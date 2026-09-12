@@ -19,6 +19,12 @@ namespace RTE {
 	/// without bumping the envelope an old client still has to decode a rejection from.
 	constexpr uint16_t c_NetH4Version = 1;
 
+	/// Version of the module-digest payloads, carried per message for the same reason.
+	constexpr uint16_t c_NetModuleDigestVersion = 1;
+
+	/// The sender had more modules than the request or the size cap allowed, and sent the first of them.
+	constexpr uint8_t c_NetModuleDigestsTruncated = 0x01;
+
 	enum class NetMessageType : uint16_t {
 		ClientHello = 1,
 		HostHello = 2,
@@ -43,6 +49,8 @@ namespace RTE {
 		ApplicantAck = 21,
 		SubstitutionOffer = 22,
 		SubstitutionAck = 23,
+		ModuleDigestRequest = 24,
+		ModuleDigests = 25,
 	};
 
 	enum class NetRejectReason : uint16_t {
@@ -370,6 +378,35 @@ namespace RTE {
 		bool operator==(const NetH4SubstitutionAck&) const = default;
 	};
 
+	/// One loaded module as the diagnostic digest exchange describes it: enough to name what to
+	/// install, remove or update, and nothing the admission decision reads.
+	struct NetModuleDigestEntry {
+		std::string fileName;
+		std::string friendlyName;
+		uint32_t version = 0;
+		bool official = false;
+		NetHash32 contentHash{};
+
+		bool operator==(const NetModuleDigestEntry&) const = default;
+	};
+
+	/// Asks a peer whose module manifest did not match to list its modules. The refusal is already
+	/// decided when this is sent; the answer only lets it name the modules.
+	struct NetModuleDigestRequest {
+		uint16_t version = c_NetModuleDigestVersion;
+		uint16_t maxEntries = 0;
+
+		bool operator==(const NetModuleDigestRequest&) const = default;
+	};
+
+	struct NetModuleDigests {
+		uint16_t version = c_NetModuleDigestVersion;
+		uint8_t flags = 0;
+		std::vector<NetModuleDigestEntry> entries;
+
+		bool operator==(const NetModuleDigests&) const = default;
+	};
+
 	using NetPayload = std::variant<
 		NetClientHello,
 		NetHostHello,
@@ -393,7 +430,9 @@ namespace RTE {
 		NetH4Applicant,
 		NetH4ApplicantAck,
 		NetH4SubstitutionOffer,
-		NetH4SubstitutionAck>;
+		NetH4SubstitutionAck,
+		NetModuleDigestRequest,
+		NetModuleDigests>;
 
 	struct NetMessage {
 		uint32_t sequence = 0;
@@ -412,7 +451,7 @@ namespace RTE {
 	class NetProtocol {
 	public:
 		static constexpr uint32_t c_Magic = 0x324E4343U;
-		static constexpr uint16_t c_Version = 1;
+		static constexpr uint16_t c_Version = 2;
 		static constexpr uint16_t c_HeaderBytes = 24;
 		static constexpr size_t c_MaxControlPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxDisplayNameBytes = 64;
@@ -421,9 +460,19 @@ namespace RTE {
 		// An admission message comes from a connection nobody has authenticated yet, so it is refused
 		// on size before anything parses it. The largest H4 message is a Reclaim at ~498 B.
 		static constexpr size_t c_MaxH4PayloadBytes = 1024;
+		static constexpr size_t c_MaxModuleNameBytes = 64;
+		// A digest list also arrives from a connection that failed admission, so it is capped both
+		// ways: the entry count first, then the bytes the count can still add up to.
+		static constexpr size_t c_MaxModuleDigestEntries = 256;
+		static constexpr size_t c_MaxModuleDigestBytes = 24U * 1024U;
 
 		/// Whether the type is one of the H4 admission messages, which are size-capped separately.
 		static bool IsH4MessageType(NetMessageType type);
+		/// Whether the type is one of the module digest messages, which are size-capped separately.
+		static bool IsModuleDigestMessageType(NetMessageType type);
+		/// Whether that type exists in that header version's schema. A payload the peer's build has no
+		/// decoder for is undecodable noise however the envelope is stamped.
+		static bool IsMessageTypeInVersion(NetMessageType type, uint16_t headerVersion);
 
 		static NetMessageType MessageTypeOf(const NetPayload& payload);
 		static const char* MessageTypeName(NetMessageType type);

@@ -183,7 +183,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x01, 0x00,
+				0x02, 0x00,
 				0x18, 0x00,
 				0x07, 0x00,
 				0x00, 0x00,
@@ -304,7 +304,7 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expected = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x01, 0x00,
+				0x02, 0x00,
 				0x18, 0x00,
 				0x10, 0x00,
 				0x00, 0x00,
@@ -330,7 +330,7 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expectedAck = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x01, 0x00,
+				0x02, 0x00,
 				0x18, 0x00,
 				0x13, 0x00,
 				0x00, 0x00,
@@ -353,7 +353,7 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expectedSubstitution = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x01, 0x00,
+				0x02, 0x00,
 				0x18, 0x00,
 				0x17, 0x00,
 				0x00, 0x00,
@@ -394,7 +394,7 @@ namespace RTE {
 			// An oversized admission message is refused on the header, before any field is parsed.
 			mutated.assign(NetProtocol::c_HeaderBytes + NetProtocol::c_MaxH4PayloadBytes + 1U, 0);
 			mutated[0] = 0x43; mutated[1] = 0x43; mutated[2] = 0x4E; mutated[3] = 0x32;
-			mutated[4] = 0x01;
+			mutated[4] = 0x02;
 			mutated[6] = 0x18;
 			mutated[8] = static_cast<uint8_t>(NetMessageType::Reclaim);
 			mutated[16] = static_cast<uint8_t>((NetProtocol::c_MaxH4PayloadBytes + 1U) & 0xFFU);
@@ -617,6 +617,220 @@ namespace RTE {
 			return true;
 		}
 
+		NetModuleDigestEntry MakeDigestEntry(const std::string& fileName, uint32_t version, uint8_t hashSeed, bool official = false) {
+			NetModuleDigestEntry entry;
+			entry.fileName = fileName;
+			entry.friendlyName = fileName.substr(0, fileName.find('.'));
+			entry.version = version;
+			entry.official = official;
+			entry.contentHash = MakeHash(hashSeed);
+			return entry;
+		}
+
+		bool ExpectEncodeError(const NetMessage& message, NetProtocolErrorCode code, const std::string& what, std::string* error) {
+			NetProtocolError encodeError;
+			std::vector<uint8_t> ignored;
+			if (NetProtocol::Encode(message, ignored, &encodeError)) {
+				*error = what + " was accepted by the encoder";
+				return false;
+			}
+			if (encodeError.code != code) {
+				*error = what + " gave " + NetProtocol::ErrorCodeName(encodeError.code) + ", not " + NetProtocol::ErrorCodeName(code);
+				return false;
+			}
+			return true;
+		}
+
+		bool TestModuleDigestRoundTrips(std::string* error) {
+			NetModuleDigestRequest request;
+			request.maxEntries = static_cast<uint16_t>(NetProtocol::c_MaxModuleDigestEntries);
+			if (!RoundTrip({40, 0, request}, error)) {
+				return false;
+			}
+			std::vector<uint8_t> requestBytes;
+			if (!EncodeMessage({40, 0, request}, requestBytes, error)) {
+				return false;
+			}
+			if (requestBytes.size() - NetProtocol::c_HeaderBytes != 4U) {
+				*error = "ModuleDigestRequest encoded " + std::to_string(requestBytes.size() - NetProtocol::c_HeaderBytes) + " payload bytes, not 4";
+				return false;
+			}
+
+			NetModuleDigests digests;
+			digests.entries = {MakeDigestEntry("Base.rte", 1, 129, true), MakeDigestEntry("Coalition.rte", 3, 161), MakeDigestEntry("Ronin.rte", 5, 193)};
+			if (!RoundTrip({41, 0, digests}, error)) {
+				return false;
+			}
+			NetModuleDigests truncated = digests;
+			truncated.flags = c_NetModuleDigestsTruncated;
+			if (!RoundTrip({42, 0, truncated}, error)) {
+				return false;
+			}
+			NetModuleDigests empty;
+			if (!RoundTrip({43, 0, empty}, error)) {
+				return false;
+			}
+
+			// Sorted and unique by file name both ways: the encoder refuses to write an unsorted list
+			// and the decoder refuses to read one.
+			NetModuleDigests unsorted;
+			unsorted.entries = {MakeDigestEntry("Ronin.rte", 5, 193), MakeDigestEntry("Base.rte", 1, 129)};
+			if (!ExpectEncodeError({44, 0, unsorted}, NetProtocolErrorCode::InvalidValue, "an unsorted digest list", error)) {
+				return false;
+			}
+			NetModuleDigests duplicate;
+			duplicate.entries = {MakeDigestEntry("Base.rte", 1, 129), MakeDigestEntry("Base.rte", 2, 130)};
+			if (!ExpectEncodeError({45, 0, duplicate}, NetProtocolErrorCode::InvalidValue, "a duplicated digest entry", error)) {
+				return false;
+			}
+			std::vector<uint8_t> sortedBytes;
+			if (!EncodeMessage({46, 0, digests}, sortedBytes, error)) {
+				return false;
+			}
+			// Swap the two leading entries' names on the wire; the decoder must refuse the result.
+			std::vector<uint8_t> mutated = sortedBytes;
+			const size_t firstName = NetProtocol::c_HeaderBytes + 6U + 2U;
+			mutated[firstName] = 'Z';
+			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::InvalidValue, error)) {
+				return false;
+			}
+			return true;
+		}
+
+		bool TestModuleDigestCaps(std::string* error) {
+			NetModuleDigests overCount;
+			for (size_t i = 0; i <= NetProtocol::c_MaxModuleDigestEntries; ++i) {
+				std::string name = std::to_string(100000 + i) + ".rte";
+				overCount.entries.push_back(MakeDigestEntry(name, 1, static_cast<uint8_t>(i)));
+			}
+			if (!ExpectEncodeError({47, 0, overCount}, NetProtocolErrorCode::InvalidValue, "a digest list over the entry cap", error)) {
+				return false;
+			}
+
+			// The entry cap alone does not bound the bytes: 256 worst-case names do not fit, and the
+			// encoder must refuse rather than write a packet the decoder would drop on the header.
+			NetModuleDigests overBytes;
+			for (size_t i = 0; i < NetProtocol::c_MaxModuleDigestEntries; ++i) {
+				NetModuleDigestEntry entry;
+				entry.fileName = std::to_string(100000 + i) + std::string(NetProtocol::c_MaxModuleNameBytes - 6U, 'n');
+				entry.friendlyName.assign(NetProtocol::c_MaxModuleNameBytes, 'f');
+				entry.version = 1;
+				entry.contentHash = MakeHash(static_cast<uint8_t>(i));
+				overBytes.entries.push_back(std::move(entry));
+			}
+			if (!ExpectEncodeError({48, 0, overBytes}, NetProtocolErrorCode::PayloadTooLarge, "a digest list over the byte cap", error)) {
+				return false;
+			}
+
+			NetModuleDigests atCap;
+			for (size_t i = 0; i < NetProtocol::c_MaxModuleDigestEntries; ++i) {
+				atCap.entries.push_back(MakeDigestEntry(std::to_string(100000 + i) + ".rte", static_cast<uint32_t>(i), static_cast<uint8_t>(i)));
+			}
+			std::vector<uint8_t> atCapBytes;
+			if (!EncodeMessage({49, 0, atCap}, atCapBytes, error)) {
+				return false;
+			}
+			if (atCapBytes.size() - NetProtocol::c_HeaderBytes > NetProtocol::c_MaxModuleDigestBytes) {
+				*error = "a full-cap digest list of plain names did not fit the byte cap";
+				return false;
+			}
+			if (!RoundTrip({49, 0, atCap}, error)) {
+				return false;
+			}
+
+			// Refused on the header, before any entry is parsed.
+			std::vector<uint8_t> oversized(NetProtocol::c_HeaderBytes + NetProtocol::c_MaxModuleDigestBytes + 1U, 0);
+			oversized[0] = 0x43; oversized[1] = 0x43; oversized[2] = 0x4E; oversized[3] = 0x32;
+			oversized[4] = static_cast<uint8_t>(NetProtocol::c_Version);
+			oversized[6] = 0x18;
+			oversized[8] = static_cast<uint8_t>(NetMessageType::ModuleDigests);
+			const uint32_t payloadSize = static_cast<uint32_t>(NetProtocol::c_MaxModuleDigestBytes + 1U);
+			for (int i = 0; i < 4; ++i) {
+				oversized[16 + i] = static_cast<uint8_t>((payloadSize >> (i * 8)) & 0xFFU);
+			}
+			if (!ExpectDecodeError(oversized, NetProtocolErrorCode::PayloadTooLarge, error)) {
+				return false;
+			}
+
+			NetModuleDigestRequest zero;
+			zero.maxEntries = 0;
+			if (!ExpectEncodeError({50, 0, zero}, NetProtocolErrorCode::InvalidValue, "a digest request for zero entries", error)) {
+				return false;
+			}
+			NetModuleDigestRequest tooMany;
+			tooMany.maxEntries = static_cast<uint16_t>(NetProtocol::c_MaxModuleDigestEntries + 1U);
+			if (!ExpectEncodeError({51, 0, tooMany}, NetProtocolErrorCode::InvalidValue, "a digest request over the entry cap", error)) {
+				return false;
+			}
+			std::cout << "[net-protocol-selftest] PASS module digests: entry cap " << NetProtocol::c_MaxModuleDigestEntries
+			          << ", byte cap " << NetProtocol::c_MaxModuleDigestBytes << ", full-cap list "
+			          << (atCapBytes.size() - NetProtocol::c_HeaderBytes) << " bytes" << std::endl;
+			return true;
+		}
+
+		bool TestOldWireEncoding(std::string* error) {
+			// A v1 peer's build has no decoder for the v2 types, so it is told why it was refused in
+			// its own envelope and never handed a payload it would read as garbage.
+			if (!NetProtocol::CanEncodeAtVersion(1) || !NetProtocol::CanEncodeAtVersion(NetProtocol::c_Version)) {
+				*error = "the build cannot stamp a rejection at v1 and at its own version";
+				return false;
+			}
+			if (NetProtocol::CanEncodeAtVersion(0) || NetProtocol::CanEncodeAtVersion(static_cast<uint16_t>(NetProtocol::c_Version + 1))) {
+				*error = "a version this build cannot write was accepted";
+				return false;
+			}
+			const NetMessage rejection{7, 0, NetJoinRejected{NetRejectReason::ProtocolMismatch, "protocol version 1 does not match this build's 2", "protocol_version", "2", "1"}};
+			std::vector<uint8_t> v1;
+			NetProtocolError encodeError;
+			if (!NetProtocol::EncodeAtVersion(rejection, 1, v1, &encodeError)) {
+				*error = "a rejection could not be stamped at v1: " + encodeError.message;
+				return false;
+			}
+			uint16_t stamped = 0;
+			if (!NetProtocol::PeekHeaderVersion(v1.data(), v1.size(), stamped) || stamped != 1U) {
+				*error = "the v1 rejection was not stamped at v1";
+				return false;
+			}
+			std::vector<uint8_t> current;
+			if (!NetProtocol::EncodeAtVersion(rejection, NetProtocol::c_Version, current, &encodeError)) {
+				*error = "a rejection could not be stamped at the current version: " + encodeError.message;
+				return false;
+			}
+			// The payload schema did not change across the bump, so only the two version bytes differ.
+			if (v1.size() != current.size()) {
+				*error = "the v1 and v2 rejections differ in size";
+				return false;
+			}
+			for (size_t i = 0; i < v1.size(); ++i) {
+				if (i != 4 && i != 5 && v1[i] != current[i]) {
+					*error = "the v1 rejection differs from the v2 one outside the version field, at byte " + std::to_string(i);
+					return false;
+				}
+			}
+			// Our own decoder only speaks the current version; the v1 bytes are for the peer that does.
+			if (!ExpectDecodeError(v1, NetProtocolErrorCode::UnsupportedVersion, error)) {
+				return false;
+			}
+
+			NetModuleDigestRequest request;
+			request.maxEntries = 8;
+			std::vector<uint8_t> refused;
+			if (NetProtocol::EncodeAtVersion({8, 0, request}, 1, refused, &encodeError) ||
+			    encodeError.code != NetProtocolErrorCode::UnsupportedVersion) {
+				*error = "a v2-only message type was stamped at v1";
+				return false;
+			}
+			if (!NetProtocol::IsMessageTypeInVersion(NetMessageType::JoinRejected, 1) ||
+			    NetProtocol::IsMessageTypeInVersion(NetMessageType::ModuleDigests, 1) ||
+			    !NetProtocol::IsMessageTypeInVersion(NetMessageType::ModuleDigests, NetProtocol::c_Version)) {
+				*error = "the per-version message type table is wrong";
+				return false;
+			}
+			std::cout << "[net-protocol-selftest] PASS old wire: v" << NetProtocol::c_Version
+			          << " build stamps a JoinRejected at v1, refuses v2-only types there" << std::endl;
+			return true;
+		}
+
 		bool TestLoopback(std::string* error) {
 			LoopbackTransport host;
 			LoopbackTransport client;
@@ -766,6 +980,15 @@ namespace RTE {
 			return fail(error);
 		}
 		if (!TestH4DecodeFailures(&error)) {
+			return fail(error);
+		}
+		if (!TestModuleDigestRoundTrips(&error)) {
+			return fail(error);
+		}
+		if (!TestModuleDigestCaps(&error)) {
+			return fail(error);
+		}
+		if (!TestOldWireEncoding(&error)) {
 			return fail(error);
 		}
 		if (!TestLoopback(&error)) {

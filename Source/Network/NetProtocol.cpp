@@ -476,6 +476,58 @@ namespace RTE {
 			return AppendH4Reserved(out, 3);
 		}
 
+		bool EncodePayload(const NetModuleDigestRequest& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
+			if (payload.version == 0) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "module digest version must be nonzero");
+				return false;
+			}
+			if (payload.maxEntries == 0 || payload.maxEntries > NetProtocol::c_MaxModuleDigestEntries) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "module digest request asks for an out-of-range entry count");
+				return false;
+			}
+			AppendU16LE(out, payload.version);
+			AppendU16LE(out, payload.maxEntries);
+			return true;
+		}
+
+		bool EncodePayload(const NetModuleDigests& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
+			if (payload.version == 0) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "module digest version must be nonzero");
+				return false;
+			}
+			if ((payload.flags & static_cast<uint8_t>(~c_NetModuleDigestsTruncated)) != 0U) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "module digest flags have unknown bits");
+				return false;
+			}
+			if (payload.entries.size() > NetProtocol::c_MaxModuleDigestEntries) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "module digest list exceeds the entry cap");
+				return false;
+			}
+			AppendU16LE(out, payload.version);
+			AppendU8(out, payload.flags);
+			AppendU8(out, 0);
+			AppendU16LE(out, static_cast<uint16_t>(payload.entries.size()));
+			for (size_t i = 0; i < payload.entries.size(); ++i) {
+				const NetModuleDigestEntry& entry = payload.entries[i];
+				if (i > 0 && !(payload.entries[i - 1].fileName < entry.fileName)) {
+					SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "module digests are not sorted by file name");
+					return false;
+				}
+				if (!AppendString(out, entry.fileName, NetProtocol::c_MaxModuleNameBytes, "module_file_name", error) ||
+				    !AppendString(out, entry.friendlyName, NetProtocol::c_MaxModuleNameBytes, "module_friendly_name", error)) {
+					return false;
+				}
+				AppendU32LE(out, entry.version);
+				AppendBool(out, entry.official);
+				AppendHash(out, entry.contentHash);
+			}
+			if (out.size() > NetProtocol::c_MaxModuleDigestBytes) {
+				SetError(error, NetProtocolErrorCode::PayloadTooLarge, out.size(), "module digest payload exceeds max digest size");
+				return false;
+			}
+			return true;
+		}
+
 		bool DecodePayload(ByteReader& reader, NetClientHello& payload, NetProtocolError* error) {
 			if (!ReadOrTruncated(reader.ReadU64LE(payload.clientNonce), reader, error, "client_nonce") ||
 			    !ReadOrTruncated(reader.ReadU16LE(payload.minProtocolVersion), reader, error, "min_protocol_version") ||
@@ -817,6 +869,79 @@ namespace RTE {
 			       ReadH4Bool(reader, payload.stored, "stored", error) &&
 			       ReadH4Reserved(reader, 3, error);
 		}
+
+		bool DecodePayload(ByteReader& reader, NetModuleDigestRequest& payload, NetProtocolError* error) {
+			if (!ReadOrTruncated(reader.ReadU16LE(payload.version), reader, error, "module_digest_version") ||
+			    !ReadOrTruncated(reader.ReadU16LE(payload.maxEntries), reader, error, "max_entries")) {
+				return false;
+			}
+			if (payload.version == 0) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 4, "module digest version must be nonzero");
+				return false;
+			}
+			if (payload.maxEntries == 0 || payload.maxEntries > NetProtocol::c_MaxModuleDigestEntries) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 2, "module digest request asks for an out-of-range entry count");
+				return false;
+			}
+			return true;
+		}
+
+		bool DecodePayload(ByteReader& reader, NetModuleDigests& payload, NetProtocolError* error) {
+			uint8_t reserved = 0;
+			uint16_t count = 0;
+			if (!ReadOrTruncated(reader.ReadU16LE(payload.version), reader, error, "module_digest_version") ||
+			    !ReadOrTruncated(reader.ReadU8(payload.flags), reader, error, "module_digest_flags") ||
+			    !ReadOrTruncated(reader.ReadU8(reserved), reader, error, "module digest reserved") ||
+			    !ReadOrTruncated(reader.ReadU16LE(count), reader, error, "module_digest_count")) {
+				return false;
+			}
+			if (payload.version == 0) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 6, "module digest version must be nonzero");
+				return false;
+			}
+			if ((payload.flags & static_cast<uint8_t>(~c_NetModuleDigestsTruncated)) != 0U) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 4, "module digest flags have unknown bits");
+				return false;
+			}
+			if (reserved != 0U) {
+				SetError(error, NetProtocolErrorCode::ReservedFieldNonZero, reader.Offset() - 3, "module digest reserved field is nonzero");
+				return false;
+			}
+			if (count > NetProtocol::c_MaxModuleDigestEntries) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 2, "module digest list exceeds the entry cap");
+				return false;
+			}
+			payload.entries.clear();
+			payload.entries.reserve(count);
+			for (uint16_t i = 0; i < count; ++i) {
+				NetModuleDigestEntry entry;
+				uint8_t official = 0;
+				if (!reader.ReadString(entry.fileName, NetProtocol::c_MaxModuleNameBytes, "module_file_name", error) ||
+				    !reader.ReadString(entry.friendlyName, NetProtocol::c_MaxModuleNameBytes, "module_friendly_name", error) ||
+				    !ReadOrTruncated(reader.ReadU32LE(entry.version), reader, error, "module_version") ||
+				    !ReadOrTruncated(reader.ReadU8(official), reader, error, "module_official") ||
+				    !ReadOrTruncated(reader.ReadHash(entry.contentHash), reader, error, "module_content_hash")) {
+					return false;
+				}
+				if (official > 1U) {
+					SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 1, "module_official must be 0 or 1");
+					return false;
+				}
+				if (entry.fileName.empty()) {
+					SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset(), "module file name is empty");
+					return false;
+				}
+				// Sorted and unique by file name, so a peer cannot pad the list with one module.
+				if (!payload.entries.empty() && !(payload.entries.back().fileName < entry.fileName)) {
+					SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset(), "module digests are not sorted by file name");
+					return false;
+				}
+				entry.official = official != 0U;
+				payload.entries.push_back(std::move(entry));
+			}
+			return true;
+		}
+
 	}
 
 	bool NetProtocol::IsH4MessageType(NetMessageType type) {
@@ -838,6 +963,17 @@ namespace RTE {
 			default:
 				return false;
 		}
+	}
+
+	bool NetProtocol::IsModuleDigestMessageType(NetMessageType type) {
+		return type == NetMessageType::ModuleDigestRequest || type == NetMessageType::ModuleDigests;
+	}
+
+	bool NetProtocol::IsMessageTypeInVersion(NetMessageType type, uint16_t headerVersion) {
+		if (headerVersion != 1) {
+			return headerVersion == c_Version;
+		}
+		return !IsModuleDigestMessageType(type);
 	}
 
 	NetMessageType NetProtocol::MessageTypeOf(const NetPayload& payload) {
@@ -865,6 +1001,8 @@ namespace RTE {
 			[](const NetH4ApplicantAck&) { return NetMessageType::ApplicantAck; },
 			[](const NetH4SubstitutionOffer&) { return NetMessageType::SubstitutionOffer; },
 			[](const NetH4SubstitutionAck&) { return NetMessageType::SubstitutionAck; },
+			[](const NetModuleDigestRequest&) { return NetMessageType::ModuleDigestRequest; },
+			[](const NetModuleDigests&) { return NetMessageType::ModuleDigests; },
 		}, payload);
 	}
 
@@ -893,6 +1031,8 @@ namespace RTE {
 			case NetMessageType::ApplicantAck: return "ApplicantAck";
 			case NetMessageType::SubstitutionOffer: return "SubstitutionOffer";
 			case NetMessageType::SubstitutionAck: return "SubstitutionAck";
+			case NetMessageType::ModuleDigestRequest: return "ModuleDigestRequest";
+			case NetMessageType::ModuleDigests: return "ModuleDigests";
 		}
 		return "Unknown";
 	}
@@ -944,9 +1084,9 @@ namespace RTE {
 	}
 
 	bool NetProtocol::CanEncodeAtVersion(uint16_t headerVersion) {
-		// Only versions whose payload schema this build still writes. Today that is exactly the current
-		// one; the first real bump adds its predecessor here alongside that version's encoders.
-		return headerVersion == c_Version;
+		// Only versions whose payload schema this build still writes. v1 shares every payload it had
+		// with v2, so a v1 peer can still be told, in its own envelope, why it was refused.
+		return headerVersion == c_Version || headerVersion == 1;
 	}
 
 	bool NetProtocol::PeekHeaderVersion(const uint8_t* data, size_t size, uint16_t& outVersion) {
@@ -971,6 +1111,10 @@ namespace RTE {
 			SetError(error, NetProtocolErrorCode::UnsupportedVersion, 4, "cannot encode at that protocol version");
 			return false;
 		}
+		if (!IsMessageTypeInVersion(MessageTypeOf(message.payload), headerVersion)) {
+			SetError(error, NetProtocolErrorCode::UnsupportedVersion, 8, "that message type does not exist in that protocol version");
+			return false;
+		}
 		if (!Encode(message, outBytes, error)) {
 			return false;
 		}
@@ -982,7 +1126,7 @@ namespace RTE {
 	bool NetProtocol::Encode(const NetMessage& message, std::vector<uint8_t>& outBytes, NetProtocolError* error) {
 		outBytes.clear();
 		if (message.flags != 0U) {
-			SetError(error, NetProtocolErrorCode::UnknownFlags, 0, "message flags must be zero in protocol v1");
+			SetError(error, NetProtocolErrorCode::UnknownFlags, 0, "message flags must be zero");
 			return false;
 		}
 
@@ -999,6 +1143,10 @@ namespace RTE {
 		}
 		if (IsH4MessageType(MessageTypeOf(message.payload)) && payloadBytes.size() > c_MaxH4PayloadBytes) {
 			SetError(error, NetProtocolErrorCode::PayloadTooLarge, c_HeaderBytes, "H4 admission payload exceeds max admission size");
+			return false;
+		}
+		if (IsModuleDigestMessageType(MessageTypeOf(message.payload)) && payloadBytes.size() > c_MaxModuleDigestBytes) {
+			SetError(error, NetProtocolErrorCode::PayloadTooLarge, c_HeaderBytes, "module digest payload exceeds max digest size");
 			return false;
 		}
 
@@ -1072,6 +1220,11 @@ namespace RTE {
 		// oversized one on the header alone rather than parsing it.
 		if (IsH4MessageType(messageType) && payloadBytes > c_MaxH4PayloadBytes) {
 			return Fail(NetProtocolErrorCode::PayloadTooLarge, 16, "H4 admission payload exceeds max admission size");
+		}
+		// A digest list arrives from a connection that just failed admission, so it is refused on the
+		// header the same way, before any entry is parsed.
+		if (IsModuleDigestMessageType(messageType) && payloadBytes > c_MaxModuleDigestBytes) {
+			return Fail(NetProtocolErrorCode::PayloadTooLarge, 16, "module digest payload exceeds max digest size");
 		}
 		ByteReader payloadReader(data + c_HeaderBytes, payloadBytes);
 		NetProtocolError payloadError;
@@ -1214,6 +1367,18 @@ namespace RTE {
 				NetH4SubstitutionAck value;
 				decoded = DecodePayload(payloadReader, value, &payloadError);
 				payload = value;
+				break;
+			}
+			case NetMessageType::ModuleDigestRequest: {
+				NetModuleDigestRequest value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::ModuleDigests: {
+				NetModuleDigests value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = std::move(value);
 				break;
 			}
 			default:
