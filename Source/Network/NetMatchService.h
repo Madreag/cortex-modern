@@ -242,6 +242,18 @@ namespace RTE {
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
 		friend bool TestRosterTransitionsRecordHoldThenPresent(std::string* error);
 		friend bool TestRosterBannerNamesThePlayerOnce(std::string* error);
+		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
+		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
+		/// only where the match is already launched.
+		void AttachCoordinatorSessionSink();
+		/// Delivers the handover queue through the session before a teardown destroys the coordinator
+		/// that filled it. Caller holds the lock. The census may only open where the sim stands at a
+		/// completed tick with the world still up.
+		void DrainPendingSessionEventsLocked(bool atTickBoundary);
+		/// The relaunch's queue reset, with a permanent diagnostic for anything a teardown left behind.
+		void DiscardUndeliveredSessionEventsLocked();
+		/// Folds the coordinator's counters into the service so a gate can read them across a resync.
+		void AccumulateLockstepTotalsLocked();
 		/// Client: the §7 leave protocol, waiting exactly P21's budget for the ack before giving up and
 		/// KEEPING the ticket. Runs only with a plane attached and a record to lose.
 		void RunCleanLeave();
@@ -277,6 +289,9 @@ namespace RTE {
 		std::optional<NetResyncState> m_PendingResyncState;
 		bool m_ResyncRetainsLocalState = false;
 		uint64_t m_ResyncSourceRound = 0;
+		//!< The last host snapshot's tick label and the completed tick it was taken at; a gate asserts they match.
+		std::atomic<uint64_t> m_ResyncSavedTick{UINT64_MAX};
+		std::atomic<uint64_t> m_ResyncBoundaryTick{UINT64_MAX};
 		std::string m_LocalName;
 		NetLobbySnapshot m_LobbySnapshot;
 		NetSeatAuthRegistry m_SeatAuth; //!< Hosted-session reconnect-auth material (off-sim epoch + seat credentials); survives resync/rejoin/rematch.
@@ -334,6 +349,15 @@ namespace RTE {
 		std::unique_ptr<NetLockstepCoordinator> m_Coordinator;
 		std::unique_ptr<NetMatchRunner> m_Runner;
 		std::vector<NetTransportEvent> m_PendingSessionEvents; //!< Game-thread only: reconnect traffic the coordinator handed over.
+		//!< Coordinator counters a resync would otherwise zero, accumulated at every teardown.
+		struct LockstepTotals {
+			uint64_t peerFramesWaived = 0;
+			uint64_t peersDroppedSilent = 0;
+			uint64_t connectionsClosedOnEviction = 0;
+		};
+		LockstepTotals m_LockstepTotals;
+		uint32_t m_SessionEventsDrained = 0;   //!< Handover events delivered by a teardown instead of the pump.
+		uint32_t m_SessionEventsDiscarded = 0; //!< Handover events a relaunch found undelivered; must stay zero.
 		NetAdmissionClock m_AdmissionClock; //!< One elapsed-time source for setup, play, stalls and resync.
 		NetLanDiscovery m_LanDiscovery; //!< Game-thread only: the hosting lobby's LAN beacon.
 		uint16_t m_BeaconGamePort = 0;

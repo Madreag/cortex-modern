@@ -7528,8 +7528,8 @@ namespace RTE {
 			return true;
 		}
 
-		// Production DefersStops, so Reclaimed must request resync on this tick. A 2-peer Tick
-		// that treats the emptied hold as "nobody coming back" Stops with PeerLeft instead.
+		// Production defers stops, so Reclaimed's resync must land at the FinishSimulationTick below. A
+		// 2-peer Tick that treats the emptied hold as "nobody coming back" Stops with PeerLeft instead.
 		bool DriveTwoPeerHoldResolution(uint16_t port, uint64_t sessionId, NetLockstepHoldResolution resolution,
 		                                NetLockstepCoordinator& host, LoopbackTransport& hostT, LoopbackTransport& clientT,
 		                                uint64_t& leaveFrame, uint64_t& now, std::string* error) {
@@ -7596,6 +7596,10 @@ namespace RTE {
 			leaveFrame = host.GetPeerLeaveFrames().at(2);
 			host.ResolveHeldSeat(2, resolution, now);
 			host.Tick(now + 5);
+			if (resolution != NetLockstepHoldResolution::Expired && (!host.IsRunning() || !host.HasPendingRecoveryStop())) {
+				*error = "the hold resolution ended the round before its tick boundary: " + host.GetStats().timeoutReason;
+				return false;
+			}
 			host.FinishSimulationTick(leaveFrame > 0 ? leaveFrame - 1 : 0);
 			return true;
 		}
@@ -7730,6 +7734,11 @@ namespace RTE {
 			}
 			host.ResolveHeldSeat(2, NetLockstepHoldResolution::Reclaimed, now);
 			host.Tick(now + 5);
+			if (!host.IsRunning() || !host.HasPendingRecoveryStop()) {
+				*error = "3-peer Reclaimed did not hold its resync for the tick boundary: " + host.GetStats().timeoutReason;
+				return false;
+			}
+			host.FinishSimulationTick(host.GetStats().nextFrame - 1);
 			if (host.IsStopped()) {
 				*error = "Reclaimed stopped a 3-peer round: " + host.GetStats().timeoutReason;
 				return false;
@@ -8147,6 +8156,18 @@ namespace RTE {
 			return true;
 		}
 
+		// The admission plane's answer for a seat whose old incarnation has been fenced.
+		struct FencedSeats {
+			std::set<uint8_t> fenced;
+			static NetLockstepSeatState Query(void* context, uint8_t peerId, NetPeerId) {
+				NetLockstepSeatState state;
+				if (const auto* self = static_cast<const FencedSeats*>(context)) {
+					state.fencedTransport = self->fenced.find(peerId) != self->fenced.end();
+				}
+				return state;
+			}
+		};
+
 		// A reclaimed LIVE seat fences the old transport without a drop, so the pump's resync is the only
 		// one and it lands while the host is parked on frames that never come.
 		bool TestParkedWaitAppliesPendingResync(std::string* error) {
@@ -8214,6 +8235,8 @@ namespace RTE {
 				*error = "the fenced reclaim fixture dropped a seat; the defect needs the no-drop path";
 				return false;
 			}
+			FencedSeats seats{{2}};
+			host.SetSeatStateSource(&FencedSeats::Query, &seats);
 			uint32_t pumps = 0;
 			ScenarioRunner::SetLockstepCoordinator(&host);
 			ScenarioRunner::SetSessionPump([&] {
@@ -8227,25 +8250,34 @@ namespace RTE {
 			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
 			ScenarioRunner::SetSessionPump(nullptr);
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
-			if (got) {
-				*error = "the wait produced a frame the fenced peer never sent";
-				return false;
-			}
-			if (waitError != "ResyncRequested:player rejoined") {
+			if (!got || out.frame != 1) {
 				*error = "the parked wait ended with \"" + waitError + "\" after " + std::to_string(elapsedMs) +
-				         "ms instead of the resync the pump scheduled (pumps=" + std::to_string(pumps) + ")";
+				         "ms instead of committing the parked tick (pumps=" + std::to_string(pumps) + ")";
 				return false;
 			}
-			if (host.HasPendingRecoveryStop()) {
-				*error = "the parked wait left the recovery stop pending";
+			if (!host.IsRunning() || !host.HasPendingRecoveryStop()) {
+				*error = "the parked wait applied the resync inside the tick it was waiting on";
 				return false;
 			}
-			if (host.GetStats().nextFrame != 1 || host.GetStats().framesAccepted != 1) {
-				*error = "the parked wait's resync did not land at the tick the sim had not run";
+			if (!host.GetPeerLeaveFrames().empty() || host.AnyDroppedSeatHeld() || host.GetStats().peersDroppedSilent != 0) {
+				*error = "waiving the fenced incarnation's frames took its seat as well";
+				return false;
+			}
+			if (host.GetPeerFrameWaivers().count(2) == 0 || host.GetPeerFrameWaivers().at(2) != 1 ||
+			    host.GetStats().peerFramesWaived != 1) {
+				*error = "the fenced peer's frames were not waived at the parked tick";
+				return false;
+			}
+			if (!host.FinishSimulationTick(1) || !host.IsFailed() || host.GetStats().timeoutReason != "ResyncRequested:player rejoined") {
+				*error = "the pending resync did not fire at the boundary: " + host.GetStats().timeoutReason;
+				return false;
+			}
+			if (host.GetStats().nextFrame != 2 || host.GetStats().framesAccepted != 2) {
+				*error = "the parked tick did not commit before the resync";
 				return false;
 			}
 			if (elapsedMs >= 500) {
-				*error = "the parked wait applied the resync only after " + std::to_string(elapsedMs) + "ms";
+				*error = "the parked wait committed only after " + std::to_string(elapsedMs) + "ms";
 				return false;
 			}
 			if (!drive([&] { return client.IsFailed(); }, 3000) || !client.GetStats().timeoutReason.starts_with("ResyncRequested:")) {
@@ -8254,6 +8286,291 @@ namespace RTE {
 			}
 			std::cout << "[net-lockstep-selftest] PASS parked_wait_applies_pending_resync frame=1 pumps=" << pumps
 			          << " ms=" << elapsedMs << std::endl;
+			return true;
+		}
+
+		// The fenced incarnation's seat is untouched and the survivor commits the same tick from the
+		// same waiver, so the round ends at a boundary every peer agrees on.
+		bool TestFencedPeerWaivedAtTheParkedTick(std::string* error) {
+			const uint16_t port = 43142;
+			LoopbackTransport hostT, aT, bT;
+			// Connection order fixes the transport ids the host binds the two seats to.
+			if (!hostT.StartHost(port, error) || !bT.Connect("loopback", port, error) || !aT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = 0x7000000000000142ULL;
+				c.timeoutMs = 1000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.matchConfig.peerCount = 3;
+				c.matchConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Fenced"}, {3, 1, false, "Survivor"}};
+				return c;
+			};
+			// Peer 2 is the superseded incarnation, peer 3 the survivor that must commit the same tick.
+			NetLockstepCoordinator host, fenced, survivor;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+			    !fenced.Start(bT, cfg(2, {{1, 1}}, false), error) ||
+			    !survivor.Start(aT, cfg(3, {{1, 1}}, false), error)) {
+				return false;
+			}
+			host.DeferStopsToTickBoundary();
+			survivor.DeferStopsToTickBoundary();
+			fenced.DeferStopsToTickBoundary();
+			const auto pumpAll = [&] {
+				const uint64_t now = NetLockstepNowMs();
+				host.Tick(now);
+				fenced.Tick(now);
+				survivor.Tick(now);
+				hostT.AdvanceTimeMs(1);
+				aT.AdvanceTimeMs(1);
+				bT.AdvanceTimeMs(1);
+			};
+			const auto drive = [&](const std::function<bool()>& done, uint64_t budgetMs) {
+				const uint64_t start = NetLockstepNowMs();
+				while (true) {
+					pumpAll();
+					if (done()) {
+						return true;
+					}
+					if (NetLockstepNowMs() - start >= budgetMs) {
+						return false;
+					}
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}
+			};
+			if (!drive([&] { return host.IsRunning() && fenced.IsRunning() && survivor.IsRunning(); }, 3000)) {
+				*error = "waiver fixture never reached Running";
+				return false;
+			}
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) ||
+			    !fenced.QueueLocalInput(0, {MakeFrame(200, 1)}, {}, error) ||
+			    !survivor.QueueLocalInput(0, {MakeFrame(300, 1)}, {}, error)) {
+				return false;
+			}
+			if (!drive([&] { return host.GetStats().framesAccepted == 1 && survivor.GetStats().framesAccepted == 1; }, 3000)) {
+				*error = "waiver fixture never committed frame 0";
+				return false;
+			}
+			NetLockstepReadyFrame committed;
+			while (host.PopReadyFrame(committed)) {
+			}
+			while (survivor.PopReadyFrame(committed)) {
+			}
+			host.FinishSimulationTick(0);
+			survivor.FinishSimulationTick(0);
+			// Tick 1: the fenced incarnation goes silent with no drop notice; the survivor still plays.
+			if (!host.QueueLocalInput(1, {MakeFrame(100, 2)}, {}, error) ||
+			    !survivor.QueueLocalInput(1, {MakeFrame(300, 2)}, {}, error)) {
+				return false;
+			}
+			FencedSeats seats{{2}};
+			host.SetSeatStateSource(&FencedSeats::Query, &seats);
+			uint32_t pumps = 0;
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::SetSessionPump([&] {
+				++pumps;
+				host.RequestResync("player rejoined");
+				const uint64_t now = NetLockstepNowMs();
+				fenced.Tick(now);
+				survivor.Tick(now);
+				hostT.AdvanceTimeMs(1);
+				aT.AdvanceTimeMs(1);
+				bT.AdvanceTimeMs(1);
+			});
+			NetLockstepReadyFrame out;
+			std::string waitError;
+			const bool got = ScenarioRunner::WaitForLockstepControllerFrame(1, out, &waitError);
+			ScenarioRunner::SetSessionPump(nullptr);
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (!got || out.frame != 1) {
+				*error = "the host's parked tick never committed: \"" + waitError + "\" (pumps=" + std::to_string(pumps) + ")";
+				return false;
+			}
+			if (!host.IsRunning() || !host.HasPendingRecoveryStop()) {
+				*error = "the waiver let the resync land inside the parked tick";
+				return false;
+			}
+			if (!drive([&] { return survivor.GetStats().framesAccepted == 2; }, 3000)) {
+				*error = "the survivor never committed the waived tick: " + survivor.BuildReportJson();
+				return false;
+			}
+			if (!survivor.PopReadyFrame(committed) || committed.frame != 1) {
+				*error = "the survivor committed a different tick from the host";
+				return false;
+			}
+			const auto seatUntouched = [&](const char* name, const NetLockstepCoordinator& peer) {
+				if (!peer.GetPeerLeaveFrames().empty() || peer.AnyDroppedSeatHeld() || peer.GetStats().peersDroppedSilent != 0) {
+					*error = std::string(name) + " turned the waiver into a seat drop";
+					return false;
+				}
+				if (peer.GetPeerFrameWaivers().count(2) == 0 || peer.GetPeerFrameWaivers().at(2) != 1 ||
+				    peer.GetStats().peerFramesWaived != 1) {
+					*error = std::string(name) + " did not waive the fenced peer's frame 1";
+					return false;
+				}
+				return true;
+			};
+			if (!seatUntouched("host", host) || !seatUntouched("survivor", survivor)) {
+				return false;
+			}
+			if (!host.FinishSimulationTick(1) || !host.IsFailed() || host.GetStats().timeoutReason != "ResyncRequested:player rejoined") {
+				*error = "the waived tick's boundary did not fire the resync: " + host.GetStats().timeoutReason;
+				return false;
+			}
+			if (!drive([&] { return survivor.IsFailed(); }, 3000) || !survivor.GetStats().timeoutReason.starts_with("ResyncRequested:")) {
+				*error = "the boundary resync never reached the survivor";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS fenced_peer_waived_at_the_parked_tick frame=1 pumps=" << pumps << std::endl;
+			return true;
+		}
+
+		// The heal saves the world at the tick the label names, so a resync that ends the round must wait
+		// for the tick in flight to commit instead of failing the round inside it.
+		bool TestResyncAppliesOnlyAtCompletedTick(std::string* error) {
+			const auto cfg = [](uint64_t sessionId, uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 2;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.matchConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Client"}};
+				return c;
+			};
+			// Both arms leave the host holding the client's seat with tick 2 queued and uncommitted.
+			const auto park = [&](uint16_t port, uint64_t sessionId, LoopbackTransport& hostT, LoopbackTransport& clientT,
+			                      NetLockstepCoordinator& host, NetLockstepCoordinator& client, uint64_t& now) {
+				if (!hostT.StartHost(port, error) || !clientT.Connect("loopback", port, error)) {
+					return false;
+				}
+				if (!host.Start(hostT, cfg(sessionId, 1, {{2, 1}}, true), error) ||
+				    !client.Start(clientT, cfg(sessionId, 2, {{1, 1}}, false), error)) {
+					return false;
+				}
+				host.DeferStopsToTickBoundary();
+				now = 0;
+				const auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+					for (const uint64_t until = now + forMs; now <= until; now += 5) {
+						host.Tick(now);
+						client.Tick(now);
+						if (done()) {
+							return true;
+						}
+						hostT.AdvanceTimeMs(5);
+						clientT.AdvanceTimeMs(5);
+					}
+					return false;
+				};
+				if (!drive(2000, [&] { return host.IsRunning() && client.IsRunning(); })) {
+					*error = "boundary-resync fixture never started";
+					return false;
+				}
+				for (uint64_t f = 0; f < 2; ++f) {
+					if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+					    !client.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error)) {
+						return false;
+					}
+				}
+				NetLockstepReadyFrame ready;
+				size_t committed = 0;
+				if (!drive(2000, [&] {
+						while (host.PopReadyFrame(ready)) {
+							++committed;
+						}
+						return committed >= 2;
+					})) {
+					*error = "boundary-resync fixture never committed";
+					return false;
+				}
+				host.FinishSimulationTick(0);
+				host.FinishSimulationTick(1);
+				clientT.Stop();
+				if (!drive(2000, [&] { return host.AnyDroppedSeatHeld() && host.GetPeerLeaveFrames().count(2) != 0; })) {
+					*error = "boundary-resync fixture never held the drop";
+					return false;
+				}
+				if (host.GetPeerLeaveFrames().at(2) != 2 || host.GetStats().nextFrame != 2) {
+					*error = "boundary-resync fixture did not freeze on tick 2";
+					return false;
+				}
+				return host.QueueLocalInput(2, {MakeFrame(100, 3)}, {}, error);
+			};
+			{
+				LoopbackTransport hostT, clientT;
+				NetLockstepCoordinator host, client;
+				uint64_t now = 0;
+				if (!park(43140, 0x7000000000000140ULL, hostT, clientT, host, client, now)) {
+					return false;
+				}
+				host.ResolveHeldSeat(2, NetLockstepHoldResolution::Reclaimed, now);
+				if (!host.IsRunning() || !host.HasPendingRecoveryStop()) {
+					*error = "the reclaim resync took effect inside tick 2: state " +
+					         std::string(NetLockstepCoordinator::StateName(host.GetState())) +
+					         ", reason \"" + host.GetStats().timeoutReason + "\"";
+					return false;
+				}
+				host.Tick(now + 5);
+				NetLockstepReadyFrame parked;
+				if (!host.PopReadyFrame(parked) || parked.frame != 2) {
+					*error = "the parked tick never committed after the hold was resolved";
+					return false;
+				}
+				if (!host.FinishSimulationTick(2) || !host.IsFailed() ||
+				    !host.GetStats().timeoutReason.starts_with("ResyncRequested:")) {
+					*error = "the pending resync did not fire at the boundary: " + host.GetStats().timeoutReason;
+					return false;
+				}
+				if (host.GetResumeFrame() != 3) {
+					*error = "the boundary resync resumes at frame " + std::to_string(host.GetResumeFrame()) + " not 3";
+					return false;
+				}
+			}
+			uint32_t pumps = 0;
+			{
+				LoopbackTransport hostT, clientT;
+				NetLockstepCoordinator host, client;
+				uint64_t now = 0;
+				if (!park(43141, 0x7000000000000141ULL, hostT, clientT, host, client, now)) {
+					return false;
+				}
+				ScenarioRunner::SetLockstepCoordinator(&host);
+				ScenarioRunner::SetSessionPump([&] {
+					++pumps;
+					if (pumps == 40) {
+						host.ResolveHeldSeat(2, NetLockstepHoldResolution::Reclaimed, now + 5);
+					}
+				});
+				NetLockstepReadyFrame out;
+				std::string waitError;
+				const bool got = ScenarioRunner::WaitForLockstepControllerFrame(2, out, &waitError);
+				ScenarioRunner::SetSessionPump(nullptr);
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				if (!got || out.frame != 2) {
+					*error = "the parked wait ended with \"" + waitError + "\" instead of committing tick 2 (pumps=" +
+					         std::to_string(pumps) + ")";
+					return false;
+				}
+				if (!host.IsRunning() || !host.HasPendingRecoveryStop()) {
+					*error = "the wait's reclaim resync did not stay pending to the boundary";
+					return false;
+				}
+				if (!host.FinishSimulationTick(2) || !host.IsFailed() ||
+				    !host.GetStats().timeoutReason.starts_with("ResyncRequested:")) {
+					*error = "the wait's pending resync did not fire at the boundary: " + host.GetStats().timeoutReason;
+					return false;
+				}
+			}
+			std::cout << "[net-lockstep-selftest] PASS resync_applies_only_at_completed_tick frame=2 pumps=" << pumps << std::endl;
 			return true;
 		}
 
@@ -8976,6 +9293,7 @@ namespace RTE {
 		    !TestDecodeFailures(&error) ||
 		    !TestSemanticFailures(&error) ||
 		    !TestRecoveryStopsAtCompletedTick(&error) ||
+		    !TestResyncAppliesOnlyAtCompletedTick(&error) ||
 		    !TestCompletionDrainsAppliedTicks(&error) ||
 		    !TestCoordinatorDelayedHappyPath(&error) ||
 		    !TestCoordinatorFrameBeforeStart(&error) ||
@@ -9010,6 +9328,7 @@ namespace RTE {
 		    !TestWaitDoesNotGiveUpDuringHoldPause(&error) ||
 		    !TestWaitSurvivesHoldAfterPreHoldStall(&error) ||
 		    !TestParkedWaitAppliesPendingResync(&error) ||
+		    !TestFencedPeerWaivedAtTheParkedTick(&error) ||
 		    !TestAnnouncedLeaveStillClosesAtOnce(&error) ||
 		    !TestCoordinatorHeldSeatWithASurvivor(&error) ||
 		    !TestCoordinatorThreePeer(&error) ||
