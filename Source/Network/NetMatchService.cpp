@@ -863,6 +863,7 @@ static std::string ResyncSaveName() {
 		ScenarioRunner::CloseLockstepReplayRecord();
 		RetractDirectoryListing();
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		DrainPendingSessionEventsLocked(false);
 		if (m_Coordinator) {
 			m_Coordinator->Complete(reason);
 		}
@@ -874,6 +875,10 @@ static std::string ResyncSaveName() {
 
 	// Terminal clean end; the session objects stay alive for the next Start or quit.
 	void NetMatchService::FinishMatch(const std::string& result) {
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			DrainPendingSessionEventsLocked(false);
+		}
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
 		RetractDirectoryListing();
@@ -889,6 +894,10 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::LeaveMatch(const std::string& result) {
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			DrainPendingSessionEventsLocked(false);
+		}
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
 		RetractDirectoryListing();
