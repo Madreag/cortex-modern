@@ -70,6 +70,7 @@
 #include "GnsTransport.h"
 #include "NetAdmissionSelfTest.h"
 #include "NetAuthSelfTest.h"
+#include "NetDirectoryCodec.h"
 #include "NetIdentity.h"
 #include "NetIdentitySelfTest.h"
 #include "NetLanDiscovery.h"
@@ -3939,6 +3940,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-reconnect-session-selftest") {
 			return NetReconnectSessionSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-directory-selftest") {
+			return NetDirectorySelfTest::Run();
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-discovery-selftest") {
 			// A beacon and a browser over the loopback broadcast: the browser must list the host.
