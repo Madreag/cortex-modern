@@ -606,7 +606,7 @@ namespace RTE {
 				if (!error->empty()) {
 					return false;
 				}
-				std::cout << "[net-directory-selftest] install key lazy: load left " << staged.size() << " bytes unchanged, first use wrote key " << key << std::endl;
+				std::cout << "[net-directory-selftest] PASS install key lazy: load left " << staged.size() << " bytes unchanged, first use wrote key " << key << std::endl;
 				return true;
 			}
 

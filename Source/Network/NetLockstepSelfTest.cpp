@@ -1419,7 +1419,7 @@ namespace RTE {
 			if (ownerQueue.front().first != Vector(10.0F, 20.0F) || ownerQueue.back().first != Vector(30.0F, 40.0F)) {
 				return finish("the applied queue is not in the order the AI wrote it");
 			}
-			std::cout << "[net-lockstep-selftest] ai waypoint adds cross the wire: sent=" << sent.size() << " owner_wp=" << ownerQueue.size() << " peer_wp=" << peerQueue.size() << std::endl;
+			std::cout << "[net-lockstep-selftest] PASS ai waypoint adds cross the wire: sent=" << sent.size() << " owner_wp=" << ownerQueue.size() << " peer_wp=" << peerQueue.size() << std::endl;
 			return finish(nullptr);
 		}
 

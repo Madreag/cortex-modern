@@ -1112,7 +1112,7 @@ namespace RTE {
 				}
 				return false;
 			}
-			std::cout << "[net-match-selftest] healed round planned end: host_total=" << hostAtStopFrame
+			std::cout << "[net-match-selftest] PASS healed round planned end: host_total=" << hostAtStopFrame
 			          << " client_total=" << clientAtStopFrame << " behind_total=" << behindAtStopFrame
 			          << " at frame " << c_StopFrame << ", both stop at " << hostStop << std::endl;
 			return true;
