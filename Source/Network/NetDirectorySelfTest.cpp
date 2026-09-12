@@ -1,3 +1,4 @@
+#include "NetDirectoryClient.h"
 #include "NetDirectoryCodec.h"
 #include "NetHttpClient.h"
 
@@ -488,6 +489,265 @@ namespace RTE {
 				return error->empty();
 			}
 #endif
+
+			/// The injected transport: each request records itself and answers the next canned reply.
+			class ScriptedTransport final : public NetDirectoryClient::Transport {
+			public:
+				ScriptedTransport(std::shared_ptr<std::deque<NetDirectoryClient::Reply>> replies, std::shared_ptr<std::vector<NetDirectoryClient::Request>> sent) :
+					m_Replies(std::move(replies)), m_Sent(std::move(sent)) {}
+				void Start(const NetDirectoryClient::Request& request) override { m_Sent->push_back(request); }
+				bool Finished() override { return true; }
+				NetDirectoryClient::Reply Take() override {
+					NetDirectoryClient::Reply reply = m_Replies->empty() ? NetDirectoryClient::Reply{500, "", ""} : m_Replies->front();
+					if (!m_Replies->empty()) {
+						m_Replies->pop_front();
+					}
+					return reply;
+				}
+				void Abort() override {}
+
+			private:
+				std::shared_ptr<std::deque<NetDirectoryClient::Reply>> m_Replies;
+				std::shared_ptr<std::vector<NetDirectoryClient::Request>> m_Sent;
+			};
+
+			struct ScriptedClient {
+				std::shared_ptr<std::deque<NetDirectoryClient::Reply>> replies = std::make_shared<std::deque<NetDirectoryClient::Reply>>();
+				std::shared_ptr<std::vector<NetDirectoryClient::Request>> sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
+				NetDirectoryClient client;
+
+				ScriptedClient() {
+					auto replies = this->replies;
+					auto sent = this->sent;
+					client.SetTransportFactory([replies, sent] { return std::make_unique<ScriptedTransport>(replies, sent); });
+					client.Configure("https://dir.test", "key0123456789abcd", "");
+				}
+			};
+
+			bool RequestIs(const NetDirectoryClient::Request& request, const char* method, const char* path, std::string* error) {
+				if (request.method != method || request.path != path) {
+					*error = "request was " + request.method + " " + request.path + ", expected " + method + " " + path;
+					return false;
+				}
+				return true;
+			}
+
+			bool TestClientLifecycle(std::string* error) {
+				ScriptedClient s;
+				s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
+				s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
+				s.replies->push_back({200, R"({"ok":true})", ""});
+
+				s.client.Advertise(SampleRegisterRequest(), false);
+				s.client.Update(0);
+				if (s.sent->size() != 1 || !RequestIs(s.sent->at(0), "POST", "/v1/sessions", error)) {
+					*error = error->empty() ? "no register request issued" : *error;
+					return false;
+				}
+				s.client.Update(0);
+				if (s.client.GetState() != NetDirectoryClient::State::Registered) {
+					*error = "client did not register";
+					return false;
+				}
+				s.client.Update(4999); // before the interval: nothing may be sent
+				if (s.sent->size() != 1) {
+					*error = "a heartbeat left before the interval elapsed";
+					return false;
+				}
+				s.client.Update(5000);
+				if (s.sent->size() != 2 || !RequestIs(s.sent->at(1), "POST", "/v1/sessions/7b8c9d2e-1111-4222-8333-444455556666/heartbeat", error)) {
+					*error = error->empty() ? "no heartbeat at the interval" : *error;
+					return false;
+				}
+				NetDirectoryHeartbeatRequest heartbeat;
+				std::string reason;
+				if (!NetDirectoryCodec::DecodeHeartbeatRequest(s.sent->at(1).body, heartbeat, reason) || heartbeat.token != "tok" || heartbeat.peerCount != 2 || heartbeat.seatsFree != 1 || !heartbeat.state || *heartbeat.state != "lobby") {
+					*error = "heartbeat body wrong: " + reason;
+					return false;
+				}
+				s.client.Update(5000);
+				s.client.Update(9999);
+				if (s.sent->size() != 2) {
+					*error = "a second heartbeat left before its interval elapsed";
+					return false;
+				}
+				s.client.Update(10000);
+				s.client.Update(10000);
+				if (s.sent->size() != 3) {
+					*error = "the second heartbeat was not sent at the doubled interval";
+					return false;
+				}
+				s.client.Retract();
+				s.client.Update(10000);
+				if (s.sent->size() != 4 || !RequestIs(s.sent->at(3), "DELETE", "/v1/sessions/7b8c9d2e-1111-4222-8333-444455556666", error)) {
+					*error = error->empty() ? "no delete on retract" : *error;
+					return false;
+				}
+				NetDirectoryDeleteRequest deleted;
+				if (!NetDirectoryCodec::DecodeDeleteRequest(s.sent->at(3).body, deleted, reason) || deleted.token != "tok") {
+					*error = "delete body wrong: " + reason;
+					return false;
+				}
+				s.client.Update(10000);
+				if (s.client.GetState() != NetDirectoryClient::State::Idle) {
+					*error = "client did not settle after the delete";
+					return false;
+				}
+				const json report = json::parse(s.client.BuildReportJson());
+				if (report["registers"] != 1 || report["heartbeats"] != 2 || report["deletes"] != 1) {
+					*error = "report counters wrong: " + report.dump();
+					return false;
+				}
+				return true;
+			}
+
+			bool TestHeartbeat404Reregisters(std::string* error) {
+				ScriptedClient s;
+				s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({404, R"({"error":"not_found"})", ""});
+				s.replies->push_back({200, R"({"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({404, R"({"error":"not_found"})", ""});
+
+				s.client.Advertise(SampleRegisterRequest(), false);
+				s.client.Update(0);
+				s.client.Update(0);
+				s.client.Update(5000); // heartbeat -> 404
+				s.client.Update(5000); // handled: one re-register is issued immediately
+				if (s.sent->size() != 3 || !RequestIs(s.sent->at(2), "POST", "/v1/sessions", error)) {
+					*error = error->empty() ? "no re-register after the 404" : *error;
+					return false;
+				}
+				s.client.Update(5000); // the second registration lands
+				if (s.client.GetState() != NetDirectoryClient::State::Registered || s.client.GetSessionId() != "8c9d2e1f-2222-4333-8444-555566667777") {
+					*error = "the re-registered session was not adopted";
+					return false;
+				}
+				s.client.Update(10000); // heartbeat against the new session -> 404 again
+				s.client.Update(10000); // the once-only re-register is spent: the client fails closed
+				if (s.client.GetState() != NetDirectoryClient::State::Failed || s.sent->size() != 4) {
+					*error = "a second 404 did not fail closed";
+					return false;
+				}
+				return true;
+			}
+
+			bool TestHeartbeat429HonorsRetryAfter(std::string* error) {
+				ScriptedClient s;
+				s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":30})", ""});
+				s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
+
+				s.client.Advertise(SampleRegisterRequest(), false);
+				s.client.Update(0);
+				s.client.Update(0);
+				s.client.Update(5000);
+				s.client.Update(5000); // 429: nothing may leave until retry_after elapses
+				s.client.Update(34999);
+				if (s.sent->size() != 2) {
+					*error = "a request left while the 429 retry_after was pending";
+					return false;
+				}
+				s.client.Update(35000);
+				s.client.Update(35000);
+				if (s.sent->size() != 3 || !RequestIs(s.sent->at(2), "POST", "/v1/sessions/7b8c9d2e-1111-4222-8333-444455556666/heartbeat", error)) {
+					*error = error->empty() ? "the heartbeat did not resume after retry_after" : *error;
+					return false;
+				}
+				return true;
+			}
+
+			bool TestTransportErrorBackoff(std::string* error) {
+				ScriptedClient s;
+				s.replies->push_back({0, "", "send: certificate verification failed"});
+				s.replies->push_back({0, "", "connect timed out"});
+				s.replies->push_back({0, "", "connect timed out"});
+				s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+
+				s.client.Advertise(SampleRegisterRequest(), false);
+				s.client.Update(0);
+				s.client.Update(0); // first failure: retry in 5s
+				s.client.Update(4999);
+				if (s.sent->size() != 1) {
+					*error = "a retry left before the first backoff elapsed";
+					return false;
+				}
+				s.client.Update(5000);
+				s.client.Update(5000); // second failure: retry in 10s
+				s.client.Update(14999);
+				if (s.sent->size() != 2) {
+					*error = "a retry left before the second backoff elapsed";
+					return false;
+				}
+				s.client.Update(15000);
+				s.client.Update(15000); // third failure: retry in 20s
+				s.client.Update(34999);
+				if (s.sent->size() != 3) {
+					*error = "a retry left before the third backoff elapsed";
+					return false;
+				}
+				s.client.Update(35000);
+				s.client.Update(35000);
+				if (s.client.GetState() != NetDirectoryClient::State::Registered || s.sent->size() != 4) {
+					*error = "the register did not recover after the backoff sequence";
+					return false;
+				}
+				return true;
+			}
+
+			bool TestMergeGameLists(std::string* error) {
+				NetLanHostInfo lan;
+				lan.address = "10.0.0.5";
+				lan.port = 42000;
+				lan.hostName = "Erol-LAN";
+				lan.activity = "P4 Alpha Duel";
+				lan.mode = "pvp-skirmish";
+				lan.playerCount = 1;
+				lan.maxPlayers = 2;
+
+				const NetDirectoryLocalIdentity local = SampleLocal();
+				NetDirectorySessionRow joinable = SampleRow();
+				NetDirectorySessionRow codecMismatch = SampleRow();
+				codecMismatch.lockstepCodecVersion = 99;
+				NetDirectorySessionRow protocolMismatch = SampleRow();
+				protocolMismatch.networkProtocolVersion = 9;
+				NetDirectorySessionRow framesMismatch = SampleRow();
+				framesMismatch.controllerFrameVersion = 9;
+				NetDirectorySessionRow identityMismatch = SampleRow();
+				identityMismatch.sessionIdentityHash = kHex64A;
+				NetDirectorySessionRow modulesMismatch = SampleRow();
+				modulesMismatch.moduleManifestHash = kHex64A;
+				NetDirectorySessionRow full = SampleRow();
+				full.seatsFree = 0;
+
+				const std::vector<NetDirectoryClient::GameRow> merged = NetDirectoryClient::MergeGameLists(
+					{lan},
+					{joinable, codecMismatch, protocolMismatch, framesMismatch, identityMismatch, modulesMismatch, full},
+					local);
+				if (merged.size() != 8) {
+					*error = "merged list size " + std::to_string(merged.size());
+					return false;
+				}
+				const NetDirectoryClient::GameRow& lanRow = merged[0];
+				if (lanRow.source != "LAN" || !lanRow.joinable || lanRow.address != "10.0.0.5" || lanRow.port != 42000 || lanRow.players != "1/2") {
+					*error = "the LAN row did not merge unchanged";
+					return false;
+				}
+				const NetDirectoryClient::GameRow& netRow = merged[1];
+				if (netRow.source != "NET" || !netRow.joinable || !netRow.reason.empty() || netRow.address != "192.168.1.20" || netRow.port != 41010 || netRow.players != "1/2") {
+					*error = "the joinable NET row did not carry its address:port";
+					return false;
+				}
+				const std::vector<std::string> expectedReasons = {"codec", "protocol", "controller frames", "identity", "modules", "full"};
+				for (size_t i = 0; i < expectedReasons.size(); ++i) {
+					const NetDirectoryClient::GameRow& row = merged[2 + i];
+					if (row.joinable || row.reason != expectedReasons[i]) {
+						*error = "row " + std::to_string(i) + " reason was \"" + row.reason + "\" joinable=" + std::to_string(row.joinable) + ", expected \"" + expectedReasons[i] + "\"";
+						return false;
+					}
+				}
+				return true;
+			}
 		}
 
 		int Run() {
@@ -504,6 +764,11 @@ namespace RTE {
 			if (!TestCompatibilityPredicate(&error)) return fail(error);
 			if (!TestCannedSequence(&error)) return fail(error);
 			if (!TestHttpClientReuse(&error)) return fail(error);
+			if (!TestClientLifecycle(&error)) return fail(error);
+			if (!TestHeartbeat404Reregisters(&error)) return fail(error);
+			if (!TestHeartbeat429HonorsRetryAfter(&error)) return fail(error);
+			if (!TestTransportErrorBackoff(&error)) return fail(error);
+			if (!TestMergeGameLists(&error)) return fail(error);
 #ifdef _WIN32
 			if (!TestHttpClientCancel(&error)) return fail(error);
 #endif
