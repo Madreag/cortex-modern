@@ -527,6 +527,74 @@ class DirectoryTests(unittest.TestCase):
         self.assert_keys(drained, SIGNAL_GET_KEYS)
         self.assertEqual(drained["signals"], [])
 
+    def test_signal_long_poll_wait(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid = created["session_id"]
+        token = created["token"]
+        nonce = "longPollNonce"
+        client_peer = f"client:{nonce}"
+        up = base64.b64encode(b"held-for-you").decode("ascii")
+
+        held: list[tuple[int, Any]] = []
+
+        def poll() -> None:
+            held.append(
+                self.call(
+                    "GET",
+                    f"/v1/sessions/{sid}/signals?peer=host&after=0&wait=2&token={quote(token)}",
+                )
+            )
+
+        thread = threading.Thread(target=poll, daemon=True)
+        thread.start()
+        time.sleep(0.4)
+        # wait=2 must hold the GET instead of answering an empty queue at once.
+        self.assertTrue(thread.is_alive())
+        status, posted = self.call(
+            "POST",
+            f"/v1/sessions/{sid}/signal",
+            {
+                "token_or_join_nonce": nonce,
+                "from": client_peer,
+                "to": "host",
+                "payload_b64": up,
+            },
+        )
+        self.assertEqual(status, 200)
+        thread.join(timeout=3.0)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(held), 1)
+        status, body = held[0]
+        self.assertEqual(status, 200)
+        self.assert_keys(body, SIGNAL_GET_KEYS)
+        self.assertEqual([item["payload_b64"] for item in body["signals"]], [up])
+
+        # An empty queue with wait elapses before answering, and the held request
+        # counts once against the per-key budget.
+        key_reqs = self.server.store.limiter._by_key._requests
+        before = len(key_reqs.get(INSTALL_KEY, []))
+        began = time.monotonic()
+        status, empty = self.call(
+            "GET",
+            f"/v1/sessions/{sid}/signals?peer={quote(client_peer, safe=':')}&after=0&wait=0.5",
+        )
+        elapsed = time.monotonic() - began
+        self.assertEqual(status, 200)
+        self.assertEqual(empty["signals"], [])
+        self.assertGreaterEqual(elapsed, 0.35)
+        self.assertEqual(len(key_reqs.get(INSTALL_KEY, [])) - before, 1)
+
+        # wait must be a number inside 0..25.
+        for bad in ("abc", "-1", "30"):
+            status, err = self.call(
+                "GET",
+                f"/v1/sessions/{sid}/signals?peer=host&after=0&wait={bad}&token={quote(token)}",
+            )
+            self.assertEqual(status, 400)
+            self.assertEqual(err, {"error": "invalid_field", "field": "wait"})
+
     def test_signal_queue_and_payload_caps(self) -> None:
         self.start()
         status, created = self.register()
