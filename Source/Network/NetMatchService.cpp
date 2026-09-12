@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <random>
@@ -34,6 +35,7 @@ namespace RTE {
 
 	bool NetMatchService::s_AdmissionEnabled = true;
 	std::string NetMatchService::s_TicketStorePath;
+	std::string NetMatchService::s_JoinWaitPath;
 	bool NetMatchService::s_ApplyForSeat = false;
 	uint16_t NetMatchService::s_ApplySeat = 0;
 	bool NetMatchService::s_AutoSubstitute = false;
@@ -179,6 +181,9 @@ static std::string ResyncSaveName() {
 
 		if (!request.host && NetA7Journal::HasConnectGate() && !WaitForA7ConnectGate(error)) return false;
 
+		// Startup is done and nothing is connected yet, so this is where a held joiner waits.
+		if (!request.host && !WaitForJoinTrigger(s_JoinWaitPath, c_JoinWaitBudgetMs, error)) return false;
+
 		m_ActivityPreset = request.activityPreset;
 		SetState(NetMatchServiceState::Starting, request.host ? "Hosting direct-IP match" : "Joining direct-IP match");
 		{
@@ -269,7 +274,8 @@ static std::string ResyncSaveName() {
 				}
 			}
 		}
-		FinishMatch(text);
+		// The session pump must not destroy the coordinator; the main loop FinishMatch's the stop.
+		Complete(text);
 	}
 
 	bool NetMatchService::ResyncMatch(std::string* error) {
@@ -293,6 +299,7 @@ static std::string ResyncSaveName() {
 			}
 			return false;
 		}
+		uint64_t dropFrame = 0;
 		if (isHost) {
 			// Snapshot callbacks stay on the game thread while waiting peers keep hearing from us.
 			std::jthread keepalive([this](std::stop_token stop) {
@@ -304,6 +311,21 @@ static std::string ResyncSaveName() {
 					std::this_thread::sleep_for(std::chrono::milliseconds(50));
 				}
 			});
+			// The healed round resumes at the first frame the sim has not applied.
+			bool rewindSim = false;
+			if (!ScenarioRunner::ResolveResyncDropFrame(ScenarioRunner::GetLockstepResumeFrame(), static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), dropFrame, rewindSim, error)) {
+				return false;
+			}
+			if (rewindSim) {
+				long long time = g_TimerMan.GetSimTimeTicks();
+				if (!g_TimerMan.IsSimTimeFrozen()) {
+					const long long delta = g_TimerMan.GetDeltaTimeTicks();
+					if (time >= delta) {
+						time -= delta;
+					}
+				}
+				g_TimerMan.RewindSimTo(static_cast<long long>(dropFrame - 1), time);
+			}
 			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName()) || !g_ActivityMan.WaitForSaveGameTask()) {
 				if (error) *error = "resync snapshot save failed";
 				return false;
@@ -329,7 +351,7 @@ static std::string ResyncSaveName() {
 			}
 			NetResyncState state;
 			std::vector<uint8_t> envelope;
-			if (!ScenarioRunner::CaptureNetResyncState(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), state, error) || !NetResyncCodec::Encode(state, stateBytes, envelope, error)) return false;
+			if (!ScenarioRunner::CaptureNetResyncState(dropFrame > 0 ? dropFrame - 1 : 0, state, error) || !NetResyncCodec::Encode(state, stateBytes, envelope, error)) return false;
 			stateBytes = std::move(envelope);
 		}
 		m_ResyncSourceRound = ScenarioRunner::GetLockstepRoundId();
@@ -357,8 +379,7 @@ static std::string ResyncSaveName() {
 			session = std::move(m_Session);
 			runner = std::move(m_Runner);
 			if (isHost) {
-				// The snapshot restores verbatim at its saved sim tick, so the healed round's first frame follows it.
-				runner->SetStartFrame(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1U);
+				runner->SetStartFrame(ScenarioRunner::ResyncResumeStartFrame(dropFrame));
 			}
 			m_Coordinator.reset();
 			coordinator = std::make_unique<NetLockstepCoordinator>();
@@ -514,6 +535,30 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	void NetMatchService::ResetRosterTransitionHistory() {
+		m_RosterTransitions.clear();
+		m_RosterTransitionsDropped = 0;
+		m_LastRosterPair.clear();
+	}
+
+	void NetMatchService::RecordRosterTransitions(uint64_t observedAtMs) {
+		const uint64_t appliedFrame = ScenarioRunner::GetLockstepAppliedFrame();
+		for (const NetLobbyMember& member: m_LobbySnapshot.members) {
+			const std::string state = NetSeatPresence::StateName(m_SeatPresence.StateOf(member.peerId));
+			const std::string line = m_SeatPresence.Line(member.peerId, member.displayName);
+			std::pair<std::string, std::string>& last = m_LastRosterPair[member.peerId];
+			if (last.first == state && last.second == line) {
+				continue;
+			}
+			last = {state, line};
+			if (m_RosterTransitions.size() >= 256) {
+				++m_RosterTransitionsDropped;
+				continue;
+			}
+			m_RosterTransitions.push_back({member.peerId, state, line, appliedFrame, observedAtMs});
+		}
+	}
+
 	void NetMatchService::EndAdmissionSession() {
 		if (m_AdmissionAttached && m_IsHost && m_Session) {
 			// P22: sent from the same call that clears the registry, so a client's record is provably
@@ -525,6 +570,7 @@ static std::string ResyncSaveName() {
 		m_ReconnectHost.TakeOutbound();
 		m_SeatStatuses.clear();
 		m_SeatPresence.Clear();
+		ResetRosterTransitionHistory();
 		m_ModerationSeats.clear();
 		m_AdmissionAttached = false;
 	}
@@ -855,6 +901,9 @@ static std::string ResyncSaveName() {
 		}
 		outActivityPreset = m_ActivityPreset;
 		m_MatchWasRunning = true;
+		if (!m_PendingResyncState.has_value()) {
+			ResetRosterTransitionHistory();
+		}
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
 		CaptureA7SeatView();
@@ -866,7 +915,11 @@ static std::string ResyncSaveName() {
 		if (!m_Coordinator || m_State != NetMatchServiceState::Running) {
 			return;
 		}
-		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot()) m_SeatPresence.ApplySnapshot(*snapshot);
+		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot()) {
+			if (m_SeatPresence.ApplySnapshot(*snapshot)) {
+				RecordRosterTransitions(snapshot->observedAtMs);
+			}
+		}
 		m_SeatPresence.NoteFrame(ScenarioRunner::GetLockstepAppliedFrame());
 		CaptureA7SeatView();
 	}
@@ -914,7 +967,11 @@ static std::string ResyncSaveName() {
 		std::sort(presence.begin(), presence.end(), [](const auto& a, const auto& b) { return a.stableSeat < b.stableSeat; });
 		m_ModerationSeats = std::move(seats);
 		(void)m_Coordinator->PublishSeatSnapshot(std::move(presence), AdmissionNowMs());
-		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot()) m_SeatPresence.ApplySnapshot(*snapshot);
+		if (const auto snapshot = m_Coordinator->TakeSeatSnapshot()) {
+			if (m_SeatPresence.ApplySnapshot(*snapshot)) {
+				RecordRosterTransitions(snapshot->observedAtMs);
+			}
+		}
 	}
 
 	void NetMatchService::PumpSessionEvents() {
@@ -1177,6 +1234,18 @@ static std::string ResyncSaveName() {
 			}
 		}
 		reconnect["roster_lines"] = rosterLines;
+		json rosterTransitions = json::array();
+		for (const RosterTransition& row: m_RosterTransitions) {
+			rosterTransitions.push_back(json{
+				{"peer_id", static_cast<int>(row.peerId)},
+				{"state", row.state},
+				{"line", row.line},
+				{"applied_frame", row.appliedFrame},
+				{"observed_at_ms", row.observedAtMs},
+			});
+		}
+		reconnect["roster_transitions"] = rosterTransitions;
+		reconnect["roster_transitions_dropped"] = static_cast<int>(m_RosterTransitionsDropped);
 		if (const auto& snapshot = m_SeatPresence.GetSnapshot()) {
 			json entries = json::array();
 			for (const auto& seat: snapshot->seats) {
@@ -1358,6 +1427,32 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::SetTicketStorePath(std::string path) {
 		s_TicketStorePath = std::move(path);
+	}
+
+	void NetMatchService::SetJoinWaitPath(std::string path) {
+		s_JoinWaitPath = std::move(path);
+	}
+
+	bool NetMatchService::WaitForJoinTrigger(const std::string& path, uint64_t budgetMs, std::string* error) {
+		if (path.empty()) return true;
+		const std::filesystem::path trigger(path);
+		const auto opened = std::chrono::steady_clock::now();
+		std::cout << "[net-join-wait] waiting for " << path << std::endl;
+		for (;;) {
+			std::error_code fsError;
+			if (std::filesystem::exists(trigger, fsError) && !fsError) {
+				const auto waitedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - opened).count();
+				std::cout << "[net-join-wait] released after " << waitedMs << "ms" << std::endl;
+				return true;
+			}
+			const uint64_t elapsedMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - opened).count());
+			if (elapsedMs >= budgetMs) break;
+			const uint64_t remainingMs = budgetMs - elapsedMs;
+			std::this_thread::sleep_for(std::chrono::milliseconds(std::min<uint64_t>(c_JoinWaitPollMs, remainingMs)));
+		}
+		if (error) *error = "join wait timed out: " + path + " did not appear within " + std::to_string(budgetMs) + "ms";
+		std::cerr << "[net-join-wait] timed out after " << budgetMs << "ms waiting for " << path << std::endl;
+		return false;
 	}
 
 	void NetMatchService::SetApplyForSeat(bool enabled, uint16_t stableSeat) {

@@ -568,6 +568,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (!lastArg && currentArg == "-net-join-wait-for") {
+			NetMatchService::SetJoinWaitPath(argValue[++i]);
+			continue;
+		}
+
 		// Phase B, unattended gates: the joiner asks the host for a seat instead of joining one, and
 		// the host approves the first applicant for that seat the way a moderator would.
 		if (!lastArg && currentArg == "-net-h4-apply") {
@@ -2243,6 +2248,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 					s_netMatchE2ETicks.OnResyncRelaunch();
 				}
 			} else if (resyncError == "match over") {
+				g_NetMatchService.FinishMatch("match over");
 				g_ActivityMan.EndActivity();
 				g_ActivityMan.SetInActivity(false);
 				ScenarioRunner::ClearControllerReplayError();
@@ -3073,7 +3079,10 @@ void RunGameLoop() {
 				}
 				// A legitimate game-over may end the activity mid-run; the sim keeps ticking to the cap so
 				// the trace stays bounded. An end in the first 100 ticks still means a broken setup.
-				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchE2ETicks.EarlyOverIsSetupFailure())) {
+				const uint64_t earlyOverTick = ScenarioRunner::HasLockstepCoordinator()
+					                               ? ScenarioRunner::GetLockstepAppliedFrame()
+					                               : s_netMatchE2ETicks.Total();
+				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchE2ETicks.EarlyOverIsSetupFailure(earlyOverTick))) {
 					s_netMatchServiceE2EError = std::string("activity ended in state ") + ActivityStateName(activityState);
 					s_netMatchServiceE2EExitCode = 1;
 					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);

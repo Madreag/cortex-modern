@@ -1153,6 +1153,26 @@ namespace RTE {
 		return commands;
 	}
 
+	uint64_t ScenarioRunner::ResyncResumeStartFrame(uint64_t dropFrame) {
+		return dropFrame;
+	}
+
+	uint64_t ScenarioRunner::GetLockstepResumeFrame() {
+		return s_LockstepCoordinator ? s_LockstepCoordinator->GetResumeFrame() : 0;
+	}
+
+	bool ScenarioRunner::ResolveResyncDropFrame(uint64_t resumeFrame, uint64_t simUpdateCount, uint64_t& outDropFrame, bool& outRewind, std::string* error) {
+		const uint64_t lastApplied = resumeFrame > 0 ? resumeFrame - 1 : 0;
+		if (simUpdateCount != lastApplied && simUpdateCount != resumeFrame) {
+			if (error) *error = "resync sim tick " + std::to_string(simUpdateCount) + " is neither the applied tick " + std::to_string(lastApplied) + " nor the drop frame " + std::to_string(resumeFrame);
+			return false;
+		}
+		outDropFrame = resumeFrame;
+		// A failed frame wait leaves the counter on the unsimulated drop frame, a deferred stop on the applied tick.
+		outRewind = simUpdateCount == resumeFrame && resumeFrame > 0;
+		return true;
+	}
+
 	bool ScenarioRunner::CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error) {
 		if (!s_LockstepCoordinator || savedTick == UINT64_MAX) return false;
 		NetResyncState captured;
@@ -1570,6 +1590,8 @@ namespace RTE {
 		// configured milliseconds - long enough for the host's drop notice to arrive too late.
 		const uint64_t giveUpMs = timeoutMs > 0 ? static_cast<uint64_t>(timeoutMs) + 50 : 500;
 		const auto waitStart = std::chrono::steady_clock::now();
+		auto giveUpOrigin = waitStart;
+		bool heldThisWait = false;
 		// A sub-second wait is a normal frame exchange; only a real stall gets the marker + overlay.
 		uint32_t nextOverlayMs = 1500;
 		bool stalled = false;
@@ -1585,6 +1607,10 @@ namespace RTE {
 					nextPumpMs = sincePumpMs + 15;
 					s_SessionPump();
 				}
+			}
+			if (!s_LockstepCoordinator) {
+				if (error) *error = "lockstep coordinator is not active";
+				return false;
 			}
 			NetLockstepReadyFrame ready;
 			while (s_LockstepCoordinator->PopReadyFrame(ready)) {
@@ -1621,6 +1647,9 @@ namespace RTE {
 					return false;
 				}
 			}
+			// Parked on a tick the sim has not run: the boundary FinishSimulationTick would use is here,
+			// and the frame we are waiting for may be from a peer the pump has just fenced.
+			s_LockstepCoordinator->ApplyPendingRecoveryStopWhileWaiting(tick);
 			if (s_LockstepCoordinator->IsFailed() || s_LockstepCoordinator->IsStopped()) {
 				if (error) *error = s_LockstepCoordinator->GetStats().timeoutReason;
 				return false;
@@ -1660,16 +1689,17 @@ namespace RTE {
 				}
 				nextOverlayMs = stallMs + 200;
 			}
-			uint64_t budgetMs = giveUpMs;
 			if (holdPause) {
-				uint64_t remain = s_LockstepCoordinator->HoldPauseRemainingMs(NetLockstepNowMs());
-				if (remain == 0) {
-					remain = NetLockstepCoordinator::c_HoldPauseMs;
+				heldThisWait = true;
+			} else {
+				if (heldThisWait) {
+					giveUpOrigin = std::chrono::steady_clock::now();
+					heldThisWait = false;
 				}
-				budgetMs = remain + 1000;
-			}
-			if (stallMs >= budgetMs) {
-				break;
+				const uint32_t giveUpStallMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - giveUpOrigin).count());
+				if (giveUpStallMs >= giveUpMs) {
+					break;
+				}
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
