@@ -105,7 +105,7 @@ namespace RTE {
 				m_Offer = NetReconnectOffer::Stale;
 				break;
 			case NetH4TicketLoadResult::Missing:
-				m_Offer = NetReconnectOffer::None;
+				m_Offer = NetReconnectOffer::Missing;
 				break;
 		}
 		m_OfferAddress.clear();
@@ -121,6 +121,7 @@ namespace RTE {
 			case NetReconnectOffer::Available: return "Rejoin your match at " + m_OfferAddress + "?";
 			case NetReconnectOffer::Corrupt: return "The saved reconnect ticket is damaged and cannot be used.";
 			case NetReconnectOffer::Stale: return "The saved reconnect ticket is too old to use.";
+			case NetReconnectOffer::Missing: return "No reconnect record for that match.";
 			case NetReconnectOffer::None: break;
 		}
 		return "";

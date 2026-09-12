@@ -218,6 +218,7 @@ namespace RTE {
 		std::map<const GUIControl*, NetModerationUx::Row> m_PressedModeration;
 		std::array<GUILabel*, 4> m_MultiplayerLobbyPlayerLabels;
 		MultiplayerSubScreen m_MultiplayerSubScreen;
+		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
 		GUICollectionBox* m_CreditsScrollPanel;
 		std::array<GUICollectionBox*, MenuScreen::ScreenCount> m_MainMenuScreens;
 		std::array<GUIButton*, MenuButton::ButtonCount> m_MainMenuButtons;
