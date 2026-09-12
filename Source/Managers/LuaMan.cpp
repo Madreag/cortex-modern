@@ -7607,6 +7607,7 @@ static std::vector<uint64_t> HashScriptObjectGraphs(LuaStateWrapper& master, Lua
 std::unordered_set<const MovableObject*> LuaMan::s_PreviewClones;
 std::unordered_set<long> LuaMan::s_PreviewFrozenUIDs;
 std::vector<std::pair<LuaStateWrapper*, std::string>> LuaMan::s_PreviewGlobalSnapshots;
+static std::vector<std::pair<long, LuaStateWrapper*>> s_PreviewCloneBindings;
 
 namespace {
 	int AbsoluteLuaIndex(lua_State* L, int index) {
@@ -7880,12 +7881,16 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 
 void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot) {
 	s_PreviewClones.clear();
+	s_PreviewCloneBindings.clear();
 	s_PreviewSharedSlot = sharedSlot;
 	for (MovableObject* clone: clones) {
 		WalkOwned(clone, [sharedSlot](MovableObject* mo) {
 			s_PreviewClones.insert(mo);
 			LuaStateWrapper* state = mo->GetLuaState();
 			const long uid = mo->GetUniqueID();
+			if (state) {
+				s_PreviewCloneBindings.push_back({uid, state});
+			}
 			if (!state) {
 				mo->m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(uid) + "#preview\"]";
 				return;
@@ -7910,14 +7915,13 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 void LuaMan::EndPreviewScripts() {
 	s_PreviewGlobalSnapshots.clear();
 	std::unordered_set<long> dropped;
-	for (const MovableObject* mo: s_PreviewClones) {
-		if (!mo || !dropped.insert(mo->GetUniqueID()).second) {
+	for (const auto& [uid, state]: s_PreviewCloneBindings) {
+		if (!state || !dropped.insert(uid).second) {
 			continue;
 		}
-		if (LuaStateWrapper* state = const_cast<MovableObject*>(mo)->GetLuaState()) {
-			state->DropPreviewScriptObject(mo->GetUniqueID());
-		}
+		state->DropPreviewScriptObject(uid);
 	}
+	s_PreviewCloneBindings.clear();
 	s_PreviewClones.clear();
 	s_PreviewFrozenUIDs.clear();
 	s_PreviewGlobalSnapshots.clear();
