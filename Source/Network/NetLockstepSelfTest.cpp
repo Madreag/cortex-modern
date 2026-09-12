@@ -7269,8 +7269,8 @@ namespace RTE {
 			return true;
 		}
 
-		// Production DefersStops, so Reclaimed must request resync on this tick. A 2-peer Tick
-		// that treats the emptied hold as "nobody coming back" Stops with PeerLeft instead.
+		// Production defers stops, so Reclaimed's resync must land at the FinishSimulationTick below. A
+		// 2-peer Tick that treats the emptied hold as "nobody coming back" Stops with PeerLeft instead.
 		bool DriveTwoPeerHoldResolution(uint16_t port, uint64_t sessionId, NetLockstepHoldResolution resolution,
 		                                NetLockstepCoordinator& host, LoopbackTransport& hostT, LoopbackTransport& clientT,
 		                                uint64_t& leaveFrame, uint64_t& now, std::string* error) {
@@ -7337,6 +7337,10 @@ namespace RTE {
 			leaveFrame = host.GetPeerLeaveFrames().at(2);
 			host.ResolveHeldSeat(2, resolution, now);
 			host.Tick(now + 5);
+			if (resolution != NetLockstepHoldResolution::Expired && (!host.IsRunning() || !host.HasPendingRecoveryStop())) {
+				*error = "the hold resolution ended the round before its tick boundary: " + host.GetStats().timeoutReason;
+				return false;
+			}
 			host.FinishSimulationTick(leaveFrame > 0 ? leaveFrame - 1 : 0);
 			return true;
 		}
@@ -7471,6 +7475,11 @@ namespace RTE {
 			}
 			host.ResolveHeldSeat(2, NetLockstepHoldResolution::Reclaimed, now);
 			host.Tick(now + 5);
+			if (!host.IsRunning() || !host.HasPendingRecoveryStop()) {
+				*error = "3-peer Reclaimed did not hold its resync for the tick boundary: " + host.GetStats().timeoutReason;
+				return false;
+			}
+			host.FinishSimulationTick(host.GetStats().nextFrame - 1);
 			if (host.IsStopped()) {
 				*error = "Reclaimed stopped a 3-peer round: " + host.GetStats().timeoutReason;
 				return false;
