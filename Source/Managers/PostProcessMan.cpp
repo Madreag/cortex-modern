@@ -12,6 +12,9 @@
 #include "GUICheckpoint.h"
 
 #include "PresetMan.h"
+#include "PreviewEventLedger.h"
+#include "SoundSimulation.h"
+#include "TimerMan.h"
 #include "GLResourceMan.h"
 #include "RenderTarget.h"
 
@@ -326,17 +329,43 @@ void PostProcessMan::AdjustEffectsPosToPlayerScreen(int playerScreen, BITMAP* ta
 	}
 }
 
+bool PostProcessMan::TakePreviewEffect(size_t hash) {
+	const uint64_t emitter = SoundSimulationScope::CurrentKey().objectUID;
+	if (!PreviewEventLedger::IsPreviewedEmitter(emitter)) {
+		return !s_RegistrationSuppressed;
+	}
+	const PreviewEventLedger::Key key = PreviewEventLedger::NextKey(PreviewEventLedger::PostEffect, emitter, hash, 0, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+	if (PreviewEventLedger::IsArmed()) {
+		// Consecutive previews re-predict the same effect; the first one shows it.
+		if (PreviewEventLedger::AlreadyPlayed(key)) {
+			return false;
+		}
+		PreviewEventLedger::Insert(key, {});
+		PreviewEventLedger::NoteEventStart(PreviewEventLedger::CommittedTick(), key, true);
+		return true;
+	}
+	if (s_RegistrationSuppressed) {
+		return false;
+	}
+	std::vector<int> adopted;
+	if (PreviewEventLedger::Consume(key, adopted)) {
+		return false;
+	}
+	PreviewEventLedger::NoteEventStart(PreviewEventLedger::CommittedTick(), key, false);
+	return true;
+}
+
 void PostProcessMan::RegisterPostEffect(const Vector& effectPos, BITMAP* effect, size_t hash, int strength, float angle) {
 	// These effects get applied when there's a drawn frame that followed one or more sim updates.
 	// They are not only registered on drawn sim updates; flashes and stuff could be missed otherwise if they occur on undrawn sim updates.
 
-	if (!s_RegistrationSuppressed && effect && g_TimerMan.SimUpdatesSinceDrawn() >= 0) {
+	if (effect && g_TimerMan.SimUpdatesSinceDrawn() >= 0 && TakePreviewEffect(hash)) {
 		m_PostSceneEffects.push_back(PostEffect(effectPos, effect, hash, strength, angle));
 	}
 }
 
 void PostProcessMan::RegisterPostEffect(const Vector& effectPos, BITMAP* effect, size_t hash, int strength, float angle, MOID attachedToMOID) {
-	if (!s_RegistrationSuppressed && effect && g_TimerMan.SimUpdatesSinceDrawn() >= 0) {
+	if (effect && g_TimerMan.SimUpdatesSinceDrawn() >= 0 && TakePreviewEffect(hash)) {
 		m_PostSceneEffects.push_back(PostEffect(effectPos, effect, hash, strength, angle, attachedToMOID));
 	}
 }

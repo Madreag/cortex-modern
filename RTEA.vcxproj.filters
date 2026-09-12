@@ -145,6 +145,9 @@
     <ClInclude Include="Source\Managers\LocalPrediction.h">
       <Filter>Managers</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Managers\PreviewEventLedger.h">
+      <Filter>Managers</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Managers\TerrainLayerSnapshot.h">
       <Filter>Managers</Filter>
     </ClInclude>
@@ -977,6 +980,9 @@
       <Filter>Managers</Filter>
     </ClCompile>
     <ClCompile Include="Source\Managers\LocalPrediction.cpp">
+      <Filter>Managers</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Managers\PreviewEventLedger.cpp">
       <Filter>Managers</Filter>
     </ClCompile>
     <ClCompile Include="Source\Managers\TerrainLayerSnapshot.cpp">

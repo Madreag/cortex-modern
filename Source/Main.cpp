@@ -91,6 +91,7 @@
 #include "AIWriteScript.h"
 #include "FaultInjection.h"
 #include "LocalPrediction.h"
+#include "PreviewEventLedger.h"
 #include "TerrainLayerSnapshot.h"
 #include "DeterminismCheck.h"
 #include "MetricsCollector.h"
@@ -254,6 +255,9 @@ static long long s_lpExpectEquipTick = 0;
 static long long s_lpExpectEquipSlack = 0; //!< Ticks the preview's pickup may lag the canonical one (the reach ray is a random cast).
 static long long s_lpExpectFireTick = 0;
 static long long s_lpExpectFireSlack = 0;
+static long long s_eventLedgerPressTick = 0; //!< -local-prediction-event-ledger: the tick the tracked press is sampled at.
+static bool s_eventLedgerChecked = false;
+static long long s_eventLedgerFlashTick = -1; //!< The committed tick a preview first drew the muzzle flash on.
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
@@ -406,6 +410,7 @@ int ShutDown(int exitCode) {
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
 	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
 	LocalPrediction::Clear();
+	PreviewEventLedger::Clear();
 	if (s_rbProbeOriginals.held) {
 		// These originals outlive the managers, so a refusal here is discarded while there is still an engine to do it.
 		if (!g_MovableMan.ReinstateWorld(s_rbProbeOriginals)) {
@@ -839,6 +844,16 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				return false;
 			}
 			LocalPrediction::SetDepthOverride(static_cast<int>(std::strtol(text.c_str(), nullptr, 10)));
+			continue;
+		}
+		if (!lastArg && currentArg == "-local-prediction-event-ledger") {
+			// The tick the tracked press is sampled at; the shot's sound must be audible by the next one.
+			const std::string text = argValue[++i];
+			if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
+				std::cerr << "[preview-event-selftest] bad press tick '" << text << "': expected a whole number" << std::endl;
+				return false;
+			}
+			s_eventLedgerPressTick = std::strtoll(text.c_str(), nullptr, 10);
 			continue;
 		}
 		if (!lastArg && currentArg == "-local-prediction-invariance") {
@@ -1700,6 +1715,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 		return;
 	}
 	WriteProbeText("lpinv_before", before);
+	const uint64_t soundCursorBefore = g_AudioMan.GetCheckpointSoundContainerCursor();
 	int failures = 0;
 	int cases = 0;
 	for (const int depth: s_lpInvarianceDepths) {
@@ -1712,6 +1728,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 			};
 			LocalPrediction::SetDepthOverride(depth);
 			const uint64_t previewsBefore = LocalPrediction::GetPreviewCount();
+			const uint64_t armsBefore = PreviewEventLedger::GetArmCount();
 			std::string outcomeFailure;
 			for (int n = 0; n < repeats; ++n) {
 				LocalPrediction::Clear();
@@ -1742,6 +1759,15 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 			if (previewsRun != static_cast<uint64_t>(repeats)) {
 				fail(std::to_string(previewsRun) + " previews ran, expected " + std::to_string(repeats) + " (no local actor to preview?)");
 			}
+			if (const uint64_t soundCursorAfter = g_AudioMan.GetCheckpointSoundContainerCursor(); soundCursorAfter != soundCursorBefore) {
+				fail("the audio checkpoint identity cursor moved " + std::to_string(soundCursorBefore) + " -> " + std::to_string(soundCursorAfter) + " across discarded previews");
+			}
+			if (const uint64_t armed = PreviewEventLedger::GetArmCount() - armsBefore; armed != previewsRun) {
+				fail("the event ledger armed " + std::to_string(armed) + " times for " + std::to_string(previewsRun) + " previews");
+			}
+			if (PreviewEventLedger::IsArmed()) {
+				fail("the event ledger is still armed after the previews");
+			}
 			if (!outcomeFailure.empty()) {
 				fail(outcomeFailure + " [" + outcome + "]");
 			}
@@ -1767,9 +1793,73 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 	}
 }
 
+// -local-prediction-event-ledger drives one preview and one frame per sim tick, the cadence a played
+// match has; a replay run pumps its ticks without frames, so nothing would preview at all.
+static void PreviewEventLedgerFrameOnTick() {
+	if (s_eventLedgerPressTick <= 0) {
+		return;
+	}
+	LocalPrediction::RunPreview();
+	if (s_eventLedgerFlashTick < 0 && LocalPrediction::GetLastOutcome().firedFrame) {
+		s_eventLedgerFlashTick = g_TimerMan.GetSimUpdateCount();
+	}
+	DrawFrameWithPreviews();
+}
+
+// -local-prediction-event-ledger: the shot a previewed actor fires must be audible on the preview that
+// runs it, not D ticks later at its committed tick, and it must reach the output exactly once.
+static void CheckPreviewEventLedgerSelfTest() {
+	if (s_eventLedgerPressTick <= 0 || s_eventLedgerChecked) {
+		return;
+	}
+	s_eventLedgerChecked = true;
+	bool passed = true;
+	const auto check = [&passed](const char* name, bool ok, const std::string& detail) {
+		std::cout << "[preview-event-selftest] " << (ok ? "PASS " : "FAIL ") << name << ": " << detail << std::endl;
+		passed = passed && ok;
+	};
+	const uint64_t press = static_cast<uint64_t>(s_eventLedgerPressTick);
+	const std::vector<PreviewEventLedger::EventStart>& starts = PreviewEventLedger::GetEventStarts();
+	const auto firstAfterPress = [&starts, press](uint8_t kind) -> const PreviewEventLedger::EventStart* {
+		for (const PreviewEventLedger::EventStart& start: starts) {
+			if (start.kind == kind && start.committedTick >= press) return &start;
+		}
+		return nullptr;
+	};
+	const PreviewEventLedger::EventStart* tracked = firstAfterPress(PreviewEventLedger::Sound);
+	if (!tracked) {
+		check("a_previewed_actor_played_a_sound", false, "no physical voice from a previewed actor at or after tick " + std::to_string(press) + " (" + std::to_string(PreviewEventLedger::GetEventStartCount()) + " events recorded in the run)");
+	} else {
+		size_t sameKey = 0;
+		for (const PreviewEventLedger::EventStart& start: starts) {
+			if (start.kind == tracked->kind && start.emitterUID == tracked->emitterUID && start.eventTick == tracked->eventTick && start.seq == tracked->seq) {
+				++sameKey;
+			}
+		}
+		check("the_sound_starts_on_the_preview_tick", tracked->committedTick <= press + 1,
+		      "first physical voice for the press at committed tick " + std::to_string(tracked->committedTick) + " (event tick " + std::to_string(tracked->eventTick) + ", seq " + std::to_string(tracked->seq) + ", predicted=" + std::to_string(tracked->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1));
+		check("the_event_reaches_the_output_once", sameKey == 1, std::to_string(sameKey) + " physical starts for that event");
+	}
+	const PreviewEventLedger::EventStart* glow = firstAfterPress(PreviewEventLedger::PostEffect);
+	check("the_glow_starts_on_the_preview_tick", glow && glow->committedTick <= press + 1,
+	      glow ? "first post effect for the press at committed tick " + std::to_string(glow->committedTick) + " (event tick " + std::to_string(glow->eventTick) + ", predicted=" + std::to_string(glow->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1)
+	           : "no post effect from a previewed actor at or after tick " + std::to_string(press));
+	// A guard, not a detector: the muzzle flash sprite is already drawn on the preview that fires.
+	check("the_flash_sprite_stays_on_the_preview_tick", s_eventLedgerFlashTick > 0 && static_cast<uint64_t>(s_eventLedgerFlashTick) <= press + 1,
+	      "the previewed firearm's flash frame is first set at committed tick " + std::to_string(s_eventLedgerFlashTick) + ", expected <= " + std::to_string(press + 1));
+	const PreviewEventLedger::Counters& counters = PreviewEventLedger::GetCounters();
+	check("the_counters_balance", counters.playedAtPreview == counters.adoptedAtCommit + counters.expired + PreviewEventLedger::GetLiveEntryCount(),
+	      PreviewEventLedger::Describe() + " live=" + std::to_string(PreviewEventLedger::GetLiveEntryCount()));
+	std::cout << "[preview-event-selftest] " << (passed ? "PASS" : "FAIL") << " press tick " << press << std::endl;
+	if (!passed) {
+		s_netReplayExitCode = 5;
+	}
+}
+
 // A requested test that never reached its tick is a failed test; stopping early cannot pass it.
 static void CheckRequiredProbesCompleted() {
 	const long long stoppedAt = g_TimerMan.GetSimUpdateCount();
+	CheckPreviewEventLedgerSelfTest();
 	if (s_lpInvarianceTick > 0 && s_lpInvarianceFailures < 0) {
 		std::cout << "[lpinv] FAIL: invariance test at tick " << s_lpInvarianceTick << " never executed (the run stopped at tick " << stoppedAt << ")" << std::endl;
 		g_MetricsCollector.RecordString("lpinv_result", "not_run");
@@ -2349,6 +2439,7 @@ void RunGameLoop() {
 
 		if (!g_ActivityMan.ActivityRunning()) {
 			LocalPrediction::Clear();
+			PreviewEventLedger::Clear();
 		}
 
 		const bool paceActiveAtIterStart = ScenarioRunner::IsLockstepControllerSyncActive();
@@ -2380,6 +2471,7 @@ void RunGameLoop() {
 			g_PerformanceMan.UpdateMSPSU();
 			g_TimerMan.UpdateSim();
 			g_AudioMan.RetireFinishedSimulationSounds();
+			PreviewEventLedger::ExpireForTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
@@ -2639,6 +2731,7 @@ void RunGameLoop() {
 			DumpSimStateIfArmed(simTick);
 			TickProbeIfArmed(simTick);
 			LocalPredictionInvarianceOnTick(simTick);
+			PreviewEventLedgerFrameOnTick();
 			TrackUidsIfArmed(simTick);
 			DumpTerrainIfArmed(simTick);
 			{
@@ -3595,6 +3688,20 @@ std::string BuildLoopPaceJson() {
 	return out.str();
 }
 
+// What a previewed actor put on the output and when, so a fixture can measure press to sound.
+std::string BuildPreviewEventStartsJson() {
+	std::ostringstream out;
+	out << "[";
+	const std::vector<PreviewEventLedger::EventStart>& starts = PreviewEventLedger::GetEventStarts();
+	for (size_t index = 0; index < starts.size(); ++index) {
+		const PreviewEventLedger::EventStart& start = starts[index];
+		out << (index ? "," : "") << "{\"committed_tick\":" << start.committedTick << ",\"event_tick\":" << start.eventTick << ",\"emitter\":" << start.emitterUID
+		    << ",\"kind\":" << static_cast<int>(start.kind) << ",\"seq\":" << start.seq << ",\"predicted\":" << (start.predicted ? "true" : "false") << "}";
+	}
+	out << "]";
+	return out.str();
+}
+
 std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& setupError) {
 	const Activity* activity = g_ActivityMan.GetActivity();
 	const Activity::ActivityState activityState = activity ? activity->GetActivityState() : Activity::NoActivity;
@@ -3620,7 +3727,12 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"local_prediction\":{\"enabled\":" << (LocalPrediction::IsEnabled() ? "true" : "false")
 	    << ",\"previews\":" << LocalPrediction::GetPreviewCount() << ",\"actor_ticks\":" << LocalPrediction::GetPreviewTicks()
 	    << ",\"ms_total\":" << LocalPrediction::GetPreviewMs() << ",\"shadows\":" << LocalPrediction::GetShadows() << ",\"taken\":" << LocalPrediction::GetTaken()
-	    << ",\"violations\":" << LocalPrediction::GetViolations() << "},";
+	    << ",\"violations\":" << LocalPrediction::GetViolations()
+	    << ",\"events_played_at_preview\":" << PreviewEventLedger::GetCounters().playedAtPreview
+	    << ",\"events_suppressed_at_commit\":" << PreviewEventLedger::GetCounters().adoptedAtCommit
+	    << ",\"events_expired\":" << PreviewEventLedger::GetCounters().expired
+	    << ",\"events_retimed\":" << PreviewEventLedger::GetCounters().retimed
+	    << ",\"event_starts\":" << BuildPreviewEventStartsJson() << "},";
 	out << "\"controller_boundary\":" << BuildControllerBoundaryJson() << ",";
 	out << "\"replay_recording\":{\"frames\":" << ScenarioRunner::GetLockstepReplayRecordFrames()
 	    << ",\"closed\":" << (ScenarioRunner::WasLockstepReplayRecordClosed() ? "true" : "false") << "},";
@@ -3912,6 +4024,9 @@ int main(int argc, char** argv) {
 	for (int i = 1; i < argc; ++i) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-controller-frame-selftest") {
 			return ControllerFrameSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-preview-event-ledger-selftest") {
+			return PreviewEventLedger::RunSelfTest() ? 0 : 1;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-protocol-selftest") {
 			return NetProtocolSelfTest::Run();

@@ -909,7 +909,12 @@ void SoundContainer::ReidentifyCheckpoint(uint64_t identity) {
 
 std::string SoundContainer::SaveCheckpoint() const {
 	CheckpointWriter archive("SoundContainer3");
-	archive(Entity::SaveCheckpoint(), m_CheckpointIdentity, std::set<int>(m_PlayingChannels.begin(), m_PlayingChannels.end()));
+	// A predicted voice exists on the predicting peer only, so no checkpoint may name it.
+	std::set<int> playing;
+	for (int identity: m_PlayingChannels) {
+		if (!g_AudioMan.IsPredictedVoice(identity)) playing.insert(identity);
+	}
+	archive(Entity::SaveCheckpoint(), m_CheckpointIdentity, playing);
 	archive(m_SoundOverlapMode, m_BusRouting, m_Immobile, m_AttenuationStartDistance, m_CustomPanValue, m_PanningStrengthMultiplier, m_Loops, m_SoundPropertiesUpToDate, m_Priority, m_AffectedByGlobalPitch, m_Pos, m_Pitch, m_PitchVariation, m_Volume, m_WasFadedOut, m_Paused, m_MusicPreEntryTime, m_MusicExitTime);
 	archive(m_LogicalPlayback);
 	return archive.Text();

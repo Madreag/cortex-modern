@@ -61,6 +61,10 @@ namespace RTE {
 		SoundContainer* FindSimulationSoundContainer(uint64_t identity) const { return FindCheckpointSoundContainer(identity); }
 		void VisitSharedSimulationSounds(const std::function<void(const SoundContainer&)>& visitor) const;
 		float GetLocalSoundAudibility(const SoundContainer* container) const;
+		/// Drops a prediction no canonical emission claimed: a loop stops, a one-shot finishes unowned.
+		void RetirePredictedVoice(int identity);
+		/// A voice a preview started and nothing has adopted; it is on this machine only.
+		bool IsPredictedVoice(int identity) const;
 		bool RunLogicalPlaybackSelfTest();
 		/// This peer's actual audibility of every live shared sound it answers for, sampled at the input boundary; only changed readings ride.
 		std::vector<NetSoundObservation> SampleSoundObservations();
@@ -483,6 +487,7 @@ namespace RTE {
 			std::string soundPath;
 			float minimumAudibleDistance = 0;
 			SoundExecutionDomain domain = SoundExecutionDomain::Presentation;
+			bool predicted = false; //!< Started by a preview and not yet adopted, so it belongs to no checkpoint.
 		};
 		std::map<int, PlayingVoice> m_PlayingVoices;
 		std::unordered_map<int, int> m_BackendVoiceIdentities;
@@ -521,7 +526,8 @@ namespace RTE {
 		SoundContainer* FindRestoredCheckpointSoundContainer(uint64_t identity) const;
 		SoundContainer* ResolveCheckpointVoiceOwner(uint64_t identity) const;
 		void RefreshRestoredManagerIdentities();
-		int RegisterPlayingVoice(FMOD::Channel* channel, SoundContainer* owner, const std::string& path, float minimumAudibleDistance);
+		int RegisterPlayingVoice(FMOD::Channel* channel, SoundContainer* owner, const std::string& path, float minimumAudibleDistance, bool predicted = false);
+		bool AdoptPredictedVoice(int identity, SoundContainer* owner, float pitch, const SoundData* soundData);
 		int FindVoiceIdentity(const FMOD::Channel* channel) const;
 		FMOD_RESULT GetVoiceChannel(int voiceIdentity, FMOD::Channel** channel) const;
 		bool OwnsVoice(int voiceIdentity, const SoundContainer* owner) const;

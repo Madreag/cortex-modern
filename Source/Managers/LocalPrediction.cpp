@@ -15,6 +15,7 @@
 #include "MOSRotating.h"
 #include "MovableMan.h"
 #include "PostProcessMan.h"
+#include "PreviewEventLedger.h"
 #include "RTETools.h"
 #include "ScenarioRunner.h"
 #include "SceneMan.h"
@@ -128,6 +129,7 @@ namespace RTE {
 		const std::mt19937 rngState = g_SimRNG.GetEngineState();
 		const uint64_t rngDraws = g_SimRNG.GetDrawCount();
 		const long uidCounter = MovableObject::GetUniqueIDCounter();
+		const uint64_t soundIdentityCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		Activity::RollbackState activityState;
 		activity->CaptureRollbackState(activityState);
 		static TerrainLayerSnapshot terrain;
@@ -140,6 +142,12 @@ namespace RTE {
 		LuaMan::SetScriptsFrozen(true);
 		AudioMan::SetPlaybackSuppressed(true);
 		PostProcessMan::SetRegistrationSuppressed(true);
+		std::vector<uint64_t> emitters;
+		emitters.reserve(targets.size());
+		for (const Preview& preview: targets) {
+			emitters.push_back(static_cast<uint64_t>(preview.original->GetUniqueID()));
+		}
+		PreviewEventLedger::Arm(static_cast<uint64_t>(simCount), soundIdentityCursor, std::move(emitters));
 		g_MovableMan.BeginSpeculation();
 		{
 			MovableObject::FaithfulCloneScope scope(false);
@@ -208,6 +216,7 @@ namespace RTE {
 					if (const HDFirearm* firearm = dynamic_cast<const HDFirearm*>(equipped)) {
 						outcome.roundsInMag = firearm->GetRoundInMagCount();
 						outcome.firedOnce = firearm->FiredOnce();
+						outcome.firedFrame = firearm->FiredFrame();
 					}
 				}
 				break;
@@ -218,6 +227,12 @@ namespace RTE {
 		outcome.spawnedNames = g_MovableMan.DescribeAddedSince(mark);
 		std::vector<MovableObject*> taken;
 		g_MovableMan.EndSpeculation(&taken);
+		std::vector<uint64_t> takenEmitters;
+		takenEmitters.reserve(taken.size());
+		for (const MovableObject* resident: taken) {
+			takenEmitters.push_back(static_cast<uint64_t>(resident->GetRootParent()->GetUniqueID()));
+		}
+		PreviewEventLedger::AddPreviewedEmitters(takenEmitters);
 		Trace("discarded");
 		const MovableMan::SpeculationStats statsAfter = g_MovableMan.GetSpeculationStats();
 		outcome.shadows = statsAfter.shadows - statsBefore.shadows;
@@ -241,6 +256,9 @@ namespace RTE {
 		g_SimRNG.SetDrawCount(rngDraws);
 		g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);
 		MovableObject::PinUniqueIDCounter(uidCounter);
+		// The rounds a preview pops take fresh sound identities with them; the canonical cursor keeps its place.
+		g_AudioMan.SetCheckpointSoundContainerCursor(soundIdentityCursor);
+		PreviewEventLedger::Disarm();
 		PostProcessMan::SetRegistrationSuppressed(false);
 		AudioMan::SetPlaybackSuppressed(false);
 		LuaMan::SetScriptsFrozen(false);
@@ -335,7 +353,8 @@ namespace RTE {
 			return "";
 		}
 		const MovableMan::SpeculationStats& stats = g_MovableMan.GetSpeculationStats();
+		const std::string events = PreviewEventLedger::Describe();
 		return "previews=" + std::to_string(s_PreviewCount) + " actor_ticks=" + std::to_string(s_PreviewTicks) + " ms_total=" + std::to_string(s_PreviewMs) + " avg_ms=" + std::to_string(s_PreviewMs / static_cast<double>(s_PreviewCount)) +
-		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations);
+		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations) + (events.empty() ? std::string() : " " + events);
 	}
 } // namespace RTE
