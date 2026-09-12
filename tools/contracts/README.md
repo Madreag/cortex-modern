@@ -21,9 +21,10 @@ previously saved fixture, detecting manager values accidentally inherited from t
 
 Every run retains source/input hashes, the executable hash, complete output, independent
 state differences and losslessly compressed observations. `complete` means the operations
-executed cleanly on unchanged inputs; it does **not** mean faithful restoration. Getter
-mismatches, graph refusal, native fields and identities must all be assessed. Raw difference
-counts include legitimate candidate objects and clock context and are not bug counts.
+executed cleanly on unchanged inputs, every ARMED fixture produced a check list, and those
+lists reported no mismatches; it does **not** mean faithful restoration. Raw field differences,
+native gaps and identities must still be assessed. Raw difference counts include legitimate
+candidate objects and clock context and are not bug counts.
 
 The instrumentation was built and run with the combined source at audit executable
 `65c51ea60dfa281d4c4449bd4b0b41b339ba5334b8d2659793c30a383926b8ef`.
