@@ -51,10 +51,18 @@ mkdir -p /Users/erol/cortex-directory/logs
 
 ```bash
 cd /Users/erol/cortex-directory
-openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=cortex-directory"
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=cortex-directory" -addext "subjectAltName=IP:<lan-ip>"
 ```
 
-Clients trust the system store or a user-supplied CA file. Do not pin a certificate hash in the engine.
+Use `DNS:<name>` instead of `IP:<lan-ip>` when the directory is reached by name.
+
+Pin the leaf (64 lowercase hex):
+
+```bash
+openssl x509 -in cert.pem -outform DER | openssl dgst -sha256
+```
+
+Every client sets `SessionDirectoryCertSha256 = <hex>` in Settings.ini for a self-signed directory. An unpinned client needs a certificate the system store trusts (Let's Encrypt with a public DNS name). Pinned mode does not consult the chain, the name or the dates.
 
 4. Load the daemon (starts at boot, survives logout, KeepAlive):
 
@@ -80,4 +88,4 @@ Start in: D:\path\to
 
 Allow inbound TCP 8443 for that Python executable (elevated firewall rule). Clients set the directory URL to this PC. There is no launchd job and no `gui/501` requirement.
 
-Self-signed certificate (same `openssl` command as above) unless a public DNS name exists for Let's Encrypt.
+Self-signed certificate (same `openssl` command as above, including the SAN) unless a public DNS name exists for Let's Encrypt. Clients pin that certificate as in step 3.
