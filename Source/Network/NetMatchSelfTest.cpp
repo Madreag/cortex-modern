@@ -701,6 +701,22 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestResyncReportAbsentWhenIdle(std::string* error) {
+			NetMatchService service;
+			nlohmann::json report;
+			try {
+				report = nlohmann::json::parse(service.BuildReportJson());
+			} catch (const nlohmann::json::exception& parseError) {
+				*error = std::string("idle report was not JSON: ") + parseError.what();
+				return false;
+			}
+			if (report.contains("resync")) {
+				*error = "idle service report carried a resync block";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestSaveCompressionChoice(std::string* error) {
 			if (ActivityMan::ZipLevelFor(ActivityMan::SaveCompression::Fast) != ActivityMan::c_SaveZipLevelFast) {
 				*error = "Fast save compression is not the user-save zip level";
@@ -1811,6 +1827,7 @@ namespace RTE {
 		if (!TestServiceRuntimeErrorSurface(&error)) return fail(error);
 		if (!TestJoinWaitTrigger(&error)) return fail(error);
 		if (!TestSaveCompressionChoice(&error)) return fail(error);
+		if (!TestResyncReportAbsentWhenIdle(&error)) return fail(error);
 		std::string failedReportError;
 		std::string rejoinOverError;
 		std::string rejoinWaitError;
