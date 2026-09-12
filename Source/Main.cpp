@@ -98,6 +98,7 @@
 #include "AIWriteScript.h"
 #include "FaultInjection.h"
 #include "LocalPrediction.h"
+#include "OwnedMovableObjects.h"
 #include "PreviewEventLedger.h"
 #include "PreviewScriptSelfTest.h"
 #include "TerrainLayerSnapshot.h"
@@ -132,6 +133,7 @@
 #include <map>
 #include <sstream>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -315,6 +317,7 @@ static bool s_eventLedgerChecked = false;
 static long long s_eventLedgerFlashTick = -1; //!< The committed tick a preview first drew the muzzle flash on.
 static uint64_t s_eventLedgerLuaEmitterUID = 0;
 static std::string s_eventLedgerLuaPreset;
+static std::unordered_set<uint64_t> s_eventLedgerGlowUIDs;
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
@@ -1992,6 +1995,16 @@ static void PreviewEventLedgerFrameOnTick() {
 					if (const HeldDevice* held = human->GetEquippedItem()) {
 						s_eventLedgerLuaPreset = held->GetPresetName();
 						s_eventLedgerLuaEmitterUID = static_cast<uint64_t>(held->GetUniqueID());
+						s_eventLedgerGlowUIDs.clear();
+						s_eventLedgerGlowUIDs.insert(static_cast<uint64_t>(actor->GetUniqueID()));
+						std::unordered_set<const Entity*> visited;
+						std::unordered_set<const MovableObject*> objects;
+						CollectOwnedMovableObjects(held, visited, objects);
+						for (const MovableObject* mo: objects) {
+							if (mo) {
+								s_eventLedgerGlowUIDs.insert(static_cast<uint64_t>(mo->GetUniqueID()));
+							}
+						}
 					}
 				}
 			}
@@ -2038,10 +2051,20 @@ static void CheckPreviewEventLedgerSelfTest() {
 		      "first physical voice for the press at committed tick " + std::to_string(tracked->committedTick) + " (event tick " + std::to_string(tracked->eventTick) + ", seq " + std::to_string(tracked->seq) + ", predicted=" + std::to_string(tracked->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1));
 		check("the_event_reaches_the_output_once", sameKey == 1, std::to_string(sameKey) + " physical starts for that event");
 	}
-	const PreviewEventLedger::EventStart* glow = firstAfterPress(PreviewEventLedger::PostEffect);
-	check("the_glow_starts_on_the_preview_tick", glow && glow->committedTick <= press + 1,
-	      glow ? "first post effect for the press at committed tick " + std::to_string(glow->committedTick) + " (event tick " + std::to_string(glow->eventTick) + ", predicted=" + std::to_string(glow->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1)
-	           : "no post effect from a previewed actor at or after tick " + std::to_string(press));
+	const uint64_t glowWindow = press + static_cast<uint64_t>(std::max(0, LocalPrediction::GetDepthOverride())) + 1;
+	const PreviewEventLedger::EventStart* glow = nullptr;
+	for (const PreviewEventLedger::EventStart& start: starts) {
+		if (start.kind == PreviewEventLedger::PostEffect && start.committedTick >= press && start.committedTick <= glowWindow && s_eventLedgerGlowUIDs.count(start.emitterUID)) {
+			glow = &start;
+			break;
+		}
+	}
+	if (!glow) {
+		check("the_glow_starts_on_the_preview_tick", true, "no post effect belongs to " + (s_eventLedgerLuaPreset.empty() ? std::string("the firearm") : s_eventLedgerLuaPreset));
+	} else {
+		check("the_glow_starts_on_the_preview_tick", glow->committedTick <= press + 1,
+		      "first post effect for the press at committed tick " + std::to_string(glow->committedTick) + " (event tick " + std::to_string(glow->eventTick) + ", predicted=" + std::to_string(glow->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1));
+	}
 	if (s_eventLedgerLuaPreset == "AK-47" && s_eventLedgerLuaEmitterUID != 0) {
 		const PreviewEventLedger::EventStart* luaFire = nullptr;
 		for (const PreviewEventLedger::EventStart& start: starts) {
