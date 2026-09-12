@@ -25,6 +25,7 @@ namespace RTE {
 	class GUIControl;
 	class GUITextBox;
 	class GUIListBox;
+	class GUICheckbox;
 	struct NetLobbySnapshot;
 
 	/// Handling for the main menu screen composition and sub-menu interaction.
@@ -78,6 +79,12 @@ namespace RTE {
 
 		/// Sets a text box's text by control name.
 		bool AutomationSetText(const std::string& controlName, const std::string& text);
+
+		/// Sets a checkbox's state by control name, then runs the same change path a click would.
+		bool AutomationSetCheck(const std::string& controlName, bool checked);
+
+		/// Gets a named control's text (label, button or checkbox) for assert_label; false when it has none.
+		bool AutomationLabelText(const std::string& controlName, std::string& text) const;
 
 		/// Gets the name of the active menu screen.
 		std::string AutomationActiveScreenName() const;
@@ -201,6 +208,7 @@ namespace RTE {
 		GUITextBox* m_MultiplayerHostPortTextBox;
 		GUITextBox* m_MultiplayerHostPlayersTextBox;
 		GUITextBox* m_MultiplayerHostInputDelayTextBox;
+		GUICheckbox* m_MultiplayerHostPortMapCheckbox;
 		GUIButton* m_MultiplayerHostModeButton;
 		NetMatchMode m_MultiplayerHostMode;
 		GUITextBox* m_MultiplayerJoinAddressTextBox;
