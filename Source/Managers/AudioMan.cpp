@@ -17,6 +17,7 @@
 #include "PresetMan.h"
 #include "MovableObject.h"
 #include "MovableMan.h"
+#include "PreviewEventLedger.h"
 #include "Actor.h"
 #include "AEmitter.h"
 #include "HDFirearm.h"
@@ -520,6 +521,11 @@ void AudioMan::ClearSoundEvents(int player) {
 	}
 }
 
+// The preset a container was defined from, which a preview's clone of it shares.
+static uint64_t SoundPresetHash(const SoundContainer* soundContainer) {
+	return Hash(soundContainer->GetPresetName() + "@" + std::to_string(soundContainer->GetModuleID()));
+}
+
 bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 	if (!soundContainer) return false;
 	const bool restoring = g_MovableMan.IsRestoringSnapshot();
@@ -533,14 +539,16 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 	}
 	const bool logical = soundContainer->UsesLogicalPlayback();
 	const bool physical = !s_PlaybackSuppressed && m_AudioEnabled;
-	if (!logical && !physical) return false;
+	// A previewed actor's own event is played now and adopted by its canonical emission later.
+	bool predicting = !physical && m_AudioEnabled && PreviewEventLedger::IsArmed() && PreviewEventLedger::IsPreviewedEmitter(SoundSimulationScope::CurrentKey().objectUID);
+	if (!logical && !physical && !predicting) return false;
 	if (logical) soundContainer->RetireFinishedLogicalVoices();
 	std::erase_if(soundContainer->m_PlayingChannels, [this, soundContainer](int identity) { return !OwnsVoice(identity, soundContainer); });
 	if (logical ? soundContainer->CurrentLogicalPlayback().voices.size() >= c_MaxPlayingSoundsPerContainer : soundContainer->m_PlayingChannels.size() >= c_MaxPlayingSoundsPerContainer) return false;
 	FMOD_RESULT result = FMOD_OK;
 
-	// A preview never touches the shared samples; the canonical play sets their properties.
-	if (physical && !soundContainer->SoundPropertiesUpToDate()) {
+	// The properties are the emitting container's own; a prediction sets them on the samples its play needs.
+	if ((physical || predicting) && !soundContainer->SoundPropertiesUpToDate()) {
 		result = soundContainer->UpdateSoundProperties();
 		if (result != FMOD_OK) {
 			g_ConsoleMan.PrintString("ERROR: Could not update sound properties for SoundContainer " + soundContainer->GetPresetName() + ": " + std::string(FMOD_ErrorString(result)));
@@ -606,17 +614,45 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 		playback.voices.insert(playback.voices.end(), std::make_move_iterator(logicalVoices.begin()), std::make_move_iterator(logicalVoices.end()));
 		RefreshLogicalSound(soundContainer);
 	}
+	const uint64_t emitterUID = SoundSimulationScope::CurrentKey().objectUID;
+	PreviewEventLedger::Key eventKey;
+	std::vector<int> adoptedVoices;
+	std::vector<int> predictedVoices;
+	size_t adoptedIndex = 0;
+	bool noteStart = false;
+	if (physical || predicting) {
+		eventKey = PreviewEventLedger::NextKey(PreviewEventLedger::Sound, emitterUID, PreviewEventLedger::StableAssetIdentity(soundContainer->GetCheckpointIdentity()), SoundPresetHash(soundContainer), static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+		noteStart = PreviewEventLedger::IsPreviewedEmitter(emitterUID);
+		// Consecutive previews re-predict the same event; the first one owns it.
+		if (predicting) predicting = !PreviewEventLedger::AlreadyPlayed(eventKey);
+		else PreviewEventLedger::Consume(eventKey, adoptedVoices);
+	}
+	SoundContainer* voiceOwner = soundContainer;
+	if (predicting) {
+		SoundContainer* canonical = FindCheckpointSoundContainer(soundContainer->GetCheckpointIdentity());
+		voiceOwner = canonical ? canonical : soundContainer;
+	}
 	size_t sampleIndex = 0;
 	for (const SoundData* soundData: selectedSoundData) {
 		const float selectedPitch = pitches[sampleIndex++];
-		if (!physical) continue;
+		if (adoptedIndex < adoptedVoices.size()) {
+			AdoptPredictedVoice(adoptedVoices[adoptedIndex++], soundContainer, selectedPitch, soundData);
+			continue;
+		}
+		if (!physical && !predicting) continue;
 		if (!MakeVoiceSlotAvailable()) { if (logical) continue; return false; }
 		channel = nullptr; channelIndex = 0;
 		result = (result == FMOD_OK) ? m_AudioSystem->playSound(soundData->SoundObject, channelGroupToPlayIn, true, &channel) : result;
-		if (result == FMOD_OK) channelIndex = RegisterPlayingVoice(channel, soundContainer, soundData->SoundFile.GetDataPath(), soundData->MinimumAudibleDistance);
+		if (result == FMOD_OK) channelIndex = RegisterPlayingVoice(channel, voiceOwner, soundData->SoundFile.GetDataPath(), soundData->MinimumAudibleDistance, predicting);
 		if (result != FMOD_OK) { if (logical) { result = FMOD_OK; continue; } return false; }
+		if (predicting) predictedVoices.push_back(channelIndex);
+		if (noteStart) { PreviewEventLedger::NoteEventStart(PreviewEventLedger::CommittedTick(), eventKey, predicting); noteStart = false; }
+		if (PreviewEventLedger::TraceEnabled()) {
+			std::cout << "[preview-event] voice committed=" << PreviewEventLedger::CommittedTick() << " tick=" << eventKey.tick << " uid=" << eventKey.emitterUID << " previewed=" << PreviewEventLedger::IsPreviewedEmitter(eventKey.emitterUID)
+			          << " asset=" << eventKey.assetIdentity << " preset=" << eventKey.presetHash << " seq=" << eventKey.seq << " preset_name=\"" << soundContainer->GetPresetName() << "\" path=" << soundData->SoundFile.GetDataPath() << std::endl;
+		}
 
-		result = (result == FMOD_OK) ? channel->setUserData(soundContainer) : result;
+		result = (result == FMOD_OK) ? channel->setUserData(voiceOwner) : result;
 		result = (result == FMOD_OK) ? channel->setCallback(SoundChannelEndedCallback) : result;
 		result = (result == FMOD_OK) ? channel->setPriority(soundContainer->GetPriority()) : result;
 		result = (result == FMOD_OK) ? channel->setPitch(selectedPitch) : result;
@@ -654,7 +690,7 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 
 		// At this point the sound is ready to go, but if the SoundContainer is explicitly paused, it and this new channel will hopefully be unpaused
 		// at some later point in time by whatever paused it
-		soundContainer->AddPlayingChannel(channelIndex);
+		voiceOwner->AddPlayingChannel(channelIndex);
 		if (!soundContainer->IsPaused()) {
 			result = channel->setPaused(false);
 			if (result != FMOD_OK) {
@@ -666,6 +702,9 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 		}
 
 	}
+
+	if (predicting && !predictedVoices.empty()) PreviewEventLedger::Insert(eventKey, std::move(predictedVoices));
+	for (; adoptedIndex < adoptedVoices.size(); ++adoptedIndex) RetirePredictedVoice(adoptedVoices[adoptedIndex]);
 
 	if (m_IsInMultiplayerMode) {
 		RegisterSoundEvent(player, SOUND_PLAY, soundContainer);
@@ -1351,7 +1390,7 @@ SoundContainer* AudioMan::ResolveCheckpointVoiceOwner(uint64_t identity) const {
 	return nullptr;
 }
 
-int AudioMan::RegisterPlayingVoice(FMOD::Channel* channel, SoundContainer* owner, const std::string& path, float minimumAudibleDistance) {
+int AudioMan::RegisterPlayingVoice(FMOD::Channel* channel, SoundContainer* owner, const std::string& path, float minimumAudibleDistance, bool predicted) {
 	do {
 		if (m_NextVoiceIdentity == std::numeric_limits<int>::max()) m_NextVoiceIdentity = 0;
 		++m_NextVoiceIdentity;
@@ -1359,8 +1398,60 @@ int AudioMan::RegisterPlayingVoice(FMOD::Channel* channel, SoundContainer* owner
 	int backend;
 	if (channel->getIndex(&backend) != FMOD_OK) throw std::runtime_error("could not identify playing audio channel");
 	m_BackendVoiceIdentities[backend] = m_NextVoiceIdentity;
-	m_PlayingVoices.emplace(m_NextVoiceIdentity, PlayingVoice{channel, owner, path, minimumAudibleDistance, SoundSimulationScope::Domain()});
+	// A prediction is presentation until its canonical emission adopts it, so no reading and no observation can carry it.
+	const SoundExecutionDomain domain = predicted ? SoundExecutionDomain::Presentation : SoundSimulationScope::Domain();
+	m_PlayingVoices.emplace(m_NextVoiceIdentity, PlayingVoice{channel, owner, path, minimumAudibleDistance, domain, predicted});
 	return m_NextVoiceIdentity;
+}
+
+bool AudioMan::AdoptPredictedVoice(int identity, SoundContainer* owner, float pitch, const SoundData* soundData) {
+	const auto found = m_PlayingVoices.find(identity);
+	if (found == m_PlayingVoices.end() || !found->second.channel || !owner) return false;
+	PlayingVoice& voice = found->second;
+	if (voice.owner && voice.owner != owner) voice.owner->RemovePlayingChannel(identity);
+	voice.owner = owner;
+	voice.predicted = false;
+	voice.domain = SoundSimulationScope::Domain();
+	FMOD::Channel* channel = voice.channel;
+	FMOD_RESULT result = channel->setUserData(owner);
+	result = (result == FMOD_OK) ? channel->setPriority(owner->GetPriority()) : result;
+	result = (result == FMOD_OK) ? channel->setPitch(pitch) : result;
+	if (owner->GetCustomPanValue() != 0.0F) result = (result == FMOD_OK) ? channel->setPan(owner->GetCustomPanValue()) : result;
+	if (owner->IsImmobile()) {
+		result = (result == FMOD_OK) ? channel->setVolume(owner->GetVolume()) : result;
+	} else {
+		result = (result == FMOD_OK) ? channel->set3DLevel(m_SoundPanningEffectStrength * owner->GetPanningStrengthMultiplier()) : result;
+		FMOD_VECTOR position = GetAsFMODVector(owner->GetPosition() + soundData->Offset);
+		result = (result == FMOD_OK) ? UpdatePositionalEffectsForSoundChannel(channel, &position) : result;
+	}
+	owner->AddPlayingChannel(identity);
+	if (!owner->IsPaused()) result = (result == FMOD_OK) ? channel->setPaused(false) : result;
+	if (result != FMOD_OK) g_ConsoleMan.PrintString("ERROR: Could not adopt a predicted sound for SoundContainer " + owner->GetPresetName() + ": " + std::string(FMOD_ErrorString(result)));
+	return result == FMOD_OK;
+}
+
+void AudioMan::RetirePredictedVoice(int identity) {
+	const auto found = m_PlayingVoices.find(identity);
+	if (found == m_PlayingVoices.end() || !found->second.predicted) return;
+	SoundContainer* owner = found->second.owner;
+	FMOD::Channel* channel = found->second.channel;
+	// A loop no canonical emission will ever own cannot run on; a one-shot is already audible, so it finishes.
+	if (owner && owner->GetLoopSetting() != 0) {
+		if (channel) channel->stop();
+		RetireVoice(identity);
+		return;
+	}
+	if (owner) owner->RemovePlayingChannel(identity);
+	const auto still = m_PlayingVoices.find(identity);
+	if (still == m_PlayingVoices.end()) return;
+	still->second.owner = nullptr;
+	still->second.predicted = false;
+	if (still->second.channel) still->second.channel->setUserData(nullptr);
+}
+
+bool AudioMan::IsPredictedVoice(int identity) const {
+	const auto found = m_PlayingVoices.find(identity);
+	return found != m_PlayingVoices.end() && found->second.predicted;
 }
 
 int AudioMan::FindVoiceIdentity(const FMOD::Channel* channel) const {
@@ -1755,6 +1846,7 @@ std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const So
 		}
 		std::set<std::string> disownedPresets;
 		for (const auto& [identity, voice]: m_PlayingVoices) {
+			if (voice.predicted) continue;
 			int bus = 0;
 			FMOD::ChannelGroup* group = nullptr;
 			if (voice.channel && voice.channel->getChannelGroup(&group) == FMOD_OK) bus = group == m_UIChannelGroup ? 1 : group == m_MusicChannelGroup ? 2 : 0;
@@ -2937,6 +3029,55 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 		      !m_LastSentAudibility.contains(KeyOf(dropped)) && m_LastSentAudibility.contains(KeyOf(kept2)),
 		      std::to_string(m_LastSentAudibility.size()));
 		m_LastSentAudibility = sentBefore;
+	}
+	{
+		// A prediction is this machine's alone: no checkpoint may name it until its canonical emission adopts it.
+		SoundContainer predicted;
+		predicted.Create(samplePath, false, true, SoundContainer::SFX);
+		const auto savedChannels = [](const SoundContainer& container) {
+			const std::string text = container.SaveCheckpoint();
+			CheckpointReader reader(text, SoundContainer::CheckpointVersion(text));
+			std::string entity;
+			uint64_t identity = 0;
+			std::set<int> playing;
+			reader.Value(entity); reader.Value(identity); reader.Value(playing);
+			return playing;
+		};
+		const auto savedVoices = [this] {
+			AudioRuntime state;
+			std::set<int> voices;
+			if (state.Load(SaveCheckpoint())) for (const AudioCheckpoint::Voice& voice: state.voices) voices.insert(voice.identity);
+			return voices;
+		};
+		PreviewEventLedger::Clear();
+		PreviewEventLedger::Arm(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), GetCheckpointSoundContainerCursor(), {4243});
+		{
+			SoundSimulationScope preview(4243, phase);
+			predicted.Play();
+		}
+		PreviewEventLedger::Disarm();
+		const std::set<int> live(predicted.GetPlayingChannels()->begin(), predicted.GetPlayingChannels()->end());
+		const int voice = live.size() == 1 ? *live.begin() : 0;
+		check("a_preview_plays_on_the_canonical_container", voice > 0 && IsPredictedVoice(voice), std::to_string(live.size()));
+		check("a_prediction_is_in_no_checkpoint", voice > 0 && !savedChannels(predicted).contains(voice) && !savedVoices().contains(voice));
+		s_PlaybackSuppressed = false;
+		{
+			SoundSimulationScope canonical(4243, phase);
+			predicted.Play();
+		}
+		s_PlaybackSuppressed = true;
+		const std::set<int> after(predicted.GetPlayingChannels()->begin(), predicted.GetPlayingChannels()->end());
+		check("the_commit_adopts_the_prediction", voice > 0 && !IsPredictedVoice(voice) && after.size() == 1 && after.contains(voice));
+		bool inSharedCohort = false;
+		{
+			SoundSimulationScope shared(4243, phase);
+			inSharedCohort = voice > 0 && VoiceMatchesContext(voice, &predicted);
+		}
+		// The cohort GetAudibleVolume reads and every shared write walks; a suppressed commit leaves it empty.
+		check("an_adopted_prediction_joins_the_shared_cohort", inSharedCohort);
+		check("an_adopted_voice_is_in_the_checkpoint", voice > 0 && savedChannels(predicted).contains(voice) && savedVoices().contains(voice));
+		predicted.Stop();
+		PreviewEventLedger::Clear();
 	}
 	g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);
 	s_PlaybackSuppressed = suppressed;
