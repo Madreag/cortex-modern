@@ -2314,19 +2314,47 @@ void MovableMan::EndSpeculation(std::vector<MovableObject*>* takenResidents) {
 	m_Speculation.taken.clear();
 }
 
-MovableObject* MovableMan::ResidentForRetiringShadow(MovableObject* mo) const {
+MovableObject* MovableMan::OverlaySurvivorOf(MovableObject* mo, const std::unordered_set<const MovableObject*>& retiring) const {
 	if (!mo || !m_Speculation.active) {
 		return mo;
 	}
 	const auto resident = m_Speculation.residents.find(mo);
-	if (resident == m_Speculation.residents.end()) {
+	if (resident != m_Speculation.residents.end()) {
+		const Speculation::Shadow& shadow = m_Speculation.shadows.at(resident->second);
+		if (shadow.inWorld) {
+			return resident->second;
+		}
 		return mo;
 	}
-	const Speculation::Shadow& shadow = m_Speculation.shadows.at(resident->second);
-	if (shadow.inWorld) {
-		return resident->second;
+	if (retiring.count(mo) > 0) {
+		return nullptr;
 	}
 	return mo;
+}
+
+std::unordered_set<const MovableObject*> MovableMan::RetiringOverlayObjects() {
+	std::unordered_set<const MovableObject*> retiring;
+	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex);
+	for (const Speculation::Spawn& spawn: m_Speculation.spawns) {
+		if (spawn.object) {
+			retiring.insert(spawn.object);
+		}
+	}
+	for (const auto& entry: m_Speculation.spawnMeta) {
+		if (entry.first) {
+			retiring.insert(entry.first);
+		}
+	}
+	for (size_t i = m_Speculation.mark.actors; i < m_AddedActors.size(); ++i) {
+		retiring.insert(m_AddedActors[i]);
+	}
+	for (size_t i = m_Speculation.mark.items; i < m_AddedItems.size(); ++i) {
+		retiring.insert(m_AddedItems[i]);
+	}
+	for (size_t i = m_Speculation.mark.particles; i < m_AddedParticles.size(); ++i) {
+		retiring.insert(m_AddedParticles[i]);
+	}
+	return retiring;
 }
 
 int MovableMan::ResidentKind(const MovableObject* mo) const {
