@@ -36,6 +36,10 @@ namespace RTE {
 		bool operator==(const NetH4Seat&) const = default;
 	};
 
+	/// An application that names no seat: the host picks a substitutable one. It discloses nothing an
+	/// application for a named seat does not already answer, and saves a joiner guessing seat numbers.
+	constexpr uint16_t c_NetH4AnySubstitutableSeat = UINT16_MAX;
+
 	enum class NetHoldResolution : uint16_t {
 		Expired = 0,
 		Reclaimed = 1,
@@ -463,6 +467,9 @@ namespace RTE {
 		Substitution* FindSubstitutionBySeat(uint16_t stableSeat);
 		Substitution* FindSubstitutionByConnection(NetPeerId connection);
 		Applicant* FindApplicant(NetPeerId connection, uint16_t stableSeat);
+		Applicant* FindApplicantByTransaction(NetPeerId connection, const NetAuthBytes16& txId);
+		/// The seat an application that names none should go to: substitutable and not already full.
+		SeatState* FindSubstitutableSeatWithRoom();
 		/// Ends a pending substitution: caches the terminal refusal under its transaction id so a
 		/// retransmitted ack replays it, tells the substitute, and forgets the credential.
 		void AbandonSubstitution(size_t index, NetH4DenialReason reason, const std::string& summary, uint64_t nowMs);
