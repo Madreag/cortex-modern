@@ -2,6 +2,7 @@
 
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
+#include "PieMenu.h"
 #include "NetMatchReplay.h"
 #include "NetProtocol.h"
 #include "NetReconnectLedger.h"
@@ -10209,6 +10210,11 @@ namespace RTE {
 			std::cerr << "[net-lockstep-selftest] FAIL: " << message << std::endl;
 			return 1;
 		};
+
+		std::string piePinError;
+		if (!PieMenu::RunHoverOpenDelayPinSelfTest(&piePinError)) {
+			return fail(piePinError);
+		}
 
 		std::string error;
 		if (!TestRoundTrips(&error) ||

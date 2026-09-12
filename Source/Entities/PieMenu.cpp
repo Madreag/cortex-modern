@@ -1,5 +1,6 @@
 #include "PieMenu.h"
 
+#include "System/ScenarioRunner.h"
 #include "FrameMan.h"
 #include "UInputMan.h"
 #include "PresetMan.h"
@@ -18,6 +19,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <iostream>
 #include <sstream>
 #include <array>
 
@@ -428,7 +430,59 @@ bool PieMenu::RunCheckpointSelfTest() {
 	PieMenu copy;
 	{ MovableObject::FaithfulCloneScope scope(true); check("faithful_clone_preserves_runtime", copy.Create(menu) == 0 && copy.SaveRuntimeCheckpoint() == saved); }
 	check("clone_owns_its_bitmaps", copy.m_BGBitmap != menu.m_BGBitmap && copy.m_BGRotationBitmap != menu.m_BGRotationBitmap && copy.m_BGPieSlicesWithSubPieMenuBitmap != menu.m_BGPieSlicesWithSubPieMenuBitmap);
+	check("hover_open_delay_pin", RunHoverOpenDelayPinSelfTest());
 	return passed;
+}
+
+bool PieMenu::RunHoverOpenDelayPinSelfTest(std::string* error) {
+	const int savedDelay = g_SettingsMan.GetSubPieMenuHoverOpenDelay();
+	const bool savedGold = g_SettingsMan.GetAutomaticGoldDeposit();
+	const bool savedCrab = g_SettingsMan.CrabBombsEnabled();
+	const int savedThreshold = g_SettingsMan.GetCrabBombThreshold();
+	ScenarioRunner::SetLockstepCoordinator(nullptr);
+	g_SettingsMan.SetSubPieMenuHoverOpenDelay(900);
+	ScenarioRunner::ApplyDeterministicConfig();
+	const int pinned = g_SettingsMan.GetSubPieMenuHoverOpenDelay();
+	if (pinned != 1000) {
+		if (error) {
+			*error = "SubPieMenuHoverOpenDelay stayed at " + std::to_string(pinned) + " after ApplyDeterministicConfig, expected 1000";
+		}
+		std::cout << "[piemenu-hover-pin-selftest] FAIL setting_is_canonical got=" << pinned << std::endl;
+		g_SettingsMan.SetSubPieMenuHoverOpenDelay(savedDelay);
+		g_SettingsMan.SetAutomaticGoldDeposit(savedGold);
+		g_SettingsMan.SetCrabBombsEnabled(savedCrab);
+		g_SettingsMan.SetCrabBombThreshold(savedThreshold);
+		return false;
+	}
+	PieMenu menu;
+	const double limit = menu.m_SubPieMenuHoverOpenTimer.GetSimTimeLimitMS();
+	if (limit != 1000) {
+		if (error) {
+			*error = "fresh PieMenu hover-open limit is " + std::to_string(limit) + ", expected 1000";
+		}
+		std::cout << "[piemenu-hover-pin-selftest] FAIL fresh_menu_limit got=" << limit << std::endl;
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		g_SettingsMan.SetSubPieMenuHoverOpenDelay(savedDelay);
+		g_SettingsMan.SetAutomaticGoldDeposit(savedGold);
+		g_SettingsMan.SetCrabBombsEnabled(savedCrab);
+		g_SettingsMan.SetCrabBombThreshold(savedThreshold);
+		return false;
+	}
+	ScenarioRunner::SetLockstepCoordinator(nullptr);
+	const int restored = g_SettingsMan.GetSubPieMenuHoverOpenDelay();
+	g_SettingsMan.SetSubPieMenuHoverOpenDelay(savedDelay);
+	g_SettingsMan.SetAutomaticGoldDeposit(savedGold);
+	g_SettingsMan.SetCrabBombsEnabled(savedCrab);
+	g_SettingsMan.SetCrabBombThreshold(savedThreshold);
+	if (restored != 900) {
+		if (error) {
+			*error = "SubPieMenuHoverOpenDelay was " + std::to_string(restored) + " after session-end restore, expected 900";
+		}
+		std::cout << "[piemenu-hover-pin-selftest] FAIL setting_restored got=" << restored << std::endl;
+		return false;
+	}
+	std::cout << "[piemenu-hover-pin-selftest] PASS setting_is_canonical fresh_menu_limit setting_restored" << std::endl;
+	return true;
 }
 
 void PieMenu::SetOwner(Actor* newOwner) {
@@ -1100,6 +1154,7 @@ void PieMenu::UpdateSliceActivation() {
 	}
 
 	if (IsEnabled()) {
+		m_SubPieMenuHoverOpenTimer.SetSimTimeLimitMS(g_SettingsMan.GetSubPieMenuHoverOpenDelay());
 		if ((m_ActivatedPieSlice && m_ActivatedPieSlice->GetSubPieMenu() != nullptr) || (m_HoveredPieSlice->GetSubPieMenu() && m_SubPieMenuHoverOpenTimer.IsPastSimTimeLimit())) {
 			PreparePieSliceSubPieMenuForUse(m_ActivatedPieSlice ? m_ActivatedPieSlice : m_HoveredPieSlice);
 			m_ActiveSubPieMenu = m_ActivatedPieSlice ? m_ActivatedPieSlice->GetSubPieMenu() : m_HoveredPieSlice->GetSubPieMenu();
