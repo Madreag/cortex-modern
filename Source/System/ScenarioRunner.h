@@ -132,6 +132,9 @@ namespace RTE {
 		/// Enable the "waiting for peer" overlay drawn while the lockstep wait is stalled. Interactive
 		/// matches only — automated runs keep their output clean and have no visible window.
 		static void SetLockstepStallOverlayEnabled(bool enabled);
+		/// Lets an armed NetModerationGUIProbe script pump the seats panel from the stall wait on a run
+		/// that is not the interactive game. Nothing else reaches the menus or the backbuffer there.
+		static void SetLockstepStallUIProbeArmed(bool armed);
 		static bool IsLockstepControllerSyncActive();
 		/// Whether a lockstep coordinator is attached at all — a FAILED one still owns the sim (the
 		/// tick must surface its stop reason, never silently degrade to per-machine controllers).

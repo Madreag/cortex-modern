@@ -111,6 +111,7 @@ namespace RTE {
 		std::map<int64_t, uint8_t> s_LockstepControlOverrides; //!< Synced per-actor control handoffs (co-op shared teams).
 		std::map<int64_t, uint8_t> s_LockstepDroppedControlOverrides;
 		bool s_LockstepStallOverlayEnabled = false;
+		bool s_LockstepStallUiProbeArmed = false; //!< A net-UI probe script drives the seats panel outside the interactive game.
 		bool s_LockstepPaused = false;
 		int s_LockstepResumeCountdown = -1;
 		struct NetUiToast {
@@ -1459,6 +1460,10 @@ namespace RTE {
 		s_LockstepStallOverlayEnabled = enabled;
 	}
 
+	void ScenarioRunner::SetLockstepStallUIProbeArmed(bool armed) {
+		s_LockstepStallUiProbeArmed = armed;
+	}
+
 	void ScenarioRunner::ArmReplayRewindBuffer(uint64_t fromFrame, uint64_t frameCount) {
 		s_ReplayRewindFrom = fromFrame;
 		s_ReplayRewindCount = frameCount;
@@ -1757,7 +1762,7 @@ namespace RTE {
 						std::cout << "[net-match] waiting on peer frames (tick " << tick << (missing.empty() ? "" : ", " + missing) << ")" << std::endl;
 					}
 				}
-				if (s_LockstepStallOverlayEnabled || s_StallEventPoll) {
+				if (s_LockstepStallOverlayEnabled || s_LockstepStallUiProbeArmed) {
 					PumpLockstepStallUI(stallMs, timeoutMs, missing, holdPause, holdName, holdSeconds);
 				}
 				nextOverlayMs = stallMs + 200;
