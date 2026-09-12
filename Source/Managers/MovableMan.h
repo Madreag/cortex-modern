@@ -131,6 +131,10 @@ namespace RTE {
 		void PurgeAllMOs();
 		bool RunPurgeSelfTest();
 
+		/// Checks that the contiguous actor index never outlives its actors: takes the passed-in craft
+		/// through a tick's add, index and removal, then the archive round trip. Takes ownership of the craft.
+		bool RunContiguousActorIndexSelfTest(Actor* craft);
+
 		class ConstructionRegistryScope {
 		public:
 			ConstructionRegistryScope();
@@ -969,6 +973,9 @@ namespace RTE {
 		/// This is needed for a tricky reason - we want the controller from the activity to override the normal controller state
 		/// So we need to update the controller state prior to activity, so the changes from activity are layered on top.
 		void UpdateControllers();
+
+		/// Renumbers the contiguous actor index from the live actor list, in its current order.
+		void RebuildContiguousActorIDs();
 
 		/// Updates all things that need to be done before we update the controllers.
 		/// This is needed because of a very awkward and ugly old code path where controllers were updated in the middle of update, and various mods relied of this behaviour for actions that were therefore delayed by a frame
