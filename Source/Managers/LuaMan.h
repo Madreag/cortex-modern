@@ -8,6 +8,10 @@
 #include "BS_thread_pool.hpp"
 
 #include <array>
+#include <string>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 #define g_LuaMan LuaMan::Instance()
 
@@ -173,6 +177,14 @@ namespace RTE {
 		void StashScriptObject(long uniqueID);
 		void UnstashScriptObject(long uniqueID);
 		void DiscardStashedScriptObject(long uniqueID);
+
+		/// Copies `_ScriptedObjects[uid]`'s instance into `_ScriptFieldsStash["preview:<uid>"]`.
+		bool CopyScriptInstanceToPreviewHold(long uniqueID, std::vector<std::string>& problems);
+		bool SnapshotPreviewGlobals(std::string& text, std::vector<std::string>& problems);
+		bool RestorePreviewGlobals(const std::string& text, std::vector<std::string>& problems);
+		bool BindPreviewScriptObject(MovableObject* clone, bool sharedSlot);
+		void DropPreviewScriptObject(long uniqueID);
+		bool AttachPreviewInvStride(MovableObject* object);
 
 		/// Reads a number field off the object's self.
 		/// @return The field, or the fallback when the object or the field is absent.
@@ -383,6 +395,30 @@ namespace RTE {
 		static bool AreScriptsFrozen() { return s_ScriptsFrozen; }
 		static void SetScriptsFrozen(bool frozen) { s_ScriptsFrozen = frozen; }
 		static inline bool s_ScriptsFrozen = false;
+
+		/// Copies each original's self into a hold table. A refused self stays frozen.
+		static void CapturePreviewSelfCopies(const std::vector<const MovableObject*>& roots, bool sharedSlot);
+		/// Binds each clone to `_ScriptedObjects["<uid>#preview"]`, or the shared slot when sharedSlot is set.
+		static void BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot);
+		/// Drops the preview slots.
+		static void EndPreviewScripts();
+		static bool IsPreviewClone(const MovableObject* mo);
+		static bool IsPreviewEdgeHook(const std::string& functionName);
+		static bool ShouldRunPreviewHook(const MovableObject* mo, const std::string& functionName);
+		static bool IsRunningPreviewHook() { return s_RunningPreviewHook; }
+		static void SetRunningPreviewHook(bool running) { s_RunningPreviewHook = running; }
+		struct PreviewHookScope {
+			const bool previous;
+			explicit PreviewHookScope(bool on) :
+			    previous(s_RunningPreviewHook) {
+				s_RunningPreviewHook = previous || on;
+			}
+			~PreviewHookScope() { s_RunningPreviewHook = previous; }
+			PreviewHookScope(const PreviewHookScope&) = delete;
+			PreviewHookScope& operator=(const PreviewHookScope&) = delete;
+		};
+		static std::string PreviewScriptKey(const MovableObject* mo);
+		static uint64_t PreviewCodecFallbackCount() { return s_PreviewCodecFallbacks; }
 #pragma endregion
 
 #pragma region Destruction
@@ -627,6 +663,13 @@ namespace RTE {
 		// Disallow the use of some implicit methods.
 		LuaMan(const LuaMan& reference) = delete;
 		LuaMan& operator=(const LuaMan& rhs) = delete;
+
+		static inline bool s_RunningPreviewHook = false;
+		static inline bool s_PreviewSharedSlot = false;
+		static inline uint64_t s_PreviewCodecFallbacks = 0;
+		static std::unordered_set<const MovableObject*> s_PreviewClones;
+		static std::unordered_set<long> s_PreviewFrozenUIDs;
+		static std::vector<std::pair<LuaStateWrapper*, std::string>> s_PreviewGlobalSnapshots;
 	};
 
 	/// RAII redirect of the C++ sim-RNG free functions and Lua math.random to one

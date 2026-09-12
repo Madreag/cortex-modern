@@ -54,6 +54,7 @@
 #include "GLResourceMan.h"
 #include "CameraMan.h"
 #include "ActivityMan.h"
+#include "Actor.h"
 #include "GameActivity.h"
 #include "MovableObject.h"
 #include "RTETools.h"
@@ -98,6 +99,7 @@
 #include "FaultInjection.h"
 #include "LocalPrediction.h"
 #include "PreviewEventLedger.h"
+#include "PreviewScriptSelfTest.h"
 #include "TerrainLayerSnapshot.h"
 #include "DeterminismCheck.h"
 #include "MetricsCollector.h"
@@ -963,6 +965,12 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			}
 			s_eventLedgerPressTick = std::strtoll(text.c_str(), nullptr, 10);
 			continue;
+		}
+		if (currentArg == "-local-prediction-subtree-emitter") {
+			PreviewScriptSelfTest::SetSubtreeProbe(true);
+		}
+		if (currentArg == "-local-prediction-shared-slot") {
+			PreviewScriptSelfTest::SetSharedSlot(true);
 		}
 		if (!lastArg && currentArg == "-local-prediction-invariance") {
 			// T:d1,d2,...:r1,r2,... — at tick T run previews of each depth, each repeat count, and prove the canonical world untouched.
@@ -1891,6 +1899,14 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 	const int savedDepth = LocalPrediction::GetDepthOverride();
 	g_MovableMan.WaitForActorsSeeTask();
 	g_MovableMan.CompleteQueuedMOIDDrawings();
+	PreviewScriptSelfTest::SetStrideCounter(true);
+	if (Activity* activity = g_ActivityMan.GetActivity()) {
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			if (Actor* actor = activity->GetControlledActor(player)) {
+				PreviewScriptSelfTest::InstallStrideCounter(actor);
+			}
+		}
+	}
 	std::vector<std::string> problems;
 	const std::string before = DumpSimStateToString() + DescribeCanonicalExtras(problems);
 	if (!problems.empty()) {
@@ -1971,6 +1987,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 		}
 	}
 	LocalPrediction::SetDepthOverride(savedDepth);
+	PreviewScriptSelfTest::SetStrideCounter(false);
 	s_lpInvarianceFailures = failures;
 	std::cout << "[lpinv] " << (failures == 0 ? "PASS" : "FAIL") << " tick " << simTick << ": " << (cases - failures) << "/" << cases << " cases left the canonical world untouched" << std::endl;
 	g_MetricsCollector.RecordString("lpinv_result", failures == 0 ? "pass" : "fail");
@@ -2048,6 +2065,12 @@ static void CheckPreviewEventLedgerSelfTest() {
 static void CheckRequiredProbesCompleted() {
 	const long long stoppedAt = g_TimerMan.GetSimUpdateCount();
 	CheckPreviewEventLedgerSelfTest();
+	if ((s_eventLedgerPressTick > 0 || s_lpInvarianceTick > 0) && !PreviewScriptSelfTest::CheckNestedHookScope()) {
+		s_netReplayExitCode = 5;
+	}
+	if (PreviewScriptSelfTest::SubtreeProbeEnabled() && !PreviewScriptSelfTest::CheckSubtreeEmitter(s_eventLedgerPressTick)) {
+		s_netReplayExitCode = 5;
+	}
 	if (s_lpInvarianceTick > 0 && s_lpInvarianceFailures < 0) {
 		std::cout << "[lpinv] FAIL: invariance test at tick " << s_lpInvarianceTick << " never executed (the run stopped at tick " << stoppedAt << ")" << std::endl;
 		g_MetricsCollector.RecordString("lpinv_result", "not_run");
