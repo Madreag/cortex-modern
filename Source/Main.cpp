@@ -2408,12 +2408,13 @@ void RunGameLoop() {
 				}
 			}
 
-			// E2E control: the host pauses at tick 250 and unpauses at 430; both sims must stop and
-			// resume on the same frame with sim time frozen across the gap.
+			// E2E control: the host pauses at the flag's tick (default 250) and unpauses 180 ticks
+			// later; both sims must stop and resume on the same frame with sim time frozen across the gap.
 			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestPauseCommand) {
-				if (simTick == 250) {
+				const uint64_t pauseTick = ScenarioRunner::GetArgs().selftestPauseTick;
+				if (simTick == pauseTick) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{0, true}});
-				} else if (simTick == 430) {
+				} else if (simTick == pauseTick + 180) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{0, false}});
 				}
 			}
