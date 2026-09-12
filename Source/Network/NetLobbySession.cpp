@@ -106,6 +106,7 @@ namespace RTE {
 		m_ReadySent = false;
 		m_StartRequested = config.autoStart;
 		m_FailureReason.clear();
+		m_SeatAssigned = false;
 		m_StateBytesToSend.clear();
 		m_OutgoingStateId = 0;
 		m_OutgoingChunkIndex = 0;
@@ -124,9 +125,15 @@ namespace RTE {
 		m_Stats = {};
 
 		if (m_Config.host) {
+			for (uint8_t peerId : m_RemotePeerIds) {
+				SendSeatAssign(peerId);
+			}
 			SendConfigIfDue(0);
 		}
-		SendPeerState();
+		// A reseated client must not speak under an id the host's lobby does not answer to.
+		if (!m_Config.assignSeats || m_Config.host) {
+			SendPeerState();
+		}
 		return true;
 	}
 
@@ -476,6 +483,11 @@ namespace RTE {
 		m_State = NetLobbyState::WaitingForConfigAck;
 		m_StartRequested = m_Config.autoStart;
 		m_PeerStatePending = true;
+		if (addedPeer) {
+			for (uint8_t peerId: m_RemotePeerIds) {
+				if (!previous.contains(peerId)) SendSeatAssign(peerId);
+			}
+		}
 		if (addedPeer && !m_StateBytesToSend.empty()) RestartStateTransfer();
 	}
 
@@ -544,6 +556,8 @@ namespace RTE {
 			if (m_ConfigAckedByPeer[peerId]) {
 				continue;
 			}
+			// A peer whose lobby came up after the first send has heard neither, so both go again.
+			SendSeatAssign(peerId);
 			std::string error;
 			if (SendTo(m_RemoteTransports[peerId], NetLobbyMatchConfig{m_Config.matchConfig}, &error)) {
 				sentAny = true;
@@ -582,11 +596,48 @@ namespace RTE {
 	}
 
 	void NetLobbySession::SendPeerStateIfDue(uint64_t nowMs) {
+		if (!m_Config.host && m_Config.assignSeats && !m_SeatAssigned) {
+			return;
+		}
 		if (!m_PeerStatePending && (m_Config.peerStateIntervalMs == 0 || nowMs < m_LastPeerStateSentMs + m_Config.peerStateIntervalMs)) {
 			return;
 		}
 		SendPeerState();
 		m_LastPeerStateSentMs = nowMs;
+	}
+
+	void NetLobbySession::SendSeatAssign(uint8_t peerId) {
+		if (!m_Config.host || !m_Config.assignSeats || !IsKnownRemote(peerId)) {
+			return;
+		}
+		std::string error;
+		if (SendTo(m_RemoteTransports.at(peerId), NetLobbySeatAssign{peerId}, &error)) {
+			++m_Stats.seatAssignmentsSent;
+		}
+	}
+
+	void NetLobbySession::HandleSeatAssign(const NetLobbySeatAssign& message) {
+		if (m_Config.host || message.assignedPeerId == 0) {
+			return;
+		}
+		m_SeatAssigned = true;
+		if (message.assignedPeerId == m_Config.localPeerId) {
+			return;
+		}
+		if (IsKnownRemote(message.assignedPeerId)) {
+			Fail("the host bound this connection to a seat it already gave another peer");
+			return;
+		}
+		m_Config.localPeerId = message.assignedPeerId;
+		if (m_Config.session) {
+			std::string error;
+			if (!m_Config.session->AdoptRematchPeerId(static_cast<uint8_t>(message.assignedPeerId - 1), &error)) {
+				Fail(error);
+				return;
+			}
+		}
+		++m_Stats.seatAssignmentsAdopted;
+		m_PeerStatePending = true;
 	}
 
 	void NetLobbySession::SendReadyIfNeeded() {
@@ -676,6 +727,8 @@ namespace RTE {
 				const bool allowed = std::visit([&](const auto& payload) {
 					using Payload = std::decay_t<decltype(payload)>;
 					if constexpr (std::is_same_v<Payload, NetLobbyStateChunk>) return !m_Config.host && event.lane == NetTransportLane::ControlReliable;
+					// Only the hub binds seats; a client offering one is not a peer this round keeps.
+					if constexpr (std::is_same_v<Payload, NetLobbySeatAssign>) return !m_Config.host;
 					if (m_Config.host) {
 						if constexpr (requires { payload.peerId; }) {
 							return payload.peerId == sender->first;
@@ -725,12 +778,18 @@ namespace RTE {
 				HandlePeerState(payload);
 			} else if constexpr (std::is_same_v<Payload, NetLobbyStateChunk>) {
 				HandleStateChunk(payload);
+			} else if constexpr (std::is_same_v<Payload, NetLobbySeatAssign>) {
+				HandleSeatAssign(payload);
 			}
 		}, message.payload);
 	}
 
 	void NetLobbySession::HandleMatchConfig(const NetLobbyMatchConfig& message) {
 		if (m_Config.host) {
+			return;
+		}
+		// The ack carries this peer's id, so it waits for the one the host bound to this connection.
+		if (m_Config.assignSeats && !m_SeatAssigned) {
 			return;
 		}
 		const NetHash32 incomingHash = NetMatchConfigUtil::HashConfig(message.config);
