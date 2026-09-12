@@ -3865,6 +3865,12 @@ void MovableMan::ClearLockstepJoinQuarantine() {
 	m_LockstepJoinQuarantine.clear();
 }
 
+static void ForgetActivitySlots(MovableObject* object) {
+	Activity* activity = g_ActivityMan.GetActivity();
+	if (!activity) return;
+	if (const Actor* actor = dynamic_cast<Actor*>(object)) activity->ForgetDestroyedActor(actor);
+}
+
 void MovableMan::Update() {
 	ZoneScoped;
 
@@ -4148,7 +4154,7 @@ void MovableMan::Update() {
 				if (pActivity) {
 					if (pActivity->IsAssignedBrain(*aIt))
 						pActivity->SetPlayerBrain(0, pActivity->IsBrainOfWhichPlayer(*aIt));
-
+					pActivity->ForgetDestroyedActor(*aIt);
 					pActivity->ReportDeath((*aIt)->GetTeam());
 				}
 
@@ -4173,6 +4179,7 @@ void MovableMan::Update() {
 			imidIt = iIt;
 
 			while (iIt != m_Items.end()) {
+				ForgetActivitySlots(*iIt);
 				(*iIt)->DestroyScriptState();
 				delete (*iIt);
 				m_ValidItems.erase(*iIt);
@@ -4185,6 +4192,7 @@ void MovableMan::Update() {
 			midIt = parIt;
 
 			while (parIt != m_Particles.end()) {
+				ForgetActivitySlots(*parIt);
 				(*parIt)->DestroyScriptState();
 				delete (*parIt);
 				m_ValidParticles.erase(*parIt);
@@ -4217,6 +4225,7 @@ void MovableMan::Update() {
 				if ((*parIt)->GetDrawPriority() >= terrMat->GetPriority()) {
 					(*parIt)->DrawToTerrain(g_SceneMan.GetTerrain());
 				}
+				ForgetActivitySlots(*parIt);
 				(*parIt)->DestroyScriptState();
 				delete (*parIt);
 				m_ValidParticles.erase(*parIt);
@@ -4224,6 +4233,10 @@ void MovableMan::Update() {
 			}
 			m_Particles.erase(midIt, m_Particles.end());
 		}
+	}
+
+	if (g_ActivityMan.LockstepRelaunchInProgress()) {
+		if (Activity* activity = g_ActivityMan.GetActivity()) activity->RebindNonOwnedActorSlots();
 	}
 
 	// Feed each actor's stable end-of-tick state into the `actors` checksum subsystem.

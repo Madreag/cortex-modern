@@ -14,6 +14,7 @@
 #include "ScenarioRunner.h"
 #include "NetActorOwnership.h"
 #include "LuaMan.h"
+#include "ActivityMan.h"
 
 #include "ACraft.h"
 
@@ -1080,7 +1081,7 @@ bool Activity::ApplyNetPlayerSlots(const NetGamePlayerBindings& bindings) {
 		m_PlayerCount += binding.active ? 1 : 0;
 		m_PlayerScreen[player] = binding.active && binding.human ? screen++ : -1;
 	}
-	m_HasCheckpointActorIDs = false;
+	if (!g_ActivityMan.LockstepRelaunchInProgress()) m_HasCheckpointActorIDs = false;
 	return true;
 }
 
@@ -1246,6 +1247,39 @@ bool Activity::ApplyPendingCheckpoint() {
 	return true;
 }
 
+static Actor* LiveCheckpointActor(long uid) {
+	if (!uid) return nullptr;
+	Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(uid));
+	if (!actor || !g_MovableMan.ValidMO(actor) || !g_MovableMan.IsActor(actor)) return nullptr;
+	return actor;
+}
+
+void Activity::ClearNonOwnedActorSlots() {
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		m_Brain[player] = nullptr;
+		m_ControlledActor[player] = nullptr;
+		m_PlayerController[player].SetControlledActor(nullptr);
+	}
+}
+
+void Activity::RebindNonOwnedActorSlots() {
+	if (!m_HasCheckpointActorIDs) return;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		m_Brain[player] = LiveCheckpointActor(m_CheckpointActorIDs[player][0]);
+		m_ControlledActor[player] = LiveCheckpointActor(m_CheckpointActorIDs[player][1]);
+		m_PlayerController[player].SetControlledActor(LiveCheckpointActor(m_CheckpointActorIDs[player][2]));
+	}
+}
+
+void Activity::ForgetDestroyedActor(const Actor* actor) {
+	if (!actor) return;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (m_Brain[player] == actor) m_Brain[player] = nullptr;
+		if (m_ControlledActor[player] == actor) m_ControlledActor[player] = nullptr;
+		if (m_PlayerController[player].GetControlledActor() == actor) m_PlayerController[player].SetControlledActor(nullptr);
+	}
+}
+
 bool Activity::ResolveCheckpointReferences() {
 	if (!m_HasCheckpointActorIDs) return true;
 	std::array<std::array<Actor*, 3>, Players::MaxPlayerCount> actors{};
@@ -1261,7 +1295,7 @@ bool Activity::ResolveCheckpointReferences() {
 		m_ControlledActor[player] = actors[player][1];
 		m_PlayerController[player].SetControlledActor(actors[player][2]);
 	}
-	m_HasCheckpointActorIDs = false;
+	if (!g_ActivityMan.LockstepRelaunchInProgress()) m_HasCheckpointActorIDs = false;
 	return true;
 }
 
