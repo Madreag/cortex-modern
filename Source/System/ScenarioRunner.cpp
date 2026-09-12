@@ -905,6 +905,22 @@ namespace RTE {
 		}
 	}
 
+	bool ScenarioRunner::TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame) {
+		if (!s_LockstepCoordinator) {
+			return false;
+		}
+		const auto it = s_LockstepDroppedControlOverrides.find(actorUniqueID);
+		if (it == s_LockstepDroppedControlOverrides.end()) {
+			return false;
+		}
+		const uint8_t claimant = it->second;
+		if (!s_LockstepCoordinator->IsPeerGoneAtFrame(claimant, frame) || s_LockstepCoordinator->IsSeatHeldForReclaim(claimant)) {
+			return false;
+		}
+		s_LockstepDroppedControlOverrides.erase(it);
+		return true;
+	}
+
 	bool ScenarioRunner::IsLockstepTeamCommandSender(int team, uint8_t senderPeerId) {
 		if (!s_LockstepCoordinator || team < 0) {
 			return true;
