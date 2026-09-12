@@ -713,6 +713,8 @@ namespace RTE {
 		size_t LeftPeersNotRefilling() const;
 		/// Ends a round every remote has left once the last held seat's reclaim window has closed.
 		void EndRoundIfNobodyIsComingBack();
+		/// Whether a scheduled resync owns the end of this round; a last-player leave must not take it.
+		bool ReclaimResyncPending() const;
 		bool IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const;
 		uint16_t PeerInputDelay(uint8_t peerId) const;
 		uint64_t EffectiveStartOf(uint8_t peerId) const;

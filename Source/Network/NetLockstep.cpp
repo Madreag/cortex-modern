@@ -4555,14 +4555,16 @@ namespace RTE {
 			(void)SendPacket({notice}, NetTransportLane::ControlReliable, &ignored);
 		}
 		if (resolution == NetLockstepHoldResolution::Expired) {
-			if (LeftPeersNotRefilling() >= m_RemotePeerIds.size() && !AnyLeftSeatHeld()) {
+			if (LeftPeersNotRefilling() >= m_RemotePeerIds.size() && !AnyLeftSeatHeld() && !ReclaimResyncPending()) {
 				m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":" + m_LastLeaveMessage;
 				m_State = NetLockstepState::Stopped;
 			}
 			return;
 		}
 		std::cout << "[net-match] rejoin: " << DescribePeer(peerId) << " reconnected - resyncing the match" << std::endl;
-		RequestResync(resolution == NetLockstepHoldResolution::Reclaimed ? "seat reclaimed" : "seat substituted", true);
+		// Deferred: the tick in flight commits first, or the heal snapshots half a tick under the label
+		// of the one before it.
+		RequestResync(resolution == NetLockstepHoldResolution::Reclaimed ? "seat reclaimed" : "seat substituted");
 		(void)nowMs;
 	}
 
@@ -4607,9 +4609,15 @@ namespace RTE {
 		       m_PeerLeaveFrames.size() >= m_RemotePeerIds.size() && (AnyLeftSeatHeld() || AnySeatRefilling());
 	}
 
+	// The round is already ending through the pending resync, one boundary from now; ending it as a
+	// last-player leave first would throw the reclaim away.
+	bool NetLockstepCoordinator::ReclaimResyncPending() const {
+		return m_PendingRecoveryStop && m_PendingRecoveryStop->reason == NetLockstepStopReason::ResyncRequested;
+	}
+
 	void NetLockstepCoordinator::EndRoundIfNobodyIsComingBack() {
 		if (m_State != NetLockstepState::Running || m_RemotePeerIds.empty() ||
-		    LeftPeersNotRefilling() < m_RemotePeerIds.size() || AnyLeftSeatHeld()) {
+		    LeftPeersNotRefilling() < m_RemotePeerIds.size() || AnyLeftSeatHeld() || ReclaimResyncPending()) {
 			return;
 		}
 		// Nobody left to play with.
@@ -4649,7 +4657,7 @@ namespace RTE {
 		ForgetCongestion(peerId);
 		m_LastLeaveMessage = message;
 		// A dropped seat pauses commits until the host resolves it; an announced leave still ends a last-player match at once.
-		if (LeftPeersNotRefilling() >= m_RemotePeerIds.size() && (announced || !AnyLeftSeatHeld())) {
+		if (LeftPeersNotRefilling() >= m_RemotePeerIds.size() && (announced || !AnyLeftSeatHeld()) && !ReclaimResyncPending()) {
 			// Nobody left to play with.
 			m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":" + message;
 			m_State = NetLockstepState::Stopped;
