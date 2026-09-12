@@ -1,5 +1,6 @@
 #include "NetLockstepSelfTest.h"
 
+#include "allegro.h"
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
 #include "PieMenu.h"
@@ -1771,6 +1772,86 @@ namespace RTE {
 				return finish("a stranger may not write a queue");
 			}
 			std::cout << "[net-lockstep-selftest] PASS a_stranger_may_not_write_a_queue uid=" << targetUID << std::endl;
+			return finish(nullptr);
+		}
+
+		// An in-pass path update while the add is still on the wire stays armed until apply loads it.
+		bool TestPathUpdateStaysArmedWhileWaypointAddIsInFlight(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			if (!StartOwnedPair(44880, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x573731342D504154ULL, hostTransport, clientTransport, host, client, error)) {
+				return false;
+			}
+			Actor* ownerView = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (ownerView->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			ownerView->SetTeam(0);
+			ownerView->SetControllerMode(Controller::CIM_AI);
+			if (!SceneMan::IsConstructed()) {
+				install_allegro(SYSTEM_NONE, &errno, std::atexit);
+				SceneMan::Construct();
+			}
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+			if (ScenarioRunner::GetLockstepActorOwner(static_cast<int64_t>(ownerView->GetUniqueID()), 0, !ownerView->IsPlayerControlled()) != 1) {
+				return finish("team-owner did not give the actor to the host");
+			}
+
+			g_CurrentAIActor = ownerView;
+			ownerView->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			ownerView->UpdateMovePath();
+			g_CurrentAIActor = nullptr;
+			ownerView->SendDeferredWaypoints();
+			if (!ownerView->IsMovePathUpdatePending()) {
+				return finish("the path update stayed armed while the waypoint add was in flight");
+			}
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			if (sent.size() != 1) {
+				return finish("the AI pass did not send one AIOrder for the add");
+			}
+			const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&sent[0].payload);
+			const int64_t ownerUID = static_cast<int64_t>(ownerView->GetUniqueID());
+			if (!order || order->actorUID != ownerUID || order->op != NetGameAIOrder::SceneWaypoint) {
+				return finish("the sent AIOrder does not match the waypoint add");
+			}
+
+			ownerView->AddAISceneWaypoint(Vector(order->x, order->y));
+			if (!ownerView->IsMovePathUpdatePending()) {
+				return finish("the path update stayed armed after the in-flight add applied");
+			}
+			if (ownerView->GetWaypointsSize() != 1) {
+				return finish("the applied queue is not the one waypoint the AI asked for");
+			}
+
+			ownerView->UpdateMovePath();
+			if (ownerView->GetWaypointCursor() < 1 && ownerView->GetWaypointsSize() != 0) {
+				return finish("the later path update loaded the applied waypoint");
+			}
+			const std::vector<NetGameCommand> pops = ScenarioRunner::DrainLocalGameCommands();
+			int popCount = 0;
+			for (const NetGameCommand& command: pops) {
+				const NetGameAIOrder* pop = std::get_if<NetGameAIOrder>(&command.payload);
+				if (pop && pop->op == NetGameAIOrder::PopWaypoint && pop->actorUID == ownerUID) {
+					++popCount;
+				}
+			}
+			if (popCount != 1) {
+				return finish("the later path update enqueued exactly one PopWaypoint");
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_path_update_stays_armed_while_the_waypoint_add_is_in_flight uid=" << ownerUID << std::endl;
 			return finish(nullptr);
 		}
 
@@ -10637,6 +10718,7 @@ namespace RTE {
 		    !TestHostRunCpuActorOnAHumanTeamPopsItsWaypoint(&error) ||
 		    !TestAnOwnedWriterMayWriteAnotherOwnersActor(&error) ||
 		    !TestAStrangerMayNotWriteAQueue(&error) ||
+		    !TestPathUpdateStaysArmedWhileWaypointAddIsInFlight(&error) ||
 		    !TestCoordinatorOwedFrameRetryEndsWithTheRound(&error) ||
 		    !TestCoordinatorOwedFrameKeepsItsCommands(&error) ||
 		    !TestCoordinatorStoppedRoundStopsResending(&error) ||

@@ -1698,7 +1698,45 @@ MOID Actor::GetAIMOWaypointID() const {
 }
 
 void Actor::UpdateMovePath() {
+	const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
+	const size_t loaded = lockstep ? static_cast<size_t>(std::max(m_WaypointCursor, 0)) : 0;
+	bool writesInFlight = !m_InflightWaypoints.empty();
+	if (!writesInFlight) {
+		for (const DeferredWaypoint& waypoint: m_PendingDeferredWaypoints) {
+			if (DeferredTargetsActor(waypoint, this, this)) {
+				writesInFlight = true;
+				break;
+			}
+		}
+	}
+	if (!writesInFlight && g_CurrentAIActor && g_CurrentAIActor != this) {
+		for (const DeferredWaypoint& waypoint: g_CurrentAIActor->m_PendingDeferredWaypoints) {
+			if (DeferredTargetsActor(waypoint, this, g_CurrentAIActor)) {
+				writesInFlight = true;
+				break;
+			}
+		}
+	}
+	// The add is still on the wire; keep the request until it lands.
+	if (lockstep && m_MovePath.empty() && !g_MovableMan.ValidMO(m_pMOMoveTarget) && m_Waypoints.size() <= loaded && writesInFlight) {
+		m_UpdateMovePath = true;
+		return;
+	}
+
 	if (g_SceneMan.GetScene() == nullptr) {
+		if (lockstep && m_MovePath.empty() && !g_MovableMan.ValidMO(m_pMOMoveTarget) && m_Waypoints.size() > loaded) {
+			const auto& waypoint = *std::next(m_Waypoints.begin(), static_cast<long>(loaded));
+			if (g_MovableMan.ValidMO(waypoint.second)) {
+				m_pMOMoveTarget = waypoint.second;
+			} else {
+				m_pMOMoveTarget = 0;
+			}
+			if (ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled())) {
+				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(GetUniqueID()), m_Team, NetGameAIOrder::PopWaypoint, waypoint.first.m_X, waypoint.first.m_Y, 0}});
+			}
+			++m_WaypointCursor;
+			m_UpdateMovePath = false;
+		}
 		return;
 	}
 
