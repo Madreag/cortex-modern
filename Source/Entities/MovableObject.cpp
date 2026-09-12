@@ -1210,10 +1210,7 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 		const bool localAI = functionName == "UpdateAI" || functionName == "ThreadedUpdateAI";
 		const bool presentation = functionName == "WhilePieMenuOpen";
 		SoundSimulationScope soundScope(m_UniqueID, Hash(functionName), presentation ? SoundExecutionDomain::Presentation : (localAI ? SoundExecutionDomain::LocalSimulation : SoundExecutionDomain::SharedSimulation));
-		struct PreviewHookScope {
-			explicit PreviewHookScope(bool on) { LuaMan::SetRunningPreviewHook(on); }
-			~PreviewHookScope() { LuaMan::SetRunningPreviewHook(false); }
-		} previewHookScope(LuaMan::IsPreviewClone(this));
+		LuaMan::PreviewHookScope previewHookScope(LuaMan::IsPreviewClone(this));
 		const std::string selfKey = LuaMan::PreviewScriptKey(this);
 
 		for (const LuaFunction& luaFunction: itr->second) {
