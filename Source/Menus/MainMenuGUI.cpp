@@ -827,7 +827,7 @@ void MainMenuGUI::RefreshReconnectControls() {
 	const bool recovering = reconnect.IsActive();
 	// §9b: the one refusal a joiner can answer. The same two buttons carry it, so the landing panel
 	// keeps one pair of controls whatever it is offering.
-	const bool applying = !recovering && !offering && !missing && m_MultiplayerApplyOffered && g_NetMatchService.WasJoinRefusedByALiveMatch();
+	const bool applying = !recovering && !offering && m_MultiplayerApplyOffered && g_NetMatchService.WasJoinRefusedByALiveMatch();
 	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || applying || missing || reconnect.CanRetryManually()));
 	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering || applying || missing || reconnect.CanRetryManually());
 	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(applying ? "Apply to Substitute" : (offering || missing ? "Rejoin Match" : "Retry"));
