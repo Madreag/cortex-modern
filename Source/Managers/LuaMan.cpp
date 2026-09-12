@@ -4729,7 +4729,14 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	m_MasterScriptState.RunScriptString("_PathCallbackPurgeTest = nil");
 	ResetPathCallbacks(true);
 	std::cout << "[script-graph-selftest] " << (purgePreserved ? "PASS" : "FAIL") << " native_path_callback_survives_purge" << std::endl;
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved;
+	LuaStatesArray setAside;
+	setAside.swap(m_ScriptStates);
+	LuaStateWrapper* emptyPick = GetAndLockFreeScriptState();
+	const bool emptySetPicksMaster = emptyPick == &m_MasterScriptState;
+	emptyPick->GetMutex().unlock();
+	m_ScriptStates.swap(setAside);
+	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && emptySetPicksMaster;
 }
 
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
