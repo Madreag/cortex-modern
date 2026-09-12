@@ -4387,7 +4387,7 @@ int RunNetDirectoryList() {
 
 	const std::string& baseUrl = g_SettingsMan.GetSessionDirectoryUrl();
 	NetDirectoryClient directory;
-	directory.Configure(baseUrl, g_SettingsMan.GetSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
+	directory.Configure(baseUrl, baseUrl.empty() ? std::string() : g_SettingsMan.GetOrCreateSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
 
 	NetLanDiscovery browser;
 	std::string browseError;
