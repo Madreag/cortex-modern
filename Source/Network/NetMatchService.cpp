@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <random>
 #include <string>
 #include <thread>
@@ -226,6 +227,7 @@ static std::string ResyncSaveName() {
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
 			m_ResyncSourceRound = 0;
+			DrainPendingSessionEventsLocked(false);
 			transport = std::move(m_Transport);
 			session = std::move(m_Session);
 			runner = std::move(m_Runner);
@@ -372,6 +374,9 @@ static std::string ResyncSaveName() {
 				if (error) *error = m_ErrorText;
 				return false;
 			}
+			// The round the resync destroys may be holding a fenced peer's disconnect it took off the
+			// transport; the session is the only thing here that outlives the coordinator.
+			DrainPendingSessionEventsLocked(true);
 			transport = std::move(m_Transport);
 			session = std::move(m_Session);
 			runner = std::move(m_Runner);
@@ -642,6 +647,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<GnsTransport> transport;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			DrainPendingSessionEventsLocked(false);
 			runner = std::move(m_Runner);
 			coordinator = std::move(m_Coordinator);
 			session = std::move(m_Session);
@@ -684,6 +690,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<GnsTransport> transport;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			DrainPendingSessionEventsLocked(false);
 			if (m_CapturedRunnerReport.empty() && m_Runner && m_Session && m_Coordinator) {
 				m_CapturedRunnerReport = m_Runner->BuildReportJson(*m_Session, *m_Coordinator);
 			}
@@ -888,10 +895,8 @@ static std::string ResyncSaveName() {
 		ScenarioRunner::SetLockstepSeatPresence(&m_SeatPresence);
 		// The coordinator owns the transport queue during the match; reconnect handshakes hand over
 		// here and drain through PumpSessionEvents on the same (game) thread.
-		m_PendingSessionEvents.clear();
-		m_Coordinator->SetSessionEventSink([this](const NetTransportEvent& event) {
-			m_PendingSessionEvents.push_back(event);
-		});
+		DiscardUndeliveredSessionEventsLocked();
+		AttachCoordinatorSessionSink();
 		if (m_Runner) {
 			std::string recordError;
 			(void)ScenarioRunner::BeginLockstepReplayRecord(m_Runner->GetMatchConfig(), &recordError);
@@ -968,6 +973,41 @@ static std::string ResyncSaveName() {
 			if (m_SeatPresence.ApplySnapshot(*snapshot)) {
 				RecordRosterTransitions(snapshot->observedAtMs);
 			}
+		}
+	}
+
+	void NetMatchService::AttachCoordinatorSessionSink() {
+		if (!m_Coordinator) {
+			return;
+		}
+		m_Coordinator->SetSessionEventSink([this](const NetTransportEvent& event) {
+			m_PendingSessionEvents.push_back(event);
+		});
+	}
+
+	void NetMatchService::DrainPendingSessionEventsLocked(bool atTickBoundary) {
+		if (m_PendingSessionEvents.empty() || !m_Session) {
+			return;
+		}
+		std::vector<NetTransportEvent> events;
+		events.swap(m_PendingSessionEvents);
+		const uint64_t nowMs = AdmissionNowMs();
+		// A drop recorded here walks g_MovableMan, which only a resync leaves standing at a finished tick.
+		std::optional<SimCensusScope> census;
+		if (atTickBoundary) {
+			census.emplace();
+		}
+		for (const NetTransportEvent& event: events) {
+			m_Session->InjectEvent(event, nowMs);
+			++m_SessionEventsDrained;
+		}
+	}
+
+	void NetMatchService::DiscardUndeliveredSessionEventsLocked() {
+		if (!m_PendingSessionEvents.empty()) {
+			m_SessionEventsDiscarded += static_cast<uint32_t>(m_PendingSessionEvents.size());
+			std::cout << "[net-match] discarded " << m_PendingSessionEvents.size() << " undelivered session events" << std::endl;
+			m_PendingSessionEvents.clear();
 		}
 	}
 
@@ -1264,6 +1304,7 @@ static std::string ResyncSaveName() {
 		if (m_ResyncSavedTick.load() != UINT64_MAX) {
 			report["resync"] = {{"saved_tick", m_ResyncSavedTick.load()}, {"boundary_tick", m_ResyncBoundaryTick.load()}};
 		}
+		report["session_events"] = {{"drained_at_teardown", m_SessionEventsDrained}, {"discarded", m_SessionEventsDiscarded}};
 		if (m_Runner && m_Session && m_Coordinator) {
 			report["runner"] = json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
 		} else if (!m_CapturedRunnerReport.empty()) {
