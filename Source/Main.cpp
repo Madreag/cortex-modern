@@ -1054,6 +1054,10 @@ static void DriveModerationE2e() {
 /// <summary>
 /// Game menus loop.
 /// </summary>
+static uint64_t MenuScriptNowMs() {
+	return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
 // A scripted-menu step failed: print it and exit non-zero so the automation harness can't false-green.
 static void MenuScriptFail(const std::string& reason) {
 	std::cerr << "[menu-script] FAILED: " << reason << std::endl;
@@ -1070,6 +1074,8 @@ void ProcessMenuScript() {
 	static bool loaded = false;
 	static std::string waitCond;
 	static int waitCondTimeout = 0;
+	static uint64_t waitCondDeadlineMs = 0;
+	static uint64_t waitUntilMs = 0;
 
 	if (!loaded) {
 		std::ifstream in(s_menuScriptPath);
@@ -1089,16 +1095,30 @@ void ProcessMenuScript() {
 		}
 	}
 	static bool introSkipped = false;
+	static uint64_t awaySinceMs = 0;
 	if (!g_MenuMan.IsMainMenuInteractive()) {
-		if (!introSkipped) {
+		if (awaySinceMs == 0) {
+			awaySinceMs = MenuScriptNowMs();
+		}
+		// The intro is skipped at once. Later the script follows the game back to the main menu, but
+		// only once the menu has stayed away longer than a launch's own fade-out, which this must not
+		// cancel.
+		if (!introSkipped || MenuScriptNowMs() - awaySinceMs > 5000) {
 			g_MenuMan.SkipTitleIntroForAutomation();
 		}
 		return;
 	}
+	awaySinceMs = 0;
 	introSkipped = true;
 	if (waitFrames > 0) {
 		--waitFrames;
 		return;
+	}
+	if (waitUntilMs > 0) {
+		if (MenuScriptNowMs() < waitUntilMs) {
+			return;
+		}
+		waitUntilMs = 0;
 	}
 	// Condition wait: block until the service reaches a member count / state, robust to variable FPS across
 	// two contending instances (frame-count waits can't synchronize two real-time peers reliably).
@@ -1117,11 +1137,17 @@ void ProcessMenuScript() {
 			met = snapshot.remoteReady;
 		} else if (waitCond.starts_with("error:")) {
 			met = snapshot.errorText.find(waitCond.substr(6)) != std::string::npos;
+		} else if (waitCond.rfind("attempts:", 0) == 0) {
+			met = g_NetMatchService.GetReconnectUx().GetAttempts() >= static_cast<uint32_t>(std::atoi(waitCond.c_str() + 9));
 		}
-		if (met || --waitCondTimeout <= 0) {
+		// The retry schedule is real time, so its wait is bounded in real time; every other condition
+		// keeps the frame budget it has always had.
+		const bool expired = waitCondDeadlineMs != 0 ? MenuScriptNowMs() >= waitCondDeadlineMs : --waitCondTimeout <= 0;
+		if (met || expired) {
 			std::cout << "[menu-script] " << waitCond << " -> " << (met ? "OK" : "TIMEOUT") << " (members=" << snapshot.members.size() << " state=" << snapshot.serviceState << ")" << std::endl;
 			if (!met) { return MenuScriptFail("condition wait timed out: " + waitCond); }
 			waitCond.clear();
+			waitCondDeadlineMs = 0;
 		}
 		return;
 	}
@@ -1136,6 +1162,10 @@ void ProcessMenuScript() {
 	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
 	if (cmd == "wait") {
 		iss >> waitFrames;
+	} else if (cmd == "wait_ms") {
+		int milliseconds = 0;
+		iss >> milliseconds;
+		waitUntilMs = MenuScriptNowMs() + static_cast<uint64_t>(std::max(0, milliseconds));
 	} else if (cmd == "wait_members") {
 		int n = 0;
 		iss >> n;
@@ -1143,9 +1173,15 @@ void ProcessMenuScript() {
 		waitCondTimeout = 4000;
 	} else if (cmd == "wait_state") {
 		std::string s;
+		int seconds = 0;
 		iss >> s;
 		waitCond = "state:" + s;
 		waitCondTimeout = 4000;
+		// A wait that has to survive a whole match cannot be counted in menu frames: none run while
+		// the match does, and a fade-out at menu frame rates burns the budget on its own.
+		if ((iss >> seconds) && seconds > 0) {
+			waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000ULL;
+		}
 	} else if (cmd == "wait_error") {
 		std::string text;
 		std::getline(iss >> std::ws, text);
@@ -1163,6 +1199,13 @@ void ProcessMenuScript() {
 	} else if (cmd == "wait_all_ready") {
 		waitCond = "allready";
 		waitCondTimeout = 4000;
+	} else if (cmd == "wait_attempts") {
+		int attempts = 0;
+		int seconds = 0;
+		iss >> attempts;
+		if (!(iss >> seconds) || seconds <= 0) { seconds = 60; }
+		waitCond = "attempts:" + std::to_string(attempts);
+		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000ULL;
 	} else if (cmd == "screenshot") {
 		std::string name;
 		iss >> name;
@@ -1224,12 +1267,36 @@ void ProcessMenuScript() {
 	} else if (cmd == "dump_lobby") {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::cout << "[menu-script] dump_lobby state=" << snapshot.serviceState << " members=" << snapshot.members.size()
-				  << " error=\"" << snapshot.errorText << "\" status=\"" << snapshot.statusText << "\"";
+				  << " error=\"" << snapshot.errorText << "\" status=\"" << snapshot.statusText << "\""
+				  << " input_delay=\"" << snapshot.inputDelayText << "\"";
 		for (const NetLobbyMember& member: snapshot.members) {
 			std::cout << " | " << member.displayName << "(team" << static_cast<int>(member.team)
 					  << (member.isLocal ? ",local" : ",remote") << ",ping" << member.pingMs << ")";
 		}
 		std::cout << std::endl;
+	} else if (cmd == "goto_main") {
+		menu->AutomationGoToMainScreen();
+		std::cout << "[menu-script] goto_main screen=" << menu->AutomationActiveScreenName() << std::endl;
+	} else if (cmd == "dump_reconnect") {
+		const NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
+		std::cout << "[menu-script] dump_reconnect screen=" << menu->AutomationActiveScreenName()
+				  << " state=" << NetReconnectUx::StateName(reconnect.GetState())
+				  << " attempts=" << reconnect.GetAttempts()
+				  << " service=" << g_NetMatchService.GetLobbySnapshot().serviceState
+				  << " status=\"" << reconnect.GetStatusText() << "\""
+				  << " offer=\"" << reconnect.GetOfferText() << "\"" << std::endl;
+	} else if (cmd == "assert_console") {
+		int expected = 0;
+		iss >> expected;
+		const int actual = g_ConsoleMan.IsEnabled() ? 1 : 0;
+		const bool pass = actual == expected;
+		std::cout << "[menu-script] assert_console expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		if (!pass) { return MenuScriptFail("assert_console expected " + std::to_string(expected)); }
+	} else if (cmd == "assert_landing_empty") {
+		const std::string status = menu->AutomationMultiplayerError();
+		const bool pass = status.empty();
+		std::cout << "[menu-script] assert_landing_empty status=\"" << status << "\" " << (pass ? "PASS" : "FAIL") << std::endl;
+		if (!pass) { return MenuScriptFail("assert_landing_empty found: " + status); }
 	} else if (cmd == "assert_enabled") {
 		std::string control;
 		int expected = 0;
@@ -1636,6 +1703,7 @@ static void DrawFrameWithPreviews() {
 	LocalPrediction::BeginRender();
 	g_FrameMan.Draw();
 	g_MenuMan.DrawNetworkUI();
+	ScenarioRunner::DrawNetUiToasts();
 	g_WindowMan.DrawPostProcessBuffer();
 	g_WindowMan.UploadFrame();
 	LocalPrediction::EndRender();
@@ -1644,7 +1712,7 @@ static void DrawFrameWithPreviews() {
 	NetModerationGUIProbe::AfterDraw();
 }
 
-static void UpdateResyncUI() {
+static void UpdateResyncUI(uint32_t elapsedSeconds) {
 	PollSDLEvents();
 	g_UInputMan.Update(false);
 	if (g_UInputMan.KeyPressed(SDLK_F6) || (g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.AnyStartPress(false))) {
@@ -1654,9 +1722,14 @@ static void UpdateResyncUI() {
 	g_WindowMan.ClearBackbuffer();
 	clear_to_color(g_FrameMan.GetBackBuffer32(), makeacol32(20, 22, 27, 255));
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
-	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, g_WindowMan.GetResX() / 2, g_WindowMan.GetResY() - 24,
-	    "Resynchronizing the match...  Seats [F6]", GUIFont::Centre);
+	const int centerX = g_WindowMan.GetResX() / 2;
+	const int centerY = g_WindowMan.GetResY() / 2;
+	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, "Resyncing the match...", GUIFont::Centre);
+	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
+	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]", GUIFont::Centre);
 	g_MenuMan.DrawNetworkUI();
+	ScenarioRunner::DrawNetUiToasts();
+	ScenarioRunner::NoteResyncOverlayFrame();
 	g_WindowMan.UploadFrame();
 	NetModerationGUIProbe::AfterDraw();
 	g_UInputMan.EndFrame();
@@ -2306,6 +2379,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			++s_netMatchResyncs;
 			g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchResyncs) + "): " + error);
 			std::cout << "[net-match] resync: " << (error.find("ResyncRequested") != std::string::npos ? "requested" : "desync detected") << ", reloading from the host snapshot" << std::endl;
+			ScenarioRunner::PushNetUiToast("resync_start", "Resyncing the match...");
 			ScenarioRunner::ClearControllerReplayError();
 			std::string resyncError;
 			bool resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
@@ -2313,7 +2387,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				std::string launchPreset;
 				const auto resyncWaitStart = std::chrono::steady_clock::now();
 				while (!g_NetMatchService.ConsumeReadyToLaunch(launchPreset)) {
-					UpdateResyncUI();
+					UpdateResyncUI(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - resyncWaitStart).count()));
 					if (System::IsSetToQuit()) {
 						resyncError = "quit requested during resync";
 						resyncOk = false;
@@ -2345,6 +2419,10 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			if (resyncOk) {
 				std::cout << "[net-match] resync: match relaunched from the snapshot" << std::endl;
 				g_NetMatchService.NoteResyncRelaunched();
+				// The relaunch drops the queue; the healed round has not applied a frame yet, so the
+				// toast names the frame it resumes on.
+				ScenarioRunner::ClearNetUiToasts();
+				ScenarioRunner::PushNetUiToast("resync_finish", "Match resynced (healed at frame " + std::to_string(ScenarioRunner::GetLockstepResumeFrame()) + ")");
 				if (s_netMatchServiceE2E) {
 					s_netMatchE2ETicks.OnResyncRelaunch();
 				}
@@ -2375,7 +2453,6 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		} else {
 			std::cerr << "[net-match] controller sync failed: " << error << std::endl;
 			g_ConsoleMan.PrintString("NETWORK: Match stopped: " + error);
-			g_ConsoleMan.SetEnabled(true);
 			g_NetMatchService.ReportRuntimeError(error);
 			g_ActivityMan.EndActivity();
 			g_ActivityMan.SetInActivity(false);
@@ -3749,6 +3826,17 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	    << ",\"closed\":" << (ScenarioRunner::WasLockstepReplayRecordClosed() ? "true" : "false") << "},";
 	out << "\"setup_surface\":\"fixed-alpha-duel\",";
 	out << "\"unsupported_setup_surface\":\"stock pregame editor/deployment/buy-menu setup is not synchronized in P4A\",";
+	// Presentation-only instrumentation: banners queued, wait-screen frames drawn, the announced
+	// input-delay line. None of it touches sim state, tick hashes or saves.
+	out << "\"ui\":{\"toasts\":[";
+	const std::vector<ScenarioRunner::NetUiToastRecord>& uiToasts = ScenarioRunner::GetNetUiToastLog();
+	for (size_t i = 0; i < uiToasts.size(); ++i) {
+		if (i) out << ",";
+		out << "{\"tick\":" << uiToasts[i].tick << ",\"kind\":\"" << JsonEscape(uiToasts[i].kind)
+		    << "\",\"text\":\"" << JsonEscape(uiToasts[i].text) << "\"}";
+	}
+	out << "],\"resync_overlay_frames\":" << ScenarioRunner::GetResyncOverlayFrames()
+	    << ",\"input_delay_text\":\"" << JsonEscape(g_NetMatchService.GetInputDelayText()) << "\"},";
 	out << "\"service\":" << g_NetMatchService.BuildReportJson();
 	out << "}";
 	return out.str();
@@ -4191,6 +4279,10 @@ int main(int argc, char** argv) {
 	InstallRNGDrawTraceIfArmed();
 
 	InitializeManagers();
+	ScenarioRunner::SetStallEventPoll(&PollSDLEvents);
+	// Same arming condition as the probe itself, so only a probe run pumps the panel from a stall.
+	const char* netUiProbeScript = std::getenv("CC_TEST_NET_UI_SCRIPT");
+	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');
 
 	if (!HandleMainArgs(argc, argv)) return ShutDown(EXIT_FAILURE);
 

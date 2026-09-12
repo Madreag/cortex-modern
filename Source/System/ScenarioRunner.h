@@ -139,6 +139,9 @@ namespace RTE {
 		/// Enable the "waiting for peer" overlay drawn while the lockstep wait is stalled. Interactive
 		/// matches only — automated runs keep their output clean and have no visible window.
 		static void SetLockstepStallOverlayEnabled(bool enabled);
+		/// Lets an armed NetModerationGUIProbe script pump the seats panel from the stall wait on a run
+		/// that is not the interactive game. Nothing else reaches the menus or the backbuffer there.
+		static void SetLockstepStallUIProbeArmed(bool armed);
 		static bool IsLockstepControllerSyncActive();
 		/// Whether a lockstep coordinator is attached at all — a FAILED one still owns the sim (the
 		/// tick must surface its stop reason, never silently degrade to per-machine controllers).
@@ -178,6 +181,12 @@ namespace RTE {
 		/// Whether the round is running only because a dropped player still has a seat to come back to.
 		static bool IsLockstepHoldingSeatForReclaim();
 
+		/// The round's hold pause as the coordinator has it, with the seat-presence names and seconds
+		/// laid over it. Every surface that says the match is paused reads this one answer, so the stall
+		/// overlay and the seats panel cannot disagree about it.
+		/// @return Whether a dropped seat is being held right now.
+		static bool DescribeLockstepHoldPause(std::string& outWho, uint32_t& outSecondsLeft);
+
 		/// The committed frame the sim is applying. Every peer applies the same frames in the same
 		/// order, so anything answered from this answers identically on all of them.
 		static void SetLockstepAppliedFrame(uint64_t frame);
@@ -191,6 +200,29 @@ namespace RTE {
 		/// including the leave the waited-for peer is waiting to have acknowledged.
 		static void SetSessionPump(std::function<void()> pump);
 		static void SetLockstepSeatPresence(const NetSeatPresence* presence);
+
+		/// One shown match-event banner: the lockstep tick it was recorded at, its class and text.
+		struct NetUiToastRecord {
+			uint64_t tick = 0;
+			std::string kind;
+			std::string text;
+		};
+		/// Presentation only: queues a top-centre banner (~3s wall clock) and logs it for the report.
+		/// Lives outside every serialized, hashed or saved structure; never read by the sim.
+		static void PushNetUiToast(const std::string& kind, const std::string& text);
+		/// Drops the on-screen queue (a resync relaunch clears it); the report log is kept.
+		static void ClearNetUiToasts();
+		/// Draws the live banner queue top-centre on the 32-bit backbuffer; a no-op without fonts.
+		static void DrawNetUiToasts();
+		/// Every banner queued this run, in order — the report's ui.toasts source.
+		static const std::vector<NetUiToastRecord>& GetNetUiToastLog();
+		/// Counts resync wait-screen draws for the report (also counted headless).
+		static void NoteResyncOverlayFrame();
+		static uint64_t GetResyncOverlayFrames();
+
+		/// The shell's SDL event poll (PollSDLEvents in Main.cpp), so a stalled lockstep wait can keep
+		/// the seats panel and the UI probe live while the sim thread is blocked. May be null.
+		static void SetStallEventPoll(void (*poll)());
 
 		/// Records a synced control handoff: the actor's frames now come from this peer. Co-op players
 		/// share a team, so per-actor control must override the per-team ownership policy.

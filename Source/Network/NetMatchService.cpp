@@ -38,6 +38,7 @@ namespace RTE {
 	std::string NetMatchService::s_JoinWaitPath;
 	bool NetMatchService::s_ApplyForSeat = false;
 	uint16_t NetMatchService::s_ApplySeat = 0;
+	bool NetMatchService::s_ApplyOnce = false;
 	bool NetMatchService::s_AutoSubstitute = false;
 	uint16_t NetMatchService::s_AutoSubstituteSeat = 0;
 	uint64_t NetMatchService::s_AutoSubstituteDelayMs = 0;
@@ -198,11 +199,13 @@ static std::string ResyncSaveName() {
 			m_LocalTeam = request.dedicated ? Activity::NoTeam : (request.host ? 0 : 1);
 			m_Dedicated = request.dedicated;
 			m_HumanSeats = request.dedicated ? std::max(0, static_cast<int>(request.peerCount) - 1) : static_cast<int>(request.peerCount);
+			m_InputDelayText.clear();
 			m_ResyncOnDesync = request.resyncOnDesync;
 			m_PendingResyncLoad.clear();
 			m_BeaconGamePort = request.port;
 			m_BeaconMaxPlayers = request.dedicated ? static_cast<uint8_t>(std::max(1, static_cast<int>(request.peerCount) - 1)) : request.peerCount;
 			m_LocalName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
+			m_JoinRefusedByLiveMatch = false;
 		}
 		m_EverStarted.store(true);
 		m_Worker = std::thread(&NetMatchService::WorkerMain, this, request, std::move(manifest));
@@ -601,7 +604,17 @@ static std::string ResyncSaveName() {
 			if (last.first == state && last.second == line) {
 				continue;
 			}
+			const std::string previous = last.first;
 			last = {state, line};
+			if (!previous.empty()) {
+				const std::string who = member.displayName.empty() ? "Player " + std::to_string(member.peerId) : member.displayName;
+				const bool wasAway = previous == "Disconnected" || previous == "Reconnecting" || previous == "Left";
+				if ((state == "Disconnected" || state == "Left") && !wasAway) {
+					ScenarioRunner::PushNetUiToast("player_left", who + " left");
+				} else if (state == "Present" && wasAway) {
+					ScenarioRunner::PushNetUiToast("player_rejoined", who + " rejoined");
+				}
+			}
 			if (m_RosterTransitions.size() >= 256) {
 				++m_RosterTransitionsDropped;
 				continue;
@@ -717,8 +730,10 @@ static std::string ResyncSaveName() {
 			m_StatusText = "Idle";
 			m_ErrorText.clear();
 			m_LobbySnapshot = {};
+			m_InputDelayText.clear();
 			m_LeaveExchangeRun = false;
 			m_MatchWasRunning = false;
+			m_JoinRefusedByLiveMatch = false;
 			EndAdmissionSession();
 		}
 		runner.reset();
@@ -758,6 +773,7 @@ static std::string ResyncSaveName() {
 			m_StatusText = "Match stopped";
 			m_ErrorText = error;
 			m_LobbySnapshot = {};
+			m_InputDelayText.clear();
 			EndAdmissionSession();
 		}
 		runner.reset();
@@ -823,6 +839,13 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::Update() {
+		// Both the multiplayer screen and the menu loop's recovery pump call this; one pump per
+		// millisecond is one pump per frame at any frame rate a menu runs at.
+		const uint64_t nowMs = SteadyNowMs();
+		if (m_LastUpdateMs == nowMs) {
+			return;
+		}
+		m_LastUpdateMs = nowMs;
 		JoinWorkerIfDone();
 		// A hosting lobby advertises itself on the LAN until the match launches.
 		bool beaconWanted = false;
@@ -834,7 +857,6 @@ static std::string ResyncSaveName() {
 				snapshot = m_LobbySnapshot;
 			}
 		}
-		const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 		if (beaconWanted) {
 			if (!m_HostLobbyBeaconed) {
 				const std::string address = NetLanDiscovery::GetPrimaryLocalAddress();
@@ -863,6 +885,35 @@ static std::string ResyncSaveName() {
 
 	uint64_t NetMatchService::AdmissionNowMs() const {
 		return m_AdmissionClock.NowMs(SteadyNowMs());
+	}
+
+	bool NetMatchService::WasJoinRefusedByALiveMatch() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_JoinRefusedByLiveMatch && m_State == NetMatchServiceState::Failed;
+	}
+
+	bool NetMatchService::BeginSubstituteApplication(const NetMatchServiceRequest& request, std::string* error) {
+		s_ApplyOnce = true;
+		if (Start(request, error)) {
+			return true;
+		}
+		s_ApplyOnce = false;
+		return false;
+	}
+
+	bool NetMatchService::NeedsRecoveryPump() const {
+		if (!s_AdmissionEnabled) {
+			return false;
+		}
+		const NetReconnectUxState uxState = m_ReconnectUx.GetState();
+		if (uxState == NetReconnectUxState::Waiting || uxState == NetReconnectUxState::Retrying) {
+			return true;
+		}
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (m_State != NetMatchServiceState::Failed || m_IsHost || !m_MatchWasRunning) {
+			return false;
+		}
+		return m_TicketStore.HasRecord();
 	}
 
 	void NetMatchService::DriveReconnectUx(uint64_t nowMs) {
@@ -1152,6 +1203,7 @@ static std::string ResyncSaveName() {
 		snapshot.inLobby = m_State == NetMatchServiceState::Starting;
 		snapshot.running = m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch;
 		snapshot.failed = m_State == NetMatchServiceState::Failed;
+		snapshot.inputDelayText = m_InputDelayText;
 		if (snapshot.activityPreset.empty()) {
 			snapshot.activityPreset = m_ActivityPreset;
 		}
@@ -1173,6 +1225,11 @@ static std::string ResyncSaveName() {
 			member.statusLine = m_SeatPresence.Line(member.peerId, member.displayName);
 		}
 		return snapshot;
+	}
+
+	std::string NetMatchService::GetInputDelayText() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_InputDelayText;
 	}
 
 	std::string NetMatchService::GetStatusText() const {
@@ -1419,9 +1476,25 @@ static std::string ResyncSaveName() {
 		runnerConfig.readyRequested = &m_ReadyRequested;
 		runnerConfig.startRequested = &m_StartRequested;
 		runnerConfig.cancelRequested = &m_CancelRequested;
-		runnerConfig.publishLobby = [this](const NetLobbySnapshot& snapshot) {
+		NetMatchRunner* runnerRaw = runner.get();
+		runnerConfig.publishLobby = [this, runnerRaw](const NetLobbySnapshot& snapshot) {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_LobbySnapshot = snapshot;
+			// The announced delay comes from the lobby's exchanged config (host-authored, already
+			// auto-adjusted) — never recomputed here, so every peer renders the same value.
+			const NetMatchConfig& config = runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle
+			                                   ? runnerRaw->GetLobbySession().GetMatchConfig()
+			                                   : runnerRaw->GetMatchConfig();
+			uint8_t localPeerId = m_LocalPeerId;
+			uint32_t pingMs = 0;
+			for (const NetLobbyMember& member: snapshot.members) {
+				if (member.isLocal) {
+					localPeerId = member.peerId;
+					pingMs = member.pingMs;
+				}
+			}
+			m_InputDelayText = "Input delay: " + std::to_string(NetMatchConfigUtil::PeerInputDelay(config, localPeerId)) +
+			    (config.peerInputDelayFrames.empty() ? " (fixed)" : " (auto, " + std::to_string(pingMs) + "ms ping)");
 		};
 
 		// One clock from here on: setup, play, stalls and every resync read the same elapsed time.
@@ -1480,6 +1553,9 @@ static std::string ResyncSaveName() {
 				m_State = NetMatchServiceState::Failed;
 				m_StatusText = "Network setup failed";
 				m_ErrorText = error;
+				// §9b: a live match is the one refusal a joiner can answer, by applying for a seat.
+				m_JoinRefusedByLiveMatch = !request.host && m_Session && m_Session->HasReject() &&
+				                           m_Session->GetMismatchKey() == "live_match";
 			}
 			m_WorkerDone = true;
 		}
@@ -1666,7 +1742,8 @@ static std::string ResyncSaveName() {
 		// The record names the host it belongs to; the config hash is context, not a gate - a client
 		// adopts the host's match config in the lobby round that follows.
 		m_ReconnectClient.SetHostContext(request.address, NetHash32{});
-		m_ReconnectClient.SetApplyForSeat(s_ApplyForSeat, s_ApplySeat);
+		m_ReconnectClient.SetApplyForSeat(s_ApplyForSeat || s_ApplyOnce, s_ApplyOnce ? c_NetH4AnySubstitutableSeat : s_ApplySeat);
+		s_ApplyOnce = false;
 		session.SetReconnectClient(&m_ReconnectClient);
 		m_AdmissionAttached = true;
 	}
