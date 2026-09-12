@@ -1214,7 +1214,7 @@ function Graph.validate(text)
 			local value = node.value
 			if value.checkpoint and not _ScriptGraphOwnerState(nil, value.class, value.checkpoint) then error("script graph: invalid owner checkpoint") end
 			local values = (_ScriptGraphBaseline or {}).values or _G
-			if value.class and not value.checkpoint and not values["To" .. value.class] then error("script graph: unknown owner class " .. value.class) end
+			if value.class and not value.checkpoint and not _ScriptGraphEntityCast(value.class, values[value.class]) then error("script graph: unknown owner class " .. value.class) end
 		end
 		if node.code then
 			local fn, message = (loadstring or load)(node.code)
@@ -2484,6 +2484,14 @@ static bool ScriptGraphPushEntity(lua_State* L, const Entity* entity, const std:
 	std::unique_ptr<LuabindObjectWrapper> value(cast->second(const_cast<Entity*>(entity), L));
 	value->GetLuabindObject()->push(L);
 	return true;
+}
+
+// True when an owner-ref of this class can be pushed: it has a cast function, or argument 2 is the bound class to push it as.
+static int ScriptGraphEntityCast(lua_State* L) {
+	const char* type = luaL_checkstring(L, 1);
+	const auto& casts = LuaAdaptersEntityCast::s_EntityToLuabindObjectCastFunctions;
+	lua_pushboolean(L, casts.find(type) != casts.end() || luabind::detail::is_class_rep(L, 2));
+	return 1;
 }
 
 static int ScriptGraphPropertyOwner(lua_State* L) {
@@ -3819,6 +3827,8 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_setglobal(m_State, "_ScriptGraphNative");
 		lua_pushcfunction(m_State, ScriptGraphOwnerState);
 		lua_setglobal(m_State, "_ScriptGraphOwnerState");
+		lua_pushcfunction(m_State, ScriptGraphEntityCast);
+		lua_setglobal(m_State, "_ScriptGraphEntityCast");
 		lua_pushcfunction(m_State, ScriptGraphOwnerReference);
 		lua_setglobal(m_State, "_ScriptGraphOwnerReference");
 		lua_pushcfunction(m_State, ScriptGraphControllerState);
@@ -4795,13 +4805,26 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			if (!held) std::cout << "[script-graph-selftest] " << name << " is not the scene's back layer" << std::endl;
 			return held;
 		};
-		bool backgroundOwnerRef = restored("_ScriptGraphSelfTestTyped");
+		const bool typedRestored = restored("_ScriptGraphSelfTestTyped");
+		bool backgroundOwnerRef = typedRestored;
 		backgroundOwnerRef = restored("_ScriptGraphSelfTestUntyped") && backgroundOwnerRef;
 		backgroundOwnerRef = restored("_ScriptGraphSelfTestUnknown") && backgroundOwnerRef;
-		RunScriptString("_ScriptGraphSelfTestScene = nil; _ScriptGraphSelfTestTyped = nil; _ScriptGraphSelfTestUntyped = nil; _ScriptGraphSelfTestUnknown = nil");
-		lua_gc(m_State, LUA_GCCOLLECT, 0);
 		std::cout << "[script-graph-selftest] " << (backgroundOwnerRef ? "PASS" : "FAIL") << " background_owner_reference_restores" << std::endl;
 		checkpointValues = backgroundOwnerRef && checkpointValues;
+		// The class-only token the codec writes when a borrowed owner has no checkpoint.
+		RunScriptString(
+		    "local text = \"SG1;r1;s1:1#1;G0;L0;N2;U1;Z#2;s10:backgroundn0;f;s12:SLBackgroundIz;U2;g1;s25:_ScriptGraphSelfTestSceneIz;\"\n"
+		    "local ok, message = pcall(_ScriptGraph.validate, text)\n"
+		    "_ScriptGraphSelfTestClassOnlyError = ok and \"\" or tostring(message)");
+		lua_getglobal(m_State, "_ScriptGraphSelfTestClassOnlyError");
+		const std::string classOnlyError = lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?";
+		lua_pop(m_State, 1);
+		if (!classOnlyError.empty()) std::cout << "[script-graph-selftest] class-only owner-ref refused: " << classOnlyError << std::endl;
+		const bool classOnlyOwnerRef = classOnlyError.empty() && typedRestored;
+		RunScriptString("_ScriptGraphSelfTestScene = nil; _ScriptGraphSelfTestTyped = nil; _ScriptGraphSelfTestUntyped = nil; _ScriptGraphSelfTestUnknown = nil; _ScriptGraphSelfTestClassOnlyError = nil");
+		lua_gc(m_State, LUA_GCCOLLECT, 0);
+		std::cout << "[script-graph-selftest] " << (classOnlyOwnerRef ? "PASS" : "FAIL") << " class_only_owner_reference_validates" << std::endl;
+		checkpointValues = classOnlyOwnerRef && checkpointValues;
 	}
 	{
 		const auto check = [&](const std::string& name, bool passed) {
