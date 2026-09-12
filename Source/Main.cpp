@@ -67,11 +67,13 @@
 #include "System.h"
 
 #include "ControllerFrame.h"
+#include "GnsP2PSelfTest.h"
 #include "GnsTransport.h"
 #include "NetAdmissionSelfTest.h"
 #include "NetAuthSelfTest.h"
 #include "NetDirectoryClient.h"
 #include "NetDirectoryCodec.h"
+#include "NetDirectorySignalChannel.h"
 #include "NetHttpClient.h"
 #include "NetIdentity.h"
 #include "NetIdentitySelfTest.h"
@@ -177,6 +179,8 @@ static std::string s_netIdentityDumpPath;
 // Headless directory probe: register -> heartbeat -> list -> delete -> list, then exit.
 static std::string s_netDirectoryProbeUrl;
 static std::string s_netDirectoryProbeCertSha256;
+static std::string s_netDirectorySignalProbeUrl;
+static std::string s_netDirectorySignalProbeCertSha256;
 static bool s_netDirectoryList = false;
 
 // Debug-only transport/session smoke. This exits before gameplay starts.
@@ -590,6 +594,14 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			s_netDirectoryProbeUrl = argValue[++i];
 			if (i + 1 < argCount && argValue[i + 1][0] != '-') {
 				s_netDirectoryProbeCertSha256 = argValue[++i];
+			}
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-directory-signal-probe") {
+			s_netDirectorySignalProbeUrl = argValue[++i];
+			if (i + 1 < argCount && argValue[i + 1][0] != '-') {
+				s_netDirectorySignalProbeCertSha256 = argValue[++i];
 			}
 			continue;
 		}
@@ -4363,6 +4375,169 @@ int RunNetDirectoryProbe(const std::string& baseUrlArg, const std::string& certP
 	return 0;
 }
 
+/// <summary>
+/// The headless signal-channel probe against a live session-directory service: register a row, a
+/// joiner channel posts three signals, the host channel polls them with the session token and echoes
+/// two back, the joiner polls those, both drain, the row is deleted, and a joiner on the deleted row
+/// fails with "session gone". Returns 0 only when every step held.
+/// </summary>
+int RunNetDirectorySignalProbe(const std::string& baseUrlArg, const std::string& certPin) {
+	using Channel = NetDirectorySignalChannel;
+	std::string baseUrl = baseUrlArg;
+	while (!baseUrl.empty() && baseUrl.back() == '/') {
+		baseUrl.pop_back();
+	}
+	const std::string installKey = g_SettingsMan.GetOrCreateSessionDirectoryInstallKey();
+	auto fail = [](const std::string& why) {
+		std::cerr << "[net-directory-signal-probe] FAIL: " << why << std::endl;
+		return 1;
+	};
+	auto request = [&](const std::string& method, const std::string& path, const std::string& body, NetHttpClient::Response& out) {
+		NetHttpClient client;
+		client.Start(method, baseUrl + path, {{"X-Install-Key", installKey}, {"Content-Type", "application/json"}}, body, certPin);
+		while (client.Poll() == NetHttpClient::PollResult::Pending) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		}
+		out = client.GetResponse();
+		std::cout << "[net-directory-signal-probe] " << method << " " << path << " -> status=" << out.statusCode << (out.error.empty() ? "" : " error=" + out.error) << " body=" << out.body << std::endl;
+		return out.error.empty();
+	};
+	const auto nowMs = [] {
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+	};
+	// Runs one channel until done() holds, the channel leaves Open, or 10 s pass.
+	auto pump = [&](Channel& channel, auto done) {
+		const uint64_t begin = nowMs();
+		while (!done() && channel.GetState() == Channel::State::Open && nowMs() - begin < 10000) {
+			channel.Update(nowMs());
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		}
+		return done();
+	};
+	auto headerNames = [](const Channel& channel) {
+		std::string names;
+		for (const auto& [name, value] : channel.RequestHeaders()) {
+			names += (names.empty() ? "" : ",") + name;
+		}
+		return names;
+	};
+
+	NetDirectoryRegisterRequest row;
+	row.name = "signal-probe";
+	row.activity = "probe";
+	row.scene = "probe";
+	row.mode = "probe";
+	row.peerCount = 1;
+	row.seatsFree = 1;
+	row.gameVersion = "probe";
+	row.buildId = "probe";
+	row.matchConfigHash = std::string(64, '0');
+	row.sessionIdentityHash = std::string(64, '0');
+	row.moduleManifestHash = std::string(64, '0');
+	row.listenPort = 41010;
+	row.joinMode = "ice";
+	NetHttpClient::Response resp;
+	NetDirectoryRegisterResponse created;
+	std::string reason;
+	if (!request("POST", "/v1/sessions", NetDirectoryCodec::EncodeRegisterRequest(row), resp) || resp.statusCode != 200 || !NetDirectoryCodec::DecodeRegisterResponse(resp.body, created, reason)) {
+		return fail("register refused: status=" + std::to_string(resp.statusCode) + " " + reason);
+	}
+
+	Channel client;
+	client.ConfigureClient(baseUrl, installKey, certPin, created.sessionId);
+	const std::string nonce = client.GetJoinNonce();
+	std::cout << "[net-directory-signal-probe] joiner nonce=" << nonce << " (" << nonce.size() << " chars, printed so the service log can be searched for it) headers=" << headerNames(client) << std::endl;
+	Channel host;
+	host.ConfigureHost(baseUrl, installKey, certPin, created.sessionId, created.token);
+	std::cout << "[net-directory-signal-probe] host headers=" << headerNames(host) << std::endl;
+	if (client.GetState() != Channel::State::Open || host.GetState() != Channel::State::Open || nonce.size() != Channel::c_JoinNonceChars) {
+		return fail("a channel did not open");
+	}
+
+	const std::vector<std::string> posted = {"probe-signal-1", "probe-signal-2", "probe-signal-3"};
+	for (const std::string& bytes : posted) {
+		if (!client.Post("host", bytes)) {
+			return fail("the joiner refused to queue " + bytes);
+		}
+	}
+	if (!pump(client, [&] { return client.PendingPosts() == 0; })) {
+		return fail("the joiner's posts did not go: " + client.BuildReportJson());
+	}
+	std::cout << "[net-directory-signal-probe] joiner posted 3 signals: " << client.BuildReportJson() << std::endl;
+
+	std::vector<Channel::Signal> hostGot;
+	host.SetSink([&hostGot](const Channel::Signal& signal) {
+		hostGot.push_back(signal);
+		return true;
+	});
+	host.SetPolling(true);
+	if (!pump(host, [&] { return hostGot.size() >= posted.size(); })) {
+		return fail("the host did not receive 3 signals: " + host.BuildReportJson());
+	}
+	for (size_t i = 0; i < hostGot.size(); ++i) {
+		std::cout << "[net-directory-signal-probe] host received seq=" << hostGot[i].seq << " from=" << hostGot[i].from << " bytes=" << hostGot[i].bytes << std::endl;
+	}
+	for (size_t i = 0; i < posted.size(); ++i) {
+		if (hostGot.size() != posted.size() || hostGot[i].seq != static_cast<int64_t>(i + 1) || hostGot[i].from != client.GetLocalPeer() || hostGot[i].bytes != posted[i]) {
+			return fail("the host received the signals changed or out of order");
+		}
+	}
+
+	for (size_t i = 0; i < 2; ++i) {
+		if (!host.Post(hostGot[i].from, "echo:" + hostGot[i].bytes)) {
+			return fail("the host refused to queue an echo");
+		}
+	}
+	if (!pump(host, [&] { return host.PendingPosts() == 0; })) {
+		return fail("the host's echoes did not go: " + host.BuildReportJson());
+	}
+	std::cout << "[net-directory-signal-probe] host echoed 2 signals: " << host.BuildReportJson() << std::endl;
+
+	std::vector<Channel::Signal> clientGot;
+	client.SetSink([&clientGot](const Channel::Signal& signal) {
+		clientGot.push_back(signal);
+		return true;
+	});
+	client.SetPolling(true);
+	if (!pump(client, [&] { return clientGot.size() >= 2; })) {
+		return fail("the joiner did not receive the 2 echoes: " + client.BuildReportJson());
+	}
+	for (size_t i = 0; i < clientGot.size(); ++i) {
+		std::cout << "[net-directory-signal-probe] joiner received seq=" << clientGot[i].seq << " from=" << clientGot[i].from << " bytes=" << clientGot[i].bytes << std::endl;
+	}
+	for (size_t i = 0; i < 2; ++i) {
+		if (clientGot.size() != 2 || clientGot[i].seq != static_cast<int64_t>(i + 1) || clientGot[i].from != "host" || clientGot[i].bytes != "echo:" + posted[i]) {
+			return fail("the joiner received the echoes changed or out of order");
+		}
+	}
+
+	host.Drain();
+	client.Drain();
+	std::cout << "[net-directory-signal-probe] host drained: cursor=" << host.GetCursor() << " " << host.BuildReportJson() << std::endl;
+	std::cout << "[net-directory-signal-probe] joiner drained: cursor=" << client.GetCursor() << " " << client.BuildReportJson() << std::endl;
+	if (host.GetState() != Channel::State::Closed || client.GetState() != Channel::State::Closed || host.GetCursor() != 3 || client.GetCursor() != 2) {
+		return fail("a channel did not drain and close");
+	}
+
+	NetDirectoryDeleteRequest del;
+	del.token = created.token;
+	if (!request("DELETE", "/v1/sessions/" + created.sessionId, NetDirectoryCodec::EncodeDeleteRequest(del), resp) || resp.statusCode != 200) {
+		return fail("delete refused");
+	}
+
+	Channel late;
+	late.ConfigureClient(baseUrl, installKey, certPin, created.sessionId);
+	std::cout << "[net-directory-signal-probe] late joiner nonce=" << late.GetJoinNonce() << " polls the deleted row" << std::endl;
+	late.SetPolling(true);
+	(void)pump(late, [] { return false; });
+	std::cout << "[net-directory-signal-probe] late joiner: " << late.BuildReportJson() << std::endl;
+	if (late.GetState() != Channel::State::Failed || late.GetLastError() != "session gone") {
+		return fail("a joiner on the deleted row did not fail with \"session gone\"");
+	}
+	std::cout << "[net-directory-signal-probe] PASS" << std::endl;
+	return 0;
+}
+
 /// The headless half of the join list: one directory GET plus one 2 s LAN browse window, then the
 /// merged rows exactly as the join screen would render them. Exit 1 when the directory is
 /// configured but no reply arrived.
@@ -4463,6 +4638,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-directory-selftest") {
 			return NetDirectorySelfTest::Run();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-p2p-selftest") {
+			return GnsP2PSelfTest::Run(std::vector<std::string>(argv + i + 1, argv + argc));
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-discovery-selftest") {
 			// A beacon and a browser over the loopback broadcast: the browser must list the host.
 			NetLanDiscovery beacon;
@@ -4527,7 +4705,7 @@ int main(int argc, char** argv) {
 				continue;
 			}
 			const std::string arg = argv[i];
-			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e" || arg == "-net-directory-probe" || arg == "-net-directory-list" || arg == "-net-directory-selftest") {
+			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e" || arg == "-net-directory-probe" || arg == "-net-directory-signal-probe" || arg == "-net-directory-list" || arg == "-net-directory-selftest") {
 				headless = true;
 			} else if (arg.size() > 9 && arg.compare(arg.size() - 9, 9, "-selftest") == 0) {
 				// A selftest never needs a visible window; a bare launch from a worker shell must not raise one.
@@ -4626,6 +4804,10 @@ int main(int argc, char** argv) {
 	if (!s_netDirectoryProbeUrl.empty()) {
 		const int exitCode = RunNetDirectoryProbe(s_netDirectoryProbeUrl, s_netDirectoryProbeCertSha256);
 		return ShutDown(exitCode);
+	}
+
+	if (!s_netDirectorySignalProbeUrl.empty()) {
+		return ShutDown(RunNetDirectorySignalProbe(s_netDirectorySignalProbeUrl, s_netDirectorySignalProbeCertSha256));
 	}
 
 	if (s_netDirectoryList) {
