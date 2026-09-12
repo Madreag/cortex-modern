@@ -38,6 +38,7 @@
 #include "GUIInput.h"
 #include "LuaMan.h"
 #include "ActivityMan.h"
+#include "TimerMan.h"
 #include "OwnedMovableObjects.h"
 
 #include <cstdlib>
@@ -1141,6 +1142,9 @@ void GameActivity::UpdateEditing() {
 }
 
 void GameActivity::Update() {
+	if (g_ActivityMan.LockstepRelaunchInProgress()) {
+		g_ActivityMan.NoteStaleActivitySlots(CountStaleRelaunchSlots(static_cast<int>(g_TimerMan.GetSimUpdateCount())));
+	}
 	Activity::Update();
 
 	// Avoid game logic when we're editing
