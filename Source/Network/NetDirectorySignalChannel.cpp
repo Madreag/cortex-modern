@@ -317,7 +317,13 @@ namespace RTE {
 
 	void NetDirectorySignalChannel::IssuePoll() {
 		++m_Polls;
-		StartRequest(RequestKind::Poll, {"GET", m_SessionPath + "/signals?peer=" + m_LocalPeer + "&after=" + std::to_string(m_Cursor), ""});
+		// The drain poll is a last look before closing: never hold it open.
+		const int waitS = m_State == State::Draining ? 0 : m_PollWaitS;
+		std::string path = m_SessionPath + "/signals?peer=" + m_LocalPeer + "&after=" + std::to_string(m_Cursor);
+		if (waitS > 0) {
+			path += "&wait=" + std::to_string(waitS);
+		}
+		StartRequest(RequestKind::Poll, {"GET", path, ""});
 	}
 
 	void NetDirectorySignalChannel::HandlePostReply(const Reply& reply, uint64_t nowMs) {
@@ -362,7 +368,9 @@ namespace RTE {
 			return;
 		}
 		m_BackoffMs = 0;
-		m_NextPollMs = nowMs + c_PollIntervalMs;
+		// The service held a long poll until a signal or the deadline, so an idle gap would
+		// only add latency: re-poll at once. Short polls keep the 500 ms cadence.
+		m_NextPollMs = m_PollWaitS > 0 ? nowMs : nowMs + c_PollIntervalMs;
 		for (const Signal& signal : inbound) {
 			if (signal.seq <= m_Cursor) {
 				continue; // re-delivered: the sink already took it

@@ -1300,6 +1300,56 @@ namespace RTE {
 				return true;
 			}
 
+			bool TestSignalLongPoll(std::string* error) {
+				ScriptedChannel s(false);
+				const std::string me = s.channel.GetLocalPeer();
+				s.channel.SetPollWait(7);
+				s.replies->push_back({200, SignalListBody({{1, "host", me, B64("one")}}), ""});
+				s.replies->push_back({200, SignalListBody({}), ""});
+
+				s.channel.SetPolling(true);
+				s.channel.Update(0);
+				s.channel.Update(1); // poll 1 answers; a long-poll re-issues at once, not after c_PollIntervalMs
+				if (s.sent->size() != 2) {
+					*error = "signal long-poll: " + std::to_string(s.sent->size()) + " requests, expected the next GET right after the previous returned";
+					return false;
+				}
+				for (size_t i = 0; i < s.sent->size(); ++i) {
+					const std::string expected = s.PollPath(static_cast<int64_t>(i)) + "&wait=7";
+					if (!RequestIs(s.sent->at(i), "GET", expected.c_str(), error)) {
+						*error = "signal long-poll: poll " + std::to_string(i + 1) + ": " + *error;
+						return false;
+					}
+				}
+				if (Taken(s) != "1:one") {
+					*error = "signal long-poll: the sink took " + Taken(s) + ", expected 1:one";
+					return false;
+				}
+				// The wait is clamped under the HTTP client's total request timeout.
+				ScriptedChannel clamped(false);
+				clamped.channel.SetPollWait(60);
+				clamped.channel.SetPolling(true);
+				clamped.channel.Update(0);
+				const std::string capped = clamped.PollPath(0) + "&wait=" + std::to_string(NetDirectorySignalChannel::c_MaxPollWaitS);
+				if (clamped.sent->size() != 1 || !RequestIs(clamped.sent->at(0), "GET", capped.c_str(), error)) {
+					*error = "signal long-poll clamp: " + (clamped.sent->empty() ? std::string("no poll issued") : *error);
+					return false;
+				}
+				// No wait configured: the poll URL and the 500 ms interval are unchanged.
+				ScriptedChannel plain(false);
+				plain.replies->push_back({200, SignalListBody({}), ""});
+				plain.channel.SetPolling(true);
+				plain.channel.Update(0);
+				plain.channel.Update(0);
+				plain.channel.Update(499);
+				if (plain.sent->size() != 1 || !RequestIs(plain.sent->at(0), "GET", plain.PollPath(0).c_str(), error)) {
+					*error = "signal long-poll default: the unconfigured poll changed shape or left before the 500 ms interval";
+					return false;
+				}
+				std::cout << "[net-directory-selftest] signal long-poll: wait=7 on the wire, the next GET issues right after each return, the wait clamps to " << NetDirectorySignalChannel::c_MaxPollWaitS << " s, unset keeps the 500 ms interval" << std::endl;
+				return true;
+			}
+
 			bool TestSignal404Fails(std::string* error) {
 				ScriptedChannel s(false);
 				s.replies->push_back({404, R"({"error":"not_found"})", ""});
@@ -1652,6 +1702,7 @@ namespace RTE {
 			if (!TestMergeGameLists(&error)) return fail(error);
 			if (!TestSignalOrderingAndCursor(&error)) return fail(error);
 			if (!TestSignalCursorWaitsForSink(&error)) return fail(error);
+			if (!TestSignalLongPoll(&error)) return fail(error);
 			if (!TestSignal404Fails(&error)) return fail(error);
 			if (!TestSignal403Fails(&error)) return fail(error);
 			if (!TestSignalQueueFullRetries(&error)) return fail(error);

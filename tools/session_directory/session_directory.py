@@ -40,6 +40,7 @@ MAX_SESSION_PAYLOAD = 1024 * 1024
 QUEUE_IDLE_S = 120.0
 HANDLER_TIMEOUT_S = 10
 HANDSHAKE_TIMEOUT_S = 5
+MAX_SIGNAL_WAIT_S = 25.0
 INSTALL_KEY_MIN = 16
 INSTALL_KEY_MAX = 32
 INSTALL_KEY_CHARS = frozenset(
@@ -305,6 +306,7 @@ class SessionDirectory:
         self.heartbeat_s = heartbeat_s
         self.queue_idle_s = queue_idle_s
         self._lock = threading.RLock()
+        self._signals_changed = threading.Condition(self._lock)
         self._sessions: dict[str, Session] = {}
         self.limiter = DualRateLimiter()
         self._stop = threading.Event()
@@ -421,6 +423,7 @@ class SessionDirectory:
             if not tokens_equal(token, sess.token):
                 raise PermissionError("forbidden")
             del self._sessions[session_id]
+            self._signals_changed.notify_all()
         return {"ok": True}
 
     def list_sessions(
@@ -482,6 +485,7 @@ class SessionDirectory:
             sess.next_seq[to_peer] = seq + 1
             queue.append(Signal(seq, from_peer, to_peer, payload_b64, len(raw)))
             sess.undrained_bytes += len(raw)
+            self._signals_changed.notify_all()
         return {"ok": True, "seq": seq}
 
     def get_signals(
@@ -491,6 +495,7 @@ class SessionDirectory:
         after: int,
         host_token: Optional[str],
         now: float,
+        wait_s: float = 0.0,
     ) -> dict[str, Any]:
         if not valid_peer(peer):
             raise FieldError("invalid_field", "peer")
@@ -501,6 +506,21 @@ class SessionDirectory:
             if peer == "host":
                 if host_token is None or not tokens_equal(host_token, sess.token):
                     raise PermissionError("forbidden")
+            deadline = now + wait_s
+            # Long-poll: hold the request until this peer's queue gains a signal past
+            # `after`, the session goes away, or the wait elapses.
+            while wait_s > 0:
+                queue = sess.queues.get(peer)
+                if queue is not None and any(item.seq > after for item in queue):
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._signals_changed.wait(remaining)
+                sess = self._sessions.get(session_id)
+                if sess is None:
+                    raise KeyError("not_found")
+            now = time.monotonic()
             queue = sess.queues.get(peer)
             if queue is None:
                 return {"signals": []}
@@ -730,6 +750,15 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                             after = int(after_raw)
                         except ValueError:
                             raise FieldError("invalid_field", "after") from None
+                    wait_raw = self._q1(query, "wait")
+                    wait_s = 0.0
+                    if wait_raw is not None:
+                        try:
+                            wait_s = float(wait_raw)
+                        except ValueError:
+                            raise FieldError("invalid_field", "wait") from None
+                        if not 0.0 <= wait_s <= MAX_SIGNAL_WAIT_S:
+                            raise FieldError("invalid_field", "wait")
                     token = self._q1(query, "token") or self.headers.get(
                         "X-Session-Token"
                     )
@@ -739,7 +768,10 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                         self._observed_ip(),
                         peer_via,
                     )
-                    self._send(200, store.get_signals(sid, peer, after, token, now))
+                    self._send(
+                        200,
+                        store.get_signals(sid, peer, after, token, now, wait_s),
+                    )
                     return
                 self._send(404, {"error": "not_found"})
             except TimeoutError:
