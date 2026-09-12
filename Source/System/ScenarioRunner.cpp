@@ -742,6 +742,10 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::SetLockstepCoordinator(NetLockstepCoordinator* coordinator, bool preserveCommands) {
+		// Every coordinator reaches the sim here, a menu-started session's too; its peers' Lua worlds must agree.
+		if (coordinator) {
+			LuaMan::SetDeterministicCollection(true);
+		}
 		if (!coordinator && s_LockstepCoordinator) {
 			for (auto& input: s_LockstepCoordinator->CaptureLocalInputHistory()) s_LocalInputHistory[input.targetFrame] = std::move(input);
 			if (!s_LocalInputHistory.empty()) {
