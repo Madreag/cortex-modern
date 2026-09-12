@@ -234,6 +234,8 @@ namespace RTE {
 		/// team's policy owner (a surviving teammate's AI picks them up). Synced: every peer consumes
 		/// the frame with identical leave knowledge.
 		static void PurgeLockstepControlOverridesForGonePeers(uint64_t frame);
+		/// Erases a dropped claim whose claimant is gone and whose seat is no longer held.
+		static bool TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame);
 		/// Whether this peer may issue team commands for the team (any of a shared team's human peers may).
 		static bool IsLockstepTeamCommandSender(int team, uint8_t senderPeerId);
 		/// The local peer's index among the team's human slots in the synced roster, or -1 outside a
