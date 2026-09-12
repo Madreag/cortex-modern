@@ -125,7 +125,8 @@ namespace RTE {
 		~NetPortMap() { Release(); }
 		friend bool NetPortMapSelfTest::TestDoubleStartGuard(std::string* error);
 
-		void Request(uint16_t internalUdpPort, uint32_t leaseSeconds, const Options& options = Options());
+		void Request(uint16_t internalUdpPort, uint32_t leaseSeconds, const Options& options);
+		void Request(uint16_t internalUdpPort, uint32_t leaseSeconds) { Request(internalUdpPort, leaseSeconds, Options()); }
 		/// Collects a finished worker, renews a mapped lease at its half-life. Never blocks a frame.
 		void Update(uint64_t nowMs);
 		/// Stops the worker, then deletes the mapping (lifetime-0 for NAT-PMP/PCP, DeletePortMapping
