@@ -132,6 +132,15 @@ namespace RTE {
 		/// @param pin The cert pin; empty validates against the system chain.
 		void SetSessionDirectoryCertSha256(const std::string& pin) { m_SessionDirectoryCertSha256 = pin; }
 
+		/// Whether a hosted match asks the router for a public UDP port mapping (NAT-PMP/PCP/UPnP).
+		bool GetNetworkPortMapEnable() const { return m_NetworkPortMapEnableOverride >= 0 ? (m_NetworkPortMapEnableOverride == 1) : m_NetworkPortMapEnable; }
+
+		/// Sets whether a hosted match asks the router for a public UDP port mapping.
+		void SetNetworkPortMapEnable(bool enable) { m_NetworkPortMapEnable = enable; }
+
+		/// CLI -net-port-map on|off override for this run only (-1 = follow the setting); never written to Settings.ini.
+		void SetNetworkPortMapEnableOverride(int enable) { m_NetworkPortMapEnableOverride = enable; }
+
 		/// Whether the local player's actors are drawn ahead through the input-delay pipeline.
 		bool LocalPredictionEnabled() const { return m_LocalPrediction; }
 		void SetLocalPredictionEnabled(bool enabled) { m_LocalPrediction = enabled; }
@@ -458,6 +467,8 @@ namespace RTE {
 		std::string m_SessionDirectoryUrl; //!< Base URL of the session-directory service; empty disables it.
 		std::string m_SessionDirectoryInstallKey; //!< Per-install rate-limit identity sent as X-Install-Key; generated on the first directory use.
 		std::string m_SessionDirectoryCertSha256; //!< Pinned SHA-256 hex of the directory server's certificate; empty = system chain.
+		bool m_NetworkPortMapEnable; //!< Whether a hosted match requests a router UDP port mapping and advertises the public endpoint.
+		int m_NetworkPortMapEnableOverride; //!< -net-port-map on|off run override (-1 unset); consulted by the getter, never persisted.
 		bool m_LocalPrediction; //!< Whether the local player's actors are previewed through the input delay.
 		int m_LocalPredictionMaxTicks; //!< Cap on how many ticks ahead the preview runs.
 		int m_NumberOfLuaStatesOverride; //!< Overrides how many threaded Lua states we'll use. -1 for no override, which defaults to the maximum number of concurrent hardware threads.
