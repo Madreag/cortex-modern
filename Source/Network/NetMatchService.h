@@ -229,6 +229,17 @@ namespace RTE {
 		NetMatchServiceState GetState() const;
 		bool IsHost() const { std::lock_guard<std::mutex> lock(m_Mutex); return m_IsHost; }
 		bool WasEverStarted() const { return m_EverStarted.load(); }
+		/// The host's router port-mapping state, for the lobby's status line. Game-thread only.
+		struct PortMapStatus {
+			bool enabled = false;    //!< This match's host asked the router for a mapping.
+			bool done = false;       //!< The request settled: mapped, or the chain gave up.
+			bool mapped = false;     //!< A mapping is held right now.
+			std::string method;      //!< "natpmp"|"pcp"|"upnp" while mapped.
+			std::string externalIp;
+			uint16_t externalPort = 0;
+			std::string error;       //!< Why the chain gave up; empty while running or mapped.
+		};
+		PortMapStatus GetPortMapStatus() const;
 		NetLobbySnapshot GetLobbySnapshot() const;
 		/// "Input delay: N (auto, Rms ping)" / "(fixed)", from the announced match config. "" pre-lobby.
 		std::string GetInputDelayText() const;
