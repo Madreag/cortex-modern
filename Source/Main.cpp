@@ -2300,9 +2300,10 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			}
 			if (resyncOk) {
 				std::cout << "[net-match] resync: match relaunched from the snapshot" << std::endl;
-				// The relaunch drops the queue; the heal toast reports the frame it landed on.
+				// The relaunch drops the queue; the healed round has not applied a frame yet, so the
+				// toast names the frame it resumes on.
 				ScenarioRunner::ClearNetUiToasts();
-				ScenarioRunner::PushNetUiToast("resync_finish", "Match resynced (healed at frame " + std::to_string(ScenarioRunner::GetLockstepAppliedFrame()) + ")");
+				ScenarioRunner::PushNetUiToast("resync_finish", "Match resynced (healed at frame " + std::to_string(ScenarioRunner::GetLockstepResumeFrame()) + ")");
 				if (s_netMatchServiceE2E) {
 					s_netMatchE2ETicks.OnResyncRelaunch();
 				}
