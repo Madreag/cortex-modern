@@ -42,6 +42,8 @@ namespace RTE {
 		friend class MovableObjectReference;
 		friend class Atom;
 		friend class LuaStateWrapper;
+		friend class LuaMan;
+		friend class PreviewScriptSelfTest;
 		friend struct EntityLuaBindings;
 
 		/// Public member variable, method and friend function declarations
