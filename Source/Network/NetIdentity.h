@@ -91,6 +91,7 @@ namespace RTE {
 
 		static NetHash32 HashCanonicalText(const std::string& domain, const std::vector<std::pair<std::string, std::string>>& fields);
 		static NetHash32 HashDeterministicConfig(const NetIdentityDeterministicConfig& config);
+		static NetHash32 HashSessionIdentity(const NetIdentityManifest& manifest);
 		static std::string HashHex(const NetHash32& hash);
 		static std::string ShortHashHex(const NetHash32& hash);
 		static std::string NormalizeRelativePathForHash(const std::string& path, std::string* error = nullptr);
