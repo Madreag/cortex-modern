@@ -1,5 +1,6 @@
 #include "NetDirectoryClient.h"
 #include "NetDirectoryCodec.h"
+#include "NetDirectorySignalChannel.h"
 #include "NetHttpClient.h"
 
 #include "allegro.h"
@@ -18,6 +19,7 @@
 #include "UInputMan.h"
 #include "WindowMan.h"
 
+#include "Base64/base64.h"
 #include "nlohmann/json.hpp"
 
 #ifdef _WIN32
@@ -868,6 +870,494 @@ namespace RTE {
 				}
 				return true;
 			}
+
+			const std::string kSignalSession = "7b8c9d2e-1111-4222-8333-444455556666";
+			const std::string kSignalBase = "/v1/sessions/" + kSignalSession;
+			const NetDirectoryClient::Reply kPostOk{200, R"({"ok":true,"seq":1})", ""};
+			const NetDirectoryClient::Reply kNoSignals{200, R"({"signals":[]})", ""};
+
+			std::string B64(const std::string& bytes) { return base64_encode(bytes, false); }
+
+			std::string SignalListBody(const std::vector<NetDirectorySignal>& signals) {
+				NetDirectorySignalList list;
+				list.signals = signals;
+				return NetDirectoryCodec::EncodeSignalList(list);
+			}
+
+			/// A channel on the scripted transport whose sink records every offer and what it took.
+			struct ScriptedChannel {
+				std::shared_ptr<std::deque<NetDirectoryClient::Reply>> replies = std::make_shared<std::deque<NetDirectoryClient::Reply>>();
+				std::shared_ptr<std::vector<NetDirectoryClient::Request>> sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
+				std::vector<int64_t> offered;
+				std::vector<NetDirectorySignalChannel::Signal> taken;
+				std::function<bool(const NetDirectorySignalChannel::Signal&)> accept = [](const NetDirectorySignalChannel::Signal&) { return true; };
+				NetDirectorySignalChannel channel;
+
+				explicit ScriptedChannel(bool host) {
+					auto replies = this->replies;
+					auto sent = this->sent;
+					channel.SetTransportFactory([replies, sent] { return std::make_unique<ScriptedTransport>(replies, sent); });
+					if (host) {
+						channel.ConfigureHost("https://dir.test", "key0123456789abcd", "", kSignalSession, "hostToken_0123456789");
+					} else {
+						channel.ConfigureClient("https://dir.test", "key0123456789abcd", "", kSignalSession);
+					}
+					channel.SetSink([this](const NetDirectorySignalChannel::Signal& signal) {
+						offered.push_back(signal.seq);
+						if (!accept(signal)) {
+							return false;
+						}
+						taken.push_back(signal);
+						return true;
+					});
+				}
+
+				std::string PollPath(int64_t after) const { return kSignalBase + "/signals?peer=" + channel.GetLocalPeer() + "&after=" + std::to_string(after); }
+			};
+
+			/// "seq:bytes,..." of what the sink took.
+			std::string Taken(const ScriptedChannel& s) {
+				std::string text;
+				for (const NetDirectorySignalChannel::Signal& signal : s.taken) {
+					text += (text.empty() ? "" : ",") + std::to_string(signal.seq) + ":" + signal.bytes;
+				}
+				return text;
+			}
+
+			bool TakenTwice(const ScriptedChannel& s) {
+				for (size_t i = 0; i < s.taken.size(); ++i) {
+					for (size_t j = i + 1; j < s.taken.size(); ++j) {
+						if (s.taken[i].seq == s.taken[j].seq) {
+							return true;
+						}
+					}
+				}
+				return false;
+			}
+
+			bool PollsReadAfter(const ScriptedChannel& s, const std::vector<int64_t>& afters, const char* what, std::string* error) {
+				if (s.sent->size() != afters.size()) {
+					*error = std::string(what) + ": " + std::to_string(s.sent->size()) + " requests, expected " + std::to_string(afters.size());
+					return false;
+				}
+				for (size_t i = 0; i < afters.size(); ++i) {
+					if (!RequestIs(s.sent->at(i), "GET", s.PollPath(afters[i]).c_str(), error)) {
+						*error = std::string(what) + ": poll " + std::to_string(i + 1) + ": " + *error;
+						return false;
+					}
+				}
+				return true;
+			}
+
+			bool TestSignalOrderingAndCursor(std::string* error) {
+				ScriptedChannel s(false);
+				const std::string me = s.channel.GetLocalPeer();
+				s.replies->push_back({200, SignalListBody({{2, "host", me, B64("two")}, {1, "host", me, B64("one")}}), ""});
+				s.replies->push_back({200, SignalListBody({{2, "host", me, B64("two")}, {3, "host", me, B64("three")}}), ""});
+				s.replies->push_back({200, SignalListBody({{4, "host", me, B64("four")}}), ""});
+
+				s.channel.SetPolling(true);
+				s.channel.Update(0);
+				s.channel.Update(0); // poll 1 answers seq 2 before seq 1
+				if (Taken(s) != "1:one,2:two") {
+					*error = "signal ordering: poll 1 delivered " + Taken(s) + ", expected 1:one,2:two";
+					return false;
+				}
+				s.channel.Update(499);
+				if (s.sent->size() != 1) {
+					*error = "signal ordering: a poll left before the 500 ms interval";
+					return false;
+				}
+				s.channel.Update(500);
+				s.channel.Update(500); // poll 2 re-delivers seq 2
+				if (TakenTwice(s)) {
+					*error = "signal ordering: a re-delivered signal reached the sink twice: " + Taken(s);
+					return false;
+				}
+				s.channel.Update(1000);
+				s.channel.Update(1000);
+				if (Taken(s) != "1:one,2:two,3:three,4:four") {
+					*error = "signal ordering: the sink took " + Taken(s) + ", expected 1:one,2:two,3:three,4:four";
+					return false;
+				}
+				if (!PollsReadAfter(s, {0, 2, 3}, "signal ordering", error)) {
+					return false;
+				}
+				const json report = json::parse(s.channel.BuildReportJson());
+				if (s.channel.GetCursor() != 4 || report["state"] != "open" || report["polls"] != 3 || report["signals_received"] != 4 || report["signals_posted"] != 0 || report["last_status"] != 200 || report["last_error"] != "") {
+					*error = "signal ordering: cursor " + std::to_string(s.channel.GetCursor()) + ", report " + report.dump();
+					return false;
+				}
+				std::cout << "[net-directory-selftest] signal ordering: polls after=0,2,3 took 1,2,3,4 once each; seq 2 re-delivered by poll 2 was skipped; report " << report.dump() << std::endl;
+				return true;
+			}
+
+			bool TestSignalCursorWaitsForSink(std::string* error) {
+				ScriptedChannel s(false);
+				const std::string me = s.channel.GetLocalPeer();
+				bool busy = true;
+				s.accept = [&busy](const NetDirectorySignalChannel::Signal& signal) {
+					if (signal.seq == 2 && busy) {
+						busy = false;
+						return false;
+					}
+					return true;
+				};
+				s.replies->push_back({200, SignalListBody({{1, "host", me, B64("one")}, {2, "host", me, B64("two")}, {3, "host", me, B64("three")}}), ""});
+				s.replies->push_back({200, SignalListBody({{2, "host", me, B64("two")}, {3, "host", me, B64("three")}}), ""});
+				s.replies->push_back({200, SignalListBody({{3, "host", me, B64("three")}, {4, "host", me, B64("four")}}), ""});
+
+				s.channel.SetPolling(true);
+				for (const uint64_t now : {0, 0, 500, 500, 1000, 1000}) {
+					s.channel.Update(now);
+				}
+				if (TakenTwice(s) || Taken(s) != "1:one,2:two,3:three,4:four") {
+					*error = "signal cursor: the sink took " + Taken(s) + ", expected 1:one,2:two,3:three,4:four once each";
+					return false;
+				}
+				// seq 2 refused on poll 1, so seq 3 waited; poll 3 re-sent seq 3 and it was not offered again.
+				if (s.offered != std::vector<int64_t>{1, 2, 2, 3, 4}) {
+					std::string offers;
+					for (const int64_t seq : s.offered) {
+						offers += (offers.empty() ? "" : ",") + std::to_string(seq);
+					}
+					*error = "signal cursor: the sink was offered " + offers + ", expected 1,2,2,3,4";
+					return false;
+				}
+				if (!PollsReadAfter(s, {0, 1, 3}, "signal cursor", error)) {
+					return false;
+				}
+				std::cout << "[net-directory-selftest] signal cursor: a refused seq 2 held the cursor at 1 (next poll after=1); offers 1,2,2,3,4; seq 3 re-sent by poll 3 was not offered again" << std::endl;
+				return true;
+			}
+
+			bool TestSignal404Fails(std::string* error) {
+				ScriptedChannel s(false);
+				s.replies->push_back({404, R"({"error":"not_found"})", ""});
+				s.channel.SetPolling(true);
+				s.channel.Update(0);
+				s.channel.Update(0);
+				const bool took = s.channel.Post("host", "after-failure");
+				s.channel.Update(600000);
+				const json report = json::parse(s.channel.BuildReportJson());
+				if (s.channel.GetState() != NetDirectorySignalChannel::State::Failed || s.channel.GetLastError() != "session gone" || report["state"] != "failed" || report["last_error"] != "session gone" || report["last_status"] != 404) {
+					*error = "signal 404: expected failed with \"session gone\", report " + report.dump();
+					return false;
+				}
+				if (took || s.sent->size() != 1) {
+					*error = "signal 404: the failed channel still took or sent a signal";
+					return false;
+				}
+				std::cout << "[net-directory-selftest] signal 404: poll answered 404 -> " << report.dump() << ", nothing sent after" << std::endl;
+				return true;
+			}
+
+			bool TestSignal403Fails(std::string* error) {
+				ScriptedChannel s(true);
+				s.replies->push_back({403, R"({"error":"forbidden"})", ""});
+				if (!s.channel.Post("client:joinNonce1", "offer")) {
+					*error = "signal 403: the host refused to queue a signal for a client";
+					return false;
+				}
+				s.channel.SetPolling(true);
+				s.channel.Update(0);
+				s.channel.Update(0);
+				s.channel.Update(600000);
+				const json report = json::parse(s.channel.BuildReportJson());
+				if (s.sent->size() != 1 || !RequestIs(s.sent->at(0), "POST", (kSignalBase + "/signal").c_str(), error)) {
+					*error = "signal 403: " + (error->empty() ? std::to_string(s.sent->size()) + " requests, expected the one post" : *error);
+					return false;
+				}
+				if (s.channel.GetState() != NetDirectorySignalChannel::State::Failed || s.channel.GetLastError() != "bad credential" || report["last_error"] != "bad credential" || report["last_status"] != 403) {
+					*error = "signal 403: expected failed with \"bad credential\", report " + report.dump();
+					return false;
+				}
+				std::cout << "[net-directory-selftest] signal 403: host post answered 403 -> " << report.dump() << ", nothing sent after" << std::endl;
+				return true;
+			}
+
+			bool TestSignalQueueFullRetries(std::string* error) {
+				ScriptedChannel s(false);
+				s.replies->push_back({400, R"({"error":"queue_full"})", ""});
+				s.replies->push_back(kNoSignals);
+				s.replies->push_back(kNoSignals);
+				s.replies->push_back(kPostOk);
+				if (!s.channel.Post("host", "offer")) {
+					*error = "signal queue_full: Post refused a signal";
+					return false;
+				}
+				s.channel.SetPolling(true);
+				s.channel.Update(0);
+				s.channel.Update(0); // queue_full: the post waits, the due poll goes
+				s.channel.Update(0);
+				s.channel.Update(4999);
+				s.channel.Update(4999);
+				if (s.sent->size() != 3 || s.sent->at(0).method != "POST" || s.sent->at(1).method != "GET" || s.sent->at(2).method != "GET") {
+					*error = "signal queue_full: expected POST then two polls before +5000 ms, got " + std::to_string(s.sent->size()) + " requests";
+					return false;
+				}
+				s.channel.Update(5000);
+				s.channel.Update(5000);
+				if (s.sent->size() != 4 || s.sent->at(3).method != "POST" || s.sent->at(3).body != s.sent->at(0).body || s.channel.PendingPosts() != 0 || s.channel.GetState() != NetDirectorySignalChannel::State::Open) {
+					*error = "signal queue_full: the same signal was not re-posted at +5000 ms";
+					return false;
+				}
+				std::cout << "[net-directory-selftest] signal queue_full: the same post body went again at t=5000; polls went on at t=0 and t=4999 meanwhile" << std::endl;
+				return true;
+			}
+
+			bool TestSignal429RetryAfter(std::string* error) {
+				ScriptedChannel s(false);
+				s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":7})", ""});
+				s.replies->push_back(kPostOk);
+				s.replies->push_back(kNoSignals);
+				if (!s.channel.Post("host", "offer")) {
+					*error = "signal 429: Post refused a signal";
+					return false;
+				}
+				s.channel.SetPolling(true);
+				s.channel.Update(1000);
+				s.channel.Update(1000); // 429: every request waits for t=8000
+				s.channel.Update(7999);
+				if (s.sent->size() != 1) {
+					*error = "signal 429: a request left at t=7999, before retry_after_s=7 from t=1000 elapsed";
+					return false;
+				}
+				s.channel.Update(8000);
+				if (s.sent->size() != 2 || s.sent->at(1).method != "POST" || s.sent->at(1).body != s.sent->at(0).body) {
+					*error = "signal 429: the post was not retried at exactly t=8000";
+					return false;
+				}
+				s.channel.Update(8000);
+				if (s.sent->size() != 3 || s.sent->at(2).method != "GET") {
+					*error = "signal 429: the held poll did not follow the retried post";
+					return false;
+				}
+				std::cout << "[net-directory-selftest] signal 429: retry_after_s=7 at t=1000 held every request through t=7999; the post went again at t=8000, then the poll" << std::endl;
+				return true;
+			}
+
+			bool TestSignalTransportBackoff(std::string* error) {
+				ScriptedChannel s(false);
+				const std::string me = s.channel.GetLocalPeer();
+				s.replies->push_back({0, "", "send: cannot connect"});
+				s.replies->push_back({0, "", "send: timed out"});
+				s.replies->push_back({0, "", "receive: timed out"});
+				s.replies->push_back({200, SignalListBody({{1, "host", me, B64("one")}}), ""});
+				s.replies->push_back({503, R"({"error":"full"})", ""});
+
+				s.channel.SetPolling(true);
+				s.channel.Update(0);
+				s.channel.Update(0);
+				const uint64_t retries[] = {5000, 15000, 35000};
+				for (size_t i = 0; i < 3; ++i) {
+					s.channel.Update(retries[i] - 1);
+					if (s.sent->size() != i + 1) {
+						*error = "signal backoff: a retry left at t=" + std::to_string(retries[i] - 1);
+						return false;
+					}
+					s.channel.Update(retries[i]);
+					s.channel.Update(retries[i]);
+					if (s.sent->size() != i + 2) {
+						*error = "signal backoff: no retry at t=" + std::to_string(retries[i]);
+						return false;
+					}
+				}
+				if (Taken(s) != "1:one" || !PollsReadAfter(s, {0, 0, 0, 0}, "signal backoff", error)) {
+					*error = error->empty() ? "signal backoff: the recovered poll delivered " + Taken(s) : *error;
+					return false;
+				}
+				s.channel.Update(35500);
+				s.channel.Update(35500); // a 503 after the success starts the ladder over
+				s.channel.Update(40499);
+				const size_t held = s.sent->size();
+				s.channel.Update(40500);
+				if (held != 5 || s.sent->size() != 6) {
+					*error = "signal backoff: after a success the next failure did not wait exactly 5 s";
+					return false;
+				}
+				std::cout << "[net-directory-selftest] signal backoff: transport errors at t=0,5000,15000 retried at t=5000,15000,35000 (5/10/20 s); a 503 after the success waited 5 s again" << std::endl;
+				return true;
+			}
+
+			bool TestSignalPayloadCap(std::string* error) {
+				ScriptedChannel s(false);
+				const std::string me = s.channel.GetLocalPeer();
+				std::string atCap(NetDirectorySignalChannel::c_MaxSignalBytes, '\0');
+				for (size_t i = 0; i < atCap.size(); ++i) {
+					atCap[i] = static_cast<char>((i * 7) & 0xFF);
+				}
+				if (s.channel.Post("host", atCap + "x")) {
+					*error = "signal cap: Post took 64 KiB + 1 bytes";
+					return false;
+				}
+				if (!s.channel.Post("host", atCap) || s.channel.PendingPosts() != 1) {
+					*error = "signal cap: Post refused exactly 64 KiB";
+					return false;
+				}
+				s.replies->push_back(kPostOk);
+				s.channel.Update(0);
+				NetDirectorySignalPost post;
+				std::string reason;
+				if (s.sent->size() != 1 || s.sent->at(0).body.size() > NetDirectoryLimits::c_MaxBodyBytes || !NetDirectoryCodec::DecodeSignalPost(s.sent->at(0).body, post, reason) || base64_decode(post.payloadB64) != atCap) {
+					*error = "signal cap: the 64 KiB post did not carry the payload intact " + reason;
+					return false;
+				}
+				s.channel.Update(0);
+				s.replies->push_back({200, SignalListBody({{1, "host", me, post.payloadB64}}), ""});
+				s.channel.SetPolling(true);
+				s.channel.Update(0);
+				s.channel.Update(0);
+				if (s.taken.size() != 1 || s.taken[0].bytes != atCap) {
+					*error = "signal cap: the 64 KiB signal did not reach the sink intact";
+					return false;
+				}
+				// The codec's 87384-character cap, unpadded, decodes to 65538 bytes: over the signal cap.
+				s.replies->push_back({200, SignalListBody({{2, "host", me, std::string(NetDirectoryLimits::c_MaxPayloadB64Chars, 'A')}}), ""});
+				s.channel.Update(500);
+				s.channel.Update(500);
+				if (s.taken.size() != 1 || s.channel.GetCursor() != 1) {
+					*error = "signal cap: an inbound payload over 64 KiB reached the sink";
+					return false;
+				}
+				std::cout << "[net-directory-selftest] signal cap: 65536 bytes posted (" << post.payloadB64.size() << " base64 chars, body " << s.sent->at(0).body.size() << " bytes) and delivered intact; 65537 refused at Post; an inbound 65538-byte payload refused" << std::endl;
+				return true;
+			}
+
+			bool TestSignalPostBeforePoll(std::string* error) {
+				ScriptedChannel s(false);
+				s.replies->push_back(kPostOk);
+				s.replies->push_back(kPostOk);
+				s.replies->push_back(kNoSignals);
+				s.channel.SetPolling(true);
+				if (!s.channel.Post("host", "first") || !s.channel.Post("host", "second")) {
+					*error = "signal priority: Post refused a signal";
+					return false;
+				}
+				s.channel.Update(0);
+				s.channel.Update(0);
+				s.channel.Update(0);
+				NetDirectorySignalPost first;
+				NetDirectorySignalPost second;
+				std::string reason;
+				if (s.sent->size() != 3 || s.sent->at(0).method != "POST" || s.sent->at(1).method != "POST" || !RequestIs(s.sent->at(2), "GET", s.PollPath(0).c_str(), error) ||
+				    !NetDirectoryCodec::DecodeSignalPost(s.sent->at(0).body, first, reason) || !NetDirectoryCodec::DecodeSignalPost(s.sent->at(1).body, second, reason) ||
+				    base64_decode(first.payloadB64) != "first" || base64_decode(second.payloadB64) != "second") {
+					*error = "signal priority: expected POST first, POST second, then the poll that was due all along";
+					return false;
+				}
+				std::cout << "[net-directory-selftest] signal priority: with the poll due at t=0, POST(first) and POST(second) went before the GET" << std::endl;
+				return true;
+			}
+
+			std::string HeaderValue(const NetDirectorySignalChannel& channel, const char* name) {
+				for (const auto& [key, value] : channel.RequestHeaders()) {
+					if (key == name) {
+						return value;
+					}
+				}
+				return "<absent>";
+			}
+
+			bool TestSignalNonceAndCredentials(std::string* error) {
+				const std::string a = NetDirectorySignalChannel::MintJoinNonce();
+				const std::string b = NetDirectorySignalChannel::MintJoinNonce();
+				auto isKeyChar = [](char ch) { return (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '-' || ch == '_'; };
+				if (a.size() != NetDirectorySignalChannel::c_JoinNonceChars || !std::all_of(a.begin(), a.end(), isKeyChar) || a == b) {
+					*error = "signal nonce: minted \"" + a + "\" then \"" + b + "\"";
+					return false;
+				}
+				ScriptedChannel client(false);
+				ScriptedChannel sameKey(false);
+				const std::string nonce = client.channel.GetJoinNonce();
+				if (nonce.size() != 32 || !std::all_of(nonce.begin(), nonce.end(), isKeyChar) || client.channel.GetLocalPeer() != "client:" + nonce || nonce == sameKey.channel.GetJoinNonce()) {
+					*error = "signal nonce: two joiners on one install key did not get their own 32-character nonces";
+					return false;
+				}
+				if (HeaderValue(client.channel, "X-Signal-Peer") != "client:" + nonce || HeaderValue(client.channel, "X-Install-Key") != "key0123456789abcd" || HeaderValue(client.channel, "X-Session-Token") != "<absent>") {
+					*error = "signal credentials: the joiner's headers were wrong";
+					return false;
+				}
+				client.replies->push_back(kPostOk);
+				client.replies->push_back(kNoSignals);
+				if (client.channel.Post("client:someoneElse", "x") || !client.channel.Post("host", "hello")) {
+					*error = "signal peers: a joiner must signal the host and nobody else";
+					return false;
+				}
+				client.channel.SetPolling(true);
+				for (int i = 0; i < 3; ++i) {
+					client.channel.Update(0);
+				}
+				NetDirectorySignalPost post;
+				std::string reason;
+				if (client.sent->size() != 2 || !NetDirectoryCodec::DecodeSignalPost(client.sent->at(0).body, post, reason) || post.from != "client:" + nonce || post.to != "host" || post.tokenOrJoinNonce != nonce || client.sent->at(1).path != client.PollPath(0)) {
+					*error = "signal credentials: the joiner did not post as client:<nonce> proving the nonce, then poll its own queue";
+					return false;
+				}
+
+				ScriptedChannel host(true);
+				host.replies->push_back(kPostOk);
+				host.replies->push_back(kNoSignals);
+				if (HeaderValue(host.channel, "X-Signal-Peer") != "host" || HeaderValue(host.channel, "X-Session-Token") != "hostToken_0123456789" || !host.channel.GetJoinNonce().empty()) {
+					*error = "signal credentials: the host's headers were wrong";
+					return false;
+				}
+				if (host.channel.Post("host", "x") || host.channel.Post("client:", "x") || host.channel.Post("client:bad nonce", "x") || !host.channel.Post("client:" + nonce, "answer")) {
+					*error = "signal peers: the host must answer a client:<nonce> and nobody else";
+					return false;
+				}
+				host.channel.SetPolling(true);
+				for (int i = 0; i < 3; ++i) {
+					host.channel.Update(0);
+				}
+				if (host.sent->size() != 2 || !NetDirectoryCodec::DecodeSignalPost(host.sent->at(0).body, post, reason) || post.from != "host" || post.to != "client:" + nonce || post.tokenOrJoinNonce != "hostToken_0123456789" ||
+				    host.sent->at(1).path != kSignalBase + "/signals?peer=host&after=0") {
+					*error = "signal credentials: the host did not post as host proving the token, then poll with the token out of the URL";
+					return false;
+				}
+
+				// A session id that could reshape the request path, or a token the service never mints, fails at configure.
+				NetDirectorySignalChannel badSession;
+				badSession.ConfigureClient("https://dir.test", "key0123456789abcd", "", "../../v1/sessions");
+				NetDirectorySignalChannel badToken;
+				badToken.ConfigureHost("https://dir.test", "key0123456789abcd", "", kSignalSession, "tok\r\nX-Evil: 1");
+				if (badSession.GetState() != NetDirectorySignalChannel::State::Failed || badSession.GetLastError() != "invalid session id" ||
+				    badToken.GetState() != NetDirectorySignalChannel::State::Failed || badToken.GetLastError() != "invalid session token") {
+					*error = "signal credentials: a malformed session id or token was configured";
+					return false;
+				}
+				std::cout << "[net-directory-selftest] signal credentials: nonce of 32 install-key characters, fresh per joiner; X-Signal-Peer on every request; the host token only in X-Session-Token and the post body" << std::endl;
+				return true;
+			}
+
+			bool TestSignalDrain(std::string* error) {
+				ScriptedChannel s(false);
+				const std::string me = s.channel.GetLocalPeer();
+				s.replies->push_back({200, SignalListBody({{1, "host", me, B64("one")}, {2, "host", me, B64("two")}}), ""});
+				s.replies->push_back({200, SignalListBody({{3, "host", me, B64("three")}}), ""});
+				s.channel.SetPolling(true);
+				s.channel.Update(0);
+				s.channel.Update(0);
+				if (!s.channel.Post("host", "unsent")) {
+					*error = "signal drain: Post refused a signal";
+					return false;
+				}
+				s.channel.Drain();
+				if (!PollsReadAfter(s, {0, 2}, "signal drain", error)) {
+					return false;
+				}
+				if (Taken(s) != "1:one,2:two,3:three" || s.channel.GetState() != NetDirectorySignalChannel::State::Closed || s.channel.PendingPosts() != 0) {
+					*error = "signal drain: took " + Taken(s) + ", state " + NetDirectorySignalChannel::StateName(s.channel.GetState());
+					return false;
+				}
+				s.channel.Update(600000);
+				if (s.channel.Post("host", "late") || s.sent->size() != 2) {
+					*error = "signal drain: the closed channel still took or sent a signal";
+					return false;
+				}
+				std::cout << "[net-directory-selftest] signal drain: one more poll after=2 inside the 500 ms interval took seq 3, then closed; the queued post was dropped" << std::endl;
+				return true;
+			}
 		}
 
 		int Run() {
@@ -889,6 +1379,17 @@ namespace RTE {
 			if (!TestHeartbeat429HonorsRetryAfter(&error)) return fail(error);
 			if (!TestTransportErrorBackoff(&error)) return fail(error);
 			if (!TestMergeGameLists(&error)) return fail(error);
+			if (!TestSignalOrderingAndCursor(&error)) return fail(error);
+			if (!TestSignalCursorWaitsForSink(&error)) return fail(error);
+			if (!TestSignal404Fails(&error)) return fail(error);
+			if (!TestSignal403Fails(&error)) return fail(error);
+			if (!TestSignalQueueFullRetries(&error)) return fail(error);
+			if (!TestSignal429RetryAfter(&error)) return fail(error);
+			if (!TestSignalTransportBackoff(&error)) return fail(error);
+			if (!TestSignalPayloadCap(&error)) return fail(error);
+			if (!TestSignalPostBeforePoll(&error)) return fail(error);
+			if (!TestSignalNonceAndCredentials(&error)) return fail(error);
+			if (!TestSignalDrain(&error)) return fail(error);
 #if defined(_WIN32) || defined(__APPLE__)
 			if (!TestHttpClientCancel(&error)) return fail(error);
 #endif
