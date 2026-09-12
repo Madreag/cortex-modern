@@ -85,6 +85,7 @@
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
 #include "NetMatchSelfTest.h"
+#include "NetPortMap.h"
 #include "NetProtocolSelfTest.h"
 #include "NetReconnectSelfTest.h"
 #include "NetReconnectSessionSelfTest.h"
@@ -204,6 +205,12 @@ static bool s_netMatch = false;
 static bool s_netMatchServiceE2E = false;
 static bool s_netDedicated = false;
 static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
+
+// The W97 router port-mapping feature: opt-in by setting or flag, probed headless.
+static int s_netPortMapCli = -1; // -1 unset; -net-port-map off|on forces 0/1 over the setting.
+static bool s_netPortMapProbe = false;
+static std::string s_netPortMapGateway; // Test seam: the gateway as a.b.c.d[:port].
+static std::string s_netPortMapIgd;     // Test seam: the IGD description URL.
 // Named host-issued spawn: -net-match-e2e-spawn Class:Preset:Module:x:y:tick[:team]
 struct E2eNamedSpawn {
 	std::string className;
@@ -396,7 +403,6 @@ void InitializeManagers() {
 	if (s_cliNumLuaStatesOverride >= 0) {
 		g_SettingsMan.SetNumberOfLuaStatesOverride(s_cliNumLuaStatesOverride);
 	}
-
 	g_WindowMan.Initialize();
 	g_GLResourceMan.Initialize();
 
@@ -649,6 +655,28 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			if (parsedPort > 0 && parsedPort <= 65535) {
 				s_netPort = static_cast<uint16_t>(parsedPort);
 			}
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-port-map") {
+			const std::string value = argValue[++i];
+			s_netPortMapCli = (value == "on" || value == "true" || value == "1") ? 1 : 0;
+			continue;
+		}
+
+		if (currentArg == "-net-port-map-probe") {
+			s_netPortMapProbe = true;
+			++i;
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-port-map-gateway") {
+			s_netPortMapGateway = argValue[++i];
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-port-map-igd") {
+			s_netPortMapIgd = argValue[++i];
 			continue;
 		}
 
@@ -4749,6 +4777,35 @@ static bool IsDeterministicRunArgument(const std::string& argument) {
 }
 
 /// <summary>
+/// The headless port-map probe: request a UDP mapping for the game port through the
+/// NAT-PMP -> PCP -> UPnP chain (optionally against the -net-port-map-gateway/-net-port-map-igd
+/// test seams), print the result, then delete the mapping. Returns 0 only when one method mapped.
+/// </summary>
+int RunNetPortMapProbe() {
+	NetPortMap mapper;
+	mapper.Request(s_netPort, NetPortMap::c_DefaultLeaseS, NetPortMap::ProbeOverrides());
+	const auto nowMs = [] {
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+	};
+	const uint64_t begin = nowMs();
+	while (!mapper.Done() && nowMs() - begin < NetPortMap::c_MapBudgetMs + NetPortMap::c_ReleaseBudgetMs) {
+		mapper.Update(nowMs());
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	const NetPortMap::Result& result = mapper.GetResult();
+	const bool mapped = mapper.Mapped();
+	if (mapped) {
+		std::cout << "[net-port-map-probe] mapped " << result.externalIp << ":" << result.externalPort
+		          << " via " << NetPortMap::MethodName(result.method) << " lease_s=" << result.leaseS << std::endl;
+	} else {
+		std::cout << "[net-port-map-probe] no mapping: " << (result.error.empty() ? "still pending at the budget" : result.error) << std::endl;
+	}
+	mapper.Release();
+	std::cout << "[net-port-map-probe] " << (mapped ? "PASS" : "FAIL") << std::endl;
+	return mapped ? 0 : 1;
+}
+
+/// <summary>
 /// Implementation of the main function.
 /// </summary>
 int main(int argc, char** argv) {
@@ -4791,6 +4848,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-p2p-selftest") {
 			return GnsP2PSelfTest::Run(std::vector<std::string>(argv + i + 1, argv + argc));
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-port-map-selftest") {
+			return NetPortMapSelfTest::Run();
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-discovery-selftest") {
 			// A beacon and a browser over the loopback broadcast: the browser must list the host.
@@ -4864,7 +4924,7 @@ int main(int argc, char** argv) {
 				continue;
 			}
 			const std::string arg = argv[i];
-			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e" || arg == "-net-directory-probe" || arg == "-net-directory-signal-probe" || arg == "-net-directory-list" || arg == "-net-directory-selftest") {
+			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e" || arg == "-net-directory-probe" || arg == "-net-directory-signal-probe" || arg == "-net-directory-list" || arg == "-net-directory-selftest" || arg == "-net-port-map-probe") {
 				headless = true;
 			} else if (arg.size() > 9 && arg.compare(arg.size() - 9, 9, "-selftest") == 0) {
 				// A selftest never needs a visible window; a bare launch from a worker shell must not raise one.
@@ -4928,6 +4988,11 @@ int main(int argc, char** argv) {
 
 	if (!HandleMainArgs(argc, argv)) return ShutDown(EXIT_FAILURE);
 
+	// The -net-port-map flags are only parsed by HandleMainArgs, so the run override and the
+	// probe seams take effect here, before the probe dispatch and any match Start can read them.
+	g_SettingsMan.SetNetworkPortMapEnableOverride(s_netPortMapCli);
+	NetPortMap::SetProbeOverrides(s_netPortMapGateway, s_netPortMapIgd);
+
 	if (s_cameraNullSceneSelfTest) {
 		// The scroll update runs from the sim tick, which keeps ticking for a frame after an activity
 		// ends or an activity launch fails. With no scene it must do nothing rather than fault, and
@@ -4971,6 +5036,10 @@ int main(int argc, char** argv) {
 
 	if (s_netDirectoryList) {
 		return ShutDown(RunNetDirectoryList());
+	}
+
+	if (s_netPortMapProbe) {
+		return ShutDown(RunNetPortMapProbe());
 	}
 
 	if (NetSessionCliRequested()) {
