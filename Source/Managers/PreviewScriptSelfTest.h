@@ -19,10 +19,16 @@ namespace RTE {
 		static bool InstallStrideCounter(MovableObject* object);
 		static void SetSharedSlot(bool shared);
 		static bool SharedSlot();
+		static void SetStrideCounter(bool enabled);
+		static bool StrideCounterRequested();
+		static void NotePreviewStride(bool initialized);
+		static bool PreviewStrideRan() { return s_PreviewStrideSeen; }
 
 	private:
 		static bool s_SubtreeProbe;
 		static bool s_SharedSlot;
+		static bool s_StrideCounter;
+		static bool s_PreviewStrideSeen;
 		static bool s_Probed;
 		static bool s_Played;
 		static bool s_ChildWasPreviewed;

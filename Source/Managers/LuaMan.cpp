@@ -49,6 +49,7 @@
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <future>
 #include <map>
 #include <set>
@@ -56,6 +57,7 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyLua.hpp"
@@ -6901,4 +6903,307 @@ void LuaMan::ClearScriptTimings() {
 
 void LuaStateWrapper::DiscardStashedScriptObject(long uniqueID) {
 	RunScriptString("if _ScriptFieldsStash then _ScriptFieldsStash[\"" + std::to_string(uniqueID) + "\"] = nil; end");
+}
+
+std::unordered_set<const MovableObject*> LuaMan::s_PreviewClones;
+std::unordered_set<long> LuaMan::s_PreviewFrozenUIDs;
+std::vector<std::pair<LuaStateWrapper*, std::string>> LuaMan::s_PreviewGlobalSnapshots;
+
+bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector<std::string>& problems) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	LoadScriptGraphHelper();
+	const int top = lua_gettop(m_State);
+	const std::string uid = std::to_string(uniqueID);
+	lua_newtable(m_State);
+	lua_pushstring(m_State, uid.c_str());
+	PushScriptObjectInstanceTable(m_State, uniqueID);
+	if (lua_isnil(m_State, -1)) {
+		lua_pop(m_State, 1);
+		lua_newtable(m_State);
+	}
+	lua_settable(m_State, -3);
+	lua_getglobal(m_State, "_ScriptGraph");
+	lua_getfield(m_State, -1, "serialize");
+	lua_pushvalue(m_State, -3);
+	if (lua_pcall(m_State, 1, 2, 0) != 0) {
+		problems.push_back(std::string("preview self serialize failed: ") + (lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?"));
+		lua_settop(m_State, top);
+		return false;
+	}
+	const size_t before = problems.size();
+	CollectStrings(m_State, -1, problems);
+	size_t length = 0;
+	const char* data = lua_tolstring(m_State, -2, &length);
+	const std::string text = data ? std::string(data, length) : std::string();
+	lua_settop(m_State, top);
+	if (problems.size() != before || text.empty()) {
+		if (text.empty() && problems.size() == before) {
+			problems.push_back("preview self serialize produced no text");
+		}
+		return false;
+	}
+	lua_getglobal(m_State, "_ScriptGraph");
+	lua_getfield(m_State, -1, "deserialize");
+	lua_pushlstring(m_State, text.data(), text.size());
+	lua_pushboolean(m_State, 0);
+	lua_pushboolean(m_State, 0);
+	if (lua_pcall(m_State, 3, 2, 0) != 0) {
+		problems.push_back(std::string("preview self deserialize failed: ") + (lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?"));
+		lua_settop(m_State, top);
+		return false;
+	}
+	CollectStrings(m_State, -1, problems);
+	if (problems.size() != before || !lua_istable(m_State, -2)) {
+		lua_settop(m_State, top);
+		return false;
+	}
+	lua_getglobal(m_State, "_ScriptFieldsStash");
+	if (!lua_istable(m_State, -1)) {
+		lua_pop(m_State, 1);
+		lua_newtable(m_State);
+		lua_pushvalue(m_State, -1);
+		lua_setglobal(m_State, "_ScriptFieldsStash");
+	}
+	lua_pushstring(m_State, ("preview:" + uid).c_str());
+	lua_getfield(m_State, -4, uid.c_str());
+	lua_settable(m_State, -3);
+	lua_settop(m_State, top);
+	return problems.size() == before;
+}
+
+bool LuaStateWrapper::SnapshotPreviewGlobals(std::string& text, std::vector<std::string>& problems) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	LoadScriptGraphHelper();
+	const int top = lua_gettop(m_State);
+	text.clear();
+	lua_newtable(m_State);
+	lua_getglobal(m_State, "_ScriptGraph");
+	lua_getfield(m_State, -1, "serialize");
+	lua_pushvalue(m_State, -3);
+	if (lua_pcall(m_State, 1, 2, 0) != 0) {
+		problems.push_back(std::string("preview globals serialize failed: ") + (lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?"));
+		lua_settop(m_State, top);
+		return false;
+	}
+	size_t length = 0;
+	const char* data = lua_tolstring(m_State, -2, &length);
+	text = data ? std::string(data, length) : std::string();
+	CollectStrings(m_State, -1, problems);
+	lua_settop(m_State, top);
+	return !text.empty();
+}
+
+bool LuaStateWrapper::RestorePreviewGlobals(const std::string& text, std::vector<std::string>& problems) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	LoadScriptGraphHelper();
+	const int top = lua_gettop(m_State);
+	lua_getglobal(m_State, "_ScriptGraph");
+	lua_getfield(m_State, -1, "deserialize");
+	lua_pushlstring(m_State, text.data(), text.size());
+	lua_pushboolean(m_State, 0);
+	lua_pushboolean(m_State, 0);
+	if (lua_pcall(m_State, 3, 2, 0) != 0) {
+		problems.push_back(std::string("preview globals restore failed: ") + (lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?"));
+		lua_settop(m_State, top);
+		return false;
+	}
+	CollectStrings(m_State, -1, problems);
+	lua_settop(m_State, top);
+	return true;
+}
+
+bool LuaStateWrapper::BindPreviewScriptObject(MovableObject* clone, bool sharedSlot) {
+	if (!clone) {
+		return false;
+	}
+	const std::string uid = std::to_string(clone->GetUniqueID());
+	RegisterMO(clone);
+	SetTempEntity(clone);
+	if (sharedSlot) {
+		clone->m_ScriptObjectName = "_ScriptedObjects[\"" + uid + "\"]";
+		return true;
+	}
+	const std::string dest = uid + "#preview";
+	if (RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; _ScriptedObjects[\"" + dest + "\"] = To" + clone->GetClassName() + "(LuaMan.TempEntity);") < 0) {
+		return false;
+	}
+	if (RunScriptString("local hold = _ScriptFieldsStash and _ScriptFieldsStash[\"preview:" + uid + "\"]; local dest = _ScriptedObjects[\"" + dest + "\"]; if dest and hold and _ScriptGraphSetInstance then _ScriptGraphSetInstance(dest, hold) end") < 0) {
+		return false;
+	}
+	clone->m_ScriptObjectName = "_ScriptedObjects[\"" + dest + "\"]";
+	return TableEntryIsDefined("_ScriptedObjects", dest);
+}
+
+void LuaStateWrapper::DropPreviewScriptObject(long uniqueID) {
+	const std::string uid = std::to_string(uniqueID);
+	RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; _ScriptedObjects[\"" + uid + "#preview\"] = nil; if _ScriptFieldsStash then _ScriptFieldsStash[\"preview:" + uid + "\"] = nil; end");
+}
+
+bool LuaStateWrapper::AttachPreviewInvStride(MovableObject* object) {
+	if (!object) {
+		return false;
+	}
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	if (RunScriptString("_PreviewInvOnStride = _PreviewInvOnStride or function(self) self.previewInvCounter = (self.previewInvCounter or 0) + 1 end") < 0) {
+		return false;
+	}
+	auto& functions = object->m_FunctionsAndScripts["OnStride"];
+	const std::string selfKey = LuaMan::PreviewScriptKey(object);
+	for (const MovableObject::LuaFunction& existing: functions) {
+		if (existing.m_LuaFunction && existing.m_LuaFunction->GetFilePath() == "preview-inv-stride.lua") {
+			RunScriptString("local s = _ScriptedObjects and _ScriptedObjects[\"" + selfKey + "\"]; if s then s.previewInvCounter = s.previewInvCounter or 0 end");
+			return true;
+		}
+	}
+	lua_getglobal(m_State, "_PreviewInvOnStride");
+	if (!lua_isfunction(m_State, -1)) {
+		lua_pop(m_State, 1);
+		return false;
+	}
+	auto* luaObject = new luabind::adl::object(luabind::from_stack(m_State, -1));
+	lua_pop(m_State, 1);
+	MovableObject::LuaFunction function;
+	function.m_ScriptIsEnabled = true;
+	function.m_LuaFunction = std::make_unique<LuabindObjectWrapper>(luaObject, "preview-inv-stride.lua");
+	functions.push_back(std::move(function));
+	RunScriptString("local s = _ScriptedObjects and _ScriptedObjects[\"" + selfKey + "\"]; if s then s.previewInvCounter = s.previewInvCounter or 0 end");
+	return true;
+}
+
+namespace {
+	void ForEachLuaState(const std::function<void(LuaStateWrapper&)>& visit) {
+		visit(g_LuaMan.GetMasterScriptState());
+		for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
+			visit(state);
+		}
+	}
+
+	void WalkOwned(const MovableObject* root, const std::function<void(MovableObject*)>& visit) {
+		if (!root) {
+			return;
+		}
+		std::unordered_set<const Entity*> entities;
+		std::unordered_set<const MovableObject*> objects;
+		CollectOwnedMovableObjects(root, entities, objects);
+		for (const MovableObject* mo: objects) {
+			if (mo) {
+				visit(const_cast<MovableObject*>(mo));
+			}
+		}
+	}
+}
+
+bool LuaMan::IsPreviewClone(const MovableObject* mo) {
+	return mo && s_PreviewClones.count(mo) > 0;
+}
+
+bool LuaMan::IsPreviewEdgeHook(const std::string& functionName) {
+	return functionName == "OnFire" || functionName == "OnStride" || functionName == "OnReload" || functionName == "OnAttach" || functionName == "OnDetach" || functionName == "OnCollideWithMO" || functionName == "OnCollideWithTerrain";
+}
+
+bool LuaMan::ShouldRunPreviewHook(const MovableObject* mo, const std::string& functionName) {
+	if (!mo || !IsPreviewClone(mo) || !IsPreviewEdgeHook(functionName)) {
+		return false;
+	}
+	return s_PreviewSharedSlot || s_PreviewFrozenUIDs.count(mo->GetUniqueID()) == 0;
+}
+
+std::string LuaMan::PreviewScriptKey(const MovableObject* mo) {
+	if (!mo) {
+		return {};
+	}
+	const std::string uid = std::to_string(mo->GetUniqueID());
+	if (s_PreviewSharedSlot || !IsPreviewClone(mo) || s_PreviewFrozenUIDs.count(mo->GetUniqueID()) > 0) {
+		return uid;
+	}
+	return uid + "#preview";
+}
+
+void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& roots, bool sharedSlot) {
+	s_PreviewFrozenUIDs.clear();
+	s_PreviewGlobalSnapshots.clear();
+	std::vector<std::pair<LuaStateWrapper*, std::string>> isolation;
+	ForEachLuaState([&isolation](LuaStateWrapper& state) {
+		std::string text;
+		std::vector<std::string> problems;
+		if (state.SnapshotPreviewGlobals(text, problems) && !text.empty()) {
+			isolation.emplace_back(&state, std::move(text));
+		}
+	});
+	if (!sharedSlot) {
+		for (const MovableObject* root: roots) {
+			WalkOwned(root, [](MovableObject* mo) {
+				LuaStateWrapper* state = mo->GetLuaState();
+				if (!state || !mo->ObjectScriptsInitialized()) {
+					return;
+				}
+				std::vector<std::string> problems;
+				if (!state->CopyScriptInstanceToPreviewHold(mo->GetUniqueID(), problems)) {
+					s_PreviewFrozenUIDs.insert(mo->GetUniqueID());
+					++s_PreviewCodecFallbacks;
+				}
+			});
+		}
+		for (const auto& [state, text]: isolation) {
+			std::vector<std::string> problems;
+			state->RestorePreviewGlobals(text, problems);
+		}
+	}
+	ForEachLuaState([](LuaStateWrapper& state) {
+		std::string text;
+		std::vector<std::string> problems;
+		if (state.SnapshotPreviewGlobals(text, problems) && !text.empty()) {
+			s_PreviewGlobalSnapshots.emplace_back(&state, std::move(text));
+		}
+	});
+}
+
+void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot) {
+	s_PreviewClones.clear();
+	s_PreviewSharedSlot = sharedSlot;
+	for (MovableObject* clone: clones) {
+		WalkOwned(clone, [sharedSlot](MovableObject* mo) {
+			s_PreviewClones.insert(mo);
+			LuaStateWrapper* state = mo->GetLuaState();
+			const long uid = mo->GetUniqueID();
+			if (!state) {
+				mo->m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(uid) + "#preview\"]";
+				return;
+			}
+			if (sharedSlot) {
+				state->BindPreviewScriptObject(mo, true);
+				return;
+			}
+			if (s_PreviewFrozenUIDs.count(uid) > 0) {
+				mo->m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(uid) + "#preview\"]";
+				return;
+			}
+			if (!state->BindPreviewScriptObject(mo, false)) {
+				s_PreviewFrozenUIDs.insert(uid);
+				++s_PreviewCodecFallbacks;
+				mo->m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(uid) + "#preview\"]";
+			}
+		});
+	}
+}
+
+void LuaMan::EndPreviewScripts() {
+	for (const auto& [state, text]: s_PreviewGlobalSnapshots) {
+		std::vector<std::string> problems;
+		state->RestorePreviewGlobals(text, problems);
+	}
+	std::unordered_set<long> dropped;
+	for (const MovableObject* mo: s_PreviewClones) {
+		if (!mo || !dropped.insert(mo->GetUniqueID()).second) {
+			continue;
+		}
+		if (LuaStateWrapper* state = const_cast<MovableObject*>(mo)->GetLuaState()) {
+			state->DropPreviewScriptObject(mo->GetUniqueID());
+		}
+	}
+	s_PreviewClones.clear();
+	s_PreviewFrozenUIDs.clear();
+	s_PreviewGlobalSnapshots.clear();
+	s_PreviewSharedSlot = false;
+	s_RunningPreviewHook = false;
 }

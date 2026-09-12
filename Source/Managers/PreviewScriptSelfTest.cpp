@@ -4,6 +4,8 @@
 #include "Actor.h"
 #include "AudioMan.h"
 #include "HDFirearm.h"
+#include "LuaMan.h"
+#include "MovableObject.h"
 #include "OwnedMovableObjects.h"
 #include "PreviewEventLedger.h"
 #include "RTETools.h"
@@ -18,6 +20,8 @@ namespace RTE {
 
 	bool PreviewScriptSelfTest::s_SubtreeProbe = false;
 	bool PreviewScriptSelfTest::s_SharedSlot = false;
+	bool PreviewScriptSelfTest::s_StrideCounter = false;
+	bool PreviewScriptSelfTest::s_PreviewStrideSeen = false;
 	bool PreviewScriptSelfTest::s_Probed = false;
 	bool PreviewScriptSelfTest::s_Played = false;
 	bool PreviewScriptSelfTest::s_ChildWasPreviewed = false;
@@ -115,7 +119,24 @@ namespace RTE {
 		return passed;
 	}
 
-	bool PreviewScriptSelfTest::InstallStrideCounter(MovableObject*) {
-		return false;
+	void PreviewScriptSelfTest::SetStrideCounter(bool enabled) {
+		s_StrideCounter = enabled;
+	}
+
+	bool PreviewScriptSelfTest::StrideCounterRequested() {
+		return s_StrideCounter;
+	}
+
+	void PreviewScriptSelfTest::NotePreviewStride(bool initialized) {
+		if (initialized) {
+			s_PreviewStrideSeen = true;
+		}
+	}
+
+	bool PreviewScriptSelfTest::InstallStrideCounter(MovableObject* object) {
+		if (!object || !object->GetLuaState()) {
+			return false;
+		}
+		return object->GetLuaState()->AttachPreviewInvStride(object);
 	}
 } // namespace RTE
