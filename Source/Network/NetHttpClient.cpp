@@ -11,6 +11,7 @@
 #include <array>
 #include <chrono>
 #include <cctype>
+#include <iostream>
 
 namespace RTE {
 
@@ -354,9 +355,9 @@ namespace RTE {
 					return;
 				}
 				case WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING:
-					// Guaranteed to be the handle's last callback; a closed request cannot complete.
-					if (st->requestClosedEvent != nullptr) SetEvent(st->requestClosedEvent);
+					// Guaranteed last callback; the release signal stays the last act on this state.
 					SignalDone(st);
+					if (st->requestClosedEvent != nullptr) SetEvent(st->requestClosedEvent);
 					return;
 				default:
 					return;
@@ -426,16 +427,25 @@ namespace RTE {
 		// last callback it sends; waiting for it keeps WinHTTP threads off this state before it is freed.
 		const auto finish = [&](Response& result) {
 			CloseRequestHandle(async);
+			bool closingArrived = true;
 			if (async->requestClosed.load() && async->callbackArmed.load() && async->requestClosedEvent != nullptr) {
-				WaitForSingleObject(async->requestClosedEvent, 2000);
+				closingArrived = WaitForSingleObject(async->requestClosedEvent, 60000) == WAIT_OBJECT_0;
 			}
-			if (async->requestClosedEvent != nullptr) CloseHandle(async->requestClosedEvent);
-			if (async->doneEvent != nullptr) CloseHandle(async->doneEvent);
 			{
 				std::lock_guard<std::mutex> lock(m_HandleMutex);
 				m_Async = nullptr;
 			}
-			delete async;
+			if (closingArrived) {
+				if (async->requestClosedEvent != nullptr) CloseHandle(async->requestClosedEvent);
+				if (async->doneEvent != nullptr) CloseHandle(async->doneEvent);
+				delete async;
+			} else {
+				// HANDLE_CLOSING is documented to always follow a close; if it did not, a
+				// callback may still be live, so the state and the flag it points at are
+				// leaked rather than freed.
+				async->cancelRequested = new std::atomic<bool>(async->cancelRequested->load());
+				std::cerr << "[net-http] request state leaked: HANDLE_CLOSING never arrived" << std::endl;
+			}
 			Finish(result);
 		};
 		if (async->doneEvent == nullptr || async->requestClosedEvent == nullptr) {
