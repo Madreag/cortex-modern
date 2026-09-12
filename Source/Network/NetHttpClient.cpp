@@ -391,16 +391,20 @@ namespace RTE {
 
 	void NetHttpClient::Cancel() {
 		m_CancelRequested = true;
+		HINTERNET handle = nullptr;
+		// Close without holding m_HandleMutex so finish can clear m_Async after HANDLE_CLOSING.
 		{
-			// Holding m_HandleMutex through the close keeps the worker from freeing the state
-			// mid-cancel; the worker only clears m_Async under the same mutex.
 			std::lock_guard<std::mutex> lock(m_HandleMutex);
 			AsyncRequest* async = static_cast<AsyncRequest*>(m_Async);
 			if (async != nullptr) {
-				// Closing the request handle terminates the in-progress asynchronous request;
-				// the documented cancellation path (closing a synchronous request is forbidden).
-				CloseRequestHandle(async);
+				std::lock_guard<std::recursive_mutex> handleLock(async->handleMutex);
+				handle = async->request;
+				async->request = nullptr;
+				async->requestClosed = true;
 			}
+		}
+		if (handle != nullptr) {
+			WinHttpCloseHandle(handle);
 		}
 		if (m_Worker.joinable()) m_Worker.join();
 	}
