@@ -102,6 +102,10 @@ namespace RTE {
 		std::string m_OfferAddress;
 	};
 
+	/// The seats panel's title line. The hold it reports is the ROUND's pause state, so the panel and
+	/// the stall overlay cannot say different things about the same moment.
+	std::string NetModerationPanelTitle(bool running, bool holdPause, const std::string& holdName, uint32_t holdSeconds);
+
 	/// §9b's moderation panel as a model: the rows the host sees and the three actions it can take.
 	/// The panel renders this and the headless driver drives this, so a gate exercises the path a
 	/// player's click takes - the same rows, the same choice of applicant, the same service calls.

@@ -155,6 +155,17 @@ namespace RTE {
 		return dropped ? " - Disconnected" : "";
 	}
 
+	std::string NetModerationPanelTitle(bool running, bool holdPause, const std::string& holdName, uint32_t holdSeconds) {
+		if (!running) {
+			return "SEATS  /  Resynchronizing the match...";
+		}
+		if (!holdPause) {
+			return "SEATS  /  The match continues while this panel is open";
+		}
+		return "SEATS  /  Match paused: waiting for " + (holdName.empty() ? std::string("a player") : holdName) +
+		       " to return (" + std::to_string(holdSeconds) + "s left)";
+	}
+
 	const char* NetModerationActionName(NetModerationAction action) {
 		switch (action) {
 			case NetModerationAction::Wait: return "wait";
