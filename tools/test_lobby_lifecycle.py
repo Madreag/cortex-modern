@@ -80,7 +80,7 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--players", type=int, choices=[2, 3, 4], default=3)
     parser.add_argument("--action", choices=["leave", "rejoin", "drop"], default="rejoin")
-    parser.add_argument("--port", type=int, default=44160)
+    parser.add_argument("--port", type=int, default=47612)
     parser.add_argument("--short-trace-control", action="store_true", help="require the replacement to report an incomplete longer trace")
     parser.add_argument("--fake-lag-ms", type=int, default=0)
     parser.add_argument("--leave-at-frame", type=int, default=0,
