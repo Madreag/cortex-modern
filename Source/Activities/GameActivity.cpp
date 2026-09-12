@@ -2147,12 +2147,12 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 		g_PostProcessMan.RegisterGlowArea(m_ActorCursor[PoS], 10);
 
 		// Draw a line from the last set waypoint to the cursor
-		if (m_ControlledActor[PoS] && g_MovableMan.IsActor(m_ControlledActor[PoS]))
+		if (m_ControlledActor[PoS] && (g_MovableMan.IsActor(m_ControlledActor[PoS]) || g_MovableMan.IsRenderSubstitute(m_ControlledActor[PoS])))
 			g_FrameMan.DrawLine(pTargetBitmap, m_ControlledActor[PoS]->GetLastAIWaypoint() - targetPos, m_ActorCursor[PoS] - targetPos, g_YellowGlowColor, 0, AILINEDOTSPACING, 0, true);
 	}
 	// Group selection circle
 	else if (m_ViewState[PoS] == ViewState::UnitSelectCircle) {
-		if (m_ControlledActor[PoS] && g_MovableMan.IsActor(m_ControlledActor[PoS])) {
+		if (m_ControlledActor[PoS] && (g_MovableMan.IsActor(m_ControlledActor[PoS]) || g_MovableMan.IsRenderSubstitute(m_ControlledActor[PoS]))) {
 			Vector cursorDrawPos = m_ActorCursor[PoS] - targetPos;
 			Vector actorPos = m_ControlledActor[PoS]->GetPos();
 			Vector drawPos = actorPos - targetPos;

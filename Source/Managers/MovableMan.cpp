@@ -1204,6 +1204,7 @@ void MovableMan::Clear() {
 	DropAllPreviewGhosts();
 	m_PreviewGhostPeak = 0;
 	m_RenderHidden.clear();
+	m_RenderSubstitutes.clear();
 	m_LinkRoot = nullptr;
 	m_WorldSetAside = nullptr;
 	m_Actors.clear();
@@ -1359,6 +1360,9 @@ void MovableMan::UnregisterObject(MovableObject* mo) {
 // Only a destruction may take an object out of a held copy. Unregistering also happens to live objects:
 // a restore detaches every Lua-owned tree, and those have to come back with the world that named them.
 void MovableMan::ForgetDestroyedObject(MovableObject* mo) {
+	if (m_LinkRoot == mo) {
+		m_LinkRoot = nullptr;
+	}
 	{
 		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 		// By address, not by key: the object may have taken a new identity since the copy was made.
@@ -2443,6 +2447,20 @@ void MovableMan::HideForRender(const MovableObject* mo, bool hidden) {
 	}
 }
 
+void MovableMan::AddRenderSubstitute(const MovableObject* mo) {
+	if (mo) {
+		m_RenderSubstitutes.insert(mo);
+	}
+}
+
+void MovableMan::ClearRenderSubstitutes() {
+	m_RenderSubstitutes.clear();
+}
+
+bool MovableMan::IsRenderSubstitute(const MovableObject* mo) const {
+	return mo && m_RenderSubstitutes.count(mo) > 0;
+}
+
 std::string MovableMan::DescribeTeamRosters() const {
 	std::string out;
 	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
@@ -3329,6 +3347,9 @@ bool MovableMan::ValidMO(const MovableObject* pMOToCheck) const {
 	if (!pMOToCheck) {
 		return false;
 	}
+	if (!m_RenderSubstitutes.empty() && m_RenderSubstitutes.count(pMOToCheck) > 0) {
+		return true;
+	}
 	if (m_Speculation.active) {
 		if (const auto shadow = m_Speculation.residents.find(pMOToCheck); shadow != m_Speculation.residents.end()) {
 			return m_Speculation.shadows.at(shadow->second).inWorld;
@@ -3345,6 +3366,9 @@ bool MovableMan::ValidMO(const MovableObject* pMOToCheck) const {
 bool MovableMan::IsActor(const MovableObject* pMOToCheck) {
 	if (!pMOToCheck) {
 		return false;
+	}
+	if (!m_RenderSubstitutes.empty() && m_RenderSubstitutes.count(pMOToCheck) > 0) {
+		return true;
 	}
 	if (m_Speculation.active) {
 		if (const auto shadow = m_Speculation.residents.find(pMOToCheck); shadow != m_Speculation.residents.end()) {

@@ -290,6 +290,9 @@ namespace RTE {
 		uint64_t GetPreviewGhostPeak() const { return m_PreviewGhostPeak; }
 		/// Draws the substitute in the original's slot until swapped back.
 		bool SwapActorForRender(Actor* original, Actor* substitute);
+		void AddRenderSubstitute(const MovableObject* mo);
+		void ClearRenderSubstitutes();
+		bool IsRenderSubstitute(const MovableObject* mo) const;
 
 		/// Speculative execution (a preview): gameplay runs against an overlay of the world. Lookups hand out
 		/// shadow clones of the residents they resolve, membership and ownership changes land on the overlay,
@@ -905,6 +908,7 @@ namespace RTE {
 		SpeculationStats m_SpeculationStats;
 		ControllerBoundaryStats m_ControllerBoundaryStats;
 		std::unordered_set<const MovableObject*> m_RenderHidden;
+		std::unordered_set<const MovableObject*> m_RenderSubstitutes;
 		MovableObject* m_LinkRoot = nullptr;
 
 		MovableObject* LookupMOID(MOID whichID) const;
