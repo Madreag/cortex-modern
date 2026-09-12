@@ -10,6 +10,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <string>
 
 namespace RTE {
 
@@ -555,6 +556,34 @@ namespace RTE {
 		const std::vector<uint8_t> malformedFlagsBytes = ControllerFrameCodec::Encode(malformed);
 		if (ControllerFrameCodec::Decode(malformedFlagsBytes.data(), malformedFlagsBytes.size(), decoded, nullptr)) {
 			return fail("malformed flags were accepted");
+		}
+
+		// Real time past the 250 ms debounce must not re-arm; sim time must.
+		g_TimerMan.ResetTime();
+		Controller releaseDelay(Controller::CIM_PLAYER, Players::PlayerOne);
+		std::string clock = g_TimerMan.SaveCheckpoint();
+		const std::string from = "9 TimerMan1 1000000 0 ";
+		const auto at = clock.find(from);
+		if (at == std::string::npos) {
+			return fail("TimerMan checkpoint prefix missing");
+		}
+		clock.replace(at, from.size(), "9 TimerMan1 1000000 500000 ");
+		if (!g_TimerMan.LoadCheckpoint(clock) || g_TimerMan.GetRealTickCount() != 500000 || g_TimerMan.GetSimTickCount() != 0) {
+			return fail("TimerMan real time did not advance without a sim tick");
+		}
+		if (releaseDelay.ReleaseDelayPassed()) {
+			return fail("release delay passed on real time with no sim tick");
+		}
+		int steps = 0;
+		while (g_TimerMan.GetSimTimeMS() <= 250 && steps < 64) {
+			g_TimerMan.AdvanceSimTickForPreview();
+			++steps;
+		}
+		if (g_TimerMan.GetSimTimeMS() <= 250) {
+			return fail("sim time did not advance past 250 ms");
+		}
+		if (!releaseDelay.ReleaseDelayPassed()) {
+			return fail("release delay still closed after sim time passed 250 ms");
 		}
 
 		std::cout << "[controller-frame-selftest] PASS" << std::endl;
