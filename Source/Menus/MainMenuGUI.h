@@ -25,6 +25,7 @@ namespace RTE {
 	class GUIControl;
 	class GUITextBox;
 	class GUIListBox;
+	class GUICheckbox;
 	struct NetLobbySnapshot;
 
 	/// Handling for the main menu screen composition and sub-menu interaction.
@@ -78,6 +79,12 @@ namespace RTE {
 
 		/// Sets a text box's text by control name.
 		bool AutomationSetText(const std::string& controlName, const std::string& text);
+
+		/// Sets a checkbox's state by control name, then runs the same change path a click would.
+		bool AutomationSetCheck(const std::string& controlName, bool checked);
+
+		/// Gets a named control's text (label, button or checkbox) for assert_label; false when it has none.
+		bool AutomationLabelText(const std::string& controlName, std::string& text) const;
 
 		/// Gets the name of the active menu screen.
 		std::string AutomationActiveScreenName() const;
@@ -201,6 +208,7 @@ namespace RTE {
 		GUITextBox* m_MultiplayerHostPortTextBox;
 		GUITextBox* m_MultiplayerHostPlayersTextBox;
 		GUITextBox* m_MultiplayerHostInputDelayTextBox;
+		GUICheckbox* m_MultiplayerHostPortMapCheckbox;
 		GUIButton* m_MultiplayerHostModeButton;
 		NetMatchMode m_MultiplayerHostMode;
 		GUITextBox* m_MultiplayerJoinAddressTextBox;
@@ -229,6 +237,8 @@ namespace RTE {
 		NetModerationUx m_ModerationUx; //!< §9b's panel model; the buttons and the headless driver share it.
 		std::map<const GUIControl*, NetModerationUx::Row> m_PressedModeration;
 		std::array<GUILabel*, 4> m_MultiplayerLobbyPlayerLabels;
+		GUILabel* m_MultiplayerLobbyPortMapLabel;
+		uint32_t m_PortMapSerialShown; //!< The last lobby port-map serial this panel rendered.
 		MultiplayerSubScreen m_MultiplayerSubScreen;
 		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
 		NetMatchServiceRequest m_MultiplayerJoinRequest; //!< The join the player last asked for, so an application reuses it.
