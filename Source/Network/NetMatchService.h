@@ -52,10 +52,11 @@ namespace RTE {
 			const uint64_t origin = (segmentFirstFrame > 0 && segmentFirstFrame < firstTick) ? segmentFirstFrame : firstTick;
 			return lastTick >= origin ? lastTick - origin + 1 : 0;
 		}
+		// The healed round replays from resumeFrame, so the frames before it are the round's and are
+		// counted once: the clock stays the round's frame number whatever the relaunch cost each peer.
 		void OnResyncRelaunch(uint64_t resumeFrame = 0) {
-			(void)resumeFrame;
-			priorTicks += SegmentTicks();
-			segmentFirstFrame = 0;
+			priorTicks = resumeFrame > 0 ? resumeFrame - 1 : priorTicks + SegmentTicks();
+			segmentFirstFrame = resumeFrame;
 			firstTick = UINT64_MAX;
 			lastTick = UINT64_MAX;
 		}
@@ -98,6 +99,11 @@ namespace RTE {
 
 	/// Whether an e2e round's stop is the round reaching its planned end rather than a break.
 	inline bool NetMatchE2ERoundReachedPlannedEnd(const std::string& error, uint64_t runningTicks, uint64_t matchTick, uint64_t cap) {
+		// Only the peer that ran the round to its plan sends this stop, so it ends the round on every
+		// peer whatever tick the local sim is on when it lands.
+		if (error.find(c_NetMatchE2ECompleteStop) != std::string::npos) {
+			return true;
+		}
 		return NetMatchE2EReachedCap(runningTicks, matchTick, cap) &&
 		       (error.find("Complete:") != std::string::npos ||
 		        error.find("MissingFrameTimeout") != std::string::npos ||
