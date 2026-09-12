@@ -1,16 +1,38 @@
 #include "NetDirectoryCodec.h"
 #include "NetHttpClient.h"
 
+#include "allegro.h"
+
+#include "ActivityMan.h"
+#include "AudioMan.h"
+#include "CameraMan.h"
+#include "ConsoleMan.h"
+#include "FrameMan.h"
+#include "MovableMan.h"
+#include "PerformanceMan.h"
+#include "PresetMan.h"
+#include "SceneMan.h"
+#include "SettingsMan.h"
+#include "TimerMan.h"
+#include "UInputMan.h"
+#include "WindowMan.h"
+
 #include "nlohmann/json.hpp"
 
 #ifdef _WIN32
 #include <winsock2.h>
 #endif
 
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -488,6 +510,85 @@ namespace RTE {
 				return error->empty();
 			}
 #endif
+
+			std::string ReadWholeFile(const std::filesystem::path& path) {
+				std::ifstream stream(path, std::ios::binary);
+				return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+			}
+
+			void SetSettingsPathEnv(const std::string& path) {
+#ifdef _WIN32
+				_putenv_s("CCCP_SETTINGSPATH", path.c_str());
+#else
+				if (path.empty()) {
+					unsetenv("CCCP_SETTINGSPATH");
+				} else {
+					setenv("CCCP_SETTINGSPATH", path.c_str(), 1);
+				}
+#endif
+			}
+
+			bool IsInstallKeyHex(const std::string& key) {
+				return key.size() == 32 && std::all_of(key.begin(), key.end(), [](char ch) { return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'); });
+			}
+
+			bool TestInstallKeyIsLazy(std::string* error) {
+				// A settings write reads every manager and this selftest runs before the boot builds
+				// them, so the ones SettingsMan::Save reads are built here.
+				install_allegro(SYSTEM_NONE, &errno, std::atexit);
+				if (!TimerMan::IsConstructed()) TimerMan::Construct();
+				if (!PresetMan::IsConstructed()) PresetMan::Construct();
+				if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
+				if (!WindowMan::IsConstructed()) WindowMan::Construct();
+				if (!FrameMan::IsConstructed()) FrameMan::Construct();
+				if (!AudioMan::IsConstructed()) AudioMan::Construct();
+				if (!UInputMan::IsConstructed()) UInputMan::Construct();
+				if (!ConsoleMan::IsConstructed()) ConsoleMan::Construct();
+				if (!SceneMan::IsConstructed()) SceneMan::Construct();
+				if (!MovableMan::IsConstructed()) MovableMan::Construct();
+				if (!CameraMan::IsConstructed()) CameraMan::Construct();
+				if (!ActivityMan::IsConstructed()) ActivityMan::Construct();
+				if (!PerformanceMan::IsConstructed()) PerformanceMan::Construct();
+
+				const std::filesystem::path settingsPath = std::filesystem::temp_directory_path() / "net-directory-install-key.ini";
+				std::error_code fileError;
+				std::filesystem::remove(settingsPath, fileError);
+				{
+					std::ofstream file(settingsPath, std::ios::binary | std::ios::trunc);
+					file << "SettingsMan\n\tSessionDirectoryUrl = http://127.0.0.1:8099\n";
+				}
+				const std::string staged = ReadWholeFile(settingsPath);
+				SetSettingsPathEnv(settingsPath.generic_string());
+				g_SettingsMan.Initialize();
+				const std::string afterLoad = ReadWholeFile(settingsPath);
+
+				std::string key;
+				if (g_SettingsMan.SettingsNeedOverwrite()) {
+					*error = "a settings file without an install key was marked for a rewrite at load";
+				} else if (!g_SettingsMan.GetSessionDirectoryInstallKey().empty()) {
+					*error = "an install key was generated at load: " + g_SettingsMan.GetSessionDirectoryInstallKey();
+				} else if (afterLoad != staged) {
+					*error = "loading a settings file without an install key rewrote it";
+				} else {
+					key = g_SettingsMan.GetOrCreateSessionDirectoryInstallKey();
+					const std::string persisted = ReadWholeFile(settingsPath);
+					if (!IsInstallKeyHex(key)) {
+						*error = "the first directory use returned install key \"" + key + "\"";
+					} else if (persisted.find("SessionDirectoryInstallKey = " + key) == std::string::npos) {
+						*error = "the first directory use did not persist the install key";
+					} else if (g_SettingsMan.GetSessionDirectoryInstallKey() != key || g_SettingsMan.GetOrCreateSessionDirectoryInstallKey() != key) {
+						*error = "a second directory use changed the install key";
+					}
+				}
+
+				SetSettingsPathEnv("");
+				std::filesystem::remove(settingsPath, fileError);
+				if (!error->empty()) {
+					return false;
+				}
+				std::cout << "[net-directory-selftest] install key lazy: load left " << staged.size() << " bytes unchanged, first use wrote key " << key << std::endl;
+				return true;
+			}
 		}
 
 		int Run() {
@@ -507,6 +608,7 @@ namespace RTE {
 #ifdef _WIN32
 			if (!TestHttpClientCancel(&error)) return fail(error);
 #endif
+			if (!TestInstallKeyIsLazy(&error)) return fail(error);
 
 			std::cout << "[net-directory-selftest] PASS" << std::endl;
 			return 0;

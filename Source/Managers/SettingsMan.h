@@ -113,8 +113,12 @@ namespace RTE {
 		void SetSessionDirectoryUrl(const std::string& url) { m_SessionDirectoryUrl = url; }
 
 		/// Gets the per-install rate-limit identity sent as X-Install-Key.
-		/// @return The install key; generated and persisted on first load.
+		/// @return The install key; empty until the directory is first used.
 		const std::string& GetSessionDirectoryInstallKey() const { return m_SessionDirectoryInstallKey; }
+
+		/// Gets the per-install rate-limit identity, generating and saving it on the first directory use.
+		/// @return The install key.
+		const std::string& GetOrCreateSessionDirectoryInstallKey();
 
 		/// Sets the per-install rate-limit identity sent as X-Install-Key.
 		/// @param key 16-32 characters of A-Za-z0-9-_.
@@ -452,7 +456,7 @@ namespace RTE {
 		int m_AIUpdateInterval; //!< How often actor's AI should be updated, i.e. every n simulation updates.
 		int m_NetworkInputDelayFrames; //!< Lockstep input-delay buffer (frames) a hosted match uses; the client adopts the host's.
 		std::string m_SessionDirectoryUrl; //!< Base URL of the session-directory service; empty disables it.
-		std::string m_SessionDirectoryInstallKey; //!< Per-install rate-limit identity sent as X-Install-Key; generated on first load.
+		std::string m_SessionDirectoryInstallKey; //!< Per-install rate-limit identity sent as X-Install-Key; generated on the first directory use.
 		std::string m_SessionDirectoryCertSha256; //!< Pinned SHA-256 hex of the directory server's certificate; empty = system chain.
 		bool m_LocalPrediction; //!< Whether the local player's actors are previewed through the input delay.
 		int m_LocalPredictionMaxTicks; //!< Cap on how many ticks ahead the preview runs.
@@ -483,8 +487,8 @@ namespace RTE {
 		/// Clears all the member variables of this SettingsMan, effectively resetting the members of this abstraction level only.
 		void Clear();
 
-		/// Generates m_SessionDirectoryInstallKey from non-sim entropy when empty after a load.
-		void EnsureSessionDirectoryInstallKey();
+		/// Generates m_SessionDirectoryInstallKey from non-sim entropy.
+		void GenerateSessionDirectoryInstallKey();
 
 		// Disallow the use of some implicit methods.
 		SettingsMan(const SettingsMan& reference) = delete;
