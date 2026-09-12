@@ -102,6 +102,14 @@ class TraceContracts(unittest.TestCase):
         self.paths[0].unlink()
         self.assertFalse(strict_compare(*self.paths, 3)[0])
 
+    def test_one_tick_pair_fails_expected_full_run(self):
+        one = {"runs": [{"tick_hashes": [{"tick": 1, "total": "a" * 64, "subsystems": dict.fromkeys(CORE | {"controller"}, "b" * 64)}]}]}
+        for path in self.paths:
+            path.write_text(json.dumps(one), encoding="utf-8")
+        passed, result = strict_compare(*self.paths, 600)
+        self.assertFalse(passed)
+        self.assertTrue(any("too few ticks" in reason for reason in result["reasons"]))
+
 
 if __name__ == "__main__":
     unittest.main()
