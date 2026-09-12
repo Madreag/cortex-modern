@@ -51,6 +51,7 @@
 #include <cstring>
 #include <future>
 #include <map>
+#include <set>
 #include <sstream>
 #include <thread>
 #include <type_traits>
@@ -2472,12 +2473,17 @@ static int ScriptGraphProperty(lua_State* L) {
 	return 1;
 }
 
-static void ScriptGraphPushEntity(lua_State* L, const Entity* entity, const std::string& type) {
+static bool ScriptGraphPushEntity(lua_State* L, const Entity* entity, const std::string& type) {
 	const auto& casts = LuaAdaptersEntityCast::s_EntityToLuabindObjectCastFunctions;
-	const auto cast = casts.find(type);
-	if (!entity || cast == casts.end()) { lua_pushnil(L); return; }
+	auto cast = casts.end();
+	if (entity) {
+		cast = casts.find(type);
+		if (cast == casts.end()) cast = casts.find(entity->GetClassName());
+	}
+	if (cast == casts.end()) { lua_pushnil(L); return false; }
 	std::unique_ptr<LuabindObjectWrapper> value(cast->second(const_cast<Entity*>(entity), L));
 	value->GetLuabindObject()->push(L);
+	return true;
 }
 
 static int ScriptGraphPropertyOwner(lua_State* L) {
@@ -3037,7 +3043,11 @@ static int ScriptGraphOwnerReference(lua_State* L) {
 	const auto push = [&](auto* value) {
 		if (!value) { lua_pushnil(L); return 1; }
 		if constexpr (std::is_base_of_v<Entity, std::remove_cv_t<std::remove_pointer_t<decltype(value)>>>) {
-			ScriptGraphPushEntity(L, value, type ? type : value->GetClassName());
+			// A class with no cast function keeps the static type it was pushed with before the typed push.
+			if (!ScriptGraphPushEntity(L, value, type ? type : value->GetClassName())) {
+				lua_pop(L, 1);
+				luabind::object(L, value).push(L);
+			}
 		} else luabind::object(L, value).push(L);
 		if (auto* rep = luabind::detail::is_class_object(L, -1)) {
 			rep->set_flags((rep->flags() & ~luabind::detail::object_rep::constant) | (constant ? luabind::detail::object_rep::constant : 0));
@@ -4738,6 +4748,61 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	checkpointValues = Activity::RunNetLocalPlayerStateSelfTest() && checkpointValues;
 	checkpointValues = GameActivity::RunNetLocalUIRestoreSelfTest() && checkpointValues;
+	{
+		// A bound Entity class with no cast function loses every borrowed owner-ref of that class.
+		std::set<std::string> uncovered;
+		const auto& casts = LuaAdaptersEntityCast::s_EntityToLuabindObjectCastFunctions;
+		auto* registry = luabind::detail::class_registry::get_registry(m_State);
+		// The C++ hierarchy, because LimbPath and MetaPlayer are bound without naming Entity as a luabind base.
+#define PER_LUA_BINDING(Type) \
+	if constexpr (std::is_base_of_v<Entity, Type>) { \
+		const auto* bound = registry ? registry->find_class(LUABIND_TYPEID(Type)) : nullptr; \
+		const char* boundName = bound ? bound->name() : #Type; \
+		if (casts.find(boundName) == casts.end()) uncovered.insert(boundName); \
+	}
+		LIST_OF_LUABOUND_OBJECTS
+#undef PER_LUA_BINDING
+		lua_pushvalue(m_State, LUA_GLOBALSINDEX);
+		lua_pushnil(m_State);
+		while (lua_next(m_State, -2) != 0) {
+			if (luabind::detail::is_class_rep(m_State, -1)) {
+				const auto* rep = static_cast<const luabind::detail::class_rep*>(lua_touserdata(m_State, -1));
+				if (ClassDerivesFrom(rep, "Entity") && casts.find(rep->name()) == casts.end()) uncovered.insert(rep->name());
+			}
+			lua_pop(m_State, 1);
+		}
+		lua_pop(m_State, 1);
+		for (const std::string& name: uncovered) std::cout << "[script-graph-selftest] no entity cast function for " << name << std::endl;
+		std::cout << "[script-graph-selftest] " << (uncovered.empty() ? "PASS" : "FAIL") << " entity_cast_functions_cover_bound_classes" << std::endl;
+		checkpointValues = uncovered.empty() && checkpointValues;
+	}
+	{
+		// The scene's back layers are borrowed owner-refs, and the selftest has no scene of its own.
+		const auto scene = std::make_unique<Scene>();
+		auto* layer = new SLBackground;
+		scene->GetBackLayers().push_back(layer);
+		luabind::object(m_State, scene.get()).push(m_State);
+		lua_setglobal(m_State, "_ScriptGraphSelfTestScene");
+		RunScriptString(
+		    "_ScriptGraphSelfTestTyped = _ScriptGraphOwnerReference(_ScriptGraphSelfTestScene, \"background\", 0, false, \"SLBackground\");"
+		    "_ScriptGraphSelfTestUntyped = _ScriptGraphOwnerReference(_ScriptGraphSelfTestScene, \"background\", 0, false, nil);"
+		    "_ScriptGraphSelfTestUnknown = _ScriptGraphOwnerReference(_ScriptGraphSelfTestScene, \"background\", 0, false, \"AbsentOwnerClass\")");
+		const auto restored = [&](const char* name) {
+			lua_getglobal(m_State, name);
+			const auto* rep = luabind::detail::is_class_object(m_State, -1);
+			const bool held = rep && rep->ptr() == layer && rep->crep() && std::strcmp(rep->crep()->name(), "SLBackground") == 0;
+			lua_pop(m_State, 1);
+			if (!held) std::cout << "[script-graph-selftest] " << name << " is not the scene's back layer" << std::endl;
+			return held;
+		};
+		bool backgroundOwnerRef = restored("_ScriptGraphSelfTestTyped");
+		backgroundOwnerRef = restored("_ScriptGraphSelfTestUntyped") && backgroundOwnerRef;
+		backgroundOwnerRef = restored("_ScriptGraphSelfTestUnknown") && backgroundOwnerRef;
+		RunScriptString("_ScriptGraphSelfTestScene = nil; _ScriptGraphSelfTestTyped = nil; _ScriptGraphSelfTestUntyped = nil; _ScriptGraphSelfTestUnknown = nil");
+		lua_gc(m_State, LUA_GCCOLLECT, 0);
+		std::cout << "[script-graph-selftest] " << (backgroundOwnerRef ? "PASS" : "FAIL") << " background_owner_reference_restores" << std::endl;
+		checkpointValues = backgroundOwnerRef && checkpointValues;
+	}
 	{
 		const auto check = [&](const std::string& name, bool passed) {
 			std::cout << "[craft-exit-selftest] " << (passed ? "PASS" : "FAIL") << " " << name << std::endl;

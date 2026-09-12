@@ -204,7 +204,13 @@ namespace RTE {
 		LuaEntityCastFunctionsDeclarationsForType(MOPixel);
 		LuaEntityCastFunctionsDeclarationsForType(MOSprite);
 		LuaEntityCastFunctionsDeclarationsForType(Scene);
+		LuaEntityCastFunctionsDeclarationsForType(SLBackground);
+		LuaEntityCastFunctionsDeclarationsForType(StaticSceneLayer);
+		LuaEntityCastFunctionsDeclarationsForType(Material);
+		LuaEntityCastFunctionsDeclarationsForType(MetaPlayer);
+		LuaEntityCastFunctionsDeclarationsForType(LimbPath);
 		LuaEntityCastFunctionsDeclarationsForType(Deployment);
+		LuaEntityCastFunctionsDeclarationsForType(Activity);
 		LuaEntityCastFunctionsDeclarationsForType(GameActivity);
 		LuaEntityCastFunctionsDeclarationsForType(GlobalScript);
 		LuaEntityCastFunctionsDeclarationsForType(GAScripted);
