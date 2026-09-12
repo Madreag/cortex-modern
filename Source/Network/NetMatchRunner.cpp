@@ -5,6 +5,7 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <iostream>
@@ -115,15 +116,126 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetMatchRunner::PrepareRematchRoster(NetSession& session, const std::vector<uint8_t>& survivingPeerIds, std::string* error) {
+		auto refuse = [&](const std::string& reason) {
+			SetFailed(reason);
+			if (error) *error = m_SetupError;
+			return false;
+		};
+		std::vector<uint8_t> survivors;
+		if (m_Config.host) {
+			// The host's roster is the peers it can still run a lobby with; a joiner on a provisional id
+			// past the roster is not one of them.
+			survivors.push_back(m_MatchConfig.hostPeerId);
+			for (const NetSessionPeerInfo& peer : session.GetReadyPeers()) {
+				const uint8_t peerId = LockstepPeerId(peer.assignedPeerId);
+				if (peerId != m_MatchConfig.hostPeerId && peerId <= m_MatchConfig.peerCount) {
+					survivors.push_back(peerId);
+				}
+			}
+		} else {
+			survivors = survivingPeerIds;
+		}
+		std::map<uint8_t, uint8_t> seatMap;
+		std::string deriveError;
+		if (!NetMatchConfigUtil::DeriveRematchConfig(m_MatchConfig, survivors, m_RematchConfig, &seatMap, &deriveError)) {
+			return refuse("rematch roster: " + deriveError);
+		}
+		m_RematchRound = true;
+		if (NetMatchConfigUtil::HashConfig(m_RematchConfig) == NetMatchConfigUtil::HashConfig(m_MatchConfig)) {
+			return true;
+		}
+		if (m_Config.host) {
+			std::map<uint8_t, uint8_t> reseated;
+			for (const auto& [seated, moved] : seatMap) {
+				if (seated != m_MatchConfig.hostPeerId) {
+					reseated[static_cast<uint8_t>(seated - 1)] = static_cast<uint8_t>(moved - 1);
+				}
+			}
+			std::string seatError;
+			if (!session.RenumberReadySeats(reseated, &seatError)) {
+				return refuse("rematch roster: " + seatError);
+			}
+			if (NetReconnectHost* admission = session.GetReconnectHost()) {
+				// A survivor keeps the stable seat its ticket names; the leaver's seat is simply gone.
+				std::vector<NetH4Seat> seats;
+				for (size_t index = 0; index < m_MatchConfig.players.size(); ++index) {
+					const NetMatchPlayerSlot& was = m_MatchConfig.players[index];
+					uint8_t peerId = was.peerId;
+					if (!was.cpu) {
+						const auto moved = seatMap.find(was.peerId);
+						if (moved == seatMap.end()) {
+							continue;
+						}
+						peerId = moved->second;
+					}
+					NetH4Seat seat;
+					seat.stableSeat = static_cast<uint16_t>(index);
+					seat.peerId = peerId > 0 ? static_cast<uint8_t>(peerId - 1) : 0;
+					seat.team = static_cast<int32_t>(was.team);
+					seat.cpu = was.cpu;
+					seat.lockstepPeerId = peerId;
+					seat.local = !was.cpu && peerId == m_RematchConfig.hostPeerId;
+					seats.push_back(seat);
+				}
+				admission->SetSeatTable(std::move(seats), m_RematchConfig.mode);
+			}
+		} else {
+			const auto mine = seatMap.find(LocalLockstepPeerId(session));
+			if (mine == seatMap.end()) {
+				return refuse("rematch roster: this peer has no seat in the roster it derived");
+			}
+			std::string seatError;
+			if (!session.AdoptRematchPeerId(static_cast<uint8_t>(mine->second - 1), &seatError)) {
+				return refuse("rematch roster: " + seatError);
+			}
+		}
+		m_MatchConfig = m_RematchConfig;
+		m_Config.matchConfig = m_RematchConfig;
+		return true;
+	}
+
+	bool NetMatchRunner::VerifyRematchProposal(std::string* error) {
+		if (m_Config.host || !m_RematchRound) {
+			return true;
+		}
+		// Names are the host's to stamp; the roster is what the two sides have to agree on.
+		auto roster = [](const NetMatchConfig& config) {
+			std::vector<std::array<uint8_t, 3>> seats;
+			for (const NetMatchPlayerSlot& slot : config.players) {
+				seats.push_back({slot.peerId, slot.team, static_cast<uint8_t>(slot.cpu ? 1 : 0)});
+			}
+			std::sort(seats.begin(), seats.end());
+			return seats;
+		};
+		if (m_MatchConfig.peerCount == m_RematchConfig.peerCount && m_MatchConfig.hostPeerId == m_RematchConfig.hostPeerId &&
+		    m_MatchConfig.dedicated == m_RematchConfig.dedicated && roster(m_MatchConfig) == roster(m_RematchConfig)) {
+			return true;
+		}
+		SetFailed("rematch roster refused: the host proposed peer_count " + std::to_string(m_MatchConfig.peerCount) + " (" +
+		          HashText(NetMatchConfigUtil::HashConfig(m_MatchConfig)) + "), this peer derived peer_count " +
+		          std::to_string(m_RematchConfig.peerCount) + " (" + HashText(NetMatchConfigUtil::HashConfig(m_RematchConfig)) + ")");
+		if (error) *error = m_SetupError;
+		return false;
+	}
+
 	bool NetMatchRunner::StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error, std::vector<uint8_t> stateToStream) {
+		m_SetupError.clear();
+		m_ResyncRound = !stateToStream.empty();
+		m_RematchRound = false;
+		// A rematch re-forms the roster on the peers still here; a resync must keep the one its snapshot
+		// was taken on. The host's resync is the round that carries the state out.
+		std::vector<uint8_t> rematchRoster;
+		rematchRoster.swap(m_RematchRoster);
+		if (!m_ResyncRound && (m_Config.host || !rematchRoster.empty()) && !PrepareRematchRoster(session, rematchRoster, error)) {
+			return false;
+		}
 		const uint32_t expectedReadyPeers = m_Config.host ? static_cast<uint32_t>(m_MatchConfig.peerCount - 1) : 1U;
 		if (!session.IsReady() || session.GetReadyPeerCount() < expectedReadyPeers) {
 			SetFailed(std::string("session is no longer connected") + (session.HasReject() ? ": " + session.BuildRejectText() : ""));
 			if (error) *error = m_SetupError;
 			return false;
 		}
-		m_SetupError.clear();
-		m_ResyncRound = !stateToStream.empty();
 		m_StateToStream = std::move(stateToStream);
 		m_ReceivedStateBytes.clear();
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
@@ -136,6 +248,9 @@ namespace RTE {
 			if (m_Config.postLobbySettleMs > 0) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(m_Config.postLobbySettleMs));
 			}
+		}
+		if (!VerifyRematchProposal(error)) {
+			return false;
 		}
 
 		m_State = NetMatchRuntimeState::LockstepStarting;
