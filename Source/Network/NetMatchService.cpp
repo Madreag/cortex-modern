@@ -1081,6 +1081,7 @@ static std::string ResyncSaveName() {
 		snapshot.inLobby = m_State == NetMatchServiceState::Starting;
 		snapshot.running = m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch;
 		snapshot.failed = m_State == NetMatchServiceState::Failed;
+		snapshot.inputDelayText = m_InputDelayText;
 		if (snapshot.activityPreset.empty()) {
 			snapshot.activityPreset = m_ActivityPreset;
 		}
@@ -1100,8 +1101,6 @@ static std::string ResyncSaveName() {
 			member.dropped = state == NetSeatPresenceState::Disconnected || state == NetSeatPresenceState::Reconnecting;
 			member.reclaiming = state == NetSeatPresenceState::Reconnecting;
 			member.statusLine = m_SeatPresence.Line(member.peerId, member.displayName);
-			// The local seat's spare row slot carries the announced input delay until §11 needs it.
-			if (member.statusLine.empty() && member.isLocal) member.statusLine = m_InputDelayText;
 		}
 		return snapshot;
 	}

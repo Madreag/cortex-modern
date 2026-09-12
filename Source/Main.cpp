@@ -1198,7 +1198,7 @@ void ProcessMenuScript() {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::cout << "[menu-script] dump_lobby state=" << snapshot.serviceState << " members=" << snapshot.members.size()
 				  << " error=\"" << snapshot.errorText << "\" status=\"" << snapshot.statusText << "\""
-				  << " input_delay=\"" << g_NetMatchService.GetInputDelayText() << "\"";
+				  << " input_delay=\"" << snapshot.inputDelayText << "\"";
 		for (const NetLobbyMember& member: snapshot.members) {
 			std::cout << " | " << member.displayName << "(team" << static_cast<int>(member.team)
 					  << (member.isLocal ? ",local" : ",remote") << ",ping" << member.pingMs << ")";
