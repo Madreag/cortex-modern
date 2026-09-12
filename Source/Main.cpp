@@ -3683,6 +3683,20 @@ std::string BuildLoopPaceJson() {
 	return out.str();
 }
 
+// What a previewed actor put on the output and when, so a fixture can measure press to sound.
+std::string BuildPreviewEventStartsJson() {
+	std::ostringstream out;
+	out << "[";
+	const std::vector<PreviewEventLedger::EventStart>& starts = PreviewEventLedger::GetEventStarts();
+	for (size_t index = 0; index < starts.size(); ++index) {
+		const PreviewEventLedger::EventStart& start = starts[index];
+		out << (index ? "," : "") << "{\"committed_tick\":" << start.committedTick << ",\"event_tick\":" << start.eventTick << ",\"emitter\":" << start.emitterUID
+		    << ",\"kind\":" << static_cast<int>(start.kind) << ",\"seq\":" << start.seq << ",\"predicted\":" << (start.predicted ? "true" : "false") << "}";
+	}
+	out << "]";
+	return out.str();
+}
+
 std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& setupError) {
 	const Activity* activity = g_ActivityMan.GetActivity();
 	const Activity::ActivityState activityState = activity ? activity->GetActivityState() : Activity::NoActivity;
@@ -3712,7 +3726,8 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	    << ",\"events_played_at_preview\":" << PreviewEventLedger::GetCounters().playedAtPreview
 	    << ",\"events_suppressed_at_commit\":" << PreviewEventLedger::GetCounters().adoptedAtCommit
 	    << ",\"events_expired\":" << PreviewEventLedger::GetCounters().expired
-	    << ",\"events_retimed\":" << PreviewEventLedger::GetCounters().retimed << "},";
+	    << ",\"events_retimed\":" << PreviewEventLedger::GetCounters().retimed
+	    << ",\"event_starts\":" << BuildPreviewEventStartsJson() << "},";
 	out << "\"controller_boundary\":" << BuildControllerBoundaryJson() << ",";
 	out << "\"replay_recording\":{\"frames\":" << ScenarioRunner::GetLockstepReplayRecordFrames()
 	    << ",\"closed\":" << (ScenarioRunner::WasLockstepReplayRecordClosed() ? "true" : "false") << "},";

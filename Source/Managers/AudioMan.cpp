@@ -647,6 +647,10 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 		if (result != FMOD_OK) { if (logical) { result = FMOD_OK; continue; } return false; }
 		if (predicting) predictedVoices.push_back(channelIndex);
 		if (noteStart) { PreviewEventLedger::NoteEventStart(PreviewEventLedger::CommittedTick(), eventKey, predicting); noteStart = false; }
+		if (PreviewEventLedger::TraceEnabled()) {
+			std::cout << "[preview-event] voice committed=" << PreviewEventLedger::CommittedTick() << " tick=" << eventKey.tick << " uid=" << eventKey.emitterUID << " previewed=" << PreviewEventLedger::IsPreviewedEmitter(eventKey.emitterUID)
+			          << " asset=" << eventKey.assetIdentity << " preset=" << eventKey.presetHash << " seq=" << eventKey.seq << " preset_name=\"" << soundContainer->GetPresetName() << "\" path=" << soundData->SoundFile.GetDataPath() << std::endl;
+		}
 
 		result = (result == FMOD_OK) ? channel->setUserData(voiceOwner) : result;
 		result = (result == FMOD_OK) ? channel->setCallback(SoundChannelEndedCallback) : result;
