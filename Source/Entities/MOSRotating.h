@@ -370,6 +370,7 @@ namespace RTE {
 		/// Adopts saved identity for this object and its whole attachable and wound tree.
 		void AdoptPersistedUniqueID() override;
 		void ResolveFaithfulLinks() override;
+		void RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) override;
 		MovableObject* FindPartByUniqueID(long uid) override;
 		void DiscardPersistedSnapshotState() override;
 
