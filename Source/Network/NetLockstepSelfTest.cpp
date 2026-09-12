@@ -9299,6 +9299,9 @@ namespace RTE {
 			g_MovableMan.AddActor(actor);
 			g_MovableMan.SetRestoringSnapshot(false);
 			actor->SetControllerMode(Controller::CIM_AI);
+			// A CPU actor's committed frames have already put CIM_AI on the wire; the seat alone would
+			// leave the sim-facing mode at the Controller default and hide a mode transition.
+			actor->GetController()->ApplyWireMode(Controller::CIM_AI, Players::NoPlayer);
 		}
 
 		// The engine's command apply, driven on the second peer's copy of the actor too: the views are
@@ -9689,6 +9692,10 @@ namespace RTE {
 				return finish("initial seat refused");
 			}
 			hostAbandoned->SetControllerMode(Controller::CIM_PLAYER, Players::PlayerOne);
+			// The seat is already on the wire on both peers: the committed frames of a seated actor
+			// carry CIM_PLAYER, which is the mode the switch has to take off it.
+			hostAbandoned->GetController()->ApplyWireMode(Controller::CIM_PLAYER, Players::PlayerOne);
+			clientAbandoned->GetController()->ApplyWireMode(Controller::CIM_PLAYER, Players::PlayerOne);
 			ScenarioRunner::DrainLocalGameCommands();
 			std::string queueError;
 			for (uint64_t produced = 0; produced < holdFrame; ++produced) {
@@ -9720,7 +9727,7 @@ namespace RTE {
 				const std::string hostTuple = ControlTuple(*hostAbandoned, owner);
 				const std::string clientTuple = ControlTuple(*clientAbandoned, owner);
 				const bool disabledEqual = hostAbandoned->GetController()->IsQuickDisabled() == clientAbandoned->GetController()->IsQuickDisabled();
-				const bool holdOutlived = clientAbandoned->GetController()->GetSeatMode() != Controller::CIM_PLAYER &&
+				const bool holdOutlived = clientAbandoned->GetController()->GetInputMode() != Controller::CIM_PLAYER &&
 				                          clientAbandoned->GetController()->IsSyncedOrderDisableHeld();
 				if (!disabledEqual || holdOutlived) {
 					return finish(("first differ frame=" + std::to_string(frame) + " host=" + hostTuple + " client=" + clientTuple +
