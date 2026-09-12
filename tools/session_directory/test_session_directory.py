@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
 
-from session_directory import LOGGER, RunningServer, spawn_server
+from session_directory import DualRateLimiter, LOGGER, RunningServer, spawn_server
 
 INSTALL_KEY = "0123456789abcdef"
 HEX64_A = "a" * 64
@@ -34,7 +34,7 @@ REGISTER_RESP_KEYS = {
     "heartbeat_s",
     "observed_ip",
 }
-LIST_KEYS = {"sessions"}
+LIST_KEYS = {"sessions", "total"}
 LIST_ROW_KEYS = {
     "name",
     "activity",
@@ -1261,6 +1261,77 @@ class DirectoryTests(unittest.TestCase):
         self.assertIn("1 MiB", text)
         self.assertIn("120 s", text)
         self.assertIn("host queue is never dropped", text.lower())
+        self.assertIn("limit", text)
+        self.assertIn("cursor", text)
+        self.assertIn("next_cursor", text)
+        self.assertIn("total", text)
+
+    def test_list_limit_and_cursor(self) -> None:
+        self.start()
+        assert self.server is not None
+        base = time.monotonic()
+        ids: list[str] = []
+        for i in range(250):
+            created = self.server.store.register(
+                sample_register(name=f"n{i:03d}"), "127.0.0.1", base + i * 0.001
+            )
+            ids.append(created["session_id"])
+        status, page1 = self.list_sessions("limit=100")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(page1["sessions"]), 100)
+        self.assertIn("next_cursor", page1)
+        self.assertEqual(page1["total"], 250)
+        page1_ids = [row["session_id"] for row in page1["sessions"]]
+        self.assertEqual(page1_ids, ids[:100])
+        status, page2 = self.list_sessions(
+            "limit=100&cursor=" + quote(page1["next_cursor"], safe="")
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(page2["sessions"]), 100)
+        self.assertIn("next_cursor", page2)
+        self.assertEqual(page2["total"], 250)
+        page2_ids = [row["session_id"] for row in page2["sessions"]]
+        self.assertEqual(page2_ids, ids[100:200])
+        status, page3 = self.list_sessions(
+            "limit=100&cursor=" + quote(page2["next_cursor"], safe="")
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(page3["sessions"]), 50)
+        self.assertNotIn("next_cursor", page3)
+        self.assertEqual(page3["total"], 250)
+        page3_ids = [row["session_id"] for row in page3["sessions"]]
+        self.assertEqual(page3_ids, ids[200:])
+        seen = page1_ids + page2_ids + page3_ids
+        self.assertEqual(seen, ids)
+        self.assertEqual(len(set(seen)), 250)
+
+    def test_list_bad_cursor(self) -> None:
+        self.start()
+        status, err = self.list_sessions("cursor=not-a-cursor")
+        self.assertEqual(status, 400)
+        self.assertEqual(err, {"error": "invalid_field", "field": "cursor"})
+
+    def test_limiter_prunes_idle_buckets(self) -> None:
+        limiter = DualRateLimiter()
+        now = 1.0
+        later = now + 601.0
+        key = "aaaaaaaaaaaaaaaa"
+        ip = "10.0.0.1"
+        self.assertIsNone(limiter.check(key, ip, now, True))
+        self.assertIn(key, limiter._by_key._requests)
+        for i in range(255):
+            self.assertIsNone(
+                limiter.check(f"{i:016d}", f"11.0.{i // 250}.{i % 250}", later, False)
+            )
+        self.assertNotIn(key, limiter._by_key._requests)
+        self.assertNotIn(key, limiter._by_key._registers)
+        for _ in range(10):
+            self.assertIsNone(limiter.check(key, ip, later, True))
+        blocked = limiter.check(key, ip, later, True)
+        self.assertIsNotNone(blocked)
+        assert blocked is not None
+        self.assertEqual(blocked[0], 429)
+        self.assertEqual(blocked[1]["error"], "rate_limited")
 
 
 if __name__ == "__main__":
