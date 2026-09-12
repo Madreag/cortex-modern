@@ -425,6 +425,7 @@ namespace RTE {
 			switch (info->m_info.m_eState) {
 				case k_ESteamNetworkingConnectionState_Connecting:
 					if (m_IsHost && info->m_info.m_hListenSocket == m_ListenSocket) {
+						s_ConnectionOwners[info->m_hConn] = this;
 						AcceptIncomingConnection(info->m_hConn);
 					}
 					break;
