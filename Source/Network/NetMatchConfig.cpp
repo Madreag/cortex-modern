@@ -68,6 +68,58 @@ namespace RTE {
 		return config;
 	}
 
+	bool NetMatchConfigUtil::DeriveRematchConfig(const NetMatchConfig& previous, const std::vector<uint8_t>& survivingPeerIds, NetMatchConfig& outConfig, std::map<uint8_t, uint8_t>* outSeatMap, std::string* error) {
+		std::vector<uint8_t> survivors = survivingPeerIds;
+		std::sort(survivors.begin(), survivors.end());
+		survivors.erase(std::unique(survivors.begin(), survivors.end()), survivors.end());
+		if (survivors.empty() || survivors.size() > previous.peerCount) {
+			if (error) *error = "surviving peer count is out of range";
+			return false;
+		}
+		for (uint8_t peerId : survivors) {
+			if (peerId == 0 || peerId > previous.peerCount) {
+				if (error) *error = "a surviving peer id is outside the match config";
+				return false;
+			}
+		}
+		if (!std::binary_search(survivors.begin(), survivors.end(), previous.hostPeerId)) {
+			if (error) *error = "the host is not among the surviving peers";
+			return false;
+		}
+		std::map<uint8_t, uint8_t> seatMap;
+		for (size_t index = 0; index < survivors.size(); ++index) {
+			seatMap[survivors[index]] = static_cast<uint8_t>(index + 1);
+		}
+		NetMatchConfig config = previous;
+		config.peerCount = static_cast<uint8_t>(survivors.size());
+		config.hostPeerId = seatMap.at(previous.hostPeerId);
+		config.players.clear();
+		for (const NetMatchPlayerSlot& slot : previous.players) {
+			NetMatchPlayerSlot seat = slot;
+			if (!slot.cpu) {
+				const auto moved = seatMap.find(slot.peerId);
+				if (moved == seatMap.end()) {
+					continue;
+				}
+				seat.peerId = moved->second;
+			}
+			config.players.push_back(seat);
+		}
+		if (!previous.peerInputDelayFrames.empty()) {
+			std::vector<uint16_t> delays(config.peerCount, previous.inputDelayFrames);
+			for (const auto& [was, now] : seatMap) {
+				delays[now - 1] = PeerInputDelay(previous, was);
+			}
+			config.peerInputDelayFrames = std::move(delays);
+		}
+		if (!ValidateLocalAlpha(config, error)) {
+			return false;
+		}
+		if (outSeatMap) *outSeatMap = std::move(seatMap);
+		outConfig = std::move(config);
+		return true;
+	}
+
 	bool NetMatchConfigUtil::ValidateLocalAlpha(const NetMatchConfig& config, std::string* error) {
 		if (config.version != c_Version) {
 			if (error) *error = "match config version is unsupported";
