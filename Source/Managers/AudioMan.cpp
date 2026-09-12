@@ -1288,7 +1288,9 @@ void AudioMan::CollectManagerSoundIdentities(std::unordered_set<uint64_t>& out) 
 		if (const uint64_t identity = sound.GetCheckpointIdentity()) out.insert(identity);
 	});
 	try {
-		CheckpointReader reader(g_MusicMan.SaveCheckpoint(), "MusicMan1");
+		// The reader keeps a view, so the text must outlive it.
+		const std::string music = g_MusicMan.SaveCheckpoint();
+		CheckpointReader reader(music, "MusicMan1");
 		bool playing = false;
 		std::string interrupting, song, nextType, currentType, previous, current;
 		int nextSection = 0;
