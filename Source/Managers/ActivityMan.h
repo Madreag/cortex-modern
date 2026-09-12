@@ -240,8 +240,7 @@ namespace RTE {
 		bool RestartActivity();
 		void NoteLockstepRelaunch();
 		bool LockstepRelaunchInProgress() const { return m_LockstepRelaunchInProgress; }
-		void ArmLockstepRelaunchChecks();
-		void ConsumeLockstepRelaunchCheck();
+		void EndLockstepRelaunch();
 		void NoteStaleActivitySlots(int count) { m_StaleActivitySlots += count; }
 		int StaleActivitySlotCount() const { return m_StaleActivitySlots; }
 		/// Transfers the active native owner during a checkpoint transaction; no lifecycle callbacks run.
@@ -315,7 +314,6 @@ namespace RTE {
 		PendingCheckpoint m_PendingCheckpoint;
 		bool m_RestartRestoresSnapshot = false;
 		bool m_LockstepRelaunchInProgress = false;
-		int m_LockstepRelaunchChecksLeft = 0;
 		int m_StaleActivitySlots = 0;
 
 		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.

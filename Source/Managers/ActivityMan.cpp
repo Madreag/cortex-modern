@@ -88,7 +88,6 @@ void ActivityMan::Clear() {
 	m_PendingCheckpoint = PendingCheckpoint{};
 	m_RestartRestoresSnapshot = false;
 	m_LockstepRelaunchInProgress = false;
-	m_LockstepRelaunchChecksLeft = 0;
 	m_StaleActivitySlots = 0;
 	m_StartActivityResumed = false;
 	m_SaveGameTask = std::shared_future<bool>();
@@ -1095,11 +1094,10 @@ void ActivityMan::NoteLockstepRelaunch() {
 	m_LockstepRelaunchInProgress = true;
 }
 
-void ActivityMan::ArmLockstepRelaunchChecks() {
-	if (m_LockstepRelaunchInProgress) m_LockstepRelaunchChecksLeft = 1;
-}
-
-void ActivityMan::ConsumeLockstepRelaunchCheck() {
+void ActivityMan::EndLockstepRelaunch() {
+	if (!m_LockstepRelaunchInProgress) return;
+	m_LockstepRelaunchInProgress = false;
+	if (m_Activity) m_Activity->ClearCheckpointActorIDs();
 }
 
 void ActivityMan::Update() {
@@ -1316,7 +1314,6 @@ bool ActivityMan::RestartActivity() {
 			g_MusicMan.ResetMusicState();
 			g_AudioMan.PauseIngameSounds(m_Activity && m_Activity->IsPaused());
 		}
-		ArmLockstepRelaunchChecks();
 		return true;
 	}
 	auto rejectedActivity = std::move(m_Activity);

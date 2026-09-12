@@ -30,6 +30,7 @@ namespace RTE {
 		virtual void ClearNonOwnedActorSlots();
 		virtual void RebindNonOwnedActorSlots();
 		virtual void ForgetDestroyedActor(const Actor* actor);
+		virtual void ClearCheckpointActorIDs();
 		int CountStaleRelaunchSlots(int tick) const;
 		/// Initializes a cloned checkpoint's presentation without starting the activity or its scripts.
 		virtual bool PrepareCheckpointUI() { return true; }
