@@ -112,11 +112,21 @@ namespace RTE {
 		m_HasRemoteIdentityHash = false;
 		m_Stats = {};
 		m_Peers.clear();
-		if (!m_Transport->Connect(address, m_Config.port, error)) {
+		const bool connected = m_Config.p2pJoin.connect ? m_Config.p2pJoin.connect(*m_Transport, error) : m_Transport->Connect(address, m_Config.port, error);
+		if (!connected) {
 			m_State = NetSessionState::Failed;
 			return false;
 		}
 		return true;
+	}
+
+	bool NetSession::StartClientP2P(INetTransport& transport, NetSessionConfig config, std::string* error) {
+		if (!config.p2pJoin.connect) {
+			if (error) *error = "a session-id join needs a p2pJoin spec on the session config";
+			m_State = NetSessionState::Failed;
+			return false;
+		}
+		return StartClient(transport, config.p2pJoin.identity, std::move(config), error);
 	}
 
 	void NetSession::Tick(uint64_t nowMs, bool pollTransport) {

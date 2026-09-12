@@ -31,6 +31,7 @@ sources += files(
 'NetMatchRunner.cpp',
 'NetMatchService.cpp',
 'NetMatchSelfTest.cpp',
+'NetMuxTransport.cpp',
 'NetPortMap.cpp',
 'NetPortMapSelfTest.cpp',
 'NetProtocol.cpp',
