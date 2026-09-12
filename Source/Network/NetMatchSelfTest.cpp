@@ -1575,6 +1575,53 @@ namespace RTE {
 		return pumpOne(NetHoldResolution::Expired) && pumpOne(NetHoldResolution::Reclaimed);
 	}
 
+	// A seat with no roster name is "Player N"; one with a name is the name. Never both.
+	bool TestRosterBannerNamesThePlayerOnce(std::string* error) {
+		NetMatchService service;
+		service.m_State = NetMatchServiceState::Running;
+		NetLobbyMember host;
+		host.peerId = 1;
+		host.displayName = "Host";
+		NetLobbyMember nameless;
+		nameless.peerId = 3;
+		service.m_LobbySnapshot.members = {host, nameless};
+		NetLockstepSeatSnapshot snapshot;
+		snapshot.senderPeerId = 1;
+		snapshot.sessionId = 12;
+		snapshot.roundId = 1;
+		snapshot.revision = 1;
+		snapshot.observedAtMs = 1000;
+		NetSeatPresenceEntry seat;
+		seat.stableSeat = 2;
+		seat.peerId = 3;
+		seat.state = NetSeatPresenceState::Present;
+		snapshot.seats = {seat};
+		if (!service.m_SeatPresence.ApplySnapshot(snapshot, 1000)) {
+			*error = "the present snapshot was not applied";
+			return false;
+		}
+		service.RecordRosterTransitions(snapshot.observedAtMs);
+		snapshot.revision = 2;
+		snapshot.observedAtMs = 2000;
+		snapshot.seats[0].state = NetSeatPresenceState::Left;
+		if (!service.m_SeatPresence.ApplySnapshot(snapshot, 2000)) {
+			*error = "the leave snapshot was not applied";
+			return false;
+		}
+		const size_t before = ScenarioRunner::GetNetUiToastLog().size();
+		service.RecordRosterTransitions(snapshot.observedAtMs);
+		const std::vector<ScenarioRunner::NetUiToastRecord>& toasts = ScenarioRunner::GetNetUiToastLog();
+		if (toasts.size() != before + 1 || toasts.back().kind != "player_left") {
+			*error = "the leave banner was not recorded";
+			return false;
+		}
+		if (toasts.back().text != "Player 3 left") {
+			*error = "the leave banner named the player as \"" + toasts.back().text + "\"";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestRosterTransitionsRecordHoldThenPresent(std::string* error) {
 		NetMatchService service;
 		service.m_State = NetMatchServiceState::Running;
@@ -1619,6 +1666,11 @@ namespace RTE {
 		const std::vector<ScenarioRunner::NetUiToastRecord>& toasts = ScenarioRunner::GetNetUiToastLog();
 		if (toasts.size() != toastsBefore + 1 || toasts.back().kind != "player_rejoined" || toasts.back().tick != 0) {
 			*error = "the rejoin banner was not recorded for the returning seat";
+			return false;
+		}
+		// The roster's own name, once - never "Player Leaver".
+		if (toasts.back().text != "Leaver rejoined") {
+			*error = "the rejoin banner named the player as \"" + toasts.back().text + "\"";
 			return false;
 		}
 		nlohmann::json report;
@@ -1837,6 +1889,7 @@ namespace RTE {
 		if (!earlyOverTickError.empty()) return fail(earlyOverTickError);
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestRosterTransitionsRecordHoldThenPresent(&error)) return fail(error);
+		if (!TestRosterBannerNamesThePlayerOnce(&error)) return fail(error);
 
 		std::cout << "[net-match-selftest] PASS" << std::endl;
 		return 0;
