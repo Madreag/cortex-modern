@@ -942,6 +942,88 @@ namespace RTE {
 				return true;
 			}
 
+			bool TestJoinListLabels(std::string* error) {
+				const NetDirectoryLocalIdentity local = SampleLocal();
+				std::string failures;
+				auto note = [&failures](const std::string& text) {
+					failures += (failures.empty() ? "" : "; ") + text;
+				};
+
+				// The session identity hash contains the module manifest hash, so a mod-only
+				// difference differs in both fields; the row must name the module field.
+				NetDirectorySessionRow modded = SampleRow();
+				modded.moduleManifestHash = kHex64A;
+				modded.sessionIdentityHash = kHex64A;
+				std::string reason;
+				if (NetDirectoryCodec::IsJoinable(modded, local, &reason)) {
+					note("a modded-host row was joinable");
+				} else if (reason != "incompatible: module_manifest_hash") {
+					note("modded-host reason \"" + reason + "\", expected incompatible: module_manifest_hash");
+				}
+				NetDirectorySessionRow identityOnly = SampleRow();
+				identityOnly.sessionIdentityHash = kHex64A;
+				reason.clear();
+				if (NetDirectoryCodec::IsJoinable(identityOnly, local, &reason)) {
+					note("an identity-mismatch row was joinable");
+				} else if (reason != "incompatible: session_identity_hash") {
+					note("identity-mismatch reason \"" + reason + "\", expected incompatible: session_identity_hash");
+				}
+				const std::vector<NetDirectoryClient::GameRow> netMerged =
+					NetDirectoryClient::MergeGameLists({}, {modded, identityOnly}, local);
+				if (netMerged.size() != 2) {
+					note("NET merge size " + std::to_string(netMerged.size()));
+				} else {
+					if (netMerged[0].joinable || netMerged[0].reason != "modules") {
+						note("modded-host NET row joinable=" + std::to_string(netMerged[0].joinable) + " reason=\"" + netMerged[0].reason + "\", expected joinable=no reason=modules");
+					}
+					if (netMerged[1].joinable || netMerged[1].reason != "identity") {
+						note("identity-mismatch NET row joinable=" + std::to_string(netMerged[1].joinable) + " reason=\"" + netMerged[1].reason + "\", expected joinable=no reason=identity");
+					}
+				}
+
+				// A v1 beacon carries no compatibility fields: the row must list but never be joinable.
+				NetLanDiscovery oldBeacon;
+				NetLanDiscovery oldBrowser;
+				std::string setupError;
+				NetLanHostInfo oldHost;
+				bool listed = false;
+				if (!oldBrowser.StartBrowser(&setupError) ||
+					!oldBeacon.StartBeacon(47572, "W94OldHost", "P4 Alpha Duel", "pvp-skirmish", 1, 2, &setupError)) {
+					*error = "v1 beacon pair setup failed: " + setupError;
+					return false;
+				}
+				for (uint64_t nowMs = 0; nowMs <= 3000 && !listed; nowMs += 50) {
+					oldBeacon.Tick(nowMs);
+					oldBrowser.Tick(nowMs);
+					for (const NetLanHostInfo& host : oldBrowser.GetHosts(nowMs)) {
+						if (host.hostName == "W94OldHost" && host.port == 47572) {
+							oldHost = host;
+							listed = true;
+						}
+					}
+					if (!listed) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(10));
+					}
+				}
+				oldBeacon.Stop();
+				oldBrowser.Stop();
+				if (!listed) {
+					note("a v1 beacon never listed");
+				} else {
+					const std::vector<NetDirectoryClient::GameRow> lanMerged = NetDirectoryClient::MergeGameLists({oldHost}, {}, local);
+					if (lanMerged.size() != 1 || lanMerged[0].joinable || lanMerged[0].reason != "beacon") {
+						note("v1-beacon LAN row merged " + (lanMerged.empty() ? std::string("<missing>") :
+							"joinable=" + std::to_string(lanMerged[0].joinable) + " reason=\"" + lanMerged[0].reason + "\"") +
+							", expected joinable=no reason=beacon");
+					}
+				}
+				if (!failures.empty()) {
+					*error = failures;
+					return false;
+				}
+				return true;
+			}
+
 			const std::string kSignalSession = "7b8c9d2e-1111-4222-8333-444455556666";
 			const std::string kSignalBase = "/v1/sessions/" + kSignalSession;
 			const NetDirectoryClient::Reply kPostOk{200, R"({"ok":true,"seq":1})", ""};
@@ -1449,6 +1531,7 @@ namespace RTE {
 			if (!TestHeartbeat404Reregisters(&error)) return fail(error);
 			if (!TestHeartbeat429HonorsRetryAfter(&error)) return fail(error);
 			if (!TestTransportErrorBackoff(&error)) return fail(error);
+			if (!TestJoinListLabels(&error)) return fail(error);
 			if (!TestMergeGameLists(&error)) return fail(error);
 			if (!TestSignalOrderingAndCursor(&error)) return fail(error);
 			if (!TestSignalCursorWaitsForSink(&error)) return fail(error);
