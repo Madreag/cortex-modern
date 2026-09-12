@@ -1958,6 +1958,150 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestCoordinatorSeatlessRelayHost(std::string* error) {
+			const uint16_t port = 43017;
+			const uint64_t sessionId = 0x7000000000000017ULL;
+			LoopbackTransport hostT, clientAT, clientBT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) || !clientBT.Connect("loopback", port, error)) {
+				return false;
+			}
+			// Peers: dedicated host=1 (no roster slot), clientA=2, clientB=3.
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(sessionId);
+			matchConfig.peerCount = 3;
+			matchConfig.dedicated = true;
+			matchConfig.players = {
+			    NetMatchPlayerSlot{2, 0, false, "Client A"},
+			    NetMatchPlayerSlot{3, 1, false, "Client B"},
+			};
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.startFrame = 0;
+				c.inputDelayFrames = 0;
+				c.timeoutMs = 500;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.frameLane = NetTransportLane::ControlReliable;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.matchConfig = matchConfig;
+				return c;
+			};
+			NetLockstepCoordinator host, clientA, clientB;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+			    !clientA.Start(clientAT, cfg(2, {{1, 1}}, false), error) ||
+			    !clientB.Start(clientBT, cfg(3, {{1, 1}}, false), error)) {
+				return false;
+			}
+			auto drive = [&](const std::function<bool()>& done) {
+				for (uint64_t now = 0; now <= 2000; now += 5) {
+					host.Tick(now);
+					clientA.Tick(now);
+					clientB.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					clientAT.AdvanceTimeMs(5);
+					clientBT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning(); })) {
+				*error = "seatless-host lockstep did not reach Running";
+				return false;
+			}
+			// The seatless host still feeds the gate a packet every tick: empty frames plus its
+			// bindings command; both remote gates and its own local gate require it.
+			const NetGameCommand bindings{1, NetGamePlayerBindings{}, 0};
+			for (uint64_t f = 0; f < 4; ++f) {
+				if (!host.QueueLocalInput(f, {}, {bindings}, error) ||
+				    !clientA.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error) ||
+				    !clientB.QueueLocalInput(f, {MakeFrame(300 + static_cast<int64_t>(f), f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			struct Seen {
+				std::vector<uint64_t> frames;
+				std::map<uint8_t, size_t> remoteCounts;
+				std::vector<int64_t> actors;
+				std::vector<NetGameCommand> commands;
+			};
+			auto collect = [](NetLockstepCoordinator& c, Seen& out) {
+				NetLockstepReadyFrame ready;
+				while (c.PopReadyFrame(ready)) {
+					out.frames.push_back(ready.frame);
+					for (const auto& [peer, count] : ready.remoteFrameCounts) {
+						out.remoteCounts[peer] += count;
+					}
+					for (const ControllerFrame& frame : ready.localFrames) out.actors.push_back(frame.actorUniqueID);
+					for (const ControllerFrame& frame : ready.remoteFrames) out.actors.push_back(frame.actorUniqueID);
+					out.commands.insert(out.commands.end(), ready.localCommands.begin(), ready.localCommands.end());
+					out.commands.insert(out.commands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
+				}
+			};
+			Seen hostSeen, aSeen, bSeen;
+			if (!drive([&] {
+					collect(host, hostSeen);
+					collect(clientA, aSeen);
+					collect(clientB, bSeen);
+					return hostSeen.frames.size() >= 4 && aSeen.frames.size() >= 4 && bSeen.frames.size() >= 4;
+				})) {
+				*error = "seatless-host lockstep did not commit 4 ready frames on every peer";
+				return false;
+			}
+			// Local-vs-remote perspective reorders the merged stream, so compare the committed sets.
+			auto sorted = [](Seen& seen) {
+				std::sort(seen.actors.begin(), seen.actors.end());
+				return true;
+			};
+			sorted(hostSeen);
+			sorted(aSeen);
+			sorted(bSeen);
+			if (hostSeen.frames != aSeen.frames || aSeen.frames != bSeen.frames ||
+			    hostSeen.actors != aSeen.actors || aSeen.actors != bSeen.actors ||
+			    hostSeen.commands != aSeen.commands || aSeen.commands != bSeen.commands) {
+				*error = "seatless-host peers did not commit identical ready frames";
+				return false;
+			}
+			if (aSeen.remoteCounts[1] != 0 || bSeen.remoteCounts[1] != 0 || aSeen.actors.size() != 8) {
+				*error = "the seatless host contributed controller frames to a committed tick";
+				return false;
+			}
+			if (aSeen.commands.size() != 4 || bSeen.commands.size() != 4) {
+				*error = "the seatless host's bindings command did not reach every tick";
+				return false;
+			}
+			// A client leave keeps the gate correct: survivors advance without peer 3's packets.
+			clientB.Leave("bye");
+			for (uint64_t f = 4; f < 6; ++f) {
+				if (!host.QueueLocalInput(f, {}, {bindings}, error) ||
+				    !clientA.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error)) {
+					return false;
+				}
+			}
+			if (!drive([&] {
+					collect(host, hostSeen);
+					collect(clientA, aSeen);
+					return hostSeen.frames.size() >= 6 && aSeen.frames.size() >= 6;
+				})) {
+				*error = "seatless-host survivors did not advance past the leaver";
+				return false;
+			}
+			if (host.IsFailed() || clientA.IsFailed() ||
+			    host.GetPeerLeaveFrames().count(3) == 0 || clientA.GetPeerLeaveFrames().count(3) == 0) {
+				*error = "seatless-host survivors failed or did not record the leaver";
+				return false;
+			}
+			if (aSeen.remoteCounts[3] != 4 || aSeen.remoteCounts[1] != 0) {
+				*error = "the seatless-host gate merged the wrong remote set around the leave";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestCoordinatorRejectsUnboundPackets(std::string* error) {
 			// Exercise the receive path, including its liveness bookkeeping, with every packet kind.
 			// A departed seat remains a known logical peer but no longer owns any transport.
@@ -8618,6 +8762,7 @@ namespace RTE {
 		    !TestAnnouncedLeaveStillClosesAtOnce(&error) ||
 		    !TestCoordinatorHeldSeatWithASurvivor(&error) ||
 		    !TestCoordinatorThreePeer(&error) ||
+		    !TestCoordinatorSeatlessRelayHost(&error) ||
 		    !TestCoordinatorRejectsUnboundPackets(&error) ||
 		    !TestCoordinatorPeerLeave(&error) ||
 		    !TestCoordinatorHostAdjudicatesSilentPeer(&error) ||
