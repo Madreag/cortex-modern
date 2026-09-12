@@ -1080,15 +1080,20 @@ namespace RTE {
 		}
 		m_Cancel.store(true);
 		JoinWorker();
+		// The release basis is the last result that actually mapped: a cancelled renewal's
+		// pending result must not overwrite it, a completed renewal's must.
+		Result mapped = m_Result;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_ResultReady.load()) {
 				m_Result = m_PendingResult;
 				m_ResultReady.store(false);
+				if (m_Result.method != Method::None) {
+					mapped = m_Result;
+				}
 			}
 		}
-		if (!m_Released && (m_Mapped || m_Result.method != Method::None)) {
-			const Result mapped = m_Result;
+		if (!m_Released && (m_Mapped || mapped.method != Method::None)) {
 			const Options options = m_Options;
 			// The removal reply must be logged, so the release runs on its own thread and is joined:
 			// bounded by the chain's own per-call timeouts, never by a frame.
