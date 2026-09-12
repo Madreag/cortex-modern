@@ -7613,6 +7613,10 @@ std::vector<std::pair<LuaStateWrapper*, std::string>> LuaMan::s_PreviewGlobalSna
 namespace {
 	std::vector<std::unique_ptr<SoundContainer>> s_PreviewSoundCopies;
 
+	bool IsPreviewSoundCopy(const SoundContainer* sound) {
+		return std::any_of(s_PreviewSoundCopies.begin(), s_PreviewSoundCopies.end(), [sound](const std::unique_ptr<SoundContainer>& copy) { return copy.get() == sound; });
+	}
+
 	int AbsoluteLuaIndex(lua_State* L, int index) {
 		return index < 0 ? lua_gettop(L) + index + 1 : index;
 	}
@@ -7721,6 +7725,9 @@ namespace {
 			return true;
 		}
 		if (!ClassDerivesFrom(object->crep(), "MovableObject")) {
+			if (std::strcmp(className, "SoundContainer") == 0 && IsPreviewSoundCopy(static_cast<const SoundContainer*>(object->ptr()))) {
+				return true;
+			}
 			if (ClassDerivesFrom(object->crep(), "Entity")) {
 				freezeClass = className;
 				return false;
