@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <set>
 #include <vector>
@@ -1101,6 +1102,9 @@ namespace RTE {
 
 		/// Re-points non-owned MO references by UniqueID once a restored world is registered.
 		virtual void ResolveFaithfulLinks();
+
+		/// Rewrites each external object link through map; a failed type cast clears the field.
+		virtual void RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map);
 
 		/// Finds this object or one of its parts (attachables, wounds, inventory) by unique ID.
 		virtual MovableObject* FindPartByUniqueID(long uid) { return uid == m_UniqueID ? this : nullptr; }

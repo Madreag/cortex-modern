@@ -511,6 +511,12 @@ void MovableObject::ResolveFaithfulLinks() {
 	}
 }
 
+void MovableObject::RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) {
+	if (const MovableObject* current = m_pMOToNotHit.get()) {
+		m_pMOToNotHit = dynamic_cast<MovableObject*>(map(const_cast<MovableObject*>(current)));
+	}
+}
+
 bool MovableObject::PublishNetPrivateObjectGraph() {
 	std::unordered_set<const Entity*> entities;
 	std::unordered_set<const MovableObject*> owned;
