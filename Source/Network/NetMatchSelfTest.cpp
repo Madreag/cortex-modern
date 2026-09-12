@@ -1656,6 +1656,107 @@ namespace RTE {
 		return true;
 	}
 
+	namespace {
+		NetLockstepSeatState FencedSeatState(void*, uint8_t, NetPeerId) {
+			NetLockstepSeatState state;
+			state.fencedTransport = true;
+			return state;
+		}
+	}
+
+	bool TestPendingSessionEventSurvivesTeardown(std::string* error) {
+		const uint16_t port = 43219;
+		LoopbackTransport hostTransport, clientTransport;
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_State = NetMatchServiceState::Running;
+		service.m_Runner = std::make_unique<NetMatchRunner>();
+		service.m_Session = std::make_unique<NetSession>();
+		NetSession client;
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 1;
+		hostConfig.heartbeatIntervalMs = 25;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "pending-session-event-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientConfig = hostConfig;
+		clientConfig.displayName = "Client";
+		++clientConfig.localNonce;
+		if (!service.m_Session->StartHost(hostTransport, hostConfig, error) ||
+		    !client.StartClient(clientTransport, "loopback", clientConfig, error)) {
+			return false;
+		}
+		for (uint64_t now = 0; now <= 2000 && service.m_Session->GetReadyPeerCount() != 1; now += 10) {
+			service.m_Session->Tick(now);
+			client.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+		}
+		if (service.m_Session->GetReadyPeerCount() != 1) {
+			*error = "the teardown fixture never seated the client on the host session";
+			return false;
+		}
+		const NetPeerId fencedTransportPeer = service.m_Session->GetReadyPeers().front().transportPeerId;
+
+		// A relay host mid-round: the coordinator owns the transport queue and hands session traffic over.
+		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+		NetLockstepCoordinator& coordinator = *service.m_Coordinator;
+		coordinator.m_RelayHost = true;
+		coordinator.m_State = NetLockstepState::Running;
+		coordinator.m_RemotePeerIds = {2};
+		coordinator.m_RemoteTransports[2] = fencedTransportPeer;
+		coordinator.SetSeatStateSource(&FencedSeatState, nullptr);
+		service.AttachCoordinatorSessionSink();
+		const NetTransportEvent closed{NetTransportEventType::PeerDisconnected, fencedTransportPeer,
+		                               NetTransportLane::ControlReliable, {}, "seat reclaimed by a newer connection"};
+		coordinator.HandleEvent(closed, 0);
+		if (service.m_PendingSessionEvents.size() != 1) {
+			*error = "the coordinator did not hand the fenced disconnect to the service queue";
+			return false;
+		}
+
+		// The teardown the resync runs: the coordinator dies and takes the queue's only reader with it.
+		service.ReportRuntimeError("teardown with a session event pending");
+		nlohmann::json report;
+		try {
+			report = nlohmann::json::parse(service.BuildReportJson());
+		} catch (const nlohmann::json::exception& parseError) {
+			*error = std::string("teardown report was not JSON: ") + parseError.what();
+			return false;
+		}
+		const nlohmann::json peers = report.value("runner", nlohmann::json::object())
+		                                 .value("session", nlohmann::json::object())
+		                                 .value("peers", nlohmann::json::array());
+		std::string peerState = "absent";
+		for (const nlohmann::json& peer: peers) {
+			if (peer.value("transport_peer_id", 0ULL) == static_cast<uint64_t>(fencedTransportPeer)) {
+				peerState = peer.value("state", "");
+			}
+		}
+		if (peerState != "Closed") {
+			*error = "event lost: the session never saw the fenced disconnect the coordinator took off the "
+			         "transport; peer " + std::to_string(fencedTransportPeer) + " is " + peerState;
+			return false;
+		}
+		const nlohmann::json events = report.value("session_events", nlohmann::json::object());
+		if (events.value("drained_at_teardown", 0) != 1 || events.value("discarded", 0) != 0) {
+			*error = "event lost: teardown drain counters read " + events.dump();
+			return false;
+		}
+		if (!service.m_PendingSessionEvents.empty()) {
+			*error = "the teardown left the handover queue filled";
+			return false;
+		}
+		std::cout << "PASS pending_session_event_survives_teardown peer_state=Closed drained=1 discarded=0" << std::endl;
+		return true;
+	}
+
 	bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error) {
 		LoopbackTransport hostTransport;
 		LoopbackTransport clientTransport;
@@ -1830,6 +1931,7 @@ namespace RTE {
 		if (!earlyOverTickError.empty()) return fail(earlyOverTickError);
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestRosterTransitionsRecordHoldThenPresent(&error)) return fail(error);
+		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
 
 		std::cout << "[net-match-selftest] PASS" << std::endl;
 		return 0;
