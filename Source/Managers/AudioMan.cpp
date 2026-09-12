@@ -3068,6 +3068,13 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 		s_PlaybackSuppressed = true;
 		const std::set<int> after(predicted.GetPlayingChannels()->begin(), predicted.GetPlayingChannels()->end());
 		check("the_commit_adopts_the_prediction", voice > 0 && !IsPredictedVoice(voice) && after.size() == 1 && after.contains(voice));
+		bool inSharedCohort = false;
+		{
+			SoundSimulationScope shared(4243, phase);
+			inSharedCohort = voice > 0 && VoiceMatchesContext(voice, &predicted);
+		}
+		// The cohort GetAudibleVolume reads and every shared write walks; a suppressed commit leaves it empty.
+		check("an_adopted_prediction_joins_the_shared_cohort", inSharedCohort);
 		check("an_adopted_voice_is_in_the_checkpoint", voice > 0 && savedChannels(predicted).contains(voice) && savedVoices().contains(voice));
 		predicted.Stop();
 		PreviewEventLedger::Clear();
