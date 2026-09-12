@@ -7498,7 +7498,7 @@ namespace RTE {
 				NetLockstepConfig c;
 				c.sessionId = 0x7000000000000091ULL;
 				c.roundId = relay ? 0x7000000000000092ULL : 0;
-				c.startFrame = leaveFrame;
+				c.startFrame = ScenarioRunner::ResyncResumeStartFrame(leaveFrame);
 				c.resumeFromSnapshot = true;
 				c.timeoutMs = 5000;
 				c.localPeerId = local;
@@ -7542,6 +7542,11 @@ namespace RTE {
 				*error = "resync round after reclaim never started";
 				return false;
 			}
+			if (resyncHost.GetConfig().startFrame != leaveFrame || resyncHost.GetStats().effectiveStartFrame != leaveFrame) {
+				*error = "resync first frame is " + std::to_string(resyncHost.GetStats().effectiveStartFrame) +
+				         " not drop frame " + std::to_string(leaveFrame);
+				return false;
+			}
 			if (!resyncHost.PrimeResyncInputs({}, error) || !resyncClient.PrimeResyncInputs({}, error)) {
 				return false;
 			}
@@ -7550,23 +7555,37 @@ namespace RTE {
 				return false;
 			}
 			if (!resyncHost.QueueLocalInput(leaveFrame, {MakeFrame(100, 3)}, {}, error) ||
-			    !resyncClient.QueueLocalInput(leaveFrame, {MakeFrame(200, 3)}, {}, error)) {
+			    !resyncClient.QueueLocalInput(leaveFrame, {MakeFrame(200, 3)}, {}, error) ||
+			    !resyncHost.QueueLocalInput(leaveFrame + 1, {MakeFrame(100, 4)}, {}, error) ||
+			    !resyncClient.QueueLocalInput(leaveFrame + 1, {MakeFrame(200, 4)}, {}, error)) {
 				return false;
 			}
 			NetLockstepReadyFrame ready;
-			size_t hostCommitted = 0;
+			std::vector<uint64_t> hostFrames;
 			size_t clientCommitted = 0;
 			if (!drive(2000, [&] {
 					while (resyncHost.PopReadyFrame(ready)) {
-						++hostCommitted;
+						hostFrames.push_back(ready.frame);
 					}
 					while (resyncClient.PopReadyFrame(ready)) {
 						++clientCommitted;
 					}
-					return hostCommitted >= 1 && clientCommitted >= 1;
+					return hostFrames.size() >= 2 && clientCommitted >= 2;
 				})) {
 				*error = "resync round after reclaim never committed";
 				return false;
+			}
+			std::vector<uint64_t> recorded;
+			if (leaveFrame > 0) {
+				recorded.push_back(leaveFrame - 1);
+			}
+			recorded.insert(recorded.end(), hostFrames.begin(), hostFrames.end());
+			for (size_t i = 1; i < recorded.size(); ++i) {
+				if (recorded[i] != recorded[i - 1] + 1) {
+					*error = "resync frame sequence is not contiguous at " + std::to_string(recorded[i - 1]) +
+					         " -> " + std::to_string(recorded[i]);
+					return false;
+				}
 			}
 			if (resyncHost.IsStopped() || resyncHost.IsFailed()) {
 				*error = "resync round stopped instead of committing: " + resyncHost.GetStats().timeoutReason;
@@ -7869,6 +7888,116 @@ namespace RTE {
 			return true;
 		}
 
+		// A reclaimed LIVE seat fences the old transport without a drop, so the pump's resync is the only
+		// one and it lands while the host is parked on frames that never come.
+		bool TestParkedWaitAppliesPendingResync(std::string* error) {
+			const uint16_t port = 43096;
+			LoopbackTransport hostT, clientT;
+			if (!hostT.StartHost(port, error) || !clientT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = 0x7000000000000096ULL;
+				c.timeoutMs = 1000;
+				c.localPeerId = local;
+				c.peerCount = 2;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				return c;
+			};
+			NetLockstepCoordinator host, client;
+			if (!host.Start(hostT, cfg(1, {{2, 1}}, true), error) || !client.Start(clientT, cfg(2, {{1, 1}}, false), error)) {
+				return false;
+			}
+			host.DeferStopsToTickBoundary();
+			client.DeferStopsToTickBoundary();
+			// The wait runs the coordinator on the real clock, so the fixture drives it on that one too.
+			auto drive = [&](const std::function<bool()>& done, uint64_t budgetMs) {
+				const uint64_t start = NetLockstepNowMs();
+				while (true) {
+					const uint64_t now = NetLockstepNowMs();
+					host.Tick(now);
+					client.Tick(now);
+					if (done()) {
+						return true;
+					}
+					if (now - start >= budgetMs) {
+						return false;
+					}
+					hostT.AdvanceTimeMs(1);
+					clientT.AdvanceTimeMs(1);
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}
+			};
+			if (!drive([&] { return host.IsRunning() && client.IsRunning(); }, 3000)) {
+				*error = "parked-wait fixture never reached Running";
+				return false;
+			}
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) || !client.QueueLocalInput(0, {MakeFrame(200, 1)}, {}, error)) {
+				return false;
+			}
+			if (!drive([&] { return host.GetStats().framesAccepted == 1; }, 3000)) {
+				*error = "parked-wait fixture never committed frame 0";
+				return false;
+			}
+			NetLockstepReadyFrame committed;
+			while (host.PopReadyFrame(committed)) {
+			}
+			host.FinishSimulationTick(0);
+			// Tick 1 is queued locally and the remote's frames stop with no drop notice: the fenced reclaim.
+			if (!host.QueueLocalInput(1, {MakeFrame(100, 2)}, {}, error)) {
+				return false;
+			}
+			if (host.AnyDroppedSeatHeld()) {
+				*error = "the fenced reclaim fixture dropped a seat; the defect needs the no-drop path";
+				return false;
+			}
+			uint32_t pumps = 0;
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::SetSessionPump([&] {
+				++pumps;
+				host.RequestResync("player rejoined");
+			});
+			const auto waitStart = std::chrono::steady_clock::now();
+			NetLockstepReadyFrame out;
+			std::string waitError;
+			const bool got = ScenarioRunner::WaitForLockstepControllerFrame(1, out, &waitError);
+			const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
+			ScenarioRunner::SetSessionPump(nullptr);
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (got) {
+				*error = "the wait produced a frame the fenced peer never sent";
+				return false;
+			}
+			if (waitError != "ResyncRequested:player rejoined") {
+				*error = "the parked wait ended with \"" + waitError + "\" after " + std::to_string(elapsedMs) +
+				         "ms instead of the resync the pump scheduled (pumps=" + std::to_string(pumps) + ")";
+				return false;
+			}
+			if (host.HasPendingRecoveryStop()) {
+				*error = "the parked wait left the recovery stop pending";
+				return false;
+			}
+			if (host.GetStats().nextFrame != 1 || host.GetStats().framesAccepted != 1) {
+				*error = "the parked wait's resync did not land at the tick the sim had not run";
+				return false;
+			}
+			if (elapsedMs >= 500) {
+				*error = "the parked wait applied the resync only after " + std::to_string(elapsedMs) + "ms";
+				return false;
+			}
+			if (!drive([&] { return client.IsFailed(); }, 3000) || !client.GetStats().timeoutReason.starts_with("ResyncRequested:")) {
+				*error = "the parked wait's resync never reached the client";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS parked_wait_applies_pending_resync frame=1 pumps=" << pumps
+			          << " ms=" << elapsedMs << std::endl;
+			return true;
+		}
+
 		bool TestAnnouncedLeaveStillClosesAtOnce(std::string* error) {
 			const uint16_t port = 43085;
 			LoopbackTransport hostT, leaverT, stayerT;
@@ -8007,12 +8136,35 @@ namespace RTE {
 				*error = "value observation codec lost a field";
 				return false;
 			}
-			NetLockstepFrame nanFrame = frame;
-			nanFrame.valueObservations = {MakeValueObservation(1, 1, 1, 1, "k", std::numeric_limits<double>::quiet_NaN())};
+			// A script may store any double; the wire carries the exact bits so every peer commits the same value.
+			NetLockstepFrame specialFrame = frame;
+			specialFrame.valueObservations = {
+			    MakeValueObservation(1, 1, 1, 1, "nan", std::numeric_limits<double>::quiet_NaN()),
+			    MakeValueObservation(1, 1, 1, 2, "inf", std::numeric_limits<double>::infinity()),
+			    MakeValueObservation(1, 1, 1, 3, "ninf", -std::numeric_limits<double>::infinity()),
+			    MakeValueObservation(1, 1, 1, 4, "nzero", -0.0),
+			};
+			std::vector<uint8_t> specialBytes;
 			NetLockstepError encodeError;
-			if (NetLockstepCodec::Encode({nanFrame}, bytes, &encodeError) || encodeError.code != NetLockstepErrorCode::InvalidValue) {
-				*error = "a non-finite number value observation was not InvalidValue";
+			if (!NetLockstepCodec::Encode({specialFrame}, specialBytes, &encodeError)) {
+				*error = "non-finite number value observations did not encode: " + encodeError.message;
 				return false;
+			}
+			const NetLockstepDecodeResult specialDecoded = NetLockstepCodec::Decode(specialBytes);
+			const NetLockstepFrame* specialGot = specialDecoded.ok ? std::get_if<NetLockstepFrame>(&specialDecoded.packet.payload) : nullptr;
+			if (!specialGot || specialGot->valueObservations.size() != specialFrame.valueObservations.size()) {
+				*error = "non-finite number value observations did not decode";
+				return false;
+			}
+			for (size_t i = 0; i < specialFrame.valueObservations.size(); ++i) {
+				uint64_t sent = 0;
+				uint64_t got = 0;
+				std::memcpy(&sent, &specialFrame.valueObservations[i].numberValue, sizeof(sent));
+				std::memcpy(&got, &specialGot->valueObservations[i].numberValue, sizeof(got));
+				if (sent != got) {
+					*error = "number value observation " + specialFrame.valueObservations[i].key + " did not round-trip bit-exactly";
+					return false;
+				}
 			}
 			std::vector<uint8_t> truncated;
 			if (!EncodePacket({frame}, truncated, error)) {
@@ -8596,6 +8748,7 @@ namespace RTE {
 		    !TestHoldHeartbeatsKeepPeersUnadjudicated(&error) ||
 		    !TestWaitDoesNotGiveUpDuringHoldPause(&error) ||
 		    !TestWaitSurvivesHoldAfterPreHoldStall(&error) ||
+		    !TestParkedWaitAppliesPendingResync(&error) ||
 		    !TestAnnouncedLeaveStillClosesAtOnce(&error) ||
 		    !TestCoordinatorHeldSeatWithASurvivor(&error) ||
 		    !TestCoordinatorThreePeer(&error) ||

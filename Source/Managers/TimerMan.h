@@ -61,6 +61,7 @@ namespace RTE {
 		/// still across the synced lockstep pause while the frame exchange keeps ticking.
 		/// @param frozen Frozen or not.
 		void SetSimTimeFrozen(bool frozen) { m_SimTimeFrozen = frozen; }
+		bool IsSimTimeFrozen() const { return m_SimTimeFrozen; }
 
 		/// Sets whether the sim free-runs: updates stop gating on accumulated real time, so replay
 		/// playback and benches run ticks as fast as they compute. The fixed dt is untouched.

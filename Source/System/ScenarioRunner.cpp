@@ -1243,6 +1243,26 @@ namespace RTE {
 		return commands;
 	}
 
+	uint64_t ScenarioRunner::ResyncResumeStartFrame(uint64_t dropFrame) {
+		return dropFrame;
+	}
+
+	uint64_t ScenarioRunner::GetLockstepResumeFrame() {
+		return s_LockstepCoordinator ? s_LockstepCoordinator->GetResumeFrame() : 0;
+	}
+
+	bool ScenarioRunner::ResolveResyncDropFrame(uint64_t resumeFrame, uint64_t simUpdateCount, uint64_t& outDropFrame, bool& outRewind, std::string* error) {
+		const uint64_t lastApplied = resumeFrame > 0 ? resumeFrame - 1 : 0;
+		if (simUpdateCount != lastApplied && simUpdateCount != resumeFrame) {
+			if (error) *error = "resync sim tick " + std::to_string(simUpdateCount) + " is neither the applied tick " + std::to_string(lastApplied) + " nor the drop frame " + std::to_string(resumeFrame);
+			return false;
+		}
+		outDropFrame = resumeFrame;
+		// A failed frame wait leaves the counter on the unsimulated drop frame, a deferred stop on the applied tick.
+		outRewind = simUpdateCount == resumeFrame && resumeFrame > 0;
+		return true;
+	}
+
 	bool ScenarioRunner::CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error) {
 		if (!s_LockstepCoordinator || savedTick == UINT64_MAX) return false;
 		NetResyncState captured;
@@ -1725,6 +1745,9 @@ namespace RTE {
 					return false;
 				}
 			}
+			// Parked on a tick the sim has not run: the boundary FinishSimulationTick would use is here,
+			// and the frame we are waiting for may be from a peer the pump has just fenced.
+			s_LockstepCoordinator->ApplyPendingRecoveryStopWhileWaiting(tick);
 			if (s_LockstepCoordinator->IsFailed() || s_LockstepCoordinator->IsStopped()) {
 				if (error) *error = s_LockstepCoordinator->GetStats().timeoutReason;
 				return false;
