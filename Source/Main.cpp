@@ -63,6 +63,7 @@
 #include "LuaMan.h"
 #include "MusicMan.h"
 #include "AudioMan.h"
+#include "SoundContainer.h"
 #include "SoundSimulation.h"
 #include "AudioCheckpoint.h"
 #include "System.h"
@@ -562,6 +563,15 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-save-catalog-selftest") {
 			s_saveCatalogSelfTest = true;
 			++i;
+			continue;
+		}
+		if (currentArg == "-selftest-preallocate-sound-identities" && i + 1 < argCount) {
+			const uint64_t count = std::strtoull(argValue[i + 1], nullptr, 10);
+			for (uint64_t n = 0; n < count; ++n) {
+				SoundContainer scratch;
+			}
+			std::cout << "[selftest] preallocated " << count << " sound identities cursor=" << g_AudioMan.GetCheckpointSoundContainerCursor() << std::endl;
+			i += 2;
 			continue;
 		}
 		if (currentArg == "-contract-audit" && i + 1 < argCount) {
