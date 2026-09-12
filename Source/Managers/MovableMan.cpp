@@ -2266,6 +2266,7 @@ void MovableMan::PurgeAllMOs() {
 	deleteObjects(m_AddedItems);
 	deleteObjects(m_AddedParticles);
 	m_ValidActors.clear();
+	m_ContiguousActorIDs.clear();
 	m_ValidItems.clear();
 	m_ValidParticles.clear();
 	m_ActorRoster[Activity::TeamOne].clear();
@@ -2860,6 +2861,7 @@ Actor* MovableMan::RemoveActor(MovableObject* pActorToRem) {
 				std::lock_guard<std::mutex> lock(m_ActorsMutex);
 				removed = *itr;
 				m_ValidActors.erase(*itr);
+				m_ContiguousActorIDs.erase(*itr);
 				m_Actors.erase(itr);
 				break;
 			}
@@ -3240,6 +3242,7 @@ int MovableMan::GetAllActors(bool transferOwnership, std::list<SceneObject*>& ac
 		m_Actors.clear();
 		m_AddedActors.clear();
 		m_ValidActors.clear();
+		m_ContiguousActorIDs.clear();
 
 		// Also clear the actor rosters
 		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
@@ -3774,6 +3777,7 @@ void MovableMan::Update() {
 					}
 
 					m_ValidActors.erase(*aIt);
+					m_ContiguousActorIDs.erase(*aIt);
 					aIt++;
 				}
 				// Try to set the existing iterator to a safer value, erase can crash in debug mode otherwise?
@@ -3823,6 +3827,7 @@ void MovableMan::Update() {
 					RemoveActorFromTeamRoster(*aIt);
 
 				// Delete
+				m_ContiguousActorIDs.erase(*aIt);
 				(*aIt)->DestroyScriptState();
 				delete (*aIt);
 				m_ValidActors.erase(*aIt);
@@ -4717,7 +4722,10 @@ std::string MovableMan::SaveWorldStructure() const {
 		identities(m_ActorRoster[team], state.rosters[team]); state.sortRoster[team] = m_SortTeamRoster[team];
 		state.teamMOIDCount[team] = m_TeamMOIDCount[team];
 	}
-	for (const auto& [actor, id]: m_ContiguousActorIDs) state.contiguousActorIDs.emplace(actor->GetUniqueID(), id);
+	// Derived from the live actors, not from the index's keys: a key is only as alive as the actor it points at.
+	for (const Actor* actor: m_Actors) {
+		if (auto entry = m_ContiguousActorIDs.find(actor); entry != m_ContiguousActorIDs.end()) state.contiguousActorIDs.emplace(actor->GetUniqueID(), entry->second);
+	}
 	for (const AlarmEvent* event: m_AlarmEvents) state.alarms[0].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	for (const AlarmEvent* event: m_AddedAlarmEvents) state.alarms[1].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	state.quarantine = m_LockstepJoinQuarantine;
@@ -4736,6 +4744,13 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 			std::set<long> allowed(state.cohorts[kind].begin(), state.cohorts[kind].end());
 			allowed.insert(state.cohorts[kind + 3].begin(), state.cohorts[kind + 3].end());
 			for (long uid: state.validObjects[kind]) if (!allowed.contains(uid)) throw std::runtime_error("invalid world validity member");
+		}
+		{
+			std::set<long> actors(state.cohorts[0].begin(), state.cohorts[0].end());
+			actors.insert(state.cohorts[3].begin(), state.cohorts[3].end());
+			for (const auto& entry: state.contiguousActorIDs) {
+				if (entry.first <= 0 || !actors.contains(entry.first)) throw std::runtime_error("invalid contiguous actor index member " + std::to_string(entry.first));
+			}
 		}
 		if (validateOnly) return true;
 		const auto resolve = [this](long uid) {
