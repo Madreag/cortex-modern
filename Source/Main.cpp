@@ -239,6 +239,7 @@ static bool ParseE2eSpawnSpec(const std::string& spec, E2eNamedSpawn& out) {
 	return true;
 }
 static std::string s_netLockstepReportPath;
+static std::string s_netJoinSessionId; //!< -net-join-session: the directory session a client joins instead of an address.
 // A capped stop holds the link while the relay host hands over what it still owes; a client one
 // input-delay behind needs those forwards to finish its own last tick.
 static constexpr uint32_t c_CappedStopDrainMs = 8000;
@@ -626,6 +627,27 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-join") {
 			s_netJoinAddress = argValue[++i];
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-join-session") {
+			s_netJoinSessionId = argValue[++i];
+			continue;
+		}
+
+		// Run overrides: they decide this run and are never written back to Settings.ini.
+		if (!lastArg && currentArg == "-net-ice") {
+			g_SettingsMan.SetNetworkIceEnableOverride(std::string(argValue[++i]) == "on");
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-stun") {
+			g_SettingsMan.SetNetworkStunServersOverride(argValue[++i]);
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-turn") {
+			g_SettingsMan.SetNetworkTurnServersOverride(argValue[++i]);
 			continue;
 		}
 
@@ -4101,10 +4123,11 @@ int RunNetMatchServiceE2E() {
 	std::string setupError;
 	if (!NetA7Journal::StartE2E(&setupError, [] { PollSDLEvents(); return System::IsSetToQuit(); })) s_netMatchServiceE2EExitCode = 1;
 	const bool e2eHost = s_netHost || s_netDedicated;
-	if (s_netDedicated && !s_netJoinAddress.empty()) {
+	const bool e2eJoiner = !s_netJoinAddress.empty() || !s_netJoinSessionId.empty();
+	if (s_netDedicated && e2eJoiner) {
 		setupError = "-net-dedicated cannot be combined with -net-join <address>";
-	} else if (e2eHost == !s_netJoinAddress.empty()) {
-		setupError = "-net-match-service-e2e requires exactly one of -net-host, -net-dedicated or -net-join <address>";
+	} else if (e2eHost == e2eJoiner) {
+		setupError = "-net-match-service-e2e requires exactly one of -net-host, -net-dedicated, -net-join <address> or -net-join-session <id>";
 	}
 
 	if (setupError.empty()) {
@@ -4113,6 +4136,7 @@ int RunNetMatchServiceE2E() {
 		request.host = e2eHost;
 		request.dedicated = s_netDedicated;
 		request.address = s_netJoinAddress.empty() ? "127.0.0.1" : s_netJoinAddress;
+		request.sessionId = s_netJoinSessionId;
 		request.port = s_netPort;
 		request.playerName = e2eHost ? "Host" : "Client";
 		request.activityPreset = s_netMatchServiceE2EPreset;
@@ -4138,6 +4162,8 @@ int RunNetMatchServiceE2E() {
 		}
 		const auto waitStart = std::chrono::steady_clock::now();
 		while (!g_NetMatchService.ConsumeReadyToLaunch(activityPreset)) {
+			// The directory row is the game thread's to drive, and a session-id join waits on it.
+			g_NetMatchService.Update();
 			const NetMatchServiceState state = g_NetMatchService.GetState();
 			if (e2eHost && ScenarioRunner::GetArgs().selftestJoinRejection && state == NetMatchServiceState::Starting) {
 				const std::string rejection = g_NetMatchService.GetErrorText();
@@ -4687,7 +4713,7 @@ int main(int argc, char** argv) {
 			s_cliNumLuaStatesOverride = static_cast<int>(std::strtol(argv[i + 1], nullptr, 10));
 			explicitLuaStateOverride = true;
 			++i;
-		} else if (arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join") {
+		} else if (arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-join-session") {
 			netSessionRequested = true;
 		}
 	}
@@ -4705,7 +4731,7 @@ int main(int argc, char** argv) {
 				continue;
 			}
 			const std::string arg = argv[i];
-			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e" || arg == "-net-directory-probe" || arg == "-net-directory-signal-probe" || arg == "-net-directory-list" || arg == "-net-directory-selftest") {
+			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-join-session" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e" || arg == "-net-directory-probe" || arg == "-net-directory-signal-probe" || arg == "-net-directory-list" || arg == "-net-directory-selftest") {
 				headless = true;
 			} else if (arg.size() > 9 && arg.compare(arg.size() - 9, 9, "-selftest") == 0) {
 				// A selftest never needs a visible window; a bare launch from a worker shell must not raise one.
