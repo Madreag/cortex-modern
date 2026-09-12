@@ -9,7 +9,8 @@
 
 namespace RTE {
 
-	/// One asynchronous HTTPS JSON request on its own thread. The caller owns the object, polls it
+	/// One asynchronous HTTPS JSON request, run off the caller's thread (a worker thread on Windows,
+	/// the session's queue on macOS). The caller owns the object, polls it
 	/// without blocking, and destroys it only after Poll() reports Done or after Cancel() joined.
 	/// One NetHttpClient serves exactly one request: Start() on a used object finishes an error
 	/// response instead of running again. Cancel() interrupts the in-flight transfer and returns
@@ -35,7 +36,7 @@ namespace RTE {
 		NetHttpClient& operator=(const NetHttpClient&) = delete;
 		~NetHttpClient();
 
-		/// Starts the request on a worker thread and returns immediately. certPinSha256 is empty or
+		/// Starts the request asynchronously and returns immediately. certPinSha256 is empty or
 		/// 64 lowercase hex of the server certificate's DER bytes; pinned mode accepts exactly that
 		/// certificate and verifies it before any request byte is sent, otherwise the system chain
 		/// must validate. Only https URLs are accepted. A second Start() on a used object finishes
