@@ -58,9 +58,9 @@ def main():
     runs = {}
     result = {"pass": False, "checks": {}, "details": {}}
 
-    def start(name, host, tail):
+    def start(name, host, tail, port=None):
         path = root / f"{name}.txt"
-        path.write_text(menu_script(name, host, options.port, tail), encoding="utf-8")
+        path.write_text(menu_script(name, host, port if port is not None else options.port, tail), encoding="utf-8")
         argv = ["-menu-script", path, "-num-lua-states", 4, "-net-reconnect-ticket", root / f"{name}.ticket"]
         runs[name] = make_run(options.repo, argv, root / name, 420).start()
         return runs[name]
@@ -106,6 +106,34 @@ def main():
         result["checks"]["no_script_failure"] = "[menu-script] FAILED:" not in log
         if options.console_check:
             result["checks"]["console_stayed_closed"] = "assert_console expected=0 actual=0 PASS" in log
+
+        # The moderation page is a lobby sub-screen a host reaches with the Seats button; that
+        # button's enabled window ends when the match launches and the menu leaves, so the script
+        # opens the same sub-screen from the lobby page. A lone host's lobby has no seat needing a
+        # decision, so the rows stay hidden - the asserts measure the skin geometry regardless.
+        moderator = start("Moderator", True,
+                          "wait_state Starting 60\nwait 4\nassert_substate Lobby\n"
+                          "open_moderation\nwait 4\nassert_substate Moderation\n"
+                          "screenshot moderation-panel\n"
+                          "assert_label_fits ButtonModerationWait0 ButtonModerationWait1 ButtonModerationWait2 "
+                          "ButtonModerationSubstitute0 ButtonModerationSubstitute1 ButtonModerationSubstitute2 "
+                          "ButtonModerationCancel0 ButtonModerationCancel1 ButtonModerationCancel2\n"
+                          "assert_label_fits ButtonModerationApplicant0 ButtonModerationApplicant1 ButtonModerationApplicant2\n"
+                          "exit\n",
+                          port=options.port + 8)
+        mod_record = moderator.finish()
+        mod_log = (root / "Moderator/stdout.log").read_text(errors="replace")
+        fit_lines = re.findall(r"\[menu-script\] assert_label_fits (\S+) text=(\d+) content=(\d+) (PASS|FAIL)", mod_log)
+        result["details"]["label_fit"] = {name: {"text": int(t), "content": int(c), "verdict": v}
+                                          for name, t, c, v in fit_lines}
+        result["checks"]["moderator_process"] = mod_record["exit_code"] == 0 and not mod_record["timed_out"]
+        result["checks"]["moderation_opened"] = ("assert_substate expected=Moderation actual=Moderation PASS"
+                                                 in mod_log)
+        result["checks"]["labels_fit"] = len(fit_lines) == 12 and all(v == "PASS" for *_, v in fit_lines)
+        result["checks"]["moderator_no_script_failure"] = "[menu-script] FAILED:" not in mod_log
+        shots = list((root / "Moderator/runtime/ScreenShots").glob("moderation-panel*.png"))
+        result["details"]["moderation_screenshot"] = str(shots[0]) if shots else None
+        result["checks"]["moderation_screenshot_written"] = bool(shots)
         result["pass"] = all(result["checks"].values())
     except Exception as error:
         result["error"] = str(error)

@@ -24,6 +24,8 @@
 #include "GUILabel.h"
 #include "GUIListBox.h"
 #include "GUITextBox.h"
+#include "GUISkin.h"
+#include "GUIFont.h"
 
 #include "Resources/Credits.h"
 
@@ -870,10 +872,12 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		RefreshModerationControls(snapshot);
 	}
 	if (!lobby) {
-		if (m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetHeight() != 250) {
-			m_MainMenuScreens[MenuScreen::MultiplayerScreen]->Resize(300, 250);
+		// The moderation page packs a second button line per seat and needs the extra height.
+		const int screenHeight = moderating ? 264 : 250;
+		if (m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetHeight() != screenHeight) {
+			m_MainMenuScreens[MenuScreen::MultiplayerScreen]->Resize(300, screenHeight);
 		}
-		m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((300 - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, 250);
+		m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((300 - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, screenHeight);
 		return;
 	}
 
@@ -1086,6 +1090,63 @@ std::string MainMenuGUI::AutomationMultiplayerSubScreen() const {
 
 void MainMenuGUI::AutomationGoToMainScreen() {
 	SetActiveMenuScreen(MenuScreen::MainScreen, false);
+}
+
+bool MainMenuGUI::AutomationOpenModeration() {
+	// The Seats button's enabled window closes when the match launches and the menu leaves with it,
+	// so the harness enters the sub-screen the button opens, from the lobby page that carries it.
+	if (m_ActiveMenuScreen != MenuScreen::MultiplayerScreen || m_MultiplayerSubScreen != MultiplayerSubScreen::Lobby) {
+		return false;
+	}
+	m_MultiplayerSubScreen = MultiplayerSubScreen::Moderation;
+	return true;
+}
+
+bool MainMenuGUI::AutomationLabelFits(const std::string& controlName, int* textWidth, int* contentWidth) const {
+	GUIControlManager* manager = m_SubMenuScreenGUIControlManager.get();
+	GUIControl* control = manager->GetControl(controlName);
+	if (!control) {
+		manager = m_MainMenuScreenGUIControlManager.get();
+		control = manager->GetControl(controlName);
+	}
+	if (!control) {
+		return false;
+	}
+	GUISkin* skin = manager->GetSkin();
+	std::string fontSection;
+	std::string text;
+	// A button's text area is what BuildBitmap leaves inside the frame; a label uses its whole box.
+	int margin = 0;
+	if (const GUIButton* button = dynamic_cast<GUIButton*>(control)) {
+		text = button->GetText();
+		fontSection = "Button_Up";
+		int left[4] = {0}, right[4] = {0};
+		skin->GetValue(fontSection, "Left", left, 4);
+		skin->GetValue(fontSection, "Right", right, 4);
+		margin = left[2] + right[2] + 1;
+	} else if (const GUILabel* label = dynamic_cast<GUILabel*>(control)) {
+		text = label->GetText();
+		fontSection = "Label";
+	} else {
+		return false;
+	}
+	std::string fontName;
+	skin->GetValue(fontSection, "Font", &fontName);
+	GUIFont* font = skin->GetFont(fontName);
+	if (!font) {
+		return false;
+	}
+	int x, y, width, height;
+	control->GetControlRect(&x, &y, &width, &height);
+	const int textW = font->CalculateWidth(text);
+	const int contentW = width - margin;
+	if (textWidth) {
+		*textWidth = textW;
+	}
+	if (contentWidth) {
+		*contentWidth = contentW;
+	}
+	return textW <= contentW;
 }
 
 bool MainMenuGUI::AutomationControlExists(const std::string& controlName) const {

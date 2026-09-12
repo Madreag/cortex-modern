@@ -91,6 +91,16 @@ namespace RTE {
 		/// @return Whether a row was found and the action ran.
 		bool AutomationModerate(const std::string& action, int stableSeat);
 
+		/// Opens the moderation sub-screen the way the lobby's Seats button does. The button's own
+		/// enabled window ends when the match launches and the menu leaves, so automation enters
+		/// from the lobby page it could be clicked on.
+		/// @return Whether the lobby page was up and the sub-screen changed.
+		bool AutomationOpenModeration();
+
+		/// Measures a control's text at its skin font against the width the skin leaves for it.
+		/// @return Whether the text fits inside the control's content width.
+		bool AutomationLabelFits(const std::string& controlName, int* textWidth, int* contentWidth) const;
+
 		/// Gets whether a named button is currently enabled.
 		bool AutomationControlEnabled(const std::string& controlName) const;
 		/// Whether the skin defines the control at all, whatever screen is up. "Enabled" cannot answer

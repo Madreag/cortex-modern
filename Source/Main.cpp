@@ -1283,6 +1283,25 @@ void ProcessMenuScript() {
 		const bool pass = actual == expected;
 		std::cout << "[menu-script] assert_enabled " << control << " expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
 		if (!pass) { return MenuScriptFail("assert_enabled " + control + " expected " + std::to_string(expected)); }
+	} else if (cmd == "open_moderation") {
+		const bool ok = menu->AutomationOpenModeration();
+		std::cout << "[menu-script] open_moderation ok=" << ok << std::endl;
+		if (!ok) { return MenuScriptFail("open_moderation needs the multiplayer lobby page"); }
+	} else if (cmd == "assert_label_fits") {
+		// One line per control so a failure still reports every measurement.
+		std::vector<std::string> failed;
+		std::string control;
+		int count = 0;
+		while (iss >> control) {
+			++count;
+			int textWidth = 0, contentWidth = 0;
+			const bool fits = menu->AutomationLabelFits(control, &textWidth, &contentWidth);
+			std::cout << "[menu-script] assert_label_fits " << control << " text=" << textWidth
+					  << " content=" << contentWidth << " " << (fits ? "PASS" : "FAIL") << std::endl;
+			if (!fits) { failed.push_back(control); }
+		}
+		if (count == 0) { return MenuScriptFail("assert_label_fits needs at least one control"); }
+		if (!failed.empty()) { return MenuScriptFail("assert_label_fits text wider than the control: " + failed.front()); }
 	} else if (cmd == "exit") {
 		System::SetQuit(true);
 	} else {
