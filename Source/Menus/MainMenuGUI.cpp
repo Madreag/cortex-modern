@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <iostream>
 #include <thread>
 
 using namespace RTE;
@@ -1026,6 +1027,10 @@ std::string MainMenuGUI::AutomationMultiplayerSubScreen() const {
 	}
 }
 
+void MainMenuGUI::AutomationGoToMainScreen() {
+	SetActiveMenuScreen(MenuScreen::MainScreen, false);
+}
+
 bool MainMenuGUI::AutomationControlExists(const std::string& controlName) const {
 	return m_SubMenuScreenGUIControlManager->GetControl(controlName) != nullptr ||
 	       m_MainMenuScreenGUIControlManager->GetControl(controlName) != nullptr;
@@ -1184,6 +1189,7 @@ void MainMenuGUI::MaybeLaunchMultiplayerActivity() {
 	ScenarioRunner::ApplyDeterministicConfig();
 	g_ActivityMan.SetStartActivity(activity);
 	m_UpdateResult = MainMenuUpdateResult::ActivityStarted;
+	std::cout << "[menu-mp] launching the match as team " << localTeam << std::endl;
 	SetActiveMenuScreen(MenuScreen::MainScreen, false);
 	g_GUISound.ExitMenuSound()->Play();
 }
