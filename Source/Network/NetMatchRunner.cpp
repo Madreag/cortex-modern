@@ -195,12 +195,8 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetMatchRunner::VerifyRematchProposal(std::string* error) {
-		if (m_Config.host || !m_RematchRound) {
-			return true;
-		}
-		// Names are the host's to stamp; the roster is what the two sides have to agree on.
-		auto roster = [](const NetMatchConfig& config) {
+	bool NetMatchRunner::RematchRostersAgree(const NetMatchConfig& proposed, const NetMatchConfig& derived) {
+		auto seatsOf = [](const NetMatchConfig& config) {
 			std::vector<std::array<uint8_t, 3>> seats;
 			for (const NetMatchPlayerSlot& slot : config.players) {
 				seats.push_back({slot.peerId, slot.team, static_cast<uint8_t>(slot.cpu ? 1 : 0)});
@@ -208,8 +204,15 @@ namespace RTE {
 			std::sort(seats.begin(), seats.end());
 			return seats;
 		};
-		if (m_MatchConfig.peerCount == m_RematchConfig.peerCount && m_MatchConfig.hostPeerId == m_RematchConfig.hostPeerId &&
-		    m_MatchConfig.dedicated == m_RematchConfig.dedicated && roster(m_MatchConfig) == roster(m_RematchConfig)) {
+		return proposed.peerCount == derived.peerCount && proposed.hostPeerId == derived.hostPeerId &&
+		       proposed.dedicated == derived.dedicated && seatsOf(proposed) == seatsOf(derived);
+	}
+
+	bool NetMatchRunner::VerifyRematchProposal(std::string* error) {
+		if (m_Config.host || !m_RematchRound) {
+			return true;
+		}
+		if (RematchRostersAgree(m_MatchConfig, m_RematchConfig)) {
 			return true;
 		}
 		SetFailed("rematch roster refused: the host proposed peer_count " + std::to_string(m_MatchConfig.peerCount) + " (" +
