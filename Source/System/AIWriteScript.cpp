@@ -25,14 +25,14 @@ namespace RTE {
 			if (op == "equip-group" || op == "equip-named" || op == "aim" || op == "flip") {
 				return 1;
 			}
-			if (op == "equip-loaded") {
+			if (op == "equip-loaded" || op == "scene-waypoint") {
 				return 2;
 			}
 			return 0;
 		}
 
 		bool KnownOp(const std::string& op) {
-			for (const char* known: {"equip-firearm", "equip-group", "equip-loaded", "equip-named", "equip-throwable", "equip-digger", "equip-shield", "equip-shield-bg", "unequip-fg", "unequip-bg", "flip", "aim"}) {
+			for (const char* known: {"equip-firearm", "equip-group", "equip-loaded", "equip-named", "equip-throwable", "equip-digger", "equip-shield", "equip-shield-bg", "unequip-fg", "unequip-bg", "flip", "aim", "scene-waypoint", "clear-waypoints"}) {
 				if (op == known) {
 					return true;
 				}
@@ -65,6 +65,10 @@ namespace RTE {
 				human.SetHFlipped(line.args[0] != "0");
 			} else if (line.op == "aim") {
 				human.SetAimAngle(std::strtof(line.args[0].c_str(), nullptr));
+			} else if (line.op == "scene-waypoint") {
+				human.AddAISceneWaypoint(Vector(std::strtof(line.args[0].c_str(), nullptr), std::strtof(line.args[1].c_str(), nullptr)));
+			} else if (line.op == "clear-waypoints") {
+				human.ClearAIWaypoints();
 			}
 		}
 	} // namespace
