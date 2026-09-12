@@ -32,6 +32,7 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -351,12 +352,21 @@ namespace RTE {
 				padded["pad"] = std::string(NetDirectoryLimits::c_MaxBodyBytes, 'y');
 				json bigPayload = json{{"token_or_join_nonce", "n"}, {"from", "host"}, {"to", "client:n"}, {"payload_b64", std::string(NetDirectoryLimits::c_MaxPayloadB64Chars + 4, 'A')}};
 				json longPeer = json{{"token_or_join_nonce", "n"}, {"from", "client:" + std::string(70, 'k')}, {"to", "host"}, {"payload_b64", "eA=="}};
+				json peerOver64 = json{{"token_or_join_nonce", "n"}, {"from", "client:" + std::string(NetDirectoryLimits::c_MaxPeerChars - 6, 'k')}, {"to", "host"}, {"payload_b64", "eA=="}};
+				json embeddedPad = json{{"token_or_join_nonce", "n"}, {"from", "host"}, {"to", "client:n"}, {"payload_b64", "YQ=A"}};
+				json tooManySignals = json{{"signals", json::array()}};
+				for (size_t i = 0; i <= NetDirectoryLimits::c_MaxSignalRows; ++i) {
+					tooManySignals["signals"].push_back(json{{"seq", 1}, {"from", "host"}, {"to", "client:n"}, {"payload_b64", "eA=="}});
+				}
 				const std::vector<Case> cases = {
 					{"string over 64 chars", longName.dump(), DecodeInto(&NetDirectoryCodec::DecodeRegisterRequest)},
 					{"more than 8 listen_addrs", manyAddrs.dump(), DecodeInto(&NetDirectoryCodec::DecodeRegisterRequest)},
 					{"body over 128 KiB", padded.dump(), DecodeInto(&NetDirectoryCodec::DecodeRegisterRequest)},
 					{"payload_b64 over the 64 KiB decoded cap", bigPayload.dump(), DecodeInto(&NetDirectoryCodec::DecodeSignalPost)},
 					{"peer over 71 chars", longPeer.dump(), DecodeInto(&NetDirectoryCodec::DecodeSignalPost)},
+					{"peer over 64 chars", peerOver64.dump(), DecodeInto(&NetDirectoryCodec::DecodeSignalPost)},
+					{"payload_b64 with embedded padding", embeddedPad.dump(), DecodeInto(&NetDirectoryCodec::DecodeSignalPost)},
+					{"signals over MAX_QUEUE", tooManySignals.dump(), DecodeInto(&NetDirectoryCodec::DecodeSignalList)},
 				};
 				for (const Case& item : cases) {
 					std::string reason;
@@ -364,6 +374,22 @@ namespace RTE {
 						*error = std::string("accepted an oversize body: ") + item.name;
 						return false;
 					}
+				}
+				return true;
+			}
+
+			bool TestSessionsCountCap(std::string* error) {
+				json tooMany = json{{"sessions", json::array()}};
+				for (size_t i = 0; i <= NetDirectoryLimits::c_MaxListRows; ++i) {
+					tooMany["sessions"].push_back(json::object());
+				}
+				NetDirectoryListResponse listed;
+				std::string reason;
+				const bool accepted = NetDirectoryCodec::DecodeListResponse(tooMany.dump(), listed, reason);
+				if (accepted || reason != "invalid_field:sessions") {
+					*error = std::string("sessions[] over MAX_ROWS was not refused as invalid_field:sessions; accepted=")
+					         + (accepted ? "1" : "0") + " reason=" + reason;
+					return false;
 				}
 				return true;
 			}
@@ -599,6 +625,42 @@ namespace RTE {
 						return false;
 					}
 				}
+				return true;
+			}
+
+			bool TestHttpClientCancelDuringCallback(std::string* error) {
+				SocketHandle listener = c_InvalidSocket;
+				std::string stalledUrl;
+				if (!OpenSilentListener(&listener, &stalledUrl, error)) {
+					return false;
+				}
+				for (int i = 0; i < 50; ++i) {
+					NetHttpClient client;
+					client.Start("GET", stalledUrl, {}, "", "");
+					std::this_thread::sleep_for(std::chrono::milliseconds(2 + (i % 8)));
+					std::atomic<bool> finished{false};
+					std::thread cancelThread([&] {
+						client.Cancel();
+						finished.store(true);
+					});
+					const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+					while (!finished.load() && std::chrono::steady_clock::now() < deadline) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(10));
+					}
+					if (!finished.load()) {
+						cancelThread.detach();
+						CloseSocket(listener);
+						*error = "cancel-during-callback hung on request " + std::to_string(i);
+						return false;
+					}
+					cancelThread.join();
+					if (client.Poll() != NetHttpClient::PollResult::Done) {
+						CloseSocket(listener);
+						*error = "cancel-during-callback request " + std::to_string(i) + " never reported done";
+						return false;
+					}
+				}
+				CloseSocket(listener);
 				return true;
 			}
 #endif
@@ -1442,6 +1504,7 @@ namespace RTE {
 			if (!TestMissingFieldsRefused(&error)) return fail(error);
 			if (!TestWrongTypesRefused(&error)) return fail(error);
 			if (!TestOversizeRefused(&error)) return fail(error);
+			if (!TestSessionsCountCap(&error)) return fail(error);
 			if (!TestCompatibilityPredicate(&error)) return fail(error);
 			if (!TestCannedSequence(&error)) return fail(error);
 			if (!TestHttpClientReuse(&error)) return fail(error);
@@ -1465,6 +1528,7 @@ namespace RTE {
 			if (!TestHttpClientCancel(&error)) return fail(error);
 #ifdef _WIN32
 			if (!TestHttpClientStress(&error)) return fail(error);
+			if (!TestHttpClientCancelDuringCallback(&error)) return fail(error);
 #endif
 #endif
 			if (!TestInstallKeyIsLazy(&error)) return fail(error);

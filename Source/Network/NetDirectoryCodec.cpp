@@ -2,6 +2,8 @@
 
 #include "nlohmann/json.hpp"
 
+#include <algorithm>
+#include <cstddef>
 #include <limits>
 
 namespace RTE {
@@ -112,8 +114,7 @@ namespace RTE {
 			return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || ch == '-' || ch == '_';
 		}
 
-		// Peers are "host" or "client:<1..64 install-key chars>"; total can reach 71 chars.
-		constexpr size_t c_MaxPeerChars = 7 + NetDirectoryLimits::c_MaxStringChars;
+		constexpr size_t c_MaxPeerChars = NetDirectoryLimits::c_MaxPeerChars;
 
 		bool ReadPeer(const json& obj, const char* key, std::string& out, std::string& reason) {
 			std::string value;
@@ -127,11 +128,18 @@ namespace RTE {
 		}
 
 		bool IsBase64(const std::string& value) {
+			if (value.size() % 4 != 0) {
+				return false;
+			}
+			size_t pad = 0;
+			while (pad < 2 && pad < value.size() && value[value.size() - 1 - pad] == '=') {
+				++pad;
+			}
 			auto isChar = [](char ch) {
 				const unsigned char c = static_cast<unsigned char>(ch);
-				return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || ch == '+' || ch == '/' || ch == '=';
+				return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || ch == '+' || ch == '/';
 			};
-			return std::all_of(value.begin(), value.end(), isChar);
+			return std::all_of(value.begin(), value.end() - static_cast<std::ptrdiff_t>(pad), isChar);
 		}
 
 		bool ReadPayloadB64(const json& obj, const char* key, std::string& out, std::string& reason) {
@@ -359,6 +367,7 @@ namespace RTE {
 		const auto it = obj.find("sessions");
 		if (it == obj.end()) return Fail(reason, "missing_field", "sessions");
 		if (!it->is_array()) return Fail(reason, "invalid_field", "sessions");
+		if (it->size() > NetDirectoryLimits::c_MaxListRows) return Fail(reason, "invalid_field", "sessions");
 		std::vector<NetDirectorySessionRow> rows;
 		for (const json& item : *it) {
 			if (!item.is_object()) return Fail(reason, "invalid_field", "sessions");
@@ -418,6 +427,7 @@ namespace RTE {
 		const auto it = obj.find("signals");
 		if (it == obj.end()) return Fail(reason, "missing_field", "signals");
 		if (!it->is_array()) return Fail(reason, "invalid_field", "signals");
+		if (it->size() > NetDirectoryLimits::c_MaxSignalRows) return Fail(reason, "invalid_field", "signals");
 		std::vector<NetDirectorySignal> signals;
 		for (const json& item : *it) {
 			if (!item.is_object()) return Fail(reason, "invalid_field", "signals");
