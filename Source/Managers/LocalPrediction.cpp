@@ -212,6 +212,7 @@ namespace RTE {
 			const uint64_t tick = static_cast<uint64_t>(simCount) + static_cast<uint64_t>(step);
 			frames.clear();
 			ScenarioRunner::PeekLockstepLocalControllerFrames(tick, frames);
+			g_MovableMan.TravelSpeculativeSpawns();
 			for (Preview& preview: targets) {
 				Actor* clone = preview.clone;
 				// The same stages in the same order as the world update: travel, pre-controller, wire, update, post.
@@ -244,6 +245,7 @@ namespace RTE {
 				}
 				MovableMan::PostUpdateStage(clone);
 			}
+			g_MovableMan.HarvestSpeculativeSpawns();
 		}
 		Trace("stepped");
 
@@ -262,8 +264,11 @@ namespace RTE {
 			}
 		}
 		const MovableMan::AddQueueMark after = g_MovableMan.MarkAddQueues();
-		outcome.spawned = (after.actors - mark.actors) + (after.items - mark.items) + (after.particles - mark.particles);
-		outcome.spawnedNames = g_MovableMan.DescribeAddedSince(mark);
+		outcome.spawned = g_MovableMan.GetSpeculativeSpawnCount() + (after.actors - mark.actors) + (after.items - mark.items) + (after.particles - mark.particles);
+		outcome.spawnedNames = g_MovableMan.DescribeSpeculativeSpawns();
+		if (const std::string queued = g_MovableMan.DescribeAddedSince(mark); !queued.empty()) {
+			outcome.spawnedNames += (outcome.spawnedNames.empty() ? "" : ",") + queued;
+		}
 		std::vector<MovableObject*> taken;
 		g_MovableMan.EndSpeculation(&taken);
 		std::vector<uint64_t> takenEmitters;
@@ -396,6 +401,7 @@ namespace RTE {
 		const std::string events = PreviewEventLedger::Describe();
 		return "previews=" + std::to_string(s_PreviewCount) + " actor_ticks=" + std::to_string(s_PreviewTicks) + " ms_total=" + std::to_string(s_PreviewMs) + " avg_ms=" + std::to_string(s_PreviewMs / static_cast<double>(s_PreviewCount)) +
 		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations) + " preview_codec_fallback=" + std::to_string(LuaMan::PreviewCodecFallbackCount()) +
+		       " preview_ghosts_peak=" + std::to_string(g_MovableMan.GetPreviewGhostPeak()) +
 		       (events.empty() ? std::string() : " " + events);
 	}
 } // namespace RTE
