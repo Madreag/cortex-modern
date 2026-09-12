@@ -1071,17 +1071,19 @@ static std::string ResyncSaveName() {
 		// The install key is minted on the first directory use, so only a listing host asks for it.
 		const std::string directoryKey = (directoryWanted && !directoryUrl.empty()) ? g_SettingsMan.GetOrCreateSessionDirectoryInstallKey() : g_SettingsMan.GetSessionDirectoryInstallKey();
 		const std::string directoryCertPin = g_SettingsMan.GetSessionDirectoryCertSha256();
-		m_Directory.SetTransportFactory([directoryUrl, directoryKey, directoryCertPin]() {
-			// The factory sees the raw settings value; Configure's own copy gets this normalization.
-			std::string baseUrl = directoryUrl;
-			while (!baseUrl.empty() && baseUrl.back() == '/') {
-				baseUrl.pop_back();
-			}
-			if (!baseUrl.empty() && baseUrl.rfind("https://", 0) != 0) {
-				baseUrl = "https://" + baseUrl;
-			}
-			return std::make_unique<ObservedIpTransport>(baseUrl, directoryKey, directoryCertPin);
-		});
+		if (s_PortMapRequested) {
+			m_Directory.SetTransportFactory([directoryUrl, directoryKey, directoryCertPin]() {
+				// The factory sees the raw settings value; Configure's own copy gets this normalization.
+				std::string baseUrl = directoryUrl;
+				while (!baseUrl.empty() && baseUrl.back() == '/') {
+					baseUrl.pop_back();
+				}
+				if (!baseUrl.empty() && baseUrl.rfind("https://", 0) != 0) {
+					baseUrl = "https://" + baseUrl;
+				}
+				return std::make_unique<ObservedIpTransport>(baseUrl, directoryKey, directoryCertPin);
+			});
+		}
 		m_Directory.Configure(directoryUrl, directoryKey, directoryCertPin);
 		// While the mapper is still working the register must wait: the row is sent exactly once.
 		if (directoryWanted && (!s_PortMapRequested || s_PortMap.Done())) {
@@ -1685,11 +1687,13 @@ static std::string ResyncSaveName() {
 		// ever built there, so reading it here is safe.
 		{
 			json directoryReport = json::parse(m_Directory.BuildReportJson());
-			std::lock_guard<std::mutex> observedLock(s_ObservedIpMutex);
-			directoryReport["observed_ip"] = s_DirectoryObservedIp;
+			if (s_PortMapRequested) {
+				std::lock_guard<std::mutex> observedLock(s_ObservedIpMutex);
+				directoryReport["observed_ip"] = s_DirectoryObservedIp;
+			}
 			report["directory"] = std::move(directoryReport);
 		}
-		{
+		if (s_PortMapRequested) {
 			const NetPortMap::Result& mapped = s_PortMap.GetResult();
 			report["port_map"] = {
 				{"enabled", s_PortMapRequested},
