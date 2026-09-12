@@ -1140,6 +1140,83 @@ namespace RTE {
 				return true;
 			}
 
+			std::string ListRowId(int n) {
+				const std::string tail = std::to_string(n);
+				return "7b8c9d2e-1111-4222-8333-" + std::string(12 - tail.size(), '0') + tail;
+			}
+
+			std::vector<NetDirectorySessionRow> MakeListRows(int begin, int count) {
+				std::vector<NetDirectorySessionRow> rows;
+				rows.reserve(static_cast<size_t>(count));
+				for (int i = 0; i < count; ++i) {
+					NetDirectorySessionRow row = SampleRow();
+					row.sessionId = ListRowId(begin + i);
+					rows.push_back(std::move(row));
+				}
+				return rows;
+			}
+
+			std::string ListPageBody(const std::vector<NetDirectorySessionRow>& rows, const std::string& nextCursor, int64_t total) {
+				NetDirectoryListResponse list;
+				list.sessions = rows;
+				list.nextCursor = nextCursor;
+				list.total = total;
+				return NetDirectoryCodec::EncodeListResponse(list);
+			}
+
+			bool TestListPagination(std::string* error) {
+				const std::string firstPath = std::string("/v1/sessions?limit=") + std::to_string(NetDirectoryClient::c_ListPageLimit);
+				const std::string secondPath = firstPath + "&cursor=n1";
+				{
+					ScriptedClient s;
+					s.replies->push_back({200, ListPageBody(MakeListRows(0, 100), "n1", 140), ""});
+					s.replies->push_back({200, ListPageBody(MakeListRows(100, 40), "", 140), ""});
+					s.client.PollList(0);
+					s.client.Update(0);
+					s.client.Update(0);
+					if (s.sent->size() != 2 || !RequestIs(s.sent->at(0), "GET", firstPath.c_str(), error) || !RequestIs(s.sent->at(1), "GET", secondPath.c_str(), error)) {
+						*error = error->empty() ? "list pagination sent the wrong requests" : *error;
+						return false;
+					}
+					if (s.client.Rows().size() != 140) {
+						*error = "merged list size " + std::to_string(s.client.Rows().size());
+						return false;
+					}
+					const std::vector<NetDirectoryClient::GameRow> merged = NetDirectoryClient::MergeGameLists({}, s.client.Rows(), SampleLocal());
+					if (merged.size() != 140) {
+						*error = "MergeGameLists size " + std::to_string(merged.size());
+						return false;
+					}
+					const json report = json::parse(s.client.BuildReportJson());
+					if (report["list_pages"] != 2 || report["list_total"] != 140) {
+						*error = "list report " + report.dump();
+						return false;
+					}
+				}
+				{
+					ScriptedClient s;
+					s.replies->push_back({200, ListPageBody(MakeListRows(0, 100), "n1", 200), ""});
+					s.replies->push_back({500, R"({"error":"internal"})", ""});
+					s.client.PollList(0);
+					s.client.Update(0);
+					s.client.Update(0);
+					if (s.sent->size() != 2 || !RequestIs(s.sent->at(0), "GET", firstPath.c_str(), error) || !RequestIs(s.sent->at(1), "GET", secondPath.c_str(), error)) {
+						*error = error->empty() ? "page-2 failure sent the wrong requests" : *error;
+						return false;
+					}
+					if (s.client.Rows().size() != 100) {
+						*error = "page-2 failure dropped page 1, size " + std::to_string(s.client.Rows().size());
+						return false;
+					}
+					const json report = json::parse(s.client.BuildReportJson());
+					if (!report.contains("last_error") || report["last_error"].get<std::string>().find("list") == std::string::npos) {
+						*error = "page-2 failure left no list note: " + report.dump();
+						return false;
+					}
+				}
+				return true;
+			}
+
 			const std::string kSignalSession = "7b8c9d2e-1111-4222-8333-444455556666";
 			const std::string kSignalBase = "/v1/sessions/" + kSignalSession;
 			const NetDirectoryClient::Reply kPostOk{200, R"({"ok":true,"seq":1})", ""};
@@ -1747,6 +1824,7 @@ namespace RTE {
 			if (!TestJoinListLabels(&error)) return fail(error);
 			if (!TestMergeGameLists(&error)) return fail(error);
 			if (!TestMergeAcceptsIceRows(&error)) return fail(error);
+			if (!TestListPagination(&error)) return fail(error);
 			if (!TestSignalOrderingAndCursor(&error)) return fail(error);
 			if (!TestSignalCursorWaitsForSink(&error)) return fail(error);
 			if (!TestSignalLongPoll(&error)) return fail(error);

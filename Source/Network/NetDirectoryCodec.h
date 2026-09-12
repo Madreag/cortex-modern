@@ -119,6 +119,8 @@ namespace RTE {
 	// GET /v1/sessions 200 response body.
 	struct NetDirectoryListResponse {
 		std::vector<NetDirectorySessionRow> sessions;
+		int64_t total = 0;
+		std::string nextCursor; //!< Empty when this is the last page.
 
 		bool operator==(const NetDirectoryListResponse&) const = default;
 	};
