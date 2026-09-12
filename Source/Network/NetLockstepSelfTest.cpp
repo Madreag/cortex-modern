@@ -1507,6 +1507,103 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		// A running AI pass that writes another actor's queue must send an AIOrder naming that
+		// actor, including when the target is only reachable as an inventory item.
+		bool TestAIWaypointCrossActorWrites(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433584101ULL);
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 43024, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 43024, 0, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "team-owner";
+			clientConfig.ownershipPolicy = "team-owner";
+			if (!StartCoordinatorPair(43024, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			Actor* writer = new Actor();
+			Actor* target = new Actor();
+			Actor* peerTarget = new Actor();
+			Actor* passenger = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (writer->MovableObject::Create(1) < 0 || target->MovableObject::Create(1) < 0 ||
+			    peerTarget->MovableObject::Create(1) < 0 || passenger->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			writer->SetTeam(0);
+			target->SetTeam(0);
+			peerTarget->SetTeam(0);
+			passenger->SetTeam(0);
+			writer->AddToInventoryBack(passenger);
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+			if (g_MovableMan.FindObjectByUniqueID(static_cast<long int>(passenger->GetUniqueID())) != passenger) {
+				return finish("FindObjectByUniqueID does not reach an inventory actor");
+			}
+
+			g_CurrentAIActor = writer;
+			target->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			passenger->AddAISceneWaypoint(Vector(30.0F, 40.0F));
+			g_CurrentAIActor = nullptr;
+			if (target->GetWaypointsSize() != 0 || passenger->GetWaypointsSize() != 0) {
+				return finish("a cross-actor AI write mutated the target instead of sending it");
+			}
+			writer->SendDeferredWaypoints();
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			const int64_t targetUID = static_cast<int64_t>(target->GetUniqueID());
+			const int64_t passengerUID = static_cast<int64_t>(passenger->GetUniqueID());
+			const std::vector<NetGameAIOrder> expected = {
+			    {targetUID, 0, NetGameAIOrder::SceneWaypoint, 10.0F, 20.0F, 0},
+			    {passengerUID, 0, NetGameAIOrder::SceneWaypoint, 30.0F, 40.0F, 0},
+			};
+			if (sent.size() != expected.size()) {
+				return finish("the AI pass did not send one AIOrder per cross-actor write");
+			}
+			for (size_t index = 0; index < sent.size(); ++index) {
+				const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&sent[index].payload);
+				if (!order || !(*order == expected[index])) {
+					return finish("a sent AIOrder does not name the actor the AI wrote");
+				}
+			}
+
+			auto apply = [](Actor* view, const NetGameAIOrder& order) {
+				view->AddAISceneWaypoint(Vector(order.x, order.y));
+			};
+			apply(target, expected[0]);
+			apply(peerTarget, expected[0]);
+			Actor* appliedPassenger = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(passengerUID)));
+			if (!appliedPassenger) {
+				return finish("apply could not resolve the inventory target by unique id");
+			}
+			apply(appliedPassenger, expected[1]);
+			if (target->GetWaypointsSize() != 1 || peerTarget->GetWaypointsSize() != 1 ||
+			    target->GetWaypointList().front().first != peerTarget->GetWaypointList().front().first) {
+				return finish("the two peers hold different queues after the cross-actor apply");
+			}
+			if (appliedPassenger->GetWaypointsSize() != 1 || appliedPassenger->GetWaypointList().front().first != Vector(30.0F, 40.0F)) {
+				return finish("the inventory target did not receive the applied waypoint");
+			}
+			std::cout << "[net-lockstep-selftest] PASS ai waypoint cross-actor: sent=" << sent.size()
+			          << " target_uid=" << targetUID << " passenger_uid=" << passengerUID << std::endl;
+			return finish(nullptr);
+		}
+
 		bool TestRecoveryStopsAtCompletedTick(std::string* error) {
 			for (uint16_t delay: {0, 3}) {
 				for (bool rejoin: {false, true}) {
@@ -9359,6 +9456,7 @@ namespace RTE {
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
 		    !TestAIWaypointReadThroughSamePass(&error) ||
+		    !TestAIWaypointCrossActorWrites(&error) ||
 		    !TestCoordinatorOwedFrameRetryEndsWithTheRound(&error) ||
 		    !TestCoordinatorOwedFrameKeepsItsCommands(&error) ||
 		    !TestCoordinatorStoppedRoundStopsResending(&error) ||

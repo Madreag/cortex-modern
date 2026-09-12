@@ -405,6 +405,7 @@ Field(path + ".Actor::DeferredWaypoint.op", object.op);
 Field(path + ".Actor::DeferredWaypoint.x", object.x);
 Field(path + ".Actor::DeferredWaypoint.y", object.y);
 Field(path + ".Actor::DeferredWaypoint.targetUID", object.targetUID);
+Field(path + ".Actor::DeferredWaypoint.actorUID", object.actorUID);
 }
 void Visit(const AHuman::DeferredEquip& object, const std::string& path) {
 Field(path + ".AHuman::DeferredEquip.op", object.op);
