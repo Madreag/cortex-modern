@@ -67,6 +67,7 @@
 #include "System.h"
 
 #include "ControllerFrame.h"
+#include "GnsP2PSelfTest.h"
 #include "GnsTransport.h"
 #include "NetAdmissionSelfTest.h"
 #include "NetAuthSelfTest.h"
@@ -4462,6 +4463,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-directory-selftest") {
 			return NetDirectorySelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-p2p-selftest") {
+			return GnsP2PSelfTest::Run(std::vector<std::string>(argv + i + 1, argv + argc));
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-discovery-selftest") {
 			// A beacon and a browser over the loopback broadcast: the browser must list the host.
