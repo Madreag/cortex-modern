@@ -31,12 +31,13 @@ namespace RTE {
 			uint64_t retimed = 0;
 		};
 
-		/// One physical voice start by a previewed emitter, for the latency report.
-		struct SoundStart {
+		/// One event a previewed emitter put on the output, for the latency report.
+		struct EventStart {
 			uint64_t committedTick = 0;
 			uint64_t eventTick = 0;
 			uint64_t emitterUID = 0;
 			uint32_t seq = 0;
+			uint8_t kind = Sound;
 			bool predicted = false;
 		};
 
@@ -66,9 +67,9 @@ namespace RTE {
 		static void Clear();
 
 		static const Counters& GetCounters() { return s_Counters; }
-		static void NoteSoundStart(uint64_t committedTick, const Key& key, bool predicted);
-		static const std::vector<SoundStart>& GetSoundStarts() { return s_SoundStarts; }
-		static uint64_t GetSoundStartCount() { return s_SoundStartCount; }
+		static void NoteEventStart(uint64_t committedTick, const Key& key, bool predicted);
+		static const std::vector<EventStart>& GetEventStarts() { return s_EventStarts; }
+		static uint64_t GetEventStartCount() { return s_EventStartCount; }
 		static size_t GetLiveEntryCount() { return s_Entries.size(); }
 		/// One line of counters for the match report; empty when nothing was ever predicted.
 		static std::string Describe();
@@ -93,9 +94,9 @@ namespace RTE {
 		static std::vector<uint64_t> s_PreviewedEmitters;
 		static std::map<Tuple, uint32_t> s_PreviewSeq;
 		static std::map<Tuple, uint32_t> s_CanonicalSeq;
-		static std::vector<SoundStart> s_SoundStarts;
+		static std::vector<EventStart> s_EventStarts;
 		static Counters s_Counters;
-		static uint64_t s_SoundStartCount;
+		static uint64_t s_EventStartCount;
 		static uint64_t s_CommittedTick;
 		static uint64_t s_IdentityCursor;
 		static uint64_t s_CanonicalSeqTick;

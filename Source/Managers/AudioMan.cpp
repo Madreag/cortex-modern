@@ -646,7 +646,7 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 		if (result == FMOD_OK) channelIndex = RegisterPlayingVoice(channel, voiceOwner, soundData->SoundFile.GetDataPath(), soundData->MinimumAudibleDistance, predicting);
 		if (result != FMOD_OK) { if (logical) { result = FMOD_OK; continue; } return false; }
 		if (predicting) predictedVoices.push_back(channelIndex);
-		if (noteStart) { PreviewEventLedger::NoteSoundStart(PreviewEventLedger::CommittedTick(), eventKey, predicting); noteStart = false; }
+		if (noteStart) { PreviewEventLedger::NoteEventStart(PreviewEventLedger::CommittedTick(), eventKey, predicting); noteStart = false; }
 
 		result = (result == FMOD_OK) ? channel->setUserData(voiceOwner) : result;
 		result = (result == FMOD_OK) ? channel->setCallback(SoundChannelEndedCallback) : result;

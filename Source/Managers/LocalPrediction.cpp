@@ -216,6 +216,7 @@ namespace RTE {
 					if (const HDFirearm* firearm = dynamic_cast<const HDFirearm*>(equipped)) {
 						outcome.roundsInMag = firearm->GetRoundInMagCount();
 						outcome.firedOnce = firearm->FiredOnce();
+						outcome.firedFrame = firearm->FiredFrame();
 					}
 				}
 				break;
