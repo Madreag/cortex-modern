@@ -290,6 +290,7 @@ namespace RTE {
 		Activity* activity = g_ActivityMan.GetActivity();
 		for (const Preview& preview: s_Previews) {
 			g_MovableMan.SwapActorForRender(preview.original, preview.clone);
+			g_MovableMan.AddRenderSubstitute(preview.clone);
 			if (activity) {
 				activity->SubstituteActorForRender(preview.original, preview.clone);
 			}
@@ -320,6 +321,7 @@ namespace RTE {
 					activity->SubstituteActorForRender(preview.clone, preview.original);
 				}
 			}
+			g_MovableMan.ClearRenderSubstitutes();
 			for (const MovableObject* resident: s_TakenResidents) {
 				g_MovableMan.HideForRender(resident, false);
 			}
