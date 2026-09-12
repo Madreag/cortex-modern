@@ -965,8 +965,7 @@ bool AHuman::HandlePieCommand(PieSliceType pieSliceIndex) {
 			m_AIMode = AIMODE_BRAINHUNT;
 			ClearAIWaypoints();
 		} else if (pieSliceIndex == PieSliceType::GoTo) {
-			m_AIMode = AIMODE_GOTO;
-			ClearAIWaypoints();
+			BeginGoToOrder();
 		} else if (pieSliceIndex == PieSliceType::GoldDig) {
 			m_AIMode = AIMODE_GOLDDIG;
 		} else {

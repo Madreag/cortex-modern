@@ -194,6 +194,26 @@ namespace RTE {
 			m_Disabled = disabled;
 		}
 
+		/// Disables this for a synced order every peer applied at this tick. The owner's own sample of
+		/// the disable is still in flight, so the frames committed until it lands cannot enable it again.
+		/// @param tick The sim tick the order landed on.
+		void HoldDisabledForSyncedOrder(int64_t tick) {
+			m_SyncedOrderDisableTick = tick;
+			SetDisabled(true);
+		}
+
+		/// Drops a hold the owner's disable never caught up with, so a controller cannot stay held forever.
+		/// @param tick The current sim tick.
+		void ExpireSyncedOrderDisable(int64_t tick) {
+			if (m_SyncedOrderDisableTick >= 0 && tick - m_SyncedOrderDisableTick >= c_SyncedOrderDisableMaxHoldTicks) {
+				m_SyncedOrderDisableTick = -1;
+			}
+		}
+
+		/// Whether a synced order is holding this disabled against the frames sampled before it.
+		/// @return Whether the hold is armed.
+		bool IsSyncedOrderDisableHeld() const { return m_SyncedOrderDisableTick >= 0; }
+
 		/// Shows whether the current controller is in a specific state.
 		/// @param controlState What control state to check for.
 		/// @return Whether the controller is in the specified state.
@@ -412,9 +432,11 @@ namespace RTE {
 
 	protected:
 		static constexpr int m_ReleaseDelay = 250; //!< The delay between releasing a menu button and activating the regular controls, to avoid accidental input.
+		static constexpr int64_t c_SyncedOrderDisableMaxHoldTicks = 60; //!< The lockstep cap on input delay frames.
 
 		std::array<bool, ControlState::CONTROLSTATECOUNT> m_ControlStates; //!< Control states.
 		bool m_Disabled; //!< Quick and easy disable to prevent updates from being made.
+		int64_t m_SyncedOrderDisableTick = -1; //!< The sim tick a synced order disabled this, -1 if none; re-derived on restore, not checkpointed.
 		int64_t m_WireApplyTick = -1; //!< The sim tick a lockstep wire frame last replaced this state, -1 if never.
 		bool m_WireSchemeValid = false; //!< Whether the sim reads the owner's wire-carried scheme facts instead of this machine's scheme.
 		WireDeviceClass m_WireDeviceClass = WireDeviceClass::None;
