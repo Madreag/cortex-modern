@@ -1055,11 +1055,6 @@ void Actor::BeginGoToOrder() {
 	}
 }
 
-bool Actor::IsAwaitingGoToPoint() const {
-	return m_AIMode == AIMODE_GOTO && m_Waypoints.empty() && m_MovePath.empty() && !m_pMOMoveTarget &&
-	       m_Controller.IsPlayerControlled() && m_Controller.IsDisabled();
-}
-
 void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
 	if (g_MovableMan.ValidMO(pMOWaypoint) && (m_Waypoints.empty() || m_Waypoints.back().second != pMOWaypoint)) {
 		m_Waypoints.push_back(std::pair<Vector, const MovableObject*>(pMOWaypoint->GetPos(), pMOWaypoint));
@@ -1681,16 +1676,10 @@ void Actor::ApplyPersistedControllerMode() {
 		m_Controller.ApplyWireState(controlStates, m_Controller.GetAnalogMove(), m_Controller.GetAnalogAim(), m_Controller.GetAnalogCursor(), m_Controller.GetMouseMovement(), m_Controller.GetInputMode(), m_Controller.GetPlayerRaw(), m_PersistedControllerQuickDisabled != 0);
 		m_PersistedControllerQuickDisabled = -1;
 	}
-	bool restored = false;
 	if (!m_PersistedControllerCheckpoint.empty()) {
 		m_Controller.LoadCheckpoint(m_PersistedControllerCheckpoint);
 		m_Controller.SetControlledActor(this);
 		m_PersistedControllerCheckpoint.clear();
-		restored = true;
-	}
-	// The Go-To order hold is not stored; a restore re-derives it from the order state it left behind.
-	if (restored && ScenarioRunner::IsLockstepControllerSyncActive() && IsAwaitingGoToPoint()) {
-		m_Controller.HoldDisabledForSyncedOrder(static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
 	}
 }
 

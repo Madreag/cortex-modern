@@ -436,7 +436,7 @@ namespace RTE {
 
 		std::array<bool, ControlState::CONTROLSTATECOUNT> m_ControlStates; //!< Control states.
 		bool m_Disabled; //!< Quick and easy disable to prevent updates from being made.
-		int64_t m_SyncedOrderDisableTick = -1; //!< The sim tick a synced order disabled this, -1 if none; re-derived on restore, not checkpointed.
+		int64_t m_SyncedOrderDisableTick = -1; //!< The sim tick a synced order disabled this, -1 if none.
 		int64_t m_WireApplyTick = -1; //!< The sim tick a lockstep wire frame last replaced this state, -1 if never.
 		bool m_WireSchemeValid = false; //!< Whether the sim reads the owner's wire-carried scheme facts instead of this machine's scheme.
 		WireDeviceClass m_WireDeviceClass = WireDeviceClass::None;
