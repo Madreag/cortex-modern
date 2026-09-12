@@ -13,7 +13,8 @@ namespace RTE {
 	class PreviewEventLedger {
 	public:
 		enum Kind : uint8_t { Sound = 0,
-			                  PostEffect = 1 };
+			                  PostEffect = 1,
+			                  Projectile = 2 };
 
 		struct Key {
 			uint8_t kind = Sound;
