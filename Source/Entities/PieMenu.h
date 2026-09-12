@@ -5,6 +5,7 @@
 #include "Matrix.h"
 
 #include <array>
+#include <string>
 
 namespace RTE {
 
@@ -46,6 +47,7 @@ namespace RTE {
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		int Create(const PieMenu& reference);
 		static bool RunCheckpointSelfTest();
+		static bool RunHoverOpenDelayPinSelfTest(std::string* error = nullptr);
 #pragma endregion
 
 #pragma region Destruction
