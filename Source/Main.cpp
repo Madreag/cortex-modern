@@ -2333,7 +2333,6 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		} else {
 			std::cerr << "[net-match] controller sync failed: " << error << std::endl;
 			g_ConsoleMan.PrintString("NETWORK: Match stopped: " + error);
-			g_ConsoleMan.SetEnabled(true);
 			g_NetMatchService.ReportRuntimeError(error);
 			g_ActivityMan.EndActivity();
 			g_ActivityMan.SetInActivity(false);
