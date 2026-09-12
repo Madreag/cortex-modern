@@ -1,10 +1,17 @@
 #include "NetDirectoryCodec.h"
+#include "NetHttpClient.h"
 
 #include "nlohmann/json.hpp"
 
+#ifdef _WIN32
+#include <winsock2.h>
+#endif
+
+#include <chrono>
 #include <functional>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace RTE {
@@ -411,6 +418,76 @@ namespace RTE {
 				}
 				return true;
 			}
+
+			bool TestHttpClientReuse(std::string* error) {
+				NetHttpClient client;
+				client.Start("GET", "https://127.0.0.1:1/", {}, "", "");
+				while (client.Poll() == NetHttpClient::PollResult::Pending) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(2));
+				}
+				client.Start("GET", "https://127.0.0.1:1/", {}, "", "");
+				if (client.Poll() != NetHttpClient::PollResult::Done) {
+					*error = "second Start on a used client did not finish an error response";
+					return false;
+				}
+				const NetHttpClient::Response second = client.GetResponse();
+				if (second.error != "client already used") {
+					*error = "second Start gave \"" + second.error + "\" instead of refusing the used client";
+					return false;
+				}
+				return true;
+			}
+
+#ifdef _WIN32
+			bool MeasureCancel(const std::string& url, std::string* error) {
+				NetHttpClient client;
+				client.Start("GET", url, {}, "", "");
+				std::this_thread::sleep_for(std::chrono::milliseconds(200));
+				const bool inFlight = client.Poll() == NetHttpClient::PollResult::Pending;
+				const auto begin = std::chrono::steady_clock::now();
+				client.Cancel();
+				const long long elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count();
+				std::cout << "[net-directory-selftest] http client cancel url=" << url << " in_flight=" << (inFlight ? "true" : "false") << " cancel_ms=" << elapsed << std::endl;
+				if (elapsed >= 500) {
+					*error = "Cancel() took " + std::to_string(elapsed) + " ms for " + url;
+					return false;
+				}
+				return inFlight;
+			}
+
+			bool TestHttpClientCancel(std::string* error) {
+				WSADATA wsaData;
+				(void)WSAStartup(MAKEWORD(2, 2), &wsaData);
+				// A listener that never accepts: the TCP handshake completes in the kernel and the
+				// TLS ClientHello sits unread, so the request is guaranteed to be stalled.
+				SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+				sockaddr_in addr{};
+				addr.sin_family = AF_INET;
+				addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+				addr.sin_port = 0;
+				if (listener == INVALID_SOCKET || bind(listener, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || listen(listener, 1) != 0) {
+					*error = "could not open the stall listener";
+					return false;
+				}
+				sockaddr_in bound{};
+				int boundSize = sizeof(bound);
+				(void)getsockname(listener, reinterpret_cast<sockaddr*>(&bound), &boundSize);
+				const std::string url = "https://127.0.0.1:" + std::to_string(ntohs(bound.sin_port)) + "/";
+				const bool stalled = MeasureCancel(url, error);
+				closesocket(listener);
+				if (error->empty() && !stalled) {
+					*error = "the silent-listener request was not in flight when Cancel was measured";
+					return false;
+				}
+				if (!error->empty()) {
+					return false;
+				}
+				// Black-hole address per the brief; on hosts where the route fails fast the
+				// request is already done and only the timing bound is asserted.
+				(void)MeasureCancel("https://10.255.255.1:8443/", error);
+				return error->empty();
+			}
+#endif
 		}
 
 		int Run() {
@@ -426,6 +503,10 @@ namespace RTE {
 			if (!TestOversizeRefused(&error)) return fail(error);
 			if (!TestCompatibilityPredicate(&error)) return fail(error);
 			if (!TestCannedSequence(&error)) return fail(error);
+			if (!TestHttpClientReuse(&error)) return fail(error);
+#ifdef _WIN32
+			if (!TestHttpClientCancel(&error)) return fail(error);
+#endif
 
 			std::cout << "[net-directory-selftest] PASS" << std::endl;
 			return 0;
