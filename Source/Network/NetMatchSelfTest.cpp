@@ -1617,6 +1617,64 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestRematchRosterDerivation(std::string* error) {
+			NetMatchConfig four = MakeConfig();
+			four.peerCount = 4;
+			four.inputDelayFrames = 1;
+			four.peerInputDelayFrames = {1, 2, 3, 4};
+			four.players = {
+			    NetMatchPlayerSlot{1, 0, false, "Host"},
+			    NetMatchPlayerSlot{2, 1, false, "Client 2"},
+			    NetMatchPlayerSlot{3, 2, false, "Client 3"},
+			    NetMatchPlayerSlot{4, 3, false, "Client 4"},
+			};
+			NetMatchConfig derived;
+			std::map<uint8_t, uint8_t> seatMap;
+			if (!NetMatchConfigUtil::DeriveRematchConfig(four, {1, 2, 4}, derived, &seatMap, error)) {
+				return false;
+			}
+			if (derived.peerCount != 3 || derived.hostPeerId != 1 || seatMap != std::map<uint8_t, uint8_t>{{1, 1}, {2, 2}, {4, 3}}) {
+				*error = "the rematch roster did not close up onto 1..3";
+				return false;
+			}
+			if (derived.players.size() != 3 || derived.players[0].peerId != 1 || derived.players[1].peerId != 2 ||
+			    derived.players[2].peerId != 3 || derived.players[2].displayName != "Client 4" || derived.players[2].team != 3) {
+				*error = "the rematch roster did not keep the survivors' seats in order";
+				return false;
+			}
+			if (std::any_of(derived.players.begin(), derived.players.end(), [](const NetMatchPlayerSlot& slot) { return slot.displayName == "Client 3"; })) {
+				*error = "the leaver kept a seat in the derived roster";
+				return false;
+			}
+			if (derived.peerInputDelayFrames != std::vector<uint16_t>{1, 2, 4}) {
+				*error = "per-peer input delays did not follow the survivors";
+				return false;
+			}
+			// The proposal a client accepts is the roster it derived; the round it just played is not.
+			if (!NetMatchRunner::RematchRostersAgree(derived, derived) || NetMatchRunner::RematchRostersAgree(four, derived)) {
+				*error = "the rematch proposal check accepted a roster the peer did not derive";
+				return false;
+			}
+			NetMatchConfig intact;
+			if (!NetMatchConfigUtil::DeriveRematchConfig(four, {1, 2, 3, 4}, intact, nullptr, error)) {
+				return false;
+			}
+			if (NetMatchConfigUtil::HashConfig(intact) != NetMatchConfigUtil::HashConfig(four) || !NetMatchRunner::RematchRostersAgree(intact, four)) {
+				*error = "an intact roster did not derive the config it played";
+				return false;
+			}
+			std::string refusal;
+			if (NetMatchConfigUtil::DeriveRematchConfig(four, {2, 4}, derived, nullptr, &refusal) || refusal.find("host") == std::string::npos) {
+				*error = "a roster without the host was derived: " + refusal;
+				return false;
+			}
+			if (NetMatchConfigUtil::DeriveRematchConfig(four, {1, 5}, derived, nullptr, &refusal) || refusal.find("outside") == std::string::npos) {
+				*error = "a roster naming an unseated peer was derived: " + refusal;
+				return false;
+			}
+			return true;
+		}
+
 		// A rematch after a peer leaves re-forms the round on the peers still connected: the match config
 		// drops to the survivor count and their lockstep ids close up, or the relaunch cannot start.
 		bool TestRematchRebuildsTheSurvivingRoster(std::string* error) {
@@ -2512,6 +2570,7 @@ namespace RTE {
 		if (!TestLobbyStateTransferRestart(&error)) return fail(error);
 		if (!TestLobbyStateTransferBackpressure(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error)) return fail(error);
+		if (!TestRematchRosterDerivation(&error)) return fail(error);
 		if (!TestRematchRebuildsTheSurvivingRoster(&error)) return fail(error);
 		if (!TestLobbyThreePeer(&error)) return fail(error);
 		if (!TestServiceDedicatedRequest(&error)) return fail(error);
