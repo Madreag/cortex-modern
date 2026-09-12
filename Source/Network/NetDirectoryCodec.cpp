@@ -77,6 +77,24 @@ namespace RTE {
 			return true;
 		}
 
+		bool ReadOptionalInt(const json& obj, const char* key, int64_t minValue, int64_t maxValue, int64_t& out, std::string& reason) {
+			const auto it = obj.find(key);
+			if (it == obj.end()) {
+				out = 0;
+				return true;
+			}
+			return ReadInt(obj, key, minValue, maxValue, out, reason);
+		}
+
+		bool ReadOptionalPlainStr(const json& obj, const char* key, std::string& out, std::string& reason, size_t maxChars) {
+			const auto it = obj.find(key);
+			if (it == obj.end()) {
+				out.clear();
+				return true;
+			}
+			return ReadStr(obj, key, out, reason, maxChars);
+		}
+
 		bool ReadOptionalStr(const json& obj, const char* key, std::optional<std::string>& out, std::string& reason) {
 			const auto it = obj.find(key);
 			if (it == obj.end()) {
@@ -358,7 +376,11 @@ namespace RTE {
 		for (const NetDirectorySessionRow& row : response.sessions) {
 			rows.push_back(SessionRowToJson(row));
 		}
-		return json{{"sessions", rows}}.dump();
+		json body = {{"sessions", rows}, {"total", response.total}};
+		if (!response.nextCursor.empty()) {
+			body["next_cursor"] = response.nextCursor;
+		}
+		return body.dump();
 	}
 
 	bool NetDirectoryCodec::DecodeListResponse(const std::string& body, NetDirectoryListResponse& out, std::string& reason) {
@@ -376,7 +398,8 @@ namespace RTE {
 			rows.push_back(std::move(row));
 		}
 		out.sessions = std::move(rows);
-		return true;
+		return ReadOptionalInt(obj, "total", 0, NetDirectoryLimits::c_MaxIntField, out.total, reason) &&
+		       ReadOptionalPlainStr(obj, "next_cursor", out.nextCursor, reason, 256);
 	}
 
 	std::string NetDirectoryCodec::EncodeSignalPost(const NetDirectorySignalPost& post) {
