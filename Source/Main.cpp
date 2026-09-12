@@ -124,6 +124,7 @@
 #include <sstream>
 #include <thread>
 #include <utility>
+#include <vector>
 
 extern "C" {
 FILE __iob_func[3] = {*stdin, *stdout, *stderr};
@@ -185,6 +186,44 @@ static bool s_netLockstep = false;
 static bool s_netMatch = false;
 static bool s_netMatchServiceE2E = false;
 static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
+// Named host-issued spawn: -net-match-e2e-spawn Class:Preset:Module:x:y:tick[:team]
+struct E2eNamedSpawn {
+	std::string className;
+	std::string preset;
+	std::string module;
+	float x = 0.0F;
+	float y = 0.0F;
+	uint64_t tick = 50;
+	int32_t team = 0;
+};
+static std::vector<E2eNamedSpawn> s_e2eNamedSpawns;
+
+static bool ParseE2eSpawnSpec(const std::string& spec, E2eNamedSpawn& out) {
+	std::vector<std::string> parts;
+	std::string cur;
+	for (char c: spec) {
+		if (c == ':') {
+			parts.push_back(cur);
+			cur.clear();
+		} else {
+			cur += c;
+		}
+	}
+	parts.push_back(cur);
+	if (parts.size() < 6 || parts[0].empty() || parts[1].empty() || parts[2].empty()) {
+		return false;
+	}
+	out.className = parts[0];
+	out.preset = parts[1];
+	out.module = parts[2];
+	out.x = std::strtof(parts[3].c_str(), nullptr);
+	out.y = std::strtof(parts[4].c_str(), nullptr);
+	out.tick = static_cast<uint64_t>(std::strtoull(parts[5].c_str(), nullptr, 10));
+	if (parts.size() >= 7) {
+		out.team = static_cast<int32_t>(std::strtol(parts[6].c_str(), nullptr, 10));
+	}
+	return true;
+}
 static std::string s_netLockstepReportPath;
 // A capped stop holds the link while the relay host hands over what it still owes; a client one
 // input-delay behind needs those forwards to finish its own last tick.
@@ -674,6 +713,16 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-net-match-input-delay") {
 			const unsigned long parsedDelay = std::strtoul(argValue[++i], nullptr, 10);
 			s_netLockstepInputDelay = static_cast<uint16_t>(std::min<unsigned long>(parsedDelay, NetLockstepCodec::c_MaxInputDelayFrames));
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-e2e-spawn") {
+			E2eNamedSpawn spec;
+			if (!ParseE2eSpawnSpec(argValue[++i], spec)) {
+				std::cerr << "[net-match-e2e-spawn] expected Class:Preset:Module:x:y:tick[:team]" << std::endl;
+				return false;
+			}
+			s_e2eNamedSpawns.push_back(spec);
 			continue;
 		}
 
@@ -2440,6 +2489,12 @@ void RunGameLoop() {
 				// E2E control: host-issued spawn command at tick 50; both peers must clone the identical actor.
 				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestSpawnCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1000.0F, 200.0F, 0}});
+				}
+				for (const E2eNamedSpawn& spec: s_e2eNamedSpawns) {
+					if (s_netMatchServiceE2E && simTick == spec.tick) {
+						std::cout << "[net-match-service-e2e] spawn " << spec.className << " " << spec.preset << " at " << spec.x << "," << spec.y << " tick " << spec.tick << std::endl;
+						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSpawnActor{spec.className, spec.preset, spec.module, spec.x, spec.y, spec.team}});
+					}
 				}
 				// E2E control: host-issued delivery at tick 50; both peers must build the identical craft, hold, and flight.
 				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestDeliverCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {

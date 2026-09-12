@@ -1011,6 +1011,9 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 				}
 				out << std::defaultfloat << "]";
 			}
+			if (const ADoor* door = dynamic_cast<const ADoor*>(mo)) {
+				out << " door=" << static_cast<int>(door->GetDoorState());
+			}
 			if (const ACraft* craft = dynamic_cast<const ACraft*>(mo)) {
 				out << " hatch=" << static_cast<int>(craft->GetHatchState()) << " deathms=" << craft->GetDeathTimerElapsedSimMS() << std::hexfloat << " hatchms=" << craft->GetHatchTimerElapsedSimMS() << " exitms=" << craft->GetExitTimerElapsedSimMS();
 				if (const ACDropShip* dropShip = dynamic_cast<const ACDropShip*>(craft)) {
