@@ -1016,6 +1016,52 @@ namespace RTE {
 				return true;
 			}
 
+			// An ICE row is reached through its session id, so it carries no address to be refused for.
+			bool TestMergeAcceptsIceRows(std::string* error) {
+				const NetDirectoryLocalIdentity local = SampleLocal();
+				NetDirectorySessionRow ice = SampleRow();
+				ice.joinMode = "ice";
+				ice.listenAddrs.clear();
+				ice.listenPort = 0;
+				NetDirectorySessionRow either = SampleRow();
+				either.joinMode = "either";
+				NetDirectorySessionRow eitherNoAddr = SampleRow();
+				eitherNoAddr.joinMode = "either";
+				eitherNoAddr.listenAddrs.clear();
+				eitherNoAddr.listenPort = 0;
+				NetDirectorySessionRow ip = SampleRow();
+				ip.joinMode = "ip";
+				ip.listenAddrs.clear();
+				ip.listenPort = 0;
+				NetDirectorySessionRow iceFull = SampleRow();
+				iceFull.joinMode = "ice";
+				iceFull.listenAddrs.clear();
+				iceFull.listenPort = 0;
+				iceFull.seatsFree = 0;
+
+				const std::vector<NetDirectoryClient::GameRow> merged = NetDirectoryClient::MergeGameLists({}, {ice, either, eitherNoAddr, ip, iceFull}, local);
+				if (merged.size() != 5) {
+					*error = "ice merge: list size " + std::to_string(merged.size());
+					return false;
+				}
+				const char* names[] = {"ice", "either", "either without an address", "ip without an address", "full ice"};
+				const bool wantJoinable[] = {true, true, true, false, false};
+				const char* wantReason[] = {"", "", "", "address", "full"};
+				for (size_t i = 0; i < merged.size(); ++i) {
+					if (merged[i].joinable != wantJoinable[i] || merged[i].reason != wantReason[i]) {
+						*error = std::string("ice merge: the ") + names[i] + " row came back joinable=" + (merged[i].joinable ? "1" : "0") +
+						         " reason=\"" + merged[i].reason + "\", expected joinable=" + (wantJoinable[i] ? "1" : "0") + " reason=\"" + wantReason[i] + "\"";
+						return false;
+					}
+					if (merged[i].sessionId != SampleRow().sessionId) {
+						*error = std::string("ice merge: the ") + names[i] + " row lost its session id";
+						return false;
+					}
+				}
+				std::cout << "[net-directory-selftest] ice rows: join_mode ice/either is joinable without an address, ip without one still refuses \"address\", and a full ice row still refuses \"full\"" << std::endl;
+				return true;
+			}
+
 			bool TestSignalOrderingAndCursor(std::string* error) {
 				ScriptedChannel s(false);
 				const std::string me = s.channel.GetLocalPeer();
@@ -1496,6 +1542,7 @@ namespace RTE {
 			if (!TestHeartbeat429HonorsRetryAfter(&error)) return fail(error);
 			if (!TestTransportErrorBackoff(&error)) return fail(error);
 			if (!TestMergeGameLists(&error)) return fail(error);
+			if (!TestMergeAcceptsIceRows(&error)) return fail(error);
 			if (!TestSignalOrderingAndCursor(&error)) return fail(error);
 			if (!TestSignalCursorWaitsForSink(&error)) return fail(error);
 			if (!TestSignalLongPoll(&error)) return fail(error);
