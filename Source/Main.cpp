@@ -70,6 +70,8 @@
 #include "GnsTransport.h"
 #include "NetAdmissionSelfTest.h"
 #include "NetAuthSelfTest.h"
+#include "NetDirectoryCodec.h"
+#include "NetHttpClient.h"
 #include "NetIdentity.h"
 #include "NetIdentitySelfTest.h"
 #include "NetLanDiscovery.h"
@@ -170,6 +172,10 @@ static int s_cliNumLuaStatesOverride = -1;
 
 // Post-module-load diagnostic. Empty means disabled.
 static std::string s_netIdentityDumpPath;
+
+// Headless directory probe: register -> heartbeat -> list -> delete -> list, then exit.
+static std::string s_netDirectoryProbeUrl;
+static std::string s_netDirectoryProbeCertSha256;
 
 // Debug-only transport/session smoke. This exits before gameplay starts.
 static bool s_netHost = false;
@@ -575,6 +581,14 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-identity-dump") {
 			s_netIdentityDumpPath = argValue[++i];
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-directory-probe") {
+			s_netDirectoryProbeUrl = argValue[++i];
+			if (i + 1 < argCount && argValue[i + 1][0] != '-') {
+				s_netDirectoryProbeCertSha256 = argValue[++i];
+			}
 			continue;
 		}
 
@@ -4179,6 +4193,140 @@ int RunNetMatchServiceE2E() {
 }
 
 /// <summary>
+/// The headless directory probe: register -> heartbeat -> list -> delete -> list against a live
+/// session-directory service. Returns 0 only when every step succeeded.
+/// </summary>
+int RunNetDirectoryProbe(const std::string& baseUrlArg, const std::string& certPin) {
+	std::string baseUrl = baseUrlArg;
+	while (!baseUrl.empty() && baseUrl.back() == '/') {
+		baseUrl.pop_back();
+	}
+	const std::string installKey = g_SettingsMan.GetSessionDirectoryInstallKey();
+	auto request = [&](const std::string& method, const std::string& path, const std::string& body, NetHttpClient::Response& out) {
+		NetHttpClient client;
+		const std::vector<std::pair<std::string, std::string>> headers = {
+			{"X-Install-Key", installKey},
+			{"Content-Type", "application/json"},
+		};
+		client.Start(method, baseUrl + path, headers, body, certPin);
+		while (client.Poll() == NetHttpClient::PollResult::Pending) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		}
+		out = client.GetResponse();
+		std::cout << "[net-directory-probe] " << method << " " << path << " -> status=" << out.statusCode;
+		if (!out.error.empty()) {
+			std::cout << " error=" << out.error;
+		}
+		std::cout << " body=" << out.body << std::endl;
+		return out.error.empty();
+	};
+
+	std::string reason;
+	NetIdentityManifest manifest;
+	NetIdentityBuildOptions identityOptions;
+	identityOptions.buildId = "stage2-p2d-local";
+	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+	if (!NetIdentity::BuildCurrentManifest(manifest, &reason, identityOptions)) {
+		std::cerr << "[net-directory-probe] identity manifest failed: " << reason << std::endl;
+		return 1;
+	}
+
+	NetDirectoryRegisterRequest row;
+	row.name = "probe";
+	row.activity = "probe";
+	row.scene = "probe";
+	row.mode = "probe";
+	row.peerCount = 1;
+	row.seatsFree = 1;
+	row.gameVersion = manifest.gameVersion;
+	row.buildId = manifest.buildId;
+	row.networkProtocolVersion = manifest.networkProtocolVersion;
+	row.lockstepCodecVersion = manifest.deterministicConfig.lockstepCodecVersion;
+	row.controllerFrameVersion = manifest.controllerFrameVersion;
+	row.matchConfigHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(NetMatchConfigUtil::MakeDefault(0x5354414745325032ULL)));
+	row.sessionIdentityHash = NetIdentity::HashHex(manifest.sessionIdentityHash);
+	row.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
+	row.listenPort = 41010;
+	row.listenAddrs = {"127.0.0.1"};
+	row.joinMode = "ip";
+
+	NetDirectoryLocalIdentity local;
+	local.networkProtocolVersion = row.networkProtocolVersion;
+	local.lockstepCodecVersion = row.lockstepCodecVersion;
+	local.controllerFrameVersion = row.controllerFrameVersion;
+	local.sessionIdentityHash = row.sessionIdentityHash;
+	local.moduleManifestHash = row.moduleManifestHash;
+
+	NetHttpClient::Response resp;
+	if (!request("POST", "/v1/sessions", NetDirectoryCodec::EncodeRegisterRequest(row), resp)) {
+		return 1;
+	}
+	NetDirectoryRegisterResponse created;
+	if (resp.statusCode != 200 || !NetDirectoryCodec::DecodeRegisterResponse(resp.body, created, reason)) {
+		std::cerr << "[net-directory-probe] register refused: status=" << resp.statusCode << " reason=" << reason << std::endl;
+		return 1;
+	}
+	const std::string sessionPath = "/v1/sessions/" + created.sessionId;
+
+	NetDirectoryHeartbeatRequest beat;
+	beat.token = created.token;
+	beat.peerCount = row.peerCount;
+	beat.seatsFree = row.seatsFree;
+	if (!request("POST", sessionPath + "/heartbeat", NetDirectoryCodec::EncodeHeartbeatRequest(beat), resp) || resp.statusCode != 200) {
+		return 1;
+	}
+
+	if (!request("GET", "/v1/sessions", "", resp) || resp.statusCode != 200) {
+		return 1;
+	}
+	NetDirectoryListResponse listed;
+	if (!NetDirectoryCodec::DecodeListResponse(resp.body, listed, reason)) {
+		std::cerr << "[net-directory-probe] list decode failed: " << reason << std::endl;
+		return 1;
+	}
+	const NetDirectorySessionRow* mine = nullptr;
+	for (const NetDirectorySessionRow& listedRow : listed.sessions) {
+		if (listedRow.sessionId == created.sessionId) {
+			mine = &listedRow;
+		}
+	}
+	if (mine == nullptr) {
+		std::cerr << "[net-directory-probe] registered row not listed" << std::endl;
+		return 1;
+	}
+	std::string joinReason;
+	const bool joinable = NetDirectoryCodec::IsJoinable(*mine, local, &joinReason);
+	std::cout << "[net-directory-probe] listed row joinable=" << (joinable ? "true" : "false") << (joinReason.empty() ? "" : " reason=" + joinReason) << std::endl;
+	if (!joinable) {
+		return 1;
+	}
+
+	NetDirectoryDeleteRequest del;
+	del.token = created.token;
+	if (!request("DELETE", sessionPath, NetDirectoryCodec::EncodeDeleteRequest(del), resp) || resp.statusCode != 200) {
+		return 1;
+	}
+
+	if (!request("GET", "/v1/sessions", "", resp) || resp.statusCode != 200) {
+		return 1;
+	}
+	NetDirectoryListResponse after;
+	if (!NetDirectoryCodec::DecodeListResponse(resp.body, after, reason)) {
+		std::cerr << "[net-directory-probe] list decode failed: " << reason << std::endl;
+		return 1;
+	}
+	for (const NetDirectorySessionRow& listedRow : after.sessions) {
+		if (listedRow.sessionId == created.sessionId) {
+			std::cerr << "[net-directory-probe] row still listed after delete" << std::endl;
+			return 1;
+		}
+	}
+	std::cout << "[net-directory-probe] deleted row absent from the list" << std::endl;
+	std::cout << "[net-directory-probe] PASS" << std::endl;
+	return 0;
+}
+
+/// <summary>
 /// Implementation of the main function.
 /// </summary>
 int main(int argc, char** argv) {
@@ -4215,6 +4363,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-reconnect-session-selftest") {
 			return NetReconnectSessionSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-directory-selftest") {
+			return NetDirectorySelfTest::Run();
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-discovery-selftest") {
 			// A beacon and a browser over the loopback broadcast: the browser must list the host.
@@ -4280,7 +4431,7 @@ int main(int argc, char** argv) {
 				continue;
 			}
 			const std::string arg = argv[i];
-			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e") {
+			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e" || arg == "-net-directory-probe" || arg == "-net-directory-selftest") {
 				headless = true;
 			} else if (arg == "-headed") {
 				headless = false;
@@ -4370,6 +4521,11 @@ int main(int argc, char** argv) {
 		} else {
 			std::cerr << "[net-identity-dump] failed: " << error << std::endl;
 		}
+		return ShutDown(exitCode);
+	}
+
+	if (!s_netDirectoryProbeUrl.empty()) {
+		const int exitCode = RunNetDirectoryProbe(s_netDirectoryProbeUrl, s_netDirectoryProbeCertSha256);
 		return ShutDown(exitCode);
 	}
 

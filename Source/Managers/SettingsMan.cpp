@@ -11,6 +11,7 @@
 #include "System.h"
 
 #include <map>
+#include <random>
 
 using namespace RTE;
 
@@ -52,6 +53,9 @@ void SettingsMan::Clear() {
 	m_PathFinderGridNodeSize = SCENEGRIDSIZE;
 	m_AIUpdateInterval = 2;
 	m_NetworkInputDelayFrames = 0;
+	m_SessionDirectoryUrl.clear();
+	m_SessionDirectoryInstallKey.clear();
+	m_SessionDirectoryCertSha256.clear();
 	m_LocalPrediction = true;
 	m_LocalPredictionMaxTicks = 20;
 	m_NumberOfLuaStatesOverride = -1;
@@ -91,10 +95,13 @@ int SettingsMan::Initialize() {
 		m_SettingsNeedOverwrite = true;
 
 		Reader newSettingsReader(m_SettingsPath, false, nullptr, false, true);
-		return Serializable::Create(newSettingsReader);
+		const int createResult = Serializable::Create(newSettingsReader);
+		EnsureSessionDirectoryInstallKey();
+		return createResult;
 	}
 
 	int failureCode = Serializable::Create(settingsReader);
+	EnsureSessionDirectoryInstallKey();
 
 	if (GetAnyExperimentalSettingsEnabled()) {
 		// Show a message box to annoy people as much as possible while they're using experimental settings, so they can't leave it on accidentally
@@ -102,6 +109,20 @@ int SettingsMan::Initialize() {
 	}
 
 	return failureCode;
+}
+
+void SettingsMan::EnsureSessionDirectoryInstallKey() {
+	if (!m_SessionDirectoryInstallKey.empty()) {
+		return;
+	}
+	// A rate-limit identity, not a sim draw: non-sim entropy so lockstep runs stay byte-identical.
+	static const char hex[] = "0123456789abcdef";
+	std::random_device device;
+	m_SessionDirectoryInstallKey.resize(32);
+	for (char& ch : m_SessionDirectoryInstallKey) {
+		ch = hex[device() & 0x0F];
+	}
+	m_SettingsNeedOverwrite = true;
 }
 
 void SettingsMan::UpdateSettingsFile() const {
@@ -183,6 +204,9 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("PathFinderGridNodeSize", { reader >> m_PathFinderGridNodeSize; });
 	MatchProperty("AIUpdateInterval", { reader >> m_AIUpdateInterval; });
 	MatchProperty("NetworkInputDelayFrames", { reader >> m_NetworkInputDelayFrames; });
+	MatchProperty("SessionDirectoryUrl", { reader >> m_SessionDirectoryUrl; });
+	MatchProperty("SessionDirectoryInstallKey", { reader >> m_SessionDirectoryInstallKey; });
+	MatchProperty("SessionDirectoryCertSha256", { reader >> m_SessionDirectoryCertSha256; });
 	MatchProperty("LocalPrediction", { reader >> m_LocalPrediction; });
 	MatchProperty("LocalPredictionMaxTicks", { reader >> m_LocalPredictionMaxTicks; });
 	MatchProperty("NumberOfLuaStatesOverride", { reader >> m_NumberOfLuaStatesOverride; });
@@ -313,6 +337,9 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("PathFinderGridNodeSize", m_PathFinderGridNodeSize);
 	writer.NewPropertyWithValue("AIUpdateInterval", m_AIUpdateInterval);
 	writer.NewPropertyWithValue("NetworkInputDelayFrames", m_NetworkInputDelayFrames);
+	writer.NewPropertyWithValue("SessionDirectoryUrl", m_SessionDirectoryUrl);
+	writer.NewPropertyWithValue("SessionDirectoryInstallKey", m_SessionDirectoryInstallKey);
+	writer.NewPropertyWithValue("SessionDirectoryCertSha256", m_SessionDirectoryCertSha256);
 	writer.NewPropertyWithValue("LocalPrediction", m_LocalPrediction);
 	writer.NewPropertyWithValue("LocalPredictionMaxTicks", m_LocalPredictionMaxTicks);
 	writer.NewPropertyWithValue("NumberOfLuaStatesOverride", m_NumberOfLuaStatesOverride);
