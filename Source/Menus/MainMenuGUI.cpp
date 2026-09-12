@@ -850,6 +850,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		label->SetText(row);
 		label->SetVisible(true);
 	}
+	static std::string s_shareAddress;
+	static bool s_shareResolved = false;
 	if (snapshot.isHost && snapshot.inLobby && !snapshot.remoteReady) {
 		size_t connectedCount = 0;
 		for (const NetLobbyMember& member: snapshot.members) {
@@ -857,18 +859,24 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 				++connectedCount;
 			}
 		}
-		if (snapshot.members.size() < 2) {
-			// Hand the host the address to share while the room is empty.
-			static const std::string s_localAddress = NetLanDiscovery::GetPrimaryLocalAddress();
-			m_MultiplayerStatusLabel->SetText(s_localAddress.empty()
+		if (connectedCount < 2) {
+			if (!s_shareResolved) {
+				s_shareAddress = NetLanDiscovery::GetPrimaryLocalAddress();
+				s_shareResolved = true;
+			}
+			m_MultiplayerStatusLabel->SetText(s_shareAddress.empty()
 			                                      ? "Waiting for a player to join..."
-			                                      : "Waiting for a player to join... share " + s_localAddress + ":" + m_MultiplayerHostPortTextBox->GetText());
-		} else if (connectedCount < snapshot.members.size()) {
-			m_MultiplayerStatusLabel->SetText("Waiting for players to join... (" + std::to_string(connectedCount) + "/" + std::to_string(snapshot.members.size()) + ")");
+			                                      : "Waiting for a player to join... share " + s_shareAddress + ":" + m_MultiplayerHostPortTextBox->GetText());
 		} else {
-			m_MultiplayerStatusLabel->SetText("Waiting for everyone to ready up...");
+			s_shareResolved = false;
+			if (connectedCount < snapshot.members.size()) {
+				m_MultiplayerStatusLabel->SetText("Waiting for players to join... (" + std::to_string(connectedCount) + "/" + std::to_string(snapshot.members.size()) + ")");
+			} else {
+				m_MultiplayerStatusLabel->SetText("Waiting for everyone to ready up...");
+			}
 		}
 	} else {
+		s_shareResolved = false;
 		m_MultiplayerStatusLabel->SetText(snapshot.statusText);
 	}
 	m_MultiplayerErrorLabel->SetText(snapshot.errorText);
@@ -1005,6 +1013,9 @@ std::string MainMenuGUI::AutomationActiveScreenName() const {
 }
 
 std::string MainMenuGUI::AutomationMultiplayerStatus() const {
+	if (m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby && m_MultiplayerStatusLabel) {
+		return m_MultiplayerStatusLabel->GetText();
+	}
 	return g_NetMatchService.GetStatusText();
 }
 
