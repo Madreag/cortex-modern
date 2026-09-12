@@ -97,6 +97,7 @@
 #include "FaultInjection.h"
 #include "LocalPrediction.h"
 #include "PreviewEventLedger.h"
+#include "PreviewScriptSelfTest.h"
 #include "TerrainLayerSnapshot.h"
 #include "DeterminismCheck.h"
 #include "MetricsCollector.h"
@@ -945,6 +946,12 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			}
 			s_eventLedgerPressTick = std::strtoll(text.c_str(), nullptr, 10);
 			continue;
+		}
+		if (currentArg == "-local-prediction-subtree-emitter") {
+			PreviewScriptSelfTest::SetSubtreeProbe(true);
+		}
+		if (currentArg == "-local-prediction-shared-slot") {
+			PreviewScriptSelfTest::SetSharedSlot(true);
 		}
 		if (!lastArg && currentArg == "-local-prediction-invariance") {
 			// T:d1,d2,...:r1,r2,... — at tick T run previews of each depth, each repeat count, and prove the canonical world untouched.
@@ -2026,6 +2033,9 @@ static void CheckPreviewEventLedgerSelfTest() {
 static void CheckRequiredProbesCompleted() {
 	const long long stoppedAt = g_TimerMan.GetSimUpdateCount();
 	CheckPreviewEventLedgerSelfTest();
+	if (PreviewScriptSelfTest::SubtreeProbeEnabled() && !PreviewScriptSelfTest::CheckSubtreeEmitter(s_eventLedgerPressTick)) {
+		s_netReplayExitCode = 5;
+	}
 	if (s_lpInvarianceTick > 0 && s_lpInvarianceFailures < 0) {
 		std::cout << "[lpinv] FAIL: invariance test at tick " << s_lpInvarianceTick << " never executed (the run stopped at tick " << stoppedAt << ")" << std::endl;
 		g_MetricsCollector.RecordString("lpinv_result", "not_run");

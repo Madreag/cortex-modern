@@ -1024,6 +1024,9 @@
     <ClCompile Include="Source\Managers\PreviewEventLedger.cpp">
       <Filter>Managers</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Managers\PreviewScriptSelfTest.cpp">
+      <Filter>Managers</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Managers\TerrainLayerSnapshot.cpp">
       <Filter>Managers</Filter>
     </ClCompile>

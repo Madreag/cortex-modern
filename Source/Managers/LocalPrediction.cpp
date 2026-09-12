@@ -14,8 +14,10 @@
 #include "LuaMan.h"
 #include "MOSRotating.h"
 #include "MovableMan.h"
+#include "OwnedMovableObjects.h"
 #include "PostProcessMan.h"
 #include "PreviewEventLedger.h"
+#include "PreviewScriptSelfTest.h"
 #include "RTETools.h"
 #include "ScenarioRunner.h"
 #include "SceneMan.h"
@@ -27,6 +29,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <unordered_set>
 
 namespace RTE {
 
@@ -59,6 +62,20 @@ namespace RTE {
 	static void Trace(const char* what) {
 		if (TraceEnabled()) {
 			std::cout << "[localpred] " << what << " tick=" << g_TimerMan.GetSimUpdateCount() << std::endl;
+		}
+	}
+
+	static void CollectPreviewedEmitterUIDs(const MovableObject* root, std::vector<uint64_t>& emitters) {
+		if (!root) {
+			return;
+		}
+		std::unordered_set<const Entity*> visited;
+		std::unordered_set<const MovableObject*> objects;
+		CollectOwnedMovableObjects(root, visited, objects);
+		for (const MovableObject* mo: objects) {
+			if (mo && mo->GetUniqueID() > 0) {
+				emitters.push_back(static_cast<uint64_t>(mo->GetUniqueID()));
+			}
 		}
 	}
 
@@ -143,11 +160,14 @@ namespace RTE {
 		AudioMan::SetPlaybackSuppressed(true);
 		PostProcessMan::SetRegistrationSuppressed(true);
 		std::vector<uint64_t> emitters;
-		emitters.reserve(targets.size());
+		emitters.reserve(targets.size() * 8);
 		for (const Preview& preview: targets) {
-			emitters.push_back(static_cast<uint64_t>(preview.original->GetUniqueID()));
+			CollectPreviewedEmitterUIDs(preview.original, emitters);
 		}
 		PreviewEventLedger::Arm(static_cast<uint64_t>(simCount), soundIdentityCursor, std::move(emitters));
+		if (PreviewScriptSelfTest::SubtreeProbeEnabled() && !targets.empty()) {
+			PreviewScriptSelfTest::ProbeArmedEmitters(targets.front().original);
+		}
 		g_MovableMan.BeginSpeculation();
 		{
 			MovableObject::FaithfulCloneScope scope(false);
@@ -228,9 +248,9 @@ namespace RTE {
 		std::vector<MovableObject*> taken;
 		g_MovableMan.EndSpeculation(&taken);
 		std::vector<uint64_t> takenEmitters;
-		takenEmitters.reserve(taken.size());
+		takenEmitters.reserve(taken.size() * 8);
 		for (const MovableObject* resident: taken) {
-			takenEmitters.push_back(static_cast<uint64_t>(resident->GetRootParent()->GetUniqueID()));
+			CollectPreviewedEmitterUIDs(resident, takenEmitters);
 		}
 		PreviewEventLedger::AddPreviewedEmitters(takenEmitters);
 		Trace("discarded");
