@@ -3565,6 +3565,82 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestFinishMatchDrainsFencedDisconnect(std::string* error) {
+		const uint16_t port = 43229;
+		LoopbackTransport hostTransport, clientTransport;
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_State = NetMatchServiceState::Running;
+		service.m_Runner = std::make_unique<NetMatchRunner>();
+		service.m_Session = std::make_unique<NetSession>();
+		NetSession client;
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 1;
+		hostConfig.heartbeatIntervalMs = 25;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "finish-match-fence-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientConfig = hostConfig;
+		clientConfig.displayName = "Client";
+		++clientConfig.localNonce;
+		if (!service.m_Session->StartHost(hostTransport, hostConfig, error) ||
+		    !client.StartClient(clientTransport, "loopback", clientConfig, error)) {
+			return false;
+		}
+		for (uint64_t now = 0; now <= 2000 && service.m_Session->GetReadyPeerCount() != 1; now += 10) {
+			service.m_Session->Tick(now);
+			client.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+		}
+		if (service.m_Session->GetReadyPeerCount() != 1) {
+			*error = "the FinishMatch fence fixture never seated the client on the host session";
+			return false;
+		}
+		const NetPeerId fencedTransportPeer = service.m_Session->GetReadyPeers().front().transportPeerId;
+		service.m_Session->SetReconnectHost(&service.m_ReconnectHost);
+		service.m_ReconnectHost.m_Fences.push_back({fencedTransportPeer, 0, 1});
+
+		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+		NetLockstepCoordinator& coordinator = *service.m_Coordinator;
+		coordinator.m_RelayHost = true;
+		coordinator.m_State = NetLockstepState::Running;
+		coordinator.m_RemotePeerIds = {2};
+		coordinator.m_RemoteTransports[2] = fencedTransportPeer;
+		coordinator.SetSeatStateSource(&FencedSeatState, nullptr);
+		service.AttachCoordinatorSessionSink();
+		const NetTransportEvent closed{NetTransportEventType::PeerDisconnected, fencedTransportPeer,
+		                               NetTransportLane::ControlReliable, {}, "seat reclaimed by a newer connection"};
+		coordinator.HandleEvent(closed, 0);
+		if (service.m_PendingSessionEvents.size() != 1) {
+			*error = "the coordinator did not hand the fenced disconnect to the service queue";
+			return false;
+		}
+
+		service.FinishMatch("match over");
+		if (service.GetState() != NetMatchServiceState::Completed) {
+			*error = "FinishMatch did not complete the match";
+			return false;
+		}
+		if (service.m_Session->GetStats().fencedDisconnects != 1) {
+			*error = "FinishMatch dropped the fenced disconnect; fenced_disconnects=" +
+			         std::to_string(service.m_Session->GetStats().fencedDisconnects);
+			return false;
+		}
+		if (!service.m_PendingSessionEvents.empty()) {
+			*error = "FinishMatch left the handover queue filled";
+			return false;
+		}
+		std::cout << "PASS finish_match_drains_fenced_disconnect fenced_disconnects=1" << std::endl;
+		return true;
+	}
+
 	bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error) {
 		LoopbackTransport hostTransport;
 		LoopbackTransport clientTransport;
@@ -3948,6 +4024,7 @@ namespace RTE {
 		if (!TestRosterTransitionsRecordHoldThenPresent(&error)) return fail(error);
 		if (!TestRosterBannerNamesThePlayerOnce(&error)) return fail(error);
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
+		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
 
 		std::cout << "[net-match-selftest] PASS" << std::endl;
 		return 0;

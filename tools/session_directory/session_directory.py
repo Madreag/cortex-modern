@@ -569,7 +569,16 @@ def configure_logging(log_file: Optional[Path]) -> None:
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Self-hosted session directory")
     parser.add_argument("--bind", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8443)
+    # 0 = ephemeral; the bound port is printed at start. Game-port fixture
+    # defaults live above 47600, each different:
+    #   test_lobby_rejection.py            47611
+    #   test_lobby_lifecycle.py            47612
+    #   test_lobby_input_delay.py          47613
+    #   test_hold_panel_probe.py           47614
+    #   test_reconnect_menu_recovery.py    47615
+    #   test_reconnect_startup_offer.py    47616
+    #   test_substitute_application.py     47617
+    parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--cert", type=Path, default=None)
     parser.add_argument("--key", type=Path, default=None)
     parser.add_argument("--insecure-http", action="store_true")
@@ -908,6 +917,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         key=args.key if use_tls else None,
         log_file=args.log_file,
     )
+    print(f"session_directory listening on {args.bind}:{server.port}", flush=True)
     try:
         server.thread.join()
     except KeyboardInterrupt:

@@ -47,7 +47,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--port", type=int, default=44288)
+    parser.add_argument("--port", type=int, default=47615)
     parser.add_argument("--play-seconds", type=float, default=8.0)
     parser.add_argument("--console-check", action="store_true",
                         help="also assert the drop left the console closed (G2)")

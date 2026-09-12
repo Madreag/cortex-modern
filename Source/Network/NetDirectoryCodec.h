@@ -11,6 +11,9 @@ namespace RTE {
 	// Field limits mirrored from tools/session_directory/session_directory.py (the API of record).
 	namespace NetDirectoryLimits {
 		inline constexpr size_t c_MaxStringChars = 64;        // MAX_STR
+		inline constexpr size_t c_MaxPeerChars = 64;          // peer string cap (not 7+MAX_STR)
+		inline constexpr size_t c_MaxListRows = 4096;         // MAX_ROWS
+		inline constexpr size_t c_MaxSignalRows = 256;        // MAX_QUEUE
 		inline constexpr size_t c_MaxListenAddrs = 8;         // MAX_ARR
 		inline constexpr size_t c_MaxBodyBytes = 128 * 1024;  // MAX_BODY
 		inline constexpr size_t c_MaxPayloadB64Chars = 87384; // 64 KiB decoded payload, base64 on the wire

@@ -20,7 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--port", type=int, default=44290)
+    parser.add_argument("--port", type=int, default=47616)
     parser.add_argument("--play-seconds", type=float, default=8.0)
     options = parser.parse_args()
     root = options.out.resolve()
