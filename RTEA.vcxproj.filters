@@ -475,6 +475,9 @@
     <ClInclude Include="Source\Network\GnsP2PSelfTest.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\GnsSignaling.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\GnsTransport.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -845,6 +848,9 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\GnsP2PSelfTest.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\GnsSignaling.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\GnsTransport.cpp">
