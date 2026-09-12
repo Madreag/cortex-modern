@@ -1286,8 +1286,12 @@ void Actor::SendDeferredWaypoints() {
 		if (!target) {
 			continue;
 		}
+		if (!ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled())) {
+			continue;
+		}
 		const uint8_t op = waypoint.op == DeferredWaypoint::Scene ? NetGameAIOrder::SceneWaypoint : (waypoint.op == DeferredWaypoint::MOTarget ? NetGameAIOrder::MOWaypoint : NetGameAIOrder::ClearWaypoints);
-		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{targetUID, m_Team, op, waypoint.x, waypoint.y, waypoint.targetUID}});
+		const int64_t writerUID = (targetUID != static_cast<int64_t>(GetUniqueID())) ? static_cast<int64_t>(GetUniqueID()) : 0;
+		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{targetUID, m_Team, op, waypoint.x, waypoint.y, waypoint.targetUID, writerUID}});
 		target->m_InflightWaypoints.push_back(waypoint);
 	}
 }
@@ -1718,8 +1722,7 @@ void Actor::UpdateMovePath() {
 
 				// We loaded the waypoint, no need to keep it. The queue is sim state, so under lockstep the owner drops it through the wire.
 				if (lockstep) {
-					if (ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled()) &&
-					    ScenarioRunner::IsLockstepTeamCommandSender(m_Team, ScenarioRunner::GetLockstepLocalPeerId())) {
+					if (ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled())) {
 						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(GetUniqueID()), m_Team, NetGameAIOrder::PopWaypoint, waypoint.first.m_X, waypoint.first.m_Y, 0}});
 					}
 					++m_WaypointCursor;
