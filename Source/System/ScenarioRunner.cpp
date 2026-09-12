@@ -588,12 +588,9 @@ namespace RTE {
 				if (error) *error = "controller log seed metadata mismatch.";
 				return false;
 			}
-			if (!s_Args.controllerLogAllowNlsMismatch &&
-			    s_ControllerReplayLog->metadata.numLuaStates >= 0 &&
-			    s_Args.numLuaStates >= 0 &&
-			    s_ControllerReplayLog->metadata.numLuaStates != s_Args.numLuaStates) {
-				if (error) *error = "controller log num-lua-states mismatch.";
-				return false;
+			if (s_ControllerReplayLog->metadata.numLuaStates >= 0 && s_Args.numLuaStates >= 0 && s_ControllerReplayLog->metadata.numLuaStates != s_Args.numLuaStates) {
+				// The threaded Lua state count does not change the sim, so a recording replays at any count.
+				std::cout << "[scenario] controller log recorded " << s_ControllerReplayLog->metadata.numLuaStates << " lua states, running " << s_Args.numLuaStates << std::endl;
 			}
 			if (!s_ControllerReplayLog->metadata.simConfig.empty() && s_ControllerReplayLog->metadata.simConfig != GatherSimConfig()) {
 				if (error) *error = "controller log sim config mismatch.";
