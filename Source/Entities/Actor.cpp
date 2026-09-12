@@ -987,6 +987,15 @@ void Actor::HandlePendingPieCommand() {
 	}
 }
 
+bool Actor::HandlePieCommand(PieSliceType pieSliceType) {
+	// A non-commander's squad selection puts the ordering seat through a controller-disabled unit
+	// pick; the synced slice lands on every peer here, so hold the wire from re-enabling it meanwhile.
+	if (pieSliceType == PieSliceType::FormSquad && !HasSquad() && ScenarioRunner::IsLockstepControllerSyncActive()) {
+		m_Controller.HoldDisabledForSyncedOrder(static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
+	}
+	return false;
+}
+
 void Actor::FormSquad(const Vector& selectionEdge) {
 	SetAIMode(AIMODE_SENTRY);
 	const float sqrRadius = g_SceneMan.ShortestDistance(selectionEdge, m_Pos, true).GetSqrMagnitude();
