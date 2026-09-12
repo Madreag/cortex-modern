@@ -4,6 +4,7 @@
 #include "NetLanDiscovery.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchRunner.h"
+#include "NetMuxTransport.h"
 #include "NetReconnectSession.h"
 #include "NetReconnectTicketStore.h"
 #include "NetReconnectUx.h"
@@ -27,6 +28,7 @@
 namespace RTE {
 
 	class Activity;
+	class GnsDirectorySignalDispatcher;
 	class GnsTransport;
 
 	enum class NetRejoinAnswer : uint8_t {
@@ -111,6 +113,26 @@ namespace RTE {
 		        error.find("PeerDisconnected") != std::string::npos);
 	}
 
+	/// Where a session-id join has to dial, once a directory row has been resolved.
+	struct NetIceJoinTarget {
+		std::string identity;  //!< The host's GNS identity; empty on an ip-only row.
+		std::string joinMode;  //!< "ip" | "ice" | "either", as the row carries it.
+		std::string address;   //!< Set when the row also advertises a direct address.
+		uint16_t port = 0;
+	};
+
+	/// The GNS identity a host binds for a directory session; the dispatcher's rule, readable in a
+	/// build without GameNetworkingSockets.
+	std::string NetIceHostIdentity(const std::string& sessionId);
+
+	/// The join_mode a host's directory row carries. A rematch re-registers under a new session id
+	/// while GNS keeps the identity pinned to the first one, so only a direct join still reaches it.
+	std::string NetIceRowJoinMode(bool iceEnabled, bool hasDirectAddress, const std::string& boundSessionId, const std::string& rowSessionId);
+
+	/// Resolves a session id against a directory listing. Empty and a filled target when the row can
+	/// be joined, else the join list's own refusal label for it.
+	std::string NetIceResolveSessionRow(const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, const std::string& sessionId, NetIceJoinTarget* out);
+
 	enum class NetMatchServiceState {
 		Idle,
 		Starting,
@@ -133,11 +155,13 @@ namespace RTE {
 		NetMatchMode mode = NetMatchMode::PvPSkirmish; // Shapes the roster: PvP (a team per peer), co-op PvE (one shared team vs CPU), PvPvE (teams + CPU).
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
 		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
+		std::string sessionId; // Client only: join the directory session with this id instead of an address.
 	};
 
 	class NetMatchService : public Singleton<NetMatchService> {
 	public:
-		NetMatchService() = default;
+		// Defined in the .cpp: the dispatcher member is only a declaration in this header.
+		NetMatchService();
 		~NetMatchService();
 
 		/// Turns the H4 admission plane off for a run. It is on by default; this exists so a two-peer
@@ -255,6 +279,16 @@ namespace RTE {
 		/// Match end or the host leaving takes the directory row down now rather than at Destroy.
 		/// Game-thread only, like the client it drives.
 		void RetractDirectoryListing();
+		/// Host: waits for the register reply so the GNS identity can be pinned to the session id
+		/// before any listen socket of this process opens. Worker thread; reads the published snapshot.
+		bool WaitForDirectorySession(uint64_t budgetMs, std::string& sessionId, std::string& token) const;
+		/// Host: registers first, pins the GNS identity to the session id, then opens both listens.
+		/// Client: resolves the session id to a row and arms the join. Worker thread.
+		bool SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, std::string* error);
+		/// The ICE virtual port a host listens on and a joiner dials.
+		static constexpr int c_IceVirtualPort = 41011;
+		static constexpr uint64_t c_IceRegisterBudgetMs = 30000;
+		static constexpr uint64_t c_IceResolveBudgetMs = 30000;
 		void JoinWorkerIfDone();
 		/// Attaches the H4 admission plane to a freshly built session. Host: only with a live auth
 		/// epoch, so a build without crypto keeps the pre-admission handshake and issues no tickets.
@@ -372,6 +406,22 @@ namespace RTE {
 		bool m_AutoSubstituteDone = false;
 
 		std::unique_ptr<GnsTransport> m_Transport;
+		//!< ICE runs only; the direct-IP path keeps the plain transport above untouched.
+		std::unique_ptr<NetMuxTransport> m_Mux;
+#ifdef CCCP_WITH_GNS
+		//!< The session directory's signal relay; pumped by the mux on the transport-owner thread.
+		std::unique_ptr<GnsDirectorySignalDispatcher> m_Dispatcher;
+#endif
+		bool m_IceEnabled = false;          //!< This run offers (host) or takes (client) a session-id join.
+		std::string m_IceBoundSessionId;    //!< The session id the process's GNS identity is pinned to.
+		std::string m_IceIdentity;
+		std::string m_IceJoinSessionId;     //!< Client: the session id -net-join-session named.
+		std::string m_IceReport;            //!< The dispatcher's report, captured before teardown.
+		std::string m_IceRoute;             //!< The leg the join actually took: "ice" | "ip" | "".
+		//!< Published by Update() for the worker: the directory client is game-thread only.
+		std::string m_DirectorySessionId;
+		std::string m_DirectoryToken;
+		bool m_DirectoryRegistered = false;
 		std::unique_ptr<NetSession> m_Session;
 		std::unique_ptr<NetLockstepCoordinator> m_Coordinator;
 		std::unique_ptr<NetMatchRunner> m_Runner;
