@@ -116,6 +116,7 @@ namespace RTE {
 		}
 		std::vector<bool> seen(config.peerCount + 1, false);
 		bool sawHost = false;
+		bool sawRemoteHuman = false;
 		for (const NetMatchPlayerSlot& player : config.players) {
 			// A CPU slot has no peer: it marks a machine-run team the host's AI drives over the wire.
 			if (player.cpu) {
@@ -135,6 +136,7 @@ namespace RTE {
 				seen[player.peerId] = true;
 			}
 			sawHost = sawHost || player.peerId == config.hostPeerId;
+			sawRemoteHuman = sawRemoteHuman || (!player.cpu && player.peerId >= 2);
 			if (player.team >= 4) {
 				// Engine teams are 0..3; MaxTeamCount (4) is the exclusive sentinel, so team 4 is invalid.
 				if (error) *error = "player team is out of range";
@@ -144,7 +146,16 @@ namespace RTE {
 				return false;
 			}
 		}
-		if (!sawHost) {
+		if (config.dedicated) {
+			if (sawHost) {
+				if (error) *error = "dedicated config must not seat the host peer";
+				return false;
+			}
+			if (!sawRemoteHuman) {
+				if (error) *error = "dedicated config has no client player slot";
+				return false;
+			}
+		} else if (!sawHost) {
 			if (error) *error = "host player slot is missing";
 			return false;
 		}
@@ -178,6 +189,10 @@ namespace RTE {
 			fields.emplace_back(prefix + "cpu", BoolText(player.cpu));
 			fields.emplace_back(prefix + "display_name", player.displayName);
 		}
+		// Only the true case rides the hash, so every pre-existing config keeps its value.
+		if (config.dedicated) {
+			fields.emplace_back("dedicated", "true");
+		}
 		return NetIdentity::HashCanonicalText("NetMatchConfig/v2", fields);
 	}
 
@@ -190,6 +205,7 @@ namespace RTE {
 			{"version", config.version},
 			{"session_id", config.sessionId},
 			{"host_peer_id", static_cast<int>(config.hostPeerId)},
+			{"dedicated", config.dedicated},
 			{"peer_count", static_cast<int>(config.peerCount)},
 			{"input_delay_frames", config.inputDelayFrames},
 			{"peer_input_delays", config.peerInputDelayFrames},
