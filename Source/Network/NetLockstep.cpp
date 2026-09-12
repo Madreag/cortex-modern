@@ -817,6 +817,7 @@ namespace RTE {
 						AppendU32LE(out, FloatToBitsLE(order.x));
 						AppendU32LE(out, FloatToBitsLE(order.y));
 						AppendU64LE(out, static_cast<uint64_t>(order.targetUID));
+						AppendU64LE(out, static_cast<uint64_t>(order.writerUID));
 						break;
 					}
 				}
@@ -1675,6 +1676,13 @@ namespace RTE {
 						order.x = FloatFromBitsLE(xBits);
 						order.y = FloatFromBitsLE(yBits);
 						order.targetUID = static_cast<int64_t>(targetUID);
+						if (version >= NetLockstepCodec::c_AIOrderWriterVersion) {
+							uint64_t writerUID = 0;
+							if (!ReadOrTruncated(reader.ReadU64LE(writerUID), reader, error, "ai_order_writer_uid")) {
+								return false;
+							}
+							order.writerUID = static_cast<int64_t>(writerUID);
+						}
 						command.payload = order;
 						break;
 					}

@@ -405,6 +405,7 @@ Field(path + ".Actor::DeferredWaypoint.op", object.op);
 Field(path + ".Actor::DeferredWaypoint.x", object.x);
 Field(path + ".Actor::DeferredWaypoint.y", object.y);
 Field(path + ".Actor::DeferredWaypoint.targetUID", object.targetUID);
+Field(path + ".Actor::DeferredWaypoint.actorUID", object.actorUID);
 }
 void Visit(const AHuman::DeferredEquip& object, const std::string& path) {
 Field(path + ".AHuman::DeferredEquip.op", object.op);
@@ -530,6 +531,7 @@ Field(path + ".Actor.m_BaseMass", object.m_BaseMass);
 Field(path + ".Actor.m_AIMode", object.m_AIMode);
 Field(path + ".Actor.m_Waypoints", object.m_Waypoints);
 Field(path + ".Actor.m_PendingDeferredWaypoints", object.m_PendingDeferredWaypoints);
+Field(path + ".Actor.m_InflightWaypoints", object.m_InflightWaypoints);
 Field(path + ".Actor.m_WaypointCursor", object.m_WaypointCursor);
 Field(path + ".Actor.m_DrawWaypoints", object.m_DrawWaypoints);
 Field(path + ".Actor.m_MoveTarget", object.m_MoveTarget);
