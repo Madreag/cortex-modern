@@ -4731,7 +4731,18 @@ void MovableMan::UpdateControllers() {
 		ScenarioRunner::SetLockstepAppliedFrame(readyFrame.frame);
 		ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(readyFrame.frame);
 		for (Actor* actor: m_Actors) {
-			if (ScenarioRunner::IsLockstepActorOwnerGone(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame)) {
+			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+			const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
+			if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame)) {
+				const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
+				if (seeded != 0 && ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), true) == seeded) {
+					ApplyLockstepControlHandoffToActor(*actor, false);
+					std::cout << "[net-match] claim of actor " << uid << " returned to peer " << static_cast<int>(seeded)
+					          << " after seat " << static_cast<int>(claimant) << " expired" << std::endl;
+					continue;
+				}
+			}
+			if (ScenarioRunner::IsLockstepActorOwnerGone(uid, actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame)) {
 				actor->GetController()->SetDisabled(true);
 			}
 		}

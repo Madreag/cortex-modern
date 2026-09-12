@@ -4633,6 +4633,10 @@ namespace RTE {
 		return !m_LeftSeatsHeld.empty();
 	}
 
+	bool NetLockstepCoordinator::IsSeatHeldForReclaim(uint8_t peerId) const {
+		return m_LeftSeatsHeld.find(peerId) != m_LeftSeatsHeld.end();
+	}
+
 	bool NetLockstepCoordinator::IgnoreStaleRefillLeave(uint8_t peerId, uint64_t) const {
 		return m_Config.resumeFromSnapshot && m_RemoteTransports.contains(peerId) &&
 		       m_PeerLeaveFrames.find(peerId) == m_PeerLeaveFrames.end() &&

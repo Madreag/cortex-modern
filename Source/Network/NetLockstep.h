@@ -596,6 +596,8 @@ namespace RTE {
 		/// remote has left and at least one of their seats is inside its window. Nobody can disagree
 		/// with this peer about it, because while it holds there is no other peer in the round.
 		bool IsHoldingSeatForReclaim() const;
+		/// Whether this peer's left seat is still held, from the same set AnyLeftSeatHeld reads.
+		bool IsSeatHeldForReclaim(uint8_t peerId) const;
 		// Kept for UI estimates that still speak in frames (HoldSeconds(1200) == 20). The hold itself
 		// is the admission wall-clock; commits do not advance while a dropped seat is unresolved.
 		static constexpr uint64_t c_ReclaimHoldFrames = 1200;
