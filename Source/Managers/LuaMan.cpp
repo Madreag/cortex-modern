@@ -59,6 +59,7 @@
 #include <sstream>
 #include <thread>
 #include <type_traits>
+#include <iostream>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -7664,6 +7665,131 @@ namespace {
 			lua_pop(L, 1);
 		}
 	}
+
+	std::unordered_map<long, MovableObject*> s_PreviewRootByUID;
+	std::unordered_map<long, MovableObject*> s_PreviewPartByUID;
+	std::unordered_set<long> s_PreviewFrozenPrinted;
+
+	bool LiveWorldMO(MovableObject* mo) {
+		if (!mo) {
+			return false;
+		}
+		if (g_MovableMan.IsResident(mo) || g_MovableMan.ValidMO(mo)) {
+			return true;
+		}
+		MovableObject* root = mo->GetRootParent();
+		return root && root != mo && (g_MovableMan.IsResident(root) || g_MovableMan.ValidMO(root));
+	}
+
+	bool RemapPreviewUserdata(lua_State* L, int index, std::string& freezeClass) {
+		index = AbsoluteLuaIndex(L, index);
+		const auto* object = luabind::detail::is_class_object(L, index);
+		if (!object || !object->crep()) {
+			freezeClass = "userdata";
+			return false;
+		}
+		const char* className = object->crep()->name();
+		if (std::strcmp(className, "Vector") == 0) {
+			return true;
+		}
+		if (!ClassDerivesFrom(object->crep(), "MovableObject")) {
+			if (ClassDerivesFrom(object->crep(), "Entity")) {
+				freezeClass = className;
+				return false;
+			}
+			return true;
+		}
+		auto* mo = static_cast<MovableObject*>(object->ptr());
+		if (!mo) {
+			freezeClass = className;
+			return false;
+		}
+		if (LuaMan::IsPreviewClone(mo)) {
+			return true;
+		}
+		MovableObject* mapped = nullptr;
+		if (const auto found = s_PreviewRootByUID.find(mo->GetUniqueID()); found != s_PreviewRootByUID.end() && found->second != mo) {
+			mapped = found->second;
+		} else if (LiveWorldMO(mo)) {
+			mapped = g_MovableMan.ViewIfSpeculating(mo);
+		} else if (const auto part = s_PreviewPartByUID.find(mo->GetUniqueID()); part != s_PreviewPartByUID.end() && part->second != mo) {
+			mapped = part->second;
+		} else {
+			freezeClass = mo->GetClassName();
+			return false;
+		}
+		if (!mapped) {
+			freezeClass = className;
+			return false;
+		}
+		if (mapped == mo) {
+			return true;
+		}
+		if (!ScriptGraphPushEntity(L, mapped, className) && !ScriptGraphPushEntity(L, mapped, mapped->GetClassName())) {
+			freezeClass = className;
+			return false;
+		}
+		lua_replace(L, index);
+		return true;
+	}
+
+	bool RemapPreviewValue(lua_State* L, int index, int seen, std::string& freezeClass) {
+		index = AbsoluteLuaIndex(L, index);
+		seen = AbsoluteLuaIndex(L, seen);
+		const int type = lua_type(L, index);
+		if (type == LUA_TUSERDATA) {
+			return RemapPreviewUserdata(L, index, freezeClass);
+		}
+		if (type != LUA_TTABLE) {
+			return true;
+		}
+		lua_pushvalue(L, index);
+		lua_rawget(L, seen);
+		if (!lua_isnil(L, -1)) {
+			lua_pop(L, 1);
+			return true;
+		}
+		lua_pop(L, 1);
+		lua_pushvalue(L, index);
+		lua_pushboolean(L, 1);
+		lua_rawset(L, seen);
+
+		lua_newtable(L);
+		const int keys = lua_gettop(L);
+		int count = 0;
+		lua_pushnil(L);
+		while (lua_next(L, index) != 0) {
+			lua_pop(L, 1);
+			lua_pushvalue(L, -1);
+			lua_rawseti(L, keys, ++count);
+		}
+		for (int i = 1; i <= count; ++i) {
+			lua_rawgeti(L, keys, i);
+			const int oldKey = lua_gettop(L);
+			lua_pushvalue(L, oldKey);
+			lua_rawget(L, index);
+			const int value = lua_gettop(L);
+			if (!RemapPreviewValue(L, value, seen, freezeClass)) {
+				return false;
+			}
+			lua_pushvalue(L, oldKey);
+			if (!RemapPreviewValue(L, -1, seen, freezeClass)) {
+				return false;
+			}
+			const int newKey = lua_gettop(L);
+			if (!lua_rawequal(L, oldKey, newKey)) {
+				lua_pushvalue(L, oldKey);
+				lua_pushnil(L);
+				lua_rawset(L, index);
+			}
+			lua_pushvalue(L, newKey);
+			lua_pushvalue(L, value);
+			lua_rawset(L, index);
+			lua_pop(L, 3);
+		}
+		lua_pop(L, 1);
+		return true;
+	}
 }
 
 bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector<std::string>& problems) {
@@ -7758,6 +7884,27 @@ bool LuaStateWrapper::BindPreviewScriptObject(MovableObject* clone, bool sharedS
 	}
 	clone->m_ScriptObjectName = "_ScriptedObjects[\"" + dest + "\"]";
 	return TableEntryIsDefined("_ScriptedObjects", dest);
+}
+
+bool LuaStateWrapper::RemapPreviewHoldReferences(long uniqueID, std::string& freezeClass) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	freezeClass.clear();
+	const int top = lua_gettop(m_State);
+	lua_getglobal(m_State, "_ScriptFieldsStash");
+	if (!lua_istable(m_State, -1)) {
+		lua_settop(m_State, top);
+		return true;
+	}
+	lua_pushstring(m_State, ("preview:" + std::to_string(uniqueID)).c_str());
+	lua_gettable(m_State, -2);
+	if (!lua_istable(m_State, -1)) {
+		lua_settop(m_State, top);
+		return true;
+	}
+	lua_newtable(m_State);
+	const bool ok = RemapPreviewValue(m_State, -2, lua_gettop(m_State), freezeClass);
+	lua_settop(m_State, top);
+	return ok;
 }
 
 void LuaStateWrapper::DropPreviewScriptObject(long uniqueID) {
@@ -7880,10 +8027,22 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 
 void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot) {
 	s_PreviewClones.clear();
+	s_PreviewRootByUID.clear();
+	s_PreviewPartByUID.clear();
 	s_PreviewSharedSlot = sharedSlot;
 	for (MovableObject* clone: clones) {
-		WalkOwned(clone, [sharedSlot](MovableObject* mo) {
+		if (clone) {
+			s_PreviewRootByUID[clone->GetUniqueID()] = clone;
+		}
+		WalkOwned(clone, [](MovableObject* mo) {
 			s_PreviewClones.insert(mo);
+			if (mo) {
+				s_PreviewPartByUID[mo->GetUniqueID()] = mo;
+			}
+		});
+	}
+	for (MovableObject* clone: clones) {
+		WalkOwned(clone, [sharedSlot](MovableObject* mo) {
 			LuaStateWrapper* state = mo->GetLuaState();
 			const long uid = mo->GetUniqueID();
 			if (!state) {
@@ -7902,6 +8061,18 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 				s_PreviewFrozenUIDs.insert(uid);
 				++s_PreviewCodecFallbacks;
 				mo->m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(uid) + "#preview\"]";
+				return;
+			}
+			std::string freezeClass;
+			// Held MO refs become the clone or a speculation shadow.
+			if (!state->RemapPreviewHoldReferences(uid, freezeClass)) {
+				if (s_PreviewFrozenPrinted.insert(uid).second) {
+					std::cout << "[preview] frozen uid=" << uid << " class=" << freezeClass << std::endl;
+				}
+				s_PreviewFrozenUIDs.insert(uid);
+				++s_PreviewCodecFallbacks;
+				state->DropPreviewScriptObject(uid);
+				mo->m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(uid) + "#preview\"]";
 			}
 		});
 	}
@@ -7919,6 +8090,8 @@ void LuaMan::EndPreviewScripts() {
 		}
 	}
 	s_PreviewClones.clear();
+	s_PreviewRootByUID.clear();
+	s_PreviewPartByUID.clear();
 	s_PreviewFrozenUIDs.clear();
 	s_PreviewGlobalSnapshots.clear();
 	s_PreviewSharedSlot = false;
