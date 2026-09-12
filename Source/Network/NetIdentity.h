@@ -75,6 +75,26 @@ namespace RTE {
 		std::string summary;
 	};
 
+	/// A module both peers loaded whose content or version differs. The versions are named from the
+	/// joiner's side, so "local" is always the host's and "remote" always the joiner's.
+	struct NetModuleVersionDifference {
+		std::string fileName;
+		uint32_t localVersion = 0;
+		uint32_t remoteVersion = 0;
+		bool contentDiffers = false;
+
+		bool operator==(const NetModuleVersionDifference&) const = default;
+	};
+
+	struct NetModuleDiff {
+		std::vector<std::string> missingOnRemote;
+		std::vector<std::string> extraOnRemote;
+		std::vector<NetModuleVersionDifference> differing;
+
+		bool Empty() const { return missingOnRemote.empty() && extraOnRemote.empty() && differing.empty(); }
+		size_t Count() const { return missingOnRemote.size() + extraOnRemote.size() + differing.size(); }
+	};
+
 	struct NetIdentityBuildOptions {
 		std::string buildId = "unknown";
 		std::string sessionRulesTag = "p2-session-rules-unset";
@@ -88,6 +108,16 @@ namespace RTE {
 		static bool DumpCurrentManifestJson(const std::string& path, std::string* error = nullptr, NetIdentityManifest* outManifest = nullptr);
 
 		static std::optional<NetIdentityMismatch> Compare(const NetIdentityManifest& expected, const NetIdentityManifest& actual, bool rejectUserdataModules = true);
+
+		/// The loaded modules as the diagnostic digest wire carries them, sorted by file name and cut
+		/// to the entry and byte caps. Diagnostic only - admission still decides on the full hashes.
+		static std::vector<NetModuleDigestEntry> BuildModuleDigests(const std::vector<NetIdentityModuleEntry>& modules, size_t maxEntries, bool* outTruncated = nullptr);
+		/// Diffs two digest lists by file name, never by load order, so one extra module does not make
+		/// every module after it look different.
+		static NetModuleDiff DiffModules(const std::vector<NetModuleDigestEntry>& local, const std::vector<NetModuleDigestEntry>& remote);
+		/// One joiner-facing sentence naming what to install, remove or update, or an empty string when
+		/// the digests named no difference at all.
+		static std::string DescribeModuleDiff(const NetModuleDiff& diff, size_t maxNamedPerGroup = 6, bool truncated = false);
 
 		static NetHash32 HashCanonicalText(const std::string& domain, const std::vector<std::pair<std::string, std::string>>& fields);
 		static NetHash32 HashDeterministicConfig(const NetIdentityDeterministicConfig& config);

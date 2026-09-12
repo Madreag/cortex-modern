@@ -110,6 +110,10 @@ namespace RTE {
 		m_ActualValue.clear();
 		m_RejectSummary.clear();
 		m_HasRemoteIdentityHash = false;
+		m_AwaitingModuleDigests = false;
+		m_ModuleDigestsSent = false;
+		m_ModuleDigestDeadlineMs = 0;
+		m_PendingModuleMismatch = {};
 		m_Stats = {};
 		m_Peers.clear();
 		const bool connected = m_Config.p2pJoin.connect ? m_Config.p2pJoin.connect(*m_Transport, error) : m_Transport->Connect(address, m_Config.port, error);
@@ -570,6 +574,11 @@ namespace RTE {
 			}
 			const NetIdentityMismatch mismatch = ValidateClientHello(*hello);
 			if (HasMismatch(mismatch)) {
+				if (mismatch.rejectReason == NetRejectReason::ModuleManifestMismatch && !peer->awaitingModuleDigests && BeginModuleDigestExchange(peerId)) {
+					peer->awaitingModuleDigests = true;
+					peer->pendingModuleMismatch = mismatch;
+					return;
+				}
 				RejectPeer(*peer, mismatch.rejectReason, mismatch.key, mismatch.expectedShortValue, mismatch.actualShortValue, mismatch.summary);
 				return;
 			}
@@ -621,6 +630,28 @@ namespace RTE {
 			peer->state = NetSessionState::Closed;
 			DropPeerTransport(peerId, "peer disconnected");
 			RefreshHostState();
+			return;
+		}
+		if (const auto* request = std::get_if<NetModuleDigestRequest>(&message.payload)) {
+			// Only inside the handshake window, and once: a seated peer has nothing to diagnose.
+			if (peer->state == NetSessionState::Handshake || peer->state == NetSessionState::Accepted) {
+				SendModuleDigests(peerId, request->maxEntries, peer->moduleDigestsSent);
+			}
+			return;
+		}
+		if (const auto* digests = std::get_if<NetModuleDigests>(&message.payload)) {
+			if (peer->awaitingModuleDigests) {
+				++m_Stats.moduleDigestsReceived;
+				peer->awaitingModuleDigests = false;
+				NetIdentityMismatch named = peer->pendingModuleMismatch;
+				const std::string sentence = DescribeModuleMismatch(*digests);
+				if (!sentence.empty()) {
+					named.summary = sentence;
+				}
+				// Our own list goes out first, so the joiner can name the difference from its side too.
+				SendModuleDigests(peerId, static_cast<uint16_t>(NetProtocol::c_MaxModuleDigestEntries), peer->moduleDigestsSent);
+				RejectPeer(*peer, named.rejectReason, named.key, named.expectedShortValue, named.actualShortValue, named.summary);
+			}
 			return;
 		}
 		if (RouteAdmissionMessage(peerId, message.payload)) {
@@ -710,6 +741,30 @@ namespace RTE {
 		if (peerId != m_RemoteTransportPeerId) {
 			return;
 		}
+		if (const auto* request = std::get_if<NetModuleDigestRequest>(&message.payload)) {
+			SendModuleDigests(peerId, request->maxEntries, m_ModuleDigestsSent);
+			return;
+		}
+		if (const auto* digests = std::get_if<NetModuleDigests>(&message.payload)) {
+			++m_Stats.moduleDigestsReceived;
+			if (m_AwaitingModuleDigests) {
+				m_AwaitingModuleDigests = false;
+				NetIdentityMismatch named = m_PendingModuleMismatch;
+				const std::string sentence = DescribeModuleMismatch(*digests);
+				if (!sentence.empty()) {
+					named.summary = sentence;
+				}
+				SetRejected(named.rejectReason, named.key, named.expectedShortValue, named.actualShortValue, named.summary);
+				Send(peerId, NetDisconnect{static_cast<uint16_t>(named.rejectReason), named.summary});
+				m_Transport->Disconnect(peerId, named.summary);
+			}
+			return;
+		}
+		// Parked on a refusal we have already decided: nothing the host says can admit us now.
+		if (m_AwaitingModuleDigests && !std::holds_alternative<NetJoinRejected>(message.payload) &&
+		    !std::holds_alternative<NetDisconnect>(message.payload)) {
+			return;
+		}
 		if (const auto* rejected = std::get_if<NetJoinRejected>(&message.payload)) {
 			// A refused reclaim is not automatically a refused join: the stored ticket may simply name a
 			// hosted session that has ended. One fallback attempt, then a refusal is a refusal.
@@ -724,6 +779,12 @@ namespace RTE {
 		if (const auto* hostHello = std::get_if<NetHostHello>(&message.payload)) {
 			const NetIdentityMismatch mismatch = ValidateHostHello(*hostHello);
 			if (HasMismatch(mismatch)) {
+				if (mismatch.rejectReason == NetRejectReason::ModuleManifestMismatch && !m_AwaitingModuleDigests && BeginModuleDigestExchange(peerId)) {
+					m_AwaitingModuleDigests = true;
+					m_PendingModuleMismatch = mismatch;
+					m_ModuleDigestDeadlineMs = m_NowMs + m_Config.timeoutMs;
+					return;
+				}
 				SetRejected(mismatch.rejectReason, mismatch.key, mismatch.expectedShortValue, mismatch.actualShortValue, mismatch.summary);
 				Send(peerId, NetDisconnect{static_cast<uint16_t>(mismatch.rejectReason), mismatch.summary});
 				m_Transport->Disconnect(peerId, mismatch.summary);
@@ -833,6 +894,18 @@ namespace RTE {
 					RefreshHostState();
 				}
 			}
+		} else if (m_AwaitingModuleDigests) {
+			// The refusal was decided when the host's hello was read; a host that never answers only
+			// costs us the module names, never the reason.
+			if (m_NowMs >= m_ModuleDigestDeadlineMs) {
+				++m_Stats.moduleDigestExchangesExpired;
+				m_AwaitingModuleDigests = false;
+				const NetIdentityMismatch& mismatch = m_PendingModuleMismatch;
+				SetRejected(mismatch.rejectReason, mismatch.key, mismatch.expectedShortValue, mismatch.actualShortValue, mismatch.summary);
+				if (m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+					m_Transport->Disconnect(m_RemoteTransportPeerId, mismatch.summary);
+				}
+			}
 		} else if ((m_State == NetSessionState::Connecting || m_State == NetSessionState::HelloSent || m_State == NetSessionState::Ready) &&
 		           m_NowMs >= m_LastReceiveMs && m_NowMs - m_LastReceiveMs >
 		           ((NetA7Journal::ControlledSilentClient() && m_State == NetSessionState::HelloSent) ? NetA7Journal::SilentReceiveBudgetMs() : m_Config.timeoutMs)) {
@@ -855,9 +928,18 @@ namespace RTE {
 			const uint64_t a7Age = m_NowMs >= peer.connectedAtMs ? m_NowMs - peer.connectedAtMs : 0;
 			if (m_NowMs >= peer.connectedAtMs && m_NowMs - peer.connectedAtMs > m_Config.timeoutMs) {
 				if (NetA7Journal::Enabled()) NetA7Journal::Session("handshake_expired", m_NowMs, {{"connection", std::to_string(peer.a7ConnectionId)},
-					{"reason", "client hello timeout"}, {"timeout_ms", m_Config.timeoutMs}, {"age_ms", a7Age}, {"previous_check_age_ms", peer.a7PreviousHandshakeAgeMs}});
-				++m_Stats.timeouts;
-				RejectPeer(peer, NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - peer.connectedAtMs), "client hello timeout");
+					{"reason", peer.awaitingModuleDigests ? "module digest timeout" : "client hello timeout"}, {"timeout_ms", m_Config.timeoutMs}, {"age_ms", a7Age}, {"previous_check_age_ms", peer.a7PreviousHandshakeAgeMs}});
+				if (peer.awaitingModuleDigests) {
+					// The refusal was decided when the hello was read; a peer that never lists its
+					// modules is still refused for the manifest, never for a timeout.
+					++m_Stats.moduleDigestExchangesExpired;
+					peer.awaitingModuleDigests = false;
+					const NetIdentityMismatch mismatch = peer.pendingModuleMismatch;
+					RejectPeer(peer, mismatch.rejectReason, mismatch.key, mismatch.expectedShortValue, mismatch.actualShortValue, mismatch.summary);
+				} else {
+					++m_Stats.timeouts;
+					RejectPeer(peer, NetRejectReason::Timeout, "timeout_ms", std::to_string(m_Config.timeoutMs), std::to_string(m_NowMs - peer.connectedAtMs), "client hello timeout");
+				}
 			}
 			if (NetA7Journal::Enabled()) peer.a7PreviousHandshakeAgeMs = a7Age;
 		}
@@ -1133,6 +1215,43 @@ namespace RTE {
 		return NoMismatch();
 	}
 
+	bool NetSession::BeginModuleDigestExchange(NetPeerId peerId) {
+		NetModuleDigestRequest request;
+		request.maxEntries = static_cast<uint16_t>(NetProtocol::c_MaxModuleDigestEntries);
+		if (!Send(peerId, request)) {
+			return false;
+		}
+		++m_Stats.moduleDigestRequestsSent;
+		return true;
+	}
+
+	void NetSession::SendModuleDigests(NetPeerId peerId, uint16_t maxEntries, bool& alreadySent) {
+		if (alreadySent) {
+			return;
+		}
+		alreadySent = true;
+		const size_t cap = maxEntries == 0 ? NetProtocol::c_MaxModuleDigestEntries
+		                                   : std::min<size_t>(maxEntries, NetProtocol::c_MaxModuleDigestEntries);
+		NetModuleDigests digests;
+		bool truncated = false;
+		digests.entries = NetIdentity::BuildModuleDigests(m_Config.localIdentity.modules, cap, &truncated);
+		digests.flags = truncated ? c_NetModuleDigestsTruncated : static_cast<uint8_t>(0);
+		if (Send(peerId, std::move(digests))) {
+			++m_Stats.moduleDigestsSent;
+		}
+	}
+
+	std::string NetSession::DescribeModuleMismatch(const NetModuleDigests& remoteDigests) const {
+		bool localTruncated = false;
+		const std::vector<NetModuleDigestEntry> local = NetIdentity::BuildModuleDigests(m_Config.localIdentity.modules, NetProtocol::c_MaxModuleDigestEntries, &localTruncated);
+		// The sentence is always joiner-facing, so the host's list is always the diff's local side.
+		const NetModuleDiff diff = m_Role == NetSessionRole::Host
+			? NetIdentity::DiffModules(local, remoteDigests.entries)
+			: NetIdentity::DiffModules(remoteDigests.entries, local);
+		const bool truncated = localTruncated || (remoteDigests.flags & c_NetModuleDigestsTruncated) != 0U;
+		return NetIdentity::DescribeModuleDiff(diff, 6, truncated);
+	}
+
 	uint8_t NetSession::PlatformId(const std::string& platform) {
 		if (platform == "windows") return 1;
 		if (platform == "linux") return 2;
@@ -1263,6 +1382,10 @@ namespace RTE {
 				{"old_wire_rejections_sent", m_Stats.oldWireRejectionsSent},
 				{"old_wire_disconnects", m_Stats.oldWireDisconnects},
 				{"pending_admission_joins", m_Stats.pendingAdmissionJoins},
+				{"module_digest_requests_sent", m_Stats.moduleDigestRequestsSent},
+				{"module_digests_sent", m_Stats.moduleDigestsSent},
+				{"module_digests_received", m_Stats.moduleDigestsReceived},
+				{"module_digest_exchanges_expired", m_Stats.moduleDigestExchangesExpired},
 			}},
 		};
 		return report.dump(2);
