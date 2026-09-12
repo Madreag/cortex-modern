@@ -7,7 +7,6 @@
 #include "Actor.h"
 #include "PieMenu.h"
 #include "ScenarioRunner.h"
-#include "InputScript.h"
 #include "CheckpointArchive.h"
 
 #include <array>
@@ -16,9 +15,9 @@ using namespace RTE;
 
 thread_local Actor* RTE::g_CurrentAIActor = nullptr;
 
-// A scripted seat measures the switch debounce in sim time, so an unpaced test run samples the same ticks a paced one does.
+// The switch debounce counts sim time, so a parked tick cannot re-arm.
 bool Controller::ReleaseDelayPassed() {
-	return InputScript::DrivesPlayer(m_SeatPlayer) ? m_ReleaseTimer.IsPastSimMS(m_ReleaseDelay) : m_ReleaseTimer.IsPastRealMS(m_ReleaseDelay);
+	return m_ReleaseTimer.IsPastSimMS(m_ReleaseDelay);
 }
 
 void Controller::Clear() {
