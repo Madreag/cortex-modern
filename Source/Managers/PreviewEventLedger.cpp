@@ -13,9 +13,9 @@ namespace RTE {
 	std::vector<uint64_t> PreviewEventLedger::s_PreviewedEmitters;
 	std::map<PreviewEventLedger::Tuple, uint32_t> PreviewEventLedger::s_PreviewSeq;
 	std::map<PreviewEventLedger::Tuple, uint32_t> PreviewEventLedger::s_CanonicalSeq;
-	std::vector<PreviewEventLedger::SoundStart> PreviewEventLedger::s_SoundStarts;
+	std::vector<PreviewEventLedger::EventStart> PreviewEventLedger::s_EventStarts;
 	PreviewEventLedger::Counters PreviewEventLedger::s_Counters;
-	uint64_t PreviewEventLedger::s_SoundStartCount = 0;
+	uint64_t PreviewEventLedger::s_EventStartCount = 0;
 	uint64_t PreviewEventLedger::s_CommittedTick = 0;
 	uint64_t PreviewEventLedger::s_IdentityCursor = 0;
 	uint64_t PreviewEventLedger::s_CanonicalSeqTick = 0;
@@ -23,7 +23,7 @@ namespace RTE {
 	bool PreviewEventLedger::s_Armed = false;
 
 	namespace {
-		constexpr size_t c_MaxRecordedSoundStarts = 64;
+		constexpr size_t c_MaxRecordedEventStarts = 64;
 	}
 
 	PreviewEventLedger::Tuple PreviewEventLedger::TupleOf(const Key& key) {
@@ -171,13 +171,13 @@ namespace RTE {
 		s_Armed = false;
 	}
 
-	void PreviewEventLedger::NoteSoundStart(uint64_t committedTick, const Key& key, bool predicted) {
-		++s_SoundStartCount;
-		if (s_SoundStarts.size() < c_MaxRecordedSoundStarts) s_SoundStarts.push_back({committedTick, key.tick, key.emitterUID, key.seq, predicted});
+	void PreviewEventLedger::NoteEventStart(uint64_t committedTick, const Key& key, bool predicted) {
+		++s_EventStartCount;
+		if (s_EventStarts.size() < c_MaxRecordedEventStarts) s_EventStarts.push_back({committedTick, key.tick, key.emitterUID, key.seq, key.kind, predicted});
 	}
 
 	std::string PreviewEventLedger::Describe() {
-		if (!s_Counters.playedAtPreview && !s_SoundStartCount) return "";
+		if (!s_Counters.playedAtPreview && !s_EventStartCount) return "";
 		return "events_played_at_preview=" + std::to_string(s_Counters.playedAtPreview) + " events_suppressed_at_commit=" + std::to_string(s_Counters.adoptedAtCommit) +
 		       " events_expired=" + std::to_string(s_Counters.expired) + " events_retimed=" + std::to_string(s_Counters.retimed);
 	}
@@ -187,9 +187,9 @@ namespace RTE {
 		s_PreviewedEmitters.clear();
 		s_PreviewSeq.clear();
 		s_CanonicalSeq.clear();
-		s_SoundStarts.clear();
+		s_EventStarts.clear();
 		s_Counters = {};
-		s_SoundStartCount = 0;
+		s_EventStartCount = 0;
 		s_CommittedTick = 0;
 		s_IdentityCursor = 0;
 		s_CanonicalSeqTick = 0;
