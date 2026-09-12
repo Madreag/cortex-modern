@@ -106,12 +106,12 @@ namespace RTE {
 		m_ReadySent = false;
 		m_StartRequested = config.autoStart;
 		m_FailureReason.clear();
+		m_RemoteLobbyUp.clear();
 		m_SeatAssigned = false;
 		m_StateBytesToSend.clear();
 		m_OutgoingStateId = 0;
-		m_OutgoingChunkIndex = 0;
+		m_OutgoingChunkIndexByPeer.clear();
 		m_OutgoingChunkCount = 0;
-		m_OutgoingChunkSentTo.clear();
 		m_ChunkSendStall = 0;
 		m_StateTransferProgressSerial = 0;
 		m_IncomingStateId = 0;
@@ -204,11 +204,20 @@ namespace RTE {
 			return;
 		}
 		m_OutgoingStateId = m_OutgoingStateId == 0 ? 0x50355354ULL ^ static_cast<uint32_t>(m_StateBytesToSend.size()) ^ (static_cast<uint64_t>(chunkCount) << 32) : m_OutgoingStateId + 1;
-		m_OutgoingChunkIndex = 0;
+		m_OutgoingChunkIndexByPeer.clear();
 		m_OutgoingChunkCount = chunkCount;
-		m_OutgoingChunkSentTo.clear();
 		m_ChunkSendStall = 0;
 		g_TransferStartMs.store(0);
+	}
+
+	uint16_t NetLobbySession::OutgoingChunkIndex(uint8_t peerId) const {
+		const auto it = m_OutgoingChunkIndexByPeer.find(peerId);
+		return it == m_OutgoingChunkIndexByPeer.end() ? 0 : it->second;
+	}
+
+	bool NetLobbySession::HasPendingStateChunks() const {
+		return m_OutgoingChunkCount > 0 && std::any_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(),
+		                                              [this](uint8_t peerId) { return OutgoingChunkIndex(peerId) < m_OutgoingChunkCount; });
 	}
 
 	std::vector<uint8_t> NetLobbySession::TakeReceivedState() {
@@ -220,32 +229,36 @@ namespace RTE {
 
 	void NetLobbySession::SendQueuedStateChunks() {
 		int budget = 2;
-		while (HasPendingStateChunks() && budget-- > 0) {
+		while (budget-- > 0) {
+			// A remote gets chunks only once its own lobby is up: before that its session discards
+			// them as another phase's packets and nothing ever sends them again.
+			uint16_t index = m_OutgoingChunkCount;
+			for (uint8_t peerId: m_RemotePeerIds) {
+				if (IsRemoteLobbyUp(peerId)) index = std::min(index, OutgoingChunkIndex(peerId));
+			}
+			if (index >= m_OutgoingChunkCount) break;
 			NetLobbyStateChunk chunk;
 			chunk.transferId = m_OutgoingStateId;
 			chunk.totalBytes = static_cast<uint32_t>(m_StateBytesToSend.size());
-			chunk.chunkIndex = m_OutgoingChunkIndex;
+			chunk.chunkIndex = index;
 			chunk.chunkCount = m_OutgoingChunkCount;
-			const size_t begin = static_cast<size_t>(m_OutgoingChunkIndex) * NetLobbyProtocol::c_MaxStateChunkBytes;
+			const size_t begin = static_cast<size_t>(index) * NetLobbyProtocol::c_MaxStateChunkBytes;
 			const size_t end = std::min(m_StateBytesToSend.size(), begin + NetLobbyProtocol::c_MaxStateChunkBytes);
 			chunk.bytes.assign(m_StateBytesToSend.begin() + begin, m_StateBytesToSend.begin() + end);
 			for (uint8_t peerId: m_RemotePeerIds) {
-				const NetPeerId transportId = m_RemoteTransports.at(peerId);
-				if (std::find(m_OutgoingChunkSentTo.begin(), m_OutgoingChunkSentTo.end(), transportId) != m_OutgoingChunkSentTo.end()) continue;
+				if (!IsRemoteLobbyUp(peerId) || OutgoingChunkIndex(peerId) != index) continue;
 				std::string error;
-				if (!SendTo(transportId, chunk, &error)) {
+				if (!SendTo(m_RemoteTransports.at(peerId), chunk, &error)) {
 					if (++m_ChunkSendStall > 4000) Fail("state transfer stalled: " + error);
 					return;
 				}
-				m_OutgoingChunkSentTo.push_back(transportId);
+				m_OutgoingChunkIndexByPeer[peerId] = static_cast<uint16_t>(index + 1);
 				++m_StateTransferProgressSerial;
 				m_ChunkSendStall = 0;
 				if (g_TransferStartMs.load() == 0) {
 					g_TransferStartMs.store(TransferSteadyMs());
 				}
 			}
-			++m_OutgoingChunkIndex;
-			m_OutgoingChunkSentTo.clear();
 		}
 		if (!HasPendingStateChunks()) {
 			const uint64_t start = g_TransferStartMs.exchange(0);
@@ -423,6 +436,8 @@ namespace RTE {
 		const uint8_t peerId = peer->first;
 		m_RemoteTransports.erase(peer);
 		std::erase(m_RemotePeerIds, peerId);
+		m_RemoteLobbyUp.erase(peerId);
+		m_OutgoingChunkIndexByPeer.erase(peerId);
 		m_ConfigAckedByPeer.erase(peerId);
 		m_RemoteReadyByPeer.erase(peerId);
 		m_RemoteNamesByPeer.erase(peerId);
@@ -752,6 +767,7 @@ namespace RTE {
 					return;
 				}
 				++m_Stats.messagesReceived;
+				if (m_Config.host) m_RemoteLobbyUp.insert(sender->first);
 				HandleMessage(decoded.message);
 				break;
 			}

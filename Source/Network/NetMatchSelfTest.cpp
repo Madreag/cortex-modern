@@ -2742,15 +2742,16 @@ namespace RTE {
 		}
 
 		// A survivor that moved up in the rematch drops inside the next round and reclaims its stable seat.
-		bool ReclaimAfterShrinks(uint16_t port, int shrinks, std::string& details, std::string* error) {
+		bool ReclaimAfterShrinks(uint16_t port, int shrinks, bool waitForReturnerLobby, std::string& details, std::string* error) {
 			RematchFixture fixture;
-			if (!SetUpRematchFixture(fixture, "reclaim-after-" + std::to_string(shrinks) + "-shrinks", port, 4, error)) return false;
+			if (!SetUpRematchFixture(fixture, "reclaim-after-" + std::to_string(shrinks) + "-shrinks" + (waitForReturnerLobby ? "" : "-nowait"), port, 4, error)) return false;
 			std::unique_ptr<RematchPeer> returner;
 			RematchWorkers workers;
 			std::string step;
 			const std::string round = "round " + std::to_string(shrinks + 1);
 			auto fail = [&](const std::string& what) {
-				*error = "rematch " + round + " reclaim after " + std::to_string(shrinks) + " shrink(s): " + what + (step.empty() ? "" : ": " + step);
+				*error = "rematch " + round + " reclaim after " + std::to_string(shrinks) + " shrink(s)" + (waitForReturnerLobby ? "" : " without the lobby wait") +
+				         ": " + what + (step.empty() ? "" : ": " + step);
 				StopRematchFixture(fixture);
 				if (returner) returner->transport.Stop();
 				return false;
@@ -2825,9 +2826,10 @@ namespace RTE {
 				played[peer] = peer->trace;
 			}
 			// A real heal saves first, which gives the returner time to reach its lobby before the snapshot streams.
-			if (!PumpRematchUntil(fixture, 3000, [&] { return lobbyUp->load() || !workers.FailureOf(*rejoined).empty(); }) || !lobbyUp->load()) {
+			if (waitForReturnerLobby && (!PumpRematchUntil(fixture, 3000, [&] { return lobbyUp->load() || !workers.FailureOf(*rejoined).empty(); }) || !lobbyUp->load())) {
 				return fail("the returner never reached its lobby: " + workers.FailureOf(*rejoined));
 			}
+			const bool lobbyUpAtHeal = lobbyUp->load();
 			// ResyncMatch: resume where the host's sim stopped; each session first gets what its round held.
 			const uint64_t resumeFrame = host.round->GetResumeFrame();
 			host.runner.SetStartFrame(ScenarioRunner::ResyncResumeStartFrame(resumeFrame));
@@ -2877,12 +2879,16 @@ namespace RTE {
 				return fail("the returner is lockstep peer " + std::to_string(rejoined->LockstepId()) + " where stable seat " + std::to_string(stableSeat) +
 				            " holds incarnation " + std::to_string(incarnation) + " of holder generation " + std::to_string(generation));
 			}
+			size_t returnerReceived = 0;
 			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
 				if (!peer->round->GetConfig().resumeFromSnapshot || peer->round->GetConfig().startFrame != resumeFrame) {
 					return fail(peer->name + " did not resume at frame " + std::to_string(resumeFrame));
 				}
-				if (!peer->host && peer->runner.TakeReceivedState() != snapshot) {
-					return fail(peer->name + " did not receive the host's snapshot");
+				if (peer->host) continue;
+				const std::vector<uint8_t> received = peer->runner.TakeReceivedState();
+				if (peer == rejoined) returnerReceived = received.size();
+				if (received != snapshot) {
+					return fail(peer->name + " did not receive the host's snapshot (" + std::to_string(received.size()) + " of " + std::to_string(snapshot.size()) + " bytes)");
 				}
 			}
 			if (!PlayRematchTicks(fixture, 8)) return fail("the healed round never committed");
@@ -2916,7 +2922,8 @@ namespace RTE {
 			details = "stable_seat=" + std::to_string(stableSeat) + " lockstep=" + std::to_string(moverId) + " (round-1 lockstep 4) incarnation=" +
 			          std::to_string(incarnationBefore) + "->" + std::to_string(incarnation) + " holder_generation=" + std::to_string(generation) + " used_stored_ticket=1 drop_frame=" +
 			          std::to_string(dropFrame) + " heal_start=" + std::to_string(resumeFrame) + " ticks_identical_before_drop=" + std::to_string(before) +
-			          " healed_ticks_identical=" + std::to_string(healed) + " peers=" + std::to_string(LiveRematchPeers(fixture).size());
+			          " healed_ticks_identical=" + std::to_string(healed) + " peers=" + std::to_string(LiveRematchPeers(fixture).size()) +
+			          " lobby_up_at_heal=" + std::to_string(lobbyUpAtHeal ? 1 : 0) + " returner_received=" + std::to_string(returnerReceived);
 			StopRematchFixture(fixture);
 			return true;
 		}
@@ -2926,18 +2933,23 @@ namespace RTE {
 			std::string control;
 			std::string oneShrink;
 			std::string twoShrinks;
+			std::string lateLobby;
 			std::string details;
 			// The same reclaim inside round 1, where no rematch has re-formed anything yet.
-			if (ReclaimAfterShrinks(43168, 0, details, &control)) {
+			if (ReclaimAfterShrinks(43168, 0, true, details, &control)) {
 				std::cout << "PASS rematch_round_reclaim round=1 shrinks=0 " << details << std::endl;
 			}
-			if (ReclaimAfterShrinks(43170, 1, details, &oneShrink)) {
+			if (ReclaimAfterShrinks(43170, 1, true, details, &oneShrink)) {
 				std::cout << "PASS rematch_round_reclaim round=2 shrinks=1 " << details << std::endl;
 			}
-			if (ReclaimAfterShrinks(43172, 2, details, &twoShrinks)) {
+			if (ReclaimAfterShrinks(43172, 2, true, details, &twoShrinks)) {
 				std::cout << "PASS rematch_round_reclaim round=3 shrinks=2 " << details << std::endl;
 			}
-			for (const std::string* failure: {&control, &oneShrink, &twoShrinks}) {
+			// The host heals the moment the reclaim lands, so the returner's lobby comes up after the chunk.
+			if (ReclaimAfterShrinks(43174, 0, false, details, &lateLobby)) {
+				std::cout << "PASS rematch_round_reclaim round=1 shrinks=0 late_returner_lobby " << details << std::endl;
+			}
+			for (const std::string* failure: {&control, &oneShrink, &twoShrinks, &lateLobby}) {
 				if (!failure->empty()) *error += (error->empty() ? "" : "; ") + *failure;
 			}
 			return error->empty();
