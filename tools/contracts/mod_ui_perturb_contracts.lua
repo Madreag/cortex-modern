@@ -20,12 +20,14 @@ end
 
 function Create(self)
     self.testCreate, self.testUpdate = 1, 0
+    if _ContractAuditOwner == nil then _ContractAuditOwner = self.UniqueID end
 end
 
 function Update(self)
     self.testUpdate = self.testUpdate + 1
     self:SetNumberValue("TestUpdates", self.testUpdate)
-    if self.UniqueID ~= 1048577 or self.uiContracts then return end
+    if _ContractAuditOwner == nil then _ContractAuditOwner = self.UniqueID end
+    if self.UniqueID ~= _ContractAuditOwner or self.uiContracts then return end
     local activity = ToGameActivity(ActivityMan:GetActivity())
     local buy, editor = activity:GetBuyGUI(0), activity:GetEditorGUI(0)
     assert(buy and editor, "activity UI is unavailable")
@@ -160,5 +162,6 @@ function Update(self)
         end
         print("[reference-contract-check] " .. stage .. " checked=" .. checked .. " mismatches=" .. failures)
     end
+    print("[reference-contract-check] ARMED uid=" .. tostring(self.UniqueID))
     print("[ui-contract-fixture] constructed editor=" .. current.ClassName .. " cart_items=" .. count)
 end
