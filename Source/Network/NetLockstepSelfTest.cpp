@@ -16,6 +16,7 @@
 #include "Controller.h"
 #include "GUISound.h"
 #include "MovableMan.h"
+#include "SoundContainer.h"
 #include "NetActorOwnership.h"
 #include "MovableObject.h"
 #include "SceneMan.h"
@@ -9900,6 +9901,73 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		bool TestSoundIdentityPinAgreesAcrossHistories(std::string* error) {
+			const char* name = "sound_identity_pin_agrees_across_histories";
+			const uint64_t extra = 17;
+			const uint64_t startCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+			const long startUid = MovableObject::GetUniqueIDCounter();
+			auto finish = [&](const char* message) {
+				g_AudioMan.SetCheckpointSoundContainerCursor(startCursor);
+				MovableObject::PinUniqueIDCounter(startUid);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+
+			std::vector<std::unique_ptr<SoundContainer>> hostHistory;
+			for (uint64_t i = 0; i < extra; ++i) {
+				hostHistory.emplace_back(std::make_unique<SoundContainer>());
+			}
+			ScenarioRunner::ApplyDeterministicConfig();
+			auto hostMatch = std::make_unique<SoundContainer>();
+			const uint64_t hostIdentity = hostMatch->GetCheckpointIdentity();
+
+			NetGameSoundOp command;
+			command.actorUID = 1;
+			command.soundIdentity = hostIdentity;
+			command.op = static_cast<uint8_t>(NetGameSoundOp::Play);
+			NetLockstepFrame frame;
+			frame.senderPeerId = 1;
+			frame.targetFrame = 1;
+			frame.commands = {NetGameCommand{1, command}};
+			std::vector<uint8_t> bytes;
+			if (!NetLockstepCodec::Encode(NetLockstepPacket{frame}, bytes)) {
+				return finish("could not encode the host sound op");
+			}
+
+			hostMatch.reset();
+			hostHistory.clear();
+			g_AudioMan.SetCheckpointSoundContainerCursor(startCursor);
+			ScenarioRunner::ApplyDeterministicConfig();
+			auto clientMatch = std::make_unique<SoundContainer>();
+			const uint64_t clientIdentity = clientMatch->GetCheckpointIdentity();
+			if (hostIdentity != clientIdentity) {
+				const uint64_t delta = hostIdentity > clientIdentity ? hostIdentity - clientIdentity : clientIdentity - hostIdentity;
+				return finish(("identities differ by " + std::to_string(delta) +
+				               " host=" + std::to_string(hostIdentity) +
+				               " client=" + std::to_string(clientIdentity)).c_str());
+			}
+
+			const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes);
+			const NetLockstepFrame* decodedFrame = decoded.ok ? std::get_if<NetLockstepFrame>(&decoded.packet.payload) : nullptr;
+			const NetGameSoundOp* decodedOp = decodedFrame && !decodedFrame->commands.empty()
+				? std::get_if<NetGameSoundOp>(&decodedFrame->commands[0].payload)
+				: nullptr;
+			if (!decodedOp || decodedOp->soundIdentity != clientIdentity) {
+				return finish("encoded host sound op did not round-trip");
+			}
+			if (g_AudioMan.FindSimulationSoundContainer(decodedOp->soundIdentity) != clientMatch.get()) {
+				return finish("encoded host sound op does not resolve on the client");
+			}
+			return finish(nullptr);
+		}
+
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -9914,7 +9982,8 @@ namespace RTE {
 		};
 
 		std::string error;
-		if (!TestRoundTrips(&error) ||
+		if (!TestSoundIdentityPinAgreesAcrossHistories(&error) ||
+		    !TestRoundTrips(&error) ||
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||

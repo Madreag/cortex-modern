@@ -1846,6 +1846,14 @@ namespace RTE {
 		// every deterministic match must hand out the same IDs on every peer — including a rematch, where
 		// each process has created a different number of MOs by launch time. The base clears load-time IDs.
 		MovableObject::PinUniqueIDCounter(1 << 20);
+		// Same reason: sound identities ride NetGameSoundOp. Still pin if already at the base (impossible in practice).
+		constexpr uint64_t c_MatchSoundIdentityBase = 1ULL << 40;
+		const uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+		if (soundCursor >= c_MatchSoundIdentityBase) {
+			std::cerr << "[scenario] warning: sound identity cursor " << soundCursor << " already at or above the match base" << std::endl;
+		}
+		g_AudioMan.SetCheckpointSoundContainerCursor(c_MatchSoundIdentityBase);
+		std::cerr << "[scenario] pinned sound identity cursor " << soundCursor << " -> " << c_MatchSoundIdentityBase << std::endl;
 		// Remember the user's values so the closing session can hand them back.
 		if (!s_SimSettingsPinned) {
 			s_SimSettingsPinned = true;
