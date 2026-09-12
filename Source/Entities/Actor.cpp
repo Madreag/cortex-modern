@@ -991,6 +991,15 @@ void Actor::HandlePendingPieCommand() {
 	}
 }
 
+bool Actor::HandlePieCommand(PieSliceType pieSliceType) {
+	// A non-commander's squad selection puts the ordering seat through a controller-disabled unit
+	// pick; the synced slice lands on every peer here, so hold the wire from re-enabling it meanwhile.
+	if (pieSliceType == PieSliceType::FormSquad && !HasSquad() && ScenarioRunner::IsLockstepControllerSyncActive()) {
+		m_Controller.HoldDisabledForSyncedOrder(static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
+	}
+	return false;
+}
+
 void Actor::FormSquad(const Vector& selectionEdge) {
 	SetAIMode(AIMODE_SENTRY);
 	const float sqrRadius = g_SceneMan.ShortestDistance(selectionEdge, m_Pos, true).GetSqrMagnitude();
@@ -1057,11 +1066,6 @@ void Actor::BeginGoToOrder() {
 	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
 		m_Controller.HoldDisabledForSyncedOrder(static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
 	}
-}
-
-bool Actor::IsAwaitingGoToPoint() const {
-	return m_AIMode == AIMODE_GOTO && m_Waypoints.empty() && m_MovePath.empty() && !m_pMOMoveTarget &&
-	       m_Controller.IsPlayerControlled() && m_Controller.IsDisabled();
 }
 
 // The queue is sim state but only the owner runs the AI that writes it, so under lockstep an actor's own
@@ -1764,16 +1768,10 @@ void Actor::ApplyPersistedControllerMode() {
 		m_Controller.ApplyWireState(controlStates, m_Controller.GetAnalogMove(), m_Controller.GetAnalogAim(), m_Controller.GetAnalogCursor(), m_Controller.GetMouseMovement(), m_Controller.GetInputMode(), m_Controller.GetPlayerRaw(), m_PersistedControllerQuickDisabled != 0);
 		m_PersistedControllerQuickDisabled = -1;
 	}
-	bool restored = false;
 	if (!m_PersistedControllerCheckpoint.empty()) {
 		m_Controller.LoadCheckpoint(m_PersistedControllerCheckpoint);
 		m_Controller.SetControlledActor(this);
 		m_PersistedControllerCheckpoint.clear();
-		restored = true;
-	}
-	// The Go-To order hold is not stored; a restore re-derives it from the order state it left behind.
-	if (restored && ScenarioRunner::IsLockstepControllerSyncActive() && IsAwaitingGoToPoint()) {
-		m_Controller.HoldDisabledForSyncedOrder(static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
 	}
 }
 
