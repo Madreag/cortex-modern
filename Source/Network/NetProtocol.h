@@ -22,8 +22,14 @@ namespace RTE {
 	/// Version of the module-digest payloads, carried per message for the same reason.
 	constexpr uint16_t c_NetModuleDigestVersion = 1;
 
+	/// Version of the chat payload, carried per message for the same reason.
+	constexpr uint16_t c_NetChatVersion = 1;
+
 	/// The sender had more modules than the request or the size cap allowed, and sent the first of them.
 	constexpr uint8_t c_NetModuleDigestsTruncated = 0x01;
+
+	constexpr uint8_t c_NetChatScopeAll = 0;
+	constexpr uint8_t c_NetChatScopeTeam = 1;
 
 	enum class NetMessageType : uint16_t {
 		ClientHello = 1,
@@ -51,6 +57,7 @@ namespace RTE {
 		SubstitutionAck = 23,
 		ModuleDigestRequest = 24,
 		ModuleDigests = 25,
+		Chat = 26,
 	};
 
 	enum class NetRejectReason : uint16_t {
@@ -407,6 +414,17 @@ namespace RTE {
 		bool operator==(const NetModuleDigests&) const = default;
 	};
 
+	/// Presentation only: chat never becomes a sim command and never enters a tick hash.
+	struct NetChat {
+		uint16_t chatVersion = c_NetChatVersion;
+		uint8_t senderPeerId = 0;
+		uint8_t scope = c_NetChatScopeAll;
+		uint32_t sentAtMs = 0;
+		std::string text;
+
+		bool operator==(const NetChat&) const = default;
+	};
+
 	using NetPayload = std::variant<
 		NetClientHello,
 		NetHostHello,
@@ -432,7 +450,8 @@ namespace RTE {
 		NetH4SubstitutionOffer,
 		NetH4SubstitutionAck,
 		NetModuleDigestRequest,
-		NetModuleDigests>;
+		NetModuleDigests,
+		NetChat>;
 
 	struct NetMessage {
 		uint32_t sequence = 0;

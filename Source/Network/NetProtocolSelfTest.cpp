@@ -768,6 +768,66 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestChatRoundTrips(std::string* error) {
+			NetChat chat;
+			chat.senderPeerId = 2;
+			chat.scope = c_NetChatScopeAll;
+			chat.sentAtMs = 123456;
+			chat.text = "gg, nice shot";
+			if (!RoundTrip({52, 0, chat}, error)) {
+				return false;
+			}
+			NetChat team = chat;
+			team.scope = c_NetChatScopeTeam;
+			team.text = "\xC3\xA9\xC3\xA0 flanking left \xE2\x86\x92";
+			if (!RoundTrip({53, 0, team}, error)) {
+				return false;
+			}
+			NetChat empty;
+			if (!RoundTrip({54, 0, empty}, error)) {
+				return false;
+			}
+
+			NetChat atCap = chat;
+			atCap.text.assign(NetProtocol::c_MaxShortTextBytes, 'x');
+			if (!RoundTrip({55, 0, atCap}, error)) {
+				return false;
+			}
+			NetChat overCap = chat;
+			overCap.text.assign(NetProtocol::c_MaxShortTextBytes + 1U, 'x');
+			if (!ExpectEncodeError({56, 0, overCap}, NetProtocolErrorCode::StringTooLong, "a 129-byte chat line", error)) {
+				return false;
+			}
+			NetChat controlChars = chat;
+			controlChars.text = "two\nlines";
+			if (!ExpectEncodeError({57, 0, controlChars}, NetProtocolErrorCode::InvalidString, "a chat line with a newline", error)) {
+				return false;
+			}
+			NetChat badScope = chat;
+			badScope.scope = 2;
+			if (!ExpectEncodeError({58, 0, badScope}, NetProtocolErrorCode::InvalidValue, "a chat line with an unknown scope", error)) {
+				return false;
+			}
+			for (const std::string& bad : {std::string("\xC3"), std::string("\xC0\xAF"), std::string("\xED\xA0\x80"), std::string("\x80"), std::string("\xF5\x80\x80\x80")}) {
+				NetChat invalid = chat;
+				invalid.text = bad;
+				if (!ExpectEncodeError({59, 0, invalid}, NetProtocolErrorCode::InvalidString, "a chat line that is not UTF-8", error)) {
+					return false;
+				}
+			}
+			std::vector<uint8_t> bytes;
+			if (!EncodeMessage({60, 0, chat}, bytes, error)) {
+				return false;
+			}
+			std::vector<uint8_t> mutated = bytes;
+			mutated[NetProtocol::c_HeaderBytes + 3U] = 3U;
+			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::InvalidValue, error)) {
+				return false;
+			}
+			std::cout << "[net-protocol-selftest] PASS chat: " << NetProtocol::c_MaxShortTextBytes << "-byte cap, UTF-8 validated, scopes all/team" << std::endl;
+			return true;
+		}
+
 		bool TestOldWireEncoding(std::string* error) {
 			// A v1 peer's build has no decoder for the v2 types, so it is told why it was refused in
 			// its own envelope and never handed a payload it would read as garbage.
@@ -818,6 +878,13 @@ namespace RTE {
 			if (NetProtocol::EncodeAtVersion({8, 0, request}, 1, refused, &encodeError) ||
 			    encodeError.code != NetProtocolErrorCode::UnsupportedVersion) {
 				*error = "a v2-only message type was stamped at v1";
+				return false;
+			}
+			NetChat chat;
+			chat.text = "hello";
+			if (NetProtocol::EncodeAtVersion({9, 0, chat}, 1, refused, &encodeError) ||
+			    encodeError.code != NetProtocolErrorCode::UnsupportedVersion) {
+				*error = "a v2-only chat message was stamped at v1";
 				return false;
 			}
 			if (!NetProtocol::IsMessageTypeInVersion(NetMessageType::JoinRejected, 1) ||
@@ -986,6 +1053,9 @@ namespace RTE {
 			return fail(error);
 		}
 		if (!TestModuleDigestCaps(&error)) {
+			return fail(error);
+		}
+		if (!TestChatRoundTrips(&error)) {
 			return fail(error);
 		}
 		if (!TestOldWireEncoding(&error)) {
