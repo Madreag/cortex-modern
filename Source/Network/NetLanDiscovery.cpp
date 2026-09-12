@@ -32,6 +32,12 @@ namespace RTE {
 			}
 		}
 
+		void AppendU64(std::vector<uint8_t>& out, uint64_t value) {
+			for (int shift = 0; shift < 64; shift += 8) {
+				out.push_back(static_cast<uint8_t>((value >> shift) & 0xFFU));
+			}
+		}
+
 		void AppendString(std::vector<uint8_t>& out, const std::string& text) {
 			const uint8_t length = static_cast<uint8_t>(std::min<size_t>(text.size(), 255));
 			out.push_back(length);
@@ -50,6 +56,19 @@ namespace RTE {
 			offset += length;
 			return true;
 		}
+
+		bool ReadU64(const uint8_t* data, size_t size, size_t& offset, uint64_t& out) {
+			if (offset + 8 > size) {
+				return false;
+			}
+			out = 0;
+			for (int shift = 0; shift < 64; shift += 8) {
+				out |= static_cast<uint64_t>(data[offset++]) << shift;
+			}
+			return true;
+		}
+
+		constexpr uint16_t c_LegacyBeaconVersion = 1;
 
 		bool SetNonBlocking(SocketHandle socketHandle) {
 #ifdef _WIN32
@@ -106,18 +125,29 @@ namespace RTE {
 	}
 
 	bool NetLanDiscovery::StartBeacon(uint16_t gamePort, const std::string& hostName, const std::string& activity, const std::string& mode, uint8_t playerCount, uint8_t maxPlayers, std::string* error) {
+		return StartBeacon(gamePort, hostName, activity, mode, playerCount, maxPlayers, nullptr, error);
+	}
+
+	bool NetLanDiscovery::StartBeacon(uint16_t gamePort, const std::string& hostName, const std::string& activity, const std::string& mode, uint8_t playerCount, uint8_t maxPlayers, const NetLanCompatIdentity* compat, std::string* error) {
 		if (!EnsureSocket(false, error)) {
 			return false;
 		}
 		std::vector<uint8_t> payload;
 		AppendU32(payload, c_Magic);
-		AppendU16(payload, c_Version);
+		AppendU16(payload, compat == nullptr ? c_LegacyBeaconVersion : c_Version);
 		AppendU16(payload, gamePort);
 		payload.push_back(playerCount);
 		payload.push_back(maxPlayers);
 		AppendString(payload, hostName);
 		AppendString(payload, activity);
 		AppendString(payload, mode);
+		if (compat != nullptr) {
+			AppendU64(payload, static_cast<uint64_t>(compat->networkProtocolVersion));
+			AppendU64(payload, static_cast<uint64_t>(compat->lockstepCodecVersion));
+			AppendU64(payload, static_cast<uint64_t>(compat->controllerFrameVersion));
+			AppendString(payload, compat->sessionIdentityHash);
+			AppendString(payload, compat->moduleManifestHash);
+		}
 		// A hosting lobby calls this every menu frame; keep the send schedule unless the payload
 		// actually changed, or the beacon would broadcast every frame instead of once per interval.
 		if (m_Beaconing && payload == m_BeaconPayload) {
@@ -197,7 +227,7 @@ namespace RTE {
 			const uint32_t magic = static_cast<uint32_t>(buffer[0]) | (static_cast<uint32_t>(buffer[1]) << 8) |
 			                       (static_cast<uint32_t>(buffer[2]) << 16) | (static_cast<uint32_t>(buffer[3]) << 24);
 			const uint16_t version = static_cast<uint16_t>(buffer[4]) | (static_cast<uint16_t>(buffer[5]) << 8);
-			if (magic != c_Magic || version != c_Version) {
+			if (magic != c_Magic || version == 0 || version > c_Version) {
 				continue;
 			}
 			offset = 6;
@@ -210,6 +240,22 @@ namespace RTE {
 			    !ReadString(buffer, static_cast<size_t>(received), offset, info.activity) ||
 			    !ReadString(buffer, static_cast<size_t>(received), offset, info.mode)) {
 				continue;
+			}
+			if (version >= 2) {
+				uint64_t networkProtocolVersion = 0;
+				uint64_t lockstepCodecVersion = 0;
+				uint64_t controllerFrameVersion = 0;
+				if (!ReadU64(buffer, static_cast<size_t>(received), offset, networkProtocolVersion) ||
+				    !ReadU64(buffer, static_cast<size_t>(received), offset, lockstepCodecVersion) ||
+				    !ReadU64(buffer, static_cast<size_t>(received), offset, controllerFrameVersion) ||
+				    !ReadString(buffer, static_cast<size_t>(received), offset, info.compatibility.sessionIdentityHash) ||
+				    !ReadString(buffer, static_cast<size_t>(received), offset, info.compatibility.moduleManifestHash)) {
+					continue;
+				}
+				info.compatibility.networkProtocolVersion = static_cast<int64_t>(networkProtocolVersion);
+				info.compatibility.lockstepCodecVersion = static_cast<int64_t>(lockstepCodecVersion);
+				info.compatibility.controllerFrameVersion = static_cast<int64_t>(controllerFrameVersion);
+				info.hasCompatibility = true;
 			}
 			char addressText[INET_ADDRSTRLEN] = {};
 			inet_ntop(AF_INET, &fromAddress.sin_addr, addressText, sizeof(addressText));

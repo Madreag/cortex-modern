@@ -984,8 +984,8 @@ namespace RTE {
 					return false;
 				}
 				const NetDirectoryClient::GameRow& lanRow = merged[0];
-				if (lanRow.source != "LAN" || !lanRow.joinable || lanRow.address != "10.0.0.5" || lanRow.port != 42000 || lanRow.players != "1/2") {
-					*error = "the LAN row did not merge unchanged";
+				if (lanRow.source != "LAN" || lanRow.joinable || lanRow.reason != "beacon" || lanRow.address != "10.0.0.5" || lanRow.port != 42000 || lanRow.players != "1/2") {
+					*error = "a LAN row without beacon fields did not merge listed-but-not-joinable";
 					return false;
 				}
 				const NetDirectoryClient::GameRow& netRow = merged[1];
@@ -1000,6 +1000,142 @@ namespace RTE {
 						*error = "row " + std::to_string(i) + " reason was \"" + row.reason + "\" joinable=" + std::to_string(row.joinable) + ", expected \"" + expectedReasons[i] + "\"";
 						return false;
 					}
+				}
+				return true;
+			}
+
+			bool TestJoinListLabels(std::string* error) {
+				const NetDirectoryLocalIdentity local = SampleLocal();
+				std::string failures;
+				auto note = [&failures](const std::string& text) {
+					failures += (failures.empty() ? "" : "; ") + text;
+				};
+
+				// The session identity hash contains the module manifest hash, so a mod-only
+				// difference differs in both fields; the row must name the module field.
+				NetDirectorySessionRow modded = SampleRow();
+				modded.moduleManifestHash = kHex64A;
+				modded.sessionIdentityHash = kHex64A;
+				std::string reason;
+				if (NetDirectoryCodec::IsJoinable(modded, local, &reason)) {
+					note("a modded-host row was joinable");
+				} else if (reason != "incompatible: module_manifest_hash") {
+					note("modded-host reason \"" + reason + "\", expected incompatible: module_manifest_hash");
+				}
+				NetDirectorySessionRow identityOnly = SampleRow();
+				identityOnly.sessionIdentityHash = kHex64A;
+				reason.clear();
+				if (NetDirectoryCodec::IsJoinable(identityOnly, local, &reason)) {
+					note("an identity-mismatch row was joinable");
+				} else if (reason != "incompatible: session_identity_hash") {
+					note("identity-mismatch reason \"" + reason + "\", expected incompatible: session_identity_hash");
+				}
+				const std::vector<NetDirectoryClient::GameRow> netMerged =
+					NetDirectoryClient::MergeGameLists({}, {modded, identityOnly}, local);
+				if (netMerged.size() != 2) {
+					note("NET merge size " + std::to_string(netMerged.size()));
+				} else {
+					if (netMerged[0].joinable || netMerged[0].reason != "modules") {
+						note("modded-host NET row joinable=" + std::to_string(netMerged[0].joinable) + " reason=\"" + netMerged[0].reason + "\", expected joinable=no reason=modules");
+					}
+					if (netMerged[1].joinable || netMerged[1].reason != "identity") {
+						note("identity-mismatch NET row joinable=" + std::to_string(netMerged[1].joinable) + " reason=\"" + netMerged[1].reason + "\", expected joinable=no reason=identity");
+					}
+				}
+
+				// A v1 beacon carries no compatibility fields: the row must list but never be joinable.
+				NetLanDiscovery oldBeacon;
+				NetLanDiscovery oldBrowser;
+				std::string setupError;
+				NetLanHostInfo oldHost;
+				bool listed = false;
+				if (!oldBrowser.StartBrowser(&setupError) ||
+					!oldBeacon.StartBeacon(47572, "W94OldHost", "P4 Alpha Duel", "pvp-skirmish", 1, 2, &setupError)) {
+					*error = "v1 beacon pair setup failed: " + setupError;
+					return false;
+				}
+				for (uint64_t nowMs = 0; nowMs <= 3000 && !listed; nowMs += 50) {
+					oldBeacon.Tick(nowMs);
+					oldBrowser.Tick(nowMs);
+					for (const NetLanHostInfo& host : oldBrowser.GetHosts(nowMs)) {
+						if (host.hostName == "W94OldHost" && host.port == 47572) {
+							oldHost = host;
+							listed = true;
+						}
+					}
+					if (!listed) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(10));
+					}
+				}
+				oldBeacon.Stop();
+				oldBrowser.Stop();
+				if (!listed) {
+					note("a v1 beacon never listed");
+				} else {
+					const std::vector<NetDirectoryClient::GameRow> lanMerged = NetDirectoryClient::MergeGameLists({oldHost}, {}, local);
+					if (lanMerged.size() != 1 || lanMerged[0].joinable || lanMerged[0].reason != "beacon") {
+						note("v1-beacon LAN row merged " + (lanMerged.empty() ? std::string("<missing>") :
+							"joinable=" + std::to_string(lanMerged[0].joinable) + " reason=\"" + lanMerged[0].reason + "\"") +
+							", expected joinable=no reason=beacon");
+					}
+				}
+
+				// A v2 beacon carries the five fields; the row is judged with the same predicate.
+				NetLanCompatIdentity compat;
+				compat.networkProtocolVersion = local.networkProtocolVersion;
+				compat.lockstepCodecVersion = local.lockstepCodecVersion;
+				compat.controllerFrameVersion = local.controllerFrameVersion;
+				compat.sessionIdentityHash = local.sessionIdentityHash;
+				compat.moduleManifestHash = local.moduleManifestHash;
+				NetLanDiscovery beaconV2;
+				NetLanDiscovery browserV2;
+				NetLanHostInfo hostV2;
+				bool sawV2 = false;
+				if (!browserV2.StartBrowser(&setupError) ||
+					!beaconV2.StartBeacon(47571, "W94Host", "P4 Alpha Duel", "pvp-skirmish", 1, 2, &compat, &setupError)) {
+					*error = "v2 beacon pair setup failed: " + setupError;
+					return false;
+				}
+				for (uint64_t nowMs = 0; nowMs <= 3000 && !sawV2; nowMs += 50) {
+					beaconV2.Tick(nowMs);
+					browserV2.Tick(nowMs);
+					for (const NetLanHostInfo& host : browserV2.GetHosts(nowMs)) {
+						if (host.hostName == "W94Host" && host.port == 47571) {
+							hostV2 = host;
+							sawV2 = true;
+						}
+					}
+					if (!sawV2) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(10));
+					}
+				}
+				beaconV2.Stop();
+				browserV2.Stop();
+				if (!sawV2) {
+					note("a v2 beacon never listed");
+				} else {
+					if (!hostV2.hasCompatibility || !(hostV2.compatibility == compat)) {
+						note("the v2 beacon did not round-trip its compatibility fields");
+					}
+					NetLanHostInfo lanModded = hostV2;
+					lanModded.port = 47570;
+					lanModded.compatibility.moduleManifestHash = kHex64A;
+					lanModded.compatibility.sessionIdentityHash = kHex64A;
+					const std::vector<NetDirectoryClient::GameRow> lanMerged2 = NetDirectoryClient::MergeGameLists({hostV2, lanModded}, {}, local);
+					if (lanMerged2.size() != 2) {
+						note("v2 LAN merge size " + std::to_string(lanMerged2.size()));
+					} else {
+						if (!lanMerged2[0].joinable) {
+							note("matching v2-beacon LAN row was not joinable, reason=\"" + lanMerged2[0].reason + "\"");
+						}
+						if (lanMerged2[1].joinable || lanMerged2[1].reason != "modules") {
+							note("modded v2-beacon LAN row joinable=" + std::to_string(lanMerged2[1].joinable) + " reason=\"" + lanMerged2[1].reason + "\", expected joinable=no reason=modules");
+						}
+					}
+				}
+				if (!failures.empty()) {
+					*error = failures;
+					return false;
 				}
 				return true;
 			}
@@ -1512,6 +1648,7 @@ namespace RTE {
 			if (!TestHeartbeat404Reregisters(&error)) return fail(error);
 			if (!TestHeartbeat429HonorsRetryAfter(&error)) return fail(error);
 			if (!TestTransportErrorBackoff(&error)) return fail(error);
+			if (!TestJoinListLabels(&error)) return fail(error);
 			if (!TestMergeGameLists(&error)) return fail(error);
 			if (!TestSignalOrderingAndCursor(&error)) return fail(error);
 			if (!TestSignalCursorWaitsForSink(&error)) return fail(error);
