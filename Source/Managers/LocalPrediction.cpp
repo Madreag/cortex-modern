@@ -3,6 +3,7 @@
 #include "Activity.h"
 #include "ActivityMan.h"
 #include "Actor.h"
+#include "InventoryMenuGUI.h"
 #include "AHuman.h"
 #include "Attachable.h"
 #include "AudioMan.h"
@@ -138,8 +139,9 @@ namespace RTE {
 		Trace("preview start");
 
 		const auto start = std::chrono::steady_clock::now();
-		// The seeing pass reads the terrain the clone may carve; let it finish first.
+		// The seeing pass and the MOID draw still walk the live actor trees.
 		g_MovableMan.WaitForActorsSeeTask();
+		g_MovableMan.CompleteQueuedMOIDDrawings();
 		// Fence everything a preview tick can touch; all of it goes back before the canonical sim resumes.
 		const long long simCount = g_TimerMan.GetSimUpdateCount();
 		const long long simTicks = g_TimerMan.GetSimTimeTicks();
@@ -299,6 +301,11 @@ namespace RTE {
 		g_SimRNG.SetEngineState(rngState);
 		g_SimRNG.SetDrawCount(rngDraws);
 		g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);
+		for (Preview& preview: targets) {
+			if (preview.clone) {
+				preview.clone->ClampPreviewTimers();
+			}
+		}
 		MovableObject::PinUniqueIDCounter(uidCounter);
 		// The rounds a preview pops take fresh sound identities with them; the canonical cursor keeps its place.
 		g_AudioMan.SetCheckpointSoundContainerCursor(soundIdentityCursor);
@@ -335,19 +342,31 @@ namespace RTE {
 		Activity* activity = g_ActivityMan.GetActivity();
 		for (const Preview& preview: s_Previews) {
 			g_MovableMan.SwapActorForRender(preview.original, preview.clone);
+			g_MovableMan.AddRenderSubstitute(preview.clone);
 			if (activity) {
 				activity->SubstituteActorForRender(preview.original, preview.clone);
 			}
+			InventoryMenuGUI::SetRenderSubstituteActor(preview.clone);
 		}
 		// The previews carry their taken items; the residents stay off the frame meanwhile.
 		for (const MovableObject* resident: s_TakenResidents) {
 			g_MovableMan.HideForRender(resident, true);
 		}
 		s_Rendering = true;
+		if (std::getenv("CC_TRACE_RENDER_WINDOW")) {
+			std::cout << "[preview-hud] render-window begin tick=" << g_TimerMan.GetSimUpdateCount() << " frozen=" << (LuaMan::AreScriptsFrozen() ? 1 : 0) << " clones=";
+			for (const Preview& preview: s_Previews) {
+				std::cout << (preview.clone ? preview.clone->GetUniqueID() : 0) << " ";
+			}
+			std::cout << std::endl;
+		}
 	}
 
 	void LocalPrediction::EndRender() {
 		if (s_Rendering) {
+			if (std::getenv("CC_TRACE_RENDER_WINDOW")) {
+				std::cout << "[preview-hud] render-window end tick=" << g_TimerMan.GetSimUpdateCount() << " frozen=" << (LuaMan::AreScriptsFrozen() ? 1 : 0) << std::endl;
+			}
 			Activity* activity = g_ActivityMan.GetActivity();
 			for (const Preview& preview: s_Previews) {
 				g_MovableMan.SwapActorForRender(preview.clone, preview.original);
@@ -355,6 +374,8 @@ namespace RTE {
 					activity->SubstituteActorForRender(preview.clone, preview.original);
 				}
 			}
+			g_MovableMan.ClearRenderSubstitutes();
+			InventoryMenuGUI::SetRenderSubstituteActor(nullptr);
 			for (const MovableObject* resident: s_TakenResidents) {
 				g_MovableMan.HideForRender(resident, false);
 			}
