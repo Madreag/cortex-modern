@@ -535,6 +535,9 @@
     <ClInclude Include="Source\Network\NetDirectorySignalChannel.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetMuxTransport.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetHttpClient.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -872,6 +875,9 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetDirectorySignalChannel.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetMuxTransport.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetHttpClient.cpp">

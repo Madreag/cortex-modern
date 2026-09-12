@@ -849,6 +849,7 @@
     <ClInclude Include="Source\Network\NetDirectoryClient.h" />
     <ClInclude Include="Source\Network\NetDirectoryCodec.h" />
     <ClInclude Include="Source\Network\NetDirectorySignalChannel.h" />
+    <ClInclude Include="Source\Network\NetMuxTransport.h" />
     <ClInclude Include="Source\Network\NetHttpClient.h" />
     <ClInclude Include="Source\Network\NetIdentity.h" />
     <ClInclude Include="Source\Network\NetIdentitySelfTest.h" />
@@ -1440,6 +1441,7 @@
     <ClCompile Include="Source\Network\NetDirectoryCodec.cpp" />
     <ClCompile Include="Source\Network\NetDirectorySelfTest.cpp" />
     <ClCompile Include="Source\Network\NetDirectorySignalChannel.cpp" />
+    <ClCompile Include="Source\Network\NetMuxTransport.cpp" />
     <ClCompile Include="Source\Network\NetHttpClient.cpp" />
     <ClCompile Include="Source\Network\NetIdentity.cpp" />
     <ClCompile Include="Source\Network\NetIdentitySelfTest.cpp" />
