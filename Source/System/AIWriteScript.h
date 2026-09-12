@@ -15,7 +15,8 @@ namespace RTE {
 	///
 	/// Script lines: `<tick> team=<n> <op> [args]`, targeting the lowest-id local AI-driven AHuman of the team.
 	/// Ops: equip-firearm · equip-group <group> · equip-loaded <group> <exclude> · equip-named <preset> ·
-	/// equip-throwable · equip-digger · equip-shield · equip-shield-bg · unequip-fg · unequip-bg · flip <0|1> · aim <radians>.
+	/// equip-throwable · equip-digger · equip-shield · equip-shield-bg · unequip-fg · unequip-bg · flip <0|1> · aim <radians> ·
+	/// scene-waypoint <x> <y> · clear-waypoints.
 	class AIWriteScript {
 	public:
 		static bool Load(const std::string& path, std::string* error = nullptr);

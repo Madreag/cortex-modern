@@ -10,9 +10,12 @@
 #include "NetResyncRuntimeSelfTest.h"
 #include "System/ScenarioRunner.h"
 #include "ActivityMan.h"
+#include "Actor.h"
 #include "AudioMan.h"
+#include "Controller.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
+#include "SettingsMan.h"
 #include "TimerMan.h"
 #include "nlohmann/json.hpp"
 
@@ -1008,7 +1011,7 @@ namespace RTE {
 			frame.roundId = 0x5EED0000C0FFEE01ULL;
 			frame.observations = {NetSoundObservation{2, 1048601, 31, 0x1122334455667788ULL, 7, 3, 0.25F}, NetSoundObservation{2, 0, 12, 99, 0, 1, 0.75F}};
 			frame.frames = {MakeFrame(100, 1), MakeFrame(200, 2)};
-			frame.commands = {NetGameCommand{2, NetGameSetTeamFunds{0, 1500}}, NetGameCommand{2, NetGameSetTeamFunds{1, -250}}, NetGameCommand{2, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1234.5F, -67.25F, 1}}, NetGameCommand{2, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 48.5F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Robot 1", "Base.rte"}}}}, NetGameCommand{2, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", 512.0F, 300.0F, 1, {{"AHuman", "Green Dummy", "Base.rte"}}, true, 137.5F, false, 4, 600.0F, 350.25F, 424242, 1, -32.0F}}, NetGameCommand{2, NetGameScuttleCraft{17143, 0}}, NetGameCommand{2, NetGameInventoryOp{9001, 1, NetGameInventoryOp::Drop, 0, 2, true, 0.5F, -0.25F}}, NetGameCommand{2, NetGamePauseMatch{1, true}}, NetGameCommand{2, NetGamePauseMatch{0, false}}, NetGameCommand{2, NetGameSetActorAIMode{31337, 1, 6}}, NetGameCommand{2, NetGameSwitchControl{41414, 0, 2}}, NetGameCommand{2, NetGameAIEquip{51515, 1, NetGameAIEquip::LoadedFirearmInGroup, false, "Weapons - Primary", "Weapons - Explosive", "", ""}}, NetGameCommand{2, NetGameAIEquip{51516, 0, NetGameAIEquip::NamedDevice, false, "", "", "Base.rte", "Battle Rifle"}}, NetGameCommand{2, NetGameAIEquip{51517, 1, NetGameAIEquip::ShieldInBGArm, true, "", "", "", ""}}, NetGameCommand{2, NetGameAIEquip{51518, 0, NetGameAIEquip::UnequipFGArm, false, "", "", "", ""}}, NetGameCommand{2, NetGameAIOrder{61616, 0, NetGameAIOrder::FormSquad, 512.5F, -12.25F, 61617}}, NetGameCommand{2, NetGameAIOrder{61618, 1, NetGameAIOrder::MOWaypoint, 0.0F, 0.0F, 61616}}, NetGameCommand{2, NetGameSoundOp{71717, 1, 0x00FF00FF00FF0001ULL, NetGameSoundOp::Play, 0, 3, 0, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71718, 0, 0x0000000000000002ULL, NetGameSoundOp::SetProperty, 13, -1, 0, -12.5F, 88.25F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71719, 1, 0x0000000000000003ULL, NetGameSoundOp::SelectSounds, 0, -1, 0, 0.0F, 0.0F, {2, 0, 7}, ""}}, NetGameCommand{2, NetGameSoundOp{71720, 0, 0x0000000000000004ULL, NetGameSoundOp::FadeOut, 0, -1, 250, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71721, 1, 0x0000000000000005ULL, NetGameSoundOp::AddSound, 0, -1, 0, 0.0F, 0.0F, {1}, "9 SoundData1 31 Base.rte/Sounds/GUIs/Click.flac 0 0 0 3212836864 "}}, NetGameCommand{2, NetGameSoundOp{71722, 0, 0x0000000000000006ULL, NetGameSoundOp::SetCycleMode, 0, -1, 2, 0.0F, 0.0F, {}, ""}}};
+			frame.commands = {NetGameCommand{2, NetGameSetTeamFunds{0, 1500}}, NetGameCommand{2, NetGameSetTeamFunds{1, -250}}, NetGameCommand{2, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1234.5F, -67.25F, 1}}, NetGameCommand{2, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 48.5F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Robot 1", "Base.rte"}}}}, NetGameCommand{2, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", 512.0F, 300.0F, 1, {{"AHuman", "Green Dummy", "Base.rte"}}, true, 137.5F, false, 4, 600.0F, 350.25F, 424242, 1, -32.0F}}, NetGameCommand{2, NetGameScuttleCraft{17143, 0}}, NetGameCommand{2, NetGameInventoryOp{9001, 1, NetGameInventoryOp::Drop, 0, 2, true, 0.5F, -0.25F}}, NetGameCommand{2, NetGamePauseMatch{1, true}}, NetGameCommand{2, NetGamePauseMatch{0, false}}, NetGameCommand{2, NetGameSetActorAIMode{31337, 1, 6}}, NetGameCommand{2, NetGameSwitchControl{41414, 0, 2}}, NetGameCommand{2, NetGameAIEquip{51515, 1, NetGameAIEquip::LoadedFirearmInGroup, false, "Weapons - Primary", "Weapons - Explosive", "", ""}}, NetGameCommand{2, NetGameAIEquip{51516, 0, NetGameAIEquip::NamedDevice, false, "", "", "Base.rte", "Battle Rifle"}}, NetGameCommand{2, NetGameAIEquip{51517, 1, NetGameAIEquip::ShieldInBGArm, true, "", "", "", ""}}, NetGameCommand{2, NetGameAIEquip{51518, 0, NetGameAIEquip::UnequipFGArm, false, "", "", "", ""}}, NetGameCommand{2, NetGameAIOrder{61616, 0, NetGameAIOrder::FormSquad, 512.5F, -12.25F, 61617}}, NetGameCommand{2, NetGameAIOrder{61618, 1, NetGameAIOrder::MOWaypoint, 0.0F, 0.0F, 61616}}, NetGameCommand{2, NetGameAIOrder{61619, 0, NetGameAIOrder::SceneWaypoint, -128.25F, 96.5F, 0}}, NetGameCommand{2, NetGameAIOrder{61620, 1, NetGameAIOrder::ClearWaypoints, 0.0F, 0.0F, 0}}, NetGameCommand{2, NetGameSoundOp{71717, 1, 0x00FF00FF00FF0001ULL, NetGameSoundOp::Play, 0, 3, 0, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71718, 0, 0x0000000000000002ULL, NetGameSoundOp::SetProperty, 13, -1, 0, -12.5F, 88.25F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71719, 1, 0x0000000000000003ULL, NetGameSoundOp::SelectSounds, 0, -1, 0, 0.0F, 0.0F, {2, 0, 7}, ""}}, NetGameCommand{2, NetGameSoundOp{71720, 0, 0x0000000000000004ULL, NetGameSoundOp::FadeOut, 0, -1, 250, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71721, 1, 0x0000000000000005ULL, NetGameSoundOp::AddSound, 0, -1, 0, 0.0F, 0.0F, {1}, "9 SoundData1 31 Base.rte/Sounds/GUIs/Click.flac 0 0 0 3212836864 "}}, NetGameCommand{2, NetGameSoundOp{71722, 0, 0x0000000000000006ULL, NetGameSoundOp::SetCycleMode, 0, -1, 2, 0.0F, 0.0F, {}, ""}}};
 			if (!RoundTrip({frame}, error)) {
 				return false;
 			}
@@ -1285,6 +1288,7 @@ namespace RTE {
 			return true;
 		}
 
+
 		void DrainReady(NetLockstepCoordinator& coordinator, std::vector<uint64_t>& readyFrames) {
 			NetLockstepReadyFrame ready;
 			while (coordinator.PopReadyFrame(ready)) {
@@ -1306,6 +1310,117 @@ namespace RTE {
 			         " client=" + NetLockstepCoordinator::StateName(client.GetState()) +
 			         " host_report=" + host.BuildReportJson();
 			return false;
+		}
+
+		// The AI waypoint queue is sim state only the owner's AI writes, so an AI-pass write must leave the
+		// owner as an AIOrder and land on every peer instead of mutating the owner alone.
+		bool TestAIWaypointAddsCrossTheWire(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433414D01ULL);
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 43022, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 43022, 0, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "team-owner";
+			clientConfig.ownershipPolicy = "team-owner";
+			if (!StartCoordinatorPair(43022, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			// No scene, no preset manager: the two views are not torn down inside this selftest process.
+			Actor* ownerView = new Actor();
+			Actor* peerView = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (ownerView->MovableObject::Create(1) < 0 || peerView->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			ownerView->SetTeam(0);
+			peerView->SetTeam(0);
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+
+			// A shared script's write, outside any AI pass, still lands directly on both peers.
+			ownerView->AddAISceneWaypoint(Vector(1.0F, 2.0F));
+			peerView->AddAISceneWaypoint(Vector(1.0F, 2.0F));
+			if (ownerView->GetWaypointsSize() != 1 || peerView->GetWaypointsSize() != 1 || !ScenarioRunner::DrainLocalGameCommands().empty()) {
+				return finish("a write outside the AI pass did not stay direct");
+			}
+
+			// The owner's AI pass: the writes the Lua bindings make go through these exact entries.
+			g_CurrentAIActor = ownerView;
+			ownerView->ClearAIWaypoints();
+			ownerView->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			ownerView->AddAISceneWaypoint(Vector(30.0F, 40.0F));
+			g_CurrentAIActor = nullptr;
+			if (ownerView->GetWaypointsSize() != 1) {
+				return finish("the AI pass mutated the owner's queue instead of sending it");
+			}
+			ownerView->SendDeferredWaypoints();
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			const int64_t ownerUID = static_cast<int64_t>(ownerView->GetUniqueID());
+			const std::vector<NetGameAIOrder> expected = {
+			    {ownerUID, 0, NetGameAIOrder::ClearWaypoints, 0.0F, 0.0F, 0},
+			    {ownerUID, 0, NetGameAIOrder::SceneWaypoint, 10.0F, 20.0F, 0},
+			    {ownerUID, 0, NetGameAIOrder::SceneWaypoint, 30.0F, 40.0F, 0},
+			};
+			if (sent.size() != expected.size()) {
+				return finish("the AI pass did not send one AIOrder per waypoint call");
+			}
+			for (size_t index = 0; index < sent.size(); ++index) {
+				const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&sent[index].payload);
+				if (!order || !(*order == expected[index])) {
+					return finish("a sent AIOrder does not match the waypoint call it replicates");
+				}
+			}
+
+			// Both peers apply the identical orders, the way the game-command channel does.
+			for (Actor* view: {ownerView, peerView}) {
+				for (const NetGameCommand& command: sent) {
+					const NetGameAIOrder& order = std::get<NetGameAIOrder>(command.payload);
+					switch (order.op) {
+						case NetGameAIOrder::SceneWaypoint:
+							view->AddAISceneWaypoint(Vector(order.x, order.y));
+							break;
+						case NetGameAIOrder::ClearWaypoints:
+							view->ClearAIWaypoints();
+							break;
+						default:
+							return finish("an unexpected AIOrder op reached the apply");
+					}
+				}
+			}
+			const std::list<std::pair<Vector, MovableObjectReference>>& ownerQueue = ownerView->GetWaypointList();
+			const std::list<std::pair<Vector, MovableObjectReference>>& peerQueue = peerView->GetWaypointList();
+			if (ownerQueue.size() != 2 || peerQueue.size() != 2) {
+				return finish("the applied queue is not the two waypoints the AI asked for");
+			}
+			auto ownerPoint = ownerQueue.begin();
+			auto peerPoint = peerQueue.begin();
+			for (; ownerPoint != ownerQueue.end(); ++ownerPoint, ++peerPoint) {
+				if (ownerPoint->first != peerPoint->first || ownerPoint->second != peerPoint->second) {
+					return finish("the two peers hold different waypoint queues");
+				}
+			}
+			if (ownerQueue.front().first != Vector(10.0F, 20.0F) || ownerQueue.back().first != Vector(30.0F, 40.0F)) {
+				return finish("the applied queue is not in the order the AI wrote it");
+			}
+			std::cout << "[net-lockstep-selftest] ai waypoint adds cross the wire: sent=" << sent.size() << " owner_wp=" << ownerQueue.size() << " peer_wp=" << peerQueue.size() << std::endl;
+			return finish(nullptr);
 		}
 
 		bool TestRecoveryStopsAtCompletedTick(std::string* error) {
@@ -8831,6 +8946,7 @@ namespace RTE {
 		if (!MovableMan::IsConstructed()) MovableMan::Construct();
 		if (!ActivityMan::IsConstructed()) ActivityMan::Construct();
 		if (!AudioMan::IsConstructed()) AudioMan::Construct();
+		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-lockstep-selftest] FAIL: " << message << std::endl;
 			return 1;
@@ -8840,6 +8956,7 @@ namespace RTE {
 		if (!TestRoundTrips(&error) ||
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
+		    !TestAIWaypointAddsCrossTheWire(&error) ||
 		    !TestCoordinatorOwedFrameRetryEndsWithTheRound(&error) ||
 		    !TestCoordinatorOwedFrameKeepsItsCommands(&error) ||
 		    !TestCoordinatorStoppedRoundStopsResending(&error) ||
