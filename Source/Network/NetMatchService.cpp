@@ -264,15 +264,26 @@ static std::string ResyncSaveName() {
 			// The round that just ended is the only thing that knows who left it; the next lobby is
 			// formed from the peers it still had. The host derives its own roster from the live session.
 			if (!m_IsHost) {
-				const NetMatchConfig& played = m_Runner->GetMatchConfig();
-				std::vector<uint8_t> survivors{played.hostPeerId}; // the star's hub cannot have left
-				for (const NetMatchPlayerSlot& slot : played.players) {
-					if (!slot.cpu && slot.peerId != 0 && slot.peerId != played.hostPeerId &&
-					    (!m_Coordinator || !m_Coordinator->GetPeerLeaveFrames().contains(slot.peerId))) {
-						survivors.push_back(slot.peerId);
+				std::map<uint8_t, uint64_t> leaves;
+				std::set<uint8_t> refilled;
+				std::optional<NetLockstepSeatSnapshot> seats;
+				if (m_Coordinator) {
+					leaves = m_Coordinator->GetPeerLeaveFrames();
+					for (const auto& leave : leaves) {
+						const NetLockstepHoldResolution resolution = m_Coordinator->HeldSeatResolution(leave.first);
+						if (resolution == NetLockstepHoldResolution::Reclaimed || resolution == NetLockstepHoldResolution::Substituted) {
+							refilled.insert(leave.first);
+						}
+					}
+					seats = m_Coordinator->TakeSeatSnapshot();
+					if (!seats) {
+						seats = m_SeatPresence.GetSnapshot();
+					}
+					if (seats && seats->roundId != m_Coordinator->GetRoundId()) {
+						seats.reset(); // an earlier round's view
 					}
 				}
-				m_Runner->SetRematchRoster(std::move(survivors));
+				m_Runner->SetRematchRoster(NetMatchRunner::DeriveRematchSurvivors(m_Runner->GetMatchConfig(), leaves, refilled, seats ? &*seats : nullptr));
 			}
 			DrainPendingSessionEventsLocked(false);
 			AccumulateLockstepTotalsLocked();

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -79,7 +80,7 @@ namespace RTE {
 		void SetStartFrame(uint64_t startFrame) { m_Config.startFrame = startFrame; }
 
 		/// Client: the peers ITS round still had when it ended. The next rematch derives this peer's own
-		/// roster from them and refuses a host proposal that disagrees with it. A host derives its roster
+		/// roster from them and refuses a host proposal that does not fit it. A host derives its roster
 		/// from the live session instead, so it needs no list; a resync round keeps the roster it healed.
 		void SetRematchRoster(std::vector<uint8_t> survivingPeerIds) { m_RematchRoster = std::move(survivingPeerIds); }
 
@@ -92,17 +93,18 @@ namespace RTE {
 
 		std::string BuildReportJson(const NetSession& session, const NetLockstepCoordinator& coordinator) const;
 
-		/// Whether a proposed rematch config seats exactly the roster this peer derived. Display names
-		/// are the host's to stamp; the seats are what the two sides have to agree on.
-		static bool RematchRostersAgree(const NetMatchConfig& proposed, const NetMatchConfig& derived);
+		/// Client: the survivors to hand SetRematchRoster, from what its own round saw.
+		static std::vector<uint8_t> DeriveRematchSurvivors(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaveFrames, const std::set<uint8_t>& refilledPeerIds, const NetLockstepSeatSnapshot* seats);
+		/// Whether a host's rematch proposal is the roster this peer derived, less seats only the host knows are gone.
+		static bool RematchRostersAgree(const NetMatchConfig& proposed, const NetMatchConfig& derived, uint8_t localPeerId, std::string* reason = nullptr);
 
 		static const char* StateName(NetMatchRuntimeState state);
 
 	private:
 		/// Re-forms the roster the next round is played on and re-seats everything that depends on it.
 		bool PrepareRematchRoster(NetSession& session, const std::vector<uint8_t>& survivingPeerIds, std::string* error);
-		/// Client: the host's proposal must be the roster this peer derived from its own round.
-		bool VerifyRematchProposal(std::string* error);
+		/// Client: the host's proposal must fit the roster this peer derived, on the seat it was admitted on.
+		bool VerifyRematchProposal(uint8_t localPeerId, std::string* error);
 		bool WaitForSessionReady(INetTransport& transport, NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error);
 		bool RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error);
 		bool StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error);
