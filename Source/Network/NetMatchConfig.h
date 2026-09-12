@@ -34,6 +34,7 @@ namespace RTE {
 		uint16_t version = 2;
 		uint64_t sessionId = 0;
 		uint8_t hostPeerId = 1;
+		bool dedicated = false; // The host keeps lockstep peer hostPeerId but seats no human slot there.
 		uint8_t peerCount = 2;
 		uint16_t inputDelayFrames = 0;
 		std::vector<uint16_t> peerInputDelayFrames; // Per-sender delay by peerId-1 (size 0 or peerCount); empty = uniform inputDelayFrames.
