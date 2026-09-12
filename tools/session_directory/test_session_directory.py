@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
 
-from session_directory import DualRateLimiter, LOGGER, RunningServer, spawn_server
+from session_directory import IP_REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
 
 INSTALL_KEY = "0123456789abcdef"
 HEX64_A = "a" * 64
@@ -1332,6 +1332,20 @@ class DirectoryTests(unittest.TestCase):
         assert blocked is not None
         self.assertEqual(blocked[0], 429)
         self.assertEqual(blocked[1]["error"], "rate_limited")
+
+    def test_limiter_probe_does_not_create_buckets(self) -> None:
+        limiter = DualRateLimiter()
+        now = 1.0
+        ip = "10.0.0.2"
+        for i in range(IP_REQ_PER_MIN):
+            self.assertIsNone(limiter.check(f"{i:016x}", ip, now, False))
+        blocked = limiter.check("orphan0000000000", ip, now, True)
+        self.assertIsNotNone(blocked)
+        self.assertNotIn("orphan0000000000", limiter._by_key._requests)
+        self.assertNotIn("orphan0000000000", limiter._by_key._registers)
+        self.assertNotIn("orphan0000000000", limiter._by_key._last)
+        for key in limiter._by_key._requests:
+            self.assertIn(key, limiter._by_key._last)
 
 
 if __name__ == "__main__":

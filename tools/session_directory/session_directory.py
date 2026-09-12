@@ -191,7 +191,8 @@ class RateLimiter:
 
     def _trim(self, bucket: dict[str, list[float]], key: str, now: float) -> list[float]:
         kept = [ts for ts in bucket.get(key, []) if now - ts < RATE_WINDOW_S]
-        bucket[key] = kept
+        if key in bucket:
+            bucket[key] = kept
         return kept
 
     def _retry_after(self, events: list[float], now: float) -> int:
