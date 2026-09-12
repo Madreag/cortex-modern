@@ -126,7 +126,7 @@ bool ActivityMan::WaitForSaveGameTask() const {
 #define HACK_MZ_COMPRESS_LEVEL_FAST 2
 #define HACK_MZ_COMPRESS_METHOD_DEFLATE 8
 
-bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
+bool ActivityMan::SaveCurrentGame(const std::string& fileName, SaveCompression compression) {
 	WaitForSaveGameTask();
 	std::promise<bool> refused;
 	refused.set_value(false);
@@ -283,7 +283,8 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 
 	auto sceneLayerInfos = std::make_shared<std::vector<SceneLayerInfo>>(copyBitmaps.get());
 	const std::filesystem::path savePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName + ".ccsave";
-	auto saveWriterData = [fileName, savePath, sceneLayerInfos, indexWriter, writer]() {
+	const int zipLevel = ZipLevelFor(compression);
+	auto saveWriterData = [fileName, savePath, sceneLayerInfos, indexWriter, writer, zipLevel]() {
 		struct PendingArchive {
 			std::filesystem::path path;
 			zipFile file = nullptr;
@@ -303,8 +304,9 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 #else
 			    zipOpenNewFileInZip_64;
 #endif
+			const int level = method == HACK_MZ_COMPRESS_METHOD_DEFLATE ? zipLevel : HACK_MZ_COMPRESS_LEVEL_FAST;
 			if (openEntry(archive.file, name.c_str(), &info, nullptr, 0, nullptr, 0, nullptr, method,
-			                        HACK_MZ_COMPRESS_LEVEL_FAST, size >= 0xFFFFFFFFULL) != ZIP_OK) {
+			                        level, size >= 0xFFFFFFFFULL) != ZIP_OK) {
 				throw std::runtime_error("could not open " + name + " in archive");
 			}
 			const char* bytes = static_cast<const char*>(data);
@@ -358,7 +360,7 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 		std::cout << "[snapbench] parse_ms=" << parseMs << " props=" << parsedProps << " bytes=" << snapshotText.size() << std::endl;
 	}
 
-	m_SaveGameTask = g_ThreadMan.GetBackgroundThreadPool().submit([saveWriterData, saveMainMs, fileName]() {
+	m_SaveGameTask = g_ThreadMan.GetBackgroundThreadPool().submit([this, saveWriterData, saveMainMs, fileName]() {
 		const auto asyncStart = std::chrono::steady_clock::now();
 		bool saved = false;
 		try {
@@ -369,6 +371,8 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName) {
 			g_ConsoleMan.PrintString("ERROR: Could not save game \"" + fileName + "\": " + error.what());
 		}
 		const long long asyncMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - asyncStart).count();
+		m_LastSaveMainMs = saveMainMs;
+		m_LastSaveZipMs = asyncMs;
 		std::cout << "[snapbench] save main_ms=" << saveMainMs << " zip_io_ms=" << asyncMs << " saved=" << saved << std::endl;
 		return saved;
 	}).share();

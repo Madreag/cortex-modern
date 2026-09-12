@@ -130,10 +130,23 @@ namespace RTE {
 		/// @return Whether the game was successfully saved.
 		bool ForceAbortSave();
 
+		enum class SaveCompression {
+			Fast,
+			Small,
+		};
+		static constexpr int c_SaveZipLevelFast = 2;
+		static constexpr int c_SaveZipLevelSmall = 6;
+		static constexpr int ZipLevelFor(SaveCompression compression) {
+			return compression == SaveCompression::Small ? c_SaveZipLevelSmall : c_SaveZipLevelFast;
+		}
+
 		/// Saves the currently running Scene and Activity to a savegame file. Note this only works for GAScripted activities.
 		/// @param fileName Path to the file.
+		/// @param compression Fast is the user's save level; Small is for resync snapshots.
 		/// @return Whether the save was queued. WaitForSaveGameTask returns its result.
-		bool SaveCurrentGame(const std::string& fileName);
+		bool SaveCurrentGame(const std::string& fileName, SaveCompression compression = SaveCompression::Fast);
+		long long LastSaveMainMs() const { return m_LastSaveMainMs; }
+		long long LastSaveZipMs() const { return m_LastSaveZipMs; }
 		std::string CaptureRuntimeGlobals() const;
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried) const;
 		bool RestoreRuntimeGlobals(std::string_view text, bool validateOnly = false);
@@ -297,6 +310,8 @@ namespace RTE {
 		bool m_RestartRestoresSnapshot = false;
 
 		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.
+		long long m_LastSaveMainMs = 0;
+		long long m_LastSaveZipMs = 0;
 
 		bool m_InActivity; //!< Whether we are currently in game (as in, not in the main menu or any other out-of-game menus), regardless of its state.
 		bool m_ActivityNeedsRestart; //!< Whether the current Activity needs to be restarted.
