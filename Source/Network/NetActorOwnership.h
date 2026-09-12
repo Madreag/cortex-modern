@@ -24,6 +24,18 @@ namespace RTE {
 	public:
 		static uint8_t ResolveOwnerPeer(const NetMatchConfig& config, const NetActorOwnershipQuery& query);
 
+		/// Records the owner an actor was resolved to when it entered the world. The policy reads this
+		/// first afterwards, so a control-mode change cannot move frame production under a live actor.
+		/// @param actorUniqueID The actor's unique id.
+		/// @param ownerPeerId The peer that owns it from now on.
+		static void SeedOwner(int64_t actorUniqueID, uint8_t ownerPeerId);
+		static bool HasSeededOwner(int64_t actorUniqueID);
+		/// @return The seeded owner, or 0 if the actor has no entry.
+		static uint8_t GetSeededOwner(int64_t actorUniqueID);
+		static const std::map<int64_t, uint8_t>& GetSeededOwners();
+		static void RestoreSeededOwners(std::map<int64_t, uint8_t> owners);
+		static void ClearSeededOwners();
+
 		/// Resolves which peer is allowed to issue economy commands (funds, deploy, delivery) for a team:
 		/// the human assigned to it, or the host for a CPU/unassigned team. 0 if the config defines no teams.
 		/// @param config The synced match config.
