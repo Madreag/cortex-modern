@@ -943,6 +943,7 @@
     <ClInclude Include="Source\Network\NetLanDiscovery.h" />
     <ClInclude Include="Source\Network\NetMatchReplay.h" />
     <ClInclude Include="Source\Network\NetMatchSelfTest.h" />
+    <ClInclude Include="Source\Network\NetPortMap.h" />
     <ClInclude Include="Source\Network\NetProtocol.h" />
     <ClInclude Include="Source\Network\NetProtocolSelfTest.h" />
     <ClInclude Include="Source\Network\NetReconnectAdmission.h" />
@@ -1559,6 +1560,8 @@
     <ClCompile Include="Source\Network\NetLanDiscovery.cpp" />
     <ClCompile Include="Source\Network\NetMatchReplay.cpp" />
     <ClCompile Include="Source\Network\NetMatchSelfTest.cpp" />
+    <ClCompile Include="Source\Network\NetPortMap.cpp" />
+    <ClCompile Include="Source\Network\NetPortMapSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetProtocol.cpp" />
     <ClCompile Include="Source\Network\NetProtocolSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetReconnectAdmission.cpp" />
