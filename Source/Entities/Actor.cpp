@@ -166,6 +166,7 @@ void Actor::Clear() {
 	m_AIMode = AIMODE_NONE;
 	m_Waypoints.clear();
 	m_PendingDeferredWaypoints.clear();
+	m_InflightWaypoints.clear();
 	m_WaypointCursor = 0;
 	m_DrawWaypoints = false;
 	m_MoveTarget.Reset();
@@ -1046,33 +1047,33 @@ void Actor::RequestAIMode(AIMode newMode) {
 	}
 }
 
-// The queue is sim state but only the owner runs the AI that writes it, so under lockstep an actor's own
-// AI pass queues the write here and sends it over the wire instead of landing on the owner alone. Only
-// the running actor's own writes defer, so one thread owns the queue and the drain always reaches it.
-static bool DeferWaypointMutation(const Actor* actor) {
-	return g_CurrentAIActor == actor && ScenarioRunner::IsLockstepControllerSyncActive();
+// The queue is sim state but only the owner runs the AI that writes it, so under lockstep a write made
+// inside an AI pass queues on the RUNNING actor — one thread owns the pending list and the drain always
+// reaches it — and rides the wire as an order naming the written actor, landing on every peer at the
+// committed tick. The written actor is usually the running one; a pass may also write another's queue.
+static bool DeferWaypointMutation() {
+	return g_CurrentAIActor != nullptr && ScenarioRunner::IsLockstepControllerSyncActive();
 }
 
 void Actor::AddAISceneWaypoint(const Vector& waypoint) {
-	if (DeferWaypointMutation(this)) {
-		m_PendingDeferredWaypoints.push_back({Actor::DeferredWaypoint::Scene, waypoint.m_X, waypoint.m_Y, 0});
+	if (DeferWaypointMutation()) {
+		g_CurrentAIActor->m_PendingDeferredWaypoints.push_back({Actor::DeferredWaypoint::Scene, waypoint.m_X, waypoint.m_Y, 0, false, static_cast<int64_t>(GetUniqueID())});
 		return;
 	}
 	m_Waypoints.push_back(std::pair<Vector, MovableObject*>(waypoint, (MovableObject*)NULL));
 }
 
 void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
-	if (DeferWaypointMutation(this)) {
+	if (DeferWaypointMutation()) {
 		if (!g_MovableMan.ValidMO(pMOWaypoint)) {
 			return;
 		}
-		// Same no-duplicate-tail rule as the direct path, read off the queue the pending calls will leave.
-		const int64_t identity = static_cast<int64_t>(pMOWaypoint->GetUniqueID());
-		const DeferredWaypoint* last = m_PendingDeferredWaypoints.empty() ? nullptr : &m_PendingDeferredWaypoints.back();
-		const bool tailIsSameMO = last ? (last->op == DeferredWaypoint::MOTarget && last->targetUID == identity)
-		                               : (!m_Waypoints.empty() && m_Waypoints.back().second == pMOWaypoint);
-		if (!tailIsSameMO) {
-			m_PendingDeferredWaypoints.push_back({DeferredWaypoint::MOTarget, pMOWaypoint->GetPos().m_X, pMOWaypoint->GetPos().m_Y, identity});
+		// Same no-duplicate-tail rule as the direct path, read off this queue's committed tail plus the
+		// calls the running pass already queued for it.
+		std::deque<LogicalWaypointItem> items;
+		BuildLogicalWaypoints(items);
+		if (items.empty() || items.back().target != pMOWaypoint) {
+			g_CurrentAIActor->m_PendingDeferredWaypoints.push_back({DeferredWaypoint::MOTarget, pMOWaypoint->GetPos().m_X, pMOWaypoint->GetPos().m_Y, static_cast<int64_t>(pMOWaypoint->GetUniqueID()), false, static_cast<int64_t>(GetUniqueID())});
 		}
 		return;
 	}
@@ -1082,8 +1083,8 @@ void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
 }
 
 void Actor::ClearAIWaypoints() {
-	if (DeferWaypointMutation(this)) {
-		m_PendingDeferredWaypoints.push_back({DeferredWaypoint::Clear, 0.0F, 0.0F, 0});
+	if (DeferWaypointMutation()) {
+		g_CurrentAIActor->m_PendingDeferredWaypoints.push_back({DeferredWaypoint::Clear, 0.0F, 0.0F, 0, false, static_cast<int64_t>(GetUniqueID())});
 		return;
 	}
 	m_pMOMoveTarget = 0;
@@ -1092,6 +1093,140 @@ void Actor::ClearAIWaypoints() {
 	m_MovePath.clear();
 	m_MoveTarget = m_Pos;
 	m_MoveVector.Reset();
+}
+
+// While a pass runs, reads of a queue see the committed list with every call still in flight and this
+// pass's queued calls replayed on top; the physical list still only changes when the sent commands land.
+// The queued calls live on the running actor, the in-flight ones on the written actor, so a pass reading
+// another actor's queue (after writing it, as scripts do) sees what single player would.
+bool Actor::ReadingOwnDeferredWaypoints() const {
+	if (g_CurrentAIActor == nullptr || !ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return false;
+	}
+	if (m_WaypointCursor > 0 || !m_InflightWaypoints.empty()) {
+		return true;
+	}
+	const int64_t uid = static_cast<int64_t>(GetUniqueID());
+	for (const DeferredWaypoint& waypoint: ActivePendingWaypoints()) {
+		if (waypoint.actorUID == uid) {
+			return true;
+		}
+	}
+	return false;
+}
+
+const std::vector<Actor::DeferredWaypoint>& Actor::ActivePendingWaypoints() const {
+	return g_CurrentAIActor ? g_CurrentAIActor->m_PendingDeferredWaypoints : m_PendingDeferredWaypoints;
+}
+
+bool Actor::PendingWaypointClearSeen() const {
+	if (!ReadingOwnDeferredWaypoints()) {
+		return false;
+	}
+	for (const DeferredWaypoint& waypoint: m_InflightWaypoints) {
+		if (waypoint.op == DeferredWaypoint::Clear) {
+			return true;
+		}
+	}
+	const int64_t uid = static_cast<int64_t>(GetUniqueID());
+	for (const DeferredWaypoint& waypoint: ActivePendingWaypoints()) {
+		if (waypoint.actorUID == uid && waypoint.op == DeferredWaypoint::Clear) {
+			return true;
+		}
+	}
+	return false;
+}
+
+const MovableObject* Actor::LogicalMOMoveTarget() const {
+	const int64_t uid = static_cast<int64_t>(GetUniqueID());
+	const MovableObject* moTarget = m_pMOMoveTarget;
+	auto apply = [&](const DeferredWaypoint& waypoint) {
+		if (waypoint.op == DeferredWaypoint::Clear) {
+			moTarget = nullptr;
+		} else if (waypoint.consumed) {
+			moTarget = (waypoint.op == DeferredWaypoint::MOTarget && waypoint.targetUID) ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(waypoint.targetUID)) : nullptr;
+		}
+	};
+	for (const DeferredWaypoint& waypoint: m_InflightWaypoints) {
+		apply(waypoint);
+	}
+	for (const DeferredWaypoint& waypoint: ActivePendingWaypoints()) {
+		if (waypoint.actorUID == uid) {
+			apply(waypoint);
+		}
+	}
+	return moTarget;
+}
+
+void Actor::BuildLogicalWaypoints(std::deque<LogicalWaypointItem>& items) const {
+	const size_t loaded = std::min(static_cast<size_t>(std::max(m_WaypointCursor, 0)), m_Waypoints.size());
+	std::list<std::pair<Vector, MovableObjectReference>>::const_iterator entry = m_Waypoints.begin();
+	std::advance(entry, static_cast<long>(loaded));
+	for (; entry != m_Waypoints.end(); ++entry) {
+		items.push_back({entry->first, entry->second, nullptr});
+	}
+	auto appendCall = [&](const DeferredWaypoint& waypoint) {
+		if (waypoint.op == DeferredWaypoint::Clear) {
+			items.clear();
+		} else if (!waypoint.consumed) {
+			const MovableObject* target = (waypoint.op == DeferredWaypoint::MOTarget && waypoint.targetUID) ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(waypoint.targetUID)) : nullptr;
+			items.push_back({Vector(waypoint.x, waypoint.y), target, &waypoint});
+		}
+	};
+	for (const DeferredWaypoint& waypoint: m_InflightWaypoints) {
+		appendCall(waypoint);
+	}
+	const int64_t uid = static_cast<int64_t>(GetUniqueID());
+	for (const DeferredWaypoint& waypoint: ActivePendingWaypoints()) {
+		if (waypoint.actorUID == uid) {
+			appendCall(waypoint);
+		}
+	}
+}
+
+Vector Actor::GetLastAIWaypoint() const {
+	if (ReadingOwnDeferredWaypoints()) {
+		std::deque<LogicalWaypointItem> items;
+		BuildLogicalWaypoints(items);
+		if (!items.empty()) {
+			return items.back().point;
+		}
+		if (!PendingWaypointClearSeen() && !m_MovePath.empty()) {
+			return m_MovePath.back();
+		}
+		return m_Pos;
+	}
+	if (!m_Waypoints.empty()) {
+		return m_Waypoints.back().first;
+	} else if (!m_MovePath.empty()) {
+		return m_MovePath.back();
+	}
+	return m_Pos;
+}
+
+const std::list<std::pair<Vector, MovableObjectReference>>& Actor::GetWaypointList() const {
+	if (!ReadingOwnDeferredWaypoints()) {
+		return m_Waypoints;
+	}
+	// Passes run on several threads and may read a queue owned by an actor whose own pass is live on
+	// another thread, so the scratch list is per-thread, not per-actor.
+	static thread_local std::list<std::pair<Vector, MovableObjectReference>> logicalList;
+	logicalList.clear();
+	std::deque<LogicalWaypointItem> items;
+	BuildLogicalWaypoints(items);
+	for (const LogicalWaypointItem& item: items) {
+		logicalList.emplace_back(item.point, item.target);
+	}
+	return logicalList;
+}
+
+int Actor::GetWaypointsSize() {
+	if (ReadingOwnDeferredWaypoints()) {
+		std::deque<LogicalWaypointItem> items;
+		BuildLogicalWaypoints(items);
+		return static_cast<int>(items.size());
+	}
+	return m_Waypoints.size();
 }
 
 std::vector<Actor::DeferredWaypoint> Actor::TakePendingDeferredWaypoints() {
@@ -1103,18 +1238,21 @@ std::vector<Actor::DeferredWaypoint> Actor::TakePendingDeferredWaypoints() {
 void Actor::ExecuteDeferredWaypoint(const DeferredWaypoint& waypoint) {
 	Actor* running = g_CurrentAIActor;
 	g_CurrentAIActor = nullptr;
-	switch (waypoint.op) {
-		case DeferredWaypoint::Scene:
-			AddAISceneWaypoint(Vector(waypoint.x, waypoint.y));
-			break;
-		case DeferredWaypoint::MOTarget:
-			if (const MovableObject* target = waypoint.targetUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(waypoint.targetUID)) : nullptr) {
-				AddAIMOWaypoint(target);
-			}
-			break;
-		case DeferredWaypoint::Clear:
-			ClearAIWaypoints();
-			break;
+	Actor* target = (waypoint.actorUID == static_cast<int64_t>(GetUniqueID())) ? this : dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(waypoint.actorUID)));
+	if (target) {
+		switch (waypoint.op) {
+			case DeferredWaypoint::Scene:
+				target->AddAISceneWaypoint(Vector(waypoint.x, waypoint.y));
+				break;
+			case DeferredWaypoint::MOTarget:
+				if (const MovableObject* moTarget = waypoint.targetUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(waypoint.targetUID)) : nullptr) {
+					target->AddAIMOWaypoint(moTarget);
+				}
+				break;
+			case DeferredWaypoint::Clear:
+				target->ClearAIWaypoints();
+				break;
+		}
 	}
 	g_CurrentAIActor = running;
 }
@@ -1126,8 +1264,56 @@ void Actor::SendDeferredWaypoints() {
 			ExecuteDeferredWaypoint(waypoint);
 			continue;
 		}
+		// The order names the written actor and its team; the apply on every peer resolves the id
+		// through the known-objects map, which also reaches actors riding in a craft's inventory.
+		Actor* target = (waypoint.actorUID == static_cast<int64_t>(GetUniqueID())) ? this : dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(waypoint.actorUID)));
+		if (!target || !ScenarioRunner::IsLockstepTeamCommandSender(target->GetTeam(), ScenarioRunner::GetLockstepLocalPeerId())) {
+			continue;
+		}
 		const uint8_t op = waypoint.op == DeferredWaypoint::Scene ? NetGameAIOrder::SceneWaypoint : (waypoint.op == DeferredWaypoint::MOTarget ? NetGameAIOrder::MOWaypoint : NetGameAIOrder::ClearWaypoints);
-		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(GetUniqueID()), m_Team, op, waypoint.x, waypoint.y, waypoint.targetUID}});
+		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{waypoint.actorUID, target->GetTeam(), op, waypoint.x, waypoint.y, waypoint.targetUID}});
+		// Reads keep seeing the call until the apply lands and consumes it.
+		target->NoteInflightWaypoint(waypoint);
+	}
+}
+
+void Actor::ConsumeInflightWaypoint(DeferredWaypoint::Op op, float x, float y, int64_t targetUID) {
+	for (auto it = m_InflightWaypoints.begin(); it != m_InflightWaypoints.end(); ++it) {
+		if (it->op != op || it->x != x || it->y != y || it->targetUID != targetUID) {
+			continue;
+		}
+		const bool alreadyLoaded = it->consumed;
+		m_InflightWaypoints.erase(it);
+		if (alreadyLoaded) {
+			// The pass loaded this add while it was in flight, so the apply materializes an entry that is
+			// already walked past: count it like UpdateMovePath's load and replicate the drop, same as SP's pop.
+			// The pop must name the point the apply is about to store: an MO add stores the target's
+			// position at apply time, not the send-time x/y this record carries.
+			Vector popPoint(x, y);
+			bool popEntry = true;
+			const MovableObject* moTarget = nullptr;
+			if (op == DeferredWaypoint::MOTarget) {
+				moTarget = targetUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(targetUID)) : nullptr;
+				if (!moTarget) {
+					// The apply skips the add for a dead target, so no entry materializes to count or drop.
+					popEntry = false;
+				} else if (m_Waypoints.empty() || m_Waypoints.back().second != moTarget) {
+					popPoint = moTarget->GetPos();
+				} else {
+					// The apply's no-duplicate-tail rule folds this add onto the entry already there.
+					popPoint = m_Waypoints.back().first;
+					popEntry = m_WaypointCursor < static_cast<int>(m_Waypoints.size());
+				}
+			}
+			m_pMOMoveTarget = moTarget;
+			if (popEntry) {
+				++m_WaypointCursor;
+				if (ScenarioRunner::IsLockstepTeamCommandSender(m_Team, ScenarioRunner::GetLockstepLocalPeerId())) {
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(GetUniqueID()), m_Team, NetGameAIOrder::PopWaypoint, popPoint.m_X, popPoint.m_Y, 0}});
+				}
+			}
+		}
+		return;
 	}
 }
 
@@ -1516,8 +1702,9 @@ BITMAP* Actor::GetAIModeIcon() {
 }
 
 MOID Actor::GetAIMOWaypointID() const {
-	if (g_MovableMan.ValidMO(m_pMOMoveTarget))
-		return m_pMOMoveTarget->GetID();
+	const MovableObject* moTarget = ReadingOwnDeferredWaypoints() ? LogicalMOMoveTarget() : static_cast<const MovableObject*>(m_pMOMoveTarget);
+	if (g_MovableMan.ValidMO(moTarget))
+		return moTarget->GetID();
 	else
 		return g_NoMOID;
 }
@@ -1531,41 +1718,62 @@ void Actor::UpdateMovePath() {
 	float digStrength = EstimateDigStrength();
 	float jumpHeight = EstimateJumpHeight();
 
+	const bool logicalQueue = ReadingOwnDeferredWaypoints();
+	const MovableObject* moTarget = logicalQueue ? LogicalMOMoveTarget() : static_cast<const MovableObject*>(m_pMOMoveTarget);
 	// If we're following someone/thing, then never advance waypoints until that thing disappears
-	if (g_MovableMan.ValidMO(m_pMOMoveTarget)) {
-		m_PathRequest = g_SceneMan.GetScene()->CalculatePathAsync(g_SceneMan.MovePointToGround(m_Pos, m_CharHeight * 0.2, 10), m_pMOMoveTarget->GetPos(), jumpHeight, digStrength, static_cast<Activity::Teams>(m_Team));
+	if (g_MovableMan.ValidMO(moTarget)) {
+		m_PathRequest = g_SceneMan.GetScene()->CalculatePathAsync(g_SceneMan.MovePointToGround(m_Pos, m_CharHeight * 0.2, 10), moTarget->GetPos(), jumpHeight, digStrength, static_cast<Activity::Teams>(m_Team));
 	} else {
 		// Do we currently have a path to a static target we would like to still pursue?
-		if (m_MovePath.empty()) {
+		if (m_MovePath.empty() || PendingWaypointClearSeen()) {
 			// Ok no path going, so get a new path to the next waypoint, if there is a next waypoint
 			const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
 			const size_t loaded = lockstep ? static_cast<size_t>(std::max(m_WaypointCursor, 0)) : 0;
-			if (m_Waypoints.size() > loaded) {
-				const auto& waypoint = *std::next(m_Waypoints.begin(), static_cast<long>(loaded));
-				// Make sure the path starts from the ground and not somewhere up in the air if/when dropped out of ship
-				m_PathRequest = g_SceneMan.GetScene()->CalculatePathAsync(g_SceneMan.MovePointToGround(m_Pos, m_CharHeight * 0.2, 10), waypoint.first, jumpHeight, digStrength, static_cast<Activity::Teams>(m_Team));
-
-				// If the waypoint was tied to an MO to pursue, then load it into the current MO target
-				if (g_MovableMan.ValidMO(waypoint.second)) {
-					m_pMOMoveTarget = waypoint.second;
-				} else {
-					m_pMOMoveTarget = 0;
+			LogicalWaypointItem waypoint;
+			bool haveWaypoint = false;
+			if (logicalQueue) {
+				std::deque<LogicalWaypointItem> items;
+				BuildLogicalWaypoints(items);
+				if (!items.empty()) {
+					waypoint = items.front();
+					haveWaypoint = true;
 				}
+			} else if (m_Waypoints.size() > loaded) {
+				const auto& entry = *std::next(m_Waypoints.begin(), static_cast<long>(loaded));
+				waypoint.point = entry.first;
+				waypoint.target = entry.second;
+				haveWaypoint = true;
+			}
+			if (haveWaypoint) {
+				// Make sure the path starts from the ground and not somewhere up in the air if/when dropped out of ship
+				m_PathRequest = g_SceneMan.GetScene()->CalculatePathAsync(g_SceneMan.MovePointToGround(m_Pos, m_CharHeight * 0.2, 10), waypoint.point, jumpHeight, digStrength, static_cast<Activity::Teams>(m_Team));
 
-				// We loaded the waypoint, no need to keep it. The queue is sim state, so under lockstep the owner drops it through the wire.
-				if (lockstep) {
-					if (ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled()) &&
-					    ScenarioRunner::IsLockstepTeamCommandSender(m_Team, ScenarioRunner::GetLockstepLocalPeerId())) {
-						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(GetUniqueID()), m_Team, NetGameAIOrder::PopWaypoint, waypoint.first.m_X, waypoint.first.m_Y, 0}});
-					}
-					++m_WaypointCursor;
+				if (waypoint.pending != nullptr) {
+					// The add lands when its command does; flag it so this pass's later reads see it loaded.
+					const_cast<DeferredWaypoint*>(waypoint.pending)->consumed = true;
 				} else {
-					m_Waypoints.pop_front();
+					// If the waypoint was tied to an MO to pursue, then load it into the current MO target
+					if (g_MovableMan.ValidMO(waypoint.target)) {
+						m_pMOMoveTarget = waypoint.target;
+					} else {
+						m_pMOMoveTarget = 0;
+					}
+
+					// We loaded the waypoint, no need to keep it. The queue is sim state, so under lockstep the owner drops it through the wire.
+					if (lockstep) {
+						if (ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled()) &&
+						    ScenarioRunner::IsLockstepTeamCommandSender(m_Team, ScenarioRunner::GetLockstepLocalPeerId())) {
+							ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(GetUniqueID()), m_Team, NetGameAIOrder::PopWaypoint, waypoint.point.m_X, waypoint.point.m_Y, 0}});
+						}
+						++m_WaypointCursor;
+					} else {
+						m_Waypoints.pop_front();
+					}
 				}
 			}
 			// Just try to get to the last Move Target
 			else {
-				m_PathRequest = g_SceneMan.GetScene()->CalculatePathAsync(g_SceneMan.MovePointToGround(m_Pos, m_CharHeight * 0.2, 10), m_MoveTarget, jumpHeight, digStrength, static_cast<Activity::Teams>(m_Team));
+				m_PathRequest = g_SceneMan.GetScene()->CalculatePathAsync(g_SceneMan.MovePointToGround(m_Pos, m_CharHeight * 0.2, 10), PendingWaypointClearSeen() ? m_Pos : m_MoveTarget, jumpHeight, digStrength, static_cast<Activity::Teams>(m_Team));
 			}
 		}
 		// We had a path before trying to update, so use its last point as the final destination

@@ -609,14 +609,17 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			if (actor && actor->GetTeam() == order->team && std::isfinite(order->x) && std::isfinite(order->y)) {
 				switch (order->op) {
 					case NetGameAIOrder::SceneWaypoint:
+						actor->ConsumeInflightWaypoint(Actor::DeferredWaypoint::Scene, order->x, order->y, 0);
 						actor->AddAISceneWaypoint(Vector(order->x, order->y));
 						break;
 					case NetGameAIOrder::MOWaypoint:
+						actor->ConsumeInflightWaypoint(Actor::DeferredWaypoint::MOTarget, order->x, order->y, order->targetUID);
 						if (const MovableObject* target = g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order->targetUID))) {
 							actor->AddAIMOWaypoint(target);
 						}
 						break;
 					case NetGameAIOrder::ClearWaypoints:
+						actor->ConsumeInflightWaypoint(Actor::DeferredWaypoint::Clear, order->x, order->y, 0);
 						actor->ClearAIWaypoints();
 						break;
 					case NetGameAIOrder::FormSquad:

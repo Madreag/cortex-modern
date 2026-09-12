@@ -718,6 +718,31 @@ int Activity::GetTeamAISkill(int team) const {
 }
 
 void Activity::ReassignSquadLeader(const int player, const int team) {
+	// A seat-driven switch only runs on the switching peer, so under lockstep its queue writes go over
+	// the wire as AI orders and land on every peer at the committed tick.
+	const auto writeWaypoint = [](Actor* actor, NetGameAIOrder::Op op, const Vector& point, const MovableObject* target) {
+		if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+			if (ScenarioRunner::IsLockstepTeamCommandSender(actor->GetTeam(), ScenarioRunner::GetLockstepLocalPeerId())) {
+				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), static_cast<uint8_t>(op), point.m_X, point.m_Y, target ? static_cast<int64_t>(target->GetUniqueID()) : 0}});
+				// Until the order lands, reads on this peer replay it over the committed queue.
+				const Actor::DeferredWaypoint::Op deferredOp = op == NetGameAIOrder::SceneWaypoint ? Actor::DeferredWaypoint::Scene : (op == NetGameAIOrder::MOWaypoint ? Actor::DeferredWaypoint::MOTarget : Actor::DeferredWaypoint::Clear);
+				actor->NoteInflightWaypoint({deferredOp, point.m_X, point.m_Y, target ? static_cast<int64_t>(target->GetUniqueID()) : 0, false, static_cast<int64_t>(actor->GetUniqueID())});
+			}
+			return;
+		}
+		switch (op) {
+			case NetGameAIOrder::ClearWaypoints: actor->ClearAIWaypoints(); break;
+			case NetGameAIOrder::SceneWaypoint: actor->AddAISceneWaypoint(point); break;
+			case NetGameAIOrder::MOWaypoint: actor->AddAIMOWaypoint(target); break;
+		}
+	};
+	// Owner-side only under lockstep: the applied writes leave an empty path and a queued waypoint, which
+	// re-triggers the repath on every peer at the same tick; an early flag here would pre-consume on one peer.
+	const auto repath = [](Actor* actor) {
+		if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+			actor->SetMovePathToUpdate();
+		}
+	};
 	if (m_ControlledActor[player]->GetAIMode() == Actor::AIMODE_SQUAD) {
 		MOID leaderID = m_ControlledActor[player]->GetAIMOWaypointID();
 
@@ -727,30 +752,31 @@ void Activity::ReassignSquadLeader(const int player, const int team) {
 			do {
 				// Set the controlled actor as new leader if actor follow the old leader, and not player controlled and not brain
 				if (actor && (actor->GetAIMode() == Actor::AIMODE_SQUAD) && (actor->GetAIMOWaypointID() == leaderID) && !actor->GetController()->IsPlayerControlled() && !actor->IsInGroup("Brains")) {
-					actor->ClearAIWaypoints();
-					actor->AddAIMOWaypoint(m_ControlledActor[player]);
+					writeWaypoint(actor, NetGameAIOrder::ClearWaypoints, actor->GetPos(), nullptr);
+					writeWaypoint(actor, NetGameAIOrder::MOWaypoint, m_ControlledActor[player]->GetPos(), m_ControlledActor[player]);
 					// Make sure actor has m_ControlledActor registered as an AIMOWaypoint
-					actor->SetMovePathToUpdate();
+					repath(actor);
 				} else if (actor && actor->GetID() == leaderID) {
 					// Set the old leader to follow the controlled actor and inherit his AI mode
-					m_ControlledActor[player]->ClearAIWaypoints();
-					m_ControlledActor[player]->SetAIMode(static_cast<Actor::AIMode>(actor->GetAIMode()));
+					writeWaypoint(m_ControlledActor[player], NetGameAIOrder::ClearWaypoints, m_ControlledActor[player]->GetPos(), nullptr);
+					const Actor::AIMode oldLeaderMode = static_cast<Actor::AIMode>(actor->GetAIMode());
+					m_ControlledActor[player]->RequestAIMode(oldLeaderMode);
 
-					if (m_ControlledActor[player]->GetAIMode() == Actor::AIMODE_GOTO) {
+					if (oldLeaderMode == Actor::AIMODE_GOTO) {
 						// Copy the old leaders move orders
 						if (actor->GetAIMOWaypointID() != g_NoMOID) {
 							const MovableObject* targetMO = g_MovableMan.GetMOFromID(actor->GetAIMOWaypointID());
 							if (targetMO) {
-								m_ControlledActor[player]->AddAIMOWaypoint(targetMO);
+								writeWaypoint(m_ControlledActor[player], NetGameAIOrder::MOWaypoint, targetMO->GetPos(), targetMO);
 							}
 						} else if ((actor->GetLastAIWaypoint() - actor->GetPos()).GetLargest() > 1) {
-							m_ControlledActor[player]->AddAISceneWaypoint(actor->GetLastAIWaypoint());
+							writeWaypoint(m_ControlledActor[player], NetGameAIOrder::SceneWaypoint, actor->GetLastAIWaypoint(), nullptr);
 						}
 					}
-					actor->ClearAIWaypoints();
-					actor->SetAIMode(Actor::AIMODE_SQUAD);
-					actor->AddAIMOWaypoint(m_ControlledActor[player]);
-					actor->SetMovePathToUpdate();
+					writeWaypoint(actor, NetGameAIOrder::ClearWaypoints, actor->GetPos(), nullptr);
+					actor->RequestAIMode(Actor::AIMODE_SQUAD);
+					writeWaypoint(actor, NetGameAIOrder::MOWaypoint, m_ControlledActor[player]->GetPos(), m_ControlledActor[player]);
+					repath(actor);
 				}
 				actor = g_MovableMan.GetNextTeamActor(team, actor);
 			} while (actor && actor != m_ControlledActor[player]);

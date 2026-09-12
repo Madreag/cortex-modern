@@ -9,6 +9,7 @@
 #include "PathFinder.h"
 
 #include <array>
+#include <deque>
 
 namespace RTE {
 
@@ -488,6 +489,8 @@ namespace RTE {
 			float x = 0.0F;
 			float y = 0.0F;
 			int64_t targetUID = 0;
+			bool consumed = false; //!< The running pass already loaded this add into the move path; still sent so the queue materializes on every peer.
+			int64_t actorUID = 0; //!< The actor whose queue this call writes: the running actor for its own calls, another actor for cross-actor calls.
 		};
 		/// Hands out the waypoint calls the AI queued this tick, in call order; mods don't call this.
 		std::vector<DeferredWaypoint> TakePendingDeferredWaypoints();
@@ -495,18 +498,16 @@ namespace RTE {
 		void ExecuteDeferredWaypoint(const DeferredWaypoint& waypoint);
 		/// Sends this tick's queued waypoint calls over the wire, or performs them when no match is running.
 		void SendDeferredWaypoints();
+		/// Records a waypoint call that was just sent over the wire so reads replay it until it lands.
+		void NoteInflightWaypoint(const DeferredWaypoint& waypoint) { m_InflightWaypoints.push_back(waypoint); }
+		/// Drops the oldest sent-but-unapplied waypoint call matching an applied order; called when the command lands.
+		/// If the pass already loaded the call, finishes the physical load (cursor, follow target, the pop command).
+		void ConsumeInflightWaypoint(DeferredWaypoint::Op op, float x, float y, int64_t targetUID);
 
 		/// Gets the last or furthest set AI waypoint of this. If none, this' pos
 		/// is returned.
 		/// @return The furthest set AI waypoint of this.
-		Vector GetLastAIWaypoint() const {
-			if (!m_Waypoints.empty()) {
-				return m_Waypoints.back().first;
-			} else if (!m_MovePath.empty()) {
-				return m_MovePath.back();
-			}
-			return m_Pos;
-		}
+		Vector GetLastAIWaypoint() const;
 
 		/// Gets the ID of the last set AI MO waypoint of this. If none, g_NoMOID is returned.
 		/// @return The furthest set AI MO waypoint of this.
@@ -514,11 +515,11 @@ namespace RTE {
 
 		/// Gets the list of waypoints for this Actor.
 		/// @return The list of waypoints for this Actor.
-		const std::list<std::pair<Vector, MovableObjectReference>>& GetWaypointList() const { return m_Waypoints; }
+		const std::list<std::pair<Vector, MovableObjectReference>>& GetWaypointList() const;
 
 		/// Gets how many waypoints this actor have.
 		/// @return How many waypoints.
-		int GetWaypointsSize() { return m_Waypoints.size(); };
+		int GetWaypointsSize();
 
 		/// Clears the list of coordinates in this' current MovePath, ie the path
 		/// to the next Waypoint.
@@ -545,7 +546,7 @@ namespace RTE {
 		/// Gets the last position in this Actor's move path, or otherwise the current move target.
 		/// @return The last position in this Actor's move path, or otherwise the current move target.
 		Vector GetMovePathEnd() const {
-			if (!m_MovePath.empty()) {
+			if (!m_MovePath.empty() && !PendingWaypointClearSeen()) {
 				return m_MovePath.back();
 			}
 			// In case move path is empty, check our own path request.
@@ -584,7 +585,7 @@ namespace RTE {
 
 		/// Gets a pointer to the MovableObject move target of this Actor.
 		/// @return A pointer to the MovableObject move target of this Actor.
-		const MovableObject* GetMOMoveTarget() const { return m_pMOMoveTarget; }
+		const MovableObject* GetMOMoveTarget() const { return ReadingOwnDeferredWaypoints() ? LogicalMOMoveTarget() : static_cast<const MovableObject*>(m_pMOMoveTarget); }
 		void SetMOMoveTarget(const MovableObject* object) { m_pMOMoveTarget = object; m_FaithfulMOMoveTargetUID = 0; }
 		static bool RunBorrowedReferenceSelfTest();
 		std::vector<long> GetCheckpointBorrowedReferences() const override;
@@ -764,7 +765,7 @@ namespace RTE {
 
 		/// Gets how many waypoints there are in the MovePath currently
 		/// @return The number of waypoints in the MovePath.
-		int GetMovePathSize() const { return m_MovePath.size(); }
+		int GetMovePathSize() const { return PendingWaypointClearSeen() ? 0 : m_MovePath.size(); }
 
 		/// Returns whether we're waiting on a new pending movepath.
 		/// @return Whether we're waiting on a new pending movepath.
@@ -1167,6 +1168,8 @@ namespace RTE {
 		std::list<std::pair<Vector, MovableObjectReference>> m_Waypoints;
 		// Waypoint calls the AI pass queued; the owner sends them over the wire so every peer's queue matches.
 		std::vector<DeferredWaypoint> m_PendingDeferredWaypoints;
+		// Calls sent over the wire but not yet applied; reads replay them over the committed queue until each lands.
+		std::deque<DeferredWaypoint> m_InflightWaypoints;
 		// Under lockstep the owner's AI loads waypoints ahead of the drops it sent over the wire; this many front entries are already loaded.
 		int m_WaypointCursor;
 		// Whether to draw the waypoints or not in the HUD
@@ -1201,6 +1204,23 @@ namespace RTE {
 		std::array<std::string, 2> m_PersistedActorIconReferences;
 		std::string SaveActorRuntime() const;
 		bool LoadActorRuntime(std::string_view text, bool validateOnly = false);
+
+		/// One waypoint the running pass should see: an unconsumed committed entry, or a call queued this pass or in flight.
+		struct LogicalWaypointItem {
+			Vector point;
+			const MovableObject* target = nullptr;
+			const DeferredWaypoint* pending = nullptr; //!< The queued call this came from, when it is one.
+		};
+		/// True while a lockstep AI pass could read a queue that queued or in-flight calls still describe: its reads see the logical queue.
+		bool ReadingOwnDeferredWaypoints() const;
+		/// True when queued or in-flight calls hold a Clear for this queue, which drops the move path with it.
+		bool PendingWaypointClearSeen() const;
+		/// The MO target the running pass should read: a queued Clear drops it, a consumed MO add loads it.
+		const MovableObject* LogicalMOMoveTarget() const;
+		/// The running pass's queued waypoint calls (its own plus any it queued for other actors), or this' own list outside a pass.
+		const std::vector<DeferredWaypoint>& ActivePendingWaypoints() const;
+		/// Replays the queued calls aimed at this queue over the committed queue's unconsumed tail, in call order.
+		void BuildLogicalWaypoints(std::deque<LogicalWaypointItem>& items) const;
 
 		std::unique_ptr<PieMenu> m_PieMenu;
 

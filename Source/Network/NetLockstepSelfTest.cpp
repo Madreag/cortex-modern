@@ -1423,6 +1423,226 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		// A pass that writes then reads back inside the same pass must see its own queued calls - that is
+		// what the single-player direct write gave the script - while the physical queue only moves at the apply.
+		bool TestAIWaypointReadsSeeThePass(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433414D02ULL);
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 43023, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 43023, 0, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "team-owner";
+			clientConfig.ownershipPolicy = "team-owner";
+			if (!StartCoordinatorPair(43023, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			Actor* ownerView = new Actor();
+			Actor* peerView = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) {
+					*error = message;
+					std::cout << "[net-lockstep-selftest] ai waypoint reads see the pass FAILED: " << message << std::endl;
+				}
+				return message == nullptr;
+			};
+			if (ownerView->MovableObject::Create(1) < 0 || peerView->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			ownerView->SetTeam(0);
+			peerView->SetTeam(0);
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+
+			// One committed waypoint and a live move path: the state the pass starts from on both peers.
+			ownerView->AddAISceneWaypoint(Vector(1.0F, 2.0F));
+			peerView->AddAISceneWaypoint(Vector(1.0F, 2.0F));
+			ownerView->AddToMovePathEnd(Vector(5.0F, 5.0F));
+			peerView->AddToMovePathEnd(Vector(5.0F, 5.0F));
+
+			// Inside the pass the reads see the queued calls; the physical list keeps the committed entry.
+			g_CurrentAIActor = ownerView;
+			ownerView->ClearAIWaypoints();
+			if (ownerView->GetWaypointsSize() != 0 || ownerView->GetMovePathSize() != 0) {
+				return finish("the running pass did not see its own queued clear");
+			}
+			ownerView->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			if (ownerView->GetWaypointsSize() != 1 || ownerView->GetLastAIWaypoint() != Vector(10.0F, 20.0F)) {
+				return finish("the running pass did not see its own queued add");
+			}
+			ownerView->AddAISceneWaypoint(Vector(30.0F, 40.0F));
+			if (ownerView->GetWaypointsSize() != 2 || ownerView->GetLastAIWaypoint() != Vector(30.0F, 40.0F)) {
+				return finish("the running pass did not see both queued adds");
+			}
+			g_CurrentAIActor = nullptr;
+			if (ownerView->GetWaypointsSize() != 1 || ownerView->GetMovePathSize() != 1 || ownerView->GetLastAIWaypoint() != Vector(1.0F, 2.0F)) {
+				return finish("the physical queue moved before the commands landed");
+			}
+			ownerView->SendDeferredWaypoints();
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			const int64_t ownerUID = static_cast<int64_t>(ownerView->GetUniqueID());
+			const std::vector<NetGameAIOrder> expected = {
+			    {ownerUID, 0, NetGameAIOrder::ClearWaypoints, 0.0F, 0.0F, 0},
+			    {ownerUID, 0, NetGameAIOrder::SceneWaypoint, 10.0F, 20.0F, 0},
+			    {ownerUID, 0, NetGameAIOrder::SceneWaypoint, 30.0F, 40.0F, 0},
+			};
+			if (sent.size() != expected.size()) {
+				return finish("the AI pass did not send one AIOrder per waypoint call");
+			}
+			for (size_t index = 0; index < sent.size(); ++index) {
+				const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&sent[index].payload);
+				if (!order || !(*order == expected[index])) {
+					return finish("a sent AIOrder does not match the waypoint call it replicates");
+				}
+			}
+			// The next pass runs before the commands land: the sent calls are in flight, so its reads
+			// replay them over the committed queue - without this the pass sees an emptied queue and
+			// re-issues the same order every pass.
+			g_CurrentAIActor = ownerView;
+			if (ownerView->GetWaypointsSize() != 2 || ownerView->GetLastAIWaypoint() != Vector(30.0F, 40.0F) || ownerView->GetMovePathSize() != 0) {
+				return finish("a later pass did not see the in-flight waypoint calls");
+			}
+			g_CurrentAIActor = nullptr;
+			if (ownerView->GetWaypointsSize() != 1 || ownerView->GetMovePathSize() != 1) {
+				return finish("the physical queue moved while the commands were in flight");
+			}
+			for (Actor* view: {ownerView, peerView}) {
+				for (const NetGameCommand& command: sent) {
+					const NetGameAIOrder& order = std::get<NetGameAIOrder>(command.payload);
+					switch (order.op) {
+						case NetGameAIOrder::SceneWaypoint:
+							view->ConsumeInflightWaypoint(Actor::DeferredWaypoint::Scene, order.x, order.y, 0);
+							view->AddAISceneWaypoint(Vector(order.x, order.y));
+							break;
+						case NetGameAIOrder::ClearWaypoints:
+							view->ConsumeInflightWaypoint(Actor::DeferredWaypoint::Clear, order.x, order.y, 0);
+							view->ClearAIWaypoints();
+							break;
+						default:
+							return finish("an unexpected AIOrder op reached the apply");
+					}
+				}
+			}
+			g_CurrentAIActor = ownerView;
+			const size_t ownerLogicalAfterApply = ownerView->GetWaypointsSize();
+			g_CurrentAIActor = nullptr;
+			if (ownerLogicalAfterApply != 2 || ownerView->GetWaypointsSize() != 2 || peerView->GetWaypointsSize() != 2 || peerView->GetLastAIWaypoint() != Vector(30.0F, 40.0F) || peerView->GetMovePathSize() != 0) {
+				return finish("the two peers did not apply the same logical queue");
+			}
+			std::cout << "[net-lockstep-selftest] ai waypoint reads see the pass: sent=" << sent.size() << " owner_wp=" << ownerView->GetWaypointsSize() << " peer_wp=" << peerView->GetWaypointsSize() << std::endl;
+			return finish(nullptr);
+		}
+
+		// A pass writing ANOTHER actor's queue (a brain ordering a minion, say) queues the call on the
+		// running actor with the target's id; the sent order writes the target's queue on every peer.
+		bool TestAIWaypointCrossActorOrder(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433414D03ULL);
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 43024, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 43024, 0, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "team-owner";
+			clientConfig.ownershipPolicy = "team-owner";
+			if (!StartCoordinatorPair(43024, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			Actor* runner = new Actor();
+			Actor* ownerView = new Actor();
+			Actor* peerView = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) {
+					*error = message;
+					std::cout << "[net-lockstep-selftest] ai waypoint cross-actor order FAILED: " << message << std::endl;
+				}
+				return message == nullptr;
+			};
+			if (runner->MovableObject::Create(1) < 0 || ownerView->MovableObject::Create(1) < 0 || peerView->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			runner->SetTeam(0);
+			ownerView->SetTeam(0);
+			peerView->SetTeam(0);
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+
+			// Inside the runner's pass a call on the other actor queues on the runner, not the target.
+			g_CurrentAIActor = runner;
+			ownerView->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			if (ownerView->GetWaypointsSize() != 1 || ownerView->GetLastAIWaypoint() != Vector(10.0F, 20.0F)) {
+				return finish("the pass did not see its own write to the other actor's queue");
+			}
+			if (runner->GetWaypointsSize() != 0) {
+				return finish("a cross-actor write leaked into the running actor's queue");
+			}
+			g_CurrentAIActor = nullptr;
+			if (ownerView->GetWaypointsSize() != 0 || runner->GetWaypointsSize() != 0) {
+				return finish("a cross-actor write mutated a physical queue before the apply");
+			}
+			runner->SendDeferredWaypoints();
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			const int64_t targetUID = static_cast<int64_t>(ownerView->GetUniqueID());
+			const std::vector<NetGameAIOrder> expected = {
+			    {targetUID, 0, NetGameAIOrder::SceneWaypoint, 10.0F, 20.0F, 0},
+			};
+			if (sent.size() != expected.size()) {
+				return finish("the cross-actor write did not send exactly one AIOrder");
+			}
+			for (size_t index = 0; index < sent.size(); ++index) {
+				const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&sent[index].payload);
+				if (!order || !(*order == expected[index])) {
+					return finish("the sent AIOrder does not target the other actor");
+				}
+			}
+			// While the sent order is in flight a later pass that reads the target's queue sees it.
+			g_CurrentAIActor = runner;
+			if (ownerView->GetWaypointsSize() != 1 || ownerView->GetLastAIWaypoint() != Vector(10.0F, 20.0F)) {
+				return finish("a later pass did not see the in-flight cross-actor write");
+			}
+			g_CurrentAIActor = nullptr;
+			for (Actor* view: {ownerView, peerView}) {
+				for (const NetGameCommand& command: sent) {
+					const NetGameAIOrder& order = std::get<NetGameAIOrder>(command.payload);
+					if (order.op != NetGameAIOrder::SceneWaypoint) {
+						return finish("an unexpected AIOrder op reached the apply");
+					}
+					view->ConsumeInflightWaypoint(Actor::DeferredWaypoint::Scene, order.x, order.y, 0);
+					view->AddAISceneWaypoint(Vector(order.x, order.y));
+				}
+			}
+			if (ownerView->GetWaypointsSize() != 1 || peerView->GetWaypointsSize() != 1 || peerView->GetLastAIWaypoint() != Vector(10.0F, 20.0F)) {
+				return finish("the two peers did not apply the same cross-actor write");
+			}
+			std::cout << "[net-lockstep-selftest] ai waypoint cross-actor order: sent=" << sent.size() << " owner_wp=" << ownerView->GetWaypointsSize() << " peer_wp=" << peerView->GetWaypointsSize() << std::endl;
+			return finish(nullptr);
+		}
+
 		bool TestRecoveryStopsAtCompletedTick(std::string* error) {
 			for (uint16_t delay: {0, 3}) {
 				for (bool rejoin: {false, true}) {
@@ -8813,6 +9033,7 @@ namespace RTE {
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
+		    !(TestAIWaypointReadsSeeThePass(&error) & TestAIWaypointCrossActorOrder(&error)) ||
 		    !TestCoordinatorOwedFrameRetryEndsWithTheRound(&error) ||
 		    !TestCoordinatorOwedFrameKeepsItsCommands(&error) ||
 		    !TestCoordinatorStoppedRoundStopsResending(&error) ||

@@ -2,6 +2,7 @@
 
 #include "AHuman.h"
 #include "Controller.h"
+#include "MovableMan.h"
 
 #include <cstdlib>
 #include <fstream>
@@ -28,11 +29,14 @@ namespace RTE {
 			if (op == "equip-loaded" || op == "scene-waypoint") {
 				return 2;
 			}
+			if (op == "scene-waypoint-for") {
+				return 3;
+			}
 			return 0;
 		}
 
 		bool KnownOp(const std::string& op) {
-			for (const char* known: {"equip-firearm", "equip-group", "equip-loaded", "equip-named", "equip-throwable", "equip-digger", "equip-shield", "equip-shield-bg", "unequip-fg", "unequip-bg", "flip", "aim", "scene-waypoint", "clear-waypoints"}) {
+			for (const char* known: {"equip-firearm", "equip-group", "equip-loaded", "equip-named", "equip-throwable", "equip-digger", "equip-shield", "equip-shield-bg", "unequip-fg", "unequip-bg", "flip", "aim", "scene-waypoint", "scene-waypoint-for", "clear-waypoints"}) {
 				if (op == known) {
 					return true;
 				}
@@ -67,6 +71,23 @@ namespace RTE {
 				human.SetAimAngle(std::strtof(line.args[0].c_str(), nullptr));
 			} else if (line.op == "scene-waypoint") {
 				human.AddAISceneWaypoint(Vector(std::strtof(line.args[0].c_str(), nullptr), std::strtof(line.args[1].c_str(), nullptr)));
+			} else if (line.op == "scene-waypoint-for") {
+				// A pass writing another actor's queue: arg 0 is the target's unique id, or a team
+				// slot (the n-th roster entry) when no object with that id exists.
+				const long selector = std::strtol(line.args[0].c_str(), nullptr, 10);
+				Actor* other = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(selector));
+				if (!other) {
+					other = nullptr;
+					for (long slot = selector; slot >= 0; --slot) {
+						other = g_MovableMan.GetNextTeamActor(line.team, other);
+						if (!other) {
+							break;
+						}
+					}
+				}
+				if (other) {
+					other->AddAISceneWaypoint(Vector(std::strtof(line.args[1].c_str(), nullptr), std::strtof(line.args[2].c_str(), nullptr)));
+				}
 			} else if (line.op == "clear-waypoints") {
 				human.ClearAIWaypoints();
 			}
