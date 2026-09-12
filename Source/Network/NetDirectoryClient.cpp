@@ -384,7 +384,7 @@ namespace RTE {
 		}
 		NetDirectorySessionList list;
 		std::string error;
-		if (!NetDirectoryCodec::DecodeSessionList(reply.body, &list, &error)) {
+		if (!NetDirectoryCodec::DecodeListResponse(reply.body, &list, &error)) {
 			m_ListError = error;
 			return;
 		}
@@ -396,7 +396,7 @@ namespace RTE {
 		Request request;
 		request.method = "POST";
 		request.path = "/v1/sessions";
-		request.body = NetDirectoryCodec::EncodeRegister(m_Row);
+		request.body = NetDirectoryCodec::EncodeRegisterRequest(m_Row);
 		++m_Registers;
 		SetState(State::Registering);
 		StartRequest(RequestKind::Register, request);
@@ -411,7 +411,7 @@ namespace RTE {
 		Request request;
 		request.method = "POST";
 		request.path = "/v1/sessions/" + m_SessionId + "/heartbeat";
-		request.body = NetDirectoryCodec::EncodeHeartbeat(heartbeat);
+		request.body = NetDirectoryCodec::EncodeHeartbeatRequest(heartbeat);
 		++m_Heartbeats;
 		StartRequest(RequestKind::Heartbeat, request);
 	}
