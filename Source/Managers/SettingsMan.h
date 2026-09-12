@@ -104,6 +104,30 @@ namespace RTE {
 		/// Sets the lockstep input-delay buffer (frames) a hosted match will use.
 		void SetNetworkInputDelayFrames(int newInputDelayFrames) { m_NetworkInputDelayFrames = newInputDelayFrames; }
 
+		/// Gets the base URL of the session-directory service.
+		/// @return The session-directory URL; empty means the directory is disabled.
+		const std::string& GetSessionDirectoryUrl() const { return m_SessionDirectoryUrl; }
+
+		/// Sets the base URL of the session-directory service.
+		/// @param url The session-directory URL; empty disables the directory.
+		void SetSessionDirectoryUrl(const std::string& url) { m_SessionDirectoryUrl = url; }
+
+		/// Gets the per-install rate-limit identity sent as X-Install-Key.
+		/// @return The install key; generated and persisted on first load.
+		const std::string& GetSessionDirectoryInstallKey() const { return m_SessionDirectoryInstallKey; }
+
+		/// Sets the per-install rate-limit identity sent as X-Install-Key.
+		/// @param key 16-32 characters of A-Za-z0-9-_.
+		void SetSessionDirectoryInstallKey(const std::string& key) { m_SessionDirectoryInstallKey = key; }
+
+		/// Gets the pinned SHA-256 (hex) of the directory server's certificate.
+		/// @return The cert pin; empty means the system chain must validate.
+		const std::string& GetSessionDirectoryCertSha256() const { return m_SessionDirectoryCertSha256; }
+
+		/// Sets the pinned SHA-256 (hex) of the directory server's certificate.
+		/// @param pin The cert pin; empty validates against the system chain.
+		void SetSessionDirectoryCertSha256(const std::string& pin) { m_SessionDirectoryCertSha256 = pin; }
+
 		/// Whether the local player's actors are drawn ahead through the input-delay pipeline.
 		bool LocalPredictionEnabled() const { return m_LocalPrediction; }
 		void SetLocalPredictionEnabled(bool enabled) { m_LocalPrediction = enabled; }
@@ -427,6 +451,9 @@ namespace RTE {
 		int m_PathFinderGridNodeSize; //!< The grid size used by the PathFinder, in pixels.
 		int m_AIUpdateInterval; //!< How often actor's AI should be updated, i.e. every n simulation updates.
 		int m_NetworkInputDelayFrames; //!< Lockstep input-delay buffer (frames) a hosted match uses; the client adopts the host's.
+		std::string m_SessionDirectoryUrl; //!< Base URL of the session-directory service; empty disables it.
+		std::string m_SessionDirectoryInstallKey; //!< Per-install rate-limit identity sent as X-Install-Key; generated on first load.
+		std::string m_SessionDirectoryCertSha256; //!< Pinned SHA-256 hex of the directory server's certificate; empty = system chain.
 		bool m_LocalPrediction; //!< Whether the local player's actors are previewed through the input delay.
 		int m_LocalPredictionMaxTicks; //!< Cap on how many ticks ahead the preview runs.
 		int m_NumberOfLuaStatesOverride; //!< Overrides how many threaded Lua states we'll use. -1 for no override, which defaults to the maximum number of concurrent hardware threads.
@@ -455,6 +482,9 @@ namespace RTE {
 
 		/// Clears all the member variables of this SettingsMan, effectively resetting the members of this abstraction level only.
 		void Clear();
+
+		/// Generates m_SessionDirectoryInstallKey from non-sim entropy when empty after a load.
+		void EnsureSessionDirectoryInstallKey();
 
 		// Disallow the use of some implicit methods.
 		SettingsMan(const SettingsMan& reference) = delete;

@@ -96,7 +96,7 @@ elif compiler.get_argument_syntax()== 'msvc'
   # /fp:precise stops MSVC rearranging FP ops; /arch:SSE2 keeps x86 off x87's 80-bit registers.
   extra_args += ['-D_HAS_ITERATOR_DEBUGGING=0', '-D_HAS_AUTO_PTR_ETC=1', '-bigobj', '/fp:precise', '/arch:SSE2']
   add_global_arguments('-D_ITERATOR_DEBUG_LEVEL=0', language:'cpp')
-  add_project_link_arguments(['winmm.lib', 'ws2_32.lib', 'dinput8.lib', 'ddraw.lib', 'dxguid.lib', 'dsound.lib', 'dbghelp.lib'], language:'cpp')
+  add_project_link_arguments(['winhttp.lib', 'bcrypt.lib', 'winmm.lib', 'ws2_32.lib', 'dinput8.lib', 'ddraw.lib', 'dxguid.lib', 'dsound.lib', 'dbghelp.lib'], language:'cpp')
   if host_machine.cpu_family() == 'x86'
     elfname += ' x86'
   endif
