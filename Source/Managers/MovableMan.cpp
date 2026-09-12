@@ -1290,6 +1290,9 @@ void MovableMan::UnregisterObject(MovableObject* mo) {
 // Only a destruction may take an object out of a held copy. Unregistering also happens to live objects:
 // a restore detaches every Lua-owned tree, and those have to come back with the world that named them.
 void MovableMan::ForgetDestroyedObject(MovableObject* mo) {
+	if (m_LinkRoot == mo) {
+		m_LinkRoot = nullptr;
+	}
 	{
 		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 		// By address, not by key: the object may have taken a new identity since the copy was made.
