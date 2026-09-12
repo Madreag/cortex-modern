@@ -14,6 +14,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -414,6 +415,7 @@ namespace RTE {
 		uint32_t relayObservationOverflows = 0; //!< Forwards that could not carry a frame's whole observation set; the tables would disagree.
 		uint32_t peersDroppedSilent = 0; //!< Remotes the host adjudicated gone for going quiet, not for closing their socket.
 		uint32_t stopsFromLeftPeers = 0; //!< Stops a peer sent after the round had already dropped its seat.
+		uint32_t peerFramesWaived = 0; //!< Fenced incarnations the round stopped requiring frames from; not seat drops.
 		uint32_t connectionsClosedOnEviction = 0; //!< Connections the host closed because the round took the seat.
 		uint32_t timeouts = 0;
 		uint64_t nextFrame = 0;
@@ -545,10 +547,11 @@ namespace RTE {
 		/// The first frame the sim has not applied: a heal resumes the round here.
 		uint64_t GetResumeFrame() const { return m_LastCompletedSimulationTick ? *m_LastCompletedSimulationTick + 1 : m_Config.startFrame; }
 		bool FinishSimulationTick(uint64_t completedTick);
-		/// Applies a pending recovery stop from inside the host's wait for a tick it has not simulated:
-		/// a parked wait is a tick boundary too, and the tick it waits on may never arrive.
-		/// @return Whether a stop was applied.
-		bool ApplyPendingRecoveryStopWhileWaiting(uint64_t waitingTick);
+		/// Waives the parked tick's frames for every peer it still needs whose transport the admission
+		/// plane has fenced or forgotten, so the tick commits and the pending stop fires at its boundary.
+		/// The seat is untouched: the waived peer is a superseded incarnation, not a leaver.
+		/// @return Whether a waiver was issued.
+		bool WaivePendingPeersWhileWaiting(uint64_t waitingTick);
 		/// Receives the session-protocol traffic (a reconnecting peer's handshake) the coordinator
 		/// would otherwise discard while it owns the transport queue.
 		void SetSessionEventSink(std::function<void(const NetTransportEvent&)> sink) { m_SessionEventSink = std::move(sink); }
@@ -587,6 +590,8 @@ namespace RTE {
 		bool IsPeerGoneAtFrame(uint8_t peerId, uint64_t frame) const;
 		/// Peers that announced a clean leave, each with the first frame that lacks their data.
 		const std::map<uint8_t, uint64_t>& GetPeerLeaveFrames() const { return m_PeerLeaveFrames; }
+		/// Fenced incarnations the round no longer waits on, each with the first frame it stopped needing.
+		const std::map<uint8_t, uint64_t>& GetPeerFrameWaivers() const { return m_PeerFrameWaivers; }
 		/// Whether the round is only still alive because a dropped seat may still be reclaimed: every
 		/// remote has left and at least one of their seats is inside its window. Nobody can disagree
 		/// with this peer about it, because while it holds there is no other peer in the round.
@@ -596,6 +601,8 @@ namespace RTE {
 		static constexpr uint64_t c_ReclaimHoldFrames = 1200;
 		static constexpr uint64_t c_HoldPauseMs = 20000;
 		static constexpr uint64_t c_HoldHeartbeatMs = 50;
+		/// Marks a PeerDropped notice that waives a fenced incarnation's frames instead of dropping its seat.
+		static constexpr std::string_view c_FrameWaiverPrefix = "fenced:";
 		/// Whether any dropped seat is still waiting on a host resolution. The frame argument is the
 		/// applied tick the activity gate names; the answer no longer moves with a frame deadline.
 		bool IsSeatHeldForReclaimAtFrame(uint64_t frame) const;
@@ -623,6 +630,7 @@ namespace RTE {
 		static const char* StateName(NetLockstepState state);
 
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
+		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 
 	private:
 		bool QueueInputAtTarget(uint64_t targetFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations = {});
@@ -713,7 +721,12 @@ namespace RTE {
 		size_t LeftPeersNotRefilling() const;
 		/// Ends a round every remote has left once the last held seat's reclaim window has closed.
 		void EndRoundIfNobodyIsComingBack();
+		/// Whether a scheduled resync owns the end of this round; a last-player leave must not take it.
+		bool ReclaimResyncPending() const;
 		bool IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const;
+		/// Records, and on the relay host announces, that the round stops requiring a fenced peer's frames.
+		bool WaiveRemoteFrames(uint8_t peerId, uint64_t fromFrame, uint64_t nowMs, bool announce);
+		static bool IsFrameWaiver(const NetLockstepStop& stop);
 		uint16_t PeerInputDelay(uint8_t peerId) const;
 		uint64_t EffectiveStartOf(uint8_t peerId) const;
 		uint8_t FirstAliveHumanPeerForTeam(uint8_t team, uint64_t frame) const;
@@ -730,6 +743,7 @@ namespace RTE {
 		std::map<uint8_t, NetLockstepStart> m_RemoteStarts; //!< Each accepted start, re-sent when a peer repeats its own.
 		std::set<uint8_t> m_PeersPlayedThisRound; //!< Remotes whose frames this round took; they are not still forming it.
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
+		std::map<uint8_t, uint64_t> m_PeerFrameWaivers; //!< Fenced peers -> the first frame the round stopped requiring.
 		std::set<uint8_t> m_LeftSeatsHeld;  //!< Left peers whose seat is still reclaimable, resolved once a tick.
 		std::set<uint8_t> m_DroppedSeats;   //!< Unresolved dropped seats; the round commits nothing while this is non-empty.
 		std::map<uint8_t, NetLockstepHoldResolution> m_DroppedSeatResolutions;

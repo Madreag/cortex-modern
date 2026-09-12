@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <random>
 #include <string>
 #include <thread>
@@ -235,6 +236,8 @@ static std::string ResyncSaveName() {
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
 			m_ResyncSourceRound = 0;
+			DrainPendingSessionEventsLocked(false);
+			AccumulateLockstepTotalsLocked();
 			transport = std::move(m_Transport);
 			session = std::move(m_Session);
 			runner = std::move(m_Runner);
@@ -326,25 +329,22 @@ static std::string ResyncSaveName() {
 					std::this_thread::sleep_for(std::chrono::milliseconds(50));
 				}
 			});
-			// The healed round resumes at the first frame the sim has not applied.
-			bool rewindSim = false;
-			if (!ScenarioRunner::ResolveResyncDropFrame(ScenarioRunner::GetLockstepResumeFrame(), static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), dropFrame, rewindSim, error)) {
+			// The healed round resumes at the first frame the sim has not applied, and the world may only
+			// be saved where no tick is in flight.
+			const uint64_t resumeFrame = ScenarioRunner::GetLockstepResumeFrame();
+			// The tick the live world actually stands on; equal to the label only where no tick is in flight.
+			const uint64_t simTickAtSave = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			if (!ScenarioRunner::ResolveResyncDropFrame(resumeFrame, simTickAtSave, dropFrame, error)) {
 				return false;
-			}
-			if (rewindSim) {
-				long long time = g_TimerMan.GetSimTimeTicks();
-				if (!g_TimerMan.IsSimTimeFrozen()) {
-					const long long delta = g_TimerMan.GetDeltaTimeTicks();
-					if (time >= delta) {
-						time -= delta;
-					}
-				}
-				g_TimerMan.RewindSimTo(static_cast<long long>(dropFrame - 1), time);
 			}
 			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName(), ActivityMan::SaveCompression::Small) || !g_ActivityMan.WaitForSaveGameTask()) {
 				if (error) *error = "resync snapshot save failed";
 				return false;
 			}
+			const uint64_t savedTick = dropFrame > 0 ? dropFrame - 1 : 0;
+			m_ResyncSavedTick.store(savedTick);
+			m_ResyncBoundaryTick.store(simTickAtSave);
+			std::cout << "[net-match] resync snapshot at tick " << savedTick << " (completed " << simTickAtSave << ")" << std::endl;
 			if (FaultInjected("slow_resync_save")) {
 				// Keep the snapshot frozen across a save longer than the receive timeout.
 				std::this_thread::sleep_for(std::chrono::seconds(7));
@@ -403,6 +403,10 @@ static std::string ResyncSaveName() {
 				if (error) *error = m_ErrorText;
 				return false;
 			}
+			// The round the resync destroys may be holding a fenced peer's disconnect it took off the
+			// transport; the session is the only thing here that outlives the coordinator.
+			DrainPendingSessionEventsLocked(true);
+			AccumulateLockstepTotalsLocked();
 			transport = std::move(m_Transport);
 			session = std::move(m_Session);
 			runner = std::move(m_Runner);
@@ -709,6 +713,8 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<GnsTransport> transport;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			DrainPendingSessionEventsLocked(false);
+			AccumulateLockstepTotalsLocked();
 			runner = std::move(m_Runner);
 			coordinator = std::move(m_Coordinator);
 			session = std::move(m_Session);
@@ -755,6 +761,8 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<GnsTransport> transport;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			DrainPendingSessionEventsLocked(false);
+			AccumulateLockstepTotalsLocked();
 			if (m_CapturedRunnerReport.empty() && m_Runner && m_Session && m_Coordinator) {
 				m_CapturedRunnerReport = m_Runner->BuildReportJson(*m_Session, *m_Coordinator);
 			}
@@ -1006,10 +1014,8 @@ static std::string ResyncSaveName() {
 		ScenarioRunner::SetLockstepSeatPresence(&m_SeatPresence);
 		// The coordinator owns the transport queue during the match; reconnect handshakes hand over
 		// here and drain through PumpSessionEvents on the same (game) thread.
-		m_PendingSessionEvents.clear();
-		m_Coordinator->SetSessionEventSink([this](const NetTransportEvent& event) {
-			m_PendingSessionEvents.push_back(event);
-		});
+		DiscardUndeliveredSessionEventsLocked();
+		AttachCoordinatorSessionSink();
 		if (m_Runner) {
 			std::string recordError;
 			(void)ScenarioRunner::BeginLockstepReplayRecord(m_Runner->GetMatchConfig(), &recordError);
@@ -1087,6 +1093,51 @@ static std::string ResyncSaveName() {
 				RecordRosterTransitions(snapshot->observedAtMs);
 			}
 		}
+	}
+
+	void NetMatchService::AttachCoordinatorSessionSink() {
+		if (!m_Coordinator) {
+			return;
+		}
+		m_Coordinator->SetSessionEventSink([this](const NetTransportEvent& event) {
+			m_PendingSessionEvents.push_back(event);
+		});
+	}
+
+	void NetMatchService::DrainPendingSessionEventsLocked(bool atTickBoundary) {
+		if (m_PendingSessionEvents.empty() || !m_Session) {
+			return;
+		}
+		std::vector<NetTransportEvent> events;
+		events.swap(m_PendingSessionEvents);
+		const uint64_t nowMs = AdmissionNowMs();
+		// A drop recorded here walks g_MovableMan, which only a resync leaves standing at a finished tick.
+		std::optional<SimCensusScope> census;
+		if (atTickBoundary) {
+			census.emplace();
+		}
+		for (const NetTransportEvent& event: events) {
+			m_Session->InjectEvent(event, nowMs);
+			++m_SessionEventsDrained;
+		}
+	}
+
+	void NetMatchService::DiscardUndeliveredSessionEventsLocked() {
+		if (!m_PendingSessionEvents.empty()) {
+			m_SessionEventsDiscarded += static_cast<uint32_t>(m_PendingSessionEvents.size());
+			std::cout << "[net-match] discarded " << m_PendingSessionEvents.size() << " undelivered session events" << std::endl;
+			m_PendingSessionEvents.clear();
+		}
+	}
+
+	void NetMatchService::AccumulateLockstepTotalsLocked() {
+		if (!m_Coordinator) {
+			return;
+		}
+		const NetLockstepStats& stats = m_Coordinator->GetStats();
+		m_LockstepTotals.peerFramesWaived += stats.peerFramesWaived;
+		m_LockstepTotals.peersDroppedSilent += stats.peersDroppedSilent;
+		m_LockstepTotals.connectionsClosedOnEviction += stats.connectionsClosedOnEviction;
 	}
 
 	void NetMatchService::PumpSessionEvents() {
@@ -1406,6 +1457,23 @@ static std::string ResyncSaveName() {
 				{"heal_ms", m_LastResync.healMs},
 			};
 		}
+		// The snapshot's label and the tick it was taken at; a heal at a boundary has them equal.
+		if (m_ResyncSavedTick.load() != UINT64_MAX) {
+			report["resync"]["saved_tick"] = m_ResyncSavedTick.load();
+			report["resync"]["boundary_tick"] = m_ResyncBoundaryTick.load();
+		}
+		// Every round's counters summed, so a resync that replaces the coordinator does not zero them.
+		LockstepTotals totals = m_LockstepTotals;
+		if (m_Coordinator) {
+			const NetLockstepStats& live = m_Coordinator->GetStats();
+			totals.peerFramesWaived += live.peerFramesWaived;
+			totals.peersDroppedSilent += live.peersDroppedSilent;
+			totals.connectionsClosedOnEviction += live.connectionsClosedOnEviction;
+		}
+		report["lockstep_totals"] = {{"peer_frames_waived", totals.peerFramesWaived},
+		                             {"peers_dropped_silent", totals.peersDroppedSilent},
+		                             {"connections_closed_on_eviction", totals.connectionsClosedOnEviction}};
+		report["session_events"] = {{"drained_at_teardown", m_SessionEventsDrained}, {"discarded", m_SessionEventsDiscarded}};
 		if (m_Runner && m_Session && m_Coordinator) {
 			report["runner"] = json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
 		} else if (!m_CapturedRunnerReport.empty()) {
