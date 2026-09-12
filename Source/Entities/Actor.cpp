@@ -1901,6 +1901,24 @@ void Actor::ResolveFaithfulLinks() {
 	}
 }
 
+void Actor::RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) {
+	MOSRotating::RemapExternalLinks(map);
+	if (m_pItemInReach) {
+		m_pItemInReach = dynamic_cast<HeldDevice*>(map(m_pItemInReach));
+	}
+	if (const MovableObject* current = m_pMOMoveTarget.get()) {
+		m_pMOMoveTarget = dynamic_cast<MovableObject*>(map(const_cast<MovableObject*>(current)));
+	}
+	for (auto& [waypointPosition, waypointObject]: m_Waypoints) {
+		if (const MovableObject* current = waypointObject.get()) {
+			waypointObject = dynamic_cast<MovableObject*>(map(const_cast<MovableObject*>(current)));
+		}
+	}
+	for (MovableObject* inventoryItem: m_Inventory) {
+		inventoryItem->RemapExternalLinks(map);
+	}
+}
+
 void Actor::DiscardPersistedSnapshotState() {
 	m_PersistedActorIconReferences = {};
 	m_PersistedControllerCheckpoint.clear();

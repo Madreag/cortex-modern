@@ -2325,6 +2325,21 @@ void MovableMan::EndSpeculation(std::vector<MovableObject*>* takenResidents) {
 	m_Speculation.taken.clear();
 }
 
+MovableObject* MovableMan::ResidentForRetiringShadow(MovableObject* mo) const {
+	if (!mo || !m_Speculation.active) {
+		return mo;
+	}
+	const auto resident = m_Speculation.residents.find(mo);
+	if (resident == m_Speculation.residents.end()) {
+		return mo;
+	}
+	const Speculation::Shadow& shadow = m_Speculation.shadows.at(resident->second);
+	if (shadow.inWorld) {
+		return resident->second;
+	}
+	return mo;
+}
+
 int MovableMan::ResidentKind(const MovableObject* mo) const {
 	if (!mo) {
 		return 0;

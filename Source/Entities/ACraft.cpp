@@ -1049,6 +1049,18 @@ void ACraft::ResolveFaithfulLinks() {
 	}
 }
 
+void ACraft::RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) {
+	Actor::RemapExternalLinks(map);
+	for (Exit& exit: m_Exits) {
+		if (exit.m_pIncomingMO) {
+			exit.m_pIncomingMO = dynamic_cast<MOSRotating*>(map(exit.m_pIncomingMO));
+		}
+	}
+	for (MovableObject* item: m_CollectedInventory) {
+		item->RemapExternalLinks(map);
+	}
+}
+
 std::string ACraft::SaveACraftRuntime() const {
 	CheckpointWriter archive("ACraftRuntime1");
 	archive(m_HatchState, m_HatchTimer, m_HatchDelay, m_ExitInterval, m_ExitTimer, m_ReadExitIncomingCursor, m_ExitLinePhase);
