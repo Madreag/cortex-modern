@@ -157,8 +157,11 @@ namespace RTE {
 			if (!NetH4BuildTranscript(MakeTranscript(), bytes)) {
 				return Fail("transcript refused a well-formed input");
 			}
+			// The protocol version follows the domain tag little-endian, whatever the current build's value is.
+			const std::array<uint8_t, 2> version{static_cast<uint8_t>(NetProtocol::c_Version & 0xFFU), static_cast<uint8_t>((NetProtocol::c_Version >> 8) & 0xFFU)};
 			const std::string expected =
-			    "434343502e48342e5245434c41494d000100101112131415161718191a1b1c1d1e1f0200"
+			    "434343502e48342e5245434c41494d00" + HexOf(version.data(), version.size(), false) +
+			    "101112131415161718191a1b1c1d1e1f0200"
 			    "07000000202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
 			    "404142434445464748494a4b4c4d4e4f";
 			if (HexOf(bytes.data(), bytes.size(), false) != expected) {
