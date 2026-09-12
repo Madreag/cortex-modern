@@ -23,7 +23,7 @@ def main():
     result = {"pass": False}
     reason = "deterministic config"
 
-    def start(name, host, suffix, states=4, trace=False):
+    def start(name, host, suffix, extra=(), trace=False):
         script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
         if host:
             script += f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {options.port}\nsettext TextHostPlayers 2\nsettext TextHostInputDelay 3\nactivate ButtonMultiplayerCreate\n"
@@ -31,7 +31,7 @@ def main():
             script += f"activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {options.port}\nactivate ButtonMultiplayerConnect\n"
         path = root / f"{name}.txt"
         path.write_text(script + suffix)
-        args = ["-menu-script", path, "-num-lua-states", states]
+        args = ["-menu-script", path, "-num-lua-states", 4, *extra]
         if trace:
             args += ["-tick-hashes", "-max-ticks", 180, "-out", root / name / "trace.json"]
         run = make_run(options.repo, args, root / name, 150)
@@ -43,8 +43,9 @@ def main():
             f"wait_error {reason}\nassert_substate Lobby\nassert_enabled ButtonMultiplayerStart 0\nassert_error {reason}\ndump_lobby\nscreenshot rejected-join\n"
             "wait_connected 2\nwait_remote_ready\nwait_all_ready\ndump_lobby\nactivate ButtonMultiplayerStart\nwait 99999\n", trace=True)
         wait_for_log(host, "activate ButtonMultiplayerCreate ok=1")
+        # selected_module is hashed; -module Dummy.rte leaves the official set unchanged
         wrong = start("Rejected", False,
-            f"wait_state Failed\nwait 5\nassert_substate Landing\nassert_error {reason}\ndump_lobby\nscreenshot rejected-client\nexit\n", states=8)
+            f"wait_state Failed\nwait 5\nassert_substate Landing\nassert_error {reason}\ndump_lobby\nscreenshot rejected-client\nexit\n", extra=("-module", "Dummy.rte"))
         records["Rejected"] = wrong.finish()
         wait_for_log(host, '[menu-script] dump_lobby state=Starting')
         start("Replacement", False,
