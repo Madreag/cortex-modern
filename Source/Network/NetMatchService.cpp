@@ -11,6 +11,7 @@
 #include "NetProtocol.h"
 #include "PresetMan.h"
 #include "ScenarioRunner.h"
+#include "SettingsMan.h"
 #include "System.h"
 #include "System/FaultInjection.h"
 #include "TimerMan.h"
@@ -186,6 +187,9 @@ static std::string ResyncSaveName() {
 
 		m_ActivityPreset = request.activityPreset;
 		SetState(NetMatchServiceState::Starting, request.host ? "Hosting direct-IP match" : "Joining direct-IP match");
+		// The directory row advertises the same identity fields the probe registers; only the counts
+		// move afterwards. Only a host ever lists itself.
+		const std::string directoryListenAddr = NetLanDiscovery::GetPrimaryLocalAddress();
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_WorkerDone = false;
@@ -197,6 +201,27 @@ static std::string ResyncSaveName() {
 			m_BeaconGamePort = request.port;
 			m_BeaconMaxPlayers = request.peerCount;
 			m_LocalName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
+			if (request.host) {
+				const NetMatchConfig matchConfig = BuildMatchConfig(request, c_UiSessionId);
+				m_DirectoryRow.name = m_LocalName;
+				m_DirectoryRow.activity = matchConfig.activityPreset;
+				m_DirectoryRow.scene = matchConfig.sceneName;
+				m_DirectoryRow.mode = NetMatchConfigUtil::ModeName(matchConfig.mode);
+				m_DirectoryRow.peerCount = matchConfig.peerCount;
+				m_DirectoryRow.seatsFree = std::max<int64_t>(0, static_cast<int64_t>(matchConfig.peerCount) - 1);
+				m_DirectoryRow.gameVersion = manifest.gameVersion;
+				m_DirectoryRow.buildId = manifest.buildId;
+				m_DirectoryRow.networkProtocolVersion = manifest.networkProtocolVersion;
+				m_DirectoryRow.lockstepCodecVersion = manifest.deterministicConfig.lockstepCodecVersion;
+				m_DirectoryRow.controllerFrameVersion = manifest.controllerFrameVersion;
+				m_DirectoryRow.matchConfigHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(matchConfig));
+				m_DirectoryRow.sessionIdentityHash = NetIdentity::HashHex(manifest.sessionIdentityHash);
+				m_DirectoryRow.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
+				m_DirectoryRow.listenPort = request.port;
+				m_DirectoryRow.listenAddrs = {directoryListenAddr.empty() ? "127.0.0.1" : directoryListenAddr};
+				m_DirectoryRow.joinMode = "ip";
+			}
+			m_DirectoryRetracted = false;
 		}
 		m_EverStarted.store(true);
 		m_Worker = std::thread(&NetMatchService::WorkerMain, this, request, std::move(manifest));
@@ -239,6 +264,7 @@ static std::string ResyncSaveName() {
 			m_State = NetMatchServiceState::Starting;
 			m_StatusText += " - ready up for a rematch";
 			m_ErrorText.clear();
+			m_DirectoryRetracted = false; // the rematch lobby lists itself again
 		}
 		m_CancelRequested.store(false);
 		m_ReadyRequested.store(false);
@@ -637,6 +663,7 @@ static std::string ResyncSaveName() {
 		}
 		RunCleanLeave();
 		m_LanDiscovery.Stop();
+		m_Directory.Shutdown(); // the DELETE goes out before the row would expire
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
 		std::unique_ptr<NetMatchRunner> runner;
@@ -679,6 +706,7 @@ static std::string ResyncSaveName() {
 		if (m_Worker.joinable()) {
 			m_Worker.join();
 		}
+		RetractDirectoryListing();
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
 		std::unique_ptr<NetMatchRunner> runner;
@@ -713,9 +741,18 @@ static std::string ResyncSaveName() {
 		transport.reset();
 	}
 
+	void NetMatchService::RetractDirectoryListing() {
+		m_DirectoryRetracted = true;
+		m_Directory.Retract();
+		// Kick the delete now: callers that quit right after never Update() again, and Destroy's
+		// Shutdown() would otherwise have to find the slot itself.
+		m_Directory.Update(SteadyNowMs());
+	}
+
 	void NetMatchService::Complete(const std::string& reason) {
 		// The recording gets its end marker at the match's end, not at process exit.
 		ScenarioRunner::CloseLockstepReplayRecord();
+		RetractDirectoryListing();
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_Coordinator) {
 			m_Coordinator->Complete(reason);
@@ -730,6 +767,7 @@ static std::string ResyncSaveName() {
 	void NetMatchService::FinishMatch(const std::string& result) {
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
+		RetractDirectoryListing();
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_Coordinator) {
 			m_Coordinator->Complete(result.empty() ? "match over" : result);
@@ -744,6 +782,7 @@ static std::string ResyncSaveName() {
 	void NetMatchService::LeaveMatch(const std::string& result) {
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
+		RetractDirectoryListing();
 		const std::string reason = result.empty() ? std::string("player left") : result;
 		bool exchangeOwed = false;
 		{
@@ -773,12 +812,31 @@ static std::string ResyncSaveName() {
 		JoinWorkerIfDone();
 		// A hosting lobby advertises itself on the LAN until the match launches.
 		bool beaconWanted = false;
+		bool directoryWanted = false;
+		bool directoryRunning = false;
+		int64_t directorySeatsFree = 0;
 		NetLobbySnapshot snapshot;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			beaconWanted = m_IsHost && m_State == NetMatchServiceState::Starting;
 			if (beaconWanted) {
 				snapshot = m_LobbySnapshot;
+			}
+			directoryWanted = m_IsHost && !m_DirectoryRetracted &&
+			                  (m_State == NetMatchServiceState::Starting || m_State == NetMatchServiceState::Running);
+			directoryRunning = m_State == NetMatchServiceState::Running;
+			if (directoryWanted) {
+				if (directoryRunning && !m_SeatStatuses.empty()) {
+					// The admission table says which seats a late joiner could still take: the host's
+					// own seat and the CPU slot never count, a committed or closed one is taken.
+					for (const NetH4SeatStatus& seat : m_SeatStatuses) {
+						if (seat.lockstepPeerId != 0 && seat.lockstepPeerId != m_LocalPeerId && !seat.committed && !seat.closed) {
+							++directorySeatsFree;
+						}
+					}
+				} else {
+					directorySeatsFree = std::max<int64_t>(0, static_cast<int64_t>(m_BeaconMaxPlayers) - static_cast<int64_t>(std::max<size_t>(m_LobbySnapshot.members.size(), 1)));
+				}
 			}
 		}
 		const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -794,6 +852,19 @@ static std::string ResyncSaveName() {
 		} else if (m_LanDiscovery.IsBeaconing()) {
 			m_LanDiscovery.Stop();
 		}
+		// The directory row lives beside the beacon but outlives it: it comes up with the lobby and
+		// keeps beating while the match runs so a late joiner (or a dedicated host's row) resolves.
+		// Configure runs unconditionally so an empty URL lands the client in Disabled, which is what
+		// the report's service.directory.state must show.
+		m_Directory.Configure(g_SettingsMan.GetSessionDirectoryUrl(), g_SettingsMan.GetSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
+		if (directoryWanted) {
+			m_DirectoryRow.peerCount = m_BeaconMaxPlayers;
+			m_DirectoryRow.seatsFree = directorySeatsFree;
+			m_Directory.Advertise(m_DirectoryRow, directoryRunning);
+		} else {
+			m_Directory.Retract();
+		}
+		m_Directory.Update(nowMs);
 		DriveReconnectUx(nowMs);
 	}
 
@@ -1263,6 +1334,9 @@ static std::string ResyncSaveName() {
 			reconnect["rejoin_outcome"] = m_RejoinOutcome;
 		}
 		report["reconnect"] = reconnect;
+		// The directory client's own counters; the member is game-thread only and this report is only
+		// ever built there, so reading it here is safe.
+		report["directory"] = json::parse(m_Directory.BuildReportJson());
 		if (m_Runner && m_Session && m_Coordinator) {
 			report["runner"] = json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
 		} else if (!m_CapturedRunnerReport.empty()) {

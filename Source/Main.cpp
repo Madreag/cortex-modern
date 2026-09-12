@@ -2613,6 +2613,11 @@ void RunGameLoop() {
 
 				// Mid-match session upkeep: reconnect handshakes the coordinator handed over.
 				g_NetMatchService.PumpSessionEvents();
+				// The session-directory heartbeat rides Update on the game thread, never the pump.
+				if (const NetMatchServiceState netServiceState = g_NetMatchService.GetState();
+				    g_NetMatchService.IsHost() && (netServiceState == NetMatchServiceState::Starting || netServiceState == NetMatchServiceState::Running)) {
+					g_NetMatchService.Update();
+				}
 				DriveModerationE2e();
 
 				g_FrameMan.Update();
