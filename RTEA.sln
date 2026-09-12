@@ -16,6 +16,7 @@ Global
 		Debug Minimal|x64 = Debug Minimal|x64
 		Debug Release|x64 = Debug Release|x64
 		Final|x64 = Final|x64
+		Final ASan|x64 = Final ASan|x64
 		Profiling|x64 = Profiling|x64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
@@ -27,6 +28,8 @@ Global
 		{A58C9DD7-8BC7-48DA-9E04-04D04F582BE3}.Debug Release|x64.Build.0 = Debug Release|x64
 		{A58C9DD7-8BC7-48DA-9E04-04D04F582BE3}.Final|x64.ActiveCfg = Final|x64
 		{A58C9DD7-8BC7-48DA-9E04-04D04F582BE3}.Final|x64.Build.0 = Final|x64
+		{A58C9DD7-8BC7-48DA-9E04-04D04F582BE3}.Final ASan|x64.ActiveCfg = Final ASan|x64
+		{A58C9DD7-8BC7-48DA-9E04-04D04F582BE3}.Final ASan|x64.Build.0 = Final ASan|x64
 		{A58C9DD7-8BC7-48DA-9E04-04D04F582BE3}.Profiling|x64.ActiveCfg = Profiling|x64
 		{A58C9DD7-8BC7-48DA-9E04-04D04F582BE3}.Profiling|x64.Build.0 = Profiling|x64
 		{9C341649-AA1F-35E8-81E3-228A6A09B2BB}.Debug Full|x64.ActiveCfg = Debug|x64
@@ -37,6 +40,8 @@ Global
 		{9C341649-AA1F-35E8-81E3-228A6A09B2BB}.Debug Release|x64.Build.0 = RelWithDebInfo|x64
 		{9C341649-AA1F-35E8-81E3-228A6A09B2BB}.Final|x64.ActiveCfg = Release|x64
 		{9C341649-AA1F-35E8-81E3-228A6A09B2BB}.Final|x64.Build.0 = Release|x64
+		{9C341649-AA1F-35E8-81E3-228A6A09B2BB}.Final ASan|x64.ActiveCfg = ReleaseASan|x64
+		{9C341649-AA1F-35E8-81E3-228A6A09B2BB}.Final ASan|x64.Build.0 = ReleaseASan|x64
 		{9C341649-AA1F-35E8-81E3-228A6A09B2BB}.Profiling|x64.ActiveCfg = RelWithDebInfo|x64
 		{9C341649-AA1F-35E8-81E3-228A6A09B2BB}.Profiling|x64.Build.0 = RelWithDebInfo|x64
 		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Debug Full|x64.ActiveCfg = Debug|x64
@@ -47,6 +52,8 @@ Global
 		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Debug Release|x64.Build.0 = RelWithDebInfo|x64
 		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Final|x64.ActiveCfg = Release|x64
 		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Final|x64.Build.0 = Release|x64
+		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Final ASan|x64.ActiveCfg = Release|x64
+		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Final ASan|x64.Build.0 = Release|x64
 		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Profiling|x64.ActiveCfg = RelWithDebInfo|x64
 		{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}.Profiling|x64.Build.0 = RelWithDebInfo|x64
 		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Debug Full|x64.ActiveCfg = Debug|x64
@@ -57,6 +64,8 @@ Global
 		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Debug Release|x64.Build.0 = RelWithDebInfo|x64
 		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Final|x64.ActiveCfg = Release|x64
 		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Final|x64.Build.0 = Release|x64
+		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Final ASan|x64.ActiveCfg = Release|x64
+		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Final ASan|x64.Build.0 = Release|x64
 		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Profiling|x64.ActiveCfg = RelWithDebInfo|x64
 		{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}.Profiling|x64.Build.0 = RelWithDebInfo|x64
 	EndGlobalSection
