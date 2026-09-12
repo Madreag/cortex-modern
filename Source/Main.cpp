@@ -4104,7 +4104,9 @@ int RunNetMatchServiceE2E() {
 		request.port = s_netPort;
 		request.playerName = e2eHost ? "Host" : "Client";
 		request.activityPreset = s_netMatchServiceE2EPreset;
-		request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+		// The e2e honours -net-match-ownership-policy; team-owner is the default so the flagless path is unchanged.
+		NetActorOwnershipPolicy e2ePolicy;
+		request.ownershipPolicy = NetMatchConfigUtil::ParseOwnershipPolicy(s_netMatchOwnershipPolicy, e2ePolicy) ? e2ePolicy : NetActorOwnershipPolicy::TeamOwner;
 		request.inputDelayFrames = s_netLockstepInputDelay;
 		request.peerCount = s_netMatchPeers;
 		NetMatchMode parsedMode;
