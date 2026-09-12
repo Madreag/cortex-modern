@@ -751,11 +751,17 @@ bool MovableMan::ApplyLockstepControlClaim(int64_t actorUniqueID, uint8_t sender
 	if (newOwnerPeerId != senderPeerId) {
 		// The release form: an owner hands its actor back to the owner the world seeded for it.
 		if (senderPeerId != currentOwner || newOwnerPeerId != NetActorOwnership::GetSeededOwner(actorUniqueID)) {
-			g_ConsoleMan.PrintString("ERROR: Rejected a SwitchControl command claiming another peer");
+			// A selftest process has no console; the claim rules still have to run there.
+			if (ConsoleMan::IsConstructed()) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a SwitchControl command claiming another peer");
+			}
 			return false;
 		}
 	} else if (const auto claimed = s_LockstepFrameClaims.find(actorUniqueID); claimed != s_LockstepFrameClaims.end() && claimed->second.first == frame && claimed->second.second < senderPeerId) {
-		g_ConsoleMan.PrintString("NETWORK: Rejected a SwitchControl claim on actor " + std::to_string(actorUniqueID) + " already claimed this frame by peer " + std::to_string(claimed->second.second));
+		if (ConsoleMan::IsConstructed()) {
+			g_ConsoleMan.PrintString("NETWORK: Rejected a SwitchControl claim on an actor a lower peer already claimed this frame");
+		}
+		std::cout << "[net-match] rejected a claim on actor " << actorUniqueID << " already claimed this frame by peer " << static_cast<int>(claimed->second.second) << std::endl;
 		return false;
 	} else {
 		s_LockstepFrameClaims[actorUniqueID] = {frame, senderPeerId};
