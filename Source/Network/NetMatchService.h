@@ -334,6 +334,7 @@ namespace RTE {
 		LastResyncMetrics m_LastResync;
 		uint64_t m_ResyncHealStartMs = 0;
 		bool m_ResyncHealOpen = false;
+		bool m_HostLobbyBeaconed = false;
 	};
 
 } // namespace RTE

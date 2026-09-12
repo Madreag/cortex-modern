@@ -824,6 +824,14 @@ static std::string ResyncSaveName() {
 		}
 		const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 		if (beaconWanted) {
+			if (!m_HostLobbyBeaconed) {
+				const std::string address = NetLanDiscovery::GetPrimaryLocalAddress();
+				{
+					std::lock_guard<std::mutex> lock(m_Mutex);
+					m_ReconnectHost.SetHostAddress(address);
+					m_HostLobbyBeaconed = true;
+				}
+			}
 			std::string ignored;
 			(void)m_LanDiscovery.StartBeacon(m_BeaconGamePort,
 			                                 m_LocalName.empty() ? "Host" : m_LocalName,
@@ -832,8 +840,11 @@ static std::string ResyncSaveName() {
 			                                 static_cast<uint8_t>(std::max<size_t>(snapshot.members.size(), 1)),
 			                                 m_BeaconMaxPlayers, &ignored);
 			m_LanDiscovery.Tick(nowMs);
-		} else if (m_LanDiscovery.IsBeaconing()) {
-			m_LanDiscovery.Stop();
+		} else {
+			m_HostLobbyBeaconed = false;
+			if (m_LanDiscovery.IsBeaconing()) {
+				m_LanDiscovery.Stop();
+			}
 		}
 		DriveReconnectUx(nowMs);
 	}
