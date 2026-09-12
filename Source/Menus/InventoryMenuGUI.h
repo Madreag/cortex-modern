@@ -80,6 +80,16 @@ namespace RTE {
 		/// @param actor The new Actor whose inventory this GUI will display. Ownership is NOT transferred!
 		void SetInventoryActor(Actor* newInventoryActor);
 
+		/// Presentation-only stand-in for Draw; Update still reads m_InventoryActor.
+		static void SetRenderSubstituteActor(Actor* actor);
+		static Actor* GetRenderSubstituteActor(const Actor* inventoryActor);
+		Actor* GetDrawActor() const;
+		Vector GetDrawCenter() const;
+		MovableObject* GetDrawEquippedItem() const;
+		static Actor* GetLastDrawActor() { return s_LastDrawActor; }
+		static Vector GetLastDrawCenter() { return s_LastDrawCenter; }
+		static const std::string& GetLastDrawEquippedName() { return s_LastDrawEquippedName; }
+
 		/// Gets the MenuMode this InventoryMenuGUI is currently in.
 		/// @return The current MenuMode of this InventoryMenuGUI.
 		MenuMode GetMenuMode() const { return m_MenuMode; }
@@ -210,6 +220,10 @@ namespace RTE {
 		static constexpr int c_FullMenuVerticalOffset = 50; //!< How high above its target the full GUI will be. Used in Full/Transfer MenuModes.
 
 		static BITMAP* s_CursorBitmap; //!< The cursor image shared by all GUIs.
+		static Actor* s_RenderSubstituteActor; //!< Preview clone Draw should follow; not owned.
+		static Actor* s_LastDrawActor;
+		static Vector s_LastDrawCenter;
+		static std::string s_LastDrawEquippedName;
 
 		GUIFont* m_SmallFont; //!< A pointer to the small font from FrameMan. Not owned here.
 		GUIFont* m_LargeFont; //!< A pointer to the large font from FrameMan. Not owned here.

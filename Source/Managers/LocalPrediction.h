@@ -26,6 +26,7 @@ namespace RTE {
 		/// Draws the previews in their actors' slots; EndRender puts the actors back.
 		static void BeginRender();
 		static void EndRender();
+		static bool IsRendering() { return s_Rendering; }
 
 		/// Drops the previews outright (a match teardown).
 		static void Clear();

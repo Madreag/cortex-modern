@@ -35,6 +35,10 @@ const Vector InventoryMenuGUI::c_CarouselBoxSizeStep = (c_CarouselBoxMaxSize - c
 const int InventoryMenuGUI::c_CarouselBoxCornerRadius = ((c_CarouselBoxMaxSize.GetFloorIntY() - c_CarouselBoxMinSize.GetFloorIntY()) / 2) - 1;
 
 BITMAP* InventoryMenuGUI::s_CursorBitmap = nullptr;
+Actor* InventoryMenuGUI::s_RenderSubstituteActor = nullptr;
+Actor* InventoryMenuGUI::s_LastDrawActor = nullptr;
+Vector InventoryMenuGUI::s_LastDrawCenter;
+std::string InventoryMenuGUI::s_LastDrawEquippedName;
 
 InventoryMenuGUI::InventoryMenuGUI() {
 	Clear();
@@ -279,6 +283,38 @@ int InventoryMenuGUI::SetupFullOrTransferMode() {
 	return 0;
 }
 
+void InventoryMenuGUI::SetRenderSubstituteActor(Actor* actor) {
+	s_RenderSubstituteActor = actor;
+}
+
+Actor* InventoryMenuGUI::GetRenderSubstituteActor(const Actor* inventoryActor) {
+	if (s_RenderSubstituteActor && inventoryActor && s_RenderSubstituteActor->GetUniqueID() == inventoryActor->GetUniqueID()) {
+		return s_RenderSubstituteActor;
+	}
+	return nullptr;
+}
+
+Actor* InventoryMenuGUI::GetDrawActor() const {
+	if (Actor* substitute = GetRenderSubstituteActor(m_InventoryActor)) {
+		return substitute;
+	}
+	return m_InventoryActor;
+}
+
+Vector InventoryMenuGUI::GetDrawCenter() const {
+	if (Actor* substitute = GetRenderSubstituteActor(m_InventoryActor)) {
+		return substitute->GetRenderCPUPos();
+	}
+	return m_CenterPos;
+}
+
+MovableObject* InventoryMenuGUI::GetDrawEquippedItem() const {
+	if (const AHuman* human = dynamic_cast<const AHuman*>(GetDrawActor())) {
+		return human->GetEquippedItem();
+	}
+	return m_InventoryActorEquippedItems.empty() ? nullptr : m_InventoryActorEquippedItems.front().first;
+}
+
 void InventoryMenuGUI::SetInventoryActor(Actor* newInventoryActor) {
 	m_InventoryActor = newInventoryActor;
 	if (m_InventoryActor) {
@@ -396,6 +432,12 @@ void InventoryMenuGUI::Update() {
 
 void InventoryMenuGUI::Draw(BITMAP* targetBitmap, const Vector& targetPos) const {
 	Vector drawPos = m_CenterPos - targetPos;
+	s_LastDrawActor = m_InventoryActor;
+	s_LastDrawCenter = m_CenterPos;
+	s_LastDrawEquippedName.clear();
+	if (!m_InventoryActorEquippedItems.empty() && m_InventoryActorEquippedItems.front().first) {
+		s_LastDrawEquippedName = m_InventoryActorEquippedItems.front().first->GetPresetName();
+	}
 
 	switch (m_MenuMode) {
 		case MenuMode::Carousel:
