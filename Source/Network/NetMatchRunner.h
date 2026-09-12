@@ -92,6 +92,10 @@ namespace RTE {
 
 		std::string BuildReportJson(const NetSession& session, const NetLockstepCoordinator& coordinator) const;
 
+		/// Whether a proposed rematch config seats exactly the roster this peer derived. Display names
+		/// are the host's to stamp; the seats are what the two sides have to agree on.
+		static bool RematchRostersAgree(const NetMatchConfig& proposed, const NetMatchConfig& derived);
+
 		static const char* StateName(NetMatchRuntimeState state);
 
 	private:
