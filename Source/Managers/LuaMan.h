@@ -183,6 +183,7 @@ namespace RTE {
 		bool SnapshotPreviewGlobals(std::string& text, std::vector<std::string>& problems);
 		bool RestorePreviewGlobals(const std::string& text, std::vector<std::string>& problems);
 		bool BindPreviewScriptObject(MovableObject* clone, bool sharedSlot);
+		bool RemapPreviewHoldReferences(long uniqueID, std::string& freezeClass);
 		void DropPreviewScriptObject(long uniqueID);
 		bool AttachPreviewInvStride(MovableObject* object);
 
