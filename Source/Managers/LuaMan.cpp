@@ -5610,6 +5610,13 @@ LuaStateWrapper* LuaMan::GetAndLockFreeScriptState() {
 		RTEAssert(success, "Our lua state override for our thread already belongs to another thread!") return s_luaStateOverride;
 	}
 
+	// With no threaded states every object script shares the master state.
+	if (m_ScriptStates.empty()) {
+		bool masterLocked = m_MasterScriptState.GetMutex().try_lock();
+		RTEAssert(masterLocked, "Script mutex was already locked while in a non-multithreaded environment!");
+		return &m_MasterScriptState;
+	}
+
 	// TODO
 	// It would be nice to assign to least-saturated state, but that's a bit tricky with MO registering...
 	/*auto itr = std::min_element(m_ScriptStates.begin(), m_ScriptStates.end(),
