@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -97,8 +98,8 @@ namespace RTE {
 		/// started client always holds the complete state.
 		void BeginStateTransfer(std::vector<uint8_t> fileBytes);
 		bool HasCompleteStateTransfer() const { return m_IncomingStateComplete; }
-		/// Gets whether this host still has state chunks it has not handed to the transport.
-		bool HasPendingStateChunks() const { return m_OutgoingChunkIndex < m_OutgoingChunkCount; }
+		/// Gets whether any remote still lacks a chunk of the queued state file.
+		bool HasPendingStateChunks() const;
 		/// Takes the fully received state file (empties the buffer).
 		std::vector<uint8_t> TakeReceivedState();
 		/// Received/total byte progress of an incoming transfer (0/0 when none).
@@ -138,6 +139,9 @@ namespace RTE {
 
 		bool IsKnownRemote(uint8_t peerId) const;
 		bool IsCommittedTransport(NetPeerId transportPeerId) const;
+		/// Whether that remote's own lobby has spoken; before it does, its session discards lobby packets.
+		bool IsRemoteLobbyUp(uint8_t peerId) const { return m_RemoteLobbyUp.find(peerId) != m_RemoteLobbyUp.end(); }
+		uint16_t OutgoingChunkIndex(uint8_t peerId) const;
 		bool AllConfigAcked() const;
 		bool AllRemoteReady() const;
 
@@ -162,12 +166,12 @@ namespace RTE {
 		std::map<uint8_t, std::string> m_RemoteNamesByPeer; //!< Peer display names from periodic peer-state.
 		std::map<uint8_t, uint32_t> m_RemotePingByPeer; //!< Peer pings; the host stamps relayed states with its measurement.
 		std::map<uint8_t, std::string> m_RemotePlatformsByPeer;
+		std::set<uint8_t> m_RemoteLobbyUp; //!< Remotes that have sent a lobby message of their own.
 		bool m_SeatAssigned = false;       //!< Client: the host has named the id it bound to this connection.
 		std::vector<uint8_t> m_StateBytesToSend;
 		uint64_t m_OutgoingStateId = 0;
-		uint16_t m_OutgoingChunkIndex = 0;
+		std::map<uint8_t, uint16_t> m_OutgoingChunkIndexByPeer; //!< Next chunk each remote still needs.
 		uint16_t m_OutgoingChunkCount = 0;
-		std::vector<NetPeerId> m_OutgoingChunkSentTo;
 		uint32_t m_ChunkSendStall = 0; //!< Consecutive ticks the transport refused a chunk (backpressure).
 		uint64_t m_StateTransferProgressSerial = 0;
 		uint64_t m_IncomingStateId = 0; //!< The active incoming transfer, 0 = none.
