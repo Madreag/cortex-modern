@@ -143,7 +143,7 @@ namespace RTE {
 		std::string DiscoverDefaultGateway() {
 #ifdef _WIN32
 			// iphlpapi is not on the link line; GetBestRoute is reached through the DLL instead.
-			const HMODULE lib = LoadLibraryA("iphlpapi.dll");
+			static const HMODULE lib = LoadLibraryA("iphlpapi.dll");
 			if (lib == nullptr) {
 				return "";
 			}
@@ -418,7 +418,8 @@ namespace RTE {
 							break;
 						}
 						response.append(buffer, static_cast<size_t>(received));
-						if (ResponseComplete(response)) {
+						// Bound a missing Content-Length read; the peer close still ends the body.
+						if (response.size() > 262144 || ResponseComplete(response)) {
 							break;
 						}
 					}
@@ -453,7 +454,7 @@ namespace RTE {
 				std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 				const size_t at = lower.find(needle);
 				if (at == std::string::npos) {
-					return true; // Connection: close and no length: read until the peer hangs up.
+					return false;
 				}
 				const long length = std::strtol(headers.c_str() + at + needle.size(), nullptr, 10);
 				return response.size() - (headerEnd + 4) >= static_cast<size_t>(std::max<long>(length, 0));
@@ -711,6 +712,13 @@ namespace RTE {
 		NetPortMap::Options s_ProbeOverrides;
 	}
 
+	namespace NetPortMapSelfTest {
+		bool HttpGetThroughSockets(const std::string& url, std::string& body, uint32_t timeoutMs) {
+			SocketWan wan(nullptr);
+			return wan.HttpGet(url, body, timeoutMs);
+		}
+	}
+
 	void NetPortMap::SetProbeOverrides(const std::string& gateway, const std::string& igdLocation) {
 		s_ProbeOverrides.gateway = gateway;
 		s_ProbeOverrides.igdLocation = igdLocation;
@@ -888,6 +896,20 @@ namespace RTE {
 						continue;
 					}
 					controlUrl = NetPortMapCodec::ResolveIgdUrl(location, controlUrl);
+					{
+						const size_t schemeEnd = controlUrl.find("://");
+						const std::string rest = schemeEnd == std::string::npos ? controlUrl : controlUrl.substr(schemeEnd + 3);
+						const size_t slash = rest.find('/');
+						std::string controlHost;
+						uint16_t controlPort;
+						if (!ParseHostPort(slash == std::string::npos ? rest : rest.substr(0, slash), 80, controlHost, controlPort) ||
+						    !NetPortMapCodec::SameSlash24(controlHost, localAddr)) {
+							Log("igd control URL at " + (controlHost.empty() ? controlUrl : controlHost) + " refused: outside the /24 of " + localAddr);
+							controlUrl.clear();
+							serviceType.clear();
+							continue;
+						}
+					}
 					break;
 				}
 			}
@@ -1019,6 +1041,7 @@ namespace RTE {
 		m_LeaseS = leaseSeconds;
 		m_Result = Result{};
 		m_Result.internalPort = internalUdpPort;
+		m_MappedResult = Result{};
 		m_Done = false;
 		m_Mapped = false;
 		m_Released = false;
@@ -1028,6 +1051,10 @@ namespace RTE {
 	}
 
 	void NetPortMap::StartWorker(bool renewal) {
+		if (m_Worker.joinable()) {
+			Log("refusing a second worker while one is still running");
+			return;
+		}
 		m_Worker = std::thread([this]() {
 			std::unique_ptr<SocketWan> owned;
 			NetPortMapWan* wan = m_Options.wan;
@@ -1060,40 +1087,51 @@ namespace RTE {
 			}
 			JoinWorker();
 			m_Done = true;
-			m_Mapped = m_Result.method != Method::None;
-			m_RenewAtMs = m_Mapped && m_Result.leaseS > 0
-			                  ? m_Result.leaseExpiresMs - static_cast<uint64_t>(m_Result.leaseS) * 500
-			                  : UINT64_MAX;
+			if (m_Result.method != Method::None) {
+				m_MappedResult = m_Result;
+				m_Mapped = true;
+				m_RenewAtMs = m_Result.leaseS > 0
+				                  ? m_Result.leaseExpiresMs - static_cast<uint64_t>(m_Result.leaseS) * 500
+				                  : UINT64_MAX;
+			} else if (m_MappedResult.method != Method::None) {
+				m_Mapped = nowMs < m_MappedResult.leaseExpiresMs;
+				m_RenewAtMs = UINT64_MAX;
+			} else {
+				m_Mapped = false;
+				m_RenewAtMs = UINT64_MAX;
+			}
 		}
-		if (m_Mapped && nowMs >= m_RenewAtMs) {
+		if (m_MappedResult.method != Method::None && !m_Worker.joinable() && !m_ResultReady && nowMs >= m_MappedResult.leaseExpiresMs) {
+			m_Mapped = false;
+		}
+		if (m_Mapped && nowMs >= m_RenewAtMs && !m_Worker.joinable() && !m_ResultReady) {
 			Log("renewing the lease for udp " + std::to_string(m_Port));
 			m_Done = false;
-			m_Mapped = false;
 			m_Cancel.store(false);
 			StartWorker(true);
 		}
 	}
 
 	void NetPortMap::Release() {
-		if (!m_Worker.joinable() && !m_ResultReady && m_Result.method == Method::None && !m_Mapped && m_Released) {
+		if (!m_Worker.joinable() && !m_ResultReady && m_MappedResult.method == Method::None && m_Result.method == Method::None && !m_Mapped && m_Released) {
 			return;
 		}
 		m_Cancel.store(true);
 		JoinWorker();
-		// The release basis is the last result that actually mapped: a cancelled renewal's
-		// pending result must not overwrite it, a completed renewal's must.
-		Result mapped = m_Result;
+		// Release the last result that actually mapped, not a failed or cancelled attempt.
+		Result mapped = m_MappedResult;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_ResultReady.load()) {
 				m_Result = m_PendingResult;
 				m_ResultReady.store(false);
 				if (m_Result.method != Method::None) {
+					m_MappedResult = m_Result;
 					mapped = m_Result;
 				}
 			}
 		}
-		if (!m_Released && (m_Mapped || mapped.method != Method::None)) {
+		if (!m_Released && mapped.method != Method::None) {
 			const Options options = m_Options;
 			// The removal reply must be logged, so the release runs on its own thread and is joined:
 			// bounded by the chain's own per-call timeouts, never by a frame.
@@ -1108,6 +1146,7 @@ namespace RTE {
 			});
 			release.join();
 			m_Mapped = false;
+			m_MappedResult = Result{};
 			m_RenewAtMs = UINT64_MAX;
 		}
 		m_Released = true;

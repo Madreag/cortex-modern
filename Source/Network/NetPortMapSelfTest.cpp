@@ -448,7 +448,297 @@ namespace RTE {
 				}
 				return true;
 			}
+
+			uint32_t RequestLifetime(const std::vector<uint8_t>& request) {
+				if (request.size() < 12) {
+					return 0xFFFFFFFFu;
+				}
+				return (static_cast<uint32_t>(request[8]) << 24) | (static_cast<uint32_t>(request[9]) << 16) |
+				       (static_cast<uint32_t>(request[10]) << 8) | request[11];
+			}
+
+			int CountLifetimeZero(const std::vector<std::vector<uint8_t>>& requests, size_t from) {
+				int deletes = 0;
+				for (size_t i = from; i < requests.size(); ++i) {
+					const std::vector<uint8_t>& request = requests[i];
+					if (request.size() == 12 && RequestLifetime(request) == 0) {
+						++deletes;
+					}
+				}
+				return deletes;
+			}
+
+			bool WaitUntil(NetPortMap& mapper, const std::function<bool()>& done, int spins, int sleepMs) {
+				for (int i = 0; i < spins && !done(); ++i) {
+					mapper.Update(NowMsForTest());
+					std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+				}
+				return done();
+			}
+
+			/// Map succeeds, a scripted renewal fails, Update consumes the failure, then Release.
+			bool TestFailedRenewalThenRelease(std::string* error) {
+				ScriptedWan wan;
+				std::atomic<int> maps{0};
+				wan.udpScript = [&maps](const std::vector<uint8_t>& request, std::vector<uint8_t>& reply) {
+					if (request.size() == 2) {
+						reply = NatPmpAddressReply(0, "203.0.113.7");
+						return true;
+					}
+					const uint32_t lifetime = RequestLifetime(request);
+					if (lifetime == 0) {
+						reply = NatPmpMapReply(0, 47603, 47603, 0);
+						return true;
+					}
+					if (++maps == 1) {
+						reply = NatPmpMapReply(0, 47603, 47603, 2);
+						return true;
+					}
+					reply = NatPmpMapReply(2, 0, 0, 0);
+					return true;
+				};
+				NetPortMap::Options options;
+				options.wan = &wan;
+				options.gateway = "192.168.1.1:5351";
+				NetPortMap mapper;
+				mapper.Request(47603, 2, options);
+				if (!WaitUntil(mapper, [&]() { return mapper.Mapped(); }, 400, 5)) {
+					*error = "the scripted mapping never landed before the failed renewal";
+					return false;
+				}
+				if (!WaitUntil(mapper, [&]() { return maps.load() >= 2 && mapper.Done(); }, 400, 10)) {
+					*error = "the failed renewal was never consumed";
+					return false;
+				}
+				const size_t udpBefore = wan.udpRequests.size();
+				mapper.Release();
+				const int deletes = CountLifetimeZero(wan.udpRequests, udpBefore);
+				if (deletes != 1) {
+					*error = "Release after a failed renewal sent " + std::to_string(deletes) + " lifetime-0 deletes";
+					return false;
+				}
+				return true;
+			}
+
+			bool TestRenewalStaysMapped(std::string* error) {
+				ScriptedWan wan;
+				std::atomic<int> maps{0};
+				std::atomic<bool> holdRenewal{true};
+				wan.udpScript = [&maps, &holdRenewal](const std::vector<uint8_t>& request, std::vector<uint8_t>& reply) {
+					if (request.size() == 2) {
+						reply = NatPmpAddressReply(0, "203.0.113.7");
+						return true;
+					}
+					const uint32_t lifetime = RequestLifetime(request);
+					if (lifetime == 0) {
+						reply = NatPmpMapReply(0, 47603, 47603, 0);
+						return true;
+					}
+					if (++maps == 1) {
+						reply = NatPmpMapReply(0, 47603, 47603, 2);
+						return true;
+					}
+					while (holdRenewal.load()) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(5));
+					}
+					reply = NatPmpMapReply(2, 0, 0, 0);
+					return true;
+				};
+				NetPortMap::Options options;
+				options.wan = &wan;
+				options.gateway = "192.168.1.1:5351";
+				NetPortMap mapper;
+				mapper.Request(47603, 2, options);
+				struct ReleaseHold {
+					std::atomic<bool>* flag;
+					~ReleaseHold() { flag->store(false); }
+				} releaseHold{&holdRenewal};
+				if (!WaitUntil(mapper, [&]() { return mapper.Mapped(); }, 400, 5)) {
+					*error = "the scripted mapping never landed before renewal";
+					return false;
+				}
+				if (!WaitUntil(mapper, [&]() { return maps.load() >= 2; }, 400, 10)) {
+					*error = "the in-flight renewal never started";
+					return false;
+				}
+				mapper.Update(NowMsForTest());
+				if (!mapper.Mapped()) {
+					*error = "Mapped() was false during an in-flight renewal";
+					return false;
+				}
+				if (mapper.GetResult().externalIp != "203.0.113.7" || mapper.GetResult().externalPort != 47603) {
+					*error = "GetResult() lost the external endpoint during renewal";
+					return false;
+				}
+				holdRenewal.store(false);
+				if (!WaitUntil(mapper, [&]() { return mapper.Done(); }, 400, 5)) {
+					*error = "the failed renewal never landed";
+					return false;
+				}
+				if (!mapper.Mapped()) {
+					*error = "Mapped() was false after a failed renewal before lease expiry";
+					return false;
+				}
+				if (mapper.GetResult().externalIp != "203.0.113.7" || mapper.GetResult().externalPort != 47603) {
+					*error = "GetResult() lost the mapping after a failed renewal";
+					return false;
+				}
+				mapper.Update(mapper.GetResult().leaseExpiresMs + 1);
+				if (mapper.Mapped()) {
+					*error = "Mapped() stayed true after the recorded lease expiry";
+					return false;
+				}
+				mapper.Release();
+				return true;
+			}
+
+			bool TestOffSubnetControlUrl(std::string* error) {
+				ScriptedWan wan;
+				wan.udpScript = [](const std::vector<uint8_t>& request, std::vector<uint8_t>& reply) {
+					if (request.size() == 2) {
+						reply = NatPmpAddressReply(0, "203.0.113.7");
+					} else if (request[0] == 0) {
+						reply = NatPmpMapReply(2, 0, 0, 0);
+					} else {
+						std::vector<uint8_t> nonce(request.begin() + 24, request.begin() + 36);
+						reply = PcpMapReply(nonce.data(), 2, 0, 0, "0.0.0.0", 0);
+					}
+					return true;
+				};
+				wan.ssdpReplies = {"HTTP/1.1 200 OK\r\nLOCATION: http://192.168.1.1:8467/rootDesc.xml\r\n\r\n"};
+				wan.getScript = [](const std::string&, std::string& body) {
+					body = "<?xml version=\"1.0\"?><root><device><serviceList>"
+					       "<service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType>"
+					       "<controlURL>http://10.9.9.9/ctl/IPConn</controlURL></service></serviceList></device></root>";
+					return true;
+				};
+				wan.postScript = [](const std::string&, const std::string&, const std::string&, long& status, std::string&) {
+					status = 200;
+					return true;
+				};
+				const NetPortMap::Result result = NetPortMap::RunMappingChain(wan, 47603, 600, NetPortMap::Options{}, nullptr);
+				if (result.method != NetPortMap::Method::None) {
+					*error = "an off-subnet absolute controlURL was accepted";
+					return false;
+				}
+				bool fetched = false;
+				for (const std::string& call : wan.calls) {
+					if (call.rfind("get:", 0) == 0) {
+						fetched = true;
+					}
+					if (call.rfind("post:", 0) == 0) {
+						*error = "SOAP POST was sent to an off-subnet control URL";
+						return false;
+					}
+				}
+				if (!fetched) {
+					*error = "the on-subnet description was never fetched";
+					return false;
+				}
+				return true;
+			}
+
+			bool TestHttpReaderNoContentLength(std::string* error) {
+#ifdef _WIN32
+				WSADATA wsaData;
+				(void)WSAStartup(MAKEWORD(2, 2), &wsaData);
+				const SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+				if (listener == INVALID_SOCKET) {
+					*error = "HTTP reader test could not create a listen socket";
+					return false;
+				}
+				sockaddr_in bindAddr{};
+				bindAddr.sin_family = AF_INET;
+				bindAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+				bindAddr.sin_port = htons(0);
+				if (bind(listener, reinterpret_cast<sockaddr*>(&bindAddr), sizeof(bindAddr)) != 0 || listen(listener, 1) != 0) {
+					closesocket(listener);
+					*error = "HTTP reader test could not bind 127.0.0.1";
+					return false;
+				}
+				sockaddr_in bound{};
+				int boundLen = sizeof(bound);
+				if (getsockname(listener, reinterpret_cast<sockaddr*>(&bound), &boundLen) != 0) {
+					closesocket(listener);
+					*error = "HTTP reader test could not read the listen port";
+					return false;
+				}
+				const uint16_t port = ntohs(bound.sin_port);
+				const char* kHeaders = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
+				const char* kPart1 = "FIRST-SEGMENT";
+				const char* kPart2 = "SECOND-SEGMENT";
+				std::atomic<bool> served{false};
+				std::thread server([&]() {
+					const SOCKET client = accept(listener, nullptr, nullptr);
+					if (client == INVALID_SOCKET) {
+						return;
+					}
+					char discard[512];
+					(void)recv(client, discard, sizeof(discard), 0);
+					(void)send(client, kHeaders, static_cast<int>(std::strlen(kHeaders)), 0);
+					std::this_thread::sleep_for(std::chrono::milliseconds(80));
+					(void)send(client, kPart1, static_cast<int>(std::strlen(kPart1)), 0);
+					std::this_thread::sleep_for(std::chrono::milliseconds(40));
+					(void)send(client, kPart2, static_cast<int>(std::strlen(kPart2)), 0);
+					closesocket(client);
+					served.store(true);
+				});
+				std::string body;
+				const std::string url = "http://127.0.0.1:" + std::to_string(port) + "/desc.xml";
+				const bool got = HttpGetThroughSockets(url, body, 1500);
+				server.join();
+				closesocket(listener);
+				const std::string expected = std::string(kPart1) + kPart2;
+				if (!got || body != expected) {
+					*error = "HTTP body without Content-Length was not read whole (got " + std::to_string(body.size()) + " bytes)";
+					return false;
+				}
+				(void)served;
+				return true;
+#else
+				(void)error;
+				return true;
+#endif
+			}
 		} // namespace
+
+		bool TestDoubleStartGuard(std::string* error) {
+			ScriptedWan wan;
+			std::atomic<bool> holdFirst{true};
+			wan.udpScript = [&holdFirst](const std::vector<uint8_t>& request, std::vector<uint8_t>& reply) {
+				if (request.size() == 2) {
+					reply = NatPmpAddressReply(0, "203.0.113.7");
+					return true;
+				}
+				while (holdFirst.load()) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(5));
+				}
+				reply = NatPmpMapReply(0, 47603, 47603, 600);
+				return true;
+			};
+			NetPortMap::Options options;
+			options.wan = &wan;
+			options.gateway = "192.168.1.1:5351";
+			NetPortMap mapper;
+			mapper.m_Options = options;
+			mapper.m_Port = 47603;
+			mapper.m_LeaseS = 600;
+			mapper.m_Cancel.store(false);
+			mapper.StartWorker(false);
+			mapper.StartWorker(false);
+			holdFirst.store(false);
+			for (int i = 0; i < 400 && !mapper.Done(); ++i) {
+				mapper.Update(NowMsForTest());
+				std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			}
+			if (!mapper.Mapped()) {
+				*error = "the first worker did not land after a refused second start";
+				mapper.Release();
+				return false;
+			}
+			mapper.Release();
+			return true;
+		}
 
 		int Run() {
 			auto fail = [](const std::string& message) {
@@ -462,6 +752,11 @@ namespace RTE {
 			if (!TestDiscoveryParsers(&error)) return fail(error);
 			if (!TestFallbackOrder(&error)) return fail(error);
 			if (!TestReleaseAndRenewal(&error)) return fail(error);
+			if (!TestFailedRenewalThenRelease(&error)) return fail(error);
+			if (!TestRenewalStaysMapped(&error)) return fail(error);
+			if (!TestOffSubnetControlUrl(&error)) return fail(error);
+			if (!TestHttpReaderNoContentLength(&error)) return fail(error);
+			if (!TestDoubleStartGuard(&error)) return fail(error);
 			std::cout << "[net-port-map-selftest] PASS" << std::endl;
 			return 0;
 		}
