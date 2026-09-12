@@ -1056,6 +1056,131 @@ class DirectoryTests(unittest.TestCase):
         finally:
             LOGGER.removeHandler(handler)
 
+    def capture_log(self) -> list[str]:
+        records: list[str] = []
+
+        class Capture(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record.getMessage())
+
+        handler = Capture()
+        handler.setLevel(logging.INFO)
+        LOGGER.addHandler(handler)
+        self.addCleanup(LOGGER.removeHandler, handler)
+        return records
+
+    def test_signal_peer_header_alternative(self) -> None:
+        records = self.capture_log()
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid = created["session_id"]
+        token = created["token"]
+        nonce = "headerNonce1"
+        client_peer = f"client:{nonce}"
+        down = base64.b64encode(b"host-reply").decode("ascii")
+        up = base64.b64encode(b"client-hello").decode("ascii")
+        for body in (
+            {"token_or_join_nonce": token, "from": "host", "to": client_peer, "payload_b64": down},
+            {"token_or_join_nonce": nonce, "from": client_peer, "to": "host", "payload_b64": up},
+        ):
+            status, _posted = self.call("POST", f"/v1/sessions/{sid}/signal", body)
+            self.assertEqual(status, 200)
+        signals = f"/v1/sessions/{sid}/signals"
+        with self.subTest("client_header_only"):
+            status, got = self.call(
+                "GET", f"{signals}?after=0", headers={"X-Signal-Peer": client_peer}
+            )
+            self.assertEqual(status, 200)
+            self.assert_keys(got, SIGNAL_GET_KEYS)
+            self.assertEqual([item["payload_b64"] for item in got["signals"]], [down])
+        with self.subTest("host_header_only"):
+            status, got = self.call(
+                "GET",
+                f"{signals}?after=0",
+                headers={"X-Signal-Peer": "host", "X-Session-Token": token},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual([item["payload_b64"] for item in got["signals"]], [up])
+        with self.subTest("header_and_query_agree"):
+            status, got = self.call(
+                "GET",
+                f"{signals}?peer={quote(client_peer, safe=':')}&after=1",
+                headers={"X-Signal-Peer": client_peer},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(got["signals"], [])
+        with self.subTest("query_only_still_accepted"):
+            status, got = self.call(
+                "GET", f"{signals}?peer={quote(client_peer, safe=':')}&after=1"
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(got["signals"], [])
+        with self.subTest("header_and_query_disagree"):
+            status, err = self.call(
+                "GET",
+                f"{signals}?peer=client:other&after=0",
+                headers={"X-Signal-Peer": client_peer},
+            )
+            self.assertEqual(status, 400)
+            self.assertEqual(err, {"error": "invalid_field", "field": "peer"})
+        with self.subTest("header_peer_validated"):
+            status, err = self.call(
+                "GET", f"{signals}?after=0", headers={"X-Signal-Peer": "client:no spaces"}
+            )
+            self.assertEqual(status, 400)
+            self.assertEqual(err, {"error": "invalid_field", "field": "peer"})
+        with self.subTest("header_host_still_needs_token"):
+            status, err = self.call(
+                "GET", f"{signals}?after=0", headers={"X-Signal-Peer": "host"}
+            )
+            self.assertEqual(status, 403)
+            self.assertEqual(err, {"error": "forbidden"})
+        with self.subTest("no_peer_at_all"):
+            status, err = self.call("GET", f"{signals}?after=0")
+            self.assertEqual(status, 400)
+            self.assertEqual(err, {"error": "missing_field", "field": "peer"})
+        with self.subTest("log_names_the_path"):
+            via = "\n".join(
+                line for line in records if line.startswith("signal ") and "peer_via=" in line
+            )
+            self.assertIn("peer_via=header", via)
+            self.assertIn("peer_via=query", via)
+            self.assertNotIn(nonce, "\n".join(records))
+
+    def test_client_peer_redacted_in_log(self) -> None:
+        records = self.capture_log()
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid = created["session_id"]
+        token = created["token"]
+        nonce = "RedactMe0123456789abcdefABCDEF_-"
+        client_peer = f"client:{nonce}"
+        tiny = base64.b64encode(b"x").decode("ascii")
+        status, _posted = self.call(
+            "POST",
+            f"/v1/sessions/{sid}/signal",
+            {"token_or_join_nonce": token, "from": "host", "to": client_peer, "payload_b64": tiny},
+        )
+        self.assertEqual(status, 200)
+        signals = f"/v1/sessions/{sid}/signals"
+        status, got = self.call("GET", f"{signals}?peer={quote(client_peer, safe=':')}&after=0")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(got["signals"]), 1)
+        status, got = self.call("GET", f"{signals}?peer={quote(client_peer, safe='')}&after=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(got["signals"], [])
+        status, _host_q = self.call("GET", f"{signals}?peer=host&after=0&token={quote(token)}")
+        self.assertEqual(status, 200)
+        joined = "\n".join(records)
+        self.assertNotIn(nonce, joined)
+        self.assertNotIn(token, joined)
+        polls = [line for line in records if "/signals?" in line]
+        self.assertEqual(len(polls), 3)
+        self.assertEqual(sum("peer=redacted&after=" in line for line in polls), 2)
+        self.assertEqual(sum("peer=host&after=0&token=redacted" in line for line in polls), 1)
+
     def test_readme_documents_install_key_and_caps(self) -> None:
         text = Path(__file__).with_name("README.md").read_text(encoding="utf-8")
         self.assertIn("What the install key is", text)
