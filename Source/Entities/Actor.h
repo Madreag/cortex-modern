@@ -496,6 +496,7 @@ namespace RTE {
 			float x = 0.0F;
 			float y = 0.0F;
 			int64_t targetUID = 0;
+			int64_t actorUID = 0;
 		};
 		/// Hands out the waypoint calls the AI queued this tick, in call order; mods don't call this.
 		std::vector<DeferredWaypoint> TakePendingDeferredWaypoints();
@@ -1204,6 +1205,7 @@ namespace RTE {
 		void BuildLogicalWaypoints(std::vector<std::pair<Vector, const MovableObject*>>& items) const;
 		bool LogicalWaypointClearSeen() const;
 		void ConsumeInflightWaypoint(DeferredWaypoint::Op op, float x, float y, int64_t targetUID);
+		void QueueDeferredOnRunning(const DeferredWaypoint& waypoint);
 
 		std::string m_PersistedActorRuntime;
 		std::array<std::string, 2> m_PersistedActorIconReferences;
