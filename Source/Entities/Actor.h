@@ -423,7 +423,7 @@ namespace RTE {
 		/// Tries to handle the activated PieSlice in this object's PieMenu, if there is one, based on its SliceType.
 		/// @param pieSliceType The SliceType of the PieSlice being handled.
 		/// @return Whether or not the activated PieSlice SliceType was able to be handled.
-		virtual bool HandlePieCommand(PieSliceType pieSliceType) { return false; }
+		virtual bool HandlePieCommand(PieSliceType pieSliceType);
 
 		/// Handles the PieSlice this' PieMenu activated last tick, if any. Runs in the update stage, so every peer applies it at the same tick.
 		void HandlePendingPieCommand();
