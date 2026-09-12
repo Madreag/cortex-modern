@@ -211,7 +211,10 @@ if host_machine.system() in ['linux','darwin']
   ]
   preprocessor_flags+=['-DSYSTEM_MINIZIP']
   if host_machine.system()=='darwin'
-    deps += dependency('appleframeworks', modules: ['Foundation'])  
+    # Objective-C++ for NetHttpClientApple.mm; GCC cannot parse Foundation's headers.
+    add_languages('objcpp', native: false)
+    add_project_arguments('-fobjc-arc', language: 'objcpp')
+    deps += dependency('appleframeworks', modules: ['Foundation', 'Security'])
   endif
   bfd = compiler.find_library('bfd', required: false)
   if bfd.found()
@@ -332,6 +335,7 @@ subdir('Resources')
 cccpelf = executable(
   elfname, ['Source/Main.cpp', sources], include_directories:[source_inc_dirs, external_inc_dirs], cpp_pch:pch, # Sources options
   link_with:[external_libs, source_libs], objects:[external_objects], dependencies:deps,                                # Link options
+  link_language:'cpp', # meson would otherwise link with the Objective-C++ compiler once macOS adds a .mm
   cpp_args:[extra_args, preprocessor_flags], link_args:[link_args], build_rpath:build_rpath,               # Compiler setup
   override_options:override_options,
   name_suffix:suffix,   # Executable name options
