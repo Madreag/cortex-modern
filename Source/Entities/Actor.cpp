@@ -1287,7 +1287,7 @@ void Actor::SendDeferredWaypoints() {
 			continue;
 		}
 		const uint8_t op = waypoint.op == DeferredWaypoint::Scene ? NetGameAIOrder::SceneWaypoint : (waypoint.op == DeferredWaypoint::MOTarget ? NetGameAIOrder::MOWaypoint : NetGameAIOrder::ClearWaypoints);
-		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{targetUID, target->GetTeam(), op, waypoint.x, waypoint.y, waypoint.targetUID}});
+		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{targetUID, m_Team, op, waypoint.x, waypoint.y, waypoint.targetUID}});
 		target->m_InflightWaypoints.push_back(waypoint);
 	}
 }
