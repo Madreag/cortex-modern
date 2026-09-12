@@ -106,6 +106,10 @@ void PieMenu::Clear() {
 	m_BGBitmap = nullptr;
 	m_BGRotationBitmap = nullptr;
 	m_BGPieSlicesWithSubPieMenuBitmap = nullptr;
+	m_FrozenBitmap = nullptr;
+	m_FrozenForView = false;
+	m_FreezeRadiusDraw = 0;
+	m_FrozenBitmapNeedsRedraw = false;
 	m_BGBitmapNeedsRedrawing = true;
 	m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing = true;
 }
@@ -188,6 +192,8 @@ int PieMenu::Create(const PieMenu& reference) {
 	m_CursorInVisiblePosition = reference.m_CursorInVisiblePosition;
 	m_CursorAngle = reference.m_CursorAngle;
 	m_CursorVisualAngle = reference.m_CursorVisualAngle;
+	m_FrozenForView = reference.m_FrozenForView;
+	m_FreezeRadiusDraw = reference.m_FreezeRadiusDraw;
 
 	RecreateBackgroundBitmaps();
 
@@ -287,6 +293,7 @@ void PieMenu::Destroy(bool notInherited) {
 	destroy_bitmap(m_BGBitmap);
 	destroy_bitmap(m_BGRotationBitmap);
 	destroy_bitmap(m_BGPieSlicesWithSubPieMenuBitmap);
+	destroy_bitmap(m_FrozenBitmap);
 	Clear();
 }
 
@@ -416,6 +423,8 @@ bool PieMenu::RunCheckpointSelfTest() {
 		menu.m_CursorVisualAngle == 0.625F && menu.m_EnableDisableAnimationTimer.GetStartSimTimeMS() == 1234 && menu.m_HoverTimer.GetSimTimeLimitTicks() == 4321);
 	check("independent_pixels_and_clip", getpixel(menu.m_BGBitmap, 3, 4) == 21 && getpixel(menu.m_BGRotationBitmap, 3, 4) == 22 &&
 		getpixel(menu.m_BGPieSlicesWithSubPieMenuBitmap, 3, 4) == 23 && menu.m_BGBitmap->cl == 1 && menu.m_BGBitmap->cb == 10 && !menu.m_BGBitmapNeedsRedrawing);
+	menu.FreezeAtRadius(15);
+	check("freeze_is_presentation_only", menu.SaveRuntimeCheckpoint() == saved);
 	PieMenu copy;
 	{ MovableObject::FaithfulCloneScope scope(true); check("faithful_clone_preserves_runtime", copy.Create(menu) == 0 && copy.SaveRuntimeCheckpoint() == saved); }
 	check("clone_owns_its_bitmaps", copy.m_BGBitmap != menu.m_BGBitmap && copy.m_BGRotationBitmap != menu.m_BGRotationBitmap && copy.m_BGPieSlicesWithSubPieMenuBitmap != menu.m_BGPieSlicesWithSubPieMenuBitmap);
@@ -465,6 +474,7 @@ bool PieMenu::SeatHearsSounds() const {
 
 void PieMenu::SetEnabled(bool enable, bool playSounds) {
 	m_MenuMode = MenuMode::Normal;
+	m_FrozenForView = false;
 
 	bool enabledStateDoesNotMatchInput = (enable && m_EnabledState != EnabledState::Enabled && m_EnabledState != EnabledState::Enabling) || (!enable && m_EnabledState != EnabledState::Disabled && m_EnabledState != EnabledState::Disabling);
 	if (enabledStateDoesNotMatchInput) {
@@ -745,7 +755,7 @@ void PieMenu::Update() {
 		m_AffectedObject = nullptr;
 	}
 
-	if (m_MenuMode == MenuMode::Normal) {
+	if (m_MenuMode == MenuMode::Normal && !m_FrozenForView) {
 		if (IsEnabled()) {
 			// Invoke listeners in deterministic UniqueID order — the map is pointer-keyed (unordered cross-platform)
 			std::vector<std::pair<const MovableObject*, std::function<void()>>> sortedListeners(m_WhilePieMenuOpenListeners.begin(), m_WhilePieMenuOpenListeners.end());
@@ -822,12 +832,20 @@ void PieMenu::Update() {
 		}
 	}
 
-	if (m_MenuMode == MenuMode::Wobble) {
+	if (m_MenuMode == MenuMode::Wobble && !m_FrozenForView) {
 		UpdateWobbling();
 	} else if (m_MenuMode == MenuMode::Freeze) {
 		m_EnabledState = EnabledState::Enabling;
 	} else if (m_EnabledState == EnabledState::Enabling || m_EnabledState == EnabledState::Disabling) {
 		UpdateEnablingAndDisablingProgress();
+	}
+
+	// The frozen ring draws into its own bitmap so none of it reaches the checkpointed fields or bitmaps.
+	if (m_FrozenForView && m_FrozenBitmapNeedsRedraw && m_FrozenBitmap) {
+		clear_to_color(m_FrozenBitmap, ColorKeys::g_MaskColor);
+		circlefill(m_FrozenBitmap, m_FrozenBitmap->w / 2, m_FrozenBitmap->h / 2, m_FreezeRadiusDraw + m_BackgroundThickness, m_BackgroundColor);
+		circlefill(m_FrozenBitmap, m_FrozenBitmap->w / 2, m_FrozenBitmap->h / 2, m_FreezeRadiusDraw, ColorKeys::g_MaskColor);
+		m_FrozenBitmapNeedsRedraw = false;
 	}
 
 	if (m_BGBitmapNeedsRedrawing && m_EnabledState != EnabledState::Disabled) {
@@ -867,7 +885,18 @@ void PieMenu::Draw(BITMAP* targetBitmap, const Vector& targetPos) const {
 	CalculateDrawPosition(targetBitmap, targetPos, drawPos);
 
 	rlZDepth(c_GuiDepth);
-	if (m_EnabledState != EnabledState::Disabled) {
+	if (m_FrozenForView) {
+		if (m_FrozenBitmap) {
+			if (m_DrawBackgroundTransparent) {
+				g_FrameMan.SetTransTableFromPreset(TransparencyPreset::MoreTrans);
+				g_GLResourceMan.UpdateDynamicBitmap(m_FrozenBitmap, true);
+				DrawTexture(g_GLResourceMan.GetStaticTextureFromBitmap(m_FrozenBitmap), drawPos.GetFloorIntX() - m_FrozenBitmap->w / 2, drawPos.GetFloorIntY() - m_FrozenBitmap->h / 2, {255, 255, 255, g_FrameMan.GetCurrentAlpha()});
+			} else {
+				g_GLResourceMan.UpdateDynamicBitmap(m_FrozenBitmap, true);
+				DrawTexture(g_GLResourceMan.GetStaticTextureFromBitmap(m_FrozenBitmap), drawPos.GetFloorIntX() - m_FrozenBitmap->w / 2, drawPos.GetFloorIntY() - m_FrozenBitmap->h / 2, {255, 255, 255, 255});
+			}
+		}
+	} else if (m_EnabledState != EnabledState::Disabled) {
 		if (m_DrawBackgroundTransparent) {
 			g_FrameMan.SetTransTableFromPreset(TransparencyPreset::MoreTrans);
 			g_GLResourceMan.UpdateDynamicBitmap(m_BGBitmap, true);
@@ -879,7 +908,7 @@ void PieMenu::Draw(BITMAP* targetBitmap, const Vector& targetPos) const {
 	}
 	rlZDepth(c_DefaultDrawDepth);
 
-	if (m_EnabledState == EnabledState::Enabled) {
+	if (!m_FrozenForView && m_EnabledState == EnabledState::Enabled) {
 		DrawPieIcons(targetBitmap, drawPos);
 		if (m_CursorInVisiblePosition) {
 			DrawPieCursorAndPieSliceDescriptions(targetBitmap, drawPos);
@@ -1308,6 +1337,10 @@ void PieMenu::RecreateBackgroundBitmaps() {
 		destroy_bitmap(m_BGPieSlicesWithSubPieMenuBitmap);
 		m_BGPieSlicesWithSubPieMenuBitmap = nullptr;
 	}
+	if (m_FrozenBitmap) {
+		destroy_bitmap(m_FrozenBitmap);
+		m_FrozenBitmap = nullptr;
+	}
 
 	int diameter = (m_FullInnerRadius + std::max(m_BackgroundThickness, m_BackgroundSeparatorSize) + (c_PieSliceWithSubPieMenuExtraThickness * 2)) * 2;
 
@@ -1317,6 +1350,9 @@ void PieMenu::RecreateBackgroundBitmaps() {
 	clear_to_color(m_BGRotationBitmap, ColorKeys::g_MaskColor);
 	m_BGPieSlicesWithSubPieMenuBitmap = create_bitmap_ex(8, diameter, diameter);
 	clear_to_color(m_BGPieSlicesWithSubPieMenuBitmap, ColorKeys::g_MaskColor);
+	m_FrozenBitmap = create_bitmap_ex(8, diameter, diameter);
+	clear_to_color(m_FrozenBitmap, ColorKeys::g_MaskColor);
+	m_FrozenBitmapNeedsRedraw = true;
 
 	m_BGBitmapNeedsRedrawing = true;
 	m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing = true;

@@ -137,27 +137,27 @@ namespace RTE {
 
 		/// Gets whether or not the PieMenu is enabled or in the process of being enabled, and is not in wobble mode.
 		/// @return Whether or not the PieMenu is enabled or in the process of being enabled.
-		bool IsEnabled() const { return (m_EnabledState == EnabledState::Enabled || m_EnabledState == EnabledState::Enabling) && m_MenuMode != MenuMode::Wobble; }
+		bool IsEnabled() const { return ((m_EnabledState == EnabledState::Enabled || m_EnabledState == EnabledState::Enabling) && m_MenuMode != MenuMode::Wobble) || m_FrozenForView; }
 
 		/// Gets whether or not the PieMenu is in the process of being enabled.
 		/// @return Whether or not the PieMenu is in the process of being enabled.
-		bool IsEnabling() const { return m_EnabledState == EnabledState::Enabling; }
+		bool IsEnabling() const { return m_EnabledState == EnabledState::Enabling || m_FrozenForView; }
 
 		/// Gets whether or not the PieMenu is in the process of being disabled.
 		/// @return Whether or not the PieMenu is in the process of being disabled.
-		bool IsDisabling() const { return m_EnabledState == EnabledState::Enabling && m_MenuMode != MenuMode::Wobble; }
+		bool IsDisabling() const { return (m_EnabledState == EnabledState::Enabling && m_MenuMode != MenuMode::Wobble) || m_FrozenForView; }
 
 		/// Gets whether or not the PieMenu is in the process of enabling or disabling.
 		/// @return Whether or not the PieMenu is in the process of enabling or disabling.
-		bool IsEnablingOrDisabling() const { return (m_EnabledState == EnabledState::Enabling || m_EnabledState == EnabledState::Disabling) && m_MenuMode != MenuMode::Wobble; }
+		bool IsEnablingOrDisabling() const { return ((m_EnabledState == EnabledState::Enabling || m_EnabledState == EnabledState::Disabling) && m_MenuMode != MenuMode::Wobble) || m_FrozenForView; }
 
 		/// Gets whether or not the PieMenu is at all visible.
 		/// @return Whether the PieMenu is visible.
-		bool IsVisible() const { return m_EnabledState != EnabledState::Disabled || m_MenuMode == MenuMode::Freeze || m_MenuMode == MenuMode::Wobble; }
+		bool IsVisible() const { return m_EnabledState != EnabledState::Disabled || m_MenuMode == MenuMode::Freeze || m_MenuMode == MenuMode::Wobble || m_FrozenForView; }
 
 		/// Gets whether or not the PieMenu is in the normal animation mode.
 		/// @return Whether or not the PieMenu is in the normal animation mode.
-		bool IsInNormalAnimationMode() const { return m_MenuMode == MenuMode::Normal; }
+		bool IsInNormalAnimationMode() const { return m_MenuMode == MenuMode::Normal && !m_FrozenForView; }
 
 		/// Enables or disables the PieMenu and animates it in and out of view.
 		/// @param enable Whether to enable or disable the PieMenu.
@@ -172,9 +172,10 @@ namespace RTE {
 #pragma region Special Animation Handling
 		/// Sets this PieMenu to normal MenuMode.
 		void SetAnimationModeToNormal() {
-			if (m_MenuMode != MenuMode::Normal) {
+			if (m_MenuMode != MenuMode::Normal || m_FrozenForView) {
 				m_MenuMode = MenuMode::Normal;
 				m_EnabledState = EnabledState::Disabled;
+				m_FrozenForView = false;
 			}
 		}
 
@@ -184,18 +185,20 @@ namespace RTE {
 			m_MenuMode = MenuMode::Normal;
 			m_EnableDisableAnimationTimer.Reset();
 			m_EnabledState = EnabledState::Disabling;
+			m_FrozenForView = false;
 		}
 
 		/// Plays an animation of the background circle expanding and contracting continuously. The PieMenu is effectively disabled while doing this.
 		/// This animation will continue until the next call to SetEnabled.
-		void Wobble() { m_MenuMode = MenuMode::Wobble; }
+		void Wobble() { m_MenuMode = MenuMode::Wobble; m_FrozenForView = false; }
 
-		/// Makes the background circle freeze at a certain radius until SetEnabled is called. The PieMenu is effectively disabled while doing this.
+		/// Freezes the background circle's drawn radius until the menu leaves the frozen presentation. The PieMenu is
+		/// effectively disabled while doing this; none of the presentation state it drives is checkpointed.
 		/// @param radius The radius to make the background circle freeze at.
 		void FreezeAtRadius(int radius) {
-			m_MenuMode = MenuMode::Freeze;
-			m_CurrentInnerRadius = radius;
-			m_BGBitmapNeedsRedrawing = true;
+			m_FrozenForView = true;
+			m_FreezeRadiusDraw = radius;
+			m_FrozenBitmapNeedsRedraw = true;
 		}
 #pragma endregion
 
@@ -387,6 +390,11 @@ namespace RTE {
 		BITMAP* m_BGBitmap; //!< The intermediary bitmap used to first draw the PieMenu background, which will be blitted to the final draw target surface.
 		BITMAP* m_BGRotationBitmap; //!< The intermediary bitmap used to allow the PieMenu background to rotate, which will be pivoted onto the BG bitmap.
 		BITMAP* m_BGPieSlicesWithSubPieMenuBitmap; //!< The intermediary bitmap used to support handling PieSlices with sub-PieMenus, which will be drawn onto the BG bitmap.
+		// The frozen-ring presentation is seat-local and never checkpointed, so it lives in its own fields.
+		BITMAP* m_FrozenBitmap = nullptr; //!< The background ring bitmap drawn while the frozen presentation shows.
+		bool m_FrozenForView = false; //!< Whether FreezeAtRadius's frozen ring is showing.
+		int m_FreezeRadiusDraw = 0; //!< The radius the frozen ring is held at.
+		bool m_FrozenBitmapNeedsRedraw = false; //!< Whether the frozen ring should be drawn into m_FrozenBitmap on the next Update.
 		std::string m_PersistedRuntime;
 		std::string SaveRuntimeCheckpoint() const;
 		bool LoadRuntimeCheckpoint(std::string_view text, bool validateOnly = false);
