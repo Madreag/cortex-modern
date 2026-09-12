@@ -522,6 +522,9 @@ namespace RTE {
 		/// @return How many waypoints.
 		int GetWaypointsSize();
 
+		/// Gets how many front waypoints this actor has already loaded under lockstep.
+		int GetWaypointCursor() const { return m_WaypointCursor; }
+
 		/// Clears the list of coordinates in this' current MovePath, ie the path
 		/// to the next Waypoint.
 		void ClearMovePath() {
@@ -764,6 +767,12 @@ namespace RTE {
 		/// current waypoint, if any.
 		void SetMovePathToUpdate() { m_UpdateMovePath = true; }
 
+		/// Gets whether a move-path update is still armed.
+		bool IsMovePathUpdatePending() const { return m_UpdateMovePath; }
+
+		/// Starts updating this Actor's movepath.
+		virtual void UpdateMovePath();
+
 		/// Gets how many waypoints there are in the MovePath currently
 		/// @return The number of waypoints in the MovePath.
 		int GetMovePathSize() const { return m_MovePath.size(); }
@@ -980,9 +989,6 @@ namespace RTE {
 		/// Function that is called when we get a new movepath.
 		/// This processes and cleans up the movepath.
 		virtual void OnNewMovePath();
-
-		/// Starts updating this Actor's movepath.
-		virtual void UpdateMovePath();
 
 		// Member variables
 		static Entity::ClassInfo m_sClass;
