@@ -6,6 +6,7 @@
 #include "NetTransport.h"
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -104,6 +105,13 @@ namespace RTE {
 		NetReconnectClient* GetReconnectClient() const { return m_ReconnectClient; }
 		/// The frame a seat drop is recorded against; the match runner keeps it current.
 		void SetLockstepFrame(uint64_t frame) { m_LockstepFrame = frame; }
+
+		/// Host: re-seats the Ready peers on the ids a rematch roster gives them, so a roster that lost
+		/// a player is dense again. Keyed and valued by session-assigned id. Refuses rather than take an
+		/// id a peer that is still handshaking holds.
+		bool RenumberReadySeats(const std::map<uint8_t, uint8_t>& assignedIdBySeatedId, std::string* error = nullptr);
+		/// Client: takes the session-assigned id the rematch roster gives this peer.
+		bool AdoptRematchPeerId(uint8_t assignedPeerId, std::string* error = nullptr);
 
 		NetSessionRole GetRole() const { return m_Role; }
 		NetSessionState GetState() const { return m_State; }
