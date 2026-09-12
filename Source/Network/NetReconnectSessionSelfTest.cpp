@@ -2685,12 +2685,13 @@ namespace RTE {
 					return Fail("a stale record was not reported as stale");
 				}
 				offer.OfferStoredTicket(NetH4TicketLoadResult::Missing, "");
-				if (offer.GetOffer() != NetReconnectOffer::None || !offer.GetOfferText().empty()) {
-					return Fail("a missing record produced an offer");
+				if (offer.GetOffer() != NetReconnectOffer::Missing ||
+				    offer.GetOfferText() != "No reconnect record for that match.") {
+					return Fail("a missing record said nothing at all");
 				}
 				offer.OfferStoredTicket(NetH4TicketLoadResult::Loaded, "10.0.0.7");
 				offer.DismissOffer();
-				if (offer.GetOffer() != NetReconnectOffer::None) {
+				if (offer.GetOffer() != NetReconnectOffer::None || !offer.GetOfferText().empty()) {
 					return Fail("the offer could not be dismissed");
 				}
 			}

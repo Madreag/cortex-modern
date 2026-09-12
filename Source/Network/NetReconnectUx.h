@@ -24,10 +24,11 @@ namespace RTE {
 
 	/// What the startup scan of the recovery record found. The protocol does not care; the player does.
 	enum class NetReconnectOffer : uint8_t {
-		None = 0,
+		None = 0,      //!< Nothing to say: no scan has run, or the player dismissed what it found.
 		Available = 1, //!< A usable record: offer to rejoin the match it names.
 		Corrupt = 2,
 		Stale = 3,
+		Missing = 4, //!< The scan ran and found no record; §11 says so rather than saying nothing.
 	};
 
 	/// The reconnect UX (§11): the automatic-retry schedule with its cancel and manual-retry controls,
