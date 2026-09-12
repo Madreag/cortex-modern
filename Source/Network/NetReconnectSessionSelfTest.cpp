@@ -2685,13 +2685,33 @@ namespace RTE {
 					return Fail("a stale record was not reported as stale");
 				}
 				offer.OfferStoredTicket(NetH4TicketLoadResult::Missing, "");
-				if (offer.GetOffer() != NetReconnectOffer::None || !offer.GetOfferText().empty()) {
-					return Fail("a missing record produced an offer");
+				if (offer.GetOffer() != NetReconnectOffer::Missing ||
+				    offer.GetOfferText() != "No reconnect record for that match.") {
+					return Fail("a missing record said nothing at all");
 				}
 				offer.OfferStoredTicket(NetH4TicketLoadResult::Loaded, "10.0.0.7");
 				offer.DismissOffer();
-				if (offer.GetOffer() != NetReconnectOffer::None) {
+				if (offer.GetOffer() != NetReconnectOffer::None || !offer.GetOfferText().empty()) {
 					return Fail("the offer could not be dismissed");
+				}
+			}
+
+			// A cancelled or spent schedule is not re-armed by the same loss being reported again.
+			{
+				NetReconnectUx cancelled;
+				cancelled.NoteDropped(1000, "link lost");
+				cancelled.Cancel(1500);
+				cancelled.NoteDropped(2000, "link lost");
+				if (cancelled.GetState() != NetReconnectUxState::Cancelled || cancelled.Tick(9000)) {
+					return Fail("a cancelled schedule restarted itself");
+				}
+				NetReconnectUx spent;
+				spent.NoteDropped(1000, "link lost");
+				spent.NoteAttemptStarted(1000);
+				spent.NoteAttemptFailed(1000 + NetReconnectUx::c_ResumeWindowMs + 1, "");
+				spent.NoteDropped(1000 + NetReconnectUx::c_ResumeWindowMs + 2, "link lost");
+				if (spent.GetState() != NetReconnectUxState::GaveUp) {
+					return Fail("a spent schedule restarted itself");
 				}
 			}
 
@@ -3344,6 +3364,53 @@ namespace RTE {
 			if (presence.GetSnapshot() || !presence.GetSeats().empty()) return Fail("roster survived the session lifetime");
 			if (NetSeatPresence::HoldSeconds(hold) != 20 || NetSeatPresence::HoldSeconds(0) != 0 ||
 			    NetSeatPresence::HoldSeconds(60) != 1 || NetSeatPresence::HoldSeconds(61) != 2) return Fail("hold seconds differ from the pinned timestep");
+			return 0;
+		}
+
+		// The seats panel and the stall overlay must agree about the pause: the round's hold decides,
+		// not the seat's remaining hold FRAMES, which outlive a resolved hold.
+		int TestModerationPanelTitleFollowsTheRoundHold() {
+			const uint64_t hold = NetLockstepCoordinator::c_ReclaimHoldFrames;
+			NetSeatPresence presence;
+			NetLockstepSeatSnapshot snapshot;
+			snapshot.senderPeerId = 1;
+			snapshot.sessionId = 321;
+			snapshot.roundId = 9;
+			snapshot.revision = 1;
+			snapshot.observedAtMs = 1000;
+			NetSeatPresenceEntry seat;
+			seat.stableSeat = 0;
+			seat.peerId = 2;
+			seat.state = NetSeatPresenceState::Disconnected;
+			seat.holdActive = false;
+			seat.holdUntilFrame = 100 + hold;
+			seat.holderName = "Alice";
+			snapshot.seats = {seat};
+			if (!presence.ApplySnapshot(snapshot, 1000)) {
+				return Fail("the resolved-hold snapshot was not applied");
+			}
+			presence.NoteFrame(100);
+			// The frame budget still has the whole hold in it while the round holds nothing.
+			if (presence.HoldFramesRemaining(2) != hold) {
+				return Fail("the seat's frame hold was not the disagreement window this pins");
+			}
+			std::string who;
+			uint32_t seconds = 0;
+			if (ScenarioRunner::DescribeLockstepHoldPause(who, seconds) || !who.empty() || seconds != 0) {
+				return Fail("a round with no coordinator reported a hold pause");
+			}
+			if (NetModerationPanelTitle(true, false, "Alice", 0) != "SEATS  /  The match continues while this panel is open") {
+				return Fail("the panel claimed a pause the round is not in");
+			}
+			if (NetModerationPanelTitle(true, true, "Alice", 7) != "SEATS  /  Match paused: waiting for Alice to return (7s left)") {
+				return Fail("the panel did not name the held player and the countdown");
+			}
+			if (NetModerationPanelTitle(true, true, "", 3) != "SEATS  /  Match paused: waiting for a player to return (3s left)") {
+				return Fail("a nameless hold lost its wording");
+			}
+			if (NetModerationPanelTitle(false, true, "Alice", 7) != "SEATS  /  Resynchronizing the match...") {
+				return Fail("a resyncing round did not say so");
+			}
 			return 0;
 		}
 
@@ -5962,6 +6029,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestSeatPresenceLine(); result != 0) {
+			return result;
+		}
+		if (const int result = TestModerationPanelTitleFollowsTheRoundHold(); result != 0) {
 			return result;
 		}
 		if (const int result = TestModerationSelectionModel(); result != 0) {

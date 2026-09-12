@@ -1,6 +1,7 @@
 #include "NetModerationGUI.h"
 
 #include "NetMatchService.h"
+#include "ScenarioRunner.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
 #include "UInputMan.h"
@@ -119,7 +120,11 @@ bool NetModerationGUI::SetOpen(bool open) {
 void NetModerationGUI::Refresh() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 	m_Model.Refresh(g_NetMatchService.GetModerationSeats());
-	m_Title->SetText(snapshot.serviceState == "Running" ? "SEATS  /  The match continues while this panel is open" : "SEATS  /  Resynchronizing the match...");
+	// The hold is the round's, read from the same place the stall overlay reads it.
+	std::string holdName;
+	uint32_t holdSeconds = 0;
+	const bool holdPause = ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds);
+	m_Title->SetText(NetModerationPanelTitle(snapshot.serviceState == "Running", holdPause, DisplayName(holdName), holdSeconds));
 	m_Summary->SetText(snapshot.isHost ? m_Model.GetSummaryText() : "Only the host can approve a substitute.");
 	m_Status->SetText(WrapText(m_LabelFont, m_Model.GetStatusText(), m_Status->GetWidth()));
 	m_Roster->SetVisible(!snapshot.isHost);
@@ -193,6 +198,8 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	const int width = std::min(412, g_WindowMan.GetResX() - 16);
 	int y = 8;
 	std::string text = "Seats  [F6]";
+	// The announced input delay rides the corner box so the HUD shows what the lobby showed.
+	if (!snapshot.inputDelayText.empty()) text += "\n" + snapshot.inputDelayText;
 	for (const auto& member: snapshot.members) {
 		if (member.cpu) continue;
 		text += "\n" + (member.statusLine.empty() ? DisplayName(member.displayName) + "  /  Connected" : DisplayName(member.statusLine));

@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <iostream>
 #include <thread>
 
 using namespace RTE;
@@ -86,6 +87,7 @@ void MainMenuGUI::Clear() {
 	m_PressedModeration.clear();
 	m_MultiplayerLobbyPlayerLabels.fill(nullptr);
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+	m_ReconnectStatusShown.clear();
 	m_CreditsScrollPanel = nullptr;
 	m_MainMenuScreens.fill(nullptr);
 	m_MainMenuButtons.fill(nullptr);
@@ -495,6 +497,18 @@ MainMenuGUI::MainMenuUpdateResult MainMenuGUI::Update() {
 	return result;
 }
 
+void MainMenuGUI::OfferStoredRejoinOnEntry() {
+	if (g_NetMatchService.GetState() == NetMatchServiceState::Idle) {
+		g_NetMatchService.ScanStoredTicket();
+	}
+	const NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
+	if (reconnect.GetOffer() != NetReconnectOffer::Available && !reconnect.IsActive()) {
+		return;
+	}
+	SetActiveMenuScreen(MenuScreen::MultiplayerScreen, false);
+	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+}
+
 void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
 	if ((!m_ActiveDialogBox || m_ActiveDialogBox == m_MainMenuScreens[MenuScreen::QuitScreen]) && (backButtonPressed || g_UInputMan.KeyPressed(SDLK_ESCAPE))) {
 		if (m_ActiveMenuScreen != MenuScreen::MainScreen) {
@@ -504,7 +518,10 @@ void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
 				}
 				g_SettingsMan.UpdateSettingsFile();
 			} else if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen) {
-				g_NetMatchService.Destroy();
+				// A running recovery outlives the screen; Cancel is what stops it, not walking away.
+				if (!g_NetMatchService.NeedsRecoveryPump()) {
+					g_NetMatchService.Destroy();
+				}
 			} else if (m_ActiveMenuScreen == MenuScreen::CreditsScreen) {
 				m_UpdateResult = MainMenuUpdateResult::BackToMainFromCredits;
 			}
@@ -637,6 +654,13 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		g_NetMatchService.Destroy();
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 		g_GUISound.BackButtonPressSound()->Play();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReconnectButton] &&
+	           m_MultiplayerApplyOffered && g_NetMatchService.WasJoinRefusedByALiveMatch() &&
+	           g_NetMatchService.GetReconnectUx().GetOffer() != NetReconnectOffer::Available &&
+	           !g_NetMatchService.GetReconnectUx().IsActive()) {
+		// §9b: ask the host for a seat whose holder is gone. The host picks which one.
+		ApplyToSubstitute();
+		g_GUISound.ButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]) {
 		// §11's manual retry, and the same button that takes up the stored ticket after a relaunch.
 		NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
@@ -655,6 +679,7 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		// A cancel stops the automatic attempts; the recovery record survives it, so Rejoin still works.
 		g_NetMatchService.GetReconnectUx().Cancel(MenuClockMs());
 		g_NetMatchService.GetReconnectUx().DismissOffer();
+		m_MultiplayerApplyOffered = false;
 		g_GUISound.BackButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerModerateButton]) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Moderation;
@@ -733,14 +758,29 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	}
 
 	std::string error;
+	m_MultiplayerJoinRequest = request;
+	m_MultiplayerApplyOffered = !host;
 	if (g_NetMatchService.Start(request, &error)) {
 		m_MultiplayerLandingStatusLabel->SetText("");
+		m_ReconnectStatusShown.clear();
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
 	} else {
 		m_MultiplayerLandingStatusLabel->SetText(error);
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 	}
 	g_GUISound.ButtonPressSound()->Play();
+}
+
+void MainMenuGUI::ApplyToSubstitute() {
+	std::string error;
+	m_MultiplayerApplyOffered = false;
+	if (g_NetMatchService.BeginSubstituteApplication(m_MultiplayerJoinRequest, &error)) {
+		m_MultiplayerLandingStatusLabel->SetText("Asking the host for a seat...");
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
+	} else {
+		m_MultiplayerLandingStatusLabel->SetText(error);
+	}
+	m_ReconnectStatusShown = m_MultiplayerLandingStatusLabel->GetText();
 }
 
 void MainMenuGUI::UpdateMultiplayerScreen() {
@@ -782,19 +822,35 @@ void MainMenuGUI::RefreshReconnectControls() {
 	const bool offering = reconnect.GetOffer() == NetReconnectOffer::Available;
 	const bool landing = m_MultiplayerSubScreen == MultiplayerSubScreen::Landing;
 	const bool recovering = reconnect.IsActive();
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || reconnect.CanRetryManually()));
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering || reconnect.CanRetryManually());
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering ? "Rejoin Match" : "Retry");
-	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetVisible(landing && (offering || recovering));
-	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetEnabled(offering || reconnect.CanCancel());
+	// §9b: the one refusal a joiner can answer. The same two buttons carry it, so the landing panel
+	// keeps one pair of controls whatever it is offering.
+	const bool applying = !recovering && !offering && m_MultiplayerApplyOffered && g_NetMatchService.WasJoinRefusedByALiveMatch();
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || applying || reconnect.CanRetryManually()));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering || applying || reconnect.CanRetryManually());
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering ? "Rejoin Match" : (applying ? "Apply to Substitute" : "Retry"));
+	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetVisible(landing && (offering || applying || recovering));
+	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetEnabled(offering || applying || reconnect.CanCancel());
 	if (!landing) {
+		return;
+	}
+	if (applying) {
+		const std::string offer = "The match is already in progress. Apply to substitute for a dropped player?";
+		if (offer != m_ReconnectStatusShown) {
+			m_MultiplayerLandingStatusLabel->SetText(offer);
+			m_ReconnectStatusShown = offer;
+		}
 		return;
 	}
 	// One persistent line, never a toast: the status while recovering, otherwise whatever the startup
 	// scan of the recovery record found - including precisely why it cannot be used.
 	const std::string status = recovering ? reconnect.GetStatusText() : reconnect.GetOfferText();
-	if (!status.empty()) {
-		m_MultiplayerLandingStatusLabel->SetText(status);
+	if (status != m_ReconnectStatusShown) {
+		// A recovery in progress owns the line. What the scan of the record found does not: it clears
+		// its own sentence, but never replaces a refusal or an error the screen just put there.
+		if (recovering || m_MultiplayerLandingStatusLabel->GetText() == m_ReconnectStatusShown) {
+			m_MultiplayerLandingStatusLabel->SetText(status);
+		}
+		m_ReconnectStatusShown = status;
 	}
 }
 
@@ -840,6 +896,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		row += member.peerId == 1 ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
 		// §11's persistent line for the seat, derived on this peer; the short mark while there is none.
 		row += member.statusLine.empty() ? std::string(NetReconnectUx::RosterMark(member.dropped, member.reclaiming)) : " - " + member.statusLine;
+		if (member.isLocal && !snapshot.inputDelayText.empty()) {
+			row += " - " + snapshot.inputDelayText;
+		}
 		if (!member.isLocal && member.connected) {
 			row += " - ";
 			row += NetConnectionQualityName(ClassifyConnectionQuality(member.pingMs));
@@ -1034,6 +1093,10 @@ std::string MainMenuGUI::AutomationMultiplayerSubScreen() const {
 	}
 }
 
+void MainMenuGUI::AutomationGoToMainScreen() {
+	SetActiveMenuScreen(MenuScreen::MainScreen, false);
+}
+
 bool MainMenuGUI::AutomationControlExists(const std::string& controlName) const {
 	return m_SubMenuScreenGUIControlManager->GetControl(controlName) != nullptr ||
 	       m_MainMenuScreenGUIControlManager->GetControl(controlName) != nullptr;
@@ -1192,6 +1255,7 @@ void MainMenuGUI::MaybeLaunchMultiplayerActivity() {
 	ScenarioRunner::ApplyDeterministicConfig();
 	g_ActivityMan.SetStartActivity(activity);
 	m_UpdateResult = MainMenuUpdateResult::ActivityStarted;
+	std::cout << "[menu-mp] launching the match as team " << localTeam << std::endl;
 	SetActiveMenuScreen(MenuScreen::MainScreen, false);
 	g_GUISound.ExitMenuSound()->Play();
 }
