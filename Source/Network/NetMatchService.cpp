@@ -559,9 +559,9 @@ static std::string ResyncSaveName() {
 				const std::string who = member.displayName.empty() ? "Player " + std::to_string(member.peerId) : member.displayName;
 				const bool wasAway = previous == "Disconnected" || previous == "Reconnecting" || previous == "Left";
 				if ((state == "Disconnected" || state == "Left") && !wasAway) {
-					ScenarioRunner::PushNetUiToast("player_left", "Player " + who + " left");
+					ScenarioRunner::PushNetUiToast("player_left", who + " left");
 				} else if (state == "Present" && wasAway) {
-					ScenarioRunner::PushNetUiToast("player_rejoined", "Player " + who + " rejoined");
+					ScenarioRunner::PushNetUiToast("player_rejoined", who + " rejoined");
 				}
 			}
 			if (m_RosterTransitions.size() >= 256) {
