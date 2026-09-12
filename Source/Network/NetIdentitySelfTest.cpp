@@ -172,11 +172,72 @@ namespace RTE {
 			}
 			return true;
 		}
+
+		bool TestLuaStateCountOutOfIdentity(std::string* error) {
+			NetIdentityDeterministicConfig four;
+			four.gameVersion = "7.0.0";
+			four.networkProtocolVersion = 1;
+			four.controllerFrameVersion = 5;
+			four.controllerFrameEncodedSize = 80;
+			four.deltaTimeBits = "0x3c6147ae";
+			four.aiUpdateInterval = 2;
+			four.pathfinderGridNodeSize = 20;
+			four.recommendedMoidCount = 240;
+			four.selectedModule = "Base.rte";
+			four.lockstepCodecVersion = 1;
+			four.numLuaStates = 4;
+			four.numLuaStatesOverride = 4;
+
+			NetIdentityDeterministicConfig thirtyTwo = four;
+			thirtyTwo.numLuaStates = 32;
+			thirtyTwo.numLuaStatesOverride = 32;
+
+			const NetHash32 configFour = NetIdentity::HashDeterministicConfig(four);
+			const NetHash32 configThirtyTwo = NetIdentity::HashDeterministicConfig(thirtyTwo);
+
+			NetIdentityManifest manifestFour = MakeManifest();
+			manifestFour.deterministicConfig = four;
+			manifestFour.deterministicConfigHash = configFour;
+			NetIdentityManifest manifestThirtyTwo = manifestFour;
+			manifestThirtyTwo.deterministicConfig = thirtyTwo;
+			manifestThirtyTwo.deterministicConfigHash = configThirtyTwo;
+
+			const NetHash32 identityFour = NetIdentity::HashSessionIdentity(manifestFour);
+			const NetHash32 identityThirtyTwo = NetIdentity::HashSessionIdentity(manifestThirtyTwo);
+			if (configFour != configThirtyTwo || identityFour != identityThirtyTwo) {
+				*error = "the identity depends on the Lua state count: deterministic_config_hash 4 states " + NetIdentity::HashHex(configFour) +
+				         " vs 32 states " + NetIdentity::HashHex(configThirtyTwo) + ", session_identity_hash 4 states " + NetIdentity::HashHex(identityFour) +
+				         " vs 32 states " + NetIdentity::HashHex(identityThirtyTwo);
+				return false;
+			}
+
+			if (manifestFour.deterministicConfig.numLuaStates != 4 || manifestThirtyTwo.deterministicConfig.numLuaStates != 32) {
+				*error = "the Lua state count stopped being carried in the manifest";
+				return false;
+			}
+
+			// The identity must still move for the config fields the sim does depend on.
+			NetIdentityDeterministicConfig slowerAi = four;
+			slowerAi.aiUpdateInterval = 3;
+			if (NetIdentity::HashDeterministicConfig(slowerAi) == configFour) {
+				*error = "deterministic_config_hash stopped reacting to ai_update_interval";
+				return false;
+			}
+			NetIdentityManifest otherRules = manifestFour;
+			otherRules.sessionRulesHash = MakeHash(203);
+			if (NetIdentity::HashSessionIdentity(otherRules) == identityFour) {
+				*error = "session_identity_hash stopped reacting to session_rules_hash";
+				return false;
+			}
+			std::cout << "[net-identity-selftest] lua state count out of identity: 4 and 32 states share deterministic_config_hash "
+			          << NetIdentity::HashHex(configFour) << " and session_identity_hash " << NetIdentity::HashHex(identityFour) << std::endl;
+			return true;
+		}
 	}
 
 	int NetIdentitySelfTest::Run() {
 		std::string error;
-		if (!TestCanonicalHelpers(&error) || !TestCompare(&error)) {
+		if (!TestCanonicalHelpers(&error) || !TestCompare(&error) || !TestLuaStateCountOutOfIdentity(&error)) {
 			std::cerr << "[net-identity-selftest] FAIL: " << error << std::endl;
 			return 1;
 		}
