@@ -4797,7 +4797,12 @@ std::string MovableMan::SaveWorldStructure() const {
 		state.teamMOIDCount[team] = m_TeamMOIDCount[team];
 	}
 	for (const auto& [actor, id]: m_ContiguousActorIDs) state.contiguousActorIDs.emplace(actor->GetUniqueID(), id);
-	for (const auto& [uid, owner]: NetActorOwnership::GetSeededOwners()) state.actorOwners.emplace(static_cast<long>(uid), static_cast<int>(owner));
+	// Only a live actor's owner travels: a seeded owner for a removed actor would fail the load's live-actor check.
+	const auto saveOwner = [&state](const Actor* actor) {
+		if (const uint8_t owner = NetActorOwnership::GetSeededOwner(static_cast<int64_t>(actor->GetUniqueID())); owner != 0) state.actorOwners.emplace(static_cast<long>(actor->GetUniqueID()), static_cast<int>(owner));
+	};
+	for (const Actor* actor: m_Actors) saveOwner(actor);
+	for (const Actor* actor: m_AddedActors) saveOwner(actor);
 	for (const AlarmEvent* event: m_AlarmEvents) state.alarms[0].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	for (const AlarmEvent* event: m_AddedAlarmEvents) state.alarms[1].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	state.quarantine = m_LockstepJoinQuarantine;
