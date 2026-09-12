@@ -67,6 +67,10 @@ namespace RTE {
 		void VisitCheckpointOwnedObjects(const std::function<void(const Entity*)>& visit) const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) override;
 		bool ResolveCheckpointReferences() override;
+		void ClearNonOwnedActorSlots() override;
+		void RebindNonOwnedActorSlots() override;
+		void ForgetDestroyedActor(const Actor* actor) override;
+		void ClearCheckpointActorIDs() override;
 		bool PrepareCheckpointUI() override;
 		SerializableOverrideMethods;
 		ClassInfoGetters;
