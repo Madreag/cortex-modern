@@ -682,6 +682,101 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(listed["sessions"][0]["session_id"], created["session_id"])
         self.assert_keys(listed["sessions"][0], LIST_ROW_KEYS)
 
+    def _self_signed_cert(self) -> tuple[Path, Path]:
+        openssl = shutil.which("openssl")
+        if openssl is None:
+            self.skipTest("openssl not on PATH")
+        self.tls_dir = tempfile.TemporaryDirectory()
+        root = Path(self.tls_dir.name)
+        cert = root / "cert.pem"
+        key = root / "key.pem"
+        proc = subprocess.run(
+            [
+                openssl,
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-keyout",
+                str(key),
+                "-out",
+                str(cert),
+                "-days",
+                "1",
+                "-nodes",
+                "-subj",
+                "/CN=127.0.0.1",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            self.skipTest(f"openssl failed: {proc.stderr.strip() or proc.stdout.strip()}")
+        return cert, key
+
+    def _tls_get_sessions(self, timeout: float) -> int:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        conn = http.client.HTTPSConnection(
+            "127.0.0.1", self.port, context=ctx, timeout=timeout
+        )
+        try:
+            conn.request(
+                "GET", "/v1/sessions", headers={"X-Install-Key": INSTALL_KEY}
+            )
+            resp = conn.getresponse()
+            resp.read()
+            return resp.status
+        finally:
+            conn.close()
+
+    def test_silent_tls_client_does_not_block(self) -> None:
+        import session_directory as sd
+
+        cert, key = self._self_signed_cert()
+        self.start(cert=cert, key=key)
+        silent = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        try:
+            t0 = time.monotonic()
+            try:
+                status = self._tls_get_sessions(timeout=3.0)
+            except OSError as exc:
+                self.fail(f"second client blocked by silent connection: {exc}")
+            self.assertEqual(status, 200)
+            self.assertLess(time.monotonic() - t0, 1.0)
+            handshake_timeout = getattr(sd, "HANDSHAKE_TIMEOUT_S", 5)
+            silent.settimeout(handshake_timeout + 1.0)
+            try:
+                closed = silent.recv(1) == b""
+            except (ConnectionResetError, ConnectionAbortedError):
+                closed = True
+            except OSError:
+                closed = False
+            self.assertTrue(closed, "silent connection not closed by server")
+        finally:
+            silent.close()
+
+    def test_many_silent_tls_clients_do_not_block(self) -> None:
+        cert, key = self._self_signed_cert()
+        self.start(cert=cert, key=key)
+        silents = [
+            socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            for _ in range(16)
+        ]
+        try:
+            t0 = time.monotonic()
+            try:
+                status = self._tls_get_sessions(timeout=3.0)
+            except OSError as exc:
+                self.fail(f"real request blocked by silent connections: {exc}")
+            self.assertEqual(status, 200)
+            self.assertLess(time.monotonic() - t0, 1.0)
+        finally:
+            for sock in silents:
+                sock.close()
+
     def test_install_key_required_on_every_v1_endpoint(self) -> None:
         self.start()
         status, created = self.register()
