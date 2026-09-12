@@ -783,6 +783,13 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::Update() {
+		// Both the multiplayer screen and the menu loop's recovery pump call this; one pump per
+		// millisecond is one pump per frame at any frame rate a menu runs at.
+		const uint64_t nowMs = SteadyNowMs();
+		if (m_LastUpdateMs == nowMs) {
+			return;
+		}
+		m_LastUpdateMs = nowMs;
 		JoinWorkerIfDone();
 		// A hosting lobby advertises itself on the LAN until the match launches.
 		bool beaconWanted = false;
@@ -794,7 +801,6 @@ static std::string ResyncSaveName() {
 				snapshot = m_LobbySnapshot;
 			}
 		}
-		const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 		if (beaconWanted) {
 			std::string ignored;
 			(void)m_LanDiscovery.StartBeacon(m_BeaconGamePort,
@@ -812,6 +818,21 @@ static std::string ResyncSaveName() {
 
 	uint64_t NetMatchService::AdmissionNowMs() const {
 		return m_AdmissionClock.NowMs(SteadyNowMs());
+	}
+
+	bool NetMatchService::NeedsRecoveryPump() const {
+		if (!s_AdmissionEnabled) {
+			return false;
+		}
+		const NetReconnectUxState uxState = m_ReconnectUx.GetState();
+		if (uxState == NetReconnectUxState::Waiting || uxState == NetReconnectUxState::Retrying) {
+			return true;
+		}
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (m_State != NetMatchServiceState::Failed || m_IsHost || !m_MatchWasRunning) {
+			return false;
+		}
+		return m_TicketStore.HasRecord();
 	}
 
 	void NetMatchService::DriveReconnectUx(uint64_t nowMs) {

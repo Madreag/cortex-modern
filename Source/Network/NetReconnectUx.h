@@ -43,7 +43,7 @@ namespace RTE {
 
 		void NoteConnected(uint64_t nowMs);
 		/// The link is gone and a recovery record exists: the automatic schedule starts, first attempt
-		/// immediately.
+		/// immediately. Ignored while a schedule is already running, cancelled or spent.
 		void NoteDropped(uint64_t nowMs, std::string reason);
 		void NoteReconnected(uint64_t nowMs);
 		/// @return Whether an attempt is due now. The caller starts it and reports back.

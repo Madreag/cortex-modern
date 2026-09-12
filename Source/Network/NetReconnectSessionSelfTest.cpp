@@ -2695,6 +2695,25 @@ namespace RTE {
 				}
 			}
 
+			// A cancelled or spent schedule is not re-armed by the same loss being reported again.
+			{
+				NetReconnectUx cancelled;
+				cancelled.NoteDropped(1000, "link lost");
+				cancelled.Cancel(1500);
+				cancelled.NoteDropped(2000, "link lost");
+				if (cancelled.GetState() != NetReconnectUxState::Cancelled || cancelled.Tick(9000)) {
+					return Fail("a cancelled schedule restarted itself");
+				}
+				NetReconnectUx spent;
+				spent.NoteDropped(1000, "link lost");
+				spent.NoteAttemptStarted(1000);
+				spent.NoteAttemptFailed(1000 + NetReconnectUx::c_ResumeWindowMs + 1, "");
+				spent.NoteDropped(1000 + NetReconnectUx::c_ResumeWindowMs + 2, "link lost");
+				if (spent.GetState() != NetReconnectUxState::GaveUp) {
+					return Fail("a spent schedule restarted itself");
+				}
+			}
+
 			// The roster mark is persistent text, not a toast, and reclaiming outranks dropped.
 			if (std::string(NetReconnectUx::RosterMark(false, false)) != "" ||
 			    std::string(NetReconnectUx::RosterMark(true, false)).find("Disconnected") == std::string::npos ||

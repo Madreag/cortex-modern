@@ -191,6 +191,9 @@ namespace RTE {
 		/// §11: reads the recovery record so the landing screen can offer a rejoin after a relaunch, or
 		/// say exactly why it cannot. Read-only and safe to call repeatedly.
 		void ScanStoredTicket();
+		/// Whether the §11 retry schedule still has work, so the menu loop pumps the service whatever
+		/// screen is up rather than only while the multiplayer screen is open.
+		bool NeedsRecoveryPump() const;
 
 		NetMatchServiceState GetState() const;
 		bool WasEverStarted() const { return m_EverStarted.load(); }
@@ -287,6 +290,7 @@ namespace RTE {
 		bool m_AdmissionAttached = false;
 		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.
+		uint64_t m_LastUpdateMs = 0;     //!< The millisecond Update() last ran, so two callers in one frame do one pump.
 		std::vector<NetH4SeatStatus> m_SeatStatuses; //!< Published from the sim pump for the roster (§11).
 		std::string m_InputDelayText; //!< The announced input-delay line, built beside each lobby publish.
 		std::atomic<uint32_t> m_CensusRefusals{0};   //!< Ownership censuses refused because the caller was not the sim thread.
