@@ -882,6 +882,75 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestHealedRoundPlannedEndIsNotAFailure(std::string* error) {
+			constexpr uint64_t c_Cap = 600;
+			constexpr uint64_t c_Resume = 61; // The frame both peers' healed round resumes at.
+			constexpr uint64_t c_StopFrame = 599; // The frame the sighted rounds stopped on.
+
+			std::vector<std::string> failures;
+			// The sighted host: its own clock 597 against the round's frame 599 and a 600-frame plan.
+			if (!NetMatchE2ERoundReachedPlannedEnd(c_NetMatchE2ECompleteStop, 597, c_StopFrame, c_Cap)) {
+				failures.push_back("a peer at frame " + std::to_string(c_StopFrame) + " read the round's completion as a failure");
+			}
+			// A break is still a break: only the completion of the planned round rides through.
+			if (NetMatchE2ERoundReachedPlannedEnd("MissingFrameTimeout:peer 2", 597, c_StopFrame, c_Cap)) {
+				failures.push_back("a peer lost before the planned end was read as a completion");
+			}
+			if (NetMatchE2ERoundReachedPlannedEnd("Desync:sim state diverged at tick 60 (Client)", 601, 601, c_Cap)) {
+				failures.push_back("a desync was read as a completion");
+			}
+
+			// The client kept ticking to 62 while the host's round stopped at 58, so the relaunch
+			// replays 61 and 62 for one peer and skips 59 and 60 for the other.
+			NetMatchE2ETickClock client;
+			for (uint64_t tick = 1; tick <= 62; ++tick) {
+				client.NoteSimTick(tick);
+			}
+			client.OnResyncRelaunch(c_Resume);
+			NetMatchE2ETickClock host;
+			for (uint64_t tick = 1; tick <= 58; ++tick) {
+				host.NoteSimTick(tick);
+			}
+			host.OnResyncRelaunch(c_Resume);
+			uint64_t hostStop = 0;
+			uint64_t clientStop = 0;
+			uint64_t hostAtStopFrame = 0;
+			uint64_t clientAtStopFrame = 0;
+			for (uint64_t tick = c_Resume; tick <= c_Cap + 8; ++tick) {
+				host.NoteSimTick(tick);
+				client.NoteSimTick(tick);
+				if (tick == c_StopFrame) {
+					hostAtStopFrame = host.Total();
+					clientAtStopFrame = client.Total();
+				}
+				if (hostStop == 0 && host.Total() > c_Cap) {
+					hostStop = tick;
+				}
+				if (clientStop == 0 && client.Total() > c_Cap) {
+					clientStop = tick;
+				}
+			}
+			if (hostAtStopFrame != c_StopFrame || clientAtStopFrame != c_StopFrame) {
+				failures.push_back("healed round clock disagrees with its frame " + std::to_string(c_StopFrame) +
+				                   ": host=" + std::to_string(hostAtStopFrame) + " client=" + std::to_string(clientAtStopFrame));
+			}
+			if (hostStop != c_Cap + 1 || clientStop != c_Cap + 1) {
+				failures.push_back("healed round ended off its planned frame " + std::to_string(c_Cap + 1) +
+				                   ": host=" + std::to_string(hostStop) + " client=" + std::to_string(clientStop));
+			}
+			if (!failures.empty()) {
+				*error = "healed round planned end: " + std::to_string(failures.size()) + " defects";
+				for (const std::string& failure: failures) {
+					*error += "; " + failure;
+				}
+				return false;
+			}
+			std::cout << "[net-match-selftest] healed round planned end: host_total=" << hostAtStopFrame
+			          << " client_total=" << clientAtStopFrame << " at frame " << c_StopFrame
+			          << ", both stop at " << hostStop << std::endl;
+			return true;
+		}
+
 		bool TestEarlyOverUsesMatchTick(std::string* error) {
 			NetMatchE2ETickClock lateJoin;
 			for (uint64_t tick = 1; tick <= 65; ++tick) {
@@ -1800,6 +1869,7 @@ namespace RTE {
 		std::string capTickError;
 		std::string executedTickError;
 		std::string earlyOverTickError;
+		std::string healedEndError;
 		if (!TestFailedReportKeepsAdmissionCounters(&failedReportError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << failedReportError << std::endl;
 		}
@@ -1821,6 +1891,9 @@ namespace RTE {
 		if (!TestEarlyOverUsesMatchTick(&earlyOverTickError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << earlyOverTickError << std::endl;
 		}
+		if (!TestHealedRoundPlannedEndIsNotAFailure(&healedEndError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << healedEndError << std::endl;
+		}
 		if (!failedReportError.empty()) return fail(failedReportError);
 		if (!rejoinOverError.empty()) return fail(rejoinOverError);
 		if (!rejoinWaitError.empty()) return fail(rejoinWaitError);
@@ -1828,6 +1901,7 @@ namespace RTE {
 		if (!capTickError.empty()) return fail(capTickError);
 		if (!executedTickError.empty()) return fail(executedTickError);
 		if (!earlyOverTickError.empty()) return fail(earlyOverTickError);
+		if (!healedEndError.empty()) return fail(healedEndError);
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestRosterTransitionsRecordHoldThenPresent(&error)) return fail(error);
 
