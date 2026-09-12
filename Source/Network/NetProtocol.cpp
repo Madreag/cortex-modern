@@ -63,6 +63,52 @@ namespace RTE {
 			});
 		}
 
+		// Chat text is the one field a player types, so it is validated as UTF-8 before its length is
+		// judged: a byte cap on a half-decoded sequence would let a peer feed the fonts garbage.
+		bool IsValidUtf8(const std::string& value) {
+			const auto* bytes = reinterpret_cast<const unsigned char*>(value.data());
+			const size_t size = value.size();
+			for (size_t i = 0; i < size;) {
+				const unsigned char lead = bytes[i];
+				size_t continuations = 0;
+				uint32_t codePoint = 0;
+				if (lead < 0x80U) {
+					++i;
+					continue;
+				} else if ((lead & 0xE0U) == 0xC0U) {
+					continuations = 1;
+					codePoint = lead & 0x1FU;
+				} else if ((lead & 0xF0U) == 0xE0U) {
+					continuations = 2;
+					codePoint = lead & 0x0FU;
+				} else if ((lead & 0xF8U) == 0xF0U) {
+					continuations = 3;
+					codePoint = lead & 0x07U;
+				} else {
+					return false;
+				}
+				if (size - i <= continuations) {
+					return false;
+				}
+				for (size_t offset = 1; offset <= continuations; ++offset) {
+					const unsigned char continuation = bytes[i + offset];
+					if ((continuation & 0xC0U) != 0x80U) {
+						return false;
+					}
+					codePoint = (codePoint << 6) | (continuation & 0x3FU);
+				}
+				if ((continuations == 1 && codePoint < 0x80U) || (continuations == 2 && codePoint < 0x800U) ||
+				    (continuations == 3 && codePoint < 0x10000U)) {
+					return false;
+				}
+				if (codePoint > 0x10FFFFU || (codePoint >= 0xD800U && codePoint <= 0xDFFFU)) {
+					return false;
+				}
+				i += continuations + 1;
+			}
+			return true;
+		}
+
 		bool AppendString(std::vector<uint8_t>& out, const std::string& value, size_t maxBytes, const char* fieldName, NetProtocolError* error) {
 			if (value.size() > maxBytes || value.size() > std::numeric_limits<uint16_t>::max()) {
 				SetError(error, NetProtocolErrorCode::StringTooLong, out.size(), std::string(fieldName) + " exceeds max encoded length");
@@ -75,6 +121,14 @@ namespace RTE {
 			AppendU16LE(out, static_cast<uint16_t>(value.size()));
 			out.insert(out.end(), value.begin(), value.end());
 			return true;
+		}
+
+		bool AppendChatText(std::vector<uint8_t>& out, const std::string& value, NetProtocolError* error) {
+			if (!IsValidUtf8(value)) {
+				SetError(error, NetProtocolErrorCode::InvalidString, out.size(), "chat text is not valid UTF-8");
+				return false;
+			}
+			return AppendString(out, value, NetProtocol::c_MaxShortTextBytes, "chat_text", error);
 		}
 
 		void AppendHash(std::vector<uint8_t>& out, const NetHash32& hash) {
@@ -528,6 +582,22 @@ namespace RTE {
 			return true;
 		}
 
+		bool EncodePayload(const NetChat& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
+			if (payload.chatVersion == 0) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "chat version must be nonzero");
+				return false;
+			}
+			if (payload.scope > c_NetChatScopeTeam) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "chat scope is invalid");
+				return false;
+			}
+			AppendU16LE(out, payload.chatVersion);
+			AppendU8(out, payload.senderPeerId);
+			AppendU8(out, payload.scope);
+			AppendU32LE(out, payload.sentAtMs);
+			return AppendChatText(out, payload.text, error);
+		}
+
 		bool DecodePayload(ByteReader& reader, NetClientHello& payload, NetProtocolError* error) {
 			if (!ReadOrTruncated(reader.ReadU64LE(payload.clientNonce), reader, error, "client_nonce") ||
 			    !ReadOrTruncated(reader.ReadU16LE(payload.minProtocolVersion), reader, error, "min_protocol_version") ||
@@ -942,6 +1012,31 @@ namespace RTE {
 			return true;
 		}
 
+		bool DecodePayload(ByteReader& reader, NetChat& payload, NetProtocolError* error) {
+			if (!ReadOrTruncated(reader.ReadU16LE(payload.chatVersion), reader, error, "chat_version") ||
+			    !ReadOrTruncated(reader.ReadU8(payload.senderPeerId), reader, error, "sender_peer_id") ||
+			    !ReadOrTruncated(reader.ReadU8(payload.scope), reader, error, "chat_scope") ||
+			    !ReadOrTruncated(reader.ReadU32LE(payload.sentAtMs), reader, error, "sent_at_ms")) {
+				return false;
+			}
+			if (payload.chatVersion == 0) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 8, "chat version must be nonzero");
+				return false;
+			}
+			if (payload.scope > c_NetChatScopeTeam) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 5, "chat scope is invalid");
+				return false;
+			}
+			const size_t textOffset = reader.Offset();
+			if (!reader.ReadString(payload.text, NetProtocol::c_MaxShortTextBytes, "chat_text", error)) {
+				return false;
+			}
+			if (!IsValidUtf8(payload.text)) {
+				SetError(error, NetProtocolErrorCode::InvalidString, textOffset, "chat text is not valid UTF-8");
+				return false;
+			}
+			return true;
+		}
 	}
 
 	bool NetProtocol::IsH4MessageType(NetMessageType type) {
@@ -973,7 +1068,7 @@ namespace RTE {
 		if (headerVersion != 1) {
 			return headerVersion == c_Version;
 		}
-		return !IsModuleDigestMessageType(type);
+		return !IsModuleDigestMessageType(type) && type != NetMessageType::Chat;
 	}
 
 	NetMessageType NetProtocol::MessageTypeOf(const NetPayload& payload) {
@@ -1003,6 +1098,7 @@ namespace RTE {
 			[](const NetH4SubstitutionAck&) { return NetMessageType::SubstitutionAck; },
 			[](const NetModuleDigestRequest&) { return NetMessageType::ModuleDigestRequest; },
 			[](const NetModuleDigests&) { return NetMessageType::ModuleDigests; },
+			[](const NetChat&) { return NetMessageType::Chat; },
 		}, payload);
 	}
 
@@ -1033,6 +1129,7 @@ namespace RTE {
 			case NetMessageType::SubstitutionAck: return "SubstitutionAck";
 			case NetMessageType::ModuleDigestRequest: return "ModuleDigestRequest";
 			case NetMessageType::ModuleDigests: return "ModuleDigests";
+			case NetMessageType::Chat: return "Chat";
 		}
 		return "Unknown";
 	}
@@ -1377,6 +1474,12 @@ namespace RTE {
 			}
 			case NetMessageType::ModuleDigests: {
 				NetModuleDigests value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = std::move(value);
+				break;
+			}
+			case NetMessageType::Chat: {
+				NetChat value;
 				decoded = DecodePayload(payloadReader, value, &payloadError);
 				payload = std::move(value);
 				break;
