@@ -2266,6 +2266,7 @@ void MovableMan::PurgeAllMOs() {
 	deleteObjects(m_AddedItems);
 	deleteObjects(m_AddedParticles);
 	m_ValidActors.clear();
+	m_ContiguousActorIDs.clear();
 	m_ValidItems.clear();
 	m_ValidParticles.clear();
 	m_ActorRoster[Activity::TeamOne].clear();
@@ -2860,6 +2861,7 @@ Actor* MovableMan::RemoveActor(MovableObject* pActorToRem) {
 				std::lock_guard<std::mutex> lock(m_ActorsMutex);
 				removed = *itr;
 				m_ValidActors.erase(*itr);
+				m_ContiguousActorIDs.erase(*itr);
 				m_Actors.erase(itr);
 				break;
 			}
@@ -3143,6 +3145,14 @@ int MovableMan::GetContiguousActorID(const Actor* actor) const {
 	return itr->second;
 }
 
+void MovableMan::RebuildContiguousActorIDs() {
+	m_ContiguousActorIDs.clear();
+	int actorID = 0;
+	for (const Actor* actor: m_Actors) {
+		m_ContiguousActorIDs[actor] = actorID++;
+	}
+}
+
 MOID MovableMan::GetRootMOID(MOID checkMOID) {
 	MovableObject* pMO = LookupMOID(checkMOID);
 	if (pMO)
@@ -3240,6 +3250,7 @@ int MovableMan::GetAllActors(bool transferOwnership, std::list<SceneObject*>& ac
 		m_Actors.clear();
 		m_AddedActors.clear();
 		m_ValidActors.clear();
+		m_ContiguousActorIDs.clear();
 
 		// Also clear the actor rosters
 		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
@@ -3774,6 +3785,7 @@ void MovableMan::Update() {
 					}
 
 					m_ValidActors.erase(*aIt);
+					m_ContiguousActorIDs.erase(*aIt);
 					aIt++;
 				}
 				// Try to set the existing iterator to a safer value, erase can crash in debug mode otherwise?
@@ -3823,6 +3835,7 @@ void MovableMan::Update() {
 					RemoveActorFromTeamRoster(*aIt);
 
 				// Delete
+				m_ContiguousActorIDs.erase(*aIt);
 				(*aIt)->DestroyScriptState();
 				delete (*aIt);
 				m_ValidActors.erase(*aIt);
@@ -4108,11 +4121,7 @@ void MovableMan::UpdateControllers() {
 
 	// Rebuild the contiguous actor-ID map here, in sync, so the AI-update gate reads it stably;
 	// the old async rebuild in UpdateDrawMOIDs raced this tick's actor edits.
-	m_ContiguousActorIDs.clear();
-	int actorID = 0;
-	for (Actor* actor: m_Actors) {
-		m_ContiguousActorIDs[actor] = actorID++;
-	}
+	RebuildContiguousActorIDs();
 
 	const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	DumpControllerDebugSnapshot("controller_pre", simTick, m_Actors);
@@ -4717,7 +4726,10 @@ std::string MovableMan::SaveWorldStructure() const {
 		identities(m_ActorRoster[team], state.rosters[team]); state.sortRoster[team] = m_SortTeamRoster[team];
 		state.teamMOIDCount[team] = m_TeamMOIDCount[team];
 	}
-	for (const auto& [actor, id]: m_ContiguousActorIDs) state.contiguousActorIDs.emplace(actor->GetUniqueID(), id);
+	// Derived from the live actors, not from the index's keys: a key is only as alive as the actor it points at.
+	for (const Actor* actor: m_Actors) {
+		if (auto entry = m_ContiguousActorIDs.find(actor); entry != m_ContiguousActorIDs.end()) state.contiguousActorIDs.emplace(actor->GetUniqueID(), entry->second);
+	}
 	for (const AlarmEvent* event: m_AlarmEvents) state.alarms[0].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	for (const AlarmEvent* event: m_AddedAlarmEvents) state.alarms[1].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	state.quarantine = m_LockstepJoinQuarantine;
@@ -4736,6 +4748,13 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 			std::set<long> allowed(state.cohorts[kind].begin(), state.cohorts[kind].end());
 			allowed.insert(state.cohorts[kind + 3].begin(), state.cohorts[kind + 3].end());
 			for (long uid: state.validObjects[kind]) if (!allowed.contains(uid)) throw std::runtime_error("invalid world validity member");
+		}
+		{
+			std::set<long> actors(state.cohorts[0].begin(), state.cohorts[0].end());
+			actors.insert(state.cohorts[3].begin(), state.cohorts[3].end());
+			for (const auto& entry: state.contiguousActorIDs) {
+				if (entry.first <= 0 || !actors.contains(entry.first)) throw std::runtime_error("invalid contiguous actor index member " + std::to_string(entry.first));
+			}
 		}
 		if (validateOnly) return true;
 		const auto resolve = [this](long uid) {
@@ -4791,6 +4810,49 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 		std::cout << "[world-structure] rejected: " << error.what() << std::endl;
 		return false;
 	}
+}
+
+bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
+	if (!craft) return false;
+	if (m_Actors.empty()) {
+		delete craft;
+		return false;
+	}
+	AddActor(craft);
+	AbsorbAddedMOs();
+	RebuildContiguousActorIDs();
+	const long craftUID = craft->GetUniqueID();
+	const bool indexed = std::find(m_Actors.begin(), m_Actors.end(), craft) != m_Actors.end() && GetContiguousActorID(craft) >= 0;
+
+	const bool cleared = RemoveActor(craft) == craft && GetContiguousActorID(craft) < 0;
+
+	const std::string text = SaveWorldStructure();
+	bool archived = false;
+	try {
+		WorldStructure parsed;
+		CheckpointReader reader(text, "WorldStructure1"); parsed.Fields(reader); reader.Finish();
+		const std::set<long> live(parsed.cohorts[0].begin(), parsed.cohorts[0].end());
+		archived = parsed.contiguousActorIDs.size() == m_ContiguousActorIDs.size() && !parsed.contiguousActorIDs.contains(craftUID);
+		for (const auto& entry: parsed.contiguousActorIDs) archived = archived && live.contains(entry.first);
+	} catch (const std::exception&) {
+	}
+
+	// The shape the crashed resync archives carried: an index entry for an actor the world does not have.
+	WorldStructure clean;
+	for (long uid = 1001; uid <= 1005; ++uid) clean.cohorts[0].push_back(uid);
+	for (int id = 0; id < 5; ++id) clean.contiguousActorIDs.emplace(1001 + id, id);
+	WorldStructure orphaned = clean;
+	orphaned.contiguousActorIDs.emplace(0, 5);
+	CheckpointWriter cleanWriter("WorldStructure1"); clean.Fields(cleanWriter);
+	CheckpointWriter orphanedWriter("WorldStructure1"); orphaned.Fields(orphanedWriter);
+	const bool accepted = LoadWorldStructure(text, true) && LoadWorldStructure(cleanWriter.Text(), true);
+	const bool refused = !LoadWorldStructure(orphanedWriter.Text(), true);
+
+	AddActor(craft);
+	const bool passed = indexed && cleared && archived && accepted && refused;
+	std::cout << "[contiguous-index-selftest] " << (passed ? "PASS" : "FAIL") << " indexed=" << indexed << " cleared=" << cleared
+	          << " archived=" << archived << " accepted=" << accepted << " refused=" << refused << std::endl;
+	return passed;
 }
 
 void MovableMan::RedrawRestoredMOIDs() {
