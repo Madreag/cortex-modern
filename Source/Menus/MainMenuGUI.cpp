@@ -840,6 +840,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		row += member.peerId == 1 ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
 		// §11's persistent line for the seat, derived on this peer; the short mark while there is none.
 		row += member.statusLine.empty() ? std::string(NetReconnectUx::RosterMark(member.dropped, member.reclaiming)) : " - " + member.statusLine;
+		if (member.isLocal && !snapshot.inputDelayText.empty()) {
+			row += " - " + snapshot.inputDelayText;
+		}
 		if (!member.isLocal && member.connected) {
 			row += " - ";
 			row += NetConnectionQualityName(ClassifyConnectionQuality(member.pingMs));
