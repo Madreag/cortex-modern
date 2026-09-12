@@ -37,6 +37,7 @@ namespace RTE {
 		uint64_t firstTick = UINT64_MAX;
 		uint64_t lastTick = UINT64_MAX;
 		uint64_t priorTicks = 0;
+		uint64_t segmentFirstFrame = 0; // The frame this segment resumed at; 0 when only the observed ticks are known.
 
 		void NoteSimTick(uint64_t nowTick) {
 			if (firstTick == UINT64_MAX) {
@@ -48,15 +49,19 @@ namespace RTE {
 			if (firstTick == UINT64_MAX) {
 				return 0;
 			}
-			return lastTick - firstTick + 1;
+			const uint64_t origin = (segmentFirstFrame > 0 && segmentFirstFrame < firstTick) ? segmentFirstFrame : firstTick;
+			return lastTick >= origin ? lastTick - origin + 1 : 0;
 		}
-		void OnResyncRelaunch() {
+		void OnResyncRelaunch(uint64_t resumeFrame = 0) {
+			(void)resumeFrame;
 			priorTicks += SegmentTicks();
+			segmentFirstFrame = 0;
 			firstTick = UINT64_MAX;
 			lastTick = UINT64_MAX;
 		}
 		void OnNewMatch() {
 			priorTicks = 0;
+			segmentFirstFrame = 0;
 			firstTick = UINT64_MAX;
 			lastTick = UINT64_MAX;
 		}
@@ -86,6 +91,17 @@ namespace RTE {
 	inline bool NetMatchE2EReachedCap(uint64_t runningTicks, uint64_t matchTick, uint64_t cap) {
 		(void)runningTicks;
 		return matchTick >= cap;
+	}
+
+	// The stop a peer sends once the round has run its planned length.
+	inline constexpr const char* c_NetMatchE2ECompleteStop = "Complete:e2e complete";
+
+	/// Whether an e2e round's stop is the round reaching its planned end rather than a break.
+	inline bool NetMatchE2ERoundReachedPlannedEnd(const std::string& error, uint64_t runningTicks, uint64_t matchTick, uint64_t cap) {
+		return NetMatchE2EReachedCap(runningTicks, matchTick, cap) &&
+		       (error.find("Complete:") != std::string::npos ||
+		        error.find("MissingFrameTimeout") != std::string::npos ||
+		        error.find("PeerDisconnected") != std::string::npos);
 	}
 
 	enum class NetMatchServiceState {
