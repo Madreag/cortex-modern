@@ -326,7 +326,7 @@ static std::string ResyncSaveName() {
 				}
 				g_TimerMan.RewindSimTo(static_cast<long long>(dropFrame - 1), time);
 			}
-			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName()) || !g_ActivityMan.WaitForSaveGameTask()) {
+			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName(), ActivityMan::SaveCompression::Small) || !g_ActivityMan.WaitForSaveGameTask()) {
 				if (error) *error = "resync snapshot save failed";
 				return false;
 			}
