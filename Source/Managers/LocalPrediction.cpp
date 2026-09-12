@@ -3,6 +3,7 @@
 #include "Activity.h"
 #include "ActivityMan.h"
 #include "Actor.h"
+#include "InventoryMenuGUI.h"
 #include "AHuman.h"
 #include "Attachable.h"
 #include "AudioMan.h"
@@ -294,6 +295,7 @@ namespace RTE {
 			if (activity) {
 				activity->SubstituteActorForRender(preview.original, preview.clone);
 			}
+			InventoryMenuGUI::SetRenderSubstituteActor(preview.clone);
 		}
 		// The previews carry their taken items; the residents stay off the frame meanwhile.
 		for (const MovableObject* resident: s_TakenResidents) {
@@ -322,6 +324,7 @@ namespace RTE {
 				}
 			}
 			g_MovableMan.ClearRenderSubstitutes();
+			InventoryMenuGUI::SetRenderSubstituteActor(nullptr);
 			for (const MovableObject* resident: s_TakenResidents) {
 				g_MovableMan.HideForRender(resident, false);
 			}

@@ -411,7 +411,7 @@ namespace RTE {
 		/// Draws the InventoryMenuGUI when it's in Carousel MenuMode.
 		/// @param targetBitmap A pointer to a BITMAP to draw on. Generally a screen BITMAP.
 		/// @param drawPos The position at which to draw the carousel.
-		void DrawCarouselMode(BITMAP* targetBitmap, const Vector& drawPos) const;
+		void DrawCarouselMode(BITMAP* targetBitmap, const Vector& drawPos, const std::vector<std::pair<MovableObject*, MovableObject*>>& equippedItems) const;
 
 		/// Draws the InventoryMenuGUI when it's in Full MenuMode.
 		/// @param targetBitmap A pointer to a BITMAP to draw on. Generally a screen BITMAP.
@@ -425,7 +425,7 @@ namespace RTE {
 		/// Draws the specified CarouselItemBox's item(s) and mass text to the carousel Bitmap.
 		/// @param itemBoxToDraw The CarouselItemBox to draw.
 		/// @param carouselAllegroBitmap An AllegroBitmap of the bitmap the CarouselItemBox should draw its foreground to. Used for drawing mass strings, and predefined to avoid needless creation.
-		void DrawCarouselItemBoxForeground(const CarouselItemBox& itemBoxToDraw, AllegroBitmap* carouselAllegroBitmap) const;
+		void DrawCarouselItemBoxForeground(const CarouselItemBox& itemBoxToDraw, AllegroBitmap* carouselAllegroBitmap, const std::vector<std::pair<MovableObject*, MovableObject*>>& equippedItems) const;
 #pragma endregion
 
 		/// Clears all the member variables of this InventoryMenuGUI, effectively resetting the members of this abstraction level only.
