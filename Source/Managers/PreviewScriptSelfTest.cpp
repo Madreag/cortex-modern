@@ -119,6 +119,22 @@ namespace RTE {
 		return passed;
 	}
 
+	bool PreviewScriptSelfTest::CheckNestedHookScope() {
+		LuaMan::SetRunningPreviewHook(false);
+		bool nestedKept = false;
+		{
+			LuaMan::PreviewHookScope outer(true);
+			{
+				LuaMan::PreviewHookScope inner(true);
+			}
+			nestedKept = LuaMan::IsRunningPreviewHook();
+		}
+		const bool outerCleared = !LuaMan::IsRunningPreviewHook();
+		const bool ok = nestedKept && outerCleared;
+		std::cout << "[preview-hook-scope] " << (ok ? "PASS" : "FAIL") << " nested_inner_does_not_clear_outer kept=" << (nestedKept ? 1 : 0) << " cleared=" << (outerCleared ? 1 : 0) << std::endl;
+		return ok;
+	}
+
 	void PreviewScriptSelfTest::SetStrideCounter(bool enabled) {
 		s_StrideCounter = enabled;
 	}
