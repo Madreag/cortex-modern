@@ -256,6 +256,11 @@ namespace RTE {
 		g_SimRNG.SetEngineState(rngState);
 		g_SimRNG.SetDrawCount(rngDraws);
 		g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);
+		for (Preview& preview: targets) {
+			if (preview.clone) {
+				preview.clone->ClampPreviewTimers();
+			}
+		}
 		MovableObject::PinUniqueIDCounter(uidCounter);
 		// The rounds a preview pops take fresh sound identities with them; the canonical cursor keeps its place.
 		g_AudioMan.SetCheckpointSoundContainerCursor(soundIdentityCursor);

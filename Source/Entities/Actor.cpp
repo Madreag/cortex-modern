@@ -1616,6 +1616,23 @@ void Actor::SetPieMenu(PieMenu* newPieMenu) {
 	m_PieMenu->AddWhilePieMenuOpenListener(this, std::bind(&Actor::WhilePieMenuOpenListener, this, m_PieMenu.get()));
 }
 
+void Actor::ClampPreviewTimers() {
+	const int64_t now = g_TimerMan.GetSimTimeTicks();
+	const auto clamp = [now](Timer& timer) {
+		if (timer.GetStartSimTimeMS() > now) {
+			timer.SetStartSimTimeTicks(now);
+		}
+	};
+	clamp(m_LastSecondTimer);
+	clamp(m_StableRecoverTimer);
+	clamp(m_HeartBeat);
+	clamp(m_NewControlTmr);
+	clamp(m_DeathTmr);
+	clamp(m_AimTmr);
+	clamp(m_SharpAimTimer);
+	clamp(m_AlarmTimer);
+}
+
 void Actor::OnNewMovePath() {
 	if (!m_MovePath.empty()) {
 		// Remove the first one; it's our position
