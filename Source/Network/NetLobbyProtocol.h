@@ -19,6 +19,7 @@ namespace RTE {
 		Start = 6,
 		Abort = 7,
 		StateChunk = 8,
+		SeatAssign = 9,
 	};
 
 	enum class NetLobbyErrorCode {
@@ -118,6 +119,13 @@ namespace RTE {
 		bool operator==(const NetLobbyStateChunk&) const = default;
 	};
 
+	// The lockstep id the host bound to this connection, host -> that peer, ahead of the config.
+	struct NetLobbySeatAssign {
+		uint8_t assignedPeerId = 0;
+
+		bool operator==(const NetLobbySeatAssign&) const = default;
+	};
+
 	using NetLobbyPayload = std::variant<
 		NetLobbyHello,
 		NetLobbyPeerState,
@@ -126,7 +134,8 @@ namespace RTE {
 		NetLobbyReady,
 		NetLobbyStart,
 		NetLobbyAbort,
-		NetLobbyStateChunk>;
+		NetLobbyStateChunk,
+		NetLobbySeatAssign>;
 
 	struct NetLobbyMessage {
 		NetLobbyPayload payload;
