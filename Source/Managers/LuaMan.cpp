@@ -7049,7 +7049,7 @@ bool LuaStateWrapper::BindPreviewScriptObject(MovableObject* clone, bool sharedS
 	SetTempEntity(clone);
 	if (sharedSlot) {
 		clone->m_ScriptObjectName = "_ScriptedObjects[\"" + uid + "\"]";
-		return true;
+		return clone->InitializeObjectScripts(false) >= 0;
 	}
 	const std::string dest = uid + "#preview";
 	if (RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; _ScriptedObjects[\"" + dest + "\"] = To" + clone->GetClassName() + "(LuaMan.TempEntity);") < 0) {
@@ -7059,7 +7059,7 @@ bool LuaStateWrapper::BindPreviewScriptObject(MovableObject* clone, bool sharedS
 		return false;
 	}
 	clone->m_ScriptObjectName = "_ScriptedObjects[\"" + dest + "\"]";
-	return TableEntryIsDefined("_ScriptedObjects", dest);
+	return clone->InitializeObjectScripts(false) >= 0 && TableEntryIsDefined("_ScriptedObjects", dest);
 }
 
 void LuaStateWrapper::DropPreviewScriptObject(long uniqueID) {
