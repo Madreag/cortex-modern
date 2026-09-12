@@ -2056,7 +2056,39 @@ local stitchedRestored = resumed(ra.stitched)
 check("coroutine_stitch_continues", stitchedRestored == stitchedReference and stitchedRestored == "true/9/suspended" and resumed(ra.stitched) == "true/10/suspended", stitchedRestored .. " vs " .. stitchedReference)
 local interpretedRestored = resumed(ra.interpreted)
 check("coroutine_interpreted_continues", interpretedRestored == interpretedReference and interpretedRestored == "true/9/suspended", interpretedRestored .. " vs " .. interpretedReference)
-
+)lua"
+	    R"lua(
+do
+	local names, values = {}, {}
+	for i = 1, 96 do
+		names[i] = "a" .. i
+		values[i] = tostring(i)
+	end
+	local extras, extraVals = {}, {}
+	for i = 1, 80 do
+		extras[i] = "z" .. i
+		extraVals[i] = "0"
+	end
+	local source = "local " .. table.concat(names, ", ") .. " = " .. table.concat(values, ", ") .. "\ncoroutine.yield(a96)\nlocal " .. table.concat(extras, ", ") .. " = " .. table.concat(extraVals, ", ") .. "\nlocal t = setmetatable({}, { __index = function(_, k) return k .. \"!\" end })\nreturn t.probe, a1 + a96"
+	local fn = assert(loadstring(source))
+	jit.off(fn, true)
+	local original = coroutine.create(fn)
+	coroutine.resume(original)
+	local bigText = _ScriptGraph.serialize({ ["1"] = { co = original } })
+	local restoredRoots = _ScriptGraph.deserialize(bigText)
+	local restored = restoredRoots and restoredRoots["1"] and restoredRoots["1"].co
+	local fits, needed, maxstack = _ScriptGraphThreadStackFits(restored)
+	check("coroutine_big_frame_stack_fits", fits, tostring(needed) .. "/" .. tostring(maxstack))
+	local function finish(co)
+		local ok, a, b = coroutine.resume(co)
+		return ok, a, b, coroutine.status(co)
+	end
+	local oOk, oA, oB, oSt = finish(original)
+	local rOk, rA, rB, rSt = finish(restored)
+	check("coroutine_big_frame_resumes", rOk and rA == "probe!" and rB == 97 and rSt == "dead" and rOk == oOk and rA == oA and rB == oB and rSt == oSt, tostring(rA) .. "/" .. tostring(rB) .. "/" .. tostring(rSt))
+end
+)lua"
+	    R"lua(
 -- Every dumped closure in the captured graph must load and re-dump to the same bytes in this engine.
 do
 	local unstable, first, total = 0, nil, 0
