@@ -533,9 +533,8 @@ namespace RTE {
 			}
 		}
 		if (!async->certPin.empty()) {
-			// Pinned mode: let the handshake run past the untrusted CA, then verify the DER hash
-			// ourselves in the SENDING_REQUEST callback before any request byte leaves.
-			DWORD flags = SECURITY_FLAG_IGNORE_UNKNOWN_CA;
+			// Pinned: the certificate is the identity, as on Apple; chain, name and dates are not consulted.
+			DWORD flags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
 			if (!WinHttpSetOption(request, WINHTTP_OPTION_SECURITY_FLAGS, &flags, sizeof(flags))) {
 				response.error = WinHttpError("set security flags", GetLastError());
 				finish(response);
