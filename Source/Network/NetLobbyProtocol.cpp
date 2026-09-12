@@ -418,6 +418,13 @@ namespace RTE {
 			return true;
 		}
 
+		bool EncodePayload(const NetLobbySeatAssign& payload, std::vector<uint8_t>& out, NetLobbyError*) {
+			AppendU8(out, payload.assignedPeerId);
+			AppendU8(out, 0);
+			AppendU16LE(out, 0);
+			return true;
+		}
+
 		bool DecodePayload(NetLobbyMessageType type, ByteReader& reader, NetLobbyPayload& out, NetLobbyError* error) {
 			switch (type) {
 				case NetLobbyMessageType::Hello: {
@@ -534,6 +541,24 @@ namespace RTE {
 					out = std::move(payload);
 					return true;
 				}
+				case NetLobbyMessageType::SeatAssign: {
+					NetLobbySeatAssign payload;
+					uint8_t reserved8 = 0;
+					uint16_t reserved16 = 0;
+					if (!ReadOrTruncated(reader.ReadU8(payload.assignedPeerId), reader, error, "assigned_peer_id") ||
+					    !ReadOrTruncated(reader.ReadU8(reserved8), reader, error, "reserved") ||
+					    !ReadOrTruncated(reader.ReadU16LE(reserved16), reader, error, "reserved")) return false;
+					if (reserved8 != 0 || reserved16 != 0) {
+						SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 3, "reserved field must be zero");
+						return false;
+					}
+					if (payload.assignedPeerId == 0 || payload.assignedPeerId > NetLobbyProtocol::c_MaxPlayers) {
+						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset() - 4, "seat assignment peer id is invalid");
+						return false;
+					}
+					out = payload;
+					return true;
+				}
 			}
 			SetError(error, NetLobbyErrorCode::UnknownMessageType, reader.Offset(), "unknown lobby message type");
 			return false;
@@ -549,6 +574,7 @@ namespace RTE {
 				case NetLobbyMessageType::Start:
 				case NetLobbyMessageType::Abort:
 				case NetLobbyMessageType::StateChunk:
+				case NetLobbyMessageType::SeatAssign:
 					out = static_cast<NetLobbyMessageType>(raw);
 					return true;
 			}
@@ -566,6 +592,7 @@ namespace RTE {
 			[](const NetLobbyStart&) { return NetLobbyMessageType::Start; },
 			[](const NetLobbyAbort&) { return NetLobbyMessageType::Abort; },
 			[](const NetLobbyStateChunk&) { return NetLobbyMessageType::StateChunk; },
+			[](const NetLobbySeatAssign&) { return NetLobbyMessageType::SeatAssign; },
 		}, payload);
 	}
 
@@ -579,6 +606,7 @@ namespace RTE {
 			case NetLobbyMessageType::Start: return "Start";
 			case NetLobbyMessageType::Abort: return "Abort";
 			case NetLobbyMessageType::StateChunk: return "StateChunk";
+			case NetLobbyMessageType::SeatAssign: return "SeatAssign";
 		}
 		return "Unknown";
 	}
