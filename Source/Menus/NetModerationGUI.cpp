@@ -210,13 +210,10 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	int y = 8;
 	std::string text = "Seats  [F6]";
 	// The announced input delay rides the corner box so the HUD shows what the lobby showed.
-	const std::string delayText = g_NetMatchService.GetInputDelayText();
-	if (!delayText.empty()) text += "\n" + delayText;
+	if (!snapshot.inputDelayText.empty()) text += "\n" + snapshot.inputDelayText;
 	for (const auto& member: snapshot.members) {
 		if (member.cpu) continue;
-		text += "\n" + (member.statusLine.empty() || member.statusLine == delayText
-		                    ? DisplayName(member.displayName) + "  /  Connected"
-		                    : DisplayName(member.statusLine));
+		text += "\n" + (member.statusLine.empty() ? DisplayName(member.displayName) + "  /  Connected" : DisplayName(member.statusLine));
 	}
 	text = WrapText(font, text, width - 12);
 	const int height = font->CalculateHeight(text) + 12;

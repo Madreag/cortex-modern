@@ -38,6 +38,7 @@ namespace RTE {
 		std::string activityPreset;
 		std::string sceneName;
 		std::string modeName;
+		std::string inputDelayText; //!< The announced input delay, host-authored; "" before the lobby has one.
 		bool localReady = false;
 		bool remoteReady = false;
 		std::vector<NetLobbyMember> members;
