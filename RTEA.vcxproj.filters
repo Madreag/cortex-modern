@@ -472,6 +472,9 @@
     <ClInclude Include="Source\Network\ControllerLog.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\GnsP2PSelfTest.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\GnsTransport.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -524,6 +527,9 @@
       <Filter>Network</Filter>
     </ClInclude>
     <ClInclude Include="Source\Network\NetDirectoryCodec.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetDirectorySignalChannel.h">
       <Filter>Network</Filter>
     </ClInclude>
     <ClInclude Include="Source\Network\NetHttpClient.h">
@@ -838,6 +844,9 @@
     <ClCompile Include="Source\Network\ControllerLog.cpp">
       <Filter>Network</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Network\GnsP2PSelfTest.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Network\GnsTransport.cpp">
       <Filter>Network</Filter>
     </ClCompile>
@@ -854,6 +863,9 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetDirectorySelfTest.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetDirectorySignalChannel.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetHttpClient.cpp">
