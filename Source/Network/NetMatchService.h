@@ -239,6 +239,7 @@ namespace RTE {
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
 		friend bool TestRosterTransitionsRecordHoldThenPresent(std::string* error);
+		friend bool TestRosterBannerNamesThePlayerOnce(std::string* error);
 		/// Client: the §7 leave protocol, waiting exactly P21's budget for the ack before giving up and
 		/// KEEPING the ticket. Runs only with a plane attached and a record to lose.
 		void RunCleanLeave();
