@@ -406,6 +406,11 @@ namespace RTE {
 			s_Args.selftestPauseTick = static_cast<uint64_t>(std::strtoull(argValue[startIndex + 1], nullptr, 10));
 			return 2;
 		}
+		if (a == "-net-match-e2e-end-round-tick" && hasValue) {
+			// The tick every armed peer ends the round at through the natural end path; 0 = never.
+			s_Args.selftestEndRoundTick = static_cast<uint64_t>(std::strtoull(argValue[startIndex + 1], nullptr, 10));
+			return 2;
+		}
 		return 0;
 	}
 
