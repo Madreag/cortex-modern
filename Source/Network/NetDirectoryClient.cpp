@@ -116,10 +116,8 @@ namespace RTE {
 			return;
 		}
 		if (!m_Factory) {
-			const std::string url = m_BaseUrl;
-			const std::string key = m_InstallKey;
-			const std::string pin = m_CertPinSha256;
-			m_Factory = [url, key, pin]() { return std::make_unique<NetHttpTransport>(url, key, pin); };
+			// Read at request time, so a key minted after the first Configure rides every request.
+			m_Factory = [this]() { return std::make_unique<NetHttpTransport>(m_BaseUrl, m_InstallKey, m_CertPinSha256); };
 		}
 		if (m_State == State::Disabled) {
 			SetState(State::Idle);
