@@ -10,6 +10,7 @@
 #include "NetMatchReplay.h"
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
+#include "ActivityMan.h"
 #include "ScenarioRunner.h"
 
 #include "nlohmann/json.hpp"
@@ -695,6 +696,22 @@ namespace RTE {
 			}
 			if (elapsedMs < 400 || elapsedMs > 4000) {
 				*error = "the join wait did not release on the trigger: " + std::to_string(elapsedMs) + "ms";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestSaveCompressionChoice(std::string* error) {
+			if (ActivityMan::ZipLevelFor(ActivityMan::SaveCompression::Fast) != ActivityMan::c_SaveZipLevelFast) {
+				*error = "Fast save compression is not the user-save zip level";
+				return false;
+			}
+			if (ActivityMan::ZipLevelFor(ActivityMan::SaveCompression::Small) != ActivityMan::c_SaveZipLevelSmall) {
+				*error = "Small save compression is not the resync zip level";
+				return false;
+			}
+			if (ActivityMan::c_SaveZipLevelSmall <= ActivityMan::c_SaveZipLevelFast) {
+				*error = "Small must deflate harder than Fast";
 				return false;
 			}
 			return true;
@@ -1793,6 +1810,7 @@ namespace RTE {
 		if (!TestLobbyLateJoinerRosterRace(&error)) return fail(error);
 		if (!TestServiceRuntimeErrorSurface(&error)) return fail(error);
 		if (!TestJoinWaitTrigger(&error)) return fail(error);
+		if (!TestSaveCompressionChoice(&error)) return fail(error);
 		std::string failedReportError;
 		std::string rejoinOverError;
 		std::string rejoinWaitError;
