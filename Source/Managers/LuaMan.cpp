@@ -4714,6 +4714,68 @@ LuaStateWrapper& LuaMan::GetStateByIndex(int index) {
 	return m_ScriptStates[static_cast<size_t>(index - 1) % m_ScriptStates.size()];
 }
 
+static std::string LuaStateTickHash() {
+	g_SimChecksum.BeginTick(0);
+	g_LuaMan.HashAllLuaStatesIntoSimChecksum();
+	const SimChecksum::Result result = g_SimChecksum.EndTick();
+	const auto found = result.per_subsystem.find("lua_state");
+	return found == result.per_subsystem.end() ? std::string("-") : SimChecksum::HashHex(found->second);
+}
+
+static bool RunThreadedScriptWriteHashSelfTest() {
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL lua_state_sees_threaded_script_writes no threaded Lua states" << std::endl;
+		return false;
+	}
+	const long counter = MovableObject::GetUniqueIDCounter();
+	std::vector<MOPixel*> objects;
+	// The same unique IDs on every build, so both layouts hold the same objects.
+	const auto build = [&](bool spread) {
+		MovableObject::PinUniqueIDCounter(counter + 1000);
+		for (size_t index = 0; index < 4; ++index) {
+			auto* object = new MOPixel;
+			object->Create();
+			object->MoveScriptsToState(states[spread ? index % states.size() : 0]);
+			object->AdoptScriptObject();
+			objects.push_back(object);
+		}
+	};
+	const auto write = [&](const std::string& body) {
+		for (size_t index = 0; index < objects.size(); ++index) {
+			LuaStateWrapper& state = *objects[index]->GetLuaState();
+			const std::string argument = std::to_string(index);
+			state.RunScriptString("function _LuaStateHashSelfTestWrite(self, index) " + body + " end");
+			state.RunScriptFunctionString("_LuaStateHashSelfTestWrite", "_ScriptedObjects[\"" + std::to_string(objects[index]->GetUniqueID()) + "\"]", {}, {}, {argument});
+			state.RunScriptString("_LuaStateHashSelfTestWrite = nil");
+		}
+	};
+	const auto clear = [&]() {
+		for (MOPixel* object: objects) {
+			object->DestroyScriptState();
+			delete object;
+		}
+		objects.clear();
+	};
+	build(true);
+	write("self.Probe = {}");
+	const std::string before = LuaStateTickHash();
+	write("self.Probe.value = 7 + index");
+	const std::string spread = LuaStateTickHash();
+	clear();
+	build(false);
+	write("self.Probe = {}");
+	write("self.Probe.value = 7 + index");
+	const std::string single = LuaStateTickHash();
+	clear();
+	MovableObject::PinUniqueIDCounter(counter);
+	const bool seen = spread != before;
+	const bool layoutFree = single == spread;
+	std::cout << "[script-graph-selftest] " << (seen ? "PASS" : "FAIL") << " lua_state_sees_threaded_script_writes states=" << states.size() << " before=" << before << " after=" << spread << std::endl;
+	std::cout << "[script-graph-selftest] " << (layoutFree ? "PASS" : "FAIL") << " lua_state_same_writes_hash_the_same_on_one_state_and_spread states=" << states.size() << " one_state=" << single << " spread=" << spread << std::endl;
+	return seen && layoutFree;
+}
+
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
 	const int id = AllocatePathCallback(m_PathCallbacks, state);
@@ -4729,7 +4791,8 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	m_MasterScriptState.RunScriptString("_PathCallbackPurgeTest = nil");
 	ResetPathCallbacks(true);
 	std::cout << "[script-graph-selftest] " << (purgePreserved ? "PASS" : "FAIL") << " native_path_callback_survives_purge" << std::endl;
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved;
+	const bool threadedWrites = RunThreadedScriptWriteHashSelfTest();
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites;
 }
 
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
