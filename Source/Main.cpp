@@ -2418,6 +2418,20 @@ void RunGameLoop() {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{0, false}});
 				}
 			}
+			// E2E control: at the flag's tick every armed peer ends the round through the natural
+			// end path - SetWinnerTeam + ActivityMan::EndActivity() -> Activity::End() -> Over, the
+			// same entry the scripted activity's Lua calls. Deliberately not gated on
+			// lockstepPausedTick: a tick inside the pause window must still end the round so the
+			// rematch detector below sees it.
+			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestEndRoundTick > 0 &&
+			    ScenarioRunner::IsLockstepControllerSyncActive() && simTick == ScenarioRunner::GetArgs().selftestEndRoundTick) {
+				if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+				    gameActivity && gameActivity->GetActivityState() != Activity::Over) {
+					std::cout << "[net-match-service-e2e] end-round: ending the round at tick " << simTick << std::endl;
+					gameActivity->SetWinnerTeam(Activity::TeamOne);
+					g_ActivityMan.EndActivity();
+				}
+			}
 			const bool lockstepPausedTick = ScenarioRunner::IsLockstepPaused();
 			if (lockstepPausedTick) {
 				// The sim holds still: read the sim-rate resume key, exchange an empty frame so
