@@ -55,6 +55,7 @@
 #include "CameraMan.h"
 #include "ActivityMan.h"
 #include "Actor.h"
+#include "AHuman.h"
 #include "GameActivity.h"
 #include "MovableObject.h"
 #include "RTETools.h"
@@ -332,6 +333,8 @@ static long long s_lpExpectFireSlack = 0;
 static long long s_eventLedgerPressTick = 0; //!< -local-prediction-event-ledger: the tick the tracked press is sampled at.
 static bool s_eventLedgerChecked = false;
 static long long s_eventLedgerFlashTick = -1; //!< The committed tick a preview first drew the muzzle flash on.
+static uint64_t s_eventLedgerLuaEmitterUID = 0;
+static std::string s_eventLedgerLuaPreset;
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
@@ -2032,6 +2035,18 @@ static void PreviewEventLedgerFrameOnTick() {
 	if (s_eventLedgerPressTick <= 0) {
 		return;
 	}
+	if (g_TimerMan.GetSimUpdateCount() == s_eventLedgerPressTick && s_eventLedgerLuaEmitterUID == 0) {
+		if (Activity* activity = g_ActivityMan.GetActivity()) {
+			if (Actor* actor = activity->GetControlledActor(Players::PlayerOne)) {
+				if (const AHuman* human = dynamic_cast<const AHuman*>(actor)) {
+					if (const HeldDevice* held = human->GetEquippedItem()) {
+						s_eventLedgerLuaPreset = held->GetPresetName();
+						s_eventLedgerLuaEmitterUID = static_cast<uint64_t>(held->GetUniqueID());
+					}
+				}
+			}
+		}
+	}
 	LocalPrediction::RunPreview();
 	if (s_eventLedgerFlashTick < 0 && LocalPrediction::GetLastOutcome().firedFrame) {
 		s_eventLedgerFlashTick = g_TimerMan.GetSimUpdateCount();
@@ -2077,6 +2092,18 @@ static void CheckPreviewEventLedgerSelfTest() {
 	check("the_glow_starts_on_the_preview_tick", glow && glow->committedTick <= press + 1,
 	      glow ? "first post effect for the press at committed tick " + std::to_string(glow->committedTick) + " (event tick " + std::to_string(glow->eventTick) + ", predicted=" + std::to_string(glow->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1)
 	           : "no post effect from a previewed actor at or after tick " + std::to_string(press));
+	if (s_eventLedgerLuaPreset == "AK-47" && s_eventLedgerLuaEmitterUID != 0) {
+		const PreviewEventLedger::EventStart* luaFire = nullptr;
+		for (const PreviewEventLedger::EventStart& start: starts) {
+			if (start.kind == PreviewEventLedger::Sound && start.emitterUID == s_eventLedgerLuaEmitterUID && start.committedTick >= press) {
+				luaFire = &start;
+				break;
+			}
+		}
+		check("the_lua_fire_sound_starts_on_the_preview_tick", luaFire && luaFire->committedTick <= press + 1 && luaFire->predicted,
+		      luaFire ? "first Mech Ronin AK-47 voice at committed tick " + std::to_string(luaFire->committedTick) + " (event tick " + std::to_string(luaFire->eventTick) + ", seq " + std::to_string(luaFire->seq) + ", predicted=" + std::to_string(luaFire->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1)
+		              : "no physical voice from equipped AK-47 uid=" + std::to_string(s_eventLedgerLuaEmitterUID) + " at or after tick " + std::to_string(press));
+	}
 	// A guard, not a detector: the muzzle flash sprite is already drawn on the preview that fires.
 	check("the_flash_sprite_stays_on_the_preview_tick", s_eventLedgerFlashTick > 0 && static_cast<uint64_t>(s_eventLedgerFlashTick) <= press + 1,
 	      "the previewed firearm's flash frame is first set at committed tick " + std::to_string(s_eventLedgerFlashTick) + ", expected <= " + std::to_string(press + 1));
