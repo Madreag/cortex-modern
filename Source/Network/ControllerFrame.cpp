@@ -557,6 +557,43 @@ namespace RTE {
 			return fail("malformed flags were accepted");
 		}
 
+		// A Go-To order disables the ordered actor's controller on the tick the synced pie command lands;
+		// the owner's own sample of that disable is still inputDelayFrames out, so the frames committed
+		// in the meantime were sampled before the order and must not enable the actor again.
+		{
+			Controller ordered(Controller::CIM_PLAYER, Players::PlayerOne);
+			const ControllerFrame preOrder = ControllerFrameCodec::Snapshot(4242, ordered);
+			ordered.HoldDisabledForSyncedOrder(305);
+			if (!ControllerFrameCodec::Apply(preOrder, ordered, &error)) {
+				return fail(error);
+			}
+			if (!ordered.IsDisabled()) {
+				return fail("a frame sampled before the Go-To order re-enabled the ordered controller");
+			}
+			ControllerFrame ownerDisable = preOrder;
+			ownerDisable.SetQuickDisabled(true);
+			if (!ControllerFrameCodec::Apply(ownerDisable, ordered, &error) || !ordered.IsDisabled() || ordered.IsSyncedOrderDisableHeld()) {
+				return fail("the owner's own disable failed to keep the controller disabled and take the hold back");
+			}
+			if (!ControllerFrameCodec::Apply(preOrder, ordered, &error) || ordered.IsDisabled()) {
+				return fail("the wire did not own the disable again after the owner's sample landed");
+			}
+			// A hold the owner's disable never caught up with expires at the input-delay cap.
+			Controller stranded(Controller::CIM_PLAYER, Players::PlayerOne);
+			stranded.HoldDisabledForSyncedOrder(305);
+			stranded.ExpireSyncedOrderDisable(364);
+			if (!stranded.IsSyncedOrderDisableHeld()) {
+				return fail("the order hold expired before the input-delay cap");
+			}
+			stranded.ExpireSyncedOrderDisable(365);
+			if (stranded.IsSyncedOrderDisableHeld()) {
+				return fail("the order hold outlived the input-delay cap");
+			}
+			if (!ControllerFrameCodec::Apply(preOrder, stranded, &error) || stranded.IsDisabled()) {
+				return fail("an expired order hold still blocked the wire");
+			}
+		}
+
 		std::cout << "[controller-frame-selftest] PASS" << std::endl;
 		return 0;
 	}

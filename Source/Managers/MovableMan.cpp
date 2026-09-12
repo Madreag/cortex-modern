@@ -4074,6 +4074,7 @@ void MovableMan::TravelStage(MovableObject* mo, bool actor) {
 void MovableMan::PreControllerStage(Actor* actor) {
 	static const uint64_t soundPhase = Hash("PreController");
 	SoundSimulationScope sounds(actor->GetUniqueID(), soundPhase);
+	actor->GetController()->ExpireSyncedOrderDisable(static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
 	actor->HandlePendingPieCommand();
 	actor->PreControllerUpdate();
 }
