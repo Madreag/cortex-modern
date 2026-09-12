@@ -1444,8 +1444,8 @@ void AudioMan::RetirePredictedVoice(int identity) {
 	if (owner) owner->RemovePlayingChannel(identity);
 	const auto still = m_PlayingVoices.find(identity);
 	if (still == m_PlayingVoices.end()) return;
+	// Still a prediction while it finishes: unowned and on this machine only, so no checkpoint captures it.
 	still->second.owner = nullptr;
-	still->second.predicted = false;
 	if (still->second.channel) still->second.channel->setUserData(nullptr);
 }
 
@@ -3077,6 +3077,26 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 		check("an_adopted_prediction_joins_the_shared_cohort", inSharedCohort);
 		check("an_adopted_voice_is_in_the_checkpoint", voice > 0 && savedChannels(predicted).contains(voice) && savedVoices().contains(voice));
 		predicted.Stop();
+		PreviewEventLedger::Clear();
+
+		// A prediction nothing adopts finishes unowned and stays out of every checkpoint.
+		SoundContainer mispredicted;
+		mispredicted.Create(samplePath, false, true, SoundContainer::SFX);
+		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		PreviewEventLedger::Arm(tick, GetCheckpointSoundContainerCursor(), {4244});
+		{
+			SoundSimulationScope preview(4244, phase);
+			mispredicted.Play();
+		}
+		PreviewEventLedger::Disarm();
+		const std::set<int> stray(mispredicted.GetPlayingChannels()->begin(), mispredicted.GetPlayingChannels()->end());
+		const int strayVoice = stray.size() == 1 ? *stray.begin() : 0;
+		PreviewEventLedger::ExpireForTick(tick + 3);
+		check("an_unclaimed_prediction_is_retired", strayVoice > 0 && PreviewEventLedger::GetLiveEntryCount() == 0 && mispredicted.GetPlayingChannels()->empty(), std::to_string(stray.size()));
+		check("a_retired_prediction_is_in_no_checkpoint", strayVoice > 0 && IsPredictedVoice(strayVoice) && !savedVoices().contains(strayVoice));
+		FMOD::Channel* strayChannel = nullptr;
+		if (strayVoice > 0 && GetVoiceChannel(strayVoice, &strayChannel) == FMOD_OK && strayChannel) strayChannel->stop();
+		if (strayVoice > 0) RetireVoice(strayVoice);
 		PreviewEventLedger::Clear();
 	}
 	g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);
