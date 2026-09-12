@@ -39,6 +39,8 @@ namespace RTE {
 		std::string sceneName;
 		std::string modeName;
 		std::string inputDelayText; //!< The announced input delay, host-authored; "" before the lobby has one.
+		std::string portMap;        //!< The host's router-mapping status line; "" when the toggle is off or not hosting.
+		uint32_t portMapSerial = 0; //!< Bumped whenever portMap changes so the panel skips redundant rewrites.
 		bool localReady = false;
 		bool remoteReady = false;
 		std::vector<NetLobbyMember> members;

@@ -133,6 +133,8 @@ static std::string ResyncSaveName() {
 		NetPortMap s_PortMap;
 		bool s_PortMapRequested = false; //!< This match's host asked the router for a mapping.
 		bool s_PortMapApplied = false;   //!< The row already carries the mapped external address.
+		std::string s_PortMapLine;       //!< The last status line handed to a snapshot.
+		uint32_t s_PortMapSerial = 0;    //!< Bumped when s_PortMapLine changes.
 
 		std::mutex s_ObservedIpMutex;
 		std::string s_DirectoryObservedIp; //!< The address the directory saw the register come from.
@@ -1476,6 +1478,21 @@ static std::string ResyncSaveName() {
 		return m_State;
 	}
 
+	NetMatchService::PortMapStatus NetMatchService::GetPortMapStatus() const {
+		PortMapStatus status;
+		status.enabled = s_PortMapRequested;
+		status.done = s_PortMapRequested && s_PortMap.Done();
+		status.mapped = s_PortMapRequested && s_PortMap.Mapped();
+		if (status.done || status.mapped) {
+			const NetPortMap::Result& result = s_PortMap.GetResult();
+			status.method = NetPortMap::MethodName(result.method);
+			status.externalIp = result.externalIp;
+			status.externalPort = result.externalPort;
+			status.error = result.error;
+		}
+		return status;
+	}
+
 	NetLobbySnapshot NetMatchService::GetLobbySnapshot() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		NetLobbySnapshot snapshot = m_LobbySnapshot;
@@ -1490,6 +1507,23 @@ static std::string ResyncSaveName() {
 		snapshot.running = m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch;
 		snapshot.failed = m_State == NetMatchServiceState::Failed;
 		snapshot.inputDelayText = m_InputDelayText;
+		if (snapshot.isHost && snapshot.active) {
+			const PortMapStatus portMap = GetPortMapStatus();
+			if (portMap.enabled) {
+				if (portMap.mapped) {
+					snapshot.portMap = "Public endpoint: " + portMap.externalIp + ":" + std::to_string(portMap.externalPort) + " via " + portMap.method;
+				} else if (portMap.done) {
+					snapshot.portMap = "No router mapping (" + (portMap.error.empty() ? "failed" : portMap.error) + ")";
+				} else {
+					snapshot.portMap = "Mapping the port...";
+				}
+			}
+		}
+		if (snapshot.portMap != s_PortMapLine) {
+			s_PortMapLine = snapshot.portMap;
+			++s_PortMapSerial;
+		}
+		snapshot.portMapSerial = s_PortMapSerial;
 		if (snapshot.activityPreset.empty()) {
 			snapshot.activityPreset = m_ActivityPreset;
 		}

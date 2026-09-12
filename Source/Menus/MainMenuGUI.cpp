@@ -94,6 +94,8 @@ void MainMenuGUI::Clear() {
 	m_ModerationCancelButtons.fill(nullptr);
 	m_PressedModeration.clear();
 	m_MultiplayerLobbyPlayerLabels.fill(nullptr);
+	m_MultiplayerLobbyPortMapLabel = nullptr;
+	m_PortMapSerialShown = 0;
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 	m_ReconnectStatusShown.clear();
 	m_CreditsScrollPanel = nullptr;
@@ -218,6 +220,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerLobbyPlayerLabels[1] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer1"));
 	m_MultiplayerLobbyPlayerLabels[2] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer2"));
 	m_MultiplayerLobbyPlayerLabels[3] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer3"));
+	m_MultiplayerLobbyPortMapLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPortMap"));
 
 	m_MultiplayerModerationSummaryLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationSummary"));
 	m_MultiplayerModerationStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationStatus"));
@@ -972,11 +975,20 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		s_shareResolved = false;
 		m_MultiplayerStatusLabel->SetText(snapshot.statusText);
 	}
+	if (snapshot.portMapSerial != m_PortMapSerialShown) {
+		m_PortMapSerialShown = snapshot.portMapSerial;
+		m_MultiplayerLobbyPortMapLabel->SetText(snapshot.portMap);
+	}
+	m_MultiplayerLobbyPortMapLabel->SetVisible(!snapshot.portMap.empty());
+	const int portMapHeight = snapshot.portMap.empty() ? 0 : 14;
 	m_MultiplayerErrorLabel->SetText(snapshot.errorText);
+	m_MultiplayerErrorLabel->SetPositionRel(12, 162 + portMapHeight);
 	const int errorHeight = std::max(24, m_MultiplayerErrorLabel->GetTextHeight() + 4);
-	const int extraHeight = errorHeight - 24;
+	const int extraHeight = errorHeight - 24 + portMapHeight;
 	if (m_MultiplayerErrorLabel->GetHeight() != errorHeight) {
 		m_MultiplayerErrorLabel->Resize(m_MultiplayerErrorLabel->GetWidth(), errorHeight);
+	}
+	if (m_MultiplayerLobbyPanel->GetHeight() != 250 + extraHeight) {
 		m_MultiplayerLobbyPanel->Resize(300, 250 + extraHeight);
 	}
 	if (m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetHeight() != 250 + extraHeight) {
