@@ -281,6 +281,8 @@ namespace RTE {
 		/// shadow clones of the residents they resolve, membership and ownership changes land on the overlay,
 		/// and ending it leaves the world as it was. A write to a resident itself is a violation.
 		void BeginSpeculation();
+		bool IsResident(const MovableObject* mo) const { return ResidentKind(mo) != 0; }
+		MovableObject* ViewIfSpeculating(MovableObject* found) const;
 		/// Ends the overlay: its unowned shadows and spawns are deleted, the rosters and flags go back.
 		/// @param takenResidents Receives the residents whose shadows were taken out of the overlay's world.
 		void EndSpeculation(std::vector<MovableObject*>* takenResidents = nullptr);
@@ -874,10 +876,8 @@ namespace RTE {
 
 		MovableObject* LookupMOID(MOID whichID) const;
 		int ResidentKind(const MovableObject* mo) const;
-		bool IsResident(const MovableObject* mo) const { return ResidentKind(mo) != 0; }
 		MovableObject* ShadowOf(MovableObject* resident);
 		MovableObject* SpeculativeView(MovableObject* found);
-		MovableObject* ViewIfSpeculating(MovableObject* found) const;
 		MovableObject* TakeShadow(MovableObject* mo, int kind);
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		bool m_PurgingAllMOs = false;
