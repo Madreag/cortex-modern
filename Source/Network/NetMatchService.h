@@ -109,6 +109,7 @@ namespace RTE {
 		uint8_t peerCount = 2; // Total players (2..4); the host listens for peerCount-1 clients.
 		NetMatchMode mode = NetMatchMode::PvPSkirmish; // Shapes the roster: PvP (a team per peer), co-op PvE (one shared team vs CPU), PvPvE (teams + CPU).
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
+		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
 	};
 
 	class NetMatchService : public Singleton<NetMatchService> {
@@ -247,6 +248,8 @@ namespace RTE {
 		bool m_IsHost = false;
 		uint8_t m_LocalPeerId = 0;
 		int m_LocalTeam = -1;
+		bool m_Dedicated = false;
+		int m_HumanSeats = 0;
 		bool m_ResyncOnDesync = false;
 		std::string m_PendingResyncLoad;
 		std::optional<NetResyncState> m_PendingResyncState;

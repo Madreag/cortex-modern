@@ -1495,6 +1495,88 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestServiceDedicatedRequest(std::string* error) {
+			for (const uint16_t port : {uint16_t(0), uint16_t(41010)}) {
+				NetMatchService service;
+				NetMatchServiceRequest request;
+				request.host = false;
+				request.dedicated = true;
+				request.port = port;
+				std::string startError;
+				if (service.Start(request, &startError) || startError != "dedicated service requires the host role") {
+					*error = "a dedicated join request was not refused: " + startError;
+					return false;
+				}
+			}
+			NetMatchService service;
+			const std::string report = service.BuildReportJson();
+			if (report.find("\"dedicated\":false") == std::string::npos || report.find("\"human_seats\"") == std::string::npos) {
+				*error = "service report is missing the dedicated/human_seats fields";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestLobbyThreePeerDedicated(std::string* error) {
+			const uint16_t port = 43009;
+			LoopbackTransport hostT, clientAT, clientBT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) || !clientBT.Connect("loopback", port, error)) {
+				return false;
+			}
+			// The dedicated host is lockstep peer 1 with no roster slot; peers 2 and 3 are the humans.
+			NetMatchConfig matchConfig = MakeConfig();
+			matchConfig.peerCount = 3;
+			matchConfig.dedicated = true;
+			matchConfig.players = {
+			    NetMatchPlayerSlot{2, 0, false, "Client A"},
+			    NetMatchPlayerSlot{3, 1, false, "Client B"},
+			};
+			auto cfg = [&](bool host, uint8_t local, std::map<uint8_t, NetPeerId> transports, const char* name) {
+				NetLobbySessionConfig c;
+				c.host = host;
+				c.localPeerId = local;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.matchConfig = matchConfig;
+				c.startFrame = 5;
+				c.displayName = name;
+				c.platform = "windows";
+				c.peerStateIntervalMs = 10;
+				return c;
+			};
+			NetLobbySession host, clientA, clientB;
+			if (!host.Start(hostT, cfg(true, 1, {{2, 1}, {3, 2}}, "Host"), error) ||
+			    !clientA.Start(clientAT, cfg(false, 2, {{1, 1}}, "Client A"), error) ||
+			    !clientB.Start(clientBT, cfg(false, 3, {{1, 1}}, "Client B"), error)) {
+				return false;
+			}
+			for (uint64_t now = 0; now <= 2000; now += 10) {
+				host.Tick(now);
+				clientA.Tick(now);
+				clientB.Tick(now);
+				if (host.IsStarted() && clientA.IsStarted() && clientB.IsStarted()) {
+					break;
+				}
+				if (host.IsFailed() || host.IsRejected() || clientA.IsFailed() || clientA.IsRejected() || clientB.IsFailed() || clientB.IsRejected()) {
+					*error = "dedicated three-peer lobby failed; host=" + std::string(NetLobbySession::StateName(host.GetState())) +
+					         " a=" + NetLobbySession::StateName(clientA.GetState()) + " b=" + NetLobbySession::StateName(clientB.GetState());
+					return false;
+				}
+				hostT.AdvanceTimeMs(10);
+				clientAT.AdvanceTimeMs(10);
+				clientBT.AdvanceTimeMs(10);
+			}
+			if (!host.IsStarted() || !clientA.IsStarted() || !clientB.IsStarted()) {
+				*error = "dedicated lobby did not reach Started on every peer";
+				return false;
+			}
+			if (host.GetMatchConfigHash() != clientA.GetMatchConfigHash() || host.GetMatchConfigHash() != clientB.GetMatchConfigHash() ||
+			    !clientA.GetMatchConfig().dedicated || !clientB.GetMatchConfig().dedicated) {
+				*error = "dedicated lobby did not converge on the dedicated config";
+				return false;
+			}
+			return true;
+		}
+
 		// A joiner arriving into a lobby that is already full of names hears the host's roster before
 		// the host's next config resend: the state names peers its placeholder config cannot seat yet.
 		// Failing the session over a name-and-ping message killed every four-member lobby lane, so the
@@ -1844,6 +1926,8 @@ namespace RTE {
 		if (!TestLobbyStateTransferBackpressure(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error)) return fail(error);
 		if (!TestLobbyThreePeer(&error)) return fail(error);
+		if (!TestServiceDedicatedRequest(&error)) return fail(error);
+		if (!TestLobbyThreePeerDedicated(&error)) return fail(error);
 		if (!TestLobbyLateJoinerRosterRace(&error)) return fail(error);
 		if (!TestServiceRuntimeErrorSurface(&error)) return fail(error);
 		std::string failedReportError;
