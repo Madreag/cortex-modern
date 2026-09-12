@@ -1,6 +1,7 @@
 sources += files(
 'ControllerFrame.cpp',
 'ControllerLog.cpp',
+'GnsP2PSelfTest.cpp',
 'GnsTransport.cpp',
 'LoopbackTransport.cpp',
 'NetActorOwnership.cpp',
