@@ -673,7 +673,13 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::PushNetUiToast(const std::string& kind, const std::string& text) {
-		const uint64_t tick = s_LockstepCoordinator ? s_LockstepAppliedFrame : static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		// Selftests drive the service before the managers are built, so there is no sim clock to stamp with.
+		uint64_t tick = 0;
+		if (s_LockstepCoordinator) {
+			tick = s_LockstepAppliedFrame;
+		} else if (TimerMan::IsConstructed()) {
+			tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		}
 		NetUiToast toast;
 		toast.record = {tick, kind, text};
 		toast.shownAtMs = NetLockstepNowMs();
