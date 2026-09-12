@@ -7998,6 +7998,149 @@ namespace RTE {
 			return true;
 		}
 
+		// The heal saves the world at the tick the label names, so a resync that ends the round must wait
+		// for the tick in flight to commit instead of failing the round inside it.
+		bool TestResyncAppliesOnlyAtCompletedTick(std::string* error) {
+			const auto cfg = [](uint64_t sessionId, uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 2;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.matchConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Client"}};
+				return c;
+			};
+			// Both arms leave the host holding the client's seat with tick 2 queued and uncommitted.
+			const auto park = [&](uint16_t port, uint64_t sessionId, LoopbackTransport& hostT, LoopbackTransport& clientT,
+			                      NetLockstepCoordinator& host, NetLockstepCoordinator& client, uint64_t& now) {
+				if (!hostT.StartHost(port, error) || !clientT.Connect("loopback", port, error)) {
+					return false;
+				}
+				if (!host.Start(hostT, cfg(sessionId, 1, {{2, 1}}, true), error) ||
+				    !client.Start(clientT, cfg(sessionId, 2, {{1, 1}}, false), error)) {
+					return false;
+				}
+				host.DeferStopsToTickBoundary();
+				now = 0;
+				const auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+					for (const uint64_t until = now + forMs; now <= until; now += 5) {
+						host.Tick(now);
+						client.Tick(now);
+						if (done()) {
+							return true;
+						}
+						hostT.AdvanceTimeMs(5);
+						clientT.AdvanceTimeMs(5);
+					}
+					return false;
+				};
+				if (!drive(2000, [&] { return host.IsRunning() && client.IsRunning(); })) {
+					*error = "boundary-resync fixture never started";
+					return false;
+				}
+				for (uint64_t f = 0; f < 2; ++f) {
+					if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) ||
+					    !client.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error)) {
+						return false;
+					}
+				}
+				NetLockstepReadyFrame ready;
+				size_t committed = 0;
+				if (!drive(2000, [&] {
+						while (host.PopReadyFrame(ready)) {
+							++committed;
+						}
+						return committed >= 2;
+					})) {
+					*error = "boundary-resync fixture never committed";
+					return false;
+				}
+				host.FinishSimulationTick(0);
+				host.FinishSimulationTick(1);
+				clientT.Stop();
+				if (!drive(2000, [&] { return host.AnyDroppedSeatHeld() && host.GetPeerLeaveFrames().count(2) != 0; })) {
+					*error = "boundary-resync fixture never held the drop";
+					return false;
+				}
+				if (host.GetPeerLeaveFrames().at(2) != 2 || host.GetStats().nextFrame != 2) {
+					*error = "boundary-resync fixture did not freeze on tick 2";
+					return false;
+				}
+				return host.QueueLocalInput(2, {MakeFrame(100, 3)}, {}, error);
+			};
+			{
+				LoopbackTransport hostT, clientT;
+				NetLockstepCoordinator host, client;
+				uint64_t now = 0;
+				if (!park(43140, 0x7000000000000140ULL, hostT, clientT, host, client, now)) {
+					return false;
+				}
+				host.ResolveHeldSeat(2, NetLockstepHoldResolution::Reclaimed, now);
+				if (!host.IsRunning() || !host.HasPendingRecoveryStop()) {
+					*error = "the reclaim resync took effect inside tick 2: state " +
+					         std::string(NetLockstepCoordinator::StateName(host.GetState())) +
+					         ", reason \"" + host.GetStats().timeoutReason + "\"";
+					return false;
+				}
+				host.Tick(now + 5);
+				NetLockstepReadyFrame parked;
+				if (!host.PopReadyFrame(parked) || parked.frame != 2) {
+					*error = "the parked tick never committed after the hold was resolved";
+					return false;
+				}
+				if (!host.FinishSimulationTick(2) || !host.IsFailed() ||
+				    !host.GetStats().timeoutReason.starts_with("ResyncRequested:")) {
+					*error = "the pending resync did not fire at the boundary: " + host.GetStats().timeoutReason;
+					return false;
+				}
+				if (host.GetResumeFrame() != 3) {
+					*error = "the boundary resync resumes at frame " + std::to_string(host.GetResumeFrame()) + " not 3";
+					return false;
+				}
+			}
+			uint32_t pumps = 0;
+			{
+				LoopbackTransport hostT, clientT;
+				NetLockstepCoordinator host, client;
+				uint64_t now = 0;
+				if (!park(43141, 0x7000000000000141ULL, hostT, clientT, host, client, now)) {
+					return false;
+				}
+				ScenarioRunner::SetLockstepCoordinator(&host);
+				ScenarioRunner::SetSessionPump([&] {
+					++pumps;
+					if (pumps == 40) {
+						host.ResolveHeldSeat(2, NetLockstepHoldResolution::Reclaimed, now + 5);
+					}
+				});
+				NetLockstepReadyFrame out;
+				std::string waitError;
+				const bool got = ScenarioRunner::WaitForLockstepControllerFrame(2, out, &waitError);
+				ScenarioRunner::SetSessionPump(nullptr);
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				if (!got || out.frame != 2) {
+					*error = "the parked wait ended with \"" + waitError + "\" instead of committing tick 2 (pumps=" +
+					         std::to_string(pumps) + ")";
+					return false;
+				}
+				if (!host.IsRunning() || !host.HasPendingRecoveryStop()) {
+					*error = "the wait's reclaim resync did not stay pending to the boundary";
+					return false;
+				}
+				if (!host.FinishSimulationTick(2) || !host.IsFailed() ||
+				    !host.GetStats().timeoutReason.starts_with("ResyncRequested:")) {
+					*error = "the wait's pending resync did not fire at the boundary: " + host.GetStats().timeoutReason;
+					return false;
+				}
+			}
+			std::cout << "[net-lockstep-selftest] PASS resync_applies_only_at_completed_tick frame=2 pumps=" << pumps << std::endl;
+			return true;
+		}
+
 		bool TestAnnouncedLeaveStillClosesAtOnce(std::string* error) {
 			const uint16_t port = 43085;
 			LoopbackTransport hostT, leaverT, stayerT;
@@ -8715,6 +8858,7 @@ namespace RTE {
 		    !TestDecodeFailures(&error) ||
 		    !TestSemanticFailures(&error) ||
 		    !TestRecoveryStopsAtCompletedTick(&error) ||
+		    !TestResyncAppliesOnlyAtCompletedTick(&error) ||
 		    !TestCompletionDrainsAppliedTicks(&error) ||
 		    !TestCoordinatorDelayedHappyPath(&error) ||
 		    !TestCoordinatorFrameBeforeStart(&error) ||
