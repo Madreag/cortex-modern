@@ -2704,6 +2704,15 @@ void RunGameLoop() {
 				std::cout << "[net-match] snapshot " << (saved ? "saved" : "FAILED") << ": " << saveName << " in " << saveMs << "ms at tick " << simTick << std::endl;
 			}
 
+			// Count the executed tick before the round's stop can break out of the loop below.
+			if (s_netMatchServiceE2E) {
+				const Activity* countedActivity = g_ActivityMan.GetActivity();
+				const Activity::ActivityState countedState = countedActivity ? countedActivity->GetActivityState() : Activity::NotStarted;
+				if (countedState == Activity::Running || countedState == Activity::Over) {
+					s_netMatchE2ETicks.NoteSimTick(simTick);
+				}
+			}
+
 			if (ScenarioRunner::FinishLockstepSimulationTick(simTick)) {
 				const std::string reason = ScenarioRunner::GetLockstepStopReason();
 				// A completed first round still takes the shared rematch transition below.
@@ -2999,7 +3008,6 @@ void RunGameLoop() {
 			}
 
 			if (s_netMatchServiceE2E) {
-				const uint64_t nowTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 				Activity* activity = g_ActivityMan.GetActivity();
 				if (!activity) {
 					s_netMatchServiceE2EError = "activity ended before e2e tick cap";
@@ -3090,7 +3098,6 @@ void RunGameLoop() {
 					break;
 				}
 				if (activityState == Activity::Running || activityState == Activity::Over) {
-					s_netMatchE2ETicks.NoteSimTick(nowTick);
 					// In-match census; the report runs after EndActivity, which releases actors.
 					s_netMatchE2EActorCensus = g_MovableMan.GetActorCount();
 					s_netMatchE2EActorCensusPeak = std::max(s_netMatchE2EActorCensusPeak, s_netMatchE2EActorCensus);
