@@ -4777,6 +4777,44 @@ static bool RunThreadedScriptWriteHashSelfTest() {
 	return seen && layoutFree;
 }
 
+static bool RunTickEndCollectionSelfTest() {
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL dropped_lua_owned_object_dies_at_the_next_tick_end no threaded Lua states" << std::endl;
+		return false;
+	}
+	LuaStateWrapper& state = states.front();
+	const long counter = MovableObject::GetUniqueIDCounter();
+	// Tick-end passes until a dropped Lua-owned object is gone, with `ballast` extra live tables on its state.
+	const auto passesToDestroy = [&state](int ballast) {
+		g_LuaMan.CollectGarbageForCheckpoint();
+		state.RunScriptString("_TickEndBallast = {}; for i = 1, " + std::to_string(ballast) + " do _TickEndBallast[i] = {i} end");
+		state.RunScriptString("_TickEndUID = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\").UniqueID");
+		long uid = 0;
+		{
+			std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
+			lua_getglobal(state.GetLuaState(), "_TickEndUID");
+			uid = static_cast<long>(lua_tonumber(state.GetLuaState(), -1));
+			lua_pop(state.GetLuaState(), 1);
+		}
+		int passes = 0;
+		while (uid > 0 && passes < 1000 && g_MovableMan.FindObjectByUniqueID(uid) != nullptr) {
+			g_LuaMan.StartAsyncGarbageCollection();
+			g_LuaMan.WaitForAsyncGarbageCollection();
+			++passes;
+		}
+		state.RunScriptString("_TickEndBallast = nil; _TickEndUID = nil");
+		g_LuaMan.CollectGarbageForCheckpoint();
+		return uid > 0 ? passes : -1;
+	};
+	const int smallHeap = passesToDestroy(0);
+	const int largeHeap = passesToDestroy(200000);
+	MovableObject::PinUniqueIDCounter(counter);
+	const bool pass = smallHeap == 1 && largeHeap == 1;
+	std::cout << "[script-graph-selftest] " << (pass ? "PASS" : "FAIL") << " dropped_lua_owned_object_dies_at_the_next_tick_end states=" << states.size() << " passes_small_heap=" << smallHeap << " passes_large_heap=" << largeHeap << std::endl;
+	return pass;
+}
+
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
 	const int id = AllocatePathCallback(m_PathCallbacks, state);
@@ -4793,7 +4831,8 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	ResetPathCallbacks(true);
 	std::cout << "[script-graph-selftest] " << (purgePreserved ? "PASS" : "FAIL") << " native_path_callback_survives_purge" << std::endl;
 	const bool threadedWrites = RunThreadedScriptWriteHashSelfTest();
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites;
+	const bool tickEndCollection = RunTickEndCollectionSelfTest();
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && tickEndCollection;
 }
 
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
