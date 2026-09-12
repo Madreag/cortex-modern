@@ -423,7 +423,7 @@ namespace RTE {
 		/// Tries to handle the activated PieSlice in this object's PieMenu, if there is one, based on its SliceType.
 		/// @param pieSliceType The SliceType of the PieSlice being handled.
 		/// @return Whether or not the activated PieSlice SliceType was able to be handled.
-		virtual bool HandlePieCommand(PieSliceType pieSliceType) { return false; }
+		virtual bool HandlePieCommand(PieSliceType pieSliceType);
 
 		/// Handles the PieSlice this' PieMenu activated last tick, if any. Runs in the update stage, so every peer applies it at the same tick.
 		void HandlePendingPieCommand();
@@ -458,10 +458,6 @@ namespace RTE {
 		/// Puts this into Go-To mode for a pie order, clearing the old waypoints and, under lockstep,
 		/// disabling the controller here so every peer does it on the tick the order lands.
 		void BeginGoToOrder();
-
-		/// Whether a Go-To order is still waiting for the seat to pick its destination.
-		/// @return Whether this is in Go-To mode with no destination and a disabled player seat.
-		bool IsAwaitingGoToPoint() const;
 
 		/// Adds an absolute scene point to the list of waypoints this is going to
 		/// go to, in order
