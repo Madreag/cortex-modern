@@ -976,6 +976,9 @@ namespace RTE {
 		/// @param newPieMenu The new PieMenu for this Actor.
 		void SetPieMenu(PieMenu* newPieMenu);
 
+		/// Pins clone timers whose start is past the restored sim tick.
+		void ClampPreviewTimers();
+
 		/// Protected member variable and method declarations
 	protected:
 		/// Throws a just-removed item into the world with the standard drop position and force.
