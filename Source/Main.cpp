@@ -92,6 +92,7 @@
 #include "SimChecksum.h"
 #include "NetA7Journal.h"
 #include "ScenarioRunner.h"
+#include "NetActorOwnership.h"
 #include "InputScript.h"
 #include "AIWriteScript.h"
 #include "FaultInjection.h"
@@ -126,6 +127,7 @@
 #include <random>
 #include <deque>
 #include <array>
+#include <list>
 #include <map>
 #include <sstream>
 #include <thread>
@@ -252,6 +254,17 @@ static bool s_netMatchServiceE2EEnteredEditor = false;
 static NetMatchE2ETickClock s_netMatchE2ETicks;
 static long s_netMatchE2EActorCensus = -1;
 static long s_netMatchE2EActorCensusPeak = -1; //!< The max actor count seen, so a transient heal double-spawn that later sheds back to normal is still visible.
+static uint64_t s_netMatchE2eSwitchControlTick = 0;
+static int64_t s_netMatchE2eSwitchUid = 0;
+static bool s_netMatchE2eSwitchIssued = false;
+static bool s_netMatchE2eSwitchHandedBack = false;
+struct E2eOwnerLogEntry {
+	uint64_t tick = 0;
+	int64_t uid = 0;
+	int owner = 0;
+	int mode = 0;
+};
+static std::vector<E2eOwnerLogEntry> s_netMatchE2eOwnerLog;
 // Loop-pace accounting, accumulated only while a lockstep match or playback runs: the honest
 // wall-tps and per-tick sim cost that steer the pace and rollback work.
 static uint64_t s_paceIterations = 0;
@@ -774,6 +787,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-ownership-policy") {
 			s_netMatchOwnershipPolicy = argValue[++i];
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-e2e-switch-control") {
+			s_netMatchE2eSwitchControlTick = std::strtoull(argValue[++i], nullptr, 10);
 			continue;
 		}
 
@@ -2578,6 +2596,70 @@ static bool HandleFailedActivityLaunch() {
 	return !System::IsSetToQuit();
 }
 
+static Actor* FindE2eSwitchControlTarget(Activity* activity, int player) {
+	if (!activity) {
+		return nullptr;
+	}
+	const int team = activity->GetTeamOfPlayer(player);
+	Actor* brain = activity->GetPlayerBrain(player);
+	if (!brain) {
+		brain = g_MovableMan.GetFirstBrainActor(team);
+	}
+	Actor* best = nullptr;
+	if (std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(team)) {
+		for (Actor* actor: *roster) {
+			if (!actor || actor == brain || actor->IsInGroup("Brains") || actor->IsPlayerControlled()) {
+				continue;
+			}
+			if (!best || actor->GetUniqueID() < best->GetUniqueID()) {
+				best = actor;
+			}
+		}
+	}
+	return best;
+}
+
+static void NoteE2eSwitchOwnerLog(uint64_t tick) {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return;
+	}
+	if (s_netMatchE2eSwitchUid == 0) {
+		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+			std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(team);
+			if (!roster) {
+				continue;
+			}
+			for (Actor* actor: *roster) {
+				if (!actor) {
+					continue;
+				}
+				const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+				const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
+				if (seeded == 0) {
+					continue;
+				}
+				const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
+				if (owner != seeded) {
+					s_netMatchE2eSwitchUid = uid;
+					break;
+				}
+			}
+			if (s_netMatchE2eSwitchUid != 0) {
+				break;
+			}
+		}
+	}
+	if (s_netMatchE2eSwitchUid == 0) {
+		return;
+	}
+	Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(s_netMatchE2eSwitchUid)));
+	if (!actor) {
+		return;
+	}
+	const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(s_netMatchE2eSwitchUid, actor->GetTeam(), !actor->IsPlayerControlled());
+	s_netMatchE2eOwnerLog.push_back({tick, s_netMatchE2eSwitchUid, static_cast<int>(owner), static_cast<int>(actor->GetController()->GetInputMode())});
+}
+
 void RunGameLoop() {
 	if (System::IsSetToQuit()) {
 		return;
@@ -2757,6 +2839,30 @@ void RunGameLoop() {
 						std::cout << "[net-match-service-e2e] ai order issued at tick " << simTick << " unit " << unit->GetUniqueID() << " brain " << brain->GetUniqueID() << std::endl;
 					}
 				}
+				if (s_netMatchServiceE2E && s_netMatchE2eSwitchControlTick > 0 && ScenarioRunner::IsLockstepControllerSyncActive()) {
+					if (!s_netMatchE2eSwitchIssued && simTick == s_netMatchE2eSwitchControlTick) {
+						if (Activity* activity = g_ActivityMan.GetActivity()) {
+							const int player = Players::PlayerOne;
+							if (Actor* target = FindE2eSwitchControlTarget(activity, player)) {
+								s_netMatchE2eSwitchUid = static_cast<int64_t>(target->GetUniqueID());
+								activity->SwitchToActor(target, player, activity->GetTeamOfPlayer(player));
+								std::cout << "[net-match] e2e switch-control: uid=" << s_netMatchE2eSwitchUid << " at tick " << simTick << std::endl;
+							} else {
+								std::cout << "[net-match] e2e switch-control: uid=0 at tick " << simTick << std::endl;
+							}
+							s_netMatchE2eSwitchIssued = true;
+						}
+					} else if (s_netMatchE2eSwitchIssued && !s_netMatchE2eSwitchHandedBack && simTick == s_netMatchE2eSwitchControlTick + 10) {
+						if (Activity* activity = g_ActivityMan.GetActivity()) {
+							const int player = Players::PlayerOne;
+							if (Actor* brain = activity->GetPlayerBrain(player)) {
+								activity->SwitchToActor(brain, player, activity->GetTeamOfPlayer(player));
+								std::cout << "[net-match] e2e switch-control: hand-back at tick " << simTick << std::endl;
+							}
+							s_netMatchE2eSwitchHandedBack = true;
+						}
+					}
+				}
 				// E2E control: host-issued inventory ops on its brain at fixed ticks; both peers must mutate identically.
 				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestInventoryCommand &&
 				    (simTick == 210 || simTick == 240 || simTick == 270 || simTick == 300)) {
@@ -2928,6 +3034,7 @@ void RunGameLoop() {
 			}
 
 			DumpSimStateIfArmed(simTick);
+			NoteE2eSwitchOwnerLog(simTick);
 			TickProbeIfArmed(simTick);
 			LocalPredictionInvarianceOnTick(simTick);
 			PreviewEventLedgerFrameOnTick();
@@ -3927,6 +4034,15 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	// slips every divergence gate); the peak catches a double-spawn that later sheds back to normal.
 	out << "\"actors\":" << s_netMatchE2EActorCensus << ",";
 	out << "\"actors_peak\":" << s_netMatchE2EActorCensusPeak << ",";
+	out << "\"owner_log\":[";
+	for (size_t i = 0; i < s_netMatchE2eOwnerLog.size(); ++i) {
+		if (i) {
+			out << ",";
+		}
+		const E2eOwnerLogEntry& entry = s_netMatchE2eOwnerLog[i];
+		out << "{\"tick\":" << entry.tick << ",\"uid\":" << entry.uid << ",\"owner\":" << entry.owner << ",\"mode\":" << entry.mode << "}";
+	}
+	out << "],";
 	out << "\"pace\":" << BuildLoopPaceJson() << ",";
 	out << "\"running_ticks\":" << s_netMatchE2ETicks.Total() << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
