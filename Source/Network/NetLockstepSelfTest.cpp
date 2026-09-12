@@ -1011,7 +1011,7 @@ namespace RTE {
 			frame.roundId = 0x5EED0000C0FFEE01ULL;
 			frame.observations = {NetSoundObservation{2, 1048601, 31, 0x1122334455667788ULL, 7, 3, 0.25F}, NetSoundObservation{2, 0, 12, 99, 0, 1, 0.75F}};
 			frame.frames = {MakeFrame(100, 1), MakeFrame(200, 2)};
-			frame.commands = {NetGameCommand{2, NetGameSetTeamFunds{0, 1500}}, NetGameCommand{2, NetGameSetTeamFunds{1, -250}}, NetGameCommand{2, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1234.5F, -67.25F, 1}}, NetGameCommand{2, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 48.5F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Robot 1", "Base.rte"}}}}, NetGameCommand{2, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", 512.0F, 300.0F, 1, {{"AHuman", "Green Dummy", "Base.rte"}}, true, 137.5F, false, 4, 600.0F, 350.25F, 424242, 1, -32.0F}}, NetGameCommand{2, NetGameScuttleCraft{17143, 0}}, NetGameCommand{2, NetGameInventoryOp{9001, 1, NetGameInventoryOp::Drop, 0, 2, true, 0.5F, -0.25F}}, NetGameCommand{2, NetGamePauseMatch{1, true}}, NetGameCommand{2, NetGamePauseMatch{0, false}}, NetGameCommand{2, NetGameSetActorAIMode{31337, 1, 6}}, NetGameCommand{2, NetGameSwitchControl{41414, 0, 2}}, NetGameCommand{2, NetGameAIEquip{51515, 1, NetGameAIEquip::LoadedFirearmInGroup, false, "Weapons - Primary", "Weapons - Explosive", "", ""}}, NetGameCommand{2, NetGameAIEquip{51516, 0, NetGameAIEquip::NamedDevice, false, "", "", "Base.rte", "Battle Rifle"}}, NetGameCommand{2, NetGameAIEquip{51517, 1, NetGameAIEquip::ShieldInBGArm, true, "", "", "", ""}}, NetGameCommand{2, NetGameAIEquip{51518, 0, NetGameAIEquip::UnequipFGArm, false, "", "", "", ""}}, NetGameCommand{2, NetGameAIOrder{61616, 0, NetGameAIOrder::FormSquad, 512.5F, -12.25F, 61617}}, NetGameCommand{2, NetGameAIOrder{61618, 1, NetGameAIOrder::MOWaypoint, 0.0F, 0.0F, 61616}}, NetGameCommand{2, NetGameAIOrder{61619, 0, NetGameAIOrder::SceneWaypoint, -128.25F, 96.5F, 0}}, NetGameCommand{2, NetGameAIOrder{61620, 1, NetGameAIOrder::ClearWaypoints, 0.0F, 0.0F, 0}}, NetGameCommand{2, NetGameSoundOp{71717, 1, 0x00FF00FF00FF0001ULL, NetGameSoundOp::Play, 0, 3, 0, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71718, 0, 0x0000000000000002ULL, NetGameSoundOp::SetProperty, 13, -1, 0, -12.5F, 88.25F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71719, 1, 0x0000000000000003ULL, NetGameSoundOp::SelectSounds, 0, -1, 0, 0.0F, 0.0F, {2, 0, 7}, ""}}, NetGameCommand{2, NetGameSoundOp{71720, 0, 0x0000000000000004ULL, NetGameSoundOp::FadeOut, 0, -1, 250, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71721, 1, 0x0000000000000005ULL, NetGameSoundOp::AddSound, 0, -1, 0, 0.0F, 0.0F, {1}, "9 SoundData1 31 Base.rte/Sounds/GUIs/Click.flac 0 0 0 3212836864 "}}, NetGameCommand{2, NetGameSoundOp{71722, 0, 0x0000000000000006ULL, NetGameSoundOp::SetCycleMode, 0, -1, 2, 0.0F, 0.0F, {}, ""}}};
+			frame.commands = {NetGameCommand{2, NetGameSetTeamFunds{0, 1500}}, NetGameCommand{2, NetGameSetTeamFunds{1, -250}}, NetGameCommand{2, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1234.5F, -67.25F, 1}}, NetGameCommand{2, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 48.5F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Robot 1", "Base.rte"}}}}, NetGameCommand{2, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", 512.0F, 300.0F, 1, {{"AHuman", "Green Dummy", "Base.rte"}}, true, 137.5F, false, 4, 600.0F, 350.25F, 424242, 1, -32.0F}}, NetGameCommand{2, NetGameScuttleCraft{17143, 0}}, NetGameCommand{2, NetGameInventoryOp{9001, 1, NetGameInventoryOp::Drop, 0, 2, true, 0.5F, -0.25F}}, NetGameCommand{2, NetGamePauseMatch{1, true}}, NetGameCommand{2, NetGamePauseMatch{0, false}}, NetGameCommand{2, NetGameSetActorAIMode{31337, 1, 6}}, NetGameCommand{2, NetGameSwitchControl{41414, 0, 2}}, NetGameCommand{2, NetGameAIEquip{51515, 1, NetGameAIEquip::LoadedFirearmInGroup, false, "Weapons - Primary", "Weapons - Explosive", "", ""}}, NetGameCommand{2, NetGameAIEquip{51516, 0, NetGameAIEquip::NamedDevice, false, "", "", "Base.rte", "Battle Rifle"}}, NetGameCommand{2, NetGameAIEquip{51517, 1, NetGameAIEquip::ShieldInBGArm, true, "", "", "", ""}}, NetGameCommand{2, NetGameAIEquip{51518, 0, NetGameAIEquip::UnequipFGArm, false, "", "", "", ""}}, NetGameCommand{2, NetGameAIOrder{61616, 0, NetGameAIOrder::FormSquad, 512.5F, -12.25F, 61617, 9001}}, NetGameCommand{2, NetGameAIOrder{61618, 1, NetGameAIOrder::MOWaypoint, 0.0F, 0.0F, 61616}}, NetGameCommand{2, NetGameAIOrder{61619, 0, NetGameAIOrder::SceneWaypoint, -128.25F, 96.5F, 0}}, NetGameCommand{2, NetGameAIOrder{61620, 1, NetGameAIOrder::ClearWaypoints, 0.0F, 0.0F, 0}}, NetGameCommand{2, NetGameSoundOp{71717, 1, 0x00FF00FF00FF0001ULL, NetGameSoundOp::Play, 0, 3, 0, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71718, 0, 0x0000000000000002ULL, NetGameSoundOp::SetProperty, 13, -1, 0, -12.5F, 88.25F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71719, 1, 0x0000000000000003ULL, NetGameSoundOp::SelectSounds, 0, -1, 0, 0.0F, 0.0F, {2, 0, 7}, ""}}, NetGameCommand{2, NetGameSoundOp{71720, 0, 0x0000000000000004ULL, NetGameSoundOp::FadeOut, 0, -1, 250, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71721, 1, 0x0000000000000005ULL, NetGameSoundOp::AddSound, 0, -1, 0, 0.0F, 0.0F, {1}, "9 SoundData1 31 Base.rte/Sounds/GUIs/Click.flac 0 0 0 3212836864 "}}, NetGameCommand{2, NetGameSoundOp{71722, 0, 0x0000000000000006ULL, NetGameSoundOp::SetCycleMode, 0, -1, 2, 0.0F, 0.0F, {}, ""}}};
 			if (!RoundTrip({frame}, error)) {
 				return false;
 			}
@@ -1061,7 +1061,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x14, 0x00,
+				0x15, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -1568,9 +1568,10 @@ namespace RTE {
 			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
 			const int64_t targetUID = static_cast<int64_t>(target->GetUniqueID());
 			const int64_t passengerUID = static_cast<int64_t>(passenger->GetUniqueID());
+			const int64_t writerUID = static_cast<int64_t>(writer->GetUniqueID());
 			const std::vector<NetGameAIOrder> expected = {
-			    {targetUID, 0, NetGameAIOrder::SceneWaypoint, 10.0F, 20.0F, 0},
-			    {passengerUID, 0, NetGameAIOrder::SceneWaypoint, 30.0F, 40.0F, 0},
+			    {targetUID, 0, NetGameAIOrder::SceneWaypoint, 10.0F, 20.0F, 0, writerUID},
+			    {passengerUID, 0, NetGameAIOrder::SceneWaypoint, 30.0F, 40.0F, 0, writerUID},
 			};
 			if (sent.size() != expected.size()) {
 				return finish("the AI pass did not send one AIOrder per cross-actor write");
@@ -1601,6 +1602,166 @@ namespace RTE {
 			}
 			std::cout << "[net-lockstep-selftest] PASS ai waypoint cross-actor: sent=" << sent.size()
 			          << " target_uid=" << targetUID << " passenger_uid=" << passengerUID << std::endl;
+			return finish(nullptr);
+		}
+
+		bool StartOwnedPair(uint16_t port, NetActorOwnershipPolicy policy, const char* policyName, uint64_t sessionId, LoopbackTransport& hostTransport, LoopbackTransport& clientTransport, NetLockstepCoordinator& host, NetLockstepCoordinator& client, std::string* error) {
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(sessionId);
+			matchConfig.ownershipPolicy = policy;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, port, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, port, 0, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = policyName;
+			clientConfig.ownershipPolicy = policyName;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			return DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error);
+		}
+
+		// Owner = host, team authority = the client: the host's pop of a CPU actor on that team must apply.
+		bool TestHostRunCpuActorOnAHumanTeamPopsItsWaypoint(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			if (!StartOwnedPair(43032, NetActorOwnershipPolicy::HostCpuRemoteHuman, "host-cpu-remote-human", 0x5733314831435055ULL, hostTransport, clientTransport, host, client, error)) {
+				return false;
+			}
+			Actor* hostView = new Actor();
+			Actor* peerView = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (hostView->MovableObject::Create(1) < 0 || peerView->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			hostView->SetTeam(1);
+			peerView->SetTeam(1);
+			hostView->SetControllerMode(Controller::CIM_AI);
+			peerView->SetControllerMode(Controller::CIM_AI);
+			hostView->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			peerView->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			const int64_t uid = static_cast<int64_t>(hostView->GetUniqueID());
+			if (hostView->IsPlayerControlled() || ScenarioRunner::GetLockstepActorOwner(uid, 1, !hostView->IsPlayerControlled()) != 1 || ScenarioRunner::ResolveTeamCommandAuthority(1) != 2) {
+				return finish("host-cpu-remote-human did not split owner and team authority");
+			}
+			ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{1, NetGameAIOrder{uid, 1, NetGameAIOrder::PopWaypoint, 10.0F, 20.0F, 0}});
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			if (sent.size() != 1) {
+				return finish("a host-run CPU actor on a human team pops its waypoint");
+			}
+			for (Actor* view: {hostView, peerView}) {
+				view->PopFrontWaypoint(Vector(10.0F, 20.0F));
+			}
+			if (hostView->GetWaypointsSize() != 0 || peerView->GetWaypointsSize() != 0) {
+				return finish("the host's pop op must apply on both fixtures");
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_host_run_cpu_actor_on_a_human_team_pops_its_waypoint uid=" << uid << std::endl;
+			return finish(nullptr);
+		}
+
+		// Writer owned by peer 2, target owned by peer 1: the op carrying writerUID applies.
+		bool TestAnOwnedWriterMayWriteAnotherOwnersActor(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			if (!StartOwnedPair(43033, NetActorOwnershipPolicy::UniqueIdModPeerCount, "unique-id-split", 0x5733315752495445ULL, hostTransport, clientTransport, host, client, error)) {
+				return false;
+			}
+			Actor* first = new Actor();
+			Actor* second = new Actor();
+			Actor* peerTarget = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (first->MovableObject::Create(1) < 0 || second->MovableObject::Create(1) < 0 || peerTarget->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			Actor* writer = (static_cast<int64_t>(first->GetUniqueID()) % 2 == 1) ? first : second;
+			Actor* target = (writer == first) ? second : first;
+			writer->SetTeam(0);
+			target->SetTeam(0);
+			peerTarget->SetTeam(0);
+			const int64_t writerUID = static_cast<int64_t>(writer->GetUniqueID());
+			const int64_t targetUID = static_cast<int64_t>(target->GetUniqueID());
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			if (ScenarioRunner::GetLockstepActorOwner(writerUID, 0, true) != 2 || ScenarioRunner::GetLockstepActorOwner(targetUID, 0, true) != 1) {
+				return finish("unique-id-split did not give the writer to peer 2 and the target to peer 1");
+			}
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			ScenarioRunner::DrainLocalGameCommands();
+			g_CurrentAIActor = writer;
+			target->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			g_CurrentAIActor = nullptr;
+			if (target->GetWaypointsSize() != 0) {
+				return finish("a cross-owner AI write mutated the target instead of sending it");
+			}
+			writer->SendDeferredWaypoints();
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			if (sent.size() != 1) {
+				return finish("an owned writer may write another owner's actor");
+			}
+			const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&sent[0].payload);
+			if (!order || order->actorUID != targetUID || order->op != NetGameAIOrder::SceneWaypoint || order->writerUID != writerUID) {
+				return finish("the owned writer did not send a SceneWaypoint carrying writerUID");
+			}
+			target->AddAISceneWaypoint(Vector(order->x, order->y));
+			peerTarget->AddAISceneWaypoint(Vector(order->x, order->y));
+			if (target->GetWaypointsSize() != 1 || peerTarget->GetWaypointsSize() != 1) {
+				return finish("the writerUID op must apply on both fixtures");
+			}
+			std::cout << "[net-lockstep-selftest] PASS an_owned_writer_may_write_another_owner_s_actor writer=" << writerUID << " target=" << targetUID << std::endl;
+			return finish(nullptr);
+		}
+
+		// A sender that owns neither actor and is not the team authority is rejected.
+		bool TestAStrangerMayNotWriteAQueue(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			if (!StartOwnedPair(43034, NetActorOwnershipPolicy::UniqueIdModPeerCount, "unique-id-split", 0x5733315354524E47ULL, hostTransport, clientTransport, host, client, error)) {
+				return false;
+			}
+			Actor* first = new Actor();
+			Actor* second = new Actor();
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (first->MovableObject::Create(1) < 0 || second->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			Actor* target = (static_cast<int64_t>(first->GetUniqueID()) % 2 == 0) ? first : second;
+			target->SetTeam(0);
+			const int64_t targetUID = static_cast<int64_t>(target->GetUniqueID());
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			if (ScenarioRunner::GetLockstepActorOwner(targetUID, 0, true) != 1 || ScenarioRunner::ResolveTeamCommandAuthority(0) != 1) {
+				return finish("unique-id-split did not give the even target and team 0 to the host");
+			}
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			ScenarioRunner::DrainLocalGameCommands();
+			ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{2, NetGameAIOrder{targetUID, 0, NetGameAIOrder::SceneWaypoint, 10.0F, 20.0F, 0}});
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			if (!sent.empty()) {
+				return finish("a stranger may not write a queue");
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_stranger_may_not_write_a_queue uid=" << targetUID << std::endl;
 			return finish(nullptr);
 		}
 
@@ -3202,7 +3363,7 @@ namespace RTE {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x14, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x15, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
@@ -9457,6 +9618,9 @@ namespace RTE {
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
 		    !TestAIWaypointReadThroughSamePass(&error) ||
 		    !TestAIWaypointCrossActorWrites(&error) ||
+		    !TestHostRunCpuActorOnAHumanTeamPopsItsWaypoint(&error) ||
+		    !TestAnOwnedWriterMayWriteAnotherOwnersActor(&error) ||
+		    !TestAStrangerMayNotWriteAQueue(&error) ||
 		    !TestCoordinatorOwedFrameRetryEndsWithTheRound(&error) ||
 		    !TestCoordinatorOwedFrameKeepsItsCommands(&error) ||
 		    !TestCoordinatorStoppedRoundStopsResending(&error) ||
