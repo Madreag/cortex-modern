@@ -1,10 +1,11 @@
 """Assert the F6 seats panel shows the hold pause text while a dropped seat is held.
 
 Three service-e2e peers start a match; the driver kills the departing one mid-match so
-the survivors enter the reclaim hold. The host runs a NetModerationGUIProbe script
-(CC_TEST_NET_UI_SCRIPT) that opens the seats panel during the stall, asserts the
-"Match paused: waiting for ..." title while the hold lasts, then asserts the neutral
-title once the hold expires and the panel stays open. The probe result lands in
+the survivors hold its seat for reclaim. The host runs a NetModerationGUIProbe script
+(CC_TEST_NET_UI_SCRIPT) that opens the seats panel during the stall the drop causes and
+waits for frames drawn by the lockstep wait's own UI pump, asserts the "Match paused:
+waiting for ..." title once the host has applied the leave, then asserts the neutral
+title once the hold lapses and the panel stays open. The probe result lands in
 net-ui-result.json beside the probe script.
 """
 
@@ -23,26 +24,31 @@ def main():
     parser.add_argument("--port", type=int, default=44282)
     options = parser.parse_args()
     players = 3
-    ticks = 1200
+    ticks = 2200
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     signal = root / "drop.signal.json"
+    hold_signal = root / "hold.signal.json"
     probe = {
         "schema": 1,
-        "timeout_ms": 150000,
+        "timeout_ms": 180000,
         "steps": [
             {"op": "wait", "service": "Running"},
             {"op": "wait_file", "path": str(signal)},
-            {"op": "wait", "elapsed_ms": 2500},
             {"op": "key_down", "key": "F6"},
             {"op": "key_up", "key": "F6"},
             {"op": "wait", "panel_open": True},
+            # The sim thread is parked in the lockstep wait, so these frames come from its UI pump.
+            {"op": "wait", "renders": 5},
+            {"op": "wait_file", "path": str(hold_signal)},
             {"op": "wait", "renders": 2},
-            {"op": "assert_control", "control": "NetworkSeatsTitle", "text_contains": "Match paused: waiting for"},
-            # The hold budget is 20s of pause; once it lapses the seat resolves and the
-            # title must fall back to the neutral line while the panel stays open.
-            {"op": "wait", "elapsed_ms": 30000},
-            {"op": "assert_control", "control": "NetworkSeatsTitle", "text_contains": "match continues"},
+            {"op": "assert_control", "control": "NetworkSeatsTitle", "equals": {"visible": True},
+             "text_contains": "Match paused: waiting for"},
+            # The hold budget is 1200 frames from the leave frame, so the lapse is counted in sim
+            # frames, not wall time; once it lapses the title falls back while the panel stays open.
+            {"op": "wait", "sim_at_least": 1550},
+            {"op": "assert_control", "control": "NetworkSeatsTitle", "equals": {"visible": True},
+             "text_contains": "match continues"},
             {"op": "finish"},
         ],
     }
@@ -58,7 +64,7 @@ def main():
                 "-out", out / "trace.json"]
         argv += ["-net-host", "-net-match-peers", players] if host else ["-net-join", "127.0.0.1"]
         env = {"CC_TEST_NET_UI_SCRIPT": str(probe_path)} if host else {}
-        runs[name] = make_run(options.repo, argv, out, 240, env=env).start()
+        runs[name] = make_run(options.repo, argv, out, 300, env=env).start()
 
     try:
         start("host", True)
@@ -77,6 +83,18 @@ def main():
         time.sleep(4)
         runs["departing"].terminate()
         signal.write_text("{}", encoding="utf-8")
+        # The hold only starts once the transport gives up on the killed peer, which the probe
+        # cannot see; tell it when the host reports the leave.
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if "left the match at frame" in host_log.read_text(errors="replace"):
+                break
+            if runs["host"].poll() is not None:
+                raise RuntimeError("host ended before it applied the leave")
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("host never applied the departing peer's leave")
+        hold_signal.write_text("{}", encoding="utf-8")
         for name in ("host", "stayer"):
             result["details"][name] = {"exit": runs[name].finish()["exit_code"]}
         probe_result = json.loads((root / "net-ui-result.json").read_text(errors="replace"))
