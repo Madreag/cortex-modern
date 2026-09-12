@@ -44,3 +44,7 @@ sources += files(
 'NetSessionSelfTest.cpp',
 'SimChecksum.cpp',
 )
+
+if host_machine.system() == 'darwin'
+  sources += files('NetHttpClientApple.mm')
+endif

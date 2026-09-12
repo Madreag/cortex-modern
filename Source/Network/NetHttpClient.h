@@ -60,6 +60,10 @@ namespace RTE {
 		std::mutex m_HandleMutex;   //!< Serializes the m_Async pointer between the worker and Cancel().
 		void* m_Async = nullptr;    //!< AsyncRequest, owned by the worker; defined in the .cpp.
 #endif
+#ifdef __APPLE__
+		static void AppleDone(void* context, long statusCode, const char* body, size_t bodySize, const char* error);
+		void* m_Apple = nullptr;    //!< The NSURLSession request from NetHttpClientApple.mm; released by Cancel().
+#endif
 	};
 
 } // namespace RTE
