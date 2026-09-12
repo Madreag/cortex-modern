@@ -4497,7 +4497,7 @@ int main(int argc, char** argv) {
 	}
 
 	// Pick up the thread-count override before any init runs. Net-session smoke uses
-	// a fixed default so identity does not depend on each platform's hardware threads.
+	// a fixed default so its traces compare across machines; the identity no longer hashes the count.
 	bool explicitLuaStateOverride = false;
 	bool netSessionRequested = false;
 	for (int i = 1; i < argc; ++i) {
@@ -4528,6 +4528,9 @@ int main(int argc, char** argv) {
 			}
 			const std::string arg = argv[i];
 			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e" || arg == "-net-directory-probe" || arg == "-net-directory-list" || arg == "-net-directory-selftest") {
+				headless = true;
+			} else if (arg.size() > 9 && arg.compare(arg.size() - 9, 9, "-selftest") == 0) {
+				// A selftest never needs a visible window; a bare launch from a worker shell must not raise one.
 				headless = true;
 			} else if (arg == "-headed") {
 				headless = false;
