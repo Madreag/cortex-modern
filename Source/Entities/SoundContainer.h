@@ -25,6 +25,11 @@ namespace RTE {
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("15 SoundContainer3 ") ? "SoundContainer3" : (text.starts_with("15 SoundContainer2 ") ? "SoundContainer2" : "SoundContainer1"); }
 		uint64_t GetCheckpointIdentity() const { return m_CheckpointIdentity; }
+		void SetPreviewOrigin(SoundContainer* origin) { m_PreviewOrigin = origin; }
+		SoundContainer* GetPreviewOrigin() const { return m_PreviewOrigin; }
+		SoundContainer* PreviewPlaybackOwner() { return m_PreviewOrigin ? m_PreviewOrigin->PreviewPlaybackOwner() : this; }
+		const SoundContainer* PreviewPlaybackOwner() const { return m_PreviewOrigin ? m_PreviewOrigin->PreviewPlaybackOwner() : this; }
+		uint64_t PlaybackCheckpointIdentity() const { return PreviewPlaybackOwner()->GetCheckpointIdentity(); }
 		const SoundExecutionKey& GetSharedPlaybackIdentity() const { return m_LogicalPlayback.identity.value; }
 		const LogicalSoundPlayback& GetSharedLogicalPlayback() const { return m_LogicalPlayback; }
 		const std::vector<LogicalSoundVoice>& GetSharedLogicalVoices() const { return m_LogicalPlayback.voices; }
@@ -577,6 +582,7 @@ namespace RTE {
 		void FoldLogicalVoices();
 
 		uint64_t m_CheckpointIdentity = 0;
+		SoundContainer* m_PreviewOrigin = nullptr;
 		bool m_CheckpointRegistered = false;
 		bool m_IsDestroying = false;
 		void ReidentifyCheckpoint(uint64_t identity);

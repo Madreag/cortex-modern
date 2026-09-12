@@ -621,16 +621,16 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 	size_t adoptedIndex = 0;
 	bool noteStart = false;
 	if (physical || predicting) {
-		eventKey = PreviewEventLedger::NextKey(PreviewEventLedger::Sound, emitterUID, PreviewEventLedger::StableAssetIdentity(soundContainer->GetCheckpointIdentity()), SoundPresetHash(soundContainer), static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+		eventKey = PreviewEventLedger::NextKey(PreviewEventLedger::Sound, emitterUID, PreviewEventLedger::StableAssetIdentity(soundContainer->PlaybackCheckpointIdentity()), SoundPresetHash(soundContainer), static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 		noteStart = PreviewEventLedger::IsPreviewedEmitter(emitterUID);
 		// Consecutive previews re-predict the same event; the first one owns it.
 		if (predicting) predicting = !PreviewEventLedger::AlreadyPlayed(eventKey);
 		else PreviewEventLedger::Consume(eventKey, adoptedVoices);
 	}
-	SoundContainer* voiceOwner = soundContainer;
+	SoundContainer* voiceOwner = soundContainer->PreviewPlaybackOwner();
 	if (predicting) {
-		SoundContainer* canonical = FindCheckpointSoundContainer(soundContainer->GetCheckpointIdentity());
-		voiceOwner = canonical ? canonical : soundContainer;
+		SoundContainer* canonical = FindCheckpointSoundContainer(soundContainer->PlaybackCheckpointIdentity());
+		voiceOwner = canonical ? canonical : soundContainer->PreviewPlaybackOwner();
 	}
 	size_t sampleIndex = 0;
 	for (const SoundData* soundData: selectedSoundData) {

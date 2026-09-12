@@ -2053,6 +2053,15 @@ static void CheckPreviewEventLedgerSelfTest() {
 		check("the_lua_fire_sound_starts_on_the_preview_tick", luaFire && luaFire->committedTick <= press + 1 && luaFire->predicted,
 		      luaFire ? "first Mech Ronin AK-47 voice at committed tick " + std::to_string(luaFire->committedTick) + " (event tick " + std::to_string(luaFire->eventTick) + ", seq " + std::to_string(luaFire->seq) + ", predicted=" + std::to_string(luaFire->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1)
 		              : "no physical voice from equipped AK-47 uid=" + std::to_string(s_eventLedgerLuaEmitterUID) + " at or after tick " + std::to_string(press));
+		if (luaFire) {
+			size_t luaSameKey = 0;
+			for (const PreviewEventLedger::EventStart& start: starts) {
+				if (start.kind == luaFire->kind && start.emitterUID == luaFire->emitterUID && start.eventTick == luaFire->eventTick && start.seq == luaFire->seq) {
+					++luaSameKey;
+				}
+			}
+			check("the_event_reaches_the_output_once", luaSameKey == 1, std::to_string(luaSameKey) + " physical starts for that event");
+		}
 	}
 	// A guard, not a detector: the muzzle flash sprite is already drawn on the preview that fires.
 	check("the_flash_sprite_stays_on_the_preview_tick", s_eventLedgerFlashTick > 0 && static_cast<uint64_t>(s_eventLedgerFlashTick) <= press + 1,
