@@ -99,6 +99,11 @@ namespace RTE {
 		while (!m_BaseUrl.empty() && m_BaseUrl.back() == '/') {
 			m_BaseUrl.pop_back();
 		}
+		// The ini reader cuts string values at "//" (a comment), so Settings.ini carries a
+		// scheme-less host[:port]; the directory is TLS-only, so the scheme is fixed here.
+		if (!m_BaseUrl.empty() && m_BaseUrl.rfind("https://", 0) != 0) {
+			m_BaseUrl = "https://" + m_BaseUrl;
+		}
 		if (m_BaseUrl.empty()) {
 			m_Listed = false;
 			m_BrowseWanted = false;
@@ -230,7 +235,10 @@ namespace RTE {
 		if (m_State == state) {
 			return;
 		}
-		std::cout << "[net-directory] state: " << StateName(m_State) << " -> " << StateName(state) << std::endl;
+		// Disabled means no URL was ever configured; the directory must be silent there.
+		if (state != State::Disabled) {
+			std::cout << "[net-directory] state: " << StateName(m_State) << " -> " << StateName(state) << std::endl;
+		}
 		m_State = state;
 	}
 
@@ -277,7 +285,7 @@ namespace RTE {
 		if (reply.statusCode == 200) {
 			NetDirectoryRegisterResponse response;
 			std::string error;
-			if (!NetDirectoryCodec::DecodeRegisterResponse(reply.body, &response, &error)) {
+			if (!NetDirectoryCodec::DecodeRegisterResponse(reply.body, response, error)) {
 				NoteError("register: " + error);
 				ScheduleRetry(nowMs);
 				return;
@@ -320,7 +328,7 @@ namespace RTE {
 		if (reply.statusCode == 200) {
 			NetDirectoryHeartbeatResponse response;
 			std::string error;
-			if (!NetDirectoryCodec::DecodeHeartbeatResponse(reply.body, &response, &error)) {
+			if (!NetDirectoryCodec::DecodeHeartbeatResponse(reply.body, response, error)) {
 				NoteError("heartbeat: " + error);
 				ScheduleRetry(nowMs);
 				return;
@@ -383,9 +391,9 @@ namespace RTE {
 			m_ListError = "HTTP " + std::to_string(reply.statusCode);
 			return;
 		}
-		NetDirectorySessionList list;
+		NetDirectoryListResponse list;
 		std::string error;
-		if (!NetDirectoryCodec::DecodeListResponse(reply.body, &list, &error)) {
+		if (!NetDirectoryCodec::DecodeListResponse(reply.body, list, error)) {
 			m_ListError = error;
 			return;
 		}
