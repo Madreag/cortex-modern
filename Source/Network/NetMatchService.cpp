@@ -731,6 +731,7 @@ static std::string ResyncSaveName() {
 			if (error) *error = "resync snapshot load failed: " + pendingLoad;
 			return false;
 		}
+		g_ActivityMan.NoteLockstepRelaunch();
 		const char* keepResyncSaves = std::getenv("CC_KEEP_RESYNC_SAVES");
 		if (keepResyncSaves && keepResyncSaves[0] && keepResyncSaves[0] != '0') {
 			std::cout << "[net-match] keeping resync save: " << pendingLoad << std::endl;

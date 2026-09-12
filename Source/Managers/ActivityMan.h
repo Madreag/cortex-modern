@@ -238,6 +238,12 @@ namespace RTE {
 		/// Completely restarts whatever Activity was last started.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		bool RestartActivity();
+		void NoteLockstepRelaunch();
+		bool LockstepRelaunchInProgress() const { return m_LockstepRelaunchInProgress; }
+		void ArmLockstepRelaunchChecks();
+		void ConsumeLockstepRelaunchCheck();
+		void NoteStaleActivitySlots(int count) { m_StaleActivitySlots += count; }
+		int StaleActivitySlotCount() const { return m_StaleActivitySlots; }
 		/// Transfers the active native owner during a checkpoint transaction; no lifecycle callbacks run.
 		void SwapCheckpointActivity(std::unique_ptr<Activity>& activity) { m_Activity.swap(activity); }
 		void SwapCheckpointStartActivity(std::unique_ptr<Activity>& activity) { m_StartActivity.swap(activity); }
@@ -308,6 +314,9 @@ namespace RTE {
 		};
 		PendingCheckpoint m_PendingCheckpoint;
 		bool m_RestartRestoresSnapshot = false;
+		bool m_LockstepRelaunchInProgress = false;
+		int m_LockstepRelaunchChecksLeft = 0;
+		int m_StaleActivitySlots = 0;
 
 		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.
 		long long m_LastSaveMainMs = 0;

@@ -27,6 +27,7 @@ namespace RTE {
 		virtual bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		bool ApplyPendingCheckpoint();
 		virtual bool ResolveCheckpointReferences();
+		int CountStaleRelaunchSlots(int tick) const;
 		/// Initializes a cloned checkpoint's presentation without starting the activity or its scripts.
 		virtual bool PrepareCheckpointUI() { return true; }
 

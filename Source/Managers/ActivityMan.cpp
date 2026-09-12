@@ -38,6 +38,8 @@
 #include "AssemblyEditor.h"
 
 #include "MusicMan.h"
+#include "TimerMan.h"
+#include "MovableMan.h"
 
 #ifdef SYSTEM_MINIZIP
 #include <minizip/zip.h>
@@ -85,6 +87,9 @@ void ActivityMan::Clear() {
 	PendingCheckpoint discarded = std::move(m_PendingCheckpoint);
 	m_PendingCheckpoint = PendingCheckpoint{};
 	m_RestartRestoresSnapshot = false;
+	m_LockstepRelaunchInProgress = false;
+	m_LockstepRelaunchChecksLeft = 0;
+	m_StaleActivitySlots = 0;
 	m_StartActivityResumed = false;
 	m_SaveGameTask = std::shared_future<bool>();
 	m_InActivity = false;
@@ -1083,6 +1088,17 @@ void ActivityMan::LateUpdateGlobalScripts() const {
 	}
 }
 
+void ActivityMan::NoteLockstepRelaunch() {
+	m_LockstepRelaunchInProgress = true;
+}
+
+void ActivityMan::ArmLockstepRelaunchChecks() {
+	if (m_LockstepRelaunchInProgress) m_LockstepRelaunchChecksLeft = 1;
+}
+
+void ActivityMan::ConsumeLockstepRelaunchCheck() {
+}
+
 void ActivityMan::Update() {
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActivityUpdate);
 	if (m_Activity) {
@@ -1296,6 +1312,7 @@ bool ActivityMan::RestartActivity() {
 			g_MusicMan.ResetMusicState();
 			g_AudioMan.PauseIngameSounds(m_Activity && m_Activity->IsPaused());
 		}
+		ArmLockstepRelaunchChecks();
 		return true;
 	}
 	auto rejectedActivity = std::move(m_Activity);

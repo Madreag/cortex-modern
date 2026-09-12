@@ -4195,6 +4195,7 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"entered_editor\":" << (s_netMatchServiceE2EEnteredEditor ? "true" : "false") << ",";
 	out << "\"rematches\":" << s_netMatchServiceE2ERematches << ",";
 	out << "\"resyncs\":" << s_netMatchResyncs << ",";
+	out << "\"stale_activity_slots\":" << g_ActivityMan.StaleActivitySlotCount() << ",";
 	// The actor census guards against sim-CONSISTENT duplication (both peers doubling identically
 	// slips every divergence gate); the peak catches a double-spawn that later sheds back to normal.
 	out << "\"actors\":" << s_netMatchE2EActorCensus << ",";
