@@ -1553,7 +1553,14 @@ namespace RTE {
 			*error = "the present snapshot was not applied";
 			return false;
 		}
+		const size_t toastsBefore = ScenarioRunner::GetNetUiToastLog().size();
 		service.RecordRosterTransitions(snapshot.observedAtMs);
+		// The banner is pushed from here with no managers built, so it has no sim clock to read.
+		const std::vector<ScenarioRunner::NetUiToastRecord>& toasts = ScenarioRunner::GetNetUiToastLog();
+		if (toasts.size() != toastsBefore + 1 || toasts.back().kind != "player_rejoined" || toasts.back().tick != 0) {
+			*error = "the rejoin banner was not recorded for the returning seat";
+			return false;
+		}
 		nlohmann::json report;
 		try {
 			report = nlohmann::json::parse(service.BuildReportJson());
