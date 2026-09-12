@@ -6,6 +6,7 @@
 #include "NetTransport.h"
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -31,6 +32,16 @@ namespace RTE {
 		Failed = 9,
 	};
 
+	/// A session-id (ICE) join. The runner's SessionFull retry calls StartClient again with the
+	/// config it kept, so the spec rides the config rather than the call.
+	struct NetSessionP2PJoin {
+		std::string identity;          //!< The host's GNS identity, from its directory session id.
+		int remoteVirtualPort = 0;
+		std::string sessionId;
+		/// Opens the ICE connection. Set: StartClient dials this instead of an address.
+		std::function<bool(INetTransport&, std::string*)> connect;
+	};
+
 	struct NetSessionConfig {
 		NetIdentityManifest localIdentity;
 		std::string displayName = "Player";
@@ -43,6 +54,7 @@ namespace RTE {
 		uint16_t minProtocolVersion = NetProtocol::c_Version;
 		uint16_t maxProtocolVersion = NetProtocol::c_Version;
 		bool rejectUserdataModules = true;
+		NetSessionP2PJoin p2pJoin;
 	};
 
 	struct NetSessionStats {
@@ -81,6 +93,8 @@ namespace RTE {
 
 		bool StartHost(INetTransport& transport, NetSessionConfig config, std::string* error = nullptr);
 		bool StartClient(INetTransport& transport, const std::string& address, NetSessionConfig config, std::string* error = nullptr);
+		/// Joins by session id: the config's p2pJoin spec opens the connection instead of an address.
+		bool StartClientP2P(INetTransport& transport, NetSessionConfig config, std::string* error = nullptr);
 		void Tick(uint64_t nowMs, bool pollTransport = true);
 		uint64_t GetClockMs() const { return m_NowMs; }
 		/// Sends session heartbeats without polling the transport or checking timeouts, so another
