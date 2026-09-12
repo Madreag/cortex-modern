@@ -1724,19 +1724,6 @@ void Actor::UpdateMovePath() {
 	}
 
 	if (g_SceneMan.GetScene() == nullptr) {
-		if (lockstep && m_MovePath.empty() && !g_MovableMan.ValidMO(m_pMOMoveTarget) && m_Waypoints.size() > loaded) {
-			const auto& waypoint = *std::next(m_Waypoints.begin(), static_cast<long>(loaded));
-			if (g_MovableMan.ValidMO(waypoint.second)) {
-				m_pMOMoveTarget = waypoint.second;
-			} else {
-				m_pMOMoveTarget = 0;
-			}
-			if (ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled())) {
-				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(GetUniqueID()), m_Team, NetGameAIOrder::PopWaypoint, waypoint.first.m_X, waypoint.first.m_Y, 0}});
-			}
-			++m_WaypointCursor;
-			m_UpdateMovePath = false;
-		}
 		return;
 	}
 

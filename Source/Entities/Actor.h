@@ -518,9 +518,6 @@ namespace RTE {
 		/// @return How many waypoints.
 		int GetWaypointsSize();
 
-		/// Gets how many front waypoints this actor has already loaded under lockstep.
-		int GetWaypointCursor() const { return m_WaypointCursor; }
-
 		/// Clears the list of coordinates in this' current MovePath, ie the path
 		/// to the next Waypoint.
 		void ClearMovePath() {

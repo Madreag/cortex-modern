@@ -1797,10 +1797,6 @@ namespace RTE {
 			}
 			ownerView->SetTeam(0);
 			ownerView->SetControllerMode(Controller::CIM_AI);
-			if (!SceneMan::IsConstructed()) {
-				install_allegro(SYSTEM_NONE, &errno, std::atexit);
-				SceneMan::Construct();
-			}
 			ScenarioRunner::SetLockstepCoordinator(&host);
 			ScenarioRunner::DrainLocalGameCommands();
 			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
@@ -1816,7 +1812,7 @@ namespace RTE {
 			g_CurrentAIActor = nullptr;
 			ownerView->SendDeferredWaypoints();
 			if (!ownerView->IsMovePathUpdatePending()) {
-				return finish("the path update stayed armed while the waypoint add was in flight");
+				return finish("the path update disarmed while the waypoint add was in flight");
 			}
 			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
 			if (sent.size() != 1) {
@@ -1830,26 +1826,10 @@ namespace RTE {
 
 			ownerView->AddAISceneWaypoint(Vector(order->x, order->y));
 			if (!ownerView->IsMovePathUpdatePending()) {
-				return finish("the path update stayed armed after the in-flight add applied");
+				return finish("the path update disarmed when the in-flight add applied");
 			}
 			if (ownerView->GetWaypointsSize() != 1) {
 				return finish("the applied queue is not the one waypoint the AI asked for");
-			}
-
-			ownerView->UpdateMovePath();
-			if (ownerView->GetWaypointCursor() < 1 && ownerView->GetWaypointsSize() != 0) {
-				return finish("the later path update loaded the applied waypoint");
-			}
-			const std::vector<NetGameCommand> pops = ScenarioRunner::DrainLocalGameCommands();
-			int popCount = 0;
-			for (const NetGameCommand& command: pops) {
-				const NetGameAIOrder* pop = std::get_if<NetGameAIOrder>(&command.payload);
-				if (pop && pop->op == NetGameAIOrder::PopWaypoint && pop->actorUID == ownerUID) {
-					++popCount;
-				}
-			}
-			if (popCount != 1) {
-				return finish("the later path update enqueued exactly one PopWaypoint");
 			}
 			std::cout << "[net-lockstep-selftest] PASS a_path_update_stays_armed_while_the_waypoint_add_is_in_flight uid=" << ownerUID << std::endl;
 			return finish(nullptr);
@@ -10697,6 +10677,8 @@ namespace RTE {
 		if (!ActivityMan::IsConstructed()) ActivityMan::Construct();
 		if (!AudioMan::IsConstructed()) AudioMan::Construct();
 		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
+		install_allegro(SYSTEM_NONE, &errno, std::atexit); // SceneMan::Clear creates a bitmap.
+		if (!SceneMan::IsConstructed()) SceneMan::Construct();
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-lockstep-selftest] FAIL: " << message << std::endl;
 			return 1;
