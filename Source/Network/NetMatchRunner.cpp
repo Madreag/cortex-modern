@@ -124,6 +124,8 @@ namespace RTE {
 		};
 		std::vector<uint8_t> survivors;
 		if (m_Config.host) {
+			// Nothing has polled the transport since the round stopped, and it may know of a drop.
+			session.Tick(m_Config.nowMs ? m_Config.nowMs() : session.GetClockMs());
 			// The host's roster is the peers it can still run a lobby with; a joiner on a provisional id
 			// past the roster is not one of them.
 			survivors.push_back(m_MatchConfig.hostPeerId);
@@ -203,29 +205,95 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetMatchRunner::RematchRostersAgree(const NetMatchConfig& proposed, const NetMatchConfig& derived) {
-		auto seatsOf = [](const NetMatchConfig& config) {
-			std::vector<std::array<uint8_t, 3>> seats;
-			for (const NetMatchPlayerSlot& slot : config.players) {
-				seats.push_back({slot.peerId, slot.team, static_cast<uint8_t>(slot.cpu ? 1 : 0)});
+	std::vector<uint8_t> NetMatchRunner::DeriveRematchSurvivors(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaveFrames, const std::set<uint8_t>& refilledPeerIds, const NetLockstepSeatSnapshot* seats) {
+		std::vector<uint8_t> survivors{played.hostPeerId}; // the star's hub cannot have left
+		for (const NetMatchPlayerSlot& slot : played.players) {
+			if (slot.cpu || slot.peerId == 0 || slot.peerId == played.hostPeerId) {
+				continue;
 			}
-			std::sort(seats.begin(), seats.end());
-			return seats;
-		};
-		return proposed.peerCount == derived.peerCount && proposed.hostPeerId == derived.hostPeerId &&
-		       proposed.dedicated == derived.dedicated && seatsOf(proposed) == seatsOf(derived);
+			// A reclaimed seat is back; one the host last showed closed or dropped is gone.
+			bool gone = leaveFrames.contains(slot.peerId) && !refilledPeerIds.contains(slot.peerId);
+			if (seats) {
+				gone = gone || std::any_of(seats->seats.begin(), seats->seats.end(), [&slot](const NetSeatPresenceEntry& seat) {
+					return seat.peerId == slot.peerId && seat.state != NetSeatPresenceState::Present && seat.state != NetSeatPresenceState::Substituted;
+				});
+			}
+			if (!gone) {
+				survivors.push_back(slot.peerId);
+			}
+		}
+		return survivors;
 	}
 
-	bool NetMatchRunner::VerifyRematchProposal(std::string* error) {
+	bool NetMatchRunner::RematchRostersAgree(const NetMatchConfig& proposed, const NetMatchConfig& derived, uint8_t localPeerId, std::string* reason) {
+		auto refuse = [reason](const char* why) {
+			if (reason) *reason = why;
+			return false;
+		};
+		if (proposed.dedicated != derived.dedicated) {
+			return refuse("the host proposed a dedicated flag this peer did not derive");
+		}
+		const auto seatOf = [localPeerId](const NetMatchConfig& config) {
+			return std::find_if(config.players.begin(), config.players.end(), [localPeerId](const NetMatchPlayerSlot& slot) { return !slot.cpu && slot.peerId == localPeerId; });
+		};
+		const auto mine = seatOf(proposed);
+		const auto derivedMine = seatOf(derived);
+		if (mine == proposed.players.end() || derivedMine == derived.players.end()) {
+			return refuse("the host proposed a roster without this peer");
+		}
+		if (mine->team != derivedMine->team) {
+			return refuse("the host proposed this peer on another team");
+		}
+		using Seat = std::pair<bool, uint8_t>;
+		const auto seatsOf = [](auto begin, auto end) {
+			std::vector<Seat> seats;
+			for (auto slot = begin; slot != end; ++slot) {
+				seats.emplace_back(slot->cpu, slot->team);
+			}
+			return seats;
+		};
+		// The host may know of seats gone on either side of this one; it may not add or reorder any.
+		const std::array<std::pair<std::vector<Seat>, std::vector<Seat>>, 2> sides{{
+		    {seatsOf(proposed.players.begin(), mine), seatsOf(derived.players.begin(), derivedMine)},
+		    {seatsOf(mine + 1, proposed.players.end()), seatsOf(derivedMine + 1, derived.players.end())},
+		}};
+		for (const auto& [offered, known] : sides) {
+			if (offered.size() > known.size()) {
+				return refuse("the host proposed a seat this peer did not derive");
+			}
+			size_t matched = 0;
+			for (auto next = known.begin(); matched < offered.size() && next != known.end(); ++next) {
+				if (*next == offered[matched]) {
+					++matched;
+				}
+			}
+			if (matched == offered.size()) {
+				continue;
+			}
+			std::multiset<Seat> unmatched(known.begin(), known.end());
+			for (const Seat& seat : offered) {
+				const auto found = unmatched.find(seat);
+				if (found == unmatched.end()) {
+					return refuse("the host proposed a seat on another team");
+				}
+				unmatched.erase(found);
+			}
+			return refuse("the host proposed the seats in another order");
+		}
+		return true;
+	}
+
+	bool NetMatchRunner::VerifyRematchProposal(uint8_t localPeerId, std::string* error) {
 		if (m_Config.host || !m_RematchRound) {
 			return true;
 		}
-		if (RematchRostersAgree(m_MatchConfig, m_RematchConfig)) {
+		std::string reason;
+		if (RematchRostersAgree(m_MatchConfig, m_RematchConfig, localPeerId, &reason)) {
 			return true;
 		}
-		SetFailed("rematch roster refused: the host proposed peer_count " + std::to_string(m_MatchConfig.peerCount) + " (" +
-		          HashText(NetMatchConfigUtil::HashConfig(m_MatchConfig)) + "), this peer derived peer_count " +
-		          std::to_string(m_RematchConfig.peerCount) + " (" + HashText(NetMatchConfigUtil::HashConfig(m_RematchConfig)) + ")");
+		SetFailed("rematch roster refused: " + reason + " (the host proposed peer_count " + std::to_string(m_MatchConfig.peerCount) + " " +
+		          HashText(NetMatchConfigUtil::HashConfig(m_MatchConfig)) + ", this peer derived peer_count " +
+		          std::to_string(m_RematchConfig.peerCount) + " " + HashText(NetMatchConfigUtil::HashConfig(m_RematchConfig)) + ")");
 		if (error) *error = m_SetupError;
 		return false;
 	}
@@ -260,7 +328,7 @@ namespace RTE {
 				std::this_thread::sleep_for(std::chrono::milliseconds(m_Config.postLobbySettleMs));
 			}
 		}
-		if (!VerifyRematchProposal(error)) {
+		if (!VerifyRematchProposal(LocalLockstepPeerId(session), error)) {
 			return false;
 		}
 
