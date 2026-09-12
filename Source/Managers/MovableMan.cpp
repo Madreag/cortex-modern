@@ -1926,6 +1926,7 @@ void MovableMan::DiscardAddedSince(const AddQueueMark& mark) {
 			RemoveActorFromTeamRoster(actor);
 		}
 		m_ValidActors.erase(actor);
+		m_ContiguousActorIDs.erase(actor);
 		actor->DestroyScriptState();
 		delete actor;
 	}
@@ -2873,6 +2874,7 @@ Actor* MovableMan::RemoveActor(MovableObject* pActorToRem) {
 					std::lock_guard<std::mutex> lock(m_AddedActorsMutex);
 					removed = *itr;
 					m_ValidActors.erase(*itr);
+					m_ContiguousActorIDs.erase(*itr);
 					m_AddedActors.erase(itr);
 					break;
 				}
@@ -3497,6 +3499,7 @@ void MovableMan::AbsorbAddedMOs() {
 				RemoveActorFromTeamRoster(addedActor);
 			}
 			addedActor->DestroyScriptState();
+			m_ContiguousActorIDs.erase(addedActor);
 			delete addedActor;
 			m_ValidActors.erase(addedActor);
 		}
@@ -4848,10 +4851,60 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	const bool accepted = LoadWorldStructure(text, true) && LoadWorldStructure(cleanWriter.Text(), true);
 	const bool refused = !LoadWorldStructure(orphanedWriter.Text(), true);
 
+	auto plantAdded = [this](Actor* actor, int id) {
+		if (!actor) {
+			return false;
+		}
+		AddActor(actor);
+		m_ContiguousActorIDs[actor] = id;
+		return true;
+	};
+
+	Actor* addedRemove = craft ? dynamic_cast<Actor*>(craft->Clone()) : nullptr;
+	const bool plantedRemove = plantAdded(addedRemove, 9001);
+	const bool removedAdded = plantedRemove && RemoveActor(addedRemove) == addedRemove;
+	const bool addedRemoveCleared = removedAdded && GetContiguousActorID(addedRemove) < 0;
+	if (addedRemove && (removedAdded || !plantedRemove)) {
+		delete addedRemove;
+		addedRemove = nullptr;
+	}
+
+	Actor* absorbDelete = craft ? dynamic_cast<Actor*>(craft->Clone()) : nullptr;
+	const Actor* absorbKey = absorbDelete;
+	const bool plantedAbsorb = plantAdded(absorbDelete, 9002);
+	if (plantedAbsorb) {
+		absorbDelete->SetToDelete(true);
+		AbsorbAddedMOs();
+		absorbDelete = nullptr;
+	}
+	Actor* absorbRecycled = craft ? dynamic_cast<Actor*>(craft->Clone()) : nullptr;
+	const bool absorbDeleteCleared = plantedAbsorb && m_ContiguousActorIDs.find(absorbKey) == m_ContiguousActorIDs.end() &&
+	                                 absorbRecycled && (absorbRecycled != absorbKey || GetContiguousActorID(absorbRecycled) < 0);
+	if (absorbRecycled) {
+		delete absorbRecycled;
+	}
+
+	Actor* discardAdded = craft ? dynamic_cast<Actor*>(craft->Clone()) : nullptr;
+	const Actor* discardKey = discardAdded;
+	const AddQueueMark discardMark = MarkAddQueues();
+	const bool plantedDiscard = plantAdded(discardAdded, 9003);
+	if (plantedDiscard) {
+		DiscardAddedSince(discardMark);
+		discardAdded = nullptr;
+	}
+	Actor* discardRecycled = craft ? dynamic_cast<Actor*>(craft->Clone()) : nullptr;
+	const bool discardAddedCleared = plantedDiscard && m_ContiguousActorIDs.find(discardKey) == m_ContiguousActorIDs.end() &&
+	                                 discardRecycled && (discardRecycled != discardKey || GetContiguousActorID(discardRecycled) < 0);
+	if (discardRecycled) {
+		delete discardRecycled;
+	}
+
 	AddActor(craft);
-	const bool passed = indexed && cleared && archived && accepted && refused;
+	const bool passed = indexed && cleared && archived && accepted && refused && addedRemoveCleared && absorbDeleteCleared && discardAddedCleared;
 	std::cout << "[contiguous-index-selftest] " << (passed ? "PASS" : "FAIL") << " indexed=" << indexed << " cleared=" << cleared
-	          << " archived=" << archived << " accepted=" << accepted << " refused=" << refused << std::endl;
+	          << " archived=" << archived << " accepted=" << accepted << " refused=" << refused
+	          << " added_remove=" << addedRemoveCleared << " absorb_delete=" << absorbDeleteCleared
+	          << " discard_added=" << discardAddedCleared << std::endl;
 	return passed;
 }
 
