@@ -146,7 +146,7 @@ namespace RTE {
 			return hasher.Finalize();
 		}
 
-		NetHash32 HashModuleManifest(const std::vector<NetIdentityModuleEntry>& modules) {
+		NetHash32 ComputeModuleManifestHash(const std::vector<NetIdentityModuleEntry>& modules) {
 			CanonicalHasher hasher;
 			hasher.UpdateLine("NetIdentityModuleManifest/v1");
 			AppendInt(hasher, "module_count", static_cast<uint64_t>(modules.size()));
@@ -158,7 +158,6 @@ namespace RTE {
 				AppendInt(hasher, "module.version", static_cast<uint64_t>(module.version));
 				AppendBool(hasher, "module.official", module.official);
 				AppendBool(hasher, "module.userdata", module.userdata);
-				AppendField(hasher, "module.root", module.root);
 				AppendInt(hasher, "module.file_count", module.fileCount);
 				AppendInt(hasher, "module.total_bytes", module.totalBytes);
 				AppendHash(hasher, "module.content_hash", module.contentHash);
@@ -384,6 +383,10 @@ namespace RTE {
 
 	NetHash32 NetIdentity::HashDeterministicConfig(const NetIdentityDeterministicConfig& config) {
 		return HashConfig(config);
+	}
+
+	NetHash32 NetIdentity::HashModuleManifest(const std::vector<NetIdentityModuleEntry>& modules) {
+		return ComputeModuleManifestHash(modules);
 	}
 
 	NetHash32 NetIdentity::HashSessionIdentity(const NetIdentityManifest& manifest) {

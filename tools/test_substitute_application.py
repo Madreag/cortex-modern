@@ -24,7 +24,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--port", type=int, default=44294)
+    parser.add_argument("--port", type=int, default=47617)
     options = parser.parse_args()
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)

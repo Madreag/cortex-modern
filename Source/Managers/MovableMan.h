@@ -132,7 +132,8 @@ namespace RTE {
 		bool RunPurgeSelfTest();
 
 		/// Checks that the contiguous actor index never outlives its actors: takes the passed-in craft
-		/// through a tick's add, index and removal, then the archive round trip. Takes ownership of the craft.
+		/// through a tick's add, index and removal, the three added-actor delete paths, then the archive
+		/// round trip. Takes ownership of the craft.
 		bool RunContiguousActorIndexSelfTest(Actor* craft);
 
 		class ConstructionRegistryScope {
