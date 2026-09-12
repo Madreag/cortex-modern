@@ -1048,6 +1048,8 @@ void ProcessMenuScript() {
 	static bool loaded = false;
 	static std::string waitCond;
 	static int waitCondTimeout = 0;
+	static uint64_t waitCondDeadlineMs = 0;
+	static uint64_t waitUntilMs = 0;
 
 	if (!loaded) {
 		std::ifstream in(s_menuScriptPath);
@@ -1066,17 +1068,21 @@ void ProcessMenuScript() {
 			return MenuScriptFail("menu-script has no steps: " + s_menuScriptPath);
 		}
 	}
-	static bool introSkipped = false;
 	if (!g_MenuMan.IsMainMenuInteractive()) {
-		if (!introSkipped) {
-			g_MenuMan.SkipTitleIntroForAutomation();
-		}
+		// Also after a match: the script follows the game back to the main menu instead of stalling
+		// on the scenario or pause screen the end of an activity would otherwise leave up.
+		g_MenuMan.SkipTitleIntroForAutomation();
 		return;
 	}
-	introSkipped = true;
 	if (waitFrames > 0) {
 		--waitFrames;
 		return;
+	}
+	if (waitUntilMs > 0) {
+		if (static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) < waitUntilMs) {
+			return;
+		}
+		waitUntilMs = 0;
 	}
 	// Condition wait: block until the service reaches a member count / state, robust to variable FPS across
 	// two contending instances (frame-count waits can't synchronize two real-time peers reliably).
@@ -1095,11 +1101,19 @@ void ProcessMenuScript() {
 			met = snapshot.remoteReady;
 		} else if (waitCond.starts_with("error:")) {
 			met = snapshot.errorText.find(waitCond.substr(6)) != std::string::npos;
+		} else if (waitCond.rfind("attempts:", 0) == 0) {
+			met = g_NetMatchService.GetReconnectUx().GetAttempts() >= static_cast<uint32_t>(std::atoi(waitCond.c_str() + 9));
 		}
-		if (met || --waitCondTimeout <= 0) {
+		// The retry schedule is real time, so its wait is bounded in real time; every other condition
+		// keeps the frame budget it has always had.
+		const bool expired = waitCondDeadlineMs != 0
+		                         ? static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) >= waitCondDeadlineMs
+		                         : --waitCondTimeout <= 0;
+		if (met || expired) {
 			std::cout << "[menu-script] " << waitCond << " -> " << (met ? "OK" : "TIMEOUT") << " (members=" << snapshot.members.size() << " state=" << snapshot.serviceState << ")" << std::endl;
 			if (!met) { return MenuScriptFail("condition wait timed out: " + waitCond); }
 			waitCond.clear();
+			waitCondDeadlineMs = 0;
 		}
 		return;
 	}
@@ -1114,6 +1128,10 @@ void ProcessMenuScript() {
 	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
 	if (cmd == "wait") {
 		iss >> waitFrames;
+	} else if (cmd == "wait_ms") {
+		int milliseconds = 0;
+		iss >> milliseconds;
+		waitUntilMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) + static_cast<uint64_t>(std::max(0, milliseconds));
 	} else if (cmd == "wait_members") {
 		int n = 0;
 		iss >> n;
@@ -1141,6 +1159,13 @@ void ProcessMenuScript() {
 	} else if (cmd == "wait_all_ready") {
 		waitCond = "allready";
 		waitCondTimeout = 4000;
+	} else if (cmd == "wait_attempts") {
+		int attempts = 0;
+		int seconds = 0;
+		iss >> attempts;
+		if (!(iss >> seconds) || seconds <= 0) { seconds = 60; }
+		waitCond = "attempts:" + std::to_string(attempts);
+		waitCondDeadlineMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) + static_cast<uint64_t>(seconds) * 1000ULL;
 	} else if (cmd == "screenshot") {
 		std::string name;
 		iss >> name;
@@ -1209,6 +1234,29 @@ void ProcessMenuScript() {
 					  << (member.isLocal ? ",local" : ",remote") << ",ping" << member.pingMs << ")";
 		}
 		std::cout << std::endl;
+	} else if (cmd == "goto_main") {
+		menu->AutomationGoToMainScreen();
+		std::cout << "[menu-script] goto_main screen=" << menu->AutomationActiveScreenName() << std::endl;
+	} else if (cmd == "dump_reconnect") {
+		const NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
+		std::cout << "[menu-script] dump_reconnect screen=" << menu->AutomationActiveScreenName()
+				  << " state=" << NetReconnectUx::StateName(reconnect.GetState())
+				  << " attempts=" << reconnect.GetAttempts()
+				  << " service=" << g_NetMatchService.GetLobbySnapshot().serviceState
+				  << " status=\"" << reconnect.GetStatusText() << "\""
+				  << " offer=\"" << reconnect.GetOfferText() << "\"" << std::endl;
+	} else if (cmd == "assert_console") {
+		int expected = 0;
+		iss >> expected;
+		const int actual = g_ConsoleMan.IsEnabled() ? 1 : 0;
+		const bool pass = actual == expected;
+		std::cout << "[menu-script] assert_console expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		if (!pass) { return MenuScriptFail("assert_console expected " + std::to_string(expected)); }
+	} else if (cmd == "assert_landing_empty") {
+		const std::string status = menu->AutomationMultiplayerError();
+		const bool pass = status.empty();
+		std::cout << "[menu-script] assert_landing_empty status=\"" << status << "\" " << (pass ? "PASS" : "FAIL") << std::endl;
+		if (!pass) { return MenuScriptFail("assert_landing_empty found: " + status); }
 	} else if (cmd == "assert_enabled") {
 		std::string control;
 		int expected = 0;
