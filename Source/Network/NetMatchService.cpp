@@ -994,12 +994,18 @@ static std::string ResyncSaveName() {
 				}
 			}
 			std::string ignored;
+			NetLanCompatIdentity beaconCompat;
+			beaconCompat.networkProtocolVersion = m_DirectoryRow.networkProtocolVersion;
+			beaconCompat.lockstepCodecVersion = m_DirectoryRow.lockstepCodecVersion;
+			beaconCompat.controllerFrameVersion = m_DirectoryRow.controllerFrameVersion;
+			beaconCompat.sessionIdentityHash = m_DirectoryRow.sessionIdentityHash;
+			beaconCompat.moduleManifestHash = m_DirectoryRow.moduleManifestHash;
 			(void)m_LanDiscovery.StartBeacon(m_BeaconGamePort,
 			                                 m_LocalName.empty() ? "Host" : m_LocalName,
 			                                 snapshot.activityPreset.empty() ? m_ActivityPreset : snapshot.activityPreset,
 			                                 snapshot.modeName,
 			                                 static_cast<uint8_t>(std::max<size_t>(snapshot.members.size(), 1)),
-			                                 m_BeaconMaxPlayers, &ignored);
+			                                 m_BeaconMaxPlayers, &beaconCompat, &ignored);
 			m_LanDiscovery.Tick(nowMs);
 		} else {
 			m_HostLobbyBeaconed = false;
