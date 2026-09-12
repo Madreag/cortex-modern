@@ -908,6 +908,27 @@ namespace RTE {
 		return NetActorOwnership::IsTeamCommandAuthority(s_LockstepCoordinator->GetConfig().matchConfig, static_cast<uint8_t>(team), senderPeerId);
 	}
 
+	bool ScenarioRunner::IsLockstepAIOrderAuthorized(uint8_t senderPeerId, const NetGameAIOrder& order) {
+		if (IsLockstepTeamCommandSender(order.team, senderPeerId)) {
+			return true;
+		}
+		auto cpuControlledOf = [](int64_t uid) {
+			const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(uid)));
+			return !actor || !actor->IsPlayerControlled();
+		};
+		if (GetLockstepActorOwner(order.actorUID, order.team, cpuControlledOf(order.actorUID)) == senderPeerId) {
+			return true;
+		}
+		if (order.writerUID != 0) {
+			const Actor* writer = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order.writerUID)));
+			const int writerTeam = writer ? writer->GetTeam() : order.team;
+			if (writerTeam == order.team && GetLockstepActorOwner(order.writerUID, writerTeam, cpuControlledOf(order.writerUID)) == senderPeerId) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	int ScenarioRunner::GetLockstepHumanSlotIndex(int team) {
 		if (!s_LockstepCoordinator || team < 0) {
 			return -1;
@@ -1239,7 +1260,11 @@ namespace RTE {
 		}
 		if (NetGameCommandTypeOf(command.payload) != NetGameCommandType::Reseat) {
 			const uint8_t sender = command.senderPeerId != 0 ? command.senderPeerId : GetLockstepLocalPeerId();
-			if (!IsLockstepTeamCommandSender(NetGameCommandTeam(command.payload), sender)) {
+			if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
+				if (!IsLockstepAIOrderAuthorized(sender, *order)) {
+					return;
+				}
+			} else if (!IsLockstepTeamCommandSender(NetGameCommandTeam(command.payload), sender)) {
 				return;
 			}
 		}

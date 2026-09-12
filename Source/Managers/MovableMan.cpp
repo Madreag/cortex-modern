@@ -457,6 +457,17 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				g_ConsoleMan.PrintString("ERROR: Rejected a Reseat command from a peer that is not the host");
 				continue;
 			}
+		} else if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
+			if (!ScenarioRunner::IsLockstepAIOrderAuthorized(command.senderPeerId, *order)) {
+				const Actor* target = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order->actorUID)));
+				const bool cpu = !target || !target->IsPlayerControlled();
+				const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(order->actorUID, order->team, cpu);
+				const uint8_t authority = ScenarioRunner::ResolveTeamCommandAuthority(order->team);
+				const std::string line = "ERROR: Rejected a AIOrder command from a peer that does not control team " + std::to_string(commandTeam) + " (sender=" + std::to_string(static_cast<int>(command.senderPeerId)) + " owner=" + std::to_string(static_cast<int>(owner)) + " authority=" + std::to_string(static_cast<int>(authority)) + ")";
+				g_ConsoleMan.PrintString(line);
+				std::cout << line << std::endl;
+				continue;
+			}
 		} else if (!ScenarioRunner::IsLockstepTeamCommandSender(commandTeam, command.senderPeerId)) {
 			g_ConsoleMan.PrintString("ERROR: Rejected a " + std::string(NetGameCommandTypeName(NetGameCommandTypeOf(command.payload))) + " command from a peer that does not control team " + std::to_string(commandTeam));
 			continue;
