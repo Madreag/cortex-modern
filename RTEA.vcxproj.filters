@@ -571,6 +571,9 @@
     <ClInclude Include="Source\Network\NetMatchSelfTest.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetPortMap.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetProtocol.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -938,6 +941,12 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetMatchSelfTest.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetPortMap.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetPortMapSelfTest.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetProtocol.cpp">

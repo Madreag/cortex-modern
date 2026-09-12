@@ -28,6 +28,8 @@ sources += files(
 'NetMatchRunner.cpp',
 'NetMatchService.cpp',
 'NetMatchSelfTest.cpp',
+'NetPortMap.cpp',
+'NetPortMapSelfTest.cpp',
 'NetProtocol.cpp',
 'NetProtocolSelfTest.cpp',
 'NetReconnectAdmission.cpp',
