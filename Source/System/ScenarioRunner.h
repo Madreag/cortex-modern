@@ -181,6 +181,12 @@ namespace RTE {
 		/// Whether the round is running only because a dropped player still has a seat to come back to.
 		static bool IsLockstepHoldingSeatForReclaim();
 
+		/// The round's hold pause as the coordinator has it, with the seat-presence names and seconds
+		/// laid over it. Every surface that says the match is paused reads this one answer, so the stall
+		/// overlay and the seats panel cannot disagree about it.
+		/// @return Whether a dropped seat is being held right now.
+		static bool DescribeLockstepHoldPause(std::string& outWho, uint32_t& outSecondsLeft);
+
 		/// The committed frame the sim is applying. Every peer applies the same frames in the same
 		/// order, so anything answered from this answers identically on all of them.
 		static void SetLockstepAppliedFrame(uint64_t frame);

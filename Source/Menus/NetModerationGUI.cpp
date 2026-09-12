@@ -1,6 +1,7 @@
 #include "NetModerationGUI.h"
 
 #include "NetMatchService.h"
+#include "ScenarioRunner.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
 #include "UInputMan.h"
@@ -119,23 +120,11 @@ bool NetModerationGUI::SetOpen(bool open) {
 void NetModerationGUI::Refresh() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 	m_Model.Refresh(g_NetMatchService.GetModerationSeats());
-	// A held dropped seat pauses the match (reclaim hold), so the title says what the stall overlay says.
-	std::string title = "SEATS  /  ";
-	if (snapshot.serviceState == "Running") {
-		title += "The match continues while this panel is open";
-		const NetSeatPresence& presence = g_NetMatchService.GetSeatPresence();
-		for (const auto& [peerId, seat]: presence.GetSeats()) {
-			const uint64_t holdFrames = presence.HoldFramesRemaining(peerId);
-			if (holdFrames > 0) {
-				title = "SEATS  /  Match paused: waiting for " + DisplayName(seat.holderName.empty() ? "a player" : seat.holderName) +
-				    " to return (" + std::to_string(NetSeatPresence::HoldSeconds(holdFrames)) + "s left)";
-				break;
-			}
-		}
-	} else {
-		title += "Resynchronizing the match...";
-	}
-	m_Title->SetText(title);
+	// The hold is the round's, read from the same place the stall overlay reads it.
+	std::string holdName;
+	uint32_t holdSeconds = 0;
+	const bool holdPause = ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds);
+	m_Title->SetText(NetModerationPanelTitle(snapshot.serviceState == "Running", holdPause, DisplayName(holdName), holdSeconds));
 	m_Summary->SetText(snapshot.isHost ? m_Model.GetSummaryText() : "Only the host can approve a substitute.");
 	m_Status->SetText(WrapText(m_LabelFont, m_Model.GetStatusText(), m_Status->GetWidth()));
 	m_Roster->SetVisible(!snapshot.isHost);

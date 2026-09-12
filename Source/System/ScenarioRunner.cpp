@@ -1001,6 +1001,28 @@ namespace RTE {
 		       (s_LockstepCoordinator->IsRunning() && !s_LockstepCoordinator->HasCommittedAFrame());
 	}
 
+	bool ScenarioRunner::DescribeLockstepHoldPause(std::string& outWho, uint32_t& outSecondsLeft) {
+		outWho.clear();
+		outSecondsLeft = 0;
+		if (!s_LockstepCoordinator || !s_LockstepCoordinator->AnyDroppedSeatHeld()) {
+			return false;
+		}
+		outWho = s_LockstepCoordinator->DescribeHeldPause(outSecondsLeft, NetLockstepNowMs());
+		if (s_SeatPresence) {
+			for (const auto& [peerId, seat]: s_SeatPresence->GetSeats()) {
+				if (!seat.holdActive) {
+					continue;
+				}
+				if (!seat.holderName.empty()) {
+					outWho = seat.holderName;
+				}
+				outSecondsLeft = static_cast<uint32_t>(s_SeatPresence->HoldWallSecondsRemaining(peerId));
+				break;
+			}
+		}
+		return true;
+	}
+
 	bool ScenarioRunner::IsLockstepActorOwnerGone(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {
 		if (!s_LockstepCoordinator) {
 			return false;
@@ -1753,24 +1775,9 @@ namespace RTE {
 				return false;
 			}
 			const uint32_t stallMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count());
-			const bool holdPause = s_LockstepCoordinator->AnyDroppedSeatHeld();
 			uint32_t holdSeconds = 0;
 			std::string holdName;
-			if (holdPause) {
-				holdName = s_LockstepCoordinator->DescribeHeldPause(holdSeconds, NetLockstepNowMs());
-				if (s_SeatPresence) {
-					for (const auto& [peerId, seat]: s_SeatPresence->GetSeats()) {
-						if (!seat.holdActive) {
-							continue;
-						}
-						if (!seat.holderName.empty()) {
-							holdName = seat.holderName;
-						}
-						holdSeconds = static_cast<uint32_t>(s_SeatPresence->HoldWallSecondsRemaining(peerId));
-						break;
-					}
-				}
-			}
+			const bool holdPause = DescribeLockstepHoldPause(holdName, holdSeconds);
 			if (stallMs >= nextOverlayMs) {
 				const std::string missing = s_LockstepCoordinator->DescribeMissingPeers();
 				if (!stalled) {
