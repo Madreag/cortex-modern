@@ -224,6 +224,66 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestMatchConfigDedicated(std::string* error) {
+			NetMatchConfig dedicated = MakeConfig();
+			dedicated.peerCount = 3;
+			dedicated.dedicated = true;
+			dedicated.players = {
+			    NetMatchPlayerSlot{2, 0, false, "Client A"},
+			    NetMatchPlayerSlot{3, 1, false, "Client B"},
+			};
+			if (!NetMatchConfigUtil::ValidateLocalAlpha(dedicated, error)) {
+				return false;
+			}
+			std::string validationError;
+			NetMatchConfig seatless = dedicated;
+			seatless.dedicated = false;
+			if (NetMatchConfigUtil::ValidateLocalAlpha(seatless, &validationError) ||
+			    validationError != "host player slot is missing") {
+				*error = "seatless roster without the flag did not fail closed: " + validationError;
+				return false;
+			}
+			NetMatchConfig hostSeated = dedicated;
+			hostSeated.players.push_back(NetMatchPlayerSlot{1, 2, false, "Host"});
+			validationError.clear();
+			if (NetMatchConfigUtil::ValidateLocalAlpha(hostSeated, &validationError) ||
+			    validationError != "dedicated config must not seat the host peer") {
+				*error = "dedicated roster with a host slot did not fail closed: " + validationError;
+				return false;
+			}
+			NetMatchConfig noClients = dedicated;
+			noClients.players = {NetMatchPlayerSlot{0, 3, true, "CPU"}};
+			validationError.clear();
+			if (NetMatchConfigUtil::ValidateLocalAlpha(noClients, &validationError) ||
+			    validationError != "dedicated config has no client player slot") {
+				*error = "dedicated roster without a client slot did not fail closed: " + validationError;
+				return false;
+			}
+			NetMatchConfig plain = MakeConfig();
+			const NetHash32 plainHash = NetMatchConfigUtil::HashConfig(plain);
+			if (NetMatchConfigUtil::HashConfig(plain) != plainHash) {
+				*error = "match config hash is not stable";
+				return false;
+			}
+			NetMatchConfig flagged = plain;
+			flagged.dedicated = true;
+			if (NetMatchConfigUtil::HashConfig(flagged) == plainHash) {
+				*error = "the dedicated flag did not change the match config hash";
+				return false;
+			}
+			flagged.dedicated = false;
+			if (NetMatchConfigUtil::HashConfig(flagged) != plainHash) {
+				*error = "clearing the dedicated flag changed the match config hash";
+				return false;
+			}
+			const std::string reportJson = NetMatchConfigUtil::BuildReportJson(dedicated);
+			if (reportJson.find("\"dedicated\":true") == std::string::npos) {
+				*error = "the config report omitted dedicated=true";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestOwnershipPolicies(std::string* error) {
 			NetMatchConfig config = MakeConfig();
 			config.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
@@ -1714,6 +1774,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
+		if (!TestMatchConfigDedicated(&error)) return fail(error);
 		if (!TestReplayCommandSenders(&error)) return fail(error);
 		if (!TestOwnershipPolicies(&error)) return fail(error);
 		if (!TestLockstepCoordinatorUsesMatchOwnership(&error)) return fail(error);
