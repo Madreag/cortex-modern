@@ -844,6 +844,7 @@
     <ClInclude Include="Source\Network\NetAdmissionSelfTest.h" />
     <ClInclude Include="Source\Network\NetAuthCrypto.h" />
     <ClInclude Include="Source\Network\NetAuthSelfTest.h" />
+    <ClInclude Include="Source\Network\NetDirectoryClient.h" />
     <ClInclude Include="Source\Network\NetDirectoryCodec.h" />
     <ClInclude Include="Source\Network\NetHttpClient.h" />
     <ClInclude Include="Source\Network\NetIdentity.h" />
@@ -1429,6 +1430,7 @@
     <ClCompile Include="Source\Network\NetAdmissionSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetAuthCrypto.cpp" />
     <ClCompile Include="Source\Network\NetAuthSelfTest.cpp" />
+    <ClCompile Include="Source\Network\NetDirectoryClient.cpp" />
     <ClCompile Include="Source\Network\NetDirectoryCodec.cpp" />
     <ClCompile Include="Source\Network\NetDirectorySelfTest.cpp" />
     <ClCompile Include="Source\Network\NetHttpClient.cpp" />
