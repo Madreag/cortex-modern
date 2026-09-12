@@ -459,7 +459,7 @@ namespace RTE {
 		/// go to, in order
 		/// @param m_Waypoints.push_back(std::pair<Vector The new scene point this should try to get to after all other waypoints
 		/// are reached.
-		void AddAISceneWaypoint(const Vector& waypoint) { m_Waypoints.push_back(std::pair<Vector, MovableObject*>(waypoint, (MovableObject*)NULL)); }
+		void AddAISceneWaypoint(const Vector& waypoint);
 
 		/// Adds an MO in the scene as the next waypoint for this to go to, in order
 		/// @param pMOWaypoint The new MO this should try to get to after all other waypoints are reached.
@@ -472,14 +472,29 @@ namespace RTE {
 
 		/// Removes all AI waypoints and clears the current path to the current
 		/// waypoint. The AI Actor will stop in its tracks.
-		void ClearAIWaypoints() {
-			m_pMOMoveTarget = 0;
-			m_Waypoints.clear();
-			m_WaypointCursor = 0;
-			m_MovePath.clear();
-			m_MoveTarget = m_Pos;
-			m_MoveVector.Reset();
-		}
+		void ClearAIWaypoints();
+
+		/// A waypoint call this actor's own AI made this tick: performed after the AI pass, or under
+		/// lockstep sent as a game command so every peer performs it at the committed tick.
+		struct DeferredWaypoint {
+		friend struct ContractAudit;
+
+			enum Op : uint8_t {
+				Scene = 0,
+				MOTarget = 1,
+				Clear = 2,
+			};
+			Op op = Scene;
+			float x = 0.0F;
+			float y = 0.0F;
+			int64_t targetUID = 0;
+		};
+		/// Hands out the waypoint calls the AI queued this tick, in call order; mods don't call this.
+		std::vector<DeferredWaypoint> TakePendingDeferredWaypoints();
+		/// Performs one deferred waypoint call for real.
+		void ExecuteDeferredWaypoint(const DeferredWaypoint& waypoint);
+		/// Sends this tick's queued waypoint calls over the wire, or performs them when no match is running.
+		void SendDeferredWaypoints();
 
 		/// Gets the last or furthest set AI waypoint of this. If none, this' pos
 		/// is returned.
@@ -1150,6 +1165,8 @@ namespace RTE {
 		// The list of waypoints remaining between which the paths are made. If this is empty, the last path is in teh MovePath
 		// The MO pointer in the pair is nonzero if the waypoint is tied to an MO in the scene, and gets updated each UpdateAI. This needs to be checked for validity/existence each UpdateAI
 		std::list<std::pair<Vector, MovableObjectReference>> m_Waypoints;
+		// Waypoint calls the AI pass queued; the owner sends them over the wire so every peer's queue matches.
+		std::vector<DeferredWaypoint> m_PendingDeferredWaypoints;
 		// Under lockstep the owner's AI loads waypoints ahead of the drops it sent over the wire; this many front entries are already loaded.
 		int m_WaypointCursor;
 		// Whether to draw the waypoints or not in the HUD

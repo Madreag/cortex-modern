@@ -165,6 +165,7 @@ void Actor::Clear() {
 
 	m_AIMode = AIMODE_NONE;
 	m_Waypoints.clear();
+	m_PendingDeferredWaypoints.clear();
 	m_WaypointCursor = 0;
 	m_DrawWaypoints = false;
 	m_MoveTarget.Reset();
@@ -1045,9 +1046,88 @@ void Actor::RequestAIMode(AIMode newMode) {
 	}
 }
 
+// The queue is sim state but only the owner runs the AI that writes it, so under lockstep an actor's own
+// AI pass queues the write here and sends it over the wire instead of landing on the owner alone. Only
+// the running actor's own writes defer, so one thread owns the queue and the drain always reaches it.
+static bool DeferWaypointMutation(const Actor* actor) {
+	return g_CurrentAIActor == actor && ScenarioRunner::IsLockstepControllerSyncActive();
+}
+
+void Actor::AddAISceneWaypoint(const Vector& waypoint) {
+	if (DeferWaypointMutation(this)) {
+		m_PendingDeferredWaypoints.push_back({Actor::DeferredWaypoint::Scene, waypoint.m_X, waypoint.m_Y, 0});
+		return;
+	}
+	m_Waypoints.push_back(std::pair<Vector, MovableObject*>(waypoint, (MovableObject*)NULL));
+}
+
 void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
+	if (DeferWaypointMutation(this)) {
+		if (!g_MovableMan.ValidMO(pMOWaypoint)) {
+			return;
+		}
+		// Same no-duplicate-tail rule as the direct path, read off the queue the pending calls will leave.
+		const int64_t identity = static_cast<int64_t>(pMOWaypoint->GetUniqueID());
+		const DeferredWaypoint* last = m_PendingDeferredWaypoints.empty() ? nullptr : &m_PendingDeferredWaypoints.back();
+		const bool tailIsSameMO = last ? (last->op == DeferredWaypoint::MOTarget && last->targetUID == identity)
+		                               : (!m_Waypoints.empty() && m_Waypoints.back().second == pMOWaypoint);
+		if (!tailIsSameMO) {
+			m_PendingDeferredWaypoints.push_back({DeferredWaypoint::MOTarget, pMOWaypoint->GetPos().m_X, pMOWaypoint->GetPos().m_Y, identity});
+		}
+		return;
+	}
 	if (g_MovableMan.ValidMO(pMOWaypoint) && (m_Waypoints.empty() || m_Waypoints.back().second != pMOWaypoint)) {
 		m_Waypoints.push_back(std::pair<Vector, const MovableObject*>(pMOWaypoint->GetPos(), pMOWaypoint));
+	}
+}
+
+void Actor::ClearAIWaypoints() {
+	if (DeferWaypointMutation(this)) {
+		m_PendingDeferredWaypoints.push_back({DeferredWaypoint::Clear, 0.0F, 0.0F, 0});
+		return;
+	}
+	m_pMOMoveTarget = 0;
+	m_Waypoints.clear();
+	m_WaypointCursor = 0;
+	m_MovePath.clear();
+	m_MoveTarget = m_Pos;
+	m_MoveVector.Reset();
+}
+
+std::vector<Actor::DeferredWaypoint> Actor::TakePendingDeferredWaypoints() {
+	std::vector<DeferredWaypoint> taken;
+	taken.swap(m_PendingDeferredWaypoints);
+	return taken;
+}
+
+void Actor::ExecuteDeferredWaypoint(const DeferredWaypoint& waypoint) {
+	Actor* running = g_CurrentAIActor;
+	g_CurrentAIActor = nullptr;
+	switch (waypoint.op) {
+		case DeferredWaypoint::Scene:
+			AddAISceneWaypoint(Vector(waypoint.x, waypoint.y));
+			break;
+		case DeferredWaypoint::MOTarget:
+			if (const MovableObject* target = waypoint.targetUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(waypoint.targetUID)) : nullptr) {
+				AddAIMOWaypoint(target);
+			}
+			break;
+		case DeferredWaypoint::Clear:
+			ClearAIWaypoints();
+			break;
+	}
+	g_CurrentAIActor = running;
+}
+
+void Actor::SendDeferredWaypoints() {
+	const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
+	for (const DeferredWaypoint& waypoint: TakePendingDeferredWaypoints()) {
+		if (!lockstep) {
+			ExecuteDeferredWaypoint(waypoint);
+			continue;
+		}
+		const uint8_t op = waypoint.op == DeferredWaypoint::Scene ? NetGameAIOrder::SceneWaypoint : (waypoint.op == DeferredWaypoint::MOTarget ? NetGameAIOrder::MOWaypoint : NetGameAIOrder::ClearWaypoints);
+		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(GetUniqueID()), m_Team, op, waypoint.x, waypoint.y, waypoint.targetUID}});
 	}
 }
 
