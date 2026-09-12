@@ -65,6 +65,7 @@ namespace RTE {
 			bool        selftestBuyCommand = false; // -net-match-e2e-buy-command: host grants funds then places a real buy order through CreateDelivery.
 			bool        selftestBrainSpawnCommand = false; // -net-match-e2e-brain-spawn-command: this peer spawns a second brain for its team at tick 40.
 			bool        selftestPauseCommand = false; // -net-match-e2e-pause-command: host pauses at tick 250 and unpauses at 430.
+			uint64_t    selftestPauseTick = 250; // -net-match-e2e-pause-tick <N>: the tick the synced pause command is issued at (default 250 = today's arming tick); the unpause command still rides N+180.
 			bool        selftestSnapshot = false; // -net-match-e2e-snapshot: save the full game at tick 300 (both peers save the same synced frame).
 			uint64_t    contractAuditContinueThrough = 0; // Diagnostic-only: keep running after the audit operation to this complete tick.
 			long long   contractAuditSeedMarker = 0; // Diagnostic fixture value placed in all Lua roots before a seed is saved.

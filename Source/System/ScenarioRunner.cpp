@@ -401,6 +401,11 @@ namespace RTE {
 			s_Args.selftestPauseCommand = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-pause-tick" && hasValue) {
+			// The tick the synced pause command is issued at; default 250 keeps today's arming.
+			s_Args.selftestPauseTick = static_cast<uint64_t>(std::strtoull(argValue[startIndex + 1], nullptr, 10));
+			return 2;
+		}
 		return 0;
 	}
 
