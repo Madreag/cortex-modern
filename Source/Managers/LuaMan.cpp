@@ -2472,12 +2472,17 @@ static int ScriptGraphProperty(lua_State* L) {
 	return 1;
 }
 
-static void ScriptGraphPushEntity(lua_State* L, const Entity* entity, const std::string& type) {
+static bool ScriptGraphPushEntity(lua_State* L, const Entity* entity, const std::string& type) {
 	const auto& casts = LuaAdaptersEntityCast::s_EntityToLuabindObjectCastFunctions;
-	const auto cast = casts.find(type);
-	if (!entity || cast == casts.end()) { lua_pushnil(L); return; }
+	auto cast = casts.end();
+	if (entity) {
+		cast = casts.find(type);
+		if (cast == casts.end()) cast = casts.find(entity->GetClassName());
+	}
+	if (cast == casts.end()) { lua_pushnil(L); return false; }
 	std::unique_ptr<LuabindObjectWrapper> value(cast->second(const_cast<Entity*>(entity), L));
 	value->GetLuabindObject()->push(L);
+	return true;
 }
 
 static int ScriptGraphPropertyOwner(lua_State* L) {
@@ -3037,7 +3042,11 @@ static int ScriptGraphOwnerReference(lua_State* L) {
 	const auto push = [&](auto* value) {
 		if (!value) { lua_pushnil(L); return 1; }
 		if constexpr (std::is_base_of_v<Entity, std::remove_cv_t<std::remove_pointer_t<decltype(value)>>>) {
-			ScriptGraphPushEntity(L, value, type ? type : value->GetClassName());
+			// A class with no cast function keeps the static type it was pushed with before the typed push.
+			if (!ScriptGraphPushEntity(L, value, type ? type : value->GetClassName())) {
+				lua_pop(L, 1);
+				luabind::object(L, value).push(L);
+			}
 		} else luabind::object(L, value).push(L);
 		if (auto* rep = luabind::detail::is_class_object(L, -1)) {
 			rep->set_flags((rep->flags() & ~luabind::detail::object_rep::constant) | (constant ? luabind::detail::object_rep::constant : 0));
