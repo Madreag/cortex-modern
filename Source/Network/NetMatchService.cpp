@@ -38,6 +38,7 @@ namespace RTE {
 	std::string NetMatchService::s_JoinWaitPath;
 	bool NetMatchService::s_ApplyForSeat = false;
 	uint16_t NetMatchService::s_ApplySeat = 0;
+	bool NetMatchService::s_ApplyOnce = false;
 	bool NetMatchService::s_AutoSubstitute = false;
 	uint16_t NetMatchService::s_AutoSubstituteSeat = 0;
 	uint64_t NetMatchService::s_AutoSubstituteDelayMs = 0;
@@ -198,6 +199,7 @@ static std::string ResyncSaveName() {
 			m_BeaconGamePort = request.port;
 			m_BeaconMaxPlayers = request.peerCount;
 			m_LocalName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
+			m_JoinRefusedByLiveMatch = false;
 		}
 		m_EverStarted.store(true);
 		m_Worker = std::thread(&NetMatchService::WorkerMain, this, request, std::move(manifest));
@@ -678,6 +680,7 @@ static std::string ResyncSaveName() {
 			m_InputDelayText.clear();
 			m_LeaveExchangeRun = false;
 			m_MatchWasRunning = false;
+			m_JoinRefusedByLiveMatch = false;
 			EndAdmissionSession();
 		}
 		runner.reset();
@@ -818,6 +821,20 @@ static std::string ResyncSaveName() {
 
 	uint64_t NetMatchService::AdmissionNowMs() const {
 		return m_AdmissionClock.NowMs(SteadyNowMs());
+	}
+
+	bool NetMatchService::WasJoinRefusedByALiveMatch() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_JoinRefusedByLiveMatch && m_State == NetMatchServiceState::Failed;
+	}
+
+	bool NetMatchService::BeginSubstituteApplication(const NetMatchServiceRequest& request, std::string* error) {
+		s_ApplyOnce = true;
+		if (Start(request, error)) {
+			return true;
+		}
+		s_ApplyOnce = false;
+		return false;
 	}
 
 	bool NetMatchService::NeedsRecoveryPump() const {
@@ -1450,6 +1467,9 @@ static std::string ResyncSaveName() {
 				m_State = NetMatchServiceState::Failed;
 				m_StatusText = "Network setup failed";
 				m_ErrorText = error;
+				// §9b: a live match is the one refusal a joiner can answer, by applying for a seat.
+				m_JoinRefusedByLiveMatch = !request.host && m_Session && m_Session->HasReject() &&
+				                           m_Session->GetMismatchKey() == "live_match";
 			}
 			m_WorkerDone = true;
 		}
@@ -1636,7 +1656,8 @@ static std::string ResyncSaveName() {
 		// The record names the host it belongs to; the config hash is context, not a gate - a client
 		// adopts the host's match config in the lobby round that follows.
 		m_ReconnectClient.SetHostContext(request.address, NetHash32{});
-		m_ReconnectClient.SetApplyForSeat(s_ApplyForSeat, s_ApplySeat);
+		m_ReconnectClient.SetApplyForSeat(s_ApplyForSeat || s_ApplyOnce, s_ApplyOnce ? c_NetH4AnySubstitutableSeat : s_ApplySeat);
+		s_ApplyOnce = false;
 		session.SetReconnectClient(&m_ReconnectClient);
 		m_AdmissionAttached = true;
 	}

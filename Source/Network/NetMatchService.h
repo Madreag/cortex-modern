@@ -194,6 +194,12 @@ namespace RTE {
 		/// Whether the §11 retry schedule still has work, so the menu loop pumps the service whatever
 		/// screen is up rather than only while the multiplayer screen is open.
 		bool NeedsRecoveryPump() const;
+		/// Whether the host refused the last join because its match is already running, which is the
+		/// only case §9b's applicant path exists for.
+		bool WasJoinRefusedByALiveMatch() const;
+		/// Asks the host for a seat instead of joining one: the same connection the join used, with
+		/// §9b's application in place of the new-join request. The host picks the seat.
+		bool BeginSubstituteApplication(const NetMatchServiceRequest& request, std::string* error = nullptr);
 
 		NetMatchServiceState GetState() const;
 		bool WasEverStarted() const { return m_EverStarted.load(); }
@@ -309,6 +315,8 @@ namespace RTE {
 		static std::string s_JoinWaitPath;
 		static bool s_ApplyForSeat;
 		static uint16_t s_ApplySeat;
+		static bool s_ApplyOnce; //!< The menu's one-shot application; consumed by the next join's plane.
+		bool m_JoinRefusedByLiveMatch = false; //!< The last join was refused by a running match (§9b).
 		static bool s_AutoSubstitute;
 		static uint16_t s_AutoSubstituteSeat;
 		static uint64_t s_AutoSubstituteDelayMs;

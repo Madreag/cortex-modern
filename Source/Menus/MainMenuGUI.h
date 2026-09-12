@@ -3,6 +3,7 @@
 #include "Controller.h"
 #include "NetLanDiscovery.h"
 #include "NetMatchConfig.h"
+#include "NetMatchService.h"
 #include "NetReconnectUx.h"
 
 #include "SaveLoadMenuGUI.h"
@@ -223,6 +224,8 @@ namespace RTE {
 		std::array<GUILabel*, 4> m_MultiplayerLobbyPlayerLabels;
 		MultiplayerSubScreen m_MultiplayerSubScreen;
 		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
+		NetMatchServiceRequest m_MultiplayerJoinRequest; //!< The join the player last asked for, so an application reuses it.
+		bool m_MultiplayerApplyOffered = false;          //!< A join of this host may still be answered by applying (§9b).
 		GUICollectionBox* m_CreditsScrollPanel;
 		std::array<GUICollectionBox*, MenuScreen::ScreenCount> m_MainMenuScreens;
 		std::array<GUIButton*, MenuButton::ButtonCount> m_MainMenuButtons;
@@ -336,6 +339,8 @@ namespace RTE {
 
 		/// Starts hosting or joining a multiplayer match from the setup screen fields.
 		void StartMultiplayer(bool host);
+		/// §9b: answers a live match's refusal by asking the host for a seat instead of a new one.
+		void ApplyToSubstitute();
 
 		/// Launches the activity once the multiplayer runtime reaches lockstep ready.
 		void MaybeLaunchMultiplayerActivity();
