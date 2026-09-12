@@ -468,12 +468,14 @@ static std::string ResyncSaveName() {
 		const auto state = std::make_shared<NetResyncState>(*m_PendingResyncState);
 		const uint8_t localPeer = GetLocalPeerId();
 		const bool retainLocal = m_ResyncRetainsLocalState;
+		// A seatless dedicated host has no binding in any snapshot and no local state to keep.
+		const bool dedicated = m_Dedicated;
 		std::optional<NetResyncPlayerBindings> newestBinding;
 		if (const auto found = state->playerBindings.find(localPeer); found != state->playerBindings.end()) newestBinding = found->second;
 		for (const auto& pending: state->pendingPlayerBindings) if (pending.command.senderPeerId == localPeer && (!newestBinding || pending.frame > newestBinding->frame)) {
 			newestBinding = NetResyncPlayerBindings{pending.frame, std::get<NetGamePlayerBindings>(pending.command.payload)};
 		}
-		if (!retainLocal && !newestBinding) {
+		if (!retainLocal && !newestBinding && !dedicated) {
 			if (error) *error = "the resync snapshot has no player bindings for this peer";
 			return false;
 		}
@@ -490,15 +492,17 @@ static std::string ResyncSaveName() {
 		std::cout << "[net-match] launching from the received snapshot: " << pendingLoad << std::endl;
 		struct LocalState { Activity::NetLocalPlayerState activity; std::string input, gui, frame; };
 		const auto local = std::make_shared<LocalState>();
-		if (!g_ActivityMan.SetPendingCheckpointCallbacks([local, retainLocal] {
+		const bool keepLocalPlayer = retainLocal && !dedicated;
+		if (!g_ActivityMan.SetPendingCheckpointCallbacks([local, keepLocalPlayer] {
 			local->input = g_UInputMan.SaveCheckpoint();
 			local->gui = GUIInput::SaveSharedCheckpoint();
 			local->frame = g_FrameMan.SaveNetLocalState();
-			return !retainLocal || (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->CaptureNetLocalPlayerState(local->activity));
-		}, [local, state, retainLocal, newestBinding](Activity& activity) {
+			return !keepLocalPlayer || (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->CaptureNetLocalPlayerState(local->activity));
+		}, [local, state, keepLocalPlayer, dedicated, newestBinding](Activity& activity) {
 			if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != state->savedTick ||
 			    !g_UInputMan.LoadCheckpoint(local->input, true) || !GUIInput::LoadSharedCheckpoint(local->gui, true) || !g_FrameMan.LoadNetLocalState(local->frame, true)) return false;
-			if (!(retainLocal ? activity.RestoreNetLocalPlayerState(local->activity) : activity.ApplyNetPlayerBindings(newestBinding->bindings))) return false;
+			const NetGamePlayerBindings seatless{};
+			if (!(keepLocalPlayer ? activity.RestoreNetLocalPlayerState(local->activity) : activity.ApplyNetPlayerBindings(dedicated ? seatless : newestBinding->bindings))) return false;
 			if (!g_UInputMan.LoadCheckpoint(local->input) || !GUIInput::LoadSharedCheckpoint(local->gui) || !g_FrameMan.LoadNetLocalState(local->frame)) return false;
 			return ScenarioRunner::RestoreNetResyncState(*state);
 		})) { if (error) *error = "could not stage resync local state restoration"; return false; }
@@ -652,6 +656,8 @@ static std::string ResyncSaveName() {
 			m_IsHost = false;
 			m_LocalPeerId = 0;
 			m_LocalTeam = -1;
+			m_Dedicated = false;
+			m_HumanSeats = 0;
 			m_ResyncOnDesync = false;
 			m_PendingResyncLoad.clear();
 			m_PendingResyncState.reset();
