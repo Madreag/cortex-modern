@@ -839,6 +839,7 @@
     <ClInclude Include="Source\Network\ControllerFrame.h" />
     <ClInclude Include="Source\Network\ControllerLog.h" />
     <ClInclude Include="Source\Network\GnsP2PSelfTest.h" />
+    <ClInclude Include="Source\Network\GnsSignaling.h" />
     <ClInclude Include="Source\Network\GnsTransport.h" />
     <ClInclude Include="Source\Network\LoopbackTransport.h" />
     <ClInclude Include="Source\Network\NetActorOwnership.h" />
@@ -1428,6 +1429,7 @@
     <ClCompile Include="Source\Network\ControllerFrame.cpp" />
     <ClCompile Include="Source\Network\ControllerLog.cpp" />
     <ClCompile Include="Source\Network\GnsP2PSelfTest.cpp" />
+    <ClCompile Include="Source\Network\GnsSignaling.cpp" />
     <ClCompile Include="Source\Network\GnsTransport.cpp" />
     <ClCompile Include="Source\Network\LoopbackTransport.cpp" />
     <ClCompile Include="Source\Network\NetActorOwnership.cpp" />
