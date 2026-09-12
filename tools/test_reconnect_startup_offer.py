@@ -42,7 +42,7 @@ def main():
                                          "activate ButtonMultiplayerStart\nwait 99999\n"),
                      root / "Host.ticket")
         wait_for_log(host, "activate ButtonMultiplayerCreate ok=1")
-        client = start("Client", menu_script("Client", False, options.port, "wait_state Failed\nexit\n"), ticket)
+        client = start("Client", menu_script("Client", False, options.port, "wait_state Failed 240\nexit\n"), ticket)
         wait_for_log(host, "activate ButtonMultiplayerStart ok=1")
         wait_for_log(client, "[menu-mp] launching the match")
         time.sleep(options.play_seconds)

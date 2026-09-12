@@ -1032,6 +1032,10 @@ static void DriveModerationE2e() {
 /// <summary>
 /// Game menus loop.
 /// </summary>
+static uint64_t MenuScriptNowMs() {
+	return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
 // A scripted-menu step failed: print it and exit non-zero so the automation harness can't false-green.
 static void MenuScriptFail(const std::string& reason) {
 	std::cerr << "[menu-script] FAILED: " << reason << std::endl;
@@ -1068,18 +1072,28 @@ void ProcessMenuScript() {
 			return MenuScriptFail("menu-script has no steps: " + s_menuScriptPath);
 		}
 	}
+	static bool introSkipped = false;
+	static uint64_t awaySinceMs = 0;
 	if (!g_MenuMan.IsMainMenuInteractive()) {
-		// Also after a match: the script follows the game back to the main menu instead of stalling
-		// on the scenario or pause screen the end of an activity would otherwise leave up.
-		g_MenuMan.SkipTitleIntroForAutomation();
+		if (awaySinceMs == 0) {
+			awaySinceMs = MenuScriptNowMs();
+		}
+		// The intro is skipped at once. Later the script follows the game back to the main menu, but
+		// only once the menu has stayed away longer than a launch's own fade-out, which this must not
+		// cancel.
+		if (!introSkipped || MenuScriptNowMs() - awaySinceMs > 5000) {
+			g_MenuMan.SkipTitleIntroForAutomation();
+		}
 		return;
 	}
+	awaySinceMs = 0;
+	introSkipped = true;
 	if (waitFrames > 0) {
 		--waitFrames;
 		return;
 	}
 	if (waitUntilMs > 0) {
-		if (static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) < waitUntilMs) {
+		if (MenuScriptNowMs() < waitUntilMs) {
 			return;
 		}
 		waitUntilMs = 0;
@@ -1106,9 +1120,7 @@ void ProcessMenuScript() {
 		}
 		// The retry schedule is real time, so its wait is bounded in real time; every other condition
 		// keeps the frame budget it has always had.
-		const bool expired = waitCondDeadlineMs != 0
-		                         ? static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) >= waitCondDeadlineMs
-		                         : --waitCondTimeout <= 0;
+		const bool expired = waitCondDeadlineMs != 0 ? MenuScriptNowMs() >= waitCondDeadlineMs : --waitCondTimeout <= 0;
 		if (met || expired) {
 			std::cout << "[menu-script] " << waitCond << " -> " << (met ? "OK" : "TIMEOUT") << " (members=" << snapshot.members.size() << " state=" << snapshot.serviceState << ")" << std::endl;
 			if (!met) { return MenuScriptFail("condition wait timed out: " + waitCond); }
@@ -1131,7 +1143,7 @@ void ProcessMenuScript() {
 	} else if (cmd == "wait_ms") {
 		int milliseconds = 0;
 		iss >> milliseconds;
-		waitUntilMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) + static_cast<uint64_t>(std::max(0, milliseconds));
+		waitUntilMs = MenuScriptNowMs() + static_cast<uint64_t>(std::max(0, milliseconds));
 	} else if (cmd == "wait_members") {
 		int n = 0;
 		iss >> n;
@@ -1139,9 +1151,15 @@ void ProcessMenuScript() {
 		waitCondTimeout = 4000;
 	} else if (cmd == "wait_state") {
 		std::string s;
+		int seconds = 0;
 		iss >> s;
 		waitCond = "state:" + s;
 		waitCondTimeout = 4000;
+		// A wait that has to survive a whole match cannot be counted in menu frames: none run while
+		// the match does, and a fade-out at menu frame rates burns the budget on its own.
+		if ((iss >> seconds) && seconds > 0) {
+			waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000ULL;
+		}
 	} else if (cmd == "wait_error") {
 		std::string text;
 		std::getline(iss >> std::ws, text);
@@ -1165,7 +1183,7 @@ void ProcessMenuScript() {
 		iss >> attempts;
 		if (!(iss >> seconds) || seconds <= 0) { seconds = 60; }
 		waitCond = "attempts:" + std::to_string(attempts);
-		waitCondDeadlineMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) + static_cast<uint64_t>(seconds) * 1000ULL;
+		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000ULL;
 	} else if (cmd == "screenshot") {
 		std::string name;
 		iss >> name;
