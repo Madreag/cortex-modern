@@ -581,10 +581,18 @@ namespace RTE {
 		/// Asynchronously enforces a GC run to occur.
 		void StartAsyncGarbageCollection();
 
+		/// Sets whether every state's tick-end collection is a full cycle, as a run that must agree with another run needs, or the incremental step.
+		/// @param deterministic Whether every tick end runs a full collection on every state.
+		static void SetDeterministicCollection(bool deterministic);
+
+		/// Gets whether every state's tick-end collection is a full cycle.
+		/// @return Whether every tick end runs a full collection on every state.
+		static bool IsDeterministicCollection();
+
 		/// Reseeds every Lua state's RNG, deriving an independent per-state seed from baseSeed.
 		void SeedAllLuaRNGs(uint64_t baseSeed);
 
-		/// Folds the master Lua state's RNG into the lua_state SimChecksum subsystem.
+		/// Folds the master Lua state's RNG, then every scripted object's script graph in unique ID order, into the lua_state SimChecksum subsystem.
 		void HashAllLuaStatesIntoSimChecksum();
 
 		/// Blocks until any in-flight async GC finishes.
