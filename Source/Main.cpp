@@ -2623,7 +2623,8 @@ void RunGameLoop() {
 				g_NetMatchService.PumpSessionEvents();
 				// The session-directory heartbeat rides Update on the game thread, never the pump.
 				if (const NetMatchServiceState netServiceState = g_NetMatchService.GetState();
-				    g_NetMatchService.IsHost() && (netServiceState == NetMatchServiceState::Starting || netServiceState == NetMatchServiceState::Running)) {
+				    g_NetMatchService.IsHost() && (netServiceState == NetMatchServiceState::Starting || netServiceState == NetMatchServiceState::ReadyToLaunch ||
+				                                   netServiceState == NetMatchServiceState::Running)) {
 					g_NetMatchService.Update();
 				}
 				DriveModerationE2e();
@@ -4071,6 +4072,8 @@ int RunNetDirectoryProbe(const std::string& baseUrlArg, const std::string& certP
 /// configured but no reply arrived.
 int RunNetDirectoryList() {
 	std::string reason;
+	// Rows carry the identity NetMatchService::Start computes, which pins the default dt first.
+	g_TimerMan.SetDeltaTimeSecs(c_DefaultDeltaTimeS);
 	NetIdentityManifest manifest;
 	NetIdentityBuildOptions identityOptions;
 	identityOptions.buildId = "stage2-p2d-local";

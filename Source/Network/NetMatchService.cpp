@@ -823,7 +823,8 @@ static std::string ResyncSaveName() {
 				snapshot = m_LobbySnapshot;
 			}
 			directoryWanted = m_IsHost && !m_DirectoryRetracted &&
-			                  (m_State == NetMatchServiceState::Starting || m_State == NetMatchServiceState::Running);
+			                  (m_State == NetMatchServiceState::Starting || m_State == NetMatchServiceState::ReadyToLaunch ||
+			                   m_State == NetMatchServiceState::Running);
 			directoryRunning = m_State == NetMatchServiceState::Running;
 			if (directoryWanted) {
 				if (directoryRunning && !m_SeatStatuses.empty()) {
@@ -834,8 +835,16 @@ static std::string ResyncSaveName() {
 							++directorySeatsFree;
 						}
 					}
+				} else if (!m_LobbySnapshot.members.empty()) {
+					// The roster lists every configured slot, so an open seat is a non-CPU slot no
+					// peer has connected into yet.
+					for (const NetLobbyMember& member : m_LobbySnapshot.members) {
+						if (!member.cpu && !member.connected) {
+							++directorySeatsFree;
+						}
+					}
 				} else {
-					directorySeatsFree = std::max<int64_t>(0, static_cast<int64_t>(m_BeaconMaxPlayers) - static_cast<int64_t>(std::max<size_t>(m_LobbySnapshot.members.size(), 1)));
+					directorySeatsFree = std::max<int64_t>(0, static_cast<int64_t>(m_BeaconMaxPlayers) - 1);
 				}
 			}
 		}
