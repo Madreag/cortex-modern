@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.cortex.session-directory</string>
+	<key>UserName</key>
+	<string>erol</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/erol/cortex-directory</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>/Users/erol/cortex-directory/session_directory.py</string>
+		<string>--bind</string>
+		<string>0.0.0.0</string>
+		<string>--port</string>
+		<string>8443</string>
+		<string>--cert</string>
+		<string>/Users/erol/cortex-directory/cert.pem</string>
+		<string>--key</string>
+		<string>/Users/erol/cortex-directory/key.pem</string>
+		<string>--log-file</string>
+		<string>/Users/erol/cortex-directory/logs/session-directory.log</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/Users/erol/cortex-directory/logs/stdout.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/erol/cortex-directory/logs/stderr.log</string>
+</dict>
+</plist>
