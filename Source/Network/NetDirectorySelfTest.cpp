@@ -537,9 +537,13 @@ namespace RTE {
 				if (!error->empty()) {
 					return false;
 				}
-				// Black-hole address per the brief; on hosts where the route fails fast the
-				// request is already done and only the timing bound is asserted.
-				(void)MeasureCancel("https://10.255.255.1:8443/", error);
+				// The black-hole dial measures a cancel during the SYN phase, which no loopback listener
+				// can stage; it sends a SYN off the machine, so an unattended run skips it.
+				if (std::getenv("CC_SELFTEST_EXTERNAL_DIAL") != nullptr) {
+					(void)MeasureCancel("https://10.255.255.1:8443/", error);
+				} else {
+					std::cout << "[net-directory-selftest] MEASURE http client cancel external dial skipped: set CC_SELFTEST_EXTERNAL_DIAL=1 to dial 10.255.255.1" << std::endl;
+				}
 				return error->empty();
 			}
 
