@@ -71,6 +71,7 @@ void SoundContainer::Clear() {
 		m_CheckpointRegistered = false;
 	}
 	m_CheckpointIdentity = 0;
+	m_PreviewOrigin = nullptr;
 	if (!m_IsDestroying && (!MovableObject::IsFaithfulClone() || MovableObject::FaithfulCloneRegisters())) {
 		ReidentifyCheckpoint(g_AudioMan.AllocateCheckpointSoundContainerID());
 	}

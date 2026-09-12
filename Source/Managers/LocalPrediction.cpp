@@ -385,8 +385,11 @@ namespace RTE {
 
 	void LocalPrediction::Clear() {
 		EndRender();
-		for (Preview& preview: s_Previews) {
-			delete preview.clone;
+		{
+			MovableObject::FaithfulCloneScope scope(false);
+			for (Preview& preview: s_Previews) {
+				delete preview.clone;
+			}
 		}
 		if (!s_Previews.empty()) {
 			Trace("clones dropped");

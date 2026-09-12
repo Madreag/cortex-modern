@@ -1082,6 +1082,13 @@ int MovableObject::InitializeObjectScriptsIfNeeded() {
 
 int MovableObject::InitializeObjectScripts(bool runCreate) {
 	std::lock_guard<std::recursive_mutex> lock(m_ThreadedLuaState->GetMutex());
+	if (LuaMan::IsPreviewClone(this) || m_ScriptObjectName.find("#preview") != std::string::npos) {
+		if (m_ScriptObjectName.empty()) {
+			const std::string dest = std::to_string(m_UniqueID) + (PreviewScriptSelfTest::SharedSlot() ? "" : "#preview");
+			m_ScriptObjectName = "_ScriptedObjects[\"" + dest + "\"]";
+		}
+		return 0;
+	}
 	m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(m_UniqueID) + "\"]";
 	m_ThreadedLuaState->RegisterMO(this);
 	m_ThreadedLuaState->SetTempEntity(this);
@@ -1194,7 +1201,7 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 	}
 
 	if (!ObjectScriptsInitialized()) {
-		status = InitializeObjectScripts();
+		status = InitializeObjectScripts(!LuaMan::IsPreviewClone(this));
 	}
 
 	if (status >= 0) {
@@ -1478,7 +1485,7 @@ int MovableObject::UpdateScripts() {
 
 	int status = 0;
 	if (!ObjectScriptsInitialized()) {
-		status = InitializeObjectScripts();
+		status = InitializeObjectScripts(!LuaMan::IsPreviewClone(this));
 	}
 
 	if (m_SimUpdatesSinceLastScriptedUpdate < m_SimUpdatesBetweenScriptedUpdates) {
