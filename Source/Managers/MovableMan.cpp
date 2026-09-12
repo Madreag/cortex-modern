@@ -2347,6 +2347,7 @@ void MovableMan::PurgeAllMOs() {
 	m_AlarmEvents.clear();
 	m_LockstepJoinQuarantine.clear();
 	NetActorOwnership::ClearSeededOwners();
+	s_LockstepFrameClaims.clear();
 	m_MOIDIndex.clear();
 	// We want to keep known objects around, 'cause these can exist even when not in the simulation (they're here from creation till deletion, regardless of whether they are in sim)
 	// m_KnownObjects.clear();
@@ -4870,6 +4871,8 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 		}
 		m_MOIDIndex.swap(index); m_ContiguousActorIDs.swap(contiguous); m_LockstepJoinQuarantine.swap(state.quarantine);
 		NetActorOwnership::RestoreSeededOwners(std::move(owners));
+		// A restored tick can be reached again after a resync or a rematch; claims made past it must not decide a later tie.
+		s_LockstepFrameClaims.clear();
 		const auto replaceEvents = [](auto& live, auto& saved) {
 			while (live.size() > saved.size()) { delete live.back(); live.pop_back(); }
 			for (size_t i = 0; i < saved.size(); ++i) {
