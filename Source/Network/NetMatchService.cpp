@@ -311,25 +311,20 @@ static std::string ResyncSaveName() {
 					std::this_thread::sleep_for(std::chrono::milliseconds(50));
 				}
 			});
-			// The healed round resumes at the first frame the sim has not applied.
-			bool rewindSim = false;
-			if (!ScenarioRunner::ResolveResyncDropFrame(ScenarioRunner::GetLockstepResumeFrame(), static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), dropFrame, rewindSim, error)) {
+			// The healed round resumes at the first frame the sim has not applied, and the world may only
+			// be saved where no tick is in flight.
+			const uint64_t resumeFrame = ScenarioRunner::GetLockstepResumeFrame();
+			if (!ScenarioRunner::ResolveResyncDropFrame(resumeFrame, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), dropFrame, error)) {
 				return false;
-			}
-			if (rewindSim) {
-				long long time = g_TimerMan.GetSimTimeTicks();
-				if (!g_TimerMan.IsSimTimeFrozen()) {
-					const long long delta = g_TimerMan.GetDeltaTimeTicks();
-					if (time >= delta) {
-						time -= delta;
-					}
-				}
-				g_TimerMan.RewindSimTo(static_cast<long long>(dropFrame - 1), time);
 			}
 			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName()) || !g_ActivityMan.WaitForSaveGameTask()) {
 				if (error) *error = "resync snapshot save failed";
 				return false;
 			}
+			const uint64_t savedTick = dropFrame > 0 ? dropFrame - 1 : 0;
+			m_ResyncSavedTick.store(savedTick);
+			m_ResyncBoundaryTick.store(resumeFrame > 0 ? resumeFrame - 1 : 0);
+			std::cout << "[net-match] resync snapshot at tick " << savedTick << " (completed " << m_ResyncBoundaryTick.load() << ")" << std::endl;
 			if (FaultInjected("slow_resync_save")) {
 				// Keep the snapshot frozen across a save longer than the receive timeout.
 				std::this_thread::sleep_for(std::chrono::seconds(7));
@@ -1263,6 +1258,10 @@ static std::string ResyncSaveName() {
 			reconnect["rejoin_outcome"] = m_RejoinOutcome;
 		}
 		report["reconnect"] = reconnect;
+		// The snapshot's label and the tick it was taken at; a heal at a boundary has them equal.
+		if (m_ResyncSavedTick.load() != UINT64_MAX) {
+			report["resync"] = {{"saved_tick", m_ResyncSavedTick.load()}, {"boundary_tick", m_ResyncBoundaryTick.load()}};
+		}
 		if (m_Runner && m_Session && m_Coordinator) {
 			report["runner"] = json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
 		} else if (!m_CapturedRunnerReport.empty()) {
