@@ -836,6 +836,113 @@ namespace RTE {
 			return true;
 		}
 
+		constexpr int c_GuardVirtualPort = c_HostVirtualPort + 2;
+		constexpr const char* c_GuardIdentity = "str:identity-guard-other";
+
+		std::string CheckIdentityGuard(Side& host, Side& joiner, const GnsP2PConfig& hostConfig, const GnsP2PConfig& joinerConfig, const std::string& identity,
+		                               const std::shared_ptr<SignalQueue>& toHost, const std::shared_ptr<std::atomic<int>>& releases, const std::function<void()>& pump) {
+			Side third("third");
+			Side fourth("fourth");
+			GnsP2PConfig otherHost = hostConfig;
+			otherHost.localIdentity = c_GuardIdentity;
+			GnsP2PConfig otherJoiner = joinerConfig;
+			otherJoiner.localIdentity = c_GuardIdentity;
+			std::string hostError;
+			const bool hostStarted = third.transport.StartHostP2P(c_GuardVirtualPort, otherHost, &hostError);
+			Say("third StartHostP2P(" + std::to_string(c_GuardVirtualPort) + ", local_identity=" + c_GuardIdentity + ") returned " + (hostStarted ? std::string("true") : "false: " + hostError));
+			const int releasedBefore = releases->load();
+			std::string joinError;
+			const bool joined = fourth.transport.ConnectP2P(new StubConnectionSignaling(toHost, releases), identity, c_HostVirtualPort, otherJoiner, &joinError);
+			Say("fourth ConnectP2P(peer " + identity + ", local_identity=" + c_GuardIdentity + ") returned " + (joined ? std::string("true") : "false: " + joinError) +
+			    "; its signaling object was released " + std::to_string(releases->load() - releasedBefore) + " time(s)");
+			WaitUntil(500, pump, [] { return false; });
+			const std::string after = host.transport.GetLocalIdentity();
+			Say("500ms later: process identity " + after + "; host " + StateName(host.transport.GetPeerConnectionInfo(host.peer).state) + ", joiner " +
+			    StateName(joiner.transport.GetPeerConnectionInfo(joiner.peer).state));
+			third.transport.Stop();
+			fourth.transport.Stop();
+			if (hostStarted || joined) {
+				return "a transport was given another identity while a connection was live";
+			}
+			if (hostError.empty() || joinError.empty()) {
+				return "a refusal came without a reason";
+			}
+			if (after != identity || host.closed || joiner.closed || !IsConnected(host) || !IsConnected(joiner)) {
+				return "the first connection did not stay Connected";
+			}
+			const std::vector<uint8_t> fromJoiner = Payload('J');
+			const std::vector<uint8_t> fromHost = Payload('H');
+			std::string error;
+			if (!joiner.transport.Send(joiner.peer, NetTransportLane::ControlReliable, fromJoiner, &error) || !host.transport.Send(host.peer, NetTransportLane::ControlReliable, fromHost, &error)) {
+				return "Send after the refusals: " + error;
+			}
+			if (!WaitUntil(5000, pump, [&] { return !host.received.empty() && !joiner.received.empty(); }) || host.received.front() != fromJoiner || joiner.received.front() != fromHost) {
+				return "the 64-byte messages did not cross both ways intact after the refusals";
+			}
+			Say("after the refusals the host and the joiner still exchange 64 bytes each way intact");
+			joiner.transport.Disconnect(joiner.peer, "net-p2p-selftest done");
+			if (!WaitUntil(5000, pump, [&] { return host.closed; }) || host.closeReason.find("net-p2p-selftest done") == std::string::npos) {
+				return "the host did not see the joiner's close with the joiner's reason";
+			}
+			Say("host saw the joiner's close with the joiner's reason");
+			return {};
+		}
+
+		/// identity-guard: a host and a joiner connect with the process identity; two more transports then ask for another one.
+		int RunIdentityGuard() {
+			Say("mode: single process; a host and a joiner connect over the in-memory stub with the process identity, then a third transport (StartHostP2P) and a fourth (ConnectP2P) ask for " +
+			    std::string(c_GuardIdentity));
+			EnableGnsOutput();
+			GnsP2PConfig hostConfig;
+			GnsP2PConfig joinerConfig;
+			SingleProcessConfigs(&hostConfig, &joinerConfig);
+
+			const auto toHost = std::make_shared<SignalQueue>("joiner->host");
+			const auto toJoiner = std::make_shared<SignalQueue>("host->joiner");
+			const auto releases = std::make_shared<std::atomic<int>>(0);
+			std::string failure;
+			{
+				Side host("host");
+				Side joiner("joiner");
+				StubRecvContext hostContext(toJoiner, releases, Answer::Accept);
+				StubRecvContext joinerContext(toHost, releases, Answer::Ignore);
+				const auto pump = [&] {
+					Deliver(*toHost, host.transport, hostContext, nullptr);
+					Deliver(*toJoiner, joiner.transport, joinerContext, nullptr);
+					Drain(host);
+					// Polling a closed client transport only repeats a receive fault.
+					if (!joiner.closed) {
+						Drain(joiner);
+					}
+				};
+				std::string error;
+				if (!host.transport.StartHostP2P(c_HostVirtualPort, hostConfig, &error)) {
+					failure = "StartHostP2P: " + error;
+				} else {
+					const std::string identity = host.transport.GetLocalIdentity();
+					Say("host StartHostP2P(" + std::to_string(c_HostVirtualPort) + ") succeeded; process identity " + identity);
+					if (!joiner.transport.ConnectP2P(new StubConnectionSignaling(toHost, releases), identity, c_HostVirtualPort, joinerConfig, &error)) {
+						failure = "ConnectP2P: " + error;
+					} else {
+						joiner.peer = 1;
+						if (!WaitUntil(15000, pump, [&] { return host.closed || joiner.closed || (joiner.connected && IsConnected(joiner) && IsConnected(host)); }) || host.closed || joiner.closed) {
+							failure = "the host and the joiner did not reach Connected within 15s";
+						} else {
+							Say("host and joiner Connected");
+							failure = CheckIdentityGuard(host, joiner, hostConfig, joinerConfig, identity, toHost, releases, pump);
+						}
+					}
+					host.transport.Stop();
+					joiner.transport.Stop();
+				}
+			}
+			Say("transports destroyed; GNS released " + std::to_string(releases->load()) + " stub signaling object(s)");
+			if (failure.empty() && releases->load() != 3) {
+				failure = "GNS released " + std::to_string(releases->load()) + " signaling objects, expected 3 (host, joiner, the refused ConnectP2P)";
+			}
+			return Finish(failure);
+		}
+
 	} // namespace
 
 	int GnsP2PSelfTest::Run(const std::vector<std::string>& args) {
@@ -859,7 +966,10 @@ namespace RTE {
 		if ((args[0] == "host" || args[0] == "join") && args.size() == 2 && ParseNumber(args[1], &value) && value < 0xffff) {
 			return RunTwoProcess(args[0] == "host", value);
 		}
-		std::cout << "[net-p2p-selftest] FAIL: usage: -net-p2p-selftest [reject | close-on-accept | gather <iceEnable> | drop j2h|h2j <n> | host <port> | join <port>]" << std::endl;
+		if (args.size() == 1 && args[0] == "identity-guard") {
+			return RunIdentityGuard();
+		}
+		std::cout << "[net-p2p-selftest] FAIL: usage: -net-p2p-selftest [reject | close-on-accept | gather <iceEnable> | drop j2h|h2j <n> | host <port> | join <port> | identity-guard]" << std::endl;
 		return 1;
 	}
 
