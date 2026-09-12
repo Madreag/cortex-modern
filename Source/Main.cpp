@@ -4224,7 +4224,7 @@ int RunNetDirectoryProbe(const std::string& baseUrlArg, const std::string& certP
 	while (!baseUrl.empty() && baseUrl.back() == '/') {
 		baseUrl.pop_back();
 	}
-	const std::string installKey = g_SettingsMan.GetSessionDirectoryInstallKey();
+	const std::string installKey = g_SettingsMan.GetOrCreateSessionDirectoryInstallKey();
 	auto request = [&](const std::string& method, const std::string& path, const std::string& body, NetHttpClient::Response& out) {
 		NetHttpClient client;
 		const std::vector<std::pair<std::string, std::string>> headers = {

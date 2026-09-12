@@ -95,13 +95,10 @@ int SettingsMan::Initialize() {
 		m_SettingsNeedOverwrite = true;
 
 		Reader newSettingsReader(m_SettingsPath, false, nullptr, false, true);
-		const int createResult = Serializable::Create(newSettingsReader);
-		EnsureSessionDirectoryInstallKey();
-		return createResult;
+		return Serializable::Create(newSettingsReader);
 	}
 
 	int failureCode = Serializable::Create(settingsReader);
-	EnsureSessionDirectoryInstallKey();
 
 	if (GetAnyExperimentalSettingsEnabled()) {
 		// Show a message box to annoy people as much as possible while they're using experimental settings, so they can't leave it on accidentally
@@ -111,10 +108,7 @@ int SettingsMan::Initialize() {
 	return failureCode;
 }
 
-void SettingsMan::EnsureSessionDirectoryInstallKey() {
-	if (!m_SessionDirectoryInstallKey.empty()) {
-		return;
-	}
+void SettingsMan::GenerateSessionDirectoryInstallKey() {
 	// A rate-limit identity, not a sim draw: non-sim entropy so lockstep runs stay byte-identical.
 	static const char hex[] = "0123456789abcdef";
 	std::random_device device;
@@ -122,7 +116,14 @@ void SettingsMan::EnsureSessionDirectoryInstallKey() {
 	for (char& ch : m_SessionDirectoryInstallKey) {
 		ch = hex[device() & 0x0F];
 	}
-	m_SettingsNeedOverwrite = true;
+}
+
+const std::string& SettingsMan::GetOrCreateSessionDirectoryInstallKey() {
+	if (m_SessionDirectoryInstallKey.empty()) {
+		GenerateSessionDirectoryInstallKey();
+		UpdateSettingsFile();
+	}
+	return m_SessionDirectoryInstallKey;
 }
 
 void SettingsMan::UpdateSettingsFile() const {

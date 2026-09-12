@@ -1083,6 +1083,28 @@ namespace RTE {
 				failures.push_back("healed round ended off its planned frame " + std::to_string(c_Cap + 1) +
 				                   ": host=" + std::to_string(hostStop) + " client=" + std::to_string(clientStop));
 			}
+
+			// A peer whose first observed tick after the relaunch sits below the resume frame must not
+			// count the replayed frames a second time.
+			NetMatchE2ETickClock behind;
+			for (uint64_t tick = 1; tick <= 58; ++tick) {
+				behind.NoteSimTick(tick);
+			}
+			behind.OnResyncRelaunch(c_Resume);
+			behind.NoteSimTick(c_Resume - 2);
+			const uint64_t behindBeforeResume = behind.Total();
+			if (behindBeforeResume != c_Resume - 1) {
+				failures.push_back("a peer first seen at frame " + std::to_string(c_Resume - 2) + " after the relaunch read total " +
+				                   std::to_string(behindBeforeResume) + " instead of " + std::to_string(c_Resume - 1));
+			}
+			for (uint64_t tick = c_Resume; tick <= c_StopFrame; ++tick) {
+				behind.NoteSimTick(tick);
+			}
+			const uint64_t behindAtStopFrame = behind.Total();
+			if (behindAtStopFrame != c_StopFrame) {
+				failures.push_back("a peer first seen below the resume frame read total " + std::to_string(behindAtStopFrame) +
+				                   " at frame " + std::to_string(c_StopFrame));
+			}
 			if (!failures.empty()) {
 				*error = "healed round planned end: " + std::to_string(failures.size()) + " defects";
 				for (const std::string& failure: failures) {
@@ -1091,8 +1113,8 @@ namespace RTE {
 				return false;
 			}
 			std::cout << "[net-match-selftest] healed round planned end: host_total=" << hostAtStopFrame
-			          << " client_total=" << clientAtStopFrame << " at frame " << c_StopFrame
-			          << ", both stop at " << hostStop << std::endl;
+			          << " client_total=" << clientAtStopFrame << " behind_total=" << behindAtStopFrame
+			          << " at frame " << c_StopFrame << ", both stop at " << hostStop << std::endl;
 			return true;
 		}
 
