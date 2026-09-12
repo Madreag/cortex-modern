@@ -621,7 +621,10 @@ bool ActivityMan::RunGlobalCallbacksSelfTest() {
 	GlobalScript* script = findScript();
 	const auto* craftPreset = g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte");
 	const auto* scriptPreset = g_PresetMan.GetEntityPreset("GlobalScript", "Checkpoint Global", "UserScenes.rte");
-	if (!script || !craftPreset || !scriptPreset) return false;
+	if (!script || !craftPreset || !scriptPreset) {
+		std::cout << "[global-callback-selftest] FAIL fixture missing: script=" << (script != nullptr) << " craft=" << (craftPreset != nullptr) << " preset=" << (scriptPreset != nullptr) << " (tools/test_global_callbacks.py installs UserScenes.rte/Checkpoint Global)" << std::endl;
+		return false;
+	}
 	auto* craft = dynamic_cast<ACraft*>(craftPreset->Clone());
 	craft->SetPos(Vector(500, 100));
 	craft->SetTeam(Activity::TeamOne);
