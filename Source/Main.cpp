@@ -2620,7 +2620,7 @@ static Actor* FindE2eSwitchControlTarget(Activity* activity, int player) {
 }
 
 static void NoteE2eSwitchOwnerLog(uint64_t tick) {
-	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+	if (!s_netMatchServiceE2E || !ScenarioRunner::IsLockstepControllerSyncActive()) {
 		return;
 	}
 	if (s_netMatchE2eSwitchUid == 0) {
