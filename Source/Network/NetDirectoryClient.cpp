@@ -5,7 +5,9 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <iostream>
 #include <thread>
 #include <utility>
@@ -57,6 +59,20 @@ namespace RTE {
 			} catch (...) {
 			}
 			return 1;
+		}
+
+		std::string EncodeQueryValue(const std::string& value) {
+			std::string out;
+			for (unsigned char ch : value) {
+				if (std::isalnum(ch) || ch == '-' || ch == '_' || ch == '.' || ch == '~') {
+					out.push_back(static_cast<char>(ch));
+				} else {
+					char buf[8];
+					std::snprintf(buf, sizeof(buf), "%%%02X", ch);
+					out += buf;
+				}
+			}
+			return out;
 		}
 
 		/// The join-screen refusal labels for an IsJoinable reason ("incompatible: <field>").
@@ -379,24 +395,47 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::HandleListReply(const Reply& reply, uint64_t nowMs) {
-		m_BrowseNextMs = nowMs + c_ListIntervalMs;
 		++m_ListReplies;
-		if (!reply.error.empty() || reply.statusCode == 0) {
-			m_ListError = reply.error.empty() ? "transport error" : reply.error;
-			return;
-		}
-		if (reply.statusCode != 200) {
-			m_ListError = "HTTP " + std::to_string(reply.statusCode);
+		const bool follow = m_ListPages > 1;
+		if (!reply.error.empty() || reply.statusCode == 0 || reply.statusCode != 200) {
+			if (follow) {
+				NoteError("list: page failed, keeping " + std::to_string(m_Rows.size()) + " rows");
+			} else {
+				m_ListError = !reply.error.empty() ? reply.error : (reply.statusCode == 0 ? "transport error" : "HTTP " + std::to_string(reply.statusCode));
+			}
+			m_ListCursor.clear();
+			m_BrowseNextMs = nowMs + c_ListIntervalMs;
 			return;
 		}
 		NetDirectoryListResponse list;
 		std::string error;
 		if (!NetDirectoryCodec::DecodeListResponse(reply.body, list, error)) {
-			m_ListError = error;
+			if (follow) {
+				NoteError("list: page failed, keeping " + std::to_string(m_Rows.size()) + " rows");
+			} else {
+				m_ListError = error;
+			}
+			m_ListCursor.clear();
+			m_BrowseNextMs = nowMs + c_ListIntervalMs;
 			return;
 		}
+		if (m_ListPages <= 1) {
+			m_Rows = std::move(list.sessions);
+		} else {
+			m_Rows.insert(m_Rows.end(), list.sessions.begin(), list.sessions.end());
+		}
+		m_ListTotal = list.total;
 		m_ListError.clear();
-		m_Rows = std::move(list.sessions);
+		if (!list.nextCursor.empty() && m_ListPages < c_ListMaxPages) {
+			m_ListCursor = list.nextCursor;
+			IssueList(nowMs);
+			return;
+		}
+		if (!list.nextCursor.empty()) {
+			NoteError("list: stopped after 5 pages");
+		}
+		m_ListCursor.clear();
+		m_BrowseNextMs = nowMs + c_ListIntervalMs;
 	}
 
 	void NetDirectoryClient::IssueRegister(uint64_t nowMs) {
@@ -435,10 +474,19 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::IssueList(uint64_t nowMs) {
+		if (m_ListCursor.empty()) {
+			m_ListPages = 0;
+			m_ListTotal = 0;
+		}
+		++m_ListPages;
 		Request request;
 		request.method = "GET";
-		request.path = "/v1/sessions";
+		request.path = "/v1/sessions?limit=" + std::to_string(c_ListPageLimit);
+		if (!m_ListCursor.empty()) {
+			request.path += "&cursor=" + EncodeQueryValue(m_ListCursor);
+		}
 		StartRequest(RequestKind::List, request);
+		(void)nowMs;
 	}
 
 	std::vector<NetDirectoryClient::GameRow> NetDirectoryClient::MergeGameLists(const std::vector<NetLanHostInfo>& lan,
@@ -506,6 +554,8 @@ namespace RTE {
 			{"deletes", m_Deletes},
 			{"last_status", m_LastStatus},
 			{"last_error", m_LastError},
+			{"list_pages", m_ListPages},
+			{"list_total", m_ListTotal},
 		};
 		return report.dump();
 	}
