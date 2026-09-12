@@ -1423,6 +1423,90 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		// An AI pass that adds then reads back must see the new entry while the physical queue stays
+		// empty until the sent order is applied, the way single player sees its own write immediately.
+		bool TestAIWaypointReadThroughSamePass(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433525401ULL);
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 43023, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 43023, 0, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "team-owner";
+			clientConfig.ownershipPolicy = "team-owner";
+			if (!StartCoordinatorPair(43023, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			Actor* ownerView = new Actor();
+			Actor* peerView = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (ownerView->MovableObject::Create(1) < 0 || peerView->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			ownerView->SetTeam(0);
+			peerView->SetTeam(0);
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+
+			g_CurrentAIActor = ownerView;
+			ownerView->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			const int logicalSize = ownerView->GetWaypointsSize();
+			const Vector logicalLast = ownerView->GetLastAIWaypoint();
+			g_CurrentAIActor = nullptr;
+			const int physicalSize = ownerView->GetWaypointsSize();
+			if (logicalSize != 1) {
+				return finish("the AI pass did not see its own add on the logical queue");
+			}
+			if (physicalSize != 0) {
+				return finish("the AI pass mutated the physical queue before apply");
+			}
+			if (logicalLast != Vector(10.0F, 20.0F)) {
+				return finish("GetLastAIWaypoint did not see the pending add");
+			}
+
+			ownerView->SendDeferredWaypoints();
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			if (ownerView->GetWaypointsSize() != 0) {
+				return finish("the physical queue changed when the add was sent");
+			}
+			if (sent.size() != 1) {
+				return finish("the AI pass did not send one AIOrder for the add");
+			}
+			const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&sent[0].payload);
+			const int64_t ownerUID = static_cast<int64_t>(ownerView->GetUniqueID());
+			if (!order || !(*order == NetGameAIOrder{ownerUID, 0, NetGameAIOrder::SceneWaypoint, 10.0F, 20.0F, 0})) {
+				return finish("the sent AIOrder does not match the waypoint add");
+			}
+
+			for (Actor* view: {ownerView, peerView}) {
+				view->AddAISceneWaypoint(Vector(order->x, order->y));
+			}
+			if (ownerView->GetWaypointsSize() != 1 || peerView->GetWaypointsSize() != 1) {
+				return finish("the applied queue is not the one waypoint the AI asked for");
+			}
+			if (ownerView->GetWaypointList().front().first != Vector(10.0F, 20.0F) || peerView->GetWaypointList().front().first != Vector(10.0F, 20.0F)) {
+				return finish("the two peers hold different applied waypoints");
+			}
+			std::cout << "[net-lockstep-selftest] PASS ai waypoint read-through: logical=1 physical=0 applied=1" << std::endl;
+			return finish(nullptr);
+		}
+
 		bool TestRecoveryStopsAtCompletedTick(std::string* error) {
 			for (uint16_t delay: {0, 3}) {
 				for (bool rejoin: {false, true}) {
@@ -9274,6 +9358,7 @@ namespace RTE {
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
+		    !TestAIWaypointReadThroughSamePass(&error) ||
 		    !TestCoordinatorOwedFrameRetryEndsWithTheRound(&error) ||
 		    !TestCoordinatorOwedFrameKeepsItsCommands(&error) ||
 		    !TestCoordinatorStoppedRoundStopsResending(&error) ||

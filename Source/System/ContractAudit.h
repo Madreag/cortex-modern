@@ -530,6 +530,7 @@ Field(path + ".Actor.m_BaseMass", object.m_BaseMass);
 Field(path + ".Actor.m_AIMode", object.m_AIMode);
 Field(path + ".Actor.m_Waypoints", object.m_Waypoints);
 Field(path + ".Actor.m_PendingDeferredWaypoints", object.m_PendingDeferredWaypoints);
+Field(path + ".Actor.m_InflightWaypoints", object.m_InflightWaypoints);
 Field(path + ".Actor.m_WaypointCursor", object.m_WaypointCursor);
 Field(path + ".Actor.m_DrawWaypoints", object.m_DrawWaypoints);
 Field(path + ".Actor.m_MoveTarget", object.m_MoveTarget);
