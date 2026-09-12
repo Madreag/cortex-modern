@@ -400,6 +400,12 @@ Field(path + ".AHuman.m_WalkPathOffset", object.m_WalkPathOffset);
 Field(path + ".AHuman.m_ArmSwingRate", object.m_ArmSwingRate);
 Field(path + ".AHuman.m_DeviceArmSwayRate", object.m_DeviceArmSwayRate);
 }
+void Visit(const Actor::DeferredWaypoint& object, const std::string& path) {
+Field(path + ".Actor::DeferredWaypoint.op", object.op);
+Field(path + ".Actor::DeferredWaypoint.x", object.x);
+Field(path + ".Actor::DeferredWaypoint.y", object.y);
+Field(path + ".Actor::DeferredWaypoint.targetUID", object.targetUID);
+}
 void Visit(const AHuman::DeferredEquip& object, const std::string& path) {
 Field(path + ".AHuman::DeferredEquip.op", object.op);
 Field(path + ".AHuman::DeferredEquip.depositToFront", object.depositToFront);
@@ -523,6 +529,7 @@ Field(path + ".Actor.m_AIBaseDigStrength", object.m_AIBaseDigStrength);
 Field(path + ".Actor.m_BaseMass", object.m_BaseMass);
 Field(path + ".Actor.m_AIMode", object.m_AIMode);
 Field(path + ".Actor.m_Waypoints", object.m_Waypoints);
+Field(path + ".Actor.m_PendingDeferredWaypoints", object.m_PendingDeferredWaypoints);
 Field(path + ".Actor.m_WaypointCursor", object.m_WaypointCursor);
 Field(path + ".Actor.m_DrawWaypoints", object.m_DrawWaypoints);
 Field(path + ".Actor.m_MoveTarget", object.m_MoveTarget);
