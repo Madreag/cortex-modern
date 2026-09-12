@@ -3040,6 +3040,18 @@ _NetCo = coroutine.create(function(obj)
 end)
 assert(select(1, coroutine.resume(_NetCo, ToActor(LuaMan.TempEntity))))
 )lua") == 0 && lua.HasNativeAliases(ownerOnly));
+			lua.RunScriptString("_NetCo = nil");
+			g_LuaMan.CollectGarbageForCheckpoint();
+			check("alias_from_frame_function_upvalue", lua.RunScriptString(R"lua(
+_NetCo = (function(obj)
+	local held = obj
+	return coroutine.create(function() coroutine.yield(); return held end)
+end)(ToActor(LuaMan.TempEntity))
+assert(select(1, coroutine.resume(_NetCo)))
+)lua") == 0 && lua.HasNativeAliases(ownerOnly));
+			lua.RunScriptString("_NetCo = nil");
+			g_LuaMan.CollectGarbageForCheckpoint();
+			check("no_alias_after_coroutine_dropped", !lua.HasNativeAliases(ownerOnly));
 			check("alias_from_child_dependency", lua.RunScriptString(R"lua(
 _NetCo = nil
 _NetChild = _ScriptGraphOwnerReference(ToActor(LuaMan.TempEntity), "actor-controller", 0, false)

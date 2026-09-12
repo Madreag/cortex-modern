@@ -516,10 +516,6 @@ namespace RTE {
 				SetError(error, NetLockstepErrorCode::StringTooLong, offset, "value observation string exceeds max encoded length");
 				return false;
 			}
-			if (observation.mapKind == 0 && observation.op == 0 && !std::isfinite(observation.numberValue)) {
-				SetError(error, NetLockstepErrorCode::InvalidValue, offset, "value observation number is not finite");
-				return false;
-			}
 			return true;
 		}
 
@@ -3366,11 +3362,11 @@ namespace RTE {
 		m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":" + message;
 	}
 
-	void NetLockstepCoordinator::RequestResync(const std::string& message) {
+	void NetLockstepCoordinator::RequestResync(const std::string& message, bool immediate) {
 		if (m_State == NetLockstepState::Failed || m_State == NetLockstepState::Stopped || m_State == NetLockstepState::Idle) {
 			return;
 		}
-		if (m_DeferStops) {
+		if (m_DeferStops && !immediate) {
 			ScheduleRecoveryStop(NetLockstepStopReason::ResyncRequested, m_Stats.nextFrame, message);
 			return;
 		}
@@ -3402,8 +3398,10 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::FinishSimulationTick(uint64_t completedTick) {
-		if (!m_DeferStops || !IsRunning()) return false;
-		m_LastCompletedSimulationTick = completedTick;
+		if (!m_DeferStops) return false;
+		// A tick the sim applied counts even once the round has failed: the heal resumes from it.
+		if (IsRunning() || IsFailed()) m_LastCompletedSimulationTick = completedTick;
+		if (!IsRunning()) return false;
 		if (m_PendingRecoveryStop && m_Config.localPeerId == m_Config.matchConfig.hostPeerId) {
 			const NetLockstepStop stop = *m_PendingRecoveryStop;
 			m_PendingRecoveryStop.reset();
@@ -3417,6 +3415,16 @@ namespace RTE {
 			return true;
 		}
 		return false;
+	}
+
+	bool NetLockstepCoordinator::ApplyPendingRecoveryStopWhileWaiting(uint64_t waitingTick) {
+		if (!m_DeferStops || !IsRunning() || m_Config.localPeerId != m_Config.matchConfig.hostPeerId || !m_PendingRecoveryStop) {
+			return false;
+		}
+		const NetLockstepStop stop = *m_PendingRecoveryStop;
+		m_PendingRecoveryStop.reset();
+		Fail(stop.reason, waitingTick, stop.message);
+		return true;
 	}
 
 	bool NetLockstepCoordinator::PopReadyFrame(NetLockstepReadyFrame& outFrame) {
@@ -3969,6 +3977,11 @@ namespace RTE {
 					++m_Stats.ignoredAdmissionFaults;
 					break;
 				}
+				// The old drop's close can land on the refilled seat; this round already listed them.
+				if (m_RelayHost && lockstepPeer != 0 && IgnoreStaleRefillLeave(lockstepPeer, nowMs)) {
+					++m_Stats.ignoredAdmissionFaults;
+					break;
+				}
 				// The relay host adjudicates a client drop as a leave at the first frame it has no data
 				// for, so the survivors keep playing; a host drop still ends the match. The relayed
 				// frames precede this notice on the reliable lane, so no survivor learns of the leave
@@ -4342,6 +4355,11 @@ namespace RTE {
 		}
 		if (stop.reason == NetLockstepStopReason::PeerLeft || stop.reason == NetLockstepStopReason::PeerDropped) {
 			if (IsKnownRemotePeer(stop.senderPeerId)) {
+				if (m_Config.resumeFromSnapshot && m_RemoteTransports.contains(stop.senderPeerId) &&
+				    stop.frame <= m_Config.startFrame) {
+					++m_Stats.ignoredAdmissionFaults;
+					return;
+				}
 				ApplyPeerLeave(stop.senderPeerId, stop.frame, stop.message, nowMs, stop.reason == NetLockstepStopReason::PeerLeft);
 			}
 			return;
@@ -4537,13 +4555,14 @@ namespace RTE {
 			(void)SendPacket({notice}, NetTransportLane::ControlReliable, &ignored);
 		}
 		if (resolution == NetLockstepHoldResolution::Expired) {
-			if (m_PeerLeaveFrames.size() >= m_RemotePeerIds.size() && !AnyLeftSeatHeld()) {
+			if (LeftPeersNotRefilling() >= m_RemotePeerIds.size() && !AnyLeftSeatHeld()) {
 				m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":" + m_LastLeaveMessage;
 				m_State = NetLockstepState::Stopped;
 			}
 			return;
 		}
-		RequestResync(resolution == NetLockstepHoldResolution::Reclaimed ? "seat reclaimed" : "seat substituted");
+		std::cout << "[net-match] rejoin: " << DescribePeer(peerId) << " reconnected - resyncing the match" << std::endl;
+		RequestResync(resolution == NetLockstepHoldResolution::Reclaimed ? "seat reclaimed" : "seat substituted", true);
 		(void)nowMs;
 	}
 
@@ -4551,14 +4570,46 @@ namespace RTE {
 		return !m_LeftSeatsHeld.empty();
 	}
 
+	bool NetLockstepCoordinator::IgnoreStaleRefillLeave(uint8_t peerId, uint64_t) const {
+		return m_Config.resumeFromSnapshot && m_RemoteTransports.contains(peerId) &&
+		       m_PeerLeaveFrames.find(peerId) == m_PeerLeaveFrames.end() &&
+		       m_PeerLastHeardMs.find(peerId) == m_PeerLastHeardMs.end();
+	}
+
+	bool NetLockstepCoordinator::SeatIsRefilling(uint8_t peerId) const {
+		const NetLockstepHoldResolution resolution = HeldSeatResolution(peerId);
+		return resolution == NetLockstepHoldResolution::Reclaimed || resolution == NetLockstepHoldResolution::Substituted;
+	}
+
+	bool NetLockstepCoordinator::AnySeatRefilling() const {
+		for (const auto& [peerId, resolution]: m_DroppedSeatResolutions) {
+			(void)peerId;
+			if (resolution == NetLockstepHoldResolution::Reclaimed || resolution == NetLockstepHoldResolution::Substituted) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	size_t NetLockstepCoordinator::LeftPeersNotRefilling() const {
+		size_t left = 0;
+		for (const auto& [peerId, frame]: m_PeerLeaveFrames) {
+			(void)frame;
+			if (!SeatIsRefilling(peerId)) {
+				++left;
+			}
+		}
+		return left;
+	}
+
 	bool NetLockstepCoordinator::IsHoldingSeatForReclaim() const {
 		return m_State == NetLockstepState::Running && !m_RemotePeerIds.empty() &&
-		       m_PeerLeaveFrames.size() >= m_RemotePeerIds.size() && AnyLeftSeatHeld();
+		       m_PeerLeaveFrames.size() >= m_RemotePeerIds.size() && (AnyLeftSeatHeld() || AnySeatRefilling());
 	}
 
 	void NetLockstepCoordinator::EndRoundIfNobodyIsComingBack() {
 		if (m_State != NetLockstepState::Running || m_RemotePeerIds.empty() ||
-		    m_PeerLeaveFrames.size() < m_RemotePeerIds.size() || AnyLeftSeatHeld()) {
+		    LeftPeersNotRefilling() < m_RemotePeerIds.size() || AnyLeftSeatHeld()) {
 			return;
 		}
 		// Nobody left to play with.
@@ -4598,7 +4649,7 @@ namespace RTE {
 		ForgetCongestion(peerId);
 		m_LastLeaveMessage = message;
 		// A dropped seat pauses commits until the host resolves it; an announced leave still ends a last-player match at once.
-		if (m_PeerLeaveFrames.size() >= m_RemotePeerIds.size() && (announced || !AnyLeftSeatHeld())) {
+		if (LeftPeersNotRefilling() >= m_RemotePeerIds.size() && (announced || !AnyLeftSeatHeld())) {
 			// Nobody left to play with.
 			m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":" + message;
 			m_State = NetLockstepState::Stopped;
