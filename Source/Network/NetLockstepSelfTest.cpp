@@ -16,6 +16,7 @@
 #include "Controller.h"
 #include "GUISound.h"
 #include "MovableMan.h"
+#include "NetActorOwnership.h"
 #include "MovableObject.h"
 #include "SceneMan.h"
 #include "SettingsMan.h"
@@ -9850,6 +9851,55 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		// A seeded owner whose actor left the world before a resync must not travel in the world structure:
+		// the load resolves every owner entry to a live actor and would reject the whole checkpoint otherwise.
+		bool TestOwnerMapSurvivesActorDeath(std::string* error) {
+			const char* name = "owner_map_survives_actor_death";
+			EnsureSwitchTestManagers();
+			const auto finish = [&](const char* message) {
+				NetActorOwnership::ClearSeededOwners();
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) { *error = message; }
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			NetActorOwnership::ClearSeededOwners();
+			// AddActor registers nothing without an activity.
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamOne, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* survivor = MakeSwitchTestActor(Activity::TeamOne);
+			if (!survivor) {
+				return finish("selftest actor could not be created");
+			}
+			AddSwitchTestActor(survivor);
+			const int64_t survivorUID = static_cast<int64_t>(survivor->GetUniqueID());
+			// A stale owner for an actor that already left the world: without a removal-time erase its
+			// s_SeededOwners entry outlives it, exactly as a mid-match death leaves one behind.
+			const int64_t departedUID = survivorUID + 1000000;
+			if (g_MovableMan.FindObjectByUniqueID(static_cast<long>(departedUID))) {
+				return finish("the chosen departed id unexpectedly names a live object");
+			}
+			NetActorOwnership::SeedOwner(survivorUID, 2);
+			NetActorOwnership::SeedOwner(departedUID, 1);
+			const std::string snapshot = g_MovableMan.SaveWorldStructure();
+			if (!g_MovableMan.LoadWorldStructure(snapshot, false)) {
+				return finish("the world structure was rejected because a departed actor's owner was saved");
+			}
+			if (NetActorOwnership::GetSeededOwner(survivorUID) != 2) {
+				return finish("the surviving actor's owner did not round-trip");
+			}
+			if (NetActorOwnership::GetSeededOwner(departedUID) != 0) {
+				return finish("a departed actor's owner survived the round-trip");
+			}
+			return finish(nullptr);
+		}
+
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -9972,7 +10022,9 @@ namespace RTE {
 		const bool claimTie = TestSimultaneousClaimTieBreak(&claimTieError);
 		const bool switchHold = TestSwitchUnderSyncedHold(&switchHoldError);
 		const bool coopTakeover = TestCoopTakeoverOfHostCpuActor(&coopTakeoverError);
-		if (!switchLands || !claimTie || !switchHold || !coopTakeover) {
+		std::string ownerMapError;
+		const bool ownerMapLives = TestOwnerMapSurvivesActorDeath(&ownerMapError);
+		if (!switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives) {
 			return 1;
 		}
 		std::cout << "[net-lockstep-selftest] PASS" << std::endl;
