@@ -3,8 +3,8 @@
 A host and a client play a real match; the client is killed with its record on disk while the host
 still hosts. A second client boots with that record and a script that navigates nowhere: the first
 screen it shows must be the multiplayer landing panel carrying the rejoin offer. Dismissing the offer
-must clear the line it wrote (G5), and a boot with no record must say so rather than show a blank
-line (G4).
+must clear the line it wrote (G5). A boot with no record keeps the landing line silent on the way in;
+the missing-record sentence is the answer to an explicit press on the rejoin button, nothing else.
 """
 
 import argparse
@@ -68,14 +68,20 @@ def main():
         result["checks"]["dismiss_clears_the_line"] = 'assert_landing_empty status="" PASS' in log
         result["checks"]["no_script_failure"] = "[menu-script] FAILED:" not in log
 
-        # A boot with no record at all: §11 says so instead of leaving the line blank.
+        # A boot with no record at all: the landing line stays silent on the way in, and the
+        # missing-record sentence is the answer to pressing the rejoin button, not the scan.
         start("NoRecord",
               "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
+              "assert_landing_empty\nassert_enabled ButtonMultiplayerReconnect 1\n"
+              "activate ButtonMultiplayerReconnect\nwait 6\n"
               "assert_error No reconnect record for that match.\nexit\n",
               root / "absent.ticket")
         empty_record = runs["NoRecord"].finish()
         empty_log = (root / "NoRecord/stdout.log").read_text(errors="replace")
         result["checks"]["no_record_process"] = empty_record["exit_code"] == 0 and not empty_record["timed_out"]
+        result["checks"]["no_record_visit_silent"] = 'assert_landing_empty status="" PASS' in empty_log
+        result["checks"]["no_record_rejoin_offered"] = ("assert_enabled ButtonMultiplayerReconnect expected=1 actual=1 PASS"
+                                                        in empty_log)
         result["checks"]["no_record_text"] = ('assert_error "No reconnect record for that match."' in empty_log
                                               and "[menu-script] FAILED:" not in empty_log)
         result["pass"] = all(result["checks"].values())

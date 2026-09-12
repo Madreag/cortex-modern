@@ -820,14 +820,15 @@ uint64_t MainMenuGUI::MenuClockMs() {
 void MainMenuGUI::RefreshReconnectControls() {
 	const NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
 	const bool offering = reconnect.GetOffer() == NetReconnectOffer::Available;
+	const bool missing = reconnect.GetOffer() == NetReconnectOffer::Missing;
 	const bool landing = m_MultiplayerSubScreen == MultiplayerSubScreen::Landing;
 	const bool recovering = reconnect.IsActive();
 	// §9b: the one refusal a joiner can answer. The same two buttons carry it, so the landing panel
 	// keeps one pair of controls whatever it is offering.
-	const bool applying = !recovering && !offering && m_MultiplayerApplyOffered && g_NetMatchService.WasJoinRefusedByALiveMatch();
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || applying || reconnect.CanRetryManually()));
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering || applying || reconnect.CanRetryManually());
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering ? "Rejoin Match" : (applying ? "Apply to Substitute" : "Retry"));
+	const bool applying = !recovering && !offering && !missing && m_MultiplayerApplyOffered && g_NetMatchService.WasJoinRefusedByALiveMatch();
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || applying || missing || reconnect.CanRetryManually()));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering || applying || missing || reconnect.CanRetryManually());
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(applying ? "Apply to Substitute" : (offering || missing ? "Rejoin Match" : "Retry"));
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetVisible(landing && (offering || applying || recovering));
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetEnabled(offering || applying || reconnect.CanCancel());
 	if (!landing) {
@@ -843,7 +844,8 @@ void MainMenuGUI::RefreshReconnectControls() {
 	}
 	// One persistent line, never a toast: the status while recovering, otherwise whatever the startup
 	// scan of the recovery record found - including precisely why it cannot be used.
-	const std::string status = recovering ? reconnect.GetStatusText() : reconnect.GetOfferText();
+	// A missing record answers an explicit ask only; the passive scan writes nothing.
+	const std::string status = recovering ? reconnect.GetStatusText() : (missing ? "" : reconnect.GetOfferText());
 	if (status != m_ReconnectStatusShown) {
 		// A recovery in progress owns the line. What the scan of the record found does not: it clears
 		// its own sentence, but never replaces a refusal or an error the screen just put there.
