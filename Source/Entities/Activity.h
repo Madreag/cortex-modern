@@ -592,6 +592,11 @@ namespace RTE {
 		/// @param player Which player to lose control of their selected Actor.
 		virtual void LoseControlOfActor(int player);
 
+		/// Lets go of a player's binding to an Actor another peer now owns. The seat and the view let
+		/// go here; the Actor's own control mode follows the wire on every peer.
+		/// @param player Which player to unbind.
+		void ReleaseLockstepControlOfActor(int player);
+
 		/// Handles when an ACraft has left the game scene and entered orbit, though does not delete it. Ownership is NOT transferred, as the ACraft's inventory is just 'unloaded'.
 		/// @param orbitedCraft The ACraft instance that entered orbit. Ownership is NOT transferred!
 		virtual void HandleCraftEnteringOrbit(ACraft* orbitedCraft);

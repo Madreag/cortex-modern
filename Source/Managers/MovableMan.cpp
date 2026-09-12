@@ -41,6 +41,7 @@
 #include "ControllerFrame.h"
 #include "PieMenu.h"
 #include "ScenarioRunner.h"
+#include "NetActorOwnership.h"
 #include "NetLockstep.h"
 #include "AIWriteScript.h"
 #include "LuaMan.h"
@@ -636,11 +637,6 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				std::cout << "[net-match] AI order target not found: UID " << order->actorUID << std::endl;
 			}
 		} else if (const NetGameSwitchControl* switchControl = std::get_if<NetGameSwitchControl>(&command.payload)) {
-			// A peer may only take control for itself; the team gate above already vetted membership.
-			if (switchControl->newOwnerPeerId != command.senderPeerId) {
-				g_ConsoleMan.PrintString("ERROR: Rejected a SwitchControl command claiming another peer");
-				continue;
-			}
 			// The actor may legally be gone by apply time; the override applies either way so every
 			// peer's map stays identical, but a live actor must really be on the claimed team.
 			const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(switchControl->actorUID)));
@@ -648,7 +644,9 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				g_ConsoleMan.PrintString("ERROR: Rejected a SwitchControl command for an actor off its claimed team");
 				continue;
 			}
-			ScenarioRunner::SetLockstepControlOverride(switchControl->actorUID, switchControl->newOwnerPeerId);
+			if (!MovableMan::ApplyLockstepControlClaim(switchControl->actorUID, command.senderPeerId, switchControl->newOwnerPeerId, readyFrame.frame)) {
+				continue;
+			}
 			std::cout << "[net-match] control of actor " << switchControl->actorUID << " -> peer " << static_cast<int>(switchControl->newOwnerPeerId) << std::endl;
 		} else if (const NetGameReseat* reseat = std::get_if<NetGameReseat>(&command.payload)) {
 			// Like SwitchControl, the override lands even for an actor that is already gone so every
@@ -736,6 +734,73 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				continue;
 			}
 			ApplyDeferredSoundOp(*sound);
+		}
+	}
+	MovableMan::ReconcileLockstepControlBindings();
+}
+
+namespace {
+	std::map<int64_t, std::pair<uint64_t, uint8_t>> s_LockstepFrameClaims; //!< Actor -> the frame it was claimed on and by whom.
+}
+
+bool MovableMan::ApplyLockstepControlClaim(int64_t actorUniqueID, uint8_t senderPeerId, uint8_t newOwnerPeerId, uint64_t frame) {
+	const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(actorUniqueID)));
+	const int team = actor ? actor->GetTeam() : 0;
+	const bool cpuControlled = actor ? !actor->IsPlayerControlled() : true;
+	const uint8_t currentOwner = ScenarioRunner::GetLockstepActorOwner(actorUniqueID, team, cpuControlled);
+	if (newOwnerPeerId != senderPeerId) {
+		// The release form: an owner hands its actor back to the owner the world seeded for it.
+		if (senderPeerId != currentOwner || newOwnerPeerId != NetActorOwnership::GetSeededOwner(actorUniqueID)) {
+			// A selftest process has no console; the claim rules still have to run there.
+			if (ConsoleMan::IsConstructed()) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a SwitchControl command claiming another peer");
+			}
+			return false;
+		}
+	} else if (const auto claimed = s_LockstepFrameClaims.find(actorUniqueID); claimed != s_LockstepFrameClaims.end() && claimed->second.first == frame && claimed->second.second < senderPeerId) {
+		if (ConsoleMan::IsConstructed()) {
+			g_ConsoleMan.PrintString("NETWORK: Rejected a SwitchControl claim on an actor a lower peer already claimed this frame");
+		}
+		std::cout << "[net-match] rejected a claim on actor " << actorUniqueID << " already claimed this frame by peer " << static_cast<int>(claimed->second.second) << std::endl;
+		return false;
+	} else {
+		s_LockstepFrameClaims[actorUniqueID] = {frame, senderPeerId};
+	}
+	ScenarioRunner::SetLockstepControlOverride(actorUniqueID, newOwnerPeerId);
+	if (Actor* live = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(actorUniqueID)))) {
+		ApplyLockstepControlHandoffToActor(*live, newOwnerPeerId == senderPeerId);
+	}
+	return true;
+}
+
+// Production and the sim-facing mode move on the same committed tick: the frames the old owner still
+// has in flight are dropped by the ownership gate, so nothing puts the old mode back in between.
+void MovableMan::ApplyLockstepControlHandoffToActor(Actor& actor, bool seated) {
+	Controller& controller = *actor.GetController();
+	const Controller::InputMode handedMode = seated ? Controller::CIM_PLAYER : Controller::CIM_AI;
+	const Controller::InputMode previousMode = controller.GetInputMode();
+	const int previousPlayer = controller.GetPlayer();
+	if (previousMode == handedMode) {
+		return;
+	}
+	controller.ApplyWireMode(handedMode, controller.GetPlayerRaw());
+	actor.OnControllerInputModeChanged(previousMode, previousPlayer);
+}
+
+void MovableMan::ReconcileLockstepControlBindings() {
+	Activity* activity = g_ActivityMan.GetActivity();
+	if (!activity || !ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return;
+	}
+	const uint8_t localPeerId = ScenarioRunner::GetLockstepLocalPeerId();
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		const Actor* controlled = activity->GetControlledActor(player);
+		if (!controlled || !g_MovableMan.IsActor(const_cast<Actor*>(controlled))) {
+			continue;
+		}
+		const int64_t uid = static_cast<int64_t>(controlled->GetUniqueID());
+		if (ScenarioRunner::GetLockstepActorOwner(uid, controlled->GetTeam(), !controlled->IsPlayerControlled()) != localPeerId) {
+			activity->ReleaseLockstepControlOfActor(player);
 		}
 	}
 }
@@ -2282,6 +2347,7 @@ void MovableMan::PurgeAllMOs() {
 	m_AddedAlarmEvents.clear();
 	m_AlarmEvents.clear();
 	m_LockstepJoinQuarantine.clear();
+	NetActorOwnership::ClearSeededOwners();
 	m_MOIDIndex.clear();
 	// We want to keep known objects around, 'cause these can exist even when not in the simulation (they're here from creation till deletion, regardless of whether they are in sim)
 	// m_KnownObjects.clear();
@@ -4183,6 +4249,16 @@ void MovableMan::UpdateControllers() {
 			}
 		}
 	}
+	// Record every registered actor's owner once, here, where the wire takes over: the policy would
+	// otherwise re-derive it from the control mode a switch is about to change.
+	if (lockstepActive) {
+		for (const Actor* actor: m_Actors) {
+			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+			if (!NetActorOwnership::HasSeededOwner(uid)) {
+				NetActorOwnership::SeedOwner(uid, ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()));
+			}
+		}
+	}
 	if (lockstepActive && ScenarioRunner::IsControllerLogReplaying()) {
 		ScenarioRunner::SetControllerReplayError("lockstep controller sync cannot be combined with controller log replay.");
 		return;
@@ -4430,6 +4506,8 @@ void MovableMan::UpdateControllers() {
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 		CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
 		ApplyLockstepGameCommands(readyFrame);
+		// A leave purge moves owners without a command, so the bindings settle here every tick.
+		ReconcileLockstepControlBindings();
 
 		if (ScenarioRunner::IsControllerLogRecording()) {
 			std::vector<ControllerFrame> frames = SnapshotControllerFrames(m_Actors);
@@ -4705,10 +4783,11 @@ namespace {
 		std::vector<std::pair<uint64_t, long>> quarantine;
 		std::vector<long> moidIndex;
 		std::map<long, int> contiguousActorIDs;
+		std::map<long, int> actorOwners;
 		std::array<int, Activity::MaxTeamCount> teamMOIDCount{};
 		std::array<std::set<long>, 3> validObjects;
 		template <class Archive> void Fields(Archive& archive) {
-			archive(cohorts, rosters, sortRoster, alarms, quarantine, moidIndex, contiguousActorIDs, teamMOIDCount, validObjects);
+			archive(cohorts, rosters, sortRoster, alarms, quarantine, moidIndex, contiguousActorIDs, actorOwners, teamMOIDCount, validObjects);
 		}
 	};
 }
@@ -4730,6 +4809,12 @@ std::string MovableMan::SaveWorldStructure() const {
 	for (const Actor* actor: m_Actors) {
 		if (auto entry = m_ContiguousActorIDs.find(actor); entry != m_ContiguousActorIDs.end()) state.contiguousActorIDs.emplace(actor->GetUniqueID(), entry->second);
 	}
+	// Only a live actor's owner travels: a seeded owner for a removed actor would fail the load's live-actor check.
+	const auto saveOwner = [&state](const Actor* actor) {
+		if (const uint8_t owner = NetActorOwnership::GetSeededOwner(static_cast<int64_t>(actor->GetUniqueID())); owner != 0) state.actorOwners.emplace(static_cast<long>(actor->GetUniqueID()), static_cast<int>(owner));
+	};
+	for (const Actor* actor: m_Actors) saveOwner(actor);
+	for (const Actor* actor: m_AddedActors) saveOwner(actor);
 	for (const AlarmEvent* event: m_AlarmEvents) state.alarms[0].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	for (const AlarmEvent* event: m_AddedAlarmEvents) state.alarms[1].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	state.quarantine = m_LockstepJoinQuarantine;
@@ -4779,6 +4864,11 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 		for (long uid: state.moidIndex) index.push_back(resolve(uid));
 		std::unordered_map<const Actor*, int> contiguous;
 		for (const auto& [uid, id]: state.contiguousActorIDs) contiguous.emplace(actor(uid), id);
+		std::map<int64_t, uint8_t> owners;
+		for (const auto& [uid, owner]: state.actorOwners) {
+			if (!actor(uid) || owner < 0 || owner > 255) throw std::runtime_error("owner entry names no live actor");
+			owners.emplace(static_cast<int64_t>(uid), static_cast<uint8_t>(owner));
+		}
 		// Allocate the incoming events before changing any live membership.
 		std::array<std::vector<std::unique_ptr<AlarmEvent>>, 2> events;
 		for (int group = 0; group < 2; ++group) for (const auto& [position, detail]: state.alarms[group]) {
@@ -4798,6 +4888,7 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 			m_ActorRoster[team].swap(rosters[team]); m_SortTeamRoster[team] = state.sortRoster[team]; m_TeamMOIDCount[team] = state.teamMOIDCount[team];
 		}
 		m_MOIDIndex.swap(index); m_ContiguousActorIDs.swap(contiguous); m_LockstepJoinQuarantine.swap(state.quarantine);
+		NetActorOwnership::RestoreSeededOwners(std::move(owners));
 		const auto replaceEvents = [](auto& live, auto& saved) {
 			while (live.size() > saved.size()) { delete live.back(); live.pop_back(); }
 			for (size_t i = 0; i < saved.size(); ++i) {
