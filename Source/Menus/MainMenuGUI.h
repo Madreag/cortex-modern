@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Controller.h"
+#include "NetDirectoryClient.h"
 #include "NetLanDiscovery.h"
 #include "NetMatchConfig.h"
 #include "NetReconnectUx.h"
@@ -10,6 +11,7 @@
 #include "ModManagerGUI.h"
 
 #include <array>
+#include <optional>
 
 namespace RTE {
 
@@ -197,8 +199,13 @@ namespace RTE {
 		GUITextBox* m_MultiplayerJoinAddressTextBox;
 		GUITextBox* m_MultiplayerJoinPortTextBox;
 		GUIListBox* m_MultiplayerLanGamesList;
+		GUILabel* m_MultiplayerLanGamesLabel; //!< The line above the list; doubles as the join refusal status.
+		std::string m_LanGamesLabelText;      //!< Its ini text, restored when a refusal clears.
 		NetLanDiscovery m_LanBrowser; //!< Collects LAN host beacons while the join screen is up.
-		std::vector<NetLanHostInfo> m_LanHosts; //!< The listed hosts, aligned with the list rows.
+		NetDirectoryClient m_DirectoryBrowser; //!< A browse-only instance: GETs the session list on its poll interval.
+		std::vector<NetDirectoryClient::GameRow> m_GameRows; //!< The merged LAN+NET rows, aligned with the list.
+		std::optional<NetDirectoryLocalIdentity> m_DirectoryIdentity; //!< The local identity NET rows are judged against, built once.
+		bool m_DirectoryIdentityTried = false;
 		uint64_t m_LanBrowserNowMs;
 		GUICollectionBox* m_MultiplayerLandingPanel;
 		GUICollectionBox* m_MultiplayerHostPanel;
@@ -230,8 +237,9 @@ namespace RTE {
 		/// Creates all the elements that compose the multiplayer menu screen.
 		void CreateMultiplayerScreen();
 
-		/// Runs the LAN browser while the join screen is up and mirrors fresh hosts into the list.
-		void RefreshLanGamesList();
+		/// Runs the LAN browser and the directory lister while the join screen is up and mirrors the
+		/// merged rows into the list; a non-joinable row stays visible with its refusal reason.
+		void RefreshGamesList();
 
 		/// Creates all the elements that compose the editor selection menu screen.
 		void CreateEditorsScreen();

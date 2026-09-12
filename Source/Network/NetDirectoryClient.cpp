@@ -374,6 +374,7 @@ namespace RTE {
 
 	void NetDirectoryClient::HandleListReply(const Reply& reply, uint64_t nowMs) {
 		m_BrowseNextMs = nowMs + c_ListIntervalMs;
+		++m_ListReplies;
 		if (!reply.error.empty() || reply.statusCode == 0) {
 			m_ListError = reply.error.empty() ? "transport error" : reply.error;
 			return;
