@@ -146,6 +146,35 @@ namespace RTE {
 			return true;
 		}
 		if (m_Config.host) {
+			NetReconnectHost* admission = session.GetReconnectHost();
+			std::vector<NetH4Seat> seats;
+			if (admission) {
+				// The plane's seat, not the players index, is the one a survivor's ticket names.
+				std::vector<NetH4Seat> held = admission->GetSeatTable();
+				for (const NetMatchPlayerSlot& was : m_MatchConfig.players) {
+					uint8_t peerId = was.peerId;
+					if (!was.cpu) {
+						const auto moved = seatMap.find(was.peerId);
+						if (moved == seatMap.end()) {
+							continue;
+						}
+						peerId = moved->second;
+					}
+					const auto current = std::find_if(held.begin(), held.end(), [&was](const NetH4Seat& seat) {
+						return seat.cpu == was.cpu && (was.cpu ? seat.team == static_cast<int32_t>(was.team) : seat.lockstepPeerId == was.peerId);
+					});
+					if (current == held.end()) {
+						return refuse("rematch roster: the admission plane holds no seat for peer " + std::to_string(was.peerId));
+					}
+					NetH4Seat seat = *current;
+					held.erase(current);
+					seat.peerId = peerId > 0 ? static_cast<uint8_t>(peerId - 1) : 0;
+					seat.team = static_cast<int32_t>(was.team);
+					seat.lockstepPeerId = peerId;
+					seat.local = !was.cpu && peerId == m_RematchConfig.hostPeerId;
+					seats.push_back(seat);
+				}
+			}
 			std::map<uint8_t, uint8_t> reseated;
 			for (const auto& [seated, moved] : seatMap) {
 				if (seated != m_MatchConfig.hostPeerId) {
@@ -156,28 +185,7 @@ namespace RTE {
 			if (!session.RenumberReadySeats(reseated, &seatError)) {
 				return refuse("rematch roster: " + seatError);
 			}
-			if (NetReconnectHost* admission = session.GetReconnectHost()) {
-				// A survivor keeps the stable seat its ticket names; the leaver's seat is simply gone.
-				std::vector<NetH4Seat> seats;
-				for (size_t index = 0; index < m_MatchConfig.players.size(); ++index) {
-					const NetMatchPlayerSlot& was = m_MatchConfig.players[index];
-					uint8_t peerId = was.peerId;
-					if (!was.cpu) {
-						const auto moved = seatMap.find(was.peerId);
-						if (moved == seatMap.end()) {
-							continue;
-						}
-						peerId = moved->second;
-					}
-					NetH4Seat seat;
-					seat.stableSeat = static_cast<uint16_t>(index);
-					seat.peerId = peerId > 0 ? static_cast<uint8_t>(peerId - 1) : 0;
-					seat.team = static_cast<int32_t>(was.team);
-					seat.cpu = was.cpu;
-					seat.lockstepPeerId = peerId;
-					seat.local = !was.cpu && peerId == m_RematchConfig.hostPeerId;
-					seats.push_back(seat);
-				}
+			if (admission) {
 				admission->SetSeatTable(std::move(seats), m_RematchConfig.mode);
 			}
 		} else {

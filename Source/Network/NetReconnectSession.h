@@ -335,6 +335,8 @@ namespace RTE {
 		bool IsSeatClosed(uint16_t stableSeat) const;
 		/// Every seat's admission status, in stable-seat order.
 		std::vector<NetH4SeatStatus> GetSeatStatuses() const;
+		/// The seat table as the plane holds it now, in table order.
+		std::vector<NetH4Seat> GetSeatTable() const;
 
 	private:
 		struct SeatState {
