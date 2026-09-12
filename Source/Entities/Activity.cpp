@@ -12,6 +12,7 @@
 #include "MetaMan.h"
 #include "SceneMan.h"
 #include "ScenarioRunner.h"
+#include "NetActorOwnership.h"
 #include "LuaMan.h"
 
 #include "ACraft.h"
@@ -777,7 +778,6 @@ bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 	Actor* preSwitchActor = (m_ControlledActor[player] && g_MovableMan.IsActor(m_ControlledActor[player])) ? m_ControlledActor[player] : nullptr;
 	if (preSwitchActor && preSwitchActor->GetController()->IsSeatedByPlayer(player)) {
 		preSwitchActor->SetControllerMode(Controller::CIM_AI);
-		preSwitchActor->GetController()->SetDisabled(false);
 	}
 
 	m_ControlledActor[player] = actor;
@@ -785,7 +785,6 @@ bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 		m_ControlledActor[player]->SetTeam(team);
 	}
 	m_ControlledActor[player]->SetControllerMode(Controller::CIM_PLAYER, player);
-	m_ControlledActor[player]->GetController()->SetDisabled(false);
 
 	SoundContainer* actorSwitchSoundToPlay = (m_ControlledActor[player] == m_Brain[player]) ? g_GUISound.BrainSwitchSound() : g_GUISound.ActorSwitchSound();
 	// Snapshot Start selects the brain again; the UI click is not part of the restored sim.
@@ -805,14 +804,35 @@ bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 	// Taking control of a teammate's actor in a lockstep match moves its frame production here;
 	// the handoff crosses the wire so every peer flips the actor's owner at the same frame.
 	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		const uint8_t localPeerId = ScenarioRunner::GetLockstepLocalPeerId();
 		const int64_t actorUID = static_cast<int64_t>(m_ControlledActor[player]->GetUniqueID());
-		if (!ScenarioRunner::IsLockstepLocalActor(actorUID, team, false)) {
-			const uint8_t localPeerId = ScenarioRunner::GetLockstepLocalPeerId();
+		if (ScenarioRunner::GetLockstepActorOwner(actorUID, team, !m_ControlledActor[player]->IsPlayerControlled()) != localPeerId) {
 			ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{localPeerId, NetGameSwitchControl{actorUID, team, localPeerId}});
+		}
+		// The actor left behind goes back to the owner the world seeded it with, so its AI runs there.
+		if (preSwitchActor) {
+			const int64_t preSwitchUID = static_cast<int64_t>(preSwitchActor->GetUniqueID());
+			const int preSwitchTeam = preSwitchActor->GetTeam();
+			const uint8_t seededOwner = NetActorOwnership::GetSeededOwner(preSwitchUID);
+			if (seededOwner != 0 && seededOwner != localPeerId && ScenarioRunner::GetLockstepActorOwner(preSwitchUID, preSwitchTeam, !preSwitchActor->IsPlayerControlled()) == localPeerId) {
+				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{localPeerId, NetGameSwitchControl{preSwitchUID, preSwitchTeam, seededOwner}});
+			}
 		}
 	}
 
 	return true;
+}
+
+void Activity::ReleaseLockstepControlOfActor(int player) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return;
+	}
+	if (Actor* actor = m_ControlledActor[player]; actor && g_MovableMan.IsActor(actor)) {
+		actor->SetControllerMode(Controller::CIM_AI);
+	}
+	m_ControlledActor[player] = nullptr;
+	m_ViewState[player] = ViewState::DeathWatch;
+	m_DeathTimer[player].Reset();
 }
 
 void Activity::LoseControlOfActor(int player) {
