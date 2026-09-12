@@ -8,6 +8,8 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -27,10 +29,21 @@ namespace RTE {
 			return state == NetLobbyState::Started || state == NetLobbyState::Rejected || state == NetLobbyState::Failed;
 		}
 
+		std::atomic<uint64_t> g_TransferStartMs{0};
+		std::atomic<uint64_t> g_LastStateTransferMs{0};
+
+		uint64_t TransferSteadyMs() {
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		}
+
 		const std::string& EmptyName() {
 			static const std::string empty;
 			return empty;
 		}
+	}
+
+	uint64_t NetLobbyLastStateTransferMs() {
+		return g_LastStateTransferMs.load();
 	}
 
 	bool NetLobbySession::Start(INetTransport& transport, const NetLobbySessionConfig& config, std::string* error) {
@@ -188,6 +201,7 @@ namespace RTE {
 		m_OutgoingChunkCount = chunkCount;
 		m_OutgoingChunkSentTo.clear();
 		m_ChunkSendStall = 0;
+		g_TransferStartMs.store(0);
 	}
 
 	std::vector<uint8_t> NetLobbySession::TakeReceivedState() {
@@ -219,9 +233,18 @@ namespace RTE {
 				m_OutgoingChunkSentTo.push_back(transportId);
 				++m_StateTransferProgressSerial;
 				m_ChunkSendStall = 0;
+				if (g_TransferStartMs.load() == 0) {
+					g_TransferStartMs.store(TransferSteadyMs());
+				}
 			}
 			++m_OutgoingChunkIndex;
 			m_OutgoingChunkSentTo.clear();
+		}
+		if (!HasPendingStateChunks()) {
+			const uint64_t start = g_TransferStartMs.exchange(0);
+			if (start != 0) {
+				g_LastStateTransferMs.store(TransferSteadyMs() - start);
+			}
 		}
 	}
 
@@ -242,6 +265,7 @@ namespace RTE {
 			m_IncomingNextChunkIndex = 0;
 			m_IncomingStateComplete = false;
 			m_ReceivedState.clear();
+			g_TransferStartMs.store(TransferSteadyMs());
 		}
 		if (message.totalBytes != m_IncomingTotalBytes || message.chunkCount != m_IncomingChunkCount) {
 			Fail("state transfer header changed");
@@ -267,6 +291,10 @@ namespace RTE {
 		++m_StateTransferProgressSerial;
 		if (m_IncomingNextChunkIndex != m_IncomingChunkCount) return;
 		m_IncomingStateComplete = true;
+		const uint64_t start = g_TransferStartMs.exchange(0);
+		if (start != 0) {
+			g_LastStateTransferMs.store(TransferSteadyMs() - start);
+		}
 		std::cout << "[net-match] state transfer complete: " << m_ReceivedState.size() << " bytes" << std::endl;
 	}
 

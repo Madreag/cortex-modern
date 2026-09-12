@@ -147,6 +147,7 @@ namespace RTE {
 		/// Recovers a desynced match: the host snapshots its state and streams it through the lobby
 		/// round; every peer relaunches from the identical file. Requires the session to be alive.
 		bool ResyncMatch(std::string* error = nullptr);
+		void NoteResyncRelaunched();
 		bool IsResyncOnDesyncEnabled() const { return m_ResyncOnDesync; }
 		/// The snapshot file the next launch must load instead of a fresh activity ("" = none).
 		std::string TakePendingResyncLoad();
@@ -209,7 +210,7 @@ namespace RTE {
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
 		void WorkerRematchMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
 		void WorkerResyncMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
-		bool PrepareReceivedResync(const std::vector<uint8_t>& bytes, const NetLockstepCoordinator& coordinator, std::string& pendingLoad, NetResyncState& state, std::string* error);
+		bool PrepareReceivedResync(const std::vector<uint8_t>& bytes, const NetLockstepCoordinator& coordinator, std::string& pendingLoad, NetResyncState& state, std::string* error, size_t* archiveBytes = nullptr);
 		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request) const;
 		NetMatchConfig BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const;
 		void SetState(NetMatchServiceState state, std::string status, std::string error = "");
@@ -322,6 +323,18 @@ namespace RTE {
 		std::atomic<bool> m_EverStarted{false};
 		std::string m_CapturedRunnerReport;
 		std::string m_RejoinOutcome;
+		struct LastResyncMetrics {
+			uint64_t archiveBytes = 0;
+			uint64_t envelopeBytes = 0;
+			uint64_t saveMs = 0;
+			uint64_t transferMs = 0;
+			uint64_t healMs = 0;
+			bool happened = false;
+		};
+		LastResyncMetrics m_LastResync;
+		uint64_t m_ResyncHealStartMs = 0;
+		bool m_ResyncHealOpen = false;
+		bool m_HostLobbyBeaconed = false;
 	};
 
 } // namespace RTE

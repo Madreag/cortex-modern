@@ -278,6 +278,8 @@ static std::string ResyncSaveName() {
 		Complete(text);
 	}
 
+	uint64_t NetLobbyLastStateTransferMs();
+
 	bool NetMatchService::ResyncMatch(std::string* error) {
 		JoinWorkerIfDone();
 		// The host snapshots the live (diverged) match BEFORE the teardown; both sides then reload
@@ -287,6 +289,8 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			isHost = m_IsHost;
+			m_ResyncHealStartMs = SteadyNowMs();
+			m_ResyncHealOpen = true;
 		}
 		const uint64_t a7Resync = NetA7Journal::BeginResync();
 		const bool a7Save = NetA7Journal::Enabled() && isHost && FaultInjected("slow_resync_save");
@@ -297,6 +301,8 @@ static std::string ResyncSaveName() {
 			if (error) {
 				*error = "match over";
 			}
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_ResyncHealOpen = false;
 			return false;
 		}
 		uint64_t dropFrame = 0;
@@ -326,7 +332,7 @@ static std::string ResyncSaveName() {
 				}
 				g_TimerMan.RewindSimTo(static_cast<long long>(dropFrame - 1), time);
 			}
-			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName()) || !g_ActivityMan.WaitForSaveGameTask()) {
+			if (!g_ActivityMan.SaveCurrentGame(ResyncSaveName(), ActivityMan::SaveCompression::Small) || !g_ActivityMan.WaitForSaveGameTask()) {
 				if (error) *error = "resync snapshot save failed";
 				return false;
 			}
@@ -352,6 +358,19 @@ static std::string ResyncSaveName() {
 			NetResyncState state;
 			std::vector<uint8_t> envelope;
 			if (!ScenarioRunner::CaptureNetResyncState(dropFrame > 0 ? dropFrame - 1 : 0, state, error) || !NetResyncCodec::Encode(state, stateBytes, envelope, error)) return false;
+			const uint64_t archiveBytes = stateBytes.size();
+			const uint64_t envelopeBytes = envelope.size();
+			const uint64_t saveMs = static_cast<uint64_t>(std::max(0LL, g_ActivityMan.LastSaveMainMs()));
+			const uint64_t zipMs = static_cast<uint64_t>(std::max(0LL, g_ActivityMan.LastSaveZipMs()));
+			std::cout << "[net-match] resync snapshot: archive=" << archiveBytes << " envelope=" << envelopeBytes
+			          << " save_ms=" << saveMs << " zip_ms=" << zipMs << std::endl;
+			{
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				m_LastResync.archiveBytes = archiveBytes;
+				m_LastResync.envelopeBytes = envelopeBytes;
+				m_LastResync.saveMs = saveMs;
+				m_LastResync.happened = true;
+			}
 			stateBytes = std::move(envelope);
 		}
 		m_ResyncSourceRound = ScenarioRunner::GetLockstepRoundId();
@@ -396,6 +415,17 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	void NetMatchService::NoteResyncRelaunched() {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_ResyncHealOpen) {
+			return;
+		}
+		const uint64_t now = SteadyNowMs();
+		m_LastResync.healMs = now >= m_ResyncHealStartMs ? now - m_ResyncHealStartMs : 0;
+		m_ResyncHealOpen = false;
+		m_LastResync.happened = true;
+	}
+
 	void NetMatchService::WorkerResyncMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes) {
 		std::unique_ptr<GnsTransport> transport(transportRaw);
 		std::unique_ptr<NetSession> session(sessionRaw);
@@ -403,15 +433,25 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetMatchRunner> runner(runnerRaw);
 		std::string error;
 		const bool started = runner->StartNextMatch(*transport, *session, *coordinator, &error, stateBytes);
+		const uint64_t transferMs = NetLobbyLastStateTransferMs();
 		std::string pendingLoad;
 		NetResyncState resyncState;
+		size_t receivedArchive = 0;
+		size_t receivedEnvelope = 0;
 		if (started) {
 			std::vector<uint8_t> receivedState = runner->TakeReceivedState();
 			if (receivedState.empty()) receivedState = std::move(stateBytes);
-			(void)PrepareReceivedResync(receivedState, *coordinator, pendingLoad, resyncState, &error);
+			receivedEnvelope = receivedState.size();
+			(void)PrepareReceivedResync(receivedState, *coordinator, pendingLoad, resyncState, &error, &receivedArchive);
 		}
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_LastResync.transferMs = transferMs;
+			if (!m_IsHost && receivedEnvelope != 0) {
+				m_LastResync.archiveBytes = receivedArchive;
+				m_LastResync.envelopeBytes = receivedEnvelope;
+				m_LastResync.happened = true;
+			}
 			m_Transport = std::move(transport);
 			m_Session = std::move(session);
 			m_Coordinator = std::move(coordinator);
@@ -431,9 +471,10 @@ static std::string ResyncSaveName() {
 		}
 	}
 
-	bool NetMatchService::PrepareReceivedResync(const std::vector<uint8_t>& bytes, const NetLockstepCoordinator& coordinator, std::string& pendingLoad, NetResyncState& state, std::string* error) {
+	bool NetMatchService::PrepareReceivedResync(const std::vector<uint8_t>& bytes, const NetLockstepCoordinator& coordinator, std::string& pendingLoad, NetResyncState& state, std::string* error, size_t* archiveBytes) {
 		std::vector<uint8_t> archive;
 		if (!NetResyncCodec::Decode(bytes, coordinator.GetConfig().sessionId, coordinator.GetConfig().startFrame, state, archive, error)) return false;
+		if (archiveBytes) *archiveBytes = archive.size();
 		if ((m_ResyncSourceRound != 0 && state.sourceRound != m_ResyncSourceRound) || state.sourceRound == coordinator.GetRoundId()) {
 			if (error) *error = "resync snapshot round does not match the ended match";
 			return false;
@@ -783,6 +824,14 @@ static std::string ResyncSaveName() {
 		}
 		const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 		if (beaconWanted) {
+			if (!m_HostLobbyBeaconed) {
+				const std::string address = NetLanDiscovery::GetPrimaryLocalAddress();
+				{
+					std::lock_guard<std::mutex> lock(m_Mutex);
+					m_ReconnectHost.SetHostAddress(address);
+					m_HostLobbyBeaconed = true;
+				}
+			}
 			std::string ignored;
 			(void)m_LanDiscovery.StartBeacon(m_BeaconGamePort,
 			                                 m_LocalName.empty() ? "Host" : m_LocalName,
@@ -791,8 +840,11 @@ static std::string ResyncSaveName() {
 			                                 static_cast<uint8_t>(std::max<size_t>(snapshot.members.size(), 1)),
 			                                 m_BeaconMaxPlayers, &ignored);
 			m_LanDiscovery.Tick(nowMs);
-		} else if (m_LanDiscovery.IsBeaconing()) {
-			m_LanDiscovery.Stop();
+		} else {
+			m_HostLobbyBeaconed = false;
+			if (m_LanDiscovery.IsBeaconing()) {
+				m_LanDiscovery.Stop();
+			}
 		}
 		DriveReconnectUx(nowMs);
 	}
@@ -1263,6 +1315,15 @@ static std::string ResyncSaveName() {
 			reconnect["rejoin_outcome"] = m_RejoinOutcome;
 		}
 		report["reconnect"] = reconnect;
+		if (m_LastResync.happened) {
+			report["resync"] = json{
+				{"archive_bytes", m_LastResync.archiveBytes},
+				{"envelope_bytes", m_LastResync.envelopeBytes},
+				{"save_ms", m_LastResync.saveMs},
+				{"transfer_ms", m_LastResync.transferMs},
+				{"heal_ms", m_LastResync.healMs},
+			};
+		}
 		if (m_Runner && m_Session && m_Coordinator) {
 			report["runner"] = json::parse(m_Runner->BuildReportJson(*m_Session, *m_Coordinator));
 		} else if (!m_CapturedRunnerReport.empty()) {
