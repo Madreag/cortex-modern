@@ -415,6 +415,7 @@ namespace RTE {
 		uint32_t relayObservationOverflows = 0; //!< Forwards that could not carry a frame's whole observation set; the tables would disagree.
 		uint32_t peersDroppedSilent = 0; //!< Remotes the host adjudicated gone for going quiet, not for closing their socket.
 		uint32_t stopsFromLeftPeers = 0; //!< Stops a peer sent after the round had already dropped its seat.
+		uint32_t stopsAdjudicatedAsLeaves = 0; //!< Non-recovery client Stops the relay host treated as that client's leave.
 		uint32_t peerFramesWaived = 0; //!< Fenced incarnations the round stopped requiring frames from; not seat drops.
 		uint32_t connectionsClosedOnEviction = 0; //!< Connections the host closed because the round took the seat.
 		uint32_t timeouts = 0;

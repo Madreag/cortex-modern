@@ -3683,6 +3683,7 @@ namespace RTE {
 		out << "\"peer_silence_leave_ms\":" << PeerSilenceLeaveMs() << ",";
 		out << "\"peers_dropped_silent\":" << m_Stats.peersDroppedSilent << ",";
 		out << "\"stops_from_left_peers\":" << m_Stats.stopsFromLeftPeers << ",";
+		out << "\"stops_adjudicated_as_leaves\":" << m_Stats.stopsAdjudicatedAsLeaves << ",";
 		out << "\"peer_frames_waived\":" << m_Stats.peerFramesWaived << ",";
 		out << "\"connections_closed_on_eviction\":" << m_Stats.connectionsClosedOnEviction << ",";
 		out << "\"peers_left\":" << m_PeerLeaveFrames.size() << ",";
@@ -4423,6 +4424,14 @@ namespace RTE {
 				}
 				ApplyPeerLeave(stop.senderPeerId, stop.frame, stop.message, nowMs, stop.reason == NetLockstepStopReason::PeerLeft);
 			}
+			return;
+		}
+		if (m_RelayHost && stop.senderPeerId != m_Config.matchConfig.hostPeerId &&
+		    (stop.reason == NetLockstepStopReason::ProtocolError || stop.reason == NetLockstepStopReason::InternalError ||
+		     stop.reason == NetLockstepStopReason::MissingFrameTimeout || stop.reason == NetLockstepStopReason::PeerDisconnected)) {
+			++m_Stats.stopsAdjudicatedAsLeaves;
+			ApplyPeerLeave(stop.senderPeerId, FirstFrameWithout(stop.senderPeerId),
+			               std::string(NetLockstepCodec::StopReasonName(stop.reason)) + ": " + stop.message, nowMs, true);
 			return;
 		}
 		m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(stop.reason)) + ":" + stop.message;
