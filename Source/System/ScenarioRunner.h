@@ -60,10 +60,13 @@ namespace RTE {
 			bool        freeRunSim = false; // -free-run-sim: a lockstep match runs its ticks as fast as the frames arrive, one per loop iteration, drawing nothing.
 			bool        selftestRematch = false; // -net-match-e2e-rematch: when match 1 ends, return to the lobby and run a second match.
 			bool        selftestLeave = false; // -net-match-e2e-leave: this peer quits to the menu at tick 300 like a pause-menu leave.
+			uint64_t    selftestLeaveTick = 300; // -net-match-e2e-leave-tick <N>: the tick -net-match-e2e-leave fires at (default 300 = the long-standing hardcoded value).
 			bool        selftestInventoryCommand = false; // -net-match-e2e-inventory-command: host-issued inventory ops at fixed ticks.
 			bool        selftestBuyCommand = false; // -net-match-e2e-buy-command: host grants funds then places a real buy order through CreateDelivery.
 			bool        selftestBrainSpawnCommand = false; // -net-match-e2e-brain-spawn-command: this peer spawns a second brain for its team at tick 40.
 			bool        selftestPauseCommand = false; // -net-match-e2e-pause-command: host pauses at tick 250 and unpauses at 430.
+			uint64_t    selftestPauseTick = 250; // -net-match-e2e-pause-tick <N>: the tick the synced pause command is issued at (default 250 = today's arming tick); the unpause command still rides N+180.
+			uint64_t    selftestEndRoundTick = 0; // -net-match-e2e-end-round-tick <N>: at sim tick N every armed peer ends the round via the natural end path (team 0 wins); 0 = never (today's behaviour).
 			bool        selftestSnapshot = false; // -net-match-e2e-snapshot: save the full game at tick 300 (both peers save the same synced frame).
 			uint64_t    contractAuditContinueThrough = 0; // Diagnostic-only: keep running after the audit operation to this complete tick.
 			long long   contractAuditSeedMarker = 0; // Diagnostic fixture value placed in all Lua roots before a seed is saved.

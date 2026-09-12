@@ -2651,13 +2651,28 @@ void RunGameLoop() {
 				}
 			}
 
-			// E2E control: the host pauses at tick 250 and unpauses at 430; both sims must stop and
-			// resume on the same frame with sim time frozen across the gap.
+			// E2E control: the host pauses at the flag's tick (default 250) and unpauses 180 ticks
+			// later; both sims must stop and resume on the same frame with sim time frozen across the gap.
 			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestPauseCommand) {
-				if (simTick == 250) {
+				const uint64_t pauseTick = ScenarioRunner::GetArgs().selftestPauseTick;
+				if (simTick == pauseTick) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{0, true}});
-				} else if (simTick == 430) {
+				} else if (simTick == pauseTick + 180) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{0, false}});
+				}
+			}
+			// E2E control: at the flag's tick every armed peer ends the round through the natural
+			// end path - SetWinnerTeam + ActivityMan::EndActivity() -> Activity::End() -> Over, the
+			// same entry the scripted activity's Lua calls. Deliberately not gated on
+			// lockstepPausedTick: a tick inside the pause window must still end the round so the
+			// rematch detector below sees it.
+			if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestEndRoundTick > 0 &&
+			    ScenarioRunner::IsLockstepControllerSyncActive() && simTick == ScenarioRunner::GetArgs().selftestEndRoundTick) {
+				if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+				    gameActivity && gameActivity->GetActivityState() != Activity::Over) {
+					std::cout << "[net-match-service-e2e] end-round: ending the round at tick " << simTick << std::endl;
+					gameActivity->SetWinnerTeam(Activity::TeamOne);
+					g_ActivityMan.EndActivity();
 				}
 			}
 			const bool lockstepPausedTick = ScenarioRunner::IsLockstepPaused();
@@ -2790,9 +2805,10 @@ void RunGameLoop() {
 					std::cout << "[net-match] stall: sleeping 8s at tick 300" << std::endl;
 					std::this_thread::sleep_for(std::chrono::seconds(8));
 				}
-				// Test control: leave the match at tick 300 like a pause-menu quit; the peer must get a clean end.
-				if (ScenarioRunner::GetArgs().selftestLeave && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == 300) {
-					std::cout << "[net-match] leave: quitting to menu at tick 300" << std::endl;
+				// Test control: leave the match at the flag's tick (default 300) like a pause-menu quit;
+				// the peer must get a clean end.
+				if (ScenarioRunner::GetArgs().selftestLeave && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == ScenarioRunner::GetArgs().selftestLeaveTick) {
+					std::cout << "[net-match] leave: quitting to menu at tick " << simTick << std::endl;
 					g_ActivityMan.EndActivity();
 					g_ActivityMan.SetInActivity(false);
 				}
