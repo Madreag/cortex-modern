@@ -2043,6 +2043,9 @@ static void CheckPreviewEventLedgerSelfTest() {
 static void CheckRequiredProbesCompleted() {
 	const long long stoppedAt = g_TimerMan.GetSimUpdateCount();
 	CheckPreviewEventLedgerSelfTest();
+	if ((s_eventLedgerPressTick > 0 || s_lpInvarianceTick > 0) && !PreviewScriptSelfTest::CheckNestedHookScope()) {
+		s_netReplayExitCode = 5;
+	}
 	if (PreviewScriptSelfTest::SubtreeProbeEnabled() && !PreviewScriptSelfTest::CheckSubtreeEmitter(s_eventLedgerPressTick)) {
 		s_netReplayExitCode = 5;
 	}

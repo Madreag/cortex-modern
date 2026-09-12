@@ -23,6 +23,7 @@ namespace RTE {
 		static bool StrideCounterRequested();
 		static void NotePreviewStride(bool initialized);
 		static bool PreviewStrideRan() { return s_PreviewStrideSeen; }
+		static bool CheckNestedHookScope();
 
 	private:
 		static bool s_SubtreeProbe;
