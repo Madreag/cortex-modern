@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -60,6 +61,10 @@ namespace RTE {
 		static constexpr size_t c_MaxPresetBytes = 128;
 
 		static NetMatchConfig MakeDefault(uint64_t sessionId = 0);
+		/// The roster a rematch is played on: the peers still here keep their relative seat order and
+		/// close up onto ids 1..N. An intact roster maps to itself, config and hash unchanged.
+		/// @param outSeatMap Optional old lockstep peer id -> new lockstep peer id for every survivor.
+		static bool DeriveRematchConfig(const NetMatchConfig& previous, const std::vector<uint8_t>& survivingPeerIds, NetMatchConfig& outConfig, std::map<uint8_t, uint8_t>* outSeatMap = nullptr, std::string* error = nullptr);
 		static bool ValidateLocalAlpha(const NetMatchConfig& config, std::string* error = nullptr);
 		static NetHash32 HashConfig(const NetMatchConfig& config);
 		static std::string BuildReportJson(const NetMatchConfig& config);
