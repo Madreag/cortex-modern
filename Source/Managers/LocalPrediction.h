@@ -40,6 +40,7 @@ namespace RTE {
 			uint64_t spawned = 0; //!< Objects the previews queued: rounds, shells, drops.
 			std::string spawnedNames; //!< Their preset names, comma separated.
 			bool firedOnce = false; //!< The equipped firearm reports having fired.
+			bool firedFrame = false; //!< That firearm fired on the horizon step, so its muzzle flash is drawn.
 			uint64_t shadows = 0;
 			uint64_t taken = 0;
 			uint64_t violations = 0;

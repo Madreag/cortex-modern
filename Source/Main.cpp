@@ -257,6 +257,7 @@ static long long s_lpExpectFireTick = 0;
 static long long s_lpExpectFireSlack = 0;
 static long long s_eventLedgerPressTick = 0; //!< -local-prediction-event-ledger: the tick the tracked press is sampled at.
 static bool s_eventLedgerChecked = false;
+static long long s_eventLedgerFlashTick = -1; //!< The committed tick a preview first drew the muzzle flash on.
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
@@ -1794,6 +1795,9 @@ static void PreviewEventLedgerFrameOnTick() {
 		return;
 	}
 	LocalPrediction::RunPreview();
+	if (s_eventLedgerFlashTick < 0 && LocalPrediction::GetLastOutcome().firedFrame) {
+		s_eventLedgerFlashTick = g_TimerMan.GetSimUpdateCount();
+	}
 	DrawFrameWithPreviews();
 }
 
@@ -1810,19 +1814,20 @@ static void CheckPreviewEventLedgerSelfTest() {
 		passed = passed && ok;
 	};
 	const uint64_t press = static_cast<uint64_t>(s_eventLedgerPressTick);
-	const std::vector<PreviewEventLedger::SoundStart>& starts = PreviewEventLedger::GetSoundStarts();
-	const PreviewEventLedger::SoundStart* tracked = nullptr;
-	for (const PreviewEventLedger::SoundStart& start: starts) {
-		if (start.committedTick >= press && !tracked) {
-			tracked = &start;
+	const std::vector<PreviewEventLedger::EventStart>& starts = PreviewEventLedger::GetEventStarts();
+	const auto firstAfterPress = [&starts, press](uint8_t kind) -> const PreviewEventLedger::EventStart* {
+		for (const PreviewEventLedger::EventStart& start: starts) {
+			if (start.kind == kind && start.committedTick >= press) return &start;
 		}
-	}
+		return nullptr;
+	};
+	const PreviewEventLedger::EventStart* tracked = firstAfterPress(PreviewEventLedger::Sound);
 	if (!tracked) {
-		check("a_previewed_actor_played_a_sound", false, "no physical voice from a previewed actor at or after tick " + std::to_string(press) + " (" + std::to_string(PreviewEventLedger::GetSoundStartCount()) + " recorded in the run)");
+		check("a_previewed_actor_played_a_sound", false, "no physical voice from a previewed actor at or after tick " + std::to_string(press) + " (" + std::to_string(PreviewEventLedger::GetEventStartCount()) + " events recorded in the run)");
 	} else {
 		size_t sameKey = 0;
-		for (const PreviewEventLedger::SoundStart& start: starts) {
-			if (start.emitterUID == tracked->emitterUID && start.eventTick == tracked->eventTick && start.seq == tracked->seq) {
+		for (const PreviewEventLedger::EventStart& start: starts) {
+			if (start.kind == tracked->kind && start.emitterUID == tracked->emitterUID && start.eventTick == tracked->eventTick && start.seq == tracked->seq) {
 				++sameKey;
 			}
 		}
@@ -1830,6 +1835,13 @@ static void CheckPreviewEventLedgerSelfTest() {
 		      "first physical voice for the press at committed tick " + std::to_string(tracked->committedTick) + " (event tick " + std::to_string(tracked->eventTick) + ", seq " + std::to_string(tracked->seq) + ", predicted=" + std::to_string(tracked->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1));
 		check("the_event_reaches_the_output_once", sameKey == 1, std::to_string(sameKey) + " physical starts for that event");
 	}
+	const PreviewEventLedger::EventStart* glow = firstAfterPress(PreviewEventLedger::PostEffect);
+	check("the_glow_starts_on_the_preview_tick", glow && glow->committedTick <= press + 1,
+	      glow ? "first post effect for the press at committed tick " + std::to_string(glow->committedTick) + " (event tick " + std::to_string(glow->eventTick) + ", predicted=" + std::to_string(glow->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1)
+	           : "no post effect from a previewed actor at or after tick " + std::to_string(press));
+	// A guard, not a detector: the muzzle flash sprite is already drawn on the preview that fires.
+	check("the_flash_sprite_stays_on_the_preview_tick", s_eventLedgerFlashTick > 0 && static_cast<uint64_t>(s_eventLedgerFlashTick) <= press + 1,
+	      "the previewed firearm's flash frame is first set at committed tick " + std::to_string(s_eventLedgerFlashTick) + ", expected <= " + std::to_string(press + 1));
 	const PreviewEventLedger::Counters& counters = PreviewEventLedger::GetCounters();
 	check("the_counters_balance", counters.playedAtPreview == counters.adoptedAtCommit + counters.expired + PreviewEventLedger::GetLiveEntryCount(),
 	      PreviewEventLedger::Describe() + " live=" + std::to_string(PreviewEventLedger::GetLiveEntryCount()));
