@@ -170,6 +170,7 @@ namespace RTE {
 		bool s_SavedAutomaticGoldDeposit = true;
 		bool s_SavedCrabBombsEnabled = false;
 		int s_SavedCrabBombThreshold = 42;
+		int s_SavedSubPieMenuHoverOpenDelay = 1000;
 
 		// Presentation only: the sim thread is blocked waiting on the peer, so the normal render path
 		// can't run. Keep the window pumped and show the last frame replaced by a plain wait screen.
@@ -788,6 +789,7 @@ namespace RTE {
 			g_SettingsMan.SetAutomaticGoldDeposit(s_SavedAutomaticGoldDeposit);
 			g_SettingsMan.SetCrabBombsEnabled(s_SavedCrabBombsEnabled);
 			g_SettingsMan.SetCrabBombThreshold(s_SavedCrabBombThreshold);
+			g_SettingsMan.SetSubPieMenuHoverOpenDelay(s_SavedSubPieMenuHoverOpenDelay);
 		}
 		if (!coordinator) {
 			CloseLockstepReplayRecord();
@@ -1901,12 +1903,14 @@ namespace RTE {
 			s_SavedAutomaticGoldDeposit = g_SettingsMan.GetAutomaticGoldDeposit();
 			s_SavedCrabBombsEnabled = g_SettingsMan.CrabBombsEnabled();
 			s_SavedCrabBombThreshold = g_SettingsMan.GetCrabBombThreshold();
+			s_SavedSubPieMenuHoverOpenDelay = g_SettingsMan.GetSubPieMenuHoverOpenDelay();
 		}
 		// Gold pickups route to team funds or carried gold off this per-machine setting; pin it.
 		g_SettingsMan.SetAutomaticGoldDeposit(true);
 		// Crab bombs gib a craft's ejected crabs past a threshold; both are per-machine settings on a sim path.
 		g_SettingsMan.SetCrabBombsEnabled(false);
 		g_SettingsMan.SetCrabBombThreshold(42);
+		g_SettingsMan.SetSubPieMenuHoverOpenDelay(1000);
 	}
 
 	std::map<std::string, std::string> ScenarioRunner::GatherSimConfig() {

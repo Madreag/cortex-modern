@@ -2,6 +2,7 @@
 
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
+#include "PieMenu.h"
 #include "NetMatchReplay.h"
 #include "NetProtocol.h"
 #include "NetReconnectLedger.h"
@@ -3011,6 +3012,114 @@ namespace RTE {
 			}
 			if (!fx.clientA.GetPeerLeaveFrames().empty() || fx.clientA.GetStats().peersDroppedSilent != 0) {
 				*error = "a client adjudicated a peer drop, which only the relay host may do";
+				return false;
+			}
+			return true;
+		}
+
+		bool SendStop(LoopbackTransport& from, NetPeerId to, uint8_t senderPeerId, NetLockstepStopReason reason, uint64_t frame, const std::string& message, std::string* error) {
+			NetLockstepStop stop;
+			stop.senderPeerId = senderPeerId;
+			stop.reason = reason;
+			stop.frame = frame;
+			stop.message = message;
+			std::vector<uint8_t> bytes;
+			return EncodePacket({stop}, bytes, error) && from.Send(to, NetTransportLane::ControlReliable, bytes, error);
+		}
+
+		// A live client's ProtocolError Stop is that client's leave: the host stays Running, the
+		// survivor is told PeerLeft, and host + client 1 keep committing.
+		bool TestCoordinatorClientProtocolErrorIsALeave(std::string* error) {
+			StarFixture fx;
+			if (!fx.Start(43210, 0x70000000000000E0ULL, 2000, error)) {
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.Running(); }, 2000)) {
+				*error = "client-stop-leave fixture did not reach Running";
+				return false;
+			}
+			std::vector<uint64_t> hostReady, aReady, bReady;
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.host, hostReady);
+					fx.Collect(fx.clientA, aReady);
+					fx.Collect(fx.clientB, bReady);
+					return hostReady.size() >= 2 && aReady.size() >= 2 && bReady.size() >= 2;
+				}, fx.now + 2000)) {
+				*error = "client-stop-leave fixture did not get the round moving";
+				return false;
+			}
+			if (!SendStop(fx.clientAT, 1, 2, NetLockstepStopReason::ProtocolError, fx.clientA.GetStats().nextFrame, "decode failed", error)) {
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.host.GetPeerLeaveFrames().count(2) != 0 || fx.host.IsFailed(); }, fx.now + 2000)) {
+				*error = "host never handled the client's ProtocolError stop: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (!fx.host.IsRunning()) {
+				*error = "host failed the round on a client's ProtocolError stop: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (fx.host.GetStats().stopsAdjudicatedAsLeaves != 1) {
+				*error = "the client's ProtocolError stop was not counted as a leave: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (fx.host.GetPeerLeaveFrames().count(2) != 1) {
+				*error = "client 2 is not in the host leave map after its ProtocolError stop: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.clientB.GetPeerLeaveFrames().count(2) != 0; }, fx.now + 2000)) {
+				*error = "client 1 never received the relayed PeerLeft for peer 2: " + fx.clientB.BuildReportJson();
+				return false;
+			}
+			const uint64_t leaveFrame = fx.host.GetPeerLeaveFrames().at(2);
+			if (fx.clientB.GetPeerLeaveFrames().at(2) != leaveFrame) {
+				*error = "host and client 1 disagreed on peer 2's leave frame";
+				return false;
+			}
+			fx.Collect(fx.host, hostReady);
+			fx.Collect(fx.clientB, bReady);
+			const size_t hostAtLeave = hostReady.size();
+			const size_t bAtLeave = bReady.size();
+			if (!fx.Drive(true, false, true, [&] {
+					fx.Feed(fx.host, 1, 100);
+					fx.Feed(fx.clientB, 3, 300);
+					fx.Collect(fx.host, hostReady);
+					fx.Collect(fx.clientB, bReady);
+					return hostReady.size() >= hostAtLeave + 4 && bReady.size() >= bAtLeave + 4;
+				}, fx.now + 4000)) {
+				*error = "survivors did not keep committing after the client's ProtocolError leave (host=" +
+				         std::to_string(hostReady.size()) + " b=" + std::to_string(bReady.size()) + ")";
+				return false;
+			}
+			return true;
+		}
+
+		// The host's own ProtocolError still fails every client.
+		bool TestCoordinatorHostProtocolErrorFailsClients(std::string* error) {
+			StarFixture fx;
+			if (!fx.Start(43211, 0x70000000000000E1ULL, 2000, error)) {
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.Running(); }, 2000)) {
+				*error = "host-stop-fail fixture did not reach Running";
+				return false;
+			}
+			std::vector<uint64_t> hostReady;
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.host, hostReady);
+					return hostReady.size() >= 2;
+				}, fx.now + 2000)) {
+				*error = "host-stop-fail fixture did not get the round moving";
+				return false;
+			}
+			const uint64_t frame = fx.host.GetStats().nextFrame;
+			if (!SendStop(fx.hostT, 1, 1, NetLockstepStopReason::ProtocolError, frame, "decode failed", error) ||
+			    !SendStop(fx.hostT, 2, 1, NetLockstepStopReason::ProtocolError, frame, "decode failed", error)) {
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.clientA.IsFailed() && fx.clientB.IsFailed(); }, fx.now + 2000)) {
+				*error = "clients did not fail when the host sent ProtocolError (a=" + fx.clientA.BuildReportJson() +
+				         " b=" + fx.clientB.BuildReportJson() + ")";
 				return false;
 			}
 			return true;
@@ -10512,6 +10621,11 @@ namespace RTE {
 			return 1;
 		};
 
+		std::string piePinError;
+		if (!PieMenu::RunHoverOpenDelayPinSelfTest(&piePinError)) {
+			return fail(piePinError);
+		}
+
 		std::string error;
 		if (!TestSoundIdentityPinAgreesAcrossHistories(&error) ||
 		    !TestRoundTrips(&error) ||
@@ -10586,6 +10700,8 @@ namespace RTE {
 		    !TestCoordinatorPeerLeave(&error) ||
 		    !TestCoordinatorHostAdjudicatesSilentPeer(&error) ||
 		    !TestCoordinatorSilentHostStillTimesOut(&error) ||
+		    !TestCoordinatorClientProtocolErrorIsALeave(&error) ||
+		    !TestCoordinatorHostProtocolErrorFailsClients(&error) ||
 		    !TestCoordinatorRelayBacklogHeals(&error) ||
 		    !TestCoordinatorRelayFailureDropsPeer(&error) ||
 		    !TestCoordinatorDroppedSeatHold(&error) ||
