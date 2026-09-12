@@ -38,6 +38,7 @@
 #include "GUIInput.h"
 #include "LuaMan.h"
 #include "ActivityMan.h"
+#include "TimerMan.h"
 #include "OwnedMovableObjects.h"
 
 #include <cstdlib>
@@ -1141,6 +1142,9 @@ void GameActivity::UpdateEditing() {
 }
 
 void GameActivity::Update() {
+	if (g_ActivityMan.LockstepRelaunchInProgress()) {
+		g_ActivityMan.NoteStaleActivitySlots(CountStaleRelaunchSlots(static_cast<int>(g_TimerMan.GetSimUpdateCount())));
+	}
 	Activity::Update();
 
 	// Avoid game logic when we're editing
@@ -2742,6 +2746,33 @@ bool GameActivity::LoadCheckpoint(std::string_view text, bool validateOnly) {
     } catch (const std::exception&) { return false; }
 }
 
+void GameActivity::ClearNonOwnedActorSlots() {
+	Activity::ClearNonOwnedActorSlots();
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) m_pLastMarkedActor[player] = nullptr;
+}
+
+void GameActivity::RebindNonOwnedActorSlots() {
+	Activity::RebindNonOwnedActorSlots();
+	if (!m_HasCheckpointMarkedActorIDs) return;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		const long uid = m_CheckpointMarkedActorIDs[player];
+		Actor* actor = uid ? dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(uid)) : nullptr;
+		m_pLastMarkedActor[player] = (actor && g_MovableMan.ValidMO(actor) && g_MovableMan.IsActor(actor)) ? actor : nullptr;
+	}
+}
+
+void GameActivity::ClearCheckpointActorIDs() {
+	Activity::ClearCheckpointActorIDs();
+	m_HasCheckpointMarkedActorIDs = false;
+}
+
+void GameActivity::ForgetDestroyedActor(const Actor* actor) {
+	Activity::ForgetDestroyedActor(actor);
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (m_pLastMarkedActor[player] == actor) m_pLastMarkedActor[player] = nullptr;
+	}
+}
+
 bool GameActivity::ResolveCheckpointReferences() {
     if (!Activity::ResolveCheckpointReferences()) return false;
     if (m_HasCheckpointMarkedActorIDs) {
@@ -2752,7 +2783,7 @@ bool GameActivity::ResolveCheckpointReferences() {
             if (uid && !marked[player]) return false;
         }
         for (int player = 0; player < Players::MaxPlayerCount; ++player) m_pLastMarkedActor[player] = marked[player];
-        m_HasCheckpointMarkedActorIDs = false;
+        if (!g_ActivityMan.LockstepRelaunchInProgress()) m_HasCheckpointMarkedActorIDs = false;
     }
     for (auto& queue: m_Deliveries) for (Delivery& delivery: queue) if (delivery.pCraft) delivery.pCraft->ResolveFaithfulLinks();
     return true;
@@ -2879,7 +2910,7 @@ bool GameActivity::LoadNetLocalGameState(std::string_view text) {
 			m_pLastMarkedActor[player] = ResolveNetActor(slot.marked);
 			m_PurchaseOverride[player].swap(slot.purchases);
 		}
-		m_HasCheckpointMarkedActorIDs = false;
+		if (!g_ActivityMan.LockstepRelaunchInProgress()) m_HasCheckpointMarkedActorIDs = false;
 		return true;
 	} catch (const std::exception&) { return false; }
 }
@@ -2948,7 +2979,7 @@ bool GameActivity::ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings)
 		m_LZCursorWidth[player] = 0;
 		m_NetworkPlayerNames[player].clear();
 	}
-	m_HasCheckpointMarkedActorIDs = false;
+	if (!g_ActivityMan.LockstepRelaunchInProgress()) m_HasCheckpointMarkedActorIDs = false;
 	return CreateNetLocalUI();
 }
 
