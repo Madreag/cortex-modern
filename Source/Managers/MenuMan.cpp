@@ -20,6 +20,7 @@
 #include "MetagameGUI.h"
 #include "LoadingScreen.h"
 #include "System.h"
+#include "NetMatchService.h"
 
 using namespace RTE;
 
@@ -143,6 +144,11 @@ void MenuMan::HandleTransitionIntoMenuLoop() {
 }
 
 bool MenuMan::Update() {
+	// §11's retry schedule belongs to the service, not to a screen: it runs whatever menu is up, so a
+	// dropped player recovers without having to walk back to the multiplayer screen.
+	if (g_NetMatchService.NeedsRecoveryPump()) {
+		g_NetMatchService.Update();
+	}
 	m_TitleScreen->Update();
 	SetActiveMenu();
 

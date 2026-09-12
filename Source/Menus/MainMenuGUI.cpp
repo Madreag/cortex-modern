@@ -505,7 +505,10 @@ void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
 				}
 				g_SettingsMan.UpdateSettingsFile();
 			} else if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen) {
-				g_NetMatchService.Destroy();
+				// A running recovery outlives the screen; Cancel is what stops it, not walking away.
+				if (!g_NetMatchService.NeedsRecoveryPump()) {
+					g_NetMatchService.Destroy();
+				}
 			} else if (m_ActiveMenuScreen == MenuScreen::CreditsScreen) {
 				m_UpdateResult = MainMenuUpdateResult::BackToMainFromCredits;
 			}
