@@ -112,6 +112,8 @@ namespace RTE {
 		static constexpr uint64_t c_RetryBaseMs = 5000;  //!< Backoff starts here, doubles to the cap.
 		static constexpr uint64_t c_RetryMaxMs = 60000;
 		static constexpr int64_t c_MinHeartbeatS = 1;    //!< The service's floor is respected.
+		static constexpr int c_ListPageLimit = 100;
+		static constexpr int c_ListMaxPages = 5;
 
 	private:
 		enum class RequestKind : uint8_t { None, Register, Heartbeat, Delete, List };
@@ -152,6 +154,9 @@ namespace RTE {
 		std::vector<NetDirectorySessionRow> m_Rows;
 		std::string m_ListError;
 		uint64_t m_ListReplies = 0;
+		std::string m_ListCursor;
+		int m_ListPages = 0;
+		int64_t m_ListTotal = 0;
 
 		std::unique_ptr<Transport> m_Request;
 		RequestKind m_RequestKind = RequestKind::None;
