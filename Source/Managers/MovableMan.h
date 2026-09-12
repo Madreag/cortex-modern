@@ -274,6 +274,13 @@ namespace RTE {
 		void DiscardAddedSince(const AddQueueMark& mark);
 		/// The preset names of everything queued since the mark, comma separated; the gates name a preview's spawns with it.
 		std::string DescribeAddedSince(const AddQueueMark& mark) const;
+		/// Moves this tick's add-queue entries into the speculation spawn list so later horizon steps can travel them.
+		void HarvestSpeculativeSpawns();
+		/// One TravelStage then UpdateStage per speculative spawn; the same stages the preview clones use.
+		void TravelSpeculativeSpawns();
+		size_t GetSpeculativeSpawnCount() const;
+		/// The preset names of the speculative spawns, comma separated.
+		std::string DescribeSpeculativeSpawns() const;
 		/// Draws the substitute in the original's slot until swapped back.
 		bool SwapActorForRender(Actor* original, Actor* substitute);
 
@@ -858,9 +865,16 @@ namespace RTE {
 				int kind = 0; //!< 1 actor, 2 item, 3 particle.
 				bool inWorld = true; //!< Standing in for its resident until a caller takes it.
 			};
+			struct Spawn {
+				MovableObject* object = nullptr;
+				uint64_t emitterUID = 0;
+				uint64_t tick = 0;
+			};
 			bool active = false;
 			std::unordered_map<const MovableObject*, Shadow> shadows; //!< Resident -> its shadow.
 			std::unordered_map<const MovableObject*, MovableObject*> residents; //!< Shadow -> its resident.
+			std::unordered_map<const MovableObject*, Spawn> spawnMeta;
+			std::vector<Spawn> spawns;
 			std::vector<MovableObject*> taken;
 			AddQueueMark mark;
 			std::list<Actor*> rosters[Activity::MaxTeamCount];
@@ -878,6 +892,9 @@ namespace RTE {
 		MovableObject* ShadowOf(MovableObject* resident);
 		MovableObject* SpeculativeView(MovableObject* found);
 		MovableObject* TakeShadow(MovableObject* mo, int kind);
+		void RecordSpeculativeSpawnMeta(MovableObject* mo);
+		void DestroySpeculativeSpawn(MovableObject* mo);
+		void DisposeSpeculativeSpawns();
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		bool m_PurgingAllMOs = false;
 		std::vector<MovableObject*> m_PendingLinkResolves; //!< Restored adds whose saved links resolve once the whole world is in.

@@ -1964,6 +1964,101 @@ std::string MovableMan::DescribeAddedSince(const AddQueueMark& mark) const {
 	return out;
 }
 
+void MovableMan::RecordSpeculativeSpawnMeta(MovableObject* mo) {
+	if (!m_Speculation.active || !mo) {
+		return;
+	}
+	Speculation::Spawn meta;
+	meta.object = mo;
+	meta.emitterUID = SoundSimulationScope::CurrentKey().objectUID;
+	meta.tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	m_Speculation.spawnMeta[mo] = meta;
+}
+
+void MovableMan::DestroySpeculativeSpawn(MovableObject* mo) {
+	if (!mo) {
+		return;
+	}
+	if (Actor* actor = dynamic_cast<Actor*>(mo)) {
+		if (actor->GetTeam() >= 0) {
+			RemoveActorFromTeamRoster(actor);
+		}
+		m_ValidActors.erase(actor);
+	}
+	m_ValidItems.erase(mo);
+	m_ValidParticles.erase(mo);
+	mo->DestroyScriptState();
+	delete mo;
+}
+
+void MovableMan::HarvestSpeculativeSpawns() {
+	if (!m_Speculation.active) {
+		return;
+	}
+	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex);
+	const auto take = [this](auto& queue, size_t mark) {
+		for (size_t i = mark; i < queue.size(); ++i) {
+			MovableObject* mo = queue[i];
+			Speculation::Spawn spawn;
+			spawn.object = mo;
+			if (const auto found = m_Speculation.spawnMeta.find(mo); found != m_Speculation.spawnMeta.end()) {
+				spawn.emitterUID = found->second.emitterUID;
+				spawn.tick = found->second.tick;
+				m_Speculation.spawnMeta.erase(found);
+			} else {
+				spawn.emitterUID = SoundSimulationScope::CurrentKey().objectUID;
+				spawn.tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			}
+			m_Speculation.spawns.push_back(spawn);
+		}
+		queue.resize(mark);
+	};
+	take(m_AddedActors, m_Speculation.mark.actors);
+	take(m_AddedItems, m_Speculation.mark.items);
+	take(m_AddedParticles, m_Speculation.mark.particles);
+}
+
+void MovableMan::TravelSpeculativeSpawns() {
+	if (!m_Speculation.active) {
+		return;
+	}
+	for (Speculation::Spawn& spawn: m_Speculation.spawns) {
+		if (!spawn.object || spawn.object->IsSetToDelete()) {
+			continue;
+		}
+		TravelStage(spawn.object, dynamic_cast<Actor*>(spawn.object) != nullptr);
+	}
+	for (Speculation::Spawn& spawn: m_Speculation.spawns) {
+		if (!spawn.object || spawn.object->IsSetToDelete()) {
+			continue;
+		}
+		UpdateStage(spawn.object, dynamic_cast<Actor*>(spawn.object) != nullptr);
+	}
+}
+
+size_t MovableMan::GetSpeculativeSpawnCount() const {
+	return m_Speculation.spawns.size();
+}
+
+std::string MovableMan::DescribeSpeculativeSpawns() const {
+	std::string out;
+	for (const Speculation::Spawn& spawn: m_Speculation.spawns) {
+		if (!spawn.object) {
+			continue;
+		}
+		out += (out.empty() ? "" : ",") + spawn.object->GetPresetName();
+	}
+	return out;
+}
+
+void MovableMan::DisposeSpeculativeSpawns() {
+	for (Speculation::Spawn& spawn: m_Speculation.spawns) {
+		DestroySpeculativeSpawn(spawn.object);
+	}
+	m_Speculation.spawns.clear();
+	m_Speculation.spawnMeta.clear();
+}
+
 bool MovableMan::SwapActorForRender(Actor* original, Actor* substitute) {
 	const auto found = std::find(m_Actors.begin(), m_Actors.end(), original);
 	if (found == m_Actors.end()) {
@@ -2019,16 +2114,17 @@ void MovableMan::EndSpeculation(std::vector<MovableObject*>* takenResidents) {
 	m_Speculation.active = false;
 	g_SimChecksum.SetSuppressed(false);
 	m_LinkRoot = nullptr;
+	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+		m_ActorRoster[team] = m_Speculation.rosters[team];
+		m_SortTeamRoster[team] = m_Speculation.sortRoster[team];
+		m_Speculation.rosters[team].clear();
+	}
+	DisposeSpeculativeSpawns();
 	DiscardAddedSince(m_Speculation.mark);
 	for (auto& [resident, shadow]: m_Speculation.shadows) {
 		if (shadow.inWorld) {
 			delete shadow.object;
 		}
-	}
-	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
-		m_ActorRoster[team] = m_Speculation.rosters[team];
-		m_SortTeamRoster[team] = m_Speculation.sortRoster[team];
-		m_Speculation.rosters[team].clear();
 	}
 	if (takenResidents) {
 		*takenResidents = m_Speculation.taken;
@@ -2044,6 +2140,11 @@ int MovableMan::ResidentKind(const MovableObject* mo) const {
 	}
 	// Whatever entered the add queues during the speculation is speculative itself, not a resident.
 	if (m_Speculation.active) {
+		for (const Speculation::Spawn& spawn: m_Speculation.spawns) {
+			if (spawn.object == mo) {
+				return 0;
+			}
+		}
 		for (size_t i = m_Speculation.mark.actors; i < m_AddedActors.size(); ++i) {
 			if (m_AddedActors[i] == mo) {
 				return 0;
@@ -2759,6 +2860,7 @@ void MovableMan::AddActor(Actor* actorToAdd) {
 
 		{
 			std::lock_guard<std::mutex> lock(m_AddedActorsMutex);
+			RecordSpeculativeSpawnMeta(actorToAdd);
 			m_AddedActors.push_back(actorToAdd);
 			m_ValidActors.insert(actorToAdd);
 
@@ -2802,6 +2904,7 @@ void MovableMan::AddItem(HeldDevice* itemToAdd) {
 		}
 
 		std::lock_guard<std::mutex> lock(m_AddedItemsMutex);
+		RecordSpeculativeSpawnMeta(itemToAdd);
 		m_AddedItems.push_back(itemToAdd);
 		m_ValidItems.insert(itemToAdd);
 	}
@@ -2831,6 +2934,7 @@ void MovableMan::AddParticle(MovableObject* particleToAdd) {
 				particleToAdd->SetAge(0);
 			}
 		}
+		RecordSpeculativeSpawnMeta(particleToAdd);
 		if (particleToAdd->IsDevice()) {
 			std::lock_guard<std::mutex> lock(m_AddedItemsMutex);
 			m_AddedItems.push_back(particleToAdd);
