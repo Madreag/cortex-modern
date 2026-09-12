@@ -1424,6 +1424,15 @@ namespace RTE {
 		return statuses;
 	}
 
+	std::vector<NetH4Seat> NetReconnectHost::GetSeatTable() const {
+		std::vector<NetH4Seat> seats;
+		seats.reserve(m_Seats.size());
+		for (const SeatState& state : m_Seats) {
+			seats.push_back(state.seat);
+		}
+		return seats;
+	}
+
 	void NetReconnectClient::Configure(NetReconnectTicketStore* store, NetH4Identity identity, std::string displayName) {
 		m_Store = store;
 		m_Identity = std::move(identity);

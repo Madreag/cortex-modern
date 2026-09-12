@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -25,6 +26,10 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -392,8 +397,27 @@ namespace RTE {
 			    !RoundTrip(NetLobbyConfigAck{2, true, configHash, ""}, error) ||
 			    !RoundTrip(NetLobbyReady{2, true}, error) ||
 			    !RoundTrip(NetLobbyStart{config.sessionId, 120, 0, configHash}, error) ||
-			    !RoundTrip(NetLobbyAbort{1, "user cancelled"}, error)) {
+			    !RoundTrip(NetLobbyAbort{1, "user cancelled"}, error) ||
+			    !RoundTrip(NetLobbySeatAssign{2}, error) ||
+			    !RoundTrip(NetLobbySeatAssign{static_cast<uint8_t>(NetLobbyProtocol::c_MaxPlayers)}, error)) {
 				return false;
+			}
+			// A seat assignment names a real seat; zero and out-of-range must not decode.
+			for (const uint8_t assigned: {uint8_t{0}, static_cast<uint8_t>(NetLobbyProtocol::c_MaxPlayers + 1)}) {
+				NetLobbyMessage message;
+				message.payload = NetLobbySeatAssign{2};
+				std::vector<uint8_t> bytes;
+				NetLobbyError encodeError;
+				if (!NetLobbyProtocol::Encode(message, bytes, &encodeError)) {
+					*error = "could not encode a seat assignment";
+					return false;
+				}
+				bytes.at(NetLobbyProtocol::c_HeaderBytes) = assigned;
+				const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(bytes);
+				if (decoded.ok || decoded.error.code != NetLobbyErrorCode::InvalidValue) {
+					*error = "seat assignment peer id " + std::to_string(assigned) + " was not rejected";
+					return false;
+				}
 			}
 			// A config carrying per-sender delays must survive the wire unchanged.
 			NetMatchConfig perSender = MakeConfig();
@@ -1651,7 +1675,7 @@ namespace RTE {
 				return false;
 			}
 			// The proposal a client accepts is the roster it derived; the round it just played is not.
-			if (!NetMatchRunner::RematchRostersAgree(derived, derived) || NetMatchRunner::RematchRostersAgree(four, derived)) {
+			if (!NetMatchRunner::RematchRostersAgree(derived, derived, 2) || NetMatchRunner::RematchRostersAgree(four, derived, 2)) {
 				*error = "the rematch proposal check accepted a roster the peer did not derive";
 				return false;
 			}
@@ -1659,7 +1683,7 @@ namespace RTE {
 			if (!NetMatchConfigUtil::DeriveRematchConfig(four, {1, 2, 3, 4}, intact, nullptr, error)) {
 				return false;
 			}
-			if (NetMatchConfigUtil::HashConfig(intact) != NetMatchConfigUtil::HashConfig(four) || !NetMatchRunner::RematchRostersAgree(intact, four)) {
+			if (NetMatchConfigUtil::HashConfig(intact) != NetMatchConfigUtil::HashConfig(four) || !NetMatchRunner::RematchRostersAgree(intact, four, 2)) {
 				*error = "an intact roster did not derive the config it played";
 				return false;
 			}
@@ -1909,6 +1933,1112 @@ namespace RTE {
 			round2.Complete("rematch over");
 			for (ClientPeer& client: clients) client.transport.Stop();
 			hostTransport.Stop();
+			return true;
+		}
+
+		// Loopback transports hand packets into each other's queues, so all calls share one lock.
+		class LockedLoopback final : public INetTransport {
+		public:
+			~LockedLoopback() override {
+				std::lock_guard<std::mutex> lock(Mutex());
+				m_Transport.Stop();
+			}
+
+			bool StartHost(uint16_t port, std::string* error) override {
+				std::lock_guard<std::mutex> lock(Mutex());
+				m_Hosting = m_Transport.StartHost(port, error);
+				return m_Hosting;
+			}
+			bool Connect(const std::string& address, uint16_t port, std::string* error) override {
+				std::lock_guard<std::mutex> lock(Mutex());
+				return m_Transport.Connect(address, port, error);
+			}
+			bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error, bool* congested) override {
+				std::lock_guard<std::mutex> lock(Mutex());
+				return m_Transport.Send(peerId, lane, bytes, error, congested);
+			}
+			void Disconnect(NetPeerId peerId, const std::string& reason) override {
+				std::lock_guard<std::mutex> lock(Mutex());
+				m_Transport.Disconnect(peerId, reason);
+			}
+			void Stop() override {
+				std::lock_guard<std::mutex> lock(Mutex());
+				m_Transport.Stop();
+				m_Hosting = false;
+			}
+			std::vector<NetTransportEvent> PollEvents() override {
+				std::lock_guard<std::mutex> lock(Mutex());
+				return m_Transport.PollEvents();
+			}
+			bool IsHosting() const {
+				std::lock_guard<std::mutex> lock(Mutex());
+				return m_Hosting;
+			}
+
+		private:
+			static std::mutex& Mutex() {
+				static std::mutex mutex;
+				return mutex;
+			}
+
+			LoopbackTransport m_Transport;
+			bool m_Hosting = false;
+		};
+
+		// Real elapsed time plus what a test skips, so a reclaim window can lapse without sleeping.
+		struct RematchClock {
+			const std::chrono::steady_clock::time_point origin = std::chrono::steady_clock::now();
+			std::atomic<uint64_t> skippedMs{0};
+
+			uint64_t NowMs() const {
+				return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - origin).count()) + skippedMs.load();
+			}
+		};
+
+		// One peer's match objects, pumped the way NetMatchService and the sim thread pump them.
+		struct RematchPeer {
+			std::string name;
+			bool host = false;
+			bool leaving = false; //!< Its §7 exchange owns the session; the sim no longer ticks its round.
+			bool gone = false;
+			LockedLoopback transport;
+			NetSession session;
+			NetMatchRunner runner;
+			NetMatchRunnerConfig config;
+			std::unique_ptr<NetLockstepCoordinator> round;
+			NetSeatAuthRegistry registry;
+			NetReconnectHost admission;
+			NetReconnectTicketStore store;
+			NetReconnectClient reconnect;
+			std::vector<NetTransportEvent> handover;      //!< What the round handed the session, drained like PumpSessionEvents.
+			std::optional<NetLockstepSeatSnapshot> seats; //!< Client: the host's latest seat view this round.
+			std::map<uint64_t, std::string> trace;        //!< Every tick this round committed, as the sim applied it.
+			uint64_t nextProduce = 0;
+			uint64_t lastApplied = 0;
+
+			uint8_t LockstepId() const { return static_cast<uint8_t>(session.GetLocalPeerId() + 1); }
+		};
+
+		struct RematchFixture {
+			RematchClock clock;
+			std::vector<std::unique_ptr<RematchPeer>> peers; //!< peers[0] hosts.
+			std::filesystem::path ticketDirectory;
+
+			RematchPeer& Host() { return *peers.front(); }
+			RematchPeer* Client(uint8_t lockstepId) {
+				for (auto& peer: peers) {
+					if (!peer->host && !peer->gone && peer->LockstepId() == lockstepId) return peer.get();
+				}
+				return nullptr;
+			}
+		};
+
+		NetH4Identity RematchIdentity() {
+			NetH4Identity identity;
+			identity.controllerFrameVersion = ControllerFrame::c_Version;
+			identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			identity.gameVersion = "7.0.0-test";
+			identity.buildId = "rematch-roster-selftest";
+			return identity;
+		}
+
+		uint64_t RematchUnixClock(void*) {
+			return 1'700'000'000'000ULL;
+		}
+
+		// NetMatchService::QuerySeatState over the fixture host's plane.
+		NetLockstepSeatState RematchSeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId) {
+			const auto* admission = static_cast<const NetReconnectHost*>(context);
+			NetLockstepSeatState state;
+			state.fencedTransport = transportPeerId != c_InvalidNetPeerId && admission->IsFenced(transportPeerId);
+			state.heldForReclaim = admission->IsSeatHeldForReclaim(lockstepPeerId);
+			return state;
+		}
+
+		// Admission attached as NetMatchService::AttachAdmissionPlane does, so each client holds a ticket.
+		bool SetUpRematchFixture(RematchFixture& fixture, const std::string& label, uint16_t port, uint8_t peerCount, std::string* error) {
+			std::error_code code;
+			fixture.ticketDirectory = std::filesystem::current_path() / "Userdata" / "rematch-roster-selftest" / label;
+			std::filesystem::remove_all(fixture.ticketDirectory, code);
+			std::filesystem::create_directories(fixture.ticketDirectory, code);
+			if (code) {
+				*error = label + ": could not prepare the ticket directory: " + code.message();
+				return false;
+			}
+			NetMatchConfig matchConfig = MakeConfig();
+			matchConfig.peerCount = peerCount;
+			matchConfig.players.clear();
+			for (uint8_t peerId = 1; peerId <= peerCount; ++peerId) {
+				matchConfig.players.push_back(NetMatchPlayerSlot{peerId, static_cast<uint8_t>(peerId - 1), false, peerId == 1 ? "Host" : "Client " + std::to_string(peerId)});
+			}
+			const NetH4Identity identity = RematchIdentity();
+			for (uint8_t index = 0; index < peerCount; ++index) {
+				auto peer = std::make_unique<RematchPeer>();
+				peer->host = index == 0;
+				peer->name = peer->host ? "host" : "client " + std::to_string(index);
+				NetMatchRunnerConfig& config = peer->config;
+				config.host = peer->host;
+				config.joinAddress = peer->host ? "" : "loopback";
+				config.matchConfig = matchConfig;
+				config.useLobbyProtocol = true;
+				config.sessionWaitMs = 8000;
+				config.lobbyWaitMs = 4000;
+				config.lockstepWaitMs = 4000;
+				config.missingFrameGraceMs = 30000;
+				config.postSessionSettleMs = config.postLobbySettleMs = 0;
+				config.startFrame = 1;
+				config.scenario = "rematch-roster-selftest";
+				config.nowMs = [&fixture] { return fixture.clock.NowMs(); };
+				NetSessionConfig& session = config.sessionConfig;
+				session.port = port;
+				session.maxPeers = static_cast<uint8_t>(peerCount - 1);
+				session.timeoutMs = 30000;
+				session.heartbeatIntervalMs = 25;
+				session.sessionId = matchConfig.sessionId;
+				session.localNonce += index;
+				session.displayName = peer->host ? "Host" : "Client";
+				NetIdentityManifest& manifest = session.localIdentity;
+				manifest.gameVersion = identity.gameVersion;
+				manifest.networkProtocolVersion = NetProtocol::c_Version;
+				manifest.controllerFrameVersion = ControllerFrame::c_Version;
+				manifest.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+				manifest.buildId = identity.buildId;
+				manifest.platform = "test";
+				if (peer->host) {
+					if (!peer->registry.BeginHostedSession()) {
+						*error = label + ": the seat-auth registry could not draw an epoch";
+						return false;
+					}
+					peer->admission.Configure(&peer->registry, session.sessionId, identity);
+					peer->admission.SetSeatTable(NetH4BuildSeatTable(matchConfig), matchConfig.mode);
+					peer->admission.SetHostAddress("loopback");
+					peer->admission.SetMatchConfigHash(NetMatchConfigUtil::HashConfig(matchConfig));
+					peer->admission.SetLiveMatch(false);
+					peer->session.SetReconnectHost(&peer->admission);
+				} else {
+					peer->store.SetPath((fixture.ticketDirectory / (std::to_string(index) + ".ticket")).string());
+					peer->reconnect.Configure(&peer->store, identity, "Client " + std::to_string(index));
+					peer->reconnect.SetUnixClock(&RematchUnixClock, nullptr);
+					peer->reconnect.SetHostContext("loopback", NetHash32{});
+					peer->session.SetReconnectClient(&peer->reconnect);
+				}
+				fixture.peers.push_back(std::move(peer));
+			}
+			return true;
+		}
+
+		// What NetMatchService::ConsumeReadyToLaunch wires into a round it launches.
+		void AttachRematchRound(RematchPeer& peer) {
+			NetLockstepCoordinator& round = *peer.round;
+			round.DeferStopsToTickBoundary();
+			if (peer.host) {
+				round.SetSeatStateSource(&RematchSeatState, &peer.admission);
+			}
+			RematchPeer* owner = &peer;
+			round.SetSessionEventSink([owner](const NetTransportEvent& event) { owner->handover.push_back(event); });
+			peer.nextProduce = round.GetConfig().startFrame;
+			peer.lastApplied = round.GetConfig().startFrame > 0 ? round.GetConfig().startFrame - 1 : 0;
+		}
+
+		// Setup rounds on worker threads, one per peer, as each process's match worker runs its own.
+		class RematchWorkers {
+		public:
+			~RematchWorkers() {
+				for (std::thread& thread: m_Threads) {
+					if (thread.joinable()) thread.join();
+				}
+			}
+
+			void Add(RematchPeer& peer, std::function<bool(RematchPeer&, std::string*)> setup) {
+				peer.round = std::make_unique<NetLockstepCoordinator>();
+				peer.handover.clear();
+				peer.seats.reset();
+				peer.trace.clear();
+				m_Peers.push_back(&peer);
+				m_Launched.push_back(0);
+				std::string* error = m_Errors.emplace_back(std::make_unique<std::string>()).get();
+				std::atomic<int>* outcome = m_Outcomes.emplace_back(std::make_unique<std::atomic<int>>(0)).get();
+				m_Threads.emplace_back([&peer, error, outcome, setup = std::move(setup)] { outcome->store(setup(peer, error) ? 1 : 2); });
+				for (int spin = 0; peer.host && spin < 2000 && !peer.transport.IsHosting(); ++spin) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}
+			}
+
+			/// The peer's setup error once its setup has failed; empty while it runs or once it started.
+			std::string FailureOf(const RematchPeer& peer) const {
+				for (size_t index = 0; index < m_Peers.size(); ++index) {
+					if (m_Peers[index] == &peer && m_Outcomes[index]->load() == 2) return *m_Errors[index];
+				}
+				return {};
+			}
+
+			// A settled peer launches at once and keeps relaying the starts the others wait on, as the sim does.
+			bool Settle(std::string* error) {
+				for (bool settingUp = true; settingUp;) {
+					settingUp = false;
+					for (size_t index = 0; index < m_Peers.size(); ++index) {
+						const int state = m_Outcomes[index]->load();
+						if (state == 0) {
+							settingUp = true;
+						} else if (state == 1) {
+							if (!m_Launched[index]) {
+								AttachRematchRound(*m_Peers[index]);
+								m_Launched[index] = 1;
+							}
+							m_Peers[index]->round->Tick(NetLockstepNowMs());
+						}
+					}
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}
+				for (std::thread& thread: m_Threads) {
+					if (thread.joinable()) thread.join();
+				}
+				std::string failures;
+				for (size_t index = 0; index < m_Peers.size(); ++index) {
+					if (m_Outcomes[index]->load() != 1) {
+						failures += (failures.empty() ? "" : "; ") + m_Peers[index]->name + ": " + *m_Errors[index];
+					}
+				}
+				if (!failures.empty()) {
+					*error = failures;
+				}
+				return failures.empty();
+			}
+
+		private:
+			std::vector<RematchPeer*> m_Peers;
+			std::vector<char> m_Launched;
+			std::vector<std::unique_ptr<std::string>> m_Errors;
+			std::vector<std::unique_ptr<std::atomic<int>>> m_Outcomes; //!< 0 setting up, 1 started, 2 failed.
+			std::vector<std::thread> m_Threads;
+		};
+
+		bool LaunchRematchRound(const std::vector<RematchPeer*>& peers, const std::function<bool(RematchPeer&, std::string*)>& setup, std::string* error) {
+			RematchWorkers workers;
+			for (RematchPeer* peer: peers) {
+				workers.Add(*peer, setup);
+			}
+			return workers.Settle(error);
+		}
+
+		std::vector<RematchPeer*> LiveRematchPeers(RematchFixture& fixture) {
+			std::vector<RematchPeer*> live;
+			for (auto& peer: fixture.peers) {
+				if (!peer->gone) live.push_back(peer.get());
+			}
+			return live;
+		}
+
+		// The host's roster publication, as NetMatchService::PublishModerationView builds it.
+		void PublishRematchSeats(RematchPeer& host, uint64_t nowMs) {
+			NetLockstepCoordinator& round = *host.round;
+			if (!round.IsRunning()) return;
+			const auto& leaves = round.GetPeerLeaveFrames();
+			std::vector<NetSeatPresenceEntry> presence;
+			for (const NetH4ModerationSeat& seat: host.admission.GetModerationView()) {
+				if (seat.cpu || seat.lockstepPeerId == 0) continue;
+				NetSeatPresenceEntry entry;
+				entry.stableSeat = seat.stableSeat;
+				entry.peerId = seat.lockstepPeerId;
+				entry.holderGeneration = seat.holderGeneration;
+				entry.seatGeneration = seat.seatGeneration;
+				entry.incarnation = seat.incarnation;
+				if (seat.closed) {
+					entry.state = NetSeatPresenceState::Left;
+				} else if (seat.dropped) {
+					entry.state = seat.reclaiming ? NetSeatPresenceState::Reconnecting : NetSeatPresenceState::Disconnected;
+					entry.holdActive = seat.heldForReclaim;
+					entry.holdUntilMs = seat.holdUntilMs;
+				} else if (!seat.substituteName.empty()) {
+					entry.state = NetSeatPresenceState::Substituted;
+				}
+				const auto left = leaves.find(seat.lockstepPeerId);
+				if (seat.dropped && left != leaves.end()) {
+					entry.holdUntilFrame = left->second + NetLockstepCoordinator::c_ReclaimHoldFrames;
+				}
+				presence.push_back(std::move(entry));
+			}
+			std::sort(presence.begin(), presence.end(), [](const auto& a, const auto& b) { return a.stableSeat < b.stableSeat; });
+			(void)round.PublishSeatSnapshot(std::move(presence), nowMs);
+		}
+
+		ControllerFrame RematchFrame(uint8_t peerId, uint64_t frame) {
+			ControllerFrame controller;
+			controller.actorUniqueID = 1000 + peerId;
+			controller.stateMask = frame;
+			return controller;
+		}
+
+		// One committed tick as every peer must see it: each sender's frames under its id.
+		std::string DescribeRematchFrame(const NetLockstepReadyFrame& ready, uint8_t localPeerId) {
+			std::map<uint8_t, std::vector<const ControllerFrame*>> bySender;
+			for (const ControllerFrame& frame: ready.localFrames) {
+				bySender[localPeerId].push_back(&frame);
+			}
+			size_t offset = 0;
+			for (const auto& [peerId, count]: ready.remoteFrameCounts) {
+				for (size_t index = 0; index < count && offset < ready.remoteFrames.size(); ++index) {
+					bySender[peerId].push_back(&ready.remoteFrames[offset++]);
+				}
+			}
+			std::ostringstream text;
+			text << ready.frame;
+			for (const auto& [peerId, frames]: bySender) {
+				text << ' ' << static_cast<int>(peerId) << ':';
+				for (const ControllerFrame* frame: frames) {
+					text << frame->actorUniqueID << '/' << frame->stateMask << ',';
+				}
+			}
+			text << " commands=" << ready.localCommands.size() + ready.remoteCommands.size();
+			return text.str();
+		}
+
+		// NetMatchService::PumpSessionEvents, then one pass of the sim thread's lockstep loop.
+		void PumpRematchPeer(RematchFixture& fixture, RematchPeer& peer) {
+			if (peer.gone || peer.leaving || !peer.round) return;
+			NetLockstepCoordinator& round = *peer.round;
+			const uint64_t nowMs = fixture.clock.NowMs();
+			if (peer.host) {
+				peer.admission.SetLiveMatch(true);
+				peer.session.SetLockstepFrame(round.GetStats().nextFrame);
+				peer.session.TickAdmissionPlane(nowMs);
+			}
+			std::vector<NetTransportEvent> events;
+			events.swap(peer.handover);
+			for (const NetTransportEvent& event: events) {
+				peer.session.InjectEvent(event, nowMs);
+			}
+			if (peer.host) {
+				(void)peer.admission.TakePendingReseats();
+				for (const NetHoldResolutionNotice& notice: peer.admission.TakePendingHoldResolutions()) {
+					NetLockstepHoldResolution resolution = NetLockstepHoldResolution::None;
+					switch (notice.resolution) {
+						case NetHoldResolution::Expired: resolution = NetLockstepHoldResolution::Expired; break;
+						case NetHoldResolution::Reclaimed: resolution = NetLockstepHoldResolution::Reclaimed; break;
+						case NetHoldResolution::Substituted: resolution = NetLockstepHoldResolution::Substituted; break;
+					}
+					round.ResolveHeldSeat(notice.lockstepPeerId, resolution, nowMs);
+				}
+				PublishRematchSeats(peer, nowMs);
+			} else if (std::optional<NetLockstepSeatSnapshot> snapshot = round.TakeSeatSnapshot()) {
+				peer.seats = std::move(snapshot);
+			}
+			std::string ignored;
+			if (round.IsRunning() && round.NeedsResyncPriming()) {
+				(void)round.PrimeResyncInputs({}, &ignored);
+			}
+			while (round.IsRunning() && !round.NeedsResyncPriming() && peer.nextProduce <= peer.lastApplied + 2 &&
+			       round.QueueLocalInput(peer.nextProduce, {RematchFrame(round.GetConfig().localPeerId, peer.nextProduce)}, {}, &ignored)) {
+				++peer.nextProduce;
+			}
+			round.Tick(NetLockstepNowMs());
+			NetLockstepReadyFrame ready;
+			while (round.PopReadyFrame(ready)) {
+				peer.trace[ready.frame] = DescribeRematchFrame(ready, round.GetConfig().localPeerId);
+				peer.lastApplied = ready.frame;
+				(void)round.FinishSimulationTick(ready.frame);
+			}
+			if (round.IsRunning()) {
+				(void)round.WaivePendingPeersWhileWaiting(peer.lastApplied + 1);
+			}
+		}
+
+		bool PumpRematchUntil(RematchFixture& fixture, uint32_t budgetMs, const std::function<bool()>& done) {
+			const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(budgetMs);
+			while (true) {
+				for (auto& peer: fixture.peers) {
+					PumpRematchPeer(fixture, *peer);
+				}
+				if (done()) return true;
+				if (std::chrono::steady_clock::now() >= until) return false;
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+		}
+
+		// Plays until every live peer has applied this many more ticks of its round.
+		bool PlayRematchTicks(RematchFixture& fixture, uint64_t ticks) {
+			std::map<RematchPeer*, uint64_t> target;
+			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
+				target[peer] = peer->lastApplied + ticks;
+			}
+			return PumpRematchUntil(fixture, 4000, [&] {
+				return std::all_of(target.begin(), target.end(), [](const auto& entry) { return entry.first->lastApplied >= entry.second; });
+			});
+		}
+
+		// LeaveMatch: the §7 exchange while the link is up, then the round is told, then the process goes.
+		bool LeaveRematchRound(RematchFixture& fixture, RematchPeer& leaver, std::string* error) {
+			const uint8_t leaverId = leaver.LockstepId();
+			std::string leaveError;
+			leaver.leaving = true;
+			if (!leaver.reconnect.BeginLeave(fixture.clock.NowMs(), &leaveError)) {
+				*error = leaver.name + " could not start its leave: " + leaveError;
+				return false;
+			}
+			(void)PumpRematchUntil(fixture, 3000, [&] {
+				leaver.session.Tick(fixture.clock.NowMs());
+				leaver.reconnect.Tick(fixture.clock.NowMs());
+				return leaver.reconnect.GetState() != NetH4ClientState::Leaving || leaver.reconnect.WantsLinkClosed();
+			});
+			if (leaver.reconnect.GetState() != NetH4ClientState::Left) {
+				*error = leaver.name + "'s leave was not acknowledged: " + NetReconnectClientStateName(leaver.reconnect.GetState());
+				return false;
+			}
+			leaver.round->Leave("player left");
+			const bool recorded = PumpRematchUntil(fixture, 3000, [&] {
+				for (RematchPeer* peer: LiveRematchPeers(fixture)) {
+					if (peer != &leaver && !peer->round->GetPeerLeaveFrames().contains(leaverId)) return false;
+				}
+				return true;
+			});
+			if (!recorded) {
+				*error = "the round never recorded " + leaver.name + "'s leave";
+				return false;
+			}
+			leaver.gone = true;
+			leaver.transport.Stop();
+			NetSession& hostSession = fixture.Host().session;
+			const bool closed = PumpRematchUntil(fixture, 3000, [&] {
+				return hostSession.GetReadyPeerCount() == LiveRematchPeers(fixture).size() - 1;
+			});
+			if (!closed) {
+				*error = "the host session still holds " + leaver.name;
+				return false;
+			}
+			return true;
+		}
+
+		// FinishMatch on the host; ReturnToLobby then hands each session what its stopped round held.
+		bool FinishRematchRound(RematchFixture& fixture, std::string* error) {
+			fixture.Host().round->Complete("round over");
+			const bool stopped = PumpRematchUntil(fixture, 4000, [&] {
+				const auto live = LiveRematchPeers(fixture);
+				return std::none_of(live.begin(), live.end(), [](RematchPeer* peer) { return peer->round->IsRunning(); });
+			});
+			if (!stopped) {
+				*error = "a round was still running after the host completed it";
+				return false;
+			}
+			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
+				std::vector<NetTransportEvent> events;
+				events.swap(peer->handover);
+				for (const NetTransportEvent& event: events) {
+					peer->session.InjectEvent(event, fixture.clock.NowMs());
+				}
+			}
+			return true;
+		}
+
+		// What a client's ReturnToLobby hands its runner: the played roster minus its round's leaves.
+		std::vector<uint8_t> ClientRematchSurvivors(const RematchPeer& client) {
+			const NetMatchConfig& played = client.runner.GetMatchConfig();
+			std::vector<uint8_t> survivors{played.hostPeerId};
+			for (const NetMatchPlayerSlot& slot: played.players) {
+				if (!slot.cpu && slot.peerId != 0 && slot.peerId != played.hostPeerId && !client.round->GetPeerLeaveFrames().contains(slot.peerId)) {
+					survivors.push_back(slot.peerId);
+				}
+			}
+			return survivors;
+		}
+
+		// ReturnToLobby then StartNextMatch on every live peer.
+		bool RematchFixtureRound(RematchFixture& fixture, std::string* error) {
+			const std::vector<RematchPeer*> live = LiveRematchPeers(fixture);
+			for (RematchPeer* peer: live) {
+				if (peer->host) {
+					peer->runner.SetStartFrame(1);
+				} else {
+					peer->runner.SetRematchRoster(ClientRematchSurvivors(*peer));
+				}
+			}
+			return LaunchRematchRound(live, [](RematchPeer& peer, std::string* setupError) {
+				return peer.runner.StartNextMatch(peer.transport, peer.session, *peer.round, setupError);
+			}, error);
+		}
+
+		void StopRematchFixture(RematchFixture& fixture) {
+			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
+				if (peer->round) peer->round->Complete("fixture over");
+				peer->transport.Stop();
+			}
+		}
+
+		// Each client's stable seat, on the host's plane and in its seat view, is its round-1 ticket's.
+		bool CheckRematchStableSeats(RematchFixture& fixture, const std::map<RematchPeer*, uint16_t>& roundOneSeats, std::string& details, std::string* error) {
+			RematchPeer& host = fixture.Host();
+			const std::vector<NetH4SeatStatus> statuses = host.admission.GetSeatStatuses();
+			const auto statusOf = [&statuses](uint8_t lockstepId) {
+				return std::find_if(statuses.begin(), statuses.end(), [lockstepId](const NetH4SeatStatus& status) { return status.lockstepPeerId == lockstepId; });
+			};
+			const auto hostSeat = statusOf(host.LockstepId());
+			if (hostSeat == statuses.end() || hostSeat->stableSeat != 0) {
+				*error = "the host's own seat left stable seat 0";
+				return false;
+			}
+			const bool shown = PumpRematchUntil(fixture, 3000, [&] {
+				for (RematchPeer* peer: LiveRematchPeers(fixture)) {
+					if (!peer->host && (!peer->seats || peer->seats->roundId != peer->round->GetRoundId())) return false;
+				}
+				return true;
+			});
+			if (!shown) {
+				*error = "a client was never shown this round's seat view";
+				return false;
+			}
+			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
+				if (peer->host) continue;
+				const uint16_t expected = roundOneSeats.at(peer);
+				const uint8_t lockstepId = peer->LockstepId();
+				const auto status = statusOf(lockstepId);
+				if (status == statuses.end() || status->stableSeat != expected || !status->committed || status->closed || status->dropped) {
+					*error = "the host's plane seats lockstep peer " + std::to_string(lockstepId) + " on stable seat " +
+					         (status == statuses.end() ? std::string("none") : std::to_string(status->stableSeat) + (status->closed ? " (closed)" : "") + (!status->committed ? " (uncommitted)" : "")) +
+					         ", its round-1 ticket names stable seat " + std::to_string(expected);
+					return false;
+				}
+				NetPeerId connection = c_InvalidNetPeerId;
+				uint32_t generation = 0;
+				uint32_t incarnation = 0;
+				NetPeerId expectedConnection = c_InvalidNetPeerId;
+				for (const NetSessionPeerInfo& ready: host.session.GetReadyPeers()) {
+					if (ready.assignedPeerId == peer->session.GetLocalPeerId()) expectedConnection = ready.transportPeerId;
+				}
+				if (!host.admission.GetSeatHolder(expected, connection, generation, incarnation) || connection != expectedConnection ||
+				    generation != peer->reconnect.GetRecord().holderGeneration) {
+					*error = "stable seat " + std::to_string(expected) + " does not hold lockstep peer " + std::to_string(lockstepId) + "'s own holder state";
+					return false;
+				}
+				const auto shownSeat = std::find_if(peer->seats->seats.begin(), peer->seats->seats.end(), [lockstepId](const NetSeatPresenceEntry& entry) { return entry.peerId == lockstepId; });
+				if (shownSeat == peer->seats->seats.end() || shownSeat->stableSeat != expected || shownSeat->state != NetSeatPresenceState::Present) {
+					*error = "lockstep peer " + std::to_string(lockstepId) + " was shown stable seat " +
+					         (shownSeat == peer->seats->seats.end() ? std::string("none") : std::to_string(shownSeat->stableSeat) + " " + NetSeatPresence::StateName(shownSeat->state)) +
+					         ", its round-1 ticket names stable seat " + std::to_string(expected);
+					return false;
+				}
+				details += " lockstep" + std::to_string(lockstepId) + "=seat" + std::to_string(expected) + "/gen" + std::to_string(generation);
+			}
+			return true;
+		}
+
+		// Two clean leaves, a rematch after each: the survivor that moves up twice must keep its seat.
+		bool TestRematchKeepsStableSeatsAcrossTwoShrinks(std::string* error) {
+			RematchFixture fixture;
+			if (!SetUpRematchFixture(fixture, "two-shrinks", 43150, 4, error)) return false;
+			std::string step;
+			auto fail = [&](const std::string& what) {
+				*error = "rematch stable seats across two shrinks: " + what + (step.empty() ? "" : ": " + step);
+				StopRematchFixture(fixture);
+				return false;
+			};
+			if (!LaunchRematchRound(LiveRematchPeers(fixture), [](RematchPeer& peer, std::string* setupError) {
+				    return peer.runner.Start(peer.transport, peer.session, *peer.round, peer.config, setupError);
+			    }, &step)) {
+				return fail("round 1 setup failed");
+			}
+			if (!PlayRematchTicks(fixture, 8)) return fail("round 1 never committed");
+			std::map<RematchPeer*, uint16_t> roundOneSeats;
+			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
+				if (peer->host) continue;
+				const std::vector<NetH4SeatStatus> statuses = fixture.Host().admission.GetSeatStatuses();
+				const auto status = std::find_if(statuses.begin(), statuses.end(), [peer](const NetH4SeatStatus& entry) { return entry.lockstepPeerId == peer->LockstepId(); });
+				if (status == statuses.end() || !peer->reconnect.HasRecord() || status->stableSeat != peer->reconnect.GetRecord().stableSeat) {
+					return fail("round 1 did not seat lockstep peer " + std::to_string(peer->LockstepId()) + " on the stable seat its ticket names");
+				}
+				roundOneSeats[peer] = status->stableSeat;
+			}
+			RematchPeer* survivor = fixture.Client(4);
+			RematchPeer* firstLeaver = fixture.Client(3);
+			if (!survivor || !firstLeaver) return fail("round 1 did not seat lockstep peers 3 and 4");
+			if (!LeaveRematchRound(fixture, *firstLeaver, &step) || !PlayRematchTicks(fixture, 4) || !FinishRematchRound(fixture, &step)) {
+				return fail("the first clean leave did not settle");
+			}
+			if (!RematchFixtureRound(fixture, &step)) return fail("the first rematch did not relaunch");
+			if (fixture.Host().runner.GetMatchConfig().peerCount != 3 || survivor->LockstepId() != 3) {
+				return fail("the first rematch is not the three survivors with the last one on lockstep peer 3");
+			}
+			std::string details;
+			if (!PlayRematchTicks(fixture, 8) || !CheckRematchStableSeats(fixture, roundOneSeats, details, &step)) {
+				return fail("after the first rematch");
+			}
+			RematchPeer* secondLeaver = fixture.Client(2);
+			if (!secondLeaver) return fail("the first rematch has no lockstep peer 2");
+			if (!LeaveRematchRound(fixture, *secondLeaver, &step) || !PlayRematchTicks(fixture, 4) || !FinishRematchRound(fixture, &step)) {
+				return fail("the second clean leave did not settle");
+			}
+			if (!RematchFixtureRound(fixture, &step)) return fail("the second rematch did not relaunch");
+			if (fixture.Host().runner.GetMatchConfig().peerCount != 2 || survivor->LockstepId() != 2) {
+				return fail("the second rematch is not the two survivors with the last one on lockstep peer 2");
+			}
+			details.clear();
+			if (!PlayRematchTicks(fixture, 8) || !CheckRematchStableSeats(fixture, roundOneSeats, details, &step)) {
+				return fail("after the second rematch");
+			}
+			std::cout << "PASS rematch_stable_seats_two_shrinks peer_count=2 host=seat0" << details << " (round-1 lockstep 4)" << std::endl;
+			StopRematchFixture(fixture);
+			return true;
+		}
+
+		bool StartRematchPeer(RematchPeer& peer, std::string* setupError) {
+			return peer.runner.Start(peer.transport, peer.session, *peer.round, peer.config, setupError);
+		}
+
+		// Both survivors play the host's two-seat roster, on one config, with the survivor on the given id.
+		bool CheckRematchRelaunch(RematchFixture& fixture, RematchPeer& survivor, uint8_t survivorId, std::string& details, std::string* error) {
+			RematchPeer& host = fixture.Host();
+			const NetMatchConfig& roster = host.runner.GetMatchConfig();
+			std::vector<uint8_t> seated;
+			for (const NetMatchPlayerSlot& slot: roster.players) {
+				if (!slot.cpu) seated.push_back(slot.peerId);
+			}
+			std::sort(seated.begin(), seated.end());
+			if (roster.peerCount != 2 || seated != std::vector<uint8_t>{1, 2}) {
+				*error = "the host did not propose the two survivors: peer_count " + std::to_string(roster.peerCount);
+				return false;
+			}
+			const NetHash32 hash = NetMatchConfigUtil::HashConfig(roster);
+			if (NetMatchConfigUtil::HashConfig(survivor.runner.GetMatchConfig()) != hash) {
+				*error = "the survivor relaunched on another roster than the host's";
+				return false;
+			}
+			const std::vector<NetSessionPeerInfo> ready = host.session.GetReadyPeers();
+			if (survivor.LockstepId() != survivorId || survivor.round->GetConfig().localPeerId != survivorId || ready.size() != 1 ||
+			    ready.front().assignedPeerId + 1 != survivorId || host.round->GetConfig().peerCount != 2 || survivor.round->GetConfig().peerCount != 2) {
+				*error = "the survivor's id is " + std::to_string(survivor.LockstepId()) + " where the host seats lockstep peer " +
+				         (ready.size() == 1 ? std::to_string(ready.front().assignedPeerId + 1) : std::string("none"));
+				return false;
+			}
+			if (!PlayRematchTicks(fixture, 6)) {
+				*error = "the rematch round never committed";
+				return false;
+			}
+			size_t shared = 0;
+			for (const auto& [frame, text]: host.trace) {
+				const auto other = survivor.trace.find(frame);
+				if (other == survivor.trace.end()) continue;
+				if (other->second != text) {
+					*error = "the rematch round diverged at tick " + std::to_string(frame) + ": host '" + text + "' survivor '" + other->second + "'";
+					return false;
+				}
+				++shared;
+			}
+			details = "peer_count=2 survivor_lockstep=" + std::to_string(survivorId) + " config_hash=" + NetIdentity::HashHex(hash).substr(0, 16) +
+			          " shared_ticks=" + std::to_string(shared);
+			return shared >= 6;
+		}
+
+		// The middle seat's process dies inside round 1 and nobody reclaims it: its seat's hold runs out.
+		bool RematchAfterDropInRound(std::string& details, std::string* error) {
+			RematchFixture fixture;
+			if (!SetUpRematchFixture(fixture, "drop-in-round", 43160, 3, error)) return false;
+			std::string step;
+			auto fail = [&](const std::string& what) {
+				*error = "rematch after a hard drop in round 1: " + what + (step.empty() ? "" : ": " + step);
+				StopRematchFixture(fixture);
+				return false;
+			};
+			if (!LaunchRematchRound(LiveRematchPeers(fixture), &StartRematchPeer, &step)) return fail("round 1 setup failed");
+			if (!PlayRematchTicks(fixture, 6)) return fail("round 1 never committed");
+			RematchPeer& host = fixture.Host();
+			RematchPeer* dropped = fixture.Client(2);
+			RematchPeer* survivor = fixture.Client(3);
+			if (!dropped || !survivor) return fail("round 1 did not seat lockstep peers 2 and 3");
+			dropped->gone = true;
+			dropped->transport.Stop();
+			if (!PumpRematchUntil(fixture, 3000, [&] {
+				    return host.round->GetPeerLeaveFrames().contains(2) && survivor->round->GetPeerLeaveFrames().contains(2) && host.admission.GetStats().seatsDropped == 1;
+			    })) {
+				return fail("the drop never reached both rounds and the host's plane");
+			}
+			fixture.clock.skippedMs += NetReconnectHost::c_ProvisionalExpiryMs + 1000;
+			if (!PumpRematchUntil(fixture, 3000, [&] {
+				    return host.round->HeldSeatResolution(2) == NetLockstepHoldResolution::Expired && survivor->round->HeldSeatResolution(2) == NetLockstepHoldResolution::Expired;
+			    })) {
+				std::string seats;
+				for (const NetH4SeatStatus& status: host.admission.GetSeatStatuses()) {
+					seats += " seat" + std::to_string(status.stableSeat) + "/peer" + std::to_string(status.lockstepPeerId) + (status.committed ? " committed" : "") +
+					         (status.dropped ? " dropped" : "") + (status.closed ? " closed" : "");
+				}
+				return fail("the dropped seat's hold was never resolved as expired (host round " + std::string(NetLockstepCoordinator::StateName(host.round->GetState())) +
+				            " resolution " + std::to_string(static_cast<int>(host.round->HeldSeatResolution(2))) + ", survivor round " +
+				            NetLockstepCoordinator::StateName(survivor->round->GetState()) + " resolution " + std::to_string(static_cast<int>(survivor->round->HeldSeatResolution(2))) +
+				            " " + survivor->round->GetStats().timeoutReason + "; plane dropped=" + std::to_string(host.admission.GetStats().seatsDropped) +
+				            " holds_expired=" + std::to_string(host.admission.GetStats().seatHoldsExpired) + seats + ")");
+			}
+			if (!PlayRematchTicks(fixture, 4) || !FinishRematchRound(fixture, &step)) return fail("round 1 did not play on and finish");
+			if (!RematchFixtureRound(fixture, &step)) return fail("the rematch did not relaunch");
+			if (!CheckRematchRelaunch(fixture, *survivor, 2, details, &step)) return fail("the rematch roster");
+			StopRematchFixture(fixture);
+			return true;
+		}
+
+		// The last seat's process dies after round 1 ends: only the host's transport can know it is gone.
+		bool RematchAfterDropBetweenRounds(std::string& details, std::string* error) {
+			RematchFixture fixture;
+			if (!SetUpRematchFixture(fixture, "drop-after-round", 43162, 3, error)) return false;
+			std::string step;
+			auto fail = [&](const std::string& what) {
+				*error = "rematch after a hard drop between rounds: " + what + (step.empty() ? "" : ": " + step);
+				StopRematchFixture(fixture);
+				return false;
+			};
+			if (!LaunchRematchRound(LiveRematchPeers(fixture), &StartRematchPeer, &step)) return fail("round 1 setup failed");
+			if (!PlayRematchTicks(fixture, 6) || !FinishRematchRound(fixture, &step)) return fail("round 1 did not finish");
+			RematchPeer* survivor = fixture.Client(2);
+			RematchPeer* dropped = fixture.Client(3);
+			if (!survivor || !dropped) return fail("round 1 did not seat lockstep peers 2 and 3");
+			dropped->gone = true;
+			dropped->transport.Stop();
+			if (ClientRematchSurvivors(*survivor) != std::vector<uint8_t>{1, 2, 3}) return fail("the survivor's round saw the drop after all");
+			if (!RematchFixtureRound(fixture, &step)) return fail("the rematch did not relaunch");
+			if (!CheckRematchRelaunch(fixture, *survivor, 2, details, &step)) return fail("the rematch roster");
+			StopRematchFixture(fixture);
+			return true;
+		}
+
+		// The MIDDLE seat's process dies after round 1 ends, so the survivor below it moves up a seat.
+		bool RematchAfterMiddleDropBetweenRounds(std::string& details, std::string* error) {
+			RematchFixture fixture;
+			if (!SetUpRematchFixture(fixture, "middle-drop-after-round", 43164, 3, error)) return false;
+			std::string step;
+			auto fail = [&](const std::string& what) {
+				*error = "rematch after a middle-seat drop between rounds: " + what + (step.empty() ? "" : ": " + step);
+				StopRematchFixture(fixture);
+				return false;
+			};
+			if (!LaunchRematchRound(LiveRematchPeers(fixture), &StartRematchPeer, &step)) return fail("round 1 setup failed");
+			if (!PlayRematchTicks(fixture, 6) || !FinishRematchRound(fixture, &step)) return fail("round 1 did not finish");
+			RematchPeer* dropped = fixture.Client(2);
+			RematchPeer* survivor = fixture.Client(3);
+			if (!survivor || !dropped) return fail("round 1 did not seat lockstep peers 2 and 3");
+			dropped->gone = true;
+			dropped->transport.Stop();
+			if (ClientRematchSurvivors(*survivor) != std::vector<uint8_t>{1, 2, 3}) return fail("the survivor's round saw the drop after all");
+			if (!RematchFixtureRound(fixture, &step)) return fail("the rematch did not relaunch");
+			if (!CheckRematchRelaunch(fixture, *survivor, 2, details, &step)) return fail("the rematch roster");
+			details += " survivor_derived_lockstep=3 adopted_lockstep=" + std::to_string(survivor->LockstepId());
+			StopRematchFixture(fixture);
+			return true;
+		}
+
+		// Three peers, one hard drop nobody reclaims, then a rematch: the host proposes the two survivors.
+		bool TestRematchAfterAHardDrop(std::string* error) {
+			std::string inRound;
+			std::string betweenRounds;
+			std::string middleSeat;
+			std::string details;
+			if (RematchAfterDropInRound(details, &inRound)) {
+				std::cout << "PASS rematch_after_hard_drop in_round " << details << std::endl;
+			}
+			if (RematchAfterDropBetweenRounds(details, &betweenRounds)) {
+				std::cout << "PASS rematch_after_hard_drop between_rounds " << details << std::endl;
+			}
+			if (RematchAfterMiddleDropBetweenRounds(details, &middleSeat)) {
+				std::cout << "PASS rematch_after_hard_drop middle_seat_between_rounds " << details << std::endl;
+			}
+			for (const std::string* failure: {&inRound, &betweenRounds, &middleSeat}) {
+				if (!failure->empty()) *error += (error->empty() ? "" : "; ") + *failure;
+			}
+			return error->empty();
+		}
+
+		// A survivor that moved up in the rematch drops inside the next round and reclaims its stable seat.
+		bool ReclaimAfterShrinks(uint16_t port, int shrinks, bool waitForReturnerLobby, std::string& details, std::string* error) {
+			RematchFixture fixture;
+			if (!SetUpRematchFixture(fixture, "reclaim-after-" + std::to_string(shrinks) + "-shrinks" + (waitForReturnerLobby ? "" : "-nowait"), port, 4, error)) return false;
+			std::unique_ptr<RematchPeer> returner;
+			RematchWorkers workers;
+			std::string step;
+			const std::string round = "round " + std::to_string(shrinks + 1);
+			auto fail = [&](const std::string& what) {
+				*error = "rematch " + round + " reclaim after " + std::to_string(shrinks) + " shrink(s)" + (waitForReturnerLobby ? "" : " without the lobby wait") +
+				         ": " + what + (step.empty() ? "" : ": " + step);
+				StopRematchFixture(fixture);
+				if (returner) returner->transport.Stop();
+				return false;
+			};
+			if (!LaunchRematchRound(LiveRematchPeers(fixture), &StartRematchPeer, &step)) return fail("round 1 setup failed");
+			if (!PlayRematchTicks(fixture, 6)) return fail("round 1 never committed");
+			RematchPeer* mover = fixture.Client(4);
+			if (!mover) return fail("round 1 did not seat lockstep peer 4");
+			const uint16_t stableSeat = mover->reconnect.GetRecord().stableSeat;
+			for (int shrink = 1; shrink <= shrinks; ++shrink) {
+				RematchPeer* leaver = fixture.Client(shrink == 1 ? 3 : 2);
+				if (!leaver || !LeaveRematchRound(fixture, *leaver, &step) || !PlayRematchTicks(fixture, 2) || !FinishRematchRound(fixture, &step)) {
+					return fail("clean leave " + std::to_string(shrink) + " did not settle");
+				}
+				if (!RematchFixtureRound(fixture, &step)) return fail("rematch " + std::to_string(shrink) + " did not relaunch");
+			}
+			if (!PlayRematchTicks(fixture, 6)) return fail(round + " never committed");
+			RematchPeer& host = fixture.Host();
+			const uint8_t moverId = mover->LockstepId();
+			const NetReconnectHostStats planeBefore = host.admission.GetStats();
+			NetPeerId holder = c_InvalidNetPeerId;
+			uint32_t generation = 0;
+			uint32_t incarnationBefore = 0;
+			(void)host.admission.GetSeatHolder(stableSeat, holder, generation, incarnationBefore);
+			mover->gone = true;
+			mover->transport.Stop();
+			if (!PumpRematchUntil(fixture, 3000, [&] {
+				    const auto live = LiveRematchPeers(fixture);
+				    return std::all_of(live.begin(), live.end(), [moverId](RematchPeer* peer) { return peer->round->GetPeerLeaveFrames().contains(moverId); });
+			    })) {
+				return fail("the drop never reached every round");
+			}
+			const uint64_t dropFrame = host.round->GetPeerLeaveFrames().at(moverId);
+			if (!PumpRematchUntil(fixture, 3000, [&] { return host.admission.GetStats().seatsDropped == planeBefore.seatsDropped + 1; })) {
+				return fail("the host's plane recorded no dropped seat for lockstep peer " + std::to_string(moverId));
+			}
+			// The same player comes back on a new connection, with the ticket its round-1 seat gave it.
+			returner = std::make_unique<RematchPeer>();
+			returner->name = "returner";
+			returner->config = mover->config;
+			returner->config.sessionConfig.localNonce += 100;
+			returner->config.lobbyWaitMs = 8000;
+			auto lobbyUp = std::make_shared<std::atomic<bool>>(false);
+			returner->config.publishLobby = [lobbyUp](const NetLobbySnapshot& snapshot) {
+				if (snapshot.lobbyPhase == NetMatchRunner::StateName(NetMatchRuntimeState::LobbySync)) lobbyUp->store(true);
+			};
+			returner->store.SetPath(mover->store.GetPath());
+			returner->reconnect.Configure(&returner->store, RematchIdentity(), "Returner");
+			returner->reconnect.SetUnixClock(&RematchUnixClock, nullptr);
+			returner->reconnect.SetHostContext("loopback", NetHash32{});
+			returner->session.SetReconnectClient(&returner->reconnect);
+			RematchPeer* rejoined = returner.get();
+			workers.Add(*rejoined, &StartRematchPeer);
+			const bool reclaimed = PumpRematchUntil(fixture, 5000, [&] {
+				return !workers.FailureOf(*rejoined).empty() || host.round->HeldSeatResolution(moverId) == NetLockstepHoldResolution::Reclaimed;
+			});
+			if (!reclaimed || host.round->HeldSeatResolution(moverId) != NetLockstepHoldResolution::Reclaimed) {
+				return fail("the returner was not admitted on stable seat " + std::to_string(stableSeat) + " (reclaims_accepted=" +
+				            std::to_string(host.admission.GetStats().reclaimsAccepted) + "): " + workers.FailureOf(*rejoined));
+			}
+			if (!PumpRematchUntil(fixture, 3000, [&] {
+				    const auto live = LiveRematchPeers(fixture);
+				    return std::none_of(live.begin(), live.end(), [](RematchPeer* peer) { return peer->round->IsRunning(); });
+			    })) {
+				return fail("the reclaim never ended " + round + " for its heal");
+			}
+			std::map<RematchPeer*, std::map<uint64_t, std::string>> played{{mover, mover->trace}};
+			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
+				if (peer->round->GetStats().timeoutReason.find("ResyncRequested") == std::string::npos) {
+					return fail(peer->name + "'s round ended with '" + peer->round->GetStats().timeoutReason + "', not a resync");
+				}
+				played[peer] = peer->trace;
+			}
+			// A real heal saves first, which gives the returner time to reach its lobby before the snapshot streams.
+			if (waitForReturnerLobby && (!PumpRematchUntil(fixture, 3000, [&] { return lobbyUp->load() || !workers.FailureOf(*rejoined).empty(); }) || !lobbyUp->load())) {
+				return fail("the returner never reached its lobby: " + workers.FailureOf(*rejoined));
+			}
+			const bool lobbyUpAtHeal = lobbyUp->load();
+			// ResyncMatch: resume where the host's sim stopped; each session first gets what its round held.
+			const uint64_t resumeFrame = host.round->GetResumeFrame();
+			host.runner.SetStartFrame(ScenarioRunner::ResyncResumeStartFrame(resumeFrame));
+			std::vector<uint8_t> snapshot(9000);
+			for (size_t index = 0; index < snapshot.size(); ++index) {
+				snapshot[index] = static_cast<uint8_t>(index * 131U);
+			}
+			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
+				std::vector<NetTransportEvent> events;
+				events.swap(peer->handover);
+				for (const NetTransportEvent& event: events) {
+					peer->session.InjectEvent(event, fixture.clock.NowMs());
+				}
+				if (peer->host) {
+					workers.Add(*peer, [snapshot](RematchPeer& healer, std::string* setupError) {
+						return healer.runner.StartNextMatch(healer.transport, healer.session, *healer.round, setupError, snapshot);
+					});
+				} else {
+					workers.Add(*peer, [](RematchPeer& healer, std::string* setupError) {
+						return healer.runner.StartNextMatch(healer.transport, healer.session, *healer.round, setupError);
+					});
+				}
+			}
+			if (!workers.Settle(&step)) {
+				std::vector<RematchPeer*> healers = LiveRematchPeers(fixture);
+				healers.push_back(rejoined);
+				for (RematchPeer* peer: healers) {
+					const NetLockstepConfig& config = peer->round->GetConfig();
+					step += "; " + peer->name + " lockstep=" + std::to_string(config.localPeerId) + " start=" + std::to_string(config.startFrame) +
+					        " resume=" + std::to_string(config.resumeFromSnapshot) + " peers=" + std::to_string(config.peerCount) +
+					        " received=" + std::to_string(peer->runner.TakeReceivedState().size()) +
+					        " session_ignored_phase_packets=" + std::to_string(peer->session.GetStats().ignoredPhasePackets);
+				}
+				return fail("the healed round did not relaunch");
+			}
+			fixture.peers.push_back(std::move(returner));
+			uint32_t incarnation = 0;
+			NetPeerId returnerConnection = c_InvalidNetPeerId;
+			for (const NetSessionPeerInfo& ready: host.session.GetReadyPeers()) {
+				if (ready.assignedPeerId + 1 == rejoined->LockstepId()) returnerConnection = ready.transportPeerId;
+			}
+			const bool seatHeld = host.admission.GetSeatHolder(stableSeat, holder, generation, incarnation);
+			if (!rejoined->reconnect.UsedStoredTicket() || rejoined->reconnect.GetState() != NetH4ClientState::Joined ||
+			    rejoined->reconnect.GetRecord().stableSeat != stableSeat || rejoined->LockstepId() != moverId || !seatHeld || holder != returnerConnection ||
+			    incarnation != incarnationBefore + 1 || generation != rejoined->reconnect.GetRecord().holderGeneration ||
+			    host.admission.GetStats().reclaimsAccepted != planeBefore.reclaimsAccepted + 1) {
+				return fail("the returner is lockstep peer " + std::to_string(rejoined->LockstepId()) + " where stable seat " + std::to_string(stableSeat) +
+				            " holds incarnation " + std::to_string(incarnation) + " of holder generation " + std::to_string(generation));
+			}
+			size_t returnerReceived = 0;
+			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
+				if (!peer->round->GetConfig().resumeFromSnapshot || peer->round->GetConfig().startFrame != resumeFrame) {
+					return fail(peer->name + " did not resume at frame " + std::to_string(resumeFrame));
+				}
+				if (peer->host) continue;
+				const std::vector<uint8_t> received = peer->runner.TakeReceivedState();
+				if (peer == rejoined) returnerReceived = received.size();
+				if (received != snapshot) {
+					return fail(peer->name + " did not receive the host's snapshot (" + std::to_string(received.size()) + " of " + std::to_string(snapshot.size()) + " bytes)");
+				}
+			}
+			if (!PlayRematchTicks(fixture, 8)) return fail("the healed round never committed");
+			const auto sameTicks = [&step](const std::map<uint64_t, std::string>& reference, const std::map<uint64_t, std::string>& other, const std::string& who, size_t& shared) {
+				shared = 0;
+				for (const auto& [frame, text]: reference) {
+					const auto found = other.find(frame);
+					if (found == other.end()) continue;
+					if (found->second != text) {
+						step = who + " diverged at tick " + std::to_string(frame) + ": '" + text + "' vs '" + found->second + "'";
+						return false;
+					}
+					++shared;
+				}
+				return true;
+			};
+			size_t shared = 0;
+			size_t before = std::numeric_limits<size_t>::max();
+			for (const auto& [peer, trace]: played) {
+				if (peer == &host) continue;
+				if (!sameTicks(played.at(&host), trace, peer->name, shared)) return fail(round + " before the drop");
+				before = std::min(before, shared);
+			}
+			size_t healed = std::numeric_limits<size_t>::max();
+			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
+				if (peer->host) continue;
+				if (!sameTicks(host.trace, peer->trace, peer->name, shared)) return fail("the healed " + round);
+				healed = std::min(healed, shared);
+			}
+			if (healed < 8 || before == 0) return fail("the rounds shared too few ticks to compare");
+			details = "stable_seat=" + std::to_string(stableSeat) + " lockstep=" + std::to_string(moverId) + " (round-1 lockstep 4) incarnation=" +
+			          std::to_string(incarnationBefore) + "->" + std::to_string(incarnation) + " holder_generation=" + std::to_string(generation) + " used_stored_ticket=1 drop_frame=" +
+			          std::to_string(dropFrame) + " heal_start=" + std::to_string(resumeFrame) + " ticks_identical_before_drop=" + std::to_string(before) +
+			          " healed_ticks_identical=" + std::to_string(healed) + " peers=" + std::to_string(LiveRematchPeers(fixture).size()) +
+			          " lobby_up_at_heal=" + std::to_string(lobbyUpAtHeal ? 1 : 0) + " returner_received=" + std::to_string(returnerReceived);
+			StopRematchFixture(fixture);
+			return true;
+		}
+
+		// After a shrink and its rematch, a drop and a reclaim inside the next round, healed on every peer alike.
+		bool TestRematchRoundReclaimsAfterAShrink(std::string* error) {
+			std::string control;
+			std::string oneShrink;
+			std::string twoShrinks;
+			std::string lateLobby;
+			std::string details;
+			// The same reclaim inside round 1, where no rematch has re-formed anything yet.
+			if (ReclaimAfterShrinks(43168, 0, true, details, &control)) {
+				std::cout << "PASS rematch_round_reclaim round=1 shrinks=0 " << details << std::endl;
+			}
+			if (ReclaimAfterShrinks(43170, 1, true, details, &oneShrink)) {
+				std::cout << "PASS rematch_round_reclaim round=2 shrinks=1 " << details << std::endl;
+			}
+			if (ReclaimAfterShrinks(43172, 2, true, details, &twoShrinks)) {
+				std::cout << "PASS rematch_round_reclaim round=3 shrinks=2 " << details << std::endl;
+			}
+			// The host heals the moment the reclaim lands, so the returner's lobby comes up after the chunk.
+			if (ReclaimAfterShrinks(43174, 0, false, details, &lateLobby)) {
+				std::cout << "PASS rematch_round_reclaim round=1 shrinks=0 late_returner_lobby " << details << std::endl;
+			}
+			for (const std::string* failure: {&control, &oneShrink, &twoShrinks, &lateLobby}) {
+				if (!failure->empty()) *error += (error->empty() ? "" : "; ") + *failure;
+			}
+			return error->empty();
+		}
+
+		// A host that knows of more drops is followed; a proposal that adds, reorders, re-teams or unseats is refused by name.
+		bool TestRematchProposalFits(std::string* error) {
+			const auto roster = [](std::vector<std::pair<uint8_t, uint8_t>> seats) {
+				NetMatchConfig config = MakeConfig();
+				config.peerCount = static_cast<uint8_t>(seats.size());
+				config.players.clear();
+				for (const auto& [peerId, team]: seats) {
+					config.players.push_back(NetMatchPlayerSlot{peerId, team, false, "Player " + std::to_string(peerId)});
+				}
+				return config;
+			};
+			const NetMatchConfig four = roster({{1, 0}, {2, 1}, {3, 2}, {4, 3}});
+			const NetMatchConfig three = roster({{1, 0}, {2, 1}, {3, 2}});
+			NetMatchConfig otherHub = four;
+			otherHub.hostPeerId = 2;
+			struct Proposal {
+				const char* name;
+				NetMatchConfig proposed;
+				NetMatchConfig derived;
+				uint8_t local;
+				const char* reason; //!< Empty when the proposal must be accepted.
+			};
+			const std::vector<Proposal> proposals = {
+			    {"the roster it derived", four, four, 2, ""},
+			    {"a roster less a seat after this peer's", three, four, 3, ""},
+			    {"a roster less two seats after this peer's", roster({{1, 0}, {2, 1}}), four, 2, ""},
+			    {"a proposal that adds a seat", four, three, 3, "the host proposed a seat this peer did not derive"},
+			    {"a proposal that reorders", roster({{1, 0}, {2, 2}, {3, 1}, {4, 3}}), four, 4, "the host proposed the seats in another order"},
+			    {"a proposal that changes a team", roster({{1, 0}, {2, 1}, {3, 0}, {4, 3}}), four, 4, "the host proposed a seat on another team"},
+			    {"a proposal that changes this peer's team", roster({{1, 0}, {2, 1}, {3, 2}, {4, 1}}), four, 4, "the host proposed this peer on another team"},
+			    {"a proposal that drops this peer", three, four, 4, "the host proposed a roster without this peer"},
+			    {"a proposal that names another hub", otherHub, four, 2, "the host proposed a different hub"},
+			};
+			for (const Proposal& proposal: proposals) {
+				std::string reason;
+				const bool accepted = NetMatchRunner::RematchRostersAgree(proposal.proposed, proposal.derived, proposal.local, &reason);
+				if (accepted != (proposal.reason[0] == '\0') || (!accepted && reason != proposal.reason)) {
+					*error = std::string("rematch proposal check: ") + proposal.name + (accepted ? " was accepted" : " was refused with '" + reason + "'");
+					return false;
+				}
+			}
+			const auto seatView = [](const NetMatchConfig& played, uint8_t peerId, NetSeatPresenceState state) {
+				NetLockstepSeatSnapshot view;
+				for (const NetMatchPlayerSlot& slot: played.players) {
+					NetSeatPresenceEntry entry;
+					entry.stableSeat = static_cast<uint16_t>(slot.peerId - 1);
+					entry.peerId = slot.peerId;
+					entry.state = slot.peerId == peerId ? state : NetSeatPresenceState::Present;
+					view.seats.push_back(entry);
+				}
+				return view;
+			};
+			NetMatchConfig withCpu = four;
+			withCpu.players.push_back(NetMatchPlayerSlot{0, 3, true, "CPU"});
+			const NetLockstepSeatSnapshot allPresent = seatView(four, 0, NetSeatPresenceState::Present);
+			const NetLockstepSeatSnapshot fourDropped = seatView(four, 4, NetSeatPresenceState::Disconnected);
+			const NetLockstepSeatSnapshot twoLeft = seatView(four, 2, NetSeatPresenceState::Left);
+			const NetLockstepSeatSnapshot threeReconnecting = seatView(four, 3, NetSeatPresenceState::Reconnecting);
+			const NetLockstepSeatSnapshot threeSubstituted = seatView(four, 3, NetSeatPresenceState::Substituted);
+			const NetLockstepSeatSnapshot inRoundDrop = seatView(three, 2, NetSeatPresenceState::Disconnected);
+			const NetLockstepSeatSnapshot unobserved = seatView(three, 0, NetSeatPresenceState::Present);
+			struct Survivors {
+				const char* name;
+				std::vector<uint8_t> derived;
+				std::vector<uint8_t> expected;
+			};
+			const std::vector<Survivors> survivorCases = {
+			    {"a leave the round saw", NetMatchRunner::DeriveRematchSurvivors(four, {{3, 40}}, {}, nullptr), {1, 2, 4}},
+			    {"a dropped seat that was reclaimed", NetMatchRunner::DeriveRematchSurvivors(four, {{3, 40}}, {3}, &allPresent), {1, 2, 3, 4}},
+			    {"a drop only the host's seat view shows", NetMatchRunner::DeriveRematchSurvivors(four, {}, {}, &fourDropped), {1, 2, 3}},
+			    {"a seat the host shows closed", NetMatchRunner::DeriveRematchSurvivors(four, {}, {}, &twoLeft), {1, 3, 4}},
+			    {"a reclaim still in flight", NetMatchRunner::DeriveRematchSurvivors(four, {}, {}, &threeReconnecting), {1, 2, 4}},
+			    {"a substituted seat", NetMatchRunner::DeriveRematchSurvivors(four, {}, {}, &threeSubstituted), {1, 2, 3, 4}},
+			    {"a cpu slot", NetMatchRunner::DeriveRematchSurvivors(withCpu, {}, {}, nullptr), {1, 2, 3, 4}},
+			    {"the in-round drop case", NetMatchRunner::DeriveRematchSurvivors(three, {{2, 7}}, {}, &inRoundDrop), {1, 3}},
+			    {"the between-rounds drop case", NetMatchRunner::DeriveRematchSurvivors(three, {}, {}, &unobserved), {1, 2, 3}},
+			};
+			for (const Survivors& survivors: survivorCases) {
+				if (survivors.derived != survivors.expected) {
+					*error = std::string("rematch survivor derivation: ") + survivors.name + " derived " + std::to_string(survivors.derived.size()) + " survivors";
+					return false;
+				}
+			}
+			std::cout << "PASS rematch_proposal_fits proposals=" << proposals.size() << " survivor_cases=" << survivorCases.size() << std::endl;
 			return true;
 		}
 
@@ -2545,6 +3675,182 @@ namespace RTE {
 		return true;
 	}
 
+	// A ready client session for the service fixture; the service's own transport never carries a round.
+	bool StartServiceRematchSession(uint16_t port, LoopbackTransport& hostTransport, LoopbackTransport& clientTransport, NetSession& hostSession, NetSession& client, std::string* error) {
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 1;
+		hostConfig.heartbeatIntervalMs = 25;
+		hostConfig.timeoutMs = 30000;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "service-rematch-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientConfig = hostConfig;
+		clientConfig.displayName = "Client";
+		++clientConfig.localNonce;
+		if (!hostTransport.StartHost(port, error) || !clientTransport.Connect("loopback", port, error)) return false;
+		if (!hostSession.StartHost(hostTransport, hostConfig, error) || !client.StartClient(clientTransport, "loopback", clientConfig, error)) return false;
+		for (uint64_t now = 0; now <= 4000 && hostSession.GetReadyPeerCount() != 1; now += 10) {
+			hostSession.Tick(now);
+			client.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+		}
+		if (hostSession.GetReadyPeerCount() != 1 || !client.IsReady()) {
+			*error = "the service fixture never seated its client session";
+			return false;
+		}
+		return true;
+	}
+
+	// One NetMatchService::ReturnToLobby on a client, from the played roster to the one it hands its runner.
+	bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error) {
+		LoopbackTransport idle;
+		NetLockstepCoordinator unused;
+		NetMatchRunnerConfig primed;
+		primed.host = false;
+		primed.matchConfig = played;
+		primed.useLobbyProtocol = true;
+		primed.lobbyWaitMs = 150;
+		primed.lockstepWaitMs = 150;
+		primed.postSessionSettleMs = 0;
+		primed.postLobbySettleMs = 0;
+		// Start refuses a client with no join address, after it has taken the played roster.
+		if (service.m_Runner->Start(idle, *service.m_Session, unused, primed, error)) {
+			*error = "the primed runner started a session it should have refused";
+			return false;
+		}
+		if (!service.m_Session->AdoptRematchPeerId(localSessionPeerId, error)) return false;
+		(void)service.m_Coordinator->TakeSeatSnapshot();
+		{
+			std::lock_guard<std::mutex> lock(service.m_Mutex);
+			service.m_State = NetMatchServiceState::Completed;
+			service.m_WorkerDone = false;
+		}
+		if (!service.ReturnToLobby(error)) return false;
+		for (int spin = 0; spin < 20000; ++spin) {
+			{
+				std::lock_guard<std::mutex> lock(service.m_Mutex);
+				if (service.m_WorkerDone) break;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		service.JoinWorkerIfDone();
+		std::lock_guard<std::mutex> lock(service.m_Mutex);
+		if (!service.m_WorkerDone || !service.m_Runner) {
+			*error = "the rematch worker never handed the runner back";
+			return false;
+		}
+		roster = service.m_Runner->GetMatchConfig();
+		return true;
+	}
+
+	// NetMatchService::ReturnToLobby forms the next roster itself, on a client's own played round.
+	// ReturnToLobby discards the round it derived from, so every case plays its own.
+	bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error) {
+		struct Case {
+			const char* name;
+			uint8_t peerCount;
+			uint16_t port;
+			int view; //!< 0 none, 1 this round's, 2 an earlier round's.
+			std::vector<std::pair<uint8_t, uint8_t>> seats;
+		};
+		const std::vector<Case> cases = {
+		    {"the round's own leave", 3, 43176, 0, {{1, 0}, {2, 2}}},
+		    {"the round's own leave beside a live seat", 4, 43180, 0, {{1, 0}, {2, 2}, {3, 3}}},
+		    {"a drop only the host's seat view shows", 4, 43184, 1, {{1, 0}, {2, 2}}},
+		    {"an earlier round's seat view", 4, 43188, 2, {{1, 0}, {2, 2}, {3, 3}}},
+		};
+		std::string details;
+		for (const Case& testCase: cases) {
+			const uint8_t peerCount = testCase.peerCount;
+			const uint16_t port = testCase.port;
+			RematchFixture fixture;
+			if (!SetUpRematchFixture(fixture, "service-return-to-lobby-" + std::to_string(port), port, peerCount, error)) return false;
+			std::string step;
+			auto fail = [&](const std::string& what) {
+				*error = std::string("service rematch roster, ") + testCase.name + ": " + what + (step.empty() ? "" : ": " + step);
+				StopRematchFixture(fixture);
+				return false;
+			};
+			if (!LaunchRematchRound(LiveRematchPeers(fixture), &StartRematchPeer, &step)) return fail("round 1 setup failed");
+			if (!PlayRematchTicks(fixture, 6)) return fail("round 1 never committed");
+			RematchPeer* dropped = fixture.Client(2);
+			RematchPeer* survivor = fixture.Client(3);
+			if (!dropped || !survivor) return fail("round 1 did not seat lockstep peers 2 and 3");
+			const NetMatchConfig played = survivor->runner.GetMatchConfig();
+			const uint8_t survivorSessionPeerId = survivor->session.GetLocalPeerId();
+			dropped->gone = true;
+			dropped->transport.Stop();
+			RematchPeer& host = fixture.Host();
+			if (!PumpRematchUntil(fixture, 3000, [&] {
+				    return survivor->round->GetPeerLeaveFrames().contains(2) && host.admission.GetStats().seatsDropped == 1;
+			    })) {
+				return fail("the drop never reached the survivor's round and the host's plane");
+			}
+			// The dropped seat is held for a reclaim; commits only resume once the hold runs out.
+			fixture.clock.skippedMs += NetReconnectHost::c_ProvisionalExpiryMs + 1000;
+			if (!PumpRematchUntil(fixture, 4000, [&] { return survivor->round->HeldSeatResolution(2) == NetLockstepHoldResolution::Expired; })) {
+				return fail("the dropped seat's hold never expired on the survivor's round");
+			}
+			if (!PlayRematchTicks(fixture, 2) || !FinishRematchRound(fixture, &step)) return fail("round 1 did not finish");
+			const uint64_t roundId = survivor->round->GetRoundId();
+
+			LoopbackTransport serviceHostTransport, serviceClientTransport;
+			NetSession serviceHostSession;
+			NetMatchService service;
+			service.m_IsHost = false;
+			service.m_Transport = std::make_unique<GnsTransport>();
+			service.m_Session = std::make_unique<NetSession>();
+			service.m_Runner = std::make_unique<NetMatchRunner>();
+			if (!StartServiceRematchSession(static_cast<uint16_t>(port + 2), serviceHostTransport, serviceClientTransport, serviceHostSession, *service.m_Session, &step)) {
+				return fail("the service session did not come up");
+			}
+			service.m_Coordinator = std::move(survivor->round);
+			StopRematchFixture(fixture);
+
+			// The host's published seat view of this round, as a client's service keeps it.
+			const auto viewOf = [&played](uint64_t viewRoundId, uint8_t gonePeerId) {
+				NetLockstepSeatSnapshot view;
+				view.senderPeerId = played.hostPeerId;
+				view.sessionId = played.sessionId;
+				view.roundId = viewRoundId;
+				view.revision = 1;
+				for (const NetMatchPlayerSlot& slot: played.players) {
+					NetSeatPresenceEntry entry;
+					entry.stableSeat = static_cast<uint16_t>(slot.peerId - 1);
+					entry.peerId = slot.peerId;
+					entry.state = slot.peerId == gonePeerId ? NetSeatPresenceState::Disconnected : NetSeatPresenceState::Present;
+					view.seats.push_back(entry);
+				}
+				return view;
+			};
+			service.m_SeatPresence.Clear();
+			if (testCase.view != 0) service.m_SeatPresence.ApplySnapshot(viewOf(testCase.view == 1 ? roundId : roundId + 1, 4));
+			NetMatchConfig roster;
+			if (!ServiceRematchRoster(service, played, survivorSessionPeerId, roster, &step)) return fail("ReturnToLobby did not form a roster");
+			std::vector<std::pair<uint8_t, uint8_t>> seats;
+			for (const NetMatchPlayerSlot& slot: roster.players) {
+				if (!slot.cpu) seats.emplace_back(slot.peerId, slot.team);
+			}
+			if (static_cast<size_t>(roster.peerCount) != testCase.seats.size() || seats != testCase.seats || roster.hostPeerId != 1) {
+				std::string seen;
+				for (const auto& [peerId, team]: seats) seen += " " + std::to_string(peerId) + "/t" + std::to_string(team);
+				step.clear();
+				return fail("formed peer_count " + std::to_string(roster.peerCount) + " seats" + (seen.empty() ? " none" : seen) +
+				            " on " + std::to_string(peerCount) + " played peers");
+			}
+			details += " " + std::to_string(peerCount) + "->" + std::to_string(roster.peerCount);
+		}
+		std::cout << "PASS service_return_to_lobby_roster cases=" << cases.size() << details << std::endl;
+		return true;
+	}
+
 	int NetMatchSelfTest::Run() {
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
@@ -2572,6 +3878,24 @@ namespace RTE {
 		if (!TestRunnerStateTransferProgress(&error)) return fail(error);
 		if (!TestRematchRosterDerivation(&error)) return fail(error);
 		if (!TestRematchRebuildsTheSurvivingRoster(&error)) return fail(error);
+		if (!TestRematchProposalFits(&error)) return fail(error);
+		if (!TestServiceReturnToLobbyFormsTheNextRoster(&error)) return fail(error);
+		// Each rematch-roster case reports its own verdict, so one red case cannot hide another.
+		std::string twoShrinksError;
+		if (!TestRematchKeepsStableSeatsAcrossTwoShrinks(&twoShrinksError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << twoShrinksError << std::endl;
+		}
+		std::string hardDropError;
+		if (!TestRematchAfterAHardDrop(&hardDropError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << hardDropError << std::endl;
+		}
+		std::string reclaimError;
+		if (!TestRematchRoundReclaimsAfterAShrink(&reclaimError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << reclaimError << std::endl;
+		}
+		if (!twoShrinksError.empty()) return fail(twoShrinksError);
+		if (!hardDropError.empty()) return fail(hardDropError);
+		if (!reclaimError.empty()) return fail(reclaimError);
 		if (!TestLobbyThreePeer(&error)) return fail(error);
 		if (!TestServiceDedicatedRequest(&error)) return fail(error);
 		if (!TestLobbyThreePeerDedicated(&error)) return fail(error);
