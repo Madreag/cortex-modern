@@ -185,6 +185,7 @@ static bool s_netH4SubstituteCancel = false;
 static bool s_netLockstep = false;
 static bool s_netMatch = false;
 static bool s_netMatchServiceE2E = false;
+static bool s_netDedicated = false;
 static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
 static std::string s_netLockstepReportPath;
 // A capped stop holds the link while the relay host hands over what it still owes; a client one
@@ -540,6 +541,12 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (currentArg == "-net-host") {
 			s_netHost = true;
+			++i;
+			continue;
+		}
+
+		if (currentArg == "-net-dedicated") {
+			s_netDedicated = true;
 			++i;
 			continue;
 		}
@@ -1293,6 +1300,9 @@ static std::string BuildNetMatchResultText() {
 	const int winnerTeam = gameActivity ? gameActivity->GetWinnerTeam() : Activity::NoTeam;
 	if (winnerTeam == Activity::NoTeam) {
 		return "Match over: draw";
+	}
+	if (g_NetMatchService.GetLocalTeam() == Activity::NoTeam) {
+		return "Match over";
 	}
 	return winnerTeam == g_NetMatchService.GetLocalTeam() ? "Victory!" : "Defeat";
 }
@@ -3128,7 +3138,7 @@ void RunGameLoop() {
 						break;
 					}
 					g_NetMatchService.SetReady();
-					if (s_netHost) {
+					if (s_netHost || s_netDedicated) {
 						g_NetMatchService.RequestStart();
 					}
 					std::string rematchPreset;
@@ -3763,14 +3773,17 @@ bool ConfigureNetMatchActivity(const std::string& activityPreset, int localTeam,
 		if (error) *error = "could not create multiplayer activity";
 		return false;
 	}
-	if (localTeam < Activity::TeamOne || localTeam >= Activity::MaxTeamCount) {
+	// A dedicated host owns no seat: NoTeam means clear the players but still run every roster team.
+	if (localTeam != Activity::NoTeam && (localTeam < Activity::TeamOne || localTeam >= Activity::MaxTeamCount)) {
 		delete activity;
 		if (error) *error = "invalid local team";
 		return false;
 	}
 	if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
 		gameActivity->ClearPlayers(false);
-		gameActivity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
+		if (localTeam != Activity::NoTeam) {
+			gameActivity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
+		}
 		// Activate every team in the synced roster so all peers run the identical team set.
 		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
 			if (team == localTeam || ScenarioRunner::IsLockstepActiveTeam(team)) {
@@ -3881,17 +3894,21 @@ int RunNetReplayPlayback() {
 int RunNetMatchServiceE2E() {
 	std::string setupError;
 	if (!NetA7Journal::StartE2E(&setupError, [] { PollSDLEvents(); return System::IsSetToQuit(); })) s_netMatchServiceE2EExitCode = 1;
-	if (s_netHost == !s_netJoinAddress.empty()) {
-		setupError = "-net-match-service-e2e requires exactly one of -net-host or -net-join <address>";
+	const bool e2eHost = s_netHost || s_netDedicated;
+	if (s_netDedicated && !s_netJoinAddress.empty()) {
+		setupError = "-net-dedicated cannot be combined with -net-join <address>";
+	} else if (e2eHost == !s_netJoinAddress.empty()) {
+		setupError = "-net-match-service-e2e requires exactly one of -net-host, -net-dedicated or -net-join <address>";
 	}
 
 	if (setupError.empty()) {
 		ScenarioRunner::ApplyDeterministicConfig();
 		NetMatchServiceRequest request;
-		request.host = s_netHost;
+		request.host = e2eHost;
+		request.dedicated = s_netDedicated;
 		request.address = s_netJoinAddress.empty() ? "127.0.0.1" : s_netJoinAddress;
 		request.port = s_netPort;
-		request.playerName = s_netHost ? "Host" : "Client";
+		request.playerName = e2eHost ? "Host" : "Client";
 		request.activityPreset = s_netMatchServiceE2EPreset;
 		request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		request.inputDelayFrames = s_netLockstepInputDelay;
@@ -3910,13 +3927,13 @@ int RunNetMatchServiceE2E() {
 	std::string activityPreset;
 	if (setupError.empty()) {
 		g_NetMatchService.SetReady();
-		if (s_netHost) {
+		if (e2eHost) {
 			g_NetMatchService.RequestStart();
 		}
 		const auto waitStart = std::chrono::steady_clock::now();
 		while (!g_NetMatchService.ConsumeReadyToLaunch(activityPreset)) {
 			const NetMatchServiceState state = g_NetMatchService.GetState();
-			if (s_netHost && ScenarioRunner::GetArgs().selftestJoinRejection && state == NetMatchServiceState::Starting) {
+			if (e2eHost && ScenarioRunner::GetArgs().selftestJoinRejection && state == NetMatchServiceState::Starting) {
 				const std::string rejection = g_NetMatchService.GetErrorText();
 				if (!rejection.empty()) {
 					setupError = rejection;
@@ -4102,7 +4119,7 @@ int main(int argc, char** argv) {
 			s_cliNumLuaStatesOverride = static_cast<int>(std::strtol(argv[i + 1], nullptr, 10));
 			explicitLuaStateOverride = true;
 			++i;
-		} else if (arg == "-net-host" || arg == "-net-join") {
+		} else if (arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join") {
 			netSessionRequested = true;
 		}
 	}
@@ -4120,7 +4137,7 @@ int main(int argc, char** argv) {
 				continue;
 			}
 			const std::string arg = argv[i];
-			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e") {
+			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e") {
 				headless = true;
 			} else if (arg == "-headed") {
 				headless = false;

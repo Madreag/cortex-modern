@@ -158,6 +158,10 @@ static std::string ResyncSaveName() {
 		m_CancelRequested.store(false);
 		m_ReadyRequested.store(false);
 		m_StartRequested.store(false);
+		if (request.dedicated && !request.host) {
+			if (error) *error = "dedicated service requires the host role";
+			return false;
+		}
 		if (request.port == 0) {
 			if (error) *error = "port must be nonzero";
 			return false;
@@ -191,11 +195,13 @@ static std::string ResyncSaveName() {
 			m_WorkerDone = false;
 			m_IsHost = request.host;
 			m_LocalPeerId = request.host ? 1 : 2;
-			m_LocalTeam = request.host ? 0 : 1;
+			m_LocalTeam = request.dedicated ? Activity::NoTeam : (request.host ? 0 : 1);
+			m_Dedicated = request.dedicated;
+			m_HumanSeats = request.dedicated ? std::max(0, static_cast<int>(request.peerCount) - 1) : static_cast<int>(request.peerCount);
 			m_ResyncOnDesync = request.resyncOnDesync;
 			m_PendingResyncLoad.clear();
 			m_BeaconGamePort = request.port;
-			m_BeaconMaxPlayers = request.peerCount;
+			m_BeaconMaxPlayers = request.dedicated ? static_cast<uint8_t>(std::max(1, static_cast<int>(request.peerCount) - 1)) : request.peerCount;
 			m_LocalName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
 		}
 		m_EverStarted.store(true);
@@ -510,12 +516,14 @@ static std::string ResyncSaveName() {
 		const auto state = std::make_shared<NetResyncState>(*m_PendingResyncState);
 		const uint8_t localPeer = GetLocalPeerId();
 		const bool retainLocal = m_ResyncRetainsLocalState;
+		// A seatless dedicated host has no binding in any snapshot and no local state to keep.
+		const bool dedicated = m_Dedicated;
 		std::optional<NetResyncPlayerBindings> newestBinding;
 		if (const auto found = state->playerBindings.find(localPeer); found != state->playerBindings.end()) newestBinding = found->second;
 		for (const auto& pending: state->pendingPlayerBindings) if (pending.command.senderPeerId == localPeer && (!newestBinding || pending.frame > newestBinding->frame)) {
 			newestBinding = NetResyncPlayerBindings{pending.frame, std::get<NetGamePlayerBindings>(pending.command.payload)};
 		}
-		if (!retainLocal && !newestBinding) {
+		if (!retainLocal && !newestBinding && !dedicated) {
 			if (error) *error = "the resync snapshot has no player bindings for this peer";
 			return false;
 		}
@@ -532,15 +540,17 @@ static std::string ResyncSaveName() {
 		std::cout << "[net-match] launching from the received snapshot: " << pendingLoad << std::endl;
 		struct LocalState { Activity::NetLocalPlayerState activity; std::string input, gui, frame; };
 		const auto local = std::make_shared<LocalState>();
-		if (!g_ActivityMan.SetPendingCheckpointCallbacks([local, retainLocal] {
+		const bool keepLocalPlayer = retainLocal && !dedicated;
+		if (!g_ActivityMan.SetPendingCheckpointCallbacks([local, keepLocalPlayer] {
 			local->input = g_UInputMan.SaveCheckpoint();
 			local->gui = GUIInput::SaveSharedCheckpoint();
 			local->frame = g_FrameMan.SaveNetLocalState();
-			return !retainLocal || (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->CaptureNetLocalPlayerState(local->activity));
-		}, [local, state, retainLocal, newestBinding](Activity& activity) {
+			return !keepLocalPlayer || (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->CaptureNetLocalPlayerState(local->activity));
+		}, [local, state, keepLocalPlayer, dedicated, newestBinding](Activity& activity) {
 			if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != state->savedTick ||
 			    !g_UInputMan.LoadCheckpoint(local->input, true) || !GUIInput::LoadSharedCheckpoint(local->gui, true) || !g_FrameMan.LoadNetLocalState(local->frame, true)) return false;
-			if (!(retainLocal ? activity.RestoreNetLocalPlayerState(local->activity) : activity.ApplyNetPlayerBindings(newestBinding->bindings))) return false;
+			const NetGamePlayerBindings seatless{};
+			if (!(keepLocalPlayer ? activity.RestoreNetLocalPlayerState(local->activity) : activity.ApplyNetPlayerBindings(dedicated ? seatless : newestBinding->bindings))) return false;
 			if (!g_UInputMan.LoadCheckpoint(local->input) || !GUIInput::LoadSharedCheckpoint(local->gui) || !g_FrameMan.LoadNetLocalState(local->frame)) return false;
 			return ScenarioRunner::RestoreNetResyncState(*state);
 		})) { if (error) *error = "could not stage resync local state restoration"; return false; }
@@ -694,6 +704,8 @@ static std::string ResyncSaveName() {
 			m_IsHost = false;
 			m_LocalPeerId = 0;
 			m_LocalTeam = -1;
+			m_Dedicated = false;
+			m_HumanSeats = 0;
 			m_ResyncOnDesync = false;
 			m_PendingResyncLoad.clear();
 			m_PendingResyncState.reset();
@@ -1175,6 +1187,17 @@ static std::string ResyncSaveName() {
 
 	std::string NetMatchService::BuildReportJson() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		bool dedicated = m_Dedicated;
+		int humanSeats = m_HumanSeats;
+		if (m_Runner) {
+			// Once the lobby round adopts the host's roster it, not the request, is the truth.
+			const NetMatchConfig& adopted = m_Runner->GetMatchConfig();
+			dedicated = adopted.dedicated;
+			humanSeats = 0;
+			for (const NetMatchPlayerSlot& slot : adopted.players) {
+				humanSeats += slot.cpu ? 0 : 1;
+			}
+		}
 		json report{
 			{"state", StateName(m_State)},
 			{"status", m_StatusText},
@@ -1183,6 +1206,8 @@ static std::string ResyncSaveName() {
 			{"is_host", m_IsHost},
 			{"local_peer_id", static_cast<int>(m_LocalPeerId)},
 			{"local_team", m_LocalTeam},
+			{"dedicated", dedicated},
+			{"human_seats", humanSeats},
 		};
 		json reconnect{
 			{"admission_enabled", s_AdmissionEnabled},
@@ -1690,8 +1715,9 @@ static std::string ResyncSaveName() {
 
 	NetMatchConfig NetMatchService::BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const {
 		const uint8_t peerCount = std::clamp<uint8_t>(request.peerCount, NetMatchConfigUtil::c_MinPeerCount, NetMatchConfigUtil::c_MaxPeerCount);
+		const uint8_t humanCount = request.dedicated ? static_cast<uint8_t>(peerCount - 1) : peerCount;
 		// PvPvE gives the CPU the team after the humans', so it fits three human teams at most.
-		const NetMatchMode mode = (request.mode == NetMatchMode::PvPvE && peerCount >= 4) ? NetMatchMode::PvPSkirmish : request.mode;
+		const NetMatchMode mode = (request.mode == NetMatchMode::PvPvE && humanCount >= 4) ? NetMatchMode::PvPSkirmish : request.mode;
 		NetMatchConfig config = NetMatchConfigUtil::MakeDefault(sessionId);
 		config.activityPreset = request.activityPreset.empty() ? "P4 Alpha Duel" : request.activityPreset;
 		config.sceneName = "Grasslands";
@@ -1700,14 +1726,17 @@ static std::string ResyncSaveName() {
 		config.ownershipPolicy = request.ownershipPolicy;
 		config.inputDelayFrames = request.inputDelayFrames;
 		config.peerCount = peerCount;
+		config.dedicated = request.dedicated;
 		// The host authors the roster; clients adopt it via the lobby config sync. PvP seats one team
-		// per peer; co-op PvE seats every human on team 0; PvPvE keeps per-peer teams. The PvE modes
+		// per peer; co-op PvE seats every human on team 0; PvPvE keeps per-peer teams. A dedicated host
+		// seats peers 2..peerCount instead, so peer 1 stays the seatless lockstep host. The PvE modes
 		// add a peerless CPU slot whose team the host's AI drives over the wire.
 		config.players.clear();
-		for (uint8_t peerId = 1; peerId <= peerCount; ++peerId) {
+		const uint8_t firstHumanPeer = request.dedicated ? 2 : 1;
+		for (uint8_t peerId = firstHumanPeer; peerId <= peerCount; ++peerId) {
 			NetMatchPlayerSlot slot;
 			slot.peerId = peerId;
-			slot.team = mode == NetMatchMode::CoopPvE ? 0 : static_cast<uint8_t>(peerId - 1);
+			slot.team = mode == NetMatchMode::CoopPvE ? 0 : static_cast<uint8_t>(peerId - firstHumanPeer);
 			slot.cpu = false;
 			slot.displayName = peerId == config.hostPeerId ? PlayerNameOrDefault(request, true)
 			                                               : ("Client " + std::to_string(peerId));
@@ -1716,7 +1745,7 @@ static std::string ResyncSaveName() {
 		if (mode == NetMatchMode::CoopPvE || mode == NetMatchMode::PvPvE) {
 			NetMatchPlayerSlot cpuSlot;
 			cpuSlot.peerId = 0;
-			cpuSlot.team = mode == NetMatchMode::CoopPvE ? 1 : peerCount;
+			cpuSlot.team = mode == NetMatchMode::CoopPvE ? 1 : humanCount;
 			cpuSlot.cpu = true;
 			cpuSlot.displayName = "CPU";
 			config.players.push_back(cpuSlot);

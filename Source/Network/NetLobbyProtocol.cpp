@@ -243,7 +243,8 @@ namespace RTE {
 			AppendU16LE(out, config.inputDelayFrames);
 			AppendU8(out, static_cast<uint8_t>(config.mode));
 			AppendU8(out, static_cast<uint8_t>(config.ownershipPolicy));
-			AppendU16LE(out, 0);
+			// Reserved bit 0 carries the dedicated flag; old builds refuse the nonzero word.
+			AppendU16LE(out, config.dedicated ? 1 : 0);
 			if (!AppendString(out, config.activityType, NetLobbyProtocol::c_MaxShortTextBytes, "activity_type", error) ||
 			    !AppendString(out, config.activityPreset, NetLobbyProtocol::c_MaxShortTextBytes, "activity_preset", error) ||
 			    !AppendString(out, config.sceneName, NetLobbyProtocol::c_MaxShortTextBytes, "scene_name", error) ||
@@ -278,7 +279,8 @@ namespace RTE {
 			    !ReadOrTruncated(reader.ReadU16LE(reserved), reader, error, "config.reserved")) {
 				return false;
 			}
-			if (reserved != 0) {
+			out.dedicated = (reserved & 1) != 0;
+			if (reserved & ~static_cast<uint16_t>(1)) {
 				SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 2, "config reserved field must be zero");
 				return false;
 			}

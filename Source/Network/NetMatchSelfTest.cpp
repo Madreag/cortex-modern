@@ -227,6 +227,66 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestMatchConfigDedicated(std::string* error) {
+			NetMatchConfig dedicated = MakeConfig();
+			dedicated.peerCount = 3;
+			dedicated.dedicated = true;
+			dedicated.players = {
+			    NetMatchPlayerSlot{2, 0, false, "Client A"},
+			    NetMatchPlayerSlot{3, 1, false, "Client B"},
+			};
+			if (!NetMatchConfigUtil::ValidateLocalAlpha(dedicated, error)) {
+				return false;
+			}
+			std::string validationError;
+			NetMatchConfig seatless = dedicated;
+			seatless.dedicated = false;
+			if (NetMatchConfigUtil::ValidateLocalAlpha(seatless, &validationError) ||
+			    validationError != "host player slot is missing") {
+				*error = "seatless roster without the flag did not fail closed: " + validationError;
+				return false;
+			}
+			NetMatchConfig hostSeated = dedicated;
+			hostSeated.players.push_back(NetMatchPlayerSlot{1, 2, false, "Host"});
+			validationError.clear();
+			if (NetMatchConfigUtil::ValidateLocalAlpha(hostSeated, &validationError) ||
+			    validationError != "dedicated config must not seat the host peer") {
+				*error = "dedicated roster with a host slot did not fail closed: " + validationError;
+				return false;
+			}
+			NetMatchConfig noClients = dedicated;
+			noClients.players = {NetMatchPlayerSlot{0, 3, true, "CPU"}};
+			validationError.clear();
+			if (NetMatchConfigUtil::ValidateLocalAlpha(noClients, &validationError) ||
+			    validationError != "dedicated config has no client player slot") {
+				*error = "dedicated roster without a client slot did not fail closed: " + validationError;
+				return false;
+			}
+			NetMatchConfig plain = MakeConfig();
+			const NetHash32 plainHash = NetMatchConfigUtil::HashConfig(plain);
+			if (NetMatchConfigUtil::HashConfig(plain) != plainHash) {
+				*error = "match config hash is not stable";
+				return false;
+			}
+			NetMatchConfig flagged = plain;
+			flagged.dedicated = true;
+			if (NetMatchConfigUtil::HashConfig(flagged) == plainHash) {
+				*error = "the dedicated flag did not change the match config hash";
+				return false;
+			}
+			flagged.dedicated = false;
+			if (NetMatchConfigUtil::HashConfig(flagged) != plainHash) {
+				*error = "clearing the dedicated flag changed the match config hash";
+				return false;
+			}
+			const std::string reportJson = NetMatchConfigUtil::BuildReportJson(dedicated);
+			if (reportJson.find("\"dedicated\":true") == std::string::npos) {
+				*error = "the config report omitted dedicated=true";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestOwnershipPolicies(std::string* error) {
 			NetMatchConfig config = MakeConfig();
 			config.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
@@ -384,6 +444,58 @@ namespace RTE {
 			const NetLobbyDecodeResult shortHeader = NetLobbyProtocol::Decode(bytes);
 			if (shortHeader.ok || shortHeader.error.code != NetLobbyErrorCode::ShortHeader) {
 				*error = "short header was not rejected";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestLobbyCodecDedicatedFlag(std::string* error) {
+			NetMatchConfig dedicated = MakeConfig();
+			dedicated.peerCount = 3;
+			dedicated.dedicated = true;
+			dedicated.players = {
+			    NetMatchPlayerSlot{2, 0, false, "Client A"},
+			    NetMatchPlayerSlot{3, 1, false, "Client B"},
+			};
+			if (!RoundTrip(NetLobbyMatchConfig{dedicated}, error)) {
+				return false;
+			}
+			// The config's reserved u16 sits 16 bytes into the payload (after mode/ownership).
+			const size_t reservedOffset = NetLobbyProtocol::c_HeaderBytes + 16;
+			NetLobbyMessage message;
+			message.payload = NetLobbyMatchConfig{dedicated};
+			std::vector<uint8_t> bytes;
+			NetLobbyError encodeError;
+			if (!NetLobbyProtocol::Encode(message, bytes, &encodeError) ||
+			    bytes.size() <= reservedOffset + 1 || bytes[reservedOffset] != 1 || bytes[reservedOffset + 1] != 0) {
+				*error = "dedicated config did not encode reserved bit 0";
+				return false;
+			}
+			const NetLobbyDecodeResult dedicatedDecoded = NetLobbyProtocol::Decode(bytes);
+			const NetLobbyMatchConfig* dedicatedConfig = dedicatedDecoded.ok ? std::get_if<NetLobbyMatchConfig>(&dedicatedDecoded.message.payload) : nullptr;
+			if (!dedicatedConfig || !dedicatedConfig->config.dedicated) {
+				*error = "a reserved word of 1 did not decode to dedicated=true";
+				return false;
+			}
+			message.payload = NetLobbyMatchConfig{MakeConfig()};
+			if (!NetLobbyProtocol::Encode(message, bytes, &encodeError)) {
+				*error = "could not encode a non-dedicated config";
+				return false;
+			}
+			if (bytes[reservedOffset] != 0 || bytes[reservedOffset + 1] != 0) {
+				*error = "non-dedicated config wrote a nonzero reserved word";
+				return false;
+			}
+			const NetLobbyDecodeResult plainDecoded = NetLobbyProtocol::Decode(bytes);
+			const NetLobbyMatchConfig* plainConfig = plainDecoded.ok ? std::get_if<NetLobbyMatchConfig>(&plainDecoded.message.payload) : nullptr;
+			if (!plainConfig || plainConfig->config.dedicated) {
+				*error = "a reserved word of 0 did not decode to dedicated=false";
+				return false;
+			}
+			bytes[reservedOffset] = 2;
+			const NetLobbyDecodeResult refused = NetLobbyProtocol::Decode(bytes);
+			if (refused.ok || refused.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
+				*error = "a reserved word of 2 was not refused";
 				return false;
 			}
 			return true;
@@ -1476,6 +1588,88 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestServiceDedicatedRequest(std::string* error) {
+			for (const uint16_t port : {uint16_t(0), uint16_t(41010)}) {
+				NetMatchService service;
+				NetMatchServiceRequest request;
+				request.host = false;
+				request.dedicated = true;
+				request.port = port;
+				std::string startError;
+				if (service.Start(request, &startError) || startError != "dedicated service requires the host role") {
+					*error = "a dedicated join request was not refused: " + startError;
+					return false;
+				}
+			}
+			NetMatchService service;
+			const std::string report = service.BuildReportJson();
+			if (report.find("\"dedicated\":false") == std::string::npos || report.find("\"human_seats\"") == std::string::npos) {
+				*error = "service report is missing the dedicated/human_seats fields";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestLobbyThreePeerDedicated(std::string* error) {
+			const uint16_t port = 43009;
+			LoopbackTransport hostT, clientAT, clientBT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) || !clientBT.Connect("loopback", port, error)) {
+				return false;
+			}
+			// The dedicated host is lockstep peer 1 with no roster slot; peers 2 and 3 are the humans.
+			NetMatchConfig matchConfig = MakeConfig();
+			matchConfig.peerCount = 3;
+			matchConfig.dedicated = true;
+			matchConfig.players = {
+			    NetMatchPlayerSlot{2, 0, false, "Client A"},
+			    NetMatchPlayerSlot{3, 1, false, "Client B"},
+			};
+			auto cfg = [&](bool host, uint8_t local, std::map<uint8_t, NetPeerId> transports, const char* name) {
+				NetLobbySessionConfig c;
+				c.host = host;
+				c.localPeerId = local;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.matchConfig = matchConfig;
+				c.startFrame = 5;
+				c.displayName = name;
+				c.platform = "windows";
+				c.peerStateIntervalMs = 10;
+				return c;
+			};
+			NetLobbySession host, clientA, clientB;
+			if (!host.Start(hostT, cfg(true, 1, {{2, 1}, {3, 2}}, "Host"), error) ||
+			    !clientA.Start(clientAT, cfg(false, 2, {{1, 1}}, "Client A"), error) ||
+			    !clientB.Start(clientBT, cfg(false, 3, {{1, 1}}, "Client B"), error)) {
+				return false;
+			}
+			for (uint64_t now = 0; now <= 2000; now += 10) {
+				host.Tick(now);
+				clientA.Tick(now);
+				clientB.Tick(now);
+				if (host.IsStarted() && clientA.IsStarted() && clientB.IsStarted()) {
+					break;
+				}
+				if (host.IsFailed() || host.IsRejected() || clientA.IsFailed() || clientA.IsRejected() || clientB.IsFailed() || clientB.IsRejected()) {
+					*error = "dedicated three-peer lobby failed; host=" + std::string(NetLobbySession::StateName(host.GetState())) +
+					         " a=" + NetLobbySession::StateName(clientA.GetState()) + " b=" + NetLobbySession::StateName(clientB.GetState());
+					return false;
+				}
+				hostT.AdvanceTimeMs(10);
+				clientAT.AdvanceTimeMs(10);
+				clientBT.AdvanceTimeMs(10);
+			}
+			if (!host.IsStarted() || !clientA.IsStarted() || !clientB.IsStarted()) {
+				*error = "dedicated lobby did not reach Started on every peer";
+				return false;
+			}
+			if (host.GetMatchConfigHash() != clientA.GetMatchConfigHash() || host.GetMatchConfigHash() != clientB.GetMatchConfigHash() ||
+			    !clientA.GetMatchConfig().dedicated || !clientB.GetMatchConfig().dedicated) {
+				*error = "dedicated lobby did not converge on the dedicated config";
+				return false;
+			}
+			return true;
+		}
+
 		// A joiner arriving into a lobby that is already full of names hears the host's roster before
 		// the host's next config resend: the state names peers its placeholder config cannot seat yet.
 		// Failing the session over a name-and-ping message killed every four-member lobby lane, so the
@@ -1807,11 +2001,13 @@ namespace RTE {
 
 		std::string error;
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
+		if (!TestMatchConfigDedicated(&error)) return fail(error);
 		if (!TestReplayCommandSenders(&error)) return fail(error);
 		if (!TestOwnershipPolicies(&error)) return fail(error);
 		if (!TestLockstepCoordinatorUsesMatchOwnership(&error)) return fail(error);
 		if (!TestLobbyCodecRoundTrips(&error)) return fail(error);
 		if (!TestMalformedLobbyPayloads(&error)) return fail(error);
+		if (!TestLobbyCodecDedicatedFlag(&error)) return fail(error);
 		if (!TestLobbyStateMachineHappyPath(&error)) return fail(error);
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);
 		if (!TestLobbyManualReadyCanWait(&error)) return fail(error);
@@ -1823,6 +2019,8 @@ namespace RTE {
 		if (!TestLobbyStateTransferBackpressure(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error)) return fail(error);
 		if (!TestLobbyThreePeer(&error)) return fail(error);
+		if (!TestServiceDedicatedRequest(&error)) return fail(error);
+		if (!TestLobbyThreePeerDedicated(&error)) return fail(error);
 		if (!TestLobbyLateJoinerRosterRace(&error)) return fail(error);
 		if (!TestServiceRuntimeErrorSurface(&error)) return fail(error);
 		if (!TestJoinWaitTrigger(&error)) return fail(error);
