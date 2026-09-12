@@ -8,6 +8,7 @@
 #include "SimChecksum.h"
 #include "RTETools.h"
 #include "LuaThreadCodec.h"
+#include "ScenarioRunner.h"
 #include "ContentFile.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
@@ -6856,15 +6857,20 @@ void LuaMan::SeedAllLuaRNGs(uint64_t baseSeed) {
 	}
 }
 
+static std::vector<uint64_t> HashScriptObjectGraphs(LuaStateWrapper& master, LuaStatesArray& threaded);
+
 void LuaMan::HashAllLuaStatesIntoSimChecksum() {
-	if (!g_SimChecksum.IsActive()) {
+	if (!g_SimChecksum.IsActive() || g_SimChecksum.IsSuppressed()) {
 		return;
 	}
-	// Hash the master state only — threaded per-MO Lua work is redirected to per-MO RNGs, so the
-	// threaded states carry no sim-observable RNG state. Master is the thread-count-invariant,
-	// sim-authoritative Lua RNG.
 	const std::string masterState = m_MasterScriptState.GetRandomGeneratorStateForHashing();
 	g_SimChecksum.Update("lua_state", masterState.data(), masterState.size());
+	// Where AI hooks run on one peer or on none, an object's script graph is per machine.
+	if (ScenarioRunner::HasLockstepCoordinator() || ScenarioRunner::IsLockstepReplayPlayback() || ScenarioRunner::IsControllerReplayStrict()) {
+		return;
+	}
+	const std::vector<uint64_t> objects = HashScriptObjectGraphs(m_MasterScriptState, m_ScriptStates);
+	g_SimChecksum.Update("lua_state", objects.data(), objects.size() * sizeof(uint64_t));
 }
 
 void LuaMan::ClearScriptTimings() {
@@ -6876,4 +6882,546 @@ void LuaMan::ClearScriptTimings() {
 
 void LuaStateWrapper::DiscardStashedScriptObject(long uniqueID) {
 	RunScriptString("if _ScriptFieldsStash then _ScriptFieldsStash[\"" + std::to_string(uniqueID) + "\"] = nil; end");
+}
+
+// Read in place: the walk never allocates, runs Lua or reaches a metamethod.
+extern "C" {
+#include "lj_obj.h"
+#include "lj_tab.h"
+}
+
+namespace {
+	enum GraphToken : uint64_t {
+		TokenNil = 1,
+		TokenFalse,
+		TokenTrue,
+		TokenNumber,
+		TokenNaN,
+		TokenString,
+		TokenTable,
+		TokenSeen,
+		TokenGlobals,
+		TokenEngine,
+		TokenLuaFunction,
+		TokenNativeFunction,
+		TokenUpvalue,
+		TokenUserdata,
+		TokenLuabind,
+		TokenFields,
+		TokenThread,
+		TokenLightUserdata,
+		TokenCData,
+		TokenOther,
+		TokenTooDeep,
+		TokenKey,
+		TokenObjects,
+		TokenNoScriptObject,
+		TokenStale,
+	};
+
+	constexpr int c_MaxGraphDepth = 1000;
+
+	// Integer-only rounds, so every platform reaches the same digest.
+	struct GraphDigest {
+		uint64_t state = 0x27D4EB2F165667C5ULL;
+
+		void Word(uint64_t word) {
+			state += word * 0xC2B2AE3D27D4EB4FULL;
+			state = (state << 31) | (state >> 33);
+			state *= 0x9E3779B185EBCA87ULL;
+		}
+
+		void Bytes(const char* data, size_t size) {
+			Word(size);
+			for (size_t offset = 0; offset < size; offset += 8) {
+				uint64_t word = 0;
+				for (size_t byte = 0; byte < 8 && offset + byte < size; ++byte) {
+					word |= static_cast<uint64_t>(static_cast<unsigned char>(data[offset + byte])) << (8 * byte);
+				}
+				Word(word);
+			}
+		}
+
+		uint64_t Finish() const {
+			uint64_t mixed = state;
+			mixed ^= mixed >> 33;
+			mixed *= 0xFF51AFD7ED558CCDULL;
+			mixed ^= mixed >> 33;
+			mixed *= 0xC4CEB9FE1A85EC53ULL;
+			mixed ^= mixed >> 33;
+			return mixed;
+		}
+	};
+
+	const TValue* FindStringField(const GCtab* table, std::string_view name) {
+		const ::Node* nodes = noderef(table->node);
+		for (uint32_t index = 0; index <= table->hmask; ++index) {
+			const ::Node& node = nodes[index];
+			if (!tvisnil(&node.val) && tvisstr(&node.key)) {
+				const GCstr* key = strV(&node.key);
+				if (key->len == name.size() && std::memcmp(strdata(key), name.data(), name.size()) == 0) {
+					return &node.val;
+				}
+			}
+		}
+		return nullptr;
+	}
+
+	struct GraphState {
+		lua_State* lua = nullptr;
+		GCtab* globals = nullptr;
+		GCtab* enginePaths = nullptr;
+		std::unordered_map<const GCtab*, bool> luabindMetatables;
+	};
+
+	// A borrowed native object may be gone; only the registry can vouch for it.
+	struct KnownObjects {
+		bool built = false;
+		std::vector<const MovableObject*> sorted;
+
+		bool Contains(const MovableObject* object) {
+			if (!built) {
+				for (const MovableObject* known: g_MovableMan.SnapshotKnownObjects()) {
+					sorted.push_back(known);
+				}
+				std::sort(sorted.begin(), sorted.end(), std::less<const MovableObject*>());
+				built = true;
+			}
+			return std::binary_search(sorted.begin(), sorted.end(), object, std::less<const MovableObject*>());
+		}
+	};
+
+	class ObjectGraphWalk {
+	public:
+		ObjectGraphWalk(GraphState& state, KnownObjects& known, const MovableObject* root, int depth = 0) :
+		    m_State(state), m_Known(known), m_Root(root), m_Depth(depth) {}
+
+		uint64_t Digest(const TValue* value) {
+			Value(value);
+			return m_Digest.Finish();
+		}
+
+	private:
+		struct Entry {
+			const TValue* value;
+			int rank;
+			double number = 0;
+			const GCstr* string = nullptr;
+			uint64_t keyDigest = 0;
+			uint64_t valueDigest = 0;
+		};
+
+		GraphState& m_State;
+		KnownObjects& m_Known;
+		const MovableObject* m_Root;
+		int m_Depth;
+		GraphDigest m_Digest;
+		std::unordered_map<const void*, uint64_t> m_Seen;
+
+		void Word(uint64_t word) { m_Digest.Word(word); }
+
+		void Text(const std::string& text) { m_Digest.Bytes(text.data(), text.size()); }
+
+		// A value reached again is named by when it was first reached, which the sorted walk fixes.
+		bool Seen(const void* object) {
+			const auto [entry, inserted] = m_Seen.try_emplace(object, m_Seen.size() + 1);
+			if (inserted) {
+				return false;
+			}
+			Word(TokenSeen);
+			Word(entry->second);
+			return true;
+		}
+
+		void Number(double number) {
+			if (number != number) {
+				Word(TokenNaN);
+				return;
+			}
+			uint64_t bits;
+			std::memcpy(&bits, &number, sizeof(bits));
+			Word(TokenNumber);
+			Word(bits);
+		}
+
+		void String(const GCstr* string) {
+			Word(TokenString);
+			m_Digest.Bytes(strdata(string), string->len);
+		}
+
+		void Value(const TValue* value) {
+			if (tvisnil(value)) {
+				Word(TokenNil);
+			} else if (tvisfalse(value)) {
+				Word(TokenFalse);
+			} else if (tvistrue(value)) {
+				Word(TokenTrue);
+			} else if (tvisint(value)) {
+				Number(static_cast<double>(intV(value)));
+			} else if (tvisnum(value)) {
+				Number(numV(value));
+			} else if (tvisstr(value)) {
+				String(strV(value));
+			} else if (tvislightud(value)) {
+				Word(TokenLightUserdata);
+			} else if (tviscdata(value)) {
+				Word(TokenCData);
+			} else if (m_Depth >= c_MaxGraphDepth) {
+				Word(TokenTooDeep);
+			} else {
+				++m_Depth;
+				if (tvistab(value)) {
+					Table(tabV(value), value);
+				} else if (tvisfunc(value)) {
+					Function(funcV(value), value);
+				} else if (tvisudata(value)) {
+					Userdata(udataV(value), value);
+				} else if (tvisthread(value)) {
+					Thread(threadV(value));
+				} else {
+					Word(TokenOther);
+				}
+				--m_Depth;
+			}
+		}
+
+		bool Engine(const TValue* value) {
+			if (!m_State.enginePaths) {
+				return false;
+			}
+			const TValue* path = lj_tab_get(m_State.lua, m_State.enginePaths, value);
+			if (!path || !tvistab(path)) {
+				return false;
+			}
+			Word(TokenEngine);
+			const GCtab* segments = tabV(path);
+			const TValue* array = tvref(segments->array);
+			for (uint32_t index = 1; index < segments->asize && tvisstr(&array[index]); ++index) {
+				String(strV(&array[index]));
+			}
+			return true;
+		}
+
+		static bool EntryLess(const Entry& a, const Entry& b) {
+			if (a.rank != b.rank) {
+				return a.rank < b.rank;
+			}
+			if (a.rank == 1) {
+				const size_t common = std::min(a.string->len, b.string->len);
+				const int order = std::memcmp(strdata(a.string), strdata(b.string), common);
+				return order != 0 ? order < 0 : a.string->len < b.string->len;
+			}
+			if (a.rank == 3) {
+				return a.keyDigest != b.keyDigest ? a.keyDigest < b.keyDigest : a.valueDigest < b.valueDigest;
+			}
+			return a.number < b.number;
+		}
+
+		Entry MakeEntry(const TValue* key, const TValue* value) {
+			Entry entry{value, 3};
+			if (tvisint(key)) {
+				entry.rank = 0;
+				entry.number = static_cast<double>(intV(key));
+			} else if (tvisnum(key)) {
+				entry.rank = 0;
+				entry.number = numV(key);
+			} else if (tvisstr(key)) {
+				entry.rank = 1;
+				entry.string = strV(key);
+			} else if (tvisbool(key)) {
+				entry.rank = 2;
+				entry.number = tvistrue(key) ? 1 : 0;
+			} else {
+				entry.keyDigest = ObjectGraphWalk(m_State, m_Known, m_Root, m_Depth).Digest(key);
+				entry.valueDigest = ObjectGraphWalk(m_State, m_Known, m_Root, m_Depth).Digest(value);
+			}
+			return entry;
+		}
+
+		void Table(GCtab* table, const TValue* value) {
+			if (Seen(table)) {
+				return;
+			}
+			if (table == m_State.globals) {
+				Word(TokenGlobals);
+				return;
+			}
+			if (Engine(value)) {
+				return;
+			}
+			Word(TokenTable);
+			if (GCtab* meta = tabref(table->metatable)) {
+				TValue metaValue;
+				settabV(m_State.lua, &metaValue, meta);
+				Value(&metaValue);
+			} else {
+				Word(TokenNil);
+			}
+			// Array or hash placement follows the table's history, so entries go in key order.
+			std::vector<Entry> entries;
+			const TValue* array = tvref(table->array);
+			for (uint32_t index = 0; index < table->asize; ++index) {
+				if (!tvisnil(&array[index])) {
+					Entry entry{&array[index], 0};
+					entry.number = static_cast<double>(index);
+					entries.push_back(entry);
+				}
+			}
+			const ::Node* nodes = noderef(table->node);
+			for (uint32_t index = 0; index <= table->hmask; ++index) {
+				if (!tvisnil(&nodes[index].val)) {
+					entries.push_back(MakeEntry(&nodes[index].key, &nodes[index].val));
+				}
+			}
+			std::sort(entries.begin(), entries.end(), EntryLess);
+			Word(entries.size());
+			for (const Entry& entry: entries) {
+				if (entry.rank == 0) {
+					Number(entry.number);
+				} else if (entry.rank == 1) {
+					String(entry.string);
+				} else if (entry.rank == 2) {
+					Word(entry.number != 0 ? TokenTrue : TokenFalse);
+				} else {
+					Word(TokenKey);
+					Word(entry.keyDigest);
+				}
+				Value(entry.value);
+			}
+		}
+
+		void Function(GCfunc* function, const TValue* value) {
+			if (Seen(function)) {
+				return;
+			}
+			if (Engine(value)) {
+				return;
+			}
+			if (!isluafunc(function)) {
+				Word(TokenNativeFunction);
+				Word(function->c.ffid);
+				Word(function->c.nupvalues);
+				for (uint32_t index = 0; index < function->c.nupvalues; ++index) {
+					Value(&function->c.upvalue[index]);
+				}
+				return;
+			}
+			// The prototype by where it was written; traces patch its bytecode per state.
+			const GCproto* proto = funcproto(function);
+			Word(TokenLuaFunction);
+			String(proto_chunkname(proto));
+			Word(static_cast<uint64_t>(proto->firstline));
+			Word(static_cast<uint64_t>(proto->numline));
+			Word(proto->numparams);
+			Word(proto->sizebc);
+			Word(function->l.nupvalues);
+			for (uint32_t index = 0; index < function->l.nupvalues; ++index) {
+				GCupval* upvalue = &gcref(function->l.uvptr[index])->uv;
+				if (!Seen(upvalue)) {
+					Word(TokenUpvalue);
+					Value(uvval(upvalue));
+				}
+			}
+			if (GCtab* environment = tabref(function->l.env)) {
+				TValue environmentValue;
+				settabV(m_State.lua, &environmentValue, environment);
+				Value(&environmentValue);
+			} else {
+				Word(TokenNil);
+			}
+		}
+
+		bool IsLuabindInstance(const GCtab* meta) {
+			const auto [entry, inserted] = m_State.luabindMetatables.try_emplace(meta, false);
+			if (inserted) {
+				const TValue* flag = FindStringField(meta, "__luabind_class");
+				entry->second = flag && !tvisnil(flag) && !tvisfalse(flag);
+			}
+			return entry->second;
+		}
+
+		void Preset(const Entity& entity) {
+			if (const Entity* preset = entity.GetPresetForCopy()) {
+				Text(preset->GetPresetName());
+				Text(preset->GetModuleName());
+			} else {
+				Word(TokenNil);
+			}
+		}
+
+		// Owned values are read; a borrowed one only when the registry vouches for it.
+		void NativeIdentity(const luabind::detail::object_rep& rep) {
+			const luabind::detail::class_rep* crep = rep.crep();
+			const bool owned = (rep.flags() & luabind::detail::object_rep::owner) != 0;
+			const char* className = crep->name();
+			Word(owned ? 1 : 0);
+			m_Digest.Bytes(className, std::strlen(className));
+			const void* pointer = rep.ptr();
+			if (!pointer) {
+				Word(TokenNil);
+				return;
+			}
+			if (std::strcmp(className, "Vector") == 0) {
+				if (owned) {
+					const Vector* vector = static_cast<const Vector*>(pointer);
+					Number(vector->m_X);
+					Number(vector->m_Y);
+				}
+				return;
+			}
+			if (std::strcmp(className, "Timer") == 0) {
+				// The real-time start is the wall clock, not sim state.
+				if (owned) {
+					const Timer* timer = static_cast<const Timer*>(pointer);
+					Word(static_cast<uint64_t>(timer->GetStartSimTimeMS()));
+					Word(static_cast<uint64_t>(timer->GetSimTimeLimitTicks()));
+					Number(timer->GetRealTimeLimitMS());
+				}
+				return;
+			}
+			if (ClassDerivesFrom(crep, "MovableObject")) {
+				const MovableObject* object = static_cast<const MovableObject*>(pointer);
+				if (!owned && object != m_Root && !m_Known.Contains(object)) {
+					Word(TokenStale);
+					return;
+				}
+				Word(static_cast<uint64_t>(object->GetUniqueID()));
+				if (owned) {
+					Preset(*object);
+				}
+				return;
+			}
+			if (owned && ClassDerivesFrom(crep, "Entity")) {
+				Preset(*static_cast<const Entity*>(pointer));
+				return;
+			}
+			Word(pointer == static_cast<const void*>(g_ActivityMan.GetActivity()) ? 1 : (pointer == static_cast<const void*>(g_SceneMan.GetScene()) ? 2 : 0));
+		}
+
+		void Userdata(GCudata* userdata, const TValue* value) {
+			if (Seen(userdata)) {
+				return;
+			}
+			if (Engine(value)) {
+				return;
+			}
+			Word(TokenUserdata);
+			Word(userdata->udtype);
+			const GCtab* meta = tabref(userdata->metatable);
+			if (userdata->udtype != UDTYPE_USERDATA || !meta || !IsLuabindInstance(meta)) {
+				return;
+			}
+			auto* rep = static_cast<luabind::detail::object_rep*>(uddata(userdata));
+			if (!rep->crep()) {
+				Word(TokenOther);
+				return;
+			}
+			Word(TokenLuabind);
+			NativeIdentity(*rep);
+			const luabind::detail::lua_reference& fields = rep->get_lua_table();
+			if (!fields.is_valid()) {
+				Word(TokenNil);
+				return;
+			}
+			fields.get(m_State.lua);
+			const TValue fieldsValue = *(m_State.lua->top - 1);
+			lua_pop(m_State.lua, 1);
+			Word(TokenFields);
+			Value(&fieldsValue);
+		}
+
+		void Thread(lua_State* thread) {
+			if (Seen(thread)) {
+				return;
+			}
+			Word(TokenThread);
+			const TValue* stack = tvref(thread->stack);
+			uint64_t status = 0;
+			if (thread == m_State.lua) {
+				status = 4;
+			} else if (thread->status == LUA_YIELD) {
+				status = 1;
+			} else if (thread->status != LUA_OK) {
+				status = 3;
+			} else if (thread->base > stack + 1 + LJ_FR2) {
+				status = 5;
+			} else if (thread->top == thread->base) {
+				status = 2;
+			}
+			Word(status);
+			// Frame slots depend on whether a trace ran, and hotness is per state.
+			const TValue* body = stack + 1 + LJ_FR2;
+			if ((status == 0 || status == 1) && body < thread->top && tvisfunc(body)) {
+				Value(body);
+			} else {
+				Word(TokenNil);
+			}
+		}
+	};
+} // namespace
+
+// Unique ID order across every state, so neither the state count nor an object's state moves the fold.
+static std::vector<uint64_t> HashScriptObjectGraphs(LuaStateWrapper& master, LuaStatesArray& threaded) {
+	struct ObjectDigest {
+		long uniqueID;
+		uint64_t digest;
+	};
+	std::vector<ObjectDigest> digests;
+	KnownObjects known;
+	const auto hashState = [&digests, &known](LuaStateWrapper& wrapper) {
+		std::lock_guard<std::recursive_mutex> lock(wrapper.GetMutex());
+		std::vector<const MovableObject*> objects;
+		for (const MovableObject* object: wrapper.GetRegisteredMOs()) {
+			if (object->ObjectScriptsInitialized()) {
+				objects.push_back(object);
+			}
+		}
+		for (MovableObject* object: wrapper.GetPendingRegisteredMOs()) {
+			if (object->ObjectScriptsInitialized() && !wrapper.GetRegisteredMOs().contains(object)) {
+				objects.push_back(object);
+			}
+		}
+		if (objects.empty()) {
+			return;
+		}
+		GraphState state;
+		state.lua = wrapper.GetLuaState();
+		state.globals = tabref(state.lua->env);
+		if (const TValue* baseline = FindStringField(state.globals, "_ScriptGraphBaseline"); baseline && tvistab(baseline)) {
+			if (const TValue* paths = FindStringField(tabV(baseline), "paths"); paths && tvistab(paths)) {
+				state.enginePaths = tabV(paths);
+			}
+		}
+		std::unordered_map<long, const TValue*> selves;
+		if (const TValue* scripted = FindStringField(state.globals, "_ScriptedObjects"); scripted && tvistab(scripted)) {
+			const GCtab* table = tabV(scripted);
+			const ::Node* nodes = noderef(table->node);
+			for (uint32_t index = 0; index <= table->hmask; ++index) {
+				if (tvisnil(&nodes[index].val) || !tvisstr(&nodes[index].key)) {
+					continue;
+				}
+				const GCstr* key = strV(&nodes[index].key);
+				long uniqueID = 0;
+				const auto [end, error] = std::from_chars(strdata(key), strdata(key) + key->len, uniqueID);
+				if (error == std::errc() && end == strdata(key) + key->len) {
+					selves.emplace(uniqueID, &nodes[index].val);
+				}
+			}
+		}
+		for (const MovableObject* object: objects) {
+			const auto self = selves.find(object->GetUniqueID());
+			digests.push_back({object->GetUniqueID(), self == selves.end() ? static_cast<uint64_t>(TokenNoScriptObject) : ObjectGraphWalk(state, known, object).Digest(self->second)});
+		}
+	};
+	hashState(master);
+	for (LuaStateWrapper& wrapper: threaded) {
+		hashState(wrapper);
+	}
+	std::sort(digests.begin(), digests.end(), [](const ObjectDigest& a, const ObjectDigest& b) { return a.uniqueID != b.uniqueID ? a.uniqueID < b.uniqueID : a.digest < b.digest; });
+	std::vector<uint64_t> fold{TokenObjects, digests.size()};
+	for (const ObjectDigest& entry: digests) {
+		fold.push_back(static_cast<uint64_t>(entry.uniqueID));
+		fold.push_back(entry.digest);
+	}
+	return fold;
 }
