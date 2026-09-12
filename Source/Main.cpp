@@ -1054,6 +1054,10 @@ bool HandleMainArgs(int argCount, char** argValue) {
 	if (launchModeSet) {
 		g_SettingsMan.SetSkipIntro(true);
 	}
+	if (s_globalCallbacksSelfTest && s_netReplayInPath.empty() && !ScenarioRunner::IsActive()) {
+		std::cout << "[global-callback-selftest] REFUSE needs -net-replay <recording> or -scenario, and UserScenes.rte Checkpoint Global" << std::endl;
+		return false;
+	}
 	return true;
 }
 
