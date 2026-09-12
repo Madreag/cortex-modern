@@ -68,7 +68,7 @@ def main():
     try:
         # The client's steps after "wait_state Failed" run only once the match has ended and the menu
         # loop is back, so the whole recovery half of the script happens on the main screen.
-        tail = "wait_state Failed\ndump_reconnect\ngoto_main\nassert_screen MainScreen\n" \
+        tail = "wait_state Failed 240\ndump_reconnect\ngoto_main\nassert_screen MainScreen\n" \
                "wait_attempts 1 40\ndump_reconnect\nassert_screen MainScreen\n" \
                "wait_attempts 3 60\ndump_reconnect\nassert_screen MainScreen\n"
         if options.console_check:
