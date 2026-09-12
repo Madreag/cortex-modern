@@ -78,6 +78,11 @@ namespace RTE {
 		/// Sets the first lockstep tick of the next round; the lobby start carries it to the clients.
 		void SetStartFrame(uint64_t startFrame) { m_Config.startFrame = startFrame; }
 
+		/// Client: the peers ITS round still had when it ended. The next rematch derives this peer's own
+		/// roster from them and refuses a host proposal that disagrees with it. A host derives its roster
+		/// from the live session instead, so it needs no list; a resync round keeps the roster it healed.
+		void SetRematchRoster(std::vector<uint8_t> survivingPeerIds) { m_RematchRoster = std::move(survivingPeerIds); }
+
 		NetMatchRuntimeState GetState() const { return m_State; }
 		const NetLobbySession& GetLobbySession() const { return m_Lobby; }
 		const NetMatchConfig& GetMatchConfig() const { return m_MatchConfig; }
@@ -87,9 +92,17 @@ namespace RTE {
 
 		std::string BuildReportJson(const NetSession& session, const NetLockstepCoordinator& coordinator) const;
 
+		/// Whether a proposed rematch config seats exactly the roster this peer derived. Display names
+		/// are the host's to stamp; the seats are what the two sides have to agree on.
+		static bool RematchRostersAgree(const NetMatchConfig& proposed, const NetMatchConfig& derived);
+
 		static const char* StateName(NetMatchRuntimeState state);
 
 	private:
+		/// Re-forms the roster the next round is played on and re-seats everything that depends on it.
+		bool PrepareRematchRoster(NetSession& session, const std::vector<uint8_t>& survivingPeerIds, std::string* error);
+		/// Client: the host's proposal must be the roster this peer derived from its own round.
+		bool VerifyRematchProposal(std::string* error);
 		bool WaitForSessionReady(INetTransport& transport, NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error);
 		bool RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error);
 		bool StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error);
@@ -107,6 +120,9 @@ namespace RTE {
 		NetHash32 m_MatchConfigHash{};
 		bool m_UseLobbyProtocol = false;
 		bool m_ResyncRound = false;
+		std::vector<uint8_t> m_RematchRoster; //!< Client: the peers its last round still had; consumed by the next rematch.
+		NetMatchConfig m_RematchConfig;       //!< This peer's own derivation of the rematch roster.
+		bool m_RematchRound = false;
 		std::string m_SetupError;
 		std::vector<uint8_t> m_StateToStream; //!< Host: a match-state file the next lobby round streams out.
 		std::vector<uint8_t> m_ReceivedStateBytes; //!< The state file the last lobby round received.
