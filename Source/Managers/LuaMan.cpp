@@ -55,6 +55,7 @@
 #include <functional>
 #include <future>
 #include <map>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -7610,6 +7611,8 @@ std::unordered_set<long> LuaMan::s_PreviewFrozenUIDs;
 std::vector<std::pair<LuaStateWrapper*, std::string>> LuaMan::s_PreviewGlobalSnapshots;
 
 namespace {
+	std::vector<std::unique_ptr<SoundContainer>> s_PreviewSoundCopies;
+
 	int AbsoluteLuaIndex(lua_State* L, int index) {
 		return index < 0 ? lua_gettop(L) + index + 1 : index;
 	}
@@ -7634,6 +7637,31 @@ namespace {
 						lua_pop(L, 1);
 						lua_pushvalue(L, src);
 					}
+					return;
+				}
+				if (object->crep() && std::strcmp(object->crep()->name(), "SoundContainer") == 0) {
+					auto* source = static_cast<SoundContainer*>(object->ptr());
+					lua_pushlightuserdata(L, source);
+					lua_rawget(L, seen);
+					if (!lua_isnil(L, -1)) {
+						return;
+					}
+					lua_pop(L, 1);
+					SoundContainer* copy = nullptr;
+					{
+						MovableObject::FaithfulCloneScope scope(false);
+						copy = dynamic_cast<SoundContainer*>(source->Clone());
+					}
+					if (!copy) {
+						lua_pushvalue(L, src);
+						return;
+					}
+					copy->SetPreviewOrigin(source->PreviewPlaybackOwner());
+					s_PreviewSoundCopies.emplace_back(copy);
+					luabind::object(L, copy).push(L);
+					lua_pushlightuserdata(L, source);
+					lua_pushvalue(L, -2);
+					lua_rawset(L, seen);
 					return;
 				}
 			}
@@ -7790,6 +7818,10 @@ namespace {
 		lua_pop(L, 1);
 		return true;
 	}
+
+	void DropPreviewSoundCopies() {
+		s_PreviewSoundCopies.clear();
+	}
 }
 
 bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector<std::string>& problems) {
@@ -7873,7 +7905,7 @@ bool LuaStateWrapper::BindPreviewScriptObject(MovableObject* clone, bool sharedS
 	SetTempEntity(clone);
 	if (sharedSlot) {
 		clone->m_ScriptObjectName = "_ScriptedObjects[\"" + uid + "\"]";
-		return true;
+		return clone->InitializeObjectScripts(false) >= 0;
 	}
 	const std::string dest = uid + "#preview";
 	if (RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; _ScriptedObjects[\"" + dest + "\"] = To" + clone->GetClassName() + "(LuaMan.TempEntity);") < 0) {
@@ -7883,7 +7915,7 @@ bool LuaStateWrapper::BindPreviewScriptObject(MovableObject* clone, bool sharedS
 		return false;
 	}
 	clone->m_ScriptObjectName = "_ScriptedObjects[\"" + dest + "\"]";
-	return TableEntryIsDefined("_ScriptedObjects", dest);
+	return clone->InitializeObjectScripts(false) >= 0 && TableEntryIsDefined("_ScriptedObjects", dest);
 }
 
 bool LuaStateWrapper::RemapPreviewHoldReferences(long uniqueID, std::string& freezeClass) {
@@ -7993,6 +8025,7 @@ std::string LuaMan::PreviewScriptKey(const MovableObject* mo) {
 }
 
 void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& roots, bool sharedSlot) {
+	DropPreviewSoundCopies();
 	s_PreviewFrozenUIDs.clear();
 	s_PreviewGlobalSnapshots.clear();
 	if (!sharedSlot) {
@@ -8096,4 +8129,5 @@ void LuaMan::EndPreviewScripts() {
 	s_PreviewGlobalSnapshots.clear();
 	s_PreviewSharedSlot = false;
 	s_RunningPreviewHook = false;
+	DropPreviewSoundCopies();
 }
