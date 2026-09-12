@@ -12,6 +12,7 @@ sources += files(
 'MovableMan.cpp',
 'LocalPrediction.cpp',
 'PreviewEventLedger.cpp',
+'PreviewScriptSelfTest.cpp',
 'TerrainLayerSnapshot.cpp',
 'MusicMan.cpp',
 #'NetworkClient.cpp',
