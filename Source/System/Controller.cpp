@@ -97,16 +97,26 @@ int Controller::Create(const Controller& reference) {
 }
 
 std::string Controller::SaveCheckpoint() const {
-	CheckpointWriter writer("Controller1");
+	CheckpointWriter writer("Controller2");
 	VisitCheckpoint(writer, *this);
+	writer(m_SyncedOrderDisableTick);
 	return writer.Text();
 }
 
 bool Controller::LoadCheckpoint(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader reader(text, "Controller1", validateOnly);
+		// Controller2 appends the synced-order hold tick; a Controller1 payload restores it as none.
+		const bool legacy = text.starts_with("11 Controller1 ");
+		CheckpointReader reader(text, legacy ? "Controller1" : "Controller2", validateOnly);
 		VisitCheckpoint(reader, *this);
+		int64_t syncedOrderDisableTick = -1;
+		if (!legacy) {
+			reader.Value(syncedOrderDisableTick);
+		}
 		reader.Finish();
+		if (!validateOnly) {
+			m_SyncedOrderDisableTick = syncedOrderDisableTick;
+		}
 		return true;
 	} catch (const std::exception&) {
 		return false;
