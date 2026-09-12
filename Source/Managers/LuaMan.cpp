@@ -38,6 +38,7 @@
 #include "GUIBanner.h"
 #include "GUICheckpoint.h"
 #include "OwnedMovableObjects.h"
+#include "Vector.h"
 #include "SLBackground.h"
 #include "Writer.h"
 #include "Reader.h"
@@ -6909,51 +6910,78 @@ std::unordered_set<const MovableObject*> LuaMan::s_PreviewClones;
 std::unordered_set<long> LuaMan::s_PreviewFrozenUIDs;
 std::vector<std::pair<LuaStateWrapper*, std::string>> LuaMan::s_PreviewGlobalSnapshots;
 
+namespace {
+	int AbsoluteLuaIndex(lua_State* L, int index) {
+		return index < 0 ? lua_gettop(L) + index + 1 : index;
+	}
+
+	void PushPreviewClone(lua_State* L, int src, int seen, std::vector<std::string>& problems) {
+		src = AbsoluteLuaIndex(L, src);
+		seen = AbsoluteLuaIndex(L, seen);
+		const int type = lua_type(L, src);
+		if (type == LUA_TTHREAD) {
+			problems.emplace_back("preview clone refused a coroutine");
+			lua_pushvalue(L, src);
+			return;
+		}
+		if (type == LUA_TUSERDATA) {
+			if (const auto* object = luabind::detail::is_class_object(L, src)) {
+				if (object->crep() && std::strcmp(object->crep()->name(), "Vector") == 0) {
+					const auto* vector = static_cast<const Vector*>(object->ptr());
+					lua_getglobal(L, "Vector");
+					lua_pushnumber(L, vector->GetX());
+					lua_pushnumber(L, vector->GetY());
+					if (lua_pcall(L, 2, 1, 0) != 0) {
+						lua_pop(L, 1);
+						lua_pushvalue(L, src);
+					}
+					return;
+				}
+			}
+			lua_pushvalue(L, src);
+			return;
+		}
+		if (type != LUA_TTABLE) {
+			lua_pushvalue(L, src);
+			return;
+		}
+		lua_pushvalue(L, src);
+		lua_rawget(L, seen);
+		if (!lua_isnil(L, -1)) {
+			return;
+		}
+		lua_pop(L, 1);
+		lua_newtable(L);
+		const int copy = lua_gettop(L);
+		lua_pushvalue(L, src);
+		lua_pushvalue(L, copy);
+		lua_rawset(L, seen);
+		lua_pushnil(L);
+		while (lua_next(L, src) != 0) {
+			const int value = lua_gettop(L);
+			const int key = value - 1;
+			PushPreviewClone(L, key, seen, problems);
+			PushPreviewClone(L, value, seen, problems);
+			lua_rawset(L, copy);
+			lua_pop(L, 1);
+		}
+	}
+}
+
 bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector<std::string>& problems) {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
-	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	const std::string uid = std::to_string(uniqueID);
-	lua_newtable(m_State);
-	lua_pushstring(m_State, uid.c_str());
 	PushScriptObjectInstanceTable(m_State, uniqueID);
 	if (lua_isnil(m_State, -1)) {
 		lua_pop(m_State, 1);
 		lua_newtable(m_State);
 	}
-	lua_settable(m_State, -3);
-	lua_getglobal(m_State, "_ScriptGraph");
-	lua_getfield(m_State, -1, "serialize");
-	lua_pushvalue(m_State, -3);
-	if (lua_pcall(m_State, 1, 2, 0) != 0) {
-		problems.push_back(std::string("preview self serialize failed: ") + (lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?"));
-		lua_settop(m_State, top);
-		return false;
-	}
-	const size_t before = problems.size();
-	CollectStrings(m_State, -1, problems);
-	size_t length = 0;
-	const char* data = lua_tolstring(m_State, -2, &length);
-	const std::string text = data ? std::string(data, length) : std::string();
-	lua_settop(m_State, top);
-	if (problems.size() != before || text.empty()) {
-		if (text.empty() && problems.size() == before) {
-			problems.push_back("preview self serialize produced no text");
-		}
-		return false;
-	}
-	lua_getglobal(m_State, "_ScriptGraph");
-	lua_getfield(m_State, -1, "deserialize");
-	lua_pushlstring(m_State, text.data(), text.size());
-	lua_pushboolean(m_State, 0);
-	lua_pushboolean(m_State, 0);
-	if (lua_pcall(m_State, 3, 2, 0) != 0) {
-		problems.push_back(std::string("preview self deserialize failed: ") + (lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?"));
-		lua_settop(m_State, top);
-		return false;
-	}
-	CollectStrings(m_State, -1, problems);
-	if (problems.size() != before || !lua_istable(m_State, -2)) {
+	lua_newtable(m_State);
+	const int seen = lua_gettop(m_State);
+	PushPreviewClone(m_State, -2, seen, problems);
+	if (!lua_istable(m_State, -1)) {
+		problems.emplace_back("preview self clone produced no table");
 		lua_settop(m_State, top);
 		return false;
 	}
@@ -6965,10 +6993,10 @@ bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector
 		lua_setglobal(m_State, "_ScriptFieldsStash");
 	}
 	lua_pushstring(m_State, ("preview:" + uid).c_str());
-	lua_getfield(m_State, -4, uid.c_str());
+	lua_pushvalue(m_State, -3);
 	lua_settable(m_State, -3);
 	lua_settop(m_State, top);
-	return problems.size() == before;
+	return problems.empty();
 }
 
 bool LuaStateWrapper::SnapshotPreviewGlobals(std::string& text, std::vector<std::string>& problems) {
@@ -7122,14 +7150,6 @@ std::string LuaMan::PreviewScriptKey(const MovableObject* mo) {
 void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& roots, bool sharedSlot) {
 	s_PreviewFrozenUIDs.clear();
 	s_PreviewGlobalSnapshots.clear();
-	std::vector<std::pair<LuaStateWrapper*, std::string>> isolation;
-	ForEachLuaState([&isolation](LuaStateWrapper& state) {
-		std::string text;
-		std::vector<std::string> problems;
-		if (state.SnapshotPreviewGlobals(text, problems) && !text.empty()) {
-			isolation.emplace_back(&state, std::move(text));
-		}
-	});
 	if (!sharedSlot) {
 		for (const MovableObject* root: roots) {
 			WalkOwned(root, [](MovableObject* mo) {
@@ -7144,18 +7164,20 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 				}
 			});
 		}
-		for (const auto& [state, text]: isolation) {
-			std::vector<std::string> problems;
-			state->RestorePreviewGlobals(text, problems);
-		}
 	}
-	ForEachLuaState([](LuaStateWrapper& state) {
-		std::string text;
-		std::vector<std::string> problems;
-		if (state.SnapshotPreviewGlobals(text, problems) && !text.empty()) {
-			s_PreviewGlobalSnapshots.emplace_back(&state, std::move(text));
-		}
-	});
+	static const bool snapshotGlobals = [] {
+		const char* value = std::getenv("CC_PREVIEW_GLOBALS_SNAPSHOT");
+		return value && value[0] == '1' && value[1] == '\0';
+	}();
+	if (snapshotGlobals) {
+		ForEachLuaState([](LuaStateWrapper& state) {
+			std::string text;
+			std::vector<std::string> problems;
+			if (state.SnapshotPreviewGlobals(text, problems) && !text.empty()) {
+				s_PreviewGlobalSnapshots.emplace_back(&state, std::move(text));
+			}
+		});
+	}
 }
 
 void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot) {
@@ -7188,10 +7210,7 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 }
 
 void LuaMan::EndPreviewScripts() {
-	for (const auto& [state, text]: s_PreviewGlobalSnapshots) {
-		std::vector<std::string> problems;
-		state->RestorePreviewGlobals(text, problems);
-	}
+	s_PreviewGlobalSnapshots.clear();
 	std::unordered_set<long> dropped;
 	for (const MovableObject* mo: s_PreviewClones) {
 		if (!mo || !dropped.insert(mo->GetUniqueID()).second) {

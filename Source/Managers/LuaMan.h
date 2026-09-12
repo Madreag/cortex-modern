@@ -178,7 +178,7 @@ namespace RTE {
 		void UnstashScriptObject(long uniqueID);
 		void DiscardStashedScriptObject(long uniqueID);
 
-		/// Codec-copies `_ScriptedObjects[uid]`'s instance into `_ScriptFieldsStash["preview:<uid>"]`.
+		/// Copies `_ScriptedObjects[uid]`'s instance into `_ScriptFieldsStash["preview:<uid>"]`.
 		bool CopyScriptInstanceToPreviewHold(long uniqueID, std::vector<std::string>& problems);
 		bool SnapshotPreviewGlobals(std::string& text, std::vector<std::string>& problems);
 		bool RestorePreviewGlobals(const std::string& text, std::vector<std::string>& problems);
@@ -396,17 +396,27 @@ namespace RTE {
 		static void SetScriptsFrozen(bool frozen) { s_ScriptsFrozen = frozen; }
 		static inline bool s_ScriptsFrozen = false;
 
-		/// Deep-copies each original's self into a hold table via the graph codec. A refused self stays frozen.
+		/// Copies each original's self into a hold table. A refused self stays frozen.
 		static void CapturePreviewSelfCopies(const std::vector<const MovableObject*>& roots, bool sharedSlot);
 		/// Binds each clone to `_ScriptedObjects["<uid>#preview"]`, or the shared slot when sharedSlot is set.
 		static void BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot);
-		/// Restores globals a preview hook wrote and drops the preview slots.
+		/// Drops the preview slots.
 		static void EndPreviewScripts();
 		static bool IsPreviewClone(const MovableObject* mo);
 		static bool IsPreviewEdgeHook(const std::string& functionName);
 		static bool ShouldRunPreviewHook(const MovableObject* mo, const std::string& functionName);
 		static bool IsRunningPreviewHook() { return s_RunningPreviewHook; }
 		static void SetRunningPreviewHook(bool running) { s_RunningPreviewHook = running; }
+		struct PreviewHookScope {
+			const bool previous;
+			explicit PreviewHookScope(bool on) :
+			    previous(s_RunningPreviewHook) {
+				s_RunningPreviewHook = previous || on;
+			}
+			~PreviewHookScope() { s_RunningPreviewHook = previous; }
+			PreviewHookScope(const PreviewHookScope&) = delete;
+			PreviewHookScope& operator=(const PreviewHookScope&) = delete;
+		};
 		static std::string PreviewScriptKey(const MovableObject* mo);
 		static uint64_t PreviewCodecFallbackCount() { return s_PreviewCodecFallbacks; }
 #pragma endregion
