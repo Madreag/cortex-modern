@@ -1647,9 +1647,11 @@ namespace RTE {
 					return false;
 				}
 			}
-			// Parked on a tick the sim has not run: the boundary FinishSimulationTick would use is here,
-			// and the frame we are waiting for may be from a peer the pump has just fenced.
-			s_LockstepCoordinator->ApplyPendingRecoveryStopWhileWaiting(tick);
+			// Parked on a tick the sim has not run with the round already ending: a frame owed by a
+			// connection the pump has fenced is never coming, so stop requiring it and let the tick commit.
+			if (s_LockstepCoordinator->WaivePendingPeersWhileWaiting(tick)) {
+				continue; // The tick just committed; take it before the give-up clock is read.
+			}
 			if (s_LockstepCoordinator->IsFailed() || s_LockstepCoordinator->IsStopped()) {
 				if (error) *error = s_LockstepCoordinator->GetStats().timeoutReason;
 				return false;
