@@ -2906,6 +2906,8 @@ namespace RTE {
 			};
 			const NetMatchConfig four = roster({{1, 0}, {2, 1}, {3, 2}, {4, 3}});
 			const NetMatchConfig three = roster({{1, 0}, {2, 1}, {3, 2}});
+			NetMatchConfig otherHub = four;
+			otherHub.hostPeerId = 2;
 			struct Proposal {
 				const char* name;
 				NetMatchConfig proposed;
@@ -2922,6 +2924,7 @@ namespace RTE {
 			    {"a proposal that changes a team", roster({{1, 0}, {2, 1}, {3, 0}, {4, 3}}), four, 4, "the host proposed a seat on another team"},
 			    {"a proposal that changes this peer's team", roster({{1, 0}, {2, 1}, {3, 2}, {4, 1}}), four, 4, "the host proposed this peer on another team"},
 			    {"a proposal that drops this peer", three, four, 4, "the host proposed a roster without this peer"},
+			    {"a proposal that names another hub", otherHub, four, 2, "the host proposed a different hub"},
 			};
 			for (const Proposal& proposal: proposals) {
 				std::string reason;
@@ -3637,6 +3640,7 @@ namespace RTE {
 		if (!TestRunnerStateTransferProgress(&error)) return fail(error);
 		if (!TestRematchRosterDerivation(&error)) return fail(error);
 		if (!TestRematchRebuildsTheSurvivingRoster(&error)) return fail(error);
+		if (!TestRematchProposalFits(&error)) return fail(error);
 		// Each rematch-roster case reports its own verdict, so one red case cannot hide another.
 		std::string twoShrinksError;
 		if (!TestRematchKeepsStableSeatsAcrossTwoShrinks(&twoShrinksError)) {
@@ -3653,7 +3657,6 @@ namespace RTE {
 		if (!twoShrinksError.empty()) return fail(twoShrinksError);
 		if (!hardDropError.empty()) return fail(hardDropError);
 		if (!reclaimError.empty()) return fail(reclaimError);
-		if (!TestRematchProposalFits(&error)) return fail(error);
 		if (!TestLobbyThreePeer(&error)) return fail(error);
 		if (!TestServiceDedicatedRequest(&error)) return fail(error);
 		if (!TestLobbyThreePeerDedicated(&error)) return fail(error);

@@ -230,6 +230,10 @@ namespace RTE {
 			if (reason) *reason = why;
 			return false;
 		};
+		// The hub is this peer's round authority for every seat view; it is not the host's to move.
+		if (proposed.hostPeerId != derived.hostPeerId) {
+			return refuse("the host proposed a different hub");
+		}
 		if (proposed.dedicated != derived.dedicated) {
 			return refuse("the host proposed a dedicated flag this peer did not derive");
 		}
