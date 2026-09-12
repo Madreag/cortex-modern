@@ -845,8 +845,9 @@ void MainMenuGUI::RefreshReconnectControls() {
 	// scan of the recovery record found - including precisely why it cannot be used.
 	const std::string status = recovering ? reconnect.GetStatusText() : reconnect.GetOfferText();
 	if (status != m_ReconnectStatusShown) {
-		// A dismissed offer clears its own line, but never another screen's message.
-		if (!status.empty() || m_MultiplayerLandingStatusLabel->GetText() == m_ReconnectStatusShown) {
+		// A recovery in progress owns the line. What the scan of the record found does not: it clears
+		// its own sentence, but never replaces a refusal or an error the screen just put there.
+		if (recovering || m_MultiplayerLandingStatusLabel->GetText() == m_ReconnectStatusShown) {
 			m_MultiplayerLandingStatusLabel->SetText(status);
 		}
 		m_ReconnectStatusShown = status;
