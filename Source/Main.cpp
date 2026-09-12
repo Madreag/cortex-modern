@@ -2010,6 +2010,26 @@ static void CheckPreviewEventLedgerSelfTest() {
 	check("the_glow_starts_on_the_preview_tick", glow && glow->committedTick <= press + 1,
 	      glow ? "first post effect for the press at committed tick " + std::to_string(glow->committedTick) + " (event tick " + std::to_string(glow->eventTick) + ", predicted=" + std::to_string(glow->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1)
 	           : "no post effect from a previewed actor at or after tick " + std::to_string(press));
+	const uint64_t pressEmitter = tracked ? tracked->emitterUID : 0;
+	const PreviewEventLedger::EventStart* round = nullptr;
+	for (const PreviewEventLedger::EventStart& start: starts) {
+		if (start.kind == PreviewEventLedger::Projectile && start.committedTick >= press && (!pressEmitter || start.emitterUID == pressEmitter)) {
+			round = &start;
+			break;
+		}
+	}
+	check("the_first_round_is_visible_on_the_preview_tick", round && round->committedTick <= press + 1 && round->predicted,
+	      round ? "first projectile for the press at committed tick " + std::to_string(round->committedTick) + " (event tick " + std::to_string(round->eventTick) + ", seq " + std::to_string(round->seq) + ", predicted=" + std::to_string(round->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1)
+	           : "no projectile from the press's emitter at or after tick " + std::to_string(press));
+	size_t projectileAdoptions = 0;
+	if (round) {
+		for (const PreviewEventLedger::EventStart& start: starts) {
+			if (start.kind == round->kind && start.emitterUID == round->emitterUID && start.eventTick == round->eventTick && start.seq == round->seq && !start.predicted) {
+				++projectileAdoptions;
+			}
+		}
+	}
+	check("the_projectile_is_adopted_once", projectileAdoptions == 1, std::to_string(projectileAdoptions) + " adoptions of that projectile");
 	// A guard, not a detector: the muzzle flash sprite is already drawn on the preview that fires.
 	check("the_flash_sprite_stays_on_the_preview_tick", s_eventLedgerFlashTick > 0 && static_cast<uint64_t>(s_eventLedgerFlashTick) <= press + 1,
 	      "the previewed firearm's flash frame is first set at committed tick " + std::to_string(s_eventLedgerFlashTick) + ", expected <= " + std::to_string(press + 1));

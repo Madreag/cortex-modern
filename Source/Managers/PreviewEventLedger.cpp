@@ -266,6 +266,27 @@ namespace RTE {
 
 		ResetForSelfTest();
 		Arm(100, 500, {7});
+		const Key soundTwin = NextKey(Sound, 7, 42, 9, 104);
+		const Key projectile = NextKey(Projectile, 7, 42, 9, 104);
+		Insert(soundTwin, {});
+		Insert(projectile, {});
+		const bool distinct = GetLiveEntryCount() == 2 && AlreadyPlayed(soundTwin) && AlreadyPlayed(projectile);
+		check("a_projectile_is_its_own_event", distinct && Consume(soundTwin, voices) && GetLiveEntryCount() == 1 && s_Entries.front().key.kind == Projectile && !AlreadyPlayed(soundTwin) && AlreadyPlayed(projectile));
+		Disarm();
+		Arm(101, 500, {7});
+		const Key again = NextKey(Projectile, 7, 42, 9, 104);
+		const bool skipped = AlreadyPlayed(again);
+		if (!skipped) Insert(again, {});
+		Disarm();
+		check("consecutive_previews_predict_it_once", skipped && GetLiveEntryCount() == 1 && GetCounters().playedAtPreview == 2);
+		ExpireForTick(105);
+		const bool held = GetLiveEntryCount() == 1 && GetCounters().expired == 0;
+		ExpireForTick(106);
+		check("an_unclaimed_projectile_expires", held && GetLiveEntryCount() == 0 && GetCounters().expired == 1);
+		check("counters_balance", GetCounters().playedAtPreview == GetCounters().adoptedAtCommit + GetCounters().expired + GetLiveEntryCount());
+
+		ResetForSelfTest();
+		Arm(100, 500, {7});
 		Insert(NextKey(Sound, 7, 42, 9, 104), {});
 		Disarm();
 		Clear();
