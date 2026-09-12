@@ -91,6 +91,8 @@ namespace RTE {
 		/// Whether the skin defines the control at all, whatever screen is up. "Enabled" cannot answer
 		/// this: a control that is merely on a hidden panel reads the same as one that does not exist.
 		bool AutomationControlExists(const std::string& controlName) const;
+		/// Leaves whatever sub-screen is up for the main screen, without the back button's side effects.
+		void AutomationGoToMainScreen();
 #pragma endregion
 
 	private:
