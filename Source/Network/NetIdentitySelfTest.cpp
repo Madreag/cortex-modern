@@ -233,11 +233,42 @@ namespace RTE {
 			          << NetIdentity::HashHex(configFour) << " and session_identity_hash " << NetIdentity::HashHex(identityFour) << std::endl;
 			return true;
 		}
+
+		bool TestModuleRootOutOfIdentity(std::string* error) {
+			NetIdentityManifest dataLayout = MakeManifest();
+			NetIdentityManifest modsLayout = dataLayout;
+			modsLayout.modules[0].root = "Mods/Base.rte";
+			modsLayout.modules[1].root = "Data/Example.rte";
+			dataLayout.moduleManifestHash = NetIdentity::HashModuleManifest(dataLayout.modules);
+			modsLayout.moduleManifestHash = NetIdentity::HashModuleManifest(modsLayout.modules);
+			const NetHash32 dataIdentity = NetIdentity::HashSessionIdentity(dataLayout);
+			const NetHash32 modsIdentity = NetIdentity::HashSessionIdentity(modsLayout);
+			if (dataLayout.moduleManifestHash != modsLayout.moduleManifestHash || dataIdentity != modsIdentity) {
+				*error = "identities that differ only in module.root hashed differently: module_manifest_hash "
+				         + NetIdentity::HashHex(dataLayout.moduleManifestHash) + " vs "
+				         + NetIdentity::HashHex(modsLayout.moduleManifestHash) + ", session_identity_hash "
+				         + NetIdentity::HashHex(dataIdentity) + " vs " + NetIdentity::HashHex(modsIdentity);
+				return false;
+			}
+
+			NetIdentityManifest otherContent = dataLayout;
+			otherContent.modules[1].contentHash = MakeHash(200);
+			otherContent.moduleManifestHash = NetIdentity::HashModuleManifest(otherContent.modules);
+			if (otherContent.moduleManifestHash == dataLayout.moduleManifestHash ||
+			    NetIdentity::HashSessionIdentity(otherContent) == dataIdentity) {
+				*error = "identities that differ in module content hashed the same";
+				return false;
+			}
+			std::cout << "[net-identity-selftest] PASS module root out of identity: Data/ and Mods/ share module_manifest_hash "
+			          << NetIdentity::HashHex(dataLayout.moduleManifestHash) << " and session_identity_hash "
+			          << NetIdentity::HashHex(dataIdentity) << std::endl;
+			return true;
+		}
 	}
 
 	int NetIdentitySelfTest::Run() {
 		std::string error;
-		if (!TestCanonicalHelpers(&error) || !TestCompare(&error) || !TestLuaStateCountOutOfIdentity(&error)) {
+		if (!TestCanonicalHelpers(&error) || !TestCompare(&error) || !TestLuaStateCountOutOfIdentity(&error) || !TestModuleRootOutOfIdentity(&error)) {
 			std::cerr << "[net-identity-selftest] FAIL: " << error << std::endl;
 			return 1;
 		}
