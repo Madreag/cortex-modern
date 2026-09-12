@@ -8,6 +8,7 @@ sources += files(
 'NetAdmissionSelfTest.cpp',
 'NetAuthCrypto.cpp',
 'NetAuthSelfTest.cpp',
+'NetDirectoryClient.cpp',
 'NetDirectoryCodec.cpp',
 'NetDirectorySelfTest.cpp',
 'NetHttpClient.cpp',

@@ -70,6 +70,7 @@
 #include "GnsTransport.h"
 #include "NetAdmissionSelfTest.h"
 #include "NetAuthSelfTest.h"
+#include "NetDirectoryClient.h"
 #include "NetDirectoryCodec.h"
 #include "NetHttpClient.h"
 #include "NetIdentity.h"
@@ -176,6 +177,7 @@ static std::string s_netIdentityDumpPath;
 // Headless directory probe: register -> heartbeat -> list -> delete -> list, then exit.
 static std::string s_netDirectoryProbeUrl;
 static std::string s_netDirectoryProbeCertSha256;
+static bool s_netDirectoryList = false;
 
 // Debug-only transport/session smoke. This exits before gameplay starts.
 static bool s_netHost = false;
@@ -589,6 +591,12 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			if (i + 1 < argCount && argValue[i + 1][0] != '-') {
 				s_netDirectoryProbeCertSha256 = argValue[++i];
 			}
+			continue;
+		}
+
+		if (currentArg == "-net-directory-list") {
+			s_netDirectoryList = true;
+			++i;
 			continue;
 		}
 
@@ -2864,6 +2872,12 @@ void RunGameLoop() {
 
 				// Mid-match session upkeep: reconnect handshakes the coordinator handed over.
 				g_NetMatchService.PumpSessionEvents();
+				// The session-directory heartbeat rides Update on the game thread, never the pump.
+				if (const NetMatchServiceState netServiceState = g_NetMatchService.GetState();
+				    g_NetMatchService.IsHost() && (netServiceState == NetMatchServiceState::Starting || netServiceState == NetMatchServiceState::ReadyToLaunch ||
+				                                   netServiceState == NetMatchServiceState::Running)) {
+					g_NetMatchService.Update();
+				}
 				DriveModerationE2e();
 
 				g_FrameMan.Update();
@@ -4349,6 +4363,65 @@ int RunNetDirectoryProbe(const std::string& baseUrlArg, const std::string& certP
 	return 0;
 }
 
+/// The headless half of the join list: one directory GET plus one 2 s LAN browse window, then the
+/// merged rows exactly as the join screen would render them. Exit 1 when the directory is
+/// configured but no reply arrived.
+int RunNetDirectoryList() {
+	std::string reason;
+	// Rows carry the identity NetMatchService::Start computes, which pins the default dt first.
+	g_TimerMan.SetDeltaTimeSecs(c_DefaultDeltaTimeS);
+	NetIdentityManifest manifest;
+	NetIdentityBuildOptions identityOptions;
+	identityOptions.buildId = "stage2-p2d-local";
+	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+	if (!NetIdentity::BuildCurrentManifest(manifest, &reason, identityOptions)) {
+		std::cerr << "[net-directory-list] identity manifest failed: " << reason << std::endl;
+		return 1;
+	}
+	NetDirectoryLocalIdentity local;
+	local.networkProtocolVersion = manifest.networkProtocolVersion;
+	local.lockstepCodecVersion = manifest.deterministicConfig.lockstepCodecVersion;
+	local.controllerFrameVersion = manifest.controllerFrameVersion;
+	local.sessionIdentityHash = NetIdentity::HashHex(manifest.sessionIdentityHash);
+	local.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
+
+	const std::string& baseUrl = g_SettingsMan.GetSessionDirectoryUrl();
+	NetDirectoryClient directory;
+	directory.Configure(baseUrl, g_SettingsMan.GetSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
+
+	NetLanDiscovery browser;
+	std::string browseError;
+	(void)browser.StartBrowser(&browseError);
+
+	const auto nowMs = [] {
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+	};
+	const uint64_t begin = nowMs();
+	while (nowMs() - begin < 2000) {
+		const uint64_t now = nowMs();
+		if (browser.IsBrowsing()) {
+			browser.Tick(now);
+		}
+		directory.PollList(now);
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	const std::vector<NetLanHostInfo> lan = browser.IsBrowsing() ? browser.GetHosts(nowMs()) : std::vector<NetLanHostInfo>{};
+	browser.Stop();
+
+	if (!baseUrl.empty() && (directory.ListReplies() == 0 || !directory.ListError().empty())) {
+		std::cerr << "[net-directory-list] directory unreachable: " << (directory.ListError().empty() ? "no reply in the window" : directory.ListError()) << std::endl;
+		return 1;
+	}
+
+	const std::vector<NetDirectoryClient::GameRow> rows = NetDirectoryClient::MergeGameLists(lan, directory.Rows(), local);
+	for (const NetDirectoryClient::GameRow& row : rows) {
+		std::cout << "[net-directory-list] source=" << row.source << " name=\"" << row.name << "\" activity=\"" << row.activity << "\" mode=\"" << row.mode
+		          << "\" players=" << row.players << " address=" << row.address << ":" << row.port
+		          << " joinable=" << (row.joinable ? "yes" : "no") << " reason=" << (row.reason.empty() ? "-" : row.reason) << std::endl;
+	}
+	return 0;
+}
+
 /// <summary>
 /// Implementation of the main function.
 /// </summary>
@@ -4454,7 +4527,7 @@ int main(int argc, char** argv) {
 				continue;
 			}
 			const std::string arg = argv[i];
-			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e" || arg == "-net-directory-probe" || arg == "-net-directory-selftest") {
+			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e" || arg == "-net-directory-probe" || arg == "-net-directory-list" || arg == "-net-directory-selftest") {
 				headless = true;
 			} else if (arg == "-headed") {
 				headless = false;
@@ -4550,6 +4623,10 @@ int main(int argc, char** argv) {
 	if (!s_netDirectoryProbeUrl.empty()) {
 		const int exitCode = RunNetDirectoryProbe(s_netDirectoryProbeUrl, s_netDirectoryProbeCertSha256);
 		return ShutDown(exitCode);
+	}
+
+	if (s_netDirectoryList) {
+		return ShutDown(RunNetDirectoryList());
 	}
 
 	if (NetSessionCliRequested()) {
