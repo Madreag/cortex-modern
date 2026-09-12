@@ -475,7 +475,8 @@ namespace RTE {
 				row.reason = MapMismatchReason(why);
 			} else if (session.seatsFree == 0) {
 				row.reason = "full";
-			} else if (row.address.empty() || row.port == 0) {
+			} else if ((row.address.empty() || row.port == 0) && session.joinMode != "ice" && session.joinMode != "either") {
+				// An ICE row is reached through its session id, so it has no address to be refused for.
 				row.reason = "address";
 			} else {
 				row.joinable = true;
