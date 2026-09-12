@@ -922,8 +922,8 @@ namespace RTE {
 					return false;
 				}
 				const NetDirectoryClient::GameRow& lanRow = merged[0];
-				if (lanRow.source != "LAN" || !lanRow.joinable || lanRow.address != "10.0.0.5" || lanRow.port != 42000 || lanRow.players != "1/2") {
-					*error = "the LAN row did not merge unchanged";
+				if (lanRow.source != "LAN" || lanRow.joinable || lanRow.reason != "beacon" || lanRow.address != "10.0.0.5" || lanRow.port != 42000 || lanRow.players != "1/2") {
+					*error = "a LAN row without beacon fields did not merge listed-but-not-joinable";
 					return false;
 				}
 				const NetDirectoryClient::GameRow& netRow = merged[1];
@@ -1015,6 +1015,60 @@ namespace RTE {
 						note("v1-beacon LAN row merged " + (lanMerged.empty() ? std::string("<missing>") :
 							"joinable=" + std::to_string(lanMerged[0].joinable) + " reason=\"" + lanMerged[0].reason + "\"") +
 							", expected joinable=no reason=beacon");
+					}
+				}
+
+				// A v2 beacon carries the five fields; the row is judged with the same predicate.
+				NetLanCompatIdentity compat;
+				compat.networkProtocolVersion = local.networkProtocolVersion;
+				compat.lockstepCodecVersion = local.lockstepCodecVersion;
+				compat.controllerFrameVersion = local.controllerFrameVersion;
+				compat.sessionIdentityHash = local.sessionIdentityHash;
+				compat.moduleManifestHash = local.moduleManifestHash;
+				NetLanDiscovery beaconV2;
+				NetLanDiscovery browserV2;
+				NetLanHostInfo hostV2;
+				bool sawV2 = false;
+				if (!browserV2.StartBrowser(&setupError) ||
+					!beaconV2.StartBeacon(47571, "W94Host", "P4 Alpha Duel", "pvp-skirmish", 1, 2, &compat, &setupError)) {
+					*error = "v2 beacon pair setup failed: " + setupError;
+					return false;
+				}
+				for (uint64_t nowMs = 0; nowMs <= 3000 && !sawV2; nowMs += 50) {
+					beaconV2.Tick(nowMs);
+					browserV2.Tick(nowMs);
+					for (const NetLanHostInfo& host : browserV2.GetHosts(nowMs)) {
+						if (host.hostName == "W94Host" && host.port == 47571) {
+							hostV2 = host;
+							sawV2 = true;
+						}
+					}
+					if (!sawV2) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(10));
+					}
+				}
+				beaconV2.Stop();
+				browserV2.Stop();
+				if (!sawV2) {
+					note("a v2 beacon never listed");
+				} else {
+					if (!hostV2.hasCompatibility || !(hostV2.compatibility == compat)) {
+						note("the v2 beacon did not round-trip its compatibility fields");
+					}
+					NetLanHostInfo lanModded = hostV2;
+					lanModded.port = 47570;
+					lanModded.compatibility.moduleManifestHash = kHex64A;
+					lanModded.compatibility.sessionIdentityHash = kHex64A;
+					const std::vector<NetDirectoryClient::GameRow> lanMerged2 = NetDirectoryClient::MergeGameLists({hostV2, lanModded}, {}, local);
+					if (lanMerged2.size() != 2) {
+						note("v2 LAN merge size " + std::to_string(lanMerged2.size()));
+					} else {
+						if (!lanMerged2[0].joinable) {
+							note("matching v2-beacon LAN row was not joinable, reason=\"" + lanMerged2[0].reason + "\"");
+						}
+						if (lanMerged2[1].joinable || lanMerged2[1].reason != "modules") {
+							note("modded v2-beacon LAN row joinable=" + std::to_string(lanMerged2[1].joinable) + " reason=\"" + lanMerged2[1].reason + "\", expected joinable=no reason=modules");
+						}
 					}
 				}
 				if (!failures.empty()) {
