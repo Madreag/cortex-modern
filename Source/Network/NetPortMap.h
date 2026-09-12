@@ -72,6 +72,12 @@ namespace RTE {
 		virtual bool HttpPostSoap(const std::string& url, const std::string& soapAction, const std::string& body, long& status, std::string& replyBody, uint32_t timeoutMs) = 0;
 	};
 
+	namespace NetPortMapSelfTest {
+		int Run();
+		bool HttpGetThroughSockets(const std::string& url, std::string& body, uint32_t timeoutMs);
+		bool TestDoubleStartGuard(std::string* error);
+	}
+
 	/// The host's router port-mapping client. Game-thread only, like NetDirectoryClient: Request()
 	/// hands the work to a worker thread that owns every socket, Update() collects the finished
 	/// result and drives lease renewal, Release() deletes the mapping with a bounded wait so the
@@ -117,6 +123,7 @@ namespace RTE {
 		NetPortMap(const NetPortMap&) = delete;
 		NetPortMap& operator=(const NetPortMap&) = delete;
 		~NetPortMap() { Release(); }
+		friend bool NetPortMapSelfTest::TestDoubleStartGuard(std::string* error);
 
 		void Request(uint16_t internalUdpPort, uint32_t leaseSeconds, const Options& options = Options());
 		/// Collects a finished worker, renews a mapped lease at its half-life. Never blocks a frame.
@@ -127,7 +134,7 @@ namespace RTE {
 
 		bool Done() const { return m_Done; }        //!< The current request produced a result.
 		bool Mapped() const { return m_Mapped; }    //!< A mapping is (believed) held right now.
-		const Result& GetResult() const { return m_Result; }
+		const Result& GetResult() const { return m_MappedResult.method != Method::None ? m_MappedResult : m_Result; }
 
 		/// The whole chain, blocking; the worker thread calls it with real sockets, the selftest
 		/// calls it with a scripted Wan. `stop` (may be null) abandons between steps.
@@ -145,6 +152,7 @@ namespace RTE {
 		std::atomic<bool> m_ResultReady{false};
 		Result m_PendingResult;     //!< Written by the worker under m_Mutex, read by Update().
 		Result m_Result;          //!< The game thread's view: last landed result.
+		Result m_MappedResult;    //!< Last result that actually mapped; Release() deletes this.
 		Options m_Options;
 		uint16_t m_Port = 0;
 		uint32_t m_LeaseS = 0;
@@ -153,7 +161,5 @@ namespace RTE {
 		bool m_Mapped = false;
 		bool m_Released = false; //!< The delete for m_Result already ran; Release() stays idempotent.
 	};
-
-	namespace NetPortMapSelfTest { int Run(); }
 
 } // namespace RTE
