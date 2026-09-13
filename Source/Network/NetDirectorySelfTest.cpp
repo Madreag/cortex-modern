@@ -476,6 +476,89 @@ namespace RTE {
 				return true;
 			}
 
+			// Optional visibility fields retain their value through a codec round trip.
+			template <typename T>
+			void CheckOptionalVisibilityField(const std::string& name, const char* field, const std::string& base,
+			                                  bool (*decode)(const std::string&, T&, std::string&),
+			                                  std::string (*encode)(const T&), bool keepsFalse,
+			                                  std::vector<std::string>& misses) {
+				std::string reason;
+				for (const bool value : {true, false}) {
+					json body = json::parse(base);
+					body[field] = value;
+					T decoded;
+					reason.clear();
+					if (!decode(body.dump(), decoded, reason)) {
+						misses.push_back(name + " refused " + field + "=" + (value ? "true" : "false") + ": " + reason);
+						continue;
+					}
+					const json re = json::parse(encode(decoded));
+					const auto it = re.find(field);
+					if (value || keepsFalse) {
+						if (it == re.end() || !it->is_boolean() || it->get<bool>() != value) {
+							misses.push_back(name + " lost " + field + "=" + (value ? "true" : "false") + " on decode->encode");
+						}
+					} else if (it != re.end()) {
+						misses.push_back(name + " re-encoded " + field + "=false instead of omitting it");
+					}
+				}
+				for (const bool value : {true, false}) {
+					json previous = json::parse(base);
+					previous[field] = value;
+					T reused;
+					reason.clear();
+					if (!decode(previous.dump(), reused, reason) || !decode(base, reused, reason)) {
+						misses.push_back(name + " reuse decode refused: " + reason);
+					} else {
+						const json re = json::parse(encode(reused));
+						if (re.find(field) != re.end()) {
+							misses.push_back(name + " kept " + field + " after " + (value ? "true" : "false") + " then absent decode");
+						}
+					}
+				}
+				T legacy;
+				reason.clear();
+				if (!decode(base, legacy, reason)) {
+					misses.push_back(name + " legacy body refused: " + reason);
+				} else if (json::parse(encode(legacy)) != json::parse(base)) {
+					misses.push_back(name + " changed the legacy body shape on re-encode");
+				}
+				const json badValues[] = {json(nullptr), json("yes"), json(0), json(1), json::array(), json::object()};
+				const char* badNames[] = {"null", "string", "0", "1", "array", "object"};
+				for (size_t i = 0; i < 6; ++i) {
+					json body = json::parse(base);
+					body[field] = badValues[i];
+					T decoded;
+					reason.clear();
+					if (decode(body.dump(), decoded, reason)) {
+						misses.push_back(name + " accepted malformed " + field + " (" + badNames[i] + ")");
+					} else if (reason != std::string("invalid_field:") + field) {
+						misses.push_back(name + " refused malformed " + field + " (" + badNames[i] + ") with " + reason);
+					}
+				}
+			}
+
+			bool TestUnlistedVisibility(std::string* error) {
+				std::vector<std::string> misses;
+				CheckOptionalVisibilityField<NetDirectoryRegisterResponse>("register response", "supports_unlisted",
+					R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"abcTOK123","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})",
+					&NetDirectoryCodec::DecodeRegisterResponse, &NetDirectoryCodec::EncodeRegisterResponse, false, misses);
+				CheckOptionalVisibilityField<NetDirectoryHeartbeatRequest>("heartbeat request", "listed",
+					R"({"token":"abcTOK123","peer_count":2,"seats_free":1})",
+					&NetDirectoryCodec::DecodeHeartbeatRequest, &NetDirectoryCodec::EncodeHeartbeatRequest, true, misses);
+				CheckOptionalVisibilityField<NetDirectoryHeartbeatResponse>("heartbeat response", "listed",
+					R"({"expires_in_s":15,"heartbeat_s":5})",
+					&NetDirectoryCodec::DecodeHeartbeatResponse, &NetDirectoryCodec::EncodeHeartbeatResponse, true, misses);
+				if (misses.empty()) {
+					return true;
+				}
+				*error = "unlisted visibility codec misses (" + std::to_string(misses.size()) + "):";
+				for (const std::string& miss : misses) {
+					*error += " [" + miss + "]";
+				}
+				return false;
+			}
+
 			bool TestHttpClientReuse(std::string* error) {
 				NetHttpClient client;
 				client.Start("GET", "https://127.0.0.1:1/", {}, "", "");
@@ -1816,6 +1899,7 @@ namespace RTE {
 			if (!TestSessionsCountCap(&error)) return fail(error);
 			if (!TestCompatibilityPredicate(&error)) return fail(error);
 			if (!TestCannedSequence(&error)) return fail(error);
+			if (!TestUnlistedVisibility(&error)) return fail(error);
 			if (!TestHttpClientReuse(&error)) return fail(error);
 			if (!TestClientLifecycle(&error)) return fail(error);
 			if (!TestHeartbeat404Reregisters(&error)) return fail(error);
