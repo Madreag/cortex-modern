@@ -7,6 +7,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -80,9 +81,11 @@ namespace RTE {
 		/// The session token the register reply issued; the host's signaling channel proves it.
 		const std::string& GetToken() const { return m_Token; }
 
-		/// Host: keep the row listed. The first call after Idle registers; the row passed on each
-		/// call carries the live peer_count/seats_free for the next heartbeat.
-		void Advertise(const NetDirectoryRegisterRequest& row, bool running);
+		/// Host: keep the row registered. The first call after Idle registers; the row passed on
+		/// each call carries the live peer_count/seats_free for the next heartbeat. `listed`
+		/// selects discovery visibility; a false intent needs the service's supports_unlisted
+		/// capability, otherwise the row is deleted once and the intent stays Failed.
+		void Advertise(const NetDirectoryRegisterRequest& row, bool running, bool listed = true);
 		/// Host: take the row down. Once a session exists the delete rides the request pump; a row
 		/// still mid-register is answered first so the delete can target the issued session id.
 		void Retract();
@@ -106,7 +109,8 @@ namespace RTE {
 		                                         const NetDirectoryLocalIdentity& local);
 
 		/// The service.directory report section: {state, session_id, registers, heartbeats, deletes,
-		/// last_status, last_error}.
+		/// last_status, last_error, desired_listed, confirmed_listed, supports_unlisted}; without a held
+		/// row confirmed_listed is null and supports_unlisted false, and the token is never included.
 		std::string BuildReportJson() const;
 
 		static constexpr uint64_t c_ListIntervalMs = 5000;
@@ -140,7 +144,12 @@ namespace RTE {
 		std::string m_InstallKey;
 		std::string m_CertPinSha256;
 
-		bool m_Listed = false;          //!< Whether the host wants the row up.
+		bool m_Listed = false;          //!< Whether the host wants the row registered.
+		bool m_DesiredListed = true;    //!< The visibility the host wants once registered.
+		bool m_Capable = false;         //!< The held row's register reply advertised supports_unlisted.
+		std::optional<bool> m_ConfirmedListed; //!< The held row's last server-confirmed visibility; empty without one.
+		std::optional<bool> m_InFlightListed; //!< The visibility carried by the in-flight heartbeat.
+		bool m_HiddenUnsupported = false; //!< A hidden intent on a legacy service already deleted once.
 		bool m_BrowseWanted = false;
 		NetDirectoryRegisterRequest m_Row;
 		bool m_Running = false;
