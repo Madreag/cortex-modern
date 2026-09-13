@@ -119,6 +119,26 @@ namespace RTE {
 			return true;
 		}
 
+		bool ReadOptionalBool(const json& obj, const char* key, std::optional<bool>& out, std::string& reason) {
+			const auto it = obj.find(key);
+			if (it == obj.end()) {
+				out.reset();
+				return true;
+			}
+			if (!it->is_boolean()) return Fail(reason, "invalid_field", key);
+			out = it->get<bool>();
+			return true;
+		}
+
+		bool ReadOptionalPlainBool(const json& obj, const char* key, bool& out, std::string& reason) {
+			const auto it = obj.find(key);
+			if (it == obj.end()) {
+				out = false;
+				return true;
+			}
+			return ReadBool(obj, key, out, reason);
+		}
+
 		bool IsJoinMode(const std::string& value) {
 			return value == "ip" || value == "ice" || value == "either";
 		}
@@ -287,13 +307,16 @@ namespace RTE {
 	}
 
 	std::string NetDirectoryCodec::EncodeRegisterResponse(const NetDirectoryRegisterResponse& response) {
-		return json{
+		json obj = {
 			{"session_id", response.sessionId},
 			{"token", response.token},
 			{"expires_in_s", response.expiresInS},
 			{"heartbeat_s", response.heartbeatS},
 			{"observed_ip", response.observedIp},
-		}.dump();
+		};
+		// Unsupported stays omitted so the default encoding keeps the legacy shape.
+		if (response.supportsUnlisted) obj["supports_unlisted"] = true;
+		return obj.dump();
 	}
 
 	bool NetDirectoryCodec::DecodeRegisterResponse(const std::string& body, NetDirectoryRegisterResponse& out, std::string& reason) {
@@ -303,7 +326,8 @@ namespace RTE {
 		       ReadStr(obj, "token", out.token, reason) &&
 		       ReadInt(obj, "expires_in_s", 0, NetDirectoryLimits::c_MaxIntField, out.expiresInS, reason) &&
 		       ReadInt(obj, "heartbeat_s", 0, NetDirectoryLimits::c_MaxIntField, out.heartbeatS, reason) &&
-		       ReadStr(obj, "observed_ip", out.observedIp, reason);
+		       ReadStr(obj, "observed_ip", out.observedIp, reason) &&
+		       ReadOptionalPlainBool(obj, "supports_unlisted", out.supportsUnlisted, reason);
 	}
 
 	std::string NetDirectoryCodec::EncodeHeartbeatRequest(const NetDirectoryHeartbeatRequest& request) {
@@ -313,6 +337,7 @@ namespace RTE {
 		obj["seats_free"] = request.seatsFree;
 		if (request.listenAddrs.has_value()) obj["listen_addrs"] = *request.listenAddrs;
 		if (request.state.has_value()) obj["state"] = *request.state;
+		if (request.listed.has_value()) obj["listed"] = *request.listed;
 		return obj.dump();
 	}
 
@@ -327,18 +352,21 @@ namespace RTE {
 			return false;
 		}
 		if (out.state.has_value() && !IsSessionState(*out.state)) return Fail(reason, "invalid_field", "state");
-		return true;
+		return ReadOptionalBool(obj, "listed", out.listed, reason);
 	}
 
 	std::string NetDirectoryCodec::EncodeHeartbeatResponse(const NetDirectoryHeartbeatResponse& response) {
-		return json{{"expires_in_s", response.expiresInS}, {"heartbeat_s", response.heartbeatS}}.dump();
+		json obj = {{"expires_in_s", response.expiresInS}, {"heartbeat_s", response.heartbeatS}};
+		if (response.listed.has_value()) obj["listed"] = *response.listed;
+		return obj.dump();
 	}
 
 	bool NetDirectoryCodec::DecodeHeartbeatResponse(const std::string& body, NetDirectoryHeartbeatResponse& out, std::string& reason) {
 		json obj;
 		if (!ParseBody(body, obj, reason)) return false;
 		return ReadInt(obj, "expires_in_s", 0, NetDirectoryLimits::c_MaxIntField, out.expiresInS, reason) &&
-		       ReadInt(obj, "heartbeat_s", 0, NetDirectoryLimits::c_MaxIntField, out.heartbeatS, reason);
+		       ReadInt(obj, "heartbeat_s", 0, NetDirectoryLimits::c_MaxIntField, out.heartbeatS, reason) &&
+		       ReadOptionalBool(obj, "listed", out.listed, reason);
 	}
 
 	std::string NetDirectoryCodec::EncodeDeleteRequest(const NetDirectoryDeleteRequest& request) {

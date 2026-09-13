@@ -476,6 +476,89 @@ namespace RTE {
 				return true;
 			}
 
+			// Optional visibility fields retain their value through a codec round trip.
+			template <typename T>
+			void CheckOptionalVisibilityField(const std::string& name, const char* field, const std::string& base,
+			                                  bool (*decode)(const std::string&, T&, std::string&),
+			                                  std::string (*encode)(const T&), bool keepsFalse,
+			                                  std::vector<std::string>& misses) {
+				std::string reason;
+				for (const bool value : {true, false}) {
+					json body = json::parse(base);
+					body[field] = value;
+					T decoded;
+					reason.clear();
+					if (!decode(body.dump(), decoded, reason)) {
+						misses.push_back(name + " refused " + field + "=" + (value ? "true" : "false") + ": " + reason);
+						continue;
+					}
+					const json re = json::parse(encode(decoded));
+					const auto it = re.find(field);
+					if (value || keepsFalse) {
+						if (it == re.end() || !it->is_boolean() || it->get<bool>() != value) {
+							misses.push_back(name + " lost " + field + "=" + (value ? "true" : "false") + " on decode->encode");
+						}
+					} else if (it != re.end()) {
+						misses.push_back(name + " re-encoded " + field + "=false instead of omitting it");
+					}
+				}
+				for (const bool value : {true, false}) {
+					json previous = json::parse(base);
+					previous[field] = value;
+					T reused;
+					reason.clear();
+					if (!decode(previous.dump(), reused, reason) || !decode(base, reused, reason)) {
+						misses.push_back(name + " reuse decode refused: " + reason);
+					} else {
+						const json re = json::parse(encode(reused));
+						if (re.find(field) != re.end()) {
+							misses.push_back(name + " kept " + field + " after " + (value ? "true" : "false") + " then absent decode");
+						}
+					}
+				}
+				T legacy;
+				reason.clear();
+				if (!decode(base, legacy, reason)) {
+					misses.push_back(name + " legacy body refused: " + reason);
+				} else if (json::parse(encode(legacy)) != json::parse(base)) {
+					misses.push_back(name + " changed the legacy body shape on re-encode");
+				}
+				const json badValues[] = {json(nullptr), json("yes"), json(0), json(1), json::array(), json::object()};
+				const char* badNames[] = {"null", "string", "0", "1", "array", "object"};
+				for (size_t i = 0; i < 6; ++i) {
+					json body = json::parse(base);
+					body[field] = badValues[i];
+					T decoded;
+					reason.clear();
+					if (decode(body.dump(), decoded, reason)) {
+						misses.push_back(name + " accepted malformed " + field + " (" + badNames[i] + ")");
+					} else if (reason != std::string("invalid_field:") + field) {
+						misses.push_back(name + " refused malformed " + field + " (" + badNames[i] + ") with " + reason);
+					}
+				}
+			}
+
+			bool TestUnlistedVisibility(std::string* error) {
+				std::vector<std::string> misses;
+				CheckOptionalVisibilityField<NetDirectoryRegisterResponse>("register response", "supports_unlisted",
+					R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"abcTOK123","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})",
+					&NetDirectoryCodec::DecodeRegisterResponse, &NetDirectoryCodec::EncodeRegisterResponse, false, misses);
+				CheckOptionalVisibilityField<NetDirectoryHeartbeatRequest>("heartbeat request", "listed",
+					R"({"token":"abcTOK123","peer_count":2,"seats_free":1})",
+					&NetDirectoryCodec::DecodeHeartbeatRequest, &NetDirectoryCodec::EncodeHeartbeatRequest, true, misses);
+				CheckOptionalVisibilityField<NetDirectoryHeartbeatResponse>("heartbeat response", "listed",
+					R"({"expires_in_s":15,"heartbeat_s":5})",
+					&NetDirectoryCodec::DecodeHeartbeatResponse, &NetDirectoryCodec::EncodeHeartbeatResponse, true, misses);
+				if (misses.empty()) {
+					return true;
+				}
+				*error = "unlisted visibility codec misses (" + std::to_string(misses.size()) + "):";
+				for (const std::string& miss : misses) {
+					*error += " [" + miss + "]";
+				}
+				return false;
+			}
+
 			bool TestHttpClientReuse(std::string* error) {
 				NetHttpClient client;
 				client.Start("GET", "https://127.0.0.1:1/", {}, "", "");
@@ -948,6 +1031,753 @@ namespace RTE {
 					return false;
 				}
 				return true;
+			}
+
+			/// Compatibility shim: forwards the visibility intent when the client accepts it.
+			template <typename Client>
+			auto CallAdvertiseIntent(Client& client, const NetDirectoryRegisterRequest& row, bool running, bool listed, int) -> decltype(client.Advertise(row, running, listed), void()) {
+				client.Advertise(row, running, listed);
+			}
+			template <typename Client>
+			void CallAdvertiseIntent(Client& client, const NetDirectoryRegisterRequest& row, bool running, bool listed, long) {
+				(void)listed;
+				client.Advertise(row, running);
+			}
+			void CallAdvertise(NetDirectoryClient& client, const NetDirectoryRegisterRequest& row, bool running, bool listed) {
+				CallAdvertiseIntent(client, row, running, listed, 0);
+			}
+
+			const char* kRegisterCapable = R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})";
+			const char* kRegisterLegacy = R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})";
+			const std::string kSessionPath = "/v1/sessions/7b8c9d2e-1111-4222-8333-444455556666";
+			const std::string kHeartbeatPath = kSessionPath + "/heartbeat";
+
+			const NetDirectoryClient::Request* SentAt(const ScriptedClient& s, size_t index) {
+				return index < s.sent->size() ? &s.sent->at(index) : nullptr;
+			}
+			uint64_t CountRequests(const ScriptedClient& s, const char* method, const std::string& path) {
+				uint64_t count = 0;
+				for (const NetDirectoryClient::Request& request : *s.sent) {
+					if (request.method == method && request.path == path) {
+						++count;
+					}
+				}
+				return count;
+			}
+			bool RequestListed(const NetDirectoryClient::Request& request, bool* listed) {
+				const json body = json::parse(request.body);
+				if (!body.contains("listed") || !body["listed"].is_boolean()) {
+					return false;
+				}
+				*listed = body["listed"].get<bool>();
+				return true;
+			}
+			std::string RequestToken(const NetDirectoryClient::Request& request) {
+				const json body = json::parse(request.body);
+				return body.value("token", "");
+			}
+
+			bool TestClientUnlistedCapable(std::string* error) {
+				std::vector<std::string> misses;
+				auto note = [&misses](const std::string& miss) { misses.push_back(miss); };
+
+				{   // hide -> keepalive -> relist: same id/token, no delete and no second register
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapable, ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":false})", ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":false})", ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":true})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					s.client.Update(0); // the register lands; a pending hide schedules its heartbeat now
+					const NetDirectoryClient::Request* hide = SentAt(s, 1);
+					bool listed = true;
+					if (!hide) {
+						note("hide: no heartbeat carried the hidden intent right after register");
+					} else if (hide->method != "POST" || hide->path != kHeartbeatPath) {
+						note("hide: request 1 was " + hide->method + " " + hide->path + ", not the session heartbeat");
+					} else if (!RequestListed(*hide, &listed) || listed) {
+						note("hide: the visibility heartbeat did not send listed=false");
+					} else if (RequestToken(*hide) != "tok") {
+						note("hide: the visibility heartbeat lost the session token");
+					}
+					s.client.Update(0);
+					s.client.Update(4999);
+					s.client.Update(5000); // the keepalive heartbeat on a capable row repeats the visibility
+					const NetDirectoryClient::Request* keepalive = SentAt(s, 2);
+					if (!keepalive || keepalive->path != kHeartbeatPath) {
+						note("keepalive: no interval heartbeat after the hidden row confirmed");
+					} else if (!RequestListed(*keepalive, &listed) || listed) {
+						note("keepalive: the interval heartbeat did not carry listed=false on a capable service");
+					}
+					s.client.Update(5000);
+					CallAdvertise(s.client, SampleRegisterRequest(), false, true);
+					s.client.Update(5000); // relist intent: a heartbeat with listed=true leaves immediately
+					const NetDirectoryClient::Request* relist = SentAt(s, 3);
+					if (!relist || relist->path != kHeartbeatPath) {
+						note("relist: no heartbeat carried the restored intent");
+					} else if (!RequestListed(*relist, &listed) || !listed) {
+						note("relist: the heartbeat did not send listed=true");
+					}
+					s.client.Update(5000);
+					if (s.client.GetSessionId() != "7b8c9d2e-1111-4222-8333-444455556666" || s.client.GetToken() != "tok") {
+						note("identity: the session id or token changed across a visibility flip");
+					}
+					if (CountRequests(s, "DELETE", kSessionPath) != 0 || CountRequests(s, "POST", "/v1/sessions") != 1) {
+						note("identity: a visibility flip deleted the row or registered a second session");
+					}
+					const json report = json::parse(s.client.BuildReportJson());
+					if (report.value("desired_listed", json()) != json(true) || report.value("confirmed_listed", json()) != json(true) || report.value("supports_unlisted", json()) != json(true)) {
+						note("report: desired/confirmed visibility or capability missing from BuildReportJson");
+					}
+				}
+
+				{   // intent flips while register or heartbeat is in flight
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapable, ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":false})", ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":true})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					CallAdvertise(s.client, SampleRegisterRequest(), false, true); // changed while the register is in flight
+					s.client.Update(0);
+					s.client.Update(0);
+					if (s.sent->size() != 1) {
+						note("pending-register: a visible flip during register still sent a hide");
+					}
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0); // hide intent: heartbeat listed=false now in flight
+					CallAdvertise(s.client, SampleRegisterRequest(), false, true); // flip while that heartbeat is pending
+					s.client.Update(0); // the in-flight ack (listed=false) lands; the new intent goes next
+					const NetDirectoryClient::Request* relist = SentAt(s, 2);
+					bool listed = false;
+					if (!relist || relist->path != kHeartbeatPath) {
+						note("pending-heartbeat: the newer intent was not sent after the in-flight ack");
+					} else if (!RequestListed(*relist, &listed) || !listed) {
+						note("pending-heartbeat: the follow-up heartbeat did not send listed=true");
+					}
+				}
+
+				{   // echo absent on a capable service: never confirmed hidden, bounded retry resends
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapable, ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":false})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(0);
+					const json report = json::parse(s.client.BuildReportJson());
+					if (report.value("confirmed_listed", json(true)) == json(false)) {
+						note("echo-absent: an ack without listed claimed confirmed hidden");
+					}
+					if (s.client.GetState() == NetDirectoryClient::State::Failed) {
+						note("echo-absent: a missing echo was terminal instead of a bounded retry");
+					}
+					s.client.Update(4999);
+					if (s.sent->size() > 2) {
+						note("echo-absent: the unconfirmed visibility retried before the backoff elapsed");
+					}
+					s.client.Update(5000);
+					const NetDirectoryClient::Request* retry = SentAt(s, 2);
+					bool listed = true;
+					if (!retry || !RequestListed(*retry, &listed) || listed) {
+						note("echo-absent: the bounded retry did not resend listed=false");
+					}
+				}
+
+				{   // echo contradicts the in-flight intent: protocol failure, never confirmed
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapable, ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":true})", ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":false})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(0);
+					const json report = json::parse(s.client.BuildReportJson());
+					if (report.value("confirmed_listed", json()) == json(false)) {
+						note("echo-contradicted: a listed=true ack against a listed=false request claimed hidden");
+					}
+					s.client.Update(5000);
+					const NetDirectoryClient::Request* retry = SentAt(s, 2);
+					bool listed = true;
+					if (!retry || !RequestListed(*retry, &listed) || listed) {
+						note("echo-contradicted: the bounded retry did not resend listed=false");
+					}
+				}
+
+				{   // malformed echo: the body refuses decode; the retry is bounded, never confirmed
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapable, ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":"yes"})", ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":false})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(0);
+					const json report = json::parse(s.client.BuildReportJson());
+					if (report.value("confirmed_listed", json()) == json(false)) {
+						note("echo-malformed: an undecodable ack claimed confirmed hidden");
+					}
+					s.client.Update(5000);
+					const NetDirectoryClient::Request* retry = SentAt(s, 2);
+					bool listed = true;
+					if (!retry || !RequestListed(*retry, &listed) || listed) {
+						note("echo-malformed: the bounded retry did not resend listed=false");
+					}
+				}
+
+				{   // a 404 on a hidden row fails closed: no re-register, retract still deletes the id
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapable, ""});
+					s.replies->push_back({404, R"({"error":"not_found"})", ""});
+					s.replies->push_back({200, R"({"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""});
+					s.replies->push_back({200, R"({"ok":true})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(0);
+					if (CountRequests(s, "POST", "/v1/sessions") != 1) {
+						note("hidden-404: the lost hidden row re-registered a new visible identity");
+					}
+					if (s.client.GetState() != NetDirectoryClient::State::Failed) {
+						note("hidden-404: the client did not fail closed on the lost hidden row");
+					}
+					s.client.Retract();
+					s.client.Update(0);
+					const NetDirectoryClient::Request* deleted = SentAt(s, 2);
+					if (!deleted || deleted->method != "DELETE" || deleted->path != kSessionPath) {
+						note("hidden-404: retract did not delete the known row after the failure");
+					} else if (deleted->path.find("7b8c9d2e") == std::string::npos) {
+						note("hidden-404: retract deleted a rebound identity instead of the lost row");
+					}
+				}
+
+				if (misses.empty()) {
+					return true;
+				}
+				*error = "client unlisted visibility misses (" + std::to_string(misses.size()) + "):";
+				for (const std::string& miss : misses) {
+					*error += " [" + miss + "]";
+				}
+				return false;
+			}
+
+			bool TestClientUnlistedLegacy(std::string* error) {
+				std::vector<std::string> misses;
+				auto note = [&misses](const std::string& miss) { misses.push_back(miss); };
+
+				{   // a legacy service keeps the omission-shaped visible lifecycle unchanged
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterLegacy, ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, true);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(5000);
+					const NetDirectoryClient::Request* heartbeat = SentAt(s, 1);
+					bool listed = false;
+					if (!heartbeat || heartbeat->path != kHeartbeatPath) {
+						note("legacy-visible: no interval heartbeat on a legacy service");
+					} else if (RequestListed(*heartbeat, &listed)) {
+						note("legacy-visible: a legacy heartbeat carried the listed field");
+					}
+				}
+
+				{   // hidden intent on a legacy service deletes once and stays Failed, no loop
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterLegacy, ""});
+					s.replies->push_back({200, R"({"ok":true})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(0);
+					const NetDirectoryClient::Request* deleted = SentAt(s, 1);
+					if (!deleted || deleted->method != "DELETE" || deleted->path != kSessionPath) {
+						note("legacy-hidden: the unsupported hidden row was never deleted");
+					}
+					s.client.Update(0);
+					if (s.client.GetState() != NetDirectoryClient::State::Failed) {
+						note("legacy-hidden: the client did not stay Failed for the unsupported intent");
+					}
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(60000);
+					s.client.Update(120000);
+					if (CountRequests(s, "POST", "/v1/sessions") != 1 || CountRequests(s, "DELETE", kSessionPath) > 1) {
+						note("legacy-hidden: a repeated hidden intent looped register/delete");
+					}
+					const json report = json::parse(s.client.BuildReportJson());
+					if (report.value("supports_unlisted", json(true)) != json(false)) {
+						note("legacy-hidden: the report did not expose capability=false");
+					}
+					s.replies->push_back({200, R"({"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, true);
+					s.client.Update(120000);
+					const NetDirectoryClient::Request* reregistered = SentAt(s, 2);
+					if (!reregistered || reregistered->method != "POST" || reregistered->path != "/v1/sessions") {
+						note("legacy-recover: a visible intent did not resume ordinary registration");
+					}
+					s.client.Update(120000);
+					s.client.Update(125000); // ordinary interval: the recovered row heartbeats omission-shaped
+					const NetDirectoryClient::Request* recovered = SentAt(s, 3);
+					bool relisted = true;
+					if (!recovered || recovered->path != "/v1/sessions/8c9d2e1f-2222-4333-8444-555566667777/heartbeat") {
+						note("legacy-recover: the resumed registration did not heartbeat");
+					} else if (RequestListed(*recovered, &relisted)) {
+						note("legacy-recover: the recovered heartbeat carried the listed field");
+					}
+					if (CountRequests(s, "POST", "/v1/sessions") > 2 || CountRequests(s, "DELETE", kSessionPath) != 1) {
+						note("legacy-recover: request counts were registers=" + std::to_string(CountRequests(s, "POST", "/v1/sessions")) + " deletes=" + std::to_string(CountRequests(s, "DELETE", kSessionPath)) + "");
+					}
+				}
+
+				{   // an explicit supports_unlisted:false reply is the same legacy path as absent
+					ScriptedClient s;
+					s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":false})", ""});
+					s.replies->push_back({200, R"({"ok":true})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(0);
+					const NetDirectoryClient::Request* deleted = SentAt(s, 1);
+					if (!deleted || deleted->method != "DELETE" || deleted->path != kSessionPath) {
+						note("legacy-hidden-explicit: capability=false did not delete the hidden row");
+					}
+					s.client.Update(0);
+					if (s.client.GetState() != NetDirectoryClient::State::Failed) {
+						note("legacy-hidden-explicit: capability=false did not stay Failed");
+					}
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(60000);
+					if (CountRequests(s, "POST", "/v1/sessions") != 1 || CountRequests(s, "DELETE", kSessionPath) > 1) {
+						note("legacy-hidden-explicit: a repeated hidden intent looped after capability=false");
+					}
+				}
+
+				{   // A visible row's actual 429 also gates a later retract.
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterLegacy, ""});
+					s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":30})", ""});
+					s.replies->push_back({200, R"({"ok":true})", ""});
+					s.client.Advertise(SampleRegisterRequest(), false);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(5000);
+					const NetDirectoryClient::Request* heartbeat = SentAt(s, 1);
+					if (!heartbeat || heartbeat->method != "POST" || heartbeat->path != kHeartbeatPath) {
+						note("visible-retract-429 fixture: the interval heartbeat never left");
+					}
+					s.client.Update(5000);
+					s.client.Retract();
+					s.client.Update(5000);
+					s.client.Update(34999);
+					if (CountRequests(s, "DELETE", kSessionPath) != 0) {
+						note("visible-retract-429: DELETE left before the t=35000 retry deadline");
+					}
+					s.client.Update(35000);
+					if (CountRequests(s, "DELETE", kSessionPath) != 1) {
+						note("visible-retract-429: the row did not receive exactly one DELETE by t=35000");
+					}
+				}
+
+				{   // a 429 while the visibility intent is dirty still honors retry_after
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapable, ""});
+					s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":30})", ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":false})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(0);
+					const NetDirectoryClient::Request* hide = SentAt(s, 1);
+					bool listed = true;
+					if (!hide || !RequestListed(*hide, &listed) || listed) {
+						note("dirty-429: the hidden intent never left in a heartbeat");
+					}
+					s.client.Update(29999);
+					if (s.sent->size() > 2) {
+						note("dirty-429: a request left while retry_after was pending");
+					}
+					s.client.Update(30000);
+					const NetDirectoryClient::Request* retry = SentAt(s, 2);
+					if (!retry || !RequestListed(*retry, &listed) || listed) {
+						note("dirty-429: the retry after retry_after did not resend listed=false");
+					}
+				}
+
+				{   // retract after a visibility failure still deletes the known row, past the deadline
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapable, ""});
+					s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":30})", ""});
+					s.replies->push_back({200, R"({"ok":true})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(0); // the hidden heartbeat is throttled; the intent stays dirty
+					s.client.Retract();
+					s.client.Update(0);
+					s.client.Update(29999);
+					if (CountRequests(s, "DELETE", kSessionPath) != 0) {
+						note("retract-dirty: the delete raced ahead of the 429 retry deadline");
+					}
+					s.client.Update(30000);
+					const NetDirectoryClient::Request* deleted = SentAt(s, 2);
+					if (!deleted || deleted->method != "DELETE" || deleted->path != kSessionPath) {
+						note("retract-dirty: the known row was not deleted after the deadline");
+					}
+				}
+
+				if (misses.empty()) {
+					return true;
+				}
+				*error = "client unlisted legacy misses (" + std::to_string(misses.size()) + "):";
+				for (const std::string& miss : misses) {
+					*error += " [" + miss + "]";
+				}
+				return false;
+			}
+
+			uint64_t SteadyMs() {
+				return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			}
+
+			const char* kSecretToken = "tok-report-secret-5e1d";
+			const char* kRegisterCapableSecret = R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok-report-secret-5e1d","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})";
+
+			std::string VisibilityFields(const json& report) {
+				return "desired=" + report.value("desired_listed", json("absent")).dump() + " confirmed=" + report.value("confirmed_listed", json("absent")).dump() + " capable=" + report.value("supports_unlisted", json("absent")).dump();
+			}
+			/// Without a held row the report claims no confirmed visibility and no capability.
+			bool ReportRowless(const json& report) {
+				return report.contains("confirmed_listed") && report["confirmed_listed"].is_null() &&
+				       report.contains("supports_unlisted") && report["supports_unlisted"].is_boolean() && !report["supports_unlisted"].get<bool>();
+			}
+			bool ReportLeaksToken(const std::string& report) {
+				return report.find(kSecretToken) != std::string::npos || json::parse(report).contains("token");
+			}
+
+			bool TestClientUnlistedDeadlines(std::string* error) {
+				std::vector<std::string> misses;
+				auto note = [&misses](const std::string& miss) { misses.push_back(miss); };
+
+				// Retract then re-advertise inside a heartbeat 429 (retry at t=30000) or an echo-less ack's
+				// backoff (retry at t=5000): the new intent keeps the deadline and the same row.
+				const struct {
+					const char* name;
+					NetDirectoryClient::Reply answer;
+					uint64_t deadline;
+				} readvertise[] = {
+					{"readvertise-429", {429, R"({"error":"rate_limited","retry_after_s":30})", ""}, 30000},
+					{"readvertise-backoff", {200, R"({"expires_in_s":15,"heartbeat_s":5})", ""}, 5000},
+				};
+				for (const auto& arm : readvertise) {
+					const std::string name = arm.name;
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapable, ""});
+					s.replies->push_back(arm.answer);
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":false})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(0); // the hide heartbeat's answer sets the retry deadline
+					s.client.Retract();
+					s.client.Update(1000);
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(2000);
+					const size_t afterReadvertise = s.sent->size();
+					s.client.Update(arm.deadline - 1);
+					if (afterReadvertise != 2 || s.sent->size() != 2) {
+						note(name + ": a request left at t=" + std::to_string(afterReadvertise != 2 ? uint64_t{2000} : arm.deadline - 1) + ", inside the t=" + std::to_string(arm.deadline) + " retry deadline");
+					}
+					s.client.Update(arm.deadline);
+					const NetDirectoryClient::Request* hide = SentAt(s, 2);
+					bool listed = true;
+					if (!hide || hide->method != "POST" || hide->path != kHeartbeatPath || !RequestListed(*hide, &listed) || listed || RequestToken(*hide) != "tok") {
+						note(name + ": the hidden heartbeat did not resume on the same row at the deadline");
+					}
+					s.client.Update(arm.deadline);
+					if (CountRequests(s, "DELETE", kSessionPath) != 0 || CountRequests(s, "POST", "/v1/sessions") != 1 || s.client.GetToken() != "tok") {
+						note(name + ": the re-advertise deleted the row, registered again or changed the token");
+					}
+					if (json::parse(s.client.BuildReportJson()).value("confirmed_listed", json()) != json(false)) {
+						note(name + ": the acknowledged hidden intent was not confirmed");
+					}
+				}
+
+				{   // the default visible API: retract then re-advertise inside a heartbeat 503 backoff keeps it
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterLegacy, ""});
+					s.replies->push_back({503, R"({"error":"unavailable"})", ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
+					s.client.Advertise(SampleRegisterRequest(), false);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(5000);
+					s.client.Update(5000); // the interval heartbeat's 503 backs off until t=10000
+					s.client.Retract();
+					s.client.Update(6000);
+					s.client.Advertise(SampleRegisterRequest(), false);
+					s.client.Update(7000);
+					const size_t afterReadvertise = s.sent->size();
+					s.client.Update(9999);
+					if (afterReadvertise != 2 || s.sent->size() != 2) {
+						note("readvertise-visible-backoff: a request left at t=" + std::string(afterReadvertise != 2 ? "7000" : "9999") + ", inside the t=10000 backoff deadline");
+					}
+					s.client.Update(10000);
+					const NetDirectoryClient::Request* heartbeat = SentAt(s, 2);
+					if (!heartbeat || heartbeat->method != "POST" || heartbeat->path != kHeartbeatPath) {
+						note("readvertise-visible-backoff: the heartbeat did not resume on the same row at t=10000");
+					}
+					s.client.Update(10000);
+					if (CountRequests(s, "DELETE", kSessionPath) != 0 || CountRequests(s, "POST", "/v1/sessions") != 1 || s.client.GetState() != NetDirectoryClient::State::Registered) {
+						note("readvertise-visible-backoff: the re-advertise deleted the row or registered again");
+					}
+				}
+
+				{   // the default visible API: retract then re-advertise inside a register 429 keeps retry_after
+					ScriptedClient s;
+					s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":30})", ""});
+					s.replies->push_back({200, kRegisterLegacy, ""});
+					s.client.Advertise(SampleRegisterRequest(), false);
+					s.client.Update(0);
+					s.client.Update(0); // the register's 429 holds every request until t=30000
+					s.client.Retract();
+					s.client.Update(1000);
+					s.client.Advertise(SampleRegisterRequest(), false);
+					s.client.Update(2000);
+					const size_t afterReadvertise = s.sent->size();
+					s.client.Update(29999);
+					if (afterReadvertise != 1 || s.sent->size() != 1) {
+						note("readvertise-register-429: a register left at t=" + std::string(afterReadvertise != 1 ? "2000" : "29999") + ", inside the t=30000 retry deadline");
+					}
+					s.client.Update(30000);
+					s.client.Update(30000);
+					if (CountRequests(s, "POST", "/v1/sessions") != 2 || s.client.GetState() != NetDirectoryClient::State::Registered) {
+						note("readvertise-register-429: the register did not resume at t=30000");
+					}
+				}
+
+				// A contradicting or undecodable echo retries at 5000 ms, then 10000 ms, and is never terminal.
+				const struct {
+					const char* name;
+					const char* body;
+				} mismatches[] = {
+					{"echo-contradicted-timing", R"({"expires_in_s":15,"heartbeat_s":5,"listed":true})"},
+					{"echo-malformed-timing", R"({"expires_in_s":15,"heartbeat_s":5,"listed":"yes"})"},
+				};
+				for (const auto& arm : mismatches) {
+					const std::string name = arm.name;
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapable, ""});
+					s.replies->push_back({200, arm.body, ""});
+					s.replies->push_back({200, arm.body, ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":false})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(0); // first mismatch: retry at t=5000
+					if (s.client.GetState() == NetDirectoryClient::State::Failed) {
+						note(name + ": the mismatched echo was terminal instead of a bounded retry");
+					}
+					if (json::parse(s.client.BuildReportJson()).value("confirmed_listed", json()) != json(true)) {
+						note(name + ": the register's visible confirmation did not survive the mismatch");
+					}
+					s.client.Update(4999);
+					const size_t beforeFirst = s.sent->size();
+					s.client.Update(5000);
+					const NetDirectoryClient::Request* first = SentAt(s, 2);
+					bool listed = true;
+					if (beforeFirst != 2 || !first || !RequestListed(*first, &listed) || listed) {
+						note(name + ": the first retry did not resend listed=false at exactly t=5000");
+					}
+					s.client.Update(5000); // second mismatch: the backoff doubles, retry at t=15000
+					s.client.Update(14999);
+					const size_t beforeSecond = s.sent->size();
+					s.client.Update(15000);
+					const NetDirectoryClient::Request* second = SentAt(s, 3);
+					listed = true;
+					if (beforeSecond != 3 || !second || !RequestListed(*second, &listed) || listed) {
+						note(name + ": the second retry did not resend listed=false at exactly t=15000");
+					}
+					s.client.Update(15000);
+					if (json::parse(s.client.BuildReportJson()).value("confirmed_listed", json()) != json(false)) {
+						note(name + ": the matching ack after the retries was not confirmed hidden");
+					}
+				}
+
+				if (misses.empty()) {
+					return true;
+				}
+				*error = "client unlisted deadline misses (" + std::to_string(misses.size()) + "):";
+				for (const std::string& miss : misses) {
+					*error += " [" + miss + "]";
+				}
+				return false;
+			}
+
+			bool TestClientUnlistedReportTruth(std::string* error) {
+				std::vector<std::string> misses;
+				auto note = [&misses](const std::string& miss) { misses.push_back(miss); };
+
+				{   // nothing registered yet: no confirmation and no capability are claimed
+					ScriptedClient s;
+					const json report = json::parse(s.client.BuildReportJson());
+					if (!ReportRowless(report)) {
+						note("fresh: the report claimed " + VisibilityFields(report) + " before any register");
+					}
+				}
+
+				{   // a held capable row reports typed fields; once deleted it claims nothing; never the token
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapableSecret, ""});
+					s.replies->push_back({200, R"({"ok":true})", ""});
+					s.client.Advertise(SampleRegisterRequest(), false);
+					s.client.Update(0);
+					s.client.Update(0);
+					const std::string held = s.client.BuildReportJson();
+					const json heldReport = json::parse(held);
+					if (heldReport.value("desired_listed", json()) != json(true) || heldReport.value("confirmed_listed", json()) != json(true) || heldReport.value("supports_unlisted", json()) != json(true)) {
+						note("held-visible: the report showed " + VisibilityFields(heldReport) + " for a registered capable visible row");
+					}
+					s.client.Retract();
+					s.client.Update(0);
+					s.client.Update(0);
+					const std::string deleted = s.client.BuildReportJson();
+					const json deletedReport = json::parse(deleted);
+					if (s.client.GetState() != NetDirectoryClient::State::Idle || CountRequests(s, "DELETE", kSessionPath) != 1) {
+						note("deleted fixture: the retract did not delete the row and settle Idle");
+					} else if (!ReportRowless(deletedReport)) {
+						note("deleted: the report still claimed " + VisibilityFields(deletedReport) + " after the row was deleted");
+					}
+					if (ReportLeaksToken(held) || ReportLeaksToken(deleted)) {
+						note("token: the report exposed the session token");
+					}
+				}
+
+				{   // a hidden row lost to a 404 keeps its id for Retract but claims no confirmation
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapableSecret, ""});
+					s.replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5,"listed":false})", ""});
+					s.replies->push_back({404, R"({"error":"not_found"})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(0); // the hide is acknowledged
+					const std::string hidden = s.client.BuildReportJson();
+					const json hiddenReport = json::parse(hidden);
+					if (hiddenReport.value("desired_listed", json()) != json(false) || hiddenReport.value("confirmed_listed", json()) != json(false) || hiddenReport.value("supports_unlisted", json()) != json(true)) {
+						note("held-hidden: the report showed " + VisibilityFields(hiddenReport) + " for an acknowledged hidden row");
+					}
+					s.client.Update(5000);
+					s.client.Update(5000); // the keepalive answers 404
+					const std::string lost = s.client.BuildReportJson();
+					const json lostReport = json::parse(lost);
+					if (s.client.GetState() != NetDirectoryClient::State::Failed || s.client.GetSessionId().empty()) {
+						note("lost-hidden fixture: the 404 did not fail closed with the row id kept");
+					} else if (!ReportRowless(lostReport)) {
+						note("lost-hidden: the report still claimed " + VisibilityFields(lostReport) + " after the 404");
+					}
+					if (ReportLeaksToken(hidden) || ReportLeaksToken(lost)) {
+						note("token: the report exposed the session token");
+					}
+				}
+
+				{   // the legacy hidden delete leaves no confirmation behind
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterLegacy, ""});
+					s.replies->push_back({200, R"({"ok":true})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(0);
+					const json report = json::parse(s.client.BuildReportJson());
+					if (s.client.GetState() != NetDirectoryClient::State::Failed || CountRequests(s, "DELETE", kSessionPath) != 1) {
+						note("legacy-deleted fixture: the unsupported hidden row was not deleted into Failed");
+					} else if (!ReportRowless(report)) {
+						note("legacy-deleted: the report still claimed " + VisibilityFields(report) + " after the unsupported row was deleted");
+					}
+				}
+
+				{   // Shutdown with no deadline deletes the held row, then claims nothing about it
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapableSecret, ""});
+					s.replies->push_back({200, R"({"ok":true})", ""});
+					const uint64_t base = SteadyMs();
+					s.client.Advertise(SampleRegisterRequest(), false);
+					s.client.Update(base);
+					s.client.Update(base);
+					s.client.Shutdown();
+					const json report = json::parse(s.client.BuildReportJson());
+					if (CountRequests(s, "DELETE", kSessionPath) != 1 || report.value("deletes", json()) != json(1)) {
+						note("shutdown fixture: Shutdown did not delete the held row once");
+					} else if (!ReportRowless(report)) {
+						note("shutdown: the report still claimed " + VisibilityFields(report) + " after Shutdown deleted the row");
+					}
+				}
+
+				{   // Shutdown inside a heartbeat 429 keeps retry_after: no DELETE within its budget, none counted
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapableSecret, ""});
+					s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":30})", ""});
+					s.replies->push_back({200, R"({"ok":true})", ""});
+					const uint64_t base = SteadyMs();
+					s.client.Advertise(SampleRegisterRequest(), false);
+					s.client.Update(base);
+					s.client.Update(base);
+					s.client.Update(base + 5000);
+					s.client.Update(base + 5000); // the interval heartbeat is throttled until base+35000
+					const auto begin = std::chrono::steady_clock::now();
+					s.client.Shutdown();
+					const long long elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count();
+					const json report = json::parse(s.client.BuildReportJson());
+					if (CountRequests(s, "DELETE", kSessionPath) != 0 || report.value("deletes", json()) != json(0)) {
+						note("shutdown-429: Shutdown sent or counted a DELETE inside retry_after");
+					}
+					if (elapsedMs > static_cast<long long>(NetDirectoryClient::c_ShutdownBudgetMs) + 500) {
+						note("shutdown-429: Shutdown blocked " + std::to_string(elapsedMs) + " ms, past its budget");
+					}
+					if (s.client.GetState() != NetDirectoryClient::State::Idle || !s.client.GetSessionId().empty()) {
+						note("shutdown-429: Shutdown did not release the row id after its budget");
+					} else if (!ReportRowless(report)) {
+						note("shutdown-429: the report still claimed " + VisibilityFields(report) + " for the row left to expire");
+					}
+					std::cout << "[net-directory-selftest] shutdown inside retry_after: deletes=" << report.value("deletes", json()).dump() << " elapsed_ms=" << elapsedMs << ", the row is left to the service's expiry" << std::endl;
+				}
+
+				{   // Reject absent or malformed row visibility.
+					auto mutate = [](bool hasConfirmed, const json& confirmed, bool hasCapable, const json& capable) {
+						json r = {{"state", "idle"}, {"desired_listed", false}};
+						if (hasConfirmed) { r["confirmed_listed"] = confirmed; }
+						if (hasCapable) { r["supports_unlisted"] = capable; }
+						return r;
+					};
+					const struct { const char* name; json report; bool rowless; } mutations[] = {
+						{"confirmed-missing", mutate(false, json(), true, false), false},
+						{"confirmed-string", mutate(true, "yes", true, false), false},
+						{"confirmed-number", mutate(true, 3, true, false), false},
+						{"confirmed-boolean", mutate(true, false, true, false), false},
+						{"confirmed-null", mutate(true, nullptr, true, false), true},
+						{"capable-missing", mutate(true, nullptr, false, json()), false},
+						{"capable-string", mutate(true, nullptr, true, "yes"), false},
+						{"capable-true", mutate(true, nullptr, true, true), false},
+					};
+					for (const auto& m : mutations) {
+						if (ReportRowless(m.report) != m.rowless) {
+							note(std::string("rowless-shape: ReportRowless ") + (m.rowless ? "rejected " : "accepted ") + m.name);
+						}
+					}
+				}
+
+				if (misses.empty()) {
+					return true;
+				}
+				*error = "client unlisted report misses (" + std::to_string(misses.size()) + "):";
+				for (const std::string& miss : misses) {
+					*error += " [" + miss + "]";
+				}
+				return false;
 			}
 
 			bool TestMergeGameLists(std::string* error) {
@@ -1816,6 +2646,7 @@ namespace RTE {
 			if (!TestSessionsCountCap(&error)) return fail(error);
 			if (!TestCompatibilityPredicate(&error)) return fail(error);
 			if (!TestCannedSequence(&error)) return fail(error);
+			if (!TestUnlistedVisibility(&error)) return fail(error);
 			if (!TestHttpClientReuse(&error)) return fail(error);
 			if (!TestClientLifecycle(&error)) return fail(error);
 			if (!TestHeartbeat404Reregisters(&error)) return fail(error);
@@ -1845,6 +2676,17 @@ namespace RTE {
 #endif
 #endif
 			if (!TestInstallKeyIsLazy(&error)) return fail(error);
+			// The unlisted groups aggregate their misses and run last, so a miss never skips the tests above.
+			std::string unlistedMisses;
+			for (bool (*test)(std::string*) : {TestClientUnlistedCapable, TestClientUnlistedLegacy, TestClientUnlistedDeadlines, TestClientUnlistedReportTruth}) {
+				if (!test(&error)) {
+					unlistedMisses += (unlistedMisses.empty() ? "" : " ") + error;
+					error.clear();
+				}
+			}
+			if (!unlistedMisses.empty()) {
+				return fail(unlistedMisses);
+			}
 
 			std::cout << "[net-directory-selftest] PASS" << std::endl;
 			return 0;
