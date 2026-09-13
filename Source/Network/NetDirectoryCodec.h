@@ -52,17 +52,19 @@ namespace RTE {
 		int64_t expiresInS = 0;
 		int64_t heartbeatS = 0;
 		std::string observedIp;
+		bool supportsUnlisted = false; //!< Server-advertised unlisted-session capability; absent or false means unsupported.
 
 		bool operator==(const NetDirectoryRegisterResponse&) const = default;
 	};
 
-	// POST /v1/sessions/{id}/heartbeat request body. listen_addrs and state are optional.
+	// POST /v1/sessions/{id}/heartbeat request body. listen_addrs, state and listed are optional.
 	struct NetDirectoryHeartbeatRequest {
 		std::string token;
 		int64_t peerCount = 0;
 		int64_t seatsFree = 0;
 		std::optional<std::vector<std::string>> listenAddrs;
 		std::optional<std::string> state; //!< "lobby" | "running"
+		std::optional<bool> listed; //!< Absent keeps current visibility; false hides, true relists.
 
 		bool operator==(const NetDirectoryHeartbeatRequest&) const = default;
 	};
@@ -71,6 +73,7 @@ namespace RTE {
 	struct NetDirectoryHeartbeatResponse {
 		int64_t expiresInS = 0;
 		int64_t heartbeatS = 0;
+		std::optional<bool> listed; //!< Absent on replies from services without unlisted-session support.
 
 		bool operator==(const NetDirectoryHeartbeatResponse&) const = default;
 	};
