@@ -249,6 +249,21 @@ int GUILabel::GetTextHeight() {
 	return m_Font->CalculateHeight(m_Text, m_Width);
 }
 
+int GUILabel::GetMaxWordWidth() {
+	// The wrapper breaks text only on spaces and newlines, so those are the tokens to measure.
+	int maxWidth = 0;
+	size_t pos = 0;
+	while (pos < m_Text.size()) {
+		const size_t end = m_Text.find_first_of(" \n", pos);
+		const std::string word = m_Text.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+		if (!word.empty()) {
+			maxWidth = std::max(maxWidth, m_Font->CalculateWidth(word));
+		}
+		pos = (end == std::string::npos) ? m_Text.size() : end + 1;
+	}
+	return maxWidth;
+}
+
 void GUILabel::SetHorizontalOverflowScroll(bool newOverflowScroll) {
 	m_HorizontalOverflowScroll = newOverflowScroll;
 	if (m_HorizontalOverflowScroll) {

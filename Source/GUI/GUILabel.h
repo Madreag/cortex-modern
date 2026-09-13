@@ -92,6 +92,10 @@ namespace RTE {
 		/// @return The text height, in pixels
 		int GetTextHeight();
 
+		/// Gets the pixel width of the longest space/newline-delimited token in the current text.
+		/// @return The widest word width, in pixels
+		int GetMaxWordWidth();
+
 		/// Sets the horizontal alignment of the text of this label.
 		/// @param HAlignment The desired alignment. (default: GUIFont::Left)
 		void SetHAlignment(int HAlignment = GUIFont::Left) { m_HAlignment = HAlignment; }

@@ -177,6 +177,7 @@ void MainMenuGUI::CreateMainScreen() {
 void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MainMenuScreens[MenuScreen::MultiplayerScreen] = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerScreen"));
 	m_MainMenuScreens[MenuScreen::MultiplayerScreen]->CenterInParent(true, false);
+	m_MultiplayerScreenBaselineY = m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetRelYPos();
 
 	m_MultiplayerLandingPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerLandingPanel"));
 	m_MultiplayerHostPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerHostPanel"));
@@ -820,8 +821,17 @@ void MainMenuGUI::ApplyToSubstitute() {
 	m_ReconnectStatusShown = m_MultiplayerLandingStatusLabel->GetText();
 }
 
-// The refusal sentence arrives as one line; on the landing label its groups read as a short list:
-// the prefix, Install on its own line, then Remove and Update sharing one, middle-dot separated.
+// The bitmap font draws the wire delimiter's UTF-8 bytes as icon glyphs, so the GUI shows "; ".
+static std::string GroupDelimiterForDisplay(const std::string& text) {
+	const std::string separator = " \xC2\xB7 ";
+	std::string display = text;
+	for (size_t at = display.find(separator); at != std::string::npos; at = display.find(separator, at + 2)) {
+		display.replace(at, separator.size(), "; ");
+	}
+	return display;
+}
+
+// The refusal sentence arrives as one line; the landing label shows its groups as a short list.
 static std::string FormatModuleMismatchStatus(const std::string& text) {
 	const std::string prefix = "This host's mods do not match yours.";
 	if (text.compare(0, prefix.size(), prefix) != 0) {
@@ -860,7 +870,7 @@ static std::string FormatModuleMismatchStatus(const std::string& text) {
 	if (!others.empty()) {
 		formatted += '\n';
 		for (size_t i = 0; i < others.size(); ++i) {
-			formatted += (i == 0 ? "" : separator) + others[i];
+			formatted += (i == 0 ? "" : "; ") + others[i];
 		}
 	}
 	return formatted;
@@ -888,7 +898,7 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
 	} else if (!inMatchOrLobby && (m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby || m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation)) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
-		m_MultiplayerLandingStatusLabel->SetText(FormatModuleMismatchStatus(snapshot.errorText));
+		m_MultiplayerLandingStatusLabel->SetText(GroupDelimiterForDisplay(FormatModuleMismatchStatus(snapshot.errorText)));
 	}
 
 	RefreshMultiplayerScreenControls(snapshot);
@@ -937,6 +947,43 @@ void MainMenuGUI::RefreshReconnectControls() {
 	}
 }
 
+void MainMenuGUI::FitMultiplayerPanelWidth(GUICollectionBox* panel, GUILabel* diagnosticLabel, int width) {
+	const int oldWidth = panel->GetWidth();
+	if (oldWidth == width) {
+		return;
+	}
+	// width/2 - oldWidth/2 telescopes; (width - oldWidth)/2 would drop half a pixel per parity step.
+	const int shift = width / 2 - oldWidth / 2;
+	for (GUIControl* control : *panel->GetChildren()) {
+		GUIPanel* child = control->GetPanel();
+		if (!child) {
+			continue;
+		}
+		if (child == diagnosticLabel) {
+			child->SetPositionRel(12, child->GetRelYPos());
+			control->Resize(width - 24, child->GetHeight());
+		} else {
+			child->SetPositionRel(child->GetRelXPos() + shift, child->GetRelYPos());
+		}
+	}
+	panel->Resize(width, panel->GetHeight());
+}
+
+void MainMenuGUI::FitMultiplayerScreen(int width, int height) {
+	GUICollectionBox* screen = m_MainMenuScreens[MenuScreen::MultiplayerScreen];
+	if (screen->GetWidth() != width || screen->GetHeight() != height) {
+		screen->Resize(width, height);
+	}
+	const int screenX = (m_RootBoxMaxWidth - width) / 2;
+	int screenY = m_MultiplayerScreenBaselineY;
+	if (screenY + height > g_WindowMan.GetResY()) {
+		screenY = std::max(0, (g_WindowMan.GetResY() - height) / 2);
+	}
+	if (screen->GetRelXPos() != screenX || screen->GetRelYPos() != screenY) {
+		screen->SetPositionRel(screenX, screenY);
+	}
+}
+
 void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot) {
 	const bool lobby = m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby;
 	m_MultiplayerLandingPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::Landing);
@@ -951,10 +998,27 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		RefreshModerationControls(snapshot);
 	}
 	if (!lobby) {
-		if (m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetHeight() != 250) {
-			m_MainMenuScreens[MenuScreen::MultiplayerScreen]->Resize(300, 250);
+		int contentWidth = 300;
+		int contentHeight = 250;
+		if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
+			// The status wraps only on spaces, so the panel must be as wide as its longest token.
+			contentWidth = std::max(300, m_MultiplayerLandingStatusLabel->GetMaxWordWidth() + 24);
+			FitMultiplayerPanelWidth(m_MultiplayerLandingPanel, m_MultiplayerLandingStatusLabel, contentWidth);
+			// The wrapped status can outgrow its baseline box; the panel keeps the padding it had.
+			const int statusHeight = std::max(68, m_MultiplayerLandingStatusLabel->GetTextHeight() + 4);
+			if (m_MultiplayerLandingStatusLabel->GetHeight() != statusHeight) {
+				m_MultiplayerLandingStatusLabel->Resize(m_MultiplayerLandingStatusLabel->GetWidth(), statusHeight);
+			}
+			const int labelRelY = m_MultiplayerLandingStatusLabel->GetRelYPos();
+			const int panelHeight = std::max(250, labelRelY + statusHeight + (250 - labelRelY - 68));
+			if (m_MultiplayerLandingPanel->GetHeight() != panelHeight) {
+				m_MultiplayerLandingPanel->Resize(contentWidth, panelHeight);
+			}
+			contentHeight = panelHeight;
 		}
-		m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((300 - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, 250);
+		const int screenHeight = contentHeight + m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
+		FitMultiplayerScreen(contentWidth, screenHeight);
+		m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((contentWidth - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, contentHeight);
 		return;
 	}
 
@@ -1027,23 +1091,26 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	}
 	m_MultiplayerLobbyPortMapLabel->SetVisible(!snapshot.portMap.empty());
 	const int portMapHeight = snapshot.portMap.empty() ? 0 : 14;
-	m_MultiplayerErrorLabel->SetText(snapshot.errorText);
+	m_MultiplayerErrorLabel->SetText(GroupDelimiterForDisplay(snapshot.errorText));
+	const int contentWidth = std::max(300, m_MultiplayerErrorLabel->GetMaxWordWidth() + 24);
+	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth);
 	m_MultiplayerErrorLabel->SetPositionRel(12, 162 + portMapHeight);
 	const int errorHeight = std::max(24, m_MultiplayerErrorLabel->GetTextHeight() + 4);
 	const int extraHeight = errorHeight - 24 + portMapHeight;
 	if (m_MultiplayerErrorLabel->GetHeight() != errorHeight) {
 		m_MultiplayerErrorLabel->Resize(m_MultiplayerErrorLabel->GetWidth(), errorHeight);
 	}
-	if (m_MultiplayerLobbyPanel->GetHeight() != 250 + extraHeight) {
-		m_MultiplayerLobbyPanel->Resize(300, 250 + extraHeight);
+	const int contentHeight = 250 + extraHeight;
+	if (m_MultiplayerLobbyPanel->GetHeight() != contentHeight) {
+		m_MultiplayerLobbyPanel->Resize(contentWidth, contentHeight);
 	}
-	if (m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetHeight() != 250 + extraHeight) {
-		m_MainMenuScreens[MenuScreen::MultiplayerScreen]->Resize(300, 250 + extraHeight);
-	}
-	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55, 192 + extraHeight);
-	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55, 192 + extraHeight);
-	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(90, 220 + extraHeight);
-	m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((300 - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, 250 + extraHeight);
+	const int screenHeight = contentHeight + m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
+	FitMultiplayerScreen(contentWidth, screenHeight);
+	const int buttonShift = (contentWidth - 300) / 2;
+	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55 + buttonShift, 192 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55 + buttonShift, 192 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(90 + buttonShift, 220 + extraHeight);
+	m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((contentWidth - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, contentHeight);
 
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetEnabled(!snapshot.isHost && snapshot.inLobby);
@@ -1052,7 +1119,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
 	// §9b: moderation is a match feature - a lobby seat whose holder leaves goes straight back in the pool.
-	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(212, 220 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(212 + buttonShift, 220 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetVisible(snapshot.isHost);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetEnabled(snapshot.isHost && snapshot.running);
 }
