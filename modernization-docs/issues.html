@@ -55,10 +55,28 @@
     </header>
 
     <div class="callout callout-info">
-      <p><b>Re-verified live 2026-05-17.</b> All 26 open issues below were confirmed against the upstream tracker
-      via <code>gh</code> on 2026-05-17 &mdash; still current. But this page is a <b>cache, not a live feed</b>:
-      before acting on it, re-check the tracker (<code>gh issue list</code>). To refresh, re-fetch the open
-      issues and update the <code>ISSUES</code> array near the bottom of this file.</p>
+      <p class="small"><b>Note (updated 2026-06-05):</b> this page tracks <i>upstream</i> (cortex-command-community
+      repo) issues. For <i>our internal</i> work items (the Stage 1 / Stage 2 PRs, Causeless feedback adoption),
+      the canonical plan is <code>D:\Projects\PRs\PR_ROADMAP.html</code> and the master state doc
+      <code>D:\Projects\HANDOFF.md</code> (read its top "⚡ RESUME HERE" block); see also the
+      <a href="tracker.html">Work Tracker</a> and <code>DETERMINISM_REVAMP_PLAN.md</code> /
+      <code>MULTIPLAYER_REVAMP_PLAN.md</code>. The Stage 1 PR sequence is a single numeric <b>1&ndash;10</b>
+      (no "PR A/B/C/D", no "Wave 1/2/3"): PRs 1&ndash;2 merged upstream (#279/#280), 3&ndash;9 built + verified
+      cross-platform GREEN, PR 10 (CI gates) in progress.</p>
+      <p class="small" style="margin-top:8px"><b>Two of our internal determinism items, for reference:</b> the
+      <b>cross-platform determinism divergence</b> (multi-core vs single-core replay differing across Windows /
+      Linux / macOS) is <b>RESOLVED &mdash; bit-identical GREEN on all three platforms</b>; the
+      <b>async MOID-rebuild / draw race</b> (<code>UpdateDrawMOIDs&rarr;RegMOID</code> worker writes vs
+      <code>MovableMan::Draw</code> reads) is a <b>known pre-existing upstream race with a standalone fix
+      pending</b> (sendable on its own; draft <code>PR_FIX_ASYNC_MOID_RACE.md</code>). The M3 Q40.24 fixed-point
+      math is a <b>rejected approach</b> &mdash; FPU + libm standardization is the chosen cross-platform path.</p>
+    </div>
+
+    <div class="callout callout-info">
+      <p><b>Page reviewed 2026-06-05; upstream-issue list below last live-verified 2026-05-17.</b> The 26 open
+      issues below were confirmed against the upstream tracker via <code>gh</code> on 2026-05-17. This page is a
+      <b>cache, not a live feed</b>: before acting on it, re-check the tracker (<code>gh issue list</code>). To
+      refresh, re-fetch the open issues and update the <code>ISSUES</code> array near the bottom of this file.</p>
     </div>
 
     <div class="callout callout-ok">
@@ -112,7 +130,7 @@
 
     <div class="page-foot">
       Snapshot of <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project/issues">cortex-command-community/Cortex-Command-Community-Project/issues</a>
-      &middot; re-verified live 2026-05-17 &middot; summaries are editorial.
+      &middot; page reviewed 2026-06-05; upstream-issue list last live-verified 2026-05-17 &middot; summaries are editorial.
     </div>
   </main>
 
@@ -120,7 +138,7 @@
 
 <script>
 /* ============================================================
-   ISSUES — snapshot of upstream open issues (re-verified live 2026-05-17).
+   ISSUES — snapshot of upstream open issues (last live-verified 2026-05-17; page reviewed 2026-06-05).
    To refresh: re-fetch open issues and rewrite this array.
    type: "bug" | "enhancement" | "other"
    ============================================================ */

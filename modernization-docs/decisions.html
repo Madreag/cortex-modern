@@ -633,6 +633,403 @@
       </div>
     </section>
 
+    <!-- ADR-018 -->
+    <section class="adr" id="adr-018">
+      <div class="adr-head">
+        <span class="adr-id">ADR-018</span>
+        <span class="adr-title">MP architecture flips to Controller-sync &mdash; ADR-016's lockstep rejection reversed</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-25 &middot; <b>amends ADR-016 &sect;7.7 alternative-considered</b>: the
+        Controller-sync alternative that ADR-016 rejected (because it can't support LAN lockstep or GGPO rollback)
+        is now <b>adopted as the MP architecture</b> after upstream-lead clarification.</p>
+        <h4>Context</h4>
+        <p>ADR-016 chose determinism-first + per-mode netcode (lockstep / prediction / rollback) on a fully
+        deterministic core. The "Alternative considered" section evaluated Controller-sync (each player runs AI
+        locally; only Controllers traverse the network; sim must respond deterministically to Controllers but AI
+        itself doesn't need to) and rejected it because it cannot support LAN lockstep (M7) or GGPO rollback (M9).</p>
+        <p>Causeless's 2026-05-25 Discord clarification reframes the rationale: <i>"the reasoning behind the
+        Controller-sync idea is more for allowing expensive operations (like pathfinding requests) to be async.
+        Async operations are pretty much fundamentally opposed to determinism &mdash; but if we add a boundary
+        between the calculation and the simulator-y execution, then we have something deterministic."</i> The
+        Controller boundary is the deterministic boundary; async pathfinding stays async per-machine.</p>
+        <p>Under Controller-sync, lockstep IS still possible &mdash; the sync unit is the Controller (compact
+        per-tick player intent state), not full sim state. Each machine runs its own deterministic sim downstream
+        of received Controllers, with its own (non-deterministic) AI generating its own actors' Controllers. The
+        per-machine AI can use async pathfinding without breaking the determinism contract because pathfinding
+        outputs only reach the cross-machine sync via Controllers, which are compact + deterministic.</p>
+        <h4>Decision</h4>
+        <p>Flip to Controller-sync MP architecture from M7 onward. ADR-016's "Alternative considered"
+        Controller-sync rejection is reversed; the determinism-first foundation work stands but the per-mode
+        netcode (M7 lockstep, M8 prediction+reconciliation, M9 rollback) is rebuilt on the Controller-sync
+        boundary instead of full sim sync. Specifically:</p>
+        <ul>
+          <li><b>M4A pathfinder serial-epilogue is NEVER reapplied to revamp trunks</b> &mdash; Controller-sync
+          replaces the cross-machine sync requirement that motivated it. Each machine runs its own async
+          pathfinder per-machine.</li>
+          <li><b>M4A Race A architectural fix is NEVER reapplied</b> &mdash; same reason.</li>
+          <li><b>M7 (LAN lockstep)</b> syncs Controllers per tick, not arbitrary sim state. Controllers are the
+          deterministic input; sim downstream of Controllers is deterministic via M4A's Path E enforcement.</li>
+          <li><b>M8 (online rollback co-op)</b> implements <b>separate AI Lua states</b> (Causeless's stated
+          design intent fully realized): AI runs on each player's machine for their own actors in a
+          non-deterministic AI Lua pool; sim Lua remains deterministic; only the resulting Controllers sync.
+          Block E of M8.</li>
+          <li><b>M9 (online rollback PvP)</b> reuses M8's rollback machinery on the Controller-sync boundary.</li>
+        </ul>
+        <h4>Consequences</h4>
+        <p>The MP architecture matches Causeless's stated upstream design intent precisely &mdash; what M7+ ships
+        is upstream-mergeable in principle. The pathfinder serial-epilogue (which would have been load-bearing
+        under ADR-016's full-sim-sync model) is dropped &mdash; smaller engine diff, better perf, less invasive
+        sim change. The M9 PvP rollback ship is still the project's stated north star; only the route changes.
+        See <a href="multiplayer.html#pivot-rationale">multiplayer.html &sect;11.8</a> (to be added) for the
+        full architectural comparison; see <code>D:/Projects/MULTIPLAYER_REVAMP_PLAN.md</code> for the M6&ndash;M10
+        PR decomposition built on this architecture.</p>
+      </div>
+    </section>
+
+    <!-- ADR-019 -->
+    <section class="adr" id="adr-019">
+      <div class="adr-head">
+        <span class="adr-id">ADR-019</span>
+        <span class="adr-title">Clean stage trunks &mdash; rebuild foundation on <code>determinism-revamp</code> per upstream-lead review</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-25 &middot; <b>strategic restructuring</b> of how the work is organized
+        in response to Causeless's 2026-05-25 Discord review of <code>modernization-effort</code>.</p>
+        <h4>Context</h4>
+        <p>Causeless's 2026-05-25 review surfaced three concerns about the work as it stood on
+        <code>modernization-effort</code>:</p>
+        <ol>
+          <li><b>Bundled commits</b> mix unrelated efforts. The M5.5 cccp-ctl branch alone bundled test
+          infrastructure + TSan CI + race fixes + cross-actor enforcement + macOS UB fixes &mdash; five logically
+          separate concerns in one branch. His verbatim feedback: <i>"AI is very good at creating enormous
+          quantities of code (often far in excess of any provable value therein) &mdash; they're far easier
+          to review/merge/understand if they're smaller and more well-defined PRs."</i></li>
+          <li><b>Architectural decisions rejected.</b> M3 Q40.24 fixed-point math: <i>"I don't see really no
+          benefit for it from my brief 5 minutes thinking about it &mdash; if Lua float math is non-deterministic,
+          then the game is non-deterministic regardless of how you handle the physics."</i> His preferred
+          cross-platform path is FPU + libm standardization + <code>-ffp-contract=off</code>, not fixed-point.</li>
+          <li><b>Controller-sync MP rationale clarified.</b> Async pathfinding incompatibility with determinism
+          is the real motivation; the Controller boundary solves it. See ADR-018.</li>
+        </ol>
+        <p>The user's strategic choice was: continue accumulating on <code>modernization-effort</code> (paying
+        a continuous "clean it up later for upstream" tax that may never get paid) OR restructure with clean
+        stage trunks (one-time rebuild cost; clean diffs from then on; upstream-mergeable in principle).</p>
+        <h4>Decision</h4>
+        <p>Restructure the work onto <b>clean stage trunks</b>, leaving <code>modernization-effort</code>
+        preserved as legacy reference:</p>
+        <ul>
+          <li><b>Stage 1: <code>determinism-revamp</code></b> &mdash; cut <i>fresh from
+          <code>upstream/development</code></i> (current tip). Foundation rebuild via 7 PRs across 4 waves
+          (consolidated 2026-05-26 PM from earlier 22-24-PR iteration); one conceptual unit per PR with 2-8
+          internal commits inside for bisectability. PRs: vendor (BLAKE3 + nlohmann/json), cross-platform
+          stability (macOS UB + Race B atomic + libm flags), M0+M1 determinism foundation (SimChecksum + RNG split
+          + TimerMan + island leaks), Path E enforcement (full M4 Block B/C/D/E underneath), M2 Lua determinism
+          (pairs + math.random per Lua state + os stubs + CI gate), cccp-ctl test harness + scenarios, CI gates
+          (TSan + cross-platform validation). Drops M3 Q40.24, M4A pathfinder-epilogue, M4A Race A architectural
+          fix, multi-platform race-investigation iteration commits, M5.5 mega-bundling. Detail:
+          <code>D:/Projects/DETERMINISM_REVAMP_PLAN.md</code>.</li>
+          <li><b>Stage 2: <code>multiplayer-revamp</code></b> &mdash; cut from Stage 1 tip when Stage 1 closes.
+          80+ smaller per-concern PRs decomposing M6&ndash;M10 milestones. Controller-sync MP architecture from
+          day one (ADR-018). Detail: <code>D:/Projects/MULTIPLAYER_REVAMP_PLAN.md</code>.</li>
+          <li><b>Stage 0 (legacy): <code>modernization-effort</code></b> &mdash; preserved as-is. Source-of-truth
+          for code being selectively brought forward. In-flight stragglers (e.g., Race D Windows round-3) can
+          finish here. No new milestone work cuts from it. No destructive operations on the branch or its
+          history.</li>
+        </ul>
+        <p>Every commit on a revamp trunk is one Causeless could read and either merge or critique cleanly. Smaller
+        PR cadence is mandatory across both stages.</p>
+        <h4>Consequences</h4>
+        <p>The "clean it up later for upstream" tax is avoided by not creating it. Upstream merge becomes
+        feasible in principle for each commit on revamp trunks. Wall-clock cost: ~5&ndash;7 days for Stage 1
+        foundation rebuild (7 consolidated PRs across 4 waves). The end goal (working PvP rollback MP) is
+        unchanged; the route is via clean trunks instead of accumulating on the legacy trunk. Causeless's three
+        feedback items all addressed: smaller well-defined PRs (7 cohesive PRs, each one conceptual unit a
+        reviewer can hold in their head, with 2-8 internal commits inside for bisectability), Q40.24 dropped
+        (FPU + libm path validated empirically at Stage 1 PR #7), Controller-sync MP from M7 onward (per
+        ADR-018). The CLAUDE.md "Stage convention" + "Architecturally rejected" + "PR decomposition" sections
+        capture the binding rules.</p>
+      </div>
+    </section>
+
+    <section class="adr" id="adr-020">
+      <div class="adr-head">
+        <span class="adr-id">ADR-020</span>
+        <span class="adr-title">Fork-first execution discipline &mdash; Stage 1 runs on the fork; upstream PRs are opportunistic, never blocking</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-05-27 &middot; <b>operational discipline</b> that makes ADR-008's "fork-first;
+        upstreaming opportunistic, never a gate" stance literal for Stage 1 execution.</p>
+        <h4>Context</h4>
+        <p>ADR-008 (fork-first development) was the standing policy from day one of the cortex-modern fork:
+        <i>"work in cortex-modern first; optionally upstream via <code>pr/*</code> branches later."</i> In
+        practice, the upstream LuaJIT PRs (PR A = upstream
+        <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project/pull/279">#279</a>,
+        PR B held back pending PR A merge) drifted toward being implicit gates on Stage 1: the question
+        <i>"can we start Stage 1 Wave 1?"</i> kept getting answered with <i>"after PR A + PR B land
+        upstream."</i> That implicit gate compounded with a review-pace observation that crystalized the issue
+        on 2026-05-27: upstream PR #279, opened 2026-05-26 PM, had received no review after 24+ hours, while
+        prior PRs against the user's fork branches had been reviewed near-instantly. The contrast surfaced a
+        broader risk &mdash; if Stage 1's 7 PRs each waited on Causeless's organic review pace, Stage 1
+        wall-clock would balloon 5&ndash;10&times; from the planned ~5&ndash;7 days.</p>
+        <p>The user's choice was: (a) wait for Causeless and accept the slowdown, (b) burn the upstream bridge
+        and fork fully away, or (c) enforce ADR-008 strictly &mdash; ship to the fork at the user's own pace,
+        keep upstream PRs open as goodwill, and let upstream submissions be a per-PR opportunistic decision
+        rather than a sequencing gate. (c) is what ADR-008 always said; it just hadn't been treated as
+        binding.</p>
+        <h4>Decision</h4>
+        <p>Adopt fork-first execution as the binding operational discipline for Stage 1 and beyond. Concretely:</p>
+        <ul>
+          <li><b>All Stage 1 work lands on <code>Madreag/cortex-modern:determinism-revamp</code> first.</b>
+          Every Stage 1 PR (Pre-Wave-1 LuaJIT folding + Waves 1-4's 7 PRs) is cut as a sub-branch from
+          <code>determinism-revamp</code>, opened as a fork PR against
+          <code>Madreag/cortex-modern:determinism-revamp</code>, reviewed by the user (with AI review agents
+          per PR for substantive coverage), and merged at the user's pace.</li>
+          <li><b>Upstream submission is per-PR opportunistic.</b> When Causeless is responsive, mirror the
+          PR upstream via an <code>pr/&lt;name&gt;-upstream</code> branch cut from
+          <code>upstream/development</code> directly. When he's not, fork-only is acceptable.</li>
+          <li><b>LuaJIT modernization (PR A + PR B) merged into <code>determinism-revamp</code></b> via the
+          Pre-Wave-1 procedure (DETERMINISM_REVAMP_PLAN.md &sect;5.0): merge
+          <code>pr/luajit-update-current-tip</code> into <code>determinism-revamp</code> (fast-forward), then
+          merge <code>pr/luajit-windows-source-build</code> (5 conflicts resolved in the merge commit using the
+          tested recipe). ~10 min total. The PR branches themselves are unchanged &mdash; same branches stay
+          ready for upstream submission whenever appropriate. Gives the fork the LuaJIT modernization regardless
+          of upstream pace.</li>
+          <li><b>Upstream PRs stay open as goodwill.</b> PR #279 remains open; PR B's upstream branch stays
+          held back, rebases and opens upstream after #279 merges. No bridge burned; future cooperation
+          preserved.</li>
+          <li><b>Patience timeline per upstream PR</b> (applies to PR #279 and any future upstream
+          submission): day 0&ndash;7 organic review; day 7 polite ping if silent; day 14&ndash;21 close-and-fold
+          the upstream PR amicably if no engagement. The work is already in <code>determinism-revamp</code>
+          (via Pre-Wave-1 or the corresponding fork merge), so closing an unanswered upstream PR has no
+          effect on fork progress &mdash; it's purely a goodwill signal. For PR #279 opened 2026-05-26 PM:
+          ping 2026-06-02, close-and-fold 2026-06-09 to 2026-06-16.</li>
+          <li><b>Stage exit criteria are evaluated on the fork only.</b> Stage 1 closes when
+          <code>determinism-revamp</code> meets DETERMINISM_REVAMP_PLAN.md &sect;9 criteria. Upstream merge
+          status of any PR is explicitly NOT an exit criterion.</li>
+        </ul>
+        <h4>Consequences</h4>
+        <p>Stage 1 velocity decouples from upstream review pace. The 7-PR plan plus Pre-Wave-1 LuaJIT folding
+        executes at the user's chosen cadence (~5&ndash;7 days agent work + verification), independent of
+        whether Causeless engages with any individual upstream PR. The M9 north star (working PvP rollback
+        MP) is reachable on this fork regardless of upstream merge status. Each fork PR is still STRUCTURED
+        to be upstream-friendly &mdash; same commit-message discipline, same Causeless-style PR body, same
+        scope limits &mdash; so opportunistic upstream submission of any fork PR is a cherry-pick + push,
+        not a rewrite. Cost: slight duplication for the dual-track PRs (upstream-bound PRs need a separate
+        <code>pr/&lt;name&gt;-upstream</code> branch from <code>upstream/development</code>); ongoing
+        decision overhead per PR ("upstream this one too?"). Both are small relative to the 5&ndash;10&times;
+        wall-clock cost of gating on Causeless's pace.</p>
+        <h4>Alternatives rejected</h4>
+        <ul>
+          <li><b>Wait for Causeless</b>: 5&ndash;10&times; wall-clock multiplier on Stage 1. M9 ship date
+          slips by months for no quality gain.</li>
+          <li><b>Burn the upstream bridge</b> (close PR #279, never submit upstream again): premature; no
+          upside vs keeping PRs open; loses future cooperation; signals bad-faith to the upstream community.</li>
+          <li><b>Combine PRs into mega-bundles for faster review</b>: directly contradicts Causeless's
+          2026-05-25 feedback (rejected the m5.5 mega-bundle pattern). Same trap that ADR-019 addresses.</li>
+          <li><b>Demand SLA on upstream reviews</b>: not a thing in open source; would damage the
+          relationship.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ADR-021 -->
+    <section class="adr" id="adr-021">
+      <div class="adr-head">
+        <span class="adr-id">ADR-021</span>
+        <span class="adr-title">The determinism solution, finalized (r7) &mdash; cosmetic-RNG root cause, STRID=0 over <code>det_pairs()</code>, built-in hash over BLAKE3</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-06-05 &middot; the empirical close of the determinism foundation, verified
+        cross-platform GREEN on the reference branch <code>fix/determinism-r7</code> (Windows + Linux + macOS).</p>
+        <h4>Context</h4>
+        <p>Stage 1's determinism work (ADR-019) bottomed out in a five-round cross-platform root-cause hunt. The
+        decisive finding inverts the original mental model: <b>it was never a threading problem.</b> The divergence
+        was a family of host-dependent <b>cosmetic-RNG leaks</b> &mdash; render, audio and effect-rotation code
+        drawing the <i>sim</i> RNG (<code>g_SimRNG</code>) on host-frame-rate-gated frames, the audio path
+        (<code>SoundSet::SelectNextSounds</code> + pitch, where FMOD's host-dependent channel gating varied the
+        draw count) being the dominant multi-core offender &mdash; plus two <b>uninitialized pooled reads</b>
+        (<code>Atom::Clear</code> leaving <code>m_IntPos</code> and Bresenham step state unset). Critically,
+        <b>Windows' scheduler hid the multi-core divergence</b>: every Windows-only "GREEN" was a false-GREEN, and
+        the Linux/macOS <code>--threads 1,2,4,8</code> matrix is the real proof (necessary-but-not-sufficient on
+        Windows). The fix was made <b>with full parallelism intact</b> &mdash; a standing project rule, never
+        serialize the race away. An <code>r7</code> finalization pass then revisited three design choices that had
+        accreted during the hunt.</p>
+        <h4>Decision</h4>
+        <p>Adopt the <code>r7</code> solution as the determinism foundation, with three corrections to the earlier
+        in-flight design:</p>
+        <ul>
+          <li><b>Drop the global <code>det_pairs()</code> Lua replacement &rarr; stock <code>pairs()</code> +
+          <code>LUAJIT_SECURITY_STRID=0</code>.</b> String-keyed table iteration is deterministic because STRID=0
+          makes LuaJIT assign string-ids in allocation order (deterministic) rather than randomised, and table
+          string-key order <i>is</i> the string-id (verified from <code>lj_tab.h</code>:
+          <code>hashstr(t,s)=hashmask(t,(s)-&gt;sid)</code>). The old <code>det_pairs()</code> sorted keys on
+          <i>every</i> iteration yet its comparator <b>punted on pointer / table / function / userdata keys</b>
+          (compared them equal) &mdash; so it never fixed the real object-keyed case while taxing every loop. STRID=0
+          is the correct, zero-cost mechanism; object-keyed sim tables key by <code>UniqueID</code> instead.</li>
+          <li><b>Drop the BLAKE3 crypto vendor &rarr; a small built-in FNV-1a / splitmix64 integer hash</b> inside
+          <code>SimChecksum</code>. BLAKE3 was crypto overkill for a divergence checksum; the built-in hash is
+          integer-only, so it is bit-identical cross-platform <i>by construction</i>, and it removes a ~2,590-line
+          vendor dependency.</li>
+          <li><b>Keep nlohmann/json</b> &mdash; but scoped strictly to the structured test-report / trace format
+          (the determinism harness's output, four tooling files), never the engine sim. Hand-rolling a JSON writer
+          is the reinvent trap; this is the one vendor that earns its place.</li>
+        </ul>
+        <p>Verified on Windows + Linux + macOS: the self-test positive control diverges as designed, single-core
+        scenarios all match, and the <code>--threads 1,2,4,8</code> matrix (including the
+        <code>M2PairsStress</code> / <code>M2LuaBaseline</code> string-key canaries) is bit-identical multi-core ==
+        single-core. STRID=0 was confirmed reaching <code>lj_str.c</code>'s compile.</p>
+        <h4>Consequences</h4>
+        <p>The determinism foundation is empirically closed and equivalent across all three platforms. The chosen
+        cross-platform path validates ADR-019's bet (FPU + libm, no Q40.24): the fix lived in RNG-stream hygiene and
+        uninitialised reads, not in the number system, so the Q40.24 rejection holds. Two vendor dependencies shrink
+        to one. The mod-facing surface is untouched &mdash; <code>pairs()</code> behaves exactly as before for mods;
+        only the build flag changes. The Windows-false-GREEN lesson is now a hard verification rule: a determinism
+        claim is only proven on the Linux/macOS thread matrix, never on Windows alone. This decision records the
+        <i>what</i> and <i>why</i>; the per-PR landing of these corrections is ADR-022. Full record:
+        <code>D:/Projects/R7_RESULTS.md</code> and the five-round hunt log in
+        <code>D:/Projects/DETERMINISM_FIX_PACKAGING_PLAN.md</code>.</p>
+      </div>
+    </section>
+
+    <!-- ADR-022 -->
+    <section class="adr" id="adr-022">
+      <div class="adr-head">
+        <span class="adr-id">ADR-022</span>
+        <span class="adr-title">Determinism foundation repackaged into one numeric sequence of 10 per-concern PRs</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-06-05 &middot; supersedes the &ldquo;7 PRs across 4 waves&rdquo; packaging in
+        ADR-019 for Stage 1; the <i>trunk strategy</i> in ADR-019 is unchanged.</p>
+        <h4>Context</h4>
+        <p>ADR-019 committed Stage 1 to clean per-concern PRs (a direct answer to Causeless's 2026-05-25 rejection
+        of bundled mega-changesets) and sized it as &ldquo;7 PRs across 4 waves.&rdquo; As the determinism work was
+        actually built, root-caused (ADR-021) and assembled for review, the wave grouping and the letter / Wave
+        naming proved to be its own form of bundling &mdash; a reviewer still had to hold a whole wave in their head,
+        and the relationship between &ldquo;Wave 2 PR&nbsp;#4&rdquo; and the submission order was not self-evident.
+        The two LuaJIT PRs had already merged upstream as <b>#279</b> and <b>#280</b>, anchoring a clean numeric base
+        (<code>upstream/development @ 20dfb3ea5</code>).</p>
+        <h4>Decision</h4>
+        <p>Consolidate the determinism foundation into a <b>single numeric sequence of 10 small, per-concern PRs</b>
+        &mdash; no letter names, no &ldquo;Wave&rdquo; bundling. <b>The PR number is the submission order.</b> PRs
+        1&ndash;2 are the already-merged LuaJIT track; PRs 3&ndash;10 are the determinism foundation, each
+        independently reviewable, each a single conceptual unit (with 2&ndash;8 internal commits inside for
+        bisectability):</p>
+        <ul>
+          <li><b>3</b> &mdash; vendor nlohmann/json only (<code>pr/vendor-nlohmann</code>; BLAKE3 dropped per ADR-021).</li>
+          <li><b>4</b> &mdash; cross-platform stability + FP contract (<code>-ffp-contract=off</code> / <code>/fp:precise</code>, atomic callback-id, AtomGroup MOID-order, folded uninit/UAF/meson-FP).</li>
+          <li><b>5</b> &mdash; LuaJIT determinism flags (<code>LUAJIT_SECURITY_STRID=0</code> +<code>PRNG=0</code>) &mdash; the whole <code>pairs()</code>-determinism mechanism, prereq for PR 6.</li>
+          <li><b>6</b> &mdash; Lua <code>math.random</code>-per-state + <code>os</code> stubs; <b>stock <code>pairs()</code></b>, <code>det_pairs()</code> dropped (ADR-021).</li>
+          <li><b>7</b> &mdash; the engine plumbing: <code>SimChecksum</code> (built-in hash), sim/render RNG split, <code>TimerMan</code> fixed-step time, the per-activity Lua reseed, and the cosmetic-RNG-leak fixes.</li>
+          <li><b>8</b> &mdash; threaded-sim determinism + the <code>SyncedUpdate</code> cross-actor mutation contract (Path E), full parallelism kept. Fork-review first.</li>
+          <li><b>9</b> &mdash; the <code>cccp-ctl</code> harness + <code>-determinism-check</code> mode + 11 <code>Tests.rte</code> scenarios (the proof surface). Fork-review first.</li>
+          <li><b>10</b> &mdash; the permanent CI determinism gates (scenario sweep + thread matrix + cross-platform trace + TSan + perf baseline + positive control).</li>
+        </ul>
+        <p>The branches are repackaged from the <code>fix/determinism-r7</code> reference, then integrated and
+        re-verified on <code>stage/cumulative-verify</code> (merge 3&ndash;7, cherry-pick 8 + 9) to prove they both
+        build and remain determinism-GREEN. Submission stays one-at-a-time, permission-gated, paced by Causeless's
+        review; PRs 8 and 9 (the two architectural ones) get fork-review first.</p>
+        <h4>Consequences</h4>
+        <p>Each PR is one purpose a reviewer can hold in their head, and the order to read them in is just the
+        number. This sharpens ADR-019's intent rather than changing it &mdash; the clean-stage-trunk strategy, the
+        rejected approaches, and the fork-first execution discipline (ADR-020) all stand. The integration discipline
+        is the &ldquo;never a broken PR&rdquo; gate (CLAUDE.md): every cumulative state upstream will actually
+        receive (<code>base+3</code>, <code>base+3+4</code>, &hellip;) is built AND booted on Windows before that PR
+        ships &mdash; the all-merged build passing is necessary but not sufficient. The packaging discipline already
+        caught two fold-map bugs (the Lua reseed had to move from PR 6 to PR 7 because it reads PR 7's sim RNG; PRs 8
+        and 9 were mis-based and re-pointed to verified content) and two process slips, all before anything reached
+        the maintainer. Canonical per-PR detail: <code>D:/Projects/PRs/PR_ROADMAP.html</code>; repackaging runbook +
+        fold-map: <code>D:/Projects/DETERMINISM_FIX_PACKAGING_PLAN.md</code>.</p>
+      </div>
+    </section>
+
+    <!-- ADR-023 -->
+    <section class="adr" id="adr-023">
+      <div class="adr-head">
+        <span class="adr-id">ADR-023</span>
+        <span class="adr-title">The determinism boundary excludes AI output; M4ThreadStress's thread matrix is advisory by design</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-06-08 &middot; refines ADR-018 (Controller-sync) by naming what is, and is not, on the deterministic boundary.</p>
+        <h4>Context</h4>
+        <p>PR 10's longer-horizon CI surfaced an <code>M4ThreadStress</code> determinism residual (the scenario was renamed <code>ThreadStress</code> in the 2026-06-08 readiness fix round): at high thread counts the
+        traces diverge starting ~tick&nbsp;795 (run-to-run and across thread counts). It was first read as a re-cut
+        regression and <b>disproven</b> &mdash; <code>git diff stage/cumulative-verify..cd3f34afd</code> is only the inert
+        macOS <code>Main.cpp</code> guard, so the binaries are byte-identical on Linux. Root-causing it on Linux: the
+        divergence is <b>AI-led</b> &mdash; the <code>controller</code> subsystem diverges first @795, with the physics
+        subsystems (<code>actors</code>/<code>particles</code>/<code>carve_math</code>) following 2&ndash;3 ticks later as a
+        <i>downstream consequence</i> of the different controller inputs. AI randomness is ruled out as the cause: every
+        scripted hook is wrapped in a per-MO RNG scope (<code>DeterministicMORNGScope</code>), so <code>math.random</code> and
+        the C++ sim RNG draw from a per-MO generator seeded by <code>uniqueID+tick+phase</code> &mdash; thread-invariant. What
+        remains is a <b>cross-actor read during the parallel AI</b> (<code>UpdateControllers</code> runs the AI in a
+        <code>parallelize_loop</code> over Lua states) whose value depends on how the loop partitioned the actors &mdash; i.e.
+        on the thread count. The physics core itself is count-deterministic: M1/M2/M3 @900t are bit-identical across thread
+        counts; only the threaded-AI-stress scenario diverges. The dropped <code>FreezeStateForAIPhase</code> (the
+        &ldquo;Frozen*&rdquo; snapshot) would have made these reads order-independent, but it is architecturally rejected.</p>
+        <h4>Decision</h4>
+        <p>Name the deterministic boundary explicitly. Under Controller-sync (ADR-018) the AI runs <b>per-machine and is not
+        on the deterministic wire</b> &mdash; only Controllers cross the network, and rollback records-and-replays Controllers
+        rather than re-running the AI. Therefore <b>cross-thread / cross-machine AI non-determinism is acceptable and out of
+        scope for the determinism foundation.</b> What must be deterministic &mdash; and is, verified &mdash; is the
+        <b>simulation given the same Controllers</b> (the physics core, bit-identical across thread counts for M1/M2/M3).
+        <code>M4ThreadStress</code>'s thread-count matrix tests AI determinism, so it ships <b>advisory</b> in the CI (PR 10
+        already does this), documented as advisory-<i>by design</i> rather than a known-failing gate. We do <b>not</b>
+        reintroduce <code>FreezeStateForAIPhase</code>/Frozen*, and we do <b>not</b> serialize the AI to force determinism
+        &mdash; both fight the architecture for a property the goal does not need.</p>
+        <h4>Consequences</h4>
+        <p>Stage 1 is closeable: the deterministic boundary (sim given Controllers) is met and verified, and a future
+        contributor who sees &ldquo;M4ThreadStress thread-matrix diverges&rdquo; finds this ADR instead of re-chasing it as a
+        bug (as the PR-10 agent initially did). One narrow, <i>separate</i> item was checked and closed: under
+        ThreadSanitizer the &ge;16-thread races are <b>LuaJIT-runtime internals</b> (JIT mcode allocation + the allocator's
+        mmap-hint global, rooted in <code>lj_*</code>) fired by concurrent Lua states &mdash; already classified as phantom
+        noise and suppressed (<code>race:^lj_</code> in <code>tsan-known-races.md</code>). They are address-level, benign for
+        determinism values, and not a game-logic race, so there is nothing to surgically fix. If a future design ever needs deterministic AI
+        <i>replay</i> (it does not under Controller-sync), this is the decision that would be revisited. Record: task #98,
+        <code>D:/Projects/PR10_CI_RESULTS.md</code>, and the <code>project-old-determinism-solution-to-reconcile</code> memory.</p>
+      </div>
+    </section>
+
+    <!-- ADR-024 -->
+    <section class="adr" id="adr-024">
+      <div class="adr-head">
+        <span class="adr-id">ADR-024</span>
+        <span class="adr-title">Stage 2 multiplayer ships lockstep first; rollback is gated by measurement</span>
+        <span class="status status-done">Accepted</span>
+      </div>
+      <div class="adr-body">
+        <p class="small muted">2026-06-16 &middot; supersedes rollback-first sequencing in ADR-015/016/018-era milestone docs while preserving Controller-sync.</p>
+        <h4>Context</h4>
+        <p>The previous Stage 2 docs made M8/M9 rollback the mandatory online path. That overcommits before the
+        engine has the pieces rollback needs: complete snapshot/restore, fast re-sim, Lua/mod state boundaries, and
+        audio/VFX side-effect suppression. At the same time, pure lockstep has real latency limits on high RTT or
+        jittery links. Corefall-style server-authoritative architecture remains useful research, but porting that shape
+        directly into Cortex Command first would turn the first playable milestone into a much larger state-replication
+        project.</p>
+        <h4>Decision</h4>
+        <p>Make <code>D:/Projects/MULTIPLAYER_BEST_PLAN.md</code> the Stage 2 source of truth. Build in this order:
+        Controller wire/replay synctest, GNS transport/session/mod identity, playable Controller-sync deterministic
+        lockstep, connection-quality UX, snapshot/resync/replay, public hosting, and then a rollback decision gate.
+        Rollback is implemented only if lockstep playtests plus snapshot/re-sim timings prove that a bounded PvP scope
+        needs it and can afford it. Full server-authoritative state replication is deferred; the first authority model
+        is server/coordinator authority over session, ordering, mod/config identity, checksums, and resync while peers
+        run the deterministic sim.</p>
+        <h4>Consequences</h4>
+        <p>Rollback-first language in <code>M8_PLAN.md</code>, <code>M9_PLAN.md</code>,
+        <code>MULTIPLAYER_REVAMP_PLAN.md</code>, and older wiki sections is historical. Those docs remain useful as
+        research dossiers, but agents must re-scope their blocks through <code>MULTIPLAYER_BEST_PLAN.md</code> before
+        implementation. Causeless's Controller-sync rule remains intact: AI can run per-machine, Controllers are the
+        network boundary, and the replicated sim must be bit-identical given identical Controllers. Causeless rules may
+        be revisited only at a measured product gate, not because rollback or server authority sounds theoretically
+        better.</p>
+      </div>
+    </section>
+
     <h2 id="open-questions">Open questions &mdash; decisions still needed</h2>
     <div class="card">
       <ul>
@@ -655,7 +1052,11 @@
     </div>
 
     <div class="page-foot">
-      Decision log &middot; 17 decisions recorded &middot; updated 2026-05-18 &middot; ADRs are append-only.
+      Decision log &middot; 24 decisions recorded &middot; updated 2026-06-16 (ADR-024 added &mdash; Stage 2 ships
+      Controller-sync lockstep first and gates rollback by measurement; ADR-023 added 2026-06-08 &mdash; the AI is off the
+      deterministic boundary under Controller-sync; ADR-021 + ADR-022 added 2026-06-05 for the r7 determinism finalization
+      and the 10-PR repackaging; ADR-020 added 2026-05-27 for fork-first execution discipline; ADR-018 + ADR-019 added
+      2026-05-25 for the stage pivot) &middot; ADRs are append-only.
     </div>
   </main>
 

@@ -54,6 +54,34 @@
       ~220K-LOC <code>development</code> branch.</p>
     </header>
 
+    <div class="callout callout-ok">
+      <div class="callout-title">2026-06-05 status &mdash; determinism foundation DONE, cross-platform GREEN</div>
+      <p>The technical analysis below is unchanged; what shifted is the <i>execution</i> of fixes proposed
+      against it, and the determinism foundation those fixes build is now <b>complete and verified bit-identical
+      on Windows + Linux + macOS</b> (multi-core run == single-core run). It is rebuilt cleanly on
+      <code>determinism-revamp</code> (Stage 1, active trunk) and repackaged into a numeric 10-PR sequence
+      (PRs 1&ndash;2 merged upstream; 3&ndash;9 built + verified; 10 in progress). Stage 2
+      <code>multiplayer-revamp</code> follows. Three analysis conclusions updated by the work:</p>
+      <ul>
+        <li><b>&sect;1.2 single-threaded sim &mdash; the cross-platform determinism approach</b> is FPU + libm
+        standardization + <code>-ffp-contract=off</code> everywhere, NOT M3 Q40.24 fixed-point.
+        <b>Q40.24 is rejected</b> (Causeless's review: "really no benefit") &mdash; if Lua float math is
+        cross-platform deterministic (which it appears to be), then physics float math is too. The Q40.24 code
+        stays in <code>modernization-effort</code> as a historical record only; it is not the current plan.</li>
+        <li><b>The real determinism root cause was never threading.</b> It was a family of host-dependent
+        <i>cosmetic-RNG leaks</i> (render / audio / effect-rotation code drawing the sim RNG <code>g_SimRNG</code>
+        on host-frame-rate-gated frames &mdash; the audio leak was the dominant multi-core one) plus two
+        uninitialized pooled reads in <code>Atom::Clear</code>. Windows' scheduler hid the multi-core divergence
+        (every Windows-only "GREEN" was a false-GREEN); the Linux/macOS <code>--threads 1,2,4,8</code> matrix is
+        the real proof. Fixed with full parallelism intact &mdash; never serialized away.</li>
+        <li><b>MP architecture is Controller-sync</b> (per ADR-018) &mdash; the deterministic boundary is the
+        Controller wire, not the entire AI pipeline. Async pathfinding stays async per-machine. The pathfinder
+        serial-epilogue + Race A architectural fix never reapply to revamp trunks.</li>
+      </ul>
+      <p>See ADR-018 + ADR-019 in the <a href="decisions.html">Decision Log</a> for the formal record, and the
+      <a href="engine.html">Engine</a> page for the determinism mechanism detail.</p>
+    </div>
+
     <div class="callout callout-info">
       <div class="callout-title">Tag legend</div>
       <p>
@@ -303,8 +331,9 @@
     </div>
 
     <div class="page-foot">
-      Sources: full read of <code>development</code> @ <code>41e6b7010</code> &middot; updated 2026-05-18 &middot;
-      see the <a href="roadmap.html">Roadmap</a> for what to do about all this.
+      Sources: full read of <code>development</code> @ <code>41e6b7010</code> &middot; updated 2026-06-05
+      (top-of-page callout notes the determinism foundation done + cross-platform GREEN; Q40.24 rejected per
+      ADR-018/019) &middot; see the <a href="roadmap.html">Roadmap</a> for what to do about all this.
     </div>
   </main>
 

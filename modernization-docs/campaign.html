@@ -153,6 +153,16 @@
       is validated. The decision is recorded as <a href="decisions.html">ADR-012</a>.</p>
     </header>
 
+    <div class="callout callout-info">
+      <p class="small"><b>Status note (2026-06-05):</b> the campaign is a <b>later-phase</b> flagship, deferred
+      behind the determinism and multiplayer work. Stage 1 &mdash; the deterministic simulation foundation &mdash;
+      is now <b>done and verified cross-platform GREEN</b> (Windows + Linux + macOS); Stage 2 (multiplayer,
+      <code>multiplayer-revamp</code>, M6&ndash;M10, Controller-sync) is the active phase. When the campaign work
+      starts, it will cut its own branch from the active stage trunk (the <code>multiplayer-revamp</code> tip),
+      and its <code>.ccsave</code> persistence rides the determinism contract the foundation already established.
+      See ADR-018 + ADR-019 in the <a href="decisions.html">Decision Log</a>; campaign content + plan unchanged.</p>
+    </div>
+
     <div class="callout callout-key">
       <div class="callout-title">The headline</div>
       <p>Open Conquest in the shipping game and a notice appears &mdash; hard-coded in
@@ -1146,7 +1156,9 @@
       Cortex Command campaign source (<code>MetaMan</code>, <code>MetagameGUI</code>, <code>MetaFight.lua</code>,
       the <code>Missions.rte</code> activities and faction <code>.rte</code> modules), the <b>Void Wanderers</b>
       mod, the in-game lore text, the Android Arts / Data fluff doc (<code>androidarts.com/cortexcommand</code>),
-      and the <a href="corefall.html">Corefall</a> campaign design. &middot; updated 2026-05-18 &middot; recorded
+      and the <a href="corefall.html">Corefall</a> campaign design. &middot; updated 2026-06-05 (status: a
+      later-phase flagship; determinism foundation done + cross-platform GREEN; multiplayer is the active Stage 2;
+      campaign cuts from the active stage trunk when started) &middot; recorded
       as <a href="decisions.html">ADR-012</a> (<span class="status status-done">Accepted</span>); rides
       <a href="decisions.html">ADR-014</a> (AI), <a href="decisions.html">ADR-015</a>+<a href="decisions.html">ADR-016</a>
       (Multiplayer architecture + sequencing pivot), and benefits from <a href="decisions.html">ADR-017</a>

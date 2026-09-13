@@ -1144,16 +1144,23 @@ lookVector *= aimMatrix;
       indoor bunker properly fogged + revealed by exploration, enemy sprites visible-but-dimmed in
       memory areas (the documented limitation pending the SDF-mask-based terrain commit). All three
       reverts confirmed working as designed.</p>
-      <p style="margin-top: 12px; font-size: 12.8px;">Beyond this PR, the cortex-modern fork is heading
-      into determinism + engine modernization work with an eye toward bringing multiplayer back
-      eventually (rough plan: <a href="multiplayer.html">multiplayer.html</a>). Happy to keep helping on
-      FoW if you want a third pair of hands on specific items; not going to push beyond the contribution
-      shape that's worked here.</p>
+      <p style="margin-top: 12px; font-size: 12.8px;">Beyond this PR, the cortex-modern fork's determinism +
+      engine modernization work has since advanced: as of 2026-06-05 the deterministic-simulation foundation
+      is built and verified cross-platform GREEN (Windows + Linux + macOS), packaged into the numeric PR
+      sequence 1&ndash;10 (the LuaJIT PRs #279/#280 merged upstream; PRs 3&ndash;10 in flight), with
+      multiplayer (Controller-sync, PvP rollback) as the next stage. Live plan:
+      <a href="multiplayer.html">multiplayer.html</a> and the canonical PR roadmap at
+      <code>D:\Projects\PRs\PR_ROADMAP.html</code>. Happy to keep helping on FoW if you want a third pair of
+      hands on specific items; not going to push beyond the contribution shape that's worked here.</p>
     </div>
 
     <div class="page-foot">
-      cortex-modern FoW contribution &middot; updated 2026-05-19 after Causeless's GH issue-thread review
-      and the comment-verbosity feedback &middot; canonical source: the 6 commits at
+      cortex-modern FoW contribution &middot; content current as of Causeless's 2026-05-19 GH issue-thread
+      review and the comment-verbosity feedback; page reviewed 2026-06-05 (status unchanged &mdash; no upstream
+      FoW PR opened yet) &middot; FoW work continues on its dedicated <code>pr/fow-character-centric-2stage</code>
+      branch and is unaffected by the 2026-05-25 stage pivot (the pivot reorganized the MP work onto
+      <code>determinism-revamp</code> / <code>multiplayer-revamp</code> stage trunks; FoW is a separate upstream
+      contribution on its own track) &middot; canonical source: the 6 commits at
       <code>Madreag/cortex-modern:pr/fow-character-centric-2stage</code> &middot; this page is the
       at-a-glance, not the truth &mdash; if something here disagrees with the commits, the commits win.
     </div>

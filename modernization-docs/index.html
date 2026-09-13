@@ -109,26 +109,59 @@
     <!-- ============ ACTIVE PLAN OVERVIEW ============ -->
     <h2 id="active-plan">Active plan &mdash; what's happening now</h2>
 
+    <div class="callout callout-key">
+      <div class="callout-title">2026-06-05 &mdash; the determinism foundation is DONE and cross-platform GREEN</div>
+      <p><b>The hard part of Stage 1 is finished and proven.</b> The simulation now replays bit-for-bit
+      identically &mdash; a multi-core run is byte-identical to a single-core run &mdash; on
+      <b>Windows, Linux, and macOS</b>. That bit-identical multi-core==single-core result across all three
+      platforms <i>was</i> the entire challenge of the determinism foundation.</p>
+      <p>It is repackaged into a single numeric sequence of <b>10 small, reviewable per-concern PRs</b>
+      (no "PR A/B/C/D" letters, no "Wave 1/2/3"):</p>
+      <ul>
+        <li><b>PR 1 &mdash; LuaJIT WohlSoft vendor bump:</b> <span class="status status-done">MERGED upstream #279</span></li>
+        <li><b>PR 2 &mdash; LuaJIT Windows source build:</b> <span class="status status-done">MERGED upstream #280</span></li>
+        <li><b>PR 3 &mdash; vendor nlohmann/json</b> (test-report format only); <b>PR 4</b> cross-platform
+        stability + FP contract; <b>PR 5</b> LuaJIT <code>STRID=0</code>; <b>PR 6</b> M2 Lua determinism;
+        <b>PR 7</b> M0/M1 foundation (SimChecksum + RNG split); <b>PR 8</b> Path E threaded-sim determinism;
+        <b>PR 9</b> cccp-ctl harness + scenarios &mdash; all <span class="status status-done">BUILT + VERIFIED</span>
+        (clean per-concern branches, determinism-GREEN in the integrated build).</li>
+        <li><b>PR 10 &mdash; CI determinism gates:</b> <span class="status status-doing">IN PROGRESS</span> (being
+        built by a dispatched agent, 2026-06-05).</li>
+      </ul>
+      <p><b>Nothing is shipped upstream yet beyond the two merged LuaJIT PRs</b> &mdash; 0 of PRs 3&ndash;10. What
+      remains to close Stage 1: PR 10 finishes &rarr; build+boot every cumulative PR state on Windows (the
+      "never ship a broken PR" gate) &rarr; feed PRs 3&ndash;10 to Causeless one at a time. Then <b>Stage 2
+      &mdash; the multiplayer itself &mdash; begins.</b></p>
+      <p>Technical decisions since 2026-05-25 (the r7 finalization): the global <code>det_pairs()</code> replacement
+      was <b>dropped</b> &rarr; stock <code>pairs()</code> + <code>LUAJIT_SECURITY_STRID=0</code> (string-key
+      iteration is deterministic because STRID=0 makes string-ids allocation-ordered); the BLAKE3 crypto vendor
+      was <b>dropped</b> &rarr; a built-in FNV-1a/splitmix64 hash in SimChecksum; nlohmann/json is <b>kept</b>
+      (test-report only); M3 Q40.24 fixed-point is <b>rejected</b> &rarr; FPU + libm standardization is the
+      cross-platform path. The canonical PR plan is <code>D:/Projects/PRs/PR_ROADMAP.html</code>. See
+      ADR-018 + ADR-019 in the <a href="decisions.html">Decision Log</a>.</p>
+    </div>
+
     <div class="active-banner">
       <div class="active-banner-headline">
-        MP M0&ndash;M4 complete and determinism-verified (2026-05-22) &mdash;
-        <a href="multiplayer.html">MP M5</a> (cross-platform float verification) is the next milestone
+        Stage 1 determinism foundation DONE + cross-platform GREEN &mdash; repackaged into 10 PRs, shipping next
       </div>
       <div class="active-banner-stats">
-        <div><b>3</b> committed flagships (MP / AI / Campaign)</div>
-        <div><b>5</b> engine side tracks (T-RENDER-INTERP / GPU / WASM / COSMETIC / VALIDATION)</div>
-        <div><b>17</b> ADRs (with ADR-016 + ADR-017 as the 2026-05-18 pivot)</div>
-        <div><b>M0&ndash;M4</b> MP milestones complete &amp; determinism-verified</div>
-        <div><b>1</b> upstream contribution staged (<a href="fow.html">FoW finish</a>)</div>
+        <div><b>10</b> determinism-foundation PRs (1&ndash;2 merged, 3&ndash;9 built+verified, 10 in progress)</div>
+        <div><b>3</b> platforms GREEN (Windows / Linux / macOS &mdash; bit-identical multi-core==single-core)</div>
+        <div><b>2</b> upstream contributions merged (<a href="prs.html">#279 + #280</a>)</div>
+        <div><b>2</b> stage trunks (Stage 1 foundation done, Stage 2 MP next)</div>
+        <div><b>0</b> of PRs 3&ndash;10 shipped upstream yet</div>
       </div>
     </div>
 
     <h3>Multiplayer roadmap &mdash; the main spine + engine side tracks</h3>
-    <p class="small muted">Each column is one milestone window of work. Foundation (M1&ndash;M5) builds the
-    deterministic core; enabling (M6) bridges to network; shipping (M7&ndash;M9) delivers per-mode netcode
-    (online co-op / LAN lockstep / PvP rollback); stretch (M10) is public hosting at scale. Side tracks run
-    parallel; "co-or" = coordinate-with-upstream harvest, "harv" = harvest branch, "land" = side track delivers,
-    "grow" = incremental. Full plan: <a href="multiplayer.html">Multiplayer</a> + <a href="engine.html">Engine</a>.</p>
+    <p class="small muted">Each column is one milestone window of work. The <b>determinism foundation
+    (M0&ndash;M5) is DONE and cross-platform GREEN</b> &mdash; repackaged into the 10-PR sequence (see the
+    <a href="prs.html">Upstream PRs</a> page). Next: <b>Stage 2 multiplayer</b> &mdash; enabling (M6) bridges to
+    network; shipping (M7&ndash;M9) delivers per-mode netcode (LAN lockstep / online co-op / PvP rollback);
+    stretch (M10) is public hosting at scale. Side tracks run parallel; "harv" = harvest branch, "land" = side
+    track delivers, "grow" = incremental. Full plan: <a href="multiplayer.html">Multiplayer</a> +
+    <a href="engine.html">Engine</a>.</p>
 
     <div class="timeline">
       <div class="timeline-row"><div class="timeline-label">MP main spine</div><div class="timeline-cells">
@@ -137,8 +170,8 @@
         <div class="tc tc-done">M2&#10003;</div>
         <div class="tc tc-done">M3&#10003;</div>
         <div class="tc tc-done">M4&#10003;</div>
-        <div class="tc tc-current">M5</div>
-        <div class="tc tc-enable">M6</div>
+        <div class="tc tc-done">M5&#10003;</div>
+        <div class="tc tc-current">M6</div>
         <div class="tc tc-ship">M7</div>
         <div class="tc tc-ship">M8</div>
         <div class="tc tc-ship">M9</div>
@@ -213,7 +246,7 @@
 
     <div class="phase-bar">
       <div class="pb-done">DONE</div>
-      <div class="pb-fdn">FOUNDATION (M1&ndash;M5)</div>
+      <div class="pb-fdn">FOUNDATION (M1&ndash;M5) &mdash; DONE, GREEN</div>
       <div class="pb-enable">ENABLE</div>
       <div class="pb-ship">SHIPPING MP MODES (M7&ndash;M9)</div>
       <div class="pb-stretch">STRETCH</div>
@@ -227,10 +260,10 @@
       <tbody>
         <tr>
           <td><a href="multiplayer.html">Multiplayer</a></td>
-          <td>ADR-015 + ADR-016</td>
+          <td>ADR-015 + ADR-016 + ADR-018 + ADR-019</td>
           <td class="status-cell s-active">ACTIVE</td>
-          <td>M0&ndash;M4 done &middot; M5 next</td>
-          <td>M7 LAN lockstep co-op SHIP (then M8 online co-op, M9 PvP rollback, M10 public hosting)</td>
+          <td>Stage 1 (<code>determinism-revamp</code>) foundation DONE + cross-platform GREEN, packaged into 10 PRs (3&ndash;9 verified, 10 building); Stage 2 (<code>multiplayer-revamp</code>) M6&ndash;M10 next</td>
+          <td>M9 PvP rollback playable end-to-end (the user's stated north star) &middot; M10 public hosting is stretch</td>
         </tr>
         <tr>
           <td><a href="ai.html">AI overhaul</a></td>
@@ -257,13 +290,15 @@
     </table>
 
     <div class="callout callout-info">
-      <p><b>Where to start as an AI coding agent:</b> read <a href="multiplayer.html">multiplayer.html</a> for
-      the MP architecture and <a href="engine.html">engine.html</a> for the engine work + side tracks.
-      M0&ndash;M4 &mdash; the determinism foundation through the multi-threaded deterministic sim &mdash; are
-      complete and determinism-verified on Windows; see <code>D:\Projects\MILESTONES_COMPLETION.md</code> (the
-      completion report) and <code>D:\Projects\MISSION_LEDGER.md</code> (live status), with per-milestone
-      build-from plans <code>M1_PLAN.md</code>&ndash;<code>M4_PLAN.md</code>. The next milestone is
-      <b>M5 &mdash; cross-platform float verification</b>. Master handoff: <code>D:\Projects\HANDOFF.md</code>.</p>
+      <p><b>Where to start as an AI coding agent:</b> read the <code>&#9889; RESUME HERE</code> block at the top of
+      the master handoff <code>D:/Projects/HANDOFF.md</code> first &mdash; it is the single current-state snapshot.
+      The canonical PR plan is <code>D:/Projects/PRs/PR_ROADMAP.html</code> (the 1&ndash;10 numeric sequence,
+      per-PR detail, fold-map, road to MP). Stage 1's determinism foundation is DONE + cross-platform GREEN;
+      the repackaging runbook + fold-map is <code>DETERMINISM_FIX_PACKAGING_PLAN.md</code>; the Stage-1 spec is
+      <code>DETERMINISM_REVAMP_PLAN.md</code> &sect;5; Stage 2 (M6&ndash;M10 MP) is
+      <code>ROADMAP_TO_PVP_ROLLBACK.md</code> + <code>MULTIPLAYER_REVAMP_PLAN.md</code>.
+      <code>D:/Projects/cccp/CLAUDE.md</code> documents the stage convention; the
+      <code>modernization-effort</code> branch is preserved as legacy reference.</p>
     </div>
 
     <div class="stats">
@@ -278,7 +313,7 @@
     <div class="card">
       <div class="meta-row"><b>Working fork:</b> <a href="https://github.com/Madreag/cortex-modern">Madreag/cortex-modern</a> &mdash; default branch <code>development</code></div>
       <div class="meta-row"><b>Upstream:</b> <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project">cortex-command-community/Cortex-Command-Community-Project</a> (tracked as the <code>upstream</code> remote for pulling updates)</div>
-      <div class="meta-row"><b>Working branch:</b> <code>modernization-effort</code>, cut from <code>development</code> @ <code>41e6b7010</code></div>
+      <div class="meta-row"><b>Working trunks:</b> Stage 1 <code>determinism-revamp</code> (active, cut fresh from current <code>upstream/development</code>) &middot; Stage 2 <code>multiplayer-revamp</code> (planned, cut from Stage 1 tip) &middot; Stage 0 <code>modernization-effort</code> (legacy reference, cut from <code>development</code> @ <code>41e6b7010</code>). See <code>CLAUDE.md</code> stage convention.</div>
       <div class="meta-row"><b>Build status:</b> verified building &amp; running on Windows 11 (VS 2022 Build Tools, v143 toolset, <code>Final|x64</code>)</div>
       <div class="meta-row"><b>License:</b> GNU AGPL v3 &mdash; any modernization work inherits this</div>
       <hr>
@@ -326,7 +361,7 @@
       </div></a>
       <a class="qnav" href="multiplayer.html"><div class="card">
         <h3>Multiplayer &rarr;</h3>
-        <p class="small muted">Networked play, rebuilt — now a committed plan (ADR-015, sequencing pivot ADR-016): per-mode netcode on a fully deterministic core. Ten milestones M0-M10 — determinism foundation (M1-M5), server spine (M6), LAN lockstep co-op SHIP (M7), online co-op (M8), GGPO rollback PvP (M9), public hosting (M10). M0-M4 complete and determinism-verified; M5 is next.</p>
+        <p class="small muted">Networked play, rebuilt — now a committed plan (ADR-015, sequencing pivot ADR-016, Controller-sync flip ADR-018): per-mode netcode on a fully deterministic core. Ten milestones M0-M10 — determinism foundation (M1-M5), server spine (M6), LAN lockstep co-op SHIP (M7), online co-op (M8), PvP rollback SHIP (M9), public hosting (M10). The determinism foundation is DONE + cross-platform GREEN (Windows/Linux/macOS); Stage 2 multiplayer (M6+) is next.</p>
       </div></a>
       <a class="qnav" href="ai.html"><div class="card">
         <h3>AI &rarr;</h3>
@@ -374,7 +409,8 @@
     </div>
 
     <div class="page-foot">
-      Cortex-Modern modernization wiki &middot; updated 2026-05-22 &middot; branch <code>modernization-effort</code>
+      Cortex-Modern modernization wiki &middot; updated 2026-06-05 (determinism foundation DONE + cross-platform
+      GREEN; 10-PR sequence) &middot; active trunk: <code>determinism-revamp</code> (Stage 1)
     </div>
   </main>
 

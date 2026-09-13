@@ -53,6 +53,17 @@
       fast; Tier&nbsp;3 is strategic and slow. Each item maps to a row in the <a href="tracker.html">Work Tracker</a>.</p>
     </header>
 
+    <div class="callout callout-key">
+      <div class="callout-title">2026-06-16 &mdash; Stage 2 multiplayer plan reset: lockstep first, rollback gated</div>
+      <p>The MP flagship (T3-04 below) still builds on clean stage trunks and Causeless's Controller-sync direction,
+      but the active Stage 2 sequence is now <b>Controller wire/replay synctest &rarr; GNS transport/session &rarr;
+      playable Controller-sync lockstep &rarr; snapshot/resync/replay &rarr; rollback only if measured gates pass</b>.
+      Older M8/M9 rollback-first wording is historical research. The canonical MP plan is
+      <code>D:/Projects/MULTIPLAYER_BEST_PLAN.md</code>; the canonical PR/determinism status remains
+      <code>D:/Projects/PRs/PR_ROADMAP.html</code>; see ADR-018, ADR-019, ADR-024 in the
+      <a href="decisions.html">Decision Log</a>.</p>
+    </div>
+
     <div class="callout callout-info">
       <div class="callout-title">Tag legend</div>
       <p>
@@ -205,19 +216,38 @@
     <div class="card">
       <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-04 &nbsp; Multiplayer &mdash; the networked-play flagship</h3>
       <p class="small">Reopened by <a href="decisions.html">ADR-013</a>, committed as a flagship by
-      <a href="decisions.html">ADR-015</a>, and sequencing-pivoted by <a href="decisions.html">ADR-016</a> on
-      2026-05-18: <b>per-mode netcode on a fully deterministic core</b>. M0 observability is shipped; M1&ndash;M5
-      build the deterministic foundation (RNG split &rarr; LuaJIT patch &rarr; fixed-point atom physics &rarr;
-      multi-threaded sim &rarr; cross-platform/WASM anchor); M6 ships the server spine + GNS transport;
-      <b>M7 ships online co-op</b> (first MP user-visible); M8 LAN lockstep; M9 GGPO rollback PvP; M10 public
-      hosting (stretch). Ten milestones M0&ndash;M10. <i>No Remote Play stopgap</i> (rejected per user direction
-      2026-05). The committed plan &mdash; file touch-points, engine work, side-track interweaving, automated sync
-      harness &mdash; is on the dedicated <a href="multiplayer.html">Multiplayer</a> page; the engine work
-      interweaving (parallel side tracks T-RENDER-INTERP / T-RENDER-GPU / T-WASM-BUILD / T-COSMETIC /
-      T-VALIDATION) is on the <a href="engine.html">Engine</a> page.</p>
-      <p class="small muted">Status: committed plan &mdash; see the <a href="multiplayer.html">Multiplayer</a>
-      page, the <a href="engine.html">Engine</a> page, <a href="decisions.html">ADR-015</a> +
-      <a href="decisions.html">ADR-016</a> + <a href="decisions.html">ADR-017</a></p>
+      <a href="decisions.html">ADR-015</a>, sequencing-pivoted by <a href="decisions.html">ADR-016</a>
+      (2026-05-18), <b>architecture flipped to Controller-sync</b> by <a href="decisions.html#adr-018">ADR-018</a>
+      (2026-05-25), and <b>restructured onto clean stage trunks</b> by
+      <a href="decisions.html#adr-019">ADR-019</a> (2026-05-25). Execution structure:</p>
+      <ul class="small">
+        <li><b>Stage 1: <code>determinism-revamp</code></b> &mdash; <b>DONE + cross-platform GREEN</b>
+        (bit-identical multi-core==single-core on Windows/Linux/macOS). Repackaged into a single numeric sequence
+        of <b>10 per-concern PRs</b> (no "PR A/B/C/D", no "Wave" naming): PR 1 LuaJIT WohlSoft vendor bump
+        (merged #279) / PR 2 LuaJIT Windows source build (merged #280) / PR 3 vendor nlohmann/json (test-report
+        only) / PR 4 cross-platform stability + FP contract / PR 5 LuaJIT <code>STRID=0</code> / PR 6 M2 Lua
+        determinism (math.random-per-state + os stubs; stock <code>pairs()</code>) / PR 7 M0/M1 foundation
+        (SimChecksum + sim/render RNG split) / PR 8 Path E threaded-sim determinism / PR 9 cccp-ctl harness +
+        scenarios / PR 10 CI determinism gates. PRs 1&ndash;2 merged upstream; 3&ndash;9 built + verified; PR 10
+        building now; nothing else shipped upstream yet. Canonical: <code>D:/Projects/PRs/PR_ROADMAP.html</code>.</li>
+        <li><b>Stage 2: <code>multiplayer-revamp</code></b> &mdash; P1 Controller wire/replay synctest &rarr;
+        P2 GNS transport/session/mod hash &rarr; <b>P3 playable Controller-sync lockstep SHIP</b> &rarr;
+        P5 snapshot/resync/replay &rarr; P6 public hosting &rarr; P7 rollback only if measured gates pass.
+        Controller-sync architecture from day one. Per <code>D:/Projects/MULTIPLAYER_BEST_PLAN.md</code>;
+        older rollback-first roadmap files are historical dossiers.</li>
+        <li><b>Architecturally rejected</b> (do not reappear on revamp trunks): M3 Q40.24 fixed-point (FPU + libm
+        standardization is the cross-platform path instead), M4A pathfinder serial-epilogue, M4A Race A
+        architectural fix. Also dropped in r7 finalization: the global <code>det_pairs()</code> replacement
+        (&rarr; stock <code>pairs()</code> + <code>STRID=0</code>) and the BLAKE3 vendor (&rarr; built-in
+        FNV-1a/splitmix64 hash).</li>
+      </ul>
+      <p class="small">The committed plan, file touch-points, engine work, side-track interweaving and validation
+      harness live on the dedicated <a href="multiplayer.html">Multiplayer</a> page (§11.8 covers the Controller-sync
+      flip); engine side-tracks (T-RENDER-INTERP / T-RENDER-GPU / T-WASM-BUILD / T-COSMETIC / T-VALIDATION) on the
+      <a href="engine.html">Engine</a> page.</p>
+      <p class="small muted">Status: committed plan + active stage rebuild &mdash; see the
+      <a href="multiplayer.html">Multiplayer</a> page, the <a href="engine.html">Engine</a> page,
+      <a href="decisions.html">ADR-015 + ADR-016 + ADR-017 + ADR-018 + ADR-019</a></p>
     </div>
     <div class="card">
       <h3><span class="tag tag-arch">[ARCH]</span> &nbsp;T3-05 &nbsp; Retire Allegro 4</h3>
@@ -264,8 +294,9 @@
     </div>
 
     <div class="page-foot">
-      Roadmap derived from the <a href="analysis.html">Technical Analysis</a> &middot; updated 2026-05-18 &middot;
-      track execution in the <a href="tracker.html">Work Tracker</a>.
+      Roadmap derived from the <a href="analysis.html">Technical Analysis</a> &middot; updated 2026-06-05
+      (T3-04 MP flagship card &mdash; Stage 1 determinism foundation DONE + cross-platform GREEN, 10-PR
+      sequence) &middot; track execution in the <a href="tracker.html">Work Tracker</a>.
     </div>
   </main>
 

@@ -143,6 +143,31 @@
       engineer or an AI coding agent should be able to read this page and start.</p>
     </header>
 
+    <div class="callout callout-warn">
+      <div class="callout-title">Status &amp; architecture &mdash; how the AI overhaul sits against the foundation (2026-06-05)</div>
+      <p>Two things set the context for the AI plan below:</p>
+      <ul>
+        <li><b>The determinism foundation is done.</b> Stage 1 &mdash; the deterministic simulation foundation
+        the whole project is built on &mdash; is BUILT and verified bit-identical (multi-core == single-core)
+        on Windows, Linux and macOS. Stage 2 (multiplayer, <code>multiplayer-revamp</code>, M6&ndash;M10,
+        Controller-sync) is the active phase. <b>The AI overhaul is a later/parallel flagship that rides on the
+        deterministic foundation</b> &mdash; it is not part of Stage 1 or Stage 2, and is not yet in flight.</li>
+        <li><b>AI does NOT need to be deterministic.</b> Per ADR-018 Controller-sync MP architecture: the
+        deterministic boundary is the Controller wire, not the AI pipeline. Each machine runs its OWN AI for
+        its own actors (with async pathfinding) in a non-deterministic AI Lua state pool; only Controllers
+        cross the network. This relaxes the constraint on AI from "everything in AI must be deterministic" to
+        "AI must produce Controllers; the sim downstream of Controllers must be deterministic". Separate AI Lua
+        states land at <b>M8</b> of Stage 2 &mdash; the AI pool can path asynchronously without breaking the
+        deterministic sim because pathfinding outputs only reach cross-machine sync via Controllers. See
+        <code>D:/Projects/MULTIPLAYER_REVAMP_PLAN.md</code> §8.</li>
+      </ul>
+      <p>The AI flagship plan below (locomotion-first overhaul, the M0-M6 sequence) is unchanged. Its M0
+      observability harness (decision-event channel, headless runner, CI) is shared with the rest of the
+      project; the per-tick checksum piece of that harness is already part of the shipped Stage 1 foundation,
+      while the AI-specific M0 components (the AI decision channel, the trust scenarios) are scoped with the AI
+      flagship and start when it does.</p>
+    </div>
+
     <div class="callout callout-key">
       <div class="callout-title">The headline</div>
       <p>AI quality is the <b>#1 complaint</b> across Steam reviews, the forums and mod.io, and it has been for
@@ -612,17 +637,19 @@
       (<a href="engine.html">Engine</a>, <a href="decisions.html">ADR-017</a>). Three light couplings:</p>
       <ul>
         <li><b>Build the small new C++ systems (&sect;5.2) determinism-friendly.</b> The event channel, the danger
-        query and the order object are new simulation-adjacent state. Built with ordered iteration, a seeded RNG
-        (the new <code>g_SimRNG</code> from MP M1 Block B) and no wall-clock, they cost the multiplayer build nothing;
-        built carelessly they become determinism debt for MP M5 cross-platform verification.</li>
+        query and the order object are new simulation-adjacent state. Built with ordered iteration, the sim-side
+        seeded RNG (<code>g_SimRNG</code>) and no wall-clock, they cost the multiplayer build nothing &mdash; the
+        sim downstream of the Controller wire stays bit-identical; built carelessly they become determinism debt
+        the cross-platform verification will catch.</li>
         <li><b>The harness is one apparatus.</b> This flagship's <a href="#plan">M0</a> &mdash; the decision-event
-        channel, the headless runner, CI &mdash; was built shared with the Multiplayer flagship's M0 sync harness
-        (now shipped to <code>modernization-effort</code>, 2026-05-18). Build the observability harness <b>once</b>;
-        both flagships ride on it.</li>
-        <li><b>Coordinate with the engine modernization side tracks.</b> AI behavior depends on stable MOID iteration
-        (MP M1 Block C), deterministic Lua iteration (MP M2 LuaJIT patch), and fixed-point physics (MP M3) for
-        deterministic AI replay. The AI flagship's M1&ndash;M6 milestones depend on these foundation milestones being
-        in place; sequence accordingly.</li>
+        channel, the headless runner, CI &mdash; shares the project's determinism harness; its per-tick checksum
+        piece already shipped as part of the Stage 1 foundation. Build the observability harness <b>once</b>;
+        every flagship rides on it.</li>
+        <li><b>Cross-platform determinism is FPU + libm, not fixed-point.</b> The deterministic foundation
+        standardizes on FPU float math with a pinned libm (Q40.24 fixed-point physics was evaluated and rejected
+        &mdash; "no benefit" given Lua-float determinism). The AI itself need not be deterministic under
+        Controller-sync, so this is about the sim it feeds: build the AI's new sim-adjacent state to the same
+        ordered-iteration / seeded-RNG contract the foundation already enforces.</li>
       </ul>
     </div>
 
@@ -855,7 +882,8 @@
     replay and the full reason log.</p>
 
     <h3>8.3 &nbsp; Statistical pass/fail &mdash; flaky becomes rigorous</h3>
-    <p>Cortex Command's simulation is non-deterministic, so a test cannot assert exact state. Instead each scenario
+    <p>The AI's own behaviour is non-deterministic by design (each machine runs its own AI under Controller-sync),
+    so a trust test cannot assert exact state. Instead each scenario
     runs <b>K times</b> and asserts on <i>rates</i> with a confidence bound &mdash; "holds the brain in
     &ge;&nbsp;95% of runs", "friendly-fire incidents &le;&nbsp;X per run on average", "no actor stuck
     &gt;&nbsp;N seconds in &ge;&nbsp;98% of runs". Non-determinism stops being a problem to fight and becomes a
@@ -956,7 +984,10 @@
       AI analysis &amp; implementation plan &mdash; built from a full read of the Cortex Command AI source
       (<code>Data/Base.rte/AI/</code>, <code>Source/System/PathFinder.cpp</code>, <code>Controller.cpp</code>,
       <code>MovableMan.cpp</code>, <code>CHANGELOG.md</code>), the research vault, the upstream issue tracker and
-      the dev-team Discord. &middot; locomotion-first; verified against source and re-scoped 2026-05-17 after
+      the dev-team Discord. Updated 2026-06-05 (status: the determinism foundation is done + cross-platform GREEN;
+      the AI overhaul is a later/parallel flagship riding on it; under ADR-018 Controller-sync the AI doesn't need
+      to be deterministic; separate AI Lua states at M8). &middot; locomotion-first; verified
+      against source and re-scoped 2026-05-17 after
       upstream-dev (Causeless) review; coordination with MP/Engine plans noted 2026-05-18 &middot; recorded as
       <a href="decisions.html">ADR-014</a>; see also the <a href="corefall.html">Corefall Ideas</a> AI cluster.
     </div>

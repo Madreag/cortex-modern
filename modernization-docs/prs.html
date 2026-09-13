@@ -54,6 +54,31 @@
       <a href="analysis.html">Technical Analysis</a> for why upstream PRs tend to stall.</p>
     </header>
 
+    <div class="callout callout-key">
+      <p class="small"><b>Our contributions upstream (2026-06-05):</b> per Causeless's review feedback,
+      cortex-modern ships smaller per-concern PRs. The Stage 1 determinism foundation on
+      <code>determinism-revamp</code> is <b>DONE + cross-platform GREEN</b> (bit-identical
+      multi-core==single-core on Windows/Linux/macOS), repackaged into a single numeric sequence of
+      <b>10 PRs</b> &mdash; no mega-bundles, no "PR A/B/C/D" letters:</p>
+      <ul class="small">
+        <li><b>PR 1</b> LuaJIT WohlSoft vendor bump &mdash; <b>MERGED upstream
+        <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project/pull/279" target="_blank" rel="noopener">#279</a></b>
+        (2026-05-28).</li>
+        <li><b>PR 2</b> LuaJIT Windows source build &mdash; <b>MERGED upstream
+        <a href="https://github.com/cortex-command-community/Cortex-Command-Community-Project/pull/280" target="_blank" rel="noopener">#280</a></b>
+        (2026-05-28).</li>
+        <li><b>PRs 3&ndash;9</b> (nlohmann/json &middot; cross-platform stability + FP contract &middot; LuaJIT
+        <code>STRID=0</code> &middot; M2 Lua determinism &middot; M0/M1 foundation &middot; Path E threaded-sim
+        &middot; cccp-ctl harness) &mdash; built + verified, clean <code>pr/*</code> branches, determinism-GREEN
+        in the integrated build. <b>Not yet opened upstream.</b></li>
+        <li><b>PR 10</b> CI determinism gates &mdash; in progress (building now).</li>
+      </ul>
+      <p class="small"><b>0 of PRs 3&ndash;10 are shipped upstream yet</b> &mdash; they go to Causeless one at a
+      time (permission-gated, paced by his review) after PR 10 finishes and every cumulative state is built+booted
+      on Windows. Stage 2 (M6&ndash;M10 MP on <code>multiplayer-revamp</code>) follows. Canonical PR plan:
+      <code>D:/Projects/PRs/PR_ROADMAP.html</code>; per-PR drafts in <code>D:/Projects/PRs/</code>.</p>
+    </div>
+
     <div class="callout callout-info">
       <p><b>Re-verified live 2026-05-17.</b> All 12 open PRs below were confirmed against the upstream repo via
       <code>gh</code> on 2026-05-17 &mdash; still current. But this page is a <b>cache, not a live feed</b>:

@@ -126,11 +126,46 @@
     </header>
 
     <div class="callout callout-ok" style="margin-bottom:14px">
-      <div class="callout-title">Status &mdash; 2026-05-18</div>
-      <p><b>MP M0 (observability harness) shipped.</b> All five engine subsystems and five side tracks are
-      now planned in this document. <a href="index.html#active-plan">Active plan timeline on index.html</a>;
-      <a href="multiplayer.html">multiplayer.html</a> is the MP main-spine plan;
-      <code>D:\Projects\M1_PLAN.md</code> is the ultra-detailed M1 execution plan ready for an AI coding agent.</p>
+      <div class="callout-title">Status &mdash; 2026-06-05 · determinism foundation DONE, cross-platform GREEN</div>
+      <p>Engine work is organized around <b>clean stage trunks</b> per Causeless's 2026-05-25 review feedback,
+      and Stage 1's <b>determinism foundation is built and verified bit-identical on Windows + Linux + macOS</b>
+      (a multi-core run == a single-core run). The five-subsystem + five-side-track design below stands; what
+      has settled is the determinism approach and where the work lives:</p>
+      <ul>
+        <li><b>FPU + libm standardization</b> is the cross-platform determinism path (<code>-ffp-contract=off</code>
+        everywhere + a single statically-linked libm). <b>M3 Q40.24 fixed-point is rejected</b> &mdash; Causeless's
+        review: "really no benefit," because if Lua float math is cross-platform deterministic (which it appears to
+        be) the physics float math is too. The Q40.24 code stays in <code>modernization-effort</code> as a
+        historical record only; it is no longer the plan and is never reapplied to revamp trunks. (See the PHYSICS
+        subsystem card below, which still describes the rejected fixed-point target as historical.)</li>
+        <li><b>The determinism root cause was never threading.</b> It was a family of host-dependent
+        <i>cosmetic-RNG leaks</i> &mdash; render / audio / effect-rotation code drawing the sim RNG
+        <code>g_SimRNG</code> on host-frame-rate-gated frames (the audio leak in <code>SoundSet::SelectNextSounds</code>
+        + pitch was the dominant multi-core one) &mdash; plus two uninitialized pooled reads (<code>Atom::Clear</code>
+        left <code>m_IntPos</code> + Bresenham step state unset). Windows' scheduler hid the multi-core divergence
+        (every Windows-only "GREEN" was a false-GREEN); the Linux/macOS <code>--threads 1,2,4,8</code> matrix is the
+        real proof. Fixed with <b>full parallelism intact</b> &mdash; the cosmetic draws were routed onto
+        <code>g_RenderRNG</code>, never serialized away.</li>
+        <li><b>The per-tick checksum is a built-in non-crypto hash</b> (FNV-1a / splitmix64, integer-only so it is
+        bit-identical cross-platform by construction) in <code>SimChecksum</code> &mdash; <b>BLAKE3 was dropped</b>
+        (crypto overkill for a divergence checksum). <b>String-key determinism is <code>LUAJIT_SECURITY_STRID=0</code></b>
+        (table string-key order = the string-id, which STRID randomizes by default), not a global <code>pairs()</code>
+        replacement &mdash; the old <code>det_pairs()</code> was dropped. <code>nlohmann/json</code> is kept for the
+        harness's report/trace format.</li>
+        <li><b>T-VALIDATION (cccp-ctl)</b> is rebuilt cleanly on <code>determinism-revamp</code> &mdash; it ships
+        as <b>PR 9</b> (the cccp-ctl CLI + the game's headless <code>-determinism-check</code> mode + 11
+        <code>Tests.rte</code> scenarios), built + verified. The M5.5 mega-bundle on
+        <code>modernization-effort</code> stays as legacy reference.</li>
+        <li><b>Pathfinder serial-epilogue + Race A architectural fix never reappear</b> on revamp trunks per
+        ADR-018 (Controller-sync MP architecture makes them moot).</li>
+        <li><b>Other side tracks (T-RENDER-INTERP / T-RENDER-GPU / T-WASM-BUILD / T-COSMETIC)</b> &mdash; design
+        unchanged; execution waits for revamp trunks before being applied.</li>
+      </ul>
+      <p>The foundation is now a numeric 10-PR sequence on Stage 1 <code>determinism-revamp</code> (PRs 1&ndash;2
+      merged upstream as #279/#280; 3&ndash;9 built + verified determinism-GREEN; 10 in progress) &mdash; canonical
+      plan in <code>D:\Projects\PRs\PR_ROADMAP.html</code>. Stage 2 <code>multiplayer-revamp</code> covers
+      M6&ndash;M10 (per <code>MULTIPLAYER_REVAMP_PLAN.md</code>). See ADR-018 + ADR-019 in the
+      <a href="decisions.html">Decision Log</a>.</p>
     </div>
 
     <div class="master">
@@ -138,8 +173,10 @@
       <p>Five engine subsystems need modernization for the no-compromise multiplayer architecture to land:
       <b>rendering</b>, <b>threading</b>, <b>physics</b>, <b>Lua</b>, and <b>build/platform</b>. The MP main spine
       (M0&ndash;M10 in <a href="multiplayer.html">multiplayer.html</a>) handles the determinism-critical subset
-      directly &mdash; the Lua patch (M2), fixed-point atom physics (M3), deterministic threaded sim (M4), WASM
-      cross-platform anchor (M5), GNS transport (M6). Everything outside the determinism island &mdash; render
+      directly &mdash; the Lua determinism work (M2), atom physics determinism via <b>FPU + libm standardization</b>
+      (M3 &mdash; the fixed-point target named in older drafts is now rejected; see the status callout above),
+      deterministic threaded sim (M4), WASM cross-platform anchor (M5), GNS transport (M6). Everything outside the
+      determinism island &mdash; render
       interpolation, GPU cosmetic offload, the Camera/RenderBatch abstraction &mdash; runs as <b>parallel side
       tracks</b> (T-RENDER-INTERP, T-RENDER-GPU, T-WASM-BUILD, T-COSMETIC, T-VALIDATION) that coordinate with the
       active upstream branches without blocking MP. The result: <b>LAN lockstep (M7) ships first on a deterministic core
@@ -210,8 +247,8 @@
         <div class="sub-stat"><span class="label">Current state</span><span class="val">Float math throughout <code>Atom</code>, <code>AtomGroup</code>, <code>SceneMan</code> penetration. <code>AtomGroup::Travel</code> commented "trainwreck"/"dumpsterfire" in source. Per-pixel Bresenham collision.</span></div>
         <div class="sub-stat"><span class="label">Determinism?</span><span class="val">IN island &mdash; the core of the destructible terrain that defines CC's identity.</span></div>
         <div class="sub-stat"><span class="label">MP-critical?</span><span class="val">YES &mdash; terrain replication as semantic commands depends on the math being bit-identical across machines.</span></div>
-        <div class="sub-stat"><span class="label">Where it lands</span><span class="val"><b>Main spine M3</b>.</span></div>
-        <div class="sub-desc">Modernization target: Q24.8 fixed-point math for the destruction path. Bit-identical by construction across all platforms. Per <a href="decisions.html">ADR-005</a>, the upstream lead explicitly rejected switching to Box2D &mdash; CC's atom physics is identity, not a swappable engine. Fixed-point keeps the design while making it deterministic.</div>
+        <div class="sub-stat"><span class="label">Where it lands</span><span class="val"><b>Cross-platform determinism path: FPU + libm standardization</b> (was main-spine M3 fixed-point, now rejected).</span></div>
+        <div class="sub-desc"><b>Historical target (REJECTED):</b> Q24.8/Q40.24 fixed-point math for the destruction path, bit-identical by construction. Causeless's 2026-05-25 review rejected it ("really no benefit") &mdash; if Lua float math is cross-platform deterministic (which it appears to be), the physics float math is too, so fixed-point buys nothing. <b>The chosen path is FPU + libm standardization</b> (<code>-ffp-contract=off</code> everywhere + one statically-linked libm), which keeps the float math as-is and was verified bit-identical on Win/Linux/macOS. The Q40.24 code stays in <code>modernization-effort</code> as a record only. Separately, per <a href="decisions.html">ADR-005</a> the upstream lead also rejected switching to Box2D &mdash; CC's atom physics is identity, not a swappable engine.</div>
       </div>
 
       <div class="sub">
@@ -219,11 +256,11 @@
           <div class="sub-id">LUA</div>
           <div class="sub-name">Lua runtime</div>
         </div>
-        <div class="sub-stat"><span class="label">Current state</span><span class="val">LuaJIT 2.1 vendored at <code>external/sources/LuaJIT-2.1/</code>. <code>pairs()</code> iterates in hash order (non-deterministic). <code>math.random</code> per state but seeded inconsistently.</span></div>
+        <div class="sub-stat"><span class="label">Current state</span><span class="val">LuaJIT now on the WohlSoft fork, source-built on all platforms (PRs #279/#280 merged upstream). <code>pairs()</code> over string-keyed tables iterates in string-id order, which STRID randomizes by default. <code>math.random</code> per state but seeded inconsistently.</span></div>
         <div class="sub-stat"><span class="label">Determinism?</span><span class="val">IN island &mdash; ~53K LOC of community Lua iterates tables and rolls RNG every tick.</span></div>
         <div class="sub-stat"><span class="label">MP-critical?</span><span class="val">YES &mdash; without deterministic Lua, the mod corpus diverges across clients.</span></div>
         <div class="sub-stat"><span class="label">Where it lands</span><span class="val"><b>Main spine M2</b>.</span></div>
-        <div class="sub-desc">Modernization target: patch LuaJIT pairs() to iterate sorted-by-key, seed math.random per-state from g_SimRNG. Engine-side patch, invisible to mod authors. Per <a href="decisions.html">ADR-002</a> we keep LuaJIT (do not migrate to Luau/Lua 5.4) &mdash; the binding layer (<a href="decisions.html">ADR-003</a>) is a separate concern (luabind&rarr;sol3, Tier-3, post-MP).</div>
+        <div class="sub-desc">Modernization target: build LuaJIT with <code>LUAJIT_SECURITY_STRID=0</code> so stock <code>pairs()</code> iterates string-keyed tables in allocation order (deterministic) &mdash; <b>no global <code>pairs()</code> replacement</b> (the old <code>det_pairs()</code> was dropped; it taxed every iteration and never fixed pointer-keyed tables anyway); object-keyed sim tables key by <code>UniqueID</code>. Plus seed <code>math.random</code> per-state and reseed each activity. Engine/build-side, invisible to mod authors. Per <a href="decisions.html">ADR-002</a> we keep LuaJIT (do not migrate to Luau/Lua 5.4) &mdash; the binding layer (<a href="decisions.html">ADR-003</a>) is a separate concern (luabind&rarr;sol3, Tier-3, post-MP).</div>
       </div>
 
       <div class="sub">
@@ -347,7 +384,7 @@
         <li>WASM build runs the M1 CI determinism scenarios; checksums recorded as canonical.</li>
         <li>CI matrix added: Windows + Linux + macOS x86 + macOS ARM + WASM. All produce identical per-tick checksums.</li>
       </ol></div>
-      <div class="track-field"><span class="track-key">Depends on</span><span class="track-val">M1 (compile flags), M2 (deterministic Lua), M3 (fixed-point physics), M4 (threading optional in WASM &mdash; WebWorkers available but not required for the determinism anchor).</span></div>
+      <div class="track-field"><span class="track-key">Depends on</span><span class="track-val">M1 (compile flags), M2 (deterministic Lua), M3 (physics determinism via FPU + libm standardization &mdash; fixed-point rejected), M4 (threading optional in WASM &mdash; WebWorkers available but not required for the determinism anchor).</span></div>
       <div class="track-field"><span class="track-key">Pairs with</span><span class="track-val">Is M5 itself. Not a side track; main spine.</span></div>
       <div class="track-field"><span class="track-key">Touches</span><span class="track-val touch">meson.build (WASM target) &middot; new Source/WASM/* (build glue) &middot; Source/Audio/FMODManager.cpp (software-mixer fallback for WASM) &middot; possibly Source/Allegro/* shim</span></div>
       <div class="track-field"><span class="track-key">Validated</span><span class="track-val gate"><b>Done when</b> the M1 CI scenarios run in WASM in Node.js and produce checksums identical to Windows/Linux/macOS native builds; the WASM build of CC loads a scene and plays a campaign mission in a browser.</span></div>
@@ -449,7 +486,7 @@ T-VALIDATION is incremental, accreted across M0&rarr;M10</code></pre>
       <tbody>
         <tr><td>T-RENDER-INTERP (harvest)</td><td>upstream branch reaches a stable polish state</td><td>M5 (ideally) or M7</td><td>The upstream <code>interpolated-render-redux</code> branch is the harvest source; our T-RENDER-INTERP plan is to cherry-pick it onto <code>exp/determinism-foundation</code> and verify against the determinism CI gate when it stabilizes.</td></tr>
         <tr><td>T-RENDER-GPU</td><td>M1 complete</td><td>M6</td><td>Needs compile flags pinned (M1 Block E). Lands before M7 so MP user-visible ship benefits from the abstraction.</td></tr>
-        <tr><td>T-WASM-BUILD</td><td>M3 complete</td><td>M5 (fused)</td><td>Needs fixed-point physics so WASM checksum is meaningful. Is M5.</td></tr>
+        <tr><td>T-WASM-BUILD</td><td>M3 complete</td><td>M5 (fused)</td><td>Needs the physics determinism path (FPU + libm standardization) pinned so the WASM checksum is meaningful. Is M5.</td></tr>
         <tr><td>T-COSMETIC</td><td>T-RENDER-GPU complete</td><td>M7</td><td>Needs the GPU abstraction. Lands as M7 ships for max actor ceiling.</td></tr>
         <tr><td>T-VALIDATION</td><td>M0 complete (now)</td><td>Ongoing through M10</td><td>Grows incrementally. Each MP mode adds its test commands.</td></tr>
       </tbody>
@@ -693,8 +730,8 @@ determinism CI gate added in Block A.
         </tr>
         <tr>
           <td>M3</td>
-          <td>Faster terrain physics + bit-identical destruction</td>
-          <td>Atom physics in fixed-point is often <i>faster</i> than float (no expensive transcendentals on hot paths). Terrain destruction stable across all platforms.</td>
+          <td>Bit-identical destruction across platforms</td>
+          <td>Atom physics kept on float and made cross-platform deterministic via FPU + libm standardization (<code>-ffp-contract=off</code>; fixed-point rejected). Terrain destruction stable across all platforms.</td>
           <td>Terrain replication as semantic commands becomes possible. Identical destruction on every client.</td>
         </tr>
         <tr>
@@ -764,7 +801,7 @@ determinism CI gate added in Block A.
       <tbody>
         <tr><td>M1 (cleanup + CI)</td><td>True blocker. If we can't measure determinism, we can't build it.</td><td><b>None.</b> M1 must succeed.</td><td>If M1 fails, whole plan needs replanning.</td></tr>
         <tr><td>M2 (LuaJIT patch)</td><td>If LuaJIT 2.1 pairs() can't be patched cleanly (e.g., JIT/interpreter divergence)</td><td>Opt-in mod sandbox API. Mods that want MP compat opt in.</td><td>Mod compat for MP becomes opt-in instead of automatic. Existing mods stay unchanged.</td></tr>
-        <tr><td>M3 (fixed-point physics)</td><td>If Q24.8 precision proves inadequate (visual A/B test fails) or perf regression too large</td><td>Stay on float; pin compile flags rigorously; use WASM as cross-platform anchor for verification.</td><td>Cross-platform determinism harder; slower CI verification. Acceptable.</td></tr>
+        <tr><td>M3 (physics determinism)</td><td>Chosen path is FPU + libm standardization (float kept; fixed-point rejected per Causeless). If cross-OS FP agreement proves unreachable on some target</td><td>Bundle + statically link one libm (PR 12) and pin <code>-ffp-contract=off</code> rigorously; use the cross-platform trace as the anchor for verification.</td><td>Cross-platform determinism harder on that target; slower CI verification. Acceptable.</td></tr>
         <tr><td>M4 (threaded sim)</td><td>If deterministic merge can't be made to work (Lua collision callback issue insurmountable)</td><td>Ship single-threaded. Online co-op (M7) still works (server CPU handles 4 players fine).</td><td>Max actor count lower. PvP/MMO at scale becomes hard.</td></tr>
         <tr><td>M5 (WASM cross-platform)</td><td>If WASM perf is unacceptable or build matrix maintenance becomes a burden</td><td>Native-only verification. Skip macOS ARM cross-checking.</td><td>macOS ARM users might have desync. Acceptable for initial ship; revisit when M9 PvP demands it.</td></tr>
         <tr><td>M6 (GNS)</td><td>If GNS integration proves too complex (build complexity, Steam coupling concerns)</td><td>ENet (simpler library, MIT-licensed).</td><td>Lose encryption + NAT + lanes. Add libsodium for encryption later. NAT becomes "you need to port forward or use Hamachi."</td></tr>
@@ -825,8 +862,12 @@ determinism CI gate added in Block A.
 
     <div class="page-foot">
       Engine modernization plan &middot; written 2026-05-18 as the parallel-track companion to
-      <a href="multiplayer.html">multiplayer.html</a>. Built from the upstream branch deep-dive
-      (<a href="branches.html">branches.html</a>), the Box2D rejection rationale
+      <a href="multiplayer.html">multiplayer.html</a>; restructured 2026-05-25 for stage pivot per ADR-018/019;
+      updated 2026-06-05 &mdash; determinism foundation done + cross-platform GREEN (top-of-page callout
+      summarizes: FPU + libm path replaces the rejected Q40.24; cosmetic-RNG-leak root cause; built-in
+      SimChecksum hash, not BLAKE3; STRID=0, not det_pairs; T-VALIDATION cccp-ctl rebuilt cleanly as PR 9 on
+      Stage 1 <code>determinism-revamp</code>). Built from the upstream
+      branch deep-dive (<a href="branches.html">branches.html</a>), the Box2D rejection rationale
       (<a href="decisions.html">ADR-005</a>), the MP architectural pivot
       (<a href="multiplayer.html#pivot-rationale">multiplayer.html &sect;11</a> / proposed ADR-016), the corefall
       determinism contract (<a href="https://github.com/Madreag/corefall/blob/main/docs/plan/decisions/dr-052-network-sync-rollback-and-cli-testable-determinism.md">corefall DR-052</a>),

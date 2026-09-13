@@ -54,6 +54,32 @@
       branch, not just its name.</p>
     </header>
 
+    <div class="callout callout-info">
+      <p class="small"><b>Our fork branch structure (updated 2026-06-05):</b> cortex-modern is organized
+      around <b>stage trunks</b> per CLAUDE.md "Stage convention".
+      <b>Stage 0 (legacy)</b> <code>modernization-effort</code> &mdash; preserved as the source-of-truth for code
+      being selectively brought forward.
+      <b>Stage 1 (active trunk)</b> <code>determinism-revamp</code> @ <code>20dfb3ea5</code> (= <code>upstream/development</code>
+      with the two merged LuaJIT PRs #279/#280) &mdash; the determinism foundation, now built and verified
+      cross-platform GREEN (Win + Linux + macOS, bit-identical multi-core == single-core).
+      <b>Stage 2 (future trunk)</b> <code>multiplayer-revamp</code> &mdash; cut from Stage 1 tip when it ships;
+      M6&ndash;M10 Controller-sync MP.</p>
+      <p class="small">The foundation is repackaged into a <b>numeric 10-PR sequence</b> (no "PR A/B/C/D"): PRs 1&ndash;2
+      merged upstream; 3&ndash;9 built + verified; 10 (CI gates) in progress. The per-concern PR branches:
+      <code>pr/vendor-nlohmann</code>, <code>pr/cross-platform-stability-fixes</code>,
+      <code>pr/luajit-determinism-flags</code>, <code>pr/m2-lua-determinism</code>,
+      <code>pr/m0-m1-determinism-foundation</code>, <code>pr/path-e-enforcement</code> (@ <code>6f3d5d79b</code>),
+      <code>pr/cccp-ctl-test-harness-and-scenarios</code> (@ <code>cd3f34afd</code>),
+      <code>pr/ci-determinism-gates</code> (in progress). They are integrated + re-verified on
+      <code>stage/cumulative-verify</code> (base + PRs 3&ndash;9, 44 commits); the verified determinism reference is
+      <code>fix/determinism-r7</code>. The older single mega-branch (<code>fix/determinism-r6</code>, 14 commits) is
+      its cross-platform-GREEN predecessor. Canonical PR plan: <code>D:\Projects\PRs\PR_ROADMAP.html</code>.</p>
+      <p class="small">The branches catalogued <i>below</i> are <i>upstream</i> branches (cortex-command-community
+      repo) &mdash; analyzed for harvest + coordination decisions per ADR-009 / ADR-017. See
+      <code>D:/Projects/CLAUDE.md</code> for our internal stage convention; ADR-019 in the
+      <a href="decisions.html">Decision Log</a> for the pivot rationale.</p>
+    </div>
+
     <div class="callout callout-key">
       <div class="callout-title">The headline</div>
       <p>Upstream <code>development</code> has been <b>frozen since 2026-04-06</b> (verified &mdash; its last
@@ -84,8 +110,10 @@
     <p class="small muted" id="emptyMsg" style="display:none">No branches match the current filter.</p>
 
     <div class="page-foot">
-      Branch analysis &middot; 14 of 45 branches analysed &middot; re-verified live 2026-05-17 from
-      <code>upstream/*</code> &middot; see the <a href="roadmap.html">Roadmap</a> for how this feeds our plan.
+      Branch analysis &middot; 14 of 45 branches analysed &middot; upstream branch data re-verified live
+      2026-05-17 from <code>upstream/*</code> &middot; fork-structure callout updated 2026-06-05 (determinism
+      foundation done, cross-platform GREEN; repackaged per-concern PR branches) &middot; see the
+      <a href="roadmap.html">Roadmap</a> for how this feeds our plan.
     </div>
   </main>
 
