@@ -5,7 +5,8 @@ file is the resume point: read it first, every session.
 Older detail: `_archive/docs_archive_20260912/RESUME_pre-rewrite-20260912.md` (the verbatim pre-rewrite copy — nothing
 was lost, only compressed); `HANDOFF*.md` and the 15 phase plans in `_archive/docs_archive_20260905/`.
 Policy long-form lives in `D:\Projects\CLAUDE.md` (== `AGENTS.md`); the live board is `D:\Projects\STATUS.md`;
-the live order of work is `D:\Projects\LEAD_PLAN.md`. This file does not repeat them — it points at them.
+the live order of work is §5 of this file (`D:\Projects\LEAD_PLAN.md` is the 2026-09-11 plan, §0.1). This file does
+not repeat the policy — it points at it.
 
 Sections: §0 resume in 10 minutes · §1 rules · §2 goal + the eight items · §3 what happened 09-11 → 09-12 ·
 §4 current state · §5 what is left · §6 lessons learned · §7 path index · appendices A-F (project, architecture,
@@ -16,7 +17,7 @@ lead's weekly Fable budget is at 5%; use Opus 5 for help; no new effort; fix wha
 in the wrap-up: wave A finished on the scratch branch with the three lead fix-ups and W71-4 (§4.2); every local
 `stage2/*` and `xref/*` branch backup-pushed to origin (89 branches, 16:29 MST, lease-protected, none rejected);
 W136 read and REJECTED with a precise re-spin (§3.6); the lead's merge tools copied into `grok-workers/lead-tools/`;
-three memory notes for the next session; this file rewritten by the lead (a first draft was delegated and the user
+memory notes for the next session (§7.1); this file rewritten by the lead (a first draft was delegated and the user
 rejected that — **the handoff document, review verdicts and plans are the lead's own work, never delegated**).
 **CLEAN STOP at 2026-09-12 17:30 MST (user's instruction: nothing running).** Every agent, lane, build, engine and
 queue runner was stopped and checked: no `cl.exe`/`link.exe`/`Cortex Command.exe`/`cursor-agent`/runner process on this
@@ -44,7 +45,8 @@ stderr dumps, nine superseded worktrees — every deletion in `reviews/cleanup-2
    firewall policy), Appendix A (the headed §11 review script) and Appendix B (the brief template). The live order of
    work is §5 of this file.
 4. `D:\Projects\reviews\takeover-20260909\LEAD-REVIEW-overnight.md` — the lead's line-by-line review log: per-file
-   verdicts, the findings register F1-F20, every lane acceptance, every NEGATIVE. 1205 lines; the last 400 are today.
+   verdicts, the findings register F1-F20, every lane acceptance, every NEGATIVE. ~1,300 lines; the entries from
+   "MovableMan.cpp verdict" onward are the 2026-09-12 overnight and wrap-up work.
 5. `D:\Projects\reviews\takeover-20260909\grok-workers\SPAWN_LOG.md` — every lane spawn and landing with its model
    evidence line and report path. The last ~150 rows are 2026-09-11/12.
 6. `D:\Projects\CLAUDE.md` — binding policy (delegation, firewall, junctions, scratch, commits, mod compatibility).
@@ -58,7 +60,7 @@ stderr dumps, nine superseded worktrees — every deletion in `reviews/cleanup-2
 | `D:\Projects\control-build` | `stage2/fixgroup-6-lead` @ `4dd386fb51` | **LEAD CANDIDATE.** Built exe `98f73d74aaed` (from `cefccaa1f6`, 14:52 MST) — the FG6B battery ran on it (done, §4.6); superseded by the wave, promote per §5.1 step 5. Dirty only in the vendor `allegro-release.lib`. |
 | `D:\Projects\takeover-build` | `stage2/fixgroup-6-lead-wave-a` @ `d20d4bddfa` | **WAVE SCRATCH.** Wave A (§4.2): thirteen merges, three lead fix-ups and the W71-4 trim over `4dd386fb51`; exe `cf2e611bf36d…` built 17:17 MST from this tip with the gates of §4.1 green. = origin. |
 | `D:\Projects\p4b-interp-validation` | `stage2/p4b-interp-lockstep` @ `aa650e601e` | **THE MILESTONE BRANCH / APPROVED TREE.** The only executable the two-process harness and the verification family launch (exe `ff6a44ac46c8`, 2026-09-11 16:44 MST). `origin` matches. Workers may never write here. Docs say "main" — there is no `main` ref; this branch is it. |
-| `D:\Projects\cccp` | `modernization-effort` @ `f98a88f60e` | Legacy reference **and the shared object store** for every worktree. The June-2026 wiki edits that sat uncommitted were committed and pushed 17:33 MST. |
+| `D:\Projects\cccp` | `modernization-effort` @ `67d844f3d7` (= origin) | Legacy reference, the fork's default branch, **the shared object store** for every worktree, and the wiki (`modernization-docs/`). The June-2026 wiki edits that sat uncommitted are the tip commit (committed and pushed 17:33 MST). |
 
 Worker worktrees (one branch each, reused across lanes so the firewall rules keep covering the path):
 
@@ -139,17 +141,21 @@ the next.
 - **Commit as you go.** Focused per-concern commits on the worker branch as soon as a piece is built and run, several
   times a day. Uncommitted work older than a few hours is a defect. Commit **only** through
   `reviews/takeover-20260909/grok-workers/git_commit.py <tree> "<subject>" ["<body>"] [--all | --paths ...]` — it
-  refuses a message with a trailer and re-reads the stored message. (A `git commit` typed in some agent shells gets a
-  trailer appended; four lead commits carried one before this was caught.)
+  refuses a message with a trailer and re-reads the stored message. (The Cursor agent shell appended a Cursor
+  co-author line to any `git commit` typed into it; five lead commits carried one — four were stripped on 2026-09-11,
+  the fifth was found and stripped on 2026-09-12.)
 - **Push at every verified checkpoint,** several times a day, no per-push OK needed. Before any push (backup pushes
-  included) scan `git log --grep=Co-authored-by --grep=Claude-Session --grep=Generated -i <base>..<tip>`; a hit is
-  stripped message-only with `strip_trailers.py` (trees unchanged) before the push. Push with lease. Record the push.
+  included) run `python grok-workers/lead-tools/scan_trailers.py <tree> upstream/development..<tip>` (line-start
+  match, the same rule `strip_trailers.py` strips by; exit 1 on a hit); a hit is stripped message-only with
+  `strip_trailers.py` as the `git filter-branch --msg-filter`, a branch map with a tree-identity check, and a
+  force-push only after verifying origin still holds the pre-rewrite tips. Push with lease. Record the push.
   **No upstream PRs** (the feed is held). **Trailer strip 2026-09-12 17:49 MST** (user's order: no Cursor co-author anywhere): the one public Cursor co-author line (old `9751a90e29`, 2026-09-10) was stripped by a message-only `git filter-branch --msg-filter strip_trailers.py` over every commit not reachable from its parent; 866 commits changed sha, 148 branches and 2 tags were rewritten (every tree byte-identical, `map.txt`), 147 branches force-pushed after verifying origin still held the pre-rewrite tips (`push2.txt`), 26 tags force-pushed; origin's `exp/determinism-foundation` (a May branch that had diverged from the local copy) was stripped separately (21 May-era co-author lines, old `366b9d0738` → `34253c5708`, tree identical, `README-expdf.txt`) and the local diverged copy was left as it was. A line-start scan of every local branch and tag since 2026-04-01 finds 0 trailer lines; only upstream's own 2022-2025 human co-author lines remain, and they stay. The live docs, STATUS, SPAWN_LOG, LEAD-REVIEW and the fg6c brief had every old sha rewritten from `commit-map.txt` (old sha → new sha, 40-char); evidence logs under `D:\mx` and lane reports keep the OLD shas — resolve them through that map. The old trailer commit is now `79dc711958`. Post-scan of every branch and tag for trailer lines: 0.
 - **Arizona local time only** (user, 2026-09-12 17:00 MST): every message, board line, plan, report, commit body and
   stamp is written as `2026-09-12 17:05 MST` (MST, UTC-7, no daylight saving); never UTC. Read the clock (`date`) in
   the turn that writes the stamp. Evidence logs written before this rule (SPAWN_LOG.md, LEAD-REVIEW-overnight.md, lane
-  reports) keep their UTC stamps — subtract 7 hours; machine logs stay as the tools write them. This file, STATUS.md
-  and CLAUDE.md were converted on 2026-09-12 17:03 MST (pre-conversion copies in `_archive/docs_archive_20260912/`).
+  reports) keep their UTC stamps — subtract 7 hours; machine logs stay as the tools write them. This file, STATUS.md,
+  CLAUDE.md (17:03 MST) and LEAD_PLAN.md (18:01 MST) were converted on 2026-09-12 (pre-conversion copies in
+  `_archive/docs_archive_20260912/`).
 - **The lead writes the thinking documents itself** (user, 2026-09-12 16:45 MST): RESUME.md, handoffs, plans, review
   verdicts and status boards are never delegated to a subagent, whatever the budget. Subagents get bounded engineering
   and verification with an exact spec; the lead reads and re-derives their output.
@@ -165,8 +171,9 @@ the next.
 - **Never widen a comparison mask, tolerance or exclusion; never serialise local AI to get a pass; never patch a mod,
   fixture or test to hide an engine regression.** Every comparison exclusion needs field-specific evidence and an
   independent review. Report EVERY oracle/checker/driver change between a failing and a passing run, with both runs.
-- **Workers never push, never touch `main`/the approved tree, never launch the engine outside the runners.** A worker
-  may commit on its own branch. The lead reads every diff line before any merge.
+- **Workers never push, never touch the milestone branch or the approved tree, never launch the engine outside the
+  runners, never edit outside the paths their brief lists.** A worker may commit on its own branch. The lead reads
+  every diff line before any merge.
 - **Build cap: two Windows MSBuild lanes at `CL=/MP6`; none while the lead's candidate/family build runs (`/MP12`,
   alone).** Judge the cap on `cl.exe`/`link.exe` from other working directories — idle MSBuild node-reuse processes
   linger for an hour and mean nothing.
@@ -238,8 +245,8 @@ prediction. **Flawless normal MP + UX (join / leave / rematch / reconnect) comes
 the endgame technique (bounded rollback and/or prediction), not *whether* it is pursued. The assignment is the whole
 live roadmap, not a milestone.
 
-Percentages are from `STATUS.md` at 2026-09-12 16:10 MST; overall **78%** (mean 77.5). They are the lead's judgement
-against named evidence, not a burn-down.
+Percentages are from `STATUS.md` at 2026-09-12 18:01 MST (the clean-stop board); overall **78%** (mean 77.6). They
+are the lead's judgement against named evidence, not a burn-down.
 
 | # | Item | % | "Done" means |
 |---|---|---|---|
@@ -247,12 +254,12 @@ against named evidence, not a burn-down.
 | 2 | Restore / identity / state inventory | 98 | Restoration + native + identity gates green in the family on Windows AND a clean arm64 clone; the state inventory complete (no undeclared transient); snapshot/restore faithful under every scope. |
 | 3 | Gameplay fixtures + minimizer + matrix | 96 | 3b door/crab/craft under one script, the UI path of an AI order, the seat-side pie close; all gameplay fixtures cross-peer identical with **no exclusions**; 3e (the actor-switch ownership product call) decided with the user. |
 | 4 | Presentation + performance (100-200 ms feel) | 40 | 4a numbers (pinned 2026-09-06, §C.4 below) met or reported as honest misses; 4b preview-event ledger + optimistic projectiles + Activity UI following the preview; 4c headed two-window measurements at ~100/200 ms and two render rates; 4d sim-speed program and the rollback verdict from measurements. |
-| 5 | Breadth + verification debt | 97 | 5b 3/4-peer packs, co-op, PvPvE and the full leave/drop/rejoin/resync/replay/rematch/pause lifecycle on Windows and the Mac; 5c the WSL2 leg (never yet run) in a window with no Windows builds. |
+| 5 | Breadth + verification debt | 98 | 5b 3/4-peer packs, co-op, PvPvE and the full leave/drop/rejoin/resync/replay/rematch/pause lifecycle on Windows and the Mac; 5c the WSL2 leg (never yet run) in a window with no Windows builds. |
 | 6 | H4 reconnect + host moderation | 95 | Phase A §9a gates all green, Phase B substitution (B1) + the moderation GUI (B2), and the **headed §11 reconnect review with the user at the desktop** (LEAD_PLAN Appendix A). |
 | 7 | Lobby / session UX + robustness | 38 | 7a chat (wire exists, no UI/routing yet) · 7b overlay/toasts/delay display · 7c mod-mismatch UX · 7d compression, beacon, delta frames, address re-resolve · 7e replayable post-resync rounds, periodic snapshots, telemetry bundle, crash-rejoin prompt · 7f replay browser + post-match report. |
 | 8 | Discovery / internet play + roadmap | 58 | 8b dedicated headless host (the persistent server/world on the Mac — the end game) · 8a session directory + NAT rendezvous self-hosted on the Mac (preferred) or this PC, with a **real ICE connect proven end to end** · 8c lobby v2 · 8d adaptive delay, audio smoothing, bounded rollback per the item-4 measurements. |
 
-Grouped: flawless normal MP (1, 2, 3, 5, 6) ≈ 96.8%; measured feel (4) 40%; UX + discovery (7, 8) ≈ 48%.
+Grouped: flawless normal MP (1, 2, 3, 5, 6) ≈ 97.0%; measured feel (4) 40%; UX + discovery (7, 8) ≈ 48%.
 Estimate last given (2026-09-12 01:33 MST): 5-8 days of sessions like this session for the whole roadmap.
 
 **Hosting decision (user, 2026-09-11 13:45 MST, settled — do not re-propose):** players self-host; anyone can host and
@@ -465,11 +472,11 @@ Committed through `git_commit.py`; the wave build and the gates in §4.1 were ru
 | `stage2/fixgroup-6-lead` (the candidate) | `4dd386fb51` — **up to date** |
 | `stage2/fixgroup-6-lead-wave-a` (the wave) | `d20d4bddfa` — **up to date** (pushed 17:26 MST after 0-hit scans; earlier pushes at 16:53 and 17:09 MST) |
 | `stage2/coroutine-stack-fit` (W136 + W136-2) | `f1c5e517ae` — **up to date** (pushed 17:26 MST) |
-| `docs/lead-handoff-20260912` (docs snapshot, parent `d20d4bddfa`) | `022179fab8` — pushed 17:27 MST: `docs/handoff-20260912/` holds this file, CLAUDE.md, STATUS.md, LEAD_PLAN.md, the H4 plan, the review ledger, SPAWN_LOG, WORKER_RULES, `lead-tools/`, the FG6B report, the FG6C brief, the pre-rewrite RESUME and the memory notes as they were at the clean stop. The live copies are the ones under `D:\Projects`; this branch is the off-machine backup. |
-| **Backup push, 2026-09-12 16:29 MST** | every local `stage2/*` and `xref/*` branch that was new or ahead: 89 branches, `--force-with-lease`, 84 created + 5 fast-forwarded (`actor-switch-tests`, `fixgroup-6-lead`, `item3b-harness`, `resync-boundary`, `session-directory`), none rejected. CI runs only on `development` pushes and PRs, so nothing was triggered. Trailer scan: the single pre-existing public hit `79dc711958` (§1.1), nothing new. |
+| `docs/lead-handoff-20260912` (docs snapshot, parent `d20d4bddfa`) | tip `47c2130867` — last pushed 18:02 MST (three snapshots: the clean stop, after the strip and cleanup, after the final review): `docs/handoff-20260912/` holds this file, CLAUDE.md, STATUS.md, LEAD_PLAN.md, the H4 plan, the review ledger, the cleanup log, SPAWN_LOG, WORKER_RULES, `lead-tools/`, the trailer-strip maps, the FG6B report, the FG6C brief, the pre-rewrite RESUME and the memory notes. The live copies are the ones under `D:\Projects` (this row was edited after the last snapshot); this branch is the off-machine backup — re-push it with `scratchpad`-free tooling of your own after the next doc pass. |
+| **Backup push, 2026-09-12 16:29 MST** | every local `stage2/*` and `xref/*` branch that was new or ahead: 89 branches, `--force-with-lease`, 84 created + 5 fast-forwarded (`actor-switch-tests`, `fixgroup-6-lead`, `item3b-harness`, `resync-boundary`, `session-directory`), none rejected. CI runs only on `development` pushes and PRs, so nothing was triggered. Trailer scan at the time: only the one pre-existing public hit (stripped an hour later, §1.1), nothing new. |
 | other lane branches | `stage2/preview-substitute-links` (W133-2) `364344d970` · `stage2/posix-test-runner` `6c1a099341` · `stage2/fixgroup-6` `12c7f8cf11` · `stage2/fixgroup-6-preview` `aa650e601e` — all up to date |
 | **Trailer strip 2026-09-12 17:49 MST** | 147 rewritten branches force-pushed (origin tips verified against `trailer-strip-20260912/pre-tips.txt` first), 26 tags force-pushed, origin's diverged `exp/determinism-foundation` stripped separately (`README-expdf.txt`). **Every local branch now equals origin** (checked 17:50 MST). Maps: `reviews/takeover-20260909/trailer-strip-20260912/map.txt` (branch tips) and `commit-map.txt` (866 commits). Any clone or worktree made before 17:45 MST must `git fetch --all` and reset its branches to origin. |
-| `main` | **does not exist on origin.** The fork's default branch is still `modernization-effort` (`f98a88f60e`). Where old notes say "main", they mean the milestone branch. |
+| `main` | **does not exist on origin.** The fork's default branch is still `modernization-effort` (`67d844f3d7`, = origin). Where old notes say "main", they mean the milestone branch. |
 
 ## 4.6 Lanes live at the time of writing
 
@@ -560,8 +567,8 @@ Committed through `git_commit.py`; the wave build and the gates in §4.1 were ru
 ## 5.2 Promote (a day)
 
 8. Merge the candidate into `stage2/p4b-interp-lockstep` in `p4b-interp-validation` (`--no-ff`), tree clean apart from
-   the vendor libs, trailer scan `aa650e601e..HEAD` = 0, push with lease, record the push here and in `STATUS.md`
-   with the remaining failures.
+   the vendor libs, `lead-tools/scan_trailers.py` over `upstream/development..HEAD` = 0 hits, push with lease, record
+   the push here and in `STATUS.md` with the remaining failures.
 9. **The Source44 family** on the approved tree (§0.4), nothing else running. Verdict = chain + remaining + breadth
    81/81 accounted + matrix 106 reviewed + the Mac attempt green. Then items 1, 2 and 5 can move.
 
@@ -804,8 +811,9 @@ STATUS number or record a negative delta.
   landing rows by the lead with the verdict. A landing with no row is unverifiable a day later.
 - **A report that exists only in a notification is lost.** When a subagent cannot write its own report, save the
   notification text verbatim to the lane's `REPORT.md` in the same turn.
-- One live doc (this file), one board (`STATUS.md`), one order of work (`LEAD_PLAN.md`), one review ledger
-  (`LEAD-REVIEW-overnight.md`). Everything else is evidence under `reviews/`.
+- One live doc (this file: state and the order of work), one board (`STATUS.md`), one policy file (`CLAUDE.md` ==
+  `AGENTS.md`), one review ledger (`LEAD-REVIEW-overnight.md`), one spawn log; `LEAD_PLAN.md` is the 2026-09-11 plan
+  kept for its still-current sections (§0.1). Everything else is evidence under `reviews/`.
 - Stale pointers cost a full re-investigation (proven twice). When a milestone lands, update the pointer surfaces in
   the same session.
 
@@ -817,7 +825,7 @@ STATUS number or record a negative delta.
 
 | Purpose | Path |
 |---|---|
-| This doc / board / order of work | `D:\Projects\RESUME.md` · `STATUS.md` · `LEAD_PLAN.md` |
+| This doc (state + order of work) / the board / the 2026-09-11 plan | `D:\Projects\RESUME.md` · `STATUS.md` · `LEAD_PLAN.md` (historical except §6-§8 and Appendices A-B) |
 | Project instructions (identical twins) | `D:\Projects\CLAUDE.md` **==** `D:\Projects\AGENTS.md` |
 | Pre-rewrite RESUME (verbatim) | `D:\Projects\_archive\docs_archive_20260912\RESUME_pre-rewrite-20260912.md` |
 | HANDOFF, HANDOFF2, 15 phase plans, 4.5k reports | `D:\Projects\_archive\docs_archive_20260905\` |
@@ -832,8 +840,8 @@ STATUS number or record a negative delta.
 | Contract audit + the family runner | `reviews\recovery-2026-09-07\contract-audit\` (`CONTRACTS.md`, `run_family.py`, `mac-peer-20260907\MAC_RESUME.md`) |
 | Mod-compatibility steering | `reviews\claude-review-2026-09-08\MOD_COMPATIBILITY_STEERING_PROMPT.md` · family runbook `INTEGRATION_33_RUNBOOK.md` |
 | ADRs (through ADR-024) / public wiki | `cccp\modernization-docs\decisions.html` · https://madreag.github.io/cortex-modern/ |
-| Run roots (junctions inside — never move or delete) | `D:\mx\` (`lead-fg6` the candidate's gates, `fg6bat2` the FG6B battery, `w124b` the ASan reports incl. F20's, `w132` the preview-HUD ASan, `w133b` W133-2's ASan red/red2/green, `w136` W136's red/green, `w136b` W136-2, `w71e` W71-4's red/green/pulse, `wave-a` the wave's gates, `s43b2` R5's evidence) |
-| The lead's cross-session memory (harness) | `C:\Users\egerm\.claude\projects\D--Projects\memory\` — one fact per file, indexed by `MEMORY.md`; the 2026-09-12 notes cover merge verification, separate resolve/check/commit steps, worker test-only code, heredoc backslashes, Mac evidence copies, the model-gate output name, cross-platform build misses |
+| Run roots (junctions inside — never move or delete; 136 roots after the 2026-09-12 cleanup, §4.7) | `D:\mx\` (`lead-fg6` the candidate's gates, `fg6bat2` the FG6B battery, `w124b` the ASan reports incl. F20's, `w132` the preview-HUD ASan, `w133b` W133-2's ASan red/red2/green, `w136` W136's red/green, `w136b` W136-2, `w71e` W71-4's red/green/pulse, `wave-a` the wave's gates, `s43b2` R5's evidence) |
+| The lead's cross-session memory (harness) | `C:\Users\egerm\.claude\projects\D--Projects\memory\` — one fact per file, indexed by `MEMORY.md`; the notes cover merge verification, separate resolve/check/commit steps, worker test-only code, Arizona local time, heredoc backslashes, PowerShell dash values, process kills by PID, subagent reports living in the notification, direct engine launches, Mac evidence copies, the model-gate output name, cross-platform build misses |
 | The lead's session scratchpad (scripts, partB diffs, checkpoint loggers) | `C:\Users\egerm\AppData\Local\Temp\claude\D--Projects\d1ccc20c-5de9-4ed0-bdc3-fc51ecd35f88\scratchpad\` — session-specific; the reusable tools were copied to `grok-workers\lead-tools\` |
 | Fixtures and recordings | `D:\Projects\stage2_p4\fixtures\` (`pickup_fire.ccreplay`, `pickup_fire.txt`), `stage2_p4\rb_replay_20260905\`, `rb_replay_buy\` |
 
@@ -845,7 +853,7 @@ STATUS number or record a negative delta.
 | `…\strip_trailers.py` | message-only trailer strip (trees unchanged) |
 | `…\win_cli\win_job.py` · `…\mac_cli\mac_job.py` · `…\mac_cli\mac_claude_job.py` · `…\devin_cli\devin_job.py` · `…\devin_cli\devin_queue.py` | the four worker routes and the SWE-2 queue (§0.5) |
 | `…\firewall_allow_all_exes.ps1` (elevated) · `firewall_planned_worktrees.txt` | per-executable inbound/outbound allow rules for every `Cortex Command*.exe` under `D:\Projects` |
-| **`…\grok-workers\lead-tools\`** (copied out of the lead's scratchpad 2026-09-12 — use these, not a new copy) | `verify_merge_commit.py` (per-file +/- multiset check of a merge commit) · `resolve_keep_both.py` (keep-both on the conflicted **working** file) · `apply_hunk.py` (re-apply one hunk of a branch diff by content) · `check_merge.py` (pre-commit form of the merge check) · `extract_final.py` (save a Grok lane's final message as `REPORT-final-message.md`) · `verify_lead6b.py` (**verify6**; edit `REPO`/`OUT` at the top) |
+| **`…\grok-workers\lead-tools\`** (copied out of the lead's scratchpad 2026-09-12 — use these, not a new copy) | `verify_merge_commit.py` (per-file +/- multiset check of a merge commit) · `resolve_keep_both.py` (keep-both on the conflicted **working** file) · `apply_hunk.py` (re-apply one hunk of a branch diff by content) · `check_merge.py` (pre-commit form of the merge check) · `extract_final.py` (save a Grok lane's final message as `REPORT-final-message.md`) · `verify_lead6b.py` (**verify6**; edit `REPO`/`OUT` at the top) · `scan_trailers.py` (the pre-push attribution scan, line-start rule, exit 1 on a hit; `--all-branches` for the whole repo) |
 | `<tree>\tools\run_selftests.py` | the 11 socket-free selftests, scored from PASS tokens |
 | `<tree>\tools\win32_test_runner.py` · `run_sim_test.py` · `isolated_launch.py` · `posix_test_runner.py` | the only sanctioned engine launchers (private hidden runtime, muted settings, firewall-rule check; the POSIX one is the macOS twin) |
 | `<tree>\tools\test_global_callbacks.py` | the global-callback driver — it installs the Checkpoint Global fixture; without it `RunGlobalCallbacksSelfTest` returns false and the bare flag is refused |

@@ -53,9 +53,10 @@ binding, the superseded narrative is gone.
   co-author line to any `git commit` typed into it; five lead commits carried one before the rule and the last one was
   found and stripped on 2026-09-12).
 - **Push at every verified checkpoint, several times a day** (user, 2026-09-10); no per-push OK is needed; backup
-  pushes of every local work branch are allowed. Before ANY push scan `upstream/development..<tip>` for lines that
-  START with `co-authored-by`, `claude-session` or `generated with` (a sentence that merely mentions a trailer is not
-  one); a hit is stripped before the push with a message-only rewrite (`grok-workers/strip_trailers.py` as the
+  pushes of every local work branch are allowed. Before ANY push run
+  `python reviews/takeover-20260909/grok-workers/lead-tools/scan_trailers.py <tree> upstream/development..<tip>` (it
+  lists commits whose message has a line that STARTS with `co-authored-by`, `claude-session` or `generated with`; a
+  sentence that merely mentions a trailer is not a hit; exit 1 on a hit); a hit is stripped before the push with a message-only rewrite (`grok-workers/strip_trailers.py` as the
   `git filter-branch --msg-filter`), a branch map with a tree-identity check, and a force-push only after verifying
   origin still holds the pre-rewrite tips. Push with lease; record every push in RESUME.md. **No upstream PRs** (the
   feed is held; ADR-008 upstreaming is opportunistic, never a gate).

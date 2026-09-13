@@ -4,7 +4,7 @@ Rules: updated on every status request and at every checkpoint; percentages are 
 grounded in the evidence named there; Δ is against the previous status request; "Working on" names the exact task and the worker.
 Never reformat; append to the history. Every task, worker or Mac agent must move a number; one that lands without moving a number is reported here as a NEGATIVE delta (wasted time) with the reason, and the lead re-evaluates before spawning the next.
 
-Last update: 2026-09-12 18:02 MST · Overall **78%** (621/8 = 77.6) · Δ in the table is against the 14:38 MST status request (1:98 2:98 3:96 4:40 5:97 6:95 7:38 8:58; item 5 → 98 with F10 closed and FG6B read). CLEAN STOP: nothing is running on this PC or the Mac; no worker session of any route needs resuming; every branch with work is on origin; the next lead starts at RESUME.md §5.1 and spawns its own agents. The history below is append-only and its rows quote the times and states of their moment.
+Last update: 2026-09-12 18:37 MST · Overall **78%** (621/8 = 77.6) · Δ in the table is against the 14:38 MST status request (1:98 2:98 3:96 4:40 5:97 6:95 7:38 8:58; item 5 → 98 with F10 closed and FG6B read). CLEAN STOP: nothing is running on this PC or the Mac; no worker session of any route needs resuming; every branch with work is on origin; the next lead starts at RESUME.md §5.1 and spawns its own agents. The history below is append-only and its rows quote the times and states of their moment.
 
 | # | Item (RESUME §2) | % | Δ | State at the clean stop (2026-09-12 17:30 MST) | Next (RESUME §5) |
 |---|---|---|---|---|---|
