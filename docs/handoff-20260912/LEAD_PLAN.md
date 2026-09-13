@@ -1,8 +1,15 @@
-# LEAD PLAN — Claude Code lead, from 2026-09-11 21:20 UTC
+# LEAD PLAN — Claude Code lead, from 2026-09-11 14:20 MST
 
-> The live execution plan. `RESUME.md` §B is the state, `STATUS.md` is the board, this file is the ORDER of work,
-> the lanes, the routes and the acceptance rules. The lead updates the checkboxes and lane rows at every checkpoint.
-> Read with `CLAUDE.md` (= `AGENTS.md`) "Delegation policy".
+> The 2026-09-11 execution plan (see the status note below). `RESUME.md` is the state and the live order of work,
+> `STATUS.md` is the board, `CLAUDE.md` (= `AGENTS.md`) is the policy.
+
+> **STATUS OF THIS DOCUMENT (2026-09-12 18:01 MST):** this is the 2026-09-11 plan, kept for its still-current parts —
+> §6 (the roadmap order, mirrored in RESUME.md §5.5), §7 (lead duties per landing), §8 (worktree and firewall policy;
+> its branch table is superseded by RESUME.md §0.2), Appendix A (the headed §11 reconnect review) and Appendix B (the
+> brief template). §1's standing table and waves 0-2 are history: the live state is RESUME.md §4, the live order of
+> work is RESUME.md §5, the board is STATUS.md, the policy is CLAUDE.md (= AGENTS.md). Times were converted from UTC
+> to Arizona time on 2026-09-12; shas quoted here predate the 2026-09-12 trailer strip (map:
+> `reviews/takeover-20260909/trailer-strip-20260912/commit-map.txt`).
 
 ## 0. Goal and the two rules that shape everything
 
@@ -15,7 +22,7 @@ Finish the whole §B-1 roadmap as fast as possible without lowering quality. Two
    on the exact defect and green after; the named mechanism is what the code changes; nothing masked, widened or patched
    around). Worker "PASS" and "root cause found" are claims to verify, never results.
 
-## 1. Standing (lead's judgement, 2026-09-11 21:20 UTC)
+## 1. Standing (lead's judgement, 2026-09-11 14:20 MST)
 
 | # | Item (RESUME §B-1) | % | Δ vs 18:11 | Left before 100 |
 |---|---|---|---|---|
@@ -49,9 +56,9 @@ plain messages; the lead reads every diff line before a merge; `WORKER_RULES.md`
 `grok-workers/SPAWN_LOG.md` with its evidence line (the runners append it). Build cap: two Windows MSBuild lanes (`CL=/MP6`),
 none while the Source42 chain builds (`/MP12`); the Mac builds independently. Windows worker builds wait on `Get-Process MSBuild`.
 
-## 3. Wave 0 — preparation (DONE 2026-09-11 21:20 UTC unless marked)
+## 3. Wave 0 — preparation (DONE 2026-09-11 14:20 MST unless marked)
 
-- [x] Firewall: every existing worktree executable path has inbound+outbound allow rules (elevated run 21:10 UTC, 126 paths).
+- [x] Firewall: every existing worktree executable path has inbound+outbound allow rules (elevated run 14:10 MST, 126 paths).
       The sidecar for planned worktrees (`grok-workers/firewall_planned_worktrees.txt`) was added to the script, but that
       elevated run did not execute (prompt missed) → **new lanes reuse merged worktree directories** (section 8) until the
       next elevated run, which the lead requests only when the user is at the PC.

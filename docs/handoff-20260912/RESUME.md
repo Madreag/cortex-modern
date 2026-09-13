@@ -39,7 +39,10 @@ stderr dumps, nine superseded worktrees — every deletion in `reviews/cleanup-2
 
 1. This file, §0-§5.
 2. `D:\Projects\STATUS.md` — the board: one line per item 1-8 with its %, the delta since the last ask, what runs now.
-3. `D:\Projects\LEAD_PLAN.md` — waves, worker routes, acceptance rules, the headed §11 review script (Appendix A).
+3. `D:\Projects\LEAD_PLAN.md` — the 2026-09-11 plan: its waves 0-2 are done and its standing table is historical;
+   still current are §6 (the roadmap order, mirrored in §5.5 here), §7 (lead duties per landing), §8 (worktree and
+   firewall policy), Appendix A (the headed §11 review script) and Appendix B (the brief template). The live order of
+   work is §5 of this file.
 4. `D:\Projects\reviews\takeover-20260909\LEAD-REVIEW-overnight.md` — the lead's line-by-line review log: per-file
    verdicts, the findings register F1-F20, every lane acceptance, every NEGATIVE. 1205 lines; the last 400 are today.
 5. `D:\Projects\reviews\takeover-20260909\grok-workers\SPAWN_LOG.md` — every lane spawn and landing with its model
@@ -300,8 +303,11 @@ At the user's request the lead read the **whole** delta itself, hunk by hunk, an
 - **Part B**, the P4B phase `db9ec184be..be217add64` (542 commits, 394 files, +65419/-2327) — started 15:23 MST.
   Done by 16:10 MST: all of `Source/Network` production code (54 files, 13,685 diff lines), all Managers
   (MovableMan 2,939 lines; LuaMan 5,107; LuaThreadCodec 596; AudioMan, ActivityMan, SceneMan, FrameMan, UInputMan,
-  MusicMan, PrimitiveMan, PostProcessMan, LocalPrediction, …), and half of System (ScenarioRunner, Controller, Atom,
-  CheckpointArchive, PathFinder, Entity). **Still to read: the rest of System, `Main.cpp`, the network selftests.**
+  MusicMan, PrimitiveMan, PostProcessMan, LocalPrediction, …), and all of System by 16:31 MST (ScenarioRunner,
+  Controller, Atom, CheckpointArchive, PathFinder, Entity, ContentFile, AudioCheckpoint, InputScript, AIWriteScript,
+  RTETools, Reader/Writer, BitmapCheckpoint, RTEError, ContractAudit.h, the small files, micropather's
+  sentinel-by-identity fix, StateInventory.csv — all sound). **Still to read: `Main.cpp` (3,074 diff lines) and the
+  network selftests (~11.5k).**
   Five read-only Grok audit lanes (`pb-audit-1..5`) covered Entities, tools, GUI/Menus/Data and second-read the
   network and manager/system hunks; every finding was re-derived by the lead against the **candidate**, not the P4B
   tip, which closed three of them and produced F17, F18, F19.
@@ -570,7 +576,9 @@ Committed through `git_commit.py`; the wave build and the gates in §4.1 were ru
 
 ## 5.4 Finish the review (a session)
 
-13. Part B's remainder: the rest of `Source/System`, `Main.cpp`, and the network selftests. F3 stays an open
+13. Part B's remainder: `Main.cpp` (3,074 diff lines of `db9ec184be..be217add64`) and the network selftests
+    (`Source/Network/*SelfTest*.cpp`, ~11.5k lines) — the same hunk-by-hunk read with verdicts in LEAD-REVIEW; the
+    diffs are regenerated with `git diff db9ec184be be217add64 -- <path>` in any worktree. F3 stays an open
     constraint until a lane touches the frame lane.
 
 ## 5.5 Then the roadmap (LEAD_PLAN §6, in value ÷ effort order with the user's decisions applied)
