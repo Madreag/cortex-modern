@@ -2069,7 +2069,7 @@ do
 		return "local leaf\nlocal function dive(n)\n\tif n > 0 then\n\t\tlocal r = dive(n - 1)\n\t\treturn r\n\tend\n\tlocal v = leaf()\n\treturn v\nend\nleaf = function()\n\tlocal v = coroutine.yield(\"edge\")\n\tlocal " .. table.concat(names, ", ") .. " = " .. table.concat(values, ", ") .. "\n\treturn p" .. pads .. "\nend\nreturn dive"
 	end
 	-- { depth, pads, top, needed }: top = 9 + 3 * depth, needed = top + pads - 1.
-	for _, case in ipairs({ { 2657, 5, 7980, 7984 }, { 2658, 3, 7983, 7985 }, { 2658, 28, 7983, 8010 } }) do
+	for _, case in ipairs({ { 2657, 5, 7980, 7984 }, { 2658, 3, 7983, 7985 }, { 2658, 28, 7983, 8010 }, { 2658, 29, 7983, 8011 } }) do
 		local depth, pads, wantTop, wantNeeded = case[1], case[2], case[3], case[4]
 		local chunk = assert(loadstring(program(pads)))
 		jit.off(chunk, true)
@@ -2089,7 +2089,7 @@ do
 		local rOk, rValue = false, nil
 		if restoredStatus == "suspended" then rOk, rValue = coroutine.resume(restored, "done") end
 		local detail = string.format("top %d needed %s maxstack %s restored %s resumed %s/%s%s", top, tostring(needed), tostring(restoredMax), restoredStatus, tostring(rOk), tostring(rValue), refusal and (" refused: " .. refusal) or "")
-		check("coroutine_near_cstack_limit_" .. wantNeeded, startOk and startValue == "edge" and top == wantTop and (needed == nil or needed == wantNeeded) and refusal == nil and restoredStatus == "suspended" and oOk and oValue == "done" and rOk and rValue == "done" and coroutine.status(original) == "dead" and coroutine.status(restored) == "dead", detail)
+		check("coroutine_near_cstack_limit_" .. wantNeeded, startOk and startValue == "edge" and top == wantTop and (needed == nil or needed == wantNeeded) and refusal == nil and restoredStatus == "suspended" and (wantNeeded <= 8010 or (restoredMax ~= nil and restoredMax > 8010)) and oOk and oValue == "done" and rOk and rValue == "done" and coroutine.status(original) == "dead" and coroutine.status(restored) == "dead", detail)
 	end
 	-- A link above the saved top is malformed: the refusal must leave the coroutine's stack as it was.
 	local fresh = select(3, _ScriptGraphThreadStackFits(coroutine.create(function() end)))
