@@ -820,6 +820,52 @@ void MainMenuGUI::ApplyToSubstitute() {
 	m_ReconnectStatusShown = m_MultiplayerLandingStatusLabel->GetText();
 }
 
+// The refusal sentence arrives as one line; on the landing label its groups read as a short list:
+// the prefix, Install on its own line, then Remove and Update sharing one, middle-dot separated.
+static std::string FormatModuleMismatchStatus(const std::string& text) {
+	const std::string prefix = "This host's mods do not match yours.";
+	if (text.compare(0, prefix.size(), prefix) != 0) {
+		return text;
+	}
+	const std::string separator = " \xC2\xB7 ";
+	std::string rest = text.substr(prefix.size());
+	if (!rest.empty() && rest.front() != ' ') {
+		return text;
+	}
+	if (rest.starts_with(' ')) {
+		rest.erase(0, 1);
+	}
+	if (rest.starts_with("\xC2\xB7 ")) {
+		rest.erase(0, 3);
+	}
+	std::string install;
+	std::vector<std::string> others;
+	for (size_t at = 0; at <= rest.size();) {
+		const size_t next = rest.find(separator, at);
+		std::string piece = next == std::string::npos ? rest.substr(at) : rest.substr(at, next - at);
+		if (install.empty() && piece.starts_with("Install: ")) {
+			install = std::move(piece);
+		} else if (!piece.empty()) {
+			others.push_back(std::move(piece));
+		}
+		if (next == std::string::npos) {
+			break;
+		}
+		at = next + separator.size();
+	}
+	std::string formatted = prefix;
+	if (!install.empty()) {
+		formatted += '\n' + install;
+	}
+	if (!others.empty()) {
+		formatted += '\n';
+		for (size_t i = 0; i < others.size(); ++i) {
+			formatted += (i == 0 ? "" : separator) + others[i];
+		}
+	}
+	return formatted;
+}
+
 void MainMenuGUI::UpdateMultiplayerScreen() {
 	g_NetMatchService.Update();
 	// A completed match leaves the session connected; reconvene both peers in the lobby for a rematch.
@@ -842,7 +888,7 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
 	} else if (!inMatchOrLobby && (m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby || m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation)) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
-		m_MultiplayerLandingStatusLabel->SetText(snapshot.errorText);
+		m_MultiplayerLandingStatusLabel->SetText(FormatModuleMismatchStatus(snapshot.errorText));
 	}
 
 	RefreshMultiplayerScreenControls(snapshot);
@@ -975,16 +1021,23 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		s_shareResolved = false;
 		m_MultiplayerStatusLabel->SetText(snapshot.statusText);
 	}
+	// The status line can wrap; reserve its real height and let everything below slide with it.
+	const int statusHeight = std::max(16, m_MultiplayerStatusLabel->GetTextHeight() + 4);
+	if (m_MultiplayerStatusLabel->GetHeight() != statusHeight) {
+		m_MultiplayerStatusLabel->Resize(m_MultiplayerStatusLabel->GetWidth(), statusHeight);
+	}
+	const int statusExtra = statusHeight - 16;
 	if (snapshot.portMapSerial != m_PortMapSerialShown) {
 		m_PortMapSerialShown = snapshot.portMapSerial;
 		m_MultiplayerLobbyPortMapLabel->SetText(snapshot.portMap);
 	}
 	m_MultiplayerLobbyPortMapLabel->SetVisible(!snapshot.portMap.empty());
+	m_MultiplayerLobbyPortMapLabel->SetPositionRel(12, 162 + statusExtra);
 	const int portMapHeight = snapshot.portMap.empty() ? 0 : 14;
 	m_MultiplayerErrorLabel->SetText(snapshot.errorText);
-	m_MultiplayerErrorLabel->SetPositionRel(12, 162 + portMapHeight);
+	m_MultiplayerErrorLabel->SetPositionRel(12, 162 + statusExtra + portMapHeight);
 	const int errorHeight = std::max(24, m_MultiplayerErrorLabel->GetTextHeight() + 4);
-	const int extraHeight = errorHeight - 24 + portMapHeight;
+	const int extraHeight = statusExtra + errorHeight - 24 + portMapHeight;
 	if (m_MultiplayerErrorLabel->GetHeight() != errorHeight) {
 		m_MultiplayerErrorLabel->Resize(m_MultiplayerErrorLabel->GetWidth(), errorHeight);
 	}
