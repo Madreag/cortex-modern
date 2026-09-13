@@ -3309,42 +3309,63 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 				fixture->ClearCheckpointActorIDs();
 				if (!fixture->LoadCheckpoint(fixture->SaveCheckpoint())) throw std::runtime_error("host links could not be staged");
 			};
+			// Local brain, controlled, controller and mark links differ from the host save's, so a stale host link shows after the rebind.
 			Actor* host = enter(makeActor());
 			Actor* local = enter(makeActor());
+			Actor* hostBrain = enter(makeActor());
+			Actor* hostControlled = enter(makeActor());
+			Actor* hostController = enter(makeActor());
+			Actor* localBrain = enter(makeActor());
+			Actor* localControlled = enter(makeActor());
+			Actor* localController = enter(makeActor());
+			const auto seat = [&](Actor* brain, Actor* controlled, Actor* controller, Actor* mark) {
+				fixture->m_Brain[0] = brain;
+				fixture->m_ControlledActor[0] = controlled;
+				fixture->m_PlayerController[0].SetControlledActor(controller);
+				fixture->m_pLastMarkedActor[0] = mark;
+			};
 			if (!restore.relaunching) g_ActivityMan.NoteLockstepRelaunch();
-			fixture->m_pLastMarkedActor[0] = local;
+			seat(localBrain, localControlled, localController, local);
 			NetLocalPlayerState retained;
 			if (!fixture->CaptureNetLocalPlayerState(retained)) throw std::runtime_error("marked local capture failed");
-			const auto rebindMark = [&](const char* arm, bool applied, long before) {
-				const long pending = fixture->m_HasCheckpointMarkedActorIDs ? fixture->m_CheckpointMarkedActorIDs[0] : -1;
+			struct Slots { long brain, controlled, controller, mark; bool operator==(const Slots&) const = default; };
+			const auto slots = [&] { return Slots{uidOf(fixture->m_Brain[0]), uidOf(fixture->m_ControlledActor[0]), uidOf(fixture->m_PlayerController[0].GetControlledActor()), uidOf(fixture->m_pLastMarkedActor[0])}; };
+			const auto print = [](const Slots& value) { return std::to_string(value.brain) + "/" + std::to_string(value.controlled) + "/" + std::to_string(value.controller) + "/" + std::to_string(value.mark); };
+			// Both deferred rebinds run while the relaunch flag stays set, so the lookup is repeated.
+			const auto rebindTwice = [&](const char* arm, bool applied) {
+				const Slots before = slots();
 				fixture->RebindNonOwnedActorSlots();
-				const long after = uidOf(fixture->m_pLastMarkedActor[0]);
-				std::cout << "[net-local-ui-marked] arm=" << arm << " applied=" << applied << " host_uid=" << host->GetUniqueID() << " local_uid=" << local->GetUniqueID()
-				          << " host_world=" << g_MovableMan.IsActor(host) << " local_world=" << g_MovableMan.IsActor(local) << " relaunch=" << g_ActivityMan.LockstepRelaunchInProgress()
-				          << " pending_mark=" << pending << " mark_before_rebind=" << before << " mark_after_rebind=" << after << std::endl;
-				return after;
+				const Slots first = slots();
+				fixture->RebindNonOwnedActorSlots();
+				const Slots second = slots();
+				const Slots pending{fixture->m_CheckpointActorIDs[0][0], fixture->m_CheckpointActorIDs[0][1], fixture->m_CheckpointActorIDs[0][2], fixture->m_HasCheckpointMarkedActorIDs ? fixture->m_CheckpointMarkedActorIDs[0] : -1};
+				std::cout << "[net-local-ui-slots] arm=" << arm << " applied=" << applied << " relaunch=" << g_ActivityMan.LockstepRelaunchInProgress()
+				          << " host=" << print(Slots{hostBrain->GetUniqueID(), hostControlled->GetUniqueID(), hostController->GetUniqueID(), host->GetUniqueID()})
+				          << " local=" << print(Slots{localBrain->GetUniqueID(), localControlled->GetUniqueID(), localController->GetUniqueID(), local->GetUniqueID()})
+				          << " pending=" << print(pending) << " before=" << print(before) << " first=" << print(first) << " second=" << print(second) << std::endl;
+				return std::array<Slots, 3>{before, first, second};
 			};
-			fixture->m_pLastMarkedActor[0] = host;
-			stage();
+			const auto stageHost = [&] { seat(hostBrain, hostControlled, hostController, host); stage(); };
+			const auto holds = [](const std::array<Slots, 3>& seen, const Slots& expected) { return seen[0] == expected && seen[1] == expected && seen[2] == expected; };
+			const auto marks = [](const std::array<Slots, 3>& seen, long expected) { return seen[0].mark == expected && seen[1].mark == expected && seen[2].mark == expected; };
+			stageHost();
 			bool applied = fixture->RestoreNetLocalPlayerState(retained);
-			long before = uidOf(fixture->m_pLastMarkedActor[0]);
-			long after = rebindMark("retained", applied, before);
-			check("relaunch_rebind_keeps_retained_local_mark", applied && before == local->GetUniqueID() && after == local->GetUniqueID());
+			auto seen = rebindTwice("retained", applied);
+			check("relaunch_rebind_keeps_retained_local_mark", applied && marks(seen, local->GetUniqueID()));
+			check("relaunch_rebind_keeps_retained_local_slots", applied && holds(seen, Slots{localBrain->GetUniqueID(), localControlled->GetUniqueID(), localController->GetUniqueID(), local->GetUniqueID()}));
 			// The camera needs a scene to take a seated player's scroll target, so this fresh seat stays unseated.
 			NetGamePlayerBindings fresh = retained.bindings;
 			for (auto& binding: fresh.players) binding.active = false;
-			fixture->m_pLastMarkedActor[0] = host;
-			stage();
+			stageHost();
 			applied = fixture->ApplyNetPlayerBindings(fresh);
-			before = uidOf(fixture->m_pLastMarkedActor[0]);
-			after = rebindMark("fresh", applied, before);
-			check("relaunch_rebind_keeps_fresh_mark_null", applied && before == 0 && after == 0);
-			fixture->m_pLastMarkedActor[0] = host;
-			stage();
+			seen = rebindTwice("fresh", applied);
+			check("relaunch_rebind_keeps_fresh_mark_null", applied && marks(seen, 0));
+			check("relaunch_rebind_keeps_fresh_slots", applied && holds(seen, Slots{localBrain->GetUniqueID(), localControlled->GetUniqueID(), 0, 0}));
+			stageHost();
 			applied = fixture->ApplyNetPlayerBindings(NetGamePlayerBindings{});
-			before = uidOf(fixture->m_pLastMarkedActor[0]);
-			after = rebindMark("seatless", applied, before);
-			check("relaunch_rebind_keeps_seatless_mark_null", applied && before == 0 && after == 0);
+			seen = rebindTwice("seatless", applied);
+			check("relaunch_rebind_keeps_seatless_mark_null", applied && marks(seen, 0));
+			check("relaunch_rebind_keeps_seatless_slots_empty", applied && holds(seen, Slots{}));
 
 			// A live brain may ride inside a world actor's inventory; the pending rebind keeps it and rejects a brain no current world actor owns.
 			const auto* brainPreset = dynamic_cast<const Actor*>(g_PresetMan.GetEntityPreset("Actor", "Brain Case", "Base.rte"));
