@@ -694,6 +694,8 @@ namespace RTE {
 	private:
 		bool LoadNetLocalGameState(std::string_view text);
 		bool CreateNetLocalUI();
+		/// Points a relaunch's pending marked-actor links at the marks as they stand, so its deferred rebinds keep them.
+		void RefreshCheckpointMarkedActorIDs();
 		std::string SaveValueCheckpoint() const;
 		bool LoadValueCheckpoint(std::string_view text, bool validateOnly = false);
 		std::array<long, Players::MaxPlayerCount> m_CheckpointMarkedActorIDs{};
