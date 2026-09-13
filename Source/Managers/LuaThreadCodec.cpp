@@ -341,7 +341,7 @@ namespace {
 			lua_pushnil(L);
 			while (lua_next(L, -2) != 0) {
 				const ptrdiff_t index = static_cast<ptrdiff_t>(lua_tointeger(L, -2));
-				if (lua_istable(L, -1)) {
+				if (index < top && lua_istable(L, -1)) {
 					lua_rawgeti(L, slots, static_cast<int>(index - 1));
 					if (tvisfunc(L->top - 1) && isluafunc(funcV(L->top - 1))) {
 						needed = std::max(needed, index + 1 + static_cast<ptrdiff_t>(funcproto(funcV(L->top - 1))->framesize));
@@ -356,7 +356,14 @@ namespace {
 			lua_settop(L, thread - 1);
 			return Failure(L, "the coroutine's stack bounds are invalid");
 		}
-		if (!lua_checkstack(co, static_cast<int>(needed) + 16)) {
+		if (!lua_checkstack(co, static_cast<int>(top) + 16)) {
+			lua_settop(L, thread - 1);
+			return Failure(L, "the coroutine's stack exceeds the VM limit");
+		}
+		// Frames above the top grow past the C API reservation limit, as the VM grows a called frame.
+		const ptrdiff_t missing = needed - (tvref(co->maxstack) - tvref(co->stack));
+		if (missing > 0 && lj_state_cpgrowstack(co, static_cast<MSize>(missing)) != LUA_OK) {
+			co->top--;
 			lua_settop(L, thread - 1);
 			return Failure(L, "the coroutine's stack exceeds the VM limit");
 		}
