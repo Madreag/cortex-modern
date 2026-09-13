@@ -1780,6 +1780,139 @@ namespace RTE {
 				return false;
 			}
 
+			bool TestClientFailedRowCleanup(std::string* error) {
+				std::vector<std::string> misses;
+				auto note = [&misses](const std::string& miss) { misses.push_back(miss); };
+				const char* kRegisterLegacy2 = R"({"session_id":"8c9d2e1f-2222-4333-8444-555566667777","token":"tok2","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})";
+				const char* kRegisterLegacy3 = R"({"session_id":"9d1e2f3a-3333-4444-9555-666677778888","token":"tok3","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})";
+				const std::string kSessionPath2 = "/v1/sessions/8c9d2e1f-2222-4333-8444-555566667777";
+
+				{   // a visible row fails on a heartbeat 4xx and keeps id+token: Retract deletes that row
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterLegacy, ""});
+					s.replies->push_back({403, R"({"error":"forbidden"})", ""});
+					s.replies->push_back({200, R"({"ok":true})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, true);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(5000); // heartbeat -> 4xx: Failed, the row id is still held
+					s.client.Update(5000);
+					if (s.client.GetState() != NetDirectoryClient::State::Failed || s.client.GetSessionId() != "7b8c9d2e-1111-4222-8333-444455556666" || s.client.GetToken() != "tok") {
+						note("failed-retract: fixture did not reach Failed with the held row id and token");
+					}
+					s.client.Retract();
+					s.client.Update(5000);
+					const NetDirectoryClient::Request* deleted = SentAt(s, 2);
+					if (!deleted || deleted->method != "DELETE" || deleted->path != kSessionPath) {
+						note("failed-retract: Retract did not send exactly one DELETE of the held row id");
+					} else if (RequestToken(*deleted) != "tok") {
+						note("failed-retract: the DELETE did not carry the held token");
+					}
+					s.client.Update(5000);
+					if (CountRequests(s, "DELETE", kSessionPath) != 1 || !s.client.GetSessionId().empty() || !s.client.GetToken().empty() || s.client.GetState() != NetDirectoryClient::State::Idle) {
+						note("failed-retract: the held row was not deleted once and forgotten");
+					}
+				}
+
+				{   // the same failure, then Shutdown: the held row is deleted inside the budget
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterLegacy, ""});
+					s.replies->push_back({403, R"({"error":"forbidden"})", ""});
+					s.replies->push_back({200, R"({"ok":true})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, true);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(5000);
+					s.client.Update(5000);
+					const auto begin = std::chrono::steady_clock::now();
+					s.client.Shutdown();
+					const long long elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count();
+					const json report = json::parse(s.client.BuildReportJson());
+					if (CountRequests(s, "DELETE", kSessionPath) != 1 || report.value("deletes", json()) != json(1)) {
+						note("failed-shutdown: Shutdown did not delete the held row once");
+					}
+					if (!s.client.GetSessionId().empty() || !s.client.GetToken().empty()) {
+						note("failed-shutdown: the row id or token survived Shutdown");
+					}
+					std::cout << "[net-directory-selftest] failed-shutdown: deletes=" << report.value("deletes", json()).dump() << " elapsed_ms=" << elapsedMs << std::endl;
+				}
+
+				{   // row lost again after re-register: Retract then Advertise deletes the new id before registering
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterLegacy, ""});
+					s.replies->push_back({404, R"({"error":"not_found"})", ""});
+					s.replies->push_back({200, kRegisterLegacy2, ""});
+					s.replies->push_back({404, R"({"error":"not_found"})", ""});
+					s.replies->push_back({200, R"({"ok":true})", ""});
+					s.replies->push_back({200, kRegisterLegacy3, ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, true);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(5000); // heartbeat -> 404: the once-only re-register
+					s.client.Update(5000);
+					s.client.Update(5000); // the second session lands
+					s.client.Update(10000); // heartbeat -> 404 again: Failed, the new id is held
+					s.client.Update(10000);
+					if (s.client.GetState() != NetDirectoryClient::State::Failed || s.client.GetSessionId() != "8c9d2e1f-2222-4333-8444-555566667777") {
+						note("retract-advertise: fixture did not reach Failed holding the re-registered id");
+					}
+					s.client.Retract();
+					s.client.Update(10000);
+					const NetDirectoryClient::Request* deleted = SentAt(s, 4);
+					if (!deleted || deleted->method != "DELETE" || deleted->path != kSessionPath2) {
+						note("retract-advertise: Retract did not DELETE the held re-registered id first");
+					} else if (RequestToken(*deleted) != "tok2") {
+						note("retract-advertise: the DELETE did not carry the re-registered token");
+					}
+					s.client.Update(10000); // the delete lands: the old identity is forgotten before any register
+					CallAdvertise(s.client, SampleRegisterRequest(), false, true);
+					s.client.Update(10000);
+					const NetDirectoryClient::Request* registered = SentAt(s, 5);
+					if (!registered || registered->method != "POST" || registered->path != "/v1/sessions") {
+						note("retract-advertise: no fresh register followed the delete");
+					}
+					if (CountRequests(s, "DELETE", kSessionPath2) != 1 || CountRequests(s, "DELETE", kSessionPath) != 0 || CountRequests(s, "POST", "/v1/sessions") != 3) {
+						note("retract-advertise: request counts were deletes=" + std::to_string(CountRequests(s, "DELETE", kSessionPath2)) + "/" + std::to_string(CountRequests(s, "DELETE", kSessionPath)) + " registers=" + std::to_string(CountRequests(s, "POST", "/v1/sessions")));
+					}
+					s.client.Update(10000);
+					if (s.client.GetSessionId() != "9d1e2f3a-3333-4444-9555-666677778888") {
+						note("retract-advertise: the fresh registration did not adopt the new session id");
+					}
+				}
+
+				{   // a heartbeat 429 leaves a deadline that also gates Retract's delete
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterLegacy, ""});
+					s.replies->push_back({429, R"({"error":"rate_limited","retry_after_s":30})", ""});
+					s.replies->push_back({200, R"({"ok":true})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, true);
+					s.client.Update(0);
+					s.client.Update(0);
+					s.client.Update(5000);
+					s.client.Update(5000); // throttled until t=35000
+					s.client.Retract();
+					s.client.Update(5000);
+					s.client.Update(34999);
+					if (CountRequests(s, "DELETE", kSessionPath) != 0) {
+						note("failed-retract-429: DELETE left before the t=35000 retry deadline");
+					}
+					s.client.Update(35000);
+					const NetDirectoryClient::Request* deleted = SentAt(s, 2);
+					if (CountRequests(s, "DELETE", kSessionPath) != 1 || !deleted || deleted->method != "DELETE" || deleted->path != kSessionPath) {
+						note("failed-retract-429: the held row did not receive exactly one DELETE at the deadline");
+					}
+				}
+
+				if (misses.empty()) {
+					return true;
+				}
+				*error = "client failed-row cleanup misses (" + std::to_string(misses.size()) + "):";
+				for (const std::string& miss : misses) {
+					*error += " [" + miss + "]";
+				}
+				return false;
+			}
+
 			bool TestMergeGameLists(std::string* error) {
 				NetLanHostInfo lan;
 				lan.address = "10.0.0.5";
@@ -2678,7 +2811,7 @@ namespace RTE {
 			if (!TestInstallKeyIsLazy(&error)) return fail(error);
 			// The unlisted groups aggregate their misses and run last, so a miss never skips the tests above.
 			std::string unlistedMisses;
-			for (bool (*test)(std::string*) : {TestClientUnlistedCapable, TestClientUnlistedLegacy, TestClientUnlistedDeadlines, TestClientUnlistedReportTruth}) {
+			for (bool (*test)(std::string*) : {TestClientUnlistedCapable, TestClientUnlistedLegacy, TestClientUnlistedDeadlines, TestClientUnlistedReportTruth, TestClientFailedRowCleanup}) {
 				if (!test(&error)) {
 					unlistedMisses += (unlistedMisses.empty() ? "" : " ") + error;
 					error.clear();
