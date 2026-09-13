@@ -1,0 +1,12 @@
+- [Bash heredoc hook mangles backslashes](bash-heredoc-hook-mangles-backslashes.md) — write scripts with the Write tool, pass forward-slash paths
+- [PowerShell dash-leading values need the colon binding](pwsh-dash-values-need-colon-binding.md) — `-Param:"-x y"` from bash, else "Missing an argument"
+- [Subagent report lives in the notification](subagent-report-lives-in-notification.md) — output file can be empty; save the report to disk from the notification at once
+- [Process kill by pattern hits own shell](process-kill-by-pattern-hits-own-shell.md) — kill by PID or filter on process name; keep bookkeeping in a separate call
+- [Worker direct engine launch opened a window](worker-direct-engine-launch-window.md) — CCCP_HEADLESS=1 in every worker env; selftest flags imply headless; kill by PID and resume the session with a corrective prompt
+- [Mac lane evidence copy excludes runtime](mac-lane-evidence-copy-excludes-runtime.md) — tar over ssh with --exclude=runtime; scp -r follows the Data symlinks
+- [Mac job model gate needs a dashed output name](mac-job-model-gate-needs-dashed-output-name.md) — write agent-output-<lane>.jsonl or the Extra High Fast check is skipped silently
+- [Cross-platform build misses from Windows lanes](cross-platform-build-misses-from-windows-lanes.md) — new .cpp must be in meson.build too; no default args built from nested structs (clang rejects)
+- [Merge verify per-file multiset](merge-verify-per-file-multiset.md) — verify_merge_commit.py after every merge; keep-both on the working file, never a stage copy
+- [Resolve, check, commit as separate steps](resolve-check-commit-separate-steps.md) — a failed inline resolver did not stop the chained commit; markers got committed
+- [Worker test-only production code](worker-test-only-production-code.md) — Grok lanes add branches only the test reaches and inverted FAIL messages; read for both
+- [Arizona local time only](arizona-local-time-only.md) — every stamp in MST (UTC-7, no DST), never UTC; read the clock first

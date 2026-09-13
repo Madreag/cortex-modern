@@ -1,0 +1,258 @@
+diff --git a/Source/GUI/GUIFont.cpp b/Source/GUI/GUIFont.cpp
+index e21b49819a..89f0c3ed3f 100644
+--- a/Source/GUI/GUIFont.cpp
++++ b/Source/GUI/GUIFont.cpp
+@@ -291,8 +291,10 @@ int GUIFont::CalculateWidth(const std::string& Text) {
+ }
+ 
+ int GUIFont::CalculateWidth(const char Character) {
+-	if (Character >= 32 && Character < m_CharIndexCap) {
+-		return m_Characters[Character].m_Width + m_Kerning;
++	// The string overload indexes by unsigned char; the signed char test dropped every high-bit glyph.
++	const unsigned char index = static_cast<unsigned char>(Character);
++	if (index >= 32 && index < m_CharIndexCap) {
++		return m_Characters[index].m_Width + m_Kerning;
+ 	}
+ 	return 0;
+ }
+diff --git a/Source/GUI/GUIFont.h b/Source/GUI/GUIFont.h
+index 506008c2e6..e59430dcff 100644
+--- a/Source/GUI/GUIFont.h
++++ b/Source/GUI/GUIFont.h
+@@ -53,11 +53,12 @@ namespace RTE {
+ 
+ 		/// Draws text to a bitmap.
+ 		/// @param Bitmap Bitmap, Position, Text, Color, Drop-shadow, 0 = none.
+-		void Draw(GUIBitmap* Bitmap, int X, int Y, const std::string& Text, unsigned long Shadow = 0);
++		/// @param GlyphFallback Optional font whose atlas supplies the glyph for any byte this font's cell has no ink for.
++		void Draw(GUIBitmap* Bitmap, int X, int Y, const std::string& Text, unsigned long Shadow = 0, GUIFont* GlyphFallback = nullptr);
+ 
+ 		/// Draws text to a bitmap aligned.
+ 		/// @param Bitmap Bitmap, Position, Text.
+-		void DrawAligned(GUIBitmap* Bitmap, int X, int Y, const std::string& Text, int HAlign, int VAlign = Top, int maxWidth = 0, unsigned long Shadow = 0);
++		void DrawAligned(GUIBitmap* Bitmap, int X, int Y, const std::string& Text, int HAlign, int VAlign = Top, int maxWidth = 0, unsigned long Shadow = 0, GUIFont* GlyphFallback = nullptr);
+ 
+ 		/// Sets the current color.
+ 		/// @param Color Color.
+@@ -65,7 +66,7 @@ namespace RTE {
+ 
+ 		/// Calculates the width of a piece of text.
+ 		/// @param Text Text.
+-		int CalculateWidth(const std::string& Text);
++		int CalculateWidth(const std::string& Text, GUIFont* GlyphFallback = nullptr);
+ 
+ 		/// Calculates the width of a piece of text.
+ 		/// @param Character Character.
+@@ -74,7 +75,7 @@ namespace RTE {
+ 		/// Calculates the height of a piece of text, if it's wrapped within a
+ 		/// max width.
+ 		/// @param Text Text, and the max width. If 0, no wrapping is done.
+-		int CalculateHeight(const std::string& Text, int MaxWidth = 0);
++		int CalculateHeight(const std::string& Text, int MaxWidth = 0, GUIFont* GlyphFallback = nullptr);
+ 
+ 		/// Gets the font height.
+ 		int GetFontHeight() const;
+@@ -92,6 +93,11 @@ namespace RTE {
+ 		/// between chars, 0 = chars are touching.
+ 		void SetKerning(int newKerning = 1) { m_Kerning = newKerning; }
+ 
++		/// Returns whether the font's cell for the character actually contains any drawable pixels.
++		/// Some atlas cells carry width but no ink, so width alone cannot tell a real glyph from a blank one.
++		/// @param Character Character index.
++		bool HasGlyphPixels(unsigned char Character) const { return m_GlyphCovered[Character]; }
++
+ 	private:
+ 		GUIBitmap* m_Font;
+ 		GUIScreen* m_Screen;
+@@ -103,6 +109,11 @@ namespace RTE {
+ 		GUIBitmap* m_CurrentBitmap;
+ 		std::string m_Name;
+ 		Character m_Characters[256];
++		bool m_GlyphCovered[256]; // Whether the character's atlas cell holds any drawable pixels, scanned at Load
++
++		/// Returns the font that can draw this byte: the fallback only when this font's cell has no ink
++		/// and the fallback's does. The caller passes the fallback through the draw/measure APIs.
++		GUIFont* GlyphFontFor(unsigned char Character, GUIFont* GlyphFallback);
+ 
+ 		int m_CharIndexCap; // The highest index of valid characters that was read in from the file
+ 
+diff --git a/Source/GUI/GUILabel.cpp b/Source/GUI/GUILabel.cpp
+index 0b524ca147..e1bde78bea 100644
+--- a/Source/GUI/GUILabel.cpp
++++ b/Source/GUI/GUILabel.cpp
+@@ -17,6 +17,7 @@ GUILabel::GUILabel(GUIManager* Manager, GUIControlManager* ControlManager) :
+ 	m_ControlID = "LABEL";
+ 	m_ControlManager = ControlManager;
+ 	m_Font = nullptr;
++	m_SkinFont = nullptr;
+ 	m_FontColor = 0;
+ }
+ 
+@@ -104,7 +105,8 @@ void GUILabel::ChangeSkin(GUISkin* Skin) {
+ 	std::string Filename;
+ 
+ 	m_Skin->GetValue("Label", "Font", &Filename);
+-	m_Font = m_Skin->GetFont(Filename);
++	m_SkinFont = m_Skin->GetFont(Filename);
++	m_Font = m_SkinFont;
+ 	m_Skin->GetValue("Label", "FontColor", &m_FontColor);
+ 	m_Skin->GetValue("Label", "FontShadow", &m_FontShadow);
+ 	m_Skin->GetValue("Label", "FontKerning", &m_FontKerning);
+@@ -144,7 +146,8 @@ void GUILabel::Draw(GUIBitmap* Bitmap, bool overwiteFontColorAndKerning) {
+ 		}
+ 
+ 		int textFullWidth = m_HorizontalOverflowScroll ? m_Font->CalculateWidth(m_Text) : 0;
+-		int textFullHeight = m_VerticalOverflowScroll ? m_Font->CalculateHeight(m_Text) : 0;
++		// DrawAligned wraps at m_Width, so the scroll range has to be the wrapped height, not the unwrapped one.
++		int textFullHeight = m_VerticalOverflowScroll ? m_Font->CalculateHeight(m_Text, m_Width) : 0;
+ 		bool modifyXPos = textFullWidth > m_Width;
+ 		bool modifyYPos = textFullHeight > m_Height;
+ 		xPos = modifyXPos ? m_X : xPos;
+@@ -246,7 +249,8 @@ void GUILabel::GetControlRect(int* X, int* Y, int* Width, int* Height) {
+ }
+ 
+ int GUILabel::GetTextHeight() {
+-	return m_Font->CalculateHeight(m_Text, m_Width);
++	// Horizontal overflow scrolling draws each line unwrapped, so wrapping must not count here.
++	return m_Font->CalculateHeight(m_Text, m_HorizontalOverflowScroll ? 0 : m_Width);
+ }
+ 
+ int GUILabel::GetMaxWordWidth() {
+@@ -264,6 +268,31 @@ int GUILabel::GetMaxWordWidth() {
+ 	return maxWidth;
+ }
+ 
++void GUILabel::EnsureDrawableTextFont(const std::string& fontFile) {
++	if (!m_Skin || !m_SkinFont) {
++		return;
++	}
++	const auto missingGlyphs = [](GUIFont* font, const std::string& text) {
++		int missing = 0;
++		for (char c : text) {
++			const unsigned char index = static_cast<unsigned char>(c);
++			if (index > 32 && !font->HasGlyphPixels(index)) {
++				missing++;
++			}
++		}
++		return missing;
++	};
++	SetFont(m_SkinFont);
++	const int missing = missingGlyphs(m_SkinFont, m_Text);
++	if (missing > 0) {
++		GUIFont* fallback = m_Skin->GetFont(fontFile);
++		if (fallback && missingGlyphs(fallback, m_Text) < missing) {
++			SetFont(fallback);
++		}
++	}
++	m_Font->CacheColor(m_FontColor);
++}
++
+ void GUILabel::SetHorizontalOverflowScroll(bool newOverflowScroll) {
+ 	m_HorizontalOverflowScroll = newOverflowScroll;
+ 	if (m_HorizontalOverflowScroll) {
+diff --git a/Source/GUI/GUILabel.h b/Source/GUI/GUILabel.h
+index 1b5cace19a..9e9cfabf1c 100644
+--- a/Source/GUI/GUILabel.h
++++ b/Source/GUI/GUILabel.h
+@@ -88,6 +88,12 @@ namespace RTE {
+ 		/// Gets the text of the label.
+ 		const std::string& GetText() const { return m_Text; }
+ 
++		/// Picks the skin font again when it can draw every printable byte of the current text; otherwise tries the named
++		/// skin font file and keeps it only when it draws strictly more of the text. Needed because some atlas cells
++		/// carry width but no ink, which leaves names containing those bytes invisible.
++		/// @param fontFile Font image filename in the skin directory.
++		void EnsureDrawableTextFont(const std::string& fontFile);
++
+ 		/// Shows how tall the current text is with the current width and font etc.
+ 		/// @return The text height, in pixels
+ 		int GetTextHeight();
+@@ -147,6 +153,7 @@ namespace RTE {
+ 		void ApplyProperties(GUIProperties* Props) override;
+ 
+ 	private:
++		GUIFont* m_SkinFont;
+ 		std::string m_Text;
+ 		int m_HAlignment;
+ 		int m_VAlignment;
+diff --git a/Source/GUI/GUISkin.cpp b/Source/GUI/GUISkin.cpp
+index 4a2c0a18d1..cd6dc582c0 100644
+--- a/Source/GUI/GUISkin.cpp
++++ b/Source/GUI/GUISkin.cpp
+@@ -312,9 +312,11 @@ void GUISkin::BuildStandardRect(GUIBitmap* Dest, const std::string& Section, int
+ 	if (buildBG) {
+ 		// Use the filler first
+ 		SetRect(&Rect, VFiller[0], VFiller[1], VFiller[0] + VFiller[2], VFiller[1] + VFiller[3]);
+-		// Tile the filler across
+-		for (j = Y + VTop[3]; j < Y + Height - VBottom[3]; j += VFiller[3]) {
+-			for (i = X + VLeft[2]; i < X + Width - VRight[2]; i += VFiller[2]) {
++		// Tile the filler under the frame edges too: frame sources can carry color key pixels on their
++		// inner edge (this skin's Right and Bottom do), and a column or row the filler skips shows the
++		// color key through them at widths and heights where the last tile falls short of the frame.
++		for (j = Y + VTop[3]; j < Y + Height; j += VFiller[3]) {
++			for (i = X + VLeft[2]; i < X + Width; i += VFiller[2]) {
+ 				SrcBitmap->DrawTrans(Dest, i, j, &Rect);
+ 			}
+ 		}
+diff --git a/Source/Menus/MainMenuGUI.cpp b/Source/Menus/MainMenuGUI.cpp
+index 396f7e7225..4932be4063 100644
+--- a/Source/Menus/MainMenuGUI.cpp
++++ b/Source/Menus/MainMenuGUI.cpp
+@@ -1001,16 +1001,28 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
+ 		int contentWidth = 300;
+ 		int contentHeight = 250;
+ 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
+-			// The status wraps only on spaces, so the panel must be as wide as its longest token.
+-			contentWidth = std::max(300, m_MultiplayerLandingStatusLabel->GetMaxWordWidth() + 24);
++			// FontLarge's atlas has a few width-only blank cells (e.g. 0xDF); use a skin font that draws them so names stay readable.
++			m_MultiplayerLandingStatusLabel->EnsureDrawableTextFont("FontSmall.png");
++			// The status wraps only on spaces; a token wider than the viewport scrolls through the label instead of growing the panel off-screen.
++			const int desiredWidth = std::max(300, m_MultiplayerLandingStatusLabel->GetMaxWordWidth() + 24);
++			contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
+ 			FitMultiplayerPanelWidth(m_MultiplayerLandingPanel, m_MultiplayerLandingStatusLabel, contentWidth);
+-			// The wrapped status can outgrow its baseline box; the panel keeps the padding it had.
+-			const int statusHeight = std::max(68, m_MultiplayerLandingStatusLabel->GetTextHeight() + 4);
++			// The status can outgrow its baseline box; it yields to whatever height the viewport leaves it.
++			const int labelRelY = m_MultiplayerLandingStatusLabel->GetRelYPos();
++			const int bottomPad = 250 - labelRelY - 68;
++			const int backReserve = m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
++			const int statusRoom = std::max(0, g_WindowMan.GetResY() - backReserve - labelRelY - bottomPad);
++			// An unbreakable token scrolls horizontally; otherwise a too-tall status scrolls vertically.
++			const bool scrollWide = desiredWidth > contentWidth;
++			m_MultiplayerLandingStatusLabel->SetHorizontalOverflowScroll(scrollWide);
++			const int statusHeight = std::max(10, std::min(std::max(68, m_MultiplayerLandingStatusLabel->GetTextHeight() + 4), statusRoom));
++			const bool scrollTall = !scrollWide && m_MultiplayerLandingStatusLabel->GetTextHeight() + 4 > statusRoom;
++			m_MultiplayerLandingStatusLabel->SetVerticalOverflowScroll(scrollTall);
++			m_MultiplayerLandingStatusLabel->ActivateDeactivateOverflowScroll(scrollWide || scrollTall);
+ 			if (m_MultiplayerLandingStatusLabel->GetHeight() != statusHeight) {
+ 				m_MultiplayerLandingStatusLabel->Resize(m_MultiplayerLandingStatusLabel->GetWidth(), statusHeight);
+ 			}
+-			const int labelRelY = m_MultiplayerLandingStatusLabel->GetRelYPos();
+-			const int panelHeight = std::max(250, labelRelY + statusHeight + (250 - labelRelY - 68));
++			const int panelHeight = std::max(250, labelRelY + statusHeight + bottomPad);
+ 			if (m_MultiplayerLandingPanel->GetHeight() != panelHeight) {
+ 				m_MultiplayerLandingPanel->Resize(contentWidth, panelHeight);
+ 			}
+@@ -1092,10 +1104,20 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
+ 	m_MultiplayerLobbyPortMapLabel->SetVisible(!snapshot.portMap.empty());
+ 	const int portMapHeight = snapshot.portMap.empty() ? 0 : 14;
+ 	m_MultiplayerErrorLabel->SetText(GroupDelimiterForDisplay(snapshot.errorText));
+-	const int contentWidth = std::max(300, m_MultiplayerErrorLabel->GetMaxWordWidth() + 24);
++	m_MultiplayerErrorLabel->EnsureDrawableTextFont("FontSmall.png");
++	const int desiredWidth = std::max(300, m_MultiplayerErrorLabel->GetMaxWordWidth() + 24);
++	const int contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
+ 	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth);
+ 	m_MultiplayerErrorLabel->SetPositionRel(12, 162 + portMapHeight);
+-	const int errorHeight = std::max(24, m_MultiplayerErrorLabel->GetTextHeight() + 4);
++	const int backReserve = m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
++	const int errorRoom = std::max(24, g_WindowMan.GetResY() - backReserve - 250 + 24 - portMapHeight);
++	// Same accessibility rule as the landing status: wide token scrolls horizontally, tall text vertically.
++	const bool scrollWide = desiredWidth > contentWidth;
++	m_MultiplayerErrorLabel->SetHorizontalOverflowScroll(scrollWide);
++	const int errorHeight = std::max(24, std::min(m_MultiplayerErrorLabel->GetTextHeight() + 4, errorRoom));
++	const bool scrollTall = !scrollWide && m_MultiplayerErrorLabel->GetTextHeight() + 4 > errorRoom;
++	m_MultiplayerErrorLabel->SetVerticalOverflowScroll(scrollTall);
++	m_MultiplayerErrorLabel->ActivateDeactivateOverflowScroll(scrollWide || scrollTall);
+ 	const int extraHeight = errorHeight - 24 + portMapHeight;
+ 	if (m_MultiplayerErrorLabel->GetHeight() != errorHeight) {
+ 		m_MultiplayerErrorLabel->Resize(m_MultiplayerErrorLabel->GetWidth(), errorHeight);

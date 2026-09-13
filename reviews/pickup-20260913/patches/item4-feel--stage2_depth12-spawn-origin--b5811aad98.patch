@@ -1,0 +1,110 @@
+diff --git a/Source/Managers/MovableMan.cpp b/Source/Managers/MovableMan.cpp
+index 55addafe6a..744824b148 100644
+--- a/Source/Managers/MovableMan.cpp
++++ b/Source/Managers/MovableMan.cpp
+@@ -63,6 +63,7 @@
+ #include <map>
+ #include <string>
+ #include <tuple>
++#include <iostream>
+ #include <unordered_set>
+ #include <vector>
+ 
+@@ -2130,17 +2131,74 @@ void MovableMan::TravelSpeculativeSpawns() {
+ 	if (!m_Speculation.active) {
+ 		return;
+ 	}
+-	for (Speculation::Spawn& spawn: m_Speculation.spawns) {
++	// Read-only spawn-origin probe; traveler identity is captured before Travel/Update.
++	const auto snapshotQueues = [this]() {
++		std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex);
++		return AddQueueMark{m_AddedActors.size(), m_AddedItems.size(), m_AddedParticles.size(), 0};
++	};
++	const auto printQueuedSince = [this](const char* stage, const AddQueueMark& before, const std::string& byClass, const std::string& byPreset, long byUID) {
++		std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex);
++		const auto dumpQueue = [&](const char* kind, const auto& queue, size_t start) {
++			const size_t n = queue.size();
++			if (n < start) {
++				std::cout << "[spawn-origin] " << stage << " kind=" << kind << " queue_shrank before=" << start << " after=" << n
++				          << " by_class=\"" << byClass << "\" by_preset=\"" << byPreset << "\" by_uid=" << byUID
++				          << " limit=cannot list vanished entries" << std::endl;
++				return;
++			}
++			const size_t cap = start + 64;
++			const size_t end = n < cap ? n : cap;
++			for (size_t i = start; i < end; ++i) {
++				const MovableObject* mo = queue[i];
++				if (!mo) {
++					std::cout << "[spawn-origin] " << stage << " new kind=" << kind << " null"
++					          << " by_class=\"" << byClass << "\" by_preset=\"" << byPreset << "\" by_uid=" << byUID << std::endl;
++					continue;
++				}
++				const Vector& pos = mo->GetPos();
++				const Vector& vel = mo->GetVel();
++				std::cout << "[spawn-origin] " << stage << " new kind=" << kind
++				          << " class=\"" << mo->GetClassName() << "\" preset=\"" << mo->GetPresetName() << "\" uid=" << mo->GetUniqueID()
++				          << " pos=" << pos.GetX() << "," << pos.GetY() << " vel=" << vel.GetX() << "," << vel.GetY()
++				          << " by_class=\"" << byClass << "\" by_preset=\"" << byPreset << "\" by_uid=" << byUID << std::endl;
++			}
++			if (n > cap) {
++				std::cout << "[spawn-origin] " << stage << " kind=" << kind << " truncated extra=" << (n - cap) << " by_uid=" << byUID << std::endl;
++			}
++		};
++		dumpQueue("actor", m_AddedActors, before.actors);
++		dumpQueue("item", m_AddedItems, before.items);
++		dumpQueue("particle", m_AddedParticles, before.particles);
++	};
++	const auto probe = [&](const char* stage, Speculation::Spawn& spawn, auto&& body) {
+ 		if (!spawn.object || spawn.object->IsSetToDelete()) {
+-			continue;
++			return;
+ 		}
+-		TravelStage(spawn.object, dynamic_cast<Actor*>(spawn.object) != nullptr);
++		const std::string travelerClass = spawn.object->GetClassName();
++		const std::string travelerPreset = spawn.object->GetPresetName();
++		const long travelerUID = spawn.object->GetUniqueID();
++		const uint64_t spawnTick = spawn.tick;
++		const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
++		const AddQueueMark before = snapshotQueues();
++		std::cout << "[spawn-origin] " << stage << " before class=\"" << travelerClass << "\" preset=\"" << travelerPreset << "\" uid=" << travelerUID
++		          << " spawn_tick=" << spawnTick << " sim_tick=" << simTick
++		          << " q_actors=" << before.actors << " q_items=" << before.items << " q_particles=" << before.particles << std::endl;
++		body();
++		const AddQueueMark after = snapshotQueues();
++		std::cout << "[spawn-origin] " << stage << " after class=\"" << travelerClass << "\" preset=\"" << travelerPreset << "\" uid=" << travelerUID
++		          << " spawn_tick=" << spawnTick << " sim_tick=" << simTick
++		          << " q_actors=" << after.actors << " q_items=" << after.items << " q_particles=" << after.particles << std::endl;
++		printQueuedSince(stage, before, travelerClass, travelerPreset, travelerUID);
++	};
++	for (Speculation::Spawn& spawn: m_Speculation.spawns) {
++		probe("travel", spawn, [&]() {
++			TravelStage(spawn.object, dynamic_cast<Actor*>(spawn.object) != nullptr);
++		});
+ 	}
+ 	for (Speculation::Spawn& spawn: m_Speculation.spawns) {
+-		if (!spawn.object || spawn.object->IsSetToDelete()) {
+-			continue;
+-		}
+-		UpdateStage(spawn.object, dynamic_cast<Actor*>(spawn.object) != nullptr);
++		probe("update", spawn, [&]() {
++			UpdateStage(spawn.object, dynamic_cast<Actor*>(spawn.object) != nullptr);
++		});
+ 	}
+ }
+ 
+@@ -2154,6 +2212,15 @@ std::string MovableMan::DescribeSpeculativeSpawns() const {
+ 		if (!spawn.object) {
+ 			continue;
+ 		}
++		// Read-only spawn-origin probe; harvested ledger key is not stored on the spawn.
++		const auto meta = m_Speculation.spawnMeta.find(spawn.object);
++		std::cout << "[spawn-origin] harvested class=\"" << spawn.object->GetClassName() << "\" preset=\"" << spawn.object->GetPresetName()
++		          << "\" uid=" << spawn.object->GetUniqueID() << " owner_emitter_uid=" << spawn.emitterUID << " tick=" << spawn.tick
++		          << " meta_present=" << (meta != m_Speculation.spawnMeta.end() ? 1 : 0);
++		if (meta != m_Speculation.spawnMeta.end()) {
++			std::cout << " meta_emitter_uid=" << meta->second.emitterUID << " meta_tick=" << meta->second.tick;
++		}
++		std::cout << " key=-" << std::endl;
+ 		out += (out.empty() ? "" : ",") + spawn.object->GetPresetName();
+ 	}
+ 	return out;

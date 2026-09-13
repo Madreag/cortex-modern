@@ -1,0 +1,281 @@
+diff --git a/Source/Entities/SLTerrain.cpp b/Source/Entities/SLTerrain.cpp
+index a54dfc6215..6e4d73c7e0 100644
+--- a/Source/Entities/SLTerrain.cpp
++++ b/Source/Entities/SLTerrain.cpp
+@@ -8,9 +8,14 @@
+ #include "Atom.h"
+ #include "DataModule.h"
+ #include "PresetMan.h"
++#include "ScenarioRunner.h"
+ 
+ #include <array>
++#include <cstdint>
++#include <cstdlib>
+ #include <execution>
++#include <fstream>
++#include <iostream>
+ 
+ using namespace RTE;
+ 
+@@ -288,6 +293,10 @@ int SLTerrain::LoadData() {
+ 		for (const TerrainFrosting* terrainFrosting: m_TerrainFrostings) {
+ 			terrainFrosting->FrostTerrain(this);
+ 		}
++		if (std::getenv("CC_TERRAIN_DUMP")) {
++			const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
++			std::ofstream(base + ".load.stamps.jsonl", std::ios::binary | std::ios::trunc);
++		}
+ 		for (TerrainDebris* terrainDebris: m_TerrainDebris) {
+ 			terrainDebris->ScatterOnTerrain(this);
+ 		}
+@@ -296,6 +305,25 @@ int SLTerrain::LoadData() {
+ 		}
+ 		CleanAir();
+ 	}
++	if (std::getenv("CC_TERRAIN_DUMP")) {
++		BITMAP* mat = GetMaterialBitmap();
++		BITMAP* fg = GetFGColorBitmap();
++		const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
++		auto dump = [&](const char* name, BITMAP* bitmap) {
++			if (!bitmap) {
++				return;
++			}
++			std::ofstream out(base + ".load." + name + ".bin", std::ios::binary | std::ios::trunc);
++			const std::int32_t header[3] = {bitmap->w, bitmap->h, bitmap_color_depth(bitmap)};
++			out.write(reinterpret_cast<const char*>(header), sizeof(header));
++			for (int y = 0; y < bitmap->h; ++y) {
++				out.write(reinterpret_cast<const char*>(bitmap->line[y]), bitmap->w);
++			}
++		};
++		dump("mat", mat);
++		dump("fg", fg);
++		std::cout << "[terrain-dump] load saved" << std::endl;
++	}
+ 	return 0;
+ }
+ 
+diff --git a/Source/Entities/TerrainDebris.cpp b/Source/Entities/TerrainDebris.cpp
+index c501c4af2d..638fe1f4ec 100644
+--- a/Source/Entities/TerrainDebris.cpp
++++ b/Source/Entities/TerrainDebris.cpp
+@@ -1,8 +1,132 @@
+ #include "TerrainDebris.h"
+ #include "SLTerrain.h"
++#include "ScenarioRunner.h"
++
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <fstream>
++#include <string>
+ 
+ using namespace RTE;
+ 
++namespace {
++
++	struct DebrisPlacementDump {
++		int rngPosX = 0;
++		int rngDepth = 0;
++		int buriedDepthOffset = 0;
++		float centerX = 0.0F;
++		float centerY = 0.0F;
++		int seq = 0;
++	};
++
++	DebrisPlacementDump g_DebrisPlacementDump;
++
++	std::string JsonEscape(const std::string& text) {
++		std::string out;
++		out.reserve(text.size() + 8);
++		for (char ch: text) {
++			if (ch == '\\' || ch == '"') {
++				out.push_back('\\');
++			}
++			if (ch == '\n') {
++				out += "\\n";
++				continue;
++			}
++			out.push_back(ch);
++		}
++		return out;
++	}
++
++	void WriteDebrisStampDump(const std::string& preset, const std::string& modulePreset, const std::string& debrisFile, int material, int targetMaterial, int frame, int frameW, int frameH, const Vector& position, int offsetX, int offsetY, int dimensions, BITMAP* transformed, bool didHFlip, bool didVFlip, bool didRotate, bool drewHFlip, bool drewVFlip, float hFlipDraw, float vFlipDraw, int angleDeg, float allegroAngle, std::int32_t fixedAngle, int minRotation, int maxRotation, bool canHFlip, bool canVFlip, float flipChance) {
++		if (!std::getenv("CC_TERRAIN_DUMP")) {
++			return;
++		}
++		const int drawX = position.GetFloorIntX() - offsetX;
++		const int drawY = position.GetFloorIntY() - offsetY;
++		const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
++		std::ofstream out(base + ".load.stamps.jsonl", std::ios::binary | std::ios::app);
++		char hFlipDrawBuf[32];
++		char vFlipDrawBuf[32];
++		char allegroBuf[32];
++		char flipChanceBuf[32];
++		if (drewHFlip) {
++			std::snprintf(hFlipDrawBuf, sizeof(hFlipDrawBuf), "%.9g", static_cast<double>(hFlipDraw));
++		} else {
++			std::snprintf(hFlipDrawBuf, sizeof(hFlipDrawBuf), "null");
++		}
++		if (drewVFlip) {
++			std::snprintf(vFlipDrawBuf, sizeof(vFlipDrawBuf), "%.9g", static_cast<double>(vFlipDraw));
++		} else {
++			std::snprintf(vFlipDrawBuf, sizeof(vFlipDrawBuf), "null");
++		}
++		if (didRotate) {
++			std::snprintf(allegroBuf, sizeof(allegroBuf), "%.9g", static_cast<double>(allegroAngle));
++		} else {
++			std::snprintf(allegroBuf, sizeof(allegroBuf), "null");
++		}
++		std::snprintf(flipChanceBuf, sizeof(flipChanceBuf), "%.9g", static_cast<double>(flipChance));
++		++g_DebrisPlacementDump.seq;
++		out << "{\"seq\":" << g_DebrisPlacementDump.seq
++		    << ",\"preset\":\"" << JsonEscape(preset) << "\""
++		    << ",\"module_preset\":\"" << JsonEscape(modulePreset) << "\""
++		    << ",\"debris_file\":\"" << JsonEscape(debrisFile) << "\""
++		    << ",\"material\":" << material
++		    << ",\"target_material\":" << targetMaterial
++		    << ",\"frame\":" << frame
++		    << ",\"frame_w\":" << frameW
++		    << ",\"frame_h\":" << frameH
++		    << ",\"rng_pos_x\":" << g_DebrisPlacementDump.rngPosX
++		    << ",\"rng_depth\":" << g_DebrisPlacementDump.rngDepth
++		    << ",\"buried_depth_offset\":" << g_DebrisPlacementDump.buriedDepthOffset
++		    << ",\"center_x\":" << g_DebrisPlacementDump.centerX
++		    << ",\"center_y\":" << g_DebrisPlacementDump.centerY
++		    << ",\"pos_x\":" << position.GetFloorIntX()
++		    << ",\"pos_y\":" << position.GetFloorIntY()
++		    << ",\"draw_x\":" << drawX
++		    << ",\"draw_y\":" << drawY
++		    << ",\"dim\":" << dimensions
++		    << ",\"hflip\":" << (didHFlip ? "true" : "false")
++		    << ",\"vflip\":" << (didVFlip ? "true" : "false")
++		    << ",\"rotate\":" << (didRotate ? "true" : "false")
++		    << ",\"hflip_draw\":" << hFlipDrawBuf
++		    << ",\"vflip_draw\":" << vFlipDrawBuf
++		    << ",\"angle_deg\":" << (didRotate ? std::to_string(angleDeg) : std::string("null"))
++		    << ",\"allegro_angle\":" << allegroBuf
++		    << ",\"fixed_angle\":" << (didRotate ? std::to_string(fixedAngle) : std::string("null"))
++		    << ",\"min_rotation\":" << minRotation
++		    << ",\"max_rotation\":" << maxRotation
++		    << ",\"can_hflip\":" << (canHFlip ? "true" : "false")
++		    << ",\"can_vflip\":" << (canVFlip ? "true" : "false")
++		    << ",\"flip_chance\":" << flipChanceBuf
++		    << ",\"hits\":[";
++		static const int kMeasuredX[] = {1990, 102, 831, 151, 1215, 2408, 1052, 2487, 1154, 233, 1364, 2450};
++		static const int kMeasuredY[] = {699, 809, 868, 946, 960, 981, 987, 1032, 1068, 1108, 1120, 1139};
++		bool firstHit = true;
++		if (transformed) {
++			for (int i = 0; i < 12; ++i) {
++				const int lx = kMeasuredX[i] - drawX;
++				const int ly = kMeasuredY[i] - drawY;
++				if (lx < 0 || ly < 0 || lx >= dimensions || ly >= dimensions) {
++					continue;
++				}
++				const int src = _getpixel(transformed, lx, ly);
++				if (src == 0) {
++					continue;
++				}
++				if (!firstHit) {
++					out << ",";
++				}
++				firstHit = false;
++				out << "{\"x\":" << kMeasuredX[i] << ",\"y\":" << kMeasuredY[i] << ",\"src\":" << src << "}";
++			}
++		}
++		out << "]}\n";
++	}
++
++} // namespace
++
+ ConcreteClassInfo(TerrainDebris, Entity, 0);
+ 
+ TerrainDebris::TerrainDebris() {
+@@ -136,6 +260,13 @@ bool TerrainDebris::GetPiecePlacementPosition(SLTerrain* terrain, Box& possibleP
+ 					overhangPosY -= (depth + buriedDepthOffset);
+ 					possiblePiecePosition.SetCenter(Vector(static_cast<float>(posX), static_cast<float>(scanForOverhang ? overhangPosY : surfacePosY)));
+ 					if (!m_OnlyBuried || terrain->IsBoxBuried(possiblePiecePosition)) {
++						if (std::getenv("CC_TERRAIN_DUMP")) {
++							g_DebrisPlacementDump.rngPosX = posX;
++							g_DebrisPlacementDump.rngDepth = depth;
++							g_DebrisPlacementDump.buriedDepthOffset = buriedDepthOffset;
++							g_DebrisPlacementDump.centerX = static_cast<float>(posX);
++							g_DebrisPlacementDump.centerY = static_cast<float>(scanForOverhang ? overhangPosY : surfacePosY);
++						}
+ 						return true;
+ 					}
+ 				}
+@@ -192,28 +323,64 @@ void TerrainDebris::DrawToTerrain(SLTerrain* terrain, BITMAP* bitmapToDraw, cons
+ 	blit(bitmapToDraw, tempDrawBitmap, 0, 0, offsetX, offsetY, bitmapToDraw->w, bitmapToDraw->h);
+ 
+ 	BITMAP* tempFlipAndRotBitmap = nullptr;
++	bool didHFlip = false;
++	bool didVFlip = false;
++	bool didRotate = false;
++	bool drewHFlip = false;
++	bool drewVFlip = false;
++	float hFlipDraw = 0.0F;
++	float vFlipDraw = 0.0F;
++	int angleDeg = 0;
++	float allegroAngle = 0.0F;
++	std::int32_t fixedAngle = 0;
+ 	if (m_CanHFlip || m_CanVFlip || m_MinRotation != 0 || m_MaxRotation != 0) {
+ 		tempFlipAndRotBitmap = create_bitmap_ex(8, dimensions, dimensions);
+ 
+-		if (m_CanHFlip && m_FlipChance >= RandomNum()) {
+-			clear_bitmap(tempFlipAndRotBitmap);
+-			draw_sprite_h_flip(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0);
+-			blit(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0, 0, 0, dimensions, dimensions);
++		if (m_CanHFlip) {
++			hFlipDraw = RandomNum();
++			drewHFlip = true;
++			if (m_FlipChance >= hFlipDraw) {
++				didHFlip = true;
++				clear_bitmap(tempFlipAndRotBitmap);
++				draw_sprite_h_flip(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0);
++				blit(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0, 0, 0, dimensions, dimensions);
++			}
+ 		}
+-		if (m_CanVFlip && m_FlipChance >= RandomNum()) {
+-			clear_bitmap(tempFlipAndRotBitmap);
+-			draw_sprite_v_flip(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0);
+-			blit(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0, 0, 0, dimensions, dimensions);
++		if (m_CanVFlip) {
++			vFlipDraw = RandomNum();
++			drewVFlip = true;
++			if (m_FlipChance >= vFlipDraw) {
++				didVFlip = true;
++				clear_bitmap(tempFlipAndRotBitmap);
++				draw_sprite_v_flip(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0);
++				blit(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0, 0, 0, dimensions, dimensions);
++			}
+ 		}
+ 		if (m_MinRotation != 0 || m_MaxRotation != 0) {
+ 			clear_bitmap(tempFlipAndRotBitmap);
+-			rotate_sprite(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0, ftofix(GetAllegroAngle(static_cast<float>(RandomNum(m_MinRotation, m_MaxRotation)))));
++			angleDeg = RandomNum(m_MinRotation, m_MaxRotation);
++			allegroAngle = GetAllegroAngle(static_cast<float>(angleDeg));
++			const fixed angleFixed = ftofix(allegroAngle);
++			fixedAngle = static_cast<std::int32_t>(angleFixed);
++			didRotate = true;
++			rotate_sprite(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0, angleFixed);
+ 			blit(tempFlipAndRotBitmap, tempDrawBitmap, 0, 0, 0, 0, dimensions, dimensions);
+ 		}
+ 	}
+ 	draw_sprite(terrain->GetFGColorBitmap(), tempDrawBitmap, position.GetFloorIntX() - offsetX, position.GetFloorIntY() - offsetY);
+ 	draw_character_ex(terrain->GetMaterialBitmap(), tempDrawBitmap, position.GetFloorIntX() - offsetX, position.GetFloorIntY() - offsetY, m_Material.GetIndex(), -1);
+ 
++	if (std::getenv("CC_TERRAIN_DUMP")) {
++		int frame = -1;
++		for (int i = 0; i < m_BitmapCount; ++i) {
++			if (m_Bitmaps[i] == bitmapToDraw) {
++				frame = i;
++				break;
++			}
++		}
++		WriteDebrisStampDump(GetPresetName(), GetModuleAndPresetName(), m_DebrisFile.GetDataPath(), static_cast<int>(m_Material.GetIndex()), static_cast<int>(m_TargetMaterial.GetIndex()), frame, bitmapToDraw->w, bitmapToDraw->h, position, offsetX, offsetY, dimensions, tempDrawBitmap, didHFlip, didVFlip, didRotate, drewHFlip, drewVFlip, hFlipDraw, vFlipDraw, angleDeg, allegroAngle, fixedAngle, m_MinRotation, m_MaxRotation, m_CanHFlip, m_CanVFlip, m_FlipChance);
++	}
++
+ 	if (tempFlipAndRotBitmap) {
+ 		destroy_bitmap(tempFlipAndRotBitmap);
+ 	}

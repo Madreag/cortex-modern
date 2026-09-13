@@ -1,0 +1,513 @@
+diff --git a/Source/Main.cpp b/Source/Main.cpp
+index 8cd35f9c15..6bc2b87508 100644
+--- a/Source/Main.cpp
++++ b/Source/Main.cpp
+@@ -326,6 +326,7 @@ static uint64_t s_netReplayDumpTo = 0;
+ static long long s_lpInvarianceTick = 0;
+ static std::vector<int> s_lpInvarianceDepths;
+ static std::vector<int> s_lpInvarianceRepeats;
++static std::string s_lpOverlayLinkModes; //!< -lpinv-overlay-links: the overlay link arms run after the depth cases, in order.
+ static int s_lpInvarianceFailures = -1; //!< -1 = not run, else the count of failed checks.
+ static std::string s_lpExpectEquip; //!< -lpinv-expect: the preset the previews must hold once their horizon passes its pickup tick.
+ static long long s_lpExpectEquipTick = 0;
+@@ -1124,6 +1125,16 @@ bool HandleMainArgs(int argCount, char** argValue) {
+ 			}
+ 			continue;
+ 		}
++		if (!lastArg && currentArg == "-lpinv-overlay-links") {
++			// b spawn and shadow links, r a shadow item in reach, c spawn parts, wounds and a shadow part, s a stateless part's binding.
++			const std::string modes = argValue[++i];
++			if (modes.empty() || modes.find_first_not_of("brcs") != std::string::npos) {
++				std::cerr << "[lpinv] bad overlay-link modes '" << modes << "': expected letters from brcs" << std::endl;
++				return false;
++			}
++			s_lpOverlayLinkModes = modes;
++			continue;
++		}
+ 
+ 		if (!lastArg && !singleModuleSet && currentArg == "-module") {
+ 			std::string moduleToLoad = argValue[++i];
+@@ -1974,6 +1985,186 @@ static std::string CheckPreviewOutcome(long long startTick, long long horizon) {
+ 	return "";
+ }
+ 
++// -lpinv-overlay-links: one depth-1 preview per mode whose first clone the overlay link probe rigs at the preview
++// seam. The survivor's links must leave EndSpeculation on the world or on nothing, never on what the overlay
++// retired, and the canonical world must stay byte-identical.
++static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, int& failures) {
++	const std::string label = std::string("overlay-links ") + mode;
++	bool caseFailed = false;
++	const auto fail = [&caseFailed, &label](const std::string& what) {
++		caseFailed = true;
++		std::cout << "[lpinv] FAIL " << label << ": " << what << std::endl;
++	};
++	const auto pass = [&label](const std::string& what) {
++		std::cout << "[lpinv] PASS " << label << ": " << what << std::endl;
++	};
++	++cases;
++	Activity* activity = g_ActivityMan.GetActivity();
++	// A previewed actor's own item in reach, and an arm's supported device, would come back over the probe's links
++	// through link resolution (the supported device onto a shadow of the original once the probe drops it); they wait aside.
++	std::vector<std::pair<Actor*, HeldDevice*>> reach;
++	std::vector<std::pair<Arm*, HeldDevice*>> support;
++	const Actor* original = nullptr;
++	for (int player = Players::PlayerOne; activity && player < Players::MaxPlayerCount; ++player) {
++		if (Actor* actor = activity->GetControlledActor(player)) {
++			if (!original && activity->PlayerHuman(player)) {
++				original = actor;
++			}
++			reach.emplace_back(actor, actor->GetItemInReach());
++			actor->SetItemInReach(nullptr);
++			if (const AHuman* human = dynamic_cast<const AHuman*>(actor)) {
++				for (Arm* arm: {human->GetFGArm(), human->GetBGArm()}) {
++					if (arm) {
++						support.emplace_back(arm, arm->GetHeldDeviceThisArmIsTryingToSupport());
++						arm->SetHeldDeviceThisArmIsTryingToSupport(nullptr);
++					}
++				}
++			}
++		}
++	}
++	// The resident anchors: the nearest other actor with parts and the nearest item lying in the world.
++	const Actor* residentActor = nullptr;
++	const MovableObject* residentItem = nullptr;
++	if (original) {
++		const float radius = static_cast<float>(std::max(g_SceneMan.GetSceneWidth(), g_SceneMan.GetSceneHeight()));
++		const std::vector<MovableObject*>* nearby = g_MovableMan.GetMOsInRadius(original->GetPos(), radius);
++		float actorDistance = 0.0F;
++		float itemDistance = 0.0F;
++		for (MovableObject* mo: *nearby) {
++			if (!mo) {
++				continue;
++			}
++			const float distance = g_SceneMan.ShortestDistance(original->GetPos(), mo->GetPos(), g_SceneMan.SceneWrapsX()).GetMagnitude();
++			const Actor* actor = dynamic_cast<const Actor*>(mo);
++			if (actor && actor != original && g_MovableMan.IsActor(actor) && !actor->GetAttachableList().empty()) {
++				if (!residentActor || distance < actorDistance) {
++					residentActor = actor;
++					actorDistance = distance;
++				}
++			} else if (dynamic_cast<const HeldDevice*>(mo) && g_MovableMan.IsDevice(mo) && (!residentItem || distance < itemDistance)) {
++				residentItem = mo;
++				itemDistance = distance;
++			}
++		}
++		delete nearby;
++	}
++	std::vector<LuaStateWrapper*> states {&g_LuaMan.GetMasterScriptState()};
++	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
++		states.push_back(&state);
++	}
++
++	PreviewScriptSelfTest::ArmOverlayLinkProbe(mode, residentActor, residentItem);
++	const size_t ghostsBefore = g_MovableMan.GetPreviewGhostCount();
++	LocalPrediction::SetDepthOverride(1);
++	LocalPrediction::Clear();
++	LocalPrediction::RunPreview();
++	const PreviewScriptSelfTest::OverlayLinkProbe& probe = PreviewScriptSelfTest::GetOverlayLinkProbe();
++	// Links are compared by address only: a target the overlay retired may already be deleted.
++	const auto describe = [&probe](const MovableObject* link) -> std::string {
++		if (!link) {
++			return "nothing";
++		}
++		if (link == probe.spawn) {
++			return "the retired drop " + probe.spawnPreset + " uid=" + std::to_string(probe.spawnUID);
++		}
++		if (link == probe.spawnPart) {
++			return "a part of the retired drop";
++		}
++		if (link == probe.spawnWound) {
++			return "a wound of the retired drop";
++		}
++		if (link == probe.residentActor) {
++			return "the resident actor";
++		}
++		if (link == probe.residentItem) {
++			return "the resident item";
++		}
++		if (link == probe.residentPart) {
++			return "the resident part";
++		}
++		return "another object";
++	};
++	const auto expect = [&describe, &pass, &fail](const std::string& check, const MovableObject* link, const MovableObject* wanted) {
++		if (link == wanted) {
++			pass(check + ": " + describe(link));
++		} else {
++			fail(check + ": points at " + describe(link) + ", expected " + describe(wanted));
++		}
++	};
++	if (!probe.ran) {
++		fail("not armed: no preview clone reached the probe");
++	} else if (!probe.failure.empty()) {
++		fail("not armed: " + probe.failure);
++	} else {
++		std::cout << "[lpinv] ARMED " << label << ": clone uid=" << probe.cloneUID << (probe.spawn ? " drop=" + probe.spawnPreset + " uid=" + std::to_string(probe.spawnUID) : std::string())
++		          << " ghosts " << ghostsBefore << "->" << g_MovableMan.GetPreviewGhostCount() << " [" << LocalPrediction::DescribeLastOutcome() << "]" << std::endl;
++		const Actor* clone = dynamic_cast<const Actor*>(probe.clone);
++		if (mode == 'b') {
++			expect("item_in_reach_to_a_retired_spawn", clone->GetItemInReach(), nullptr);
++			expect("mo_to_not_hit_to_a_retired_spawn", clone->GetWhichMOToNotHit(), nullptr);
++			expect("mo_to_not_hit_to_an_in_world_shadow", probe.shadowLinkPart->GetWhichMOToNotHit(), probe.residentActor);
++		} else if (mode == 'r') {
++			expect("item_in_reach_to_an_in_world_shadow", clone->GetItemInReach(), probe.residentItem);
++		} else if (mode == 'c') {
++			expect("mo_to_not_hit_to_a_retired_spawn_part", probe.spawnPartLinkPart->GetWhichMOToNotHit(), nullptr);
++			expect("mo_to_not_hit_to_a_retired_spawn_wound", probe.spawnWoundLinkPart->GetWhichMOToNotHit(), nullptr);
++			expect("survivor_wound_mo_to_not_hit_to_a_retired_spawn", probe.cloneWound->GetWhichMOToNotHit(), nullptr);
++			expect("mo_to_not_hit_to_an_in_world_shadow_part", probe.shadowPartLinkPart->GetWhichMOToNotHit(), probe.residentPart);
++		} else if (mode == 's') {
++			const std::string slot = std::to_string(probe.statelessUID);
++			std::string boundIn;
++			std::string residentChangedIn;
++			for (size_t index = 0; index < states.size(); ++index) {
++				if (states[index]->TableEntryIsDefined("_ScriptedObjects", slot + "#preview")) {
++					boundIn += " " + std::to_string(index);
++				}
++				if (index >= probe.residentSlotBefore.size() || states[index]->TableEntryIsDefined("_ScriptedObjects", slot) != probe.residentSlotBefore[index]) {
++					residentChangedIn += " " + std::to_string(index);
++				}
++			}
++			if (boundIn.empty()) {
++				pass("stateless_part_preview_slot_dropped: _ScriptedObjects[\"" + slot + "#preview\"] is bound in no Lua state");
++			} else {
++				fail("stateless_part_preview_slot_dropped: _ScriptedObjects[\"" + slot + "#preview\"] is still bound in Lua state(s)" + boundIn + " after its part was deleted");
++				// Recorded above; the stale slot is dropped so the canonical capture below never reads the deleted part through it.
++				for (LuaStateWrapper* state: states) {
++					if (state->TableEntryIsDefined("_ScriptedObjects", slot + "#preview")) {
++						state->DropPreviewScriptObject(probe.statelessUID);
++					}
++				}
++			}
++			if (residentChangedIn.empty()) {
++				pass("resident_slot_unchanged: _ScriptedObjects[\"" + slot + "\"] kept its binding in every Lua state");
++			} else {
++				fail("resident_slot_unchanged: _ScriptedObjects[\"" + slot + "\"] changed in Lua state(s)" + residentChangedIn);
++			}
++		}
++	}
++	LocalPrediction::Clear();
++	g_MovableMan.DropAllPreviewGhosts();
++	PreviewScriptSelfTest::DisarmOverlayLinkProbe();
++	for (auto entry = reach.rbegin(); entry != reach.rend(); ++entry) {
++		entry->first->SetItemInReach(entry->second);
++	}
++	for (auto entry = support.rbegin(); entry != support.rend(); ++entry) {
++		entry->first->SetHeldDeviceThisArmIsTryingToSupport(entry->second);
++	}
++	std::vector<std::string> problems;
++	const std::string after = DumpSimStateToString() + DescribeCanonicalExtras(problems);
++	for (const std::string& problem: problems) {
++		fail("cannot capture canonical Lua state: " + problem);
++	}
++	if (after != before) {
++		WriteProbeText(std::string("lpinv_after_overlay_") + mode, after);
++		fail(std::string("canonical state changed after the overlay-link preview (lpinv_before vs lpinv_after_overlay_") + mode + ")");
++	}
++	if (caseFailed) {
++		++failures;
++	} else {
++		std::cout << "[lpinv] ok " << label << ": canonical state byte-identical" << std::endl;
++	}
++}
++
+ // -local-prediction-invariance: at tick T, run and discard previews of every depth and repeat count and
+ // require the canonical world (dump + extras) byte-identical afterwards. The run then continues, so the
+ // trace compare against a no-preview reference closes the resume half of the guarantee.
+@@ -2071,6 +2262,9 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
+ 			}
+ 		}
+ 	}
++	for (const char mode: s_lpOverlayLinkModes) {
++		RunOverlayLinkArm(mode, before, cases, failures);
++	}
+ 	LocalPrediction::SetDepthOverride(savedDepth);
+ 	PreviewScriptSelfTest::SetStrideCounter(false);
+ 	s_lpInvarianceFailures = failures;
+diff --git a/Source/Managers/PreviewScriptSelfTest.cpp b/Source/Managers/PreviewScriptSelfTest.cpp
+index 4475dd31d9..0d7b728a3c 100644
+--- a/Source/Managers/PreviewScriptSelfTest.cpp
++++ b/Source/Managers/PreviewScriptSelfTest.cpp
+@@ -1,10 +1,16 @@
+ #include "PreviewScriptSelfTest.h"
+ 
++#include "AEmitter.h"
+ #include "AHuman.h"
+ #include "Actor.h"
++#include "Arm.h"
++#include "Attachable.h"
+ #include "AudioMan.h"
+ #include "HDFirearm.h"
++#include "HeldDevice.h"
+ #include "LuaMan.h"
++#include "Magazine.h"
++#include "MovableMan.h"
+ #include "MovableObject.h"
+ #include "OwnedMovableObjects.h"
+ #include "PreviewEventLedger.h"
+@@ -14,6 +20,7 @@
+ #include "TimerMan.h"
+ 
+ #include <iostream>
++#include <optional>
+ #include <unordered_set>
+ 
+ namespace RTE {
+@@ -28,6 +35,7 @@ namespace RTE {
+ 	uint64_t PreviewScriptSelfTest::s_RootUID = 0;
+ 	uint64_t PreviewScriptSelfTest::s_ChildUID = 0;
+ 	uint64_t PreviewScriptSelfTest::s_CommittedTick = 0;
++	PreviewScriptSelfTest::OverlayLinkProbe PreviewScriptSelfTest::s_OverlayLinkProbe;
+ 
+ 	void PreviewScriptSelfTest::SetSubtreeProbe(bool enabled) {
+ 		s_SubtreeProbe = enabled;
+@@ -150,9 +158,197 @@ namespace RTE {
+ 	}
+ 
+ 	bool PreviewScriptSelfTest::InstallStrideCounter(MovableObject* object) {
++		RunOverlayLinkProbe(object);
+ 		if (!object || !object->GetLuaState()) {
+ 			return false;
+ 		}
+ 		return object->GetLuaState()->AttachPreviewInvStride(object);
+ 	}
++
++	void PreviewScriptSelfTest::ArmOverlayLinkProbe(char mode, const Actor* residentActor, const MovableObject* residentItem) {
++		s_OverlayLinkProbe = {};
++		s_OverlayLinkProbe.mode = mode;
++		s_OverlayLinkProbe.residentActor = residentActor;
++		s_OverlayLinkProbe.residentItem = residentItem;
++	}
++
++	void PreviewScriptSelfTest::DisarmOverlayLinkProbe() {
++		s_OverlayLinkProbe = {};
++	}
++
++	// Runs at the stride-counter seam: speculation is on, the clones are bound, their faithful links not yet resolved.
++	void PreviewScriptSelfTest::RunOverlayLinkProbe(MovableObject* object) {
++		OverlayLinkProbe& probe = s_OverlayLinkProbe;
++		if (probe.mode == 0 || probe.ran || !object || !g_MovableMan.IsSpeculative() || !LuaMan::IsPreviewClone(object)) {
++			return;
++		}
++		probe.ran = true;
++		AHuman* clone = dynamic_cast<AHuman*>(object);
++		if (!clone) {
++			probe.failure = "the preview clone is not an AHuman";
++			return;
++		}
++		probe.clone = clone;
++		probe.cloneUID = clone->GetUniqueID();
++		// A link set here has to outlive the faithful link resolution RunPreview does after this seam.
++		const auto link = [](MovableObject* holder, MovableObject* target) {
++			holder->m_FaithfulMOToNotHitUID = 0;
++			holder->SetWhichMOToNotHit(target, -1.0F);
++		};
++		const auto shadowOf = [](const MovableObject* resident) -> MovableObject* {
++			MovableObject* view = resident ? g_MovableMan.FindObjectByUniqueID(resident->GetUniqueID()) : nullptr;
++			return view != resident ? view : nullptr;
++		};
++		// The root's direct parts are siblings, so a link set on one never propagates onto another.
++		const std::vector<MovableObject*> parts(clone->GetAttachableList().begin(), clone->GetAttachableList().end());
++
++		if (probe.mode == 'r') {
++			if (clone->GetItemInReachUniqueID() != 0) {
++				probe.failure = "the clone carries a faithful item in reach that link resolution would put back";
++				return;
++			}
++			HeldDevice* shadow = dynamic_cast<HeldDevice*>(shadowOf(probe.residentItem));
++			if (!shadow || !g_MovableMan.IsDevice(shadow)) {
++				probe.failure = "no resident item with an in-world shadow";
++				return;
++			}
++			// The shadow is the overlay's own copy; moving it into reach leaves the resident where it lies.
++			const Arm* arm = clone->GetFGArm() ? clone->GetFGArm() : clone->GetBGArm();
++			shadow->SetPos(arm ? arm->GetJointPos() : clone->GetPos());
++			clone->SetItemInReach(shadow);
++			return;
++		}
++
++		Arm* arm = nullptr;
++		for (Arm* candidate: {clone->GetFGArm(), clone->GetBGArm()}) {
++			if (candidate && candidate->GetHeldDevice()) {
++				arm = candidate;
++				break;
++			}
++		}
++		if (!arm) {
++			probe.failure = "the preview clone holds no device";
++			return;
++		}
++		if (probe.mode == 'b' && clone->GetItemInReachUniqueID() != 0) {
++			probe.failure = "the clone carries a faithful item in reach that link resolution would put back";
++			return;
++		}
++		HeldDevice* held = arm->GetHeldDevice();
++		probe.spawn = held;
++		probe.spawnUID = held->GetUniqueID();
++		probe.spawnPreset = held->GetPresetName();
++		{
++			// Dropped under a previewed emitter, as in the clone's own update, a named drop retires as a ghost that outlives
++			// EndSpeculation; the stateless arm drops with no emitter so the device and its parts are deleted instead.
++			std::optional<SoundSimulationScope> emitter;
++			if (probe.mode == 'b') {
++				emitter.emplace(static_cast<uint64_t>(clone->GetUniqueID()), Hash("overlay-link-probe"));
++			} else if (probe.mode == 'c') {
++				emitter.emplace(static_cast<uint64_t>(held->GetUniqueID()), Hash("overlay-link-probe"));
++			}
++			arm->RemoveAttachable(held, true, false);
++		}
++		link(clone, held);
++
++		if (probe.mode == 'b') {
++			MovableObject* shadowActor = shadowOf(probe.residentActor);
++			if (!shadowActor || parts.empty()) {
++				probe.failure = shadowActor ? "the clone has no parts" : "no other resident actor with an in-world shadow";
++				return;
++			}
++			clone->SetItemInReach(held);
++			link(parts[0], shadowActor);
++			probe.shadowLinkPart = parts[0];
++			return;
++		}
++
++		if (probe.mode == 'c') {
++			MovableObject* spawnPart = nullptr;
++			if (const HDFirearm* firearm = dynamic_cast<const HDFirearm*>(held); firearm && firearm->GetMagazine()) {
++				spawnPart = firearm->GetMagazine();
++			} else if (!held->GetAttachableList().empty()) {
++				spawnPart = held->GetAttachableList().front();
++			}
++			const MOSRotating* shadowActor = dynamic_cast<const MOSRotating*>(shadowOf(probe.residentActor));
++			MovableObject* shadowPart = shadowActor && !shadowActor->GetAttachableList().empty() ? shadowActor->GetAttachableList().front() : nullptr;
++			probe.residentPart = shadowPart ? const_cast<Actor*>(probe.residentActor)->FindPartByUniqueID(shadowPart->GetUniqueID()) : nullptr;
++			// Wounds as a hit makes them: copies of a part's break wound, which carry no script and so take no Lua state.
++			const AEmitter* woundPreset = nullptr;
++			for (const MovableObject* part: parts) {
++				const Attachable* attachable = dynamic_cast<const Attachable*>(part);
++				if (attachable && attachable->GetBreakWound() && static_cast<const MovableObject*>(attachable->GetBreakWound())->m_AllLoadedScripts.empty()) {
++					woundPreset = attachable->GetBreakWound();
++					break;
++				}
++			}
++			if (parts.size() < 3 || !spawnPart || !probe.residentPart || !woundPreset) {
++				probe.failure = parts.size() < 3 ? "the clone has fewer than three parts" : !spawnPart ? "the dropped device has no part" : !probe.residentPart ? "no resident part behind a shadow part" : "no unscripted wound preset on the clone";
++				return;
++			}
++			AEmitter* spawnWound = dynamic_cast<AEmitter*>(woundPreset->Clone());
++			AEmitter* cloneWound = dynamic_cast<AEmitter*>(woundPreset->Clone());
++			if (!spawnWound || !cloneWound) {
++				delete spawnWound;
++				delete cloneWound;
++				probe.failure = "the wound preset did not clone";
++				return;
++			}
++			held->AddWound(spawnWound, Vector(), false);
++			clone->AddWound(cloneWound, Vector(), false);
++			link(parts[0], spawnPart);
++			link(parts[1], spawnWound);
++			link(parts[2], shadowPart);
++			link(cloneWound, held);
++			probe.spawnPart = spawnPart;
++			probe.spawnWound = spawnWound;
++			probe.cloneWound = cloneWound;
++			probe.spawnPartLinkPart = parts[0];
++			probe.spawnWoundLinkPart = parts[1];
++			probe.shadowPartLinkPart = parts[2];
++			return;
++		}
++
++		if (probe.mode == 's') {
++			MovableObject* part = nullptr;
++			if (HDFirearm* firearm = dynamic_cast<HDFirearm*>(held); firearm && firearm->GetMagazine() && !firearm->GetMagazine()->GetLuaState()) {
++				part = firearm->GetMagazine();
++			} else {
++				std::unordered_set<const Entity*> visited;
++				std::unordered_set<const MovableObject*> owned;
++				CollectOwnedMovableObjects(held, visited, owned);
++				for (const MovableObject* candidate: owned) {
++					if (candidate != held && !candidate->GetLuaState() && (!part || candidate->GetUniqueID() < part->GetUniqueID())) {
++						part = const_cast<MovableObject*>(candidate);
++					}
++				}
++			}
++			if (!part || !LuaMan::IsPreviewClone(part)) {
++				probe.failure = part ? "the stateless part was not bound as a preview clone part" : "the dropped device has no stateless part";
++				return;
++			}
++			probe.statelessUID = part->GetUniqueID();
++			const std::string slot = std::to_string(probe.statelessUID);
++			std::vector<LuaStateWrapper*> states {&g_LuaMan.GetMasterScriptState()};
++			for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
++				states.push_back(&state);
++			}
++			for (LuaStateWrapper* state: states) {
++				probe.residentSlotBefore.push_back(state->TableEntryIsDefined("_ScriptedObjects", slot));
++				if (state->TableEntryIsDefined("_ScriptedObjects", slot + "#preview")) {
++					probe.failure = "the part's preview slot was bound before the probe";
++					return;
++				}
++			}
++			// The part gains a state mid-preview the way a script would give it one, without drawing from the canonical state cursor.
++			LuaStateWrapper& state = g_LuaMan.GetMasterScriptState();
++			part->m_ThreadedLuaState = &state;
++			probe.statelessBound = state.BindPreviewScriptObject(part, false) && state.TableEntryIsDefined("_ScriptedObjects", slot + "#preview");
++			if (!probe.statelessBound) {
++				probe.failure = "the stateless part's preview binding was not created";
++			}
++			return;
++		}
++		probe.failure = std::string("unknown probe mode '") + probe.mode + "'";
++	}
+ } // namespace RTE
+diff --git a/Source/Managers/PreviewScriptSelfTest.h b/Source/Managers/PreviewScriptSelfTest.h
+index 42ad587b18..226f3f4c0d 100644
+--- a/Source/Managers/PreviewScriptSelfTest.h
++++ b/Source/Managers/PreviewScriptSelfTest.h
+@@ -2,6 +2,7 @@
+ 
+ #include <cstdint>
+ #include <string>
++#include <vector>
+ 
+ namespace RTE {
+ 
+@@ -25,7 +26,39 @@ namespace RTE {
+ 		static bool PreviewStrideRan() { return s_PreviewStrideSeen; }
+ 		static bool CheckNestedHookScope();
+ 
++		/// What the overlay link probe rigged inside the preview it was armed for; link targets are compared by address afterwards, never read.
++		struct OverlayLinkProbe {
++			char mode = 0;
++			bool ran = false;
++			std::string failure; //!< Why the probe could not rig its links; empty when it did.
++			const Actor* residentActor = nullptr;
++			const MovableObject* residentItem = nullptr;
++			const MovableObject* residentPart = nullptr; //!< The resident's own counterpart of the linked shadow part.
++			MovableObject* clone = nullptr;
++			long cloneUID = 0;
++			MovableObject* spawn = nullptr; //!< The device the clone dropped; it retires with the overlay.
++			long spawnUID = 0;
++			std::string spawnPreset;
++			MovableObject* spawnPart = nullptr;
++			MovableObject* spawnWound = nullptr;
++			MovableObject* cloneWound = nullptr; //!< A wound on the surviving clone, holding a link of its own.
++			MovableObject* shadowLinkPart = nullptr;
++			MovableObject* spawnPartLinkPart = nullptr;
++			MovableObject* spawnWoundLinkPart = nullptr;
++			MovableObject* shadowPartLinkPart = nullptr;
++			long statelessUID = 0; //!< A part with no Lua state at bind time that the probe binds during the preview.
++			bool statelessBound = false;
++			std::vector<bool> residentSlotBefore; //!< Per Lua state, master first: whether `_ScriptedObjects[uid]` was defined.
++		};
++		/// Arms a one-shot probe for the next preview's first clone: 'b' spawn and shadow links, 'r' a shadow item in reach,
++		/// 'c' spawn parts, wounds and a shadow part, 's' a stateless part that binds and retires inside the preview.
++		static void ArmOverlayLinkProbe(char mode, const Actor* residentActor, const MovableObject* residentItem);
++		static void DisarmOverlayLinkProbe();
++		static const OverlayLinkProbe& GetOverlayLinkProbe() { return s_OverlayLinkProbe; }
++
+ 	private:
++		static void RunOverlayLinkProbe(MovableObject* object);
++		static OverlayLinkProbe s_OverlayLinkProbe;
+ 		static bool s_SubtreeProbe;
+ 		static bool s_SharedSlot;
+ 		static bool s_StrideCounter;

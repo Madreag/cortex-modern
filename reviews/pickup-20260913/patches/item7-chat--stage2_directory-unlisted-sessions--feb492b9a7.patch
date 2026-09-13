@@ -1,0 +1,26 @@
+diff --git a/Source/Network/NetDirectorySelfTest.cpp b/Source/Network/NetDirectorySelfTest.cpp
+index 2363489834..98b6e4542c 100644
+--- a/Source/Network/NetDirectorySelfTest.cpp
++++ b/Source/Network/NetDirectorySelfTest.cpp
+@@ -1559,6 +1559,21 @@ namespace RTE {
+ 					}
+ 				}
+ 
++				{   // a hide heartbeat answered 404 after the intent turned visible again still fails closed
++					ScriptedClient s;
++					s.replies->push_back({200, kRegisterCapable, ""});
++					s.replies->push_back({404, R"({"error":"not_found"})", ""});
++					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
++					s.client.Update(0);
++					s.client.Update(0); // the register lands; the hide heartbeat leaves
++					CallAdvertise(s.client, SampleRegisterRequest(), false, true); // relisted while the hide is out
++					s.client.Update(0); // the hide's 404 lands
++					s.client.Update(0);
++					if (CountRequests(s, "POST", "/v1/sessions") != 1 || s.client.GetState() != NetDirectoryClient::State::Failed) {
++						note("inflight-hidden-404: the hide's 404 re-registered a visible identity once the intent turned visible");
++					}
++				}
++
+ 				// A contradicting or undecodable echo retries at 5000 ms, then 10000 ms, and is never terminal.
+ 				const struct {
+ 					const char* name;
