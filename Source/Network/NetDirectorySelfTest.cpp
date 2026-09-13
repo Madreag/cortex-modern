@@ -1454,10 +1454,6 @@ namespace RTE {
 				return report.contains("confirmed_listed") && report["confirmed_listed"].is_null() &&
 				       report.contains("supports_unlisted") && report["supports_unlisted"].is_boolean() && !report["supports_unlisted"].get<bool>();
 			}
-			/// The earlier predicate, kept so the mutation check can show its false accepts.
-			bool ReportRowlessLoose(const json& report) {
-				return !report.value("confirmed_listed", json()).is_boolean() && report.value("supports_unlisted", json()) == json(false);
-			}
 			bool ReportLeaksToken(const std::string& report) {
 				return report.find(kSecretToken) != std::string::npos || json::parse(report).contains("token");
 			}
@@ -1750,7 +1746,7 @@ namespace RTE {
 					std::cout << "[net-directory-selftest] shutdown inside retry_after: deletes=" << report.value("deletes", json()).dump() << " elapsed_ms=" << elapsedMs << ", the row is left to the service's expiry" << std::endl;
 				}
 
-				{   // the tightened contract against the loose predicate on the same mutations
+				{   // Reject absent or malformed row visibility.
 					auto mutate = [](bool hasConfirmed, const json& confirmed, bool hasCapable, const json& capable) {
 						json r = {{"state", "idle"}, {"desired_listed", false}};
 						if (hasConfirmed) { r["confirmed_listed"] = confirmed; }
@@ -1767,19 +1763,10 @@ namespace RTE {
 						{"capable-string", mutate(true, nullptr, true, "yes"), false},
 						{"capable-true", mutate(true, nullptr, true, true), false},
 					};
-					std::vector<std::string> looseFalseAccepts;
 					for (const auto& m : mutations) {
-						if (ReportRowlessLoose(m.report) && !m.rowless) { looseFalseAccepts.push_back(m.name); }
 						if (ReportRowless(m.report) != m.rowless) {
 							note(std::string("rowless-shape: ReportRowless ") + (m.rowless ? "rejected " : "accepted ") + m.name);
 						}
-					}
-					if (looseFalseAccepts.empty()) {
-						note("rowless-shape: the loose predicate accepted none of the bad mutations");
-					} else {
-						std::cout << "[net-directory-selftest] rowless-shape: the loose predicate falsely accepted " << looseFalseAccepts.size() << " mutations";
-						for (const std::string& name : looseFalseAccepts) { std::cout << " " << name; }
-						std::cout << "; ReportRowless requires confirmed_listed=null and supports_unlisted=false" << std::endl;
 					}
 				}
 
