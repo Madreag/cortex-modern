@@ -272,8 +272,9 @@ namespace RTE {
 			outcome.spawnedNames += (outcome.spawnedNames.empty() ? "" : ",") + queued;
 		}
 		std::vector<MovableObject*> taken;
+		const std::unordered_set<const MovableObject*> retiring = g_MovableMan.RetiringOverlayObjects();
 		for (Preview& preview: targets) {
-			preview.clone->RemapExternalLinks([&](MovableObject* mo) { return g_MovableMan.ResidentForRetiringShadow(mo); });
+			preview.clone->RemapExternalLinks([&](MovableObject* mo) { return g_MovableMan.OverlaySurvivorOf(mo, retiring); });
 		}
 		g_MovableMan.EndSpeculation(&taken);
 		std::vector<uint64_t> takenEmitters;
