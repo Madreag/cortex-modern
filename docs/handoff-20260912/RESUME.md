@@ -1,6 +1,7 @@
 # CORTEX-MODERN — RESUME (the single live doc)
 
-**Rewritten 2026-09-12 16:40 MST.** This file is the resume point: read it first, every session.
+**Rewritten 2026-09-12 16:40 MST; last updated 2026-09-12 18:00 MST (after the trailer strip and the cleanup).** This
+file is the resume point: read it first, every session.
 Older detail: `_archive/docs_archive_20260912/RESUME_pre-rewrite-20260912.md` (the verbatim pre-rewrite copy — nothing
 was lost, only compressed); `HANDOFF*.md` and the 15 phase plans in `_archive/docs_archive_20260905/`.
 Policy long-form lives in `D:\Projects\CLAUDE.md` (== `AGENTS.md`); the live board is `D:\Projects\STATUS.md`;
@@ -23,7 +24,12 @@ PC, no launchd lane on the Mac, the Devin queue runner (`devin_queue.py`) killed
 or Mac session to resume.** Every branch with work is on origin (§4.5). The next lead starts at §5.1 and spawns its
 own agents. Two things were cut short by the stop and are recorded as such: the independent verifier pass on W136-2
 (the lead read the codec diff itself; the merge is on the wave, §4.3) and the promotion of `control-build` (still at
-`5c2c65c2ed`; the gates already run on the wave exe are in §4.1).
+`4dd386fb51`; the gates already run on the wave exe are in §4.1). **After the stop (17:30-18:00 MST):** the one
+public Cursor co-author trailer was stripped from the whole history and force-pushed (§1.1: 866 commits re-hashed,
+every sha in this file rewritten through `trailer-strip-20260912/commit-map.txt`); the drives were cleaned
+(§4.7: 125 GB of superseded run roots, 28 GB of finished Mac lanes, 12.6 GB of superseded review bulk, 7.6 GB of
+stderr dumps, nine superseded worktrees — every deletion in `reviews/cleanup-20260912.md`); the June wiki edits in
+`cccp` were committed and pushed; every local branch equals origin.
 
 ---
 
@@ -42,35 +48,34 @@ own agents. Two things were cut short by the stop and are recorded as such: the 
 7. Only if you need it: `STAGE2_H4_RECONNECT_PLAN.md` (H4 design + pins P1-P32), `RECOMMENDED.md`,
    `NEXTENHANCEMENTS.md`, `reviews\takeover-20260909\grok-workers\WORKER_RULES.md` (travels with every brief).
 
-## 0.2 The trees (verified 2026-09-12 16:30 MST)
+## 0.2 The trees (verified 2026-09-12 17:50 MST, after the trailer strip — all shas are post-strip)
 
 | Path | Branch @ tip | What it is |
 |---|---|---|
-| `D:\Projects\control-build` | `stage2/fixgroup-6-lead` @ `5c2c65c2ed` | **LEAD CANDIDATE.** Built exe `98f73d74aaed` (from `7d3666aa15`, 14:52 MST). The FG6B battery pins it. Dirty only in the vendor `allegro-release.lib`. |
-| `D:\Projects\takeover-build` | `stage2/fixgroup-6-lead-wave-a` @ `9484ff6106` | **WAVE SCRATCH.** Wave A prepared here while the battery pinned control-build: eleven merges + three lead fix-ups over `5c2c65c2ed`. Uncommitted trim in `Actor.cpp/.h` + `NetLockstepSelfTest.cpp` (§4.4). A build was linking here at 16:30 MST. |
-| `D:\Projects\p4b-interp-validation` | `stage2/p4b-interp-lockstep` @ `f83cc75099` | **THE MILESTONE BRANCH / APPROVED TREE.** The only executable the two-process harness and the verification family launch (exe `ff6a44ac46c8`, 2026-09-11 16:44 MST). `origin` matches. Workers may never write here. Docs say "main" — there is no `main` ref; this branch is it. |
-| `D:\Projects\cccp` | `modernization-effort` @ `0064b7e542` | Legacy reference **and the shared object store** for every worktree. |
+| `D:\Projects\control-build` | `stage2/fixgroup-6-lead` @ `4dd386fb51` | **LEAD CANDIDATE.** Built exe `98f73d74aaed` (from `cefccaa1f6`, 14:52 MST) — the FG6B battery ran on it (done, §4.6); superseded by the wave, promote per §5.1 step 5. Dirty only in the vendor `allegro-release.lib`. |
+| `D:\Projects\takeover-build` | `stage2/fixgroup-6-lead-wave-a` @ `d20d4bddfa` | **WAVE SCRATCH.** Wave A (§4.2): thirteen merges, three lead fix-ups and the W71-4 trim over `4dd386fb51`; exe `cf2e611bf36d…` built 17:17 MST from this tip with the gates of §4.1 green. = origin. |
+| `D:\Projects\p4b-interp-validation` | `stage2/p4b-interp-lockstep` @ `aa650e601e` | **THE MILESTONE BRANCH / APPROVED TREE.** The only executable the two-process harness and the verification family launch (exe `ff6a44ac46c8`, 2026-09-11 16:44 MST). `origin` matches. Workers may never write here. Docs say "main" — there is no `main` ref; this branch is it. |
+| `D:\Projects\cccp` | `modernization-effort` @ `f98a88f60e` | Legacy reference **and the shared object store** for every worktree. The June-2026 wiki edits that sat uncommitted were committed and pushed 17:33 MST. |
 
 Worker worktrees (one branch each, reused across lanes so the firewall rules keep covering the path):
 
 | Worktree | Branch @ tip | Lane |
 |---|---|---|
-| `alias-walk` | `stage2/coroutine-stack-fit` @ `7a689008fb` | W136 (rejected) + W136-2 (F20 fix) — merged on the wave; verifier pass still owed (§4.3) |
-| `item4-simspeed` | `stage2/preview-substitute-links` @ `03a7add7be` | W133 + W133-2 (F15) — merged on the wave; F15b/F15c debt (§3.4) |
-| `item5-lifecycle` | `stage2/cross-actor-waypoints` @ `b0e33ba3c7` | W71-3 + W71-4 (F10) — merged on the wave |
-| `value-observations` | `stage2/preview-reference-writes` @ `f1fb71f401` | W127 (F8) — merged |
-| `h4-secondary` | `stage2/sound-identity-pin` @ `f605a8330a` | W131 (F11) — merged |
-| `hold-pause` | `stage2/relaunch-slots-fg6b` @ `49b7249b78` | W124-2 (F13) — merged |
-| `fencing-warm` | `stage2/stop-leave-piemenu-pin` @ `9a37f3a246` | W135 (F17+F18) — merged |
-| `item7-chat` | `stage2/tools-oracle-fixes` @ `0bbfaedb10` | W134 (F19 tools) — merged |
-| `item4-feel` | `stage2/preview-scripts` @ `6ae2d3c6f4` | W129 (preview sound scope + glow oracle) — merged |
-| `item7-ux` | `stage2/port-map-toggle` @ `d3fd36c60c` | W125 (SWE-2 lobby toggle) — merged |
-| `item8-directory` | `stage2/s4-wiring` @ `86b4f82d6c` | W123 (ICE/mux wiring) — merged |
-| `item8-dedicated` | `stage2/preview-projectiles` @ `3b8035ddc9` | W104b — merged |
-| `item8-discovery` | `stage2/audit-3-harness` @ `9027d7e874` | audit-3 harness — merged |
-| `audio-owner-registry` | `stage2/join-list-mod-label` @ `c3ffc8bd1d` | W94-2 — merged |
-| `item3-fixtures`, `lane-a`, `lane-b` | `stage2/e2e-harness-flags` `ae1b48b562`, `stage2/rematch-roster-2-mac` `1dae3de1c5`, `stage2/item3b-harness` `1836ffb80b` | merged/parked |
-| `fixgroup-1..4`, `takeover-fixes`, `xarch-combat` | `stage2/fixgroup-1` `7050cb259d` … `stage2/fixgroup-4` `bf2301a075`, `stage2/a7-journal-wip` `fa24014635`, `stage2/p4a-multiplayer-ui-alpha` `f072d35dad` | superseded integration trees; A7 journal WIP parked; P4A reference |
+| `alias-walk` | `stage2/coroutine-stack-fit` @ `f1c5e517ae` | W136 (rejected) + W136-2 (F20 fix) — merged on the wave; verifier pass still owed (§4.3) |
+| `item4-simspeed` | `stage2/preview-substitute-links` @ `364344d970` | W133 + W133-2 (F15) — merged on the wave; F15b/F15c debt (§3.4) |
+| `item5-lifecycle` | `stage2/cross-actor-waypoints` @ `1544d359c2` | W71-3 + W71-4 (F10) — merged on the wave |
+| `value-observations` | `stage2/preview-reference-writes` @ `4bb407c37e` | W127 (F8) — merged |
+| `h4-secondary` | `stage2/sound-identity-pin` @ `3bc895d6fd` | W131 (F11) — merged |
+| `hold-pause` | `stage2/relaunch-slots-fg6b` @ `7cbf518a83` | W124-2 (F13) — merged |
+| `fencing-warm` | `stage2/stop-leave-piemenu-pin` @ `0774713efa` | W135 (F17+F18) — merged |
+| `item7-chat` | `stage2/tools-oracle-fixes` @ `075b57587e` | W134 (F19 tools) — merged |
+| `item4-feel` | `stage2/preview-scripts` @ `d9aa5a7690` | W129 (preview sound scope + glow oracle) — merged |
+| `item7-ux` | `stage2/port-map-toggle` @ `801bbb19d9` | W125 (SWE-2 lobby toggle) — merged |
+| `item8-directory` | `stage2/s4-wiring` @ `887bf43917` | W123 (ICE/mux wiring) — merged |
+| `item8-dedicated` | `stage2/preview-projectiles` @ `49af8a120e` | W104b — merged |
+| `item8-discovery` | `stage2/audit-3-harness` @ `a5f5380835` | audit-3 harness — merged |
+| `audio-owner-registry` | `stage2/join-list-mod-label` @ `dda7247be3` | W94-2 — merged |
+| *(removed 2026-09-12 17:48 MST)* `item3-fixtures`, `lane-a`, `lane-b`, `fixgroup-1..4`, `takeover-fixes`, `xarch-combat` | `stage2/e2e-harness-flags` `2e4f14e861`, `stage2/rematch-roster-2-mac` `1b09c8078a`, `stage2/item3b-harness` `7a94ee1a5d`, `stage2/fixgroup-1` `67d2d70aad` … `stage2/fixgroup-4` `eadd79cfc7`, `stage2/a7-journal-wip` `8c14facea8`, `stage2/p4a-multiplayer-ui-alpha` `e915e274f8` | superseded worktrees deleted in the cleanup (branches on origin at these tips; restore any with `git -C D:\Projects\cccp worktree add D:\Projects\<dir> <branch>` and re-run the firewall script elevated before a `-net*` launch from it) |
 
 ## 0.3 Build (Windows, primary)
 
@@ -93,7 +98,7 @@ Never rebuild while an engine of that tree runs (LNK1104) or while a battery pin
 |---|---|---|
 | Socket-free suite | `python <tree>/tools/run_selftests.py --repo <tree> --out <dir> --timeout 300` | `"passed": 11` — controller-frame, net-protocol, net-identity, net-session, net-lockstep, net-match, net-auth, net-admission, net-reconnect, net-reconnect-session, camera-null-scene. Exit 0 with no PASS token is FAIL. |
 | **verify6** (quick candidate set) | `python reviews/takeover-20260909/grok-workers/lead-tools/verify_lead6b.py` (edit `REPO`/`OUT` at the top) | 8/8: the suite, `-net-port-map-selftest`, `-net-directory-selftest`, `-script-graph-selftest -num-lua-states 4`, `tools/test_global_callbacks.py`, preview-event-D7, lpinv-100, W102 arm-1 switch-control e2e. |
-| ONE battery | the `fg6b-battery` brief re-run on the new tip through a Grok run-only lane; scratch `D:\mx\fg6bat<N>`, lane-unique ports (47651-47656 / 8457). Brief + drivers: `reviews/takeover-20260909/grok-workers/fg6b-battery/` | every engine gate green or a lead-classified non-engine artefact; ~20 steps (selftests, H4 gates, B1 gates, lobby, heal e2e, gameplay fixtures, dedicated, lifecycle packs, drop3_switch, preview_event_d7, lpinv_100, portmap_e2e, controller_log). |
+| ONE battery | the `fg6c-battery` brief (`reviews/takeover-20260909/grok-workers/fg6c-battery/prompt.txt`, placeholders to fill, §5.1 step 6) through a Grok run-only lane; scratch `D:\mx\fg6bat3`, ports 47661-47666 / 8458; baseline and drivers: `fg6b-battery/` | every engine gate green or a lead-classified non-engine artefact; ~20 steps (selftests, H4 gates, B1 gates, lobby, heal e2e, gameplay fixtures, dedicated, lifecycle packs, drop3_switch, preview_event_d7, lpinv_100, portmap_e2e, controller_log). |
 | The family (acceptance for a changed approved tree) | from `reviews/recovery-2026-09-07/contract-audit`: `python run_family.py --source 44 --breadth-out D:\mx\s44b1 --matrix-out D:\mx\s44-1 --mac-attempt 1` (the `family-source44.json` must not exist; the Mac attempt dir must be new) | chain + remaining + breadth 81/81 accounted + matrix 106 reviewed + the Mac attempt green. Runs ONLY on `p4b-interp-validation`, with no MSBuild, engine or worker lane active. |
 | Every engine launch | `python <tree>/tools/run_sim_test.py --repo <tree> --out <dir> --timeout <s> -- <engine flags>` (or `make_run` from Python, `tools/isolated_launch.py` from PowerShell) | never the executable directly — a direct launch puts a window on the user's desktop. |
 
@@ -136,12 +141,7 @@ the next.
 - **Push at every verified checkpoint,** several times a day, no per-push OK needed. Before any push (backup pushes
   included) scan `git log --grep=Co-authored-by --grep=Claude-Session --grep=Generated -i <base>..<tip>`; a hit is
   stripped message-only with `strip_trailers.py` (trees unchanged) before the push. Push with lease. Record the push.
-  **No upstream PRs** (the feed is held). Known public exception, decided by the user and not by the lead:
-  `9751a90e29` (2026-09-10, "Compare controlled actors across every activity in snapshot diffs") carries a
-  `Co-authored-by: Cursor` line and was already on `origin/stage2/p4b-interp-lockstep` and `origin/stage2/fixgroup-6-lead`
-  before 2026-09-12 (a fifth Cursor-shell commit the 2026-09-11 strip missed); every branch descends from it, so a
-  message-only rewrite would change every sha quoted in the evidence trail. Scan with `upstream/development..<tip>`
-  and expect exactly this one hit until the user decides.
+  **No upstream PRs** (the feed is held). **Trailer strip 2026-09-12 17:49 MST** (user's order: no Cursor co-author anywhere): the one public Cursor co-author line (old `9751a90e29`, 2026-09-10) was stripped by a message-only `git filter-branch --msg-filter strip_trailers.py` over every commit not reachable from its parent; 866 commits changed sha, 148 branches and 2 tags were rewritten (every tree byte-identical, `map.txt`), 147 branches force-pushed after verifying origin still held the pre-rewrite tips (`push2.txt`), 26 tags force-pushed; origin's `exp/determinism-foundation` (a May branch that had diverged from the local copy) was stripped separately (21 May-era co-author lines, old `366b9d0738` → `34253c5708`, tree identical, `README-expdf.txt`) and the local diverged copy was left as it was. A line-start scan of every local branch and tag since 2026-04-01 finds 0 trailer lines; only upstream's own 2022-2025 human co-author lines remain, and they stay. The live docs, STATUS, SPAWN_LOG, LEAD-REVIEW and the fg6c brief had every old sha rewritten from `commit-map.txt` (old sha → new sha, 40-char); evidence logs under `D:\mx` and lane reports keep the OLD shas — resolve them through that map. The old trailer commit is now `79dc711958`. Post-scan of every branch and tag for trailer lines: 0.
 - **Arizona local time only** (user, 2026-09-12 17:00 MST): every message, board line, plan, report, commit body and
   stamp is written as `2026-09-12 17:05 MST` (MST, UTC-7, no daylight saving); never UTC. Read the clock (`date`) in
   the turn that writes the stamp. Evidence logs written before this rule (SPAWN_LOG.md, LEAD-REVIEW-overnight.md, lane
@@ -193,7 +193,9 @@ the next.
 - **Any lane that changes a wire or version constant runs `tools/run_selftests.py` 11/11, and the lead's read checks
   that it did** (rule added 2026-09-12 14:56 MST after W126's gap became F14).
 - **Cleanup** is authorised only for items the lead has personally verified as redundant; log every deletion under
-  `reviews/`; never touch live trees, a running family's evidence or a pinned executable.
+  `reviews/` (the 2026-09-12 pass: `reviews/cleanup-20260912.md`, §4.7); never touch live trees, a running family's
+  evidence or a pinned executable; delete under `D:\mx` only with a walker that never enters a reparse point
+  (`lead-tools`' pattern: unlink junctions, never follow them) and check the engine trees' `Data` counts afterwards.
 - Momentum over ceremony; honest pushback welcome; do big writing tasks yourself; never ask the user to run what you
   can run.
 
@@ -277,9 +279,9 @@ SWE-2 and Claude-on-Mac.
 
 ## 3.2 The fix groups and the promotion chain
 
-`fixgroup-1` (`7050cb259d`) → `fixgroup-2` → `fixgroup-3` (`0e7e5b6094`) → `fixgroup-4` (`bf2301a075`) →
-`fixgroup-5` (`fb4c6e9053`) → **wave 1 promoted to the milestone `f83cc75099`** (commit dated 2026-09-12 08:14 MST,
-pushed with lease, trailer scan of the new range empty) → `fixgroup-6` (`8c7d5b75c6`) → **`stage2/fixgroup-6-lead`** (the lead candidate, in
+`fixgroup-1` (`67d2d70aad`) → `fixgroup-2` → `fixgroup-3` (`aeb398b25b`) → `fixgroup-4` (`eadd79cfc7`) →
+`fixgroup-5` (`a8e890f543`) → **wave 1 promoted to the milestone `aa650e601e`** (commit dated 2026-09-12 08:14 MST,
+pushed with lease, trailer scan of the new range empty) → `fixgroup-6` (`12c7f8cf11`) → **`stage2/fixgroup-6-lead`** (the lead candidate, in
 `control-build`) → **`stage2/fixgroup-6-lead-wave-a`** (the scratch wave, in `takeover-build`).
 
 The Source43 family on the milestone ended NOT GREEN with five reds root-caused as one group (R1 stale `Actor*` in the
@@ -291,9 +293,9 @@ hunt that produced W114/W118/W124/W124-2 and, indirectly, F20.
 
 At the user's request the lead read the **whole** delta itself, hunk by hunk, and logged every verdict:
 
-- **Overnight delta** `d81478d2ee..f83cc75099` (111 non-merge commits, Source 79 files +11306/-270, tools 10 files
+- **Overnight delta** `dfe252ad80..aa650e601e` (111 non-merge commits, Source 79 files +11306/-270, tools 10 files
   +2808/-3) — complete 11:59 MST. Verdict: no determinism defect, no mod-compatibility break; findings F1-F6.
-- **Part A**, the takeover window `be217add64..d81478d2ee` (103 commits, Source 99 files +19697/-2211) — complete
+- **Part A**, the takeover window `be217add64..dfe252ad80` (103 commits, Source 99 files +19697/-2211) — complete
   14:21 MST. No new finding beyond F10's enqueue half.
 - **Part B**, the P4B phase `db9ec184be..be217add64` (542 commits, 394 files, +65419/-2327) — started 15:23 MST.
   Done by 16:10 MST: all of `Source/Network` production code (54 files, 13,685 diff lines), all Managers
@@ -308,27 +310,27 @@ At the user's request the lead read the **whole** delta itself, hunk by hunk, an
 
 | # | Severity | What | Status |
 |---|---|---|---|
-| F1 | LOW (test gap) | `RunContiguousActorIndexSelfTest`'s orphan case used uid 0, refused by the `<= 0` check before the cohort check ever ran; the R1 shape (a nonzero stale uid) was unexercised | **fixed + merged** `d6a0e0f123` (driver-verified: `refused=1`) |
-| F2 | LOW (presentation leak) | `AudioMan::RetirePredictedVoice` cleared `predicted` on a finishing one-shot, so the audio checkpoint captured it as an unowned voice; a peer restoring that snapshot replays it | **fixed + merged** `a731ac1326` with two selftest checks |
+| F1 | LOW (test gap) | `RunContiguousActorIndexSelfTest`'s orphan case used uid 0, refused by the `<= 0` check before the cohort check ever ran; the R1 shape (a nonzero stale uid) was unexercised | **fixed + merged** `9cecfeea71` (driver-verified: `refused=1`) |
+| F2 | LOW (presentation leak) | `AudioMan::RetirePredictedVoice` cleared `predicted` on a finishing one-shot, so the audio checkpoint captured it as an unowned voice; a peer restoring that snapshot replays it | **fixed + merged** `e350827f3b` with two selftest checks |
 | F3 | LATENT (constraint) | the W62 fenced-peer waiver's content safety relies on `frameLane == ControlReliable` (ordered). Any lane switching the frame lane must also erase the waived peer's stored frames ≥ F and drop its later arrivals | **open as a standing constraint** — carried into every frame-lane brief |
 | F4 | fixture | the A7 `coop_hand_back` arm ran the armed P4 Alpha Duel (team 0 dead by tick 272 at seed 42), so the reclaim always found the activity Over | **closed** — preset `Net Lifecycle Test` in every driver copy; V-A7-2 PASS on both pinned exes |
-| F5 | MEDIUM (item 8) | Windows pinned-certificate mode set only `IGNORE_UNKNOWN_CA`, so the README's own self-signed `CN=cortex-directory` cert reached by IP was refused on Windows while the Mac accepted the pinned leaf | **fixed + merged** (W117 `865a739b45`), red/green through the real HTTPS probe |
-| F6 | LATENT (scale) | `GET /v1/sessions` returned every row while the engine refuses a body over 128 KiB — past ~200 sessions the join list shows "unreachable" | **fixed + merged** (W120 `6062f464bd`: limit/cursor/total paging, client follows 5 pages) |
-| F7 | LOW (was MEDIUM) | a claimed CPU actor kept wire mode PLAYER after the purge; corrected on W119's evidence — the seeded owner is consulted first, so it was never orphaned, only one tick late | **fixed + merged** (W119 `0d5c318367`: explicit hand-back in AI mode at expiry) |
-| F8 | **HIGH** | a preview hook writing through an entity reference held in `self` reached the **canonical** world (lpinv 6/8 at tick 153, `shadows=0`); six vanilla Base.rte scripts hold such references. A desync hazard introduced by W89-2's unfrozen edge hooks | **fixed + merged on the wave** (W127 `f1fb71f401`: remap every MovableObject userdata in the copied self at bind; anything else freezes the clone's hooks) |
-| F9 | MEDIUM | the candidate did not build on macOS: `PreviewScriptSelfTest.cpp` was in the vcxproj only, and `NetPortMap.h` built a default argument from a nested struct with default member initializers (clang 17 refuses, MSVC accepts) | **fixed** `229f12826c`; Windows binary byte-identical before/after |
-| F10 | MEDIUM | AI-generated queue ops were authorized by **team command authority**, not ownership, at BOTH the apply gate and the enqueue gate; under host-cpu-remote-human the owner's AI output for a CPU actor on a human's team was dropped and its waypoint queue never consumed | **fixed + merged** (W71-3 `435924a207`: `writerUID` on `NetGameAIOrder` codec v21 with v20 decode kept; owner-gated producers; widened apply+enqueue gates. W71-4 `b0e33ba3c7` closes the last gap: keep the path request armed while the add is in flight — read by the lead and ACCEPTED WITH CORRECTIONS, §3.6; **CLOSED 2026-09-12 17:24 MST**: the trimmed arm PASSes in the suite and the craft_cargo pulse on the wave exe is `[316, 317, 318, 319]` on both peers, `D:\mx\wave-b\craft_cargo\pulse_gameplay_wave.txt`) |
-| F11 | **HIGH** | the checkpoint **sound identity cursor** is a process-global counter with no pin at match start, while sound identities cross the wire in `NetGameSoundOp`. Two peers whose processes created a different number of containers (a rematch, a prior skirmish, or Windows vs arm64 — measured 9212 vs 9200 at the same tick) hand out different identities for the same container. Every existing two-peer test starts two fresh identical processes, which is why none saw it | **fixed + merged** (W131 `f605a8330a`: pin to `1<<40` beside the uid pin; unit arm 17-identity delta red→green; relaunch order verified) |
+| F5 | MEDIUM (item 8) | Windows pinned-certificate mode set only `IGNORE_UNKNOWN_CA`, so the README's own self-signed `CN=cortex-directory` cert reached by IP was refused on Windows while the Mac accepted the pinned leaf | **fixed + merged** (W117 `62a0cd9361`), red/green through the real HTTPS probe |
+| F6 | LATENT (scale) | `GET /v1/sessions` returned every row while the engine refuses a body over 128 KiB — past ~200 sessions the join list shows "unreachable" | **fixed + merged** (W120 `958d30c6cf`: limit/cursor/total paging, client follows 5 pages) |
+| F7 | LOW (was MEDIUM) | a claimed CPU actor kept wire mode PLAYER after the purge; corrected on W119's evidence — the seeded owner is consulted first, so it was never orphaned, only one tick late | **fixed + merged** (W119 `ed0b46b266`: explicit hand-back in AI mode at expiry) |
+| F8 | **HIGH** | a preview hook writing through an entity reference held in `self` reached the **canonical** world (lpinv 6/8 at tick 153, `shadows=0`); six vanilla Base.rte scripts hold such references. A desync hazard introduced by W89-2's unfrozen edge hooks | **fixed + merged on the wave** (W127 `4bb407c37e`: remap every MovableObject userdata in the copied self at bind; anything else freezes the clone's hooks) |
+| F9 | MEDIUM | the candidate did not build on macOS: `PreviewScriptSelfTest.cpp` was in the vcxproj only, and `NetPortMap.h` built a default argument from a nested struct with default member initializers (clang 17 refuses, MSVC accepts) | **fixed** `e13e890fad`; Windows binary byte-identical before/after |
+| F10 | MEDIUM | AI-generated queue ops were authorized by **team command authority**, not ownership, at BOTH the apply gate and the enqueue gate; under host-cpu-remote-human the owner's AI output for a CPU actor on a human's team was dropped and its waypoint queue never consumed | **fixed + merged** (W71-3 `42e0559913`: `writerUID` on `NetGameAIOrder` codec v21 with v20 decode kept; owner-gated producers; widened apply+enqueue gates. W71-4 `1544d359c2` closes the last gap: keep the path request armed while the add is in flight — read by the lead and ACCEPTED WITH CORRECTIONS, §3.6; **CLOSED 2026-09-12 17:24 MST**: the trimmed arm PASSes in the suite and the craft_cargo pulse on the wave exe is `[316, 317, 318, 319]` on both peers, `D:\mx\wave-b\craft_cargo\pulse_gameplay_wave.txt`) |
+| F11 | **HIGH** | the checkpoint **sound identity cursor** is a process-global counter with no pin at match start, while sound identities cross the wire in `NetGameSoundOp`. Two peers whose processes created a different number of containers (a rematch, a prior skirmish, or Windows vs arm64 — measured 9212 vs 9200 at the same tick) hand out different identities for the same container. Every existing two-peer test starts two fresh identical processes, which is why none saw it | **fixed + merged** (W131 `3bc895d6fd`: pin to `1<<40` beside the uid pin; unit arm 17-identity delta red→green; relaunch order verified) |
 | F12 | LOW | a directory probe under a blocked address left an unprunable rate-limit bucket | **fixed + merged** on the W120 branch, red-first, service suite 29/29 |
-| F13 | MEDIUM | `m_LockstepRelaunchInProgress` was set at relaunch and cleared only in `ActivityMan::Clear()`, so the end-of-Update rebind re-imposed the snapshot's UIDs on brain / controlled / controller / marked slots **every tick for the rest of the process**; a later legitimate switch was reverted at the end of its tick (and later checkpoints wrote stale ids) | **fixed + merged** (W124-2 `49b7249b78`: `EndLockstepRelaunch` after the first `MovableMan::Update`; dead ChecksLeft code removed). RED `tick 460: owner=2 after hand-back`, GREEN 10/10 |
-| F14 | LOW (test pin) | the reclaim transcript golden hard-coded protocol version 1; W126 bumped `c_Version` to 2 | **fixed** `7d3666aa15` (golden derives the version bytes) |
-| F14b | LOW | **the F14 fix was a half-fix** — `TestKnownAnswers`' three HMAC vectors were computed over the v1 transcript while `MakeTranscript` read the live version, so `-net-reconnect-selftest` stayed red (FG6B, W124-2, W133, W135 all saw it) | **fixed** `5c2c65c2ed` (known-answer transcripts pin `protocolVersion = 1`; the layout test keeps covering the live version). NEGATIVE against the lead |
-| F15 | **HIGH** | the preview-HUD crash: a render substitute's faithful link (`m_pItemInReach`) resolved through the speculating lookup onto a preview clone that `EndSpeculation` frees, read by the HUD on the next frame (ASan heap-use-after-free, `AHuman.cpp:3672`, 10/10 runs) | **fixed + merged, with follow-ups.** W133 `8b3c6590ee` (merged `c13966d02f`) remaps external links to residents; W133-2 (merged `8eaa54d923`, 2026-09-12 17:09 MST) closes the two remaining heads: `6e3698b463` — `EndPreviewScripts` walks recorded (uid, state) bindings (RED ASan UAF at `LuaMan.cpp:7914`, `D:\mx\w133b\asan\red\report.32984`, clean after), `03a7add7be` — `OverlaySurvivorOf` returns nullptr for every retiring overlay object (spawns, spawnMeta keys, added-since-mark), correct by reading only (no red was ever produced for that head). GREEN on the ASan build: HUD 5/5 no report, ledger, lpinv, suite 11/11. **F15b (open, test debt):** the two unit arms the verifier specified — a harvested speculative spawn linked from a clone's `m_pItemInReach`/`m_pMOToNotHit` must be null after `EndSpeculation` (RED on `6e3698b463`, GREEN on `03a7add7be`); an in-world shadow link must map to the resident, not null. **F15c (open, hardening):** `RetiringOverlayObjects` lists top-level objects only, so a link naming a part of a retiring object or a shadow part falls through (latent: `MovableObjectReference` links self-expire and the raw links store roots); `RemapExternalLinks` does not recurse wounds; a stateless clone part that gains a Lua state during the preview keeps its `#preview` slot |
-| F16 | LOW-MEDIUM (fidelity) | `RemapPreviewUserdata` tested the live world before the part map, so a self-held reference to the original's equipped gun mapped to a duplicate shadow of the whole original rather than the clone's own part | **fixed by the lead** `74072b3d08` on the wave |
-| F17 | MEDIUM (robustness) | on the relay host, a **client's** `ProtocolError`/`InternalError`/`MissingFrameTimeout`/`PeerDisconnected` stop set the coordinator to Failed, ending an N-peer match that the same client's socket merely closing would not (a griefer packet ends everyone's match) | **fixed + merged** (W135 `2b9a8ca1ff`: the stop becomes that peer's `ApplyPeerLeave` at `FirstFrameWithout`, relayed as PeerLeft; the host's own stop still fails clients) |
-| F18 | MEDIUM (determinism) | `SubPieMenuHoverOpenDelay` is a per-machine setting driving a **sim** timer inside `Actor::Update`; two peers with different values open the sub-menu on different ticks and a release in that window resolves a different slice on each | **fixed + merged** (W135 `9a37f3a246`: pinned in `ApplyDeterministicConfig` like the gold/crab settings, re-read by `PieMenu::UpdateSliceActivation`, handed back after; 900→1000→900 selftest) |
+| F13 | MEDIUM | `m_LockstepRelaunchInProgress` was set at relaunch and cleared only in `ActivityMan::Clear()`, so the end-of-Update rebind re-imposed the snapshot's UIDs on brain / controlled / controller / marked slots **every tick for the rest of the process**; a later legitimate switch was reverted at the end of its tick (and later checkpoints wrote stale ids) | **fixed + merged** (W124-2 `7cbf518a83`: `EndLockstepRelaunch` after the first `MovableMan::Update`; dead ChecksLeft code removed). RED `tick 460: owner=2 after hand-back`, GREEN 10/10 |
+| F14 | LOW (test pin) | the reclaim transcript golden hard-coded protocol version 1; W126 bumped `c_Version` to 2 | **fixed** `cefccaa1f6` (golden derives the version bytes) |
+| F14b | LOW | **the F14 fix was a half-fix** — `TestKnownAnswers`' three HMAC vectors were computed over the v1 transcript while `MakeTranscript` read the live version, so `-net-reconnect-selftest` stayed red (FG6B, W124-2, W133, W135 all saw it) | **fixed** `4dd386fb51` (known-answer transcripts pin `protocolVersion = 1`; the layout test keeps covering the live version). NEGATIVE against the lead |
+| F15 | **HIGH** | the preview-HUD crash: a render substitute's faithful link (`m_pItemInReach`) resolved through the speculating lookup onto a preview clone that `EndSpeculation` frees, read by the HUD on the next frame (ASan heap-use-after-free, `AHuman.cpp:3672`, 10/10 runs) | **fixed + merged, with follow-ups.** W133 `12c7d17e4f` (merged `eee6c0369a`) remaps external links to residents; W133-2 (merged `c3e4586b9b`, 2026-09-12 17:09 MST) closes the two remaining heads: `8e66a72ce7` — `EndPreviewScripts` walks recorded (uid, state) bindings (RED ASan UAF at `LuaMan.cpp:7914`, `D:\mx\w133b\asan\red\report.32984`, clean after), `364344d970` — `OverlaySurvivorOf` returns nullptr for every retiring overlay object (spawns, spawnMeta keys, added-since-mark), correct by reading only (no red was ever produced for that head). GREEN on the ASan build: HUD 5/5 no report, ledger, lpinv, suite 11/11. **F15b (open, test debt):** the two unit arms the verifier specified — a harvested speculative spawn linked from a clone's `m_pItemInReach`/`m_pMOToNotHit` must be null after `EndSpeculation` (RED on `8e66a72ce7`, GREEN on `364344d970`); an in-world shadow link must map to the resident, not null. **F15c (open, hardening):** `RetiringOverlayObjects` lists top-level objects only, so a link naming a part of a retiring object or a shadow part falls through (latent: `MovableObjectReference` links self-expire and the raw links store roots); `RemapExternalLinks` does not recurse wounds; a stateless clone part that gains a Lua state during the preview keeps its `#preview` slot |
+| F16 | LOW-MEDIUM (fidelity) | `RemapPreviewUserdata` tested the live world before the part map, so a self-held reference to the original's equipped gun mapped to a duplicate shadow of the whole original rather than the clone's own part | **fixed by the lead** `372ba9a5a4` on the wave |
+| F17 | MEDIUM (robustness) | on the relay host, a **client's** `ProtocolError`/`InternalError`/`MissingFrameTimeout`/`PeerDisconnected` stop set the coordinator to Failed, ending an N-peer match that the same client's socket merely closing would not (a griefer packet ends everyone's match) | **fixed + merged** (W135 `7b76bbd3ac`: the stop becomes that peer's `ApplyPeerLeave` at `FirstFrameWithout`, relayed as PeerLeft; the host's own stop still fails clients) |
+| F18 | MEDIUM (determinism) | `SubPieMenuHoverOpenDelay` is a per-machine setting driving a **sim** timer inside `Actor::Update`; two peers with different values open the sub-menu on different ticks and a release in that window resolves a different slice on each | **fixed + merged** (W135 `0774713efa`: pinned in `ApplyDeterministicConfig` like the gold/crab settings, re-read by `PieMenu::UpdateSliceActivation`, handed back after; 900→1000→900 selftest) |
 | F19 | LOW-MEDIUM (oracle validity) | contract-audit fixtures gated on the literal uid `1048577` and `run_audit`'s gate never failed on an empty or mismatching check list — a drifted uid made the whole audit vacuous | **fixed + merged** (W134: fixtures claim `_ContractAuditOwner` on the first Create/Update and print an ARMED line; the gate fails on `fixture_armed`, `<family>_checks` and every named mismatch; unit tests red→12/12) |
-| F20 | **HIGH (memory safety)** | a restored coroutine's stack is sized by its **saved top** (`lua_checkstack(co, top + 16)`), but LuaJIT requires `base + framesize <= maxstack` for every live frame (checked at call time, never on resume). A yielded frame with many locals is restored into a stack that cannot hold it, and the first register write past the allocation corrupts the heap. Every script-graph restore that rebuilds a suspended coroutine is exposed: relaunch, resync heal, rollback probe, preview codec paths | **W136 `b380ac89bb` REJECTED (2026-09-12 16:48 MST), W136-2 re-spin in progress.** The RED/GREEN evidence is genuine (RED `D:\mx\w136\sg-red4\stdout.log:537` `FAIL coroutine_big_frame_stack_fits 285/131` then a 0xC0000005; GREEN `sg-green2` 177 PASS, suite 11/11), but the sizing walk only sizes frame links that carry `pcslot` and skips the `ftsz` links (FRAME_CP — every coroutine's own main function —, FRAME_VARG, FRAME_CONT, FRAME_PCALL), so a big frame BELOW the yield is never sized; the safety net gates on `frame_islua` and skips the same frames; the `_ScriptGraphThreadStackFits` oracle mirrors the formula instead of the invariant. The lead confirmed on the source (`LuaThreadCodec.cpp` ~345-362 and ~482). W136-2 (Opus engineer, same branch): a second RED-first arm with the big frame in the main function yielding inside a helper/metamethod, then size EVERY link from the function in its own slot (`slots[i-1]`, `needed = max(needed, i + 1 + framesize)`), drop the `frame_islua` gate, make the query check the invariant. Evidence of the defect: `D:\mx\w124b\asan\report.52732` |
+| F20 | **HIGH (memory safety)** | a restored coroutine's stack is sized by its **saved top** (`lua_checkstack(co, top + 16)`), but LuaJIT requires `base + framesize <= maxstack` for every live frame (checked at call time, never on resume). A yielded frame with many locals is restored into a stack that cannot hold it, and the first register write past the allocation corrupts the heap. Every script-graph restore that rebuilds a suspended coroutine is exposed: relaunch, resync heal, rollback probe, preview codec paths | **W136 `82e5184bad` REJECTED (2026-09-12 16:48 MST); W136-2 `f1c5e517ae` landed 17:12 MST and is merged on the wave (`d20d4bddfa`) on the lead's read of the codec diff — the independent verifier pass is still owed (§4.3, §5.1 step 2).** W136's RED/GREEN evidence is genuine (RED `D:\mx\w136\sg-red4\stdout.log:537` `FAIL coroutine_big_frame_stack_fits 285/131` then a 0xC0000005; GREEN `sg-green2` 177 PASS, suite 11/11), but the sizing walk only sizes frame links that carry `pcslot` and skips the `ftsz` links (FRAME_CP — every coroutine's own main function —, FRAME_VARG, FRAME_CONT, FRAME_PCALL), so a big frame BELOW the yield is never sized; the safety net gates on `frame_islua` and skips the same frames; the `_ScriptGraphThreadStackFits` oracle mirrors the formula instead of the invariant. The lead confirmed on the source (`LuaThreadCodec.cpp` ~345-362 and ~482). W136-2 (Opus engineer, same branch) delivered exactly that: a RED-first helper arm (`D:\mx\w136b\red\run\stdout.log:539-540` — the old query's false fit `110/137`, then 0xC0000005 on the unfixed codec) plus a metamethod arm (regression coverage only), every link sized from the function in its own slot (`slots[i-1]`, `needed = max(needed, i + 1 + framesize)`), no `frame_islua` gate in the net, the query on the invariant; GREEN 181 PASS / 0 FAIL with six `coroutine_*` arms, suite 11/11, gcb pass (`D:\mx\w136b\green`). Evidence of the original defect: `D:\mx\w124b\asan\report.52732` |
 
 ## 3.5 Every NEGATIVE of the window, with its lesson
 
@@ -346,25 +348,25 @@ At the user's request the lead read the **whole** delta itself, hunk by hunk, an
 | **A SWE-2 worker typed the executable at a shell** for "quick selftests" and put a game window on the user's desktop three times | `CCCP_HEADLESS=1` in every worker process environment; selftest flags imply headless in the engine; kill the visible one by PID, end the session, resume it with a corrective prompt. Instructions alone were not enough. |
 | **W45-2 opened WinDbg on the user's desktop**; **W58 was a zombie for 2 h** after a rate limit | No GUI tool in a lane, ever (`cdb -c` or a dbghelp script for dumps). The runner ends a lingering process after a minute and resumes the same session. |
 | **Devin billed $72.34** for WIKI generation on repo connect (CLI usage was $0.01) | The user revoked Devin's GitHub access; keep GitHub disconnected from Devin. CLI SWE-2 Max stays free (0 ACU). |
-| **The lead's timestamps drifted up to 90 minutes ahead** over one hour of estimated stamps | Run `date -u` in the same turn as any board/log timestamp. When a stamp is later found wrong, append a correction note; never silently rewrite history. |
+| **The lead's timestamps drifted up to 90 minutes ahead** over one hour of estimated stamps; later the lead wrote "2026-09-13" on lines stamped before midnight UTC | Run `date` (Arizona local time, §1.1) in the same turn as any board/log timestamp and read the DATE from it too. When a stamp is later found wrong, append a correction note; never silently rewrite history. |
 
 ## 3.6 The W-lane index for this window (one line each)
 
 | Lane | Route / tree | What it produced |
 |---|---|---|
-| **W124-2** | Grok, `hold-pause`, `stage2/relaunch-slots-fg6b` `49b7249b78` | F13 fix: the relaunch window ends after the first `MovableMan::Update` (`EndLockstepRelaunch` clears the flag and the kept checkpoint ids; dead ChecksLeft code deleted). RED `tick 460: owner=2 after hand-back` → GREEN 10/10 switch-returner arms, drop3 9/10 (the tenth wrote the ASan report that opened F20). ACCEPTED, merged `f87026a765`. |
-| **W127** | Grok, `value-observations`, `f1fb71f401` | F8 fix: at `BeginPreviewScripts`, every MovableObject userdata in the clone's copied `self` is remapped (original→clone, live world→overlay shadow, clone parts by uid); anything else freezes the clone's hooks, counted. Write fixture 6/8→8/8 with `shadows=2`, fl100 violations=0, det traces identical. ACCEPTED; opened F16. |
-| **W129** | Grok, `item4-feel`, `6ae2d3c6f4` | Preview clones skip `Create` and are deleted under `FaithfulCloneScope(false)`, so no checkpoint sound identity is allocated; a `SoundContainer` in a copied self becomes a preview copy whose `m_PreviewOrigin` points at the canonical container; the glow oracle is keyed to the firearm subtree. Cursor holds at depths 1/4/7 (was +2 per preview); AK lpinv 4/4, pickup 8/8. ACCEPTED. |
-| **W131** | Grok, `h4-secondary`, `f605a8330a` | F11 fix: the checkpoint sound identity cursor pinned to `1<<40` at every deterministic match start; `-selftest-preallocate-sound-identities` gives the two-process form. ACCEPTED; the lead dropped its misleading "impossible in practice" warning in `2dca901fbd`. |
-| **W132** | Grok, `takeover-build`, measurement only | Two Final+ASan builds (W103 tip `3f27189784` pre, W130 tip `b944ce84dc` post) × 5 AK-47 HUD runs each + 2 ledgers: **all 12 halt on the same heap-use-after-free**. Proved W130 was not the mechanism and gave F15 its exact stack. Nothing to merge. |
-| **W133** | Grok, `item4-simspeed`, `8b3c6590ee` | F15 part 1: `RemapExternalLinks` over `m_pMOToNotHit`, `m_pItemInReach`, `m_pMOMoveTarget`, waypoints, a craft's incoming MO, attachables and inventory; `ResidentForRetiringShadow`. Correct, **incomplete** (spawns, the add-queue tail, and `EndPreviewScripts` dereferencing freed clones). Merged as the branch `c13966d02f`. |
-| **W133-2** | Grok, same tree/branch, `03a7add7be` (+`6e3698b463`) | F15 completion to the lead's design: `OverlaySurvivorOf` returning nullptr for members of `RetiringOverlayObjects()` (spawns, spawnMeta keys, added-since-mark), and `EndPreviewScripts` iterating recorded uid/state pairs instead of clone pointers. ACCEPTED WITH FOLLOW-UPS (Opus verifier every line, evidence re-derived from `D:\mx\w133b`; the lead spot-checked the three functions), merged `8eaa54d923`. GREEN bar met on the ASan build: HUD 5/5 exit 0 no report, ledger `PASS press tick 153`, lpinv 8/8, suite 11/11. Debt: F15b arms, F15c hardening (§3.4). |
-| **W134** | Grok, `item7-chat`, `0bbfaedb10` (tools only) | F19 fix (see the table). B-2-3 closed by the lead's reading instead of a change: `compare_sim_traces` already diffs over the **union** of both traces' subsystem keys, so a subsystem one side drops is already a divergence. ACCEPTED, merged `c72c8c05d2`. |
-| **W135** | Grok, `fencing-warm`, `9a37f3a246` | F17 + F18 (see the table), each red-first with its FAIL line quoted on exe `b13b1a6e9e`. ACCEPTED, merged `123d292dca`. Not done by the lane: a 2-peer stop arm. |
-| **W136** | Grok, `alias-walk`, `b380ac89bb` | F20 attempt, base `5c2c65c2ed`. **REJECTED** (§3.4 F20): real fix for the covered shape (the big frame as the yield's immediate caller), genuine RED/GREEN, suite 11/11 — but frames carried as `ftsz` links are never sized and the safety net cannot see them. The worker disclosed the deviation in its report ("REPORT.md:99-101") — read a report's deviations section first. **W136-2** (Opus engineer, same branch, in progress) closes it with a second RED-first arm and per-slot sizing. |
-| **W71-3** | Grok, `item5-lifecycle`, `435924a207` | F10's ownership gate: `writerUID` under codec v21 (v20 decode kept for replays), owner-only producers, `IsLockstepAIOrderAuthorized` (team authority OR sender-owns-target OR a writerUID naming a same-team actor the sender owns). Three red arms. ACCEPTED, merged `ba0cd02d34`. |
-| **W71-4** | Grok, same tree, `b0e33ba3c7` | F10's last gap: under lockstep `UpdateMovePath` keeps its request armed while this actor has in-flight waypoint writes and nothing to load, so the applied add is loaded next tick and the owner sends the pop. Merged `9484ff6106`. ACCEPTED WITH CORRECTIONS after the lead's line-by-line read (evidence re-derived: RED `D:\mx\w71e\red_lockstep3\stdout.log` L7, GREEN `green_lockstep\stdout.log` L7, pulse 316..319 both peers): the trim in §4.4 is being committed on the wave by an Opus engineer; F10 counts closed only when the trimmed arm and the pulse are green on the wave build. |
-| **FG6B battery** | Grok, run-only, lane `fg6b-battery` | The ONE acceptance battery on `7d3666aa15` / exe `98f73d74aaed`; scratch `D:\mx\fg6bat2`, ports 47651-47656 / 8457, 7 h cap. 19 selftests: 18 PASS + the F14b reconnect red. Still writing its post-battery steps at 16:30 MST; `battery_exit.txt` = 0. Known non-engine reds: `binary_matches_source` on every gameplay fixture (the lead's F14b source edit at 15:49 MST is newer than the 21:52 exe) while every **semantic** check passes (peers identical over the whole range on all seven fixtures); the old-driver fencing shape; the `heal_mod_semantics script_continued` artefact. |
+| **W124-2** | Grok, `hold-pause`, `stage2/relaunch-slots-fg6b` `7cbf518a83` | F13 fix: the relaunch window ends after the first `MovableMan::Update` (`EndLockstepRelaunch` clears the flag and the kept checkpoint ids; dead ChecksLeft code deleted). RED `tick 460: owner=2 after hand-back` → GREEN 10/10 switch-returner arms, drop3 9/10 (the tenth wrote the ASan report that opened F20). ACCEPTED, merged `a4277016a4`. |
+| **W127** | Grok, `value-observations`, `4bb407c37e` | F8 fix: at `BeginPreviewScripts`, every MovableObject userdata in the clone's copied `self` is remapped (original→clone, live world→overlay shadow, clone parts by uid); anything else freezes the clone's hooks, counted. Write fixture 6/8→8/8 with `shadows=2`, fl100 violations=0, det traces identical. ACCEPTED; opened F16. |
+| **W129** | Grok, `item4-feel`, `d9aa5a7690` | Preview clones skip `Create` and are deleted under `FaithfulCloneScope(false)`, so no checkpoint sound identity is allocated; a `SoundContainer` in a copied self becomes a preview copy whose `m_PreviewOrigin` points at the canonical container; the glow oracle is keyed to the firearm subtree. Cursor holds at depths 1/4/7 (was +2 per preview); AK lpinv 4/4, pickup 8/8. ACCEPTED. |
+| **W131** | Grok, `h4-secondary`, `3bc895d6fd` | F11 fix: the checkpoint sound identity cursor pinned to `1<<40` at every deterministic match start; `-selftest-preallocate-sound-identities` gives the two-process form. ACCEPTED; the lead dropped its misleading "impossible in practice" warning in `728a47a431`. |
+| **W132** | Grok, `takeover-build`, measurement only | Two Final+ASan builds (W103 tip `38be2a22f4` pre, W130 tip `e502b5133e` post) × 5 AK-47 HUD runs each + 2 ledgers: **all 12 halt on the same heap-use-after-free**. Proved W130 was not the mechanism and gave F15 its exact stack. Nothing to merge. |
+| **W133** | Grok, `item4-simspeed`, `12c7d17e4f` | F15 part 1: `RemapExternalLinks` over `m_pMOToNotHit`, `m_pItemInReach`, `m_pMOMoveTarget`, waypoints, a craft's incoming MO, attachables and inventory; `ResidentForRetiringShadow`. Correct, **incomplete** (spawns, the add-queue tail, and `EndPreviewScripts` dereferencing freed clones). Merged as the branch `eee6c0369a`. |
+| **W133-2** | Grok, same tree/branch, `364344d970` (+`8e66a72ce7`) | F15 completion to the lead's design: `OverlaySurvivorOf` returning nullptr for members of `RetiringOverlayObjects()` (spawns, spawnMeta keys, added-since-mark), and `EndPreviewScripts` iterating recorded uid/state pairs instead of clone pointers. ACCEPTED WITH FOLLOW-UPS (Opus verifier every line, evidence re-derived from `D:\mx\w133b`; the lead spot-checked the three functions), merged `c3e4586b9b`. GREEN bar met on the ASan build: HUD 5/5 exit 0 no report, ledger `PASS press tick 153`, lpinv 8/8, suite 11/11. Debt: F15b arms, F15c hardening (§3.4). |
+| **W134** | Grok, `item7-chat`, `075b57587e` (tools only) | F19 fix (see the table). B-2-3 closed by the lead's reading instead of a change: `compare_sim_traces` already diffs over the **union** of both traces' subsystem keys, so a subsystem one side drops is already a divergence. ACCEPTED, merged `9c3eefc3a1`. |
+| **W135** | Grok, `fencing-warm`, `0774713efa` | F17 + F18 (see the table), each red-first with its FAIL line quoted on exe `b13b1a6e9e`. ACCEPTED, merged `aa34bfeec6`. Not done by the lane: a 2-peer stop arm. |
+| **W136** | Grok, `alias-walk`, `82e5184bad` | F20 attempt, base `4dd386fb51`. **REJECTED** (§3.4 F20): real fix for the covered shape (the big frame as the yield's immediate caller), genuine RED/GREEN, suite 11/11 — but frames carried as `ftsz` links are never sized and the safety net cannot see them. The worker disclosed the deviation in its report ("REPORT.md:99-101") — read a report's deviations section first. **W136-2** (Opus engineer, same branch, `f1c5e517ae`, landed 17:12 MST) closed it with a second RED-first arm and per-slot sizing; merged `d20d4bddfa` on the lead's read (§4.3). |
+| **W71-3** | Grok, `item5-lifecycle`, `42e0559913` | F10's ownership gate: `writerUID` under codec v21 (v20 decode kept for replays), owner-only producers, `IsLockstepAIOrderAuthorized` (team authority OR sender-owns-target OR a writerUID naming a same-team actor the sender owns). Three red arms. ACCEPTED, merged `d396b15d50`. |
+| **W71-4** | Grok, same tree, `1544d359c2` | F10's last gap: under lockstep `UpdateMovePath` keeps its request armed while this actor has in-flight waypoint writes and nothing to load, so the applied add is loaded next tick and the owner sends the pop. Merged `abf5dcb28d`. ACCEPTED WITH CORRECTIONS after the lead's line-by-line read (evidence re-derived: RED `D:\mx\w71e\red_lockstep3\stdout.log` L7, GREEN `green_lockstep\stdout.log` L7, pulse 316..319 both peers); the trim (§4.4) is committed as `0bcaaddde7`, and the trimmed arm plus the craft_cargo pulse are green on the wave exe (§4.1) — F10 CLOSED. |
+| **FG6B battery** | Grok, run-only, lane `fg6b-battery` | The ONE acceptance battery on `cefccaa1f6` / exe `98f73d74aaed`; scratch `D:\mx\fg6bat2`, ports 47651-47656 / 8457, 7 h cap. DONE 16:55 MST, read and classified by the lead (§4.6): no true engine failure. 19 selftests: 18 PASS + the F14b reconnect red. Known non-engine reds: `binary_matches_source` on every gameplay fixture (the lead's F14b source edit at 15:49 MST is newer than the 21:52 exe) while every **semantic** check passes (peers identical over the whole range on all seven fixtures); the old-driver fencing shape; the `heal_mod_semantics script_continued` artefact. |
 
 Also in this window and already merged into the candidate: W90 (AK-47 recording + Lua-fire ledger arm), W104b
 (preview projectiles as ledger events + presentation ghosts), W119 (F7), W120 (F6+F12), W123 (S4 ICE/mux wiring,
@@ -374,40 +376,42 @@ drivers run on macOS), W-MAC-FG6B (the candidate green on arm64: 14 selftests + 
 
 ---
 
-# §4. CURRENT STATE (2026-09-12 23:30-16:40 MST, all values read from the trees)
+# §4. CURRENT STATE (2026-09-12 17:50 MST, all values read from the trees; every sha is post-strip)
 
 ## 4.1 Trees, tips, binaries
 
 | Tree | Branch | Tip | Exe |
 |---|---|---|---|
-| `control-build` | `stage2/fixgroup-6-lead` | `5c2c65c2ed` | `98f73d74aaed385710ac077d9c0e7e331549ba23a19059b044c6b5f1b6dbe631` — built 14:52 MST from `7d3666aa15`; **does not contain `5c2c65c2ed`** (the F14b selftest fix), which is why `binary_matches_source` is red in the battery's fixture steps |
-| `takeover-build` | `stage2/fixgroup-6-lead-wave-a` | `1fa9b540f4` (= origin, pushed 17:26 MST; = `8eaa54d923` + the W136-2 merge) | `cf2e611bf36d575aef5fe856a431704dc1ae2532e58b9b3e95556bcfc58c70eb`, built 17:17 MST from `1fa9b540f4` (Final, `/MP6`). **Gates already green on it** (an Opus engineer, stopped before the promotion; logs under `D:\mx\wave-b\`): `run_selftests.py` 11/11 (`selftests\result.json`); `-script-graph-selftest -num-lua-states 4` **181 PASS, 0 FAIL** (`script-graph\stdout.log`, the six `coroutine_*` arms included); AK-47 HUD replay ×3 `PASS press tick 500` on this plain Final build (`ak47hud\run1..3`); `ak-lpinv176` depths 1/4/7 as before, depth 12 `spawned=8 [None,Tracer Ronin AK-47,Casing,None×5]` (still unexplained, §5.1); **W71-4's craft_cargo pulse `host_wp_nonzero [316, 317, 318, 319]` = `client_wp_nonzero` (`craft_cargo\pulse_gameplay_wave.txt`) — F10 CLOSED on the trimmed code.** Not run on it: verify6, the battery. Earlier gates on the previous wave exe `959fc25e…` (W127 fixtures 8/8 ×3, W129 AK arms) are under `D:\mx\wave-a\`. **Verified on it** (Opus engineer, all through the runners, logs under `D:\mx\wave-a\`): `run_selftests.py` 11/11 (`selftests\result.json`; the new arm `PASS a_path_update_stays_armed_while_the_waypoint_add_is_in_flight` at `net-lockstep-selftest\stdout.log:12`; `net-reconnect-selftest` PASS — F14b confirmed on a build); W127's held-ref fixtures `lpinv-write` / `lpinv-control` / `lpinv-fallback` all `PASS tick 153: 8/8`, `preview_codec_fallback=0` on write/control and the by-design Activity freezes only on fallback (same three uids as W127's run) — this is the proof of the lead's fix-up `c676483586` (without it every sound-holding preview froze); W129's AK arms `ak-lpinv176` 4/4, `ak-lpinv150` 4/4, `pickup-lpinv100` 8/8, `preview_codec_fallback=0`, `violations=0`, canonical state byte-identical. Open observation: at depth 12 the AK arm lists `spawned=8` (five unnamed extra entries) where W129's tip listed 3; depths 1/4/7 identical, canonical untouched. The lead's hypothesis is F16 (`74072b3d08`: the preview now fires the clone's OWN gun instead of a duplicate shadow, so its flash/casing particles appear in the preview's spawn list); confirm by re-running the arm on `c676483586` (pre-F16) vs `74072b3d08` before the battery. |
-| `p4b-interp-validation` | `stage2/p4b-interp-lockstep` | `f83cc75099` (= `origin`) | `ff6a44ac46c8a48c3757dcd888ea419e9e88b7b5070ea88a8c15d8629a30b3f6`, 2026-09-11 16:44 MST |
-| `item4-simspeed` | `stage2/preview-substitute-links` | `03a7add7be` | `c8278244ba23…` (the lane's own) |
-| `alias-walk` | `stage2/coroutine-stack-fit` | `b380ac89bb` | `9f851b0f7430…` (the lane's own) |
+| `control-build` | `stage2/fixgroup-6-lead` | `4dd386fb51` | `98f73d74aaed385710ac077d9c0e7e331549ba23a19059b044c6b5f1b6dbe631` — built 14:52 MST from `cefccaa1f6`; **does not contain `4dd386fb51`** (the F14b selftest fix), which is why `binary_matches_source` is red in the battery's fixture steps |
+| `takeover-build` | `stage2/fixgroup-6-lead-wave-a` | `d20d4bddfa` (= origin, pushed 17:26 MST; = `c3e4586b9b` + the W136-2 merge) | `cf2e611bf36d575aef5fe856a431704dc1ae2532e58b9b3e95556bcfc58c70eb`, built 17:17 MST from `d20d4bddfa` (Final, `/MP6`). **Gates already green on it** (an Opus engineer, stopped before the promotion; logs under `D:\mx\wave-b\`): `run_selftests.py` 11/11 (`selftests\result.json`); `-script-graph-selftest -num-lua-states 4` **181 PASS, 0 FAIL** (`script-graph\stdout.log`, the six `coroutine_*` arms included); AK-47 HUD replay ×3 `PASS press tick 500` on this plain Final build (`ak47hud\run1..3`); `ak-lpinv176` depths 1/4/7 as before, depth 12 `spawned=8 [None,Tracer Ronin AK-47,Casing,None×5]` (still unexplained, §5.1); **W71-4's craft_cargo pulse `host_wp_nonzero [316, 317, 318, 319]` = `client_wp_nonzero` (`craft_cargo\pulse_gameplay_wave.txt`) — F10 CLOSED on the trimmed code.** Not run on it: verify6, the battery. **Gates run earlier on the previous wave exe `959fc25e…` (tip `0bcaaddde7`, 16:32 MST; logs under `D:\mx\wave-a\`)**, all through the runners: `run_selftests.py` 11/11 (the new arm `PASS a_path_update_stays_armed_while_the_waypoint_add_is_in_flight` at `net-lockstep-selftest\stdout.log:12`; `net-reconnect-selftest` PASS — F14b confirmed on a build); W127's held-ref fixtures `lpinv-write` / `lpinv-control` / `lpinv-fallback` all `PASS tick 153: 8/8`, `preview_codec_fallback=0` on write/control and the by-design Activity freezes only on fallback (same three uids as W127's run) — the proof of the lead's fix-up `b5811aad98` (without it every sound-holding preview froze); W129's AK arms `ak-lpinv176` 4/4, `ak-lpinv150` 4/4, `pickup-lpinv100` 8/8, `preview_codec_fallback=0`, `violations=0`, canonical state byte-identical. Open observation (both exes): at depth 12 the AK arm lists `spawned=8` (five unnamed extra entries) where W129's tip listed 3; depths 1/4/7 identical, canonical untouched. The lead's hypothesis is F16 (`372ba9a5a4`: the preview now fires the clone's OWN gun instead of a duplicate shadow, so its flash/casing particles appear in the preview's spawn list); confirm by re-running the arm on `b5811aad98` (pre-F16) vs `372ba9a5a4` before the battery. |
+| `p4b-interp-validation` | `stage2/p4b-interp-lockstep` | `aa650e601e` (= `origin`) | `ff6a44ac46c8a48c3757dcd888ea419e9e88b7b5070ea88a8c15d8629a30b3f6`, 2026-09-11 16:44 MST |
+| `item4-simspeed` | `stage2/preview-substitute-links` | `364344d970` | `c8278244ba23…` (the lane's own) |
+| `alias-walk` | `stage2/coroutine-stack-fit` | `f1c5e517ae` | `d627e0741a…` (W136-2's green exe, the lane's own) |
 
-Working-tree dirt that is expected and must not be committed: the two rebuilt vendor libs
+Working-tree dirt that is expected and must not be committed: the rebuilt vendor libs
 (`external/sources/allegro 4.4.3.1-custom/_Bin/allegro-release.lib`, `external/sources/luabind-0.7.1/_Bin/luabind-release.lib`)
-and `p4b-interp-validation/AbortCode.txt` (untracked).
+in the trees that built. Every worktree was otherwise clean at 17:50 MST (the stray `AbortCode.txt` markers and the
+untracked June screenshots in `cccp` were deleted in the cleanup).
 
 ## 4.2 Wave A, in merge order (all on `stage2/fixgroup-6-lead-wave-a`)
 
-`5c2c65c2ed` (base) → `f6d70fb596` W127 `f1fb71f401` (clean) → `2f9e7dabd0` W131 `f605a8330a`
-(`NetLockstepSelfTest.cpp` keep-both of the W119 and W131 arms) → `2a46169dfb` W129 `6ae2d3c6f4` (`Main.cpp` include
-keep-both; `LuaMan.cpp` W127's remap block then W129's `DropPreviewSoundCopies`) → `ba0cd02d34` W71-3 `435924a207` →
-`f87026a765` W124-2 `49b7249b78` → `c13966d02f` W133 `8b3c6590ee` → `123d292dca` W135 `9a37f3a246` →
-`c72c8c05d2` W134 `0bbfaedb10` → **three lead fix-ups** `c676483586` (let preview `SoundContainer` copies pass the
+`4dd386fb51` (base) → `031687bae8` W127 `4bb407c37e` (clean) → `6e315ce881` W131 `3bc895d6fd`
+(`NetLockstepSelfTest.cpp` keep-both of the W119 and W131 arms) → `d67394fb66` W129 `d9aa5a7690` (`Main.cpp` include
+keep-both; `LuaMan.cpp` W127's remap block then W129's `DropPreviewSoundCopies`) → `d396b15d50` W71-3 `42e0559913` →
+`a4277016a4` W124-2 `7cbf518a83` → `eee6c0369a` W133 `12c7d17e4f` → `aa34bfeec6` W135 `0774713efa` →
+`9c3eefc3a1` W134 `075b57587e` → **three lead fix-ups** `b5811aad98` (let preview `SoundContainer` copies pass the
 hold remap — the W127/W129 semantic clash found while merging: W127 freezes a preview whose hold carries any
 non-MovableObject Entity, and W129 had just started putting SoundContainer copies in that hold, which would have
-frozen every preview that holds a sound and made W129's AK-47 fix moot), `74072b3d08` (F16: consult the part map
-before the live-world branch), `2dca901fbd` (drop the W131 rematch warning) → `9484ff6106` W71-4 `b0e33ba3c7`.
+frozen every preview that holds a sound and made W129's AK-47 fix moot), `372ba9a5a4` (F16: consult the part map
+before the live-world branch), `728a47a431` (drop the W131 rematch warning) → `abf5dcb28d` W71-4 `1544d359c2`.
 
-→ `a44e14132f` (the lead's W71-4 trim) → `8eaa54d923` W133-2 `03a7add7be` (17:09 MST; LuaMan.cpp keep-both) →
-`1fa9b540f4` W136-2 `7a689008fb` (17:13 MST, merged clean and verified 0 differing files; **local only until the
-Opus verifier's verdict on W136-2 — push it only on ACCEPT, otherwise `git reset --hard 8eaa54d923`**).
+→ `0bcaaddde7` (the lead's W71-4 trim) → `c3e4586b9b` W133-2 `364344d970` (17:09 MST; LuaMan.cpp keep-both) →
+`d20d4bddfa` W136-2 `f1c5e517ae` (17:13 MST, merged clean and verified 0 differing files; pushed 17:26 MST on the
+lead's read of the codec diff — the independent verifier pass is owed, §5.1 step 2; a reject there means
+`git revert -m 1 d20d4bddfa` on the wave).
 
 Every merge commit was verified with `verify_merge_commit.py` (0 differing files; the W133-2 merge flagged only
-the F14b cherry-pick lines, identical on both sides). Trailer scan `f83cc75099..1fa9b540f4` = **0 hits**. The
+the F14b cherry-pick lines, identical on both sides). Trailer scan `aa650e601e..d20d4bddfa` = **0 hits**. The
 battery for this tip is briefed at `grok-workers/fg6c-battery/prompt.txt` (placeholders `TIP_SHA`/`EXE_SHA`/
 `BUILD_TIME` to fill from the control-build promotion): scratch `D:\mx\fg6bat3`, ports 47661-47666 / 8458, baseline
 fg6b, expected flips listed, N6 = the W71-4 pulse.
@@ -415,11 +419,11 @@ fg6b, expected flips listed, N6 = the W71-4 pulse.
 ## 4.3 What is merged and what is not
 
 - **Merged on the wave, read and accepted:** W127, W131, W129, W71-3, W124-2, W133 (as the branch), W135, W134,
-  W71-4, the three lead fix-ups, and the W71-4 trim `a44e14132f` (§4.4).
-- **Merged 2026-09-12 17:09 MST:** W133-2 `03a7add7be` as `8eaa54d923` (LuaMan.cpp keep-both: W127's map clears plus
+  W71-4, the three lead fix-ups, and the W71-4 trim `0bcaaddde7` (§4.4).
+- **Merged 2026-09-12 17:09 MST:** W133-2 `364344d970` as `c3e4586b9b` (LuaMan.cpp keep-both: W127's map clears plus
   W133-2's bindings clear at the top of `BeginPreviewScripts`; the verifier flagged only the F14b cherry-pick lines,
-  identical on both sides). The wave exe `959fc25e…` predates this merge: **rebuild before any gate or battery.**
-- **Merged 2026-09-12 17:13 MST, pushed 17:26 MST:** W136-2 `7a689008fb` as `1fa9b540f4` (clean, 0 differing files).
+  identical on both sides). The wave was rebuilt after it (exe `cf2e611b…`, §4.1).
+- **Merged 2026-09-12 17:13 MST, pushed 17:26 MST:** W136-2 `f1c5e517ae` as `d20d4bddfa` (clean, 0 differing files).
   Basis: the lead read the whole codec diff (every link sized from `slots[i-1]`, no `pcslot` gate, no caller fallback,
   no `base + framesize` term, no `frame_islua` gate in the net, the fits query on the invariant) and the lane's quoted
   evidence (RED `D:\mx\w136b\red\run\stdout.log:539-540` — the helper arm's false fit `110/137` then 0xC0000005 on the
@@ -427,11 +431,11 @@ fg6b, expected flips listed, N6 = the W71-4 pulse.
   independent Opus verifier pass was stopped by the clean-stop order before it reported** — the next lead runs it
   (brief: the W136 rejection findings 1-4 as the checklist) before the battery. Known and disclosed: the metamethod arm
   is regression coverage only (it passed on the unfixed codec by over-allocation, `D:\mx\w136b\red-meta`).
-- **W136** `b380ac89bb` — REJECTED (§3.4 F20), superseded by W136-2 on the same branch.
-- **Nothing is in the milestone yet.** `stage2/p4b-interp-lockstep` stays at `f83cc75099` until the wave is built,
+- **W136** `82e5184bad` — REJECTED (§3.4 F20), superseded by W136-2 on the same branch.
+- **Nothing is in the milestone yet.** `stage2/p4b-interp-lockstep` stays at `aa650e601e` until the wave is built,
   verified, battered and the family is green.
 
-## 4.4 The W71-4 trim (committed `a44e14132f`, 16:3x MST, on the wave)
+## 4.4 The W71-4 trim (committed `0bcaaddde7`, 16:3x MST, on the wave)
 
 `Source/Entities/Actor.cpp` (-13), `Source/Entities/Actor.h` (-3), `Source/Network/NetLockstepSelfTest.cpp`
 (+4/-22). It removes, from W71-4's merged commit:
@@ -451,20 +455,22 @@ Committed through `git_commit.py`; the wave build and the gates in §4.1 were ru
 
 | Ref | origin |
 |---|---|
-| `stage2/p4b-interp-lockstep` (the milestone) | `f83cc75099` — **up to date** |
-| `stage2/fixgroup-6-lead` (the candidate) | `5c2c65c2ed` — **up to date** |
-| `stage2/fixgroup-6-lead-wave-a` (the wave) | `1fa9b540f4` — **up to date** (pushed 17:26 MST after 0-hit scans; earlier pushes at 16:53 and 17:09 MST) |
-| `stage2/coroutine-stack-fit` (W136 + W136-2) | `7a689008fb` — **up to date** (pushed 17:26 MST) |
-| **Backup push, 2026-09-12 16:29 MST** | every local `stage2/*` and `xref/*` branch that was new or ahead: 89 branches, `--force-with-lease`, 84 created + 5 fast-forwarded (`actor-switch-tests`, `fixgroup-6-lead`, `item3b-harness`, `resync-boundary`, `session-directory`), none rejected. CI runs only on `development` pushes and PRs, so nothing was triggered. Trailer scan: the single pre-existing public hit `9751a90e29` (§1.1), nothing new. |
-| `stage2/coroutine-stack-fit` (W136) | `b380ac89bb` · `stage2/preview-substitute-links` (W133-2) `03a7add7be` · `stage2/posix-test-runner` `586fcfce02` · `stage2/fixgroup-6` `8c7d5b75c6` · `stage2/fixgroup-6-preview` `f83cc75099` |
-| `main` | **does not exist on origin.** The fork's default branch is still `modernization-effort` (`0064b7e542`). Where old notes say "main", they mean the milestone branch. |
+| `stage2/p4b-interp-lockstep` (the milestone) | `aa650e601e` — **up to date** |
+| `stage2/fixgroup-6-lead` (the candidate) | `4dd386fb51` — **up to date** |
+| `stage2/fixgroup-6-lead-wave-a` (the wave) | `d20d4bddfa` — **up to date** (pushed 17:26 MST after 0-hit scans; earlier pushes at 16:53 and 17:09 MST) |
+| `stage2/coroutine-stack-fit` (W136 + W136-2) | `f1c5e517ae` — **up to date** (pushed 17:26 MST) |
+| `docs/lead-handoff-20260912` (docs snapshot, parent `d20d4bddfa`) | `022179fab8` — pushed 17:27 MST: `docs/handoff-20260912/` holds this file, CLAUDE.md, STATUS.md, LEAD_PLAN.md, the H4 plan, the review ledger, SPAWN_LOG, WORKER_RULES, `lead-tools/`, the FG6B report, the FG6C brief, the pre-rewrite RESUME and the memory notes as they were at the clean stop. The live copies are the ones under `D:\Projects`; this branch is the off-machine backup. |
+| **Backup push, 2026-09-12 16:29 MST** | every local `stage2/*` and `xref/*` branch that was new or ahead: 89 branches, `--force-with-lease`, 84 created + 5 fast-forwarded (`actor-switch-tests`, `fixgroup-6-lead`, `item3b-harness`, `resync-boundary`, `session-directory`), none rejected. CI runs only on `development` pushes and PRs, so nothing was triggered. Trailer scan: the single pre-existing public hit `79dc711958` (§1.1), nothing new. |
+| other lane branches | `stage2/preview-substitute-links` (W133-2) `364344d970` · `stage2/posix-test-runner` `6c1a099341` · `stage2/fixgroup-6` `12c7f8cf11` · `stage2/fixgroup-6-preview` `aa650e601e` — all up to date |
+| **Trailer strip 2026-09-12 17:49 MST** | 147 rewritten branches force-pushed (origin tips verified against `trailer-strip-20260912/pre-tips.txt` first), 26 tags force-pushed, origin's diverged `exp/determinism-foundation` stripped separately (`README-expdf.txt`). **Every local branch now equals origin** (checked 17:50 MST). Maps: `reviews/takeover-20260909/trailer-strip-20260912/map.txt` (branch tips) and `commit-map.txt` (866 commits). Any clone or worktree made before 17:45 MST must `git fetch --all` and reset its branches to origin. |
+| `main` | **does not exist on origin.** The fork's default branch is still `modernization-effort` (`f98a88f60e`). Where old notes say "main", they mean the milestone branch. |
 
 ## 4.6 Lanes live at the time of writing
 
-- **FG6B battery** (Grok run-only lane `fg6b-battery`, `control-build` exe `98f73d74aaed` from `7d3666aa15`):
+- **FG6B battery** (Grok run-only lane `fg6b-battery`, `control-build` exe `98f73d74aaed` from `cefccaa1f6`):
   DONE (exit 0 at ~16:55 MST 2026-09-12; `fg6b-battery/REPORT.md`, 508 lines, scratch `D:\mx\fg6bat2`). The lead's
   verdict: **no true engine failure.** Reds, all classified non-engine: the reconnect KAT `56527b38…` (F14b — fixed
-  at `5c2c65c2ed`, PASS on the wave build's suite); the `fencing_two_transports` FAILs (`fenced=0`) come from the
+  at `4dd386fb51`, PASS on the wave build's suite); the `fencing_two_transports` FAILs (`fenced=0`) come from the
   h4gates OLD driver copy while the current driver passed `fencing_1..5` 5/5; `heal_wp` `script_continued` (known
   heal artefact); `binary_matches_source` on fixtures / crab / arm1 (the lead's F14b source edit at 15:49 MST
   postdates the 21:52 exe) with every semantic check PASS on all seven fixtures and switch_control; the crab driver's
@@ -473,20 +479,46 @@ Committed through `git_commit.py`; the wave build and the gates in §4.1 were ru
   and B1 gate, lobby, heal, reclaim, dedicated, lifecycle, directory (29/29 + e2e), fl100, mixed_lua, heal_global,
   and N1-N5 (AK-47 HUD 3/3 with no dump on this pre-W133 exe, expire3, the loopback session-id e2e — not an ICE
   connect —, portmap on/off, drop3_switch/lpinv_100/preview_event_d7). `control-build` is free to fast-forward.
-- **W136-2** landed 17:12 MST (`7a689008fb`, §4.3); its report is in SPAWN_LOG (17:3x MST row) and the evidence under
+- **W136-2** landed 17:12 MST (`f1c5e517ae`, §4.3); its report is in SPAWN_LOG (17:3x MST row) and the evidence under
   `D:\mx\w136b`.
 - **Nothing is running** (17:30 MST). No worker session of any route needs resuming.
-- **W133-2** (Grok, `item4-simspeed`): landed 16:55 MST with two commits over the cherry-pick `8bff413243`:
-  `6e3698b463` (EndPreviewScripts iterates recorded uid/state, RED ASan UAF `LuaMan.cpp:7914` in
-  `D:\mx\w133b\asan\red\report.32984` → no report after it) and `03a7add7be` (`OverlaySurvivorOf` redirects survivor
+- **W133-2** (Grok, `item4-simspeed`): landed 16:55 MST with two commits over the cherry-pick `860707b91b`:
+  `8e66a72ce7` (EndPreviewScripts iterates recorded uid/state, RED ASan UAF `LuaMan.cpp:7914` in
+  `D:\mx\w133b\asan\red\report.32984` → no report after it) and `364344d970` (`OverlaySurvivorOf` redirects survivor
   links off objects the overlay deletes — implemented to the lead's design with NO red of its own: the worker did not
   observe the DrawHUD head after commit 1). GREEN exe `c8278244ba…`: HUD 5/5 exit 0 no ASan, `PASS press tick 500`,
-  `compare_sim_traces` 600 ticks identical, ledger `PASS press tick 153`, lpinv PASS, suite 11/11. Under an Opus
-  verifier's read; the lead merges after spot-checking the flagged lines. The missing red for the second head is a
-  unit arm to add (spawn speculatively, point a resident's link at the spawn, EndSpeculation, assert the link is null
-  or a resident) — record it as a follow-up if not done before the battery.
-- The Mac is idle: the next Mac rows are the ICE-only e2e (W123's gap), the AK-47 oracles re-run after W129/W127, and
-  the Windows-host/Mac-client lockstep e2e after W131.
+  `compare_sim_traces` 600 ticks identical, ledger `PASS press tick 153`, lpinv PASS, suite 11/11. Reviewed by an
+  Opus verifier and spot-checked by the lead, ACCEPTED WITH FOLLOW-UPS, merged `c3e4586b9b` at 17:09 MST (§3.4 F15:
+  F15b arms and F15c hardening are the open debt).
+- The Mac is idle and clean (only `cli-home` remains under `/Users/erol/cortex-workers`): the next Mac rows are the
+  ICE-only e2e (W123's gap), the AK-47 oracles re-run after W129/W127, and the Windows-host/Mac-client lockstep e2e
+  after W131.
+
+## 4.7 Cleanup 2026-09-12 (17:35-17:50 MST; every line in `reviews/cleanup-20260912.md`)
+
+- **PC, `D:\mx`:** 42 superseded run roots deleted with a junction-safe walker (the s38/s39/s40/s41/s42 family
+  evidence and lane roots whose verdicts are closed in the reviews, the old lane roots W18-W81/W106/W70/W71 whose
+  reports live under `grok-workers/<lane>/`, `m38rev`), 125 GB; 136 roots remain, among them everything §7.1 cites
+  (`s43*` as the latest family's evidence — delete it after the Source44 family —, `fg6bat`/`fg6bat2`, `w71d`/`w71e`,
+  `w124`/`w124b`, `w132`, `w133b`, `w136`/`w136b`, `w114`/`w118`, `w105`, `w89`, `w123`, `va7`, `a3fix`,
+  `w127`/`w129`/`w134`, `wave-a`/`wave-b`, `lead-fg6`, `w80c`). The five engine trees' `Data` counts were identical
+  before and after (8518/8517 files), i.e. no junction was followed.
+- **PC, reviews:** six 1.2 GB `runner-stderr*.txt` dumps in W40-W48's lane dirs (7.6 GB); under
+  `recovery-2026-09-07/contract-audit` every `grouped-build-*` except the approved tree's `ff6a44ac`, the
+  transaction-valid runs of families 38/41/42/42-2 (43 kept), the aborted Source42 attempt, and
+  `purge-before-debug-1`'s 2.6 GB crash dump + exe copies (its analysis and launch records stay) — 12.6 GB.
+- **PC, worktrees:** nine superseded worktrees removed (§0.2), 18.9 GB; 18 remain. The untracked June screenshots
+  and the two `AbortCode.txt` markers deleted; the June wiki edits committed (`cccp` `modernization-effort`, pushed).
+- **Mac:** every finished lane under `/Users/erol/cortex-workers` deleted (28 GB, 74 → 102 GB free) after archiving
+  each lane's small files (35,727 files, gzip-verified) into
+  `reviews/takeover-20260909/mac-evidence-20260912/mac-lanes-small-files.tgz`; `cli-home` (the logged-in Cursor CLI
+  profile) kept; `/Users/erol/Documents/Codex/` untouched.
+- **Kept on purpose (not junk):** `reviews/recovery-2026-09-06/expanded-mod-gates` (4.2 GB, the expanded heal gates
+  and their driver), `reviews/claude-review-2026-09-08/lanes` (3.3 GB, that review's evidence),
+  `contract-audit/mac-peer-20260907` (4.4 GB, the cross-platform peer trail), `D:\Projects\keystone` +
+  `.keystone-venv` (14.6 GB, a different project of the user's), `stage2_p2` (the GNS build prefix the build needs),
+  `stage2_p4` (fixtures and recordings), `_archive`.
+- Free space on `D:` went from 109 GB to 253 GB.
 
 ---
 
@@ -495,24 +527,24 @@ Committed through `git_commit.py`; the wave build and the gates in §4.1 were ru
 ## 5.1 Close the wave (hours)
 
 1. (done 2026-09-12 16:58 MST) The FG6B report is read and classified (§4.6): no true engine failure on the
-   candidate at `7d3666aa15`; recorded in LEAD-REVIEW and SPAWN_LOG.
-2. W136-2 is merged (§4.3) but its independent verifier pass never reported: spawn an Opus verifier on `7a689008fb`
+   candidate at `cefccaa1f6`; recorded in LEAD-REVIEW and SPAWN_LOG.
+2. W136-2 is merged (§4.3) but its independent verifier pass never reported: spawn an Opus verifier on `f1c5e517ae`
    with the W136 rejection findings 1-4 as the checklist (re-derive RED `D:\mx\w136b\red`, GREEN `green`, the
    frame-walk arithmetic against `lj_frame.h`); on a reject, revert the merge on the wave (`git revert -m 1
-   1fa9b540f4`) and reopen F20. Also answer the depth-12 spawn question (§4.1) before the battery.
-3. (done 2026-09-12 17:09 MST) W133-2 reviewed, accepted with follow-ups, merged `8eaa54d923` (§3.4 F15). Open from
+   d20d4bddfa`) and reopen F20. Also answer the depth-12 spawn question (§4.1) before the battery.
+3. (done 2026-09-12 17:09 MST) W133-2 reviewed, accepted with follow-ups, merged `c3e4586b9b` (§3.4 F15). Open from
    it: the F15b unit arms (a bounded Opus-engineer lane: add both arms to the `[lpinv]` case loop in `Main.cpp`
-   ~1999-2077 as the verifier specified — RED on `6e3698b463`'s exe, GREEN on the tip) and the F15c hardening (walk
+   ~1999-2077 as the verifier specified — RED on `8e66a72ce7`'s exe, GREEN on the tip) and the F15c hardening (walk
    parts of retiring objects and shadow parts into the retiring set; recurse wounds in `RemapExternalLinks`; record
    `{uid, nullptr}` bindings for stateless parts). Neither blocks the battery; both are test/hardening debt.
 4. (done 17:17-17:24 MST on the wave exe `cf2e611b…`, §4.1) suite 11/11, script-graph 181/0, AK-47 HUD 3/3 on a
    plain Final build, the craft_cargo pulse closed at 316..319 on both peers.
-5. **Promote:** in `control-build` (on `stage2/fixgroup-6-lead` at `5c2c65c2ed`; restore the two dirty vendor libs
-   with `git checkout --` first) run `git merge --ff-only stage2/fixgroup-6-lead-wave-a` (expect `1fa9b540f4`),
+5. **Promote:** in `control-build` (on `stage2/fixgroup-6-lead` at `4dd386fb51`; restore the two dirty vendor libs
+   with `git checkout --` first) run `git merge --ff-only stage2/fixgroup-6-lead-wave-a` (expect `d20d4bddfa`),
    rebuild Final ALONE with `CL=/MP12`, record the exe sha256, then verify6 8/8 (`lead-tools/verify_lead6b.py`, edit
    `REPO`/`OUT` in a copy).
 6. **ONE battery** on the promoted tip: fill `grok-workers/fg6c-battery/prompt.txt` (replace `TIP_SHA` with
-   `1fa9b540f4`, `TIP_SHA_FULL` with `git rev-parse HEAD`, `EXE_SHA` with the control-build sha256, `BUILD_TIME`),
+   `d20d4bddfa`, `TIP_SHA_FULL` with `git rev-parse HEAD`, `EXE_SHA` with the control-build sha256, `BUILD_TIME`),
    spawn it run-only with `python win_cli/win_job.py fg6c-battery D:/Projects/control-build fg6c-battery/prompt.txt --task "FG6C battery" --timeout 25200`
    (7 h; the runner logs the model evidence line). Every red inventoried, root-caused in parallel, classified true/non-engine by
    the lead. Do not fix one gate at a time.
@@ -522,7 +554,7 @@ Committed through `git_commit.py`; the wave build and the gates in §4.1 were ru
 ## 5.2 Promote (a day)
 
 8. Merge the candidate into `stage2/p4b-interp-lockstep` in `p4b-interp-validation` (`--no-ff`), tree clean apart from
-   the vendor libs, trailer scan `f83cc75099..HEAD` = 0, push with lease, record the push here and in `STATUS.md`
+   the vendor libs, trailer scan `aa650e601e..HEAD` = 0, push with lease, record the push here and in `STATUS.md`
    with the remaining failures.
 9. **The Source44 family** on the approved tree (§0.4), nothing else running. Verdict = chain + remaining + breadth
    81/81 accounted + matrix 106 reviewed + the Mac attempt green. Then items 1, 2 and 5 can move.
@@ -602,8 +634,9 @@ Committed through `git_commit.py`; the wave build and the gates in §4.1 were ru
   `value-observations`, `item*`) — the firewall rules are per executable path, and a new directory means a prompt on
   the user's desktop unless the elevated script is re-run.
 - **Prepare the next wave on a scratch branch while a battery pins the candidate.** That is exactly what
-  `stage2/fixgroup-6-lead-wave-a` in `takeover-build` is for: nine merges and three fix-ups landed while FG6B kept
-  `control-build`'s exe frozen; control-build fast-forwards when the battery ends.
+  `stage2/fixgroup-6-lead-wave-a` in `takeover-build` is for: thirteen merges, three fix-ups and a trim landed and
+  were built and gated there while FG6B kept `control-build`'s exe frozen; control-build is promoted by fast-forward
+  afterwards (§5.1 step 5).
 - **The Mac is never idle.** It is a second worker host (Grok via the Cursor CLI, and Claude Code Opus 5), not a
   reference you consult once a day. It found F9 (the two cross-platform build breaks) and F11 (the identity cursor
   difference) inside one window.
@@ -626,6 +659,81 @@ Committed through `git_commit.py`; the wave build and the gates in §4.1 were ru
 - **Workers do not run the suite unless told**, and they report what they ran, not what they skipped (W126 → F14).
 - Undisclosed oracle corrections happen (W58-2): the rule is now that a lane reports every checker/driver change with
   both run directories, and an undisclosed edit is treated as a masked failure even when the new check is stricter.
+
+## 6.3b How to spawn each route, step by step (read from the runners themselves, 2026-09-12)
+
+**Every lane, before spawning:** (1) the brief is a UTF-8 file with LF endings that names the worktree AND its
+branch at a sha, the exact editable paths, the RED line and the GREEN runs that define acceptance, the report path,
+the mod-compatibility rule, the no-attribution rule, `CL=/MP6` + the two-lane build cap, "engine launches only through
+the runners with `CCCP_HEADLESS=1`", "never `-net-port-map-probe` or a bare `-net-p2p-selftest`", "never move/delete
+under `D:\mx`", "final message ≤ 25 lines", and it points at `grok-workers/WORKER_RULES.md` (template: LEAD_PLAN.md
+Appendix B); (2) the worktree is one of the firewall-ruled directories (§6.2) with a fresh branch checked out at the
+base sha and the two vendor `_Bin` libs restored; (3) the base sha in the brief is re-read from the tree (W94 was
+wasted on a stale base); (4) ports and scratch roots are lane-unique (`D:\mx\<lane>`, loopback service port, game
+port range); (5) the time cap fits the work (a battery 7 h, a fix lane 2.5-4 h, a review 1-1.5 h).
+
+**Grok 4.6 Extra High Fast on Windows** — `python grok-workers/win_cli/win_job.py <name> <worktree> <prompt.txt>
+--task "<one line>" --timeout <sec> [--mode agent|ask|plan] [--model cursor-grok-4.6-xhigh-fast] [--require-model "Extra High Fast"]`,
+run from `grok-workers/`. It launches `cursor-agent` with a PRIVATE profile (`grok-workers/cli_home`: no user MCP
+servers, hooks or Claude settings; commit/PR attribution pinned OFF), reads the first stream-json line ONCE (up to
+`--init-wait 120` s), kills the job unless that line contains the required model string, then only waits under the
+hard `--timeout` (default 3600 s; `kill_tree` at the cap) and appends the SPAWN_LOG row itself. Exit codes: 0 the
+worker finished (its own exit code in `cli_runs/<name>/exit.txt`), 2 timeout, 3 the CLI ended before naming a model
+(login or network), 4 REFUSED (wrong model — never accept work from such a run). Outputs: `cli_runs/<name>/agent-output.jsonl`
+(line 1 = the model evidence), `command.txt`, `exit.txt`; the worker's final message is extracted with
+`grok-workers/lead-tools/extract_final.py <name>` into `cli_runs/<name>/REPORT-final-message.md` (the lane's own
+`REPORT.md` lives in `grok-workers/<name>/`). There is NO resume option in this runner: a stalled or drifting Grok lane
+is killed at the cap (or by PID) and re-spawned with a corrective brief in the same worktree; the previous run's
+`agent-output.jsonl` is its record. Rate limits: the Cursor CLI has shown none at this volume; the failures seen were
+timeouts (an exe-hash loop that never ended), a direct engine launch, and a wrong model (exit 4) — all bounded by the
+runner. Run it in the background with the cap as the Bash timeout; the notification arrives when the process exits.
+
+**Grok 4.6 Extra High Fast on the Mac** — write a zsh script (LF) that `cd`s into `/Users/erol/cortex-workers/<lane>`,
+runs `cursor-agent -p --force --trust --sandbox disabled --output-format stream-json --model cursor-grok-4.6-xhigh-fast
+--workspace <lane> "$(tr -d '\r' < prompt.txt)" > agent-output-<lane>.jsonl` (the DASH in the output name is what the
+gate reads; without it the model check is skipped silently) and writes `exit.txt`; `scp` the prompt as `prompt.txt`;
+then `python grok-workers/mac_cli/mac_job.py <lane> <script.zsh> --timeout <sec> [--fetch <files>] [--poll 15]`.
+It bootstraps a launchd job into `gui/501` (the only session with the unlocked keychain), reads the model line once
+(REFUSED otherwise), polls `exit.txt` every 15 s, boots the job out and fetches the named outputs. On TIMEOUT the job
+is LEFT RUNNING — boot it out yourself (`launchctl bootout gui/501/<label>` over `ssh Erol-Mac`) before spawning the
+next Mac lane. The lead writes the SPAWN_LOG row for Mac spawns. Each lane is a fresh clone under
+`/Users/erol/cortex-workers/<lane>` (1-3 GB): delete it after its evidence is fetched with `tar` over ssh excluding
+`runtime`/`external`/`Data`/`build`/`.git` (the 2026-09-12 cleanup archived every lane's small files into
+`reviews/takeover-20260909/mac-evidence-20260912/mac-lanes-small-files.tgz` and removed all lanes but `cli-home`).
+
+**Claude Code Opus 5 on the Mac** — `python grok-workers/mac_cli/mac_claude_job.py <lane> <prompt.txt> --task "<one line>"
+--timeout <sec> [--fetch ...] [--session-id UUID | --resume UUID] [--model claude-opus-5] [--effort max] [--require-model claude-opus-5]`
+(defaults: timeout 7200, init-wait 180). Same launchd route; the gate reads the transcript's first line for the model;
+exit codes 0 / 2 timeout (booted out) / 3 no init line / 4 REFUSED. `--resume <UUID>` continues a session with its
+whole context (the UUID is printed at spawn and stored in the lane's `result.jsonl`): use it for a follow-up or a
+corrective prompt instead of re-briefing from zero.
+
+**SWE-2 Max through the Devin CLI (free)** — `python grok-workers/devin_cli/devin_job.py <name> <workspace> <prompt.txt>
+--task "<one line>" --timeout <sec> [--permission-mode dangerous] [--no-preflight] [--resume-session <id>] [--rate-resumes 8]`.
+The gate is a PRE-FLIGHT: a one-line smoke prompt in a scratch directory whose export must name `SWE-2 Max`
+(REFUSED otherwise; `--no-preflight` only when one ran minutes ago), and the real job's export is checked again at
+the end (REFUSED_FINAL = its output is not used). Sessions are durable (`%APPDATA%\devin\cli-next\sessions.db`;
+`devin -r <session_id> -p --prompt-file <turn>` continues non-interactively with the whole history). Devin's
+account-wide "overall message rate limit" ends a turn after ~three in-process; the runner sees "Created new session:
+<id>", kills the lingering process, waits for the stated reset and RESUMES THE SAME SESSION with a short continuation
+turn, up to `--rate-resumes` (8) times, so nothing the worker did is lost; `--resume-session <id>` does the same by
+hand. Keep at most two SWE-2 sessions alive, started ~90 s apart, from `devin_cli/queue.json` with
+`python grok-workers/devin_cli/devin_queue.py queue.json --slots 2 --stagger 90` (the queue runner is a long-lived
+process — it was still alive at the 2026-09-12 clean stop and had to be killed; stop it explicitly when the queue is
+done). GitHub stays DISCONNECTED from Devin (a repo connect billed $72 of wiki generation; CLI use is 0 ACU). Give
+SWE-2 bounded UI/feature work with named seams only.
+
+**Opus 5 here (the Agent tool)** — `cortex-opus-engineer` (Read/Edit/Write/Glob/Grep/Bash; builds, gates, mechanical
+corrections from an exact spec), `cortex-opus-verifier` (read-only; re-derives RED/GREEN from raw logs and quotes
+file:line), `cortex-opus-visual-reviewer` (every screenshot). Always `run_in_background: true`; the report arrives as
+a notification and exists nowhere else — save it to the lane's `REPORT-*.md` in the same turn. Stopping an agent
+(`TaskStop`) does not kill a build or engine it started: check `cl.exe`/`link.exe`/`Cortex Command.exe` afterwards and
+kill by PID. Do not delegate the thinking documents (§1.1).
+
+**After any lane lands:** extract the final message; read the report's "not done / deviations" section first; read
+every diff line (`git show`); re-derive at least the RED and GREEN lines from the raw files it cites; run
+`verify_merge_commit.py` after the merge; write the SPAWN_LOG row with the verdict and the LEAD-REVIEW entry; move a
+STATUS number or record a negative delta.
 
 ## 6.4 SWE-2 / Devin quirks
 
@@ -666,7 +774,8 @@ Committed through `git_commit.py`; the wave build and the gates in §4.1 were ru
   merge commit catches what reading does not (it caught two silently dropped auto-merged hunks).
 - **Never combine an assertion and a commit in one shell line.** Doing so once committed conflict markers; separate
   the check from the commit.
-- **Read the clock before every stamp** (`date -u`); estimated stamps drifted 90 minutes in an hour.
+- **Read the clock before every stamp** (`date`, Arizona local time — the date too); estimated stamps drifted 90
+  minutes in an hour, and a later stamp carried the wrong day.
 - **Classify every red before fixing anything.** The FG6B battery's reds were: one lead-caused stale-binary artefact
   (`binary_matches_source`, from a source edit made after the build), one known old-driver fencing shape, one known
   `script_continued` heal artefact, and one harness aggregation bug — while every semantic check passed. Fixing them
@@ -707,7 +816,9 @@ Committed through `git_commit.py`; the wave build and the gates in §4.1 were ru
 | The lead's review ledger (F1-F20, every acceptance, every NEGATIVE) | `reviews\takeover-20260909\LEAD-REVIEW-overnight.md` |
 | Every lane spawn and landing | `reviews\takeover-20260909\grok-workers\SPAWN_LOG.md` |
 | Worker rules (travels with every brief) | `reviews\takeover-20260909\grok-workers\WORKER_RULES.md` |
-| Trailer-rewrite hash map (2026-09-11) | `reviews\takeover-20260909\trailer-strip-20260911\map.txt` |
+| Trailer-rewrite hash maps | `reviews\takeover-20260909\trailer-strip-20260911\map.txt` (15 branches) · `trailer-strip-20260912\` (`map.txt` 148 branch tips, `commit-map.txt` 866 commits old→new, `pre-tips.txt`, `push2.txt`, `README-expdf.txt`) — evidence and reports written before 17:45 MST quote pre-strip shas; resolve them here |
+| Cleanup log (what was deleted and why, 2026-09-12) | `reviews\cleanup-20260912.md` |
+| Mac lane evidence archive (every lane's small files before the lanes were deleted) | `reviews\takeover-20260909\mac-evidence-20260912\mac-lanes-small-files.tgz` |
 | H4 design + pins P1-P32 | `D:\Projects\STAGE2_H4_RECONNECT_PLAN.md` |
 | Backlogs | `RECOMMENDED.md` (near-term) · `NEXTENHANCEMENTS.md` (long-range) · `MULTIPLAYER_BEST_PLAN.md` · `STAGE2_P8_PLAN.md` |
 | Contract audit + the family runner | `reviews\recovery-2026-09-07\contract-audit\` (`CONTRACTS.md`, `run_family.py`, `mac-peer-20260907\MAC_RESUME.md`) |
@@ -742,6 +853,10 @@ Committed through `git_commit.py`; the wave build and the gates in §4.1 were ru
   `fix/` · `stage/` (integration) · `xref/` (cross-platform measurement, throwaway) · `pr/<name>` **cut from
   `upstream/development`**, never from the local stack.
 - **Keep all remote branches. No pruning** (settled): since the worktree deletions, GitHub is the only copy of many.
+- **History since 2026-09-10 was rewritten (message-only) on 2026-09-12 17:45 MST** to strip the attribution line
+  (§1.1): 147 branches and 26 tags were force-pushed with identical trees. A clone, worktree or CI checkout made
+  before that must `git fetch --all` and reset each branch to `origin/<branch>`; old shas resolve through
+  `trailer-strip-20260912/commit-map.txt`.
 - GitHub is the safety net: all worktrees share one object store (`D:\Projects\cccp\.git`); deleting a worktree cannot
   lose commits; restore any branch with
   `git -C D:\Projects\cccp worktree add D:\Projects\<dir> <branch>` (fetch it first if the ref is missing).
@@ -750,7 +865,8 @@ Committed through `git_commit.py`; the wave build and the gates in §4.1 were ru
 
 ## 7.4 Mac
 
-- Lanes: `/Users/erol/cortex-workers/<lane>` · retained read-only evidence: `/Users/erol/Documents/Codex/`
+- Lanes: `/Users/erol/cortex-workers/<lane>` (empty since the 2026-09-12 cleanup except `cli-home`; each new lane is
+  a fresh clone) · retained read-only evidence: `/Users/erol/Documents/Codex/` (3.7 GB, untouched)
 - Cursor CLI: `/Users/erol/.local/bin/cursor-agent` (logged in as the user), profile `cortex-workers/cli-home`,
   attribution off. Claude Code runs through launchd in the same GUI session.
 - Reached as `ssh -o BatchMode=yes Erol-Mac`; runbook
@@ -869,7 +985,8 @@ FIELDS differ on **both** sides · a loopback service a lane starts takes a lane
 sockets let two lanes bind the same port) · the interp build renders every frame, so two-instance e2e paces near
 vsync and long cases can outlive harness waits.
 
-**This machine.** Use `python` (not `python3`); `pwsh -NoProfile`; never `taskkill`/`tasklist` in Bash (MSYS2 rewrites
+**This machine.** Clock and stamps in Arizona local time (`date` prints MST; the machine has no daylight saving) ·
+Use `python` (not `python3`); `pwsh -NoProfile`; never `taskkill`/`tasklist` in Bash (MSYS2 rewrites
 `/f` into a path) — kill by PID from a prior query, and never filter `Stop-Process` on a CommandLine pattern (it
 matches the Bash tool's own wrapper and kills the shell mid-script) · write any script containing backslashes with the
 Write tool, not through a Bash heredoc (the PreToolUse hook rewrites backslash sequences).

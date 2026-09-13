@@ -1,9 +1,9 @@
-# Lead's own line-by-line review of the overnight delta (d81478d2ee..f83cc75099) — started 18:12 UTC 2026-09-12
+# Lead's own line-by-line review of the overnight delta (dfe252ad80..aa650e601e) — started 18:12 UTC 2026-09-12
 
 Scope: 111 non-merge commits, 25 merges; Source/ 79 files +11306/-270; tools/ 10 files +2808/-3. The user asked for a
 full personal review after the four Grok audits (their findings are in audit-1..4/VERDICT.md and were acted on).
 This log records, per file, what the change does, the verdict, and every finding with file:line. Method: `git diff
-d81478d2ee f83cc75099 -- <file>` read in full; production code first in risk order, selftests and tools skimmed for
+dfe252ad80 aa650e601e -- <file>` read in full; production code first in risk order, selftests and tools skimmed for
 oracle validity. Findings are fixed by the lead or dispatched with red-first proof; nothing is "noted and left".
 
 Order: (1) sim/determinism: MovableMan, LuaMan, Actor, ScenarioRunner, NetLockstep, ControllerFrame, Controller,
@@ -16,7 +16,7 @@ GnsSignaling, GnsTransport; (4) wiring: Main.cpp, MainMenuGUI, MenuMan, Settings
 (final register at the end of this log)
 
 ## CLOSING (18:59 UTC 2026-09-12; the clock was read) — every file of the delta read
-Coverage: all 79 Source files and all 10 tools files of d81478d2ee..f83cc75099, read hunk by hunk (production first,
+Coverage: all 79 Source files and all 10 tools files of dfe252ad80..aa650e601e, read hunk by hunk (production first,
 then every selftest and every tool script), plus the four lane branches merged today (audit-1, audit-3, W117,
 W80-3) and W89's partial branch. Verdict: no determinism defect and no mod-compatibility break in the overnight
 delta; six findings, all dispositioned (F1/F2 fixed by the lead and committed on stage2/fixgroup-6-lead with the
@@ -150,7 +150,7 @@ snapshot is refused unless the sim stands on the completed tick (no rewind path 
 
 ## Findings register (running) — entries
 - F1 LOW test gap — MovableMan::RunContiguousActorIndexSelfTest orphan case uses uid 0 (refused by the <= 0 check,
-  never by the cohort check). Fix: add a nonzero stale-uid orphan. Owner: lead. DONE d6a0e0f123; verified with the
+  never by the cohort check). Fix: add a nonzero stale-uid orphan. Owner: lead. DONE 9cecfeea71; verified with the
   official driver on the lead build ('rejected: invalid contiguous actor index member 4242', refused=1).
 - F2 LOW presentation leak — AudioMan::RetirePredictedVoice clears predicted on a finishing one-shot; it then lands
   in the audio checkpoint as an unowned voice. Fix: keep predicted=true. Owner: lead, with a selftest check.
@@ -269,14 +269,14 @@ input delay announced on both peers, reconnect menu recovery (attempts climb on 
 No findings.
 
 ### Lane branches accepted after a full read (merged into stage2/fixgroup-6-lead)
-- http-pin-identity (item7-ux 865a739b45, W117): the pinned-mode flags (unknown CA + CN + dates), the README
+- http-pin-identity (item7-ux 62a0cd9361, W117): the pinned-mode flags (unknown CA + CN + dates), the README
   pin recipe with a SAN, and probe_pin_identity.py (correct / wrong / unpinned through make_run). Red on the
-  470b35200e exe with the correct pin (certificate verification failed, no request in the service log), green
+  556599d196 exe with the correct pin (certificate verification failed, no request in the service log), green
   on the fixed exe (five 200s), wrong pin still "certificate pin mismatch", unpinned still refused. Accepted.
-- audit-3-harness (item8-discovery 9027d7e874, tools only): compare_sim_traces too-few-ticks wording +
+- audit-3-harness (item8-discovery a5f5380835, tools only): compare_sim_traces too-few-ticks wording +
   test; launched_exe.py (result headers from launch.json, header/launch mismatch refuses PASS); run_selftests.py
   (PASS-token scoring: exit 0 with zero tokens is FAIL). Lane-copy driver edits live outside the repo. Accepted.
-- audit-fixes-1 (item7-chat 367177f0a0): the three added-actor index erases + detecting arms (red
+- audit-fixes-1 (item7-chat c9d64430c6): the three added-actor index erases + detecting arms (red
   added_remove=0/absorb_delete=0/discard_added=0 -> green); drains before Complete/FinishMatch/LeaveMatch + the
   fenced-disconnect selftest (red fenced_disconnects=0 -> green); Cancel closes the WinHTTP handle with no lock
   held (lock order re-derived: finish still waits for HANDLE_CLOSING before freeing; Cancel never touches the
@@ -289,13 +289,13 @@ No findings.
 
 ## Lane acceptances after the closing (19:32 UTC 2026-09-12; every diff line read by the lead before the merge)
 
-### W102-fixtures (fencing-warm 048899dbe8; Main.cpp +116, tools/check_switch_control.py +146) — MERGED 1c49db6b5e
+### W102-fixtures (fencing-warm 3cb856510e; Main.cpp +116, tools/check_switch_control.py +146) — MERGED 014b9dea59
 Stimulus `-net-match-e2e-switch-control <tick>` (client switches onto the lowest-uid non-brain CPU actor, hands back at
 +10), owner_log report field (tick, uid, owner, mode) sampled from the switched actor, and the checker (owner_log
 byte-identical on both peers, the takeover window owner=client/mode=PLAYER, after hand-back owner=host/mode=AI, traces
 strict-identical). Arm 1 PASS on the candidate and RED on the milestone (no stimulus); arm 2 drop3 PASS with the
 returner's 518 owner_log rows matching the survivors.
-- FIXED by the lead at merge (8c17ee2056): NoteE2eSwitchOwnerLog was gated on lockstep alone, so a live match would scan
+- FIXED by the lead at merge (51b775f176): NoteE2eSwitchOwnerLog was gated on lockstep alone, so a live match would scan
   every roster each tick and grow the log without bound after any switch; now gated on the e2e flag too.
 - Checked, no finding: the drop-frame row (tick 83 owner=host mode=PLAYER) is the purge of the gone peer's claim
   (PurgeLockstepControlOverridesForGonePeers) with the wire mode untouched; sampling follows the local SEAT mode
@@ -310,19 +310,19 @@ the rest of the round, while its unclaimed CPU teammates play on. Fix design (di
 overrides map names exactly the claimed actors of gone peers; at expiry an entry whose seeded owner is alive hands the
 actor back in AI mode (the release form of the handoff) instead of standing it down, on every peer at the same frame.
 
-### W116 (alias-walk 6531152809; Main.cpp +4) — MERGED 030e638061
+### W116 (alias-walk 61346bef5a; Main.cpp +4) — MERGED 4042bc97cb
 Root cause of the bare-flag hang: with no -net-replay/-scenario the engine enters RunMenuLoop and never quits. Fix: refuse
 the bare flag before LoadAllDataModules (RED 180 s timeout -> GREEN exit 1 in 7.8 s; the driver path unchanged).
 ScenarioRunner::ParseArgs sets s_Active inside the same loop, so a -scenario run is not refused. Complements the lead's
-missing-fixture FAIL line (4154eb8570).
+missing-fixture FAIL line (9366419eb5).
 
-### W113-2 (item8-directory a38e9593a6; service +34, test +68, channel +18, selftest +51) — MERGED 30b6d14cc5
+### W113-2 (item8-directory 90f0549503; service +34, test +68, channel +18, selftest +51) — MERGED eeff419625
 Service long-poll (Condition on the store lock, notify on post/delete, deadline <= 25 s, counted once by the limiter) and
 the channel's SetPollWait clamped to 12 s under the 15 s HTTP total timeout, re-poll at once after a 200, the drain poll
 never held. Red/green both sides. Decision 3 (engine wiring) not started: dispatched as W123 (Opus) with the lead-fixed
 design; the settings/flags/GUI pieces follow.
 
-### W89-2 (item4-feel acef68efe1 on the milestone; 12 files +694/-15) — MERGED 6afcc347ba (LuaMan.cpp append conflict, keep-both)
+### W89-2 (item4-feel efed9e71e6 on the milestone; 12 files +694/-15) — MERGED f2881161de (LuaMan.cpp append conflict, keep-both)
 The W89 crash root-caused (Graph.deserialize = a full-VM restore on the LIVE state, run for every preview; after tens of
 restores the VM faulted) and replaced by a table/Vector deep clone into a hold table; the shadow self slot
 (`_ScriptedObjects["<uid>#preview"]`), edge hooks only (OnFire/OnStride/OnReload/OnAttach/OnDetach/OnCollide*), clones
@@ -336,7 +336,7 @@ ticks 100 and 143, event-selftest PASS at D=7, cost 3.70 ms/preview.
 - CHECK (W122): one uid drift (spawn_child 1049513 vs 1049517) on the repaired default path in a -scenario run that arms
   no preview: run-to-run nondeterminism or a flag-dependent allocation; evidence first.
 
-### W97 + W97-2 (h4-secondary stage2/port-map, 8 commits from 8a5ced34cc, 12 files +2849/-6) — MERGED be4ad7f294 (Main.cpp keep-both)
+### W97 + W97-2 (h4-secondary stage2/port-map, 8 commits from 3926d4abb0, 12 files +2849/-6) — MERGED f0a0b8e3c6 (Main.cpp keep-both)
 The whole branch was never merged, so the lead read all of it: NAT-PMP -> PCP -> UPnP chain on a worker thread behind
 the NetPortMapWan seam, /24 gates on the SSDP location and (W97-2) the control URL, Content-Length-aware HTTP reader
 (reads to close under a 256 KiB cap), lease renewal at the half-life, Release deletes the last MAPPED result, a second
@@ -371,7 +371,7 @@ without tick hashes and is not reproduced on the candidate. Closed as not reprod
 ### F9 (NEW, MEDIUM, fixed): the candidate did not build on macOS
 W-MAC-FG6's clean clone stopped at clang 17: NetPortMap.h:128 built the Request default argument from the nested
 Options struct with default member initializers (MSVC accepts it), and W89-2's PreviewScriptSelfTest.cpp was listed
-for MSBuild only (not in Source/Managers/meson.build). Lead fix 229f12826c (a two-argument overload instead of the
+for MSBuild only (not in Source/Managers/meson.build). Lead fix e13e890fad (a two-argument overload instead of the
 default; the meson entry); the Windows binary is byte-identical before and after (sha 84e0285c8a81), so the battery on
 the candidate stays valid; the branch re-pushed and the Mac re-run (W-MAC-FG6B) started with the pickup_fire fixtures
 shipped to the lane. Rule for every merge from now on: new .cpp files must be in meson.build; no default arguments of
@@ -413,7 +413,7 @@ container or none. Every existing two-peer test starts two fresh identical proce
 Disposition: W131 (pin the cursor to 1 << 40 beside the uid pin; unit arm; a fixture flag that pre-allocates identities
 on the host only makes the two-process red; the resync path keeps restoring the cursor from the snapshot).
 
-### W104b (item8-dedicated stage2/preview-projectiles 3b8035ddc9; 7 files +317/-9) — READ 20:26 UTC, accepted for the next wave
+### W104b (item8-dedicated stage2/preview-projectiles 49af8a120e; 7 files +317/-9) — READ 20:26 UTC, accepted for the next wave
 Speculative spawns harvested per horizon step and travelled; a named spawn from a previewed emitter becomes a Projectile
 ledger event and a severed presentation-only ghost adopted by the canonical particle at commit; red/green argv-identical
 (first round visible at committed press+1, adopted once), lpinv 8/8, three-build compat byte-identical, fl100 at D=7
@@ -421,11 +421,11 @@ identical. Roadmap notes: the ghost is static until adoption (travelling it is t
 the EventStart dedupe hides a same-tick casing adoption in the diagnostics only.
 
 
-# Pre-overnight review, part A: the takeover window be217add64..d81478d2ee (2026-09-09 14:31 .. 09-11 17:30) — started 20:40 UTC 2026-09-12
+# Pre-overnight review, part A: the takeover window be217add64..dfe252ad80 (2026-09-09 14:31 .. 09-11 17:30) — started 20:40 UTC 2026-09-12
 Asked by the user at 20:36 UTC ("are you able to also review changes made before overnight"). 103 commits; Source 99
 files +19697/-2211; tools 15 files +1276/-23. Provenance: the Cursor/Codex leads with the Grok High worker generation
 (W12-W38). Two of today's findings (F10, F11) have roots here. Method as for the overnight delta: `git diff
-be217add64~1 d81478d2ee -- <file>` read in full, production first in risk order, then selftests and tools; findings
+be217add64~1 dfe252ad80 -- <file>` read in full, production first in risk order, then selftests and tools; findings
 fixed by the lead or dispatched red-first. Part B (the P4B phase before the takeover, 538 commits, 321 files +55756)
 follows with the determinism/network core read by the lead and the periphery audited by Grok Extra High lanes.
 
@@ -435,7 +435,7 @@ host), is never owner 0 and is never disabled; the only residue was the wire mod
 owner's next AI frame applied AI mode. F7 is LOW, not MEDIUM. W119's explicit hand-back at expiry (with its line, unit
 arm and the expire3 gate) still lands: it removes the one-tick lag and documents the transition.
 
-### W123 (item8-directory stage2/s4-wiring 86b4f82d6c; 17 files +1391/-11) — READ 20:46 UTC, accepted for the next wave
+### W123 (item8-directory stage2/s4-wiring 887bf43917; 17 files +1391/-11) — READ 20:46 UTC, accepted for the next wave
 NetMuxTransport (IP + ICE halves, high-bit tag, posted tasks + pump in PollEvents), settings/flags with run-only
 overrides, session-id join through NetSessionConfig, MergeGameLists accepting ice/either rows, host identity pinned
 from the session id before any listen, reports. Six selftest arms + a true behaviour red; loopback e2e green over the
@@ -668,7 +668,7 @@ expected number of times; an empty off-tick second drop does not erase a good re
 reports new_join_after_refusal.
 
 ## W126 read (item-7 wire: module digests, chat, protocol v2) — 21:20 UTC — VERDICT: ACCEPTED
-Diff b81df66f48 on item7-chat (1798 lines, all read). NetIdentity: BuildModuleDigests sanitizes names (control
+Diff 49f7fd2686 on item7-chat (1798 lines, all read). NetIdentity: BuildModuleDigests sanitizes names (control
 characters, the 64-byte cap), sorts and dedupes by file name, and cuts to the entry and byte caps with a
 truncated flag; DiffModules is keyed by file name (an extra module no longer shifts every module after it,
 proven against the index-paired Compare that still says module_order); DescribeModuleDiff is one joiner-facing
@@ -719,19 +719,19 @@ has acknowledged and requires every survivor's 180 ticks; the moderation panel's
 the skin; win32_test_runner refuses a -net launch whose executable has no inbound firewall allow rule (read
 from the registry rule store, no elevation).
 
-PRE-OVERNIGHT REVIEW PART A COMPLETE (21:21 UTC): the whole takeover window be217add64..d81478d2ee has
+PRE-OVERNIGHT REVIEW PART A COMPLETE (21:21 UTC): the whole takeover window be217add64..dfe252ad80 has
 been read by the lead (Source 99 files, the selftest units, the tools delta). Findings: none new beyond
 F10's enqueue half (recorded above for W71-3) and the four already-known artefacts. Part B (the older P4B
 phase, p4a gate..be217add64) follows: the lead reads the determinism and network core; Grok Extra High
 audit lanes cover the periphery with every finding re-derived by the lead.
 
-### W90 (item4-feel stage2/preview-scripts acef68efe1..56b9e19f64; Main.cpp +27, five tools) — READ 21:25 UTC — VERDICT: accepted
+### W90 (item4-feel stage2/preview-scripts efed9e71e6..d799f4bec8; Main.cpp +27, five tools) — READ 21:25 UTC — VERDICT: accepted
 The AK-47 Lua-fire ledger arm: at the press tick the equipped AK-47's uid is captured, and the first PREDICTED
 Sound event start from that emitter must sit at committed tick <= press+1 (the arm only exists when the
 equipped preset is the AK-47); tools: the two-peer recorder, the fl100 and replay runners through make_run,
 a stdout quoter, and wait_engine_idle (zero engines and no LEAD lock, 2 h cap). Oracle and drivers only.
 
-### W119 (fencing-warm stage2/claimed-actor-expiry be4ad7f294..0d5c318367; 7 files +347/-2) — READ 21:25 UTC — VERDICT: accepted (F7)
+### W119 (fencing-warm stage2/claimed-actor-expiry f0a0b8e3c6..ed0b46b266; 7 files +347/-2) — READ 21:25 UTC — VERDICT: accepted (F7)
 UpdateControllers: a dropped claim whose claimant is gone at the applied frame and whose seat is no longer
 held (both facts synced: leave frames and hold resolutions are relayed) is erased and the actor handed back
 to its seeded owner in AI mode when that owner is the resolved one, with one log line; otherwise the old
@@ -740,7 +740,7 @@ a claim across three peers, drops the claimant, expires the hold and checks host
 AI mode, not disabled); the expire3 oracle checks the owner logs of both peers after the claim plus the
 identical returned line and the traces. Consistent with the F7 correction (LOW).
 
-### W103 (item4-simspeed f83cc75099..3f27189784; 11 files +318/-15) — RE-READ 21:25 UTC before the W130 merge — VERDICT: accepted (as at 19:25)
+### W103 (item4-simspeed aa650e601e..38be2a22f4; 11 files +318/-15) — RE-READ 21:25 UTC before the W130 merge — VERDICT: accepted (as at 19:25)
 Render substitutes registered in BeginRender and cleared in EndRender, honoured by IsActor/ValidMO and the two
 DrawGUI guards; the inventory menu draws from the preview clone (its equipped items and CPU position) while
 Update keeps reading the canonical actor; ClampPreviewTimers pins clone timers whose start passed the restored
@@ -748,15 +748,15 @@ tick; the five-arm HUD selftest samples before/during/after the render window.
 
 ## Merge wave + the merged candidate's first gates (21:26-21:50 UTC 2026-09-12)
 
-Nine reviewed branches merged into stage2/fixgroup-6-lead (control-build) on 229f12826c, tip 5469f15f2a: W90 56b9e19f64,
-W104b 3b8035ddc9, W119 0d5c318367, W125 d3fd36c60c, W123 86b4f82d6c, W126 b81df66f48, W120 6062f464bd (with F12), W130
-b944ce84dc (with W103), W-MAC-RUNNER 586fcfce02. Every conflict resolved keep-both by script and each resolution checked
+Nine reviewed branches merged into stage2/fixgroup-6-lead (control-build) on e13e890fad, tip 97ce4639e7: W90 d799f4bec8,
+W104b 49af8a120e, W119 ed0b46b266, W125 801bbb19d9, W123 887bf43917, W126 49f7fd2686, W120 958d30c6cf (with F12), W130
+e502b5133e (with W103), W-MAC-RUNNER 6c1a099341. Every conflict resolved keep-both by script and each resolution checked
 mechanically against the branch's own diff from its merge base (scratchpad check_merge.py: the +/- line multisets agree
 exactly; the one deliberate difference is Main.cpp's headless-flag line = the union of both sides' flags). Trailer scan 0.
 Rebuilt (Final, /MP6) in 114 s: exe 18ef7ed5820a. verify6 on it: port-map, directory, script-graph(4 states), the
 global-callback driver, preview-event-d7 and lpinv-100 PASS; the socket-free suite 10/11 (F14 below); arm1 pending.
 
-### F13 (NEW, MEDIUM, in W124's unmerged branch stage2/asan-relaunch-fg6 8efc5140c9; read 21:44 UTC): the relaunch
+### F13 (NEW, MEDIUM, in W124's unmerged branch stage2/asan-relaunch-fg6 133eb9ac66; read 21:44 UTC): the relaunch
 window never closes
 W124's mechanism is right where it removes the UAF: Activity::ForgetDestroyedActor on every MovableMan delete path (actor,
 item, particle and the settle walk at MovableMan.cpp:3965-3968, the ASan free site) and a re-resolution of the checkpoint
@@ -776,7 +776,7 @@ change. Disposition: W124-2 (Grok, hold-pause, lead-fixed design): the window en
 MovableMan::Update after the relaunch (EndLockstepRelaunch clears the flag and drops the kept IDs; ForgetDestroyedActor
 stays in force always; the dead code goes); RED first with a returner-side switch after the relaunch (a
 drop3_switch_returner arm: the stimulus on the returner's relaunch command line at tick 450), GREEN 10+10 arms under ASan
-halt mode plus the selftests. W118's 6ecc65766b (the music checkpoint text kept alive while read) rides the same branch and
+halt mode plus the selftests. W118's 5f6c9cb356 (the music checkpoint text kept alive while read) rides the same branch and
 is sound. W124's branch is NOT merged until W124-2 lands and is read.
 
 ### F14 (NEW, LOW, test pin; fixed by the lead 21:50 UTC): the reclaim transcript golden hard-codes protocol version 1
@@ -790,7 +790,7 @@ W126's lane ran seven selftests (protocol, identity, session, match, lockstep, +
 lead accepted W126 without running the full 11-selftest suite on its tip; from now on a lane that changes a wire or version
 constant runs tools/run_selftests.py (11/11) and the lead's read checks that it did.
 
-### W127 (value-observations stage2/preview-reference-writes acef68efe1..f1fb71f401; 689 diff lines read) — READ 22:19 UTC — VERDICT: accepted for the next wave (F8 closed for safety); F16 opened
+### W127 (value-observations stage2/preview-reference-writes efed9e71e6..4bb407c37e; 689 diff lines read) — READ 22:19 UTC — VERDICT: accepted for the next wave (F8 closed for safety); F16 opened
 Mechanism: at BeginPreviewScripts, after the clones are bound, every clone part's copied self (the preview hold
 _ScriptFieldsStash["preview:<uid>"]) is walked (tables recursively with a seen set, keys and values) and every MovableObject
 userdata is remapped: an original previewed actor to its clone (s_PreviewRootByUID), a live world object (resident, or a
@@ -813,7 +813,7 @@ s_PreviewPartByUID before the live-world branch (a uid that is a clone part is t
 preferably register each preview clone as its original's overlay shadow (inWorld=false) so every speculating lookup of
 the original resolves to the clone. Owner: lead or a W127-2 lane once a build slot is free; not a merge blocker.
 
-### W131 (h4-secondary stage2/sound-identity-pin 229f12826c..f605a8330a; 3 files +88/-1 read) — READ 22:19 UTC — VERDICT: accepted for the next wave (F11 closed)
+### W131 (h4-secondary stage2/sound-identity-pin e13e890fad..3bc895d6fd; 3 files +88/-1 read) — READ 22:19 UTC — VERDICT: accepted for the next wave (F11 closed)
 ScenarioRunner::ApplyDeterministicConfig pins the checkpoint sound identity cursor to 1<<40 beside the MO uid pin (1<<20)
 and prints the old and new values; the unit arm builds two histories (17 extra containers before the match on one side,
 none on the other) and proves the first match-time identity differs by 17 without the pin and agrees with it, and that
@@ -826,7 +826,7 @@ the warning "already at or above the match base (impossible in practice)" fires 
 comment is wrong; the lead will drop the warning in a fix-up); the two-process miss-line RED was not demonstrated because
 the AI-order e2e sends no sound ops (the unit arm and the identity delta are the proof).
 
-### W71-3 (item5-lifecycle stage2/cross-actor-waypoints, W71-2b 4af9ef59e9 + 113ffa0b28/5c8095a78c/435924a207; 1105 diff lines read) — READ 22:19 UTC — VERDICT: the ownership gate is accepted; F10's last gap goes to W71-4
+### W71-3 (item5-lifecycle stage2/cross-actor-waypoints, W71-2b 3133a68ff7 + d991c922cc/943c2e2562/42e0559913; 1105 diff lines read) — READ 22:19 UTC — VERDICT: the ownership gate is accepted; F10's last gap goes to W71-4
 Accepted: NetGameAIOrder.writerUID under codec v21 (encoder appends, decoder reads at >= 21, v20 fixtures re-pinned,
 round trip covered); SendDeferredWaypoints sends only when this peer owns the writer and names the writer when the
 target differs; UpdateMovePath's pop is sent by the owner alone (the team-sender clause dropped); ApplyLockstepGameCommands
@@ -949,7 +949,7 @@ Verdict for the area: sound. Findings from the lead's own read: none in the code
 network second-reader findings below were re-derived and one survives (F17).
 
 ### Part B audit lanes pb-audit-1..5 (Grok, read-only, ~6-10 min each, 12+10+8+6+7 findings) — re-derived by the lead 22:34 UTC
-Every finding was checked against the CANDIDATE (7d3666aa15), not only the P4B tip, since later work may have closed it.
+Every finding was checked against the CANDIDATE (cefccaa1f6), not only the P4B tip, since later work may have closed it.
 - B-4-1 (HIGH claimed: a departed peer's absent transport mapping let any sender claim its id): TRUE at be217add64,
   CLOSED since — the candidate's SenderOwnsTransport requires a present, matching binding ("departed seats remain known
   logical peers, but their removed transport binding grants no authority") and HandleStop ignores stops from left peers.
@@ -1005,7 +1005,7 @@ Every finding was checked against the CANDIDATE (7d3666aa15), not only the P4B t
   when the engine always emits them. B-2-5 (two lobby oracles share default ports): require --port or give each its own.
   Owner: W134 (Grok, tools only). B-2-4 (no firewall check at the tip): closed since (the runner refuses unruled paths).
 
-### W129 (item4-feel stage2/preview-scripts 56b9e19f64..6ae2d3c6f4; 7 files +97/-14, all read) — READ 22:36 UTC — VERDICT: accepted for the next wave
+### W129 (item4-feel stage2/preview-scripts d799f4bec8..d9aa5a7690; 7 files +97/-14, all read) — READ 22:36 UTC — VERDICT: accepted for the next wave
 H1: a preview clone never runs Create (InitializeObjectScripts returns after naming the clone's script slot; the clone's
 self is the copied table) and the clones are deleted under FaithfulCloneScope(false), so neither the clone's creation nor
 its teardown allocates checkpoint sound identities. H2: a SoundContainer userdata held in a copied self becomes a preview
@@ -1051,8 +1051,8 @@ the same exposure as upstream's serial UpdateAI. (2) MovableMan::Update no longe
 the new call sites are checked in the Main/FrameMan read (carried).
 
 ### W132 LANDED (Grok, takeover-build, ASan measurement only; report w132-asan-preview-hud/REPORT.md with 12 verbatim reports) — 22:43 UTC
-Re-derived by the lead from the reports' frames: all 10 AK HUD runs (5 on W103's tip 3f27189784 + the ASan config, 5 on
-W130's tip b944ce84dc + the ASan config; `git diff --stat pre..post -- Source` is W130's 5 lines only) and both
+Re-derived by the lead from the reports' frames: all 10 AK HUD runs (5 on W103's tip 38be2a22f4 + the ASan config, 5 on
+W130's tip e502b5133e + the ASan config; `git diff --stat pre..post -- Source` is W130's 5 lines only) and both
 pickup_fire ledgers halted on one heap-use-after-free: READ 8 in AHuman::DrawHUD (AHuman.cpp:3672,
 m_pItemInReach->GetPresetName()) of an HDFirearm allocated by HDFirearm::Clone <- MovableMan::ShadowOf <-
 SpeculativeView <- FindObjectByUniqueID <- Actor::ResolveFaithfulLinks <- AHuman::ResolveFaithfulLinks <-
@@ -1062,12 +1062,12 @@ exactly as opened: the substitute's faithful link is resolved through the specul
 EndSpeculation frees, and the HUD reads it on the next frame. This is W133's RED: its fix must make the same 10 HUD runs
 and the 2 ledgers report nothing under the same ASan configuration. W90's reload-365 RestoreRollbackState AV was not
 reached (halt_on_error stops at the first report); it is re-measured after W133. Tree: takeover-build is left on
-stage2/w132-asan-preview-hud (d6c55c20a5 = b944ce84dc + the ASan config cherry-pick) with the ASan exe and DLL beside
-it; the pre branch is stage2/w132-asan-preview-hud-pre (0e03aebafe). Nothing to merge.
+stage2/w132-asan-preview-hud (f9deadd9ab = e502b5133e + the ASan config cherry-pick) with the ASan exe and DLL beside
+it; the pre branch is stage2/w132-asan-preview-hud-pre (cca1e87235). Nothing to merge.
 
 ### W124-2 LANDED, READ, ACCEPTED (F13 fix, hold-pause stage2/relaunch-slots-fg6b) — 23:00 UTC
-Branch from 7d3666aa15: 5cf123538c and dbefb6ef1a are W124's oracle and rebind commits re-picked (the lead diffed the
-patches against 0546b30faf and 8efc5140c9: identical except hunk offsets), then 49b7249b78 "End the lockstep relaunch
+Branch from cefccaa1f6: d87867935c and 1b4640d6d2 are W124's oracle and rebind commits re-picked (the lead diffed the
+patches against 11fee80a4c and 133eb9ac66: identical except hunk offsets), then 7cbf518a83 "End the lockstep relaunch
 window after the first world update" (7 files, +17/-10, every line read): ActivityMan::EndLockstepRelaunch clears
 m_LockstepRelaunchInProgress and calls Activity::ClearCheckpointActorIDs (GameActivity also clears the marked-actor
 flag), called by MovableMan::Update right after the end-of-tick RebindNonOwnedActorSlots; the dead
@@ -1081,14 +1081,14 @@ hand-back, expected host 1` on the untouched picks; GREEN 10/10 switch-returner 
 stale_activity_slots 0, plain drop3 9/10 (the tenth wrote the ASan report that opened F20, below), the three make_run
 selftests PASS, suite 10/11 (F14b). Merges in the next wave as the branch.
 
-### F14 was half-fixed — NEGATIVE against the lead — F14b fixed at 5c2c65c2ed — 23:00 UTC
-7d3666aa15 derived the transcript layout golden from NetProtocol::c_Version but TestKnownAnswers' three HMAC known
+### F14 was half-fixed — NEGATIVE against the lead — F14b fixed at 4dd386fb51 — 23:00 UTC
+cefccaa1f6 derived the transcript layout golden from NetProtocol::c_Version but TestKnownAnswers' three HMAC known
 answers (reclaim f0ea2c37…, substitution 72add2ad…, ticket 4f75c6ec…) were computed over the version-1 transcript and
 MakeTranscript reads the live version (2), so -net-reconnect-selftest stayed red on the candidate: `reclaim proof
 known-answer mismatch: 56527b38…` (FG6B, W124-2, W133 and W135 all saw it). The lead did not re-run the reconnect selftest
-on the rebuilt exe after the F14 edit. Fix 5c2c65c2ed on control-build: the known-answer transcript pins protocolVersion
+on the rebuilt exe after the F14 edit. Fix 4dd386fb51 on control-build: the known-answer transcript pins protocolVersion
 = 1 (a known answer is a constant; the layout test keeps covering the live version); Source/Network/NetReconnectSelfTest.cpp
-+3/-1, git_commit.py, trailer 0. Verified built-and-run by W136 (base 5c2c65c2ed, suite must be 11/11) and at the wave.
++3/-1, git_commit.py, trailer 0. Verified built-and-run by W136 (base 4dd386fb51, suite must be 11/11) and at the wave.
 
 ### F20 OPENED (HIGH, memory safety): a restored coroutine's stack is sized by its saved top, not its frames — 23:00 UTC
 Evidence: D:\mx\w124b\asan\report.52732 (W124-2 drop3-10, host side at the resync relaunch): heap-buffer-overflow, WRITE
@@ -1107,7 +1107,7 @@ frames' base + framesize from the saved slots, a post-restore safety net, a _Scr
 96-local arm in the script-graph selftest, suite 11/11). The drop3 arm is re-measured under ASan on the merged candidate.
 
 ### W133 LANDED + READ: correct but INCOMPLETE (F15 has a second head) — 23:00 UTC
-8b3c6590ee (11 files, +70, every line read): RemapExternalLinks walks m_pMOToNotHit, m_pItemInReach, m_pMOMoveTarget, the
+12c7d17e4f (11 files, +70, every line read): RemapExternalLinks walks m_pMOToNotHit, m_pItemInReach, m_pMOMoveTarget, the
 waypoints, a craft's exit incoming MO, the attachables and the inventory, through a map; ResidentForRetiringShadow maps
 an in-world shadow to its resident (keyed right: m_Speculation.residents is shadow -> resident and m_Speculation.shadows
 is resident -> info) and leaves a taken shadow alone; RunPreview calls it for every preview clone before EndSpeculation.
@@ -1126,13 +1126,13 @@ GREEN = the HUD replay 5/5 exit 0 with `[preview-hud-selftest] PASS` and no ASan
 153`, lpinv, suite 11/11. W133 merges in the wave as the branch; W133-2 lands on it.
 
 ### W135 LANDED + READ + ACCEPTED (F17 + F18, fencing-warm stage2/stop-leave-piemenu-pin) — 23:00 UTC
-2b9a8ca1ff (F17): NetLockstepCoordinator::HandleStop, after every existing routing arm (hold resolutions, waivers, the
+7b76bbd3ac (F17): NetLockstepCoordinator::HandleStop, after every existing routing arm (hold resolutions, waivers, the
 transport and known/left-peer checks, deferred Complete, scheduled Desync/ResyncRequested, PeerLeft/PeerDropped) and right
 before the Stopped/Failed fallthrough: on the relay host a non-host sender's ProtocolError / InternalError /
 MissingFrameTimeout / PeerDisconnected stop is ApplyPeerLeave(sender, FirstFrameWithout(sender), "<Reason>: message",
 nowMs, announced) and returns; stops_adjudicated_as_leaves counted and reported. Selftest arms: a client's ProtocolError
 stop leaves the host Running with the client in the leave map, the survivor gets the relayed PeerLeft at the same frame
-and host + survivor keep committing; the host's own ProtocolError still fails both clients. 9a37f3a246 (F18):
+and host + survivor keep committing; the host's own ProtocolError still fails both clients. 0774713efa (F18):
 s_SavedSubPieMenuHoverOpenDelay saved once with the other pins, SetSubPieMenuHoverOpenDelay(1000) (the SettingsMan::Clear
 default, SettingsMan.cpp:28) in ApplyDeterministicConfig, handed back in the `!coordinator && s_SimSettingsPinned` block;
 PieMenu::UpdateSliceActivation re-reads the setting into the hover-open timer's limit before IsPastSimTimeLimit, so a
@@ -1160,22 +1160,22 @@ FindOpenUpvalue (sorted insertion into the thread's open list and the global uv 
 (with the GC barrier), VisitUserdata (live objects plus the queued finalizers) are otherwise sound.
 
 ### W134 LANDED + READ + ACCEPTED (F19 tools; item7-chat stage2/tools-oracle-fixes) — 23:10 UTC
-83cdcaa59f: every fixture under tools/contracts claims `_ContractAuditOwner` on its first Create/Update (a spawned child
+9f6a4c49ea: every fixture under tools/contracts claims `_ContractAuditOwner` on its first Create/Update (a spawned child
 never claims) and prints one `[<family>-contract-check] ARMED uid=<n>` line; the literal 1048577 is gone; check bodies
 untouched. The lead checked that each fixture's ARMED family is the same prefix its check lines use (activity, native,
-reference, primitive-batch, primitive-cast, primitive-cast-v2), so the new gate can pair them. f80879bdfd: run_audit
+reference, primitive-batch, primitive-cast, primitive-cast-v2), so the new gate can pair them. 516ad67354: run_audit
 records the ARMED fixtures and gate() fails `fixture_armed` (a non-load transition that armed nothing), `<family>_checks`
 (an armed fixture with no check line), and every `native_mismatches:` / `contract_mismatches:` line by name, or the bare
 name when only a count is nonzero; unit tests RED against the old gate (quoted) and 12/12 after; the README keeps
-"complete is not faithful restoration". 0bbfaedb10: --port required on both lobby oracles; every caller already passes
+"complete is not faithful restoration". 075b57587e: --port required on both lobby oracles; every caller already passes
 one. B-2-3 not applied, accepted: the engine emits particles/items/carve_math only on ticks that have them (a lobby
 host trace lacks items on all 180 ticks), and the lead's read of compare_sim_traces' loop shows the per-tick diff runs
 over the union of both traces' subsystem keys, so a subsystem that one side drops is already a divergence; a subsystem
 both sides lack identically is the conditional case. F19 closes with this merge.
 
 ### Wave A prepared on the scratch branch stage2/fixgroup-6-lead-wave-a (takeover-build) — 23:10 UTC
-5c2c65c2ed → W127 f1fb71f401 (clean, f6d70fb596) → W131 f605a8330a (2f9e7dabd0; NetLockstepSelfTest.cpp keep-both of the
-W119 and W131 arms inserted at one anchor) → W129 6ae2d3c6f4 (2a46169dfb; Main.cpp include keep-both, LuaMan.cpp W127's
+4dd386fb51 → W127 4bb407c37e (clean, 031687bae8) → W131 3bc895d6fd (6e315ce881; NetLockstepSelfTest.cpp keep-both of the
+W119 and W131 arms inserted at one anchor) → W129 d9aa5a7690 (d67394fb66; Main.cpp include keep-both, LuaMan.cpp W127's
 remap block followed by W129's DropPreviewSoundCopies). Each merge commit verified with verify_merge_commit.py (the
 +/- line multiset of merge^1..merge equals merge-base..other per file; 0 differing files). NEGATIVE: the lead's first
 W131 resolution rebuilt the file from stage `:2:` and dropped the two hunks git had already auto-merged (the Run-list
@@ -1205,7 +1205,7 @@ Atom.cpp (faithful clone state, material and link references, trails drawn at re
 PathFinder.cpp (grid checkpoint, request scope counting), Entity.cpp (snapshot identity). All sound; no new finding.
 
 ### W71-4 LANDED + READ + ACCEPTED WITH CORRECTIONS (F10 pulse; item5-lifecycle stage2/cross-actor-waypoints) — 23:31 UTC
-b0e33ba3c7. The gate at the top of Actor::UpdateMovePath re-arms m_UpdateMovePath and returns (no path request) when
+1544d359c2. The gate at the top of Actor::UpdateMovePath re-arms m_UpdateMovePath and returns (no path request) when
 lockstep is on, the actor is idle (empty move path, no valid MO target, m_Waypoints.size() <= the loaded cursor) and a
 write for it is pending (its own pending list, or the running AI actor's list targeting it) or in flight
 (m_InflightWaypoints, pushed on the TARGET by SendDeferredWaypoints). Actor::Update's `if (m_UpdateMovePath)` re-runs it
@@ -1222,7 +1222,7 @@ with its only user. UpdateMovePath becomes public (it is bound to Lua at LuaBind
 Evidence re-derived from D:/mx/w71e (RED L7, GREEN L7, pulse [316..319] both peers).
 
 ### Trailer already on origin — 23:31 UTC
-9751a90e29 (2026-09-10, "Compare controlled actors across every activity in snapshot diffs") carries
+79dc711958 (2026-09-10, "Compare controlled actors across every activity in snapshot diffs") carries
 `Co-authored-by: Cursor <cursoragent@cursor.com>` and is an ancestor of origin/stage2/p4b-interp-lockstep and
 origin/stage2/fixgroup-6-lead (pushed before tonight), so every branch scanned tonight shows exactly this one hit. A
 message-only rewrite would change every descendant sha (the milestone, the candidate, every lane, every sha quoted in
@@ -1244,14 +1244,14 @@ The one arm covers only the shape where the big frame is the yield's immediate c
 0xC0000005 on the pre-fix exe; GREEN 177 PASS, suite 11/11) is genuine but proves the narrow shape only. W136-2
 (Opus engineer) adds the below-the-yield arm RED-first and sizes every link from its own function slot.
 
-### Wave build and gates on a44e14132f — 23:54 UTC
+### Wave build and gates on 0bcaaddde7 — 23:54 UTC
 Suite 11/11 with the trimmed W71-4 arm and the reconnect selftest green; W127's three held-ref fixtures 8/8 with no
 freeze except the fallback fixture's deliberate Activity freezes; W129's three AK lpinv arms green with fallback=0.
-The sound-copy fix-up c676483586 is therefore proven by the write/control fixtures (a frozen preview would show as
+The sound-copy fix-up b5811aad98 is therefore proven by the write/control fixtures (a frozen preview would show as
 fallback>0). Open: the depth-12 spawn count (8 vs 3), hypothesised F16; to confirm before the battery.
 
 ### FG6B battery read — 23:58 UTC
-No true engine failure on exe 98f73d74aaed (7d3666aa15). Every red is classified: the reconnect KAT (F14b, fixed and
+No true engine failure on exe 98f73d74aaed (cefccaa1f6). Every red is classified: the reconnect KAT (F14b, fixed and
 confirmed on the wave build), the old-driver fencing copy (the current driver 5/5), the heal_wp script_continued
 artefact, the stale-exe `binary_matches_source` on the fixture steps with every semantic check green, the crab
 driver's PowerShell argument error, the bare global-callback flag, the present_identity artefact, the absent
@@ -1267,13 +1267,17 @@ red→clean on the raw ASan files; the survivor-link head is correct by reading 
 Follow-ups recorded as F15b (the two unit arms the verifier specified) and F15c (parts of retiring objects and shadow
 parts are not in the retiring set — latent because the weak links self-expire and the raw links store roots; wounds
 are not recursed by RemapExternalLinks; a stateless clone part that gains a state during the preview keeps its slot).
-Merged 8eaa54d923; the wave exe 959fc25e predates this merge, so the wave is rebuilt before the battery.
+Merged c3e4586b9b; the wave exe 959fc25e predates this merge, so the wave is rebuilt before the battery.
 
 ### W136-2 merged on the lead's read; clean stop — 2026-09-12 17:26 MST
 The codec diff is exactly the specified correction (every frame link sized from the function in its own slot; the
 safety net and the fits query on the invariant). The lane's RED is the helper arm's false fit followed by an access
-violation on the unfixed codec; GREEN 181/0 with six coroutine arms, suite 11/11. Merged 1fa9b540f4 and pushed. The
+violation on the unfixed codec; GREEN 181/0 with six coroutine arms, suite 11/11. Merged d20d4bddfa and pushed. The
 independent verifier pass did not complete (stopped by the clean-stop order): the next lead re-runs it before the
 battery. Gates already green on the wave exe cf2e611b: suite 11/11, script-graph 181/0, AK-47 HUD 3/3, the craft_cargo
 pulse [316..319] both peers (F10 closed). Open at the stop: the promotion of control-build, verify6, the ONE battery
 (fg6c brief ready), the depth-12 spawn question, F15b/F15c, the W136-2 verifier pass. Nothing is running.
+
+### Trailer strip and cleanup — 2026-09-12 17:49 MST
+**Trailer strip 2026-09-12 17:49 MST** (user's order: no Cursor co-author anywhere): the one public Cursor co-author line (old `9751a90e29`, 2026-09-10) was stripped by a message-only `git filter-branch --msg-filter strip_trailers.py` over every commit not reachable from its parent; 866 commits changed sha, 148 branches and 2 tags were rewritten (every tree byte-identical, `map.txt`), 147 branches force-pushed after verifying origin still held the pre-rewrite tips (`push2.txt`), 26 tags force-pushed; origin's `exp/determinism-foundation` (a May branch that had diverged from the local copy) was stripped separately (21 May-era co-author lines, old `366b9d0738` → `34253c5708`, tree identical, `README-expdf.txt`) and the local diverged copy was left as it was. A line-start scan of every local branch and tag since 2026-04-01 finds 0 trailer lines; only upstream's own 2022-2025 human co-author lines remain, and they stay. The live docs, STATUS, SPAWN_LOG, LEAD-REVIEW and the fg6c brief had every old sha rewritten from `commit-map.txt` (old sha → new sha, 40-char); evidence logs under `D:\mx` and lane reports keep the OLD shas — resolve them through that map. The old trailer commit is now `79dc711958`. Post-scan of every branch and tag for trailer lines: 0.
+Every sha quoted above was rewritten through the map at the same time (trees identical).

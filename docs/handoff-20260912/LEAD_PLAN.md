@@ -57,11 +57,11 @@ none while the Source42 chain builds (`/MP12`); the Mac builds independently. Wi
       next elevated run, which the lead requests only when the user is at the PC.
 - [x] Trailer strip: 15 branches rewritten message-only, trees byte-identical, 0 hits per branch, ten backup branches
       force-pushed with lease, `takeover-msvc` pushed new. Map: `reviews/takeover-20260909/trailer-strip-20260911/map.txt`.
-      Main local `5a537f4901` stays unpushed until the checkpoint of wave 2 (origin main `9751a90e29`).
+      Main local `de9fa9e3de` stays unpushed until the checkpoint of wave 2 (origin main `79dc711958`).
 - [x] Runners: `devin_cli/devin_job.py` (SWE-2 Max, smoke OK), `mac_cli/mac_claude_job.py` (Opus 5 max via launchd, smoke OK),
       `win_job.py` / `mac_job.py` gates already proven (xhigh accepted, high refused).
 - [x] Mac Cursor profiles: attribution OFF in `cortex-workers/cli-home` and the user's `~/.cursor` (backup `.bak-20260911`).
-- [x] Fresh manifest for battery 2: `grok-workers/w40-battery-2/build-manifest.json` (fixgroup-1 `7050cb259d`, exe `21f8a6e6`).
+- [x] Fresh manifest for battery 2: `grok-workers/w40-battery-2/build-manifest.json` (fixgroup-1 `67d2d70aad`, exe `21f8a6e6`).
 - [ ] Wave-1 briefs written under `grok-workers/w4x-*/prompt.txt` (the lead writes them at launch).
 
 ## 4. Wave 1 — parallel lanes (all start together; more than one item moves per window)
@@ -69,7 +69,7 @@ none while the Source42 chain builds (`/MP12`); the Mac builds independently. Wi
 | Lane | Item | Worktree / branch | Route | Deliverable | Acceptance (lead-verified) |
 |---|---|---|---|---|---|
 | W40 battery-2 | 6, 2 | run-only on `D:\Projects\fixgroup-1` exe `21f8a6e6` | Grok Windows | `w40-battery-2/REPORT.md`: 13 selftests, 8 H4 gates, 4 B1 gates, 2 lobby runs, heal e2e at delay 3; per resync: host log lines, every peer's lockstep frame fields, trace tick range, first gap/duplicate | every trace contiguous, no duplicate; resume == drop frame on drop paths; heal/rejoin resyncs lose and double nothing; the lead reads every frame table |
-| W41 mac-fixgroup-1 | 6, 5 | Mac clean clone of `origin/stage2/fixgroup-1` @ `7050cb259d` | Grok Mac | build (GNS), 13 selftests, native suite diag off/on, A7 group (5 arms) | PASS lines identical to W34 apart from paths; A7 arms 5/5 with the drop-frame semantics; binary sha recorded |
+| W41 mac-fixgroup-1 | 6, 5 | Mac clean clone of `origin/stage2/fixgroup-1` @ `67d2d70aad` | Grok Mac | build (GNS), 13 selftests, native suite diag off/on, A7 group (5 arms) | PASS lines identical to W34 apart from paths; A7 arms 5/5 with the drop-frame semantics; binary sha recorded |
 | W42 feel-measure | 4 | read-only on the fixgroup-1 exe | Grok Windows | `w42-feel-measure/REPORT.md`: 100/200 ms numbers vs the 4a table, PASS/MISS/NOT MEASURABLE, fields needed | numbers only, each with run dir + JSON path; the lead spot-checks two against the raw reports |
 | W43 fencing-warm | 6 | `D:\Projects\fencing-warm` / `stage2/fencing-warm` | Opus here (engineer), build lane 1 | `-net-join-wait-for <path>` option + selftest, driver diff (`w43-fencing-warm/driver.diff`), three fencing gate runs | `host_fenced_the_old_transport` > 0 with the second client committed while Running, three runs; if still 0, the exact drop point of the synthesized `PeerDisconnected`; Grok review of the diff (W47) |
 | W44 item4-ledger | 4 | `D:\Projects\item4-feel` / `stage2/item4-feel` | Opus here (engineer), build lane 2 | 4b preview-event ledger, first slice: a sound/effect emitted by the preview plays once at the preview tick and its canonical repeat is suppressed; ledger keyed by emitter uid + preset + tick, expiring after D ticks; detecting selftest + a fixture run at 100/200 ms fake lag | sound plays once and early (measured in the e2e report), no change at D=0, mod compatibility untouched, red-then-green test |
@@ -88,7 +88,7 @@ Lane order of priority when a build slot is contended: W43 > W44 > W45 > W46.
    (W40's brief again, new manifest) + Mac clean clone (W41 again). If anything is red: inventory ALL reds, one read-only worker
    per red, lead rules true/false failure, fixes as ONE group, ONE battery. Never one gate at a time.
 3. Merge `stage2/fixgroup-1` into main (`D:\Projects\p4b-interp-validation`, `--no-ff`), tree clean apart from the two vendor
-   `.lib` files, trailer scan `9751a90e29..HEAD` = 0, `git push origin stage2/p4b-interp-lockstep`, record the push and the
+   `.lib` files, trailer scan `79dc711958..HEAD` = 0, `git push origin stage2/p4b-interp-lockstep`, record the push and the
    remaining failures in RESUME.md and STATUS.md.
 4. Source42 attempt 4, from `reviews\recovery-2026-09-07\contract-audit`, no MSBuild/engine/`claude -p` running:
    `python run_family.py --source 42 --breadth-out D:\mx\s42b3 --matrix-out D:\mx\s42-4 --mac-attempt 4`
