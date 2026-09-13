@@ -2915,10 +2915,17 @@ bool GameActivity::LoadNetLocalGameState(std::string_view text) {
 	} catch (const std::exception&) { return false; }
 }
 
+void GameActivity::RefreshCheckpointMarkedActorIDs() {
+	if (!m_HasCheckpointMarkedActorIDs) return;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) m_CheckpointMarkedActorIDs[player] = m_pLastMarkedActor[player] ? m_pLastMarkedActor[player]->GetUniqueID() : 0;
+}
+
 bool GameActivity::RestoreNetLocalPlayerState(const NetLocalPlayerState& state) {
 	if (!Activity::RestoreNetLocalPlayerState(state) || !LoadNetLocalGameState(state.gameActivity)) return false;
 	// Menu construction may alter cursor limits and screen occlusion.
-	return Activity::RestoreNetLocalPlayerState(state);
+	if (!Activity::RestoreNetLocalPlayerState(state)) return false;
+	RefreshCheckpointMarkedActorIDs();
+	return true;
 }
 
 bool GameActivity::CreateNetLocalUI() {
@@ -2980,7 +2987,9 @@ bool GameActivity::ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings)
 		m_NetworkPlayerNames[player].clear();
 	}
 	if (!g_ActivityMan.LockstepRelaunchInProgress()) m_HasCheckpointMarkedActorIDs = false;
-	return CreateNetLocalUI();
+	if (!CreateNetLocalUI()) return false;
+	RefreshCheckpointMarkedActorIDs();
+	return true;
 }
 
 bool GameActivity::RunNetLocalUIRestoreSelfTest() {
@@ -3028,6 +3037,7 @@ assert(_NetPreview.Pos.X == 137.25, "vector alias stopped being live")
 )lua";
 	struct Restore {
 		std::unique_ptr<Activity> activity;
+		bool relaunching = g_ActivityMan.LockstepRelaunchInProgress();
 		Entity* tempEntity = g_LuaMan.GetMasterScriptState().GetTempEntity();
 		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
 		std::string camera = g_CameraMan.SaveCheckpoint(), frame = g_FrameMan.SaveCheckpoint(), input = g_UInputMan.SaveCheckpoint(), gui = GUIInput::SaveSharedCheckpoint();
@@ -3037,6 +3047,7 @@ assert(_NetPreview.Pos.X == 137.25, "vector alias stopped being live")
 			g_ActivityMan.SwapCheckpointActivity(activity);
 		}
 		~Restore() {
+			if (!relaunching) g_ActivityMan.EndLockstepRelaunch();
 			g_LuaMan.GetMasterScriptState().SetTempEntity(tempEntity);
 			g_ActivityMan.SwapCheckpointActivity(activity);
 			activity.reset();
@@ -3271,6 +3282,124 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 				const size_t count = editor->GetCheckpointRetainedOwners().size();
 				check("repeated_overlay_does_not_grow_retention", fixture->RestoreNetLocalPlayerState(empty) && fixture->RestoreNetLocalPlayerState(empty) && editor->GetCheckpointRetainedOwners().size() == count);
 			}
+		}
+		{
+			// A relaunch keeps the host save's marked-actor link for its deferred rebind; the local mark applied over it must replace it.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			fixture->m_PlayerController[0].Create(Controller::CIM_PLAYER, 0);
+			const auto queues = g_MovableMan.MarkAddQueues();
+			std::vector<Actor*> world;
+			const auto enter = [&world](Actor* actor) {
+				// Pinned, so the ordinary add skips the terrain this scene-less selftest does not have.
+				actor->SetPinStrength(1000.0F);
+				g_MovableMan.AddActor(actor);
+				world.push_back(actor);
+				return actor;
+			};
+			const auto makeActor = [] {
+				auto* actor = new Actor();
+				if (actor->MovableObject::Create(1.0F) < 0) { delete actor; throw std::runtime_error("relaunch fixture actor could not be created"); }
+				actor->SetTeam(TeamOne);
+				return actor;
+			};
+			const auto uidOf = [](const MovableObject* object) { return object ? object->GetUniqueID() : 0L; };
+			const auto stage = [&] {
+				fixture->ClearCheckpointActorIDs();
+				if (!fixture->LoadCheckpoint(fixture->SaveCheckpoint())) throw std::runtime_error("host links could not be staged");
+			};
+			Actor* host = enter(makeActor());
+			Actor* local = enter(makeActor());
+			if (!restore.relaunching) g_ActivityMan.NoteLockstepRelaunch();
+			fixture->m_pLastMarkedActor[0] = local;
+			NetLocalPlayerState retained;
+			if (!fixture->CaptureNetLocalPlayerState(retained)) throw std::runtime_error("marked local capture failed");
+			const auto rebindMark = [&](const char* arm, bool applied, long before) {
+				const long pending = fixture->m_HasCheckpointMarkedActorIDs ? fixture->m_CheckpointMarkedActorIDs[0] : -1;
+				fixture->RebindNonOwnedActorSlots();
+				const long after = uidOf(fixture->m_pLastMarkedActor[0]);
+				std::cout << "[net-local-ui-marked] arm=" << arm << " applied=" << applied << " host_uid=" << host->GetUniqueID() << " local_uid=" << local->GetUniqueID()
+				          << " host_world=" << g_MovableMan.IsActor(host) << " local_world=" << g_MovableMan.IsActor(local) << " relaunch=" << g_ActivityMan.LockstepRelaunchInProgress()
+				          << " pending_mark=" << pending << " mark_before_rebind=" << before << " mark_after_rebind=" << after << std::endl;
+				return after;
+			};
+			fixture->m_pLastMarkedActor[0] = host;
+			stage();
+			bool applied = fixture->RestoreNetLocalPlayerState(retained);
+			long before = uidOf(fixture->m_pLastMarkedActor[0]);
+			long after = rebindMark("retained", applied, before);
+			check("relaunch_rebind_keeps_retained_local_mark", applied && before == local->GetUniqueID() && after == local->GetUniqueID());
+			// The camera needs a scene to take a seated player's scroll target, so this fresh seat stays unseated.
+			NetGamePlayerBindings fresh = retained.bindings;
+			for (auto& binding: fresh.players) binding.active = false;
+			fixture->m_pLastMarkedActor[0] = host;
+			stage();
+			applied = fixture->ApplyNetPlayerBindings(fresh);
+			before = uidOf(fixture->m_pLastMarkedActor[0]);
+			after = rebindMark("fresh", applied, before);
+			check("relaunch_rebind_keeps_fresh_mark_null", applied && before == 0 && after == 0);
+			fixture->m_pLastMarkedActor[0] = host;
+			stage();
+			applied = fixture->ApplyNetPlayerBindings(NetGamePlayerBindings{});
+			before = uidOf(fixture->m_pLastMarkedActor[0]);
+			after = rebindMark("seatless", applied, before);
+			check("relaunch_rebind_keeps_seatless_mark_null", applied && before == 0 && after == 0);
+
+			// An inventory-carried brain is measured, not judged; the pending rebind's live-world predicate is unchanged.
+			const auto* brainPreset = dynamic_cast<const Actor*>(g_PresetMan.GetEntityPreset("Actor", "Brain Case", "Base.rte"));
+			if (!brainPreset) throw std::runtime_error("inventory probe brain preset unavailable");
+			Actor* craft = enter(makeActor());
+			auto* carried = static_cast<Actor*>(brainPreset->Clone());
+			craft->AddInventoryItem(carried);
+			Actor* deadBrain = enter(makeActor());
+			deadBrain->SetStatus(Actor::DEAD);
+			fixture->m_pLastMarkedActor[0] = nullptr;
+			std::cout << "[net-relaunch-inventory-probe] carrier_uid=" << craft->GetUniqueID() << " carrier_class=" << craft->GetClassName() << " carrier_world=" << g_MovableMan.IsActor(craft)
+			          << " carrier_holds_brain=" << craft->HasObjectInGroup("Brains") << " carried_uid=" << carried->GetUniqueID() << " carried_in_group=" << carried->IsInGroup("Brains") << std::endl;
+			const auto probe = [&](const char* name, Actor* brain, bool destroy) {
+				fixture->m_Brain[0] = brain;
+				fixture->m_ControlledActor[0] = nullptr;
+				fixture->m_PlayerController[0].SetControlledActor(nullptr);
+				fixture->ClearCheckpointActorIDs();
+				const std::string save = fixture->SaveCheckpoint();
+				const long uid = uidOf(brain);
+				if (destroy) { fixture->m_Brain[0] = nullptr; delete brain; brain = nullptr; }
+				if (!fixture->LoadCheckpoint(save)) throw std::runtime_error("inventory probe links could not be staged");
+				const MovableObject* found = g_MovableMan.FindObjectByUniqueID(uid);
+				const long slotBefore = uidOf(fixture->m_Brain[0]);
+				const int staleBefore = fixture->CountStaleRelaunchSlots(-1);
+				fixture->RebindNonOwnedActorSlots();
+				const long slotAfter = uidOf(fixture->m_Brain[0]);
+				const int staleAfter = fixture->CountStaleRelaunchSlots(-1);
+				std::cout << "[net-relaunch-inventory-probe] case=" << name << " brain_uid=" << uid << " pending_brain=" << fixture->m_CheckpointActorIDs[0][0]
+				          << " lookup_hit=" << (found && found == brain) << " lookup_null=" << !found << " valid_mo=" << (brain && g_MovableMan.ValidMO(brain))
+				          << " is_actor=" << (brain && g_MovableMan.IsActor(brain)) << " known=" << (brain && g_MovableMan.IsKnownObject(brain)) << " dead=" << (brain && brain->IsDead())
+				          << " slot_before=" << slotBefore << " stale_before=" << staleBefore << " slot_after=" << slotAfter << " stale_after=" << staleAfter << std::endl;
+				return slotAfter;
+			};
+			probe("inventory_carried", carried, false);
+			check("relaunch_rebind_keeps_live_carrier_brain", probe("carrier_craft", craft, false) == craft->GetUniqueID());
+			probe("dead_in_world", deadBrain, false);
+			check("relaunch_rebind_drops_destroyed_brain", probe("destroyed", makeActor(), true) == 0);
+
+			fixture->m_Brain[0] = fixture->m_ControlledActor[0] = fixture->m_pLastMarkedActor[0] = nullptr;
+			fixture->m_PlayerController[0].SetControlledActor(nullptr);
+			fixture->ClearCheckpointActorIDs();
+			std::vector<Actor*> removed;
+			for (Actor* actor: world) removed.push_back(g_MovableMan.RemoveActor(actor));
+			bool stillInWorld = false;
+			for (Actor* actor: world) stillInWorld = stillInWorld || g_MovableMan.ValidMO(actor) || g_MovableMan.IsActor(actor);
+			bool allRemoved = true;
+			for (Actor* actor: removed) allRemoved = allRemoved && actor;
+			const auto drained = g_MovableMan.MarkAddQueues();
+			for (Actor* actor: removed) if (actor) { actor->DestroyScriptState(); delete actor; }
+			if (!restore.relaunching) g_ActivityMan.EndLockstepRelaunch();
+			std::cout << "[net-relaunch-inventory-probe] cleanup removed=" << allRemoved << " still_in_world=" << stillInWorld << " added_actors=" << queues.actors << "->" << drained.actors
+			          << " added_items=" << queues.items << "->" << drained.items << " added_particles=" << queues.particles << "->" << drained.particles
+			          << " relaunch=" << g_ActivityMan.LockstepRelaunchInProgress() << " restoring=" << g_MovableMan.IsRestoringSnapshot() << std::endl;
+			check("relaunch_fixture_restores_world_and_flag", allRemoved && !stillInWorld && drained.actors == queues.actors && drained.items == queues.items && drained.particles == queues.particles &&
+				g_ActivityMan.LockstepRelaunchInProgress() == restore.relaunching && !g_MovableMan.IsRestoringSnapshot());
 		}
 	} catch (const std::exception& exception) { check(exception.what(), false); }
 	for (long uid: scriptIdentities) lua.RunScriptString("if _ScriptedObjects then _ScriptedObjects[\"" + std::to_string(uid) + "\"] = nil end");
