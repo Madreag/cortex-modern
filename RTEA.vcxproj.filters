@@ -13,6 +13,9 @@
     <Filter Include="Managers">
       <UniqueIdentifier>{777a2010-7ae7-41e7-8d10-1a3d2e6b3001}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Network">
+      <UniqueIdentifier>{c4e07ab0-2a3a-4b1f-9c9d-7e0a6f9c2e02}</UniqueIdentifier>
+    </Filter>
     <Filter Include="GUI">
       <UniqueIdentifier>{2f4c4852-44a1-459f-8666-e8c263c47196}</UniqueIdentifier>
     </Filter>
@@ -58,6 +61,9 @@
     </Filter>
     <Filter Include="Renderer\raylib">
       <UniqueIdentifier>{5aa83e16-d772-476c-b51a-72480c976207}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="external\nlohmann_json">
+      <UniqueIdentifier>{c4e07ab0-2a3a-4b1f-9c9d-7e0a6f9c2e04}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -439,6 +445,9 @@
     <ClInclude Include="Source\GUI\GUISound.h">
       <Filter>GUI</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\SimChecksum.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\System\RTETools.h">
       <Filter>System</Filter>
     </ClInclude>
@@ -678,6 +687,9 @@
     </ClCompile>
     <ClCompile Include="Source\System\Matrix.cpp">
       <Filter>System</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\SimChecksum.cpp">
+      <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\System\PathFinder.cpp">
       <Filter>System</Filter>
@@ -1271,6 +1283,11 @@
     <ClCompile Include="Source\Entities\DynamicSong.cpp">
       <Filter>Entities</Filter>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="external\sources\nlohmann_json-3.12.0\nlohmann\json.hpp">
+      <Filter>external\nlohmann_json</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Image Include="Resources\ccicon.ico">

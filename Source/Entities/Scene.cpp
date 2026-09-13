@@ -35,6 +35,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <shared_mutex>
+#include <thread>
 
 using namespace RTE;
 
@@ -2377,7 +2378,9 @@ void Scene::ResetPathFinding() {
 
 void Scene::BlockUntilAllPathingRequestsComplete() {
 	for (int team = Activity::Teams::NoTeam; team < Activity::Teams::MaxTeamCount; ++team) {
-		while (GetPathFinder(static_cast<Activity::Teams>(team)).GetCurrentPathingRequests() != 0) {};
+		while (GetPathFinder(static_cast<Activity::Teams>(team)).GetCurrentPathingRequests() != 0) {
+			std::this_thread::yield();
+		}
 	}
 }
 
@@ -2390,10 +2393,15 @@ void Scene::UpdatePathFinding() {
 	// If any pathing requests are active, don't update things yet, wait till they're finished
 	// TODO: this can indefinitely block updates if pathing requests are made every frame. Figure out a solution for this
 	// Either force-complete pathing requests occasionally, or delay starting new pathing requests if we've not updated in a while
-	for (int team = Activity::Teams::NoTeam; team < Activity::Teams::MaxTeamCount; ++team) {
-		if (GetPathFinder(static_cast<Activity::Teams>(team)).GetCurrentPathingRequests() != 0) {
-			return;
-		};
+	if (g_SettingsMan.GetForceImmediatePathingRequestCompletion()) {
+		// Deterministic mode: drain in-flight async solves so the node-cost rewrite below can't race their grid reads.
+		BlockUntilAllPathingRequestsComplete();
+	} else {
+		for (int team = Activity::Teams::NoTeam; team < Activity::Teams::MaxTeamCount; ++team) {
+			if (GetPathFinder(static_cast<Activity::Teams>(team)).GetCurrentPathingRequests() != 0) {
+				return;
+			};
+		}
 	}
 
 	int nodesToUpdate = nodeUpdatesPerCall / g_ActivityMan.GetActivity()->GetTeamCount();
@@ -2487,7 +2495,8 @@ void Scene::Update() {
 	}
 
 	// Occasionally update pathfinding. There's a tradeoff between how often updates occur vs how big the multithreaded batched node lists to update are.
-	if (m_PartialPathUpdateTimer.IsPastRealMS(100)) {
+	// Sim time, not real time, so the update cadence is identical regardless of host frame rate.
+	if (m_PartialPathUpdateTimer.IsPastSimMS(100)) {
 		UpdatePathFinding();
 	}
 }

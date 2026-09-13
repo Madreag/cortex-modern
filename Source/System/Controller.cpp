@@ -10,6 +10,8 @@
 
 using namespace RTE;
 
+thread_local Actor* RTE::g_CurrentAIActor = nullptr;
+
 void Controller::Clear() {
 	m_ControlStates.fill(false);
 	m_AnalogMove.Reset();

@@ -188,6 +188,12 @@ void WindowMan::CreatePrimaryWindow() {
 	SDL_SetNumberProperty(windowProps, SDL_PROP_WINDOW_CREATE_Y_NUMBER, windowPosY);
 	SDL_SetNumberProperty(windowProps, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, m_ResX * m_ResMultiplier);
 	SDL_SetNumberProperty(windowProps, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, m_ResY * m_ResMultiplier);
+
+	// CCCP_HEADLESS creates the window hidden -- a real window and GL context are still made, only display is skipped.
+	const bool headless = SDL_getenv("CCCP_HEADLESS") != nullptr;
+	if (headless) {
+		SDL_SetBooleanProperty(windowProps, SDL_PROP_WINDOW_CREATE_HIDDEN_BOOLEAN, true);
+	}
 	m_PrimaryWindow = std::shared_ptr<SDL_Window>(SDL_CreateWindowWithProperties(windowProps), SDLWindowDeleter());
 	if (!m_PrimaryWindow) {
 		RTEError::ShowMessageBox("Unable to create window because:\n" + std::string(SDL_GetError()) + "!\n\nTrying to revert to defaults!");
@@ -197,7 +203,7 @@ void WindowMan::CreatePrimaryWindow() {
 		m_ResMultiplier = 1;
 		g_SettingsMan.SetSettingsNeedOverwrite();
 
-		m_PrimaryWindow = std::shared_ptr<SDL_Window>(SDL_CreateWindow(windowTitle.c_str(), m_ResX * m_ResMultiplier, m_ResY * m_ResMultiplier, SDL_WINDOW_OPENGL), SDLWindowDeleter());
+		m_PrimaryWindow = std::shared_ptr<SDL_Window>(SDL_CreateWindow(windowTitle.c_str(), m_ResX * m_ResMultiplier, m_ResY * m_ResMultiplier, SDL_WINDOW_OPENGL | (headless ? SDL_WINDOW_HIDDEN : 0)), SDLWindowDeleter());
 		if (!m_PrimaryWindow) {
 			RTEAbort("Failed to create window because:\n" + std::string(SDL_GetError()));
 		}
@@ -207,7 +213,7 @@ void WindowMan::CreatePrimaryWindow() {
 	SDL_GL_SwapWindow(m_PrimaryWindow.get());
 	SDL_SetCursor(NULL);
 
-	if (!m_Fullscreen && IsResolutionMaximized(m_ResX, m_ResY, m_ResMultiplier)) {
+	if (!headless && !m_Fullscreen && IsResolutionMaximized(m_ResX, m_ResY, m_ResMultiplier)) {
 		SDL_MaximizeWindow(m_PrimaryWindow.get());
 	}
 

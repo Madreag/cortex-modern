@@ -78,6 +78,9 @@ namespace RTE {
 		CONTROLSTATECOUNT
 	};
 
+	/// The actor whose AI is running on this thread during the parallel ThreadedUpdateAI pass (null outside it).
+	extern thread_local Actor* g_CurrentAIActor;
+
 	/// A class controlling MovableObjects through either player input, networking, scripting, AI, etc.
 	class Controller {
 

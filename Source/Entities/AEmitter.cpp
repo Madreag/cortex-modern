@@ -579,7 +579,7 @@ void AEmitter::Update() {
 		emitPos.RadRotate(m_HFlipped ? c_PI + m_Rotation.GetRadAngle() - m_EmitAngle.GetRadAngle() : m_Rotation.GetRadAngle() + m_EmitAngle.GetRadAngle());
 		emitPos = m_Pos + RotateOffset(m_EmissionOffset) + emitPos;
 		if (m_EffectAlwaysShows || !g_SceneMan.ObscuredPoint(emitPos)) {
-			g_PostProcessMan.RegisterPostEffect(emitPos, m_pFlash->GetScreenEffect(), m_pFlash->GetScreenEffectHash(), RandomNum(m_pFlash->GetEffectStopStrength(), m_pFlash->GetEffectStartStrength()) * std::clamp(m_FlashScale, 0.0F, 1.0F), m_pFlash->GetEffectRotAngle());
+			g_PostProcessMan.RegisterPostEffect(emitPos, m_pFlash->GetScreenEffect(), m_pFlash->GetScreenEffectHash(), g_RenderRNG.RandomNum(m_pFlash->GetEffectStopStrength(), m_pFlash->GetEffectStartStrength()) * std::clamp(m_FlashScale, 0.0F, 1.0F), m_pFlash->GetEffectRotAngle());
 		}
 	}
 }

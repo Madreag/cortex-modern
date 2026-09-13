@@ -200,6 +200,7 @@ namespace RTE {
 		LuaBindingRegisterFunctionDeclarationForType(PrimitiveMan);
 		LuaBindingRegisterFunctionDeclarationForType(SceneMan);
 		LuaBindingRegisterFunctionDeclarationForType(SettingsMan);
+		LuaBindingRegisterFunctionDeclarationForType(MetricsCollector);
 		LuaBindingRegisterFunctionDeclarationForType(TimerMan);
 		LuaBindingRegisterFunctionDeclarationForType(UInputMan);
 	};

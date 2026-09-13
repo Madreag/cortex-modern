@@ -240,7 +240,7 @@ int MovableObject::Create(const MovableObject& reference) {
 	m_RandomizeEffectRotAngleEveryFrame = reference.m_RandomizeEffectRotAngleEveryFrame;
 
 	if (m_RandomizeEffectRotAngle)
-		m_EffectRotAngle = c_PI * RandomNum(-2.0F, 2.0F);
+		m_EffectRotAngle = c_PI * g_RenderRNG.RandomNum(-2.0F, 2.0F);
 
 	m_ScreenEffectHash = reference.m_ScreenEffectHash;
 	m_EffectStartTime = reference.m_EffectStartTime;
@@ -666,6 +666,12 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 	if (status >= 0) {
 		ZoneScoped;
 		ZoneText(functionName.c_str(), functionName.length());
+
+		// Redirect every hook's RNG to a per-MO generator for thread-count invariance, collision
+		// callbacks included: their firing order isn't deterministic (the MOID map and terrain they
+		// read are built off-thread), so the shared RNG can't be drawn from here.
+		DeterministicMORNGScope rngScope(m_UniqueID, Hash(functionName), true);
+
 		for (const LuaFunction& luaFunction: itr->second) {
 			const LuabindObjectWrapper* luabindObjectWrapper = luaFunction.m_LuaFunction.get();
 			if (runOnDisabledScripts || luaFunction.m_ScriptIsEnabled) {
@@ -892,7 +898,7 @@ void MovableObject::PostTravel() {
 
 void MovableObject::Update() {
 	if (m_RandomizeEffectRotAngleEveryFrame) {
-		m_EffectRotAngle = c_PI * 2.0F * RandomNormalNum();
+		m_EffectRotAngle = c_PI * 2.0F * g_RenderRNG.RandomNormalNum();
 	}
 
 	if (m_pScreenEffect && m_PostEffectEnabled) {

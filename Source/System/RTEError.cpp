@@ -13,6 +13,7 @@
 #endif
 
 #include <array>
+#include <cstdio>
 #include <exception>
 #include <regex>
 #include <utility>
@@ -30,6 +31,14 @@
 #include <filesystem>
 #elif defined(__APPLE__) && defined(__MACH__)
 #include <sys/sysctl.h>
+#include <pthread.h>
+#endif
+
+#if defined(__APPLE__) && defined(__MACH__)
+// Cocoa dispatches message boxes onto the main thread, which deadlocks if a worker fires one while the main thread waits on it.
+static bool IsOnAppMainThread() { return pthread_main_np() != 0; }
+#else
+static bool IsOnAppMainThread() { return true; }
 #endif
 
 #include "backward/backward.hpp"
@@ -205,10 +214,23 @@ void RTEError::SetExceptionHandlers() {
 }
 
 void RTEError::ShowMessageBox(const std::string& message) {
+	if (!IsOnAppMainThread()) {
+		std::fprintf(stderr, "RTE Warning (from worker thread): %s\n", message.c_str());
+		return;
+	}
 	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "RTE Warning! (>_<)", message.c_str(), nullptr);
 }
 
 bool RTEError::ShowAbortMessageBox(const std::string& message) {
+	if (!IsOnAppMainThread()) {
+		std::fprintf(stderr, "RTE Abort (from worker thread): %s\n", message.c_str());
+		return false;
+	}
+	// Headless / automated runs can't dismiss a modal dialog — log + proceed to exit.
+	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+		std::fprintf(stderr, "RTE Abort (headless): %s\n", message.c_str());
+		return false;
+	}
 	enum AbortMessageButton {
 		ButtonInvalid,
 		ButtonExit,
@@ -242,6 +264,16 @@ bool RTEError::ShowAbortMessageBox(const std::string& message) {
 }
 
 bool RTEError::ShowAssertMessageBox(const std::string& message) {
+	if (!IsOnAppMainThread()) {
+		// Return false (Ignore-once) so the worker can unwind; the main thread sees the assert on its next pass.
+		std::fprintf(stderr, "RTE Assert (from worker thread): %s\n", message.c_str());
+		return false;
+	}
+	// Headless / automated runs can't dismiss a modal dialog — log + abort to exit.
+	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+		std::fprintf(stderr, "RTE Assert (headless): %s\n", message.c_str());
+		return true;
+	}
 	enum AssertMessageButton {
 		ButtonInvalid,
 		ButtonAbort,
