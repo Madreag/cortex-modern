@@ -647,6 +647,10 @@ namespace RTE {
 		static Actor* ResolveNetActor(int64_t uid);
 		static int64_t NetActorUID(const Actor* actor);
 		bool ApplyNetPlayerSlots(const NetGamePlayerBindings& bindings);
+		/// Returns the unique ids of a player's brain, controlled actor and controller actor as the slots hold them.
+		std::array<long, 3> SlotActorIDs(int player) const;
+		/// Points a relaunch's pending actor links at the slots as they stand, so its deferred rebinds keep them.
+		void RefreshCheckpointActorIDs();
 		std::string m_PendingRuntimeCheckpoint;
 		std::array<std::array<long, 3>, Players::MaxPlayerCount> m_CheckpointActorIDs{};
 		bool m_HasCheckpointActorIDs = false;

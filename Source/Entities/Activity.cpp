@@ -1143,6 +1143,7 @@ bool Activity::RestoreNetLocalPlayerState(const NetLocalPlayerState& state) {
 		if (!m_PlayerController[player].LoadCheckpoint(state.controllers[player])) return false;
 		m_PlayerController[player].SetControlledActor(ResolveNetActor(state.controllerActorUIDs[player]));
 	}
+	RefreshCheckpointActorIDs();
 	for (MovableObject* object: g_MovableMan.SnapshotKnownObjects()) {
 		if (auto* actor = dynamic_cast<Actor*>(object)) {
 			const auto found = inputs.find(actor->GetUniqueID());
@@ -1177,6 +1178,7 @@ bool Activity::ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings) {
 			g_CameraMan.SetScroll(Vector(binding.cameraX, binding.cameraY), m_PlayerScreen[player]);
 		}
 	}
+	RefreshCheckpointActorIDs();
 	return true;
 }
 
@@ -1188,10 +1190,11 @@ bool Activity::RunNetLocalPlayerStateSelfTest() {
 	};
 	struct Restore {
 		long uid = MovableObject::GetUniqueIDCounter();
+		bool relaunching = g_ActivityMan.LockstepRelaunchInProgress();
 		std::string camera = g_CameraMan.SaveCheckpoint();
 		std::vector<std::pair<Actor*, Controller::LocalInputState>> inputs;
 		Restore() { for (auto* object: g_MovableMan.SnapshotKnownObjects()) if (auto* actor = dynamic_cast<Actor*>(object)) inputs.emplace_back(actor, actor->GetController()->CaptureLocalInputState()); }
-		~Restore() { for (const auto& [actor, input]: inputs) actor->GetController()->RestoreLocalInputState(input); g_CameraMan.LoadCheckpoint(camera); MovableObject::PinUniqueIDCounter(uid); }
+		~Restore() { for (const auto& [actor, input]: inputs) actor->GetController()->RestoreLocalInputState(input); g_CameraMan.LoadCheckpoint(camera); MovableObject::PinUniqueIDCounter(uid); if (!relaunching) g_ActivityMan.EndLockstepRelaunch(); }
 	} restore;
 	try {
 		GameActivity fixture;
@@ -1239,20 +1242,45 @@ bool Activity::RunNetLocalPlayerStateSelfTest() {
 		for (auto& binding: fresh.players) binding.active = false;
 		fresh.players[0].brainUID = std::numeric_limits<int64_t>::max();
 		check("fresh_missing_identity_is_null", fixture.Activity::ApplyNetPlayerBindings(fresh) && !fixture.m_Brain[0] && fixture.m_ControlledActor[0] == &controlled && canonical() == authority);
+		// A relaunch holds the host save's slot links for its deferred rebinds; the local slots applied over them must replace them.
+		Actor host;
+		if (host.MovableObject::Create() < 0) throw std::runtime_error("host link actor could not be created");
+		const auto stageHostLinks = [&] {
+			fixture.m_Brain[0] = fixture.m_ControlledActor[0] = &host;
+			fixture.m_PlayerController[0].SetControlledActor(&host);
+			fixture.Activity::ClearCheckpointActorIDs();
+			if (!fixture.Activity::LoadCheckpoint(fixture.Activity::SaveCheckpoint())) throw std::runtime_error("host links could not be staged");
+		};
+		if (!restore.relaunching) g_ActivityMan.NoteLockstepRelaunch();
+		stageHostLinks();
+		check("relaunch_links_follow_retained_local_slots", fixture.Activity::RestoreNetLocalPlayerState(local) && fixture.Activity::ResolveCheckpointReferences() &&
+			!fixture.m_Brain[0] && fixture.m_ControlledActor[0] == &controlled && fixture.m_PlayerController[0].GetControlledActor() == &controlled);
+		stageHostLinks();
+		check("relaunch_links_follow_fresh_bindings", fixture.Activity::ApplyNetPlayerBindings(fresh) && fixture.Activity::ResolveCheckpointReferences() &&
+			!fixture.m_Brain[0] && fixture.m_ControlledActor[0] == &controlled && !fixture.m_PlayerController[0].GetControlledActor());
+		stageHostLinks();
+		check("relaunch_links_follow_seatless_bindings", fixture.Activity::ApplyNetPlayerBindings(NetGamePlayerBindings{}) && fixture.Activity::ResolveCheckpointReferences() &&
+			!fixture.m_Brain[0] && !fixture.m_ControlledActor[0] && !fixture.m_PlayerController[0].GetControlledActor());
 	} catch (const std::exception& exception) { check(exception.what(), false); }
 	return passed;
+}
+
+std::array<long, 3> Activity::SlotActorIDs(int player) const {
+	const Actor* controllerActor = m_PlayerController[player].GetControlledActor();
+	return {m_Brain[player] ? m_Brain[player]->GetUniqueID() : 0, m_ControlledActor[player] ? m_ControlledActor[player]->GetUniqueID() : 0,
+		controllerActor ? controllerActor->GetUniqueID() : 0};
+}
+
+void Activity::RefreshCheckpointActorIDs() {
+	if (!m_HasCheckpointActorIDs) return;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) m_CheckpointActorIDs[player] = SlotActorIDs(player);
 }
 
 std::string Activity::SaveCheckpoint() const {
 	CheckpointWriter writer("Activity3");
 	VisitCheckpoint(writer, *this);
 	std::array<std::array<long, 3>, Players::MaxPlayerCount> links{};
-	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
-		if (m_HasCheckpointActorIDs) { links[player] = m_CheckpointActorIDs[player]; continue; }
-		links[player] = {m_Brain[player] ? m_Brain[player]->GetUniqueID() : 0,
-			m_ControlledActor[player] ? m_ControlledActor[player]->GetUniqueID() : 0,
-			m_PlayerController[player].GetControlledActor() ? m_PlayerController[player].GetControlledActor()->GetUniqueID() : 0};
-	}
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) links[player] = m_HasCheckpointActorIDs ? m_CheckpointActorIDs[player] : SlotActorIDs(player);
 	writer(links, Icon::SaveCheckpointSet(m_TeamIcons));
 	return writer.Text();
 }
