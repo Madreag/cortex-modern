@@ -334,7 +334,7 @@ namespace {
 			lua_settop(L, thread - 1);
 			return Failure(L, "the coroutine's stack bounds are invalid");
 		}
-		// A yielded top is below base+framesize; grow for every live Lua frame.
+		// A yielded top sits below base+framesize; size every frame from the function in its own slot.
 		ptrdiff_t needed = top;
 		lua_getfield(L, 1, "links");
 		if (lua_istable(L, -1)) {
@@ -342,24 +342,11 @@ namespace {
 			while (lua_next(L, -2) != 0) {
 				const ptrdiff_t index = static_cast<ptrdiff_t>(lua_tointeger(L, -2));
 				if (lua_istable(L, -1)) {
-					lua_getfield(L, -1, "pcslot");
-					if (!lua_isnil(L, -1)) {
-						const ptrdiff_t funcSlot = static_cast<ptrdiff_t>(lua_tointeger(L, -1));
-						lua_pop(L, 1);
-						lua_rawgeti(L, slots, static_cast<int>(index - 1));
-						if (!(tvisfunc(L->top - 1) && isluafunc(funcV(L->top - 1)))) {
-							lua_pop(L, 1);
-							lua_rawgeti(L, slots, static_cast<int>(funcSlot));
-						}
-						if (tvisfunc(L->top - 1) && isluafunc(funcV(L->top - 1))) {
-							const ptrdiff_t framesize = static_cast<ptrdiff_t>(funcproto(funcV(L->top - 1))->framesize);
-							needed = std::max(needed, index + 1 + framesize);
-							needed = std::max(needed, base + framesize);
-						}
-						lua_pop(L, 1);
-					} else {
-						lua_pop(L, 1);
+					lua_rawgeti(L, slots, static_cast<int>(index - 1));
+					if (tvisfunc(L->top - 1) && isluafunc(funcV(L->top - 1))) {
+						needed = std::max(needed, index + 1 + static_cast<ptrdiff_t>(funcproto(funcV(L->top - 1))->framesize));
 					}
+					lua_pop(L, 1);
 				}
 				lua_pop(L, 1);
 			}
@@ -479,7 +466,7 @@ namespace {
 		}
 		guard = 0;
 		for (TValue* frame = co->base - 1; frame > stack + LJ_FR2;) {
-			if (frame_islua(frame) && tvisfunc(frame - 1) && isluafunc(funcV(frame - 1))) {
+			if (tvisfunc(frame - 1) && isluafunc(funcV(frame - 1))) {
 				if ((frame - stack) + 1 + static_cast<ptrdiff_t>(funcproto(funcV(frame - 1))->framesize) > tvref(co->maxstack) - stack) {
 					EmptyThread(co);
 					lua_settop(L, thread - 1);
@@ -518,31 +505,13 @@ namespace {
 		ptrdiff_t needed = 0;
 		const ptrdiff_t topIndex = co->top - stack;
 		int guard = 0;
+		// Every Lua frame on the chain must fit its own function: base + framesize <= maxstack.
 		for (TValue* frame = co->base - 1; frame > stack + LJ_FR2;) {
 			if (++guard > 100000 || frame - stack >= topIndex) {
 				return Failure(L, "the coroutine's frame chain is corrupt");
 			}
-			if (frame_islua(frame)) {
-				GCfunc* fn = nullptr;
-				if (tvisfunc(frame - 1) && isluafunc(funcV(frame - 1))) {
-					fn = funcV(frame - 1);
-				} else {
-					const BCIns* pc = frame_pc(frame);
-					for (ptrdiff_t i = 1 + LJ_FR2; i < topIndex; ++i) {
-						if (!tvisfunc(stack + i) || !isluafunc(funcV(stack + i))) {
-							continue;
-						}
-						GCproto* proto = funcproto(funcV(stack + i));
-						const BCIns* code = proto_bc(proto);
-						if (pc >= code && pc <= code + proto->sizebc) {
-							fn = funcV(stack + i);
-							break;
-						}
-					}
-				}
-				if (fn) {
-					needed = std::max(needed, (frame - stack) + 1 + static_cast<ptrdiff_t>(funcproto(fn)->framesize));
-				}
+			if (tvisfunc(frame - 1) && isluafunc(funcV(frame - 1))) {
+				needed = std::max(needed, (frame - stack) + 1 + static_cast<ptrdiff_t>(funcproto(funcV(frame - 1))->framesize));
 			}
 			frame = frame_islua(frame) ? frame_prevl(frame) : frame_prevd(frame);
 		}
