@@ -1021,16 +1021,23 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		s_shareResolved = false;
 		m_MultiplayerStatusLabel->SetText(snapshot.statusText);
 	}
+	// The status line can wrap; reserve its real height and let everything below slide with it.
+	const int statusHeight = std::max(16, m_MultiplayerStatusLabel->GetTextHeight() + 4);
+	if (m_MultiplayerStatusLabel->GetHeight() != statusHeight) {
+		m_MultiplayerStatusLabel->Resize(m_MultiplayerStatusLabel->GetWidth(), statusHeight);
+	}
+	const int statusExtra = statusHeight - 16;
 	if (snapshot.portMapSerial != m_PortMapSerialShown) {
 		m_PortMapSerialShown = snapshot.portMapSerial;
 		m_MultiplayerLobbyPortMapLabel->SetText(snapshot.portMap);
 	}
 	m_MultiplayerLobbyPortMapLabel->SetVisible(!snapshot.portMap.empty());
+	m_MultiplayerLobbyPortMapLabel->SetPositionRel(12, 162 + statusExtra);
 	const int portMapHeight = snapshot.portMap.empty() ? 0 : 14;
 	m_MultiplayerErrorLabel->SetText(snapshot.errorText);
-	m_MultiplayerErrorLabel->SetPositionRel(12, 162 + portMapHeight);
+	m_MultiplayerErrorLabel->SetPositionRel(12, 162 + statusExtra + portMapHeight);
 	const int errorHeight = std::max(24, m_MultiplayerErrorLabel->GetTextHeight() + 4);
-	const int extraHeight = errorHeight - 24 + portMapHeight;
+	const int extraHeight = statusExtra + errorHeight - 24 + portMapHeight;
 	if (m_MultiplayerErrorLabel->GetHeight() != errorHeight) {
 		m_MultiplayerErrorLabel->Resize(m_MultiplayerErrorLabel->GetWidth(), errorHeight);
 	}
