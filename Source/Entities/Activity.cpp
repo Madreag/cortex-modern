@@ -18,6 +18,7 @@
 #include "ActivityMan.h"
 
 #include "ACraft.h"
+#include "OwnedMovableObjects.h"
 
 #include "GUI.h"
 #include "GUIFont.h"
@@ -1319,6 +1320,23 @@ static Actor* LiveCheckpointActor(long uid) {
 	return actor;
 }
 
+// Exact-pointer membership in a current world actor's ownership graph; the object itself is never dereferenced.
+static bool OwnedByWorldActor(const MovableObject* object) {
+	std::list<SceneObject*> roots;
+	g_MovableMan.GetAllActors(false, roots);
+	std::unordered_set<const Entity*> visited;
+	std::unordered_set<const MovableObject*> owned;
+	for (const SceneObject* root: roots) CollectOwnedMovableObjects(root, visited, owned);
+	return owned.contains(object);
+}
+
+// A brain may ride in a world actor's inventory instead of standing in the world itself.
+static Actor* LiveCheckpointBrain(long uid) {
+	if (Actor* actor = LiveCheckpointActor(uid)) return actor;
+	Actor* actor = uid ? dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(uid)) : nullptr;
+	return actor && OwnedByWorldActor(actor) ? actor : nullptr;
+}
+
 void Activity::ClearNonOwnedActorSlots() {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		m_Brain[player] = nullptr;
@@ -1330,7 +1348,7 @@ void Activity::ClearNonOwnedActorSlots() {
 void Activity::RebindNonOwnedActorSlots() {
 	if (!m_HasCheckpointActorIDs) return;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		m_Brain[player] = LiveCheckpointActor(m_CheckpointActorIDs[player][0]);
+		m_Brain[player] = LiveCheckpointBrain(m_CheckpointActorIDs[player][0]);
 		m_ControlledActor[player] = LiveCheckpointActor(m_CheckpointActorIDs[player][1]);
 		m_PlayerController[player].SetControlledActor(LiveCheckpointActor(m_CheckpointActorIDs[player][2]));
 	}
@@ -1371,7 +1389,7 @@ bool Activity::ResolveCheckpointReferences() {
 int Activity::CountStaleRelaunchSlots(int tick) const {
 	int stale = 0;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (m_Brain[player] && !g_MovableMan.ValidMO(m_Brain[player]) && !g_MovableMan.IsActor(m_Brain[player])) {
+		if (m_Brain[player] && !g_MovableMan.ValidMO(m_Brain[player]) && !g_MovableMan.IsActor(m_Brain[player]) && !OwnedByWorldActor(m_Brain[player])) {
 			std::cout << "[net-match] relaunch: player " << player << " brain slot names a dead actor at tick " << tick << std::endl;
 			++stale;
 		}

@@ -3346,25 +3346,39 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			after = rebindMark("seatless", applied, before);
 			check("relaunch_rebind_keeps_seatless_mark_null", applied && before == 0 && after == 0);
 
-			// An inventory-carried brain is measured, not judged; the pending rebind's live-world predicate is unchanged.
+			// A live brain may ride inside a world actor's inventory; the pending rebind keeps it and rejects a brain no current world actor owns.
 			const auto* brainPreset = dynamic_cast<const Actor*>(g_PresetMan.GetEntityPreset("Actor", "Brain Case", "Base.rte"));
 			if (!brainPreset) throw std::runtime_error("inventory probe brain preset unavailable");
+			const auto cloneBrain = [brainPreset] { return static_cast<Actor*>(brainPreset->Clone()); };
 			Actor* craft = enter(makeActor());
-			auto* carried = static_cast<Actor*>(brainPreset->Clone());
+			Actor* carried = cloneBrain();
 			craft->AddInventoryItem(carried);
+			Actor* outer = enter(makeActor());
+			Actor* box = makeActor();
+			Actor* nested = cloneBrain();
+			box->AddInventoryItem(nested);
+			outer->AddInventoryItem(box);
+			Actor* exile = enter(makeActor());
+			Actor* exiledBrain = cloneBrain();
+			exile->AddInventoryItem(exiledBrain);
+			world.pop_back();
+			std::unique_ptr<Actor> exiled(g_MovableMan.RemoveActor(exile));
+			std::unique_ptr<Actor> loose(makeActor());
+			Actor* worldBrain = enter(makeActor());
 			Actor* deadBrain = enter(makeActor());
 			deadBrain->SetStatus(Actor::DEAD);
 			fixture->m_pLastMarkedActor[0] = nullptr;
 			std::cout << "[net-relaunch-inventory-probe] carrier_uid=" << craft->GetUniqueID() << " carrier_class=" << craft->GetClassName() << " carrier_world=" << g_MovableMan.IsActor(craft)
 			          << " carrier_holds_brain=" << craft->HasObjectInGroup("Brains") << " carried_uid=" << carried->GetUniqueID() << " carried_in_group=" << carried->IsInGroup("Brains") << std::endl;
-			const auto probe = [&](const char* name, Actor* brain, bool destroy) {
+			struct Probe { long after; int staleBefore, staleAfter; };
+			const auto probe = [&](const char* name, Actor* brain, const std::function<void()>& drop = {}) {
 				fixture->m_Brain[0] = brain;
 				fixture->m_ControlledActor[0] = nullptr;
 				fixture->m_PlayerController[0].SetControlledActor(nullptr);
 				fixture->ClearCheckpointActorIDs();
 				const std::string save = fixture->SaveCheckpoint();
 				const long uid = uidOf(brain);
-				if (destroy) { fixture->m_Brain[0] = nullptr; delete brain; brain = nullptr; }
+				if (drop) { fixture->m_Brain[0] = nullptr; drop(); brain = nullptr; }
 				if (!fixture->LoadCheckpoint(save)) throw std::runtime_error("inventory probe links could not be staged");
 				const MovableObject* found = g_MovableMan.FindObjectByUniqueID(uid);
 				const long slotBefore = uidOf(fixture->m_Brain[0]);
@@ -3376,12 +3390,23 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 				          << " lookup_hit=" << (found && found == brain) << " lookup_null=" << !found << " valid_mo=" << (brain && g_MovableMan.ValidMO(brain))
 				          << " is_actor=" << (brain && g_MovableMan.IsActor(brain)) << " known=" << (brain && g_MovableMan.IsKnownObject(brain)) << " dead=" << (brain && brain->IsDead())
 				          << " slot_before=" << slotBefore << " stale_before=" << staleBefore << " slot_after=" << slotAfter << " stale_after=" << staleAfter << std::endl;
-				return slotAfter;
+				return Probe{slotAfter, staleBefore, staleAfter};
 			};
-			probe("inventory_carried", carried, false);
-			check("relaunch_rebind_keeps_live_carrier_brain", probe("carrier_craft", craft, false) == craft->GetUniqueID());
-			probe("dead_in_world", deadBrain, false);
-			check("relaunch_rebind_drops_destroyed_brain", probe("destroyed", makeActor(), true) == 0);
+			const auto kept = [](const Probe& result, const Actor* brain) { return result.after == brain->GetUniqueID() && result.staleBefore == 0 && result.staleAfter == 0; };
+			const auto rejected = [](const Probe& result, int staleBefore) { return result.after == 0 && result.staleBefore == staleBefore && result.staleAfter == 0; };
+			check("relaunch_rebind_keeps_inventory_brain", kept(probe("inventory_carried", carried), carried));
+			check("relaunch_rebind_keeps_nested_inventory_brain", kept(probe("nested_inventory", nested), nested));
+			check("relaunch_rebind_rejects_brain_of_carrier_outside_world", rejected(probe("carrier_outside_world", exiledBrain), 1));
+			check("relaunch_rebind_rejects_unattached_registered_brain", rejected(probe("unattached_registered", loose.get()), 1));
+			check("relaunch_rebind_keeps_live_carrier_brain", kept(probe("carrier_world_actor", craft), craft));
+			check("relaunch_rebind_keeps_world_brain", kept(probe("world_brain", worldBrain), worldBrain));
+			check("relaunch_rebind_keeps_dead_world_brain", kept(probe("dead_in_world", deadBrain), deadBrain));
+			Actor* destroyed = makeActor();
+			check("relaunch_rebind_drops_destroyed_brain", rejected(probe("destroyed", destroyed, [destroyed] { delete destroyed; }), 0));
+			// An ID this world never issued: the counter is rewound past the deleted actor.
+			const long counter = MovableObject::GetUniqueIDCounter();
+			Actor* ghost = makeActor();
+			check("relaunch_rebind_drops_missing_brain", rejected(probe("missing", ghost, [ghost, counter] { delete ghost; MovableObject::PinUniqueIDCounter(counter); }), 0));
 
 			fixture->m_Brain[0] = fixture->m_ControlledActor[0] = fixture->m_pLastMarkedActor[0] = nullptr;
 			fixture->m_PlayerController[0].SetControlledActor(nullptr);
