@@ -1704,6 +1704,9 @@ void MOSRotating::RemapExternalLinks(const std::function<MovableObject*(MovableO
 	for (Attachable* attachable: m_Attachables) {
 		attachable->RemapExternalLinks(map);
 	}
+	for (AEmitter* wound: m_Wounds) {
+		wound->RemapExternalLinks(map);
+	}
 }
 
 void MOSRotating::CollectSubgroupIDTranslation(std::unordered_map<long, long>& savedToLiveSubID) const {

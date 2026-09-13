@@ -404,6 +404,8 @@ namespace RTE {
 		/// Drops the preview slots.
 		static void EndPreviewScripts();
 		static bool IsPreviewClone(const MovableObject* mo);
+		/// The clones BeginPreviewScripts bound, until EndPreviewScripts.
+		static std::vector<const MovableObject*> PreviewRoots();
 		static bool IsPreviewEdgeHook(const std::string& functionName);
 		static bool ShouldRunPreviewHook(const MovableObject* mo, const std::string& functionName);
 		static bool IsRunningPreviewHook() { return s_RunningPreviewHook; }

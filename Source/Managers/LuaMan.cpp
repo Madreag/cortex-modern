@@ -8126,6 +8126,15 @@ bool LuaMan::IsPreviewClone(const MovableObject* mo) {
 	return mo && s_PreviewClones.count(mo) > 0;
 }
 
+std::vector<const MovableObject*> LuaMan::PreviewRoots() {
+	std::vector<const MovableObject*> roots;
+	roots.reserve(s_PreviewRootByUID.size());
+	for (const auto& [uid, root]: s_PreviewRootByUID) {
+		roots.push_back(root);
+	}
+	return roots;
+}
+
 bool LuaMan::IsPreviewEdgeHook(const std::string& functionName) {
 	return functionName == "OnFire" || functionName == "OnStride" || functionName == "OnReload" || functionName == "OnAttach" || functionName == "OnDetach" || functionName == "OnCollideWithMO" || functionName == "OnCollideWithTerrain";
 }
