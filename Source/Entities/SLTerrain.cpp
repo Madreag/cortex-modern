@@ -8,9 +8,14 @@
 #include "Atom.h"
 #include "DataModule.h"
 #include "PresetMan.h"
+#include "ScenarioRunner.h"
 
 #include <array>
+#include <cstdint>
+#include <cstdlib>
 #include <execution>
+#include <fstream>
+#include <iostream>
 
 using namespace RTE;
 
@@ -288,6 +293,10 @@ int SLTerrain::LoadData() {
 		for (const TerrainFrosting* terrainFrosting: m_TerrainFrostings) {
 			terrainFrosting->FrostTerrain(this);
 		}
+		if (std::getenv("CC_TERRAIN_DUMP")) {
+			const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
+			std::ofstream(base + ".load.stamps.jsonl", std::ios::binary | std::ios::trunc);
+		}
 		for (TerrainDebris* terrainDebris: m_TerrainDebris) {
 			terrainDebris->ScatterOnTerrain(this);
 		}
@@ -295,6 +304,25 @@ int SLTerrain::LoadData() {
 			terrainObject->PlaceOnTerrain(this);
 		}
 		CleanAir();
+	}
+	if (std::getenv("CC_TERRAIN_DUMP")) {
+		BITMAP* mat = GetMaterialBitmap();
+		BITMAP* fg = GetFGColorBitmap();
+		const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
+		auto dump = [&](const char* name, BITMAP* bitmap) {
+			if (!bitmap) {
+				return;
+			}
+			std::ofstream out(base + ".load." + name + ".bin", std::ios::binary | std::ios::trunc);
+			const std::int32_t header[3] = {bitmap->w, bitmap->h, bitmap_color_depth(bitmap)};
+			out.write(reinterpret_cast<const char*>(header), sizeof(header));
+			for (int y = 0; y < bitmap->h; ++y) {
+				out.write(reinterpret_cast<const char*>(bitmap->line[y]), bitmap->w);
+			}
+		};
+		dump("mat", mat);
+		dump("fg", fg);
+		std::cout << "[terrain-dump] load saved" << std::endl;
 	}
 	return 0;
 }
