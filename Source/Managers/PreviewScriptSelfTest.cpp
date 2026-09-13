@@ -1,10 +1,16 @@
 #include "PreviewScriptSelfTest.h"
 
+#include "AEmitter.h"
 #include "AHuman.h"
 #include "Actor.h"
+#include "Arm.h"
+#include "Attachable.h"
 #include "AudioMan.h"
 #include "HDFirearm.h"
+#include "HeldDevice.h"
 #include "LuaMan.h"
+#include "Magazine.h"
+#include "MovableMan.h"
 #include "MovableObject.h"
 #include "OwnedMovableObjects.h"
 #include "PreviewEventLedger.h"
@@ -28,6 +34,7 @@ namespace RTE {
 	uint64_t PreviewScriptSelfTest::s_RootUID = 0;
 	uint64_t PreviewScriptSelfTest::s_ChildUID = 0;
 	uint64_t PreviewScriptSelfTest::s_CommittedTick = 0;
+	PreviewScriptSelfTest::OverlayLinkProbe PreviewScriptSelfTest::s_OverlayLinkProbe;
 
 	void PreviewScriptSelfTest::SetSubtreeProbe(bool enabled) {
 		s_SubtreeProbe = enabled;
@@ -150,9 +157,151 @@ namespace RTE {
 	}
 
 	bool PreviewScriptSelfTest::InstallStrideCounter(MovableObject* object) {
+		RunOverlayLinkProbe(object);
 		if (!object || !object->GetLuaState()) {
 			return false;
 		}
 		return object->GetLuaState()->AttachPreviewInvStride(object);
+	}
+
+	void PreviewScriptSelfTest::ArmOverlayLinkProbe(char mode, const Actor* residentActor, const MovableObject* residentItem) {
+		s_OverlayLinkProbe = {};
+		s_OverlayLinkProbe.mode = mode;
+		s_OverlayLinkProbe.residentActor = residentActor;
+		s_OverlayLinkProbe.residentItem = residentItem;
+	}
+
+	void PreviewScriptSelfTest::DisarmOverlayLinkProbe() {
+		s_OverlayLinkProbe = {};
+	}
+
+	// Runs at the stride-counter seam: speculation is on, the clones are bound, their faithful links not yet resolved.
+	void PreviewScriptSelfTest::RunOverlayLinkProbe(MovableObject* object) {
+		OverlayLinkProbe& probe = s_OverlayLinkProbe;
+		if (probe.mode == 0 || probe.ran || !object || !g_MovableMan.IsSpeculative() || !LuaMan::IsPreviewClone(object)) {
+			return;
+		}
+		probe.ran = true;
+		AHuman* clone = dynamic_cast<AHuman*>(object);
+		if (!clone) {
+			probe.failure = "the preview clone is not an AHuman";
+			return;
+		}
+		probe.clone = clone;
+		probe.cloneUID = clone->GetUniqueID();
+		// A link set here has to outlive the faithful link resolution RunPreview does after this seam.
+		const auto link = [](MovableObject* holder, MovableObject* target) {
+			holder->m_FaithfulMOToNotHitUID = 0;
+			holder->SetWhichMOToNotHit(target, -1.0F);
+		};
+		const auto shadowOf = [](const MovableObject* resident) -> MovableObject* {
+			MovableObject* view = resident ? g_MovableMan.FindObjectByUniqueID(resident->GetUniqueID()) : nullptr;
+			return view != resident ? view : nullptr;
+		};
+		// The root's direct parts are siblings, so a link set on one never propagates onto another.
+		const std::vector<MovableObject*> parts(clone->GetAttachableList().begin(), clone->GetAttachableList().end());
+
+		if (probe.mode == 'r') {
+			if (clone->GetItemInReachUniqueID() != 0) {
+				probe.failure = "the clone carries a faithful item in reach that link resolution would put back";
+				return;
+			}
+			HeldDevice* shadow = dynamic_cast<HeldDevice*>(shadowOf(probe.residentItem));
+			if (!shadow || !g_MovableMan.IsDevice(shadow)) {
+				probe.failure = "no resident item with an in-world shadow";
+				return;
+			}
+			// The shadow is the overlay's own copy; moving it into reach leaves the resident where it lies.
+			const Arm* arm = clone->GetFGArm() ? clone->GetFGArm() : clone->GetBGArm();
+			shadow->SetPos(arm ? arm->GetJointPos() : clone->GetPos());
+			clone->SetItemInReach(shadow);
+			return;
+		}
+
+		Arm* arm = nullptr;
+		for (Arm* candidate: {clone->GetFGArm(), clone->GetBGArm()}) {
+			if (candidate && candidate->GetHeldDevice()) {
+				arm = candidate;
+				break;
+			}
+		}
+		if (!arm) {
+			probe.failure = "the preview clone holds no device";
+			return;
+		}
+		if (probe.mode == 'b' && clone->GetItemInReachUniqueID() != 0) {
+			probe.failure = "the clone carries a faithful item in reach that link resolution would put back";
+			return;
+		}
+		HeldDevice* held = arm->GetHeldDevice();
+		probe.spawn = held;
+		probe.spawnUID = held->GetUniqueID();
+		probe.spawnPreset = held->GetPresetName();
+		{
+			// A named drop under a previewed emitter retires as a ghost that outlives EndSpeculation.
+			const uint64_t emitterUID = probe.mode == 'c' ? static_cast<uint64_t>(held->GetUniqueID()) : static_cast<uint64_t>(clone->GetUniqueID());
+			SoundSimulationScope emitter(emitterUID, Hash("overlay-link-probe"));
+			arm->RemoveAttachable(held, true, false);
+		}
+		link(clone, held);
+
+		if (probe.mode == 'b') {
+			MovableObject* shadowActor = shadowOf(probe.residentActor);
+			if (!shadowActor || parts.empty()) {
+				probe.failure = shadowActor ? "the clone has no parts" : "no other resident actor with an in-world shadow";
+				return;
+			}
+			clone->SetItemInReach(held);
+			link(parts[0], shadowActor);
+			probe.shadowLinkPart = parts[0];
+			return;
+		}
+
+		if (probe.mode == 'c') {
+			MovableObject* spawnPart = nullptr;
+			if (const HDFirearm* firearm = dynamic_cast<const HDFirearm*>(held); firearm && firearm->GetMagazine()) {
+				spawnPart = firearm->GetMagazine();
+			} else if (!held->GetAttachableList().empty()) {
+				spawnPart = held->GetAttachableList().front();
+			}
+			const MOSRotating* shadowActor = dynamic_cast<const MOSRotating*>(shadowOf(probe.residentActor));
+			MovableObject* shadowPart = shadowActor && !shadowActor->GetAttachableList().empty() ? shadowActor->GetAttachableList().front() : nullptr;
+			probe.residentPart = shadowPart ? const_cast<Actor*>(probe.residentActor)->FindPartByUniqueID(shadowPart->GetUniqueID()) : nullptr;
+			// Wounds as a hit makes them: copies of a part's break wound, which carry no script and so take no Lua state.
+			const AEmitter* woundPreset = nullptr;
+			for (const MovableObject* part: parts) {
+				const Attachable* attachable = dynamic_cast<const Attachable*>(part);
+				if (attachable && attachable->GetBreakWound() && static_cast<const MovableObject*>(attachable->GetBreakWound())->m_AllLoadedScripts.empty()) {
+					woundPreset = attachable->GetBreakWound();
+					break;
+				}
+			}
+			if (parts.size() < 3 || !spawnPart || !probe.residentPart || !woundPreset) {
+				probe.failure = parts.size() < 3 ? "the clone has fewer than three parts" : !spawnPart ? "the dropped device has no part" : !probe.residentPart ? "no resident part behind a shadow part" : "no unscripted wound preset on the clone";
+				return;
+			}
+			AEmitter* spawnWound = dynamic_cast<AEmitter*>(woundPreset->Clone());
+			AEmitter* cloneWound = dynamic_cast<AEmitter*>(woundPreset->Clone());
+			if (!spawnWound || !cloneWound) {
+				delete spawnWound;
+				delete cloneWound;
+				probe.failure = "the wound preset did not clone";
+				return;
+			}
+			held->AddWound(spawnWound, Vector(), false);
+			clone->AddWound(cloneWound, Vector(), false);
+			link(parts[0], spawnPart);
+			link(parts[1], spawnWound);
+			link(parts[2], shadowPart);
+			link(cloneWound, held);
+			probe.spawnPart = spawnPart;
+			probe.spawnWound = spawnWound;
+			probe.cloneWound = cloneWound;
+			probe.spawnPartLinkPart = parts[0];
+			probe.spawnWoundLinkPart = parts[1];
+			probe.shadowPartLinkPart = parts[2];
+			return;
+		}
+		probe.failure = std::string("unknown probe mode '") + probe.mode + "'";
 	}
 } // namespace RTE

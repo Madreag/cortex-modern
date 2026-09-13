@@ -2331,39 +2331,73 @@ MovableObject* MovableMan::OverlaySurvivorOf(MovableObject* mo, const std::unord
 	}
 	const auto resident = m_Speculation.residents.find(mo);
 	if (resident != m_Speculation.residents.end()) {
+		// A taken shadow lives on with its taker unless the taker retires too.
 		const Speculation::Shadow& shadow = m_Speculation.shadows.at(resident->second);
-		if (shadow.inWorld) {
+		if (shadow.inWorld || retiring.count(mo) > 0) {
 			return resident->second;
 		}
 		return mo;
 	}
-	if (retiring.count(mo) > 0) {
-		return nullptr;
+	if (retiring.count(mo) == 0) {
+		return mo;
 	}
-	return mo;
+	// mo is read only once found in a retiring shadow's tree, which is alive until EndSpeculation.
+	for (const auto& [shadowRoot, shadowResident]: m_Speculation.residents) {
+		if (retiring.count(shadowRoot) == 0) {
+			continue;
+		}
+		std::unordered_set<const Entity*> visited;
+		std::unordered_set<const MovableObject*> parts;
+		CollectOwnedMovableObjects(shadowRoot, visited, parts);
+		if (parts.count(mo) > 0) {
+			return shadowResident->FindPartByUniqueID(mo->GetUniqueID());
+		}
+	}
+	return nullptr;
 }
 
 std::unordered_set<const MovableObject*> MovableMan::RetiringOverlayObjects() {
 	std::unordered_set<const MovableObject*> retiring;
+	// The previews, the render substitutes and the residents outlive the overlay, so no walk enters them.
+	std::unordered_set<const Entity*> visited;
+	std::unordered_set<const MovableObject*> surviving;
+	for (const MovableObject* preview: LuaMan::PreviewRoots()) {
+		CollectOwnedMovableObjects(preview, visited, surviving);
+	}
+	for (const MovableObject* substitute: m_RenderSubstitutes) {
+		CollectOwnedMovableObjects(substitute, visited, surviving);
+	}
+	for (const auto& [resident, shadow]: m_Speculation.shadows) {
+		visited.insert(resident);
+	}
+	const auto retire = [&visited, &retiring](const MovableObject* root) {
+		if (root) {
+			CollectOwnedMovableObjects(root, visited, retiring);
+		}
+	};
 	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex);
 	for (const Speculation::Spawn& spawn: m_Speculation.spawns) {
-		if (spawn.object) {
-			retiring.insert(spawn.object);
-		}
-	}
-	for (const auto& entry: m_Speculation.spawnMeta) {
-		if (entry.first) {
-			retiring.insert(entry.first);
-		}
+		retire(spawn.object);
 	}
 	for (size_t i = m_Speculation.mark.actors; i < m_AddedActors.size(); ++i) {
-		retiring.insert(m_AddedActors[i]);
+		retire(m_AddedActors[i]);
 	}
 	for (size_t i = m_Speculation.mark.items; i < m_AddedItems.size(); ++i) {
-		retiring.insert(m_AddedItems[i]);
+		retire(m_AddedItems[i]);
 	}
 	for (size_t i = m_Speculation.mark.particles; i < m_AddedParticles.size(); ++i) {
-		retiring.insert(m_AddedParticles[i]);
+		retire(m_AddedParticles[i]);
+	}
+	for (const auto& [resident, shadow]: m_Speculation.shadows) {
+		if (shadow.inWorld) {
+			retire(shadow.object);
+		}
+	}
+	// A spawnMeta key that left the add queues may already be deleted, so it is listed but never read.
+	for (const auto& entry: m_Speculation.spawnMeta) {
+		if (entry.first && surviving.count(entry.first) == 0 && m_Speculation.shadows.count(entry.first) == 0) {
+			retiring.insert(entry.first);
+		}
 	}
 	return retiring;
 }

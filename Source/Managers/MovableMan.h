@@ -303,9 +303,9 @@ namespace RTE {
 		/// Ends the overlay: its unowned shadows and spawns are deleted, the rosters and flags go back.
 		/// @param takenResidents Receives the residents whose shadows were taken out of the overlay's world.
 		void EndSpeculation(std::vector<MovableObject*>* takenResidents = nullptr);
-		/// What a survivor's link to an overlay object becomes when the overlay retires: the resident for an in-world shadow, nothing for an object the overlay deletes, the object itself otherwise.
+		/// Maps a retiring shadow or shadow part to the resident or its part; other retiring objects to nothing; otherwise the object itself.
 		MovableObject* OverlaySurvivorOf(MovableObject* mo, const std::unordered_set<const MovableObject*>& retiring) const;
-		/// Harvested spawns, spawnMeta keys, and add-queue entries past the speculation mark.
+		/// Owned objects EndSpeculation deletes, plus unread spawnMeta keys; previews, substitutes and residents stay out.
 		std::unordered_set<const MovableObject*> RetiringOverlayObjects();
 		bool IsSpeculative() const { return m_Speculation.active; }
 		struct SpeculationStats {

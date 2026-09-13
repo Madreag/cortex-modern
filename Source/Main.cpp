@@ -329,6 +329,7 @@ static uint64_t s_netReplayDumpTo = 0;
 static long long s_lpInvarianceTick = 0;
 static std::vector<int> s_lpInvarianceDepths;
 static std::vector<int> s_lpInvarianceRepeats;
+static std::string s_lpOverlayLinkModes; //!< -lpinv-overlay-links: the overlay link arms run after the depth cases, in order.
 static int s_lpInvarianceFailures = -1; //!< -1 = not run, else the count of failed checks.
 static std::string s_lpExpectEquip; //!< -lpinv-expect: the preset the previews must hold once their horizon passes its pickup tick.
 static long long s_lpExpectEquipTick = 0;
@@ -1135,6 +1136,16 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				std::cerr << "[lpinv] bad expectation '" << spec << "': expected equip=<preset>@<tick>,fire@<tick>" << std::endl;
 				return false;
 			}
+			continue;
+		}
+		if (!lastArg && currentArg == "-lpinv-overlay-links") {
+			// b spawn and shadow links, r a shadow item in reach, c spawn parts, wounds and a shadow part.
+			const std::string modes = argValue[++i];
+			if (modes.empty() || modes.find_first_not_of("brc") != std::string::npos) {
+				std::cerr << "[lpinv] bad overlay-link modes '" << modes << "': expected letters from brc" << std::endl;
+				return false;
+			}
+			s_lpOverlayLinkModes = modes;
 			continue;
 		}
 
@@ -1987,6 +1998,151 @@ static std::string CheckPreviewOutcome(long long startTick, long long horizon) {
 	return "";
 }
 
+// One depth-1 preview per overlay-link mode; survivor links must miss retired objects and the canonical world must stay identical.
+static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, int& failures) {
+	const std::string label = std::string("overlay-links ") + mode;
+	bool caseFailed = false;
+	const auto fail = [&caseFailed, &label](const std::string& what) {
+		caseFailed = true;
+		std::cout << "[lpinv] FAIL " << label << ": " << what << std::endl;
+	};
+	const auto pass = [&label](const std::string& what) {
+		std::cout << "[lpinv] PASS " << label << ": " << what << std::endl;
+	};
+	++cases;
+	Activity* activity = g_ActivityMan.GetActivity();
+	// Clear item-in-reach and arm support so faithful resolution cannot overwrite the probe's links.
+	std::vector<std::pair<Actor*, HeldDevice*>> reach;
+	std::vector<std::pair<Arm*, HeldDevice*>> support;
+	const Actor* original = nullptr;
+	for (int player = Players::PlayerOne; activity && player < Players::MaxPlayerCount; ++player) {
+		if (Actor* actor = activity->GetControlledActor(player)) {
+			if (!original && activity->PlayerHuman(player)) {
+				original = actor;
+			}
+			reach.emplace_back(actor, actor->GetItemInReach());
+			actor->SetItemInReach(nullptr);
+			if (const AHuman* human = dynamic_cast<const AHuman*>(actor)) {
+				for (Arm* arm: {human->GetFGArm(), human->GetBGArm()}) {
+					if (arm) {
+						support.emplace_back(arm, arm->GetHeldDeviceThisArmIsTryingToSupport());
+						arm->SetHeldDeviceThisArmIsTryingToSupport(nullptr);
+					}
+				}
+			}
+		}
+	}
+	// The resident anchors: the nearest other actor with parts and the nearest item lying in the world.
+	const Actor* residentActor = nullptr;
+	const MovableObject* residentItem = nullptr;
+	if (original) {
+		const float radius = static_cast<float>(std::max(g_SceneMan.GetSceneWidth(), g_SceneMan.GetSceneHeight()));
+		const std::vector<MovableObject*>* nearby = g_MovableMan.GetMOsInRadius(original->GetPos(), radius);
+		float actorDistance = 0.0F;
+		float itemDistance = 0.0F;
+		for (MovableObject* mo: *nearby) {
+			if (!mo) {
+				continue;
+			}
+			const float distance = g_SceneMan.ShortestDistance(original->GetPos(), mo->GetPos(), g_SceneMan.SceneWrapsX()).GetMagnitude();
+			const Actor* actor = dynamic_cast<const Actor*>(mo);
+			if (actor && actor != original && g_MovableMan.IsActor(actor) && !actor->GetAttachableList().empty()) {
+				if (!residentActor || distance < actorDistance) {
+					residentActor = actor;
+					actorDistance = distance;
+				}
+			} else if (dynamic_cast<const HeldDevice*>(mo) && g_MovableMan.IsDevice(mo) && (!residentItem || distance < itemDistance)) {
+				residentItem = mo;
+				itemDistance = distance;
+			}
+		}
+		delete nearby;
+	}
+
+	PreviewScriptSelfTest::ArmOverlayLinkProbe(mode, residentActor, residentItem);
+	const size_t ghostsBefore = g_MovableMan.GetPreviewGhostCount();
+	LocalPrediction::SetDepthOverride(1);
+	LocalPrediction::Clear();
+	LocalPrediction::RunPreview();
+	const PreviewScriptSelfTest::OverlayLinkProbe& probe = PreviewScriptSelfTest::GetOverlayLinkProbe();
+	// Links are compared by address only: a target the overlay retired may already be deleted.
+	const auto describe = [&probe](const MovableObject* link) -> std::string {
+		if (!link) {
+			return "nothing";
+		}
+		if (link == probe.spawn) {
+			return "the retired drop " + probe.spawnPreset + " uid=" + std::to_string(probe.spawnUID);
+		}
+		if (link == probe.spawnPart) {
+			return "a part of the retired drop";
+		}
+		if (link == probe.spawnWound) {
+			return "a wound of the retired drop";
+		}
+		if (link == probe.residentActor) {
+			return "the resident actor";
+		}
+		if (link == probe.residentItem) {
+			return "the resident item";
+		}
+		if (link == probe.residentPart) {
+			return "the resident part";
+		}
+		return "another object";
+	};
+	const auto expect = [&describe, &pass, &fail](const std::string& check, const MovableObject* link, const MovableObject* wanted) {
+		if (link == wanted) {
+			pass(check + ": " + describe(link));
+		} else {
+			fail(check + ": points at " + describe(link) + ", expected " + describe(wanted));
+		}
+	};
+	if (!probe.ran) {
+		fail("not armed: no preview clone reached the probe");
+	} else if (!probe.failure.empty()) {
+		fail("not armed: " + probe.failure);
+	} else {
+		std::cout << "[lpinv] ARMED " << label << ": clone uid=" << probe.cloneUID << (probe.spawn ? " drop=" + probe.spawnPreset + " uid=" + std::to_string(probe.spawnUID) : std::string())
+		          << " ghosts " << ghostsBefore << "->" << g_MovableMan.GetPreviewGhostCount() << " [" << LocalPrediction::DescribeLastOutcome() << "]" << std::endl;
+		const Actor* clone = dynamic_cast<const Actor*>(probe.clone);
+		if (mode == 'b') {
+			expect("item_in_reach_to_a_retired_spawn", clone->GetItemInReach(), nullptr);
+			expect("mo_to_not_hit_to_a_retired_spawn", clone->GetWhichMOToNotHit(), nullptr);
+			expect("mo_to_not_hit_to_an_in_world_shadow", probe.shadowLinkPart->GetWhichMOToNotHit(), probe.residentActor);
+		} else if (mode == 'r') {
+			expect("item_in_reach_to_an_in_world_shadow", clone->GetItemInReach(), probe.residentItem);
+		} else if (mode == 'c') {
+			expect("mo_to_not_hit_to_a_retired_spawn_part", probe.spawnPartLinkPart->GetWhichMOToNotHit(), nullptr);
+			expect("mo_to_not_hit_to_a_retired_spawn_wound", probe.spawnWoundLinkPart->GetWhichMOToNotHit(), nullptr);
+			expect("survivor_wound_mo_to_not_hit_to_a_retired_spawn", probe.cloneWound->GetWhichMOToNotHit(), nullptr);
+			expect("mo_to_not_hit_to_an_in_world_shadow_part", probe.shadowPartLinkPart->GetWhichMOToNotHit(), probe.residentPart);
+		}
+	}
+	LocalPrediction::Clear();
+	g_MovableMan.DropAllPreviewGhosts();
+	PreviewScriptSelfTest::DisarmOverlayLinkProbe();
+	for (auto entry = reach.rbegin(); entry != reach.rend(); ++entry) {
+		entry->first->SetItemInReach(entry->second);
+	}
+	for (auto entry = support.rbegin(); entry != support.rend(); ++entry) {
+		entry->first->SetHeldDeviceThisArmIsTryingToSupport(entry->second);
+	}
+	std::vector<std::string> problems;
+	const std::string after = DumpSimStateToString() + DescribeCanonicalExtras(problems);
+	for (const std::string& problem: problems) {
+		fail("cannot capture canonical Lua state: " + problem);
+	}
+	if (after != before) {
+		WriteProbeText(std::string("lpinv_after_overlay_") + mode, after);
+		fail(std::string("canonical state changed after the overlay-link preview (lpinv_before vs lpinv_after_overlay_") + mode + ")");
+	}
+	if (caseFailed) {
+		++failures;
+	} else {
+		std::cout << "[lpinv] ok " << label << ": canonical state byte-identical" << std::endl;
+	}
+}
+
 // -local-prediction-invariance: at tick T, run and discard previews of every depth and repeat count and
 // require the canonical world (dump + extras) byte-identical afterwards. The run then continues, so the
 // trace compare against a no-preview reference closes the resume half of the guarantee.
@@ -2084,10 +2240,13 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 			}
 		}
 	}
+	for (const char mode: s_lpOverlayLinkModes) {
+		RunOverlayLinkArm(mode, before, cases, failures);
+	}
 	LocalPrediction::SetDepthOverride(savedDepth);
 	PreviewScriptSelfTest::SetStrideCounter(false);
 	s_lpInvarianceFailures = failures;
-	std::cout << "[lpinv] " << (failures == 0 ? "PASS" : "FAIL") << " tick " << simTick << ": " << (cases - failures) << "/" << cases << " cases left the canonical world untouched" << std::endl;
+	std::cout << "[lpinv] " << (failures == 0 ? "PASS" : "FAIL") << " tick " << simTick << ": " << (cases - failures) << "/" << cases << " cases passed invariance and link checks" << std::endl;
 	g_MetricsCollector.RecordString("lpinv_result", failures == 0 ? "pass" : "fail");
 	g_MetricsCollector.Record("lpinv_cases", cases);
 	g_MetricsCollector.Record("lpinv_failures", failures);
