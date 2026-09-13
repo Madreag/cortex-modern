@@ -330,6 +330,7 @@ class Session:
         self.created_at = created_at
         self.last_beat = created_at
         self.state = "lobby"
+        self.listed = True
         self.queues: dict[str, list[Signal]] = {}
         self.next_seq: dict[str, int] = {}
         self.queue_drain_at: dict[str, float] = {}
@@ -429,6 +430,7 @@ class SessionDirectory:
             "expires_in_s": as_json_int(self.expiry_s),
             "heartbeat_s": as_json_int(self.heartbeat_s),
             "observed_ip": observed_ip,
+            "supports_unlisted": True,
         }
 
     def heartbeat(
@@ -445,6 +447,12 @@ class SessionDirectory:
             state = require_str(data, "state")
             if state not in VALID_STATES:
                 raise FieldError("invalid_field", "state")
+        listed: Optional[bool] = None
+        if "listed" in data:
+            value = data["listed"]
+            if not isinstance(value, bool):
+                raise FieldError("invalid_field", "listed")
+            listed = value
         with self._lock:
             sess = self._get(session_id, now)
             if sess is None:
@@ -457,10 +465,14 @@ class SessionDirectory:
                 sess.fields["listen_addrs"] = listen_addrs
             if state is not None:
                 sess.state = state
+            if listed is not None:
+                sess.listed = listed
             sess.last_beat = now
+            listed_now = sess.listed
         return {
             "expires_in_s": as_json_int(self.expiry_s),
             "heartbeat_s": as_json_int(self.heartbeat_s),
+            "listed": listed_now,
         }
 
     def delete(self, session_id: str, data: dict[str, Any], now: float) -> dict[str, Any]:
@@ -491,6 +503,8 @@ class SessionDirectory:
             self.prune(now)
             matched: list[Session] = []
             for sess in self._sessions.values():
+                if not sess.listed:
+                    continue
                 if mode is not None and sess.fields["mode"] != mode:
                     continue
                 if activity is not None and sess.fields["activity"] != activity:
