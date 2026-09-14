@@ -108,7 +108,7 @@ namespace RTE {
 	}
 
 	void NetMatchService::CaptureMatchSummaryLocked(const std::string& result) {
-		if (m_State != NetMatchServiceState::Running || m_LastMatchSummary) return;
+		if (m_State != NetMatchServiceState::Running || m_LastMatchSummary || m_CurrentMatchSummary.identityLine.empty()) return;
 		UpdateSummarySeatsLocked();
 		m_CurrentMatchSummary.result = result.empty() ? "Match complete" : result;
 		const auto* activity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
