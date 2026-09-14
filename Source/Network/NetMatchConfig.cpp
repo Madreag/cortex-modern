@@ -72,6 +72,26 @@ namespace RTE {
 			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)}};
 		}
 
+		std::vector<std::pair<std::string, std::string>> RuleFields(const NetMatchConfig& config) {
+			std::vector<std::pair<std::string, std::string>> fields = {
+				{"round_id", std::to_string(config.roundId)}, {"config_revision", std::to_string(config.configRevision)},
+				{"activity_module", config.activityModule}, {"scene_module", config.sceneModule},
+				{"difficulty", std::to_string(config.difficulty)}, {"starting_gold", std::to_string(config.startingGold)},
+				{"fog_of_war", BoolText(config.fogOfWar)}, {"require_clear_path_to_orbit", BoolText(config.requireClearPathToOrbit)},
+				{"deploy_units", BoolText(config.deployUnits)}, {"autosave_enabled", BoolText(config.autosaveEnabled)},
+				{"autosave_interval_seconds", std::to_string(config.autosaveIntervalSeconds)},
+				{"idle_wait_minutes", std::to_string(config.idleWaitMinutes)}, {"automatic_repair", BoolText(config.automaticRepair)},
+				{"delay_policy", std::to_string(static_cast<uint8_t>(config.delayPolicy))},
+			};
+			for (size_t i = 0; i < config.teamRules.size(); ++i) {
+				const std::string prefix = "team." + std::to_string(i) + ".";
+				fields.emplace_back(prefix + "technology_intent", config.teamRules[i].technologyIntent);
+				fields.emplace_back(prefix + "technology_module", config.teamRules[i].technologyModule);
+				fields.emplace_back(prefix + "ai_skill", std::to_string(config.teamRules[i].aiSkill));
+			}
+			return fields;
+		}
+
 		bool ValidateModule(const std::string& module, const char* field, std::string* error) {
 			if (!ValidateText(module, NetMatchConfigUtil::c_MaxPresetBytes, field, error)) return false;
 			if (module.size() <= 4 || !module.ends_with(".rte") || module.find_first_of("/\\:") != std::string::npos) {
@@ -150,7 +170,7 @@ namespace RTE {
 			return false;
 		}
 		auto refuse = [&](const char* reason) { if (error) *error = reason; return false; };
-		if (config.version == 2 && RulesJson(config) != RulesJson(NetMatchConfig{})) return refuse("legacy config cannot carry extended rules");
+		if (config.version == 2 && RuleFields(config) != RuleFields(NetMatchConfig{})) return refuse("legacy config cannot carry extended rules");
 		if (config.roundId == 0 || config.configRevision == 0) return refuse("round_id and config_revision must be nonzero");
 		if (config.difficulty > 100) return refuse("difficulty is out of range");
 		if (config.startingGold > 30000 && config.startingGold != c_InfiniteGold) return refuse("starting_gold is out of range");
@@ -288,7 +308,10 @@ namespace RTE {
 		if (config.dedicated) {
 			fields.emplace_back("dedicated", "true");
 		}
-		if (config.version >= 3) fields.emplace_back("rules", RulesJson(config).dump());
+		if (config.version >= 3) {
+			const auto rules = RuleFields(config);
+			fields.insert(fields.end(), rules.begin(), rules.end());
+		}
 		return NetIdentity::HashCanonicalText(config.version >= 3 ? "NetMatchConfig/v3" : "NetMatchConfig/v2", fields);
 	}
 
