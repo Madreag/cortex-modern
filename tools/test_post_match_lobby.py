@@ -30,6 +30,8 @@ from run_sim_test import make_run  # noqa: E402
 SCREEN = re.compile(r"^\[menu-script\] assert_screen expected=(\S+) actual=(\S+) (PASS|FAIL)$", re.M)
 SUBSTATE = re.compile(r"^\[menu-script\] assert_substate expected=(\S+) actual=(\S+) (PASS|FAIL)$", re.M)
 DUMP = re.compile(r"^\[menu-script\] dump_lobby state=(\S+) members=(\d+) error=\"([^\"]*)\" status=\"([^\"]*)\"", re.M)
+LABEL = re.compile(r"^\[menu-script\] assert_label (\S+) \"([^\"]*)\" text=\"([^\"]*)\" (PASS|FAIL)$", re.M)
+STATUS_LABEL = "LabelMultiplayerStatus"
 
 
 def set_resolution(runtime: Path, x: int, y: int) -> None:
@@ -63,6 +65,8 @@ def lobby_tail(name: str, settle_ms: int) -> str:
     return (f"wait_ms {settle_ms}\nwait 20\ndump_lobby\n"
             "assert_screen MultiplayerScreen\nassert_substate Lobby\n"
             "assert_control LabelLobbyPlayer0\n"
+            # The line the panel draws has to be the lobby's own status, not a pre-match hint.
+            f"assert_label {STATUS_LABEL} ready up for a rematch\n"
             f"dump_lobby\nscreenshot post_match_lobby_{name}\nwait 10\nexit\n")
 
 
@@ -74,7 +78,26 @@ def leave_tail(name: str, settle_ms: int, leaver: bool) -> str:
     # The waiter is not told to leave: it stays where the end of the other peer's lobby leaves it.
     return (f"wait_ms {settle_ms}\nwait 20\ndump_lobby\nassert_screen MultiplayerScreen\n"
             "wait 240\nassert_screen MultiplayerScreen\ndump_lobby\n"
+            f"assert_label {STATUS_LABEL} ready up for a rematch\n"
             f"screenshot post_match_waiter_{name}\nwait 10\nexit\n")
+
+
+def status_label_vs_dump(log: str):
+    """What the status label drew against the service status the peer dumped just before it.
+
+    The dump and the label read the same frame's state, so a difference is what the panel wrote
+    over the lobby's own line - the defect this arm is here for."""
+    pairs, status = [], None
+    for line in log.splitlines():
+        dump = DUMP.match(line)
+        if dump:
+            status = dump.group(4)
+            continue
+        label = LABEL.match(line)
+        if label and label.group(1) == STATUS_LABEL:
+            pairs.append({"dump_status": status, "label_text": label.group(3), "verdict": label.group(4),
+                          "equal": status is not None and label.group(3) == status})
+    return pairs
 
 
 def read_log(out: Path) -> str:
@@ -134,6 +157,8 @@ def run_arm(repo: Path, root: Path, port: int, ticks: int, timeout: int, settle_
               "substates": {who: SUBSTATE.findall(logs[who]) for who in scripts},
               "dumps": {who: DUMP.findall(logs[who]) for who in scripts},
               "dump_lines": {who: [l for l in logs[who].splitlines() if "dump_lobby" in l] for who in scripts},
+              "labels": {who: LABEL.findall(logs[who]) for who in scripts},
+              "status_label": {who: status_label_vs_dump(logs[who]) for who in scripts},
               "failures": {who: [l for l in logs[who].splitlines() if "[menu-script] FAILED" in l]
                            for who in scripts},
               "launched": {who: "[menu-mp] launching the match" in logs[who] for who in scripts},
@@ -177,6 +202,12 @@ def main() -> int:
                 screens = detail["screens"][who]
                 result["checks"][f"{arm}_{who}_on_multiplayer_screen"] = bool(screens) and \
                     ("MultiplayerScreen", "MultiplayerScreen", "PASS") in screens
+                # The status line the panel drew is the one the service published that frame. The
+                # leave arm's guest walks out to the main screen, so only it has no line to assert.
+                pairs = detail["status_label"][who]
+                expects_label = not (arm == "leave" and who == "Guest")
+                result["checks"][f"{arm}_{who}_status_label_is_the_lobby_line"] = \
+                    bool(pairs) == expects_label and all(pair["equal"] for pair in pairs)
             if arm == "lobby":
                 for who in ("Host", "Guest"):
                     result["checks"][f"lobby_{who}_lobby_panel"] = \
