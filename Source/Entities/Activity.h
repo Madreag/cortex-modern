@@ -711,6 +711,7 @@ namespace RTE {
 
 		Actor* m_Brain[Players::MaxPlayerCount]; //!< The Brain of each player. Not owned!
 		bool m_HadBrain[Players::MaxPlayerCount]; //!< Whether each player has yet had a Brain. If not, then their Activity doesn't end if no brain is found.
+		bool m_BrainRecordReconciled; //!< Whether the brain record's fallback has already reported guessing a seat this machine does not hold.
 		bool m_BrainEvacuated[Players::MaxPlayerCount]; //!< Whether a player has evacuated his Brain into orbit.
 
 		Actor* m_ControlledActor[Players::MaxPlayerCount]; //!< Currently controlled actor, not owned.
