@@ -214,6 +214,7 @@ namespace RTE {
 			uint8_t senderPeerId = 0;
 		};
 		/// Exports a presentation event; the renderer resolves its optional sender into a display name.
+		/// Lives outside every serialized, hashed or saved structure; never read by the sim.
 		static void PushNetUiToast(const std::string& kind, const std::string& text, uint8_t senderPeerId = 0);
 		/// Drops the on-screen queue (a resync relaunch clears it); the report log is kept.
 		static void ClearNetUiToasts();
