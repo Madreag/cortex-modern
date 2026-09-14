@@ -216,6 +216,7 @@ void lj_preview_write(lua_State *L, GCtab *t)
   uint32_t index = t->preview & LJ_PREVIEW_INDEX;
   double started;
   if (!(t->preview & LJ_PREVIEW_PENDING) || !p || !p->active) return;
+  if (!index || index > p->ntables) return;  /* A stale word addresses no entry. */
   started = p->timed ? preview_clock() : 0.0;
   e = &p->tables[index-1];
   lj_assertL(e->table == t && !e->captured, "bad preview table");
@@ -262,8 +263,9 @@ void lj_preview_write(lua_State *L, GCtab *t)
 GCtab *lj_preview_saved(global_State *g, GCtab *t)
 {
   LJPreview *p = g->preview;
-  if (p && p->active && t->preview) {
-    LJPreviewTable *e = &p->tables[(t->preview & LJ_PREVIEW_INDEX)-1];
+  uint32_t index = t->preview & LJ_PREVIEW_INDEX;
+  if (p && p->active && index && index <= p->ntables) {
+    LJPreviewTable *e = &p->tables[index-1];
     if (e->captured) return &e->saved;
   }
   return NULL;
@@ -293,7 +295,11 @@ int lj_preview_weak(global_State *g, GCtab *t)
 
 void lj_preview_forget(global_State *g, GCtab *t)
 {
-  LJPreviewTable *e = &g->preview->tables[(t->preview & LJ_PREVIEW_INDEX)-1];
+  LJPreview *p = g->preview;
+  uint32_t index = t->preview & LJ_PREVIEW_INDEX;
+  LJPreviewTable *e;
+  if (!p || !index || index > p->ntables) return;  /* A stale word addresses no entry. */
+  e = &p->tables[index-1];
   if (e->captured) {
     if (e->saved.asize)
       g->allocf(g->allocd, tvref(e->saved.array), e->saved.asize*sizeof(TValue), 0);
@@ -366,6 +372,33 @@ LUA_API int luaJIT_preview_stats(lua_State *L, luaJIT_PreviewStats *stats)
   if (!p || !p->timed || !p->stats.windows) return 0;
   *stats = p->stats;
   return 1;
+}
+
+/* Fault injection: a freed window and a corrupted index must both leave the barrier untouched. */
+LUA_API int luaJIT_preview_faultcheck(lua_State *L)
+{
+  global_State *g = G(L);
+  LJPreview *p = g->preview;
+  uint32_t stale = LJ_PREVIEW_PENDING | (uint32_t)(p ? p->ntables+1 : 1);
+  uint32_t lastwrite = p ? p->lastwrite : 0;
+  size_t savedbytes = p ? p->savedbytes : 0;
+  GCtab *t;
+  int ok;
+  lua_createtable(L, 0, 0);
+  t = tabV(L->top-1);
+  g->preview = NULL;  /* The state lj_preview_free leaves behind. */
+  t->preview = LJ_PREVIEW_PENDING | 1;
+  lj_preview_write(L, t);
+  lj_preview_forget(g, t);
+  g->preview = p;
+  t->preview = stale;
+  lj_preview_write(L, t);
+  lj_preview_forget(g, t);
+  ok = t->preview == stale &&
+       (!p || (p->lastwrite == lastwrite && p->savedbytes == savedbytes));
+  t->preview = 0;
+  lua_pop(L, 1);
+  return ok;
 }
 
 void lj_preview_free(global_State *g)
