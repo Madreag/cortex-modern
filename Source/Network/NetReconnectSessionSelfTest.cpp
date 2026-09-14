@@ -1439,7 +1439,7 @@ namespace RTE {
 					            " without_ledger=" + std::to_string(wire.host.GetStats().reseatsWithoutALedger));
 				}
 			}
-			std::cout << "[net-reconnect-session-selftest] ended credentials cases=2 census_after_end=0 reseats=0" << std::endl;
+			std::cout << "[net-reconnect-session-selftest] MEASURE ended credentials cases=2 census_after_end=0 reseats=0" << std::endl;
 			return 0;
 		}
 
