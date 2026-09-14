@@ -59,6 +59,8 @@ namespace RTE {
 		GUILabel* m_NetStatus = nullptr;
 		std::array<GUILabel*, 3> m_Toasts{};
 		double m_MatchPaceTps = 0.0;
+		uint16_t m_MatchDelayFrames = 0;
+		uint16_t m_BaseDelayFrames = 0;
 		GUICollectionBox* m_Panel = nullptr;
 		GUIFont* m_LabelFont = nullptr;
 		GUILabel* m_Title = nullptr;

@@ -276,6 +276,8 @@ namespace RTE {
 		std::string GetInputDelayText() const;
 		/// The live host RTT on a client, or the largest connected peer RTT on the host.
 		std::optional<uint32_t> GetMatchPingMs() const;
+		/// Whether the current match is being restored from the host snapshot.
+		bool IsMatchResyncing() const;
 		/// The current seat holder's display name for presentation events.
 		std::string GetPeerDisplayName(uint8_t peerId) const;
 		std::string GetStatusText() const;

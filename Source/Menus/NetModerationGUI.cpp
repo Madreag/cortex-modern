@@ -253,12 +253,15 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	m_NetStatusBox->SetVisible(true);
 	m_NetStatus->SetFont(font);
 	m_NetStatus->Resize(width - 12, height - 12);
-	const uint16_t delay = ScenarioRunner::GetLockstepLocalInputDelay();
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		m_MatchDelayFrames = ScenarioRunner::GetLockstepLocalInputDelay();
+		m_BaseDelayFrames = ScenarioRunner::GetLockstepInputDelayFrames();
+	}
 	char metrics[128];
-	std::snprintf(metrics, sizeof(metrics), "D %u ticks / %.1f ms", static_cast<unsigned>(delay), static_cast<double>(delay) * 1000.0 / 60.0);
+	std::snprintf(metrics, sizeof(metrics), "D %u ticks / %.1f ms", static_cast<unsigned>(m_MatchDelayFrames), static_cast<double>(m_MatchDelayFrames) * 1000.0 / 60.0);
 	std::string text = std::string("NET STATUS  /  SEATS [F6]\n") + metrics;
-	if (delay != ScenarioRunner::GetLockstepInputDelayFrames()) {
-		text += " (base " + std::to_string(ScenarioRunner::GetLockstepInputDelayFrames()) + ")";
+	if (m_MatchDelayFrames != m_BaseDelayFrames) {
+		text += " (base " + std::to_string(m_BaseDelayFrames) + ")";
 	}
 	const auto ping = g_NetMatchService.GetMatchPingMs();
 	text += "\nRTT " + (ping ? std::to_string(*ping) : "--") + " ms / " + (snapshot.isHost ? "max peer" : "host link");
@@ -267,7 +270,10 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	std::string holdName;
 	uint32_t holdSeconds = 0;
 	bool waiting = false;
-	if (ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds)) {
+	if (g_NetMatchService.IsMatchResyncing()) {
+		text += "\nRESYNCING MATCH";
+		waiting = true;
+	} else if (ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds)) {
 		const int room = width - 12 - font->CalculateWidth("Waiting for  to reconnect");
 		text += "\nWaiting for " + FitLine(font, holdName.empty() ? "a player" : holdName, room) + " to reconnect\n" + std::to_string(holdSeconds) + " s left";
 		waiting = true;
@@ -289,7 +295,15 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 }
 
 void NetModerationGUI::DrawMatchToasts() {
-	if (!ScenarioRunner::IsLockstepControllerSyncActive()) return;
+	if (!ScenarioRunner::IsLockstepControllerSyncActive() && !g_NetMatchService.IsMatchResyncing()) {
+		for (GUILabel* label: m_Toasts) {
+			if (label) {
+				label->SetVisible(false);
+				label->SetText("");
+			}
+		}
+		return;
+	}
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	CreateOverlay();
@@ -326,11 +340,12 @@ void NetModerationGUI::Draw() {
 	if (snapshot.serviceState != "Running" && snapshot.serviceState != "Starting" && snapshot.serviceState != "ReadyToLaunch" && !m_Open) return;
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
-	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+	if (ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.IsMatchResyncing()) {
 		DrawMatchStatus(snapshot);
 		m_NetStatus->SetVisible(true);
+	} else {
+		DrawRoster(snapshot);
 	}
-	else DrawRoster(snapshot);
 	if (m_Open) {
 		m_Controls->Draw();
 		m_Controls->DrawMouse();
