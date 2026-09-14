@@ -6,8 +6,9 @@ FinishMatch path. Everything after that is the real match-end routing:
 
   * lobby arm: each peer dumps its service state where the match end leaves it, then asserts
     MultiplayerScreen with the Lobby panel up and a roster row, and saves a screenshot at
-    640x360. Without the routing the peer is put on the planet screen, nothing pumps its
-    service, and the assert reports the screen it was actually left on beside "state=Completed".
+    640x360. Without the routing the peer is left on the main menu (the script runs only while
+    MainMenuActive), nothing pumps its service, and the assert reports the screen it was actually
+    left on beside "state=Completed".
   * leave arm: both peers reach the rematch lobby, then one presses Back (post_command
     ButtonBackToMain, the real back path: destroy + directory DELETE). The peer that waited
     asserts the screen and the status line it is left on.
