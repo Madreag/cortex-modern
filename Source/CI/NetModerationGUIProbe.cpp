@@ -11,6 +11,7 @@
 #include "NetModerationGUI.h"
 #include "System.h"
 #include "TimerMan.h"
+#include "UInputMan.h"
 #include "WindowMan.h"
 
 #include <SDL3/SDL.h>
@@ -27,15 +28,23 @@ namespace RTE::NetModerationGUIProbe {
 namespace {
 	using Json = nlohmann::json;
 	using Clock = std::chrono::steady_clock;
+	enum class Phase {
+		Poll,
+		Draw,
+		Sim
+	};
 	struct Probe {
 		bool loaded = false, enabled = false, done = false, resultStarted = false;
 		size_t index = 0;
-		uint64_t renders = 0, stepRender = 0, stepMs = 0;
+		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0;
 		Clock::time_point started;
 		std::filesystem::path directory;
 		Json script, result;
 	};
 	Probe probe;
+
+	/// P is read inside the sim tick (KeyPressedSim); F6 and Escape are menu keys read per render frame.
+	bool SimRateKey(const std::string& key) { return key == "P"; }
 
 	void Require(bool condition, const std::string& reason) {
 		if (!condition) throw std::runtime_error(reason);
@@ -89,6 +98,15 @@ namespace {
 		Require(!probe.script["steps"].empty() && probe.script["steps"].size() <= 256, "invalid script length");
 		const auto timeout = probe.script.at("timeout_ms").get<uint64_t>();
 		Require(timeout > 0 && timeout <= 180000, "invalid script deadline");
+		for (const auto& step: probe.script["steps"]) {
+			const std::string op = step.value("op", "");
+			if (op != "key_down" && op != "key_up") continue;
+			if (SimRateKey(step.value("key", ""))) {
+				Require(step.contains("sim_at") && step["sim_at"].is_number_unsigned(), "sim-rate probe key needs an integer sim_at");
+			} else {
+				Require(!step.contains("sim_at"), "sim_at is only for sim-rate probe keys");
+			}
+		}
 		probe.result["script"] = probe.script;
 		WriteResult();
 	}
@@ -119,10 +137,15 @@ namespace {
 		Require(SDL_PushEvent(&event), std::string("SDL_PushEvent: ") + SDL_GetError());
 	}
 
-	bool Step(const Json& step, bool drawn, Json& observed) {
+	Phase StepPhase(const Json& step) {
 		const std::string op = step.at("op");
-		const bool drawingStep = op == "assert" || op == "assert_control" || op == "screenshot" || op == "finish";
-		if (drawingStep != drawn) return false;
+		if (op == "assert" || op == "assert_control" || op == "screenshot" || op == "finish") return Phase::Draw;
+		if ((op == "key_down" || op == "key_up") && SimRateKey(step.value("key", ""))) return Phase::Sim;
+		return Phase::Poll;
+	}
+
+	bool Step(const Json& step, Json& observed) {
+		const std::string op = step.at("op");
 		if (op == "wait") {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("renders") ||
 			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control"), "wait has no predicate");
@@ -140,6 +163,14 @@ namespace {
 		} else if (op == "key_down" || op == "key_up") {
 			const std::string key = step.at("key");
 			Require(key == "F6" || key == "Escape" || key == "P", "unsupported probe key");
+			if (SimRateKey(key)) {
+				Require(step.contains("sim_at") && step["sim_at"].is_number_unsigned(), "sim-rate probe key needs an integer sim_at");
+				const uint64_t simAt = step["sim_at"].get<uint64_t>();
+				if (probe.simTick < simAt) return false;
+				Require(probe.simTick == simAt, "sim-rate probe key missed sim update " + std::to_string(simAt) + ", the sim is at " + std::to_string(probe.simTick));
+				g_UInputMan.SetProbeKeySim(SDLK_P, op == "key_down");
+				return true;
+			}
 			SDL_Event event{};
 			event.type = op == "key_down" ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
 			event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
@@ -213,17 +244,21 @@ namespace {
 		return true;
 	}
 
-	void Process(bool drawn) {
+	void Process(Phase phase) {
 		try {
-			if (!probe.loaded) Load();
+			if (!probe.loaded) {
+				if (phase == Phase::Sim) return;
+				Load();
+			}
 			if (!probe.enabled || probe.done) return;
-			if (drawn) ++probe.renders;
+			if (phase == Phase::Draw) ++probe.renders;
 			Require(NowMs() <= probe.script.at("timeout_ms").get<uint64_t>(), "script deadline at step " + std::to_string(probe.index));
 			Require(probe.index < probe.script["steps"].size(), "script did not finish explicitly");
 			const auto& step = probe.script["steps"][probe.index];
+			if (StepPhase(step) != phase) return;
 			Json observed = Observe();
 			try {
-				if (!Step(step, drawn, observed)) return;
+				if (!Step(step, observed)) return;
 			} catch (...) {
 				probe.result["failed_observation"] = observed;
 				throw;
@@ -246,6 +281,12 @@ namespace {
 	}
 }
 
-void BeforePoll() { Process(false); }
-void AfterDraw() { Process(true); }
+void BeforePoll() { Process(Phase::Poll); }
+void AfterDraw() { Process(Phase::Draw); }
+
+void OnSimTick(uint64_t simUpdateCount) {
+	if (!probe.enabled || probe.done) return;
+	probe.simTick = simUpdateCount;
+	Process(Phase::Sim);
+}
 }

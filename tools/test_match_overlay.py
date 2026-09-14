@@ -105,7 +105,7 @@ def probe_script(who, width, event):
     if event:
         steps += [{"op": "wait", "sim_at_least": 240}]
         if who == "Host":
-            steps += [{"op": "key_down", "key": "P"}, {"op": "key_up", "key": "P"}]
+            steps += [{"op": "key_down", "key": "P", "sim_at": 240}, {"op": "key_up", "key": "P", "sim_at": 241}]
         steps += [
             {"op": "wait", "sim_at_least": 270},
             label_assert(TOAST, PAUSED),
@@ -115,7 +115,7 @@ def probe_script(who, width, event):
             {"op": "wait", "sim_at_least": 480},
         ]
         if who == "Guest":
-            steps += [{"op": "key_down", "key": "P"}, {"op": "key_up", "key": "P"}]
+            steps += [{"op": "key_down", "key": "P", "sim_at": 480}, {"op": "key_up", "key": "P", "sim_at": 481}]
         steps += [{"op": "wait", "sim_at_least": 680}, label_assert(TOAST, RESUMED)]
     steps += [{"op": "wait", "sim_at_least": 880}, label_assert(STATUS, "LIVE"),
               {"op": "assert_control", "control": TOAST, "equals": {"visible": False, "text": ""}},
