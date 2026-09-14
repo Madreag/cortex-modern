@@ -23,10 +23,25 @@ function Assert-Released {
     }
 }
 
+# A compiling lane is named by its driver MSBuild's solution; cl and link only ever quote a response file.
+function Get-ForeignBuildRoots {
+    $mine = [System.IO.Path]::GetFullPath($repo).TrimEnd('\')
+    $roots = @()
+    foreach ($line in (Get-CimInstance Win32_Process -Filter "Name = 'MSBuild.exe'" | ForEach-Object { $_.CommandLine })) {
+        foreach ($match in [regex]::Matches([string]$line, '[A-Za-z]:[\\/][^"]*?RTEA\.sln', 'IgnoreCase')) {
+            $root = [System.IO.Path]::GetFullPath((Split-Path -Path $match.Value.Replace('/', '\') -Parent)).TrimEnd('\')
+            if ($root -ne $mine) { $roots += $root }
+        }
+    }
+    return ($roots | Sort-Object -Unique)
+}
+
 function Build-Engine([string]$label) {
     Assert-Released
-    while (Get-Process -Name cl, link -ErrorAction SilentlyContinue) {
-        Start-Sleep -Seconds 5
+    # At most two engine builds run on this machine at once.
+    for ($waited = 0; @(Get-ForeignBuildRoots).Count -ge 2; $waited += 60) {
+        if ($waited -ge 10800) { throw 'Two other worktrees have been compiling for three hours.' }
+        Start-Sleep -Seconds 60
         Assert-Released
     }
     $live = Get-CimInstance Win32_Process -Filter "Name = 'Cortex Command.exe'"
