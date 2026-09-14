@@ -3448,6 +3448,80 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			check("relaunch_fixture_restores_world_and_flag", allRemoved && !stillInWorld && drained.actors == queues.actors && drained.items == queues.items && drained.particles == queues.particles &&
 				g_ActivityMan.LockstepRelaunchInProgress() == restore.relaunching && !g_MovableMan.IsRestoringSnapshot());
 		}
+		{
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			struct SceneRestore {
+				MovableMan::WorldSetAside world;
+				SceneMan::SceneSetAside scene;
+				SceneRestore() {
+					if (!g_MovableMan.SetAsideWorld(world, false)) throw std::runtime_error("slot scene world hold failed");
+					g_SceneMan.SetAsideScene(scene);
+				}
+				~SceneRestore() {
+					g_MovableMan.PurgeAllMOs();
+					g_SceneMan.ReinstateScene(scene);
+					g_MovableMan.ReinstateWorld(world);
+				}
+			} sceneRestore;
+			if (g_SceneMan.LoadScene("Null Scene", false, false) < 0) throw std::runtime_error("slot fixture scene failed");
+			using Slots = std::array<long, 4>;
+			using Actors = std::array<Actor*, 4>;
+			std::array<Actors, Players::MaxPlayerCount> host{}, local{};
+			for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+				fixture->m_PlayerController[player].Create(Controller::CIM_PLAYER, player);
+				for (auto* group: {&host, &local}) for (Actor*& actor: (*group)[player]) {
+					actor = new Actor();
+					if (actor->MovableObject::Create(1.0F) < 0) throw std::runtime_error("slot actor creation failed");
+					actor->SetTeam(TeamOne);
+					actor->SetPinStrength(1000.0F);
+					g_MovableMan.AddActor(actor);
+				}
+			}
+			const auto uid = [](const Actor* actor) { return actor ? actor->GetUniqueID() : 0L; };
+			const auto slots = [&](int player) { return Slots{uid(fixture->m_Brain[player]), uid(fixture->m_ControlledActor[player]), uid(fixture->m_PlayerController[player].GetControlledActor()), uid(fixture->m_pLastMarkedActor[player])}; };
+			const auto print = [](const Slots& value) { return std::to_string(value[0]) + "/" + std::to_string(value[1]) + "/" + std::to_string(value[2]) + "/" + std::to_string(value[3]); };
+			const auto seat = [&](const auto& groups) {
+				fixture->m_PlayerCount = Players::MaxPlayerCount;
+				for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+					fixture->m_IsActive[player] = fixture->m_IsHuman[player] = true;
+					fixture->m_Team[player] = TeamOne;
+					fixture->m_PlayerScreen[player] = player;
+					fixture->m_Brain[player] = groups[player][0];
+					fixture->m_ControlledActor[player] = groups[player][1];
+					fixture->m_PlayerController[player].SetControlledActor(groups[player][2]);
+					fixture->m_pLastMarkedActor[player] = groups[player][3];
+				}
+			};
+			if (!restore.relaunching) g_ActivityMan.NoteLockstepRelaunch();
+			seat(local);
+			NetLocalPlayerState retained;
+			if (!fixture->CaptureNetLocalPlayerState(retained)) throw std::runtime_error("all player capture failed");
+			for (const std::string arm: {"retained", "fresh", "empty"}) {
+				seat(host);
+				fixture->ClearCheckpointActorIDs();
+				if (!fixture->LoadCheckpoint(fixture->SaveCheckpoint())) throw std::runtime_error("all player host staging failed");
+				const bool applied = arm == "retained" ? fixture->RestoreNetLocalPlayerState(retained) : fixture->ApplyNetPlayerBindings(arm == "fresh" ? retained.bindings : NetGamePlayerBindings{});
+				std::array<std::array<Slots, Players::MaxPlayerCount>, 3> observations{};
+				for (int pass = 0; pass < 3; ++pass) {
+					if (pass) fixture->RebindNonOwnedActorSlots();
+					for (int player = 0; player < Players::MaxPlayerCount; ++player) observations[pass][player] = slots(player);
+				}
+				for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+					const Slots expected = arm == "empty" ? Slots{} : Slots{uid(local[player][0]), uid(local[player][1]), arm == "retained" ? uid(local[player][2]) : 0, arm == "retained" ? uid(local[player][3]) : 0};
+					const Slots hostIDs{uid(host[player][0]), uid(host[player][1]), uid(host[player][2]), uid(host[player][3])};
+					const Slots pending{fixture->m_CheckpointActorIDs[player][0], fixture->m_CheckpointActorIDs[player][1], fixture->m_CheckpointActorIDs[player][2], fixture->m_CheckpointMarkedActorIDs[player]};
+					const bool active = fixture->m_IsActive[player] && fixture->m_IsHuman[player] && fixture->m_PlayerScreen[player] == player;
+					const bool empty = !fixture->m_IsActive[player] && fixture->m_PlayerScreen[player] == -1;
+					std::cout << "[net-local-all-players] arm=" << arm << " player=" << player << " applied=" << applied << " active=" << active << " empty=" << empty << " host=" << print(hostIDs) << " expected=" << print(expected) << " pending=" << print(pending)
+					          << " before=" << print(observations[0][player]) << " first=" << print(observations[1][player]) << " second=" << print(observations[2][player]) << std::endl;
+					check(("all_players_" + arm + "_" + std::to_string(player)).c_str(), applied && (arm == "empty" ? empty : active) && g_ActivityMan.LockstepRelaunchInProgress() && observations[0][player] == expected && observations[1][player] == expected && observations[2][player] == expected);
+				}
+			}
+			fixture->ClearCheckpointActorIDs();
+			if (!restore.relaunching) g_ActivityMan.EndLockstepRelaunch();
+		}
 	} catch (const std::exception& exception) { check(exception.what(), false); }
 	for (long uid: scriptIdentities) lua.RunScriptString("if _ScriptedObjects then _ScriptedObjects[\"" + std::to_string(uid) + "\"] = nil end");
 	lua.RunScriptString(clear);
