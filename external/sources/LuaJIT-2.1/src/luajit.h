@@ -72,6 +72,7 @@ typedef struct luaJIT_PreviewStats {
   double capture_ms, write_ms, restore_ms, max_ms;
 } luaJIT_PreviewStats;
 LUA_API int luaJIT_preview_stats(lua_State *L, luaJIT_PreviewStats *stats);
+LUA_API int luaJIT_preview_faultcheck(lua_State *L);
 
 /* Low-overhead profiling API. */
 typedef void (*luaJIT_profile_callback)(void *data, lua_State *L,

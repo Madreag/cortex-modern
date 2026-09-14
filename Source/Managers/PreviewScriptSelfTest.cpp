@@ -197,6 +197,7 @@ end
 				lua_setmetatable(L, -2);
 				lua_settop(L, top);
 				check("preview_barrier_native_semantics", index, round, state->RunScriptString("assert(_PreviewBarrierProbe.capi[1] == 92 and _PreviewBarrierProbe.capi.x == 93 and _PreviewBarrierProbe.capi.added == 94)", false));
+				check("preview_barrier_fault_injection", index, round, luaJIT_preview_faultcheck(L) ? 0 : -1);
 				check("preview_barrier_weak_semantics", index, round, state->RunScriptString("_PreviewBarrierProbe.collected()", false));
 				const int error = state->RunScriptString("_ScriptFieldsStash['preview:-7654321'] = nil; _PreviewBarrierProbe.data.x = 97; error('preview barrier error arm')", false);
 				check("preview_barrier_error_caught", index, round, error < 0 ? 0 : -1);
