@@ -1,7 +1,7 @@
 """Detect the match status widget, toast lifetime, captures and simulation invariance.
 
-Two menu-launched peers run at each viewport. Quiet capture-on/off pairs compare
-complete traces; a separate pair presses the real synced pause key and resumes.
+Two menu-launched peers run at each viewport. Quiet and paused capture-on/off
+pairs compare complete traces. Host presses P to pause; Guest presses P to resume.
 The unchanged network UI probe reads the drawn labels and their rectangles.
 """
 
@@ -22,7 +22,7 @@ BOX_WIDTH, BOX_HEIGHT, BOX_TOP, BOX_MARGIN = 252, 76, 32, 8
 STATUS = "LabelNetMatchStatus"
 TOAST = "LabelNetMatchToastNewest"
 PAUSED = "Match paused by Host"
-RESUMED = "Match resumed by Host"
+RESUMED = "Match resumed by Guest"
 CAPTURE = re.compile(r"^\[net-match-screenshot\] applied_tick=(\d+) name=(\S+) queued=([01])$")
 PAUSE_EVENT = re.compile(r"^\[net-match\] match paused at tick (\d+) sim ms \d+$")
 RESUME_EVENT = re.compile(r"^\[net-match\] match resumed at tick (\d+) sim ms \d+$")
@@ -114,7 +114,7 @@ def probe_script(who, width, event):
             {"op": "assert_control", "control": TOAST, "equals": {"visible": False, "text": ""}},
             {"op": "wait", "sim_at_least": 480},
         ]
-        if who == "Host":
+        if who == "Guest":
             steps += [{"op": "key_down", "key": "P"}, {"op": "key_up", "key": "P"}]
         steps += [{"op": "wait", "sim_at_least": 680}, label_assert(TOAST, RESUMED)]
     steps += [{"op": "wait", "sim_at_least": 880}, label_assert(STATUS, "LIVE"),
@@ -244,26 +244,42 @@ def inspect_pair(root, records, size, captures, event):
             paused_reads = [obs for obs in toast_reads if obs["control"].get("text") == PAUSED and obs["control"].get("visible")]
             resumed_reads = [obs for obs in toast_reads if obs["control"].get("text") == RESUMED and obs["control"].get("visible")]
             expired_reads = [obs for obs in toast_reads if obs["control"].get("text") == "" and not obs["control"].get("visible")]
+            presses = [(step["op"], obs["sim_frame"]) for step, obs in observations
+                       if step.get("key") == "P" and step["op"] in ("key_down", "key_up")]
+            checks[f"{who}_scripted_P_press"] = [op for op, _ in presses] == ["key_down", "key_up"]
             checks[f"{who}_pause_toast_within_30"] = len(pauses) == 1 and bool(paused_reads) and 0 <= paused_reads[0]["sim_frame"] - pauses[0] <= 30
             checks[f"{who}_pause_toast_gone_within_200"] = len(pauses) == 1 and bool(expired_reads) and 0 < expired_reads[0]["sim_frame"] - pauses[0] <= 200
             checks[f"{who}_resume_toast_within_30"] = len(resumes) == 1 and bool(resumed_reads) and 0 <= resumed_reads[0]["sim_frame"] - resumes[0] <= 30
             details["events"][who] = {"pause_ticks": pauses, "resume_ticks": resumes,
+                                      "scripted_P_ticks": presses,
                                       "toast_reads": toast_reads,
                                       "lines": [{"line": index, "text": line} for index, line in enumerate(log.splitlines(), 1)
                                                 if PAUSE_EVENT.match(line) or RESUME_EVENT.match(line)]}
     ok, compared = strict_compare(root / "Host_trace.json", root / "Guest_trace.json", expected_ticks=TICKS)
     checks["complete_peer_hashes"] = ok
+    if event:
+        checks["paused_ticks_covered"] = ok and compared["paused_ticks"] > 0
     details["peer_hashes"] = compared
     return {"pass": all(checks.values()), "checks": checks, "details": details}
 
 
-def compare_capture_switch(on, off, who):
+def compare_capture_switch(on, off, who, paused):
     first, second = on / f"{who}_trace.json", off / f"{who}_trace.json"
     ok, detail = strict_compare(first, second, expected_ticks=TICKS)
     if ok:
         a, b = read_json(first), read_json(second)
         detail["all_recorded_hashes_identical"] = a["runs"][0]["tick_hashes"] == b["runs"][0]["tick_hashes"]
         ok = detail["all_recorded_hashes_identical"]
+    if paused:
+        presses = []
+        for root in (on, off):
+            probe = read_json(root / f"{who}_inputs" / "net-ui-result.json")
+            presses.append([(step["op"], obs["sim_frame"]) for step, obs in probe_observations(probe)
+                            if step.get("key") == "P" and step["op"] in ("key_down", "key_up")])
+        detail["scripted_P_ticks"] = presses
+        detail["same_scripted_P_ticks"] = presses[0] == presses[1] and len(presses[0]) == 2
+        detail["paused_path_covered"] = detail["paused_ticks"] > 0
+        ok = ok and detail["same_scripted_P_ticks"] and detail["paused_path_covered"]
     return {"pass": ok, "detail": detail}
 
 
@@ -286,7 +302,7 @@ def main():
     os.environ["CCCP_HEADLESS"] = "1"
     root.mkdir(parents=True, exist_ok=False)
     result = {"pass": False, "checks": {}, "pairs": {}, "capture_switch": {},
-              "ticks_per_run": TICKS, "ports": list(range(48201, 48207)),
+              "ticks_per_run": TICKS, "ports": list(range(48201, 48209)),
               "driver_sha256": sha256(__file__),
               "peer_comparator_sha256": sha256(repo / "tools" / "compare_sim_traces.py"),
               "peer_hash_scope": "unchanged strict_compare: controller excluded; every other subsystem at every tick",
@@ -297,9 +313,10 @@ def main():
             raise RuntimeError("the requested executable hash does not match")
         for index, size in enumerate(((640, 360), (960, 540))):
             tag = f"{size[0]}x{size[1]}"
-            for arm, captures, event in (("on", True, False), ("off", False, False), ("pause", True, True)):
+            arms = (("on", True, False), ("off", False, False), ("pause_on", True, True), ("pause_off", False, True))
+            for arm_index, (arm, captures, event) in enumerate(arms):
                 name = f"{tag}_{arm}"
-                port = 48201 + index * 3 + (0 if arm == "on" else 1 if arm == "off" else 2)
+                port = 48201 + index * 4 + arm_index
                 pair_root = root / name
                 records = run_pair(repo, pair_root, port, size, captures, event, options.timeout, result["pin_before"])
                 pair = inspect_pair(pair_root, records, size, captures, event)
@@ -308,11 +325,12 @@ def main():
                 (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
                 if not pair["pass"]:
                     raise RuntimeError(f"{name}: " + ", ".join(key for key, passed in pair["checks"].items() if not passed))
-            for who in ("Host", "Guest"):
-                comparison = compare_capture_switch(root / f"{tag}_on", root / f"{tag}_off", who)
-                result["capture_switch"][f"{tag}_{who}"] = comparison
-                result["checks"][f"{tag}_{who}_capture_switch"] = comparison["pass"]
-        result["pass"] = all(result["checks"].values()) and len(result["checks"]) == 10
+            for prefix, paused in (("", False), ("pause_", True)):
+                for who in ("Host", "Guest"):
+                    comparison = compare_capture_switch(root / f"{tag}_{prefix}on", root / f"{tag}_{prefix}off", who, paused)
+                    result["capture_switch"][f"{tag}_{prefix}{who}"] = comparison
+                    result["checks"][f"{tag}_{prefix}{who}_capture_switch"] = comparison["pass"]
+        result["pass"] = all(result["checks"].values()) and len(result["checks"]) == 16
     except Exception as error:
         result["error"] = str(error)
     finally:
