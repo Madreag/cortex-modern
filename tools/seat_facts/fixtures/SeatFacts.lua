@@ -7,6 +7,8 @@ function SeatFacts:StartActivity(startNewGame)
             local brain = self:GetPlayerBrain(player);
             if brain then
                 brain:SetNumberValue("HumanSeat" .. player, 101 + player);
+                print("[seat-branch] player=" .. player .. " team=" .. self:GetTeamOfPlayer(player)
+                    .. " brain=" .. brain.UniqueID .. " mark=" .. (101 + player));
             end
         end
     end

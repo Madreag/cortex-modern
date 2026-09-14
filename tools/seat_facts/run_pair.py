@@ -27,7 +27,7 @@ def stamp():
 
 def score_seats(logs):
     rows = {peer: [tuple(map(int, row)) for row in ROW.findall(log)] for peer, log in logs.items()}
-    complete = all(len(values) == 4 and [row[0] for row in values] == list(range(4)) for values in rows.values())
+    complete = set(rows) == {"host", "client"} and all(len(values) == 4 and [row[0] for row in values] == list(range(4)) for values in rows.values())
     checks = {"four_seat_rows_per_peer": complete}
     if complete:
         checks["shared_seats_and_brains"] = [row[:-1] for row in rows["host"]] == [row[:-1] for row in rows["client"]]
