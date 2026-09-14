@@ -312,9 +312,9 @@ void GUISkin::BuildStandardRect(GUIBitmap* Dest, const std::string& Section, int
 	if (buildBG) {
 		// Use the filler first
 		SetRect(&Rect, VFiller[0], VFiller[1], VFiller[0] + VFiller[2], VFiller[1] + VFiller[3]);
-		// Tile the filler across
-		for (j = Y + VTop[3]; j < Y + Height - VBottom[3]; j += VFiller[3]) {
-			for (i = X + VLeft[2]; i < X + Width - VRight[2]; i += VFiller[2]) {
+		// Frame sources can carry color-key pixels on their inner edge, so the filler has to tile under them.
+		for (j = Y + VTop[3]; j < Y + Height; j += VFiller[3]) {
+			for (i = X + VLeft[2]; i < X + Width; i += VFiller[2]) {
 				SrcBitmap->DrawTrans(Dest, i, j, &Rect);
 			}
 		}

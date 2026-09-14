@@ -394,10 +394,11 @@ namespace RTE {
 			return;
 		}
 		if (reply.statusCode == 404) {
-			// The row is gone, so nothing about its visibility stays confirmed.
+			const bool hiddenRequest = m_InFlightListed.has_value() && !*m_InFlightListed;
+			m_InFlightListed.reset();
 			m_ConfirmedListed.reset();
 			m_Capable = false;
-			if (!m_DesiredListed) {
+			if (!m_DesiredListed || hiddenRequest) {
 				// Fails closed: the row id is kept so Retract/Shutdown can still delete it; a
 				// hidden intent never re-registers a new visible identity.
 				NoteError("heartbeat: hidden row gone (404); not re-registering a visible identity");

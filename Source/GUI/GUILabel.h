@@ -88,9 +88,18 @@ namespace RTE {
 		/// Gets the text of the label.
 		const std::string& GetText() const { return m_Text; }
 
+		/// Arms a per-glyph fallback font when the skin font's atlas has no ink for a byte in the current text; the named
+		/// font then draws only those bytes, so bytes the skin font covers keep their normal glyphs.
+		/// @param fontFile Font image filename in the skin directory.
+		void EnsureDrawableTextFont(const std::string& fontFile);
+
 		/// Shows how tall the current text is with the current width and font etc.
 		/// @return The text height, in pixels
 		int GetTextHeight();
+
+		/// Gets the pixel width of the longest space/newline-delimited token in the current text.
+		/// @return The widest word width, in pixels
+		int GetMaxWordWidth();
 
 		/// Sets the horizontal alignment of the text of this label.
 		/// @param HAlignment The desired alignment. (default: GUIFont::Left)
@@ -143,6 +152,8 @@ namespace RTE {
 		void ApplyProperties(GUIProperties* Props) override;
 
 	private:
+		GUIFont* m_SkinFont;
+		GUIFont* m_GlyphFallbackFont; // Supplies glyphs for bytes the skin font's atlas has no ink for
 		std::string m_Text;
 		int m_HAlignment;
 		int m_VAlignment;

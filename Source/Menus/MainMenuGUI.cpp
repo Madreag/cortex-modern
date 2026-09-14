@@ -102,6 +102,7 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerScreenBaselineY = 0;
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 	m_ReconnectStatusShown.clear();
+	m_PendingAutomationCommand.clear();
 	m_CreditsScrollPanel = nullptr;
 	m_MainMenuScreens.fill(nullptr);
 	m_MainMenuButtons.fill(nullptr);
@@ -181,6 +182,7 @@ void MainMenuGUI::CreateMainScreen() {
 void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MainMenuScreens[MenuScreen::MultiplayerScreen] = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerScreen"));
 	m_MainMenuScreens[MenuScreen::MultiplayerScreen]->CenterInParent(true, false);
+	m_MultiplayerScreenBaselineY = m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetRelYPos();
 
 	m_MultiplayerLandingPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerLandingPanel"));
 	m_MultiplayerHostPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerHostPanel"));
@@ -587,6 +589,7 @@ bool MainMenuGUI::HandleInputEvents() {
 		UpdateMainScreenHoveredButton(dynamic_cast<GUIButton*>(m_MainMenuScreenGUIControlManager->GetControlUnderPoint(mouseX, mouseY, m_MainMenuScreens[MenuScreen::MainScreen], 1)));
 	}
 	m_ActiveGUIControlManager->Update();
+	PostPendingAutomationCommand();
 
 	GUIEvent guiEvent;
 	while (m_ActiveGUIControlManager->GetEvent(&guiEvent)) {
@@ -863,8 +866,17 @@ void MainMenuGUI::ApplyToSubstitute() {
 	m_ReconnectStatusShown = m_MultiplayerLandingStatusLabel->GetText();
 }
 
-// The refusal sentence arrives as one line; on the landing label its groups read as a short list:
-// the prefix, Install on its own line, then Remove and Update sharing one, middle-dot separated.
+// The bitmap font draws the wire delimiter's UTF-8 bytes as icon glyphs, so the GUI shows "; ".
+static std::string GroupDelimiterForDisplay(const std::string& text) {
+	const std::string separator = " \xC2\xB7 ";
+	std::string display = text;
+	for (size_t at = display.find(separator); at != std::string::npos; at = display.find(separator, at + 2)) {
+		display.replace(at, separator.size(), "; ");
+	}
+	return display;
+}
+
+// The refusal sentence arrives as one line; the landing label shows its groups as a short list.
 static std::string FormatModuleMismatchStatus(const std::string& text) {
 	const std::string prefix = "This host's mods do not match yours.";
 	if (text.compare(0, prefix.size(), prefix) != 0) {
@@ -903,7 +915,7 @@ static std::string FormatModuleMismatchStatus(const std::string& text) {
 	if (!others.empty()) {
 		formatted += '\n';
 		for (size_t i = 0; i < others.size(); ++i) {
-			formatted += (i == 0 ? "" : separator) + others[i];
+			formatted += (i == 0 ? "" : "; ") + others[i];
 		}
 	}
 	return formatted;
@@ -931,7 +943,7 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
 	} else if (!inMatchOrLobby && (m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby || m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation)) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
-		m_MultiplayerLandingStatusLabel->SetText(FormatModuleMismatchStatus(snapshot.errorText));
+		m_MultiplayerLandingStatusLabel->SetText(GroupDelimiterForDisplay(FormatModuleMismatchStatus(snapshot.errorText)));
 	}
 
 	RefreshMultiplayerScreenControls(snapshot);
@@ -980,6 +992,43 @@ void MainMenuGUI::RefreshReconnectControls() {
 	}
 }
 
+void MainMenuGUI::FitMultiplayerPanelWidth(GUICollectionBox* panel, GUILabel* diagnosticLabel, int width) {
+	const int oldWidth = panel->GetWidth();
+	if (oldWidth == width) {
+		return;
+	}
+	// width/2 - oldWidth/2 telescopes; (width - oldWidth)/2 would drop half a pixel per parity step.
+	const int shift = width / 2 - oldWidth / 2;
+	for (GUIControl* control : *panel->GetChildren()) {
+		GUIPanel* child = control->GetPanel();
+		if (!child) {
+			continue;
+		}
+		if (child == diagnosticLabel) {
+			child->SetPositionRel(12, child->GetRelYPos());
+			control->Resize(width - 24, child->GetHeight());
+		} else {
+			child->SetPositionRel(child->GetRelXPos() + shift, child->GetRelYPos());
+		}
+	}
+	panel->Resize(width, panel->GetHeight());
+}
+
+void MainMenuGUI::FitMultiplayerScreen(int width, int height) {
+	GUICollectionBox* screen = m_MainMenuScreens[MenuScreen::MultiplayerScreen];
+	if (screen->GetWidth() != width || screen->GetHeight() != height) {
+		screen->Resize(width, height);
+	}
+	const int screenX = (m_RootBoxMaxWidth - width) / 2;
+	int screenY = m_MultiplayerScreenBaselineY;
+	if (screenY + height > g_WindowMan.GetResY()) {
+		screenY = std::max(0, (g_WindowMan.GetResY() - height) / 2);
+	}
+	if (screen->GetRelXPos() != screenX || screen->GetRelYPos() != screenY) {
+		screen->SetPositionRel(screenX, screenY);
+	}
+}
+
 void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot) {
 	const bool lobby = m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby;
 	m_MultiplayerLandingPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::Landing);
@@ -994,21 +1043,45 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		RefreshModerationControls(snapshot);
 	}
 	if (!lobby) {
-		GUICollectionBox* screen = m_MainMenuScreens[MenuScreen::MultiplayerScreen];
-		if (screen->GetHeight() != 250) {
-			screen->Resize(300, 250);
-		}
-		// The lobby may have slid the screen up to keep Back inside the viewport; put it back.
-		if (screen->GetRelYPos() != m_MultiplayerScreenBaselineY) {
-			screen->SetPositionRel(screen->GetRelXPos(), m_MultiplayerScreenBaselineY);
-		}
 		for (GUILabel* label : m_MultiplayerLobbyChatLabels) {
 			if (label) label->SetVisible(false);
 		}
 		if (m_MultiplayerLobbyChatInput) {
 			m_MultiplayerLobbyChatInput->SetVisible(false);
 		}
-		m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((300 - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, 250);
+		int contentWidth = 300;
+		int contentHeight = 250;
+		if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
+			// FontLarge's atlas has a few width-only blank cells (e.g. 0xDF); FontSmall's ink draws those bytes.
+			m_MultiplayerLandingStatusLabel->EnsureDrawableTextFont("FontSmall.png");
+			// The status wraps only on spaces; a token wider than the viewport scrolls through the label instead of growing the panel off-screen.
+			const int desiredWidth = std::max(300, m_MultiplayerLandingStatusLabel->GetMaxWordWidth() + 24);
+			contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
+			FitMultiplayerPanelWidth(m_MultiplayerLandingPanel, m_MultiplayerLandingStatusLabel, contentWidth);
+			// The status can outgrow its baseline box; it yields to whatever height the viewport leaves it.
+			const int labelRelY = m_MultiplayerLandingStatusLabel->GetRelYPos();
+			const int bottomPad = 250 - labelRelY - 68;
+			const int backReserve = m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
+			const int statusRoom = std::max(0, g_WindowMan.GetResY() - backReserve - labelRelY - bottomPad);
+			// An unbreakable token scrolls horizontally; otherwise a too-tall status scrolls vertically.
+			const bool scrollWide = desiredWidth > contentWidth;
+			m_MultiplayerLandingStatusLabel->SetHorizontalOverflowScroll(scrollWide);
+			const int statusHeight = std::max(10, std::min(std::max(68, m_MultiplayerLandingStatusLabel->GetTextHeight() + 4), statusRoom));
+			const bool scrollTall = !scrollWide && m_MultiplayerLandingStatusLabel->GetTextHeight() + 4 > statusRoom;
+			m_MultiplayerLandingStatusLabel->SetVerticalOverflowScroll(scrollTall);
+			m_MultiplayerLandingStatusLabel->ActivateDeactivateOverflowScroll(scrollWide || scrollTall);
+			if (m_MultiplayerLandingStatusLabel->GetHeight() != statusHeight) {
+				m_MultiplayerLandingStatusLabel->Resize(m_MultiplayerLandingStatusLabel->GetWidth(), statusHeight);
+			}
+			const int panelHeight = std::max(250, labelRelY + statusHeight + bottomPad);
+			if (m_MultiplayerLandingPanel->GetHeight() != panelHeight) {
+				m_MultiplayerLandingPanel->Resize(contentWidth, panelHeight);
+			}
+			contentHeight = panelHeight;
+		}
+		const int screenHeight = contentHeight + m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
+		FitMultiplayerScreen(contentWidth, screenHeight);
+		m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((contentWidth - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, contentHeight);
 		return;
 	}
 
@@ -1088,15 +1161,30 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MultiplayerLobbyPortMapLabel->SetVisible(!snapshot.portMap.empty());
 	m_MultiplayerLobbyPortMapLabel->SetPositionRel(12, 162 + statusExtra);
 	const int portMapHeight = snapshot.portMap.empty() ? 0 : 14;
-	m_MultiplayerErrorLabel->SetText(snapshot.errorText);
+	m_MultiplayerErrorLabel->SetText(GroupDelimiterForDisplay(snapshot.errorText));
+	m_MultiplayerErrorLabel->EnsureDrawableTextFont("FontSmall.png");
+	const int desiredWidth = std::max(300, m_MultiplayerErrorLabel->GetMaxWordWidth() + 24);
+	const int contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
+	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth);
 	m_MultiplayerErrorLabel->SetPositionRel(12, 162 + statusExtra + portMapHeight);
-	// The screen must stay inside the viewport. Error, status and port-map rows keep every pixel;
-	// the chat block is the one piece that yields - a row at a time - before any of them do.
+	// The screen must stay inside the viewport. Error, status and port-map rows keep every pixel
+	// their room allows (overflow scrolls); the chat block is the one piece that yields - a row at
+	// a time - before any of them do.
+	const int backReserve = m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
 	const int fixedExtra = statusExtra + portMapHeight;
 	const int panelCap = g_WindowMan.GetResY() - 24; // the Back button's band sits under the panel
 	const int inputBlock = 25;                     // textbox 13 px + a bottom margin matching its sides
-	const int errorHeight = std::min(std::max(24, m_MultiplayerErrorLabel->GetTextHeight() + 4),
-	                                 std::max(0, panelCap - 241 - fixedExtra - inputBlock));
+	// Same accessibility rule as the landing status: wide token scrolls horizontally, tall text
+	// vertically. The chat input row always stays, so the error's room never reaches into it.
+	const int errorRoom = std::min(
+	    std::max(24, g_WindowMan.GetResY() - backReserve - 250 + 24 - fixedExtra),
+	    std::max(0, panelCap - 241 - fixedExtra - inputBlock));
+	const bool scrollWide = desiredWidth > contentWidth;
+	m_MultiplayerErrorLabel->SetHorizontalOverflowScroll(scrollWide);
+	const int errorHeight = std::max(24, std::min(m_MultiplayerErrorLabel->GetTextHeight() + 4, errorRoom));
+	const bool scrollTall = !scrollWide && m_MultiplayerErrorLabel->GetTextHeight() + 4 > errorRoom;
+	m_MultiplayerErrorLabel->SetVerticalOverflowScroll(scrollTall);
+	m_MultiplayerErrorLabel->ActivateDeactivateOverflowScroll(scrollWide || scrollTall);
 	const int extraHeight = fixedExtra + errorHeight - 24;
 	if (m_MultiplayerErrorLabel->GetHeight() != errorHeight) {
 		m_MultiplayerErrorLabel->Resize(m_MultiplayerErrorLabel->GetWidth(), errorHeight);
@@ -1107,7 +1195,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	const int chatTop = 241 + extraHeight;
 	const int chatRows = std::min<int>(m_MultiplayerLobbyChatLabels.size(),
 	                                   std::max(0, (panelCap - chatTop - inputBlock) / 10));
-	const int panelHeight = chatTop + chatRows * 10 + inputBlock;
+	const int contentHeight = chatTop + chatRows * 10 + inputBlock;
 
 	// The newest chatRows lines, oldest on top; the entry box takes Enter for All, Ctrl+Enter for
 	// Team. Team lines indent two cells as well as carrying their [team] mark.
@@ -1139,31 +1227,32 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		if (!label) continue;
 		const bool drawn = row < static_cast<size_t>(chatRows) && row >= firstLineRow;
 		label->SetText(drawn ? m_MultiplayerLobbyChatLines[chatOffset + row - firstLineRow] : "");
-		// FontSmall's cells are 10px, so the rows pitch at the measured height, not the label's skin one.
+		// FontSmall's cells are 10px, so the rows pitch at the measured height, not the label's skin
+		// one. Chat follows the player rows' left edge (X=8) with an 8 px margin on each side.
 		label->SetPositionRel(8, chatTop + static_cast<int>(row) * 10);
+		if (label->GetWidth() != contentWidth - 16) {
+			label->Resize(contentWidth - 16, 10);
+		}
 		label->SetVisible(row < static_cast<size_t>(chatRows));
 	}
 	if (m_MultiplayerLobbyChatInput) {
 		m_MultiplayerLobbyChatInput->SetPositionRel(8, chatTop + chatRows * 10);
+		if (m_MultiplayerLobbyChatInput->GetWidth() != contentWidth - 16) {
+			m_MultiplayerLobbyChatInput->Resize(contentWidth - 16, 13);
+		}
 		m_MultiplayerLobbyChatInput->SetVisible(true);
 	}
 
-	if (m_MultiplayerLobbyPanel->GetHeight() != panelHeight) {
-		m_MultiplayerLobbyPanel->Resize(300, panelHeight);
+	if (m_MultiplayerLobbyPanel->GetHeight() != contentHeight) {
+		m_MultiplayerLobbyPanel->Resize(contentWidth, contentHeight);
 	}
-	GUICollectionBox* screen = m_MainMenuScreens[MenuScreen::MultiplayerScreen];
-	if (screen->GetHeight() != panelHeight + 24) {
-		screen->Resize(300, panelHeight + 24);
-	}
-	// Taller than the ini's spacing: the lobby slides up just enough that Back stays on the viewport.
-	const int screenY = std::max(0, std::min(m_MultiplayerScreenBaselineY, g_WindowMan.GetResY() - panelHeight - 24));
-	if (screen->GetRelYPos() != screenY) {
-		screen->SetPositionRel(screen->GetRelXPos(), screenY);
-	}
-	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55, 192 + extraHeight);
-	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55, 192 + extraHeight);
-	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(90, 220 + extraHeight);
-	m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((300 - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, panelHeight + 2);
+	const int screenHeight = contentHeight + backReserve;
+	FitMultiplayerScreen(contentWidth, screenHeight);
+	const int buttonShift = (contentWidth - 300) / 2;
+	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55 + buttonShift, 192 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55 + buttonShift, 192 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(90 + buttonShift, 220 + extraHeight);
+	m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((contentWidth - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, contentHeight);
 
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetEnabled(!snapshot.isHost && snapshot.inLobby);
@@ -1172,7 +1261,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
 	// §9b: moderation is a match feature - a lobby seat whose holder leaves goes straight back in the pool.
-	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(212, 220 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(212 + buttonShift, 220 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetVisible(snapshot.isHost);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetEnabled(snapshot.isHost && snapshot.running);
 }
@@ -1257,6 +1346,32 @@ bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
 		default: return false;
 	}
 	return true;
+}
+
+bool MainMenuGUI::AutomationPostCommand(const std::string& controlName) {
+	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
+	if (!control) {
+		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
+	}
+	if (!control || !IsControlClickable(control)) {
+		return false;
+	}
+	m_PendingAutomationCommand = controlName;
+	return true;
+}
+
+void MainMenuGUI::PostPendingAutomationCommand() {
+	if (m_PendingAutomationCommand.empty()) {
+		return;
+	}
+	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(m_PendingAutomationCommand);
+	if (!control) {
+		control = m_MainMenuScreenGUIControlManager->GetControl(m_PendingAutomationCommand);
+	}
+	m_PendingAutomationCommand.clear();
+	if (control) {
+		control->AddEvent(GUIEvent::Command, 0, 0);
+	}
 }
 
 bool MainMenuGUI::AutomationSetText(const std::string& controlName, const std::string& text) {

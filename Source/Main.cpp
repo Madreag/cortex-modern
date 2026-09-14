@@ -59,6 +59,7 @@
 #include "GameActivity.h"
 #include "MovableObject.h"
 #include "RTETools.h"
+#include "RotatePrimitiveSelfTest.h"
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
@@ -1434,6 +1435,12 @@ void ProcessMenuScript() {
 		const bool ok = menu->AutomationActivateControl(control);
 		std::cout << "[menu-script] activate " << control << " ok=" << ok << std::endl;
 		if (!ok) { return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control); }
+	} else if (cmd == "post_command") {
+		std::string control;
+		iss >> control;
+		const bool ok = menu->AutomationPostCommand(control);
+		std::cout << "[menu-script] post_command " << control << " ok=" << ok << std::endl;
+		if (!ok) { return MenuScriptFail("post_command failed (control missing, disabled, or hidden): " + control); }
 	} else if (cmd == "assert_control") {
 		std::string control;
 		iss >> control;
@@ -5214,6 +5221,9 @@ int RunNetPortMapProbe() {
 /// </summary>
 int main(int argc, char** argv) {
 	for (int i = 1; i < argc; ++i) {
+		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
+			return RotatePrimitiveSelfTest::Run();
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-controller-frame-selftest") {
 			return ControllerFrameSelfTest::Run();
 		}
