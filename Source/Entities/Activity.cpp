@@ -652,7 +652,13 @@ void Activity::SetPlayerBrain(Actor* newBrain, int player) {
 	m_Brain[player] = newBrain;
 }
 
-bool Activity::RunPlayerBrainRecordSelfTest(Actor* humanBrain, Actor* aiBrain) {
+bool Activity::RunPlayerBrainRecordSelfTest(Actor* humanBrain, Actor* aiBrain, bool* legacyReseeded, bool* lastDitchRecorded) {
+	if (legacyReseeded) {
+		*legacyReseeded = false;
+	}
+	if (lastDitchRecorded) {
+		*lastDitchRecorded = false;
+	}
 	if (!humanBrain || !aiBrain || humanBrain == aiBrain) {
 		return false;
 	}
@@ -678,6 +684,25 @@ bool Activity::RunPlayerBrainRecordSelfTest(Actor* humanBrain, Actor* aiBrain) {
 	SetPlayerBrain(humanBrain, human);
 	SetPlayerBrain(aiBrain, ai);
 	const bool recorded = g_MovableMan.IsPlayerBrain(humanBrain) && !g_MovableMan.IsPlayerBrain(aiBrain);
+	// A save from before the record must come back with this seat's brain, not with an empty record.
+	if (legacyReseeded) {
+		*legacyReseeded = g_MovableMan.RunLegacyBrainRecordSelfTest(humanBrain);
+	}
+	// The last-ditch placement must reach the record as well, not write the seat slot behind its back.
+	if (lastDitchRecorded) {
+		if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(this)) {
+			const bool grouped = humanBrain->IsInGroup("Brains");
+			if (!grouped) {
+				humanBrain->AddToGroup("Brains");
+			}
+			SetPlayerBrain(nullptr, human);
+			*lastDitchRecorded = gameActivity->PlaceUnassignedBrain(human) && g_MovableMan.IsPlayerBrain(m_Brain[human]);
+			if (!grouped) {
+				humanBrain->RemoveFromGroup("Brains");
+			}
+		}
+		SetPlayerBrain(humanBrain, human);
+	}
 	SetPlayerBrain(nullptr, human);
 	const bool dropped = !g_MovableMan.IsPlayerBrain(humanBrain) && !g_MovableMan.IsPlayerBrain(aiBrain);
 
