@@ -156,7 +156,8 @@ namespace RTE {
 	class NetLobbyProtocol {
 	public:
 		static constexpr uint32_t c_Magic = 0x344C4343U;
-		static constexpr uint16_t c_Version = 4;
+		// 5 widens the player_count range to c_MaxPlayers; older peers refuse a roster past their own.
+		static constexpr uint16_t c_Version = 5;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxShortTextBytes = 128;

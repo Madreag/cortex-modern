@@ -367,14 +367,29 @@ namespace RTE {
 				request.dedicated = true;
 				if (!NetMatchService::BuildMatchConfig(request, 123, config, error) || config.peerCount != 1 || config.players.size() != 2 ||
 				    !RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
+				// The widest roster the wire carries: four co-op humans beside the three CPU teams left.
 				NetMatchServiceRequest crowded;
 				crowded.host = host;
 				crowded.peerCount = 4;
 				crowded.humans = 4;
 				crowded.cpuSlots = 3;
 				crowded.mode = NetMatchMode::CoopPvE;
-				if (NetMatchService::BuildMatchConfig(crowded, 123, config, &reason) || reason != "roster exceeds the player slot capacity") {
+				if (!NetMatchService::BuildMatchConfig(crowded, 123, config, error)) return false;
+				if (config.players.size() != NetMatchConfigUtil::c_MaxPlayers) {
+					*error = "the full co-op roster differs: " + NetMatchConfigUtil::BuildReportJson(config);
+					return false;
+				}
+				if (!RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
+				NetMatchConfig oversize = config;
+				oversize.players.push_back({0, 3, true, "CPU 4"});
+				if (NetMatchConfigUtil::ValidateLocalAlpha(oversize, &reason) || reason != "player slot count is out of range") {
 					*error = "player slot capacity refusal differs: " + reason;
+					return false;
+				}
+				std::vector<uint8_t> oversizeBytes;
+				NetLobbyError oversizeError;
+				if (NetLobbyProtocol::Encode({NetLobbyMatchConfig{oversize}}, oversizeBytes, &oversizeError) || oversizeError.message != "too many player slots") {
+					*error = "the lobby codec accepted a roster past the slot capacity: " + oversizeError.message;
 					return false;
 				}
 				// The AI-only dedicated match the battery launches: no human seat, one lockstep peer.
