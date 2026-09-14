@@ -303,23 +303,37 @@ namespace RTE {
 						afterDispose.push_back([=]() { guardArm->SetHeldDeviceThisArmIsTryingToSupport(nullptr); });
 					}
 				}
-				// The pie menu's affected object is the same shape of raw external link, on the clone's own menu.
+			} else if (mode == 'p') {
+				// Manufactured producer: nothing in the engine sets the affected object today, so the arm sets it.
+				HeldDevice* retiringDevice = deviceCopy();
+				HeldDevice* survivingDevice = deviceCopy();
+				guard->AddInventoryItem(survivingDevice);
+				add(retiringDevice);
+				g_MovableMan.HarvestSpeculativeSpawns();
+				ghostRoots.push_back(retiringDevice);
 				PieMenu* previewMenu = survivor->GetPieMenu();
+				PieMenu* craftMenu = survivorCraft->GetPieMenu();
 				MovableObject* shadowItem = residentItem ? g_MovableMan.FindObjectByUniqueID(residentItem->GetUniqueID()) : nullptr;
 				PieMenu* guardMenu = shadowItem && shadowItem != residentItem ? guard->GetPieMenu() : nullptr;
-				if (armed("preview_pie_menu", previewMenu != nullptr, "owner=" + address(survivor) + " shadow_case=" + std::to_string(guardMenu != nullptr))) {
+				if (armed("preview_pie_menu", previewMenu != nullptr && craftMenu != nullptr, "owner=" + address(survivor) + " craft=" + address(survivorCraft) + " shadow_case=" + std::to_string(guardMenu != nullptr))) {
 					previewMenu->SetAffectedObject(retiringDevice);
-					armed("affected_object_before_remap", previewMenu->GetAffectedObject() == retiringDevice, "affected=" + address(retiringDevice));
+					craftMenu->SetAffectedObject(survivingDevice);
+					armed("affected_object_before_remap", previewMenu->GetAffectedObject() == retiringDevice && craftMenu->GetAffectedObject() == survivingDevice, "retiring=" + address(retiringDevice) + " surviving=" + address(survivingDevice));
 					const std::string retiringAffected = address(retiringDevice);
 					observations.push_back([=, &check]() {
 						const MovableObject* affected = previewMenu->GetAffectedObject();
 						check("affected_object_after_retirement", affected == nullptr, "observed=" + address(affected) + " expected=0000000000000000");
+					});
+					observations.push_back([=, &check]() {
+						const MovableObject* affected = craftMenu->GetAffectedObject();
+						check("surviving_affected_object_retained", affected == survivingDevice, "observed=" + address(affected) + " expected=" + address(survivingDevice));
 					});
 					afterDispose.push_back([=, &check]() {
 						// The target is gone; the pointer value is compared, never read through.
 						const std::string stale = address(previewMenu->GetAffectedObject());
 						check("affected_object_pointer_after_disposal", stale != retiringAffected, "observed=" + stale + " retired=" + retiringAffected);
 						previewMenu->SetAffectedObject(nullptr);
+						craftMenu->SetAffectedObject(nullptr);
 					});
 					if (guardMenu) {
 						const long residentUID = residentItem->GetUniqueID();
