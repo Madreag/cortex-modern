@@ -62,6 +62,9 @@ namespace RTE {
 		/// Gets the main menu GUI, for scripted automation/testing.
 		MainMenuGUI* GetMainMenu() const { return m_MainMenu.get(); }
 
+		/// Gets the active pause menu for scripted automation.
+		PauseMenuGUI* GetActivePauseMenu() const { return m_ActiveMenu == PauseMenuActive ? m_PauseMenu.get() : nullptr; }
+
 		/// Gets whether the interactive main menu is active (past the title transition).
 		bool IsMainMenuInteractive() const { return m_ActiveMenu == MainMenuActive; }
 
