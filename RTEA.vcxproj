@@ -201,9 +201,9 @@
       <IncludeInUnityFile>false</IncludeInUnityFile>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;allegro-debug-32.lib;liblz4_debug_static.lib;luajit-debug-32.lib;sdl2main-debug-32.lib;sdl2-debug-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_debug_static.lib;luajit-debug-32.lib;sdl2main-debug-32.lib;sdl2-debug-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <SubSystem>Windows</SubSystem>
@@ -258,7 +258,7 @@
     <Link>
       <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_debug_static.lib;luajit-debug.lib;SDL3_image-static-debug.lib;SDL3-static-debug.lib;opengl32.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <SubSystem>Windows</SubSystem>
@@ -308,9 +308,9 @@
       <AddCodeAfterSourceInclude>#undef GetClassName</AddCodeAfterSourceInclude>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;allegro-debug-32.lib;liblz4_debug_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_debug_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <SubSystem>Windows</SubSystem>
@@ -365,7 +365,7 @@
     <Link>
       <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_debug_static.lib;luajit-debug-release.lib;SDL3-static-debug.lib;SDL3_image-static-debug.lib;opengl32.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <SubSystem>Windows</SubSystem>
@@ -421,9 +421,9 @@
       <AddCodeAfterSourceInclude>#undef GetClassName</AddCodeAfterSourceInclude>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;allegro-debug-release-32.lib;liblz4_release_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_release_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -483,9 +483,9 @@
       <AddCodeAfterSourceInclude>#undef GetClassName</AddCodeAfterSourceInclude>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;allegro-debug-release-32.lib;liblz4_release_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_release_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -549,7 +549,7 @@
     <Link>
       <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-debug-release.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -612,7 +612,7 @@
     <Link>
       <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-debug-release.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -669,9 +669,9 @@
       <AddCodeAfterSourceInclude>#undef GetClassName</AddCodeAfterSourceInclude>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;allegro-release-32.lib;liblz4_release_static.lib;luajit-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_release_static.lib;luajit-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -733,7 +733,7 @@
     <Link>
       <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-release.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -795,7 +795,7 @@
     <Link>
       <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-asan.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -1788,11 +1788,12 @@
       <SetPlatform>Platform=$(Platform)</SetPlatform>
       <LinkLibraryDependencies>true</LinkLibraryDependencies>
     </ProjectReference>
-    <ProjectReference Include="external\sources\allegro 4.4.3.1-custom\allegro.vcxproj" Condition="'$(Platform)'=='x64'">
+    <ProjectReference Include="external\sources\allegro 4.4.3.1-custom\allegro.vcxproj">
       <Project>{F13CE3E8-34B1-36D5-9813-AD56B7CB288A}</Project>
       <SetConfiguration Condition="'$(Configuration)'=='Debug Full' Or '$(Configuration)'=='Debug Minimal'">Configuration=Debug</SetConfiguration>
       <SetConfiguration Condition="'$(Configuration)'=='Debug Release' Or '$(Configuration)'=='Profiling'">Configuration=RelWithDebInfo</SetConfiguration>
       <SetConfiguration Condition="'$(Configuration)'=='Final' Or '$(Configuration)'=='Final ASan'">Configuration=Release</SetConfiguration>
+      <SetPlatform>Platform=$(Platform)</SetPlatform>
       <LinkLibraryDependencies>true</LinkLibraryDependencies>
     </ProjectReference>
   </ItemGroup>
