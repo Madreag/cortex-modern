@@ -572,6 +572,7 @@ namespace RTE {
 					return false;
 				}
 			}
+			std::cout << "[net-match-selftest] legacy_config_hash=" << NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(expected)) << std::endl;
 			std::cout << "[net-match-selftest] PASS rules_legacy_defaults" << std::endl;
 			return true;
 		}
