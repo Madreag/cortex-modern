@@ -6028,6 +6028,49 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (holdNeverNamesASweptObject ? "PASS" : "FAIL") << " a_hold_never_names_a_swept_object" << std::endl;
 	checkpointValues = holdNeverNamesASweptObject && checkpointValues;
+	// A mod caches a required module in Create and calls its methods in a later hook; those methods live on the
+	// module's metatable, so a preview self copy that keeps only raw fields hands the clone an empty table.
+	bool previewCopyKeepsModuleMethods = false;
+	{
+		SetLuaPath(g_PresetMan.GetFullModulePath("Base.rte/Scripts/Utility/ParticleUtility.lua"));
+		const bool staged = RunScriptString(
+		                        "_ScriptedObjects = _ScriptedObjects or {};"
+		                        "_PreviewModuleHost = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\");"
+		                        "_PreviewModuleUID = _PreviewModuleHost.UniqueID;"
+		                        "_ScriptedObjects[tostring(_PreviewModuleUID)] = _PreviewModuleHost;"
+		                        "_ScriptedObjects[tostring(_PreviewModuleUID)].particleUtility = require(\"Scripts/Utility/ParticleUtility\");") == 0;
+		lua_getglobal(m_State, "_PreviewModuleUID");
+		const long uid = static_cast<long>(lua_tonumber(m_State, -1));
+		lua_pop(m_State, 1);
+		std::vector<std::string> problems;
+		const bool copied = staged && uid > 0 && CopyScriptInstanceToPreviewHold(uid, problems);
+		for (const std::string& problem: problems) {
+			std::cout << "[preview-module] " << problem << std::endl;
+		}
+		const bool checked = copied && RunScriptString(
+		                                   "local module = require(\"Scripts/Utility/ParticleUtility\");"
+		                                   "local hold = _ScriptFieldsStash and _ScriptFieldsStash[\"preview:\" .. tostring(_PreviewModuleUID)];"
+		                                   "local copy = hold and hold.particleUtility;"
+		                                   "_PreviewModuleMethod = type(copy) == \"table\" and rawequal(copy.CreateDirectionalSmokeEffect, module.CreateDirectionalSmokeEffect);"
+		                                   "_PreviewModuleIsolated = false;"
+		                                   "if type(copy) == \"table\" then copy.previewOnlyField = 1; _PreviewModuleIsolated = not rawequal(copy, module) and module.previewOnlyField == nil; end") == 0;
+		lua_getglobal(m_State, "_PreviewModuleMethod");
+		const bool methodResolves = lua_toboolean(m_State, -1) != 0;
+		lua_pop(m_State, 1);
+		lua_getglobal(m_State, "_PreviewModuleIsolated");
+		const bool writesStayInTheCopy = lua_toboolean(m_State, -1) != 0;
+		lua_pop(m_State, 1);
+		std::cout << "[preview-module] staged=" << staged << " copied=" << copied << " checked=" << checked
+		          << " method_resolves=" << methodResolves << " writes_stay_in_copy=" << writesStayInTheCopy << std::endl;
+		previewCopyKeepsModuleMethods = checked && methodResolves && writesStayInTheCopy;
+		RunScriptString(
+		    "if _ScriptFieldsStash and _PreviewModuleUID then _ScriptFieldsStash[\"preview:\" .. tostring(_PreviewModuleUID)] = nil; end;"
+		    "if _PreviewModuleUID then _ScriptedObjects[tostring(_PreviewModuleUID)] = nil; end;"
+		    "_PreviewModuleHost = nil; _PreviewModuleUID = nil; _PreviewModuleMethod = nil; _PreviewModuleIsolated = nil");
+		g_LuaMan.CollectGarbageForCheckpoint();
+	}
+	std::cout << "[script-graph-selftest] " << (previewCopyKeepsModuleMethods ? "PASS" : "FAIL") << " preview_self_copy_keeps_required_module_methods" << std::endl;
+	checkpointValues = previewCopyKeepsModuleMethods && checkpointValues;
 	const std::string report = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
 	lua_pop(L, 1);
 	std::cout << report << std::endl;
