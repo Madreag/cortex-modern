@@ -469,8 +469,9 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::CaptureRows(const BITMAP* 
 		}
 		previousDirty = dirtyRows[y] != 0;
 	}
-	snapshot->fullCopy = !compatible || (snapshot->dirtyBytes != 0 &&
-	    static_cast<double>(snapshot->dirtyBytes) / snapshot->LogicalBytes() * 100.0 >= snapshot->fullCopyPercent);
+	const uint64_t dirtyRowCount = snapshot->dirtyBytes / snapshot->rowBytes;
+	snapshot->fullCopy = !compatible || (dirtyRowCount != 0 &&
+	    dirtyRowCount * 100 >= static_cast<uint64_t>(snapshot->height) * snapshot->fullCopyPercent);
 	if (snapshot->fullCopy) std::fill(dirtyRows.begin(), dirtyRows.end(), 1);
 	for (int first = 0; first < snapshot->height;) {
 		if (!dirtyRows[first]) {
