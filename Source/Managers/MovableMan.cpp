@@ -5347,6 +5347,12 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 		m_MOIDIndex.swap(index); m_ContiguousActorIDs.swap(contiguous); m_LockstepJoinQuarantine.swap(state.quarantine);
 		// The record decides which brains the players depend on, not what this peer's seats found at start.
 		m_PlayerBrainIDs.swap(state.playerBrains);
+		// A payload from before the record carries none, so re-seed it the way the assignment would have.
+		if (version < 3) {
+			if (Activity* activity = g_ActivityMan.GetActivity()) {
+				activity->RecordSeatedPlayerBrains();
+			}
+		}
 		NetActorOwnership::RestoreSeededOwners(std::move(owners));
 		// A restored tick can be reached again after a resync or a rematch; claims made past it must not decide a later tie.
 		s_LockstepFrameClaims.clear();
