@@ -447,6 +447,7 @@ namespace RTE {
 		int m_LocalTeam = -1;
 		bool m_Dedicated = false;
 		int m_HumanSeats = 0;
+		NetMatchConfig m_MatchConfig; //!< The roster this peer asked for, until the round adopts the host's.
 		bool m_ResyncOnDesync = false;
 		std::string m_PendingResyncLoad;
 		std::optional<NetResyncState> m_PendingResyncState;

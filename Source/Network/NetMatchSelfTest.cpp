@@ -367,6 +367,32 @@ namespace RTE {
 				request.dedicated = true;
 				if (!NetMatchService::BuildMatchConfig(request, 123, config, error) || config.peerCount != 1 || config.players.size() != 2 ||
 				    !RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
+				NetMatchServiceRequest crowded;
+				crowded.host = host;
+				crowded.peerCount = 4;
+				crowded.humans = 4;
+				crowded.cpuSlots = 3;
+				crowded.mode = NetMatchMode::CoopPvE;
+				if (NetMatchService::BuildMatchConfig(crowded, 123, config, &reason) || reason != "roster exceeds the player slot capacity") {
+					*error = "player slot capacity refusal differs: " + reason;
+					return false;
+				}
+				// The AI-only dedicated match the battery launches: no human seat, one lockstep peer.
+				NetMatchServiceRequest aiOnly;
+				aiOnly.host = host;
+				aiOnly.dedicated = true;
+				aiOnly.peerCount = 2;
+				aiOnly.humans = 0;
+				aiOnly.cpuSlots = 2;
+				aiOnly.mode = NetMatchMode::CoopPvE;
+				if (!NetMatchService::BuildMatchConfig(aiOnly, 123, config, error)) return false;
+				if (config.peerCount != 1 || config.players.size() != 2 ||
+				    config.players[0] != NetMatchPlayerSlot{0, 1, true, "CPU 1"} ||
+				    config.players[1] != NetMatchPlayerSlot{0, 2, true, "CPU 2"}) {
+					*error = "authored AI-only roster differs: " + NetMatchConfigUtil::BuildReportJson(config);
+					return false;
+				}
+				if (!RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
 			}
 			std::cout << "[net-match-selftest] PASS cpu_roster_requests" << std::endl;
 			return true;
