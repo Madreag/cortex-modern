@@ -181,6 +181,12 @@ static bool s_purgeSelfTestPassed = false;
 static bool s_globalCallbacksSelfTest = false;
 static bool s_globalCallbacksSelfTestPassed = false;
 
+// -selftest-frame-stall <tick>:<ms>: hold one frame, so a sim tick reading the wall clock is observable.
+static bool s_frameStallArmed = false;
+static bool s_frameStallFired = false;
+static long long s_frameStallTick = 0;
+static int s_frameStallMs = 0;
+
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
 static constexpr int c_NetSessionDefaultLuaStates = 4;
 static int s_cliNumLuaStatesOverride = -1;
@@ -593,6 +599,20 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				SoundContainer scratch;
 			}
 			std::cout << "[selftest] preallocated " << count << " sound identities cursor=" << g_AudioMan.GetCheckpointSoundContainerCursor() << std::endl;
+			i += 2;
+			continue;
+		}
+		if (currentArg == "-selftest-frame-stall" && i + 1 < argCount) {
+			const std::string spec = argValue[i + 1];
+			const size_t separator = spec.find(':');
+			if (separator != std::string::npos) {
+				s_frameStallTick = std::strtoll(spec.substr(0, separator).c_str(), nullptr, 10);
+				s_frameStallMs = static_cast<int>(std::strtol(spec.substr(separator + 1).c_str(), nullptr, 10));
+				s_frameStallArmed = s_frameStallMs > 0;
+			}
+			if (!s_frameStallArmed) {
+				std::cerr << "[selftest] frame stall expected <tick>:<ms>, got " << spec << std::endl;
+			}
 			i += 2;
 			continue;
 		}
@@ -3297,6 +3317,12 @@ void RunGameLoop() {
 		PollSDLEvents();
 		g_WindowMan.Update();
 		g_WindowMan.ClearBackbuffer();
+
+		if (s_frameStallArmed && !s_frameStallFired && g_TimerMan.GetSimUpdateCount() == s_frameStallTick) {
+			s_frameStallFired = true;
+			std::this_thread::sleep_for(std::chrono::milliseconds(s_frameStallMs));
+			std::cout << "[selftest] frame stall tick=" << s_frameStallTick << " ms=" << s_frameStallMs << std::endl;
+		}
 
 		g_TimerMan.Update();
 

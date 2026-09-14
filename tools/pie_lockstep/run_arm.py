@@ -11,6 +11,7 @@ import time
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / 'fixtures'
+LANE_PORTS = ((47921, 47926), (48291, 48299))
 sys.path.insert(0, str(REPO / 'tools'))
 from run_sim_test import make_run
 from win32_test_runner import firewall_allows_inbound
@@ -29,12 +30,19 @@ def main():
     parser.add_argument('--sp', action='store_true')
     parser.add_argument('--observe', action='store_true')
     parser.add_argument('--debug', action='store_true')
+    parser.add_argument('--stall', help='engine frame stall as TICK:MS, armed on one side only')
+    parser.add_argument('--stall-peer', choices=['host', 'client'], default='host')
     args = parser.parse_args()
     args.out = args.out.resolve()
     if args.out.exists():
         parser.error('evidence directory already exists')
-    if not 47921 <= args.port <= 47926:
-        parser.error('port outside the assigned lane')
+    if not any(low <= args.port <= high for low, high in LANE_PORTS):
+        parser.error('port outside the assigned lanes')
+    stall_peer = 'sp' if args.sp else args.stall_peer
+    if args.stall is not None:
+        tick, _, ms = args.stall.partition(':')
+        if not (tick.isdigit() and ms.isdigit() and int(ms) > 0):
+            parser.error('--stall expects TICK:MS')
     if firewall_allows_inbound(args.exe) is not True:
         parser.error('executable has no verified inbound firewall rule: ' + str(args.exe))
     fixture = FIXTURES / (args.case + '.txt')
@@ -45,7 +53,8 @@ def main():
                     fixture_sha256=sha(fixture), observer_sha256=sha(observer),
                     setup_sha256=sha(setup), driver_sha256=sha(Path(__file__)),
                     port=args.port, input_delay=0 if args.sp else 3,
-                    observe=args.observe, debug=args.debug)
+                    observe=args.observe, debug=args.debug,
+                    stall=args.stall, stall_peer=stall_peer if args.stall else None)
     (args.out / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
     peers = ['sp'] if args.sp else ['host', 'client']
     runs = []
@@ -66,6 +75,8 @@ def main():
                     flags += ['-net-match-e2e-spawn', 'ACrab:Crab:Base.rte:920:760:20']
             if peer != 'client':
                 flags += ['-input-script', str(fixture)]
+            if args.stall is not None and peer == stall_peer:
+                flags += ['-selftest-frame-stall', args.stall]
             if args.observe or args.case in ('actor_cancel', 'delivery_cancel'):
                 flags += ['-test-script', 'UserScenes.rte/PieObserver.lua']
             if args.debug:
