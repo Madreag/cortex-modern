@@ -467,6 +467,13 @@ namespace RTE {
 		/// @param player Which team to set the brain actor for.
 		void SetPlayerBrain(Actor* newBrain, int player = 0);
 
+		/// Drives one human and one AI seat through brain assignment and checks that only the human seat's
+		/// brain reaches the shared record. The seats and the record are put back as they were.
+		/// @param humanBrain An actor to assign to the human seat.
+		/// @param aiBrain An actor to assign to the AI seat.
+		/// @return Whether the record held exactly the human seat's brain, and dropped it when the seat lost it.
+		bool RunPlayerBrainRecordSelfTest(Actor* humanBrain, Actor* aiBrain);
+
 		/// Shows whether a specific player ever had a Brain yet.
 		/// @param player Which player to check whether they ever had a Brain.
 		/// @return Whether this player ever had a Brain.
