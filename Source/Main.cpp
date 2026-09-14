@@ -2034,7 +2034,7 @@ static std::string CheckPreviewOutcome(long long startTick, long long horizon) {
 }
 
 // One depth-1 preview per overlay-link mode; survivor links must miss retired objects and the canonical world must stay identical.
-static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, int& failures) {
+static void RunOverlayLinkArm(char mode, int& cases, int& failures) {
 	const std::string label = std::string("overlay-links ") + mode;
 	bool caseFailed = false;
 	const auto fail = [&caseFailed, &label](const std::string& what) {
@@ -2045,20 +2045,27 @@ static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, 
 		std::cout << "[lpinv] PASS " << label << ": " << what << std::endl;
 	};
 	++cases;
+	// The letters run in sequence in one process, so each is compared against the state it started from.
+	LocalPrediction::Clear();
+	g_MovableMan.DropAllPreviewGhosts();
+	std::vector<std::string> problems;
+	const std::string before = DumpSimStateToString() + DescribeCanonicalExtras(problems);
+	for (const std::string& problem: problems) {
+		fail("cannot capture canonical Lua state: " + problem);
+	}
 	if (std::string("itmqxonlap").find(mode) != std::string::npos) {
-		LocalPrediction::Clear();
-		g_MovableMan.DropAllPreviewGhosts();
 		if (!PreviewScriptSelfTest::RunRetirementArm(mode)) {
 			caseFailed = true;
 		}
-		std::vector<std::string> problems;
+		problems.clear();
 		const std::string after = DumpSimStateToString() + DescribeCanonicalExtras(problems);
 		for (const std::string& problem: problems) {
 			fail("cannot capture canonical Lua state: " + problem);
 		}
 		if (after != before) {
+			WriteProbeText(std::string("lpinv_before_overlay_") + mode, before);
 			WriteProbeText(std::string("lpinv_after_overlay_") + mode, after);
-			fail("canonical state changed after retirement arm");
+			fail(std::string("canonical state changed after retirement arm (lpinv_before_overlay_") + mode + " vs lpinv_after_overlay_" + mode + ")");
 		}
 		if (caseFailed) {
 			++failures;
@@ -2184,14 +2191,15 @@ static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, 
 	for (auto entry = support.rbegin(); entry != support.rend(); ++entry) {
 		entry->first->SetHeldDeviceThisArmIsTryingToSupport(entry->second);
 	}
-	std::vector<std::string> problems;
+	problems.clear();
 	const std::string after = DumpSimStateToString() + DescribeCanonicalExtras(problems);
 	for (const std::string& problem: problems) {
 		fail("cannot capture canonical Lua state: " + problem);
 	}
 	if (after != before) {
+		WriteProbeText(std::string("lpinv_before_overlay_") + mode, before);
 		WriteProbeText(std::string("lpinv_after_overlay_") + mode, after);
-		fail(std::string("canonical state changed after the overlay-link preview (lpinv_before vs lpinv_after_overlay_") + mode + ")");
+		fail(std::string("canonical state changed after the overlay-link preview (lpinv_before_overlay_") + mode + " vs lpinv_after_overlay_" + mode + ")");
 	}
 	if (caseFailed) {
 		++failures;
@@ -2298,7 +2306,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 		}
 	}
 	for (const char mode: s_lpOverlayLinkModes) {
-		RunOverlayLinkArm(mode, before, cases, failures);
+		RunOverlayLinkArm(mode, cases, failures);
 	}
 	LocalPrediction::SetDepthOverride(savedDepth);
 	PreviewScriptSelfTest::SetStrideCounter(false);
