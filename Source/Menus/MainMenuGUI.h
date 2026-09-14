@@ -24,6 +24,7 @@ namespace RTE {
 	class GUIButton;
 	class GUILabel;
 	class GUIControl;
+	class GUIFont;
 	class GUITextBox;
 	class GUIListBox;
 	class GUICheckbox;
@@ -242,6 +243,9 @@ namespace RTE {
 		NetModerationUx m_ModerationUx; //!< §9b's panel model; the buttons and the headless driver share it.
 		std::map<const GUIControl*, NetModerationUx::Row> m_PressedModeration;
 		std::array<GUILabel*, 4> m_MultiplayerLobbyPlayerLabels;
+		GUIFont* m_MultiplayerLobbyPlayerRowFont = nullptr; //!< The font the player rows draw in, so the row text is measured against what draws it.
+		GUIFont* m_MultiplayerLobbyPlayerRowFallbackFont = nullptr; //!< Supplies the row bytes the primary font's atlas has no ink for.
+		GUILabel* m_MultiplayerLobbyPlayersHeader = nullptr; //!< The "Players" column header; it moves with the rows when the panel widens.
 		GUILabel* m_MultiplayerLobbyPortMapLabel;
 		uint32_t m_PortMapSerialShown; //!< The last lobby port-map serial this panel rendered.
 		// The lobby's chat is built in code so the panel can grow for it without touching the skin file.
@@ -371,7 +375,7 @@ namespace RTE {
 		void RefreshReconnectControls();
 
 		/// Resizes a multiplayer sub-panel's width: the diagnostic label keeps its 12px side margins and every other child keeps its center offset.
-		void FitMultiplayerPanelWidth(GUICollectionBox* panel, GUILabel* diagnosticLabel, int width);
+		void FitMultiplayerPanelWidth(GUICollectionBox* panel, GUILabel* diagnosticLabel, int width, const std::vector<GUILabel*>& fillLabels = {});
 		/// Resizes the MultiplayerScreen and keeps it centered, moving up from its baseline Y only when the height no longer fits the viewport.
 		void FitMultiplayerScreen(int width, int height);
 
