@@ -104,6 +104,10 @@ namespace RTE {
 		/// Sends session heartbeats without polling the transport or checking timeouts, so another
 		/// phase (the lobby) can own the shared event queue while peers still see us alive.
 		void TickKeepalive(uint64_t nowMs);
+		/// Records valid traffic from another phase on a Ready peer's wire.
+		void NotePeerTraffic(NetPeerId peerId, uint64_t nowMs);
+		/// Refuses one Ready client without ending the host's session.
+		void DisconnectReadyPeer(NetPeerId peerId, NetRejectReason reason, const std::string& message);
 		/// Feeds one transport event when another phase owns the queue (a reconnect handshake the
 		/// lockstep coordinator hands over mid-match).
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs);

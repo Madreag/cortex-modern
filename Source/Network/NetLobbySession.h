@@ -25,6 +25,7 @@ namespace RTE {
 	};
 
 	struct NetLobbySessionConfig {
+		std::vector<NetTransportEvent> pendingEvents; //!< Earlier packets on the same bound transport.
 		bool host = false;
 		uint8_t localPeerId = 0;
 		uint8_t remotePeerId = 0; // 2-peer convenience; N-peer derives the remote set from remoteTransportPeerIds.

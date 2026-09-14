@@ -65,12 +65,24 @@ namespace RTE {
 			m_Seats.clear();
 			m_NowMs = 0;
 			m_LiveMatch = false;
+			m_MatchEnded = false;
 			m_Stats = {};
 		}
 		m_Registry = registry;
 		m_HostSessionId = hostSessionId;
 		m_ConfiguredEpoch = epoch;
 		m_LocalIdentity = std::move(localIdentity);
+	}
+
+	void NetReconnectHost::SetMatchEnded() {
+		m_LiveMatch = false;
+		m_MatchEnded = true;
+		m_PendingReseats.clear();
+		m_PendingHoldResolutions.clear();
+		m_Ledger.Clear();
+		for (SeatState& seat : m_Seats) {
+			if (seat.dropped) seat.holdExpired = true;
+		}
 	}
 
 	NetAuthBytes16 NetReconnectHost::GetEpoch() const {
@@ -566,8 +578,10 @@ namespace RTE {
 			{"incarnation", seat->incarnation}, {"holder_generation", seat->holderGeneration}}, "NetReconnectHost::nowMs");
 		m_Commits.push_back({connection, seat->seat.stableSeat, seat->seat.peerId, seat->incarnation, supersededConnection, true});
 		Send(connection, committed);
-		IssueReseat(*seat);
-		QueueHoldResolution(seat->seat.lockstepPeerId, NetHoldResolution::Reclaimed);
+		if (!m_MatchEnded) {
+			IssueReseat(*seat);
+			QueueHoldResolution(seat->seat.lockstepPeerId, NetHoldResolution::Reclaimed);
+		}
 	}
 
 	void NetReconnectHost::HandleLeaveRequest(NetPeerId connection, const NetH4LeaveRequest& message, uint64_t nowMs) {
@@ -1254,6 +1268,13 @@ namespace RTE {
 		}), m_PendingReclaims.end());
 		for (SeatState& seat : m_Seats) {
 			if (seat.committed && seat.activeConnection == connection) {
+				if (m_MatchEnded) {
+					seat.activeConnection = c_InvalidNetPeerId;
+					seat.dropped = true;
+					seat.holdExpired = true;
+					++m_Stats.seatsDropped;
+					return NetH4DisconnectOutcome::SeatDropped;
+				}
 				if (!m_LiveMatch) {
 					// Nothing has been played, so there is no ownership to hold and no world to come
 					// back to; the seat is free for the next joiner.
@@ -1291,6 +1312,7 @@ namespace RTE {
 		m_PendingReseats.clear();
 		m_Commits.clear();
 		m_LiveMatch = false;
+		m_MatchEnded = false;
 		for (SeatState& seat : m_Seats) {
 			seat.holderGeneration = 0;
 			seat.incarnation = 0;

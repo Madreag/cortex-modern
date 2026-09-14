@@ -280,6 +280,24 @@ namespace RTE {
 		static const char* StateName(NetMatchServiceState state);
 
 	private:
+		/// A match's transports, moved as one into a rematch or resync worker and back.
+		struct TransportLink {
+			// Defined in the .cpp, where the dispatcher type is complete.
+			TransportLink();
+			TransportLink(TransportLink&&) noexcept;
+			TransportLink& operator=(TransportLink&&) noexcept;
+			~TransportLink();
+
+			std::unique_ptr<GnsTransport> ip;
+			std::unique_ptr<NetMuxTransport> mux;
+			std::vector<NetTransportEvent> lobbyEvents;
+#ifdef CCCP_WITH_GNS
+			std::unique_ptr<GnsDirectorySignalDispatcher> dispatcher; //!< After the mux, so it is destroyed first.
+#endif
+			/// The session's wire: the mux if there is one, else the IP transport.
+			INetTransport* Wire() const { return mux ? static_cast<INetTransport*>(mux.get()) : ip.get(); }
+		};
+
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
 		void WorkerRematchMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
 		void WorkerResyncMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
@@ -326,6 +344,7 @@ namespace RTE {
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
 		friend bool TestGnsStopCancelContracts(std::string* error);
+		friend bool TestEndedWorldLateAdmission(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
@@ -333,6 +352,12 @@ namespace RTE {
 		/// that filled it. Caller holds the lock. The census may only open where the sim stands at a
 		/// completed tick with the world still up.
 		void DrainPendingSessionEventsLocked(bool atTickBoundary);
+		/// Keeps next-lobby packets until the rematch worker takes the link.
+		void QueueLobbyEvent(const NetTransportEvent& event);
+		/// Polls a finished session without touching the ended simulation; caller holds the lock.
+		void PumpCompletedSessionLocked();
+		/// Refuses Ready peers absent from the ended round; caller holds the lock.
+		void RefuseEndedPeersLocked(const std::string& reason);
 		/// The relaunch's queue reset, with a permanent diagnostic for anything a teardown left behind.
 		void DiscardUndeliveredSessionEventsLocked();
 		/// Folds the coordinator's counters into the service so a gate can read them across a resync.
@@ -447,6 +472,11 @@ namespace RTE {
 		std::unique_ptr<NetSession> m_Session;
 		std::unique_ptr<NetLockstepCoordinator> m_Coordinator;
 		std::unique_ptr<NetMatchRunner> m_Runner;
+		std::vector<NetTransportEvent> m_PendingLobbyEvents;
+		size_t m_PendingLobbyBytes = 0;
+		bool m_PendingLobbyOverflow = false;
+		bool m_LeftMatch = false;
+		uint64_t m_EndedLockstepPackets = 0;
 		std::vector<NetTransportEvent> m_PendingSessionEvents; //!< Game-thread only: reconnect traffic the coordinator handed over.
 		//!< Coordinator counters a resync would otherwise zero, accumulated at every teardown.
 		struct LockstepTotals {
