@@ -520,6 +520,17 @@ void PieMenu::SetPos(const Vector& newPos) {
 	}
 }
 
+void PieMenu::RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) {
+	if (m_AffectedObject) {
+		m_AffectedObject = map(m_AffectedObject);
+	}
+	for (const PieSlice* pieSlice: m_CurrentPieSlices) {
+		if (PieMenu* subPieMenu = pieSlice->GetSubPieMenu()) {
+			subPieMenu->RemapExternalLinks(map);
+		}
+	}
+}
+
 // The menu runs on every peer for every actor; only the seat driving it hears it.
 bool PieMenu::SeatHearsSounds() const {
 	const Controller* controller = GetController();
