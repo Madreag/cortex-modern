@@ -60,7 +60,7 @@ namespace RTE {
 		GUILabel* m_NetStatus = nullptr;
 		std::array<GUILabel*, 3> m_Toasts{};
 		std::string m_StripText;
-		mutable int64_t m_AutoShowUntilUs = 0;
+		mutable long long m_AutoShowUntilUs = 0;
 		uint16_t m_MatchDelayFrames = 0;
 		uint16_t m_BaseDelayFrames = 0;
 		GUICollectionBox* m_Panel = nullptr;
