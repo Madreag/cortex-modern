@@ -1604,7 +1604,7 @@ void MainMenuGUI::RefreshReplayList() {
 
 void MainMenuGUI::RefreshReplayBrowserControls() {
 	const int width = std::min(600, m_RootBoxMaxWidth - 24);
-	const int height = std::min(360, g_WindowMan.GetResY() - 30);
+	constexpr int height = 360 - 24; // The lobby's minimum-viewport budget leaves a band for Back.
 	const int selected = m_ReplayList->GetSelectedIndex();
 	const bool hasSelection = selected >= 0 && static_cast<size_t>(selected) < m_ReplayRows.size();
 	if (m_ReplayBrowserPanel->GetWidth() != width || m_ReplayBrowserPanel->GetHeight() != height) m_ReplayBrowserPanel->Resize(width, height);
