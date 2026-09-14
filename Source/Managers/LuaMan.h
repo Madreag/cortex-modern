@@ -185,7 +185,7 @@ namespace RTE {
 
 		/// Whether this state's globals are recorded for the running preview.
 		bool PreviewGlobalFenceArmed() const { return m_PreviewGlobalFenceArmed; }
-		/// Records this state's globals and require caches so a preview's writes to them can be undone.
+		/// Arms the native barrier for tables reachable from this state's globals and require caches.
 		void CapturePreviewGlobalFence();
 		/// Puts them back as the fence found them: keys the preview added go, values it changed or removed come back.
 		/// @return How many entries were put back.
