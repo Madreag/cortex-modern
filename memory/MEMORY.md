@@ -10,3 +10,4 @@
 - [Resolve, check, commit as separate steps](resolve-check-commit-separate-steps.md) — a failed inline resolver did not stop the chained commit; markers got committed
 - [Worker test-only production code](worker-test-only-production-code.md) — Grok lanes add branches only the test reaches and inverted FAIL messages; read for both
 - [Arizona local time only](arizona-local-time-only.md) — every stamp in MST (UTC-7, no DST), never UTC; read the clock first
+- [Mac job uploads only run.zsh](mac-job-uploads-only-run-zsh.md) — scp prompt/policy/rules/build.zsh to the Mac lane first; clear stale exit.txt; local cli_runs dir must not pre-exist

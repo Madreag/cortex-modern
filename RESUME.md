@@ -118,7 +118,7 @@ Never rebuild while an engine of that tree runs (LNK1104) or while a battery pin
 
 | Gate | Command | Bar |
 |---|---|---|
-| Socket-free suite | `python <tree>/tools/run_selftests.py --repo <tree> --out <dir> --timeout 300` | `"passed": 11` — controller-frame, net-protocol, net-identity, net-session, net-lockstep, net-match, net-auth, net-admission, net-reconnect, net-reconnect-session, camera-null-scene. Exit 0 with no PASS token is FAIL. |
+| Socket-free suite | `python <tree>/tools/run_selftests.py --repo <tree> --out <dir> --timeout 300` | `"passed": 12` (12 rows since 2026-09-13: the rotate-primitive guard row; 11 before) — controller-frame, net-protocol, net-identity, net-session, net-lockstep, net-match, net-auth, net-admission, net-reconnect, net-reconnect-session, camera-null-scene. Exit 0 with no PASS token is FAIL. |
 | **verify6** (quick candidate set) | `python reviews/takeover-20260909/grok-workers/lead-tools/verify_lead6b.py` (edit `REPO`/`OUT` at the top) | 8/8: the suite, `-net-port-map-selftest`, `-net-directory-selftest`, `-script-graph-selftest -num-lua-states 4`, `tools/test_global_callbacks.py`, preview-event-D7, lpinv-100, W102 arm-1 switch-control e2e. |
 | ONE battery | the `fg6c-battery` brief (`reviews/takeover-20260909/grok-workers/fg6c-battery/prompt.txt`, placeholders to fill, §5.1 step 6) through a Grok run-only lane; scratch `D:\mx\fg6bat3`, ports 47661-47666 / 8458; baseline and drivers: `fg6b-battery/` | every engine gate green or a lead-classified non-engine artefact; ~20 steps (selftests, H4 gates, B1 gates, lobby, heal e2e, gameplay fixtures, dedicated, lifecycle packs, drop3_switch, preview_event_d7, lpinv_100, portmap_e2e, controller_log). |
 | The family (acceptance for a changed approved tree) | from `reviews/recovery-2026-09-07/contract-audit`: `python run_family.py --source 44 --breadth-out D:\mx\s44b1 --matrix-out D:\mx\s44-1 --mac-attempt 1` (the `family-source44.json` must not exist; the Mac attempt dir must be new) | chain + remaining + breadth 81/81 accounted + matrix 106 reviewed + the Mac attempt green. Runs ONLY on `p4b-interp-validation`, with no MSBuild, engine or worker lane active. |
@@ -793,6 +793,8 @@ the Cursor CLI offers no Grok 4.7 (`cli_runs/smoke-grok47*-20260913/agent-stderr
 
 ## 5.0 Order of work from 2026-09-13 16:42 MST (option B: the lead runs it; Astra is the main engineering counterpart)
 
+**2026-09-13 20:14 MST additions (lead):** B13 landed (F15 debt arms, test-only, ACCEPT; findings F26 owned-template remap gap, F27 Arm support raw pointer, F28 late-LoadScript cursor leak — LEAD-REVIEW 2026-09-13 20:14 MST); new lane **B15 = opus-f15-remap-20260913** (Opus engineer, F26+F27 fixes on `stage2/f15-debt-arms`); player-row redesign accepted by visual review, header regression → **A5b** corrective resume (`swe-lobby-player-row-20260913/header-prompt.txt`, session defiant-taurus); verify6 harness needle is now `"passed": 12` (suite bar 12 rows since B14); candidate 8418e6cbca exe `e29ddd593b572b27…` built 20:05 MST, battery launch after verify6 run 2. Wave origin = 8418e6cbca.
+
 Roles (commands §0.5, spawn steps §6.3b, policy CLAUDE.md §0/§0.1): **Astra** (GPT-6 Astra, effort max, Codex CLI,
 full permissions) = engine surgery, netcode, UI/UX design, harness engineering, independent second reads — used heavily
 now; the user watches the Codex quota and calls the shift to Opus; usable to zero. **Opus 5** (max, Fast off; Agent tool
@@ -968,6 +970,8 @@ Historical checkpoint 2026-09-13 11:59 MST: FG6C original run_all/remaining fini
   both run directories, and an undisclosed edit is treated as a masked failure even when the new check is stricter.
 
 ## 6.3b How to spawn each route, step by step (read from the runners themselves, 2026-09-12)
+
+- **Mac Grok lanes (2026-09-13 20:18 MST):** `mac_job.py` uploads only `run.zsh` and the plist. Before the launch, scp `prompt.txt`, `policy.md`, `WORKER_RULES.md`, `build.zsh` into `/Users/erol/cortex-workers/<lane>/`, `chmod +x build.zsh`, delete any stale `exit.txt` / `agent-output-*.jsonl` there, and rename an existing local `cli_runs/<lane>` (the runner refuses it). Missing files → cursor-agent "No prompt provided for print mode" → NO_INIT rc=1 (mac-gates-8418, 20:16 MST, relaunched 20:19 MST).
 
 **Every lane, before spawning:** (1) the brief is a UTF-8 file with LF endings that names the worktree AND its
 branch at a sha, the exact editable paths, the RED line and the GREEN runs that define acceptance, the report path,

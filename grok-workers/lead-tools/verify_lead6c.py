@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 REPO = Path("D:/Projects/control-build")
-OUT = Path("D:/mx/lead-fg6/verify6-6c9932a926")
+OUT = Path("D:/mx/lead-fg6/verify6-8418e6cbca-r2")
 OUT.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(REPO / "tools"))
 from run_sim_test import make_run  # noqa: E402
@@ -49,7 +49,7 @@ def shell(name, cmd, cwd=None, timeout=1800, needle=None):
 
 t0 = time.time()
 # 1. socket-free suite
-shell("selftests", [sys.executable, str(REPO / "tools/run_selftests.py"), "--repo", str(REPO), "--out", str(OUT / "selftests"), "--timeout", "300"], needle='"passed": 11')
+shell("selftests", [sys.executable, str(REPO / "tools/run_selftests.py"), "--repo", str(REPO), "--out", str(OUT / "selftests"), "--timeout", "300"], needle='"passed": 12')
 # 2. the merged selftests not in the suite
 engine("port-map", ["-net-port-map-selftest"], 120, "[net-port-map-selftest] PASS")
 engine("directory", ["-net-directory-selftest"], 120, "[net-directory-selftest] PASS")

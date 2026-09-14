@@ -362,7 +362,7 @@ $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find 'MSBui
 
 Configurations: `Debug Full | Debug Minimal | Debug Release | Final` (there is NO plain "Release"; "Final ASan" exists
 for the ASan hunts). `/t:RTEA` incremental, `/t:RTEA:Rebuild` clean; a `:Build` target does not exist. Gates in order:
-`python <tree>/tools/run_selftests.py --repo <tree> --out <dir> --timeout 300` (11/11), verify6
+`python <tree>/tools/run_selftests.py --repo <tree> --out <dir> --timeout 300` (12/12 since 2026-09-13; 11/11 before the rotate-primitive guard row), verify6
 (`grok-workers/lead-tools/verify_lead6b.py`, 8/8), ONE battery (the current brief under `grok-workers/`), the family
 (`reviews/recovery-2026-09-07/contract-audit/run_family.py` on the approved tree with nothing else running). Every
 engine launch through the runners (§1.4). Running the game by hand is for a human at the desktop only: it is
