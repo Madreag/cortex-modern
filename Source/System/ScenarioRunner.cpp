@@ -363,6 +363,16 @@ namespace RTE {
 			s_Args.selftestDeliverCommand = true;
 			return 1;
 		}
+		if (a == "-scenario-deliver-command" && hasValue) {
+			// The same delivery with no match around it, applied at the given tick.
+			s_Args.scenarioDeliverCommandTick = static_cast<int64_t>(std::strtoll(argValue[startIndex + 1], nullptr, 10));
+			return 2;
+		}
+		if (a == "-scenario-run-past-end") {
+			// Run the whole tick cap even after the activity is decided, the way a match does.
+			s_Args.scenarioRunPastEnd = true;
+			return 1;
+		}
 		if (a == "-net-match-e2e-ai-order-command") {
 			s_Args.selftestAIOrderCommand = true;
 			return 1;
