@@ -84,6 +84,9 @@ void MenuMan::SetActiveMenu() {
 		m_ActiveMenu = newActiveMenu;
 		switch (m_ActiveMenu) {
 			case ActiveMenu::MainMenuActive:
+				// A finished online match comes in on its rematch lobby; a drop comes in on the rejoin
+				// offer, which wins because its own routing sent us here.
+				m_MainMenu->OfferRematchLobbyOnEntry();
 				// §11: the rejoin offer is put up on the way in, at process start and after a match.
 				m_MainMenu->OfferStoredRejoinOnEntry();
 				break;
@@ -126,6 +129,12 @@ void MenuMan::HandleTransitionIntoMenuLoop() {
 	// §11: a match this peer was dropped from sends the player to the main menu, where the rejoin
 	// offer and the retry status are, rather than to the planet screen the preset would pick.
 	if (g_NetMatchService.NeedsRecoveryPump()) {
+		m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::ScrollingFadeIn);
+		return;
+	}
+	// An online match that ended with its session alive reconvenes in the rematch lobby, so both
+	// peers land on the multiplayer screen rather than on the planet screen the preset would pick.
+	if (g_NetMatchService.NeedsCompletedLobbyPump()) {
 		m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::ScrollingFadeIn);
 		return;
 	}
