@@ -2,6 +2,7 @@
 #define _LJ_PREVIEW_H
 
 #include "lj_obj.h"
+#include "luajit.h"
 
 typedef struct LJPreviewTable {
   GCtab *table;
@@ -19,6 +20,9 @@ typedef struct LJPreview {
   size_t savedbytes;
   uint32_t lastwrite;
   int active;
+  int timed;
+  double window_ms;
+  luaJIT_PreviewStats stats;
 } LJPreview;
 
 LJ_FUNCA void lj_preview_write(lua_State *L, GCtab *t);
