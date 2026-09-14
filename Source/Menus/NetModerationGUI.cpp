@@ -350,7 +350,8 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		if (m_NetStatusBox->GetWidth() != width || m_NetStatusBox->GetHeight() != height) m_NetStatusBox->Resize(width, height);
 		m_NetStatusBox->SetVisible(true);
 		m_NetStatus->SetFont(font);
-		m_NetStatus->Move(7, 4);
+		// GUILabel::Move is in screen coordinates, so the inset is measured from the strip itself.
+		m_NetStatus->Move(x + 7, y + 4);
 		m_NetStatus->Resize(width - 14, height - 6);
 		m_NetStatus->SetText(m_StripText);
 		AllegroBitmap bitmap(backbuffer);
@@ -368,7 +369,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	if (m_NetStatusBox->GetWidth() != width) m_NetStatusBox->Resize(width, height);
 	m_NetStatusBox->SetVisible(true);
 	m_NetStatus->SetFont(font);
-	m_NetStatus->Move(6, 6);
+	m_NetStatus->Move(x + 6, y + 6);
 	m_NetStatus->Resize(width - 12, height - 12);
 	std::string text = std::string("NET STATUS  /  SEATS [F6]\n") + metrics;
 	if (m_MatchDelayFrames != m_BaseDelayFrames) {
