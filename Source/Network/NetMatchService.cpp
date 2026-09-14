@@ -268,6 +268,13 @@ static std::string ResyncSaveName() {
 		Destroy();
 	}
 
+	NetMatchService::TransportLink::TransportLink() = default;
+	NetMatchService::TransportLink::TransportLink(TransportLink&&) noexcept = default;
+	NetMatchService::TransportLink& NetMatchService::TransportLink::operator=(TransportLink&&) noexcept = default;
+	NetMatchService::TransportLink::~TransportLink() {
+		if (mux) mux->SetPump({});
+	}
+
 	bool NetMatchService::Start(const NetMatchServiceRequest& request, std::string* error) {
 		Destroy();
 		m_CancelRequested.store(false);
@@ -377,17 +384,18 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::ReturnToLobby(std::string* error) {
 		JoinWorkerIfDone();
-		std::unique_ptr<GnsTransport> transport;
+		// A running worker still owns and polls the link.
+		if (m_Worker.joinable()) {
+			if (error) *error = "the previous match worker is still running";
+			return false;
+		}
+		TransportLink link;
 		std::unique_ptr<NetSession> session;
 		std::unique_ptr<NetLockstepCoordinator> coordinator;
 		std::unique_ptr<NetMatchRunner> runner;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			if (m_Mux) {
-				if (error) *error = "a session-id (ICE) match cannot return to the lobby yet";
-				return false;
-			}
-			if (m_State != NetMatchServiceState::Completed || !m_Transport || !m_Session || !m_Runner) {
+			if (m_State != NetMatchServiceState::Completed || !ActiveWireLocked() || !m_Session || !m_Runner) {
 				if (error) *error = "no completed match to rematch";
 				return false;
 			}
@@ -432,7 +440,7 @@ static std::string ResyncSaveName() {
 			}
 			DrainPendingSessionEventsLocked(false);
 			AccumulateLockstepTotalsLocked();
-			transport = std::move(m_Transport);
+			link = TakeTransportLinkLocked();
 			session = std::move(m_Session);
 			runner = std::move(m_Runner);
 			if (m_IsHost) {
@@ -454,7 +462,7 @@ static std::string ResyncSaveName() {
 		m_CancelRequested.store(false);
 		m_ReadyRequested.store(false);
 		m_StartRequested.store(false);
-		m_Worker = std::thread(&NetMatchService::WorkerRematchMain, this, transport.release(), session.release(), coordinator.release(), runner.release());
+		m_Worker = std::thread(&NetMatchService::WorkerRematchMain, this, std::move(link), session.release(), coordinator.release(), runner.release());
 		return true;
 	}
 
@@ -473,7 +481,7 @@ static std::string ResyncSaveName() {
 			m_RejoinOutcome = "match_over";
 			RefuseEndedPeersLocked(text);
 		}
-		// The session pump must not destroy the coordinator; the main loop FinishMatch's the stop.
+		// The main loop owns coordinator teardown.
 		Complete(text);
 	}
 
@@ -530,12 +538,21 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::ResyncMatch(std::string* error) {
 		JoinWorkerIfDone();
+		// A running worker still owns and polls the link.
+		if (m_Worker.joinable()) {
+			if (error) *error = "the previous match worker is still running";
+			return false;
+		}
 		// The host snapshots the live (diverged) match BEFORE the teardown; both sides then reload
 		// the identical file, so the divergence is healed by construction.
 		std::vector<uint8_t> stateBytes;
 		bool isHost = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			// Refused before anything is staged, so the running round keeps its coordinator and pump.
+			if (!CanResyncLocked(error)) {
+				return false;
+			}
 			isHost = m_IsHost;
 			m_ResyncHealStartMs = SteadyNowMs();
 			m_ResyncHealOpen = true;
@@ -618,36 +635,26 @@ static std::string ResyncSaveName() {
 			}
 			stateBytes = std::move(envelope);
 		}
-		m_ResyncSourceRound = ScenarioRunner::GetLockstepRoundId();
-		m_ResyncRetainsLocalState = true;
-		ScenarioRunner::SetLockstepCoordinator(nullptr);
-		ScenarioRunner::SetSessionPump(nullptr);
-		std::unique_ptr<GnsTransport> transport;
+		TransportLink link;
 		std::unique_ptr<NetSession> session;
 		std::unique_ptr<NetLockstepCoordinator> coordinator;
 		std::unique_ptr<NetMatchRunner> runner;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			if (m_Mux) {
-				if (error) *error = "a session-id (ICE) match cannot resync yet";
+			// The host's snapshot ran unlocked while keepalives ticked the session.
+			if (!CanResyncLocked(error)) {
+				m_ResyncHealOpen = false;
 				return false;
 			}
-			if (!m_Transport || !m_Session || !m_Runner) {
-				if (error) *error = "no live match to resync";
-				return false;
-			}
-			if (!m_Session->IsReady()) {
-				m_State = NetMatchServiceState::Failed;
-				m_StatusText = "Resync unavailable";
-				m_ErrorText = m_Session->HasReject() ? m_Session->BuildRejectText() : "the session was lost";
-				if (error) *error = m_ErrorText;
-				return false;
-			}
+			m_ResyncSourceRound = ScenarioRunner::GetLockstepRoundId();
+			m_ResyncRetainsLocalState = true;
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			ScenarioRunner::SetSessionPump(nullptr);
 			// The round the resync destroys may be holding a fenced peer's disconnect it took off the
 			// transport; the session is the only thing here that outlives the coordinator.
 			DrainPendingSessionEventsLocked(true);
 			AccumulateLockstepTotalsLocked();
-			transport = std::move(m_Transport);
+			link = TakeTransportLinkLocked();
 			session = std::move(m_Session);
 			runner = std::move(m_Runner);
 			if (isHost) {
@@ -664,7 +671,7 @@ static std::string ResyncSaveName() {
 		m_CancelRequested.store(false);
 		m_ReadyRequested.store(true);
 		m_StartRequested.store(isHost);
-		m_Worker = std::thread(&NetMatchService::WorkerResyncMain, this, transport.release(), session.release(), coordinator.release(), runner.release(), std::move(stateBytes));
+		m_Worker = std::thread(&NetMatchService::WorkerResyncMain, this, std::move(link), session.release(), coordinator.release(), runner.release(), std::move(stateBytes));
 		return true;
 	}
 
@@ -679,8 +686,7 @@ static std::string ResyncSaveName() {
 		m_LastResync.happened = true;
 	}
 
-	void NetMatchService::WorkerResyncMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes) {
-		std::unique_ptr<GnsTransport> transport(transportRaw);
+	void NetMatchService::WorkerResyncMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes) {
 		std::unique_ptr<NetSession> session(sessionRaw);
 		std::unique_ptr<NetLockstepCoordinator> coordinator(coordinatorRaw);
 		std::unique_ptr<NetMatchRunner> runner(runnerRaw);
@@ -705,7 +711,7 @@ static std::string ResyncSaveName() {
 				m_LastResync.envelopeBytes = receivedEnvelope;
 				m_LastResync.happened = true;
 			}
-			m_Transport = std::move(transport);
+			RestoreTransportLinkLocked(std::move(link));
 			m_Session = std::move(session);
 			m_Coordinator = std::move(coordinator);
 			m_Runner = std::move(runner);
@@ -808,8 +814,7 @@ static std::string ResyncSaveName() {
 
 	// Same shape as WorkerMain: the objects live as worker locals while the lobby round runs, so
 	// report/snapshot readers never race a mid-mutation runner; they move back in when it settles.
-	void NetMatchService::WorkerRematchMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw) {
-		std::unique_ptr<GnsTransport> transport(transportRaw);
+	void NetMatchService::WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw) {
 		std::unique_ptr<NetSession> session(sessionRaw);
 		std::unique_ptr<NetLockstepCoordinator> coordinator(coordinatorRaw);
 		std::unique_ptr<NetMatchRunner> runner(runnerRaw);
@@ -836,7 +841,7 @@ static std::string ResyncSaveName() {
 					m_DirectoryRow.matchConfigHash = NetIdentity::HashHex(runner->GetMatchConfigHash());
 				}
 			}
-			m_Transport = std::move(transport);
+			RestoreTransportLinkLocked(std::move(link));
 			m_Session = std::move(session);
 			m_Coordinator = std::move(coordinator);
 			m_Runner = std::move(runner);
