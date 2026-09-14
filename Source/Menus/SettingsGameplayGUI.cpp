@@ -9,6 +9,7 @@
 #include "GUITextBox.h"
 #include "GUISlider.h"
 #include "GUILabel.h"
+#include "GUIComboBox.h"
 
 using namespace RTE;
 
@@ -41,6 +42,11 @@ SettingsGameplayGUI::SettingsGameplayGUI(GUIControlManager* parentControlManager
 	m_MaxUnheldItemsTextbox->SetText(std::to_string(g_MovableMan.GetMaxDroppedItems()));
 	m_MaxUnheldItemsTextbox->SetNumericOnly(true);
 	m_MaxUnheldItemsTextbox->SetMaxTextLength(2);
+
+	m_BrainlessHumansSpectateCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboBrainlessHumansSpectate"));
+	m_BrainlessHumansSpectateCombo->AddItem("Keep playing, spectate");
+	m_BrainlessHumansSpectateCombo->AddItem("End the match");
+	m_BrainlessHumansSpectateCombo->SetSelectedIndex(g_SettingsMan.GetBrainlessHumansSpectate() ? 0 : 1);
 
 	m_CrabBombThresholdTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextboxCrabBombThreshold"));
 	m_CrabBombThresholdTextbox->SetText(std::to_string(g_SettingsMan.GetCrabBombThreshold()));
@@ -140,6 +146,9 @@ void SettingsGameplayGUI::HandleInputEvents(GUIEvent& guiEvent) {
 			g_SettingsMan.SetShowEnemyHUD(m_ShowEnemyHUDCheckbox->GetCheck());
 		} else if (guiEvent.GetControl() == m_EnableSmartBuyMenuNavigationCheckbox) {
 			g_SettingsMan.SetSmartBuyMenuNavigation(m_EnableSmartBuyMenuNavigationCheckbox->GetCheck());
+		} else if (guiEvent.GetControl() == m_BrainlessHumansSpectateCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
+			// A net match follows the host's rule instead; this is what single player and a hosted match start from.
+			g_SettingsMan.SetBrainlessHumansSpectate(m_BrainlessHumansSpectateCombo->GetSelectedIndex() != 1);
 		} else if (guiEvent.GetControl() == m_MaxUnheldItemsTextbox && guiEvent.GetMsg() == GUITextBox::Enter) {
 			UpdateMaxUnheldItemsTextbox();
 		} else if (guiEvent.GetControl() == m_CrabBombThresholdTextbox && guiEvent.GetMsg() == GUITextBox::Enter) {

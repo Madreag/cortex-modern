@@ -143,6 +143,7 @@
 #include <array>
 #include <list>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <thread>
 #include <unordered_set>
@@ -280,7 +281,7 @@ static uint64_t s_netLockstepTicks = 0;
 static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
 static uint16_t s_netLockstepInputDelay = 0;
 static uint8_t s_netMatchPeers = 2;
-static bool s_netMatchBrainlessSpectate = true;
+static std::optional<bool> s_netMatchBrainlessSpectate;
 static std::string s_netMatchMode = "pvp";
 static std::string s_netMatchOwnershipPolicy = "team-owner";
 static bool s_netMatchServiceE2EEnteredEditor = false;
