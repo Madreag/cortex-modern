@@ -38,6 +38,13 @@ def rules_for(variant):
         rules["scene_name"] = "Fredeleig Plains"
     elif variant == "stock":
         rules["activity_preset"] = "Skirmish Defense"
+    elif variant == "census":
+        # What an offline "-scenario Skirmish Defense" launch produces: the preset declares no
+        # DefaultGoldMediumDifficulty, so ActivityMan::StartActivity falls back to the activity's own
+        # team funds, and the CLI path stages the activity's own site with units left undeployed.
+        rules.update(activity_preset="Skirmish Defense", scene_name="Ketanot Hills", difficulty=50,
+                     starting_gold=2000, fog_of_war=False, require_clear_path_to_orbit=False, deploy_units=False)
+        rules["teams"][1] = dict(technology_intent="-All-", technology_module="", ai_skill=50)
     elif variant == "missing-activity":
         rules["activity_preset"] = "Missing launch activity"
     elif variant == "missing-scene":
@@ -97,6 +104,27 @@ def score_rules(log, rules, default=False):
     actual = rows[0] if len(rows) == 1 else {}
     differences = {key: {"expected": value, "actual": actual.get(key)} for key, value in expected.items() if actual.get(key) != value}
     return {"pass": len(rows) == 1 and not differences, "observations": rows, "differences": differences}
+
+
+def tick_lines(path, tick="1"):
+    """Every per-MO CC_SIM_DUMP line of one tick: the census of what the launch actually placed."""
+    if not Path(path).is_file():
+        return None
+    return [line for line in Path(path).read_text(errors="replace").splitlines() if line.split(" ", 1)[0] == tick]
+
+
+def census_compare(offline_dump, match_dump):
+    left, right = tick_lines(offline_dump), tick_lines(match_dump)
+    if left is None or right is None:
+        return {"pass": False, "reason": "a census dump is missing", "offline_dump": str(offline_dump), "match_dump": str(match_dump)}
+    first = next((index for index, (a, b) in enumerate(zip(left, right)) if a != b), None)
+    if first is None and len(left) != len(right):
+        first = min(len(left), len(right))
+    return {"pass": left == right, "offline_lines": len(left), "match_lines": len(right),
+            "first_difference": None if first is None else {
+                "index": first,
+                "offline": left[first] if first < len(left) else None,
+                "match": right[first] if first < len(right) else None}}
 
 
 def launch(options):
@@ -177,6 +205,27 @@ def launch(options):
         checks["replay_exact"], result["replay_simulation"] = strict_compare(root / "host/trace.json", replay_trace, 600)
         result["replay_rules"] = score_rules((root / "replay/stdout.log").read_text(errors="replace"), rules, default)
         checks["replay_rules"] = result["replay_rules"]["pass"]
+        if options.variant == "census":
+            # The offline arm: the same preset launched through the stock command line scenario path, whose
+            # setup the match must match. A retained reference build is passed as --offline-repo.
+            offline_repo = Path(getattr(options, "offline_repo", None) or repo).resolve()
+            offline_trace = root / "offline/trace.json"
+            offline = make_run(offline_repo, ["-scenario", rules["activity_preset"], "-max-ticks", "1", "-tick-hashes",
+                                              "-out", str(offline_trace), "-seed", "42", "-num-lua-states", "4"],
+                               root / "offline", options.timeout,
+                               env={"CCCP_HEADLESS": "1", "CC_SIM_DUMP": "1:1"}, expected=[offline_trace])
+            try:
+                result["offline_record"] = offline.start().finish()
+            finally:
+                offline.close()
+            offline_log = (root / "offline/stdout.log").read_text(errors="replace")
+            checks["offline_process"] = result["offline_record"].get("exit_code") == 0 and not result["offline_record"].get("timed_out")
+            result["census"] = census_compare(root / "offline/trace.json.simdump.txt", root / "host/trace.json.simdump.txt")
+            result["census"]["offline_exe_sha256"] = sha(offline_repo / "Cortex Command.exe")
+            # Evidence, not a gate: a reference build has no rules print, and the command line scenario path
+            # never runs the technology combo the menu does, so its team tech stays unset.
+            result["census"]["rules_rows"] = {"offline": observations(offline_log), "match": observations(logs["host"])}
+            checks["census_tick1_dump"] = result["census"]["pass"]
         if options.baseline:
             for peer in ("host", "client", "replay"):
                 left, right = options.baseline / peer / "trace.json.simdump.txt", root / peer / "trace.json.simdump.txt"
