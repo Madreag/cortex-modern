@@ -282,7 +282,25 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	}
 	const auto ping = g_NetMatchService.GetMatchPingMs();
 	text += "\nRTT " + (ping ? std::to_string(*ping) : "--") + " ms / " + (snapshot.isHost ? "max peer" : "host link");
-	std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", m_MatchPaceTps);
+	// Sim updates against wall time over the last second: the loop's busy microseconds exclude the time a
+	// stalled or paused match spends waiting, so they over-read the pace.
+	static long long s_paceMarkUs = 0;
+	static uint64_t s_paceMarkUpdates = 0;
+	static double s_paceTps = 0.0;
+	const long long paceNowUs = g_TimerMan.GetAbsoluteTime();
+	const uint64_t paceUpdates = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	const long long paceSpanUs = paceNowUs - s_paceMarkUs;
+	if (s_paceMarkUs <= 0 || paceSpanUs < 0) {
+		s_paceMarkUs = paceNowUs;
+		s_paceMarkUpdates = paceUpdates;
+	} else if (paceSpanUs >= 1000000 || (s_paceTps == 0.0 && paceSpanUs > 0)) {
+		s_paceTps = static_cast<double>(paceUpdates - s_paceMarkUpdates) * 1000000.0 / static_cast<double>(paceSpanUs);
+		if (paceSpanUs >= 1000000) {
+			s_paceMarkUs = paceNowUs;
+			s_paceMarkUpdates = paceUpdates;
+		}
+	}
+	std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", s_paceTps);
 	text += metrics;
 	std::string holdName;
 	uint32_t holdSeconds = 0;
