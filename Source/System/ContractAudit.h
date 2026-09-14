@@ -726,6 +726,20 @@ Field(path + ".Controller.m_JoyAccelTimer", object.m_JoyAccelTimer);
 Field(path + ".Controller.m_KeyAccelTimer", object.m_KeyAccelTimer);
 Field(path + ".Controller.m_MouseMovement", object.m_MouseMovement);
 Field(path + ".Controller.m_AnalogCursorAngleLimits", object.m_AnalogCursorAngleLimits);
+Field(path + ".Controller.m_LocalProduction.controlStates", object.m_LocalProduction.controlStates);
+Field(path + ".Controller.m_LocalProduction.analogMove", object.m_LocalProduction.analogMove);
+Field(path + ".Controller.m_LocalProduction.analogAim", object.m_LocalProduction.analogAim);
+Field(path + ".Controller.m_LocalProduction.analogCursor", object.m_LocalProduction.analogCursor);
+Field(path + ".Controller.m_LocalProduction.mouseMovement", object.m_LocalProduction.mouseMovement);
+Field(path + ".Controller.m_LocalProductionSeatMode", object.m_LocalProductionSeatMode);
+Field(path + ".Controller.m_LocalProductionSeatPlayer", object.m_LocalProductionSeatPlayer);
+Field(path + ".Controller.m_LocalProductionValid", object.m_LocalProductionValid);
+Field(path + ".Controller.m_CommittedInput.controlStates", object.m_CommittedInput.controlStates);
+Field(path + ".Controller.m_CommittedInput.analogMove", object.m_CommittedInput.analogMove);
+Field(path + ".Controller.m_CommittedInput.analogAim", object.m_CommittedInput.analogAim);
+Field(path + ".Controller.m_CommittedInput.analogCursor", object.m_CommittedInput.analogCursor);
+Field(path + ".Controller.m_CommittedInput.mouseMovement", object.m_CommittedInput.mouseMovement);
+Field(path + ".Controller.m_ProducingLocalInput", object.m_ProducingLocalInput);
 }
 void Visit(const Emission& object, const std::string& path) {
 Visit(static_cast<const Entity&>(object), path);

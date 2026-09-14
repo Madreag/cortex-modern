@@ -495,11 +495,14 @@ namespace RTE {
 		};
 
 		InputSample m_LocalProduction; //!< The input this machine's seat produced last tick.
-		InputSample m_CommittedInput; //!< The sim-facing input held aside while the producing pass runs.
 		InputMode m_LocalProductionSeatMode; //!< The seat the carried production belongs to.
 		int m_LocalProductionSeatPlayer;
 		bool m_LocalProductionValid; //!< Whether the carried production still belongs to the current seat.
-		bool m_ProducingLocalInput; //!< Whether the producing pass holds this controller right now.
+
+		// The producing pass owns these two, not the controller's contents: a script that replaces the
+		// whole controller inside the pass must still get the sim's committed input back at its end.
+		InputSample m_CommittedInput; //!< The sim-facing input held aside while the producing pass runs.
+		bool m_ProducingLocalInput = false; //!< Whether the producing pass holds this controller right now.
 
 		std::pair<std::pair<float, float>, bool> m_AnalogCursorAngleLimits; //!< Analog aim value limits, as well as whether or not the limit is actually enabled.
 
@@ -511,6 +514,15 @@ namespace RTE {
 				self.m_WeaponChangeNextIgnore, self.m_WeaponChangePrevIgnore, self.m_WeaponPickupIgnore, self.m_WeaponDropIgnore,
 				self.m_WeaponReloadIgnore, self.m_WeaponPrimaryHotkeyIgnore, self.m_ReleaseTimer, self.m_JoyAccelTimer,
 				self.m_KeyAccelTimer, self.m_MouseMovement, self.m_AnalogCursorAngleLimits);
+		}
+		/// The producer's own baseline, so a restored controller carries on from the input it was producing
+		/// instead of re-deriving a held button as a fresh press.
+		template <class Archive, class Self> static void VisitLocalProduction(Archive& archive, Self& self) {
+			archive(self.m_LocalProduction.controlStates, self.m_LocalProduction.analogMove, self.m_LocalProduction.analogAim,
+				self.m_LocalProduction.analogCursor, self.m_LocalProduction.mouseMovement,
+				self.m_LocalProductionSeatMode, self.m_LocalProductionSeatPlayer, self.m_LocalProductionValid,
+				self.m_CommittedInput.controlStates, self.m_CommittedInput.analogMove, self.m_CommittedInput.analogAim,
+				self.m_CommittedInput.analogCursor, self.m_CommittedInput.mouseMovement, self.m_ProducingLocalInput);
 		}
 #pragma region Update Breakdown
 		/// Updates the player's inputs portion of this Controller. For breaking down Update into more comprehensible chunks.
