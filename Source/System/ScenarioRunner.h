@@ -252,6 +252,8 @@ namespace RTE {
 		static uint64_t GetLockstepReplayFramesWritten();
 		static void CloseLockstepReplayRecord();
 		static bool SetLockstepReplaySource(const std::string& path, std::string* error = nullptr);
+		/// Releases playback input and rewind buffers, preserving its terminal outcome and counters.
+		static void CloseLockstepReplayPlayback();
 		static bool IsLockstepReplayPlayback();
 		static const NetMatchConfig& GetLockstepReplayConfig();
 		static uint64_t GetLockstepReplayStartFrame();

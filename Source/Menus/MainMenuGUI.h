@@ -72,6 +72,8 @@ namespace RTE {
 		/// §11: reads the recovery record on the way into the main menu and, when one applies, opens the
 		/// multiplayer screen's landing panel on the offer instead of leaving the player to find it.
 		void OfferStoredRejoinOnEntry();
+		/// Reopens the browser after playback releases its activity and input stream.
+		void ReturnToReplayBrowser(const std::string& status);
 #pragma endregion
 
 #pragma region Automation
@@ -157,6 +159,12 @@ namespace RTE {
 			MultiplayerModerationBackButton,
 			LastMatchDetailsButton,
 			LastMatchCloseButton,
+			MultiplayerReplaysButton,
+			ReplayPlayButton,
+			ReplayDeleteButton,
+			ReplayBackButton,
+			ReplayDeleteConfirmButton,
+			ReplayDeleteCancelButton,
 			PlayTutorialButton,
 			MetaGameContinueButton,
 			QuitConfirmButton,
@@ -175,7 +183,8 @@ namespace RTE {
 			HostSetup,
 			JoinSetup,
 			Lobby,
-			Moderation
+			Moderation,
+			ReplayBrowser
 		};
 
 		int m_RootBoxMaxWidth; //!< The maximum width the root CollectionBox that holds all this menu's GUI elements. This is to constrain this menu to the primary window's display (left-most) while in multi-display fullscreen, otherwise positioning can get stupid.
@@ -215,6 +224,19 @@ namespace RTE {
 		GUILabel* m_LastMatchSummaryLabel;
 		GUILabel* m_LastMatchDetailsLabel;
 		GUICollectionBox* m_LastMatchDialog;
+		GUICollectionBox* m_ReplayBrowserPanel;
+		GUICollectionBox* m_ReplayDeleteDialog;
+		GUIListBox* m_ReplayList;
+		GUILabel* m_ReplaySelectedLabel;
+		GUILabel* m_ReplayStatusLabel;
+		GUILabel* m_ReplayDeleteLabel;
+		struct ReplayRow {
+			std::string path;
+			std::string text;
+			std::string error;
+		};
+		std::vector<ReplayRow> m_ReplayRows;
+		std::string m_ReplayDeletePath;
 		GUITextBox* m_MultiplayerNameTextBox;
 		GUITextBox* m_MultiplayerHostPortTextBox;
 		GUITextBox* m_MultiplayerHostPlayersTextBox;
@@ -375,6 +397,11 @@ namespace RTE {
 		/// Restricts input to a multiplayer dialog until it closes.
 		void OpenMultiplayerDialog(GUICollectionBox* dialog);
 		void CloseMultiplayerDialog();
+		/// Enumerates replay headers and preserves the selected filename across refreshes.
+		void RefreshReplayList();
+		void RefreshReplayBrowserControls();
+		void PlaySelectedReplay();
+		void ConfirmReplayDelete();
 		/// Rebuilds §9b's moderation panel from the host's live seat view.
 		void RefreshModerationControls(const NetLobbySnapshot& snapshot);
 		/// The one path a moderation action takes, whether a player clicked it or a gate drove it.
