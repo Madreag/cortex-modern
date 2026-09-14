@@ -275,9 +275,9 @@ def probe_script(who, size, arm, mode):
         steps.append({"op": "finish"})
         return {"schema": 1, "timeout_ms": 180000, "steps": steps}
     steps += [{"op": "wait", "sim_at_least": 880}]
-    # At 880 only Always is up; Auto lingers past the stall's end (~780 + 3 s).
-    steps.append(widget(mode == "auto" and arm.get("stall") and who == "Host"))
-    if mode == "always" or (mode == "auto" and arm.get("stall") and who == "Host"):
+    # At 880 only Always is up: the stall clears near its own tick, so Auto's three seconds are long spent.
+    steps.append(widget(False))
+    if mode == "always":
         steps += status_reads + [label_assert(STATUS, "LIVE")]
     steps += [{"op": "assert_control", "control": TOAST, "equals": {"visible": False, "text": ""}},
               {"op": "finish"}]
@@ -429,7 +429,8 @@ def inspect_pair(root, records, size, arm, mode, name):
             checks[f"{who}_widget_never_painted"] = not widget_rects
         if mode == "always":
             checks[f"{who}_widget_seen"] = bool(widget_rects)
-        expect_status = mode == "always" or (mode == "auto" and (arm.get("event") or arm.get("stall") or arm.get("leave")))
+        # Only the host reads the widget through a stall or a hold; in Auto its peer never sees one.
+        expect_status = mode == "always" or (mode == "auto" and (arm.get("event") or ((arm.get("stall") or arm.get("leave")) and who == "Host")))
         if expect_status:
             checks[f"{who}_live_rtt"] = bool(status_texts) and all(re.search(r"(?:^|\n| )RTT \d+ ms", text) for text in status_texts)
             checks[f"{who}_pace_field"] = all(re.search(r"PACE \d+(?:\.\d+)? tps", text) for text in status_texts)
