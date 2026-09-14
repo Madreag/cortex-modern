@@ -1091,6 +1091,7 @@ void ActivityMan::LateUpdateGlobalScripts() const {
 }
 
 void ActivityMan::ClearEndedReplayActivity() {
+	if (m_ActivityNeedsRestart) return;
 	if (m_Activity && !m_Activity->IsOver()) return;
 	m_StartActivity.reset();
 	m_Activity.reset();
