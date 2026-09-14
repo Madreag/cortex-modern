@@ -58,6 +58,7 @@
 #include <array>
 #include <chrono>
 #include <charconv>
+#include <condition_variable>
 #include <map>
 #include <cstdlib>
 #include <execution>
@@ -71,6 +72,54 @@
 #endif
 
 using namespace RTE;
+
+namespace {
+	class AutosaveArchiveWriter {
+	public:
+		AutosaveArchiveWriter() : m_Worker([this] {
+			while (true) {
+				std::packaged_task<bool()> task;
+				{
+					std::unique_lock lock(m_Mutex);
+					m_Ready.wait(lock, [this] { return m_Stopping || !m_Tasks.empty(); });
+					if (m_Tasks.empty()) return;
+					task = std::move(m_Tasks.front());
+					m_Tasks.pop_front();
+				}
+				task();
+			}
+		}) {}
+		~AutosaveArchiveWriter() {
+			{
+				std::lock_guard lock(m_Mutex);
+				m_Stopping = true;
+			}
+			m_Ready.notify_one();
+			m_Worker.join();
+		}
+		std::shared_future<bool> Submit(std::function<bool()> writer) {
+			std::packaged_task<bool()> task(std::move(writer));
+			auto future = task.get_future().share();
+			{
+				std::lock_guard lock(m_Mutex);
+				m_Tasks.push_back(std::move(task));
+			}
+			m_Ready.notify_one();
+			return future;
+		}
+	private:
+		std::mutex m_Mutex;
+		std::condition_variable m_Ready;
+		std::deque<std::packaged_task<bool()>> m_Tasks;
+		bool m_Stopping = false;
+		std::thread m_Worker;
+	};
+
+	AutosaveArchiveWriter& AutosaveWriter() {
+		static AutosaveArchiveWriter writer;
+		return writer;
+	}
+}
 
 ActivityMan::PendingCheckpoint::PendingCheckpoint() = default;
 ActivityMan::PendingCheckpoint::~PendingCheckpoint() = default;
@@ -148,10 +197,6 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 	std::erase_if(m_AutosaveTasks, [](const auto& task) {
 		return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
 	});
-	if (m_AutosaveTasks.size() >= 3) {
-		std::cout << "[autosave] skipped tick=" << tick << " reason=write queue full" << std::endl;
-		return false;
-	}
 	const std::string fileName = matchId + "-" + std::to_string(tick);
 	const std::string path = System::GetWorkingDirectory() + "Autosaves/" + fileName + ".ccsave";
 	std::shared_future<bool> task;
@@ -170,6 +215,10 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 		std::cout << "[autosave] failed tick=" << tick << " reason=" << error.what() << std::endl;
 		return false;
 	}
+}
+
+void ActivityMan::WaitForAutosaveTasks() const {
+	for (const auto& task: m_AutosaveTasks) task.wait();
 }
 
 bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::string& path, SaveCompression compression,
@@ -359,10 +408,7 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 	const std::filesystem::path savePath = path;
 	const int zipLevel = ZipLevelFor(compression);
 	auto saveWriterData = [fileName, savePath, sceneLayerInfos, indexWriter, writer, zipLevel, automatic, matchId]() {
-		static std::mutex autosaveWriteMutex;
-		std::unique_lock<std::mutex> autosaveLock(autosaveWriteMutex, std::defer_lock);
 		if (automatic) {
-			autosaveLock.lock();
 			std::filesystem::create_directories(savePath.parent_path());
 		}
 		struct PendingArchive {
@@ -468,7 +514,7 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 		for (const auto& layer: *sceneLayerInfos) bytes += static_cast<size_t>(layer.bitmap->w) * layer.bitmap->h * bitmap_color_depth(layer.bitmap.get()) / 8;
 		*capturedBytes = bytes;
 	}
-	task = g_ThreadMan.GetBackgroundThreadPool().submit([this, saveWriterData, saveMainMs, fileName, automatic, tick]() {
+	auto writeArchive = [this, saveWriterData, saveMainMs, fileName, automatic, tick]() {
 		const auto asyncStart = std::chrono::steady_clock::now();
 		bool saved = false;
 		try {
@@ -486,7 +532,8 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 			std::cout << "[snapbench] save main_ms=" << saveMainMs << " zip_io_ms=" << asyncMs << " saved=" << saved << std::endl;
 		}
 		return saved;
-	}).share();
+	};
+	task = automatic ? AutosaveWriter().Submit(std::move(writeArchive)) : g_ThreadMan.GetBackgroundThreadPool().submit(std::move(writeArchive)).share();
 
 	return true;
 }

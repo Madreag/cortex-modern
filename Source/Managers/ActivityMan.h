@@ -147,6 +147,8 @@ namespace RTE {
 		bool SaveCurrentGame(const std::string& fileName, SaveCompression compression = SaveCompression::Fast);
 		/// Captures a callback-free checkpoint at a completed sim tick and queues its archive write.
 		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick);
+		/// Drains checkpoint writes at shutdown, after simulation has ended.
+		void WaitForAutosaveTasks() const;
 		long long LastSaveMainMs() const { return m_LastSaveMainMs; }
 		long long LastSaveZipMs() const { return m_LastSaveZipMs; }
 		std::string CaptureRuntimeGlobals() const;
@@ -323,7 +325,7 @@ namespace RTE {
 		int m_StaleActivitySlots = 0;
 
 		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.
-		std::vector<std::shared_future<bool>> m_AutosaveTasks; //!< At most three captured checkpoints await disk IO.
+		std::vector<std::shared_future<bool>> m_AutosaveTasks; //!< Captured checkpoints awaiting disk IO.
 		long long m_LastSaveMainMs = 0;
 		long long m_LastSaveZipMs = 0;
 
