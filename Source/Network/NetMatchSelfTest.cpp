@@ -5830,7 +5830,7 @@ namespace RTE {
 							step = "the expired lease was deleted more than once";
 						} else {
 							std::cout << "PASS completed_lobby_expires wait_s=" << NetMatchService::c_CompletedLobbyExpiryMs / 1000
-									  << " deletes=1 beats_after=0" << std::endl;
+									  << " deletes=1 new_beats=0" << std::endl;
 						}
 					}
 				}
