@@ -18,9 +18,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--case", choices=["codec"], required=True)
+    parser.add_argument("--case", choices=["codec", "launch"], required=True)
     parser.add_argument("--timeout", type=float, default=300)
+    parser.add_argument("--port", type=int, default=48320)
+    parser.add_argument("--variant", default="rules", choices=["rules", "default", "infinite", "site", "stock", "missing-activity", "missing-scene", "missing-module", "missing-tech"])
+    parser.add_argument("--dedicated", action="store_true")
+    parser.add_argument("--baseline", type=Path)
     options = parser.parse_args()
+    if options.case == "launch":
+        from net_activity_launch import launch
+        return launch(options)
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     run = make_run(options.repo, ["-net-match-selftest"], root / "net-match-selftest", options.timeout)

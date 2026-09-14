@@ -85,6 +85,7 @@
 #include "NetIdentitySelfTest.h"
 #include "NetLanDiscovery.h"
 #include "NetLockstep.h"
+#include "NetLobbyProtocol.h"
 #include "NetMatchReplay.h"
 #include "TelemetryBundle.h"
 #include "NetLockstepSelfTest.h"
@@ -138,6 +139,7 @@
 #include <filesystem>
 #include <format>
 #include <iostream>
+#include <iomanip>
 #include <random>
 #include <deque>
 #include <array>
@@ -226,6 +228,7 @@ static bool s_netMatch = false;
 static bool s_netMatchServiceE2E = false;
 static bool s_netDedicated = false;
 static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
+static std::string s_netMatchServiceConfigPath;
 
 // The W97 router port-mapping feature: opt-in by setting or flag, probed headless.
 static int s_netPortMapCli = -1; // -1 unset; -net-port-map off|on forces 0/1 over the setting.
@@ -855,6 +858,10 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-service-preset") {
 			s_netMatchServiceE2EPreset = argValue[++i];
+			continue;
+		}
+		if (!lastArg && currentArg == "-net-match-service-config") {
+			s_netMatchServiceConfigPath = argValue[++i];
 			continue;
 		}
 
@@ -3483,6 +3490,20 @@ void RunGameLoop() {
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
 			const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			if (simTick == 1 && (s_netMatchServiceE2E || !s_netReplayInPath.empty() || ScenarioRunner::IsActive())) {
+				if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) {
+					std::cout << "[e2e] rules tick=" << simTick << " difficulty=" << activity->GetDifficulty()
+					          << " gold=" << activity->GetStartingGold() << " fog=" << activity->GetFogOfWarEnabled()
+					          << " orbit=" << activity->GetRequireClearPathToOrbit() << " deploy=" << g_SceneMan.GetPlaceUnitsOnLoad();
+					for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+						std::cout << " team" << team << ".tech=" << std::quoted(activity->GetTeamTech(team))
+						          << " team" << team << ".ai=" << activity->GetTeamAISkill(team)
+						          << " team" << team << ".funds=" << activity->GetTeamFunds(team);
+					}
+					std::cout << " cpu_team=" << activity->GetCPUTeam() << " activity=" << std::quoted(activity->GetModuleAndPresetName())
+					          << " scene=" << std::quoted(g_SceneMan.GetScene()->GetModuleAndPresetName()) << std::endl;
+				}
+			}
 			// Sample the sim hash on an interval during live lockstep for the runtime desync check. NOT under
 			// -tick-hashes recording (the offline gate is the check there); a real menu match has no -tick-hashes.
 			constexpr uint64_t c_DesyncCheckIntervalTicks = 30;
@@ -5122,6 +5143,20 @@ int RunNetMatchServiceE2E() {
 		request.port = s_netPort;
 		request.playerName = e2eHost ? "Host" : "Client";
 		request.activityPreset = s_netMatchServiceE2EPreset;
+		if (e2eHost && !s_netMatchServiceConfigPath.empty()) {
+			std::ifstream input(s_netMatchServiceConfigPath, std::ios::binary);
+			std::vector<uint8_t> bytes(NetLobbyProtocol::c_HeaderBytes + NetLobbyProtocol::c_MaxPayloadBytes + 1);
+			input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+			bytes.resize(static_cast<size_t>(input.gcount()));
+			const auto decoded = NetLobbyProtocol::Decode(bytes);
+			const auto* payload = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
+			if (!payload || payload->config.dedicated != request.dedicated) {
+				setupError = payload ? "launch config dedicated role differs from command line" : "launch config: " + decoded.error.message;
+			} else {
+				request.standardRules = payload->config;
+				request.activityPreset = payload->config.activityPreset;
+			}
+		}
 		// The e2e honours -net-match-ownership-policy; team-owner is the default so the flagless path is unchanged.
 		NetActorOwnershipPolicy e2ePolicy;
 		request.ownershipPolicy = NetMatchConfigUtil::ParseOwnershipPolicy(s_netMatchOwnershipPolicy, e2ePolicy) ? e2ePolicy : NetActorOwnershipPolicy::TeamOwner;
@@ -5133,7 +5168,7 @@ int RunNetMatchServiceE2E() {
 		}
 		request.resyncOnDesync = s_netMatchResyncOnDesync;
 		request.autoInputDelay = s_netMatchAutoDelay;
-		if (!g_NetMatchService.Start(request, &setupError)) {
+		if (!setupError.empty() || !g_NetMatchService.Start(request, &setupError)) {
 			s_netMatchServiceE2EExitCode = 1;
 		}
 	}

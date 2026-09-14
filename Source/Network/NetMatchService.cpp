@@ -2896,6 +2896,9 @@ static std::string ResyncSaveName() {
 		NetMatchConfig config = NetMatchConfigUtil::MakeDefault(sessionId);
 		config.activityPreset = request.activityPreset.empty() ? "P4 Alpha Duel" : request.activityPreset;
 		config.sceneName = "Grasslands";
+		if (request.standardRules) {
+			static_cast<NetMatchStandardRules&>(config) = *request.standardRules;
+		}
 		config.mode = mode;
 		config.modePreset = NetMatchConfigUtil::ModeName(mode);
 		config.ownershipPolicy = request.ownershipPolicy;
