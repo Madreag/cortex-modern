@@ -3,6 +3,8 @@
 #include "Singleton.h"
 
 #include <deque>
+#include <mutex>
+#include <cstddef>
 #include <unordered_set>
 #include <string>
 
@@ -92,6 +94,8 @@ namespace RTE {
 		/// @param filePath The filename of the file to write to.
 		/// @return Whether writing to the file was successful.
 		bool SaveAllText(const std::string& filePath);
+		/// Copies the console's newest bytes without touching the filesystem.
+		std::string CopyLogTail(size_t limit) const;
 
 		/// Clears all previous input.
 		void ClearLog();
@@ -135,6 +139,7 @@ namespace RTE {
 
 		int m_ConsoleTextMaxNumLines; //!< Maximum number of lines to display in the console text label.
 
+		mutable std::mutex m_OutputLogMutex;
 		std::deque<std::string> m_OutputLog; //!< Log of all strings outputted by the console.
 		std::deque<std::string> m_InputLog; //!< Log of previously entered input strings.
 		std::deque<std::string>::iterator m_InputLogPosition; //!< Iterator to the current position in the log.
@@ -144,6 +149,7 @@ namespace RTE {
 		short m_LastLogMove; //!< The last direction the log marker was moved. Needed so that changing directions won't need double tapping.
 
 	private:
+		void AppendLogEntry(const std::string& text);
 		bool m_ConsoleUseMonospaceFont; //!< Whether the console text is using the monospace font.
 
 		/// Sets the console to read-only mode and enables it.
