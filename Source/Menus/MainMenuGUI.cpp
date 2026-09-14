@@ -1180,16 +1180,20 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	const int portMapHeight = snapshot.portMap.empty() ? 0 : 14;
 	m_MultiplayerErrorLabel->SetText(GroupDelimiterForDisplay(snapshot.errorText));
 	m_MultiplayerErrorLabel->EnsureDrawableTextFont("FontSmall.png");
-	const int desiredWidth = std::max(300, std::max(m_MultiplayerErrorLabel->GetMaxWordWidth(), widestRowText) + 24);
+	const int statusTextWidth = m_MultiplayerLobbyPlayerRowFont
+		? m_MultiplayerLobbyPlayerRowFont->CalculateWidth(m_MultiplayerStatusLabel->GetText(), m_MultiplayerLobbyPlayerRowFallbackFont)
+		: 0;
+	const int desiredWidth = std::max(300, std::max({m_MultiplayerErrorLabel->GetMaxWordWidth(), widestRowText, statusTextWidth}) + 24);
 	const int contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
-	std::vector<GUILabel*> playerRowLabels(m_MultiplayerLobbyPlayerLabels.begin(), m_MultiplayerLobbyPlayerLabels.end());
+	std::vector<GUILabel*> fillLabels(m_MultiplayerLobbyPlayerLabels.begin(), m_MultiplayerLobbyPlayerLabels.end());
+	fillLabels.push_back(m_MultiplayerStatusLabel);
 	// Chat labels fill like the player rows when the panel widens (X=12, W=contentWidth-24).
 	for (GUILabel* label : m_MultiplayerLobbyChatLabels) {
 		if (label) {
-			playerRowLabels.push_back(label);
+			fillLabels.push_back(label);
 		}
 	}
-	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth, playerRowLabels);
+	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth, fillLabels);
 	if (m_MultiplayerLobbyPlayersHeader) {
 		m_MultiplayerLobbyPlayersHeader->SetPositionRel(contentWidth > 300 ? 24 : 20, m_MultiplayerLobbyPlayersHeader->GetRelYPos());
 	}
