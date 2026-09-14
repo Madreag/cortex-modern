@@ -3671,6 +3671,39 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			fixture->ClearCheckpointActorIDs();
 			if (!restore.relaunching) g_ActivityMan.EndLockstepRelaunch();
 		}
+		{
+			// A peer that did not own a seat carries no local UI for it, so a returner's saved slot arrives empty.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			fixture->m_PlayerController[0].Create(Controller::CIM_PLAYER, 0);
+			Controller* controller = &fixture->m_PlayerController[0];
+			fixture->m_pBuyGUI[0] = new BuyMenuGUI();
+			GUICheckpoint::NetLocalRestoreScope localUI;
+			if (fixture->m_pBuyGUI[0]->Create(controller) < 0) throw std::runtime_error("buy menu fixture creation failed");
+			BuyMenuGUI* const menu = fixture->m_pBuyGUI[0];
+			const std::string live = menu->SaveCheckpoint();
+			std::string detail;
+			const auto step = [&](const char* name, bool applied) {
+				if (!detail.empty()) return false;
+				const bool same = fixture->m_pBuyGUI[0] == menu, initialized = menu->IsCheckpointInitialized(), controls = menu->HasLiveCachedControls();
+				std::cout << "[net-local-menu] step=" << name << " applied=" << applied << " same_menu=" << same << " initialized=" << initialized << " controls_live=" << controls << std::endl;
+				if (applied && same && initialized && controls) return true;
+				detail = std::string(name) + " applied=" + std::to_string(applied) + " same_menu=" + std::to_string(same) +
+				         " initialized=" + std::to_string(initialized) + " controls_live=" + std::to_string(controls);
+				return false;
+			};
+			// Each step creates over or restores into the live menu the returner's seat already owns.
+			if (step("created", true) && step("second_create", menu->Create(controller) >= 0) &&
+			    step("empty_restore", RestoreNetLocalMenu(fixture->m_pBuyGUI[0], std::string{}, controller)) &&
+			    step("saved_restore", RestoreNetLocalMenu(fixture->m_pBuyGUI[0], live, controller))) {
+				BuyMenuGUI peer;
+				if (peer.Create(controller) < 0) throw std::runtime_error("buy menu peer fixture creation failed");
+				GUICheckpoint::NetLocalCaptureScope localValues;
+				step("create_net_local_ui", RestoreNetLocalMenu(fixture->m_pBuyGUI[0], peer.SaveCheckpoint(), controller));
+			}
+			check(("net_local_menu_survives_empty_restore" + (detail.empty() ? std::string{} : " " + detail)).c_str(), detail.empty());
+		}
 	} catch (const std::exception& exception) { check(exception.what(), false); }
 	for (long uid: scriptIdentities) lua.RunScriptString("if _ScriptedObjects then _ScriptedObjects[\"" + std::to_string(uid) + "\"] = nil end");
 	lua.RunScriptString(clear);
