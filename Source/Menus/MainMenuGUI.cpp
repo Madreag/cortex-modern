@@ -558,6 +558,16 @@ void MainMenuGUI::OfferStoredRejoinOnEntry() {
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 }
 
+void MainMenuGUI::OfferRematchLobbyOnEntry() {
+	if (!g_NetMatchService.NeedsCompletedLobbyPump()) {
+		return;
+	}
+	SetActiveMenuScreen(MenuScreen::MultiplayerScreen, false);
+	// UpdateMultiplayerScreen reconvenes the session and reconciles this panel from the snapshot;
+	// naming it here keeps the first frame on the lobby instead of the landing panel.
+	m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
+}
+
 void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
 	if ((!m_ActiveDialogBox || m_ActiveDialogBox == m_MainMenuScreens[MenuScreen::QuitScreen]) && (backButtonPressed || g_UInputMan.KeyPressed(SDLK_ESCAPE))) {
 		if (m_ActiveMenuScreen != MenuScreen::MainScreen) {
@@ -1138,7 +1148,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	}
 	static std::string s_shareAddress;
 	static bool s_shareResolved = false;
-	if (snapshot.isHost && snapshot.inLobby && !snapshot.remoteReady) {
+	// The host's join and ready-up hints belong to the lobby it opened itself; a lobby that follows
+	// a played match already carries its own line - the result and the rematch offer - like the client's.
+	if (snapshot.isHost && snapshot.inLobby && !snapshot.remoteReady && !snapshot.playedAMatch) {
 		size_t connectedCount = 0;
 		for (const NetLobbyMember& member: snapshot.members) {
 			if (member.connected) {

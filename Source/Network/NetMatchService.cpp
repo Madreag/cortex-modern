@@ -1028,6 +1028,7 @@ static std::string ResyncSaveName() {
 			m_LeaveExchangeRun = false;
 			m_MatchWasRunning = false;
 			m_LeftMatch = false;
+			m_CompletedLobbySinceMs = 0;
 			m_PendingLobbyEvents.clear();
 			m_PendingLobbyBytes = 0;
 			m_PendingLobbyOverflow = false;
@@ -1180,6 +1181,8 @@ static std::string ResyncSaveName() {
 		}
 		if (m_State == NetMatchServiceState::Running) {
 			m_State = NetMatchServiceState::Completed;
+			// The rematch lobby this end opens starts waiting for the other peers here.
+			m_CompletedLobbySinceMs = SteadyNowMs();
 			m_StatusText = result.empty() ? "Match complete" : result;
 			m_ErrorText.clear();
 		}
@@ -1363,6 +1366,49 @@ static std::string ResyncSaveName() {
 			m_DirectoryRegistered = m_Directory.GetState() == NetDirectoryClient::State::Registered;
 		}
 		DriveReconnectUx(nowMs);
+		// Last: the expiry destroys the service, so nothing in this pump may run after it.
+		UpdateCompletedLobbyExpiry(nowMs);
+	}
+
+	bool NetMatchService::RematchLobbySeatedLocked() const {
+		if (m_LobbySnapshot.members.empty()) {
+			return false;
+		}
+		for (const NetLobbyMember& member: m_LobbySnapshot.members) {
+			if (!member.cpu && !member.connected) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// A rematch lobby lives only while its peers are coming back. One still a seat short after the
+	// wait is destroyed here, which is what releases the session, the seats and the directory lease.
+	void NetMatchService::UpdateCompletedLobbyExpiry(uint64_t nowMs) {
+		bool expired = false;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_CompletedLobbySinceMs == 0) {
+				return;
+			}
+			const bool settled = m_LeftMatch || m_State == NetMatchServiceState::Idle || m_State == NetMatchServiceState::Failed ||
+			                     m_State == NetMatchServiceState::ReadyToLaunch || m_State == NetMatchServiceState::Running ||
+			                     RematchLobbySeatedLocked();
+			if (settled) {
+				m_CompletedLobbySinceMs = 0;
+				return;
+			}
+			expired = nowMs >= m_CompletedLobbySinceMs + c_CompletedLobbyExpiryMs;
+			if (expired) {
+				m_CompletedLobbySinceMs = 0;
+			}
+		}
+		if (!expired) {
+			return;
+		}
+		std::cout << "[net-match] rematch lobby expired after " << c_CompletedLobbyExpiryMs / 1000 << "s waiting for the other player" << std::endl;
+		Destroy();
+		SetState(NetMatchServiceState::Idle, "Idle", "The rematch lobby timed out.");
 	}
 
 	uint64_t NetMatchService::AdmissionNowMs() const {
@@ -1385,7 +1431,9 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::NeedsCompletedLobbyPump() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		return m_State == NetMatchServiceState::Completed && !m_LeftMatch;
+		// The lobby a match end opens outlives the Completed state: until every peer is back it still
+		// owes its lease a heartbeat and the peer that never returns its expiry.
+		return !m_LeftMatch && (m_State == NetMatchServiceState::Completed || m_CompletedLobbySinceMs != 0);
 	}
 
 	bool NetMatchService::NeedsRecoveryPump() const {
@@ -1801,6 +1849,7 @@ static std::string ResyncSaveName() {
 		snapshot.inLobby = m_State == NetMatchServiceState::Starting;
 		snapshot.running = m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch;
 		snapshot.failed = m_State == NetMatchServiceState::Failed;
+		snapshot.playedAMatch = m_MatchWasRunning;
 		snapshot.inputDelayText = m_InputDelayText;
 		if (snapshot.isHost && snapshot.active) {
 			const PortMapStatus portMap = GetPortMapStatus();
