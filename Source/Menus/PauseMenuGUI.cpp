@@ -39,6 +39,7 @@ void PauseMenuGUI::Clear() {
 	m_ButtonHoveredText.fill(std::string());
 	m_ButtonUnhoveredText.fill(std::string());
 	m_HoveredButton = nullptr;
+	m_PendingAutomationCommand.clear();
 	m_PrevHoveredButtonIndex = 0;
 
 	m_SavingButtonsDisabled = false;
@@ -203,6 +204,11 @@ bool PauseMenuGUI::HandleInputEvents() {
 		UpdateHoveredButton(dynamic_cast<GUIButton*>(m_GUIControlManager->GetControlUnderPoint(mousePosX, mousePosY, m_PauseMenuBox, 1)));
 	}
 	m_GUIControlManager->Update();
+	if (!m_PendingAutomationCommand.empty()) {
+		GUIControl* control = m_GUIControlManager->GetControl(m_PendingAutomationCommand);
+		m_PendingAutomationCommand.clear();
+		if (control) control->AddEvent(GUIEvent::Command, 0, 0);
+	}
 
 	GUIEvent guiEvent;
 	while (m_GUIControlManager->GetEvent(&guiEvent)) {
@@ -227,6 +233,32 @@ bool PauseMenuGUI::HandleInputEvents() {
 		}
 	}
 	return false;
+}
+
+bool PauseMenuGUI::AutomationPostCommand(const std::string& controlName) {
+	if (!AutomationControlEnabled(controlName)) return false;
+	m_PendingAutomationCommand = controlName;
+	return true;
+}
+
+bool PauseMenuGUI::AutomationControlExists(const std::string& controlName) const {
+	return m_GUIControlManager->GetControl(controlName) != nullptr;
+}
+
+bool PauseMenuGUI::AutomationControlEnabled(const std::string& controlName) const {
+	GUIControl* control = m_GUIControlManager->GetControl(controlName);
+	if (!control || m_ActiveMenuScreen != PauseMenuScreen::MainScreen || m_ActiveDialogBox) return false;
+	for (GUIControl* node = control; node; node = node->GetParent()) {
+		if (!node->GetEnabled() || !node->GetVisible()) return false;
+	}
+	return true;
+}
+
+bool PauseMenuGUI::AutomationLabelText(const std::string& controlName, std::string& text) const {
+	const auto* button = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl(controlName));
+	if (!button) return false;
+	text = button->GetText();
+	return true;
 }
 
 void PauseMenuGUI::UpdateHoveredButton(const GUIButton* hoveredButton) {
