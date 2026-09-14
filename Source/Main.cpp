@@ -1974,7 +1974,7 @@ static std::string RollbackProbeSaveName() {
 /// Whether this completed update batch has a harness frame to present.
 static bool NetMatchScreenshotDue() {
 	return !s_netMatchScreenshotTicks.empty() && ScenarioRunner::IsLockstepControllerSyncActive() &&
-	       s_netMatchScreenshotTicks.contains(ScenarioRunner::GetLockstepAppliedFrame());
+	       s_netMatchScreenshotTicks.contains(ScenarioRunner::GetLockstepCompletedFrame());
 }
 
 static void DrawFrameWithPreviews() {
@@ -1994,7 +1994,7 @@ static void DrawFrameWithPreviews() {
 	g_WindowMan.DrawPostProcessBuffer();
 	g_WindowMan.UploadFrame();
 	if (NetMatchScreenshotDue()) {
-		const uint64_t tick = ScenarioRunner::GetLockstepAppliedFrame();
+		const uint64_t tick = ScenarioRunner::GetLockstepCompletedFrame();
 		const std::string name = "net_match_tick_" + std::to_string(tick) + "_round_" + std::to_string(ScenarioRunner::GetLockstepRoundId());
 		const int result = g_FrameMan.SaveScreenToPNG(name.c_str());
 		std::cout << "[net-match-screenshot] applied_tick=" << tick << " name=" << name << " queued=" << (result == 0) << std::endl;
