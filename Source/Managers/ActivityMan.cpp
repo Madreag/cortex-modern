@@ -66,6 +66,10 @@
 #include <optional>
 #include <stdexcept>
 
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
 using namespace RTE;
 
 ActivityMan::PendingCheckpoint::PendingCheckpoint() = default;
@@ -160,7 +164,7 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 		}
 		m_AutosaveTasks.push_back(std::move(task));
 		const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count();
-		std::cout << "[autosave] tick=" << tick << " capture_ms=" << std::format("{:.3f}", captureMs) << " bytes=" << bytes << std::endl;
+		std::cout << std::format("[autosave] tick={} capture_ms={:.3f} bytes={}\n", tick, captureMs, bytes) << std::flush;
 		return true;
 	} catch (const std::exception& error) {
 		std::cout << "[autosave] failed tick=" << tick << " reason=" << error.what() << std::endl;
@@ -417,7 +421,15 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 		const int closed = zipClose(archive.file, fileName.c_str());
 		archive.file = nullptr;
 		if (closed != ZIP_OK) throw std::runtime_error("could not finish archive");
-		std::filesystem::rename(archive.path, savePath);
+#ifdef _WIN32
+		if (automatic) {
+			// A healed match can revisit a saved tick; retain the old archive until replacement succeeds.
+			if (!MoveFileExW(archive.path.c_str(), savePath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) throw std::runtime_error("could not publish autosave: " + std::to_string(GetLastError()));
+		} else
+#endif
+		{
+			std::filesystem::rename(archive.path, savePath);
+		}
 		if (automatic) {
 			std::vector<std::pair<uint64_t, std::filesystem::path>> saves;
 			const std::string prefix = matchId + "-";

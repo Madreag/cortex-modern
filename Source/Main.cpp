@@ -933,8 +933,8 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			uint32_t seconds = 0;
 			const std::string value = lastArg ? "" : argValue[i + 1];
 			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), seconds);
-			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || seconds > 86400) {
-				std::cerr << "[autosave] -net-autosave-seconds requires an integer in 0..86400" << std::endl;
+			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
+				std::cerr << "[autosave] -net-autosave-seconds requires a nonnegative 32-bit integer" << std::endl;
 				return false;
 			}
 			NetMatchService::SetAutosaveSeconds(seconds);
