@@ -75,6 +75,12 @@ namespace RTE {
 		m_HasRemoteIdentityHash = false;
 		m_Stats = {};
 		m_Peers.clear();
+		{
+			std::lock_guard<std::mutex> chatLock(m_ChatMutex);
+			m_ChatLog.clear();
+			m_ChatTeams.clear();
+			m_ChatRate.clear();
+		}
 		if (m_Config.maxPeers == 0) {
 			if (error) *error = "host maxPeers must be nonzero";
 			m_State = NetSessionState::Failed;
@@ -116,6 +122,12 @@ namespace RTE {
 		m_PendingModuleMismatch = {};
 		m_Stats = {};
 		m_Peers.clear();
+		{
+			std::lock_guard<std::mutex> chatLock(m_ChatMutex);
+			m_ChatLog.clear();
+			m_ChatTeams.clear();
+			m_ChatRate.clear();
+		}
 		const bool connected = m_Config.p2pJoin.connect ? m_Config.p2pJoin.connect(*m_Transport, error) : m_Transport->Connect(address, m_Config.port, error);
 		if (!connected) {
 			m_State = NetSessionState::Failed;
@@ -135,7 +147,7 @@ namespace RTE {
 
 	void NetSession::Tick(uint64_t nowMs, bool pollTransport) {
 		// Callers clock each setup phase from its own start; never let a later phase rewind us.
-		m_NowMs = std::max(m_NowMs, nowMs);
+		m_NowMs = std::max(m_NowMs.load(), nowMs);
 		if (!m_Transport || m_State == NetSessionState::Stopped || m_State == NetSessionState::Closed ||
 		    m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed) {
 			return;
@@ -161,7 +173,7 @@ namespace RTE {
 	}
 
 	void NetSession::TickKeepalive(uint64_t nowMs) {
-		m_NowMs = std::max(m_NowMs, nowMs);
+		m_NowMs = std::max(m_NowMs.load(), nowMs);
 		if (!m_Transport || m_State == NetSessionState::Stopped || m_State == NetSessionState::Closed ||
 		    m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed) {
 			return;
@@ -170,7 +182,7 @@ namespace RTE {
 	}
 
 	void NetSession::InjectEvent(const NetTransportEvent& event, uint64_t nowMs) {
-		m_NowMs = std::max(m_NowMs, nowMs);
+		m_NowMs = std::max(m_NowMs.load(), nowMs);
 		if (!m_Transport || m_State == NetSessionState::Stopped || m_State == NetSessionState::Closed ||
 		    m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed) {
 			return;
@@ -180,7 +192,7 @@ namespace RTE {
 	}
 
 	void NetSession::TickAdmissionPlane(uint64_t nowMs) {
-		m_NowMs = std::max(m_NowMs, nowMs);
+		m_NowMs = std::max(m_NowMs.load(), nowMs);
 		if (!m_Transport || !m_ReconnectHost || m_State == NetSessionState::Stopped || m_State == NetSessionState::Closed ||
 		    m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed) {
 			return;
@@ -314,6 +326,7 @@ namespace RTE {
 	}
 
 	bool NetSession::Send(NetPeerId peerId, NetPayload payload, std::string* error) {
+		std::lock_guard<std::mutex> sendLock(m_SendMutex);
 		if (!m_Transport) {
 			if (error) *error = "session has no transport";
 			return false;
@@ -470,6 +483,15 @@ namespace RTE {
 				++m_Stats.ignoredPhasePackets;
 				return;
 			}
+			// A chat line that fails decode is a bad presentation message, not a bad peer: it goes
+			// to its own counter and nobody's connection pays for it.
+			uint16_t messageType = 0;
+			if (NetProtocol::PeekMessageType(bytes.data(), bytes.size(), messageType) &&
+			    messageType == static_cast<uint16_t>(NetMessageType::Chat)) {
+				++m_Stats.chatDroppedMalformed;
+				++m_Stats.malformedMessages;
+				return;
+			}
 			HandleMalformed(peerId, decoded.error, bytes);
 			return;
 		}
@@ -526,6 +548,7 @@ namespace RTE {
 		// possible whenever we can still write that version's payload schema. When we cannot, sending
 		// one stamped at OUR version would be undecodable noise, so the disconnect reason carries it.
 		if (haveVersion && NetProtocol::CanEncodeAtVersion(claimedVersion)) {
+			std::lock_guard<std::mutex> sendLock(m_SendMutex);
 			NetMessage rejection;
 			rejection.sequence = m_NextSequence++;
 			rejection.payload = NetJoinRejected{NetRejectReason::ProtocolMismatch, summary, "protocol_version", std::to_string(NetProtocol::c_Version), haveVersion ? std::to_string(claimedVersion) : std::string("unknown")};
@@ -548,6 +571,10 @@ namespace RTE {
 	void NetSession::HandleHostMessage(NetPeerId peerId, const NetMessage& message) {
 		PeerState* peer = FindPeer(peerId);
 		if (!peer || !IsActive(peer->state)) {
+			return;
+		}
+		if (const auto* chat = std::get_if<NetChat>(&message.payload)) {
+			HandleChatMessage(peerId, peer, *chat);
 			return;
 		}
 		if (const auto* hello = std::get_if<NetClientHello>(&message.payload)) {
@@ -712,6 +739,177 @@ namespace RTE {
 		}
 	}
 
+	bool NetSession::SendChat(uint8_t scope, const std::string& text) {
+		std::string clean = text;
+		const bool valid = scope <= c_NetChatScopeTeam && SanitizeChatText(clean);
+		std::vector<NetPeerId> targets;
+		bool sendToHost = false;
+		{
+			std::lock_guard<std::mutex> lock(m_ChatMutex);
+			// Accepted counts as linked: a client sits in Accepted while its admission commit is in
+			// flight, and the host's aggregate state is Accepted in the same window - both are in the lobby.
+			const bool linked = m_Transport &&
+			    (m_Role == NetSessionRole::Host ? (m_State == NetSessionState::Listening || m_State == NetSessionState::Accepted || m_State == NetSessionState::Ready)
+			                                  : (m_Role == NetSessionRole::Client && (m_State == NetSessionState::Accepted || m_State == NetSessionState::Ready)));
+			if (!linked) {
+				return false;
+			}
+			if (!valid) {
+				++m_Stats.chatDroppedInvalid;
+				return false;
+			}
+			// The local seat's window is keyed by the id no transport peer can hold.
+			if (!AdmitChatRate(c_InvalidNetPeerId, m_NowMs)) {
+				++m_Stats.chatDroppedRate;
+				return false;
+			}
+			++m_Stats.chatMessagesSent;
+			DeliverChat({m_LockstepFrame, m_LocalPeerId, m_Config.displayName, scope, clean});
+			if (m_Role == NetSessionRole::Client) {
+				sendToHost = true;
+			} else {
+				// The host's own line is the relay: team scope reaches only the host's own team.
+				const auto mine = m_ChatTeams.find(m_LocalPeerId);
+				const int senderTeam = mine == m_ChatTeams.end() ? -1 : mine->second;
+				for (const PeerState& dest : m_Peers) {
+					if (dest.state != NetSessionState::Accepted && dest.state != NetSessionState::Ready) {
+						continue;
+					}
+					if (scope == c_NetChatScopeTeam) {
+						const auto team = m_ChatTeams.find(dest.assignedPeerId);
+						if (team == m_ChatTeams.end() || team->second != senderTeam) {
+							continue;
+						}
+					}
+					targets.push_back(dest.transportPeerId);
+				}
+			}
+		}
+		NetChat wire;
+		wire.senderPeerId = m_LocalPeerId;
+		wire.scope = scope;
+		wire.sentAtMs = static_cast<uint32_t>(m_NowMs);
+		wire.text = std::move(clean);
+		if (sendToHost) {
+			return Send(m_RemoteTransportPeerId, wire);
+		}
+		uint32_t relayed = 0;
+		for (const NetPeerId target : targets) {
+			if (Send(target, wire)) {
+				++relayed;
+			}
+		}
+		if (relayed > 0) {
+			std::lock_guard<std::mutex> lock(m_ChatMutex);
+			m_Stats.chatMessagesRelayed += relayed;
+		}
+		return true;
+	}
+
+	std::vector<NetChatEntry> NetSession::TakeChatEntries() {
+		std::lock_guard<std::mutex> lock(m_ChatMutex);
+		std::vector<NetChatEntry> out(m_ChatLog.begin(), m_ChatLog.end());
+		m_ChatLog.clear();
+		return out;
+	}
+
+	void NetSession::SetChatTeams(std::map<uint8_t, int> teamsByPeerId) {
+		std::lock_guard<std::mutex> lock(m_ChatMutex);
+		m_ChatTeams = std::move(teamsByPeerId);
+	}
+
+	bool NetSession::SanitizeChatText(std::string& text) {
+		std::string clean;
+		clean.reserve(text.size());
+		for (const char c : text) {
+			const uint8_t byte = static_cast<uint8_t>(c);
+			if (byte >= 0x20U && byte != 0x7FU) {
+				clean.push_back(c);
+			}
+		}
+		if (clean.empty() || clean.size() > NetProtocol::c_MaxChatTextBytes || !NetProtocol::IsValidUtf8(clean)) {
+			return false;
+		}
+		text = std::move(clean);
+		return true;
+	}
+
+	bool NetSession::AdmitChatRate(uint64_t key, uint64_t nowMs) {
+		auto& window = m_ChatRate[key];
+		if (nowMs - window.first >= 1000U) {
+			window.first = nowMs;
+			window.second = 0;
+		}
+		if (window.second >= 5U) {
+			return false;
+		}
+		++window.second;
+		return true;
+	}
+
+	void NetSession::DeliverChat(NetChatEntry entry) {
+		m_ChatLog.push_back(std::move(entry));
+		while (m_ChatLog.size() > 64) {
+			m_ChatLog.pop_front();
+		}
+	}
+
+	void NetSession::HandleChatMessage(NetPeerId transportPeerId, const PeerState* sender, const NetChat& chat) {
+		if (m_Role == NetSessionRole::Host) {
+			// A line that names another seat or arrives before the seat exists is not a message, it
+			// is noise: dropped, counted, never a kick.
+			if (!sender || (sender->state != NetSessionState::Accepted && sender->state != NetSessionState::Ready) ||
+			    chat.senderPeerId != sender->assignedPeerId) {
+				std::lock_guard<std::mutex> lock(m_ChatMutex);
+				++m_Stats.chatDroppedInvalid;
+				return;
+			}
+		} else if (m_State != NetSessionState::Accepted && m_State != NetSessionState::Ready) {
+			std::lock_guard<std::mutex> lock(m_ChatMutex);
+			++m_Stats.chatDroppedInvalid;
+			return;
+		}
+		std::vector<NetPeerId> relayTargets;
+		{
+			std::lock_guard<std::mutex> lock(m_ChatMutex);
+			// The budget is per author, not per socket: a client's inbound lines all ride the host's
+			// transport, so keying that would cap every relayed peer at one shared window.
+			if (!AdmitChatRate(chat.senderPeerId, m_NowMs)) {
+				++m_Stats.chatDroppedRate;
+				return;
+			}
+			++m_Stats.chatMessagesReceived;
+			DeliverChat({m_LockstepFrame, chat.senderPeerId, sender ? sender->displayName : std::string(), chat.scope, chat.text});
+			if (m_Role == NetSessionRole::Host) {
+				const auto mine = m_ChatTeams.find(chat.senderPeerId);
+				const int senderTeam = mine == m_ChatTeams.end() ? -1 : mine->second;
+				for (const PeerState& dest : m_Peers) {
+					if (dest.transportPeerId == transportPeerId ||
+					    (dest.state != NetSessionState::Accepted && dest.state != NetSessionState::Ready)) {
+						continue;
+					}
+					if (chat.scope == c_NetChatScopeTeam) {
+						const auto team = m_ChatTeams.find(dest.assignedPeerId);
+						if (team == m_ChatTeams.end() || team->second != senderTeam) {
+							continue;
+						}
+					}
+					relayTargets.push_back(dest.transportPeerId);
+				}
+			}
+		}
+		uint32_t relayed = 0;
+		for (const NetPeerId target : relayTargets) {
+			if (Send(target, chat)) {
+				++relayed;
+			}
+		}
+		if (relayed > 0) {
+			std::lock_guard<std::mutex> lock(m_ChatMutex);
+			m_Stats.chatMessagesRelayed += relayed;
+		}
+	}
+
 	void NetSession::CompleteClientAdmission() {
 		if (m_Role != NetSessionRole::Client || m_State != NetSessionState::Accepted || !m_ReconnectClient) {
 			return;
@@ -739,6 +937,11 @@ namespace RTE {
 
 	void NetSession::HandleClientMessage(NetPeerId peerId, const NetMessage& message) {
 		if (peerId != m_RemoteTransportPeerId) {
+			return;
+		}
+		if (const auto* chat = std::get_if<NetChat>(&message.payload)) {
+			// Only the host may speak to us in this phase, which the id check above already proved.
+			HandleChatMessage(peerId, nullptr, *chat);
 			return;
 		}
 		if (const auto* request = std::get_if<NetModuleDigestRequest>(&message.payload)) {
@@ -1386,6 +1589,12 @@ namespace RTE {
 				{"module_digests_sent", m_Stats.moduleDigestsSent},
 				{"module_digests_received", m_Stats.moduleDigestsReceived},
 				{"module_digest_exchanges_expired", m_Stats.moduleDigestExchangesExpired},
+				{"chat_sent", m_Stats.chatMessagesSent},
+				{"chat_received", m_Stats.chatMessagesReceived},
+				{"chat_relayed", m_Stats.chatMessagesRelayed},
+				{"chat_dropped_invalid", m_Stats.chatDroppedInvalid},
+				{"chat_dropped_rate", m_Stats.chatDroppedRate},
+				{"chat_dropped_malformed", m_Stats.chatDroppedMalformed},
 			}},
 		};
 		return report.dump(2);

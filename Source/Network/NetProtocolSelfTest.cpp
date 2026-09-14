@@ -789,13 +789,13 @@ namespace RTE {
 			}
 
 			NetChat atCap = chat;
-			atCap.text.assign(NetProtocol::c_MaxShortTextBytes, 'x');
+			atCap.text.assign(NetProtocol::c_MaxChatTextBytes, 'x');
 			if (!RoundTrip({55, 0, atCap}, error)) {
 				return false;
 			}
 			NetChat overCap = chat;
-			overCap.text.assign(NetProtocol::c_MaxShortTextBytes + 1U, 'x');
-			if (!ExpectEncodeError({56, 0, overCap}, NetProtocolErrorCode::StringTooLong, "a 129-byte chat line", error)) {
+			overCap.text.assign(NetProtocol::c_MaxChatTextBytes + 1U, 'x');
+			if (!ExpectEncodeError({56, 0, overCap}, NetProtocolErrorCode::StringTooLong, "a 257-byte chat line", error)) {
 				return false;
 			}
 			NetChat controlChars = chat;
@@ -824,7 +824,29 @@ namespace RTE {
 			if (!ExpectDecodeError(mutated, NetProtocolErrorCode::InvalidValue, error)) {
 				return false;
 			}
-			std::cout << "[net-protocol-selftest] PASS chat: " << NetProtocol::c_MaxShortTextBytes << "-byte cap, UTF-8 validated, scopes all/team" << std::endl;
+			// The malformed-chat path keys on the envelope type alone, so the peek must name Chat on
+			// bytes the payload decoder rejects, and refuse everything that is not a session envelope.
+			uint16_t peeked = 0;
+			if (!NetProtocol::PeekMessageType(mutated.data(), mutated.size(), peeked) || peeked != static_cast<uint16_t>(NetMessageType::Chat)) {
+				*error = "PeekMessageType did not name Chat on a chat envelope with a bad payload";
+				return false;
+			}
+			if (NetProtocol::PeekMessageType(bytes.data(), NetProtocol::c_HeaderBytes - 1U, peeked) ||
+			    NetProtocol::PeekMessageType(nullptr, 0, peeked)) {
+				*error = "PeekMessageType accepted a truncated or absent envelope";
+				return false;
+			}
+			NetHeartbeat heartbeat;
+			std::vector<uint8_t> heartbeatBytes;
+			if (!EncodeMessage({61, 0, heartbeat}, heartbeatBytes, error)) {
+				return false;
+			}
+			if (!NetProtocol::PeekMessageType(heartbeatBytes.data(), heartbeatBytes.size(), peeked) ||
+			    peeked != static_cast<uint16_t>(NetMessageType::Heartbeat)) {
+				*error = "PeekMessageType misnamed a non-chat envelope";
+				return false;
+			}
+			std::cout << "[net-protocol-selftest] PASS chat: " << NetProtocol::c_MaxChatTextBytes << "-byte cap, UTF-8 validated, scopes all/team" << std::endl;
 			return true;
 		}
 

@@ -475,6 +475,9 @@ namespace RTE {
 		static constexpr size_t c_MaxControlPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxDisplayNameBytes = 64;
 		static constexpr size_t c_MaxShortTextBytes = 128;
+		// A chat line is a whole sentence, not a name, so it gets its own bound; the codec drops
+		// anything past it and the session strips control bytes before they ever reach the wire.
+		static constexpr size_t c_MaxChatTextBytes = 256;
 		static constexpr size_t c_MaxDiagnosticTextBytes = 512;
 		// An admission message comes from a connection nobody has authenticated yet, so it is refused
 		// on size before anything parses it. The largest H4 message is a Reclaim at ~498 B.
@@ -493,6 +496,8 @@ namespace RTE {
 		/// decoder for is undecodable noise however the envelope is stamped.
 		static bool IsMessageTypeInVersion(NetMessageType type, uint16_t headerVersion);
 
+		/// Whether the string is well-formed UTF-8, the same check the wire applies.
+		static bool IsValidUtf8(const std::string& value);
 		static NetMessageType MessageTypeOf(const NetPayload& payload);
 		static const char* MessageTypeName(NetMessageType type);
 		static const char* RejectReasonName(NetRejectReason reason);
@@ -509,6 +514,10 @@ namespace RTE {
 		/// This is the stable negotiation envelope §10's probe asks about: magic and version sit at
 		/// fixed offsets in every version of this header.
 		static bool PeekHeaderVersion(const uint8_t* data, size_t size, uint16_t& outVersion);
+		/// Reads the message type out of a buffer stamped with this build's magic, version and header
+		/// size, without decoding the payload. A payload that fails decode still routes to the right
+		/// counter through this instead of falling into the generic malformed path.
+		static bool PeekMessageType(const uint8_t* data, size_t size, uint16_t& outType);
 		static NetDecodeResult Decode(const uint8_t* data, size_t size);
 		static NetDecodeResult Decode(const std::vector<uint8_t>& bytes);
 	};
