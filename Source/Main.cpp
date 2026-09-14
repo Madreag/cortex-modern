@@ -58,6 +58,7 @@
 #include "AHuman.h"
 #include "Attachable.h"
 #include "GameActivity.h"
+#include "NetActivitySetup.h"
 #include "MovableObject.h"
 #include "RTETools.h"
 #include "RotatePrimitiveSelfTest.h"
@@ -3500,8 +3501,9 @@ void RunGameLoop() {
 						          << " team" << team << ".ai=" << activity->GetTeamAISkill(team)
 						          << " team" << team << ".funds=" << activity->GetTeamFunds(team);
 					}
+					const Scene* loadedScene = g_SceneMan.GetScene();
 					std::cout << " cpu_team=" << activity->GetCPUTeam() << " activity=" << std::quoted(activity->GetModuleAndPresetName())
-					          << " scene=" << std::quoted(g_SceneMan.GetScene()->GetModuleAndPresetName()) << std::endl;
+					          << " scene=" << std::quoted(loadedScene ? loadedScene->GetModuleAndPresetName() : std::string()) << std::endl;
 				}
 			}
 			// Sample the sim hash on an interval during live lockstep for the runtime desync check. NOT under
@@ -4929,38 +4931,15 @@ bool StageResyncedMatchActivity(std::string* error) {
 	return g_NetMatchService.StageResyncedMatchLaunch(error);
 }
 
-bool ConfigureNetMatchActivity(const std::string& activityPreset, int localTeam, std::string* error) {
-	const Entity* presetEntity = g_PresetMan.GetEntityPreset("GAScripted", activityPreset);
-	const Activity* presetActivity = dynamic_cast<const Activity*>(presetEntity);
-	if (!presetActivity) {
-		if (error) *error = "could not find multiplayer activity preset";
-		return false;
-	}
-	if (!presetActivity->GetSceneName().empty()) {
-		g_SceneMan.SetSceneToLoad(presetActivity->GetSceneName(), true, false);
-	}
-	Activity* activity = dynamic_cast<Activity*>(presetActivity->Clone());
+bool ConfigureNetMatchActivity(const NetMatchConfig& config, int localTeam, std::string* error) {
+	Activity* activity = NetActivitySetup::CreateConfiguredActivity(config, localTeam, error);
 	if (!activity) {
-		if (error) *error = "could not create multiplayer activity";
 		return false;
 	}
-	// A dedicated host owns no seat: NoTeam means clear the players but still run every roster team.
-	if (localTeam != Activity::NoTeam && (localTeam < Activity::TeamOne || localTeam >= Activity::MaxTeamCount)) {
-		delete activity;
-		if (error) *error = "invalid local team";
-		return false;
-	}
-	if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
-		gameActivity->ClearPlayers(false);
-		if (!gameActivity->ConfigureLockstepPlayers() && localTeam != Activity::NoTeam) {
-			gameActivity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
-		}
-		// Activate every team in the synced roster so all peers run the identical team set.
-		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
-			if (team == localTeam || ScenarioRunner::IsLockstepActiveTeam(team)) {
-				gameActivity->ForceSetTeamAsActive(team);
-				gameActivity->SetTeamFunds(0, team);
-				if (s_netMatchServiceE2E) {
+	if (s_netMatchServiceE2E) {
+		if (const GameActivity* gameActivity = dynamic_cast<const GameActivity*>(activity)) {
+			for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+				if (team == localTeam || ScenarioRunner::IsLockstepActiveTeam(team)) {
 					std::cout << "[e2e] TeamIsCPU team=" << team << " value=" << (gameActivity->TeamIsCPU(team) ? 1 : 0) << std::endl;
 				}
 			}
@@ -4973,7 +4952,17 @@ bool ConfigureNetMatchActivity(const std::string& activityPreset, int localTeam,
 }
 
 bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error) {
-	return ConfigureNetMatchActivity(activityPreset, g_NetMatchService.GetLocalTeam(), error);
+	// The roster's agreed config is the launch descriptor on every peer, the dedicated host and here.
+	const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+	if (!config) {
+		if (error) *error = "the launching match carries no agreed config";
+		return false;
+	}
+	if (!activityPreset.empty() && activityPreset != config->activityPreset) {
+		if (error) *error = "the service's launch activity \"" + activityPreset + "\" differs from the agreed \"" + config->activityPreset + "\"";
+		return false;
+	}
+	return ConfigureNetMatchActivity(*config, g_NetMatchService.GetLocalTeam(), error);
 }
 
 // Drives a recorded match through the standard lockstep apply path: a no-remote coordinator over
@@ -5014,7 +5003,7 @@ int RunNetReplayPlayback() {
 			break;
 		}
 	}
-	if (!ConfigureNetMatchActivity(replayConfig.activityPreset, localTeam, &setupError)) {
+	if (!ConfigureNetMatchActivity(replayConfig, localTeam, &setupError)) {
 		std::cerr << "[net-replay] setup failed: " << setupError << std::endl;
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		return 1;
