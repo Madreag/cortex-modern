@@ -47,8 +47,11 @@ namespace RTE {
 		void Refresh();
 		void HandleEvents();
 		void DrawRoster(const NetLobbySnapshot& snapshot);
+		/// Creates presentation controls only when an online match draws them.
+		void CreateOverlay();
 		/// Draws the status widget beneath the controller icon, outside the funds HUD.
 		void DrawMatchStatus(const NetLobbySnapshot& snapshot);
+		AllegroScreen* m_Screen = nullptr;
 		std::unique_ptr<GUIInputWrapper> m_Input;
 		std::unique_ptr<GUIControlManager> m_Controls;
 		std::unique_ptr<GUIControlManager> m_OverlayControls;
