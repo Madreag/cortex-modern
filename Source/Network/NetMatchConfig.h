@@ -53,6 +53,7 @@ namespace RTE {
 		bool fogOfWar = false;
 		bool requireClearPathToOrbit = false;
 		bool deployUnits = false;
+		bool brainlessHumansSpectate = true; // Losing every human brain leaves the humans watching instead of ending the round.
 		std::array<NetMatchTeamRules, 4> teamRules;
 		bool operator==(const NetMatchStandardRules&) const = default;
 	};

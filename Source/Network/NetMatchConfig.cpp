@@ -66,7 +66,8 @@ namespace RTE {
 			        {"activity_module", config.activityModule}, {"scene_module", config.sceneModule},
 			        {"difficulty", config.difficulty}, {"starting_gold", config.startingGold},
 			        {"fog_of_war", config.fogOfWar}, {"require_clear_path_to_orbit", config.requireClearPathToOrbit},
-			        {"deploy_units", config.deployUnits}, {"teams", std::move(teams)},
+			        {"deploy_units", config.deployUnits}, {"brainless_humans_spectate", config.brainlessHumansSpectate},
+			        {"teams", std::move(teams)},
 			        {"autosave_enabled", config.autosaveEnabled}, {"autosave_interval_seconds", config.autosaveIntervalSeconds},
 			        {"idle_wait_minutes", config.idleWaitMinutes}, {"automatic_repair", config.automaticRepair},
 			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)}};
@@ -78,7 +79,9 @@ namespace RTE {
 				{"activity_module", config.activityModule}, {"scene_module", config.sceneModule},
 				{"difficulty", std::to_string(config.difficulty)}, {"starting_gold", std::to_string(config.startingGold)},
 				{"fog_of_war", BoolText(config.fogOfWar)}, {"require_clear_path_to_orbit", BoolText(config.requireClearPathToOrbit)},
-				{"deploy_units", BoolText(config.deployUnits)}, {"autosave_enabled", BoolText(config.autosaveEnabled)},
+				{"deploy_units", BoolText(config.deployUnits)},
+				{"brainless_humans_spectate", BoolText(config.brainlessHumansSpectate)},
+				{"autosave_enabled", BoolText(config.autosaveEnabled)},
 				{"autosave_interval_seconds", std::to_string(config.autosaveIntervalSeconds)},
 				{"idle_wait_minutes", std::to_string(config.idleWaitMinutes)}, {"automatic_repair", BoolText(config.automaticRepair)},
 				{"delay_policy", std::to_string(static_cast<uint8_t>(config.delayPolicy))},
@@ -170,7 +173,12 @@ namespace RTE {
 			return false;
 		}
 		auto refuse = [&](const char* reason) { if (error) *error = reason; return false; };
-		if (config.version == 2 && RuleFields(config) != RuleFields(NetMatchConfig{})) return refuse("legacy config cannot carry extended rules");
+		if (config.version == 2) {
+			// A v2 config predates the rules block, so it carries the pre-rules end rule too.
+			NetMatchConfig legacyDefaults;
+			legacyDefaults.brainlessHumansSpectate = false;
+			if (RuleFields(config) != RuleFields(legacyDefaults)) return refuse("legacy config cannot carry extended rules");
+		}
 		if (config.roundId == 0 || config.configRevision == 0) return refuse("round_id and config_revision must be nonzero");
 		if (config.difficulty > 100) return refuse("difficulty is out of range");
 		if (config.startingGold > c_MaxFiniteStartingGold && config.startingGold != c_InfiniteGold) return refuse("starting_gold is out of range");
