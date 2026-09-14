@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 import threading
 import zipfile
 from pathlib import Path
@@ -135,14 +136,111 @@ def run_replay(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
     return result
 
 
+def set_visual_resolution(run, width: int, height: int) -> None:
+    path = run.cwd / "Userdata/Settings.ini"
+    settings = path.read_text(encoding="utf-8")
+    for key, value in (("ResolutionX", width), ("ResolutionY", height)):
+        settings, count = re.subn(rf"(?m)^(\s*{key}\s*=\s*)[^\r\n]*", lambda match: match[1] + str(value), settings)
+        assert count == 1, key
+    path.write_text(settings, encoding="utf-8")
+    metadata_path = run.out / "runtime.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["settings_sha256"] = sha(path)
+    metadata["settings_overrides"].update(ResolutionX=str(width), ResolutionY=str(height))
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+
+
+def inspect_pictures(runtime: Path, prefix: str, width: int, height: int, count: int) -> list:
+    paths = sorted((runtime / "ScreenShots").glob(f"{prefix}*.png"))
+    assert len(paths) == count, f"expected {count} screenshots, found {len(paths)} in {runtime / 'ScreenShots'}"
+    pictures = []
+    for path in paths:
+        with path.open("rb") as source:
+            header = source.read(24)
+        assert header[:8] == b"\x89PNG\r\n\x1a\n", path
+        dimensions = struct.unpack(">II", header[16:24])
+        assert dimensions == (width, height), (path, dimensions)
+        pictures.append({"path": str(path), "dimensions": list(dimensions), "sha256": sha(path), "size": path.stat().st_size})
+    return pictures
+
+
+def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
+    root.mkdir(parents=True, exist_ok=False)
+    rows = {}
+    for index, (width, height) in enumerate(((640, 360), (960, 540))):
+        tag = f"{width}x{height}"
+        case = root / tag
+        case.mkdir()
+        inputs = case / "pause-input.txt"
+        inputs.write_text("100 100 START\n", encoding="utf-8")
+        script = case / "pause-menu.txt"
+        script.write_text("wait 12\nassert_screen Pause\nassert_control ButtonSaveDiagnostics\n"
+                          "assert_enabled ButtonSaveDiagnostics 1\nassert_label ButtonSaveDiagnostics Save Diagnostics\n"
+                          "screenshot diagnostics_pause\npost_command ButtonSaveDiagnostics\n"
+                          "wait_file Telemetry/diag-*.zip 30\nwait_ms 50\n"
+                          "assert_enabled ButtonSaveDiagnostics 1\nassert_label ButtonSaveDiagnostics Save Diagnostics\n"
+                          "screenshot diagnostics_pause_saved\nexit\n", encoding="utf-8")
+        runs, records = {}, {}
+        for who in ("host", "client"):
+            args = ["-net-match-service-e2e", "-net-port", str(port + index), "-net-match-peers", "2",
+                    "-net-match-ticks", "400", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
+                    "-input-script", str(inputs), "-menu-script", str(script),
+                    "-net-match-report", str(case / f"{who}_report.json")]
+            args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
+            runs[who] = make_run(repo, args, case / who, 120, env={"CCCP_HEADLESS": "1"})
+            set_visual_resolution(runs[who], width, height)
+
+        def drive(who: str) -> None:
+            try:
+                records[who] = runs[who].start().finish()
+            except Exception as error:
+                records[who] = {"error": repr(error)}
+
+        threads = [threading.Thread(target=drive, args=(who,)) for who in runs]
+        try:
+            threads[0].start()
+            threading.Event().wait(1)
+            threads[1].start()
+            for thread in threads:
+                thread.join()
+        finally:
+            for run in runs.values():
+                run.close()
+        details = {"records": records, "script_sha256": sha(script), "input_sha256": sha(inputs), "peers": {}, "errors": {}}
+        for who, run in runs.items():
+            try:
+                assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
+                pictures = inspect_pictures(run.cwd, "diagnostics_pause", width, height, 2)
+                log = read_log(run.out)
+                assert "assert_screen expected=Pause actual=Pause PASS" in log, "pause screen was not asserted"
+                assert "post_command ButtonSaveDiagnostics ok=1" in log, "diagnostics command was not accepted"
+                assert "file:Telemetry/diag-*.zip -> OK" in log, "diagnostics file wait did not complete"
+                assert log.count("assert_enabled ButtonSaveDiagnostics expected=1 actual=1 PASS") == 2, "terminal button was not enabled"
+                assert log.count('assert_label ButtonSaveDiagnostics "Save Diagnostics" text="Save Diagnostics" PASS') == 2, "terminal label differs"
+                details["peers"][who] = {"pictures": pictures, "bundle": inspect_bundle(run.cwd, exe_sha)}
+            except Exception as error:
+                details["errors"][who] = str(error)
+        details["passed"] = not details["errors"]
+        rows[tag] = details
+        if details["passed"]:
+            print(f"PASS visual Pause {tag}: two peers, 4 PNGs, 2 diagnostics zips; terminal buttons enabled", flush=True)
+        else:
+            found = sum(len(list((run.cwd / "ScreenShots").glob("diagnostics_pause*.png"))) for run in runs.values())
+            print(f"FAIL visual Pause {tag}: expected menu-script PNGs from both peers, found {found}", flush=True)
+        (case / "result.json").write_text(json.dumps(details, indent=2) + "\n", encoding="utf-8")
+    assert all(row["passed"] for row in rows.values()), f"pause diagnostics failed: {root}"
+    return rows
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--arm", choices=("menu", "replay", "all"), default="all")
+    parser.add_argument("--arm", choices=("menu", "replay", "pause", "all"), default="all",
+                        help="all retains the menu/replay gate; pause runs both pause-menu resolutions")
     parser.add_argument("--port", type=int, default=48211)
     args = parser.parse_args()
-    if not 48211 <= args.port <= 48219:
+    if not 48211 <= args.port <= 48219 or (args.arm == "pause" and args.port > 48218):
         parser.error("port must be in 48211..48219")
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = args.repo.resolve(), args.out.resolve()
@@ -150,8 +248,11 @@ def main() -> int:
     result = {"exe_sha256": sha(repo / "Cortex Command.exe"), "arms": {}}
     for arm in (("menu", "replay") if args.arm == "all" else (args.arm,)):
         try:
-            details = (run_menu(repo, root / arm, result["exe_sha256"]) if arm == "menu" else
-                       run_replay(repo, root / arm, args.port, result["exe_sha256"]))
+            if arm == "pause":
+                details = run_pause(repo, root / arm, args.port, result["exe_sha256"])
+            else:
+                details = (run_menu(repo, root / arm, result["exe_sha256"]) if arm == "menu" else
+                           run_replay(repo, root / arm, args.port, result["exe_sha256"]))
             result["arms"][arm] = {"passed": True, "details": details}
             print(f"PASS {arm}: bounded telemetry members and sha256 manifest match", flush=True)
         except Exception as error:
