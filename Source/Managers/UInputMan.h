@@ -254,6 +254,12 @@ namespace RTE {
 		bool KeyPressedSim(SDL_Scancode scancodeToTest, int whichPlayer = -1) const { return GetKeyboardButtonState(scancodeToTest, InputState::PressedSim, whichPlayer); }
 		bool KeyPressedSim(SDL_Keycode keycodeToTest, int whichPlayer = -1) const { return KeyPressedSim(SDL_GetScancodeFromKey(keycodeToTest, NULL), whichPlayer); }
 
+		/// Writes a key's held and sim-rate edge state directly, for the input probe: the SDL queue is only
+		/// pumped per render frame, so an event cannot pick the sim tick that reads it.
+		/// @param keycodeToSet A keycode to write. See SDL_KeyCode enumeration.
+		/// @param down Whether the key is down after this write.
+		void SetProbeKeySim(SDL_Keycode keycodeToSet, bool down);
+
 		/// Gets whether a key was released between the last update and the one previous to it, by scancode.
 		/// @param scancodeToTest A scancode to test. See SDL_Scancode enumeration.
 		/// @return Whether the key is released or not.

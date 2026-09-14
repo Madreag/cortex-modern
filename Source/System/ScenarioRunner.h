@@ -201,6 +201,8 @@ namespace RTE {
 		/// The last frame the sim applied. The reclaim hold is counted in these, so anything that
 		/// shows or decides on the hold reads the tick and never a clock.
 		static uint64_t GetLockstepAppliedFrame();
+		/// The last completed exchange tick, including paused ticks, for presentation.
+		static uint64_t GetLockstepCompletedFrame();
 		static uint64_t GetLockstepRoundId();
 
 		/// The session upkeep the match service owns. A peer that stops sending frames parks the sim
@@ -214,16 +216,21 @@ namespace RTE {
 			uint64_t tick = 0;
 			std::string kind;
 			std::string text;
+			uint8_t senderPeerId = 0;
 		};
-		/// Presentation only: queues a top-centre banner (~3s wall clock) and logs it for the report.
+		/// Exports a presentation event; the renderer resolves its optional sender into a display name.
 		/// Lives outside every serialized, hashed or saved structure; never read by the sim.
-		static void PushNetUiToast(const std::string& kind, const std::string& text);
+		static void PushNetUiToast(const std::string& kind, const std::string& text, uint8_t senderPeerId = 0);
 		/// Drops the on-screen queue (a resync relaunch clears it); the report log is kept.
 		static void ClearNetUiToasts();
-		/// Draws the live banner queue top-centre on the 32-bit backbuffer; a no-op without fonts.
+		/// Draws at most three unexpired toast rows at bottom centre, outside simulation state.
 		static void DrawNetUiToasts();
 		/// Every banner queued this run, in order — the report's ui.toasts source.
 		static const std::vector<NetUiToastRecord>& GetNetUiToastLog();
+		/// The newest three unexpired presentation events, in display order.
+		static std::vector<NetUiToastRecord> GetVisibleNetUiToasts();
+		/// Names of peers whose next input frame is missing, for the stalled render path.
+		static std::string GetLockstepMissingPeers();
 		/// Counts resync wait-screen draws for the report (also counted headless).
 		static void NoteResyncOverlayFrame();
 		static uint64_t GetResyncOverlayFrames();
@@ -289,7 +296,8 @@ namespace RTE {
 		/// shared null-tick countdown, while the wire keeps exchanging empty frames.
 		static bool IsLockstepPaused();
 		static int GetLockstepResumeCountdown();
-		static void ApplyLockstepPauseCommand(bool pause);
+		/// Applies the shared pause and exports its sender for presentation only.
+		static void ApplyLockstepPauseCommand(bool pause, uint8_t senderPeerId = 0);
 		static void AdvanceLockstepPausedTick();
 		static bool QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error = nullptr);
 		static bool WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
