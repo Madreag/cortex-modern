@@ -58,6 +58,7 @@ bool GUIFont::Load(GUIScreen* Screen, const std::string& Filename) {
 
 	// Pre-calculate the character details
 	memset(m_Characters, 0, sizeof(Character) * 256);
+	memset(m_GlyphCovered, 0, sizeof(m_GlyphCovered));
 
 	int x = 1;
 	y = 0;
@@ -80,6 +81,7 @@ bool GUIFont::Load(GUIScreen* Screen, const std::string& Filename) {
 				unsigned long Pixel = m_Font->GetPixel(i, j);
 				if (Pixel != Red && Pixel != BackG) {
 					Height = std::max(Height, j - y);
+					m_GlyphCovered[chr] = true;
 				}
 			}
 		}
@@ -105,13 +107,19 @@ bool GUIFont::Load(GUIScreen* Screen, const std::string& Filename) {
 	return true;
 }
 
-void GUIFont::Draw(GUIBitmap* Bitmap, int X, int Y, const std::string& Text, unsigned long Shadow) {
+GUIFont* GUIFont::GlyphFontFor(unsigned char Character, GUIFont* GlyphFallback) {
+	if (GlyphFallback && !m_GlyphCovered[Character] && Character < GlyphFallback->m_CharIndexCap && GlyphFallback->m_GlyphCovered[Character]) {
+		return GlyphFallback;
+	}
+	return this;
+}
+
+void GUIFont::Draw(GUIBitmap* Bitmap, int X, int Y, const std::string& Text, unsigned long Shadow, GUIFont* GlyphFallback) {
 	unsigned char c;
 	GUIRect Rect;
-	GUIBitmap* Surf = m_CurrentBitmap;
 	int initX = X;
 
-	assert(Surf);
+	assert(m_CurrentBitmap);
 
 	// Make the shadow color
 	FontColor* FSC = nullptr;
@@ -134,32 +142,44 @@ void GUIFont::Draw(GUIBitmap* Bitmap, int X, int Y, const std::string& Text, uns
 		if (c == '\t') {
 			X += m_Characters[' '].m_Width * 4;
 		}
-		if (c < 0) {
-			c += m_CharIndexCap;
+		if (c < 32) {
+			continue;
 		}
-		if (c < 32 || c >= m_CharIndexCap) {
+		GUIFont* glyphFont = GlyphFontFor(c, GlyphFallback);
+		if (c >= glyphFont->m_CharIndexCap) {
 			continue;
 		}
 
-		int CharWidth = m_Characters[c].m_Width;
-		int offX = m_Characters[c].m_Offset;
-		int offY = ((c - 32) / 16) * m_FontHeight;
-		SetRect(&Rect, offX, offY, offX + CharWidth, offY + m_FontHeight);
+		int CharWidth = glyphFont->m_Characters[c].m_Width;
+		int offX = glyphFont->m_Characters[c].m_Offset;
+		int offY = ((c - 32) / 16) * glyphFont->m_FontHeight;
+		SetRect(&Rect, offX, offY, offX + CharWidth, offY + glyphFont->m_FontHeight);
 
 		// Draw the shadow
 		if (Shadow && FSC) {
-			FSC->m_Bitmap->DrawTrans(Bitmap, X + 1, Y + 1, &Rect);
+			if (glyphFont == this) {
+				FSC->m_Bitmap->DrawTrans(Bitmap, X + 1, Y + 1, &Rect);
+			} else {
+				FontColor* GFSC = glyphFont->GetFontColor(Shadow);
+				if (!GFSC) {
+					glyphFont->CacheColor(Shadow);
+					GFSC = glyphFont->GetFontColor(Shadow);
+				}
+				if (GFSC) {
+					GFSC->m_Bitmap->DrawTrans(Bitmap, X + 1, Y + 1, &Rect);
+				}
+			}
 		}
 
 		// Draw the main color
-		Surf->DrawTrans(Bitmap, X, Y, &Rect);
+		glyphFont->m_CurrentBitmap->DrawTrans(Bitmap, X, Y, &Rect);
 
 		// Find the starting position
 		X += CharWidth + m_Kerning;
 	}
 }
 
-void GUIFont::DrawAligned(GUIBitmap* Bitmap, int X, int Y, const std::string& Text, int HAlign, int VAlign, int MaxWidth, unsigned long Shadow) {
+void GUIFont::DrawAligned(GUIBitmap* Bitmap, int X, int Y, const std::string& Text, int HAlign, int VAlign, int MaxWidth, unsigned long Shadow, GUIFont* GlyphFallback) {
 	std::string TextLine = Text;
 	int lineStartPos = 0;
 	int lineEndPos = 0;
@@ -169,9 +189,9 @@ void GUIFont::DrawAligned(GUIBitmap* Bitmap, int X, int Y, const std::string& Te
 
 	// Adjust the starting of the Y based on vertical alignment
 	if (VAlign == Middle) {
-		yLine -= (CalculateHeight(TextLine, MaxWidth) / 2);
+		yLine -= (CalculateHeight(TextLine, MaxWidth, GlyphFallback) / 2);
 	} else if (VAlign == Bottom) {
-		yLine -= CalculateHeight(TextLine, MaxWidth);
+		yLine -= CalculateHeight(TextLine, MaxWidth, GlyphFallback);
 	}
 
 	while (lineStartPos < Text.size()) {
@@ -180,7 +200,7 @@ void GUIFont::DrawAligned(GUIBitmap* Bitmap, int X, int Y, const std::string& Te
 		// Grab the whole line
 		TextLine = Text.substr(lineStartPos, (lineEndPos == std::string::npos ? Text.size() : lineEndPos) - lineStartPos);
 		// Figure its width, in pixels
-		lineWidth = CalculateWidth(TextLine);
+		lineWidth = CalculateWidth(TextLine, GlyphFallback);
 
 		// See if it's too wide to fit within the maxWidth
 		if (MaxWidth > 0 && lineWidth > MaxWidth) {
@@ -198,7 +218,7 @@ void GUIFont::DrawAligned(GUIBitmap* Bitmap, int X, int Y, const std::string& Te
 				// Get the new, shorter line
 				TextLine = Text.substr(lineStartPos, lineEndPos - lineStartPos);
 				// Figure the new line width, in pixels
-				lineWidth = CalculateWidth(TextLine);
+				lineWidth = CalculateWidth(TextLine, GlyphFallback);
 			} while (lineWidth > MaxWidth);
 
 			// Update the new start position for next line
@@ -217,17 +237,17 @@ void GUIFont::DrawAligned(GUIBitmap* Bitmap, int X, int Y, const std::string& Te
 			switch (HAlign) {
 				// Left HAlignment: Where X is the starting point of the text
 				case Left:
-					Draw(Bitmap, X, yLine, TextLine, Shadow);
+					Draw(Bitmap, X, yLine, TextLine, Shadow, GlyphFallback);
 					break;
 
 					// Center HAlignment: Where X is the center point of the text
 				case Centre:
-					Draw(Bitmap, X - lineWidth / 2, yLine, TextLine, Shadow);
+					Draw(Bitmap, X - lineWidth / 2, yLine, TextLine, Shadow, GlyphFallback);
 					break;
 
 					// Right HAlignment: Where X is the end point of the text
 				case Right:
-					Draw(Bitmap, X - lineWidth, yLine, TextLine, Shadow);
+					Draw(Bitmap, X - lineWidth, yLine, TextLine, Shadow, GlyphFallback);
 					break;
 				default:
 					break;
@@ -254,7 +274,7 @@ void GUIFont::SetColor(unsigned long Color) {
 	}
 }
 
-int GUIFont::CalculateWidth(const std::string& Text) {
+int GUIFont::CalculateWidth(const std::string& Text, GUIFont* GlyphFallback) {
 	unsigned char c;
 	int Width = 0;
 	int WidestLine = 0;
@@ -270,15 +290,15 @@ int GUIFont::CalculateWidth(const std::string& Text) {
 			Width = 0;
 			continue;
 		}
-		if (c < 0) {
-			c += m_CharIndexCap;
+		if (c < 32) {
+			continue;
 		}
-
-		if (c < 32 || c >= m_CharIndexCap) {
+		GUIFont* glyphFont = GlyphFontFor(c, GlyphFallback);
+		if (c >= glyphFont->m_CharIndexCap) {
 			continue;
 		}
 
-		Width += m_Characters[c].m_Width;
+		Width += glyphFont->m_Characters[c].m_Width;
 
 		// Add kerning
 		Width += m_Kerning;
@@ -291,13 +311,15 @@ int GUIFont::CalculateWidth(const std::string& Text) {
 }
 
 int GUIFont::CalculateWidth(const char Character) {
-	if (Character >= 32 && Character < m_CharIndexCap) {
-		return m_Characters[Character].m_Width + m_Kerning;
+	// The string overload indexes by unsigned char, so the single character overload has to agree.
+	const unsigned char index = static_cast<unsigned char>(Character);
+	if (index >= 32 && index < m_CharIndexCap) {
+		return m_Characters[index].m_Width + m_Kerning;
 	}
 	return 0;
 }
 
-int GUIFont::CalculateHeight(const std::string& Text, int MaxWidth) {
+int GUIFont::CalculateHeight(const std::string& Text, int MaxWidth, GUIFont* GlyphFallback) {
 	if (Text.empty()) {
 		return 0;
 	}
@@ -316,14 +338,18 @@ int GUIFont::CalculateHeight(const std::string& Text, int MaxWidth) {
 			Height += m_FontHeight;
 			continue;
 		}
-		if (c < 32 || c >= m_CharIndexCap) {
+		if (c < 32) {
+			continue;
+		}
+		GUIFont* glyphFont = GlyphFontFor(c, GlyphFallback);
+		if (c >= glyphFont->m_CharIndexCap) {
 			continue;
 		}
 		if (c == ' ') {
 			lastSpacePos = i;
 		}
 
-		Width += m_Characters[c].m_Width + m_Kerning;
+		Width += glyphFont->m_Characters[c].m_Width + m_Kerning;
 		if (MaxWidth > 0 && Width > MaxWidth) {
 			// Rewind to the last space, and do line break, but only if we've passed a space since last wrap
 			if (lastSpacePos > 0) {
