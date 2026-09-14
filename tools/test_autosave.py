@@ -180,10 +180,10 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=48212)
     parser.add_argument("--ticks", type=int, default=400)
-    parser.add_argument("--arm", choices=("all", "default", "peer-shared", "restore"), default="all")
+    parser.add_argument("--arm", choices=("all", "default", "peer-shared", "restore", "host-option"), default="all")
     args = parser.parse_args()
-    if not (48211 <= args.port <= 48216 or 48240 <= args.port <= 48246) or args.ticks < 400:
-        parser.error("four ports must fit 48211..48219 or 48240..48249; at least 400 ticks are required")
+    if not (48211 <= args.port <= 48216 or 48240 <= args.port <= 48246 or 48500 <= args.port <= 48516) or args.ticks < 400:
+        parser.error("four ports must fit 48211..48219, 48240..48249 or 48500..48519; at least 400 ticks are required")
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = args.repo.resolve(), args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -195,6 +195,8 @@ def main() -> int:
     if args.arm == "default":
         arms = {"default": {"host": None, "client": None}, "setting": {"host": None, "client": None},
                 "setting-off": {"host": None, "client": None}, "flag-off": {"host": 0, "client": 0}}
+    elif args.arm == "host-option":
+        arms = {"host-option": {"host": 2, "client": None}}
     elif args.arm in ("peer-shared", "restore"):
         arms = {args.arm: {"host": 2, "client": 2}}
     for index, (arm, cadence) in enumerate(arms.items()):
@@ -206,6 +208,9 @@ def main() -> int:
             extras = {who: ["-net-replay-out", str(arm_root / f"{who}.ccreplay")]
                       for who in cadence} if arm == "restore" else None
             prepare = None
+            if args.arm == "host-option":
+                def prepare(who, runtime):
+                    prepare_setting(runtime, 0 if who == "client" else None)
             if args.arm == "default":
                 from test_autosave_cost import PRESET, install_fixture
                 setting = {"default": None, "setting": 2, "setting-off": 0, "flag-off": 2}[arm]
@@ -221,7 +226,7 @@ def main() -> int:
             details["records"] = records
             for who in cadence:
                 assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
-                enabled = arm in ("default", "setting") or cadence[who] is not None and cadence[who] > 0
+                enabled = arm in ("default", "setting", "host-option") or cadence[who] is not None and cadence[who] > 0
                 details[who] = inspect_autosaves(arm_root, who, enabled)
                 if args.arm == "default":
                     if arm != "flag-off":
@@ -238,11 +243,21 @@ def main() -> int:
                     listing = sorted(str(path) for path in directory.iterdir()) if directory.exists() else []
                     details[who]["listing"] = {"directory": str(directory), "exists": directory.exists(), "files": listing}
                     print(f"FILES {arm}/{who}: {listing} directory={directory} exists={directory.exists()}", flush=True)
+                if arm == "host-option":
+                    details[who]["setting"] = inspect_setting(arm_root, who, 0 if who == "client" else None)
+                    if who == "client":
+                        assert "-net-autosave-seconds" not in records[who]["argv"], "the client was handed the autosave flag"
+                    saved_ticks = [row["tick"] for row in details[who]["captures"]]
+                    assert all(b - a == 2 * 60 for a, b in zip(saved_ticks, saved_ticks[1:])), saved_ticks
                 if arm == "rotation":
                     assert len(details[who]["captures"]) > 3, "rotation arm never exceeded the retention limit"
             passed, comparison = strict_compare(arm_root / "host_trace.json", arm_root / "client_trace.json", ticks)
             details["peer_comparison"] = comparison
             assert passed, comparison
+            if arm == "host-option":
+                ticks_by_peer = {who: [row["tick"] for row in details[who]["captures"]] for who in cadence}
+                details["capture_ticks"] = ticks_by_peer
+                assert ticks_by_peer["host"] == ticks_by_peer["client"], ticks_by_peer
             if arm == "peer-shared":
                 by_tick = {who: {int(Path(path).stem.rsplit("-", 1)[1]): Path(path)
                                  for path in details[who]["files"]} for who in cadence}
@@ -272,6 +287,9 @@ def main() -> int:
             if args.arm == "default":
                 counts = {who: {"captures": len(details[who]["captures"]), "files": len(details[who]["files"])} for who in cadence}
                 print(f"PASS {arm}: {ticks} peer ticks match; cadence_seconds={expected} persisted={setting}; {counts}", flush=True)
+            elif arm == "host-option":
+                print(f"PASS host-option: the client autosaved at the host's cadence at ticks "
+                      f"{details['capture_ticks']['client']} with its own setting off", flush=True)
             elif arm == "peer-shared":
                 print(f"PASS peer-shared: {ticks} peer ticks match; every retained checkpoint matches the approved shared-state comparer", flush=True)
             elif arm == "restore":
