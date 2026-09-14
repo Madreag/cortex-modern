@@ -1148,7 +1148,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	}
 	static std::string s_shareAddress;
 	static bool s_shareResolved = false;
-	if (snapshot.isHost && snapshot.inLobby && !snapshot.remoteReady) {
+	// The host's join and ready-up hints belong to the lobby it opened itself; a lobby that follows
+	// a played match already carries its own line - the result and the rematch offer - like the client's.
+	if (snapshot.isHost && snapshot.inLobby && !snapshot.remoteReady && !snapshot.playedAMatch) {
 		size_t connectedCount = 0;
 		for (const NetLobbyMember& member: snapshot.members) {
 			if (member.connected) {
