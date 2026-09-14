@@ -136,7 +136,7 @@ namespace {
 			for (int player = 0; player < Players::MaxPlayerCount; ++player) {
 				if (!activity->PlayerActive(player) || !activity->PlayerHuman(player)) continue;
 				const Actor* actor = activity->GetControlledActor(player);
-				if (!actor) continue;
+				if (!actor || !g_MovableMan.ValidMO(actor) || !g_MovableMan.IsActor(actor)) continue;
 				FeelJson value = FeelActor(actor);
 				value["player"] = player;
 				actors.push_back(std::move(value));
