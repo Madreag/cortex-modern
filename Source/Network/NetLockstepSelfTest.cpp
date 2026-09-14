@@ -10669,6 +10669,69 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		// A script may replace a whole controller inside the producing pass; the sim still gets the frame
+		// the wire committed for the tick back, and the replacement is what the next pass produces from.
+		bool TestProducingPassSurvivesAnOverride(std::string* error) {
+			Controller controller;
+			controller.Create(Controller::CIM_AI, Players::NoPlayer);
+			controller.SetState(ControlState::BODY_JUMP, true);
+			controller.SetAnalogMove(Vector(0.25F, -0.5F));
+
+			controller.BeginLocalProduction();
+			Controller replacement;
+			replacement.Create(Controller::CIM_AI, Players::NoPlayer);
+			replacement.SetState(ControlState::WEAPON_FIRE, true);
+			controller.Override(replacement);
+			controller.EndLocalProduction();
+
+			if (!controller.IsState(ControlState::BODY_JUMP) || controller.IsState(ControlState::WEAPON_FIRE) || controller.GetAnalogMove() != Vector(0.25F, -0.5F)) {
+				*error = "an override inside the producing pass kept the sim from its committed input";
+				return false;
+			}
+			controller.BeginLocalProduction();
+			const bool carried = controller.IsState(ControlState::WEAPON_FIRE) && !controller.IsState(ControlState::BODY_JUMP);
+			controller.EndLocalProduction();
+			if (!carried) {
+				*error = "the next producing pass did not start from the overridden input";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS producing_pass_survives_an_override" << std::endl;
+			return true;
+		}
+
+		// A restored controller keeps the baseline it was producing from, so a held button is not produced
+		// again as a fresh press on the tick after the restore.
+		bool TestRestoredControllerKeepsItsProductionBaseline(std::string* error) {
+			Controller controller;
+			controller.Create(Controller::CIM_AI, Players::NoPlayer);
+			controller.BeginLocalProduction();
+			controller.SetState(ControlState::PIE_MENU_ACTIVE, true);
+			controller.SetState(ControlState::PIE_MENU_ACTIVE_DIGITAL, true);
+			controller.SetAnalogCursor(Vector(0.75F, 0.0F));
+			controller.EndLocalProduction();
+
+			const std::string text = controller.SaveCheckpoint();
+			Controller restored;
+			if (!restored.LoadCheckpoint(text, true) || !restored.LoadCheckpoint(text)) {
+				*error = "a Controller checkpoint carrying the producer's baseline did not load";
+				return false;
+			}
+			restored.BeginLocalProduction();
+			const bool held = restored.IsState(ControlState::PIE_MENU_ACTIVE) && restored.IsState(ControlState::PIE_MENU_ACTIVE_DIGITAL) && restored.GetAnalogCursor() == Vector(0.75F, 0.0F);
+			restored.EndLocalProduction();
+			if (!held) {
+				*error = "a restored controller produced from an empty baseline, re-firing the held input as a fresh press";
+				return false;
+			}
+			Controller refused;
+			if (refused.LoadCheckpoint(std::string_view(), true) || refused.LoadCheckpoint(text.substr(0, text.size() - 2), true)) {
+				*error = "a truncated Controller checkpoint was accepted";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS restored_controller_keeps_its_production_baseline bytes=" << text.size() << std::endl;
+			return true;
+		}
+
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -10690,7 +10753,9 @@ namespace RTE {
 		}
 
 		std::string error;
-		if (!TestSoundIdentityPinAgreesAcrossHistories(&error) ||
+		if (!TestRestoredControllerKeepsItsProductionBaseline(&error) ||
+		    !TestProducingPassSurvivesAnOverride(&error) ||
+		    !TestSoundIdentityPinAgreesAcrossHistories(&error) ||
 		    !TestRoundTrips(&error) ||
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
