@@ -524,6 +524,13 @@ void Arm::ResolveFaithfulLinks() {
 	}
 }
 
+void Arm::RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) {
+	Attachable::RemapExternalLinks(map);
+	if (m_HeldDeviceThisArmIsTryingToSupport) {
+		m_HeldDeviceThisArmIsTryingToSupport = dynamic_cast<HeldDevice*>(map(m_HeldDeviceThisArmIsTryingToSupport));
+	}
+}
+
 std::string Arm::SaveArmRuntime() const {
 	CheckpointWriter archive("ArmRuntime1");
 	archive(m_MaxLength, m_MoveSpeed, m_HandIdleOffset, m_HandIdleRotation, m_HandCurrentOffset, m_HandPrevPos, m_HandPos);
