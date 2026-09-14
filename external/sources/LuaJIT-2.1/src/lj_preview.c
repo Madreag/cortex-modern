@@ -116,7 +116,7 @@ LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t n
       size_t k;
       if (!tvisstr(&node->key) || !tvisgcv(&node->val)) continue;
       for (k = 0; k < nskip; k++) {
-        if (!strcmp(strVdata(&node->key), skip[k]) &&
+        if (strV(&node->key)->len == strlen(skip[k]) && !strcmp(strVdata(&node->key), skip[k]) &&
             preview_seen(p, gcV(&node->val)) < 0) goto fail;
       }
     }
@@ -241,7 +241,7 @@ int lj_preview_weak(global_State *g, GCtab *t)
   if (mt->hmask) {
     for (i = 0; i <= mt->hmask; i++) {
       Node *n = &noderef(mt->node)[i];
-      if (tvisstr(&n->key) && tvisstr(&n->val) &&
+      if (tvisstr(&n->key) && strV(&n->key)->len == 6 && tvisstr(&n->val) &&
           !strcmp(strVdata(&n->key), "__mode")) {
         const char *mode = strVdata(&n->val);
         return (strchr(mode, 'k') ? LJ_GC_WEAKKEY : 0) |
