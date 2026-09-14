@@ -467,6 +467,10 @@ namespace RTE {
 		/// @param player Which team to set the brain actor for.
 		void SetPlayerBrain(Actor* newBrain, int player = 0);
 
+		/// Records the brain of every lockstep team that has none recorded yet, so the set holds the seats
+		/// this machine does not seat as well as its own.
+		void UpdatePlayerBrainRecord();
+
 		/// Drives one human and one AI seat through brain assignment and checks that only the human seat's
 		/// brain reaches the shared record. The seats and the record are put back as they were.
 		/// @param humanBrain An actor to assign to the human seat.

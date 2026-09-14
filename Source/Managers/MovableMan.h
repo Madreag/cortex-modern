@@ -482,6 +482,11 @@ namespace RTE {
 		/// @param isBrain Whether it is a human player's brain now.
 		void NotePlayerBrain(long uniqueID, bool isBrain);
 
+		/// Whether a live actor of this team is recorded as a human player's brain.
+		/// @param team The team to look for.
+		/// @return Whether the record holds a brain of that team.
+		bool HasPlayerBrainOfTeam(int team);
+
 		/// Get a pointer to the first brain actor of a specific team which hasn't
 		/// been assigned to a player yet.
 		/// @param team Which team to try to get the brain for. 0 means first team, 1 means 2nd. (default: 0)
