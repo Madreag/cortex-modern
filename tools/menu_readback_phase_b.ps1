@@ -16,6 +16,11 @@ $env:PYTHONPATH = "$repo/tools"
 function Assert-Released {
     if (-not $FamilyEnded) { throw 'Run only after FAMILY ENDED — BUILD, with -FamilyEnded.' }
     if (Test-Path -LiteralPath 'D:/mx/LEAD_FAMILY.lock') { throw 'LEAD_FAMILY.lock exists.' }
+    # A two-process harness run owns the machine while it holds the lock, so hold our launches until it releases.
+    for ($waited = 0; Test-Path -LiteralPath 'D:/mx/HARNESS_RUNS.lock'; $waited += 30) {
+        if ($waited -ge 2700) { throw 'HARNESS_RUNS.lock held for 45 minutes.' }
+        Start-Sleep -Seconds 30
+    }
 }
 
 function Build-Engine([string]$label) {
