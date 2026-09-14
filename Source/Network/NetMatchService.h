@@ -167,6 +167,10 @@ namespace RTE {
 		/// gate can be bisected against the pre-admission handshake without a rebuild.
 		static void SetAdmissionEnabled(bool enabled) { s_AdmissionEnabled = enabled; }
 		static bool IsAdmissionEnabled() { return s_AdmissionEnabled; }
+		/// Sets this machine's checkpoint cadence in sim seconds; zero disables it.
+		static void SetAutosaveSeconds(uint32_t seconds) { s_AutosaveSeconds = seconds; }
+		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
+		void AutosaveAtTickBoundary(uint64_t tick);
 		/// §11: the multiprocess reconnect test shares one Userdata, so each process gets its own
 		/// recovery-record path instead of racing over the default one.
 		static void SetTicketStorePath(std::string path);
@@ -399,6 +403,10 @@ namespace RTE {
 
 
 		mutable std::mutex m_Mutex;
+		static uint32_t s_AutosaveSeconds;
+		std::string m_AutosaveMatchId;
+		int64_t m_NextAutosaveSimTime = -1;
+		int64_t m_LastAutosaveSimTime = -1;
 		NetMatchServiceState m_State = NetMatchServiceState::Idle;
 		std::string m_StatusText = "Idle";
 		std::string m_ErrorText;
