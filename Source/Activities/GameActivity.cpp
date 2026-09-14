@@ -1670,7 +1670,9 @@ void GameActivity::Update() {
 		if (m_ControlledActor[player] && m_ViewState[player] != ViewState::DeathWatch && m_ViewState[player] != ViewState::ActorSelect && m_ViewState[player] != ViewState::AIGoToPoint && m_ViewState[player] != ViewState::UnitSelectCircle) {
 			PieMenu* controlledActorPieMenu = m_ControlledActor[player]->GetPieMenu();
 			if (controlledActorPieMenu && m_ControlledActor[player]->GetController()->IsState(PIE_MENU_ACTIVE)) {
-				if (!m_BuyMenuEnabled && controlledActorPieMenu->IsEnabling()) {
+				// Only this peer holds a seat for this player, so under lockstep the slice set every peer
+				// dumps is refreshed from the shared buy menu setting in Actor::WhilePieMenuOpenListener.
+				if (localPieAnimations && !m_BuyMenuEnabled && controlledActorPieMenu->IsEnabling()) {
 					controlledActorPieMenu->RemovePieSlicesByType(PieSliceType::BuyMenu);
 				}
 
@@ -1724,7 +1726,10 @@ void GameActivity::Update() {
 					m_pBuyGUI[player]->SetEnabled(true);
 					skipBuyUpdate = true;
 				} else if (command == PieSliceType::FullInventory) {
-					controlledActorPieMenu->SetEnabled(false);
+					// The synchronized slice closes the shared pie state in Actor::HandlePieCommand.
+					if (localPieAnimations) {
+						controlledActorPieMenu->SetEnabled(false);
+					}
 					m_InventoryMenuGUI[player]->SetEnabled(false);
 					m_InventoryMenuGUI[player]->SetMenuMode(InventoryMenuGUI::MenuMode::Full);
 					m_InventoryMenuGUI[player]->SetEnabled(true);

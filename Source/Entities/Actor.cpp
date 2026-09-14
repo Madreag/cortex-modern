@@ -998,7 +998,24 @@ bool Actor::HandlePieCommand(PieSliceType pieSliceType) {
 	if (pieSliceType == PieSliceType::FormSquad && !HasSquad() && ScenarioRunner::IsLockstepControllerSyncActive()) {
 		m_Controller.HoldDisabledForSyncedOrder(static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
 	}
+	// The inventory pick closes the menu on the ordering seat only, and nothing on the wire follows it
+	// while the pie button is still down, so under lockstep every peer closes it on the synced slice.
+	if (pieSliceType == PieSliceType::FullInventory && m_PieMenu && ScenarioRunner::IsLockstepControllerSyncActive()) {
+		m_PieMenu->SetEnabled(false);
+	}
 	return false;
+}
+
+int Actor::WhilePieMenuOpenListener(const PieMenu* pieMenu) {
+	// Only the seat's own machine runs the activity's per-player menu code, so under lockstep the buy
+	// menu setting has to take its slice out here, where every peer refreshes this pie menu. It runs
+	// before the scripts, as the activity's own removal does on the seat.
+	if (m_PieMenu && m_PieMenu->IsEnabling() && m_Controller.IsPlayerControlled() && ScenarioRunner::IsLockstepControllerSyncActive()) {
+		if (const GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity()); gameActivity && !gameActivity->GetBuyMenuEnabled()) {
+			m_PieMenu->RemovePieSlicesByType(PieSliceType::BuyMenu);
+		}
+	}
+	return MovableObject::WhilePieMenuOpenListener(pieMenu);
 }
 
 void Actor::FormSquad(const Vector& selectionEdge) {

@@ -1,0 +1,10 @@
+# F23c site B: GameActivity.cpp FormSquad non-commander SetDisabled(true) + pie SetEnabled(false).
+# L_DOWN hovers the Down quadrant's middle slice (Eye); L_RIGHT is counter-clockwise from Down and
+# steps to the next flattened slice (Follow = Form Squad). FIRE activates it with PIEMENU_DIGITAL
+# still held, so PIE_MENU_ACTIVE stays set and the pie does not close through the release path.
+# The crab has no squad, so the non-commander branch is the one that runs.
+30 31 NEXT
+150 220 PIEMENU_DIGITAL
+160 161 L_DOWN
+170 171 L_RIGHT
+180 181 FIRE
