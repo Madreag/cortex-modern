@@ -128,7 +128,7 @@ namespace RTE {
 				SetError(error, NetProtocolErrorCode::InvalidString, out.size(), "chat text is not valid UTF-8");
 				return false;
 			}
-			return AppendString(out, value, NetProtocol::c_MaxChatTextBytes, "chat_text", error);
+			return AppendString(out, value, NetProtocol::c_MaxShortTextBytes, "chat_text", error);
 		}
 
 		void AppendHash(std::vector<uint8_t>& out, const NetHash32& hash) {
@@ -1028,7 +1028,7 @@ namespace RTE {
 				return false;
 			}
 			const size_t textOffset = reader.Offset();
-			if (!reader.ReadString(payload.text, NetProtocol::c_MaxChatTextBytes, "chat_text", error)) {
+			if (!reader.ReadString(payload.text, NetProtocol::c_MaxShortTextBytes, "chat_text", error)) {
 				return false;
 			}
 			if (!IsValidUtf8(payload.text)) {

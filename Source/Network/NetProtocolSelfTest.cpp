@@ -789,14 +789,31 @@ namespace RTE {
 			}
 
 			NetChat atCap = chat;
-			atCap.text.assign(NetProtocol::c_MaxChatTextBytes, 'x');
+			atCap.text.assign(NetProtocol::c_MaxShortTextBytes, 'x');
 			if (!RoundTrip({55, 0, atCap}, error)) {
 				return false;
 			}
 			NetChat overCap = chat;
-			overCap.text.assign(NetProtocol::c_MaxChatTextBytes + 1U, 'x');
-			if (!ExpectEncodeError({56, 0, overCap}, NetProtocolErrorCode::StringTooLong, "a 257-byte chat line", error)) {
+			overCap.text.assign(NetProtocol::c_MaxShortTextBytes + 1U, 'x');
+			if (!ExpectEncodeError({56, 0, overCap}, NetProtocolErrorCode::StringTooLong, "a 129-byte chat line", error)) {
 				return false;
+			}
+			// The decoder must answer the same bound: a wire that claims 129 bytes of chat text is
+			// StringTooLong, not a disconnectable offence - a well-formed same-version peer's own
+			// encoder could never have produced it, so the old build refuses identically.
+			{
+				std::vector<uint8_t> longChat;
+				if (!EncodeMessage({62, 0, atCap}, longChat, error)) {
+					return false;
+				}
+				const size_t textLenAt = NetProtocol::c_HeaderBytes + 8U; // version, sender, scope, sentAt
+				longChat[textLenAt] = 129;
+				longChat[textLenAt + 1U] = 0;
+				++longChat[16]; // the header's payload length must grow with the claimed string
+				longChat.push_back('x');
+				if (!ExpectDecodeError(longChat, NetProtocolErrorCode::StringTooLong, error)) {
+					return false;
+				}
 			}
 			NetChat controlChars = chat;
 			controlChars.text = "two\nlines";
@@ -846,7 +863,7 @@ namespace RTE {
 				*error = "PeekMessageType misnamed a non-chat envelope";
 				return false;
 			}
-			std::cout << "[net-protocol-selftest] PASS chat: " << NetProtocol::c_MaxChatTextBytes << "-byte cap, UTF-8 validated, scopes all/team" << std::endl;
+			std::cout << "[net-protocol-selftest] PASS chat: " << NetProtocol::c_MaxShortTextBytes << "-byte cap, UTF-8 validated, scopes all/team" << std::endl;
 			return true;
 		}
 
