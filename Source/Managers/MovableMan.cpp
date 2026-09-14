@@ -5370,6 +5370,25 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 	}
 }
 
+bool MovableMan::RunLegacyBrainRecordSelfTest(const Actor* seatBrain) {
+	if (!seatBrain) {
+		return false;
+	}
+	const std::string current = SaveWorldStructure();
+	WorldStructure live;
+	try {
+		CheckpointReader reader(current, "WorldStructure3"); live.Fields(reader); reader.Finish();
+	} catch (const std::exception&) {
+		return false;
+	}
+	bool reseeded = true;
+	for (int version = 1; version <= 2; ++version) {
+		CheckpointWriter writer(version == 1 ? "WorldStructure1" : "WorldStructure2"); live.Fields(writer, version);
+		reseeded = reseeded && LoadWorldStructure(writer.Text()) && IsPlayerBrain(seatBrain);
+	}
+	return LoadWorldStructure(current) && reseeded;
+}
+
 bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	if (!craft) return false;
 	if (m_Actors.empty()) {
@@ -5418,9 +5437,12 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 		brainRestored = !IsPlayerBrain(recordActor) && LoadWorldStructure(withBrain) && IsPlayerBrain(recordActor);
 		NotePlayerBrain(recordUID, recordWasBrain);
 	}
-	// One human seat and one AI seat: only the human seat's brain is recorded.
+	// One human seat and one AI seat: only the human seat's brain is recorded; the legacy load and the
+	// last-ditch placement have to reach the record too.
+	bool brainLegacyReseeded = false;
+	bool brainLastDitch = false;
 	const bool brainSeats = g_ActivityMan.GetActivity() && recordActor && m_Actors.size() > 1 &&
-	                        g_ActivityMan.GetActivity()->RunPlayerBrainRecordSelfTest(recordActor, m_Actors[1]);
+	                        g_ActivityMan.GetActivity()->RunPlayerBrainRecordSelfTest(recordActor, m_Actors[1], &brainLegacyReseeded, &brainLastDitch);
 
 	// The shape the crashed resync archives carried: an index entry for an actor the world does not have.
 	WorldStructure clean;
@@ -5509,13 +5531,14 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 
 	AddActor(craft);
 	const bool passed = indexed && cleared && archived && roundTripped && tagged && accepted && refused && legacyAccepted && legacyRefused &&
-	                    brainArchived && brainRestored && brainSeats &&
+	                    brainArchived && brainRestored && brainSeats && brainLegacyReseeded && brainLastDitch &&
 	                    addedRemoveCleared && absorbDeleteCleared && discardAddedCleared;
 	std::cout << "[contiguous-index-selftest] " << (passed ? "PASS" : "FAIL") << " indexed=" << indexed << " cleared=" << cleared
 	          << " archived=" << archived << " round_trip=" << roundTripped << " tagged=" << tagged
 	          << " accepted=" << accepted << " refused=" << refused
 	          << " legacy=" << legacyAccepted << " legacy_refused=" << legacyRefused
 	          << " brain_archived=" << brainArchived << " brain_restored=" << brainRestored << " brain_seats=" << brainSeats
+	          << " brain_legacy_reseeded=" << brainLegacyReseeded << " brain_lastditch=" << brainLastDitch
 	          << " added_remove=" << addedRemoveCleared << " absorb_delete=" << absorbDeleteCleared
 	          << " discard_added=" << discardAddedCleared << std::endl;
 	return passed;

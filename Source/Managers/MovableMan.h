@@ -134,6 +134,10 @@ namespace RTE {
 		void PurgeAllMOs();
 		bool RunPurgeSelfTest();
 
+		/// Checks that a world payload from before the brain record re-seeds it from the seats instead of
+		/// installing an empty one. Leaves the live record as it found it.
+		bool RunLegacyBrainRecordSelfTest(const Actor* seatBrain);
+
 		/// Checks that the contiguous actor index never outlives its actors: takes the passed-in craft
 		/// through a tick's add, index and removal, the three added-actor delete paths, then the archive
 		/// round trip. Takes ownership of the craft.

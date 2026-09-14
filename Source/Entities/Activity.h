@@ -478,8 +478,10 @@ namespace RTE {
 		/// brain reaches the shared record. The seats and the record are put back as they were.
 		/// @param humanBrain An actor to assign to the human seat.
 		/// @param aiBrain An actor to assign to the AI seat.
+		/// @param legacyReseeded Filled with whether a payload from before the record re-seeds it from the seats.
+		/// @param lastDitchRecorded Filled with whether the last-ditch brain placement reaches the record.
 		/// @return Whether the record held exactly the human seat's brain, and dropped it when the seat lost it.
-		bool RunPlayerBrainRecordSelfTest(Actor* humanBrain, Actor* aiBrain);
+		bool RunPlayerBrainRecordSelfTest(Actor* humanBrain, Actor* aiBrain, bool* legacyReseeded = nullptr, bool* lastDitchRecorded = nullptr);
 
 		/// Shows whether a specific player ever had a Brain yet.
 		/// @param player Which player to check whether they ever had a Brain.
