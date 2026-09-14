@@ -9,6 +9,7 @@
 #include "ConsoleMan.h"
 #include "NetMatchService.h"
 #include "NetIdentity.h"
+#include "NetMatchReplay.h"
 #include "NetConnectionQuality.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
@@ -32,11 +33,27 @@
 
 #include <algorithm>
 #include <chrono>
+#include <charconv>
+#include <cctype>
 #include <cstdlib>
+#include <ctime>
+#include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <thread>
 
 using namespace RTE;
+
+bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string* error);
+
+static std::optional<size_t> ReplayRowIndex(const std::string& name) {
+	const std::string prefix = "LabelReplayRow";
+	if (!name.starts_with(prefix)) return std::nullopt;
+	size_t index = 0;
+	const auto [end, error] = std::from_chars(name.data() + prefix.size(), name.data() + name.size(), index);
+	return error == std::errc{} && end == name.data() + name.size() ? std::optional<size_t>(index) : std::nullopt;
+}
 
 void MainMenuGUI::Clear() {
 	m_RootBoxMaxWidth = 0;
@@ -67,6 +84,14 @@ void MainMenuGUI::Clear() {
 	m_LastMatchSummaryLabel = nullptr;
 	m_LastMatchDetailsLabel = nullptr;
 	m_LastMatchDialog = nullptr;
+	m_ReplayBrowserPanel = nullptr;
+	m_ReplayDeleteDialog = nullptr;
+	m_ReplayList = nullptr;
+	m_ReplaySelectedLabel = nullptr;
+	m_ReplayStatusLabel = nullptr;
+	m_ReplayDeleteLabel = nullptr;
+	m_ReplayRows.clear();
+	m_ReplayDeletePath.clear();
 	m_MultiplayerNameTextBox = nullptr;
 	m_MultiplayerHostPortTextBox = nullptr;
 	m_MultiplayerHostPlayersTextBox = nullptr;
@@ -230,6 +255,19 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_LastMatchDialog = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("LastMatchDialog"));
 	m_MainMenuButtons[MenuButton::LastMatchDetailsButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonLastMatchDetails"));
 	m_MainMenuButtons[MenuButton::LastMatchCloseButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonLastMatchClose"));
+	m_ReplayBrowserPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("ReplayBrowserPanel"));
+	m_ReplayDeleteDialog = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("ReplayDeleteDialog"));
+	m_ReplayList = dynamic_cast<GUIListBox*>(m_SubMenuScreenGUIControlManager->GetControl("ListReplays"));
+	m_ReplaySelectedLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelReplaySelected"));
+	m_ReplayStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelReplayStatus"));
+	m_ReplayDeleteLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelReplayDelete"));
+	m_MainMenuButtons[MenuButton::MultiplayerReplaysButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerReplays"));
+	m_MainMenuButtons[MenuButton::ReplayPlayButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayPlay"));
+	m_MainMenuButtons[MenuButton::ReplayDeleteButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayDelete"));
+	m_MainMenuButtons[MenuButton::ReplayBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayBack"));
+	m_MainMenuButtons[MenuButton::ReplayDeleteConfirmButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayDeleteConfirm"));
+	m_MainMenuButtons[MenuButton::ReplayDeleteCancelButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayDeleteCancel"));
+	m_ReplayList->SetHighlightAsIfAlwaysFocused(true);
 	m_MultiplayerLobbyPlayerLabels[0] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer0"));
 	m_MultiplayerLobbyPlayerLabels[1] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer1"));
 	m_MultiplayerLobbyPlayerLabels[2] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer2"));
@@ -248,6 +286,10 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	if (chatFont) {
 		m_LastMatchSummaryLabel->SetFont(chatFont);
 		m_LastMatchDetailsLabel->SetFont(chatFont);
+		m_ReplaySelectedLabel->SetFont(chatFont);
+		m_ReplayStatusLabel->SetFont(chatFont);
+		m_ReplayDeleteLabel->SetFont(chatFont);
+		m_ReplayList->SetFont(chatFont);
 	}
 	m_LastMatchSummaryLabel->SetHorizontalOverflowScroll(true);
 	m_LastMatchSummaryLabel->ActivateDeactivateOverflowScroll(true);
@@ -355,7 +397,7 @@ void MainMenuGUI::CreateQuitScreen() {
 }
 
 void MainMenuGUI::HideAllScreens() {
-	if (m_ActiveDialogBox == m_LastMatchDialog && m_LastMatchDialog) CloseMultiplayerDialog();
+	if (m_ActiveDialogBox && (m_ActiveDialogBox == m_LastMatchDialog || m_ActiveDialogBox == m_ReplayDeleteDialog)) CloseMultiplayerDialog();
 	for (GUICollectionBox* menuScreen: m_MainMenuScreens) {
 		if (menuScreen) {
 			menuScreen->SetVisible(false);
@@ -574,8 +616,12 @@ void MainMenuGUI::OfferStoredRejoinOnEntry() {
 }
 
 void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
-	if (m_ActiveDialogBox == m_LastMatchDialog && m_LastMatchDialog && (backButtonPressed || g_UInputMan.KeyPressed(SDLK_ESCAPE))) {
+	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen && m_ActiveDialogBox && (backButtonPressed || g_UInputMan.KeyPressed(SDLK_ESCAPE))) {
 		CloseMultiplayerDialog();
+		return;
+	}
+	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen && m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser && g_UInputMan.KeyPressed(SDLK_ESCAPE)) {
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 		return;
 	}
 	if ((!m_ActiveDialogBox || m_ActiveDialogBox == m_MainMenuScreens[MenuScreen::QuitScreen]) && (backButtonPressed || g_UInputMan.KeyPressed(SDLK_ESCAPE))) {
@@ -616,7 +662,7 @@ bool MainMenuGUI::HandleInputEvents() {
 
 	GUIEvent guiEvent;
 	while (m_ActiveGUIControlManager->GetEvent(&guiEvent)) {
-		if (m_ActiveDialogBox == m_LastMatchDialog && m_LastMatchDialog) {
+		if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen && m_ActiveDialogBox) {
 			GUIControl* node = guiEvent.GetControl();
 			while (node && node != m_ActiveDialogBox) node = node->GetParent();
 			if (!node) continue;
@@ -658,7 +704,7 @@ bool MainMenuGUI::HandleInputEvents() {
 			}
 		} else if (guiEvent.GetType() == GUIEvent::Notification && (guiEvent.GetMsg() == GUIButton::Focused && dynamic_cast<GUIButton*>(guiEvent.GetControl()))) {
 			g_GUISound.SelectionChangeSound()->Play();
-		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetControl() == m_MultiplayerLanGamesList) {
+		} else if (guiEvent.GetType() == GUIEvent::Notification && (guiEvent.GetControl() == m_MultiplayerLanGamesList || guiEvent.GetControl() == m_ReplayList)) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUICheckbox::Changed && guiEvent.GetControl() == m_MultiplayerHostPortMapCheckbox) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
@@ -720,6 +766,30 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		ShowLastMatchDetails();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::LastMatchCloseButton]) {
 		CloseMultiplayerDialog();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReplaysButton]) {
+		m_MultiplayerSubScreen = MultiplayerSubScreen::ReplayBrowser;
+		RefreshReplayBrowserControls();
+		RefreshReplayList();
+		m_ReplayList->SetFocus();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::ReplayPlayButton]) {
+		PlaySelectedReplay();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::ReplayDeleteButton]) {
+		const int selected = m_ReplayList->GetSelectedIndex();
+		if (selected >= 0 && static_cast<size_t>(selected) < m_ReplayRows.size()) {
+			m_ReplayDeletePath = m_ReplayRows[selected].path;
+			m_ReplayDeleteLabel->SetText("Delete " + std::filesystem::path(m_ReplayDeletePath).filename().string() + "?\nThis removes the replay file.");
+			m_ReplayDeleteDialog->CenterInParent(true, true);
+			OpenMultiplayerDialog(m_ReplayDeleteDialog);
+			m_MainMenuButtons[MenuButton::ReplayDeleteCancelButton]->SetFocus();
+		}
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::ReplayDeleteConfirmButton]) {
+		ConfirmReplayDelete();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::ReplayDeleteCancelButton]) {
+		CloseMultiplayerDialog();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::ReplayBackButton]) {
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+	} else if (guiEventControl == m_ReplayList) {
+		RefreshReplayBrowserControls();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerHostGameButton]) {
 		m_MultiplayerLandingStatusLabel->SetText("");
 		m_MultiplayerHostPortMapCheckbox->SetCheck(g_SettingsMan.GetNetworkPortMapEnable() ? GUICheckbox::Checked : GUICheckbox::Unchecked);
@@ -1075,6 +1145,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MultiplayerLobbyPanel->SetVisible(lobby);
 	const bool moderating = m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation;
 	m_MultiplayerModerationPanel->SetVisible(moderating);
+	m_ReplayBrowserPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser);
 	RefreshGamesList();
 	RefreshReconnectControls();
 	if (moderating) {
@@ -1086,6 +1157,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		}
 		if (m_MultiplayerLobbyChatInput) {
 			m_MultiplayerLobbyChatInput->SetVisible(false);
+		}
+		if (m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser) {
+			RefreshReplayBrowserControls();
+			return;
 		}
 		int contentWidth = 300;
 		int contentHeight = 250;
@@ -1412,7 +1487,9 @@ void MainMenuGUI::CloseMultiplayerDialog() {
 	m_ActiveDialogBox = nullptr;
 	m_MainMenuScreens[MenuScreen::MultiplayerScreen]->SetEnabled(true);
 	m_MainMenuButtons[MenuButton::BackToMainButton]->SetEnabled(true);
-	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetFocus();
+	m_ReplayDeletePath.clear();
+	if (m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser) m_ReplayList->SetFocus();
+	else m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetFocus();
 }
 
 void MainMenuGUI::ShowLastMatchDetails() {
@@ -1430,6 +1507,141 @@ void MainMenuGUI::ShowLastMatchDetails() {
 	m_MainMenuButtons[MenuButton::LastMatchCloseButton]->SetPositionRel((width - 80) / 2, height - 32);
 	OpenMultiplayerDialog(m_LastMatchDialog);
 	m_MainMenuButtons[MenuButton::LastMatchCloseButton]->SetFocus();
+}
+
+void MainMenuGUI::RefreshReplayList() {
+	namespace fs = std::filesystem;
+	const int selected = m_ReplayList->GetSelectedIndex();
+	const std::string keep = selected >= 0 && static_cast<size_t>(selected) < m_ReplayRows.size() ? m_ReplayRows[selected].path : "";
+	m_ReplayRows.clear();
+	m_ReplayList->ClearList();
+	std::error_code error;
+	const fs::path directory = fs::path("Userdata") / "Replays";
+	fs::directory_iterator entries(directory, error);
+	if (error) {
+		m_ReplayStatusLabel->SetText(error == std::errc::no_such_file_or_directory ? "No replays in Userdata/Replays." : "Could not read Userdata/Replays: " + error.message());
+		RefreshReplayBrowserControls();
+		return;
+	}
+	for (const auto end = fs::directory_iterator(); entries != end; entries.increment(error)) {
+		if (error) break;
+		const auto& entry = *entries;
+		std::error_code fileError;
+		if (fs::is_symlink(entry.symlink_status(fileError)) || !entry.is_regular_file(fileError) || fileError) continue;
+		std::string extension = entry.path().extension().string();
+		std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		if (extension != ".ccreplay") continue;
+		ReplayRow row;
+		row.path = entry.path().string();
+		row.text = entry.path().filename().string();
+		const auto written = entry.last_write_time(fileError);
+		if (!fileError) {
+			const auto systemTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(fs::file_time_type::clock::to_sys(written));
+			const std::time_t time = std::chrono::system_clock::to_time_t(systemTime) - 7 * 60 * 60;
+			std::tm local{};
+#ifdef _WIN32
+			gmtime_s(&local, &time);
+#else
+			gmtime_r(&time, &local);
+#endif
+			std::ostringstream date;
+			date << std::put_time(&local, "%Y-%m-%d %H:%M MST");
+			row.text += " | " + date.str();
+		}
+		NetMatchReplayReader reader;
+		if (reader.Open(row.path, &row.error)) {
+			const auto& config = reader.GetConfig();
+			row.text += " | " + config.activityPreset + " / " + config.sceneName + " | " + std::to_string(config.peerCount) + " peers";
+			reader.Close();
+			NetReplayVerifyReport scan;
+			if (NetMatchReplayReader::Verify(row.path, scan)) {
+				NetMatchSummary duration;
+				duration.runningTicks = scan.frames;
+				row.text += " | " + duration.DurationText();
+			} else {
+				row.error = scan.error;
+			}
+		}
+		if (!row.error.empty()) row.text += " | Unavailable: " + row.error;
+		m_ReplayRows.push_back(std::move(row));
+	}
+	std::sort(m_ReplayRows.begin(), m_ReplayRows.end(), [](const auto& a, const auto& b) { return a.path < b.path; });
+	m_ReplayList->BeginUpdate();
+	int restore = m_ReplayRows.empty() ? -1 : 0;
+	for (size_t i = 0; i < m_ReplayRows.size(); ++i) {
+		m_ReplayList->AddItem(m_ReplayRows[i].text);
+		if (m_ReplayRows[i].path == keep) restore = static_cast<int>(i);
+	}
+	m_ReplayList->EndUpdate();
+	m_ReplayList->SetSelectedIndex(restore);
+	m_ReplayStatusLabel->SetText(error ? "Replay listing stopped: " + error.message() : std::to_string(m_ReplayRows.size()) + " replays in Userdata/Replays");
+	RefreshReplayBrowserControls();
+}
+
+void MainMenuGUI::RefreshReplayBrowserControls() {
+	const int width = std::min(600, m_RootBoxMaxWidth - 24);
+	const int height = std::min(360, g_WindowMan.GetResY() - 30);
+	const int selected = m_ReplayList->GetSelectedIndex();
+	const bool hasSelection = selected >= 0 && static_cast<size_t>(selected) < m_ReplayRows.size();
+	if (m_ReplayBrowserPanel->GetWidth() != width || m_ReplayBrowserPanel->GetHeight() != height) m_ReplayBrowserPanel->Resize(width, height);
+	if (m_ReplayList->GetWidth() != width - 24 || m_ReplayList->GetHeight() != height - 146) {
+		m_ReplayList->Resize(width - 24, height - 146);
+		m_ReplayList->SetFont(m_MultiplayerLobbyPlayerRowFallbackFont);
+		for (auto* row : *m_ReplayList->GetItemList()) row->m_Height = 0;
+		m_ReplayList->EndUpdate();
+	}
+	m_ReplaySelectedLabel->SetPositionRel(12, height - 92);
+	m_ReplaySelectedLabel->Resize(width - 24, 42);
+	m_ReplaySelectedLabel->SetText(hasSelection ? m_ReplayRows[selected].text : "Select a replay to play or delete.");
+	m_ReplaySelectedLabel->SetVerticalOverflowScroll(true);
+	m_ReplaySelectedLabel->ActivateDeactivateOverflowScroll(true);
+	m_ReplayStatusLabel->Resize(width - 24, 16);
+	m_ReplayStatusLabel->ActivateDeactivateOverflowScroll(true);
+	m_MainMenuButtons[MenuButton::ReplayPlayButton]->SetEnabled(hasSelection && m_ReplayRows[selected].error.empty());
+	m_MainMenuButtons[MenuButton::ReplayDeleteButton]->SetEnabled(hasSelection);
+	m_MainMenuButtons[MenuButton::ReplayPlayButton]->SetPositionRel(12, height - 34);
+	m_MainMenuButtons[MenuButton::ReplayDeleteButton]->SetPositionRel(104, height - 34);
+	m_MainMenuButtons[MenuButton::ReplayBackButton]->SetPositionRel(width - 92, height - 34);
+	const int backHeight = m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight();
+	FitMultiplayerScreen(width, height + backHeight + 5);
+	m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((width - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, height);
+}
+
+void MainMenuGUI::PlaySelectedReplay() {
+	const int selected = m_ReplayList->GetSelectedIndex();
+	if (selected < 0 || static_cast<size_t>(selected) >= m_ReplayRows.size() || !m_ReplayRows[selected].error.empty()) return;
+	std::string error;
+	if (!StartNetReplayPlayback(m_ReplayRows[selected].path, true, &error)) {
+		m_ReplayStatusLabel->SetText(error);
+		return;
+	}
+	m_UpdateResult = MainMenuUpdateResult::ActivityStarted;
+	SetActiveMenuScreen(MenuScreen::MainScreen, false);
+}
+
+void MainMenuGUI::ReturnToReplayBrowser(const std::string& status) {
+	SetActiveMenuScreen(MenuScreen::MultiplayerScreen, false);
+	ShowMultiplayerScreen();
+	m_MultiplayerSubScreen = MultiplayerSubScreen::ReplayBrowser;
+	RefreshReplayList();
+	m_ReplayStatusLabel->SetText(status);
+	RefreshMultiplayerScreenControls(g_NetMatchService.GetLobbySnapshot());
+	m_ReplayList->SetFocus();
+}
+
+void MainMenuGUI::ConfirmReplayDelete() {
+	namespace fs = std::filesystem;
+	const fs::path path(m_ReplayDeletePath);
+	std::error_code error;
+	const fs::path directory = fs::weakly_canonical(fs::path("Userdata") / "Replays", error);
+	const fs::path parent = error ? fs::path() : fs::weakly_canonical(path.parent_path(), error);
+	const auto statusBeforeDelete = error ? fs::file_status() : fs::symlink_status(path, error);
+	const bool allowed = !m_ReplayDeletePath.empty() && !error && directory == parent && fs::is_regular_file(statusBeforeDelete);
+	const bool removed = allowed && !error && fs::remove(path, error);
+	const std::string status = removed ? "Deleted " + path.filename().string() : "Could not delete replay: " + (error ? error.message() : "file unavailable");
+	CloseMultiplayerDialog();
+	RefreshReplayList();
+	m_ReplayStatusLabel->SetText(status);
 }
 
 void MainMenuGUI::ActivateModerationRow(const GUIControl* control, NetModerationAction action) {
@@ -1471,6 +1683,12 @@ static bool IsControlClickable(GUIControl* control) {
 }
 
 bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
+	if (const auto index = ReplayRowIndex(controlName)) {
+		if (*index >= m_ReplayRows.size() || !IsControlClickable(m_ReplayList) || m_ActiveDialogBox) return false;
+		m_ReplayList->SetSelectedIndex(static_cast<int>(*index));
+		HandleMultiplayerScreenInputEvents(m_ReplayList);
+		return true;
+	}
 	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
 	if (!control) {
 		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
@@ -1541,6 +1759,11 @@ bool MainMenuGUI::AutomationSetCheck(const std::string& controlName, bool checke
 }
 
 bool MainMenuGUI::AutomationLabelText(const std::string& controlName, std::string& text) const {
+	if (const auto index = ReplayRowIndex(controlName)) {
+		if (*index >= m_ReplayRows.size()) return false;
+		text = m_ReplayRows[*index].text;
+		return true;
+	}
 	// The chat rows' count moves with the layout budget, so scripts address them by role, not
 	// index: LabelLobbyChatNewest is the last drawn row, LabelLobbyChatAny every drawn row's
 	// text joined - an assert_label substring hit proves the line reached a rendered row.
@@ -1616,6 +1839,7 @@ std::string MainMenuGUI::AutomationMultiplayerSubScreen() const {
 		case MultiplayerSubScreen::JoinSetup: return "JoinSetup";
 		case MultiplayerSubScreen::Lobby: return "Lobby";
 		case MultiplayerSubScreen::Moderation: return "Moderation";
+		case MultiplayerSubScreen::ReplayBrowser: return "ReplayBrowser";
 		default: return "Unknown";
 	}
 }
@@ -1625,11 +1849,13 @@ void MainMenuGUI::AutomationGoToMainScreen() {
 }
 
 bool MainMenuGUI::AutomationControlExists(const std::string& controlName) const {
+	if (const auto index = ReplayRowIndex(controlName)) return *index < m_ReplayRows.size();
 	return m_SubMenuScreenGUIControlManager->GetControl(controlName) != nullptr ||
 	       m_MainMenuScreenGUIControlManager->GetControl(controlName) != nullptr;
 }
 
 bool MainMenuGUI::AutomationControlEnabled(const std::string& controlName) const {
+	if (const auto index = ReplayRowIndex(controlName)) return *index < m_ReplayRows.size() && IsControlClickable(m_ReplayList);
 	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
 	if (!control) {
 		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);

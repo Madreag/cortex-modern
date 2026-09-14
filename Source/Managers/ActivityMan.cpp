@@ -1090,6 +1090,15 @@ void ActivityMan::LateUpdateGlobalScripts() const {
 	}
 }
 
+void ActivityMan::ClearEndedReplayActivity() {
+	if (m_Activity && !m_Activity->IsOver()) return;
+	m_StartActivity.reset();
+	m_Activity.reset();
+	m_InActivity = false;
+	m_ActivityNeedsRestart = false;
+	m_ActivityNeedsResume = false;
+}
+
 void ActivityMan::NoteLockstepRelaunch() {
 	m_LockstepRelaunchInProgress = true;
 }

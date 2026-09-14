@@ -1688,6 +1688,18 @@ namespace RTE {
 		return s_ReplayReader.IsOpen();
 	}
 
+	void ScenarioRunner::CloseLockstepReplayPlayback() {
+		s_ReplayReader.Close();
+		s_ReplayRewindFrom = 0;
+		s_ReplayRewindCount = 0;
+		s_ReplayRewindKeep.clear();
+		s_ReplayRewindBuffer.clear();
+		s_ReplayLookahead.clear();
+		s_ReplayLookaheadFailed = false;
+		s_ReplayLookaheadEof = false;
+		s_ReplayLookaheadError.clear();
+	}
+
 	const NetMatchConfig& ScenarioRunner::GetLockstepReplayConfig() {
 		return s_ReplayReader.GetConfig();
 	}
