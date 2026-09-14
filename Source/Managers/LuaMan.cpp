@@ -52,7 +52,12 @@ extern "C" {
 #include "lj_ctype.h"
 #include "lj_dispatch.h"
 #include "lj_gc.h"
+#include "lj_state.h"
 }
+
+// lj_dispatch.h drags in windows.h, whose A/W macros rewrite our own GetClassName and LoadBitmap.
+#undef GetClassName
+#undef LoadBitmap
 
 #include <atomic>
 #include <cmath>
