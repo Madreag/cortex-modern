@@ -385,6 +385,9 @@ namespace RTE {
 		/// @return Whether the quick disabled flag is set.
 		bool IsQuickDisabled() const { return m_Disabled; }
 
+		/// Whether the producing pass holds this controller, so the sim's committed input is still held aside.
+		bool IsProducingLocalInput() const { return m_ProducingLocalInput; }
+
 		/// Replaces the sim-facing controller state from a decoded wire frame.
 		void ApplyWireState(const std::array<bool, ControlState::CONTROLSTATECOUNT>& controlStates, const Vector& analogMove, const Vector& analogAim, const Vector& analogCursor, const Vector& mouseMovement, InputMode inputMode, int playerRaw, bool quickDisabled);
 
