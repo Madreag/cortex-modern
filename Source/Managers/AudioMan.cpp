@@ -308,7 +308,7 @@ void AudioMan::Update() {
 
 		if (!g_ActivityMan.ActivityPaused()) {
 			const Activity* currentActivity = g_ActivityMan.GetActivity();
-			uint8_t currentActivityHumanCount = m_IsInMultiplayerMode ? 1 : currentActivity->GetHumanCount();
+			uint8_t currentActivityHumanCount = m_IsInMultiplayerMode ? 1 : currentActivity->GetLocalHumanCount();
 
 			if (m_CurrentActivityHumanPlayerPositions.size() != currentActivityHumanCount) {
 				status = status == FMOD_OK ? m_AudioSystem->set3DNumListeners(currentActivityHumanCount) : status;
@@ -316,7 +316,7 @@ void AudioMan::Update() {
 
 			m_CurrentActivityHumanPlayerPositions.clear();
 			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount && m_CurrentActivityHumanPlayerPositions.size() < currentActivityHumanCount; player++) {
-				if (currentActivity->PlayerActive(player) && currentActivity->PlayerHuman(player)) {
+				if (currentActivity->PlayerActive(player) && currentActivity->IsLocalHumanSeat(player)) {
 					int screen = currentActivity->ScreenOfPlayer(player);
 					Vector humanPlayerPosition = g_CameraMan.GetScrollTarget(screen);
 					if (IsInMultiplayerMode()) {

@@ -255,6 +255,8 @@ namespace RTE {
 		InputMode GetSeatMode() const { return m_SeatMode; }
 		int GetSeatPlayer() const { return m_SeatMode == InputMode::CIM_PLAYER ? m_SeatPlayer : Players::NoPlayer; }
 		int GetSeatPlayerRaw() const { return m_SeatPlayer; }
+		/// The physical input slot sampled for this machine's activity seat.
+		int GetInputPlayer() const;
 
 		struct LocalInputState {
 			InputMode seatMode = CIM_AI;

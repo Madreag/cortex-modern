@@ -283,7 +283,7 @@ void AreaEditorGUI::Update() {
 		g_FrameMan.SetScreenText("Click and drag to ADD a new box to the Area - Drag existing ones to MOVE them", g_ActivityMan.GetActivity()->ScreenOfPlayer(m_pController->GetPlayer()));
 
 		// Trap the mouse cursor
-		g_UInputMan.TrapMousePos(true, m_pController->GetPlayer());
+		g_UInputMan.TrapMousePos(true, m_pController->GetInputPlayer());
 
 		// Move the cursor according to analog or mouse input
 		if (!analogInput.IsZero()) {
@@ -360,7 +360,7 @@ void AreaEditorGUI::Update() {
 
 	else if (m_pCurrentArea && (m_EditorGUIMode == MOVINGBOX || m_EditorGUIMode == ADDINGBOX || m_EditorGUIMode == DELETINGBOX) && !m_PieMenu->IsEnabled()) {
 		// Trap the mouse cursor
-		g_UInputMan.TrapMousePos(true, m_pController->GetPlayer());
+		g_UInputMan.TrapMousePos(true, m_pController->GetInputPlayer());
 
 		// Move the cursor according to analog or mouse input
 		if (!analogInput.IsZero())

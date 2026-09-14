@@ -1048,7 +1048,7 @@ void FrameMan::Draw() {
 void FrameMan::DrawScreenText(int playerScreen, AllegroBitmap playerGUIBitmap) {
 	int textPosY = 0;
 	// Only draw screen text to actual human players
-	if (playerScreen < g_ActivityMan.GetActivity()->GetHumanCount()) {
+	if (playerScreen < g_ActivityMan.GetActivity()->GetLocalHumanCount()) {
 		textPosY += 12;
 
 		if (!m_ScreenText[playerScreen].empty()) {

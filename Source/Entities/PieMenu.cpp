@@ -1597,7 +1597,7 @@ void PieMenu::PrepareAnalogCursorForEnableOrDisable(bool enable) const {
 		const bool seated = controller->IsSeatedByPlayer();
 		if (!IsSubPieMenu()) {
 			if (seated) {
-				g_UInputMan.SetMouseValueMagnitude(0, controller->GetSeatPlayer());
+				g_UInputMan.SetMouseValueMagnitude(0, controller->GetInputPlayer());
 			}
 			controller->m_AnalogCursor.Reset();
 		} else if (enable) {
@@ -1605,8 +1605,8 @@ void PieMenu::PrepareAnalogCursorForEnableOrDisable(bool enable) const {
 			if (!controller->m_AnalogCursor.IsZero()) {
 				float mouseAngleToSet = GetRotAngle() + (m_HoveredPieSlice ? m_HoveredPieSlice->GetMidAngle() : c_DirectionsToRadiansMap.at(m_DirectionIfSubPieMenu));
 				if (seated) {
-					g_UInputMan.SetMouseValueAngle(mouseAngleToSet, controller->GetSeatPlayer());
-					g_UInputMan.SetMouseValueMagnitude(0.75F, controller->GetSeatPlayer());
+					g_UInputMan.SetMouseValueAngle(mouseAngleToSet, controller->GetInputPlayer());
+					g_UInputMan.SetMouseValueMagnitude(0.75F, controller->GetInputPlayer());
 				}
 				controller->m_AnalogCursor.SetAbsRadAngle(mouseAngleToSet);
 				controller->m_AnalogCursor.SetMagnitude(0.75F);
