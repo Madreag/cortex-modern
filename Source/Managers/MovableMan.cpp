@@ -757,6 +757,22 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 	MovableMan::ReconcileLockstepControlBindings();
 }
 
+// With no coordinator the pending commands have no ready frame to ride in on, so a scenario run
+// drains them itself and applies the identical set through the same path the match uses.
+static void ApplyOfflineGameCommands(uint64_t simTick) {
+	if (ScenarioRunner::HasLockstepCoordinator()) {
+		return;
+	}
+	std::vector<NetGameCommand> commands = ScenarioRunner::DrainLocalGameCommands();
+	if (commands.empty()) {
+		return;
+	}
+	NetLockstepReadyFrame readyFrame;
+	readyFrame.frame = simTick;
+	readyFrame.localCommands = std::move(commands);
+	ApplyLockstepGameCommands(readyFrame);
+}
+
 namespace {
 	std::map<int64_t, std::pair<uint64_t, uint8_t>> s_LockstepFrameClaims; //!< Actor -> the frame it was claimed on and by whom.
 }
@@ -4846,6 +4862,7 @@ void MovableMan::UpdateControllers() {
 
 	if (!lockstepActive) {
 		CommitOfflineValueWrites();
+		ApplyOfflineGameCommands(simTick);
 	}
 
 	if (lockstepActive) {
