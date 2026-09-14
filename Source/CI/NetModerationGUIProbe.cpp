@@ -44,6 +44,7 @@ namespace {
 		Clock::time_point started;
 		std::filesystem::path directory;
 		Json script, result;
+		SDL_Joystick* pad = nullptr;
 	};
 	Probe probe;
 
@@ -61,6 +62,38 @@ namespace {
 
 	void Require(bool condition, const std::string& reason) {
 		if (!condition) throw std::runtime_error(reason);
+	}
+
+	/// The probe's own gamepad, so a start button is the device press the seat reads, not a key.
+	SDL_Joystick* ProbePad() {
+		if (!probe.pad) {
+			SDL_VirtualJoystickDesc description{};
+			SDL_INIT_INTERFACE(&description);
+			description.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+			description.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+			description.naxes = SDL_GAMEPAD_AXIS_COUNT;
+			description.button_mask = (1U << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+			description.axis_mask = (1U << SDL_GAMEPAD_AXIS_COUNT) - 1;
+			description.name = "Net UI probe controller";
+			const SDL_JoystickID attached = SDL_AttachVirtualJoystick(&description);
+			Require(attached != 0, std::string("SDL_AttachVirtualJoystick: ") + SDL_GetError());
+			probe.pad = SDL_OpenJoystick(attached);
+			if (!probe.pad) {
+				const std::string reason = SDL_GetError();
+				SDL_DetachVirtualJoystick(attached);
+				Require(false, "SDL_OpenJoystick: " + reason);
+			}
+		}
+		return probe.pad;
+	}
+
+	void ReleaseProbePad() {
+		if (probe.pad) {
+			const SDL_JoystickID attached = SDL_GetJoystickID(probe.pad);
+			SDL_CloseJoystick(probe.pad);
+			SDL_DetachVirtualJoystick(attached);
+			probe.pad = nullptr;
+		}
 	}
 
 	uint64_t NowMs() {
@@ -204,6 +237,14 @@ namespace {
 			event.key.key = key == "F6" ? SDLK_F6 : key == "P" ? SDLK_P : SDLK_ESCAPE;
 			event.key.down = op == "key_down";
 			Push(event);
+		} else if (op == "pad_down" || op == "pad_up") {
+			const std::string name = step.at("button");
+			const SDL_GamepadButton button = SDL_GetGamepadButtonFromString(name.c_str());
+			Require(button != SDL_GAMEPAD_BUTTON_INVALID, "unsupported probe pad button: " + name);
+			SDL_Joystick* pad = ProbePad();
+			Require(SDL_SetJoystickVirtualButton(pad, button, op == "pad_down"), std::string("SDL_SetJoystickVirtualButton: ") + SDL_GetError());
+			SDL_UpdateJoysticks();
+			observed["pad"] = SDL_GetJoystickID(pad);
 		} else if (op == "input_scope") {
 			GUIInputWrapper::SetAutomationDriving(step.at("enabled").get<bool>());
 		} else if (op == "menu") {
@@ -283,6 +324,7 @@ namespace {
 			if (!std::filesystem::is_regular_file(step.at("path").get<std::string>())) return false;
 		} else if (op == "finish") {
 			GUIInputWrapper::SetAutomationDriving(false);
+			ReleaseProbePad();
 			Require(probe.index + 1 == probe.script["steps"].size(), "finish must be last");
 			probe.done = true;
 			probe.result["complete"] = true;
@@ -320,6 +362,7 @@ namespace {
 			if (probe.done) std::cout << "[net-ui-probe] PASS: completed " << probe.index << " steps" << std::endl;
 		} catch (const std::exception& error) {
 			GUIInputWrapper::SetAutomationDriving(false);
+			ReleaseProbePad();
 			probe.done = true;
 			probe.result["pass"] = false;
 			probe.result["error"] = error.what();
