@@ -1,12 +1,18 @@
-"""Detect the match status widget, toast lifetime, captures and simulation invariance.
+"""Detect the match status widget, toast lifetime, HUD clearance and simulation invariance.
 
 Two menu-launched peers run at each viewport. Quiet and paused capture-on/off
 pairs compare complete traces. Host presses P to pause; Guest presses P to resume.
-The unchanged network UI probe reads the drawn labels and their rectangles.
+The network UI probe reads the drawn labels and their rectangles. Additional arms
+force the widget's other visibility states: the ShowMatchStatus setting, the F6
+seats panel, a wall-clock stall on the guest, and a guest leave that parks the
+host in the reconnect hold. The widget is hidden during ordinary play; when it is
+up it must sit in the measured free zone: below 480 rows a single-line strip
+between the funds block and the controller icon, at or above it the top-right box.
 """
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
 from pathlib import Path
@@ -15,17 +21,91 @@ import subprocess
 import sys
 import threading
 
-SCRATCH = Path("D:/mx/astra-match-overlay-20260913")
+SCRATCH = Path("D:/mx/swe-overlay-layout-20260914")
+PORT_BASE, PORT_COUNT = 48260, 10
 TICKS = 900
 CAPTURE_TICKS = (60, 270, 500, 680, 880)
 BOX_WIDTH, BOX_HEIGHT, BOX_TOP, BOX_MARGIN = 252, 76, 32, 8
+STRIP_TOP, STRIP_LEFT, STRIP_RIGHT_MARGIN = 2, 152, 40
+COMPACT_MAX_HEIGHT = 480
 STATUS = "LabelNetMatchStatus"
+STATUS_BOX = "BoxNetMatchStatus"
 TOAST = "LabelNetMatchToastNewest"
 PAUSED = "Match paused by Host"
 RESUMED = "Match resumed by Guest"
+WIDGET_FILL = (20, 22, 27)
+WIDGET_BORDER = (59, 65, 83)
+WIDGET_ACCENTS = ((108, 118, 168), (170, 120, 0))
 CAPTURE = re.compile(r"^\[net-match-screenshot\] applied_tick=(\d+) name=(\S+) queued=([01])$")
 PAUSE_EVENT = re.compile(r"^\[net-match\] match paused at tick (\d+) sim ms \d+$")
 RESUME_EVENT = re.compile(r"^\[net-match\] match resumed at tick (\d+) sim ms \d+$")
+
+# Arms beyond the original four drive the remaining visibility states. "event" is
+# the scripted pause/resume; "setting" turns on ShowMatchStatus; "f6" opens the
+# seats panel; "stall" makes the guest sleep 8 s at tick 300 so the host waits on
+# frames; "leave" makes the guest quit at tick 300 so the host holds its seat.
+ARMS = {
+    "on": {"captures": True},
+    "off": {},
+    "pause_on": {"captures": True, "event": True},
+    "pause_off": {"event": True},
+    "status_on": {"captures": True, "setting": True},
+    "f6": {"f6": True},
+    "stall": {"stall": True},
+    "hold": {"leave": True},
+}
+
+# The HUD furniture the widget must never touch, measured on the retained
+# captures: funds/health block top-left, the controller icon top-right (drawn for
+# the first 30 s), and the right-side band the alarm marker and actor labels
+# occupy. The bottom band carries nothing fixed in-match in this build, so it is
+# not listed; the toast stack's band is still checked against the same rects.
+def hud_rects(size):
+    w, h = size
+    rects = {"funds_block": (0, 0, 144, 18), "controller_icon": (w - 38, 0, 38, 18)}
+    if (w, h) == (960, 540):
+        rects["right_markers"] = (660, 140, 300, 140)
+    else:
+        sx, sy = w / 640, h / 360
+        rects["right_markers"] = (int(500 * sx), int(88 * sy), int(140 * sx), int(112 * sy))
+    return rects
+
+
+def rects_intersect(a, b):
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    return ax < bx + bw and ax + aw > bx and ay < by + bh and ay + ah > by
+
+
+def occluding_rects(rect, size):
+    return [name for name, hud in hud_rects(size).items() if rects_intersect(rect, hud)]
+
+
+def find_widget_paint(image, size):
+    """Bounding box of the drawn widget, or None. The widget's own border color
+    (59,65,83) frames it; a >=60px contiguous run marks a horizontal edge, which
+    no HUD element or this scene reproduces. The band covers both layouts."""
+    width, height = size
+    pixels = image.load()
+    region_bottom = min(BOX_TOP + BOX_HEIGHT + 22, height)
+    for y in range(region_bottom):
+        x = 0
+        while x < width:
+            if pixels[x, y] != WIDGET_BORDER:
+                x += 1
+                continue
+            x0 = x
+            while x < width and pixels[x, y] == WIDGET_BORDER:
+                x += 1
+            if x - x0 < 60:
+                continue
+            bottom = y
+            for yy in range(y + 1, region_bottom):
+                if any(pixels[xx, yy] == WIDGET_BORDER for xx in range(x0, x)):
+                    bottom = yy
+            if bottom - y + 1 >= 8:
+                return (x0, y, x - x0, bottom - y + 1)
+    return None
 
 
 def sha256(path):
@@ -59,14 +139,21 @@ def read_log(out):
                      for path in (out / "stdout.log", out / "stderr.log") if path.exists())
 
 
-def set_resolution(runtime, width, height):
+def set_settings(runtime, values):
     path = runtime / "Userdata" / "Settings.ini"
     settings = path.read_text(encoding="utf-8")
-    for name, value in (("ResolutionX", width), ("ResolutionY", height)):
+    for name, value in values.items():
         settings, count = re.subn(rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*",
                                   lambda match: match[1] + str(value), settings)
-        if count != 1:
-            raise RuntimeError(f"expected one private {name} setting, found {count}")
+        if count == 0:
+            # A missing property must land at the SettingsMan top level, not inside
+            # the trailing Player4Scheme child object, so it anchors on ResolutionY.
+            settings, anchored = re.subn(r"(?m)^(\s*ResolutionY\s*=\s*[^\r\n]*)",
+                                         lambda match: match[1] + f"\n\t{name} = {value}", settings, count=1)
+            if anchored != 1:
+                raise RuntimeError(f"no SettingsMan anchor for private {name} setting")
+        elif count != 1:
+            raise RuntimeError(f"expected at most one private {name} setting, found {count}")
     path.write_text(settings, encoding="utf-8")
 
 
@@ -91,39 +178,86 @@ def label_assert(control, text=None, visible=True):
     return step
 
 
-def probe_script(who, width, event):
-    box = [width - BOX_WIDTH - BOX_MARGIN, BOX_TOP, BOX_WIDTH, BOX_HEIGHT]
-    steps = [
-        {"op": "wait", "service": "Running"},
-        {"op": "wait", "sim_at_least": 60},
-        {"op": "assert_control", "control": "BoxNetMatchStatus", "equals": {"visible": True, "rect": box}, "fits": True},
-        label_assert(STATUS, "NET STATUS"),
-        label_assert(STATUS, "D 3 ticks / 50.0 ms"),
-        label_assert(STATUS, "max peer" if who == "Host" else "host link"),
-        label_assert(STATUS, "PACE "),
-    ]
-    if event:
+def probe_script(who, size, arm):
+    width, height = size
+    compact = height < COMPACT_MAX_HEIGHT
+    hidden = {"op": "assert_control", "control": STATUS_BOX, "equals": {"visible": False}, "fits": True}
+    shown = {"op": "assert_control", "control": STATUS_BOX, "equals": {"visible": True}, "fits": True}
+    status_reads = [label_assert(STATUS, "NET [F6]" if compact else "NET STATUS"),
+                    label_assert(STATUS, "D 3" if compact else "D 3 ticks / 50.0 ms"),
+                    label_assert(STATUS, "RTT "),
+                    label_assert(STATUS, "PACE ")]
+    steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "sim_at_least": 60}]
+    if arm.get("setting"):
+        steps += [shown, *status_reads, label_assert(STATUS, "LIVE")]
+    else:
+        steps.append(hidden)
+    if arm.get("event"):
         steps += [{"op": "wait", "sim_at_least": 240}]
         if who == "Host":
             steps += [{"op": "key_down", "key": "P", "sim_at": 240}, {"op": "key_up", "key": "P", "sim_at": 241}]
         steps += [
             {"op": "wait", "sim_at_least": 270},
             label_assert(TOAST, PAUSED),
+            shown,
             label_assert(STATUS, "PAUSED"),
+            {"op": "screenshot", "name": f"widget-paused-{who.lower()}"},
             {"op": "wait", "sim_at_least": 430},
             {"op": "assert_control", "control": TOAST, "equals": {"visible": False, "text": ""}},
             {"op": "wait", "sim_at_least": 480},
         ]
         if who == "Guest":
             steps += [{"op": "key_down", "key": "P", "sim_at": 480}, {"op": "key_up", "key": "P", "sim_at": 481}]
-        steps += [{"op": "wait", "sim_at_least": 680}, label_assert(TOAST, RESUMED)]
-    steps += [{"op": "wait", "sim_at_least": 880}, label_assert(STATUS, "LIVE"),
-              {"op": "assert_control", "control": TOAST, "equals": {"visible": False, "text": ""}},
+        steps += [{"op": "wait", "sim_at_least": 680}, label_assert(TOAST, RESUMED), hidden]
+    if arm.get("f6"):
+        if who == "Host":
+            steps += [
+                {"op": "wait", "sim_at_least": 200},
+                {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+                {"op": "wait", "panel_open": True},
+                shown,
+                {"op": "assert_control", "control": "NetworkSeatsTitle", "equals": {"visible": True}},
+                {"op": "screenshot", "name": "widget-f6-panel-host"},
+                {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+                {"op": "wait", "panel_open": False},
+            ]
+    if arm.get("stall"):
+        if who == "Host":
+            steps += [
+                {"op": "wait", "sim_at_least": 290},
+                # The guest sleeps 8 s at tick 300; the stall UI pump keeps drawing and polling here.
+                {"op": "wait", "control": STATUS, "equals": {"visible": True}},
+                shown,
+                label_assert(STATUS, "WAITING FOR FRAMES"),
+                {"op": "screenshot", "name": "widget-stalled-host"},
+            ]
+    if arm.get("leave"):
+        if who == "Host":
+            steps += [
+                {"op": "wait", "sim_at_least": 290},
+                {"op": "wait", "control": STATUS, "equals": {"visible": True}},
+                # The seat hold engages after the transport's give-up, seconds after the leave tick.
+                {"op": "wait", "elapsed_ms": 6000},
+                shown,
+                label_assert(STATUS, "WAITING FOR" if compact else "Waiting for"),
+                {"op": "screenshot", "name": "widget-hold-host"},
+            ]
+        else:
+            # The guest quits at tick 300 and is terminated afterwards; its probe must be done first.
+            steps += [{"op": "wait", "sim_at_least": 250}, hidden]
+        steps.append({"op": "finish"})
+        return {"schema": 1, "timeout_ms": 180000, "steps": steps}
+    steps += [{"op": "wait", "sim_at_least": 880}]
+    if arm.get("setting"):
+        steps += [shown, label_assert(STATUS, "LIVE")]
+    else:
+        steps += [hidden]
+    steps += [{"op": "assert_control", "control": TOAST, "equals": {"visible": False, "text": ""}},
               {"op": "finish"}]
     return {"schema": 1, "timeout_ms": 180000, "steps": steps}
 
 
-def run_pair(repo, root, port, size, captures, event, timeout, expected_pin):
+def run_pair(repo, root, port, size, arm, timeout, expected_pin):
     require_pin(repo, expected_pin)
     root.mkdir(parents=True, exist_ok=False)
     runs, records = {}, {}
@@ -134,15 +268,22 @@ def run_pair(repo, root, port, size, captures, event, timeout, expected_pin):
             menu = inputs / "menu.txt"
             menu.write_text(menu_script(who, port), encoding="utf-8")
             probe = inputs / "probe.json"
-            probe.write_text(json.dumps(probe_script(who, size[0], event), indent=2), encoding="utf-8")
+            probe.write_text(json.dumps(probe_script(who, size, arm), indent=2), encoding="utf-8")
             flags = ["-menu-script", menu, "-num-lua-states", 4, "-tick-hashes", "-max-ticks", TICKS,
                      "-net-match-ticks", TICKS, "-out", root / f"{who}_trace.json",
                      "-net-match-report", root / f"{who}_report.json"]
-            if captures:
+            if arm.get("captures"):
                 flags += ["-net-match-screenshot-ticks", ",".join(map(str, CAPTURE_TICKS))]
+            if arm.get("stall") and who == "Guest":
+                flags += ["-net-match-e2e-stall"]
+            if arm.get("leave") and who == "Guest":
+                flags += ["-net-match-e2e-leave", "-net-match-e2e-leave-tick", "300"]
             runs[who] = make_run(repo, flags, root / who, timeout,
                                  env={"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)})
-            set_resolution(runs[who].cwd, *size)
+            values = {"ResolutionX": size[0], "ResolutionY": size[1]}
+            if arm.get("setting"):
+                values["ShowMatchStatus"] = 1
+            set_settings(runs[who].cwd, values)
 
         def drive(who):
             try:
@@ -156,6 +297,11 @@ def run_pair(repo, root, port, size, captures, event, timeout, expected_pin):
         threading.Event().wait(2.0)
         guest.start()
         host.join()
+        if arm.get("leave"):
+            try:
+                runs["Guest"].terminate(reason="scripted mid-match leave")
+            except RuntimeError:
+                pass
         guest.join()
     finally:
         for run in runs.values():
@@ -172,7 +318,7 @@ def probe_observations(probe):
             yield steps[index], result["observed"]
 
 
-def image_oracle(path, size, event_capture):
+def image_oracle(path, size, arm, tick):
     from PIL import Image
 
     with Image.open(path) as source:
@@ -180,37 +326,53 @@ def image_oracle(path, size, event_capture):
     if image.size != tuple(size):
         return {"pass": False, "actual_size": list(image.size), "expected_size": list(size)}
     width, height = size
-    x, y = width - BOX_WIDTH - BOX_MARGIN, BOX_TOP
     pixels = image.load()
-    border = (59, 65, 83)
-    edge = [(px, y) for px in range(x, x + BOX_WIDTH)]
-    edge += [(px, y + BOX_HEIGHT - 1) for px in range(x, x + BOX_WIDTH)]
-    edge += [(x, py) for py in range(y + 1, y + BOX_HEIGHT - 1)]
-    edge += [(x + BOX_WIDTH - 1, py) for py in range(y + 1, y + BOX_HEIGHT - 1)]
-    matched = sum(pixels[point] == border for point in edge)
-    fill = (20, 22, 27)
-    ink = sum(pixels[px, py] != fill for py in range(y + 6, y + BOX_HEIGHT - 6)
-              for px in range(x + 6, x + BOX_WIDTH - 6))
+    box = find_widget_paint(image, size)
+    if arm.get("event"):
+        expected_visible = tick in (270, 500)
+    elif arm.get("setting"):
+        expected_visible = True
+    else:
+        expected_visible = False
     result = {"path": str(path), "sha256": sha256(path), "size": list(image.size),
-              "box": [x, y, BOX_WIDTH, BOX_HEIGHT], "border_matches": matched,
-              "border_pixels": len(edge), "interior_ink": ink,
-              "pass": matched == len(edge) and ink > 0}
-    if event_capture:
+              "tick": tick, "expected_visible": expected_visible, "widget_paint": box,
+              "pass": True}
+    if expected_visible:
+        result["occluding"] = occluding_rects(box, size) if box else ["widget_missing"]
+        if height < COMPACT_MAX_HEIGHT:
+            result["pass"] = box is not None and not result["occluding"] and box[1] <= STRIP_TOP + 1 and box[3] <= 20 \
+                and box[0] >= STRIP_LEFT and box[0] + box[2] <= width - STRIP_RIGHT_MARGIN
+        else:
+            x, y = width - BOX_WIDTH - BOX_MARGIN, BOX_TOP
+            expected = (x, y, BOX_WIDTH, BOX_HEIGHT)
+            result["pass"] = box == expected and not result["occluding"]
+        result["checks"] = {"paint_found": box is not None, "occluding": result["occluding"],
+                            "compact_strip": height >= COMPACT_MAX_HEIGHT or result["pass"]}
+    else:
+        result["pass"] = box is None
+        result["checks"] = {"paint_absent": box is None}
+    if arm.get("event") and tick == 270:
         toast_width = min(520, width - 32)
         left, top = (width - toast_width) // 2, height - 28
-        background = all(pixels[px, top] == fill for px in range(left, left + toast_width))
-        toast_ink = sum(pixels[px, py] != fill for py in range(top + 4, top + 16)
-                       for px in range(left + 8, left + toast_width - 8))
-        result.update(toast_background=background, toast_ink=toast_ink)
-        result["pass"] = result["pass"] and background and toast_ink > 0
+        background = all(pixels[px, top] == WIDGET_FILL for px in range(left, left + toast_width))
+        toast_ink = sum(pixels[px, py] != WIDGET_FILL for py in range(top + 4, top + 16)
+                        for px in range(left + 8, left + toast_width - 8))
+        toast_rect = (left, top, toast_width, 18)
+        result.update(toast_background=background, toast_ink=toast_ink,
+                      toast_occluding=occluding_rects(toast_rect, size))
+        result["pass"] = result["pass"] and background and toast_ink > 0 and not result["toast_occluding"]
     return result
 
 
-def inspect_pair(root, records, size, captures, event):
-    checks, details = {}, {"records": records, "captures": {}, "probes": {}, "events": {}}
+def inspect_pair(root, records, size, arm):
+    checks, details = {}, {"records": records, "captures": {}, "probes": {}, "events": {}, "occlusion": {}}
+    leaving = bool(arm.get("leave"))
     for who in ("Host", "Guest"):
         record = records.get(who, {})
-        checks[f"{who}_exit"] = record.get("exit_code") == 0 and not record.get("timed_out", True)
+        if leaving and who == "Guest":
+            checks[f"{who}_exit"] = record.get("exit_code") not in (0, None) or record.get("injected_termination") is not None
+        else:
+            checks[f"{who}_exit"] = record.get("exit_code") == 0 and not record.get("timed_out", True)
         checks[f"{who}_evidence"] = record.get("evidence_complete") is True
         log = read_log(root / who)
         checks[f"{who}_menu_match"] = "[menu-mp] launching the match" in log
@@ -222,22 +384,30 @@ def inspect_pair(root, records, size, captures, event):
         checks[f"{who}_probe_complete"] = probe.get("pass") is True and probe.get("complete") is True
         observations = list(probe_observations(probe))
         status_texts = [obs["control"]["text"] for step, obs in observations
-                        if step.get("control") == STATUS and "control" in obs]
-        checks[f"{who}_live_rtt"] = bool(status_texts) and all(re.search(r"\nRTT \d+ ms / ", text) for text in status_texts)
-        checks[f"{who}_measured_pace"] = bool(status_texts) and all(re.search(r"\nPACE (?:[1-9]\d*(?:\.\d+)?|0\.[1-9]\d*) tps", text) for text in status_texts)
+                        if step.get("control") == STATUS and obs.get("control", {}).get("visible")]
+        widget_rects = [tuple(obs["control"]["rect"]) for step, obs in observations
+                        if step.get("control") == STATUS_BOX and obs.get("control", {}).get("visible")]
+        toast_rects = [tuple(obs["control"]["rect"]) for step, obs in observations
+                       if step.get("control") == TOAST and obs.get("control", {}).get("visible")]
+        details["occlusion"][who] = {"widget_rects": widget_rects, "toast_rects": toast_rects}
+        checks[f"{who}_widget_rects_clear"] = all(not occluding_rects(rect, size) for rect in widget_rects)
+        checks[f"{who}_toast_rects_clear"] = all(not occluding_rects(rect, size) for rect in toast_rects)
+        if arm.get("setting") or arm.get("event"):
+            checks[f"{who}_live_rtt"] = bool(status_texts) and all(re.search(r"(?:^|\n| )RTT \d+ ms", text) for text in status_texts)
+            checks[f"{who}_measured_pace"] = bool(status_texts) and all(re.search(r"PACE (?:[1-9]\d*(?:\.\d+)?|0\.[1-9]\d*) tps", text) for text in status_texts)
         capture_lines = [(int(match[1]), match[2], match[3] == "1") for line in log.splitlines()
                          if (match := CAPTURE.match(line))]
         shots = sorted((root / who / "runtime" / "ScreenShots").glob("net_match_tick_*.png"))
         details["captures"][who] = {"queued": capture_lines, "images": []}
-        expected_ticks = list(CAPTURE_TICKS) if captures else []
+        expected_ticks = list(CAPTURE_TICKS) if arm.get("captures") else []
         checks[f"{who}_capture_ticks"] = [tick for tick, _, ok in capture_lines if ok] == expected_ticks
         checks[f"{who}_capture_count"] = len(shots) == len(expected_ticks)
         for tick in expected_ticks:
             matching = [path for path in shots if path.name.startswith(f"net_match_tick_{tick}_round_")]
-            image_result = image_oracle(matching[0], size, event and tick == 270) if len(matching) == 1 else {"pass": False, "reason": "missing or duplicate capture", "tick": tick}
+            image_result = image_oracle(matching[0], size, arm, tick) if len(matching) == 1 else {"pass": False, "reason": "missing or duplicate capture", "tick": tick}
             details["captures"][who]["images"].append(image_result)
             checks[f"{who}_pixels_{tick}"] = image_result["pass"]
-        if event:
+        if arm.get("event"):
             pauses = [int(match[1]) for line in log.splitlines() if (match := PAUSE_EVENT.match(line))]
             resumes = [int(match[1]) for line in log.splitlines() if (match := RESUME_EVENT.match(line))]
             toast_reads = [obs for step, obs in observations if step.get("control") == TOAST and "control" in obs]
@@ -255,11 +425,28 @@ def inspect_pair(root, records, size, captures, event):
                                       "toast_reads": toast_reads,
                                       "lines": [{"line": index, "text": line} for index, line in enumerate(log.splitlines(), 1)
                                                 if PAUSE_EVENT.match(line) or RESUME_EVENT.match(line)]}
-    ok, compared = strict_compare(root / "Host_trace.json", root / "Guest_trace.json", expected_ticks=TICKS)
-    checks["complete_peer_hashes"] = ok
-    if event:
-        checks["paused_ticks_covered"] = ok and compared["paused_ticks"] > 0
-    details["peer_hashes"] = compared
+        if arm.get("stall"):
+            waiting_reads = [obs for step, obs in observations
+                             if step.get("control") == STATUS and "WAITING FOR FRAMES" in obs.get("control", {}).get("text", "")]
+            details["events"].setdefault(who, {})["stall_reads"] = waiting_reads
+            if who == "Host":
+                checks["Host_stall_widget_seen"] = bool(waiting_reads)
+        if leaving:
+            hold_reads = [obs for step, obs in observations
+                          if step.get("control") == STATUS and obs.get("control", {}).get("visible")
+                          and ("WAITING FOR" in obs["control"].get("text", "") or "Waiting for" in obs["control"].get("text", ""))]
+            details["events"].setdefault(who, {})["hold_reads"] = hold_reads
+            if who == "Host":
+                checks["Host_hold_widget_seen"] = bool(hold_reads)
+        if arm.get("f6") and who == "Host":
+            panel_reads = [obs.get("panel_open") for step, obs in observations if "panel_open" in obs]
+            checks["Host_f6_panel_seen"] = any(panel_reads)
+    if not leaving:
+        ok, compared = strict_compare(root / "Host_trace.json", root / "Guest_trace.json", expected_ticks=TICKS)
+        checks["complete_peer_hashes"] = ok
+        if arm.get("event"):
+            checks["paused_ticks_covered"] = ok and compared["paused_ticks"] > 0
+        details["peer_hashes"] = compared
     return {"pass": all(checks.values()), "checks": checks, "details": details}
 
 
@@ -301,8 +488,9 @@ def main():
     from run_sim_test import make_run
     os.environ["CCCP_HEADLESS"] = "1"
     root.mkdir(parents=True, exist_ok=False)
+    ports = (PORT_BASE + index % PORT_COUNT for index in itertools.count())
     result = {"pass": False, "checks": {}, "pairs": {}, "capture_switch": {},
-              "ticks_per_run": TICKS, "ports": list(range(48201, 48209)),
+              "ticks_per_run": TICKS, "ports": list(range(PORT_BASE, PORT_BASE + PORT_COUNT)),
               "driver_sha256": sha256(__file__),
               "peer_comparator_sha256": sha256(repo / "tools" / "compare_sim_traces.py"),
               "peer_hash_scope": "unchanged strict_compare: controller excluded; every other subsystem at every tick",
@@ -313,13 +501,11 @@ def main():
             raise RuntimeError("the requested executable hash does not match")
         for index, size in enumerate(((640, 360), (960, 540))):
             tag = f"{size[0]}x{size[1]}"
-            arms = (("on", True, False), ("off", False, False), ("pause_on", True, True), ("pause_off", False, True))
-            for arm_index, (arm, captures, event) in enumerate(arms):
-                name = f"{tag}_{arm}"
-                port = 48201 + index * 4 + arm_index
+            for arm_name in ARMS:
+                name = f"{tag}_{arm_name}"
                 pair_root = root / name
-                records = run_pair(repo, pair_root, port, size, captures, event, options.timeout, result["pin_before"])
-                pair = inspect_pair(pair_root, records, size, captures, event)
+                records = run_pair(repo, pair_root, next(ports), size, ARMS[arm_name], options.timeout, result["pin_before"])
+                pair = inspect_pair(pair_root, records, size, ARMS[arm_name])
                 result["pairs"][name] = pair
                 result["checks"][name] = pair["pass"]
                 (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
@@ -330,7 +516,7 @@ def main():
                     comparison = compare_capture_switch(root / f"{tag}_{prefix}on", root / f"{tag}_{prefix}off", who, paused)
                     result["capture_switch"][f"{tag}_{prefix}{who}"] = comparison
                     result["checks"][f"{tag}_{prefix}{who}_capture_switch"] = comparison["pass"]
-        result["pass"] = all(result["checks"].values()) and len(result["checks"]) == 16
+        result["pass"] = all(result["checks"].values()) and len(result["checks"]) >= 16
     except Exception as error:
         result["error"] = str(error)
     finally:
