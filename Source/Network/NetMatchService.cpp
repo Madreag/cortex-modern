@@ -126,6 +126,11 @@ namespace RTE {
 		if (m_State != NetMatchServiceState::Running || m_LastMatchSummary || m_CurrentMatchSummary.identityLine.empty()) return;
 		UpdateSummarySeatsLocked();
 		m_CurrentMatchSummary.result = result.empty() ? "Match complete" : result;
+		if (m_Coordinator) {
+			// A received clean stop already carries the match-over reason.
+			const std::string& endReason = m_Coordinator->GetStats().timeoutReason;
+			if (endReason.starts_with("Complete:") && endReason.size() > 9) m_CurrentMatchSummary.result = endReason.substr(9);
+		}
 		const auto* activity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
 		m_CurrentMatchSummary.winnerTeam = activity ? activity->GetWinnerTeam() : Activity::NoTeam;
 		m_CurrentMatchSummary.runningTicks = ScenarioRunner::GetLockstepAppliedFrame();
@@ -1240,9 +1245,11 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::Complete(const std::string& reason) {
+		std::string displayReason = reason;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(reason);
+			if (m_LastMatchSummary) displayReason = m_LastMatchSummary->result;
 		}
 		// The recording gets its end marker at the match's end, not at process exit.
 		ScenarioRunner::CloseLockstepReplayRecord();
@@ -1257,16 +1264,18 @@ static std::string ResyncSaveName() {
 			m_Coordinator->Complete(reason);
 		}
 		if (m_State == NetMatchServiceState::Running) {
-			m_StatusText = reason.empty() ? "Match complete" : reason;
+			m_StatusText = displayReason.empty() ? "Match complete" : displayReason;
 			m_ErrorText.clear();
 		}
 	}
 
 	// Terminal clean end; the session objects stay alive for the next Start or quit.
 	void NetMatchService::FinishMatch(const std::string& result) {
+		std::string displayResult = result;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(result);
+			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
 			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
 			DrainPendingSessionEventsLocked(false);
 		}
@@ -1285,15 +1294,17 @@ static std::string ResyncSaveName() {
 			m_State = NetMatchServiceState::Completed;
 			// The rematch lobby this end opens starts waiting for the other peers here.
 			m_CompletedLobbySinceMs = SteadyNowMs();
-			m_StatusText = result.empty() ? "Match complete" : result;
+			m_StatusText = displayResult.empty() ? "Match complete" : displayResult;
 			m_ErrorText.clear();
 		}
 	}
 
 	void NetMatchService::LeaveMatch(const std::string& result) {
+		std::string displayResult = result;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(result);
+			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
 			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
 			m_LeftMatch = true;
 			DrainPendingSessionEventsLocked(false);
@@ -1314,7 +1325,7 @@ static std::string ResyncSaveName() {
 			}
 			if (m_State == NetMatchServiceState::Running) {
 				m_State = NetMatchServiceState::Completed;
-				m_StatusText = result.empty() ? "Left the match" : result;
+				m_StatusText = displayResult.empty() ? "Left the match" : displayResult;
 				m_ErrorText.clear();
 			}
 		}
