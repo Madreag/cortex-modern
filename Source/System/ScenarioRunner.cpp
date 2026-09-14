@@ -877,6 +877,11 @@ namespace RTE {
 		return s_LockstepAppliedFrame;
 	}
 
+	uint64_t ScenarioRunner::GetLockstepCompletedFrame() {
+		const uint64_t resumeFrame = GetLockstepResumeFrame();
+		return resumeFrame > 0 ? resumeFrame - 1 : 0;
+	}
+
 	void ScenarioRunner::SetLockstepAppliedFrame(uint64_t frame) {
 		s_LockstepAppliedFrame = frame;
 	}
