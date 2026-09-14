@@ -1536,7 +1536,12 @@ void MainMenuGUI::RefreshReplayList() {
 		row.text = entry.path().filename().string();
 		const auto written = entry.last_write_time(fileError);
 		if (!fileError) {
-			const auto systemTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(fs::file_time_type::clock::to_sys(written));
+#ifdef _MSC_VER
+			const auto convertedTime = std::chrono::clock_cast<std::chrono::system_clock>(written);
+#else
+			const auto convertedTime = fs::file_time_type::clock::to_sys(written);
+#endif
+			const auto systemTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(convertedTime);
 			const std::time_t time = std::chrono::system_clock::to_time_t(systemTime) - 7 * 60 * 60;
 			std::tm local{};
 #ifdef _WIN32
