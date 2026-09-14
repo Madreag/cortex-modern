@@ -323,6 +323,17 @@ static int s_netMatchResyncs = 0;
 static bool s_netMatchResyncOnDesync = false;
 static bool s_netMatchAutoDelay = false;
 static std::string s_netMatchServiceE2EError;
+// -net-chat-script <file>: lines "tick all|team text" this peer sends at those sim ticks.
+// Presentation-only traffic — the sends never touch the command stream or a tick hash.
+struct NetChatScriptLine {
+	uint64_t tick = 0;
+	uint8_t scope = c_NetChatScopeAll;
+	std::string text;
+};
+static std::string s_netChatScriptPath;
+static std::vector<NetChatScriptLine> s_netChatScript;
+static size_t s_netChatScriptNext = 0;
+static void NetChatScriptOnSimTick(uint64_t simTick);
 static std::string s_netReplayInPath;
 static std::string s_netReplayVerifyPath;
 static uint64_t s_netReplayDumpFrom = 1;
@@ -853,6 +864,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				return false;
 			}
 			s_e2eNamedSpawns.push_back(spec);
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-chat-script") {
+			s_netChatScriptPath = argValue[++i];
 			continue;
 		}
 
@@ -1488,6 +1504,17 @@ void ProcessMenuScript() {
 		const bool pass = actual == expected;
 		std::cout << "[menu-script] assert_substate expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
 		if (!pass) { return MenuScriptFail("assert_substate expected " + expected + " got " + actual); }
+	} else if (cmd == "chat") {
+		// The same send the lobby's input line does, driven headless so a capture has content.
+		std::string scope;
+		iss >> scope;
+		std::string text;
+		std::getline(iss, text);
+		if (!text.empty() && text[0] == ' ') { text.erase(0, 1); }
+		const uint8_t scopeValue = scope == "team" ? c_NetChatScopeTeam : c_NetChatScopeAll;
+		const bool ok = g_NetMatchService.SendChat(scopeValue, text);
+		std::cout << "[menu-script] chat scope=" << scope << " ok=" << ok << " text=\"" << text << "\"" << std::endl;
+		if (!ok) { return MenuScriptFail("chat send dropped: " + text); }
 	} else if (cmd == "dump_lobby") {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::cout << "[menu-script] dump_lobby state=" << snapshot.serviceState << " members=" << snapshot.members.size()
@@ -3385,6 +3412,10 @@ void RunGameLoop() {
 
 				// Mid-match session upkeep: reconnect handshakes the coordinator handed over.
 				g_NetMatchService.PumpSessionEvents();
+				// Chat script sends and the receive drain ride the sim tick so [chat] lines order with the match.
+				if (s_netMatchServiceE2E) {
+					NetChatScriptOnSimTick(simTick);
+				}
 				// The session-directory heartbeat rides Update on the game thread, never the pump.
 				if (const NetMatchServiceState netServiceState = g_NetMatchService.GetState();
 				    g_NetMatchService.IsHost() && (netServiceState == NetMatchServiceState::Starting || netServiceState == NetMatchServiceState::ReadyToLaunch ||
@@ -4609,6 +4640,60 @@ int RunNetReplayPlayback() {
 	return s_netReplayExitCode;
 }
 
+// Loads the -net-chat-script file: one "tick all|team text" line per scheduled send.
+static bool LoadNetChatScript(const std::string& path, std::string* error) {
+	std::ifstream in(path);
+	if (!in) {
+		*error = "cannot open chat script: " + path;
+		return false;
+	}
+	s_netChatScript.clear();
+	s_netChatScriptNext = 0;
+	std::string line;
+	uint64_t lineNo = 0;
+	while (std::getline(in, line)) {
+		++lineNo;
+		if (!line.empty() && line.back() == '\r') {
+			line.pop_back();
+		}
+		if (line.empty()) {
+			continue;
+		}
+		std::istringstream ls(line);
+		uint64_t tick = 0;
+		std::string scope;
+		if (!(ls >> tick >> scope) || (scope != "all" && scope != "team")) {
+			*error = "chat script line " + std::to_string(lineNo) + ": expected '<tick> all|team <text>'";
+			return false;
+		}
+		std::string text;
+		std::getline(ls, text);
+		if (!text.empty() && text[0] == ' ') {
+			text.erase(0, 1);
+		}
+		s_netChatScript.push_back({tick, static_cast<uint8_t>(scope == "team" ? c_NetChatScopeTeam : c_NetChatScopeAll), text});
+	}
+	std::stable_sort(s_netChatScript.begin(), s_netChatScript.end(), [](const NetChatScriptLine& a, const NetChatScriptLine& b) { return a.tick < b.tick; });
+	return true;
+}
+
+// Fires the due chat sends on this peer's tick, then drains what arrived — the [chat] lines are the
+// driver's oracle, so they print in sink order exactly once each.
+static void NetChatScriptOnSimTick(uint64_t simTick) {
+	while (s_netChatScriptNext < s_netChatScript.size() && s_netChatScript[s_netChatScriptNext].tick <= simTick) {
+		const NetChatScriptLine& line = s_netChatScript[s_netChatScriptNext++];
+		const bool sent = g_NetMatchService.SendChat(line.scope, line.text);
+		std::cout << "[chat-send] tick=" << simTick << " scope=" << (line.scope == c_NetChatScopeTeam ? "team" : "all")
+		          << " ok=" << (sent ? 1 : 0) << " text=" << line.text << std::endl;
+	}
+	for (const NetChatEntry& entry : g_NetMatchService.TakeChatEntries()) {
+		std::cout << "[chat] tick=" << entry.receivedTick
+		          << " from=" << static_cast<int>(entry.senderPeerId)
+		          << " scope=" << (entry.scope == c_NetChatScopeTeam ? "team" : "all")
+		          << " text=" << entry.text << std::endl;
+	}
+}
+
 int RunNetMatchServiceE2E() {
 	std::string setupError;
 	if (!NetA7Journal::StartE2E(&setupError, [] { PollSDLEvents(); return System::IsSetToQuit(); })) s_netMatchServiceE2EExitCode = 1;
@@ -4618,6 +4703,9 @@ int RunNetMatchServiceE2E() {
 		setupError = "-net-dedicated cannot be combined with -net-join <address>";
 	} else if (e2eHost == e2eJoiner) {
 		setupError = "-net-match-service-e2e requires exactly one of -net-host, -net-dedicated, -net-join <address> or -net-join-session <id>";
+	}
+	if (setupError.empty() && !s_netChatScriptPath.empty() && !LoadNetChatScript(s_netChatScriptPath, &setupError)) {
+		s_netMatchServiceE2EExitCode = 1;
 	}
 
 	if (setupError.empty()) {
@@ -5335,6 +5423,12 @@ int main(int argc, char** argv) {
 	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');
 
 	if (!HandleMainArgs(argc, argv)) return ShutDown(EXIT_FAILURE);
+
+	// The chat script drives session traffic — only a headless e2e match may carry it.
+	if (!s_netChatScriptPath.empty() && !s_netMatchServiceE2E) {
+		std::cerr << "[net-chat-script] requires -net-match-service-e2e" << std::endl;
+		return ShutDown(EXIT_FAILURE);
+	}
 
 	// The -net-port-map flags are only parsed by HandleMainArgs, so the run override and the
 	// probe seams take effect here, before the probe dispatch and any match Start can read them.

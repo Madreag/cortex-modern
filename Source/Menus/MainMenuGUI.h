@@ -12,6 +12,7 @@
 #include "ModManagerGUI.h"
 
 #include <array>
+#include <deque>
 #include <optional>
 
 namespace RTE {
@@ -247,6 +248,10 @@ namespace RTE {
 		GUILabel* m_MultiplayerLobbyPlayersHeader = nullptr; //!< The "Players" column header; it moves with the rows when the panel widens.
 		GUILabel* m_MultiplayerLobbyPortMapLabel;
 		uint32_t m_PortMapSerialShown; //!< The last lobby port-map serial this panel rendered.
+		// The lobby's chat is built in code so the panel can grow for it without touching the skin file.
+		std::array<GUILabel*, 8> m_MultiplayerLobbyChatLabels;
+		GUITextBox* m_MultiplayerLobbyChatInput;
+		std::deque<std::string> m_MultiplayerLobbyChatLines; //!< Newest at the back; the labels show the last eight.
 		MultiplayerSubScreen m_MultiplayerSubScreen;
 		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
 		std::string m_PendingAutomationCommand; //!< Control waiting to raise Command after Update clears the queue.
@@ -338,6 +343,10 @@ namespace RTE {
 		/// Handles the player interaction with the multiplayer screen GUI elements.
 		/// @param guiEventControl Pointer to the GUI element that the player interacted with.
 		void HandleMultiplayerScreenInputEvents(const GUIControl* guiEventControl);
+
+		/// Sends the lobby chat box's line: Enter for All, Ctrl+Enter for Team. The line is cleared
+		/// only when the session accepted it.
+		void SendLobbyChat();
 
 		/// Handles the player interaction with the editor selection screen GUI elements.
 		/// @param guiEventControl Pointer to the GUI element that the player interacted with.

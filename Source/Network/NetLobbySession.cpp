@@ -730,9 +730,13 @@ namespace RTE {
 				const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(event.bytes);
 				if (!decoded.ok) {
 					// Another phase's packet on the shared wire: session leftovers, or the prior
-					// match's in-flight lockstep frames when a rematch lobby round starts.
+					// match's in-flight lockstep frames when a rematch lobby round starts. A chat line
+					// that fails decode is counted and dropped by the session, never cause to eject.
+					uint16_t peekedType = 0;
+					const bool chatTyped = NetProtocol::PeekMessageType(event.bytes.data(), event.bytes.size(), peekedType) &&
+					                       peekedType == static_cast<uint16_t>(NetMessageType::Chat);
 					if (decoded.error.code == NetLobbyErrorCode::BadMagic &&
-					    (NetProtocol::Decode(event.bytes).ok || NetLockstepCodec::LooksLikePacket(event.bytes))) {
+					    (NetProtocol::Decode(event.bytes).ok || NetLockstepCodec::LooksLikePacket(event.bytes) || chatTyped)) {
 						++m_Stats.ignoredSessionPackets;
 						return;
 					}
