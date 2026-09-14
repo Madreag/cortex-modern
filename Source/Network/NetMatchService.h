@@ -318,6 +318,7 @@ namespace RTE {
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
+		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
