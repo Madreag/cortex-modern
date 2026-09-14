@@ -1,6 +1,6 @@
 """Browse two retained replay copies, play the second, and confirm its deletion.
 
-Run unchanged on the wave (ButtonMultiplayerReplays is absent) and the tip.
+Run unchanged on the control (the Replays button has no handler) and the tip.
 Only individual fixture files are copied, into each run's private Userdata.
 """
 
@@ -24,7 +24,9 @@ PLAYBACK = re.compile(r"\[net-replay\] playback finished[^\n]*ticks=(\d+)[^\n]*o
 
 def menu_script(date):
     script = ("wait 40\nactivate ButtonMainToMultiplayer\nwait 12\n"
-              "activate ButtonMultiplayerReplays\nwait 10\nassert_substate ReplayBrowser\n")
+              "assert_screen MultiplayerScreen\nassert_control ButtonMultiplayerReplays\n"
+              "activate ButtonMultiplayerReplays\nwait 10\nassert_substate ReplayBrowser\n"
+              "assert_control ListReplays\nassert_control LabelReplaySelected\n")
     for index, name in enumerate(NAMES):
         for expected in (name, date, "P4 Alpha Duel / Grasslands", "2 peers"):
             script += f"assert_label LabelReplayRow{index} {expected}\n"
