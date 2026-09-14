@@ -822,7 +822,7 @@ void MovableMan::ApplyLockstepControlHandoffToActor(Actor& actor, bool seated) {
 	actor.OnControllerInputModeChanged(previousMode, previousPlayer);
 }
 
-void ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors) {
+void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors) {
 	ScenarioRunner::SetLockstepAppliedFrame(readyFrame.frame);
 	ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(readyFrame.frame);
 	for (Actor* actor: actors) {
