@@ -372,8 +372,10 @@ void GameActivity::SetCPUTeam(int team) {
 
 bool GameActivity::IsBuyGUIVisible(int which) const {
 	if (which == -1) {
-		for (short player = Players::PlayerOne; player < this->GetPlayerCount(); player++) {
-			if (this->GetBuyGUI(player)->IsVisible()) {
+		const int playerLimit = m_SharedPlayerSeats ? Players::MaxPlayerCount : GetPlayerCount();
+		for (int player = Players::PlayerOne; player < playerLimit; player++) {
+			if (m_SharedPlayerSeats && !(IsSeatActive(player) && IsLocalHumanSeat(player))) continue;
+			if (GetBuyGUI(player)->IsVisible()) {
 				return true;
 			}
 		}
@@ -394,7 +396,7 @@ bool GameActivity::LockControlledActor(Players player, bool lock, Controller::In
 
 bool GameActivity::SwitchToActor(Actor* pActor, int player, int team) {
 	// Computer players don't focus on any Actor
-	if (!m_IsHuman[player])
+	if (!IsLocalHumanSeat(player))
 		return false;
 
 	m_InventoryMenuGUI[player]->SetEnabled(false);
@@ -407,6 +409,7 @@ bool GameActivity::SwitchToActor(Actor* pActor, int player, int team) {
 }
 
 void GameActivity::SwitchToNextActor(int player, int team, Actor* pSkip) {
+	if (m_SharedPlayerSeats && !IsLocalHumanSeat(player)) return;
 	m_InventoryMenuGUI[player]->SetEnabled(false);
 
 	// Disable the AI command mode since it's connected to the current actor
@@ -417,6 +420,7 @@ void GameActivity::SwitchToNextActor(int player, int team, Actor* pSkip) {
 }
 
 void GameActivity::SwitchToPrevActor(int player, int team, Actor* pSkip) {
+	if (m_SharedPlayerSeats && !IsLocalHumanSeat(player)) return;
 	m_InventoryMenuGUI[player]->SetEnabled(false);
 
 	// Disable the AI command mode since it's connected to the current actor
@@ -735,7 +739,7 @@ bool GameActivity::QueuePurchaseDelivery(ACraft* pDeliveryCraft, const PurchaseO
 	m_TeamFunds[order.team] -= order.totalCost;
 
 	// Go 'ding!', but only if player is human, or it may be confusing
-	if (order.orderedByPlayer >= Players::PlayerOne && order.orderedByPlayer < Players::MaxPlayerCount && PlayerHuman(order.orderedByPlayer))
+	if (order.orderedByPlayer >= Players::PlayerOne && order.orderedByPlayer < Players::MaxPlayerCount && IsLocalHumanSeat(order.orderedByPlayer))
 		g_GUISound.ConfirmSound()->Play(order.orderedByPlayer);
 
 	return true;
@@ -762,7 +766,7 @@ void GameActivity::SetupPlayers() {
 
 int GameActivity::Start() {
 	// Set the split screen config before the Scene (and it SceneLayers, specifially) are loaded
-	uint8_t humanCount = GetHumanCount();
+	uint8_t humanCount = GetLocalHumanCount();
 	// Depending on the resolution aspect ratio, split first horizontally (if wide screen)
 	if (((float)g_WindowMan.GetResX() / (float)g_WindowMan.GetResY()) >= 1.6)
 		g_FrameMan.ResetSplitScreens(humanCount > 1, humanCount > 2);
@@ -805,7 +809,7 @@ int GameActivity::Start() {
 	// Set up human players
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
 		// Set the team associations with each screen displayed
@@ -907,7 +911,7 @@ int GameActivity::Start() {
 		m_LandingZone[player].Reset();
 
 		// Set the initial landing zones to be above the respective brains, but not for the observer player in a three player game
-		if (m_Brain[player] && !(m_PlayerCount == 3 && ScreenOfPlayer(player) == 3)) {
+		if (m_Brain[player] && !(GetLocalHumanCount() == 3 && ScreenOfPlayer(player) == 3)) {
 			// Also set the brain to be the selected actor at start
 			SwitchToActor(m_Brain[player], player, m_Team[player]);
 			m_ActorCursor[player] = m_Brain[player]->GetPos();
@@ -961,7 +965,7 @@ void GameActivity::End() {
 
 	// Disable control of actors.. will be handed over to the observation targets instead
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
 		g_CameraMan.SetScreenOcclusion(Vector(), ScreenOfPlayer(player));
@@ -1021,7 +1025,7 @@ void GameActivity::UpdateEditing() {
 	// Iterate through all human players
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
 		m_pEditorGUI[player]->Update();
@@ -1060,7 +1064,7 @@ void GameActivity::UpdateEditing() {
 	// Have all players flagged themselves as ready to start the game?
 	bool allReady = true;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsHumanSeat(player)))
 			continue;
 		if (!m_ReadyToStart[player])
 			allReady = false;
@@ -1070,7 +1074,7 @@ void GameActivity::UpdateEditing() {
 	if (allReady) {
 		// Make sure any players haven't moved or entombed their brains in the period after flagging themselves "done"
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-			if (!(m_IsActive[player] && m_IsHuman[player]))
+			if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 				continue;
 			// See if a brain has been placed yet by this player - IN A VALID LOCATION
 			if (!m_pEditorGUI[player]->TestBrainResidence()) {
@@ -1091,7 +1095,7 @@ void GameActivity::UpdateEditing() {
 		if (allReady) {
 			// All resident brains are still in valid spots - place them into the simulation
 			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-				if (!(m_IsActive[player] && m_IsHuman[player]))
+				if (!(IsSeatActive(player) && IsHumanSeat(player)))
 					continue;
 
 				// Place this player's resident brain into the simulation and set it as the player's assigned brain
@@ -1162,7 +1166,7 @@ void GameActivity::Update() {
 	// Iterate through all human players
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
 		// The current player's team
@@ -1317,7 +1321,7 @@ void GameActivity::Update() {
 			if (m_PlayerController[player].IsState(PRESS_SECONDARY)) {
 				// Reset the mouse so the actor doesn't change aim because mouse has been moved
 				if (m_PlayerController[player].IsMouseControlled()) {
-					g_UInputMan.SetMouseValueMagnitude(0, player);
+					g_UInputMan.SetMouseValueMagnitude(0, LocalInputOfPlayer(player));
 				}
 
 				m_ViewState[player] = ViewState::Normal;
@@ -1337,7 +1341,7 @@ void GameActivity::Update() {
 			else if (m_PlayerController[player].IsState(ACTOR_NEXT) || m_PlayerController[player].IsState(ACTOR_PREV) || m_PlayerController[player].IsState(PRESS_FACEBUTTON) || m_PlayerController[player].IsState(PRESS_PRIMARY)) {
 				// Reset the mouse so the actor doesn't change aim because mouse has been moved
 				if (m_PlayerController[player].IsMouseControlled()) {
-					g_UInputMan.SetMouseValueMagnitude(0, player);
+					g_UInputMan.SetMouseValueMagnitude(0, LocalInputOfPlayer(player));
 				}
 
 				if (pMarkedActor) {
@@ -1752,7 +1756,7 @@ void GameActivity::Update() {
 		}
 
 		// Trap the mouse if we're in gameplay and not in menus
-		g_UInputMan.TrapMousePos(!g_MenuMan.IsNetworkPanelOpen() && !m_pBuyGUI[player]->IsEnabled() && !m_InventoryMenuGUI[player]->IsEnabledAndNotCarousel() && !m_LuaLockActor[player], player);
+		g_UInputMan.TrapMousePos(!g_MenuMan.IsNetworkPanelOpen() && !m_pBuyGUI[player]->IsEnabled() && !m_InventoryMenuGUI[player]->IsEnabledAndNotCarousel() && !m_LuaLockActor[player], LocalInputOfPlayer(player));
 
 		// Start LZ picking mode if a purchase was made
 		if (m_pBuyGUI[player]->PurchaseMade()) {
@@ -1944,7 +1948,7 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 
 	// Iterate through all players, drawing each currently used LZ cursor.
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
 		if (m_ViewState[player] == ViewState::LandingZoneSelect) {
@@ -2025,7 +2029,7 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 		return;
 
 	// None of the following player-specific GUI elements apply if this isn't a played human actor
-	if (!(m_IsActive[PoS] && m_IsHuman[PoS]))
+	if (!(IsSeatActive(PoS) && IsLocalHumanSeat(PoS)))
 		return;
 
 	// Get all possible wrapped boxes of the screen
@@ -2123,8 +2127,8 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 	if (m_GameTimer.GetElapsedRealTimeS() < 30) {
 		// TODO: Only blink if there hasn't been any input on a controller since start of game??
 		// Blink them at first, but only if there's more than one human player
-		if (m_GameTimer.GetElapsedRealTimeS() > 4 || m_GameTimer.AlternateReal(150) || GetHumanCount() < 2) {
-			pIcon = g_UInputMan.GetSchemeIcon(PoS);
+		if (m_GameTimer.GetElapsedRealTimeS() > 4 || m_GameTimer.AlternateReal(150) || GetLocalHumanCount() < 2) {
+			pIcon = g_UInputMan.GetSchemeIcon(LocalInputOfPlayer(PoS));
 			if (pIcon) {
 				draw_sprite(pTargetBitmap, pIcon->GetBitmaps8()[0], MIN(pTargetBitmap->w - pIcon->GetBitmaps8()[0]->w - 2, pTargetBitmap->w - pIcon->GetBitmaps8()[0]->w - 2 + g_CameraMan.GetScreenOcclusion(which).m_X), yTextPos);
 				// TODO: make a black Activity intro screen, saying "Player X, press any key/button to show that you are ready!, and display their controller icon, then fade into the scene"
@@ -2143,7 +2147,7 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 	}
 
 	// Draw actor picking crosshairs if applicable
-	if (m_ViewState[PoS] == ViewState::ActorSelect && m_IsActive[PoS] && m_IsHuman[PoS]) {
+	if (m_ViewState[PoS] == ViewState::ActorSelect && IsSeatActive(PoS) && IsLocalHumanSeat(PoS)) {
 		Vector center = m_ActorCursor[PoS] - targetPos;
 		circle(pTargetBitmap, center.m_X, center.m_Y, m_CursorTimer.AlternateReal(150) ? 6 : 8, g_YellowGlowColor);
 		// Add pixel glow area around it, in scene coordinates
@@ -2296,7 +2300,7 @@ void GameActivity::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 
 	// Iterate through all players, drawing each currently used LZ cursor.
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
 		if (m_ViewState[player] == ViewState::LandingZoneSelect) {
@@ -2953,7 +2957,7 @@ bool GameActivity::RestoreNetLocalPlayerState(const NetLocalPlayerState& state) 
 
 bool GameActivity::CreateNetLocalUI() {
 	GUICheckpoint::NetLocalRestoreScope localUI;
-	const uint8_t humanCount = GetHumanCount();
+	const uint8_t humanCount = GetLocalHumanCount();
 	const bool wide = static_cast<float>(g_WindowMan.GetResX()) / g_WindowMan.GetResY() >= 1.6F;
 	g_FrameMan.ResetSplitScreens(wide ? humanCount > 1 : humanCount > 2, wide ? humanCount > 2 : humanCount > 1);
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
@@ -2963,7 +2967,7 @@ bool GameActivity::CreateNetLocalUI() {
 		BuyMenuGUI buy;
 		GUIBanner red, yellow;
 		Controller* controller = &m_PlayerController[player];
-		if (m_IsActive[player] && m_IsHuman[player]) {
+		if (IsSeatActive(player) && IsLocalHumanSeat(player)) {
 			if (inventory.Create(controller, m_ControlledActor[player]) < 0 || editor.Create(controller) < 0 || buy.Create(controller) < 0 ||
 				!red.Create("Base.rte/GUIs/Fonts/BannerFontRedReg.png", "Base.rte/GUIs/Fonts/BannerFontRedBlur.png", 8) ||
 				!yellow.Create("Base.rte/GUIs/Fonts/BannerFontYellowReg.png", "Base.rte/GUIs/Fonts/BannerFontYellowBlur.png", 8)) return false;

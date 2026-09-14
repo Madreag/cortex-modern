@@ -927,8 +927,8 @@ void ActivityMan::ResumeActivity() {
 
 		std::vector<int> humanPlayers;
 		for (int player = 0; player < MaxPlayerCount; player++) {
-			if (m_Activity->PlayerHuman(player)) {
-				humanPlayers.push_back(player);
+			if (m_Activity->IsLocalHumanSeat(player)) {
+				humanPlayers.push_back(m_Activity->LocalInputOfPlayer(player));
 			}
 		}
 		g_UInputMan.CheckMultiMouseKeyboardEnabled(humanPlayers);
