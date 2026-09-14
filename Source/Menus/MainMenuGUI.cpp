@@ -98,6 +98,7 @@ void MainMenuGUI::Clear() {
 	m_PortMapSerialShown = 0;
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 	m_ReconnectStatusShown.clear();
+	m_PendingAutomationCommand.clear();
 	m_CreditsScrollPanel = nullptr;
 	m_MainMenuScreens.fill(nullptr);
 	m_MainMenuButtons.fill(nullptr);
@@ -562,6 +563,7 @@ bool MainMenuGUI::HandleInputEvents() {
 		UpdateMainScreenHoveredButton(dynamic_cast<GUIButton*>(m_MainMenuScreenGUIControlManager->GetControlUnderPoint(mouseX, mouseY, m_MainMenuScreens[MenuScreen::MainScreen], 1)));
 	}
 	m_ActiveGUIControlManager->Update();
+	PostPendingAutomationCommand();
 
 	GUIEvent guiEvent;
 	while (m_ActiveGUIControlManager->GetEvent(&guiEvent)) {
@@ -1233,6 +1235,32 @@ bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
 		default: return false;
 	}
 	return true;
+}
+
+bool MainMenuGUI::AutomationPostCommand(const std::string& controlName) {
+	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
+	if (!control) {
+		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
+	}
+	if (!control || !IsControlClickable(control)) {
+		return false;
+	}
+	m_PendingAutomationCommand = controlName;
+	return true;
+}
+
+void MainMenuGUI::PostPendingAutomationCommand() {
+	if (m_PendingAutomationCommand.empty()) {
+		return;
+	}
+	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(m_PendingAutomationCommand);
+	if (!control) {
+		control = m_MainMenuScreenGUIControlManager->GetControl(m_PendingAutomationCommand);
+	}
+	m_PendingAutomationCommand.clear();
+	if (control) {
+		control->AddEvent(GUIEvent::Command, 0, 0);
+	}
 }
 
 bool MainMenuGUI::AutomationSetText(const std::string& controlName, const std::string& text) {

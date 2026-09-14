@@ -1,5 +1,7 @@
 #pragma once
 
+#include <map>
+
 namespace RTE {
 
 	/// A class to handle the drawing of text.
@@ -50,6 +52,11 @@ namespace RTE {
 		/// Finds a font color structure from the cache.
 		/// @param Color Color.
 		FontColor* GetFontColor(unsigned long Color);
+
+		/// A font bitmap where every drawable pixel is recoloured to Color, cached per color.
+		/// For atlases whose antialias ink never matches m_MainColor, so CacheColor leaves them unchanged.
+		GUIBitmap* InkColorBitmap(unsigned long Color);
+		unsigned long InkOf(GUIBitmap* Bitmap);
 
 		/// Draws text to a bitmap.
 		/// @param Bitmap Bitmap, Position, Text, Color, Drop-shadow, 0 = none.
@@ -102,6 +109,8 @@ namespace RTE {
 		GUIBitmap* m_Font;
 		GUIScreen* m_Screen;
 		std::vector<FontColor> m_ColorCache;
+		std::vector<FontColor> m_InkColorCache;
+		std::map<GUIBitmap*, unsigned long> m_InkOfBitmap;
 
 		int m_FontHeight;
 		unsigned long m_MainColor;
