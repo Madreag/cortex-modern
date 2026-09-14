@@ -15,11 +15,6 @@ import subprocess
 import sys
 import threading
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from compare_sim_traces import strict_compare
-from run_sim_test import make_run
-
-
 SCRATCH = Path("D:/mx/astra-match-overlay-20260913")
 TICKS = 900
 CAPTURE_TICKS = (60, 270, 880)
@@ -284,12 +279,16 @@ def main():
     repo, root = options.repo.resolve(), options.out.resolve()
     if not root.is_relative_to(SCRATCH.resolve()) or root == SCRATCH.resolve():
         parser.error(f"--out must name a fresh run beneath {SCRATCH}")
+    global make_run, strict_compare
+    sys.path.insert(0, str(repo / "tools"))
+    from compare_sim_traces import strict_compare
+    from run_sim_test import make_run
     os.environ["CCCP_HEADLESS"] = "1"
     root.mkdir(parents=True, exist_ok=False)
     result = {"pass": False, "checks": {}, "pairs": {}, "capture_switch": {},
               "ticks_per_run": TICKS, "ports": list(range(48201, 48207)),
               "driver_sha256": sha256(__file__),
-              "peer_comparator_sha256": sha256(Path(__file__).with_name("compare_sim_traces.py")),
+              "peer_comparator_sha256": sha256(repo / "tools" / "compare_sim_traces.py"),
               "peer_hash_scope": "unchanged strict_compare: controller excluded; every other subsystem at every tick",
               "capture_switch_hash_scope": "every recorded hash, including controller and total"}
     try:
