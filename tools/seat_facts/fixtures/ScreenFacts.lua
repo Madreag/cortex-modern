@@ -1,3 +1,4 @@
+SeatFacts = SeatFacts or {};
 dofile("UserScenes.rte/SeatFacts.lua");
 
 local function zero(value)
