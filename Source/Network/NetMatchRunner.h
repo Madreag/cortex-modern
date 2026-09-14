@@ -71,7 +71,7 @@ namespace RTE {
 		/// Runs the next match over an already-established session: re-runs the lobby round and starts a
 		/// fresh coordinator, reusing the config from Start(). The prior match must have ended cleanly.
 		/// A host may hand in a match-state file to stream to every peer during the round (a resync).
-		bool StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error = nullptr, std::vector<uint8_t> stateToStream = {});
+		bool StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error = nullptr, std::vector<uint8_t> stateToStream = {}, std::vector<NetTransportEvent> pendingLobbyEvents = {});
 
 		/// Takes the state file the lobby round received (empty when the round carried none).
 		std::vector<uint8_t> TakeReceivedState() { return std::move(m_ReceivedStateBytes); }
@@ -107,7 +107,7 @@ namespace RTE {
 		/// Client: the host's proposal must fit the roster this peer derived, on the seat it was admitted on.
 		bool VerifyRematchProposal(uint8_t localPeerId, std::string* error);
 		bool WaitForSessionReady(INetTransport& transport, NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error);
-		bool RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error);
+		bool RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error, std::vector<NetTransportEvent> pendingEvents = {});
 		bool StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error);
 		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error);
 		NetLobbySnapshot BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const;

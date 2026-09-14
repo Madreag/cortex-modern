@@ -4871,6 +4871,341 @@ namespace RTE {
 	}
 #endif
 
+	bool TestEndedWorldLateAdmission(std::string* error) {
+		auto fail = [&](const std::string& what) -> bool {
+			if (error) *error = what;
+			return false;
+		};
+		std::string errors;
+		const auto add = [&](const std::string& what) {
+			if (!what.empty()) errors += (errors.empty() ? "" : "; ") + what;
+		};
+
+		{
+			NetMessage message;
+			message.payload = NetDisconnect{static_cast<uint16_t>(NetRejectReason::SessionEnded), "match over"};
+			std::vector<uint8_t> bytes;
+			if (!NetProtocol::Encode(message, bytes)) return fail("SessionEnded packet did not encode");
+			const NetDecodeResult decoded = NetProtocol::Decode(bytes);
+			const NetDisconnect* disconnect = decoded.ok ? std::get_if<NetDisconnect>(&decoded.message.payload) : nullptr;
+			if (!disconnect || disconnect->disconnectReason != static_cast<uint16_t>(NetRejectReason::SessionEnded)) {
+				return fail("SessionEnded packet did not decode");
+			}
+		}
+
+		const auto countEndedPackets = [](const std::vector<NetTransportEvent>& events, int& sessionEnded, int& peerDisconnects, std::string& seen) {
+			sessionEnded = 0;
+			peerDisconnects = 0;
+			seen.clear();
+			for (const NetTransportEvent& event: events) {
+				if (event.type == NetTransportEventType::PeerDisconnected) {
+					++peerDisconnects;
+					seen += " PeerDisconnected(" + event.reason + ")";
+					continue;
+				}
+				const NetDecodeResult decoded = NetProtocol::Decode(event.bytes);
+				const NetDisconnect* disconnect = decoded.ok ? std::get_if<NetDisconnect>(&decoded.message.payload) : nullptr;
+				if (!disconnect) {
+					seen += " event" + std::to_string(static_cast<int>(event.type)) + (decoded.ok ? "(other payload)" : "(undecoded)");
+					continue;
+				}
+				seen += " NetDisconnect(" + std::to_string(disconnect->disconnectReason) + "," + disconnect->message + ")";
+				if (disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::SessionEnded)) ++sessionEnded;
+			}
+		};
+
+		const auto endedRefuseVerdict = [](const char* path, int sessionEnded, int peerDisconnects, uint32_t reseats, bool usesLate, bool dispatcherOwned) -> std::string {
+			if (reseats != 0 || usesLate) {
+				return std::string(path) + " reseated/admitted late peer into the old epoch reseats=" +
+				       std::to_string(reseats) + " uses_late=" + (usesLate ? "1" : "0");
+			}
+			if (sessionEnded != 1 || peerDisconnects != 1) {
+				return std::string(path) + " received " + std::to_string(sessionEnded) +
+				       " SessionEnded disconnects and " + std::to_string(peerDisconnects) + " peer disconnects";
+			}
+			if (!dispatcherOwned) {
+				return std::string(path) + " dispatcher pump was not owned after the ended-world refuse";
+			}
+			return {};
+		};
+
+		const auto runLatePath = [&](bool iceHalf, uint16_t sessionPort, uint16_t coordPort) -> std::string {
+			const char* path = iceHalf ? "mux" : "ip";
+			LoopbackTransport coordHost, coordClient;
+			NetPeerId coordRemote = c_InvalidNetPeerId;
+			NetPeerId coordLocal = c_InvalidNetPeerId;
+			std::string step;
+			if (!StartLoopbackTransports(coordPort, coordHost, coordClient, coordRemote, coordLocal, &step)) {
+				return std::string(path) + " coordinator loopback: " + step;
+			}
+
+			NetMatchService service;
+			auto ipHalfPtr = std::make_unique<LoopbackHalfTap>();
+			auto p2pHalfPtr = std::make_unique<LoopbackHalfTap>();
+			LoopbackHalfTap* ip = ipHalfPtr.get();
+			LoopbackHalfTap* p2p = p2pHalfPtr.get();
+			if (iceHalf) {
+				ip->listen = false;
+			} else {
+				p2p->listen = false;
+			}
+			service.m_IsHost = true;
+			service.m_State = NetMatchServiceState::Running;
+			service.m_ResyncOnDesync = true;
+			service.m_Transport = std::make_unique<GnsTransport>();
+			service.m_Mux = std::make_unique<NetMuxTransport>(std::move(ipHalfPtr), std::move(p2pHalfPtr));
+			if (iceHalf) {
+				GnsP2PConfig hostP2P;
+				hostP2P.localIdentity = NetIceHostIdentity("ended-world-late-mux");
+				service.m_Mux->SetHostP2P(NetMatchService::c_IceVirtualPort, hostP2P);
+			}
+			service.m_Session = std::make_unique<NetSession>();
+			service.m_Runner = std::make_unique<NetMatchRunner>();
+			service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+
+			NetLockstepConfig coordCfg;
+			coordCfg.sessionId = 0x454E4452443031ULL;
+			coordCfg.timeoutMs = 2000;
+			coordCfg.localPeerId = 1;
+			coordCfg.peerCount = 2;
+			coordCfg.remoteTransportPeerIds = {{2, coordRemote}};
+			coordCfg.relayToOtherPeers = true;
+			coordCfg.scenario = "LockstepSelfTest";
+			coordCfg.ownershipPolicy = "unique-id-split";
+			coordCfg.roundId = 77;
+			if (!service.m_Coordinator->Start(coordHost, coordCfg, &step)) {
+				return std::string(path) + " coordinator Start: " + step;
+			}
+			const uint64_t oldEpoch = service.m_Coordinator->GetRoundId();
+			if (oldEpoch != 77) {
+				return std::string(path) + " fixture: old epoch was " + std::to_string(oldEpoch);
+			}
+
+			NetSessionConfig hostConfig;
+			hostConfig.port = sessionPort;
+			hostConfig.displayName = "Host";
+			hostConfig.maxPeers = 1;
+			hostConfig.heartbeatIntervalMs = 25;
+			hostConfig.timeoutMs = 30000;
+			NetIdentityManifest& identity = hostConfig.localIdentity;
+			identity.gameVersion = "7.0.0-test";
+			identity.networkProtocolVersion = NetProtocol::c_Version;
+			identity.controllerFrameVersion = ControllerFrame::c_Version;
+			identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			identity.buildId = iceHalf ? "ended-world-late-mux" : "ended-world-late-ip";
+			identity.platform = "test";
+			NetSessionConfig lateConfig = hostConfig;
+			lateConfig.displayName = "Late";
+			++lateConfig.localNonce;
+
+			LoopbackTransport lateLink;
+			NetSession lateClient;
+			if (!service.m_Session->StartHost(*service.m_Mux, hostConfig, &step)) return std::string(path) + " host Start: " + step;
+			// Consume an actual connection id so the late IP peer is absent from the ended round.
+			LoopbackTransport priorLink;
+			if (!priorLink.Connect("loopback", sessionPort, &step)) return std::string(path) + " prior link: " + step;
+			priorLink.Stop();
+			if (!lateClient.StartClient(lateLink, "loopback", lateConfig, &step)) {
+				return std::string(path) + " late peer could not reach the host: " + step;
+			}
+			LoopbackTransport& hostHalf = iceHalf ? p2p->link : ip->link;
+			for (uint64_t now = 0; now <= 4000 && service.m_Session->GetReadyPeerCount() != 1; now += 10) {
+				service.m_Session->Tick(now);
+				lateClient.Tick(now);
+				hostHalf.AdvanceTimeMs(10);
+				lateLink.AdvanceTimeMs(10);
+			}
+			const std::vector<NetSessionPeerInfo> readyPeers = service.m_Session->GetReadyPeers();
+			if (readyPeers.size() != 1 || !lateClient.IsReady()) {
+				return std::string(path) + " fixture: host Ready peers=" + std::to_string(readyPeers.size()) +
+				       " late " + (lateClient.IsReady() ? "Ready" : "not Ready");
+			}
+			const NetPeerId latePeer = readyPeers.front().transportPeerId;
+			if (iceHalf ? !NetMuxTransport::IsP2P(latePeer) : NetMuxTransport::IsP2P(latePeer)) {
+				return std::string(path) + " fixture: late peer " + std::to_string(latePeer) +
+				       (NetMuxTransport::IsP2P(latePeer) ? " is tagged" : " is untagged");
+			}
+			if (service.m_Coordinator->UsesTransportPeer(latePeer)) {
+				return std::string(path) + " fixture: the old epoch already uses late peer " + std::to_string(latePeer);
+			}
+
+			service.m_ReconnectHost.SetLiveMatch(true);
+			service.m_AdmissionAttached = true;
+#ifdef CCCP_WITH_GNS
+			GnsTransport dispatcherWire;
+			service.m_Dispatcher = std::make_unique<GnsDirectorySignalDispatcher>();
+			GnsDirectorySignalDispatcher* const dispatcher = service.m_Dispatcher.get();
+			GnsDirectorySignalDispatcher::Config cfg;
+			(void)dispatcher->Start(dispatcherWire, cfg);
+			std::atomic<int> pumps{0};
+			service.m_Mux->SetPump([dispatcher, &pumps] {
+				pumps.fetch_add(1);
+				dispatcher->Update(1);
+			});
+			const int pumpsBeforeFinish = pumps.load();
+			(void)service.m_Mux->PollEvents();
+			if (pumps.load() <= pumpsBeforeFinish) {
+				return std::string(path) + " fixture: mux pump was not owned before FinishMatch";
+			}
+#endif
+			(void)lateLink.PollEvents();
+			const uint64_t p2pSendsBefore = p2p->sends;
+			const uint64_t p2pDisconnectsBefore = p2p->disconnects;
+			const uint64_t ipCallsBefore = ip->sends + ip->connects + ip->disconnects;
+			service.FinishMatch("match over");
+			if (service.GetState() != NetMatchServiceState::Completed) {
+				return std::string(path) + " FinishMatch did not complete the match";
+			}
+			if (!service.m_DirectoryRetracted) {
+				return std::string(path) + " FinishMatch left directoryWanted live (listing not retracted)";
+			}
+#ifdef CCCP_WITH_GNS
+			if (service.m_Dispatcher.get() != dispatcher) {
+				return std::string(path) + " FinishMatch took the dispatcher";
+			}
+#endif
+			if (service.m_Coordinator->GetRoundId() != oldEpoch) {
+				return std::string(path) + " FinishMatch replaced the old epoch " + std::to_string(oldEpoch) +
+				       " with " + std::to_string(service.m_Coordinator->GetRoundId());
+			}
+
+			service.PumpSessionEvents();
+#ifdef CCCP_WITH_GNS
+			if (service.m_Dispatcher.get() != dispatcher) {
+				return std::string(path) + " ended-world pump took the dispatcher";
+			}
+			const int pumpsBeforeEndedPoll = pumps.load();
+			(void)service.m_Mux->PollEvents();
+			if (pumps.load() <= pumpsBeforeEndedPoll) {
+				return std::string(path) + " dispatcher pump was not owned after the ended-world refuse";
+			}
+#endif
+			const bool dispatcherOwned = true;
+			if (service.GetState() != NetMatchServiceState::Completed) {
+				return std::string(path) + " ended-world pump left state " +
+				       std::string(NetMatchService::StateName(service.GetState()));
+			}
+			const uint32_t reseats = service.m_ReconnectHost.GetStats().reseatsIssued +
+			                         service.m_ReconnectHost.GetStats().reseatsWithoutALedger;
+			const bool queuedReseat = !service.m_ReconnectHost.TakePendingReseats().empty();
+			const bool usesLate = service.m_Coordinator && service.m_Coordinator->UsesTransportPeer(latePeer);
+			lateLink.AdvanceTimeMs(10);
+			int sessionEnded = 0;
+			int peerDisconnects = 0;
+			std::string seen;
+			countEndedPackets(lateLink.PollEvents(), sessionEnded, peerDisconnects, seen);
+			const uint64_t p2pSends = p2p->sends - p2pSendsBefore;
+			const uint64_t p2pDisconnects = p2p->disconnects - p2pDisconnectsBefore;
+			const uint64_t ipCalls = ip->sends + ip->connects + ip->disconnects - ipCallsBefore;
+			std::string verdict = endedRefuseVerdict(path, sessionEnded, peerDisconnects, reseats + (queuedReseat ? 1u : 0u),
+			                                         usesLate, dispatcherOwned);
+			if (!verdict.empty()) {
+				return "ended-world late peer " + std::to_string(latePeer) + " on " + verdict + " in [" + seen +
+				       "]; ICE half sends " + std::to_string(p2pSends) + " disconnects " +
+				       std::to_string(p2pDisconnects) + ", IP half calls " + std::to_string(ipCalls);
+			}
+			LoopbackTransport freshLink;
+			NetSession freshClient;
+			lateConfig.localNonce += 1;
+			if (!freshClient.StartClient(freshLink, "loopback", lateConfig, &step)) return std::string(path) + " fresh late connect: " + step;
+			int freshEnded = 0, freshClosed = 0;
+			bool wasReady = false;
+			for (uint64_t now = 0; now <= 4000 && (freshEnded == 0 || freshClosed == 0); now += 10) {
+				service.PumpSessionEvents();
+				const auto events = freshLink.PollEvents();
+				int ended = 0, closed = 0;
+				std::string ignored;
+				countEndedPackets(events, ended, closed, ignored);
+				freshEnded += ended;
+				freshClosed += closed;
+				for (const auto& event : events) freshClient.InjectEvent(event, now);
+				freshClient.Tick(now, false);
+				wasReady = wasReady || freshClient.IsReady();
+				hostHalf.AdvanceTimeMs(10);
+				freshLink.AdvanceTimeMs(10);
+			}
+			if (!wasReady || freshEnded != 1 || freshClosed != 1 || service.m_Session->GetReadyPeerCount() != 0 ||
+			    service.m_ReconnectHost.GetStats().reseatsIssued != 0 || service.m_ReconnectHost.GetStats().reseatsWithoutALedger != 0) {
+				return std::string(path) + " fresh arrival after FinishMatch ready=" + std::to_string(wasReady) +
+				       " SessionEnded=" + std::to_string(freshEnded) + " closed=" + std::to_string(freshClosed);
+			}
+			std::cout << "PASS fresh_peer_after_finish path=" << path << " SessionEnded=1 reseats=0" << std::endl;
+			return {};
+		};
+
+		add(runLatePath(false, 43360, 43361));
+		add(runLatePath(true, 43370, 43371));
+
+		{
+			LoopbackTransport hostTransport, clientTransport;
+			std::string step;
+			NetMatchService service;
+			service.m_IsHost = true;
+			service.m_State = NetMatchServiceState::Running;
+			service.m_Transport = std::make_unique<GnsTransport>();
+			service.m_Session = std::make_unique<NetSession>();
+			service.m_Runner = std::make_unique<NetMatchRunner>();
+			service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+			NetSession client;
+			NetSessionConfig hostConfig;
+			hostConfig.port = 43380;
+			hostConfig.displayName = "Host";
+			hostConfig.maxPeers = 1;
+			hostConfig.heartbeatIntervalMs = 25;
+			NetIdentityManifest& identity = hostConfig.localIdentity;
+			identity.gameVersion = "7.0.0-test";
+			identity.networkProtocolVersion = NetProtocol::c_Version;
+			identity.controllerFrameVersion = ControllerFrame::c_Version;
+			identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			identity.buildId = "ended-world-rtl-new-round";
+			identity.platform = "test";
+			NetSessionConfig clientConfig = hostConfig;
+			clientConfig.displayName = "Client";
+			++clientConfig.localNonce;
+			if (!service.m_Session->StartHost(hostTransport, hostConfig, &step) ||
+			    !client.StartClient(clientTransport, "loopback", clientConfig, &step)) {
+				add("ReturnToLobby fixture session: " + step);
+			} else {
+				for (uint64_t now = 0; now <= 2000 && service.m_Session->GetReadyPeerCount() != 1; now += 10) {
+					service.m_Session->Tick(now);
+					client.Tick(now);
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+				}
+				if (service.m_Session->GetReadyPeerCount() != 1) {
+					add("ReturnToLobby fixture never seated the original peer");
+				} else {
+					service.FinishMatch("match over");
+					if (service.GetState() != NetMatchServiceState::Completed) {
+						add("ReturnToLobby control: FinishMatch did not complete");
+					} else {
+						std::string rtl;
+						const bool returned = service.ReturnToLobby(&rtl);
+						NetMatchServiceState stateAfter;
+						{
+							std::lock_guard<std::mutex> lock(service.m_Mutex);
+							stateAfter = service.m_State;
+						}
+						if (!returned) {
+							add("ReturnToLobby after FinishMatch was refused (" + rtl + ", state " +
+							    NetMatchService::StateName(stateAfter) + ")");
+						} else if (stateAfter == NetMatchServiceState::Completed) {
+							add("ReturnToLobby after FinishMatch left the ended world");
+						}
+						service.Destroy();
+					}
+				}
+			}
+		}
+
+		if (!errors.empty()) {
+			*error = errors;
+			return false;
+		}
+		std::cout << "PASS ended_world_late_admission ip+mux SessionEnded=1 reseats=0 rtl_new_round=1" << std::endl;
+		return true;
+	}
+
 	bool TestIceRowJoinMode(std::string* error) {
 		struct Case {
 			bool enabled;
@@ -5152,6 +5487,8 @@ namespace RTE {
 		if (!TestRosterBannerNamesThePlayerOnce(&error)) return fail(error);
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
+		std::string endedAdmissionError;
+		if (!TestEndedWorldLateAdmission(&endedAdmissionError)) std::cerr << "[net-match-selftest] FAIL: " << endedAdmissionError << std::endl;
 		std::string stopCancelError;
 		if (!TestGnsStopCancelContracts(&stopCancelError)) std::cerr << "[net-match-selftest] FAIL: " << stopCancelError << std::endl;
 		if (!TestMuxOpensIceListenFirst(&error)) return fail(error);
@@ -5160,6 +5497,7 @@ namespace RTE {
 		if (!TestSessionIdJoinRefusals(&error)) return fail(error);
 		if (!TestIceSettingsOverrideIsNotPersisted(&error)) return fail(error);
 		if (!TestP2PJoinSpecRidesTheSessionConfig(&error)) return fail(error);
+		if (!endedAdmissionError.empty()) return fail(endedAdmissionError);
 		if (!stopCancelError.empty()) return fail(stopCancelError);
 
 		if (!TestServiceDirectoryIceLeaseKeepsIdentity(&error)) return fail(error);

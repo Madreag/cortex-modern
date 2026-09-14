@@ -270,7 +270,9 @@ namespace RTE {
 		void SetSeatTable(std::vector<NetH4Seat> seats, NetMatchMode mode);
 		/// Live match: a ticketless join is denied outright in Phase A; in a lobby it may fill a
 		/// never-held seat.
-		void SetLiveMatch(bool live) { m_LiveMatch = live; }
+		void SetLiveMatch(bool live) { m_LiveMatch = live; if (live) m_MatchEnded = false; }
+		/// Retains credentials between rounds without carrying world ownership into the lobby.
+		void SetMatchEnded();
 		bool IsLiveMatch() const { return m_LiveMatch; }
 		void SetHostAddress(std::string address) { m_HostAddress = std::move(address); }
 		void SetMatchConfigHash(const NetHash32& hash) { m_MatchConfigHash = hash; }
@@ -489,6 +491,7 @@ namespace RTE {
 		NetMatchMode m_Mode = NetMatchMode::PvPSkirmish;
 		uint64_t m_NowMs = 0; //!< The plane's own clock, so a drop can be stamped without one being passed in.
 		bool m_LiveMatch = false;
+		bool m_MatchEnded = false;
 		std::vector<NetH4LedgerActor> (*m_DropOwnershipSource)(void*) = nullptr;
 		void* m_DropOwnershipContext = nullptr;
 
