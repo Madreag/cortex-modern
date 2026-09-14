@@ -406,6 +406,9 @@
     <ClInclude Include="Source\Activities\GibEditor.h">
       <Filter>Activities</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Activities\NetActivitySetup.h">
+      <Filter>Activities</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Activities\SceneEditor.h">
       <Filter>Activities</Filter>
     </ClInclude>
@@ -1304,6 +1307,9 @@
       <Filter>Activities</Filter>
     </ClCompile>
     <ClCompile Include="Source\Activities\GibEditor.cpp">
+      <Filter>Activities</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Activities\NetActivitySetup.cpp">
       <Filter>Activities</Filter>
     </ClCompile>
     <ClCompile Include="Source\Activities\SceneEditor.cpp">
