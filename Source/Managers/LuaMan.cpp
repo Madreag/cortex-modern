@@ -6073,12 +6073,20 @@ _PrimitiveQueueCapture = nil
 	checkpointValues = previewCopyKeepsModuleMethods && checkpointValues;
 	// Only the predicting peer runs previews, so a global a preview hook writes is that peer's alone; the boundary must undo it.
 	bool previewLeavesGlobalsAsFound = false;
+	// A mod keeps its state inside an existing global table, so a write that never changes a binding must be undone too.
+	bool previewDeepGlobalWritesUndone = false;
 	{
 		RunScriptString("_PreviewFenceExisting = \"canonical\"; _PreviewFenceNew = nil; package.loaded[\"_preview_fence_probe\"] = nil");
+		RunScriptString("_PreviewFenceDeep = { count = 1, list = {}, nested = { inner = \"a\" } }");
+		std::vector<std::string> deepGraphsBefore;
+		std::vector<std::string> deepGraphsAfter;
+		std::vector<std::string> deepGraphProblems;
+		const bool deepGraphsObserved = g_MovableMan.SerializeScriptGraphs(deepGraphsBefore, deepGraphProblems);
 		LuaMan::CapturePreviewSelfCopies({}, false);
 		{
 			LuaMan::PreviewHookScope hookScope(true);
 			RunScriptString("_PreviewFenceNew = 7; _PreviewFenceExisting = \"preview\"; package.loaded[\"_preview_fence_probe\"] = {}");
+			RunScriptString("_PreviewFenceDeep.count = _PreviewFenceDeep.count + 1; table.insert(_PreviewFenceDeep.list, 7); _PreviewFenceDeep.nested.inner = \"b\"; _PreviewFenceDeep.added = true");
 		}
 		LuaMan::EndPreviewScripts();
 		lua_getglobal(m_State, "_PreviewFenceNew");
@@ -6095,10 +6103,68 @@ _PrimitiveQueueCapture = nil
 		std::cout << "[preview-globals] added_gone=" << addedGlobalGone << " changed_restored=" << changedGlobalRestored
 		          << " loaded_module_gone=" << loadedModuleGone << std::endl;
 		previewLeavesGlobalsAsFound = addedGlobalGone && changedGlobalRestored && loadedModuleGone;
-		RunScriptString("_PreviewFenceExisting = nil; _PreviewFenceNew = nil; _PreviewFenceModuleGone = nil; package.loaded[\"_preview_fence_probe\"] = nil");
+		int deepCount = -1;
+		int deepListLength = -1;
+		std::string deepInner = "?";
+		bool deepAdded = true;
+		lua_getglobal(m_State, "_PreviewFenceDeep");
+		if (lua_istable(m_State, -1)) {
+			const int deep = lua_gettop(m_State);
+			lua_getfield(m_State, deep, "count");
+			deepCount = lua_isnumber(m_State, -1) ? static_cast<int>(lua_tonumber(m_State, -1)) : -1;
+			lua_pop(m_State, 1);
+			lua_getfield(m_State, deep, "list");
+			deepListLength = lua_istable(m_State, -1) ? static_cast<int>(lua_objlen(m_State, -1)) : -1;
+			lua_pop(m_State, 1);
+			lua_getfield(m_State, deep, "nested");
+			if (lua_istable(m_State, -1)) {
+				lua_getfield(m_State, -1, "inner");
+				deepInner = lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?";
+				lua_pop(m_State, 1);
+			}
+			lua_pop(m_State, 1);
+			lua_getfield(m_State, deep, "added");
+			deepAdded = !lua_isnil(m_State, -1);
+			lua_pop(m_State, 1);
+		}
+		lua_pop(m_State, 1);
+		std::cout << "[preview-deep-globals] count=" << deepCount << " list=" << deepListLength << " inner=" << deepInner
+		          << " added=" << (deepAdded ? "true" : "false") << std::endl;
+		previewDeepGlobalWritesUndone = deepCount == 1 && deepListLength == 0 && deepInner == "a" && !deepAdded;
+		// The graph is the checkpoint oracle, so what it does not carry is what a non-previewing peer cannot be shown to miss.
+		const bool deepGraphsRead = deepGraphsObserved && g_MovableMan.SerializeScriptGraphs(deepGraphsAfter, deepGraphProblems);
+		std::string deepGraphDelta;
+		for (size_t index = 0; index < std::max(deepGraphsBefore.size(), deepGraphsAfter.size()); ++index) {
+			const std::string first = index < deepGraphsBefore.size() ? deepGraphsBefore[index] : std::string();
+			const std::string second = index < deepGraphsAfter.size() ? deepGraphsAfter[index] : std::string();
+			if (first == second) {
+				continue;
+			}
+			size_t at = 0;
+			while (at < first.size() && at < second.size() && first[at] == second[at]) {
+				++at;
+			}
+			deepGraphDelta += " state " + std::to_string(index) + ": " + std::to_string(first.size()) + "->" + std::to_string(second.size()) + " at " + std::to_string(at) + " '" + second.substr(at, 60) + "'";
+		}
+		size_t deepGraphBytesBefore = 0;
+		size_t deepGraphBytesAfter = 0;
+		for (const std::string& text: deepGraphsBefore) {
+			deepGraphBytesBefore += text.size();
+		}
+		for (const std::string& text: deepGraphsAfter) {
+			deepGraphBytesAfter += text.size();
+		}
+		std::cout << "[preview-deep-globals-graph] read=" << deepGraphsRead << " states=" << deepGraphsAfter.size()
+		          << " bytes " << deepGraphBytesBefore << "->" << deepGraphBytesAfter
+		          << " delta=" << (static_cast<long long>(deepGraphBytesAfter) - static_cast<long long>(deepGraphBytesBefore))
+		          << " problems=" << deepGraphProblems.size()
+		          << (deepGraphDelta.empty() ? std::string(" first_diff=none") : deepGraphDelta) << std::endl;
+		RunScriptString("_PreviewFenceExisting = nil; _PreviewFenceNew = nil; _PreviewFenceModuleGone = nil; _PreviewFenceDeep = nil; package.loaded[\"_preview_fence_probe\"] = nil");
 	}
 	std::cout << "[script-graph-selftest] " << (previewLeavesGlobalsAsFound ? "PASS" : "FAIL") << " preview_leaves_globals_as_found" << std::endl;
 	checkpointValues = previewLeavesGlobalsAsFound && checkpointValues;
+	std::cout << "[script-graph-selftest] " << (previewDeepGlobalWritesUndone ? "PASS" : "FAIL") << " preview_deep_global_writes_undone" << std::endl;
+	checkpointValues = previewDeepGlobalWritesUndone && checkpointValues;
 	// A preview hook may load a script the supported way. The state that load takes, the chunk it compiles and the
 	// cursor that handed the state out are the predicting peer's alone, so the boundary must leave all three as found.
 	bool previewLateScriptLoadLeavesStatesAsFound = false;
