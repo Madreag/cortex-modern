@@ -139,13 +139,13 @@ int ACDropShip::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 void ACDropShip::SaveSnapshotConfiguration(Writer& writer) const {
 	ACraft::SaveSnapshotConfiguration(writer);
-	writer.NewPropertyWithValue("SpecialBehaviour_BodyGroupCheckpoint", base64_encode(m_PersistedBodyGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pBodyAG) : m_PersistedBodyGroupCheckpoint, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_BodyGroupCheckpoint", CheckpointWriter::Native([&] { return m_PersistedBodyGroupCheckpoint.empty() ? CaptureOwnedCheckpoint(m_pBodyAG) : m_PersistedBodyGroupCheckpoint; }).Base64(true));
 	writer.NewPropertyWithValue("HatchDoorSwingRange", m_HatchSwingRange);
 	writer.NewPropertyWithValue("AutoStabilize", m_AutoStabilize);
 	writer.NewPropertyWithValue("MaxEngineAngle", m_MaxEngineAngle);
 	writer.NewPropertyWithValue("LateralControlSpeed", m_LateralControlSpeed);
 	writer.NewPropertyWithValue("HoverHeightModifier", m_HoverHeightModifier);
-	writer.NewPropertyWithValue("SpecialBehaviour_ACDropShipRuntime", base64_encode(m_PersistedACDropShipRuntime.empty() ? SaveACDropShipRuntime() : m_PersistedACDropShipRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ACDropShipRuntime", CheckpointWriter::Native([&] { return m_PersistedACDropShipRuntime.empty() ? SaveACDropShipRuntime() : m_PersistedACDropShipRuntime; }).Base64(true));
 }
 
 void ACDropShip::AdoptPersistedUniqueID() {

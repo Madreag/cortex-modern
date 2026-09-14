@@ -273,7 +273,7 @@ int SoundContainer::Save(Writer& writer) const {
 	writer.NewProperty("MusicExitTime");
 	writer << m_MusicExitTime;
 	if (writer.IsSnapshot()) {
-		writer.NewPropertyWithValue("SpecialBehaviour_SoundCheckpoint", base64_encode(SaveCheckpoint(), true));
+		writer.NewPropertyWithValue("SpecialBehaviour_SoundCheckpoint", CheckpointWriter::Native([&] { return SaveCheckpoint(); }).Base64(true));
 		g_AudioMan.NoteCarriedSoundIdentity(m_CheckpointIdentity);
 	}
 
@@ -915,7 +915,7 @@ std::string SoundContainer::SaveCheckpoint() const {
 	for (int identity: m_PlayingChannels) {
 		if (!g_AudioMan.IsPredictedVoice(identity)) playing.insert(identity);
 	}
-	archive(Entity::SaveCheckpoint(), m_CheckpointIdentity, playing);
+	archive(static_cast<const Entity&>(*this), m_CheckpointIdentity, playing);
 	archive(m_SoundOverlapMode, m_BusRouting, m_Immobile, m_AttenuationStartDistance, m_CustomPanValue, m_PanningStrengthMultiplier, m_Loops, m_SoundPropertiesUpToDate, m_Priority, m_AffectedByGlobalPitch, m_Pos, m_Pitch, m_PitchVariation, m_Volume, m_WasFadedOut, m_Paused, m_MusicPreEntryTime, m_MusicExitTime);
 	archive(m_LogicalPlayback);
 	return archive.Text();

@@ -138,14 +138,14 @@ int Emission::Save(Writer& writer) const {
 	writer << m_StopTimer.GetSimTimeLimitMS();
 	writer.NewProperty("ParticleCount");
 	writer << m_ParticleCount;
-	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_EmissionCheckpoint", base64_encode(SaveCheckpoint(), true));
+	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_EmissionCheckpoint", CheckpointWriter::Native([&] { return SaveCheckpoint(); }).Base64(true));
 
 	return 0;
 }
 
 std::string Emission::SaveCheckpoint() const {
 	CheckpointWriter archive("Emission1");
-	archive(Entity::SaveCheckpoint());
+	archive(static_cast<const Entity&>(*this));
 	archive(m_PPM, m_BurstSize, m_Accumulator, m_Spread, m_MinVelocity, m_MaxVelocity, m_LifeVariation, m_PushesEmitter, m_InheritsVel, m_InheritsAngularVel, m_StartTimer, m_StopTimer, m_Offset, m_ParticleCount);
 	return archive.Text();
 }

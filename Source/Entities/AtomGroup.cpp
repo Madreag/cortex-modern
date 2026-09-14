@@ -158,14 +158,14 @@ int AtomGroup::Create(MOSRotating* ownerMOSRotating, Material const* material, i
 std::string AtomGroup::SaveCheckpoint() const {
 	CheckpointWriter writer("AtomGroup2");
 	VisitCheckpoint(writer, *this);
-	writer(std::set<std::string>(m_Groups.begin(), m_Groups.end()), m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference,
+	writer(std::set<std::string>(m_Groups.begin(), m_Groups.end()), CheckpointWriter::Native([&] { return m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference; }),
 	    m_HasCheckpointOwner ? m_CheckpointOwnerID : (m_OwnerMOSR ? m_OwnerMOSR->GetUniqueID() : 0));
-	std::vector<std::string> atoms;
+	std::vector<CheckpointText> atoms;
 	std::unordered_map<const Atom*, size_t> indices;
 	atoms.reserve(m_Atoms.size());
 	for (const Atom* atom: m_Atoms) {
 		indices.emplace(atom, atoms.size());
-		atoms.push_back(atom->SaveCheckpoint());
+		atoms.push_back(CheckpointWriter::Native([atom] { return atom->SaveCheckpoint(); }));
 	}
 	std::map<long, std::vector<size_t>> subgroups;
 	for (const auto& [id, group]: m_SubGroups) {
@@ -293,7 +293,7 @@ int AtomGroup::ReadProperty(const std::string_view& propName, Reader& reader) {
 int AtomGroup::Save(Writer& writer) const {
 	Entity::Save(writer);
 
-    if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialReference", base64_encode(m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference, true));
+    if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialReference", CheckpointWriter::Native([&] { return m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference; }).Base64(true));
     else { writer.NewProperty("Material"); writer << m_Material; }
 	writer.NewProperty("AutoGenerate");
 	writer << m_AutoGenerate;

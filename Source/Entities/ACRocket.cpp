@@ -362,7 +362,7 @@ int ACRocket::ReadProperty(const std::string_view& propName, Reader& reader) {
 void ACRocket::SaveSnapshotConfiguration(Writer& writer) const {
 	ACraft::SaveSnapshotConfiguration(writer);
 	writer.NewPropertyWithValue("SpecialBehaviour_MaxGimbalAngleRaw", m_MaxGimbalAngle);
-	writer.NewPropertyWithValue("SpecialBehaviour_ACRocketRuntime", base64_encode(m_PersistedACRocketRuntime.empty() ? SaveACRocketRuntime() : m_PersistedACRocketRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ACRocketRuntime", CheckpointWriter::Native([&] { return m_PersistedACRocketRuntime.empty() ? SaveACRocketRuntime() : m_PersistedACRocketRuntime; }).Base64(true));
 }
 
 int ACRocket::Save(Writer& writer) const {
@@ -768,7 +768,7 @@ void ACRocket::ResolveFaithfulLinks() {
 std::string ACRocket::SaveACRocketRuntime() const {
 	CheckpointWriter archive("ACRocketRuntime1");
 	archive(m_GearState, m_Paths, m_MaxGimbalAngle);
-	archive(CaptureOwnedCheckpoint(m_pRFootGroup), CaptureOwnedCheckpoint(m_pLFootGroup));
+	archive(CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pRFootGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pLFootGroup); }));
 	return archive.Text();
 }
 

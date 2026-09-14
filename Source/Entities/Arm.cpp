@@ -568,13 +568,15 @@ std::string Arm::SaveArmRuntime() const {
 	CheckpointWriter archive("ArmRuntime1");
 	archive(m_MaxLength, m_MoveSpeed, m_HandIdleOffset, m_HandIdleRotation, m_HandCurrentOffset, m_HandPrevPos, m_HandPos);
 	archive(m_HandMovementDelayTimer, m_HandHasReachedCurrentTarget, m_GripStrength, m_ThrowStrength);
-	std::vector<std::string> targets;
+	std::vector<CheckpointText> targets;
 	auto queue = m_HandTargets;
 	while (!queue.empty()) {
 		const HandTarget& target = queue.front();
-		CheckpointWriter value("HandTarget1");
-		value(target.Description, target.TargetOffset, target.DelayAtTarget, target.HFlippedWhenTargetWasCreated);
-		targets.push_back(value.Text());
+		targets.push_back(CheckpointWriter::Native([&] {
+			CheckpointWriter value("HandTarget1");
+			value(target.Description, target.TargetOffset, target.DelayAtTarget, target.HFlippedWhenTargetWasCreated);
+			return value.Text();
+		}));
 		queue.pop();
 	}
 	archive(targets);

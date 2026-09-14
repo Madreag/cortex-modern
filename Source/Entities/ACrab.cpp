@@ -577,7 +577,7 @@ void ACrab::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("AimRangeLowerLimit", m_AimRangeLowerLimit);
 	writer.NewPropertyWithValue("LockMouseAimInput", m_LockMouseAimInput);
 	writer.NewPropertyWithValue("StrideSound", m_StrideSound);
-	writer.NewPropertyWithValue("SpecialBehaviour_ACrabRuntime", base64_encode(m_PersistedACrabRuntime.empty() ? SaveACrabRuntime() : m_PersistedACrabRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ACrabRuntime", CheckpointWriter::Native([&] { return m_PersistedACrabRuntime.empty() ? SaveACrabRuntime() : m_PersistedACrabRuntime; }).Base64(true));
 }
 
 int ACrab::Save(Writer& writer) const {
@@ -1770,7 +1770,10 @@ std::string ACrab::SaveACrabRuntime() const {
 	CheckpointWriter archive("ACrabRuntime1");
 	archive(m_IconBlinkTimer, m_StrideFrame, m_Paths, m_Aiming, m_StrideStart, m_StrideTimer, m_AimRangeUpperLimit);
 	archive(m_AimRangeLowerLimit, m_LockMouseAimInput);
-	archive(CaptureOwnedCheckpoint(m_pLFGFootGroup), CaptureOwnedCheckpoint(m_BackupLFGFootGroup), CaptureOwnedCheckpoint(m_pLBGFootGroup), CaptureOwnedCheckpoint(m_BackupLBGFootGroup), CaptureOwnedCheckpoint(m_pRFGFootGroup), CaptureOwnedCheckpoint(m_BackupRFGFootGroup), CaptureOwnedCheckpoint(m_pRBGFootGroup), CaptureOwnedCheckpoint(m_BackupRBGFootGroup));
+	archive(CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pLFGFootGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_BackupLFGFootGroup); }),
+	    CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pLBGFootGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_BackupLBGFootGroup); }),
+	    CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pRFGFootGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_BackupRFGFootGroup); }),
+	    CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pRBGFootGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_BackupRBGFootGroup); }));
 	return archive.Text();
 }
 

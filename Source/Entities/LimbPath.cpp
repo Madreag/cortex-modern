@@ -14,7 +14,7 @@ using namespace RTE;
 
 std::string LimbPath::SaveCheckpoint() const {
 	CheckpointWriter archive("LimbPath1");
-	archive(Entity::SaveCheckpoint());
+	archive(static_cast<const Entity&>(*this));
 	archive(m_Start, m_StartSegCount, m_FootCollisionsDisabledSegment, m_SegProgress, m_TravelSpeed, m_SegmentEndedThreshold, m_BaseTravelSpeedMultiplier, m_CurrentTravelSpeedMultiplier, m_BaseScaleMultiplier, m_CurrentScaleMultiplier, m_PushForce, m_JointPos, m_JointVel, m_Rotation, m_RotationOffset, m_PositionOffset, m_TimeLeft, m_PathTimer, m_SegTimer, m_TotalLength, m_RegularLength, m_SegmentDone, m_Ended, m_HFlipped);
 	archive(m_Segments, static_cast<size_t>(std::distance(m_Segments.cbegin(), std::deque<Vector>::const_iterator(m_CurrentSegment))));
 	return archive.Text();

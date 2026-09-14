@@ -660,7 +660,7 @@ void AHuman::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("CrouchRotAngleTarget", m_RotAngleTargets[CROUCH]);
 	writer.NewPropertyWithValue("JumpRotAngleTarget", m_RotAngleTargets[JUMP]);
 	writer.NewPropertyWithValue("SpecialBehaviour_StrideSound", m_StrideSound);
-	writer.NewPropertyWithValue("SpecialBehaviour_AHumanRuntime", base64_encode(m_PersistedAHumanRuntime.empty() ? SaveAHumanRuntime() : m_PersistedAHumanRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_AHumanRuntime", CheckpointWriter::Native([&] { return m_PersistedAHumanRuntime.empty() ? SaveAHumanRuntime() : m_PersistedAHumanRuntime; }).Base64(true));
 }
 
 int AHuman::Save(Writer& writer) const {
@@ -3781,12 +3781,16 @@ std::string AHuman::SaveAHumanRuntime() const {
 	archive(m_ProneTimer, m_MaxWalkPathCrouchShift, m_CrouchAmount, m_CrouchAmountOverride, m_Paths, m_RotAngleTargets, m_Aiming);
 	archive(m_ArmClimbing, m_StrideFrame, m_StrideStart, m_StrideTimer, m_ThrowTmr, m_ThrowPrepTime, m_SharpAimRevertTimer);
 	archive(m_FGArmFlailScalar, m_BGArmFlailScalar, m_EquipHUDTimer, m_WalkAngle, m_WalkPathOffset, m_ArmSwingRate, m_DeviceArmSwayRate);
-	archive(CaptureOwnedCheckpoint(m_pFGHandGroup), CaptureOwnedCheckpoint(m_pBGHandGroup), CaptureOwnedCheckpoint(m_pFGFootGroup), CaptureOwnedCheckpoint(m_BackupFGFootGroup), CaptureOwnedCheckpoint(m_pBGFootGroup), CaptureOwnedCheckpoint(m_BackupBGFootGroup));
-	std::vector<std::string> equips;
+	archive(CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pFGHandGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pBGHandGroup); }),
+	    CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pFGFootGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_BackupFGFootGroup); }),
+	    CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pBGFootGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_BackupBGFootGroup); }));
+	std::vector<CheckpointText> equips;
 	for (const DeferredEquip& equip: m_PendingDeferredEquips) {
-		CheckpointWriter value("DeferredEquip1");
-		value(equip.op, equip.depositToFront, equip.group, equip.excludeGroup, equip.moduleName, equip.presetName);
-		equips.push_back(value.Text());
+		equips.push_back(CheckpointWriter::Native([&] {
+			CheckpointWriter value("DeferredEquip1");
+			value(equip.op, equip.depositToFront, equip.group, equip.excludeGroup, equip.moduleName, equip.presetName);
+			return value.Text();
+		}));
 	}
 	archive(equips);
 	return archive.Text();
