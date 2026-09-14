@@ -11,6 +11,7 @@ elfname = 'CortexCommand'
 build_rpath = ''
 link_args=[]
 extra_args=[]
+fp_args=[]
 preprocessor_flags = []
 override_options = []
 suffix=''
@@ -33,9 +34,9 @@ if compiler.get_argument_syntax()== 'gcc' # used for gcc compatible compilers
 
   # Pin floating-point so the same source gives bit-identical results across platforms.
   if host_machine.cpu_family() in ['x86', 'x86_64']
-    extra_args += ['-msse2']         # baseline ISA — no x87 80-bit drift on Windows
+    fp_args += ['-msse2']         # baseline ISA — no x87 80-bit drift on Windows
   endif
-  extra_args += [
+  fp_args += [
     '-ffp-contract=off',             # forbid FMA/contraction — required on ARM, harmless on x86
     '-fno-fast-math',
     '-fno-finite-math-only',
@@ -94,7 +95,8 @@ elif compiler.get_argument_syntax()== 'msvc'
   # LuaJIT's C API raises errors across C++ frames; /EHsc assumes it cannot.
   override_options += ['cpp_eh=s']
   # /fp:precise stops MSVC rearranging FP ops; /arch:SSE2 keeps x86 off x87's 80-bit registers.
-  extra_args += ['-D_HAS_ITERATOR_DEBUGGING=0', '-D_HAS_AUTO_PTR_ETC=1', '-bigobj', '/fp:precise', '/arch:SSE2']
+  extra_args += ['-D_HAS_ITERATOR_DEBUGGING=0', '-D_HAS_AUTO_PTR_ETC=1', '-bigobj']
+  fp_args += ['/fp:precise', '/arch:SSE2']
   add_global_arguments('-D_ITERATOR_DEBUG_LEVEL=0', language:'cpp')
   add_project_link_arguments(['winhttp.lib', 'bcrypt.lib', 'winmm.lib', 'ws2_32.lib', 'dinput8.lib', 'ddraw.lib', 'dxguid.lib', 'dsound.lib', 'dbghelp.lib'], language:'cpp')
   if host_machine.cpu_family() == 'x86'
@@ -158,6 +160,8 @@ elif compiler.get_argument_syntax()== 'msvc'
 else
   error('Using unknown compiler, please use gcc or msvc compatible compilers')
 endif
+add_global_arguments(fp_args, language:['c', 'cpp'])
+add_global_arguments(fp_args, language:['c', 'cpp'], native:true)
 add_project_arguments(preprocessor_flags, extra_args, language:'cpp')
 add_project_link_arguments(link_args, language:'cpp')
 
@@ -240,7 +244,7 @@ subdir('external')
 
 sdl3_opt = cmake.subproject_options()
 sdl3_opt.add_cmake_defines({'CMAKE_POSITION_INDEPENDENT_CODE': get_option('b_staticpic'), 'BUILD_SHARED_LIBS':false, 'BUILD_STATIC_LIBS': true})
-sdl3_opt.append_compile_args('c','-DUSE_XINPUT2_KEYBOARD')
+sdl3_opt.append_compile_args('c', fp_args + ['-DUSE_XINPUT2_KEYBOARD'])
 if host_machine.system() == 'darwin'
   sdl3_dep = dependency('sdl3')
 else
