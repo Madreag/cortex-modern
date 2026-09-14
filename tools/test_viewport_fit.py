@@ -707,6 +707,24 @@ def main():
                     zoom.save(root / "fallback-zoom.png")
                     details["fallback_zoom"] = str(root / "fallback-zoom.png")
 
+                    # Separated dimmer cells: each fallback cell keeps a 1px blank
+                    # column (a contiguous bar shows none) and its ink is ~55% of
+                    # the text gold, same hue (full gold fails the dim bound).
+                    _span, run_y, run_x0, run_x1 = name_run
+                    band = range(max(0, run_y - 1), min(height, run_y + 8))
+                    gaps = sum(1 for x in range(run_x0, run_x1 + 1)
+                               if all(not is_ink(px0[x, y]) for y in band))
+                    from collections import Counter
+                    row_inks = Counter(tuple(px0[x, y]) for y in (run_y - 1, run_y, run_y + 1)
+                                       for x in range(run_x0, run_x1 + 1)
+                                       if 0 <= y < height and is_ink(px0[x, y]))
+                    warm = Counter({c: n for c, n in row_inks.items()
+                                    if c[0] > c[1] > c[2] and c[0] > 60})
+                    dom = warm.most_common(1)[0][0] if warm else (0, 0, 0)
+                    details["fallback_run"] = {"blank_columns": gaps, "dominant_ink": list(dom)}
+                    checks["fallback_cells_separated"] = gaps >= 16
+                    checks["fallback_ink_dimmed"] = bool(warm) and dom[0] < 200
+
                 # Mirror the engine's measure: the fallback font's cell width x
                 # the 64 wire bytes predicts the token width. The label is
                 # panel-24 wide; the measured gray span is the panel minus its
