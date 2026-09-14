@@ -1,4 +1,7 @@
-"""Exercise the diagnostics button and exit flag through isolated engine runs."""
+"""Exercise diagnostics through isolated runs; all runs menu+replay, pause is explicit.
+
+The pause arm does not record a replay, so its diagnostics ZIPs contain none.
+"""
 
 import argparse
 import hashlib
@@ -237,7 +240,7 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--arm", choices=("menu", "replay", "pause", "all"), default="all",
-                        help="all retains the menu/replay gate; pause runs both pause-menu resolutions")
+                        help="all runs menu+replay; use --arm pause for both pause-menu resolutions (no replay recording)")
     parser.add_argument("--port", type=int, default=48211)
     args = parser.parse_args()
     if not 48211 <= args.port <= 48219 or (args.arm == "pause" and args.port > 48218):
