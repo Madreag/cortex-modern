@@ -15,6 +15,7 @@
 #include "MovableMan.h"
 #include "MovableObject.h"
 #include "OwnedMovableObjects.h"
+#include "PieMenu.h"
 #include "PostProcessMan.h"
 #include "PresetMan.h"
 #include "PreviewEventLedger.h"
@@ -298,6 +299,37 @@ namespace RTE {
 							check("surviving_supported_device_retained", held == survivingDevice, "observed=" + address(held) + " expected=" + address(survivingDevice));
 						});
 						afterDispose.push_back([=]() { guardArm->SetHeldDeviceThisArmIsTryingToSupport(nullptr); });
+					}
+				}
+				// The pie menu's affected object is the same shape of raw external link, on the clone's own menu.
+				PieMenu* previewMenu = survivor->GetPieMenu();
+				MovableObject* shadowItem = residentItem ? g_MovableMan.FindObjectByUniqueID(residentItem->GetUniqueID()) : nullptr;
+				PieMenu* guardMenu = shadowItem && shadowItem != residentItem ? guard->GetPieMenu() : nullptr;
+				if (armed("preview_pie_menu", previewMenu != nullptr, "owner=" + address(survivor) + " shadow_case=" + std::to_string(guardMenu != nullptr))) {
+					previewMenu->SetAffectedObject(retiringDevice);
+					armed("affected_object_before_remap", previewMenu->GetAffectedObject() == retiringDevice, "affected=" + address(retiringDevice));
+					const std::string retiringAffected = address(retiringDevice);
+					observations.push_back([=, &check]() {
+						const MovableObject* affected = previewMenu->GetAffectedObject();
+						check("affected_object_after_retirement", affected == nullptr, "observed=" + address(affected) + " expected=0000000000000000");
+					});
+					afterDispose.push_back([=, &check]() {
+						// The target is gone; the pointer value is compared, never read through.
+						const std::string stale = address(previewMenu->GetAffectedObject());
+						check("affected_object_pointer_after_disposal", stale != retiringAffected, "observed=" + stale + " retired=" + retiringAffected);
+						previewMenu->SetAffectedObject(nullptr);
+					});
+					if (guardMenu) {
+						const long residentUID = residentItem->GetUniqueID();
+						guardMenu->SetAffectedObject(shadowItem);
+						armed("affected_object_shadow_before_remap", guardMenu->GetAffectedObject() == shadowItem, "shadow=" + address(shadowItem) + " resident=" + address(residentItem) + " uid=" + std::to_string(residentUID));
+						observations.push_back([=, &check]() {
+							const MovableObject* affected = guardMenu->GetAffectedObject();
+							// Only the resident is safe to read through; a stale shadow is compared by address alone.
+							const long observedUID = affected == residentItem ? affected->GetUniqueID() : -1;
+							check("affected_object_to_shadow_item", affected == residentItem && observedUID == residentUID, "observed=" + address(affected) + " uid=" + std::to_string(observedUID) + " expected=" + address(residentItem) + " uid=" + std::to_string(residentUID));
+						});
+						afterDispose.push_back([=]() { guardMenu->SetAffectedObject(nullptr); });
 					}
 				}
 			} else if (mode == 'n') {
