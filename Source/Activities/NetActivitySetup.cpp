@@ -60,18 +60,17 @@ namespace RTE {
 			Refuse(error, "match activity " + config.activityModule + "/" + config.activityPreset + " is not installed");
 			return nullptr;
 		}
-		// The agreed site, staged the way the Scenario setup stages its selected scene. A config from before
-		// the rules existed carries no site and keeps launching the activity's own scene.
+		// The agreed site. A config from before the rules existed carries no site and keeps launching the
+		// activity's own scene. Resolved here but staged last, so a refused launch leaves nothing behind.
 		const bool ownSite = config.sceneName.empty();
 		const std::string sceneName = ownSite ? presetActivity->GetSceneName() : config.sceneName;
+		const Scene* scene = nullptr;
 		if (!sceneName.empty()) {
-			const Entity* sceneEntity = ownSite ? g_PresetMan.GetEntityPreset("Scene", sceneName) : FindInModule("Scene", config.sceneModule, sceneName);
-			const Scene* scene = dynamic_cast<const Scene*>(sceneEntity);
+			scene = dynamic_cast<const Scene*>(ownSite ? g_PresetMan.GetEntityPreset("Scene", sceneName) : FindInModule("Scene", config.sceneModule, sceneName));
 			if (!scene) {
 				Refuse(error, "match scene " + (ownSite ? sceneName : config.sceneModule + "/" + sceneName) + " is not installed");
 				return nullptr;
 			}
-			g_SceneMan.SetSceneToLoad(scene, true, config.deployUnits);
 		}
 		Activity* activity = dynamic_cast<Activity*>(presetActivity->Clone());
 		if (!activity) {
@@ -97,6 +96,10 @@ namespace RTE {
 					gameActivity->SetTeamFunds(static_cast<float>(gameActivity->GetStartingGold()), team);
 				}
 			}
+		}
+		// Staged the way the Scenario setup stages its selected scene, with the agreed deploy-units choice.
+		if (scene) {
+			g_SceneMan.SetSceneToLoad(scene, true, config.deployUnits);
 		}
 		return activity;
 	}
