@@ -2236,6 +2236,120 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 		return;
 	}
 	WriteProbeText("lpinv_before", before);
+	// What a checkpoint taken with previews outstanding would see: the per-state bindings and the graph roots.
+	struct Registrations {
+		std::string bindings;
+		std::vector<std::string> graphs;
+		std::vector<std::vector<long>> roots;
+	};
+	// The uids SerializeScriptGraph keys its roots by: registered plus pending, scripts initialized, one per uid.
+	const auto rootUIDs = [](const LuaStateWrapper& state) {
+		std::vector<long> uids;
+		for (const MovableObject* mo: state.GetRegisteredMOs()) {
+			if (mo->ObjectScriptsInitialized()) {
+				uids.push_back(mo->GetUniqueID());
+			}
+		}
+		for (const MovableObject* mo: state.GetPendingRegisteredMOs()) {
+			if (mo->ObjectScriptsInitialized()) {
+				uids.push_back(mo->GetUniqueID());
+			}
+		}
+		std::sort(uids.begin(), uids.end());
+		uids.erase(std::unique(uids.begin(), uids.end()), uids.end());
+		return uids;
+	};
+	const auto captureRegistrations = [&rootUIDs](std::vector<std::string>& into) {
+		Registrations capture;
+		capture.bindings = g_MovableMan.DescribeScriptBindings();
+		g_MovableMan.SerializeScriptGraphs(capture.graphs, into);
+		capture.roots.push_back(rootUIDs(g_LuaMan.GetMasterScriptState()));
+		for (const LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
+			capture.roots.push_back(rootUIDs(state));
+		}
+		return capture;
+	};
+	const auto describeDrift = [](const Registrations& was, const Registrations& now) {
+		const auto bindingLines = [](const std::string& text) {
+			std::map<std::string, std::string> byState;
+			std::istringstream stream(text);
+			for (std::string line; std::getline(stream, line);) {
+				const size_t split = line.find(' ');
+				byState[line.substr(0, split)] = split == std::string::npos ? std::string() : line.substr(split + 1);
+			}
+			return byState;
+		};
+		const auto tokensOnlyIn = [](const std::string& left, const std::string& right) {
+			std::map<std::string, int> pool;
+			std::istringstream rightTokens(right);
+			for (std::string token; rightTokens >> token;) {
+				++pool[token];
+			}
+			std::string out;
+			std::istringstream leftTokens(left);
+			for (std::string token; leftTokens >> token;) {
+				if (const auto found = pool.find(token); found != pool.end() && found->second > 0) {
+					--found->second;
+					continue;
+				}
+				out += (out.empty() ? "" : " ") + token;
+			}
+			return out;
+		};
+		const auto uidsOnlyIn = [](const std::vector<long>& left, const std::vector<long>& right) {
+			std::string out;
+			for (const long uid: left) {
+				if (std::find(right.begin(), right.end(), uid) == right.end()) {
+					out += (out.empty() ? "" : " ") + std::to_string(uid);
+				}
+			}
+			return out;
+		};
+		std::vector<std::string> drift;
+		const std::map<std::string, std::string> wasLines = bindingLines(was.bindings);
+		const std::map<std::string, std::string> nowLines = bindingLines(now.bindings);
+		std::vector<std::string> states;
+		for (const auto& [name, tokens]: wasLines) {
+			states.push_back(name);
+		}
+		for (const auto& [name, tokens]: nowLines) {
+			if (wasLines.find(name) == wasLines.end()) {
+				states.push_back(name);
+			}
+		}
+		for (const std::string& name: states) {
+			const std::string wasTokens = wasLines.find(name) != wasLines.end() ? wasLines.at(name) : std::string();
+			const std::string nowTokens = nowLines.find(name) != nowLines.end() ? nowLines.at(name) : std::string();
+			const std::string extra = tokensOnlyIn(nowTokens, wasTokens);
+			const std::string missing = tokensOnlyIn(wasTokens, nowTokens);
+			if (!extra.empty() || !missing.empty()) {
+				drift.push_back("scripts " + name + ": extra [" + extra + "] missing [" + missing + "]; measured before [" + wasTokens + "] now [" + nowTokens + "]");
+			}
+		}
+		for (size_t index = 0; index < std::max(was.roots.size(), now.roots.size()); ++index) {
+			const std::vector<long> wasRoots = index < was.roots.size() ? was.roots[index] : std::vector<long>();
+			const std::vector<long> nowRoots = index < now.roots.size() ? now.roots[index] : std::vector<long>();
+			const std::string wasGraph = index < was.graphs.size() ? was.graphs[index] : std::string();
+			const std::string nowGraph = index < now.graphs.size() ? now.graphs[index] : std::string();
+			const std::string extra = uidsOnlyIn(nowRoots, wasRoots);
+			const std::string missing = uidsOnlyIn(wasRoots, nowRoots);
+			if (!extra.empty() || !missing.empty() || wasGraph != nowGraph) {
+				drift.push_back("lua_graph " + std::to_string(index) + " (" + (index == 0 ? std::string("master") : "thread" + std::to_string(index - 1)) + "): extra roots [" + extra + "] missing roots [" + missing + "]; measured roots " + std::to_string(wasRoots.size()) + " -> " + std::to_string(nowRoots.size()) + ", graph bytes " + std::to_string(wasGraph.size()) + " -> " + std::to_string(nowGraph.size()));
+			}
+		}
+		return drift;
+	};
+	std::vector<std::string> registrationProblems;
+	const Registrations registrationsBefore = captureRegistrations(registrationProblems);
+	if (!registrationProblems.empty()) {
+		for (const std::string& problem: registrationProblems) {
+			std::cout << "[lpinv] FAIL: cannot capture canonical script registrations: " << problem << std::endl;
+		}
+		s_lpInvarianceFailures = 1;
+		s_netReplayExitCode = 5;
+		g_MetricsCollector.RecordString("lpinv_result", "fail");
+		return;
+	}
 	const uint64_t soundCursorBefore = g_AudioMan.GetCheckpointSoundContainerCursor();
 	int failures = 0;
 	int cases = 0;
@@ -2258,6 +2372,22 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 				DrawFrameWithPreviews();
 				if (const std::string failure = CheckPreviewOutcome(static_cast<long long>(simTick), static_cast<long long>(simTick) + depth); !failure.empty() && outcomeFailure.empty()) {
 					outcomeFailure = failure;
+				}
+			}
+			// The previews are still outstanding: a checkpoint here must find the registrations unchanged.
+			std::vector<std::string> outstandingProblems;
+			const Registrations registrationsOutstanding = captureRegistrations(outstandingProblems);
+			for (const std::string& problem: outstandingProblems) {
+				fail("cannot capture the script registrations while the previews are outstanding: " + problem);
+			}
+			if (const std::vector<std::string> drift = describeDrift(registrationsBefore, registrationsOutstanding); !drift.empty()) {
+				std::string probe = "scripts\n" + registrationsOutstanding.bindings;
+				for (size_t index = 0; index < registrationsOutstanding.graphs.size(); ++index) {
+					probe += "lua_graph " + std::to_string(index) + " " + std::to_string(registrationsOutstanding.graphs[index].size()) + "\n" + registrationsOutstanding.graphs[index] + "\n";
+				}
+				WriteProbeText("lpinv_previews_d" + std::to_string(depth) + "_x" + std::to_string(repeats), probe);
+				for (const std::string& line: drift) {
+					fail("the outstanding previews left the Lua states changed - " + line);
 				}
 			}
 			const uint64_t previewsRun = LocalPrediction::GetPreviewCount() - previewsBefore;
@@ -3838,12 +3968,17 @@ void RunGameLoop() {
 			if (!ScenarioRunner::IsActive() && !s_netMatchServiceE2E && !s_recordTickHashes && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 				static uint64_t s_matchOverTick = UINT64_MAX;
 				const Activity* matchActivity = g_ActivityMan.GetActivity();
-				if (matchActivity && matchActivity->IsOver()) {
+				// -net-match-ticks ends a menu-launched match at an applied frame every peer reaches,
+				// so an unattended run finishes one the same way a win condition does.
+				const bool cappedEnd = s_netLockstepTicks > 0 && ScenarioRunner::HasLockstepCoordinator() &&
+				                       ScenarioRunner::GetLockstepAppliedFrame() >= s_netLockstepTicks;
+				if ((matchActivity && matchActivity->IsOver()) || cappedEnd) {
 					const uint64_t nowTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 					if (s_matchOverTick == UINT64_MAX) {
 						s_matchOverTick = nowTick;
 					}
-					const uint64_t graceTicks = static_cast<uint64_t>(5.0f / g_TimerMan.GetDeltaTimeSecs());
+					// The grace lets a win play out on screen; a capped end has nothing to show.
+					const uint64_t graceTicks = cappedEnd ? 0 : static_cast<uint64_t>(5.0f / g_TimerMan.GetDeltaTimeSecs());
 					if (nowTick - s_matchOverTick >= graceTicks) {
 						s_matchOverTick = UINT64_MAX;
 						const std::string result = BuildNetMatchResultText();

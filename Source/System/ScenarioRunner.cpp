@@ -853,6 +853,13 @@ namespace RTE {
 		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled);
 	}
 
+	uint8_t ScenarioRunner::GetLockstepPolicyActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
+		if (!s_LockstepCoordinator) {
+			return 0;
+		}
+		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled);
+	}
+
 	uint8_t ScenarioRunner::GetLockstepDropTimeActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
 		if (!s_LockstepCoordinator) {
 			return 0;

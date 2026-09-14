@@ -74,6 +74,10 @@ namespace RTE {
 		/// §11: reads the recovery record on the way into the main menu and, when one applies, opens the
 		/// multiplayer screen's landing panel on the offer instead of leaving the player to find it.
 		void OfferStoredRejoinOnEntry();
+
+		/// Opens the multiplayer screen on the lobby panel when the match that just ended left a
+		/// rematch lobby waiting, so the player comes out of the match where the rematch is.
+		void OfferRematchLobbyOnEntry();
 #pragma endregion
 
 #pragma region Automation

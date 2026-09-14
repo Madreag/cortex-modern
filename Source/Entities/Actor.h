@@ -428,6 +428,11 @@ namespace RTE {
 		/// Handles the PieSlice this' PieMenu activated last tick, if any. Runs in the update stage, so every peer applies it at the same tick.
 		void HandlePendingPieCommand();
 
+		/// Event listener to be run while this Actor's PieMenu is opened. Refreshes the slices the activity's settings decide, on every peer.
+		/// @param pieMenu The PieMenu this event listener needs to listen to. This will always be this' m_PieMenu and only exists for std::bind.
+		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
+		int WhilePieMenuOpenListener(const PieMenu* pieMenu) override;
+
 		/// Makes this the squad leader: it goes sentry, and every non-player AHuman/ACrab of its team closer than the selection edge clears its waypoints, enters squad mode and follows this.
 		/// @param selectionEdge The scene point marking the selection radius around this.
 		void FormSquad(const Vector& selectionEdge);

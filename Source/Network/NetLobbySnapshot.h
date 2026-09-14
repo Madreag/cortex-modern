@@ -41,6 +41,7 @@ namespace RTE {
 		std::string inputDelayText; //!< The announced input delay, host-authored; "" before the lobby has one.
 		std::string portMap;        //!< The host's router-mapping status line; "" when the toggle is off or not hosting.
 		uint32_t portMapSerial = 0; //!< Bumped whenever portMap changes so the panel skips redundant rewrites.
+		bool playedAMatch = false;  //!< A match has already run on this session, so this lobby is a rematch lobby.
 		bool localReady = false;
 		bool remoteReady = false;
 		std::vector<NetLobbyMember> members;
