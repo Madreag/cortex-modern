@@ -5205,6 +5205,41 @@ namespace RTE {
 		return true;
 	}
 
+	// The menus route a recovery pump to the title screen and keep it alive past Back; an ordinary
+	// match end is not one, so it must answer the lobby pump's read instead.
+	bool TestCompletedLobbyIsNotARecovery(std::string* error) {
+		NetMatchService service;
+		{
+			std::lock_guard<std::mutex> lock(service.m_Mutex);
+			service.m_IsHost = true;
+			service.m_MatchWasRunning = true;
+			service.m_State = NetMatchServiceState::Completed;
+		}
+		if (service.NeedsRecoveryPump()) {
+			*error = "a completed match reads as a recovery the menus route to the title screen";
+			return false;
+		}
+		if (!service.NeedsCompletedLobbyPump()) {
+			*error = "a completed match does not ask the menu loop to pump its rematch lobby";
+			return false;
+		}
+		{
+			std::lock_guard<std::mutex> lock(service.m_Mutex);
+			service.m_LeftMatch = true;
+		}
+		if (service.NeedsCompletedLobbyPump()) {
+			*error = "a deliberately left match still asks the menu loop to pump it";
+			return false;
+		}
+		service.m_ReconnectUx.NoteDropped(1000, "dropped");
+		if (!service.NeedsRecoveryPump()) {
+			*error = "a running recovery schedule stopped asking for its pump";
+			return false;
+		}
+		std::cout << "PASS completed_lobby_is_not_a_recovery" << std::endl;
+		return true;
+	}
+
 	bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error) {
 		struct Wire {
 			std::deque<NetDirectoryClient::Reply> replies;
@@ -5948,6 +5983,7 @@ namespace RTE {
 		if (!TestIceSettingsOverrideIsNotPersisted(&error)) return fail(error);
 		if (!TestP2PJoinSpecRidesTheSessionConfig(&error)) return fail(error);
 		if (!TestServiceDirectoryIceLeaseKeepsIdentity(&error)) return fail(error);
+		if (!TestCompletedLobbyIsNotARecovery(&error)) return fail(error);
 		if (!twoIceRoundsError.empty()) return fail(twoIceRoundsError);
 		if (!stopCancelError.empty()) return fail(stopCancelError);
 		if (!endedAdmissionError.empty()) return fail(endedAdmissionError);

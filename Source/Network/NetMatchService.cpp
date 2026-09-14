@@ -1381,11 +1381,12 @@ static std::string ResyncSaveName() {
 		return false;
 	}
 
+	bool NetMatchService::NeedsCompletedLobbyPump() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_State == NetMatchServiceState::Completed && !m_LeftMatch;
+	}
+
 	bool NetMatchService::NeedsRecoveryPump() const {
-		{
-			std::lock_guard<std::mutex> lock(m_Mutex);
-			if (m_State == NetMatchServiceState::Completed && !m_LeftMatch) return true;
-		}
 		if (!s_AdmissionEnabled) {
 			return false;
 		}

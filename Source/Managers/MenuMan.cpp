@@ -156,7 +156,8 @@ void MenuMan::HandleTransitionIntoMenuLoop() {
 bool MenuMan::Update() {
 	// §11's retry schedule belongs to the service, not to a screen: it runs whatever menu is up, so a
 	// dropped player recovers without having to walk back to the multiplayer screen.
-	if (g_NetMatchService.NeedsRecoveryPump()) {
+	// A completed match's rematch lobby needs the same pump: its directory lease heartbeats from here.
+	if (g_NetMatchService.NeedsRecoveryPump() || g_NetMatchService.NeedsCompletedLobbyPump()) {
 		g_NetMatchService.Update();
 	}
 	m_TitleScreen->Update();
