@@ -1736,6 +1736,14 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::SendChat(uint8_t scope, const std::string& text) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		// Only a live lobby or match can carry a line to the wire: after LeaveWorkerMain the
+		// session object (and m_ChatSession) is still owned but no pump will ever drain it, so
+		// accepting would just let the UI drop text it should have kept.
+		if (m_State != NetMatchServiceState::Starting &&
+		    m_State != NetMatchServiceState::ReadyToLaunch &&
+		    m_State != NetMatchServiceState::Running) {
+			return false;
+		}
 		return m_ChatSession && m_ChatSession->SendChat(scope, text);
 	}
 

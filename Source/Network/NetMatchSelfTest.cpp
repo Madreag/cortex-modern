@@ -3864,6 +3864,31 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestChatSendRefusedOutsideCarry(std::string* error) {
+		// LeaveWorkerMain keeps m_Session (and m_ChatSession) owned past Completed, so a bare
+		// session pointer cannot be the gate: SendChat must refuse on the service state itself.
+		// A line accepted in Idle/Completed/Failed has no pump left to drain it - the UI clears
+		// the input box on true, so true here is text silently thrown away.
+		NetMatchService service;
+		service.m_Session = std::make_unique<NetSession>();
+		service.m_ChatSession = service.m_Session.get();
+		for (const NetMatchServiceState state :
+		     {NetMatchServiceState::Idle, NetMatchServiceState::Completed, NetMatchServiceState::Failed}) {
+			service.m_State = state;
+			if (service.SendChat(c_NetChatScopeAll, "ghost line")) {
+				*error = std::string("SendChat accepted a line while the service was ") +
+				         NetMatchService::StateName(state);
+				return false;
+			}
+		}
+		service.m_State = NetMatchServiceState::Running;
+		if (!service.SendChat(c_NetChatScopeAll, "live line")) {
+			*error = "SendChat refused a line while the service was Running";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestPendingSessionEventSurvivesTeardown(std::string* error) {
 		const uint16_t port = 43219;
 		LoopbackTransport hostTransport, clientTransport;
@@ -5153,8 +5178,21 @@ namespace RTE {
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestRosterTransitionsRecordHoldThenPresent(&error)) return fail(error);
 		if (!TestRosterBannerNamesThePlayerOnce(&error)) return fail(error);
-		if (!TestChatRoutingAndBounds(&error)) return fail(error);
-		if (!TestChatOutboxJoinRace(&error)) return fail(error);
+		// The chat arms accumulate like the other independent tests so one defective build shows
+		// every defect instead of stopping at the first.
+		std::string chatRoutingError, chatRaceError, chatCarryError;
+		if (!TestChatRoutingAndBounds(&chatRoutingError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << chatRoutingError << std::endl;
+		}
+		if (!TestChatOutboxJoinRace(&chatRaceError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << chatRaceError << std::endl;
+		}
+		if (!TestChatSendRefusedOutsideCarry(&chatCarryError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << chatCarryError << std::endl;
+		}
+		if (!chatRoutingError.empty()) return fail(chatRoutingError);
+		if (!chatRaceError.empty()) return fail(chatRaceError);
+		if (!chatCarryError.empty()) return fail(chatCarryError);
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
 		if (!TestMuxOpensIceListenFirst(&error)) return fail(error);
