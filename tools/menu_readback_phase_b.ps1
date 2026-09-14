@@ -7,8 +7,6 @@ $ErrorActionPreference = 'Stop'
 $repo = 'D:/Projects/item5-lifecycle'
 $baseline = '6e8a59e1174a8a71c6091ca13e7e2d6706895130'
 $branch = 'stage2/menu-readback'
-$retainedRepo = 'D:/Projects/takeover-build'
-$retainedHash = 'CF2E611BF36D575AEF5FE856A431704DC1AE2532E58B9B3E95556BCFC58C70EB'
 $env:CCCP_HEADLESS = '1'
 $env:CL = '/MP6'
 $env:GNS_ROOT = 'D:/Projects/stage2_p2/gns_spike/install-win-vcpkg-release'
@@ -84,20 +82,14 @@ $tip = & git -C $repo rev-parse HEAD
 $detector = "$Out/test_menu_readback.py"
 Copy-Item -LiteralPath "$repo/tools/test_menu_readback.py" -Destination $detector
 $ledger = @()
-$useRetained = (Test-Path -LiteralPath "$retainedRepo/Cortex Command.exe") -and
-    ((Get-FileHash -LiteralPath "$retainedRepo/Cortex Command.exe" -Algorithm SHA256).Hash -eq $retainedHash)
 
 try {
-    if ($useRetained) {
-        Record-Executable $retainedRepo 'baseline' "Retained executable named by the brief; target source $baseline; build provenance requires review."
-        Run-Detector $retainedRepo 'red' $true
-    } else {
-        & git -C $repo switch --detach $baseline
-        if ($LASTEXITCODE -ne 0) { throw 'Cannot select the baseline.' }
-        Build-Engine 'baseline'
-        Record-Executable $repo 'baseline' "Built Final at $baseline in build-baseline.log."
-        Run-Detector $repo 'red' $true
-    }
+    # The RED arm only means anything when the baseline executable was built here from the baseline source.
+    & git -C $repo switch --detach $baseline
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot select the baseline.' }
+    Build-Engine 'baseline'
+    Record-Executable $repo 'baseline' "Built Final at $baseline in build-baseline.log."
+    Run-Detector $repo 'red' $true
 } finally {
     if ((& git -C $repo branch --show-current) -ne $branch) {
         & git -C $repo switch $branch
