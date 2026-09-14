@@ -7,7 +7,9 @@ joiner rows carry team/role words plus connection quality and ping, and one
 joiner stays unready so both role words show. A fourth name is all high-byte
 cp1252 so glyph coverage past ASCII is exercised too.
 
-The oracle is pixel-only, measured inside each row's 288x16 label box:
+The oracle is pixel-only, measured inside each row's label box - the ini box
+(X=8 W=288) when the panel keeps its 300px default, or the fitted box
+(X=12 W=panel-24) once the panel widens to hold the widest row:
 
     rowN_populated          the box holds text ink
     rowN_single_line        ink forms one contiguous band - a wrapped row shows
@@ -17,14 +19,18 @@ The oracle is pixel-only, measured inside each row's 288x16 label box:
     rowN_no_bottom_clip     no ink in the box's bottom edge rows - the wrapped
                             second line lands there
 
-On the control build every populated row wraps, so the band/clip checks fail.
-On the repaired build the rows are drawn in FontSmall and the name is elided
-with 0x85 until the measured width fits, so all checks pass and the log's
-assert_label dumps prove the delay text stayed whole and the ellipsis drew.
+On the control build the host row wraps, so the band/clip checks fail.
+On the repaired build the panel widens (contentWidth = max(300, widest row + 24)
+capped at m_RootBoxMaxWidth - 12) and only when the cap still cannot hold the
+row is the name elided with 0x85, so all checks pass and the log's
+assert_label dumps prove the delay text stayed whole.
 
---reference <png> additionally requires every pixel outside the four row boxes
-to equal a control-run capture of the same lobby, so nothing outside the rows
-may move.
+--reference <png> compares a control-run capture of the same lobby. The panel
+widens by recentering, so siblings hold position up to the odd-width parity
+drift the stock shift math already has; the check diffs the intersection of
+both panels minus the rows' band under each row's best translation in +-4px -
+every pixel row must align under one small dx. The backdrop outside the panel
+animates between runs and is not compared.
 """
 
 import argparse
@@ -41,7 +47,8 @@ from test_viewport_fit import (PinDrift, close_all, game_version, near,  # noqa:
                                pin_state, require_pin, resolve_tools, set_resolution, sha256_file)
 
 PANEL_GRAY = (59, 65, 83)
-ROW_X, ROW_W, ROW_H, ROW_Y0, ROW_STEP = 8, 288, 16, 66, 18
+ROW_X_INI, ROW_W_INI, ROW_H, ROW_Y0, ROW_STEP = 8, 288, 16, 66, 18
+PANEL_W_INI = 300
 ELLIPSIS = b"\x85"
 
 HOST_NAME = "H" * 64
@@ -168,10 +175,13 @@ def main():
         checks["shot_taken"] = len(shots) >= 1
         host_log = (root / HOST_NAME / "stdout.log").read_bytes()
 
-        m = re.search(rb'assert_label LabelLobbyPlayer0 "auto" text="(.*?)" (PASS|FAIL)', host_log, re.S)
-        details["row0_text"] = m.group(1).decode("cp1252") if m else None
-        checks["row0_delay_text_whole"] = bool(m and b"(auto," in m.group(1) and b"ping)" in m.group(1))
-        checks["row0_elided"] = bool(m and ELLIPSIS in m.group(1))
+        for i in range(4):
+            m = re.search(rb'assert_label LabelLobbyPlayer' + str(i).encode()
+                          + rb' "[^"]*" text="(.*?)" (PASS|FAIL)', host_log, re.S)
+            details[f"row{i}_text"] = m.group(1).decode("cp1252") if m else None
+            details[f"row{i}_elided"] = bool(m and ELLIPSIS in m.group(1))
+        m0 = re.search(rb'assert_label LabelLobbyPlayer0 "[^"]*" text="(.*?)" (PASS|FAIL)', host_log, re.S)
+        checks["row0_delay_text_whole"] = bool(m0 and b"(auto," in m0.group(1) and b"ping)" in m0.group(1))
         checks["host_reached_lobby"] = "activate ButtonMultiplayerCreate ok=1" in host_log.decode("cp1252", errors="replace")
 
         if shots:
@@ -183,39 +193,70 @@ def main():
             checks["panel_found"] = panel is not None
             if panel:
                 top, left, right, bottom = panel
-                details["panel"] = {"top": top, "left": left, "right": right, "bottom": bottom}
+                panel_w = right - left + 1
+                details["panel"] = {"top": top, "left": left, "right": right,
+                                    "bottom": bottom, "width": panel_w}
+                # A widened panel moved its rows to the diagnostic-label margin
+                # convention (X=12, W=panel-24); an untouched panel keeps the
+                # ini box (X=8, W=288).
+                if panel_w > PANEL_W_INI:
+                    row_x, row_w = 12, panel_w - 24
+                else:
+                    row_x, row_w = ROW_X_INI, ROW_W_INI
+                details["row_box"] = {"x": row_x, "w": row_w}
                 for i in range(4):
                     y0 = top + ROW_Y0 + ROW_STEP * i
-                    counts = ink_counts(px, left + ROW_X, y0, ROW_W, ROW_H)
+                    counts = ink_counts(px, left + row_x, y0, row_w, ROW_H)
                     row_bands = bands(counts)
+                    extent = [dx for dx in range(row_w)
+                              if any(not near(px[left + row_x + dx, y0 + dy], PANEL_GRAY, 14)
+                                     for dy in range(ROW_H))]
                     details[f"row{i}_ink"] = counts
                     details[f"row{i}_bands"] = row_bands
+                    details[f"row{i}_ink_extent_px"] = (max(extent) - min(extent) + 1) if extent else 0
                     checks[f"row{i}_populated"] = sum(counts) > 20
                     checks[f"row{i}_single_line"] = len(row_bands) == 1
                     checks[f"row{i}_no_top_clip"] = (counts[0] + counts[1]) <= 8
                     checks[f"row{i}_no_bottom_clip"] = (counts[14] + counts[15]) <= 8
                 if options.reference:
-                    # The starfield backdrop animates, so the comparison is the
-                    # panel's own bounding box minus the four row boxes - every
-                    # other lobby element must sit exactly where the control put it.
+                    # Widening recenters the panel so siblings keep position up
+                    # to a parity pixel; every pixel row of the panels'
+                    # intersection (minus the union row band) must match the
+                    # control under one horizontal translation dx in +-4.
                     ref = Image.open(options.reference).convert("RGB")
                     checks["reference_size_matches"] = ref.size == (w, h)
                     rpx = ref.load()
-                    diffs = 0
-                    if ref.size == (w, h):
-                        # The rows' ink can spill past the 16px boxes when a row
-                        # wraps, so the excluded block is the four boxes grown by
-                        # a 6px apron on every side.
-                        x_lo, x_hi = left + ROW_X - 6, left + ROW_X + ROW_W + 6
-                        y_lo = top + ROW_Y0 - 6
-                        y_hi = top + ROW_Y0 + ROW_STEP * 3 + ROW_H + 6
-                        for y in range(top, bottom + 1):
-                            for x in range(left, right + 1):
-                                if not (x_lo <= x < x_hi and y_lo <= y < y_hi) \
-                                        and px[x, y] != rpx[x, y]:
-                                    diffs += 1
-                    details["outside_row_diffs"] = diffs
-                    checks["outside_rows_identical"] = diffs == 0
+                    ref_panel = find_panel(rpx, w, h) if ref.size == (w, h) else None
+                    bad_rows, dx_seen = [], {}
+                    if ref_panel:
+                        rtop, rleft, rright, rbottom = ref_panel
+                        details["reference_panel"] = {"top": rtop, "left": rleft,
+                                                      "right": rright, "bottom": rbottom,
+                                                      "width": rright - rleft + 1}
+                        # 6px margin: a shifted sample past the ref panel edge
+                        # would read its frame and alias as a fake diff.
+                        ix_lo, ix_hi = max(left, rleft) + 6, min(right, rright) - 6
+                        iy_lo, iy_hi = max(top, rtop), min(bottom, rbottom)
+                        ex_lo = min(left + row_x, rleft + ROW_X_INI) - 6
+                        ex_hi = max(left + row_x + row_w, rleft + ROW_X_INI + ROW_W_INI) + 6
+                        ey_lo = min(top, rtop) + ROW_Y0 - 6
+                        ey_hi = min(top, rtop) + ROW_Y0 + ROW_STEP * 3 + ROW_H + 6
+                        for y in range(iy_lo, iy_hi + 1):
+                            best_dx, best_n = 0, None
+                            for dx in range(-4, 5):
+                                n = sum(1 for x in range(ix_lo, ix_hi + 1)
+                                        if not (ex_lo <= x < ex_hi and ey_lo <= y < ey_hi)
+                                        and 0 <= x + dx < w and px[x, y] != rpx[x + dx, y])
+                                if best_n is None or n < best_n or (n == best_n and abs(dx) < abs(best_dx)):
+                                    best_dx, best_n = dx, n
+                            if best_n:
+                                bad_rows.append((y, best_dx, best_n))
+                            else:
+                                dx_seen[best_dx] = dx_seen.get(best_dx, 0) + 1
+                    details["shift_dx_histogram"] = dx_seen
+                    details["unmatched_pixel_rows"] = bad_rows[:20]
+                    details["unmatched_pixel_row_count"] = len(bad_rows)
+                    checks["shared_panel_shifted_identical"] = not bad_rows
     finally:
         errors = close_all(runs)
         if errors:
