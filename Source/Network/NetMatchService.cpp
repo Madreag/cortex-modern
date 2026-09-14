@@ -59,8 +59,8 @@ namespace RTE {
 		if (!iceEnabled) {
 			return "ip";
 		}
-		// A rematch re-registers under a new id while GNS holds the identity of the first one.
-		if (!boundSessionId.empty() && !rowSessionId.empty() && boundSessionId != rowSessionId) {
+		// Only the bound directory id answers on this ICE listener.
+		if (!boundSessionId.empty() && boundSessionId != rowSessionId) {
 			return "ip";
 		}
 		return hasDirectAddress ? "either" : "ice";
@@ -1233,6 +1233,8 @@ static std::string ResyncSaveName() {
 				m_DirectoryRow.seatsFree = directorySeatsFree;
 				m_DirectoryRow.joinMode = NetIceRowJoinMode(m_IceEnabled, !m_DirectoryRow.listenAddrs.empty(), m_IceBoundSessionId, m_Directory.GetSessionId());
 				advertised = m_DirectoryRow;
+				// A register receives a new id; only the existing bound row can advertise ICE.
+				advertised.joinMode = NetIceRowJoinMode(m_IceEnabled, !advertised.listenAddrs.empty(), m_IceBoundSessionId, std::string());
 			}
 			m_Directory.Advertise(advertised, directoryRunning);
 		} else if (!directoryWanted) {
