@@ -15,6 +15,7 @@
 #include "Activity.h"
 #include "Actor.h"
 #include "AudioMan.h"
+#include "CameraMan.h"
 #include "Controller.h"
 #include "GUISound.h"
 #include "MovableMan.h"
@@ -4923,10 +4924,8 @@ namespace RTE {
 					*error = "local production did not follow the owner the peers agreed on";
 					return false;
 				}
-				// The branch under test was actually reached: the leaver's team has no survivor, so both
-				// peers fell through to the hold and both were told there is none.
-				if (hostOwner != 0 || !hostGone) {
-					*error = "the leaver's ownerless team did not reach the hold branch";
+				if (hostOwner != 1 || hostGone) {
+					*error = "the departed team's AI owner=" + std::to_string(hostOwner) + " gone=" + std::to_string(hostGone);
 					return false;
 				}
 				if (host.IsHoldingSeatForReclaim() || clientB.IsHoldingSeatForReclaim()) {
@@ -10578,6 +10577,180 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		bool TestDepartedActorsGoToAI(NetActorOwnershipPolicy policy, bool dropped, bool teammate, std::string* error) {
+			EnsureSwitchTestManagers();
+			if (!CameraMan::IsConstructed()) CameraMan::Construct();
+			const std::string name = std::string("leave_ai_takeover policy=") +
+				(policy == NetActorOwnershipPolicy::TeamOwner ? "team" : "host_cpu") + (dropped ? " departure=drop" : " departure=leave") +
+				(teammate ? " teammate=1" : " teammate=0");
+			const uint16_t port = 48300;
+			const uint16_t delay = 2;
+			LoopbackTransport hostT, leaverT, survivorT;
+			NetLockstepCoordinator host, leaver, survivor;
+			const auto finish = [&](const std::string& message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				NetActorOwnership::ClearSeededOwners();
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				std::cout << "[net-lockstep-selftest] " << (message.empty() ? "PASS " : "FAIL ") << name;
+				if (!message.empty()) std::cout << ": " << message;
+				std::cout << std::endl;
+				if (error && !message.empty()) *error = message;
+				return message.empty();
+			};
+			NetActorOwnership::ClearSeededOwners();
+			if (!hostT.StartHost(port, error) || !leaverT.Connect("loopback", port, error) || !survivorT.Connect("loopback", port, error)) {
+				return finish("trio transport did not start");
+			}
+			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0x4C454156454149ULL);
+			match.peerCount = 3;
+			match.players = {{1, 0, false, "Host"}, {2, 1, false, "Leaver"}, {3, 1, false, "Survivor"}};
+			if (!teammate) match.players[2].team = Activity::TeamOne;
+			match.ownershipPolicy = policy;
+			const auto config = [&](uint8_t peer, std::map<uint8_t, NetPeerId> transports) {
+				NetLockstepConfig result;
+				result.sessionId = match.sessionId;
+				result.inputDelayFrames = delay;
+				result.timeoutMs = 4000;
+				result.localPeerId = peer;
+				result.peerCount = 3;
+				result.remoteTransportPeerIds = std::move(transports);
+				result.relayToOtherPeers = peer == 1;
+				result.frameLane = NetTransportLane::ControlReliable;
+				result.scenario = "LockstepSelfTest";
+				result.ownershipPolicy = policy == NetActorOwnershipPolicy::TeamOwner ? "team-owner" : "host-cpu-remote-human";
+				result.matchConfig = match;
+				return result;
+			};
+			if (!host.Start(hostT, config(1, {{2, 1}, {3, 2}}), error) ||
+				!leaver.Start(leaverT, config(2, {{1, 1}}), error) ||
+				!survivor.Start(survivorT, config(3, {{1, 1}}), error) ||
+				!DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor,
+					[&] { return host.IsRunning() && leaver.IsRunning() && survivor.IsRunning(); }, error)) {
+				return finish("trio did not reach Running");
+			}
+			for (uint64_t tick = 0; tick < 4; ++tick) {
+				if (!host.QueueLocalInput(tick, {MakeFrame(100, tick)}, {}, error) ||
+					!leaver.QueueLocalInput(tick, {MakeFrame(200, tick)}, {}, error) ||
+					!survivor.QueueLocalInput(tick, {MakeFrame(300, tick)}, {}, error)) return finish("initial input refused");
+			}
+			if (!DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor,
+				[&] { return host.GetStats().framesAccepted >= 4 && survivor.GetStats().framesAccepted >= 4; }, error)) {
+				return finish("initial input did not arrive");
+			}
+			if (dropped) leaverT.Stop();
+			else leaver.Leave("leave handoff selftest");
+			if (!DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor,
+				[&] { return host.GetPeerLeaveFrames().contains(2) && survivor.GetPeerLeaveFrames().contains(2); }, error, 8000)) {
+				return finish("departure did not reach both survivors");
+			}
+			const uint64_t leaveFrame = host.GetPeerLeaveFrames().at(2);
+			if (leaveFrame == 0 || survivor.GetPeerLeaveFrames().at(2) != leaveFrame) return finish("leave frames disagree");
+			for (uint64_t tick = 4; tick <= leaveFrame + 1; ++tick) {
+				if (!host.QueueLocalInput(tick, {MakeFrame(100, tick)}, {}, error) ||
+					!survivor.QueueLocalInput(tick, {MakeFrame(300, tick)}, {}, error)) return finish("survivor input refused");
+			}
+			std::array<std::map<uint64_t, NetLockstepReadyFrame>, 2> committed;
+			if (!DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor, [&] {
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) committed[0][ready.frame] = ready;
+				while (survivor.PopReadyFrame(ready)) committed[1][ready.frame] = ready;
+				return committed[0].contains(leaveFrame + 1) && committed[1].contains(leaveFrame + 1);
+			}, error)) return finish("survivors did not commit leaveFrame+1");
+
+			std::unique_ptr<Activity> activity(new Activity());
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			std::deque<Actor*> actors;
+			for (int index = 0; index < 4; ++index) {
+				Actor* actor = MakeSwitchTestActor(Activity::TeamTwo);
+				if (!actor) return finish("actor creation failed");
+				AddSwitchTestActor(actor);
+				actors.push_back(actor);
+				if (index == 2 && !teammate) actor->SetTeam(Activity::TeamOne);
+				NetActorOwnership::SeedOwner(actor->GetUniqueID(), index == 0 ? 2 : (index == 2 ? 3 : 1), static_cast<uint8_t>(actor->GetTeam()));
+			}
+			bool passed = true;
+			std::array<std::array<std::string, 4>, 2> states;
+			std::array<NetLockstepCoordinator*, 2> peers{&host, &survivor};
+			for (size_t view = 0; view < peers.size(); ++view) {
+				ScenarioRunner::SetLockstepCoordinator(peers[view]);
+				ScenarioRunner::SetLockstepControlOverride(actors[1]->GetUniqueID(), 2);
+				ScenarioRunner::SetLockstepControlOverride(actors[2]->GetUniqueID(), 3);
+				for (size_t index = 0; index < actors.size(); ++index) {
+					Controller& controller = *actors[index]->GetController();
+					controller.ResetLocalInputState(view == 1 && index == 2 ? Controller::CIM_PLAYER : Controller::CIM_AI, Players::PlayerOne);
+					controller.ApplyWireMode(index < 3 ? Controller::CIM_PLAYER : Controller::CIM_AI, Players::PlayerOne);
+					controller.SetDisabled(index == 1);
+				}
+				for (const auto& [frame, ready]: committed[view]) {
+					if (frame > leaveFrame + 1) break;
+					ApplyLockstepLeaveHandoffs(ready, actors);
+					if (frame == leaveFrame - 1) {
+						passed &= actors[0]->IsPlayerControlled() && actors[1]->IsPlayerControlled() && ready.departedPeerIds.empty();
+					}
+					if (frame != leaveFrame && frame != leaveFrame + 1) continue;
+					for (size_t index = 0; index < actors.size(); ++index) {
+						Actor& actor = *actors[index];
+						Controller& controller = *actor.GetController();
+						const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(actor.GetUniqueID(), actor.GetTeam(), !actor.IsPlayerControlled());
+						const auto wantedMode = index == 2 ? Controller::CIM_PLAYER : Controller::CIM_AI;
+						const uint8_t wantedOwner = index == 2 || (index == 0 && teammate) ? 3 : 1;
+						const bool ok = controller.GetInputMode() == wantedMode && !controller.IsDisabled() &&
+							actor.IsPlayerControlled() == (index == 2) && owner == wantedOwner &&
+							(index >= 2 || controller.GetSeatMode() == Controller::CIM_AI);
+						passed &= ok;
+						states[view][index] = ControlTuple(actor, owner);
+						std::cout << "[net-lockstep-selftest] " << (ok ? "PASS " : "FAIL ") << name
+							<< " peer=" << static_cast<int>(peers[view]->GetConfig().localPeerId) << " frame=" << frame
+							<< " leave_frame=" << leaveFrame << " actor=" << index << " uid=" << actor.GetUniqueID()
+							<< " " << states[view][index] << " player_controlled=" << actor.IsPlayerControlled() << std::endl;
+						if (index < 2) {
+							const uint8_t classified = NetActorOwnership::ResolveOwnerPeer(match, {-(static_cast<int64_t>(index) + 1), Activity::TeamTwo, !actor.IsPlayerControlled()});
+							passed &= classified == (policy == NetActorOwnershipPolicy::HostCpuRemoteHuman ? 1 : 2);
+						}
+					}
+				}
+			}
+			passed &= states[0] == states[1];
+			if (dropped) {
+				host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, 20000);
+				if (!DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor, [&] {
+					return host.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired &&
+						survivor.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired;
+				}, error)) return finish("expiry did not reach both survivors");
+				passed &= host.IsRunning() && survivor.IsRunning();
+			}
+
+			NetGamePlayerBindings bindings;
+			for (int player = 0; player < 2; ++player) {
+				bindings.players[player].active = true;
+				bindings.players[player].human = true;
+				bindings.players[player].team = Activity::TeamTwo;
+				bindings.players[player].controlledUID = actors[player]->GetUniqueID();
+			}
+			ScenarioRunner::SetLockstepCoordinator(&leaver);
+			if (!g_ActivityMan.GetActivity()->ApplyNetPlayerBindings(bindings)) return finish("returning bindings refused");
+			std::vector<ControllerFrame> reseated;
+			for (size_t index = 0; index < actors.size(); ++index) {
+				passed &= actors[index]->GetController()->GetSeatMode() == (index < 2 ? Controller::CIM_PLAYER : Controller::CIM_AI);
+				if (index < 2) {
+					passed &= g_ActivityMan.GetActivity()->GetControlledActor(static_cast<int>(index)) == actors[index];
+					reseated.push_back(ControllerFrameCodec::Snapshot(actors[index]->GetUniqueID(), *actors[index]->GetController()));
+				}
+			}
+			for (NetLockstepCoordinator* peer: peers) {
+				ScenarioRunner::SetLockstepCoordinator(peer);
+				for (size_t index = 0; index < reseated.size(); ++index) {
+					actors[index]->GetController()->ApplyWireMode(Controller::CIM_AI, Players::NoPlayer);
+					if (!MovableMan::ApplyLockstepFrameToActor(*actors[index], reseated[index], leaveFrame + 2, error)) return finish("reseated frame refused");
+					passed &= actors[index]->IsPlayerControlled() && !actors[index]->GetController()->IsDisabled() &&
+						actors[index]->GetController()->GetPlayer() == static_cast<int>(index);
+				}
+				passed &= actors[2]->IsPlayerControlled() && !actors[3]->IsPlayerControlled();
+			}
+			return finish(passed ? "" : "departed actor state or exact reseat differs; actor rows above contain observed values");
+		}
+
 		bool TestClaimedActorReturnsToCpuAfterTheClaimantExpires(std::string* error) {
 			const char* name = "claimed_actor_returns_to_cpu_after_the_claimant_expires";
 			EnsureSwitchTestManagers();
@@ -10851,6 +11024,13 @@ namespace RTE {
 		}
 
 		std::string error;
+		bool leavePassed = true;
+		for (auto policy: {NetActorOwnershipPolicy::TeamOwner, NetActorOwnershipPolicy::HostCpuRemoteHuman}) {
+			for (bool dropped: {false, true}) {
+				for (bool teammate: {false, true}) leavePassed &= TestDepartedActorsGoToAI(policy, dropped, teammate, &error);
+			}
+		}
+		if (!leavePassed) return fail(error);
 		if (!TestRestoredControllerKeepsItsProductionBaseline(&error) ||
 		    !TestProducingPassSurvivesAnOverride(&error) ||
 		    !TestSoundIdentityPinAgreesAcrossHistories(&error) ||

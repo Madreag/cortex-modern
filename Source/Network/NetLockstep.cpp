@@ -3486,6 +3486,9 @@ namespace RTE {
 		}
 		outFrame = std::move(m_ReadyFrames.front());
 		m_ReadyFrames.pop_front();
+		for (const auto& [peerId, leaveFrame]: m_PeerLeaveFrames) {
+			if (leaveFrame <= outFrame.frame) outFrame.departedPeerIds.push_back(peerId);
+		}
 		return true;
 	}
 
