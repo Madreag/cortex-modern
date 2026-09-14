@@ -52,6 +52,8 @@ void PauseMenuGUI::Clear() {
 }
 
 void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
+	m_AutomationInput = guiInput->CreateAutomationInput();
+	if (m_AutomationInput) guiInput = m_AutomationInput.get();
 	m_GUIControlManager = std::make_unique<GUIControlManager>();
 	RTEAssert(m_GUIControlManager->Create(guiScreen, guiInput, "Base.rte/GUIs/Skins/Menus", "MainMenuScreenSkin.ini"), "Failed to create GUI Control Manager and load it from Base.rte/GUIs/Skins/Menus/MainMenuScreenSkin.ini");
 	m_GUIControlManager->Load("Base.rte/GUIs/PauseMenuGUI.ini");
@@ -248,16 +250,18 @@ bool PauseMenuGUI::HandleInputEvents() {
 }
 
 bool PauseMenuGUI::AutomationPostCommand(const std::string& controlName) {
+	if (m_ActiveMenuScreen == PauseMenuScreen::SettingsScreen) return m_SettingsMenu->AutomationPostCommand(controlName);
 	if (!AutomationControlEnabled(controlName)) return false;
 	m_PendingAutomationCommand = controlName;
 	return true;
 }
 
 bool PauseMenuGUI::AutomationControlExists(const std::string& controlName) const {
-	return m_GUIControlManager->GetControl(controlName) != nullptr;
+	return AutomationManager() && AutomationManager()->GetControl(controlName) != nullptr;
 }
 
 bool PauseMenuGUI::AutomationControlEnabled(const std::string& controlName) const {
+	if (m_ActiveMenuScreen == PauseMenuScreen::SettingsScreen) return MenuAutomation::Enabled(AutomationManager()->GetControl(controlName));
 	GUIControl* control = m_GUIControlManager->GetControl(controlName);
 	if (!control || m_ActiveMenuScreen != PauseMenuScreen::MainScreen || m_ActiveDialogBox) return false;
 	for (GUIControl* node = control; node; node = node->GetParent()) {
@@ -267,10 +271,16 @@ bool PauseMenuGUI::AutomationControlEnabled(const std::string& controlName) cons
 }
 
 bool PauseMenuGUI::AutomationLabelText(const std::string& controlName, std::string& text) const {
-	const auto* button = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl(controlName));
-	if (!button) return false;
-	text = button->GetText();
-	return true;
+	return AutomationManager() && MenuAutomation::Text(AutomationManager()->GetControl(controlName), text);
+}
+
+GUIControlManager* PauseMenuGUI::AutomationManager() const {
+	if (m_ActiveMenuScreen == PauseMenuScreen::SettingsScreen) return m_SettingsMenu->AutomationManager();
+	return m_ActiveMenuScreen == PauseMenuScreen::MainScreen ? m_GUIControlManager.get() : nullptr;
+}
+
+std::string PauseMenuGUI::AutomationActiveScreenName() const {
+	return m_ActiveMenuScreen == PauseMenuScreen::MainScreen ? "Pause" : m_ActiveMenuScreen == PauseMenuScreen::SettingsScreen ? "PauseSettings" : "PauseOther";
 }
 
 void PauseMenuGUI::UpdateHoveredButton(const GUIButton* hoveredButton) {

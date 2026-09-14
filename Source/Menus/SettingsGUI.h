@@ -8,6 +8,7 @@
 
 #include <array>
 #include <memory>
+#include <iosfwd>
 
 namespace RTE {
 
@@ -16,6 +17,16 @@ namespace RTE {
 	class GUIControlManager;
 	class GUIButton;
 	class GUITab;
+	class GUIControl;
+
+	namespace MenuAutomation {
+		bool Visible(GUIControl* control);
+		bool Enabled(GUIControl* control);
+		bool Text(GUIControl* control, std::string& text);
+		bool Handles(const std::string& command);
+		bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation);
+		void Click(GUIControlManager* manager, const std::string& control);
+	}
 
 	/// Handling for the settings menu screen composition and sub-menu interaction.
 	class SettingsGUI {
@@ -48,6 +59,9 @@ namespace RTE {
 
 		/// Draws the SettingsGUI to the screen.
 		void Draw() const;
+		/// Routes automation to the controls owned by the active settings page.
+		GUIControlManager* AutomationManager() const { return m_GUIControlManager.get(); }
+		bool AutomationPostCommand(const std::string& name);
 #pragma endregion
 
 	private:
