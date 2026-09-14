@@ -77,6 +77,9 @@ namespace RTE {
 		/// @return Whether the control was found.
 		bool AutomationActivateControl(const std::string& controlName);
 
+		/// Names a clickable control; its Command is posted after the next GUI Update.
+		bool AutomationPostCommand(const std::string& controlName);
+
 		/// Sets a text box's text by control name.
 		bool AutomationSetText(const std::string& controlName, const std::string& text);
 
@@ -242,6 +245,7 @@ namespace RTE {
 		uint32_t m_PortMapSerialShown; //!< The last lobby port-map serial this panel rendered.
 		MultiplayerSubScreen m_MultiplayerSubScreen;
 		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
+		std::string m_PendingAutomationCommand; //!< Control waiting to raise Command after Update clears the queue.
 		NetMatchServiceRequest m_MultiplayerJoinRequest; //!< The join the player last asked for, so an application reuses it.
 		bool m_MultiplayerApplyOffered = false;          //!< A join of this host may still be answered by applying (§9b).
 		GUICollectionBox* m_CreditsScrollPanel;
@@ -315,6 +319,9 @@ namespace RTE {
 		/// Handles the player interaction with the MainMenuGUI GUI elements.
 		/// @return Whether the player requested to return to the main menu from one of the sub-menus.
 		bool HandleInputEvents();
+
+		/// Posts a pending menu-script Command after Update has cleared the queue.
+		void PostPendingAutomationCommand();
 
 		/// Handles the player interaction with the main screen GUI elements.
 		/// @param guiEventControl Pointer to the GUI element that the player interacted with.

@@ -1418,6 +1418,12 @@ void ProcessMenuScript() {
 		const bool ok = menu->AutomationActivateControl(control);
 		std::cout << "[menu-script] activate " << control << " ok=" << ok << std::endl;
 		if (!ok) { return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control); }
+	} else if (cmd == "post_command") {
+		std::string control;
+		iss >> control;
+		const bool ok = menu->AutomationPostCommand(control);
+		std::cout << "[menu-script] post_command " << control << " ok=" << ok << std::endl;
+		if (!ok) { return MenuScriptFail("post_command failed (control missing, disabled, or hidden): " + control); }
 	} else if (cmd == "assert_control") {
 		std::string control;
 		iss >> control;
