@@ -2,9 +2,11 @@
 #include "CheckpointArchive.h"
 #include "OwnedMovableObjects.h"
 #include "SoundSimulation.h"
+#include "FloatText.h"
 
 #include <bit>
 #include <cstdlib>
+#include <stdexcept>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -752,10 +754,16 @@ void MovableObject::ReadCustomValueProperty(Reader& reader) {
 	std::string customKey = reader.ReadPropName();
 	std::string customValue = reader.ReadPropValue();
 	if (customValueType == "NumberValue") {
-		try {
-			SetNumberValue(customKey, std::stod(customValue));
-		} catch (const std::invalid_argument) {
+		double value = 0;
+		// std::stod read this through the global locale; its report on a bad value and its throw on a huge one are kept.
+		const std::from_chars_result parsed = ParseNumberExact(customValue.data(), customValue.data() + customValue.size(), value);
+		if (parsed.ec == std::errc::result_out_of_range) {
+			throw std::out_of_range("SetNumberValue is out of range");
+		}
+		if (parsed.ec != std::errc()) {
 			reader.ReportError("Tried to read a non-number value for SetNumberValue.");
+		} else {
+			SetNumberValue(customKey, value);
 		}
 	} else if (customValueType == "StringValue") {
 		SetStringValue(customKey, customValue);

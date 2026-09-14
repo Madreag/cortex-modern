@@ -1,5 +1,6 @@
 #include "Reader.h"
 #include "ConsoleMan.h"
+#include "FloatText.h"
 #include "PresetMan.h"
 #include "SettingsMan.h"
 #include "System.h"
@@ -12,6 +13,99 @@
 #include <stdexcept>
 
 using namespace RTE;
+
+namespace {
+	bool IsNumberDigit(int character) { return character >= '0' && character <= '9'; }
+
+	bool IsHexNumberDigit(int character) { return IsNumberDigit(character) || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F'); }
+
+	/// Takes the longest prefix of the stream that std::strtod reads as a number, leaving what follows it
+	/// for the next read, the way the stream's own extraction did. Infinity and NaN are not spellings it
+	/// took, so they are not taken here either.
+	std::string TakeNumberToken(std::istream& stream) {
+		std::string token;
+		const auto peek = [&stream] { return stream.peek(); };
+		const auto take = [&stream, &token] { token.push_back(static_cast<char>(stream.get())); };
+		if (peek() == '+' || peek() == '-') {
+			take();
+		}
+		bool hexadecimal = false;
+		int digits = 0;
+		if (peek() == '0') {
+			take();
+			if (peek() == 'x' || peek() == 'X') {
+				take();
+				hexadecimal = true;
+			} else {
+				++digits;
+			}
+		}
+		const auto takeDigits = [&] {
+			while (hexadecimal ? IsHexNumberDigit(peek()) : IsNumberDigit(peek())) {
+				take();
+				++digits;
+			}
+		};
+		takeDigits();
+		if (peek() == '.') {
+			take();
+			takeDigits();
+		}
+		if (digits == 0) {
+			return token;
+		}
+		if (peek() == (hexadecimal ? 'p' : 'e') || peek() == (hexadecimal ? 'P' : 'E')) {
+			const std::streampos mark = stream.tellg();
+			const size_t mantissa = token.size();
+			take();
+			if (peek() == '+' || peek() == '-') {
+				take();
+			}
+			int exponentDigits = 0;
+			while (IsNumberDigit(peek())) {
+				take();
+				++exponentDigits;
+			}
+			if (exponentDigits == 0 && mark != std::streampos(-1)) {
+				token.resize(mantissa);
+				stream.clear();
+				stream.seekg(mark);
+			}
+		}
+		return token;
+	}
+
+	template <class FloatType> void ReadNumberFromStream(std::istream& stream, FloatType& value) {
+		const std::string token = TakeNumberToken(stream);
+		FloatType parsed = 0;
+		const std::from_chars_result result = ParseStreamNumber(token.data(), token.data() + token.size(), parsed);
+		if (result.ec == std::errc::result_out_of_range && result.ptr == token.data() + token.size()) {
+			// Measured on the old build: the stream stored strtod's own answer here, an infinity or zero.
+			value = parsed;
+			stream.setstate(std::ios::failbit);
+			return;
+		}
+		if (result.ec != std::errc() || result.ptr != token.data() + token.size()) {
+			// The stream's extraction zeroed the target and set failbit when it could not read a number.
+			value = 0;
+			stream.setstate(std::ios::failbit);
+			return;
+		}
+		value = parsed;
+	}
+} // namespace
+
+void Reader::ReadFloating(float& var) {
+	if constexpr (Reader::c_ReadFloatsAsFloats) {
+		ReadNumberFromStream(*m_Stream, var);
+	} else {
+		double wide = 0;
+		ReadNumberFromStream(*m_Stream, wide);
+		var = static_cast<float>(wide);
+	}
+}
+
+void Reader::ReadFloating(double& var) { ReadNumberFromStream(*m_Stream, var); }
 
 void Reader::Clear() {
 	m_Stream = nullptr;

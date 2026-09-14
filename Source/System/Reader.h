@@ -211,18 +211,19 @@ namespace RTE {
 			*m_Stream >> var;
 			return *this;
 		}
-		// Yeah, this is dumb - read as double and cast.
-		// This is because, for whatever fucking reason, iostream can save out floats at a precision that it's then unable to read...
+		/// True: a float is read as a float. False: the text is parsed exactly as a double and narrowed,
+		/// which is the shape the stream had and rounds twice. True is live.
+		static constexpr bool c_ReadFloatsAsFloats = true;
+
+		// The stream's own extraction took its decimal point from the global locale; this one does not.
 		Reader& operator>>(float& var) {
 			DiscardEmptySpace();
-			double var2;
-			*m_Stream >> var2;
-			var = static_cast<float>(var2);
+			ReadFloating(var);
 			return *this;
 		}
 		Reader& operator>>(double& var) {
 			DiscardEmptySpace();
-			*m_Stream >> var;
+			ReadFloating(var);
 			return *this;
 		}
 		Reader& operator>>(std::string& var) {
@@ -232,6 +233,12 @@ namespace RTE {
 #pragma endregion
 
 	protected:
+		/// Reads one number off the stream in the C locale, taking only the characters that belong to it.
+		void ReadFloating(float& var);
+
+		/// Reads one number off the stream in the C locale, taking only the characters that belong to it.
+		void ReadFloating(double& var);
+
 		/// A struct containing information from the currently used stream.
 		struct StreamInfo {
 			/// Constructor method used to instantiate a StreamInfo object in system memory.
