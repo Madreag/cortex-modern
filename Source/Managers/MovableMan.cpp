@@ -814,6 +814,7 @@ void MovableMan::ApplyLockstepControlHandoffToActor(Actor& actor, bool seated) {
 	const Controller::InputMode handedMode = seated ? Controller::CIM_PLAYER : Controller::CIM_AI;
 	const Controller::InputMode previousMode = controller.GetInputMode();
 	const int previousPlayer = controller.GetPlayer();
+	if (!seated) controller.ResetLocalInputState();
 	if (previousMode == handedMode) {
 		return;
 	}
@@ -827,6 +828,9 @@ void ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const s
 	for (Actor* actor: actors) {
 		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
 		const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
+		if (actor->IsPlayerControlled() && std::find(readyFrame.departedPeerIds.begin(), readyFrame.departedPeerIds.end(), claimant) != readyFrame.departedPeerIds.end()) {
+			MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
+		}
 		if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame)) {
 			const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
 			if (seeded != 0 && ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), true) == seeded) {
@@ -918,6 +922,7 @@ bool MovableMan::RunLockstepPausedTick() {
 		ScenarioRunner::SetControllerReplayError("tick " + std::to_string(simTick) + " paused wait: " + error);
 		return false;
 	}
+	ApplyLockstepLeaveHandoffs(readyFrame, m_Actors);
 	// Only the game commands apply on a paused tick; the sim itself holds still.
 	g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 	CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
