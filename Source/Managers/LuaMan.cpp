@@ -7902,7 +7902,6 @@ static std::vector<uint64_t> HashScriptObjectGraphs(LuaStateWrapper& master, Lua
 
 std::unordered_set<const MovableObject*> LuaMan::s_PreviewClones;
 std::unordered_set<long> LuaMan::s_PreviewFrozenUIDs;
-std::vector<std::pair<LuaStateWrapper*, std::string>> LuaMan::s_PreviewGlobalSnapshots;
 static std::vector<std::pair<long, LuaStateWrapper*>> s_PreviewCloneBindings;
 
 namespace {
@@ -7998,6 +7997,71 @@ namespace {
 			lua_setmetatable(L, copy);
 			lua_pop(L, 1);
 		}
+	}
+
+	// The key/value set of one table, for the preview fence; nested tables are not followed. The record table is
+	// reused across previews so a fence costs no allocation once a state has run one.
+	void FillShallowCopy(lua_State* L, int src, int copy) {
+		src = AbsoluteLuaIndex(L, src);
+		copy = AbsoluteLuaIndex(L, copy);
+		lua_pushnil(L);
+		while (lua_next(L, copy) != 0) {
+			lua_pop(L, 1);
+			lua_pushvalue(L, -1);
+			lua_pushnil(L);
+			lua_rawset(L, copy);
+		}
+		lua_pushnil(L);
+		while (lua_next(L, src) != 0) {
+			lua_pushvalue(L, -2);
+			lua_pushvalue(L, -2);
+			lua_rawset(L, copy);
+			lua_pop(L, 1);
+		}
+	}
+
+	// Puts a table back the way a PushShallowCopy record found it: added keys go, changed and deleted values come back.
+	int RestoreFromShallowCopy(lua_State* L, int live, int saved) {
+		live = AbsoluteLuaIndex(L, live);
+		saved = AbsoluteLuaIndex(L, saved);
+		lua_newtable(L);
+		const int pending = lua_gettop(L);
+		int count = 0;
+		lua_pushnil(L);
+		while (lua_next(L, live) != 0) {
+			lua_pushvalue(L, -2);
+			lua_rawget(L, saved);
+			const bool differs = lua_isnil(L, -1) || !lua_rawequal(L, -1, -2);
+			lua_pop(L, 1);
+			if (differs) {
+				lua_pushvalue(L, -2);
+				lua_rawseti(L, pending, ++count);
+			}
+			lua_pop(L, 1);
+		}
+		for (int index = 1; index <= count; ++index) {
+			lua_rawgeti(L, pending, index);
+			lua_pushvalue(L, -1);
+			lua_rawget(L, saved);
+			lua_rawset(L, live);
+		}
+		int changes = count;
+		lua_pushnil(L);
+		while (lua_next(L, saved) != 0) {
+			lua_pushvalue(L, -2);
+			lua_rawget(L, live);
+			const bool gone = lua_isnil(L, -1);
+			lua_pop(L, 1);
+			if (gone) {
+				lua_pushvalue(L, -2);
+				lua_pushvalue(L, -2);
+				lua_rawset(L, live);
+				++changes;
+			}
+			lua_pop(L, 1);
+		}
+		lua_pop(L, 1);
+		return changes;
 	}
 
 	std::unordered_map<long, MovableObject*> s_PreviewRootByUID;
@@ -8211,6 +8275,84 @@ bool LuaStateWrapper::RestorePreviewGlobals(const std::string& text, std::vector
 	return true;
 }
 
+void LuaStateWrapper::CapturePreviewGlobalFence() {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	const int top = lua_gettop(m_State);
+	lua_getfield(m_State, LUA_REGISTRYINDEX, "CortexPreviewGlobalFence");
+	if (!lua_istable(m_State, -1)) {
+		lua_pop(m_State, 1);
+		lua_newtable(m_State);
+		for (const char* field: {"globals", "loaded", "required"}) {
+			lua_newtable(m_State);
+			lua_setfield(m_State, -2, field);
+		}
+		lua_pushvalue(m_State, -1);
+		lua_setfield(m_State, LUA_REGISTRYINDEX, "CortexPreviewGlobalFence");
+	}
+	const int fence = lua_gettop(m_State);
+	lua_getfield(m_State, fence, "globals");
+	lua_pushvalue(m_State, LUA_GLOBALSINDEX);
+	FillShallowCopy(m_State, -1, -2);
+	lua_pop(m_State, 2);
+	// A module the preview requires must not stay loaded: the next canonical require has to run the chunk itself.
+	lua_getfield(m_State, fence, "loaded");
+	lua_getglobal(m_State, "package");
+	if (lua_istable(m_State, -1)) {
+		lua_getfield(m_State, -1, "loaded");
+		if (lua_istable(m_State, -1)) {
+			FillShallowCopy(m_State, -1, -3);
+		}
+		lua_pop(m_State, 1);
+	}
+	lua_pop(m_State, 2);
+	lua_getfield(m_State, fence, "required");
+	lua_getglobal(m_State, "_RequiredPackages");
+	if (lua_istable(m_State, -1)) {
+		FillShallowCopy(m_State, -1, -2);
+	}
+	lua_pop(m_State, 2);
+	m_PreviewGlobalFenceArmed = true;
+	lua_settop(m_State, top);
+}
+
+int LuaStateWrapper::ReleasePreviewGlobalFence() {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	if (!m_PreviewGlobalFenceArmed) {
+		return 0;
+	}
+	m_PreviewGlobalFenceArmed = false;
+	const int top = lua_gettop(m_State);
+	lua_getfield(m_State, LUA_REGISTRYINDEX, "CortexPreviewGlobalFence");
+	if (!lua_istable(m_State, -1)) {
+		lua_settop(m_State, top);
+		return 0;
+	}
+	const int fence = lua_gettop(m_State);
+	int changes = 0;
+	lua_getfield(m_State, fence, "globals");
+	lua_pushvalue(m_State, LUA_GLOBALSINDEX);
+	changes += RestoreFromShallowCopy(m_State, -1, -2);
+	lua_pop(m_State, 2);
+	lua_getfield(m_State, fence, "loaded");
+	lua_getglobal(m_State, "package");
+	if (lua_istable(m_State, -1)) {
+		lua_getfield(m_State, -1, "loaded");
+		if (lua_istable(m_State, -1)) {
+			changes += RestoreFromShallowCopy(m_State, -1, -3);
+		}
+		lua_pop(m_State, 1);
+	}
+	lua_pop(m_State, 2);
+	lua_getfield(m_State, fence, "required");
+	lua_getglobal(m_State, "_RequiredPackages");
+	if (lua_istable(m_State, -1)) {
+		changes += RestoreFromShallowCopy(m_State, -1, -2);
+	}
+	lua_pop(m_State, 2);
+	lua_settop(m_State, top);
+	return changes;
+}
+
 bool LuaStateWrapper::BindPreviewScriptObject(MovableObject* clone, bool sharedSlot) {
 	if (!clone) {
 		return false;
@@ -8351,7 +8493,6 @@ std::string LuaMan::PreviewScriptKey(const MovableObject* mo) {
 void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& roots, bool sharedSlot) {
 	DropPreviewSoundCopies();
 	s_PreviewFrozenUIDs.clear();
-	s_PreviewGlobalSnapshots.clear();
 	if (!sharedSlot) {
 		for (const MovableObject* root: roots) {
 			WalkOwned(root, [](MovableObject* mo) {
@@ -8367,19 +8508,26 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 			});
 		}
 	}
-	static const bool snapshotGlobals = [] {
-		const char* value = std::getenv("CC_PREVIEW_GLOBALS_SNAPSHOT");
-		return value && value[0] == '1' && value[1] == '\0';
-	}();
-	if (snapshotGlobals) {
-		ForEachLuaState([](LuaStateWrapper& state) {
-			std::string text;
-			std::vector<std::string> problems;
-			if (state.SnapshotPreviewGlobals(text, problems) && !text.empty()) {
-				s_PreviewGlobalSnapshots.emplace_back(&state, std::move(text));
-			}
-		});
+	if (PreviewGlobalFenceEnabled()) {
+		// Only the states a preview runs code in: the clones script in their originals' states, and the master runs the global scripts.
+		g_LuaMan.GetMasterScriptState().CapturePreviewGlobalFence();
+		for (const MovableObject* root: roots) {
+			WalkOwned(root, [](MovableObject* mo) {
+				LuaStateWrapper* state = mo->GetLuaState();
+				if (state && !state->PreviewGlobalFenceArmed()) {
+					state->CapturePreviewGlobalFence();
+				}
+			});
+		}
 	}
+}
+
+bool LuaMan::PreviewGlobalFenceEnabled() {
+	static const bool enabled = [] {
+		const char* value = std::getenv("CC_PREVIEW_GLOBALS_FENCE");
+		return !(value && value[0] == '0' && value[1] == '\0');
+	}();
+	return enabled;
 }
 
 void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot) {
@@ -8440,7 +8588,6 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 }
 
 void LuaMan::EndPreviewScripts() {
-	s_PreviewGlobalSnapshots.clear();
 	std::unordered_set<long> dropped;
 	for (const auto& [uid, state]: s_PreviewCloneBindings) {
 		if (!state || !dropped.insert(uid).second) {
@@ -8453,8 +8600,15 @@ void LuaMan::EndPreviewScripts() {
 	s_PreviewRootByUID.clear();
 	s_PreviewPartByUID.clear();
 	s_PreviewFrozenUIDs.clear();
-	s_PreviewGlobalSnapshots.clear();
 	s_PreviewSharedSlot = false;
 	s_RunningPreviewHook = false;
 	DropPreviewSoundCopies();
+	// Last, so a global the drops themselves make is undone too: a preview leaves every state's globals as it found them.
+	if (PreviewGlobalFenceEnabled()) {
+		ForEachLuaState([](LuaStateWrapper& state) { s_PreviewGlobalsUndone += state.ReleasePreviewGlobalFence(); });
+		if (s_PreviewGlobalsUndone > 0 && !s_PreviewGlobalsReported) {
+			s_PreviewGlobalsReported = true;
+			std::cout << "[preview-globals] undone=" << s_PreviewGlobalsUndone << " at the first preview that wrote one" << std::endl;
+		}
+	}
 }

@@ -182,6 +182,14 @@ namespace RTE {
 		bool CopyScriptInstanceToPreviewHold(long uniqueID, std::vector<std::string>& problems);
 		bool SnapshotPreviewGlobals(std::string& text, std::vector<std::string>& problems);
 		bool RestorePreviewGlobals(const std::string& text, std::vector<std::string>& problems);
+
+		/// Whether this state's globals are recorded for the running preview.
+		bool PreviewGlobalFenceArmed() const { return m_PreviewGlobalFenceArmed; }
+		/// Records this state's globals and require caches so a preview's writes to them can be undone.
+		void CapturePreviewGlobalFence();
+		/// Puts them back as the fence found them: keys the preview added go, values it changed or removed come back.
+		/// @return How many entries were put back.
+		int ReleasePreviewGlobalFence();
 		bool BindPreviewScriptObject(MovableObject* clone, bool sharedSlot);
 		bool RemapPreviewHoldReferences(long uniqueID, std::string& freezeClass);
 		void DropPreviewScriptObject(long uniqueID);
@@ -358,6 +366,7 @@ namespace RTE {
 
 		lua_State* m_State;
 		bool m_ScriptGraphHelperLoaded = false; //!< Whether the script graph codec has been installed in this state.
+		bool m_PreviewGlobalFenceArmed = false; //!< Whether a preview's record of this state's globals is waiting to be put back.
 		Entity* m_TempEntity; //!< Temporary holder for an Entity object that we want to pass into the Lua state without fuss. Lets you export objects to lua easily.
 		std::vector<Entity*> m_TempEntityVector; //!< Temporary holder for a vector of Entities that we want to pass into the Lua state without a fuss. Usually used to pass arguments to special Lua functions.
 		std::string m_LastError; //!< Description of the last error that occurred in the script execution.
@@ -422,6 +431,10 @@ namespace RTE {
 		};
 		static std::string PreviewScriptKey(const MovableObject* mo);
 		static uint64_t PreviewCodecFallbackCount() { return s_PreviewCodecFallbacks; }
+		/// Whether previews fence the Lua states' globals; CC_PREVIEW_GLOBALS_FENCE=0 turns the fence off.
+		static bool PreviewGlobalFenceEnabled();
+		/// How many global entries previews have put back so far.
+		static uint64_t PreviewGlobalsUndoneCount() { return s_PreviewGlobalsUndone; }
 #pragma endregion
 
 #pragma region Destruction
@@ -672,7 +685,8 @@ namespace RTE {
 		static inline uint64_t s_PreviewCodecFallbacks = 0;
 		static std::unordered_set<const MovableObject*> s_PreviewClones;
 		static std::unordered_set<long> s_PreviewFrozenUIDs;
-		static std::vector<std::pair<LuaStateWrapper*, std::string>> s_PreviewGlobalSnapshots;
+		static inline uint64_t s_PreviewGlobalsUndone = 0;
+		static inline bool s_PreviewGlobalsReported = false;
 	};
 
 	/// RAII redirect of the C++ sim-RNG free functions and Lua math.random to one
