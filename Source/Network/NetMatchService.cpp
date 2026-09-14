@@ -344,6 +344,7 @@ static std::string ResyncSaveName() {
 			m_LocalTeam = request.dedicated ? Activity::NoTeam : (request.host ? 0 : 1);
 			m_Dedicated = request.dedicated;
 			m_HumanSeats = static_cast<int>(std::count_if(matchConfig.players.begin(), matchConfig.players.end(), [](const auto& slot) { return !slot.cpu; }));
+			m_MatchConfig = matchConfig;
 			m_InputDelayText.clear();
 			m_ResyncOnDesync = request.resyncOnDesync;
 			m_PendingResyncLoad.clear();
@@ -1031,6 +1032,7 @@ static std::string ResyncSaveName() {
 			m_LocalTeam = -1;
 			m_Dedicated = false;
 			m_HumanSeats = 0;
+			m_MatchConfig = {};
 			m_ResyncOnDesync = false;
 			m_PendingResyncLoad.clear();
 			m_PendingResyncState.reset();
@@ -2060,6 +2062,7 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		bool dedicated = m_Dedicated;
 		int humanSeats = m_HumanSeats;
+		NetMatchConfig roster = m_MatchConfig;
 		if (m_Runner) {
 			// Once the lobby round adopts the host's roster it, not the request, is the truth.
 			const NetMatchConfig& adopted = m_Runner->GetMatchConfig();
@@ -2068,6 +2071,7 @@ static std::string ResyncSaveName() {
 			for (const NetMatchPlayerSlot& slot : adopted.players) {
 				humanSeats += slot.cpu ? 0 : 1;
 			}
+			roster = adopted;
 		}
 		json report{
 			{"pending_lobby_events", m_PendingLobbyEvents.size()},
@@ -2082,6 +2086,8 @@ static std::string ResyncSaveName() {
 			{"local_team", m_LocalTeam},
 			{"dedicated", dedicated},
 			{"human_seats", humanSeats},
+			// The seated roster, CPU flags and all, so a gate reads who plays from the report alone.
+			{"match_config", roster.players.empty() ? json::object() : json::parse(NetMatchConfigUtil::BuildReportJson(roster))},
 		};
 		json reconnect{
 			{"admission_enabled", s_AdmissionEnabled},
@@ -2577,7 +2583,8 @@ static std::string ResyncSaveName() {
 		}
 		runnerConfig.nowMs = [this] { return AdmissionNowMs(); };
 
-		AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest);
+		// A refused roster leaves matchConfig unauthored; nothing is armed on it.
+		if (started) AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest);
 
 		if (started && iceWanted) {
 			started = SetUpIceTransport(request, manifest, *mux, runnerConfig.sessionConfig, runnerConfig.joinAddress, &error);
@@ -2905,6 +2912,8 @@ static std::string ResyncSaveName() {
 		if (mode == NetMatchMode::PvPvE && humanCount == Teams::MaxTeamCount) return refuse("four-human PvPvE exceeds team capacity");
 		const uint32_t firstCPUTeam = mode == NetMatchMode::CoopPvE ? 1 : humanCount;
 		if (cpuCount > Teams::MaxTeamCount || firstCPUTeam + cpuCount > Teams::MaxTeamCount) return refuse("CPU seats exceed team capacity");
+		// Co-op seats every human on one team, so a full lobby can ask for more slots than the wire carries.
+		if (humanCount + cpuCount > NetMatchConfigUtil::c_MaxPlayers) return refuse("roster exceeds the player slot capacity");
 		NetMatchConfig config = NetMatchConfigUtil::MakeDefault(sessionId);
 		config.activityPreset = request.activityPreset.empty() ? "P4 Alpha Duel" : request.activityPreset;
 		config.sceneName = "Grasslands";
