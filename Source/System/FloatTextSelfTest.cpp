@@ -512,9 +512,6 @@ namespace RTE::FloatTextSelfTest {
 
 		/// Installs the C++ global locale, which every stream built afterwards copies, proven by its decimal point.
 		std::string InstallCommaLocaleCxx() {
-			if constexpr (!NamedCxxLocalesExist) {
-				return std::string();
-			}
 			for (const char* name: CommaLocaleNames) {
 				try {
 					std::locale::global(std::locale(name));
@@ -564,7 +561,7 @@ namespace RTE::FloatTextSelfTest {
 			const std::string cxxLocale = InstallCommaLocaleCxx();
 			// std::locale::global also sets the C locale, so the C half goes last and its probe is the final word.
 			const std::string cLocale = InstallCommaLocaleC();
-			const std::string cxxText = NamedCxxLocalesExist ? (cxxLocale.empty() ? std::string("none") : cxxLocale) : std::string("unavailable(libstdc++ generic model)");
+			const std::string cxxText = !cxxLocale.empty() ? cxxLocale : (NamedCxxLocalesExist ? std::string("none") : std::string("unavailable(libstdc++ generic model)"));
 			std::cout << Tag << " locale=" << (cLocale.empty() ? std::string("none") : cLocale) << " cxx_locale=" << cxxText << std::endl;
 			if (cLocale.empty()) {
 				RestoreClassicLocales();
