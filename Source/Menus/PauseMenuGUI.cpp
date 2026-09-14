@@ -217,8 +217,9 @@ bool PauseMenuGUI::HandleInputEvents() {
 	m_GUIControlManager->Update();
 	if (!m_PendingAutomationCommand.empty()) {
 		GUIControl* control = m_GUIControlManager->GetControl(m_PendingAutomationCommand);
+		const bool enabled = AutomationControlEnabled(m_PendingAutomationCommand);
 		m_PendingAutomationCommand.clear();
-		if (control) control->AddEvent(GUIEvent::Command, 0, 0);
+		if (control && enabled) control->AddEvent(GUIEvent::Command, 0, 0);
 	}
 
 	GUIEvent guiEvent;
