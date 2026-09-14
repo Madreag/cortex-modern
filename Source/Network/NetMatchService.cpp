@@ -935,6 +935,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetMuxTransport> mux;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_Mux) m_Mux->SetPump({});
 #ifdef CCCP_WITH_GNS
 			if (m_Dispatcher) {
 				m_IceReport = m_Dispatcher->BuildReportJson();
@@ -1004,6 +1005,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetMuxTransport> mux;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_Mux) m_Mux->SetPump({});
 #ifdef CCCP_WITH_GNS
 			if (m_Dispatcher) {
 				m_IceReport = m_Dispatcher->BuildReportJson();
