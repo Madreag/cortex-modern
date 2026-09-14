@@ -8361,6 +8361,21 @@ void LuaStateWrapper::CapturePreviewGlobalFence() {
 		FillShallowCopy(m_State, -1, -2);
 	}
 	lua_pop(m_State, 2);
+	// Loading a script rewrites package.path, a value inside a table the record only names, so it is recorded on its own.
+	lua_getglobal(m_State, "package");
+	if (lua_istable(m_State, -1)) {
+		const int package = lua_gettop(m_State);
+		for (const char* field: {"path", "cpath"}) {
+			lua_getfield(m_State, package, field);
+			lua_setfield(m_State, fence, field);
+		}
+	}
+	lua_pop(m_State, 1);
+	// The cached chunks are serialized with the state, so a file the preview is first to load must not stay cached either.
+	m_PreviewScriptCacheKeys.clear();
+	for (const auto& [path, cached]: m_ScriptCache) {
+		m_PreviewScriptCacheKeys.insert(path);
+	}
 	m_PreviewGlobalFenceArmed = true;
 	lua_settop(m_State, top);
 }
@@ -8399,6 +8414,36 @@ int LuaStateWrapper::ReleasePreviewGlobalFence() {
 		changes += RestoreFromShallowCopy(m_State, -1, -2);
 	}
 	lua_pop(m_State, 2);
+	lua_getglobal(m_State, "package");
+	if (lua_istable(m_State, -1)) {
+		const int package = lua_gettop(m_State);
+		for (const char* field: {"path", "cpath"}) {
+			lua_getfield(m_State, fence, field);
+			lua_getfield(m_State, package, field);
+			const char* saved = lua_tostring(m_State, -2);
+			const char* live = lua_tostring(m_State, -1);
+			lua_pop(m_State, 1);
+			if (saved && (!live || std::strcmp(saved, live) != 0)) {
+				lua_setfield(m_State, package, field);
+				++changes;
+			} else {
+				lua_pop(m_State, 1);
+			}
+		}
+	}
+	lua_pop(m_State, 1);
+	for (auto entry = m_ScriptCache.begin(); entry != m_ScriptCache.end();) {
+		if (m_PreviewScriptCacheKeys.count(entry->first) > 0) {
+			++entry;
+			continue;
+		}
+		for (const auto& [name, function]: entry->second.functionNamesAndObjects) {
+			delete function;
+		}
+		entry = m_ScriptCache.erase(entry);
+		++changes;
+	}
+	m_PreviewScriptCacheKeys.clear();
 	lua_settop(m_State, top);
 	return changes;
 }
