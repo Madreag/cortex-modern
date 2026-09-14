@@ -3703,6 +3703,21 @@ namespace RTE {
 			     std::to_string(host.GetReadyPeerCount()) + " wanted 20/15/2");
 		}
 
+		// Reconnect churn: transport ids are monotonic, so a reconnecting sender still
+		// handshaking arrives under a fresh id. Every such id must share one malformed-sender
+		// budget entry - one rate-map key, not one per fresh socket.
+		const size_t rateKeysBefore = host.ChatRateWindowCount();
+		for (NetPeerId fresh = 4000; fresh < 4000 + 40; ++fresh) {
+			host.InjectEvent(NetTransportEvent{NetTransportEventType::PacketReceived, fresh,
+			                                 NetTransportLane::ControlReliable, malformed, {}},
+			                 hostTransport.NowMs());
+		}
+		const size_t rateKeysMinted = host.ChatRateWindowCount() - rateKeysBefore;
+		if (rateKeysMinted > 1) {
+			fail("unmapped senders minted " + std::to_string(rateKeysMinted) +
+			     " rate-map entries across reconnect churn");
+		}
+
 		// The sink is bounded: past the window the oldest lines fall off. Start in a fresh rate
 		// window - the burst arm above already spent this one's five.
 		pump(110);
