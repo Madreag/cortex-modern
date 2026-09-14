@@ -6071,6 +6071,34 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (previewCopyKeepsModuleMethods ? "PASS" : "FAIL") << " preview_self_copy_keeps_required_module_methods" << std::endl;
 	checkpointValues = previewCopyKeepsModuleMethods && checkpointValues;
+	// Only the predicting peer runs previews, so a global a preview hook writes is that peer's alone; the boundary must undo it.
+	bool previewLeavesGlobalsAsFound = false;
+	{
+		RunScriptString("_PreviewFenceExisting = \"canonical\"; _PreviewFenceNew = nil; package.loaded[\"_preview_fence_probe\"] = nil");
+		LuaMan::CapturePreviewSelfCopies({}, false);
+		{
+			LuaMan::PreviewHookScope hookScope(true);
+			RunScriptString("_PreviewFenceNew = 7; _PreviewFenceExisting = \"preview\"; package.loaded[\"_preview_fence_probe\"] = {}");
+		}
+		LuaMan::EndPreviewScripts();
+		lua_getglobal(m_State, "_PreviewFenceNew");
+		const bool addedGlobalGone = lua_isnil(m_State, -1);
+		lua_pop(m_State, 1);
+		lua_getglobal(m_State, "_PreviewFenceExisting");
+		const char* existing = lua_tostring(m_State, -1);
+		const bool changedGlobalRestored = existing && std::strcmp(existing, "canonical") == 0;
+		lua_pop(m_State, 1);
+		RunScriptString("_PreviewFenceModuleGone = package.loaded[\"_preview_fence_probe\"] == nil");
+		lua_getglobal(m_State, "_PreviewFenceModuleGone");
+		const bool loadedModuleGone = lua_toboolean(m_State, -1) != 0;
+		lua_pop(m_State, 1);
+		std::cout << "[preview-globals] added_gone=" << addedGlobalGone << " changed_restored=" << changedGlobalRestored
+		          << " loaded_module_gone=" << loadedModuleGone << std::endl;
+		previewLeavesGlobalsAsFound = addedGlobalGone && changedGlobalRestored && loadedModuleGone;
+		RunScriptString("_PreviewFenceExisting = nil; _PreviewFenceNew = nil; _PreviewFenceModuleGone = nil; package.loaded[\"_preview_fence_probe\"] = nil");
+	}
+	std::cout << "[script-graph-selftest] " << (previewLeavesGlobalsAsFound ? "PASS" : "FAIL") << " preview_leaves_globals_as_found" << std::endl;
+	checkpointValues = previewLeavesGlobalsAsFound && checkpointValues;
 	const std::string report = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
 	lua_pop(L, 1);
 	std::cout << report << std::endl;
