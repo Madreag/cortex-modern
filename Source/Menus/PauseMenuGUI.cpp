@@ -38,6 +38,8 @@ void PauseMenuGUI::Clear() {
 
 	m_ButtonHoveredText.fill(std::string());
 	m_ButtonUnhoveredText.fill(std::string());
+	m_DiagnosticsIdleText.fill(std::string());
+	m_DiagnosticsBusy = false;
 	m_HoveredButton = nullptr;
 	m_PendingAutomationCommand.clear();
 	m_PrevHoveredButtonIndex = 0;
@@ -79,6 +81,7 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 		m_PauseMenuButtons[pauseMenuButton]->SetText(m_ButtonUnhoveredText[pauseMenuButton]);
 		m_PauseMenuButtons[pauseMenuButton]->CenterInParent(true, false);
 	}
+	m_DiagnosticsIdleText = {m_ButtonHoveredText[PauseMenuButton::SaveDiagnosticsButton], m_ButtonUnhoveredText[PauseMenuButton::SaveDiagnosticsButton]};
 
 	if (m_BackdropBitmap) {
 		destroy_bitmap(m_BackdropBitmap);
@@ -146,7 +149,14 @@ void PauseMenuGUI::SetActiveMenuScreen(PauseMenuScreen screenToShow, bool playBu
 PauseMenuGUI::PauseMenuUpdateResult PauseMenuGUI::Update() {
 	m_UpdateResult = PauseMenuUpdateResult::NoEvent;
 	const bool savingDiagnostics = TelemetryBundle::IsBusy();
-	m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton]->SetEnabled(!savingDiagnostics);
+	GUIButton* diagnosticsButton = m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton];
+	diagnosticsButton->SetEnabled(!savingDiagnostics);
+	if (savingDiagnostics != m_DiagnosticsBusy) {
+		m_DiagnosticsBusy = savingDiagnostics;
+		m_ButtonHoveredText[PauseMenuButton::SaveDiagnosticsButton] = savingDiagnostics ? "SAVING..." : m_DiagnosticsIdleText[0];
+		m_ButtonUnhoveredText[PauseMenuButton::SaveDiagnosticsButton] = savingDiagnostics ? "Saving..." : m_DiagnosticsIdleText[1];
+		diagnosticsButton->SetText(m_HoveredButton == diagnosticsButton ? m_ButtonHoveredText[PauseMenuButton::SaveDiagnosticsButton] : m_ButtonUnhoveredText[PauseMenuButton::SaveDiagnosticsButton]);
+	}
 
 	if (g_ConsoleMan.IsEnabled() && !g_ConsoleMan.IsReadOnly()) {
 		return m_UpdateResult;
@@ -173,7 +183,6 @@ PauseMenuGUI::PauseMenuUpdateResult PauseMenuGUI::Update() {
 			break;
 	}
 	HandleBackNavigation(backToMainScreen);
-	m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton]->SetText(savingDiagnostics ? "Saving..." : "Save Diagnostics");
 
 	return m_UpdateResult;
 }
