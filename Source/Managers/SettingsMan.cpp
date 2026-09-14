@@ -32,6 +32,7 @@ void SettingsMan::Clear() {
 	m_ShowEnemyHUD = true;
 	m_EnableSmartBuyMenuNavigation = true;
 	m_AutomaticGoldDeposit = true;
+	m_BrainlessHumansSpectate = true;
 
 	m_NetworkServerAddress = "127.0.0.1:8000";
 	m_PlayerNetworkName = "Dummy";
@@ -193,6 +194,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("SmartBuyMenuNavigation", { reader >> m_EnableSmartBuyMenuNavigation; });
 	MatchProperty("ScrapCompactingHeight", { reader >> g_SceneMan.m_ScrapCompactingHeight; });
 	MatchProperty("AutomaticGoldDeposit", { reader >> m_AutomaticGoldDeposit; });
+	MatchProperty("BrainlessHumansSpectate", { reader >> m_BrainlessHumansSpectate; });
 	MatchProperty("ScreenShakeStrength", { reader >> g_CameraMan.m_ScreenShakeStrength; });
 	MatchProperty("ScreenShakeDecay", { reader >> g_CameraMan.m_ScreenShakeDecay; });
 	MatchProperty("MaxScreenShakeTime", { reader >> g_CameraMan.m_MaxScreenShakeTime; });
@@ -317,6 +319,7 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("SmartBuyMenuNavigation", m_EnableSmartBuyMenuNavigation);
 	writer.NewPropertyWithValue("ScrapCompactingHeight", g_SceneMan.m_ScrapCompactingHeight);
 	writer.NewPropertyWithValue("AutomaticGoldDeposit", m_AutomaticGoldDeposit);
+	writer.NewPropertyWithValue("BrainlessHumansSpectate", m_BrainlessHumansSpectate);
 
 	writer.NewLine(false, 2);
 	writer.NewDivider(false);

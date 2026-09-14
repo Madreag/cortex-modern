@@ -2900,7 +2900,8 @@ static std::string ResyncSaveName() {
 		config.modePreset = NetMatchConfigUtil::ModeName(mode);
 		config.ownershipPolicy = request.ownershipPolicy;
 		config.inputDelayFrames = request.inputDelayFrames;
-		config.brainlessHumansSpectate = request.brainlessHumansSpectate;
+		// The host's Gameplay setting seats the rule unless the lobby or a request flag picked one.
+		config.brainlessHumansSpectate = request.brainlessHumansSpectate.value_or(g_SettingsMan.GetBrainlessHumansSpectate());
 		config.peerCount = peerCount;
 		config.dedicated = request.dedicated;
 		// The host authors the roster; clients adopt it via the lobby config sync. PvP seats one team

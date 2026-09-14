@@ -16,6 +16,7 @@
 #include "NetGameCommand.h"
 #include "LuaMan.h"
 #include "ActivityMan.h"
+#include "SettingsMan.h"
 
 #include "ACraft.h"
 #include "OwnedMovableObjects.h"
@@ -1154,12 +1155,13 @@ void Activity::HandleCraftEnteringOrbit(ACraft* orbitedCraft) {
 }
 
 bool Activity::BrainlessHumansSpectate() const {
-	// Only a lockstep match carries the host's rule, so single player keeps the original end rules.
-	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
-		return false;
+	// A running match follows the host's agreed rule; everything else follows this machine's setting.
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		if (const NetMatchConfig* matchConfig = ScenarioRunner::GetLockstepMatchConfig()) {
+			return matchConfig->brainlessHumansSpectate;
+		}
 	}
-	const NetMatchConfig* matchConfig = ScenarioRunner::GetLockstepMatchConfig();
-	return matchConfig && matchConfig->brainlessHumansSpectate;
+	return g_SettingsMan.GetBrainlessHumansSpectate();
 }
 
 int Activity::GetBrainCount(bool getForHuman) const {
