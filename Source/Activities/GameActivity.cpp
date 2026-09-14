@@ -3368,6 +3368,26 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			check("relaunch_rebind_keeps_seatless_mark_null", applied && marks(seen, 0));
 			check("relaunch_rebind_keeps_seatless_slots_empty", applied && holds(seen, Slots{}));
 
+			// A selection made during the relaunch window is newer than the saved link, so the deferred rebind keeps it.
+			const Slots localSlots{localBrain->GetUniqueID(), localControlled->GetUniqueID(), localController->GetUniqueID(), local->GetUniqueID()};
+			stageHost();
+			applied = fixture->RestoreNetLocalPlayerState(retained);
+			fixture->m_ControlledActor[0] = host;
+			seen = rebindTwice("window_switch", applied);
+			check("relaunch_rebind_keeps_window_switch", applied && holds(seen, Slots{localSlots.brain, host->GetUniqueID(), localSlots.controller, localSlots.mark}));
+			stageHost();
+			applied = fixture->RestoreNetLocalPlayerState(retained);
+			seat(hostBrain, hostControlled, hostController, host);
+			seen = rebindTwice("window_seat", applied);
+			check("relaunch_rebind_keeps_window_brain_controller_and_mark", applied && holds(seen, Slots{hostBrain->GetUniqueID(), hostControlled->GetUniqueID(), hostController->GetUniqueID(), host->GetUniqueID()}));
+			// A slot the window emptied still heals from the saved link.
+			stageHost();
+			applied = fixture->RestoreNetLocalPlayerState(retained);
+			fixture->m_ControlledActor[0] = nullptr;
+			fixture->m_pLastMarkedActor[0] = nullptr;
+			seen = rebindTwice("window_cleared", applied);
+			check("relaunch_rebind_heals_cleared_window_slots", applied && seen[1] == localSlots && seen[2] == localSlots);
+
 			// A live brain may ride inside a world actor's inventory; the pending rebind keeps it and rejects a brain no current world actor owns.
 			const auto* brainPreset = dynamic_cast<const Actor*>(g_PresetMan.GetEntityPreset("Actor", "Brain Case", "Base.rte"));
 			if (!brainPreset) throw std::runtime_error("inventory probe brain preset unavailable");
