@@ -8,8 +8,10 @@
 #include "AudioMan.h"
 #include "PerformanceMan.h"
 #include "UInputMan.h"
+#include "NetMatchService.h"
 #include "System.h"
 
+#include <charconv>
 #include <cstdlib>
 #include <filesystem>
 #include <initializer_list>
@@ -156,6 +158,7 @@ void SettingsMan::Clear() {
 	m_PathFinderGridNodeSize = SCENEGRIDSIZE;
 	m_AIUpdateInterval = 2;
 	m_NetworkInputDelayFrames = 0;
+	SetAutosaveSeconds(0);
 	m_SessionDirectoryUrl.clear();
 	m_SessionDirectoryInstallKey.clear();
 	m_SessionDirectoryCertSha256.clear();
@@ -226,6 +229,11 @@ int SettingsMan::Initialize() {
 	}
 
 	return failureCode;
+}
+
+void SettingsMan::SetAutosaveSeconds(uint32_t seconds) {
+	m_AutosaveSeconds = seconds;
+	NetMatchService::SetAutosaveSecondsSetting(seconds);
 }
 
 void SettingsMan::GenerateSessionDirectoryInstallKey() {
@@ -325,6 +333,16 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("PathFinderGridNodeSize", { reader >> m_PathFinderGridNodeSize; });
 	MatchProperty("AIUpdateInterval", { reader >> m_AIUpdateInterval; });
 	MatchProperty("NetworkInputDelayFrames", { reader >> m_NetworkInputDelayFrames; });
+	MatchProperty("AutosaveSeconds", {
+		const std::string value = reader.ReadPropValue();
+		uint32_t seconds = 0;
+		const auto parsed = std::from_chars(value.data(), value.data() + value.size(), seconds);
+		if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
+			reader.ReportError("AutosaveSeconds requires a nonnegative 32-bit integer");
+			return -1;
+		}
+		SetAutosaveSeconds(seconds);
+	});
 	MatchProperty("SessionDirectoryUrl", { reader >> m_SessionDirectoryUrl; });
 	MatchProperty("SessionDirectoryInstallKey", { reader >> m_SessionDirectoryInstallKey; });
 	MatchProperty("SessionDirectoryCertSha256", { reader >> m_SessionDirectoryCertSha256; });
@@ -480,6 +498,7 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("PathFinderGridNodeSize", m_PathFinderGridNodeSize);
 	writer.NewPropertyWithValue("AIUpdateInterval", m_AIUpdateInterval);
 	writer.NewPropertyWithValue("NetworkInputDelayFrames", m_NetworkInputDelayFrames);
+	writer.NewPropertyWithValue("AutosaveSeconds", m_AutosaveSeconds);
 	writer.NewPropertyWithValue("SessionDirectoryUrl", m_SessionDirectoryUrl);
 	writer.NewPropertyWithValue("SessionDirectoryInstallKey", m_SessionDirectoryInstallKey);
 	writer.NewPropertyWithValue("SessionDirectoryCertSha256", m_SessionDirectoryCertSha256);
