@@ -174,9 +174,16 @@ def fixture_checks(item, name):
     return [check for check in (item.get('contract_checks') or []) if check.get('family') == name]
 
 
+def _contract_mismatch_observation(line):
+    """The observation token is the word immediately after the mismatch tag."""
+    match = re.search(r'\]\s+(\S+)', line)
+    return match.group(1) if match else None
+
+
 def gate(item, expect_load, exe_hash, scripts=None):
     """The recorded outcome of the transition, not just a clean process."""
     base = item['operation'].split(':', 1)[0]
+    memory_perturb = base == 'memory-perturb'
     must_apply = base in APPLYING_OPERATIONS or (base in LOAD_OPERATIONS and expect_load == 'accepted')
     failures = [name for name, passed in (
         ('completed', item['completed']),
@@ -202,10 +209,20 @@ def gate(item, expect_load, exe_hash, scripts=None):
             check.get('mismatches', 0) > 0 for check in (item.get('native_checks') or [])):
         failures.append('native_mismatches')
     for line in item.get('contract_mismatches') or []:
+        # Perturbed-observation mismatches are the detection for a deliberate in-memory mutate.
+        if memory_perturb and _contract_mismatch_observation(line) == 'perturbed':
+            continue
         failures.append('contract_mismatches:' + line)
     if not (item.get('contract_mismatches') or []) and any(
-            check.get('mismatches', 0) > 0 for check in (item.get('contract_checks') or [])):
+            check.get('mismatches', 0) > 0
+            and not (memory_perturb and check.get('observation') == 'perturbed')
+            for check in (item.get('contract_checks') or [])):
         failures.append('contract_mismatches')
+    if memory_perturb:
+        if item.get('perturbation_detected') is not True:
+            failures.append('perturbation_not_detected')
+        if item.get('restored_contract_checks_passed') is not True:
+            failures.append('restored_contract_checks_failed')
     return failures
 
 
