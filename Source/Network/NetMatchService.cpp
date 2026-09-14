@@ -271,7 +271,9 @@ static std::string ResyncSaveName() {
 	NetMatchService::TransportLink::TransportLink() = default;
 	NetMatchService::TransportLink::TransportLink(TransportLink&&) noexcept = default;
 	NetMatchService::TransportLink& NetMatchService::TransportLink::operator=(TransportLink&&) noexcept = default;
-	NetMatchService::TransportLink::~TransportLink() = default;
+	NetMatchService::TransportLink::~TransportLink() {
+		if (mux) mux->SetPump({});
+	}
 
 	bool NetMatchService::Start(const NetMatchServiceRequest& request, std::string* error) {
 		Destroy();
@@ -971,6 +973,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetMuxTransport> mux;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_Mux) m_Mux->SetPump({});
 #ifdef CCCP_WITH_GNS
 			if (m_Dispatcher) {
 				m_IceReport = m_Dispatcher->BuildReportJson();
@@ -1038,6 +1041,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetMuxTransport> mux;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_Mux) m_Mux->SetPump({});
 #ifdef CCCP_WITH_GNS
 			if (m_Dispatcher) {
 				m_IceReport = m_Dispatcher->BuildReportJson();

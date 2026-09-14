@@ -3919,12 +3919,13 @@ namespace RTE {
 				++disconnects;
 				link.Disconnect(peerId, reason);
 			}
-			void Stop() override { link.Stop(); }
+			void Stop() override { if (beforeStop) beforeStop(); link.Stop(); }
 			std::vector<NetTransportEvent> PollEvents() override {
 				++polls;
 				return link.PollEvents();
 			}
 
+			std::function<void()> beforeStop;
 			LoopbackTransport link;
 			bool listen = true;
 			uint64_t polls = 0;
@@ -4387,6 +4388,322 @@ namespace RTE {
 		return true;
 	}
 
+#ifdef CCCP_WITH_GNS
+	bool TestGnsStopCancelContracts(std::string* error) {
+		auto fail = [&](const std::string& what) -> bool {
+			if (error) *error = what;
+			return false;
+		};
+		std::string errors;
+		const auto add = [&](const std::string& what) {
+			if (!what.empty()) errors += (errors.empty() ? "" : "; ") + what;
+		};
+		const auto waitJoinable = [](NetMatchService& service, int ms) {
+			for (int i = 0; i < ms && !service.m_Worker.joinable(); ++i) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return service.m_Worker.joinable();
+		};
+		const auto waitDone = [](NetMatchService& service, int ms) {
+			for (int i = 0; i < ms; ++i) {
+				{
+					std::lock_guard<std::mutex> lock(service.m_Mutex);
+					if (service.m_WorkerDone) return true;
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return false;
+		};
+		const auto primeCompletedClient = [](NetMatchService& service, const NetMatchConfig& played, uint8_t peerId, std::string* step) -> bool {
+			LoopbackTransport idle;
+			NetLockstepCoordinator unused;
+			NetMatchRunnerConfig primed;
+			primed.host = false;
+			primed.matchConfig = played;
+			primed.useLobbyProtocol = true;
+			primed.lobbyWaitMs = 8000;
+			primed.lockstepWaitMs = 150;
+			primed.postSessionSettleMs = 0;
+			primed.postLobbySettleMs = 0;
+			primed.cancelRequested = &service.m_CancelRequested;
+			if (service.m_Runner->Start(idle, *service.m_Session, unused, primed, step)) {
+				if (step) *step = "the primed runner started a session it should have refused";
+				return false;
+			}
+			if (!service.m_Session->AdoptRematchPeerId(peerId, step)) return false;
+			(void)service.m_Coordinator->TakeSeatSnapshot();
+			{
+				std::lock_guard<std::mutex> lock(service.m_Mutex);
+				service.m_State = NetMatchServiceState::Completed;
+				service.m_WorkerDone = false;
+			}
+			return true;
+		};
+		const auto armIceDispatcher = [](NetMatchService& service, GnsTransport& gns, std::atomic<int>& updates) -> GnsDirectorySignalDispatcher* {
+			service.m_Dispatcher = std::make_unique<GnsDirectorySignalDispatcher>();
+			GnsDirectorySignalDispatcher* raw = service.m_Dispatcher.get();
+			GnsDirectorySignalDispatcher::Config cfg;
+			(void)raw->Start(gns, cfg);
+			raw->SetPolling(true, 1);
+			if (service.m_Mux) {
+				service.m_Mux->SetPump([raw, &updates] {
+					updates.fetch_add(1);
+					raw->Update(1);
+				});
+			}
+			return raw;
+		};
+
+		// Observe the real teardown while the mux and dispatcher are still inspectable.
+		for (bool runtimeError : {false, true}) {
+			const std::string arm = runtimeError ? "SC5-error" : "SC5-destroy";
+			GnsTransport gns;
+			std::atomic<int> updates{0};
+			int stops = 0;
+			int halfStops = 0;
+			NetMatchService service;
+			auto ipHalf = std::make_unique<LoopbackHalfTap>();
+			auto p2pHalf = std::make_unique<LoopbackHalfTap>();
+			LoopbackHalfTap* ip = ipHalf.get();
+			service.m_Mux = std::make_unique<NetMuxTransport>(std::move(ipHalf), std::move(p2pHalf));
+			NetMuxTransport* mux = service.m_Mux.get();
+			GnsDirectorySignalDispatcher* dispatcher = armIceDispatcher(service, gns, updates);
+			auto pumpArmed = [mux] {
+				std::lock_guard<std::mutex> lock(mux->m_TaskMutex);
+				return static_cast<bool>(mux->m_Pump);
+			};
+			dispatcher->SetTrace([&](const std::string& line) {
+				if (line.find("polling disarmed after") == std::string::npos) return;
+				++stops;
+				if (pumpArmed()) add(arm + " mux pump still armed during dispatcher Stop");
+			});
+			ip->beforeStop = [&] {
+				++halfStops;
+				if (stops != 1 || service.m_Dispatcher) add(arm + " mux stopped before dispatcher teardown");
+				if (pumpArmed()) {
+					add(arm + " mux pump still armed after dispatcher.reset(); PollEvents would invoke the destroyed pointee");
+				} else {
+					const int before = updates.load();
+					(void)mux->PollEvents();
+					if (updates.load() != before) add(arm + " pump ran after dispatcher.reset()");
+				}
+			};
+			(void)mux->PollEvents();
+			if (updates.load() != 1) add(arm + " live pump did not call Update exactly once");
+			if (runtimeError) service.ReportRuntimeError("stop contract probe");
+			else service.Destroy();
+			const int after = updates.load();
+			service.Destroy();
+			if (stops != 1 || halfStops != 1 || updates.load() != after) add(arm + " teardown repeated or callback survived destroy");
+		}
+
+		// ICE rematch: second ReturnToLobby refuses while the worker owns the link; Destroy cancels and joins.
+		{
+			RematchFixture fixture;
+			std::string step;
+			if (!SetUpRematchFixture(fixture, "stop-cancel-ice-destroy", 43350, 2, &step)) {
+				add("SC2-ice fixture: " + step);
+			} else if (!LaunchRematchRound(LiveRematchPeers(fixture), &StartRematchPeer, &step) ||
+			           !PlayRematchTicks(fixture, 6) || !FinishRematchRound(fixture, &step)) {
+				StopRematchFixture(fixture);
+				add("SC2-ice round: " + step);
+			} else {
+				RematchPeer* client = fixture.Client(2);
+				LoopbackTransport iceHostTransport;
+				NetSession iceHostSession;
+				NetMatchService service;
+				auto ipHalf = std::make_unique<LoopbackHalfTap>();
+				auto p2pHalf = std::make_unique<LoopbackHalfTap>();
+				LoopbackHalfTap* p2p = p2pHalf.get();
+				service.m_IsHost = false;
+				service.m_Transport = std::make_unique<GnsTransport>();
+				service.m_Mux = std::make_unique<NetMuxTransport>(std::move(ipHalf), std::move(p2pHalf));
+				service.m_Session = std::make_unique<NetSession>();
+				service.m_Runner = std::make_unique<NetMatchRunner>();
+				if (!client || !StartServiceIceSession(43352, iceHostTransport, *p2p, *service.m_Mux, iceHostSession, *service.m_Session, &step)) {
+					StopRematchFixture(fixture);
+					add("SC2-ice session: " + step);
+				} else {
+					service.m_Coordinator = std::move(client->round);
+					const NetMatchConfig played = client->runner.GetMatchConfig();
+					const uint8_t clientSessionPeerId = client->session.GetLocalPeerId();
+					StopRematchFixture(fixture);
+					GnsTransport gns;
+					std::atomic<int> updates{0};
+					(void)armIceDispatcher(service, gns, updates);
+					if (!primeCompletedClient(service, played, clientSessionPeerId, &step)) {
+						add("SC2-ice prime: " + step);
+					} else {
+						std::string rtl;
+						const bool returned = service.ReturnToLobby(&rtl);
+						if (!returned) {
+							add("SC2-ice first ReturnToLobby failed (" + rtl + ")");
+						} else if (!waitJoinable(service, 200)) {
+							add("SC2-ice rematch worker never became joinable");
+						} else {
+							std::string again;
+							const bool second = service.ReturnToLobby(&again);
+							const bool joinable = service.m_Worker.joinable();
+							if (second || !joinable || again.find("previous match worker") == std::string::npos) {
+								add("SC2-ice second ReturnToLobby returned " + std::string(second ? "true" : "false") + " (\"" + again +
+								    "\"), joinable " + (joinable ? "yes" : "no"));
+							}
+							const auto t0 = std::chrono::steady_clock::now();
+							service.Destroy();
+							const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+							if (ms > 2000) add("SC2-ice Destroy took " + std::to_string(ms) + " ms");
+							if (service.m_Worker.joinable()) add("SC2-ice worker still joinable after Destroy");
+							std::lock_guard<std::mutex> lock(service.m_Mutex);
+							if (service.m_Mux || service.m_Dispatcher || service.m_Transport) {
+								add("SC2-ice owners survived Destroy");
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// ICE rematch: cancel finishes the worker and Restore puts mux+dispatcher back on the service.
+		{
+			RematchFixture fixture;
+			std::string step;
+			if (!SetUpRematchFixture(fixture, "stop-cancel-ice-handback", 43360, 2, &step)) {
+				add("SC-handback fixture: " + step);
+			} else if (!LaunchRematchRound(LiveRematchPeers(fixture), &StartRematchPeer, &step) ||
+			           !PlayRematchTicks(fixture, 6) || !FinishRematchRound(fixture, &step)) {
+				StopRematchFixture(fixture);
+				add("SC-handback round: " + step);
+			} else {
+				RematchPeer* client = fixture.Client(2);
+				LoopbackTransport iceHostTransport;
+				NetSession iceHostSession;
+				NetMatchService service;
+				auto ipHalf = std::make_unique<LoopbackHalfTap>();
+				auto p2pHalf = std::make_unique<LoopbackHalfTap>();
+				LoopbackHalfTap* p2p = p2pHalf.get();
+				service.m_IsHost = false;
+				service.m_Transport = std::make_unique<GnsTransport>();
+				service.m_Mux = std::make_unique<NetMuxTransport>(std::move(ipHalf), std::move(p2pHalf));
+				service.m_Session = std::make_unique<NetSession>();
+				service.m_Runner = std::make_unique<NetMatchRunner>();
+				if (!client || !StartServiceIceSession(43362, iceHostTransport, *p2p, *service.m_Mux, iceHostSession, *service.m_Session, &step)) {
+					StopRematchFixture(fixture);
+					add("SC-handback session: " + step);
+				} else {
+					service.m_Coordinator = std::move(client->round);
+					const NetMatchConfig played = client->runner.GetMatchConfig();
+					const uint8_t clientSessionPeerId = client->session.GetLocalPeerId();
+					StopRematchFixture(fixture);
+					GnsTransport gns;
+					std::atomic<int> updates{0};
+					NetMuxTransport* const muxBefore = service.m_Mux.get();
+					GnsDirectorySignalDispatcher* const dispBefore = armIceDispatcher(service, gns, updates);
+					if (!primeCompletedClient(service, played, clientSessionPeerId, &step)) {
+						add("SC-handback prime: " + step);
+					} else {
+						std::string rtl;
+						if (!service.ReturnToLobby(&rtl)) {
+							add("SC-handback first ReturnToLobby failed (" + rtl + ")");
+						} else if (!waitJoinable(service, 200)) {
+							add("SC-handback rematch worker never became joinable");
+						} else {
+							{
+								std::lock_guard<std::mutex> lock(service.m_Mutex);
+								if (service.m_Mux || service.m_Dispatcher) {
+									add("SC-handback owners were not taken by the rematch worker");
+								}
+							}
+							service.m_CancelRequested.store(true);
+							if (!waitDone(service, 2000)) {
+								add("SC-handback cancel did not finish the worker");
+							}
+							service.JoinWorkerIfDone();
+							{
+								std::lock_guard<std::mutex> lock(service.m_Mutex);
+								if (service.m_Mux.get() != muxBefore) {
+									add("SC-handback mux was not restored");
+								}
+								if (service.m_Dispatcher.get() != dispBefore) {
+									add("SC-handback dispatcher was not restored");
+								}
+							}
+							service.Destroy();
+							if (service.m_Worker.joinable()) add("SC-handback worker still joinable after Destroy");
+						}
+					}
+				}
+			}
+		}
+
+		// IP rematch: same second-ReturnToLobby and Destroy contracts on the IP wire.
+		{
+			RematchFixture fixture;
+			std::string step;
+			if (!SetUpRematchFixture(fixture, "stop-cancel-ip", 43370, 2, &step)) {
+				add("SC2-ip fixture: " + step);
+			} else if (!LaunchRematchRound(LiveRematchPeers(fixture), &StartRematchPeer, &step) ||
+			           !PlayRematchTicks(fixture, 6) || !FinishRematchRound(fixture, &step)) {
+				StopRematchFixture(fixture);
+				add("SC2-ip round: " + step);
+			} else {
+				RematchPeer* client = fixture.Client(2);
+				LoopbackTransport hostTransport;
+				LoopbackTransport clientTransport;
+				NetSession hostSession;
+				NetMatchService service;
+				service.m_IsHost = false;
+				service.m_Transport = std::make_unique<GnsTransport>();
+				service.m_Session = std::make_unique<NetSession>();
+				service.m_Runner = std::make_unique<NetMatchRunner>();
+				if (!client || !StartServiceRematchSession(43372, hostTransport, clientTransport, hostSession, *service.m_Session, &step)) {
+					StopRematchFixture(fixture);
+					add("SC2-ip session: " + step);
+				} else {
+					service.m_Coordinator = std::move(client->round);
+					const NetMatchConfig played = client->runner.GetMatchConfig();
+					const uint8_t clientSessionPeerId = client->session.GetLocalPeerId();
+					StopRematchFixture(fixture);
+					if (!primeCompletedClient(service, played, clientSessionPeerId, &step)) {
+						add("SC2-ip prime: " + step);
+					} else {
+						std::string rtl;
+						if (!service.ReturnToLobby(&rtl)) {
+							add("SC2-ip first ReturnToLobby failed: " + rtl);
+						} else if (!waitJoinable(service, 200)) {
+							add("SC2-ip rematch worker never became joinable");
+						} else {
+							std::string again;
+							const bool second = service.ReturnToLobby(&again);
+							const bool joinable = service.m_Worker.joinable();
+							if (second) {
+								add("SC2-ip second ReturnToLobby started another worker (\"" + again + "\")");
+							} else if (!joinable) {
+								add("SC2-ip second ReturnToLobby left no joinable worker (\"" + again + "\")");
+							} else if (again.find("previous match worker") == std::string::npos) {
+								add("SC2-ip second ReturnToLobby \"" + again + "\"");
+							}
+							const auto t0 = std::chrono::steady_clock::now();
+							service.Destroy();
+							const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+							if (ms > 2000) add("SC2-ip Destroy took " + std::to_string(ms) + " ms");
+							if (service.m_Worker.joinable()) add("SC2-ip worker still joinable after Destroy");
+						}
+					}
+				}
+			}
+		}
+
+		if (!errors.empty()) return fail(errors);
+		std::cout << "PASS gns_stop_cancel_contracts" << std::endl;
+		return true;
+	}
+#else
+	bool TestGnsStopCancelContracts(std::string* error) {
+		(void)error;
+		return true;
+	}
+#endif
+
 	bool TestIceRowJoinMode(std::string* error) {
 		struct Case {
 			bool enabled;
@@ -4678,6 +4995,8 @@ namespace RTE {
 		if (!TestRosterBannerNamesThePlayerOnce(&error)) return fail(error);
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
+		std::string stopCancelError;
+		if (!TestGnsStopCancelContracts(&stopCancelError)) std::cerr << "[net-match-selftest] FAIL: " << stopCancelError << std::endl;
 		if (!TestMuxOpensIceListenFirst(&error)) return fail(error);
 		if (!TestMuxRoutesByTag(&error)) return fail(error);
 		std::string iceRowError;
@@ -4687,6 +5006,7 @@ namespace RTE {
 		if (!TestSessionIdJoinRefusals(&error)) return fail(error);
 		if (!TestIceSettingsOverrideIsNotPersisted(&error)) return fail(error);
 		if (!TestP2PJoinSpecRidesTheSessionConfig(&error)) return fail(error);
+		if (!stopCancelError.empty()) return fail(stopCancelError);
 		if (!serviceRosterError.empty()) return fail(serviceRosterError);
 		if (!rejoinWaitError.empty()) return fail(rejoinWaitError);
 		if (!iceRowError.empty()) return fail(iceRowError);
