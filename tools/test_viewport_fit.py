@@ -795,6 +795,12 @@ def main():
                 name_run = longest_ink_run(px0, left, right + 1, (top or 0) + 120, bottom or height - 1)
                 details["name_ink_run"] = name_run
                 checks["name_glyph_ink_present"] = bool(name_run) and name_run[0] >= 240
+                if name_run:
+                    zoom = images[0].crop((max(0, name_run[2] - 10), max(0, name_run[1] - 4),
+                                           min(width, name_run[3] + 11), min(height, name_run[1] + 12)))
+                    zoom = zoom.resize((zoom.width * 4, zoom.height * 4), Image.NEAREST)
+                    zoom.save(root / "fallback-zoom.png")
+                    details["fallback_zoom"] = str(root / "fallback-zoom.png")
 
                 # Mirror the engine's measure: the fallback font's cell width x
                 # the 64 wire bytes predicts the token width. The label is
