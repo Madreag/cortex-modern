@@ -178,10 +178,14 @@ def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
         inputs.write_text("100 100 START\n", encoding="utf-8")
         script = case / "pause-menu.txt"
         script.write_text("wait 12\nassert_screen Pause\nassert_control ButtonSaveDiagnostics\n"
-                          "assert_enabled ButtonSaveDiagnostics 1\nassert_label ButtonSaveDiagnostics Save Diagnostics\n"
+                          "assert_enabled ButtonSaveDiagnostics 1\nassert_label ButtonSaveDiagnostics save diagnostics\n"
                           "screenshot diagnostics_pause\npost_command ButtonSaveDiagnostics\n"
-                          "wait_file Telemetry/diag-*.zip 30\nwait_ms 50\n"
-                          "assert_enabled ButtonSaveDiagnostics 1\nassert_label ButtonSaveDiagnostics Save Diagnostics\n"
+                          "wait 2\nassert_enabled ButtonSaveDiagnostics 0\nassert_label ButtonSaveDiagnostics Saving...\n"
+                          "screenshot diagnostics_pause_busy\n"
+                          "assert_enabled ButtonSaveDiagnostics 0\nassert_label ButtonSaveDiagnostics Saving...\n"
+                          "screenshot diagnostics_pause_busy_confirmed\n"
+                          "wait_file Telemetry/diag-*.zip\nwait_ms 50\n"
+                          "assert_enabled ButtonSaveDiagnostics 1\nassert_label ButtonSaveDiagnostics save diagnostics\n"
                           "screenshot diagnostics_pause_saved\nexit\n", encoding="utf-8")
         runs, records = {}, {}
         for who in ("host", "client"):
@@ -213,20 +217,22 @@ def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
         for who, run in runs.items():
             try:
                 assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
-                pictures = inspect_pictures(run.cwd, "diagnostics_pause", width, height, 2)
+                pictures = inspect_pictures(run.cwd, "diagnostics_pause", width, height, 4)
                 log = read_log(run.out)
                 assert "assert_screen expected=Pause actual=Pause PASS" in log, "pause screen was not asserted"
                 assert "post_command ButtonSaveDiagnostics ok=1" in log, "diagnostics command was not accepted"
                 assert "file:Telemetry/diag-*.zip -> OK" in log, "diagnostics file wait did not complete"
                 assert log.count("assert_enabled ButtonSaveDiagnostics expected=1 actual=1 PASS") == 2, "terminal button was not enabled"
-                assert log.count('assert_label ButtonSaveDiagnostics "Save Diagnostics" text="Save Diagnostics" PASS') == 2, "terminal label differs"
+                assert log.count('assert_label ButtonSaveDiagnostics "save diagnostics" text="save diagnostics" PASS') == 2, "terminal label differs"
+                assert log.count("assert_enabled ButtonSaveDiagnostics expected=0 actual=0 PASS") == 2, "busy button was not disabled"
+                assert log.count('assert_label ButtonSaveDiagnostics "Saving..." text="Saving..." PASS') == 2, "busy label differs"
                 details["peers"][who] = {"pictures": pictures, "bundle": inspect_bundle(run.cwd, exe_sha)}
             except Exception as error:
                 details["errors"][who] = str(error)
         details["passed"] = not details["errors"]
         rows[tag] = details
         if details["passed"]:
-            print(f"PASS visual Pause {tag}: two peers, 4 PNGs, 2 diagnostics zips; terminal buttons enabled", flush=True)
+            print(f"PASS visual Pause {tag}: two peers, 8 PNGs, 2 diagnostics zips; busy labels and restored buttons verified", flush=True)
         else:
             found = sum(len(list((run.cwd / "ScreenShots").glob("diagnostics_pause*.png"))) for run in runs.values())
             print(f"FAIL visual Pause {tag}: expected menu-script PNGs from both peers, found {found}", flush=True)
