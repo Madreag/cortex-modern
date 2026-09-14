@@ -975,6 +975,7 @@
     <ClInclude Include="Source\System\FaultInjection.h" />
     <ClInclude Include="Source\System\ContentFile.h" />
     <ClInclude Include="Source\System\SaveGameArchive.h" />
+    <ClInclude Include="Source\System\TelemetryBundle.h" />
     <ClInclude Include="Source\System\DataModule.h" />
     <ClInclude Include="Source\System\RTEError.h" />
     <ClInclude Include="Source\System\RTETools.h" />
@@ -1614,6 +1615,7 @@
     <ClCompile Include="Source\System\PathFinder.cpp" />
     <ClCompile Include="Source\System\Reader.cpp" />
     <ClCompile Include="Source\System\System.cpp" />
+    <ClCompile Include="Source\System\TelemetryBundle.cpp" />
     <ClCompile Include="Source\System\Timer.cpp" />
     <ClCompile Include="Source\System\Vector.cpp" />
     <ClCompile Include="Source\System\Writer.cpp" />

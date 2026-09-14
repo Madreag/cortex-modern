@@ -305,6 +305,7 @@ static std::string ResyncSaveName() {
 			SetState(NetMatchServiceState::Failed, "Identity build failed", buildError);
 			return false;
 		}
+		CacheDiagnosticIdentity(manifest);
 
 		if (!request.host && NetA7Journal::HasConnectGate() && !WaitForA7ConnectGate(error)) return false;
 
@@ -555,6 +556,7 @@ static std::string ResyncSaveName() {
 				return false;
 			}
 			isHost = m_IsHost;
+			m_DiagnosticRuntimeError = ScenarioRunner::GetControllerReplayError();
 			m_ResyncHealStartMs = SteadyNowMs();
 			m_ResyncHealOpen = true;
 		}
@@ -1044,6 +1046,10 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::ReportRuntimeError(const std::string& error) {
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_DiagnosticRuntimeError = error;
+		}
 		m_CancelRequested.store(true);
 		if (m_Worker.joinable()) {
 			m_Worker.join();
@@ -1892,6 +1898,57 @@ static std::string ResyncSaveName() {
 	std::string NetMatchService::GetErrorText() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return m_ErrorText.empty() ? m_LobbySnapshot.errorText : m_ErrorText;
+	}
+
+	void NetMatchService::CacheDiagnosticIdentity(const NetIdentityManifest& manifest) {
+		const auto& config = manifest.deterministicConfig;
+		const json fields{
+			{"game_version", config.gameVersion}, {"network_protocol_version", config.networkProtocolVersion},
+			{"controller_frame_version", config.controllerFrameVersion}, {"controller_frame_encoded_size", config.controllerFrameEncodedSize},
+			{"delta_time_bits", config.deltaTimeBits}, {"ai_update_interval", config.aiUpdateInterval},
+			{"pathfinder_grid_node_size", config.pathfinderGridNodeSize}, {"recommended_moid_count", config.recommendedMoidCount},
+			{"particle_settling", config.particleSettling}, {"mo_subtraction", config.moSubtraction},
+			{"num_lua_states", config.numLuaStates}, {"num_lua_states_override", config.numLuaStatesOverride},
+			{"selected_module", config.selectedModule}, {"scenario_test_module_loaded", config.scenarioTestModuleLoaded},
+			{"lockstep_codec_version", config.lockstepCodecVersion}, {"enabled_global_scripts", config.enabledGlobalScripts}};
+		const json identity{{"schema", manifest.schema}, {"build_id", manifest.buildId}, {"game_version", manifest.gameVersion},
+			{"platform", manifest.platform}, {"deterministic_config", fields},
+			{"module_manifest_hash", NetIdentity::HashHex(manifest.moduleManifestHash)},
+			{"deterministic_config_hash", NetIdentity::HashHex(manifest.deterministicConfigHash)},
+			{"session_rules_hash", NetIdentity::HashHex(manifest.sessionRulesHash)},
+			{"session_identity_hash", NetIdentity::HashHex(manifest.sessionIdentityHash)}};
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_DiagnosticIdentity = identity.dump(2, ' ', false, json::error_handler_t::replace);
+	}
+
+	bool NetMatchService::RefreshDiagnosticIdentity(std::string* error) {
+		NetIdentityManifest manifest;
+		NetIdentityBuildOptions options;
+		options.buildId = "stage2-p2d-local";
+		options.sessionRulesTag = "stage2-p2-session-rules";
+		if (!NetIdentity::BuildCurrentManifest(manifest, error, options)) return false;
+		CacheDiagnosticIdentity(manifest);
+		return true;
+	}
+
+	std::string NetMatchService::ExportDiagnosticIdentity() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_DiagnosticIdentity;
+	}
+
+	std::string NetMatchService::ExportDiagnosticDesyncHeal() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		json record{{"present", !m_DiagnosticRuntimeError.empty() || m_LastResync.happened || m_ResyncHealOpen},
+		            {"error", m_DiagnosticRuntimeError}, {"healing", m_ResyncHealOpen}};
+		if (m_LastResync.happened) {
+			record["heal"] = {{"archive_bytes", m_LastResync.archiveBytes}, {"envelope_bytes", m_LastResync.envelopeBytes},
+			                  {"save_ms", m_LastResync.saveMs}, {"transfer_ms", m_LastResync.transferMs}, {"heal_ms", m_LastResync.healMs}};
+		}
+		if (m_ResyncSavedTick.load() != UINT64_MAX) {
+			record["saved_tick"] = m_ResyncSavedTick.load();
+			record["boundary_tick"] = m_ResyncBoundaryTick.load();
+		}
+		return record.dump(2, ' ', false, json::error_handler_t::replace);
 	}
 
 	std::string NetMatchService::BuildReportJson() const {

@@ -281,6 +281,12 @@ namespace RTE {
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
 		std::string BuildReportJson() const;
+		/// Builds the menu's identity once after modules load; match startup replaces it with the join inputs.
+		bool RefreshDiagnosticIdentity(std::string* error = nullptr);
+		/// Returns the cached join inputs without reading settings, modules, or simulation state.
+		std::string ExportDiagnosticIdentity() const;
+		/// Returns the last runtime error and heal record without exposing reconnect credentials.
+		std::string ExportDiagnosticDesyncHeal() const;
 		uint8_t GetLocalPeerId() const;
 		int GetLocalTeam() const;
 
@@ -399,10 +405,13 @@ namespace RTE {
 		/// Elapsed milliseconds since this session began, for every admission deadline.
 		uint64_t AdmissionNowMs() const;
 		void CaptureA7SeatView();
+		void CacheDiagnosticIdentity(const NetIdentityManifest& manifest);
 		bool WaitForA7ConnectGate(std::string* error);
 
 
 		mutable std::mutex m_Mutex;
+		std::string m_DiagnosticIdentity;
+		std::string m_DiagnosticRuntimeError;
 		static uint32_t s_AutosaveSeconds;
 		std::string m_AutosaveMatchId;
 		int64_t m_NextAutosaveSimTime = -1;
