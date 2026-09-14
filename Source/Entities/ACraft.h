@@ -17,6 +17,7 @@ namespace RTE {
 	/// A flying Actor which carries other things and can drop them.
 	class ACraft : public Actor {
 		friend struct ContractAudit;
+		friend class PreviewScriptSelfTest;
 
 		friend struct EntityLuaBindings;
 
@@ -47,6 +48,7 @@ namespace RTE {
 		class Exit :
 		    public Serializable {
 		friend struct ContractAudit;
+		friend class PreviewScriptSelfTest;
 
 
 			friend class ACraft;
