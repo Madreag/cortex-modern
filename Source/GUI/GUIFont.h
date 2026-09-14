@@ -120,8 +120,9 @@ namespace RTE {
 		Character m_Characters[256];
 		bool m_GlyphCovered[256]; // Whether the character's atlas cell holds any drawable pixels, scanned at Load
 
-		/// Returns the font that can draw this byte: the fallback only when this font's cell has no ink
-		/// and the fallback's does. The caller passes the fallback through the draw/measure APIs.
+		/// Returns the font that can draw this byte: the fallback when it covers the byte and either this
+		/// font's cell has no ink or the byte is >= 0x80 (the large atlas keeps HUD icons there, not letters).
+		/// The caller passes the fallback through the draw/measure APIs.
 		GUIFont* GlyphFontFor(unsigned char Character, GUIFont* GlyphFallback);
 
 		int m_CharIndexCap; // The highest index of valid characters that was read in from the file
