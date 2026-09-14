@@ -1,0 +1,9 @@
+# UNCOVERED: seat-side pie close while switching (item 3b remaining).
+# Host player 0. Seat the spawned Crab (same spawn as crab_ai_order), open digital pie,
+# release NEXT while PIEMENU_DIGITAL is still held. Do not serialize AI.
+# Existing crab_ai_order.txt never overlaps NEXT with an open pie (NEXT at 30, pie 150-220).
+# Existing pie_reload.txt never switches after the menu opens.
+# Existing switch e2e uses Main.cpp SwitchToActor injection, not NEXT-while-pie.
+30 31 NEXT
+150 220 PIEMENU_DIGITAL
+199 200 NEXT
