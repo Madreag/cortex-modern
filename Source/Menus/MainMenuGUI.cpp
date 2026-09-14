@@ -290,7 +290,6 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 		m_ReplaySelectedLabel->SetFont(chatFont);
 		m_ReplayStatusLabel->SetFont(chatFont);
 		m_ReplayDeleteLabel->SetFont(chatFont);
-		m_ReplayList->SetFont(chatFont);
 	}
 	m_LastMatchSummaryLabel->SetHorizontalOverflowScroll(true);
 	m_LastMatchSummaryLabel->ActivateDeactivateOverflowScroll(true);
@@ -1611,9 +1610,6 @@ void MainMenuGUI::RefreshReplayBrowserControls() {
 	if (m_ReplayBrowserPanel->GetWidth() != width || m_ReplayBrowserPanel->GetHeight() != height) m_ReplayBrowserPanel->Resize(width, height);
 	if (m_ReplayList->GetWidth() != width - 24 || m_ReplayList->GetHeight() != height - 146) {
 		m_ReplayList->Resize(width - 24, height - 146);
-		m_ReplayList->SetFont(m_MultiplayerLobbyPlayerRowFallbackFont);
-		for (auto* row : *m_ReplayList->GetItemList()) row->m_Height = 0;
-		m_ReplayList->EndUpdate();
 	}
 	m_ReplaySelectedLabel->SetPositionRel(12, height - 92);
 	m_ReplaySelectedLabel->Resize(width - 24, 42);

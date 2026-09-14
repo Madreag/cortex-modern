@@ -70,6 +70,53 @@ def selection_pixels(before, after, geometry):
     return sum(a != b for a, b in zip(first.crop(region).getdata(), second.crop(region).getdata()))
 
 
+def first_row_ink(repo, path, text, geometry):
+    """Require every atlas ink pixel of row zero, including under the modal dim."""
+    from PIL import Image
+    with Image.open(repo / "Data/Base.rte/GUIs/Skins/Menus/FontLarge.png") as source:
+        atlas = source.convert("RGB")
+    with Image.open(path) as source:
+        capture = source.convert("RGB")
+    separator, background = atlas.getpixel((0, 0)), atlas.getpixel((atlas.width - 1, 0))
+    cell_height = next(y for y in range(1, atlas.height) if atlas.getpixel((0, y)) == separator)
+    glyphs = {}
+    x, y = 1, 0
+    for code in range(32, 127):
+        stop = next(i for i in range(x, atlas.width) if atlas.getpixel((i, y)) == separator)
+        glyphs[chr(code)] = (x, y, stop - x - 1)
+        x = stop + 1
+        if (code - 31) % 16 == 0:
+            x, y = 1, y + cell_height
+    # Locate the list's top frame in the unobscured browser geometry.
+    left, right = geometry["panel"][1:3]
+    frame_color = (108, 118, 168)
+    dim = lambda color: tuple(channel * 127 // 256 for channel in color)
+    frame_rows = [y for y in range(geometry["top"] + 40, geometry["top"] + 60)
+                  if sum(capture.getpixel((x, y)) in (frame_color, dim(frame_color))
+                         for x in range(left + 10, right - 9)) >= right - left - 24]
+    if not frame_rows:
+        return {"pass": False, "reason": "list top frame missing"}
+    top = min(frame_rows)
+    frame = (left + 10, top - 1, right - 9, geometry["bottom"] - 93)
+    cursor, origin_y = frame[0] + 4, top
+    expected = []
+    for char in text:
+        gx, gy, width = glyphs[char]
+        for dy in range(cell_height):
+            for dx in range(width):
+                color = atlas.getpixel((gx + dx, gy + dy))
+                if color not in (separator, background):
+                    expected.append((cursor + dx, origin_y + dy, color))
+        cursor += width
+    outside = sum(not (frame[0] + 2 <= x < frame[2] - 2 and frame[1] + 2 <= y < frame[3] - 2)
+                  for x, y, _ in expected)
+    missing = sum(capture.getpixel((x, y)) not in (color, dim(color)) for x, y, color in expected)
+    return {"pass": bool(expected) and outside == 0 and missing == 0, "frame": frame,
+            "ink_pixels": len(expected), "outside": outside, "missing": missing,
+            "ink_bounds": [min(x for x, _, _ in expected), min(y for _, y, _ in expected),
+                           max(x for x, _, _ in expected), max(y for _, y, _ in expected)]}
+
+
 def run_size(repo, root, size, fixture, expected):
     root.mkdir(parents=True, exist_ok=False)
     checks, details = {}, {}
@@ -114,6 +161,11 @@ def run_size(repo, root, size, fixture, expected):
         changed = selection_pixels(latest_capture(run, "replays_list"), latest_capture(run, "replays_selected"), details["replays_list"])
         details["selection_changed_pixels"] = changed
         checks["selection_visible"] = changed >= 16
+        row_text = next(text for name, text, status in labels if name == "LabelReplayRow0" and status == "PASS")
+        details["first_row_ink"] = {
+            stem: first_row_ink(repo, Path(capture["path"]), row_text, details["replays_list"])
+            for stem, capture in details.items() if stem.startswith("replays_") and stem != "replays_back"}
+        checks["first_row_ink_inside_frame"] = all(row["pass"] for row in details["first_row_ink"].values())
         checks["pin_unchanged"] = pin(repo, expected) == before
     except Exception as error:
         details["error"] = repr(error)
