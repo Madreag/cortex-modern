@@ -77,6 +77,8 @@ namespace RTE {
 		void Configure(std::string baseUrl, std::string installKey, std::string certPinSha256);
 
 		State GetState() const { return m_State; }
+		/// The held row's last acknowledged visibility; empty before registration or after loss.
+		std::optional<bool> GetConfirmedListed() const { return m_ConfirmedListed; }
 		const std::string& GetSessionId() const { return m_SessionId; }
 		/// The session token the register reply issued; the host's signaling channel proves it.
 		const std::string& GetToken() const { return m_Token; }

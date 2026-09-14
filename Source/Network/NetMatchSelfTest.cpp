@@ -24,6 +24,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -4150,6 +4151,420 @@ namespace RTE {
 		return true;
 	}
 
+	// The service's real NetDirectoryClient behind its transport seam; a held reply stays in flight.
+	bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error) {
+		struct Wire {
+			std::deque<NetDirectoryClient::Reply> replies;
+			std::vector<NetDirectoryClient::Request> sent;
+			bool hold = false;
+			std::atomic<size_t> requests{0};
+		};
+		class ScriptedTransport final : public NetDirectoryClient::Transport {
+		public:
+			explicit ScriptedTransport(std::shared_ptr<Wire> wire) : m_Wire(std::move(wire)) {}
+			void Start(const NetDirectoryClient::Request& request) override { m_Wire->sent.push_back(request); ++m_Wire->requests; }
+			bool Finished() override { return !m_Wire->hold; }
+			NetDirectoryClient::Reply Take() override {
+				if (m_Wire->replies.empty()) {
+					return {500, "", ""};
+				}
+				NetDirectoryClient::Reply reply = m_Wire->replies.front();
+				m_Wire->replies.pop_front();
+				return reply;
+			}
+			void Abort() override {}
+
+		private:
+			std::shared_ptr<Wire> m_Wire;
+		};
+		struct SettingsGuard {
+			std::string url = g_SettingsMan.GetSessionDirectoryUrl();
+			std::string key = g_SettingsMan.GetSessionDirectoryInstallKey();
+			SettingsGuard() {
+				g_SettingsMan.SetSessionDirectoryUrl("https://127.0.0.1:8461");
+				g_SettingsMan.SetSessionDirectoryInstallKey("key0123456789abcd");
+			}
+			~SettingsGuard() {
+				g_SettingsMan.SetSessionDirectoryUrl(url);
+				g_SettingsMan.SetSessionDirectoryInstallKey(key);
+			}
+		};
+		struct RematchRig {
+			LoopbackTransport host;
+			LoopbackTransport client;
+			NetSession clientSession;
+		};
+		const std::string idA = "7b8c9d2e-aaaa-4bbb-8ccc-ddddeeeeffff";
+		const std::string idB = "8c9d2e1f-bbbb-4ccc-8ddd-eeeeffff0000";
+		const std::string idLegacy = "9d2e1f30-cccc-4ddd-8eee-ffff00001111";
+		const auto registerReply = [](const std::string& id, const char* token, int heartbeatS, bool capable) {
+			return NetDirectoryClient::Reply{200, R"({"session_id":")" + id + R"(","token":")" + token + R"(","expires_in_s":15,"heartbeat_s":)" + std::to_string(heartbeatS) + R"(,"observed_ip":"127.0.0.1")" + (capable ? R"(,"supports_unlisted":true})" : "}"), ""};
+		};
+		const NetDirectoryClient::Reply hidden{200, R"({"expires_in_s":15,"heartbeat_s":1,"listed":false})", ""};
+		const NetDirectoryClient::Reply listed{200, R"({"expires_in_s":15,"heartbeat_s":1,"listed":true})", ""};
+		const NetDirectoryClient::Reply deleted{200, R"({"ok":true})", ""};
+		const NetDirectoryClient::Reply gone{404, R"({"error":"not_found"})", ""};
+		const auto count = [](const Wire& wire, const std::string& method, const std::string& path) {
+			return static_cast<size_t>(std::count_if(wire.sent.begin(), wire.sent.end(), [&](const NetDirectoryClient::Request& request) { return request.method == method && request.path == path; }));
+		};
+		const auto body = [](const NetDirectoryClient::Request& request) {
+			try {
+				return nlohmann::json::parse(request.body);
+			} catch (const nlohmann::json::exception&) {
+				return nlohmann::json();
+			}
+		};
+		const auto update = [](NetMatchService& service) {
+			{
+				std::lock_guard<std::mutex> lock(service.m_Mutex);
+				if (service.m_State == NetMatchServiceState::Starting) service.m_State = NetMatchServiceState::ReadyToLaunch;
+			}
+			service.Update();
+		};
+		const auto pumpUntil = [&](NetMatchService& service, uint64_t budgetMs, const std::function<bool()>& done) {
+			const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(budgetMs);
+			while (!done() && std::chrono::steady_clock::now() < until) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+				update(service);
+			}
+			return done();
+		};
+		const auto pump = [&](NetMatchService& service, int times) {
+			for (int i = 0; i < times; ++i) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+				update(service);
+			}
+		};
+		const auto confirmed = [](NetMatchService& service) {
+			return nlohmann::json::parse(service.m_Directory.BuildReportJson()).value("confirmed_listed", nlohmann::json());
+		};
+		// A running host registers without the lobby's LAN beacon, then pins its identity as SetUpIceTransport does.
+		const auto hostAndBind = [&](NetMatchService& service, bool ice, const std::shared_ptr<Wire>& wire, std::string& step) {
+			service.m_Directory.SetTransportFactory([wire] { return std::make_unique<ScriptedTransport>(wire); });
+			{
+				std::lock_guard<std::mutex> lock(service.m_Mutex);
+				service.m_IsHost = true;
+				service.m_IceEnabled = ice;
+				service.m_State = NetMatchServiceState::Running;
+			}
+			service.m_BeaconGamePort = 48031;
+			service.m_BeaconMaxPlayers = 2;
+			service.m_LocalName = "LeaseHost";
+			service.m_DirectoryRow.name = "LeaseHost";
+			service.m_DirectoryRow.activity = "Skirmish Defense";
+			service.m_DirectoryRow.mode = "PvP";
+			service.m_DirectoryRow.peerCount = 2;
+			service.m_DirectoryRow.seatsFree = 1;
+			service.m_DirectoryRow.listenPort = 48031;
+			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+			if (!pumpUntil(service, 500, [&] { return service.m_Directory.GetState() == NetDirectoryClient::State::Registered; })) {
+				step = std::string("the directory never registered; state=") + NetDirectoryClient::StateName(service.m_Directory.GetState());
+				return false;
+			}
+			if (ice) {
+				std::lock_guard<std::mutex> lock(service.m_Mutex);
+				service.m_IceBoundSessionId = service.m_Directory.GetSessionId();
+				service.m_IceIdentity = NetIceHostIdentity(service.m_IceBoundSessionId);
+			}
+			return true;
+		};
+		// ReturnToLobby needs a live session and a runner; the rematch lobby then waits until Destroy cancels it.
+		const auto armRematch = [](NetMatchService& service, RematchRig& rig, uint16_t port, std::string& step) {
+			service.m_Transport = std::make_unique<GnsTransport>();
+			service.m_Session = std::make_unique<NetSession>();
+			if (!StartServiceRematchSession(port, rig.host, rig.client, *service.m_Session, rig.clientSession, &step)) return false;
+			service.m_Runner = std::make_unique<NetMatchRunner>();
+			service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+			NetMatchRunnerConfig primed;
+			primed.host = true;
+			primed.useLobbyProtocol = true;
+			primed.sessionWaitMs = 1;
+			primed.lobbyWaitMs = 30000;
+			primed.lockstepWaitMs = 50;
+			primed.postSessionSettleMs = 0;
+			primed.postLobbySettleMs = 0;
+			primed.cancelRequested = &service.m_CancelRequested;
+			primed.matchConfig = NetMatchConfigUtil::MakeDefault(0x4449524C45415345ULL);
+			primed.matchConfig.peerCount = 2;
+			LoopbackTransport idle;
+			NetLockstepCoordinator unused;
+			std::string primedError;
+			NetSession primingSession;
+			// Prime the config without replacing the seated session.
+			service.m_CancelRequested.store(true);
+			(void)service.m_Runner->Start(idle, primingSession, unused, primed, &primedError);
+			service.m_CancelRequested.store(false);
+			if (!service.m_Session->IsReady()) {
+				step = "runner priming replaced the seated session";
+				return false;
+			}
+			return true;
+		};
+		const auto finish = [](NetMatchService& service) {
+			service.m_CancelRequested.store(true);
+			service.Destroy();
+		};
+		std::vector<std::string> misses;
+		SettingsGuard settings;
+
+		{   // a natural ICE end hides the bound row, keeps beating it, and the rematch relists that same row
+			auto wire = std::make_shared<Wire>();
+			wire->replies = {registerReply(idA, "tok-a", 1, true), hidden, hidden, listed, deleted};
+			RematchRig rig;
+			NetMatchService service;
+			std::string step;
+			const std::string beat = "/v1/sessions/" + idA + "/heartbeat";
+			const auto beatSays = [&](size_t n, bool wantListed) {
+				size_t seen = 0;
+				for (const NetDirectoryClient::Request& request : wire->sent) {
+					if (request.path == beat && ++seen == n) {
+						const nlohmann::json sentBody = body(request);
+						return sentBody.value("listed", nlohmann::json()) == nlohmann::json(wantListed) && sentBody.value("token", "") == "tok-a";
+					}
+				}
+				return false;
+			};
+			if (armRematch(service, rig, 48032, step) && hostAndBind(service, true, wire, step)) {
+				service.Complete("e2e complete");
+				pump(service, 3);
+				if (service.GetState() != NetMatchServiceState::Running || count(*wire, "DELETE", "/v1/sessions/" + idA) != 0 || count(*wire, "POST", beat) != 1 || !beatSays(1, false) || confirmed(service) != nlohmann::json(false)) {
+					step = "Complete did not hide the bound row on its own heartbeat; deletes=" + std::to_string(count(*wire, "DELETE", "/v1/sessions/" + idA));
+				}
+				service.FinishMatch("match over");
+				if (step.empty() && !pumpUntil(service, 2500, [&] { return count(*wire, "POST", beat) >= 2; })) {
+					step = "the hidden row sent no interval keepalive";
+				}
+				pump(service, 3);
+				if (step.empty() && (service.GetState() != NetMatchServiceState::Completed || !beatSays(2, false) || service.m_LanDiscovery.IsBeaconing() || count(*wire, "POST", "/v1/sessions") != 1 || count(*wire, "DELETE", "/v1/sessions/" + idA) != 0)) {
+					step = "the completed ICE host did not keep its row hidden, beating and beacon-free";
+				}
+				std::string rematchError;
+				if (step.empty() && !service.ReturnToLobby(&rematchError)) {
+					step = "ReturnToLobby refused: " + rematchError;
+				}
+				if (step.empty() && !pumpUntil(service, 1000, [&] { return confirmed(service) == nlohmann::json(true); })) {
+					step = "the rematch lobby never relisted the kept row";
+				}
+				if (step.empty() && (count(*wire, "POST", beat) != 3 || !beatSays(3, true) || count(*wire, "POST", "/v1/sessions") != 1 || service.m_Directory.GetSessionId() != idA || service.m_Directory.GetToken() != "tok-a")) {
+					step = "the relist changed identity: registers=" + std::to_string(count(*wire, "POST", "/v1/sessions")) + " heartbeats=" + std::to_string(count(*wire, "POST", beat));
+				}
+			}
+			finish(service);
+			if (step.empty() && count(*wire, "DELETE", "/v1/sessions/" + idA) != 1) {
+				step = "Destroy did not delete the kept row";
+			}
+			if (!step.empty()) misses.push_back("ice end: " + step);
+		}
+
+		{   // a direct-IP end deletes as before, and its rematch lobby registers afresh
+			auto wire = std::make_shared<Wire>();
+			wire->replies = {registerReply(idLegacy, "tok-ip", 60, false), deleted, registerReply(idB, "tok-ip-2", 60, false)};
+			RematchRig rig;
+			NetMatchService service;
+			std::string step;
+			if (armRematch(service, rig, 48033, step) && hostAndBind(service, false, wire, step)) {
+				service.FinishMatch("match over");
+				if (!pumpUntil(service, 500, [&] { return count(*wire, "DELETE", "/v1/sessions/" + idLegacy) == 1 && service.m_Directory.GetState() == NetDirectoryClient::State::Idle; })) {
+					step = "FinishMatch did not delete the IP row";
+				}
+				std::string rematchError;
+				if (step.empty() && !service.ReturnToLobby(&rematchError)) {
+					step = "ReturnToLobby refused: " + rematchError;
+				}
+				if (step.empty() && !pumpUntil(service, 500, [&] { return count(*wire, "POST", "/v1/sessions") == 2; })) {
+					step = "the IP rematch lobby did not register again";
+				}
+			}
+			finish(service);
+			if (!step.empty()) misses.push_back("ip end: " + step);
+		}
+
+		{   // leaving an ICE match deletes the bound row
+			auto wire = std::make_shared<Wire>();
+			wire->replies = {registerReply(idA, "tok-a", 60, true), deleted};
+			NetMatchService service;
+			std::string step;
+			if (hostAndBind(service, true, wire, step)) {
+				service.LeaveMatch("player left");
+				if (!pumpUntil(service, 500, [&] { return count(*wire, "DELETE", "/v1/sessions/" + idA) == 1; })) {
+					step = "LeaveMatch kept the row";
+				}
+			}
+			finish(service);
+			if (!step.empty()) misses.push_back("ice leave: " + step);
+		}
+
+		{   // legacy service: the hide's delete is still out when the rematch starts; nothing registers again
+			auto wire = std::make_shared<Wire>();
+			wire->replies = {registerReply(idLegacy, "tok-legacy", 60, false), deleted, registerReply(idB, "tok-legacy-2", 60, false)};
+			RematchRig rig;
+			NetMatchService service;
+			std::string step;
+			if (armRematch(service, rig, 48034, step) && hostAndBind(service, true, wire, step)) {
+				wire->hold = true;
+				service.FinishMatch("match over");
+				std::string rematchError;
+				if (count(*wire, "DELETE", "/v1/sessions/" + idLegacy) != 1) {
+					step = "the unsupported hide did not delete the row";
+				} else if (!service.ReturnToLobby(&rematchError)) {
+					step = "ReturnToLobby refused: " + rematchError;
+				}
+				pump(service, 3);
+				wire->hold = false;
+				pump(service, 20);
+				if (step.empty() && count(*wire, "POST", "/v1/sessions") != 1) {
+					step = "a replacement row was registered: registers=" + std::to_string(count(*wire, "POST", "/v1/sessions"));
+				}
+			}
+			finish(service);
+			if (!step.empty()) misses.push_back("legacy in flight: " + step);
+		}
+
+		{   // hidden 404: the hide's 404 is still out when the rematch starts; the lost row is deleted, never replaced
+			auto wire = std::make_shared<Wire>();
+			wire->replies = {registerReply(idA, "tok-a", 60, true), gone, deleted, registerReply(idB, "tok-b", 60, true)};
+			RematchRig rig;
+			NetMatchService service;
+			std::string step;
+			if (armRematch(service, rig, 48035, step) && hostAndBind(service, true, wire, step)) {
+				wire->hold = true;
+				service.FinishMatch("match over");
+				std::string rematchError;
+				if (!service.ReturnToLobby(&rematchError)) {
+					step = "ReturnToLobby refused: " + rematchError;
+				}
+				pump(service, 3);
+				wire->hold = false;
+				(void)pumpUntil(service, 500, [&] { return count(*wire, "DELETE", "/v1/sessions/" + idA) == 1; });
+				pump(service, 10);
+				if (step.empty() && (count(*wire, "POST", "/v1/sessions") != 1 || count(*wire, "DELETE", "/v1/sessions/" + idA) != 1)) {
+					step = "registers=" + std::to_string(count(*wire, "POST", "/v1/sessions")) + " deletes=" + std::to_string(count(*wire, "DELETE", "/v1/sessions/" + idA));
+				}
+			}
+			finish(service);
+			if (!step.empty()) misses.push_back("hidden 404 in flight: " + step);
+		}
+
+		{   // a mid-match re-register is not the bound row: its register says ip, and the end deletes it
+			auto wire = std::make_shared<Wire>();
+			wire->replies = {registerReply(idA, "tok-a", 1, true), gone, registerReply(idB, "tok-b", 60, true), deleted};
+			NetMatchService service;
+			std::string step;
+			if (hostAndBind(service, true, wire, step)) {
+				if (!pumpUntil(service, 2500, [&] { return service.m_Directory.GetSessionId() == idB; })) {
+					step = "the visible 404 never re-registered";
+				} else {
+					const std::string first = body(wire->sent.at(0)).value("join_mode", "");
+					const std::string second = body(wire->sent.at(2)).value("join_mode", "");
+					service.FinishMatch("match over");
+					if (!pumpUntil(service, 500, [&] { return count(*wire, "DELETE", "/v1/sessions/" + idB) == 1; })) {
+						step = "the end kept a row GNS is not pinned to";
+					}
+					if (first != "either" || second != "ip") {
+						step += (step.empty() ? "" : "; ") + std::string("register join_mode ") + first + " then " + second + ", want either then ip";
+					}
+				}
+			}
+			finish(service);
+			if (!step.empty()) misses.push_back("rebound row: " + step);
+		}
+
+
+
+		// A held hide must settle before the relist changes the requested visibility.
+		{
+			auto wire = std::make_shared<Wire>();
+			wire->replies = {registerReply(idA, "tok-a", 60, true), hidden, listed, deleted};
+			RematchRig rig;
+			NetMatchService service;
+			std::string step;
+			if (armRematch(service, rig, 48036, step) && hostAndBind(service, true, wire, step)) {
+				wire->hold = true;
+				service.FinishMatch("match over");
+				if (!service.ReturnToLobby(&step) && step.empty()) step = "ReturnToLobby refused";
+				pump(service, 3);
+				const bool desired = nlohmann::json::parse(service.m_Directory.BuildReportJson()).value("desired_listed", true);
+				const size_t earlyDeletes = count(*wire, "DELETE", "/v1/sessions/" + idA);
+				wire->hold = false;
+				pump(service, 8);
+				const size_t registers = count(*wire, "POST", "/v1/sessions");
+				const size_t beats = count(*wire, "POST", "/v1/sessions/" + idA + "/heartbeat");
+				std::cout << "[net-match-selftest] directory lease delayed hide desired_before_ack=" << desired << " early_deletes=" << earlyDeletes << " registers=" << registers << " heartbeats=" << beats << std::endl;
+				if (step.empty() && (desired || earlyDeletes != 0 || registers != 1 || beats != 2 || confirmed(service) != nlohmann::json(true) || service.m_Directory.GetSessionId() != idA)) {
+					step = "desired_before_ack=" + std::to_string(desired) + " early_deletes=" + std::to_string(earlyDeletes) + " registers=" + std::to_string(registers) + " heartbeats=" + std::to_string(beats);
+				}
+			}
+			finish(service);
+			if (!step.empty()) misses.push_back("delayed hide: " + step);
+		}
+
+		// Failure can settle while Complete still leaves the service Running.
+		for (bool capable : {false, true}) {
+			auto wire = std::make_shared<Wire>();
+			wire->replies = {registerReply(idA, "tok-a", 60, capable), capable ? gone : deleted, deleted, registerReply(idB, "tok-b", 60, true)};
+			RematchRig rig;
+			NetMatchService service;
+			std::string step;
+			const std::string label = capable ? "settled hidden 404" : "settled legacy";
+			if (armRematch(service, rig, capable ? 48038 : 48037, step) && hostAndBind(service, true, wire, step)) {
+				service.Complete("match over");
+				pump(service, 8);
+				service.FinishMatch("match over");
+				pump(service, 3);
+				if (!service.ReturnToLobby(&step) && step.empty()) step = "ReturnToLobby refused";
+				pump(service, 10);
+				const size_t registers = count(*wire, "POST", "/v1/sessions");
+				const size_t deletes = count(*wire, "DELETE", "/v1/sessions/" + idA);
+				std::cout << "[net-match-selftest] directory lease " << label << " registers=" << registers << " deletes=" << deletes << std::endl;
+				if (step.empty() && (registers != 1 || deletes != 1)) {
+					step = "registers=" + std::to_string(registers) + " deletes=" + std::to_string(deletes);
+				}
+			}
+			finish(service);
+			if (!step.empty()) misses.push_back(label + ": " + step);
+		}
+
+		// A lease decision waits for the worker's shared state before touching the directory.
+		{
+			auto wire = std::make_shared<Wire>();
+			wire->replies = {registerReply(idA, "tok-a", 60, true), deleted};
+			NetMatchService service;
+			std::string step;
+			if (hostAndBind(service, true, wire, step)) {
+				const size_t before = wire->requests.load();
+				std::atomic<bool> entering{false};
+				std::unique_lock<std::mutex> lock(service.m_Mutex);
+				std::thread complete([&] {
+					entering.store(true);
+					service.Complete("match over");
+				});
+				while (!entering.load()) std::this_thread::yield();
+				std::this_thread::sleep_for(std::chrono::milliseconds(100));
+				const size_t whileLocked = wire->requests.load() - before;
+				service.m_IceBoundSessionId.clear();
+				lock.unlock();
+				complete.join();
+				const size_t deletes = count(*wire, "DELETE", "/v1/sessions/" + idA);
+				std::cout << "[net-match-selftest] directory lease locked snapshot requests_while_locked=" << whileLocked << " deletes=" << deletes << std::endl;
+				if (whileLocked != 0 || deletes != 1) {
+					step = "requests_while_locked=" + std::to_string(whileLocked) + " deletes_after_unbind=" + std::to_string(deletes);
+				}
+			}
+			finish(service);
+			if (!step.empty()) misses.push_back("locked snapshot: " + step);
+		}
+
+		if (!misses.empty()) {
+			*error = "directory lease misses (" + std::to_string(misses.size()) + "):";
+			for (const std::string& miss : misses) {
+				*error += " [" + miss + "]";
+			}
+			return false;
+		}
+		std::cout << "PASS service_directory_lease ice_end_hides_keeps_relists=1 ip_leave_delete=1 legacy_404_in_flight_no_reregister=1 rebound_row_deleted_ip=1" << std::endl;
+		return true;
+	}
+
 	// One NetMatchService::ReturnToLobby on a client, from the played roster to the one it hands its runner.
 	bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error) {
 		LoopbackTransport idle;
@@ -4717,6 +5132,8 @@ namespace RTE {
 		if (!TestSessionIdJoinRefusals(&error)) return fail(error);
 		if (!TestIceSettingsOverrideIsNotPersisted(&error)) return fail(error);
 		if (!TestP2PJoinSpecRidesTheSessionConfig(&error)) return fail(error);
+
+		if (!TestServiceDirectoryIceLeaseKeepsIdentity(&error)) return fail(error);
 
 		std::cout << "[net-match-selftest] PASS" << std::endl;
 		return 0;

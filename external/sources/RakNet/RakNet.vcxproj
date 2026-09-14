@@ -310,12 +310,12 @@
     <_ProjectFileVersion>15.0.28307.799</_ProjectFileVersion>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>_Bin\</OutDir>
+    <OutDir>_Bin\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>_Bin\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
     <TargetName>raknet-debug</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>_Bin\</OutDir>
+    <OutDir>_Bin\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>_Bin\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
     <TargetName>raknet-release</TargetName>
   </PropertyGroup>
