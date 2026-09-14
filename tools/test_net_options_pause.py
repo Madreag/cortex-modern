@@ -58,8 +58,38 @@ def live_menu_assertions(tag):
     return steps + [menu_step("dump_host_options"), {"op": "screenshot", "name": tag}]
 
 
+def pad(edge):
+    return {"op": f"pad_{edge}", "button": "start"}
+
+
+def pad_steps(tag):
+    """The pad's start button on the same menu: it opens it, closes it and cancels the confirmation."""
+    # The pad joins on its first step; the press itself is the next step's one-frame edge.
+    steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "sim_at_least": 200},
+             pad("up"), {"op": "wait", "renders": 4},
+             pad("down"), {"op": "wait", "screen": "Pause"}, pad("up"),
+             {"op": "assert", "equals": {"screen": "Pause", "service": "Running", "paused": False}, "sim_at_least": 200}]
+    steps += live_menu_assertions(f"{tag}_open")
+    steps += [pad("down"), {"op": "wait", "screen": "Gameplay"}, pad("up"),
+              {"op": "assert", "equals": {"screen": "Gameplay", "service": "Running", "paused": False}},
+              {"op": "wait", "sim_at_least": 360},
+              pad("down"), {"op": "wait", "screen": "Pause"}, pad("up"),
+              menu_step("post_command ButtonLeaveMatch"), {"op": "wait", "screen": "PauseLeaveConfirm"},
+              {"op": "screenshot", "name": f"{tag}_confirm"},
+              # The pad cancels the confirmation: the seat stays in the match it was asked about.
+              pad("down"), {"op": "wait", "screen": "Pause"}, pad("up"),
+              {"op": "assert", "equals": {"screen": "Pause", "service": "Running", "paused": False}},
+              menu_step("assert_visible ButtonResume 1"),
+              menu_step("post_command ButtonResume"), {"op": "wait", "screen": "Gameplay"},
+              {"op": "assert", "equals": {"screen": "Gameplay", "service": "Running", "paused": False}, "sim_at_least": 360},
+              {"op": "wait", "sim_at_least": 480}, {"op": "finish"}]
+    return {"schema": 1, "timeout_ms": 180000, "steps": steps}
+
+
 def lifecycle_steps(arm, who, tag):
     """The probe script of one peer. Every arm opens the local menu the same way."""
+    if arm == "pad":
+        return pad_steps(tag)
     steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "sim_at_least": 200}]
     steps += escape()
     steps += [{"op": "wait", "screen": "Pause"},
@@ -89,13 +119,13 @@ def lifecycle_steps(arm, who, tag):
                   menu_step("post_command ButtonResume"), {"op": "wait", "screen": "Gameplay"},
                   {"op": "wait", "sim_at_least": 480}, {"op": "finish"}]
     elif arm == "leave":
-        # The confirmation replaces the rows; its text names what this seat loses, from the session's hold.
+        # The confirmation replaces the rows; its text names what this seat loses when it leaves.
         steps += [menu_step("post_command ButtonLeaveMatch"), {"op": "wait", "screen": "PauseLeaveConfirm"},
                   menu_step("assert_visible LabelLeaveConfirm 1"), menu_step("assert_rect_inside LabelLeaveConfirm LeaveConfirmBox"),
                   menu_step("assert_text_fits LabelLeaveConfirm"), menu_step("assert_text_fits ButtonLeaveConfirm"),
                   menu_step("assert_text_fits ButtonLeaveCancel"), menu_step("assert_visible ButtonResume 0"),
                   {"op": "assert_control", "scope": "menu", "control": "LabelLeaveConfirm",
-                   "text_contains": "match ends for everyone" if who == "host" else "held for reclaim",
+                   "text_contains": "match ends for everyone" if who == "host" else "fall to a teammate or to the AI",
                    "equals": {"visible": True}},
                   menu_step("dump_host_options"), {"op": "screenshot", "name": f"{tag}_confirm"},
                   # Cancel first: the confirmation must be escapable without touching the session.
@@ -261,7 +291,7 @@ def inspect(arm, root, outcome, strict_compare):
             checks[f"{who}_probe_confirmed_leave"] = "post_command ButtonLeaveConfirm" in executed_commands(probe)
         else:
             checks[f"{who}_probe_complete"] = probe.get("pass") is True and probe.get("complete") is True
-    if arm in ("menu", "peers4"):
+    if arm in ("menu", "peers4", "pad"):
         first = outcome["peers"][0]
         for other in outcome["peers"][1:]:
             ok, compared = strict_compare(root / f"{first}_trace.json", root / f"{other}_trace.json", expected_ticks=TICKS)
@@ -277,7 +307,7 @@ def main():
     parser.add_argument("--case", choices=("lifecycle",), required=True)
     parser.add_argument("--exe-sha256", required=True)
     parser.add_argument("--timeout", type=int, default=600)
-    parser.add_argument("--arms", nargs="*", default=["menu", "pause", "leave", "sp", "peers4", "resync"])
+    parser.add_argument("--arms", nargs="*", default=["menu", "pause", "leave", "sp", "peers4", "resync", "pad"])
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("verification family owns the machine; no driver may start")
@@ -300,7 +330,7 @@ def main():
         index = 0
         for size in SIZES:
             for arm in options.arms:
-                if arm in ("peers4", "resync") and size != SIZES[0]:
+                if arm in ("peers4", "resync", "pad") and size != SIZES[0]:
                     continue
                 name = f"{arm}_{size[0]}x{size[1]}"
                 port = PORTS[index % len(PORTS)]
