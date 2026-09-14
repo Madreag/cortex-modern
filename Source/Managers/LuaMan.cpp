@@ -2102,6 +2102,103 @@ do
 end
 )lua"
 	    R"lua(
+-- The same growth, into a used suspended placeholder the restore must reuse, keep and rejoin.
+do
+	local function program(pads)
+		local names, values = {}, {}
+		for i = 1, pads do
+			names[i] = "p" .. i
+			values[i] = i < pads and tostring(i) or "v"
+		end
+		return "local leaf\nlocal function dive(n)\n\tif n > 0 then\n\t\tlocal r = dive(n - 1)\n\t\treturn r\n\tend\n\tlocal v = leaf()\n\treturn v\nend\nleaf = function()\n\tlocal shared = 1\n\tlocal alias = function(value)\n\t\tif value then shared = value end\n\t\treturn shared\n\tend\n\tlocal v = coroutine.yield(alias)\n\tlocal " .. table.concat(names, ", ") .. " = " .. table.concat(values, ", ") .. "\n\treturn tostring(p" .. pads .. ") .. \"/\" .. tostring(shared)\nend\nreturn dive"
+	end
+	local function usedPlaceholder()
+		local co = coroutine.create(function(seed)
+			local kept = seed
+			coroutine.yield(kept)
+			return kept + 1
+		end)
+		coroutine.resume(co, 5)
+		return co
+	end
+	for _, case in ipairs({ { "shallow", 3, 96 }, { "near_limit", 2640, 90 } }) do
+		local tag, depth, pads = case[1], case[2], case[3]
+		local chunk = assert(loadstring(program(pads)))
+		jit.off(chunk, true)
+		local original = coroutine.create(chunk())
+		local startOk, alias = coroutine.resume(original, depth)
+		local slot
+		for _, info in pairs(_ScriptGraphOpenUpvalues()) do
+			if info.thread == original then slot = info.slot end
+		end
+		local needed = select(2, _ScriptGraphThreadStackFits(original))
+		local placeholder = usedPlaceholder()
+		local placeholderMax = select(3, _ScriptGraphThreadStackFits(placeholder))
+		local desc = _ScriptGraphThreadCapture(original)
+		local reused, reuseError = _ScriptGraphThreadRestore(desc, placeholder)
+		local fits, restoredNeeded, restoredMax = false, nil, nil
+		if reused then fits, restoredNeeded, restoredMax = _ScriptGraphThreadStackFits(reused) end
+		local detail = string.format("needed %s placeholder %s restored %s/%s status %s refused %s", tostring(needed), tostring(placeholderMax), tostring(restoredNeeded), tostring(restoredMax), reused and coroutine.status(reused) or "none", tostring(reuseError))
+		check("coroutine_reused_placeholder_grows_" .. tag, startOk and type(alias) == "function" and slot ~= nil and needed > placeholderMax and reused == placeholder and reuseError == nil and fits and restoredNeeded == needed and restoredMax >= needed and coroutine.status(reused) == "suspended", detail)
+		-- A restore rejoins open upvalues onto the restored slots, so a write through the alias must reach the resumed frame.
+		local joined = reused ~= nil and slot ~= nil and coroutine.status(reused) == "suspended" and _ScriptGraphJoinOpenUpvalue(alias, 1, reused, slot)
+		local aliasBefore = joined and alias()
+		if joined then alias(7) end
+		collectgarbage("collect")
+		collectgarbage("collect")
+		local oOk, oValue = coroutine.resume(original, "done")
+		local rOk, rValue = false, nil
+		if reused and coroutine.status(reused) == "suspended" then rOk, rValue = coroutine.resume(reused, "done") end
+		check("coroutine_reused_placeholder_alias_survives_collection_" .. tag, joined == true and aliasBefore == 1 and oOk and oValue == "done/1" and rOk and rValue == "done/7" and coroutine.status(reused) == "dead", string.format("alias %s original %s reused %s", tostring(aliasBefore), tostring(oValue), tostring(rValue)))
+	end
+end
+)lua"
+	    R"lua(
+-- Frozen graph bytes: CC_TEST_SG_ARTIFACT names the file one build writes and another build reads.
+do
+	local path = os.getenv("CC_TEST_SG_ARTIFACT")
+	if path then
+		local pads, depth = 90, 2640
+		local names, values = {}, {}
+		for i = 1, pads do
+			names[i] = "p" .. i
+			values[i] = i < pads and tostring(i) or "v"
+		end
+		local source = "local leaf\nlocal function dive(n)\n\tif n > 0 then\n\t\tlocal r = dive(n - 1)\n\t\treturn r\n\tend\n\tlocal v = leaf()\n\treturn v\nend\nleaf = function()\n\tlocal v = coroutine.yield(\"edge\")\n\tlocal " .. table.concat(names, ", ") .. " = " .. table.concat(values, ", ") .. "\n\treturn p" .. pads .. "\nend\nreturn dive"
+		if os.getenv("CC_TEST_SG_ARTIFACT_READ") then
+			local file = io.open(path, "rb")
+			local text = file and file:read("*a")
+			if file then file:close() end
+			local roots, problems
+			if text then roots, problems = _ScriptGraph.deserialize(text) end
+			local restored = roots and roots["1"] and roots["1"].co
+			local refusal = problems and #problems > 0 and table.concat(problems, " | ") or nil
+			local status = restored and coroutine.status(restored) or "none"
+			local fits, needed, maxstack = false, nil, nil
+			if status == "suspended" then fits, needed, maxstack = _ScriptGraphThreadStackFits(restored) end
+			local ok, value = false, nil
+			if status == "suspended" then ok, value = coroutine.resume(restored, "done") end
+			check("frozen_graph_reader_continues", text ~= nil and refusal == nil and status == "suspended" and fits and ok and value == "done" and coroutine.status(restored) == "dead",
+				string.format("bytes %s needed %s maxstack %s status %s resumed %s/%s refused %s", tostring(text and #text), tostring(needed), tostring(maxstack), status, tostring(ok), tostring(value), tostring(refusal)))
+		else
+			local chunk = assert(loadstring(source))
+			jit.off(chunk, true)
+			local original = coroutine.create(chunk())
+			local startOk, startValue = coroutine.resume(original, depth)
+			local needed = select(2, _ScriptGraphThreadStackFits(original))
+			local text, problems = _ScriptGraph.serialize({ ["1"] = { co = original } })
+			local file = text and io.open(path, "wb")
+			if file then
+				file:write(text)
+				file:close()
+			end
+			check("frozen_graph_writer_saved", startOk and startValue == "edge" and text ~= nil and (problems == nil or #problems == 0) and file ~= nil,
+				string.format("needed %s bytes %s problems %s", tostring(needed), tostring(text and #text), problems and table.concat(problems, " | ") or "none"))
+		end
+	end
+end
+)lua"
+	    R"lua(
 do
 	local names, values = {}, {}
 	for i = 1, 96 do
