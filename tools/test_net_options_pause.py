@@ -35,8 +35,9 @@ def sha(path):
 
 
 def read_log(out):
-    return "\n".join(path.read_text(encoding="utf-8", errors="replace")
-                     for path in (out / "stdout.log", out / "stderr.log") if path.exists())
+    # The pause and leave notices are console lines, so the engine's own console log is part of the log.
+    sources = (out / "stdout.log", out / "stderr.log", out / "runtime" / "LogConsole.txt")
+    return "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in sources if path.exists())
 
 
 def menu_step(command, accepted=True):
@@ -260,7 +261,10 @@ def inspect(arm, root, outcome, strict_compare):
                                  if LEFT_LOCAL in line or LEFT_REMOTE.match(line) or PAUSED.match(line)
                                  or RESUMED.match(line) or ACTIVITY_PAUSED.match(line)]
     if arm == "sp":
-        checks["sp_exit"] = outcome["records"]["sp"].get("exit_code") == 0
+        # The menu script quits from the pause menu before the scenario's tick budget, so the run ends on
+        # the scenario's own unfinished verdict; a crash or a hang would not land there.
+        checks["sp_exit_is_the_scenario_verdict"] = (outcome["records"]["sp"].get("exit_code") == 1
+                                                     and outcome["records"]["sp"].get("timed_out") is False)
         checks["sp_activity_paused"] = any(ACTIVITY_PAUSED.match(line) for line in logs["sp"].splitlines())
         checks["sp_no_menu_failure"] = "[menu-script] FAILED" not in logs["sp"]
     else:
@@ -294,7 +298,8 @@ def inspect(arm, root, outcome, strict_compare):
     if arm in ("menu", "peers4", "pad"):
         first = outcome["peers"][0]
         for other in outcome["peers"][1:]:
-            ok, compared = strict_compare(root / f"{first}_trace.json", root / f"{other}_trace.json", expected_ticks=TICKS)
+            # The capped match hashes its completion tick too, so the trace holds one tick more than the cap.
+            ok, compared = strict_compare(root / f"{first}_trace.json", root / f"{other}_trace.json", expected_ticks=TICKS + 1)
             checks[f"hashes_{first}_{other}"] = ok
             details.setdefault("peer_hashes", {})[other] = compared
     return {"pass": all(checks.values()), "checks": checks, "details": details}

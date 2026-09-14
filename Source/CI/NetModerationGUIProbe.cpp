@@ -67,6 +67,8 @@ namespace {
 	/// The probe's own gamepad, so a start button is the device press the seat reads, not a key.
 	SDL_Joystick* ProbePad() {
 		if (!probe.pad) {
+			// A headless run never holds keyboard focus, and SDL drops device presses without it.
+			SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 			SDL_VirtualJoystickDesc description{};
 			SDL_INIT_INTERFACE(&description);
 			description.type = SDL_JOYSTICK_TYPE_GAMEPAD;
