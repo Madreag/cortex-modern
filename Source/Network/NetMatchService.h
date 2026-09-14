@@ -125,8 +125,7 @@ namespace RTE {
 	/// build without GameNetworkingSockets.
 	std::string NetIceHostIdentity(const std::string& sessionId);
 
-	/// The join_mode a host's directory row carries. A rematch re-registers under a new session id
-	/// while GNS keeps the identity pinned to the first one, so only a direct join still reaches it.
+	/// Reports ICE reachability only for the directory id bound to the listener.
 	std::string NetIceRowJoinMode(bool iceEnabled, bool hasDirectAddress, const std::string& boundSessionId, const std::string& rowSessionId);
 
 	/// Resolves a session id against a directory listing. Empty and a filled target when the row can
@@ -299,8 +298,16 @@ namespace RTE {
 		};
 
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
-		void WorkerRematchMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
-		void WorkerResyncMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
+		void WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
+		void WorkerResyncMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
+		/// The live wire, by the same rule. Caller holds the lock.
+		INetTransport* ActiveWireLocked() const { return m_Mux ? static_cast<INetTransport*>(m_Mux.get()) : m_Transport.get(); }
+		/// Hands the transports and dispatcher to a worker, caching the dispatcher's report. Caller holds the lock.
+		TransportLink TakeTransportLinkLocked();
+		/// Takes them back from a worker. Caller holds the lock.
+		void RestoreTransportLinkLocked(TransportLink link);
+		/// Refuses a resync with no live match or a lost session; a lost session fails the service. Caller holds the lock.
+		bool CanResyncLocked(std::string* error);
 		bool PrepareReceivedResync(const std::vector<uint8_t>& bytes, const NetLockstepCoordinator& coordinator, std::string& pendingLoad, NetResyncState& state, std::string* error, size_t* archiveBytes = nullptr);
 		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request) const;
 		NetMatchConfig BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const;
@@ -342,9 +349,10 @@ namespace RTE {
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
-		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
 		friend bool TestGnsStopCancelContracts(std::string* error);
 		friend bool TestEndedWorldLateAdmission(std::string* error);
+		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
+		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
@@ -463,7 +471,7 @@ namespace RTE {
 		std::string m_IceBoundSessionId;    //!< The session id the process's GNS identity is pinned to.
 		std::string m_IceIdentity;
 		std::string m_IceJoinSessionId;     //!< Client: the session id -net-join-session named.
-		std::string m_IceReport;            //!< The dispatcher's report, captured before teardown.
+		std::string m_IceReport;            //!< The dispatcher's last report, taken when a worker or teardown takes the dispatcher.
 		std::string m_IceRoute;             //!< The leg the join actually took: "ice" | "ip" | "".
 		//!< Published by Update() for the worker: the directory client is game-thread only.
 		std::string m_DirectorySessionId;
