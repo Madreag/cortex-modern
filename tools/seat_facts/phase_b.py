@@ -266,6 +266,39 @@ def pair_arms(root, reference=False):
             invoke(HERE / "check_world.py", [*saves, "--out", root / arm / "world-result.json", *(["--damage"] if arm == "damage" else [])], root / (arm + "_world.log"))
 
 
+def cpu_arms(root):
+    results = {}
+    for arm, port in (("stock", 43589), ("p4", 43590), ("script", 43586)):
+        invoke(HERE / "run_cpu.py", [arm, root / ("cpu_" + arm), "--port", port], root / ("cpu_" + arm + ".log"))
+        results[arm] = json.loads((root / ("cpu_" + arm) / "cpu-result.json").read_text(encoding="utf-8"))
+    stock_placement = results["stock"]["cpu_facts"]["needs_brain_placement"]
+    summary = {"stamp": stamp(), "selected_activity": "P4 Alpha Duel" if stock_placement else "Skirmish Defense",
+        "stock_requires_brain_placement": stock_placement,
+        "pass": results["p4"]["pass"] and results["script"]["pass"] and (results["stock"]["pass"] or stock_placement),
+        "results": results}
+    write_json(root / "cpu-suite.json", summary)
+    return summary
+
+
+def validate_cpu_red(root, suite):
+    checks, quotes = {}, {}
+    for peer, write_team in (("host", 1), ("client", 2)):
+        rows = suite["results"]["p4"]["cpu_facts"]["rows"][peer]
+        first = [row for row in rows if row["phase"] == "first_tick"]
+        checks[peer + "_p4_first_tick_no_cpu"] = len(first) == 1 and first[0]["running"] == 1 and first[0]["tick"] == 1 and first[0]["aiTeams"] == [] and first[0]["flags"] == [[0, 0], [1, 0]] and first[0]["legacy"] == -1
+        written = [row for row in suite["results"]["script"]["cpu_facts"]["rows"][peer] if row["phase"] == "first_tick"]
+        checks[peer + "_per_peer_lua_assignment"] = len(written) == 1 and written[0]["legacy"] == write_team
+        directory = root / "cpu_p4/e2e/humans_vs_cpu" / peer
+        quotes[peer] = []
+        for path in (directory / "stdout.log", directory / "runtime/LogConsole.txt"):
+            if path.is_file():
+                quotes[peer].extend({"path": str(path), "line": number, "text": line} for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1) if "[cpu-facts] phase=first_tick" in line)
+        checks[peer + "_raw_quote_present"] = bool(quotes[peer])
+    write_json(root / "cpu-red-detection.json", {"checks": checks, "quotes": quotes})
+    if not all(checks.values()):
+        raise RuntimeError("the CPU roster/Lua assignment RED was not reproduced; inspect cpu-red-detection.json")
+
+
 def validate_red(root):
     world = json.loads((root / "reseat/world-result.json").read_text(encoding="utf-8"))
     seats = json.loads((root / "lua/seat-result.json").read_text(encoding="utf-8"))
@@ -323,6 +356,9 @@ def main():
     plan = json.loads((ROOT / "phase-b-plan.json").read_text(encoding="utf-8"))
     if fixtures() != plan["fixtures"]:
         raise RuntimeError("an existing fixture differs from the Phase A inventory")
+    cpu_plan = json.loads((ROOT / "cpu-plan.json").read_text(encoding="utf-8"))
+    if any(sha(path) != digest for path, digest in cpu_plan["retained_inputs"].items()):
+        raise RuntimeError("a retained CPU fixture/oracle differs from the item 3 inventory")
     if args.stage in ("red", "reference") and sha(EXE) != RED_SHA:
         raise RuntimeError("the RED executable is not on the ruled path")
     if args.stage == "green":
@@ -343,8 +379,10 @@ def main():
             raise RuntimeError("firewall_allow_rule_present failed for " + str(EXE))
         write_json(root / "manifest.json", {"stamp": stamp(), "exe_sha256": expected, "fixtures": fixtures(), "driver_sha256": sha(__file__)})
         pair_arms(root, args.stage == "reference")
+        cpu_suite = cpu_arms(root)
         if args.stage == "red":
             validate_red(root)
+            validate_cpu_red(root, cpu_suite)
         compatibility(runner, root)
         if args.stage == "green":
             gates(root)
