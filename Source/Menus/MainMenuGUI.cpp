@@ -1244,11 +1244,14 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	const int fixedExtra = statusExtra + portMapHeight;
 	const int panelCap = g_WindowMan.GetResY() - 24; // the Back button's band sits under the panel
 	const int inputBlock = 25;                     // textbox 13 px + a bottom margin matching its sides
+	// The Leave/Seats row ends at rel 240; the first chat row keeps a 4px gap under it and the
+	// error block must not reach into that band.
+	const int c_LobbyChatTop = 245;
 	// Same accessibility rule as the landing status: wide token scrolls horizontally, tall text
 	// vertically. The chat input row always stays, so the error's room never reaches into it.
 	const int errorRoom = std::min(
 	    std::max(24, g_WindowMan.GetResY() - backReserve - 250 + 24 - fixedExtra),
-	    std::max(0, panelCap - 241 - fixedExtra - inputBlock));
+	    std::max(0, panelCap - (c_LobbyChatTop - 4) - fixedExtra - inputBlock));
 	const bool scrollWide = desiredWidth > contentWidth;
 	m_MultiplayerErrorLabel->SetHorizontalOverflowScroll(scrollWide);
 	const int errorHeight = std::max(24, std::min(m_MultiplayerErrorLabel->GetTextHeight() + 4, errorRoom));
@@ -1262,8 +1265,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	// A shrunken box still reads top-down: Middle would anchor a tall error on its middle lines.
 	m_MultiplayerErrorLabel->SetVAlignment(
 	    m_MultiplayerErrorLabel->GetTextHeight() > errorHeight ? GUIFont::Top : GUIFont::Middle);
-	// The Leave/Seats row ends at rel 240; the first chat row keeps a 4px gap under it.
-	const int chatTop = 245 + extraHeight;
+	const int chatTop = c_LobbyChatTop + extraHeight;
 	const int chatRows = std::min<int>(m_MultiplayerLobbyChatLabels.size(),
 	                                   std::max(0, (panelCap - chatTop - inputBlock) / 10));
 	const int contentHeight = chatTop + chatRows * 10 + inputBlock;
