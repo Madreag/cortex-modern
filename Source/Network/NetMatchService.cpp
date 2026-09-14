@@ -1226,13 +1226,15 @@ static std::string ResyncSaveName() {
 		m_Directory.Configure(directoryUrl, directoryKey, directoryCertPin);
 		// While the mapper is still working the register must wait: the row is sent exactly once.
 		if (directoryWanted && (!s_PortMapRequested || s_PortMap.Done())) {
-			m_DirectoryRow.peerCount = m_BeaconMaxPlayers;
-			m_DirectoryRow.seatsFree = directorySeatsFree;
+			NetDirectoryRegisterRequest advertised;
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
+				m_DirectoryRow.peerCount = m_BeaconMaxPlayers;
+				m_DirectoryRow.seatsFree = directorySeatsFree;
 				m_DirectoryRow.joinMode = NetIceRowJoinMode(m_IceEnabled, !m_DirectoryRow.listenAddrs.empty(), m_IceBoundSessionId, m_Directory.GetSessionId());
+				advertised = m_DirectoryRow;
 			}
-			m_Directory.Advertise(m_DirectoryRow, directoryRunning);
+			m_Directory.Advertise(advertised, directoryRunning);
 		} else if (!directoryWanted) {
 			m_Directory.Retract();
 			if (s_PortMapRequested) {
