@@ -12,7 +12,11 @@
 #include <stdexcept>
 #include <unordered_map>
 
+struct BITMAP;
+
 namespace RTE {
+	struct BitmapSnapshot;
+	bool RunOwnedCheckpointSelfTest();
 
 	/// Owned checkpoint values whose text is produced by the archive worker.
 	class CheckpointText {
@@ -22,6 +26,7 @@ namespace RTE {
 		const std::string& Text() const;
 		size_t OwnedBytes() const;
 		bool SameValues(const CheckpointText& other) const;
+		CheckpointText ReuseChildren(const CheckpointText& previous) const;
 		CheckpointText Base64(bool url = true) const;
 		static CheckpointText Deferred(std::function<std::string()> produce, size_t ownedBytes = 0, std::string identity = {});
 	private:
@@ -59,12 +64,15 @@ namespace RTE {
 	public:
 		void Begin() { ++m_Generation; }
 		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value);
+		CheckpointText CapturePixels(const BITMAP* bitmap);
 		std::vector<CheckpointText> RetireUnused();
 	private:
 		struct Entry { CheckpointText text; uint64_t generation = 0; };
 		std::unordered_map<const void*, std::unordered_map<unsigned, Entry>> m_Entries;
 		std::vector<CheckpointText> m_Retired;
 		uint64_t m_Generation = 0;
+		struct Pixels { std::shared_ptr<const BitmapSnapshot> snapshot; CheckpointText text; uint64_t generation = 0; };
+		std::unordered_map<const BITMAP*, Pixels> m_Pixels;
 	};
 
 	/// Writes RTE objects to std::ostreams.
@@ -129,6 +137,27 @@ namespace RTE {
 		static CheckpointText Capture(const std::function<void(Writer&)>& visit, int indent = 0);
 		bool IsCapturing() const { return m_Capture != nullptr; }
 		void Append(const CheckpointText& text);
+		struct SaveOverrides {
+			struct Identity { std::string name; int module = -1; bool original = false; };
+			std::unordered_map<const void*, Identity> identities;
+			std::unordered_map<const void*, std::string> contentPaths;
+			const void* scene = nullptr;
+		};
+		void SetSaveOverrides(const SaveOverrides* overrides) { m_SaveOverrides = overrides; }
+		const SaveOverrides::Identity* IdentityOverride(const void* object) const {
+			if (!m_SaveOverrides) return nullptr;
+			auto found = m_SaveOverrides->identities.find(object);
+			return found == m_SaveOverrides->identities.end() ? nullptr : &found->second;
+		}
+		const std::string* ContentOverride(const void* object) const {
+			if (!m_SaveOverrides) return nullptr;
+			auto found = m_SaveOverrides->contentPaths.find(object);
+			return found == m_SaveOverrides->contentPaths.end() ? nullptr : &found->second;
+		}
+		bool IsSavedScene(const void* scene) const { return m_SaveOverrides && m_SaveOverrides->scene == scene; }
+		int GetIndent() const { return m_IndentCount; }
+		const void* GetCaptureObject() const { return m_CaptureObject; }
+		void SetCaptureObject(const void* object) { m_CaptureObject = object; }
 
 		/// Used to specify the start of an object to be written.
 		/// @param className The class name of the object about to be written.
@@ -282,6 +311,8 @@ namespace RTE {
 		int m_IndentCount; //!< Indentation counter.
 		bool m_Snapshot = false;
 		CheckpointBuffer* m_Capture = nullptr;
+		const SaveOverrides* m_SaveOverrides = nullptr;
+		const void* m_CaptureObject = nullptr;
 
 	private:
 		/// Writes a float in shortest round-trip form, locale-independent and allocation-free.
