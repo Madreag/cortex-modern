@@ -86,16 +86,23 @@ def captured_chat_rows(path):
             "band": [left + 10, bottom - 104, left + 98, bottom - 24]}
 
 
-def end_reason_agreement(labels, summary):
-    """Compare every observed round's status and Details reason with the final report."""
+def end_reason_agreement(labels, summary, console, expected_rounds):
+    """Compare every round's console, status and Details reason with the final report."""
     suffix = " - ready up for a rematch"
     statuses = sorted({text.removesuffix(suffix) for name, text, _ in labels
-                       if name in ("LabelMultiplayerStatus", "LabelLobbyStatus") and suffix in text})
+                       if name in ("LabelMultiplayerStatus", "LabelLobbyStatus")})
     reasons = sorted({match.group(1) for name, text, _ in labels if name == "LabelLastMatchDetails"
                       for match in [re.search(r"^Result: (.*)$", text, re.M)] if match})
+    prefix = "NETWORK: Match complete: "
+    console_lines = [{"line": index, "text": line, "result": line.removeprefix(prefix)}
+                     for index, line in enumerate(console.splitlines(), 1) if line.startswith(prefix)]
     reported = summary.get("result") if summary else None
-    return {"pass": bool(reported) and statuses == reasons == [reported],
-            "status": statuses, "details": reasons, "json": reported}
+    console_matches = (bool(reported) and expected_rounds > 0 and len(console_lines) == expected_rounds and
+                       all(line["result"] == reported for line in console_lines))
+    return {"pass": bool(reported) and statuses == reasons == [reported] and console_matches,
+            "status": statuses, "details": reasons, "json": reported,
+            "console_matches_json": console_matches, "console_lines": console_lines,
+            "expected_rounds": expected_rounds}
 
 
 def menu_script(who, port):
@@ -190,7 +197,7 @@ def run_size(repo, root, size, port, expected):
             report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}
             summary = report.get("last_match", report.get("service", {}).get("last_match"))
             details[who]["summary"] = summary
-            details[who]["end_reason"] = end_reason_agreement(labels, summary)
+            details[who]["end_reason"] = end_reason_agreement(labels, summary, console or log, 2)
             checks[who + "_end_reason_agreement"] = details[who]["end_reason"]["pass"]
             checks[who + "_summary"] = bool(summary and summary["running_ticks"] == TICKS and summary["winner_team"] == -1 and
                                            [peer["name"] for peer in summary["peers"]] == ["Host", "Guest"])
