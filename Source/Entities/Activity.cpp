@@ -1154,6 +1154,7 @@ void Activity::UpdatePlayerBrainRecord() {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (!IsSeatActive(player) || !IsHumanSeat(player)) continue;
 		if (m_Brain[player]) {
+			if (!m_Brain[player]->IsDead()) m_HadBrain[player] = true;
 			g_MovableMan.NotePlayerBrain(m_Brain[player]->GetUniqueID(), true);
 			continue;
 		}

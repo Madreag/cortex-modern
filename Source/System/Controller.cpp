@@ -264,8 +264,10 @@ float Controller::GetLocalDigitalAimSpeed() const {
 }
 
 int Controller::GetInputPlayer() const {
-	const Activity* activity = ActivityMan::IsConstructed() ? g_ActivityMan.GetActivity() : nullptr;
-	return activity ? activity->LocalInputOfPlayer(m_SeatPlayer) : m_SeatPlayer;
+	Activity* activity = ActivityMan::IsConstructed() ? g_ActivityMan.GetActivity() : nullptr;
+	if (!activity || (!m_ControlledActor && activity->GetPlayerController(m_SeatPlayer) != this)) return m_SeatPlayer;
+	const int inputPlayer = activity->LocalInputOfPlayer(m_SeatPlayer);
+	return inputPlayer < 0 && m_SeatMode != InputMode::CIM_PLAYER ? m_SeatPlayer : inputPlayer;
 }
 
 // Every registered actor of a lockstep match takes its sim-facing mode from the committed frames,
