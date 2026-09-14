@@ -81,17 +81,38 @@ function AutosaveCapture240:UpdateActivity()
     end
 end
 """
+TERRAIN_EDITS_LUA = """
+local BaseAutosaveCaptureUpdate = AutosaveCapture240.UpdateActivity;
+function AutosaveCapture240:UpdateActivity()
+    BaseAutosaveCaptureUpdate(self);
+    if self.CaptureTick % 60 ~= 0 then return; end
+    local removed = 0;
+    for row = 0, SceneMan.SceneHeight - 1 do
+        local y = SceneMan.SceneHeight - 1 - row;
+        local x = (self.CaptureTick * 7 + row * 11) % SceneMan.SceneWidth;
+        if SceneMan:GetTerrMatter(x, y) > 0 then
+            SceneMan:DislodgePixel(x, y, true);
+            if SceneMan:GetTerrMatter(x, y) == 0 then removed = removed + 1; end
+        end
+        if removed == 8 then break; end
+    end
+    assert(removed == 8, "autosave terrain stimulus did not remove eight pixels");
+    self.TerrainEditedPixels = (self.TerrainEditedPixels or 0) + removed;
+    print("[autosave-terrain] fixture_tick=" .. self.CaptureTick .. " removed=" .. removed);
+end
+"""
+TERRAIN_EDIT = re.compile(r"\[autosave-terrain\] fixture_tick=(\d+) removed=(\d+)")
 
 
 def write_json(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
 
-def install_fixture(who, runtime):
+def install_fixture(who, runtime, terrain_edits=False):
     module = runtime / "Userdata/UserScenes.rte"
     module.mkdir(parents=True, exist_ok=True)
     (module / "Index.ini").write_text(FIXTURE_INI, encoding="utf-8")
-    (module / "AutosaveCapture240.lua").write_text(FIXTURE_LUA, encoding="utf-8")
+    (module / "AutosaveCapture240.lua").write_text(FIXTURE_LUA + (TERRAIN_EDITS_LUA if terrain_edits else ""), encoding="utf-8")
 
 
 def checkpoint_actor_count(path):
@@ -153,7 +174,7 @@ def process_inventory():
     return rows
 
 
-def launch(repo, root, port, arm, actors):
+def launch(repo, root, port, arm, actors, terrain_edits=False):
     if FAMILY_LOCK.exists():
         raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
     before = process_inventory()
@@ -184,7 +205,9 @@ def launch(repo, root, port, arm, actors):
                         "-net-replay-out", str(root / f"{who}.ccreplay")]
                   for who in ("host", "client")}
         records = run_pair(repo, root, port, {"host": 2, "client": 2}, 400,
-                           extra_args=extras, prepare=install_fixture if actors == ACTORS else None, timeout=600,
+                           extra_args=extras,
+                           prepare=(lambda who, runtime: install_fixture(who, runtime, terrain_edits)) if actors == ACTORS else None,
+                           timeout=600,
                            env={"CCCP_AUTOSAVE_FULL_REFERENCE": "1"} if arm == "incremental-full" else {})
     finally:
         stop.set()
@@ -257,9 +280,9 @@ def cost_failures(rows):
             for row in rows if row["capture_ms"] >= LIMIT_MS]
 
 
-def inspect(root, arm, actors=ACTORS, baseline=False):
+def inspect(root, arm, actors=ACTORS, baseline=False, terrain_edits=False):
     result = {"root": str(root), "arm": arm, "actors": actors, "baseline": baseline,
-              "boundary_limit_ms_exclusive": LIMIT_MS, "peers": {}, "failures": []}
+              "terrain_edits": terrain_edits, "boundary_limit_ms_exclusive": LIMIT_MS, "peers": {}, "failures": []}
     records_path = root / "records.json"
     if records_path.exists():
         records = json.loads(records_path.read_text(encoding="utf-8"))
@@ -287,6 +310,16 @@ def inspect(root, arm, actors=ACTORS, baseline=False):
                 "first_capture_ms": rows[0]["capture_ms"] if rows else None,
                 "steady_capture_ms_max": max((row["capture_ms"] for row in rows[1:]), default=None)}
         result["peers"][who] = peer
+        if terrain_edits:
+            peer["terrain_stimulus"] = [
+                {"source": str(path), "line": number, "raw": raw, "fixture_tick": int(match[1]), "removed": int(match[2])}
+                for name in ("stdout.log", "stderr.log", "runtime/LogConsole.txt")
+                if (path := root / who / name).is_file()
+                for number, raw in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1)
+                if (match := TERRAIN_EDIT.search(raw))]
+            edits = peer["terrain_stimulus"]
+            if {row["fixture_tick"] for row in edits} != set(range(60, 361, 60)) or any(row["removed"] != 8 for row in edits):
+                result["failures"].append(f"{who}: terrain stimulus is missing a six-by-eight pixel edit sequence")
         if arm == "cost":
             result["failures"].extend(cost_failures(rows[1:]))
         if not baseline:
@@ -297,6 +330,11 @@ def inspect(root, arm, actors=ACTORS, baseline=False):
                 path = Path(name)
                 count = checkpoint_actor_count(path)
                 peer["checkpoints"].append({"path": name, "actors": count})
+                if terrain_edits:
+                    with zipfile.ZipFile(path) as archive:
+                        peer["checkpoints"][-1]["terrain_sha256"] = {
+                            name: hashlib.sha256(archive.read(name)).hexdigest()
+                            for name in ("Save Mat.png", "Save FG.png", "Save BG.png")}
                 if count != actors:
                     result["failures"].append(f"{path}: actors={count}, required={actors}")
                 if arm == "incremental-full":
@@ -305,6 +343,10 @@ def inspect(root, arm, actors=ACTORS, baseline=False):
                     peer["checkpoints"][-1]["comparison"] = comparison
                     if not comparison["passed"]:
                         result["failures"].append(f"{path}: incremental/full differ: {comparison}")
+            if terrain_edits:
+                for name in ("Save Mat.png", "Save FG.png"):
+                    if len({row["terrain_sha256"][name] for row in peer["checkpoints"]}) != 3:
+                        result["failures"].append(f"{who}: {name} did not change across all three captures")
         except Exception as error:
             result["failures"].append(f"{who}: {error}")
     result["passed"] = not result["failures"]
@@ -379,11 +421,14 @@ def main():
     parser.add_argument("--scene", type=int, choices=(4, ACTORS), default=ACTORS,
                         help="use the accepted 240-actor fixture or the original four-actor P4 Alpha Duel")
     parser.add_argument("--baseline", action="store_true", help="measure the full-capture control without requiring a worker line")
+    parser.add_argument("--terrain-edits", action="store_true", help="add explicit terrain mutations only to the 240-actor equality fixture")
     args = parser.parse_args()
     if not 48240 <= args.port <= 48247:
         parser.error("three ports must fit 48240..48249")
     if args.baseline and args.arm != "cost":
         parser.error("--baseline applies only to --arm cost")
+    if args.terrain_edits and (args.arm not in ("incremental-full", "fixtures") or args.scene != ACTORS):
+        parser.error("--terrain-edits requires the 240-actor incremental-full arm (or fixture export)")
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=False)
     os.environ["CCCP_HEADLESS"] = "1"
@@ -395,27 +440,27 @@ def main():
         elif args.arm == "oracle":
             result = oracle_selftest(args.out)
         elif args.arm == "fixtures":
-            install_fixture("host", args.out)
-            result = {"passed": True, "engine_launched": False, "actors": ACTORS}
+            install_fixture("host", args.out, args.terrain_edits)
+            result = {"passed": True, "engine_launched": False, "actors": ACTORS, "terrain_edits": args.terrain_edits}
         elif args.run_root:
-            result = inspect(args.run_root.resolve(), args.arm, args.scene, args.baseline)
+            result = inspect(args.run_root.resolve(), args.arm, args.scene, args.baseline, args.terrain_edits)
         else:
             runs = []
             repo = args.repo.resolve()
             for repeat in range(args.runs):
                 root = args.out / f"run-{repeat + 1}"
                 try:
-                    launch(repo, root, args.port + repeat, args.arm, args.scene)
-                    measured = inspect(root, args.arm, args.scene, args.baseline)
+                    launch(repo, root, args.port + repeat, args.arm, args.scene, args.terrain_edits)
+                    measured = inspect(root, args.arm, args.scene, args.baseline, args.terrain_edits)
                 except Exception as error:
-                    measured = inspect(root, args.arm, args.scene, args.baseline)
+                    measured = inspect(root, args.arm, args.scene, args.baseline, args.terrain_edits)
                     measured["failures"].append(str(error))
                     measured["passed"] = False
                 runs.append(measured)
                 write_json(args.out / "result.json", {"runs": runs, "passed": False})
             result = {"passed": all(row["passed"] for row in runs), "runs": runs, "quiet_repetitions": args.runs,
-                      "actors": args.scene, "baseline": args.baseline,
-                      "fixture_sha256": hashlib.sha256(FIXTURE_LUA.encode()).hexdigest() if args.scene == ACTORS
+                      "actors": args.scene, "baseline": args.baseline, "terrain_edits": args.terrain_edits,
+                      "fixture_sha256": hashlib.sha256((FIXTURE_LUA + (TERRAIN_EDITS_LUA if args.terrain_edits else "")).encode()).hexdigest() if args.scene == ACTORS
                       else hashlib.sha256((repo / "Data/Base.rte/Activities/P4AlphaDuel.lua").read_bytes()).hexdigest()}
     except Exception as error:
         result = {"passed": False, "error": str(error)}
