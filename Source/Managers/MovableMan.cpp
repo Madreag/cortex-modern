@@ -576,6 +576,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				std::cout << "[net-match] buy order queued: team " << delivery->team << " cost " << delivery->cost << " funds " << fundsBefore << " -> " << activity->GetTeamFunds(delivery->team) << " items " << delivery->cargo.size() << std::endl;
 			} else {
 				// Load the manifest in order so both peers clone the same presets and assign matching unique ids.
+				int loaded = 0;
 				for (const NetGameCargoItem& item : delivery->cargo) {
 					const Entity* itemPreset = g_PresetMan.GetEntityPreset(item.className, item.preset, item.module);
 					if (!itemPreset) {
@@ -585,6 +586,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 					Entity* itemClone = itemPreset->Clone();
 					if (MovableObject* cargo = dynamic_cast<MovableObject*>(itemClone)) {
 						craft->AddInventoryItem(cargo);
+						++loaded;
 					} else {
 						delete itemClone;
 					}
@@ -595,6 +597,8 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				craft->SetAIMode(Actor::AIMODE_DELIVER);
 				craft->SetNetworkDelivery(true);
 				g_MovableMan.AddActor(craft);
+				// One line per applied delivery on every peer, so the peers' logs compare directly.
+				std::cout << "[net-match] deliver command host applied tick=" << readyFrame.frame << " team=" << delivery->team << " order=" << command.sequence << " items=" << loaded << " peer=" << static_cast<int>(command.senderPeerId) << std::endl;
 			}
 		} else if (const NetGameScuttleCraft* scuttle = std::get_if<NetGameScuttleCraft>(&command.payload)) {
 			// Set the scuttle AI mode on every peer so the gib (which runs in both peers' ungated physics) matches.
@@ -715,7 +719,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				std::cout << "[net-match] inventory command did not apply: op " << static_cast<int>(inventoryOp->op) << " UID " << inventoryOp->actorUID << std::endl;
 			}
 		} else if (const NetGamePauseMatch* pauseMatch = std::get_if<NetGamePauseMatch>(&command.payload)) {
-			ScenarioRunner::ApplyLockstepPauseCommand(pauseMatch->pause);
+			ScenarioRunner::ApplyLockstepPauseCommand(pauseMatch->pause, command.senderPeerId);
 		} else if (const NetGameAIEquip* equip = std::get_if<NetGameAIEquip>(&command.payload)) {
 			// The AI's equip call runs here on every peer; only the peer driving the actor may issue it.
 			AHuman* human = dynamic_cast<AHuman*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(equip->actorUID)));
@@ -751,6 +755,22 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		}
 	}
 	MovableMan::ReconcileLockstepControlBindings();
+}
+
+// With no coordinator the pending commands have no ready frame to ride in on, so a scenario run
+// drains them itself and applies the identical set through the same path the match uses.
+static void ApplyOfflineGameCommands(uint64_t simTick) {
+	if (ScenarioRunner::HasLockstepCoordinator()) {
+		return;
+	}
+	std::vector<NetGameCommand> commands = ScenarioRunner::DrainLocalGameCommands();
+	if (commands.empty()) {
+		return;
+	}
+	NetLockstepReadyFrame readyFrame;
+	readyFrame.frame = simTick;
+	readyFrame.localCommands = std::move(commands);
+	ApplyLockstepGameCommands(readyFrame);
 }
 
 namespace {
@@ -799,6 +819,27 @@ void MovableMan::ApplyLockstepControlHandoffToActor(Actor& actor, bool seated) {
 	}
 	controller.ApplyWireMode(handedMode, controller.GetPlayerRaw());
 	actor.OnControllerInputModeChanged(previousMode, previousPlayer);
+}
+
+std::vector<long int> MovableMan::BeginLockstepProducingPass(const std::deque<Actor*>& actors, const std::function<bool(const Actor*)>& isLocal) {
+	std::vector<long int> producing;
+	producing.reserve(actors.size());
+	for (Actor* actor: actors) {
+		if (isLocal(actor)) {
+			producing.push_back(static_cast<long int>(actor->GetUniqueID()));
+			actor->GetController()->BeginLocalProduction();
+		}
+	}
+	return producing;
+}
+
+void MovableMan::EndLockstepProducingPass(const std::vector<long int>& producing) {
+	for (long int actorID: producing) {
+		Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(actorID));
+		if (actor && g_MovableMan.IsActor(actor)) {
+			actor->GetController()->EndLocalProduction();
+		}
+	}
 }
 
 void MovableMan::ReconcileLockstepControlBindings() {
@@ -997,6 +1038,8 @@ static void DumpAttachableTree(uint64_t tick, const MOSRotating* parent, std::os
 }
 
 void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
+	// The queued MOID draw renumbers m_MOID on the pool while this reads it; join it so one dump holds one tick's numbering.
+	g_MovableMan.CompleteQueuedMOIDDrawings();
 	auto dumpMO = [&](const char* kind, MovableObject* mo) {
 		out << tick << " " << kind << " uid=" << mo->GetUniqueID() << " " << mo->GetPresetName()
 		    << " pos=" << std::hexfloat << mo->GetPos().m_X << "," << mo->GetPos().m_Y
@@ -4608,19 +4651,29 @@ void MovableMan::UpdateControllers() {
 			}
 		}
 	}
-	// Record every registered actor's owner once, here, where the wire takes over: the policy would
-	// otherwise re-derive it from the control mode a switch is about to change.
+	// Record every registered actor's owner once per team it plays for, here, where the wire takes
+	// over: the policy would otherwise re-derive it from the control mode a switch is about to change.
+	// A live claim is not the owner to return to, so the entry takes the policy's peer, not the claimant.
 	if (lockstepActive) {
 		for (const Actor* actor: m_Actors) {
 			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
-			if (!NetActorOwnership::HasSeededOwner(uid)) {
-				NetActorOwnership::SeedOwner(uid, ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()));
+			// The ownership query normalizes a negative team to 0; the seed records the team it was resolved at.
+			const uint8_t team = actor->GetTeam() < 0 ? uint8_t{0} : static_cast<uint8_t>(actor->GetTeam());
+			if (!NetActorOwnership::HasSeededOwnerForTeam(uid, team)) {
+				NetActorOwnership::SeedOwner(uid, ScenarioRunner::GetLockstepPolicyActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()), team);
 			}
 		}
 	}
 	if (lockstepActive && ScenarioRunner::IsControllerLogReplaying()) {
 		ScenarioRunner::SetControllerReplayError("lockstep controller sync cannot be combined with controller log replay.");
 		return;
+	}
+
+	// The pass that samples this machine's seats and runs its AI owns the input it produces; the sim keeps
+	// the frame the wire committed for this tick until the frames are snapshotted.
+	std::vector<long int> producingActors;
+	if (lockstepActive) {
+		producingActors = BeginLockstepProducingPass(m_Actors, isLocalControllerActor);
 	}
 
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsAI);
@@ -4812,6 +4865,7 @@ void MovableMan::UpdateControllers() {
 
 	if (!lockstepActive) {
 		CommitOfflineValueWrites();
+		ApplyOfflineGameCommands(simTick);
 	}
 
 	if (lockstepActive) {
@@ -4821,6 +4875,7 @@ void MovableMan::UpdateControllers() {
 		// the frame COMMITTED for simTick — sampled D ticks ago — so local and remote apply in phase.
 		// At D=0 the committed local frame is this tick's snapshot, so behavior is unchanged.
 		std::vector<ControllerFrame> localFrames = SnapshotLockstepControllerFrames(m_Actors, true);
+		EndLockstepProducingPass(producingActors);
 		DumpControllerDebugSnapshot("lockstep_local_pre_canonicalize", simTick, m_Actors, &localFrames);
 		if (!CanonicalizeControllerFramesThroughWire(localFrames, error)) {
 			DumpControllerDebugSnapshot("lockstep_local_canonicalize_error", simTick, m_Actors, &localFrames, &error);
@@ -5158,11 +5213,14 @@ namespace {
 		std::vector<std::pair<uint64_t, long>> quarantine;
 		std::vector<long> moidIndex;
 		std::map<long, int> contiguousActorIDs;
-		std::map<long, int> actorOwners;
+		std::map<long, std::pair<int, int>> actorOwners; // Actor -> its seeded owner and the team that owner was seeded at.
 		std::array<int, Activity::MaxTeamCount> teamMOIDCount{};
 		std::array<std::set<long>, 3> validObjects;
-		template <class Archive> void Fields(Archive& archive) {
-			archive(cohorts, rosters, sortRoster, alarms, quarantine, moidIndex, contiguousActorIDs, actorOwners, teamMOIDCount, validObjects);
+		// A WorldStructure1 payload predates the owner map and carries no owners field.
+		template <class Archive> void Fields(Archive& archive, bool legacy = false) {
+			archive(cohorts, rosters, sortRoster, alarms, quarantine, moidIndex, contiguousActorIDs);
+			if (!legacy) archive(actorOwners);
+			archive(teamMOIDCount, validObjects);
 		}
 	};
 }
@@ -5186,20 +5244,25 @@ std::string MovableMan::SaveWorldStructure() const {
 	}
 	// Only a live actor's owner travels: a seeded owner for a removed actor would fail the load's live-actor check.
 	const auto saveOwner = [&state](const Actor* actor) {
-		if (const uint8_t owner = NetActorOwnership::GetSeededOwner(static_cast<int64_t>(actor->GetUniqueID())); owner != 0) state.actorOwners.emplace(static_cast<long>(actor->GetUniqueID()), static_cast<int>(owner));
+		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+		if (const uint8_t owner = NetActorOwnership::GetSeededOwner(uid); owner != 0) {
+			state.actorOwners.emplace(static_cast<long>(uid), std::pair{static_cast<int>(owner), static_cast<int>(NetActorOwnership::GetSeededOwnerTeam(uid))});
+		}
 	};
 	for (const Actor* actor: m_Actors) saveOwner(actor);
 	for (const Actor* actor: m_AddedActors) saveOwner(actor);
 	for (const AlarmEvent* event: m_AlarmEvents) state.alarms[0].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	for (const AlarmEvent* event: m_AddedAlarmEvents) state.alarms[1].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	state.quarantine = m_LockstepJoinQuarantine;
-	CheckpointWriter writer("WorldStructure1"); state.Fields(writer); return writer.Text();
+	CheckpointWriter writer("WorldStructure2"); state.Fields(writer); return writer.Text();
 }
 
 bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 	try {
 		WorldStructure state;
-		CheckpointReader reader(text, "WorldStructure1"); state.Fields(reader); reader.Finish();
+		// A game saved before the owner map keeps loading; its owners are re-derived from the policy.
+		const bool legacy = text.starts_with("15 WorldStructure1 ");
+		CheckpointReader reader(text, legacy ? "WorldStructure1" : "WorldStructure2"); state.Fields(reader, legacy); reader.Finish();
 		std::set<long> incoming;
 		for (const auto& cohort: state.cohorts) for (long uid: cohort) {
 			if (uid <= 0 || !incoming.insert(uid).second) throw std::runtime_error("invalid or duplicate world member");
@@ -5239,10 +5302,12 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 		for (long uid: state.moidIndex) index.push_back(resolve(uid));
 		std::unordered_map<const Actor*, int> contiguous;
 		for (const auto& [uid, id]: state.contiguousActorIDs) contiguous.emplace(actor(uid), id);
-		std::map<int64_t, uint8_t> owners;
-		for (const auto& [uid, owner]: state.actorOwners) {
+		std::map<int64_t, NetSeededActorOwner> owners;
+		for (const auto& [uid, entry]: state.actorOwners) {
+			const auto& [owner, team] = entry;
 			if (!actor(uid) || owner < 0 || owner > 255) throw std::runtime_error("owner entry names no live actor");
-			owners.emplace(static_cast<int64_t>(uid), static_cast<uint8_t>(owner));
+			if (team < 0 || team > 255) throw std::runtime_error("owner entry names no team");
+			owners.emplace(static_cast<int64_t>(uid), NetSeededActorOwner{static_cast<uint8_t>(owner), static_cast<uint8_t>(team)});
 		}
 		// Allocate the incoming events before changing any live membership.
 		std::array<std::vector<std::unique_ptr<AlarmEvent>>, 2> events;
@@ -5295,13 +5360,17 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	const bool cleared = RemoveActor(craft) == craft && GetContiguousActorID(craft) < 0;
 
 	const std::string text = SaveWorldStructure();
+	const bool tagged = text.starts_with("15 WorldStructure2 ");
 	bool archived = false;
+	bool roundTripped = false;
 	try {
 		WorldStructure parsed;
-		CheckpointReader reader(text, "WorldStructure1"); parsed.Fields(reader); reader.Finish();
+		CheckpointReader reader(text, "WorldStructure2"); parsed.Fields(reader); reader.Finish();
 		const std::set<long> live(parsed.cohorts[0].begin(), parsed.cohorts[0].end());
 		archived = parsed.contiguousActorIDs.size() == m_ContiguousActorIDs.size() && !parsed.contiguousActorIDs.contains(craftUID);
 		for (const auto& entry: parsed.contiguousActorIDs) archived = archived && live.contains(entry.first);
+		CheckpointWriter rewriter("WorldStructure2"); parsed.Fields(rewriter);
+		roundTripped = rewriter.Text() == text;
 	} catch (const std::exception&) {
 	}
 
@@ -5313,11 +5382,26 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	orphaned.contiguousActorIDs.emplace(0, 5);
 	WorldStructure stale = clean;
 	stale.contiguousActorIDs.emplace(4242, 5);
-	CheckpointWriter cleanWriter("WorldStructure1"); clean.Fields(cleanWriter);
-	CheckpointWriter orphanedWriter("WorldStructure1"); orphaned.Fields(orphanedWriter);
-	CheckpointWriter staleWriter("WorldStructure1"); stale.Fields(staleWriter);
+	CheckpointWriter cleanWriter("WorldStructure2"); clean.Fields(cleanWriter);
+	CheckpointWriter orphanedWriter("WorldStructure2"); orphaned.Fields(orphanedWriter);
+	CheckpointWriter staleWriter("WorldStructure2"); stale.Fields(staleWriter);
 	const bool accepted = LoadWorldStructure(text, true) && LoadWorldStructure(cleanWriter.Text(), true);
 	const bool refused = !LoadWorldStructure(orphanedWriter.Text(), true) && !LoadWorldStructure(staleWriter.Text(), true);
+
+	// A game saved before the record carried the owner map: its payload has no owners field at all.
+	const auto writeLegacyFields = [](const WorldStructure& state, CheckpointWriter& writer) {
+		writer(state.cohorts, state.rosters, state.sortRoster, state.alarms, state.quarantine, state.moidIndex, state.contiguousActorIDs, state.teamMOIDCount, state.validObjects);
+	};
+	CheckpointWriter legacyWriter("WorldStructure1"); writeLegacyFields(clean, legacyWriter);
+	CheckpointWriter legacyTrailingWriter("WorldStructure1"); writeLegacyFields(clean, legacyTrailingWriter); legacyTrailingWriter.Value(7);
+	CheckpointWriter unknownWriter("WorldStructure3"); clean.Fields(unknownWriter);
+	// The layout the owner map first shipped as: owners under the old tag, which no reader can tell apart.
+	WorldStructure owned = clean;
+	owned.actorOwners.emplace(1001, std::pair{2, 1});
+	CheckpointWriter intermediateWriter("WorldStructure1"); owned.Fields(intermediateWriter);
+	const bool legacyAccepted = LoadWorldStructure(legacyWriter.Text(), true);
+	const bool legacyRefused = !LoadWorldStructure(legacyTrailingWriter.Text(), true) && !LoadWorldStructure(unknownWriter.Text(), true) &&
+	                           !LoadWorldStructure(intermediateWriter.Text(), true);
 
 	auto plantAdded = [this](Actor* actor, int id) {
 		if (!actor) {
@@ -5368,9 +5452,12 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	}
 
 	AddActor(craft);
-	const bool passed = indexed && cleared && archived && accepted && refused && addedRemoveCleared && absorbDeleteCleared && discardAddedCleared;
+	const bool passed = indexed && cleared && archived && roundTripped && tagged && accepted && refused && legacyAccepted && legacyRefused &&
+	                    addedRemoveCleared && absorbDeleteCleared && discardAddedCleared;
 	std::cout << "[contiguous-index-selftest] " << (passed ? "PASS" : "FAIL") << " indexed=" << indexed << " cleared=" << cleared
-	          << " archived=" << archived << " accepted=" << accepted << " refused=" << refused
+	          << " archived=" << archived << " round_trip=" << roundTripped << " tagged=" << tagged
+	          << " accepted=" << accepted << " refused=" << refused
+	          << " legacy=" << legacyAccepted << " legacy_refused=" << legacyRefused
 	          << " added_remove=" << addedRemoveCleared << " absorb_delete=" << absorbDeleteCleared
 	          << " discard_added=" << discardAddedCleared << std::endl;
 	return passed;

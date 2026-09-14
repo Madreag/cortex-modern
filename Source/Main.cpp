@@ -60,6 +60,7 @@
 #include "MovableObject.h"
 #include "RTETools.h"
 #include "RotatePrimitiveSelfTest.h"
+#include "FloatTextSelfTest.h"
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
@@ -180,6 +181,12 @@ static bool s_purgeSelfTestPassed = false;
 static bool s_globalCallbacksSelfTest = false;
 static bool s_globalCallbacksSelfTestPassed = false;
 
+// -selftest-frame-stall <tick>:<ms>: hold one frame, so a sim tick reading the wall clock is observable.
+static bool s_frameStallArmed = false;
+static bool s_frameStallFired = false;
+static long long s_frameStallTick = 0;
+static int s_frameStallMs = 0;
+
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
 static constexpr int c_NetSessionDefaultLuaStates = 4;
 static int s_cliNumLuaStatesOverride = -1;
@@ -262,6 +269,7 @@ static std::string s_netJoinSessionId; //!< -net-join-session: the directory ses
 static constexpr uint32_t c_CappedStopDrainMs = 8000;
 static constexpr uint32_t c_CappedStopLingerMs = 1500;
 static uint64_t s_netLockstepTicks = 0;
+static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
 static uint16_t s_netLockstepInputDelay = 0;
 static uint8_t s_netMatchPeers = 2;
 static std::string s_netMatchMode = "pvp";
@@ -323,6 +331,17 @@ static int s_netMatchResyncs = 0;
 static bool s_netMatchResyncOnDesync = false;
 static bool s_netMatchAutoDelay = false;
 static std::string s_netMatchServiceE2EError;
+// -net-chat-script <file>: lines "tick all|team text" this peer sends at those sim ticks.
+// Presentation-only traffic — the sends never touch the command stream or a tick hash.
+struct NetChatScriptLine {
+	uint64_t tick = 0;
+	uint8_t scope = c_NetChatScopeAll;
+	std::string text;
+};
+static std::string s_netChatScriptPath;
+static std::vector<NetChatScriptLine> s_netChatScript;
+static size_t s_netChatScriptNext = 0;
+static void NetChatScriptOnSimTick(uint64_t simTick);
 static std::string s_netReplayInPath;
 static std::string s_netReplayVerifyPath;
 static uint64_t s_netReplayDumpFrom = 1;
@@ -584,6 +603,20 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			i += 2;
 			continue;
 		}
+		if (currentArg == "-selftest-frame-stall" && i + 1 < argCount) {
+			const std::string spec = argValue[i + 1];
+			const size_t separator = spec.find(':');
+			if (separator != std::string::npos) {
+				s_frameStallTick = std::strtoll(spec.substr(0, separator).c_str(), nullptr, 10);
+				s_frameStallMs = static_cast<int>(std::strtol(spec.substr(separator + 1).c_str(), nullptr, 10));
+				s_frameStallArmed = s_frameStallMs > 0;
+			}
+			if (!s_frameStallArmed) {
+				std::cerr << "[selftest] frame stall expected <tick>:<ms>, got " << spec << std::endl;
+			}
+			i += 2;
+			continue;
+		}
 		if (currentArg == "-contract-audit" && i + 1 < argCount) {
 			s_contractAuditOperation = argValue[i + 1];
 			i += 2;
@@ -834,6 +867,27 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (currentArg == "-net-match-screenshot-ticks") {
+			const std::string list = lastArg ? "" : argValue[++i];
+			std::istringstream entries(list);
+			std::string entry;
+			bool valid = !list.empty() && list.back() != ',';
+			while (std::getline(entries, entry, ',')) {
+				uint64_t tick = 0;
+				std::istringstream number(entry);
+				if (entry.empty() || !std::all_of(entry.begin(), entry.end(), [](char c) { return c >= '0' && c <= '9'; }) || !(number >> tick) || !number.eof() || tick == 0) {
+					valid = false;
+					break;
+				}
+				s_netMatchScreenshotTicks.insert(tick);
+			}
+			if (!valid || s_netMatchScreenshotTicks.size() > 32) {
+				std::cerr << "[net-match-screenshot] expected 1-32 positive, comma-separated applied ticks" << std::endl;
+				return false;
+			}
+			continue;
+		}
+
 		if (!lastArg && currentArg == "-net-lockstep-input-delay") {
 			const unsigned long parsedDelay = std::strtoul(argValue[++i], nullptr, 10);
 			s_netLockstepInputDelay = static_cast<uint16_t>(std::min<unsigned long>(parsedDelay, NetLockstepCodec::c_MaxInputDelayFrames));
@@ -853,6 +907,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				return false;
 			}
 			s_e2eNamedSpawns.push_back(spec);
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-chat-script") {
+			s_netChatScriptPath = argValue[++i];
 			continue;
 		}
 
@@ -1142,8 +1201,8 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-lpinv-overlay-links") {
 			// b spawn and shadow links, r a shadow item in reach, c spawn parts, wounds and a shadow part.
 			const std::string modes = argValue[++i];
-			if (modes.empty() || modes.find_first_not_of("brc") != std::string::npos) {
-				std::cerr << "[lpinv] bad overlay-link modes '" << modes << "': expected letters from brc" << std::endl;
+			if (modes.empty() || modes.find_first_not_of("brcitmqxonlap") != std::string::npos) {
+				std::cerr << "[lpinv] bad overlay-link modes '" << modes << "': expected letters from brcitmqxonlap" << std::endl;
 				return false;
 			}
 			s_lpOverlayLinkModes = modes;
@@ -1488,6 +1547,17 @@ void ProcessMenuScript() {
 		const bool pass = actual == expected;
 		std::cout << "[menu-script] assert_substate expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
 		if (!pass) { return MenuScriptFail("assert_substate expected " + expected + " got " + actual); }
+	} else if (cmd == "chat") {
+		// The same send the lobby's input line does, driven headless so a capture has content.
+		std::string scope;
+		iss >> scope;
+		std::string text;
+		std::getline(iss, text);
+		if (!text.empty() && text[0] == ' ') { text.erase(0, 1); }
+		const uint8_t scopeValue = scope == "team" ? c_NetChatScopeTeam : c_NetChatScopeAll;
+		const bool ok = g_NetMatchService.SendChat(scopeValue, text);
+		std::cout << "[menu-script] chat scope=" << scope << " ok=" << ok << " text=\"" << text << "\"" << std::endl;
+		if (!ok) { return MenuScriptFail("chat send dropped: " + text); }
 	} else if (cmd == "dump_lobby") {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::cout << "[menu-script] dump_lobby state=" << snapshot.serviceState << " members=" << snapshot.members.size()
@@ -1921,6 +1991,12 @@ static std::string RollbackProbeSaveName() {
 	return "rbprobe_" + std::to_string(System::GetProcessID());
 }
 
+/// Whether this completed update batch has a harness frame to present.
+static bool NetMatchScreenshotDue() {
+	return !s_netMatchScreenshotTicks.empty() && ScenarioRunner::IsLockstepControllerSyncActive() &&
+	       s_netMatchScreenshotTicks.contains(ScenarioRunner::GetLockstepCompletedFrame());
+}
+
 static void DrawFrameWithPreviews() {
 	RandomGenerator* prevSimRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
@@ -1930,10 +2006,20 @@ static void DrawFrameWithPreviews() {
 	LocalPredictionHudSelfTest::SampleDuringRender();
 	g_FrameMan.Draw();
 	LocalPredictionHudSelfTest::SampleAfterDraw();
+	if (auto* panel = g_MenuMan.GetNetworkPanel()) {
+		panel->SetMatchPace(s_paceSimTicks, s_paceUpdateUs + s_paceDrawUs);
+	}
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts();
 	g_WindowMan.DrawPostProcessBuffer();
 	g_WindowMan.UploadFrame();
+	if (NetMatchScreenshotDue()) {
+		const uint64_t tick = ScenarioRunner::GetLockstepCompletedFrame();
+		const std::string name = "net_match_tick_" + std::to_string(tick) + "_round_" + std::to_string(ScenarioRunner::GetLockstepRoundId());
+		const int result = g_FrameMan.SaveScreenToPNG(name.c_str());
+		std::cout << "[net-match-screenshot] applied_tick=" << tick << " name=" << name << " queued=" << (result == 0) << std::endl;
+		s_netMatchScreenshotTicks.erase(tick);
+	}
 	LocalPrediction::EndRender();
 	LocalPredictionHudSelfTest::SampleAfterRender();
 	g_SceneMan.SetRenderDrawContext(false);
@@ -2005,8 +2091,37 @@ static std::string CheckPreviewOutcome(long long startTick, long long horizon) {
 	return "";
 }
 
+// The first differing lines of two canonical-state captures, so a failure names what moved.
+static std::string DescribeStateDifference(const std::string& before, const std::string& after) {
+	const auto split = [](const std::string& text) {
+		std::vector<std::string> lines;
+		std::istringstream stream(text);
+		std::string line;
+		while (std::getline(stream, line)) {
+			lines.push_back(line);
+		}
+		return lines;
+	};
+	const std::vector<std::string> first = split(before);
+	const std::vector<std::string> second = split(after);
+	std::string detail;
+	size_t differing = 0;
+	size_t shown = 0;
+	for (size_t index = 0; index < std::min(first.size(), second.size()); ++index) {
+		if (first[index] == second[index]) {
+			continue;
+		}
+		++differing;
+		if (shown < 3) {
+			++shown;
+			detail += " line " + std::to_string(index + 1) + ": '" + first[index].substr(0, 60) + "' -> '" + second[index].substr(0, 60) + "'";
+		}
+	}
+	return "lines " + std::to_string(first.size()) + "->" + std::to_string(second.size()) + " differing=" + std::to_string(differing) + detail;
+}
+
 // One depth-1 preview per overlay-link mode; survivor links must miss retired objects and the canonical world must stay identical.
-static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, int& failures) {
+static void RunOverlayLinkArm(char mode, int& cases, int& failures) {
 	const std::string label = std::string("overlay-links ") + mode;
 	bool caseFailed = false;
 	const auto fail = [&caseFailed, &label](const std::string& what) {
@@ -2017,6 +2132,35 @@ static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, 
 		std::cout << "[lpinv] PASS " << label << ": " << what << std::endl;
 	};
 	++cases;
+	// The letters run in sequence in one process, so each is compared against the state it started from.
+	LocalPrediction::Clear();
+	g_MovableMan.DropAllPreviewGhosts();
+	std::vector<std::string> problems;
+	const std::string before = DumpSimStateToString() + DescribeCanonicalExtras(problems);
+	for (const std::string& problem: problems) {
+		fail("cannot capture canonical Lua state: " + problem);
+	}
+	if (std::string("itmqxonlap").find(mode) != std::string::npos) {
+		if (!PreviewScriptSelfTest::RunRetirementArm(mode)) {
+			caseFailed = true;
+		}
+		problems.clear();
+		const std::string after = DumpSimStateToString() + DescribeCanonicalExtras(problems);
+		for (const std::string& problem: problems) {
+			fail("cannot capture canonical Lua state: " + problem);
+		}
+		if (after != before) {
+			WriteProbeText(std::string("lpinv_before_overlay_") + mode, before);
+			WriteProbeText(std::string("lpinv_after_overlay_") + mode, after);
+			fail(std::string("canonical state changed after retirement arm (lpinv_before_overlay_") + mode + " vs lpinv_after_overlay_" + mode + ")");
+		}
+		if (caseFailed) {
+			++failures;
+		} else {
+			pass("canonical state byte-identical");
+		}
+		return;
+	}
 	Activity* activity = g_ActivityMan.GetActivity();
 	// Clear item-in-reach and arm support so faithful resolution cannot overwrite the probe's links.
 	std::vector<std::pair<Actor*, HeldDevice*>> reach;
@@ -2134,14 +2278,15 @@ static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, 
 	for (auto entry = support.rbegin(); entry != support.rend(); ++entry) {
 		entry->first->SetHeldDeviceThisArmIsTryingToSupport(entry->second);
 	}
-	std::vector<std::string> problems;
+	problems.clear();
 	const std::string after = DumpSimStateToString() + DescribeCanonicalExtras(problems);
 	for (const std::string& problem: problems) {
 		fail("cannot capture canonical Lua state: " + problem);
 	}
 	if (after != before) {
+		WriteProbeText(std::string("lpinv_before_overlay_") + mode, before);
 		WriteProbeText(std::string("lpinv_after_overlay_") + mode, after);
-		fail(std::string("canonical state changed after the overlay-link preview (lpinv_before vs lpinv_after_overlay_") + mode + ")");
+		fail(std::string("canonical state changed after the overlay-link preview (lpinv_before_overlay_") + mode + " vs lpinv_after_overlay_" + mode + ")");
 	}
 	if (caseFailed) {
 		++failures;
@@ -2180,6 +2325,120 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 		return;
 	}
 	WriteProbeText("lpinv_before", before);
+	// What a checkpoint taken with previews outstanding would see: the per-state bindings and the graph roots.
+	struct Registrations {
+		std::string bindings;
+		std::vector<std::string> graphs;
+		std::vector<std::vector<long>> roots;
+	};
+	// The uids SerializeScriptGraph keys its roots by: registered plus pending, scripts initialized, one per uid.
+	const auto rootUIDs = [](const LuaStateWrapper& state) {
+		std::vector<long> uids;
+		for (const MovableObject* mo: state.GetRegisteredMOs()) {
+			if (mo->ObjectScriptsInitialized()) {
+				uids.push_back(mo->GetUniqueID());
+			}
+		}
+		for (const MovableObject* mo: state.GetPendingRegisteredMOs()) {
+			if (mo->ObjectScriptsInitialized()) {
+				uids.push_back(mo->GetUniqueID());
+			}
+		}
+		std::sort(uids.begin(), uids.end());
+		uids.erase(std::unique(uids.begin(), uids.end()), uids.end());
+		return uids;
+	};
+	const auto captureRegistrations = [&rootUIDs](std::vector<std::string>& into) {
+		Registrations capture;
+		capture.bindings = g_MovableMan.DescribeScriptBindings();
+		g_MovableMan.SerializeScriptGraphs(capture.graphs, into);
+		capture.roots.push_back(rootUIDs(g_LuaMan.GetMasterScriptState()));
+		for (const LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
+			capture.roots.push_back(rootUIDs(state));
+		}
+		return capture;
+	};
+	const auto describeDrift = [](const Registrations& was, const Registrations& now) {
+		const auto bindingLines = [](const std::string& text) {
+			std::map<std::string, std::string> byState;
+			std::istringstream stream(text);
+			for (std::string line; std::getline(stream, line);) {
+				const size_t split = line.find(' ');
+				byState[line.substr(0, split)] = split == std::string::npos ? std::string() : line.substr(split + 1);
+			}
+			return byState;
+		};
+		const auto tokensOnlyIn = [](const std::string& left, const std::string& right) {
+			std::map<std::string, int> pool;
+			std::istringstream rightTokens(right);
+			for (std::string token; rightTokens >> token;) {
+				++pool[token];
+			}
+			std::string out;
+			std::istringstream leftTokens(left);
+			for (std::string token; leftTokens >> token;) {
+				if (const auto found = pool.find(token); found != pool.end() && found->second > 0) {
+					--found->second;
+					continue;
+				}
+				out += (out.empty() ? "" : " ") + token;
+			}
+			return out;
+		};
+		const auto uidsOnlyIn = [](const std::vector<long>& left, const std::vector<long>& right) {
+			std::string out;
+			for (const long uid: left) {
+				if (std::find(right.begin(), right.end(), uid) == right.end()) {
+					out += (out.empty() ? "" : " ") + std::to_string(uid);
+				}
+			}
+			return out;
+		};
+		std::vector<std::string> drift;
+		const std::map<std::string, std::string> wasLines = bindingLines(was.bindings);
+		const std::map<std::string, std::string> nowLines = bindingLines(now.bindings);
+		std::vector<std::string> states;
+		for (const auto& [name, tokens]: wasLines) {
+			states.push_back(name);
+		}
+		for (const auto& [name, tokens]: nowLines) {
+			if (wasLines.find(name) == wasLines.end()) {
+				states.push_back(name);
+			}
+		}
+		for (const std::string& name: states) {
+			const std::string wasTokens = wasLines.find(name) != wasLines.end() ? wasLines.at(name) : std::string();
+			const std::string nowTokens = nowLines.find(name) != nowLines.end() ? nowLines.at(name) : std::string();
+			const std::string extra = tokensOnlyIn(nowTokens, wasTokens);
+			const std::string missing = tokensOnlyIn(wasTokens, nowTokens);
+			if (!extra.empty() || !missing.empty()) {
+				drift.push_back("scripts " + name + ": extra [" + extra + "] missing [" + missing + "]; measured before [" + wasTokens + "] now [" + nowTokens + "]");
+			}
+		}
+		for (size_t index = 0; index < std::max(was.roots.size(), now.roots.size()); ++index) {
+			const std::vector<long> wasRoots = index < was.roots.size() ? was.roots[index] : std::vector<long>();
+			const std::vector<long> nowRoots = index < now.roots.size() ? now.roots[index] : std::vector<long>();
+			const std::string wasGraph = index < was.graphs.size() ? was.graphs[index] : std::string();
+			const std::string nowGraph = index < now.graphs.size() ? now.graphs[index] : std::string();
+			const std::string extra = uidsOnlyIn(nowRoots, wasRoots);
+			const std::string missing = uidsOnlyIn(wasRoots, nowRoots);
+			if (!extra.empty() || !missing.empty() || wasGraph != nowGraph) {
+				drift.push_back("lua_graph " + std::to_string(index) + " (" + (index == 0 ? std::string("master") : "thread" + std::to_string(index - 1)) + "): extra roots [" + extra + "] missing roots [" + missing + "]; measured roots " + std::to_string(wasRoots.size()) + " -> " + std::to_string(nowRoots.size()) + ", graph bytes " + std::to_string(wasGraph.size()) + " -> " + std::to_string(nowGraph.size()));
+			}
+		}
+		return drift;
+	};
+	std::vector<std::string> registrationProblems;
+	const Registrations registrationsBefore = captureRegistrations(registrationProblems);
+	if (!registrationProblems.empty()) {
+		for (const std::string& problem: registrationProblems) {
+			std::cout << "[lpinv] FAIL: cannot capture canonical script registrations: " << problem << std::endl;
+		}
+		s_lpInvarianceFailures = 1;
+		s_netReplayExitCode = 5;
+		g_MetricsCollector.RecordString("lpinv_result", "fail");
+		return;
+	}
 	const uint64_t soundCursorBefore = g_AudioMan.GetCheckpointSoundContainerCursor();
 	int failures = 0;
 	int cases = 0;
@@ -2202,6 +2461,22 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 				DrawFrameWithPreviews();
 				if (const std::string failure = CheckPreviewOutcome(static_cast<long long>(simTick), static_cast<long long>(simTick) + depth); !failure.empty() && outcomeFailure.empty()) {
 					outcomeFailure = failure;
+				}
+			}
+			// The previews are still outstanding: a checkpoint here must find the registrations unchanged.
+			std::vector<std::string> outstandingProblems;
+			const Registrations registrationsOutstanding = captureRegistrations(outstandingProblems);
+			for (const std::string& problem: outstandingProblems) {
+				fail("cannot capture the script registrations while the previews are outstanding: " + problem);
+			}
+			if (const std::vector<std::string> drift = describeDrift(registrationsBefore, registrationsOutstanding); !drift.empty()) {
+				std::string probe = "scripts\n" + registrationsOutstanding.bindings;
+				for (size_t index = 0; index < registrationsOutstanding.graphs.size(); ++index) {
+					probe += "lua_graph " + std::to_string(index) + " " + std::to_string(registrationsOutstanding.graphs[index].size()) + "\n" + registrationsOutstanding.graphs[index] + "\n";
+				}
+				WriteProbeText("lpinv_previews_d" + std::to_string(depth) + "_x" + std::to_string(repeats), probe);
+				for (const std::string& line: drift) {
+					fail("the outstanding previews left the Lua states changed - " + line);
 				}
 			}
 			const uint64_t previewsRun = LocalPrediction::GetPreviewCount() - previewsBefore;
@@ -2247,8 +2522,28 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 			}
 		}
 	}
-	for (const char mode: s_lpOverlayLinkModes) {
-		RunOverlayLinkArm(mode, before, cases, failures);
+	if (!s_lpOverlayLinkModes.empty()) {
+		// Each letter is compared against its own baseline, so the set keeps its own end-to-end compare for drift across letters.
+		problems.clear();
+		const std::string setBefore = DumpSimStateToString() + DescribeCanonicalExtras(problems);
+		for (const char mode: s_lpOverlayLinkModes) {
+			RunOverlayLinkArm(mode, cases, failures);
+		}
+		++cases;
+		const std::string setAfter = DumpSimStateToString() + DescribeCanonicalExtras(problems);
+		if (!problems.empty()) {
+			++failures;
+			for (const std::string& problem: problems) {
+				std::cout << "[lpinv] FAIL overlay-links set: cannot capture canonical Lua state: " << problem << std::endl;
+			}
+		} else if (setAfter != setBefore) {
+			WriteProbeText("lpinv_before_overlay_set", setBefore);
+			WriteProbeText("lpinv_after_overlay_set", setAfter);
+			++failures;
+			std::cout << "[lpinv] FAIL overlay-links set: canonical state changed: " << DescribeStateDifference(setBefore, setAfter) << std::endl;
+		} else {
+			std::cout << "[lpinv] PASS overlay-links set: canonical state byte-identical" << std::endl;
+		}
 	}
 	LocalPrediction::SetDepthOverride(savedDepth);
 	PreviewScriptSelfTest::SetStrideCounter(false);
@@ -3061,6 +3356,12 @@ void RunGameLoop() {
 		g_WindowMan.Update();
 		g_WindowMan.ClearBackbuffer();
 
+		if (s_frameStallArmed && !s_frameStallFired && g_TimerMan.GetSimUpdateCount() == s_frameStallTick) {
+			s_frameStallFired = true;
+			std::this_thread::sleep_for(std::chrono::milliseconds(s_frameStallMs));
+			std::cout << "[selftest] frame stall tick=" << s_frameStallTick << " ms=" << s_frameStallMs << std::endl;
+		}
+
 		g_TimerMan.Update();
 
 		if (!g_ActivityMan.ActivityRunning()) {
@@ -3091,6 +3392,9 @@ void RunGameLoop() {
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
 		while (g_TimerMan.TimeForSimUpdate()) {
 			ZoneScopedN("Simulation Update");
+
+			// The probe's sim-rate keys land before the update that reads them; SDL events only arrive per frame.
+			NetModerationGUIProbe::OnSimTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
 			g_PerformanceMan.NewPerformanceSample();
@@ -3159,9 +3463,6 @@ void RunGameLoop() {
 				}
 				g_MovableMan.RunLockstepPausedTick();
 				ScenarioRunner::AdvanceLockstepPausedTick();
-				if (ScenarioRunner::IsLockstepPaused() && simTick % 30 == 0) {
-					g_FrameMan.SetScreenText(ScenarioRunner::GetLockstepResumeCountdown() > 0 ? "Match resuming..." : "Match paused - press P to resume", 0);
-				}
 			}
 			if (!lockstepPausedTick) {
 				g_LuaMan.Update();
@@ -3182,6 +3483,12 @@ void RunGameLoop() {
 				}
 				// E2E control: host-issued delivery at tick 50; both peers must build the identical craft, hold, and flight.
 				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestDeliverCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 100.0F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Green Dummy", "Base.rte"}}}});
+				}
+				// The same delivery with no match around it: a scenario run issues it at the tick the
+				// match's delivery lands on, so a single-player dump can be read beside a lockstep one.
+				if (!ScenarioRunner::HasLockstepCoordinator() && ScenarioRunner::GetArgs().scenarioDeliverCommandTick >= 0 &&
+				    simTick == static_cast<uint64_t>(ScenarioRunner::GetArgs().scenarioDeliverCommandTick)) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 100.0F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Green Dummy", "Base.rte"}}}});
 				}
 				// E2E control: the host orders its dummy and its brain at fixed ticks; both peers must hold the identical AI mode, waypoints and squad.
@@ -3363,10 +3670,14 @@ void RunGameLoop() {
 
 				// Mid-match session upkeep: reconnect handshakes the coordinator handed over.
 				g_NetMatchService.PumpSessionEvents();
+				// Chat script sends and the receive drain ride the sim tick so [chat] lines order with the match.
+				if (s_netMatchServiceE2E) {
+					NetChatScriptOnSimTick(simTick);
+				}
 				// The session-directory heartbeat rides Update on the game thread, never the pump.
 				if (const NetMatchServiceState netServiceState = g_NetMatchService.GetState();
 				    g_NetMatchService.IsHost() && (netServiceState == NetMatchServiceState::Starting || netServiceState == NetMatchServiceState::ReadyToLaunch ||
-				                                   netServiceState == NetMatchServiceState::Running)) {
+				                                   netServiceState == NetMatchServiceState::Running || netServiceState == NetMatchServiceState::Completed)) {
 					g_NetMatchService.Update();
 				}
 				DriveModerationE2e();
@@ -3719,7 +4030,10 @@ void RunGameLoop() {
 				const uint64_t scenarioTickCap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 1800;
 				const uint64_t tickCap = NetGameplayRequested() && s_netLockstepTicks > 0 ? s_netLockstepTicks : scenarioTickCap;
 				const Activity* scenarioActivity = g_ActivityMan.GetActivity();
-				if ((scenarioActivity && scenarioActivity->IsOver()) || elapsedTicks >= tickCap) {
+				// A match keeps simulating its remaining ticks after the round is decided; a scenario
+				// run that has to be read beside one needs the same window.
+				const bool activityDecided = scenarioActivity && scenarioActivity->IsOver() && !ScenarioRunner::GetArgs().scenarioRunPastEnd;
+				if (activityDecided || elapsedTicks >= tickCap) {
 					// Finalize so the scenario's Lua OnEnd grades the run even when the CLI tick cap
 					// stops it before the scenario's own max-ticks (idempotent if it already ended).
 					g_ActivityMan.EndActivity();
@@ -3758,12 +4072,17 @@ void RunGameLoop() {
 			if (!ScenarioRunner::IsActive() && !s_netMatchServiceE2E && !s_recordTickHashes && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 				static uint64_t s_matchOverTick = UINT64_MAX;
 				const Activity* matchActivity = g_ActivityMan.GetActivity();
-				if (matchActivity && matchActivity->IsOver()) {
+				// -net-match-ticks ends a menu-launched match at an applied frame every peer reaches,
+				// so an unattended run finishes one the same way a win condition does.
+				const bool cappedEnd = s_netLockstepTicks > 0 && ScenarioRunner::HasLockstepCoordinator() &&
+				                       ScenarioRunner::GetLockstepAppliedFrame() >= s_netLockstepTicks;
+				if ((matchActivity && matchActivity->IsOver()) || cappedEnd) {
 					const uint64_t nowTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 					if (s_matchOverTick == UINT64_MAX) {
 						s_matchOverTick = nowTick;
 					}
-					const uint64_t graceTicks = static_cast<uint64_t>(5.0f / g_TimerMan.GetDeltaTimeSecs());
+					// The grace lets a win play out on screen; a capped end has nothing to show.
+					const uint64_t graceTicks = cappedEnd ? 0 : static_cast<uint64_t>(5.0f / g_TimerMan.GetDeltaTimeSecs());
 					if (nowTick - s_matchOverTick >= graceTicks) {
 						s_matchOverTick = UINT64_MAX;
 						const std::string result = BuildNetMatchResultText();
@@ -3976,7 +4295,8 @@ void RunGameLoop() {
 				g_PerformanceMan.ResetSimUpdateTimer();
 				updateStartTime = g_TimerMan.GetAbsoluteTime();
 			}
-			if (ScenarioRunner::GetArgs().freeRunSim) {
+			// A capture ends only the update batch; the next simulation tick keeps its time debt.
+			if (ScenarioRunner::GetArgs().freeRunSim || NetMatchScreenshotDue()) {
 				break;
 			}
 		}
@@ -4010,7 +4330,7 @@ void RunGameLoop() {
 			g_SceneMan.SetRenderDrawContext(false);
 			t_simRNGOverride = prevSimRNG;
 		}
-		if (!freeRunLockstep) {
+		if (!freeRunLockstep || NetMatchScreenshotDue()) {
 			DrawFrameWithPreviews();
 		}
 
@@ -4587,6 +4907,60 @@ int RunNetReplayPlayback() {
 	return s_netReplayExitCode;
 }
 
+// Loads the -net-chat-script file: one "tick all|team text" line per scheduled send.
+static bool LoadNetChatScript(const std::string& path, std::string* error) {
+	std::ifstream in(path);
+	if (!in) {
+		*error = "cannot open chat script: " + path;
+		return false;
+	}
+	s_netChatScript.clear();
+	s_netChatScriptNext = 0;
+	std::string line;
+	uint64_t lineNo = 0;
+	while (std::getline(in, line)) {
+		++lineNo;
+		if (!line.empty() && line.back() == '\r') {
+			line.pop_back();
+		}
+		if (line.empty()) {
+			continue;
+		}
+		std::istringstream ls(line);
+		uint64_t tick = 0;
+		std::string scope;
+		if (!(ls >> tick >> scope) || (scope != "all" && scope != "team")) {
+			*error = "chat script line " + std::to_string(lineNo) + ": expected '<tick> all|team <text>'";
+			return false;
+		}
+		std::string text;
+		std::getline(ls, text);
+		if (!text.empty() && text[0] == ' ') {
+			text.erase(0, 1);
+		}
+		s_netChatScript.push_back({tick, static_cast<uint8_t>(scope == "team" ? c_NetChatScopeTeam : c_NetChatScopeAll), text});
+	}
+	std::stable_sort(s_netChatScript.begin(), s_netChatScript.end(), [](const NetChatScriptLine& a, const NetChatScriptLine& b) { return a.tick < b.tick; });
+	return true;
+}
+
+// Fires the due chat sends on this peer's tick, then drains what arrived — the [chat] lines are the
+// driver's oracle, so they print in sink order exactly once each.
+static void NetChatScriptOnSimTick(uint64_t simTick) {
+	while (s_netChatScriptNext < s_netChatScript.size() && s_netChatScript[s_netChatScriptNext].tick <= simTick) {
+		const NetChatScriptLine& line = s_netChatScript[s_netChatScriptNext++];
+		const bool sent = g_NetMatchService.SendChat(line.scope, line.text);
+		std::cout << "[chat-send] tick=" << simTick << " scope=" << (line.scope == c_NetChatScopeTeam ? "team" : "all")
+		          << " ok=" << (sent ? 1 : 0) << " text=" << line.text << std::endl;
+	}
+	for (const NetChatEntry& entry : g_NetMatchService.TakeChatEntries()) {
+		std::cout << "[chat] tick=" << entry.receivedTick
+		          << " from=" << static_cast<int>(entry.senderPeerId)
+		          << " scope=" << (entry.scope == c_NetChatScopeTeam ? "team" : "all")
+		          << " text=" << entry.text << std::endl;
+	}
+}
+
 int RunNetMatchServiceE2E() {
 	std::string setupError;
 	if (!NetA7Journal::StartE2E(&setupError, [] { PollSDLEvents(); return System::IsSetToQuit(); })) s_netMatchServiceE2EExitCode = 1;
@@ -4596,6 +4970,9 @@ int RunNetMatchServiceE2E() {
 		setupError = "-net-dedicated cannot be combined with -net-join <address>";
 	} else if (e2eHost == e2eJoiner) {
 		setupError = "-net-match-service-e2e requires exactly one of -net-host, -net-dedicated, -net-join <address> or -net-join-session <id>";
+	}
+	if (setupError.empty() && !s_netChatScriptPath.empty() && !LoadNetChatScript(s_netChatScriptPath, &setupError)) {
+		s_netMatchServiceE2EExitCode = 1;
 	}
 
 	if (setupError.empty()) {
@@ -5136,6 +5513,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
 			return RotatePrimitiveSelfTest::Run();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-float-text-selftest") {
+			return FloatTextSelfTest::Run();
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-controller-frame-selftest") {
 			return ControllerFrameSelfTest::Run();
 		}
@@ -5313,6 +5693,12 @@ int main(int argc, char** argv) {
 	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');
 
 	if (!HandleMainArgs(argc, argv)) return ShutDown(EXIT_FAILURE);
+
+	// The chat script drives session traffic — only a headless e2e match may carry it.
+	if (!s_netChatScriptPath.empty() && !s_netMatchServiceE2E) {
+		std::cerr << "[net-chat-script] requires -net-match-service-e2e" << std::endl;
+		return ShutDown(EXIT_FAILURE);
+	}
 
 	// The -net-port-map flags are only parsed by HandleMainArgs, so the run override and the
 	// probe seams take effect here, before the probe dispatch and any match Start can read them.

@@ -51,6 +51,8 @@ namespace RTE {
 			bool        selftestFundsCommand = false; // -net-match-e2e-funds-command: host-issued funds command at tick 50.
 			bool        selftestSpawnCommand = false; // -net-match-e2e-spawn-command: host-issued spawn command at tick 50.
 			bool        selftestDeliverCommand = false; // -net-match-e2e-deliver-command: host-issued delivery command at tick 50.
+			int64_t     scenarioDeliverCommandTick = -1; // -scenario-deliver-command <tick>: the same delivery offline, for the single-player reference.
+			bool        scenarioRunPastEnd = false; // -scenario-run-past-end: keep ticking to -max-ticks after the activity is over, as a match's tick cap does.
 			bool        selftestAIOrderCommand = false; // -net-match-e2e-ai-order-command: the host orders its units (go-to, follow, squad, disband) at ticks 50/200/400/600.
 			bool        selftestScuttleCommand = false; // -net-match-e2e-scuttle-command: host scuttles the delivered craft at tick 100.
 			bool        selftestBrainKillCommand = false; // -net-match-e2e-brain-kill-command: host delivers + scuttles a craft onto the enemy brain.
@@ -160,6 +162,9 @@ namespace RTE {
 		static bool IsLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint8_t peerId);
 		/// The peer that produces the actor's frames now (control handoffs included); 0 without a coordinator.
 		static uint8_t GetLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
+		/// The peer the ownership policy gives the actor, with a live control handoff ignored; 0 without
+		/// a coordinator. The owner map is seeded from this, so a claim cannot become the owner to return to.
+		static uint8_t GetLockstepPolicyActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
 		/// The peer that HELD the actor: the control handoff if there is one, else the ownership policy
 		/// with leaves not applied. The drop ledger records this; a leave must not rename it first.
 		static uint8_t GetLockstepDropTimeActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
@@ -196,6 +201,8 @@ namespace RTE {
 		/// The last frame the sim applied. The reclaim hold is counted in these, so anything that
 		/// shows or decides on the hold reads the tick and never a clock.
 		static uint64_t GetLockstepAppliedFrame();
+		/// The last completed exchange tick, including paused ticks, for presentation.
+		static uint64_t GetLockstepCompletedFrame();
 		static uint64_t GetLockstepRoundId();
 
 		/// The session upkeep the match service owns. A peer that stops sending frames parks the sim
@@ -209,16 +216,21 @@ namespace RTE {
 			uint64_t tick = 0;
 			std::string kind;
 			std::string text;
+			uint8_t senderPeerId = 0;
 		};
-		/// Presentation only: queues a top-centre banner (~3s wall clock) and logs it for the report.
+		/// Exports a presentation event; the renderer resolves its optional sender into a display name.
 		/// Lives outside every serialized, hashed or saved structure; never read by the sim.
-		static void PushNetUiToast(const std::string& kind, const std::string& text);
+		static void PushNetUiToast(const std::string& kind, const std::string& text, uint8_t senderPeerId = 0);
 		/// Drops the on-screen queue (a resync relaunch clears it); the report log is kept.
 		static void ClearNetUiToasts();
-		/// Draws the live banner queue top-centre on the 32-bit backbuffer; a no-op without fonts.
+		/// Draws at most three unexpired toast rows at bottom centre, outside simulation state.
 		static void DrawNetUiToasts();
 		/// Every banner queued this run, in order — the report's ui.toasts source.
 		static const std::vector<NetUiToastRecord>& GetNetUiToastLog();
+		/// The newest three unexpired presentation events, in display order.
+		static std::vector<NetUiToastRecord> GetVisibleNetUiToasts();
+		/// Names of peers whose next input frame is missing, for the stalled render path.
+		static std::string GetLockstepMissingPeers();
 		/// Counts resync wait-screen draws for the report (also counted headless).
 		static void NoteResyncOverlayFrame();
 		static uint64_t GetResyncOverlayFrames();
@@ -284,7 +296,8 @@ namespace RTE {
 		/// shared null-tick countdown, while the wire keeps exchanging empty frames.
 		static bool IsLockstepPaused();
 		static int GetLockstepResumeCountdown();
-		static void ApplyLockstepPauseCommand(bool pause);
+		/// Applies the shared pause and exports its sender for presentation only.
+		static void ApplyLockstepPauseCommand(bool pause, uint8_t senderPeerId = 0);
 		static void AdvanceLockstepPausedTick();
 		static bool QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error = nullptr);
 		static bool WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);

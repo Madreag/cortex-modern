@@ -10398,8 +10398,8 @@ namespace RTE {
 			if (g_MovableMan.FindObjectByUniqueID(static_cast<long>(departedUID))) {
 				return finish("the chosen departed id unexpectedly names a live object");
 			}
-			NetActorOwnership::SeedOwner(survivorUID, 2);
-			NetActorOwnership::SeedOwner(departedUID, 1);
+			NetActorOwnership::SeedOwner(survivorUID, 2, Activity::TeamTwo);
+			NetActorOwnership::SeedOwner(departedUID, 1, Activity::TeamOne);
 			const std::string snapshot = g_MovableMan.SaveWorldStructure();
 			if (!g_MovableMan.LoadWorldStructure(snapshot, false)) {
 				return finish("the world structure was rejected because a departed actor's owner was saved");
@@ -10407,8 +10407,106 @@ namespace RTE {
 			if (NetActorOwnership::GetSeededOwner(survivorUID) != 2) {
 				return finish("the surviving actor's owner did not round-trip");
 			}
+			if (NetActorOwnership::GetSeededOwnerTeam(survivorUID) != Activity::TeamTwo) {
+				return finish("the surviving actor's seeded team did not round-trip");
+			}
 			if (NetActorOwnership::GetSeededOwner(departedUID) != 0) {
 				return finish("a departed actor's owner survived the round-trip");
+			}
+			return finish(nullptr);
+		}
+
+		// A seeded owner freezes the control-mode input a switch is about to change, not the team: an
+		// actor that changes team is owned by its new team's peer everywhere authority is asked for.
+		bool TestSeededOwnerFollowsATeamChange(std::string* error) {
+			const char* name = "seeded_owner_follows_a_team_change";
+			EnsureSwitchTestManagers();
+			const uint16_t delay = 2;
+			const uint16_t port = 43226;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433573136ULL);
+			// One human per team, so the team-owner policy names a different peer for each team.
+			matchConfig.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Client"}};
+			matchConfig.peerCount = 2;
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, port, delay, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, port, delay, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "team-owner";
+			clientConfig.ownershipPolicy = "team-owner";
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				NetActorOwnership::ClearSeededOwners();
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			NetActorOwnership::ClearSeededOwners();
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return finish(error && !error->empty() ? error->c_str() : "coordinator pair failed");
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 4000)) {
+				return finish(error && !error->empty() ? error->c_str() : "pair did not reach Running");
+			}
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamOne, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* view = MakeSwitchTestActor(Activity::TeamOne);
+			if (!view) {
+				return finish("selftest actor could not be created");
+			}
+			AddSwitchTestActor(view);
+			const int64_t uid = static_cast<int64_t>(view->GetUniqueID());
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			NetActorOwnership::SeedOwner(uid, 1, Activity::TeamOne);
+			if (ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamOne, false) != 1 ||
+			    ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamOne, true) != 1) {
+				return finish("the seeded owner did not hold at the team it was seeded at");
+			}
+			if (!g_ActivityMan.GetActivity()->SwitchToActor(view, Players::PlayerOne, Activity::TeamOne)) {
+				return finish("the selftest actor could not be seated on player one");
+			}
+			ScenarioRunner::DrainLocalGameCommands();
+			// The transfer a Lua script makes: the team moves under a live actor and nothing re-seeds.
+			view->SetTeam(Activity::TeamTwo);
+			const uint8_t ownerAfterTransfer = ScenarioRunner::GetLockstepActorOwner(uid, view->GetTeam(), !view->IsPlayerControlled());
+			const uint8_t observationAuthority = g_MovableMan.ValueObservationAuthority(static_cast<uint64_t>(uid));
+			MovableMan::ReconcileLockstepControlBindings();
+			const bool released = g_ActivityMan.GetActivity()->GetControlledActor(Players::PlayerOne) == nullptr;
+			if (ownerAfterTransfer != 2 || observationAuthority != 2 || !released) {
+				return finish(("after the transfer owner=" + std::to_string(static_cast<int>(ownerAfterTransfer)) +
+				               " value_observation_authority=" + std::to_string(static_cast<int>(observationAuthority)) +
+				               " local_control_released=" + std::to_string(released ? 1 : 0) + " (expected 2 2 1)")
+				                  .c_str());
+			}
+			if (ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamOne, false) != 1) {
+				return finish("the seeded owner stopped applying at the team it was seeded at");
+			}
+			// The frozen half, on the one policy that reads the control mode: a flip cannot move the owner.
+			NetMatchConfig cpuConfig = matchConfig;
+			cpuConfig.ownershipPolicy = NetActorOwnershipPolicy::HostCpuRemoteHuman;
+			const int64_t cpuUID = 909001;
+			NetActorOwnership::SeedOwner(cpuUID, 2, Activity::TeamTwo);
+			const uint8_t ownerOnControlFlip = NetActorOwnership::ResolveOwnerPeer(cpuConfig, {cpuUID, Activity::TeamTwo, true});
+			const uint8_t ownerAtOtherTeam = NetActorOwnership::ResolveOwnerPeer(cpuConfig, {cpuUID, Activity::TeamOne, false});
+			if (ownerOnControlFlip != 2 || ownerAtOtherTeam != 1) {
+				return finish(("seeded owner on a control-mode flip=" + std::to_string(static_cast<int>(ownerOnControlFlip)) +
+				               " at another team=" + std::to_string(static_cast<int>(ownerAtOtherTeam)) + " (expected 2 1)")
+				                  .c_str());
 			}
 			return finish(nullptr);
 		}
@@ -10549,7 +10647,7 @@ namespace RTE {
 			const int64_t uid = static_cast<int64_t>(hostView->GetUniqueID());
 			AddSwitchTestActor(hostView);
 			AddSwitchTestActor(survivorView);
-			NetActorOwnership::SeedOwner(uid, 1);
+			NetActorOwnership::SeedOwner(uid, 1, Activity::TeamTwo);
 			ScenarioRunner::SetLockstepCoordinator(&host);
 			if (ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamTwo, true) != 1) {
 				return finish("the CPU actor did not start on the host");
@@ -10669,6 +10767,69 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		// A script may replace a whole controller inside the producing pass; the sim still gets the frame
+		// the wire committed for the tick back, and the replacement is what the next pass produces from.
+		bool TestProducingPassSurvivesAnOverride(std::string* error) {
+			Controller controller;
+			controller.Create(Controller::CIM_AI, Players::NoPlayer);
+			controller.SetState(ControlState::BODY_JUMP, true);
+			controller.SetAnalogMove(Vector(0.25F, -0.5F));
+
+			controller.BeginLocalProduction();
+			Controller replacement;
+			replacement.Create(Controller::CIM_AI, Players::NoPlayer);
+			replacement.SetState(ControlState::WEAPON_FIRE, true);
+			controller.Override(replacement);
+			controller.EndLocalProduction();
+
+			if (!controller.IsState(ControlState::BODY_JUMP) || controller.IsState(ControlState::WEAPON_FIRE) || controller.GetAnalogMove() != Vector(0.25F, -0.5F)) {
+				*error = "an override inside the producing pass kept the sim from its committed input";
+				return false;
+			}
+			controller.BeginLocalProduction();
+			const bool carried = controller.IsState(ControlState::WEAPON_FIRE) && !controller.IsState(ControlState::BODY_JUMP);
+			controller.EndLocalProduction();
+			if (!carried) {
+				*error = "the next producing pass did not start from the overridden input";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS producing_pass_survives_an_override" << std::endl;
+			return true;
+		}
+
+		// A restored controller keeps the baseline it was producing from, so a held button is not produced
+		// again as a fresh press on the tick after the restore.
+		bool TestRestoredControllerKeepsItsProductionBaseline(std::string* error) {
+			Controller controller;
+			controller.Create(Controller::CIM_AI, Players::NoPlayer);
+			controller.BeginLocalProduction();
+			controller.SetState(ControlState::PIE_MENU_ACTIVE, true);
+			controller.SetState(ControlState::PIE_MENU_ACTIVE_DIGITAL, true);
+			controller.SetAnalogCursor(Vector(0.75F, 0.0F));
+			controller.EndLocalProduction();
+
+			const std::string text = controller.SaveCheckpoint();
+			Controller restored;
+			if (!restored.LoadCheckpoint(text, true) || !restored.LoadCheckpoint(text)) {
+				*error = "a Controller checkpoint carrying the producer's baseline did not load";
+				return false;
+			}
+			restored.BeginLocalProduction();
+			const bool held = restored.IsState(ControlState::PIE_MENU_ACTIVE) && restored.IsState(ControlState::PIE_MENU_ACTIVE_DIGITAL) && restored.GetAnalogCursor() == Vector(0.75F, 0.0F);
+			restored.EndLocalProduction();
+			if (!held) {
+				*error = "a restored controller produced from an empty baseline, re-firing the held input as a fresh press";
+				return false;
+			}
+			Controller refused;
+			if (refused.LoadCheckpoint(std::string_view(), true) || refused.LoadCheckpoint(text.substr(0, text.size() - 2), true)) {
+				*error = "a truncated Controller checkpoint was accepted";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS restored_controller_keeps_its_production_baseline bytes=" << text.size() << std::endl;
+			return true;
+		}
+
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -10690,7 +10851,9 @@ namespace RTE {
 		}
 
 		std::string error;
-		if (!TestSoundIdentityPinAgreesAcrossHistories(&error) ||
+		if (!TestRestoredControllerKeepsItsProductionBaseline(&error) ||
+		    !TestProducingPassSurvivesAnOverride(&error) ||
+		    !TestSoundIdentityPinAgreesAcrossHistories(&error) ||
 		    !TestRoundTrips(&error) ||
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
@@ -10811,7 +10974,9 @@ namespace RTE {
 		const bool ownerMapLives = TestOwnerMapSurvivesActorDeath(&ownerMapError);
 		std::string claimedExpiryError;
 		const bool claimedExpiry = TestClaimedActorReturnsToCpuAfterTheClaimantExpires(&claimedExpiryError);
-		if (!switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry) {
+		std::string teamChangeError;
+		const bool teamChangeOwner = TestSeededOwnerFollowsATeamChange(&teamChangeError);
+		if (!switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner) {
 			return 1;
 		}
 		std::cout << "[net-lockstep-selftest] PASS" << std::endl;

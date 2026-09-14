@@ -192,19 +192,23 @@ namespace RTE {
 		       " events_expired=" + std::to_string(s_Counters.expired) + " events_retimed=" + std::to_string(s_Counters.retimed);
 	}
 
-	void PreviewEventLedger::ResetForSelfTest() {
+	void PreviewEventLedger::ResetBetweenSelfTestArms() {
 		s_Entries.clear();
 		s_PreviewedEmitters.clear();
 		s_PreviewSeq.clear();
 		s_CanonicalSeq.clear();
-		s_EventStarts.clear();
-		s_Counters = {};
-		s_EventStartCount = 0;
 		s_CommittedTick = 0;
 		s_IdentityCursor = 0;
 		s_CanonicalSeqTick = 0;
-		s_ArmCount = 0;
 		s_Armed = false;
+	}
+
+	void PreviewEventLedger::ResetForSelfTest() {
+		ResetBetweenSelfTestArms();
+		s_EventStarts.clear();
+		s_Counters = {};
+		s_EventStartCount = 0;
+		s_ArmCount = 0;
 	}
 
 	bool PreviewEventLedger::RunSelfTest() {

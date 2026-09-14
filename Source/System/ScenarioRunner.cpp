@@ -24,6 +24,7 @@
 #include "MenuMan.h"
 #include "UInputMan.h"
 #include "NetModerationGUIProbe.h"
+#include "NetModerationGUI.h"
 #include "RenderTarget.h"
 
 #include <SDL3/SDL.h>
@@ -172,35 +173,20 @@ namespace RTE {
 		int s_SavedCrabBombThreshold = 42;
 		int s_SavedSubPieMenuHoverOpenDelay = 1000;
 
-		// Presentation only: the sim thread is blocked waiting on the peer, so the normal render path
-		// can't run. Keep the window pumped and show the last frame replaced by a plain wait screen.
-		void DrawLockstepStallOverlay(uint32_t stallMs, uint32_t graceMs, const std::string& waitingOn, bool holdPause, const std::string& holdName, uint32_t holdSeconds) {
+		// The blocked frame draws the same network widget as the normal render pass.
+		void DrawLockstepStallOverlay() {
 			SDL_PumpEvents();
 			BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
-			GUIFont* largeFont = g_FrameMan.GetLargeFont();
-			GUIFont* smallFont = g_FrameMan.GetSmallFont();
-			if (!backbuffer || !largeFont || !smallFont) {
-				return;
-			}
+			if (!backbuffer) return;
+			RandomGenerator* previousRNG = t_simRNGOverride;
+			t_simRNGOverride = &g_RenderRNG;
 			clear_to_color(backbuffer, 0);
-			AllegroBitmap drawBitmap(backbuffer);
-			const int centerX = backbuffer->w / 2;
-			const int centerY = backbuffer->h / 2;
-			if (holdPause) {
-				const std::string who = holdName.empty() ? "a player" : holdName;
-				largeFont->DrawAligned(&drawBitmap, centerX, centerY - 12, "Match paused: waiting for " + who + " to return (" + std::to_string(holdSeconds) + "s left)", GUIFont::Centre);
-			} else {
-				const std::string who = waitingOn.empty() ? "the other player" : waitingOn;
-				largeFont->DrawAligned(&drawBitmap, centerX, centerY - 12, "Waiting for " + who + "... " + std::to_string(stallMs / 1000) + "s", GUIFont::Centre);
-				if (graceMs > stallMs) {
-					smallFont->DrawAligned(&drawBitmap, centerX, centerY + 8, "The match ends in " + std::to_string((graceMs - stallMs + 999) / 1000) + "s if they do not return", GUIFont::Centre);
-				}
-			}
 			g_MenuMan.DrawNetworkUI();
 			ScenarioRunner::DrawNetUiToasts();
 			g_WindowMan.ClearBackbuffer(false);
 			g_WindowMan.GetScreenBuffer()->Begin();
 			g_WindowMan.UploadFrame();
+			t_simRNGOverride = previousRNG;
 			NetModerationGUIProbe::AfterDraw();
 			static bool s_LoggedOnce = false;
 			if (!s_LoggedOnce) {
@@ -211,7 +197,7 @@ namespace RTE {
 
 		// The sim thread owns the stall wait; without this pump the seats panel and the UI probe freeze
 		// for the whole hold. Presentation only — no UInputMan frame/sim-edge buffers are consumed here.
-		void PumpLockstepStallUI(uint32_t stallMs, uint32_t graceMs, const std::string& waitingOn, bool holdPause, const std::string& holdName, uint32_t holdSeconds) {
+		void PumpLockstepStallUI() {
 			if (s_StallEventPoll) {
 				s_StallEventPoll();
 			}
@@ -222,7 +208,7 @@ namespace RTE {
 			}
 			s_F6WasHeld = f6Held;
 			g_MenuMan.UpdateNetworkUI();
-			DrawLockstepStallOverlay(stallMs, graceMs, waitingOn, holdPause, holdName, holdSeconds);
+			DrawLockstepStallOverlay();
 		}
 
 		std::string FloatBitsHex(float value) {
@@ -361,6 +347,16 @@ namespace RTE {
 		if (a == "-net-match-e2e-deliver-command") {
 			// Arm the host-issued delivery command. Boolean flag.
 			s_Args.selftestDeliverCommand = true;
+			return 1;
+		}
+		if (a == "-scenario-deliver-command" && hasValue) {
+			// The same delivery with no match around it, applied at the given tick.
+			s_Args.scenarioDeliverCommandTick = static_cast<int64_t>(std::strtoll(argValue[startIndex + 1], nullptr, 10));
+			return 2;
+		}
+		if (a == "-scenario-run-past-end") {
+			// Run the whole tick cap even after the activity is decided, the way a match does.
+			s_Args.scenarioRunPastEnd = true;
 			return 1;
 		}
 		if (a == "-net-match-e2e-ai-order-command") {
@@ -686,7 +682,7 @@ namespace RTE {
 		s_SeatPresence = presence;
 	}
 
-	void ScenarioRunner::PushNetUiToast(const std::string& kind, const std::string& text) {
+	void ScenarioRunner::PushNetUiToast(const std::string& kind, const std::string& text, uint8_t senderPeerId) {
 		// Selftests drive the service before the managers are built, so there is no sim clock to stamp with.
 		uint64_t tick = 0;
 		if (s_LockstepCoordinator) {
@@ -695,7 +691,7 @@ namespace RTE {
 			tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 		}
 		NetUiToast toast;
-		toast.record = {tick, kind, text};
+		toast.record = {tick, kind, text, senderPeerId};
 		toast.shownAtMs = NetLockstepNowMs();
 		s_NetUiToasts.push_back(toast);
 		s_NetUiToastLog.push_back(toast.record);
@@ -706,28 +702,31 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::DrawNetUiToasts() {
-		BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
-		GUIFont* smallFont = g_FrameMan.GetSmallFont();
-		if (!backbuffer || !smallFont) {
-			return;
-		}
 		const uint64_t nowMs = NetLockstepNowMs();
 		while (!s_NetUiToasts.empty() && nowMs >= s_NetUiToasts.front().shownAtMs + c_NetUiToastMs) {
 			s_NetUiToasts.pop_front();
 		}
-		if (s_NetUiToasts.empty()) {
-			return;
-		}
-		AllegroBitmap drawBitmap(backbuffer);
-		int y = 8;
-		for (const NetUiToast& toast: s_NetUiToasts) {
-			smallFont->DrawAligned(&drawBitmap, backbuffer->w / 2, y, toast.record.text, GUIFont::Centre);
-			y += smallFont->GetFontHeight() + 2;
-		}
+		if (auto* panel = g_MenuMan.GetNetworkPanel()) panel->DrawMatchToasts();
 	}
 
 	const std::vector<ScenarioRunner::NetUiToastRecord>& ScenarioRunner::GetNetUiToastLog() {
 		return s_NetUiToastLog;
+	}
+
+	std::vector<ScenarioRunner::NetUiToastRecord> ScenarioRunner::GetVisibleNetUiToasts() {
+		const uint64_t nowMs = NetLockstepNowMs();
+		std::vector<NetUiToastRecord> visible;
+		for (auto toast = s_NetUiToasts.rbegin(); toast != s_NetUiToasts.rend() && visible.size() < 3; ++toast) {
+			if (nowMs < toast->shownAtMs + c_NetUiToastMs) {
+				visible.push_back(toast->record);
+			}
+		}
+		std::reverse(visible.begin(), visible.end());
+		return visible;
+	}
+
+	std::string ScenarioRunner::GetLockstepMissingPeers() {
+		return s_LockstepCoordinator ? s_LockstepCoordinator->DescribeMissingPeers() : std::string();
 	}
 
 	void ScenarioRunner::NoteResyncOverlayFrame() {
@@ -853,6 +852,13 @@ namespace RTE {
 		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled);
 	}
 
+	uint8_t ScenarioRunner::GetLockstepPolicyActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
+		if (!s_LockstepCoordinator) {
+			return 0;
+		}
+		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled);
+	}
+
 	uint8_t ScenarioRunner::GetLockstepDropTimeActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
 		if (!s_LockstepCoordinator) {
 			return 0;
@@ -886,6 +892,11 @@ namespace RTE {
 
 	uint64_t ScenarioRunner::GetLockstepAppliedFrame() {
 		return s_LockstepAppliedFrame;
+	}
+
+	uint64_t ScenarioRunner::GetLockstepCompletedFrame() {
+		const uint64_t resumeFrame = GetLockstepResumeFrame();
+		return resumeFrame > 0 ? resumeFrame - 1 : 0;
 	}
 
 	void ScenarioRunner::SetLockstepAppliedFrame(uint64_t frame) {
@@ -989,7 +1000,7 @@ namespace RTE {
 		return s_LockstepResumeCountdown;
 	}
 
-	void ScenarioRunner::ApplyLockstepPauseCommand(bool pause) {
+	void ScenarioRunner::ApplyLockstepPauseCommand(bool pause, uint8_t senderPeerId) {
 		if (pause && !s_LockstepPaused) {
 			s_LockstepPaused = true;
 			s_LockstepResumeCountdown = -1;
@@ -997,12 +1008,13 @@ namespace RTE {
 			const std::string line = "match paused at tick " + std::to_string(g_TimerMan.GetSimUpdateCount()) + " sim ms " + std::to_string(g_TimerMan.GetSimTimeMS());
 			g_ConsoleMan.PrintString("NETWORK: " + line);
 			std::cout << "[net-match] " << line << std::endl;
-			PushNetUiToast("paused", "Match paused");
+			PushNetUiToast("paused", "Match paused", senderPeerId);
 		} else if (!pause && s_LockstepPaused && s_LockstepResumeCountdown < 0) {
 			s_LockstepResumeCountdown = static_cast<int>(3.0F / c_DefaultDeltaTimeS + 0.5F);
 			const std::string line = "match resuming in " + std::to_string(s_LockstepResumeCountdown) + " ticks";
 			g_ConsoleMan.PrintString("NETWORK: " + line);
 			std::cout << "[net-match] " << line << std::endl;
+			PushNetUiToast("resuming", "Resume requested", senderPeerId);
 		}
 	}
 
@@ -1854,7 +1866,7 @@ namespace RTE {
 					}
 				}
 				if (s_LockstepStallOverlayEnabled || s_LockstepStallUiProbeArmed) {
-					PumpLockstepStallUI(stallMs, timeoutMs, missing, holdPause, holdName, holdSeconds);
+					PumpLockstepStallUI();
 				}
 				nextOverlayMs = stallMs + 200;
 			}

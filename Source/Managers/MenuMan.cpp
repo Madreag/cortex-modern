@@ -84,6 +84,9 @@ void MenuMan::SetActiveMenu() {
 		m_ActiveMenu = newActiveMenu;
 		switch (m_ActiveMenu) {
 			case ActiveMenu::MainMenuActive:
+				// A finished online match comes in on its rematch lobby; a drop comes in on the rejoin
+				// offer, which wins because its own routing sent us here.
+				m_MainMenu->OfferRematchLobbyOnEntry();
 				// §11: the rejoin offer is put up on the way in, at process start and after a match.
 				m_MainMenu->OfferStoredRejoinOnEntry();
 				break;
@@ -129,6 +132,12 @@ void MenuMan::HandleTransitionIntoMenuLoop() {
 		m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::ScrollingFadeIn);
 		return;
 	}
+	// An online match that ended with its session alive reconvenes in the rematch lobby, so both
+	// peers land on the multiplayer screen rather than on the planet screen the preset would pick.
+	if (g_NetMatchService.NeedsCompletedLobbyPump()) {
+		m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::ScrollingFadeIn);
+		return;
+	}
 	if (g_MetaMan.GameInProgress()) {
 		if (g_ActivityMan.SkipPauseMenuWhenPausingActivity()) {
 			m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::MetaGameFadeIn);
@@ -156,7 +165,8 @@ void MenuMan::HandleTransitionIntoMenuLoop() {
 bool MenuMan::Update() {
 	// §11's retry schedule belongs to the service, not to a screen: it runs whatever menu is up, so a
 	// dropped player recovers without having to walk back to the multiplayer screen.
-	if (g_NetMatchService.NeedsRecoveryPump()) {
+	// A completed match's rematch lobby needs the same pump: its directory lease heartbeats from here.
+	if (g_NetMatchService.NeedsRecoveryPump() || g_NetMatchService.NeedsCompletedLobbyPump()) {
 		g_NetMatchService.Update();
 	}
 	m_TitleScreen->Update();

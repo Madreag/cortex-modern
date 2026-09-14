@@ -77,6 +77,8 @@ namespace RTE {
 		static bool TraceEnabled();
 		/// Insert, match, expiry, numbering and the one-tick tolerance, with no engine around them.
 		static bool RunSelfTest();
+		/// Drops the entries and the numbering between two self-test arms so each arm starts from an empty ledger. Keeps the run's counters.
+		static void ResetBetweenSelfTestArms();
 
 	private:
 		struct Entry {

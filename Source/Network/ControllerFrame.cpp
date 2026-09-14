@@ -646,6 +646,10 @@ namespace RTE {
 			Controller held(Controller::CIM_PLAYER, Players::PlayerOne);
 			const ControllerFrame preOrder = ControllerFrameCodec::Snapshot(4242, held);
 			held.HoldDisabledForSyncedOrder(305);
+			held.BeginLocalProduction();
+			held.SetState(ControlState::PIE_MENU_ACTIVE, true);
+			held.SetAnalogCursor(Vector(0.5F, 0.0F));
+			held.EndLocalProduction();
 			const std::string saved = held.SaveCheckpoint();
 
 			Controller restored(Controller::CIM_DISABLED, Players::NoPlayer);
@@ -663,11 +667,40 @@ namespace RTE {
 			if (restored.IsSyncedOrderDisableHeld()) {
 				return fail("a restored order hold outlived the input-delay cap");
 			}
+			restored.BeginLocalProduction();
+			const bool baselineRestored = restored.IsState(ControlState::PIE_MENU_ACTIVE) && restored.GetAnalogCursor() == Vector(0.5F, 0.0F);
+			restored.EndLocalProduction();
+			if (!baselineRestored) {
+				return fail("a restored controller lost the baseline it was producing from");
+			}
 
-			// A Controller1 payload has no hold field and restores as none; a stale reader refuses the wider payload.
-			std::string legacyText = saved;
+			// Two input samples, the seat they belong to, and the two flags make up the producer's baseline.
+			const size_t baselineFields = 2 * (ControlState::CONTROLSTATECOUNT + 8) + 4;
+			const auto dropFields = [](std::string text, size_t count) {
+				for (size_t field = 0; field < count; ++field) {
+					text = text.substr(0, text.rfind(' ', text.size() - 2) + 1);
+				}
+				return text;
+			};
+
+			// A Controller2 payload has no baseline: the hold restores armed and the producer starts empty.
+			std::string olderText = dropFields(saved, baselineFields);
+			olderText.replace(olderText.find("Controller3"), 11, "Controller2");
+			Controller olderRestored(Controller::CIM_DISABLED, Players::NoPlayer);
+			if (!olderRestored.LoadCheckpoint(olderText) || !olderRestored.IsSyncedOrderDisableHeld()) {
+				return fail("a Controller2 payload did not restore its order hold");
+			}
+			olderRestored.BeginLocalProduction();
+			const bool olderBaselineEmpty = !olderRestored.IsState(ControlState::PIE_MENU_ACTIVE) && olderRestored.GetAnalogCursor().IsZero();
+			olderRestored.EndLocalProduction();
+			if (!olderBaselineEmpty) {
+				return fail("a Controller2 payload restored a producer baseline it does not carry");
+			}
+
+			// A Controller1 payload has neither the hold field nor the baseline and restores as none; a
+			// stale reader refuses the wider payload.
+			std::string legacyText = dropFields(olderText, 1);
 			legacyText.replace(legacyText.find("Controller2"), 11, "Controller1");
-			legacyText = legacyText.substr(0, legacyText.rfind(' ', legacyText.size() - 2) + 1);
 			Controller legacyRestored(Controller::CIM_DISABLED, Players::NoPlayer);
 			if (!legacyRestored.LoadCheckpoint(legacyText) || legacyRestored.IsSyncedOrderDisableHeld()) {
 				return fail("a Controller1 payload did not restore cleanly");

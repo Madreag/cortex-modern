@@ -125,8 +125,7 @@ namespace RTE {
 	/// build without GameNetworkingSockets.
 	std::string NetIceHostIdentity(const std::string& sessionId);
 
-	/// The join_mode a host's directory row carries. A rematch re-registers under a new session id
-	/// while GNS keeps the identity pinned to the first one, so only a direct join still reaches it.
+	/// Reports ICE reachability only for the directory id bound to the listener.
 	std::string NetIceRowJoinMode(bool iceEnabled, bool hasDirectAddress, const std::string& boundSessionId, const std::string& rowSessionId);
 
 	/// Resolves a session id against a directory listing. Empty and a filled target when the row can
@@ -184,6 +183,9 @@ namespace RTE {
 		static bool WaitForJoinTrigger(const std::string& path, uint64_t budgetMs, std::string* error);
 		static constexpr uint64_t c_JoinWaitBudgetMs = 120000;
 		static constexpr uint64_t c_JoinWaitPollMs = 100;
+		/// How long a finished match's rematch lobby waits for every peer to come back before the
+		/// service destroys it and releases the session, the seats and the directory lease.
+		static constexpr uint64_t c_CompletedLobbyExpiryMs = 600000;
 
 		bool Start(const NetMatchServiceRequest& request, std::string* error = nullptr);
 		bool CanSealA7Journal() const;
@@ -243,6 +245,9 @@ namespace RTE {
 		/// Whether the §11 retry schedule still has work, so the menu loop pumps the service whatever
 		/// screen is up rather than only while the multiplayer screen is open.
 		bool NeedsRecoveryPump() const;
+		/// Whether a finished match still wants the menu loop's pump for its rematch lobby and kept
+		/// directory lease. Not a recovery: the screens route a drop, not an ordinary match end.
+		bool NeedsCompletedLobbyPump() const;
 		/// Whether the host refused the last join because its match is already running, which is the
 		/// only case §9b's applicant path exists for.
 		bool WasJoinRefusedByALiveMatch() const;
@@ -265,8 +270,19 @@ namespace RTE {
 		};
 		PortMapStatus GetPortMapStatus() const;
 		NetLobbySnapshot GetLobbySnapshot() const;
+		/// Local chat send, presentation only. Reaches the session whether the lobby is still running
+		/// on the worker or the match has handed it back; false when no session link exists.
+		bool SendChat(uint8_t scope, const std::string& text);
+		/// Drains the session's chat queue for the UI. Newest 64 are kept on the session side.
+		std::vector<NetChatEntry> TakeChatEntries();
 		/// "Input delay: N (auto, Rms ping)" / "(fixed)", from the announced match config. "" pre-lobby.
 		std::string GetInputDelayText() const;
+		/// The live host RTT on a client, or the largest connected peer RTT on the host.
+		std::optional<uint32_t> GetMatchPingMs() const;
+		/// Whether the current match is being restored from the host snapshot.
+		bool IsMatchResyncing() const;
+		/// The current seat holder's display name for presentation events.
+		std::string GetPeerDisplayName(uint8_t peerId) const;
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
 		std::string BuildReportJson() const;
@@ -280,9 +296,35 @@ namespace RTE {
 		static const char* StateName(NetMatchServiceState state);
 
 	private:
+		/// A match's transports, moved as one into a rematch or resync worker and back.
+		struct TransportLink {
+			// Defined in the .cpp, where the dispatcher type is complete.
+			TransportLink();
+			TransportLink(TransportLink&&) noexcept;
+			TransportLink& operator=(TransportLink&&) noexcept;
+			~TransportLink();
+
+			std::unique_ptr<GnsTransport> ip;
+			std::unique_ptr<NetMuxTransport> mux;
+			std::vector<NetTransportEvent> lobbyEvents;
+#ifdef CCCP_WITH_GNS
+			std::unique_ptr<GnsDirectorySignalDispatcher> dispatcher; //!< After the mux, so it is destroyed first.
+#endif
+			/// The session's wire: the mux if there is one, else the IP transport.
+			INetTransport* Wire() const { return mux ? static_cast<INetTransport*>(mux.get()) : ip.get(); }
+		};
+
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
-		void WorkerRematchMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
-		void WorkerResyncMain(GnsTransport* transportRaw, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
+		void WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
+		void WorkerResyncMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
+		/// The live wire, by the same rule. Caller holds the lock.
+		INetTransport* ActiveWireLocked() const { return m_Mux ? static_cast<INetTransport*>(m_Mux.get()) : m_Transport.get(); }
+		/// Hands the transports and dispatcher to a worker, caching the dispatcher's report. Caller holds the lock.
+		TransportLink TakeTransportLinkLocked();
+		/// Takes them back from a worker. Caller holds the lock.
+		void RestoreTransportLinkLocked(TransportLink link);
+		/// Refuses a resync with no live match or a lost session; a lost session fails the service. Caller holds the lock.
+		bool CanResyncLocked(std::string* error);
 		bool PrepareReceivedResync(const std::vector<uint8_t>& bytes, const NetLockstepCoordinator& coordinator, std::string& pendingLoad, NetResyncState& state, std::string* error, size_t* archiveBytes = nullptr);
 		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request) const;
 		NetMatchConfig BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const;
@@ -324,7 +366,13 @@ namespace RTE {
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
+		friend bool TestGnsStopCancelContracts(std::string* error);
+		friend bool TestEndedWorldLateAdmission(std::string* error);
 		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
+		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
+		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
+		friend bool TestCompletedLobbyExpires(std::string* error);
+		friend bool TestChatSendRefusedOutsideCarry(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
@@ -332,6 +380,12 @@ namespace RTE {
 		/// that filled it. Caller holds the lock. The census may only open where the sim stands at a
 		/// completed tick with the world still up.
 		void DrainPendingSessionEventsLocked(bool atTickBoundary);
+		/// Keeps next-lobby packets until the rematch worker takes the link.
+		void QueueLobbyEvent(const NetTransportEvent& event);
+		/// Polls a finished session without touching the ended simulation; caller holds the lock.
+		void PumpCompletedSessionLocked();
+		/// Refuses Ready peers absent from the ended round; caller holds the lock.
+		void RefuseEndedPeersLocked(const std::string& reason);
 		/// The relaunch's queue reset, with a permanent diagnostic for anything a teardown left behind.
 		void DiscardUndeliveredSessionEventsLocked();
 		/// Folds the coordinator's counters into the service so a gate can read them across a resync.
@@ -346,8 +400,15 @@ namespace RTE {
 		void EndAdmissionSession();
 		void ResetRosterTransitionHistory();
 		void RecordRosterTransitions(uint64_t observedAtMs);
+		/// Publishes a successful local host action to the presentation sink; caller holds the lock.
+		void RecordModerationAction(uint16_t stableSeat, NetModerationAction action);
 		/// Runs the §11 automatic-retry schedule from the service's own state. Game thread only.
 		void DriveReconnectUx(uint64_t nowMs);
+		/// Destroys a rematch lobby whose peers did not all come back inside c_CompletedLobbyExpiryMs.
+		/// Game thread only, from Update(): it takes the lock and then destroys without it.
+		void UpdateCompletedLobbyExpiry(uint64_t nowMs);
+		/// Whether every non-CPU seat of the current lobby is connected. Caller holds the lock.
+		bool RematchLobbySeatedLocked() const;
 		/// Elapsed milliseconds since this session began, for every admission deadline.
 		uint64_t AdmissionNowMs() const;
 		void CaptureA7SeatView();
@@ -437,7 +498,7 @@ namespace RTE {
 		std::string m_IceBoundSessionId;    //!< The session id the process's GNS identity is pinned to.
 		std::string m_IceIdentity;
 		std::string m_IceJoinSessionId;     //!< Client: the session id -net-join-session named.
-		std::string m_IceReport;            //!< The dispatcher's report, captured before teardown.
+		std::string m_IceReport;            //!< The dispatcher's last report, taken when a worker or teardown takes the dispatcher.
 		std::string m_IceRoute;             //!< The leg the join actually took: "ice" | "ip" | "".
 		//!< Published by Update() for the worker: the directory client is game-thread only.
 		std::string m_DirectorySessionId;
@@ -446,6 +507,16 @@ namespace RTE {
 		std::unique_ptr<NetSession> m_Session;
 		std::unique_ptr<NetLockstepCoordinator> m_Coordinator;
 		std::unique_ptr<NetMatchRunner> m_Runner;
+		std::vector<NetTransportEvent> m_PendingLobbyEvents;
+		size_t m_PendingLobbyBytes = 0;
+		bool m_PendingLobbyOverflow = false;
+		bool m_LeftMatch = false;
+		//!< Steady ms of the match end that opened this rematch lobby; 0 when no lobby is waiting.
+		uint64_t m_CompletedLobbySinceMs = 0;
+		uint64_t m_EndedLockstepPackets = 0;
+		// Non-owning view of the live session object: while the runner's worker still owns it
+		// (the whole lobby phase) m_Session is empty, but chat must already reach it.
+		NetSession* m_ChatSession = nullptr;
 		std::vector<NetTransportEvent> m_PendingSessionEvents; //!< Game-thread only: reconnect traffic the coordinator handed over.
 		//!< Coordinator counters a resync would otherwise zero, accumulated at every teardown.
 		struct LockstepTotals {
