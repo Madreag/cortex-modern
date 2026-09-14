@@ -52,6 +52,7 @@ namespace RTE {
 			bool        selftestSpawnCommand = false; // -net-match-e2e-spawn-command: host-issued spawn command at tick 50.
 			bool        selftestDeliverCommand = false; // -net-match-e2e-deliver-command: host-issued delivery command at tick 50.
 			int64_t     scenarioDeliverCommandTick = -1; // -scenario-deliver-command <tick>: the same delivery offline, for the single-player reference.
+			bool        scenarioRunPastEnd = false; // -scenario-run-past-end: keep ticking to -max-ticks after the activity is over, as a match's tick cap does.
 			bool        selftestAIOrderCommand = false; // -net-match-e2e-ai-order-command: the host orders its units (go-to, follow, squad, disband) at ticks 50/200/400/600.
 			bool        selftestScuttleCommand = false; // -net-match-e2e-scuttle-command: host scuttles the delivered craft at tick 100.
 			bool        selftestBrainKillCommand = false; // -net-match-e2e-brain-kill-command: host delivers + scuttles a craft onto the enemy brain.

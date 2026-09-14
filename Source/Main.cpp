@@ -3779,7 +3779,10 @@ void RunGameLoop() {
 				const uint64_t scenarioTickCap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 1800;
 				const uint64_t tickCap = NetGameplayRequested() && s_netLockstepTicks > 0 ? s_netLockstepTicks : scenarioTickCap;
 				const Activity* scenarioActivity = g_ActivityMan.GetActivity();
-				if ((scenarioActivity && scenarioActivity->IsOver()) || elapsedTicks >= tickCap) {
+				// A match keeps simulating its remaining ticks after the round is decided; a scenario
+				// run that has to be read beside one needs the same window.
+				const bool activityDecided = scenarioActivity && scenarioActivity->IsOver() && !ScenarioRunner::GetArgs().scenarioRunPastEnd;
+				if (activityDecided || elapsedTicks >= tickCap) {
 					// Finalize so the scenario's Lua OnEnd grades the run even when the CLI tick cap
 					// stops it before the scenario's own max-ticks (idempotent if it already ended).
 					g_ActivityMan.EndActivity();
