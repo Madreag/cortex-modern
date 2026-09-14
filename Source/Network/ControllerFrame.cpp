@@ -664,10 +664,15 @@ namespace RTE {
 				return fail("a restored order hold outlived the input-delay cap");
 			}
 
-			// A Controller1 payload has no hold field and restores as none; a stale reader refuses the wider payload.
+			// A Controller1 payload has neither the hold field nor the producer's baseline and restores as
+			// none; a stale reader refuses the wider payload.
 			std::string legacyText = saved;
-			legacyText.replace(legacyText.find("Controller2"), 11, "Controller1");
-			legacyText = legacyText.substr(0, legacyText.rfind(' ', legacyText.size() - 2) + 1);
+			legacyText.replace(legacyText.find("Controller3"), 11, "Controller1");
+			// Two input samples, the seat they belong to, and the two flags, then the hold tick.
+			const size_t widerFields = 2 * (ControlState::CONTROLSTATECOUNT + 8) + 4 + 1;
+			for (size_t field = 0; field < widerFields; ++field) {
+				legacyText = legacyText.substr(0, legacyText.rfind(' ', legacyText.size() - 2) + 1);
+			}
 			Controller legacyRestored(Controller::CIM_DISABLED, Players::NoPlayer);
 			if (!legacyRestored.LoadCheckpoint(legacyText) || legacyRestored.IsSyncedOrderDisableHeld()) {
 				return fail("a Controller1 payload did not restore cleanly");

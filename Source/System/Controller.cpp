@@ -52,11 +52,10 @@ void Controller::Clear() {
 	m_JoyAccelTimer.Reset();
 	m_KeyAccelTimer.Reset();
 	m_LocalProduction = InputSample();
-	m_CommittedInput = InputSample();
 	m_LocalProductionSeatMode = InputMode::CIM_PLAYER;
 	m_LocalProductionSeatPlayer = 0;
 	m_LocalProductionValid = false;
-	m_ProducingLocalInput = false;
+	// m_CommittedInput and m_ProducingLocalInput belong to the producing pass, which outlives a Clear.
 }
 
 int Controller::Create(InputMode mode, Actor* controlledActor) {
@@ -102,25 +101,39 @@ int Controller::Create(const Controller& reference) {
 }
 
 std::string Controller::SaveCheckpoint() const {
-	CheckpointWriter writer("Controller2");
+	CheckpointWriter writer("Controller3");
 	VisitCheckpoint(writer, *this);
 	writer(m_SyncedOrderDisableTick);
+	VisitLocalProduction(writer, *this);
 	return writer.Text();
 }
 
 bool Controller::LoadCheckpoint(std::string_view text, bool validateOnly) {
 	try {
-		// Controller2 appends the synced-order hold tick; a Controller1 payload restores it as none.
-		const bool legacy = text.starts_with("11 Controller1 ");
-		CheckpointReader reader(text, legacy ? "Controller1" : "Controller2", validateOnly);
+		// Controller2 appends the synced-order hold tick and Controller3 the producer's baseline; an older
+		// payload restores the tick as none and the baseline as absent.
+		const bool legacyOrder = text.starts_with("11 Controller1 ");
+		const bool legacyProduction = legacyOrder || text.starts_with("11 Controller2 ");
+		CheckpointReader reader(text, legacyOrder ? "Controller1" : (legacyProduction ? "Controller2" : "Controller3"), validateOnly);
 		VisitCheckpoint(reader, *this);
 		int64_t syncedOrderDisableTick = -1;
-		if (!legacy) {
+		if (!legacyOrder) {
 			reader.Value(syncedOrderDisableTick);
+		}
+		if (!legacyProduction) {
+			VisitLocalProduction(reader, *this);
 		}
 		reader.Finish();
 		if (!validateOnly) {
 			m_SyncedOrderDisableTick = syncedOrderDisableTick;
+			if (legacyProduction) {
+				m_LocalProduction = InputSample();
+				m_LocalProductionSeatMode = m_SeatMode;
+				m_LocalProductionSeatPlayer = m_SeatPlayer;
+				m_LocalProductionValid = false;
+				m_CommittedInput = InputSample();
+				m_ProducingLocalInput = false;
+			}
 		}
 		return true;
 	} catch (const std::exception&) {
@@ -137,6 +150,12 @@ void Controller::CopyCheckpointFrom(const Controller& reference) {
 	m_JoyAccelTimer = reference.m_JoyAccelTimer;
 	m_KeyAccelTimer = reference.m_KeyAccelTimer;
 	m_MouseMovement = reference.m_MouseMovement;
+	m_LocalProduction = reference.m_LocalProduction;
+	m_LocalProductionSeatMode = reference.m_LocalProductionSeatMode;
+	m_LocalProductionSeatPlayer = reference.m_LocalProductionSeatPlayer;
+	m_LocalProductionValid = reference.m_LocalProductionValid;
+	m_CommittedInput = reference.m_CommittedInput;
+	m_ProducingLocalInput = reference.m_ProducingLocalInput;
 }
 
 Controller::LocalInputState Controller::CaptureLocalInputState() const {
