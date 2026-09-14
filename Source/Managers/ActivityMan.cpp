@@ -522,7 +522,7 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 			saved = true;
 			if (!automatic) g_ConsoleMan.PrintString("SYSTEM: Game saved to \"" + fileName + "\"!");
 		} catch (const std::exception& error) {
-			if (automatic) std::cout << "[autosave] failed tick=" << tick << " reason=" << error.what() << std::endl;
+			if (automatic) std::cout << "[autosave] failed tick=" + std::to_string(tick) + " reason=" + error.what() + "\n" << std::flush;
 			else g_ConsoleMan.PrintString("ERROR: Could not save game \"" + fileName + "\": " + error.what());
 		}
 		const long long asyncMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - asyncStart).count();

@@ -368,7 +368,7 @@ namespace RTE {
 				try { WriteBundle(std::move(job)); }
 				catch (const std::exception& error) {
 					saved = false;
-					std::cerr << "[telemetry] failed: " << error.what() << std::endl;
+					std::cerr << std::string("[telemetry] failed: ") + error.what() + "\n" << std::flush;
 					g_ConsoleMan.PrintString("ERROR: Could not save diagnostics: " + std::string(error.what()));
 				}
 				std::lock_guard lock(s_State.mutex);
