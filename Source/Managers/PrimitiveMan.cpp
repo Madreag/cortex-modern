@@ -288,7 +288,7 @@ namespace {
 			const auto& bitmap = static_cast<const BitmapPrimitive&>(primitive);
 			const auto* owner = static_cast<const MOSprite*>(bitmap.m_SpriteOwner.get());
 			if (owner && (bitmap.m_IconBitmap ? owner->GetGraphicalIcon() : owner->GetSpriteFrame(bitmap.m_SpriteFrame)) != bitmap.m_Bitmap) owner = nullptr;
-			writer(pool.Image(bitmap.m_Bitmap), bitmap.m_PendingSpriteReference.empty() ? GUICheckpoint::SaveEntityReference(owner) : bitmap.m_PendingSpriteReference);
+			writer(pool.Image(bitmap.m_Bitmap), bitmap.m_PendingSpriteReference.empty() ? CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(owner); }) : CheckpointText(bitmap.m_PendingSpriteReference));
 		} else if (primitive.GetPrimitiveType() == PrimitiveType::Polygon || primitive.GetPrimitiveType() == PrimitiveType::PolygonFill) {
 			const auto& vertices = primitive.GetPrimitiveType() == PrimitiveType::Polygon ? static_cast<const PolygonPrimitive&>(primitive).m_Vertices : static_cast<const PolygonFillPrimitive&>(primitive).m_Vertices;
 			writer(vertices.size());
@@ -298,14 +298,14 @@ namespace {
 	}
 	std::string SavePrimitiveList(const std::vector<const GraphicalPrimitive*>& primitives, const char* version) {
 		PrimitiveCheckpointPool pool;
-		std::vector<std::string> records;
+		std::vector<CheckpointText> records;
 		for (const auto* primitive: primitives) {
 			if (!primitive) throw std::runtime_error("null scheduled graphical primitive");
-			records.push_back(SavePrimitiveRecord(*primitive, pool));
+			records.push_back(CheckpointWriter::Native([&] { return SavePrimitiveRecord(*primitive, pool); }));
 		}
 		CheckpointWriter writer(version);
 		writer(pool.images.size());
-		for (const auto* bitmap: pool.images) writer(GUICheckpoint::SaveSharedBitmap(bitmap));
+		for (const auto* bitmap: pool.images) writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveSharedBitmap(bitmap); }));
 		writer(pool.vertices.size());
 		for (const auto* vertex: pool.vertices) writer(*vertex);
 		writer(records);

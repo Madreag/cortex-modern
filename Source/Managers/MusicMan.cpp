@@ -440,6 +440,94 @@ struct MusicCheckpoint {
         if (!sectionFound || !soundFound) throw std::runtime_error("music points outside its owned song");
         return value;
     }
+    static std::string SaveCapturedSet(const SoundSet& source) {
+        CheckpointWriter writer("MusicSet1");
+        writer(source.m_SoundSelectionCycleMode, source.m_CurrentSelection, source.m_SoundData.size());
+        for (const auto& sample: source.m_SoundData) {
+            std::string path;
+            if (sample.SoundObject) {
+                for (const auto& [candidate, sound]: ContentFile::s_LoadedSamples) if (sound == sample.SoundObject && (path.empty() || candidate < path)) path = candidate;
+                if (path.empty()) throw std::runtime_error("music sample has no cached asset identity");
+            }
+            writer(CheckpointWriter::Native([&] {
+                CheckpointWriter value("MusicSample1");
+                value(sample.SoundFile, path, sample.Offset, sample.MinimumAudibleDistance, sample.AttenuationStartDistance);
+                return value.Text();
+            }));
+        }
+        writer(source.m_SubSoundSets.size());
+        for (const auto* subset: source.m_SubSoundSets) {
+            if (!subset) throw std::runtime_error("null music sound subset");
+            writer(CheckpointWriter::Native([&] { return SaveCapturedSet(*subset); }));
+        }
+        return writer.Text();
+    }
+    static std::string SaveCapturedSound(const SoundContainer& source) {
+        CheckpointWriter writer("MusicSound1");
+        writer(source, CheckpointWriter::Native([&] { return SaveCapturedSet(*source.m_TopLevelSoundSet); }));
+        return writer.Text();
+    }
+    static CheckpointText CaptureOwnedSound(const std::unique_ptr<SoundContainer>& source) {
+        return source ? CheckpointWriter::Native([&] { return SaveCapturedSound(*source); }) : CheckpointText{};
+    }
+    static std::string SaveCapturedSection(const DynamicSongSection& source) {
+        CheckpointWriter writer("MusicSection1");
+        writer(CheckpointWriter::Native([&] { return source.Entity::SaveCheckpoint(); }), source.m_TransitionSoundContainers.size());
+        for (const auto& sound: source.m_TransitionSoundContainers) writer(CheckpointWriter::Native([&] { return SaveCapturedSound(sound); }));
+        writer(source.m_LastTransitionSoundContainerIndex, source.m_TransitionShuffleUnplayedIndices, source.m_SoundContainers.size());
+        for (const auto& sound: source.m_SoundContainers) writer(CheckpointWriter::Native([&] { return SaveCapturedSound(sound); }));
+        writer(source.m_LastSoundContainerIndex, source.m_ShuffleUnplayedIndices, source.m_SoundContainerSelectionCycleMode, source.m_SectionType);
+        return writer.Text();
+    }
+    static std::string SaveCaptured(const MusicMan& source) {
+        const auto interrupting = CaptureOwnedSound(source.m_InterruptingMusicSoundContainer);
+        const auto previous = CaptureOwnedSound(source.m_PreviousSoundContainer), current = CaptureOwnedSound(source.m_CurrentSoundContainer);
+        CheckpointText song;
+        int nextSection = -2;
+        std::array<int, 3> nextSound{-2, 0, -1};
+        bool sectionFound = source.m_NextSongSection == nullptr, soundFound = source.m_NextSoundContainer == nullptr;
+        if (source.m_CurrentSong) {
+            const auto& currentSong = *source.m_CurrentSong;
+            song = CheckpointWriter::Native([&] {
+                CheckpointWriter writer("MusicSong1");
+                writer(CheckpointWriter::Native([&] { return currentSong.Entity::SaveCheckpoint(); }),
+                    CheckpointWriter::Native([&] { return SaveCapturedSection(currentSong.m_DefaultSongSection); }), currentSong.m_SongSections.size());
+                for (const auto& section: currentSong.m_SongSections) writer(CheckpointWriter::Native([&] { return SaveCapturedSection(section); }));
+                return writer.Text();
+            });
+            const auto inspect = [&](const DynamicSongSection& section, int index) {
+                if (&section == source.m_NextSongSection) { nextSection = index; sectionFound = true; }
+                for (size_t i = 0; i < section.m_TransitionSoundContainers.size(); ++i) if (&section.m_TransitionSoundContainers[i] == source.m_NextSoundContainer) { nextSound = {index, 1, static_cast<int>(i)}; soundFound = true; }
+                for (size_t i = 0; i < section.m_SoundContainers.size(); ++i) if (&section.m_SoundContainers[i] == source.m_NextSoundContainer) { nextSound = {index, 0, static_cast<int>(i)}; soundFound = true; }
+            };
+            inspect(currentSong.m_DefaultSongSection, -1);
+            for (size_t i = 0; i < currentSong.m_SongSections.size(); ++i) inspect(currentSong.m_SongSections[i], static_cast<int>(i));
+        }
+        if (!sectionFound || !soundFound) throw std::runtime_error("music points outside its owned song");
+        CheckpointWriter writer("MusicMan1");
+        writer(source.m_IsPlayingDynamicMusic, interrupting, song, source.m_NextSongSectionType, source.m_CurrentSongSectionType,
+            nextSection, previous, current, nextSound, source.m_MusicFadeTimer, source.m_PreviousSoundContainerSetToFade,
+            source.m_MusicTimer, source.m_MusicPausedTime, source.m_ReturnToDynamicMusic);
+        return writer.Text();
+    }
+    static void VisitSounds(const MusicMan& source, const std::function<void(const SoundContainer&)>& visit) {
+        std::vector<const SoundContainer*> sounds;
+        if (source.m_InterruptingMusicSoundContainer) sounds.push_back(source.m_InterruptingMusicSoundContainer.get());
+        bool sectionFound = source.m_NextSongSection == nullptr, soundFound = source.m_NextSoundContainer == nullptr;
+        if (source.m_CurrentSong) {
+            const auto section = [&](const DynamicSongSection& value) {
+                sectionFound |= &value == source.m_NextSongSection;
+                for (const auto& sound: value.m_TransitionSoundContainers) { sounds.push_back(&sound); soundFound |= &sound == source.m_NextSoundContainer; }
+                for (const auto& sound: value.m_SoundContainers) { sounds.push_back(&sound); soundFound |= &sound == source.m_NextSoundContainer; }
+            };
+            section(source.m_CurrentSong->m_DefaultSongSection);
+            for (const auto& value: source.m_CurrentSong->m_SongSections) section(value);
+        }
+        if (!sectionFound || !soundFound) throw std::runtime_error("music points outside its owned song");
+        if (source.m_PreviousSoundContainer) sounds.push_back(source.m_PreviousSoundContainer.get());
+        if (source.m_CurrentSoundContainer) sounds.push_back(source.m_CurrentSoundContainer.get());
+        for (const auto* sound: sounds) visit(*sound);
+    }
 
     static bool ValidateSet(const Set& value, int depth = 0) {
         if (depth > 128 || value.cycle < 0 || value.cycle > SoundSet::ALL || value.selection.second < -1) return false;
@@ -622,7 +710,12 @@ struct MusicMan::CheckpointOwners {
 };
 }
 
-std::string MusicMan::SaveCheckpoint() const { return MusicCheckpoint::Capture(*this).SaveCheckpoint(); }
+std::string MusicMan::SaveCheckpoint() const {
+    return CheckpointWriter::IsCapturing() ? MusicCheckpoint::SaveCaptured(*this) : MusicCheckpoint::Capture(*this).SaveCheckpoint();
+}
+void MusicMan::VisitCheckpointSounds(const std::function<void(const SoundContainer&)>& visit) const {
+    MusicCheckpoint::VisitSounds(*this, visit);
+}
 
 bool MusicMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
     // An owning music checkpoint must commit together with its AudioMan voices.

@@ -1338,9 +1338,9 @@ std::string FrameMan::SaveCheckpoint() const {
 	CheckpointWriter writer("FrameMan3");
 	writer(m_HSplit, m_VSplit);
 	VisitCheckpoint(writer, *this);
-	for (const auto* font: m_SmallFonts) writer(font ? GUICheckpoint::SaveFont(*font) : std::string{});
-	for (const auto* font: m_LargeFonts) writer(font ? GUICheckpoint::SaveFont(*font) : std::string{});
-	writer(SavePaletteCheckpoint());
+	for (const auto* font: m_SmallFonts) writer(font ? CheckpointWriter::Native([&] { return GUICheckpoint::SaveFont(*font); }) : CheckpointText{});
+	for (const auto* font: m_LargeFonts) writer(font ? CheckpointWriter::Native([&] { return GUICheckpoint::SaveFont(*font); }) : CheckpointText{});
+	writer(CheckpointWriter::Native([&] { return SavePaletteCheckpoint(); }));
 	return writer.Text();
 }
 

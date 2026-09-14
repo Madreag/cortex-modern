@@ -176,8 +176,8 @@ std::string PostProcessMan::SaveCheckpoint() const {
 	for (const auto& [size, bitmap]: temporary) queues(size, bitmapID(bitmap.get()));
 	CheckpointWriter writer("PostProcessMan2");
 	writer(s_RegistrationSuppressed, bitmaps.size());
-	for (const auto* bitmap: bitmaps) writer(GUICheckpoint::SaveSharedBitmap(bitmap));
-	writer(queues.Text());
+	for (const auto* bitmap: bitmaps) writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveSharedBitmap(bitmap); }));
+	writer(CheckpointWriter::Native([&] { return queues.Text(); }));
 	return writer.Text();
 }
 

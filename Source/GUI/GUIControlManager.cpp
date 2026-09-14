@@ -114,7 +114,7 @@ std::string GUICheckpoint::SaveImage(const GUIBitmap* bitmap) {
 	if (bitmap) {
 		const auto* image = dynamic_cast<const AllegroBitmap*>(bitmap);
 		if (!image) throw std::runtime_error("unsupported GUI bitmap checkpoint backend");
-		writer(image->m_BitmapFile, SaveBitmap(bitmap->GetBitmap()));
+		writer(image->m_BitmapFile, CheckpointWriter::Native([&] { return SaveBitmap(bitmap->GetBitmap()); }));
 	}
 	return writer.Text();
 }
@@ -143,6 +143,16 @@ std::string GUICheckpoint::SaveOwnedEntity(const Entity* entity) {
 	CheckpointWriter checkpoint("GUIOwnedEntity1");
 	checkpoint(entity != nullptr);
 	if (entity) {
+		if (CheckpointWriter::IsCapturing()) {
+			const auto native = Writer::Capture([&](Writer& writer) {
+				Writer::SnapshotScope snapshot(writer);
+				writer.NewProperty("GUIOwnedEntity");
+				if (const auto* movable = dynamic_cast<const MovableObject*>(entity)) Scene::SaveSceneObject(writer, movable, false, true);
+				else { entity->Save(writer); writer.ObjectEnd(); }
+			});
+			checkpoint(entity->GetClassName(), native);
+			return checkpoint.Text();
+		}
 		auto stream = std::make_unique<std::stringstream>();
 		auto* raw = stream.get();
 		Writer writer(std::move(stream));
@@ -228,7 +238,7 @@ std::string GUICheckpoint::SaveSharedBitmap(const BITMAP* bitmap) {
 		}
 	}
 	CheckpointWriter writer("SharedBitmap1");
-	writer(path, cacheSlot, SaveBitmap(bitmap));
+	writer(path, cacheSlot, CheckpointWriter::Native([&] { return SaveBitmap(bitmap); }));
 	return writer.Text();
 }
 
@@ -378,7 +388,7 @@ const Entity* GUICheckpoint::LoadEntityReference(std::string_view text, bool val
 namespace {
 	template <class Archive> void GUIRectFields(Archive& archive, GUIRect& rect) { archive(rect.left, rect.top, rect.right, rect.bottom); }
 	template <class Archive> void GUIImageField(Archive& archive, GUIBitmap*& image) {
-		if constexpr (std::is_same_v<Archive, CheckpointWriter>) archive(GUICheckpoint::SaveImage(image));
+		if constexpr (std::is_same_v<Archive, CheckpointWriter>) archive(CheckpointWriter::Native([&] { return GUICheckpoint::SaveImage(image); }));
 		else {
 			std::string saved;
 			archive.Value(saved);
@@ -387,7 +397,7 @@ namespace {
 		}
 	}
 	template <class Archive> void GUIImageField(Archive& archive, std::unique_ptr<GUIBitmap>& image) {
-		if constexpr (std::is_same_v<Archive, CheckpointWriter>) archive(GUICheckpoint::SaveImage(image.get()));
+		if constexpr (std::is_same_v<Archive, CheckpointWriter>) archive(CheckpointWriter::Native([&] { return GUICheckpoint::SaveImage(image.get()); }));
 		else {
 			std::string saved;
 			archive.Value(saved);
@@ -989,7 +999,7 @@ std::string GUICheckpoint::SavePanel(const GUIPanel& source) {
 		for (const auto* item: list->m_Items) {
 			if (!item) throw std::runtime_error("null checkpoint list item");
 			writer(item->m_ID, item->m_Name, item->m_RightText, item->m_ExtraIndex, item->m_Selected, item->m_Height, item->m_OffsetX,
-				SaveImage(item->m_pBitmap), SaveEntityReference(item->m_pEntity));
+				CheckpointWriter::Native([&] { return SaveImage(item->m_pBitmap); }), CheckpointWriter::Native([&] { return SaveEntityReference(item->m_pEntity); }));
 		}
 		std::vector<size_t> selected;
 		for (const auto* item: list->m_SelectedList) {
@@ -1107,13 +1117,13 @@ bool GUICheckpoint::LoadPanel(GUIPanel& panel, std::string_view text, bool valid
 
 std::string GUICheckpoint::SaveFont(const GUIFont& font) {
 	CheckpointWriter writer("GUIFont1");
-	writer(font.m_Name, font.m_FontHeight, font.m_MainColor, font.m_CurrentColor, font.m_CharIndexCap, font.m_Kerning, font.m_Leading, SaveImage(font.m_Font));
+	writer(font.m_Name, font.m_FontHeight, font.m_MainColor, font.m_CurrentColor, font.m_CharIndexCap, font.m_Kerning, font.m_Leading, CheckpointWriter::Native([&] { return SaveImage(font.m_Font); }));
 	for (const auto& character: font.m_Characters) writer(character.m_Width, character.m_Height, character.m_Offset);
 	writer(font.m_ColorCache.size());
 	int current = font.m_CurrentBitmap == font.m_Font ? -1 : -2;
 	for (size_t index = 0; index < font.m_ColorCache.size(); ++index) {
 		const auto& color = font.m_ColorCache[index];
-		writer(color.m_Color, SaveImage(color.m_Bitmap));
+		writer(color.m_Color, CheckpointWriter::Native([&] { return SaveImage(color.m_Bitmap); }));
 		if (font.m_CurrentBitmap == color.m_Bitmap) current = static_cast<int>(index);
 	}
 	if (current == -2 && font.m_CurrentBitmap) throw std::runtime_error("GUI font bitmap has no cache owner");
@@ -1152,9 +1162,9 @@ std::string GUICheckpoint::SaveSkin(const GUISkin& skin) {
 	CheckpointWriter writer("GUISkin1");
 	writer(skin.m_Directory, skin.m_PropList.size());
 	for (auto* properties: skin.m_PropList) writer(properties->m_Name, GUIPropertyValues(*properties));
-	std::vector<std::string> images, fonts;
-	for (const auto* image: skin.m_ImageCache) images.push_back(SaveImage(image));
-	for (const auto* font: skin.m_FontCache) fonts.push_back(SaveFont(*font));
+	std::vector<CheckpointText> images, fonts;
+	for (const auto* image: skin.m_ImageCache) images.push_back(CheckpointWriter::Native([&] { return SaveImage(image); }));
+	for (const auto* font: skin.m_FontCache) fonts.push_back(CheckpointWriter::Native([&] { return SaveFont(*font); }));
 	writer(images, fonts);
 	for (const auto* cursor: skin.m_MousePointers) {
 		const auto found = std::find(skin.m_ImageCache.begin(), skin.m_ImageCache.end(), cursor);
@@ -1299,7 +1309,8 @@ std::string GUICheckpoint::Save(const GUIControlManager& manager) {
 	};
 	CheckpointWriter managerValues("GUIManager1");
 	VisitManagerFields(managerValues, *manager.m_GUIManager);
-	writer(manager.m_CursorType, manager.m_Input->SaveCheckpoint(), SaveSkin(*manager.m_Skin), managerValues.Text(), manager.m_ControlList.size());
+	writer(manager.m_CursorType, CheckpointWriter::Native([&] { return manager.m_Input->SaveCheckpoint(); }),
+		CheckpointWriter::Native([&] { return SaveSkin(*manager.m_Skin); }), CheckpointWriter::Native([&] { return managerValues.Text(); }), manager.m_ControlList.size());
 	for (auto* control: manager.m_ControlList) {
 		std::vector<std::string> children;
 		for (auto* child: control->m_ControlChildren) children.push_back(child->GetName());
@@ -1311,7 +1322,7 @@ std::string GUICheckpoint::Save(const GUIControlManager& manager) {
 	for (const auto& [key, panel]: panels) {
 		std::vector<std::string> children;
 		for (auto* child: panel->m_Children) children.push_back(keyOf(child));
-		writer(key, keyOf(panel->m_Parent), keyOf(panel->m_SignalTarget), children, SavePanel(*panel));
+		writer(key, keyOf(panel->m_Parent), keyOf(panel->m_SignalTarget), children, CheckpointWriter::Native([&] { return SavePanel(*panel); }));
 	}
 	std::vector<std::string> roots;
 	for (auto* panel: manager.m_GUIManager->m_PanelList) roots.push_back(keyOf(panel));

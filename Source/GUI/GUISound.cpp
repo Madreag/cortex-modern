@@ -198,6 +198,37 @@ struct GUISoundCheckpoint {
         for (size_t i = 0; i < members.size(); ++i) result.sounds[i] = {members[i]->SaveCheckpoint(), CaptureSet(*members[i]->m_TopLevelSoundSet)};
         return result;
     }
+    static std::string SaveCapturedSet(const SoundSet& source) {
+        CheckpointWriter writer("GUISoundSet1");
+        writer(source.m_SoundSelectionCycleMode, source.m_CurrentSelection, source.m_SoundData.size());
+        for (const auto& sample: source.m_SoundData) {
+            std::string path;
+            if (sample.SoundObject) {
+                for (const auto& [candidate, sound]: ContentFile::s_LoadedSamples) if (sound == sample.SoundObject && (path.empty() || candidate < path)) path = candidate;
+                if (path.empty()) throw std::runtime_error("GUI sample has no cached asset identity");
+            }
+            writer(CheckpointWriter::Native([&] {
+                CheckpointWriter value("GUISoundSample1");
+                value(sample.SoundFile, path, sample.Offset, sample.MinimumAudibleDistance, sample.AttenuationStartDistance);
+                return value.Text();
+            }));
+        }
+        writer(source.m_SubSoundSets.size());
+        for (const auto* child: source.m_SubSoundSets) {
+            if (!child) throw std::runtime_error("null GUI sound subset");
+            writer(CheckpointWriter::Native([&] { return SaveCapturedSet(*child); }));
+        }
+        return writer.Text();
+    }
+    static std::string SaveCaptured(const GUISound& source) {
+        CheckpointWriter writer("GUISound1");
+        for (const auto* sound: Members(const_cast<GUISound&>(source))) writer(CheckpointWriter::Native([&] {
+            CheckpointWriter value("GUISoundContainer1");
+            value(*sound, CheckpointWriter::Native([&] { return SaveCapturedSet(*sound->m_TopLevelSoundSet); }));
+            return value.Text();
+        }));
+        return writer.Text();
+    }
     static bool ValidateSet(const Set& value, int depth = 0) {
         if (depth > 128 || value.cycle < 0 || value.cycle > SoundSet::ALL || value.selection.second < -1) return false;
         if (value.selection.second >= 0 && static_cast<size_t>(value.selection.second) >= (value.selection.first ? value.subsets.size() : value.samples.size())) return false;
@@ -339,7 +370,9 @@ struct GUISoundCheckpoint {
 };
 }
 
-std::string GUISound::SaveCheckpoint() const { return GUISoundCheckpoint::Capture(*this).SaveCheckpoint(); }
+std::string GUISound::SaveCheckpoint() const {
+    return CheckpointWriter::IsCapturing() ? GUISoundCheckpoint::SaveCaptured(*this) : GUISoundCheckpoint::Capture(*this).SaveCheckpoint();
+}
 
 bool GUISound::LoadCheckpoint(std::string_view text, bool validateOnly) {
     if (!validateOnly) return LoadCheckpointWithAudio(text, g_MusicMan.SaveCheckpoint(), g_AudioMan.SaveCheckpoint());

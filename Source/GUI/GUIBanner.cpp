@@ -393,7 +393,7 @@ int GUIBanner::CalculateWidth(const char Character, FontMode mode) const {
 std::string GUIBanner::SaveCheckpoint() const {
 	CheckpointWriter writer("GUIBanner2");
 	VisitCheckpoint(writer, *this);
-	for (const auto* image: m_pFontImage) writer(GUICheckpoint::SaveBitmap(image));
+	for (const auto* image: m_pFontImage) writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(image); }));
 	return writer.Text();
 }
 

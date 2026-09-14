@@ -1287,6 +1287,14 @@ void AudioMan::CollectManagerSoundIdentities(std::unordered_set<uint64_t>& out) 
 	g_GUISound.VisitCheckpointSounds([&out](size_t, const SoundContainer& sound) {
 		if (const uint64_t identity = sound.GetCheckpointIdentity()) out.insert(identity);
 	});
+	if (CheckpointWriter::IsCapturing()) {
+		try {
+			g_MusicMan.VisitCheckpointSounds([&out](const SoundContainer& sound) {
+				if (const uint64_t identity = sound.GetCheckpointIdentity()) out.insert(identity);
+			});
+		} catch (const std::exception&) {}
+		return;
+	}
 	try {
 		// The reader keeps a view, so the text must outlive it.
 		const std::string music = g_MusicMan.SaveCheckpoint();
@@ -2150,12 +2158,12 @@ bool AudioMan::RunCheckpointPlaybackContinuationSelfTest() const {
 }
 
 std::string AudioMan::GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const {
-	std::vector<std::string> voices;
+	std::vector<CheckpointText> voices;
 	AudioCheckpoint::MixerLock mixer(m_AudioEnabled ? m_AudioSystem : nullptr);
 	for (const auto& [identity, voice]: m_PlayingVoices) {
 		if (voice.owner != container) continue;
 		int bus = container ? container->GetBusRouting() : 0;
-		voices.push_back(AudioCheckpoint::Voice::Capture(identity, container ? container->GetCheckpointIdentity() : 0, voice.soundPath, voice.minimumAudibleDistance, voice.channel, bus).SaveCheckpoint());
+		voices.push_back(CheckpointWriter::Native([&] { return AudioCheckpoint::Voice::Capture(identity, container ? container->GetCheckpointIdentity() : 0, voice.soundPath, voice.minimumAudibleDistance, voice.channel, bus).SaveCheckpoint(); }));
 	}
 	CheckpointWriter writer("SoundPlayback1"); writer(voices); return writer.Text();
 }
