@@ -155,6 +155,8 @@ namespace RTE {
 			MultiplayerJoinBackButton,
 			MultiplayerModerateButton,
 			MultiplayerModerationBackButton,
+			LastMatchDetailsButton,
+			LastMatchCloseButton,
 			PlayTutorialButton,
 			MetaGameContinueButton,
 			QuitConfirmButton,
@@ -210,6 +212,9 @@ namespace RTE {
 		GUILabel* m_MultiplayerErrorLabel;
 		GUILabel* m_MultiplayerLandingStatusLabel;
 		GUILabel* m_MultiplayerLobbyMatchLabel;
+		GUILabel* m_LastMatchSummaryLabel;
+		GUILabel* m_LastMatchDetailsLabel;
+		GUICollectionBox* m_LastMatchDialog;
 		GUITextBox* m_MultiplayerNameTextBox;
 		GUITextBox* m_MultiplayerHostPortTextBox;
 		GUITextBox* m_MultiplayerHostPlayersTextBox;
@@ -365,6 +370,11 @@ namespace RTE {
 
 		/// Refreshes the multiplayer sub-panels, labels, and button states from the lobby snapshot.
 		void RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot);
+		/// Opens the finished round's summary using the menu's modal overlay.
+		void ShowLastMatchDetails();
+		/// Restricts input to a multiplayer dialog until it closes.
+		void OpenMultiplayerDialog(GUICollectionBox* dialog);
+		void CloseMultiplayerDialog();
 		/// Rebuilds §9b's moderation panel from the host's live seat view.
 		void RefreshModerationControls(const NetLobbySnapshot& snapshot);
 		/// The one path a moderation action takes, whether a player clicked it or a gate drove it.
