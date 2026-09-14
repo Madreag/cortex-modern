@@ -90,6 +90,9 @@ if jitEnabled then
   end
   assert(compiled, 'hot store trace was not compiled')
 end
+local exits = 0
+local function onexit() exits = exits + 1 end
+local slot = 1
 p.prepare = function()
   p.co = coroutine.create(function()
     local value = {deep = {value = 41}}
@@ -120,8 +123,13 @@ p.mutate = function()
   setmetatable(p.data, {__index = {fallback = 29}})
   assert(p.data.fallback == 29 and getmetatable(p.data) ~= mt)
   hidden.deep.value = 81
+  local exitsBefore = exits
+  if jitEnabled then jit.attach(onexit, 'texit') end
   hot(p.hot, 512)
+  if jitEnabled then jit.attach(onexit) end
   assert(p.hot.x == 512 and rawget(p.hot, 'raw') == 512)
+  assert(not jitEnabled or exits > exitsBefore, 'no compiled trace ran for the guarded stores')
+  slot = 2
   assert((jit and jit.status() or false) == jitEnabled)
   assert(coroutine.resume(p.co))
   rawset(p.weak, 2, {})
@@ -151,6 +159,12 @@ p.released = function()
   local inside, after = _ScriptFieldsStash['preview:gc'], collectgarbage('count')
   _ScriptFieldsStash['preview:gc'] = nil
   assert(inside and inside - after >= 48, 'beforeimage bytes not released: '..tostring(inside)..' -> '..tostring(after))
+end
+p.upvalueSlotReport = function()
+  -- Documented limit: the barrier captures tables, so an upvalue slot keeps what the preview wrote.
+  _PreviewBarrierUpvalueSlot = slot
+  assert(slot == 2, 'upvalue slot write was undone: '..tostring(slot))
+  slot = 1
 end
 p.check = function()
   assert(p.data == p.alias and p.cycle == p)
@@ -189,6 +203,12 @@ end
 		for (int round = 0; round < 2 && passed; ++round) {
 			for (int index = 0; index < static_cast<int>(states.size()); ++index) {
 				check("preview_barrier_prepared", index, round, states[index]->RunScriptString("collectgarbage('stop'); _PreviewBarrierProbe.prepare(); _ScriptFieldsStash['preview:-7654321'] = {}", false));
+				// Only the registry holds this one, so nothing the walk reaches from the globals refers to it.
+				lua_State* armed = states[index]->GetLuaState();
+				lua_newtable(armed);
+				lua_pushinteger(armed, 1);
+				lua_setfield(armed, -2, "value");
+				lua_setfield(armed, LUA_REGISTRYINDEX, "_PreviewBarrierRegistry");
 			}
 			if (!passed) break;
 			LuaMan::CapturePreviewSelfCopies({}, false);
@@ -212,7 +232,11 @@ end
 				lua_getfield(L, -1, "cmeta");
 				lua_newtable(L);
 				lua_setmetatable(L, -2);
+				lua_getfield(L, LUA_REGISTRYINDEX, "_PreviewBarrierRegistry");
+				lua_pushinteger(L, 2);
+				lua_setfield(L, -2, "value");
 				lua_settop(L, top);
+				check("preview_barrier_double_arm_refused", index, round, luaJIT_preview_begin(L, nullptr, 0) ? -1 : 0);
 				check("preview_barrier_native_semantics", index, round, state->RunScriptString("assert(_PreviewBarrierProbe.capi[1] == 92 and _PreviewBarrierProbe.capi.x == 93 and _PreviewBarrierProbe.capi.added == 94)", false));
 				check("preview_barrier_fault_injection", index, round, luaJIT_preview_faultcheck(L) ? 0 : -1);
 				check("preview_barrier_gc_accounting", index, round, state->RunScriptString("_PreviewBarrierProbe.accounting()", false));
@@ -224,10 +248,29 @@ end
 			for (int index = 0; index < static_cast<int>(states.size()); ++index) {
 				check("preview_barrier_exact_rollback", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.check(); assert(_ScriptFieldsStash['preview:-7654321'] == nil)", false));
 				check("preview_barrier_gc_released", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.released()", false));
+				check("preview_barrier_upvalue_slot_limit", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.upvalueSlotReport()", false));
+				lua_State* observed = states[index]->GetLuaState();
+				const int slotTop = lua_gettop(observed);
+				lua_getglobal(observed, "_PreviewBarrierUpvalueSlot");
+				lua_getfield(observed, LUA_REGISTRYINDEX, "_PreviewBarrierRegistry");
+				int registryValue = -1;
+				if (lua_istable(observed, -1)) {
+					lua_getfield(observed, -1, "value");
+					registryValue = lua_isnumber(observed, -1) ? static_cast<int>(lua_tointeger(observed, -1)) : -1;
+				}
+				// Both are documented limits, so the observed values are printed and a contract change shows up here.
+				std::cout << "[preview-barrier] state=" << index << " round=" << round
+				          << " upvalue_slot_after_end=" << (lua_isnumber(observed, slotTop + 1) ? static_cast<int>(lua_tointeger(observed, slotTop + 1)) : -1)
+				          << " registry_table_after_end=" << registryValue << std::endl;
+				lua_settop(observed, slotTop);
+				check("preview_barrier_registry_table", index, round, registryValue == 2 ? 0 : -1);
 			}
 		}
 		for (LuaStateWrapper* state: states) {
-			state->RunScriptString("debug.sethook(); if _PreviewBarrierProbe and _PreviewBarrierProbe.cleanup then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; rawset(_G, '_ScriptFieldsStash\\0probe', nil); _ScriptFieldsStash['preview:-7654321'] = nil; _ScriptFieldsStash['preview:gc'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
+			state->RunScriptString("debug.sethook(); if _PreviewBarrierProbe and _PreviewBarrierProbe.cleanup then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; _PreviewBarrierUpvalueSlot = nil; rawset(_G, '_ScriptFieldsStash\\0probe', nil); _ScriptFieldsStash['preview:-7654321'] = nil; _ScriptFieldsStash['preview:gc'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
+			lua_State* done = state->GetLuaState();
+			lua_pushnil(done);
+			lua_setfield(done, LUA_REGISTRYINDEX, "_PreviewBarrierRegistry");
 		}
 		return passed;
 	}

@@ -186,6 +186,7 @@ namespace RTE {
 		/// Whether this state's globals are recorded for the running preview.
 		bool PreviewGlobalFenceArmed() const { return m_PreviewGlobalFenceArmed; }
 		/// Arms the native barrier for tables reachable from this state's globals and require caches.
+		/// It undoes table writes only: upvalue slots, setfenv envs, registry-only tables and stack-only tables keep what a preview wrote.
 		void CapturePreviewGlobalFence();
 		/// Puts them back as the fence found them: keys the preview added go, values it changed or removed come back.
 		/// @return How many tables and cached scripts were put back.
