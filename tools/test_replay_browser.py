@@ -90,7 +90,12 @@ def first_row_ink(repo, path, text, geometry):
     # Locate the list's top frame in the unobscured browser geometry.
     left, right = geometry["panel"][1:3]
     frame_color = (108, 118, 168)
-    dim = lambda color: tuple(channel * 127 // 256 for channel in color)
+    def dim(color):
+        # TrueAlphaBlender uses packed unsigned 32-bit arithmetic on the RGBA buffer.
+        packed = color[0] | (color[1] << 8) | (color[2] << 16)
+        rb = (((-(packed & 0xFF00FF) * 129) & 0xFFFFFFFF) // 256 + packed) & 0xFF00FF
+        green = (((-(packed & 0xFF00) * 129) & 0xFFFFFFFF) // 256 + (packed & 0xFF00)) & 0xFF00
+        return tuple(((rb | green) >> shift) & 255 for shift in (0, 8, 16))
     frame_rows = [y for y in range(geometry["top"] + 40, geometry["top"] + 60)
                   if sum(capture.getpixel((x, y)) in (frame_color, dim(frame_color))
                          for x in range(left + 10, right - 9)) >= right - left - 24]
