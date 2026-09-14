@@ -1457,6 +1457,26 @@ bool MainMenuGUI::AutomationSetCheck(const std::string& controlName, bool checke
 }
 
 bool MainMenuGUI::AutomationLabelText(const std::string& controlName, std::string& text) const {
+	// The chat rows' count moves with the layout budget, so scripts address them by role, not
+	// index: LabelLobbyChatNewest is the last drawn row, LabelLobbyChatAny every drawn row's
+	// text joined - an assert_label substring hit proves the line reached a rendered row.
+	if (controlName == "LabelLobbyChatNewest" || controlName == "LabelLobbyChatAny") {
+		// Drawn rows are exactly the labels carrying text: the refresh blanks every row the
+		// budget hides, and the top-gap rows never get text.
+		std::string joined;
+		for (const GUILabel* label : m_MultiplayerLobbyChatLabels) {
+			if (label && !label->GetText().empty()) {
+				if (controlName == "LabelLobbyChatNewest") {
+					text = label->GetText();
+				} else {
+					if (!joined.empty()) joined += "\n";
+					joined += label->GetText();
+				}
+			}
+		}
+		if (controlName == "LabelLobbyChatAny") text = joined;
+		return !text.empty();
+	}
 	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
 	if (!control) {
 		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
