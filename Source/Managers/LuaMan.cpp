@@ -7902,7 +7902,13 @@ static std::vector<uint64_t> HashScriptObjectGraphs(LuaStateWrapper& master, Lua
 
 std::unordered_set<const MovableObject*> LuaMan::s_PreviewClones;
 std::unordered_set<long> LuaMan::s_PreviewFrozenUIDs;
-static std::vector<std::pair<long, LuaStateWrapper*>> s_PreviewCloneBindings;
+// What BeginPreviewScripts bound into a state, so EndPreviewScripts can undo exactly that.
+struct PreviewCloneBinding {
+	long uid;
+	MovableObject* clone;
+	LuaStateWrapper* state;
+};
+static std::vector<PreviewCloneBinding> s_PreviewCloneBindings;
 
 namespace {
 	std::vector<std::unique_ptr<SoundContainer>> s_PreviewSoundCopies;
@@ -8552,7 +8558,7 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 			LuaStateWrapper* state = mo->GetLuaState();
 			const long uid = mo->GetUniqueID();
 			if (state) {
-				s_PreviewCloneBindings.push_back({uid, state});
+				s_PreviewCloneBindings.push_back({uid, mo, state});
 			}
 			if (!state) {
 				mo->m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(uid) + "#preview\"]";
@@ -8589,8 +8595,14 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 
 void LuaMan::EndPreviewScripts() {
 	std::unordered_set<long> dropped;
-	for (const auto& [uid, state]: s_PreviewCloneBindings) {
-		if (!state || !dropped.insert(uid).second) {
+	for (const auto& [uid, clone, state]: s_PreviewCloneBindings) {
+		if (!state) {
+			continue;
+		}
+		// The clone outlives the pass in LocalPrediction, and it shares its original's uid: a registration left
+		// behind roots that uid in any script graph serialized before the clear.
+		state->UnregisterMO(clone);
+		if (!dropped.insert(uid).second) {
 			continue;
 		}
 		state->DropPreviewScriptObject(uid);
