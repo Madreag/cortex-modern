@@ -27,10 +27,11 @@ assert_label dumps prove the delay text stayed whole.
 
 --reference <png> compares a control-run capture of the same lobby. The panel
 widens by recentering, so siblings hold position up to the odd-width parity
-drift the stock shift math already has; the check diffs the intersection of
-both panels minus the rows' band under each row's best translation in +-4px -
-every pixel row must align under one small dx. The backdrop outside the panel
-animates between runs and is not compared.
+drift the stock shift math already has; the check requires ALL content pixel
+rows of the panels' shared interior (minus the rows' band) to match the
+control under one translation - a single content_dx in +-4. Blank panel rows
+do not vote. The backdrop outside the panel animates between runs and is not
+compared.
 """
 
 import argparse
@@ -48,6 +49,7 @@ from test_viewport_fit import (PinDrift, close_all, game_version, near,  # noqa:
 
 PANEL_GRAY = (59, 65, 83)
 ROW_X_INI, ROW_W_INI, ROW_H, ROW_Y0, ROW_STEP = 8, 288, 16, 66, 18
+HEADER_Y, HEADER_H = 50, 14
 PANEL_W_INI = 300
 ELLIPSIS = b"\x85"
 
@@ -218,11 +220,45 @@ def main():
                     checks[f"row{i}_single_line"] = len(row_bands) == 1
                     checks[f"row{i}_no_top_clip"] = (counts[0] + counts[1]) <= 8
                     checks[f"row{i}_no_bottom_clip"] = (counts[14] + counts[15]) <= 8
+
+                # The Players header must ride with the rows: its leftmost ink
+                # pixel lands within 0..16 px right of the rows' box left edge.
+                hy0 = top + HEADER_Y
+                header_inked = [x for x in range(left + 4, right - 3)
+                                if any(not near(px[x, hy0 + dy], PANEL_GRAY, 14)
+                                       for dy in range(HEADER_H))]
+                header_left = min(header_inked) if header_inked else None
+                offset = (header_left - (left + row_x)) if header_inked else None
+                details["header_ink_left"] = header_left
+                details["header_rowbox_offset"] = offset
+                checks["header_aligned_with_rows"] = offset is not None and 0 <= offset <= 16
+
+                # 4x crop of row 0's name/tail boundary (the H-run end through
+                # " (you") so the elision glyph is resolvable at any dpi.
+                inkcols = [x for x in range(left + row_x, left + row_x + row_w)
+                           if any(not near(px[x, top + ROW_Y0 + dy], PANEL_GRAY, 14)
+                                  for dy in range(ROW_H))]
+                if inkcols:
+                    gap_at, prev = None, inkcols[0]
+                    for x in inkcols[1:]:
+                        if x - prev >= 3:
+                            gap_at = prev + 1
+                            break
+                        prev = x
+                    anchor = gap_at if gap_at else inkcols[-1] + 1
+                    crop = im.crop((max(0, anchor - 60), top + ROW_Y0 - 2,
+                                    min(w, anchor + 60), top + ROW_Y0 + ROW_H + 2))
+                    zoom = crop.resize((crop.width * 4, crop.height * 4), Image.NEAREST)
+                    zoom_path = root / "rows-zoom.png"
+                    zoom.save(zoom_path)
+                    details["rows_zoom"] = str(zoom_path)
+                    details["rows_zoom_anchor_x"] = anchor
                 if options.reference:
                     # Widening recenters the panel so siblings keep position up
-                    # to a parity pixel; every pixel row of the panels'
-                    # intersection (minus the union row band) must match the
-                    # control under one horizontal translation dx in +-4.
+                    # to a parity pixel; every content pixel row of the panels'
+                    # shared interior (minus the union row band and the header
+                    # line, both of which legitimately move) must match the
+                    # control under one common translation content_dx in +-4.
                     ref = Image.open(options.reference).convert("RGB")
                     checks["reference_size_matches"] = ref.size == (w, h)
                     rpx = ref.load()
@@ -241,22 +277,29 @@ def main():
                         ex_hi = max(left + row_x + row_w, rleft + ROW_X_INI + ROW_W_INI) + 6
                         ey_lo = min(top, rtop) + ROW_Y0 - 6
                         ey_hi = min(top, rtop) + ROW_Y0 + ROW_STEP * 3 + ROW_H + 6
+                        hy_lo = min(top, rtop) + HEADER_Y - 6
+                        hy_hi = min(top, rtop) + HEADER_Y + HEADER_H + 6
                         for y in range(iy_lo, iy_hi + 1):
-                            best_dx, best_n = 0, None
+                            row_counts = []
                             for dx in range(-4, 5):
                                 n = sum(1 for x in range(ix_lo, ix_hi + 1)
-                                        if not (ex_lo <= x < ex_hi and ey_lo <= y < ey_hi)
+                                        if not ((ex_lo <= x < ex_hi and ey_lo <= y < ey_hi)
+                                                or (hy_lo <= y < hy_hi))
                                         and 0 <= x + dx < w and px[x, y] != rpx[x + dx, y])
-                                if best_n is None or n < best_n or (n == best_n and abs(dx) < abs(best_dx)):
-                                    best_dx, best_n = dx, n
+                                row_counts.append((dx, n))
+                            best_dx, best_n = min(row_counts, key=lambda t: (t[1], abs(t[0])))
+                            if max(n for _, n in row_counts) == 0:
+                                continue
                             if best_n:
                                 bad_rows.append((y, best_dx, best_n))
                             else:
                                 dx_seen[best_dx] = dx_seen.get(best_dx, 0) + 1
+                    content_dx = next(iter(dx_seen)) if len(dx_seen) == 1 else None
+                    details["content_dx"] = content_dx
                     details["shift_dx_histogram"] = dx_seen
                     details["unmatched_pixel_rows"] = bad_rows[:20]
                     details["unmatched_pixel_row_count"] = len(bad_rows)
-                    checks["shared_panel_shifted_identical"] = not bad_rows
+                    checks["shared_panel_shifted_identical"] = not bad_rows and len(dx_seen) <= 1
     finally:
         errors = close_all(runs)
         if errors:
