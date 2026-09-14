@@ -1956,6 +1956,9 @@ void Actor::RemapExternalLinks(const std::function<MovableObject*(MovableObject*
 			waypointObject = dynamic_cast<MovableObject*>(map(const_cast<MovableObject*>(current)));
 		}
 	}
+	if (m_PieMenu) {
+		m_PieMenu->RemapExternalLinks(map);
+	}
 	for (MovableObject* inventoryItem: m_Inventory) {
 		inventoryItem->RemapExternalLinks(map);
 	}

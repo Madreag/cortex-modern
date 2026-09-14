@@ -15,6 +15,7 @@
 #include "MovableMan.h"
 #include "MovableObject.h"
 #include "OwnedMovableObjects.h"
+#include "PieMenu.h"
 #include "PostProcessMan.h"
 #include "PresetMan.h"
 #include "PreviewEventLedger.h"
@@ -117,7 +118,18 @@ namespace RTE {
 			HeldDevice* guardCollected = deviceCopy();
 			survivorCraft->AddInventoryItem(guardCollected);
 			std::vector<MovableObject*> roots{survivor, guard, survivorCraft};
+			LuaStateWrapper* master = &g_LuaMan.GetMasterScriptState();
+			if (mode == 'l') {
+				// The fixture's globals are canonical state: loading it inside the preview window would hand the fence its own chunk to undo.
+				master->RunScriptString("_F15Path = package.path", false);
+				const int loaded = master->RunScriptFile("Tests.rte/F15Retirement/HeldRefs.lua", false, false);
+				if (!armed("fixture_loaded", loaded >= 0, "Tests.rte/F15Retirement/HeldRefs.lua status=" + std::to_string(loaded) + " " + master->GetLastError())) return false;
+				const int captured = master->RunScriptFunctionString("F15Refs.Capture", "", {}, {device}, {});
+				if (!armed("fixture_capture", captured >= 0, "canonical device=" + address(device) + " " + master->GetLastError())) return false;
+			}
 			LuaMan::CapturePreviewSelfCopies({}, false);
+			// Each arm starts from an empty ledger: an earlier arm's identical event key would ghost nothing here.
+			PreviewEventLedger::ResetBetweenSelfTestArms();
 			PreviewEventLedger::Arm(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), soundCursor, {static_cast<uint64_t>(original->GetUniqueID())});
 			g_MovableMan.BeginSpeculation();
 			LuaMan::BeginPreviewScripts(roots, false);
@@ -248,12 +260,6 @@ namespace RTE {
 				survivor->AddWound(holder, Vector(), false);
 				link(holder, cargoChild);
 				if (!armed("lua_link_holder", holder->GetWhichMOToNotHit() == cargoChild, "holder=" + address(holder) + " target=" + address(cargoChild))) return false;
-				LuaStateWrapper* master = &g_LuaMan.GetMasterScriptState();
-				master->RunScriptString("_F15Path = package.path", false);
-				const int loaded = master->RunScriptFile("Tests.rte/F15Retirement/HeldRefs.lua", false, false);
-				if (!armed("fixture_loaded", loaded >= 0, "Tests.rte/F15Retirement/HeldRefs.lua status=" + std::to_string(loaded) + " " + master->GetLastError())) return false;
-				const int captured = master->RunScriptFunctionString("F15Refs.Capture", "", {}, {device}, {});
-				if (!armed("fixture_capture", captured >= 0, "canonical device=" + address(device) + " " + master->GetLastError())) return false;
 				observations.push_back([=, &check]() {
 					const int status = master->RunScriptFunctionString("F15Refs.CheckLink", "", {}, {holder}, {});
 					check("fixture_link_observation", status >= 0, status >= 0 ? "holder=" + address(holder) : master->GetLastError());
@@ -298,6 +304,51 @@ namespace RTE {
 							check("surviving_supported_device_retained", held == survivingDevice, "observed=" + address(held) + " expected=" + address(survivingDevice));
 						});
 						afterDispose.push_back([=]() { guardArm->SetHeldDeviceThisArmIsTryingToSupport(nullptr); });
+					}
+				}
+			} else if (mode == 'p') {
+				// Manufactured producer: nothing in the engine sets the affected object today, so the arm sets it.
+				HeldDevice* retiringDevice = deviceCopy();
+				HeldDevice* survivingDevice = deviceCopy();
+				guard->AddInventoryItem(survivingDevice);
+				add(retiringDevice);
+				g_MovableMan.HarvestSpeculativeSpawns();
+				ghostRoots.push_back(retiringDevice);
+				PieMenu* previewMenu = survivor->GetPieMenu();
+				PieMenu* craftMenu = survivorCraft->GetPieMenu();
+				MovableObject* shadowItem = residentItem ? g_MovableMan.FindObjectByUniqueID(residentItem->GetUniqueID()) : nullptr;
+				PieMenu* guardMenu = shadowItem && shadowItem != residentItem ? guard->GetPieMenu() : nullptr;
+				if (armed("preview_pie_menu", previewMenu != nullptr && craftMenu != nullptr, "owner=" + address(survivor) + " craft=" + address(survivorCraft) + " shadow_case=" + std::to_string(guardMenu != nullptr))) {
+					previewMenu->SetAffectedObject(retiringDevice);
+					craftMenu->SetAffectedObject(survivingDevice);
+					armed("affected_object_before_remap", previewMenu->GetAffectedObject() == retiringDevice && craftMenu->GetAffectedObject() == survivingDevice, "retiring=" + address(retiringDevice) + " surviving=" + address(survivingDevice));
+					const std::string retiringAffected = address(retiringDevice);
+					observations.push_back([=, &check]() {
+						const MovableObject* affected = previewMenu->GetAffectedObject();
+						check("affected_object_after_retirement", affected == nullptr, "observed=" + address(affected) + " expected=0000000000000000");
+					});
+					observations.push_back([=, &check]() {
+						const MovableObject* affected = craftMenu->GetAffectedObject();
+						check("surviving_affected_object_retained", affected == survivingDevice, "observed=" + address(affected) + " expected=" + address(survivingDevice));
+					});
+					afterDispose.push_back([=, &check]() {
+						// The target is gone; the pointer value is compared, never read through.
+						const std::string stale = address(previewMenu->GetAffectedObject());
+						check("affected_object_pointer_after_disposal", stale != retiringAffected, "observed=" + stale + " retired=" + retiringAffected);
+						previewMenu->SetAffectedObject(nullptr);
+						craftMenu->SetAffectedObject(nullptr);
+					});
+					if (guardMenu) {
+						const long residentUID = residentItem->GetUniqueID();
+						guardMenu->SetAffectedObject(shadowItem);
+						armed("affected_object_shadow_before_remap", guardMenu->GetAffectedObject() == shadowItem, "shadow=" + address(shadowItem) + " resident=" + address(residentItem) + " uid=" + std::to_string(residentUID));
+						observations.push_back([=, &check]() {
+							const MovableObject* affected = guardMenu->GetAffectedObject();
+							// Only the resident is safe to read through; a stale shadow is compared by address alone.
+							const long observedUID = affected == residentItem ? affected->GetUniqueID() : -1;
+							check("affected_object_to_shadow_item", affected == residentItem && observedUID == residentUID, "observed=" + address(affected) + " uid=" + std::to_string(observedUID) + " expected=" + address(residentItem) + " uid=" + std::to_string(residentUID));
+						});
+						afterDispose.push_back([=]() { guardMenu->SetAffectedObject(nullptr); });
 					}
 				}
 			} else if (mode == 'n') {
