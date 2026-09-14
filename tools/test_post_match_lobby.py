@@ -137,7 +137,10 @@ def run_arm(repo: Path, root: Path, port: int, ticks: int, timeout: int, settle_
               "failures": {who: [l for l in logs[who].splitlines() if "[menu-script] FAILED" in l]
                            for who in scripts},
               "launched": {who: "[menu-mp] launching the match" in logs[who] for who in scripts},
-              "match_complete": {who: any('status="Match over' in l for l in logs[who].splitlines() if "dump_lobby" in l)
+              # The round ended for this peer: its service reached Completed, or the rematch lobby
+              # its end opened has already appended its own suffix to the match result.
+              "match_complete": {who: any("state=Completed" in l or "- ready up for a rematch" in l
+                                          for l in logs[who].splitlines() if "dump_lobby" in l)
                                  for who in scripts}}
     return {"detail": detail, "logs": logs, "root": root}
 
