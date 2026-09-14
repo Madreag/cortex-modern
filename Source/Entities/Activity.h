@@ -471,6 +471,9 @@ namespace RTE {
 		/// this machine does not seat as well as its own.
 		void UpdatePlayerBrainRecord();
 
+		/// Records the brains the human seats hold, for a save that was written before the record existed.
+		void RecordSeatedPlayerBrains();
+
 		/// Drives one human and one AI seat through brain assignment and checks that only the human seat's
 		/// brain reaches the shared record. The seats and the record are put back as they were.
 		/// @param humanBrain An actor to assign to the human seat.

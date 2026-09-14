@@ -1063,6 +1063,14 @@ void Activity::UpdatePlayerBrainRecord() {
 	}
 }
 
+void Activity::RecordSeatedPlayerBrains() {
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (m_IsActive[player] && m_IsHuman[player] && m_Brain[player]) {
+			g_MovableMan.NotePlayerBrain(m_Brain[player]->GetUniqueID(), true);
+		}
+	}
+}
+
 void Activity::Update() {
 	UpdatePlayerBrainRecord();
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
