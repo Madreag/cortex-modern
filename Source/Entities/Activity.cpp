@@ -639,9 +639,10 @@ void Activity::SetPlayerBrain(Actor* newBrain, int player) {
 		m_HadBrain[player] = true;
 	}
 	// A human seat's brain also goes into the shared record, which every peer holds for every seat.
-	// Whether the seat is human comes from the synced roster in a match, never from this machine's seats.
+	// A seat this machine calls human only reaches the record if the synced roster agrees about its team:
+	// a per-machine claim must not put a brain into shared state on its own.
 	const bool seated = player >= Players::PlayerOne && player < Players::MaxPlayerCount;
-	if (seated && (ScenarioRunner::IsLockstepActiveTeam(m_Team[player]) ? ScenarioRunner::IsLockstepHumanTeam(m_Team[player]) : m_IsHuman[player])) {
+	if (seated && m_IsHuman[player] && (!ScenarioRunner::IsLockstepActiveTeam(m_Team[player]) || ScenarioRunner::IsLockstepHumanTeam(m_Team[player]))) {
 		if (m_Brain[player] && m_Brain[player] != newBrain && !IsOtherPlayerBrain(m_Brain[player], player)) {
 			g_MovableMan.NotePlayerBrain(m_Brain[player]->GetUniqueID(), false);
 		}
