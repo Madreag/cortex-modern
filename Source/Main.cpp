@@ -1600,6 +1600,11 @@ void RunMenuLoop() {
 			g_UInputMan.EndFrame();
 			break;
 		}
+		if (s_netReplayReturnPending && g_MenuMan.IsMainMenuInteractive()) {
+			// Apply the playback destination after the menu-entry offers, before drawing.
+			s_netReplayReturnPending = false;
+			g_MenuMan.GetMainMenu()->ReturnToReplayBrowser(s_netReplayReturnStatus);
+		}
 
 		g_ConsoleMan.Update();
 
@@ -3159,7 +3164,8 @@ static bool HandleFailedActivityLaunch() {
 		ScenarioRunner::SetLockstepReplayOutcome(ScenarioRunner::LockstepReplayOutcome::SimFailure);
 		CloseNetReplayPlayback();
 		g_ActivityMan.ClearEndedReplayActivity();
-		g_MenuMan.GetMainMenu()->ReturnToReplayBrowser("Playback failed: " + reason);
+		s_netReplayReturnStatus = "Playback failed: " + reason;
+		s_netReplayReturnPending = true;
 	}
 	if (s_netMatchServiceE2E) {
 		if (s_netMatchServiceE2EExitCode == 0) {
@@ -4199,9 +4205,7 @@ void RunGameLoop() {
 		if (returnToMenuAfterNetworkEnd && !System::IsSetToQuit()) {
 			g_TimerMan.PauseSim(true);
 			if (s_netReplayReturnPending) {
-				s_netReplayReturnPending = false;
 				g_ActivityMan.ClearEndedReplayActivity();
-				g_MenuMan.GetMainMenu()->ReturnToReplayBrowser(s_netReplayReturnStatus);
 			}
 			if (!g_ActivityMan.ActivitySetToRestart()) {
 				g_MenuMan.HandleTransitionIntoMenuLoop();
