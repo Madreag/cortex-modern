@@ -1267,7 +1267,8 @@ void GameActivity::Update() {
 				g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
 			} else if (m_ViewState[player] != ViewState::ActorSelect && !m_pBuyGUI[player]->IsVisible() && !m_LuaLockActor[player] && (m_PlayerController[player].IsState(ACTOR_NEXT_PREP) || m_PlayerController[player].IsState(ACTOR_PREV_PREP))) {
 				// Go into manual actor select mode if either actor switch buttons are held for a duration
-				if (m_ActorSelectTimer[player].IsPastRealMS(250)) {
+				// Sim time, so a held switch trips on the same tick for every peer and a stalled frame can't trip it
+				if (m_ActorSelectTimer[player].IsPastSimMS(250)) {
 					// Set cursor to start at the head of controlled actor
 					if (m_ControlledActor[player]) {
 						// Give switched from actor an AI controller
