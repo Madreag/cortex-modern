@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 REPO = Path("D:/Projects/control-build")
-OUT = Path("D:/mx/lead-fg6/verify6-3f65208668-r2")
+OUT = Path("D:/mx/lead-fg6/verify6-6c9932a926")
 OUT.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(REPO / "tools"))
 from run_sim_test import make_run  # noqa: E402
