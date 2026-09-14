@@ -474,7 +474,8 @@ namespace RTE::FloatTextSelfTest {
 			static const LocaleProbe probes[] = {
 			    {"reader_float", ProbeReaderFloat, "0x3fc00000/0x3f800000"},
 			    {"reader_double", ProbeReaderDouble, "0xbfb999999999999a/0xbff0000000000000"},
-			    {"reader_single_rounding", ProbeReaderSingleRounding, Reader::c_ReadFloatsAsFloats ? "0x3f800001" : "0x3f800000"},
+			    // 0x3f800000 is the answer when Reader::c_ReadFloatsAsFloats is false: flipping that switch flips this.
+			    {"reader_single_rounding", ProbeReaderSingleRounding, "0x3f800001"},
 			    {"reader_out_of_range", ProbeReaderOutOfRange, nullptr},
 			    {"writer_float", ProbeWriter, "1.5|-0.1"},
 			    {"arm_hand_target", ProbeArmHandTarget, "0x1.8p+0|-0x1p-2|0x1.8p-1|1|reach"},
