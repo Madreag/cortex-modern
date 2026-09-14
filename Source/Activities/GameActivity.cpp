@@ -1242,7 +1242,8 @@ void GameActivity::Update() {
 				m_ViewState[player] = ViewState::Normal;
 			} else if (m_PlayerController[player].IsState(ACTOR_NEXT) && m_ViewState[player] != ViewState::ActorSelect && !m_pBuyGUI[player]->IsVisible() && !m_LuaLockActor[player]) {
 				// Switch to next actor if the player wants to. Don't do it while the buy menu is open
-				if (m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
+				// The synchronized actor controller closes shared pie state.
+				if (!ScenarioRunner::IsLockstepControllerSyncActive() && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
 					m_ControlledActor[player]->GetPieMenu()->SetEnabled(false);
 				}
 
@@ -1252,7 +1253,7 @@ void GameActivity::Update() {
 			}
 			// Switch to prev actor if the player wants to. Don't do it while the buy menu is open
 			else if (m_PlayerController[player].IsState(ACTOR_PREV) && m_ViewState[player] != ViewState::ActorSelect && !m_pBuyGUI[player]->IsVisible()) {
-				if (m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
+				if (!ScenarioRunner::IsLockstepControllerSyncActive() && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
 					m_ControlledActor[player]->GetPieMenu()->SetEnabled(false);
 				}
 
