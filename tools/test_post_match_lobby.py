@@ -4,10 +4,10 @@ Two menu-driven peers host and join on loopback, ready up and play a match bound
 -net-match-ticks, which ends it on the applied frame both peers reach through the ordinary
 FinishMatch path. Everything after that is the real match-end routing:
 
-  * lobby arm: each peer waits for its service to reconvene the session (state Starting), then
-    asserts MultiplayerScreen with the Lobby panel up and a roster row, and saves a screenshot
-    at 640x360. On the wave the match end routes to the planet screen instead, nothing pumps
-    the service, and the wait fails with the state the peer was left in ("state=Completed").
+  * lobby arm: each peer dumps its service state where the match end leaves it, then asserts
+    MultiplayerScreen with the Lobby panel up and a roster row, and saves a screenshot at
+    640x360. Without the routing the peer is put on the planet screen, nothing pumps its
+    service, and the assert reports the screen it was actually left on beside "state=Completed".
   * leave arm: both peers reach the rematch lobby, then one presses Back (post_command
     ButtonBackToMain, the real back path: destroy + directory DELETE). The peer that waited
     asserts the screen and the status line it is left on.
@@ -27,9 +27,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_sim_test import make_run  # noqa: E402
 
-SCREEN = re.compile(r"^\[menu-script\] assert_screen expected=(\S+) actual=(\S+) (PASS|FAIL)$")
-SUBSTATE = re.compile(r"^\[menu-script\] assert_substate expected=(\S+) actual=(\S+) (PASS|FAIL)$")
-DUMP = re.compile(r"^\[menu-script\] dump_lobby state=(\S+) members=(\d+) error=\"([^\"]*)\" status=\"([^\"]*)\"")
+SCREEN = re.compile(r"^\[menu-script\] assert_screen expected=(\S+) actual=(\S+) (PASS|FAIL)$", re.M)
+SUBSTATE = re.compile(r"^\[menu-script\] assert_substate expected=(\S+) actual=(\S+) (PASS|FAIL)$", re.M)
+DUMP = re.compile(r"^\[menu-script\] dump_lobby state=(\S+) members=(\d+) error=\"([^\"]*)\" status=\"([^\"]*)\"", re.M)
 
 
 def set_resolution(runtime: Path, x: int, y: int) -> None:
@@ -55,21 +55,24 @@ def head(name: str, host: bool, port: int) -> str:
                      "wait_connected 2\nactivate ButtonMultiplayerReady\nwait_remote_ready\n")
 
 
-def lobby_tail(name: str, seconds: int) -> str:
-    """The match-end assertions: the service reconvened, and the screen it reconvened on."""
-    return (f"wait_state Starting {seconds}\nwait 20\n"
+# The launch stops the menu loop, so a real-time wait longer than the fade-out cannot finish
+# before the match: the step after it runs on the first menu frame the match end brings back.
+# A lobby-state wait cannot do this - the pre-launch lobby is already in the state it would name.
+def lobby_tail(name: str, settle_ms: int) -> str:
+    """The match-end assertions: where the peer landed and what its panel shows."""
+    return (f"wait_ms {settle_ms}\nwait 20\ndump_lobby\n"
             "assert_screen MultiplayerScreen\nassert_substate Lobby\n"
             "assert_control LabelLobbyPlayer0\n"
             f"dump_lobby\nscreenshot post_match_lobby_{name}\nwait 10\nexit\n")
 
 
-def leave_tail(name: str, seconds: int, leaver: bool) -> str:
+def leave_tail(name: str, settle_ms: int, leaver: bool) -> str:
     if leaver:
-        return (f"wait_state Starting {seconds}\nwait 20\nassert_screen MultiplayerScreen\n"
+        return (f"wait_ms {settle_ms}\nwait 20\ndump_lobby\nassert_screen MultiplayerScreen\n"
                 "post_command ButtonBackToMain\nwait 20\nassert_screen MainScreen\n"
                 f"dump_lobby\nscreenshot post_match_left_{name}\nwait 10\nexit\n")
     # The waiter is not told to leave: it stays where the end of the other peer's lobby leaves it.
-    return (f"wait_state Starting {seconds}\nwait 20\nassert_screen MultiplayerScreen\n"
+    return (f"wait_ms {settle_ms}\nwait 20\ndump_lobby\nassert_screen MultiplayerScreen\n"
             "wait 240\nassert_screen MultiplayerScreen\ndump_lobby\n"
             f"screenshot post_match_waiter_{name}\nwait 10\nexit\n")
 
@@ -89,13 +92,13 @@ def newest_shot(out: Path, stem: str) -> Path:
     return found[-1] if found else shots / f"{stem}.png"
 
 
-def run_arm(repo: Path, root: Path, port: int, ticks: int, timeout: int, wait_s: int, arm: str) -> dict:
+def run_arm(repo: Path, root: Path, port: int, ticks: int, timeout: int, settle_ms: int, arm: str) -> dict:
     root.mkdir(parents=True, exist_ok=True)
     scripts = {
-        "Host": head("Host", True, port) + (lobby_tail("host", wait_s) if arm == "lobby"
-                                            else leave_tail("host", wait_s, leaver=False)),
-        "Guest": head("Guest", False, port) + (lobby_tail("guest", wait_s) if arm == "lobby"
-                                               else leave_tail("guest", wait_s, leaver=True)),
+        "Host": head("Host", True, port) + (lobby_tail("host", settle_ms) if arm == "lobby"
+                                            else leave_tail("host", settle_ms, leaver=False)),
+        "Guest": head("Guest", False, port) + (lobby_tail("guest", settle_ms) if arm == "lobby"
+                                               else leave_tail("guest", settle_ms, leaver=True)),
     }
     runs, records = {}, {}
     for who, text in scripts.items():
@@ -134,7 +137,8 @@ def run_arm(repo: Path, root: Path, port: int, ticks: int, timeout: int, wait_s:
               "failures": {who: [l for l in logs[who].splitlines() if "[menu-script] FAILED" in l]
                            for who in scripts},
               "launched": {who: "[menu-mp] launching the match" in logs[who] for who in scripts},
-              "match_complete": {who: "NETWORK: Match complete" in logs[who] for who in scripts}}
+              "match_complete": {who: any('status="Match over' in l for l in logs[who].splitlines() if "dump_lobby" in l)
+                                 for who in scripts}}
     return {"detail": detail, "logs": logs, "root": root}
 
 
@@ -145,8 +149,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=48171)
     parser.add_argument("--ticks", type=int, default=240, help="applied frames the match runs before it ends")
     parser.add_argument("--timeout", type=int, default=600)
-    parser.add_argument("--wait-seconds", type=int, default=240,
-                        help="how long a peer waits for its service to reconvene the session")
+    parser.add_argument("--wait-seconds", type=int, default=20,
+                        help="real-time guard that keeps the post-match steps out of the launch fade-out")
     parser.add_argument("--arm", choices=["lobby", "leave", "both"], default="both")
     options = parser.parse_args()
     root = options.out.resolve()
@@ -157,7 +161,7 @@ def main() -> int:
         arms = ["lobby", "leave"] if options.arm == "both" else [options.arm]
         for index, arm in enumerate(arms):
             run = run_arm(options.repo, root / arm, options.port + index * 4, options.ticks,
-                          options.timeout, options.wait_seconds, arm)
+                          options.timeout, options.wait_seconds * 1000, arm)
             detail = run["detail"]
             result["details"][arm] = detail
             for who in ("Host", "Guest"):
