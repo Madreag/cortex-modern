@@ -141,7 +141,9 @@ unsigned long GUIFont::InkOf(GUIBitmap* Bitmap) {
 }
 
 GUIFont* GUIFont::GlyphFontFor(unsigned char Character, GUIFont* GlyphFallback) {
-	if (GlyphFallback && !m_GlyphCovered[Character] && Character < GlyphFallback->m_CharIndexCap && GlyphFallback->m_GlyphCovered[Character]) {
+	// Bytes >= 0x80 always reroute when the fallback covers them: the large
+	// atlas stores HUD icons in those cells, not letters a name should draw.
+	if (GlyphFallback && Character < GlyphFallback->m_CharIndexCap && GlyphFallback->m_GlyphCovered[Character] && (Character >= 0x80 || !m_GlyphCovered[Character])) {
 		return GlyphFallback;
 	}
 	return this;
