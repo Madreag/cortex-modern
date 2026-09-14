@@ -118,6 +118,15 @@ namespace RTE {
 			HeldDevice* guardCollected = deviceCopy();
 			survivorCraft->AddInventoryItem(guardCollected);
 			std::vector<MovableObject*> roots{survivor, guard, survivorCraft};
+			LuaStateWrapper* master = &g_LuaMan.GetMasterScriptState();
+			if (mode == 'l') {
+				// The fixture's globals are canonical state: loading it inside the preview window would hand the fence its own chunk to undo.
+				master->RunScriptString("_F15Path = package.path", false);
+				const int loaded = master->RunScriptFile("Tests.rte/F15Retirement/HeldRefs.lua", false, false);
+				if (!armed("fixture_loaded", loaded >= 0, "Tests.rte/F15Retirement/HeldRefs.lua status=" + std::to_string(loaded) + " " + master->GetLastError())) return false;
+				const int captured = master->RunScriptFunctionString("F15Refs.Capture", "", {}, {device}, {});
+				if (!armed("fixture_capture", captured >= 0, "canonical device=" + address(device) + " " + master->GetLastError())) return false;
+			}
 			LuaMan::CapturePreviewSelfCopies({}, false);
 			// Each arm starts from an empty ledger: an earlier arm's identical event key would ghost nothing here.
 			PreviewEventLedger::ResetBetweenSelfTestArms();
@@ -251,12 +260,6 @@ namespace RTE {
 				survivor->AddWound(holder, Vector(), false);
 				link(holder, cargoChild);
 				if (!armed("lua_link_holder", holder->GetWhichMOToNotHit() == cargoChild, "holder=" + address(holder) + " target=" + address(cargoChild))) return false;
-				LuaStateWrapper* master = &g_LuaMan.GetMasterScriptState();
-				master->RunScriptString("_F15Path = package.path", false);
-				const int loaded = master->RunScriptFile("Tests.rte/F15Retirement/HeldRefs.lua", false, false);
-				if (!armed("fixture_loaded", loaded >= 0, "Tests.rte/F15Retirement/HeldRefs.lua status=" + std::to_string(loaded) + " " + master->GetLastError())) return false;
-				const int captured = master->RunScriptFunctionString("F15Refs.Capture", "", {}, {device}, {});
-				if (!armed("fixture_capture", captured >= 0, "canonical device=" + address(device) + " " + master->GetLastError())) return false;
 				observations.push_back([=, &check]() {
 					const int status = master->RunScriptFunctionString("F15Refs.CheckLink", "", {}, {holder}, {});
 					check("fixture_link_observation", status >= 0, status >= 0 ? "holder=" + address(holder) : master->GetLastError());
