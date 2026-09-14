@@ -2,7 +2,7 @@
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 
-#include <charconv>
+#include "FloatText.h"
 
 #include "AtomGroup.h"
 #include "Attachable.h"
@@ -292,7 +292,7 @@ std::string ACrab::GetLimbGroupPositions() const {
 		if (cursor != buffer) {
 			*cursor++ = ' ';
 		}
-		cursor = std::to_chars(cursor, buffer + sizeof(buffer), value).ptr;
+		cursor = ToCharsExact(cursor, buffer + sizeof(buffer), value).ptr;
 	};
 	for (const AtomGroup* group: {m_pLFGFootGroup, m_pLBGFootGroup, m_pRFGFootGroup, m_pRBGFootGroup}) {
 		const Vector limbPos = group ? group->GetRawLimbPos() : Vector();
@@ -312,7 +312,7 @@ static void ApplyPackedLimbPositions(const std::string& packed, std::initializer
 		while (cursor != end && *cursor == ' ') {
 			++cursor;
 		}
-		cursor = std::from_chars(cursor, end, value).ptr;
+		cursor = FromCharsExact(cursor, end, value).ptr;
 	};
 	for (AtomGroup* group: groups) {
 		Vector limbPos;
@@ -334,7 +334,7 @@ std::string ACrab::GetLimbGroupInertia() const {
 		if (cursor != buffer) {
 			*cursor++ = ' ';
 		}
-		cursor = std::to_chars(cursor, buffer + sizeof(buffer), value).ptr;
+		cursor = ToCharsExact(cursor, buffer + sizeof(buffer), value).ptr;
 	};
 	for (const AtomGroup* group: {m_pLFGFootGroup, m_pLBGFootGroup, m_pRFGFootGroup, m_pRBGFootGroup}) {
 		appendValue(group ? group->GetStoredMomentOfInertia() : 0.0F);
@@ -353,7 +353,7 @@ static void ApplyPackedLimbInertia(const std::string& packed, std::initializer_l
 		while (cursor != end && *cursor == ' ') {
 			++cursor;
 		}
-		cursor = std::from_chars(cursor, end, value).ptr;
+		cursor = FromCharsExact(cursor, end, value).ptr;
 	};
 	for (AtomGroup* group: groups) {
 		float momentOfInertia = 0.0F;
