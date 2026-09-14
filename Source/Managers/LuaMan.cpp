@@ -6099,6 +6099,45 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (previewLeavesGlobalsAsFound ? "PASS" : "FAIL") << " preview_leaves_globals_as_found" << std::endl;
 	checkpointValues = previewLeavesGlobalsAsFound && checkpointValues;
+	// A preview hook may load a script the supported way. The state that load takes, the chunk it compiles and the
+	// cursor that handed the state out are the predicting peer's alone, so the boundary must leave all three as found.
+	bool previewLateScriptLoadLeavesStatesAsFound = false;
+	{
+		const std::string scriptPath = g_PresetMan.GetFullModulePath("Tests.rte/PreviewCompat.lua");
+		const bool created = RunScriptString("_PreviewLateHost = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\"); _PreviewLateUID = _PreviewLateHost.UniqueID") == 0;
+		lua_getglobal(m_State, "_PreviewLateUID");
+		const long uid = static_cast<long>(lua_tonumber(m_State, -1));
+		lua_pop(m_State, 1);
+		MovableObject* host = created && uid > 0 ? g_MovableMan.FindObjectByUniqueID(uid) : nullptr;
+		const bool staged = host && host->GetAllLoadedScripts().empty() && !host->GetLuaState() && !host->ObjectScriptsInitialized();
+		const int cursorBefore = g_LuaMan.GetScriptStateCursor();
+		const std::string bindingsBefore = g_MovableMan.DescribeScriptBindings();
+		std::vector<std::string> graphsBefore;
+		std::vector<std::string> graphsAfter;
+		std::vector<std::string> graphProblems;
+		const bool observed = g_MovableMan.SerializeScriptGraphs(graphsBefore, graphProblems);
+		int loaded = -99;
+		LuaMan::CapturePreviewSelfCopies({}, false);
+		{
+			LuaMan::PreviewHookScope hookScope(true);
+			loaded = staged ? host->LoadScript(scriptPath) : -99;
+		}
+		const int stateTaken = staged ? g_LuaMan.GetStateIndex(host->GetLuaState()) : -1;
+		LuaMan::EndPreviewScripts();
+		const int cursorAfter = g_LuaMan.GetScriptStateCursor();
+		const bool cursorKept = cursorAfter == cursorBefore;
+		const bool bindingsKept = g_MovableMan.DescribeScriptBindings() == bindingsBefore;
+		const bool graphsKept = observed && g_MovableMan.SerializeScriptGraphs(graphsAfter, graphProblems) && graphsAfter == graphsBefore;
+		std::cout << "[preview-late-script] staged=" << staged << " loaded=" << loaded << " state=" << stateTaken
+		          << " cursor " << cursorBefore << "->" << cursorAfter << " bindings_kept=" << bindingsKept
+		          << " graphs_kept=" << graphsKept << " graph_problems=" << graphProblems.size() << std::endl;
+		previewLateScriptLoadLeavesStatesAsFound = staged && loaded == 0 && cursorKept && bindingsKept && graphsKept;
+		RunScriptString("_PreviewLateHost = nil; _PreviewLateUID = nil");
+		g_LuaMan.CollectGarbageForCheckpoint();
+		g_LuaMan.SetScriptStateCursor(cursorBefore);
+	}
+	std::cout << "[script-graph-selftest] " << (previewLateScriptLoadLeavesStatesAsFound ? "PASS" : "FAIL") << " preview_late_script_load_leaves_states_as_found" << std::endl;
+	checkpointValues = previewLateScriptLoadLeavesStatesAsFound && checkpointValues;
 	const std::string report = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
 	lua_pop(L, 1);
 	std::cout << report << std::endl;
