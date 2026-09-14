@@ -24,6 +24,10 @@ namespace RTE {
 		~NetModerationGUI();
 		void Update();
 		void Draw();
+		/// Takes the match loop's report counters on the render path.
+		void SetMatchPace(uint64_t ticks, long long wallUs);
+		/// Draws the bounded toast rows after the rest of the network UI.
+		void DrawMatchToasts();
 		bool SetOpen(bool open);
 		bool IsOpen() const { return m_Open; }
 		bool AutomationModerate(const std::string& action, int stableSeat);
@@ -43,8 +47,15 @@ namespace RTE {
 		void Refresh();
 		void HandleEvents();
 		void DrawRoster(const NetLobbySnapshot& snapshot);
+		/// Draws the status widget beneath the controller icon, outside the funds HUD.
+		void DrawMatchStatus(const NetLobbySnapshot& snapshot);
 		std::unique_ptr<GUIInputWrapper> m_Input;
 		std::unique_ptr<GUIControlManager> m_Controls;
+		std::unique_ptr<GUIControlManager> m_OverlayControls;
+		GUICollectionBox* m_NetStatusBox = nullptr;
+		GUILabel* m_NetStatus = nullptr;
+		std::array<GUILabel*, 3> m_Toasts{};
+		double m_MatchPaceTps = 0.0;
 		GUICollectionBox* m_Panel = nullptr;
 		GUIFont* m_LabelFont = nullptr;
 		GUILabel* m_Title = nullptr;
