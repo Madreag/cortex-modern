@@ -119,6 +119,8 @@ namespace RTE {
 			survivorCraft->AddInventoryItem(guardCollected);
 			std::vector<MovableObject*> roots{survivor, guard, survivorCraft};
 			LuaMan::CapturePreviewSelfCopies({}, false);
+			// Each arm starts from an empty ledger: an earlier arm's identical event key would ghost nothing here.
+			PreviewEventLedger::ResetBetweenSelfTestArms();
 			PreviewEventLedger::Arm(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), soundCursor, {static_cast<uint64_t>(original->GetUniqueID())});
 			g_MovableMan.BeginSpeculation();
 			LuaMan::BeginPreviewScripts(roots, false);
