@@ -1,4 +1,5 @@
 #include "CheckpointArchive.h"
+#include "Constants.h"
 #include "OwnedMovableObjects.h"
 #include "MovableMan.h"
 #include "NetA7Journal.h"
@@ -209,7 +210,7 @@ namespace {
 AlarmEvent::AlarmEvent(const Vector& pos, int team, float range) :
 	m_ScenePos(pos),
 	m_Team((Activity::Teams)team),
-	m_Range(range * g_FrameMan.GetPlayerScreenWidth() * 0.51F) {}
+	m_Range(range * c_DefaultResX * 0.51F) {}
 
 const std::string MovableMan::c_ClassName = "MovableMan";
 
