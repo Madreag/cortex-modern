@@ -1143,10 +1143,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 					return name + tail;
 				}
 				std::string trimmed = name;
-				while (!trimmed.empty() && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(trimmed + "\x85" + tail, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
+				while (!trimmed.empty() && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(trimmed + "..." + tail, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
 					trimmed.pop_back();
 				}
-				return trimmed + "\x85" + tail;
+				return trimmed + "..." + tail;
 			};
 			std::string row = elide(name, tailFull);
 			if (m_MultiplayerLobbyPlayerRowFont && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(row, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
