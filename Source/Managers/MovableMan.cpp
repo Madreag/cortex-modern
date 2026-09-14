@@ -290,14 +290,22 @@ void MovableMan::RecordA7UnitOwnership(uint64_t round, uint64_t frame) const {
 		Actor* controlled = activity->GetControlledActor(player);
 		const int screen = activity->ScreenOfPlayer(player);
 		json view = {{"round_id", round}, {"frame", frame}, {"peer_id", ScenarioRunner::GetLockstepLocalPeerId()},
+			{"player_index", player}, {"input_player", activity->LocalInputOfPlayer(player)},
+			{"player_controller_input", activity->GetPlayerController(player) ? activity->GetPlayerController(player)->GetInputPlayer() : Activity::NoPlayer},
 			{"player_active", activity->PlayerActive(player)}, {"player_human", activity->IsLocalHumanSeat(player)},
 			{"team", player >= 0 ? activity->GetTeamOfPlayer(player) : Activity::NoTeam}, {"screen", screen},
 			{"controlled_uid", uid(controlled)}, {"brain_uid", uid(activity->GetPlayerBrain(player))},
 			{"view_state", static_cast<int>(player >= 0 ? activity->GetViewState(player) : Activity::Observe)}, {"camera_target", nullptr},
-			{"seat_mode", nullptr}, {"seat_player", nullptr}};
+			{"seat_mode", nullptr}, {"seat_player", nullptr}, {"controller_input", nullptr}, {"seat_facts", json::array()}};
 		if (uid(controlled) != 0) {
 			view["seat_mode"] = static_cast<int>(controlled->GetController()->GetSeatMode());
 			view["seat_player"] = controlled->GetController()->GetSeatPlayer();
+			view["controller_input"] = controlled->GetController()->GetInputPlayer();
+		}
+		for (int seat = Activity::PlayerOne; seat < Activity::MaxPlayerCount; ++seat) {
+			view["seat_facts"].push_back({{"player", seat}, {"active", activity->IsSeatActive(seat)},
+				{"human", activity->IsHumanSeat(seat)}, {"team", activity->GetTeamOfPlayer(seat)},
+				{"brain_uid", uid(activity->GetPlayerBrain(seat))}, {"input", activity->LocalInputOfPlayer(seat)}, {"screen", activity->ScreenOfPlayer(seat)}});
 		}
 		if (screen >= 0) {
 			const Vector target = g_CameraMan.GetScrollTarget(screen);
