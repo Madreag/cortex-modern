@@ -204,8 +204,9 @@ GCtab * LJ_FASTCALL lj_tab_dup(lua_State *L, const GCtab *kt)
 }
 
 /* Clear a table. */
-void LJ_FASTCALL lj_tab_clear(GCtab *t)
+void LJ_FASTCALL lj_tab_clear(lua_State *L, GCtab *t)
 {
+  if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
   clearapart(t);
   if (t->hmask > 0) {
     Node *node = noderef(t->node);
