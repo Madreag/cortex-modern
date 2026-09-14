@@ -10,6 +10,28 @@
 #include "lj_preview.h"
 #include "luajit.h"
 
+#if LJ_TARGET_WINDOWS
+#include <windows.h>
+#else
+#include <time.h>
+#endif
+
+static double preview_clock(void)
+{
+#if LJ_TARGET_WINDOWS
+  LARGE_INTEGER counter, frequency;
+  QueryPerformanceCounter(&counter);
+  QueryPerformanceFrequency(&frequency);
+  return (double)counter.QuadPart * 1000.0 / (double)frequency.QuadPart;
+#elif LJ_TARGET_POSIX
+  struct timespec value;
+  clock_gettime(CLOCK_MONOTONIC, &value);
+  return (double)value.tv_sec * 1000.0 + (double)value.tv_nsec / 1000000.0;
+#else
+  return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+#endif
+}
+
 static void *preview_grow(void *buffer, size_t *capacity, size_t count, size_t size)
 {
   size_t next = *capacity ? *capacity : 64;
@@ -103,10 +125,13 @@ LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t n
   LJPreview *p = g->preview;
   GCtab *root = tabref(L->env);
   size_t i, cursor;
+  int timed = p ? p->timed : getenv("CC_PREVIEW_BARRIER_STATS") != NULL;
+  double started = timed ? preview_clock() : 0.0;
   if (!p) {
     p = (LJPreview *)calloc(1, sizeof(LJPreview));
     if (!p) return 0;
     g->preview = p;
+    p->timed = timed;
   }
   if (p->active) return 0;
   p->savedbytes = 0;
@@ -169,6 +194,11 @@ LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t n
   }
   p->root = root;
   p->active = 1;
+  if (timed) {
+    p->window_ms = preview_clock()-started;
+    p->stats.capture_ms += p->window_ms;
+    p->stats.tables += p->ntables;
+  }
   return 1;
 fail:
   preview_disarm(p);
@@ -184,7 +214,9 @@ void lj_preview_write(lua_State *L, GCtab *t)
   Node *nodes = NULL;
   size_t i, abytes, hbytes;
   uint32_t index = t->preview & LJ_PREVIEW_INDEX;
+  double started;
   if (!(t->preview & LJ_PREVIEW_PENDING) || !p || !p->active) return;
+  started = p->timed ? preview_clock() : 0.0;
   e = &p->tables[index-1];
   lj_assertL(e->table == t && !e->captured, "bad preview table");
   abytes = t->asize*sizeof(TValue);
@@ -218,6 +250,13 @@ void lj_preview_write(lua_State *L, GCtab *t)
   p->savedbytes += abytes+hbytes;
   t->preview = index;
   lj_gc_anybarriert(L, t);
+  if (p->timed) {
+    double elapsed = preview_clock()-started;
+    p->window_ms += elapsed;
+    p->stats.write_ms += elapsed;
+    p->stats.saves++;
+    p->stats.bytes += abytes+hbytes;
+  }
 }
 
 GCtab *lj_preview_saved(global_State *g, GCtab *t)
@@ -270,7 +309,9 @@ LUA_API size_t luaJIT_preview_end(lua_State *L)
   global_State *g = G(L);
   LJPreview *p = g->preview;
   size_t changes = 0;
+  double started;
   if (!p || !p->active) return 0;
+  started = p->timed ? preview_clock() : 0.0;
   p->active = 0;
   while (p->lastwrite) {
     LJPreviewTable *e = &p->tables[p->lastwrite-1];
@@ -309,7 +350,22 @@ LUA_API size_t luaJIT_preview_end(lua_State *L)
     changes++;
   }
   preview_disarm(p);
+  if (p->timed) {
+    double elapsed = preview_clock()-started;
+    p->window_ms += elapsed;
+    p->stats.restore_ms += elapsed;
+    if (p->window_ms > p->stats.max_ms) p->stats.max_ms = p->window_ms;
+    p->stats.windows++;
+  }
   return changes;
+}
+
+LUA_API int luaJIT_preview_stats(lua_State *L, luaJIT_PreviewStats *stats)
+{
+  LJPreview *p = G(L)->preview;
+  if (!p || !p->timed || !p->stats.windows) return 0;
+  *stats = p->stats;
+  return 1;
 }
 
 void lj_preview_free(global_State *g)

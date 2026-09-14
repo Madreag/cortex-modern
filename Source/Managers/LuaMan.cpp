@@ -4863,6 +4863,15 @@ void LuaStateWrapper::Initialize() {
 }
 
 void LuaStateWrapper::Destroy() {
+	luaJIT_PreviewStats stats{};
+	if (m_State && luaJIT_preview_stats(m_State, &stats)) {
+		std::ostringstream row;
+		row.precision(9);
+		row << "[preview-write-barrier] windows=" << stats.windows << " tables=" << stats.tables
+		    << " saves=" << stats.saves << " bytes=" << stats.bytes << " capture_ms=" << stats.capture_ms
+		    << " write_ms=" << stats.write_ms << " restore_ms=" << stats.restore_ms << " max_ms=" << stats.max_ms;
+		std::cout << row.str() << std::endl;
+	}
 	lua_close(m_State);
 }
 
