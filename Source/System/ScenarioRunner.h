@@ -219,6 +219,10 @@ namespace RTE {
 		static void DrawNetUiToasts();
 		/// Every banner queued this run, in order — the report's ui.toasts source.
 		static const std::vector<NetUiToastRecord>& GetNetUiToastLog();
+		/// The newest three unexpired presentation events, in display order.
+		static std::vector<NetUiToastRecord> GetVisibleNetUiToasts();
+		/// Names of peers whose next input frame is missing, for the stalled render path.
+		static std::string GetLockstepMissingPeers();
 		/// Counts resync wait-screen draws for the report (also counted headless).
 		static void NoteResyncOverlayFrame();
 		static uint64_t GetResyncOverlayFrames();

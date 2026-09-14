@@ -730,6 +730,22 @@ namespace RTE {
 		return s_NetUiToastLog;
 	}
 
+	std::vector<ScenarioRunner::NetUiToastRecord> ScenarioRunner::GetVisibleNetUiToasts() {
+		const uint64_t nowMs = NetLockstepNowMs();
+		std::vector<NetUiToastRecord> visible;
+		for (auto toast = s_NetUiToasts.rbegin(); toast != s_NetUiToasts.rend() && visible.size() < 3; ++toast) {
+			if (nowMs < toast->shownAtMs + c_NetUiToastMs) {
+				visible.push_back(toast->record);
+			}
+		}
+		std::reverse(visible.begin(), visible.end());
+		return visible;
+	}
+
+	std::string ScenarioRunner::GetLockstepMissingPeers() {
+		return s_LockstepCoordinator ? s_LockstepCoordinator->DescribeMissingPeers() : std::string();
+	}
+
 	void ScenarioRunner::NoteResyncOverlayFrame() {
 		++s_NetUiResyncOverlayFrames;
 	}
