@@ -296,7 +296,8 @@ namespace RTE {
 			} else omissions.push_back({{"name", "Settings.ini"}, {"reason", "file unavailable"}});
 			add("SystemInfo.json", SystemInfo(s_State.gpu).dump(2));
 			add("Executable.json", json{{"sha256", FileDigest(s_State.executable)}, {"version", c_VersionString}}.dump(2));
-			json manifest{{"schema", 1}, {"members", json::array()}, {"omitted", omissions}, {"replay", replayStatus}};
+			json manifest{{"schema", 1}, {"members", json::array()}, {"omitted", omissions}, {"replay", replayStatus},
+			              {"identity_build_ms", job.snapshot.identityBuildMs}};
 			for (const auto& [name, data]: members) {
 				json entry{{"name", name}, {"size", data.size()}, {"sha256", Digest(data)}};
 				if (name == "Replay.ccrp") entry["truncated"] = job.snapshot.replayTruncated;
@@ -402,6 +403,15 @@ namespace RTE {
 			Snapshot snapshot;
 			snapshot.consoleTail = g_ConsoleMan.CopyLogTail(c_LogTailLimit);
 			snapshot.joinIdentity = g_NetMatchService.ExportDiagnosticIdentity();
+			if (snapshot.joinIdentity.empty()) {
+				std::string error;
+				if (g_NetMatchService.RefreshDiagnosticIdentity(&error, &snapshot.identityBuildMs)) {
+					std::cout << std::format("[telemetry] identity built in {:.3f} ms\n", snapshot.identityBuildMs) << std::flush;
+					snapshot.joinIdentity = g_NetMatchService.ExportDiagnosticIdentity();
+				} else {
+					snapshot.joinIdentity = json{{"error", error}}.dump(2);
+				}
+			}
 			if (snapshot.joinIdentity.empty()) snapshot.joinIdentity = json{{"error", "identity unavailable before module loading completes"}}.dump(2);
 			snapshot.desyncHeal = g_NetMatchService.ExportDiagnosticDesyncHeal();
 			if (ScenarioRunner::CopyLockstepReplayForDiagnostics(snapshot.replay, snapshot.replayTruncated)) {

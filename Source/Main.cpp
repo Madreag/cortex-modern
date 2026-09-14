@@ -5534,10 +5534,6 @@ int main(int argc, char** argv) {
 
 	g_PresetMan.LoadAllDataModules();
 	if (!ContentFile::WaitForPendingSounds(LoadingScreen::LoadingSplashProgressReport)) return ShutDown(EXIT_FAILURE);
-	std::string diagnosticIdentityError;
-	if (!g_NetMatchService.RefreshDiagnosticIdentity(&diagnosticIdentityError)) {
-		g_ConsoleMan.PrintString("ERROR: Could not prepare diagnostics identity: " + diagnosticIdentityError);
-	}
 
 	if (!s_netIdentityDumpPath.empty()) {
 		NetIdentityManifest manifest;

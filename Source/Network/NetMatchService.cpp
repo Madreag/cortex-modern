@@ -1924,12 +1924,15 @@ static std::string ResyncSaveName() {
 		m_DiagnosticIdentity = identity.dump(2, ' ', false, json::error_handler_t::replace);
 	}
 
-	bool NetMatchService::RefreshDiagnosticIdentity(std::string* error) {
+	bool NetMatchService::RefreshDiagnosticIdentity(std::string* error, double* buildMs) {
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions options;
 		options.buildId = "stage2-p2d-local";
 		options.sessionRulesTag = "stage2-p2-session-rules";
-		if (!NetIdentity::BuildCurrentManifest(manifest, error, options)) return false;
+		const auto started = std::chrono::steady_clock::now();
+		const bool built = NetIdentity::BuildCurrentManifest(manifest, error, options);
+		if (buildMs) *buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+		if (!built) return false;
 		CacheDiagnosticIdentity(manifest);
 		return true;
 	}

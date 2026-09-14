@@ -18,6 +18,7 @@ namespace RTE {
 			std::string replay;
 			std::string replayReason = "no recording";
 			bool replayTruncated = false;
+			double identityBuildMs = 0;
 		};
 
 		/// Installs a bounded network-log mirror and starts the writer before any match.

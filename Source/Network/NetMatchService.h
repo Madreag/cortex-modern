@@ -281,8 +281,8 @@ namespace RTE {
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
 		std::string BuildReportJson() const;
-		/// Builds the menu's identity once after modules load; match startup replaces it with the join inputs.
-		bool RefreshDiagnosticIdentity(std::string* error = nullptr);
+		/// Builds diagnostic identity on request; match startup supplies the cached join inputs.
+		bool RefreshDiagnosticIdentity(std::string* error = nullptr, double* buildMs = nullptr);
 		/// Returns the cached join inputs without reading settings, modules, or simulation state.
 		std::string ExportDiagnosticIdentity() const;
 		/// Returns the last runtime error and heal record without exposing reconnect credentials.
