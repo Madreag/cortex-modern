@@ -81,6 +81,7 @@ void GameActivity::Clear() {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		m_ObservationTarget[player].Reset();
 		m_DeathViewTarget[player].Reset();
+		m_SpectatorTarget[player] = nullptr;
 		m_ActorSelectTimer[player].Reset();
 		m_ActorCursor[player].Reset();
 		m_pLastMarkedActor[player] = 0;
@@ -1160,6 +1161,74 @@ void GameActivity::UpdateEditing() {
 	}
 }
 
+// The spectator's cycle: every living actor of every team, in team and roster order.
+static Actor* NextSpectatorActor(const Actor* current, bool forward) {
+	Actor* first = nullptr;
+	Actor* last = nullptr;
+	Actor* before = nullptr;
+	Actor* after = nullptr;
+	bool seenCurrent = false;
+
+	for (int team = Activity::Teams::TeamOne; team < Activity::Teams::MaxTeamCount; ++team) {
+		const std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(team);
+		if (!roster) {
+			continue;
+		}
+		for (Actor* actor: *roster) {
+			if (!actor || actor->IsDead()) {
+				continue;
+			}
+			if (!first) {
+				first = actor;
+			}
+			if (actor == current) {
+				seenCurrent = true;
+			} else if (seenCurrent) {
+				if (!after) {
+					after = actor;
+				}
+			} else {
+				before = actor;
+			}
+			last = actor;
+		}
+	}
+	// A followed unit that died drops the cycle back to the start.
+	if (!seenCurrent) {
+		return first;
+	}
+	return forward ? (after ? after : first) : (before ? before : last);
+}
+
+void GameActivity::UpdateSpectatorView(int player, bool lookedAround) {
+	// Only a brainless human under the host's rule spectates; every other observer keeps the old view.
+	if (!BrainlessHumansSpectate() || !m_HadBrain[player] || (m_Brain[player] && !m_Brain[player]->IsDead())) {
+		return;
+	}
+
+	const int screen = ScreenOfPlayer(player);
+	if (!g_MovableMan.IsActor(m_SpectatorTarget[player])) {
+		m_SpectatorTarget[player] = nullptr;
+	}
+	// Looking around by hand drops the followed unit.
+	if (lookedAround && m_SpectatorTarget[player]) {
+		m_SpectatorTarget[player] = nullptr;
+		g_FrameMan.ClearScreenText(screen);
+	}
+
+	const bool forward = m_PlayerController[player].IsState(ACTOR_NEXT);
+	if (forward || m_PlayerController[player].IsState(ACTOR_PREV)) {
+		m_SpectatorTarget[player] = NextSpectatorActor(m_SpectatorTarget[player], forward);
+		g_FrameMan.ClearScreenText(screen);
+	}
+
+	if (const Actor* followed = m_SpectatorTarget[player]) {
+		// Following holds the view on the unit and names it until the player looks around again.
+		m_ObservationTarget[player] = followed->GetPos();
+		g_FrameMan.SetScreenText(GetTeamName(followed->GetTeam()) + " - " + followed->GetPresetName(), screen, 0, -1, false);
+	}
+}
+
 void GameActivity::Update() {
 	if (g_ActivityMan.LockstepRelaunchInProgress()) {
 		g_ActivityMan.NoteStaleActivitySlots(CountStaleRelaunchSlots(static_cast<int>(g_TimerMan.GetSimUpdateCount())));
@@ -1311,7 +1380,8 @@ void GameActivity::Update() {
 			// If we're observing game over state, freeze the view for a bit so the player's input doesn't ruin the focus
 			if (!(m_ActivityState == ActivityState::Over && !m_GameOverTimer.IsPastRealMS(1000))) {
 				// Get cursor input
-				m_PlayerController[player].RelativeCursorMovement(m_ObservationTarget[player], 1.2f);
+				const bool lookedAround = m_PlayerController[player].RelativeCursorMovement(m_ObservationTarget[player], 1.2f);
+				UpdateSpectatorView(player, lookedAround);
 			}
 			// Set the view to the observation position
 			g_SceneMan.ForceBounds(m_ObservationTarget[player]);
