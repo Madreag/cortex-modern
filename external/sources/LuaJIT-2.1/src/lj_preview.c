@@ -33,20 +33,21 @@ static double preview_clock(void)
 #endif
 }
 
-static void *preview_grow(void *buffer, size_t *capacity, size_t count, size_t size)
+static void *preview_grow(LJPreview *p, void *buffer, size_t *capacity, size_t count, size_t size)
 {
+  global_State *g = p->g;
   size_t next = *capacity ? *capacity : 64;
-  void *p;
+  void *block;
   if (count <= *capacity) return buffer;
   while (next < count) {
     if (next > SIZE_MAX/2) return NULL;
     next *= 2;
   }
   if (next > SIZE_MAX/size) return NULL;
-  p = realloc(buffer, next*size);
-  if (!p) return NULL;
+  block = g->allocf(g->allocd, buffer, *capacity*size, next*size);
+  if (!block) return NULL;
   *capacity = next;
-  return p;
+  return block;
 }
 
 static size_t preview_hash(GCobj *o, size_t mask)
@@ -57,12 +58,14 @@ static size_t preview_hash(GCobj *o, size_t mask)
 
 static int preview_seen(LJPreview *p, GCobj *o)
 {
+  global_State *g = p->g;
   size_t i;
   if (2*(p->nseen+1) >= p->seencap) {
     size_t cap = p->seencap ? p->seencap*2 : 128;
     if (p->seencap > SIZE_MAX/(2*sizeof(GCobj *))) return -1;
-    GCobj **seen = (GCobj **)calloc(cap, sizeof(GCobj *));
+    GCobj **seen = (GCobj **)g->allocf(g->allocd, NULL, 0, cap*sizeof(GCobj *));
     if (!seen) return -1;
+    memset(seen, 0, cap*sizeof(GCobj *));
     for (i = 0; i < p->seencap; i++) {
       GCobj *old = p->seen[i];
       if (old) {
@@ -71,7 +74,7 @@ static int preview_seen(LJPreview *p, GCobj *o)
         seen[at] = old;
       }
     }
-    free(p->seen);
+    if (p->seen) g->allocf(g->allocd, p->seen, p->seencap*sizeof(GCobj *), 0);
     p->seen = seen;
     p->seencap = cap;
   }
@@ -93,7 +96,7 @@ static int preview_object(LJPreview *p, GCobj *o)
               o->gch.gct == ~LJ_TUDATA || o->gch.gct == ~LJ_TTHREAD)) return 1;
   seen = preview_seen(p, o);
   if (seen) return seen > 0;
-  objects = (GCobj **)preview_grow(p->objects, &p->objectscap,
+  objects = (GCobj **)preview_grow(p, p->objects, &p->objectscap,
                                   p->nobjects+1, sizeof(GCobj *));
   if (!objects) return 0;
   p->objects = objects;
@@ -133,8 +136,10 @@ LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t n
   if (G2J(g)->state != LJ_TRACE_IDLE) return 0;
 #endif
   if (!p) {
-    p = (LJPreview *)calloc(1, sizeof(LJPreview));
+    p = (LJPreview *)g->allocf(g->allocd, NULL, 0, sizeof(LJPreview));
     if (!p) return 0;
+    memset(p, 0, sizeof(LJPreview));
+    p->g = g;
     g->preview = p;
     p->timed = timed;
   }
@@ -158,7 +163,7 @@ LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t n
       GCtab *t = gco2tab(o);
       LJPreviewTable *entry, *tables;
       if (p->ntables == LJ_PREVIEW_INDEX) goto fail;
-      tables = (LJPreviewTable *)preview_grow(p->tables, &p->tablescap,
+      tables = (LJPreviewTable *)preview_grow(p, p->tables, &p->tablescap,
                                              p->ntables+1, sizeof(LJPreviewTable));
       if (!tables) goto fail;
       p->tables = tables;
@@ -254,6 +259,7 @@ void lj_preview_write(lua_State *L, GCtab *t)
   e->previous = p->lastwrite;
   p->lastwrite = index;
   p->savedbytes += abytes+hbytes;
+  g->gc.total += abytes+hbytes;  /* Images are live for the window, so pacing must see them. */
   t->preview = index;
   lj_gc_anybarriert(L, t);
   if (p->timed) {
@@ -306,10 +312,11 @@ void lj_preview_forget(global_State *g, GCtab *t)
   if (!p || !index || index > p->ntables) return;  /* A stale word addresses no entry. */
   e = &p->tables[index-1];
   if (e->captured) {
-    if (e->saved.asize)
-      g->allocf(g->allocd, tvref(e->saved.array), e->saved.asize*sizeof(TValue), 0);
-    if (e->saved.hmask)
-      g->allocf(g->allocd, noderef(e->saved.node), (e->saved.hmask+1)*sizeof(Node), 0);
+    size_t abytes = e->saved.asize*sizeof(TValue);
+    size_t hbytes = e->saved.hmask ? (e->saved.hmask+1)*sizeof(Node) : 0;
+    if (abytes) g->allocf(g->allocd, tvref(e->saved.array), abytes, 0);
+    if (hbytes) g->allocf(g->allocd, noderef(e->saved.node), hbytes, 0);
+    g->gc.total -= abytes+hbytes;
     e->captured = 0;
   }
   e->table = NULL;
@@ -329,7 +336,6 @@ LUA_API size_t luaJIT_preview_end(lua_State *L)
     GCtab *t = e->table;
     GCtab *s = &e->saved;
     size_t abytes = s->asize*sizeof(TValue);
-    size_t hbytes = s->hmask ? (s->hmask+1)*sizeof(Node) : 0;
     p->lastwrite = e->previous;
     if (!t) continue;
     changes++;
@@ -341,14 +347,13 @@ LUA_API size_t luaJIT_preview_end(lua_State *L)
       if (abytes) {
         memcpy(inlinearray, tvref(s->array), abytes);
         g->allocf(g->allocd, tvref(s->array), abytes, 0);
+        g->gc.total -= abytes;
       }
       setmref(t->array, inlinearray);
     } else {
-      setmrefr(t->array, s->array);
-      g->gc.total += abytes;
+      setmrefr(t->array, s->array);  /* The image becomes the live vector it was counted as. */
     }
     setmrefr(t->node, s->node);
-    g->gc.total += hbytes;
 #if LJ_GC64
     setmrefr(t->freetop, s->freetop);
 #endif
@@ -411,9 +416,9 @@ void lj_preview_free(global_State *g)
   LJPreview *p = g->preview;
   if (!p) return;
   luaJIT_preview_end(mainthread(g));
-  free(p->tables);
-  free(p->objects);
-  free(p->seen);
-  free(p);
+  if (p->tables) g->allocf(g->allocd, p->tables, p->tablescap*sizeof(LJPreviewTable), 0);
+  if (p->objects) g->allocf(g->allocd, p->objects, p->objectscap*sizeof(GCobj *), 0);
+  if (p->seen) g->allocf(g->allocd, p->seen, p->seencap*sizeof(GCobj *), 0);
+  g->allocf(g->allocd, p, sizeof(LJPreview), 0);
   g->preview = NULL;
 }

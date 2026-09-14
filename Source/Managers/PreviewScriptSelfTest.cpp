@@ -58,6 +58,8 @@ p.alias = p.data; p.cycle = p; p.sink = sink; p.mt = mt
 p.colocated = {10, 20, 30}; p.separate = {}
 for i = 1, 96 do p.separate[i] = i end
 p.hot = {x = 7, raw = 8, [1] = 9}
+p.big = {}
+for i = 1, 8192 do p.big[i] = i end
 p.hookData = {count = 0}
 p.weak = setmetatable({}, {__mode = 'v'})
 p.weak[1] = {value = 1}
@@ -135,6 +137,21 @@ p.collected = function()
   collectgarbage('restart'); collectgarbage('collect'); collectgarbage('collect')
   assert(p.weak[1] == nil and p.weak[2] == nil, 'weak references stayed live')
 end
+p.accounting = function()
+  -- Only the beforeimage of p.big is allocated between the two readings.
+  local before = collectgarbage('count')
+  p.big[1] = -1
+  local inside = collectgarbage('count')
+  _ScriptFieldsStash['preview:gc'] = inside
+  assert(inside - before >= 48, 'beforeimage bytes unaccounted: '..tostring(inside-before))
+end
+p.released = function()
+  assert(p.big[1] == 1, 'the captured array did not come back')
+  collectgarbage('collect')
+  local inside, after = _ScriptFieldsStash['preview:gc'], collectgarbage('count')
+  _ScriptFieldsStash['preview:gc'] = nil
+  assert(inside and inside - after >= 48, 'beforeimage bytes not released: '..tostring(inside)..' -> '..tostring(after))
+end
 p.check = function()
   assert(p.data == p.alias and p.cycle == p)
   assert(sequence(p.data) == order and #p.data == length, 'table layout changed')
@@ -198,6 +215,7 @@ end
 				lua_settop(L, top);
 				check("preview_barrier_native_semantics", index, round, state->RunScriptString("assert(_PreviewBarrierProbe.capi[1] == 92 and _PreviewBarrierProbe.capi.x == 93 and _PreviewBarrierProbe.capi.added == 94)", false));
 				check("preview_barrier_fault_injection", index, round, luaJIT_preview_faultcheck(L) ? 0 : -1);
+				check("preview_barrier_gc_accounting", index, round, state->RunScriptString("_PreviewBarrierProbe.accounting()", false));
 				check("preview_barrier_weak_semantics", index, round, state->RunScriptString("_PreviewBarrierProbe.collected()", false));
 				const int error = state->RunScriptString("_ScriptFieldsStash['preview:-7654321'] = nil; _PreviewBarrierProbe.data.x = 97; error('preview barrier error arm')", false);
 				check("preview_barrier_error_caught", index, round, error < 0 ? 0 : -1);
@@ -205,10 +223,11 @@ end
 			LuaMan::EndPreviewScripts();
 			for (int index = 0; index < static_cast<int>(states.size()); ++index) {
 				check("preview_barrier_exact_rollback", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.check(); assert(_ScriptFieldsStash['preview:-7654321'] == nil)", false));
+				check("preview_barrier_gc_released", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.released()", false));
 			}
 		}
 		for (LuaStateWrapper* state: states) {
-			state->RunScriptString("debug.sethook(); if _PreviewBarrierProbe and _PreviewBarrierProbe.cleanup then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; rawset(_G, '_ScriptFieldsStash\\0probe', nil); _ScriptFieldsStash['preview:-7654321'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
+			state->RunScriptString("debug.sethook(); if _PreviewBarrierProbe and _PreviewBarrierProbe.cleanup then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; rawset(_G, '_ScriptFieldsStash\\0probe', nil); _ScriptFieldsStash['preview:-7654321'] = nil; _ScriptFieldsStash['preview:gc'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
 		}
 		return passed;
 	}
