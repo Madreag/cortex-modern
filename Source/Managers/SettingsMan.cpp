@@ -58,12 +58,35 @@ namespace {
 	bool ValidUtf8DisplayName(const std::string& name) {
 		if (name.empty() || name.size() > 64) return false;
 		size_t characters = 0;
-		for (size_t index = 0; index < name.size(); ++index) {
+		for (size_t index = 0; index < name.size();) {
 			const unsigned char lead = static_cast<unsigned char>(name[index]);
-			if (lead < 0x20 || lead == 0x7F) return false;
-			if ((lead & 0xC0) == 0x80) continue;
-			if (lead >= 0x80 && (lead & 0xE0) != 0xC0 && (lead & 0xF0) != 0xE0 && (lead & 0xF8) != 0xF0) return false;
+			size_t need = 0;
+			if (lead < 0x80) {
+				if (lead < 0x20 || lead == 0x7F) return false;
+			} else if (lead < 0xC2) {
+				return false;
+			} else if (lead < 0xE0) {
+				need = 1;
+			} else if (lead < 0xF0) {
+				need = 2;
+			} else if (lead < 0xF5) {
+				need = 3;
+			} else {
+				return false;
+			}
+			if (index + 1 + need > name.size()) return false;
+			for (size_t trail = 1; trail <= need; ++trail) {
+				if ((static_cast<unsigned char>(name[index + trail]) & 0xC0) != 0x80) return false;
+			}
+			if (need >= 1) {
+				const unsigned char next = static_cast<unsigned char>(name[index + 1]);
+				if (lead == 0xE0 && next < 0xA0) return false;
+				if (lead == 0xED && next >= 0xA0) return false;
+				if (lead == 0xF0 && next < 0x90) return false;
+				if (lead == 0xF4 && next >= 0x90) return false;
+			}
 			if (++characters > 24) return false;
+			index += 1 + need;
 		}
 		return true;
 	}
@@ -640,17 +663,6 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 		Reader reader(path, false, nullptr, true, true);
 		settings.Create(reader);
 	};
-	writeRead([&](Writer& writer) { settings.WriteNetworkPreferences(writer); });
-	if (const char* broken = std::getenv("CCCP_SETTINGS_PREFERENCES_SELFTEST_BROKEN")) {
-		settings.Clear();
-		Reader reader(broken, false, nullptr, true, true);
-		if (!reader.ReaderOK()) {
-			std::cout << Tag << " FAIL reader" << std::endl;
-			return 1;
-		}
-		settings.Create(reader);
-	}
-
 	int failures = 0;
 	const auto check = [&](const char* label, bool ok) {
 		if (!ok) {
@@ -658,6 +670,25 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 			++failures;
 		}
 	};
+	{
+		Writer writer(path);
+		writer.ObjectStart(settings.GetClassName());
+		settings.WriteNetworkPreferences(writer);
+		writer.ObjectEnd();
+		writer.EndWrite();
+		settings.Clear();
+		if (settings.GetNetworkDisplayName() != "Player") {
+			std::cout << Tag << " FAIL roundtrip-cleared" << std::endl;
+			return 1;
+		}
+		const char* broken = std::getenv("CCCP_SETTINGS_PREFERENCES_SELFTEST_BROKEN");
+		Reader reader(broken ? broken : path, false, nullptr, true, true);
+		if (!reader.ReaderOK()) {
+			std::cout << Tag << " FAIL reader" << std::endl;
+			return 1;
+		}
+		settings.Create(reader);
+	}
 	check("roundtrip", settings.GetNetworkDisplayName() == "AlphaPilot" && settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Always && !settings.GetNetworkToastsEnabled() && !settings.GetNetworkChatVisible() && settings.GetNetworkChatDefaultScope() == NetworkChatDefaultScope::Team && !settings.GetNetworkChatNotify() && settings.GetNetworkChatSound() && settings.GetNetworkChatTextSize() == NetworkChatTextSize::Large && !settings.GetNetworkAutoReconnect() && !settings.GetNetworkOfferStoredRejoin() && settings.GetNetworkDiagnosticsDirectory() == "D:/tmp/telemetry-alt" && !settings.GetNetworkRecordReplays() && settings.GetNetworkHostDelayPolicy() == NetworkHostDelayPolicy::Fixed && !settings.GetNetworkHostAutoRepair() && settings.GetNetworkHostIdleWaitMinutes() == 0 && settings.GetNetworkHostVisibility() == NetworkHostVisibility::Unlisted);
 	if (failures != 0) {
 		return 1;
@@ -669,12 +700,35 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	settings.SetNetworkDisplayName(std::string(25, 'A'));
 	settings.SetNetworkDisplayName(std::string("Bad\nName"));
 	settings.SetNetworkDisplayName("\xFF\xFE");
+	settings.SetNetworkDisplayName("\x80abc");
+	settings.SetNetworkDisplayName("caf\xC3");
+	settings.SetNetworkDisplayName("\xC0\xAF");
+	settings.SetNetworkDisplayName("\xED\xA0\x80");
 	check("invalid-name rejection", settings.GetNetworkDisplayName() == kept);
+	settings.SetNetworkDisplayName("caf\xC3\xA9");
+	check("invalid-name rejection", settings.GetNetworkDisplayName() == "caf\xC3\xA9");
+	std::string twentyFour;
+	twentyFour.reserve(48);
+	for (int i = 0; i < 24; ++i) {
+		twentyFour += "\xC3\xA9";
+	}
+	settings.SetNetworkDisplayName(twentyFour);
+	check("invalid-name rejection", settings.GetNetworkDisplayName() == twentyFour);
+	settings.SetNetworkDisplayName(twentyFour + "\xC3\xA9");
+	check("invalid-name rejection", settings.GetNetworkDisplayName() == twentyFour);
+	std::string overBytes;
+	overBytes.reserve(66);
+	for (int i = 0; i < 33; ++i) {
+		overBytes += "\xC3\xA9";
+	}
+	settings.SetNetworkDisplayName(overBytes);
+	check("invalid-name rejection", settings.GetNetworkDisplayName() == twentyFour);
 	settings.SetNetworkHostIdleWaitMinutes(61);
 	settings.SetNetworkHostIdleWaitMinutes(-1);
 	check("idle-wait range", settings.GetNetworkHostIdleWaitMinutes() == 0);
 
 	const int warningsBefore = g_UnknownEnumWarnings;
+	// Unknown-enum and case-insensitive arms leave a non-default set so the read is what changes it.
 	settings.SetNetworkMatchStatusMode(NetworkMatchStatusMode::Always);
 	writeRead([&](Writer& writer) { writer.NewPropertyWithValue("NetworkMatchStatusMode", "Banana"); });
 	check("unknown-enum fallback", settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Auto);

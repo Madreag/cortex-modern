@@ -1,12 +1,13 @@
-"""Write a private Settings.ini with every L01 key at a non-default, plus a broken file for the FAIL demo.
+"""Write L01 Settings.ini fixtures. Does not launch the engine unless --launch is set.
 
-Python only. Does not launch the engine. Scores a captured FAIL log through run_selftests.py --score-stdout.
+The handwritten FAIL log is a scorer demo, not RED. PHASE B RED is the engine run with
+CCCP_SETTINGS_PREFERENCES_SELFTEST_BROKEN pointed at broken-Settings.ini.
 """
 
 from __future__ import annotations
 
 import argparse
-import subprocess
+import json
 import sys
 from pathlib import Path
 
@@ -41,39 +42,39 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--timeout", type=float, default=300)
+    parser.add_argument("--launch", choices=("pass", "fail"), help="PHASE B only: runner-only engine launch")
     options = parser.parse_args()
     out = options.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
 
     good = out / "Settings.ini"
     broken = out / "broken-Settings.ini"
-    fail_log = out / "settings-preferences-selftest-FAIL.stdout"
     write_settings(good, KEYS)
     write_settings(broken, [("NetworkDisplayName", "BrokenName")])
-    fail_log.write_text("[settings-preferences-selftest] FAIL NetworkDisplayName\n", encoding="utf-8")
-
-    scored = subprocess.run(
-        [
-            sys.executable,
-            str(options.repo / "tools" / "run_selftests.py"),
-            "--score-stdout",
-            str(fail_log),
-            "--name",
-            "settings-preferences-selftest",
-            "--exit-code",
-            "0",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    (out / "score-fail.stdout").write_text(scored.stdout + scored.stderr, encoding="utf-8")
     print(f"wrote {good}")
     print(f"wrote {broken}")
-    print(f"wrote {fail_log}")
-    print(f"score_exit={scored.returncode}")
-    print(scored.stdout, end="")
-    return 0
+    print("PHASE B pass: python tools/run_sim_test.py --repo <tree> --out <out>/pass --timeout 300 -- -settings-preferences-selftest")
+    print(f"PHASE B fail: python tools/test_mp_preferences.py --out <out> --repo <tree> --launch fail  (CCCP_SETTINGS_PREFERENCES_SELFTEST_BROKEN={broken})")
+    print("PHASE B suite: python tools/run_selftests.py --repo <tree> --out <out>/selftests --timeout 300")
+
+    if options.launch is None:
+        return 0
+
+    sys.path.insert(0, str(options.repo / "tools"))
+    from run_sim_test import make_run  # noqa: PLC0415
+
+    case = out / options.launch
+    env = None
+    if options.launch == "fail":
+        env = {"CCCP_SETTINGS_PREFERENCES_SELFTEST_BROKEN": str(broken)}
+    run = make_run(options.repo, ["-settings-preferences-selftest"], case, options.timeout, env=env)
+    try:
+        record = run.start().finish()
+    finally:
+        run.close()
+    print(json.dumps({k: record.get(k) for k in ("pid", "exit_code", "timed_out")}, indent=2))
+    return 0 if record.get("exit_code") == 0 else 1
 
 
 if __name__ == "__main__":
