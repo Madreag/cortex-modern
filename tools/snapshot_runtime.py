@@ -4,6 +4,7 @@ Schemas name the serialized fields in their C++ order. Unclassified nested recor
 tails stay byte-exact. Shared projection is explicit; full comparisons project nothing.
 """
 
+from pathlib import Path
 import re
 
 
@@ -340,10 +341,19 @@ class Reader:
         return [self.value(kind) for _ in range(count)]
 
 
+def family(version):
+    """A record's tag family: the tag without its trailing version number."""
+    return version.rstrip("0123456789")
+
+
 def decode(data):
     reader = Reader(data)
     version = reader.string().decode("ascii")
     if version not in SCHEMAS:
+        # A classified record that bumped its version keeps its local fields; falling back to the raw
+        # bytes would drop their projection and read the producing peer's own state as a difference.
+        if family(version) in {family(name) for name in SCHEMAS}:
+            raise ValueError(f"unschema'd {version} runtime checkpoint version")
         return data
     result = {"version": version, **{name: reader.value(kind) for name, kind in SCHEMAS[version]}}
     if version == "GraphicalPrimitive1":
@@ -588,12 +598,41 @@ def _payload(version):
     return str(len(tag)).encode() + b" " + tag + b" " + b"".join(_emit(kind) for _name, kind in SCHEMAS[version])
 
 
+_CHECKPOINT_ARCHIVE = re.compile(r"Checkpoint(?:Writer|Reader)\s*\w*\s*\(")
+_CHECKPOINT_TAG = re.compile(r'"([A-Za-z][A-Za-z0-9_:]*)"')
+
+
+def source_checkpoint_tags(root):
+    """Map every tag a CheckpointWriter or CheckpointReader names under root to its first file:line."""
+    tags = {}
+    for path in sorted(Path(root).rglob("*")):
+        if path.suffix not in (".cpp", ".h", ".hpp", ".mm"):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for match in _CHECKPOINT_ARCHIVE.finditer(text):
+            depth, stop = 1, match.end()
+            while depth and stop < len(text):
+                depth += (text[stop] == "(") - (text[stop] == ")")
+                stop += 1
+            for tag in _CHECKPOINT_TAG.findall(text[match.end():stop]):
+                tags.setdefault(tag, f"{path.as_posix()}:{text.count(chr(10), 0, match.start()) + 1}")
+    return tags
+
+
 def selftest():
     checks = []
 
     def check(name, ok):
         checks.append(ok)
         print(f"[snapshot-runtime-selftest] {'PASS' if ok else 'FAIL'} {name}")
+
+    tags = source_checkpoint_tags(Path(__file__).resolve().parents[1] / "Source")
+    known = {family(name) for name in SCHEMAS}
+    unschemad = sorted((tag, site) for tag, site in tags.items() if tag not in SCHEMAS and family(tag) in known)
+    for tag, site in unschemad:
+        versions = sorted(name for name in SCHEMAS if family(name) == family(tag))
+        print(f"[snapshot-runtime-selftest]   {site} writes {tag}; schemas for {family(tag)} stop at {versions}")
+    check(f"source_checkpoint_tags_schemad ({len(tags)} tags)", bool(tags) and not unschemad)
 
     one = decode(_payload("Controller1"))
     raw_two = _payload("Controller2")
@@ -621,6 +660,15 @@ def selftest():
           all(name in three for name in producer))
     check("controller3_producer_fields_masked", all(projected[name] == "LOCAL" for name in producer) and
           projected["team"] == "LOCAL" and projected["joy_accel_timer"]["sim_start"] == "LOCAL")
+
+    bumped = _payload("Controller3").replace(b"11 Controller3", b"11 Controller4", 1)
+    try:
+        decode(bumped)
+        check("unschemad_version_refused", False)
+    except ValueError as error:
+        check("unschemad_version_refused", "Controller4" in str(error))
+    unclassified = b"9 NoSchema1 0 "
+    check("unclassified_tag_stays_raw", decode(unclassified) == unclassified)
     return all(checks)
 
 
