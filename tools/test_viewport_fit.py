@@ -391,6 +391,63 @@ def button_extent(px, width, y0, y1):
     return best
 
 
+def count_button_runs(px, width, y0, y1):
+    """Rows carrying a 60..260px button-blue run, so the main menu's own
+    buttons register as several hits while star/planet backdrop gives none."""
+    hits = 0
+    for y in range(y0, y1):
+        run = 0
+        for x in range(width):
+            if near(px[x, y], BUTTON_BLUE, 25):
+                run += 1
+            else:
+                if 60 <= run <= 260:
+                    hits += 1
+                run = 0
+        if 60 <= run <= 260:
+            hits += 1
+    return hits
+
+
+def coarse_cell_diff(img_a, img_b, cell=16, pix_tol=24, frac=0.2):
+    """Share of grid cells whose changed-pixel fraction exceeds frac. Whole
+    fixed UI regions read as changed cells; sparse starfield twinkle does not."""
+    pa, pb = img_a.load(), img_b.load()
+    width, height = img_a.size
+    changed = total = 0
+    for cy in range(0, height, cell):
+        for cx in range(0, width, cell):
+            total += 1
+            diff = n = 0
+            for y in range(cy, min(cy + cell, height)):
+                for x in range(cx, min(cx + cell, width)):
+                    n += 1
+                    a, b = pa[x, y][:3], pb[x, y][:3]
+                    if abs(a[0] - b[0]) > pix_tol or abs(a[1] - b[1]) > pix_tol or abs(a[2] - b[2]) > pix_tol:
+                        diff += 1
+            if diff > frac * n:
+                changed += 1
+    return changed / max(1, total)
+
+
+def post_back_is_main(post_back_path, main_start_path):
+    """True when the post-Back frame shows the main menu again: no full-size
+    gray multiplayer panel, its coarse structure matches this run's own
+    main-start capture, and the main menu's button rows are present."""
+    from PIL import Image
+    img = Image.open(post_back_path).convert("RGB")
+    px = img.load()
+    width, height = img.size
+    extent = panel_extent(px, width, height)
+    if extent and extent[2] - extent[1] >= 300:
+        return False, {"reason": "multiplayer panel still present", "extent": extent}
+    main_img = Image.open(main_start_path).convert("RGB")
+    diff = coarse_cell_diff(main_img, img)
+    buttons = count_button_runs(px, width, 0, height)
+    ok = diff <= 0.30 and buttons >= 1
+    return ok, {"main_diff": round(diff, 4), "button_rows": buttons}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, required=True)
@@ -426,7 +483,7 @@ def main():
 
     def start(name, host, port, suffix, modules, phase="viewport"):
         require_pin(repo, options.exe_sha256, before, checks, f"{name}_prelaunch")
-        script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
+        script = f"wait 40\nscreenshot main-start\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
         if host:
             script += (f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\n"
                        "settext TextHostPlayers 2\nsettext TextHostInputDelay 3\nactivate ButtonMultiplayerCreate\n")
@@ -461,12 +518,12 @@ def main():
         if options.no_scroll_input:
             joiner_script = (f"wait_state Failed\nwait 5\nassert_substate Landing\nassert_label {LABEL} yours\n"
                              "dump_lobby\nscreenshot viewport-t0\n"
-                             "post_command ButtonBackToMain\nwait 12\nassert_screen MainScreen\nexit\n")
+                             "post_command ButtonBackToMain\nwait 12\nscreenshot post-back\nassert_screen MainScreen\nexit\n")
         else:
             joiner_script = (f"wait_state Failed\nwait 5\nassert_substate Landing\nassert_label {LABEL} yours\n"
                              "dump_lobby\nscreenshot viewport-t0\nwait_ms 9000\nscreenshot viewport-t1\n"
                              "wait_ms 9000\nscreenshot viewport-t2\nwait_ms 9000\nscreenshot viewport-t3\n"
-                             "post_command ButtonBackToMain\nwait 12\nassert_screen MainScreen\nexit\n")
+                             "post_command ButtonBackToMain\nwait 12\nscreenshot post-back\nassert_screen MainScreen\nexit\n")
         start("Joiner", False, options.port, joiner_script,
               [(BASE_NAME, "Base1"), (SZ70_NAME, "Sz70")])
         records["Joiner"] = runs["Joiner"].finish()
@@ -484,10 +541,10 @@ def main():
                   [(d, f, v) for d, f, v in TALL_HOST_MODS], phase="tall")
             wait_for_log(runs["TallHost"], "activate ButtonMultiplayerCreate ok=1")
             tall_script = ("wait_state Failed\nwait 5\nassert_substate Landing\n"
-                           "assert_label %s yours\nscreenshot tall-t0\nwait_ms 9000\n"
-                           "screenshot tall-t1\nwait_ms 9000\nscreenshot tall-t2\n"
-                           "post_command ButtonBackToMain\nwait 12\n"
-                           "assert_screen MainScreen\nexit\n" % LABEL)
+                           "assert_label %s yours\nscreenshot tall-t0\n" % LABEL +
+                           "".join("wait_ms 750\nscreenshot tall-t%d\n" % n for n in range(1, 9)) +
+                           "post_command ButtonBackToMain\nwait 12\nscreenshot post-back\n"
+                           "assert_screen MainScreen\nexit\n")
             start("TallJoiner", False, options.port + 1, tall_script,
                   [(d, f, v) for d, f, v in TALL_JOINER_MODS], phase="tall")
             records["TallJoiner"] = runs["TallJoiner"].finish()
@@ -499,7 +556,7 @@ def main():
             tall_shots = sorted((root / "tall" / "TallJoiner" / "runtime/ScreenShots").glob("tall-t*_*.png"))
             details["tall_screenshots"] = [str(p) for p in tall_shots]
             checks["tall_landed"] = "assert_substate expected=Landing actual=Landing PASS" in tall_log
-            checks["tall_shot_count"] = len(tall_shots) == 3
+            checks["tall_shot_count"] = len(tall_shots) == 9
             checks["tall_back_command_posted"] = "post_command ButtonBackToMain ok=1" in tall_log
             checks["tall_returned_to_main"] = "assert_screen expected=MainScreen actual=MainScreen PASS" in tall_log
         else:
@@ -524,7 +581,7 @@ def main():
             seam_script = ("wait_state Failed\nwait 5\nassert_substate Landing\n"
                            "assert_label %s yours\nscreenshot seam-t0\nwait_ms 3000\n"
                            "screenshot seam-t1\npost_command ButtonBackToMain\nwait 12\n"
-                           "assert_screen MainScreen\nexit\n" % LABEL)
+                           "screenshot post-back\nassert_screen MainScreen\nexit\n" % LABEL)
             start(tag + "Joiner", False, options.port + 2 + attempt * 3, seam_script,
                   [(BASE_NAME, "Base1"), (seam_name, "Seam")], phase="seam")
             records[tag + "Joiner"] = runs[tag + "Joiner"].finish()
@@ -763,6 +820,32 @@ def main():
                 for key in ("seam_panel_is_seam_width", "seam_right_column_filled",
                             "seam_bottom_row_filled"):
                     checks[key] = False
+
+        # The Back press is only proven by what the screen shows after it: each
+        # arm's post-back frame is compared against the same run's main-start
+        # reference, so a withheld command leaves the multiplayer panel in view.
+        post_back_details = {}
+        post_back_ok = []
+        seam_keep = "SeamB" if (len(seam_logs) > 1 and seam_width and seam_width % 8 == 5) else "Seam"
+        for arm, run_dir in (("viewport", root / "viewport" / "Joiner"),
+                             ("tall", root / "tall" / "TallJoiner"),
+                             ("seam", root / "seam" / (seam_keep + "Joiner"))):
+            shot_dir = run_dir / "runtime" / "ScreenShots"
+            post = sorted(shot_dir.glob("post-back_*.png"))
+            ref = sorted(shot_dir.glob("main-start_*.png"))
+            if not post or not ref:
+                post_back_details[arm] = {"reason": "missing post-back or main-start capture",
+                                          "post_back": [str(p) for p in post],
+                                          "main_start": [str(p) for p in ref]}
+                post_back_ok.append(False)
+                continue
+            ok, info = post_back_is_main(post[-1], ref[-1])
+            info["post_back"] = str(post[-1])
+            info["main_start"] = str(ref[-1])
+            post_back_details[arm] = info
+            post_back_ok.append(bool(ok))
+        details["post_back"] = post_back_details
+        checks["post_back_main_screen"] = all(post_back_ok) and bool(post_back_ok)
 
         result["pin_after"] = require_pin(repo, options.exe_sha256, before, checks, "final")
         result.update({"checks": checks, "details": details})
