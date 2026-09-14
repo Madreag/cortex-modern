@@ -293,7 +293,9 @@ Vector FrameMan::GetMiddleOfPlayerScreen(int whichPlayer) {
 	if (whichPlayer == -1) {
 		middleOfPlayerScreen.SetXY(static_cast<float>(g_WindowMan.GetResX() / 2), static_cast<float>(g_WindowMan.GetResY() / 2));
 	} else {
-		int playerScreen = g_ActivityMan.GetActivity()->ScreenOfPlayer(whichPlayer);
+		const Activity* activity = g_ActivityMan.GetActivity();
+		const int playerScreen = activity ? activity->ScreenOfPlayer(whichPlayer) : -1;
+		if (playerScreen < 0) return Vector();
 
 		middleOfPlayerScreen.SetXY(static_cast<float>(m_PlayerScreenWidth / 2), static_cast<float>(m_PlayerScreenHeight / 2));
 		if ((playerScreen == 1 && g_FrameMan.GetVSplit()) || playerScreen == 3) {

@@ -316,7 +316,7 @@ namespace RTE {
 		/// Gets the current team a specific player belongs to.
 		/// @param player The player to get the team info on.
 		/// @return The team number of the specified player.
-		int GetTeamOfPlayer(int player) const { return m_Team[player]; }
+		int GetTeamOfPlayer(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount ? m_Team[player] : Teams::NoTeam; }
 
 		/// Sets the current team a specific player belongs to.
 		/// @param player The player to set the team for.
@@ -336,17 +336,17 @@ namespace RTE {
 		/// Gets the current viewing state for a specific player. See the ViewState enumeration for values.
 		/// @param whichPlayer Which player to get the view state for.
 		/// @return The current viewing state of the player.
-		ViewState GetViewState(int whichPlayer = 0) const { return m_ViewState[whichPlayer]; }
+		ViewState GetViewState(int whichPlayer = 0) const { return LocalInputOfPlayer(whichPlayer) != Players::NoPlayer ? m_ViewState[whichPlayer] : ViewState::Observe; }
 
 		/// Sets the current viewing state for a specific player. See the ViewState enumeration for values.
 		/// @param whichViewState The state to set to.
 		/// @param whichPlayer Which player to set the view state for.
-		void SetViewState(ViewState whichViewState, int whichPlayer = 0) { m_ViewState[whichPlayer] = whichViewState; }
+		void SetViewState(ViewState whichViewState, int whichPlayer = 0) { if (LocalInputOfPlayer(whichPlayer) != Players::NoPlayer) m_ViewState[whichPlayer] = whichViewState; }
 
 		/// Resets the message timer for one player.
 		/// @param player The player to reset the message timer for.
 		void ResetMessageTimer(int player = 0) {
-			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount) {
+			if (LocalInputOfPlayer(player) != Players::NoPlayer) {
 				m_MessageTimer[player].Reset();
 			}
 		}

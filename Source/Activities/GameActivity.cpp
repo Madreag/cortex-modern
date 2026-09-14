@@ -375,17 +375,18 @@ bool GameActivity::IsBuyGUIVisible(int which) const {
 		const int playerLimit = m_SharedPlayerSeats ? Players::MaxPlayerCount : GetPlayerCount();
 		for (int player = Players::PlayerOne; player < playerLimit; player++) {
 			if (m_SharedPlayerSeats && !(IsSeatActive(player) && IsLocalHumanSeat(player))) continue;
-			if (GetBuyGUI(player)->IsVisible()) {
+			if (const BuyMenuGUI* menu = GetBuyGUI(player); menu && menu->IsVisible()) {
 				return true;
 			}
 		}
 		return false;
 	}
-	return this->GetBuyGUI(which)->IsVisible();
+	const BuyMenuGUI* menu = GetBuyGUI(which);
+	return menu && menu->IsVisible();
 }
 
 bool GameActivity::LockControlledActor(Players player, bool lock, Controller::InputMode lockToMode) {
-	if (player >= Players::PlayerOne && player < Players::MaxPlayerCount) {
+	if (LocalInputOfPlayer(player) != Players::NoPlayer) {
 		bool prevLock = m_LuaLockActor[player];
 		m_LuaLockActor[player] = lock;
 		m_LuaLockActorMode[player] = lockToMode;
@@ -439,7 +440,7 @@ void GameActivity::YSortObjectivePoints() {
 }
 
 int GameActivity::AddOverridePurchase(const SceneObject* pPurchase, int player) {
-	if (player >= Players::PlayerOne && player < Players::MaxPlayerCount) {
+	if (LocalInputOfPlayer(player) != Players::NoPlayer) {
 		// Add to purchase list if valid item
 		if (pPurchase) {
 			// Get the preset of this instance passed in, so we make sure we are only storing non-owned instances
@@ -471,6 +472,7 @@ int GameActivity::AddOverridePurchase(const SceneObject* pPurchase, int player) 
 }
 
 int GameActivity::SetOverridePurchaseList(const Loadout* pLoadout, int player) {
+	if (LocalInputOfPlayer(player) == Players::NoPlayer) return 0;
 	// First clear out the list
 	ClearOverridePurchase(player);
 
@@ -511,6 +513,7 @@ int GameActivity::SetOverridePurchaseList(const Loadout* pLoadout, int player) {
 }
 
 int GameActivity::SetOverridePurchaseList(const std::string& loadoutName, int player) {
+	if (LocalInputOfPlayer(player) == Players::NoPlayer) return 0;
 	// Find out the native module of this player
 	int nativeModule = 0;
 	MetaPlayer* pMetaPlayer = g_MetaMan.GetMetaPlayerOfInGamePlayer(player);
@@ -528,6 +531,8 @@ int GameActivity::SetOverridePurchaseList(const std::string& loadoutName, int pl
 }
 
 bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor* pTargetMO) {
+	if (LocalInputOfPlayer(player) == Players::NoPlayer) return false;
+	if (!m_pBuyGUI[player]) return false;
 	int team = m_Team[player];
 	if (team == Teams::NoTeam)
 		return false;
