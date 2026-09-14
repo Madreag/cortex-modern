@@ -475,9 +475,6 @@ namespace RTE {
 		static constexpr size_t c_MaxControlPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxDisplayNameBytes = 64;
 		static constexpr size_t c_MaxShortTextBytes = 128;
-		// A chat line is a whole sentence, not a name, so it gets its own bound; the codec drops
-		// anything past it and the session strips control bytes before they ever reach the wire.
-		static constexpr size_t c_MaxChatTextBytes = 256;
 		static constexpr size_t c_MaxDiagnosticTextBytes = 512;
 		// An admission message comes from a connection nobody has authenticated yet, so it is refused
 		// on size before anything parses it. The largest H4 message is a Reclaim at ~498 B.
