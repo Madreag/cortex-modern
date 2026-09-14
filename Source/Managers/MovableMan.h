@@ -57,7 +57,7 @@ namespace RTE {
 			m_Team = Activity::NoTeam;
 			m_Range = 1.0F;
 		}
-		// TODO: Stop relying on screen width for this shit!
+		// The range is scaled by the default player screen width, not the local one: this is shared sim state.
 		AlarmEvent(const Vector& pos, int team = Activity::NoTeam, float range = 1.0F);
 
 		// Absolute position in the scene where this occurred
