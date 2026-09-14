@@ -1153,6 +1153,10 @@ void GameActivity::Update() {
 		return;
 	}
 
+	// A local view's pie animations write state every peer's sim reads and dumps, and only this peer is
+	// in that view; under lockstep they ride the synchronized controller instead.
+	const bool localPieAnimations = !ScenarioRunner::IsLockstepControllerSyncActive();
+
 	///////////////////////////////////////////
 	// Iterate through all human players
 
@@ -1243,7 +1247,7 @@ void GameActivity::Update() {
 			} else if (m_PlayerController[player].IsState(ACTOR_NEXT) && m_ViewState[player] != ViewState::ActorSelect && !m_pBuyGUI[player]->IsVisible() && !m_LuaLockActor[player]) {
 				// Switch to next actor if the player wants to. Don't do it while the buy menu is open
 				// The synchronized actor controller closes shared pie state.
-				if (!ScenarioRunner::IsLockstepControllerSyncActive() && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
+				if (localPieAnimations && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
 					m_ControlledActor[player]->GetPieMenu()->SetEnabled(false);
 				}
 
@@ -1253,7 +1257,7 @@ void GameActivity::Update() {
 			}
 			// Switch to prev actor if the player wants to. Don't do it while the buy menu is open
 			else if (m_PlayerController[player].IsState(ACTOR_PREV) && m_ViewState[player] != ViewState::ActorSelect && !m_pBuyGUI[player]->IsVisible()) {
-				if (!ScenarioRunner::IsLockstepControllerSyncActive() && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
+				if (localPieAnimations && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
 					m_ControlledActor[player]->GetPieMenu()->SetEnabled(false);
 				}
 
@@ -1318,12 +1322,13 @@ void GameActivity::Update() {
 				m_ViewState[player] = ViewState::Normal;
 				g_GUISound.UserErrorSound()->Play(player);
 				if (m_ControlledActor[player]) {
-					if (m_ControlledActor[player]->GetPieMenu()) {
+					// The seat comes back on the committed frame, which plays this animation on every peer.
+					if (localPieAnimations && m_ControlledActor[player]->GetPieMenu()) {
 						m_ControlledActor[player]->GetPieMenu()->DoDisableAnimation();
 					}
 					m_ControlledActor[player]->SetControllerMode(Controller::CIM_PLAYER, player);
 				}
-				if (pMarkedActor && pMarkedActor->GetPieMenu()) {
+				if (localPieAnimations && pMarkedActor && pMarkedActor->GetPieMenu()) {
 					pMarkedActor->GetPieMenu()->DoDisableAnimation();
 				}
 			}
@@ -1343,10 +1348,10 @@ void GameActivity::Update() {
 				m_ViewState[player] = ViewState::Normal;
 				g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
 				// Flash the same actor, jsut to show the control went back to him
-				if (m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
+				if (localPieAnimations && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
 					m_ControlledActor[player]->GetPieMenu()->DoDisableAnimation();
 				}
-			} else if (pMarkedActor && pMarkedActor->GetPieMenu()) {
+			} else if (localPieAnimations && pMarkedActor && pMarkedActor->GetPieMenu()) {
 				int quarterFrameBuffer = g_FrameMan.GetPlayerFrameBufferWidth(player) / 4;
 				if (markedDistance.MagnitudeIsGreaterThan(static_cast<float>(quarterFrameBuffer))) {
 					pMarkedActor->GetPieMenu()->Wobble();
@@ -1362,7 +1367,7 @@ void GameActivity::Update() {
 			if (m_pLastMarkedActor[player]) {
 				if (!g_MovableMan.ValidMO(m_pLastMarkedActor[player])) {
 					m_pLastMarkedActor[player] = nullptr;
-				} else if (m_pLastMarkedActor[player] != pMarkedActor && m_pLastMarkedActor[player]->GetPieMenu()) {
+				} else if (localPieAnimations && m_pLastMarkedActor[player] != pMarkedActor && m_pLastMarkedActor[player]->GetPieMenu()) {
 					m_pLastMarkedActor[player]->GetPieMenu()->SetAnimationModeToNormal();
 				}
 			}
@@ -1384,12 +1389,14 @@ void GameActivity::Update() {
 			Actor* pTargetActor = 0;
 			Vector distance;
 			if (pTargetActor = g_MovableMan.GetClosestActor(m_ActorCursor[player], 40, distance, m_ControlledActor[player]); pTargetActor && pTargetActor->GetPieMenu()) {
-				if (m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
-					m_pLastMarkedActor[player]->GetPieMenu()->SetAnimationModeToNormal();
+				if (localPieAnimations) {
+					if (m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
+						m_pLastMarkedActor[player]->GetPieMenu()->SetAnimationModeToNormal();
+					}
+					pTargetActor->GetPieMenu()->FreezeAtRadius(15);
 				}
-				pTargetActor->GetPieMenu()->FreezeAtRadius(15);
 				m_pLastMarkedActor[player] = pTargetActor;
-			} else if (m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
+			} else if (localPieAnimations && m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
 				m_pLastMarkedActor[player]->GetPieMenu()->SetAnimationModeToNormal();
 			}
 
@@ -1413,7 +1420,7 @@ void GameActivity::Update() {
 				m_ViewState[player] = ViewState::Normal;
 				// Stop displaying the message
 				g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
-				if (m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
+				if (localPieAnimations && m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
 					m_pLastMarkedActor[player]->GetPieMenu()->SetAnimationModeToNormal();
 				}
 			}
@@ -1430,7 +1437,7 @@ void GameActivity::Update() {
 					m_ControlledActor[player]->AddAISceneWaypoint(m_ActorCursor[player]);
 				}
 
-				if (m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
+				if (localPieAnimations && m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
 					m_pLastMarkedActor[player]->GetPieMenu()->SetAnimationModeToNormal();
 				}
 			}
@@ -1573,7 +1580,8 @@ void GameActivity::Update() {
 				m_MessageTimer[player].Reset();
 				g_GUISound.UserErrorSound()->Play(player);
 				// Flash the same actor, jsut to show the control went back to him
-				if (m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
+				// Leaving the view hands the seat back on the committed frame, which flashes it on every peer.
+				if (localPieAnimations && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
 					m_ControlledActor[player]->GetPieMenu()->DoDisableAnimation();
 				}
 			} else if (m_PlayerController[player].IsState(PRESS_FACEBUTTON) || m_PlayerController[player].IsState(PRESS_PRIMARY)) {
@@ -1589,7 +1597,7 @@ void GameActivity::Update() {
 						m_ViewState[player] = ViewState::Normal;
 					}
 					g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
-					if (m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
+					if (localPieAnimations && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
 						m_ControlledActor[player]->GetPieMenu()->DoDisableAnimation();
 					}
 
