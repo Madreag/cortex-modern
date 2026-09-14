@@ -46,6 +46,7 @@ Activity::~Activity() {
 
 void Activity::Clear() {
 	m_PendingRuntimeCheckpoint.clear();
+	m_BrainRecordReconciled = false;
 	m_CheckpointActorIDs = {};
 	m_HasCheckpointActorIDs = false;
 	m_ActivityState = ActivityState::NotStarted;
@@ -638,7 +639,9 @@ void Activity::SetPlayerBrain(Actor* newBrain, int player) {
 		m_HadBrain[player] = true;
 	}
 	// A human seat's brain also goes into the shared record, which every peer holds for every seat.
-	if (player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_IsHuman[player]) {
+	// Whether the seat is human comes from the synced roster in a match, never from this machine's seats.
+	const bool seated = player >= Players::PlayerOne && player < Players::MaxPlayerCount;
+	if (seated && (ScenarioRunner::IsLockstepControllerSyncActive() ? ScenarioRunner::IsLockstepHumanTeam(m_Team[player]) : m_IsHuman[player])) {
 		if (m_Brain[player] && m_Brain[player] != newBrain && !IsOtherPlayerBrain(m_Brain[player], player)) {
 			g_MovableMan.NotePlayerBrain(m_Brain[player]->GetUniqueID(), false);
 		}
@@ -1059,6 +1062,11 @@ void Activity::UpdatePlayerBrainRecord() {
 		}
 		if (brain) {
 			g_MovableMan.NotePlayerBrain(brain->GetUniqueID(), true);
+			// The fallback guesses a seat this machine does not hold; say so once so a run shows it was needed.
+			if (!m_BrainRecordReconciled) {
+				m_BrainRecordReconciled = true;
+				std::cout << "[brain-record] reconciled team=" << team << " uid=" << brain->GetUniqueID() << std::endl;
+			}
 		}
 	}
 }
