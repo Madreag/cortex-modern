@@ -96,6 +96,10 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerLobbyPlayerLabels.fill(nullptr);
 	m_MultiplayerLobbyPortMapLabel = nullptr;
 	m_PortMapSerialShown = 0;
+	m_MultiplayerLobbyChatLabels.fill(nullptr);
+	m_MultiplayerLobbyChatInput = nullptr;
+	m_MultiplayerLobbyChatLines.clear();
+	m_MultiplayerScreenBaselineY = 0;
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 	m_ReconnectStatusShown.clear();
 	m_PendingAutomationCommand.clear();
@@ -227,6 +231,28 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 
 	m_MultiplayerLobbyPlayerRowFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontLarge.png");
 	m_MultiplayerLobbyPlayerRowFallbackFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png");
+
+	// The lobby's chat lives below the Leave/Seats row: eight FontSmall lines and one entry box.
+	// They are created here rather than in the ini so the panel can grow for them without touching
+	// the skin the other sub-screens share.
+	m_MultiplayerScreenBaselineY = m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetRelYPos();
+	GUIFont* chatFont = m_SubMenuScreenGUIControlManager->GetSkin() ? m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png") : nullptr;
+	for (size_t row = 0; row < m_MultiplayerLobbyChatLabels.size(); ++row) {
+		m_MultiplayerLobbyChatLabels[row] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->AddControl(
+		    "LabelLobbyChat" + std::to_string(row), "LABEL", m_MultiplayerLobbyPanel, 8, 0, 284, 10));
+		if (m_MultiplayerLobbyChatLabels[row]) {
+			if (chatFont) m_MultiplayerLobbyChatLabels[row]->SetFont(chatFont);
+			m_MultiplayerLobbyChatLabels[row]->SetVAlignment(GUIFont::Middle);
+			m_MultiplayerLobbyChatLabels[row]->SetVisible(false);
+		}
+	}
+	m_MultiplayerLobbyChatInput = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->AddControl(
+	    "TextLobbyChat", "TEXTBOX", m_MultiplayerLobbyPanel, 8, 0, 284, 13));
+	if (m_MultiplayerLobbyChatInput) {
+		if (chatFont) m_MultiplayerLobbyChatInput->SetFont(chatFont);
+		m_MultiplayerLobbyChatInput->SetMaxTextLength(static_cast<int>(NetProtocol::c_MaxShortTextBytes));
+		m_MultiplayerLobbyChatInput->SetVisible(false);
+	}
 
 	m_MultiplayerModerationSummaryLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationSummary"));
 	m_MultiplayerModerationStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationStatus"));
@@ -612,9 +638,26 @@ bool MainMenuGUI::HandleInputEvents() {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUICheckbox::Changed && guiEvent.GetControl() == m_MultiplayerHostPortMapCheckbox) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
+		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUITextBox::Enter && guiEvent.GetControl() == m_MultiplayerLobbyChatInput) {
+			SendLobbyChat();
 		}
 	}
 	return false;
+}
+
+void MainMenuGUI::SendLobbyChat() {
+	if (!m_MultiplayerLobbyChatInput) {
+		return;
+	}
+	const std::string text = m_MultiplayerLobbyChatInput->GetText();
+	if (text.empty()) {
+		return;
+	}
+	const int modifier = m_SubMenuScreenGUIControlManager->GetManager()->GetInputController()->GetModifier();
+	const uint8_t scope = (modifier & GUIPanel::MODI_CTRL) ? c_NetChatScopeTeam : c_NetChatScopeAll;
+	if (g_NetMatchService.SendChat(scope, text)) {
+		m_MultiplayerLobbyChatInput->SetText("");
+	}
 }
 
 void MainMenuGUI::HandleMainScreenInputEvents(const GUIControl* guiEventControl) {
@@ -1004,6 +1047,12 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		RefreshModerationControls(snapshot);
 	}
 	if (!lobby) {
+		for (GUILabel* label : m_MultiplayerLobbyChatLabels) {
+			if (label) label->SetVisible(false);
+		}
+		if (m_MultiplayerLobbyChatInput) {
+			m_MultiplayerLobbyChatInput->SetVisible(false);
+		}
 		int contentWidth = 300;
 		int contentHeight = 250;
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
@@ -1133,7 +1182,13 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MultiplayerErrorLabel->EnsureDrawableTextFont("FontSmall.png");
 	const int desiredWidth = std::max(300, std::max(m_MultiplayerErrorLabel->GetMaxWordWidth(), widestRowText) + 24);
 	const int contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
-	const std::vector<GUILabel*> playerRowLabels(m_MultiplayerLobbyPlayerLabels.begin(), m_MultiplayerLobbyPlayerLabels.end());
+	std::vector<GUILabel*> playerRowLabels(m_MultiplayerLobbyPlayerLabels.begin(), m_MultiplayerLobbyPlayerLabels.end());
+	// Chat labels fill like the player rows when the panel widens (X=12, W=contentWidth-24).
+	for (GUILabel* label : m_MultiplayerLobbyChatLabels) {
+		if (label) {
+			playerRowLabels.push_back(label);
+		}
+	}
 	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth, playerRowLabels);
 	if (m_MultiplayerLobbyPlayersHeader) {
 		m_MultiplayerLobbyPlayersHeader->SetPositionRel(contentWidth > 300 ? 24 : 20, m_MultiplayerLobbyPlayersHeader->GetRelYPos());
@@ -1164,25 +1219,91 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		label->SetText(fitRow(lobbyRowName[i], lobbyRowTailFull[i], lobbyRowTailMarked[i]));
 		label->EnsureDrawableTextFont("FontSmall.png");
 	}
+	// The port-map row sits under the wrapped status, so the error starts below both.
 	m_MultiplayerErrorLabel->SetPositionRel(12, 162 + statusExtra + portMapHeight);
+	// The screen must stay inside the viewport. Error, status and port-map rows keep every pixel
+	// their room allows (overflow scrolls); the chat block is the one piece that yields - a row at
+	// a time - before any of them do.
 	const int backReserve = m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
-	const int errorRoom = std::max(24, g_WindowMan.GetResY() - backReserve - 250 + 24 - statusExtra - portMapHeight);
-	// Same accessibility rule as the landing status: wide token scrolls horizontally, tall text vertically.
+	const int fixedExtra = statusExtra + portMapHeight;
+	const int panelCap = g_WindowMan.GetResY() - 24; // the Back button's band sits under the panel
+	const int inputBlock = 25;                     // textbox 13 px + a bottom margin matching its sides
+	// Same accessibility rule as the landing status: wide token scrolls horizontally, tall text
+	// vertically. The chat input row always stays, so the error's room never reaches into it.
+	const int errorRoom = std::min(
+	    std::max(24, g_WindowMan.GetResY() - backReserve - 250 + 24 - fixedExtra),
+	    std::max(0, panelCap - 241 - fixedExtra - inputBlock));
 	const bool scrollWide = desiredWidth > contentWidth;
 	m_MultiplayerErrorLabel->SetHorizontalOverflowScroll(scrollWide);
 	const int errorHeight = std::max(24, std::min(m_MultiplayerErrorLabel->GetTextHeight() + 4, errorRoom));
 	const bool scrollTall = !scrollWide && m_MultiplayerErrorLabel->GetTextHeight() + 4 > errorRoom;
 	m_MultiplayerErrorLabel->SetVerticalOverflowScroll(scrollTall);
 	m_MultiplayerErrorLabel->ActivateDeactivateOverflowScroll(scrollWide || scrollTall);
-	const int extraHeight = statusExtra + errorHeight - 24 + portMapHeight;
+	const int extraHeight = fixedExtra + errorHeight - 24;
 	if (m_MultiplayerErrorLabel->GetHeight() != errorHeight) {
 		m_MultiplayerErrorLabel->Resize(m_MultiplayerErrorLabel->GetWidth(), errorHeight);
 	}
-	const int contentHeight = 250 + extraHeight;
+	// A shrunken box still reads top-down: Middle would anchor a tall error on its middle lines.
+	m_MultiplayerErrorLabel->SetVAlignment(
+	    m_MultiplayerErrorLabel->GetTextHeight() > errorHeight ? GUIFont::Top : GUIFont::Middle);
+	const int chatTop = 241 + extraHeight;
+	const int chatRows = std::min<int>(m_MultiplayerLobbyChatLabels.size(),
+	                                   std::max(0, (panelCap - chatTop - inputBlock) / 10));
+	const int contentHeight = chatTop + chatRows * 10 + inputBlock;
+
+	// The newest chatRows lines, oldest on top; the entry box takes Enter for All, Ctrl+Enter for
+	// Team. Team lines indent two cells as well as carrying their [team] mark.
+	for (const NetChatEntry& entry : g_NetMatchService.TakeChatEntries()) {
+		std::string name = entry.senderName;
+		if (name.empty()) {
+			for (const NetLobbyMember& member : snapshot.members) {
+				if (member.peerId == entry.senderPeerId + 1) {
+					name = member.displayName;
+					break;
+				}
+			}
+		}
+		if (name.empty()) {
+			name = "Player " + std::to_string(entry.senderPeerId + 1);
+		}
+		m_MultiplayerLobbyChatLines.push_back(std::string(entry.scope == c_NetChatScopeTeam ? "  [team] " : "") + name + ": " + entry.text);
+		while (m_MultiplayerLobbyChatLines.size() > m_MultiplayerLobbyChatLabels.size()) {
+			m_MultiplayerLobbyChatLines.pop_front();
+		}
+	}
+	// Lines sit bottom-aligned above the input: the newest line is always the lowest drawn row.
+	const size_t chatOffset = m_MultiplayerLobbyChatLines.size() > static_cast<size_t>(chatRows)
+	                              ? m_MultiplayerLobbyChatLines.size() - chatRows : 0;
+	const size_t firstLineRow = m_MultiplayerLobbyChatLines.size() - chatOffset < static_cast<size_t>(chatRows)
+	                                ? static_cast<size_t>(chatRows) - (m_MultiplayerLobbyChatLines.size() - chatOffset) : 0;
+	// Chat follows the player rows' convention: X=8 (their ini spot) at the base width, X=12 once
+	// FitMultiplayerPanelWidth's fill rule has moved the rows. Width keeps the margin symmetric.
+	const int chatX = contentWidth > 300 ? 12 : 8;
+	const int chatW = contentWidth - 2 * chatX;
+	for (size_t row = 0; row < m_MultiplayerLobbyChatLabels.size(); ++row) {
+		GUILabel* label = m_MultiplayerLobbyChatLabels[row];
+		if (!label) continue;
+		const bool drawn = row < static_cast<size_t>(chatRows) && row >= firstLineRow;
+		label->SetText(drawn ? m_MultiplayerLobbyChatLines[chatOffset + row - firstLineRow] : "");
+		// FontSmall's cells are 10px, so the rows pitch at the measured height, not the label's skin one.
+		label->SetPositionRel(chatX, chatTop + static_cast<int>(row) * 10);
+		if (label->GetWidth() != chatW) {
+			label->Resize(chatW, 10);
+		}
+		label->SetVisible(row < static_cast<size_t>(chatRows));
+	}
+	if (m_MultiplayerLobbyChatInput) {
+		m_MultiplayerLobbyChatInput->SetPositionRel(chatX, chatTop + chatRows * 10);
+		if (m_MultiplayerLobbyChatInput->GetWidth() != chatW) {
+			m_MultiplayerLobbyChatInput->Resize(chatW, 13);
+		}
+		m_MultiplayerLobbyChatInput->SetVisible(true);
+	}
+
 	if (m_MultiplayerLobbyPanel->GetHeight() != contentHeight) {
 		m_MultiplayerLobbyPanel->Resize(contentWidth, contentHeight);
 	}
-	const int screenHeight = contentHeight + m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
+	const int screenHeight = contentHeight + backReserve;
 	FitMultiplayerScreen(contentWidth, screenHeight);
 	const int buttonShift = (contentWidth - 300) / 2;
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55 + buttonShift, 192 + extraHeight);

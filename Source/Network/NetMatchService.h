@@ -267,6 +267,11 @@ namespace RTE {
 		};
 		PortMapStatus GetPortMapStatus() const;
 		NetLobbySnapshot GetLobbySnapshot() const;
+		/// Local chat send, presentation only. Reaches the session whether the lobby is still running
+		/// on the worker or the match has handed it back; false when no session link exists.
+		bool SendChat(uint8_t scope, const std::string& text);
+		/// Drains the session's chat queue for the UI. Newest 64 are kept on the session side.
+		std::vector<NetChatEntry> TakeChatEntries();
 		/// "Input delay: N (auto, Rms ping)" / "(fixed)", from the announced match config. "" pre-lobby.
 		std::string GetInputDelayText() const;
 		std::string GetStatusText() const;
@@ -489,6 +494,9 @@ namespace RTE {
 		bool m_PendingLobbyOverflow = false;
 		bool m_LeftMatch = false;
 		uint64_t m_EndedLockstepPackets = 0;
+		// Non-owning view of the live session object: while the runner's worker still owns it
+		// (the whole lobby phase) m_Session is empty, but chat must already reach it.
+		NetSession* m_ChatSession = nullptr;
 		std::vector<NetTransportEvent> m_PendingSessionEvents; //!< Game-thread only: reconnect traffic the coordinator handed over.
 		//!< Coordinator counters a resync would otherwise zero, accumulated at every teardown.
 		struct LockstepTotals {

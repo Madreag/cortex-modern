@@ -1006,6 +1006,7 @@ static std::string ResyncSaveName() {
 			coordinator = std::move(m_Coordinator);
 			session = std::move(m_Session);
 			transport = std::move(m_Transport);
+			m_ChatSession = nullptr;
 			m_WorkerDone = false;
 			m_IsHost = false;
 			m_LocalPeerId = 0;
@@ -1074,6 +1075,7 @@ static std::string ResyncSaveName() {
 			coordinator = std::move(m_Coordinator);
 			session = std::move(m_Session);
 			transport = std::move(m_Transport);
+			m_ChatSession = nullptr;
 			m_WorkerDone = false;
 			m_IsHost = false;
 			m_LocalPeerId = 0;
@@ -1660,6 +1662,17 @@ static std::string ResyncSaveName() {
 			}
 		}
 		PumpSeatPresence();
+		{
+			// The stamp must track the sim even on ticks that carry no session events, or a send
+			// between heartbeats would date a chat line by the last heartbeat's frame.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_Session && m_Coordinator && m_State == NetMatchServiceState::Running) {
+				m_Session->SetLockstepFrame(m_Coordinator->GetStats().nextFrame);
+				// The coordinator owns the transport queue mid-match, so this pump is the only
+				// driver that ever drains the session's chat outbox here.
+				m_Session->PumpChatOutbox();
+			}
+		}
 		const bool hostAdmission = m_AdmissionAttached && m_IsHost;
 		const bool holdPause = m_Coordinator && m_Coordinator->AnyDroppedSeatHeld();
 		if (m_PendingSessionEvents.empty() && !hostAdmission && !holdPause) {
@@ -1677,10 +1690,11 @@ static std::string ResyncSaveName() {
 		// This is the sim thread inside the tick, so the drop-frame ownership census may walk the world
 		// here and nowhere else. The scope is what makes that a checked property rather than a comment.
 		const SimCensusScope censusScope;
+		// Chat entries stamp the frame they arrived on, on every peer, not only the host's plane.
+		m_Session->SetLockstepFrame(m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0);
 		if (hostAdmission) {
 			// Phase A: a ticketless join into a running match is refused; a returning holder proves.
 			m_ReconnectHost.SetLiveMatch(true);
-			m_Session->SetLockstepFrame(m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0);
 		}
 		const uint64_t nowMs = AdmissionNowMs();
 		// F1.5: the two clocks must be one. Sampled here, at the pump, because the report is written
@@ -1826,6 +1840,16 @@ static std::string ResyncSaveName() {
 			member.statusLine = m_SeatPresence.Line(member.peerId, member.displayName);
 		}
 		return snapshot;
+	}
+
+	bool NetMatchService::SendChat(uint8_t scope, const std::string& text) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_ChatSession && m_ChatSession->SendChat(scope, text);
+	}
+
+	std::vector<NetChatEntry> NetMatchService::TakeChatEntries() {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_ChatSession ? m_ChatSession->TakeChatEntries() : std::vector<NetChatEntry>{};
 	}
 
 	std::string NetMatchService::GetInputDelayText() const {
@@ -2296,6 +2320,8 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			iceWanted = m_IceEnabled;
+			// The worker owns the session through the whole lobby; chat still needs to reach it.
+			m_ChatSession = session.get();
 		}
 		std::unique_ptr<NetMuxTransport> mux;
 		INetTransport* wire = transport.get();
@@ -2341,6 +2367,17 @@ static std::string ResyncSaveName() {
 			}
 			m_InputDelayText = "Input delay: " + std::to_string(NetMatchConfigUtil::PeerInputDelay(config, localPeerId)) +
 			    (config.peerInputDelayFrames.empty() ? " (fixed)" : " (auto, " + std::to_string(pingMs) + "ms ping)");
+			if (m_ChatSession) {
+				// The roster's lockstep ids are the session's assigned ids plus one; the host relays
+				// team scope only inside the sender's team.
+				std::map<uint8_t, int> chatTeams;
+				for (const NetMatchPlayerSlot& slot : config.players) {
+					if (!slot.cpu && slot.peerId > 0) {
+						chatTeams[static_cast<uint8_t>(slot.peerId - 1)] = slot.team;
+					}
+				}
+				m_ChatSession->SetChatTeams(std::move(chatTeams));
+			}
 		};
 
 		// One clock from here on: setup, play, stalls and every resync read the same elapsed time.
