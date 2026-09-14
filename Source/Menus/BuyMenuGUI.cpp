@@ -265,6 +265,11 @@ int BuyMenuGUI::Create(Controller* pController) {
 	return 0;
 }
 
+bool BuyMenuGUI::HasLiveCachedControls() {
+	return m_pGUIController && m_pParentBox == m_pGUIController->GetControl("BuyGUIBox") && m_Banner == m_pGUIController->GetControl("CatalogHeader") &&
+	       m_Logo == m_pGUIController->GetControl("CatalogLogo") && m_pPopupBox == m_pGUIController->GetControl("BuyGUIPopup") && m_pPopupText == m_pGUIController->GetControl("PopupText");
+}
+
 void BuyMenuGUI::Destroy() {
 	delete m_pGUIController;
 	delete m_pGUIInput;
