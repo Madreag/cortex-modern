@@ -1419,7 +1419,7 @@ void ProcessMenuScript() {
 		// keeps the frame budget it has always had.
 		const bool expired = waitCondDeadlineMs != 0 ? MenuScriptNowMs() >= waitCondDeadlineMs : --waitCondTimeout <= 0;
 		if (met || expired) {
-			std::cout << "[menu-script] " << waitCond << " -> " << (met ? "OK" : "TIMEOUT") << " (members=" << snapshot.members.size() << " state=" << snapshot.serviceState << ")" << std::endl;
+			std::cout << std::format("[menu-script] {} -> {} (members={} state={})\n", waitCond, met ? "OK" : "TIMEOUT", snapshot.members.size(), snapshot.serviceState) << std::flush;
 			if (!met) { return MenuScriptFail("condition wait timed out: " + waitCond); }
 			waitCond.clear();
 			waitCondDeadlineMs = 0;
