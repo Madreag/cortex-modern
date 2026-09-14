@@ -346,6 +346,16 @@ int Activity::Start() {
 		m_TeamDeaths[team] = 0;
 	}
 
+	// A peer only seats its own players, so record every lockstep seat's brain here: shared decisions
+	// about a player's brain have to read the same set on every peer.
+	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
+		if (ScenarioRunner::IsLockstepActiveTeam(team)) {
+			if (const Actor* brain = g_MovableMan.GetUnassignedBrain(team)) {
+				g_MovableMan.NotePlayerBrain(brain->GetUniqueID(), true);
+			}
+		}
+	}
+
 	// Intentionally doing all players, all need controllers
 	std::vector<int> playerControlled;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
@@ -637,7 +647,60 @@ void Activity::SetPlayerBrain(Actor* newBrain, int player) {
 		}
 		m_HadBrain[player] = true;
 	}
+	// A human seat's brain also goes into the shared record, which every peer holds for every seat.
+	if (player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_IsHuman[player]) {
+		if (m_Brain[player] && m_Brain[player] != newBrain && !IsOtherPlayerBrain(m_Brain[player], player)) {
+			g_MovableMan.NotePlayerBrain(m_Brain[player]->GetUniqueID(), false);
+		}
+		if (newBrain) {
+			g_MovableMan.NotePlayerBrain(newBrain->GetUniqueID(), true);
+		}
+	}
 	m_Brain[player] = newBrain;
+}
+
+bool Activity::RunPlayerBrainRecordSelfTest(Actor* humanBrain, Actor* aiBrain) {
+	if (!humanBrain || !aiBrain || humanBrain == aiBrain) {
+		return false;
+	}
+	constexpr int human = Players::PlayerOne;
+	constexpr int ai = Players::PlayerTwo;
+	Actor* const heldBrains[2] = {m_Brain[human], m_Brain[ai]};
+	const bool heldHuman[2] = {m_IsHuman[human], m_IsHuman[ai]};
+	const bool heldActive[2] = {m_IsActive[human], m_IsActive[ai]};
+	const bool heldHadBrain[2] = {m_HadBrain[human], m_HadBrain[ai]};
+	const int heldTeam[2] = {m_Team[human], m_Team[ai]};
+	const bool heldRecord[2] = {g_MovableMan.IsPlayerBrain(humanBrain), g_MovableMan.IsPlayerBrain(aiBrain)};
+
+	// A single player activity's two seats: one human, one AI, each on the team of the actor it gets.
+	m_Brain[human] = m_Brain[ai] = nullptr;
+	m_IsActive[human] = m_IsActive[ai] = true;
+	m_IsHuman[human] = true;
+	m_IsHuman[ai] = false;
+	m_Team[human] = humanBrain->GetTeam();
+	m_Team[ai] = aiBrain->GetTeam();
+	g_MovableMan.NotePlayerBrain(humanBrain->GetUniqueID(), false);
+	g_MovableMan.NotePlayerBrain(aiBrain->GetUniqueID(), false);
+
+	SetPlayerBrain(humanBrain, human);
+	SetPlayerBrain(aiBrain, ai);
+	const bool recorded = g_MovableMan.IsPlayerBrain(humanBrain) && !g_MovableMan.IsPlayerBrain(aiBrain);
+	SetPlayerBrain(nullptr, human);
+	const bool dropped = !g_MovableMan.IsPlayerBrain(humanBrain) && !g_MovableMan.IsPlayerBrain(aiBrain);
+
+	m_Brain[human] = heldBrains[0];
+	m_Brain[ai] = heldBrains[1];
+	m_IsHuman[human] = heldHuman[0];
+	m_IsHuman[ai] = heldHuman[1];
+	m_IsActive[human] = heldActive[0];
+	m_IsActive[ai] = heldActive[1];
+	m_HadBrain[human] = heldHadBrain[0];
+	m_HadBrain[ai] = heldHadBrain[1];
+	m_Team[human] = heldTeam[0];
+	m_Team[ai] = heldTeam[1];
+	g_MovableMan.NotePlayerBrain(humanBrain->GetUniqueID(), heldRecord[0]);
+	g_MovableMan.NotePlayerBrain(aiBrain->GetUniqueID(), heldRecord[1]);
+	return recorded && dropped;
 }
 
 bool Activity::AnyBrainWasEvacuated() const {
@@ -1374,6 +1437,7 @@ void Activity::ClearCheckpointActorIDs() {
 
 void Activity::ForgetDestroyedActor(const Actor* actor) {
 	if (!actor) return;
+	g_MovableMan.NotePlayerBrain(actor->GetUniqueID(), false);
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (m_Brain[player] == actor) m_Brain[player] = nullptr;
 		if (m_ControlledActor[player] == actor) m_ControlledActor[player] = nullptr;
