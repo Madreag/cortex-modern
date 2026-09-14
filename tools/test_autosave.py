@@ -20,9 +20,11 @@ def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int) -> di
     runs, records = {}, {}
     for who in ("host", "client"):
         args = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "2",
-                "-net-match-ticks", str(ticks), "-net-match-input-delay", "3",
-                "-net-autosave-seconds", str(seconds[who]), "-tick-hashes", "-max-ticks", str(ticks),
-                "-out", str(root / f"{who}_trace.json"), "-net-match-report", str(root / f"{who}_report.json")]
+                "-net-match-ticks", str(ticks), "-net-match-input-delay", "3"]
+        if seconds[who] is not None:
+            args += ["-net-autosave-seconds", str(seconds[who])]
+        args += ["-tick-hashes", "-max-ticks", str(ticks), "-out", str(root / f"{who}_trace.json"),
+                 "-net-match-report", str(root / f"{who}_report.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
         runs[who] = make_run(repo, args, root / who, 360, env={"CCCP_HEADLESS": "1"})
 
@@ -95,6 +97,7 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=48212)
     parser.add_argument("--ticks", type=int, default=400)
+    parser.add_argument("--arm", choices=("all", "default"), default="all")
     args = parser.parse_args()
     if not 48211 <= args.port <= 48216 or args.ticks < 400:
         parser.error("four ports must fit 48211..48219 and at least 400 ticks are required")
@@ -106,6 +109,8 @@ def main() -> int:
     result = {"exe_sha256": exe_sha, "arms": {}}
     arms = {"off": {"host": 0, "client": 0}, "on": {"host": 2, "client": 2},
             "asymmetric": {"host": 2, "client": 0}, "rotation": {"host": 1, "client": 1}}
+    if args.arm == "default":
+        arms = {"default": {"host": None, "client": None}}
     for index, (arm, cadence) in enumerate(arms.items()):
         arm_root = root / arm
         details = {"cadence_seconds": cadence}
@@ -115,17 +120,29 @@ def main() -> int:
             details["records"] = records
             for who in cadence:
                 assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
-                details[who] = inspect_autosaves(arm_root, who, cadence[who] > 0)
+                details[who] = inspect_autosaves(arm_root, who, cadence[who] is not None and cadence[who] > 0)
+                if arm == "default":
+                    assert "-net-autosave-seconds" not in records[who]["argv"], "default row supplied the autosave flag"
+                    log = (arm_root / who / "stdout.log").read_text(encoding="utf-8", errors="replace")
+                    assert "[autosave]" not in log, "default row emitted an autosave line"
+                    directory = arm_root / who / "runtime/Autosaves"
+                    listing = sorted(str(path) for path in directory.iterdir()) if directory.exists() else []
+                    assert not listing, f"default row produced Autosaves entries: {listing}"
+                    details[who]["listing"] = {"directory": str(directory), "exists": directory.exists(), "files": listing}
+                    print(f"FILES default/{who}: {listing} directory={directory} exists={directory.exists()}", flush=True)
                 if arm == "rotation":
                     assert len(details[who]["captures"]) > 3, "rotation arm never exceeded the retention limit"
             passed, comparison = strict_compare(arm_root / "host_trace.json", arm_root / "client_trace.json", args.ticks)
             details["peer_comparison"] = comparison
             assert passed, comparison
-            if arm != "off":
+            if arm not in ("off", "default"):
                 for who in cadence:
                     exact_role_compare(root / "off" / f"{who}_trace.json", arm_root / f"{who}_trace.json", args.ticks)
             details["passed"] = True
-            print(f"PASS {arm}: {args.ticks} peer ticks match; checkpoint rotation and same-peer full hashes match", flush=True)
+            if arm == "default":
+                print(f"PASS default: {args.ticks} peer ticks match; autosave flag absent; capture_lines=0 files_host=0 files_client=0", flush=True)
+            else:
+                print(f"PASS {arm}: {args.ticks} peer ticks match; checkpoint rotation and same-peer full hashes match", flush=True)
         except Exception as error:
             details.update(passed=False, error=str(error))
             print(f"FAIL {arm}: {error}", flush=True)

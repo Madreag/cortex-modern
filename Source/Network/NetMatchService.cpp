@@ -91,7 +91,7 @@ namespace RTE {
 	}
 
 	bool NetMatchService::s_AdmissionEnabled = true;
-	uint32_t NetMatchService::s_AutosaveSeconds = 60;
+	uint32_t NetMatchService::s_AutosaveSeconds = 0;
 	std::string NetMatchService::s_TicketStorePath;
 	std::string NetMatchService::s_JoinWaitPath;
 	bool NetMatchService::s_ApplyForSeat = false;
