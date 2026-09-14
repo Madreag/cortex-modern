@@ -87,6 +87,8 @@ def activities():
 def instrument_runner(expected):
     sys.path.insert(0, str(REPO / "tools"))
     import run_sim_test
+    if getattr(run_sim_test, "seat_facts_instrumented_sha", None) == expected:
+        return run_sim_test
     original = run_sim_test.make_run
 
     def make(*args, **kwargs):
@@ -113,6 +115,7 @@ def instrument_runner(expected):
         return run
 
     run_sim_test.make_run = make
+    run_sim_test.seat_facts_instrumented_sha = expected
     return run_sim_test
 
 
@@ -252,7 +255,7 @@ def compatibility(runner, root):
 
 
 def pair_arms(root, reference=False):
-    for offset, arm in enumerate(("reseat", "lua", "damage", "snapshot")):
+    for offset, arm in enumerate(("reseat", "lua", "damage", "snapshot", "screens")):
         if reference and arm in ("reseat", "damage"):
             continue
         invoke(HERE / "run_pair.py", [arm, root / arm, "--port", 43570 + offset], root / (arm + ".log"))
@@ -273,12 +276,16 @@ def validate_red(root):
     for peer, team in (("host", 0), ("client", 1)):
         rows = seats["rows"].get(peer, [])
         checks[peer + "_only_local_human"] = len(rows) == 4 and rows[0][1:4] == [1, 1, team] and rows[0][5] == 101 and all(row[1:3] == [0, 0] for row in rows[1:])
+        directory = root / "screens/e2e/snapshot_p5" / peer
+        screen_log = "\n".join(path.read_text(errors="replace") for path in (directory / "stdout.log", directory / "runtime/LogConsole.txt") if path.is_file())
+        checks[peer + "_screen_guard_red"] = "[screen-facts] begin" in screen_log and "[screen-facts] pass remote=1" not in screen_log
     write_json(root / "red-detection.json", checks)
     if not all(checks.values()):
         raise RuntimeError("the required RED defects were not reproduced; inspect red-detection.json")
 
 
 def gates(root):
+    invoke(HERE / "reconnect.py", ["--build-manifest", ROOT / "reconnect-build.json"], root / "reconnect.log")
     invoke(REPO / "tools/run_selftests.py", ["--repo", REPO, "--out", root / "selftests", "--timeout", 300], root / "selftests.log")
     invoke(REPO / "tools/run_sim_test.py", ["--repo", REPO, "--out", root / "script_graph", "--timeout", 300, "--",
         "-script-graph-selftest", "-num-lua-states", 4], root / "script_graph.log")

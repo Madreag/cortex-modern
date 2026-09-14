@@ -19,6 +19,8 @@ $vswhere = 'C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe
 $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
 $beforeHash = (Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash.ToLowerInvariant()
 $beforeStamp = date '+%Y-%m-%d %H:%M:%S MST'
+python "$taskRepo/tools/seat_facts/build_pin.py" before
+if ($LASTEXITCODE -ne 0) { throw 'Build input capture failed.' }
 & $msbuild "$taskRepo/RTEA.sln" /t:RTEA /p:Configuration=Final /p:Platform=x64 /m:1 /nr:false /nologo /v:minimal 2>&1 | Tee-Object -FilePath "$taskRoot/build.log"
 $buildExit = $LASTEXITCODE
 $record = [ordered]@{
@@ -31,4 +33,8 @@ $record = [ordered]@{
     CL = $env:CL
 }
 $record | ConvertTo-Json | Set-Content -LiteralPath "$taskRoot/build.json" -Encoding utf8
+if ($buildExit -eq 0) {
+    python "$taskRepo/tools/seat_facts/build_pin.py" after
+    if ($LASTEXITCODE -ne 0) { throw 'Build input or executable verification failed.' }
+}
 exit $buildExit
