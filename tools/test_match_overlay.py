@@ -114,6 +114,16 @@ def find_widget_paint(image, size):
     return None
 
 
+def interior_ink(image, rect):
+    """Pixels inside the widget's frame that are not its fill: its text must be drawn in it,
+    not somewhere else on the screen. Skips the border and the accent line under it."""
+    pixels = image.load()
+    x, y, width, height = rect
+    return sum(pixels[px, py] != WIDGET_FILL
+               for py in range(y + 3, y + height - 1)
+               for px in range(x + 2, x + width - 2))
+
+
 def sha256(path):
     with Path(path).open("rb") as source:
         return hashlib.file_digest(source, "sha256").hexdigest()
@@ -378,7 +388,10 @@ def image_oracle(path, size, arm, mode, name, tick):
             expected = (x, y, BOX_WIDTH, BOX_HEIGHT)
             result["expected_rect"] = list(expected)
             result["pass"] = box == expected and not result["occluding"]
+        result["interior_ink"] = interior_ink(image, box) if box else 0
+        result["pass"] = result["pass"] and result["interior_ink"] > 0
         result["checks"] = {"paint_found": box is not None, "occluding": result["occluding"],
+                            "text_in_widget": result["interior_ink"] > 0,
                             "compact_strip": height >= COMPACT_MAX_HEIGHT or result["pass"]}
     else:
         result["pass"] = box is None
@@ -422,8 +435,13 @@ def inspect_pair(root, records, size, arm, mode, name):
                         if step.get("control") == STATUS_BOX and obs.get("control", {}).get("visible")]
         toast_rects = [tuple(obs["control"]["rect"]) for step, obs in observations
                        if step.get("control") == TOAST and obs.get("control", {}).get("visible")]
-        details["occlusion"][who] = {"widget_rects": widget_rects, "toast_rects": toast_rects}
+        # The label carries the text and is placed on its own, so its rectangle is read too.
+        status_rects = [tuple(obs["control"]["rect"]) for step, obs in observations
+                        if step.get("control") == STATUS and obs.get("control", {}).get("visible")]
+        details["occlusion"][who] = {"widget_rects": widget_rects, "toast_rects": toast_rects,
+                                     "status_rects": status_rects}
         checks[f"{who}_widget_rects_clear"] = all(not occluding_rects(rect, size) for rect in widget_rects)
+        checks[f"{who}_status_rects_clear"] = all(not occluding_rects(rect, size) for rect in status_rects)
         checks[f"{who}_toast_rects_clear"] = all(not occluding_rects(rect, size) for rect in toast_rects)
         if mode == "off":
             checks[f"{who}_widget_never_painted"] = not widget_rects
