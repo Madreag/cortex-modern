@@ -1,13 +1,15 @@
 """Detect the match status widget, toast lifetime, HUD clearance and simulation invariance.
 
-Two menu-launched peers run at each viewport. Quiet and paused capture-on/off
-pairs compare complete traces. Host presses P to pause; Guest presses P to resume.
-The network UI probe reads the drawn labels and their rectangles. Additional arms
-force the widget's other visibility states: the ShowMatchStatus setting, the F6
-seats panel, a wall-clock stall on the guest, and a guest leave that parks the
-host in the reconnect hold. The widget is hidden during ordinary play; when it is
-up it must sit in the measured free zone: below 480 rows a single-line strip
-between the funds block and the controller icon, at or above it the top-right box.
+Two menu-launched peers run at each viewport under each NetworkMatchStatusMode.
+Quiet and paused capture-on/off pairs compare complete traces. Host presses P to
+pause; Guest presses P to resume. The network UI probe reads the drawn labels and
+their rectangles. Additional arms force the widget's other triggers: the F6 seats
+panel, a wall-clock stall on the guest, and a guest leave that parks the host in
+the reconnect hold. Off never paints the widget (event toasts still appear), Auto
+paints it on triggers and three seconds past recovery, Always paints it
+throughout. When it is up it must sit in the measured free zone: below 480 rows a
+single-line strip between the funds block and the controller icon, at or above it
+the top-right box.
 """
 
 import argparse
@@ -40,16 +42,20 @@ CAPTURE = re.compile(r"^\[net-match-screenshot\] applied_tick=(\d+) name=(\S+) q
 PAUSE_EVENT = re.compile(r"^\[net-match\] match paused at tick (\d+) sim ms \d+$")
 RESUME_EVENT = re.compile(r"^\[net-match\] match resumed at tick (\d+) sim ms \d+$")
 
+# The widget's mode axis: every arm runs once per mode. "auto" is the persisted
+# default, so the capture-switch pairs are taken from its runs.
+MODES = ("auto", "off", "always")
+MODE_INI = {"off": "Off", "auto": "Auto", "always": "Always"}
+
 # Arms beyond the original four drive the remaining visibility states. "event" is
-# the scripted pause/resume; "setting" turns on ShowMatchStatus; "f6" opens the
-# seats panel; "stall" makes the guest sleep 8 s at tick 300 so the host waits on
-# frames; "leave" makes the guest quit at tick 300 so the host holds its seat.
+# the scripted pause/resume; "f6" opens the seats panel; "stall" makes the guest
+# sleep 8 s at tick 300 so the host waits on frames; "leave" makes the guest quit
+# at tick 300 so the host holds its seat.
 ARMS = {
     "on": {"captures": True},
     "off": {},
     "pause_on": {"captures": True, "event": True},
     "pause_off": {"event": True},
-    "status_on": {"captures": True, "setting": True},
     "f6": {"f6": True},
     "stall": {"stall": True},
     "hold": {"leave": True},
@@ -178,20 +184,23 @@ def label_assert(control, text=None, visible=True):
     return step
 
 
-def probe_script(who, size, arm):
+def probe_script(who, size, arm, mode):
     width, height = size
     compact = height < COMPACT_MAX_HEIGHT
     hidden = {"op": "assert_control", "control": STATUS_BOX, "equals": {"visible": False}, "fits": True}
     shown = {"op": "assert_control", "control": STATUS_BOX, "equals": {"visible": True}, "fits": True}
+    def widget(trigger):
+        # The widget at a probe point: Always paints it, Off never does, Auto only
+        # while a trigger or its three-second recovery linger is up.
+        return shown if mode == "always" or (mode == "auto" and trigger) else hidden
     status_reads = [label_assert(STATUS, "NET [F6]" if compact else "NET STATUS"),
                     label_assert(STATUS, "D 3" if compact else "D 3 ticks / 50.0 ms"),
                     label_assert(STATUS, "RTT "),
                     label_assert(STATUS, "PACE ")]
     steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "sim_at_least": 60}]
-    if arm.get("setting"):
-        steps += [shown, *status_reads, label_assert(STATUS, "LIVE")]
-    else:
-        steps.append(hidden)
+    steps.append(widget(False))
+    if mode == "always":
+        steps += status_reads + [label_assert(STATUS, "LIVE")]
     if arm.get("event"):
         steps += [{"op": "wait", "sim_at_least": 240}]
         if who == "Host":
@@ -199,23 +208,30 @@ def probe_script(who, size, arm):
         steps += [
             {"op": "wait", "sim_at_least": 270},
             label_assert(TOAST, PAUSED),
-            shown,
-            label_assert(STATUS, "PAUSED"),
-            {"op": "screenshot", "name": f"widget-paused-{who.lower()}"},
+            widget(True),
+        ]
+        if mode != "off":
+            steps += [label_assert(STATUS, "PAUSED")]
+        steps += [{"op": "screenshot", "name": f"widget-paused-{who.lower()}"}]
+        steps += [
             {"op": "wait", "sim_at_least": 430},
             {"op": "assert_control", "control": TOAST, "equals": {"visible": False, "text": ""}},
             {"op": "wait", "sim_at_least": 480},
         ]
         if who == "Guest":
             steps += [{"op": "key_down", "key": "P", "sim_at": 480}, {"op": "key_up", "key": "P", "sim_at": 481}]
-        steps += [{"op": "wait", "sim_at_least": 680}, label_assert(TOAST, RESUMED), hidden]
+        # The resume lands near 663; Auto lingers three seconds, so the widget is
+        # still up at 680 and long gone by 880.
+        steps += [{"op": "wait", "sim_at_least": 680}, label_assert(TOAST, RESUMED), widget(True)]
+        if mode != "off":
+            steps += [label_assert(STATUS, "LIVE")]
     if arm.get("f6"):
         if who == "Host":
             steps += [
                 {"op": "wait", "sim_at_least": 200},
                 {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                 {"op": "wait", "panel_open": True},
-                shown,
+                widget(True),
                 {"op": "assert_control", "control": "NetworkSeatsTitle", "equals": {"visible": True}},
                 {"op": "screenshot", "name": "widget-f6-panel-host"},
                 {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
@@ -223,41 +239,52 @@ def probe_script(who, size, arm):
             ]
     if arm.get("stall"):
         if who == "Host":
-            steps += [
-                {"op": "wait", "sim_at_least": 290},
-                # The guest sleeps 8 s at tick 300; the stall UI pump keeps drawing and polling here.
-                {"op": "wait", "control": STATUS, "equals": {"visible": True}},
-                shown,
-                label_assert(STATUS, "WAITING FOR FRAMES"),
-                {"op": "screenshot", "name": "widget-stalled-host"},
-            ]
+            steps += [{"op": "wait", "sim_at_least": 290}]
+            if mode == "off":
+                # Inside the guest's 8 s sleep: no widget, no read, just the frame.
+                steps += [{"op": "wait", "elapsed_ms": 2000}, hidden,
+                          {"op": "screenshot", "name": "widget-stall-off-host"}]
+            else:
+                # The stall UI pump keeps drawing and polling while the guest sleeps.
+                steps += [
+                    {"op": "wait", "control": STATUS, "equals": {"visible": True}},
+                    shown,
+                    label_assert(STATUS, "WAITING FOR FRAMES"),
+                    {"op": "screenshot", "name": "widget-stalled-host"},
+                ]
     if arm.get("leave"):
         if who == "Host":
-            steps += [
-                {"op": "wait", "sim_at_least": 290},
-                {"op": "wait", "control": STATUS, "equals": {"visible": True}},
-                # The seat hold engages after the transport's give-up, seconds after the leave tick.
-                {"op": "wait", "elapsed_ms": 6000},
-                shown,
-                label_assert(STATUS, "WAITING FOR" if compact else "Waiting for"),
-                {"op": "screenshot", "name": "widget-hold-host"},
-            ]
+            steps += [{"op": "wait", "sim_at_least": 290}]
+            if mode == "off":
+                # The hold toast is the required banner in Off; the widget stays away.
+                steps += [{"op": "wait", "control": TOAST, "equals": {"visible": True}},
+                          label_assert(TOAST, "waiting for"), hidden,
+                          {"op": "screenshot", "name": "widget-hold-off-host"}]
+            else:
+                steps += [
+                    {"op": "wait", "control": STATUS, "equals": {"visible": True}},
+                    # The seat hold engages after the transport's give-up, seconds after the leave tick.
+                    {"op": "wait", "elapsed_ms": 6000},
+                    shown,
+                    label_assert(STATUS, "WAITING FOR" if compact else "Waiting for"),
+                    {"op": "screenshot", "name": "widget-hold-host"},
+                ]
         else:
             # The guest quits at tick 300 and is terminated afterwards; its probe must be done first.
-            steps += [{"op": "wait", "sim_at_least": 250}, hidden]
+            steps += [{"op": "wait", "sim_at_least": 250}, widget(False)]
         steps.append({"op": "finish"})
         return {"schema": 1, "timeout_ms": 180000, "steps": steps}
     steps += [{"op": "wait", "sim_at_least": 880}]
-    if arm.get("setting"):
-        steps += [shown, label_assert(STATUS, "LIVE")]
-    else:
-        steps += [hidden]
+    # At 880 only Always is up; Auto lingers past the stall's end (~780 + 3 s).
+    steps.append(widget(mode == "auto" and arm.get("stall") and who == "Host"))
+    if mode == "always" or (mode == "auto" and arm.get("stall") and who == "Host"):
+        steps += status_reads + [label_assert(STATUS, "LIVE")]
     steps += [{"op": "assert_control", "control": TOAST, "equals": {"visible": False, "text": ""}},
               {"op": "finish"}]
     return {"schema": 1, "timeout_ms": 180000, "steps": steps}
 
 
-def run_pair(repo, root, port, size, arm, timeout, expected_pin):
+def run_pair(repo, root, port, size, arm, mode, timeout, expected_pin):
     require_pin(repo, expected_pin)
     root.mkdir(parents=True, exist_ok=False)
     runs, records = {}, {}
@@ -268,7 +295,7 @@ def run_pair(repo, root, port, size, arm, timeout, expected_pin):
             menu = inputs / "menu.txt"
             menu.write_text(menu_script(who, port), encoding="utf-8")
             probe = inputs / "probe.json"
-            probe.write_text(json.dumps(probe_script(who, size, arm), indent=2), encoding="utf-8")
+            probe.write_text(json.dumps(probe_script(who, size, arm, mode), indent=2), encoding="utf-8")
             flags = ["-menu-script", menu, "-num-lua-states", 4, "-tick-hashes", "-max-ticks", TICKS,
                      "-net-match-ticks", TICKS, "-out", root / f"{who}_trace.json",
                      "-net-match-report", root / f"{who}_report.json"]
@@ -280,9 +307,8 @@ def run_pair(repo, root, port, size, arm, timeout, expected_pin):
                 flags += ["-net-match-e2e-leave", "-net-match-e2e-leave-tick", "300"]
             runs[who] = make_run(repo, flags, root / who, timeout,
                                  env={"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)})
-            values = {"ResolutionX": size[0], "ResolutionY": size[1]}
-            if arm.get("setting"):
-                values["ShowMatchStatus"] = 1
+            values = {"ResolutionX": size[0], "ResolutionY": size[1],
+                      "NetworkMatchStatusMode": MODE_INI[mode]}
             set_settings(runs[who].cwd, values)
 
         def drive(who):
@@ -318,7 +344,16 @@ def probe_observations(probe):
             yield steps[index], result["observed"]
 
 
-def image_oracle(path, size, arm, tick):
+def tick_expected_visible(arm, mode, tick):
+    if mode == "always":
+        return True
+    if mode == "off":
+        return False
+    # Auto: the pause covers 270 and 500, the post-resume linger still shows at 680.
+    return bool(arm.get("event")) and tick in (270, 500, 680)
+
+
+def image_oracle(path, size, arm, mode, name, tick):
     from PIL import Image
 
     with Image.open(path) as source:
@@ -328,23 +363,20 @@ def image_oracle(path, size, arm, tick):
     width, height = size
     pixels = image.load()
     box = find_widget_paint(image, size)
-    if arm.get("event"):
-        expected_visible = tick in (270, 500)
-    elif arm.get("setting"):
-        expected_visible = True
-    else:
-        expected_visible = False
-    result = {"path": str(path), "sha256": sha256(path), "size": list(image.size),
-              "tick": tick, "expected_visible": expected_visible, "widget_paint": box,
-              "pass": True}
+    expected_visible = tick_expected_visible(arm, mode, tick)
+    result = {"path": str(path), "sha256": sha256(path), "size": list(image.size), "mode": mode,
+              "arm": name, "tick": tick, "expected_visible": expected_visible,
+              "widget_paint": box, "pass": True}
     if expected_visible:
         result["occluding"] = occluding_rects(box, size) if box else ["widget_missing"]
         if height < COMPACT_MAX_HEIGHT:
+            result["expected_zone"] = [STRIP_LEFT, 0, width - STRIP_LEFT - STRIP_RIGHT_MARGIN, 20]
             result["pass"] = box is not None and not result["occluding"] and box[1] <= STRIP_TOP + 1 and box[3] <= 20 \
                 and box[0] >= STRIP_LEFT and box[0] + box[2] <= width - STRIP_RIGHT_MARGIN
         else:
             x, y = width - BOX_WIDTH - BOX_MARGIN, BOX_TOP
             expected = (x, y, BOX_WIDTH, BOX_HEIGHT)
+            result["expected_rect"] = list(expected)
             result["pass"] = box == expected and not result["occluding"]
         result["checks"] = {"paint_found": box is not None, "occluding": result["occluding"],
                             "compact_strip": height >= COMPACT_MAX_HEIGHT or result["pass"]}
@@ -364,8 +396,9 @@ def image_oracle(path, size, arm, tick):
     return result
 
 
-def inspect_pair(root, records, size, arm):
-    checks, details = {}, {"records": records, "captures": {}, "probes": {}, "events": {}, "occlusion": {}}
+def inspect_pair(root, records, size, arm, mode, name):
+    checks, details = {}, {"records": records, "captures": {}, "probes": {}, "events": {}, "occlusion": {},
+                         "mode": mode, "arm": name}
     leaving = bool(arm.get("leave"))
     for who in ("Host", "Guest"):
         record = records.get(who, {})
@@ -392,9 +425,16 @@ def inspect_pair(root, records, size, arm):
         details["occlusion"][who] = {"widget_rects": widget_rects, "toast_rects": toast_rects}
         checks[f"{who}_widget_rects_clear"] = all(not occluding_rects(rect, size) for rect in widget_rects)
         checks[f"{who}_toast_rects_clear"] = all(not occluding_rects(rect, size) for rect in toast_rects)
-        if arm.get("setting") or arm.get("event"):
+        if mode == "off":
+            checks[f"{who}_widget_never_painted"] = not widget_rects
+        if mode == "always":
+            checks[f"{who}_widget_seen"] = bool(widget_rects)
+        expect_status = mode == "always" or (mode == "auto" and (arm.get("event") or arm.get("stall") or arm.get("leave")))
+        if expect_status:
             checks[f"{who}_live_rtt"] = bool(status_texts) and all(re.search(r"(?:^|\n| )RTT \d+ ms", text) for text in status_texts)
-            checks[f"{who}_measured_pace"] = bool(status_texts) and all(re.search(r"PACE (?:[1-9]\d*(?:\.\d+)?|0\.[1-9]\d*) tps", text) for text in status_texts)
+            checks[f"{who}_pace_field"] = all(re.search(r"PACE \d+(?:\.\d+)? tps", text) for text in status_texts)
+            running = [text for text in status_texts if not re.search(r"waiting for", text, re.I)]
+            checks[f"{who}_measured_pace"] = all(re.search(r"PACE (?:[1-9]\d*(?:\.\d+)?|0\.[1-9]\d*) tps", text) for text in running)
         capture_lines = [(int(match[1]), match[2], match[3] == "1") for line in log.splitlines()
                          if (match := CAPTURE.match(line))]
         shots = sorted((root / who / "runtime" / "ScreenShots").glob("net_match_tick_*.png"))
@@ -404,7 +444,7 @@ def inspect_pair(root, records, size, arm):
         checks[f"{who}_capture_count"] = len(shots) == len(expected_ticks)
         for tick in expected_ticks:
             matching = [path for path in shots if path.name.startswith(f"net_match_tick_{tick}_round_")]
-            image_result = image_oracle(matching[0], size, arm, tick) if len(matching) == 1 else {"pass": False, "reason": "missing or duplicate capture", "tick": tick}
+            image_result = image_oracle(matching[0], size, arm, mode, name, tick) if len(matching) == 1 else {"pass": False, "reason": "missing or duplicate capture", "tick": tick}
             details["captures"][who]["images"].append(image_result)
             checks[f"{who}_pixels_{tick}"] = image_result["pass"]
         if arm.get("event"):
@@ -430,14 +470,24 @@ def inspect_pair(root, records, size, arm):
                              if step.get("control") == STATUS and "WAITING FOR FRAMES" in obs.get("control", {}).get("text", "")]
             details["events"].setdefault(who, {})["stall_reads"] = waiting_reads
             if who == "Host":
-                checks["Host_stall_widget_seen"] = bool(waiting_reads)
+                if mode == "off":
+                    checks["Host_stall_widget_absent"] = not waiting_reads and not widget_rects
+                else:
+                    checks["Host_stall_widget_seen"] = bool(waiting_reads)
         if leaving:
             hold_reads = [obs for step, obs in observations
                           if step.get("control") == STATUS and obs.get("control", {}).get("visible")
                           and ("WAITING FOR" in obs["control"].get("text", "") or "Waiting for" in obs["control"].get("text", ""))]
+            hold_toast_reads = [obs for step, obs in observations
+                                if step.get("control") == TOAST and "waiting for" in obs.get("control", {}).get("text", "")]
             details["events"].setdefault(who, {})["hold_reads"] = hold_reads
+            details["events"][who]["hold_toast_reads"] = hold_toast_reads
             if who == "Host":
-                checks["Host_hold_widget_seen"] = bool(hold_reads)
+                if mode == "off":
+                    checks["Host_hold_widget_absent"] = not hold_reads and not widget_rects
+                    checks["Host_hold_toast_seen"] = bool(hold_toast_reads)
+                else:
+                    checks["Host_hold_widget_seen"] = bool(hold_reads)
         if arm.get("f6") and who == "Host":
             panel_reads = [obs.get("panel_open") for step, obs in observations if "panel_open" in obs]
             checks["Host_f6_panel_seen"] = any(panel_reads)
@@ -501,20 +551,21 @@ def main():
             raise RuntimeError("the requested executable hash does not match")
         for index, size in enumerate(((640, 360), (960, 540))):
             tag = f"{size[0]}x{size[1]}"
-            for arm_name in ARMS:
-                name = f"{tag}_{arm_name}"
-                pair_root = root / name
-                records = run_pair(repo, pair_root, next(ports), size, ARMS[arm_name], options.timeout, result["pin_before"])
-                pair = inspect_pair(pair_root, records, size, ARMS[arm_name])
-                result["pairs"][name] = pair
-                result["checks"][name] = pair["pass"]
-                (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-                if not pair["pass"]:
-                    raise RuntimeError(f"{name}: " + ", ".join(key for key, passed in pair["checks"].items() if not passed))
+            for mode in MODES:
+                for arm_name in ARMS:
+                    name = f"{tag}_{mode}_{arm_name}"
+                    pair_root = root / name
+                    records = run_pair(repo, pair_root, next(ports), size, ARMS[arm_name], mode, options.timeout, result["pin_before"])
+                    pair = inspect_pair(pair_root, records, size, ARMS[arm_name], mode, name)
+                    result["pairs"][name] = pair
+                    result["checks"][name] = pair["pass"]
+                    (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+                    if not pair["pass"]:
+                        raise RuntimeError(f"{name}: " + ", ".join(key for key, passed in pair["checks"].items() if not passed))
             for prefix, paused in (("", False), ("pause_", True)):
                 for who in ("Host", "Guest"):
-                    comparison = compare_capture_switch(root / f"{tag}_{prefix}on", root / f"{tag}_{prefix}off", who, paused)
-                    result["capture_switch"][f"{tag}_{prefix}{who}"] = comparison
+                    comparison = compare_capture_switch(root / f"{tag}_auto_{prefix}on", root / f"{tag}_auto_{prefix}off", who, paused)
+                    result["capture_switch"][f"{tag}_{prefix}{who}_capture_switch"] = comparison
                     result["checks"][f"{tag}_{prefix}{who}_capture_switch"] = comparison["pass"]
         result["pass"] = all(result["checks"].values()) and len(result["checks"]) >= 16
     except Exception as error:
