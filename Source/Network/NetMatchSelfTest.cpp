@@ -522,10 +522,36 @@ namespace RTE {
 				*error = "a reserved word of 0 did not decode to dedicated=false";
 				return false;
 			}
+			// Bit 1 announces the host's autosave option, and a config that sets it carries the cadence.
+			NetMatchConfig autosaving = MakeConfig();
+			autosaving.autosaveEnabled = true;
+			autosaving.autosaveIntervalSeconds = 45;
+			message.payload = NetLobbyMatchConfig{autosaving};
+			if (!NetLobbyProtocol::Encode(message, bytes, &encodeError) || bytes[reservedOffset] != 2 || bytes[reservedOffset + 1] != 0) {
+				*error = "an autosaving config did not encode reserved bit 1";
+				return false;
+			}
+			const NetLobbyDecodeResult autosaveDecoded = NetLobbyProtocol::Decode(bytes);
+			const NetLobbyMatchConfig* autosaveConfig = autosaveDecoded.ok ? std::get_if<NetLobbyMatchConfig>(&autosaveDecoded.message.payload) : nullptr;
+			if (!autosaveConfig || !autosaveConfig->config.autosaveEnabled || autosaveConfig->config.autosaveIntervalSeconds != 45) {
+				*error = "a reserved word of 2 did not decode to the announced cadence";
+				return false;
+			}
+			message.payload = NetLobbyMatchConfig{MakeConfig()};
+			if (!NetLobbyProtocol::Encode(message, bytes, &encodeError)) {
+				*error = "could not re-encode a plain config";
+				return false;
+			}
 			bytes[reservedOffset] = 2;
+			const NetLobbyDecodeResult missingCadence = NetLobbyProtocol::Decode(bytes);
+			if (missingCadence.ok || missingCadence.error.code != NetLobbyErrorCode::TruncatedPayload) {
+				*error = "an autosave bit without its cadence was not refused";
+				return false;
+			}
+			bytes[reservedOffset] = 4;
 			const NetLobbyDecodeResult refused = NetLobbyProtocol::Decode(bytes);
 			if (refused.ok || refused.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
-				*error = "a reserved word of 2 was not refused";
+				*error = "a reserved word of 4 was not refused";
 				return false;
 			}
 			return true;
