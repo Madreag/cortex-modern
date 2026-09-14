@@ -6,7 +6,7 @@ and the long diagnostic must stay reachable through the label's overflow scroll.
         --out D:/mx/ui-viewport-complete-20260913/detector --port 47871 \
         --exe-sha256 <exe hash>
 
-Two phases, each one host + one refused joiner on loopback:
+Three phases, each one host + one refused joiner on loopback:
 
   viewport  the joiner stages Base1.rte plus 'ß'*70 + '.rte' (the unchanged
             encoded-name fixture; the wire name arrives as 64 x 0xDF), then
@@ -16,6 +16,10 @@ Two phases, each one host + one refused joiner on loopback:
             wraps past the status room in the minimum-width panel; the timed
             frames must show the label band moving while every pixel outside
             it stays put. Skipped by --no-scroll-input, which must fail closed.
+  seam      the joiner stages an '@'-run name whose produced panel width is
+            driven to 5 mod 8 (a second attempt corrects the residue); the
+            bitmap's last column/row under the frame's colour-key edge must be
+            filler or frame pixels, never the untouched BASE_FILL.
 
 Geometry/visibility assertions are pixel checks on the menu-script screenshots
 (no control-rect readback seam exists; documented, not invented):
@@ -54,6 +58,9 @@ LABEL = "LabelMultiplayerLandingStatus"
 PREFIX = "This host's mods do not match yours."
 BASE_NAME = "Base1.rte"
 SZ70_NAME = "ß" * 70 + ".rte"
+# The '@' cell is 9px in FontLarge; the produced panel is word+constant wide,
+# so the driver adjusts the run length until the produced width lands on 5 mod 8.
+SEAM_CHAR = "@"
 # Install+Remove+Update groups each list up to 6 names; filling all three makes
 # the status wrap past the 153px room at 640x360, so the label's vertical
 # overflow scroll has to engage. Updates are the same dirs at Version 1 vs 2.
@@ -322,6 +329,33 @@ def outside_band_diff(img_a, img_b, excl):
     return diff / max(1, total)
 
 
+FRAME_BLUE = (108, 118, 168)
+
+
+def is_hole(pixel):
+    """A transparent panel pixel shows the backdrop: every channel is dark,
+    unlike the panel's navy frame bezel (24,28,55)."""
+    return pixel[0] < 45 and pixel[1] < 45 and pixel[2] < 48
+
+
+def real_panel_edges(px, width, height, extent, gtop, gbottom):
+    """Real bitmap edges: the opaque blue frame column plus the outermost
+    bitmap column past it (colour-key over filler on the fix, the painted
+    bezel or a gap on the old tiling). Returns (left, right, top, bottom)."""
+    _, gleft, gright, _ = extent
+    def blue_col(x):
+        hits = sum(1 for y in range(gtop + 4, gbottom - 3) if near(px[x, y], FRAME_BLUE, 28))
+        return hits > (gbottom - gtop - 7) * 0.6
+    def blue_row(y):
+        hits = sum(1 for x in range(gleft + 4, gright - 3) if near(px[x, y], FRAME_BLUE, 28))
+        return hits > (gright - gleft - 7) * 0.6
+    left_frame = next((x for x in range(gleft - 1, max(0, gleft - 8), -1) if blue_col(x)), gleft)
+    right_frame = next((x for x in range(gright + 1, min(width, gright + 8)) if blue_col(x)), gright)
+    top_frame = next((y for y in range(gtop - 1, max(0, gtop - 8), -1) if blue_row(y)), gtop)
+    bottom_frame = next((y for y in range(gbottom + 1, min(height, gbottom + 8)) if blue_row(y)), gbottom)
+    return left_frame - 1, right_frame + 1, top_frame - 1, bottom_frame + 1
+
+
 def wrapped_height_px(text, inner_px, cell_w):
     """Greedy word-wrap replication of GUIFont::DrawAligned: words break on
     spaces only; a word that does not fit the remaining line starts a new one.
@@ -474,6 +508,51 @@ def main():
                         "tall_returned_to_main"):
                 checks[key] = False
 
+        # --- Phase "seam": an '@' name whose produced panel width lands on
+        # 5 mod 8 - the residue where the old filler tiling left the bitmap's
+        # base exposed under the frame's colour-key edge pixels. The produced
+        # width is word+constant, so a second attempt corrects the residue.
+        seam_logs, seam_shots, seam_width = {}, [], None
+        seam_n = 57
+        for attempt in range(2):
+            seam_name = SEAM_CHAR * seam_n + ".rte"
+            tag = "Seam" if attempt == 0 else "SeamB"
+            start(tag + "Host", True, options.port + 2 + attempt * 3,
+                  "wait_error could not join\nwait_ms 3000\ngoto_main\nassert_screen MainScreen\nexit\n",
+                  [(BASE_NAME, "Base1")], phase="seam")
+            wait_for_log(runs[tag + "Host"], "activate ButtonMultiplayerCreate ok=1")
+            seam_script = ("wait_state Failed\nwait 5\nassert_substate Landing\n"
+                           "assert_label %s yours\nscreenshot seam-t0\nwait_ms 3000\n"
+                           "screenshot seam-t1\npost_command ButtonBackToMain\nwait 12\n"
+                           "assert_screen MainScreen\nexit\n" % LABEL)
+            start(tag + "Joiner", False, options.port + 2 + attempt * 3, seam_script,
+                  [(BASE_NAME, "Base1"), (seam_name, "Seam")], phase="seam")
+            records[tag + "Joiner"] = runs[tag + "Joiner"].finish()
+            records[tag + "Host"] = runs[tag + "Host"].finish()
+            logs_key = tag + "Joiner"
+            seam_logs[tag] = (root / "seam" / logs_key / "stdout.log").read_bytes().decode("utf-8", errors="replace")
+            shots = sorted((root / "seam" / logs_key / "runtime/ScreenShots").glob("seam-t*_*.png"))
+            details["seam%d_screenshots" % attempt] = [str(p) for p in shots]
+            details["seam%d_name_len" % attempt] = len(seam_name)
+            if shots:
+                from PIL import Image as _Img
+                spx = _Img.open(shots[0]).convert("RGB").load()
+                ext = panel_extent(spx, options.width, options.height)
+                if ext:
+                    sgt, sgb = panel_vertical(spx, options.width, options.height)
+                    srl, srr, _, _ = real_panel_edges(spx, options.width, options.height,
+                                                    ext, sgt or 0, sgb or options.height - 1)
+                    produced = srr - srl + 1
+                    details["seam%d_produced_width" % attempt] = produced
+                    seam_width = produced
+                    seam_shots = shots
+                    if produced % 8 == 5:
+                        break
+                    seam_n += (5 - produced % 8) % 8 or 8
+                    seam_n = seam_n if seam_n <= 60 else seam_n - 8
+        seam_log = seam_logs.get("SeamB" if (len(seam_logs) > 1 and seam_width and seam_width % 8 == 5) else "Seam", "")
+        checks["seam_landed"] = "assert_substate expected=Landing actual=Landing PASS" in seam_log
+        checks["seam_shot_count"] = len(seam_shots) == 2
 
         logs, raw = {}, {}
         for name in ("Host", "Joiner"):
@@ -649,6 +728,41 @@ def main():
                 checks["tall_scroll_motion"] = checks["tall_scroll_confined"] = False
         elif options.no_scroll_input:
             checks["tall_scroll_motion"] = checks["tall_scroll_confined"] = False
+
+        if seam_shots:
+            from PIL import Image as _Image
+            simg = _Image.open(seam_shots[0]).convert("RGB")
+            spx = simg.load()
+            sw, sh = simg.size
+            sextent = panel_extent(spx, sw, sh)
+            details["seam_panel_extent"] = sextent
+            if sextent:
+                sgt, sgb = panel_vertical(spx, sw, sh)
+                sleft, sright, stop, sbottom = real_panel_edges(
+                    spx, sw, sh, sextent, sgt or 0, sgb or sh - 1)
+                seam_w = sright - sleft + 1
+                details["seam_panel"] = {"left": sleft, "right": sright, "top": stop,
+                                         "bottom": sbottom, "width": seam_w}
+                checks["seam_panel_is_seam_width"] = seam_w % 8 == 5
+                # The old filler tiling stopped at the frame boundary, so at
+                # widths 5 mod 8 a filler column under the frame stayed
+                # transparent and the backdrop shows through - a 1px hole band.
+                # The label's text cannot reach the frame region (12px inset).
+                gap = sright - 2
+                right_holes = sum(1 for y in range(stop + 4, sbottom - 3)
+                                  for x in (gap - 1, gap, sright)
+                                  if is_hole(spx[x, y]))
+                bottom_holes = sum(1 for x in range(sleft + 4, sright - 3)
+                                   for y in (sbottom - 2, sbottom)
+                                   if is_hole(spx[x, y]))
+                details["seam_right_holes"] = right_holes
+                details["seam_bottom_holes"] = bottom_holes
+                checks["seam_right_column_filled"] = right_holes == 0
+                checks["seam_bottom_row_filled"] = bottom_holes == 0
+            else:
+                for key in ("seam_panel_is_seam_width", "seam_right_column_filled",
+                            "seam_bottom_row_filled"):
+                    checks[key] = False
 
         result["pin_after"] = require_pin(repo, options.exe_sha256, before, checks, "final")
         result.update({"checks": checks, "details": details})
