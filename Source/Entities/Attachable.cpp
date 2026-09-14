@@ -1,8 +1,10 @@
 #include "Attachable.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
+#include "FloatText.h"
 
 #include <bit>
+#include <stdexcept>
 #include "SceneMan.h"
 #include "Scene.h"
 
@@ -196,7 +198,19 @@ int Attachable::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("SpecialBehaviour_InheritsHFlipped", { reader >> m_InheritsHFlipped; });
 	MatchProperty("InheritsRotAngle", { reader >> m_InheritsRotAngle; });
 	MatchForwards("InheritedRotAngleRadOffset") MatchProperty("InheritedRotAngleOffset", { reader >> m_InheritedRotAngleOffset; });
-	MatchProperty("InheritedRotAngleDegOffset", { m_InheritedRotAngleOffset = DegreesToRadians(std::stof(reader.ReadPropValue())); });
+	MatchProperty("InheritedRotAngleDegOffset", {
+		const std::string degrees = reader.ReadPropValue();
+		float value = 0;
+		// std::stof read this through the global locale; its throws on a bad or huge value are kept.
+		const std::from_chars_result parsed = ParseNumberExact(degrees.data(), degrees.data() + degrees.size(), value);
+		if (parsed.ec == std::errc::result_out_of_range) {
+			throw std::out_of_range("InheritedRotAngleDegOffset is out of range");
+		}
+		if (parsed.ec != std::errc()) {
+			throw std::invalid_argument("InheritedRotAngleDegOffset is not a number");
+		}
+		m_InheritedRotAngleOffset = DegreesToRadians(value);
+	});
 	MatchProperty("MountedRotAngleOffset", { reader >> m_MountedRotAngleOffset; });
 	MatchProperty("InheritsFrame", { reader >> m_InheritsFrame; });
 	MatchProperty("InheritsVelWhenDetached", { reader >> m_InheritsVelWhenDetached; });
