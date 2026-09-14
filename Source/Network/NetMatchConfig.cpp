@@ -173,7 +173,7 @@ namespace RTE {
 		if (config.version == 2 && RuleFields(config) != RuleFields(NetMatchConfig{})) return refuse("legacy config cannot carry extended rules");
 		if (config.roundId == 0 || config.configRevision == 0) return refuse("round_id and config_revision must be nonzero");
 		if (config.difficulty > 100) return refuse("difficulty is out of range");
-		if (config.startingGold > 30000 && config.startingGold != c_InfiniteGold) return refuse("starting_gold is out of range");
+		if (config.startingGold > c_MaxFiniteStartingGold && config.startingGold != c_InfiniteGold) return refuse("starting_gold is out of range");
 		if (config.autosaveEnabled && config.autosaveIntervalSeconds == 0) return refuse("enabled autosave requires a nonzero interval");
 		if (config.idleWaitMinutes > 60) return refuse("idle_wait_minutes is out of range");
 		if (config.delayPolicy != NetMatchDelayPolicy::Auto && config.delayPolicy != NetMatchDelayPolicy::Fixed) return refuse("delay_policy is invalid");
