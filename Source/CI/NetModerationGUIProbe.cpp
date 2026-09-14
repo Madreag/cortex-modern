@@ -139,12 +139,12 @@ namespace {
 			}
 		} else if (op == "key_down" || op == "key_up") {
 			const std::string key = step.at("key");
-			Require(key == "F6" || key == "Escape", "unsupported probe key");
+			Require(key == "F6" || key == "Escape" || key == "P", "unsupported probe key");
 			SDL_Event event{};
 			event.type = op == "key_down" ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
 			event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
-			event.key.scancode = key == "F6" ? SDL_SCANCODE_F6 : SDL_SCANCODE_ESCAPE;
-			event.key.key = key == "F6" ? SDLK_F6 : SDLK_ESCAPE;
+			event.key.scancode = key == "F6" ? SDL_SCANCODE_F6 : key == "P" ? SDL_SCANCODE_P : SDL_SCANCODE_ESCAPE;
+			event.key.key = key == "F6" ? SDLK_F6 : key == "P" ? SDLK_P : SDLK_ESCAPE;
 			event.key.down = op == "key_down";
 			Push(event);
 		} else if (op == "mouse_down" || op == "mouse_up") {
