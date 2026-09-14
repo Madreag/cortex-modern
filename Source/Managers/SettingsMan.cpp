@@ -700,7 +700,7 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	settings.SetNetworkDisplayName(std::string(25, 'A'));
 	settings.SetNetworkDisplayName(std::string("Bad\nName"));
 	settings.SetNetworkDisplayName("\xFF\xFE");
-	settings.SetNetworkDisplayName("\x80abc");
+	settings.SetNetworkDisplayName("\x80" "abc");
 	settings.SetNetworkDisplayName("caf\xC3");
 	settings.SetNetworkDisplayName("\xC0\xAF");
 	settings.SetNetworkDisplayName("\xED\xA0\x80");
