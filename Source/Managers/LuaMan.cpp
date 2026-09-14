@@ -8141,71 +8141,6 @@ namespace {
 		}
 	}
 
-	// The key/value set of one table, for the preview fence; nested tables are not followed. The record table is
-	// reused across previews so a fence costs no allocation once a state has run one.
-	void FillShallowCopy(lua_State* L, int src, int copy) {
-		src = AbsoluteLuaIndex(L, src);
-		copy = AbsoluteLuaIndex(L, copy);
-		lua_pushnil(L);
-		while (lua_next(L, copy) != 0) {
-			lua_pop(L, 1);
-			lua_pushvalue(L, -1);
-			lua_pushnil(L);
-			lua_rawset(L, copy);
-		}
-		lua_pushnil(L);
-		while (lua_next(L, src) != 0) {
-			lua_pushvalue(L, -2);
-			lua_pushvalue(L, -2);
-			lua_rawset(L, copy);
-			lua_pop(L, 1);
-		}
-	}
-
-	// Puts a table back the way a PushShallowCopy record found it: added keys go, changed and deleted values come back.
-	int RestoreFromShallowCopy(lua_State* L, int live, int saved) {
-		live = AbsoluteLuaIndex(L, live);
-		saved = AbsoluteLuaIndex(L, saved);
-		lua_newtable(L);
-		const int pending = lua_gettop(L);
-		int count = 0;
-		lua_pushnil(L);
-		while (lua_next(L, live) != 0) {
-			lua_pushvalue(L, -2);
-			lua_rawget(L, saved);
-			const bool differs = lua_isnil(L, -1) || !lua_rawequal(L, -1, -2);
-			lua_pop(L, 1);
-			if (differs) {
-				lua_pushvalue(L, -2);
-				lua_rawseti(L, pending, ++count);
-			}
-			lua_pop(L, 1);
-		}
-		for (int index = 1; index <= count; ++index) {
-			lua_rawgeti(L, pending, index);
-			lua_pushvalue(L, -1);
-			lua_rawget(L, saved);
-			lua_rawset(L, live);
-		}
-		int changes = count;
-		lua_pushnil(L);
-		while (lua_next(L, saved) != 0) {
-			lua_pushvalue(L, -2);
-			lua_rawget(L, live);
-			const bool gone = lua_isnil(L, -1);
-			lua_pop(L, 1);
-			if (gone) {
-				lua_pushvalue(L, -2);
-				lua_pushvalue(L, -2);
-				lua_rawset(L, live);
-				++changes;
-			}
-			lua_pop(L, 1);
-		}
-		lua_pop(L, 1);
-		return changes;
-	}
-
 	std::unordered_map<long, MovableObject*> s_PreviewRootByUID;
 	std::unordered_map<long, MovableObject*> s_PreviewPartByUID;
 	std::unordered_set<long> s_PreviewFrozenPrinted;
@@ -8419,57 +8354,22 @@ bool LuaStateWrapper::RestorePreviewGlobals(const std::string& text, std::vector
 
 void LuaStateWrapper::CapturePreviewGlobalFence() {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
-	const int top = lua_gettop(m_State);
-	lua_getfield(m_State, LUA_REGISTRYINDEX, "CortexPreviewGlobalFence");
-	if (!lua_istable(m_State, -1)) {
-		lua_pop(m_State, 1);
-		lua_newtable(m_State);
-		for (const char* field: {"globals", "loaded", "required"}) {
-			lua_newtable(m_State);
-			lua_setfield(m_State, -2, field);
-		}
-		lua_pushvalue(m_State, -1);
-		lua_setfield(m_State, LUA_REGISTRYINDEX, "CortexPreviewGlobalFence");
+	if (m_PreviewGlobalFenceArmed) {
+		return;
 	}
-	const int fence = lua_gettop(m_State);
-	lua_getfield(m_State, fence, "globals");
-	lua_pushvalue(m_State, LUA_GLOBALSINDEX);
-	FillShallowCopy(m_State, -1, -2);
-	lua_pop(m_State, 2);
-	// A module the preview requires must not stay loaded: the next canonical require has to run the chunk itself.
-	lua_getfield(m_State, fence, "loaded");
-	lua_getglobal(m_State, "package");
-	if (lua_istable(m_State, -1)) {
-		lua_getfield(m_State, -1, "loaded");
-		if (lua_istable(m_State, -1)) {
-			FillShallowCopy(m_State, -1, -3);
-		}
-		lua_pop(m_State, 1);
-	}
-	lua_pop(m_State, 2);
-	lua_getfield(m_State, fence, "required");
-	lua_getglobal(m_State, "_RequiredPackages");
-	if (lua_istable(m_State, -1)) {
-		FillShallowCopy(m_State, -1, -2);
-	}
-	lua_pop(m_State, 2);
-	// Loading a script rewrites package.path, a value inside a table the record only names, so it is recorded on its own.
-	lua_getglobal(m_State, "package");
-	if (lua_istable(m_State, -1)) {
-		const int package = lua_gettop(m_State);
-		for (const char* field: {"path", "cpath"}) {
-			lua_getfield(m_State, package, field);
-			lua_setfield(m_State, fence, field);
-		}
-	}
-	lua_pop(m_State, 1);
-	// The cached chunks are serialized with the state, so a file the preview is first to load must not stay cached either.
+	// Preview holds and graph bookkeeping have their own lifetime at this boundary.
+	static const char* const skipped[] = {
+		"_ScriptedObjects", "_ScriptGraph", "_ScriptGraphBaseline", "_ScriptGraphNative",
+		"_ScriptGraphProgress", "_ScriptFieldsStash"
+	};
 	m_PreviewScriptCacheKeys.clear();
 	for (const auto& [path, cached]: m_ScriptCache) {
 		m_PreviewScriptCacheKeys.insert(path);
 	}
+	if (!luaJIT_preview_begin(m_State, skipped, std::size(skipped))) {
+		RTEAbort("Unable to arm the native preview table barrier.");
+	}
 	m_PreviewGlobalFenceArmed = true;
-	lua_settop(m_State, top);
 }
 
 int LuaStateWrapper::ReleasePreviewGlobalFence() {
@@ -8478,52 +8378,7 @@ int LuaStateWrapper::ReleasePreviewGlobalFence() {
 		return 0;
 	}
 	m_PreviewGlobalFenceArmed = false;
-	const int top = lua_gettop(m_State);
-	lua_getfield(m_State, LUA_REGISTRYINDEX, "CortexPreviewGlobalFence");
-	if (!lua_istable(m_State, -1)) {
-		lua_settop(m_State, top);
-		return 0;
-	}
-	const int fence = lua_gettop(m_State);
-	int changes = 0;
-	lua_getfield(m_State, fence, "globals");
-	lua_pushvalue(m_State, LUA_GLOBALSINDEX);
-	changes += RestoreFromShallowCopy(m_State, -1, -2);
-	lua_pop(m_State, 2);
-	lua_getfield(m_State, fence, "loaded");
-	lua_getglobal(m_State, "package");
-	if (lua_istable(m_State, -1)) {
-		lua_getfield(m_State, -1, "loaded");
-		if (lua_istable(m_State, -1)) {
-			changes += RestoreFromShallowCopy(m_State, -1, -3);
-		}
-		lua_pop(m_State, 1);
-	}
-	lua_pop(m_State, 2);
-	lua_getfield(m_State, fence, "required");
-	lua_getglobal(m_State, "_RequiredPackages");
-	if (lua_istable(m_State, -1)) {
-		changes += RestoreFromShallowCopy(m_State, -1, -2);
-	}
-	lua_pop(m_State, 2);
-	lua_getglobal(m_State, "package");
-	if (lua_istable(m_State, -1)) {
-		const int package = lua_gettop(m_State);
-		for (const char* field: {"path", "cpath"}) {
-			lua_getfield(m_State, fence, field);
-			lua_getfield(m_State, package, field);
-			const char* saved = lua_tostring(m_State, -2);
-			const char* live = lua_tostring(m_State, -1);
-			lua_pop(m_State, 1);
-			if (saved && (!live || std::strcmp(saved, live) != 0)) {
-				lua_setfield(m_State, package, field);
-				++changes;
-			} else {
-				lua_pop(m_State, 1);
-			}
-		}
-	}
-	lua_pop(m_State, 1);
+	int changes = static_cast<int>(luaJIT_preview_end(m_State));
 	for (auto entry = m_ScriptCache.begin(); entry != m_ScriptCache.end();) {
 		if (m_PreviewScriptCacheKeys.count(entry->first) > 0) {
 			++entry;
@@ -8536,7 +8391,6 @@ int LuaStateWrapper::ReleasePreviewGlobalFence() {
 		++changes;
 	}
 	m_PreviewScriptCacheKeys.clear();
-	lua_settop(m_State, top);
 	return changes;
 }
 

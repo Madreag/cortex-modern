@@ -1493,6 +1493,9 @@ static void build_subroutines(BuildCtx *ctx)
   |  cmplwi TAB:TMP1, 0
   |   lbz TMP3, TAB:CARG1->marked
   |  bne ->fff_fallback
+  |  lwz TMP0, TAB:CARG1->preview
+  |  cmpwi TMP0, 0
+  |  blt ->fff_fallback
   |   andix. TMP0, TMP3, LJ_GC_BLACK	// isblack(table)
   |    stw TAB:CARG2, TAB:CARG1->metatable
   |   beq ->fff_restv
@@ -4873,6 +4876,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  checktab CARG1
     |   checknum cr1, CARG2
     |  bne ->vmeta_tsetv
+    |  lwz TMP0, TAB:RB->preview
+    |  cmpwi TMP0, 0
+    |  blt ->vmeta_tsetv
     |.if DUALNUM
     |  lwz TMP0, TAB:RB->asize
     |   bne cr1, >5
@@ -4947,6 +4953,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   lwzx STR:RC, KBASE, TMP1	// KBASE-4-str_const*4
     |  bne ->vmeta_tsets1
     |->BC_TSETS_Z:
+    |  lwz TMP0, TAB:RB->preview
+    |  cmpwi TMP0, 0
+    |  blt ->vmeta_tsets
     |  // TAB:RB = GCtab *, STR:RC = GCstr *, RA = src*8
     |  lwz TMP0, TAB:RB->hmask
     |  lwz TMP1, STR:RC->sid
@@ -5037,6 +5046,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   srwi TMP0, RC, 3
     |   lwz TAB:RB, 4(RB)
     |  checktab CARG1; bne ->vmeta_tsetb
+    |  lwz TMP1, TAB:RB->preview
+    |  cmpwi TMP1, 0
+    |  blt ->vmeta_tsetb
     |  lwz TMP1, TAB:RB->asize
     |   lwz TMP2, TAB:RB->array
     |    lbz TMP3, TAB:RB->marked
@@ -5096,6 +5108,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  andix. TMP2, TMP3, LJ_GC_BLACK	// isblack(table)
     |  bne >7
     |2:
+    |  lwz TMP2, TAB:CARG2->preview
+    |  cmpwi TMP2, 0
+    |  blt ->vmeta_tsetr
     |  cmplw TMP0, CARG3
     |   slwi TMP2, CARG3, 3
     |.if FPU
@@ -5126,6 +5141,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |1:
     |   add TMP3, KBASE, RD
     |  lwz TAB:CARG2, -4(RA)		// Guaranteed to be a table.
+    |  lwz TMP2, TAB:CARG2->preview
+    |  cmpwi TMP2, 0
+    |  blt >8
     |    addic. TMP0, MULTRES, -8
     |   lwz TMP3, 4(TMP3)		// Integer constant is in lo-word.
     |    srwi CARG3, TMP0, 3
@@ -5168,6 +5186,15 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  mr SAVE0, RD
     |  bl extern lj_tab_reasize		// (lua_State *L, GCtab *t, int nasize)
     |  // Must not reallocate the stack.
+    |  mr RD, SAVE0
+    |  b <1
+    |
+    |8:
+    |  stp BASE, L->base
+    |  mr CARG1, L
+    |  stw PC, SAVE_PC
+    |  mr SAVE0, RD
+    |  bl extern lj_preview_write
     |  mr RD, SAVE0
     |  b <1
     |

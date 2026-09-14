@@ -295,7 +295,9 @@ LJLIB_NOREG LJLIB_CF(table_new)		LJLIB_REC(.)
 
 LJLIB_NOREG LJLIB_CF(table_clear)	LJLIB_REC(.)
 {
-  lj_tab_clear(lj_lib_checktab(L, 1));
+  GCtab *t = lj_lib_checktab(L, 1);
+  if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+  lj_tab_clear(t);
   return 0;
 }
 

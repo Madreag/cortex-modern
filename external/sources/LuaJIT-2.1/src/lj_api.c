@@ -1025,6 +1025,7 @@ LUA_API int lua_setmetatable(lua_State *L, int idx)
   }
   g = G(L);
   if (tvistab(o)) {
+    if (tabV(o)->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, tabV(o));
     setgcref(tabV(o)->metatable, obj2gco(mt));
     if (mt)
       lj_gc_objbarriert(L, tabV(o), mt);

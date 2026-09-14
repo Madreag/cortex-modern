@@ -7,6 +7,7 @@
 #define _LJ_TAB_H
 
 #include "lj_obj.h"
+#include "lj_preview.h"
 
 /* Hash constants. Tuned using a brute force search. */
 #define HASH_BIAS	(-0x04c11db7)
@@ -81,7 +82,8 @@ LJ_FUNC TValue *lj_tab_set(lua_State *L, GCtab *t, cTValue *key);
 #define lj_tab_getint(t, key) \
   (inarray((t), (key)) ? arrayslot((t), (key)) : lj_tab_getinth((t), (key)))
 #define lj_tab_setint(L, t, key) \
-  (inarray((t), (key)) ? arrayslot((t), (key)) : lj_tab_setinth(L, (t), (key)))
+  (((t)->preview & LJ_PREVIEW_PENDING) ? lj_preview_write((L), (t)) : (void)0, \
+   inarray((t), (key)) ? arrayslot((t), (key)) : lj_tab_setinth(L, (t), (key)))
 
 LJ_FUNC uint32_t LJ_FASTCALL lj_tab_keyindex(GCtab *t, cTValue *key);
 LJ_FUNCA int lj_tab_next(GCtab *t, cTValue *key, TValue *o);
