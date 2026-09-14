@@ -23,10 +23,6 @@ namespace RTE {
 		s_SeededOwners[actorUniqueID] = NetSeededActorOwner{ownerPeerId, team};
 	}
 
-	bool NetActorOwnership::HasSeededOwner(int64_t actorUniqueID) {
-		return s_SeededOwners.find(actorUniqueID) != s_SeededOwners.end();
-	}
-
 	bool NetActorOwnership::HasSeededOwnerForTeam(int64_t actorUniqueID, uint8_t team) {
 		const auto found = s_SeededOwners.find(actorUniqueID);
 		return found != s_SeededOwners.end() && found->second.team == team;
