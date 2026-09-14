@@ -7,6 +7,7 @@
 #include "ThreadMan.h"
 #include "GLResourceMan.h"
 #include "BigTexture.h"
+#include "BitmapCheckpoint.h"
 
 #include "Draw.h"
 #include "tracy/Tracy.hpp"
@@ -19,7 +20,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <iostream>
 #include <stdexcept>
+#include <thread>
 #include <unordered_set>
 
 using namespace RTE;
@@ -91,6 +94,106 @@ size_t BitmapSnapshot::OwnedBytes() const {
 		if (allocations.insert(row.pixels.get()).second) bytes += row.pixels->size;
 	}
 	return bytes;
+}
+
+bool BitmapSnapshot::RunSelfTest() {
+	bool passed = true;
+	size_t checked = 0;
+	const auto check = [&](const std::string& name, bool result) {
+		passed = result && passed; ++checked;
+		std::cout << "[bitmap-snapshot-selftest] " << (result ? "PASS " : "FAIL ") << name << std::endl;
+	};
+	try {
+		check("null_capture", !Capture(nullptr));
+		for (const int colorDepth: {8, 15, 16, 24, 32}) {
+			constexpr int width = 9, height = 100;
+			const size_t stride = width * ((colorDepth + 7) / 8);
+			const std::string prefix = "depth_" + std::to_string(colorDepth) + "_";
+			BitmapPtr source(create_bitmap_ex(colorDepth, width, height));
+			if (!source) throw std::runtime_error("bitmap snapshot fixture allocation failed");
+			std::string original(stride * height, '\0');
+			for (size_t index = 0; index < original.size(); ++index) original[index] = static_cast<char>((index * 17 + colorDepth * 3) & 255);
+			const auto reset = [&] {
+				for (int y = 0; y < height; ++y) std::memcpy(source->line[y], original.data() + y * stride, stride);
+			};
+			reset();
+			struct Expected {
+				std::string name;
+				std::shared_ptr<const BitmapSnapshot> snapshot;
+				std::string pixels, checkpoint;
+				std::vector<unsigned char> png;
+			};
+			std::vector<Expected> records;
+			const auto retain = [&](const std::string& name, std::shared_ptr<const BitmapSnapshot> snapshot) {
+				BitmapCheckpoint full; full.Capture(source.get());
+				Expected value{prefix + name, std::move(snapshot), full.pixels, full.SaveCheckpoint(), {}};
+				if (colorDepth == 8 && !ContentFile::EncodeIndexedPNG(source.get(), value.png)) throw std::runtime_error("bitmap snapshot reference PNG encoding failed");
+				records.push_back(std::move(value));
+			};
+			const auto first = Capture(source.get());
+			check(prefix + "first_full_capture", first && first->fullCopy && first->copiedBytes == original.size() && first->reusedRows == 0);
+			if (!first) throw std::runtime_error("bitmap snapshot first capture is missing");
+			check(prefix + "pixel_stride", first->width == width && first->height == height && first->depth == colorDepth && first->rowBytes == stride);
+			const auto independent = Capture(source.get());
+			check(prefix + "independent_pixel_equality", first->SamePixels(*independent));
+			retain("first", first);
+			const auto unchanged = Capture(source.get(), first);
+			bool shared = true;
+			for (int y = 0; y < height; ++y) shared &= unchanged->rows[y].pixels == first->rows[y].pixels && unchanged->rows[y].offset == first->rows[y].offset;
+			check(prefix + "unchanged_rows_shared", shared && unchanged->SamePixels(*first) && unchanged->reusedRows == height && unchanged->copiedBytes == 0 && !unchanged->fullCopy);
+			retain("unchanged", unchanged);
+			source->line[13][3] ^= 0x5a;
+			const auto sparse = Capture(source.get(), unchanged);
+			const unsigned int threshold = first->fullCopyPercent;
+			if (threshold > 100) throw std::runtime_error("bitmap snapshot full-copy threshold is invalid");
+			check(prefix + "unmarked_raw_write", !sparse->SamePixels(*first) && sparse->dirtyBytes == stride && sparse->unmarkedDirtyBytes == stride && sparse->markedBytes == 0);
+			const bool sparseFull = threshold <= 1;
+			check(prefix + "sparse_row_copy", sparse->fullCopy == sparseFull && sparse->copiedBytes == (sparseFull ? original.size() : stride) && sparse->reusedRows == (sparseFull ? 0 : height - 1));
+			if (!sparseFull) {
+				bool preserved = sparse->rows[13].pixels != first->rows[13].pixels;
+				for (int y = 0; y < height; ++y) if (y != 13) preserved &= sparse->rows[y].pixels == first->rows[y].pixels && sparse->rows[y].offset == first->rows[y].offset;
+				check(prefix + "sparse_unchanged_rows_shared", preserved);
+			}
+			retain("sparse", sparse);
+			const auto probe = [&](const char* name, unsigned int dirtyRows, bool fullCopy) {
+				reset();
+				for (unsigned int y = 0; y < dirtyRows; ++y) source->line[y][0] ^= 0x33;
+				const auto snapshot = Capture(source.get(), first);
+				check(prefix + name + "_percent_" + std::to_string(threshold), snapshot->fullCopy == fullCopy && snapshot->dirtyBytes == dirtyRows * stride &&
+					snapshot->copiedBytes == (fullCopy ? original.size() : dirtyRows * stride) && snapshot->reusedRows == (fullCopy ? 0 : height - dirtyRows));
+				retain(name, snapshot);
+			};
+			probe("below_threshold", threshold ? threshold - 1 : 0, false);
+			probe("at_threshold", std::max(1u, threshold), true);
+			probe("dense_full_copy", height, true);
+			check(prefix + "null_replaces_previous", !Capture(nullptr, first));
+			source.reset();
+			auto worker = std::async(std::launch::async, [records = std::move(records), prefix, caller = std::this_thread::get_id()] {
+				std::vector<std::pair<std::string, bool>> results;
+				results.emplace_back(prefix + "separate_worker_thread", std::this_thread::get_id() != caller);
+				for (const auto& value: records) {
+					const auto bitmap = value.snapshot->CopyBitmap();
+					bool pixelsEqual = bitmap && bitmap->w == value.snapshot->width && bitmap->h == value.snapshot->height && bitmap_color_depth(bitmap.get()) == value.snapshot->depth;
+					if (pixelsEqual) for (int y = 0; y < bitmap->h; ++y) pixelsEqual &= std::memcmp(bitmap->line[y], value.pixels.data() + y * value.snapshot->rowBytes, value.snapshot->rowBytes) == 0;
+					results.emplace_back(value.name + "_owned_pixels_after_source_destruction", pixelsEqual && value.snapshot->PixelBytes() == value.pixels);
+					BitmapCheckpoint encoded; encoded.Capture(bitmap.get());
+					results.emplace_back(value.name + "_worker_checkpoint_equals_full", encoded.SaveCheckpoint() == value.checkpoint);
+					if (value.snapshot->depth == 8) {
+						std::vector<unsigned char> png;
+						results.emplace_back(value.name + "_worker_png_equals_full", ContentFile::EncodeIndexedPNG(bitmap.get(), png) && png == value.png);
+					}
+				}
+				BitmapSnapshot empty;
+				results.emplace_back(prefix + "empty_owned_bitmap", !empty.CopyBitmap() && empty.PixelBytes().empty());
+				return results;
+			});
+			for (const auto& [name, result]: worker.get()) check(name, result);
+		}
+	} catch (const std::exception& error) {
+		check(error.what(), false);
+	}
+	std::cout << "[bitmap-snapshot-selftest] " << (passed ? "PASS " : "FAIL ") << "complete checked=" << checked << std::endl;
+	return passed;
 }
 
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>

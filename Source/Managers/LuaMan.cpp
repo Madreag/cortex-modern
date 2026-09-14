@@ -5984,6 +5984,7 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	checkpointValues = g_PostProcessMan.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_FrameMan.RunPaletteCheckpointSelfTest() && checkpointValues;
 	checkpointValues = BitmapCheckpoint::RunSelfTest() && checkpointValues;
+	checkpointValues = BitmapSnapshot::RunSelfTest() && checkpointValues;
 	checkpointValues = PieMenu::RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunBorrowedReferenceSelfTest() && checkpointValues;
 	checkpointValues = MOSprite::RunCheckpointSelfTest() && checkpointValues;

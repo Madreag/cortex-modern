@@ -52,6 +52,8 @@ namespace RTE {
 		/// Counts retained pixel allocations, including partially shared blocks, on the save worker.
 		size_t OwnedBytes() const;
 		size_t LogicalBytes() const { return rowBytes * static_cast<size_t>(height); }
+		/// Exercises shared pixel rows and worker serialization after source destruction.
+		static bool RunSelfTest();
 
 	private:
 		template <bool, bool> friend class SceneLayerImpl;
