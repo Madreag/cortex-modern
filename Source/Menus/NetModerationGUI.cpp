@@ -282,8 +282,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	}
 	const auto ping = g_NetMatchService.GetMatchPingMs();
 	text += "\nRTT " + (ping ? std::to_string(*ping) : "--") + " ms / " + (snapshot.isHost ? "max peer" : "host link");
-	// Sim updates against wall time over the last second: the loop's busy microseconds exclude the time a
-	// stalled or paused match spends waiting, so they over-read the pace.
+	// Sim updates against wall time over the last second, so a stalled or paused match reads its true pace
 	static long long s_paceMarkUs = 0;
 	static uint64_t s_paceMarkUpdates = 0;
 	static double s_paceTps = 0.0;
