@@ -79,6 +79,7 @@ namespace RTE {
 			SaveOrLoadGameButton,
 			SettingsButton,
 			ModManagerButton,
+			SaveDiagnosticsButton,
 			ResumeButton,
 			ButtonCount
 		};
