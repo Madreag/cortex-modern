@@ -145,7 +145,8 @@ void PauseMenuGUI::SetActiveMenuScreen(PauseMenuScreen screenToShow, bool playBu
 
 PauseMenuGUI::PauseMenuUpdateResult PauseMenuGUI::Update() {
 	m_UpdateResult = PauseMenuUpdateResult::NoEvent;
-	m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton]->SetEnabled(!TelemetryBundle::IsBusy());
+	const bool savingDiagnostics = TelemetryBundle::IsBusy();
+	m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton]->SetEnabled(!savingDiagnostics);
 
 	if (g_ConsoleMan.IsEnabled() && !g_ConsoleMan.IsReadOnly()) {
 		return m_UpdateResult;
@@ -172,6 +173,7 @@ PauseMenuGUI::PauseMenuUpdateResult PauseMenuGUI::Update() {
 			break;
 	}
 	HandleBackNavigation(backToMainScreen);
+	m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton]->SetText(savingDiagnostics ? "Saving..." : "Save Diagnostics");
 
 	return m_UpdateResult;
 }
