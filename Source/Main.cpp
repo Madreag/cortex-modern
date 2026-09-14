@@ -3247,9 +3247,6 @@ void RunGameLoop() {
 				}
 				g_MovableMan.RunLockstepPausedTick();
 				ScenarioRunner::AdvanceLockstepPausedTick();
-				if (ScenarioRunner::IsLockstepPaused() && simTick % 30 == 0) {
-					g_FrameMan.SetScreenText(ScenarioRunner::GetLockstepResumeCountdown() > 0 ? "Match resuming..." : "Match paused - press P to resume", 0);
-				}
 			}
 			if (!lockstepPausedTick) {
 				g_LuaMan.Update();

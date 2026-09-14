@@ -24,6 +24,7 @@
 #include "MenuMan.h"
 #include "UInputMan.h"
 #include "NetModerationGUIProbe.h"
+#include "NetModerationGUI.h"
 #include "RenderTarget.h"
 
 #include <SDL3/SDL.h>
@@ -172,35 +173,20 @@ namespace RTE {
 		int s_SavedCrabBombThreshold = 42;
 		int s_SavedSubPieMenuHoverOpenDelay = 1000;
 
-		// Presentation only: the sim thread is blocked waiting on the peer, so the normal render path
-		// can't run. Keep the window pumped and show the last frame replaced by a plain wait screen.
-		void DrawLockstepStallOverlay(uint32_t stallMs, uint32_t graceMs, const std::string& waitingOn, bool holdPause, const std::string& holdName, uint32_t holdSeconds) {
+		// The blocked frame draws the same network widget as the normal render pass.
+		void DrawLockstepStallOverlay() {
 			SDL_PumpEvents();
 			BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
-			GUIFont* largeFont = g_FrameMan.GetLargeFont();
-			GUIFont* smallFont = g_FrameMan.GetSmallFont();
-			if (!backbuffer || !largeFont || !smallFont) {
-				return;
-			}
+			if (!backbuffer) return;
+			RandomGenerator* previousRNG = t_simRNGOverride;
+			t_simRNGOverride = &g_RenderRNG;
 			clear_to_color(backbuffer, 0);
-			AllegroBitmap drawBitmap(backbuffer);
-			const int centerX = backbuffer->w / 2;
-			const int centerY = backbuffer->h / 2;
-			if (holdPause) {
-				const std::string who = holdName.empty() ? "a player" : holdName;
-				largeFont->DrawAligned(&drawBitmap, centerX, centerY - 12, "Match paused: waiting for " + who + " to return (" + std::to_string(holdSeconds) + "s left)", GUIFont::Centre);
-			} else {
-				const std::string who = waitingOn.empty() ? "the other player" : waitingOn;
-				largeFont->DrawAligned(&drawBitmap, centerX, centerY - 12, "Waiting for " + who + "... " + std::to_string(stallMs / 1000) + "s", GUIFont::Centre);
-				if (graceMs > stallMs) {
-					smallFont->DrawAligned(&drawBitmap, centerX, centerY + 8, "The match ends in " + std::to_string((graceMs - stallMs + 999) / 1000) + "s if they do not return", GUIFont::Centre);
-				}
-			}
 			g_MenuMan.DrawNetworkUI();
 			ScenarioRunner::DrawNetUiToasts();
 			g_WindowMan.ClearBackbuffer(false);
 			g_WindowMan.GetScreenBuffer()->Begin();
 			g_WindowMan.UploadFrame();
+			t_simRNGOverride = previousRNG;
 			NetModerationGUIProbe::AfterDraw();
 			static bool s_LoggedOnce = false;
 			if (!s_LoggedOnce) {
@@ -211,7 +197,7 @@ namespace RTE {
 
 		// The sim thread owns the stall wait; without this pump the seats panel and the UI probe freeze
 		// for the whole hold. Presentation only — no UInputMan frame/sim-edge buffers are consumed here.
-		void PumpLockstepStallUI(uint32_t stallMs, uint32_t graceMs, const std::string& waitingOn, bool holdPause, const std::string& holdName, uint32_t holdSeconds) {
+		void PumpLockstepStallUI() {
 			if (s_StallEventPoll) {
 				s_StallEventPoll();
 			}
@@ -222,7 +208,7 @@ namespace RTE {
 			}
 			s_F6WasHeld = f6Held;
 			g_MenuMan.UpdateNetworkUI();
-			DrawLockstepStallOverlay(stallMs, graceMs, waitingOn, holdPause, holdName, holdSeconds);
+			DrawLockstepStallOverlay();
 		}
 
 		std::string FloatBitsHex(float value) {
@@ -706,24 +692,11 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::DrawNetUiToasts() {
-		BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
-		GUIFont* smallFont = g_FrameMan.GetSmallFont();
-		if (!backbuffer || !smallFont) {
-			return;
-		}
 		const uint64_t nowMs = NetLockstepNowMs();
 		while (!s_NetUiToasts.empty() && nowMs >= s_NetUiToasts.front().shownAtMs + c_NetUiToastMs) {
 			s_NetUiToasts.pop_front();
 		}
-		if (s_NetUiToasts.empty()) {
-			return;
-		}
-		AllegroBitmap drawBitmap(backbuffer);
-		int y = 8;
-		for (const NetUiToast& toast: s_NetUiToasts) {
-			smallFont->DrawAligned(&drawBitmap, backbuffer->w / 2, y, toast.record.text, GUIFont::Centre);
-			y += smallFont->GetFontHeight() + 2;
-		}
+		if (auto* panel = g_MenuMan.GetNetworkPanel()) panel->DrawMatchToasts();
 	}
 
 	const std::vector<ScenarioRunner::NetUiToastRecord>& ScenarioRunner::GetNetUiToastLog() {
@@ -1870,7 +1843,7 @@ namespace RTE {
 					}
 				}
 				if (s_LockstepStallOverlayEnabled || s_LockstepStallUiProbeArmed) {
-					PumpLockstepStallUI(stallMs, timeoutMs, missing, holdPause, holdName, holdSeconds);
+					PumpLockstepStallUI();
 				}
 				nextOverlayMs = stallMs + 200;
 			}
