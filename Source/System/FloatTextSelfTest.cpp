@@ -397,6 +397,9 @@ namespace RTE::FloatTextSelfTest {
 		/// A float read as a double and narrowed rounds twice, and lands one ulp below on this value.
 		std::string ProbeReaderSingleRounding() { return Hex(ReadThroughReader<float>("1.000000059604644775390625000000000000001\n")); }
 
+		/// Not pinned here: what the stream stored on an out of range read is compared control against tip.
+		std::string ProbeReaderOutOfRange() { return Hex(ReadThroughReader<double>("1e400\n")) + "/" + Hex(ReadThroughReader<double>("-1e400\n")) + "/" + Hex(ReadThroughReader<float>("1e-400\n")); }
+
 		std::string ProbeWriter() {
 			Writer writer(std::make_unique<std::ostringstream>());
 			writer << 1.5F;
@@ -471,7 +474,8 @@ namespace RTE::FloatTextSelfTest {
 			static const LocaleProbe probes[] = {
 			    {"reader_float", ProbeReaderFloat, "0x3fc00000/0x3f800000"},
 			    {"reader_double", ProbeReaderDouble, "0xbfb999999999999a/0xbff0000000000000"},
-			    {"reader_single_rounding", ProbeReaderSingleRounding, "0x3f800001"},
+			    {"reader_single_rounding", ProbeReaderSingleRounding, Reader::c_ReadFloatsAsFloats ? "0x3f800001" : "0x3f800000"},
+			    {"reader_out_of_range", ProbeReaderOutOfRange, nullptr},
 			    {"writer_float", ProbeWriter, "1.5|-0.1"},
 			    {"arm_hand_target", ProbeArmHandTarget, "0x1.8p+0|-0x1p-2|0x1.8p-1|1|reach"},
 			    {"pie_menu_cursor_angle", ProbePieMenuState, "0|0|0|0|0|0x1.8p+0|1|-1|-1|-1|-1"},
