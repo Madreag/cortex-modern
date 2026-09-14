@@ -21,13 +21,15 @@ The detector requires successful and complete `manifest.json`, `run_result.json`
 and peer `launch.json` evidence, all actor/activity rows, every trace row and
 subsystem, and full peer dump equality. It checks actual actor identities, the
 replacement seat and consumed switch edge. AI player-only input is forbidden.
-NEXT requires the departing pie to be Disabled at every tick 205..320, as the
-brief requires; Disabling for an extra four ticks is not accepted.
+NEXT requires the departing pie to stay open until the committed handoff, then be
+Disabled at every tick from handoff+4 through 320: the 50 ms disable animation
+takes four sim ticks here and in SP, which is Disabling at its own handoff..+3.
 
 Cancellation checks require `--reference`. They compare every pie field and
 Lua observation from net tick 199 through 320 with SP ticks 196..317, including
-the committed cancellation at 202. `compare_reference.py` calls this same
-detector. Delivery's mode-change callback count has a separate exact expectation:
+the committed cancellation at 202. NEXT and PREV read the same reference through
+the same input delay, net 204..320 against SP 201..317.
+`compare_reference.py` calls this same detector. Delivery's mode-change callback count has a separate exact expectation:
 two before the committed cancellation, three afterwards. Its direct SP
 `SetInputMode` calls do not notify, while frame application does. Pie getters,
 pie callbacks, controller mode and callback counts are all checked.
