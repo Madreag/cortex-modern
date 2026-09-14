@@ -1660,9 +1660,9 @@ void Actor::GibThis(const Vector& impactImpulse, MovableObject* movableObjectToI
 
 	// If this is the actual brain of any player, flash that player's screen when he's now dead
 	if (g_SettingsMan.FlashOnBrainDamage() && g_ActivityMan.IsInActivity()) {
-		int brainOfPlayer = g_ActivityMan.GetActivity()->IsBrainOfWhichPlayer(this);
+		int brainOfPlayer = g_ActivityMan.GetActivity()->IsBrainOfWhichLocalPlayer(this);
 		// Only flash if player is human (AI players don't have screens!)
-		if (brainOfPlayer != Players::NoPlayer && g_ActivityMan.GetActivity()->PlayerHuman(brainOfPlayer)) {
+		if (brainOfPlayer != Players::NoPlayer && g_ActivityMan.GetActivity()->IsLocalHumanSeat(brainOfPlayer)) {
 			// Croaked.. flash for a longer period
 			if (m_ToDelete || m_Status == DEAD)
 				g_FrameMan.FlashScreen(g_ActivityMan.GetActivity()->ScreenOfPlayer(brainOfPlayer), g_WhiteColor, 500);
@@ -2187,8 +2187,8 @@ void Actor::Update() {
 	}
 
 	// The screen flashes belong to this machine's seats, so they keep reading the local brain slot.
-	int brainOfPlayer = g_ActivityMan.GetActivity()->IsBrainOfWhichPlayer(this);
-	const bool localPlayerBrain = brainOfPlayer != Players::NoPlayer && g_ActivityMan.GetActivity()->PlayerHuman(brainOfPlayer);
+	int brainOfPlayer = g_ActivityMan.GetActivity()->IsBrainOfWhichLocalPlayer(this);
+	const bool localPlayerBrain = brainOfPlayer != Players::NoPlayer && g_ActivityMan.GetActivity()->IsLocalHumanSeat(brainOfPlayer);
 	if (m_PrevHealth - m_Health > 1.5F) {
 		// If this is a brain that's under attack, broadcast an alarm event so that the enemy AI won't dawdle in trying to kill it.
 		// The alarm is shared sim state, so it asks the shared brain record instead of this peer's seats.

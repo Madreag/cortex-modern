@@ -286,13 +286,14 @@ void MovableMan::RecordA7UnitOwnership(uint64_t round, uint64_t frame) const {
 	if (!NetA7Journal::Enabled()) return;
 	if (Activity* activity = g_ActivityMan.GetActivity()) {
 		const auto uid = [](const Actor* actor) { return actor && g_MovableMan.IsActor(actor) ? static_cast<int64_t>(actor->GetUniqueID()) : int64_t{0}; };
-		Actor* controlled = activity->GetControlledActor(Players::PlayerOne);
-		const int screen = activity->ScreenOfPlayer(Players::PlayerOne);
+		const int player = activity->PlayerOfScreen(0);
+		Actor* controlled = activity->GetControlledActor(player);
+		const int screen = activity->ScreenOfPlayer(player);
 		json view = {{"round_id", round}, {"frame", frame}, {"peer_id", ScenarioRunner::GetLockstepLocalPeerId()},
-			{"player_active", activity->PlayerActive(Players::PlayerOne)}, {"player_human", activity->PlayerHuman(Players::PlayerOne)},
-			{"team", activity->GetTeamOfPlayer(Players::PlayerOne)}, {"screen", screen},
-			{"controlled_uid", uid(controlled)}, {"brain_uid", uid(activity->GetPlayerBrain(Players::PlayerOne))},
-			{"view_state", static_cast<int>(activity->GetViewState())}, {"camera_target", nullptr},
+			{"player_active", activity->PlayerActive(player)}, {"player_human", activity->IsLocalHumanSeat(player)},
+			{"team", player >= 0 ? activity->GetTeamOfPlayer(player) : Activity::NoTeam}, {"screen", screen},
+			{"controlled_uid", uid(controlled)}, {"brain_uid", uid(activity->GetPlayerBrain(player))},
+			{"view_state", static_cast<int>(player >= 0 ? activity->GetViewState(player) : Activity::Observe)}, {"camera_target", nullptr},
 			{"seat_mode", nullptr}, {"seat_player", nullptr}};
 		if (uid(controlled) != 0) {
 			view["seat_mode"] = static_cast<int>(controlled->GetController()->GetSeatMode());
@@ -3122,6 +3123,18 @@ void MovableMan::NotePlayerBrain(long uniqueID, bool isBrain) {
 	}
 }
 
+Actor* MovableMan::GetUnassignedBrainByID(int team) const {
+	if (team < Activity::TeamOne || team >= Activity::MaxTeamCount) return nullptr;
+	Actor* brain = nullptr;
+	const auto consider = [&](Actor* candidate) {
+		if (candidate->GetTeam() == team && !candidate->IsDead() && candidate->HasObjectInGroup("Brains") &&
+			!g_ActivityMan.GetActivity()->IsAssignedBrain(candidate) && (!brain || candidate->GetUniqueID() < brain->GetUniqueID())) brain = candidate;
+	};
+	for (Actor* actor: m_ActorRoster[team]) consider(actor);
+	for (Actor* actor: m_AddedActors) consider(actor);
+	return static_cast<Actor*>(ViewIfSpeculating(brain));
+}
+
 Actor* MovableMan::GetUnassignedBrain(int team) const {
 	if (/*m_Actors.empty() || */ m_ActorRoster[team].empty())
 		return 0;
@@ -5443,6 +5456,7 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	bool brainLastDitch = false;
 	const bool brainSeats = g_ActivityMan.GetActivity() && recordActor && m_Actors.size() > 1 &&
 	                        g_ActivityMan.GetActivity()->RunPlayerBrainRecordSelfTest(recordActor, m_Actors[1], &brainLegacyReseeded, &brainLastDitch);
+	const bool sharedSeats = Activity::RunSharedSeatSelfTest();
 
 	// The shape the crashed resync archives carried: an index entry for an actor the world does not have.
 	WorldStructure clean;
@@ -5531,13 +5545,13 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 
 	AddActor(craft);
 	const bool passed = indexed && cleared && archived && roundTripped && tagged && accepted && refused && legacyAccepted && legacyRefused &&
-	                    brainArchived && brainRestored && brainSeats && brainLegacyReseeded && brainLastDitch &&
+	                    brainArchived && brainRestored && brainSeats && sharedSeats && brainLegacyReseeded && brainLastDitch &&
 	                    addedRemoveCleared && absorbDeleteCleared && discardAddedCleared;
 	std::cout << "[contiguous-index-selftest] " << (passed ? "PASS" : "FAIL") << " indexed=" << indexed << " cleared=" << cleared
 	          << " archived=" << archived << " round_trip=" << roundTripped << " tagged=" << tagged
 	          << " accepted=" << accepted << " refused=" << refused
 	          << " legacy=" << legacyAccepted << " legacy_refused=" << legacyRefused
-	          << " brain_archived=" << brainArchived << " brain_restored=" << brainRestored << " brain_seats=" << brainSeats
+	          << " brain_archived=" << brainArchived << " brain_restored=" << brainRestored << " brain_seats=" << brainSeats << " shared_seats=" << sharedSeats
 	          << " brain_legacy_reseeded=" << brainLegacyReseeded << " brain_lastditch=" << brainLastDitch
 	          << " added_remove=" << addedRemoveCleared << " absorb_delete=" << absorbDeleteCleared
 	          << " discard_added=" << discardAddedCleared << std::endl;
