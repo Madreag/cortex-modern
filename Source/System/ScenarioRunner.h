@@ -160,6 +160,9 @@ namespace RTE {
 		static bool IsLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint8_t peerId);
 		/// The peer that produces the actor's frames now (control handoffs included); 0 without a coordinator.
 		static uint8_t GetLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
+		/// The peer the ownership policy gives the actor, with a live control handoff ignored; 0 without
+		/// a coordinator. The owner map is seeded from this, so a claim cannot become the owner to return to.
+		static uint8_t GetLockstepPolicyActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
 		/// The peer that HELD the actor: the control handoff if there is one, else the ownership policy
 		/// with leaves not applied. The drop ledger records this; a leave must not rename it first.
 		static uint8_t GetLockstepDropTimeActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
