@@ -336,7 +336,7 @@ namespace RTE {
 			archive.file = nullptr;
 			if (closed != ZIP_OK) throw std::runtime_error("could not finish diagnostics archive");
 			std::filesystem::rename(temporary, path);
-			std::cout << "[telemetry] saved " << path.generic_string() << std::endl;
+			std::cout << "[telemetry] saved " + path.generic_string() + "\n" << std::flush;
 			g_ConsoleMan.PrintString("SYSTEM: Diagnostics saved to " + path.generic_string());
 		}
 	}
