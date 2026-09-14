@@ -242,6 +242,9 @@ namespace RTE {
 		/// Whether the §11 retry schedule still has work, so the menu loop pumps the service whatever
 		/// screen is up rather than only while the multiplayer screen is open.
 		bool NeedsRecoveryPump() const;
+		/// Whether a finished match still wants the menu loop's pump for its rematch lobby and kept
+		/// directory lease. Not a recovery: the screens route a drop, not an ordinary match end.
+		bool NeedsCompletedLobbyPump() const;
 		/// Whether the host refused the last join because its match is already running, which is the
 		/// only case §9b's applicant path exists for.
 		bool WasJoinRefusedByALiveMatch() const;
@@ -353,6 +356,7 @@ namespace RTE {
 		friend bool TestEndedWorldLateAdmission(std::string* error);
 		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
 		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
+		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
