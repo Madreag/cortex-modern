@@ -401,6 +401,57 @@ std::string AHuman::GetWalkState() const {
 	return std::string(buffer, cursor);
 }
 
+std::vector<CheckpointText> AHuman::CaptureLimbPathStates(bool forHashing) const {
+	std::vector<CheckpointText> states;
+	if (!m_PersistedLimbPathStates.empty()) {
+		states.reserve(m_PersistedLimbPathStates.size());
+		for (const auto& state: m_PersistedLimbPathStates) states.emplace_back(state);
+		return states;
+	}
+	states.reserve(2 * MOVEMENTSTATECOUNT);
+	for (int layer = 0; layer < 2; ++layer) {
+		for (int movementState = 0; movementState < MOVEMENTSTATECOUNT; ++movementState) {
+			states.push_back(m_Paths[layer][movementState].CaptureTraversalState(forHashing));
+		}
+	}
+	return states;
+}
+
+CheckpointText AHuman::CaptureLimbGroupPositions() const {
+	if (!m_PersistedLimbGroupPositions.empty()) return CheckpointText(m_PersistedLimbGroupPositions);
+	CheckpointBuffer packed;
+	bool first = true;
+	for (const AtomGroup* group: {m_pFGHandGroup, m_pBGHandGroup, m_pFGFootGroup, m_pBGFootGroup}) {
+		const Vector limbPos = group ? group->GetRawLimbPos() : Vector();
+		if (!first) packed.Raw(" ");
+		packed.Real(limbPos.m_X); packed.Raw(" "); packed.Real(limbPos.m_Y);
+		first = false;
+	}
+	return packed.Finish();
+}
+
+CheckpointText AHuman::CaptureLimbGroupInertia() const {
+	if (!m_PersistedLimbGroupInertia.empty()) return CheckpointText(m_PersistedLimbGroupInertia);
+	CheckpointBuffer packed;
+	bool first = true;
+	for (const AtomGroup* group: {m_pFGHandGroup, m_pBGHandGroup, m_pFGFootGroup, m_pBGFootGroup}) {
+		if (!first) packed.Raw(" ");
+		packed.Real(group ? group->GetStoredMomentOfInertia() : 0.0F); packed.Raw(" ");
+		packed.Real(group ? group->GetStoredOwnerMass() : 0.0F);
+		first = false;
+	}
+	return packed.Finish();
+}
+
+CheckpointText AHuman::CaptureWalkState() const {
+	if (!m_PersistedWalkState.empty()) return CheckpointText(m_PersistedWalkState);
+	CheckpointBuffer packed;
+	packed.Real(m_WalkAngle[FGROUND].GetRadAngle()); packed.Raw(" ");
+	packed.Real(m_WalkAngle[BGROUND].GetRadAngle()); packed.Raw(" ");
+	packed.Real(m_WalkPathOffset.m_X); packed.Raw(" "); packed.Real(m_WalkPathOffset.m_Y);
+	return packed.Finish();
+}
+
 static void ApplyPackedLimbInertia(const std::string& packed, std::initializer_list<AtomGroup*> groups) {
 	if (packed.empty()) {
 		return;

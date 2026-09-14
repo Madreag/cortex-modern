@@ -228,6 +228,48 @@ std::vector<std::string> ACRocket::GetLimbPathStates(bool forHashing) const {
 	return states;
 }
 
+CheckpointText ACRocket::CaptureLimbGroupPositions() const {
+	if (!m_PersistedLimbGroupPositions.empty()) return CheckpointText(m_PersistedLimbGroupPositions);
+	CheckpointBuffer packed;
+	bool first = true;
+	for (const AtomGroup* group: {m_pRFootGroup, m_pLFootGroup}) {
+		const Vector limbPos = group ? group->GetRawLimbPos() : Vector();
+		if (!first) packed.Raw(" ");
+		packed.Real(limbPos.m_X); packed.Raw(" "); packed.Real(limbPos.m_Y);
+		first = false;
+	}
+	return packed.Finish();
+}
+
+CheckpointText ACRocket::CaptureLimbGroupInertia() const {
+	if (!m_PersistedLimbGroupInertia.empty()) return CheckpointText(m_PersistedLimbGroupInertia);
+	CheckpointBuffer packed;
+	bool first = true;
+	for (const AtomGroup* group: {m_pRFootGroup, m_pLFootGroup}) {
+		if (!first) packed.Raw(" ");
+		packed.Real(group ? group->GetStoredMomentOfInertia() : 0.0F); packed.Raw(" ");
+		packed.Real(group ? group->GetStoredOwnerMass() : 0.0F);
+		first = false;
+	}
+	return packed.Finish();
+}
+
+std::vector<CheckpointText> ACRocket::CaptureLimbPathStates(bool forHashing) const {
+	std::vector<CheckpointText> states;
+	if (!m_PersistedLimbPathStates.empty()) {
+		states.reserve(m_PersistedLimbPathStates.size());
+		for (const auto& state: m_PersistedLimbPathStates) states.emplace_back(state);
+		return states;
+	}
+	states.reserve(2 * GearStateCount);
+	for (int side = 0; side < 2; ++side) {
+		for (int gearState = 0; gearState < GearStateCount; ++gearState) {
+			states.push_back(m_Paths[side][gearState].CaptureTraversalState(forHashing));
+		}
+	}
+	return states;
+}
+
 static void ApplyPackedLimbState(const std::string& packed, std::initializer_list<AtomGroup*> groups, bool inertia) {
 	if (packed.empty()) {
 		return;

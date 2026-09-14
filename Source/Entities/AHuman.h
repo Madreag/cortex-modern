@@ -142,6 +142,8 @@ namespace RTE {
 
 		/// Packed traversal state of every limb path, layer-major, for full-game saves.
 		std::vector<std::string> GetLimbPathStates(bool forHashing = false) const;
+		/// Copies limb traversal values for formatting on the save worker.
+		std::vector<CheckpointText> CaptureLimbPathStates(bool forHashing = false) const;
 
 		/// Gets the stable index of an owned limb path, or -1 when absent.
 		int GetLimbPathIndex(const LimbPath* path) const;
@@ -151,12 +153,15 @@ namespace RTE {
 
 		/// Packed raw limb positions of the four limb groups, for full-game saves.
 		std::string GetLimbGroupPositions() const;
+		CheckpointText CaptureLimbGroupPositions() const;
 
 		/// Packed moment-of-inertia pairs of the four limb groups, for full-game saves.
 		std::string GetLimbGroupInertia() const;
+		CheckpointText CaptureLimbGroupInertia() const;
 
 		/// Packed walk state (per-layer walk angles + walk path offset), for full-game saves.
 		std::string GetWalkState() const;
+		CheckpointText CaptureWalkState() const;
 
 		/// The dual-wield trigger latches, for full-game saves.
 		bool GetCanActivateBGItem() const { return m_CanActivateBGItem; }

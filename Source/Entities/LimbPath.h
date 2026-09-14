@@ -113,6 +113,8 @@ namespace RTE {
 
 		/// Packs the runtime traversal state into one saveable token string, for full-game saves.
 		std::string PackTraversalState(bool forHashing = false) const;
+		/// Copies traversal values for formatting on the save worker.
+		CheckpointText CaptureTraversalState(bool forHashing = false) const;
 
 		/// Applies a packed traversal-state string.
 		void ApplyTraversalState(const std::string& state);
