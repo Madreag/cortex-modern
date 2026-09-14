@@ -291,7 +291,7 @@ void MovableMan::RecordA7UnitOwnership(uint64_t round, uint64_t frame) const {
 		const int screen = activity->ScreenOfPlayer(player);
 		json view = {{"round_id", round}, {"frame", frame}, {"peer_id", ScenarioRunner::GetLockstepLocalPeerId()},
 			{"player_index", player}, {"input_player", activity->LocalInputOfPlayer(player)},
-			{"player_controller_input", activity->GetPlayerController(player) ? activity->GetPlayerController(player)->GetInputPlayer() : Activity::NoPlayer},
+			{"player_controller_input", activity->GetPlayerController(player) ? activity->GetPlayerController(player)->GetInputPlayer() : Players::NoPlayer},
 			{"player_active", activity->PlayerActive(player)}, {"player_human", activity->IsLocalHumanSeat(player)},
 			{"team", player >= 0 ? activity->GetTeamOfPlayer(player) : Activity::NoTeam}, {"screen", screen},
 			{"controlled_uid", uid(controlled)}, {"brain_uid", uid(activity->GetPlayerBrain(player))},
@@ -302,7 +302,7 @@ void MovableMan::RecordA7UnitOwnership(uint64_t round, uint64_t frame) const {
 			view["seat_player"] = controlled->GetController()->GetSeatPlayer();
 			view["controller_input"] = controlled->GetController()->GetInputPlayer();
 		}
-		for (int seat = Activity::PlayerOne; seat < Activity::MaxPlayerCount; ++seat) {
+		for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
 			view["seat_facts"].push_back({{"player", seat}, {"active", activity->IsSeatActive(seat)},
 				{"human", activity->IsHumanSeat(seat)}, {"team", activity->GetTeamOfPlayer(seat)},
 				{"brain_uid", uid(activity->GetPlayerBrain(seat))}, {"input", activity->LocalInputOfPlayer(seat)}, {"screen", activity->ScreenOfPlayer(seat)}});
