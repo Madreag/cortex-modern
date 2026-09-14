@@ -497,7 +497,9 @@ namespace RTE {
 			uint16_t messageType = 0;
 			if (NetProtocol::PeekMessageType(bytes.data(), bytes.size(), messageType) &&
 			    messageType == static_cast<uint16_t>(NetMessageType::Chat)) {
-				uint64_t authorKey = c_MalformedChatRateBase + peerId;
+				// A transport id the roster never learned (a reconnect still handshaking) shares
+				// one budget key: per-id keys would grow the rate map with every fresh socket.
+				uint64_t authorKey = c_MalformedChatRateBase;
 				if (m_Role == NetSessionRole::Host) {
 					if (const PeerState* peer = FindPeer(peerId)) {
 						authorKey = peer->assignedPeerId;
@@ -847,6 +849,11 @@ namespace RTE {
 				m_Stats.chatMessagesRelayed += relayed;
 			}
 		}
+	}
+
+	size_t NetSession::ChatRateWindowCount() const {
+		std::lock_guard<std::mutex> chatLock(m_ChatMutex);
+		return m_ChatRate.size();
 	}
 
 	std::vector<NetChatEntry> NetSession::TakeChatEntries() {

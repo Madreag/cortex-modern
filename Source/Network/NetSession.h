@@ -158,6 +158,8 @@ namespace RTE {
 		/// Moves the UI's queued lines onto the wire. Call only from the thread that owns the
 		/// session's pump; mid-match that is the service's PumpSessionEvents, not Tick.
 		void PumpChatOutbox();
+		/// Rate-window keys currently held: seats plus the single shared unknown-sender budget.
+		size_t ChatRateWindowCount() const;
 
 		/// Host: re-seats the Ready peers on the ids a rematch roster gives them, so a roster that lost
 		/// a player is dense again. Keyed and valued by session-assigned id. Refuses rather than take an
