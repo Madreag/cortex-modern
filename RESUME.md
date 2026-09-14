@@ -75,7 +75,7 @@ stderr dumps, nine superseded worktrees — every deletion in `reviews/cleanup-2
 | Path | Branch @ tip | What it is |
 |---|---|---|
 | `D:\Projects\control-build` | `stage2/fixgroup-6-lead` @ `3f65208668` (fast-forwarded to the wave tip 2026-09-13 17:34 MST; the FG6C evidence stays pinned to 7e63a0c1b5 / exe c67b35a6…; exe 2b637683d933… built alone /MP12 at 17:36 MST, log D:/mx/lead-candidate-20260913b/build.log; verify6 8/8 at 17:39 MST, OUT D:/mx/lead-fg6/verify6-3f65208668-r2) | **LEAD CANDIDATE.** Clean Final exe c67b35a65b05, built09:22:40 alone/MP12. Verify6 underlying8/8; original wrapper7/8 false marker disclosed. Frozen for FG6C; candidate=origin. |
-| `D:\Projects\takeover-build` | `stage2/fixgroup-6-lead-wave-a` @ `3f65208668` (=origin; 2026-09-13 17:34 MST: 3b12f4bcc6 + pie-close 81187eef4e + viewport 9a3459c389) | **WAVE SCRATCH.** Directory backend/codec/client integrated3b12f4bc after seven-file merge proof and exact-lease push. Binary is STALE; candidate remains frozen7e63. |
+| `D:\Projects\takeover-build` | `stage2/fixgroup-6-lead-wave-a` @ `73c17555c7` (=origin, 2026-09-13 18:51 MST: 3f65208668 + terrain fix 4169c598e6 + lease corrections 73c17555c7 + viewport follow-up aca344d5f7; 2026-09-13 17:34 MST: 3b12f4bcc6 + pie-close 81187eef4e + viewport 9a3459c389) | **WAVE SCRATCH.** Directory backend/codec/client integrated3b12f4bc after seven-file merge proof and exact-lease push. Binary is STALE; candidate remains frozen7e63. |
 | `D:\Projects\p4b-interp-validation` | `stage2/p4b-interp-lockstep` @ `aa650e601e` | **THE MILESTONE BRANCH / APPROVED TREE.** The only executable the two-process harness and the verification family launch (exe `ff6a44ac46c8`, 2026-09-11 16:44 MST). `origin` matches. Workers may never write here. Docs say "main" — there is no `main` ref; this branch is it. |
 | `D:\Projects\cccp` | `modernization-effort` @ `67d844f3d7` (= origin) | Legacy reference, the fork's default branch, **the shared object store** for every worktree, and the wiki (`modernization-docs/`). The June-2026 wiki edits that sat uncommitted are the tip commit (committed and pushed 17:33 MST). |
 
@@ -1054,7 +1054,9 @@ and `-C` / `-s` / `--add-dir` are not accepted there, so a resumed lane is full-
 is then resumed with `--resume`. A `turn.failed` event with `codex_error_info: cyber_policy` (the provider's
 cybersecurity classifier; seen 2026-09-13 18:19 MST on allocator-failure / stack-capacity test wording, and earlier on
 the interactive session) ends the turn with CLI exit 1 and no usage event: resume the thread with a continuation that
-rewords the step in plain engine terms and moves it last; if it recurs, record the step and skip it. Astra reads the `AGENTS.md` at the worktree root by convention: the twin is the policy,
+rewords the step in plain engine terms and moves it last; if it recurs, record the step and skip it. Both 2026-09-13 trips followed a process-enumeration command (`Get-CimInstance Win32_Process … CommandLine`
+for the build-cap check): Astra briefs now check the cap with `Get-Process -Name cl,link` only and never enumerate
+command lines. Astra reads the `AGENTS.md` at the worktree root by convention: the twin is the policy,
 the brief is the fence. Every Astra brief says "no nested Codex sessions or sub-agents" (B2 spawned its own
 `codex exec` for part of a read on 2026-09-13; harmless but unbudgeted). Smoke evidence 2026-09-13 16:09-16:32 MST: `cli_runs/smoke-astra-runner-20260913` (gate ok,
 14 s); `-s workspace-write` allowed in-workspace writes, commands and loopback sockets and denied outside writes;
