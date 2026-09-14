@@ -2887,13 +2887,13 @@ bool GameActivity::CaptureNetLocalPlayerState(NetLocalPlayerState& out) const {
 
 namespace {
 template <class T> bool RestoreNetLocalMenu(T*& target, const std::string& saved, Controller* controller) {
-	if (saved.empty() && !target) return true;
-	const std::string state = saved.empty() ? T{}.SaveCheckpoint() : saved;
-	if (target && target->IsCheckpointInitialized()) return target->LoadCheckpoint(state);
+	// A seat that was not local on the snapshotting peer carries no local UI, so the live menu stays as it is.
+	if (saved.empty()) return true;
+	if (target && target->IsCheckpointInitialized()) return target->LoadCheckpoint(saved);
 	std::unique_ptr<T> candidate;
 	if (!target) { candidate = std::make_unique<T>(); target = candidate.get(); }
-	const bool restored = target->LoadCheckpoint(state) &&
-		(!target->IsCheckpointInitialized() || target->Create(controller) >= 0) && target->LoadCheckpoint(state);
+	const bool restored = target->LoadCheckpoint(saved) &&
+		(!target->IsCheckpointInitialized() || target->Create(controller) >= 0) && target->LoadCheckpoint(saved);
 	if (candidate) { if (restored) candidate.release(); else target = nullptr; }
 	return restored;
 }
