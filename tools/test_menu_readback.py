@@ -15,10 +15,14 @@ from run_sim_test import make_run
 from test_telemetry_bundle import set_visual_resolution
 
 
-CASES = ("landing", "settings", "lobby", "pause", "live", "input", "disabled", "scope-off", "oracles")
+CASES = ("landing", "settings", "lobby", "pause", "live", "input", "input-parity", "disabled", "scope-off", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 ORDER = ("TextMultiplayerName", "ButtonMultiplayerHostGame", "ButtonMultiplayerJoinGame",
          "ButtonBackToMain", "ButtonSaveDiagnostics")
+RESET_INPUT = ("wait 40\nactivate ButtonMainToOptions\nwait 5\nassert_visible TabInputSettings 1\n"
+               "activate TabInputSettings\nwait 3\npost_command ButtonP2Clear\npost_command ButtonP2Clear\n"
+               "wait 3\npost_command ButtonP3Clear\npost_command ButtonP3Clear\nwait 3\n"
+               "post_command ButtonBackToMainMenu\nwait 5\n")
 
 
 def sha(path):
@@ -64,31 +68,49 @@ def scripts(case, port, root):
         text += checks("TabGameplaySettings", "CollectionBoxSettingsBase") + "dump_player_options\n"
         text += "post_command ButtonBackToMainMenu\nwait 4\nassert_screen Pause\ndump_host_options\nexit\n"
     elif case == "input":
-        text = ("wait 40\nactivate ButtonMainToOptions\nwait 5\nassert_visible TabInputSettings 1\nactivate TabInputSettings\nwait 3\n"
-                "post_command ButtonP2Clear\npost_command ButtonP2Clear\nwait 3\npost_command ButtonP3Clear\npost_command ButtonP3Clear\nwait 3\n"
-                "post_command ButtonBackToMainMenu\nwait 5\nactivate ButtonMainToMultiplayer\nwait 5\n"
+        text = (RESET_INPUT + "activate ButtonMainToMultiplayer\nwait 5\n"
                 "assert_visible TextMultiplayerName 1\nfocus_next\nassert_focus TextMultiplayerName\n"
                 "settext TextMultiplayerName abc\nkey End down\nkey End up\nkey Backspace down\n"
                 "key Backspace up\nassert_label TextMultiplayerName ab\ndump_player_options\n"
                 "focus_next\nassert_focus ButtonMultiplayerHostGame\nkey KP1 down\nkey KP1 up\nwait 3\n"
                 "assert_substate HostSetup\nactivate ButtonHostBack\nwait 4\n"
-                "focus_next\nassert_focus TextMultiplayerName\nfocus_next\n"
+                "focus_previous\nassert_focus TextMultiplayerName\nfocus_next\n"
                 "pad south down\npad south up\nwait 3\nassert_substate HostSetup\n"
                 "dump_host_options\nexit\n")
-    elif case in ("live", "disabled", "scope-off"):
+    elif case in ("live", "disabled", "scope-off", "input-parity"):
         text = ("wait 12\nassert_screen Pause\nassert_visible ButtonSettings 1\n" if case == "live"
-                else host_lobby(port) if case == "disabled" else LANDING)
+                else RESET_INPUT + host_lobby(port) if case == "disabled"
+                else RESET_INPUT + LANDING if case == "input-parity" else LANDING)
         text += "assert_visible root 1\n"
-        if case == "scope-off":
+        if case in ("scope-off", "input-parity"):
             text += "focus_next\nassert_focus TextMultiplayerName\n"
         text += f"wait_file {root / 'done.json'} 90\nexit\n"
         steps = [{"op": "wait", "screen": "Pause" if case == "live" else "MultiplayerScreen"}]
         if case == "live":
-            steps += [menu_step("assert_visible ButtonSettings 1"), menu_step("dump_host_options"),
+            steps += [{"op": "assert", "equals": {"service": "Running", "paused": True}, "sim_at_least": 100},
+                      menu_step("assert_visible ButtonSettings 1"), menu_step("dump_host_options"),
                       menu_step("activate ButtonSettings"), {"op": "wait", "screen": "PauseSettings"},
                       menu_step("assert_visible CollectionBoxGameplaySettings 1"), menu_step("dump_player_options"),
                       menu_step("post_command ButtonBackToMainMenu"), {"op": "wait", "screen": "Pause"},
-                      menu_step("assert_visible ButtonSettings 1"), menu_step("dump_host_options")]
+                      menu_step("assert_visible ButtonSettings 1"), menu_step("dump_host_options"),
+                      {"op": "assert", "equals": {"service": "Running", "paused": True}, "sim_at_least": 100}]
+        elif case == "input-parity":
+            steps += [{"op": "wait", "scope": "menu", "control": "TextMultiplayerName", "equals": {"focus": True}}]
+            for route in ("key", "pad", "mouse", "post_command"):
+                if route == "post_command":
+                    steps += [menu_step("post_command ButtonMultiplayerHostGame")]
+                else:
+                    steps += [{"op": "mouse_move", "scope": "menu", "control": "ButtonMultiplayerHostGame"}]
+                    for edge in ("down", "up"):
+                        steps += ([{"op": f"mouse_{edge}", "scope": "menu", "control": "ButtonMultiplayerHostGame"}]
+                                  if route == "mouse" else [menu_step(f"{route} {'KP1' if route == 'key' else 'south'} {edge}")])
+                        if edge == "down":
+                            steps += [menu_step("assert_focus ButtonMultiplayerHostGame")]
+                steps += [menu_step("assert_visible TextHostPort 1"), menu_step("dump_host_options"),
+                          menu_step("post_command ButtonHostBack"), menu_step("assert_visible ButtonMultiplayerHostGame 1")]
+                if route != "post_command":
+                    steps += [menu_step("focus_previous")]
+                steps += [menu_step("assert_focus TextMultiplayerName")]
         elif case == "disabled":
             steps += [{"op": "wait", "scope": "menu", "control": "ButtonMultiplayerStart",
                        "equals": {"visible": True, "enabled": False}},
@@ -99,6 +121,7 @@ def scripts(case, port, root):
         else:
             steps += [{"op": "wait", "scope": "menu", "control": "TextMultiplayerName",
                        "equals": {"focus": True}}, menu_step("dump_player_options"),
+                      {"op": "mouse_move", "scope": "menu", "control": "ButtonMultiplayerHostGame"},
                       {"op": "input_scope", "enabled": False},
                       {"op": "menu", "command": "key KP1 down", "accepted": False},
                       {"op": "menu", "command": "key KP1 up", "accepted": False},
@@ -121,7 +144,7 @@ def inside(rect, parent):
 
 def captures(runtime, metadata):
     rows = []
-    for path in sorted((runtime / "ScreenShots").glob("dump_*_*.json")):
+    for path in sorted((runtime / "ScreenShots").glob("dump_*_*.json"), key=lambda path: int(path.stem.rsplit("_", 1)[1])):
         value = json.loads(path.read_text(encoding="utf-8"))
         png = path.with_suffix(".png")
         with Image.open(png) as source:
@@ -150,7 +173,8 @@ def run_case(options, case, root, failing=None):
     root.mkdir(parents=True, exist_ok=False)
     text, probe = scripts(case, options.port, root)
     if failing:
-        text = LANDING + failing + "\nexit\n"
+        setup, assertion = failing
+        text = LANDING + setup + assertion + "\nexit\n"
     script = root / "menu.txt"
     script.write_text(text, encoding="utf-8")
     inputs = root / "input.txt"
@@ -201,7 +225,7 @@ def run_case(options, case, root, failing=None):
             assert not record.get("timed_out"), record
             if failing:
                 assert record.get("exit_code") != 0 and record.get("exit_code") is not None, record
-                assert f"[menu-script] FAILED: {failing.split()[0]}" in logs[who], logs[who][-3000:]
+                assert f"[menu-script] FAILED: {assertion.split()[0]}" in logs[who], logs[who][-3000:]
                 assert "unknown command" not in logs[who], logs[who][-3000:]
             else:
                 assert record.get("exit_code") == 0, record
@@ -223,6 +247,11 @@ def run_case(options, case, root, failing=None):
                 assert first["service"] == last["service"], (first["service"], last["service"])
         if case == "input":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == "ab"
+        if case == "input-parity":
+            assert len(images) == 4, len(images)
+            projected = [[{key: control[key] for key in ("name", "rect", "text", "enabled", "visible")}
+                          for control in capture["controls"]] for capture in images]
+            assert all(value == projected[0] for value in projected[1:]), "activation routes produce different controls"
         result["pass"] = True
     except Exception as error:
         result["error"] = str(error)
@@ -253,10 +282,10 @@ def main():
     rows = []
     for case in CASES if options.case == "all" else (options.case,):
         if case == "oracles":
-            for name, command in {"visible": "assert_visible ButtonMultiplayerHostGame 0",
-                                  "focus": "assert_focus ButtonMultiplayerJoinGame",
-                                  "rect": "assert_rect_inside ButtonMultiplayerHostGame ButtonMultiplayerJoinGame",
-                                  "text": "assert_text_fits NoSuchControl"}.items():
+            for name, command in {"visible": ("", "assert_visible ButtonMultiplayerHostGame 0"),
+                                  "focus": ("", "assert_focus ButtonMultiplayerJoinGame"),
+                                  "rect": ("", "assert_rect_inside ButtonMultiplayerHostGame ButtonMultiplayerJoinGame"),
+                                  "text": ("settext TextMultiplayerName " + "W" * 200 + "\n", "assert_text_fits TextMultiplayerName")}.items():
                 rows.append(run_case(options, "landing", options.out / f"oracle-{name}" / options.size, command))
         else:
             rows.append(run_case(options, case, options.out / case / options.size))
