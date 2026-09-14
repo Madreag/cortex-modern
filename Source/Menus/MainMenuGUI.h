@@ -252,7 +252,6 @@ namespace RTE {
 		std::array<GUILabel*, 8> m_MultiplayerLobbyChatLabels;
 		GUITextBox* m_MultiplayerLobbyChatInput;
 		std::deque<std::string> m_MultiplayerLobbyChatLines; //!< Newest at the back; the labels show the last eight.
-		int m_MultiplayerScreenBaselineY; //!< The ini's Y for the multiplayer screen; the lobby slides up from it when it needs the room.
 		MultiplayerSubScreen m_MultiplayerSubScreen;
 		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
 		std::string m_PendingAutomationCommand; //!< Control waiting to raise Command after Update clears the queue.
