@@ -1,0 +1,8 @@
+# UNCOVERED: Go-To UI view + switch before the waypoint click (item 3b remaining).
+# Crab pie Go-To (Right) lands BeginGoToOrder + GameActivity AIGoToPoint.
+# NEXT before FIRE abandons the Go-To pick. Existing crab_ai_order.txt FIREs at 270
+# and never switches after the pie release. Do not serialize AI.
+30 31 NEXT
+150 220 PIEMENU_DIGITAL
+160 161 L_RIGHT
+240 241 NEXT

@@ -4623,6 +4623,20 @@ void MovableMan::UpdateControllers() {
 		return;
 	}
 
+	// The pass that samples this machine's seats and runs its AI owns the input it produces; the sim keeps
+	// the frame the wire committed for this tick until the frames are snapshotted. The set is fixed here:
+	// an AI script that moves an actor to another team would otherwise leave it holding produced input.
+	std::vector<Actor*> producingActors;
+	if (lockstepActive) {
+		producingActors.reserve(m_Actors.size());
+		for (Actor* actor: m_Actors) {
+			if (isLocalControllerActor(actor)) {
+				producingActors.push_back(actor);
+				actor->GetController()->BeginLocalProduction();
+			}
+		}
+	}
+
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActorsAI);
 	{
 		for (Actor* actor: m_Actors) {
@@ -4821,6 +4835,9 @@ void MovableMan::UpdateControllers() {
 		// the frame COMMITTED for simTick — sampled D ticks ago — so local and remote apply in phase.
 		// At D=0 the committed local frame is this tick's snapshot, so behavior is unchanged.
 		std::vector<ControllerFrame> localFrames = SnapshotLockstepControllerFrames(m_Actors, true);
+		for (Actor* actor: producingActors) {
+			actor->GetController()->EndLocalProduction();
+		}
 		DumpControllerDebugSnapshot("lockstep_local_pre_canonicalize", simTick, m_Actors, &localFrames);
 		if (!CanonicalizeControllerFramesThroughWire(localFrames, error)) {
 			DumpControllerDebugSnapshot("lockstep_local_canonicalize_error", simTick, m_Actors, &localFrames, &error);
