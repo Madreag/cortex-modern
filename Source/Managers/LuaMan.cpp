@@ -4025,6 +4025,13 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_pushcfunction(m_State, ScriptGraphEndCapture);
 		lua_setglobal(m_State, "_ScriptGraphEndCapture");
 		LuaThreadCodec::Register(m_State);
+		if (const char* probe = std::getenv("CC_TEST_F21_INVENTORY"); probe && std::strcmp(probe, "1") == 0) {
+			lua_pushcfunction(m_State, [](lua_State* state) -> int {
+				lua_pushboolean(state, GameActivity::RunNetInventoryRelaunchProbe(luaL_checkstring(state, 1)));
+				return 1;
+			});
+			lua_setglobal(m_State, "_ScriptGraphInventoryProbe");
+		}
 		RunScriptString(c_ScriptGraphHelper);
 		m_ScriptGraphHelperLoaded = true;
 	}
@@ -4202,6 +4209,9 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 		}
 	}
 	RestoreScriptCallbacks(problems, !reuseHeld);
+	if (this == &g_LuaMan.GetMasterScriptState()) {
+		if (const char* probe = std::getenv("CC_TEST_F21_INVENTORY"); probe && std::strcmp(probe, "1") == 0) GameActivity::RunNetInventoryRelaunchProbe("held");
+	}
 	lua_settop(m_State, top);
 	return problems.size() == before;
 }
