@@ -3471,6 +3471,216 @@ namespace RTE {
 		}
 	}
 
+	bool TestChatRoutingAndBounds(std::string* error) {
+		// A host plus one teammate and one opponent of the sending client, so a team line has both
+		// an eligible relay target (the host sinks what it relays) and an ineligible one.
+		const uint16_t port = 43260;
+		LoopbackTransport hostTransport, teamTransport, otherTransport;
+		NetSession host, teamPeer, otherPeer;
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 2;
+		hostConfig.heartbeatIntervalMs = 25;
+		hostConfig.timeoutMs = 120000;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "chat-routing-selftest";
+		identity.platform = "test";
+		NetSessionConfig teamConfig = hostConfig;
+		teamConfig.displayName = "Mate";
+		++teamConfig.localNonce;
+		NetSessionConfig otherConfig = hostConfig;
+		otherConfig.displayName = "Foe";
+		otherConfig.localNonce += 2;
+		if (!host.StartHost(hostTransport, hostConfig, error) ||
+		    !teamPeer.StartClient(teamTransport, "loopback", teamConfig, error) ||
+		    !otherPeer.StartClient(otherTransport, "loopback", otherConfig, error)) {
+			return false;
+		}
+		const auto pump = [&](uint64_t steps) {
+			for (uint64_t step = 0; step < steps; ++step) {
+				hostTransport.AdvanceTimeMs(10);
+				teamTransport.AdvanceTimeMs(10);
+				otherTransport.AdvanceTimeMs(10);
+				host.Tick(hostTransport.NowMs());
+				teamPeer.Tick(teamTransport.NowMs());
+				otherPeer.Tick(otherTransport.NowMs());
+			}
+		};
+		for (uint64_t waited = 0; waited <= 4000 &&
+		     !(host.GetReadyPeerCount() == 2 && teamPeer.IsReady() && otherPeer.IsReady()); waited += 10) {
+			pump(1);
+		}
+		if (host.GetReadyPeerCount() != 2 || !teamPeer.IsReady() || !otherPeer.IsReady()) {
+			*error = "the chat fixture never reached Ready on every session";
+			return false;
+		}
+		const uint8_t teamId = teamPeer.GetLocalPeerId();
+		const uint8_t otherId = otherPeer.GetLocalPeerId();
+		if (teamId == 0 || otherId == 0 || teamId == otherId) {
+			*error = "the clients did not receive distinct session ids";
+			return false;
+		}
+		const std::map<uint8_t, int> teams{{0, 0}, {teamId, 0}, {otherId, 1}};
+		host.SetChatTeams(teams);
+		teamPeer.SetChatTeams(teams);
+		otherPeer.SetChatTeams(teams);
+		const auto lastLines = [](NetSession& session) {
+			return session.TakeChatEntries();
+		};
+		const auto hasLine = [](const std::vector<NetChatEntry>& entries, uint8_t sender, uint8_t scope,
+		                        const std::string& text) {
+			for (const NetChatEntry& entry: entries) {
+				if (entry.senderPeerId == sender && entry.scope == scope && entry.text == text) return true;
+			}
+			return false;
+		};
+
+		// All-scope: the host sinks the client's line and relays it to the other peer too.
+		if (!teamPeer.SendChat(c_NetChatScopeAll, "covering left")) {
+			*error = "an in-limit all-scope send was refused locally";
+			return false;
+		}
+		pump(4);
+		const std::vector<NetChatEntry> hostLog = lastLines(host);
+		const std::vector<NetChatEntry> otherLog = lastLines(otherPeer);
+		const std::vector<NetChatEntry> teamEcho = lastLines(teamPeer);
+		if (!hasLine(hostLog, teamId, c_NetChatScopeAll, "covering left")) {
+			*error = "the host never saw the client's all-scope line";
+			return false;
+		}
+		if (!hasLine(otherLog, teamId, c_NetChatScopeAll, "covering left")) {
+			*error = "the host did not relay the all-scope line to the other peer";
+			return false;
+		}
+		if (!hasLine(teamEcho, teamId, c_NetChatScopeAll, "covering left")) {
+			*error = "the sender never got its own local echo";
+			return false;
+		}
+
+		// Team-scope from the host: only same-team peers take the relay.
+		if (!host.SendChat(c_NetChatScopeTeam, "push together")) {
+			*error = "a host team-scope send was refused";
+			return false;
+		}
+		pump(4);
+		if (!hasLine(lastLines(teamPeer), 0, c_NetChatScopeTeam, "push together")) {
+			*error = "the teammate never received the host's team line";
+			return false;
+		}
+		for (const NetChatEntry& entry: lastLines(otherPeer)) {
+			if (entry.text == "push together") {
+				*error = "a team line reached a peer on the other team";
+				return false;
+			}
+		}
+
+		// Team-scope from the teammate: the host sinks it but relays to nobody outside team 0.
+		if (!teamPeer.SendChat(c_NetChatScopeTeam, "team only line")) {
+			*error = "a client team-scope send was refused";
+			return false;
+		}
+		pump(4);
+		if (!hasLine(lastLines(host), teamId, c_NetChatScopeTeam, "team only line")) {
+			*error = "the host never saw the teammate's team line";
+			return false;
+		}
+		for (const NetChatEntry& entry: lastLines(otherPeer)) {
+			if (entry.text == "team only line") {
+				*error = "a relayed team line leaked to the other team";
+				return false;
+			}
+		}
+
+		// Bounds: the cap is inclusive at 256 bytes, refused at 257, and control bytes are stripped.
+		if (!teamPeer.SendChat(c_NetChatScopeAll, std::string(NetProtocol::c_MaxChatTextBytes, 'x'))) {
+			*error = "a chat line exactly at the byte cap was refused";
+			return false;
+		}
+		if (teamPeer.SendChat(c_NetChatScopeAll, std::string(NetProtocol::c_MaxChatTextBytes + 1, 'x'))) {
+			*error = "a chat line over the byte cap was accepted";
+			return false;
+		}
+		if (teamPeer.SendChat(c_NetChatScopeAll, std::string("bad \xC0\xAF utf8"))) {
+			*error = "a chat line with malformed UTF-8 was accepted";
+			return false;
+		}
+		if (teamPeer.SendChat(7, "bad scope")) {
+			*error = "a chat line with an unknown scope was accepted";
+			return false;
+		}
+		if (teamPeer.GetStats().chatDroppedInvalid != 3) {
+			*error = "invalid sends counted " + std::to_string(teamPeer.GetStats().chatDroppedInvalid) + " wanted 3";
+			return false;
+		}
+		// A control byte is stripped on send rather than refused: "a\rb" reaches the wire as "ab".
+		if (!teamPeer.SendChat(c_NetChatScopeAll, "a\rb")) {
+			*error = "a send carrying a strippable control byte was refused";
+			return false;
+		}
+		pump(4);
+		if (!hasLine(lastLines(host), teamId, c_NetChatScopeAll, "ab")) {
+			*error = "the stripped control byte did not arrive as \"ab\" on the host";
+			return false;
+		}
+
+		// Rate: five lines inside one 1s window pass, the sixth is dropped and counted.
+		pump(110);
+		uint64_t sent = 0;
+		for (int i = 0; i < 6; ++i) {
+			if (teamPeer.SendChat(c_NetChatScopeAll, "burst " + std::to_string(i))) ++sent;
+		}
+		if (sent != 5 || teamPeer.GetStats().chatDroppedRate != 1) {
+			*error = "burst sent " + std::to_string(sent) + " rate-drops " +
+			         std::to_string(teamPeer.GetStats().chatDroppedRate) + " wanted 5/1";
+			return false;
+		}
+
+		// A malformed chat-typed packet is counted and tolerated: the peer stays seated.
+		std::vector<uint8_t> malformed;
+		if (!NetProtocol::Encode(NetMessage{0, 0, NetChat{c_NetChatVersion, 0, c_NetChatScopeAll, 0, "hi"}}, malformed)) {
+			*error = "could not encode the chat message the malformed arm mutates";
+			return false;
+		}
+		malformed[27] = 9; // a scope byte the decoder must reject while the type still peeks as Chat
+		NetPeerId otherTransportPeer = c_InvalidNetPeerId;
+		for (const NetSessionPeerInfo& peer: host.GetReadyPeers()) {
+			if (peer.assignedPeerId == otherId) otherTransportPeer = peer.transportPeerId;
+		}
+		if (otherTransportPeer == c_InvalidNetPeerId) {
+			*error = "the opponent's transport peer id was never learned";
+			return false;
+		}
+		host.InjectEvent(NetTransportEvent{NetTransportEventType::PacketReceived, otherTransportPeer,
+		                                 NetTransportLane::ControlReliable, malformed, {}}, hostTransport.NowMs());
+		if (host.GetStats().chatDroppedMalformed != 1 || host.GetReadyPeerCount() != 2) {
+			*error = "malformed chat counted " + std::to_string(host.GetStats().chatDroppedMalformed) +
+			         " peers " + std::to_string(host.GetReadyPeerCount()) + " wanted 1/2";
+			return false;
+		}
+
+		// The sink is bounded: past the window the oldest lines fall off. Start in a fresh rate
+		// window - the burst arm above already spent this one's five.
+		pump(110);
+		uint64_t sentForCap = 0;
+		for (int i = 0; i < 70; ++i) {
+			if (teamPeer.SendChat(c_NetChatScopeAll, "cap line " + std::to_string(i))) ++sentForCap;
+			if (i % 5 == 4) pump(110);
+		}
+		const std::vector<NetChatEntry> capped = lastLines(teamPeer);
+		if (sentForCap != 70 || capped.size() != 64 ||
+		    capped.back().text != "cap line 69") {
+			*error = "the bounded sink kept " + std::to_string(capped.size()) + " after " +
+			         std::to_string(sentForCap) + " sends";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestPendingSessionEventSurvivesTeardown(std::string* error) {
 		const uint16_t port = 43219;
 		LoopbackTransport hostTransport, clientTransport;
@@ -4346,6 +4556,7 @@ namespace RTE {
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestRosterTransitionsRecordHoldThenPresent(&error)) return fail(error);
 		if (!TestRosterBannerNamesThePlayerOnce(&error)) return fail(error);
+		if (!TestChatRoutingAndBounds(&error)) return fail(error);
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
 		if (!TestMuxOpensIceListenFirst(&error)) return fail(error);
