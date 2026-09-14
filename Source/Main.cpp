@@ -1334,7 +1334,7 @@ static bool MenuScriptFileExists(const std::string& pattern) {
 	std::filesystem::directory_iterator entry(path.has_parent_path() ? path.parent_path() : ".", error), end;
 	for (; !error && entry != end; entry.increment(error)) {
 		const std::string candidate = entry->path().filename().string();
-		if (candidate.starts_with(prefix) && candidate.ends_with(suffix) && entry->is_regular_file(error)) return true;
+		if (candidate.size() >= prefix.size() + suffix.size() && candidate.starts_with(prefix) && candidate.ends_with(suffix) && entry->is_regular_file(error)) return true;
 	}
 	return false;
 }
@@ -1445,8 +1445,8 @@ void ProcessMenuScript() {
 	} else if (cmd == "wait_file") {
 		std::string path;
 		int seconds = 30;
-		iss >> path >> seconds;
-		if (path.empty() || seconds <= 0) return MenuScriptFail("wait_file requires a path and positive timeout");
+		iss >> path >> std::ws;
+		if (path.empty() || (!iss.eof() && !(iss >> seconds)) || seconds <= 0) return MenuScriptFail("wait_file requires a path and positive timeout");
 		waitCond = "file:" + path;
 		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000ULL;
 	} else if (cmd == "wait_members") {
