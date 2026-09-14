@@ -4207,6 +4207,14 @@ void RunGameLoop() {
 				g_MenuMan.HandleTransitionIntoMenuLoop();
 				RunMenuLoop();
 			}
+			if (!System::IsSetToQuit()) {
+				g_TimerMan.PauseSim(false);
+				if (g_ActivityMan.ActivitySetToRestart()) {
+					g_LoadingScreen.DrawLoadingSplash();
+					g_WindowMan.UploadFrame();
+					if (!g_ActivityMan.RestartActivity() && !HandleFailedActivityLaunch()) return;
+				}
+			}
 			continue;
 		}
 
