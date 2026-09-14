@@ -1,4 +1,5 @@
 #include "NetMatchReplay.h"
+#include "TelemetryBundle.h"
 
 #include "NetLobbyProtocol.h"
 
@@ -63,6 +64,9 @@ namespace RTE {
 
 	bool NetMatchReplayWriter::Open(const std::string& path, const NetMatchConfig& config, std::string* error) {
 		Close();
+		m_DiagnosticBytes.clear();
+		m_DiagnosticFrames = 0;
+		m_DiagnosticTruncated = false;
 		m_Out.open(path, std::ios::binary | std::ios::trunc);
 		if (!m_Out) {
 			if (error) *error = "could not open replay file for writing: " + path;
@@ -89,6 +93,10 @@ namespace RTE {
 			return false;
 		}
 		m_FramesWritten = 0;
+		if (header.size() + configBytes.size() + 4 <= TelemetryBundle::c_MemberLimit) {
+			m_DiagnosticBytes = header;
+			m_DiagnosticBytes.insert(m_DiagnosticBytes.end(), configBytes.begin(), configBytes.end());
+		} else m_DiagnosticTruncated = true;
 		return true;
 	}
 
@@ -209,7 +217,23 @@ namespace RTE {
 			if (error) *error = "could not write a replay frame";
 			return false;
 		}
+		if (!m_DiagnosticTruncated) {
+			if (m_DiagnosticBytes.size() + lengthPrefix.size() + bytes.size() + 4 <= TelemetryBundle::c_MemberLimit) {
+				m_DiagnosticBytes.insert(m_DiagnosticBytes.end(), lengthPrefix.begin(), lengthPrefix.end());
+				m_DiagnosticBytes.insert(m_DiagnosticBytes.end(), bytes.begin(), bytes.end());
+				++m_DiagnosticFrames;
+			} else m_DiagnosticTruncated = true;
+		}
 		++m_FramesWritten;
+		return true;
+	}
+
+	bool NetMatchReplayWriter::CopyDiagnosticReplay(std::string& bytes, bool& truncated) const {
+		bytes.clear();
+		truncated = m_DiagnosticTruncated;
+		if (m_DiagnosticFrames == 0) return false;
+		bytes.assign(reinterpret_cast<const char*>(m_DiagnosticBytes.data()), m_DiagnosticBytes.size());
+		bytes.append(4, static_cast<char>(0xff));
 		return true;
 	}
 

@@ -263,6 +263,8 @@ namespace RTE {
 		static bool IsLockstepReplayRecording();
 		static uint64_t GetLockstepReplayFramesWritten();
 		static void CloseLockstepReplayRecord();
+		/// Takes a bounded, complete replay prefix at a completed simulation tick.
+		static bool CopyLockstepReplayForDiagnostics(std::string& bytes, bool& truncated);
 		static bool SetLockstepReplaySource(const std::string& path, std::string* error = nullptr);
 		static bool IsLockstepReplayPlayback();
 		static const NetMatchConfig& GetLockstepReplayConfig();
