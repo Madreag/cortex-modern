@@ -307,7 +307,10 @@ namespace RTE {
 			{"mode_preset", config.modePreset},
 		};
 		for (const NetMatchPlayerSlot& player : SortedPlayers(config.players)) {
-			const std::string prefix = "player." + std::to_string(player.peerId) + ".";
+			// A CPU slot has no peer id, so its team is its key: under a shared player.0 prefix the
+			// canonical sort merges every CPU slot's fields and two rosters that swap their teams hash alike.
+			const std::string prefix = player.cpu ? ("player.cpu" + std::to_string(player.team) + ".")
+			                                      : ("player." + std::to_string(player.peerId) + ".");
 			fields.emplace_back(prefix + "team", std::to_string(player.team));
 			fields.emplace_back(prefix + "cpu", BoolText(player.cpu));
 			fields.emplace_back(prefix + "display_name", player.displayName);

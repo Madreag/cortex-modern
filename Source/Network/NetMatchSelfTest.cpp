@@ -406,6 +406,41 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestCPURosterHash(std::string* error) {
+			NetMatchConfig seated = MakeConfig();
+			seated.players.push_back({0, 2, true, "CPU Alpha"});
+			seated.players.push_back({0, 3, true, "CPU Beta"});
+			if (!NetMatchConfigUtil::ValidateLocalAlpha(seated, error)) return false;
+			const NetHash32 seatedHash = NetMatchConfigUtil::HashConfig(seated);
+			NetMatchConfig reordered = seated;
+			std::swap(reordered.players[2], reordered.players[3]);
+			if (NetMatchConfigUtil::HashConfig(reordered) != seatedHash) {
+				*error = "the CPU roster hash depends on the player vector order";
+				return false;
+			}
+			NetMatchConfig aiOnly;
+			aiOnly.sessionId = seated.sessionId;
+			aiOnly.dedicated = true;
+			aiOnly.peerCount = 1;
+			aiOnly.players = {{0, 0, true, "CPU Alpha"}, {0, 1, true, "CPU Beta"}};
+			if (!NetMatchConfigUtil::ValidateLocalAlpha(aiOnly, error)) return false;
+			NetMatchConfig traded = aiOnly;
+			traded.players[0].displayName = aiOnly.players[1].displayName;
+			traded.players[1].displayName = aiOnly.players[0].displayName;
+			if (NetMatchConfigUtil::HashConfig(traded) == NetMatchConfigUtil::HashConfig(aiOnly)) {
+				*error = "trading two CPU slots between teams left the match config hash unchanged";
+				return false;
+			}
+			NetMatchConfig moved = aiOnly;
+			moved.players.back().team = 2;
+			if (NetMatchConfigUtil::HashConfig(moved) == NetMatchConfigUtil::HashConfig(aiOnly)) {
+				*error = "moving a CPU slot to another team left the match config hash unchanged";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS cpu_roster_hash" << std::endl;
+			return true;
+		}
+
 		bool TestOwnershipPolicies(std::string* error) {
 			NetMatchConfig config = MakeConfig();
 			config.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
@@ -6838,6 +6873,7 @@ namespace RTE {
 		if (!TestMatchConfigDedicated(&error)) return fail(error);
 		if (!TestCPURosterRequests(&error)) return fail(error);
 		if (!TestCPURosterValidation(&error)) return fail(error);
+		if (!TestCPURosterHash(&error)) return fail(error);
 		if (!TestReplayCommandSenders(&error)) return fail(error);
 		if (!TestOwnershipPolicies(&error)) return fail(error);
 		if (!TestLockstepCoordinatorUsesMatchOwnership(&error)) return fail(error);
