@@ -23,10 +23,7 @@ namespace RTE {
 			for (const Attachable* part: rotating->GetAttachables()) visit(part);
 			for (const AEmitter* wound: rotating->GetWoundList()) visit(wound);
 		}
-		if (const auto* part = dynamic_cast<const Attachable*>(entity)) {
-			visit(part->GetOwnedBreakWound());
-			visit(part->GetOwnedParentBreakWound());
-		}
+		if (const auto* part = dynamic_cast<const Attachable*>(entity)) part->VisitOwnedWoundTemplates(visit);
 		if (const auto* actor = dynamic_cast<const Actor*>(entity)) {
 			for (const MovableObject* item: *actor->GetInventory()) visit(item);
 		}

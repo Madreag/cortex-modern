@@ -249,7 +249,13 @@ namespace RTE {
 		void SetOwnedParentBreakWound(AEmitter* wound);
 		AEmitter* GetOwnedBreakWound() const { return m_OwnedBreakWound.get(); }
 		AEmitter* GetOwnedParentBreakWound() const { return m_OwnedParentBreakWound.get(); }
+
+		/// Visits the wound templates this Attachable owns, so owned object collection and link remapping walk the same set.
+		/// @param visit The function to call with each owned wound template.
+		void VisitOwnedWoundTemplates(const std::function<void(AEmitter*)>& visit) const;
+
 		void ResolveFaithfulLinks() override;
+		void RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) override;
 #pragma endregion
 
 #pragma region Inherited Value Getters and Setters
