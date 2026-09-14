@@ -185,6 +185,7 @@ namespace RTE {
 		/// @return A pointer to a SceneEditorGUI. Ownership is NOT transferred!
 		SceneEditorGUI* GetEditorGUI(unsigned int which = 0) const { return m_pEditorGUI[which]; }
 		static bool RunNetLocalUIRestoreSelfTest();
+		static bool RunNetInventoryRelaunchProbe(std::string_view phase);
 
 		/// Locks a player controlled actor to a specific controller mode.
 		/// Locking the actor will disable player input, including switching actors.

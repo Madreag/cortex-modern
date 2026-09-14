@@ -22,6 +22,7 @@
 #include "AHuman.h"
 #include "ACrab.h"
 #include "ACRocket.h"
+#include "ACDropShip.h"
 #include "HeldDevice.h"
 #include "Loadout.h"
 #include "SLTerrain.h"
@@ -2996,6 +2997,93 @@ bool GameActivity::ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings)
 	return true;
 }
 
+bool GameActivity::RunNetInventoryRelaunchProbe(std::string_view phase) {
+	const char* enabled = std::getenv("CC_TEST_F21_INVENTORY");
+	if (!enabled || std::strcmp(enabled, "1") != 0) return false;
+	struct State {
+		bool staged = false, passed = true;
+		int peer = 0, held = 0, first = 0, after = 0;
+		std::array<long, 2> carriers{}, ordinary{}, collected{}, controlled{};
+		Actor* oldCarrier = nullptr;
+	};
+	static State state;
+	auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+	const auto uid = [](const Actor* actor) { return actor ? actor->GetUniqueID() : 0L; };
+	const auto check = [&](std::string_view name, bool passed) {
+		state.passed = passed && state.passed;
+		std::cout << "[net-inventory-resync] " << (passed ? "PASS" : "FAIL") << " " << name << " phase=" << phase << " peer=" << state.peer
+		          << " tick=" << g_TimerMan.GetSimUpdateCount() << " relaunch=" << g_ActivityMan.LockstepRelaunchInProgress() << std::endl;
+		return passed;
+	};
+	if (phase == "stage") {
+		if (!activity || state.staged) return check("stage_once", false);
+		state.peer = ScenarioRunner::GetLockstepLocalPeerId();
+		if (state.peer < 1 || state.peer > 2) return check("two_peer_fixture", false);
+		const auto* craftPreset = dynamic_cast<const ACDropShip*>(g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte"));
+		const auto* brainPreset = dynamic_cast<const Actor*>(g_PresetMan.GetEntityPreset("Actor", "Brain Case", "Base.rte"));
+		if (!craftPreset || !brainPreset) return check("fixture_presets", false);
+		for (int index = 0; index < 2; ++index) {
+			auto* craft = static_cast<ACDropShip*>(craftPreset->Clone());
+			craft->SetTeam(index);
+			craft->SetPos(Vector(400.0F + index * 1000.0F, 100.0F));
+			craft->SetPinStrength(10000.0F);
+			craft->SetControllerMode(Controller::CIM_DISABLED);
+			auto* ordinary = static_cast<Actor*>(brainPreset->Clone());
+			auto* collected = static_cast<Actor*>(brainPreset->Clone());
+			ordinary->SetTeam(index); collected->SetTeam(index);
+			craft->AddInventoryItem(ordinary);
+			const_cast<std::deque<MovableObject*>&>(craft->GetCollectedInventory()).push_back(collected);
+			state.carriers[index] = uid(craft);
+			state.ordinary[index] = uid(ordinary);
+			state.collected[index] = uid(collected);
+			g_MovableMan.AddActor(craft);
+			std::cout << "[net-inventory-resync-fixture] index=" << index << " carrier=" << uid(craft) << " ordinary=" << uid(ordinary) << " collected=" << uid(collected) << std::endl;
+		}
+		const int index = state.peer - 1;
+		state.oldCarrier = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(state.carriers[index]));
+		activity->m_Brain[0] = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(state.ordinary[index]));
+		activity->m_Brain[1] = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(state.collected[index]));
+		for (int player = 0; player < 2; ++player) {
+			activity->m_pLastMarkedActor[player] = state.oldCarrier;
+			state.controlled[player] = uid(activity->m_ControlledActor[player]);
+		}
+		state.staged = activity->m_Brain[0] && activity->m_Brain[1] && state.oldCarrier;
+		return check("inventory_and_distinct_local_marks_staged", state.staged);
+	}
+	if (!state.staged || !activity) return phase == "held" ? true : check("stage_observed", false);
+	const int index = state.peer - 1;
+	if (phase == "held") {
+		if (!g_ActivityMan.LockstepRelaunchInProgress()) return true;
+		Actor* current = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(state.carriers[index]));
+		const bool outside = current && current != state.oldCarrier && !g_MovableMan.IsActor(state.oldCarrier) && !g_MovableMan.ValidMO(state.oldCarrier);
+		Actor* saved = activity->m_Brain[3];
+		activity->m_Brain[3] = nullptr;
+		const int before = activity->CountStaleRelaunchSlots(-1);
+		activity->m_Brain[3] = state.oldCarrier;
+		const int withHeld = activity->CountStaleRelaunchSlots(-1);
+		activity->m_Brain[3] = saved;
+		auto* craft = dynamic_cast<ACraft*>(current);
+		const bool carried = craft && std::any_of(craft->GetCollectedInventory().begin(), craft->GetCollectedInventory().end(), [&](const MovableObject* object) { return object->GetUniqueID() == state.collected[index]; });
+		++state.held;
+		std::cout << "[net-inventory-held] uid=" << state.carriers[index] << " old=" << state.oldCarrier << " current=" << current << " outside=" << outside << " stale=" << before << "/" << withHeld << " collected=" << carried << std::endl;
+		return check("held_old_world_excluded_and_collected_restored", outside && withHeld == before + 1 && carried);
+	}
+	if (phase != "first" && phase != "after") return check("known_phase", false);
+	const bool relaunch = g_ActivityMan.LockstepRelaunchInProgress();
+	if (phase == "first") ++state.first; else ++state.after;
+	bool matched = true;
+	for (int player = 0; player < 2; ++player) {
+		const long expectedBrain = player == 0 ? state.ordinary[index] : state.collected[index];
+		const long brain = uid(activity->m_Brain[player]), mark = uid(activity->m_pLastMarkedActor[player]);
+		const long controlled = uid(activity->m_ControlledActor[player]);
+		std::cout << "[net-inventory-slots] phase=" << phase << " peer=" << state.peer << " player=" << player << " expected_brain=" << expectedBrain << " brain=" << brain
+		          << " saved_host_brain=" << (player == 0 ? state.ordinary[0] : state.collected[0]) << " expected_mark=" << state.carriers[index] << " mark=" << mark << " saved_host_mark=" << state.carriers[0]
+		          << " expected_controlled=" << state.controlled[player] << " controlled=" << controlled << std::endl;
+		matched = matched && brain == expectedBrain && mark == state.carriers[index] && controlled == state.controlled[player];
+	}
+	return check("local_inventory_and_marks_survive", matched && state.held > 0 && (phase == "first" ? relaunch && state.first == 1 : !relaunch && state.first == 1 && state.after == 1)) && state.passed;
+}
+
 bool GameActivity::RunNetLocalUIRestoreSelfTest() {
 	bool passed = true;
 	const char* reclaimDiagnostic = std::getenv("CC_TEST_NET_RECLAIM_DIAG");
@@ -3470,6 +3558,80 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			          << " relaunch=" << g_ActivityMan.LockstepRelaunchInProgress() << " restoring=" << g_MovableMan.IsRestoringSnapshot() << std::endl;
 			check("relaunch_fixture_restores_world_and_flag", allRemoved && !stillInWorld && drained.actors == queues.actors && drained.items == queues.items && drained.particles == queues.particles &&
 				g_ActivityMan.LockstepRelaunchInProgress() == restore.relaunching && !g_MovableMan.IsRestoringSnapshot());
+		}
+		{
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			struct SceneRestore {
+				MovableMan::WorldSetAside world;
+				SceneMan::SceneSetAside scene;
+				SceneRestore() {
+					if (!g_MovableMan.SetAsideWorld(world, false)) throw std::runtime_error("slot scene world hold failed");
+					g_SceneMan.SetAsideScene(scene);
+				}
+				~SceneRestore() {
+					g_MovableMan.PurgeAllMOs();
+					g_SceneMan.ReinstateScene(scene);
+					g_MovableMan.ReinstateWorld(world);
+				}
+			} sceneRestore;
+			if (g_SceneMan.LoadScene("Null Scene", false, false) < 0) throw std::runtime_error("slot fixture scene failed");
+			using Slots = std::array<long, 4>;
+			using Actors = std::array<Actor*, 4>;
+			std::array<Actors, Players::MaxPlayerCount> host{}, local{};
+			for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+				fixture->m_PlayerController[player].Create(Controller::CIM_PLAYER, player);
+				for (auto* group: {&host, &local}) for (Actor*& actor: (*group)[player]) {
+					actor = new Actor();
+					if (actor->MovableObject::Create(1.0F) < 0) throw std::runtime_error("slot actor creation failed");
+					actor->SetTeam(TeamOne);
+					actor->SetPinStrength(1000.0F);
+					g_MovableMan.AddActor(actor);
+				}
+			}
+			const auto uid = [](const Actor* actor) { return actor ? actor->GetUniqueID() : 0L; };
+			const auto slots = [&](int player) { return Slots{uid(fixture->m_Brain[player]), uid(fixture->m_ControlledActor[player]), uid(fixture->m_PlayerController[player].GetControlledActor()), uid(fixture->m_pLastMarkedActor[player])}; };
+			const auto print = [](const Slots& value) { return std::to_string(value[0]) + "/" + std::to_string(value[1]) + "/" + std::to_string(value[2]) + "/" + std::to_string(value[3]); };
+			const auto seat = [&](const auto& groups) {
+				fixture->m_PlayerCount = Players::MaxPlayerCount;
+				for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+					fixture->m_IsActive[player] = fixture->m_IsHuman[player] = true;
+					fixture->m_Team[player] = TeamOne;
+					fixture->m_PlayerScreen[player] = player;
+					fixture->m_Brain[player] = groups[player][0];
+					fixture->m_ControlledActor[player] = groups[player][1];
+					fixture->m_PlayerController[player].SetControlledActor(groups[player][2]);
+					fixture->m_pLastMarkedActor[player] = groups[player][3];
+				}
+			};
+			if (!restore.relaunching) g_ActivityMan.NoteLockstepRelaunch();
+			seat(local);
+			NetLocalPlayerState retained;
+			if (!fixture->CaptureNetLocalPlayerState(retained)) throw std::runtime_error("all player capture failed");
+			for (const std::string arm: {"retained", "fresh", "empty"}) {
+				seat(host);
+				fixture->ClearCheckpointActorIDs();
+				if (!fixture->LoadCheckpoint(fixture->SaveCheckpoint())) throw std::runtime_error("all player host staging failed");
+				const bool applied = arm == "retained" ? fixture->RestoreNetLocalPlayerState(retained) : fixture->ApplyNetPlayerBindings(arm == "fresh" ? retained.bindings : NetGamePlayerBindings{});
+				std::array<std::array<Slots, Players::MaxPlayerCount>, 3> observations{};
+				for (int pass = 0; pass < 3; ++pass) {
+					if (pass) fixture->RebindNonOwnedActorSlots();
+					for (int player = 0; player < Players::MaxPlayerCount; ++player) observations[pass][player] = slots(player);
+				}
+				for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+					const Slots expected = arm == "empty" ? Slots{} : Slots{uid(local[player][0]), uid(local[player][1]), arm == "retained" ? uid(local[player][2]) : 0, arm == "retained" ? uid(local[player][3]) : 0};
+					const Slots hostIDs{uid(host[player][0]), uid(host[player][1]), uid(host[player][2]), uid(host[player][3])};
+					const Slots pending{fixture->m_CheckpointActorIDs[player][0], fixture->m_CheckpointActorIDs[player][1], fixture->m_CheckpointActorIDs[player][2], fixture->m_CheckpointMarkedActorIDs[player]};
+					const bool active = fixture->m_IsActive[player] && fixture->m_IsHuman[player] && fixture->m_PlayerScreen[player] == player;
+					const bool empty = !fixture->m_IsActive[player] && fixture->m_PlayerScreen[player] == -1;
+					std::cout << "[net-local-all-players] arm=" << arm << " player=" << player << " applied=" << applied << " active=" << active << " empty=" << empty << " host=" << print(hostIDs) << " expected=" << print(expected) << " pending=" << print(pending)
+					          << " before=" << print(observations[0][player]) << " first=" << print(observations[1][player]) << " second=" << print(observations[2][player]) << std::endl;
+					check(("all_players_" + arm + "_" + std::to_string(player)).c_str(), applied && (arm == "empty" ? empty : active) && g_ActivityMan.LockstepRelaunchInProgress() && observations[0][player] == expected && observations[1][player] == expected && observations[2][player] == expected);
+				}
+			}
+			fixture->ClearCheckpointActorIDs();
+			if (!restore.relaunching) g_ActivityMan.EndLockstepRelaunch();
 		}
 	} catch (const std::exception& exception) { check(exception.what(), false); }
 	for (long uid: scriptIdentities) lua.RunScriptString("if _ScriptedObjects then _ScriptedObjects[\"" + std::to_string(uid) + "\"] = nil end");
