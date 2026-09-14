@@ -1,7 +1,9 @@
-"""Browse two retained replay copies, play the second, and confirm its deletion.
+"""Browse two match copies and a legacy replay, play the second, and delete it.
 
 Run unchanged on the control (the Replays button has no handler) and the tip.
 Only individual fixture files are copied, into each run's private Userdata.
+The legacy fixture defaults to pickup_fire.ccreplay in the shared harness fixture
+root; --legacy-fixture overrides that path. Its 602 running ticks must read 00:10.
 """
 
 import argparse
@@ -18,6 +20,7 @@ from test_post_match_report import LABELS, SIZES, capture_geometry, latest_captu
 
 
 NAMES = ("01-first.ccreplay", "02-second.ccreplay")
+LEGACY_NAME = "03-pickup_fire.ccreplay"
 FIXTURE = Path("D:/Projects/stage2_p4/fixtures/pickup_fire.ccreplay")
 PLAYBACK = re.compile(r"\[net-replay\] playback finished[^\n]*ticks=(\d+)[^\n]*outcome=completed[^\n]*frames=(\d+)[^\n]*end_marker=1")
 
@@ -31,7 +34,7 @@ def duration_agreement(row_text, summary):
             "row": actual, "summary": expected, "running_ticks": ticks}
 
 
-def menu_script(date, duration=None):
+def menu_script(date, legacy_date, duration=None):
     script = ("wait 40\nactivate ButtonMainToMultiplayer\nwait 12\n"
               "assert_screen MultiplayerScreen\nassert_control ButtonMultiplayerReplays\n"
               "activate ButtonMultiplayerReplays\nwait 10\nassert_substate ReplayBrowser\n"
@@ -39,6 +42,8 @@ def menu_script(date, duration=None):
     for index, name in enumerate(NAMES):
         for expected in (name, date, "P4 Alpha Duel / Grasslands", "2 peers", *(("| " + duration,) if duration else ())):
             script += f"assert_label LabelReplayRow{index} {expected}\n"
+    for expected in (LEGACY_NAME, legacy_date, "P4 Alpha Duel / Grasslands", "2 peers", "| 00:10"):
+        script += f"assert_label LabelReplayRow2 {expected}\n"
     script += ("assert_label LabelReplaySelected 01-first.ccreplay\nscreenshot replays_list\n"
                "activate LabelReplayRow1\nwait 10\nassert_label LabelReplaySelected 02-second.ccreplay\n"
                "screenshot replays_selected\nactivate ButtonReplayDelete\nwait 10\n"
@@ -131,15 +136,17 @@ def first_row_ink(repo, path, text, geometry):
                            max(x for x, _, _ in expected), max(y for _, y, _ in expected)]}
 
 
-def run_size(repo, root, size, fixture, expected, summary=None):
+def run_size(repo, root, size, fixture, expected, summary=None, legacy_fixture=FIXTURE):
     root.mkdir(parents=True, exist_ok=False)
     checks, details = {}, {}
     before = pin(repo, expected)
     fixture_hash = sha256(fixture)
+    legacy_hash = sha256(legacy_fixture)
     date = datetime.fromtimestamp(fixture.stat().st_mtime, timezone(timedelta(hours=-7))).strftime("%Y-%m-%d %H:%M MST")
+    legacy_date = datetime.fromtimestamp(legacy_fixture.stat().st_mtime, timezone(timedelta(hours=-7))).strftime("%Y-%m-%d %H:%M MST")
     script = root / "browser.txt"
     expected_duration = duration_agreement("", summary)["summary"] if summary else None
-    script.write_text(menu_script(date, expected_duration), encoding="utf-8")
+    script.write_text(menu_script(date, legacy_date, expected_duration), encoding="utf-8")
     run = make_run(repo, ["-menu-script", script, "-num-lua-states", 4], root / "browser", 240,
                    env={"CCCP_HEADLESS": "1"})
     try:
@@ -148,8 +155,11 @@ def run_size(repo, root, size, fixture, expected, summary=None):
         directory.mkdir()
         for name in NAMES:
             shutil.copy2(fixture, directory / name)
+        shutil.copy2(legacy_fixture, directory / LEGACY_NAME)
         details["seed"] = {"source": str(fixture), "sha256": fixture_hash, "date": date,
                            "copies": [str(directory / name) for name in NAMES]}
+        details["legacy_seed"] = {"source": str(legacy_fixture), "sha256": legacy_hash, "date": legacy_date,
+                                  "copy": str(directory / LEGACY_NAME), "running_ticks": 602, "duration": "00:10"}
         record = run.start().finish()
         details["record"] = record
         log = read_log(run.out)
@@ -170,8 +180,9 @@ def run_size(repo, root, size, fixture, expected, summary=None):
         details["playback"] = playback
         checks["playback_completed"] = len(playback) == 2 and all(int(ticks) >= 60 and int(frames) >= 60 for ticks, frames in playback)
         checks["returned_to_browser"] = "assert_substate expected=ReplayBrowser actual=ReplayBrowser PASS" in log and "Playback finished:" in log
-        checks["deleted_only_second"] = not (directory / NAMES[1]).exists() and sha256(directory / NAMES[0]) == fixture_hash
-        checks["source_unchanged"] = sha256(fixture) == fixture_hash
+        checks["deleted_only_second"] = (not (directory / NAMES[1]).exists() and sha256(directory / NAMES[0]) == fixture_hash and
+                                         sha256(directory / LEGACY_NAME) == legacy_hash)
+        checks["source_unchanged"] = sha256(fixture) == fixture_hash and sha256(legacy_fixture) == legacy_hash
         checks["no_network_failure"] = "[net-match] controller sync failed" not in log
         for stem in ("replays_list", "replays_selected", "replays_cancel_confirm", "replays_return", "replays_repeat_return", "replays_delete_confirm", "replays_deleted", "replays_back"):
             capture = capture_geometry(latest_capture(run, stem), size)
@@ -202,6 +213,7 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--exe-sha256", required=True)
     parser.add_argument("--fixture", type=Path, default=FIXTURE)
+    parser.add_argument("--legacy-fixture", type=Path, default=FIXTURE, help="602-tick pickup_fire replay from the shared harness fixture root")
     parser.add_argument("--summary", type=Path, help="report JSON from the same match as --fixture; checks row duration against its running ticks")
     args = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
@@ -213,10 +225,11 @@ def main():
     summary = report.get("last_match", report.get("service", {}).get("last_match")) if report else None
     if args.summary and not summary:
         parser.error("--summary must contain last_match from the recorded match")
-    results = {f"{w}x{h}": run_size(args.repo.resolve(), root / f"{w}x{h}", (w, h), args.fixture, args.exe_sha256.lower(), summary)
+    results = {f"{w}x{h}": run_size(args.repo.resolve(), root / f"{w}x{h}", (w, h), args.fixture, args.exe_sha256.lower(), summary, args.legacy_fixture)
                for w, h in SIZES}
     result = {"pass": all(row["pass"] for row in results.values()), "runs": results,
-              "driver_sha256": sha256(__file__), "fixture_sha256": sha256(args.fixture)}
+              "driver_sha256": sha256(__file__), "fixture_sha256": sha256(args.fixture),
+              "legacy_fixture_sha256": sha256(args.legacy_fixture)}
     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps({"pass": result["pass"], "out": str(root), "exe_sha256": args.exe_sha256}), flush=True)
     return 0 if result["pass"] else 1
