@@ -24,6 +24,8 @@ namespace RTE {
 		static void NotePreviewStride(bool initialized);
 		static bool PreviewStrideRan() { return s_PreviewStrideSeen; }
 		static bool CheckNestedHookScope();
+		/// Exercises table stores and exact rollback through the production preview boundary.
+		static bool CheckGlobalWriteBarrier();
 		/// Exercises retirement ownership and observes links before and after disposal.
 		static bool RunRetirementArm(char mode);
 
