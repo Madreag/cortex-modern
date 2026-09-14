@@ -1738,7 +1738,7 @@ void GameActivity::Update() {
 			}
 
 			m_InventoryMenuGUI[player]->SetInventoryActor(m_ControlledActor[player]);
-			if (g_MenuMan.IsNetworkPanelOpen()) m_InventoryMenuGUI[player]->SetEnabled(false);
+			if (g_MenuMan.IsLiveMenuOwningInput()) m_InventoryMenuGUI[player]->SetEnabled(false);
 			m_InventoryMenuGUI[player]->Update();
 		}
 
@@ -1747,13 +1747,13 @@ void GameActivity::Update() {
 
 		// Enable or disable the Buy Menus if the brain is selected, Skip if an LZ selection button press was just performed
 		if (!skipBuyUpdate) {
-			if (g_MenuMan.IsNetworkPanelOpen()) m_pBuyGUI[player]->SetEnabled(false);
+			if (g_MenuMan.IsLiveMenuOwningInput()) m_pBuyGUI[player]->SetEnabled(false);
 			//            m_pBuyGUI[player]->SetEnabled(m_ControlledActor[player] == m_Brain[player] && m_ViewState[player] != ViewState::LandingZoneSelect && m_ActivityState != ActivityState::Over);
 			m_pBuyGUI[player]->Update();
 		}
 
 		// Trap the mouse if we're in gameplay and not in menus
-		g_UInputMan.TrapMousePos(!g_MenuMan.IsNetworkPanelOpen() && !m_pBuyGUI[player]->IsEnabled() && !m_InventoryMenuGUI[player]->IsEnabledAndNotCarousel() && !m_LuaLockActor[player], player);
+		g_UInputMan.TrapMousePos(!g_MenuMan.IsLiveMenuOwningInput() && !m_pBuyGUI[player]->IsEnabled() && !m_InventoryMenuGUI[player]->IsEnabledAndNotCarousel() && !m_LuaLockActor[player], player);
 
 		// Start LZ picking mode if a purchase was made
 		if (m_pBuyGUI[player]->PurchaseMade()) {
