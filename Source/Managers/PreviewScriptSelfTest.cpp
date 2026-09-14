@@ -234,6 +234,56 @@ namespace RTE {
 				observations.push_back([=, &expect]() { expect("owned_parent_break_wound_outgoing_link", surviving->GetOwnedParentBreakWound()->GetWhichMOToNotHit(), nullptr); });
 				weak("retiring_owned_break_wound_inbound", retiring->GetOwnedBreakWound(), nullptr);
 				weak("shared_preset_guard", const_cast<AEmitter*>(wound), const_cast<AEmitter*>(wound));
+			} else if (mode == 'l') {
+				// A mod-style fixture holds Lua references across the boundary and reads one link back.
+				Actor* actor = actorCopy();
+				HeldDevice* cargo = deviceCopy();
+				AEmitter* cargoChild = woundCopy();
+				cargo->AddWound(cargoChild, Vector(), false);
+				actor->AddInventoryItem(cargo);
+				add(actor);
+				g_MovableMan.HarvestSpeculativeSpawns();
+				ghostRoots.push_back(actor);
+				AEmitter* holder = woundCopy();
+				survivor->AddWound(holder, Vector(), false);
+				link(holder, cargoChild);
+				if (!armed("lua_link_holder", holder->GetWhichMOToNotHit() == cargoChild, "holder=" + address(holder) + " target=" + address(cargoChild))) return false;
+				LuaStateWrapper* master = &g_LuaMan.GetMasterScriptState();
+				master->RunScriptString("_F15Path = package.path", false);
+				const int loaded = master->RunScriptFile("Tests.rte/F15Retirement/HeldRefs.lua", false, false);
+				if (!armed("fixture_loaded", loaded >= 0, "Tests.rte/F15Retirement/HeldRefs.lua status=" + std::to_string(loaded) + " " + master->GetLastError())) return false;
+				const int captured = master->RunScriptFunctionString("F15Refs.Capture", "", {}, {device}, {});
+				if (!armed("fixture_capture", captured >= 0, "canonical device=" + address(device) + " " + master->GetLastError())) return false;
+				observations.push_back([=, &check]() {
+					const int status = master->RunScriptFunctionString("F15Refs.CheckLink", "", {}, {holder}, {});
+					check("fixture_link_observation", status >= 0, status >= 0 ? "holder=" + address(holder) : master->GetLastError());
+				});
+				afterDispose.push_back([=, &check]() {
+					const int status = master->RunScriptFunctionString("F15Refs.Verify", "", {}, {device}, {});
+					check("fixture_reference_semantics", status >= 0, status >= 0 ? "closure, shared identity, continuation and property alias held" : master->GetLastError());
+					master->RunScriptString("F15Refs.Release()", false);
+					master->RunScriptString("package.path = _F15Path _F15Path = nil collectgarbage('collect')", false);
+				});
+			} else if (mode == 'n') {
+				// A preview part gains a script the supported way; the canonical state assignment must not move.
+				AEmitter* retiringPart = woundCopy();
+				AEmitter* survivingPart = woundCopy();
+				survivor->AddWound(survivingPart, Vector(), false);
+				const int cursorBefore = g_LuaMan.GetScriptStateCursor();
+				const bool stateless = retiringPart->GetAllLoadedScripts().empty() && survivingPart->GetAllLoadedScripts().empty() && !retiringPart->GetLuaState() && !survivingPart->GetLuaState();
+				armed("stateless_preview_parts", stateless, "cursor=" + std::to_string(cursorBefore) + " retiring_scripts=" + std::to_string(retiringPart->GetAllLoadedScripts().size()) + " surviving_scripts=" + std::to_string(survivingPart->GetAllLoadedScripts().size()));
+				const int retiringLoad = stateless ? retiringPart->LoadScript(g_PresetMan.GetFullModulePath("Tests.rte/PreviewCompat.lua")) : -99;
+				const int survivingLoad = stateless ? survivingPart->LoadScript(g_PresetMan.GetFullModulePath("Tests.rte/PreviewCompat.lua")) : -99;
+				armed("late_scripts_loaded", retiringLoad == 0 && survivingLoad == 0, "retiring=" + std::to_string(retiringLoad) + " surviving=" + std::to_string(survivingLoad));
+				const int cursorGained = g_LuaMan.GetScriptStateCursor();
+				armed("late_state_allocation", true, "retiring_state=" + std::to_string(g_LuaMan.GetStateIndex(retiringPart->GetLuaState())) + " surviving_state=" + std::to_string(g_LuaMan.GetStateIndex(survivingPart->GetLuaState())) + " cursor " + std::to_string(cursorBefore) + "->" + std::to_string(cursorGained));
+				add(retiringPart);
+                                g_MovableMan.HarvestSpeculativeSpawns();
+				ghostRoots.push_back(retiringPart);
+				afterDispose.push_back([=, &check]() {
+					check("lua_state_cursor_after_preview", g_LuaMan.GetScriptStateCursor() == cursor, "observed=" + std::to_string(g_LuaMan.GetScriptStateCursor()) + " saved=" + std::to_string(cursor));
+					check("no_canonical_slot_for_preview_part", !survivingPart->ObjectScriptsInitialized(), "slot='" + survivingPart->m_ScriptObjectName + "' state=" + std::to_string(g_LuaMan.GetStateIndex(survivingPart->GetLuaState())));
+				});
 			} else {
 				check("unknown arm", false, std::string(1, mode));
 			}

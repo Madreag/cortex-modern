@@ -1141,8 +1141,8 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-lpinv-overlay-links") {
 			// b spawn and shadow links, r a shadow item in reach, c spawn parts, wounds and a shadow part.
 			const std::string modes = argValue[++i];
-			if (modes.empty() || modes.find_first_not_of("brcitmqxo") != std::string::npos) {
-				std::cerr << "[lpinv] bad overlay-link modes '" << modes << "': expected letters from brcitmqxo" << std::endl;
+			if (modes.empty() || modes.find_first_not_of("brcitmqxonl") != std::string::npos) {
+				std::cerr << "[lpinv] bad overlay-link modes '" << modes << "': expected letters from brcitmqxonl" << std::endl;
 				return false;
 			}
 			s_lpOverlayLinkModes = modes;
@@ -2010,7 +2010,7 @@ static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, 
 		std::cout << "[lpinv] PASS " << label << ": " << what << std::endl;
 	};
 	++cases;
-	if (std::string("itmqxo").find(mode) != std::string::npos) {
+	if (std::string("itmqxonl").find(mode) != std::string::npos) {
 		LocalPrediction::Clear();
 		g_MovableMan.DropAllPreviewGhosts();
 		if (!PreviewScriptSelfTest::RunRetirementArm(mode)) {
