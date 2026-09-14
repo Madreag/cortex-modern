@@ -244,6 +244,7 @@ namespace RTE {
 		std::array<GUILabel*, 4> m_MultiplayerLobbyPlayerLabels;
 		GUIFont* m_MultiplayerLobbyPlayerRowFont = nullptr; //!< The font the player rows draw in, so the row text is measured against what draws it.
 		GUIFont* m_MultiplayerLobbyPlayerRowFallbackFont = nullptr; //!< Supplies the row bytes the primary font's atlas has no ink for.
+		GUILabel* m_MultiplayerLobbyPlayersHeader = nullptr; //!< The "Players" column header; it moves with the rows when the panel widens.
 		GUILabel* m_MultiplayerLobbyPortMapLabel;
 		uint32_t m_PortMapSerialShown; //!< The last lobby port-map serial this panel rendered.
 		MultiplayerSubScreen m_MultiplayerSubScreen;

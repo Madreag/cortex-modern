@@ -223,6 +223,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerLobbyPlayerLabels[2] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer2"));
 	m_MultiplayerLobbyPlayerLabels[3] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer3"));
 	m_MultiplayerLobbyPortMapLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPortMap"));
+	m_MultiplayerLobbyPlayersHeader = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayersHeader"));
 
 	m_MultiplayerLobbyPlayerRowFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontLarge.png");
 	m_MultiplayerLobbyPlayerRowFallbackFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png");
@@ -1127,6 +1128,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	const int contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
 	const std::vector<GUILabel*> playerRowLabels(m_MultiplayerLobbyPlayerLabels.begin(), m_MultiplayerLobbyPlayerLabels.end());
 	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth, playerRowLabels);
+	if (m_MultiplayerLobbyPlayersHeader) {
+		m_MultiplayerLobbyPlayersHeader->SetPositionRel(contentWidth > 300 ? 24 : 20, m_MultiplayerLobbyPlayersHeader->GetRelYPos());
+	}
 	const int rowBoxWidth = contentWidth - 24;
 	for (size_t i = 0; i < lobbyRowName.size(); ++i) {
 		GUILabel* label = m_MultiplayerLobbyPlayerLabels[i];
