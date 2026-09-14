@@ -526,21 +526,25 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--exe-sha256", required=True)
     parser.add_argument("--timeout", type=int, default=600)
+    # A second lane runs the same matrix from its own scratch root and port range.
+    parser.add_argument("--scratch", type=Path, default=SCRATCH)
+    parser.add_argument("--port-base", type=int, default=PORT_BASE)
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("verification family owns the machine; no driver may start")
     repo, root = options.repo.resolve(), options.out.resolve()
-    if not root.is_relative_to(SCRATCH.resolve()) or root == SCRATCH.resolve():
-        parser.error(f"--out must name a fresh run beneath {SCRATCH}")
+    scratch = options.scratch.resolve()
+    if not root.is_relative_to(scratch) or root == scratch:
+        parser.error(f"--out must name a fresh run beneath {scratch}")
     global make_run, strict_compare
     sys.path.insert(0, str(repo / "tools"))
     from compare_sim_traces import strict_compare
     from run_sim_test import make_run
     os.environ["CCCP_HEADLESS"] = "1"
     root.mkdir(parents=True, exist_ok=False)
-    ports = (PORT_BASE + index % PORT_COUNT for index in itertools.count())
+    ports = (options.port_base + index % PORT_COUNT for index in itertools.count())
     result = {"pass": False, "checks": {}, "pairs": {}, "capture_switch": {},
-              "ticks_per_run": TICKS, "ports": list(range(PORT_BASE, PORT_BASE + PORT_COUNT)),
+              "ticks_per_run": TICKS, "ports": list(range(options.port_base, options.port_base + PORT_COUNT)),
               "driver_sha256": sha256(__file__),
               "peer_comparator_sha256": sha256(repo / "tools" / "compare_sim_traces.py"),
               "peer_hash_scope": "unchanged strict_compare: controller excluded; every other subsystem at every tick",
