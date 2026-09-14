@@ -5374,8 +5374,13 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	CheckpointWriter legacyWriter("WorldStructure1"); writeLegacyFields(clean, legacyWriter);
 	CheckpointWriter legacyTrailingWriter("WorldStructure1"); writeLegacyFields(clean, legacyTrailingWriter); legacyTrailingWriter.Value(7);
 	CheckpointWriter unknownWriter("WorldStructure3"); clean.Fields(unknownWriter);
+	// The layout the owner map first shipped as: owners under the old tag, which no reader can tell apart.
+	WorldStructure owned = clean;
+	owned.actorOwners.emplace(1001, std::pair{2, 1});
+	CheckpointWriter intermediateWriter("WorldStructure1"); owned.Fields(intermediateWriter);
 	const bool legacyAccepted = LoadWorldStructure(legacyWriter.Text(), true);
-	const bool legacyRefused = !LoadWorldStructure(legacyTrailingWriter.Text(), true) && !LoadWorldStructure(unknownWriter.Text(), true);
+	const bool legacyRefused = !LoadWorldStructure(legacyTrailingWriter.Text(), true) && !LoadWorldStructure(unknownWriter.Text(), true) &&
+	                           !LoadWorldStructure(intermediateWriter.Text(), true);
 
 	auto plantAdded = [this](Actor* actor, int id) {
 		if (!actor) {
