@@ -826,6 +826,8 @@ lanes run when the lead can review the landings within the hour (CLAUDE.md §0.1
 | B8 | `mac-wave-<tip>` (Grok Mac) after A3 | clean clone of the new candidate tip | arm64 build, script-graph, A7, AK, local UI/state gates | 3 h |
 | B9 | Astra design lanes as A/B land | item 8b dedicated headless host on the Mac; item 7a chat routing + UI | design notes with the detecting-test plan, then implementation lanes | 2 h each |
 | B11 | `astra-pie-lockstep-gating` (Astra engineering, HIGH; launched 17:44 MST) | `item5-lifecycle` `stage2/pie-close-lockstep` @ `81187eef4e` | **F23**: the departing actor keeps player control bits and its pie flickers Enabling/Disabling after a lockstep switch (both peers, pre-existing); the remaining local pie mutations in GameActivity.cpp gated or proven presentation-only; arms RED on the tip, GREEN after; SP controls byte-identical | 5 h |
+| B11a | (folded into B11's acceptance, 2026-09-13 17:52 MST) | same worktree and driver family | the pie-close detector made fail-closed against A2's five probes (`astra-pie-close-review-20260913/probe_detector.py --assert-fail-closed` must exit 0; today it exits 1) and an MP PREV detecting pair (RED on the retained control, GREEN on the tip) | — |
+| B13 | `astra-f15-debt-arms` or Grok (execution lane, queued 2026-09-13 17:53 MST) | `control-build` @ `3f65208668`; the F15 lanes' retained fixtures | B2's §4 recipes I/T/M/Q/X/J/A/L/N/O: the taken-shadow-retiring branch, spawnMeta-only filtering, stale-key exclusion, unharvested tail descendants, retiring Actor inventories, ghost-owner reachability, and unchanged mod behaviour across a preview end (aliases, continuations) — each a fail-closed arm RED on the reversed hardening, GREEN on the tip | 5 h |
 | B12 | `astra-f21-debt-arms` or Grok (execution lane, queued 2026-09-13 17:46 MST) | `control-build` @ `3f65208668`; alias-walk as the isolated builder | the seven debt arms of B3's report §6: players 1..3 across all four slot types; a legitimate first-update selection change through a scene-backed `SwitchToActor`; inventory/marked slots through a real resync incl. ACraft inventory; substitute / seatless spectator / dedicated host / late tagged ICE lifecycles; large reused placeholders, protected-growth failure and GC stress; frozen old/new serialized SG/ccsave artefacts read by both readers; the A7 oracle requiring 61 consecutive resumed rows. Each RED on a reversed repair, GREEN on the tip | 5 h |
 | B10 | lead | Mac lanes whose evidence is fetched; `reviews/cleanup-20260913.md` | Mac disk back (three 1.7-2 GB lanes); every deletion logged | — |
 
@@ -1049,8 +1051,12 @@ rollout `%USERPROFILE%\.codex\sessions\<y>\<m>\<d>\rollout-*-<thread>.jsonl`, an
 refused. `--resume <thread>` runs `codex exec resume <thread> …` behind the same gate; the cwd comes from the session
 and `-C` / `-s` / `--add-dir` are not accepted there, so a resumed lane is full-permission. Each lane is its own
 `codex exec` process: run as many as the queue holds; a rate limit surfaces as a CLI error in `stderr.txt`, and the lane
-is then resumed with `--resume`. Astra reads the `AGENTS.md` at the worktree root by convention: the twin is the policy,
-the brief is the fence. Smoke evidence 2026-09-13 16:09-16:32 MST: `cli_runs/smoke-astra-runner-20260913` (gate ok,
+is then resumed with `--resume`. A `turn.failed` event with `codex_error_info: cyber_policy` (the provider's
+cybersecurity classifier; seen 2026-09-13 18:19 MST on allocator-failure / stack-capacity test wording, and earlier on
+the interactive session) ends the turn with CLI exit 1 and no usage event: resume the thread with a continuation that
+rewords the step in plain engine terms and moves it last; if it recurs, record the step and skip it. Astra reads the `AGENTS.md` at the worktree root by convention: the twin is the policy,
+the brief is the fence. Every Astra brief says "no nested Codex sessions or sub-agents" (B2 spawned its own
+`codex exec` for part of a read on 2026-09-13; harmless but unbudgeted). Smoke evidence 2026-09-13 16:09-16:32 MST: `cli_runs/smoke-astra-runner-20260913` (gate ok,
 14 s); `-s workspace-write` allowed in-workspace writes, commands and loopback sockets and denied outside writes;
 resume kept the thread's context. Briefs: the same template as every route (Appendix B) plus the exact permitted
 paths; Astra may call the other runners (`win_job.py`, `mac_job.py`, `mac_claude_job.py`) when its brief says so.

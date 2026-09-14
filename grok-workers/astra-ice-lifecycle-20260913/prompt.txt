@@ -25,3 +25,5 @@ RULES THAT BIND: no widening of any comparison, no serialisation to hide a race,
 EDITABLE: D:/Projects/item8-directory (the branch), D:/Projects/reviews/takeover-20260909/grok-workers/astra-ice-lifecycle-20260913/ (REPORT.md, scripts, fetched Mac files), D:/mx/astra-ice-20260913/, and on the Mac only /Users/erol/cortex-workers/astra-ice-lifecycle-20260913/.
 
 REPORT: astra-ice-lifecycle-20260913/REPORT.md — Deviations / not done first; per part: design decision, mechanism, diff (path:line), RED and GREEN commands with raw output paths; the selftest count; the commit shas; what B5 must provide if anything. Final message ≤ 25 lines. Time cap 5 h (write the report at 4 h 40 min with what exists).
+
+No nested Codex sessions or sub-agents of any kind: you are the only agent in this lane.
