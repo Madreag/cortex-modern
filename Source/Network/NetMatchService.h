@@ -147,6 +147,7 @@ namespace RTE {
 		uint16_t port = 41010;
 		std::string playerName = "Player";
 		std::string activityPreset = "Skirmish Defense";
+		std::optional<NetMatchStandardRules> standardRules;
 		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		uint16_t inputDelayFrames = 0; // Lockstep input-delay buffer; the host picks it, the client agrees at the start handshake.
 		bool autoInputDelay = false; // Host: raise the delay to cover the measured peer RTT (the manual value stays the floor).
