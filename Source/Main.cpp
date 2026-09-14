@@ -3234,6 +3234,12 @@ void RunGameLoop() {
 				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestDeliverCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 100.0F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Green Dummy", "Base.rte"}}}});
 				}
+				// The same delivery with no match around it: a scenario run issues it at the tick the
+				// match's delivery lands on, so a single-player dump can be read beside a lockstep one.
+				if (!ScenarioRunner::HasLockstepCoordinator() && ScenarioRunner::GetArgs().scenarioDeliverCommandTick >= 0 &&
+				    simTick == static_cast<uint64_t>(ScenarioRunner::GetArgs().scenarioDeliverCommandTick)) {
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 100.0F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Green Dummy", "Base.rte"}}}});
+				}
 				// E2E control: the host orders its dummy and its brain at fixed ticks; both peers must hold the identical AI mode, waypoints and squad.
 				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestAIOrderCommand && (simTick == 50 || simTick == 200 || simTick == 400 || simTick == 600)) {
 					std::vector<Actor*> units;
