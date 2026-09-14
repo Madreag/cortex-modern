@@ -422,6 +422,14 @@ namespace RTE {
 		/// @param showToolTips Whether to display tooltips or not.
 		void SetShowToolTips(bool showToolTips) { m_ShowToolTips = showToolTips; }
 
+		/// Gets whether the in-match network status widget stays up during ordinary play or not.
+		/// @return Whether the match status widget is always shown or not.
+		bool ShowMatchStatus() const { return m_ShowMatchStatus; }
+
+		/// Sets whether the in-match network status widget stays up during ordinary play or not.
+		/// @param showMatchStatus Whether to always show the match status widget or not.
+		void SetShowMatchStatus(bool showMatchStatus) { m_ShowMatchStatus = showMatchStatus; }
+
 		/// Gets whether to draw AtomGroup visualizations or not.
 		/// @return Whether to draw AtomGroup visualizations or not.
 		bool DrawAtomGroupVisualizations() const { return m_DrawAtomGroupVisualizations; }
@@ -542,6 +550,7 @@ namespace RTE {
 
 		bool m_SkipIntro; //!< Whether to play the intro of the game or skip directly to the main menu.
 		bool m_ShowToolTips; //!< Whether ToolTips are enabled or not.
+		bool m_ShowMatchStatus; //!< Whether the in-match network status widget stays up during ordinary play or not.
 		bool m_DisableLoadingScreenProgressReport; //!< Whether to display the reader progress report during module loading or not. Greatly increases loading speeds when disabled.
 		int m_LoadingScreenProgressReportPrecision; //!< How accurately the reader progress report tells what line it's reading during module loading. Lower values equal more precision at the cost of loading speed.
 		float m_MenuTransitionDurationMultiplier; //!< Multiplier value for the transition durations between different menus. Lower values equal faster transitions.

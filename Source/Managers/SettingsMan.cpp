@@ -70,6 +70,7 @@ void SettingsMan::Clear() {
 
 	m_SkipIntro = false;
 	m_ShowToolTips = true;
+	m_ShowMatchStatus = false;
 	m_DisableLoadingScreenProgressReport = true;
 	m_LoadingScreenProgressReportPrecision = 100;
 	m_MenuTransitionDurationMultiplier = 1.0F;
@@ -232,6 +233,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("ShowMetaScenes", { reader >> m_ShowMetaScenes; });
 	MatchProperty("SkipIntro", { reader >> m_SkipIntro; });
 	MatchProperty("ShowToolTips", { reader >> m_ShowToolTips; });
+	MatchProperty("ShowMatchStatus", { reader >> m_ShowMatchStatus; });
 	MatchProperty("CaseSensitiveFilePaths", { System::EnableFilePathCaseSensitivity(std::stoi(reader.ReadPropValue())); });
 	MatchProperty("DisableLoadingScreenProgressReport", { reader >> m_DisableLoadingScreenProgressReport; });
 	MatchProperty("LoadingScreenProgressReportPrecision", { reader >> m_LoadingScreenProgressReportPrecision; });
@@ -388,6 +390,7 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewLine(false);
 	writer.NewPropertyWithValue("SkipIntro", m_SkipIntro);
 	writer.NewPropertyWithValue("ShowToolTips", m_ShowToolTips);
+	writer.NewPropertyWithValue("ShowMatchStatus", m_ShowMatchStatus);
 	writer.NewPropertyWithValue("CaseSensitiveFilePaths", System::FilePathsCaseSensitive());
 	writer.NewPropertyWithValue("DisableLoadingScreenProgressReport", m_DisableLoadingScreenProgressReport);
 	writer.NewPropertyWithValue("LoadingScreenProgressReportPrecision", m_LoadingScreenProgressReportPrecision);
