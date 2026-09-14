@@ -522,6 +522,15 @@ typedef struct GCtab {
 #endif
 } GCtab;
 
+/* The VM and the DynASM backends read t->preview at these fixed places. */
+#if LJ_GC64
+LJ_STATIC_ASSERT(sizeof(GCtab) == 64);
+LJ_STATIC_ASSERT(offsetof(GCtab, preview) == 12);
+#else
+LJ_STATIC_ASSERT(sizeof(GCtab) == 40);
+LJ_STATIC_ASSERT(offsetof(GCtab, preview) == 32);
+#endif
+
 #define sizetabcolo(n)	((n)*sizeof(TValue) + sizeof(GCtab))
 #define tabref(r)	((GCtab *)gcref((r)))
 #define noderef(r)	(mref((r), Node))
