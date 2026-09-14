@@ -998,6 +998,11 @@ bool Actor::HandlePieCommand(PieSliceType pieSliceType) {
 	if (pieSliceType == PieSliceType::FormSquad && !HasSquad() && ScenarioRunner::IsLockstepControllerSyncActive()) {
 		m_Controller.HoldDisabledForSyncedOrder(static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
 	}
+	// The inventory pick closes the menu on the ordering seat only, and nothing on the wire follows it
+	// while the pie button is still down, so under lockstep every peer closes it on the synced slice.
+	if (pieSliceType == PieSliceType::FullInventory && m_PieMenu && ScenarioRunner::IsLockstepControllerSyncActive()) {
+		m_PieMenu->SetEnabled(false);
+	}
 	return false;
 }
 

@@ -1726,7 +1726,10 @@ void GameActivity::Update() {
 					m_pBuyGUI[player]->SetEnabled(true);
 					skipBuyUpdate = true;
 				} else if (command == PieSliceType::FullInventory) {
-					controlledActorPieMenu->SetEnabled(false);
+					// The synchronized slice closes the shared pie state in Actor::HandlePieCommand.
+					if (localPieAnimations) {
+						controlledActorPieMenu->SetEnabled(false);
+					}
 					m_InventoryMenuGUI[player]->SetEnabled(false);
 					m_InventoryMenuGUI[player]->SetMenuMode(InventoryMenuGUI::MenuMode::Full);
 					m_InventoryMenuGUI[player]->SetEnabled(true);
