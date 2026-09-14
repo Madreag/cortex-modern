@@ -250,6 +250,7 @@ namespace RTE {
 		struct Job {
 			TelemetryBundle::Snapshot snapshot;
 			std::string network;
+			std::string gpu;
 		};
 		struct State {
 			LogTail log;
@@ -294,7 +295,7 @@ namespace RTE {
 				bytes.resize(static_cast<size_t>(settings.gcount()));
 				add("Settings.ini", std::move(bytes));
 			} else omissions.push_back({{"name", "Settings.ini"}, {"reason", "file unavailable"}});
-			add("SystemInfo.json", SystemInfo(s_State.gpu).dump(2));
+			add("SystemInfo.json", SystemInfo(job.gpu).dump(2));
 			add("Executable.json", json{{"sha256", FileDigest(s_State.executable)}, {"version", c_VersionString}}.dump(2));
 			json manifest{{"schema", 1}, {"members", json::array()}, {"omitted", omissions}, {"replay", replayStatus},
 			              {"identity_build_ms", job.snapshot.identityBuildMs}};
@@ -377,10 +378,15 @@ namespace RTE {
 		});
 	}
 
+	void TelemetryBundle::SetGpuDescription(const std::string& gpu) {
+		std::lock_guard lock(s_State.mutex);
+		s_State.gpu = gpu;
+	}
+
 	bool TelemetryBundle::Request(Snapshot snapshot) {
 		std::lock_guard lock(s_State.mutex);
 		if (!s_State.worker.joinable() || s_State.stop || s_State.busy) return false;
-		s_State.job.emplace(Job{std::move(snapshot), s_State.log.Copy()});
+		s_State.job.emplace(Job{std::move(snapshot), s_State.log.Copy(), s_State.gpu});
 		s_State.busy = true;
 		s_State.ready.notify_one();
 		return true;
