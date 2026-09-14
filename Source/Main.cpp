@@ -85,6 +85,7 @@
 #include "NetLanDiscovery.h"
 #include "NetLockstep.h"
 #include "NetMatchReplay.h"
+#include "TelemetryBundle.h"
 #include "NetLockstepSelfTest.h"
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
@@ -153,6 +154,7 @@ using namespace RTE;
 
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
+static bool s_telemetryBundleOnExit = false;
 static std::string s_menuMpTraceError;
 static bool s_bitmapSaveSelfTest = false;
 static int s_bitmapSaveSelfTestResult = -1;
@@ -517,8 +519,18 @@ int ShutDown(int exitCode) {
 		exitCode = EXIT_FAILURE;
 	}
 	s_rbProbeWorld.Clear();
+	ScenarioRunner::CloseLockstepReplayRecord();
+	if (s_telemetryBundleOnExit) {
+		TelemetryBundle::Flush();
+		TelemetryBundle::RequestCapture();
+		if (!TelemetryBundle::CaptureAtTickBoundary()) exitCode = EXIT_FAILURE;
+	} else {
+		TelemetryBundle::CaptureAtTickBoundary();
+	}
+	if (!TelemetryBundle::Flush()) exitCode = EXIT_FAILURE;
 	g_ConsoleMan.SaveAllText("LogConsole.txt");
 	DestroyManagers();
+	TelemetryBundle::Finish();
 	allegro_exit();
 	SDL_Quit();
 	std::cout.flush();
@@ -922,6 +934,12 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-e2e-moderate-delay") {
 			s_netMatchE2eModerateDelayMs = std::strtoull(argValue[++i], nullptr, 10);
+			continue;
+		}
+
+		if (currentArg == "-telemetry-bundle") {
+			s_telemetryBundleOnExit = true;
+			++i;
 			continue;
 		}
 
@@ -1611,6 +1629,7 @@ void RunMenuLoop() {
 
 		g_ConsoleMan.Update();
 
+		TelemetryBundle::CaptureAtTickBoundary();
 		g_UInputMan.EndFrame();
 		g_WindowMan.GetScreenBuffer()->Begin();
 		g_MenuMan.Draw();
@@ -3528,6 +3547,7 @@ void RunGameLoop() {
 			g_UInputMan.EndSimUpdate();
 			if (probeTickResult) RollbackProbeOnHashedTick(simTick, *probeTickResult);
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
+			TelemetryBundle::CaptureAtTickBoundary();
 
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 
@@ -5441,7 +5461,10 @@ int main(int argc, char** argv) {
 	const char* netUiProbeScript = std::getenv("CC_TEST_NET_UI_SCRIPT");
 	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');
 
-	if (!HandleMainArgs(argc, argv)) return ShutDown(EXIT_FAILURE);
+	const bool mainArgsValid = HandleMainArgs(argc, argv);
+	const auto* gpu = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+	TelemetryBundle::Initialize(gpu ? gpu : "unavailable");
+	if (!mainArgsValid) return ShutDown(EXIT_FAILURE);
 
 	// The chat script drives session traffic — only a headless e2e match may carry it.
 	if (!s_netChatScriptPath.empty() && !s_netMatchServiceE2E) {
@@ -5471,6 +5494,10 @@ int main(int argc, char** argv) {
 
 	g_PresetMan.LoadAllDataModules();
 	if (!ContentFile::WaitForPendingSounds(LoadingScreen::LoadingSplashProgressReport)) return ShutDown(EXIT_FAILURE);
+	std::string diagnosticIdentityError;
+	if (!g_NetMatchService.RefreshDiagnosticIdentity(&diagnosticIdentityError)) {
+		g_ConsoleMan.PrintString("ERROR: Could not prepare diagnostics identity: " + diagnosticIdentityError);
+	}
 
 	if (!s_netIdentityDumpPath.empty()) {
 		NetIdentityManifest manifest;

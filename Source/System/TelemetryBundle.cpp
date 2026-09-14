@@ -2,6 +2,9 @@
 
 #include "GameVersion.h"
 #include "System.h"
+#include "ConsoleMan.h"
+#include "NetMatchService.h"
+#include "ScenarioRunner.h"
 
 #ifdef SYSTEM_MINIZIP
 #include <minizip/zip.h>
@@ -254,7 +257,7 @@ namespace RTE {
 			std::mutex mutex;
 			std::condition_variable ready;
 			std::optional<Job> job;
-			bool busy = false, stop = false;
+			bool busy = false, stop = false, captureRequested = false, lastSucceeded = true;
 			std::thread worker;
 			std::filesystem::path runtime, executable;
 			std::string gpu;
@@ -334,6 +337,7 @@ namespace RTE {
 			if (closed != ZIP_OK) throw std::runtime_error("could not finish diagnostics archive");
 			std::filesystem::rename(temporary, path);
 			std::cout << "[telemetry] saved " << path.generic_string() << std::endl;
+			g_ConsoleMan.PrintString("SYSTEM: Diagnostics saved to " + path.generic_string());
 		}
 	}
 
@@ -357,10 +361,17 @@ namespace RTE {
 					job = std::move(*s_State.job);
 					s_State.job.reset();
 				}
+				bool saved = true;
 				try { WriteBundle(std::move(job)); }
-				catch (const std::exception& error) { std::cerr << "[telemetry] failed: " << error.what() << std::endl; }
+				catch (const std::exception& error) {
+					saved = false;
+					std::cerr << "[telemetry] failed: " << error.what() << std::endl;
+					g_ConsoleMan.PrintString("ERROR: Could not save diagnostics: " + std::string(error.what()));
+				}
 				std::lock_guard lock(s_State.mutex);
 				s_State.busy = false;
+				s_State.lastSucceeded = saved;
+				s_State.ready.notify_all();
 			}
 		});
 	}
@@ -372,6 +383,50 @@ namespace RTE {
 		s_State.busy = true;
 		s_State.ready.notify_one();
 		return true;
+	}
+
+	bool TelemetryBundle::RequestCapture() {
+		std::lock_guard lock(s_State.mutex);
+		if (!s_State.worker.joinable() || s_State.stop || s_State.busy || s_State.captureRequested) return false;
+		s_State.captureRequested = true;
+		return true;
+	}
+
+	bool TelemetryBundle::CaptureAtTickBoundary() {
+		{
+			std::lock_guard lock(s_State.mutex);
+			if (!s_State.captureRequested || s_State.busy || s_State.stop) return false;
+			s_State.captureRequested = false;
+		}
+		try {
+			Snapshot snapshot;
+			snapshot.consoleTail = g_ConsoleMan.CopyLogTail(c_LogTailLimit);
+			snapshot.joinIdentity = g_NetMatchService.ExportDiagnosticIdentity();
+			if (snapshot.joinIdentity.empty()) snapshot.joinIdentity = json{{"error", "identity unavailable before module loading completes"}}.dump(2);
+			snapshot.desyncHeal = g_NetMatchService.ExportDiagnosticDesyncHeal();
+			if (ScenarioRunner::CopyLockstepReplayForDiagnostics(snapshot.replay, snapshot.replayTruncated)) {
+				snapshot.replayReason = snapshot.replayTruncated ? "complete-record prefix at member limit" : "complete recorded ticks";
+			} else if (snapshot.replayTruncated) {
+				snapshot.replayReason = "no complete replay frame fits the member limit";
+			}
+			return Request(std::move(snapshot));
+		} catch (const std::exception& error) {
+			g_ConsoleMan.PrintString("ERROR: Could not capture diagnostics: " + std::string(error.what()));
+			std::lock_guard lock(s_State.mutex);
+			s_State.lastSucceeded = false;
+			return false;
+		}
+	}
+
+	bool TelemetryBundle::IsBusy() {
+		std::lock_guard lock(s_State.mutex);
+		return s_State.busy || s_State.captureRequested;
+	}
+
+	bool TelemetryBundle::Flush() {
+		std::unique_lock lock(s_State.mutex);
+		s_State.ready.wait(lock, [] { return !s_State.busy; });
+		return s_State.lastSucceeded;
 	}
 
 	void TelemetryBundle::Finish() {
