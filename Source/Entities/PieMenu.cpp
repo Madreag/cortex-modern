@@ -1,6 +1,7 @@
 #include "PieMenu.h"
 
 #include "System/ScenarioRunner.h"
+#include "FloatText.h"
 #include "FrameMan.h"
 #include "UInputMan.h"
 #include "PresetMan.h"
@@ -220,7 +221,7 @@ std::string PieMenu::PackInteractionState() const {
 	}
 	std::ostringstream out;
 	out << static_cast<int>(m_EnabledState) << "|" << static_cast<int>(m_MenuMode) << "|" << m_EnableDisableAnimationTimer.GetStartSimTimeMS() << "|" << m_HoverTimer.GetStartSimTimeMS() << "|" << m_SubPieMenuHoverOpenTimer.GetStartSimTimeMS()
-	    << "|" << std::hexfloat << m_CursorAngle << std::defaultfloat << "|" << (m_CursorInVisiblePosition ? 1 : 0) << "|" << indexOf(m_HoveredPieSlice) << "|" << indexOf(m_ActivatedPieSlice) << "|" << indexOf(m_AlreadyActivatedPieSlice) << "|" << activeSubMenuSlice;
+	    << "|" << HexFloatString(m_CursorAngle) << "|" << (m_CursorInVisiblePosition ? 1 : 0) << "|" << indexOf(m_HoveredPieSlice) << "|" << indexOf(m_ActivatedPieSlice) << "|" << indexOf(m_AlreadyActivatedPieSlice) << "|" << activeSubMenuSlice;
 	if (m_ActiveSubPieMenu) {
 		out << "|{" << m_ActiveSubPieMenu->PackInteractionState() << "}";
 	}
@@ -251,7 +252,11 @@ void PieMenu::UnpackInteractionState(const std::string& packed) {
 	m_EnableDisableAnimationTimer.SetStartSimTimeTicks(std::strtoll(fields[2].c_str(), nullptr, 10));
 	m_HoverTimer.SetStartSimTimeTicks(std::strtoll(fields[3].c_str(), nullptr, 10));
 	m_SubPieMenuHoverOpenTimer.SetStartSimTimeTicks(std::strtoll(fields[4].c_str(), nullptr, 10));
-	m_CursorAngle = std::strtof(fields[5].c_str(), nullptr);
+	// strtof read the packed hexfloat through the global locale and gave 0 for a field it could not read.
+	m_CursorAngle = 0.0F;
+	if (ParseHexFloatExact(fields[5].data(), fields[5].data() + fields[5].size(), m_CursorAngle).ec != std::errc()) {
+		m_CursorAngle = 0.0F;
+	}
 	m_CursorInVisiblePosition = fields[6] == "1";
 	m_HoveredPieSlice = sliceAt(fields[7]);
 	m_ActivatedPieSlice = sliceAt(fields[8]);

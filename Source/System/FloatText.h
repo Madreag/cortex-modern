@@ -133,6 +133,77 @@ namespace RTE::FloatText {
 		return cursor;
 	}
 
+	inline bool IsHexDigit(char character) {
+		const char lower = LowerAscii(character);
+		return IsDigit(character) || (lower >= 'a' && lower <= 'f');
+	}
+
+	/// Returns the end of the longest prefix matching printf's %a output, or first when there is none.
+	/// This is strtod's hexadecimal form, which std::from_chars has no grammar for: the 0x prefix is required,
+	/// the binary exponent is optional, and the infinity and NaN spellings %a can produce are accepted.
+	inline const char* ScanHexNumber(const char* first, const char* last) {
+		const char* cursor = first;
+		if (cursor != last && (*cursor == '-' || *cursor == '+')) {
+			++cursor;
+		}
+		if (MatchLiteral(cursor, last, "inf")) {
+			MatchLiteral(cursor, last, "inity");
+			return cursor;
+		}
+		if (MatchLiteral(cursor, last, "nan")) {
+			if (cursor != last && *cursor == '(') {
+				const char* probe = cursor + 1;
+				while (probe != last && IsNanPayloadCharacter(*probe)) {
+					++probe;
+				}
+				if (probe != last && *probe == ')') {
+					cursor = probe + 1;
+				}
+			}
+			return cursor;
+		}
+		if (cursor == last || *cursor != '0') {
+			return first;
+		}
+		++cursor;
+		if (cursor == last || LowerAscii(*cursor) != 'x') {
+			return first;
+		}
+		++cursor;
+		const char* digits = cursor;
+		while (cursor != last && IsHexDigit(*cursor)) {
+			++cursor;
+		}
+		bool anyDigits = cursor != digits;
+		if (cursor != last && *cursor == '.') {
+			const char* fraction = cursor + 1;
+			const char* scan = fraction;
+			while (scan != last && IsHexDigit(*scan)) {
+				++scan;
+			}
+			if (anyDigits || scan != fraction) {
+				anyDigits = true;
+				cursor = scan;
+			}
+		}
+		if (!anyDigits) {
+			return first;
+		}
+		const char* mantissaEnd = cursor;
+		if (cursor != last && LowerAscii(*cursor) == 'p') {
+			const char* exponent = cursor + 1;
+			if (exponent != last && (*exponent == '+' || *exponent == '-')) {
+				++exponent;
+			}
+			const char* exponentDigits = exponent;
+			while (exponent != last && IsDigit(*exponent)) {
+				++exponent;
+			}
+			cursor = (exponent != exponentDigits) ? exponent : mantissaEnd;
+		}
+		return cursor;
+	}
+
 	inline double StrToFloating(const char* text, char** end, double) {
 #if defined(_WIN32)
 		return ::_strtod_l(text, end, CLocale());
@@ -149,13 +220,10 @@ namespace RTE::FloatText {
 #endif
 	}
 
-	/// Parses one number in std::from_chars' general grammar with the C locale's correctly rounded strtod.
-	template <class FloatType> std::from_chars_result ParseFallback(const char* first, const char* last, FloatType& value) {
-		static_assert(std::is_floating_point_v<FloatType>, "ParseFallback takes float or double");
-		const char* end = ScanNumber(first, last);
-		if (end == first) {
-			return {first, std::errc::invalid_argument};
-		}
+	/// Converts an already scanned token with the C locale's correctly rounded strtod. storeOutOfRange keeps
+	/// strtod's own out of range answer - an infinity, or zero on underflow - which from_chars discards.
+	template <class FloatType> std::from_chars_result ParseScanned(const char* first, const char* end, FloatType& value, bool storeOutOfRange = false) {
+		static_assert(std::is_floating_point_v<FloatType>, "ParseScanned takes float or double");
 		const size_t length = static_cast<size_t>(end - first);
 		char stack[512];
 		char* text = stack;
@@ -178,10 +246,63 @@ namespace RTE::FloatText {
 		}
 		// strtod reports ERANGE for subnormal results too, but a subnormal is representable and from_chars takes it.
 		if (parseErrno == ERANGE && (std::isinf(parsed) || parsed == FloatType(0))) {
+			if (storeOutOfRange) {
+				value = parsed;
+			}
 			return {end, std::errc::result_out_of_range}; // Out of range leaves the target alone, as the standard says.
 		}
 		value = parsed;
 		return {end, std::errc()};
+	}
+
+	/// Parses one number in std::from_chars' general grammar with the C locale's correctly rounded strtod.
+	template <class FloatType> std::from_chars_result ParseFallback(const char* first, const char* last, FloatType& value) {
+		const char* end = ScanNumber(first, last);
+		if (end == first) {
+			return {first, std::errc::invalid_argument};
+		}
+		return ParseScanned(first, end, value);
+	}
+
+	/// Returns the end of the longest prefix matching std::strtod's grammar, or first when there is none.
+	/// Wider than from_chars': leading space, an explicit '+' and the hexadecimal form are all accepted,
+	/// because content written for std::stof and std::stod may contain them.
+	inline const char* ScanCNumber(const char* first, const char* last) {
+		const char* cursor = first;
+		while (cursor != last && (*cursor == ' ' || (*cursor >= '\t' && *cursor <= '\r'))) {
+			++cursor;
+		}
+		const char* number = cursor;
+		if (cursor != last && (*cursor == '+' || *cursor == '-')) {
+			++cursor;
+		}
+		const char* hexEnd = ScanHexNumber(number, last); // The hex, infinity and NaN forms carry their own sign.
+		if (hexEnd != number) {
+			return hexEnd;
+		}
+		if (cursor != last && (*cursor == '+' || *cursor == '-')) {
+			return first; // The sign is already consumed, so a second one is not a number.
+		}
+		const char* decimalEnd = ScanNumber(cursor, last);
+		return decimalEnd == cursor ? first : decimalEnd;
+	}
+
+	/// Parses one number in std::strtod's grammar with the C locale's correctly rounded strtod.
+	template <class FloatType> std::from_chars_result ParseCFallback(const char* first, const char* last, FloatType& value, bool storeOutOfRange = false) {
+		const char* end = ScanCNumber(first, last);
+		if (end == first) {
+			return {first, std::errc::invalid_argument};
+		}
+		return ParseScanned(first, end, value, storeOutOfRange);
+	}
+
+	/// Parses one number in printf's %a grammar with the C locale's correctly rounded strtod.
+	template <class FloatType> std::from_chars_result ParseHexFallback(const char* first, const char* last, FloatType& value) {
+		const char* end = ScanHexNumber(first, last);
+		if (end == first) {
+			return {first, std::errc::invalid_argument};
+		}
+		return ParseScanned(first, end, value);
 	}
 
 	/// Formats with the C locale, the one call in this header that needs a locale-parameterised printf.
@@ -196,6 +317,18 @@ namespace RTE::FloatText {
 		::uselocale(previous);
 		return written;
 #endif
+	}
+
+	/// Writes a number the way printf's %a and an ostream's std::hexfloat do, in the C locale. Hexadecimal
+	/// text is exact, so this is the codec for state that is written once and read back bit for bit.
+	inline std::to_chars_result FormatHex(char* first, char* last, double value) {
+		char buffer[64] = {};
+		const int written = FormatC(buffer, sizeof(buffer), "%a", value);
+		if (written <= 0 || static_cast<size_t>(written) >= sizeof(buffer) || last - first < written) {
+			return {last, std::errc::value_too_large};
+		}
+		std::memcpy(first, buffer, static_cast<size_t>(written));
+		return {first + written, std::errc()};
 	}
 
 	inline std::to_chars_result WriteLiteral(char* first, char* last, const char* literal) {
@@ -444,6 +577,38 @@ namespace RTE {
 #else
 		return FloatText::FormatFallback(first, last, value);
 #endif
+	}
+
+	/// Parses one float or double in std::strtod's grammar, locale-free. This is the replacement for
+	/// std::stof and std::stod on content text, which may carry a leading '+' or a hexadecimal form.
+	inline std::from_chars_result ParseNumberExact(const char* first, const char* last, float& value) { return FloatText::ParseCFallback(first, last, value); }
+
+	/// Parses one float or double in std::strtod's grammar, locale-free.
+	inline std::from_chars_result ParseNumberExact(const char* first, const char* last, double& value) { return FloatText::ParseCFallback(first, last, value); }
+
+	/// Parses one number the way an istream's extraction did: std::strtod's grammar, and an out of range
+	/// result stored as strtod gave it - an infinity, or zero on underflow - instead of left alone.
+	inline std::from_chars_result ParseStreamNumber(const char* first, const char* last, float& value) { return FloatText::ParseCFallback(first, last, value, true); }
+
+	/// Parses one number the way an istream's extraction did, keeping strtod's out of range answer.
+	inline std::from_chars_result ParseStreamNumber(const char* first, const char* last, double& value) { return FloatText::ParseCFallback(first, last, value, true); }
+
+	/// Parses one float or double in printf's %a grammar, locale-free and without allocating. std::from_chars
+	/// has no grammar that accepts the 0x prefix, so the hexadecimal codec is always the C-locale strtod.
+	inline std::from_chars_result ParseHexFloatExact(const char* first, const char* last, float& value) { return FloatText::ParseHexFallback(first, last, value); }
+
+	/// Parses one float or double in printf's %a grammar, locale-free and without allocating.
+	inline std::from_chars_result ParseHexFloatExact(const char* first, const char* last, double& value) { return FloatText::ParseHexFallback(first, last, value); }
+
+	/// Writes a float or double in printf's %a form, locale-free, exactly as an ostream's std::hexfloat does.
+	/// Floats promote to double first, which is what an ostream insertion does, so the text is unchanged.
+	inline std::to_chars_result FormatHexFloatExact(char* first, char* last, double value) { return FloatText::FormatHex(first, last, value); }
+
+	/// Writes one float or double in printf's %a form into a std::string, locale-free.
+	inline std::string HexFloatString(double value) {
+		char buffer[64];
+		const std::to_chars_result result = FormatHexFloatExact(buffer, buffer + sizeof(buffer), value);
+		return std::string(buffer, result.ec == std::errc() ? result.ptr : buffer);
 	}
 
 	/// std::from_chars for any codec value, routing floating point through the availability-safe helper.
