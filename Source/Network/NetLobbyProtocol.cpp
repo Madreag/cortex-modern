@@ -702,7 +702,7 @@ namespace RTE {
 		return true;
 	}
 
-	NetLobbyDecodeResult NetLobbyProtocol::Decode(const uint8_t* data, size_t size) {
+	NetLobbyDecodeResult NetLobbyProtocol::Decode(const uint8_t* data, size_t size, NetLobbyDecodeOptions options) {
 		if (!data) {
 			return Fail(NetLobbyErrorCode::NullBuffer, 0, "data is null");
 		}
@@ -728,8 +728,9 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLobbyErrorCode::BadMagic, 0, "bad lobby protocol magic");
 		}
-		// Recorded v3 config envelopes retain their own versioned payload reader.
-		if (version != c_Version && !(version == 3 && rawType == static_cast<uint16_t>(NetLobbyMessageType::MatchConfig))) {
+		const bool recordedConfig = options.allowRecordedConfigVersions && (version == 2 || version == 3) &&
+		                            rawType == static_cast<uint16_t>(NetLobbyMessageType::MatchConfig);
+		if (version != c_Version && !recordedConfig) {
 			return Fail(NetLobbyErrorCode::UnsupportedVersion, 4, "unsupported lobby protocol version");
 		}
 		if (headerBytes != c_HeaderBytes) {
@@ -761,8 +762,8 @@ namespace RTE {
 		return result;
 	}
 
-	NetLobbyDecodeResult NetLobbyProtocol::Decode(const std::vector<uint8_t>& bytes) {
-		return Decode(bytes.data(), bytes.size());
+	NetLobbyDecodeResult NetLobbyProtocol::Decode(const std::vector<uint8_t>& bytes, NetLobbyDecodeOptions options) {
+		return Decode(bytes.data(), bytes.size(), options);
 	}
 
 } // namespace RTE
