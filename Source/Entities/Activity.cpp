@@ -159,6 +159,7 @@ int Activity::Create(const Activity& reference) {
 	m_CheckpointActorIDs = reference.m_CheckpointActorIDs;
 	m_HasCheckpointActorIDs = reference.m_HasCheckpointActorIDs;
 	if (MovableObject::IsFaithfulClone() && !Activity::LoadCheckpoint(reference.Activity::SaveCheckpoint())) return -1;
+	if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
 
 	return 0;
 }
@@ -395,6 +396,7 @@ void Activity::End() {
 
 void Activity::SetupPlayers() {
 	if (!m_SharedPlayerSeats) ConfigureLockstepPlayers();
+	RefreshLockstepLocalPlayers();
 	m_TeamCount = 0;
 	m_PlayerCount = 0;
 
@@ -442,10 +444,8 @@ bool Activity::ConfigureLockstepPlayers() {
 void Activity::ConfigureHumanRoster(const NetMatchConfig& config, uint8_t localPeer) {
 	ClearPlayers(false);
 	m_SharedPlayerSeats = true;
-	m_LocalInputPlayers.fill(Players::NoPlayer);
 	std::fill(std::begin(m_Team), std::end(m_Team), Teams::NoTeam);
 	int player = Players::PlayerOne;
-	int localInput = Players::PlayerOne;
 	for (const NetMatchPlayerSlot& slot: config.players) {
 		const bool firstOnTeam = !m_TeamActive[slot.team];
 		if (firstOnTeam) ++m_TeamCount;
@@ -456,10 +456,34 @@ void Activity::ConfigureHumanRoster(const NetMatchConfig& config, uint8_t localP
 		m_Team[player] = slot.team;
 		m_FundsContribution[player] = 0;
 		m_TeamFundsShare[player] = firstOnTeam ? 1.0F : 0.0F;
-		if (slot.peerId == localPeer) m_LocalInputPlayers[player] = localInput++;
 		++player;
 	}
 	m_PlayerCount = player;
+	MapLocalPlayers(config, localPeer);
+}
+
+void Activity::RefreshLockstepLocalPlayers() {
+	if (const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig()) {
+		MapLocalPlayers(*config, ScenarioRunner::GetLockstepLocalPeerId());
+	}
+}
+
+void Activity::MapLocalPlayers(const NetMatchConfig& config, uint8_t localPeer) {
+	m_SharedPlayerSeats = true;
+	m_LocalInputPlayers.fill(Players::NoPlayer);
+	std::fill(std::begin(m_PlayerScreen), std::end(m_PlayerScreen), Players::NoPlayer);
+	int player = Players::PlayerOne;
+	int input = Players::PlayerOne;
+	int screen = 0;
+	for (const NetMatchPlayerSlot& slot: config.players) {
+		if (slot.cpu) continue;
+		RTEAssert(player < Players::MaxPlayerCount, "The match roster exceeds the human seat capacity");
+		if (slot.peerId == localPeer) {
+			m_LocalInputPlayers[player] = input++;
+			if (IsSeatActive(player) && IsHumanSeat(player)) m_PlayerScreen[player] = screen++;
+		}
+		++player;
+	}
 }
 
 int Activity::LocalInputOfPlayer(int player) const {
@@ -497,8 +521,14 @@ bool Activity::RunSharedSeatSelfTest() {
 		offlineSame = offlineSame && offline.LocalInputOfPlayer(player) == player && offline.IsHumanSeat(player) == offline.IsLocalHumanSeat(player);
 	}
 	const bool passed = roster && local && offlineSame;
+	GameActivity copied;
+	copied.Create(host);
+	copied.MapLocalPlayers(config, 2);
+	const bool rebound = copied.m_LocalInputPlayers[1] == 0 && copied.ScreenOfPlayer(1) == 0 && copied.ScreenOfPlayer(0) == -1 &&
+		copied.GetHumanCount() == host.GetHumanCount() && copied.GetTeamOfPlayer(1) == host.GetTeamOfPlayer(1);
 	std::cout << "[shared-seat-selftest] " << (passed ? "PASS" : "FAIL") << " roster=" << roster << " local=" << local << " offline=" << offlineSame << std::endl;
-	return passed;
+	std::cout << "[shared-seat-selftest] " << (rebound ? "PASS" : "FAIL") << " copied_peer_map=" << rebound << std::endl;
+	return passed && rebound;
 }
 
 bool Activity::DeactivatePlayer(int playerToDeactivate) {
@@ -1290,6 +1320,7 @@ bool Activity::CaptureNetLocalPlayerState(NetLocalPlayerState& out) const {
 }
 
 bool Activity::ApplyNetPlayerSlots(const NetGamePlayerBindings& bindings) {
+	if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
 	for (const auto& player: bindings.players) {
 		if (player.team < Teams::NoTeam || player.team >= Teams::MaxTeamCount || player.viewState > ViewState::UnitSelectCircle ||
 			player.controlledUID < 0 || player.brainUID < 0 || !std::isfinite(player.cameraX) || !std::isfinite(player.cameraY) ||
@@ -1340,6 +1371,7 @@ bool Activity::RestoreNetLocalPlayerState(const NetLocalPlayerState& state) {
 		if (!m_PlayerController[player].LoadCheckpoint(state.controllers[player])) return false;
 		m_PlayerController[player].SetControlledActor(ResolveNetActor(state.controllerActorUIDs[player]));
 	}
+	if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
 	RefreshCheckpointActorIDs();
 	for (MovableObject* object: g_MovableMan.SnapshotKnownObjects()) {
 		if (auto* actor = dynamic_cast<Actor*>(object)) {
@@ -1496,7 +1528,10 @@ bool Activity::LoadCheckpoint(std::string_view text, bool validateOnly) {
 			auto apply = Icon::PrepareCheckpointSet(icons, m_TeamIcons, validateOnly);
 			if (apply) reader.OnCommit(std::move(apply));
 		}
-		reader.OnCommit([this] { m_HasCheckpointActorIDs = true; });
+		reader.OnCommit([this] {
+			m_HasCheckpointActorIDs = true;
+			if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
+		});
 		reader.Finish();
 		return true;
 	} catch (const std::exception&) {

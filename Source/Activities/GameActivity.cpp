@@ -2825,6 +2825,7 @@ void GameActivity::VisitCheckpointOwnedObjects(const std::function<void(const En
 }
 
 bool GameActivity::PrepareCheckpointUI() {
+    if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
     const std::string values = SaveValueCheckpoint();
     for (int player = 0; player < Players::MaxPlayerCount; ++player) {
         if (m_InventoryMenuGUI[player] && m_InventoryMenuGUI[player]->IsCheckpointInitialized() && m_InventoryMenuGUI[player]->Create(&m_PlayerController[player]) < 0) return false;
@@ -2956,6 +2957,7 @@ bool GameActivity::RestoreNetLocalPlayerState(const NetLocalPlayerState& state) 
 }
 
 bool GameActivity::CreateNetLocalUI() {
+	if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
 	GUICheckpoint::NetLocalRestoreScope localUI;
 	const uint8_t humanCount = GetLocalHumanCount();
 	const bool wide = static_cast<float>(g_WindowMan.GetResX()) / g_WindowMan.GetResY() >= 1.6F;
