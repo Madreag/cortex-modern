@@ -391,6 +391,53 @@ def button_extent(px, width, y0, y1):
     return best
 
 
+def gold_text_rows(px, width, height):
+    """Rows carrying >=10 gold text-ink pixels. The main menu's own items are
+    unframed gold text (its buttons draw no blue frame), so the real menu
+    scores ~150+ while a bare starfield or a black frame scores ~0."""
+    return sum(1 for y in range(height)
+               if sum(1 for x in range(width) if is_gold_ink(px[x, y])) >= 10)
+
+
+def coarse_cell_diff(img_a, img_b, cell=16, pix_tol=24, frac=0.2):
+    """Share of grid cells whose changed-pixel fraction exceeds frac. Whole
+    fixed UI regions read as changed cells; sparse starfield twinkle does not."""
+    pa, pb = img_a.load(), img_b.load()
+    width, height = img_a.size
+    changed = total = 0
+    for cy in range(0, height, cell):
+        for cx in range(0, width, cell):
+            total += 1
+            diff = n = 0
+            for y in range(cy, min(cy + cell, height)):
+                for x in range(cx, min(cx + cell, width)):
+                    n += 1
+                    a, b = pa[x, y][:3], pb[x, y][:3]
+                    if abs(a[0] - b[0]) > pix_tol or abs(a[1] - b[1]) > pix_tol or abs(a[2] - b[2]) > pix_tol:
+                        diff += 1
+            if diff > frac * n:
+                changed += 1
+    return changed / max(1, total)
+
+
+def post_back_is_main(post_back_path, main_start_path):
+    """True when the post-Back frame shows the main menu again: no full-size
+    gray multiplayer panel, its coarse structure matches this run's own
+    main-start capture, and the main menu's button rows are present."""
+    from PIL import Image
+    img = Image.open(post_back_path).convert("RGB")
+    px = img.load()
+    width, height = img.size
+    extent = panel_extent(px, width, height)
+    if extent and extent[2] - extent[1] >= 300:
+        return False, {"reason": "multiplayer panel still present", "extent": extent}
+    main_img = Image.open(main_start_path).convert("RGB")
+    diff = coarse_cell_diff(main_img, img)
+    buttons = gold_text_rows(px, width, height)
+    ok = diff <= 0.30 and buttons >= 8
+    return ok, {"main_diff": round(diff, 4), "gold_rows": buttons}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, required=True)
@@ -426,7 +473,7 @@ def main():
 
     def start(name, host, port, suffix, modules, phase="viewport"):
         require_pin(repo, options.exe_sha256, before, checks, f"{name}_prelaunch")
-        script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
+        script = f"wait 40\nscreenshot main-start\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
         if host:
             script += (f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\n"
                        "settext TextHostPlayers 2\nsettext TextHostInputDelay 3\nactivate ButtonMultiplayerCreate\n")
@@ -461,12 +508,12 @@ def main():
         if options.no_scroll_input:
             joiner_script = (f"wait_state Failed\nwait 5\nassert_substate Landing\nassert_label {LABEL} yours\n"
                              "dump_lobby\nscreenshot viewport-t0\n"
-                             "post_command ButtonBackToMain\nwait 12\nassert_screen MainScreen\nexit\n")
+                             "post_command ButtonBackToMain\nwait 12\nscreenshot post-back\nassert_screen MainScreen\nexit\n")
         else:
             joiner_script = (f"wait_state Failed\nwait 5\nassert_substate Landing\nassert_label {LABEL} yours\n"
                              "dump_lobby\nscreenshot viewport-t0\nwait_ms 9000\nscreenshot viewport-t1\n"
                              "wait_ms 9000\nscreenshot viewport-t2\nwait_ms 9000\nscreenshot viewport-t3\n"
-                             "post_command ButtonBackToMain\nwait 12\nassert_screen MainScreen\nexit\n")
+                             "post_command ButtonBackToMain\nwait 12\nscreenshot post-back\nassert_screen MainScreen\nexit\n")
         start("Joiner", False, options.port, joiner_script,
               [(BASE_NAME, "Base1"), (SZ70_NAME, "Sz70")])
         records["Joiner"] = runs["Joiner"].finish()
@@ -484,10 +531,10 @@ def main():
                   [(d, f, v) for d, f, v in TALL_HOST_MODS], phase="tall")
             wait_for_log(runs["TallHost"], "activate ButtonMultiplayerCreate ok=1")
             tall_script = ("wait_state Failed\nwait 5\nassert_substate Landing\n"
-                           "assert_label %s yours\nscreenshot tall-t0\nwait_ms 9000\n"
-                           "screenshot tall-t1\nwait_ms 9000\nscreenshot tall-t2\n"
-                           "post_command ButtonBackToMain\nwait 12\n"
-                           "assert_screen MainScreen\nexit\n" % LABEL)
+                           "assert_label %s yours\nscreenshot tall-t0\n" % LABEL +
+                           "".join("wait_ms 750\nscreenshot tall-t%d\n" % n for n in range(1, 9)) +
+                           "post_command ButtonBackToMain\nwait 12\nscreenshot post-back\n"
+                           "assert_screen MainScreen\nexit\n")
             start("TallJoiner", False, options.port + 1, tall_script,
                   [(d, f, v) for d, f, v in TALL_JOINER_MODS], phase="tall")
             records["TallJoiner"] = runs["TallJoiner"].finish()
@@ -499,7 +546,7 @@ def main():
             tall_shots = sorted((root / "tall" / "TallJoiner" / "runtime/ScreenShots").glob("tall-t*_*.png"))
             details["tall_screenshots"] = [str(p) for p in tall_shots]
             checks["tall_landed"] = "assert_substate expected=Landing actual=Landing PASS" in tall_log
-            checks["tall_shot_count"] = len(tall_shots) == 3
+            checks["tall_shot_count"] = len(tall_shots) == 9
             checks["tall_back_command_posted"] = "post_command ButtonBackToMain ok=1" in tall_log
             checks["tall_returned_to_main"] = "assert_screen expected=MainScreen actual=MainScreen PASS" in tall_log
         else:
@@ -524,7 +571,7 @@ def main():
             seam_script = ("wait_state Failed\nwait 5\nassert_substate Landing\n"
                            "assert_label %s yours\nscreenshot seam-t0\nwait_ms 3000\n"
                            "screenshot seam-t1\npost_command ButtonBackToMain\nwait 12\n"
-                           "assert_screen MainScreen\nexit\n" % LABEL)
+                           "screenshot post-back\nassert_screen MainScreen\nexit\n" % LABEL)
             start(tag + "Joiner", False, options.port + 2 + attempt * 3, seam_script,
                   [(BASE_NAME, "Base1"), (seam_name, "Seam")], phase="seam")
             records[tag + "Joiner"] = runs[tag + "Joiner"].finish()
@@ -653,6 +700,12 @@ def main():
                 name_run = longest_ink_run(px0, left, right + 1, (top or 0) + 120, bottom or height - 1)
                 details["name_ink_run"] = name_run
                 checks["name_glyph_ink_present"] = bool(name_run) and name_run[0] >= 240
+                if name_run:
+                    zoom = images[0].crop((max(0, name_run[2] - 10), max(0, name_run[1] - 4),
+                                           min(width, name_run[3] + 11), min(height, name_run[1] + 12)))
+                    zoom = zoom.resize((zoom.width * 4, zoom.height * 4), Image.NEAREST)
+                    zoom.save(root / "fallback-zoom.png")
+                    details["fallback_zoom"] = str(root / "fallback-zoom.png")
 
                 # Mirror the engine's measure: the fallback font's cell width x
                 # the 64 wire bytes predicts the token width. The label is
@@ -691,6 +744,42 @@ def main():
             details["frame_shas"] = [sha256_file(p)[:16] for p in joiner_shots]
             checks["frames_not_identical"] = len(set(details["frame_shas"])) >= 2
 
+        # LabelMultiplayerStatus is a 16px box at panel-rel Y 144; the panel's
+        # controls anchor 2px above the first gray row. A wrapped status line
+        # is centered over the box and its top rows are cut by the label clip,
+        # so the first ink block must start inside the band and span a full
+        # FontLarge glyph height - seeing ink at the band's top edge is the clip.
+        checks["host_status_unclipped"] = False
+        if host_shots:
+            from PIL import Image as _Img2
+            himg = _Img2.open(host_shots[0]).convert("RGB")
+            hpx = himg.load()
+            hw, hh = himg.size
+            hext = panel_extent(hpx, hw, hh)
+            if hext:
+                htop, _hbot = panel_vertical(hpx, hw, hh)
+                if htop is not None:
+                    band_top = htop + 142
+                    blocks = []
+                    y = band_top
+                    while y < band_top + 16:
+                        cols = sum(1 for x in range(hext[1] + 2, hext[2] - 1)
+                                   if is_gold_ink(hpx[x, y]))
+                        if cols >= 3:
+                            start_y = y
+                            while y < band_top + 16 and sum(
+                                    1 for x in range(hext[1] + 2, hext[2] - 1)
+                                    if is_gold_ink(hpx[x, y])) >= 3:
+                                y += 1
+                            blocks.append((start_y - band_top, y - 1 - band_top))
+                        else:
+                            y += 1
+                    details["host_status_band"] = {"top": band_top, "blocks": blocks}
+                    if blocks:
+                        first = blocks[0]
+                        checks["host_status_unclipped"] = (first[0] >= 2
+                                                         and first[1] - first[0] + 1 >= 7)
+
         if not options.no_scroll_input and tall_shots:
             from PIL import Image as _Image
             tall_imgs = [_Image.open(p).convert("RGB") for p in tall_shots]
@@ -724,10 +813,52 @@ def main():
                 # so motion is only demanded when the geometry predicts scroll.
                 checks["tall_scroll_motion"] = (not scroll_expected) or sum(1 for d in td if d > 0.03) >= 2
                 checks["tall_scroll_confined"] = max(tout, default=1.0) < 0.01
+                # The tail is proven by scroll offset, not by a glyph mask:
+                # the short closing line's ink pattern is too similar to the
+                # hash fragment one line above it to locate reliably. Instead
+                # each frame's label-band ink set is correlated against t0 -
+                # captured inside the scroll's initial wait, so offset 0 - and
+                # the argmax dy is that frame's absolute scroll offset. The
+                # closing line is drawn iff a frame reaches the overflow
+                # distance, i.e. predicted text height minus label room.
+                checks["tall_tail_reached"] = False
+                if scroll_expected and tall_shots:
+                    label_top = (ttop or 0) - 2 + 168
+                    label_bot = label_top + room
+                    xl, xr = tleft + 12, tright - 12
+                    ink_sets = []
+                    for img in tall_imgs:
+                        ipx = img.load()
+                        ink_sets.append({(x, y - label_top)
+                                         for y in range(label_top, label_bot)
+                                         for x in range(xl, xr)
+                                         if is_ink(ipx[x, y])})
+                    base = ink_sets[0]
+                    offsets = []
+                    for s in ink_sets[1:]:
+                        if not s or not base:
+                            continue
+                        scored = sorted(((sum(1 for x, y in s if (x, y + dy) in base), dy)
+                                         for dy in range(0, 60)), reverse=True)
+                        best_m, best_d = scored[0]
+                        frac = best_m / len(s)
+                        runner = scored[1][0] / len(s) if len(scored) > 1 else 0.0
+                        if frac >= 0.75 and frac - runner >= 0.05:
+                            offsets.append(best_d)
+                    overflow = predicted_h - room
+                    details["tall_tail"] = {"overflow_px": overflow,
+                                            "frame_offsets": offsets,
+                                            "max_offset": max(offsets, default=0)}
+                    checks["tall_tail_reached"] = bool(offsets) and max(offsets) >= overflow - 4
+                elif not scroll_expected:
+                    checks["tall_tail_reached"] = True
+                    details["tall_tail"] = "no scroll expected; full text inside the band"
             else:
                 checks["tall_scroll_motion"] = checks["tall_scroll_confined"] = False
+                checks["tall_tail_reached"] = False
         elif options.no_scroll_input:
             checks["tall_scroll_motion"] = checks["tall_scroll_confined"] = False
+            checks["tall_tail_reached"] = False
 
         if seam_shots:
             from PIL import Image as _Image
@@ -763,6 +894,32 @@ def main():
                 for key in ("seam_panel_is_seam_width", "seam_right_column_filled",
                             "seam_bottom_row_filled"):
                     checks[key] = False
+
+        # The Back press is only proven by what the screen shows after it: each
+        # arm's post-back frame is compared against the same run's main-start
+        # reference, so a withheld command leaves the multiplayer panel in view.
+        post_back_details = {}
+        post_back_ok = []
+        seam_keep = "SeamB" if (len(seam_logs) > 1 and seam_width and seam_width % 8 == 5) else "Seam"
+        for arm, run_dir in (("viewport", root / "viewport" / "Joiner"),
+                             ("tall", root / "tall" / "TallJoiner"),
+                             ("seam", root / "seam" / (seam_keep + "Joiner"))):
+            shot_dir = run_dir / "runtime" / "ScreenShots"
+            post = sorted(shot_dir.glob("post-back_*.png"))
+            ref = sorted(shot_dir.glob("main-start_*.png"))
+            if not post or not ref:
+                post_back_details[arm] = {"reason": "missing post-back or main-start capture",
+                                          "post_back": [str(p) for p in post],
+                                          "main_start": [str(p) for p in ref]}
+                post_back_ok.append(False)
+                continue
+            ok, info = post_back_is_main(post[-1], ref[-1])
+            info["post_back"] = str(post[-1])
+            info["main_start"] = str(ref[-1])
+            post_back_details[arm] = info
+            post_back_ok.append(bool(ok))
+        details["post_back"] = post_back_details
+        checks["post_back_main_screen"] = all(post_back_ok) and bool(post_back_ok)
 
         result["pin_after"] = require_pin(repo, options.exe_sha256, before, checks, "final")
         result.update({"checks": checks, "details": details})
