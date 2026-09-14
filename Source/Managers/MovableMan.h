@@ -716,6 +716,14 @@ namespace RTE {
 		/// Lets go of this peer's control bindings for actors another peer now owns.
 		static void ReconcileLockstepControlBindings();
 
+		/// Hands every controller this machine produces for to the producing pass, and names the set it
+		/// began with by unique ID: what the pass ends on cannot depend on a team or an owner a script
+		/// changes meanwhile, and an actor handed out of the world in between is not touched again.
+		static std::vector<long int> BeginLockstepProducingPass(const std::deque<Actor*>& actors, const std::function<bool(const Actor*)>& isLocal);
+
+		/// Ends the producing pass for exactly that set, skipping anything that left the world meanwhile.
+		static void EndLockstepProducingPass(const std::vector<long int>& producing);
+
 		/// Moves the pending added MOs into the live lists immediately. The per-tick update does
 		/// this at its transfer point; a rollback restore does it before the first re-run tick so
 		/// the world enters it structurally identical to the first pass.
