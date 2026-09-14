@@ -21,8 +21,10 @@ namespace RTE {
 			double identityBuildMs = 0;
 		};
 
-		/// Installs a bounded network-log mirror and starts the writer before any match.
+		/// Installs the log mirrors before manager threads can print.
 		static void Initialize(const std::string& gpu);
+		/// Supplies the renderer description after the graphics context is ready.
+		static void SetGpuDescription(const std::string& gpu);
 		/// Queues immutable copies captured at a completed tick; false while a bundle is pending.
 		static bool Request(Snapshot snapshot);
 		/// Marks a menu request for the next safe capture boundary without doing any IO.

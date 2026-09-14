@@ -5495,6 +5495,7 @@ int main(int argc, char** argv) {
 	SeedRNG();
 	InstallRNGDrawTraceIfArmed();
 
+	TelemetryBundle::Initialize("unavailable");
 	InitializeManagers();
 	ScenarioRunner::SetStallEventPoll(&PollSDLEvents);
 	// Same arming condition as the probe itself, so only a probe run pumps the panel from a stall.
@@ -5503,7 +5504,7 @@ int main(int argc, char** argv) {
 
 	const bool mainArgsValid = HandleMainArgs(argc, argv);
 	const auto* gpu = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
-	TelemetryBundle::Initialize(gpu ? gpu : "unavailable");
+	TelemetryBundle::SetGpuDescription(gpu ? gpu : "unavailable");
 	if (!mainArgsValid) return ShutDown(EXIT_FAILURE);
 
 	// The chat script drives session traffic — only a headless e2e match may carry it.
