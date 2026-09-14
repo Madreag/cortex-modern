@@ -175,6 +175,7 @@ SettingsMultiplayerGUI::SettingsMultiplayerGUI(GUIControlManager* parentControlM
 
 	m_DisplayNameBox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextMpDisplayName"));
 	m_DisplayNameBox->SetMaxTextLength(64);
+	CreateStatusModeCombo();
 	m_NotificationsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxMpNotifications"));
 	m_PredictionCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxMpPrediction"));
 	m_PlayerError = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelMpPlayerError"));
@@ -235,6 +236,7 @@ void SettingsMultiplayerGUI::SetActivePage(Page page) {
 
 void SettingsMultiplayerGUI::ResetDraft() {
 	m_DisplayNameBox->SetText(g_SettingsMan.GetNetworkDisplayName());
+	m_StatusModeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkMatchStatusMode()));
 	m_NotificationsCheckbox->SetCheck(g_SettingsMan.GetNetworkToastsEnabled());
 	m_PredictionCheckbox->SetCheck(g_SettingsMan.GetLocalPrediction());
 
@@ -258,6 +260,7 @@ void SettingsMultiplayerGUI::ResetPageDefaults(Page page) {
 	switch (page) {
 		case Page::Player:
 			m_DisplayNameBox->SetText("Player");
+			m_StatusModeCombo->SetSelectedIndex(static_cast<int>(SettingsMan::NetworkMatchStatusMode::Auto));
 			m_NotificationsCheckbox->SetCheck(true);
 			m_PredictionCheckbox->SetCheck(true);
 			break;
@@ -280,6 +283,7 @@ void SettingsMultiplayerGUI::ResetPageDefaults(Page page) {
 
 bool SettingsMultiplayerGUI::DraftMatchesSettings() const {
 	return m_DisplayNameBox->GetText() == g_SettingsMan.GetNetworkDisplayName() &&
+		m_StatusModeCombo->GetSelectedIndex() == static_cast<int>(g_SettingsMan.GetNetworkMatchStatusMode()) &&
 		(m_NotificationsCheckbox->GetCheck() != 0) == g_SettingsMan.GetNetworkToastsEnabled() &&
 		(m_PredictionCheckbox->GetCheck() != 0) == g_SettingsMan.GetLocalPrediction() &&
 		(m_ChatVisibleCheckbox->GetCheck() != 0) == g_SettingsMan.GetNetworkChatVisible() &&
@@ -329,6 +333,7 @@ void SettingsMultiplayerGUI::ApplyDraft() {
 	}
 
 	g_SettingsMan.SetNetworkDisplayName(name);
+	g_SettingsMan.SetNetworkMatchStatusMode(static_cast<SettingsMan::NetworkMatchStatusMode>(m_StatusModeCombo->GetSelectedIndex()));
 	g_SettingsMan.SetNetworkToastsEnabled(m_NotificationsCheckbox->GetCheck() != 0);
 	g_SettingsMan.SetLocalPrediction(m_PredictionCheckbox->GetCheck() != 0);
 	g_SettingsMan.SetNetworkChatVisible(m_ChatVisibleCheckbox->GetCheck() != 0);
@@ -447,5 +452,20 @@ void SettingsMultiplayerGUI::HandleInputEvents(GUIEvent& guiEvent) {
 			reconnect.DismissOffer();
 		}
 	}
+	OnStatusModeEvent(guiEvent);
 	UpdateStatusLines();
+}
+
+void SettingsMultiplayerGUI::CreateStatusModeCombo() {
+	m_StatusModeCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboMatchStatusWidget"));
+	m_StatusModeCombo->AddItem("Off");
+	m_StatusModeCombo->AddItem("Auto");
+	m_StatusModeCombo->AddItem("Always");
+	m_StatusModeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkMatchStatusMode()));
+}
+
+void SettingsMultiplayerGUI::OnStatusModeEvent(GUIEvent& guiEvent) {
+	if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetControl() == m_StatusModeCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
+		UpdateStatusLines();
+	}
 }
