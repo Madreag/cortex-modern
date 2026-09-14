@@ -370,91 +370,6 @@ def wrapped_height_px(text, inner_px, cell_w):
     return lines * 15
 
 
-def wrap_lines_px(text, inner_px, cell_w):
-    """Same greedy wrap as wrapped_height_px but returns the line strings;
-    '\n' is a hard break as GUIFont::Draw treats it."""
-    out = []
-    for para in text.split("\n"):
-        cur, cur_w = "", 0
-        for word in para.replace("\r", "").split(" "):
-            width = sum(cell_w(b) for b in word.encode("cp1252", errors="replace"))
-            if cur and cur_w + 1 + width > inner_px:
-                out.append(cur)
-                cur, cur_w = "", 0
-            cur += word if not cur else " " + word
-            cur_w += width if cur_w == 0 else 1 + width
-        out.append(cur)
-    return out
-
-
-def font_ink_masks(png_path):
-    """Per-byte glyph ink offsets, replicating GUIFont::Load's red-separator
-    scan. Returns ({byte: (advance, [(dx, dy), ...])}, font_height)."""
-    from PIL import Image
-    img = Image.open(png_path).convert("RGBA")
-    width, height = img.size
-    px = img.load()
-    red = px[0, 0]
-    bg = px[width - 1, 0]
-    font_h = next(y for y in range(1, height) if px[0, y] == red)
-    masks = {}
-    x, y, col = 1, 0, 0
-    for ch in range(32, 256):
-        cell_w = 0
-        for n in range(x, width):
-            if px[n, y] == red:
-                break
-            cell_w += 1
-        advance = max(0, cell_w - 1)
-        pts = []
-        for ry in range(y, y + font_h):
-            for rx in range(x, x + advance):
-                p = px[rx, ry]
-                if p != bg and p != red:
-                    pts.append((rx - x, ry - y))
-        masks[ch] = (advance, pts)
-        x += cell_w + 1
-        col += 1
-        if col >= 16:
-            col = 0
-            x = 1
-            y += font_h
-            if y + font_h > height:
-                break
-    return masks, font_h
-
-
-def line_ink_mask(text, masks):
-    """Ink offsets of one rendered line: each byte's cell advances by its
-    measured width, mirroring GUIFont::Draw's X += CharWidth + kerning."""
-    pts, x = [], 0
-    for b in text.encode("cp1252", errors="replace"):
-        advance, cell = masks.get(b, (0, []))
-        pts += [(x + dx, dy) for dx, dy in cell]
-        x += advance
-    return pts, x
-
-
-def frame_has_line(img, x0, x1, y0, y1, mask_pts, mask_w, mask_h, cover=0.75):
-    """True when the expected line's ink lands on drawn text-ink somewhere in
-    the rect: a scroll frame only contains the tail when it really drew it."""
-    if not mask_pts:
-        return False
-    px = img.load()
-    need = int(len(mask_pts) * cover + 0.999)
-    for y in range(y0, max(y0, y1 - mask_h + 1)):
-        for x in range(x0, max(x0, x1 - mask_w + 1)):
-            hit = 0
-            for i, (dx, dy) in enumerate(mask_pts):
-                if is_ink(px[x + dx, y + dy]):
-                    hit += 1
-                    if hit >= need:
-                        return True
-                if hit + len(mask_pts) - i - 1 < need:
-                    break
-    return False
-
-
 def button_extent(px, width, y0, y1):
     """The Back button's horizontal extent: the first contiguous run of the
     button frame blue between 60 and 220px long inside the y-band."""
@@ -476,22 +391,12 @@ def button_extent(px, width, y0, y1):
     return best
 
 
-def count_button_runs(px, width, y0, y1):
-    """Rows carrying a 60..260px button-blue run, so the main menu's own
-    buttons register as several hits while star/planet backdrop gives none."""
-    hits = 0
-    for y in range(y0, y1):
-        run = 0
-        for x in range(width):
-            if near(px[x, y], BUTTON_BLUE, 25):
-                run += 1
-            else:
-                if 60 <= run <= 260:
-                    hits += 1
-                run = 0
-        if 60 <= run <= 260:
-            hits += 1
-    return hits
+def gold_text_rows(px, width, height):
+    """Rows carrying >=10 gold text-ink pixels. The main menu's own items are
+    unframed gold text (its buttons draw no blue frame), so the real menu
+    scores ~150+ while a bare starfield or a black frame scores ~0."""
+    return sum(1 for y in range(height)
+               if sum(1 for x in range(width) if is_gold_ink(px[x, y])) >= 10)
 
 
 def coarse_cell_diff(img_a, img_b, cell=16, pix_tol=24, frac=0.2):
@@ -528,9 +433,9 @@ def post_back_is_main(post_back_path, main_start_path):
         return False, {"reason": "multiplayer panel still present", "extent": extent}
     main_img = Image.open(main_start_path).convert("RGB")
     diff = coarse_cell_diff(main_img, img)
-    buttons = count_button_runs(px, width, 0, height)
-    ok = diff <= 0.30 and buttons >= 1
-    return ok, {"main_diff": round(diff, 4), "button_rows": buttons}
+    buttons = gold_text_rows(px, width, height)
+    ok = diff <= 0.30 and buttons >= 8
+    return ok, {"main_diff": round(diff, 4), "gold_rows": buttons}
 
 
 def main():
@@ -839,6 +744,42 @@ def main():
             details["frame_shas"] = [sha256_file(p)[:16] for p in joiner_shots]
             checks["frames_not_identical"] = len(set(details["frame_shas"])) >= 2
 
+        # LabelMultiplayerStatus is a 16px box at panel-rel Y 144; the panel's
+        # controls anchor 2px above the first gray row. A wrapped status line
+        # is centered over the box and its top rows are cut by the label clip,
+        # so the first ink block must start inside the band and span a full
+        # FontLarge glyph height - seeing ink at the band's top edge is the clip.
+        checks["host_status_unclipped"] = False
+        if host_shots:
+            from PIL import Image as _Img2
+            himg = _Img2.open(host_shots[0]).convert("RGB")
+            hpx = himg.load()
+            hw, hh = himg.size
+            hext = panel_extent(hpx, hw, hh)
+            if hext:
+                htop, _hbot = panel_vertical(hpx, hw, hh)
+                if htop is not None:
+                    band_top = htop + 142
+                    blocks = []
+                    y = band_top
+                    while y < band_top + 16:
+                        cols = sum(1 for x in range(hext[1] + 2, hext[2] - 1)
+                                   if is_gold_ink(hpx[x, y]))
+                        if cols >= 3:
+                            start_y = y
+                            while y < band_top + 16 and sum(
+                                    1 for x in range(hext[1] + 2, hext[2] - 1)
+                                    if is_gold_ink(hpx[x, y])) >= 3:
+                                y += 1
+                            blocks.append((start_y - band_top, y - 1 - band_top))
+                        else:
+                            y += 1
+                    details["host_status_band"] = {"top": band_top, "blocks": blocks}
+                    if blocks:
+                        first = blocks[0]
+                        checks["host_status_unclipped"] = (first[0] >= 2
+                                                         and first[1] - first[0] + 1 >= 7)
+
         if not options.no_scroll_input and tall_shots:
             from PIL import Image as _Image
             tall_imgs = [_Image.open(p).convert("RGB") for p in tall_shots]
@@ -872,22 +813,46 @@ def main():
                 # so motion is only demanded when the geometry predicts scroll.
                 checks["tall_scroll_motion"] = (not scroll_expected) or sum(1 for d in td if d > 0.03) >= 2
                 checks["tall_scroll_confined"] = max(tout, default=1.0) < 0.01
-                # The tail is proven by ink, not by the label dump: the last
-                # wrapped line's expected glyph mask is searched in the band,
-                # so it only registers when a frame actually drew it. The
-                # 750ms frames span a full scroll cycle, so an end window is
-                # always sampled; a run that never reaches it fails here.
+                # The tail is proven by scroll offset, not by a glyph mask:
+                # the short closing line's ink pattern is too similar to the
+                # hash fragment one line above it to locate reliably. Instead
+                # each frame's label-band ink set is correlated against t0 -
+                # captured inside the scroll's initial wait, so offset 0 - and
+                # the argmax dy is that frame's absolute scroll offset. The
+                # closing line is drawn iff a frame reaches the overflow
+                # distance, i.e. predicted text height minus label room.
                 checks["tall_tail_reached"] = False
-                if tall_label:
-                    masks, font_h = font_ink_masks(skin_dir / "FontLarge.png")
-                    tail_line = wrap_lines_px(tall_label, inner, cell)[-1]
-                    mask_pts, mask_w = line_ink_mask(tail_line, masks)
-                    hits = [i for i, img in enumerate(tall_imgs)
-                            if frame_has_line(img, band[0], band[1], band[2], band[3],
-                                              mask_pts, mask_w, font_h)]
-                    details["tall_tail"] = {"line": tail_line, "mask_w": mask_w,
-                                            "mask_pts": len(mask_pts), "frames": hits}
-                    checks["tall_tail_reached"] = bool(hits)
+                if scroll_expected and tall_shots:
+                    label_top = (ttop or 0) - 2 + 168
+                    label_bot = label_top + room
+                    xl, xr = tleft + 12, tright - 12
+                    ink_sets = []
+                    for img in tall_imgs:
+                        ipx = img.load()
+                        ink_sets.append({(x, y - label_top)
+                                         for y in range(label_top, label_bot)
+                                         for x in range(xl, xr)
+                                         if is_ink(ipx[x, y])})
+                    base = ink_sets[0]
+                    offsets = []
+                    for s in ink_sets[1:]:
+                        if not s or not base:
+                            continue
+                        scored = sorted(((sum(1 for x, y in s if (x, y + dy) in base), dy)
+                                         for dy in range(0, 60)), reverse=True)
+                        best_m, best_d = scored[0]
+                        frac = best_m / len(s)
+                        runner = scored[1][0] / len(s) if len(scored) > 1 else 0.0
+                        if frac >= 0.75 and frac - runner >= 0.05:
+                            offsets.append(best_d)
+                    overflow = predicted_h - room
+                    details["tall_tail"] = {"overflow_px": overflow,
+                                            "frame_offsets": offsets,
+                                            "max_offset": max(offsets, default=0)}
+                    checks["tall_tail_reached"] = bool(offsets) and max(offsets) >= overflow - 4
+                elif not scroll_expected:
+                    checks["tall_tail_reached"] = True
+                    details["tall_tail"] = "no scroll expected; full text inside the band"
             else:
                 checks["tall_scroll_motion"] = checks["tall_scroll_confined"] = False
                 checks["tall_tail_reached"] = False
