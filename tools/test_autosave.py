@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 import re
+import subprocess
+import sys
 import threading
 import zipfile
 from pathlib import Path
@@ -130,7 +132,7 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=48212)
     parser.add_argument("--ticks", type=int, default=400)
-    parser.add_argument("--arm", choices=("all", "default", "peer-bytes"), default="all")
+    parser.add_argument("--arm", choices=("all", "default", "peer-bytes", "restore"), default="all")
     args = parser.parse_args()
     if not (48211 <= args.port <= 48216 or 48240 <= args.port <= 48246) or args.ticks < 400:
         parser.error("four ports must fit 48211..48219 or 48240..48249; at least 400 ticks are required")
@@ -144,14 +146,16 @@ def main() -> int:
             "asymmetric": {"host": 2, "client": 0}, "rotation": {"host": 1, "client": 1}}
     if args.arm == "default":
         arms = {"default": {"host": None, "client": None}}
-    elif args.arm == "peer-bytes":
-        arms = {"peer-bytes": {"host": 2, "client": 2}}
+    elif args.arm in ("peer-bytes", "restore"):
+        arms = {args.arm: {"host": 2, "client": 2}}
     for index, (arm, cadence) in enumerate(arms.items()):
         arm_root = root / arm
         details = {"cadence_seconds": cadence}
         result["arms"][arm] = details
         try:
-            records = run_pair(repo, arm_root, args.port + index, cadence, args.ticks)
+            extras = {who: ["-net-replay-out", str(arm_root / f"{who}.ccreplay")]
+                      for who in cadence} if arm == "restore" else None
+            records = run_pair(repo, arm_root, args.port + index, cadence, args.ticks, extra_args=extras)
             details["records"] = records
             for who in cadence:
                 assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
@@ -178,6 +182,19 @@ def main() -> int:
                                for tick in sorted(by_tick["host"])]
                 details["checkpoint_byte_comparisons"] = comparisons
                 assert all(row["passed"] for row in comparisons), comparisons
+            elif arm == "restore":
+                snapshots = [max(map(Path, details[who]["files"]), key=lambda path: int(path.stem.rsplit("-", 1)[1]))
+                             for who in cadence]
+                command = [sys.executable, str(repo / "tools/test_snapshot_roundtrip.py"), *map(str, snapshots),
+                           "--repo", str(repo), "--recording", str(arm_root / "host.ccreplay"),
+                           "--out", str(arm_root / "roundtrip"), "--lua-states", "4", "--shared-pair",
+                           "--audio-mode", "locked"]
+                with (arm_root / "roundtrip-driver.log").open("w", encoding="utf-8") as log:
+                    restored = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=300)
+                details["roundtrip"] = {"argv": command, "exit_code": restored.returncode,
+                                        "result": str(arm_root / "roundtrip/result.json")}
+                assert restored.returncode == 0, details["roundtrip"]
+                assert json.loads((arm_root / "roundtrip/result.json").read_text())["pass"], details["roundtrip"]
             elif arm not in ("off", "default"):
                 for who in cadence:
                     exact_role_compare(root / "off" / f"{who}_trace.json", arm_root / f"{who}_trace.json", args.ticks)
@@ -186,6 +203,8 @@ def main() -> int:
                 print(f"PASS default: {args.ticks} peer ticks match; autosave flag absent; capture_lines=0 files_host=0 files_client=0", flush=True)
             elif arm == "peer-bytes":
                 print(f"PASS peer-bytes: {args.ticks} peer ticks match; every retained checkpoint is byte-equal", flush=True)
+            elif arm == "restore":
+                print(f"PASS restore: both newest autosaves pass the full snapshot roundtrip driver", flush=True)
             else:
                 print(f"PASS {arm}: {args.ticks} peer ticks match; checkpoint rotation and same-peer full hashes match", flush=True)
         except Exception as error:
