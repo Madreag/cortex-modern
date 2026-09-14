@@ -2900,6 +2900,7 @@ static std::string ResyncSaveName() {
 		config.modePreset = NetMatchConfigUtil::ModeName(mode);
 		config.ownershipPolicy = request.ownershipPolicy;
 		config.inputDelayFrames = request.inputDelayFrames;
+		config.brainlessHumansSpectate = request.brainlessHumansSpectate;
 		config.peerCount = peerCount;
 		config.dedicated = request.dedicated;
 		// The host authors the roster; clients adopt it via the lobby config sync. PvP seats one team

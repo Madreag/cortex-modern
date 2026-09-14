@@ -158,6 +158,7 @@ namespace RTE {
 			};
 			NetMatchConfig historical = MakeConfig();
 			historical.version = 2;
+			historical.brainlessHumansSpectate = false;
 			std::vector<uint8_t> historicalWire;
 			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{historical}}, historicalWire)) return false;
 			historicalWire[4] = 3;
@@ -445,6 +446,7 @@ namespace RTE {
 				{"deploy", [](auto& c) { c.deployUnits = false; }}, {"autosave", [](auto& c) { c.autosaveEnabled = false; }},
 				{"interval", [](auto& c) { ++c.autosaveIntervalSeconds; }}, {"idle_wait", [](auto& c) { ++c.idleWaitMinutes; }},
 				{"repair", [](auto& c) { c.automaticRepair = true; }}, {"policy", [](auto& c) { c.delayPolicy = NetMatchDelayPolicy::Auto; }},
+				{"brainless_spectate", [](auto& c) { c.brainlessHumansSpectate = false; }},
 				{"floor", [](auto& c) { ++c.inputDelayFrames; }}, {"sender_1", [](auto& c) { ++c.peerInputDelayFrames[0]; }},
 				{"sender_2", [](auto& c) { ++c.peerInputDelayFrames[1]; }},
 			};
@@ -519,6 +521,7 @@ namespace RTE {
 			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{config}}, bytes)) return false;
 			NetMatchConfig prefix = MakeConfig();
 			prefix.version = 2;
+			prefix.brainlessHumansSpectate = false;
 			prefix.inputDelayFrames = config.inputDelayFrames;
 			prefix.peerInputDelayFrames = config.peerInputDelayFrames;
 			std::vector<uint8_t> prefixBytes;
@@ -544,7 +547,8 @@ namespace RTE {
 				for (size_t i = 0; i < 4; ++i) truncated[12 + i] = static_cast<uint8_t>((length - NetLobbyProtocol::c_HeaderBytes) >> (8 * i));
 				if (NetLobbyProtocol::Decode(truncated).ok) { *error = "truncated rules decoded"; return false; }
 			}
-			for (const size_t offset : {bytes.size() - 8, bytes.size() - 2, bytes.size() - 1}) {
+			// The spectate rule rides between deploy_units and the team rules, so its byte is offset from difficulty.
+			for (const size_t offset : {difficultyOffset + 8, bytes.size() - 8, bytes.size() - 2, bytes.size() - 1}) {
 				auto invalidWire = bytes;
 				invalidWire[offset] = 3;
 				if (NetLobbyProtocol::Decode(invalidWire).ok) { *error = "invalid rules bool/policy decoded"; return false; }
@@ -555,6 +559,8 @@ namespace RTE {
 			for (size_t i = 0; i < legacyHex.size(); i += 2) legacy.push_back(static_cast<uint8_t>(std::stoul(legacyHex.substr(i, 2), nullptr, 16)));
 			NetMatchConfig expected = MakeConfig();
 			expected.version = 2;
+			// A legacy config carries the pre-rules end rule: the last human brain ends the round.
+			expected.brainlessHumansSpectate = false;
 			expected.sessionId = 1;
 			for (const uint8_t version : {2, 1}) {
 				legacy[16] = version;

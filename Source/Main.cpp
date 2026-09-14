@@ -280,6 +280,7 @@ static uint64_t s_netLockstepTicks = 0;
 static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
 static uint16_t s_netLockstepInputDelay = 0;
 static uint8_t s_netMatchPeers = 2;
+static bool s_netMatchBrainlessSpectate = true;
 static std::string s_netMatchMode = "pvp";
 static std::string s_netMatchOwnershipPolicy = "team-owner";
 static bool s_netMatchServiceE2EEnteredEditor = false;
@@ -964,6 +965,16 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-mode") {
 			s_netMatchMode = argValue[++i];
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-brainless-spectate") {
+			const std::string value = argValue[++i];
+			if (value != "0" && value != "1") {
+				std::cerr << "[net-match] -net-match-brainless-spectate requires 0 or 1" << std::endl;
+				return false;
+			}
+			s_netMatchBrainlessSpectate = value == "1";
 			continue;
 		}
 
@@ -5126,6 +5137,7 @@ int RunNetMatchServiceE2E() {
 		NetActorOwnershipPolicy e2ePolicy;
 		request.ownershipPolicy = NetMatchConfigUtil::ParseOwnershipPolicy(s_netMatchOwnershipPolicy, e2ePolicy) ? e2ePolicy : NetActorOwnershipPolicy::TeamOwner;
 		request.inputDelayFrames = s_netLockstepInputDelay;
+		request.brainlessHumansSpectate = s_netMatchBrainlessSpectate;
 		request.peerCount = s_netMatchPeers;
 		NetMatchMode parsedMode;
 		if (NetMatchConfigUtil::ParseMode(s_netMatchMode, parsedMode)) {
