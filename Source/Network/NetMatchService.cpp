@@ -1517,6 +1517,9 @@ static std::string ResyncSaveName() {
 		}
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
+		const NetLockstepConfig& config = m_Coordinator->GetConfig();
+		std::cout << std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={}\n",
+		                         m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames) << std::flush;
 		CaptureA7SeatView();
 		return true;
 	}
