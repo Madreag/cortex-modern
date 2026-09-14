@@ -273,6 +273,9 @@ def call_main(module, args):
 
 
 def compatibility(label):
+    if label == 'reference':
+        run_case('reference/graph', ['-script-graph-selftest', '-num-lua-states', 4])
+        run_case('reference/letters', replay_flags(spec='200:1:1', modes='brcitmqxonlap'))
     for scenario in ('LuaBaseline', 'LuaPairsStress', 'LuaRandomStress', 'LuaOsStubTest'):
         run_case(f'{label}/scenario-{scenario}', ['-scenario', scenario, '-seed', 42,
                  '-max-ticks', 600, '-num-lua-states', 4, '-tick-hashes'])
@@ -355,6 +358,10 @@ def score():
             label = path.parent.name.split('-')[0]
         checks['identity_' + row['name']] = row['identity'] == identities[label] and row['transport_ok']
     red, green = read_row('red/graph'), read_row('green/graph')
+    reference = read_row('reference/graph')
+    checks['reference_graph'] = (reference['transport_ok'] and reference['exit_code'] == 1 and
+                                 'preview_deep_global_writes_undone' in reference['graph_failures'] and
+                                 set(reference['graph_failures']) <= {'', 'preview_deep_global_writes_undone'})
     checks['fresh_red'] = red['transport_ok'] and red['exit_code'] == 1 and 'preview_deep_global_writes_undone' in red['graph_failures']
     checks['green_graph'] = green['transport_ok'] and green['exit_code'] == 0 and not green['graph_failures']
     checks['barrier_rounds'] = sum('PASS preview_barrier_exact_rollback ' in line for line in green['verdicts']) == 10
@@ -380,6 +387,9 @@ def score():
         checks['fixture_' + scenario] = runs_ok and rows[0]['passed'] and rows[0] == rows[1] == rows[2]
     rows = [read_row(label + '/module') for label in ('reference', 'red', 'green')]
     checks['fixture_module'] = all(r['transport_ok'] and r['exit_code'] == 0 for r in rows) and bool(rows[0]['observations']) and rows[0]['observations'] == rows[1]['observations'] == rows[2]['observations']
+    held = [[line for line in read_row(label + '/letters')['verdicts'] if 'fixture_reference_semantics:' in line]
+            for label in ('reference', 'red', 'green')]
+    checks['fixture_held_references'] = bool(held[0]) and held[0] == held[1] == held[2] and all('[lpinv] PASS ' in line for line in held[0])
     sys.path.insert(0, str(REPO / 'tools/pie_lockstep'))
     pie_compare = import_driver('tools/pie_lockstep/compare_sp.py')
     for case in ('next', 'prev', 'goto', 'actor_cancel', 'delivery_cancel'):
