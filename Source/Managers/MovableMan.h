@@ -71,6 +71,7 @@ namespace RTE {
 	/// The singleton manager of all movable objects in the RTE.
 	class MovableMan : public Singleton<MovableMan>, public Serializable {
 		friend struct ContractAudit;
+		friend class PreviewScriptSelfTest;
 
 		friend class SettingsMan;
 		friend struct ManagerLuaBindings;

@@ -246,6 +246,16 @@ void Attachable::SetOwnedParentBreakWound(AEmitter* wound) {
 	m_ParentBreakWound = wound;
 }
 
+void Attachable::VisitOwnedWoundTemplates(const std::function<void(AEmitter*)>& visit) const {
+	if (m_OwnedBreakWound) visit(m_OwnedBreakWound.get());
+	if (m_OwnedParentBreakWound) visit(m_OwnedParentBreakWound.get());
+}
+
+void Attachable::RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) {
+	MOSRotating::RemapExternalLinks(map);
+	VisitOwnedWoundTemplates([&map](AEmitter* wound) { wound->RemapExternalLinks(map); });
+}
+
 void Attachable::ResolveFaithfulLinks() {
 	MOSRotating::ResolveFaithfulLinks();
 	if (m_OwnedBreakWound) m_OwnedBreakWound->ResolveFaithfulLinks();
