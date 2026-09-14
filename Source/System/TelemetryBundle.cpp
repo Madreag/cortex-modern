@@ -281,7 +281,8 @@ namespace RTE {
 			add("JoinIdentity.json", std::move(job.snapshot.joinIdentity));
 			add("DesyncHeal.json", std::move(job.snapshot.desyncHeal));
 			const bool replayIncluded = !job.snapshot.replay.empty() && job.snapshot.replay.size() <= TelemetryBundle::c_MemberLimit;
-			add("Replay.status.json", json{{"included", replayIncluded}, {"truncated", job.snapshot.replayTruncated}, {"reason", job.snapshot.replayReason}}.dump(2));
+			const json replayStatus{{"included", replayIncluded}, {"truncated", job.snapshot.replayTruncated}, {"reason", job.snapshot.replayReason}};
+			add("Replay.status.json", replayStatus.dump(2));
 			if (!job.snapshot.replay.empty()) add("Replay.ccrp", std::move(job.snapshot.replay));
 			std::ifstream settings(s_State.runtime / "Userdata" / "Settings.ini", std::ios::binary);
 			if (settings) {
@@ -292,8 +293,12 @@ namespace RTE {
 			} else omissions.push_back({{"name", "Settings.ini"}, {"reason", "file unavailable"}});
 			add("SystemInfo.json", SystemInfo(s_State.gpu).dump(2));
 			add("Executable.json", json{{"sha256", FileDigest(s_State.executable)}, {"version", c_VersionString}}.dump(2));
-			json manifest{{"schema", 1}, {"members", json::array()}, {"omitted", omissions}};
-			for (const auto& [name, data]: members) manifest["members"].push_back({{"name", name}, {"size", data.size()}, {"sha256", Digest(data)}});
+			json manifest{{"schema", 1}, {"members", json::array()}, {"omitted", omissions}, {"replay", replayStatus}};
+			for (const auto& [name, data]: members) {
+				json entry{{"name", name}, {"size", data.size()}, {"sha256", Digest(data)}};
+				if (name == "Replay.ccrp") entry["truncated"] = job.snapshot.replayTruncated;
+				manifest["members"].push_back(std::move(entry));
+			}
 			add("manifest.json", manifest.dump(2));
 			const auto directory = s_State.runtime / "Telemetry";
 			std::filesystem::create_directories(directory);

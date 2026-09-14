@@ -70,8 +70,10 @@ def inspect_bundle(runtime: Path, exe_sha: str, replay: Path | None = None) -> d
     assert contents["Settings.ini"] == (runtime / "Userdata/Settings.ini").read_bytes(), "settings copy"
     assert "present" in json.loads(contents["DesyncHeal.json"]), "desync/heal status"
     status = json.loads(contents["Replay.status.json"])
+    assert manifest["replay"] == status, "manifest replay truncation/status differs"
     if replay is not None:
         assert status["included"] and not status["truncated"], status
+        assert next(row for row in listed if row["name"] == "Replay.ccrp")["truncated"] == status["truncated"], "replay member truncation flag"
         assert contents["Replay.ccrp"] == replay.read_bytes(), "replay differs from closed tick-boundary recording"
         assert contents["Replay.ccrp"][:4] == b"CCRP", "replay header"
         assert contents["Replay.ccrp"][-4:] == b"\xff\xff\xff\xff", "replay end marker"
