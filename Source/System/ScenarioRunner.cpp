@@ -1626,6 +1626,10 @@ namespace RTE {
 		s_ReplayWriter.Close();
 	}
 
+	bool ScenarioRunner::CopyLockstepReplayForDiagnostics(std::string& bytes, bool& truncated) {
+		return s_ReplayWriter.CopyDiagnosticReplay(bytes, truncated);
+	}
+
 	uint64_t ScenarioRunner::GetLockstepReplayRecordFrames() {
 		return s_ReplayWriter.IsOpen() ? s_ReplayWriter.GetFramesWritten() : s_ReplayRecordFrames;
 	}
