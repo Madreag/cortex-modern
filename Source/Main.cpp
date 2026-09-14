@@ -60,6 +60,7 @@
 #include "MovableObject.h"
 #include "RTETools.h"
 #include "RotatePrimitiveSelfTest.h"
+#include "FloatTextSelfTest.h"
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
@@ -5250,6 +5251,9 @@ int main(int argc, char** argv) {
 	for (int i = 1; i < argc; ++i) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
 			return RotatePrimitiveSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-float-text-selftest") {
+			return FloatTextSelfTest::Run();
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-controller-frame-selftest") {
 			return ControllerFrameSelfTest::Run();

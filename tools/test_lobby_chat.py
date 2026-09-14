@@ -122,11 +122,17 @@ def shots_menu_script(who: str, port: int, res_tag: str) -> str:
                 "chat team for my team only\nwait 15\n"
                 "settext TextLobbyChat typed but not sent\nwait 10\n"
                 f"screenshot lobby_chat_{res_tag}\n"
+                # Row-agnostic proof that a delivered line reached a drawn panel row: the row
+                # count varies with the layout budget, so the aliases resolve whatever label
+                # index the newest row landed in.
+                "assert_label LabelLobbyChatAny hello from the client seat\n"
+                "chat all lobby closing marker\nwait 15\n"
+                "assert_label LabelLobbyChatNewest lobby closing marker\n"
                 "dump_lobby\nexit\n")
     return (head + "activate ButtonMultiplayerJoinGame\nwait 10\n"
             f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
             "activate ButtonMultiplayerConnect\nwait_connected 2\nwait 20\n"
-            "chat all hello from the client seat\nwait 30\nexit\n")
+            "chat all hello from the client seat\nwait 60\nexit\n")
 
 
 LONG_MODULES = [chr(ord('a') + i) * 60 + ".rte" for i in range(5)]  # five 64-byte module names
@@ -277,6 +283,7 @@ def run_shots(repo: Path, root: Path, port: int) -> dict:
             "host_exit": records.get("host", {}).get("exit_code"),
             "screenshot": str(shot), "screenshot_exists": shot.exists(),
             "chat_sends": [l for l in host_log.splitlines() if "[menu-script] chat" in l],
+            "assert_labels": [l for l in host_log.splitlines() if "assert_label" in l],
             "dump_lobby": [l for l in host_log.splitlines() if "dump_lobby" in l],
         }
         result["checks"][f"{res_tag}_exit"] = records.get("host", {}).get("exit_code") == 0

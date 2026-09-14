@@ -14,7 +14,7 @@
 #include "GUI.h"
 #include "AllegroBitmap.h"
 
-#include <charconv>
+#include "FloatText.h"
 
 using namespace RTE;
 
@@ -185,7 +185,7 @@ std::string ACRocket::GetLimbGroupPositions() const {
 		if (cursor != buffer) {
 			*cursor++ = ' ';
 		}
-		cursor = std::to_chars(cursor, buffer + sizeof(buffer), value).ptr;
+		cursor = ToCharsExact(cursor, buffer + sizeof(buffer), value).ptr;
 	};
 	for (const AtomGroup* group: {m_pRFootGroup, m_pLFootGroup}) {
 		const Vector limbPos = group ? group->GetRawLimbPos() : Vector();
@@ -205,7 +205,7 @@ std::string ACRocket::GetLimbGroupInertia() const {
 		if (cursor != buffer) {
 			*cursor++ = ' ';
 		}
-		cursor = std::to_chars(cursor, buffer + sizeof(buffer), value).ptr;
+		cursor = ToCharsExact(cursor, buffer + sizeof(buffer), value).ptr;
 	};
 	for (const AtomGroup* group: {m_pRFootGroup, m_pLFootGroup}) {
 		appendValue(group ? group->GetStoredMomentOfInertia() : 0.0F);
@@ -238,7 +238,7 @@ static void ApplyPackedLimbState(const std::string& packed, std::initializer_lis
 		while (cursor != end && *cursor == ' ') {
 			++cursor;
 		}
-		cursor = std::from_chars(cursor, end, value).ptr;
+		cursor = FromCharsExact(cursor, end, value).ptr;
 	};
 	for (AtomGroup* group: groups) {
 		float first = 0.0F;

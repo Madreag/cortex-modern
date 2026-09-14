@@ -3671,6 +3671,22 @@ namespace RTE {
 		}
 		host.SetChatTeams({{0, 0}, {teamId, 0}, {otherId, 1}});
 
+		// Before team membership is pushed the host's own seat follows the relay's rule: a
+		// missing entry means "on no team", so a team line sinks on nobody - not on "team -1".
+		host.SetChatTeams({});
+		pump(110);
+		if (!otherPeer.SendChat(c_NetChatScopeTeam, "unassigned huddle")) {
+			fail("the unmapped opponent's team-scope send was refused");
+		}
+		pump(4);
+		for (const NetChatEntry& entry: lastLines(host)) {
+			if (entry.text == "unassigned huddle") {
+				fail("a team line reached the host's sink with no team mapping pushed");
+			}
+		}
+		host.SetChatTeams(teams);
+		pump(110);
+
 		// A malformed chat-typed packet is counted and tolerated, and the flood budget is real:
 		// twenty of them burn the sender's window, count as malformed, and the peer stays seated.
 		// Start in a fresh window - the team arm's relayed line still sits in this sender's.
@@ -3701,6 +3717,21 @@ namespace RTE {
 			     std::to_string(host.GetStats().chatDroppedMalformed - malformedBefore) + "/" +
 			     std::to_string(host.GetStats().chatDroppedRate - rateBefore) + " peers " +
 			     std::to_string(host.GetReadyPeerCount()) + " wanted 20/15/2");
+		}
+
+		// Reconnect churn: transport ids are monotonic, so a reconnecting sender still
+		// handshaking arrives under a fresh id. Every such id must share one malformed-sender
+		// budget entry - one rate-map key, not one per fresh socket.
+		const size_t rateKeysBefore = host.ChatRateWindowCount();
+		for (NetPeerId fresh = 4000; fresh < 4000 + 40; ++fresh) {
+			host.InjectEvent(NetTransportEvent{NetTransportEventType::PacketReceived, fresh,
+			                                 NetTransportLane::ControlReliable, malformed, {}},
+			                 hostTransport.NowMs());
+		}
+		const size_t rateKeysMinted = host.ChatRateWindowCount() - rateKeysBefore;
+		if (rateKeysMinted > 1) {
+			fail("unmapped senders minted " + std::to_string(rateKeysMinted) +
+			     " rate-map entries across reconnect churn");
 		}
 
 		// The sink is bounded: past the window the oldest lines fall off. Start in a fresh rate
@@ -3828,6 +3859,31 @@ namespace RTE {
 		if (once != 100 || missing != 0 || duplicated != 0) {
 			*error = "outbox echoes: once " + std::to_string(once) + " missing " +
 			         std::to_string(missing) + " duplicated " + std::to_string(duplicated) + " wanted 100/0/0";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestChatSendRefusedOutsideCarry(std::string* error) {
+		// LeaveWorkerMain keeps m_Session (and m_ChatSession) owned past Completed, so a bare
+		// session pointer cannot be the gate: SendChat must refuse on the service state itself.
+		// A line accepted in Idle/Completed/Failed has no pump left to drain it - the UI clears
+		// the input box on true, so true here is text silently thrown away.
+		NetMatchService service;
+		service.m_Session = std::make_unique<NetSession>();
+		service.m_ChatSession = service.m_Session.get();
+		for (const NetMatchServiceState state :
+		     {NetMatchServiceState::Idle, NetMatchServiceState::Completed, NetMatchServiceState::Failed}) {
+			service.m_State = state;
+			if (service.SendChat(c_NetChatScopeAll, "ghost line")) {
+				*error = std::string("SendChat accepted a line while the service was ") +
+				         NetMatchService::StateName(state);
+				return false;
+			}
+		}
+		service.m_State = NetMatchServiceState::Running;
+		if (!service.SendChat(c_NetChatScopeAll, "live line")) {
+			*error = "SendChat refused a line while the service was Running";
 			return false;
 		}
 		return true;
@@ -6569,8 +6625,21 @@ namespace RTE {
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestRosterTransitionsRecordHoldThenPresent(&error)) return fail(error);
 		if (!TestRosterBannerNamesThePlayerOnce(&error)) return fail(error);
-		if (!TestChatRoutingAndBounds(&error)) return fail(error);
-		if (!TestChatOutboxJoinRace(&error)) return fail(error);
+		// The chat arms accumulate like the other independent tests so one defective build shows
+		// every defect instead of stopping at the first.
+		std::string chatRoutingError, chatRaceError, chatCarryError;
+		if (!TestChatRoutingAndBounds(&chatRoutingError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << chatRoutingError << std::endl;
+		}
+		if (!TestChatOutboxJoinRace(&chatRaceError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << chatRaceError << std::endl;
+		}
+		if (!TestChatSendRefusedOutsideCarry(&chatCarryError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << chatCarryError << std::endl;
+		}
+		if (!chatRoutingError.empty()) return fail(chatRoutingError);
+		if (!chatRaceError.empty()) return fail(chatRaceError);
+		if (!chatCarryError.empty()) return fail(chatCarryError);
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
 		std::string stopCancelError, endedAdmissionError, twoIceRoundsError;

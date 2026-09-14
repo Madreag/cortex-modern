@@ -26,6 +26,7 @@ SELFTESTS = [
     "net-reconnect-session",
     "camera-null-scene",
     "rotate-primitive",
+    "float-text",
 ]
 FATAL = re.compile(
     r"^.*(?:\bFAIL\b|RTE Assert|RTE Abort|stack traceback|Stack trace \(most recent call last\)).*$",

@@ -948,6 +948,8 @@
     <ClInclude Include="Source\Network\NetPortMap.h" />
     <ClInclude Include="Source\Network\NetProtocol.h" />
     <ClInclude Include="Source\System\RotatePrimitiveSelfTest.h" />
+    <ClInclude Include="Source\System\FloatText.h" />
+    <ClInclude Include="Source\System\FloatTextSelfTest.h" />
     <ClInclude Include="Source\Network\NetProtocolSelfTest.h" />
     <ClInclude Include="Source\Network\NetReconnectAdmission.h" />
     <ClInclude Include="Source\Network\NetReconnectLedger.h" />
@@ -1568,6 +1570,7 @@
     <ClCompile Include="Source\Network\NetPortMapSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetProtocol.cpp" />
     <ClCompile Include="Source\System\RotatePrimitiveSelfTest.cpp" />
+    <ClCompile Include="Source\System\FloatTextSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetProtocolSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetReconnectAdmission.cpp" />
     <ClCompile Include="Source\Network\NetReconnectLedger.cpp" />
