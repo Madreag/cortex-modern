@@ -6114,6 +6114,7 @@ _PrimitiveQueueCapture = nil
 		int loaded = -99;
 		int stateTaken = -1;
 		bool staged = false;
+		bool stateFenced = false;
 		LuaMan::CapturePreviewSelfCopies({}, false);
 		{
 			LuaMan::PreviewHookScope hookScope(true);
@@ -6126,19 +6127,36 @@ _PrimitiveQueueCapture = nil
 			staged = host && host->GetAllLoadedScripts().empty() && !host->GetLuaState() && !host->ObjectScriptsInitialized();
 			loaded = staged ? host->LoadScript(scriptPath) : -99;
 			stateTaken = staged ? g_LuaMan.GetStateIndex(host->GetLuaState()) : -1;
+			stateFenced = staged && host->GetLuaState() && host->GetLuaState()->PreviewGlobalFenceArmed();
 		}
+		const uint64_t undoneBefore = LuaMan::PreviewGlobalsUndoneCount();
 		LuaMan::EndPreviewScripts();
+		const uint64_t undone = LuaMan::PreviewGlobalsUndoneCount() - undoneBefore;
 		const int cursorAfter = g_LuaMan.GetScriptStateCursor();
 		const bool cursorKept = cursorAfter == cursorBefore;
 		const bool bindingsKept = g_MovableMan.DescribeScriptBindings() == bindingsBefore;
-		const bool graphsKept = observed && g_MovableMan.SerializeScriptGraphs(graphsAfter, graphProblems) && graphsAfter == graphsBefore;
 		RunScriptString("_PreviewLateHost = nil; _PreviewLateUID = nil");
 		g_LuaMan.CollectGarbageForCheckpoint();
 		const bool hostGone = uid > 0 && g_MovableMan.FindObjectByUniqueID(uid) == nullptr;
+		// Read the graphs once the window's own object is gone: what is left is the state the load moved.
+		const bool graphsKept = observed && g_MovableMan.SerializeScriptGraphs(graphsAfter, graphProblems) && graphsAfter == graphsBefore;
+		std::string graphDelta;
+		for (size_t index = 0; index < std::max(graphsBefore.size(), graphsAfter.size()); ++index) {
+			const std::string first = index < graphsBefore.size() ? graphsBefore[index] : std::string();
+			const std::string second = index < graphsAfter.size() ? graphsAfter[index] : std::string();
+			if (first == second) {
+				continue;
+			}
+			size_t at = 0;
+			while (at < first.size() && at < second.size() && first[at] == second[at]) {
+				++at;
+			}
+			graphDelta += " state " + std::to_string(index) + ": " + std::to_string(first.size()) + "->" + std::to_string(second.size()) + " at " + std::to_string(at) + " '" + second.substr(at, 60) + "'";
+		}
 		std::cout << "[preview-late-script] staged=" << staged << " loaded=" << loaded << " state=" << stateTaken
 		          << " cursor " << cursorBefore << "->" << cursorAfter << " bindings_kept=" << bindingsKept
 		          << " graphs_kept=" << graphsKept << " graph_problems=" << graphProblems.size()
-		          << " uid=" << uid << " host_gone=" << hostGone << std::endl;
+		          << " uid=" << uid << " host_gone=" << hostGone << " state_fenced=" << stateFenced << " undone=" << undone << graphDelta << std::endl;
 		previewLateScriptLoadLeavesStatesAsFound = staged && loaded == 0 && cursorKept && bindingsKept && graphsKept && hostGone;
 		g_LuaMan.SetScriptStateCursor(cursorBefore);
 	}
