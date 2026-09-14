@@ -1,6 +1,8 @@
 #include "PreviewScriptSelfTest.h"
 
 #include "AEmitter.h"
+#include "ACraft.h"
+#include "ActivityMan.h"
 #include "AHuman.h"
 #include "Actor.h"
 #include "Arm.h"
@@ -13,6 +15,8 @@
 #include "MovableMan.h"
 #include "MovableObject.h"
 #include "OwnedMovableObjects.h"
+#include "PostProcessMan.h"
+#include "PresetMan.h"
 #include "PreviewEventLedger.h"
 #include "RTETools.h"
 #include "SoundContainer.h"
@@ -20,9 +24,251 @@
 #include "TimerMan.h"
 
 #include <iostream>
+#include <functional>
+#include <memory>
+#include <sstream>
 #include <unordered_set>
 
 namespace RTE {
+
+	bool PreviewScriptSelfTest::RunRetirementArm(char mode) {
+		const std::string label = std::string("overlay-links ") + mode;
+		bool passed = true;
+		const auto check = [&](const std::string& name, bool ok, const std::string& detail) {
+			std::cout << "[lpinv] " << (ok ? "PASS " : "FAIL ") << label << ": " << name << ": " << detail << std::endl;
+			passed = passed && ok;
+		};
+		const auto address = [](const MovableObject* object) {
+			std::ostringstream out;
+			out << static_cast<const void*>(object);
+			return out.str();
+		};
+		const auto expect = [&](const std::string& name, const MovableObject* actual, const MovableObject* wanted) {
+			check(name, actual == wanted, "observed=" + address(actual) + " expected=" + address(wanted));
+		};
+		const auto armed = [&](const std::string& name, bool ok, const std::string& detail) {
+			if (ok) {
+				std::cout << "[lpinv] ARMED " << label << ": " << name << ": " << detail << std::endl;
+			} else {
+				check("not armed " + name, false, detail);
+			}
+			return ok;
+		};
+		Activity* activity = g_ActivityMan.GetActivity();
+		const AHuman* original = activity ? dynamic_cast<const AHuman*>(activity->GetControlledActor(Players::PlayerOne)) : nullptr;
+		const HeldDevice* device = original ? original->GetEquippedItem() : nullptr;
+		const AEmitter* wound = nullptr;
+		if (original) {
+			for (const Attachable* part: original->GetAttachables()) {
+				if (part->GetBreakWound() && part->GetBreakWound()->m_AllLoadedScripts.empty()) {
+					wound = part->GetBreakWound();
+					break;
+				}
+			}
+		}
+		std::list<Entity*> crafts;
+		g_PresetMan.GetAllOfType(crafts, "ACDropShip");
+		const ACraft* craftPreset = crafts.empty() ? nullptr : dynamic_cast<const ACraft*>(crafts.front());
+		MovableObject* residentItem = nullptr;
+		const HeldDevice* residentChild = nullptr;
+		for (MovableObject* mo: g_MovableMan.SnapshotKnownObjects()) {
+			if (mo != original && g_MovableMan.IsResident(mo)) {
+				if (!residentItem && dynamic_cast<HeldDevice*>(mo) && g_MovableMan.IsDevice(mo)) residentItem = mo;
+				if (const AHuman* human = dynamic_cast<const AHuman*>(mo); human && human->GetEquippedItem()) residentChild = human->GetEquippedItem();
+			}
+		}
+		if (!device) device = dynamic_cast<const HeldDevice*>(residentItem);
+		if (!armed("presets", original && device && wound && craftPreset, "actor/device/unscripted wound/craft=" + std::to_string(original != nullptr) + "/" + std::to_string(device != nullptr) + "/" + std::to_string(wound != nullptr) + "/" + std::to_string(craftPreset != nullptr))) return false;
+		if (mode == 't' && !armed("resident item", residentItem != nullptr, "address=" + address(residentItem))) return false;
+		if (mode == 'x' && !armed("resident held child", residentChild != nullptr, "address=" + address(residentChild))) return false;
+
+		const auto rng = g_SimRNG.GetEngineState();
+		const uint64_t draws = g_SimRNG.GetDrawCount();
+		const long uid = MovableObject::GetUniqueIDCounter();
+		const int cursor = g_LuaMan.GetScriptStateCursor();
+		const uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+		Activity::RollbackState activityState;
+		activity->CaptureRollbackState(activityState);
+		TerrainLayerSnapshot terrain;
+		if (!armed("terrain snapshot", terrain.Capture(), "capture")) return false;
+		LuaMan::SetScriptsFrozen(true);
+		AudioMan::SetPlaybackSuppressed(true);
+		PostProcessMan::SetRegistrationSuppressed(true);
+		const auto actorCopy = [&]() { MovableObject::ScriptLoadDeferralScope scope; return dynamic_cast<Actor*>(original->Clone()); };
+		const auto craftCopy = [&]() { MovableObject::ScriptLoadDeferralScope scope; return dynamic_cast<ACraft*>(craftPreset->Clone()); };
+		const auto deviceCopy = [&]() { MovableObject::ScriptLoadDeferralScope scope; return dynamic_cast<HeldDevice*>(device->Clone()); };
+		const auto woundCopy = [&]() { MovableObject::ScriptLoadDeferralScope scope; return dynamic_cast<AEmitter*>(wound->Clone()); };
+		const auto link = [](MovableObject* holder, MovableObject* target) {
+			holder->m_FaithfulMOToNotHitUID = 0;
+			holder->SetWhichMOToNotHit(target, -1.0F);
+		};
+		const int repeats = mode == 't' ? 2 : 1;
+		for (int subcase = 0; subcase < repeats; ++subcase) {
+			std::vector<std::unique_ptr<MovableObject>> survivors;
+			Actor* survivor = actorCopy();
+			survivors.emplace_back(survivor);
+			Actor* guard = actorCopy();
+			survivors.emplace_back(guard);
+			HeldDevice* guardCargo = deviceCopy();
+			guard->AddInventoryItem(guardCargo);
+			ACraft* survivorCraft = craftCopy();
+			survivors.emplace_back(survivorCraft);
+			survivorCraft->OpenHatch();
+			HeldDevice* guardCollected = deviceCopy();
+			survivorCraft->AddInventoryItem(guardCollected);
+			std::vector<MovableObject*> roots{survivor, guard, survivorCraft};
+			LuaMan::CapturePreviewSelfCopies({}, false);
+			PreviewEventLedger::Arm(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), soundCursor, {static_cast<uint64_t>(original->GetUniqueID())});
+			g_MovableMan.BeginSpeculation();
+			LuaMan::BeginPreviewScripts(roots, false);
+			std::vector<std::function<void()>> observations;
+			std::vector<std::function<void()>> afterDispose;
+			std::vector<MovableObject*> ghostRoots;
+			const auto add = [&](MovableObject* root) {
+				SoundSimulationScope scope(static_cast<uint64_t>(original->GetUniqueID()), Hash("retirement-arm"));
+				g_MovableMan.AddMO(root);
+			};
+			const auto weak = [&](const std::string& name, MovableObject* target, MovableObject* wanted) {
+				AEmitter* holder = woundCopy();
+				survivor->AddWound(holder, Vector(), false);
+				link(holder, target);
+				armed(name, holder->GetWhichMOToNotHit() == target && target, "holder=" + address(holder) + " target=" + address(target));
+				observations.push_back([=, &expect]() { expect(name, holder->GetWhichMOToNotHit(), wanted); });
+			};
+			weak("surviving_actor_inventory", guardCargo, guardCargo);
+			weak("surviving_craft_collected", guardCollected, guardCollected);
+			armed("surviving_collected_membership", std::find(survivorCraft->GetCollectedInventory().begin(), survivorCraft->GetCollectedInventory().end(), guardCollected) != survivorCraft->GetCollectedInventory().end(), "cargo=" + address(guardCollected));
+			if (mode == 'i' || mode == 'x') {
+				Actor* actor = actorCopy();
+				ACraft* craft = craftCopy();
+				HeldDevice* cargo = deviceCopy();
+				HeldDevice* collected = deviceCopy();
+				AEmitter* actorChild = woundCopy();
+				AEmitter* craftChild = woundCopy();
+				cargo->AddWound(actorChild, Vector(), false);
+				collected->AddWound(craftChild, Vector(), false);
+				actor->AddInventoryItem(cargo);
+				craft->OpenHatch();
+				craft->AddInventoryItem(collected);
+				armed("actor_inventory_membership", std::find(actor->GetInventory()->begin(), actor->GetInventory()->end(), cargo) != actor->GetInventory()->end(), "owner=" + address(actor) + " cargo=" + address(cargo));
+				armed("craft_collected_membership", std::find(craft->GetCollectedInventory().begin(), craft->GetCollectedInventory().end(), collected) != craft->GetCollectedInventory().end(), "owner=" + address(craft) + " cargo=" + address(collected));
+				add(actor);
+				add(craft);
+				g_MovableMan.HarvestSpeculativeSpawns();
+				ghostRoots = {actor, craft};
+				if (mode == 'i') {
+					weak("actor_inventory_child", actorChild, nullptr);
+					weak("craft_collected_child", craftChild, nullptr);
+				} else {
+					survivor->SetItemInReach(cargo);
+					if (armed("craft exit", !survivorCraft->m_Exits.empty(), "count=" + std::to_string(survivorCraft->m_Exits.size()))) {
+						auto* exit = &survivorCraft->m_Exits.front();
+						exit->m_FaithfulIncomingMOUID = 0;
+						exit->m_pIncomingMO = collected;
+						armed("raw_craft_child_before_remap", exit->m_pIncomingMO == collected, "target=" + address(collected));
+						observations.push_back([=, &expect]() { expect("raw_craft_exit_to_retiring_child", exit->m_pIncomingMO, nullptr); });
+						afterDispose.push_back([=, &check]() { exit->m_Clear = true; exit->SuckInMOs(survivorCraft); check("craft_exit_consumer", exit->m_pIncomingMO == nullptr, "incoming=" + address(exit->m_pIncomingMO)); });
+					}
+					armed("raw_item_before_remap", survivor->GetItemInReach() == cargo, "target=" + address(cargo));
+					observations.push_back([=, &expect]() { expect("raw_item_in_reach_to_retiring_child", survivor->GetItemInReach(), nullptr); });
+					MovableObject* shadowChild = g_MovableMan.FindObjectByUniqueID(residentChild->GetUniqueID());
+					armed("raw_shadow_child", shadowChild && shadowChild != residentChild && dynamic_cast<HeldDevice*>(shadowChild), "shadow=" + address(shadowChild) + " resident=" + address(residentChild));
+					guard->SetItemInReach(dynamic_cast<HeldDevice*>(shadowChild));
+					observations.push_back([=, &expect]() { expect("raw_item_in_reach_to_shadow_child", guard->GetItemInReach(), residentChild); });
+				}
+			} else if (mode == 't') {
+				MovableObject* shadow = g_MovableMan.FindObjectByUniqueID(residentItem->GetUniqueID());
+				MovableObject* taken = g_MovableMan.RemoveItem(shadow);
+				Actor* taker = subcase == 0 ? actorCopy() : guard;
+				taker->AddInventoryItem(taken);
+				if (subcase == 0) {
+					add(taker);
+					g_MovableMan.HarvestSpeculativeSpawns();
+					ghostRoots.push_back(taker);
+				}
+				const auto found = g_MovableMan.m_Speculation.shadows.find(residentItem);
+				armed("taken_shadow_ownership", taken && taken == shadow && found != g_MovableMan.m_Speculation.shadows.end() && !found->second.inWorld && std::find(taker->GetInventory()->begin(), taker->GetInventory()->end(), taken) != taker->GetInventory()->end(), "inWorld=" + std::to_string(found == g_MovableMan.m_Speculation.shadows.end() ? -1 : found->second.inWorld) + " shadow=" + address(shadow) + " taker=" + address(taker) + " retiring=" + std::to_string(subcase == 0));
+				weak(subcase == 0 ? "taken_shadow_with_retiring_owner" : "taken_shadow_with_surviving_owner", taken, subcase == 0 ? residentItem : taken);
+				afterDispose.push_back([=, &check]() { check("canonical_resident_live", g_MovableMan.IsDevice(residentItem) && g_MovableMan.IsKnownObject(residentItem), "resident=" + address(residentItem)); });
+			} else if (mode == 'm') {
+				HeldDevice* reacquired = deviceCopy();
+				add(reacquired);
+				MovableObject* removed = g_MovableMan.RemoveItem(reacquired);
+				guard->AddInventoryItem(removed);
+				armed("metadata_only_reacquired", removed == reacquired && g_MovableMan.m_Speculation.spawnMeta.count(reacquired) == 1 && g_MovableMan.GetSpeculativeSpawnCount() == 0 && std::find(g_MovableMan.m_AddedItems.begin(), g_MovableMan.m_AddedItems.end(), reacquired) == g_MovableMan.m_AddedItems.end(), "target=" + address(reacquired) + " metadata=" + std::to_string(g_MovableMan.m_Speculation.spawnMeta.count(reacquired)));
+				weak("reacquired_spawn_meta_key", reacquired, reacquired);
+				HeldDevice* stale = deviceCopy();
+				add(stale);
+				const bool removedStale = g_MovableMan.RemoveItem(stale) == stale;
+				stale->DestroyScriptState();
+				delete stale;
+				armed("stale_metadata_key", removedStale && g_MovableMan.m_Speculation.spawnMeta.count(stale) == 1 && !g_MovableMan.IsKnownObject(stale), "deleted address=" + address(stale));
+				observations.push_back([=, &check]() { check("stale_key_listed_without_traversal", g_MovableMan.RetiringOverlayObjects().count(stale) == 1, "key=" + address(stale)); });
+			} else if (mode == 'q') {
+				std::vector<MOSRotating*> queued{actorCopy(), deviceCopy(), woundCopy()};
+				const char* kinds[] = {"actor", "item", "particle"};
+				for (size_t i = 0; i < queued.size(); ++i) {
+					AEmitter* child = woundCopy();
+					queued[i]->AddWound(child, Vector(), false);
+					add(queued[i]);
+					weak(std::string("added_tail_") + kinds[i] + "_child", child, nullptr);
+				}
+				const auto tail = g_MovableMan.MarkAddQueues();
+				const auto mark = g_MovableMan.m_Speculation.mark;
+				armed("three_unharvested_tails", tail.actors == mark.actors + 1 && tail.items == mark.items + 1 && tail.particles == mark.particles + 1 && g_MovableMan.GetSpeculativeSpawnCount() == 0, "actors=" + std::to_string(tail.actors - mark.actors) + " items=" + std::to_string(tail.items - mark.items) + " particles=" + std::to_string(tail.particles - mark.particles) + " harvested=" + std::to_string(g_MovableMan.GetSpeculativeSpawnCount()));
+			} else if (mode == 'o') {
+				HeldDevice* retiring = deviceCopy();
+				HeldDevice* surviving = deviceCopy();
+				guard->AddInventoryItem(surviving);
+				for (HeldDevice* owner: {retiring, surviving}) {
+					owner->SetOwnedBreakWound(woundCopy());
+					owner->SetOwnedParentBreakWound(woundCopy());
+					link(owner->GetOwnedBreakWound(), retiring);
+					link(owner->GetOwnedParentBreakWound(), retiring);
+				}
+				add(retiring);
+				g_MovableMan.HarvestSpeculativeSpawns();
+				ghostRoots.push_back(retiring);
+				armed("owned_templates", surviving->GetOwnedBreakWound() && surviving->GetOwnedParentBreakWound() && retiring->GetOwnedBreakWound() && retiring->GetOwnedParentBreakWound(), "owned=4 shared=" + address(wound));
+				observations.push_back([=, &expect]() { expect("owned_break_wound_outgoing_link", surviving->GetOwnedBreakWound()->GetWhichMOToNotHit(), nullptr); });
+				observations.push_back([=, &expect]() { expect("owned_parent_break_wound_outgoing_link", surviving->GetOwnedParentBreakWound()->GetWhichMOToNotHit(), nullptr); });
+				weak("retiring_owned_break_wound_inbound", retiring->GetOwnedBreakWound(), nullptr);
+				weak("shared_preset_guard", const_cast<AEmitter*>(wound), const_cast<AEmitter*>(wound));
+			} else {
+				check("unknown arm", false, std::string(1, mode));
+			}
+			const auto retiring = g_MovableMan.RetiringOverlayObjects();
+			armed("retirement_boundary", g_MovableMan.IsSpeculative() && (!retiring.empty() || (mode == 't' && subcase == 1)), "retiring=" + std::to_string(retiring.size()) + " harvested=" + std::to_string(g_MovableMan.GetSpeculativeSpawnCount()));
+			for (MovableObject* root: roots) root->RemapExternalLinks([&](MovableObject* mo) { return g_MovableMan.OverlaySurvivorOf(mo, retiring); });
+			std::cout << "[lpinv] OBSERVE " << label << ": before EndSpeculation" << std::endl;
+			for (const auto& observe: observations) observe();
+			g_MovableMan.EndSpeculation();
+			LuaMan::EndPreviewScripts();
+			PreviewEventLedger::Disarm();
+			if (mode != 'm') {
+				std::cout << "[lpinv] OBSERVE " << label << ": after EndPreviewScripts" << std::endl;
+				for (const auto& observe: observations) observe();
+			}
+			for (MovableObject* ghost: ghostRoots) {
+				const bool retained = std::any_of(g_MovableMan.m_PreviewGhosts.begin(), g_MovableMan.m_PreviewGhosts.end(), [=](const auto& entry) { return entry.object == ghost; });
+				check("named_ghost_owner_retained", retained, "owner=" + address(ghost));
+			}
+			g_MovableMan.DropAllPreviewGhosts();
+			for (const auto& observe: afterDispose) observe();
+			for (const auto& owner: survivors) owner->DestroyScriptState();
+		}
+		terrain.Restore();
+		activity->RestoreRollbackState(activityState);
+		g_SimRNG.SetEngineState(rng);
+		g_SimRNG.SetDrawCount(draws);
+		MovableObject::PinUniqueIDCounter(uid);
+		g_LuaMan.SetScriptStateCursor(cursor);
+		g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
+		PostProcessMan::SetRegistrationSuppressed(false);
+		AudioMan::SetPlaybackSuppressed(false);
+		LuaMan::SetScriptsFrozen(false);
+		return passed;
+	}
 
 	bool PreviewScriptSelfTest::s_SubtreeProbe = false;
 	bool PreviewScriptSelfTest::s_SharedSlot = false;
