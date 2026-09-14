@@ -140,6 +140,7 @@ COMMAND = re.compile(r'^\[net-replay-dump\] frame=(\d+) command=(\S+) sender=(\d
 VOICE = re.compile(r'^\[preview-event\] voice committed=(\d+) tick=(\d+) uid=(\d+) previewed=(\d+) '
                    r'asset=(\d+) preset=(\d+) seq=(\d+) preset_name="(.*?)" path=(.*)$')
 POSITION = re.compile(r'^(\d+) actor uid=(\d+) .*? pos=(\S+),(\S+) prev=')
+AUTO_DELAY = re.compile(r'^\[net-match\] auto input delay: peer (\d+) rtt (\d+)ms -> (\d+) frames \(manual floor (\d+)\)$')
 
 
 def remote_commands(path, local_peer):
@@ -334,6 +335,13 @@ def reduce_peer(run, peer, baseline=None):
     captures = [row for row in rows if row['type'] == 'capture']
     capture_missing = sorted(set(range(60, TICKS + 1, 60)) - {row['requested_tick'] for row in captures if row['saved'] and Path(row['path']).is_file()})
     rtts = [row for frame in frames for row in frame['rtt']]
+    auto_picks = []
+    host_log = run / 'host/stdout.log'
+    if host_log.is_file():
+        for line_no, text in enumerate(host_log.read_text(encoding='utf-8-sig', errors='replace').splitlines(), 1):
+            match = AUTO_DELAY.match(text)
+            if match:
+                auto_picks.append(dict(peer=int(match[1]), rtt_ms=int(match[2]), delay=int(match[3]), floor=int(match[4]), raw_line=line_no))
     metrics = dict(cpu_ms=cpu_ms, draw_ms=draw, present_ms=present, frame_interval_ms=interval,
                    cpu_window=dict(first_iteration_tick=all_iterations[0]['tick'], last_iteration_tick=all_iterations[-1]['tick'],
                                    includes_match_stop_drain=True),
@@ -343,6 +351,7 @@ def reduce_peer(run, peer, baseline=None):
                    latency_edges=len(latency), latency_unreflected=sum(row['ms'] is None for row in latency),
                    firing_presses=len(firing), local_prediction=dict(lp, avg_ms=lp_cost),
                    delays=delays, input_delay_text=frames[-1]['input_delay_text'],
+                   auto_picks=auto_picks, auto_pick_source=str(host_log),
                    rtt_ms=distribution([row['ping_ms'] for row in rtts if row['ping_ms'] > 0]),
                    pace_wall_tps=pace_tps, sim_ms_per_tick=sim_cost,
                    correction_over_4_px=len(large), correction_max_in_10_sim_seconds=window_sim,
@@ -352,11 +361,12 @@ def reduce_peer(run, peer, baseline=None):
                    capture_missing=capture_missing, frame_count=len(frames), cap_hz=cap,
                    effective_hz=(len(frames) - 1) * 1000 / (frames[-1]['present_end_ms'] - frames[0]['present_end_ms']) if len(frames) > 1 else None)
     measured = bool(ended and coverage and latency and not missing_inputs and len(firing) == schedule['fire_presses'] and cpu_ms is not None
+                    and (auto_picks or peer == 'sp')
                     and not correction_missing and not capture_missing and (commands_complete or peer == 'sp'))
     pins = {}
     pins['wall_tps'] = pin(pace_tps, '>= 59.0', pace_tps is not None and pace_tps >= 59, [raw])
     pins['sim_ms_per_tick'] = pin(sim_cost, '<= 8 ms', sim_cost is not None and sim_cost <= 8, [raw])
-    pins['auto_delay'] = pin(delays, f'D = {expected_delay}', delays == [expected_delay], [raw])
+    pins['auto_delay'] = pin(delays, f'D = {expected_delay}', delays == [expected_delay] and (peer == 'sp' or '(auto,' in frames[-1]['input_delay_text']), [raw, host_log])
     latency_value = dict(observed_ms=latency_ms, observed_frames=latency_frames,
                          lower_bounds_ms=metrics['latency_lower_bounds_ms'], unreflected=metrics['latency_unreflected'])
     pins['input_to_photon'] = pin(latency_value, '<= 34 ms at 60 Hz; <= one 60 Hz sim tick + one actual frame when uncapped',
