@@ -15,10 +15,14 @@ from compare_sim_traces import strict_compare
 from run_sim_test import make_run
 
 CAPTURE = re.compile(r"^\[autosave\] tick=(\d+) capture_ms=(\d+(?:\.\d+)?) bytes=(\d+)$", re.MULTILINE)
+FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
+DEFAULT_SECONDS = 60
 
 
 def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int, *,
              extra_args=None, prepare=None, env=None, timeout=360) -> dict:
+    if FAMILY_LOCK.exists():
+        raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
     root.mkdir(parents=True, exist_ok=False)
     runs, records = {}, {}
     for who in ("host", "client"):
@@ -82,6 +86,45 @@ def compare_checkpoint_bytes(left: Path, right: Path) -> dict:
             "different_members": different, "first_different_archive_byte": first}
 
 
+def compare_checkpoint_shared(repo: Path, left: Path, right: Path, out: Path) -> dict:
+    comparator = repo / "tools/compare_snapshots.py"
+    sources = {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+               for path in (comparator, repo / "tools/snapshot_runtime.py")}
+    command = [sys.executable, str(comparator), str(left), str(right), "--report", str(out.with_suffix(".json"))]
+    compared = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    out.with_suffix(".log").write_text(compared.stdout + compared.stderr, encoding="utf-8")
+    report = json.loads(out.with_suffix(".json").read_text()) if out.with_suffix(".json").exists() else {}
+    unchanged = all(hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest for path, digest in sources.items())
+    return {"passed": compared.returncode == 0 and report.get("passed") is True
+            and report.get("mode") == "shared" and unchanged,
+            "argv": command, "exit_code": compared.returncode, "source_sha256": sources,
+            "sources_unchanged": unchanged, "report": report, "log": str(out.with_suffix(".log"))}
+
+
+def prepare_setting(runtime: Path, seconds) -> None:
+    path = runtime / "Userdata/Settings.ini"
+    before = path.read_text(encoding="utf-8-sig")
+    text = re.sub(r"(?m)^[ \t]*AutosaveSeconds[ \t]*=[^\r\n]*(?:\r?\n|$)", "", before)
+    if seconds is not None:
+        text += f"\n\tAutosaveSeconds = {seconds}\n"
+    path.write_text(text, encoding="utf-8")
+    (runtime.parent / "prepared-settings.json").write_text(json.dumps({
+        "path": str(path), "autosave_seconds": seconds,
+        "source_sha256": hashlib.sha256(before.encode()).hexdigest(),
+        "prepared_sha256": hashlib.sha256(text.encode()).hexdigest(),
+        "lines": [line for line in text.splitlines() if re.match(r"[ \t]*AutosaveSeconds[ \t]*=", line)]}, indent=2) + "\n", encoding="utf-8")
+
+
+def inspect_setting(root: Path, who: str, expected: int) -> dict:
+    path = root / who / "runtime/Userdata/Settings.ini"
+    lines = [{"source": str(path), "line": index, "raw": line, "seconds": int(match[1])}
+             for index, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1)
+             if (match := re.fullmatch(r"[ \t]*AutosaveSeconds[ \t]*=[ \t]*(\d+)[ \t]*", line))]
+    assert len(lines) == 1 and lines[0]["seconds"] == expected, f"persisted autosave setting differs: {lines}"
+    return {"expected_seconds": expected, "lines": lines,
+            "prepared": json.loads((root / who / "prepared-settings.json").read_text())}
+
+
 def inspect_autosaves(root: Path, who: str, enabled: bool) -> dict:
     runtime = root / who / "runtime"
     files = sorted((runtime / "Autosaves").glob("*.ccsave"))
@@ -132,7 +175,7 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=48212)
     parser.add_argument("--ticks", type=int, default=400)
-    parser.add_argument("--arm", choices=("all", "default", "peer-bytes", "restore"), default="all")
+    parser.add_argument("--arm", choices=("all", "default", "peer-shared", "restore"), default="all")
     args = parser.parse_args()
     if not (48211 <= args.port <= 48216 or 48240 <= args.port <= 48246) or args.ticks < 400:
         parser.error("four ports must fit 48211..48219 or 48240..48249; at least 400 ticks are required")
@@ -145,42 +188,64 @@ def main() -> int:
     arms = {"off": {"host": 0, "client": 0}, "on": {"host": 2, "client": 2},
             "asymmetric": {"host": 2, "client": 0}, "rotation": {"host": 1, "client": 1}}
     if args.arm == "default":
-        arms = {"default": {"host": None, "client": None}}
-    elif args.arm in ("peer-bytes", "restore"):
+        arms = {"default": {"host": None, "client": None}, "setting": {"host": None, "client": None},
+                "setting-off": {"host": None, "client": None}, "flag-off": {"host": 0, "client": 0}}
+    elif args.arm in ("peer-shared", "restore"):
         arms = {args.arm: {"host": 2, "client": 2}}
     for index, (arm, cadence) in enumerate(arms.items()):
         arm_root = root / arm
-        details = {"cadence_seconds": cadence}
+        ticks = max(args.ticks, DEFAULT_SECONDS * 60 * 3 + 2) if arm == "default" else args.ticks
+        details = {"cadence_seconds": cadence, "ticks": ticks}
         result["arms"][arm] = details
         try:
             extras = {who: ["-net-replay-out", str(arm_root / f"{who}.ccreplay")]
                       for who in cadence} if arm == "restore" else None
-            records = run_pair(repo, arm_root, args.port + index, cadence, args.ticks, extra_args=extras)
+            prepare = None
+            if args.arm == "default":
+                from test_autosave_cost import PRESET, install_fixture
+                setting = {"default": None, "setting": 2, "setting-off": 0, "flag-off": 2}[arm]
+                details["initial_setting_seconds"] = setting
+                extras = {who: ["-net-match-service-preset", PRESET, "-num-lua-states", "4"] for who in cadence}
+
+                def prepare(who, runtime):
+                    install_fixture(who, runtime)
+                    prepare_setting(runtime, setting)
+
+            records = run_pair(repo, arm_root, args.port + index, cadence, ticks,
+                               extra_args=extras, prepare=prepare, timeout=1200 if arm == "default" else 360)
             details["records"] = records
             for who in cadence:
                 assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
-                details[who] = inspect_autosaves(arm_root, who, cadence[who] is not None and cadence[who] > 0)
-                if arm == "default":
-                    assert "-net-autosave-seconds" not in records[who]["argv"], "default row supplied the autosave flag"
-                    log = (arm_root / who / "stdout.log").read_text(encoding="utf-8", errors="replace")
-                    assert "[autosave]" not in log, "default row emitted an autosave line"
+                enabled = arm in ("default", "setting") or cadence[who] is not None and cadence[who] > 0
+                details[who] = inspect_autosaves(arm_root, who, enabled)
+                if args.arm == "default":
+                    if arm != "flag-off":
+                        assert "-net-autosave-seconds" not in records[who]["argv"], "setting/default row supplied the autosave flag"
+                    else:
+                        flag = records[who]["argv"].index("-net-autosave-seconds")
+                        assert records[who]["argv"][flag + 1] == "0", "flag-off override is not zero"
+                    expected = DEFAULT_SECONDS if arm == "default" else setting
+                    details[who]["setting"] = inspect_setting(arm_root, who, expected)
+                    if enabled:
+                        saved_ticks = [row["tick"] for row in details[who]["captures"]]
+                        assert all(b - a == expected * 60 for a, b in zip(saved_ticks, saved_ticks[1:])), saved_ticks
                     directory = arm_root / who / "runtime/Autosaves"
                     listing = sorted(str(path) for path in directory.iterdir()) if directory.exists() else []
-                    assert not listing, f"default row produced Autosaves entries: {listing}"
                     details[who]["listing"] = {"directory": str(directory), "exists": directory.exists(), "files": listing}
-                    print(f"FILES default/{who}: {listing} directory={directory} exists={directory.exists()}", flush=True)
+                    print(f"FILES {arm}/{who}: {listing} directory={directory} exists={directory.exists()}", flush=True)
                 if arm == "rotation":
                     assert len(details[who]["captures"]) > 3, "rotation arm never exceeded the retention limit"
-            passed, comparison = strict_compare(arm_root / "host_trace.json", arm_root / "client_trace.json", args.ticks)
+            passed, comparison = strict_compare(arm_root / "host_trace.json", arm_root / "client_trace.json", ticks)
             details["peer_comparison"] = comparison
             assert passed, comparison
-            if arm == "peer-bytes":
+            if arm == "peer-shared":
                 by_tick = {who: {int(Path(path).stem.rsplit("-", 1)[1]): Path(path)
                                  for path in details[who]["files"]} for who in cadence}
                 assert by_tick["host"].keys() == by_tick["client"].keys(), "peer saved ticks differ"
-                comparisons = [compare_checkpoint_bytes(by_tick["host"][tick], by_tick["client"][tick])
+                comparisons = [compare_checkpoint_shared(repo, by_tick["host"][tick], by_tick["client"][tick],
+                                                        arm_root / f"shared-{tick}")
                                for tick in sorted(by_tick["host"])]
-                details["checkpoint_byte_comparisons"] = comparisons
+                details["checkpoint_shared_comparisons"] = comparisons
                 assert all(row["passed"] for row in comparisons), comparisons
             elif arm == "restore":
                 snapshots = [max(map(Path, details[who]["files"]), key=lambda path: int(path.stem.rsplit("-", 1)[1]))
@@ -195,14 +260,15 @@ def main() -> int:
                                         "result": str(arm_root / "roundtrip/result.json")}
                 assert restored.returncode == 0, details["roundtrip"]
                 assert json.loads((arm_root / "roundtrip/result.json").read_text())["pass"], details["roundtrip"]
-            elif arm not in ("off", "default"):
+            elif args.arm == "all" and arm != "off":
                 for who in cadence:
                     exact_role_compare(root / "off" / f"{who}_trace.json", arm_root / f"{who}_trace.json", args.ticks)
             details["passed"] = True
-            if arm == "default":
-                print(f"PASS default: {args.ticks} peer ticks match; autosave flag absent; capture_lines=0 files_host=0 files_client=0", flush=True)
-            elif arm == "peer-bytes":
-                print(f"PASS peer-bytes: {args.ticks} peer ticks match; every retained checkpoint is byte-equal", flush=True)
+            if args.arm == "default":
+                counts = {who: {"captures": len(details[who]["captures"]), "files": len(details[who]["files"])} for who in cadence}
+                print(f"PASS {arm}: {ticks} peer ticks match; persisted_seconds={expected}; {counts}", flush=True)
+            elif arm == "peer-shared":
+                print(f"PASS peer-shared: {ticks} peer ticks match; every retained checkpoint matches the approved shared-state comparer", flush=True)
             elif arm == "restore":
                 print(f"PASS restore: both newest autosaves pass the full snapshot roundtrip driver", flush=True)
             else:

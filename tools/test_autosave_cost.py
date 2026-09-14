@@ -1,4 +1,4 @@
-"""Measure every autosave boundary on 240 actors and compare checkpoints byte for byte."""
+"""Measure first and steady autosave boundaries and require exact same-peer reference archives."""
 
 import argparse
 import base64
@@ -15,13 +15,14 @@ import threading
 import time
 import zipfile
 
-from test_autosave import CAPTURE, compare_checkpoint_bytes, inspect_autosaves, run_pair
+from test_autosave import CAPTURE, FAMILY_LOCK, compare_checkpoint_bytes, inspect_autosaves, run_pair
 
 
-FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
 ACTORS = 240
 LIMIT_MS = 3.0
 PRESET = "Autosave Capture 240"
+WORKER = re.compile(r"^\[autosave-worker\] tick=(\d+) thread=(\S+) boundary_thread=(\S+) "
+                    r"serialize_ms=(\d+(?:\.\d+)?) stable=([01])$", re.MULTILINE)
 FIXTURE_INI = """DataModule
 	ModuleName = User Scenes
 	AddActivity = GAScripted
@@ -152,7 +153,7 @@ def process_inventory():
     return rows
 
 
-def launch(repo, root, port, arm):
+def launch(repo, root, port, arm, actors):
     if FAMILY_LOCK.exists():
         raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
     before = process_inventory()
@@ -178,11 +179,12 @@ def launch(repo, root, port, arm):
     sampler.start()
     records = {}
     try:
-        extras = {who: ["-net-match-service-preset", PRESET, "-num-lua-states", "4",
+        preset = PRESET if actors == ACTORS else "P4 Alpha Duel"
+        extras = {who: ["-net-match-service-preset", preset, "-num-lua-states", "4",
                         "-net-replay-out", str(root / f"{who}.ccreplay")]
                   for who in ("host", "client")}
         records = run_pair(repo, root, port, {"host": 2, "client": 2}, 400,
-                           extra_args=extras, prepare=install_fixture, timeout=600,
+                           extra_args=extras, prepare=install_fixture if actors == ACTORS else None, timeout=600,
                            env={"CCCP_AUTOSAVE_FULL_REFERENCE": "1"} if arm == "incremental-full" else {})
     finally:
         stop.set()
@@ -218,7 +220,36 @@ def capture_rows(root, who):
             if match:
                 rows.append({"tick": int(match[1]), "capture_ms": float(match[2]), "bytes": int(match[3]),
                              "source": str(path), "line": line, "raw": raw})
-    return rows
+    return sorted(rows, key=lambda row: row["tick"])
+
+
+def worker_rows(root, who):
+    rows = []
+    for name in ("stdout.log", "stderr.log"):
+        path = root / who / name
+        if not path.is_file():
+            continue
+        for line, raw in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            match = WORKER.fullmatch(raw)
+            if match:
+                rows.append({"tick": int(match[1]), "thread": match[2], "boundary_thread": match[3],
+                             "serialize_ms": float(match[4]), "stable": match[5] == "1",
+                             "source": str(path), "line": line, "raw": raw})
+    return sorted(rows, key=lambda row: row["tick"])
+
+
+def worker_failures(captures, workers):
+    failures = []
+    if len({row["tick"] for row in captures}) != len(captures):
+        failures.append("duplicate boundary capture ticks")
+    if len({row["tick"] for row in workers}) != len(workers):
+        failures.append("duplicate worker serialization ticks")
+    if {row["tick"] for row in captures} != {row["tick"] for row in workers}:
+        failures.append("worker serialization ticks do not match every boundary capture, including the first")
+    for row in workers:
+        if row["thread"] in (row["boundary_thread"], "0") or row["boundary_thread"] == "0" or not row["stable"]:
+            failures.append(f"{row['source']}:{row['line']}: {row['raw']} (requires owned data on a separate worker)")
+    return failures
 
 
 def cost_failures(rows):
@@ -226,8 +257,9 @@ def cost_failures(rows):
             for row in rows if row["capture_ms"] >= LIMIT_MS]
 
 
-def inspect(root, arm):
-    result = {"root": str(root), "arm": arm, "peers": {}, "failures": []}
+def inspect(root, arm, actors=ACTORS, baseline=False):
+    result = {"root": str(root), "arm": arm, "actors": actors, "baseline": baseline,
+              "boundary_limit_ms_exclusive": LIMIT_MS, "peers": {}, "failures": []}
     records_path = root / "records.json"
     if records_path.exists():
         records = json.loads(records_path.read_text(encoding="utf-8"))
@@ -249,18 +281,24 @@ def inspect(root, arm):
             result["failures"].append("quiet-run evidence missing or failed")
     for who in ("host", "client"):
         rows = capture_rows(root, who)
-        peer = {"captures": rows, "checkpoints": []}
+        workers = worker_rows(root, who)
+        peer = {"captures": rows, "workers": workers, "checkpoints": [],
+                "first_capture": rows[0] if rows else None, "steady_captures": rows[1:],
+                "first_capture_ms": rows[0]["capture_ms"] if rows else None,
+                "steady_capture_ms_max": max((row["capture_ms"] for row in rows[1:]), default=None)}
         result["peers"][who] = peer
         if arm == "cost":
-            result["failures"].extend(cost_failures(rows))
+            result["failures"].extend(cost_failures(rows[1:]))
+        if not baseline:
+            result["failures"].extend(f"{who}: {failure}" for failure in worker_failures(rows, workers))
         try:
             details = inspect_autosaves(root, who, True)
             for name in details["files"]:
                 path = Path(name)
                 count = checkpoint_actor_count(path)
                 peer["checkpoints"].append({"path": name, "actors": count})
-                if count != ACTORS:
-                    result["failures"].append(f"{path}: actors={count}, required={ACTORS}")
+                if count != actors:
+                    result["failures"].append(f"{path}: actors={count}, required={actors}")
                 if arm == "incremental-full":
                     reference = path.parent.parent / "AutosaveFull" / path.name
                     comparison = compare_checkpoint_bytes(path, reference)
@@ -300,12 +338,30 @@ def oracle_selftest(root):
         results[name] = {"expected_equal": expected, "detected": comparison["passed"] == expected, **comparison}
     log = root / "host/stdout.log"
     log.parent.mkdir()
-    log.write_text("[autosave] tick=121 capture_ms=2.999 bytes=50\n"
+    log.write_text("[autosave] tick=121 capture_ms=162.000 bytes=50\n"
                    "[autosave] tick=241 capture_ms=3.000 bytes=50\n"
-                   "[autosave] tick=361 capture_ms=117.077 bytes=50\n", encoding="utf-8")
-    failures = cost_failures(capture_rows(root, "host"))
+                   "[autosave] tick=361 capture_ms=117.077 bytes=50\n"
+                   "[autosave] tick=481 capture_ms=2.999 bytes=50\n"
+                   "[autosave-worker] tick=121 thread=2 boundary_thread=1 serialize_ms=162.000 stable=1\n"
+                   "[autosave-worker] tick=241 thread=2 boundary_thread=1 serialize_ms=117.000 stable=1\n"
+                   "[autosave-worker] tick=361 thread=2 boundary_thread=1 serialize_ms=117.000 stable=1\n"
+                   "[autosave-worker] tick=481 thread=2 boundary_thread=1 serialize_ms=117.000 stable=1\n", encoding="utf-8")
+    captures, workers = capture_rows(root, "host"), worker_rows(root, "host")
+    failures = cost_failures(captures[1:])
     results["strict_cost_boundary"] = {"detected": len(failures) == 2 and "tick=241" in failures[0]
                                        and "tick=361" in failures[1], "failures": failures}
+    results["first_capture_retained"] = {"detected": len(captures) == 4 and captures[0]["capture_ms"] == 162.0
+                                         and captures[0]["tick"] == 121, "first": captures[0]}
+    for name, candidate, expected in (
+            ("owned_worker", workers, True), ("missing_first_worker", workers[1:], False),
+            ("duplicate_worker", [*workers, workers[0]], False),
+            ("sim_thread_serialization", [{**row, "thread": row["boundary_thread"],
+                                           "raw": row["raw"].replace(" thread=2 ", " thread=1 ")}
+                                          for row in workers], False),
+            ("live_object_serialization", [{**row, "stable": False, "raw": row["raw"].replace("stable=1", "stable=0")}
+                                           for row in workers], False)):
+        failures = worker_failures(captures, candidate)
+        results[name] = {"detected": (not failures) == expected, "failures": failures}
     write_json(root / "oracle.json", results)
     return {"passed": all(row["detected"] for row in results.values()), "cases": results}
 
@@ -320,9 +376,14 @@ def main():
     parser.add_argument("--right", type=Path)
     parser.add_argument("--port", type=int, default=48240)
     parser.add_argument("--runs", type=int, choices=(1, 3), default=3)
+    parser.add_argument("--scene", type=int, choices=(4, ACTORS), default=ACTORS,
+                        help="use the accepted 240-actor fixture or the original four-actor P4 Alpha Duel")
+    parser.add_argument("--baseline", action="store_true", help="measure the full-capture control without requiring a worker line")
     args = parser.parse_args()
     if not 48240 <= args.port <= 48247:
         parser.error("three ports must fit 48240..48249")
+    if args.baseline and args.arm != "cost":
+        parser.error("--baseline applies only to --arm cost")
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=False)
     os.environ["CCCP_HEADLESS"] = "1"
@@ -337,22 +398,34 @@ def main():
             install_fixture("host", args.out)
             result = {"passed": True, "engine_launched": False, "actors": ACTORS}
         elif args.run_root:
-            result = inspect(args.run_root.resolve(), args.arm)
+            result = inspect(args.run_root.resolve(), args.arm, args.scene, args.baseline)
         else:
             runs = []
             repo = args.repo.resolve()
             for repeat in range(args.runs):
                 root = args.out / f"run-{repeat + 1}"
-                launch(repo, root, args.port + repeat, args.arm)
-                runs.append(inspect(root, args.arm))
+                try:
+                    launch(repo, root, args.port + repeat, args.arm, args.scene)
+                    measured = inspect(root, args.arm, args.scene, args.baseline)
+                except Exception as error:
+                    measured = inspect(root, args.arm, args.scene, args.baseline)
+                    measured["failures"].append(str(error))
+                    measured["passed"] = False
+                runs.append(measured)
                 write_json(args.out / "result.json", {"runs": runs, "passed": False})
-            result = {"passed": all(row["passed"] for row in runs), "runs": runs,
-                      "fixture_sha256": hashlib.sha256(FIXTURE_LUA.encode()).hexdigest()}
+            result = {"passed": all(row["passed"] for row in runs), "runs": runs, "quiet_repetitions": args.runs,
+                      "actors": args.scene, "baseline": args.baseline,
+                      "fixture_sha256": hashlib.sha256(FIXTURE_LUA.encode()).hexdigest() if args.scene == ACTORS
+                      else hashlib.sha256((repo / "Data/Base.rte/Activities/P4AlphaDuel.lua").read_bytes()).hexdigest()}
     except Exception as error:
         result = {"passed": False, "error": str(error)}
     write_json(args.out / "result.json", result)
     print(f"{'PASS' if result['passed'] else 'FAIL'} {args.arm}: {args.out / 'result.json'}", flush=True)
     for row in result.get("runs", [result]):
+        for who, peer in row.get("peers", {}).items():
+            print(f"COST {row['root']}/{who}: first_ms={peer['first_capture_ms']} "
+                  f"steady_max_ms={peer['steady_capture_ms_max']} "
+                  f"captures={len(peer['captures'])} worker_lines={len(peer['workers'])}", flush=True)
         for failure in row.get("failures", []):
             print(f"FAIL {failure}", flush=True)
     if result.get("error"):
