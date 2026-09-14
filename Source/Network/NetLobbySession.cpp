@@ -141,7 +141,9 @@ namespace RTE {
 		if (!m_Transport || m_State == NetLobbyState::Idle || IsTerminal(m_State)) {
 			return;
 		}
-		const std::vector<NetTransportEvent> events = m_Transport->PollEvents();
+		std::vector<NetTransportEvent> events;
+		events.swap(m_Config.pendingEvents);
+		for (NetTransportEvent& event : m_Transport->PollEvents()) events.push_back(std::move(event));
 		if (m_Config.session) {
 			const uint64_t sessionNowMs = m_Config.sessionNowMs ? m_Config.sessionNowMs() : m_SessionClockBaseMs + nowMs;
 			for (const NetTransportEvent& event: events) {

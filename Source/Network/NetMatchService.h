@@ -290,6 +290,7 @@ namespace RTE {
 
 			std::unique_ptr<GnsTransport> ip;
 			std::unique_ptr<NetMuxTransport> mux;
+			std::vector<NetTransportEvent> lobbyEvents;
 #ifdef CCCP_WITH_GNS
 			std::unique_ptr<GnsDirectorySignalDispatcher> dispatcher; //!< After the mux, so it is destroyed first.
 #endif
@@ -344,6 +345,7 @@ namespace RTE {
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestGnsStopCancelContracts(std::string* error);
+		friend bool TestEndedWorldLateAdmission(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
@@ -351,6 +353,12 @@ namespace RTE {
 		/// that filled it. Caller holds the lock. The census may only open where the sim stands at a
 		/// completed tick with the world still up.
 		void DrainPendingSessionEventsLocked(bool atTickBoundary);
+		/// Keeps next-lobby packets until the rematch worker takes the link.
+		void QueueLobbyEvent(const NetTransportEvent& event);
+		/// Polls a finished session without touching the ended simulation; caller holds the lock.
+		void PumpCompletedSessionLocked();
+		/// Refuses Ready peers absent from the ended round; caller holds the lock.
+		void RefuseEndedPeersLocked(const std::string& reason);
 		/// The relaunch's queue reset, with a permanent diagnostic for anything a teardown left behind.
 		void DiscardUndeliveredSessionEventsLocked();
 		/// Folds the coordinator's counters into the service so a gate can read them across a resync.
@@ -465,6 +473,11 @@ namespace RTE {
 		std::unique_ptr<NetSession> m_Session;
 		std::unique_ptr<NetLockstepCoordinator> m_Coordinator;
 		std::unique_ptr<NetMatchRunner> m_Runner;
+		std::vector<NetTransportEvent> m_PendingLobbyEvents;
+		size_t m_PendingLobbyBytes = 0;
+		bool m_PendingLobbyOverflow = false;
+		bool m_LeftMatch = false;
+		uint64_t m_EndedLockstepPackets = 0;
 		std::vector<NetTransportEvent> m_PendingSessionEvents; //!< Game-thread only: reconnect traffic the coordinator handed over.
 		//!< Coordinator counters a resync would otherwise zero, accumulated at every teardown.
 		struct LockstepTotals {

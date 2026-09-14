@@ -306,7 +306,7 @@ namespace RTE {
 		return false;
 	}
 
-	bool NetMatchRunner::StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error, std::vector<uint8_t> stateToStream) {
+	bool NetMatchRunner::StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error, std::vector<uint8_t> stateToStream, std::vector<NetTransportEvent> pendingLobbyEvents) {
 		m_SetupError.clear();
 		m_ResyncRound = !stateToStream.empty();
 		m_RematchRound = false;
@@ -330,7 +330,7 @@ namespace RTE {
 
 		if (m_UseLobbyProtocol) {
 			m_State = NetMatchRuntimeState::LobbySync;
-			if (!RunLobby(transport, session, m_Config.lobbyWaitMs, error)) {
+			if (!RunLobby(transport, session, m_Config.lobbyWaitMs, error, std::move(pendingLobbyEvents))) {
 				return false;
 			}
 			if (m_Config.postLobbySettleMs > 0) {
@@ -425,7 +425,7 @@ namespace RTE {
 		}
 	}
 
-	bool NetMatchRunner::RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error) {
+	bool NetMatchRunner::RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error, std::vector<NetTransportEvent> pendingEvents) {
 		if (m_Config.host) {
 			// The roster carries each client's session-handshake name to every peer via the config sync.
 			for (const NetSessionPeerInfo& peer : session.GetReadyPeers()) {
@@ -437,6 +437,7 @@ namespace RTE {
 			}
 		}
 		NetLobbySessionConfig lobbyConfig;
+		lobbyConfig.pendingEvents = std::move(pendingEvents);
 		lobbyConfig.host = m_Config.host;
 		lobbyConfig.localPeerId = LocalLockstepPeerId(session);
 		lobbyConfig.remoteTransportPeerIds = BuildRemoteTransportMap(session);
