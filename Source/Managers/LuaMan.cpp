@@ -7963,6 +7963,13 @@ namespace {
 			lua_rawset(L, copy);
 			lua_pop(L, 1);
 		}
+		// A cached module or class keeps its methods on its metatable; the copy gets its own clone of it, so the
+		// preview reaches the same methods and a write through them still lands inside the copy.
+		if (lua_getmetatable(L, src) != 0) {
+			PushPreviewClone(L, -1, seen, problems);
+			lua_setmetatable(L, copy);
+			lua_pop(L, 1);
+		}
 	}
 
 	std::unordered_map<long, MovableObject*> s_PreviewRootByUID;
@@ -8090,6 +8097,12 @@ namespace {
 			lua_pop(L, 3);
 		}
 		lua_pop(L, 1);
+		// The hold's metatables are its own clones, so the references they carry get the same remap as its fields.
+		if (lua_getmetatable(L, index) != 0) {
+			const bool remapped = RemapPreviewValue(L, -1, seen, freezeClass);
+			lua_pop(L, 1);
+			return remapped;
+		}
 		return true;
 	}
 
