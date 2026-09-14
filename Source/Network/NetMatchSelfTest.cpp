@@ -4744,7 +4744,7 @@ namespace RTE {
 			*error = "mux listen order: calls were [" + seen + "], expected the ICE half first";
 			return false;
 		}
-		std::cout << "[net-match-selftest] mux listen order: the ICE half opens first (identity bound there), then the IP listen" << std::endl;
+		std::cout << "[net-match-selftest] PASS mux listen order: the ICE half opens first (identity bound there), then the IP listen" << std::endl;
 		return true;
 	}
 
@@ -4801,7 +4801,7 @@ namespace RTE {
 			*error = "mux routing: PollEvents did not drain the posted task";
 			return false;
 		}
-		std::cout << "[net-match-selftest] mux routing: Send/Disconnect/ping follow the peer-id tag, ICE events come back tagged, an unbound fault stays invalid, posted tasks run inside PollEvents" << std::endl;
+		std::cout << "[net-match-selftest] PASS mux routing: Send/Disconnect/ping follow the peer-id tag, ICE events come back tagged, an unbound fault stays invalid, posted tasks run inside PollEvents" << std::endl;
 		return true;
 	}
 
@@ -5481,7 +5481,7 @@ namespace RTE {
 		const std::string identity = NetIceHostIdentity(rowId);
 		const auto fail = [&](const std::string& message) {
 			for (size_t index = 0; index < peers.size(); ++index) {
-				std::cout << "[net-match-selftest] ice round diagnostic peer=" << index << ' ' << peers[index].BuildReportJson() << std::endl;
+				std::cout << "[net-match-selftest] MEASURE ice round diagnostic peer=" << index << ' ' << peers[index].BuildReportJson() << std::endl;
 			}
 			for (auto& peer : peers) peer.Destroy();
 			*error = "service ICE two rounds: " + message;
@@ -6019,7 +6019,7 @@ namespace RTE {
 				pump(service, 8);
 				const size_t registers = count(*wire, "POST", "/v1/sessions");
 				const size_t beats = count(*wire, "POST", "/v1/sessions/" + idA + "/heartbeat");
-				std::cout << "[net-match-selftest] directory lease delayed hide desired_before_ack=" << desired << " early_deletes=" << earlyDeletes << " registers=" << registers << " heartbeats=" << beats << std::endl;
+				std::cout << "[net-match-selftest] MEASURE directory lease delayed hide desired_before_ack=" << desired << " early_deletes=" << earlyDeletes << " registers=" << registers << " heartbeats=" << beats << std::endl;
 				if (step.empty() && (desired || earlyDeletes != 0 || registers != 1 || beats != 2 || confirmed(service) != nlohmann::json(true) || service.m_Directory.GetSessionId() != idA)) {
 					step = "desired_before_ack=" + std::to_string(desired) + " early_deletes=" + std::to_string(earlyDeletes) + " registers=" + std::to_string(registers) + " heartbeats=" + std::to_string(beats);
 				}
@@ -6045,7 +6045,7 @@ namespace RTE {
 				pump(service, 10);
 				const size_t registers = count(*wire, "POST", "/v1/sessions");
 				const size_t deletes = count(*wire, "DELETE", "/v1/sessions/" + idA);
-				std::cout << "[net-match-selftest] directory lease " << label << " registers=" << registers << " deletes=" << deletes << std::endl;
+				std::cout << "[net-match-selftest] MEASURE directory lease " << label << " registers=" << registers << " deletes=" << deletes << std::endl;
 				if (step.empty() && (registers != 1 || deletes != 1)) {
 					step = "registers=" + std::to_string(registers) + " deletes=" + std::to_string(deletes);
 				}
@@ -6075,7 +6075,7 @@ namespace RTE {
 				lock.unlock();
 				complete.join();
 				const size_t deletes = count(*wire, "DELETE", "/v1/sessions/" + idA);
-				std::cout << "[net-match-selftest] directory lease locked snapshot requests_while_locked=" << whileLocked << " deletes=" << deletes << std::endl;
+				std::cout << "[net-match-selftest] MEASURE directory lease locked snapshot requests_while_locked=" << whileLocked << " deletes=" << deletes << std::endl;
 				if (whileLocked != 0 || deletes != 1) {
 					step = "requests_while_locked=" + std::to_string(whileLocked) + " deletes_after_unbind=" + std::to_string(deletes);
 				}
@@ -6128,7 +6128,7 @@ namespace RTE {
 			*error = "ice join_mode: " + mismatches;
 			return false;
 		}
-		std::cout << "[net-match-selftest] ice join_mode: the bound row remains ICE-capable; replacement ids advertise ip" << std::endl;
+		std::cout << "[net-match-selftest] PASS ice join_mode: the bound row remains ICE-capable; replacement ids advertise ip" << std::endl;
 		return true;
 	}
 
@@ -6199,7 +6199,7 @@ namespace RTE {
 			*error = "session-id join: an either row did not carry its direct address too";
 			return false;
 		}
-		std::cout << "[net-match-selftest] session-id join: an absent, full, mismatched or ip-only row is refused with the join list's own label; an ice row resolves to str:h-<session>, an either row keeps its address" << std::endl;
+		std::cout << "[net-match-selftest] PASS session-id join: an absent, full, mismatched or ip-only row is refused with the join list's own label; an ice row resolves to str:h-<session>, an either row keeps its address" << std::endl;
 		return true;
 	}
 
@@ -6232,7 +6232,7 @@ namespace RTE {
 		}
 		g_SettingsMan.SetNetworkIceEnable(savedEnable);
 		g_SettingsMan.SetNetworkStunServers(savedStun);
-		std::cout << "[net-match-selftest] ice settings: NetworkIceEnable defaults off; -net-ice and -net-stun decide the run and never touch the saved value" << std::endl;
+		std::cout << "[net-match-selftest] PASS ice settings: NetworkIceEnable defaults off; -net-ice and -net-stun decide the run and never touch the saved value" << std::endl;
 		return true;
 	}
 
@@ -6281,7 +6281,7 @@ namespace RTE {
 			*error = "p2p join spec: a config without a spec no longer takes the direct-IP path";
 			return false;
 		}
-		std::cout << "[net-match-selftest] p2p join spec: StartClient dials the config's spec and replays it on the SessionFull retry; without a spec the direct-IP Connect is unchanged" << std::endl;
+		std::cout << "[net-match-selftest] PASS p2p join spec: StartClient dials the config's spec and replays it on the SessionFull retry; without a spec the direct-IP Connect is unchanged" << std::endl;
 		return true;
 	}
 
