@@ -7,6 +7,7 @@
 #include "lj_err.h"
 #include "lj_tab.h"
 #include "lj_frame.h"
+#include "lj_dispatch.h"
 #include "lj_preview.h"
 #include "luajit.h"
 
@@ -127,6 +128,10 @@ LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t n
   size_t i, cursor;
   int timed = p ? p->timed : getenv("CC_PREVIEW_BARRIER_STATS") != NULL;
   double started = timed ? preview_clock() : 0.0;
+#if LJ_HASJIT
+  /* The recorded preview guard is hoisted out of loops, so a window must not open inside a trace. */
+  if (G2J(g)->state != LJ_TRACE_IDLE) return 0;
+#endif
   if (!p) {
     p = (LJPreview *)calloc(1, sizeof(LJPreview));
     if (!p) return 0;
