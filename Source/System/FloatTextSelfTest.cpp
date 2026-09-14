@@ -409,22 +409,28 @@ namespace RTE::FloatTextSelfTest {
 			return static_cast<std::ostringstream*>(writer.GetStream())->str();
 		}
 
+		/// These objects are deliberately never destroyed. Destroying a MovableObject before the engine is up
+		/// walks MovableMan::ForgetDestroyedObject into g_LuaMan, which does not exist yet; the probes are here
+		/// for the text codec, not for entity lifetime, so they keep their four objects for the process rather
+		/// than building a manager graph to satisfy a destructor.
+		template <class EntityType> EntityType& KeptAlive() { return *(new EntityType()); }
+
 		std::string ProbeArmHandTarget() {
 			const std::string packed = HexFloatString(1.5F) + "|" + HexFloatString(-0.25F) + "|" + HexFloatString(0.75F) + "|1|reach";
-			Arm arm;
+			Arm& arm = KeptAlive<Arm>();
 			arm.AddHandTargetFromSave(packed);
 			const std::vector<std::string> saved = arm.GetHandTargetsForSave();
 			return saved.size() == 1 ? saved[0] : "targets=" + std::to_string(saved.size());
 		}
 
 		std::string ProbePieMenuState() {
-			PieMenu menu;
+			PieMenu& menu = KeptAlive<PieMenu>();
 			menu.UnpackInteractionState("0|0|0|0|0|" + HexFloatString(1.5F) + "|1|-1|-1|-1|-1");
 			return menu.PackInteractionState();
 		}
 
 		std::string ProbeInheritedRotAngleDegOffset() {
-			Arm arm;
+			Arm& arm = KeptAlive<Arm>();
 			Reader fractional(std::make_unique<std::istringstream>("1.5\n"), "float-text-selftest.ini");
 			arm.ReadProperty("InheritedRotAngleDegOffset", fractional);
 			const float fractionalOffset = arm.GetInheritedRotAngleOffset();
@@ -434,7 +440,7 @@ namespace RTE::FloatTextSelfTest {
 		}
 
 		std::string ProbeCustomNumberValue() {
-			Arm arm;
+			Arm& arm = KeptAlive<Arm>();
 			Reader reader(std::make_unique<std::istringstream>("NumberValue\n\tFloatTextKey = 1.5\n"), "float-text-selftest.ini");
 			arm.ReadProperty("AddCustomValue", reader);
 			return Hex(arm.GetNumberValue("FloatTextKey"));
