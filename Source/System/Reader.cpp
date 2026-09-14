@@ -79,6 +79,12 @@ namespace {
 		const std::string token = TakeNumberToken(stream);
 		FloatType parsed = 0;
 		const std::from_chars_result result = ParseNumberExact(token.data(), token.data() + token.size(), parsed);
+		if (result.ec == std::errc::result_out_of_range && result.ptr == token.data() + token.size()) {
+			// The stream's extraction stored the most positive or negative representable value here.
+			value = (!token.empty() && token.front() == '-') ? std::numeric_limits<FloatType>::lowest() : (std::numeric_limits<FloatType>::max)();
+			stream.setstate(std::ios::failbit);
+			return;
+		}
 		if (result.ec != std::errc() || result.ptr != token.data() + token.size()) {
 			// The stream's extraction zeroed the target and set failbit when it could not read a number.
 			value = 0;
@@ -89,7 +95,15 @@ namespace {
 	}
 } // namespace
 
-void Reader::ReadFloating(float& var) { ReadNumberFromStream(*m_Stream, var); }
+void Reader::ReadFloating(float& var) {
+	if constexpr (Reader::c_ReadFloatsAsFloats) {
+		ReadNumberFromStream(*m_Stream, var);
+	} else {
+		double wide = 0;
+		ReadNumberFromStream(*m_Stream, wide);
+		var = static_cast<float>(wide);
+	}
+}
 
 void Reader::ReadFloating(double& var) { ReadNumberFromStream(*m_Stream, var); }
 
