@@ -351,7 +351,9 @@ static void ApplyPackedLimbPositions(const std::string& packed, std::initializer
 		while (cursor != end && *cursor == ' ') {
 			++cursor;
 		}
-		cursor = FromCharsExact(cursor, end, value).ptr;
+		const std::from_chars_result result = FromCharsExact(cursor, end, value);
+		RTEAssert(result.ec == std::errc(), "Invalid packed limb positions");
+		cursor = result.ptr;
 	};
 	for (AtomGroup* group: groups) {
 		Vector limbPos;
@@ -411,7 +413,9 @@ static void ApplyPackedLimbInertia(const std::string& packed, std::initializer_l
 		while (cursor != end && *cursor == ' ') {
 			++cursor;
 		}
-		cursor = FromCharsExact(cursor, end, value).ptr;
+		const std::from_chars_result result = FromCharsExact(cursor, end, value);
+		RTEAssert(result.ec == std::errc(), "Invalid packed limb inertia");
+		cursor = result.ptr;
 	};
 	for (AtomGroup* group: groups) {
 		float momentOfInertia = 0.0F;
@@ -464,7 +468,9 @@ void AHuman::AdoptPersistedUniqueID() {
 			while (cursor != end && *cursor == ' ') {
 				++cursor;
 			}
-			cursor = FromCharsExact(cursor, end, value).ptr;
+			const std::from_chars_result result = FromCharsExact(cursor, end, value);
+			RTEAssert(result.ec == std::errc(), "Invalid packed walk state");
+			cursor = result.ptr;
 		};
 		float walkAngleFG = 0.0F;
 		float walkAngleBG = 0.0F;
