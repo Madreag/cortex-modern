@@ -5326,13 +5326,17 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	const bool cleared = RemoveActor(craft) == craft && GetContiguousActorID(craft) < 0;
 
 	const std::string text = SaveWorldStructure();
+	const bool tagged = text.starts_with("15 WorldStructure2 ");
 	bool archived = false;
+	bool roundTripped = false;
 	try {
 		WorldStructure parsed;
-		CheckpointReader reader(text, "WorldStructure1"); parsed.Fields(reader); reader.Finish();
+		CheckpointReader reader(text, "WorldStructure2"); parsed.Fields(reader); reader.Finish();
 		const std::set<long> live(parsed.cohorts[0].begin(), parsed.cohorts[0].end());
 		archived = parsed.contiguousActorIDs.size() == m_ContiguousActorIDs.size() && !parsed.contiguousActorIDs.contains(craftUID);
 		for (const auto& entry: parsed.contiguousActorIDs) archived = archived && live.contains(entry.first);
+		CheckpointWriter rewriter("WorldStructure2"); parsed.Fields(rewriter);
+		roundTripped = rewriter.Text() == text;
 	} catch (const std::exception&) {
 	}
 
@@ -5349,6 +5353,16 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	CheckpointWriter staleWriter("WorldStructure1"); stale.Fields(staleWriter);
 	const bool accepted = LoadWorldStructure(text, true) && LoadWorldStructure(cleanWriter.Text(), true);
 	const bool refused = !LoadWorldStructure(orphanedWriter.Text(), true) && !LoadWorldStructure(staleWriter.Text(), true);
+
+	// A game saved before the record carried the owner map: its payload has no owners field at all.
+	const auto writeLegacyFields = [](const WorldStructure& state, CheckpointWriter& writer) {
+		writer(state.cohorts, state.rosters, state.sortRoster, state.alarms, state.quarantine, state.moidIndex, state.contiguousActorIDs, state.teamMOIDCount, state.validObjects);
+	};
+	CheckpointWriter legacyWriter("WorldStructure1"); writeLegacyFields(clean, legacyWriter);
+	CheckpointWriter legacyTrailingWriter("WorldStructure1"); writeLegacyFields(clean, legacyTrailingWriter); legacyTrailingWriter.Value(7);
+	CheckpointWriter unknownWriter("WorldStructure3"); clean.Fields(unknownWriter);
+	const bool legacyAccepted = LoadWorldStructure(legacyWriter.Text(), true);
+	const bool legacyRefused = !LoadWorldStructure(legacyTrailingWriter.Text(), true) && !LoadWorldStructure(unknownWriter.Text(), true);
 
 	auto plantAdded = [this](Actor* actor, int id) {
 		if (!actor) {
@@ -5399,9 +5413,12 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	}
 
 	AddActor(craft);
-	const bool passed = indexed && cleared && archived && accepted && refused && addedRemoveCleared && absorbDeleteCleared && discardAddedCleared;
+	const bool passed = indexed && cleared && archived && roundTripped && tagged && accepted && refused && legacyAccepted && legacyRefused &&
+	                    addedRemoveCleared && absorbDeleteCleared && discardAddedCleared;
 	std::cout << "[contiguous-index-selftest] " << (passed ? "PASS" : "FAIL") << " indexed=" << indexed << " cleared=" << cleared
-	          << " archived=" << archived << " accepted=" << accepted << " refused=" << refused
+	          << " archived=" << archived << " round_trip=" << roundTripped << " tagged=" << tagged
+	          << " accepted=" << accepted << " refused=" << refused
+	          << " legacy=" << legacyAccepted << " legacy_refused=" << legacyRefused
 	          << " added_remove=" << addedRemoveCleared << " absorb_delete=" << absorbDeleteCleared
 	          << " discard_added=" << discardAddedCleared << std::endl;
 	return passed;
