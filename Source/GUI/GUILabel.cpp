@@ -17,6 +17,8 @@ GUILabel::GUILabel(GUIManager* Manager, GUIControlManager* ControlManager) :
 	m_ControlID = "LABEL";
 	m_ControlManager = ControlManager;
 	m_Font = nullptr;
+	m_SkinFont = nullptr;
+	m_GlyphFallbackFont = nullptr;
 	m_FontColor = 0;
 }
 
@@ -104,7 +106,9 @@ void GUILabel::ChangeSkin(GUISkin* Skin) {
 	std::string Filename;
 
 	m_Skin->GetValue("Label", "Font", &Filename);
-	m_Font = m_Skin->GetFont(Filename);
+	m_SkinFont = m_Skin->GetFont(Filename);
+	m_Font = m_SkinFont;
+	m_GlyphFallbackFont = nullptr;
 	m_Skin->GetValue("Label", "FontColor", &m_FontColor);
 	m_Skin->GetValue("Label", "FontShadow", &m_FontShadow);
 	m_Skin->GetValue("Label", "FontKerning", &m_FontKerning);
@@ -143,8 +147,9 @@ void GUILabel::Draw(GUIBitmap* Bitmap, bool overwiteFontColorAndKerning) {
 			yPos += (m_Height)-1;
 		}
 
-		int textFullWidth = m_HorizontalOverflowScroll ? m_Font->CalculateWidth(m_Text) : 0;
-		int textFullHeight = m_VerticalOverflowScroll ? m_Font->CalculateHeight(m_Text) : 0;
+		int textFullWidth = m_HorizontalOverflowScroll ? m_Font->CalculateWidth(m_Text, m_GlyphFallbackFont) : 0;
+		// DrawAligned wraps at m_Width, so the scroll range has to be the wrapped height, not the unwrapped one.
+		int textFullHeight = m_VerticalOverflowScroll ? m_Font->CalculateHeight(m_Text, m_Width, m_GlyphFallbackFont) : 0;
 		bool modifyXPos = textFullWidth > m_Width;
 		bool modifyYPos = textFullHeight > m_Height;
 		xPos = modifyXPos ? m_X : xPos;
@@ -196,7 +201,7 @@ void GUILabel::Draw(GUIBitmap* Bitmap, bool overwiteFontColorAndKerning) {
 					break;
 			}
 		}
-		m_Font->DrawAligned(Bitmap, xPos, yPos, m_Text, m_HorizontalOverflowScroll && textFullWidth > m_Width ? GUIFont::Left : m_HAlignment, m_VerticalOverflowScroll && textFullHeight > m_Height ? GUIFont::Top : m_VAlignment, m_HorizontalOverflowScroll ? textFullWidth : m_Width, m_FontShadow);
+		m_Font->DrawAligned(Bitmap, xPos, yPos, m_Text, m_HorizontalOverflowScroll && textFullWidth > m_Width ? GUIFont::Left : m_HAlignment, m_VerticalOverflowScroll && textFullHeight > m_Height ? GUIFont::Top : m_VAlignment, m_HorizontalOverflowScroll ? textFullWidth : m_Width, m_FontShadow, m_GlyphFallbackFont);
 	}
 
 	Bitmap->SetClipRect(nullptr);
@@ -246,7 +251,8 @@ void GUILabel::GetControlRect(int* X, int* Y, int* Width, int* Height) {
 }
 
 int GUILabel::GetTextHeight() {
-	return m_Font->CalculateHeight(m_Text, m_Width);
+	// Horizontal overflow scrolling draws each line unwrapped, so wrapping must not count here.
+	return m_Font->CalculateHeight(m_Text, m_HorizontalOverflowScroll ? 0 : m_Width, m_GlyphFallbackFont);
 }
 
 int GUILabel::GetMaxWordWidth() {
@@ -257,11 +263,33 @@ int GUILabel::GetMaxWordWidth() {
 		const size_t end = m_Text.find_first_of(" \n", pos);
 		const std::string word = m_Text.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
 		if (!word.empty()) {
-			maxWidth = std::max(maxWidth, m_Font->CalculateWidth(word));
+			maxWidth = std::max(maxWidth, m_Font->CalculateWidth(word, m_GlyphFallbackFont));
 		}
 		pos = (end == std::string::npos) ? m_Text.size() : end + 1;
 	}
 	return maxWidth;
+}
+
+void GUILabel::EnsureDrawableTextFont(const std::string& fontFile) {
+	m_GlyphFallbackFont = nullptr;
+	if (!m_Skin || !m_SkinFont) {
+		return;
+	}
+	GUIFont* fallback = nullptr;
+	for (char c : m_Text) {
+		const unsigned char index = static_cast<unsigned char>(c);
+		if (index > 32 && !m_SkinFont->HasGlyphPixels(index)) {
+			if (!fallback) {
+				fallback = m_Skin->GetFont(fontFile);
+			}
+			if (fallback && fallback != m_SkinFont && fallback->HasGlyphPixels(index)) {
+				m_GlyphFallbackFont = fallback;
+				break;
+			}
+		}
+	}
+	SetFont(m_SkinFont);
+	m_Font->CacheColor(m_FontColor);
 }
 
 void GUILabel::SetHorizontalOverflowScroll(bool newOverflowScroll) {

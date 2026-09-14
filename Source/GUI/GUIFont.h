@@ -53,11 +53,12 @@ namespace RTE {
 
 		/// Draws text to a bitmap.
 		/// @param Bitmap Bitmap, Position, Text, Color, Drop-shadow, 0 = none.
-		void Draw(GUIBitmap* Bitmap, int X, int Y, const std::string& Text, unsigned long Shadow = 0);
+		/// @param GlyphFallback Optional font whose atlas supplies the glyph for any byte this font's cell has no ink for.
+		void Draw(GUIBitmap* Bitmap, int X, int Y, const std::string& Text, unsigned long Shadow = 0, GUIFont* GlyphFallback = nullptr);
 
 		/// Draws text to a bitmap aligned.
 		/// @param Bitmap Bitmap, Position, Text.
-		void DrawAligned(GUIBitmap* Bitmap, int X, int Y, const std::string& Text, int HAlign, int VAlign = Top, int maxWidth = 0, unsigned long Shadow = 0);
+		void DrawAligned(GUIBitmap* Bitmap, int X, int Y, const std::string& Text, int HAlign, int VAlign = Top, int maxWidth = 0, unsigned long Shadow = 0, GUIFont* GlyphFallback = nullptr);
 
 		/// Sets the current color.
 		/// @param Color Color.
@@ -65,7 +66,7 @@ namespace RTE {
 
 		/// Calculates the width of a piece of text.
 		/// @param Text Text.
-		int CalculateWidth(const std::string& Text);
+		int CalculateWidth(const std::string& Text, GUIFont* GlyphFallback = nullptr);
 
 		/// Calculates the width of a piece of text.
 		/// @param Character Character.
@@ -74,7 +75,7 @@ namespace RTE {
 		/// Calculates the height of a piece of text, if it's wrapped within a
 		/// max width.
 		/// @param Text Text, and the max width. If 0, no wrapping is done.
-		int CalculateHeight(const std::string& Text, int MaxWidth = 0);
+		int CalculateHeight(const std::string& Text, int MaxWidth = 0, GUIFont* GlyphFallback = nullptr);
 
 		/// Gets the font height.
 		int GetFontHeight() const;
@@ -92,6 +93,11 @@ namespace RTE {
 		/// between chars, 0 = chars are touching.
 		void SetKerning(int newKerning = 1) { m_Kerning = newKerning; }
 
+		/// Returns whether the font's cell for the character actually contains any drawable pixels.
+		/// Some atlas cells carry width but no ink, so width alone cannot tell a real glyph from a blank one.
+		/// @param Character Character index.
+		bool HasGlyphPixels(unsigned char Character) const { return m_GlyphCovered[Character]; }
+
 	private:
 		GUIBitmap* m_Font;
 		GUIScreen* m_Screen;
@@ -103,6 +109,11 @@ namespace RTE {
 		GUIBitmap* m_CurrentBitmap;
 		std::string m_Name;
 		Character m_Characters[256];
+		bool m_GlyphCovered[256]; // Whether the character's atlas cell holds any drawable pixels, scanned at Load
+
+		/// Returns the font that can draw this byte: the fallback only when this font's cell has no ink
+		/// and the fallback's does. The caller passes the fallback through the draw/measure APIs.
+		GUIFont* GlyphFontFor(unsigned char Character, GUIFont* GlyphFallback);
 
 		int m_CharIndexCap; // The highest index of valid characters that was read in from the file
 
