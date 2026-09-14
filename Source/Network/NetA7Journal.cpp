@@ -327,14 +327,29 @@ namespace RTE {
 		if (!HasConnectGate()) return true;
 		Emit("connect_waiting", {{"ticket_sha256", loadedTicketSha}, {"load_phase", "preconnect_validation"}});
 		const auto opened = Clock::now();
+		bool exists = false, parseOk = false, runIdMatch = false, peerListed = false;
+		unsigned long long fileSize = 0;
 		while (Clock::now() - opened < std::chrono::milliseconds(c_GateBudgetMs)) {
 			if (s_State.cancelled && s_State.cancelled()) { if (error) *error = "A7 connect gate cancelled"; return false; }
 			std::error_code fsError;
-			if (std::filesystem::exists(s_State.gate, fsError) && !fsError) {
-				if (std::filesystem::file_size(s_State.gate, fsError) > 16384 || fsError) break;
+			exists = std::filesystem::exists(s_State.gate, fsError) && !fsError;
+			if (exists) {
+				parseOk = false;
+				runIdMatch = false;
+				peerListed = false;
+				fileSize = static_cast<unsigned long long>(std::filesystem::file_size(s_State.gate, fsError));
+				if (fileSize > 16384 || fsError) break;
 				std::ifstream input(s_State.gate, std::ios::binary);
 				const json gate = json::parse(input, nullptr, false);
-				if (!gate.is_object() || !gate.contains("schema") || !gate["schema"].is_number_integer() || gate["schema"] != 1 || !gate.contains("run_id") || !gate["run_id"].is_string() || gate["run_id"] != s_State.run || !gate.contains("peers") || !gate["peers"].is_array()) break;
+				parseOk = !gate.is_discarded();
+				// Incomplete gate bytes are not a verdict while the wait budget remains.
+				if (!parseOk || !gate.is_object() || !gate.contains("schema") || !gate.contains("run_id")) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(5));
+					continue;
+				}
+				if (!gate["schema"].is_number_integer() || gate["schema"] != 1 || !gate["run_id"].is_string()) break;
+				runIdMatch = gate["run_id"] == s_State.run;
+				if (!runIdMatch || !gate.contains("peers") || !gate["peers"].is_array()) break;
 				bool includesPeer = false;
 				std::vector<std::string> seen;
 				for (const auto& entry: gate["peers"]) {
@@ -344,13 +359,24 @@ namespace RTE {
 					seen.push_back(name);
 					includesPeer = includesPeer || name == s_State.peer;
 				}
+				peerListed = includesPeer;
 				if (!seen.empty() && includesPeer) { s_State.gateReleased.store(true); Emit("connect_released"); return true; }
 				break;
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(5));
 		}
-		Gap("connect gate invalid or its bounded wait expired");
-		if (error) *error = "A7 connect gate invalid or timed out";
+		const unsigned long long elapsedMs = static_cast<unsigned long long>(
+			std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - opened).count());
+		char gap[320];
+		std::snprintf(gap, sizeof(gap),
+			"connect gate invalid or its bounded wait expired exists=%d file_size=%llu parse_ok=%d run_id_match=%d peer_listed=%d elapsed_ms=%llu",
+			exists ? 1 : 0, fileSize, parseOk ? 1 : 0, runIdMatch ? 1 : 0, peerListed ? 1 : 0, elapsedMs);
+		Gap(gap);
+		char fail[320];
+		std::snprintf(fail, sizeof(fail),
+			"A7 connect gate invalid or timed out exists=%d file_size=%llu parse_ok=%d run_id_match=%d peer_listed=%d elapsed_ms=%llu",
+			exists ? 1 : 0, fileSize, parseOk ? 1 : 0, runIdMatch ? 1 : 0, peerListed ? 1 : 0, elapsedMs);
+		if (error) *error = fail;
 		return false;
 	}
 
