@@ -221,11 +221,11 @@ int GATutorial::Start() {
 	// Set up players
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsHumanSeat(player)))
 			continue;
 
 		// Expand all modules to show the goods
-		m_pBuyGUI[player]->SetModuleExpanded(0);
+		if (IsLocalHumanSeat(player)) m_pBuyGUI[player]->SetModuleExpanded(0);
 
 		// No need for the LZ to follow the brain, the scene-set one is enough
 		SetBrainLZWidth(player, 0);
@@ -312,7 +312,7 @@ void GATutorial::End() {
 	bool playerWon = false;
 	// Show appropriate end game messages
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
 		if (m_Team[player] == m_WinnerTeam) {
@@ -359,7 +359,7 @@ void GATutorial::Update() {
 	// Iterate through all human players
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsHumanSeat(player)))
 			continue;
 		// The current player's team
 		int team = m_Team[player];
@@ -467,7 +467,7 @@ void GATutorial::Update() {
 			            {
 			                for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player)
 			                {
-			                    if (!(m_IsActive[player] && m_IsHuman[player]))
+			                    if (!(IsSeatActive(player) && IsHumanSeat(player)))
 			                        continue;
 
 			                    if (m_Team[player] == team)

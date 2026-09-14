@@ -60,7 +60,7 @@ int AreaPickerGUI::Create(Controller* pController, const std::string& onlyOfType
 	if (!m_pGUIScreen)
 		m_pGUIScreen = new AllegroScreen(g_FrameMan.GetBackBuffer8());
 	if (!m_pGUIInput)
-		m_pGUIInput = new GUIInputWrapper(pController->GetPlayer());
+		m_pGUIInput = new GUIInputWrapper(pController->GetInputPlayer());
 	if (!m_pGUIController)
 		m_pGUIController = new GUIControlManager();
 	if (!m_pGUIController->Create(m_pGUIScreen, m_pGUIInput, "Base.rte/GUIs/Skins", "DefaultSkin.ini")) {
@@ -138,12 +138,12 @@ void AreaPickerGUI::SetEnabled(bool enable) {
 		m_RepeatStartTimer.Reset();
 		m_RepeatTimer.Reset();
 		// Set the mouse cursor free
-		g_UInputMan.TrapMousePos(false, m_pController->GetPlayer());
+		g_UInputMan.TrapMousePos(false, m_pController->GetInputPlayer());
 		// Move the mouse cursor to the middle of the player's screen
 		int mouseOffX, mouseOffY;
 		m_pGUIInput->GetMouseOffset(mouseOffX, mouseOffY);
 		Vector mousePos(-mouseOffX + (g_FrameMan.GetPlayerScreenWidth() / 2), -mouseOffY + (g_FrameMan.GetPlayerScreenHeight() / 2));
-		g_UInputMan.SetMousePos(mousePos, m_pController->GetPlayer());
+		g_UInputMan.SetMousePos(mousePos, m_pController->GetInputPlayer());
 		g_GUISound.EnterMenuSound()->Play();
 
 		// Repopulate with the current Scene's list of Area:s
@@ -151,7 +151,7 @@ void AreaPickerGUI::SetEnabled(bool enable) {
 	} else if (!enable && m_PickerEnabled != DISABLED && m_PickerEnabled != DISABLING) {
 		m_PickerEnabled = DISABLING;
 		// Trap the mouse cursor again
-		g_UInputMan.TrapMousePos(true, m_pController->GetPlayer());
+		g_UInputMan.TrapMousePos(true, m_pController->GetInputPlayer());
 		// Only play switching away sound
 		//        if (!m_pPickedArea)
 		g_GUISound.ExitMenuSound()->Play();
