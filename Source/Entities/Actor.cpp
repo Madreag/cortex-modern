@@ -2186,18 +2186,21 @@ void Actor::Update() {
 		m_PainSound->Play(m_Pos);
 	}
 
+	// The screen flashes belong to this machine's seats, so they keep reading the local brain slot.
 	int brainOfPlayer = g_ActivityMan.GetActivity()->IsBrainOfWhichPlayer(this);
-	if (brainOfPlayer != Players::NoPlayer && g_ActivityMan.GetActivity()->PlayerHuman(brainOfPlayer)) {
-		if (m_PrevHealth - m_Health > 1.5F) {
-			// If this is a brain that's under attack, broadcast an alarm event so that the enemy AI won't dawdle in trying to kill it.
+	const bool localPlayerBrain = brainOfPlayer != Players::NoPlayer && g_ActivityMan.GetActivity()->PlayerHuman(brainOfPlayer);
+	if (m_PrevHealth - m_Health > 1.5F) {
+		// If this is a brain that's under attack, broadcast an alarm event so that the enemy AI won't dawdle in trying to kill it.
+		// The alarm is shared sim state, so it asks the shared brain record instead of this peer's seats.
+		if (g_MovableMan.IsPlayerBrain(this)) {
 			g_MovableMan.RegisterAlarmEvent(AlarmEvent(m_Pos, m_Team, 0.5F));
-			if (g_SettingsMan.FlashOnBrainDamage()) {
-				g_FrameMan.FlashScreen(g_ActivityMan.GetActivity()->ScreenOfPlayer(brainOfPlayer), g_RedColor, 10);
-			}
 		}
-		if ((m_ToDelete || m_Status == DEAD) && g_SettingsMan.FlashOnBrainDamage()) {
-			g_FrameMan.FlashScreen(g_ActivityMan.GetActivity()->ScreenOfPlayer(brainOfPlayer), g_WhiteColor, 500);
+		if (localPlayerBrain && g_SettingsMan.FlashOnBrainDamage()) {
+			g_FrameMan.FlashScreen(g_ActivityMan.GetActivity()->ScreenOfPlayer(brainOfPlayer), g_RedColor, 10);
 		}
+	}
+	if (localPlayerBrain && (m_ToDelete || m_Status == DEAD) && g_SettingsMan.FlashOnBrainDamage()) {
+		g_FrameMan.FlashScreen(g_ActivityMan.GetActivity()->ScreenOfPlayer(brainOfPlayer), g_WhiteColor, 500);
 	}
 
 	if (m_Controller.IsState(ACTOR_PRIMARY_HOTKEY)) {
