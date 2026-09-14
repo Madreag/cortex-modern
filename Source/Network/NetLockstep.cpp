@@ -2212,7 +2212,9 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error) {
-		if (config.peerCount < 2 || config.peerCount > NetLockstepCodec::c_MaxPeerCount ||
+		// One peer is a round whose only producer is here (an AI-only dedicated host); two or more
+		// still need the remotes below.
+		if (config.peerCount == 0 || config.peerCount > NetLockstepCodec::c_MaxPeerCount ||
 		    config.localPeerId == 0 || config.localPeerId > config.peerCount) {
 			if (error) *error = "lockstep peer identity is invalid";
 			return false;
@@ -2237,7 +2239,7 @@ namespace RTE {
 				}
 				remoteTransports[peerId] = transportId;
 			}
-		} else {
+		} else if (!remotePeerIds.empty()) {
 			if (config.remotePeerId == 0 || config.remotePeerId == config.localPeerId ||
 			    config.remotePeerId > config.peerCount || config.remoteTransportPeerId == c_InvalidNetPeerId) {
 				if (error) *error = "lockstep peer identity is invalid";
@@ -2245,7 +2247,7 @@ namespace RTE {
 			}
 			remoteTransports[config.remotePeerId] = config.remoteTransportPeerId;
 		}
-		if (remoteTransports.empty()) {
+		if (remoteTransports.empty() && !remotePeerIds.empty()) {
 			if (error) *error = "lockstep has no remote transport targets";
 			return false;
 		}
@@ -2338,6 +2340,11 @@ namespace RTE {
 		m_Stats.remotePeerId = config.remotePeerId;
 		m_Stats.nextFrame = m_Stats.effectiveStartFrame;
 
+		// With no remote there is no start to hand out and none to wait for: the round runs at once.
+		if (m_RemotePeerIds.empty()) {
+			m_State = NetLockstepState::Running;
+			return true;
+		}
 		return SendStart(error);
 	}
 
@@ -2608,7 +2615,8 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::StartReplay(INetTransport& transport, const NetLockstepConfig& config, std::string* error) {
-		if (config.peerCount < 2 || config.peerCount > NetLockstepCodec::c_MaxPeerCount ||
+		// A one-peer recording is the AI-only round's; playback has no remotes either way.
+		if (config.peerCount == 0 || config.peerCount > NetLockstepCodec::c_MaxPeerCount ||
 		    config.localPeerId == 0 || config.localPeerId > config.peerCount) {
 			if (error) *error = "replay peer identity is invalid";
 			return false;
