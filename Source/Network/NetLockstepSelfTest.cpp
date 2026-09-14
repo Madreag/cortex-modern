@@ -10398,14 +10398,17 @@ namespace RTE {
 			if (g_MovableMan.FindObjectByUniqueID(static_cast<long>(departedUID))) {
 				return finish("the chosen departed id unexpectedly names a live object");
 			}
-			NetActorOwnership::SeedOwner(survivorUID, 2);
-			NetActorOwnership::SeedOwner(departedUID, 1);
+			NetActorOwnership::SeedOwner(survivorUID, 2, Activity::TeamTwo);
+			NetActorOwnership::SeedOwner(departedUID, 1, Activity::TeamOne);
 			const std::string snapshot = g_MovableMan.SaveWorldStructure();
 			if (!g_MovableMan.LoadWorldStructure(snapshot, false)) {
 				return finish("the world structure was rejected because a departed actor's owner was saved");
 			}
 			if (NetActorOwnership::GetSeededOwner(survivorUID) != 2) {
 				return finish("the surviving actor's owner did not round-trip");
+			}
+			if (NetActorOwnership::GetSeededOwnerTeam(survivorUID) != Activity::TeamTwo) {
+				return finish("the surviving actor's seeded team did not round-trip");
 			}
 			if (NetActorOwnership::GetSeededOwner(departedUID) != 0) {
 				return finish("a departed actor's owner survived the round-trip");
@@ -10549,7 +10552,7 @@ namespace RTE {
 			const int64_t uid = static_cast<int64_t>(hostView->GetUniqueID());
 			AddSwitchTestActor(hostView);
 			AddSwitchTestActor(survivorView);
-			NetActorOwnership::SeedOwner(uid, 1);
+			NetActorOwnership::SeedOwner(uid, 1, Activity::TeamTwo);
 			ScenarioRunner::SetLockstepCoordinator(&host);
 			if (ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamTwo, true) != 1) {
 				return finish("the CPU actor did not start on the host");

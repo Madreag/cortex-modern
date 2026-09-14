@@ -4636,8 +4636,10 @@ void MovableMan::UpdateControllers() {
 	if (lockstepActive) {
 		for (const Actor* actor: m_Actors) {
 			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+			// The ownership query normalizes a negative team to 0; the seed records the team it was resolved at.
+			const uint8_t team = actor->GetTeam() < 0 ? uint8_t{0} : static_cast<uint8_t>(actor->GetTeam());
 			if (!NetActorOwnership::HasSeededOwner(uid)) {
-				NetActorOwnership::SeedOwner(uid, ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()));
+				NetActorOwnership::SeedOwner(uid, ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()), team);
 			}
 		}
 	}
@@ -5189,7 +5191,7 @@ namespace {
 		std::vector<std::pair<uint64_t, long>> quarantine;
 		std::vector<long> moidIndex;
 		std::map<long, int> contiguousActorIDs;
-		std::map<long, int> actorOwners;
+		std::map<long, std::pair<int, int>> actorOwners; // Actor -> its seeded owner and the team that owner was seeded at.
 		std::array<int, Activity::MaxTeamCount> teamMOIDCount{};
 		std::array<std::set<long>, 3> validObjects;
 		// A WorldStructure1 payload predates the owner map and carries no owners field.
@@ -5220,7 +5222,10 @@ std::string MovableMan::SaveWorldStructure() const {
 	}
 	// Only a live actor's owner travels: a seeded owner for a removed actor would fail the load's live-actor check.
 	const auto saveOwner = [&state](const Actor* actor) {
-		if (const uint8_t owner = NetActorOwnership::GetSeededOwner(static_cast<int64_t>(actor->GetUniqueID())); owner != 0) state.actorOwners.emplace(static_cast<long>(actor->GetUniqueID()), static_cast<int>(owner));
+		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+		if (const uint8_t owner = NetActorOwnership::GetSeededOwner(uid); owner != 0) {
+			state.actorOwners.emplace(static_cast<long>(uid), std::pair{static_cast<int>(owner), static_cast<int>(NetActorOwnership::GetSeededOwnerTeam(uid))});
+		}
 	};
 	for (const Actor* actor: m_Actors) saveOwner(actor);
 	for (const Actor* actor: m_AddedActors) saveOwner(actor);
@@ -5275,10 +5280,12 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 		for (long uid: state.moidIndex) index.push_back(resolve(uid));
 		std::unordered_map<const Actor*, int> contiguous;
 		for (const auto& [uid, id]: state.contiguousActorIDs) contiguous.emplace(actor(uid), id);
-		std::map<int64_t, uint8_t> owners;
-		for (const auto& [uid, owner]: state.actorOwners) {
+		std::map<int64_t, NetSeededActorOwner> owners;
+		for (const auto& [uid, entry]: state.actorOwners) {
+			const auto& [owner, team] = entry;
 			if (!actor(uid) || owner < 0 || owner > 255) throw std::runtime_error("owner entry names no live actor");
-			owners.emplace(static_cast<int64_t>(uid), static_cast<uint8_t>(owner));
+			if (team < 0 || team > 255) throw std::runtime_error("owner entry names no team");
+			owners.emplace(static_cast<int64_t>(uid), NetSeededActorOwner{static_cast<uint8_t>(owner), static_cast<uint8_t>(team)});
 		}
 		// Allocate the incoming events before changing any live membership.
 		std::array<std::vector<std::unique_ptr<AlarmEvent>>, 2> events;

@@ -7,7 +7,7 @@ namespace RTE {
 	namespace {
 		using json = nlohmann::json;
 
-		std::map<int64_t, uint8_t> s_SeededOwners; //!< Per-actor owners frozen at world entry, part of the world structure.
+		std::map<int64_t, NetSeededActorOwner> s_SeededOwners; //!< Per-actor owners frozen at world entry, part of the world structure.
 
 		uint8_t FindHumanPeerForTeam(const NetMatchConfig& config, uint8_t team) {
 			for (const NetMatchPlayerSlot& player : config.players) {
@@ -19,24 +19,34 @@ namespace RTE {
 		}
 	}
 
-	void NetActorOwnership::SeedOwner(int64_t actorUniqueID, uint8_t ownerPeerId) {
-		s_SeededOwners.emplace(actorUniqueID, ownerPeerId);
+	void NetActorOwnership::SeedOwner(int64_t actorUniqueID, uint8_t ownerPeerId, uint8_t team) {
+		s_SeededOwners[actorUniqueID] = NetSeededActorOwner{ownerPeerId, team};
 	}
 
 	bool NetActorOwnership::HasSeededOwner(int64_t actorUniqueID) {
 		return s_SeededOwners.find(actorUniqueID) != s_SeededOwners.end();
 	}
 
-	uint8_t NetActorOwnership::GetSeededOwner(int64_t actorUniqueID) {
+	bool NetActorOwnership::HasSeededOwnerForTeam(int64_t actorUniqueID, uint8_t team) {
 		const auto found = s_SeededOwners.find(actorUniqueID);
-		return found != s_SeededOwners.end() ? found->second : uint8_t{0};
+		return found != s_SeededOwners.end() && found->second.team == team;
 	}
 
-	const std::map<int64_t, uint8_t>& NetActorOwnership::GetSeededOwners() {
+	uint8_t NetActorOwnership::GetSeededOwner(int64_t actorUniqueID) {
+		const auto found = s_SeededOwners.find(actorUniqueID);
+		return found != s_SeededOwners.end() ? found->second.ownerPeerId : uint8_t{0};
+	}
+
+	uint8_t NetActorOwnership::GetSeededOwnerTeam(int64_t actorUniqueID) {
+		const auto found = s_SeededOwners.find(actorUniqueID);
+		return found != s_SeededOwners.end() ? found->second.team : uint8_t{0};
+	}
+
+	const std::map<int64_t, NetSeededActorOwner>& NetActorOwnership::GetSeededOwners() {
 		return s_SeededOwners;
 	}
 
-	void NetActorOwnership::RestoreSeededOwners(std::map<int64_t, uint8_t> owners) {
+	void NetActorOwnership::RestoreSeededOwners(std::map<int64_t, NetSeededActorOwner> owners) {
 		s_SeededOwners = std::move(owners);
 	}
 
@@ -47,7 +57,7 @@ namespace RTE {
 	uint8_t NetActorOwnership::ResolveOwnerPeer(const NetMatchConfig& config, const NetActorOwnershipQuery& query) {
 		// An actor the world already seeded keeps that owner; only an unseeded query reads the policy.
 		if (const auto seeded = s_SeededOwners.find(query.actorUniqueID); seeded != s_SeededOwners.end()) {
-			return seeded->second;
+			return seeded->second.ownerPeerId;
 		}
 		switch (config.ownershipPolicy) {
 			case NetActorOwnershipPolicy::UniqueIdModPeerCount: {

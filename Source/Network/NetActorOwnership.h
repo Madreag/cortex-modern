@@ -20,20 +20,32 @@ namespace RTE {
 		uint32_t unassignedActors = 0;
 	};
 
+	/// An actor's owner as the world seeded it, with the team it was resolved at.
+	struct NetSeededActorOwner {
+		uint8_t ownerPeerId = 0;
+		uint8_t team = 0;
+	};
+
 	class NetActorOwnership {
 	public:
 		static uint8_t ResolveOwnerPeer(const NetMatchConfig& config, const NetActorOwnershipQuery& query);
 
-		/// Records the owner an actor was resolved to when it entered the world. The policy reads this
-		/// first afterwards, so a control-mode change cannot move frame production under a live actor.
+		/// Records the owner an actor was resolved to when it entered the world, and the team it was
+		/// resolved at. The policy reads this first afterwards, so a control-mode change cannot move
+		/// frame production under a live actor.
 		/// @param actorUniqueID The actor's unique id.
 		/// @param ownerPeerId The peer that owns it from now on.
-		static void SeedOwner(int64_t actorUniqueID, uint8_t ownerPeerId);
+		/// @param team The team the owner was resolved at.
+		static void SeedOwner(int64_t actorUniqueID, uint8_t ownerPeerId, uint8_t team);
 		static bool HasSeededOwner(int64_t actorUniqueID);
+		/// @return Whether the actor's seeded owner was taken at this team.
+		static bool HasSeededOwnerForTeam(int64_t actorUniqueID, uint8_t team);
 		/// @return The seeded owner, or 0 if the actor has no entry.
 		static uint8_t GetSeededOwner(int64_t actorUniqueID);
-		static const std::map<int64_t, uint8_t>& GetSeededOwners();
-		static void RestoreSeededOwners(std::map<int64_t, uint8_t> owners);
+		/// @return The team the seeded owner was taken at, or 0 if the actor has no entry.
+		static uint8_t GetSeededOwnerTeam(int64_t actorUniqueID);
+		static const std::map<int64_t, NetSeededActorOwner>& GetSeededOwners();
+		static void RestoreSeededOwners(std::map<int64_t, NetSeededActorOwner> owners);
 		static void ClearSeededOwners();
 
 		/// Resolves which peer is allowed to issue economy commands (funds, deploy, delivery) for a team:
