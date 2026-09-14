@@ -278,7 +278,9 @@ void GUILabel::EnsureDrawableTextFont(const std::string& fontFile) {
 	GUIFont* fallback = nullptr;
 	for (char c : m_Text) {
 		const unsigned char index = static_cast<unsigned char>(c);
-		if (index > 32 && !m_SkinFont->HasGlyphPixels(index)) {
+		// High bytes count as uncovered even when the skin font has ink there:
+		// FontLarge's high cells are HUD icons, so labels must not draw them.
+		if (index > 32 && (index >= 0x80 || !m_SkinFont->HasGlyphPixels(index))) {
 			if (!fallback) {
 				fallback = m_Skin->GetFont(fontFile);
 			}

@@ -35,6 +35,7 @@ compared.
 """
 
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 import re
@@ -220,6 +221,64 @@ def main():
                     checks[f"row{i}_single_line"] = len(row_bands) == 1
                     checks[f"row{i}_no_top_clip"] = (counts[0] + counts[1]) <= 8
                     checks[f"row{i}_no_bottom_clip"] = (counts[14] + counts[15]) <= 8
+
+                # The 64-byte cp1252 name (0xC0 cells): the large font's high
+                # cells hold HUD icons, so the name must come from the fallback
+                # font - no icon ink (icon red / near-white), the dimmed warm
+                # dominant ink, and the blank gap column each fallback cell keeps.
+                hi_row = next((i for i in range(4)
+                               if (details.get(f"row{i}_text") or "").startswith("À")), None)
+                details["high_byte_row"] = hi_row
+                checks["high_byte_row_found"] = hi_row is not None
+                if hi_row is not None:
+                    hy0 = top + ROW_Y0 + ROW_STEP * hi_row
+                    hx0 = left + row_x
+                    icon_red = icon_white = 0
+                    ink_cols = set()
+                    for dy in range(ROW_H):
+                        for dx in range(row_w):
+                            p = px[hx0 + dx, hy0 + dy]
+                            if near(p, PANEL_GRAY, 14):
+                                continue
+                            ink_cols.add(dx)
+                            if p[0] > 150 and p[1] < 80:
+                                icon_red += 1
+                            if p[0] >= 240 and p[1] >= 240 and p[2] >= 240:
+                                icon_white += 1
+                    details["high_byte_icon_ink"] = {"red": icon_red, "white": icon_white}
+                    checks["high_byte_no_icon_ink"] = icon_red == 0 and icon_white == 0
+                    if ink_cols:
+                        lo, hi = min(ink_cols), max(ink_cols)
+                        blanks = {dx for dx in range(lo, hi + 1)
+                                  if all(near(px[hx0 + dx, hy0 + dy], PANEL_GRAY, 14)
+                                         for dy in range(ROW_H))}
+                        # The name run ends at the first gap of 4+ blank columns
+                        # (the " - " break); the histogram is measured inside it.
+                        name_hi = hi
+                        for dx in sorted(blanks):
+                            if all(dx + k in blanks for k in range(4)):
+                                name_hi = dx - 1
+                                break
+                        gaps = sum(1 for dx in range(lo, name_hi + 1) if dx in blanks)
+                        warm = Counter(tuple(px[hx0 + dx, hy0 + dy])
+                                       for dx in range(lo, name_hi + 1) if dx not in blanks
+                                       for dy in range(ROW_H))
+                        warm = Counter({c: n for c, n in warm.items()
+                                        if c[0] > c[1] > c[2] and c[0] > 60})
+                        dom = warm.most_common(1)[0][0] if warm else None
+                        details["high_byte_run"] = {"x0": hx0 + lo, "x1": hx0 + name_hi,
+                                                    "blank_columns": gaps,
+                                                    "dominant_warm": dom}
+                        checks["high_byte_fallback_dimmed"] = (
+                            gaps >= 16 and dom is not None and dom[0] < 200)
+                        crop = im.crop((max(0, hx0 + lo - 4), hy0 - 2,
+                                        min(w, hx0 + name_hi + 5), hy0 + ROW_H + 2))
+                        zoom_path = root / "highbytes-zoom.png"
+                        crop.resize((crop.width * 4, crop.height * 4), Image.NEAREST).save(zoom_path)
+                        details["high_bytes_zoom"] = str(zoom_path)
+                    else:
+                        details["high_byte_run"] = None
+                        checks["high_byte_fallback_dimmed"] = False
 
                 # The Players header must ride with the rows: its leftmost ink
                 # pixel lands within 0..16 px right of the rows' box left edge.
