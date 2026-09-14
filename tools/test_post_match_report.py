@@ -120,7 +120,7 @@ def menu_script(who, port):
                "assert_label LabelLastMatchSummary Host, Guest\ndump_lobby\n")
     script += ("wait_remote_ready\nwait_all_ready\nactivate ButtonMultiplayerStart\n" if who == "Host" else
                "activate ButtonMultiplayerReady\n")
-    script += ("wait_state Running 120\nassert_label LabelLastMatchSummary\nassert_label LabelLastMatchDetails\n"
+    script += ("wait_state Running 120\nassert_label LabelLastMatchDetails\n"
                "wait_state Starting 240\nwait 20\nassert_substate Lobby\n"
                "assert_label LabelLastMatchSummary Last match: draw\n"
                "assert_label LabelLastMatchSummary 00:02\nwait_ms 3000\nexit\n")
@@ -164,16 +164,19 @@ def run_size(repo, root, size, port, expected):
             checks[who + "_launched"] = "[menu-mp] launching the match" in log
             checks[who + "_ended"] = "NETWORK: Match complete" in console
             checks[who + "_two_rounds"] = log.count("[menu-mp] launching the match") == 2
-            checks[who + "_cleared_on_start"] = all(any(name == alias and text == "" and status == "PASS" for name, text, status in labels)
-                                                    for alias in ("LabelLastMatchSummary", "LabelLastMatchDetails"))
+            clear_observations = re.findall(r'^\[menu-mp\] report at launch summary="([^"\n]*)" details="([^"\n]*)" retained=(\d+)$', log, re.M)
+            checks[who + "_cleared_on_start"] = (clear_observations == [("", "", "0"), ("", "", "0")] and
+                                                  any(name == "LabelLastMatchDetails" and text == "" and status == "PASS" for name, text, status in labels))
             checks[who + "_assertions"] = not failures and len(labels) >= 14 and all(status == "PASS" for _, _, status in labels)
-            details[who] = {"failures": failures, "labels": labels, "record": record, "console_path": str(console_path)}
+            details[who] = {"failures": failures, "labels": labels, "record": record, "console_path": str(console_path),
+                            "clear_observations": clear_observations}
             report_path = root / f"{who}_report.json"
             report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}
             summary = report.get("last_match", report.get("service", {}).get("last_match"))
             details[who]["summary"] = summary
             checks[who + "_summary"] = bool(summary and summary["running_ticks"] == TICKS and summary["winner_team"] == -1 and
                                            [peer["name"] for peer in summary["peers"]] == ["Host", "Guest"])
+            checks[who + "_pace_is_last_round"] = bool(summary and summary["pace"]["sim_ticks"] == TICKS)
             checks[who + "_peer_details"] = bool(summary and len(announced_delays) == 2 and all(
                 peer["input_delay"] == announced_delays.get(peer["name"]) and any(
                     name == "LabelLastMatchDetails" and f'{peer["name"]} | team {peer["team"] + 1} | seat {peer["seat"]} | delay {peer["input_delay"]}' in text
