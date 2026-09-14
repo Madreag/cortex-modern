@@ -394,6 +394,8 @@ namespace RTE {
 		void EndAdmissionSession();
 		void ResetRosterTransitionHistory();
 		void RecordRosterTransitions(uint64_t observedAtMs);
+		/// Publishes a successful local host action to the presentation sink; caller holds the lock.
+		void RecordModerationAction(uint16_t stableSeat, NetModerationAction action);
 		/// Runs the §11 automatic-retry schedule from the service's own state. Game thread only.
 		void DriveReconnectUx(uint64_t nowMs);
 		/// Elapsed milliseconds since this session began, for every admission deadline.
