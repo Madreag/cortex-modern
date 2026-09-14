@@ -2031,6 +2031,9 @@ void MainMenuGUI::MaybeLaunchMultiplayerActivity() {
 	}
 	m_LastMatchSummaryLabel->SetText("");
 	m_LastMatchDetailsLabel->SetText("");
+	std::cout << "[menu-mp] report at launch summary=\"" << m_LastMatchSummaryLabel->GetText()
+	          << "\" details=\"" << m_LastMatchDetailsLabel->GetText() << "\" retained="
+	          << (g_NetMatchService.GetLastMatchSummary().has_value() ? 1 : 0) << std::endl;
 	// A joiner whose lobby round carried a live match's snapshot launches from it instead.
 	if (g_NetMatchService.HasPendingResyncLoad()) {
 		std::string stageError;
