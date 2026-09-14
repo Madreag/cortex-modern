@@ -6242,6 +6242,62 @@ _PrimitiveQueueCapture = nil
 		previewLateScriptLoadLeavesStatesAsFound = staged && loaded == 0 && cursorKept && bindingsKept && graphsKept && hostGone;
 		g_LuaMan.SetScriptStateCursor(cursorBefore);
 	}
+	// A pie slice reloads its own script file inside the window, so the cached function objects must come back with the globals.
+	{
+		const std::string reloadPath = g_PresetMan.GetFullModulePath("Tests.rte/PreviewCompat.lua");
+		const std::string reloadFunction = "Update";
+		std::unordered_map<std::string, LuabindObjectWrapper*> primed;
+		const bool cached = RunScriptFileAndRetrieveFunctions(reloadPath, {reloadFunction}, primed, false) == 0 && primed.count(reloadFunction) > 0;
+		for (const auto& [name, function]: primed) {
+			delete function;
+		}
+		std::vector<std::string> graphsBefore;
+		std::vector<std::string> graphsAfter;
+		std::vector<std::string> problems;
+		const bool observed = g_MovableMan.SerializeScriptGraphs(graphsBefore, problems);
+		int reloaded = -99;
+		LuaMan::CapturePreviewSelfCopies({}, false);
+		{
+			LuaMan::PreviewHookScope hookScope(true);
+			std::unordered_map<std::string, LuabindObjectWrapper*> reloadedFunctions;
+			reloaded = RunScriptFileAndRetrieveFunctions(reloadPath, {reloadFunction}, reloadedFunctions, true);
+			for (const auto& [name, function]: reloadedFunctions) {
+				delete function;
+			}
+		}
+		const bool fenced = PreviewGlobalFenceArmed();
+		LuaMan::EndPreviewScripts();
+		g_LuaMan.CollectGarbageForCheckpoint();
+		const bool graphsKept = observed && g_MovableMan.SerializeScriptGraphs(graphsAfter, problems) && graphsAfter == graphsBefore;
+		// One function, not the window's copy in the cache and the original in the globals.
+		bool sameFunction = false;
+		auto entry = m_ScriptCache.find(reloadPath);
+		if (entry != m_ScriptCache.end()) {
+			const auto function = entry->second.functionNamesAndObjects.find(reloadFunction);
+			if (function != entry->second.functionNamesAndObjects.end()) {
+				const int top = lua_gettop(m_State);
+				lua_getglobal(m_State, reloadPath.c_str());
+				if (lua_istable(m_State, -1)) {
+					lua_getfield(m_State, -1, reloadFunction.c_str());
+					function->second->GetLuabindObject()->push(m_State);
+					sameFunction = lua_rawequal(m_State, -1, -2) != 0;
+				}
+				lua_settop(m_State, top);
+			}
+		}
+		std::cout << "[preview-late-script-reload] cached=" << cached << " fenced=" << fenced << " reloaded=" << reloaded
+		          << " graphs_kept=" << graphsKept << " same_function=" << sameFunction << " graph_problems=" << problems.size() << std::endl;
+		previewLateScriptLoadLeavesStatesAsFound = cached && fenced && reloaded == 0 && graphsKept && sameFunction && previewLateScriptLoadLeavesStatesAsFound;
+		// Leave the cache and the globals as this arm found them.
+		if (entry != m_ScriptCache.end()) {
+			for (const auto& [name, function]: entry->second.functionNamesAndObjects) {
+				delete function;
+			}
+			m_ScriptCache.erase(entry);
+		}
+		lua_pushnil(m_State);
+		lua_setglobal(m_State, reloadPath.c_str());
+	}
 	std::cout << "[script-graph-selftest] " << (previewLateScriptLoadLeavesStatesAsFound ? "PASS" : "FAIL") << " preview_late_script_load_leaves_states_as_found" << std::endl;
 	checkpointValues = previewLateScriptLoadLeavesStatesAsFound && checkpointValues;
 	const std::string report = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
@@ -6953,8 +7009,14 @@ bool LuaStateWrapper::RetrieveFunctions(const std::string& funcObjectName, const
 	}
 
 	auto& newScript = m_ScriptCache[funcObjectName.c_str()];
-	for (auto& pair: newScript.functionNamesAndObjects) {
-		delete pair.second;
+	// A reload inside a preview window sets the state's own function objects aside, so the release can put them back.
+	if (m_PreviewGlobalFenceArmed && m_PreviewScriptCacheKeys.count(funcObjectName) > 0 &&
+	    m_PreviewScriptCacheHeld.count(funcObjectName) == 0) {
+		m_PreviewScriptCacheHeld.emplace(funcObjectName, std::move(newScript.functionNamesAndObjects));
+	} else {
+		for (auto& pair: newScript.functionNamesAndObjects) {
+			delete pair.second;
+		}
 	}
 	newScript.functionNamesAndObjects.clear();
 	for (const std::string& functionName: functionNamesToLookFor) {
@@ -8383,6 +8445,7 @@ void LuaStateWrapper::CapturePreviewGlobalFence() {
 		"_ScriptGraphProgress", "_ScriptFieldsStash"
 	};
 	m_PreviewScriptCacheKeys.clear();
+	m_PreviewScriptCacheHeld.clear();
 	for (const auto& [path, cached]: m_ScriptCache) {
 		m_PreviewScriptCacheKeys.insert(path);
 	}
@@ -8399,6 +8462,22 @@ int LuaStateWrapper::ReleasePreviewGlobalFence() {
 	}
 	m_PreviewGlobalFenceArmed = false;
 	int changes = static_cast<int>(luaJIT_preview_end(m_State));
+	// The cache holds function objects the Lua heap no longer names, so the window's own go and the held ones come back.
+	for (auto& [path, held]: m_PreviewScriptCacheHeld) {
+		auto cached = m_ScriptCache.find(path);
+		if (cached == m_ScriptCache.end()) {
+			for (const auto& [name, function]: held) {
+				delete function;
+			}
+			continue;
+		}
+		for (const auto& [name, function]: cached->second.functionNamesAndObjects) {
+			delete function;
+		}
+		cached->second.functionNamesAndObjects = std::move(held);
+		++changes;
+	}
+	m_PreviewScriptCacheHeld.clear();
 	for (auto entry = m_ScriptCache.begin(); entry != m_ScriptCache.end();) {
 		if (m_PreviewScriptCacheKeys.count(entry->first) > 0) {
 			++entry;
