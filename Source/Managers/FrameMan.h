@@ -217,6 +217,7 @@ namespace RTE {
 		/// @param color What color to flash it. -1 means no color or flash.
 		/// @param periodMS How long a period to fill the frame with color. If 0, a single-frame flash will happen.
 		void FlashScreen(int screen, int color, float periodMS = 0) {
+			if (screen < 0 || screen >= c_MaxScreenCount) return;
 			m_FlashScreenColor[screen] = color;
 			m_FlashTimer[screen].SetRealTimeLimitMS(periodMS);
 			m_FlashTimer[screen].Reset();
@@ -253,12 +254,12 @@ namespace RTE {
 		/// Gets whether or not the HUD is disabled for a given screen.
 		/// @param screenId The screen to check for.
 		/// @return True if in given screen's HUD is disabled.
-		bool IsHudDisabled(int screenId = 0) const { return m_HUDDisabled[screenId]; }
+		bool IsHudDisabled(int screenId = 0) const { return screenId >= 0 && screenId < c_MaxScreenCount && m_HUDDisabled[screenId]; }
 
 		/// Sets whether or not the HUD is disabled for a given screen.
 		/// @param value Whether the HUD should be disabled.
 		/// @param screenId The screen to set for.
-		void SetHudDisabled(bool value, int screenId = 0) { m_HUDDisabled[screenId] = value; }
+		void SetHudDisabled(bool value, int screenId = 0) { if (screenId >= 0 && screenId < c_MaxScreenCount) m_HUDDisabled[screenId] = value; }
 
 #pragma region Palette Routines
 		/// Loads a palette from a bitmap file and sets it as the currently used screen palette.

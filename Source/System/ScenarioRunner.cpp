@@ -992,6 +992,11 @@ namespace RTE {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().localPeerId : 0;
 	}
 
+	const NetMatchConfig* ScenarioRunner::GetLockstepMatchConfig() {
+		return s_LockstepCoordinator && !s_LockstepCoordinator->GetConfig().matchConfig.players.empty()
+			? &s_LockstepCoordinator->GetConfig().matchConfig : nullptr;
+	}
+
 	bool ScenarioRunner::IsLockstepPaused() {
 		return s_LockstepPaused;
 	}

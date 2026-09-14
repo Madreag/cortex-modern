@@ -1,4 +1,5 @@
 #include "CheckpointArchive.h"
+#include "Constants.h"
 #include "OwnedMovableObjects.h"
 #include "MovableMan.h"
 #include "NetA7Journal.h"
@@ -209,7 +210,7 @@ namespace {
 AlarmEvent::AlarmEvent(const Vector& pos, int team, float range) :
 	m_ScenePos(pos),
 	m_Team((Activity::Teams)team),
-	m_Range(range * g_FrameMan.GetPlayerScreenWidth() * 0.51F) {}
+	m_Range(range * c_DefaultResX * 0.51F) {}
 
 const std::string MovableMan::c_ClassName = "MovableMan";
 
@@ -285,17 +286,26 @@ void MovableMan::RecordA7UnitOwnership(uint64_t round, uint64_t frame) const {
 	if (!NetA7Journal::Enabled()) return;
 	if (Activity* activity = g_ActivityMan.GetActivity()) {
 		const auto uid = [](const Actor* actor) { return actor && g_MovableMan.IsActor(actor) ? static_cast<int64_t>(actor->GetUniqueID()) : int64_t{0}; };
-		Actor* controlled = activity->GetControlledActor(Players::PlayerOne);
-		const int screen = activity->ScreenOfPlayer(Players::PlayerOne);
+		const int player = activity->PlayerOfScreen(0);
+		Actor* controlled = activity->GetControlledActor(player);
+		const int screen = activity->ScreenOfPlayer(player);
 		json view = {{"round_id", round}, {"frame", frame}, {"peer_id", ScenarioRunner::GetLockstepLocalPeerId()},
-			{"player_active", activity->PlayerActive(Players::PlayerOne)}, {"player_human", activity->PlayerHuman(Players::PlayerOne)},
-			{"team", activity->GetTeamOfPlayer(Players::PlayerOne)}, {"screen", screen},
-			{"controlled_uid", uid(controlled)}, {"brain_uid", uid(activity->GetPlayerBrain(Players::PlayerOne))},
-			{"view_state", static_cast<int>(activity->GetViewState())}, {"camera_target", nullptr},
-			{"seat_mode", nullptr}, {"seat_player", nullptr}};
+			{"player_index", player}, {"input_player", activity->LocalInputOfPlayer(player)},
+			{"player_controller_input", activity->GetPlayerController(player) ? activity->GetPlayerController(player)->GetInputPlayer() : Activity::NoPlayer},
+			{"player_active", activity->PlayerActive(player)}, {"player_human", activity->IsLocalHumanSeat(player)},
+			{"team", player >= 0 ? activity->GetTeamOfPlayer(player) : Activity::NoTeam}, {"screen", screen},
+			{"controlled_uid", uid(controlled)}, {"brain_uid", uid(activity->GetPlayerBrain(player))},
+			{"view_state", static_cast<int>(player >= 0 ? activity->GetViewState(player) : Activity::Observe)}, {"camera_target", nullptr},
+			{"seat_mode", nullptr}, {"seat_player", nullptr}, {"controller_input", nullptr}, {"seat_facts", json::array()}};
 		if (uid(controlled) != 0) {
 			view["seat_mode"] = static_cast<int>(controlled->GetController()->GetSeatMode());
 			view["seat_player"] = controlled->GetController()->GetSeatPlayer();
+			view["controller_input"] = controlled->GetController()->GetInputPlayer();
+		}
+		for (int seat = Activity::PlayerOne; seat < Activity::MaxPlayerCount; ++seat) {
+			view["seat_facts"].push_back({{"player", seat}, {"active", activity->IsSeatActive(seat)},
+				{"human", activity->IsHumanSeat(seat)}, {"team", activity->GetTeamOfPlayer(seat)},
+				{"brain_uid", uid(activity->GetPlayerBrain(seat))}, {"input", activity->LocalInputOfPlayer(seat)}, {"screen", activity->ScreenOfPlayer(seat)}});
 		}
 		if (screen >= 0) {
 			const Vector target = g_CameraMan.GetScrollTarget(screen);
@@ -3116,6 +3126,43 @@ Actor* MovableMan::GetClosestOtherBrainActor(int notOfTeam, const Vector& sceneP
 	return static_cast<Actor*>(ViewIfSpeculating(pClosestBrain));
 }
 
+bool MovableMan::IsPlayerBrain(const Actor* actor) const {
+	return actor && m_PlayerBrainIDs.contains(actor->GetUniqueID());
+}
+
+bool MovableMan::HasPlayerBrainOfTeam(int team) {
+	for (long uid: m_PlayerBrainIDs) {
+		const Actor* actor = dynamic_cast<const Actor*>(FindObjectByUniqueID(uid));
+		if (actor && actor->GetTeam() == team) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void MovableMan::NotePlayerBrain(long uniqueID, bool isBrain) {
+	if (uniqueID <= 0) {
+		return;
+	}
+	if (isBrain) {
+		m_PlayerBrainIDs.insert(uniqueID);
+	} else {
+		m_PlayerBrainIDs.erase(uniqueID);
+	}
+}
+
+Actor* MovableMan::GetUnassignedBrainByID(int team) const {
+	if (team < Activity::TeamOne || team >= Activity::MaxTeamCount) return nullptr;
+	Actor* brain = nullptr;
+	const auto consider = [&](Actor* candidate) {
+		if (candidate->GetTeam() == team && !candidate->IsDead() && candidate->HasObjectInGroup("Brains") &&
+			!g_ActivityMan.GetActivity()->IsAssignedBrain(candidate) && (!brain || candidate->GetUniqueID() < brain->GetUniqueID())) brain = candidate;
+	};
+	for (Actor* actor: m_ActorRoster[team]) consider(actor);
+	for (Actor* actor: m_AddedActors) consider(actor);
+	return static_cast<Actor*>(ViewIfSpeculating(brain));
+}
+
 Actor* MovableMan::GetUnassignedBrain(int team) const {
 	if (/*m_Actors.empty() || */ m_ActorRoster[team].empty())
 		return 0;
@@ -5216,11 +5263,13 @@ namespace {
 		std::map<long, std::pair<int, int>> actorOwners; // Actor -> its seeded owner and the team that owner was seeded at.
 		std::array<int, Activity::MaxTeamCount> teamMOIDCount{};
 		std::array<std::set<long>, 3> validObjects;
-		// A WorldStructure1 payload predates the owner map and carries no owners field.
-		template <class Archive> void Fields(Archive& archive, bool legacy = false) {
+		std::set<long> playerBrains; // The actors human players depend on as their brains.
+		// A WorldStructure1 payload predates the owner map, a WorldStructure2 payload the brain record.
+		template <class Archive> void Fields(Archive& archive, int version = 3) {
 			archive(cohorts, rosters, sortRoster, alarms, quarantine, moidIndex, contiguousActorIDs);
-			if (!legacy) archive(actorOwners);
+			if (version >= 2) archive(actorOwners);
 			archive(teamMOIDCount, validObjects);
+			if (version >= 3) archive(playerBrains);
 		}
 	};
 }
@@ -5251,18 +5300,25 @@ std::string MovableMan::SaveWorldStructure() const {
 	};
 	for (const Actor* actor: m_Actors) saveOwner(actor);
 	for (const Actor* actor: m_AddedActors) saveOwner(actor);
+	// Same rule for the brain record: only a live actor's entry travels.
+	const auto saveBrain = [this, &state](const Actor* actor) {
+		if (m_PlayerBrainIDs.contains(actor->GetUniqueID())) state.playerBrains.insert(actor->GetUniqueID());
+	};
+	for (const Actor* actor: m_Actors) saveBrain(actor);
+	for (const Actor* actor: m_AddedActors) saveBrain(actor);
 	for (const AlarmEvent* event: m_AlarmEvents) state.alarms[0].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	for (const AlarmEvent* event: m_AddedAlarmEvents) state.alarms[1].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	state.quarantine = m_LockstepJoinQuarantine;
-	CheckpointWriter writer("WorldStructure2"); state.Fields(writer); return writer.Text();
+	CheckpointWriter writer("WorldStructure3"); state.Fields(writer); return writer.Text();
 }
 
 bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 	try {
 		WorldStructure state;
-		// A game saved before the owner map keeps loading; its owners are re-derived from the policy.
-		const bool legacy = text.starts_with("15 WorldStructure1 ");
-		CheckpointReader reader(text, legacy ? "WorldStructure1" : "WorldStructure2"); state.Fields(reader, legacy); reader.Finish();
+		// A game saved before the owner map or the brain record keeps loading; the missing fields stay empty.
+		const int version = text.starts_with("15 WorldStructure1 ") ? 1 : (text.starts_with("15 WorldStructure2 ") ? 2 : 3);
+		const char* tag = version == 1 ? "WorldStructure1" : (version == 2 ? "WorldStructure2" : "WorldStructure3");
+		CheckpointReader reader(text, tag); state.Fields(reader, version); reader.Finish();
 		std::set<long> incoming;
 		for (const auto& cohort: state.cohorts) for (long uid: cohort) {
 			if (uid <= 0 || !incoming.insert(uid).second) throw std::runtime_error("invalid or duplicate world member");
@@ -5309,6 +5365,9 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 			if (team < 0 || team > 255) throw std::runtime_error("owner entry names no team");
 			owners.emplace(static_cast<int64_t>(uid), NetSeededActorOwner{static_cast<uint8_t>(owner), static_cast<uint8_t>(team)});
 		}
+		for (long uid: state.playerBrains) {
+			if (!actor(uid)) throw std::runtime_error("player brain entry names no live actor");
+		}
 		// Allocate the incoming events before changing any live membership.
 		std::array<std::vector<std::unique_ptr<AlarmEvent>>, 2> events;
 		for (int group = 0; group < 2; ++group) for (const auto& [position, detail]: state.alarms[group]) {
@@ -5328,6 +5387,14 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 			m_ActorRoster[team].swap(rosters[team]); m_SortTeamRoster[team] = state.sortRoster[team]; m_TeamMOIDCount[team] = state.teamMOIDCount[team];
 		}
 		m_MOIDIndex.swap(index); m_ContiguousActorIDs.swap(contiguous); m_LockstepJoinQuarantine.swap(state.quarantine);
+		// The record decides which brains the players depend on, not what this peer's seats found at start.
+		m_PlayerBrainIDs.swap(state.playerBrains);
+		// A payload from before the record carries none, so re-seed it the way the assignment would have.
+		if (version < 3) {
+			if (Activity* activity = g_ActivityMan.GetActivity()) {
+				activity->RecordSeatedPlayerBrains();
+			}
+		}
 		NetActorOwnership::RestoreSeededOwners(std::move(owners));
 		// A restored tick can be reached again after a resync or a rematch; claims made past it must not decide a later tie.
 		s_LockstepFrameClaims.clear();
@@ -5345,6 +5412,25 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 	}
 }
 
+bool MovableMan::RunLegacyBrainRecordSelfTest(const Actor* seatBrain) {
+	if (!seatBrain) {
+		return false;
+	}
+	const std::string current = SaveWorldStructure();
+	WorldStructure live;
+	try {
+		CheckpointReader reader(current, "WorldStructure3"); live.Fields(reader); reader.Finish();
+	} catch (const std::exception&) {
+		return false;
+	}
+	bool reseeded = true;
+	for (int version = 1; version <= 2; ++version) {
+		CheckpointWriter writer(version == 1 ? "WorldStructure1" : "WorldStructure2"); live.Fields(writer, version);
+		reseeded = reseeded && LoadWorldStructure(writer.Text()) && IsPlayerBrain(seatBrain);
+	}
+	return LoadWorldStructure(current) && reseeded;
+}
+
 bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	if (!craft) return false;
 	if (m_Actors.empty()) {
@@ -5360,19 +5446,46 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	const bool cleared = RemoveActor(craft) == craft && GetContiguousActorID(craft) < 0;
 
 	const std::string text = SaveWorldStructure();
-	const bool tagged = text.starts_with("15 WorldStructure2 ");
+	const bool tagged = text.starts_with("15 WorldStructure3 ");
 	bool archived = false;
 	bool roundTripped = false;
 	try {
 		WorldStructure parsed;
-		CheckpointReader reader(text, "WorldStructure2"); parsed.Fields(reader); reader.Finish();
+		CheckpointReader reader(text, "WorldStructure3"); parsed.Fields(reader); reader.Finish();
 		const std::set<long> live(parsed.cohorts[0].begin(), parsed.cohorts[0].end());
 		archived = parsed.contiguousActorIDs.size() == m_ContiguousActorIDs.size() && !parsed.contiguousActorIDs.contains(craftUID);
 		for (const auto& entry: parsed.contiguousActorIDs) archived = archived && live.contains(entry.first);
-		CheckpointWriter rewriter("WorldStructure2"); parsed.Fields(rewriter);
+		CheckpointWriter rewriter("WorldStructure3"); parsed.Fields(rewriter);
 		roundTripped = rewriter.Text() == text;
 	} catch (const std::exception&) {
 	}
+
+	// The brain record travels with the world: note a live actor, save, drop it, and read it back from the record.
+	Actor* const recordActor = m_Actors.empty() ? nullptr : m_Actors.front();
+	const long recordUID = recordActor ? recordActor->GetUniqueID() : 0;
+	const bool recordWasBrain = recordActor && IsPlayerBrain(recordActor);
+	bool brainArchived = false;
+	bool brainRestored = false;
+	if (recordActor) {
+		NotePlayerBrain(recordUID, true);
+		const std::string withBrain = SaveWorldStructure();
+		try {
+			WorldStructure parsed;
+			CheckpointReader reader(withBrain, "WorldStructure3"); parsed.Fields(reader); reader.Finish();
+			brainArchived = parsed.playerBrains.contains(recordUID) && parsed.playerBrains.size() == m_PlayerBrainIDs.size();
+		} catch (const std::exception&) {
+		}
+		NotePlayerBrain(recordUID, false);
+		brainRestored = !IsPlayerBrain(recordActor) && LoadWorldStructure(withBrain) && IsPlayerBrain(recordActor);
+		NotePlayerBrain(recordUID, recordWasBrain);
+	}
+	// One human seat and one AI seat: only the human seat's brain is recorded; the legacy load and the
+	// last-ditch placement have to reach the record too.
+	bool brainLegacyReseeded = false;
+	bool brainLastDitch = false;
+	const bool brainSeats = g_ActivityMan.GetActivity() && recordActor && m_Actors.size() > 1 &&
+	                        g_ActivityMan.GetActivity()->RunPlayerBrainRecordSelfTest(recordActor, m_Actors[1], &brainLegacyReseeded, &brainLastDitch);
+	const bool sharedSeats = Activity::RunSharedSeatSelfTest();
 
 	// The shape the crashed resync archives carried: an index entry for an actor the world does not have.
 	WorldStructure clean;
@@ -5382,9 +5495,9 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	orphaned.contiguousActorIDs.emplace(0, 5);
 	WorldStructure stale = clean;
 	stale.contiguousActorIDs.emplace(4242, 5);
-	CheckpointWriter cleanWriter("WorldStructure2"); clean.Fields(cleanWriter);
-	CheckpointWriter orphanedWriter("WorldStructure2"); orphaned.Fields(orphanedWriter);
-	CheckpointWriter staleWriter("WorldStructure2"); stale.Fields(staleWriter);
+	CheckpointWriter cleanWriter("WorldStructure3"); clean.Fields(cleanWriter);
+	CheckpointWriter orphanedWriter("WorldStructure3"); orphaned.Fields(orphanedWriter);
+	CheckpointWriter staleWriter("WorldStructure3"); stale.Fields(staleWriter);
 	const bool accepted = LoadWorldStructure(text, true) && LoadWorldStructure(cleanWriter.Text(), true);
 	const bool refused = !LoadWorldStructure(orphanedWriter.Text(), true) && !LoadWorldStructure(staleWriter.Text(), true);
 
@@ -5394,14 +5507,22 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	};
 	CheckpointWriter legacyWriter("WorldStructure1"); writeLegacyFields(clean, legacyWriter);
 	CheckpointWriter legacyTrailingWriter("WorldStructure1"); writeLegacyFields(clean, legacyTrailingWriter); legacyTrailingWriter.Value(7);
-	CheckpointWriter unknownWriter("WorldStructure3"); clean.Fields(unknownWriter);
+	CheckpointWriter trailingWriter("WorldStructure3"); clean.Fields(trailingWriter); trailingWriter.Value(7);
+	CheckpointWriter unknownWriter("WorldStructure4"); clean.Fields(unknownWriter);
 	// The layout the owner map first shipped as: owners under the old tag, which no reader can tell apart.
 	WorldStructure owned = clean;
 	owned.actorOwners.emplace(1001, std::pair{2, 1});
-	CheckpointWriter intermediateWriter("WorldStructure1"); owned.Fields(intermediateWriter);
-	const bool legacyAccepted = LoadWorldStructure(legacyWriter.Text(), true);
-	const bool legacyRefused = !LoadWorldStructure(legacyTrailingWriter.Text(), true) && !LoadWorldStructure(unknownWriter.Text(), true) &&
-	                           !LoadWorldStructure(intermediateWriter.Text(), true);
+	CheckpointWriter intermediateWriter("WorldStructure1"); owned.Fields(intermediateWriter, 2);
+	// The same mistake for the brain record: the new field carried under the tag before it.
+	WorldStructure brained = clean;
+	brained.playerBrains.insert(1001);
+	CheckpointWriter intermediateBrainWriter("WorldStructure2"); brained.Fields(intermediateBrainWriter, 3);
+	// A game saved before the brain record: owners, no brains.
+	CheckpointWriter legacyOwnersWriter("WorldStructure2"); owned.Fields(legacyOwnersWriter, 2);
+	const bool legacyAccepted = LoadWorldStructure(legacyWriter.Text(), true) && LoadWorldStructure(legacyOwnersWriter.Text(), true);
+	const bool legacyRefused = !LoadWorldStructure(legacyTrailingWriter.Text(), true) && !LoadWorldStructure(trailingWriter.Text(), true) &&
+	                           !LoadWorldStructure(unknownWriter.Text(), true) && !LoadWorldStructure(intermediateWriter.Text(), true) &&
+	                           !LoadWorldStructure(intermediateBrainWriter.Text(), true);
 
 	auto plantAdded = [this](Actor* actor, int id) {
 		if (!actor) {
@@ -5453,11 +5574,14 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 
 	AddActor(craft);
 	const bool passed = indexed && cleared && archived && roundTripped && tagged && accepted && refused && legacyAccepted && legacyRefused &&
+	                    brainArchived && brainRestored && brainSeats && sharedSeats && brainLegacyReseeded && brainLastDitch &&
 	                    addedRemoveCleared && absorbDeleteCleared && discardAddedCleared;
 	std::cout << "[contiguous-index-selftest] " << (passed ? "PASS" : "FAIL") << " indexed=" << indexed << " cleared=" << cleared
 	          << " archived=" << archived << " round_trip=" << roundTripped << " tagged=" << tagged
 	          << " accepted=" << accepted << " refused=" << refused
 	          << " legacy=" << legacyAccepted << " legacy_refused=" << legacyRefused
+	          << " brain_archived=" << brainArchived << " brain_restored=" << brainRestored << " brain_seats=" << brainSeats << " shared_seats=" << sharedSeats
+	          << " brain_legacy_reseeded=" << brainLegacyReseeded << " brain_lastditch=" << brainLastDitch
 	          << " added_remove=" << addedRemoveCleared << " absorb_delete=" << absorbDeleteCleared
 	          << " discard_added=" << discardAddedCleared << std::endl;
 	return passed;

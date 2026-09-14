@@ -45,7 +45,7 @@ namespace RTE {
 		/// Gets the offset (scroll position) of the terrain.
 		/// @param screenId Which screen you want to get the offset of.
 		/// @return The offset for the given screen.
-		Vector GetOffset(int screenId = 0) const { return m_Screens[screenId].Offset; }
+		Vector GetOffset(int screenId = 0) const { return IsValidScreen(screenId) ? m_Screens[screenId].Offset : Vector(); }
 
 		/// Render-rate offset interpolated between last sim tick's value and the current one. Snaps to current across seam wraps to avoid lerping the camera across the whole map.
 		Vector GetRenderOffset(int screenId = 0) const;
@@ -57,7 +57,7 @@ namespace RTE {
 
 		/// Gets the difference in current offset and that of the Update() before.
 		/// @return The delta offset in pixels.
-		Vector GetDeltaOffset(int screenId = 0) const { return m_Screens[screenId].DeltaOffset; }
+		Vector GetDeltaOffset(int screenId = 0) const { return IsValidScreen(screenId) ? m_Screens[screenId].DeltaOffset : Vector(); }
 
 		/// Gets the offset (scroll position) of the terrain, without taking wrapping into account.
 		/// @param screenId Which screen you want to get the offset of.
@@ -73,24 +73,24 @@ namespace RTE {
 		/// Gets the team associated with a specific screen.
 		/// @param screenId Which screen you want to get the team of.
 		/// @return The team associated with the screen.
-		int GetScreenTeam(int screenId = 0) const { return m_Screens[screenId].ScreenTeam; }
+		int GetScreenTeam(int screenId = 0) const { return IsValidScreen(screenId) ? m_Screens[screenId].ScreenTeam : -1; }
 
 		/// Sets the team associated with a specific screen.
 		/// @param team The team to set the screen to.
 		/// @param screenId Which screen you want to set the team of.
-		void SetScreenTeam(int team, int screenId = 0) { m_Screens[screenId].ScreenTeam = team; }
+		void SetScreenTeam(int team, int screenId = 0) { if (IsValidScreen(screenId)) m_Screens[screenId].ScreenTeam = team; }
 
 		/// Gets the amount that a specific screen is occluded by a GUI panel or something of the sort.
 		/// This will affect how the scroll target translates into the offset of the screen, in order to keep the target centered on the screen.
 		/// @param screenId Which screen you want to get the team of.
 		/// @return A vector indicating the screen occlusion amount.
-		Vector& GetScreenOcclusion(int screenId = 0) { return m_Screens[screenId].ScreenOcclusion; }
+		Vector& GetScreenOcclusion(int screenId = 0);
 
 		/// Sets the amount that a specific screen is occluded by a GUI panel or something of the sort.
 		/// This will affect how the scroll target translates into the offset of the screen, in order to keep the target centered on the screen.
 		/// @param occlusion The amount of occlusion of the screen.
 		/// @param screenId Which screen you want to set the occlusion of.
-		void SetScreenOcclusion(const Vector& occlusion, int screenId = 0) { m_Screens[screenId].ScreenOcclusion = occlusion; }
+		void SetScreenOcclusion(const Vector& occlusion, int screenId = 0) { if (IsValidScreen(screenId)) m_Screens[screenId].ScreenOcclusion = occlusion; }
 
 		/// Gets the currently set scroll target, i.e. where the center of the specific screen is trying to line up with.
 		/// @param screenId Which screen to get the target for.
@@ -166,17 +166,17 @@ namespace RTE {
 		/// Increases the magnitude of screen shake.
 		/// @param magnitude The amount of screen shake to add.
 		/// @param screenId Which screen you want to add screen-shake to.
-		void AddScreenShake(float magnitude, int screenId = 0) { m_Screens[screenId].ScreenShakeMagnitude += magnitude; }
+		void AddScreenShake(float magnitude, int screenId = 0) { if (IsValidScreen(screenId)) m_Screens[screenId].ScreenShakeMagnitude += magnitude; }
 
 		/// Sets the magnitude of screen shake.
 		/// @param magnitude The amount of screen shake.
 		/// @param screenId Which screen you want to set screen-shake for.
-		void SetScreenShake(float magnitude, int screenId = 0) { m_Screens[screenId].ScreenShakeMagnitude = magnitude; }
+		void SetScreenShake(float magnitude, int screenId = 0) { if (IsValidScreen(screenId)) m_Screens[screenId].ScreenShakeMagnitude = magnitude; }
 
 		/// Applies screen shake to be at least magnitude.
 		/// @param magnitude The amount of screen shake.
 		/// @param screenId Which screen you want to set screen-shake for.
-		void ApplyScreenShake(float magnitude, int screenId = 0) { m_Screens[screenId].ScreenShakeMagnitude = std::max(magnitude, m_Screens[screenId].ScreenShakeMagnitude); }
+		void ApplyScreenShake(float magnitude, int screenId = 0) { if (IsValidScreen(screenId)) m_Screens[screenId].ScreenShakeMagnitude = std::max(magnitude, m_Screens[screenId].ScreenShakeMagnitude); }
 #pragma endregion
 
 #pragma region Concrete Methods
@@ -185,6 +185,7 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		static bool IsValidScreen(int screenId) { return screenId >= 0 && screenId < c_MaxScreenCount; }
 
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_ScreenShakeStrength, self.m_ScreenShakeDecay, self.m_MaxScreenShakeTime, self.m_DefaultShakePerUnitOfGibEnergy,
