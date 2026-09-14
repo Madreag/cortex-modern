@@ -1,6 +1,7 @@
 #include "GUI.h"
 
 #include <cassert>
+#include <map>
 
 using namespace RTE;
 
@@ -107,6 +108,36 @@ bool GUIFont::Load(GUIScreen* Screen, const std::string& Filename) {
 	return true;
 }
 
+unsigned long GUIFont::InkOf(GUIBitmap* Bitmap) {
+	std::map<GUIBitmap*, unsigned long>::const_iterator cached = m_InkOfBitmap.find(Bitmap);
+	if (cached != m_InkOfBitmap.end()) {
+		return cached->second;
+	}
+	// The colour glyphs actually draw in: the dominant non-background,
+	// non-separator pixel of the active bitmap (recolour may be a no-op).
+	const unsigned long BackG = Bitmap->GetPixel(Bitmap->GetWidth() - 1, 0);
+	const unsigned long Red = Bitmap->GetPixel(0, 0);
+	std::map<unsigned long, int> inkCount;
+	for (int y = 0; y < Bitmap->GetHeight(); y++) {
+		for (int x = 0; x < Bitmap->GetWidth(); x++) {
+			const unsigned long Pixel = Bitmap->GetPixel(x, y);
+			if (Pixel != BackG && Pixel != Red) {
+				inkCount[Pixel]++;
+			}
+		}
+	}
+	unsigned long ink = m_MainColor;
+	int best = 0;
+	for (const std::pair<const unsigned long, int>& Entry : inkCount) {
+		if (Entry.second > best) {
+			best = Entry.second;
+			ink = Entry.first;
+		}
+	}
+	m_InkOfBitmap[Bitmap] = ink;
+	return ink;
+}
+
 GUIFont* GUIFont::GlyphFontFor(unsigned char Character, GUIFont* GlyphFallback) {
 	if (GlyphFallback && !m_GlyphCovered[Character] && Character < GlyphFallback->m_CharIndexCap && GlyphFallback->m_GlyphCovered[Character]) {
 		return GlyphFallback;
@@ -154,25 +185,22 @@ void GUIFont::Draw(GUIBitmap* Bitmap, int X, int Y, const std::string& Text, uns
 		int offX = glyphFont->m_Characters[c].m_Offset;
 		int offY = ((c - 32) / 16) * glyphFont->m_FontHeight;
 		SetRect(&Rect, offX, offY, offX + CharWidth, offY + glyphFont->m_FontHeight);
+		// A smaller fallback cell sits on this font's line bottom, not its top.
+		const int glyphY = glyphFont == this ? Y : Y + m_FontHeight - glyphFont->m_FontHeight;
 
 		// Draw the shadow
 		if (Shadow && FSC) {
 			if (glyphFont == this) {
 				FSC->m_Bitmap->DrawTrans(Bitmap, X + 1, Y + 1, &Rect);
 			} else {
-				FontColor* GFSC = glyphFont->GetFontColor(Shadow);
-				if (!GFSC) {
-					glyphFont->CacheColor(Shadow);
-					GFSC = glyphFont->GetFontColor(Shadow);
-				}
-				if (GFSC) {
-					GFSC->m_Bitmap->DrawTrans(Bitmap, X + 1, Y + 1, &Rect);
-				}
+				glyphFont->InkColorBitmap(Shadow)->DrawTrans(Bitmap, X + 1, glyphY + 1, &Rect);
 			}
 		}
 
-		// Draw the main color
-		glyphFont->m_CurrentBitmap->DrawTrans(Bitmap, X, Y, &Rect);
+		// Fallback glyphs take the ink the primary glyphs actually draw in - the
+		// dominant colour of the active bitmap (a cached recolour may be a no-op).
+		GUIBitmap* glyphSurf = glyphFont == this ? m_CurrentBitmap : glyphFont->InkColorBitmap(InkOf(m_CurrentBitmap));
+		glyphSurf->DrawTrans(Bitmap, X, glyphY, &Rect);
 
 		// Find the starting position
 		X += CharWidth + m_Kerning;
@@ -399,6 +427,37 @@ void GUIFont::CacheColor(unsigned long Color) {
 
 	// Add the color to the list
 	m_ColorCache.push_back(FC);
+}
+
+GUIBitmap* GUIFont::InkColorBitmap(unsigned long Color) {
+	for (FontColor& FC : m_InkColorCache) {
+		if (FC.m_Color == Color) {
+			return FC.m_Bitmap;
+		}
+	}
+	if (!Color) {
+		return m_CurrentBitmap;
+	}
+	FontColor FC;
+	FC.m_Color = Color;
+	FC.m_Bitmap = m_Screen->CreateBitmap(m_Font->GetWidth(), m_Font->GetHeight());
+	if (!FC.m_Bitmap) {
+		return m_CurrentBitmap;
+	}
+	m_Font->Draw(FC.m_Bitmap, 0, 0, nullptr);
+	const unsigned long BackG = FC.m_Bitmap->GetPixel(FC.m_Bitmap->GetWidth() - 1, 0);
+	const unsigned long Red = FC.m_Bitmap->GetPixel(0, 0);
+	FC.m_Bitmap->SetColorKey(BackG);
+	for (int y = 0; y < FC.m_Bitmap->GetHeight(); y++) {
+		for (int x = 0; x < FC.m_Bitmap->GetWidth(); x++) {
+			const unsigned long Pixel = FC.m_Bitmap->GetPixel(x, y);
+			if (Pixel != BackG && Pixel != Red) {
+				FC.m_Bitmap->SetPixel(x, y, Color);
+			}
+		}
+	}
+	m_InkColorCache.push_back(FC);
+	return m_InkColorCache.back().m_Bitmap;
 }
 
 GUIFont::FontColor* GUIFont::GetFontColor(unsigned long Color) {
