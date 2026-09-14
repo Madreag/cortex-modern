@@ -467,7 +467,7 @@ namespace RTE {
 				    !checkEdit({"technology module", [i](auto& c) { c.teamRules[i].technologyModule = "Dummy.rte"; }}) ||
 				    !checkEdit({"AI skill", [i](auto& c) { ++c.teamRules[i].aiSkill; }})) return false;
 			}
-			for (const uint32_t gold : {0U, 30000U, NetMatchConfigUtil::c_InfiniteGold}) {
+			for (const uint32_t gold : {0U, 29999U, NetMatchConfigUtil::c_InfiniteGold}) {
 				config.startingGold = gold;
 				if (!RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
 			}
@@ -486,7 +486,8 @@ namespace RTE {
 			std::cout << "[net-match-selftest] PASS rules_hash_sensitivity" << std::endl;
 			const std::vector<Edit> invalid = {
 				{"round", [](auto& c) { c.roundId = 0; }}, {"revision", [](auto& c) { c.configRevision = 0; }},
-				{"difficulty", [](auto& c) { c.difficulty = 101; }}, {"gold", [](auto& c) { c.startingGold = 30001; }},
+				{"difficulty", [](auto& c) { c.difficulty = 101; }}, {"gold slider top", [](auto& c) { c.startingGold = 30000; }},
+				{"gold above slider", [](auto& c) { c.startingGold = 30001; }},
 				{"module path", [](auto& c) { c.activityModule = "../Base.rte"; }}, {"scene module", [](auto& c) { c.sceneModule = "Maps"; }},
 				{"empty scene", [](auto& c) { c.sceneName.clear(); }}, {"empty class", [](auto& c) { c.activityType.clear(); }},
 				{"module control", [](auto& c) { c.activityModule = "Bad\n.rte"; }},

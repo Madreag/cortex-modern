@@ -83,6 +83,7 @@ namespace RTE {
 	class NetMatchConfigUtil {
 	public:
 		static constexpr uint16_t c_Version = 3;
+		static constexpr uint32_t c_MaxFiniteStartingGold = 29999;
 		static constexpr uint32_t c_InfiniteGold = 1000000000;
 		static constexpr uint8_t c_MinPeerCount = 2;
 		static constexpr uint8_t c_MaxPeerCount = 4;
