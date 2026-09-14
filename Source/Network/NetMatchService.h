@@ -17,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -150,7 +151,9 @@ namespace RTE {
 		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		uint16_t inputDelayFrames = 0; // Lockstep input-delay buffer; the host picks it, the client agrees at the start handshake.
 		bool autoInputDelay = false; // Host: raise the delay to cover the measured peer RTT (the manual value stays the floor).
-		uint8_t peerCount = 2; // Total players (2..4); the host listens for peerCount-1 clients.
+		uint8_t peerCount = 2; // Connected peers (2..4), including a dedicated host.
+		std::optional<uint32_t> humans; // Omitted seats every available human peer.
+		std::optional<uint32_t> cpuSlots; // Omitted keeps the mode's default CPU count.
 		NetMatchMode mode = NetMatchMode::PvPSkirmish; // Shapes the roster: PvP (a team per peer), co-op PvE (one shared team vs CPU), PvPvE (teams + CPU).
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
 		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
@@ -290,6 +293,7 @@ namespace RTE {
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
 		std::string BuildReportJson() const;
+		static bool BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId, NetMatchConfig& outConfig, std::string* error = nullptr);
 		/// Builds diagnostic identity on request; match startup supplies the cached join inputs.
 		bool RefreshDiagnosticIdentity(std::string* error = nullptr, double* buildMs = nullptr);
 		/// Returns the cached join inputs without reading settings, modules, or simulation state.
@@ -337,7 +341,6 @@ namespace RTE {
 		bool CanResyncLocked(std::string* error);
 		bool PrepareReceivedResync(const std::vector<uint8_t>& bytes, const NetLockstepCoordinator& coordinator, std::string& pendingLoad, NetResyncState& state, std::string* error, size_t* archiveBytes = nullptr);
 		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request) const;
-		NetMatchConfig BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const;
 		void SetState(NetMatchServiceState state, std::string status, std::string error = "");
 		/// Match end or the host leaving takes the directory row down now rather than at Destroy.
 		/// Game-thread only, like the client it drives.

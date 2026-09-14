@@ -288,9 +288,8 @@ namespace RTE {
 			NetMatchConfig noClients = dedicated;
 			noClients.players = {NetMatchPlayerSlot{0, 3, true, "CPU"}};
 			validationError.clear();
-			if (NetMatchConfigUtil::ValidateLocalAlpha(noClients, &validationError) ||
-			    validationError != "dedicated config has no client player slot") {
-				*error = "dedicated roster without a client slot did not fail closed: " + validationError;
+			if (!NetMatchConfigUtil::ValidateLocalAlpha(noClients, &validationError)) {
+				*error = "dedicated CPU roster was refused: " + validationError;
 				return false;
 			}
 			NetMatchConfig plain = MakeConfig();
@@ -315,6 +314,95 @@ namespace RTE {
 				*error = "the config report omitted dedicated=true";
 				return false;
 			}
+			return true;
+		}
+
+		bool TestCPURosterRequests(std::string* error) {
+			for (bool host : {false, true}) {
+				for (bool dedicated : {false, true}) {
+					for (NetMatchMode mode : {NetMatchMode::PvPSkirmish, NetMatchMode::CoopPvE, NetMatchMode::PvPvE}) {
+						NetMatchServiceRequest request;
+						request.host = host;
+						request.dedicated = dedicated;
+						request.peerCount = dedicated ? 3 : 2;
+						request.humans = 2;
+						request.cpuSlots = 2;
+						request.mode = mode;
+						NetMatchConfig config;
+						if (!NetMatchService::BuildMatchConfig(request, 123, config, error)) return false;
+						const uint8_t firstCPU = mode == NetMatchMode::CoopPvE ? 1 : 2;
+						if (config.players.size() != 4 || config.mode != mode ||
+						    config.players[0].peerId != (dedicated ? 2 : 1) || config.players[0].cpu ||
+						    config.players[1].team != (mode == NetMatchMode::CoopPvE ? 0 : 1) ||
+						    config.players[2] != NetMatchPlayerSlot{0, firstCPU, true, "CPU 1"} ||
+						    config.players[3] != NetMatchPlayerSlot{0, static_cast<uint8_t>(firstCPU + 1), true, "CPU 2"}) {
+							*error = "authored CPU roster differs: " + NetMatchConfigUtil::BuildReportJson(config);
+							return false;
+						}
+						if (!RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
+						request.humans = request.peerCount + 1;
+						std::string reason;
+						if (NetMatchService::BuildMatchConfig(request, 123, config, &reason) || reason != "human seats exceed peer capacity") {
+							*error = "human capacity refusal differs: " + reason;
+							return false;
+						}
+					}
+				}
+				NetMatchServiceRequest request;
+				request.host = host;
+				request.peerCount = 4;
+				request.mode = NetMatchMode::PvPvE;
+				NetMatchConfig config;
+				std::string reason;
+				if (NetMatchService::BuildMatchConfig(request, 123, config, &reason) || reason != "four-human PvPvE exceeds team capacity") {
+					*error = "four-human PvPvE refusal differs: " + reason;
+					return false;
+				}
+				request.humans = 0;
+				request.cpuSlots = 2;
+				if (NetMatchService::BuildMatchConfig(request, 123, config, &reason) || reason != "zero human seats require a dedicated host") {
+					*error = "zero-human refusal differs: " + reason;
+					return false;
+				}
+				request.dedicated = true;
+				if (!NetMatchService::BuildMatchConfig(request, 123, config, error) || config.peerCount != 1 || config.players.size() != 2 ||
+				    !RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
+			}
+			std::cout << "[net-match-selftest] PASS cpu_roster_requests" << std::endl;
+			return true;
+		}
+
+		bool TestCPURosterValidation(std::string* error) {
+			NetMatchConfig config = MakeConfig();
+			config.players.push_back({0, 2, true, "CPU 1"});
+			config.players.push_back({0, 3, true, "CPU 2"});
+			if (!RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
+			for (const auto& [team, expected] : std::vector<std::pair<uint8_t, std::string>>{
+			         {0, "cpu slot shares a human team"}, {2, "duplicate cpu team"}, {4, "player team is out of range"}}) {
+				NetMatchConfig invalid = config;
+				invalid.players.back().team = team;
+				for (bool host : {true, false}) {
+					std::string reason;
+					NetLobbySession lobby;
+					LoopbackTransport transport;
+					NetLobbySessionConfig setup;
+					setup.host = host;
+					setup.localPeerId = host ? 1 : 2;
+					setup.remotePeerId = host ? 2 : 1;
+					setup.remoteTransportPeerId = 1;
+					setup.matchConfig = invalid;
+					if (lobby.Start(transport, setup, &reason) || reason != expected) {
+						*error = "CPU roster refusal differs on " + std::string(host ? "host: " : "client: ") + reason;
+						return false;
+					}
+				}
+			}
+			const auto report = nlohmann::json::parse(NetMatchConfigUtil::BuildReportJson(config));
+			if (std::count_if(report["players"].begin(), report["players"].end(), [](const auto& slot) { return slot["cpu"] == true; }) != 2) {
+				*error = "config report lost CPU flags";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS cpu_roster_validation" << std::endl;
 			return true;
 		}
 
@@ -6748,6 +6836,8 @@ namespace RTE {
 		std::string error;
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
 		if (!TestMatchConfigDedicated(&error)) return fail(error);
+		if (!TestCPURosterRequests(&error)) return fail(error);
+		if (!TestCPURosterValidation(&error)) return fail(error);
 		if (!TestReplayCommandSenders(&error)) return fail(error);
 		if (!TestOwnershipPolicies(&error)) return fail(error);
 		if (!TestLockstepCoordinatorUsesMatchOwnership(&error)) return fail(error);

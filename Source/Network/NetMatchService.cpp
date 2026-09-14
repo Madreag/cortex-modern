@@ -293,6 +293,13 @@ static std::string ResyncSaveName() {
 			if (error) *error = "join address must not be empty";
 			return false;
 		}
+		NetMatchConfig matchConfig;
+		std::string configError;
+		if (!BuildMatchConfig(request, c_UiSessionId, matchConfig, &configError)) {
+			if (error) *error = configError;
+			SetState(NetMatchServiceState::Failed, "Match roster refused", configError);
+			return false;
+		}
 
 		g_TimerMan.SetDeltaTimeSecs(c_DefaultDeltaTimeS);
 		NetIdentityManifest manifest;
@@ -336,7 +343,7 @@ static std::string ResyncSaveName() {
 			m_LocalPeerId = request.host ? 1 : 2;
 			m_LocalTeam = request.dedicated ? Activity::NoTeam : (request.host ? 0 : 1);
 			m_Dedicated = request.dedicated;
-			m_HumanSeats = request.dedicated ? std::max(0, static_cast<int>(request.peerCount) - 1) : static_cast<int>(request.peerCount);
+			m_HumanSeats = static_cast<int>(std::count_if(matchConfig.players.begin(), matchConfig.players.end(), [](const auto& slot) { return !slot.cpu; }));
 			m_InputDelayText.clear();
 			m_ResyncOnDesync = request.resyncOnDesync;
 			m_PendingResyncLoad.clear();
@@ -345,7 +352,6 @@ static std::string ResyncSaveName() {
 			m_LocalName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
 			m_JoinRefusedByLiveMatch = false;
 			if (request.host) {
-				const NetMatchConfig matchConfig = BuildMatchConfig(request, c_UiSessionId);
 				m_DirectoryRow.name = m_LocalName;
 				m_DirectoryRow.activity = matchConfig.activityPreset;
 				m_DirectoryRow.scene = matchConfig.sceneName;
@@ -837,7 +843,7 @@ static std::string ResyncSaveName() {
 						break;
 					}
 				}
-				m_HumanSeats = roster.dedicated ? std::max(0, static_cast<int>(roster.peerCount) - 1) : static_cast<int>(roster.peerCount);
+				m_HumanSeats = static_cast<int>(std::count_if(roster.players.begin(), roster.players.end(), [](const auto& slot) { return !slot.cpu; }));
 				if (m_IsHost) {
 					// The beacon and the directory row take their counts from these at the next pump.
 					m_BeaconMaxPlayers = static_cast<uint8_t>(std::max(1, m_HumanSeats));
@@ -2517,7 +2523,8 @@ static std::string ResyncSaveName() {
 		runnerConfig.host = request.host;
 		runnerConfig.joinAddress = request.host ? "" : request.address;
 		runnerConfig.sessionConfig = BuildSessionConfig(manifest, request);
-		runnerConfig.matchConfig = BuildMatchConfig(request, runnerConfig.sessionConfig.sessionId);
+		std::string error;
+		bool started = BuildMatchConfig(request, runnerConfig.sessionConfig.sessionId, runnerConfig.matchConfig, &error);
 		runnerConfig.autoInputDelay = request.autoInputDelay;
 		runnerConfig.useLobbyProtocol = true;
 		// Wait patiently for the other player to connect (host listening / client retrying), not the 15s default.
@@ -2572,9 +2579,7 @@ static std::string ResyncSaveName() {
 
 		AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest);
 
-		std::string error;
-		bool started = true;
-		if (iceWanted) {
+		if (started && iceWanted) {
 			started = SetUpIceTransport(request, manifest, *mux, runnerConfig.sessionConfig, runnerConfig.joinAddress, &error);
 #ifdef CCCP_WITH_GNS
 			if (started && m_Dispatcher) {
@@ -2604,7 +2609,7 @@ static std::string ResyncSaveName() {
 			if (started) {
 				// The lockstep peer id is the session-assigned id + 1; the team comes from that slot.
 				const uint8_t localLockstepId = static_cast<uint8_t>(session->GetLocalPeerId() + 1);
-				int localTeam = m_LocalTeam;
+				int localTeam = Activity::NoTeam;
 				for (const NetMatchPlayerSlot& slot : runner->GetMatchConfig().players) {
 					if (slot.peerId == localLockstepId) {
 						localTeam = slot.team;
@@ -2888,11 +2893,18 @@ static std::string ResyncSaveName() {
 		return config;
 	}
 
-	NetMatchConfig NetMatchService::BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const {
-		const uint8_t peerCount = std::clamp<uint8_t>(request.peerCount, NetMatchConfigUtil::c_MinPeerCount, NetMatchConfigUtil::c_MaxPeerCount);
-		const uint8_t humanCount = request.dedicated ? static_cast<uint8_t>(peerCount - 1) : peerCount;
-		// PvPvE gives the CPU the team after the humans', so it fits three human teams at most.
-		const NetMatchMode mode = (request.mode == NetMatchMode::PvPvE && humanCount >= 4) ? NetMatchMode::PvPSkirmish : request.mode;
+	bool NetMatchService::BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId, NetMatchConfig& outConfig, std::string* error) {
+		auto refuse = [&](const char* reason) { if (error) *error = reason; return false; };
+		if (request.peerCount < NetMatchConfigUtil::c_MinPeerCount || request.peerCount > NetMatchConfigUtil::c_MaxPeerCount) return refuse("peer_count is out of range");
+		const uint32_t capacity = request.peerCount - (request.dedicated ? 1 : 0);
+		const uint32_t humanCount = request.humans.value_or(capacity);
+		const NetMatchMode mode = request.mode;
+		const uint32_t cpuCount = request.cpuSlots.value_or(mode == NetMatchMode::PvPSkirmish ? 0 : 1);
+		if (humanCount > capacity) return refuse("human seats exceed peer capacity");
+		if (humanCount == 0 && !request.dedicated) return refuse("zero human seats require a dedicated host");
+		if (mode == NetMatchMode::PvPvE && humanCount == Teams::MaxTeamCount) return refuse("four-human PvPvE exceeds team capacity");
+		const uint32_t firstCPUTeam = mode == NetMatchMode::CoopPvE ? 1 : humanCount;
+		if (cpuCount > Teams::MaxTeamCount || firstCPUTeam + cpuCount > Teams::MaxTeamCount) return refuse("CPU seats exceed team capacity");
 		NetMatchConfig config = NetMatchConfigUtil::MakeDefault(sessionId);
 		config.activityPreset = request.activityPreset.empty() ? "P4 Alpha Duel" : request.activityPreset;
 		config.sceneName = "Grasslands";
@@ -2900,15 +2912,12 @@ static std::string ResyncSaveName() {
 		config.modePreset = NetMatchConfigUtil::ModeName(mode);
 		config.ownershipPolicy = request.ownershipPolicy;
 		config.inputDelayFrames = request.inputDelayFrames;
-		config.peerCount = peerCount;
+		config.peerCount = humanCount == 0 ? 1 : request.peerCount;
 		config.dedicated = request.dedicated;
-		// The host authors the roster; clients adopt it via the lobby config sync. PvP seats one team
-		// per peer; co-op PvE seats every human on team 0; PvPvE keeps per-peer teams. A dedicated host
-		// seats peers 2..peerCount instead, so peer 1 stays the seatless lockstep host. The PvE modes
-		// add a peerless CPU slot whose team the host's AI drives over the wire.
+		// CPU teams follow human teams and consume no peer identity.
 		config.players.clear();
 		const uint8_t firstHumanPeer = request.dedicated ? 2 : 1;
-		for (uint8_t peerId = firstHumanPeer; peerId <= peerCount; ++peerId) {
+		for (uint8_t peerId = firstHumanPeer; peerId < firstHumanPeer + humanCount; ++peerId) {
 			NetMatchPlayerSlot slot;
 			slot.peerId = peerId;
 			slot.team = mode == NetMatchMode::CoopPvE ? 0 : static_cast<uint8_t>(peerId - firstHumanPeer);
@@ -2917,15 +2926,17 @@ static std::string ResyncSaveName() {
 			                                               : ("Client " + std::to_string(peerId));
 			config.players.push_back(slot);
 		}
-		if (mode == NetMatchMode::CoopPvE || mode == NetMatchMode::PvPvE) {
+		for (uint32_t cpu = 0; cpu < cpuCount; ++cpu) {
 			NetMatchPlayerSlot cpuSlot;
 			cpuSlot.peerId = 0;
-			cpuSlot.team = mode == NetMatchMode::CoopPvE ? 1 : humanCount;
+			cpuSlot.team = static_cast<uint8_t>(firstCPUTeam + cpu);
 			cpuSlot.cpu = true;
-			cpuSlot.displayName = "CPU";
+			cpuSlot.displayName = cpuCount == 1 ? "CPU" : "CPU " + std::to_string(cpu + 1);
 			config.players.push_back(cpuSlot);
 		}
-		return config;
+		if (!NetMatchConfigUtil::ValidateLocalAlpha(config, error)) return false;
+		outConfig = std::move(config);
+		return true;
 	}
 
 	void NetMatchService::SetState(NetMatchServiceState state, std::string status, std::string error) {
