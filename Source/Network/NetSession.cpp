@@ -95,7 +95,7 @@ namespace RTE {
 			m_State = NetSessionState::Failed;
 			return false;
 		}
-		m_State = NetSessionState::Listening;
+		m_State = m_Config.readyWithoutPeers ? NetSessionState::Ready : NetSessionState::Listening;
 		m_StateStartedMs = m_NowMs;
 		if (NetA7Journal::Enabled()) NetA7Journal::Session("listening", m_NowMs, {{"port", m_Config.port}});
 		return true;
@@ -1362,10 +1362,12 @@ namespace RTE {
 		const bool hasHandshake = std::any_of(m_Peers.begin(), m_Peers.end(), [](const PeerState& peer) {
 			return peer.state == NetSessionState::Handshake;
 		});
+		// A round with no remote seat has everyone it needs the moment it is hosted.
+		const NetSessionState idleState = m_Config.readyWithoutPeers ? NetSessionState::Ready : NetSessionState::Listening;
 		const NetSessionState nextState = hasReady ? NetSessionState::Ready :
 		                                  hasAccepted ? NetSessionState::Accepted :
 		                                  hasHandshake ? NetSessionState::Handshake :
-		                                  NetSessionState::Listening;
+		                                  idleState;
 		if (m_State != nextState) {
 			m_State = nextState;
 			m_StateStartedMs = m_NowMs;

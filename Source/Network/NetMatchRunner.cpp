@@ -62,6 +62,8 @@ namespace RTE {
 		}
 
 		NetSessionConfig sessionConfig = config.sessionConfig;
+		// A one-peer roster has no remote to wait for: the host is the whole round.
+		sessionConfig.readyWithoutPeers = config.host && m_MatchConfig.peerCount == 1;
 		const bool sessionStarted = config.host
 			? session.StartHost(transport, std::move(sessionConfig), error)
 			: session.StartClient(transport, config.joinAddress, std::move(sessionConfig), error);
