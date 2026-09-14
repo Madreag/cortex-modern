@@ -6,6 +6,7 @@
 #include "GUI.h"
 #include "GUICollectionBox.h"
 #include "GUICheckbox.h"
+#include "GUIComboBox.h"
 #include "GUILabel.h"
 #include "GUISlider.h"
 
@@ -21,8 +22,7 @@ SettingsMiscGUI::SettingsMiscGUI(GUIControlManager* parentControlManager) :
 	m_ShowToolTipsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxShowToolTips"));
 	m_ShowToolTipsCheckbox->SetCheck(g_SettingsMan.ShowToolTips());
 
-	m_ShowMatchStatusCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxShowMatchStatus"));
-	m_ShowMatchStatusCheckbox->SetCheck(g_SettingsMan.ShowMatchStatus());
+	CreateMatchStatusWidgetCombo();
 
 	m_ShowLoadingScreenProgressReportCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxShowLoadingScreenProgressReport"));
 	m_ShowLoadingScreenProgressReportCheckbox->SetCheck(!g_SettingsMan.GetLoadingScreenProgressReportDisabled());
@@ -74,8 +74,6 @@ void SettingsMiscGUI::HandleInputEvents(GUIEvent& guiEvent) {
 			g_SettingsMan.SetSkipIntro(m_SkipIntroCheckbox->GetCheck());
 		} else if (guiEvent.GetControl() == m_ShowToolTipsCheckbox) {
 			g_SettingsMan.SetShowToolTips(m_ShowToolTipsCheckbox->GetCheck());
-		} else if (guiEvent.GetControl() == m_ShowMatchStatusCheckbox) {
-			g_SettingsMan.SetShowMatchStatus(m_ShowMatchStatusCheckbox->GetCheck());
 		} else if (guiEvent.GetControl() == m_ShowLoadingScreenProgressReportCheckbox) {
 			g_SettingsMan.SetLoadingScreenProgressReportDisabled(!m_ShowLoadingScreenProgressReportCheckbox->GetCheck());
 		} else if (guiEvent.GetControl() == m_ShowAdvancedPerfStatsCheckbox) {
@@ -92,5 +90,20 @@ void SettingsMiscGUI::HandleInputEvents(GUIEvent& guiEvent) {
 			g_SettingsMan.SetSceneBackgroundAutoScaleMode(m_SceneBackgroundAutoScaleSlider->GetValue());
 			UpdateSceneBackgroundAutoScaleLabel();
 		}
+	}
+	OnMatchStatusWidgetEvent(guiEvent);
+}
+
+void SettingsMiscGUI::CreateMatchStatusWidgetCombo() {
+	m_MatchStatusWidgetCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboMatchStatusWidget"));
+	m_MatchStatusWidgetCombo->AddItem("Off");
+	m_MatchStatusWidgetCombo->AddItem("Auto");
+	m_MatchStatusWidgetCombo->AddItem("Always");
+	m_MatchStatusWidgetCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkMatchStatusMode()));
+}
+
+void SettingsMiscGUI::OnMatchStatusWidgetEvent(GUIEvent& guiEvent) {
+	if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetControl() == m_MatchStatusWidgetCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
+		g_SettingsMan.SetNetworkMatchStatusMode(static_cast<SettingsMan::NetworkMatchStatusMode>(m_MatchStatusWidgetCombo->GetSelectedIndex()));
 	}
 }
