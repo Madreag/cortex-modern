@@ -274,6 +274,7 @@ static long s_netMatchE2EActorCensus = -1;
 static long s_netMatchE2EActorCensusPeak = -1; //!< The max actor count seen, so a transient heal double-spawn that later sheds back to normal is still visible.
 static uint64_t s_netMatchE2eSwitchControlTick = 0;
 static uint64_t s_netMatchE2eBrainDamageTick = 0;
+static uint64_t s_netMatchE2eBrainReseatTick = 0;
 static int64_t s_netMatchE2eSwitchUid = 0;
 static bool s_netMatchE2eSwitchIssued = false;
 static bool s_netMatchE2eSwitchHandedBack = false;
@@ -887,6 +888,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-e2e-brain-damage") {
 			s_netMatchE2eBrainDamageTick = std::strtoull(argValue[++i], nullptr, 10);
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-e2e-brain-reseat") {
+			s_netMatchE2eBrainReseatTick = std::strtoull(argValue[++i], nullptr, 10);
 			continue;
 		}
 
@@ -3564,6 +3570,30 @@ void RunGameLoop() {
 						target->AddDamage(2.0F / target->GetDamageMultiplier());
 						std::cout << "[net-match-service-e2e] brain-damage: tick=" << simTick << " team=" << team << " brain=" << brain->GetUniqueID()
 						          << " attachable=" << target->GetUniqueID() << " health=" << brain->GetHealth() << std::endl;
+					}
+				}
+
+				// Test control: the seating peer moves its seat to its team's LAST brain, the shape a script
+				// takes when a team has more than one brain and the seat is not at the first of them.
+				if (s_netMatchE2eBrainReseatTick > 0 && simTick == s_netMatchE2eBrainReseatTick && ScenarioRunner::IsLockstepControllerSyncActive()) {
+					if (Activity* activity = g_ActivityMan.GetActivity()) {
+						for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+							if (!activity->PlayerActive(player) || !activity->PlayerHuman(player)) {
+								continue;
+							}
+							const int team = activity->GetTeamOfPlayer(player);
+							Actor* lastBrain = nullptr;
+							for (Actor* actor: *g_MovableMan.GetTeamRoster(team)) {
+								if (actor->HasObjectInGroup("Brains")) {
+									lastBrain = actor;
+								}
+							}
+							if (lastBrain && lastBrain != activity->GetPlayerBrain(player)) {
+								std::cout << "[net-match-service-e2e] brain-reseat: tick=" << simTick << " team=" << team
+								          << " brain=" << lastBrain->GetUniqueID() << std::endl;
+								activity->SetPlayerBrain(lastBrain, player);
+							}
+						}
 					}
 				}
 
