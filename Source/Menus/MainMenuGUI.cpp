@@ -224,12 +224,8 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerLobbyPlayerLabels[3] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer3"));
 	m_MultiplayerLobbyPortMapLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPortMap"));
 
-	m_MultiplayerLobbyPlayerRowFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png");
-	for (GUILabel* label : m_MultiplayerLobbyPlayerLabels) {
-		if (label && m_MultiplayerLobbyPlayerRowFont) {
-			label->SetFont(m_MultiplayerLobbyPlayerRowFont);
-		}
-	}
+	m_MultiplayerLobbyPlayerRowFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontLarge.png");
+	m_MultiplayerLobbyPlayerRowFallbackFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png");
 
 	m_MultiplayerModerationSummaryLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationSummary"));
 	m_MultiplayerModerationStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationStatus"));
@@ -956,7 +952,7 @@ void MainMenuGUI::RefreshReconnectControls() {
 	}
 }
 
-void MainMenuGUI::FitMultiplayerPanelWidth(GUICollectionBox* panel, GUILabel* diagnosticLabel, int width) {
+void MainMenuGUI::FitMultiplayerPanelWidth(GUICollectionBox* panel, GUILabel* diagnosticLabel, int width, const std::vector<GUILabel*>& fillLabels) {
 	const int oldWidth = panel->GetWidth();
 	if (oldWidth == width) {
 		return;
@@ -968,7 +964,7 @@ void MainMenuGUI::FitMultiplayerPanelWidth(GUICollectionBox* panel, GUILabel* di
 		if (!child) {
 			continue;
 		}
-		if (child == diagnosticLabel) {
+		if (child == diagnosticLabel || std::find(fillLabels.begin(), fillLabels.end(), child) != fillLabels.end()) {
 			child->SetPositionRel(12, child->GetRelYPos());
 			control->Resize(width - 24, child->GetHeight());
 		} else {
@@ -1051,6 +1047,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		matchInfo += " - " + snapshot.modeName;
 	}
 	m_MultiplayerLobbyMatchLabel->SetText(matchInfo);
+	std::array<std::string, 4> lobbyRowName;
+	std::array<std::string, 4> lobbyRowTailFull;
+	std::array<std::string, 4> lobbyRowTailMarked;
+	int widestRowText = 0;
 	for (size_t i = 0; i < m_MultiplayerLobbyPlayerLabels.size(); ++i) {
 		GUILabel* label = m_MultiplayerLobbyPlayerLabels[i];
 		if (i >= snapshot.members.size()) {
@@ -1078,23 +1078,12 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			}
 			return tail;
 		};
-		const int rowWidth = label->GetWidth();
-		const auto fitRow = [this, rowWidth](const std::string& name, const std::string& tail) {
-			std::string row = name + tail;
-			if (!m_MultiplayerLobbyPlayerRowFont || m_MultiplayerLobbyPlayerRowFont->CalculateWidth(row) <= rowWidth) {
-				return row;
-			}
-			std::string trimmed = name;
-			while (!trimmed.empty() && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(trimmed + "\x85" + tail) > rowWidth) {
-				trimmed.pop_back();
-			}
-			return trimmed + "\x85" + tail;
-		};
-		std::string row = fitRow(member.displayName, buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine));
-		if (m_MultiplayerLobbyPlayerRowFont && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(row) > rowWidth) {
-			row = fitRow(member.displayName, buildTail(seatMark));
+		lobbyRowName[i] = member.displayName;
+		lobbyRowTailFull[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine);
+		lobbyRowTailMarked[i] = buildTail(seatMark);
+		if (m_MultiplayerLobbyPlayerRowFont) {
+			widestRowText = std::max(widestRowText, m_MultiplayerLobbyPlayerRowFont->CalculateWidth(lobbyRowName[i] + lobbyRowTailFull[i], m_MultiplayerLobbyPlayerRowFallbackFont));
 		}
-		label->SetText(row);
 		label->SetVisible(true);
 	}
 	static std::string s_shareAddress;
@@ -1134,9 +1123,36 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	const int portMapHeight = snapshot.portMap.empty() ? 0 : 14;
 	m_MultiplayerErrorLabel->SetText(GroupDelimiterForDisplay(snapshot.errorText));
 	m_MultiplayerErrorLabel->EnsureDrawableTextFont("FontSmall.png");
-	const int desiredWidth = std::max(300, m_MultiplayerErrorLabel->GetMaxWordWidth() + 24);
+	const int desiredWidth = std::max(300, std::max(m_MultiplayerErrorLabel->GetMaxWordWidth(), widestRowText) + 24);
 	const int contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
-	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth);
+	const std::vector<GUILabel*> playerRowLabels(m_MultiplayerLobbyPlayerLabels.begin(), m_MultiplayerLobbyPlayerLabels.end());
+	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth, playerRowLabels);
+	const int rowBoxWidth = contentWidth - 24;
+	for (size_t i = 0; i < lobbyRowName.size(); ++i) {
+		GUILabel* label = m_MultiplayerLobbyPlayerLabels[i];
+		if (!label || lobbyRowTailFull[i].empty()) {
+			continue;
+		}
+		const auto fitRow = [this, rowBoxWidth](const std::string& name, const std::string& tailFull, const std::string& tailMarked) {
+			const auto elide = [this, rowBoxWidth](const std::string& name, const std::string& tail) {
+				if (!m_MultiplayerLobbyPlayerRowFont || m_MultiplayerLobbyPlayerRowFont->CalculateWidth(name + tail, m_MultiplayerLobbyPlayerRowFallbackFont) <= rowBoxWidth) {
+					return name + tail;
+				}
+				std::string trimmed = name;
+				while (!trimmed.empty() && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(trimmed + "\x85" + tail, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
+					trimmed.pop_back();
+				}
+				return trimmed + "\x85" + tail;
+			};
+			std::string row = elide(name, tailFull);
+			if (m_MultiplayerLobbyPlayerRowFont && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(row, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
+				row = elide(name, tailMarked);
+			}
+			return row;
+		};
+		label->SetText(fitRow(lobbyRowName[i], lobbyRowTailFull[i], lobbyRowTailMarked[i]));
+		label->EnsureDrawableTextFont("FontSmall.png");
+	}
 	m_MultiplayerErrorLabel->SetPositionRel(12, 162 + portMapHeight);
 	const int backReserve = m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
 	const int errorRoom = std::max(24, g_WindowMan.GetResY() - backReserve - 250 + 24 - portMapHeight);
