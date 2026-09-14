@@ -499,6 +499,9 @@ namespace RTE {
 		/// unassigned brains of that team.
 		Actor* GetUnassignedBrain(int team = 0) const;
 
+		/// The unassigned live brain with the lowest unique ID, including pending actors.
+		Actor* GetUnassignedBrainByID(int team) const;
+
 		/// Gets the number of actors currently held.
 		/// @return The number of actors.
 		long GetActorCount() const { return m_Actors.size(); }

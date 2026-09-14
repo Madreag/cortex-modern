@@ -2087,7 +2087,7 @@ static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, 
 	const Actor* original = nullptr;
 	for (int player = Players::PlayerOne; activity && player < Players::MaxPlayerCount; ++player) {
 		if (Actor* actor = activity->GetControlledActor(player)) {
-			if (!original && activity->PlayerHuman(player)) {
+			if (!original && activity->IsLocalHumanSeat(player)) {
 				original = actor;
 			}
 			reach.emplace_back(actor, actor->GetItemInReach());
@@ -2463,7 +2463,7 @@ static void PreviewEventLedgerFrameOnTick() {
 	}
 	if (g_TimerMan.GetSimUpdateCount() == s_eventLedgerPressTick && s_eventLedgerLuaEmitterUID == 0) {
 		if (Activity* activity = g_ActivityMan.GetActivity()) {
-			if (Actor* actor = activity->GetControlledActor(Players::PlayerOne)) {
+			if (Actor* actor = activity->GetControlledActor(activity->PlayerOfScreen(0))) {
 				if (const AHuman* human = dynamic_cast<const AHuman*>(actor)) {
 					if (const HeldDevice* held = human->GetEquippedItem()) {
 						s_eventLedgerLuaPreset = held->GetPresetName();
@@ -3408,7 +3408,7 @@ void RunGameLoop() {
 				if (s_netMatchServiceE2E && s_netMatchE2eSwitchControlTick > 0 && ScenarioRunner::IsLockstepControllerSyncActive()) {
 					if (!s_netMatchE2eSwitchIssued && simTick == s_netMatchE2eSwitchControlTick) {
 						if (Activity* activity = g_ActivityMan.GetActivity()) {
-							const int player = Players::PlayerOne;
+							const int player = activity->PlayerOfScreen(0);
 							if (Actor* target = FindE2eSwitchControlTarget(activity, player)) {
 								s_netMatchE2eSwitchUid = static_cast<int64_t>(target->GetUniqueID());
 								activity->SwitchToActor(target, player, activity->GetTeamOfPlayer(player));
@@ -3420,7 +3420,7 @@ void RunGameLoop() {
 						}
 					} else if (s_netMatchE2eSwitchIssued && !s_netMatchE2eSwitchHandedBack && simTick == s_netMatchE2eSwitchControlTick + 10) {
 						if (Activity* activity = g_ActivityMan.GetActivity()) {
-							const int player = Players::PlayerOne;
+							const int player = activity->PlayerOfScreen(0);
 							if (Actor* brain = activity->GetPlayerBrain(player)) {
 								activity->SwitchToActor(brain, player, activity->GetTeamOfPlayer(player));
 								std::cout << "[net-match] e2e switch-control: hand-back at tick " << simTick << std::endl;
@@ -4722,7 +4722,7 @@ bool ConfigureNetMatchActivity(const std::string& activityPreset, int localTeam,
 	}
 	if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
 		gameActivity->ClearPlayers(false);
-		if (localTeam != Activity::NoTeam) {
+		if (!gameActivity->ConfigureLockstepPlayers() && localTeam != Activity::NoTeam) {
 			gameActivity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
 		}
 		// Activate every team in the synced roster so all peers run the identical team set.
