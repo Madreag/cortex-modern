@@ -576,6 +576,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				std::cout << "[net-match] buy order queued: team " << delivery->team << " cost " << delivery->cost << " funds " << fundsBefore << " -> " << activity->GetTeamFunds(delivery->team) << " items " << delivery->cargo.size() << std::endl;
 			} else {
 				// Load the manifest in order so both peers clone the same presets and assign matching unique ids.
+				int loaded = 0;
 				for (const NetGameCargoItem& item : delivery->cargo) {
 					const Entity* itemPreset = g_PresetMan.GetEntityPreset(item.className, item.preset, item.module);
 					if (!itemPreset) {
@@ -585,6 +586,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 					Entity* itemClone = itemPreset->Clone();
 					if (MovableObject* cargo = dynamic_cast<MovableObject*>(itemClone)) {
 						craft->AddInventoryItem(cargo);
+						++loaded;
 					} else {
 						delete itemClone;
 					}
@@ -595,6 +597,8 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				craft->SetAIMode(Actor::AIMODE_DELIVER);
 				craft->SetNetworkDelivery(true);
 				g_MovableMan.AddActor(craft);
+				// One line per applied delivery on every peer, so the peers' logs compare directly.
+				std::cout << "[net-match] deliver command host applied tick=" << readyFrame.frame << " team=" << delivery->team << " order=" << command.sequence << " items=" << loaded << " peer=" << static_cast<int>(command.senderPeerId) << std::endl;
 			}
 		} else if (const NetGameScuttleCraft* scuttle = std::get_if<NetGameScuttleCraft>(&command.payload)) {
 			// Set the scuttle AI mode on every peer so the gib (which runs in both peers' ungated physics) matches.
