@@ -4862,16 +4862,22 @@ void LuaStateWrapper::Initialize() {
 	}
 }
 
-void LuaStateWrapper::Destroy() {
+void LuaStateWrapper::ReportPreviewBarrierStats() {
 	luaJIT_PreviewStats stats{};
-	if (m_State && luaJIT_preview_stats(m_State, &stats)) {
-		std::ostringstream row;
-		row.precision(9);
-		row << "[preview-write-barrier] windows=" << stats.windows << " tables=" << stats.tables
-		    << " saves=" << stats.saves << " bytes=" << stats.bytes << " capture_ms=" << stats.capture_ms
-		    << " write_ms=" << stats.write_ms << " restore_ms=" << stats.restore_ms << " max_ms=" << stats.max_ms;
-		std::cout << row.str() << std::endl;
+	if (m_PreviewStatsReported || !m_State || !luaJIT_preview_stats(m_State, &stats)) {
+		return;
 	}
+	m_PreviewStatsReported = true;
+	std::ostringstream row;
+	row.precision(9);
+	row << "[preview-write-barrier] windows=" << stats.windows << " tables=" << stats.tables
+	    << " saves=" << stats.saves << " bytes=" << stats.bytes << " capture_ms=" << stats.capture_ms
+	    << " write_ms=" << stats.write_ms << " restore_ms=" << stats.restore_ms << " max_ms=" << stats.max_ms;
+	std::cout << row.str() << std::endl;
+}
+
+void LuaStateWrapper::Destroy() {
+	ReportPreviewBarrierStats();
 	lua_close(m_State);
 }
 
@@ -6553,6 +6559,11 @@ const std::unordered_map<std::string, PerformanceMan::ScriptTiming> LuaMan::GetS
 }
 
 void LuaMan::Destroy() {
+	// The wrappers outlive every exit path, so the barrier's row is emitted here or not at all.
+	m_MasterScriptState.ReportPreviewBarrierStats();
+	for (LuaStateWrapper& state: m_ScriptStates) {
+		state.ReportPreviewBarrierStats();
+	}
 	for (int i = 0; i < c_MaxOpenFiles; ++i) {
 		FileClose(i);
 	}
