@@ -37,7 +37,11 @@ namespace RTE {
 local p = {data = {1, 2, 3, x = 4}, list = {4, 1, 3, 2}, capi = {x = 11, [1] = 12}, cmeta = {}}
 _PreviewBarrierProbe = p
 local priorUtil = package.loaded['jit.util']
+local priorClear = package.loaded['table.clear']
 local util = jit and require('jit.util')
+local clear = require('table.clear')
+p.cleanup = function() package.loaded['jit.util'] = priorUtil; package.loaded['table.clear'] = priorClear end
+p.clearData = {1, 2, key = 3}
 local hidden = {deep = {value = 31}}
 local sink = {}
 local mt = {__index = {fallback = 17}, __newindex = function(t, k, v)
@@ -75,9 +79,7 @@ local compiled = false
 if jitEnabled then
   for i = 1, 65535 do
     local info = util.traceinfo(i)
-    if not info then break end
-    local traceFunc = util.traceir(i, 1)
-    if traceFunc then compiled = true; break end
+    if info and util.traceir(i, 1) then compiled = true; break end
   end
   assert(compiled, 'hot store trace was not compiled')
 end
@@ -104,6 +106,8 @@ p.mutate = function()
   p.data[-0.0] = 'changed'; p.data[false] = nil; p.data[1.5] = 'changed'
   table.insert(p.list, 2, 8); assert(table.remove(p.list, 1) == 4)
   table.sort(p.list); assert(#p.list == 4 and p.list[1] == 1 and p.list[4] == 8)
+  table.move(p.list, 1, 3, 2); assert(table.concat(p.list, ',') == '1,1,2,3')
+  clear(p.clearData); assert(next(p.clearData) == nil and #p.clearData == 0)
   for i = 1, 1024 do p.data['new'..i] = i; p.colocated[i] = i; p.separate[i+96] = i end
   setmetatable(p.data, {__index = {fallback = 29}})
   assert(p.data.fallback == 29 and getmetatable(p.data) ~= mt)
@@ -132,6 +136,7 @@ p.check = function()
   assert(p.data[p.key] == 'key' and rawget(p.data, 'raw') == nil and rawget(p.data, 'new1') == nil)
   assert(getmetatable(p.data) == mt and p.data.fallback == 17 and sink.trap == nil)
   assert(table.concat(p.list, ',') == '4,1,3,2' and table.concat(p.colocated, ',') == '10,20,30')
+  assert(p.clearData[1] == 1 and p.clearData[2] == 2 and p.clearData.key == 3, 'table.clear leaked')
   assert(#p.separate == 96 and p.separate[96] == 96 and p.separate[97] == nil)
   assert(hidden.deep.value == 31 and p.added == nil and p.hookData.count == 0)
   assert(p.hot.x == 7 and p.hot.raw == 8 and p.hot[1] == 9 and p.hot[2] == nil, 'compiled store leaked')
@@ -142,7 +147,6 @@ p.check = function()
   assert(ok and value == 41, 'coroutine table store leaked')
   assert((jit and jit.status() or false) == jitEnabled)
 end
-p.cleanup = function() package.loaded['jit.util'] = priorUtil end
 )lua";
 		std::vector<LuaStateWrapper*> states{&g_LuaMan.GetMasterScriptState()};
 		for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) states.push_back(&state);
@@ -159,9 +163,10 @@ p.cleanup = function() package.loaded['jit.util'] = priorUtil end
 			check("preview_barrier_fixture", index, 0, states[index]->RunScriptString(setup, false));
 		}
 		for (int round = 0; round < 2 && passed; ++round) {
-			for (LuaStateWrapper* state: states) {
-				state->RunScriptString("collectgarbage('stop'); _PreviewBarrierProbe.prepare(); _ScriptFieldsStash['preview:-7654321'] = {}", false);
+			for (int index = 0; index < static_cast<int>(states.size()); ++index) {
+				check("preview_barrier_prepared", index, round, states[index]->RunScriptString("collectgarbage('stop'); _PreviewBarrierProbe.prepare(); _ScriptFieldsStash['preview:-7654321'] = {}", false));
 			}
+			if (!passed) break;
 			LuaMan::CapturePreviewSelfCopies({}, false);
 			for (LuaStateWrapper* state: states) state->CapturePreviewGlobalFence();
 			LuaMan::BeginPreviewScripts({}, false);
@@ -195,7 +200,7 @@ p.cleanup = function() package.loaded['jit.util'] = priorUtil end
 			}
 		}
 		for (LuaStateWrapper* state: states) {
-			state->RunScriptString("debug.sethook(); if _PreviewBarrierProbe then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; _ScriptFieldsStash['preview:-7654321'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
+			state->RunScriptString("debug.sethook(); if _PreviewBarrierProbe and _PreviewBarrierProbe.cleanup then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; _ScriptFieldsStash['preview:-7654321'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
 		}
 		return passed;
 	}
