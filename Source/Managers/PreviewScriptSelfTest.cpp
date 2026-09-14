@@ -264,6 +264,42 @@ namespace RTE {
 					master->RunScriptString("F15Refs.Release()", false);
 					master->RunScriptString("package.path = _F15Path _F15Path = nil collectgarbage('collect')", false);
 				});
+			} else if (mode == 'a') {
+				// Manufactured producer: the natural late-detach timing is not armed, so the support pointer is set here.
+				AHuman* supporter = dynamic_cast<AHuman*>(survivor);
+				Arm* backArm = supporter ? supporter->GetBGArm() : nullptr;
+				HeldDevice* retiringDevice = deviceCopy();
+				HeldDevice* survivingDevice = deviceCopy();
+				guard->AddInventoryItem(survivingDevice);
+				add(retiringDevice);
+				g_MovableMan.HarvestSpeculativeSpawns();
+				ghostRoots.push_back(retiringDevice);
+				if (armed("background_arm", backArm != nullptr, "arm=" + address(backArm))) {
+					backArm->SetHeldDeviceThisArmIsTryingToSupport(retiringDevice);
+					armed("support_before_remap", backArm->GetHeldDeviceThisArmIsTryingToSupport() == retiringDevice, "support=" + address(retiringDevice));
+					const std::string retiringAddress = address(retiringDevice);
+					observations.push_back([=, &check]() {
+						const HeldDevice* held = backArm->GetHeldDeviceThisArmIsTryingToSupport();
+						check("supported_device_after_retirement", held == nullptr, "observed=" + address(held) + " expected=0000000000000000");
+					});
+					afterDispose.push_back([=, &check]() {
+						// The target is gone; the pointer value is compared, never read through.
+						const std::string stale = address(backArm->GetHeldDeviceThisArmIsTryingToSupport());
+						check("support_pointer_after_disposal", stale != retiringAddress, "observed=" + stale + " retired=" + retiringAddress);
+						backArm->SetHeldDeviceThisArmIsTryingToSupport(nullptr);
+					});
+					Actor* guardSupporterHolder = guard;
+					AHuman* guardSupporter = dynamic_cast<AHuman*>(guardSupporterHolder);
+					Arm* guardArm = guardSupporter ? guardSupporter->GetBGArm() : nullptr;
+					if (armed("surviving_support_guard", guardArm != nullptr, "arm=" + address(guardArm))) {
+						guardArm->SetHeldDeviceThisArmIsTryingToSupport(survivingDevice);
+						observations.push_back([=, &check]() {
+							const HeldDevice* held = guardArm->GetHeldDeviceThisArmIsTryingToSupport();
+							check("surviving_supported_device_retained", held == survivingDevice, "observed=" + address(held) + " expected=" + address(survivingDevice));
+						});
+						afterDispose.push_back([=]() { guardArm->SetHeldDeviceThisArmIsTryingToSupport(nullptr); });
+					}
+				}
 			} else if (mode == 'n') {
 				// A preview part gains a script the supported way; the canonical state assignment must not move.
 				AEmitter* retiringPart = woundCopy();
