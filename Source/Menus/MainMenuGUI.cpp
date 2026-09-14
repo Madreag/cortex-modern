@@ -1580,7 +1580,7 @@ void MainMenuGUI::RefreshReplayList() {
 			NetReplayVerifyReport scan;
 			if (NetMatchReplayReader::Verify(row.path, scan)) {
 				NetMatchSummary duration;
-				duration.runningTicks = scan.frames;
+				duration.runningTicks = scan.lastFrame;
 				row.text += " | " + duration.DurationText();
 			} else {
 				row.error = scan.error;
