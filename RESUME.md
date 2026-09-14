@@ -799,7 +799,11 @@ now; the user watches the Codex quota and calls the shift to Opus; usable to zer
 here, `mac_claude_job.py` on the Mac) = the independent verifier of every HIGH fix, every visual question, surgery once
 Astra shifts. **SWE-2 Max** (free, two durable sessions) = bounded UI/feature work with named seams. **Grok 4.6 Extra
 High Fast** (both machines) = run-only batteries, builds and gates, triage, mechanical implementation from a fixed
-design. **The Mac** = every cross-platform proof, never idle. The queue below stays at least six deep; five to eight
+design. **The Mac** = every cross-platform proof, never idle.
+
+**Shift called 2026-09-13 19:03 MST (user, Codex quota at 50%):** Astra is winding down — no new Astra lanes; the running A1, B14, B11 and B6
+finish and are not resumed if cut; every replacement and new engineering lane is Opus 5 (`cortex-opus-engineer`,
+`cortex-opus-verifier`, `cortex-opus-visual-reviewer`, or `mac_claude_job.py` on the Mac). SWE-2 and Grok routes unchanged. The queue below stays at least six deep; five to eight
 lanes run when the lead can review the landings within the hour (CLAUDE.md §0.1). Sequence A is never displaced.
 
 ### Sequence A — the approved tree moves
@@ -1056,7 +1060,9 @@ cybersecurity classifier; seen 2026-09-13 18:19 MST on allocator-failure / stack
 the interactive session) ends the turn with CLI exit 1 and no usage event: resume the thread with a continuation that
 rewords the step in plain engine terms and moves it last; if it recurs, record the step and skip it. Both 2026-09-13 trips followed a process-enumeration command (`Get-CimInstance Win32_Process … CommandLine`
 for the build-cap check): Astra briefs now check the cap with `Get-Process -Name cl,link` only and never enumerate
-command lines. Astra reads the `AGENTS.md` at the worktree root by convention: the twin is the policy,
+command lines. Three Astra lanes doing lifetime/rebind probing with temporary production reversals were cut
+by the classifier on 2026-09-13 (B12 twice, B13) while the engineering, build and review lanes were not: route that
+class of work (debt arms with reversals, fault-injection probes, allocator/GC stress) to Opus. Astra reads the `AGENTS.md` at the worktree root by convention: the twin is the policy,
 the brief is the fence. Every Astra brief says "no nested Codex sessions or sub-agents" (B2 spawned its own
 `codex exec` for part of a read on 2026-09-13; harmless but unbudgeted). Smoke evidence 2026-09-13 16:09-16:32 MST: `cli_runs/smoke-astra-runner-20260913` (gate ok,
 14 s); `-s workspace-write` allowed in-workspace writes, commands and loopback sockets and denied outside writes;
