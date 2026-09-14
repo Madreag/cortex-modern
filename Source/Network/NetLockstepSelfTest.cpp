@@ -10669,6 +10669,16 @@ namespace RTE {
 				if (index == 2 && !teammate) actor->SetTeam(Activity::TeamOne);
 				NetActorOwnership::SeedOwner(actor->GetUniqueID(), index == 0 ? 2 : (index == 2 ? 3 : 1), static_cast<uint8_t>(actor->GetTeam()));
 			}
+			NetGamePlayerBindings bindings;
+			for (int player = 0; player < 2; ++player) {
+				bindings.players[player].active = true;
+				bindings.players[player].human = true;
+				bindings.players[player].team = Activity::TeamTwo;
+				bindings.players[player].controlledUID = actors[player]->GetUniqueID();
+			}
+			ScenarioRunner::SetLockstepCoordinator(&leaver);
+			if (!g_ActivityMan.GetActivity()->ApplyNetPlayerBindings(bindings)) return finish("initial bindings refused");
+			g_ActivityMan.GetActivity()->CaptureNetPlayerBindings(bindings);
 			bool passed = true;
 			std::array<std::array<std::string, 4>, 2> states;
 			std::array<NetLockstepCoordinator*, 2> peers{&host, &survivor};
@@ -10695,19 +10705,18 @@ namespace RTE {
 						const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(actor.GetUniqueID(), actor.GetTeam(), !actor.IsPlayerControlled());
 						const auto wantedMode = index == 2 ? Controller::CIM_PLAYER : Controller::CIM_AI;
 						const uint8_t wantedOwner = index == 2 || (index == 0 && teammate) ? 3 : 1;
+						const uint8_t classified = NetActorOwnership::ResolveOwnerPeer(match, {-(static_cast<int64_t>(index) + 1), Activity::TeamTwo, !actor.IsPlayerControlled()});
 						const bool ok = controller.GetInputMode() == wantedMode && !controller.IsDisabled() &&
 							actor.IsPlayerControlled() == (index == 2) && owner == wantedOwner &&
-							(index >= 2 || controller.GetSeatMode() == Controller::CIM_AI);
+							(index >= 2 || (controller.GetSeatMode() == Controller::CIM_AI &&
+								classified == (policy == NetActorOwnershipPolicy::HostCpuRemoteHuman ? 1 : 2)));
 						passed &= ok;
 						states[view][index] = ControlTuple(actor, owner);
 						std::cout << "[net-lockstep-selftest] " << (ok ? "PASS " : "FAIL ") << name
 							<< " peer=" << static_cast<int>(peers[view]->GetConfig().localPeerId) << " frame=" << frame
 							<< " leave_frame=" << leaveFrame << " actor=" << index << " uid=" << actor.GetUniqueID()
-							<< " " << states[view][index] << " player_controlled=" << actor.IsPlayerControlled() << std::endl;
-						if (index < 2) {
-							const uint8_t classified = NetActorOwnership::ResolveOwnerPeer(match, {-(static_cast<int64_t>(index) + 1), Activity::TeamTwo, !actor.IsPlayerControlled()});
-							passed &= classified == (policy == NetActorOwnershipPolicy::HostCpuRemoteHuman ? 1 : 2);
-						}
+							<< " " << states[view][index] << " player_controlled=" << actor.IsPlayerControlled()
+							<< " cpu_policy_owner=" << static_cast<int>(classified) << std::endl;
 					}
 				}
 			}
@@ -10718,16 +10727,12 @@ namespace RTE {
 					return host.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired &&
 						survivor.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired;
 				}, error)) return finish("expiry did not reach both survivors");
-				passed &= host.IsRunning() && survivor.IsRunning();
+				const bool running = host.IsRunning() && survivor.IsRunning();
+				passed &= running;
+				std::cout << "[net-lockstep-selftest] " << (running ? "PASS " : "FAIL ") << name
+					<< " expired host_state=" << static_cast<int>(host.GetState()) << " survivor_state=" << static_cast<int>(survivor.GetState()) << std::endl;
 			}
 
-			NetGamePlayerBindings bindings;
-			for (int player = 0; player < 2; ++player) {
-				bindings.players[player].active = true;
-				bindings.players[player].human = true;
-				bindings.players[player].team = Activity::TeamTwo;
-				bindings.players[player].controlledUID = actors[player]->GetUniqueID();
-			}
 			ScenarioRunner::SetLockstepCoordinator(&leaver);
 			if (!g_ActivityMan.GetActivity()->ApplyNetPlayerBindings(bindings)) return finish("returning bindings refused");
 			std::vector<ControllerFrame> reseated;
@@ -10738,13 +10743,18 @@ namespace RTE {
 					reseated.push_back(ControllerFrameCodec::Snapshot(actors[index]->GetUniqueID(), *actors[index]->GetController()));
 				}
 			}
-			for (NetLockstepCoordinator* peer: peers) {
+			for (NetLockstepCoordinator* peer: {&host, &leaver, &survivor}) {
 				ScenarioRunner::SetLockstepCoordinator(peer);
 				for (size_t index = 0; index < reseated.size(); ++index) {
 					actors[index]->GetController()->ApplyWireMode(Controller::CIM_AI, Players::NoPlayer);
 					if (!MovableMan::ApplyLockstepFrameToActor(*actors[index], reseated[index], leaveFrame + 2, error)) return finish("reseated frame refused");
-					passed &= actors[index]->IsPlayerControlled() && !actors[index]->GetController()->IsDisabled() &&
-						actors[index]->GetController()->GetPlayer() == static_cast<int>(index);
+					const bool restored = actors[index]->IsPlayerControlled() && !actors[index]->GetController()->IsDisabled() &&
+						actors[index]->GetController()->GetPlayer() == static_cast<int>(index) &&
+						bindings.players[index].controlledUID == actors[index]->GetUniqueID();
+					passed &= restored;
+					std::cout << "[net-lockstep-selftest] " << (restored ? "PASS " : "FAIL ") << name
+						<< " reclaimed peer=" << static_cast<int>(peer->GetConfig().localPeerId) << " uid=" << actors[index]->GetUniqueID()
+						<< " binding_uid=" << bindings.players[index].controlledUID << " " << ControlTuple(*actors[index], 2) << std::endl;
 				}
 				passed &= actors[2]->IsPlayerControlled() && !actors[3]->IsPlayerControlled();
 			}
