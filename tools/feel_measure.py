@@ -206,6 +206,7 @@ def summarize_case(report, out):
             cells.append(f'{value_text(value)} / {row["status"]}')
         lines.append(f'| {key} | {cells[0]} | {cells[1]} |')
     lines += ['', f'Measurement complete: {report["measurement_complete"]}. Off-wire proof: {report["off_wire_pass"]}.',
+              f'RTT and D selection: {json.dumps(peers["client"]["metrics"]["auto_picks"], separators=(",", ":"))}',
               '', 'Raw files and their hashes are in feel-report.json. Per-edge matches, every kinematic residual,',
               'all commit comparisons and firing matches are under each peer/analysis directory.', '',
               'The presentation boundary is UploadFrame return on the private desktop. Audio times are conservative',
