@@ -4,6 +4,8 @@
 #include "FloatText.h"
 
 #include <cstdlib>
+#include <array>
+#include <bit>
 #include <sstream>
 #include "MovableMan.h"
 #include "RTETools.h"
@@ -179,7 +181,7 @@ void Arm::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("HandSprite", m_HandSpriteFile);
 	writer.NewPropertyWithValue("GripStrength", m_GripStrength);
 	writer.NewPropertyWithValue("ThrowStrength", m_ThrowStrength);
-	writer.NewPropertyWithValue("SpecialBehaviour_ArmRuntime", base64_encode(m_PersistedArmRuntime.empty() ? SaveArmRuntime() : m_PersistedArmRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ArmRuntime", CheckpointWriter::Native([&] { return m_PersistedArmRuntime.empty() ? SaveArmRuntime() : m_PersistedArmRuntime; }).Base64(true));
 }
 
 int Arm::Save(Writer& writer) const {
@@ -470,6 +472,26 @@ std::vector<std::string> Arm::GetHandTargetsForSave() const {
 		const HandTarget& target = targets.front();
 		// A stream's hexfloat takes its decimal point from the global locale; this saved state must not.
 		packed.push_back(HexFloatString(target.TargetOffset.m_X) + "|" + HexFloatString(target.TargetOffset.m_Y) + "|" + HexFloatString(target.DelayAtTarget) + "|" + (target.HFlippedWhenTargetWasCreated ? "1" : "0") + "|" + target.Description);
+	}
+	return packed;
+}
+
+std::vector<CheckpointText> Arm::CaptureHandTargetsForSave() const {
+	std::vector<CheckpointText> packed;
+	packed.reserve(m_HandTargets.size());
+	for (std::queue<HandTarget> targets = m_HandTargets; !targets.empty(); targets.pop()) {
+		HandTarget target = std::move(targets.front());
+		const std::array<uint32_t, 4> values = {
+			std::bit_cast<uint32_t>(target.TargetOffset.m_X), std::bit_cast<uint32_t>(target.TargetOffset.m_Y),
+			std::bit_cast<uint32_t>(target.DelayAtTarget), target.HFlippedWhenTargetWasCreated ? 1u : 0u
+		};
+		std::string identity = "HandTarget";
+		identity.append(reinterpret_cast<const char*>(values.data()), sizeof(values));
+		identity += target.Description;
+		const size_t ownedBytes = sizeof(HandTarget) + target.Description.size() + identity.size();
+		packed.push_back(CheckpointText::Deferred([target = std::move(target)] {
+			return HexFloatString(target.TargetOffset.m_X) + "|" + HexFloatString(target.TargetOffset.m_Y) + "|" + HexFloatString(target.DelayAtTarget) + "|" + (target.HFlippedWhenTargetWasCreated ? "1" : "0") + "|" + target.Description;
+		}, ownedBytes, std::move(identity)));
 	}
 	return packed;
 }

@@ -172,6 +172,8 @@ namespace RTE {
 
 		/// Packs each queued hand target as one save line, front first.
 		std::vector<std::string> GetHandTargetsForSave() const;
+		/// Copies queued hand targets for formatting on the save worker.
+		std::vector<CheckpointText> CaptureHandTargetsForSave() const;
 
 		/// Queues a hand target from its save line.
 		void AddHandTargetFromSave(const std::string& packed);

@@ -210,7 +210,7 @@ void PEmitter::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SustainBurstSound", m_SustainBurstSound);
 	writer.NewPropertyWithValue("BurstSoundFollowsEmitter", m_BurstSoundFollowsEmitter);
 	writer.NewPropertyWithValue("LoudnessOnEmit", m_LoudnessOnEmit);
-	writer.NewPropertyWithValue("SpecialBehaviour_PEmitterRuntime", base64_encode(m_PersistedPEmitterRuntime.empty() ? SavePEmitterRuntime() : m_PersistedPEmitterRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_PEmitterRuntime", CheckpointWriter::Native([&] { return m_PersistedPEmitterRuntime.empty() ? SavePEmitterRuntime() : m_PersistedPEmitterRuntime; }).Base64(true));
 }
 
 int PEmitter::Save(Writer& writer) const {
@@ -530,6 +530,23 @@ std::vector<std::string> PEmitter::GetEmissionTimers() const {
 	timers.reserve(m_EmissionList.size());
 	for (const Emission* emission: m_EmissionList) {
 		timers.push_back(emission->PackTimers());
+	}
+	return timers;
+}
+
+std::vector<CheckpointText> PEmitter::CaptureEmissionTimers() const {
+	std::vector<CheckpointText> timers;
+	timers.reserve(m_EmissionList.size());
+	for (const Emission* emission: m_EmissionList) {
+		CheckpointBuffer packed;
+		packed.Integer(emission->m_StartTimer.GetStartSimTimeMS());
+		packed.Raw("|");
+		packed.Integer(emission->m_StartTimer.GetSimTimeLimitTicks());
+		packed.Raw("|");
+		packed.Integer(emission->m_StopTimer.GetStartSimTimeMS());
+		packed.Raw("|");
+		packed.Integer(emission->m_StopTimer.GetSimTimeLimitTicks());
+		timers.push_back(packed.Finish());
 	}
 	return timers;
 }
