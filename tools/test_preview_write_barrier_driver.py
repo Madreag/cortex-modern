@@ -60,6 +60,10 @@ class CostChecks(unittest.TestCase):
         summary['results'][SELFTESTS[0]]['binary'] = 'b' * 64
         self.assertFalse(driver.assess_selftests(summary, identity))
 
+    def test_actor_census_accepts_binary_lua_graphs(self):
+        data = b'153 actor uid=1 A\n153 att uid=2 B\n153 actor uid=3 C\nlua_graph\xb8\x00\n'
+        self.assertEqual(driver.count_actors(data), 2)
+
 
 if __name__ == '__main__':
     unittest.main()
