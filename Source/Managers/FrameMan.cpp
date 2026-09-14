@@ -132,7 +132,7 @@ namespace {
 
 	FeelJson FeelLocalActors() {
 		FeelJson actors = FeelJson::array();
-		if (const Activity* activity = g_ActivityMan.GetActivity()) {
+		if (Activity* activity = g_ActivityMan.GetActivity()) {
 			for (int player = 0; player < Players::MaxPlayerCount; ++player) {
 				if (!activity->PlayerActive(player) || !activity->PlayerHuman(player)) continue;
 				const Actor* actor = activity->GetControlledActor(player);
