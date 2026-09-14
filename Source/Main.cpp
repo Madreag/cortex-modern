@@ -56,6 +56,7 @@
 #include "ActivityMan.h"
 #include "Actor.h"
 #include "AHuman.h"
+#include "Attachable.h"
 #include "GameActivity.h"
 #include "MovableObject.h"
 #include "RTETools.h"
@@ -272,6 +273,7 @@ static NetMatchE2ETickClock s_netMatchE2ETicks;
 static long s_netMatchE2EActorCensus = -1;
 static long s_netMatchE2EActorCensusPeak = -1; //!< The max actor count seen, so a transient heal double-spawn that later sheds back to normal is still visible.
 static uint64_t s_netMatchE2eSwitchControlTick = 0;
+static uint64_t s_netMatchE2eBrainDamageTick = 0;
 static int64_t s_netMatchE2eSwitchUid = 0;
 static bool s_netMatchE2eSwitchIssued = false;
 static bool s_netMatchE2eSwitchHandedBack = false;
@@ -880,6 +882,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-e2e-switch-control") {
 			s_netMatchE2eSwitchControlTick = std::strtoull(argValue[++i], nullptr, 10);
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-e2e-brain-damage") {
+			s_netMatchE2eBrainDamageTick = std::strtoull(argValue[++i], nullptr, 10);
 			continue;
 		}
 
@@ -3533,6 +3540,30 @@ void RunGameLoop() {
 							std::cout << "[net-match-service-e2e] brain-kill scuttle: tick=" << simTick << " craft=" << craftUID << std::endl;
 							ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameScuttleCraft{craftUID, 0}});
 						}
+					}
+				}
+				// Test control: every peer hurts every team's brain on the same applied frame, so a
+				// brain-damage reaction only one peer takes stands out as a shared-state difference.
+				// The damage rides an attachable's damage counter because Actor::Update only sees a
+				// drop it collects itself, between saving the previous health and reacting to it.
+				if (s_netMatchE2eBrainDamageTick > 0 && simTick == s_netMatchE2eBrainDamageTick && ScenarioRunner::IsLockstepControllerSyncActive()) {
+					for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+						Actor* brain = g_MovableMan.GetFirstBrainActor(team);
+						if (!brain) {
+							continue;
+						}
+						Attachable* target = nullptr;
+						for (Attachable* attachable: brain->GetAttachables()) {
+							if (attachable->GetDamageMultiplier() > 0.0F && (!target || attachable->GetUniqueID() < target->GetUniqueID())) {
+								target = attachable;
+							}
+						}
+						if (!target) {
+							continue;
+						}
+						target->AddDamage(2.0F / target->GetDamageMultiplier());
+						std::cout << "[net-match-service-e2e] brain-damage: tick=" << simTick << " team=" << team << " brain=" << brain->GetUniqueID()
+						          << " attachable=" << target->GetUniqueID() << " health=" << brain->GetHealth() << std::endl;
 					}
 				}
 
