@@ -2,13 +2,13 @@
 -- native audit reads every primitive, bitmap, sprite link and vertex directly.
 function Create(self)
     self.testCreate, self.testUpdate = 1, 0
-    if _ContractAuditOwner == nil then _ContractAuditOwner = self.UniqueID end
+    if _ContractAuditOwner == nil and not IsACraft(self) then _ContractAuditOwner = self.UniqueID end
 end
 
 function Update(self)
     self.testUpdate = self.testUpdate + 1
     self:SetNumberValue("TestUpdates", self.testUpdate)
-    if _ContractAuditOwner == nil then _ContractAuditOwner = self.UniqueID end
+    if _ContractAuditOwner == nil and not IsACraft(self) then _ContractAuditOwner = self.UniqueID end
     if self.UniqueID ~= _ContractAuditOwner then return end
     local state = self.primitiveContracts
     if not state then

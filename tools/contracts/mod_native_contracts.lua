@@ -53,7 +53,7 @@ local function same(expected, value)
 end
 function Create(self)
     self.testCreate, self.testUpdate = 1, 0
-    if _ContractAuditOwner == nil then _ContractAuditOwner = self.UniqueID end
+    if _ContractAuditOwner == nil and not IsACraft(self) then _ContractAuditOwner = self.UniqueID end
     if self.UniqueID ~= _ContractAuditOwner then return end
     local catalog = {}
     for preset in PresetMan:GetAllEntities() do
