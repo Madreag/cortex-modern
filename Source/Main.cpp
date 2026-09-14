@@ -157,6 +157,7 @@ static std::string s_menuMpTraceError;
 static bool s_bitmapSaveSelfTest = false;
 static int s_bitmapSaveSelfTestResult = -1;
 static bool s_cameraNullSceneSelfTest = false;
+static bool s_screenBoundsSelfTest = false;
 static bool s_saveIoSelfTest = false;
 static bool s_saveIoSelfTestQueued = false;
 static std::string s_saveIoSelfTestName;
@@ -567,6 +568,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (currentArg == "-camera-null-scene-selftest") {
 			s_cameraNullSceneSelfTest = true;
+			++i;
+			continue;
+		}
+		if (currentArg == "-screen-bounds-selftest") {
+			s_screenBoundsSelfTest = true;
 			++i;
 			continue;
 		}
@@ -5643,6 +5649,12 @@ int main(int argc, char** argv) {
 		}
 		std::cout << "[camera-null-scene-selftest] PASS" << std::endl;
 		return ShutDown(EXIT_SUCCESS);
+	}
+
+	if (s_screenBoundsSelfTest) {
+		// Scripts reach the per-screen arrays with whatever ScreenOfPlayer gave them, so the arm needs
+		// the managers up; nothing it touches needs a loaded module.
+		return ShutDown(ScreenBoundsSelfTest::Run() == 0 ? EXIT_SUCCESS : EXIT_FAILURE);
 	}
 
 	g_PresetMan.LoadAllDataModules();

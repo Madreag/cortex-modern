@@ -25,6 +25,7 @@ SELFTESTS = [
     "net-reconnect",
     "net-reconnect-session",
     "camera-null-scene",
+    "screen-bounds",
     "rotate-primitive",
     "float-text",
 ]

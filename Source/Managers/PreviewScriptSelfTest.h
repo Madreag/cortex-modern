@@ -67,4 +67,12 @@ namespace RTE {
 		static uint64_t s_ChildUID;
 		static uint64_t s_CommittedTick;
 	};
+
+	/// Detecting test for screen indices outside the per-screen arrays of FrameMan and CameraMan.
+	namespace ScreenBoundsSelfTest {
+
+		/// Calls every per-screen entry with an out-of-range screen and checks that no in-range screen moved.
+		int Run();
+
+	}
 } // namespace RTE

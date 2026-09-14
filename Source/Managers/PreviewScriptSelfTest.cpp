@@ -8,6 +8,8 @@
 #include "Arm.h"
 #include "Attachable.h"
 #include "AudioMan.h"
+#include "CameraMan.h"
+#include "FrameMan.h"
 #include "HDFirearm.h"
 #include "HeldDevice.h"
 #include "LuaMan.h"
@@ -23,6 +25,7 @@
 #include "SoundSimulation.h"
 #include "TimerMan.h"
 
+#include <array>
 #include <iostream>
 #include <functional>
 #include <memory>
@@ -636,4 +639,152 @@ namespace RTE {
 		}
 		probe.failure = std::string("unknown probe mode '") + probe.mode + "'";
 	}
+
+	namespace ScreenBoundsSelfTest {
+
+		namespace {
+
+			constexpr const char* c_Tag = "[screen-bounds-selftest]";
+
+			int s_failures = 0;
+
+			void Check(const std::string& name, bool passed, const std::string& detail) {
+				std::cout << c_Tag << (passed ? " PASS " : " FAIL ") << name << ": " << detail << std::endl;
+				if (!passed) {
+					s_failures++;
+				}
+			}
+
+			std::string Show(const Vector& value) { return std::to_string(value.GetX()) + "," + std::to_string(value.GetY()); }
+
+			/// A screen name that reads as a test name: minus1, minus2, 0, 4.
+			std::string Label(int screen) { return screen < 0 ? "minus" + std::to_string(-screen) : std::to_string(screen); }
+
+			/// Everything a script can read back for one screen.
+			struct ScreenState {
+				std::string text;
+				bool hudDisabled = false;
+				int team = Activity::NoTeam;
+				Vector occlusion;
+				Vector offset;
+				Vector deltaOffset;
+				Vector scrollTarget;
+
+				bool operator==(const ScreenState& rhs) const = default;
+
+				std::string Describe() const {
+					return "text '" + text + "' hud " + std::to_string(hudDisabled ? 1 : 0) + " team " + std::to_string(team) + " occlusion " + Show(occlusion) +
+					       " offset " + Show(offset) + " delta " + Show(deltaOffset) + " target " + Show(scrollTarget);
+				}
+			};
+
+			ScreenState Capture(int screen) {
+				ScreenState state;
+				state.text = g_FrameMan.GetScreenText(screen);
+				state.hudDisabled = g_FrameMan.IsHudDisabled(screen);
+				state.team = g_CameraMan.GetScreenTeam(screen);
+				state.occlusion = g_CameraMan.GetScreenOcclusion(screen);
+				state.offset = g_CameraMan.GetOffset(screen);
+				state.deltaOffset = g_CameraMan.GetDeltaOffset(screen);
+				state.scrollTarget = g_CameraMan.GetScrollTarget(screen);
+				return state;
+			}
+
+			/// The presentation calls a script makes for a player slot that has no screen.
+			void CallScreenEntries(int screen) {
+				g_FrameMan.FlashScreen(screen, 13, 1000);
+				g_FrameMan.SetScreenText("out of range", screen, 250, 60000, true);
+				g_FrameMan.ClearScreenText(screen);
+				g_FrameMan.SetHudDisabled(true, screen);
+				g_CameraMan.SetScreenTeam(7, screen);
+				g_CameraMan.SetScreenOcclusion(Vector(99.0F, 99.0F), screen);
+				g_CameraMan.SetScreenShake(9.0F, screen);
+				g_CameraMan.AddScreenShake(9.0F, screen);
+				g_CameraMan.ApplyScreenShake(9.0F, screen);
+			}
+
+			/// The per-screen entries that go on to read the scene.
+			void CallSceneEntries(int screen) {
+				g_CameraMan.SetOffset(Vector(99.0F, 99.0F), screen);
+				g_CameraMan.SetScroll(Vector(99.0F, 99.0F), screen);
+				g_CameraMan.SetScrollTarget(Vector(99.0F, 99.0F), 1.0F, screen);
+				g_CameraMan.CheckOffset(screen);
+				g_CameraMan.Update(screen);
+			}
+
+			std::string CompareArchives(const std::string& before, const std::string& after) {
+				if (before == after) {
+					return "identical, " + std::to_string(before.size()) + " bytes";
+				}
+				size_t index = 0;
+				while (index < before.size() && index < after.size() && before[index] == after[index]) {
+					index++;
+				}
+				return "differs at byte " + std::to_string(index) + " of " + std::to_string(before.size()) + ": '" + before.substr(index, 32) + "' became '" + after.substr(index, 32) + "'";
+			}
+
+			/// The in-range screens and both checkpoint archives, against what they held before the bad calls.
+			void CheckNothingMoved(const std::string& stage, const std::array<ScreenState, c_MaxScreenCount>& before, const std::string& frameBefore, const std::string& cameraBefore) {
+				for (int screen = 0; screen < c_MaxScreenCount; ++screen) {
+					const ScreenState after = Capture(screen);
+					Check("screen_" + Label(screen) + "_unchanged_" + stage, after == before[screen], before[screen].Describe() + " became " + after.Describe());
+				}
+				const std::string frameAfter = g_FrameMan.SaveNetLocalState();
+				const std::string cameraAfter = g_CameraMan.SaveCheckpoint();
+				Check("frameman_archive_unchanged_" + stage, frameAfter == frameBefore, CompareArchives(frameBefore, frameAfter));
+				Check("cameraman_archive_unchanged_" + stage, cameraAfter == cameraBefore, CompareArchives(cameraBefore, cameraAfter));
+			}
+
+		} // namespace
+
+		int Run() {
+			s_failures = 0;
+			std::cout << c_Tag << " screens=" << c_MaxScreenCount << std::endl;
+
+			// A different value on every screen, so a write through a bad index has somewhere to land.
+			for (int screen = 0; screen < c_MaxScreenCount; ++screen) {
+				g_FrameMan.SetScreenText("screen " + std::to_string(screen), screen, 100 + screen, 60000, screen % 2 == 0);
+				g_FrameMan.SetHudDisabled(true, screen);
+				g_FrameMan.FlashScreen(screen, 20 + screen, static_cast<float>(1000 + screen));
+				g_CameraMan.SetScreenTeam(screen % 2, screen);
+				g_CameraMan.SetScreenOcclusion(Vector(static_cast<float>(screen + 1), static_cast<float>(-1 - screen)), screen);
+				g_CameraMan.SetScreenShake(0.25F * static_cast<float>(screen + 1), screen);
+			}
+
+			std::array<ScreenState, c_MaxScreenCount> before;
+			for (int screen = 0; screen < c_MaxScreenCount; ++screen) {
+				before[screen] = Capture(screen);
+			}
+			const std::string frameBefore = g_FrameMan.SaveNetLocalState();
+			const std::string cameraBefore = g_CameraMan.SaveCheckpoint();
+
+			const std::array<int, 4> badScreens = {-1, -2, c_MaxScreenCount, c_MaxScreenCount + 1};
+			for (int screen: badScreens) {
+				CallScreenEntries(screen);
+			}
+			CheckNothingMoved("after_screen_entries", before, frameBefore, cameraBefore);
+
+			for (int screen: badScreens) {
+				const ScreenState neutral = Capture(screen);
+				Check("screen_" + Label(screen) + "_reads_neutral", neutral == ScreenState() && g_CameraMan.GetRenderOffset(screen) == Vector(),
+				      neutral.Describe() + " render " + Show(g_CameraMan.GetRenderOffset(screen)));
+			}
+
+			// The scene-reading entries come last: with no scene loaded they are where an unguarded index faults.
+			for (int screen: badScreens) {
+				CallSceneEntries(screen);
+				Check("screen_" + Label(screen) + "_scene_reads_neutral", g_CameraMan.GetUnwrappedOffset(screen) == Vector() && g_CameraMan.GetFrameSize(screen) == Vector(),
+				      "unwrapped " + Show(g_CameraMan.GetUnwrappedOffset(screen)) + " frame size " + Show(g_CameraMan.GetFrameSize(screen)));
+			}
+			CheckNothingMoved("after_scene_entries", before, frameBefore, cameraBefore);
+
+			if (s_failures > 0) {
+				std::cerr << c_Tag << " FAIL failures=" << s_failures << std::endl;
+				return 1;
+			}
+			std::cout << c_Tag << " PASS" << std::endl;
+			return 0;
+		}
+
+	} // namespace ScreenBoundsSelfTest
 } // namespace RTE
