@@ -43,6 +43,11 @@ function ScreenFacts:StartActivity(startNewGame)
     local remoteCount = 0;
     local sound = SoundContainer();
     sound.BusRouting = SoundContainer.UI;
+    for _, player in ipairs({-2, Activity.MAXPLAYERCOUNT}) do
+        assert(not sound:Play(Vector(12, 34), player), "invalid sound target");
+        assert(zero(sound.Pos), "invalid sound target moved the sound");
+        assert(not sound:Stop(player) and not sound:Restart(player), "invalid sound control");
+    end
     for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
         if self:PlayerHuman(player) and self:ScreenOfPlayer(player) == -1 then
             remoteCount = remoteCount + 1;
