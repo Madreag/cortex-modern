@@ -21,6 +21,9 @@ SettingsMiscGUI::SettingsMiscGUI(GUIControlManager* parentControlManager) :
 	m_ShowToolTipsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxShowToolTips"));
 	m_ShowToolTipsCheckbox->SetCheck(g_SettingsMan.ShowToolTips());
 
+	m_ShowMatchStatusCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxShowMatchStatus"));
+	m_ShowMatchStatusCheckbox->SetCheck(g_SettingsMan.ShowMatchStatus());
+
 	m_ShowLoadingScreenProgressReportCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxShowLoadingScreenProgressReport"));
 	m_ShowLoadingScreenProgressReportCheckbox->SetCheck(!g_SettingsMan.GetLoadingScreenProgressReportDisabled());
 
@@ -71,6 +74,8 @@ void SettingsMiscGUI::HandleInputEvents(GUIEvent& guiEvent) {
 			g_SettingsMan.SetSkipIntro(m_SkipIntroCheckbox->GetCheck());
 		} else if (guiEvent.GetControl() == m_ShowToolTipsCheckbox) {
 			g_SettingsMan.SetShowToolTips(m_ShowToolTipsCheckbox->GetCheck());
+		} else if (guiEvent.GetControl() == m_ShowMatchStatusCheckbox) {
+			g_SettingsMan.SetShowMatchStatus(m_ShowMatchStatusCheckbox->GetCheck());
 		} else if (guiEvent.GetControl() == m_ShowLoadingScreenProgressReportCheckbox) {
 			g_SettingsMan.SetLoadingScreenProgressReportDisabled(!m_ShowLoadingScreenProgressReportCheckbox->GetCheck());
 		} else if (guiEvent.GetControl() == m_ShowAdvancedPerfStatsCheckbox) {

@@ -36,6 +36,7 @@ namespace RTE {
 		GUICollectionBox* m_MiscSettingsBox;
 		GUICheckbox* m_SkipIntroCheckbox;
 		GUICheckbox* m_ShowToolTipsCheckbox;
+		GUICheckbox* m_ShowMatchStatusCheckbox;
 		GUICheckbox* m_ShowLoadingScreenProgressReportCheckbox;
 		GUICheckbox* m_ShowAdvancedPerfStatsCheckbox;
 		GUICheckbox* m_MeasureLoadTimeCheckbox;
