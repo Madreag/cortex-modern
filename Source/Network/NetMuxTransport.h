@@ -75,6 +75,7 @@ namespace RTE {
 		uint64_t P2PEvents() const { return m_P2PEvents; }
 
 	private:
+		friend bool TestGnsStopCancelContracts(std::string* error);
 		std::unique_ptr<INetTransport> m_Ip;
 		std::unique_ptr<INetTransport> m_P2P;
 		GnsTransport* m_IpGns = nullptr;
