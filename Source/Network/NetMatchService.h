@@ -183,6 +183,9 @@ namespace RTE {
 		static bool WaitForJoinTrigger(const std::string& path, uint64_t budgetMs, std::string* error);
 		static constexpr uint64_t c_JoinWaitBudgetMs = 120000;
 		static constexpr uint64_t c_JoinWaitPollMs = 100;
+		/// How long a finished match's rematch lobby waits for every peer to come back before the
+		/// service destroys it and releases the session, the seats and the directory lease.
+		static constexpr uint64_t c_CompletedLobbyExpiryMs = 600000;
 
 		bool Start(const NetMatchServiceRequest& request, std::string* error = nullptr);
 		bool CanSealA7Journal() const;
@@ -362,6 +365,7 @@ namespace RTE {
 		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
 		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
 		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
+		friend bool TestCompletedLobbyExpires(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
@@ -391,6 +395,11 @@ namespace RTE {
 		void RecordRosterTransitions(uint64_t observedAtMs);
 		/// Runs the §11 automatic-retry schedule from the service's own state. Game thread only.
 		void DriveReconnectUx(uint64_t nowMs);
+		/// Destroys a rematch lobby whose peers did not all come back inside c_CompletedLobbyExpiryMs.
+		/// Game thread only, from Update(): it takes the lock and then destroys without it.
+		void UpdateCompletedLobbyExpiry(uint64_t nowMs);
+		/// Whether every non-CPU seat of the current lobby is connected. Caller holds the lock.
+		bool RematchLobbySeatedLocked() const;
 		/// Elapsed milliseconds since this session began, for every admission deadline.
 		uint64_t AdmissionNowMs() const;
 		void CaptureA7SeatView();
@@ -493,6 +502,8 @@ namespace RTE {
 		size_t m_PendingLobbyBytes = 0;
 		bool m_PendingLobbyOverflow = false;
 		bool m_LeftMatch = false;
+		//!< Steady ms of the match end that opened this rematch lobby; 0 when no lobby is waiting.
+		uint64_t m_CompletedLobbySinceMs = 0;
 		uint64_t m_EndedLockstepPackets = 0;
 		// Non-owning view of the live session object: while the runner's worker still owns it
 		// (the whole lobby phase) m_Session is empty, but chat must already reach it.
