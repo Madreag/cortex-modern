@@ -1865,6 +1865,35 @@ static std::string ResyncSaveName() {
 		return m_InputDelayText;
 	}
 
+	std::optional<uint32_t> NetMatchService::GetMatchPingMs() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		const INetTransport* wire = ActiveWireLocked();
+		if (m_State != NetMatchServiceState::Running || !wire || !m_Session) {
+			return std::nullopt;
+		}
+		std::optional<uint32_t> ping;
+		for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
+			if (m_Coordinator && m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
+				ping = std::max(ping.value_or(0), wire->GetPeerPingMs(peer.transportPeerId));
+			}
+		}
+		return ping;
+	}
+
+	std::string NetMatchService::GetPeerDisplayName(uint8_t peerId) const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		const auto seat = m_SeatPresence.GetSeats().find(peerId);
+		if (seat != m_SeatPresence.GetSeats().end() && !seat->second.holderName.empty()) {
+			return seat->second.holderName;
+		}
+		for (const NetLobbyMember& member: m_LobbySnapshot.members) {
+			if (member.peerId == peerId && !member.displayName.empty()) {
+				return member.displayName;
+			}
+		}
+		return "Player " + std::to_string(peerId);
+	}
+
 	std::string NetMatchService::GetStatusText() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return m_StatusText;

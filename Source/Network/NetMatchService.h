@@ -274,6 +274,10 @@ namespace RTE {
 		std::vector<NetChatEntry> TakeChatEntries();
 		/// "Input delay: N (auto, Rms ping)" / "(fixed)", from the announced match config. "" pre-lobby.
 		std::string GetInputDelayText() const;
+		/// The live host RTT on a client, or the largest connected peer RTT on the host.
+		std::optional<uint32_t> GetMatchPingMs() const;
+		/// The current seat holder's display name for presentation events.
+		std::string GetPeerDisplayName(uint8_t peerId) const;
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
 		std::string BuildReportJson() const;
