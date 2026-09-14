@@ -290,6 +290,8 @@ namespace RTE {
 		/// Match end or the host leaving takes the directory row down now rather than at Destroy.
 		/// Game-thread only, like the client it drives.
 		void RetractDirectoryListing();
+		/// Keeps only the registered row bound to this host's ICE identity. Game-thread only.
+		bool ShouldKeepIceDirectoryLease() const;
 		/// Host: waits for the register reply so the GNS identity can be pinned to the session id
 		/// before any listen socket of this process opens. Worker thread; reads the published snapshot.
 		bool WaitForDirectorySession(uint64_t budgetMs, std::string& sessionId, std::string& token) const;

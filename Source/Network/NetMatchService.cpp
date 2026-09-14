@@ -1042,6 +1042,12 @@ static std::string ResyncSaveName() {
 		m_Directory.Update(SteadyNowMs());
 	}
 
+	bool NetMatchService::ShouldKeepIceDirectoryLease() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_IsHost && m_IceEnabled && !m_DirectoryRetracted && !m_IceBoundSessionId.empty() &&
+		       m_Directory.GetState() == NetDirectoryClient::State::Registered && m_Directory.GetSessionId() == m_IceBoundSessionId;
+	}
+
 	void NetMatchService::Complete(const std::string& reason) {
 		// The recording gets its end marker at the match's end, not at process exit.
 		ScenarioRunner::CloseLockstepReplayRecord();
