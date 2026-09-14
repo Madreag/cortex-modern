@@ -2,6 +2,7 @@
 #include "SettingsMan.h"
 #include "NetMatchService.h"
 #include "NetReconnectUx.h"
+#include "NetLockstep.h"
 #include "TelemetryBundle.h"
 #include "System.h"
 #include "Writer.h"
@@ -15,6 +16,7 @@
 #include "GUITab.h"
 #include "GUITextBox.h"
 
+#include <SDL3/SDL.h>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -120,6 +122,19 @@ namespace {
 
 	std::string autosavesDirectory() {
 		return System::GetWorkingDirectory() + "Autosaves";
+	}
+
+	// Creates the directory when absent so the opened folder always exists, then
+	// hands a file URI to the OS browser.
+	bool openFolder(const std::string& directory) {
+		std::error_code error;
+		std::filesystem::create_directories(directory, error);
+		if (error) return false;
+		std::string uri = "file:///";
+		for (char character: std::filesystem::path(directory).generic_string()) {
+			uri += character == ' ' ? "%20" : std::string(1, character);
+		}
+		return SDL_OpenURL(uri.c_str());
 	}
 
 	std::string latestFileName(const std::string& directory, const std::string& extension) {
@@ -390,14 +405,46 @@ void SettingsMultiplayerGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		}
 	}
 	if (guiEvent.GetType() == GUIEvent::Command) {
+		const std::string control = guiEvent.GetControl()->GetName();
 		if (guiEvent.GetControl() == m_ApplyButton) {
 			ApplyDraft();
-		} else if (guiEvent.GetControl()->GetName() == "ButtonMpPlayerDefaults") {
+		} else if (control == "ButtonMpPlayerDefaults") {
 			ResetPageDefaults(Page::Player);
-		} else if (guiEvent.GetControl()->GetName() == "ButtonMpChatDefaults") {
+		} else if (control == "ButtonMpChatDefaults") {
 			ResetPageDefaults(Page::Chat);
-		} else if (guiEvent.GetControl()->GetName() == "ButtonMpInternetDefaults") {
+		} else if (control == "ButtonMpInternetDefaults") {
 			ResetPageDefaults(Page::Internet);
+		} else if (guiEvent.GetControl() == m_SaveDiagButton) {
+			if (!TelemetryBundle::RequestCapture()) {
+				FailOnPage(Page::Files, "Diagnostics are already being saved.", nullptr);
+			}
+		} else if (control == "ButtonMpOpenAutosaves") {
+			if (!openFolder(autosavesDirectory())) {
+				FailOnPage(Page::Files, "Could not open the autosaves folder.", nullptr);
+			}
+		} else if (control == "ButtonMpOpenDiagDir") {
+			if (!openFolder(effectiveTelemetryDirectory())) {
+				FailOnPage(Page::Files, "Could not open the diagnostics folder.", nullptr);
+			}
+		} else if (control == "ButtonMpCopyDiagPath") {
+			if (!SDL_SetClipboardText(effectiveTelemetryDirectory().c_str())) {
+				FailOnPage(Page::Files, "Could not copy the folder path.", nullptr);
+			}
+		} else if (guiEvent.GetControl() == m_RejoinButton) {
+			NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
+			reconnect.RequestManualRetry(NetLockstepNowMs());
+			reconnect.DismissOffer();
+			std::string rejoinError;
+			if (!g_NetMatchService.BeginTicketRejoin(&rejoinError)) {
+				reconnect.NoteAttemptFailed(NetLockstepNowMs(), rejoinError);
+				FailOnPage(Page::Recovery, rejoinError.empty() ? "Rejoin failed." : rejoinError, nullptr);
+			} else {
+				reconnect.NoteAttemptStarted(NetLockstepNowMs());
+			}
+		} else if (guiEvent.GetControl() == m_CancelRecoveryButton) {
+			NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
+			reconnect.Cancel(NetLockstepNowMs());
+			reconnect.DismissOffer();
 		}
 	}
 	UpdateStatusLines();
