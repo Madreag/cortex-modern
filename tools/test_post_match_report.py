@@ -86,6 +86,18 @@ def captured_chat_rows(path):
             "band": [left + 10, bottom - 104, left + 98, bottom - 24]}
 
 
+def end_reason_agreement(labels, summary):
+    """Compare every observed round's status and Details reason with the final report."""
+    suffix = " - ready up for a rematch"
+    statuses = sorted({text.removesuffix(suffix) for name, text, _ in labels
+                       if name in ("LabelMultiplayerStatus", "LabelLobbyStatus") and suffix in text})
+    reasons = sorted({match.group(1) for name, text, _ in labels if name == "LabelLastMatchDetails"
+                      for match in [re.search(r"^Result: (.*)$", text, re.M)] if match})
+    reported = summary.get("result") if summary else None
+    return {"pass": bool(reported) and statuses == reasons == [reported],
+            "status": statuses, "details": reasons, "json": reported}
+
+
 def menu_script(who, port):
     script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {who}\n"
     if who == "Host":
@@ -123,7 +135,11 @@ def menu_script(who, port):
     script += ("wait_state Running 120\nassert_label LabelLastMatchDetails\n"
                "wait_state Starting 240\nwait 20\nassert_substate Lobby\n"
                "assert_label LabelLastMatchSummary Last match: draw\n"
-               "assert_label LabelLastMatchSummary 00:02\nwait_ms 3000\nexit\n")
+               "assert_label LabelLastMatchSummary 00:02\n"
+               "assert_label LabelMultiplayerStatus ready up for a rematch\n"
+               "activate ButtonLastMatchDetails\nwait 10\nassert_label LabelLastMatchDetails Result:\n"
+               "screenshot report_second_details\nactivate ButtonLastMatchClose\nwait 10\n"
+               "wait_ms 3000\nexit\n")
     return script
 
 
@@ -174,6 +190,8 @@ def run_size(repo, root, size, port, expected):
             report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}
             summary = report.get("last_match", report.get("service", {}).get("last_match"))
             details[who]["summary"] = summary
+            details[who]["end_reason"] = end_reason_agreement(labels, summary)
+            checks[who + "_end_reason_agreement"] = details[who]["end_reason"]["pass"]
             checks[who + "_summary"] = bool(summary and summary["running_ticks"] == TICKS and summary["winner_team"] == -1 and
                                            [peer["name"] for peer in summary["peers"]] == ["Host", "Guest"])
             checks[who + "_pace_is_last_round"] = bool(summary and summary["pace"]["sim_ticks"] == TICKS)
@@ -192,7 +210,7 @@ def run_size(repo, root, size, port, expected):
         before_shot = latest_capture(runs["Host"], "report_before")
         details["chat_before"] = {"capture": str(before_shot), **captured_chat_rows(before_shot)}
         checks["before_chat_rows"] = details["chat_before"]["count"] >= 5
-        shared_fields = ("winner_team", "running_ticks", "duration", "peers", "resyncs", "drops", "reclaims", "substitutions")
+        shared_fields = ("result", "winner_team", "running_ticks", "duration", "peers", "resyncs", "drops", "reclaims", "substitutions")
         checks["peer_agreement"] = bool(details["Host"]["summary"] and details["Guest"]["summary"] and all(
             details["Host"]["summary"][field] == details["Guest"]["summary"][field] for field in shared_fields))
         checks["pin_unchanged"] = pin(repo, expected) == before
