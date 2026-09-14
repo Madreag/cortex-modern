@@ -22,6 +22,7 @@
 #include "AHuman.h"
 #include "ACrab.h"
 #include "ACRocket.h"
+#include "ACDropShip.h"
 #include "HeldDevice.h"
 #include "Loadout.h"
 #include "SLTerrain.h"
@@ -2991,6 +2992,93 @@ bool GameActivity::ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings)
 	if (!CreateNetLocalUI()) return false;
 	RefreshCheckpointMarkedActorIDs();
 	return true;
+}
+
+bool GameActivity::RunNetInventoryRelaunchProbe(std::string_view phase) {
+	const char* enabled = std::getenv("CC_TEST_F21_INVENTORY");
+	if (!enabled || std::strcmp(enabled, "1") != 0) return false;
+	struct State {
+		bool staged = false, passed = true;
+		int peer = 0, held = 0, first = 0, after = 0;
+		std::array<long, 2> carriers{}, ordinary{}, collected{}, controlled{};
+		Actor* oldCarrier = nullptr;
+	};
+	static State state;
+	auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+	const auto uid = [](const Actor* actor) { return actor ? actor->GetUniqueID() : 0L; };
+	const auto check = [&](std::string_view name, bool passed) {
+		state.passed = passed && state.passed;
+		std::cout << "[net-inventory-resync] " << (passed ? "PASS" : "FAIL") << " " << name << " phase=" << phase << " peer=" << state.peer
+		          << " tick=" << g_TimerMan.GetSimUpdateCount() << " relaunch=" << g_ActivityMan.LockstepRelaunchInProgress() << std::endl;
+		return passed;
+	};
+	if (phase == "stage") {
+		if (!activity || state.staged) return check("stage_once", false);
+		state.peer = ScenarioRunner::GetLockstepLocalPeerId();
+		if (state.peer < 1 || state.peer > 2) return check("two_peer_fixture", false);
+		const auto* craftPreset = dynamic_cast<const ACDropShip*>(g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte"));
+		const auto* brainPreset = dynamic_cast<const Actor*>(g_PresetMan.GetEntityPreset("Actor", "Brain Case", "Base.rte"));
+		if (!craftPreset || !brainPreset) return check("fixture_presets", false);
+		for (int index = 0; index < 2; ++index) {
+			auto* craft = static_cast<ACDropShip*>(craftPreset->Clone());
+			craft->SetTeam(index);
+			craft->SetPos(Vector(400.0F + index * 1000.0F, 100.0F));
+			craft->SetPinStrength(10000.0F);
+			craft->SetControllerMode(Controller::CIM_DISABLED);
+			auto* ordinary = static_cast<Actor*>(brainPreset->Clone());
+			auto* collected = static_cast<Actor*>(brainPreset->Clone());
+			ordinary->SetTeam(index); collected->SetTeam(index);
+			craft->AddInventoryItem(ordinary);
+			const_cast<std::deque<MovableObject*>&>(craft->GetCollectedInventory()).push_back(collected);
+			state.carriers[index] = uid(craft);
+			state.ordinary[index] = uid(ordinary);
+			state.collected[index] = uid(collected);
+			g_MovableMan.AddActor(craft);
+			std::cout << "[net-inventory-resync-fixture] index=" << index << " carrier=" << uid(craft) << " ordinary=" << uid(ordinary) << " collected=" << uid(collected) << std::endl;
+		}
+		const int index = state.peer - 1;
+		state.oldCarrier = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(state.carriers[index]));
+		activity->m_Brain[0] = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(state.ordinary[index]));
+		activity->m_Brain[1] = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(state.collected[index]));
+		for (int player = 0; player < 2; ++player) {
+			activity->m_pLastMarkedActor[player] = state.oldCarrier;
+			state.controlled[player] = uid(activity->m_ControlledActor[player]);
+		}
+		state.staged = activity->m_Brain[0] && activity->m_Brain[1] && state.oldCarrier;
+		return check("inventory_and_distinct_local_marks_staged", state.staged);
+	}
+	if (!state.staged || !activity) return phase == "held" ? true : check("stage_observed", false);
+	const int index = state.peer - 1;
+	if (phase == "held") {
+		if (!g_ActivityMan.LockstepRelaunchInProgress()) return true;
+		Actor* current = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(state.carriers[index]));
+		const bool outside = current && current != state.oldCarrier && !g_MovableMan.IsActor(state.oldCarrier) && !g_MovableMan.ValidMO(state.oldCarrier);
+		Actor* saved = activity->m_Brain[3];
+		activity->m_Brain[3] = nullptr;
+		const int before = activity->CountStaleRelaunchSlots(-1);
+		activity->m_Brain[3] = state.oldCarrier;
+		const int withHeld = activity->CountStaleRelaunchSlots(-1);
+		activity->m_Brain[3] = saved;
+		auto* craft = dynamic_cast<ACraft*>(current);
+		const bool carried = craft && std::any_of(craft->GetCollectedInventory().begin(), craft->GetCollectedInventory().end(), [&](const MovableObject* object) { return object->GetUniqueID() == state.collected[index]; });
+		++state.held;
+		std::cout << "[net-inventory-held] uid=" << state.carriers[index] << " old=" << state.oldCarrier << " current=" << current << " outside=" << outside << " stale=" << before << "/" << withHeld << " collected=" << carried << std::endl;
+		return check("held_old_world_excluded_and_collected_restored", outside && withHeld == before + 1 && carried);
+	}
+	if (phase != "first" && phase != "after") return check("known_phase", false);
+	const bool relaunch = g_ActivityMan.LockstepRelaunchInProgress();
+	if (phase == "first") ++state.first; else ++state.after;
+	bool matched = true;
+	for (int player = 0; player < 2; ++player) {
+		const long expectedBrain = player == 0 ? state.ordinary[index] : state.collected[index];
+		const long brain = uid(activity->m_Brain[player]), mark = uid(activity->m_pLastMarkedActor[player]);
+		const long controlled = uid(activity->m_ControlledActor[player]);
+		std::cout << "[net-inventory-slots] phase=" << phase << " peer=" << state.peer << " player=" << player << " expected_brain=" << expectedBrain << " brain=" << brain
+		          << " saved_host_brain=" << (player == 0 ? state.ordinary[0] : state.collected[0]) << " expected_mark=" << state.carriers[index] << " mark=" << mark << " saved_host_mark=" << state.carriers[0]
+		          << " expected_controlled=" << state.controlled[player] << " controlled=" << controlled << std::endl;
+		matched = matched && brain == expectedBrain && mark == state.carriers[index] && controlled == state.controlled[player];
+	}
+	return check("local_inventory_and_marks_survive", matched && state.held > 0 && (phase == "first" ? relaunch && state.first == 1 : !relaunch && state.first == 1 && state.after == 1)) && state.passed;
 }
 
 bool GameActivity::RunNetLocalUIRestoreSelfTest() {
