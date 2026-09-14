@@ -20,7 +20,9 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
 
+import session_directory
 from session_directory import IP_REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
+from unittest import mock
 
 INSTALL_KEY = "0123456789abcdef"
 HEX64_A = "a" * 64
@@ -33,6 +35,7 @@ REGISTER_RESP_KEYS = {
     "expires_in_s",
     "heartbeat_s",
     "observed_ip",
+    "supports_unlisted",
 }
 LIST_KEYS = {"sessions", "total"}
 LIST_ROW_KEYS = {
@@ -58,7 +61,7 @@ LIST_ROW_KEYS = {
     "observed_ip",
     "state",
 }
-HEARTBEAT_KEYS = {"expires_in_s", "heartbeat_s"}
+HEARTBEAT_KEYS = {"expires_in_s", "heartbeat_s", "listed"}
 DELETE_KEYS = {"ok"}
 SIGNAL_POST_KEYS = {"ok", "seq"}
 SIGNAL_GET_KEYS = {"signals"}
@@ -1346,6 +1349,282 @@ class DirectoryTests(unittest.TestCase):
         self.assertNotIn("orphan0000000000", limiter._by_key._last)
         for key in limiter._by_key._requests:
             self.assertIn(key, limiter._by_key._last)
+
+    def beat(
+        self,
+        sid: str,
+        token: str,
+        **fields: object,
+    ) -> tuple[int, dict[str, Any]]:
+        body: dict[str, Any] = {
+            "token": token,
+            "peer_count": 2,
+            "seats_free": 1,
+        }
+        body.update(fields)
+        return self.call("POST", f"/v1/sessions/{sid}/heartbeat", body)
+
+    def _session(self, sid: str):
+        assert self.server is not None
+        return self.server.store._sessions[sid]
+
+    def test_register_reports_unlisted_capability(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        self.assertIs(created["supports_unlisted"], True)
+
+    def test_heartbeat_reply_reports_actual_listed(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, reply = self.beat(sid, token)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], True)
+        status, reply = self.beat(sid, token, listed=False)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], False)
+        status, reply = self.beat(sid, token, listed=True)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], True)
+
+    def test_hidden_disappears_but_signals_round_trip(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, reply = self.beat(sid, token, listed=False)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], False)
+        status, listed = self.list_sessions()
+        self.assertEqual(status, 200)
+        self.assertEqual(listed["sessions"], [])
+        self.assertEqual(listed["total"], 0)
+        payload = base64.b64encode(b"offer").decode("ascii")
+        status, posted = self.call(
+            "POST",
+            f"/v1/sessions/{sid}/signal",
+            {
+                "token_or_join_nonce": token,
+                "from": "host",
+                "to": "client:abc",
+                "payload_b64": payload,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(posted["seq"], 1)
+        status, got = self.call(
+            "GET",
+            f"/v1/sessions/{sid}/signals?peer=client:abc&after=0",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(got["signals"]), 1)
+        self.assertEqual(got["signals"][0]["payload_b64"], payload)
+        status, posted = self.call(
+            "POST",
+            f"/v1/sessions/{sid}/signal",
+            {
+                "token_or_join_nonce": "abc",
+                "from": "client:abc",
+                "to": "host",
+                "payload_b64": base64.b64encode(b"answer").decode("ascii"),
+            },
+        )
+        self.assertEqual(status, 200)
+        status, got = self.call(
+            "GET",
+            f"/v1/sessions/{sid}/signals?peer=host&after=0&token={token}",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(got["signals"]), 1)
+
+    def test_hidden_survives_ordinary_heartbeat(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, _ = self.beat(sid, token, listed=False)
+        self.assertEqual(status, 200)
+        status, reply = self.beat(sid, token, seats_free=0)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], False)
+        status, listed = self.list_sessions()
+        self.assertEqual(listed["sessions"], [])
+
+    def test_relist_same_id_token_monotonic_seq(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, _ = self.beat(sid, token, listed=False)
+        self.assertEqual(status, 200)
+        status, posted = self.call(
+            "POST",
+            f"/v1/sessions/{sid}/signal",
+            {
+                "token_or_join_nonce": token,
+                "from": "host",
+                "to": "client:abc",
+                "payload_b64": base64.b64encode(b"s1").decode("ascii"),
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(posted["seq"], 1)
+        status, reply = self.beat(sid, token, listed=True)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], True)
+        status, listed = self.list_sessions()
+        self.assertEqual(status, 200)
+        self.assertEqual(len(listed["sessions"]), 1)
+        self.assertEqual(listed["sessions"][0]["session_id"], sid)
+        status, posted = self.call(
+            "POST",
+            f"/v1/sessions/{sid}/signal",
+            {
+                "token_or_join_nonce": token,
+                "from": "host",
+                "to": "client:abc",
+                "payload_b64": base64.b64encode(b"s2").decode("ascii"),
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(posted["seq"], 2)
+        status, got = self.call(
+            "GET",
+            f"/v1/sessions/{sid}/signals?peer=client:abc&after=0",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual([item["seq"] for item in got["signals"]], [1, 2])
+
+    def test_delete_hidden_session(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, _ = self.beat(sid, token, listed=False)
+        self.assertEqual(status, 200)
+        status, deleted = self.call(
+            "DELETE", f"/v1/sessions/{sid}", {"token": token}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(deleted["ok"])
+        status, err = self.call(
+            "GET", f"/v1/sessions/{sid}/signals?peer=host&token={token}"
+        )
+        self.assertEqual(status, 404)
+
+    def test_hidden_session_expires_normally(self) -> None:
+        self.start(expiry_s=1)
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, _ = self.beat(sid, token, listed=False)
+        self.assertEqual(status, 200)
+        time.sleep(2.0)
+        status, _ = self.call(
+            "GET", f"/v1/sessions/{sid}/signals?peer=host&token={token}"
+        )
+        self.assertEqual(status, 404)
+
+    def test_wrong_token_cannot_hide_or_relist(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, err = self.beat(sid, "bad-token-000000", listed=False)
+        self.assertEqual(status, 403)
+        self.assertEqual(err, {"error": "forbidden"})
+        self.assertTrue(self._session(sid).listed)
+        status, _ = self.beat(sid, token, listed=False)
+        self.assertEqual(status, 200)
+        status, err = self.beat(sid, "bad-token-000000", listed=True)
+        self.assertEqual(status, 403)
+        self.assertFalse(self._session(sid).listed)
+        status, listed = self.list_sessions()
+        self.assertEqual(listed["sessions"], [])
+
+    def test_malformed_listed_values_rejected_without_mutation(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        sess = self._session(sid)
+        beat_before = sess.last_beat
+        for bad in (None, "true", 0, 1, [True], {"x": True}):
+            status, err = self.beat(sid, token, listed=bad, seats_free=9)
+            self.assertEqual(status, 400)
+            self.assertEqual(err, {"error": "invalid_field", "field": "listed"})
+            self.assertEqual(sess.last_beat, beat_before)
+            self.assertTrue(sess.listed)
+            self.assertEqual(sess.fields["seats_free"], 1)
+        status, reply = self.beat(sid, token)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], True)
+
+    def test_mixed_listed_unlisted_pagination(self) -> None:
+        self.start()
+        assert self.server is not None
+        base = time.monotonic()
+        ids: list[str] = []
+        tokens: list[str] = []
+        for i in range(4):
+            created = self.server.store.register(
+                sample_register(name=f"m{i}"), "127.0.0.1", base + i * 0.001
+            )
+            ids.append(created["session_id"])
+            tokens.append(created["token"])
+        for i in (1, 3):
+            status, _ = self.beat(ids[i], tokens[i], listed=False)
+            self.assertEqual(status, 200)
+        status, page = self.list_sessions("limit=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(page["total"], 2)
+        self.assertEqual([row["session_id"] for row in page["sessions"]], [ids[0]])
+        self.assertIn("next_cursor", page)
+        status, page2 = self.list_sessions(
+            "limit=1&cursor=" + quote(page["next_cursor"], safe="")
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(page2["total"], 2)
+        self.assertEqual([row["session_id"] for row in page2["sessions"]], [ids[2]])
+        self.assertNotIn("next_cursor", page2)
+        for i in (0, 2):
+            status, _ = self.beat(ids[i], tokens[i], listed=False)
+            self.assertEqual(status, 200)
+        status, empty = self.list_sessions()
+        self.assertEqual(status, 200)
+        self.assertEqual(empty["sessions"], [])
+        self.assertEqual(empty["total"], 0)
+
+    def test_hidden_rows_still_consume_capacity(self) -> None:
+        self.start()
+        assert self.server is not None
+        with mock.patch.object(session_directory, "MAX_ROWS", 3):
+            for i in range(3):
+                status, created = self.register(name=f"c{i}")
+                self.assertEqual(status, 200)
+                status, _ = self.beat(
+                    created["session_id"], created["token"], listed=False
+                )
+                self.assertEqual(status, 200)
+            status, err = self.register(name="c3")
+            self.assertEqual(status, 503)
+            self.assertEqual(err, {"error": "full"})
+
+    def test_legacy_requests_default_visible(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, reply = self.beat(sid, token)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], True)
+        self.assertTrue(self._session(sid).listed)
+        status, listed = self.list_sessions()
+        self.assertEqual(status, 200)
+        self.assertEqual(len(listed["sessions"]), 1)
+        self.assertNotIn("listed", listed["sessions"][0])
 
 
 if __name__ == "__main__":
