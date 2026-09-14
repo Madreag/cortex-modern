@@ -17,7 +17,7 @@ import re
 LO, HI = 27, 320
 TICKS = set(range(LO, HI + 1))
 CASES = ('buy_menu', 'form_squad', 'full_inventory')
-PORT_LO, PORT_HI = 48171, 48179
+PORT_LO, PORT_HI = 48181, 48189
 SUBSYSTEMS = {'actors', 'controller', 'funds', 'lua_state', 'rot_angle',
               'rot_angvel', 'scene', 'sim_rng', 'terrain', 'tick'}
 ACTOR_FIELDS = set('pos prev vel angvel moid mass frc imps moi atoms rest osc settle pvel '

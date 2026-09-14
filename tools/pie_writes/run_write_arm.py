@@ -16,7 +16,7 @@ from run_sim_test import make_run
 from win32_test_runner import firewall_allows_inbound
 
 CASES = ('buy_menu', 'form_squad', 'full_inventory')
-PORT_LO, PORT_HI = 48171, 48179
+PORT_LO, PORT_HI = 48181, 48189
 TICKS = 320
 
 
