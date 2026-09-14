@@ -143,6 +143,8 @@ namespace RTE {
 		/// Whether that remote's own lobby has spoken; before it does, its session discards lobby packets.
 		bool IsRemoteLobbyUp(uint8_t peerId) const { return m_RemoteLobbyUp.find(peerId) != m_RemoteLobbyUp.end(); }
 		uint16_t OutgoingChunkIndex(uint8_t peerId) const;
+		/// Whether the round seats a human on a peer other than this host's own.
+		bool SeatsRemoteHuman() const;
 		bool AllConfigAcked() const;
 		bool AllRemoteReady() const;
 
