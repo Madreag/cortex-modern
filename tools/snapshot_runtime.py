@@ -39,6 +39,11 @@ SCHEMAS["Controller1"] = [
             "next_ignore prev_ignore weapon_next_ignore weapon_prev_ignore pickup_ignore drop_ignore reload_ignore primary_hotkey_ignore"),
     *fields("release_timer joy_accel_timer key_accel_timer", TIMER), ("mouse_movement", VECTOR), ("cursor_angle_limits", array(3))]
 SCHEMAS["Controller2"] = [*SCHEMAS["Controller1"], ("synced_order_disable_tick", "n")]
+SCHEMAS["Controller3"] = [*SCHEMAS["Controller2"], ("production_states", array(57)),
+    *fields("production_analog_move production_analog_aim production_analog_cursor production_mouse_movement", VECTOR),
+    *fields("production_seat_mode production_seat_player production_valid"), ("committed_states", array(57)),
+    *fields("committed_analog_move committed_analog_aim committed_analog_cursor committed_mouse_movement", VECTOR),
+    ("producing_local_input", "n")]
 SCHEMAS["TimerMan1"] = fields("ticks_per_second real_time sim_time sim_update_count sim_accumulator delta_time delta_time_seconds delta_buffer "
     "sim_updates_since_drawn drawn_sim_update sim_speed time_scale sim_paused sim_time_frozen free_run_sim "
     "pace_accrued pace_trimmed pace_wall_seen pace_cap_lost pace_paused_lost pace_update_calls pace_reset_calls")
@@ -123,6 +128,7 @@ SCHEMAS["SoundPlayback1"] = [("voices", sequence("o"))]
 SCHEMAS["SoundContainer1"] = [("entity", "o"), ("identity", "n"), ("playing_channels", sequence("n")),
     *fields("overlap_mode bus immobile attenuation_start custom_pan panning_multiplier loops properties_current priority affected_by_global_pitch"),
     ("position", VECTOR), *fields("pitch pitch_variation volume faded_out paused music_pre_entry_time music_exit_time")]
+SCHEMAS["SoundContainer3"] = [*SCHEMAS["SoundContainer1"], ("logical_playback", "o")]
 SCHEMAS["MusicSample1"] = [("content", "o"), ("backend", "s"), ("offset", VECTOR), *fields("minimum attenuation")]
 SCHEMAS["MusicSet1"] = [("cycle", "n"), ("selection", array(2)), *fields("samples subsets", sequence("o"))]
 SCHEMAS["MusicSound1"] = [*fields("native set", "o")]
@@ -464,6 +470,17 @@ _LOCAL_FIELDS = {
     "AEmitterRuntime1": {"average_burst_impulse", "average_impulse"},
     "HDFirearmRuntime1": {"ai_fire_velocity", "ai_bullet_lifetime", "ai_bullet_acceleration"},
 }
+# Controller3's producer region is written only inside the producing pass this machine runs for the actors
+# it owns (MovableMan.cpp:804-823); the wire never writes it (Controller::ApplyWireState, Controller.cpp:446-459).
+# production_*: EndLocalProduction stores this machine's own sample (Controller.cpp:399-408).
+# production_seat_mode/_seat_player: copies of the already-local seat_mode/seat_player (Controller.cpp:405-406).
+# production_valid: the local seat's claim on that sample, cleared by the local SetDisabled (Controller.h:193).
+# committed_*: the sim-facing input BeginLocalProduction holds aside for the duration of the local pass (Controller.cpp:379-384).
+# producing_local_input: true only between this machine's BeginLocalProduction and EndLocalProduction (Controller.cpp:385, 407).
+_LOCAL_FIELDS["Controller3"] = _LOCAL_FIELDS["Controller2"] | set(
+    "production_states production_analog_move production_analog_aim production_analog_cursor production_mouse_movement "
+    "production_seat_mode production_seat_player production_valid committed_states committed_analog_move committed_analog_aim "
+    "committed_analog_cursor committed_mouse_movement producing_local_input".split())
 
 
 def project(value, shared=False, snapshot_name=None, path=(), masked=None, local_roles=None, cross_process=False):
@@ -500,7 +517,7 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
                 if isinstance(parameter, dict) and parameter.get("index") == _MULTIBAND_EQ_LOWPASS:
                     parameter["number"] = "LOCAL"
                     masked.append((*path, "parameters", index, "number"))
-        if version in ("Controller1", "Controller2"):
+        if version in ("Controller1", "Controller2", "Controller3"):
             for key in ("release_timer", "joy_accel_timer", "key_accel_timer"):
                 result[key]["sim_start"] = "LOCAL"
                 masked.append((*path, key, "sim_start"))
@@ -596,6 +613,14 @@ def selftest():
     projected = project(two, shared=True, masked=masked)
     check("controller2_local_fields_masked", projected["player"] == "LOCAL" and projected["input_mode"] == "LOCAL" and
           projected["synced_order_disable_tick"] == 305 and projected["release_timer"]["sim_start"] == "LOCAL")
+
+    three = decode(_payload("Controller3"))
+    projected = project(three, shared=True, path=("player_controller", 0), masked=[])
+    producer = [name for name, _kind in SCHEMAS["Controller3"][len(SCHEMAS["Controller2"]):]]
+    check("controller3_decodes", isinstance(three, dict) and three["version"] == "Controller3" and len(producer) == 14 and
+          all(name in three for name in producer))
+    check("controller3_producer_fields_masked", all(projected[name] == "LOCAL" for name in producer) and
+          projected["team"] == "LOCAL" and projected["joy_accel_timer"]["sim_start"] == "LOCAL")
     return all(checks)
 
 
