@@ -6,6 +6,7 @@
 #include <list>
 #include <cmath>
 #include <algorithm>
+#include <cstdint>
 
 #define g_SettingsMan SettingsMan::Instance()
 
@@ -103,6 +104,12 @@ namespace RTE {
 
 		/// Sets the lockstep input-delay buffer (frames) a hosted match will use.
 		void SetNetworkInputDelayFrames(int newInputDelayFrames) { m_NetworkInputDelayFrames = newInputDelayFrames; }
+
+		/// Gets the saved autosave cadence in simulation seconds; zero disables autosaves.
+		uint32_t GetAutosaveSeconds() const { return m_AutosaveSeconds; }
+
+		/// Sets the saved autosave cadence without replacing a command-line override.
+		void SetAutosaveSeconds(uint32_t seconds);
 
 		/// Gets the base URL of the session-directory service.
 		/// @return The session-directory URL; empty means the directory is disabled.
@@ -567,6 +574,7 @@ namespace RTE {
 		int m_PathFinderGridNodeSize; //!< The grid size used by the PathFinder, in pixels.
 		int m_AIUpdateInterval; //!< How often actor's AI should be updated, i.e. every n simulation updates.
 		int m_NetworkInputDelayFrames; //!< Lockstep input-delay buffer (frames) a hosted match uses; the client adopts the host's.
+		uint32_t m_AutosaveSeconds; //!< Saved checkpoint cadence in simulation seconds; zero disables autosaves.
 		std::string m_SessionDirectoryUrl; //!< Base URL of the session-directory service; empty disables it.
 		std::string m_SessionDirectoryInstallKey; //!< Per-install rate-limit identity sent as X-Install-Key; generated on the first directory use.
 		std::string m_SessionDirectoryCertSha256; //!< Pinned SHA-256 hex of the directory server's certificate; empty = system chain.
