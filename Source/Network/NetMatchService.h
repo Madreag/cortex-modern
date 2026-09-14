@@ -277,6 +277,12 @@ namespace RTE {
 		std::vector<NetChatEntry> TakeChatEntries();
 		/// "Input delay: N (auto, Rms ping)" / "(fixed)", from the announced match config. "" pre-lobby.
 		std::string GetInputDelayText() const;
+		/// The live host RTT on a client, or the largest connected peer RTT on the host.
+		std::optional<uint32_t> GetMatchPingMs() const;
+		/// Whether the current match is being restored from the host snapshot.
+		bool IsMatchResyncing() const;
+		/// The current seat holder's display name for presentation events.
+		std::string GetPeerDisplayName(uint8_t peerId) const;
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
 		std::string BuildReportJson() const;
@@ -394,6 +400,8 @@ namespace RTE {
 		void EndAdmissionSession();
 		void ResetRosterTransitionHistory();
 		void RecordRosterTransitions(uint64_t observedAtMs);
+		/// Publishes a successful local host action to the presentation sink; caller holds the lock.
+		void RecordModerationAction(uint16_t stableSeat, NetModerationAction action);
 		/// Runs the §11 automatic-retry schedule from the service's own state. Game thread only.
 		void DriveReconnectUx(uint64_t nowMs);
 		/// Destroys a rematch lobby whose peers did not all come back inside c_CompletedLobbyExpiryMs.

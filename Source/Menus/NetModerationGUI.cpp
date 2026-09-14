@@ -15,8 +15,11 @@
 #include "AllegroScreen.h"
 #include "AllegroBitmap.h"
 #include "RTEError.h"
+#include "TimerMan.h"
+#include "RTETools.h"
 
 #include <algorithm>
+#include <cstdio>
 
 using namespace RTE;
 
@@ -24,6 +27,30 @@ namespace {
 	std::string DisplayName(std::string text) {
 		for (char& c: text) if (static_cast<unsigned char>(c) < 32) c = ' ';
 		return text;
+	}
+
+	std::string FitLine(GUIFont* font, std::string text, int width) {
+		text = DisplayName(std::move(text));
+		if (font->CalculateWidth(text) <= width) return text;
+		while (!text.empty() && font->CalculateWidth(text + "...") > width) text.pop_back();
+		return text + "...";
+	}
+
+	std::string ToastText(const ScenarioRunner::NetUiToastRecord& toast) {
+		uint8_t sender = toast.senderPeerId;
+		if (toast.kind == "resumed" && sender == 0) {
+			const auto& events = ScenarioRunner::GetNetUiToastLog();
+			auto event = std::find_if(events.rbegin(), events.rend(), [&](const auto& entry) {
+				return entry.tick == toast.tick && entry.kind == toast.kind && entry.text == toast.text;
+			});
+			if (event != events.rend()) {
+				for (++event; event != events.rend(); ++event) {
+					if (event->kind == "resuming") { sender = event->senderPeerId; break; }
+					if (event->kind == "paused" || event->kind == "resumed") break;
+				}
+			}
+		}
+		return toast.text + (sender ? " by " + g_NetMatchService.GetPeerDisplayName(sender) : std::string());
 	}
 
 	std::string WrapText(GUIFont* font, const std::string& text, int width) {
@@ -51,7 +78,7 @@ namespace {
 }
 
 NetModerationGUI::NetModerationGUI(AllegroScreen* screen) :
-	m_Input(std::make_unique<GUIInputWrapper>(-1, true)), m_Controls(std::make_unique<GUIControlManager>()) {
+	m_Screen(screen), m_Input(std::make_unique<GUIInputWrapper>(-1, true)), m_Controls(std::make_unique<GUIControlManager>()) {
 	RTEAssert(m_Controls->Create(screen, m_Input.get(), "Base.rte/GUIs/Skins/Menus", "MainMenuSubMenuSkin.ini"), "Could not create the network seat panel");
 	std::string fontName;
 	m_Controls->GetSkin()->GetValue("Label", "Font", &fontName);
@@ -93,6 +120,22 @@ NetModerationGUI::NetModerationGUI(AllegroScreen* screen) :
 }
 
 NetModerationGUI::~NetModerationGUI() = default;
+
+void NetModerationGUI::CreateOverlay() {
+	if (m_OverlayControls) return;
+	m_OverlayControls = std::make_unique<GUIControlManager>();
+	RTEAssert(m_OverlayControls->Create(m_Screen, m_Input.get(), "Base.rte/GUIs/Skins/Menus", "MainMenuSubMenuSkin.ini"), "Could not create the network status widget");
+	m_NetStatusBox = dynamic_cast<GUICollectionBox*>(m_OverlayControls->AddControl("BoxNetMatchStatus", "COLLECTIONBOX", nullptr, 0, 32, 252, 76));
+	m_NetStatus = dynamic_cast<GUILabel*>(m_OverlayControls->AddControl("LabelNetMatchStatus", "LABEL", m_NetStatusBox, 6, 6, 240, 64));
+	m_NetStatus->SetVAlignment(GUIFont::Top);
+	m_NetStatusBox->SetVisible(false);
+	for (size_t row = 0; row < m_Toasts.size(); ++row) {
+		m_Toasts[row] = dynamic_cast<GUILabel*>(m_OverlayControls->AddControl("LabelNetMatchToast" + std::to_string(row), "LABEL", nullptr, 0, 0, 20, 12));
+		m_Toasts[row]->SetHAlignment(GUIFont::Centre);
+		m_Toasts[row]->SetVAlignment(GUIFont::Top);
+		m_Toasts[row]->SetVisible(false);
+	}
+}
 
 bool NetModerationGUI::SetOpen(bool open) {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
@@ -210,14 +253,138 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	font->DrawAligned(&bitmap, 14, y + 6, text, GUIFont::Left, GUIFont::Top);
 }
 
+void NetModerationGUI::SetMatchPace(uint64_t ticks, long long wallUs) {
+	m_MatchPaceTps = wallUs > 0 ? static_cast<double>(ticks) * 1000000.0 / static_cast<double>(wallUs) : 0.0;
+}
+
+void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
+	CreateOverlay();
+	BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
+	GUIFont* font = g_FrameMan.GetSmallFont(true);
+	const int width = std::min(252, backbuffer->w - 16);
+	const int x = backbuffer->w - width - 8;
+	constexpr int y = 32;
+	constexpr int height = 76;
+	m_NetStatusBox->Move(x, y);
+	if (m_NetStatusBox->GetWidth() != width) m_NetStatusBox->Resize(width, height);
+	m_NetStatusBox->SetVisible(true);
+	m_NetStatus->SetFont(font);
+	m_NetStatus->Resize(width - 12, height - 12);
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		m_MatchDelayFrames = ScenarioRunner::GetLockstepLocalInputDelay();
+		m_BaseDelayFrames = ScenarioRunner::GetLockstepInputDelayFrames();
+	}
+	char metrics[128];
+	std::snprintf(metrics, sizeof(metrics), "D %u ticks / %.1f ms", static_cast<unsigned>(m_MatchDelayFrames), static_cast<double>(m_MatchDelayFrames) * 1000.0 / 60.0);
+	std::string text = std::string("NET STATUS  /  SEATS [F6]\n") + metrics;
+	if (m_MatchDelayFrames != m_BaseDelayFrames) {
+		text += " (base " + std::to_string(m_BaseDelayFrames) + ")";
+	}
+	const auto ping = g_NetMatchService.GetMatchPingMs();
+	text += "\nRTT " + (ping ? std::to_string(*ping) : "--") + " ms / " + (snapshot.isHost ? "max peer" : "host link");
+	// Sim updates against wall time over the last second, so a stalled or paused match reads its true pace
+	static long long s_paceMarkUs = 0;
+	static uint64_t s_paceMarkUpdates = 0;
+	static double s_paceTps = 0.0;
+	const long long paceNowUs = g_TimerMan.GetAbsoluteTime();
+	const uint64_t paceUpdates = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	const long long paceSpanUs = paceNowUs - s_paceMarkUs;
+	if (s_paceMarkUs <= 0 || paceSpanUs < 0) {
+		s_paceMarkUs = paceNowUs;
+		s_paceMarkUpdates = paceUpdates;
+	} else if (paceSpanUs >= 1000000 || (s_paceTps == 0.0 && paceSpanUs > 0)) {
+		s_paceTps = static_cast<double>(paceUpdates - s_paceMarkUpdates) * 1000000.0 / static_cast<double>(paceSpanUs);
+		if (paceSpanUs >= 1000000) {
+			s_paceMarkUs = paceNowUs;
+			s_paceMarkUpdates = paceUpdates;
+		}
+	}
+	std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", s_paceTps);
+	text += metrics;
+	std::string holdName;
+	uint32_t holdSeconds = 0;
+	bool waiting = false;
+	if (g_NetMatchService.IsMatchResyncing()) {
+		text += "\nRESYNCING MATCH";
+		waiting = true;
+	} else if (ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds)) {
+		const int room = width - 12 - font->CalculateWidth("Waiting for  to reconnect");
+		text += "\nWaiting for " + FitLine(font, holdName.empty() ? "a player" : holdName, room) + " to reconnect\n" + std::to_string(holdSeconds) + " s left";
+		waiting = true;
+	} else if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame()) {
+		text += "\nWAITING FOR FRAMES\n" + FitLine(font, ScenarioRunner::GetLockstepMissingPeers(), width - 12);
+		waiting = true;
+	} else if (ScenarioRunner::IsLockstepPaused()) {
+		const int countdown = ScenarioRunner::GetLockstepResumeCountdown();
+		text += countdown > 0 ? "\nResuming in " + std::to_string((countdown + 59) / 60) + " s" : "\nPAUSED / P to resume";
+	} else {
+		text += "\nLIVE";
+	}
+	m_NetStatus->SetText(text);
+	AllegroBitmap bitmap(backbuffer);
+	rectfill(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(20, 22, 27, 255));
+	rect(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(59, 65, 83, 255));
+	hline(backbuffer, x + 1, y + 1, x + width - 2, waiting ? makeacol32(170, 120, 0, 255) : makeacol32(108, 118, 168, 255));
+	m_NetStatus->Draw(&bitmap, false);
+}
+
+void NetModerationGUI::DrawMatchToasts() {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive() && !g_NetMatchService.IsMatchResyncing()) {
+		for (GUILabel* label: m_Toasts) {
+			if (label) {
+				label->SetVisible(false);
+				label->SetText("");
+			}
+		}
+		return;
+	}
+	RandomGenerator* previousRNG = t_simRNGOverride;
+	t_simRNGOverride = &g_RenderRNG;
+	CreateOverlay();
+	const auto visible = ScenarioRunner::GetVisibleNetUiToasts();
+	BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
+	GUIFont* font = g_FrameMan.GetSmallFont(true);
+	const int rowHeight = std::max(12, font->GetFontHeight()) + 8;
+	const int width = std::min(520, backbuffer->w - 32);
+	const int x = (backbuffer->w - width) / 2;
+	const int top = backbuffer->h - 8 - static_cast<int>(visible.size()) * rowHeight;
+	AllegroBitmap bitmap(backbuffer);
+	for (size_t row = 0; row < m_Toasts.size(); ++row) {
+		GUILabel* label = m_Toasts[row];
+		const bool shown = row < visible.size();
+		label->SetVisible(shown);
+		label->SetText(shown ? FitLine(font, ToastText(visible[row]), width - 16) : std::string());
+		if (!shown) continue;
+		const int y = top + static_cast<int>(row) * rowHeight;
+		label->SetFont(font);
+		label->Move(x + 8, y + 4);
+		label->Resize(width - 16, rowHeight - 8);
+		rectfill(backbuffer, x, y, x + width - 1, y + rowHeight - 3, makeacol32(20, 22, 27, 255));
+		label->Draw(&bitmap, false);
+	}
+	t_simRNGOverride = previousRNG;
+}
+
 void NetModerationGUI::Draw() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+	if (m_NetStatusBox) {
+		m_NetStatusBox->SetVisible(false);
+		m_NetStatus->SetVisible(false);
+	}
 	if (snapshot.serviceState != "Running" && snapshot.serviceState != "Starting" && snapshot.serviceState != "ReadyToLaunch" && !m_Open) return;
-	DrawRoster(snapshot);
+	RandomGenerator* previousRNG = t_simRNGOverride;
+	t_simRNGOverride = &g_RenderRNG;
+	if (ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.IsMatchResyncing()) {
+		DrawMatchStatus(snapshot);
+		m_NetStatus->SetVisible(true);
+	} else {
+		DrawRoster(snapshot);
+	}
 	if (m_Open) {
 		m_Controls->Draw();
 		m_Controls->DrawMouse();
 	}
+	t_simRNGOverride = previousRNG;
 }
 
 bool NetModerationGUI::AutomationModerate(const std::string& action, int stableSeat) {
@@ -245,4 +412,15 @@ bool NetModerationGUI::AutomationModerate(const std::string& action, int stableS
 	return m_ActionResult == NetH4ModerationResult::Ok;
 }
 
-GUIControl* NetModerationGUI::GetControl(const std::string& name) const { return m_Controls->GetControl(name); }
+GUIControl* NetModerationGUI::GetControl(const std::string& name) const {
+	if (m_OverlayControls && name == "LabelNetMatchToastNewest") {
+		for (auto row = m_Toasts.rbegin(); row != m_Toasts.rend(); ++row) {
+			if ((*row)->GetVisible()) return *row;
+		}
+		return m_Toasts.front();
+	}
+	if (m_OverlayControls) {
+		if (GUIControl* overlay = m_OverlayControls->GetControl(name)) return overlay;
+	}
+	return m_Controls->GetControl(name);
+}
