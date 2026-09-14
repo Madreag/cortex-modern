@@ -290,6 +290,12 @@ namespace RTE {
 		/// Match end or the host leaving takes the directory row down now rather than at Destroy.
 		/// Game-thread only, like the client it drives.
 		void RetractDirectoryListing();
+		/// Keeps only the registered row bound to this host's ICE identity. Game-thread only.
+		bool ShouldKeepIceDirectoryLease() const;
+		/// Hides the bound row while retaining its lease. Game-thread only.
+		void HideDirectoryListing();
+		/// Relists an acknowledged hidden lease or retracts a lost one. Game-thread only.
+		void SettleKeptDirectoryLease();
 		/// Host: waits for the register reply so the GNS identity can be pinned to the session id
 		/// before any listen socket of this process opens. Worker thread; reads the published snapshot.
 		bool WaitForDirectorySession(uint64_t budgetMs, std::string& sessionId, std::string& token) const;
@@ -318,6 +324,7 @@ namespace RTE {
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
+		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
@@ -456,6 +463,8 @@ namespace RTE {
 		NetDirectoryClient m_Directory;
 		NetDirectoryRegisterRequest m_DirectoryRow; //!< The listing template; counts refresh per Update.
 		bool m_DirectoryRetracted = false;          //!< The match ended while the state was still Running.
+		bool m_DirectoryHidden = false;             //!< A natural ICE end keeps the bound row unlisted.
+		bool m_DirectoryRelistPending = false;      //!< The next lobby awaits the hide acknowledgement.
 		uint16_t m_BeaconGamePort = 0;
 		uint8_t m_BeaconMaxPlayers = 2;
 		std::atomic<bool> m_ReadyRequested{false};

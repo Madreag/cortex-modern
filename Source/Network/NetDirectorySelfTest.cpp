@@ -1559,6 +1559,22 @@ namespace RTE {
 					}
 				}
 
+				{   // a hide heartbeat answered 404 after the intent turned visible again still fails closed
+					ScriptedClient s;
+					s.replies->push_back({200, kRegisterCapable, ""});
+					s.replies->push_back({404, R"({"error":"not_found"})", ""});
+					CallAdvertise(s.client, SampleRegisterRequest(), false, false);
+					s.client.Update(0);
+					s.client.Update(0); // the register lands; the hide heartbeat leaves
+					CallAdvertise(s.client, SampleRegisterRequest(), false, true); // relisted while the hide is out
+					s.client.Update(0); // the hide's 404 lands
+					s.client.Update(0);
+					std::cout << "[net-directory-selftest] inflight-hidden-404 registers=" << CountRequests(s, "POST", "/v1/sessions") << " state=" << NetDirectoryClient::StateName(s.client.GetState()) << std::endl;
+					if (CountRequests(s, "POST", "/v1/sessions") != 1 || s.client.GetState() != NetDirectoryClient::State::Failed) {
+						note("inflight-hidden-404: the hide's 404 re-registered a visible identity once the intent turned visible");
+					}
+				}
+
 				// A contradicting or undecodable echo retries at 5000 ms, then 10000 ms, and is never terminal.
 				const struct {
 					const char* name;
