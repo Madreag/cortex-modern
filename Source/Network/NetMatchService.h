@@ -167,8 +167,17 @@ namespace RTE {
 		/// gate can be bisected against the pre-admission handshake without a rebuild.
 		static void SetAdmissionEnabled(bool enabled) { s_AdmissionEnabled = enabled; }
 		static bool IsAdmissionEnabled() { return s_AdmissionEnabled; }
-		/// Sets this machine's checkpoint cadence in sim seconds; zero disables it.
-		static void SetAutosaveSeconds(uint32_t seconds) { s_AutosaveSeconds = seconds; }
+		/// Overrides this run's checkpoint cadence in simulation seconds; zero disables it.
+		static void SetAutosaveSeconds(uint32_t seconds) {
+			s_AutosaveSeconds = seconds;
+			s_AutosaveSecondsOverridden = true;
+		}
+		/// Applies the saved cadence while preserving any command-line override.
+		static void SetAutosaveSecondsSetting(uint32_t seconds) {
+			if (!s_AutosaveSecondsOverridden) s_AutosaveSeconds = seconds;
+		}
+		/// Gets this run's checkpoint cadence, including its command-line override.
+		static uint32_t GetAutosaveSeconds() { return s_AutosaveSeconds; }
 		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
 		void AutosaveAtTickBoundary(uint64_t tick);
 		/// §11: the multiprocess reconnect test shares one Userdata, so each process gets its own
@@ -430,6 +439,7 @@ namespace RTE {
 		std::string m_DiagnosticIdentity;
 		std::string m_DiagnosticRuntimeError;
 		static uint32_t s_AutosaveSeconds;
+		static bool s_AutosaveSecondsOverridden;
 		std::string m_AutosaveMatchId;
 		int64_t m_NextAutosaveSimTime = -1;
 		int64_t m_LastAutosaveSimTime = -1;
