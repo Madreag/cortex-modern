@@ -6028,6 +6028,77 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (holdNeverNamesASweptObject ? "PASS" : "FAIL") << " a_hold_never_names_a_swept_object" << std::endl;
 	checkpointValues = holdNeverNamesASweptObject && checkpointValues;
+	// A mod caches a required module in Create and calls its methods in a later hook; those methods live on the
+	// module's metatable, so a preview self copy that keeps only raw fields hands the clone an empty table.
+	bool previewCopyKeepsModuleMethods = false;
+	{
+		SetLuaPath(g_PresetMan.GetFullModulePath("Base.rte/Scripts/Utility/ParticleUtility.lua"));
+		const bool staged = RunScriptString(
+		                        "_ScriptedObjects = _ScriptedObjects or {};"
+		                        "_PreviewModuleHost = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\");"
+		                        "_PreviewModuleUID = _PreviewModuleHost.UniqueID;"
+		                        "_ScriptedObjects[tostring(_PreviewModuleUID)] = _PreviewModuleHost;"
+		                        "_ScriptedObjects[tostring(_PreviewModuleUID)].particleUtility = require(\"Scripts/Utility/ParticleUtility\");") == 0;
+		lua_getglobal(m_State, "_PreviewModuleUID");
+		const long uid = static_cast<long>(lua_tonumber(m_State, -1));
+		lua_pop(m_State, 1);
+		std::vector<std::string> problems;
+		const bool copied = staged && uid > 0 && CopyScriptInstanceToPreviewHold(uid, problems);
+		for (const std::string& problem: problems) {
+			std::cout << "[preview-module] " << problem << std::endl;
+		}
+		const bool checked = copied && RunScriptString(
+		                                   "local module = require(\"Scripts/Utility/ParticleUtility\");"
+		                                   "local hold = _ScriptFieldsStash and _ScriptFieldsStash[\"preview:\" .. tostring(_PreviewModuleUID)];"
+		                                   "local copy = hold and hold.particleUtility;"
+		                                   "_PreviewModuleMethod = type(copy) == \"table\" and rawequal(copy.CreateDirectionalSmokeEffect, module.CreateDirectionalSmokeEffect);"
+		                                   "_PreviewModuleIsolated = false;"
+		                                   "if type(copy) == \"table\" then copy.previewOnlyField = 1; _PreviewModuleIsolated = not rawequal(copy, module) and module.previewOnlyField == nil; end") == 0;
+		lua_getglobal(m_State, "_PreviewModuleMethod");
+		const bool methodResolves = lua_toboolean(m_State, -1) != 0;
+		lua_pop(m_State, 1);
+		lua_getglobal(m_State, "_PreviewModuleIsolated");
+		const bool writesStayInTheCopy = lua_toboolean(m_State, -1) != 0;
+		lua_pop(m_State, 1);
+		std::cout << "[preview-module] staged=" << staged << " copied=" << copied << " checked=" << checked
+		          << " method_resolves=" << methodResolves << " writes_stay_in_copy=" << writesStayInTheCopy << std::endl;
+		previewCopyKeepsModuleMethods = checked && methodResolves && writesStayInTheCopy;
+		RunScriptString(
+		    "if _ScriptFieldsStash and _PreviewModuleUID then _ScriptFieldsStash[\"preview:\" .. tostring(_PreviewModuleUID)] = nil; end;"
+		    "if _PreviewModuleUID then _ScriptedObjects[tostring(_PreviewModuleUID)] = nil; end;"
+		    "_PreviewModuleHost = nil; _PreviewModuleUID = nil; _PreviewModuleMethod = nil; _PreviewModuleIsolated = nil");
+		g_LuaMan.CollectGarbageForCheckpoint();
+	}
+	std::cout << "[script-graph-selftest] " << (previewCopyKeepsModuleMethods ? "PASS" : "FAIL") << " preview_self_copy_keeps_required_module_methods" << std::endl;
+	checkpointValues = previewCopyKeepsModuleMethods && checkpointValues;
+	// Only the predicting peer runs previews, so a global a preview hook writes is that peer's alone; the boundary must undo it.
+	bool previewLeavesGlobalsAsFound = false;
+	{
+		RunScriptString("_PreviewFenceExisting = \"canonical\"; _PreviewFenceNew = nil; package.loaded[\"_preview_fence_probe\"] = nil");
+		LuaMan::CapturePreviewSelfCopies({}, false);
+		{
+			LuaMan::PreviewHookScope hookScope(true);
+			RunScriptString("_PreviewFenceNew = 7; _PreviewFenceExisting = \"preview\"; package.loaded[\"_preview_fence_probe\"] = {}");
+		}
+		LuaMan::EndPreviewScripts();
+		lua_getglobal(m_State, "_PreviewFenceNew");
+		const bool addedGlobalGone = lua_isnil(m_State, -1);
+		lua_pop(m_State, 1);
+		lua_getglobal(m_State, "_PreviewFenceExisting");
+		const char* existing = lua_tostring(m_State, -1);
+		const bool changedGlobalRestored = existing && std::strcmp(existing, "canonical") == 0;
+		lua_pop(m_State, 1);
+		RunScriptString("_PreviewFenceModuleGone = package.loaded[\"_preview_fence_probe\"] == nil");
+		lua_getglobal(m_State, "_PreviewFenceModuleGone");
+		const bool loadedModuleGone = lua_toboolean(m_State, -1) != 0;
+		lua_pop(m_State, 1);
+		std::cout << "[preview-globals] added_gone=" << addedGlobalGone << " changed_restored=" << changedGlobalRestored
+		          << " loaded_module_gone=" << loadedModuleGone << std::endl;
+		previewLeavesGlobalsAsFound = addedGlobalGone && changedGlobalRestored && loadedModuleGone;
+		RunScriptString("_PreviewFenceExisting = nil; _PreviewFenceNew = nil; _PreviewFenceModuleGone = nil; package.loaded[\"_preview_fence_probe\"] = nil");
+	}
+	std::cout << "[script-graph-selftest] " << (previewLeavesGlobalsAsFound ? "PASS" : "FAIL") << " preview_leaves_globals_as_found" << std::endl;
+	checkpointValues = previewLeavesGlobalsAsFound && checkpointValues;
 	const std::string report = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
 	lua_pop(L, 1);
 	std::cout << report << std::endl;
@@ -7831,7 +7902,6 @@ static std::vector<uint64_t> HashScriptObjectGraphs(LuaStateWrapper& master, Lua
 
 std::unordered_set<const MovableObject*> LuaMan::s_PreviewClones;
 std::unordered_set<long> LuaMan::s_PreviewFrozenUIDs;
-std::vector<std::pair<LuaStateWrapper*, std::string>> LuaMan::s_PreviewGlobalSnapshots;
 static std::vector<std::pair<long, LuaStateWrapper*>> s_PreviewCloneBindings;
 
 namespace {
@@ -7920,6 +7990,78 @@ namespace {
 			lua_rawset(L, copy);
 			lua_pop(L, 1);
 		}
+		// A cached module or class keeps its methods on its metatable; the copy gets its own clone of it, so the
+		// preview reaches the same methods and a write through them still lands inside the copy.
+		if (lua_getmetatable(L, src) != 0) {
+			PushPreviewClone(L, -1, seen, problems);
+			lua_setmetatable(L, copy);
+			lua_pop(L, 1);
+		}
+	}
+
+	// The key/value set of one table, for the preview fence; nested tables are not followed. The record table is
+	// reused across previews so a fence costs no allocation once a state has run one.
+	void FillShallowCopy(lua_State* L, int src, int copy) {
+		src = AbsoluteLuaIndex(L, src);
+		copy = AbsoluteLuaIndex(L, copy);
+		lua_pushnil(L);
+		while (lua_next(L, copy) != 0) {
+			lua_pop(L, 1);
+			lua_pushvalue(L, -1);
+			lua_pushnil(L);
+			lua_rawset(L, copy);
+		}
+		lua_pushnil(L);
+		while (lua_next(L, src) != 0) {
+			lua_pushvalue(L, -2);
+			lua_pushvalue(L, -2);
+			lua_rawset(L, copy);
+			lua_pop(L, 1);
+		}
+	}
+
+	// Puts a table back the way a PushShallowCopy record found it: added keys go, changed and deleted values come back.
+	int RestoreFromShallowCopy(lua_State* L, int live, int saved) {
+		live = AbsoluteLuaIndex(L, live);
+		saved = AbsoluteLuaIndex(L, saved);
+		lua_newtable(L);
+		const int pending = lua_gettop(L);
+		int count = 0;
+		lua_pushnil(L);
+		while (lua_next(L, live) != 0) {
+			lua_pushvalue(L, -2);
+			lua_rawget(L, saved);
+			const bool differs = lua_isnil(L, -1) || !lua_rawequal(L, -1, -2);
+			lua_pop(L, 1);
+			if (differs) {
+				lua_pushvalue(L, -2);
+				lua_rawseti(L, pending, ++count);
+			}
+			lua_pop(L, 1);
+		}
+		for (int index = 1; index <= count; ++index) {
+			lua_rawgeti(L, pending, index);
+			lua_pushvalue(L, -1);
+			lua_rawget(L, saved);
+			lua_rawset(L, live);
+		}
+		int changes = count;
+		lua_pushnil(L);
+		while (lua_next(L, saved) != 0) {
+			lua_pushvalue(L, -2);
+			lua_rawget(L, live);
+			const bool gone = lua_isnil(L, -1);
+			lua_pop(L, 1);
+			if (gone) {
+				lua_pushvalue(L, -2);
+				lua_pushvalue(L, -2);
+				lua_rawset(L, live);
+				++changes;
+			}
+			lua_pop(L, 1);
+		}
+		lua_pop(L, 1);
+		return changes;
 	}
 
 	std::unordered_map<long, MovableObject*> s_PreviewRootByUID;
@@ -8047,6 +8189,12 @@ namespace {
 			lua_pop(L, 3);
 		}
 		lua_pop(L, 1);
+		// The hold's metatables are its own clones, so the references they carry get the same remap as its fields.
+		if (lua_getmetatable(L, index) != 0) {
+			const bool remapped = RemapPreviewValue(L, -1, seen, freezeClass);
+			lua_pop(L, 1);
+			return remapped;
+		}
 		return true;
 	}
 
@@ -8125,6 +8273,84 @@ bool LuaStateWrapper::RestorePreviewGlobals(const std::string& text, std::vector
 	CollectStrings(m_State, -1, problems);
 	lua_settop(m_State, top);
 	return true;
+}
+
+void LuaStateWrapper::CapturePreviewGlobalFence() {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	const int top = lua_gettop(m_State);
+	lua_getfield(m_State, LUA_REGISTRYINDEX, "CortexPreviewGlobalFence");
+	if (!lua_istable(m_State, -1)) {
+		lua_pop(m_State, 1);
+		lua_newtable(m_State);
+		for (const char* field: {"globals", "loaded", "required"}) {
+			lua_newtable(m_State);
+			lua_setfield(m_State, -2, field);
+		}
+		lua_pushvalue(m_State, -1);
+		lua_setfield(m_State, LUA_REGISTRYINDEX, "CortexPreviewGlobalFence");
+	}
+	const int fence = lua_gettop(m_State);
+	lua_getfield(m_State, fence, "globals");
+	lua_pushvalue(m_State, LUA_GLOBALSINDEX);
+	FillShallowCopy(m_State, -1, -2);
+	lua_pop(m_State, 2);
+	// A module the preview requires must not stay loaded: the next canonical require has to run the chunk itself.
+	lua_getfield(m_State, fence, "loaded");
+	lua_getglobal(m_State, "package");
+	if (lua_istable(m_State, -1)) {
+		lua_getfield(m_State, -1, "loaded");
+		if (lua_istable(m_State, -1)) {
+			FillShallowCopy(m_State, -1, -3);
+		}
+		lua_pop(m_State, 1);
+	}
+	lua_pop(m_State, 2);
+	lua_getfield(m_State, fence, "required");
+	lua_getglobal(m_State, "_RequiredPackages");
+	if (lua_istable(m_State, -1)) {
+		FillShallowCopy(m_State, -1, -2);
+	}
+	lua_pop(m_State, 2);
+	m_PreviewGlobalFenceArmed = true;
+	lua_settop(m_State, top);
+}
+
+int LuaStateWrapper::ReleasePreviewGlobalFence() {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	if (!m_PreviewGlobalFenceArmed) {
+		return 0;
+	}
+	m_PreviewGlobalFenceArmed = false;
+	const int top = lua_gettop(m_State);
+	lua_getfield(m_State, LUA_REGISTRYINDEX, "CortexPreviewGlobalFence");
+	if (!lua_istable(m_State, -1)) {
+		lua_settop(m_State, top);
+		return 0;
+	}
+	const int fence = lua_gettop(m_State);
+	int changes = 0;
+	lua_getfield(m_State, fence, "globals");
+	lua_pushvalue(m_State, LUA_GLOBALSINDEX);
+	changes += RestoreFromShallowCopy(m_State, -1, -2);
+	lua_pop(m_State, 2);
+	lua_getfield(m_State, fence, "loaded");
+	lua_getglobal(m_State, "package");
+	if (lua_istable(m_State, -1)) {
+		lua_getfield(m_State, -1, "loaded");
+		if (lua_istable(m_State, -1)) {
+			changes += RestoreFromShallowCopy(m_State, -1, -3);
+		}
+		lua_pop(m_State, 1);
+	}
+	lua_pop(m_State, 2);
+	lua_getfield(m_State, fence, "required");
+	lua_getglobal(m_State, "_RequiredPackages");
+	if (lua_istable(m_State, -1)) {
+		changes += RestoreFromShallowCopy(m_State, -1, -2);
+	}
+	lua_pop(m_State, 2);
+	lua_settop(m_State, top);
+	return changes;
 }
 
 bool LuaStateWrapper::BindPreviewScriptObject(MovableObject* clone, bool sharedSlot) {
@@ -8267,7 +8493,6 @@ std::string LuaMan::PreviewScriptKey(const MovableObject* mo) {
 void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& roots, bool sharedSlot) {
 	DropPreviewSoundCopies();
 	s_PreviewFrozenUIDs.clear();
-	s_PreviewGlobalSnapshots.clear();
 	if (!sharedSlot) {
 		for (const MovableObject* root: roots) {
 			WalkOwned(root, [](MovableObject* mo) {
@@ -8283,19 +8508,26 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 			});
 		}
 	}
-	static const bool snapshotGlobals = [] {
-		const char* value = std::getenv("CC_PREVIEW_GLOBALS_SNAPSHOT");
-		return value && value[0] == '1' && value[1] == '\0';
-	}();
-	if (snapshotGlobals) {
-		ForEachLuaState([](LuaStateWrapper& state) {
-			std::string text;
-			std::vector<std::string> problems;
-			if (state.SnapshotPreviewGlobals(text, problems) && !text.empty()) {
-				s_PreviewGlobalSnapshots.emplace_back(&state, std::move(text));
-			}
-		});
+	if (PreviewGlobalFenceEnabled()) {
+		// Only the states a preview runs code in: the clones script in their originals' states, and the master runs the global scripts.
+		g_LuaMan.GetMasterScriptState().CapturePreviewGlobalFence();
+		for (const MovableObject* root: roots) {
+			WalkOwned(root, [](MovableObject* mo) {
+				LuaStateWrapper* state = mo->GetLuaState();
+				if (state && !state->PreviewGlobalFenceArmed()) {
+					state->CapturePreviewGlobalFence();
+				}
+			});
+		}
 	}
+}
+
+bool LuaMan::PreviewGlobalFenceEnabled() {
+	static const bool enabled = [] {
+		const char* value = std::getenv("CC_PREVIEW_GLOBALS_FENCE");
+		return !(value && value[0] == '0' && value[1] == '\0');
+	}();
+	return enabled;
 }
 
 void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot) {
@@ -8356,7 +8588,6 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 }
 
 void LuaMan::EndPreviewScripts() {
-	s_PreviewGlobalSnapshots.clear();
 	std::unordered_set<long> dropped;
 	for (const auto& [uid, state]: s_PreviewCloneBindings) {
 		if (!state || !dropped.insert(uid).second) {
@@ -8369,8 +8600,15 @@ void LuaMan::EndPreviewScripts() {
 	s_PreviewRootByUID.clear();
 	s_PreviewPartByUID.clear();
 	s_PreviewFrozenUIDs.clear();
-	s_PreviewGlobalSnapshots.clear();
 	s_PreviewSharedSlot = false;
 	s_RunningPreviewHook = false;
 	DropPreviewSoundCopies();
+	// Last, so a global the drops themselves make is undone too: a preview leaves every state's globals as it found them.
+	if (PreviewGlobalFenceEnabled()) {
+		ForEachLuaState([](LuaStateWrapper& state) { s_PreviewGlobalsUndone += state.ReleasePreviewGlobalFence(); });
+		if (s_PreviewGlobalsUndone > 0 && !s_PreviewGlobalsReported) {
+			s_PreviewGlobalsReported = true;
+			std::cout << "[preview-globals] undone=" << s_PreviewGlobalsUndone << " at the first preview that wrote one" << std::endl;
+		}
+	}
 }
