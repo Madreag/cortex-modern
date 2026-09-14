@@ -461,6 +461,7 @@ void AudioMan::GetSoundEvents(int player, std::list<NetworkSoundData>& list) {
 }
 
 void AudioMan::RegisterSoundEvent(int player, NetworkSoundState state, const SoundContainer* soundContainer, int fadeoutTime) {
+	if (player < -1 || player >= c_MaxClients) return;
 	if (player == -1) {
 		for (int i = 0; i < c_MaxClients; i++) {
 			RegisterSoundEvent(i, state, soundContainer, fadeoutTime);
@@ -510,6 +511,7 @@ void AudioMan::RegisterSoundEvent(int player, NetworkSoundState state, const Sou
 }
 
 void AudioMan::ClearSoundEvents(int player) {
+	if (player < -1) return;
 	if (player == -1 || player >= c_MaxClients) {
 		for (int i = 0; i < c_MaxClients; i++) {
 			ClearSoundEvents(i);
@@ -528,9 +530,10 @@ static uint64_t SoundPresetHash(const SoundContainer* soundContainer) {
 
 bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 	if (!soundContainer) return false;
+	const bool audibleHere = soundContainer->CanPresentToPlayer(player);
 	const bool restoring = g_MovableMan.IsRestoringSnapshot();
 	const char* phase = RestorePlayPhaseScope::Name();
-	const bool physicalPlay = !s_PlaybackSuppressed && m_AudioEnabled;
+	const bool physicalPlay = audibleHere && !s_PlaybackSuppressed && m_AudioEnabled;
 	if (restoring && physicalPlay) ++s_RestorePlayCount;
 	if (restoring || (phase && std::strcmp(phase, "staging") == 0)) {
 		std::cout << "[audio-checkpoint] play during restore: preset \"" << soundContainer->GetPresetName() << "\" identity " << soundContainer->GetCheckpointIdentity()
@@ -538,9 +541,9 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 		PrintRestorePlayBacktrace();
 	}
 	const bool logical = soundContainer->UsesLogicalPlayback();
-	const bool physical = !s_PlaybackSuppressed && m_AudioEnabled;
+	const bool physical = audibleHere && !s_PlaybackSuppressed && m_AudioEnabled;
 	// A previewed actor's own event is played now and adopted by its canonical emission later.
-	bool predicting = !physical && m_AudioEnabled && PreviewEventLedger::IsArmed() && PreviewEventLedger::IsPreviewedEmitter(SoundSimulationScope::CurrentKey().objectUID);
+	bool predicting = audibleHere && !physical && m_AudioEnabled && PreviewEventLedger::IsArmed() && PreviewEventLedger::IsPreviewedEmitter(SoundSimulationScope::CurrentKey().objectUID);
 	if (!logical && !physical && !predicting) return false;
 	if (logical) soundContainer->RetireFinishedLogicalVoices();
 	std::erase_if(soundContainer->m_PlayingChannels, [this, soundContainer](int identity) { return !OwnsVoice(identity, soundContainer); });

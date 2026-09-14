@@ -43,7 +43,7 @@ def score_seats(logs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("arm", choices=("snapshot", "damage", "reseat", "lua"))
+    parser.add_argument("arm", choices=("snapshot", "damage", "reseat", "lua", "screens"))
     parser.add_argument("out", type=Path)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--harness", type=Path, default=Path("D:/Projects/stage2_p4/recovery_e2e.py"))
@@ -71,27 +71,32 @@ def main():
         for peer in ("host", "client"):
             lane[peer] += ["-net-match-e2e-brain-reseat", "100"]
         lane["client"] += ["-net-match-e2e-brain-spawn-command"]
-    elif args.arm == "lua":
+    elif args.arm in ("lua", "screens"):
         for peer in ("host", "client"):
-            lane[peer] += ["-net-match-service-preset", "Seat Facts"]
+            lane[peer] += ["-net-match-service-preset", "Screen Facts" if args.arm == "screens" else "Seat Facts"]
     manifest = {"stamp": stamp(), "arm": args.arm, "port": args.port,
                 "exe": str(harness.EXE), "exe_sha256": sha(harness.EXE),
                 "driver_sha256": sha(__file__), "fixture_sha256": sha(FIXTURE),
                 "harness_sha256": sha(args.harness), "lane": lane}
+    if args.arm == "screens":
+        manifest["screen_fixture_sha256"] = sha(FIXTURE.with_name("ScreenFacts.lua"))
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     original_run = harness.run_isolated
 
     def prepare(*positional, **keywords):
         run = original_run(*positional, **keywords)
-        if args.arm == "lua":
+        if args.arm in ("lua", "screens"):
             module = Path(run.cwd) / "Userdata/UserScenes.rte"
             module.mkdir(exist_ok=True)
             (module / "SeatFacts.lua").write_bytes(FIXTURE.read_bytes())
+            class_name = "ScreenFacts" if args.arm == "screens" else "SeatFacts"
+            if args.arm == "screens":
+                (module / "ScreenFacts.lua").write_bytes(FIXTURE.with_name("ScreenFacts.lua").read_bytes())
             (module / "Index.ini").write_text(
                 "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n"
-                "\tAddActivity = GAScripted\n\t\tPresetName = Seat Facts\n"
-                "\t\tSceneName = Grasslands\n\t\tScriptPath = UserScenes.rte/SeatFacts.lua\n"
-                "\t\tLuaClassName = SeatFacts\n\t\tMinTeamsRequired = 2\n"
+                "\tAddActivity = GAScripted\n\t\tPresetName = " + ("Screen Facts" if args.arm == "screens" else "Seat Facts") + "\n"
+                f"\t\tSceneName = Grasslands\n\t\tScriptPath = UserScenes.rte/{class_name}.lua\n"
+                f"\t\tLuaClassName = {class_name}\n\t\tMinTeamsRequired = 2\n"
                 "\t\tDefaultRequireClearPathToOrbit = 0\n\t\tDefaultFogOfWar = 0\n"
                 "\t\tDefaultDeployUnits = 0\n", encoding="utf-8")
         start, finish = run.start, run.finish
@@ -119,7 +124,7 @@ def main():
 
     harness.run_isolated = prepare
     result = harness.lane("snapshot_p5", lane)
-    if args.arm == "lua":
+    if args.arm in ("lua", "screens"):
         logs = {}
         for peer in ("host", "client"):
             run_dir = args.out / "e2e/snapshot_p5" / peer
@@ -130,9 +135,11 @@ def main():
         seat_result = score_seats(logs)
         (args.out / "seat-result.json").write_text(json.dumps(seat_result, indent=2), encoding="utf-8")
         result["seat_facts"] = seat_result
+        if args.arm == "screens":
+            result["screen_facts"] = {peer: log.count("[screen-facts] pass remote=1") == 1 for peer, log in logs.items()}
     (args.out / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))
-    return 0 if result.get("pass") is True and result.get("seat_facts", {"pass": True})["pass"] else 1
+    return 0 if result.get("pass") is True and result.get("seat_facts", {"pass": True})["pass"] and all(result.get("screen_facts", {}).values()) else 1
 
 
 if __name__ == "__main__":
