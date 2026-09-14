@@ -125,6 +125,7 @@ function Create(self)
 		self.Pos = Vector(80 + self.UniqueID % 97, 30 + stamp % 31);
 		return;
 	end
+	if _ContractAuditOwner == nil then _ContractAuditOwner = self.UniqueID; end
 	self.testCarried = self:GetNumberValue("TestUpdates");
 	self.testCreate = (self.testCreate or 0) + 1;
 	self.testUpdate = 0;
@@ -576,7 +577,11 @@ local transactionBaseUpdate = Update;
 local transactionOwner;
 Update = checked(function(self)
     transactionBaseUpdate(self);
-    if self.UniqueID ~= 1048577 then return; end
+    if _ContractAuditOwner == nil then _ContractAuditOwner = self.UniqueID; end
+    if self.UniqueID ~= _ContractAuditOwner then return; end
+    if not transactionOwner then
+        print("[reference-contract-check] ARMED uid=" .. tostring(self.UniqueID));
+    end
     transactionOwner = self;
     if not self.transactionOpenJob then
         self.transactionOpenJob = coroutine.create(function()

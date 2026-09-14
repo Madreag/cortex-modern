@@ -27,6 +27,11 @@ namespace RTE {
 		virtual bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		bool ApplyPendingCheckpoint();
 		virtual bool ResolveCheckpointReferences();
+		virtual void ClearNonOwnedActorSlots();
+		virtual void RebindNonOwnedActorSlots();
+		virtual void ForgetDestroyedActor(const Actor* actor);
+		virtual void ClearCheckpointActorIDs();
+		int CountStaleRelaunchSlots(int tick) const;
 		/// Initializes a cloned checkpoint's presentation without starting the activity or its scripts.
 		virtual bool PrepareCheckpointUI() { return true; }
 
@@ -592,6 +597,11 @@ namespace RTE {
 		/// @param player Which player to lose control of their selected Actor.
 		virtual void LoseControlOfActor(int player);
 
+		/// Lets go of a player's binding to an Actor another peer now owns. The seat and the view let
+		/// go here; the Actor's own control mode follows the wire on every peer.
+		/// @param player Which player to unbind.
+		void ReleaseLockstepControlOfActor(int player);
+
 		/// Handles when an ACraft has left the game scene and entered orbit, though does not delete it. Ownership is NOT transferred, as the ACraft's inventory is just 'unloaded'.
 		/// @param orbitedCraft The ACraft instance that entered orbit. Ownership is NOT transferred!
 		virtual void HandleCraftEnteringOrbit(ACraft* orbitedCraft);
@@ -637,6 +647,10 @@ namespace RTE {
 		static Actor* ResolveNetActor(int64_t uid);
 		static int64_t NetActorUID(const Actor* actor);
 		bool ApplyNetPlayerSlots(const NetGamePlayerBindings& bindings);
+		/// Returns the unique ids of a player's brain, controlled actor and controller actor as the slots hold them.
+		std::array<long, 3> SlotActorIDs(int player) const;
+		/// Points a relaunch's pending actor links at the slots as they stand, so its deferred rebinds keep them.
+		void RefreshCheckpointActorIDs();
 		std::string m_PendingRuntimeCheckpoint;
 		std::array<std::array<long, 3>, Players::MaxPlayerCount> m_CheckpointActorIDs{};
 		bool m_HasCheckpointActorIDs = false;

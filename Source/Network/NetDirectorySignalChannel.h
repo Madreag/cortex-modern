@@ -2,6 +2,7 @@
 
 #include "NetDirectoryClient.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -52,6 +53,9 @@ namespace RTE {
 		void ConfigureClient(std::string baseUrl, std::string installKey, std::string certPinSha256, std::string sessionId);
 		void SetSink(Sink sink) { m_Sink = std::move(sink); }
 		void SetPolling(bool armed) { m_PollArmed = armed; }
+		/// Long-poll: polls carry wait=<seconds> (clamped to c_MaxPollWaitS) and the next GET issues
+		/// right after the previous returns, instead of after c_PollIntervalMs. 0 keeps short polls.
+		void SetPollWait(int seconds) { m_PollWaitS = std::clamp(seconds, 0, static_cast<int>(c_MaxPollWaitS)); }
 
 		/// Queues bytes for the peer `to`: a joiner signals "host", the host answers "client:<nonce>".
 		/// False when the channel is not open, `to` is not a peer this end may signal, the payload is
@@ -80,6 +84,7 @@ namespace RTE {
 		static std::string MintJoinNonce();
 
 		static constexpr uint64_t c_PollIntervalMs = 500;
+		static constexpr uint64_t c_MaxPollWaitS = 12;        //!< NetHttpClient's total timeout is 15 s; a held poll must answer inside it.
 		static constexpr size_t c_MaxSignalBytes = 64 * 1024; //!< The service's MAX_PAYLOAD.
 		static constexpr size_t c_MaxPendingPosts = 256;      //!< The service's MAX_QUEUE.
 		static constexpr size_t c_JoinNonceChars = 32;
@@ -125,6 +130,7 @@ namespace RTE {
 
 		std::deque<Outbound> m_Outbox;
 		int64_t m_Cursor = 0;          //!< The highest seq the sink took; the next poll reads after it.
+		int m_PollWaitS = 0;           //!< Long-poll seconds on the wire; 0 = a plain GET every c_PollIntervalMs.
 		uint64_t m_NextPollMs = 0;
 		uint64_t m_NextAttemptMs = 0;  //!< Every request waits for this slot after a transport error, 5xx or 429.
 		uint64_t m_BackoffMs = 0;

@@ -20,7 +20,9 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
 
-from session_directory import LOGGER, RunningServer, spawn_server
+import session_directory
+from session_directory import IP_REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
+from unittest import mock
 
 INSTALL_KEY = "0123456789abcdef"
 HEX64_A = "a" * 64
@@ -33,8 +35,9 @@ REGISTER_RESP_KEYS = {
     "expires_in_s",
     "heartbeat_s",
     "observed_ip",
+    "supports_unlisted",
 }
-LIST_KEYS = {"sessions"}
+LIST_KEYS = {"sessions", "total"}
 LIST_ROW_KEYS = {
     "name",
     "activity",
@@ -58,7 +61,7 @@ LIST_ROW_KEYS = {
     "observed_ip",
     "state",
 }
-HEARTBEAT_KEYS = {"expires_in_s", "heartbeat_s"}
+HEARTBEAT_KEYS = {"expires_in_s", "heartbeat_s", "listed"}
 DELETE_KEYS = {"ok"}
 SIGNAL_POST_KEYS = {"ok", "seq"}
 SIGNAL_GET_KEYS = {"signals"}
@@ -526,6 +529,74 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assert_keys(drained, SIGNAL_GET_KEYS)
         self.assertEqual(drained["signals"], [])
+
+    def test_signal_long_poll_wait(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid = created["session_id"]
+        token = created["token"]
+        nonce = "longPollNonce"
+        client_peer = f"client:{nonce}"
+        up = base64.b64encode(b"held-for-you").decode("ascii")
+
+        held: list[tuple[int, Any]] = []
+
+        def poll() -> None:
+            held.append(
+                self.call(
+                    "GET",
+                    f"/v1/sessions/{sid}/signals?peer=host&after=0&wait=2&token={quote(token)}",
+                )
+            )
+
+        thread = threading.Thread(target=poll, daemon=True)
+        thread.start()
+        time.sleep(0.4)
+        # wait=2 must hold the GET instead of answering an empty queue at once.
+        self.assertTrue(thread.is_alive())
+        status, posted = self.call(
+            "POST",
+            f"/v1/sessions/{sid}/signal",
+            {
+                "token_or_join_nonce": nonce,
+                "from": client_peer,
+                "to": "host",
+                "payload_b64": up,
+            },
+        )
+        self.assertEqual(status, 200)
+        thread.join(timeout=3.0)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(held), 1)
+        status, body = held[0]
+        self.assertEqual(status, 200)
+        self.assert_keys(body, SIGNAL_GET_KEYS)
+        self.assertEqual([item["payload_b64"] for item in body["signals"]], [up])
+
+        # An empty queue with wait elapses before answering, and the held request
+        # counts once against the per-key budget.
+        key_reqs = self.server.store.limiter._by_key._requests
+        before = len(key_reqs.get(INSTALL_KEY, []))
+        began = time.monotonic()
+        status, empty = self.call(
+            "GET",
+            f"/v1/sessions/{sid}/signals?peer={quote(client_peer, safe=':')}&after=0&wait=0.5",
+        )
+        elapsed = time.monotonic() - began
+        self.assertEqual(status, 200)
+        self.assertEqual(empty["signals"], [])
+        self.assertGreaterEqual(elapsed, 0.35)
+        self.assertEqual(len(key_reqs.get(INSTALL_KEY, [])) - before, 1)
+
+        # wait must be a number inside 0..25.
+        for bad in ("abc", "-1", "30"):
+            status, err = self.call(
+                "GET",
+                f"/v1/sessions/{sid}/signals?peer=host&after=0&wait={bad}&token={quote(token)}",
+            )
+            self.assertEqual(status, 400)
+            self.assertEqual(err, {"error": "invalid_field", "field": "wait"})
 
     def test_signal_queue_and_payload_caps(self) -> None:
         self.start()
@@ -1193,6 +1264,367 @@ class DirectoryTests(unittest.TestCase):
         self.assertIn("1 MiB", text)
         self.assertIn("120 s", text)
         self.assertIn("host queue is never dropped", text.lower())
+        self.assertIn("limit", text)
+        self.assertIn("cursor", text)
+        self.assertIn("next_cursor", text)
+        self.assertIn("total", text)
+
+    def test_list_limit_and_cursor(self) -> None:
+        self.start()
+        assert self.server is not None
+        base = time.monotonic()
+        ids: list[str] = []
+        for i in range(250):
+            created = self.server.store.register(
+                sample_register(name=f"n{i:03d}"), "127.0.0.1", base + i * 0.001
+            )
+            ids.append(created["session_id"])
+        status, page1 = self.list_sessions("limit=100")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(page1["sessions"]), 100)
+        self.assertIn("next_cursor", page1)
+        self.assertEqual(page1["total"], 250)
+        page1_ids = [row["session_id"] for row in page1["sessions"]]
+        self.assertEqual(page1_ids, ids[:100])
+        status, page2 = self.list_sessions(
+            "limit=100&cursor=" + quote(page1["next_cursor"], safe="")
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(page2["sessions"]), 100)
+        self.assertIn("next_cursor", page2)
+        self.assertEqual(page2["total"], 250)
+        page2_ids = [row["session_id"] for row in page2["sessions"]]
+        self.assertEqual(page2_ids, ids[100:200])
+        status, page3 = self.list_sessions(
+            "limit=100&cursor=" + quote(page2["next_cursor"], safe="")
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(page3["sessions"]), 50)
+        self.assertNotIn("next_cursor", page3)
+        self.assertEqual(page3["total"], 250)
+        page3_ids = [row["session_id"] for row in page3["sessions"]]
+        self.assertEqual(page3_ids, ids[200:])
+        seen = page1_ids + page2_ids + page3_ids
+        self.assertEqual(seen, ids)
+        self.assertEqual(len(set(seen)), 250)
+
+    def test_list_bad_cursor(self) -> None:
+        self.start()
+        status, err = self.list_sessions("cursor=not-a-cursor")
+        self.assertEqual(status, 400)
+        self.assertEqual(err, {"error": "invalid_field", "field": "cursor"})
+
+    def test_limiter_prunes_idle_buckets(self) -> None:
+        limiter = DualRateLimiter()
+        now = 1.0
+        later = now + 601.0
+        key = "aaaaaaaaaaaaaaaa"
+        ip = "10.0.0.1"
+        self.assertIsNone(limiter.check(key, ip, now, True))
+        self.assertIn(key, limiter._by_key._requests)
+        for i in range(255):
+            self.assertIsNone(
+                limiter.check(f"{i:016d}", f"11.0.{i // 250}.{i % 250}", later, False)
+            )
+        self.assertNotIn(key, limiter._by_key._requests)
+        self.assertNotIn(key, limiter._by_key._registers)
+        for _ in range(10):
+            self.assertIsNone(limiter.check(key, ip, later, True))
+        blocked = limiter.check(key, ip, later, True)
+        self.assertIsNotNone(blocked)
+        assert blocked is not None
+        self.assertEqual(blocked[0], 429)
+        self.assertEqual(blocked[1]["error"], "rate_limited")
+
+    def test_limiter_probe_does_not_create_buckets(self) -> None:
+        limiter = DualRateLimiter()
+        now = 1.0
+        ip = "10.0.0.2"
+        for i in range(IP_REQ_PER_MIN):
+            self.assertIsNone(limiter.check(f"{i:016x}", ip, now, False))
+        blocked = limiter.check("orphan0000000000", ip, now, True)
+        self.assertIsNotNone(blocked)
+        self.assertNotIn("orphan0000000000", limiter._by_key._requests)
+        self.assertNotIn("orphan0000000000", limiter._by_key._registers)
+        self.assertNotIn("orphan0000000000", limiter._by_key._last)
+        for key in limiter._by_key._requests:
+            self.assertIn(key, limiter._by_key._last)
+
+    def beat(
+        self,
+        sid: str,
+        token: str,
+        **fields: object,
+    ) -> tuple[int, dict[str, Any]]:
+        body: dict[str, Any] = {
+            "token": token,
+            "peer_count": 2,
+            "seats_free": 1,
+        }
+        body.update(fields)
+        return self.call("POST", f"/v1/sessions/{sid}/heartbeat", body)
+
+    def _session(self, sid: str):
+        assert self.server is not None
+        return self.server.store._sessions[sid]
+
+    def test_register_reports_unlisted_capability(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        self.assertIs(created["supports_unlisted"], True)
+
+    def test_heartbeat_reply_reports_actual_listed(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, reply = self.beat(sid, token)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], True)
+        status, reply = self.beat(sid, token, listed=False)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], False)
+        status, reply = self.beat(sid, token, listed=True)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], True)
+
+    def test_hidden_disappears_but_signals_round_trip(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, reply = self.beat(sid, token, listed=False)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], False)
+        status, listed = self.list_sessions()
+        self.assertEqual(status, 200)
+        self.assertEqual(listed["sessions"], [])
+        self.assertEqual(listed["total"], 0)
+        payload = base64.b64encode(b"offer").decode("ascii")
+        status, posted = self.call(
+            "POST",
+            f"/v1/sessions/{sid}/signal",
+            {
+                "token_or_join_nonce": token,
+                "from": "host",
+                "to": "client:abc",
+                "payload_b64": payload,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(posted["seq"], 1)
+        status, got = self.call(
+            "GET",
+            f"/v1/sessions/{sid}/signals?peer=client:abc&after=0",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(got["signals"]), 1)
+        self.assertEqual(got["signals"][0]["payload_b64"], payload)
+        status, posted = self.call(
+            "POST",
+            f"/v1/sessions/{sid}/signal",
+            {
+                "token_or_join_nonce": "abc",
+                "from": "client:abc",
+                "to": "host",
+                "payload_b64": base64.b64encode(b"answer").decode("ascii"),
+            },
+        )
+        self.assertEqual(status, 200)
+        status, got = self.call(
+            "GET",
+            f"/v1/sessions/{sid}/signals?peer=host&after=0&token={token}",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(got["signals"]), 1)
+
+    def test_hidden_survives_ordinary_heartbeat(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, _ = self.beat(sid, token, listed=False)
+        self.assertEqual(status, 200)
+        status, reply = self.beat(sid, token, seats_free=0)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], False)
+        status, listed = self.list_sessions()
+        self.assertEqual(listed["sessions"], [])
+
+    def test_relist_same_id_token_monotonic_seq(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, _ = self.beat(sid, token, listed=False)
+        self.assertEqual(status, 200)
+        status, posted = self.call(
+            "POST",
+            f"/v1/sessions/{sid}/signal",
+            {
+                "token_or_join_nonce": token,
+                "from": "host",
+                "to": "client:abc",
+                "payload_b64": base64.b64encode(b"s1").decode("ascii"),
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(posted["seq"], 1)
+        status, reply = self.beat(sid, token, listed=True)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], True)
+        status, listed = self.list_sessions()
+        self.assertEqual(status, 200)
+        self.assertEqual(len(listed["sessions"]), 1)
+        self.assertEqual(listed["sessions"][0]["session_id"], sid)
+        status, posted = self.call(
+            "POST",
+            f"/v1/sessions/{sid}/signal",
+            {
+                "token_or_join_nonce": token,
+                "from": "host",
+                "to": "client:abc",
+                "payload_b64": base64.b64encode(b"s2").decode("ascii"),
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(posted["seq"], 2)
+        status, got = self.call(
+            "GET",
+            f"/v1/sessions/{sid}/signals?peer=client:abc&after=0",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual([item["seq"] for item in got["signals"]], [1, 2])
+
+    def test_delete_hidden_session(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, _ = self.beat(sid, token, listed=False)
+        self.assertEqual(status, 200)
+        status, deleted = self.call(
+            "DELETE", f"/v1/sessions/{sid}", {"token": token}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(deleted["ok"])
+        status, err = self.call(
+            "GET", f"/v1/sessions/{sid}/signals?peer=host&token={token}"
+        )
+        self.assertEqual(status, 404)
+
+    def test_hidden_session_expires_normally(self) -> None:
+        self.start(expiry_s=1)
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, _ = self.beat(sid, token, listed=False)
+        self.assertEqual(status, 200)
+        time.sleep(2.0)
+        status, _ = self.call(
+            "GET", f"/v1/sessions/{sid}/signals?peer=host&token={token}"
+        )
+        self.assertEqual(status, 404)
+
+    def test_wrong_token_cannot_hide_or_relist(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, err = self.beat(sid, "bad-token-000000", listed=False)
+        self.assertEqual(status, 403)
+        self.assertEqual(err, {"error": "forbidden"})
+        self.assertTrue(self._session(sid).listed)
+        status, _ = self.beat(sid, token, listed=False)
+        self.assertEqual(status, 200)
+        status, err = self.beat(sid, "bad-token-000000", listed=True)
+        self.assertEqual(status, 403)
+        self.assertFalse(self._session(sid).listed)
+        status, listed = self.list_sessions()
+        self.assertEqual(listed["sessions"], [])
+
+    def test_malformed_listed_values_rejected_without_mutation(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        sess = self._session(sid)
+        beat_before = sess.last_beat
+        for bad in (None, "true", 0, 1, [True], {"x": True}):
+            status, err = self.beat(sid, token, listed=bad, seats_free=9)
+            self.assertEqual(status, 400)
+            self.assertEqual(err, {"error": "invalid_field", "field": "listed"})
+            self.assertEqual(sess.last_beat, beat_before)
+            self.assertTrue(sess.listed)
+            self.assertEqual(sess.fields["seats_free"], 1)
+        status, reply = self.beat(sid, token)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], True)
+
+    def test_mixed_listed_unlisted_pagination(self) -> None:
+        self.start()
+        assert self.server is not None
+        base = time.monotonic()
+        ids: list[str] = []
+        tokens: list[str] = []
+        for i in range(4):
+            created = self.server.store.register(
+                sample_register(name=f"m{i}"), "127.0.0.1", base + i * 0.001
+            )
+            ids.append(created["session_id"])
+            tokens.append(created["token"])
+        for i in (1, 3):
+            status, _ = self.beat(ids[i], tokens[i], listed=False)
+            self.assertEqual(status, 200)
+        status, page = self.list_sessions("limit=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(page["total"], 2)
+        self.assertEqual([row["session_id"] for row in page["sessions"]], [ids[0]])
+        self.assertIn("next_cursor", page)
+        status, page2 = self.list_sessions(
+            "limit=1&cursor=" + quote(page["next_cursor"], safe="")
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(page2["total"], 2)
+        self.assertEqual([row["session_id"] for row in page2["sessions"]], [ids[2]])
+        self.assertNotIn("next_cursor", page2)
+        for i in (0, 2):
+            status, _ = self.beat(ids[i], tokens[i], listed=False)
+            self.assertEqual(status, 200)
+        status, empty = self.list_sessions()
+        self.assertEqual(status, 200)
+        self.assertEqual(empty["sessions"], [])
+        self.assertEqual(empty["total"], 0)
+
+    def test_hidden_rows_still_consume_capacity(self) -> None:
+        self.start()
+        assert self.server is not None
+        with mock.patch.object(session_directory, "MAX_ROWS", 3):
+            for i in range(3):
+                status, created = self.register(name=f"c{i}")
+                self.assertEqual(status, 200)
+                status, _ = self.beat(
+                    created["session_id"], created["token"], listed=False
+                )
+                self.assertEqual(status, 200)
+            status, err = self.register(name="c3")
+            self.assertEqual(status, 503)
+            self.assertEqual(err, {"error": "full"})
+
+    def test_legacy_requests_default_visible(self) -> None:
+        self.start()
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, reply = self.beat(sid, token)
+        self.assertEqual(status, 200)
+        self.assertIs(reply["listed"], True)
+        self.assertTrue(self._session(sid).listed)
+        status, listed = self.list_sessions()
+        self.assertEqual(status, 200)
+        self.assertEqual(len(listed["sessions"]), 1)
+        self.assertNotIn("listed", listed["sessions"][0])
 
 
 if __name__ == "__main__":

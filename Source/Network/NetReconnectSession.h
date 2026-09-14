@@ -335,6 +335,8 @@ namespace RTE {
 		bool IsSeatClosed(uint16_t stableSeat) const;
 		/// Every seat's admission status, in stable-seat order.
 		std::vector<NetH4SeatStatus> GetSeatStatuses() const;
+		/// The seat table as the plane holds it now, in table order.
+		std::vector<NetH4Seat> GetSeatTable() const;
 
 	private:
 		struct SeatState {
@@ -454,6 +456,7 @@ namespace RTE {
 		void IssueReseat(const SeatState& seat);
 		void QueueHoldResolution(uint8_t lockstepPeerId, NetHoldResolution resolution);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
+		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		const NetPayload* FindCached(const NetAuthBytes16& txId, const NetH4TxKey& key, uint64_t nowMs);
 
 		/// Whether an explicit host action may hand this seat to somebody else: a live match, a real

@@ -817,6 +817,7 @@ namespace RTE {
 						AppendU32LE(out, FloatToBitsLE(order.x));
 						AppendU32LE(out, FloatToBitsLE(order.y));
 						AppendU64LE(out, static_cast<uint64_t>(order.targetUID));
+						AppendU64LE(out, static_cast<uint64_t>(order.writerUID));
 						break;
 					}
 				}
@@ -1675,6 +1676,13 @@ namespace RTE {
 						order.x = FloatFromBitsLE(xBits);
 						order.y = FloatFromBitsLE(yBits);
 						order.targetUID = static_cast<int64_t>(targetUID);
+						if (version >= NetLockstepCodec::c_AIOrderWriterVersion) {
+							uint64_t writerUID = 0;
+							if (!ReadOrTruncated(reader.ReadU64LE(writerUID), reader, error, "ai_order_writer_uid")) {
+								return false;
+							}
+							order.writerUID = static_cast<int64_t>(writerUID);
+						}
 						command.payload = order;
 						break;
 					}
@@ -3683,6 +3691,7 @@ namespace RTE {
 		out << "\"peer_silence_leave_ms\":" << PeerSilenceLeaveMs() << ",";
 		out << "\"peers_dropped_silent\":" << m_Stats.peersDroppedSilent << ",";
 		out << "\"stops_from_left_peers\":" << m_Stats.stopsFromLeftPeers << ",";
+		out << "\"stops_adjudicated_as_leaves\":" << m_Stats.stopsAdjudicatedAsLeaves << ",";
 		out << "\"peer_frames_waived\":" << m_Stats.peerFramesWaived << ",";
 		out << "\"connections_closed_on_eviction\":" << m_Stats.connectionsClosedOnEviction << ",";
 		out << "\"peers_left\":" << m_PeerLeaveFrames.size() << ",";
@@ -4425,6 +4434,14 @@ namespace RTE {
 			}
 			return;
 		}
+		if (m_RelayHost && stop.senderPeerId != m_Config.matchConfig.hostPeerId &&
+		    (stop.reason == NetLockstepStopReason::ProtocolError || stop.reason == NetLockstepStopReason::InternalError ||
+		     stop.reason == NetLockstepStopReason::MissingFrameTimeout || stop.reason == NetLockstepStopReason::PeerDisconnected)) {
+			++m_Stats.stopsAdjudicatedAsLeaves;
+			ApplyPeerLeave(stop.senderPeerId, FirstFrameWithout(stop.senderPeerId),
+			               std::string(NetLockstepCodec::StopReasonName(stop.reason)) + ": " + stop.message, nowMs, true);
+			return;
+		}
 		m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(stop.reason)) + ":" + stop.message;
 		m_State = stop.reason == NetLockstepStopReason::Complete ? NetLockstepState::Stopped : NetLockstepState::Failed;
 	}
@@ -4631,6 +4648,10 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::AnyLeftSeatHeld() const {
 		return !m_LeftSeatsHeld.empty();
+	}
+
+	bool NetLockstepCoordinator::IsSeatHeldForReclaim(uint8_t peerId) const {
+		return m_LeftSeatsHeld.find(peerId) != m_LeftSeatsHeld.end();
 	}
 
 	bool NetLockstepCoordinator::IgnoreStaleRefillLeave(uint8_t peerId, uint64_t) const {

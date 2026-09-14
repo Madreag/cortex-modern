@@ -54,14 +54,18 @@
 #include "GLResourceMan.h"
 #include "CameraMan.h"
 #include "ActivityMan.h"
+#include "Actor.h"
+#include "AHuman.h"
 #include "GameActivity.h"
 #include "MovableObject.h"
 #include "RTETools.h"
+#include "RotatePrimitiveSelfTest.h"
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
 #include "MusicMan.h"
 #include "AudioMan.h"
+#include "SoundContainer.h"
 #include "SoundSimulation.h"
 #include "AudioCheckpoint.h"
 #include "System.h"
@@ -84,6 +88,7 @@
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
 #include "NetMatchSelfTest.h"
+#include "NetPortMap.h"
 #include "NetProtocolSelfTest.h"
 #include "NetReconnectSelfTest.h"
 #include "NetReconnectSessionSelfTest.h"
@@ -92,11 +97,15 @@
 #include "SimChecksum.h"
 #include "NetA7Journal.h"
 #include "ScenarioRunner.h"
+#include "NetActorOwnership.h"
 #include "InputScript.h"
 #include "AIWriteScript.h"
 #include "FaultInjection.h"
 #include "LocalPrediction.h"
+#include "LocalPredictionHudSelfTest.h"
+#include "OwnedMovableObjects.h"
 #include "PreviewEventLedger.h"
+#include "PreviewScriptSelfTest.h"
 #include "TerrainLayerSnapshot.h"
 #include "DeterminismCheck.h"
 #include "MetricsCollector.h"
@@ -126,9 +135,11 @@
 #include <random>
 #include <deque>
 #include <array>
+#include <list>
 #include <map>
 #include <sstream>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -200,6 +211,12 @@ static bool s_netMatch = false;
 static bool s_netMatchServiceE2E = false;
 static bool s_netDedicated = false;
 static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
+
+// The W97 router port-mapping feature: opt-in by setting or flag, probed headless.
+static int s_netPortMapCli = -1; // -1 unset; -net-port-map off|on forces 0/1 over the setting.
+static bool s_netPortMapProbe = false;
+static std::string s_netPortMapGateway; // Test seam: the gateway as a.b.c.d[:port].
+static std::string s_netPortMapIgd;     // Test seam: the IGD description URL.
 // Named host-issued spawn: -net-match-e2e-spawn Class:Preset:Module:x:y:tick[:team]
 struct E2eNamedSpawn {
 	std::string className;
@@ -239,6 +256,7 @@ static bool ParseE2eSpawnSpec(const std::string& spec, E2eNamedSpawn& out) {
 	return true;
 }
 static std::string s_netLockstepReportPath;
+static std::string s_netJoinSessionId; //!< -net-join-session: the directory session a client joins instead of an address.
 // A capped stop holds the link while the relay host hands over what it still owes; a client one
 // input-delay behind needs those forwards to finish its own last tick.
 static constexpr uint32_t c_CappedStopDrainMs = 8000;
@@ -252,6 +270,17 @@ static bool s_netMatchServiceE2EEnteredEditor = false;
 static NetMatchE2ETickClock s_netMatchE2ETicks;
 static long s_netMatchE2EActorCensus = -1;
 static long s_netMatchE2EActorCensusPeak = -1; //!< The max actor count seen, so a transient heal double-spawn that later sheds back to normal is still visible.
+static uint64_t s_netMatchE2eSwitchControlTick = 0;
+static int64_t s_netMatchE2eSwitchUid = 0;
+static bool s_netMatchE2eSwitchIssued = false;
+static bool s_netMatchE2eSwitchHandedBack = false;
+struct E2eOwnerLogEntry {
+	uint64_t tick = 0;
+	int64_t uid = 0;
+	int owner = 0;
+	int mode = 0;
+};
+static std::vector<E2eOwnerLogEntry> s_netMatchE2eOwnerLog;
 // Loop-pace accounting, accumulated only while a lockstep match or playback runs: the honest
 // wall-tps and per-tick sim cost that steer the pace and rollback work.
 static uint64_t s_paceIterations = 0;
@@ -301,6 +330,7 @@ static uint64_t s_netReplayDumpTo = 0;
 static long long s_lpInvarianceTick = 0;
 static std::vector<int> s_lpInvarianceDepths;
 static std::vector<int> s_lpInvarianceRepeats;
+static std::string s_lpOverlayLinkModes; //!< -lpinv-overlay-links: the overlay link arms run after the depth cases, in order.
 static int s_lpInvarianceFailures = -1; //!< -1 = not run, else the count of failed checks.
 static std::string s_lpExpectEquip; //!< -lpinv-expect: the preset the previews must hold once their horizon passes its pickup tick.
 static long long s_lpExpectEquipTick = 0;
@@ -310,6 +340,9 @@ static long long s_lpExpectFireSlack = 0;
 static long long s_eventLedgerPressTick = 0; //!< -local-prediction-event-ledger: the tick the tracked press is sampled at.
 static bool s_eventLedgerChecked = false;
 static long long s_eventLedgerFlashTick = -1; //!< The committed tick a preview first drew the muzzle flash on.
+static uint64_t s_eventLedgerLuaEmitterUID = 0;
+static std::string s_eventLedgerLuaPreset;
+static std::unordered_set<uint64_t> s_eventLedgerGlowUIDs;
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
@@ -381,7 +414,6 @@ void InitializeManagers() {
 	if (s_cliNumLuaStatesOverride >= 0) {
 		g_SettingsMan.SetNumberOfLuaStatesOverride(s_cliNumLuaStatesOverride);
 	}
-
 	g_WindowMan.Initialize();
 	g_GLResourceMan.Initialize();
 
@@ -543,6 +575,15 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			++i;
 			continue;
 		}
+		if (currentArg == "-selftest-preallocate-sound-identities" && i + 1 < argCount) {
+			const uint64_t count = std::strtoull(argValue[i + 1], nullptr, 10);
+			for (uint64_t n = 0; n < count; ++n) {
+				SoundContainer scratch;
+			}
+			std::cout << "[selftest] preallocated " << count << " sound identities cursor=" << g_AudioMan.GetCheckpointSoundContainerCursor() << std::endl;
+			i += 2;
+			continue;
+		}
 		if (currentArg == "-contract-audit" && i + 1 < argCount) {
 			s_contractAuditOperation = argValue[i + 1];
 			i += 2;
@@ -629,11 +670,54 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (!lastArg && currentArg == "-net-join-session") {
+			s_netJoinSessionId = argValue[++i];
+			continue;
+		}
+
+		// Run overrides: they decide this run and are never written back to Settings.ini.
+		if (!lastArg && currentArg == "-net-ice") {
+			g_SettingsMan.SetNetworkIceEnableOverride(std::string(argValue[++i]) == "on");
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-stun") {
+			g_SettingsMan.SetNetworkStunServersOverride(argValue[++i]);
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-turn") {
+			g_SettingsMan.SetNetworkTurnServersOverride(argValue[++i]);
+			continue;
+		}
+
 		if (!lastArg && currentArg == "-net-port") {
 			const long parsedPort = std::strtol(argValue[++i], nullptr, 10);
 			if (parsedPort > 0 && parsedPort <= 65535) {
 				s_netPort = static_cast<uint16_t>(parsedPort);
 			}
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-port-map") {
+			const std::string value = argValue[++i];
+			s_netPortMapCli = (value == "on" || value == "true" || value == "1") ? 1 : 0;
+			continue;
+		}
+
+		if (currentArg == "-net-port-map-probe") {
+			s_netPortMapProbe = true;
+			++i;
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-port-map-gateway") {
+			s_netPortMapGateway = argValue[++i];
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-port-map-igd") {
+			s_netPortMapIgd = argValue[++i];
 			continue;
 		}
 
@@ -774,6 +858,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-ownership-policy") {
 			s_netMatchOwnershipPolicy = argValue[++i];
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-e2e-switch-control") {
+			s_netMatchE2eSwitchControlTick = std::strtoull(argValue[++i], nullptr, 10);
 			continue;
 		}
 
@@ -946,6 +1035,21 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			s_eventLedgerPressTick = std::strtoll(text.c_str(), nullptr, 10);
 			continue;
 		}
+		if (currentArg == "-local-prediction-subtree-emitter") {
+			PreviewScriptSelfTest::SetSubtreeProbe(true);
+		}
+		if (currentArg == "-local-prediction-shared-slot") {
+			PreviewScriptSelfTest::SetSharedSlot(true);
+		}
+		if (!lastArg && currentArg == "-local-prediction-hud") {
+			const std::string text = argValue[++i];
+			if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
+				std::cerr << "[preview-hud-selftest] bad press tick '" << text << "': expected a whole number" << std::endl;
+				return false;
+			}
+			LocalPredictionHudSelfTest::g_PressTick = std::strtoll(text.c_str(), nullptr, 10);
+			continue;
+		}
 		if (!lastArg && currentArg == "-local-prediction-invariance") {
 			// T:d1,d2,...:r1,r2,... — at tick T run previews of each depth, each repeat count, and prove the canonical world untouched.
 			const std::string spec = argValue[++i];
@@ -1035,6 +1139,16 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			}
 			continue;
 		}
+		if (!lastArg && currentArg == "-lpinv-overlay-links") {
+			// b spawn and shadow links, r a shadow item in reach, c spawn parts, wounds and a shadow part.
+			const std::string modes = argValue[++i];
+			if (modes.empty() || modes.find_first_not_of("brc") != std::string::npos) {
+				std::cerr << "[lpinv] bad overlay-link modes '" << modes << "': expected letters from brc" << std::endl;
+				return false;
+			}
+			s_lpOverlayLinkModes = modes;
+			continue;
+		}
 
 		if (!lastArg && !singleModuleSet && currentArg == "-module") {
 			std::string moduleToLoad = argValue[++i];
@@ -1053,6 +1167,10 @@ bool HandleMainArgs(int argCount, char** argValue) {
 	}
 	if (launchModeSet) {
 		g_SettingsMan.SetSkipIntro(true);
+	}
+	if (s_globalCallbacksSelfTest && s_netReplayInPath.empty() && !ScenarioRunner::IsActive()) {
+		std::cout << "[global-callback-selftest] REFUSE needs -net-replay <recording> or -scenario, and UserScenes.rte Checkpoint Global" << std::endl;
+		return false;
 	}
 	return true;
 }
@@ -1301,6 +1419,12 @@ void ProcessMenuScript() {
 		const bool ok = menu->AutomationActivateControl(control);
 		std::cout << "[menu-script] activate " << control << " ok=" << ok << std::endl;
 		if (!ok) { return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control); }
+	} else if (cmd == "post_command") {
+		std::string control;
+		iss >> control;
+		const bool ok = menu->AutomationPostCommand(control);
+		std::cout << "[menu-script] post_command " << control << " ok=" << ok << std::endl;
+		if (!ok) { return MenuScriptFail("post_command failed (control missing, disabled, or hidden): " + control); }
 	} else if (cmd == "assert_control") {
 		std::string control;
 		iss >> control;
@@ -1325,6 +1449,23 @@ void ProcessMenuScript() {
 		std::getline(iss, text);
 		if (!text.empty() && text[0] == ' ') { text.erase(0, 1); }
 		if (!menu->AutomationSetText(control, text)) { return MenuScriptFail("settext failed (textbox missing): " + control); }
+	} else if (cmd == "setcheck") {
+		std::string control;
+		int checked = 0;
+		iss >> control >> checked;
+		if (!menu->AutomationSetCheck(control, checked != 0)) { return MenuScriptFail("setcheck failed (checkbox missing or hidden): " + control); }
+		std::cout << "[menu-script] setcheck " << control << " " << checked << std::endl;
+	} else if (cmd == "assert_label") {
+		std::string control;
+		std::string sub;
+		iss >> control;
+		std::getline(iss, sub);
+		if (!sub.empty() && sub[0] == ' ') { sub.erase(0, 1); }
+		std::string text;
+		const bool found = menu->AutomationLabelText(control, text);
+		const bool pass = found && text.find(sub) != std::string::npos;
+		std::cout << "[menu-script] assert_label " << control << " \"" << sub << "\" text=\"" << text << "\" " << (pass ? "PASS" : "FAIL") << std::endl;
+		if (!pass) { return MenuScriptFail("assert_label " + control + " missing substring: " + sub); }
 	} else if (cmd == "assert_screen") {
 		std::string expected;
 		iss >> expected;
@@ -1351,7 +1492,8 @@ void ProcessMenuScript() {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::cout << "[menu-script] dump_lobby state=" << snapshot.serviceState << " members=" << snapshot.members.size()
 				  << " error=\"" << snapshot.errorText << "\" status=\"" << snapshot.statusText << "\""
-				  << " input_delay=\"" << snapshot.inputDelayText << "\"";
+				  << " input_delay=\"" << snapshot.inputDelayText << "\""
+				  << " port_map=\"" << snapshot.portMap << "\"";
 		for (const NetLobbyMember& member: snapshot.members) {
 			std::cout << " | " << member.displayName << "(team" << static_cast<int>(member.team)
 					  << (member.isLocal ? ",local" : ",remote") << ",ping" << member.pingMs << ")";
@@ -1783,13 +1925,17 @@ static void DrawFrameWithPreviews() {
 	RandomGenerator* prevSimRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	g_SceneMan.SetRenderDrawContext(true);
+	LocalPredictionHudSelfTest::SampleBeforeRender();
 	LocalPrediction::BeginRender();
+	LocalPredictionHudSelfTest::SampleDuringRender();
 	g_FrameMan.Draw();
+	LocalPredictionHudSelfTest::SampleAfterDraw();
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts();
 	g_WindowMan.DrawPostProcessBuffer();
 	g_WindowMan.UploadFrame();
 	LocalPrediction::EndRender();
+	LocalPredictionHudSelfTest::SampleAfterRender();
 	g_SceneMan.SetRenderDrawContext(false);
 	t_simRNGOverride = prevSimRNG;
 	NetModerationGUIProbe::AfterDraw();
@@ -1859,6 +2005,151 @@ static std::string CheckPreviewOutcome(long long startTick, long long horizon) {
 	return "";
 }
 
+// One depth-1 preview per overlay-link mode; survivor links must miss retired objects and the canonical world must stay identical.
+static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, int& failures) {
+	const std::string label = std::string("overlay-links ") + mode;
+	bool caseFailed = false;
+	const auto fail = [&caseFailed, &label](const std::string& what) {
+		caseFailed = true;
+		std::cout << "[lpinv] FAIL " << label << ": " << what << std::endl;
+	};
+	const auto pass = [&label](const std::string& what) {
+		std::cout << "[lpinv] PASS " << label << ": " << what << std::endl;
+	};
+	++cases;
+	Activity* activity = g_ActivityMan.GetActivity();
+	// Clear item-in-reach and arm support so faithful resolution cannot overwrite the probe's links.
+	std::vector<std::pair<Actor*, HeldDevice*>> reach;
+	std::vector<std::pair<Arm*, HeldDevice*>> support;
+	const Actor* original = nullptr;
+	for (int player = Players::PlayerOne; activity && player < Players::MaxPlayerCount; ++player) {
+		if (Actor* actor = activity->GetControlledActor(player)) {
+			if (!original && activity->PlayerHuman(player)) {
+				original = actor;
+			}
+			reach.emplace_back(actor, actor->GetItemInReach());
+			actor->SetItemInReach(nullptr);
+			if (const AHuman* human = dynamic_cast<const AHuman*>(actor)) {
+				for (Arm* arm: {human->GetFGArm(), human->GetBGArm()}) {
+					if (arm) {
+						support.emplace_back(arm, arm->GetHeldDeviceThisArmIsTryingToSupport());
+						arm->SetHeldDeviceThisArmIsTryingToSupport(nullptr);
+					}
+				}
+			}
+		}
+	}
+	// The resident anchors: the nearest other actor with parts and the nearest item lying in the world.
+	const Actor* residentActor = nullptr;
+	const MovableObject* residentItem = nullptr;
+	if (original) {
+		const float radius = static_cast<float>(std::max(g_SceneMan.GetSceneWidth(), g_SceneMan.GetSceneHeight()));
+		const std::vector<MovableObject*>* nearby = g_MovableMan.GetMOsInRadius(original->GetPos(), radius);
+		float actorDistance = 0.0F;
+		float itemDistance = 0.0F;
+		for (MovableObject* mo: *nearby) {
+			if (!mo) {
+				continue;
+			}
+			const float distance = g_SceneMan.ShortestDistance(original->GetPos(), mo->GetPos(), g_SceneMan.SceneWrapsX()).GetMagnitude();
+			const Actor* actor = dynamic_cast<const Actor*>(mo);
+			if (actor && actor != original && g_MovableMan.IsActor(actor) && !actor->GetAttachableList().empty()) {
+				if (!residentActor || distance < actorDistance) {
+					residentActor = actor;
+					actorDistance = distance;
+				}
+			} else if (dynamic_cast<const HeldDevice*>(mo) && g_MovableMan.IsDevice(mo) && (!residentItem || distance < itemDistance)) {
+				residentItem = mo;
+				itemDistance = distance;
+			}
+		}
+		delete nearby;
+	}
+
+	PreviewScriptSelfTest::ArmOverlayLinkProbe(mode, residentActor, residentItem);
+	const size_t ghostsBefore = g_MovableMan.GetPreviewGhostCount();
+	LocalPrediction::SetDepthOverride(1);
+	LocalPrediction::Clear();
+	LocalPrediction::RunPreview();
+	const PreviewScriptSelfTest::OverlayLinkProbe& probe = PreviewScriptSelfTest::GetOverlayLinkProbe();
+	// Links are compared by address only: a target the overlay retired may already be deleted.
+	const auto describe = [&probe](const MovableObject* link) -> std::string {
+		if (!link) {
+			return "nothing";
+		}
+		if (link == probe.spawn) {
+			return "the retired drop " + probe.spawnPreset + " uid=" + std::to_string(probe.spawnUID);
+		}
+		if (link == probe.spawnPart) {
+			return "a part of the retired drop";
+		}
+		if (link == probe.spawnWound) {
+			return "a wound of the retired drop";
+		}
+		if (link == probe.residentActor) {
+			return "the resident actor";
+		}
+		if (link == probe.residentItem) {
+			return "the resident item";
+		}
+		if (link == probe.residentPart) {
+			return "the resident part";
+		}
+		return "another object";
+	};
+	const auto expect = [&describe, &pass, &fail](const std::string& check, const MovableObject* link, const MovableObject* wanted) {
+		if (link == wanted) {
+			pass(check + ": " + describe(link));
+		} else {
+			fail(check + ": points at " + describe(link) + ", expected " + describe(wanted));
+		}
+	};
+	if (!probe.ran) {
+		fail("not armed: no preview clone reached the probe");
+	} else if (!probe.failure.empty()) {
+		fail("not armed: " + probe.failure);
+	} else {
+		std::cout << "[lpinv] ARMED " << label << ": clone uid=" << probe.cloneUID << (probe.spawn ? " drop=" + probe.spawnPreset + " uid=" + std::to_string(probe.spawnUID) : std::string())
+		          << " ghosts " << ghostsBefore << "->" << g_MovableMan.GetPreviewGhostCount() << " [" << LocalPrediction::DescribeLastOutcome() << "]" << std::endl;
+		const Actor* clone = dynamic_cast<const Actor*>(probe.clone);
+		if (mode == 'b') {
+			expect("item_in_reach_to_a_retired_spawn", clone->GetItemInReach(), nullptr);
+			expect("mo_to_not_hit_to_a_retired_spawn", clone->GetWhichMOToNotHit(), nullptr);
+			expect("mo_to_not_hit_to_an_in_world_shadow", probe.shadowLinkPart->GetWhichMOToNotHit(), probe.residentActor);
+		} else if (mode == 'r') {
+			expect("item_in_reach_to_an_in_world_shadow", clone->GetItemInReach(), probe.residentItem);
+		} else if (mode == 'c') {
+			expect("mo_to_not_hit_to_a_retired_spawn_part", probe.spawnPartLinkPart->GetWhichMOToNotHit(), nullptr);
+			expect("mo_to_not_hit_to_a_retired_spawn_wound", probe.spawnWoundLinkPart->GetWhichMOToNotHit(), nullptr);
+			expect("survivor_wound_mo_to_not_hit_to_a_retired_spawn", probe.cloneWound->GetWhichMOToNotHit(), nullptr);
+			expect("mo_to_not_hit_to_an_in_world_shadow_part", probe.shadowPartLinkPart->GetWhichMOToNotHit(), probe.residentPart);
+		}
+	}
+	LocalPrediction::Clear();
+	g_MovableMan.DropAllPreviewGhosts();
+	PreviewScriptSelfTest::DisarmOverlayLinkProbe();
+	for (auto entry = reach.rbegin(); entry != reach.rend(); ++entry) {
+		entry->first->SetItemInReach(entry->second);
+	}
+	for (auto entry = support.rbegin(); entry != support.rend(); ++entry) {
+		entry->first->SetHeldDeviceThisArmIsTryingToSupport(entry->second);
+	}
+	std::vector<std::string> problems;
+	const std::string after = DumpSimStateToString() + DescribeCanonicalExtras(problems);
+	for (const std::string& problem: problems) {
+		fail("cannot capture canonical Lua state: " + problem);
+	}
+	if (after != before) {
+		WriteProbeText(std::string("lpinv_after_overlay_") + mode, after);
+		fail(std::string("canonical state changed after the overlay-link preview (lpinv_before vs lpinv_after_overlay_") + mode + ")");
+	}
+	if (caseFailed) {
+		++failures;
+	} else {
+		std::cout << "[lpinv] ok " << label << ": canonical state byte-identical" << std::endl;
+	}
+}
+
 // -local-prediction-invariance: at tick T, run and discard previews of every depth and repeat count and
 // require the canonical world (dump + extras) byte-identical afterwards. The run then continues, so the
 // trace compare against a no-preview reference closes the resume half of the guarantee.
@@ -1869,6 +2160,14 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 	const int savedDepth = LocalPrediction::GetDepthOverride();
 	g_MovableMan.WaitForActorsSeeTask();
 	g_MovableMan.CompleteQueuedMOIDDrawings();
+	PreviewScriptSelfTest::SetStrideCounter(true);
+	if (Activity* activity = g_ActivityMan.GetActivity()) {
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			if (Actor* actor = activity->GetControlledActor(player)) {
+				PreviewScriptSelfTest::InstallStrideCounter(actor);
+			}
+		}
+	}
 	std::vector<std::string> problems;
 	const std::string before = DumpSimStateToString() + DescribeCanonicalExtras(problems);
 	if (!problems.empty()) {
@@ -1948,9 +2247,13 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 			}
 		}
 	}
+	for (const char mode: s_lpOverlayLinkModes) {
+		RunOverlayLinkArm(mode, before, cases, failures);
+	}
 	LocalPrediction::SetDepthOverride(savedDepth);
+	PreviewScriptSelfTest::SetStrideCounter(false);
 	s_lpInvarianceFailures = failures;
-	std::cout << "[lpinv] " << (failures == 0 ? "PASS" : "FAIL") << " tick " << simTick << ": " << (cases - failures) << "/" << cases << " cases left the canonical world untouched" << std::endl;
+	std::cout << "[lpinv] " << (failures == 0 ? "PASS" : "FAIL") << " tick " << simTick << ": " << (cases - failures) << "/" << cases << " cases passed invariance and link checks" << std::endl;
 	g_MetricsCollector.RecordString("lpinv_result", failures == 0 ? "pass" : "fail");
 	g_MetricsCollector.Record("lpinv_cases", cases);
 	g_MetricsCollector.Record("lpinv_failures", failures);
@@ -1962,8 +2265,30 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 // -local-prediction-event-ledger drives one preview and one frame per sim tick, the cadence a played
 // match has; a replay run pumps its ticks without frames, so nothing would preview at all.
 static void PreviewEventLedgerFrameOnTick() {
-	if (s_eventLedgerPressTick <= 0) {
+	if (s_eventLedgerPressTick <= 0 && LocalPredictionHudSelfTest::g_PressTick <= 0) {
 		return;
+	}
+	if (g_TimerMan.GetSimUpdateCount() == s_eventLedgerPressTick && s_eventLedgerLuaEmitterUID == 0) {
+		if (Activity* activity = g_ActivityMan.GetActivity()) {
+			if (Actor* actor = activity->GetControlledActor(Players::PlayerOne)) {
+				if (const AHuman* human = dynamic_cast<const AHuman*>(actor)) {
+					if (const HeldDevice* held = human->GetEquippedItem()) {
+						s_eventLedgerLuaPreset = held->GetPresetName();
+						s_eventLedgerLuaEmitterUID = static_cast<uint64_t>(held->GetUniqueID());
+						s_eventLedgerGlowUIDs.clear();
+						s_eventLedgerGlowUIDs.insert(static_cast<uint64_t>(actor->GetUniqueID()));
+						std::unordered_set<const Entity*> visited;
+						std::unordered_set<const MovableObject*> objects;
+						CollectOwnedMovableObjects(held, visited, objects);
+						for (const MovableObject* mo: objects) {
+							if (mo) {
+								s_eventLedgerGlowUIDs.insert(static_cast<uint64_t>(mo->GetUniqueID()));
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 	LocalPrediction::RunPreview();
 	if (s_eventLedgerFlashTick < 0 && LocalPrediction::GetLastOutcome().firedFrame) {
@@ -2006,10 +2331,61 @@ static void CheckPreviewEventLedgerSelfTest() {
 		      "first physical voice for the press at committed tick " + std::to_string(tracked->committedTick) + " (event tick " + std::to_string(tracked->eventTick) + ", seq " + std::to_string(tracked->seq) + ", predicted=" + std::to_string(tracked->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1));
 		check("the_event_reaches_the_output_once", sameKey == 1, std::to_string(sameKey) + " physical starts for that event");
 	}
-	const PreviewEventLedger::EventStart* glow = firstAfterPress(PreviewEventLedger::PostEffect);
-	check("the_glow_starts_on_the_preview_tick", glow && glow->committedTick <= press + 1,
-	      glow ? "first post effect for the press at committed tick " + std::to_string(glow->committedTick) + " (event tick " + std::to_string(glow->eventTick) + ", predicted=" + std::to_string(glow->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1)
-	           : "no post effect from a previewed actor at or after tick " + std::to_string(press));
+	const uint64_t glowWindow = press + static_cast<uint64_t>(std::max(0, LocalPrediction::GetDepthOverride())) + 1;
+	const PreviewEventLedger::EventStart* glow = nullptr;
+	for (const PreviewEventLedger::EventStart& start: starts) {
+		if (start.kind == PreviewEventLedger::PostEffect && start.committedTick >= press && start.committedTick <= glowWindow && s_eventLedgerGlowUIDs.count(start.emitterUID)) {
+			glow = &start;
+			break;
+		}
+	}
+	if (!glow) {
+		check("the_glow_starts_on_the_preview_tick", true, "no post effect belongs to " + (s_eventLedgerLuaPreset.empty() ? std::string("the firearm") : s_eventLedgerLuaPreset));
+	} else {
+		check("the_glow_starts_on_the_preview_tick", glow->committedTick <= press + 1,
+		      "first post effect for the press at committed tick " + std::to_string(glow->committedTick) + " (event tick " + std::to_string(glow->eventTick) + ", predicted=" + std::to_string(glow->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1));
+	}
+	if (s_eventLedgerLuaPreset == "AK-47" && s_eventLedgerLuaEmitterUID != 0) {
+		const PreviewEventLedger::EventStart* luaFire = nullptr;
+		for (const PreviewEventLedger::EventStart& start: starts) {
+			if (start.kind == PreviewEventLedger::Sound && start.emitterUID == s_eventLedgerLuaEmitterUID && start.committedTick >= press) {
+				luaFire = &start;
+				break;
+			}
+		}
+		check("the_lua_fire_sound_starts_on_the_preview_tick", luaFire && luaFire->committedTick <= press + 1 && luaFire->predicted,
+		      luaFire ? "first Mech Ronin AK-47 voice at committed tick " + std::to_string(luaFire->committedTick) + " (event tick " + std::to_string(luaFire->eventTick) + ", seq " + std::to_string(luaFire->seq) + ", predicted=" + std::to_string(luaFire->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1)
+		              : "no physical voice from equipped AK-47 uid=" + std::to_string(s_eventLedgerLuaEmitterUID) + " at or after tick " + std::to_string(press));
+		if (luaFire) {
+			size_t luaSameKey = 0;
+			for (const PreviewEventLedger::EventStart& start: starts) {
+				if (start.kind == luaFire->kind && start.emitterUID == luaFire->emitterUID && start.eventTick == luaFire->eventTick && start.seq == luaFire->seq) {
+					++luaSameKey;
+				}
+			}
+			check("the_event_reaches_the_output_once", luaSameKey == 1, std::to_string(luaSameKey) + " physical starts for that event");
+		}
+	}
+	const uint64_t pressEmitter = tracked ? tracked->emitterUID : 0;
+	const PreviewEventLedger::EventStart* round = nullptr;
+	for (const PreviewEventLedger::EventStart& start: starts) {
+		if (start.kind == PreviewEventLedger::Projectile && start.committedTick >= press && (!pressEmitter || start.emitterUID == pressEmitter)) {
+			round = &start;
+			break;
+		}
+	}
+	check("the_first_round_is_visible_on_the_preview_tick", round && round->committedTick <= press + 1 && round->predicted,
+	      round ? "first projectile for the press at committed tick " + std::to_string(round->committedTick) + " (event tick " + std::to_string(round->eventTick) + ", seq " + std::to_string(round->seq) + ", predicted=" + std::to_string(round->predicted ? 1 : 0) + "), expected <= " + std::to_string(press + 1)
+	           : "no projectile from the press's emitter at or after tick " + std::to_string(press));
+	size_t projectileAdoptions = 0;
+	if (round) {
+		for (const PreviewEventLedger::EventStart& start: starts) {
+			if (start.kind == round->kind && start.emitterUID == round->emitterUID && start.eventTick == round->eventTick && start.seq == round->seq && !start.predicted) {
+				++projectileAdoptions;
+			}
+		}
+	}
+	check("the_projectile_is_adopted_once", projectileAdoptions == 1, std::to_string(projectileAdoptions) + " adoptions of that projectile");
 	// A guard, not a detector: the muzzle flash sprite is already drawn on the preview that fires.
 	check("the_flash_sprite_stays_on_the_preview_tick", s_eventLedgerFlashTick > 0 && static_cast<uint64_t>(s_eventLedgerFlashTick) <= press + 1,
 	      "the previewed firearm's flash frame is first set at committed tick " + std::to_string(s_eventLedgerFlashTick) + ", expected <= " + std::to_string(press + 1));
@@ -2026,6 +2402,21 @@ static void CheckPreviewEventLedgerSelfTest() {
 static void CheckRequiredProbesCompleted() {
 	const long long stoppedAt = g_TimerMan.GetSimUpdateCount();
 	CheckPreviewEventLedgerSelfTest();
+	if ((s_eventLedgerPressTick > 0 || s_lpInvarianceTick > 0) && !PreviewScriptSelfTest::CheckNestedHookScope()) {
+		s_netReplayExitCode = 5;
+	}
+	if (PreviewScriptSelfTest::SubtreeProbeEnabled() && !PreviewScriptSelfTest::CheckSubtreeEmitter(s_eventLedgerPressTick)) {
+		s_netReplayExitCode = 5;
+	}
+	if (LocalPredictionHudSelfTest::g_PressTick > 0) {
+		if (!LocalPredictionHudSelfTest::g_Sampled && !LocalPredictionHudSelfTest::g_Checked) {
+			std::cout << "[preview-hud-selftest] FAIL: hud sample at tick " << LocalPredictionHudSelfTest::g_PressTick << " never executed (the run stopped at tick " << stoppedAt << ")" << std::endl;
+			s_netReplayExitCode = 5;
+			LocalPredictionHudSelfTest::g_Checked = true;
+		} else if (!LocalPredictionHudSelfTest::Check()) {
+			s_netReplayExitCode = 5;
+		}
+	}
 	if (s_lpInvarianceTick > 0 && s_lpInvarianceFailures < 0) {
 		std::cout << "[lpinv] FAIL: invariance test at tick " << s_lpInvarianceTick << " never executed (the run stopped at tick " << stoppedAt << ")" << std::endl;
 		g_MetricsCollector.RecordString("lpinv_result", "not_run");
@@ -2578,6 +2969,70 @@ static bool HandleFailedActivityLaunch() {
 	return !System::IsSetToQuit();
 }
 
+static Actor* FindE2eSwitchControlTarget(Activity* activity, int player) {
+	if (!activity) {
+		return nullptr;
+	}
+	const int team = activity->GetTeamOfPlayer(player);
+	Actor* brain = activity->GetPlayerBrain(player);
+	if (!brain) {
+		brain = g_MovableMan.GetFirstBrainActor(team);
+	}
+	Actor* best = nullptr;
+	if (std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(team)) {
+		for (Actor* actor: *roster) {
+			if (!actor || actor == brain || actor->IsInGroup("Brains") || actor->IsPlayerControlled()) {
+				continue;
+			}
+			if (!best || actor->GetUniqueID() < best->GetUniqueID()) {
+				best = actor;
+			}
+		}
+	}
+	return best;
+}
+
+static void NoteE2eSwitchOwnerLog(uint64_t tick) {
+	if (!s_netMatchServiceE2E || !ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return;
+	}
+	if (s_netMatchE2eSwitchUid == 0) {
+		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+			std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(team);
+			if (!roster) {
+				continue;
+			}
+			for (Actor* actor: *roster) {
+				if (!actor) {
+					continue;
+				}
+				const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+				const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
+				if (seeded == 0) {
+					continue;
+				}
+				const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
+				if (owner != seeded) {
+					s_netMatchE2eSwitchUid = uid;
+					break;
+				}
+			}
+			if (s_netMatchE2eSwitchUid != 0) {
+				break;
+			}
+		}
+	}
+	if (s_netMatchE2eSwitchUid == 0) {
+		return;
+	}
+	Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(s_netMatchE2eSwitchUid)));
+	if (!actor) {
+		return;
+	}
+	const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(s_netMatchE2eSwitchUid, actor->GetTeam(), !actor->IsPlayerControlled());
+	s_netMatchE2eOwnerLog.push_back({tick, s_netMatchE2eSwitchUid, static_cast<int>(owner), static_cast<int>(actor->GetController()->GetInputMode())});
+}
+
 void RunGameLoop() {
 	if (System::IsSetToQuit()) {
 		return;
@@ -2757,6 +3212,30 @@ void RunGameLoop() {
 						std::cout << "[net-match-service-e2e] ai order issued at tick " << simTick << " unit " << unit->GetUniqueID() << " brain " << brain->GetUniqueID() << std::endl;
 					}
 				}
+				if (s_netMatchServiceE2E && s_netMatchE2eSwitchControlTick > 0 && ScenarioRunner::IsLockstepControllerSyncActive()) {
+					if (!s_netMatchE2eSwitchIssued && simTick == s_netMatchE2eSwitchControlTick) {
+						if (Activity* activity = g_ActivityMan.GetActivity()) {
+							const int player = Players::PlayerOne;
+							if (Actor* target = FindE2eSwitchControlTarget(activity, player)) {
+								s_netMatchE2eSwitchUid = static_cast<int64_t>(target->GetUniqueID());
+								activity->SwitchToActor(target, player, activity->GetTeamOfPlayer(player));
+								std::cout << "[net-match] e2e switch-control: uid=" << s_netMatchE2eSwitchUid << " at tick " << simTick << std::endl;
+							} else {
+								std::cout << "[net-match] e2e switch-control: uid=0 at tick " << simTick << std::endl;
+							}
+							s_netMatchE2eSwitchIssued = true;
+						}
+					} else if (s_netMatchE2eSwitchIssued && !s_netMatchE2eSwitchHandedBack && simTick == s_netMatchE2eSwitchControlTick + 10) {
+						if (Activity* activity = g_ActivityMan.GetActivity()) {
+							const int player = Players::PlayerOne;
+							if (Actor* brain = activity->GetPlayerBrain(player)) {
+								activity->SwitchToActor(brain, player, activity->GetTeamOfPlayer(player));
+								std::cout << "[net-match] e2e switch-control: hand-back at tick " << simTick << std::endl;
+							}
+							s_netMatchE2eSwitchHandedBack = true;
+						}
+					}
+				}
 				// E2E control: host-issued inventory ops on its brain at fixed ticks; both peers must mutate identically.
 				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestInventoryCommand &&
 				    (simTick == 210 || simTick == 240 || simTick == 270 || simTick == 300)) {
@@ -2928,6 +3407,7 @@ void RunGameLoop() {
 			}
 
 			DumpSimStateIfArmed(simTick);
+			NoteE2eSwitchOwnerLog(simTick);
 			TickProbeIfArmed(simTick);
 			LocalPredictionInvarianceOnTick(simTick);
 			PreviewEventLedgerFrameOnTick();
@@ -3923,10 +4403,20 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"entered_editor\":" << (s_netMatchServiceE2EEnteredEditor ? "true" : "false") << ",";
 	out << "\"rematches\":" << s_netMatchServiceE2ERematches << ",";
 	out << "\"resyncs\":" << s_netMatchResyncs << ",";
+	out << "\"stale_activity_slots\":" << g_ActivityMan.StaleActivitySlotCount() << ",";
 	// The actor census guards against sim-CONSISTENT duplication (both peers doubling identically
 	// slips every divergence gate); the peak catches a double-spawn that later sheds back to normal.
 	out << "\"actors\":" << s_netMatchE2EActorCensus << ",";
 	out << "\"actors_peak\":" << s_netMatchE2EActorCensusPeak << ",";
+	out << "\"owner_log\":[";
+	for (size_t i = 0; i < s_netMatchE2eOwnerLog.size(); ++i) {
+		if (i) {
+			out << ",";
+		}
+		const E2eOwnerLogEntry& entry = s_netMatchE2eOwnerLog[i];
+		out << "{\"tick\":" << entry.tick << ",\"uid\":" << entry.uid << ",\"owner\":" << entry.owner << ",\"mode\":" << entry.mode << "}";
+	}
+	out << "],";
 	out << "\"pace\":" << BuildLoopPaceJson() << ",";
 	out << "\"running_ticks\":" << s_netMatchE2ETicks.Total() << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
@@ -4101,10 +4591,11 @@ int RunNetMatchServiceE2E() {
 	std::string setupError;
 	if (!NetA7Journal::StartE2E(&setupError, [] { PollSDLEvents(); return System::IsSetToQuit(); })) s_netMatchServiceE2EExitCode = 1;
 	const bool e2eHost = s_netHost || s_netDedicated;
-	if (s_netDedicated && !s_netJoinAddress.empty()) {
+	const bool e2eJoiner = !s_netJoinAddress.empty() || !s_netJoinSessionId.empty();
+	if (s_netDedicated && e2eJoiner) {
 		setupError = "-net-dedicated cannot be combined with -net-join <address>";
-	} else if (e2eHost == !s_netJoinAddress.empty()) {
-		setupError = "-net-match-service-e2e requires exactly one of -net-host, -net-dedicated or -net-join <address>";
+	} else if (e2eHost == e2eJoiner) {
+		setupError = "-net-match-service-e2e requires exactly one of -net-host, -net-dedicated, -net-join <address> or -net-join-session <id>";
 	}
 
 	if (setupError.empty()) {
@@ -4113,10 +4604,13 @@ int RunNetMatchServiceE2E() {
 		request.host = e2eHost;
 		request.dedicated = s_netDedicated;
 		request.address = s_netJoinAddress.empty() ? "127.0.0.1" : s_netJoinAddress;
+		request.sessionId = s_netJoinSessionId;
 		request.port = s_netPort;
 		request.playerName = e2eHost ? "Host" : "Client";
 		request.activityPreset = s_netMatchServiceE2EPreset;
-		request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+		// The e2e honours -net-match-ownership-policy; team-owner is the default so the flagless path is unchanged.
+		NetActorOwnershipPolicy e2ePolicy;
+		request.ownershipPolicy = NetMatchConfigUtil::ParseOwnershipPolicy(s_netMatchOwnershipPolicy, e2ePolicy) ? e2ePolicy : NetActorOwnershipPolicy::TeamOwner;
 		request.inputDelayFrames = s_netLockstepInputDelay;
 		request.peerCount = s_netMatchPeers;
 		NetMatchMode parsedMode;
@@ -4138,6 +4632,8 @@ int RunNetMatchServiceE2E() {
 		}
 		const auto waitStart = std::chrono::steady_clock::now();
 		while (!g_NetMatchService.ConsumeReadyToLaunch(activityPreset)) {
+			// The directory row is the game thread's to drive, and a session-id join waits on it.
+			g_NetMatchService.Update();
 			const NetMatchServiceState state = g_NetMatchService.GetState();
 			if (e2eHost && ScenarioRunner::GetArgs().selftestJoinRejection && state == NetMatchServiceState::Starting) {
 				const std::string rejection = g_NetMatchService.GetErrorText();
@@ -4597,11 +5093,49 @@ int RunNetDirectoryList() {
 	return 0;
 }
 
+/// Whether an argument starts a run whose Lua-side world must agree with another run's: a net session, a hash trace, a replay, a controller log or the determinism check.
+static bool IsDeterministicRunArgument(const std::string& argument) {
+	static const std::array<std::string, 13> c_Arguments = {"-deterministic-gc", "-tick-hashes", "-net-host", "-net-join", "-net-dedicated", "-net-lockstep", "-net-match", "-net-match-service-e2e", "-net-replay", "-net-replay-out", "-controller-log-out", "-controller-log-in", "-determinism-selftest-perturb"};
+	return std::find(c_Arguments.begin(), c_Arguments.end(), argument) != c_Arguments.end();
+}
+
+/// <summary>
+/// The headless port-map probe: request a UDP mapping for the game port through the
+/// NAT-PMP -> PCP -> UPnP chain (optionally against the -net-port-map-gateway/-net-port-map-igd
+/// test seams), print the result, then delete the mapping. Returns 0 only when one method mapped.
+/// </summary>
+int RunNetPortMapProbe() {
+	NetPortMap mapper;
+	mapper.Request(s_netPort, NetPortMap::c_DefaultLeaseS, NetPortMap::ProbeOverrides());
+	const auto nowMs = [] {
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+	};
+	const uint64_t begin = nowMs();
+	while (!mapper.Done() && nowMs() - begin < NetPortMap::c_MapBudgetMs + NetPortMap::c_ReleaseBudgetMs) {
+		mapper.Update(nowMs());
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	const NetPortMap::Result& result = mapper.GetResult();
+	const bool mapped = mapper.Mapped();
+	if (mapped) {
+		std::cout << "[net-port-map-probe] mapped " << result.externalIp << ":" << result.externalPort
+		          << " via " << NetPortMap::MethodName(result.method) << " lease_s=" << result.leaseS << std::endl;
+	} else {
+		std::cout << "[net-port-map-probe] no mapping: " << (result.error.empty() ? "still pending at the budget" : result.error) << std::endl;
+	}
+	mapper.Release();
+	std::cout << "[net-port-map-probe] " << (mapped ? "PASS" : "FAIL") << std::endl;
+	return mapped ? 0 : 1;
+}
+
 /// <summary>
 /// Implementation of the main function.
 /// </summary>
 int main(int argc, char** argv) {
 	for (int i = 1; i < argc; ++i) {
+		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
+			return RotatePrimitiveSelfTest::Run();
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-controller-frame-selftest") {
 			return ControllerFrameSelfTest::Run();
 		}
@@ -4640,6 +5174,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-p2p-selftest") {
 			return GnsP2PSelfTest::Run(std::vector<std::string>(argv + i + 1, argv + argc));
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-port-map-selftest") {
+			return NetPortMapSelfTest::Run();
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-discovery-selftest") {
 			// A beacon and a browser over the loopback broadcast: the browser must list the host.
@@ -4687,12 +5224,20 @@ int main(int argc, char** argv) {
 			s_cliNumLuaStatesOverride = static_cast<int>(std::strtol(argv[i + 1], nullptr, 10));
 			explicitLuaStateOverride = true;
 			++i;
-		} else if (arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join") {
+		} else if (arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-join-session") {
 			netSessionRequested = true;
 		}
 	}
 	if (netSessionRequested && !explicitLuaStateOverride) {
 		s_cliNumLuaStatesOverride = c_NetSessionDefaultLuaStates;
+	}
+
+	// Decided before LuaMan starts, so its startup line names the collector this run uses.
+	for (int i = 1; i < argc; ++i) {
+		if (argv[i] != nullptr && IsDeterministicRunArgument(argv[i])) {
+			LuaMan::SetDeterministicCollection(true);
+			break;
+		}
 	}
 
 	// Headless: -tick-hashes (the determinism trace mode, set on every -determinism-check child)
@@ -4705,7 +5250,7 @@ int main(int argc, char** argv) {
 				continue;
 			}
 			const std::string arg = argv[i];
-			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e" || arg == "-net-directory-probe" || arg == "-net-directory-signal-probe" || arg == "-net-directory-list" || arg == "-net-directory-selftest") {
+			if (arg == "-tick-hashes" || arg == "-headless" || arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-lockstep" || arg == "-net-match" || arg == "-net-match-service-e2e" || arg == "-net-directory-probe" || arg == "-net-directory-signal-probe" || arg == "-net-directory-list" || arg == "-net-directory-selftest" || arg == "-net-port-map-probe" || arg == "-net-join-session") {
 				headless = true;
 			} else if (arg.size() > 9 && arg.compare(arg.size() - 9, 9, "-selftest") == 0) {
 				// A selftest never needs a visible window; a bare launch from a worker shell must not raise one.
@@ -4769,6 +5314,11 @@ int main(int argc, char** argv) {
 
 	if (!HandleMainArgs(argc, argv)) return ShutDown(EXIT_FAILURE);
 
+	// The -net-port-map flags are only parsed by HandleMainArgs, so the run override and the
+	// probe seams take effect here, before the probe dispatch and any match Start can read them.
+	g_SettingsMan.SetNetworkPortMapEnableOverride(s_netPortMapCli);
+	NetPortMap::SetProbeOverrides(s_netPortMapGateway, s_netPortMapIgd);
+
 	if (s_cameraNullSceneSelfTest) {
 		// The scroll update runs from the sim tick, which keeps ticking for a frame after an activity
 		// ends or an activity launch fails. With no scene it must do nothing rather than fault, and
@@ -4812,6 +5362,10 @@ int main(int argc, char** argv) {
 
 	if (s_netDirectoryList) {
 		return ShutDown(RunNetDirectoryList());
+	}
+
+	if (s_netPortMapProbe) {
+		return ShutDown(RunNetPortMapProbe());
 	}
 
 	if (NetSessionCliRequested()) {

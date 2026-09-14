@@ -16,6 +16,7 @@
 #include "Activity.h"
 #include "Scene.h"
 #include "SpatialPartitionGrid.h"
+#include "PreviewEventLedger.h"
 
 #include "BS_thread_pool.hpp"
 
@@ -132,7 +133,8 @@ namespace RTE {
 		bool RunPurgeSelfTest();
 
 		/// Checks that the contiguous actor index never outlives its actors: takes the passed-in craft
-		/// through a tick's add, index and removal, then the archive round trip. Takes ownership of the craft.
+		/// through a tick's add, index and removal, the three added-actor delete paths, then the archive
+		/// round trip. Takes ownership of the craft.
 		bool RunContiguousActorIndexSelfTest(Actor* craft);
 
 		class ConstructionRegistryScope {
@@ -274,16 +276,37 @@ namespace RTE {
 		void DiscardAddedSince(const AddQueueMark& mark);
 		/// The preset names of everything queued since the mark, comma separated; the gates name a preview's spawns with it.
 		std::string DescribeAddedSince(const AddQueueMark& mark) const;
+		/// Moves this tick's add-queue entries into the speculation spawn list so later horizon steps can travel them.
+		void HarvestSpeculativeSpawns();
+		/// One TravelStage then UpdateStage per speculative spawn; the same stages the preview clones use.
+		void TravelSpeculativeSpawns();
+		size_t GetSpeculativeSpawnCount() const;
+		/// The preset names of the speculative spawns, comma separated.
+		std::string DescribeSpeculativeSpawns() const;
+		/// Drops the ghost that matches this ledger key; the canonical particle takes the pixel.
+		void DropPreviewGhost(const PreviewEventLedger::Key& key);
+		void DropAllPreviewGhosts();
+		size_t GetPreviewGhostCount() const { return m_PreviewGhosts.size(); }
+		uint64_t GetPreviewGhostPeak() const { return m_PreviewGhostPeak; }
 		/// Draws the substitute in the original's slot until swapped back.
 		bool SwapActorForRender(Actor* original, Actor* substitute);
+		void AddRenderSubstitute(const MovableObject* mo);
+		void ClearRenderSubstitutes();
+		bool IsRenderSubstitute(const MovableObject* mo) const;
 
 		/// Speculative execution (a preview): gameplay runs against an overlay of the world. Lookups hand out
 		/// shadow clones of the residents they resolve, membership and ownership changes land on the overlay,
 		/// and ending it leaves the world as it was. A write to a resident itself is a violation.
 		void BeginSpeculation();
+		bool IsResident(const MovableObject* mo) const { return ResidentKind(mo) != 0; }
+		MovableObject* ViewIfSpeculating(MovableObject* found) const;
 		/// Ends the overlay: its unowned shadows and spawns are deleted, the rosters and flags go back.
 		/// @param takenResidents Receives the residents whose shadows were taken out of the overlay's world.
 		void EndSpeculation(std::vector<MovableObject*>* takenResidents = nullptr);
+		/// Maps a retiring shadow or shadow part to the resident or its part; other retiring objects to nothing; otherwise the object itself.
+		MovableObject* OverlaySurvivorOf(MovableObject* mo, const std::unordered_set<const MovableObject*>& retiring) const;
+		/// Owned objects EndSpeculation deletes, plus unread spawnMeta keys; previews, substitutes and residents stay out.
+		std::unordered_set<const MovableObject*> RetiringOverlayObjects();
 		bool IsSpeculative() const { return m_Speculation.active; }
 		struct SpeculationStats {
 			uint64_t shadows = 0;
@@ -679,6 +702,20 @@ namespace RTE {
 		/// Applies one wire frame to an actor: its actor state, its controller and the apply tick.
 		static bool ApplyLockstepFrameToActor(Actor& actor, const ControllerFrame& frame, uint64_t simTick, std::string* error);
 
+		/// Moves an actor's frame production at a committed frame. A peer claims only for itself and
+		/// the lowest peer id wins an actor two of them claim at the same frame; an owner may also
+		/// release its actor back to the owner the world seeded for it.
+		/// @return Whether the claim was accepted.
+		static bool ApplyLockstepControlClaim(int64_t actorUniqueID, uint8_t senderPeerId, uint8_t newOwnerPeerId, uint64_t frame);
+
+		/// Lands a control handoff on one peer's copy of an actor: the sim-facing mode follows the
+		/// owner at the committed tick, the local seat is left alone.
+		/// @param seated Whether the new owner seats a player on it.
+		static void ApplyLockstepControlHandoffToActor(Actor& actor, bool seated);
+
+		/// Lets go of this peer's control bindings for actors another peer now owns.
+		static void ReconcileLockstepControlBindings();
+
 		/// Moves the pending added MOs into the live lists immediately. The per-tick update does
 		/// this at its transfer point; a rollback restore does it before the first re-run tick so
 		/// the world enters it structurally identical to the first pass.
@@ -858,9 +895,16 @@ namespace RTE {
 				int kind = 0; //!< 1 actor, 2 item, 3 particle.
 				bool inWorld = true; //!< Standing in for its resident until a caller takes it.
 			};
+			struct Spawn {
+				MovableObject* object = nullptr;
+				uint64_t emitterUID = 0;
+				uint64_t tick = 0;
+			};
 			bool active = false;
 			std::unordered_map<const MovableObject*, Shadow> shadows; //!< Resident -> its shadow.
 			std::unordered_map<const MovableObject*, MovableObject*> residents; //!< Shadow -> its resident.
+			std::unordered_map<const MovableObject*, Spawn> spawnMeta;
+			std::vector<Spawn> spawns;
 			std::vector<MovableObject*> taken;
 			AddQueueMark mark;
 			std::list<Actor*> rosters[Activity::MaxTeamCount];
@@ -870,14 +914,25 @@ namespace RTE {
 		SpeculationStats m_SpeculationStats;
 		ControllerBoundaryStats m_ControllerBoundaryStats;
 		std::unordered_set<const MovableObject*> m_RenderHidden;
+		std::unordered_set<const MovableObject*> m_RenderSubstitutes;
 		MovableObject* m_LinkRoot = nullptr;
 
 		MovableObject* LookupMOID(MOID whichID) const;
 		int ResidentKind(const MovableObject* mo) const;
-		bool IsResident(const MovableObject* mo) const { return ResidentKind(mo) != 0; }
 		MovableObject* ShadowOf(MovableObject* resident);
 		MovableObject* SpeculativeView(MovableObject* found);
 		MovableObject* TakeShadow(MovableObject* mo, int kind);
+		void RecordSpeculativeSpawnMeta(MovableObject* mo);
+		void DestroySpeculativeSpawn(MovableObject* mo);
+		void DisposeSpeculativeSpawns();
+		void TakePreviewSpawn(MovableObject* particle);
+		void InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key);
+		struct PreviewGhost {
+			MovableObject* object = nullptr;
+			PreviewEventLedger::Key key;
+		};
+		std::vector<PreviewGhost> m_PreviewGhosts;
+		uint64_t m_PreviewGhostPeak = 0;
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		bool m_PurgingAllMOs = false;
 		std::vector<MovableObject*> m_PendingLinkResolves; //!< Restored adds whose saved links resolve once the whole world is in.

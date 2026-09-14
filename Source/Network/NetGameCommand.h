@@ -226,6 +226,7 @@ namespace RTE {
 		float x = 0.0F;
 		float y = 0.0F;
 		int64_t targetUID = 0;
+		int64_t writerUID = 0; //!< 0 = the target actor wrote its own queue.
 
 		bool operator==(const NetGameAIOrder&) const = default;
 	};

@@ -258,6 +258,7 @@ namespace RTE {
 		bool IsNetworkDelivery() const { return m_NetworkDelivery; }
 
 		void ResolveFaithfulLinks() override;
+		void RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) override;
 
 		/// Adds an inventory item to this Actor.
 		/// @param pItemToAdd An pointer to the new item to add. Ownership IS TRANSFERRED!

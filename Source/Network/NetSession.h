@@ -6,6 +6,7 @@
 #include "NetTransport.h"
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -31,6 +32,16 @@ namespace RTE {
 		Failed = 9,
 	};
 
+	/// A session-id (ICE) join. The runner's SessionFull retry calls StartClient again with the
+	/// config it kept, so the spec rides the config rather than the call.
+	struct NetSessionP2PJoin {
+		std::string identity;          //!< The host's GNS identity, from its directory session id.
+		int remoteVirtualPort = 0;
+		std::string sessionId;
+		/// Opens the ICE connection. Set: StartClient dials this instead of an address.
+		std::function<bool(INetTransport&, std::string*)> connect;
+	};
+
 	struct NetSessionConfig {
 		NetIdentityManifest localIdentity;
 		std::string displayName = "Player";
@@ -43,6 +54,7 @@ namespace RTE {
 		uint16_t minProtocolVersion = NetProtocol::c_Version;
 		uint16_t maxProtocolVersion = NetProtocol::c_Version;
 		bool rejectUserdataModules = true;
+		NetSessionP2PJoin p2pJoin;
 	};
 
 	struct NetSessionStats {
@@ -60,6 +72,10 @@ namespace RTE {
 		uint32_t oldWireRejectionsSent = 0; //!< Host: explicit rejections stamped at the peer's own header version (§10).
 		uint32_t oldWireDisconnects = 0; //!< Host: old-wire peers whose version we cannot answer in, disconnected with the reason text.
 		uint32_t pendingAdmissionJoins = 0; //!< Host: mid-match joiners admitted on a provisional id to prove a ticket on (§6).
+		uint32_t moduleDigestRequestsSent = 0; //!< Digest exchanges opened on a module-manifest refusal, so the refusal can name the modules.
+		uint32_t moduleDigestsSent = 0;
+		uint32_t moduleDigestsReceived = 0;
+		uint32_t moduleDigestExchangesExpired = 0; //!< Peers that never answered; the refusal went out on its plain summary.
 	};
 
 	// A connected peer as seen by the match runner: its transport id and session-assigned id.
@@ -81,6 +97,8 @@ namespace RTE {
 
 		bool StartHost(INetTransport& transport, NetSessionConfig config, std::string* error = nullptr);
 		bool StartClient(INetTransport& transport, const std::string& address, NetSessionConfig config, std::string* error = nullptr);
+		/// Joins by session id: the config's p2pJoin spec opens the connection instead of an address.
+		bool StartClientP2P(INetTransport& transport, NetSessionConfig config, std::string* error = nullptr);
 		void Tick(uint64_t nowMs, bool pollTransport = true);
 		uint64_t GetClockMs() const { return m_NowMs; }
 		/// Sends session heartbeats without polling the transport or checking timeouts, so another
@@ -161,6 +179,11 @@ namespace RTE {
 			bool resumedWithoutTraffic = false; //!< Its window was restarted by a resumption and it has not spoken since; the next one does not restart it again.
 			uint64_t lastHeartbeatMs = 0;
 			NetHash32 identityHash{};
+			// Parked on a module-manifest refusal that has already been decided, waiting only for the
+			// digests that let it name the modules. Bounded by ExpireSilentHandshakes.
+			bool awaitingModuleDigests = false;
+			bool moduleDigestsSent = false;
+			NetIdentityMismatch pendingModuleMismatch;
 		};
 
 		bool Send(NetPeerId peerId, NetPayload payload, std::string* error = nullptr);
@@ -212,6 +235,15 @@ namespace RTE {
 		NetIdentityMismatch ValidateClientHello(const NetClientHello& hello) const;
 		NetIdentityMismatch ValidateHostHello(const NetHostHello& hello) const;
 
+		/// Asks a peer refused on its module manifest for its module list. The refusal itself is already
+		/// decided; only the text it carries is still open.
+		/// @return Whether the peer was parked, so the caller holds the refusal back.
+		bool BeginModuleDigestExchange(NetPeerId peerId);
+		/// Answers a digest request with the local module list, once per connection.
+		void SendModuleDigests(NetPeerId peerId, uint16_t maxEntries, bool& alreadySent);
+		/// The joiner-facing sentence for a peer's digests, or an empty string when nothing was named.
+		std::string DescribeModuleMismatch(const NetModuleDigests& remoteDigests) const;
+
 		static uint8_t PlatformId(const std::string& platform);
 
 		INetTransport* m_Transport = nullptr;
@@ -241,6 +273,12 @@ namespace RTE {
 		std::string m_RejectSummary;
 		NetHash32 m_RemoteIdentityHash{};
 		bool m_HasRemoteIdentityHash = false;
+		// Client mirror of the parked peer state, bounded by its own deadline rather than by the
+		// handshake expiry the host runs.
+		bool m_AwaitingModuleDigests = false;
+		bool m_ModuleDigestsSent = false;
+		uint64_t m_ModuleDigestDeadlineMs = 0;
+		NetIdentityMismatch m_PendingModuleMismatch;
 		NetSessionStats m_Stats;
 		NetReconnectHost* m_ReconnectHost = nullptr;
 		NetReconnectClient* m_ReconnectClient = nullptr;

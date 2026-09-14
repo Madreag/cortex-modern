@@ -12,9 +12,13 @@
 #include "MetaMan.h"
 #include "SceneMan.h"
 #include "ScenarioRunner.h"
+#include "NetActorOwnership.h"
+#include "NetGameCommand.h"
 #include "LuaMan.h"
+#include "ActivityMan.h"
 
 #include "ACraft.h"
+#include "OwnedMovableObjects.h"
 
 #include "GUI.h"
 #include "GUIFont.h"
@@ -722,35 +726,71 @@ void Activity::ReassignSquadLeader(const int player, const int team) {
 		MOID leaderID = m_ControlledActor[player]->GetAIMOWaypointID();
 
 		if (leaderID != g_NoMOID) {
+			const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
+			const bool send = !lockstep || ScenarioRunner::IsLockstepTeamCommandSender(team, ScenarioRunner::GetLockstepLocalPeerId());
+			auto enqueue = [](Actor* target, uint8_t op, const Vector& point, const MovableObject* mo) {
+				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{static_cast<int64_t>(target->GetUniqueID()), target->GetTeam(), op, point.m_X, point.m_Y, mo ? static_cast<int64_t>(mo->GetUniqueID()) : 0}});
+			};
+			auto clearWP = [&](Actor* target) {
+				if (!lockstep) {
+					target->ClearAIWaypoints();
+				} else if (send) {
+					enqueue(target, NetGameAIOrder::ClearWaypoints, Vector(), nullptr);
+				}
+			};
+			auto addMO = [&](Actor* target, const MovableObject* mo) {
+				if (!mo) {
+					return;
+				}
+				if (!lockstep) {
+					target->AddAIMOWaypoint(mo);
+				} else if (send) {
+					enqueue(target, NetGameAIOrder::MOWaypoint, mo->GetPos(), mo);
+				}
+			};
+			auto addScene = [&](Actor* target, const Vector& point) {
+				if (!lockstep) {
+					target->AddAISceneWaypoint(point);
+				} else if (send) {
+					enqueue(target, NetGameAIOrder::SceneWaypoint, point, nullptr);
+				}
+			};
+			auto setMode = [&](Actor* target, Actor::AIMode mode) {
+				if (!lockstep) {
+					target->SetAIMode(mode);
+				} else if (send) {
+					target->RequestAIMode(mode);
+				}
+			};
 			Actor* actor = g_MovableMan.GetNextTeamActor(team, m_ControlledActor[player]);
 
 			do {
 				// Set the controlled actor as new leader if actor follow the old leader, and not player controlled and not brain
 				if (actor && (actor->GetAIMode() == Actor::AIMODE_SQUAD) && (actor->GetAIMOWaypointID() == leaderID) && !actor->GetController()->IsPlayerControlled() && !actor->IsInGroup("Brains")) {
-					actor->ClearAIWaypoints();
-					actor->AddAIMOWaypoint(m_ControlledActor[player]);
-					// Make sure actor has m_ControlledActor registered as an AIMOWaypoint
-					actor->SetMovePathToUpdate();
+					clearWP(actor);
+					addMO(actor, m_ControlledActor[player]);
+					if (!lockstep) {
+						actor->SetMovePathToUpdate();
+					}
 				} else if (actor && actor->GetID() == leaderID) {
 					// Set the old leader to follow the controlled actor and inherit his AI mode
-					m_ControlledActor[player]->ClearAIWaypoints();
-					m_ControlledActor[player]->SetAIMode(static_cast<Actor::AIMode>(actor->GetAIMode()));
+					clearWP(m_ControlledActor[player]);
+					const Actor::AIMode inherited = static_cast<Actor::AIMode>(actor->GetAIMode());
+					setMode(m_ControlledActor[player], inherited);
 
-					if (m_ControlledActor[player]->GetAIMode() == Actor::AIMODE_GOTO) {
-						// Copy the old leaders move orders
+					if (inherited == Actor::AIMODE_GOTO) {
 						if (actor->GetAIMOWaypointID() != g_NoMOID) {
-							const MovableObject* targetMO = g_MovableMan.GetMOFromID(actor->GetAIMOWaypointID());
-							if (targetMO) {
-								m_ControlledActor[player]->AddAIMOWaypoint(targetMO);
-							}
+							addMO(m_ControlledActor[player], g_MovableMan.GetMOFromID(actor->GetAIMOWaypointID()));
 						} else if ((actor->GetLastAIWaypoint() - actor->GetPos()).GetLargest() > 1) {
-							m_ControlledActor[player]->AddAISceneWaypoint(actor->GetLastAIWaypoint());
+							addScene(m_ControlledActor[player], actor->GetLastAIWaypoint());
 						}
 					}
-					actor->ClearAIWaypoints();
-					actor->SetAIMode(Actor::AIMODE_SQUAD);
-					actor->AddAIMOWaypoint(m_ControlledActor[player]);
-					actor->SetMovePathToUpdate();
+					clearWP(actor);
+					setMode(actor, Actor::AIMODE_SQUAD);
+					addMO(actor, m_ControlledActor[player]);
+					if (!lockstep) {
+						actor->SetMovePathToUpdate();
+					}
 				}
 				actor = g_MovableMan.GetNextTeamActor(team, actor);
 			} while (actor && actor != m_ControlledActor[player]);
@@ -777,7 +817,6 @@ bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 	Actor* preSwitchActor = (m_ControlledActor[player] && g_MovableMan.IsActor(m_ControlledActor[player])) ? m_ControlledActor[player] : nullptr;
 	if (preSwitchActor && preSwitchActor->GetController()->IsSeatedByPlayer(player)) {
 		preSwitchActor->SetControllerMode(Controller::CIM_AI);
-		preSwitchActor->GetController()->SetDisabled(false);
 	}
 
 	m_ControlledActor[player] = actor;
@@ -785,7 +824,6 @@ bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 		m_ControlledActor[player]->SetTeam(team);
 	}
 	m_ControlledActor[player]->SetControllerMode(Controller::CIM_PLAYER, player);
-	m_ControlledActor[player]->GetController()->SetDisabled(false);
 
 	SoundContainer* actorSwitchSoundToPlay = (m_ControlledActor[player] == m_Brain[player]) ? g_GUISound.BrainSwitchSound() : g_GUISound.ActorSwitchSound();
 	// Snapshot Start selects the brain again; the UI click is not part of the restored sim.
@@ -805,14 +843,35 @@ bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 	// Taking control of a teammate's actor in a lockstep match moves its frame production here;
 	// the handoff crosses the wire so every peer flips the actor's owner at the same frame.
 	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		const uint8_t localPeerId = ScenarioRunner::GetLockstepLocalPeerId();
 		const int64_t actorUID = static_cast<int64_t>(m_ControlledActor[player]->GetUniqueID());
-		if (!ScenarioRunner::IsLockstepLocalActor(actorUID, team, false)) {
-			const uint8_t localPeerId = ScenarioRunner::GetLockstepLocalPeerId();
+		if (ScenarioRunner::GetLockstepActorOwner(actorUID, team, !m_ControlledActor[player]->IsPlayerControlled()) != localPeerId) {
 			ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{localPeerId, NetGameSwitchControl{actorUID, team, localPeerId}});
+		}
+		// The actor left behind goes back to the owner the world seeded it with, so its AI runs there.
+		if (preSwitchActor) {
+			const int64_t preSwitchUID = static_cast<int64_t>(preSwitchActor->GetUniqueID());
+			const int preSwitchTeam = preSwitchActor->GetTeam();
+			const uint8_t seededOwner = NetActorOwnership::GetSeededOwner(preSwitchUID);
+			if (seededOwner != 0 && seededOwner != localPeerId && ScenarioRunner::GetLockstepActorOwner(preSwitchUID, preSwitchTeam, !preSwitchActor->IsPlayerControlled()) == localPeerId) {
+				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{localPeerId, NetGameSwitchControl{preSwitchUID, preSwitchTeam, seededOwner}});
+			}
 		}
 	}
 
 	return true;
+}
+
+void Activity::ReleaseLockstepControlOfActor(int player) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return;
+	}
+	if (Actor* actor = m_ControlledActor[player]; actor && g_MovableMan.IsActor(actor)) {
+		actor->SetControllerMode(Controller::CIM_AI);
+	}
+	m_ControlledActor[player] = nullptr;
+	m_ViewState[player] = ViewState::DeathWatch;
+	m_DeathTimer[player].Reset();
 }
 
 void Activity::LoseControlOfActor(int player) {
@@ -1060,7 +1119,7 @@ bool Activity::ApplyNetPlayerSlots(const NetGamePlayerBindings& bindings) {
 		m_PlayerCount += binding.active ? 1 : 0;
 		m_PlayerScreen[player] = binding.active && binding.human ? screen++ : -1;
 	}
-	m_HasCheckpointActorIDs = false;
+	if (!g_ActivityMan.LockstepRelaunchInProgress()) m_HasCheckpointActorIDs = false;
 	return true;
 }
 
@@ -1085,6 +1144,7 @@ bool Activity::RestoreNetLocalPlayerState(const NetLocalPlayerState& state) {
 		if (!m_PlayerController[player].LoadCheckpoint(state.controllers[player])) return false;
 		m_PlayerController[player].SetControlledActor(ResolveNetActor(state.controllerActorUIDs[player]));
 	}
+	RefreshCheckpointActorIDs();
 	for (MovableObject* object: g_MovableMan.SnapshotKnownObjects()) {
 		if (auto* actor = dynamic_cast<Actor*>(object)) {
 			const auto found = inputs.find(actor->GetUniqueID());
@@ -1119,6 +1179,7 @@ bool Activity::ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings) {
 			g_CameraMan.SetScroll(Vector(binding.cameraX, binding.cameraY), m_PlayerScreen[player]);
 		}
 	}
+	RefreshCheckpointActorIDs();
 	return true;
 }
 
@@ -1130,10 +1191,11 @@ bool Activity::RunNetLocalPlayerStateSelfTest() {
 	};
 	struct Restore {
 		long uid = MovableObject::GetUniqueIDCounter();
+		bool relaunching = g_ActivityMan.LockstepRelaunchInProgress();
 		std::string camera = g_CameraMan.SaveCheckpoint();
 		std::vector<std::pair<Actor*, Controller::LocalInputState>> inputs;
 		Restore() { for (auto* object: g_MovableMan.SnapshotKnownObjects()) if (auto* actor = dynamic_cast<Actor*>(object)) inputs.emplace_back(actor, actor->GetController()->CaptureLocalInputState()); }
-		~Restore() { for (const auto& [actor, input]: inputs) actor->GetController()->RestoreLocalInputState(input); g_CameraMan.LoadCheckpoint(camera); MovableObject::PinUniqueIDCounter(uid); }
+		~Restore() { for (const auto& [actor, input]: inputs) actor->GetController()->RestoreLocalInputState(input); g_CameraMan.LoadCheckpoint(camera); MovableObject::PinUniqueIDCounter(uid); if (!relaunching) g_ActivityMan.EndLockstepRelaunch(); }
 	} restore;
 	try {
 		GameActivity fixture;
@@ -1181,20 +1243,45 @@ bool Activity::RunNetLocalPlayerStateSelfTest() {
 		for (auto& binding: fresh.players) binding.active = false;
 		fresh.players[0].brainUID = std::numeric_limits<int64_t>::max();
 		check("fresh_missing_identity_is_null", fixture.Activity::ApplyNetPlayerBindings(fresh) && !fixture.m_Brain[0] && fixture.m_ControlledActor[0] == &controlled && canonical() == authority);
+		// A relaunch holds the host save's slot links for its deferred rebinds; the local slots applied over them must replace them.
+		Actor host;
+		if (host.MovableObject::Create() < 0) throw std::runtime_error("host link actor could not be created");
+		const auto stageHostLinks = [&] {
+			fixture.m_Brain[0] = fixture.m_ControlledActor[0] = &host;
+			fixture.m_PlayerController[0].SetControlledActor(&host);
+			fixture.Activity::ClearCheckpointActorIDs();
+			if (!fixture.Activity::LoadCheckpoint(fixture.Activity::SaveCheckpoint())) throw std::runtime_error("host links could not be staged");
+		};
+		if (!restore.relaunching) g_ActivityMan.NoteLockstepRelaunch();
+		stageHostLinks();
+		check("relaunch_links_follow_retained_local_slots", fixture.Activity::RestoreNetLocalPlayerState(local) && fixture.Activity::ResolveCheckpointReferences() &&
+			!fixture.m_Brain[0] && fixture.m_ControlledActor[0] == &controlled && fixture.m_PlayerController[0].GetControlledActor() == &controlled);
+		stageHostLinks();
+		check("relaunch_links_follow_fresh_bindings", fixture.Activity::ApplyNetPlayerBindings(fresh) && fixture.Activity::ResolveCheckpointReferences() &&
+			!fixture.m_Brain[0] && fixture.m_ControlledActor[0] == &controlled && !fixture.m_PlayerController[0].GetControlledActor());
+		stageHostLinks();
+		check("relaunch_links_follow_seatless_bindings", fixture.Activity::ApplyNetPlayerBindings(NetGamePlayerBindings{}) && fixture.Activity::ResolveCheckpointReferences() &&
+			!fixture.m_Brain[0] && !fixture.m_ControlledActor[0] && !fixture.m_PlayerController[0].GetControlledActor());
 	} catch (const std::exception& exception) { check(exception.what(), false); }
 	return passed;
+}
+
+std::array<long, 3> Activity::SlotActorIDs(int player) const {
+	const Actor* controllerActor = m_PlayerController[player].GetControlledActor();
+	return {m_Brain[player] ? m_Brain[player]->GetUniqueID() : 0, m_ControlledActor[player] ? m_ControlledActor[player]->GetUniqueID() : 0,
+		controllerActor ? controllerActor->GetUniqueID() : 0};
+}
+
+void Activity::RefreshCheckpointActorIDs() {
+	if (!m_HasCheckpointActorIDs) return;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) m_CheckpointActorIDs[player] = SlotActorIDs(player);
 }
 
 std::string Activity::SaveCheckpoint() const {
 	CheckpointWriter writer("Activity3");
 	VisitCheckpoint(writer, *this);
 	std::array<std::array<long, 3>, Players::MaxPlayerCount> links{};
-	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
-		if (m_HasCheckpointActorIDs) { links[player] = m_CheckpointActorIDs[player]; continue; }
-		links[player] = {m_Brain[player] ? m_Brain[player]->GetUniqueID() : 0,
-			m_ControlledActor[player] ? m_ControlledActor[player]->GetUniqueID() : 0,
-			m_PlayerController[player].GetControlledActor() ? m_PlayerController[player].GetControlledActor()->GetUniqueID() : 0};
-	}
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) links[player] = m_HasCheckpointActorIDs ? m_CheckpointActorIDs[player] : SlotActorIDs(player);
 	writer(links, Icon::SaveCheckpointSet(m_TeamIcons));
 	return writer.Text();
 }
@@ -1226,6 +1313,74 @@ bool Activity::ApplyPendingCheckpoint() {
 	return true;
 }
 
+static Actor* LiveCheckpointActor(long uid) {
+	if (!uid) return nullptr;
+	Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(uid));
+	if (!actor || !g_MovableMan.ValidMO(actor) || !g_MovableMan.IsActor(actor)) return nullptr;
+	return actor;
+}
+
+// Exact-pointer membership in a current world actor's ownership graph; the object itself is never dereferenced.
+static bool OwnedByWorldActor(const MovableObject* object) {
+	std::list<SceneObject*> roots;
+	g_MovableMan.GetAllActors(false, roots);
+	std::unordered_set<const Entity*> visited;
+	std::unordered_set<const MovableObject*> owned;
+	for (const SceneObject* root: roots) CollectOwnedMovableObjects(root, visited, owned);
+	return owned.contains(object);
+}
+
+// A brain may ride in a world actor's inventory instead of standing in the world itself.
+static Actor* LiveCheckpointBrain(long uid) {
+	if (Actor* actor = LiveCheckpointActor(uid)) return actor;
+	Actor* actor = uid ? dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(uid)) : nullptr;
+	return actor && OwnedByWorldActor(actor) ? actor : nullptr;
+}
+
+// A slot that names a live actor other than its saved link's was written after the world was replaced,
+// so it holds a newer truth than the relaunch's deferred rebind and keeps it. Pointers are only compared.
+static bool HoldsNewerBinding(const Actor* slot, const Actor* link) {
+	return slot && slot != link && g_MovableMan.IsActor(slot);
+}
+
+// A brain slot counts a brain riding in a world actor's inventory as live too.
+static bool HoldsNewerBrainBinding(const Actor* slot, const Actor* link) {
+	return slot && slot != link && (g_MovableMan.IsActor(slot) || OwnedByWorldActor(slot));
+}
+
+void Activity::ClearNonOwnedActorSlots() {
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		m_Brain[player] = nullptr;
+		m_ControlledActor[player] = nullptr;
+		m_PlayerController[player].SetControlledActor(nullptr);
+	}
+}
+
+void Activity::RebindNonOwnedActorSlots() {
+	if (!m_HasCheckpointActorIDs) return;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		Actor* brain = LiveCheckpointBrain(m_CheckpointActorIDs[player][0]);
+		Actor* controlled = LiveCheckpointActor(m_CheckpointActorIDs[player][1]);
+		Actor* controller = LiveCheckpointActor(m_CheckpointActorIDs[player][2]);
+		if (!HoldsNewerBrainBinding(m_Brain[player], brain)) m_Brain[player] = brain;
+		if (!HoldsNewerBinding(m_ControlledActor[player], controlled)) m_ControlledActor[player] = controlled;
+		if (!HoldsNewerBinding(m_PlayerController[player].GetControlledActor(), controller)) m_PlayerController[player].SetControlledActor(controller);
+	}
+}
+
+void Activity::ClearCheckpointActorIDs() {
+	m_HasCheckpointActorIDs = false;
+}
+
+void Activity::ForgetDestroyedActor(const Actor* actor) {
+	if (!actor) return;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (m_Brain[player] == actor) m_Brain[player] = nullptr;
+		if (m_ControlledActor[player] == actor) m_ControlledActor[player] = nullptr;
+		if (m_PlayerController[player].GetControlledActor() == actor) m_PlayerController[player].SetControlledActor(nullptr);
+	}
+}
+
 bool Activity::ResolveCheckpointReferences() {
 	if (!m_HasCheckpointActorIDs) return true;
 	std::array<std::array<Actor*, 3>, Players::MaxPlayerCount> actors{};
@@ -1241,6 +1396,21 @@ bool Activity::ResolveCheckpointReferences() {
 		m_ControlledActor[player] = actors[player][1];
 		m_PlayerController[player].SetControlledActor(actors[player][2]);
 	}
-	m_HasCheckpointActorIDs = false;
+	if (!g_ActivityMan.LockstepRelaunchInProgress()) m_HasCheckpointActorIDs = false;
 	return true;
+}
+
+int Activity::CountStaleRelaunchSlots(int tick) const {
+	int stale = 0;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (m_Brain[player] && !g_MovableMan.ValidMO(m_Brain[player]) && !g_MovableMan.IsActor(m_Brain[player]) && !OwnedByWorldActor(m_Brain[player])) {
+			std::cout << "[net-match] relaunch: player " << player << " brain slot names a dead actor at tick " << tick << std::endl;
+			++stale;
+		}
+		if (m_ControlledActor[player] && !g_MovableMan.ValidMO(m_ControlledActor[player]) && !g_MovableMan.IsActor(m_ControlledActor[player])) {
+			std::cout << "[net-match] relaunch: player " << player << " controlled slot names a dead actor at tick " << tick << std::endl;
+			++stale;
+		}
+	}
+	return stale;
 }

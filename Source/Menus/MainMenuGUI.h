@@ -25,6 +25,7 @@ namespace RTE {
 	class GUIControl;
 	class GUITextBox;
 	class GUIListBox;
+	class GUICheckbox;
 	struct NetLobbySnapshot;
 
 	/// Handling for the main menu screen composition and sub-menu interaction.
@@ -76,8 +77,17 @@ namespace RTE {
 		/// @return Whether the control was found.
 		bool AutomationActivateControl(const std::string& controlName);
 
+		/// Names a clickable control; its Command is posted after the next GUI Update.
+		bool AutomationPostCommand(const std::string& controlName);
+
 		/// Sets a text box's text by control name.
 		bool AutomationSetText(const std::string& controlName, const std::string& text);
+
+		/// Sets a checkbox's state by control name, then runs the same change path a click would.
+		bool AutomationSetCheck(const std::string& controlName, bool checked);
+
+		/// Gets a named control's text (label, button or checkbox) for assert_label; false when it has none.
+		bool AutomationLabelText(const std::string& controlName, std::string& text) const;
 
 		/// Gets the name of the active menu screen.
 		std::string AutomationActiveScreenName() const;
@@ -165,6 +175,7 @@ namespace RTE {
 		};
 
 		int m_RootBoxMaxWidth; //!< The maximum width the root CollectionBox that holds all this menu's GUI elements. This is to constrain this menu to the primary window's display (left-most) while in multi-display fullscreen, otherwise positioning can get stupid.
+		int m_MultiplayerScreenBaselineY; //!< The MultiplayerScreen's ordinary Y, so grown layouts return to it without drift.
 
 		std::unique_ptr<GUIControlManager> m_MainMenuScreenGUIControlManager; //!< The GUIControlManager which owns all the GUIControls of the MainMenuGUI main screen. Alternative to changing skins at runtime which is expensive, since the main screen now has a unique skin.
 		std::unique_ptr<GUIControlManager> m_SubMenuScreenGUIControlManager; //!< The GUIControlManager which owns all the GUIControls of the MainMenuGUI sub-menus.
@@ -201,6 +212,7 @@ namespace RTE {
 		GUITextBox* m_MultiplayerHostPortTextBox;
 		GUITextBox* m_MultiplayerHostPlayersTextBox;
 		GUITextBox* m_MultiplayerHostInputDelayTextBox;
+		GUICheckbox* m_MultiplayerHostPortMapCheckbox;
 		GUIButton* m_MultiplayerHostModeButton;
 		NetMatchMode m_MultiplayerHostMode;
 		GUITextBox* m_MultiplayerJoinAddressTextBox;
@@ -229,8 +241,11 @@ namespace RTE {
 		NetModerationUx m_ModerationUx; //!< §9b's panel model; the buttons and the headless driver share it.
 		std::map<const GUIControl*, NetModerationUx::Row> m_PressedModeration;
 		std::array<GUILabel*, 4> m_MultiplayerLobbyPlayerLabels;
+		GUILabel* m_MultiplayerLobbyPortMapLabel;
+		uint32_t m_PortMapSerialShown; //!< The last lobby port-map serial this panel rendered.
 		MultiplayerSubScreen m_MultiplayerSubScreen;
 		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
+		std::string m_PendingAutomationCommand; //!< Control waiting to raise Command after Update clears the queue.
 		NetMatchServiceRequest m_MultiplayerJoinRequest; //!< The join the player last asked for, so an application reuses it.
 		bool m_MultiplayerApplyOffered = false;          //!< A join of this host may still be answered by applying (§9b).
 		GUICollectionBox* m_CreditsScrollPanel;
@@ -305,6 +320,9 @@ namespace RTE {
 		/// @return Whether the player requested to return to the main menu from one of the sub-menus.
 		bool HandleInputEvents();
 
+		/// Posts a pending menu-script Command after Update has cleared the queue.
+		void PostPendingAutomationCommand();
+
 		/// Handles the player interaction with the main screen GUI elements.
 		/// @param guiEventControl Pointer to the GUI element that the player interacted with.
 		void HandleMainScreenInputEvents(const GUIControl* guiEventControl);
@@ -341,6 +359,11 @@ namespace RTE {
 
 		/// §11: shows the recovery banner and the rejoin/cancel controls the reconnect state machine says apply.
 		void RefreshReconnectControls();
+
+		/// Resizes a multiplayer sub-panel's width: the diagnostic label keeps its 12px side margins and every other child keeps its center offset.
+		void FitMultiplayerPanelWidth(GUICollectionBox* panel, GUILabel* diagnosticLabel, int width);
+		/// Resizes the MultiplayerScreen and keeps it centered, moving up from its baseline Y only when the height no longer fits the viewport.
+		void FitMultiplayerScreen(int width, int height);
 
 		/// Real-time clock for the reconnect schedule; the menu runs outside the sim.
 		static uint64_t MenuClockMs();

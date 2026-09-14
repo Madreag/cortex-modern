@@ -1,7 +1,9 @@
 #include "NetLockstepSelfTest.h"
 
+#include "allegro.h"
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
+#include "PieMenu.h"
 #include "NetMatchReplay.h"
 #include "NetProtocol.h"
 #include "NetReconnectLedger.h"
@@ -10,13 +12,20 @@
 #include "NetResyncRuntimeSelfTest.h"
 #include "System/ScenarioRunner.h"
 #include "ActivityMan.h"
+#include "Activity.h"
 #include "Actor.h"
 #include "AudioMan.h"
 #include "Controller.h"
+#include "GUISound.h"
 #include "MovableMan.h"
+#include "SoundContainer.h"
+#include "NetActorOwnership.h"
 #include "MovableObject.h"
+#include "SceneMan.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
+#include "WindowMan.h"
+#include "allegro.h"
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
@@ -27,6 +36,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -1011,7 +1021,7 @@ namespace RTE {
 			frame.roundId = 0x5EED0000C0FFEE01ULL;
 			frame.observations = {NetSoundObservation{2, 1048601, 31, 0x1122334455667788ULL, 7, 3, 0.25F}, NetSoundObservation{2, 0, 12, 99, 0, 1, 0.75F}};
 			frame.frames = {MakeFrame(100, 1), MakeFrame(200, 2)};
-			frame.commands = {NetGameCommand{2, NetGameSetTeamFunds{0, 1500}}, NetGameCommand{2, NetGameSetTeamFunds{1, -250}}, NetGameCommand{2, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1234.5F, -67.25F, 1}}, NetGameCommand{2, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 48.5F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Robot 1", "Base.rte"}}}}, NetGameCommand{2, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", 512.0F, 300.0F, 1, {{"AHuman", "Green Dummy", "Base.rte"}}, true, 137.5F, false, 4, 600.0F, 350.25F, 424242, 1, -32.0F}}, NetGameCommand{2, NetGameScuttleCraft{17143, 0}}, NetGameCommand{2, NetGameInventoryOp{9001, 1, NetGameInventoryOp::Drop, 0, 2, true, 0.5F, -0.25F}}, NetGameCommand{2, NetGamePauseMatch{1, true}}, NetGameCommand{2, NetGamePauseMatch{0, false}}, NetGameCommand{2, NetGameSetActorAIMode{31337, 1, 6}}, NetGameCommand{2, NetGameSwitchControl{41414, 0, 2}}, NetGameCommand{2, NetGameAIEquip{51515, 1, NetGameAIEquip::LoadedFirearmInGroup, false, "Weapons - Primary", "Weapons - Explosive", "", ""}}, NetGameCommand{2, NetGameAIEquip{51516, 0, NetGameAIEquip::NamedDevice, false, "", "", "Base.rte", "Battle Rifle"}}, NetGameCommand{2, NetGameAIEquip{51517, 1, NetGameAIEquip::ShieldInBGArm, true, "", "", "", ""}}, NetGameCommand{2, NetGameAIEquip{51518, 0, NetGameAIEquip::UnequipFGArm, false, "", "", "", ""}}, NetGameCommand{2, NetGameAIOrder{61616, 0, NetGameAIOrder::FormSquad, 512.5F, -12.25F, 61617}}, NetGameCommand{2, NetGameAIOrder{61618, 1, NetGameAIOrder::MOWaypoint, 0.0F, 0.0F, 61616}}, NetGameCommand{2, NetGameAIOrder{61619, 0, NetGameAIOrder::SceneWaypoint, -128.25F, 96.5F, 0}}, NetGameCommand{2, NetGameAIOrder{61620, 1, NetGameAIOrder::ClearWaypoints, 0.0F, 0.0F, 0}}, NetGameCommand{2, NetGameSoundOp{71717, 1, 0x00FF00FF00FF0001ULL, NetGameSoundOp::Play, 0, 3, 0, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71718, 0, 0x0000000000000002ULL, NetGameSoundOp::SetProperty, 13, -1, 0, -12.5F, 88.25F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71719, 1, 0x0000000000000003ULL, NetGameSoundOp::SelectSounds, 0, -1, 0, 0.0F, 0.0F, {2, 0, 7}, ""}}, NetGameCommand{2, NetGameSoundOp{71720, 0, 0x0000000000000004ULL, NetGameSoundOp::FadeOut, 0, -1, 250, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71721, 1, 0x0000000000000005ULL, NetGameSoundOp::AddSound, 0, -1, 0, 0.0F, 0.0F, {1}, "9 SoundData1 31 Base.rte/Sounds/GUIs/Click.flac 0 0 0 3212836864 "}}, NetGameCommand{2, NetGameSoundOp{71722, 0, 0x0000000000000006ULL, NetGameSoundOp::SetCycleMode, 0, -1, 2, 0.0F, 0.0F, {}, ""}}};
+			frame.commands = {NetGameCommand{2, NetGameSetTeamFunds{0, 1500}}, NetGameCommand{2, NetGameSetTeamFunds{1, -250}}, NetGameCommand{2, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1234.5F, -67.25F, 1}}, NetGameCommand{2, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 48.5F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Robot 1", "Base.rte"}}}}, NetGameCommand{2, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", 512.0F, 300.0F, 1, {{"AHuman", "Green Dummy", "Base.rte"}}, true, 137.5F, false, 4, 600.0F, 350.25F, 424242, 1, -32.0F}}, NetGameCommand{2, NetGameScuttleCraft{17143, 0}}, NetGameCommand{2, NetGameInventoryOp{9001, 1, NetGameInventoryOp::Drop, 0, 2, true, 0.5F, -0.25F}}, NetGameCommand{2, NetGamePauseMatch{1, true}}, NetGameCommand{2, NetGamePauseMatch{0, false}}, NetGameCommand{2, NetGameSetActorAIMode{31337, 1, 6}}, NetGameCommand{2, NetGameSwitchControl{41414, 0, 2}}, NetGameCommand{2, NetGameAIEquip{51515, 1, NetGameAIEquip::LoadedFirearmInGroup, false, "Weapons - Primary", "Weapons - Explosive", "", ""}}, NetGameCommand{2, NetGameAIEquip{51516, 0, NetGameAIEquip::NamedDevice, false, "", "", "Base.rte", "Battle Rifle"}}, NetGameCommand{2, NetGameAIEquip{51517, 1, NetGameAIEquip::ShieldInBGArm, true, "", "", "", ""}}, NetGameCommand{2, NetGameAIEquip{51518, 0, NetGameAIEquip::UnequipFGArm, false, "", "", "", ""}}, NetGameCommand{2, NetGameAIOrder{61616, 0, NetGameAIOrder::FormSquad, 512.5F, -12.25F, 61617, 9001}}, NetGameCommand{2, NetGameAIOrder{61618, 1, NetGameAIOrder::MOWaypoint, 0.0F, 0.0F, 61616}}, NetGameCommand{2, NetGameAIOrder{61619, 0, NetGameAIOrder::SceneWaypoint, -128.25F, 96.5F, 0}}, NetGameCommand{2, NetGameAIOrder{61620, 1, NetGameAIOrder::ClearWaypoints, 0.0F, 0.0F, 0}}, NetGameCommand{2, NetGameSoundOp{71717, 1, 0x00FF00FF00FF0001ULL, NetGameSoundOp::Play, 0, 3, 0, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71718, 0, 0x0000000000000002ULL, NetGameSoundOp::SetProperty, 13, -1, 0, -12.5F, 88.25F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71719, 1, 0x0000000000000003ULL, NetGameSoundOp::SelectSounds, 0, -1, 0, 0.0F, 0.0F, {2, 0, 7}, ""}}, NetGameCommand{2, NetGameSoundOp{71720, 0, 0x0000000000000004ULL, NetGameSoundOp::FadeOut, 0, -1, 250, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71721, 1, 0x0000000000000005ULL, NetGameSoundOp::AddSound, 0, -1, 0, 0.0F, 0.0F, {1}, "9 SoundData1 31 Base.rte/Sounds/GUIs/Click.flac 0 0 0 3212836864 "}}, NetGameCommand{2, NetGameSoundOp{71722, 0, 0x0000000000000006ULL, NetGameSoundOp::SetCycleMode, 0, -1, 2, 0.0F, 0.0F, {}, ""}}};
 			if (!RoundTrip({frame}, error)) {
 				return false;
 			}
@@ -1061,7 +1071,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x14, 0x00,
+				0x15, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -1420,6 +1430,408 @@ namespace RTE {
 				return finish("the applied queue is not in the order the AI wrote it");
 			}
 			std::cout << "[net-lockstep-selftest] PASS ai waypoint adds cross the wire: sent=" << sent.size() << " owner_wp=" << ownerQueue.size() << " peer_wp=" << peerQueue.size() << std::endl;
+			return finish(nullptr);
+		}
+
+		// An AI pass that adds then reads back must see the new entry while the physical queue stays
+		// empty until the sent order is applied, the way single player sees its own write immediately.
+		bool TestAIWaypointReadThroughSamePass(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433525401ULL);
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 43023, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 43023, 0, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "team-owner";
+			clientConfig.ownershipPolicy = "team-owner";
+			if (!StartCoordinatorPair(43023, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			Actor* ownerView = new Actor();
+			Actor* peerView = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (ownerView->MovableObject::Create(1) < 0 || peerView->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			ownerView->SetTeam(0);
+			peerView->SetTeam(0);
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+
+			g_CurrentAIActor = ownerView;
+			ownerView->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			const int logicalSize = ownerView->GetWaypointsSize();
+			const Vector logicalLast = ownerView->GetLastAIWaypoint();
+			g_CurrentAIActor = nullptr;
+			const int physicalSize = ownerView->GetWaypointsSize();
+			if (logicalSize != 1) {
+				return finish("the AI pass did not see its own add on the logical queue");
+			}
+			if (physicalSize != 0) {
+				return finish("the AI pass mutated the physical queue before apply");
+			}
+			if (logicalLast != Vector(10.0F, 20.0F)) {
+				return finish("GetLastAIWaypoint did not see the pending add");
+			}
+
+			ownerView->SendDeferredWaypoints();
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			if (ownerView->GetWaypointsSize() != 0) {
+				return finish("the physical queue changed when the add was sent");
+			}
+			if (sent.size() != 1) {
+				return finish("the AI pass did not send one AIOrder for the add");
+			}
+			const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&sent[0].payload);
+			const int64_t ownerUID = static_cast<int64_t>(ownerView->GetUniqueID());
+			if (!order || !(*order == NetGameAIOrder{ownerUID, 0, NetGameAIOrder::SceneWaypoint, 10.0F, 20.0F, 0})) {
+				return finish("the sent AIOrder does not match the waypoint add");
+			}
+
+			for (Actor* view: {ownerView, peerView}) {
+				view->AddAISceneWaypoint(Vector(order->x, order->y));
+			}
+			if (ownerView->GetWaypointsSize() != 1 || peerView->GetWaypointsSize() != 1) {
+				return finish("the applied queue is not the one waypoint the AI asked for");
+			}
+			if (ownerView->GetWaypointList().front().first != Vector(10.0F, 20.0F) || peerView->GetWaypointList().front().first != Vector(10.0F, 20.0F)) {
+				return finish("the two peers hold different applied waypoints");
+			}
+			std::cout << "[net-lockstep-selftest] PASS ai waypoint read-through: logical=1 physical=0 applied=1" << std::endl;
+			return finish(nullptr);
+		}
+
+		// A running AI pass that writes another actor's queue must send an AIOrder naming that
+		// actor, including when the target is only reachable as an inventory item.
+		bool TestAIWaypointCrossActorWrites(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433584101ULL);
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 43024, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 43024, 0, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "team-owner";
+			clientConfig.ownershipPolicy = "team-owner";
+			if (!StartCoordinatorPair(43024, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			Actor* writer = new Actor();
+			Actor* target = new Actor();
+			Actor* peerTarget = new Actor();
+			Actor* passenger = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (writer->MovableObject::Create(1) < 0 || target->MovableObject::Create(1) < 0 ||
+			    peerTarget->MovableObject::Create(1) < 0 || passenger->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			writer->SetTeam(0);
+			target->SetTeam(0);
+			peerTarget->SetTeam(0);
+			passenger->SetTeam(0);
+			writer->AddToInventoryBack(passenger);
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+			if (g_MovableMan.FindObjectByUniqueID(static_cast<long int>(passenger->GetUniqueID())) != passenger) {
+				return finish("FindObjectByUniqueID does not reach an inventory actor");
+			}
+
+			g_CurrentAIActor = writer;
+			target->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			passenger->AddAISceneWaypoint(Vector(30.0F, 40.0F));
+			g_CurrentAIActor = nullptr;
+			if (target->GetWaypointsSize() != 0 || passenger->GetWaypointsSize() != 0) {
+				return finish("a cross-actor AI write mutated the target instead of sending it");
+			}
+			writer->SendDeferredWaypoints();
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			const int64_t targetUID = static_cast<int64_t>(target->GetUniqueID());
+			const int64_t passengerUID = static_cast<int64_t>(passenger->GetUniqueID());
+			const int64_t writerUID = static_cast<int64_t>(writer->GetUniqueID());
+			const std::vector<NetGameAIOrder> expected = {
+			    {targetUID, 0, NetGameAIOrder::SceneWaypoint, 10.0F, 20.0F, 0, writerUID},
+			    {passengerUID, 0, NetGameAIOrder::SceneWaypoint, 30.0F, 40.0F, 0, writerUID},
+			};
+			if (sent.size() != expected.size()) {
+				return finish("the AI pass did not send one AIOrder per cross-actor write");
+			}
+			for (size_t index = 0; index < sent.size(); ++index) {
+				const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&sent[index].payload);
+				if (!order || !(*order == expected[index])) {
+					return finish("a sent AIOrder does not name the actor the AI wrote");
+				}
+			}
+
+			auto apply = [](Actor* view, const NetGameAIOrder& order) {
+				view->AddAISceneWaypoint(Vector(order.x, order.y));
+			};
+			apply(target, expected[0]);
+			apply(peerTarget, expected[0]);
+			Actor* appliedPassenger = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(passengerUID)));
+			if (!appliedPassenger) {
+				return finish("apply could not resolve the inventory target by unique id");
+			}
+			apply(appliedPassenger, expected[1]);
+			if (target->GetWaypointsSize() != 1 || peerTarget->GetWaypointsSize() != 1 ||
+			    target->GetWaypointList().front().first != peerTarget->GetWaypointList().front().first) {
+				return finish("the two peers hold different queues after the cross-actor apply");
+			}
+			if (appliedPassenger->GetWaypointsSize() != 1 || appliedPassenger->GetWaypointList().front().first != Vector(30.0F, 40.0F)) {
+				return finish("the inventory target did not receive the applied waypoint");
+			}
+			std::cout << "[net-lockstep-selftest] PASS ai waypoint cross-actor: sent=" << sent.size()
+			          << " target_uid=" << targetUID << " passenger_uid=" << passengerUID << std::endl;
+			return finish(nullptr);
+		}
+
+		bool StartOwnedPair(uint16_t port, NetActorOwnershipPolicy policy, const char* policyName, uint64_t sessionId, LoopbackTransport& hostTransport, LoopbackTransport& clientTransport, NetLockstepCoordinator& host, NetLockstepCoordinator& client, std::string* error) {
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(sessionId);
+			matchConfig.ownershipPolicy = policy;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, port, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, port, 0, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = policyName;
+			clientConfig.ownershipPolicy = policyName;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			return DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error);
+		}
+
+		// Owner = host, team authority = the client: the host's pop of a CPU actor on that team must apply.
+		bool TestHostRunCpuActorOnAHumanTeamPopsItsWaypoint(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			if (!StartOwnedPair(43032, NetActorOwnershipPolicy::HostCpuRemoteHuman, "host-cpu-remote-human", 0x5733314831435055ULL, hostTransport, clientTransport, host, client, error)) {
+				return false;
+			}
+			Actor* hostView = new Actor();
+			Actor* peerView = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (hostView->MovableObject::Create(1) < 0 || peerView->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			hostView->SetTeam(1);
+			peerView->SetTeam(1);
+			hostView->SetControllerMode(Controller::CIM_AI);
+			peerView->SetControllerMode(Controller::CIM_AI);
+			hostView->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			peerView->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			const int64_t uid = static_cast<int64_t>(hostView->GetUniqueID());
+			if (hostView->IsPlayerControlled() || ScenarioRunner::GetLockstepActorOwner(uid, 1, !hostView->IsPlayerControlled()) != 1 || ScenarioRunner::ResolveTeamCommandAuthority(1) != 2) {
+				return finish("host-cpu-remote-human did not split owner and team authority");
+			}
+			ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{1, NetGameAIOrder{uid, 1, NetGameAIOrder::PopWaypoint, 10.0F, 20.0F, 0}});
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			if (sent.size() != 1) {
+				return finish("a host-run CPU actor on a human team pops its waypoint");
+			}
+			for (Actor* view: {hostView, peerView}) {
+				view->PopFrontWaypoint(Vector(10.0F, 20.0F));
+			}
+			if (hostView->GetWaypointsSize() != 0 || peerView->GetWaypointsSize() != 0) {
+				return finish("the host's pop op must apply on both fixtures");
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_host_run_cpu_actor_on_a_human_team_pops_its_waypoint uid=" << uid << std::endl;
+			return finish(nullptr);
+		}
+
+		// Writer owned by peer 2, target owned by peer 1: the op carrying writerUID applies.
+		bool TestAnOwnedWriterMayWriteAnotherOwnersActor(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			if (!StartOwnedPair(43033, NetActorOwnershipPolicy::UniqueIdModPeerCount, "unique-id-split", 0x5733315752495445ULL, hostTransport, clientTransport, host, client, error)) {
+				return false;
+			}
+			Actor* first = new Actor();
+			Actor* second = new Actor();
+			Actor* peerTarget = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (first->MovableObject::Create(1) < 0 || second->MovableObject::Create(1) < 0 || peerTarget->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			Actor* writer = (static_cast<int64_t>(first->GetUniqueID()) % 2 == 1) ? first : second;
+			Actor* target = (writer == first) ? second : first;
+			writer->SetTeam(0);
+			target->SetTeam(0);
+			peerTarget->SetTeam(0);
+			const int64_t writerUID = static_cast<int64_t>(writer->GetUniqueID());
+			const int64_t targetUID = static_cast<int64_t>(target->GetUniqueID());
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			if (ScenarioRunner::GetLockstepActorOwner(writerUID, 0, true) != 2 || ScenarioRunner::GetLockstepActorOwner(targetUID, 0, true) != 1) {
+				return finish("unique-id-split did not give the writer to peer 2 and the target to peer 1");
+			}
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			ScenarioRunner::DrainLocalGameCommands();
+			g_CurrentAIActor = writer;
+			target->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			g_CurrentAIActor = nullptr;
+			if (target->GetWaypointsSize() != 0) {
+				return finish("a cross-owner AI write mutated the target instead of sending it");
+			}
+			writer->SendDeferredWaypoints();
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			if (sent.size() != 1) {
+				return finish("an owned writer may write another owner's actor");
+			}
+			const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&sent[0].payload);
+			if (!order || order->actorUID != targetUID || order->op != NetGameAIOrder::SceneWaypoint || order->writerUID != writerUID) {
+				return finish("the owned writer did not send a SceneWaypoint carrying writerUID");
+			}
+			target->AddAISceneWaypoint(Vector(order->x, order->y));
+			peerTarget->AddAISceneWaypoint(Vector(order->x, order->y));
+			if (target->GetWaypointsSize() != 1 || peerTarget->GetWaypointsSize() != 1) {
+				return finish("the writerUID op must apply on both fixtures");
+			}
+			std::cout << "[net-lockstep-selftest] PASS an_owned_writer_may_write_another_owner_s_actor writer=" << writerUID << " target=" << targetUID << std::endl;
+			return finish(nullptr);
+		}
+
+		// A sender that owns neither actor and is not the team authority is rejected.
+		bool TestAStrangerMayNotWriteAQueue(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			if (!StartOwnedPair(43034, NetActorOwnershipPolicy::UniqueIdModPeerCount, "unique-id-split", 0x5733315354524E47ULL, hostTransport, clientTransport, host, client, error)) {
+				return false;
+			}
+			Actor* first = new Actor();
+			Actor* second = new Actor();
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (first->MovableObject::Create(1) < 0 || second->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			Actor* target = (static_cast<int64_t>(first->GetUniqueID()) % 2 == 0) ? first : second;
+			target->SetTeam(0);
+			const int64_t targetUID = static_cast<int64_t>(target->GetUniqueID());
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			if (ScenarioRunner::GetLockstepActorOwner(targetUID, 0, true) != 1 || ScenarioRunner::ResolveTeamCommandAuthority(0) != 1) {
+				return finish("unique-id-split did not give the even target and team 0 to the host");
+			}
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			ScenarioRunner::DrainLocalGameCommands();
+			ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{2, NetGameAIOrder{targetUID, 0, NetGameAIOrder::SceneWaypoint, 10.0F, 20.0F, 0}});
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			if (!sent.empty()) {
+				return finish("a stranger may not write a queue");
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_stranger_may_not_write_a_queue uid=" << targetUID << std::endl;
+			return finish(nullptr);
+		}
+
+		// An in-pass path update while the add is still on the wire stays armed until apply loads it.
+		bool TestPathUpdateStaysArmedWhileWaypointAddIsInFlight(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			if (!StartOwnedPair(44880, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x573731342D504154ULL, hostTransport, clientTransport, host, client, error)) {
+				return false;
+			}
+			Actor* ownerView = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (ownerView->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			ownerView->SetTeam(0);
+			ownerView->SetControllerMode(Controller::CIM_AI);
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+			if (ScenarioRunner::GetLockstepActorOwner(static_cast<int64_t>(ownerView->GetUniqueID()), 0, !ownerView->IsPlayerControlled()) != 1) {
+				return finish("team-owner did not give the actor to the host");
+			}
+
+			g_CurrentAIActor = ownerView;
+			ownerView->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			ownerView->UpdateMovePath();
+			g_CurrentAIActor = nullptr;
+			ownerView->SendDeferredWaypoints();
+			if (!ownerView->IsMovePathUpdatePending()) {
+				return finish("the path update disarmed while the waypoint add was in flight");
+			}
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			if (sent.size() != 1) {
+				return finish("the AI pass did not send one AIOrder for the add");
+			}
+			const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&sent[0].payload);
+			const int64_t ownerUID = static_cast<int64_t>(ownerView->GetUniqueID());
+			if (!order || order->actorUID != ownerUID || order->op != NetGameAIOrder::SceneWaypoint) {
+				return finish("the sent AIOrder does not match the waypoint add");
+			}
+
+			ownerView->AddAISceneWaypoint(Vector(order->x, order->y));
+			if (!ownerView->IsMovePathUpdatePending()) {
+				return finish("the path update disarmed when the in-flight add applied");
+			}
+			if (ownerView->GetWaypointsSize() != 1) {
+				return finish("the applied queue is not the one waypoint the AI asked for");
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_path_update_stays_armed_while_the_waypoint_add_is_in_flight uid=" << ownerUID << std::endl;
 			return finish(nullptr);
 		}
 
@@ -2666,6 +3078,114 @@ namespace RTE {
 			return true;
 		}
 
+		bool SendStop(LoopbackTransport& from, NetPeerId to, uint8_t senderPeerId, NetLockstepStopReason reason, uint64_t frame, const std::string& message, std::string* error) {
+			NetLockstepStop stop;
+			stop.senderPeerId = senderPeerId;
+			stop.reason = reason;
+			stop.frame = frame;
+			stop.message = message;
+			std::vector<uint8_t> bytes;
+			return EncodePacket({stop}, bytes, error) && from.Send(to, NetTransportLane::ControlReliable, bytes, error);
+		}
+
+		// A live client's ProtocolError Stop is that client's leave: the host stays Running, the
+		// survivor is told PeerLeft, and host + client 1 keep committing.
+		bool TestCoordinatorClientProtocolErrorIsALeave(std::string* error) {
+			StarFixture fx;
+			if (!fx.Start(43210, 0x70000000000000E0ULL, 2000, error)) {
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.Running(); }, 2000)) {
+				*error = "client-stop-leave fixture did not reach Running";
+				return false;
+			}
+			std::vector<uint64_t> hostReady, aReady, bReady;
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.host, hostReady);
+					fx.Collect(fx.clientA, aReady);
+					fx.Collect(fx.clientB, bReady);
+					return hostReady.size() >= 2 && aReady.size() >= 2 && bReady.size() >= 2;
+				}, fx.now + 2000)) {
+				*error = "client-stop-leave fixture did not get the round moving";
+				return false;
+			}
+			if (!SendStop(fx.clientAT, 1, 2, NetLockstepStopReason::ProtocolError, fx.clientA.GetStats().nextFrame, "decode failed", error)) {
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.host.GetPeerLeaveFrames().count(2) != 0 || fx.host.IsFailed(); }, fx.now + 2000)) {
+				*error = "host never handled the client's ProtocolError stop: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (!fx.host.IsRunning()) {
+				*error = "host failed the round on a client's ProtocolError stop: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (fx.host.GetStats().stopsAdjudicatedAsLeaves != 1) {
+				*error = "the client's ProtocolError stop was not counted as a leave: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (fx.host.GetPeerLeaveFrames().count(2) != 1) {
+				*error = "client 2 is not in the host leave map after its ProtocolError stop: " + fx.host.BuildReportJson();
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.clientB.GetPeerLeaveFrames().count(2) != 0; }, fx.now + 2000)) {
+				*error = "client 1 never received the relayed PeerLeft for peer 2: " + fx.clientB.BuildReportJson();
+				return false;
+			}
+			const uint64_t leaveFrame = fx.host.GetPeerLeaveFrames().at(2);
+			if (fx.clientB.GetPeerLeaveFrames().at(2) != leaveFrame) {
+				*error = "host and client 1 disagreed on peer 2's leave frame";
+				return false;
+			}
+			fx.Collect(fx.host, hostReady);
+			fx.Collect(fx.clientB, bReady);
+			const size_t hostAtLeave = hostReady.size();
+			const size_t bAtLeave = bReady.size();
+			if (!fx.Drive(true, false, true, [&] {
+					fx.Feed(fx.host, 1, 100);
+					fx.Feed(fx.clientB, 3, 300);
+					fx.Collect(fx.host, hostReady);
+					fx.Collect(fx.clientB, bReady);
+					return hostReady.size() >= hostAtLeave + 4 && bReady.size() >= bAtLeave + 4;
+				}, fx.now + 4000)) {
+				*error = "survivors did not keep committing after the client's ProtocolError leave (host=" +
+				         std::to_string(hostReady.size()) + " b=" + std::to_string(bReady.size()) + ")";
+				return false;
+			}
+			return true;
+		}
+
+		// The host's own ProtocolError still fails every client.
+		bool TestCoordinatorHostProtocolErrorFailsClients(std::string* error) {
+			StarFixture fx;
+			if (!fx.Start(43211, 0x70000000000000E1ULL, 2000, error)) {
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.Running(); }, 2000)) {
+				*error = "host-stop-fail fixture did not reach Running";
+				return false;
+			}
+			std::vector<uint64_t> hostReady;
+			if (!fx.DriveProducing(true, [&] {
+					fx.Collect(fx.host, hostReady);
+					return hostReady.size() >= 2;
+				}, fx.now + 2000)) {
+				*error = "host-stop-fail fixture did not get the round moving";
+				return false;
+			}
+			const uint64_t frame = fx.host.GetStats().nextFrame;
+			if (!SendStop(fx.hostT, 1, 1, NetLockstepStopReason::ProtocolError, frame, "decode failed", error) ||
+			    !SendStop(fx.hostT, 2, 1, NetLockstepStopReason::ProtocolError, frame, "decode failed", error)) {
+				return false;
+			}
+			if (!fx.Drive(true, true, true, [&] { return fx.clientA.IsFailed() && fx.clientB.IsFailed(); }, fx.now + 2000)) {
+				*error = "clients did not fail when the host sent ProtocolError (a=" + fx.clientA.BuildReportJson() +
+				         " b=" + fx.clientB.BuildReportJson() + ")";
+				return false;
+			}
+			return true;
+		}
+
 		// Runs a 3-peer star to a moving round, then refuses every host send to clientB while all three
 		// keep producing - so the ONLY thing wrong is the forward, not a peer that went quiet.
 		bool StartRelayRefusal(StarFixture& fx, uint16_t port, uint64_t sessionId, uint32_t timeoutMs, std::vector<uint64_t>& hostReady, std::string* error) {
@@ -3021,7 +3541,7 @@ namespace RTE {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x14, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x15, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
@@ -9256,6 +9776,899 @@ namespace RTE {
 			          << " sustained_dropped=" << host.GetStats().valueObservationsDropped << std::endl;
 			return true;
 		}
+		void EnsureSwitchTestManagers() {
+			if (!GUISound::IsConstructed()) {
+				GUISound::Construct();
+			}
+			if (!WindowMan::IsConstructed()) {
+				WindowMan::Construct();
+			}
+			if (!SceneMan::IsConstructed()) {
+				install_allegro(SYSTEM_NONE, &errno, std::atexit); // SceneMan::Clear creates a bitmap.
+				SceneMan::Construct();
+			}
+		}
+
+		std::string ControlTuple(Actor& actor, uint8_t owner) {
+			const Controller* controller = actor.GetController();
+			return "{input_mode=" + std::to_string(static_cast<int>(controller->GetInputMode())) +
+			       " player=" + std::to_string(controller->GetPlayerRaw()) +
+			       " disabled=" + std::to_string(controller->IsQuickDisabled() ? 1 : 0) +
+			       " owner=" + std::to_string(static_cast<int>(owner)) + "}";
+		}
+
+		Actor* MakeSwitchTestActor(int team) {
+			Actor* actor = new Actor();
+			if (actor->MovableObject::Create(1.0F) < 0) {
+				delete actor;
+				return nullptr;
+			}
+			actor->SetTeam(team);
+			actor->GetController()->SetControlledActor(actor);
+			return actor;
+		}
+
+		void AddSwitchTestActor(Actor* actor) {
+			g_MovableMan.SetRestoringSnapshot(true);
+			g_MovableMan.AddActor(actor);
+			g_MovableMan.SetRestoringSnapshot(false);
+			actor->SetControllerMode(Controller::CIM_AI);
+			// A CPU actor's committed frames have already put CIM_AI on the wire; the seat alone would
+			// leave the sim-facing mode at the Controller default and hide a mode transition.
+			actor->GetController()->ApplyWireMode(Controller::CIM_AI, Players::NoPlayer);
+		}
+
+		// The engine's command apply, driven on the second peer's copy of the actor too: the views are
+		// separate objects here, so each one takes the handoff its own machine would.
+		void ApplyReadySwitchCommands(const NetLockstepReadyFrame& ready, Actor* mirrorView = nullptr) {
+			std::vector<NetGameCommand> commands;
+			commands.insert(commands.end(), ready.localCommands.begin(), ready.localCommands.end());
+			commands.insert(commands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
+			std::stable_sort(commands.begin(), commands.end(), [](const NetGameCommand& lhs, const NetGameCommand& rhs) {
+				return lhs.senderPeerId < rhs.senderPeerId;
+			});
+			for (const NetGameCommand& command: commands) {
+				if (const NetGameSwitchControl* switchControl = std::get_if<NetGameSwitchControl>(&command.payload)) {
+					if (MovableMan::ApplyLockstepControlClaim(switchControl->actorUID, command.senderPeerId, switchControl->newOwnerPeerId, ready.frame) && mirrorView) {
+						MovableMan::ApplyLockstepControlHandoffToActor(*mirrorView, switchControl->newOwnerPeerId == command.senderPeerId);
+					}
+				}
+			}
+			MovableMan::ReconcileLockstepControlBindings();
+		}
+
+		// MovableMan applies a committed frame only to actors the producing side owns; a frame the old
+		// owner still had in flight is dropped, so the views mirror that gate.
+		void ApplyOwnerFramesToViews(const NetLockstepReadyFrame& ready, Actor& hostView, Actor& clientView, int64_t uid, int team) {
+			const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(uid, team, !clientView.IsPlayerControlled());
+			auto applyAll = [&](const std::vector<ControllerFrame>& frames, uint8_t producerPeerId) {
+				if (producerPeerId != owner) {
+					return;
+				}
+				for (ControllerFrame frame: frames) {
+					if (frame.actorUniqueID != uid) {
+						continue;
+					}
+					std::string applyError;
+					MovableMan::ApplyLockstepFrameToActor(hostView, frame, ready.frame, &applyError);
+					MovableMan::ApplyLockstepFrameToActor(clientView, frame, ready.frame, &applyError);
+				}
+			};
+			applyAll(ready.localFrames, 1);
+			applyAll(ready.remoteFrames, 2);
+		}
+
+		bool DriveTrio(LoopbackTransport& hostT, LoopbackTransport& aT, LoopbackTransport& bT, NetLockstepCoordinator& host, NetLockstepCoordinator& peerA, NetLockstepCoordinator& peerB, const std::function<bool()>& done, std::string* error, uint64_t maxMs = 4000) {
+			for (uint64_t now = 0; now <= maxMs; now += 5) {
+				host.Tick(now);
+				peerA.Tick(now);
+				peerB.Tick(now);
+				if (done()) {
+					return true;
+				}
+				hostT.AdvanceTimeMs(5);
+				aT.AdvanceTimeMs(5);
+				bT.AdvanceTimeMs(5);
+			}
+			if (error) {
+				*error = "trio condition not reached; host=" + host.BuildReportJson();
+			}
+			return false;
+		}
+
+		bool TestSwitchLandsOnOneTick(std::string* error) {
+			const char* name = "switch_lands_on_one_tick";
+			EnsureSwitchTestManagers();
+			const uint16_t delay = 2;
+			const uint64_t switchFrame = 4;
+			const uint16_t port = 43221;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433573131ULL);
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::HostCpuRemoteHuman;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, port, delay, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, port, delay, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "host-cpu-remote-human";
+			clientConfig.ownershipPolicy = "host-cpu-remote-human";
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return finish(error && !error->empty() ? error->c_str() : "coordinator pair failed");
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 4000)) {
+				return finish(error && !error->empty() ? error->c_str() : "pair did not reach Running");
+			}
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamTwo, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* hostView = MakeSwitchTestActor(Activity::TeamTwo);
+			Actor* clientView = MakeSwitchTestActor(Activity::TeamTwo);
+			if (!hostView || !clientView) {
+				return finish("selftest actors could not be created");
+			}
+			const int64_t uid = static_cast<int64_t>(clientView->GetUniqueID());
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			AddSwitchTestActor(hostView);
+			AddSwitchTestActor(clientView);
+			if (!ScenarioRunner::IsLockstepControllerSyncActive() || !g_MovableMan.IsActor(clientView)) {
+				return finish("client view is not on a running lockstep activity");
+			}
+			std::string queueError;
+			for (uint64_t produced = 0; produced < switchFrame; ++produced) {
+				if (!host.QueueLocalInput(produced, {MakeFrame(100, produced + 1)}, {}, &queueError) ||
+				    !client.QueueLocalInput(produced, {MakeFrame(200, produced + 1)}, {}, &queueError)) {
+					return finish(queueError.c_str());
+				}
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.GetStats().framesAccepted >= switchFrame && client.GetStats().framesAccepted >= switchFrame; }, &queueError, 4000)) {
+				return finish(queueError.c_str());
+			}
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!g_ActivityMan.GetActivity()->SwitchToActor(clientView, Players::PlayerOne, Activity::TeamTwo)) {
+				return finish("SwitchToActor refused the client takeover");
+			}
+			const std::vector<NetGameCommand> switchCommands = ScenarioRunner::DrainLocalGameCommands();
+			ControllerFrame hostSnap = ControllerFrameCodec::Snapshot(uid, *hostView->GetController(), hostView);
+			hostSnap.actorUniqueID = uid;
+			if (!host.QueueLocalInput(switchFrame, {hostSnap}, {}, &queueError) ||
+			    !client.QueueLocalInput(switchFrame, {MakeFrame(200, switchFrame + 1)}, switchCommands, &queueError)) {
+				return finish(queueError.c_str());
+			}
+			for (uint64_t produced = switchFrame + 1; produced <= switchFrame + 2 * delay; ++produced) {
+				ControllerFrame later = ControllerFrameCodec::Snapshot(uid, *hostView->GetController(), hostView);
+				later.actorUniqueID = uid;
+				if (!host.QueueLocalInput(produced, {later}, {}, &queueError) ||
+				    !client.QueueLocalInput(produced, {MakeFrame(200, produced + 1)}, {}, &queueError)) {
+					return finish(queueError.c_str());
+				}
+			}
+			std::map<uint64_t, NetLockstepReadyFrame> hostReady;
+			std::map<uint64_t, NetLockstepReadyFrame> clientReady;
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) {
+						hostReady[ready.frame] = ready;
+					}
+					while (client.PopReadyFrame(ready)) {
+						clientReady[ready.frame] = ready;
+					}
+					return hostReady.count(switchFrame + delay) != 0 && clientReady.count(switchFrame + delay) != 0;
+				}, &queueError, 4000)) {
+				return finish(queueError.c_str());
+			}
+			std::string firstDiffer;
+			for (uint64_t frame = switchFrame; frame <= switchFrame + 2 * delay; ++frame) {
+				if (hostReady.count(frame)) {
+					ApplyReadySwitchCommands(hostReady[frame], hostView);
+					ApplyOwnerFramesToViews(hostReady[frame], *hostView, *clientView, uid, Activity::TeamTwo);
+				}
+				const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamTwo, !hostView->IsPlayerControlled());
+				const std::string hostTuple = ControlTuple(*hostView, owner);
+				const std::string clientTuple = ControlTuple(*clientView, owner);
+				if (hostTuple != clientTuple && firstDiffer.empty()) {
+					firstDiffer = "first differ frame=" + std::to_string(frame) + " host=" + hostTuple + " client=" + clientTuple;
+				}
+				if (frame == switchFrame + delay) {
+					const bool modeLanded = hostView->GetController()->GetInputMode() == Controller::CIM_PLAYER &&
+					                        clientView->GetController()->GetInputMode() == Controller::CIM_PLAYER;
+					const bool ownerFlipped = owner == 2;
+					if (!modeLanded || !ownerFlipped) {
+						return finish(("first differ frame=" + std::to_string(frame) + " host=" + hostTuple + " client=" + clientTuple +
+						               " expected mode=CIM_PLAYER owner=2").c_str());
+					}
+				}
+			}
+			if (!firstDiffer.empty()) {
+				return finish(firstDiffer.c_str());
+			}
+			return finish(nullptr);
+		}
+
+		bool TestSimultaneousClaimTieBreak(std::string* error) {
+			const char* name = "simultaneous_claim_tie_break";
+			EnsureSwitchTestManagers();
+			const uint16_t delay = 2;
+			const uint64_t claimFrame = 4;
+			const uint16_t port = 43222;
+			LoopbackTransport hostT, aT, bT;
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			if (!hostT.StartHost(port, error) || !aT.Connect("loopback", port, error) || !bT.Connect("loopback", port, error)) {
+				return finish(error && !error->empty() ? error->c_str() : "trio transport failed");
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = 0x5732315433573132ULL;
+				c.startFrame = 0;
+				c.inputDelayFrames = delay;
+				c.timeoutMs = 4000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.frameLane = NetTransportLane::ControlReliable;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.matchConfig.hostPeerId = 1;
+				c.matchConfig.peerCount = 3;
+				c.matchConfig.ownershipPolicy = NetActorOwnershipPolicy::UniqueIdModPeerCount;
+				return c;
+			};
+			NetLockstepCoordinator host, peerA, peerB;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+			    !peerA.Start(aT, cfg(2, {{1, 1}}, false), error) ||
+			    !peerB.Start(bT, cfg(3, {{1, 1}}, false), error)) {
+				return finish(error && !error->empty() ? error->c_str() : "trio start failed");
+			}
+			if (!DriveTrio(hostT, aT, bT, host, peerA, peerB, [&] { return host.IsRunning() && peerA.IsRunning() && peerB.IsRunning(); }, error)) {
+				return finish(error && !error->empty() ? error->c_str() : "trio did not reach Running");
+			}
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamOne, 0);
+			activity->AddPlayer(Players::PlayerTwo, true, Activity::TeamTwo, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* claimed = nullptr;
+			Actor* peerView = nullptr;
+			for (int attempt = 0; attempt < 8 && !claimed; ++attempt) {
+				Actor* candidate = MakeSwitchTestActor(Activity::TeamOne);
+				if (candidate && (static_cast<int64_t>(candidate->GetUniqueID()) % 3) == 0) {
+					claimed = candidate;
+				} else if (candidate && !peerView) {
+					peerView = candidate;
+				} else if (candidate) {
+					delete candidate;
+				}
+			}
+			if (!claimed) {
+				return finish("no actor UID with owner peer 1");
+			}
+			if (!peerView) {
+				peerView = MakeSwitchTestActor(Activity::TeamOne);
+			}
+			if (!peerView) {
+				return finish("peer view could not be created");
+			}
+			const int64_t uid = static_cast<int64_t>(claimed->GetUniqueID());
+			AddSwitchTestActor(claimed);
+			std::string queueError;
+			for (uint64_t produced = 0; produced < claimFrame; ++produced) {
+				if (!host.QueueLocalInput(produced, {MakeFrame(100, produced + 1)}, {}, &queueError) ||
+				    !peerA.QueueLocalInput(produced, {MakeFrame(200, produced + 1)}, {}, &queueError) ||
+				    !peerB.QueueLocalInput(produced, {MakeFrame(300, produced + 1)}, {}, &queueError)) {
+					return finish(queueError.c_str());
+				}
+			}
+			if (!DriveTrio(hostT, aT, bT, host, peerA, peerB, [&] { return host.GetStats().framesAccepted >= claimFrame; }, &queueError)) {
+				return finish(queueError.c_str());
+			}
+			ScenarioRunner::SetLockstepCoordinator(&peerA);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!g_ActivityMan.GetActivity()->SwitchToActor(claimed, Players::PlayerOne, Activity::TeamOne)) {
+				return finish("peer 2 SwitchToActor refused");
+			}
+			const std::vector<NetGameCommand> claimA = ScenarioRunner::DrainLocalGameCommands();
+			claimed->SetControllerMode(Controller::CIM_AI); // Remote view still CIM_AI.
+			ScenarioRunner::SetLockstepCoordinator(&peerB);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!g_ActivityMan.GetActivity()->SwitchToActor(claimed, Players::PlayerTwo, Activity::TeamOne)) {
+				return finish("peer 3 SwitchToActor refused");
+			}
+			const std::vector<NetGameCommand> claimB = ScenarioRunner::DrainLocalGameCommands();
+			if (!host.QueueLocalInput(claimFrame, {MakeFrame(100, claimFrame + 1)}, {}, &queueError) ||
+			    !peerA.QueueLocalInput(claimFrame, {MakeFrame(200, claimFrame + 1)}, claimA, &queueError) ||
+			    !peerB.QueueLocalInput(claimFrame, {MakeFrame(300, claimFrame + 1)}, claimB, &queueError)) {
+				return finish(queueError.c_str());
+			}
+			for (uint64_t produced = claimFrame + 1; produced <= claimFrame + delay; ++produced) {
+				if (!host.QueueLocalInput(produced, {MakeFrame(100, produced + 1)}, {}, &queueError) ||
+				    !peerA.QueueLocalInput(produced, {MakeFrame(200, produced + 1)}, {}, &queueError) ||
+				    !peerB.QueueLocalInput(produced, {MakeFrame(300, produced + 1)}, {}, &queueError)) {
+					return finish(queueError.c_str());
+				}
+			}
+			NetLockstepReadyFrame applied;
+			bool sawApply = false;
+			if (!DriveTrio(hostT, aT, bT, host, peerA, peerB, [&] {
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) {
+						if (ready.frame == claimFrame + delay) {
+							applied = ready;
+							sawApply = true;
+						}
+					}
+					while (peerA.PopReadyFrame(ready)) {
+					}
+					while (peerB.PopReadyFrame(ready)) {
+					}
+					return sawApply;
+				}, &queueError)) {
+				return finish(queueError.c_str());
+			}
+			ApplyReadySwitchCommands(applied);
+			const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamOne, false);
+			Actor* loserBinding = g_ActivityMan.GetActivity()->GetControlledActor(Players::PlayerTwo);
+			const std::string hostTuple = ControlTuple(*claimed, owner);
+			const std::string peerTuple = ControlTuple(*peerView, owner);
+			if (owner != 2 || loserBinding != nullptr) {
+				return finish(("first differ frame=" + std::to_string(claimFrame + delay) + " host=" + hostTuple + " client=" + peerTuple +
+				               " winner=" + std::to_string(static_cast<int>(owner)) + " peer3_binding=" + (loserBinding ? "kept" : "dropped") +
+				               " expected winner=2 peer3_binding=dropped")
+				                  .c_str());
+			}
+			return finish(nullptr);
+		}
+
+		bool TestSwitchUnderSyncedHold(std::string* error) {
+			const char* name = "switch_under_synced_hold";
+			EnsureSwitchTestManagers();
+			const uint16_t delay = 2;
+			const uint64_t holdFrame = 4;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433573133ULL);
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			const uint16_t port = 43223;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, port, delay, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, port, delay, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "team-owner";
+			clientConfig.ownershipPolicy = "team-owner";
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return finish(error && !error->empty() ? error->c_str() : "coordinator pair failed");
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 4000)) {
+				return finish(error && !error->empty() ? error->c_str() : "pair did not reach Running");
+			}
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamTwo, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* hostAbandoned = MakeSwitchTestActor(Activity::TeamTwo);
+			Actor* clientAbandoned = MakeSwitchTestActor(Activity::TeamTwo);
+			Actor* nextActor = MakeSwitchTestActor(Activity::TeamTwo);
+			if (!hostAbandoned || !clientAbandoned || !nextActor) {
+				return finish("selftest actors could not be created");
+			}
+			const int64_t uid = static_cast<int64_t>(clientAbandoned->GetUniqueID());
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			AddSwitchTestActor(hostAbandoned);
+			AddSwitchTestActor(clientAbandoned);
+			AddSwitchTestActor(nextActor);
+			if (!g_ActivityMan.GetActivity()->SwitchToActor(clientAbandoned, Players::PlayerOne, Activity::TeamTwo)) {
+				return finish("initial seat refused");
+			}
+			hostAbandoned->SetControllerMode(Controller::CIM_PLAYER, Players::PlayerOne);
+			// The seat is already on the wire on both peers: the committed frames of a seated actor
+			// carry CIM_PLAYER, which is the mode the switch has to take off it.
+			hostAbandoned->GetController()->ApplyWireMode(Controller::CIM_PLAYER, Players::PlayerOne);
+			clientAbandoned->GetController()->ApplyWireMode(Controller::CIM_PLAYER, Players::PlayerOne);
+			ScenarioRunner::DrainLocalGameCommands();
+			std::string queueError;
+			for (uint64_t produced = 0; produced < holdFrame; ++produced) {
+				if (!host.QueueLocalInput(produced, {MakeFrame(100, produced + 1)}, {}, &queueError) ||
+				    !client.QueueLocalInput(produced, {MakeFrame(200, produced + 1)}, {}, &queueError)) {
+					return finish(queueError.c_str());
+				}
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, &queueError, 4000)) {
+				return finish(queueError.c_str());
+			}
+			hostAbandoned->GetController()->HoldDisabledForSyncedOrder(static_cast<int64_t>(holdFrame));
+			clientAbandoned->GetController()->HoldDisabledForSyncedOrder(static_cast<int64_t>(holdFrame));
+			if (!g_ActivityMan.GetActivity()->SwitchToActor(nextActor, Players::PlayerOne, Activity::TeamTwo)) {
+				return finish("switch away refused");
+			}
+			ScenarioRunner::DrainLocalGameCommands();
+			// The owner samples the abandoned actor at the switch; that frame commits delay ticks later
+			// on every peer, which is where its mode leaves the seat.
+			ControllerFrame abandonedFrame = ControllerFrameCodec::Snapshot(uid, *clientAbandoned->GetController(), clientAbandoned);
+			abandonedFrame.actorUniqueID = uid;
+			for (uint64_t frame = holdFrame + 1; frame <= holdFrame + delay; ++frame) {
+				if (frame == holdFrame + delay) {
+					std::string applyError;
+					MovableMan::ApplyLockstepFrameToActor(*hostAbandoned, abandonedFrame, frame, &applyError);
+					MovableMan::ApplyLockstepFrameToActor(*clientAbandoned, abandonedFrame, frame, &applyError);
+				}
+				const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamTwo, !clientAbandoned->IsPlayerControlled());
+				const std::string hostTuple = ControlTuple(*hostAbandoned, owner);
+				const std::string clientTuple = ControlTuple(*clientAbandoned, owner);
+				const bool disabledEqual = hostAbandoned->GetController()->IsQuickDisabled() == clientAbandoned->GetController()->IsQuickDisabled();
+				const bool holdOutlived = clientAbandoned->GetController()->GetInputMode() != Controller::CIM_PLAYER &&
+				                          clientAbandoned->GetController()->IsSyncedOrderDisableHeld();
+				if (!disabledEqual || holdOutlived) {
+					return finish(("first differ frame=" + std::to_string(frame) + " host=" + hostTuple + " client=" + clientTuple +
+					               (holdOutlived ? " hold outlived the seat" : " disabled diverged"))
+					                  .c_str());
+				}
+			}
+			return finish(nullptr);
+		}
+
+		bool TestCoopTakeoverOfHostCpuActor(std::string* error) {
+			const char* name = "coop_takeover_host_cpu_actor";
+			EnsureSwitchTestManagers();
+			const uint16_t delay = 2;
+			const uint64_t switchFrame = 4;
+			const uint16_t port = 43224;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433573134ULL);
+			// Both humans share TeamOne, so the CPU actor's policy owner is the host.
+			matchConfig.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 0, false, "Client"}};
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::HostCpuRemoteHuman;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, port, delay, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, port, delay, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "host-cpu-remote-human";
+			clientConfig.ownershipPolicy = "host-cpu-remote-human";
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return finish(error && !error->empty() ? error->c_str() : "coordinator pair failed");
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 4000)) {
+				return finish(error && !error->empty() ? error->c_str() : "pair did not reach Running");
+			}
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamOne, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* hostView = MakeSwitchTestActor(Activity::TeamOne);
+			Actor* clientView = MakeSwitchTestActor(Activity::TeamOne);
+			if (!hostView || !clientView) {
+				return finish("selftest actors could not be created");
+			}
+			const int64_t uid = static_cast<int64_t>(clientView->GetUniqueID());
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			AddSwitchTestActor(hostView);
+			AddSwitchTestActor(clientView);
+			if (ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamOne, true) != 1) {
+				return finish("the CPU actor did not start on the host");
+			}
+			std::string queueError;
+			for (uint64_t produced = 0; produced < switchFrame; ++produced) {
+				if (!host.QueueLocalInput(produced, {MakeFrame(100, produced + 1)}, {}, &queueError) ||
+				    !client.QueueLocalInput(produced, {MakeFrame(200, produced + 1)}, {}, &queueError)) {
+					return finish(queueError.c_str());
+				}
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.GetStats().framesAccepted >= switchFrame && client.GetStats().framesAccepted >= switchFrame; }, &queueError, 4000)) {
+				return finish(queueError.c_str());
+			}
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!g_ActivityMan.GetActivity()->SwitchToActor(clientView, Players::PlayerOne, Activity::TeamOne)) {
+				return finish("SwitchToActor refused the co-op takeover");
+			}
+			const std::vector<NetGameCommand> switchCommands = ScenarioRunner::DrainLocalGameCommands();
+			if (switchCommands.empty()) {
+				return finish("the takeover produced no SwitchControl command");
+			}
+			ControllerFrame hostSnap = ControllerFrameCodec::Snapshot(uid, *hostView->GetController(), hostView);
+			hostSnap.actorUniqueID = uid;
+			if (!host.QueueLocalInput(switchFrame, {hostSnap}, {}, &queueError) ||
+			    !client.QueueLocalInput(switchFrame, {MakeFrame(200, switchFrame + 1)}, switchCommands, &queueError)) {
+				return finish(queueError.c_str());
+			}
+			std::map<uint64_t, NetLockstepReadyFrame> hostReady;
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) {
+						hostReady[ready.frame] = ready;
+					}
+					while (client.PopReadyFrame(ready)) {
+					}
+					return hostReady.count(switchFrame + delay) != 0;
+				}, &queueError, 4000)) {
+				return finish(queueError.c_str());
+			}
+			for (uint64_t frame = switchFrame; frame <= switchFrame + delay; ++frame) {
+				if (hostReady.count(frame)) {
+					ApplyReadySwitchCommands(hostReady[frame], hostView);
+					ApplyOwnerFramesToViews(hostReady[frame], *hostView, *clientView, uid, Activity::TeamOne);
+				}
+			}
+			const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamOne, !hostView->IsPlayerControlled());
+			const std::string hostTuple = ControlTuple(*hostView, owner);
+			const std::string clientTuple = ControlTuple(*clientView, owner);
+			if (owner != 2 || hostTuple != clientTuple ||
+			    hostView->GetController()->GetInputMode() != Controller::CIM_PLAYER ||
+			    clientView->GetController()->GetInputMode() != Controller::CIM_PLAYER) {
+				return finish(("frame=" + std::to_string(switchFrame + delay) + " host=" + hostTuple + " client=" + clientTuple +
+				               " expected mode=CIM_PLAYER owner=2")
+				                  .c_str());
+			}
+			return finish(nullptr);
+		}
+
+		// A seeded owner whose actor left the world before a resync must not travel in the world structure:
+		// the load resolves every owner entry to a live actor and would reject the whole checkpoint otherwise.
+		bool TestOwnerMapSurvivesActorDeath(std::string* error) {
+			const char* name = "owner_map_survives_actor_death";
+			EnsureSwitchTestManagers();
+			const auto finish = [&](const char* message) {
+				NetActorOwnership::ClearSeededOwners();
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) { *error = message; }
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			NetActorOwnership::ClearSeededOwners();
+			// AddActor registers nothing without an activity.
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamOne, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* survivor = MakeSwitchTestActor(Activity::TeamOne);
+			if (!survivor) {
+				return finish("selftest actor could not be created");
+			}
+			AddSwitchTestActor(survivor);
+			const int64_t survivorUID = static_cast<int64_t>(survivor->GetUniqueID());
+			// A stale owner for an actor that already left the world: without a removal-time erase its
+			// s_SeededOwners entry outlives it, exactly as a mid-match death leaves one behind.
+			const int64_t departedUID = survivorUID + 1000000;
+			if (g_MovableMan.FindObjectByUniqueID(static_cast<long>(departedUID))) {
+				return finish("the chosen departed id unexpectedly names a live object");
+			}
+			NetActorOwnership::SeedOwner(survivorUID, 2);
+			NetActorOwnership::SeedOwner(departedUID, 1);
+			const std::string snapshot = g_MovableMan.SaveWorldStructure();
+			if (!g_MovableMan.LoadWorldStructure(snapshot, false)) {
+				return finish("the world structure was rejected because a departed actor's owner was saved");
+			}
+			if (NetActorOwnership::GetSeededOwner(survivorUID) != 2) {
+				return finish("the surviving actor's owner did not round-trip");
+			}
+			if (NetActorOwnership::GetSeededOwner(departedUID) != 0) {
+				return finish("a departed actor's owner survived the round-trip");
+			}
+			return finish(nullptr);
+		}
+
+		bool TestSoundIdentityPinAgreesAcrossHistories(std::string* error) {
+			const char* name = "sound_identity_pin_agrees_across_histories";
+			const uint64_t extra = 17;
+			const uint64_t startCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+			const long startUid = MovableObject::GetUniqueIDCounter();
+			auto finish = [&](const char* message) {
+				g_AudioMan.SetCheckpointSoundContainerCursor(startCursor);
+				MovableObject::PinUniqueIDCounter(startUid);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+
+			std::vector<std::unique_ptr<SoundContainer>> hostHistory;
+			for (uint64_t i = 0; i < extra; ++i) {
+				hostHistory.emplace_back(std::make_unique<SoundContainer>());
+			}
+			ScenarioRunner::ApplyDeterministicConfig();
+			auto hostMatch = std::make_unique<SoundContainer>();
+			const uint64_t hostIdentity = hostMatch->GetCheckpointIdentity();
+
+			NetGameSoundOp command;
+			command.actorUID = 1;
+			command.soundIdentity = hostIdentity;
+			command.op = static_cast<uint8_t>(NetGameSoundOp::Play);
+			NetLockstepFrame frame;
+			frame.senderPeerId = 1;
+			frame.targetFrame = 1;
+			frame.commands = {NetGameCommand{1, command}};
+			std::vector<uint8_t> bytes;
+			if (!NetLockstepCodec::Encode(NetLockstepPacket{frame}, bytes)) {
+				return finish("could not encode the host sound op");
+			}
+
+			hostMatch.reset();
+			hostHistory.clear();
+			g_AudioMan.SetCheckpointSoundContainerCursor(startCursor);
+			ScenarioRunner::ApplyDeterministicConfig();
+			auto clientMatch = std::make_unique<SoundContainer>();
+			const uint64_t clientIdentity = clientMatch->GetCheckpointIdentity();
+			if (hostIdentity != clientIdentity) {
+				const uint64_t delta = hostIdentity > clientIdentity ? hostIdentity - clientIdentity : clientIdentity - hostIdentity;
+				return finish(("identities differ by " + std::to_string(delta) +
+				               " host=" + std::to_string(hostIdentity) +
+				               " client=" + std::to_string(clientIdentity)).c_str());
+			}
+
+			const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes);
+			const NetLockstepFrame* decodedFrame = decoded.ok ? std::get_if<NetLockstepFrame>(&decoded.packet.payload) : nullptr;
+			const NetGameSoundOp* decodedOp = decodedFrame && !decodedFrame->commands.empty()
+				? std::get_if<NetGameSoundOp>(&decodedFrame->commands[0].payload)
+				: nullptr;
+			if (!decodedOp || decodedOp->soundIdentity != clientIdentity) {
+				return finish("encoded host sound op did not round-trip");
+			}
+			if (g_AudioMan.FindSimulationSoundContainer(decodedOp->soundIdentity) != clientMatch.get()) {
+				return finish("encoded host sound op does not resolve on the client");
+			}
+			return finish(nullptr);
+		}
+
+		bool TestClaimedActorReturnsToCpuAfterTheClaimantExpires(std::string* error) {
+			const char* name = "claimed_actor_returns_to_cpu_after_the_claimant_expires";
+			EnsureSwitchTestManagers();
+			const uint16_t delay = 2;
+			const uint64_t switchFrame = 4;
+			const uint16_t port = 43225;
+			LoopbackTransport hostT, leaverT, stayerT;
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				NetActorOwnership::ClearSeededOwners();
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			if (!hostT.StartHost(port, error) || !leaverT.Connect("loopback", port, error) || !stayerT.Connect("loopback", port, error)) {
+				return finish(error && !error->empty() ? error->c_str() : "trio transport failed");
+			}
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433573135ULL);
+			matchConfig.players = {
+				NetMatchPlayerSlot{1, 0, false, "Host"},
+				NetMatchPlayerSlot{2, 1, false, "Claimant"},
+				NetMatchPlayerSlot{3, 0, false, "Survivor"},
+			};
+			matchConfig.peerCount = 3;
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::HostCpuRemoteHuman;
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = 0x5732315433573135ULL;
+				c.startFrame = 0;
+				c.inputDelayFrames = delay;
+				c.timeoutMs = 4000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.frameLane = NetTransportLane::ControlReliable;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "host-cpu-remote-human";
+				c.matchConfig = matchConfig;
+				return c;
+			};
+			NetLockstepCoordinator host, leaver, stayer;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+			    !leaver.Start(leaverT, cfg(2, {{1, 1}}, false), error) ||
+			    !stayer.Start(stayerT, cfg(3, {{1, 1}}, false), error)) {
+				return finish(error && !error->empty() ? error->c_str() : "trio start failed");
+			}
+			if (!DriveTrio(hostT, leaverT, stayerT, host, leaver, stayer, [&] { return host.IsRunning() && leaver.IsRunning() && stayer.IsRunning(); }, error)) {
+				return finish(error && !error->empty() ? error->c_str() : "trio did not reach Running");
+			}
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamTwo, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* hostView = MakeSwitchTestActor(Activity::TeamTwo);
+			Actor* survivorView = MakeSwitchTestActor(Activity::TeamTwo);
+			if (!hostView || !survivorView) {
+				return finish("selftest actors could not be created");
+			}
+			const int64_t uid = static_cast<int64_t>(hostView->GetUniqueID());
+			AddSwitchTestActor(hostView);
+			AddSwitchTestActor(survivorView);
+			NetActorOwnership::SeedOwner(uid, 1);
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			if (ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamTwo, true) != 1) {
+				return finish("the CPU actor did not start on the host");
+			}
+			std::string queueError;
+			for (uint64_t produced = 0; produced < switchFrame; ++produced) {
+				if (!host.QueueLocalInput(produced, {MakeFrame(100, produced + 1)}, {}, &queueError) ||
+				    !leaver.QueueLocalInput(produced, {MakeFrame(200, produced + 1)}, {}, &queueError) ||
+				    !stayer.QueueLocalInput(produced, {MakeFrame(300, produced + 1)}, {}, &queueError)) {
+					return finish(queueError.c_str());
+				}
+			}
+			if (!DriveTrio(hostT, leaverT, stayerT, host, leaver, stayer, [&] { return host.GetStats().framesAccepted >= switchFrame; }, &queueError)) {
+				return finish(queueError.c_str());
+			}
+			ScenarioRunner::SetLockstepCoordinator(&leaver);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!g_ActivityMan.GetActivity()->SwitchToActor(hostView, Players::PlayerOne, Activity::TeamTwo)) {
+				return finish("peer 2 SwitchToActor refused the claim");
+			}
+			const std::vector<NetGameCommand> switchCommands = ScenarioRunner::DrainLocalGameCommands();
+			if (switchCommands.empty()) {
+				return finish("the claim produced no SwitchControl command");
+			}
+			if (!host.QueueLocalInput(switchFrame, {MakeFrame(100, switchFrame + 1)}, {}, &queueError) ||
+			    !leaver.QueueLocalInput(switchFrame, {MakeFrame(200, switchFrame + 1)}, switchCommands, &queueError) ||
+			    !stayer.QueueLocalInput(switchFrame, {MakeFrame(300, switchFrame + 1)}, {}, &queueError)) {
+				return finish(queueError.c_str());
+			}
+			for (uint64_t produced = switchFrame + 1; produced <= switchFrame + delay; ++produced) {
+				if (!host.QueueLocalInput(produced, {MakeFrame(100, produced + 1)}, {}, &queueError) ||
+				    !leaver.QueueLocalInput(produced, {MakeFrame(200, produced + 1)}, {}, &queueError) ||
+				    !stayer.QueueLocalInput(produced, {MakeFrame(300, produced + 1)}, {}, &queueError)) {
+					return finish(queueError.c_str());
+				}
+			}
+			std::map<uint64_t, NetLockstepReadyFrame> hostReady;
+			if (!DriveTrio(hostT, leaverT, stayerT, host, leaver, stayer, [&] {
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) {
+						hostReady[ready.frame] = ready;
+					}
+					while (leaver.PopReadyFrame(ready)) {
+					}
+					while (stayer.PopReadyFrame(ready)) {
+					}
+					return hostReady.count(switchFrame + delay) != 0;
+				}, &queueError)) {
+				return finish(queueError.c_str());
+			}
+			for (uint64_t frame = switchFrame; frame <= switchFrame + delay; ++frame) {
+				if (hostReady.count(frame)) {
+					ApplyReadySwitchCommands(hostReady[frame], survivorView);
+				}
+			}
+			const uint8_t claimedOwner = ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamTwo, !hostView->IsPlayerControlled());
+			if (claimedOwner != 2 || hostView->GetController()->GetInputMode() != Controller::CIM_PLAYER ||
+			    survivorView->GetController()->GetInputMode() != Controller::CIM_PLAYER) {
+				return finish(("claim did not land owner=" + std::to_string(static_cast<int>(claimedOwner)) +
+				               " hostMode=" + std::to_string(static_cast<int>(hostView->GetController()->GetInputMode())) +
+				               " survivorMode=" + std::to_string(static_cast<int>(survivorView->GetController()->GetInputMode())))
+				                  .c_str());
+			}
+			leaverT.Stop();
+			if (!DriveTrio(hostT, leaverT, stayerT, host, leaver, stayer, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && stayer.GetPeerLeaveFrames().count(2) != 0; }, &queueError, 8000)) {
+				return finish(queueError.empty() ? "peer 2 drop was never adjudicated" : queueError.c_str());
+			}
+			if (!host.AnyDroppedSeatHeld() || !stayer.AnyDroppedSeatHeld()) {
+				return finish("the dropped claim seat was not held for reclaim");
+			}
+			const uint64_t leaveFrame = host.GetPeerLeaveFrames().at(2);
+			host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, 20000);
+			if (!DriveTrio(hostT, leaverT, stayerT, host, leaver, stayer, [&] {
+					return host.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired &&
+					       stayer.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired;
+				}, &queueError, 4000)) {
+				return finish(queueError.empty() ? "Expired never reached both survivors" : queueError.c_str());
+			}
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			// Install clears the live claim map; put it back so Purge can move it.
+			ScenarioRunner::SetLockstepControlOverride(uid, 2);
+			ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(leaveFrame);
+			const bool expired = ScenarioRunner::TakeExpiredDroppedClaim(uid, leaveFrame);
+			const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
+			const uint8_t resolved = ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamTwo, true);
+			auto applyPost = [&](NetLockstepCoordinator& peer, Actor& view) {
+				ScenarioRunner::SetLockstepCoordinator(&peer);
+				if (expired && seeded != 0 && resolved == seeded) {
+					MovableMan::ApplyLockstepControlHandoffToActor(view, false);
+					return;
+				}
+				if (ScenarioRunner::IsLockstepActorOwnerGone(uid, view.GetTeam(), !view.IsPlayerControlled(), leaveFrame)) {
+					view.GetController()->SetDisabled(true);
+				}
+			};
+			applyPost(host, *hostView);
+			applyPost(stayer, *survivorView);
+			auto describe = [&](Actor& view, uint8_t owner) {
+				return "owner=" + std::to_string(static_cast<int>(owner)) +
+				       " disabled=" + std::to_string(view.GetController()->IsDisabled() ? 1 : 0) +
+				       " mode=" + std::to_string(static_cast<int>(view.GetController()->GetInputMode()));
+			};
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			const uint8_t hostOwner = ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamTwo, !hostView->IsPlayerControlled());
+			ScenarioRunner::SetLockstepCoordinator(&stayer);
+			const uint8_t survivorOwner = ScenarioRunner::GetLockstepActorOwner(uid, Activity::TeamTwo, !survivorView->IsPlayerControlled());
+			const std::string hostState = describe(*hostView, hostOwner);
+			const std::string survivorState = describe(*survivorView, survivorOwner);
+			if (hostOwner != 1 || survivorOwner != 1 || hostState != survivorState ||
+			    hostView->GetController()->IsDisabled() || survivorView->GetController()->IsDisabled() ||
+			    hostView->GetController()->GetInputMode() != Controller::CIM_AI ||
+			    survivorView->GetController()->GetInputMode() != Controller::CIM_AI) {
+				return finish(("host=" + hostState + " survivor=" + survivorState +
+				               " expected owner=1 disabled=0 mode=" + std::to_string(static_cast<int>(Controller::CIM_AI)))
+				                  .c_str());
+			}
+			return finish(nullptr);
+		}
+
 	}
 
 	int NetLockstepSelfTest::Run() {
@@ -9264,16 +10677,30 @@ namespace RTE {
 		if (!ActivityMan::IsConstructed()) ActivityMan::Construct();
 		if (!AudioMan::IsConstructed()) AudioMan::Construct();
 		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
+		install_allegro(SYSTEM_NONE, &errno, std::atexit); // SceneMan::Clear creates a bitmap.
+		if (!SceneMan::IsConstructed()) SceneMan::Construct();
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-lockstep-selftest] FAIL: " << message << std::endl;
 			return 1;
 		};
 
+		std::string piePinError;
+		if (!PieMenu::RunHoverOpenDelayPinSelfTest(&piePinError)) {
+			return fail(piePinError);
+		}
+
 		std::string error;
-		if (!TestRoundTrips(&error) ||
+		if (!TestSoundIdentityPinAgreesAcrossHistories(&error) ||
+		    !TestRoundTrips(&error) ||
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
+		    !TestAIWaypointReadThroughSamePass(&error) ||
+		    !TestAIWaypointCrossActorWrites(&error) ||
+		    !TestHostRunCpuActorOnAHumanTeamPopsItsWaypoint(&error) ||
+		    !TestAnOwnedWriterMayWriteAnotherOwnersActor(&error) ||
+		    !TestAStrangerMayNotWriteAQueue(&error) ||
+		    !TestPathUpdateStaysArmedWhileWaypointAddIsInFlight(&error) ||
 		    !TestCoordinatorOwedFrameRetryEndsWithTheRound(&error) ||
 		    !TestCoordinatorOwedFrameKeepsItsCommands(&error) ||
 		    !TestCoordinatorStoppedRoundStopsResending(&error) ||
@@ -9337,6 +10764,8 @@ namespace RTE {
 		    !TestCoordinatorPeerLeave(&error) ||
 		    !TestCoordinatorHostAdjudicatesSilentPeer(&error) ||
 		    !TestCoordinatorSilentHostStillTimesOut(&error) ||
+		    !TestCoordinatorClientProtocolErrorIsALeave(&error) ||
+		    !TestCoordinatorHostProtocolErrorFailsClients(&error) ||
 		    !TestCoordinatorRelayBacklogHeals(&error) ||
 		    !TestCoordinatorRelayFailureDropsPeer(&error) ||
 		    !TestCoordinatorDroppedSeatHold(&error) ||
@@ -9369,6 +10798,22 @@ namespace RTE {
 		}
 
 		if (NetResyncSelfTest::Run() != 0 || NetResyncRuntimeSelfTest::Run() != 0) return fail("resync regression suite failed");
+
+		std::string switchLandsError;
+		std::string claimTieError;
+		std::string switchHoldError;
+		std::string coopTakeoverError;
+		const bool switchLands = TestSwitchLandsOnOneTick(&switchLandsError);
+		const bool claimTie = TestSimultaneousClaimTieBreak(&claimTieError);
+		const bool switchHold = TestSwitchUnderSyncedHold(&switchHoldError);
+		const bool coopTakeover = TestCoopTakeoverOfHostCpuActor(&coopTakeoverError);
+		std::string ownerMapError;
+		const bool ownerMapLives = TestOwnerMapSurvivesActorDeath(&ownerMapError);
+		std::string claimedExpiryError;
+		const bool claimedExpiry = TestClaimedActorReturnsToCpuAfterTheClaimantExpires(&claimedExpiryError);
+		if (!switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry) {
+			return 1;
+		}
 		std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 		return 0;
 	}
