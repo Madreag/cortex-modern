@@ -5,7 +5,6 @@
 #include "NetReconnectSession.h"
 #include "NetTransport.h"
 
-#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -143,11 +142,12 @@ namespace RTE {
 		/// The frame a seat drop is recorded against; the match runner keeps it current.
 		void SetLockstepFrame(uint64_t frame) { m_LockstepFrame = frame; }
 
-		/// Queues a chat line onto the session wire for the local UI. Presentation only: it never
-		/// becomes a lockstep command and no part of it reaches a tick hash. The host sends its own
-		/// line straight to every Ready peer; a client sends to the host, which relays it.
-		/// @return false when the line was dropped (bad scope, oversize, malformed, rate window, or
-		/// no live link); the reason lives in the chat drop counters.
+		/// Queues a chat line for the session's own pump thread to put on the wire, so the caller
+		/// (usually the UI) never touches peers, the transport or session state. Presentation only:
+		/// it never becomes a lockstep command and no part of it reaches a tick hash. The host's
+		/// line relays to every Ready peer; a client's line goes to the host, which relays it.
+		/// @return false when the line was refused outright (bad scope, oversize, malformed text, or
+		/// a full outbox); a queued line can still be rate-dropped at the pump - the counters tell.
 		bool SendChat(uint8_t scope, const std::string& text);
 		/// Drains the bounded presentation queue (newest 64 kept). Safe from the UI thread while the
 		/// runner worker owns the transport pump.
@@ -155,6 +155,9 @@ namespace RTE {
 		/// Session-assigned id -> team, pushed by the match service when it knows the roster. The
 		/// host relays a team-scoped line only to the sender's own team.
 		void SetChatTeams(std::map<uint8_t, int> teamsByPeerId);
+		/// Moves the UI's queued lines onto the wire. Call only from the thread that owns the
+		/// session's pump; mid-match that is the service's PumpSessionEvents, not Tick.
+		void PumpChatOutbox();
 
 		/// Host: re-seats the Ready peers on the ids a rematch roster gives them, so a roster that lost
 		/// a player is dense again. Keyed and valued by session-assigned id. Refuses rather than take an
@@ -290,8 +293,7 @@ namespace RTE {
 		NetSessionConfig m_Config;
 		NetSessionRole m_Role = NetSessionRole::None;
 		NetSessionState m_State = NetSessionState::Stopped;
-		// Ticked on the session's driving thread, sampled by SendChat on the UI thread.
-		std::atomic<uint64_t> m_NowMs{0};
+		uint64_t m_NowMs = 0;
 		uint64_t m_A7NextConnectionId = 0;
 		uint64_t m_A7ClientConnectedMs = 0;
 		bool m_A7HeartbeatAttempted = false;
@@ -323,18 +325,21 @@ namespace RTE {
 		NetSessionStats m_Stats;
 		NetReconnectHost* m_ReconnectHost = nullptr;
 		NetReconnectClient* m_ReconnectClient = nullptr;
-		// Written on the sim thread every tick, read under m_ChatMutex when a line is stamped.
-		std::atomic<uint64_t> m_LockstepFrame{0};
+		uint64_t m_LockstepFrame = 0;
 		std::vector<PeerState> m_Peers;
 
-		// The UI thread can send while the runner worker owns the pump, so the wire sequence and the
-		// send counter move under a lock rather than hoping the phases never overlap.
-		std::mutex m_SendMutex;
-		// Chat state lives behind its own lock for the same reason: the pump appends, the UI drains.
-		std::mutex m_ChatMutex;
+		// Chat state lives behind its own lock: the UI enqueues and drains, the session's own pump
+		// thread is the only side that sends, relays or stamps a line.
+		struct NetChatOutbound {
+			uint8_t scope;
+			std::string text;
+		};
+		mutable std::mutex m_ChatMutex;
+		std::deque<NetChatOutbound> m_ChatOutbox;
 		std::deque<NetChatEntry> m_ChatLog;
 		std::map<uint8_t, int> m_ChatTeams;
-		// windowStartMs -> count pairs, keyed by the author's session id (local sends share one key).
+		// windowStartMs -> count pairs, keyed by the author's session id (local sends use a key no
+		// peer id can hold; malformed packets fall back to a per-transport key).
 		std::map<uint64_t, std::pair<uint64_t, uint32_t>> m_ChatRate;
 	};
 

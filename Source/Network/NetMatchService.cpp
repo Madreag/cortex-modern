@@ -1503,6 +1503,9 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_Session && m_Coordinator && m_State == NetMatchServiceState::Running) {
 				m_Session->SetLockstepFrame(m_Coordinator->GetStats().nextFrame);
+				// The coordinator owns the transport queue mid-match, so this pump is the only
+				// driver that ever drains the session's chat outbox here.
+				m_Session->PumpChatOutbox();
 			}
 		}
 		const bool hostAdmission = m_AdmissionAttached && m_IsHost;
