@@ -1,5 +1,7 @@
 #include "GUI.h"
 
+#include "allegro.h"
+
 #include <cassert>
 #include <map>
 
@@ -448,12 +450,27 @@ GUIBitmap* GUIFont::InkColorBitmap(unsigned long Color) {
 	const unsigned long BackG = FC.m_Bitmap->GetPixel(FC.m_Bitmap->GetWidth() - 1, 0);
 	const unsigned long Red = FC.m_Bitmap->GetPixel(0, 0);
 	FC.m_Bitmap->SetColorKey(BackG);
+	// Fallback cells draw dimmer than real glyphs so a run of them stays
+	// readable marks; each cell's last column stays clear for a 1px gap.
+	const unsigned long ink = FC.m_Bitmap->GetColorDepth() == 32
+		? makeacol32(getr32(Color) * 55 / 100, getg32(Color) * 55 / 100, getb32(Color) * 55 / 100, geta32(Color))
+		: Color;
 	for (int y = 0; y < FC.m_Bitmap->GetHeight(); y++) {
 		for (int x = 0; x < FC.m_Bitmap->GetWidth(); x++) {
 			const unsigned long Pixel = FC.m_Bitmap->GetPixel(x, y);
 			if (Pixel != BackG && Pixel != Red) {
-				FC.m_Bitmap->SetPixel(x, y, Color);
+				FC.m_Bitmap->SetPixel(x, y, ink);
 			}
+		}
+	}
+	for (int chr = 32; chr < m_CharIndexCap; chr++) {
+		if (m_Characters[chr].m_Width < 2) {
+			continue;
+		}
+		const int gapX = m_Characters[chr].m_Offset + m_Characters[chr].m_Width - 1;
+		const int gapY0 = ((chr - 32) / 16) * m_FontHeight;
+		for (int y = gapY0; y < gapY0 + m_FontHeight && y < FC.m_Bitmap->GetHeight(); y++) {
+			FC.m_Bitmap->SetPixel(gapX, y, BackG);
 		}
 	}
 	m_InkColorCache.push_back(FC);
