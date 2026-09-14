@@ -2047,13 +2047,15 @@ static std::string DescribeStateDifference(const std::string& before, const std:
 	const std::vector<std::string> first = split(before);
 	const std::vector<std::string> second = split(after);
 	std::string detail;
-	size_t differing = first.size() > second.size() ? first.size() - second.size() : second.size() - first.size();
+	size_t differing = 0;
+	size_t shown = 0;
 	for (size_t index = 0; index < std::min(first.size(), second.size()); ++index) {
 		if (first[index] == second[index]) {
 			continue;
 		}
 		++differing;
-		if (differing <= 3) {
+		if (shown < 3) {
+			++shown;
 			detail += " line " + std::to_string(index + 1) + ": '" + first[index].substr(0, 60) + "' -> '" + second[index].substr(0, 60) + "'";
 		}
 	}
