@@ -68,12 +68,12 @@ namespace RTE {
 
 		/// Draws the MainMenuGUI to the screen.
 		void Draw();
+		/// Reopens the browser after playback releases its activity and input stream.
+		void ReturnToReplayBrowser(const std::string& status);
 
 		/// §11: reads the recovery record on the way into the main menu and, when one applies, opens the
 		/// multiplayer screen's landing panel on the offer instead of leaving the player to find it.
 		void OfferStoredRejoinOnEntry();
-		/// Reopens the browser after playback releases its activity and input stream.
-		void ReturnToReplayBrowser(const std::string& status);
 #pragma endregion
 
 #pragma region Automation
