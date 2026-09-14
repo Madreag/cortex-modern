@@ -8219,12 +8219,23 @@ namespace {
 
 	size_t s_PreviewFenceDeepTables = 0;
 
+	// Names the tables the depth record covers so the prototype can say which global a preview wrote into. Off by
+	// default because the paths cost string work the depth measurement is not meant to carry.
+	bool PreviewFenceNames() {
+		static const bool names = []() {
+			const char* value = std::getenv("CC_PREVIEW_FENCE_NAMES");
+			return value && std::strcmp(value, "1") == 0;
+		}();
+		return names;
+	}
+
 	// Records the contents of every table reachable from src within depth steps into map[table] = record, reusing the
 	// record a previous preview built for the same table. The visited set is also the cycle guard.
-	void FillDeepRecords(lua_State* L, int src, int map, int visited, int depth) {
+	void FillDeepRecords(lua_State* L, int src, int map, int visited, int names, int depth, const std::string& prefix) {
 		src = AbsoluteLuaIndex(L, src);
 		map = AbsoluteLuaIndex(L, map);
 		visited = AbsoluteLuaIndex(L, visited);
+		names = AbsoluteLuaIndex(L, names);
 		if (depth < 1 || lua_checkstack(L, 8) == 0) {
 			return;
 		}
@@ -8240,6 +8251,17 @@ namespace {
 					lua_pushvalue(L, value);
 					lua_pushboolean(L, 1);
 					lua_rawset(L, visited);
+					std::string path;
+					if (PreviewFenceNames()) {
+						// The key is copied before it is read as a string: lua_tostring on the live key would break lua_next.
+						lua_pushvalue(L, value - 1);
+						const char* key = lua_tostring(L, -1);
+						path = prefix + (key ? key : "?");
+						lua_pop(L, 1);
+						lua_pushvalue(L, value);
+						lua_pushlstring(L, path.data(), path.size());
+						lua_rawset(L, names);
+					}
 					lua_pushvalue(L, value);
 					lua_rawget(L, map);
 					if (!lua_istable(L, -1)) {
@@ -8252,13 +8274,52 @@ namespace {
 					FillShallowCopy(L, value, lua_gettop(L));
 					++s_PreviewFenceDeepTables;
 					if (depth > 1) {
-						FillDeepRecords(L, value, map, visited, depth - 1);
+						FillDeepRecords(L, value, map, visited, names, depth - 1, path + ".");
 					}
 					lua_settop(L, value);
 				}
 			}
 			lua_pop(L, 1);
 		}
+	}
+
+	// Names up to three keys a preview changed inside one recorded table, for the prototype's report.
+	std::string DescribeShallowDifference(lua_State* L, int live, int saved) {
+		live = AbsoluteLuaIndex(L, live);
+		saved = AbsoluteLuaIndex(L, saved);
+		std::string keys;
+		int found = 0;
+		lua_pushnil(L);
+		while (lua_next(L, live) != 0) {
+			lua_pushvalue(L, -2);
+			lua_rawget(L, saved);
+			const bool differs = lua_isnil(L, -1) || !lua_rawequal(L, -1, -2);
+			lua_pop(L, 1);
+			if (differs && found < 3) {
+				++found;
+				lua_pushvalue(L, -2);
+				const char* key = lua_tostring(L, -1);
+				keys += (keys.empty() ? "" : ",") + std::string(key ? key : "?");
+				lua_pop(L, 1);
+			}
+			lua_pop(L, 1);
+		}
+		lua_pushnil(L);
+		while (lua_next(L, saved) != 0) {
+			lua_pushvalue(L, -2);
+			lua_rawget(L, live);
+			const bool gone = lua_isnil(L, -1);
+			lua_pop(L, 1);
+			if (gone && found < 3) {
+				++found;
+				lua_pushvalue(L, -2);
+				const char* key = lua_tostring(L, -1);
+				keys += (keys.empty() ? "" : ",") + std::string("-") + (key ? key : "?");
+				lua_pop(L, 1);
+			}
+			lua_pop(L, 1);
+		}
+		return keys;
 	}
 
 	// Drops the records of tables this preview no longer reaches, so a long run does not pin dead tables.
@@ -8281,13 +8342,26 @@ namespace {
 	}
 
 	// Puts every recorded table back the way its record found it.
-	int RestoreDeepRecords(lua_State* L, int map) {
+	int RestoreDeepRecords(lua_State* L, int map, int names) {
 		map = AbsoluteLuaIndex(L, map);
+		names = AbsoluteLuaIndex(L, names);
 		int changes = 0;
 		lua_pushnil(L);
 		while (lua_next(L, map) != 0) {
 			if (lua_istable(L, -2) && lua_istable(L, -1)) {
-				changes += RestoreFromShallowCopy(L, -2, -1);
+				std::string keys;
+				if (PreviewFenceNames()) {
+					keys = DescribeShallowDifference(L, -2, -1);
+				}
+				const int undone = RestoreFromShallowCopy(L, -2, -1);
+				changes += undone;
+				if (undone > 0 && PreviewFenceNames()) {
+					lua_pushvalue(L, -2);
+					lua_rawget(L, names);
+					const char* path = lua_tostring(L, -1);
+					std::cout << "[preview-fence-deep-write] path=" << (path ? path : "?") << " undone=" << undone << " keys=" << keys << std::endl;
+					lua_pop(L, 1);
+				}
 			}
 			lua_pop(L, 1);
 		}
@@ -8534,6 +8608,14 @@ void LuaStateWrapper::CapturePreviewGlobalFence() {
 			lua_setfield(m_State, fence, "deep");
 		}
 		const int map = lua_gettop(m_State);
+		lua_getfield(m_State, fence, "deepnames");
+		if (!lua_istable(m_State, -1)) {
+			lua_pop(m_State, 1);
+			lua_newtable(m_State);
+			lua_pushvalue(m_State, -1);
+			lua_setfield(m_State, fence, "deepnames");
+		}
+		const int names = lua_gettop(m_State);
 		lua_newtable(m_State);
 		const int visited = lua_gettop(m_State);
 		// _G is already recorded above, so marking it visited keeps _G._G from being recorded twice.
@@ -8542,7 +8624,7 @@ void LuaStateWrapper::CapturePreviewGlobalFence() {
 		lua_rawset(m_State, visited);
 		s_PreviewFenceDeepTables = 0;
 		lua_pushvalue(m_State, LUA_GLOBALSINDEX);
-		FillDeepRecords(m_State, -1, map, visited, PreviewFenceDepth() - 1);
+		FillDeepRecords(m_State, -1, map, visited, names, PreviewFenceDepth() - 1, "_G.");
 		lua_pop(m_State, 1);
 		PruneDeepRecords(m_State, map, visited);
 		lua_pushnumber(m_State, static_cast<lua_Number>(s_PreviewFenceDeepTables));
@@ -8607,10 +8689,11 @@ int LuaStateWrapper::ReleasePreviewGlobalFence() {
 	if (PreviewFenceDepth() > 1) {
 		int deepChanges = 0;
 		lua_getfield(m_State, fence, "deep");
-		if (lua_istable(m_State, -1)) {
-			deepChanges = RestoreDeepRecords(m_State, -1);
+		lua_getfield(m_State, fence, "deepnames");
+		if (lua_istable(m_State, -2) && lua_istable(m_State, -1)) {
+			deepChanges = RestoreDeepRecords(m_State, -2, -1);
 		}
-		lua_pop(m_State, 1);
+		lua_pop(m_State, 2);
 		lua_getfield(m_State, fence, "deepcount");
 		const long deepTables = static_cast<long>(lua_tonumber(m_State, -1));
 		lua_pop(m_State, 1);
