@@ -415,8 +415,15 @@ namespace RTE::FloatTextSelfTest {
 		/// than building a manager graph to satisfy a destructor.
 		template <class EntityType> EntityType& KeptAlive() { return *(new EntityType()); }
 
+		/// The hexadecimal spelling is the platform's %a - UCRT pads the mantissa to 13 digits where the BSD
+		/// and glibc libcs trim it - so these two expectations are built, not written out. What pins the
+		/// spelling itself is CheckHexFloatMatchesTheStream, against the stream that wrote today's saves.
+		std::string ArmHandTargetText() { return HexFloatString(1.5F) + "|" + HexFloatString(-0.25F) + "|" + HexFloatString(0.75F) + "|1|reach"; }
+
+		std::string PieMenuStateText() { return "0|0|0|0|0|" + HexFloatString(1.5F) + "|1|-1|-1|-1|-1"; }
+
 		std::string ProbeArmHandTarget() {
-			const std::string packed = HexFloatString(1.5F) + "|" + HexFloatString(-0.25F) + "|" + HexFloatString(0.75F) + "|1|reach";
+			const std::string packed = ArmHandTargetText();
 			Arm& arm = KeptAlive<Arm>();
 			arm.AddHandTargetFromSave(packed);
 			const std::vector<std::string> saved = arm.GetHandTargetsForSave();
@@ -425,7 +432,7 @@ namespace RTE::FloatTextSelfTest {
 
 		std::string ProbePieMenuState() {
 			PieMenu& menu = KeptAlive<PieMenu>();
-			menu.UnpackInteractionState("0|0|0|0|0|" + HexFloatString(1.5F) + "|1|-1|-1|-1|-1");
+			menu.UnpackInteractionState(PieMenuStateText());
 			return menu.PackInteractionState();
 		}
 
@@ -449,7 +456,8 @@ namespace RTE::FloatTextSelfTest {
 		struct LocaleProbe {
 			const char* name;
 			std::string (*run)();
-			const char* expected; //!< The text or bits the site must produce in any locale, or null when the constant is not fixed here.
+			const char* expected; //!< The text or bits the site must produce in any locale, or null when it is built below.
+			std::string (*expectedText)() = nullptr; //!< Built expectation, for text whose spelling is the platform's %a.
 		};
 
 		/// Installs a locale whose decimal point is a comma, and reports which one it got.
@@ -485,20 +493,23 @@ namespace RTE::FloatTextSelfTest {
 			    {"reader_double", ProbeReaderDouble, "0xbfb999999999999a/0xbff0000000000000"},
 			    // 0x3f800000 is the answer when Reader::c_ReadFloatsAsFloats is false: flipping that switch flips this.
 			    {"reader_single_rounding", ProbeReaderSingleRounding, "0x3f800001"},
-			    {"reader_out_of_range", ProbeReaderOutOfRange, nullptr},
+			    // The stream stored the most positive or negative representable value on an out of range read.
+			    {"reader_out_of_range", ProbeReaderOutOfRange, "0x7fefffffffffffff/0xffefffffffffffff/0x7f7fffff"},
 			    {"writer_float", ProbeWriter, "1.5|-0.1"},
-			    {"arm_hand_target", ProbeArmHandTarget, "0x1.8p+0|-0x1p-2|0x1.8p-1|1|reach"},
-			    {"pie_menu_cursor_angle", ProbePieMenuState, "0|0|0|0|0|0x1.8p+0|1|-1|-1|-1|-1"},
+			    {"arm_hand_target", ProbeArmHandTarget, nullptr, ArmHandTargetText},
+			    {"pie_menu_cursor_angle", ProbePieMenuState, nullptr, PieMenuStateText},
 			    {"attachable_deg_offset", ProbeInheritedRotAngleDegOffset, nullptr},
 			    {"custom_number_value", ProbeCustomNumberValue, "0x3ff8000000000000"},
 			};
+			const auto expectationOf = [](const LocaleProbe& probe) { return probe.expectedText ? probe.expectedText() : std::string(probe.expected ? probe.expected : ""); };
 			std::string references[std::size(probes)];
 			for (size_t index = 0; index < std::size(probes); ++index) {
 				// Named as it starts: a site that reaches for an engine manager it has not got dies here.
 				std::cout << Tag << " probe=" << probes[index].name << std::endl;
 				references[index] = probes[index].run();
-				if (probes[index].expected != nullptr && references[index] != probes[index].expected) {
-					Fail(std::string("locale=C ") + probes[index].name + " '" + references[index] + "' expected '" + probes[index].expected + "'");
+				const std::string expected = expectationOf(probes[index]);
+				if (!expected.empty() && references[index] != expected) {
+					Fail(std::string("locale=C ") + probes[index].name + " '" + references[index] + "' expected '" + expected + "'");
 				}
 			}
 			const std::string locale = InstallCommaLocale();
@@ -511,8 +522,9 @@ namespace RTE::FloatTextSelfTest {
 				if (result != references[index]) {
 					Fail(std::string("locale=") + locale + " " + probes[index].name + " '" + result + "' but locale=C gives '" + references[index] + "'");
 				}
-				if (probes[index].expected != nullptr && result != probes[index].expected) {
-					Fail(std::string("locale=") + locale + " " + probes[index].name + " '" + result + "' expected '" + probes[index].expected + "'");
+				const std::string expected = expectationOf(probes[index]);
+				if (!expected.empty() && result != expected) {
+					Fail(std::string("locale=") + locale + " " + probes[index].name + " '" + result + "' expected '" + expected + "'");
 				}
 			}
 			std::locale::global(std::locale::classic());
