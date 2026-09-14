@@ -39,6 +39,7 @@
 #include "GUIBanner.h"
 #include "GUICheckpoint.h"
 #include "OwnedMovableObjects.h"
+#include "PreviewScriptSelfTest.h"
 #include "Vector.h"
 #include "SLBackground.h"
 #include "Writer.h"
@@ -6231,6 +6232,7 @@ _PrimitiveQueueCapture = nil
 	const std::string report = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
 	lua_pop(L, 1);
 	std::cout << report << std::endl;
+	checkpointValues = PreviewScriptSelfTest::CheckGlobalWriteBarrier() && checkpointValues;
 	const bool pass = checkpointValues && settledSoundOwner && scopeForgetsDestroyed && nativeLifetime && registryLifetime && randomRoundtrip && soundSetCopies && textRoundtrip && !report.empty() && report.find("FAIL") == std::string::npos;
 	std::cout << "[script-graph-selftest] " << (pass ? "PASS" : "FAIL") << std::endl;
 	return pass;

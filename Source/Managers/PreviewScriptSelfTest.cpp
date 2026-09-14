@@ -32,6 +32,174 @@
 
 namespace RTE {
 
+	bool PreviewScriptSelfTest::CheckGlobalWriteBarrier() {
+		static const std::string setup = R"lua(
+local p = {data = {1, 2, 3, x = 4}, list = {4, 1, 3, 2}, capi = {x = 11, [1] = 12}, cmeta = {}}
+_PreviewBarrierProbe = p
+local priorUtil = package.loaded['jit.util']
+local util = jit and require('jit.util')
+local hidden = {deep = {value = 31}}
+local sink = {}
+local mt = {__index = {fallback = 17}, __newindex = function(t, k, v)
+  if k == 'trap' then sink[k] = v else rawset(t, k, v) end
+end}
+setmetatable(p.data, mt)
+p.key = {}; p.data[p.key] = 'key'; p.data[false] = 'false'; p.data[1.5] = 'fraction'; p.data[0] = 'zero'
+p.alias = p.data; p.cycle = p; p.sink = sink; p.mt = mt
+p.colocated = {10, 20, 30}; p.separate = {}
+for i = 1, 96 do p.separate[i] = i end
+p.hot = {x = 7, raw = 8, [1] = 9}
+p.hookData = {count = 0}
+p.weak = setmetatable({}, {__mode = 'v'})
+p.weak[1] = {value = 1}
+local function sequence(t)
+  local result, k, v = {}, nil, nil
+  repeat
+    k, v = next(t, k)
+    if k ~= nil then result[#result+1] = tostring(k)..'='..tostring(v) end
+  until k == nil
+  return table.concat(result, '|')
+end
+local order, length = sequence(p.data), #p.data
+local originalCMeta = {kind = 'original'}
+setmetatable(p.cmeta, originalCMeta)
+local function hot(t, n)
+  for i = 1, n do
+    t.x = i; t[i % 16 + 1] = i; rawset(t, 'raw', i)
+  end
+end
+local warm = {}
+hot(warm, 512); hot(warm, 512)
+local jitEnabled = jit and jit.status() or false
+local compiled = false
+if jitEnabled then
+  for i = 1, 65535 do
+    local info = util.traceinfo(i)
+    if not info then break end
+    local traceFunc = util.traceir(i, 1)
+    if traceFunc then compiled = true; break end
+  end
+  assert(compiled, 'hot store trace was not compiled')
+end
+p.prepare = function()
+  p.co = coroutine.create(function()
+    local value = {deep = {value = 41}}
+    coroutine.yield()
+    value.deep.value = 91
+    coroutine.yield()
+    return value.deep.value
+  end)
+  assert(coroutine.resume(p.co))
+  p.weak[1] = {value = 1}
+end
+p.mutate = function()
+  assert(rawequal(p.data, p.alias) and p.cycle == p)
+  assert(getmetatable(p.data) == mt and p.data.fallback == 17)
+  assert(#p.data == length and sequence(p.data) == order)
+  assert(rawget(p.data, 'x') == 4 and rawget(p.data, 'fallback') == nil)
+  p.data.x = 5; p.data.x = 6; p.data.x = nil; p.data.x = 7
+  p.data.trap = 51
+  assert(rawget(p.data, 'trap') == nil and sink.trap == 51)
+  rawset(p.data, 'raw', 61); rawset(p.data, p.key, nil)
+  p.data[-0.0] = 'changed'; p.data[false] = nil; p.data[1.5] = 'changed'
+  table.insert(p.list, 2, 8); assert(table.remove(p.list, 1) == 4)
+  table.sort(p.list); assert(#p.list == 4 and p.list[1] == 1 and p.list[4] == 8)
+  for i = 1, 1024 do p.data['new'..i] = i; p.colocated[i] = i; p.separate[i+96] = i end
+  setmetatable(p.data, {__index = {fallback = 29}})
+  assert(p.data.fallback == 29 and getmetatable(p.data) ~= mt)
+  hidden.deep.value = 81
+  hot(p.hot, 512)
+  assert(p.hot.x == 512 and rawget(p.hot, 'raw') == 512)
+  assert((jit and jit.status() or false) == jitEnabled)
+  assert(coroutine.resume(p.co))
+  rawset(p.weak, 2, {})
+  if p.weak[1] then p.weak[1].value = 2 end
+  local hook = function() p.hookData.count = p.hookData.count + 1 end
+  debug.sethook(hook, '', 1)
+  assert(debug.gethook() == hook)
+  debug.sethook()
+  assert(p.hookData.count > 0)
+  p.added = {nested = {value = 71}}
+end
+p.collected = function()
+  collectgarbage('restart'); collectgarbage('collect'); collectgarbage('collect')
+  assert(p.weak[1] == nil and p.weak[2] == nil, 'weak references stayed live')
+end
+p.check = function()
+  assert(p.data == p.alias and p.cycle == p)
+  assert(sequence(p.data) == order and #p.data == length, 'table layout changed')
+  assert(p.data.x == 4 and p.data[0] == 'zero' and p.data[false] == 'false' and p.data[1.5] == 'fraction')
+  assert(p.data[p.key] == 'key' and rawget(p.data, 'raw') == nil and rawget(p.data, 'new1') == nil)
+  assert(getmetatable(p.data) == mt and p.data.fallback == 17 and sink.trap == nil)
+  assert(table.concat(p.list, ',') == '4,1,3,2' and table.concat(p.colocated, ',') == '10,20,30')
+  assert(#p.separate == 96 and p.separate[96] == 96 and p.separate[97] == nil)
+  assert(hidden.deep.value == 31 and p.added == nil and p.hookData.count == 0)
+  assert(p.hot.x == 7 and p.hot.raw == 8 and p.hot[1] == 9 and p.hot[2] == nil, 'compiled store leaked')
+  assert(p.capi.x == 11 and p.capi[1] == 12 and p.capi.added == nil, 'native API store leaked')
+  assert(getmetatable(p.cmeta) == originalCMeta, 'native metatable store leaked')
+  assert(p.weak[1] == nil and p.weak[2] == nil, 'collected weak reference resurrected')
+  local ok, value = coroutine.resume(p.co)
+  assert(ok and value == 41, 'coroutine table store leaked')
+  assert((jit and jit.status() or false) == jitEnabled)
+end
+p.cleanup = function() package.loaded['jit.util'] = priorUtil end
+)lua";
+		std::vector<LuaStateWrapper*> states{&g_LuaMan.GetMasterScriptState()};
+		for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) states.push_back(&state);
+		bool passed = true;
+		const auto check = [&](const char* name, int state, int round, int status) {
+			std::cout << "[script-graph-selftest] " << (status >= 0 ? "PASS " : "FAIL ") << name
+			          << " state=" << state << " round=" << round;
+			if (status < 0) std::cout << " " << states[state]->GetLastError();
+			std::cout << std::endl;
+			passed = status >= 0 && passed;
+		};
+		for (int index = 0; index < static_cast<int>(states.size()); ++index) {
+			states[index]->RunScriptString("collectgarbage('stop')", false);
+			check("preview_barrier_fixture", index, 0, states[index]->RunScriptString(setup, false));
+		}
+		for (int round = 0; round < 2 && passed; ++round) {
+			for (LuaStateWrapper* state: states) {
+				state->RunScriptString("collectgarbage('stop'); _PreviewBarrierProbe.prepare(); _ScriptFieldsStash['preview:-7654321'] = {}", false);
+			}
+			LuaMan::CapturePreviewSelfCopies({}, false);
+			for (LuaStateWrapper* state: states) state->CapturePreviewGlobalFence();
+			LuaMan::BeginPreviewScripts({}, false);
+			for (int index = 0; index < static_cast<int>(states.size()); ++index) {
+				LuaStateWrapper* state = states[index];
+				check("preview_barrier_vm_semantics", index, round, state->RunScriptString("_PreviewBarrierProbe.mutate()", false));
+				lua_State* L = state->GetLuaState();
+				const int top = lua_gettop(L);
+				lua_getglobal(L, "_PreviewBarrierProbe");
+				lua_getfield(L, -1, "capi");
+				lua_pushinteger(L, 92);
+				lua_rawseti(L, -2, 1);
+				lua_pushinteger(L, 93);
+				lua_setfield(L, -2, "x");
+				lua_pushliteral(L, "added");
+				lua_pushinteger(L, 94);
+				lua_rawset(L, -3);
+				lua_pop(L, 1);
+				lua_getfield(L, -1, "cmeta");
+				lua_newtable(L);
+				lua_setmetatable(L, -2);
+				lua_settop(L, top);
+				check("preview_barrier_native_semantics", index, round, state->RunScriptString("assert(_PreviewBarrierProbe.capi[1] == 92 and _PreviewBarrierProbe.capi.x == 93 and _PreviewBarrierProbe.capi.added == 94)", false));
+				check("preview_barrier_weak_semantics", index, round, state->RunScriptString("_PreviewBarrierProbe.collected()", false));
+				const int error = state->RunScriptString("_ScriptFieldsStash['preview:-7654321'] = nil; _PreviewBarrierProbe.data.x = 97; error('preview barrier error arm')", false);
+				check("preview_barrier_error_caught", index, round, error < 0 ? 0 : -1);
+			}
+			LuaMan::EndPreviewScripts();
+			for (int index = 0; index < static_cast<int>(states.size()); ++index) {
+				check("preview_barrier_exact_rollback", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.check(); assert(_ScriptFieldsStash['preview:-7654321'] == nil)", false));
+			}
+		}
+		for (LuaStateWrapper* state: states) {
+			state->RunScriptString("debug.sethook(); if _PreviewBarrierProbe then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; _ScriptFieldsStash['preview:-7654321'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
+		}
+		return passed;
+	}
+
 	bool PreviewScriptSelfTest::RunRetirementArm(char mode) {
 		const std::string label = std::string("overlay-links ") + mode;
 		bool passed = true;
