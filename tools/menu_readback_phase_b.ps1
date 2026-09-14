@@ -74,8 +74,14 @@ function Run-Detector([string]$tree, [string]$label, [bool]$red) {
         if ($red) {
             if ($code -eq 0 -or $result.pass) { throw "Baseline detector passed: $size" }
             foreach ($case in $result.cases) {
-                if (-not $case.unknown_commands) { throw "Baseline did not reach an unknown command: $($case.case), $size" }
-                $case.unknown_commands | Add-Content -LiteralPath "$Out/baseline-unknown-commands.txt"
+                if ($case.pass) { throw "Baseline case passed: $($case.case), $size" }
+                if ($case.unknown_commands) { $case.unknown_commands | Add-Content -LiteralPath "$Out/baseline-unknown-commands.txt" }
+                # A menu-script case stops at an unknown command, a probe case at the predicate it cannot express.
+                $reasons = @($case.unknown_commands)
+                foreach ($record in $case.records.PSObject.Properties) { $reasons += @($record.Value.verdict_lines) }
+                $reasons = @($reasons | Where-Object { $_ })
+                if (-not $reasons) { $reasons = @([string]$case.error) }
+                Add-Content -LiteralPath "$Out/baseline-red-reasons.txt" -Value "$size $($case.case): $($reasons -join ' | ')"
             }
         } elseif ($code -ne 0 -or -not $result.pass) { throw "Tip detector failed: $size" }
     }
