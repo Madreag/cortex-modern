@@ -1523,20 +1523,20 @@ std::string SceneEditorGUI::SaveCheckpoint() const {
 	CheckpointWriter writer(netOwners ? "SceneEditorGUI3" : "SceneEditorGUI2");
 	writer(m_CheckpointInitialized);
 	VisitCheckpoint(writer, *this);
-	writer(GUICheckpoint::SaveOwnedEntity(m_pCurrentObject), GUICheckpoint::SaveOwnedEntity(m_PieMenu.get()), m_pPicker != nullptr);
-	if (m_pPicker) writer(m_pPicker->SaveCheckpoint());
+	writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveOwnedEntity(m_pCurrentObject); }), CheckpointWriter::Native([&] { return GUICheckpoint::SaveOwnedEntity(m_PieMenu.get()); }), m_pPicker != nullptr);
+	if (m_pPicker) writer(CheckpointWriter::Native([&] { return m_pPicker->SaveCheckpoint(); }));
 	writer(m_pObjectToBlink == m_pCurrentObject && m_pObjectToBlink != nullptr);
-	writer(GUICheckpoint::SaveEntityReference(m_pObjectToBlink == m_pCurrentObject ? nullptr : m_pObjectToBlink));
+	writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(m_pObjectToBlink == m_pCurrentObject ? nullptr : m_pObjectToBlink); }));
 	writer(m_PathRequest != nullptr);
 	if (m_PathRequest) {
 		const auto& request = const_cast<const PathRequest&>(*m_PathRequest);
 		if (!request.complete) throw std::runtime_error("an editor path request is still running at checkpoint capture");
 		writer(request.complete, request.status, request.path, request.pathLength, request.totalCost, request.startPos, request.targetPos);
 	}
-	writer(GUICheckpoint::SaveBitmap(m_DrawBitmap.get()));
+	writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(m_DrawBitmap.get()); }));
 	if (netOwners) {
 		writer(m_NetPrivateCurrentObject, retainedOwners ? m_NetRetainedOwners.size() : size_t{0});
-		if (retainedOwners) for (size_t index = 0; index < m_NetRetainedOwners.size(); ++index) writer(static_cast<bool>(m_NetRetainedPrivateOwners[index]), GUICheckpoint::SaveOwnedEntity(m_NetRetainedOwners[index].get()));
+		if (retainedOwners) for (size_t index = 0; index < m_NetRetainedOwners.size(); ++index) writer(static_cast<bool>(m_NetRetainedPrivateOwners[index]), CheckpointWriter::Native([&] { return GUICheckpoint::SaveOwnedEntity(m_NetRetainedOwners[index].get()); }));
 	}
 	return writer.Text();
 }

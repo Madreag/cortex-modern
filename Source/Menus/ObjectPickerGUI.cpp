@@ -621,8 +621,8 @@ std::string ObjectPickerGUI::SaveCheckpoint() const {
 	CheckpointWriter writer("ObjectPickerGUI3");
 	writer(m_CheckpointInitialized);
 	VisitCheckpoint(writer, *this);
-	writer(GUICheckpoint::SaveModuleFlags(m_ExpandedModules), GUICheckpoint::SaveEntityReference(m_PickedObject), m_GUIControlManager != nullptr);
-	if (m_GUIControlManager) writer(m_GUIControlManager->SaveCheckpoint());
+	writer(GUICheckpoint::SaveModuleFlags(m_ExpandedModules), CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(m_PickedObject); }), m_GUIControlManager != nullptr);
+	if (m_GUIControlManager) writer(CheckpointWriter::Native([&] { return m_GUIControlManager->SaveCheckpoint(); }));
 	return writer.Text();
 }
 

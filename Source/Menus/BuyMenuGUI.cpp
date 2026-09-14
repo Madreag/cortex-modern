@@ -2471,17 +2471,18 @@ std::string BuyMenuGUI::SaveCheckpoint() const {
 	CheckpointWriter writer("BuyMenuGUI3");
 	writer(m_CheckpointInitialized);
 	VisitCheckpoint(writer, *this);
-	writer(GUICheckpoint::SaveEntityReference(m_pSelectedCraft));
+	writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(m_pSelectedCraft); }));
 	std::vector<bool> expanded;
 	if (m_aExpandedModules) for (int i = 0; i < g_PresetMan.GetTotalModuleCount(); ++i) expanded.push_back(m_aExpandedModules[i]);
 	writer(m_aExpandedModules != nullptr, GUICheckpoint::SaveModuleFlags(expanded), m_Loadouts.size());
 	for (const auto& loadout: m_Loadouts) {
-		std::vector<std::string> cargo;
-		for (const auto* item: loadout.m_CargoItems) cargo.push_back(GUICheckpoint::SaveEntityReference(item));
-		writer(GUICheckpoint::SaveOwnedEntity(&loadout), loadout.m_Complete, GUICheckpoint::SaveEntityReference(loadout.m_pDeliveryCraft), cargo);
+		std::vector<CheckpointText> cargo;
+		for (const auto* item: loadout.m_CargoItems) cargo.push_back(CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(item); }));
+		writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveOwnedEntity(&loadout); }), loadout.m_Complete,
+			CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(loadout.m_pDeliveryCraft); }), cargo);
 	}
 	writer(m_pGUIController != nullptr);
-	if (m_pGUIController) writer(m_pGUIController->SaveCheckpoint());
+	if (m_pGUIController) writer(CheckpointWriter::Native([&] { return m_pGUIController->SaveCheckpoint(); }));
 	return writer.Text();
 }
 

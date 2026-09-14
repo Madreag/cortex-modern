@@ -2578,14 +2578,14 @@ void GameActivity::SetNetworkPlayerName(int player, std::string name) {
 
 std::string GameActivity::SaveValueCheckpoint() const {
 	CheckpointWriter writer("GameActivity1");
-	writer(Activity::SaveCheckpoint());
+	writer(CheckpointWriter::Native([&] { return Activity::SaveCheckpoint(); }));
 	VisitCheckpoint(writer, *this);
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
-		writer(m_pBuyGUI[player] ? m_pBuyGUI[player]->SaveCheckpoint() : std::string{},
-			m_pEditorGUI[player] ? m_pEditorGUI[player]->SaveCheckpoint() : std::string{},
-			m_InventoryMenuGUI[player] ? m_InventoryMenuGUI[player]->SaveCheckpoint() : std::string{},
-			m_pBannerRed[player] ? m_pBannerRed[player]->SaveCheckpoint() : std::string{},
-			m_pBannerYellow[player] ? m_pBannerYellow[player]->SaveCheckpoint() : std::string{});
+		writer(CheckpointWriter::Native([&] { return m_pBuyGUI[player] ? m_pBuyGUI[player]->SaveCheckpoint() : std::string{}; }),
+			CheckpointWriter::Native([&] { return m_pEditorGUI[player] ? m_pEditorGUI[player]->SaveCheckpoint() : std::string{}; }),
+			CheckpointWriter::Native([&] { return m_InventoryMenuGUI[player] ? m_InventoryMenuGUI[player]->SaveCheckpoint() : std::string{}; }),
+			CheckpointWriter::Native([&] { return m_pBannerRed[player] ? m_pBannerRed[player]->SaveCheckpoint() : std::string{}; }),
+			CheckpointWriter::Native([&] { return m_pBannerYellow[player] ? m_pBannerYellow[player]->SaveCheckpoint() : std::string{}; }));
 	}
 	return writer.Text();
 }
@@ -2643,20 +2643,24 @@ bool GameActivity::ObjectivePoint::LoadCheckpoint(std::string_view text, bool va
 
 
 namespace {
-std::string SaveActivityOwnedEntity(const Entity* object) {
-    if (!object) return {};
+CheckpointText SaveActivityOwnedEntity(const Entity* object) {
+    if (!object) return CheckpointText(std::string());
+    const auto visit = [object](Writer& writer) {
+        writer.NewProperty("ActivityOwnedEntity");
+        if (const auto* movable = dynamic_cast<const MovableObject*>(object)) {
+            Scene::SaveSceneObject(writer, movable, false, true);
+        } else {
+            object->Save(writer);
+            writer.ObjectEnd();
+        }
+    };
+    if (CheckpointWriter::IsCapturing()) return Writer::Capture(visit);
     auto stream = std::make_unique<std::stringstream>();
     auto* raw = stream.get();
     Writer writer(std::move(stream));
     Writer::SnapshotScope snapshot(writer);
-    writer.NewProperty("ActivityOwnedEntity");
-    if (const auto* movable = dynamic_cast<const MovableObject*>(object)) {
-        Scene::SaveSceneObject(writer, movable, false, true);
-    } else {
-        object->Save(writer);
-        writer.ObjectEnd();
-    }
-    return raw->str();
+    visit(writer);
+    return CheckpointText(raw->str());
 }
 
 std::unique_ptr<Entity> LoadActivityOwnedEntity(const std::string& text) {
@@ -2674,7 +2678,7 @@ std::unique_ptr<Entity> LoadActivityOwnedEntity(const std::string& text) {
 
 std::string GameActivity::SaveCheckpoint() const {
     CheckpointWriter writer("GameActivity2");
-    writer(SaveValueCheckpoint());
+    writer(CheckpointWriter::Native([&] { return SaveValueCheckpoint(); }));
     for (int player = 0; player < Players::MaxPlayerCount; ++player) {
         writer(m_pLastMarkedActor[player] ? m_pLastMarkedActor[player]->GetUniqueID() : 0);
         writer(m_PurchaseOverride[player].size());
