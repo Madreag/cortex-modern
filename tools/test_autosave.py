@@ -15,7 +15,8 @@ from run_sim_test import make_run
 CAPTURE = re.compile(r"^\[autosave\] tick=(\d+) capture_ms=(\d+(?:\.\d+)?) bytes=(\d+)$", re.MULTILINE)
 
 
-def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int) -> dict:
+def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int, *,
+             extra_args=None, prepare=None, env=None, timeout=360) -> dict:
     root.mkdir(parents=True, exist_ok=False)
     runs, records = {}, {}
     for who in ("host", "client"):
@@ -26,7 +27,10 @@ def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int) -> di
         args += ["-tick-hashes", "-max-ticks", str(ticks), "-out", str(root / f"{who}_trace.json"),
                  "-net-match-report", str(root / f"{who}_report.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
-        runs[who] = make_run(repo, args, root / who, 360, env={"CCCP_HEADLESS": "1"})
+        args += list((extra_args or {}).get(who, ()))
+        runs[who] = make_run(repo, args, root / who, timeout, env={**(env or {}), "CCCP_HEADLESS": "1"})
+        if prepare:
+            prepare(who, Path(runs[who].cwd))
 
     def drive(who: str) -> None:
         try:
@@ -45,6 +49,35 @@ def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int) -> di
         for run in runs.values():
             run.close()
     return records
+
+
+def compare_checkpoint_bytes(left: Path, right: Path) -> dict:
+    """Compare entire archives and report member differences without normalizing bytes."""
+    payloads = [left.read_bytes(), right.read_bytes()]
+    members, ticks = [], []
+    for path in (left, right):
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            if len(names) != len(set(names)) or archive.testzip() is not None:
+                raise ValueError(f"invalid checkpoint archive: {path}")
+            if not {"Index.ini", "Save.ini", "Save Mat.png", "Save FG.png", "Save BG.png"} <= set(names):
+                raise ValueError(f"incomplete checkpoint archive: {path}")
+            entries = {name: archive.read(name) for name in names}
+            matches = re.findall(rb"^SimUpdateCount = (\d+)\s*$", entries["Save.ini"], re.MULTILINE)
+            if len(matches) != 1:
+                raise ValueError(f"missing or duplicate checkpoint tick: {path}")
+            ticks.append(int(matches[0]))
+            members.append(entries)
+    different = [name for name in sorted(members[0].keys() | members[1].keys())
+                 if members[0].get(name) != members[1].get(name)]
+    first = next((i for i, (a, b) in enumerate(zip(*payloads)) if a != b), None)
+    if first is None and len(payloads[0]) != len(payloads[1]):
+        first = min(map(len, payloads))
+    return {"passed": ticks[0] == ticks[1] and payloads[0] == payloads[1],
+            "paths": [str(left), str(right)], "ticks": ticks,
+            "sizes": list(map(len, payloads)),
+            "sha256": [hashlib.sha256(data).hexdigest() for data in payloads],
+            "different_members": different, "first_different_archive_byte": first}
 
 
 def inspect_autosaves(root: Path, who: str, enabled: bool) -> dict:
@@ -97,10 +130,10 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=48212)
     parser.add_argument("--ticks", type=int, default=400)
-    parser.add_argument("--arm", choices=("all", "default"), default="all")
+    parser.add_argument("--arm", choices=("all", "default", "peer-bytes"), default="all")
     args = parser.parse_args()
-    if not 48211 <= args.port <= 48216 or args.ticks < 400:
-        parser.error("four ports must fit 48211..48219 and at least 400 ticks are required")
+    if not (48211 <= args.port <= 48216 or 48240 <= args.port <= 48246) or args.ticks < 400:
+        parser.error("four ports must fit 48211..48219 or 48240..48249; at least 400 ticks are required")
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = args.repo.resolve(), args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -111,6 +144,8 @@ def main() -> int:
             "asymmetric": {"host": 2, "client": 0}, "rotation": {"host": 1, "client": 1}}
     if args.arm == "default":
         arms = {"default": {"host": None, "client": None}}
+    elif args.arm == "peer-bytes":
+        arms = {"peer-bytes": {"host": 2, "client": 2}}
     for index, (arm, cadence) in enumerate(arms.items()):
         arm_root = root / arm
         details = {"cadence_seconds": cadence}
@@ -135,12 +170,22 @@ def main() -> int:
             passed, comparison = strict_compare(arm_root / "host_trace.json", arm_root / "client_trace.json", args.ticks)
             details["peer_comparison"] = comparison
             assert passed, comparison
-            if arm not in ("off", "default"):
+            if arm == "peer-bytes":
+                by_tick = {who: {int(Path(path).stem.rsplit("-", 1)[1]): Path(path)
+                                 for path in details[who]["files"]} for who in cadence}
+                assert by_tick["host"].keys() == by_tick["client"].keys(), "peer saved ticks differ"
+                comparisons = [compare_checkpoint_bytes(by_tick["host"][tick], by_tick["client"][tick])
+                               for tick in sorted(by_tick["host"])]
+                details["checkpoint_byte_comparisons"] = comparisons
+                assert all(row["passed"] for row in comparisons), comparisons
+            elif arm not in ("off", "default"):
                 for who in cadence:
                     exact_role_compare(root / "off" / f"{who}_trace.json", arm_root / f"{who}_trace.json", args.ticks)
             details["passed"] = True
             if arm == "default":
                 print(f"PASS default: {args.ticks} peer ticks match; autosave flag absent; capture_lines=0 files_host=0 files_client=0", flush=True)
+            elif arm == "peer-bytes":
+                print(f"PASS peer-bytes: {args.ticks} peer ticks match; every retained checkpoint is byte-equal", flush=True)
             else:
                 print(f"PASS {arm}: {args.ticks} peer ticks match; checkpoint rotation and same-peer full hashes match", flush=True)
         except Exception as error:
