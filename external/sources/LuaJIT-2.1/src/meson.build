@@ -14,7 +14,7 @@ ljlib_sources = files(
     'lib_buffer.c')
 ljcore_sources = files(
     'lj_assert.c', 'lj_gc.c', 'lj_err.c', 'lj_char.c', 'lj_bc.c', 'lj_obj.c', 'lj_buf.c',
-    'lj_str.c', 'lj_tab.c', 'lj_func.c', 'lj_udata.c', 'lj_meta.c', 'lj_debug.c',
+    'lj_str.c', 'lj_tab.c', 'lj_preview.c', 'lj_func.c', 'lj_udata.c', 'lj_meta.c', 'lj_debug.c',
     'lj_prng.c', 'lj_state.c', 'lj_dispatch.c', 'lj_vmevent.c', 'lj_vmmath.c',
     'lj_strscan.c', 'lj_strfmt.c', 'lj_strfmt_num.c', 'lj_serialize.c',
     'lj_api.c', 'lj_profile.c',

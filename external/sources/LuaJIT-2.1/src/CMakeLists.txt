@@ -538,6 +538,7 @@ set(luajit_sources
     lj_opt_sink.c
     lj_opt_split.c
     lj_parse.c
+    lj_preview.c
     lj_prng.c
     lj_profile.c
     lj_record.c
