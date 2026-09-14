@@ -1246,7 +1246,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	// A shrunken box still reads top-down: Middle would anchor a tall error on its middle lines.
 	m_MultiplayerErrorLabel->SetVAlignment(
 	    m_MultiplayerErrorLabel->GetTextHeight() > errorHeight ? GUIFont::Top : GUIFont::Middle);
-	const int chatTop = 241 + extraHeight;
+	// The Leave/Seats row ends at rel 240; the first chat row keeps a 4px gap under it.
+	const int chatTop = 245 + extraHeight;
 	const int chatRows = std::min<int>(m_MultiplayerLobbyChatLabels.size(),
 	                                   std::max(0, (panelCap - chatTop - inputBlock) / 10));
 	const int contentHeight = chatTop + chatRows * 10 + inputBlock;
