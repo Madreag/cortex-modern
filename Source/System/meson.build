@@ -18,6 +18,7 @@ sources += files(
 'Color.cpp',
 'InputScheme.cpp',
 'RTETools.cpp',
+'RotatePrimitiveSelfTest.cpp',
 'ScenarioRunner.cpp',
 'InputScript.cpp',
 'AIWriteScript.cpp',
