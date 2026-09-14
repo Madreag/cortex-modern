@@ -423,8 +423,8 @@ def main():
     parser.add_argument("--baseline", action="store_true", help="measure the full-capture control without requiring a worker line")
     parser.add_argument("--terrain-edits", action="store_true", help="add explicit terrain mutations only to the 240-actor equality fixture")
     args = parser.parse_args()
-    if not 48240 <= args.port <= 48247:
-        parser.error("three ports must fit 48240..48249")
+    if not (48240 <= args.port <= 48247 or 48500 <= args.port <= 48517):
+        parser.error("three ports must fit 48240..48249 or 48500..48519")
     if args.baseline and args.arm != "cost":
         parser.error("--baseline applies only to --arm cost")
     if args.terrain_edits and (args.arm not in ("incremental-full", "fixtures") or args.scene != ACTORS):
