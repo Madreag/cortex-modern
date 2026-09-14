@@ -1122,6 +1122,51 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestLobbyStartsWithoutRemoteHumanSeats(std::string* error) {
+			NetMatchServiceRequest aiOnly;
+			aiOnly.host = true;
+			aiOnly.dedicated = true;
+			aiOnly.peerCount = 2;
+			aiOnly.humans = 0;
+			aiOnly.cpuSlots = 2;
+			aiOnly.mode = NetMatchMode::CoopPvE;
+			NetMatchConfig aiOnlyConfig;
+			if (!NetMatchService::BuildMatchConfig(aiOnly, 0x4149304E4C593031ULL, aiOnlyConfig, error)) return false;
+
+			LoopbackTransport transport;
+			if (!transport.StartHost(43213, error)) return false;
+			NetLobbySession lobby;
+			NetLobbySessionConfig setup;
+			setup.host = true;
+			setup.localPeerId = 1;
+			setup.matchConfig = aiOnlyConfig;
+			setup.autoStart = true;
+			if (!lobby.Start(transport, setup, error)) return false;
+			lobby.Tick(0);
+			if (!lobby.IsStarted()) {
+				*error = "a dedicated host seating only CPU teams stopped at " + std::string(NetLobbySession::StateName(lobby.GetState()));
+				return false;
+			}
+
+			// A roster that seats a human on another peer still waits for that peer.
+			LoopbackTransport waitingTransport;
+			if (!waitingTransport.StartHost(43214, error)) return false;
+			NetLobbySession waiting;
+			NetLobbySessionConfig waitingSetup;
+			waitingSetup.host = true;
+			waitingSetup.localPeerId = 1;
+			waitingSetup.matchConfig = MakeConfig();
+			waitingSetup.autoStart = true;
+			if (!waiting.Start(waitingTransport, waitingSetup, error)) return false;
+			waiting.Tick(0);
+			if (waiting.IsStarted() || waiting.GetState() != NetLobbyState::WaitingForConfigAck) {
+				*error = "a roster with a remote human seat started at " + std::string(NetLobbySession::StateName(waiting.GetState()));
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS ai_only_lobby_starts" << std::endl;
+			return true;
+		}
+
 		bool TestServiceRuntimeErrorSurface(std::string* error) {
 			NetMatchService service;
 			service.ReportRuntimeError("PeerDisconnected:test");
@@ -6925,6 +6970,7 @@ namespace RTE {
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);
 		if (!TestLobbyManualReadyCanWait(&error)) return fail(error);
 		if (!TestLobbyReadyDoesNotStartBeforeConfigAck(&error)) return fail(error);
+		if (!TestLobbyStartsWithoutRemoteHumanSeats(&error)) return fail(error);
 		if (!TestLobbyStateTransfer(&error)) return fail(error);
 		if (!TestLobbyStateChunkBounds(&error)) return fail(error);
 		if (!TestLobbyStateChunkConsistency(&error)) return fail(error);

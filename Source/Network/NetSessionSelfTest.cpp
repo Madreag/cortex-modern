@@ -386,6 +386,28 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestHostWithNoRemoteSeatIsReady(std::string* error) {
+			ScriptedHostTransport waitingTransport;
+			NetSession waiting;
+			if (!waiting.StartHost(waitingTransport, MakeConfig(42214, 1514, "Host"), error)) return false;
+			waiting.Tick(0);
+			if (waiting.GetState() != NetSessionState::Listening) {
+				*error = "a host still expecting a client did not stay Listening";
+				return false;
+			}
+			ScriptedHostTransport soloTransport;
+			NetSessionConfig solo = MakeConfig(42215, 1515, "Host");
+			solo.readyWithoutPeers = true;
+			NetSession alone;
+			if (!alone.StartHost(soloTransport, solo, error)) return false;
+			alone.Tick(0);
+			if (!alone.IsReady() || alone.GetReadyPeerCount() != 0) {
+				*error = "a host whose round seats no remote peer never became Ready";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestRejectCase(const std::string& name, const std::function<void(NetSessionConfig&)>& mutateClient, NetRejectReason expectedReason, const std::string& expectedKey, std::string* error) {
 			static uint16_t nextPort = 42100;
 			const uint16_t port = nextPort++;
@@ -1197,6 +1219,7 @@ namespace RTE {
 		if (!TestHappyPath(&error)) return fail(error);
 		if (!TestAssignedPeerIdIgnoresTransportPeerId(&error)) return fail(error);
 		if (!TestReadyRequiresAcceptedConnection(&error)) return fail(error);
+		if (!TestHostWithNoRemoteSeatIsReady(&error)) return fail(error);
 		if (!TestRejects(&error)) return fail(error);
 		if (!TestLockstepCodecAdmission(&error)) return fail(error);
 		if (!TestSessionFull(&error)) return fail(error);
