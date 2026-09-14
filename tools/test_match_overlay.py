@@ -4,7 +4,7 @@ Two menu-launched peers run at each viewport under each NetworkMatchStatusMode.
 Quiet and paused capture-on/off pairs compare complete traces. Host presses P to
 pause; Guest presses P to resume. The network UI probe reads the drawn labels and
 their rectangles. Additional arms force the widget's other triggers: the F6 seats
-panel, a wall-clock stall on the guest, and a guest leave that parks the host in
+panel, a wall-clock stall on the guest, and a guest drop that parks the host in
 the reconnect hold. Off never paints the widget (event toasts still appear), Auto
 paints it on triggers and three seconds past recovery, Always paints it
 throughout. When it is up it must sit in the measured free zone: below 480 rows a
@@ -22,10 +22,12 @@ import re
 import subprocess
 import sys
 import threading
+import time
 
 SCRATCH = Path("D:/mx/swe-overlay-layout-20260914")
 PORT_BASE, PORT_COUNT = 48260, 10
 TICKS = 900
+DROP_SIGNAL = "host-past-290"
 CAPTURE_TICKS = (60, 270, 500, 680, 880)
 BOX_WIDTH, BOX_HEIGHT, BOX_TOP, BOX_MARGIN = 252, 76, 32, 8
 STRIP_TOP, STRIP_LEFT, STRIP_RIGHT_MARGIN = 2, 152, 40
@@ -49,8 +51,8 @@ MODE_INI = {"off": "Off", "auto": "Auto", "always": "Always"}
 
 # Arms beyond the original four drive the remaining visibility states. "event" is
 # the scripted pause/resume; "f6" opens the seats panel; "stall" makes the guest
-# sleep 8 s at tick 300 so the host waits on frames; "leave" makes the guest quit
-# at tick 300 so the host holds its seat.
+# sleep 8 s at tick 300 so the host waits on frames; "leave" kills the guest once
+# the host is past 290 so the host holds its dropped seat.
 ARMS = {
     "on": {"captures": True},
     "off": {},
@@ -264,7 +266,8 @@ def probe_script(who, size, arm, mode):
                 ]
     if arm.get("leave"):
         if who == "Host":
-            steps += [{"op": "wait", "sim_at_least": 290}]
+            # The driver drops the guest on this signal, so the host is always past 290 when its link dies.
+            steps += [{"op": "wait", "sim_at_least": 290}, {"op": "signal", "name": DROP_SIGNAL}]
             if mode == "off":
                 # The hold toast is the required banner in Off; the widget stays away.
                 steps += [{"op": "wait", "control": TOAST, "equals": {"visible": True}},
@@ -273,14 +276,14 @@ def probe_script(who, size, arm, mode):
             else:
                 steps += [
                     {"op": "wait", "control": STATUS, "equals": {"visible": True}},
-                    # The seat hold engages after the transport's give-up, seconds after the leave tick.
+                    # The seat hold engages after the transport's give-up, seconds after the drop.
                     {"op": "wait", "elapsed_ms": 6000},
                     shown,
                     label_assert(STATUS, "WAITING FOR" if compact else "Waiting for"),
                     {"op": "screenshot", "name": "widget-hold-host"},
                 ]
         else:
-            # The guest quits at tick 300 and is terminated afterwards; its probe must be done first.
+            # The guest is killed mid-match, so its own probe has to be done before the drop.
             steps += [{"op": "wait", "sim_at_least": 250}, widget(False)]
         steps.append({"op": "finish"})
         return {"schema": 1, "timeout_ms": 180000, "steps": steps}
@@ -313,8 +316,6 @@ def run_pair(repo, root, port, size, arm, mode, timeout, expected_pin):
                 flags += ["-net-match-screenshot-ticks", ",".join(map(str, CAPTURE_TICKS))]
             if arm.get("stall") and who == "Guest":
                 flags += ["-net-match-e2e-stall"]
-            if arm.get("leave") and who == "Guest":
-                flags += ["-net-match-e2e-leave", "-net-match-e2e-leave-tick", "300"]
             runs[who] = make_run(repo, flags, root / who, timeout,
                                  env={"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)})
             values = {"ResolutionX": size[0], "ResolutionY": size[1],
@@ -327,15 +328,31 @@ def run_pair(repo, root, port, size, arm, mode, timeout, expected_pin):
             except Exception as error:
                 records[who] = {"error": repr(error)}
 
+        def drop_guest():
+            # A killed peer is what holds the host's seat; a clean quit just ends the match.
+            signal = root / "Host_inputs" / f"{DROP_SIGNAL}.json"
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if signal.exists():
+                    break
+                threading.Event().wait(0.2)
+            try:
+                runs["Guest"].terminate(reason="scripted mid-match drop")
+            except RuntimeError:
+                pass
+
         host = threading.Thread(target=drive, args=("Host",), daemon=True)
         guest = threading.Thread(target=drive, args=("Guest",), daemon=True)
         host.start()
         threading.Event().wait(2.0)
         guest.start()
+        dropper = threading.Thread(target=drop_guest, daemon=True) if arm.get("leave") else None
+        if dropper:
+            dropper.start()
         host.join()
         if arm.get("leave"):
             try:
-                runs["Guest"].terminate(reason="scripted mid-match leave")
+                runs["Guest"].terminate(reason="scripted mid-match drop")
             except RuntimeError:
                 pass
         guest.join()
@@ -415,12 +432,15 @@ def inspect_pair(root, records, size, arm, mode, name):
     leaving = bool(arm.get("leave"))
     for who in ("Host", "Guest"):
         record = records.get(who, {})
+        log = read_log(root / who)
         if leaving and who == "Guest":
             checks[f"{who}_exit"] = record.get("exit_code") not in (0, None) or record.get("injected_termination") is not None
+        elif leaving:
+            # The dropped peer never comes back, so the host ends on the lost link instead of its tick budget.
+            checks[f"{who}_exit"] = not record.get("timed_out", True) and "lockstep wait: PeerLeft" in log
         else:
             checks[f"{who}_exit"] = record.get("exit_code") == 0 and not record.get("timed_out", True)
         checks[f"{who}_evidence"] = record.get("evidence_complete") is True
-        log = read_log(root / who)
         checks[f"{who}_menu_match"] = "[menu-mp] launching the match" in log
         checks[f"{who}_no_menu_failure"] = "[menu-script] FAILED" not in log
         probe_path = root / f"{who}_inputs" / "net-ui-result.json"
