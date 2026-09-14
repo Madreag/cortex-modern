@@ -70,6 +70,11 @@ namespace RTE {
 		void ClearNonOwnedActorSlots() override;
 		void RebindNonOwnedActorSlots() override;
 		void ForgetDestroyedActor(const Actor* actor) override;
+
+		/// Gives this player the first brain no seat has taken, the last step of brain placement.
+		/// @param player The player to give a brain to.
+		/// @return Whether the player has a brain now.
+		bool PlaceUnassignedBrain(int player);
 		void ClearCheckpointActorIDs() override;
 		bool PrepareCheckpointUI() override;
 		SerializableOverrideMethods;

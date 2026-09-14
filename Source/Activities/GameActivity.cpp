@@ -1099,7 +1099,7 @@ void GameActivity::UpdateEditing() {
 
 				// Still no brain of this player? Last ditch effort to find one and assign it to this player
 				if (!m_Brain[player])
-					m_Brain[player] = g_MovableMan.GetUnassignedBrain(m_Team[player]);
+					PlaceUnassignedBrain(player);
 				// Um, something went wrong.. we're not done placing brains after all??
 				if (!m_Brain[player]) {
 					allReady = false;
@@ -2782,6 +2782,11 @@ void GameActivity::RebindNonOwnedActorSlots() {
 void GameActivity::ClearCheckpointActorIDs() {
 	Activity::ClearCheckpointActorIDs();
 	m_HasCheckpointMarkedActorIDs = false;
+}
+
+bool GameActivity::PlaceUnassignedBrain(int player) {
+	SetPlayerBrain(g_MovableMan.GetUnassignedBrain(m_Team[player]), player);
+	return m_Brain[player] != nullptr;
 }
 
 void GameActivity::ForgetDestroyedActor(const Actor* actor) {
