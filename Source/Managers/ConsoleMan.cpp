@@ -1,4 +1,5 @@
 #include "ConsoleMan.h"
+#include <limits>
 
 #include "LuaMan.h"
 #include "UInputMan.h"
@@ -37,7 +38,7 @@ void ConsoleMan::Clear() {
 	m_ConsoleText = nullptr;
 	m_InputTextBox = nullptr;
 	m_ConsoleTextMaxNumLines = 10;
-	m_OutputLog.clear();
+	{ std::lock_guard lock(m_OutputLogMutex); m_OutputLog.clear(); }
 	m_InputLog.clear();
 	m_InputLogPosition = m_InputLog.begin();
 	m_LastInputString.clear();
@@ -81,7 +82,7 @@ int ConsoleMan::Initialize() {
 	m_ParentBox->SetVisible(false);
 
 	if (!g_WindowMan.ResolutionChanged()) {
-		m_OutputLog.emplace_back("- RTE Lua Console -\nSee the Data Realms Wiki for commands: http://www.datarealms.com/wiki/\nPress F1 for a list of helpful shortcuts\n-------------------------------------");
+		AppendLogEntry("- RTE Lua Console -\nSee the Data Realms Wiki for commands: http://www.datarealms.com/wiki/\nPress F1 for a list of helpful shortcuts\n-------------------------------------");
 	}
 
 	return 0;
@@ -189,9 +190,7 @@ void ConsoleMan::SaveInputLog(const std::string& filePath) {
 bool ConsoleMan::SaveAllText(const std::string& filePath) {
 	Writer logWriter(filePath.c_str());
 	if (logWriter.WriterOK()) {
-		for (const std::string& loggedString: m_OutputLog) {
-			logWriter << loggedString;
-		}
+		logWriter << CopyLogTail(std::numeric_limits<size_t>::max());
 		logWriter.EndWrite();
 		PrintString("SYSTEM: Entire console contents saved to " + filePath);
 		return true;
@@ -199,17 +198,35 @@ bool ConsoleMan::SaveAllText(const std::string& filePath) {
 	return false;
 }
 
+void ConsoleMan::AppendLogEntry(const std::string& text) {
+	std::lock_guard lock(m_OutputLogMutex);
+	m_OutputLog.emplace_back(text);
+}
+
+std::string ConsoleMan::CopyLogTail(size_t limit) const {
+	std::lock_guard lock(m_OutputLogMutex);
+	auto first = m_OutputLog.end();
+	size_t size = 0, skip = 0;
+	while (first != m_OutputLog.begin() && size < limit) {
+		--first;
+		const size_t count = std::min(first->size(), limit - size);
+		size += count;
+		skip = first->size() - count;
+	}
+	std::string text;
+	text.reserve(size);
+	for (auto entry = first; entry != m_OutputLog.end(); ++entry) text.append(*entry, entry == first ? skip : 0);
+	return text;
+}
+
 void ConsoleMan::ClearLog() {
 	m_InputLog.clear();
 	m_InputLogPosition = m_InputLog.begin();
-	m_OutputLog.clear();
+	{ std::lock_guard lock(m_OutputLogMutex); m_OutputLog.clear(); }
 }
 
 void ConsoleMan::PrintString(const std::string& stringToPrint) {
-	static std::mutex printStringMutex;
-	std::scoped_lock<std::mutex> printStringLock(printStringMutex);
-
-	m_OutputLog.emplace_back("\n" + stringToPrint);
+	AppendLogEntry("\n" + stringToPrint);
 	if (System::IsLoggingToCLI()) {
 		System::PrintToCLI(stringToPrint);
 	}
@@ -277,8 +294,11 @@ void ConsoleMan::Update() {
 	}
 
 	std::stringstream consoleText;
-	for (std::deque<std::string>::iterator logIterator = (m_OutputLog.size() < m_ConsoleTextMaxNumLines) ? m_OutputLog.begin() : m_OutputLog.end() - m_ConsoleTextMaxNumLines; logIterator != m_OutputLog.end(); ++logIterator) {
-		consoleText << *logIterator;
+	{
+		std::lock_guard lock(m_OutputLogMutex);
+		for (auto logIterator = (m_OutputLog.size() < m_ConsoleTextMaxNumLines) ? m_OutputLog.begin() : m_OutputLog.end() - m_ConsoleTextMaxNumLines; logIterator != m_OutputLog.end(); ++logIterator) {
+			consoleText << *logIterator;
+		}
 	}
 	m_ConsoleText->SetText(consoleText.str());
 
@@ -365,15 +385,15 @@ void ConsoleMan::FeedString(bool feedEmptyString) {
 		if (!feedEmptyString) {
 			if (!line.empty() && line != "\r") {
 				g_LuaMan.GetMasterScriptState().ClearErrors();
-				m_OutputLog.emplace_back("\n" + line);
+				AppendLogEntry("\n" + line);
 				if (ScenarioRunner::IsLockstepControllerSyncActive()) {
-					m_OutputLog.emplace_back("\nDISABLED during a multiplayer match -- running console scripts would desync the peers.");
+					AppendLogEntry("\nDISABLED during a multiplayer match -- running console scripts would desync the peers.");
 				} else {
 					g_LuaMan.GetMasterScriptState().RunScriptString(line, false);
 				}
 
 				if (g_LuaMan.GetMasterScriptState().ErrorExists()) {
-					m_OutputLog.emplace_back("\nERROR: " + g_LuaMan.GetMasterScriptState().GetLastError());
+					AppendLogEntry("\nERROR: " + g_LuaMan.GetMasterScriptState().GetLastError());
 				}
 				if (m_InputLog.empty() || m_InputLog.front() != line) {
 					m_InputLog.push_front(line);
@@ -383,7 +403,7 @@ void ConsoleMan::FeedString(bool feedEmptyString) {
 				m_LastLogMove = 0;
 			}
 		} else {
-			m_OutputLog.emplace_back("\n");
+			AppendLogEntry("\n");
 			break;
 		}
 	}
