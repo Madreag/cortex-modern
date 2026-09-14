@@ -1393,6 +1393,56 @@ namespace RTE {
 			return g_Census;
 		}
 
+		int TestEndedCredentialsStayOutOfWorld() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) return Fail(error);
+			for (bool dropBeforeEnd : {false, true}) {
+				uint64_t unixNow = 1'700'000'000'000ULL;
+				Wire wire;
+				ConfigureWire(wire);
+				int censusCalls = 0;
+				wire.host.SetDropOwnershipSource([](void* context) {
+					++*static_cast<int*>(context);
+					return std::vector<NetH4LedgerActor>{{101, 1, 2, true}};
+				}, &censusCalls);
+				Endpoint player;
+				player.connection = 901;
+				ConfigureEndpoint(player, dropBeforeEnd ? "ended-held" : "ended-connected", &unixNow);
+				wire.Add(&player);
+				if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) return Fail("ended credential seed: " + error);
+				NetH4TicketRecord record;
+				if (player.store.Load(unixNow, record, &error) != NetH4TicketLoadResult::Loaded) return Fail("ended credential record: " + error);
+				wire.host.SetLiveMatch(true);
+				if (dropBeforeEnd) wire.host.NotifyDisconnect(player.connection, 100);
+				wire.host.SetMatchEnded();
+				if (!dropBeforeEnd) wire.host.NotifyDisconnect(player.connection, 100);
+				player.connected = false;
+				wire.Remove(player.connection);
+				player.client.NotifyAmbiguousLoss();
+				if (censusCalls != (dropBeforeEnd ? 1 : 0) || wire.host.GetLedger().Size() != 0 || !player.store.HasRecord()) {
+					return Fail("ended disconnect census=" + std::to_string(censusCalls) + " ledger=" + std::to_string(wire.host.GetLedger().Size()) +
+					            " record=" + (player.store.HasRecord() ? "kept" : "lost"));
+				}
+				Endpoint returner;
+				returner.connection = 902;
+				ConfigureEndpoint(returner, dropBeforeEnd ? "ended-held" : "ended-connected", &unixNow);
+				wire.Add(&returner);
+				wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				if (!returner.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) return Fail("ended credential reclaim: " + error);
+				if (returner.client.GetState() != NetH4ClientState::Joined || returner.client.GetIncarnation() != 2 ||
+				    censusCalls != (dropBeforeEnd ? 1 : 0) || wire.host.GetStats().reseatsIssued != 0 || wire.host.GetStats().reseatsWithoutALedger != 0 ||
+				    !wire.host.TakePendingReseats().empty() || !wire.host.TakePendingHoldResolutions().empty()) {
+					return Fail("ended reclaim state=" + std::string(NetReconnectClientStateName(returner.client.GetState())) +
+					            " reseats=" + std::to_string(wire.host.GetStats().reseatsIssued) +
+					            " without_ledger=" + std::to_string(wire.host.GetStats().reseatsWithoutALedger));
+				}
+			}
+			std::cout << "[net-reconnect-session-selftest] ended credentials cases=2 census_after_end=0 reseats=0" << std::endl;
+			return 0;
+		}
+
 		int TestLedgerAndReseat() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -6079,6 +6129,7 @@ namespace RTE {
 		if (const int result = TestRefusedReclaimReportsNewJoin(); result != 0) {
 			return result;
 		}
+		if (const int result = TestEndedCredentialsStayOutOfWorld(); result != 0) return result;
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;
 		return 0;
 	}

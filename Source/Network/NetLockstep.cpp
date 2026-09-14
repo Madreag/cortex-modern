@@ -4117,7 +4117,8 @@ namespace RTE {
 						return;
 					}
 					if (decoded.error.code == NetLockstepErrorCode::BadMagic && NetLobbyProtocol::Decode(event.bytes).ok) {
-						++m_Stats.ignoredSessionPackets;
+						if (m_SessionEventSink) m_SessionEventSink(event);
+						else ++m_Stats.ignoredSessionPackets;
 						return;
 					}
 					// Malformed admission traffic cannot stop a round it never joined.

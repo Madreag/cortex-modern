@@ -3366,7 +3366,7 @@ void RunGameLoop() {
 				// The session-directory heartbeat rides Update on the game thread, never the pump.
 				if (const NetMatchServiceState netServiceState = g_NetMatchService.GetState();
 				    g_NetMatchService.IsHost() && (netServiceState == NetMatchServiceState::Starting || netServiceState == NetMatchServiceState::ReadyToLaunch ||
-				                                   netServiceState == NetMatchServiceState::Running)) {
+				                                   netServiceState == NetMatchServiceState::Running || netServiceState == NetMatchServiceState::Completed)) {
 					g_NetMatchService.Update();
 				}
 				DriveModerationE2e();
