@@ -238,7 +238,9 @@ static void ApplyPackedLimbState(const std::string& packed, std::initializer_lis
 		while (cursor != end && *cursor == ' ') {
 			++cursor;
 		}
-		cursor = FromCharsExact(cursor, end, value).ptr;
+		const std::from_chars_result result = FromCharsExact(cursor, end, value);
+		RTEAssert(result.ec == std::errc(), "Invalid packed limb state");
+		cursor = result.ptr;
 	};
 	for (AtomGroup* group: groups) {
 		float first = 0.0F;
