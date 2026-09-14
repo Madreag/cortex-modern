@@ -5192,8 +5192,11 @@ namespace {
 		std::map<long, int> actorOwners;
 		std::array<int, Activity::MaxTeamCount> teamMOIDCount{};
 		std::array<std::set<long>, 3> validObjects;
-		template <class Archive> void Fields(Archive& archive) {
-			archive(cohorts, rosters, sortRoster, alarms, quarantine, moidIndex, contiguousActorIDs, actorOwners, teamMOIDCount, validObjects);
+		// A WorldStructure1 payload predates the owner map and carries no owners field.
+		template <class Archive> void Fields(Archive& archive, bool legacy = false) {
+			archive(cohorts, rosters, sortRoster, alarms, quarantine, moidIndex, contiguousActorIDs);
+			if (!legacy) archive(actorOwners);
+			archive(teamMOIDCount, validObjects);
 		}
 	};
 }
@@ -5224,13 +5227,15 @@ std::string MovableMan::SaveWorldStructure() const {
 	for (const AlarmEvent* event: m_AlarmEvents) state.alarms[0].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	for (const AlarmEvent* event: m_AddedAlarmEvents) state.alarms[1].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	state.quarantine = m_LockstepJoinQuarantine;
-	CheckpointWriter writer("WorldStructure1"); state.Fields(writer); return writer.Text();
+	CheckpointWriter writer("WorldStructure2"); state.Fields(writer); return writer.Text();
 }
 
 bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 	try {
 		WorldStructure state;
-		CheckpointReader reader(text, "WorldStructure1"); state.Fields(reader); reader.Finish();
+		// A game saved before the owner map keeps loading; its owners are re-derived from the policy.
+		const bool legacy = text.starts_with("15 WorldStructure1 ");
+		CheckpointReader reader(text, legacy ? "WorldStructure1" : "WorldStructure2"); state.Fields(reader, legacy); reader.Finish();
 		std::set<long> incoming;
 		for (const auto& cohort: state.cohorts) for (long uid: cohort) {
 			if (uid <= 0 || !incoming.insert(uid).second) throw std::runtime_error("invalid or duplicate world member");
@@ -5348,9 +5353,9 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	orphaned.contiguousActorIDs.emplace(0, 5);
 	WorldStructure stale = clean;
 	stale.contiguousActorIDs.emplace(4242, 5);
-	CheckpointWriter cleanWriter("WorldStructure1"); clean.Fields(cleanWriter);
-	CheckpointWriter orphanedWriter("WorldStructure1"); orphaned.Fields(orphanedWriter);
-	CheckpointWriter staleWriter("WorldStructure1"); stale.Fields(staleWriter);
+	CheckpointWriter cleanWriter("WorldStructure2"); clean.Fields(cleanWriter);
+	CheckpointWriter orphanedWriter("WorldStructure2"); orphaned.Fields(orphanedWriter);
+	CheckpointWriter staleWriter("WorldStructure2"); stale.Fields(staleWriter);
 	const bool accepted = LoadWorldStructure(text, true) && LoadWorldStructure(cleanWriter.Text(), true);
 	const bool refused = !LoadWorldStructure(orphanedWriter.Text(), true) && !LoadWorldStructure(staleWriter.Text(), true);
 
