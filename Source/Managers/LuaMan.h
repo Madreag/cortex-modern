@@ -42,6 +42,9 @@ namespace RTE {
 
 		/// Destroys and resets (through Clear()) the LuaStateWrapper object.
 		void Destroy();
+
+		/// Prints this state's native preview barrier stats row once, when they were collected.
+		void ReportPreviewBarrierStats();
 #pragma endregion
 
 #pragma region Getters and Setters
@@ -368,6 +371,7 @@ namespace RTE {
 		lua_State* m_State;
 		bool m_ScriptGraphHelperLoaded = false; //!< Whether the script graph codec has been installed in this state.
 		bool m_PreviewGlobalFenceArmed = false; //!< Whether the VM's native table barrier is armed for this state.
+		bool m_PreviewStatsReported = false; //!< Whether this state's barrier stats row has been printed.
 		std::unordered_set<std::string> m_PreviewScriptCacheKeys; //!< The script files this state had cached when the preview's record was taken.
 		Entity* m_TempEntity; //!< Temporary holder for an Entity object that we want to pass into the Lua state without fuss. Lets you export objects to lua easily.
 		std::vector<Entity*> m_TempEntityVector; //!< Temporary holder for a vector of Entities that we want to pass into the Lua state without a fuss. Usually used to pass arguments to special Lua functions.
