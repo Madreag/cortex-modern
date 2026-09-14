@@ -640,17 +640,6 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 		Reader reader(path, false, nullptr, true, true);
 		settings.Create(reader);
 	};
-	writeRead([&](Writer& writer) { settings.WriteNetworkPreferences(writer); });
-	if (const char* broken = std::getenv("CCCP_SETTINGS_PREFERENCES_SELFTEST_BROKEN")) {
-		settings.Clear();
-		Reader reader(broken, false, nullptr, true, true);
-		if (!reader.ReaderOK()) {
-			std::cout << Tag << " FAIL reader" << std::endl;
-			return 1;
-		}
-		settings.Create(reader);
-	}
-
 	int failures = 0;
 	const auto check = [&](const char* label, bool ok) {
 		if (!ok) {
@@ -658,6 +647,25 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 			++failures;
 		}
 	};
+	{
+		Writer writer(path);
+		writer.ObjectStart(settings.GetClassName());
+		settings.WriteNetworkPreferences(writer);
+		writer.ObjectEnd();
+		writer.EndWrite();
+		settings.Clear();
+		if (settings.GetNetworkDisplayName() != "Player") {
+			std::cout << Tag << " FAIL roundtrip-cleared" << std::endl;
+			return 1;
+		}
+		const char* broken = std::getenv("CCCP_SETTINGS_PREFERENCES_SELFTEST_BROKEN");
+		Reader reader(broken ? broken : path, false, nullptr, true, true);
+		if (!reader.ReaderOK()) {
+			std::cout << Tag << " FAIL reader" << std::endl;
+			return 1;
+		}
+		settings.Create(reader);
+	}
 	check("roundtrip", settings.GetNetworkDisplayName() == "AlphaPilot" && settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Always && !settings.GetNetworkToastsEnabled() && !settings.GetNetworkChatVisible() && settings.GetNetworkChatDefaultScope() == NetworkChatDefaultScope::Team && !settings.GetNetworkChatNotify() && settings.GetNetworkChatSound() && settings.GetNetworkChatTextSize() == NetworkChatTextSize::Large && !settings.GetNetworkAutoReconnect() && !settings.GetNetworkOfferStoredRejoin() && settings.GetNetworkDiagnosticsDirectory() == "D:/tmp/telemetry-alt" && !settings.GetNetworkRecordReplays() && settings.GetNetworkHostDelayPolicy() == NetworkHostDelayPolicy::Fixed && !settings.GetNetworkHostAutoRepair() && settings.GetNetworkHostIdleWaitMinutes() == 0 && settings.GetNetworkHostVisibility() == NetworkHostVisibility::Unlisted);
 	if (failures != 0) {
 		return 1;
@@ -675,6 +683,7 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	check("idle-wait range", settings.GetNetworkHostIdleWaitMinutes() == 0);
 
 	const int warningsBefore = g_UnknownEnumWarnings;
+	// Unknown-enum and case-insensitive arms leave a non-default set so the read is what changes it.
 	settings.SetNetworkMatchStatusMode(NetworkMatchStatusMode::Always);
 	writeRead([&](Writer& writer) { writer.NewPropertyWithValue("NetworkMatchStatusMode", "Banana"); });
 	check("unknown-enum fallback", settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Auto);
