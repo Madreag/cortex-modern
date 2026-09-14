@@ -125,8 +125,7 @@ namespace RTE {
 	/// build without GameNetworkingSockets.
 	std::string NetIceHostIdentity(const std::string& sessionId);
 
-	/// The join_mode a host's directory row carries. GNS keeps the identity pinned to the first session
-	/// id it bound, so only a direct join reaches a row under any other id, or one still registering.
+	/// Reports ICE reachability only for the directory id bound to the listener.
 	std::string NetIceRowJoinMode(bool iceEnabled, bool hasDirectAddress, const std::string& boundSessionId, const std::string& rowSessionId);
 
 	/// Resolves a session id against a directory listing. Empty and a filled target when the row can
@@ -316,6 +315,12 @@ namespace RTE {
 		/// Match end or the host leaving takes the directory row down now rather than at Destroy.
 		/// Game-thread only, like the client it drives.
 		void RetractDirectoryListing();
+		/// Keeps only the registered row bound to this host's ICE identity. Game-thread only.
+		bool ShouldKeepIceDirectoryLease() const;
+		/// Hides the bound row while retaining its lease. Game-thread only.
+		void HideDirectoryListing();
+		/// Relists an acknowledged hidden lease or retracts a lost one. Game-thread only.
+		void SettleKeptDirectoryLease();
 		/// Host: waits for the register reply so the GNS identity can be pinned to the session id
 		/// before any listen socket of this process opens. Worker thread; reads the published snapshot.
 		bool WaitForDirectorySession(uint64_t budgetMs, std::string& sessionId, std::string& token) const;
@@ -346,6 +351,8 @@ namespace RTE {
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestGnsStopCancelContracts(std::string* error);
 		friend bool TestEndedWorldLateAdmission(std::string* error);
+		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
+		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
@@ -494,6 +501,8 @@ namespace RTE {
 		/// stays listed while the match runs so a late joiner can still resolve it.
 		NetDirectoryClient m_Directory;
 		NetDirectoryRegisterRequest m_DirectoryRow; //!< The listing template; counts refresh per Update.
+		bool m_DirectoryHidden = false;
+		bool m_DirectoryRelistPending = false;
 		bool m_DirectoryRetracted = false;          //!< The match ended while the state was still Running.
 		uint16_t m_BeaconGamePort = 0;
 		uint8_t m_BeaconMaxPlayers = 2;

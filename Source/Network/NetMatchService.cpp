@@ -59,7 +59,7 @@ namespace RTE {
 		if (!iceEnabled) {
 			return "ip";
 		}
-		// Only the row GNS is bound to answers over ICE; a rematch's or a re-register's cannot.
+		// Only the bound directory id answers on this ICE listener.
 		if (!boundSessionId.empty() && boundSessionId != rowSessionId) {
 			return "ip";
 		}
@@ -364,6 +364,8 @@ static std::string ResyncSaveName() {
 				m_DirectoryRow.joinMode = NetIceRowJoinMode(iceEnabled, !m_DirectoryRow.listenAddrs.empty(), std::string(), std::string());
 			}
 			m_DirectoryRetracted = false;
+			m_DirectoryHidden = false;
+			m_DirectoryRelistPending = false;
 		}
 		// The mapping request must land before the first directory register: the heartbeat never
 		// resends listen_addrs/join_mode, so the row goes out once with its final addresses.
@@ -451,7 +453,8 @@ static std::string ResyncSaveName() {
 			m_State = NetMatchServiceState::Starting;
 			m_StatusText += " - ready up for a rematch";
 			m_ErrorText.clear();
-			m_DirectoryRetracted = false; // the rematch lobby lists itself again
+			if (!m_IceEnabled || m_IceBoundSessionId.empty()) m_DirectoryRetracted = false;
+			m_DirectoryRelistPending = m_DirectoryHidden;
 		}
 		m_CancelRequested.store(false);
 		m_ReadyRequested.store(false);
@@ -475,7 +478,7 @@ static std::string ResyncSaveName() {
 			m_RejoinOutcome = "match_over";
 			RefuseEndedPeersLocked(text);
 		}
-		// The session pump must not destroy the coordinator; the main loop FinishMatch's the stop.
+		// The main loop owns coordinator teardown.
 		Complete(text);
 	}
 
@@ -993,6 +996,8 @@ static std::string ResyncSaveName() {
 			m_DirectorySessionId.clear();
 			m_DirectoryToken.clear();
 			m_DirectoryRegistered = false;
+			m_DirectoryHidden = false;
+			m_DirectoryRelistPending = false;
 			AccumulateLockstepTotalsLocked();
 			runner = std::move(m_Runner);
 			coordinator = std::move(m_Coordinator);
@@ -1090,6 +1095,8 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::RetractDirectoryListing() {
+		m_DirectoryHidden = false;
+		m_DirectoryRelistPending = false;
 		m_DirectoryRetracted = true;
 		m_Directory.Retract();
 		// Kick the delete now: callers that quit right after never Update() again, and Destroy's
@@ -1097,10 +1104,46 @@ static std::string ResyncSaveName() {
 		m_Directory.Update(SteadyNowMs());
 	}
 
+	bool NetMatchService::ShouldKeepIceDirectoryLease() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_IsHost && m_IceEnabled && !m_DirectoryRetracted && !m_IceBoundSessionId.empty() &&
+		       m_Directory.GetState() == NetDirectoryClient::State::Registered && m_Directory.GetSessionId() == m_IceBoundSessionId;
+	}
+
+	void NetMatchService::HideDirectoryListing() {
+		NetDirectoryRegisterRequest advertised;
+		bool running;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			advertised = m_DirectoryRow;
+			running = m_State == NetMatchServiceState::Running;
+		}
+		m_DirectoryHidden = true;
+		m_DirectoryRelistPending = false;
+		m_Directory.Advertise(advertised, running, false);
+		m_Directory.Update(SteadyNowMs());
+	}
+
+	void NetMatchService::SettleKeptDirectoryLease() {
+		if (!m_DirectoryHidden || m_Directory.GetState() == NetDirectoryClient::State::Deleting) {
+			return;
+		}
+		if (!ShouldKeepIceDirectoryLease()) {
+			RetractDirectoryListing();
+		} else if (m_DirectoryRelistPending && m_Directory.GetConfirmedListed() == false) {
+			m_DirectoryHidden = false;
+			m_DirectoryRelistPending = false;
+		}
+	}
+
 	void NetMatchService::Complete(const std::string& reason) {
 		// The recording gets its end marker at the match's end, not at process exit.
 		ScenarioRunner::CloseLockstepReplayRecord();
-		RetractDirectoryListing();
+		if (ShouldKeepIceDirectoryLease()) {
+			HideDirectoryListing();
+		} else {
+			RetractDirectoryListing();
+		}
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		DrainPendingSessionEventsLocked(false);
 		if (m_Coordinator) {
@@ -1121,7 +1164,11 @@ static std::string ResyncSaveName() {
 		}
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
-		RetractDirectoryListing();
+		if (ShouldKeepIceDirectoryLease()) {
+			HideDirectoryListing();
+		} else {
+			RetractDirectoryListing();
+		}
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_Coordinator) {
 			m_Coordinator->Complete(result.empty() ? "match over" : result);
@@ -1181,10 +1228,12 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			PumpCompletedSessionLocked();
 		}
+		SettleKeptDirectoryLease();
 		// A hosting lobby advertises itself on the LAN until the match launches.
 		bool beaconWanted = false;
 		bool directoryWanted = false;
 		bool directoryRunning = false;
+		bool directoryListed = true;
 		int64_t directorySeatsFree = 0;
 		NetLobbySnapshot snapshot;
 		{
@@ -1195,8 +1244,9 @@ static std::string ResyncSaveName() {
 			}
 			directoryWanted = m_IsHost && !m_DirectoryRetracted &&
 			                  (m_State == NetMatchServiceState::Starting || m_State == NetMatchServiceState::ReadyToLaunch ||
-			                   m_State == NetMatchServiceState::Running);
+			                   m_State == NetMatchServiceState::Running || (m_DirectoryHidden && m_State == NetMatchServiceState::Completed));
 			directoryRunning = m_State == NetMatchServiceState::Running;
+			directoryListed = !m_DirectoryHidden;
 			if (directoryWanted) {
 				if (directoryRunning && !m_SeatStatuses.empty()) {
 					// The admission table says which seats a late joiner could still take: the host's
@@ -1282,13 +1332,17 @@ static std::string ResyncSaveName() {
 		m_Directory.Configure(directoryUrl, directoryKey, directoryCertPin);
 		// While the mapper is still working the register must wait: the row is sent exactly once.
 		if (directoryWanted && (!s_PortMapRequested || s_PortMap.Done())) {
-			m_DirectoryRow.peerCount = m_BeaconMaxPlayers;
-			m_DirectoryRow.seatsFree = directorySeatsFree;
+			NetDirectoryRegisterRequest advertised;
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
+				m_DirectoryRow.peerCount = m_BeaconMaxPlayers;
+				m_DirectoryRow.seatsFree = directorySeatsFree;
 				m_DirectoryRow.joinMode = NetIceRowJoinMode(m_IceEnabled, !m_DirectoryRow.listenAddrs.empty(), m_IceBoundSessionId, m_Directory.GetSessionId());
+				advertised = m_DirectoryRow;
+				// A register receives a new id; only the existing bound row can advertise ICE.
+				advertised.joinMode = NetIceRowJoinMode(m_IceEnabled, !advertised.listenAddrs.empty(), m_IceBoundSessionId, std::string());
 			}
-			m_Directory.Advertise(m_DirectoryRow, directoryRunning);
+			m_Directory.Advertise(advertised, directoryRunning, directoryListed);
 		} else if (!directoryWanted) {
 			m_Directory.Retract();
 			if (s_PortMapRequested) {
