@@ -40,6 +40,10 @@ def menu_script(date):
                "assert_screen MultiplayerScreen\nassert_substate ReplayBrowser\n"
                "assert_label LabelReplayStatus Playback finished:\n"
                "assert_label LabelReplaySelected 02-second.ccreplay\nscreenshot replays_return\n"
+               "activate ButtonReplayPlay\nwait_ms 5000\n"
+               "assert_screen MultiplayerScreen\nassert_substate ReplayBrowser\n"
+               "assert_label LabelReplayStatus Playback finished:\n"
+               "assert_label LabelReplaySelected 02-second.ccreplay\nscreenshot replays_repeat_return\n"
                "activate ButtonReplayBack\nwait 10\nassert_substate Landing\n"
                "activate ButtonMultiplayerReplays\nwait 10\nassert_substate ReplayBrowser\n"
                "assert_label LabelReplaySelected 02-second.ccreplay\n"
@@ -98,12 +102,12 @@ def run_size(repo, root, size, fixture, expected):
         checks["second_played"] = any("[net-replay] playing back " in line and NAMES[1] in line for line in log.splitlines())
         playback = PLAYBACK.findall(log)
         details["playback"] = playback
-        checks["playback_completed"] = len(playback) == 1 and all(int(ticks) >= 60 and int(frames) >= 60 for ticks, frames in playback)
+        checks["playback_completed"] = len(playback) == 2 and all(int(ticks) >= 60 and int(frames) >= 60 for ticks, frames in playback)
         checks["returned_to_browser"] = "assert_substate expected=ReplayBrowser actual=ReplayBrowser PASS" in log and "Playback finished:" in log
         checks["deleted_only_second"] = not (directory / NAMES[1]).exists() and sha256(directory / NAMES[0]) == fixture_hash
         checks["source_unchanged"] = sha256(fixture) == fixture_hash
         checks["no_network_failure"] = "[net-match] controller sync failed" not in log
-        for stem in ("replays_list", "replays_selected", "replays_cancel_confirm", "replays_return", "replays_delete_confirm", "replays_deleted", "replays_back"):
+        for stem in ("replays_list", "replays_selected", "replays_cancel_confirm", "replays_return", "replays_repeat_return", "replays_delete_confirm", "replays_deleted", "replays_back"):
             capture = capture_geometry(latest_capture(run, stem), size)
             details[stem] = capture
             checks[stem] = capture["dimensions"] == list(size) and capture["inside_viewport"]
