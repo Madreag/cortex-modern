@@ -25,6 +25,8 @@ namespace RTE {
 		std::string selectedModule;
 		bool scenarioTestModuleLoaded = false;
 		uint16_t lockstepCodecVersion = 0;
+		uint16_t matchConfigVersion = 0;
+		uint16_t lobbyProtocolVersion = 0;
 		std::string enabledGlobalScripts; //!< Sim-mutating global scripts run off per-machine Settings; a mismatch must reject at join.
 
 		bool operator==(const NetIdentityDeterministicConfig&) const = default;
