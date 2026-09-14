@@ -105,6 +105,8 @@ namespace RTE {
 		/// Sets the lockstep input-delay buffer (frames) a hosted match will use.
 		void SetNetworkInputDelayFrames(int newInputDelayFrames) { m_NetworkInputDelayFrames = newInputDelayFrames; }
 
+		static constexpr uint32_t c_DefaultAutosaveSeconds = 60; //!< Checkpoint cadence a match keeps when nothing overrides it.
+
 		/// Gets the saved autosave cadence in simulation seconds; zero disables autosaves.
 		uint32_t GetAutosaveSeconds() const { return m_AutosaveSeconds; }
 

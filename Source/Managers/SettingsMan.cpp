@@ -55,7 +55,7 @@ void SettingsMan::Clear() {
 	m_PathFinderGridNodeSize = SCENEGRIDSIZE;
 	m_AIUpdateInterval = 2;
 	m_NetworkInputDelayFrames = 0;
-	SetAutosaveSeconds(0);
+	SetAutosaveSeconds(c_DefaultAutosaveSeconds);
 	m_SessionDirectoryUrl.clear();
 	m_SessionDirectoryInstallKey.clear();
 	m_SessionDirectoryCertSha256.clear();
