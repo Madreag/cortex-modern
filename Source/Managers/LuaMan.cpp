@@ -6081,7 +6081,10 @@ _PrimitiveQueueCapture = nil
 		std::vector<std::string> deepGraphsBefore;
 		std::vector<std::string> deepGraphsAfter;
 		std::vector<std::string> deepGraphProblems;
+		// A full graph capture is the other way a boundary could tell what a preview changed, so its cost is on the record.
+		const auto graphStart = std::chrono::steady_clock::now();
 		const bool deepGraphsObserved = g_MovableMan.SerializeScriptGraphs(deepGraphsBefore, deepGraphProblems);
+		const double graphCaptureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - graphStart).count();
 		LuaMan::CapturePreviewSelfCopies({}, false);
 		{
 			LuaMan::PreviewHookScope hookScope(true);
@@ -6090,7 +6093,9 @@ _PrimitiveQueueCapture = nil
 		}
 		LuaMan::EndPreviewScripts();
 		// Read the graphs before the row's own probe writes a global, so the only difference left is the leak.
+		const auto graphSecondStart = std::chrono::steady_clock::now();
 		const bool deepGraphsRead = deepGraphsObserved && g_MovableMan.SerializeScriptGraphs(deepGraphsAfter, deepGraphProblems);
+		const double graphCompareMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - graphSecondStart).count();
 		lua_getglobal(m_State, "_PreviewFenceNew");
 		const bool addedGlobalGone = lua_isnil(m_State, -1);
 		lua_pop(m_State, 1);
@@ -6160,6 +6165,7 @@ _PrimitiveQueueCapture = nil
 		          << " bytes " << deepGraphBytesBefore << "->" << deepGraphBytesAfter
 		          << " delta=" << (static_cast<long long>(deepGraphBytesAfter) - static_cast<long long>(deepGraphBytesBefore))
 		          << " problems=" << deepGraphProblems.size()
+		          << " capture_ms=" << graphCaptureMs << " second_capture_ms=" << graphCompareMs
 		          << (deepGraphDelta.empty() ? std::string(" first_diff=none") : deepGraphDelta) << std::endl;
 		RunScriptString("_PreviewFenceExisting = nil; _PreviewFenceNew = nil; _PreviewFenceModuleGone = nil; _PreviewFenceDeep = nil; package.loaded[\"_preview_fence_probe\"] = nil");
 	}
