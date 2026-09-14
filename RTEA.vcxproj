@@ -201,9 +201,9 @@
       <IncludeInUnityFile>false</IncludeInUnityFile>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip-32.lib;libpng16-static-32.lib;fmodL_vc.lib;allegro-debug-32.lib;liblz4_debug_static.lib;luajit-debug-32.lib;sdl2main-debug-32.lib;sdl2-debug-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip-32.lib;fmodL_vc.lib;allegro-debug-32.lib;liblz4_debug_static.lib;luajit-debug-32.lib;sdl2main-debug-32.lib;sdl2-debug-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\libpng-1.6.40\_Bin;external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <SubSystem>Windows</SubSystem>
@@ -256,9 +256,9 @@
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip.lib;libpng16-static.lib;fmod_vc.lib;liblz4_debug_static.lib;luajit-debug.lib;SDL3_image-static-debug.lib;SDL3-static-debug.lib;opengl32.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip.lib;fmod_vc.lib;liblz4_debug_static.lib;luajit-debug.lib;SDL3_image-static-debug.lib;SDL3-static-debug.lib;opengl32.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\libpng-1.6.40\_Bin;external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <SubSystem>Windows</SubSystem>
@@ -308,9 +308,9 @@
       <AddCodeAfterSourceInclude>#undef GetClassName</AddCodeAfterSourceInclude>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip-32.lib;libpng16-static-32.lib;fmodL_vc.lib;allegro-debug-32.lib;liblz4_debug_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip-32.lib;fmodL_vc.lib;allegro-debug-32.lib;liblz4_debug_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\libpng-1.6.40\_Bin;external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <SubSystem>Windows</SubSystem>
@@ -363,9 +363,9 @@
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip.lib;libpng16-static.lib;fmod_vc.lib;liblz4_debug_static.lib;luajit-debug-release.lib;SDL3-static-debug.lib;SDL3_image-static-debug.lib;opengl32.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip.lib;fmod_vc.lib;liblz4_debug_static.lib;luajit-debug-release.lib;SDL3-static-debug.lib;SDL3_image-static-debug.lib;opengl32.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\libpng-1.6.40\_Bin;external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <SubSystem>Windows</SubSystem>
@@ -421,9 +421,9 @@
       <AddCodeAfterSourceInclude>#undef GetClassName</AddCodeAfterSourceInclude>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip-32.lib;libpng16-static-32.lib;fmodL_vc.lib;allegro-debug-release-32.lib;liblz4_release_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip-32.lib;fmodL_vc.lib;allegro-debug-release-32.lib;liblz4_release_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\libpng-1.6.40\_Bin;external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -483,9 +483,9 @@
       <AddCodeAfterSourceInclude>#undef GetClassName</AddCodeAfterSourceInclude>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip-32.lib;libpng16-static-32.lib;fmodL_vc.lib;allegro-debug-release-32.lib;liblz4_release_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip-32.lib;fmodL_vc.lib;allegro-debug-release-32.lib;liblz4_release_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\libpng-1.6.40\_Bin;external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -547,9 +547,9 @@
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip.lib;libpng16-static.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-debug-release.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-debug-release.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\libpng-1.6.40\_Bin;external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -610,9 +610,9 @@
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip.lib;libpng16-static.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-debug-release.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-debug-release.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\libpng-1.6.40\_Bin;external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -669,9 +669,9 @@
       <AddCodeAfterSourceInclude>#undef GetClassName</AddCodeAfterSourceInclude>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip-32.lib;libpng16-static-32.lib;fmodL_vc.lib;allegro-release-32.lib;liblz4_release_static.lib;luajit-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip-32.lib;fmodL_vc.lib;allegro-release-32.lib;liblz4_release_static.lib;luajit-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\libpng-1.6.40\_Bin;external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -731,9 +731,9 @@
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip.lib;libpng16-static.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-release.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-release.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\libpng-1.6.40\_Bin;external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -793,9 +793,9 @@
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip.lib;libpng16-static.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-asan.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;libminizip.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-asan.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\libpng-1.6.40\_Bin;external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\allegro 4.4.3.1-custom\_Bin;external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\sources\minizip-ng-4.0.0\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -1759,6 +1759,13 @@
       <Project>{F5610C06-793E-394B-8335-33FCBFDE1D3C}</Project>
       <SetConfiguration Condition="'$(Configuration)'=='Debug Full' Or '$(Configuration)'=='Debug Minimal'">Configuration=Debug</SetConfiguration>
       <SetConfiguration Condition="'$(Configuration)'=='Debug Release' Or '$(Configuration)'=='Profiling' Or '$(Configuration)'=='Final' Or '$(Configuration)'=='Final ASan'">Configuration=Release</SetConfiguration>
+      <SetPlatform>Platform=$(Platform)</SetPlatform>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+    </ProjectReference>
+    <ProjectReference Include="external\sources\libpng-1.6.40\libpng.vcxproj">
+      <Project>{D6973076-9317-4EF2-A0B8-B7A18AC0713E}</Project>
+      <SetConfiguration Condition="'$(Configuration)'=='Debug Full' Or '$(Configuration)'=='Debug Minimal'">Configuration=Debug Library</SetConfiguration>
+      <SetConfiguration Condition="'$(Configuration)'=='Debug Release' Or '$(Configuration)'=='Profiling' Or '$(Configuration)'=='Final' Or '$(Configuration)'=='Final ASan'">Configuration=Release Library</SetConfiguration>
       <SetPlatform>Platform=$(Platform)</SetPlatform>
       <LinkLibraryDependencies>true</LinkLibraryDependencies>
     </ProjectReference>
