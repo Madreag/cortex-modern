@@ -212,10 +212,10 @@ def main():
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--exe-sha256", required=True)
-    parser.add_argument("--port", type=int, default=48221)
+    parser.add_argument("--port", type=int, default=48211)
     args = parser.parse_args()
-    if not 48221 <= args.port <= 48228:
-        parser.error("two ports must fit 48221-48229")
+    if not 48211 <= args.port <= 48218:
+        parser.error("two ports must fit 48211-48219")
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("family lock exists; no driver may run")
     os.environ["CCCP_HEADLESS"] = "1"

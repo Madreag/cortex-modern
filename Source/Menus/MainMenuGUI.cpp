@@ -16,6 +16,7 @@
 #include "ScenarioRunner.h"
 
 #include "Activity.h"
+#include "AllegroTools.h"
 #include "Entity.h"
 #include "GameVersion.h"
 
@@ -788,8 +789,14 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		if (selected >= 0 && static_cast<size_t>(selected) < m_ReplayRows.size()) {
 			m_ReplayDeletePath = m_ReplayRows[selected].path;
 			m_ReplayDeleteLabel->SetText("Delete " + std::filesystem::path(m_ReplayDeletePath).filename().string() + "?\nThis removes the replay file.");
-			m_ReplayDeleteDialog->CenterInParent(true, true);
-			OpenMultiplayerDialog(m_ReplayDeleteDialog);
+			const int width = m_ReplayBrowserPanel->GetWidth();
+			m_ReplayDeleteLabel->Resize(width - 24, 88);
+			const int height = std::max(104, m_ReplayDeleteLabel->GetTextHeight() + 64);
+			m_ReplayDeleteDialog->Resize(width, height);
+			m_ReplayDeleteLabel->Resize(width - 24, height - 64);
+			m_MainMenuButtons[MenuButton::ReplayDeleteCancelButton]->SetPositionRel(width / 2 - 132, height - 34);
+			m_MainMenuButtons[MenuButton::ReplayDeleteConfirmButton]->SetPositionRel(width / 2 + 12, height - 34);
+			OpenMultiplayerDialog(m_ReplayDeleteDialog, m_ReplayBrowserPanel);
 			m_MainMenuButtons[MenuButton::ReplayDeleteCancelButton]->SetFocus();
 		}
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::ReplayDeleteConfirmButton]) {
@@ -1485,7 +1492,9 @@ void MainMenuGUI::RefreshModerationControls(const NetLobbySnapshot& snapshot) {
 	}
 }
 
-void MainMenuGUI::OpenMultiplayerDialog(GUICollectionBox* dialog) {
+void MainMenuGUI::OpenMultiplayerDialog(GUICollectionBox* dialog, const GUICollectionBox* owner) {
+	dialog->SetPositionAbs(owner->GetXPos() + (owner->GetWidth() - dialog->GetWidth()) / 2,
+	                       owner->GetYPos() + (owner->GetHeight() - dialog->GetHeight()) / 2);
 	m_ActiveDialogBox = dialog;
 	m_MainMenuScreens[MenuScreen::MultiplayerScreen]->SetEnabled(false);
 	m_MainMenuButtons[MenuButton::BackToMainButton]->SetEnabled(false);
@@ -1507,17 +1516,16 @@ void MainMenuGUI::CloseMultiplayerDialog() {
 void MainMenuGUI::ShowLastMatchDetails() {
 	const auto summary = g_NetMatchService.GetLastMatchSummary();
 	if (!summary) return;
-	const int width = std::min(600, m_RootBoxMaxWidth - 24);
+	const int width = m_MultiplayerLobbyPanel->GetWidth();
 	m_LastMatchDetailsLabel->SetText(summary->DetailsText());
 	m_LastMatchDetailsLabel->Resize(width - 24, 240);
 	const int height = std::min(g_WindowMan.GetResY() - 24, m_LastMatchDetailsLabel->GetTextHeight() + 72);
 	m_LastMatchDialog->Resize(width, height);
-	m_LastMatchDialog->CenterInParent(true, true);
 	m_LastMatchDetailsLabel->Resize(width - 24, height - 72);
 	m_LastMatchDetailsLabel->SetVerticalOverflowScroll(true);
 	m_LastMatchDetailsLabel->ActivateDeactivateOverflowScroll(true);
 	m_MainMenuButtons[MenuButton::LastMatchCloseButton]->SetPositionRel((width - 80) / 2, height - 32);
-	OpenMultiplayerDialog(m_LastMatchDialog);
+	OpenMultiplayerDialog(m_LastMatchDialog, m_MultiplayerLobbyPanel);
 	m_MainMenuButtons[MenuButton::LastMatchCloseButton]->SetFocus();
 }
 
@@ -2100,8 +2108,11 @@ void MainMenuGUI::Draw() {
 			break;
 	}
 	if (m_ActiveDialogBox) {
-		set_trans_blender(128, 128, 128, 128);
+		// The menu compositor needs the overlay's alpha as well as its black colour.
+		SetTrueAlphaBlender();
+		clear_to_color(g_FrameMan.GetOverlayBitmap32(), makeacol32(0, 0, 0, 128));
 		draw_trans_sprite(g_FrameMan.GetBackBuffer32(), g_FrameMan.GetOverlayBitmap32(), 0, 0);
+		clear_to_color(g_FrameMan.GetOverlayBitmap32(), 0);
 		// Whatever this box may be at this point it's already been drawn by the owning GUIControlManager, but we need to draw it again on top of the overlay so it's not affected by it.
 		m_ActiveDialogBox->Draw(m_ActiveGUIControlManager->GetScreen());
 	}

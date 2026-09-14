@@ -399,7 +399,7 @@ namespace RTE {
 		/// Opens the finished round's summary using the menu's modal overlay.
 		void ShowLastMatchDetails();
 		/// Restricts input to a multiplayer dialog until it closes.
-		void OpenMultiplayerDialog(GUICollectionBox* dialog);
+		void OpenMultiplayerDialog(GUICollectionBox* dialog, const GUICollectionBox* owner);
 		void CloseMultiplayerDialog();
 		/// Enumerates replay headers and preserves the selected filename across refreshes.
 		void RefreshReplayList();
