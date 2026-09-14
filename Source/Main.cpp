@@ -263,6 +263,7 @@ static std::string s_netJoinSessionId; //!< -net-join-session: the directory ses
 static constexpr uint32_t c_CappedStopDrainMs = 8000;
 static constexpr uint32_t c_CappedStopLingerMs = 1500;
 static uint64_t s_netLockstepTicks = 0;
+static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
 static uint16_t s_netLockstepInputDelay = 0;
 static uint8_t s_netMatchPeers = 2;
 static std::string s_netMatchMode = "pvp";
@@ -843,6 +844,27 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-ticks") {
 			s_netLockstepTicks = static_cast<uint64_t>(std::strtoull(argValue[++i], nullptr, 10));
+			continue;
+		}
+
+		if (currentArg == "-net-match-screenshot-ticks") {
+			const std::string list = lastArg ? "" : argValue[++i];
+			std::istringstream entries(list);
+			std::string entry;
+			bool valid = !list.empty() && list.back() != ',';
+			while (std::getline(entries, entry, ',')) {
+				uint64_t tick = 0;
+				std::istringstream number(entry);
+				if (entry.empty() || !std::all_of(entry.begin(), entry.end(), [](char c) { return c >= '0' && c <= '9'; }) || !(number >> tick) || !number.eof() || tick == 0) {
+					valid = false;
+					break;
+				}
+				s_netMatchScreenshotTicks.insert(tick);
+			}
+			if (!valid || s_netMatchScreenshotTicks.size() > 32) {
+				std::cerr << "[net-match-screenshot] expected 1-32 positive, comma-separated applied ticks" << std::endl;
+				return false;
+			}
 			continue;
 		}
 
@@ -1949,6 +1971,12 @@ static std::string RollbackProbeSaveName() {
 	return "rbprobe_" + std::to_string(System::GetProcessID());
 }
 
+/// Whether this completed update batch has a harness frame to present.
+static bool NetMatchScreenshotDue() {
+	return !s_netMatchScreenshotTicks.empty() && ScenarioRunner::IsLockstepControllerSyncActive() &&
+	       s_netMatchScreenshotTicks.contains(ScenarioRunner::GetLockstepAppliedFrame());
+}
+
 static void DrawFrameWithPreviews() {
 	RandomGenerator* prevSimRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
@@ -1965,6 +1993,13 @@ static void DrawFrameWithPreviews() {
 	ScenarioRunner::DrawNetUiToasts();
 	g_WindowMan.DrawPostProcessBuffer();
 	g_WindowMan.UploadFrame();
+	if (NetMatchScreenshotDue()) {
+		const uint64_t tick = ScenarioRunner::GetLockstepAppliedFrame();
+		const std::string name = "net_match_tick_" + std::to_string(tick) + "_round_" + std::to_string(ScenarioRunner::GetLockstepRoundId());
+		const int result = g_FrameMan.SaveScreenToPNG(name.c_str());
+		std::cout << "[net-match-screenshot] applied_tick=" << tick << " name=" << name << " queued=" << (result == 0) << std::endl;
+		s_netMatchScreenshotTicks.erase(tick);
+	}
 	LocalPrediction::EndRender();
 	LocalPredictionHudSelfTest::SampleAfterRender();
 	g_SceneMan.SetRenderDrawContext(false);
@@ -4033,7 +4068,8 @@ void RunGameLoop() {
 				g_PerformanceMan.ResetSimUpdateTimer();
 				updateStartTime = g_TimerMan.GetAbsoluteTime();
 			}
-			if (ScenarioRunner::GetArgs().freeRunSim) {
+			// A capture ends only the update batch; the next simulation tick keeps its time debt.
+			if (ScenarioRunner::GetArgs().freeRunSim || NetMatchScreenshotDue()) {
 				break;
 			}
 		}
@@ -4067,7 +4103,7 @@ void RunGameLoop() {
 			g_SceneMan.SetRenderDrawContext(false);
 			t_simRNGOverride = prevSimRNG;
 		}
-		if (!freeRunLockstep) {
+		if (!freeRunLockstep || NetMatchScreenshotDue()) {
 			DrawFrameWithPreviews();
 		}
 
