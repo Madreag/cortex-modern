@@ -1527,6 +1527,14 @@ static int nommstr(jit_State *J, TRef key)
 }
 
 /* Record indexed load/store. */
+void lj_record_preview(jit_State *J, TRef tab, GCtab *t)
+{
+  TRef pending;
+  if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(J->L, t);
+  pending = emitir(IRT(IR_FLOAD, IRT_INT), tab, IRFL_TAB_PREVIEW);
+  emitir(IRTGI(IR_GE), pending, lj_ir_kint(J, 0));
+}
+
 TRef lj_record_idx(jit_State *J, RecordIndex *ix)
 {
   TRef xref;
@@ -1588,6 +1596,7 @@ TRef lj_record_idx(jit_State *J, RecordIndex *ix)
   }
 
   /* Record the key lookup. */
+  if (ix->val) lj_record_preview(J, ix->tab, tabV(&ix->tabv));
   xref = rec_idx_key(J, ix, &rbref, &rbguard);
   xrefop = IR(tref_ref(xref))->o;
   loadop = xrefop == IR_AREF ? IR_ALOAD : IR_HLOAD;
