@@ -30,6 +30,7 @@ def main() -> int:
         run.close()
     stdout = (root / "net-match-selftest" / "stdout.log").read_text(errors="replace")
     result = score_selftest(stdout, record.get("exit_code"), record.get("timed_out"), "net-match-selftest")
+    result["suite_pass"] = result["pass"]
     result["checks"] = {row: f"[net-match-selftest] PASS {row}" in stdout.splitlines() for row in ROWS}
     result["exe_sha256"] = record.get("exe_sha256")
     result["detector_sha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()

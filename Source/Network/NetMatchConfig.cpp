@@ -56,6 +56,30 @@ namespace RTE {
 				{"display_name", player.displayName},
 			};
 		}
+
+		json RulesJson(const NetMatchConfig& config) {
+			json teams = json::array();
+			for (const auto& team : config.teamRules) {
+				teams.push_back({{"technology_intent", team.technologyIntent}, {"technology_module", team.technologyModule}, {"ai_skill", team.aiSkill}});
+			}
+			return {{"round_id", config.roundId}, {"config_revision", config.configRevision},
+			        {"activity_module", config.activityModule}, {"scene_module", config.sceneModule},
+			        {"difficulty", config.difficulty}, {"starting_gold", config.startingGold},
+			        {"fog_of_war", config.fogOfWar}, {"require_clear_path_to_orbit", config.requireClearPathToOrbit},
+			        {"deploy_units", config.deployUnits}, {"teams", std::move(teams)},
+			        {"autosave_enabled", config.autosaveEnabled}, {"autosave_interval_seconds", config.autosaveIntervalSeconds},
+			        {"idle_wait_minutes", config.idleWaitMinutes}, {"automatic_repair", config.automaticRepair},
+			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)}};
+		}
+
+		bool ValidateModule(const std::string& module, const char* field, std::string* error) {
+			if (!ValidateText(module, NetMatchConfigUtil::c_MaxPresetBytes, field, error)) return false;
+			if (module.size() <= 4 || !module.ends_with(".rte") || module.find_first_of("/\\:") != std::string::npos) {
+				if (error) *error = std::string(field) + " must be a module name ending in .rte";
+				return false;
+			}
+			return true;
+		}
 	}
 
 	NetMatchConfig NetMatchConfigUtil::MakeDefault(uint64_t sessionId) {
@@ -121,9 +145,28 @@ namespace RTE {
 	}
 
 	bool NetMatchConfigUtil::ValidateLocalAlpha(const NetMatchConfig& config, std::string* error) {
-		if (config.version != c_Version) {
+		if (config.version != 2 && config.version != c_Version) {
 			if (error) *error = "match config version is unsupported";
 			return false;
+		}
+		auto refuse = [&](const char* reason) { if (error) *error = reason; return false; };
+		if (config.version == 2 && RulesJson(config) != RulesJson(NetMatchConfig{})) return refuse("legacy config cannot carry extended rules");
+		if (config.roundId == 0 || config.configRevision == 0) return refuse("round_id and config_revision must be nonzero");
+		if (config.difficulty > 100) return refuse("difficulty is out of range");
+		if (config.startingGold > 30000 && config.startingGold != c_InfiniteGold) return refuse("starting_gold is out of range");
+		if (config.autosaveEnabled && config.autosaveIntervalSeconds == 0) return refuse("enabled autosave requires a nonzero interval");
+		if (config.idleWaitMinutes > 60) return refuse("idle_wait_minutes is out of range");
+		if (config.delayPolicy != NetMatchDelayPolicy::Auto && config.delayPolicy != NetMatchDelayPolicy::Fixed) return refuse("delay_policy is invalid");
+		if (config.mode != NetMatchMode::PvPSkirmish && config.mode != NetMatchMode::CoopPvE && config.mode != NetMatchMode::PvPvE) return refuse("match mode is invalid");
+		if (!ValidateModule(config.activityModule, "activity_module", error) || !ValidateModule(config.sceneModule, "scene_module", error)) return false;
+		for (const auto& team : config.teamRules) {
+			if (team.aiSkill < 1 || team.aiSkill > 100) return refuse("team AI skill is out of range");
+			if (team.technologyIntent == "-All-") {
+				if (!team.technologyModule.empty()) return refuse("all technology must resolve to unrestricted factions");
+			} else {
+				if (!ValidateModule(team.technologyModule, "team technology module", error)) return false;
+				if (team.technologyIntent != "-Random-" && team.technologyIntent != team.technologyModule) return refuse("team technology intent does not match its resolved module");
+			}
 		}
 		if (config.sessionId == 0) {
 			if (error) *error = "session_id must be nonzero";
@@ -159,7 +202,7 @@ namespace RTE {
 		    !ValidateText(config.modePreset, c_MaxPresetBytes, "mode_preset", error)) {
 			return false;
 		}
-		if (!config.sceneName.empty() && !ValidateText(config.sceneName, c_MaxPresetBytes, "scene_name", error)) {
+		if ((config.version >= 3 || !config.sceneName.empty()) && !ValidateText(config.sceneName, c_MaxPresetBytes, "scene_name", error)) {
 			return false;
 		}
 		if (config.players.empty() || config.players.size() > c_MaxPlayers) {
@@ -245,7 +288,8 @@ namespace RTE {
 		if (config.dedicated) {
 			fields.emplace_back("dedicated", "true");
 		}
-		return NetIdentity::HashCanonicalText("NetMatchConfig/v2", fields);
+		if (config.version >= 3) fields.emplace_back("rules", RulesJson(config).dump());
+		return NetIdentity::HashCanonicalText(config.version >= 3 ? "NetMatchConfig/v3" : "NetMatchConfig/v2", fields);
 	}
 
 	std::string NetMatchConfigUtil::BuildReportJson(const NetMatchConfig& config) {
@@ -270,6 +314,7 @@ namespace RTE {
 			{"match_config_hash", NetIdentity::HashHex(HashConfig(config))},
 			{"players", std::move(players)},
 		};
+		report["rules"] = RulesJson(config);
 		return report.dump();
 	}
 

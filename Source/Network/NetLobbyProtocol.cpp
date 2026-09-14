@@ -263,14 +263,39 @@ namespace RTE {
 			for (uint16_t delay : config.peerInputDelayFrames) {
 				AppendU16LE(out, delay);
 			}
+			if (config.version >= 3) {
+				AppendU64LE(out, config.roundId);
+				AppendU64LE(out, config.configRevision);
+				if (!AppendString(out, config.activityModule, NetMatchConfigUtil::c_MaxPresetBytes, "activity_module", error) ||
+				    !AppendString(out, config.sceneModule, NetMatchConfigUtil::c_MaxPresetBytes, "scene_module", error)) return false;
+				AppendU8(out, config.difficulty);
+				AppendU32LE(out, config.startingGold);
+				AppendBool(out, config.fogOfWar);
+				AppendBool(out, config.requireClearPathToOrbit);
+				AppendBool(out, config.deployUnits);
+				for (const auto& team : config.teamRules) {
+					if (!AppendString(out, team.technologyIntent, NetMatchConfigUtil::c_MaxPresetBytes, "technology_intent", error) ||
+					    !AppendString(out, team.technologyModule, NetMatchConfigUtil::c_MaxPresetBytes, "technology_module", error)) return false;
+					AppendU8(out, team.aiSkill);
+				}
+				AppendBool(out, config.autosaveEnabled);
+				AppendU32LE(out, config.autosaveIntervalSeconds);
+				AppendU8(out, config.idleWaitMinutes);
+				AppendBool(out, config.automaticRepair);
+				AppendU8(out, static_cast<uint8_t>(config.delayPolicy));
+			}
 			return true;
 		}
 
 		bool DecodeConfig(ByteReader& reader, NetMatchConfig& out, NetLobbyError* error) {
 			uint16_t reserved = 0;
 			uint8_t playerCount = 0;
-			if (!ReadOrTruncated(reader.ReadU16LE(out.version), reader, error, "config.version") ||
-			    !ReadOrTruncated(reader.ReadU64LE(out.sessionId), reader, error, "config.session_id") ||
+			if (!ReadOrTruncated(reader.ReadU16LE(out.version), reader, error, "config.version")) return false;
+			if (out.version == 0 || out.version > NetMatchConfigUtil::c_Version) {
+				SetError(error, NetLobbyErrorCode::UnsupportedVersion, reader.Offset() - 2, "unsupported match config version " + std::to_string(out.version));
+				return false;
+			}
+			if (!ReadOrTruncated(reader.ReadU64LE(out.sessionId), reader, error, "config.session_id") ||
 			    !ReadOrTruncated(reader.ReadU8(out.hostPeerId), reader, error, "config.host_peer_id") ||
 			    !ReadOrTruncated(reader.ReadU8(out.peerCount), reader, error, "config.peer_count") ||
 			    !ReadOrTruncated(reader.ReadU16LE(out.inputDelayFrames), reader, error, "config.input_delay_frames") ||
@@ -321,6 +346,22 @@ namespace RTE {
 					}
 					out.peerInputDelayFrames.push_back(delay);
 				}
+			}
+			if (out.version >= 3) {
+				if (!ReadOrTruncated(reader.ReadU64LE(out.roundId) && reader.ReadU64LE(out.configRevision), reader, error, "config revision binding") ||
+				    !reader.ReadString(out.activityModule, NetMatchConfigUtil::c_MaxPresetBytes, "activity_module", error) ||
+				    !reader.ReadString(out.sceneModule, NetMatchConfigUtil::c_MaxPresetBytes, "scene_module", error) ||
+				    !ReadOrTruncated(reader.ReadU8(out.difficulty) && reader.ReadU32LE(out.startingGold) && reader.ReadBool(out.fogOfWar) &&
+				                     reader.ReadBool(out.requireClearPathToOrbit) && reader.ReadBool(out.deployUnits), reader, error, "standard rules")) return false;
+				for (auto& team : out.teamRules) {
+					if (!reader.ReadString(team.technologyIntent, NetMatchConfigUtil::c_MaxPresetBytes, "technology_intent", error) ||
+					    !reader.ReadString(team.technologyModule, NetMatchConfigUtil::c_MaxPresetBytes, "technology_module", error) ||
+					    !ReadOrTruncated(reader.ReadU8(team.aiSkill), reader, error, "team AI skill")) return false;
+				}
+				uint8_t policy = 0;
+				if (!ReadOrTruncated(reader.ReadBool(out.autosaveEnabled) && reader.ReadU32LE(out.autosaveIntervalSeconds) &&
+				                     reader.ReadU8(out.idleWaitMinutes) && reader.ReadBool(out.automaticRepair) && reader.ReadU8(policy), reader, error, "host match options")) return false;
+				out.delayPolicy = static_cast<NetMatchDelayPolicy>(policy);
 			}
 			std::string validateError;
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(out, &validateError)) {
@@ -687,7 +728,8 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLobbyErrorCode::BadMagic, 0, "bad lobby protocol magic");
 		}
-		if (version != c_Version) {
+		// Recorded v3 config envelopes retain their own versioned payload reader.
+		if (version != c_Version && !(version == 3 && rawType == static_cast<uint16_t>(NetLobbyMessageType::MatchConfig))) {
 			return Fail(NetLobbyErrorCode::UnsupportedVersion, 4, "unsupported lobby protocol version");
 		}
 		if (headerBytes != c_HeaderBytes) {
