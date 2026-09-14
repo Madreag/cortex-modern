@@ -215,7 +215,7 @@ namespace RTE {
 		static void PushNetUiToast(const std::string& kind, const std::string& text);
 		/// Drops the on-screen queue (a resync relaunch clears it); the report log is kept.
 		static void ClearNetUiToasts();
-		/// Draws the live banner queue top-centre on the 32-bit backbuffer; a no-op without fonts.
+		/// Draws at most three unexpired toast rows at bottom centre, outside simulation state.
 		static void DrawNetUiToasts();
 		/// Every banner queued this run, in order — the report's ui.toasts source.
 		static const std::vector<NetUiToastRecord>& GetNetUiToastLog();
