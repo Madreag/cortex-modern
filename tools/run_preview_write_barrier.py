@@ -117,6 +117,7 @@ def gate():
 def fixture_hashes():
     files = [path for folder in LEGACY_FIXTURES for path in sorted((REPO / folder).rglob('*')) if path.is_file()]
     files += [FIXTURES / (name + suffix) for name in ('pickup_fire', 'ak47_fire') for suffix in ('.txt', '.ccreplay')]
+    files += [REPO / 'tools/fixtures' / name for name in ('preview_write_barrier.lua', 'preview_barrier_240.lua', 'preview_barrier_240.txt')]
     return {str(path).replace('\\', '/'): sha(path) for path in files}
 
 
@@ -415,6 +416,8 @@ def phase_b(authorized):
         raise RuntimeError('retained reference hash differs')
     if git('diff', BASE, '--', *LEGACY_FIXTURES).strip():
         raise RuntimeError('legacy fixtures differ from the wave base')
+    if git('diff', RED, '--', 'Source/Managers/PreviewScriptSelfTest.cpp', 'Source/Managers/PreviewScriptSelfTest.h').strip():
+        raise RuntimeError('RED and GREEN regression fixtures differ')
     branch = git('branch', '--show-current').decode().strip()
     tip = git('rev-parse', 'HEAD').decode().strip()
     write(ROOT / 'fixtures.json', fixture_hashes())
