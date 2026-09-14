@@ -24,6 +24,8 @@
 #include "SoundSimulation.h"
 #include "TimerMan.h"
 
+#include "lua.hpp"
+
 #include <iostream>
 #include <functional>
 #include <memory>
