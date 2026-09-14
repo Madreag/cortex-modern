@@ -37,7 +37,6 @@ namespace RTE {
 		/// @param ownerPeerId The peer that owns it from now on.
 		/// @param team The team the owner was resolved at.
 		static void SeedOwner(int64_t actorUniqueID, uint8_t ownerPeerId, uint8_t team);
-		static bool HasSeededOwner(int64_t actorUniqueID);
 		/// @return Whether the actor's seeded owner was taken at this team.
 		static bool HasSeededOwnerForTeam(int64_t actorUniqueID, uint8_t team);
 		/// @return The seeded owner, or 0 if the actor has no entry.
