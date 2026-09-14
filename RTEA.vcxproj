@@ -201,9 +201,9 @@
       <IncludeInUnityFile>false</IncludeInUnityFile>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_debug_static.lib;luajit-debug-32.lib;sdl2main-debug-32.lib;sdl2-debug-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_debug_static.lib;sdl2main-debug-32.lib;sdl2-debug-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <SubSystem>Windows</SubSystem>
@@ -256,9 +256,9 @@
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_debug_static.lib;luajit-debug.lib;SDL3_image-static-debug.lib;SDL3-static-debug.lib;opengl32.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_debug_static.lib;SDL3_image-static-debug.lib;SDL3-static-debug.lib;opengl32.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <SubSystem>Windows</SubSystem>
@@ -308,9 +308,9 @@
       <AddCodeAfterSourceInclude>#undef GetClassName</AddCodeAfterSourceInclude>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_debug_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_debug_static.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <SubSystem>Windows</SubSystem>
@@ -363,9 +363,9 @@
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_debug_static.lib;luajit-debug-release.lib;SDL3-static-debug.lib;SDL3_image-static-debug.lib;opengl32.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_debug_static.lib;SDL3-static-debug.lib;SDL3_image-static-debug.lib;opengl32.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <SubSystem>Windows</SubSystem>
@@ -421,9 +421,9 @@
       <AddCodeAfterSourceInclude>#undef GetClassName</AddCodeAfterSourceInclude>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_release_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_release_static.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -483,9 +483,9 @@
       <AddCodeAfterSourceInclude>#undef GetClassName</AddCodeAfterSourceInclude>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_release_static.lib;luajit-debug-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_release_static.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -547,9 +547,9 @@
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-debug-release.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_release_static.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -610,9 +610,9 @@
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-debug-release.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_release_static.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -669,9 +669,9 @@
       <AddCodeAfterSourceInclude>#undef GetClassName</AddCodeAfterSourceInclude>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_release_static.lib;luajit-release-32.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmodL_vc.lib;liblz4_release_static.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\lib\win\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -731,9 +731,9 @@
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-release.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_release_static.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -793,9 +793,9 @@
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_release_static.lib;luajit-asan.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_release_static.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
-      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\sources\LuaJIT-2.1\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>external\sources\SDL3-3.2.10\_Bin;external\sources\SDL3_image-3.2.4\_Bin;external\lib\win;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <LargeAddressAware>true</LargeAddressAware>
@@ -1778,7 +1778,12 @@
     </ProjectReference>
     <ProjectReference Include="external\sources\LuaJIT-2.1\libluajit.vcxproj">
       <Project>{9C341649-AA1F-35E8-81E3-228A6A09B2BB}</Project>
+      <SetConfiguration Condition="'$(Configuration)'=='Debug Full'">Configuration=Debug</SetConfiguration>
+      <SetConfiguration Condition="'$(Configuration)'=='Debug Minimal' Or '$(Configuration)'=='Debug Release' Or '$(Configuration)'=='Profiling'">Configuration=RelWithDebInfo</SetConfiguration>
+      <SetConfiguration Condition="'$(Configuration)'=='Final'">Configuration=Release</SetConfiguration>
       <SetConfiguration Condition="'$(Configuration)'=='Final ASan'">Configuration=ReleaseASan</SetConfiguration>
+      <SetPlatform>Platform=$(Platform)</SetPlatform>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
     </ProjectReference>
     <ProjectReference Include="external\sources\luabind-0.7.1\luabind.vcxproj">
       <Project>{AF484DB4-5CA2-3DB9-B84B-174EB84D32AA}</Project>
