@@ -493,8 +493,8 @@ namespace RTE::FloatTextSelfTest {
 			    {"reader_double", ProbeReaderDouble, "0xbfb999999999999a/0xbff0000000000000"},
 			    // 0x3f800000 is the answer when Reader::c_ReadFloatsAsFloats is false: flipping that switch flips this.
 			    {"reader_single_rounding", ProbeReaderSingleRounding, "0x3f800001"},
-			    // The stream stored the most positive or negative representable value on an out of range read.
-			    {"reader_out_of_range", ProbeReaderOutOfRange, "0x7fefffffffffffff/0xffefffffffffffff/0x7f7fffff"},
+			    // Measured on the pre-change build: the stream stored an infinity, and zero on underflow.
+			    {"reader_out_of_range", ProbeReaderOutOfRange, "0x7ff0000000000000/0xfff0000000000000/0x0"},
 			    {"writer_float", ProbeWriter, "1.5|-0.1"},
 			    {"arm_hand_target", ProbeArmHandTarget, nullptr, ArmHandTargetText},
 			    {"pie_menu_cursor_angle", ProbePieMenuState, nullptr, PieMenuStateText},
