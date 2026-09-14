@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import struct
 import threading
 import zipfile
@@ -24,6 +25,72 @@ IDENTITY_FIELDS = {"game_version", "network_protocol_version", "controller_frame
                    "pathfinder_grid_node_size", "recommended_moid_count", "particle_settling",
                    "mo_subtraction", "num_lua_states", "num_lua_states_override", "selected_module",
                    "scenario_test_module_loaded", "lockstep_codec_version", "enabled_global_scripts"}
+SECRET_KEYS = ("SessionDirectoryInstallKey", "NetworkTurnPass", "NetworkTurnUser", "SessionDirectoryCertSha256")
+SECRET_NEEDLES = ("Pass", "Password", "Secret", "Token", "PrivateKey", "Credential", "Ticket")
+
+
+def secret_settings_key(name: str) -> bool:
+    return name in SECRET_KEYS or any(needle in name for needle in SECRET_NEEDLES)
+
+
+def plant_bundle_secrets(run) -> dict:
+    path = run.cwd / "Userdata/Settings.ini"
+    settings = path.read_text(encoding="utf-8")
+    token = secrets.token_hex(8)
+    planted = {
+        "NetworkTurnPass": f"hunter2-{token}",
+        "SessionDirectoryInstallKey": f"fakeinstall{token}",
+        "NetworkTurnUser": f"turnuser{token}",
+        "SessionDirectoryCertSha256": secrets.token_hex(32),
+        "NetworkInputDelayFrames": "0",
+    }
+    for key, value in planted.items():
+        settings, count = re.subn(rf"(?m)^(\s*{key}\s*=\s*)[^\r\n]*", lambda match, value=value: match[1] + value, settings)
+        if count == 0:
+            settings += f"\n\t{key} = {value}\n"
+    path.write_text(settings, encoding="utf-8")
+    metadata_path = run.out / "runtime.json"
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["settings_sha256"] = sha(path)
+        metadata.setdefault("settings_overrides", {}).update(planted)
+        metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    return planted
+
+
+def check_no_secrets(contents: dict, original: bytes, planted: dict | None) -> None:
+    delay_line = None
+    for line in original.splitlines():
+        text = line.decode("utf-8", errors="replace")
+        match = re.match(r"^(\s*)([^;/#=\s][^=]*?)\s*=\s*(.*)$", text)
+        if not match:
+            continue
+        key, value = match.group(2).strip(), match.group(3)
+        if key == "NetworkInputDelayFrames":
+            delay_line = line
+        if secret_settings_key(key) and value:
+            token = value.encode("utf-8")
+            for name, data in contents.items():
+                if token in data:
+                    leaked = next((row.decode("utf-8", errors="replace") for row in data.splitlines() if token in row), name)
+                    raise AssertionError(f"no_secrets: {key} leaked in {name}: {leaked}")
+    assert delay_line is not None, "NetworkInputDelayFrames missing from private Settings.ini"
+    assert delay_line in contents["Settings.ini"].splitlines(), "harmless NetworkInputDelayFrames line was rewritten"
+    if not planted:
+        return
+    for key, value in planted.items():
+        if key == "NetworkInputDelayFrames":
+            continue
+        assert value.encode("utf-8") in original, f"{key} missing from private Settings.ini after the run"
+        token = value.encode("utf-8")
+        for name, data in contents.items():
+            if token in data:
+                leaked = next((row.decode("utf-8", errors="replace") for row in data.splitlines() if token in row), name)
+                raise AssertionError(f"no_secrets: {key} leaked in {name}: {leaked}")
+    listed = json.loads(contents["manifest.json"]).get("redacted")
+    assert isinstance(listed, list), "manifest.json missing redacted key names"
+    missing = [key for key in planted if key != "NetworkInputDelayFrames" and key not in listed]
+    assert not missing, f"manifest.json redacted missing {missing}: {listed}"
 
 
 def sha(path: Path) -> str:
@@ -36,7 +103,7 @@ def read_log(root: Path) -> str:
                      for name in ("stdout.log", "stderr.log") if (root / name).exists())
 
 
-def inspect_bundle(runtime: Path, exe_sha: str, replay: Path | None = None) -> dict:
+def inspect_bundle(runtime: Path, exe_sha: str, replay: Path | None = None, secrets: dict | None = None) -> dict:
     archives = sorted((runtime / "Telemetry").glob("diag-*.zip"))
     if len(archives) != 1:
         raise AssertionError(f"expected one telemetry zip, found {len(archives)} in {runtime / 'Telemetry'}")
@@ -71,7 +138,8 @@ def inspect_bundle(runtime: Path, exe_sha: str, replay: Path | None = None) -> d
     assert {"os", "cpu", "gpu", "memory_mb"} <= system.keys(), "system info fields"
     assert all(system[key] for key in ("os", "cpu", "gpu")), "empty system description"
     assert system["memory_mb"] > 0, "memory size"
-    assert contents["Settings.ini"] == (runtime / "Userdata/Settings.ini").read_bytes(), "settings copy"
+    original = (runtime / "Userdata/Settings.ini").read_bytes()
+    check_no_secrets(contents, original, secrets)
     assert "present" in json.loads(contents["DesyncHeal.json"]), "desync/heal status"
     status = json.loads(contents["Replay.status.json"])
     assert manifest["replay"] == status, "manifest replay truncation/status differs"
@@ -94,6 +162,7 @@ def run_menu(repo: Path, root: Path, exe_sha: str) -> dict:
     script.write_text("wait 40\nactivate ButtonMainToMultiplayer\nwait 12\n"
                       "post_command ButtonSaveDiagnostics\nwait 12\nexit\n", encoding="utf-8")
     run = make_run(repo, ["-menu-script", str(script)], root / "menu", 240, env={"CCCP_HEADLESS": "1"})
+    planted = plant_bundle_secrets(run)
     try:
         record = run.start().finish()
     finally:
@@ -101,7 +170,7 @@ def run_menu(repo: Path, root: Path, exe_sha: str) -> dict:
     log = read_log(root / "menu")
     assert record.get("exit_code") == 0 and not record.get("timed_out"), f"menu run failed: {log[-6000:]}"
     assert "ButtonSaveDiagnostics" in log, "diagnostics command was not exercised"
-    return inspect_bundle(run.cwd, exe_sha)
+    return inspect_bundle(run.cwd, exe_sha, secrets=planted)
 
 
 def run_replay(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
@@ -115,6 +184,7 @@ def run_replay(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
                 "-net-match-report", str(root / f"{who}_report.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
         runs[who] = make_run(repo, args, root / who, 300, env={"CCCP_HEADLESS": "1"})
+    planted = {who: plant_bundle_secrets(run) for who, run in runs.items()}
 
     def drive(who: str) -> None:
         try:
@@ -135,7 +205,7 @@ def run_replay(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
     result = {}
     for who, run in runs.items():
         assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
-        result[who] = inspect_bundle(run.cwd, exe_sha, recordings[who])
+        result[who] = inspect_bundle(run.cwd, exe_sha, recordings[who], secrets=planted[who])
     return result
 
 
@@ -239,6 +309,7 @@ def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
             args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
             runs[who] = make_run(repo, args, case / who, 120, env={"CCCP_HEADLESS": "1"})
             set_visual_resolution(runs[who], width, height)
+        planted = {who: plant_bundle_secrets(run) for who, run in runs.items()}
 
         def drive(who: str) -> None:
             try:
@@ -275,7 +346,7 @@ def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
                 assert log.count('assert_label ButtonSaveDiagnostics "save diagnostics" text="save diagnostics" PASS') == 2, "terminal label differs"
                 assert log.count("assert_enabled ButtonSaveDiagnostics expected=0 actual=0 PASS") == 2, "busy button was not disabled"
                 assert log.count('assert_label ButtonSaveDiagnostics "saving" text="saving" PASS') == 2, "busy label differs"
-                details["peers"][who]["bundle"] = inspect_bundle(run.cwd, exe_sha)
+                details["peers"][who]["bundle"] = inspect_bundle(run.cwd, exe_sha, secrets=planted[who])
             except Exception as error:
                 details["errors"][who] = str(error)
         details["passed"] = not details["errors"]
@@ -298,8 +369,11 @@ def main() -> int:
                         help="all runs menu+replay; use --arm pause for both pause-menu resolutions (no replay recording)")
     parser.add_argument("--port", type=int, default=48211)
     args = parser.parse_args()
-    if not 48211 <= args.port <= 48219 or (args.arm == "pause" and args.port > 48218):
-        parser.error("port must be in 48211..48219")
+    allowed = ((48211, 48219), (48280, 48289))
+    if not any(lo <= args.port <= hi for lo, hi in allowed):
+        parser.error("port must be in 48211..48219 or 48280..48289")
+    if args.arm == "pause" and not any(lo <= args.port <= hi - 1 for lo, hi in allowed):
+        parser.error("pause needs port and port+1 inside 48211..48219 or 48280..48289")
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = args.repo.resolve(), args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
