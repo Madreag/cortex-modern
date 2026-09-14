@@ -3671,6 +3671,22 @@ namespace RTE {
 		}
 		host.SetChatTeams({{0, 0}, {teamId, 0}, {otherId, 1}});
 
+		// Before team membership is pushed the host's own seat follows the relay's rule: a
+		// missing entry means "on no team", so a team line sinks on nobody - not on "team -1".
+		host.SetChatTeams({});
+		pump(110);
+		if (!otherPeer.SendChat(c_NetChatScopeTeam, "unassigned huddle")) {
+			fail("the unmapped opponent's team-scope send was refused");
+		}
+		pump(4);
+		for (const NetChatEntry& entry: lastLines(host)) {
+			if (entry.text == "unassigned huddle") {
+				fail("a team line reached the host's sink with no team mapping pushed");
+			}
+		}
+		host.SetChatTeams(teams);
+		pump(110);
+
 		// A malformed chat-typed packet is counted and tolerated, and the flood budget is real:
 		// twenty of them burn the sender's window, count as malformed, and the peer stays seated.
 		// Start in a fresh window - the team arm's relayed line still sits in this sender's.

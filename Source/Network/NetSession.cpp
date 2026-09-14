@@ -932,9 +932,11 @@ namespace RTE {
 			const auto senders = m_ChatTeams.find(chat.senderPeerId);
 			const int senderTeam = senders == m_ChatTeams.end() ? -1 : senders->second;
 			// The host's own seat filters a team line by the same rule the relay applies to peers:
-			// a line scoped to a team the host is not on must not reach its panel either.
+			// a line scoped to a team the host is not on must not reach its panel either, and a
+			// missing entry means "on no team" - never the shared -1 that would sink it anyway.
+			const auto mine = m_ChatTeams.find(m_LocalPeerId);
 			const bool sinks = m_Role != NetSessionRole::Host || chat.scope != c_NetChatScopeTeam ||
-			    senderTeam == (m_ChatTeams.count(m_LocalPeerId) ? m_ChatTeams[m_LocalPeerId] : -1);
+			    (senders != m_ChatTeams.end() && mine != m_ChatTeams.end() && senders->second == mine->second);
 			if (sinks) {
 				DeliverChat({m_LockstepFrame, chat.senderPeerId, sender ? sender->displayName : std::string(), chat.scope, chat.text});
 			}
