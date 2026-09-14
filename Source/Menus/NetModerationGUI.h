@@ -24,8 +24,6 @@ namespace RTE {
 		~NetModerationGUI();
 		void Update();
 		void Draw();
-		/// Takes the match loop's report counters on the render path.
-		void SetMatchPace(uint64_t ticks, long long wallUs);
 		/// Draws the bounded toast rows after the rest of the network UI.
 		void DrawMatchToasts();
 		bool SetOpen(bool open);
@@ -58,7 +56,6 @@ namespace RTE {
 		GUICollectionBox* m_NetStatusBox = nullptr;
 		GUILabel* m_NetStatus = nullptr;
 		std::array<GUILabel*, 3> m_Toasts{};
-		double m_MatchPaceTps = 0.0;
 		uint16_t m_MatchDelayFrames = 0;
 		uint16_t m_BaseDelayFrames = 0;
 		GUICollectionBox* m_Panel = nullptr;
