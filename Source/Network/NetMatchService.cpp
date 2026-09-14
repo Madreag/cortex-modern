@@ -64,6 +64,21 @@ namespace RTE {
 		return text;
 	}
 
+	std::string NetMatchSummary::IdentityText() const {
+		if (identityLine.empty()) return {};
+		static const std::string exeHash = [] {
+			std::ifstream file(System::GetThisExePathAndName(), std::ios::binary | std::ios::ate);
+			const auto size = file.tellg();
+			if (!file || size <= 0) return std::string("unavailable");
+			std::vector<uint8_t> bytes(static_cast<size_t>(size));
+			file.seekg(0, std::ios::beg);
+			if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) return std::string("unavailable");
+			const std::string hash = NetA7Journal::Sha256(bytes.data(), bytes.size());
+			return hash.empty() ? std::string("unavailable") : hash;
+		}();
+		return identityLine + "\nSHA256: " + exeHash + "\nCodec: Controller " + std::to_string(ControllerFrame::c_Version) + " | Lockstep " + std::to_string(NetLockstepCodec::c_Version);
+	}
+
 	std::string NetMatchSummary::DetailsText() const {
 		std::ostringstream text;
 		text << "Result: " << result << "\nWinner: " << (winnerTeam < 0 ? "draw" : "Team " + std::to_string(winnerTeam + 1));
@@ -77,7 +92,7 @@ namespace RTE {
 			text << std::fixed << std::setprecision(1) << "\nFinal pace: " << pace.value("wall_tps", 0.0) << " tps, "
 			     << pace.value("sim_ms_per_tick", 0.0) << " ms/tick";
 		}
-		text << "\n\n" << identityLine;
+		text << "\n\n" << IdentityText();
 		return text.str();
 	}
 
@@ -1653,14 +1668,7 @@ static std::string ResyncSaveName() {
 				}
 				m_CurrentMatchSummary.peers.push_back({slot.peerId, name, slot.team, static_cast<uint16_t>(slot.peerId - 1), NetMatchConfigUtil::PeerInputDelay(config, slot.peerId)});
 			}
-			static const std::string exeHash = [] {
-				std::ifstream file(System::GetThisExePathAndName(), std::ios::binary);
-				const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-				const std::string hash = file.bad() || bytes.empty() ? "" : NetA7Journal::Sha256(bytes.data(), bytes.size());
-				return hash.empty() ? std::string("unavailable") : hash;
-			}();
-			m_CurrentMatchSummary.identityLine = "Exe: " + std::filesystem::path(System::GetThisExePathAndName()).filename().string() + " v" + c_GameVersion.str() +
-			    "\nSHA256: " + exeHash + "\nCodec: Controller " + std::to_string(ControllerFrame::c_Version) + " | Lockstep " + std::to_string(NetLockstepCodec::c_Version);
+			m_CurrentMatchSummary.identityLine = "Exe: " + std::filesystem::path(System::GetThisExePathAndName()).filename().string() + " v" + c_GameVersion.str();
 		} else {
 			++m_CurrentMatchSummary.resyncs;
 		}
@@ -2291,7 +2299,7 @@ static std::string ResyncSaveName() {
 			}
 			report["last_match"] = {{"result", summary.result}, {"winner_team", summary.winnerTeam}, {"running_ticks", summary.runningTicks},
 			    {"duration", summary.DurationText()}, {"peers", peers}, {"resyncs", summary.resyncs}, {"drops", summary.drops},
-			    {"reclaims", summary.reclaims}, {"substitutions", summary.substitutions}, {"pace", json::parse(summary.paceJson)}, {"identity", summary.identityLine}};
+			    {"reclaims", summary.reclaims}, {"substitutions", summary.substitutions}, {"pace", json::parse(summary.paceJson)}, {"identity", summary.IdentityText()}};
 		} else {
 			report["last_match"] = nullptr;
 		}

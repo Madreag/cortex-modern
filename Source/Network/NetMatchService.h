@@ -182,6 +182,8 @@ namespace RTE {
 		/// Formats the single lobby line and the complete dialog body.
 		std::string LineText() const;
 		std::string DetailsText() const;
+		/// Formats the identity, reading and caching the executable hash on first use.
+		std::string IdentityText() const;
 	};
 
 	class NetMatchService : public Singleton<NetMatchService> {
