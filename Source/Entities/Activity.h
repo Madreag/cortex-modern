@@ -275,6 +275,9 @@ namespace RTE {
 		/// Installs the synced human roster in the activity's player slots.
 		bool ConfigureLockstepPlayers();
 
+		/// Rebuilds local input and screen bindings from the current coordinator without changing shared seat facts.
+		void RefreshLockstepLocalPlayers();
+
 		/// Checks roster order, local input mapping and unchanged offline seats.
 		static bool RunSharedSeatSelfTest();
 
@@ -754,6 +757,7 @@ namespace RTE {
 
 	private:
 		void ConfigureHumanRoster(const NetMatchConfig& config, uint8_t localPeer);
+		void MapLocalPlayers(const NetMatchConfig& config, uint8_t localPeer);
 
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_ActivityState, self.m_Paused, self.m_AllowsUserSaving, self.m_IsTestActivity,
