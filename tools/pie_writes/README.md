@@ -16,12 +16,12 @@ write. `L_DOWN`/`L_LEFT` hover a quadrant's middle slice and the counter-clockwi
 second slice in that quadrant.
 
 ```powershell
-python tools/pie_writes/run_write_arm.py full_inventory D:/mx/opus-f23c-20260913/<name> --exe '<retained executable>' --port 48171
+python tools/pie_writes/run_write_arm.py full_inventory D:/mx/opus-f23c-20260913/<name> --exe '<retained executable>' --port 48181
 python tools/pie_writes/verify_peer_pie.py full_inventory D:/mx/opus-f23c-20260913/<name> --out D:/mx/opus-f23c-20260913/score/<name>.json
 ```
 
 The runner uses the existing isolated runner (`tools/run_sim_test.py` `make_run`), headless, separate peer
-runtimes, input delay 3, 320 ticks, dumps 27..320, ports 48171-48179. It never builds or copies an
+runtimes, input delay 3, 320 ticks, dumps 27..320, ports 48181-48189. It never builds or copies an
 executable and refuses one with no inbound firewall rule.
 
 The detector requires complete `manifest.json`, `run_result.json` and per-peer `launch.json` evidence, a
