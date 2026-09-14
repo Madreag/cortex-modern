@@ -346,16 +346,6 @@ int Activity::Start() {
 		m_TeamDeaths[team] = 0;
 	}
 
-	// A peer only seats its own players, so record every lockstep seat's brain here: shared decisions
-	// about a player's brain have to read the same set on every peer.
-	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
-		if (ScenarioRunner::IsLockstepActiveTeam(team)) {
-			if (const Actor* brain = g_MovableMan.GetUnassignedBrain(team)) {
-				g_MovableMan.NotePlayerBrain(brain->GetUniqueID(), true);
-			}
-		}
-	}
-
 	// Intentionally doing all players, all need controllers
 	std::vector<int> playerControlled;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
@@ -1051,7 +1041,30 @@ void Activity::SwitchToPrevOrNextActor(bool nextActor, int player, int team, con
 	}
 }
 
+void Activity::UpdatePlayerBrainRecord() {
+	// A machine seats only its own players, so the brains of the seats it does not hold are recorded here,
+	// by the rule the machine holding them used: a team's brain is its seat's, or the first no seat took.
+	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
+		if (!ScenarioRunner::IsLockstepActiveTeam(team) || g_MovableMan.HasPlayerBrainOfTeam(team)) {
+			continue;
+		}
+		const Actor* brain = nullptr;
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount && !brain; ++player) {
+			if (m_IsActive[player] && m_IsHuman[player] && m_Team[player] == team) {
+				brain = m_Brain[player];
+			}
+		}
+		if (!brain) {
+			brain = g_MovableMan.GetUnassignedBrain(team);
+		}
+		if (brain) {
+			g_MovableMan.NotePlayerBrain(brain->GetUniqueID(), true);
+		}
+	}
+}
+
 void Activity::Update() {
+	UpdatePlayerBrainRecord();
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (m_MessageTimer[player].IsPastSimMS(5000)) {
 			g_FrameMan.ClearScreenText(ScreenOfPlayer(player));

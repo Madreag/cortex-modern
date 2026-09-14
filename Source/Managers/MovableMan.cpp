@@ -3101,6 +3101,16 @@ bool MovableMan::IsPlayerBrain(const Actor* actor) const {
 	return actor && m_PlayerBrainIDs.contains(actor->GetUniqueID());
 }
 
+bool MovableMan::HasPlayerBrainOfTeam(int team) {
+	for (long uid: m_PlayerBrainIDs) {
+		const Actor* actor = dynamic_cast<const Actor*>(FindObjectByUniqueID(uid));
+		if (actor && actor->GetTeam() == team) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void MovableMan::NotePlayerBrain(long uniqueID, bool isBrain) {
 	if (uniqueID <= 0) {
 		return;
