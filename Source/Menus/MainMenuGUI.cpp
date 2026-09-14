@@ -1001,16 +1001,28 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		int contentWidth = 300;
 		int contentHeight = 250;
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
-			// The status wraps only on spaces, so the panel must be as wide as its longest token.
-			contentWidth = std::max(300, m_MultiplayerLandingStatusLabel->GetMaxWordWidth() + 24);
+			// FontLarge's atlas has a few width-only blank cells (e.g. 0xDF); FontSmall's ink draws those bytes.
+			m_MultiplayerLandingStatusLabel->EnsureDrawableTextFont("FontSmall.png");
+			// The status wraps only on spaces; a token wider than the viewport scrolls through the label instead of growing the panel off-screen.
+			const int desiredWidth = std::max(300, m_MultiplayerLandingStatusLabel->GetMaxWordWidth() + 24);
+			contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
 			FitMultiplayerPanelWidth(m_MultiplayerLandingPanel, m_MultiplayerLandingStatusLabel, contentWidth);
-			// The wrapped status can outgrow its baseline box; the panel keeps the padding it had.
-			const int statusHeight = std::max(68, m_MultiplayerLandingStatusLabel->GetTextHeight() + 4);
+			// The status can outgrow its baseline box; it yields to whatever height the viewport leaves it.
+			const int labelRelY = m_MultiplayerLandingStatusLabel->GetRelYPos();
+			const int bottomPad = 250 - labelRelY - 68;
+			const int backReserve = m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
+			const int statusRoom = std::max(0, g_WindowMan.GetResY() - backReserve - labelRelY - bottomPad);
+			// An unbreakable token scrolls horizontally; otherwise a too-tall status scrolls vertically.
+			const bool scrollWide = desiredWidth > contentWidth;
+			m_MultiplayerLandingStatusLabel->SetHorizontalOverflowScroll(scrollWide);
+			const int statusHeight = std::max(10, std::min(std::max(68, m_MultiplayerLandingStatusLabel->GetTextHeight() + 4), statusRoom));
+			const bool scrollTall = !scrollWide && m_MultiplayerLandingStatusLabel->GetTextHeight() + 4 > statusRoom;
+			m_MultiplayerLandingStatusLabel->SetVerticalOverflowScroll(scrollTall);
+			m_MultiplayerLandingStatusLabel->ActivateDeactivateOverflowScroll(scrollWide || scrollTall);
 			if (m_MultiplayerLandingStatusLabel->GetHeight() != statusHeight) {
 				m_MultiplayerLandingStatusLabel->Resize(m_MultiplayerLandingStatusLabel->GetWidth(), statusHeight);
 			}
-			const int labelRelY = m_MultiplayerLandingStatusLabel->GetRelYPos();
-			const int panelHeight = std::max(250, labelRelY + statusHeight + (250 - labelRelY - 68));
+			const int panelHeight = std::max(250, labelRelY + statusHeight + bottomPad);
 			if (m_MultiplayerLandingPanel->GetHeight() != panelHeight) {
 				m_MultiplayerLandingPanel->Resize(contentWidth, panelHeight);
 			}
@@ -1092,10 +1104,20 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MultiplayerLobbyPortMapLabel->SetVisible(!snapshot.portMap.empty());
 	const int portMapHeight = snapshot.portMap.empty() ? 0 : 14;
 	m_MultiplayerErrorLabel->SetText(GroupDelimiterForDisplay(snapshot.errorText));
-	const int contentWidth = std::max(300, m_MultiplayerErrorLabel->GetMaxWordWidth() + 24);
+	m_MultiplayerErrorLabel->EnsureDrawableTextFont("FontSmall.png");
+	const int desiredWidth = std::max(300, m_MultiplayerErrorLabel->GetMaxWordWidth() + 24);
+	const int contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
 	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth);
 	m_MultiplayerErrorLabel->SetPositionRel(12, 162 + portMapHeight);
-	const int errorHeight = std::max(24, m_MultiplayerErrorLabel->GetTextHeight() + 4);
+	const int backReserve = m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
+	const int errorRoom = std::max(24, g_WindowMan.GetResY() - backReserve - 250 + 24 - portMapHeight);
+	// Same accessibility rule as the landing status: wide token scrolls horizontally, tall text vertically.
+	const bool scrollWide = desiredWidth > contentWidth;
+	m_MultiplayerErrorLabel->SetHorizontalOverflowScroll(scrollWide);
+	const int errorHeight = std::max(24, std::min(m_MultiplayerErrorLabel->GetTextHeight() + 4, errorRoom));
+	const bool scrollTall = !scrollWide && m_MultiplayerErrorLabel->GetTextHeight() + 4 > errorRoom;
+	m_MultiplayerErrorLabel->SetVerticalOverflowScroll(scrollTall);
+	m_MultiplayerErrorLabel->ActivateDeactivateOverflowScroll(scrollWide || scrollTall);
 	const int extraHeight = errorHeight - 24 + portMapHeight;
 	if (m_MultiplayerErrorLabel->GetHeight() != errorHeight) {
 		m_MultiplayerErrorLabel->Resize(m_MultiplayerErrorLabel->GetWidth(), errorHeight);
