@@ -36,6 +36,23 @@ namespace {
 		return text + "...";
 	}
 
+	std::string ToastText(const ScenarioRunner::NetUiToastRecord& toast) {
+		uint8_t sender = toast.senderPeerId;
+		if (toast.kind == "resumed" && sender == 0) {
+			const auto& events = ScenarioRunner::GetNetUiToastLog();
+			auto event = std::find_if(events.rbegin(), events.rend(), [&](const auto& entry) {
+				return entry.tick == toast.tick && entry.kind == toast.kind && entry.text == toast.text;
+			});
+			if (event != events.rend()) {
+				for (++event; event != events.rend(); ++event) {
+					if (event->kind == "resuming") { sender = event->senderPeerId; break; }
+					if (event->kind == "paused" || event->kind == "resumed") break;
+				}
+			}
+		}
+		return toast.text + (sender ? " by " + g_NetMatchService.GetPeerDisplayName(sender) : std::string());
+	}
+
 	std::string WrapText(GUIFont* font, const std::string& text, int width) {
 		std::string wrapped, line;
 		for (char c: text) {
@@ -319,7 +336,7 @@ void NetModerationGUI::DrawMatchToasts() {
 		GUILabel* label = m_Toasts[row];
 		const bool shown = row < visible.size();
 		label->SetVisible(shown);
-		label->SetText(shown ? FitLine(font, visible[row].text, width - 16) : std::string());
+		label->SetText(shown ? FitLine(font, ToastText(visible[row]), width - 16) : std::string());
 		if (!shown) continue;
 		const int y = top + static_cast<int>(row) * rowHeight;
 		label->SetFont(font);

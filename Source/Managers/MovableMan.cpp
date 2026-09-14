@@ -715,7 +715,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				std::cout << "[net-match] inventory command did not apply: op " << static_cast<int>(inventoryOp->op) << " UID " << inventoryOp->actorUID << std::endl;
 			}
 		} else if (const NetGamePauseMatch* pauseMatch = std::get_if<NetGamePauseMatch>(&command.payload)) {
-			ScenarioRunner::ApplyLockstepPauseCommand(pauseMatch->pause);
+			ScenarioRunner::ApplyLockstepPauseCommand(pauseMatch->pause, command.senderPeerId);
 		} else if (const NetGameAIEquip* equip = std::get_if<NetGameAIEquip>(&command.payload)) {
 			// The AI's equip call runs here on every peer; only the peer driving the actor may issue it.
 			AHuman* human = dynamic_cast<AHuman*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(equip->actorUID)));
