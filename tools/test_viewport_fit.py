@@ -370,6 +370,91 @@ def wrapped_height_px(text, inner_px, cell_w):
     return lines * 15
 
 
+def wrap_lines_px(text, inner_px, cell_w):
+    """Same greedy wrap as wrapped_height_px but returns the line strings;
+    '\n' is a hard break as GUIFont::Draw treats it."""
+    out = []
+    for para in text.split("\n"):
+        cur, cur_w = "", 0
+        for word in para.replace("\r", "").split(" "):
+            width = sum(cell_w(b) for b in word.encode("cp1252", errors="replace"))
+            if cur and cur_w + 1 + width > inner_px:
+                out.append(cur)
+                cur, cur_w = "", 0
+            cur += word if not cur else " " + word
+            cur_w += width if cur_w == 0 else 1 + width
+        out.append(cur)
+    return out
+
+
+def font_ink_masks(png_path):
+    """Per-byte glyph ink offsets, replicating GUIFont::Load's red-separator
+    scan. Returns ({byte: (advance, [(dx, dy), ...])}, font_height)."""
+    from PIL import Image
+    img = Image.open(png_path).convert("RGBA")
+    width, height = img.size
+    px = img.load()
+    red = px[0, 0]
+    bg = px[width - 1, 0]
+    font_h = next(y for y in range(1, height) if px[0, y] == red)
+    masks = {}
+    x, y, col = 1, 0, 0
+    for ch in range(32, 256):
+        cell_w = 0
+        for n in range(x, width):
+            if px[n, y] == red:
+                break
+            cell_w += 1
+        advance = max(0, cell_w - 1)
+        pts = []
+        for ry in range(y, y + font_h):
+            for rx in range(x, x + advance):
+                p = px[rx, ry]
+                if p != bg and p != red:
+                    pts.append((rx - x, ry - y))
+        masks[ch] = (advance, pts)
+        x += cell_w + 1
+        col += 1
+        if col >= 16:
+            col = 0
+            x = 1
+            y += font_h
+            if y + font_h > height:
+                break
+    return masks, font_h
+
+
+def line_ink_mask(text, masks):
+    """Ink offsets of one rendered line: each byte's cell advances by its
+    measured width, mirroring GUIFont::Draw's X += CharWidth + kerning."""
+    pts, x = [], 0
+    for b in text.encode("cp1252", errors="replace"):
+        advance, cell = masks.get(b, (0, []))
+        pts += [(x + dx, dy) for dx, dy in cell]
+        x += advance
+    return pts, x
+
+
+def frame_has_line(img, x0, x1, y0, y1, mask_pts, mask_w, mask_h, cover=0.75):
+    """True when the expected line's ink lands on drawn text-ink somewhere in
+    the rect: a scroll frame only contains the tail when it really drew it."""
+    if not mask_pts:
+        return False
+    px = img.load()
+    need = int(len(mask_pts) * cover + 0.999)
+    for y in range(y0, max(y0, y1 - mask_h + 1)):
+        for x in range(x0, max(x0, x1 - mask_w + 1)):
+            hit = 0
+            for i, (dx, dy) in enumerate(mask_pts):
+                if is_ink(px[x + dx, y + dy]):
+                    hit += 1
+                    if hit >= need:
+                        return True
+                if hit + len(mask_pts) - i - 1 < need:
+                    break
+    return False
+
+
 def button_extent(px, width, y0, y1):
     """The Back button's horizontal extent: the first contiguous run of the
     button frame blue between 60 and 220px long inside the y-band."""
@@ -781,10 +866,28 @@ def main():
                 # so motion is only demanded when the geometry predicts scroll.
                 checks["tall_scroll_motion"] = (not scroll_expected) or sum(1 for d in td if d > 0.03) >= 2
                 checks["tall_scroll_confined"] = max(tout, default=1.0) < 0.01
+                # The tail is proven by ink, not by the label dump: the last
+                # wrapped line's expected glyph mask is searched in the band,
+                # so it only registers when a frame actually drew it. The
+                # 750ms frames span a full scroll cycle, so an end window is
+                # always sampled; a run that never reaches it fails here.
+                checks["tall_tail_reached"] = False
+                if tall_label:
+                    masks, font_h = font_ink_masks(skin_dir / "FontLarge.png")
+                    tail_line = wrap_lines_px(tall_label, inner, cell)[-1]
+                    mask_pts, mask_w = line_ink_mask(tail_line, masks)
+                    hits = [i for i, img in enumerate(tall_imgs)
+                            if frame_has_line(img, band[0], band[1], band[2], band[3],
+                                              mask_pts, mask_w, font_h)]
+                    details["tall_tail"] = {"line": tail_line, "mask_w": mask_w,
+                                            "mask_pts": len(mask_pts), "frames": hits}
+                    checks["tall_tail_reached"] = bool(hits)
             else:
                 checks["tall_scroll_motion"] = checks["tall_scroll_confined"] = False
+                checks["tall_tail_reached"] = False
         elif options.no_scroll_input:
             checks["tall_scroll_motion"] = checks["tall_scroll_confined"] = False
+            checks["tall_tail_reached"] = False
 
         if seam_shots:
             from PIL import Image as _Image
