@@ -78,10 +78,10 @@ namespace {
 	template <class FloatType> void ReadNumberFromStream(std::istream& stream, FloatType& value) {
 		const std::string token = TakeNumberToken(stream);
 		FloatType parsed = 0;
-		const std::from_chars_result result = ParseNumberExact(token.data(), token.data() + token.size(), parsed);
+		const std::from_chars_result result = ParseStreamNumber(token.data(), token.data() + token.size(), parsed);
 		if (result.ec == std::errc::result_out_of_range && result.ptr == token.data() + token.size()) {
-			// The stream's extraction stored the most positive or negative representable value here.
-			value = (!token.empty() && token.front() == '-') ? std::numeric_limits<FloatType>::lowest() : (std::numeric_limits<FloatType>::max)();
+			// Measured on the old build: the stream stored strtod's own answer here, an infinity or zero.
+			value = parsed;
 			stream.setstate(std::ios::failbit);
 			return;
 		}

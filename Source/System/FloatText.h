@@ -220,8 +220,9 @@ namespace RTE::FloatText {
 #endif
 	}
 
-	/// Converts an already scanned token with the C locale's correctly rounded strtod.
-	template <class FloatType> std::from_chars_result ParseScanned(const char* first, const char* end, FloatType& value) {
+	/// Converts an already scanned token with the C locale's correctly rounded strtod. storeOutOfRange keeps
+	/// strtod's own out of range answer - an infinity, or zero on underflow - which from_chars discards.
+	template <class FloatType> std::from_chars_result ParseScanned(const char* first, const char* end, FloatType& value, bool storeOutOfRange = false) {
 		static_assert(std::is_floating_point_v<FloatType>, "ParseScanned takes float or double");
 		const size_t length = static_cast<size_t>(end - first);
 		char stack[512];
@@ -245,6 +246,9 @@ namespace RTE::FloatText {
 		}
 		// strtod reports ERANGE for subnormal results too, but a subnormal is representable and from_chars takes it.
 		if (parseErrno == ERANGE && (std::isinf(parsed) || parsed == FloatType(0))) {
+			if (storeOutOfRange) {
+				value = parsed;
+			}
 			return {end, std::errc::result_out_of_range}; // Out of range leaves the target alone, as the standard says.
 		}
 		value = parsed;
@@ -284,12 +288,12 @@ namespace RTE::FloatText {
 	}
 
 	/// Parses one number in std::strtod's grammar with the C locale's correctly rounded strtod.
-	template <class FloatType> std::from_chars_result ParseCFallback(const char* first, const char* last, FloatType& value) {
+	template <class FloatType> std::from_chars_result ParseCFallback(const char* first, const char* last, FloatType& value, bool storeOutOfRange = false) {
 		const char* end = ScanCNumber(first, last);
 		if (end == first) {
 			return {first, std::errc::invalid_argument};
 		}
-		return ParseScanned(first, end, value);
+		return ParseScanned(first, end, value, storeOutOfRange);
 	}
 
 	/// Parses one number in printf's %a grammar with the C locale's correctly rounded strtod.
@@ -581,6 +585,13 @@ namespace RTE {
 
 	/// Parses one float or double in std::strtod's grammar, locale-free.
 	inline std::from_chars_result ParseNumberExact(const char* first, const char* last, double& value) { return FloatText::ParseCFallback(first, last, value); }
+
+	/// Parses one number the way an istream's extraction did: std::strtod's grammar, and an out of range
+	/// result stored as strtod gave it - an infinity, or zero on underflow - instead of left alone.
+	inline std::from_chars_result ParseStreamNumber(const char* first, const char* last, float& value) { return FloatText::ParseCFallback(first, last, value, true); }
+
+	/// Parses one number the way an istream's extraction did, keeping strtod's out of range answer.
+	inline std::from_chars_result ParseStreamNumber(const char* first, const char* last, double& value) { return FloatText::ParseCFallback(first, last, value, true); }
 
 	/// Parses one float or double in printf's %a grammar, locale-free and without allocating. std::from_chars
 	/// has no grammar that accepts the 0x prefix, so the hexadecimal codec is always the C-locale strtod.
