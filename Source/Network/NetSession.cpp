@@ -521,7 +521,9 @@ namespace RTE {
 			uint16_t messageType = 0;
 			if (NetProtocol::PeekMessageType(bytes.data(), bytes.size(), messageType) &&
 			    messageType == static_cast<uint16_t>(NetMessageType::Chat)) {
-				uint64_t authorKey = c_MalformedChatRateBase + peerId;
+				// A transport id the roster never learned (a reconnect still handshaking) shares
+				// one budget key: per-id keys would grow the rate map with every fresh socket.
+				uint64_t authorKey = c_MalformedChatRateBase;
 				if (m_Role == NetSessionRole::Host) {
 					if (const PeerState* peer = FindPeer(peerId)) {
 						authorKey = peer->assignedPeerId;
@@ -593,7 +595,7 @@ namespace RTE {
 		// possible whenever we can still write that version's payload schema. When we cannot, sending
 		// one stamped at OUR version would be undecodable noise, so the disconnect reason carries it.
 		if (haveVersion && NetProtocol::CanEncodeAtVersion(claimedVersion)) {
-				NetMessage rejection;
+			NetMessage rejection;
 			rejection.sequence = m_NextSequence++;
 			rejection.payload = NetJoinRejected{NetRejectReason::ProtocolMismatch, summary, "protocol_version", std::to_string(NetProtocol::c_Version), haveVersion ? std::to_string(claimedVersion) : std::string("unknown")};
 			std::vector<uint8_t> encoded;
@@ -873,6 +875,11 @@ namespace RTE {
 		}
 	}
 
+	size_t NetSession::ChatRateWindowCount() const {
+		std::lock_guard<std::mutex> chatLock(m_ChatMutex);
+		return m_ChatRate.size();
+	}
+
 	std::vector<NetChatEntry> NetSession::TakeChatEntries() {
 		std::lock_guard<std::mutex> lock(m_ChatMutex);
 		std::vector<NetChatEntry> out(m_ChatLog.begin(), m_ChatLog.end());
@@ -949,9 +956,11 @@ namespace RTE {
 			const auto senders = m_ChatTeams.find(chat.senderPeerId);
 			const int senderTeam = senders == m_ChatTeams.end() ? -1 : senders->second;
 			// The host's own seat filters a team line by the same rule the relay applies to peers:
-			// a line scoped to a team the host is not on must not reach its panel either.
+			// a line scoped to a team the host is not on must not reach its panel either, and a
+			// missing entry means "on no team" - never the shared -1 that would sink it anyway.
+			const auto mine = m_ChatTeams.find(m_LocalPeerId);
 			const bool sinks = m_Role != NetSessionRole::Host || chat.scope != c_NetChatScopeTeam ||
-			    senderTeam == (m_ChatTeams.count(m_LocalPeerId) ? m_ChatTeams[m_LocalPeerId] : -1);
+			    (senders != m_ChatTeams.end() && mine != m_ChatTeams.end() && senders->second == mine->second);
 			if (sinks) {
 				DeliverChat({m_LockstepFrame, chat.senderPeerId, sender ? sender->displayName : std::string(), chat.scope, chat.text});
 			}
