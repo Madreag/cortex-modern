@@ -12,6 +12,7 @@ typedef struct LJPreviewTable {
 } LJPreviewTable;
 
 typedef struct LJPreview {
+  global_State *g;
   LJPreviewTable *tables;
   GCobj **objects;
   GCobj **seen;
