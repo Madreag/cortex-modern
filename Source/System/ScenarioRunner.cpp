@@ -170,6 +170,7 @@ namespace RTE {
 		bool s_SavedAutomaticGoldDeposit = true;
 		bool s_SavedCrabBombsEnabled = false;
 		int s_SavedCrabBombThreshold = 42;
+		int s_SavedSubPieMenuHoverOpenDelay = 1000;
 
 		// Presentation only: the sim thread is blocked waiting on the peer, so the normal render path
 		// can't run. Keep the window pumped and show the last frame replaced by a plain wait screen.
@@ -742,6 +743,10 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::SetLockstepCoordinator(NetLockstepCoordinator* coordinator, bool preserveCommands) {
+		// Every coordinator reaches the sim here, a menu-started session's too; its peers' Lua worlds must agree.
+		if (coordinator) {
+			LuaMan::SetDeterministicCollection(true);
+		}
 		if (!coordinator && s_LockstepCoordinator) {
 			for (auto& input: s_LockstepCoordinator->CaptureLocalInputHistory()) s_LocalInputHistory[input.targetFrame] = std::move(input);
 			if (!s_LocalInputHistory.empty()) {
@@ -784,6 +789,7 @@ namespace RTE {
 			g_SettingsMan.SetAutomaticGoldDeposit(s_SavedAutomaticGoldDeposit);
 			g_SettingsMan.SetCrabBombsEnabled(s_SavedCrabBombsEnabled);
 			g_SettingsMan.SetCrabBombThreshold(s_SavedCrabBombThreshold);
+			g_SettingsMan.SetSubPieMenuHoverOpenDelay(s_SavedSubPieMenuHoverOpenDelay);
 		}
 		if (!coordinator) {
 			CloseLockstepReplayRecord();
@@ -901,11 +907,48 @@ namespace RTE {
 		}
 	}
 
+	bool ScenarioRunner::TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame) {
+		if (!s_LockstepCoordinator) {
+			return false;
+		}
+		const auto it = s_LockstepDroppedControlOverrides.find(actorUniqueID);
+		if (it == s_LockstepDroppedControlOverrides.end()) {
+			return false;
+		}
+		const uint8_t claimant = it->second;
+		if (!s_LockstepCoordinator->IsPeerGoneAtFrame(claimant, frame) || s_LockstepCoordinator->IsSeatHeldForReclaim(claimant)) {
+			return false;
+		}
+		s_LockstepDroppedControlOverrides.erase(it);
+		return true;
+	}
+
 	bool ScenarioRunner::IsLockstepTeamCommandSender(int team, uint8_t senderPeerId) {
 		if (!s_LockstepCoordinator || team < 0) {
 			return true;
 		}
 		return NetActorOwnership::IsTeamCommandAuthority(s_LockstepCoordinator->GetConfig().matchConfig, static_cast<uint8_t>(team), senderPeerId);
+	}
+
+	bool ScenarioRunner::IsLockstepAIOrderAuthorized(uint8_t senderPeerId, const NetGameAIOrder& order) {
+		if (IsLockstepTeamCommandSender(order.team, senderPeerId)) {
+			return true;
+		}
+		auto cpuControlledOf = [](int64_t uid) {
+			const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(uid)));
+			return !actor || !actor->IsPlayerControlled();
+		};
+		if (GetLockstepActorOwner(order.actorUID, order.team, cpuControlledOf(order.actorUID)) == senderPeerId) {
+			return true;
+		}
+		if (order.writerUID != 0) {
+			const Actor* writer = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order.writerUID)));
+			const int writerTeam = writer ? writer->GetTeam() : order.team;
+			if (writerTeam == order.team && GetLockstepActorOwner(order.writerUID, writerTeam, cpuControlledOf(order.writerUID)) == senderPeerId) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	int ScenarioRunner::GetLockstepHumanSlotIndex(int team) {
@@ -1239,7 +1282,11 @@ namespace RTE {
 		}
 		if (NetGameCommandTypeOf(command.payload) != NetGameCommandType::Reseat) {
 			const uint8_t sender = command.senderPeerId != 0 ? command.senderPeerId : GetLockstepLocalPeerId();
-			if (!IsLockstepTeamCommandSender(NetGameCommandTeam(command.payload), sender)) {
+			if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
+				if (!IsLockstepAIOrderAuthorized(sender, *order)) {
+					return;
+				}
+			} else if (!IsLockstepTeamCommandSender(NetGameCommandTeam(command.payload), sender)) {
 				return;
 			}
 		}
@@ -1842,18 +1889,25 @@ namespace RTE {
 		// every deterministic match must hand out the same IDs on every peer — including a rematch, where
 		// each process has created a different number of MOs by launch time. The base clears load-time IDs.
 		MovableObject::PinUniqueIDCounter(1 << 20);
+		// Same reason: sound identities ride NetGameSoundOp.
+		constexpr uint64_t c_MatchSoundIdentityBase = 1ULL << 40;
+		const uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+		g_AudioMan.SetCheckpointSoundContainerCursor(c_MatchSoundIdentityBase);
+		std::cerr << "[scenario] pinned sound identity cursor " << soundCursor << " -> " << c_MatchSoundIdentityBase << std::endl;
 		// Remember the user's values so the closing session can hand them back.
 		if (!s_SimSettingsPinned) {
 			s_SimSettingsPinned = true;
 			s_SavedAutomaticGoldDeposit = g_SettingsMan.GetAutomaticGoldDeposit();
 			s_SavedCrabBombsEnabled = g_SettingsMan.CrabBombsEnabled();
 			s_SavedCrabBombThreshold = g_SettingsMan.GetCrabBombThreshold();
+			s_SavedSubPieMenuHoverOpenDelay = g_SettingsMan.GetSubPieMenuHoverOpenDelay();
 		}
 		// Gold pickups route to team funds or carried gold off this per-machine setting; pin it.
 		g_SettingsMan.SetAutomaticGoldDeposit(true);
 		// Crab bombs gib a craft's ejected crabs past a threshold; both are per-machine settings on a sim path.
 		g_SettingsMan.SetCrabBombsEnabled(false);
 		g_SettingsMan.SetCrabBombThreshold(42);
+		g_SettingsMan.SetSubPieMenuHoverOpenDelay(1000);
 	}
 
 	std::map<std::string, std::string> ScenarioRunner::GatherSimConfig() {

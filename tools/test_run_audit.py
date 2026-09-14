@@ -27,6 +27,13 @@ def case(operation, **fields):
         ],
         "prepared": True,
         "applied": True,
+        "armed_fixtures": [{"name": "activity", "uid": "1"}],
+        "native_checks": [],
+        "contract_checks": [
+            {"family": "activity", "observation": "after", "checked": 1, "mismatches": 0}
+        ],
+        "native_mismatches": [],
+        "contract_mismatches": [],
     }
     item.update(fields)
     return item
@@ -134,6 +141,39 @@ class Gate(unittest.TestCase):
             ],
         )
         self.assertEqual(self.gate(broken), ["graphs_serialized"])
+
+    def test_an_empty_check_list_fails(self):
+        empty = case(
+            "memory",
+            armed_fixtures=[{"name": "activity", "uid": "1"}],
+            contract_checks=[],
+            native_checks=[],
+        )
+        self.assertEqual(self.gate(empty), ["activity_checks"])
+        unarmed = case("memory", armed_fixtures=[], contract_checks=[], native_checks=[])
+        self.assertEqual(self.gate(unarmed), ["fixture_armed"])
+
+    def test_a_mismatch_fails_with_the_listed_names(self):
+        line = "[activity-contract-mismatch] after TeamFunds expected=33337 actual=0"
+        item = case(
+            "memory",
+            contract_checks=[
+                {"family": "activity", "observation": "after", "checked": 1, "mismatches": 1}
+            ],
+            contract_mismatches=[line],
+        )
+        self.assertEqual(self.gate(item), ["contract_mismatches:" + line])
+        native_line = "[native-contract-mismatch] after AHuman.Health"
+        native = case(
+            "memory",
+            armed_fixtures=[{"name": "native", "uid": "1"}],
+            native_checks=[
+                {"observation": "after", "owners": 1, "checked": 1, "mismatches": 1}
+            ],
+            contract_checks=[],
+            native_mismatches=[native_line],
+        )
+        self.assertEqual(self.gate(native), ["native_mismatches:" + native_line])
 
 
 if __name__ == "__main__":

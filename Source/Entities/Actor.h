@@ -423,7 +423,7 @@ namespace RTE {
 		/// Tries to handle the activated PieSlice in this object's PieMenu, if there is one, based on its SliceType.
 		/// @param pieSliceType The SliceType of the PieSlice being handled.
 		/// @return Whether or not the activated PieSlice SliceType was able to be handled.
-		virtual bool HandlePieCommand(PieSliceType pieSliceType) { return false; }
+		virtual bool HandlePieCommand(PieSliceType pieSliceType);
 
 		/// Handles the PieSlice this' PieMenu activated last tick, if any. Runs in the update stage, so every peer applies it at the same tick.
 		void HandlePendingPieCommand();
@@ -459,10 +459,6 @@ namespace RTE {
 		/// disabling the controller here so every peer does it on the tick the order lands.
 		void BeginGoToOrder();
 
-		/// Whether a Go-To order is still waiting for the seat to pick its destination.
-		/// @return Whether this is in Go-To mode with no destination and a disabled player seat.
-		bool IsAwaitingGoToPoint() const;
-
 		/// Adds an absolute scene point to the list of waypoints this is going to
 		/// go to, in order
 		/// @param m_Waypoints.push_back(std::pair<Vector The new scene point this should try to get to after all other waypoints
@@ -496,6 +492,7 @@ namespace RTE {
 			float x = 0.0F;
 			float y = 0.0F;
 			int64_t targetUID = 0;
+			int64_t actorUID = 0;
 		};
 		/// Hands out the waypoint calls the AI queued this tick, in call order; mods don't call this.
 		std::vector<DeferredWaypoint> TakePendingDeferredWaypoints();
@@ -507,14 +504,7 @@ namespace RTE {
 		/// Gets the last or furthest set AI waypoint of this. If none, this' pos
 		/// is returned.
 		/// @return The furthest set AI waypoint of this.
-		Vector GetLastAIWaypoint() const {
-			if (!m_Waypoints.empty()) {
-				return m_Waypoints.back().first;
-			} else if (!m_MovePath.empty()) {
-				return m_MovePath.back();
-			}
-			return m_Pos;
-		}
+		Vector GetLastAIWaypoint() const;
 
 		/// Gets the ID of the last set AI MO waypoint of this. If none, g_NoMOID is returned.
 		/// @return The furthest set AI MO waypoint of this.
@@ -522,11 +512,11 @@ namespace RTE {
 
 		/// Gets the list of waypoints for this Actor.
 		/// @return The list of waypoints for this Actor.
-		const std::list<std::pair<Vector, MovableObjectReference>>& GetWaypointList() const { return m_Waypoints; }
+		const std::list<std::pair<Vector, MovableObjectReference>>& GetWaypointList() const;
 
 		/// Gets how many waypoints this actor have.
 		/// @return How many waypoints.
-		int GetWaypointsSize() { return m_Waypoints.size(); };
+		int GetWaypointsSize();
 
 		/// Clears the list of coordinates in this' current MovePath, ie the path
 		/// to the next Waypoint.
@@ -770,6 +760,12 @@ namespace RTE {
 		/// current waypoint, if any.
 		void SetMovePathToUpdate() { m_UpdateMovePath = true; }
 
+		/// Gets whether a move-path update is still armed.
+		bool IsMovePathUpdatePending() const { return m_UpdateMovePath; }
+
+		/// Starts updating this Actor's movepath.
+		virtual void UpdateMovePath();
+
 		/// Gets how many waypoints there are in the MovePath currently
 		/// @return The number of waypoints in the MovePath.
 		int GetMovePathSize() const { return m_MovePath.size(); }
@@ -803,6 +799,7 @@ namespace RTE {
 		/// Adopts saved identity for the actor, its attachable tree, and its inventory.
 		void AdoptPersistedUniqueID() override;
 		void ResolveFaithfulLinks() override;
+		void RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) override;
 		MovableObject* FindPartByUniqueID(long uid) override;
 		void DiscardPersistedSnapshotState() override;
 
@@ -976,6 +973,9 @@ namespace RTE {
 		/// @param newPieMenu The new PieMenu for this Actor.
 		void SetPieMenu(PieMenu* newPieMenu);
 
+		/// Pins clone timers whose start is past the restored sim tick.
+		void ClampPreviewTimers();
+
 		/// Protected member variable and method declarations
 	protected:
 		/// Throws a just-removed item into the world with the standard drop position and force.
@@ -986,9 +986,6 @@ namespace RTE {
 		/// Function that is called when we get a new movepath.
 		/// This processes and cleans up the movepath.
 		virtual void OnNewMovePath();
-
-		/// Starts updating this Actor's movepath.
-		virtual void UpdateMovePath();
 
 		// Member variables
 		static Entity::ClassInfo m_sClass;
@@ -1175,6 +1172,8 @@ namespace RTE {
 		std::list<std::pair<Vector, MovableObjectReference>> m_Waypoints;
 		// Waypoint calls the AI pass queued; the owner sends them over the wire so every peer's queue matches.
 		std::vector<DeferredWaypoint> m_PendingDeferredWaypoints;
+		// Sent calls still in flight; the running actor's reads keep seeing them until the apply lands.
+		std::vector<DeferredWaypoint> m_InflightWaypoints;
 		// Under lockstep the owner's AI loads waypoints ahead of the drops it sent over the wire; this many front entries are already loaded.
 		int m_WaypointCursor;
 		// Whether to draw the waypoints or not in the HUD
@@ -1205,6 +1204,12 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		bool SeeingLogicalWaypoints() const;
+		void BuildLogicalWaypoints(std::vector<std::pair<Vector, const MovableObject*>>& items) const;
+		bool LogicalWaypointClearSeen() const;
+		void ConsumeInflightWaypoint(DeferredWaypoint::Op op, float x, float y, int64_t targetUID);
+		void QueueDeferredOnRunning(const DeferredWaypoint& waypoint);
+
 		std::string m_PersistedActorRuntime;
 		std::array<std::string, 2> m_PersistedActorIconReferences;
 		std::string SaveActorRuntime() const;

@@ -621,16 +621,16 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 	size_t adoptedIndex = 0;
 	bool noteStart = false;
 	if (physical || predicting) {
-		eventKey = PreviewEventLedger::NextKey(PreviewEventLedger::Sound, emitterUID, PreviewEventLedger::StableAssetIdentity(soundContainer->GetCheckpointIdentity()), SoundPresetHash(soundContainer), static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+		eventKey = PreviewEventLedger::NextKey(PreviewEventLedger::Sound, emitterUID, PreviewEventLedger::StableAssetIdentity(soundContainer->PlaybackCheckpointIdentity()), SoundPresetHash(soundContainer), static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 		noteStart = PreviewEventLedger::IsPreviewedEmitter(emitterUID);
 		// Consecutive previews re-predict the same event; the first one owns it.
 		if (predicting) predicting = !PreviewEventLedger::AlreadyPlayed(eventKey);
 		else PreviewEventLedger::Consume(eventKey, adoptedVoices);
 	}
-	SoundContainer* voiceOwner = soundContainer;
+	SoundContainer* voiceOwner = soundContainer->PreviewPlaybackOwner();
 	if (predicting) {
-		SoundContainer* canonical = FindCheckpointSoundContainer(soundContainer->GetCheckpointIdentity());
-		voiceOwner = canonical ? canonical : soundContainer;
+		SoundContainer* canonical = FindCheckpointSoundContainer(soundContainer->PlaybackCheckpointIdentity());
+		voiceOwner = canonical ? canonical : soundContainer->PreviewPlaybackOwner();
 	}
 	size_t sampleIndex = 0;
 	for (const SoundData* soundData: selectedSoundData) {
@@ -1288,7 +1288,9 @@ void AudioMan::CollectManagerSoundIdentities(std::unordered_set<uint64_t>& out) 
 		if (const uint64_t identity = sound.GetCheckpointIdentity()) out.insert(identity);
 	});
 	try {
-		CheckpointReader reader(g_MusicMan.SaveCheckpoint(), "MusicMan1");
+		// The reader keeps a view, so the text must outlive it.
+		const std::string music = g_MusicMan.SaveCheckpoint();
+		CheckpointReader reader(music, "MusicMan1");
 		bool playing = false;
 		std::string interrupting, song, nextType, currentType, previous, current;
 		int nextSection = 0;
@@ -1444,8 +1446,8 @@ void AudioMan::RetirePredictedVoice(int identity) {
 	if (owner) owner->RemovePlayingChannel(identity);
 	const auto still = m_PlayingVoices.find(identity);
 	if (still == m_PlayingVoices.end()) return;
+	// Still a prediction while it finishes: unowned and on this machine only, so no checkpoint captures it.
 	still->second.owner = nullptr;
-	still->second.predicted = false;
 	if (still->second.channel) still->second.channel->setUserData(nullptr);
 }
 
@@ -3077,6 +3079,26 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 		check("an_adopted_prediction_joins_the_shared_cohort", inSharedCohort);
 		check("an_adopted_voice_is_in_the_checkpoint", voice > 0 && savedChannels(predicted).contains(voice) && savedVoices().contains(voice));
 		predicted.Stop();
+		PreviewEventLedger::Clear();
+
+		// A prediction nothing adopts finishes unowned and stays out of every checkpoint.
+		SoundContainer mispredicted;
+		mispredicted.Create(samplePath, false, true, SoundContainer::SFX);
+		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		PreviewEventLedger::Arm(tick, GetCheckpointSoundContainerCursor(), {4244});
+		{
+			SoundSimulationScope preview(4244, phase);
+			mispredicted.Play();
+		}
+		PreviewEventLedger::Disarm();
+		const std::set<int> stray(mispredicted.GetPlayingChannels()->begin(), mispredicted.GetPlayingChannels()->end());
+		const int strayVoice = stray.size() == 1 ? *stray.begin() : 0;
+		PreviewEventLedger::ExpireForTick(tick + 3);
+		check("an_unclaimed_prediction_is_retired", strayVoice > 0 && PreviewEventLedger::GetLiveEntryCount() == 0 && mispredicted.GetPlayingChannels()->empty(), std::to_string(stray.size()));
+		check("a_retired_prediction_is_in_no_checkpoint", strayVoice > 0 && IsPredictedVoice(strayVoice) && !savedVoices().contains(strayVoice));
+		FMOD::Channel* strayChannel = nullptr;
+		if (strayVoice > 0 && GetVoiceChannel(strayVoice, &strayChannel) == FMOD_OK && strayChannel) strayChannel->stop();
+		if (strayVoice > 0) RetireVoice(strayVoice);
 		PreviewEventLedger::Clear();
 	}
 	g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);

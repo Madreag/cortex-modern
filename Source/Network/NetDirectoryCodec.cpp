@@ -2,6 +2,8 @@
 
 #include "nlohmann/json.hpp"
 
+#include <algorithm>
+#include <cstddef>
 #include <limits>
 
 namespace RTE {
@@ -75,6 +77,24 @@ namespace RTE {
 			return true;
 		}
 
+		bool ReadOptionalInt(const json& obj, const char* key, int64_t minValue, int64_t maxValue, int64_t& out, std::string& reason) {
+			const auto it = obj.find(key);
+			if (it == obj.end()) {
+				out = 0;
+				return true;
+			}
+			return ReadInt(obj, key, minValue, maxValue, out, reason);
+		}
+
+		bool ReadOptionalPlainStr(const json& obj, const char* key, std::string& out, std::string& reason, size_t maxChars) {
+			const auto it = obj.find(key);
+			if (it == obj.end()) {
+				out.clear();
+				return true;
+			}
+			return ReadStr(obj, key, out, reason, maxChars);
+		}
+
 		bool ReadOptionalStr(const json& obj, const char* key, std::optional<std::string>& out, std::string& reason) {
 			const auto it = obj.find(key);
 			if (it == obj.end()) {
@@ -99,6 +119,26 @@ namespace RTE {
 			return true;
 		}
 
+		bool ReadOptionalBool(const json& obj, const char* key, std::optional<bool>& out, std::string& reason) {
+			const auto it = obj.find(key);
+			if (it == obj.end()) {
+				out.reset();
+				return true;
+			}
+			if (!it->is_boolean()) return Fail(reason, "invalid_field", key);
+			out = it->get<bool>();
+			return true;
+		}
+
+		bool ReadOptionalPlainBool(const json& obj, const char* key, bool& out, std::string& reason) {
+			const auto it = obj.find(key);
+			if (it == obj.end()) {
+				out = false;
+				return true;
+			}
+			return ReadBool(obj, key, out, reason);
+		}
+
 		bool IsJoinMode(const std::string& value) {
 			return value == "ip" || value == "ice" || value == "either";
 		}
@@ -112,8 +152,7 @@ namespace RTE {
 			return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || ch == '-' || ch == '_';
 		}
 
-		// Peers are "host" or "client:<1..64 install-key chars>"; total can reach 71 chars.
-		constexpr size_t c_MaxPeerChars = 7 + NetDirectoryLimits::c_MaxStringChars;
+		constexpr size_t c_MaxPeerChars = NetDirectoryLimits::c_MaxPeerChars;
 
 		bool ReadPeer(const json& obj, const char* key, std::string& out, std::string& reason) {
 			std::string value;
@@ -127,11 +166,18 @@ namespace RTE {
 		}
 
 		bool IsBase64(const std::string& value) {
+			if (value.size() % 4 != 0) {
+				return false;
+			}
+			size_t pad = 0;
+			while (pad < 2 && pad < value.size() && value[value.size() - 1 - pad] == '=') {
+				++pad;
+			}
 			auto isChar = [](char ch) {
 				const unsigned char c = static_cast<unsigned char>(ch);
-				return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || ch == '+' || ch == '/' || ch == '=';
+				return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || ch == '+' || ch == '/';
 			};
-			return std::all_of(value.begin(), value.end(), isChar);
+			return std::all_of(value.begin(), value.end() - static_cast<std::ptrdiff_t>(pad), isChar);
 		}
 
 		bool ReadPayloadB64(const json& obj, const char* key, std::string& out, std::string& reason) {
@@ -261,13 +307,16 @@ namespace RTE {
 	}
 
 	std::string NetDirectoryCodec::EncodeRegisterResponse(const NetDirectoryRegisterResponse& response) {
-		return json{
+		json obj = {
 			{"session_id", response.sessionId},
 			{"token", response.token},
 			{"expires_in_s", response.expiresInS},
 			{"heartbeat_s", response.heartbeatS},
 			{"observed_ip", response.observedIp},
-		}.dump();
+		};
+		// Unsupported stays omitted so the default encoding keeps the legacy shape.
+		if (response.supportsUnlisted) obj["supports_unlisted"] = true;
+		return obj.dump();
 	}
 
 	bool NetDirectoryCodec::DecodeRegisterResponse(const std::string& body, NetDirectoryRegisterResponse& out, std::string& reason) {
@@ -277,7 +326,8 @@ namespace RTE {
 		       ReadStr(obj, "token", out.token, reason) &&
 		       ReadInt(obj, "expires_in_s", 0, NetDirectoryLimits::c_MaxIntField, out.expiresInS, reason) &&
 		       ReadInt(obj, "heartbeat_s", 0, NetDirectoryLimits::c_MaxIntField, out.heartbeatS, reason) &&
-		       ReadStr(obj, "observed_ip", out.observedIp, reason);
+		       ReadStr(obj, "observed_ip", out.observedIp, reason) &&
+		       ReadOptionalPlainBool(obj, "supports_unlisted", out.supportsUnlisted, reason);
 	}
 
 	std::string NetDirectoryCodec::EncodeHeartbeatRequest(const NetDirectoryHeartbeatRequest& request) {
@@ -287,6 +337,7 @@ namespace RTE {
 		obj["seats_free"] = request.seatsFree;
 		if (request.listenAddrs.has_value()) obj["listen_addrs"] = *request.listenAddrs;
 		if (request.state.has_value()) obj["state"] = *request.state;
+		if (request.listed.has_value()) obj["listed"] = *request.listed;
 		return obj.dump();
 	}
 
@@ -301,18 +352,21 @@ namespace RTE {
 			return false;
 		}
 		if (out.state.has_value() && !IsSessionState(*out.state)) return Fail(reason, "invalid_field", "state");
-		return true;
+		return ReadOptionalBool(obj, "listed", out.listed, reason);
 	}
 
 	std::string NetDirectoryCodec::EncodeHeartbeatResponse(const NetDirectoryHeartbeatResponse& response) {
-		return json{{"expires_in_s", response.expiresInS}, {"heartbeat_s", response.heartbeatS}}.dump();
+		json obj = {{"expires_in_s", response.expiresInS}, {"heartbeat_s", response.heartbeatS}};
+		if (response.listed.has_value()) obj["listed"] = *response.listed;
+		return obj.dump();
 	}
 
 	bool NetDirectoryCodec::DecodeHeartbeatResponse(const std::string& body, NetDirectoryHeartbeatResponse& out, std::string& reason) {
 		json obj;
 		if (!ParseBody(body, obj, reason)) return false;
 		return ReadInt(obj, "expires_in_s", 0, NetDirectoryLimits::c_MaxIntField, out.expiresInS, reason) &&
-		       ReadInt(obj, "heartbeat_s", 0, NetDirectoryLimits::c_MaxIntField, out.heartbeatS, reason);
+		       ReadInt(obj, "heartbeat_s", 0, NetDirectoryLimits::c_MaxIntField, out.heartbeatS, reason) &&
+		       ReadOptionalBool(obj, "listed", out.listed, reason);
 	}
 
 	std::string NetDirectoryCodec::EncodeDeleteRequest(const NetDirectoryDeleteRequest& request) {
@@ -350,7 +404,11 @@ namespace RTE {
 		for (const NetDirectorySessionRow& row : response.sessions) {
 			rows.push_back(SessionRowToJson(row));
 		}
-		return json{{"sessions", rows}}.dump();
+		json body = {{"sessions", rows}, {"total", response.total}};
+		if (!response.nextCursor.empty()) {
+			body["next_cursor"] = response.nextCursor;
+		}
+		return body.dump();
 	}
 
 	bool NetDirectoryCodec::DecodeListResponse(const std::string& body, NetDirectoryListResponse& out, std::string& reason) {
@@ -359,6 +417,7 @@ namespace RTE {
 		const auto it = obj.find("sessions");
 		if (it == obj.end()) return Fail(reason, "missing_field", "sessions");
 		if (!it->is_array()) return Fail(reason, "invalid_field", "sessions");
+		if (it->size() > NetDirectoryLimits::c_MaxListRows) return Fail(reason, "invalid_field", "sessions");
 		std::vector<NetDirectorySessionRow> rows;
 		for (const json& item : *it) {
 			if (!item.is_object()) return Fail(reason, "invalid_field", "sessions");
@@ -367,7 +426,8 @@ namespace RTE {
 			rows.push_back(std::move(row));
 		}
 		out.sessions = std::move(rows);
-		return true;
+		return ReadOptionalInt(obj, "total", 0, NetDirectoryLimits::c_MaxIntField, out.total, reason) &&
+		       ReadOptionalPlainStr(obj, "next_cursor", out.nextCursor, reason, 256);
 	}
 
 	std::string NetDirectoryCodec::EncodeSignalPost(const NetDirectorySignalPost& post) {
@@ -418,6 +478,7 @@ namespace RTE {
 		const auto it = obj.find("signals");
 		if (it == obj.end()) return Fail(reason, "missing_field", "signals");
 		if (!it->is_array()) return Fail(reason, "invalid_field", "signals");
+		if (it->size() > NetDirectoryLimits::c_MaxSignalRows) return Fail(reason, "invalid_field", "signals");
 		std::vector<NetDirectorySignal> signals;
 		for (const json& item : *it) {
 			if (!item.is_object()) return Fail(reason, "invalid_field", "signals");
@@ -442,8 +503,9 @@ namespace RTE {
 		if (row.networkProtocolVersion != local.networkProtocolVersion) return mismatch("network_protocol_version");
 		if (row.lockstepCodecVersion != local.lockstepCodecVersion) return mismatch("lockstep_codec_version");
 		if (row.controllerFrameVersion != local.controllerFrameVersion) return mismatch("controller_frame_version");
-		if (row.sessionIdentityHash != local.sessionIdentityHash) return mismatch("session_identity_hash");
+		// The session identity hash contains the module manifest hash, so it names only a difference the specific fields did not.
 		if (row.moduleManifestHash != local.moduleManifestHash) return mismatch("module_manifest_hash");
+		if (row.sessionIdentityHash != local.sessionIdentityHash) return mismatch("session_identity_hash");
 		if (reason) reason->clear();
 		return true;
 	}

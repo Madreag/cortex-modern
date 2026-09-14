@@ -334,7 +334,36 @@ namespace {
 			lua_settop(L, thread - 1);
 			return Failure(L, "the coroutine's stack bounds are invalid");
 		}
+		// A yielded top sits below base+framesize; size every frame from the function in its own slot.
+		ptrdiff_t needed = top;
+		lua_getfield(L, 1, "links");
+		if (lua_istable(L, -1)) {
+			lua_pushnil(L);
+			while (lua_next(L, -2) != 0) {
+				const ptrdiff_t index = static_cast<ptrdiff_t>(lua_tointeger(L, -2));
+				if (index < top && lua_istable(L, -1)) {
+					lua_rawgeti(L, slots, static_cast<int>(index - 1));
+					if (tvisfunc(L->top - 1) && isluafunc(funcV(L->top - 1))) {
+						needed = std::max(needed, index + 1 + static_cast<ptrdiff_t>(funcproto(funcV(L->top - 1))->framesize));
+					}
+					lua_pop(L, 1);
+				}
+				lua_pop(L, 1);
+			}
+		}
+		lua_pop(L, 1);
+		if (needed > 1000000) {
+			lua_settop(L, thread - 1);
+			return Failure(L, "the coroutine's stack bounds are invalid");
+		}
 		if (!lua_checkstack(co, static_cast<int>(top) + 16)) {
+			lua_settop(L, thread - 1);
+			return Failure(L, "the coroutine's stack exceeds the VM limit");
+		}
+		// Frames above the top grow past the C API reservation limit, as the VM grows a called frame.
+		const ptrdiff_t missing = needed - (tvref(co->maxstack) - tvref(co->stack));
+		if (missing > 0 && lj_state_cpgrowstack(co, static_cast<MSize>(missing)) != LUA_OK) {
+			co->top--;
 			lua_settop(L, thread - 1);
 			return Failure(L, "the coroutine's stack exceeds the VM limit");
 		}
@@ -442,8 +471,61 @@ namespace {
 			}
 			frame = stack + index - step;
 		}
+		guard = 0;
+		for (TValue* frame = co->base - 1; frame > stack + LJ_FR2;) {
+			if (tvisfunc(frame - 1) && isluafunc(funcV(frame - 1))) {
+				if ((frame - stack) + 1 + static_cast<ptrdiff_t>(funcproto(funcV(frame - 1))->framesize) > tvref(co->maxstack) - stack) {
+					EmptyThread(co);
+					lua_settop(L, thread - 1);
+					return Failure(L, "a frame needs more stack than the coroutine has");
+				}
+			}
+			const ptrdiff_t index = frame - stack;
+			if (++guard > 100000) {
+				break;
+			}
+			const ptrdiff_t step = frame_islua(frame) ? 1 + LJ_FR2 + bc_a(frame_pc(frame)[-1]) : frame_sized(frame) / sizeof(TValue);
+			if (step <= 0 || step > index - LJ_FR2) {
+				break;
+			}
+			frame = stack + index - step;
+		}
 		lua_settop(L, thread);
 		return 1;
+	}
+
+	// (coroutine) -> fits, needed, maxstack.
+	int ThreadStackFits(lua_State* L) {
+		if (!lua_isthread(L, 1)) {
+			return Failure(L, "not a coroutine");
+		}
+		lua_State* co = lua_tothread(L, 1);
+		TValue* stack = tvref(co->stack);
+		const ptrdiff_t maxstack = tvref(co->maxstack) - stack;
+		const std::string status = ThreadStatus(L, co);
+		if (status != "suspended") {
+			lua_pushboolean(L, 1);
+			lua_pushinteger(L, 0);
+			lua_pushinteger(L, static_cast<lua_Integer>(maxstack));
+			return 3;
+		}
+		ptrdiff_t needed = 0;
+		const ptrdiff_t topIndex = co->top - stack;
+		int guard = 0;
+		// Every Lua frame on the chain must fit its own function: base + framesize <= maxstack.
+		for (TValue* frame = co->base - 1; frame > stack + LJ_FR2;) {
+			if (++guard > 100000 || frame - stack >= topIndex) {
+				return Failure(L, "the coroutine's frame chain is corrupt");
+			}
+			if (tvisfunc(frame - 1) && isluafunc(funcV(frame - 1))) {
+				needed = std::max(needed, (frame - stack) + 1 + static_cast<ptrdiff_t>(funcproto(funcV(frame - 1))->framesize));
+			}
+			frame = frame_islua(frame) ? frame_prevl(frame) : frame_prevd(frame);
+		}
+		lua_pushboolean(L, needed <= maxstack);
+		lua_pushinteger(L, static_cast<lua_Integer>(needed));
+		lua_pushinteger(L, static_cast<lua_Integer>(maxstack));
+		return 3;
 	}
 
 	// () -> { [upvalue id] = { thread = coroutine, slot = index } } for every open upvalue of every coroutine.
@@ -599,6 +681,8 @@ namespace RTE::LuaThreadCodec {
 		lua_setglobal(state, "_ScriptGraphThreadCapture");
 		lua_pushcfunction(state, ThreadRestore);
 		lua_setglobal(state, "_ScriptGraphThreadRestore");
+		lua_pushcfunction(state, ThreadStackFits);
+		lua_setglobal(state, "_ScriptGraphThreadStackFits");
 		lua_pushcfunction(state, OpenUpvalues);
 		lua_setglobal(state, "_ScriptGraphOpenUpvalues");
 		lua_pushcfunction(state, JoinOpenUpvalue);

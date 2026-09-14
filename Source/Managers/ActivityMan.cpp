@@ -38,6 +38,8 @@
 #include "AssemblyEditor.h"
 
 #include "MusicMan.h"
+#include "TimerMan.h"
+#include "MovableMan.h"
 
 #ifdef SYSTEM_MINIZIP
 #include <minizip/zip.h>
@@ -85,6 +87,8 @@ void ActivityMan::Clear() {
 	PendingCheckpoint discarded = std::move(m_PendingCheckpoint);
 	m_PendingCheckpoint = PendingCheckpoint{};
 	m_RestartRestoresSnapshot = false;
+	m_LockstepRelaunchInProgress = false;
+	m_StaleActivitySlots = 0;
 	m_StartActivityResumed = false;
 	m_SaveGameTask = std::shared_future<bool>();
 	m_InActivity = false;
@@ -621,7 +625,10 @@ bool ActivityMan::RunGlobalCallbacksSelfTest() {
 	GlobalScript* script = findScript();
 	const auto* craftPreset = g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte");
 	const auto* scriptPreset = g_PresetMan.GetEntityPreset("GlobalScript", "Checkpoint Global", "UserScenes.rte");
-	if (!script || !craftPreset || !scriptPreset) return false;
+	if (!script || !craftPreset || !scriptPreset) {
+		std::cout << "[global-callback-selftest] FAIL fixture missing: script=" << (script != nullptr) << " craft=" << (craftPreset != nullptr) << " preset=" << (scriptPreset != nullptr) << " (tools/test_global_callbacks.py installs UserScenes.rte/Checkpoint Global)" << std::endl;
+		return false;
+	}
 	auto* craft = dynamic_cast<ACraft*>(craftPreset->Clone());
 	craft->SetPos(Vector(500, 100));
 	craft->SetTeam(Activity::TeamOne);
@@ -978,6 +985,7 @@ bool ActivityMan::RestartActivityCandidate() {
 	if (restoresSnapshot && activityStarted >= 0 && !m_PendingCheckpoint.worldStructure.empty() && !g_MovableMan.LoadWorldStructure(m_PendingCheckpoint.worldStructure)) {
 		g_ConsoleMan.PrintString("ERROR: the saved world membership did not restore"); activityStarted = -1;
 	}
+	if (restoresSnapshot && activityStarted >= 0 && m_LockstepRelaunchInProgress && m_Activity) m_Activity->ClearNonOwnedActorSlots();
 	if (restoresSnapshot && activityStarted >= 0 && !PrepareCheckpointPrimitives(m_PendingCheckpoint.runtimeGlobals)) {
 		g_ConsoleMan.PrintString("ERROR: the saved drawing primitives did not restore"); activityStarted = -1;
 	}
@@ -1002,6 +1010,8 @@ bool ActivityMan::RestartActivityCandidate() {
 		if (!m_Activity->ResolveCheckpointReferences() || !g_PrimitiveMan.ResolveCheckpointReferences()) {
 			g_ConsoleMan.PrintString("ERROR: the saved runtime references or globals did not restore");
 			activityStarted = -1;
+		} else if (m_LockstepRelaunchInProgress) {
+			m_Activity->RebindNonOwnedActorSlots();
 		}
 
 		if (m_PendingCheckpoint.uniqueIDCounter >= 0) {
@@ -1078,6 +1088,16 @@ void ActivityMan::LateUpdateGlobalScripts() const {
 		SoundSimulationScope sounds(0, soundPhase);
 		scriptedActivity->UpdateGlobalScripts(true);
 	}
+}
+
+void ActivityMan::NoteLockstepRelaunch() {
+	m_LockstepRelaunchInProgress = true;
+}
+
+void ActivityMan::EndLockstepRelaunch() {
+	if (!m_LockstepRelaunchInProgress) return;
+	m_LockstepRelaunchInProgress = false;
+	if (m_Activity) m_Activity->ClearCheckpointActorIDs();
 }
 
 void ActivityMan::Update() {
@@ -1284,6 +1304,7 @@ bool ActivityMan::RestartActivity() {
 	g_MovableMan.SetRestoringSnapshot(false);
 	if (restored) {
 		g_MovableMan.DiscardWorld(originalWorld);
+		if (m_LockstepRelaunchInProgress && m_Activity) m_Activity->RebindNonOwnedActorSlots();
 		committedImages = std::move(m_PendingCheckpoint.images);
 		if (committedImages) committedImages->Commit();
 		PendingCheckpoint completed = std::move(m_PendingCheckpoint);

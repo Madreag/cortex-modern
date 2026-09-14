@@ -53,7 +53,8 @@ local function same(expected, value)
 end
 function Create(self)
     self.testCreate, self.testUpdate = 1, 0
-    if self.UniqueID ~= 1048577 then return end
+    if _ContractAuditOwner == nil then _ContractAuditOwner = self.UniqueID end
+    if self.UniqueID ~= _ContractAuditOwner then return end
     local catalog = {}
     for preset in PresetMan:GetAllEntities() do
         local class = preset.ClassName
@@ -139,6 +140,7 @@ function Create(self)
         end
     end
     for _, gap in ipairs(state.gaps) do print("[native-contract-gap] " .. gap) end
+    print("[native-contract-check] ARMED uid=" .. tostring(self.UniqueID))
     print("[native-contract-fixture] constructed=" .. constructed .. " distinct_property_cases=" .. exercised .. " gaps=" .. #state.gaps)
 end
 function Update(self)

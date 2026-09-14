@@ -41,10 +41,14 @@
 #include "ControllerFrame.h"
 #include "PieMenu.h"
 #include "ScenarioRunner.h"
+#include "NetActorOwnership.h"
 #include "NetLockstep.h"
 #include "AIWriteScript.h"
 #include "LuaMan.h"
 #include "ThreadMan.h"
+#include "PreviewEventLedger.h"
+#include "RTETools.h"
+#include "TimerMan.h"
 
 #include <bit>
 
@@ -457,6 +461,17 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				g_ConsoleMan.PrintString("ERROR: Rejected a Reseat command from a peer that is not the host");
 				continue;
 			}
+		} else if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
+			if (!ScenarioRunner::IsLockstepAIOrderAuthorized(command.senderPeerId, *order)) {
+				const Actor* target = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order->actorUID)));
+				const bool cpu = !target || !target->IsPlayerControlled();
+				const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(order->actorUID, order->team, cpu);
+				const uint8_t authority = ScenarioRunner::ResolveTeamCommandAuthority(order->team);
+				const std::string line = "ERROR: Rejected a AIOrder command from a peer that does not control team " + std::to_string(commandTeam) + " (sender=" + std::to_string(static_cast<int>(command.senderPeerId)) + " owner=" + std::to_string(static_cast<int>(owner)) + " authority=" + std::to_string(static_cast<int>(authority)) + ")";
+				g_ConsoleMan.PrintString(line);
+				std::cout << line << std::endl;
+				continue;
+			}
 		} else if (!ScenarioRunner::IsLockstepTeamCommandSender(commandTeam, command.senderPeerId)) {
 			g_ConsoleMan.PrintString("ERROR: Rejected a " + std::string(NetGameCommandTypeName(NetGameCommandTypeOf(command.payload))) + " command from a peer that does not control team " + std::to_string(commandTeam));
 			continue;
@@ -636,11 +651,6 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				std::cout << "[net-match] AI order target not found: UID " << order->actorUID << std::endl;
 			}
 		} else if (const NetGameSwitchControl* switchControl = std::get_if<NetGameSwitchControl>(&command.payload)) {
-			// A peer may only take control for itself; the team gate above already vetted membership.
-			if (switchControl->newOwnerPeerId != command.senderPeerId) {
-				g_ConsoleMan.PrintString("ERROR: Rejected a SwitchControl command claiming another peer");
-				continue;
-			}
 			// The actor may legally be gone by apply time; the override applies either way so every
 			// peer's map stays identical, but a live actor must really be on the claimed team.
 			const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(switchControl->actorUID)));
@@ -648,7 +658,9 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				g_ConsoleMan.PrintString("ERROR: Rejected a SwitchControl command for an actor off its claimed team");
 				continue;
 			}
-			ScenarioRunner::SetLockstepControlOverride(switchControl->actorUID, switchControl->newOwnerPeerId);
+			if (!MovableMan::ApplyLockstepControlClaim(switchControl->actorUID, command.senderPeerId, switchControl->newOwnerPeerId, readyFrame.frame)) {
+				continue;
+			}
 			std::cout << "[net-match] control of actor " << switchControl->actorUID << " -> peer " << static_cast<int>(switchControl->newOwnerPeerId) << std::endl;
 		} else if (const NetGameReseat* reseat = std::get_if<NetGameReseat>(&command.payload)) {
 			// Like SwitchControl, the override lands even for an actor that is already gone so every
@@ -736,6 +748,73 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				continue;
 			}
 			ApplyDeferredSoundOp(*sound);
+		}
+	}
+	MovableMan::ReconcileLockstepControlBindings();
+}
+
+namespace {
+	std::map<int64_t, std::pair<uint64_t, uint8_t>> s_LockstepFrameClaims; //!< Actor -> the frame it was claimed on and by whom.
+}
+
+bool MovableMan::ApplyLockstepControlClaim(int64_t actorUniqueID, uint8_t senderPeerId, uint8_t newOwnerPeerId, uint64_t frame) {
+	const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(actorUniqueID)));
+	const int team = actor ? actor->GetTeam() : 0;
+	const bool cpuControlled = actor ? !actor->IsPlayerControlled() : true;
+	const uint8_t currentOwner = ScenarioRunner::GetLockstepActorOwner(actorUniqueID, team, cpuControlled);
+	if (newOwnerPeerId != senderPeerId) {
+		// The release form: an owner hands its actor back to the owner the world seeded for it.
+		if (senderPeerId != currentOwner || newOwnerPeerId != NetActorOwnership::GetSeededOwner(actorUniqueID)) {
+			// A selftest process has no console; the claim rules still have to run there.
+			if (ConsoleMan::IsConstructed()) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a SwitchControl command claiming another peer");
+			}
+			return false;
+		}
+	} else if (const auto claimed = s_LockstepFrameClaims.find(actorUniqueID); claimed != s_LockstepFrameClaims.end() && claimed->second.first == frame && claimed->second.second < senderPeerId) {
+		if (ConsoleMan::IsConstructed()) {
+			g_ConsoleMan.PrintString("NETWORK: Rejected a SwitchControl claim on an actor a lower peer already claimed this frame");
+		}
+		std::cout << "[net-match] rejected a claim on actor " << actorUniqueID << " already claimed this frame by peer " << static_cast<int>(claimed->second.second) << std::endl;
+		return false;
+	} else {
+		s_LockstepFrameClaims[actorUniqueID] = {frame, senderPeerId};
+	}
+	ScenarioRunner::SetLockstepControlOverride(actorUniqueID, newOwnerPeerId);
+	if (Actor* live = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(actorUniqueID)))) {
+		ApplyLockstepControlHandoffToActor(*live, newOwnerPeerId == senderPeerId);
+	}
+	return true;
+}
+
+// Production and the sim-facing mode move on the same committed tick: the frames the old owner still
+// has in flight are dropped by the ownership gate, so nothing puts the old mode back in between.
+void MovableMan::ApplyLockstepControlHandoffToActor(Actor& actor, bool seated) {
+	Controller& controller = *actor.GetController();
+	const Controller::InputMode handedMode = seated ? Controller::CIM_PLAYER : Controller::CIM_AI;
+	const Controller::InputMode previousMode = controller.GetInputMode();
+	const int previousPlayer = controller.GetPlayer();
+	if (previousMode == handedMode) {
+		return;
+	}
+	controller.ApplyWireMode(handedMode, controller.GetPlayerRaw());
+	actor.OnControllerInputModeChanged(previousMode, previousPlayer);
+}
+
+void MovableMan::ReconcileLockstepControlBindings() {
+	Activity* activity = g_ActivityMan.GetActivity();
+	if (!activity || !ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return;
+	}
+	const uint8_t localPeerId = ScenarioRunner::GetLockstepLocalPeerId();
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		const Actor* controlled = activity->GetControlledActor(player);
+		if (!controlled || !g_MovableMan.IsActor(const_cast<Actor*>(controlled))) {
+			continue;
+		}
+		const int64_t uid = static_cast<int64_t>(controlled->GetUniqueID());
+		if (ScenarioRunner::GetLockstepActorOwner(uid, controlled->GetTeam(), !controlled->IsPlayerControlled()) != localPeerId) {
+			activity->ReleaseLockstepControlOfActor(player);
 		}
 	}
 }
@@ -1133,7 +1212,10 @@ MovableMan::~MovableMan() {
 
 void MovableMan::Clear() {
 	m_Speculation = Speculation();
+	DropAllPreviewGhosts();
+	m_PreviewGhostPeak = 0;
 	m_RenderHidden.clear();
+	m_RenderSubstitutes.clear();
 	m_LinkRoot = nullptr;
 	m_WorldSetAside = nullptr;
 	m_Actors.clear();
@@ -1289,6 +1371,9 @@ void MovableMan::UnregisterObject(MovableObject* mo) {
 // Only a destruction may take an object out of a held copy. Unregistering also happens to live objects:
 // a restore detaches every Lua-owned tree, and those have to come back with the world that named them.
 void MovableMan::ForgetDestroyedObject(MovableObject* mo) {
+	if (m_LinkRoot == mo) {
+		m_LinkRoot = nullptr;
+	}
 	{
 		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 		// By address, not by key: the object may have taken a new identity since the copy was made.
@@ -1299,21 +1384,43 @@ void MovableMan::ForgetDestroyedObject(MovableObject* mo) {
 	g_LuaMan.ForgetDestroyedRegisteredMO(mo);
 }
 
+MovableObject* MovableMan::ViewIfSpeculating(MovableObject* found) const {
+	if (!found || !m_Speculation.active) {
+		return found;
+	}
+	return const_cast<MovableMan*>(this)->SpeculativeView(found);
+}
+
 const std::vector<MovableObject*>* MovableMan::GetMOsInBox(const Box& box, int ignoreTeam, bool getsHitByMOsOnly) const {
 	std::vector<MovableObject*>* vectorForLua = new std::vector<MovableObject*>();
 	*vectorForLua = std::move(g_SceneMan.GetMOIDGrid().GetMOsInBox(box, ignoreTeam, getsHitByMOsOnly));
+	if (m_Speculation.active) {
+		for (MovableObject*& mo: *vectorForLua) {
+			mo = ViewIfSpeculating(mo);
+		}
+	}
 	return vectorForLua;
 }
 
 const std::vector<MovableObject*>* MovableMan::GetMOsInRadius(const Vector& centre, float radius, int ignoreTeam, bool getsHitByMOsOnly) const {
 	std::vector<MovableObject*>* vectorForLua = new std::vector<MovableObject*>();
 	*vectorForLua = std::move(g_SceneMan.GetMOIDGrid().GetMOsInRadius(centre, radius, ignoreTeam, getsHitByMOsOnly));
+	if (m_Speculation.active) {
+		for (MovableObject*& mo: *vectorForLua) {
+			mo = ViewIfSpeculating(mo);
+		}
+	}
 	return vectorForLua;
 }
 
 const std::vector<MovableObject*>* MovableMan::GetMOsAtPosition(int pixelX, int pixelY, int ignoreTeam, bool getsHitByMOsOnly) const {
 	std::vector<MovableObject*>* vectorForLua = new std::vector<MovableObject*>();
 	*vectorForLua = std::move(g_SceneMan.GetMOIDGrid().GetMOsAtPosition(pixelX, pixelY, ignoreTeam, getsHitByMOsOnly));
+	if (m_Speculation.active) {
+		for (MovableObject*& mo: *vectorForLua) {
+			mo = ViewIfSpeculating(mo);
+		}
+	}
 	return vectorForLua;
 }
 
@@ -1926,6 +2033,7 @@ void MovableMan::DiscardAddedSince(const AddQueueMark& mark) {
 			RemoveActorFromTeamRoster(actor);
 		}
 		m_ValidActors.erase(actor);
+		m_ContiguousActorIDs.erase(actor);
 		actor->DestroyScriptState();
 		delete actor;
 	}
@@ -1962,6 +2070,184 @@ std::string MovableMan::DescribeAddedSince(const AddQueueMark& mark) const {
 		append(m_AddedParticles[i]);
 	}
 	return out;
+}
+
+void MovableMan::RecordSpeculativeSpawnMeta(MovableObject* mo) {
+	if (!m_Speculation.active || !mo) {
+		return;
+	}
+	Speculation::Spawn meta;
+	meta.object = mo;
+	meta.emitterUID = SoundSimulationScope::CurrentKey().objectUID;
+	meta.tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	m_Speculation.spawnMeta[mo] = meta;
+}
+
+void MovableMan::DestroySpeculativeSpawn(MovableObject* mo) {
+	if (!mo) {
+		return;
+	}
+	if (Actor* actor = dynamic_cast<Actor*>(mo)) {
+		if (actor->GetTeam() >= 0) {
+			RemoveActorFromTeamRoster(actor);
+		}
+		m_ValidActors.erase(actor);
+	}
+	m_ValidItems.erase(mo);
+	m_ValidParticles.erase(mo);
+	mo->DestroyScriptState();
+	delete mo;
+}
+
+void MovableMan::HarvestSpeculativeSpawns() {
+	if (!m_Speculation.active) {
+		return;
+	}
+	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex);
+	const auto take = [this](auto& queue, size_t mark) {
+		for (size_t i = mark; i < queue.size(); ++i) {
+			MovableObject* mo = queue[i];
+			Speculation::Spawn spawn;
+			spawn.object = mo;
+			if (const auto found = m_Speculation.spawnMeta.find(mo); found != m_Speculation.spawnMeta.end()) {
+				spawn.emitterUID = found->second.emitterUID;
+				spawn.tick = found->second.tick;
+				m_Speculation.spawnMeta.erase(found);
+			} else {
+				spawn.emitterUID = SoundSimulationScope::CurrentKey().objectUID;
+				spawn.tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			}
+			m_Speculation.spawns.push_back(spawn);
+		}
+		queue.resize(mark);
+	};
+	take(m_AddedActors, m_Speculation.mark.actors);
+	take(m_AddedItems, m_Speculation.mark.items);
+	take(m_AddedParticles, m_Speculation.mark.particles);
+}
+
+void MovableMan::TravelSpeculativeSpawns() {
+	if (!m_Speculation.active) {
+		return;
+	}
+	for (Speculation::Spawn& spawn: m_Speculation.spawns) {
+		if (!spawn.object || spawn.object->IsSetToDelete()) {
+			continue;
+		}
+		TravelStage(spawn.object, dynamic_cast<Actor*>(spawn.object) != nullptr);
+	}
+	for (Speculation::Spawn& spawn: m_Speculation.spawns) {
+		if (!spawn.object || spawn.object->IsSetToDelete()) {
+			continue;
+		}
+		UpdateStage(spawn.object, dynamic_cast<Actor*>(spawn.object) != nullptr);
+	}
+}
+
+size_t MovableMan::GetSpeculativeSpawnCount() const {
+	return m_Speculation.spawns.size();
+}
+
+std::string MovableMan::DescribeSpeculativeSpawns() const {
+	std::string out;
+	for (const Speculation::Spawn& spawn: m_Speculation.spawns) {
+		if (!spawn.object) {
+			continue;
+		}
+		out += (out.empty() ? "" : ",") + spawn.object->GetPresetName();
+	}
+	return out;
+}
+
+void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key) {
+	if (!mo) {
+		return;
+	}
+	mo->SetAsAddedToMovableMan(false);
+	mo->DestroyScriptState();
+	m_ValidActors.erase(mo);
+	m_ValidItems.erase(mo);
+	m_ValidParticles.erase(mo);
+	if (Actor* actor = dynamic_cast<Actor*>(mo); actor && actor->GetTeam() >= 0) {
+		RemoveActorFromTeamRoster(actor);
+	}
+	UnregisterObject(mo);
+	mo->SetAsNoID();
+	m_PreviewGhosts.push_back({mo, key});
+	if (m_PreviewGhosts.size() > m_PreviewGhostPeak) {
+		m_PreviewGhostPeak = m_PreviewGhosts.size();
+	}
+}
+
+void MovableMan::DropPreviewGhost(const PreviewEventLedger::Key& key) {
+	for (auto ghost = m_PreviewGhosts.begin(); ghost != m_PreviewGhosts.end(); ++ghost) {
+		if (ghost->key.kind == key.kind && ghost->key.emitterUID == key.emitterUID && ghost->key.presetHash == key.presetHash && ghost->key.tick == key.tick && ghost->key.seq == key.seq) {
+			delete ghost->object;
+			m_PreviewGhosts.erase(ghost);
+			return;
+		}
+	}
+}
+
+void MovableMan::DropAllPreviewGhosts() {
+	for (PreviewGhost& ghost: m_PreviewGhosts) {
+		delete ghost.object;
+	}
+	m_PreviewGhosts.clear();
+}
+
+static bool IsNamedSpeculativeSpawn(const MovableObject* mo) {
+	return mo && mo->GetPresetName() != "None" && !mo->GetPresetName().empty();
+}
+
+static void NoteProjectileEvent(const PreviewEventLedger::Key& key, bool predicted) {
+	for (const PreviewEventLedger::EventStart& start: PreviewEventLedger::GetEventStarts()) {
+		if (start.kind == key.kind && start.emitterUID == key.emitterUID && start.eventTick == key.tick && start.seq == key.seq && start.predicted == predicted) {
+			return;
+		}
+	}
+	PreviewEventLedger::NoteEventStart(PreviewEventLedger::CommittedTick(), key, predicted);
+}
+
+void MovableMan::TakePreviewSpawn(MovableObject* particle) {
+	if (!IsNamedSpeculativeSpawn(particle)) {
+		return;
+	}
+	const uint64_t emitter = SoundSimulationScope::CurrentKey().objectUID;
+	if (PreviewEventLedger::IsArmed() || !PreviewEventLedger::IsPreviewedEmitter(emitter)) {
+		return;
+	}
+	const uint64_t presetHash = Hash(particle->GetPresetName() + "@" + std::to_string(particle->GetModuleID()));
+	const PreviewEventLedger::Key key = PreviewEventLedger::NextKey(PreviewEventLedger::Projectile, emitter, 0, presetHash, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+	std::vector<int> voices;
+	if (PreviewEventLedger::Consume(key, voices)) {
+		DropPreviewGhost(key);
+		NoteProjectileEvent(key, false);
+	}
+}
+
+void MovableMan::DisposeSpeculativeSpawns() {
+	for (Speculation::Spawn& spawn: m_Speculation.spawns) {
+		MovableObject* mo = spawn.object;
+		if (!mo) {
+			continue;
+		}
+		if (mo->IsSetToDelete() || !IsNamedSpeculativeSpawn(mo) || !PreviewEventLedger::IsPreviewedEmitter(spawn.emitterUID)) {
+			DestroySpeculativeSpawn(mo);
+			continue;
+		}
+		const uint64_t presetHash = Hash(mo->GetPresetName() + "@" + std::to_string(mo->GetModuleID()));
+		const PreviewEventLedger::Key key = PreviewEventLedger::NextKey(PreviewEventLedger::Projectile, spawn.emitterUID, 0, presetHash, spawn.tick);
+		if (PreviewEventLedger::AlreadyPlayed(key)) {
+			DestroySpeculativeSpawn(mo);
+			continue;
+		}
+		PreviewEventLedger::Insert(key, {});
+		NoteProjectileEvent(key, true);
+		InstallPreviewGhost(mo, key);
+	}
+	m_Speculation.spawns.clear();
+	m_Speculation.spawnMeta.clear();
 }
 
 bool MovableMan::SwapActorForRender(Actor* original, Actor* substitute) {
@@ -2019,16 +2305,17 @@ void MovableMan::EndSpeculation(std::vector<MovableObject*>* takenResidents) {
 	m_Speculation.active = false;
 	g_SimChecksum.SetSuppressed(false);
 	m_LinkRoot = nullptr;
+	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+		m_ActorRoster[team] = m_Speculation.rosters[team];
+		m_SortTeamRoster[team] = m_Speculation.sortRoster[team];
+		m_Speculation.rosters[team].clear();
+	}
+	DisposeSpeculativeSpawns();
 	DiscardAddedSince(m_Speculation.mark);
 	for (auto& [resident, shadow]: m_Speculation.shadows) {
 		if (shadow.inWorld) {
 			delete shadow.object;
 		}
-	}
-	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
-		m_ActorRoster[team] = m_Speculation.rosters[team];
-		m_SortTeamRoster[team] = m_Speculation.sortRoster[team];
-		m_Speculation.rosters[team].clear();
 	}
 	if (takenResidents) {
 		*takenResidents = m_Speculation.taken;
@@ -2038,12 +2325,94 @@ void MovableMan::EndSpeculation(std::vector<MovableObject*>* takenResidents) {
 	m_Speculation.taken.clear();
 }
 
+MovableObject* MovableMan::OverlaySurvivorOf(MovableObject* mo, const std::unordered_set<const MovableObject*>& retiring) const {
+	if (!mo || !m_Speculation.active) {
+		return mo;
+	}
+	const auto resident = m_Speculation.residents.find(mo);
+	if (resident != m_Speculation.residents.end()) {
+		// A taken shadow lives on with its taker unless the taker retires too.
+		const Speculation::Shadow& shadow = m_Speculation.shadows.at(resident->second);
+		if (shadow.inWorld || retiring.count(mo) > 0) {
+			return resident->second;
+		}
+		return mo;
+	}
+	if (retiring.count(mo) == 0) {
+		return mo;
+	}
+	// mo is read only once found in a retiring shadow's tree, which is alive until EndSpeculation.
+	for (const auto& [shadowRoot, shadowResident]: m_Speculation.residents) {
+		if (retiring.count(shadowRoot) == 0) {
+			continue;
+		}
+		std::unordered_set<const Entity*> visited;
+		std::unordered_set<const MovableObject*> parts;
+		CollectOwnedMovableObjects(shadowRoot, visited, parts);
+		if (parts.count(mo) > 0) {
+			return shadowResident->FindPartByUniqueID(mo->GetUniqueID());
+		}
+	}
+	return nullptr;
+}
+
+std::unordered_set<const MovableObject*> MovableMan::RetiringOverlayObjects() {
+	std::unordered_set<const MovableObject*> retiring;
+	// The previews, the render substitutes and the residents outlive the overlay, so no walk enters them.
+	std::unordered_set<const Entity*> visited;
+	std::unordered_set<const MovableObject*> surviving;
+	for (const MovableObject* preview: LuaMan::PreviewRoots()) {
+		CollectOwnedMovableObjects(preview, visited, surviving);
+	}
+	for (const MovableObject* substitute: m_RenderSubstitutes) {
+		CollectOwnedMovableObjects(substitute, visited, surviving);
+	}
+	for (const auto& [resident, shadow]: m_Speculation.shadows) {
+		visited.insert(resident);
+	}
+	const auto retire = [&visited, &retiring](const MovableObject* root) {
+		if (root) {
+			CollectOwnedMovableObjects(root, visited, retiring);
+		}
+	};
+	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex);
+	for (const Speculation::Spawn& spawn: m_Speculation.spawns) {
+		retire(spawn.object);
+	}
+	for (size_t i = m_Speculation.mark.actors; i < m_AddedActors.size(); ++i) {
+		retire(m_AddedActors[i]);
+	}
+	for (size_t i = m_Speculation.mark.items; i < m_AddedItems.size(); ++i) {
+		retire(m_AddedItems[i]);
+	}
+	for (size_t i = m_Speculation.mark.particles; i < m_AddedParticles.size(); ++i) {
+		retire(m_AddedParticles[i]);
+	}
+	for (const auto& [resident, shadow]: m_Speculation.shadows) {
+		if (shadow.inWorld) {
+			retire(shadow.object);
+		}
+	}
+	// A spawnMeta key that left the add queues may already be deleted, so it is listed but never read.
+	for (const auto& entry: m_Speculation.spawnMeta) {
+		if (entry.first && surviving.count(entry.first) == 0 && m_Speculation.shadows.count(entry.first) == 0) {
+			retiring.insert(entry.first);
+		}
+	}
+	return retiring;
+}
+
 int MovableMan::ResidentKind(const MovableObject* mo) const {
 	if (!mo) {
 		return 0;
 	}
 	// Whatever entered the add queues during the speculation is speculative itself, not a resident.
 	if (m_Speculation.active) {
+		for (const Speculation::Spawn& spawn: m_Speculation.spawns) {
+			if (spawn.object == mo) {
+				return 0;
+			}
+		}
 		for (size_t i = m_Speculation.mark.actors; i < m_AddedActors.size(); ++i) {
 			if (m_AddedActors[i] == mo) {
 				return 0;
@@ -2166,6 +2535,20 @@ void MovableMan::HideForRender(const MovableObject* mo, bool hidden) {
 	}
 }
 
+void MovableMan::AddRenderSubstitute(const MovableObject* mo) {
+	if (mo) {
+		m_RenderSubstitutes.insert(mo);
+	}
+}
+
+void MovableMan::ClearRenderSubstitutes() {
+	m_RenderSubstitutes.clear();
+}
+
+bool MovableMan::IsRenderSubstitute(const MovableObject* mo) const {
+	return mo && m_RenderSubstitutes.count(mo) > 0;
+}
+
 std::string MovableMan::DescribeTeamRosters() const {
 	std::string out;
 	for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
@@ -2282,12 +2665,17 @@ void MovableMan::PurgeAllMOs() {
 	m_AddedAlarmEvents.clear();
 	m_AlarmEvents.clear();
 	m_LockstepJoinQuarantine.clear();
+	NetActorOwnership::ClearSeededOwners();
+	s_LockstepFrameClaims.clear();
 	m_MOIDIndex.clear();
 	// We want to keep known objects around, 'cause these can exist even when not in the simulation (they're here from creation till deletion, regardless of whether they are in sim)
 	// m_KnownObjects.clear();
 }
 
 Actor* MovableMan::GetNextActorInGroup(std::string group, Actor* pAfterThis) {
+	if (LuaMan::IsRunningPreviewHook()) {
+		ReportSpeculationViolation("GetNextActorInGroup", pAfterThis);
+	}
 	if (group.empty())
 		return 0;
 
@@ -2334,6 +2722,9 @@ Actor* MovableMan::GetNextActorInGroup(std::string group, Actor* pAfterThis) {
 }
 
 Actor* MovableMan::GetPrevActorInGroup(std::string group, Actor* pBeforeThis) {
+	if (LuaMan::IsRunningPreviewHook()) {
+		ReportSpeculationViolation("GetPrevActorInGroup", pBeforeThis);
+	}
 	if (group.empty())
 		return 0;
 
@@ -2380,6 +2771,9 @@ Actor* MovableMan::GetPrevActorInGroup(std::string group, Actor* pBeforeThis) {
 }
 
 Actor* MovableMan::GetNextTeamActor(int team, Actor* pAfterThis) {
+	if (LuaMan::IsRunningPreviewHook()) {
+		ReportSpeculationViolation("GetNextTeamActor", pAfterThis);
+	}
 	if (team < Activity::TeamOne || team >= Activity::MaxTeamCount || m_ActorRoster[team].empty())
 		return 0;
 	/*
@@ -2455,6 +2849,9 @@ Actor* MovableMan::GetNextTeamActor(int team, Actor* pAfterThis) {
 }
 
 Actor* MovableMan::GetPrevTeamActor(int team, Actor* pBeforeThis) {
+	if (LuaMan::IsRunningPreviewHook()) {
+		ReportSpeculationViolation("GetPrevTeamActor", pBeforeThis);
+	}
 	if (team < Activity::TeamOne || team >= Activity::MaxTeamCount || m_Actors.empty() || m_ActorRoster[team].empty())
 		return 0;
 	/* Obsolete, now uses team rosters which are sorted
@@ -2572,7 +2969,7 @@ Actor* MovableMan::GetClosestTeamActor(int team, int player, const Vector& scene
 		}
 	}
 
-	return pClosestActor;
+	return static_cast<Actor*>(ViewIfSpeculating(pClosestActor));
 }
 
 Actor* MovableMan::GetClosestEnemyActor(int team, const Vector& scenePoint, int maxRadius, Vector& getDistance) {
@@ -2599,7 +2996,7 @@ Actor* MovableMan::GetClosestEnemyActor(int team, const Vector& scenePoint, int 
 		}
 	}
 
-	return pClosestActor;
+	return static_cast<Actor*>(ViewIfSpeculating(pClosestActor));
 }
 
 Actor* MovableMan::GetClosestActor(const Vector& scenePoint, int maxRadius, Vector& getDistance, const Actor* pExcludeThis) {
@@ -2626,7 +3023,7 @@ Actor* MovableMan::GetClosestActor(const Vector& scenePoint, int maxRadius, Vect
 		}
 	}
 
-	return pClosestActor;
+	return static_cast<Actor*>(ViewIfSpeculating(pClosestActor));
 }
 
 Actor* MovableMan::GetClosestBrainActor(int team, const Vector& scenePoint) const {
@@ -2650,7 +3047,7 @@ Actor* MovableMan::GetClosestBrainActor(int team, const Vector& scenePoint) cons
 		}
 	}
 
-	return pClosestBrain;
+	return static_cast<Actor*>(ViewIfSpeculating(pClosestBrain));
 }
 
 Actor* MovableMan::GetClosestOtherBrainActor(int notOfTeam, const Vector& scenePoint) const {
@@ -2673,7 +3070,7 @@ Actor* MovableMan::GetClosestOtherBrainActor(int notOfTeam, const Vector& sceneP
 			}
 		}
 	}
-	return pClosestBrain;
+	return static_cast<Actor*>(ViewIfSpeculating(pClosestBrain));
 }
 
 Actor* MovableMan::GetUnassignedBrain(int team) const {
@@ -2682,7 +3079,7 @@ Actor* MovableMan::GetUnassignedBrain(int team) const {
 
 	for (std::list<Actor*>::const_iterator aIt = m_ActorRoster[team].begin(); aIt != m_ActorRoster[team].end(); ++aIt) {
 		if ((*aIt)->HasObjectInGroup("Brains") && !g_ActivityMan.GetActivity()->IsAssignedBrain(*aIt))
-			return *aIt;
+			return static_cast<Actor*>(ViewIfSpeculating(*aIt));
 	}
 
 	// Also need to look through all the actors added this frame, one might be a brain.
@@ -2691,7 +3088,7 @@ Actor* MovableMan::GetUnassignedBrain(int team) const {
 		int actorTeam = (*aaIt)->GetTeam();
 		// Accept no-team brains too - ACTUALLY, DON'T
 		if ((actorTeam == team /* || actorTeam == Activity::NoTeam*/) && (*aaIt)->HasObjectInGroup("Brains") && !g_ActivityMan.GetActivity()->IsAssignedBrain(*aaIt))
-			return *aaIt;
+			return static_cast<Actor*>(ViewIfSpeculating(*aaIt));
 	}
 
 	return 0;
@@ -2759,6 +3156,7 @@ void MovableMan::AddActor(Actor* actorToAdd) {
 
 		{
 			std::lock_guard<std::mutex> lock(m_AddedActorsMutex);
+			RecordSpeculativeSpawnMeta(actorToAdd);
 			m_AddedActors.push_back(actorToAdd);
 			m_ValidActors.insert(actorToAdd);
 
@@ -2802,6 +3200,7 @@ void MovableMan::AddItem(HeldDevice* itemToAdd) {
 		}
 
 		std::lock_guard<std::mutex> lock(m_AddedItemsMutex);
+		RecordSpeculativeSpawnMeta(itemToAdd);
 		m_AddedItems.push_back(itemToAdd);
 		m_ValidItems.insert(itemToAdd);
 	}
@@ -2830,6 +3229,10 @@ void MovableMan::AddParticle(MovableObject* particleToAdd) {
 				particleToAdd->NewFrame();
 				particleToAdd->SetAge(0);
 			}
+		}
+		RecordSpeculativeSpawnMeta(particleToAdd);
+		if (!m_Speculation.active && !m_RestoringSnapshot) {
+			TakePreviewSpawn(particleToAdd);
 		}
 		if (particleToAdd->IsDevice()) {
 			std::lock_guard<std::mutex> lock(m_AddedItemsMutex);
@@ -2873,6 +3276,7 @@ Actor* MovableMan::RemoveActor(MovableObject* pActorToRem) {
 					std::lock_guard<std::mutex> lock(m_AddedActorsMutex);
 					removed = *itr;
 					m_ValidActors.erase(*itr);
+					m_ContiguousActorIDs.erase(*itr);
 					m_AddedActors.erase(itr);
 					break;
 				}
@@ -3031,6 +3435,9 @@ bool MovableMan::ValidMO(const MovableObject* pMOToCheck) const {
 	if (!pMOToCheck) {
 		return false;
 	}
+	if (!m_RenderSubstitutes.empty() && m_RenderSubstitutes.count(pMOToCheck) > 0) {
+		return true;
+	}
 	if (m_Speculation.active) {
 		if (const auto shadow = m_Speculation.residents.find(pMOToCheck); shadow != m_Speculation.residents.end()) {
 			return m_Speculation.shadows.at(shadow->second).inWorld;
@@ -3047,6 +3454,9 @@ bool MovableMan::ValidMO(const MovableObject* pMOToCheck) const {
 bool MovableMan::IsActor(const MovableObject* pMOToCheck) {
 	if (!pMOToCheck) {
 		return false;
+	}
+	if (!m_RenderSubstitutes.empty() && m_RenderSubstitutes.count(pMOToCheck) > 0) {
+		return true;
 	}
 	if (m_Speculation.active) {
 		if (const auto shadow = m_Speculation.residents.find(pMOToCheck); shadow != m_Speculation.residents.end()) {
@@ -3497,6 +3907,7 @@ void MovableMan::AbsorbAddedMOs() {
 				RemoveActorFromTeamRoster(addedActor);
 			}
 			addedActor->DestroyScriptState();
+			m_ContiguousActorIDs.erase(addedActor);
 			delete addedActor;
 			m_ValidActors.erase(addedActor);
 		}
@@ -3540,6 +3951,12 @@ void MovableMan::ResolvePendingSnapshotLinks() {
 
 void MovableMan::ClearLockstepJoinQuarantine() {
 	m_LockstepJoinQuarantine.clear();
+}
+
+static void ForgetActivitySlots(MovableObject* object) {
+	Activity* activity = g_ActivityMan.GetActivity();
+	if (!activity) return;
+	if (const Actor* actor = dynamic_cast<Actor*>(object)) activity->ForgetDestroyedActor(actor);
 }
 
 void MovableMan::Update() {
@@ -3825,7 +4242,7 @@ void MovableMan::Update() {
 				if (pActivity) {
 					if (pActivity->IsAssignedBrain(*aIt))
 						pActivity->SetPlayerBrain(0, pActivity->IsBrainOfWhichPlayer(*aIt));
-
+					pActivity->ForgetDestroyedActor(*aIt);
 					pActivity->ReportDeath((*aIt)->GetTeam());
 				}
 
@@ -3850,6 +4267,7 @@ void MovableMan::Update() {
 			imidIt = iIt;
 
 			while (iIt != m_Items.end()) {
+				ForgetActivitySlots(*iIt);
 				(*iIt)->DestroyScriptState();
 				delete (*iIt);
 				m_ValidItems.erase(*iIt);
@@ -3862,6 +4280,7 @@ void MovableMan::Update() {
 			midIt = parIt;
 
 			while (parIt != m_Particles.end()) {
+				ForgetActivitySlots(*parIt);
 				(*parIt)->DestroyScriptState();
 				delete (*parIt);
 				m_ValidParticles.erase(*parIt);
@@ -3894,6 +4313,7 @@ void MovableMan::Update() {
 				if ((*parIt)->GetDrawPriority() >= terrMat->GetPriority()) {
 					(*parIt)->DrawToTerrain(g_SceneMan.GetTerrain());
 				}
+				ForgetActivitySlots(*parIt);
 				(*parIt)->DestroyScriptState();
 				delete (*parIt);
 				m_ValidParticles.erase(*parIt);
@@ -3901,6 +4321,11 @@ void MovableMan::Update() {
 			}
 			m_Particles.erase(midIt, m_Particles.end());
 		}
+	}
+
+	if (g_ActivityMan.LockstepRelaunchInProgress()) {
+		if (Activity* activity = g_ActivityMan.GetActivity()) activity->RebindNonOwnedActorSlots();
+		g_ActivityMan.EndLockstepRelaunch();
 	}
 
 	// Feed each actor's stable end-of-tick state into the `actors` checksum subsystem.
@@ -4183,6 +4608,16 @@ void MovableMan::UpdateControllers() {
 			}
 		}
 	}
+	// Record every registered actor's owner once, here, where the wire takes over: the policy would
+	// otherwise re-derive it from the control mode a switch is about to change.
+	if (lockstepActive) {
+		for (const Actor* actor: m_Actors) {
+			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+			if (!NetActorOwnership::HasSeededOwner(uid)) {
+				NetActorOwnership::SeedOwner(uid, ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()));
+			}
+		}
+	}
 	if (lockstepActive && ScenarioRunner::IsControllerLogReplaying()) {
 		ScenarioRunner::SetControllerReplayError("lockstep controller sync cannot be combined with controller log replay.");
 		return;
@@ -4422,7 +4857,18 @@ void MovableMan::UpdateControllers() {
 		ScenarioRunner::SetLockstepAppliedFrame(readyFrame.frame);
 		ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(readyFrame.frame);
 		for (Actor* actor: m_Actors) {
-			if (ScenarioRunner::IsLockstepActorOwnerGone(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame)) {
+			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+			const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
+			if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame)) {
+				const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
+				if (seeded != 0 && ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), true) == seeded) {
+					ApplyLockstepControlHandoffToActor(*actor, false);
+					std::cout << "[net-match] claim of actor " << uid << " returned to peer " << static_cast<int>(seeded)
+					          << " after seat " << static_cast<int>(claimant) << " expired" << std::endl;
+					continue;
+				}
+			}
+			if (ScenarioRunner::IsLockstepActorOwnerGone(uid, actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame)) {
 				actor->GetController()->SetDisabled(true);
 			}
 		}
@@ -4430,6 +4876,8 @@ void MovableMan::UpdateControllers() {
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 		CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
 		ApplyLockstepGameCommands(readyFrame);
+		// A leave purge moves owners without a command, so the bindings settle here every tick.
+		ReconcileLockstepControlBindings();
 
 		if (ScenarioRunner::IsControllerLogRecording()) {
 			std::vector<ControllerFrame> frames = SnapshotControllerFrames(m_Actors);
@@ -4606,6 +5054,11 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 				(*parIt)->Draw(pTargetBitmap, targetPos);
 			}
 		}
+		for (const PreviewGhost& ghost: m_PreviewGhosts) {
+			if (ghost.object) {
+				ghost.object->Draw(pTargetBitmap, targetPos);
+			}
+		}
 	}
 
 	{
@@ -4705,10 +5158,11 @@ namespace {
 		std::vector<std::pair<uint64_t, long>> quarantine;
 		std::vector<long> moidIndex;
 		std::map<long, int> contiguousActorIDs;
+		std::map<long, int> actorOwners;
 		std::array<int, Activity::MaxTeamCount> teamMOIDCount{};
 		std::array<std::set<long>, 3> validObjects;
 		template <class Archive> void Fields(Archive& archive) {
-			archive(cohorts, rosters, sortRoster, alarms, quarantine, moidIndex, contiguousActorIDs, teamMOIDCount, validObjects);
+			archive(cohorts, rosters, sortRoster, alarms, quarantine, moidIndex, contiguousActorIDs, actorOwners, teamMOIDCount, validObjects);
 		}
 	};
 }
@@ -4730,6 +5184,12 @@ std::string MovableMan::SaveWorldStructure() const {
 	for (const Actor* actor: m_Actors) {
 		if (auto entry = m_ContiguousActorIDs.find(actor); entry != m_ContiguousActorIDs.end()) state.contiguousActorIDs.emplace(actor->GetUniqueID(), entry->second);
 	}
+	// Only a live actor's owner travels: a seeded owner for a removed actor would fail the load's live-actor check.
+	const auto saveOwner = [&state](const Actor* actor) {
+		if (const uint8_t owner = NetActorOwnership::GetSeededOwner(static_cast<int64_t>(actor->GetUniqueID())); owner != 0) state.actorOwners.emplace(static_cast<long>(actor->GetUniqueID()), static_cast<int>(owner));
+	};
+	for (const Actor* actor: m_Actors) saveOwner(actor);
+	for (const Actor* actor: m_AddedActors) saveOwner(actor);
 	for (const AlarmEvent* event: m_AlarmEvents) state.alarms[0].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	for (const AlarmEvent* event: m_AddedAlarmEvents) state.alarms[1].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	state.quarantine = m_LockstepJoinQuarantine;
@@ -4779,6 +5239,11 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 		for (long uid: state.moidIndex) index.push_back(resolve(uid));
 		std::unordered_map<const Actor*, int> contiguous;
 		for (const auto& [uid, id]: state.contiguousActorIDs) contiguous.emplace(actor(uid), id);
+		std::map<int64_t, uint8_t> owners;
+		for (const auto& [uid, owner]: state.actorOwners) {
+			if (!actor(uid) || owner < 0 || owner > 255) throw std::runtime_error("owner entry names no live actor");
+			owners.emplace(static_cast<int64_t>(uid), static_cast<uint8_t>(owner));
+		}
 		// Allocate the incoming events before changing any live membership.
 		std::array<std::vector<std::unique_ptr<AlarmEvent>>, 2> events;
 		for (int group = 0; group < 2; ++group) for (const auto& [position, detail]: state.alarms[group]) {
@@ -4798,6 +5263,9 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 			m_ActorRoster[team].swap(rosters[team]); m_SortTeamRoster[team] = state.sortRoster[team]; m_TeamMOIDCount[team] = state.teamMOIDCount[team];
 		}
 		m_MOIDIndex.swap(index); m_ContiguousActorIDs.swap(contiguous); m_LockstepJoinQuarantine.swap(state.quarantine);
+		NetActorOwnership::RestoreSeededOwners(std::move(owners));
+		// A restored tick can be reached again after a resync or a rematch; claims made past it must not decide a later tie.
+		s_LockstepFrameClaims.clear();
 		const auto replaceEvents = [](auto& live, auto& saved) {
 			while (live.size() > saved.size()) { delete live.back(); live.pop_back(); }
 			for (size_t i = 0; i < saved.size(); ++i) {
@@ -4843,15 +5311,68 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	for (int id = 0; id < 5; ++id) clean.contiguousActorIDs.emplace(1001 + id, id);
 	WorldStructure orphaned = clean;
 	orphaned.contiguousActorIDs.emplace(0, 5);
+	WorldStructure stale = clean;
+	stale.contiguousActorIDs.emplace(4242, 5);
 	CheckpointWriter cleanWriter("WorldStructure1"); clean.Fields(cleanWriter);
 	CheckpointWriter orphanedWriter("WorldStructure1"); orphaned.Fields(orphanedWriter);
+	CheckpointWriter staleWriter("WorldStructure1"); stale.Fields(staleWriter);
 	const bool accepted = LoadWorldStructure(text, true) && LoadWorldStructure(cleanWriter.Text(), true);
-	const bool refused = !LoadWorldStructure(orphanedWriter.Text(), true);
+	const bool refused = !LoadWorldStructure(orphanedWriter.Text(), true) && !LoadWorldStructure(staleWriter.Text(), true);
+
+	auto plantAdded = [this](Actor* actor, int id) {
+		if (!actor) {
+			return false;
+		}
+		AddActor(actor);
+		m_ContiguousActorIDs[actor] = id;
+		return true;
+	};
+
+	Actor* addedRemove = craft ? dynamic_cast<Actor*>(craft->Clone()) : nullptr;
+	const bool plantedRemove = plantAdded(addedRemove, 9001);
+	const bool removedAdded = plantedRemove && RemoveActor(addedRemove) == addedRemove;
+	const bool addedRemoveCleared = removedAdded && GetContiguousActorID(addedRemove) < 0;
+	if (addedRemove && (removedAdded || !plantedRemove)) {
+		delete addedRemove;
+		addedRemove = nullptr;
+	}
+
+	Actor* absorbDelete = craft ? dynamic_cast<Actor*>(craft->Clone()) : nullptr;
+	const Actor* absorbKey = absorbDelete;
+	const bool plantedAbsorb = plantAdded(absorbDelete, 9002);
+	if (plantedAbsorb) {
+		absorbDelete->SetToDelete(true);
+		AbsorbAddedMOs();
+		absorbDelete = nullptr;
+	}
+	Actor* absorbRecycled = craft ? dynamic_cast<Actor*>(craft->Clone()) : nullptr;
+	const bool absorbDeleteCleared = plantedAbsorb && m_ContiguousActorIDs.find(absorbKey) == m_ContiguousActorIDs.end() &&
+	                                 absorbRecycled && (absorbRecycled != absorbKey || GetContiguousActorID(absorbRecycled) < 0);
+	if (absorbRecycled) {
+		delete absorbRecycled;
+	}
+
+	Actor* discardAdded = craft ? dynamic_cast<Actor*>(craft->Clone()) : nullptr;
+	const Actor* discardKey = discardAdded;
+	const AddQueueMark discardMark = MarkAddQueues();
+	const bool plantedDiscard = plantAdded(discardAdded, 9003);
+	if (plantedDiscard) {
+		DiscardAddedSince(discardMark);
+		discardAdded = nullptr;
+	}
+	Actor* discardRecycled = craft ? dynamic_cast<Actor*>(craft->Clone()) : nullptr;
+	const bool discardAddedCleared = plantedDiscard && m_ContiguousActorIDs.find(discardKey) == m_ContiguousActorIDs.end() &&
+	                                 discardRecycled && (discardRecycled != discardKey || GetContiguousActorID(discardRecycled) < 0);
+	if (discardRecycled) {
+		delete discardRecycled;
+	}
 
 	AddActor(craft);
-	const bool passed = indexed && cleared && archived && accepted && refused;
+	const bool passed = indexed && cleared && archived && accepted && refused && addedRemoveCleared && absorbDeleteCleared && discardAddedCleared;
 	std::cout << "[contiguous-index-selftest] " << (passed ? "PASS" : "FAIL") << " indexed=" << indexed << " cleared=" << cleared
-	          << " archived=" << archived << " accepted=" << accepted << " refused=" << refused << std::endl;
+	          << " archived=" << archived << " accepted=" << accepted << " refused=" << refused
+	          << " added_remove=" << addedRemoveCleared << " absorb_delete=" << absorbDeleteCleared
+	          << " discard_added=" << discardAddedCleared << std::endl;
 	return passed;
 }
 

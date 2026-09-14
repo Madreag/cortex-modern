@@ -1699,6 +1699,16 @@ void MOSRotating::ResolveFaithfulLinks() {
 	}
 }
 
+void MOSRotating::RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) {
+	MovableObject::RemapExternalLinks(map);
+	for (Attachable* attachable: m_Attachables) {
+		attachable->RemapExternalLinks(map);
+	}
+	for (AEmitter* wound: m_Wounds) {
+		wound->RemapExternalLinks(map);
+	}
+}
+
 void MOSRotating::CollectSubgroupIDTranslation(std::unordered_map<long, long>& savedToLiveSubID) const {
 	for (const Attachable* attachable: m_Attachables) {
 		if (const long pendingID = attachable->GetPendingPersistedUniqueID(); pendingID > 0) {

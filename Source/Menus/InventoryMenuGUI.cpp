@@ -35,6 +35,10 @@ const Vector InventoryMenuGUI::c_CarouselBoxSizeStep = (c_CarouselBoxMaxSize - c
 const int InventoryMenuGUI::c_CarouselBoxCornerRadius = ((c_CarouselBoxMaxSize.GetFloorIntY() - c_CarouselBoxMinSize.GetFloorIntY()) / 2) - 1;
 
 BITMAP* InventoryMenuGUI::s_CursorBitmap = nullptr;
+Actor* InventoryMenuGUI::s_RenderSubstituteActor = nullptr;
+Actor* InventoryMenuGUI::s_LastDrawActor = nullptr;
+Vector InventoryMenuGUI::s_LastDrawCenter;
+std::string InventoryMenuGUI::s_LastDrawEquippedName;
 
 InventoryMenuGUI::InventoryMenuGUI() {
 	Clear();
@@ -279,6 +283,38 @@ int InventoryMenuGUI::SetupFullOrTransferMode() {
 	return 0;
 }
 
+void InventoryMenuGUI::SetRenderSubstituteActor(Actor* actor) {
+	s_RenderSubstituteActor = actor;
+}
+
+Actor* InventoryMenuGUI::GetRenderSubstituteActor(const Actor* inventoryActor) {
+	if (s_RenderSubstituteActor && inventoryActor && s_RenderSubstituteActor->GetUniqueID() == inventoryActor->GetUniqueID()) {
+		return s_RenderSubstituteActor;
+	}
+	return nullptr;
+}
+
+Actor* InventoryMenuGUI::GetDrawActor() const {
+	if (Actor* substitute = GetRenderSubstituteActor(m_InventoryActor)) {
+		return substitute;
+	}
+	return m_InventoryActor;
+}
+
+Vector InventoryMenuGUI::GetDrawCenter() const {
+	if (Actor* substitute = GetRenderSubstituteActor(m_InventoryActor)) {
+		return substitute->GetRenderCPUPos();
+	}
+	return m_CenterPos;
+}
+
+MovableObject* InventoryMenuGUI::GetDrawEquippedItem() const {
+	if (const AHuman* human = dynamic_cast<const AHuman*>(GetDrawActor())) {
+		return human->GetEquippedItem();
+	}
+	return m_InventoryActorEquippedItems.empty() ? nullptr : m_InventoryActorEquippedItems.front().first;
+}
+
 void InventoryMenuGUI::SetInventoryActor(Actor* newInventoryActor) {
 	m_InventoryActor = newInventoryActor;
 	if (m_InventoryActor) {
@@ -395,18 +431,34 @@ void InventoryMenuGUI::Update() {
 }
 
 void InventoryMenuGUI::Draw(BITMAP* targetBitmap, const Vector& targetPos) const {
-	Vector drawPos = m_CenterPos - targetPos;
+	Actor* drawActor = GetDrawActor();
+	Vector center = GetDrawCenter();
+	Vector drawPos = center - targetPos;
+	std::vector<std::pair<MovableObject*, MovableObject*>> equippedItems;
+	if (const AHuman* human = dynamic_cast<const AHuman*>(drawActor)) {
+		if (human->GetEquippedItem() || human->GetEquippedBGItem()) {
+			equippedItems.push_back({human->GetEquippedItem(), human->GetEquippedBGItem()});
+		}
+	} else {
+		equippedItems = m_InventoryActorEquippedItems;
+	}
+	s_LastDrawActor = drawActor;
+	s_LastDrawCenter = center;
+	s_LastDrawEquippedName.clear();
+	if (!equippedItems.empty() && equippedItems.front().first) {
+		s_LastDrawEquippedName = equippedItems.front().first->GetPresetName();
+	}
 
 	switch (m_MenuMode) {
 		case MenuMode::Carousel:
-			if (!m_InventoryActor || (m_InventoryActor->IsInventoryEmpty() && m_InventoryActorEquippedItems.empty() && m_EnabledState != EnabledState::Disabling)) {
+			if (!drawActor || (drawActor->IsInventoryEmpty() && equippedItems.empty() && m_EnabledState != EnabledState::Disabling)) {
 				return;
 			}
 			drawPos -= Vector(0, c_CarouselMenuVerticalOffset + c_CarouselBoxMaxSize.GetY() * 0.5F);
-			DrawCarouselMode(targetBitmap, drawPos);
+			DrawCarouselMode(targetBitmap, drawPos, equippedItems);
 			break;
 		case MenuMode::Full:
-			if (!m_InventoryActor) {
+			if (!drawActor) {
 				return;
 			}
 			drawPos -= Vector((m_GUITopLevelBoxFullSize.GetX() - static_cast<float>(m_GUIInventoryItemsScrollbar->IsEnabled() ? m_GUIInventoryItemsScrollbar->GetWidth() : 0)) / 2.0F, m_GUITopLevelBoxFullSize.GetY() + c_FullMenuVerticalOffset);
@@ -1281,16 +1333,16 @@ void InventoryMenuGUI::DropSelectedItem(const Vector* dropDirection) {
 	m_GUIDropButton->OnLoseFocus();
 }
 
-void InventoryMenuGUI::DrawCarouselMode(BITMAP* targetBitmap, const Vector& drawPos) const {
+void InventoryMenuGUI::DrawCarouselMode(BITMAP* targetBitmap, const Vector& drawPos, const std::vector<std::pair<MovableObject*, MovableObject*>>& equippedItems) const {
 	clear_to_color(m_CarouselBitmap.get(), g_MaskColor);
 	clear_to_color(m_CarouselBGBitmap.get(), g_MaskColor);
 	AllegroBitmap carouselAllegroBitmap(m_CarouselBitmap.get());
 	float enableDisableProgress = static_cast<float>(m_EnableDisableAnimationTimer.GetRealTimeLimitProgress());
 
 	for (const std::unique_ptr<CarouselItemBox>& carouselItemBox: m_CarouselItemBoxes) {
-		if ((carouselItemBox->Item && carouselItemBox->Item->GetUniqueID() != 0) || (carouselItemBox->IsForEquippedItems && !m_InventoryActorEquippedItems.empty())) {
+		if ((carouselItemBox->Item && carouselItemBox->Item->GetUniqueID() != 0) || (carouselItemBox->IsForEquippedItems && !equippedItems.empty())) {
 			DrawCarouselItemBoxBackground(*carouselItemBox);
-			DrawCarouselItemBoxForeground(*carouselItemBox, &carouselAllegroBitmap);
+			DrawCarouselItemBoxForeground(*carouselItemBox, &carouselAllegroBitmap, equippedItems);
 		} else if (m_CarouselDrawEmptyBoxes) {
 			DrawCarouselItemBoxBackground(*carouselItemBox);
 			m_SmallFont->DrawAligned(&carouselAllegroBitmap, carouselItemBox->IconCenterPosition.GetFloorIntX(), carouselItemBox->IconCenterPosition.GetFloorIntY() - (m_SmallFont->GetFontHeight() / 2), "Empty", GUIFont::Centre);
@@ -1300,7 +1352,7 @@ void InventoryMenuGUI::DrawCarouselMode(BITMAP* targetBitmap, const Vector& draw
 		if (m_CarouselExitingItemBox->Item) {
 			DrawCarouselItemBoxBackground(*m_CarouselExitingItemBox);
 			if (m_CarouselExitingItemBox->Item->GetUniqueID() != 0) {
-				DrawCarouselItemBoxForeground(*m_CarouselExitingItemBox, &carouselAllegroBitmap);
+				DrawCarouselItemBoxForeground(*m_CarouselExitingItemBox, &carouselAllegroBitmap, equippedItems);
 			}
 		} else if (m_CarouselDrawEmptyBoxes) {
 			DrawCarouselItemBoxBackground(*m_CarouselExitingItemBox);
@@ -1358,10 +1410,10 @@ void InventoryMenuGUI::DrawCarouselItemBoxBackground(const CarouselItemBox& item
 	DrawBox(m_CarouselBGBitmap.get(), itemBoxToDraw.Pos + (itemBoxToDraw.RoundedAndBorderedSides.first ? m_CarouselBackgroundBoxBorderSize : Vector(0, m_CarouselBackgroundBoxBorderSize.GetY())), itemBoxToDraw.Pos + itemBoxToDraw.CurrentSize - spriteZeroIndexSizeOffset - (itemBoxToDraw.RoundedAndBorderedSides.second ? m_CarouselBackgroundBoxBorderSize : Vector(0, m_CarouselBackgroundBoxBorderSize.GetY())), m_CarouselBackgroundBoxColor, itemBoxToDraw.RoundedAndBorderedSides.first, itemBoxToDraw.RoundedAndBorderedSides.second);
 }
 
-void InventoryMenuGUI::DrawCarouselItemBoxForeground(const CarouselItemBox& itemBoxToDraw, AllegroBitmap* carouselAllegroBitmap) const {
+void InventoryMenuGUI::DrawCarouselItemBoxForeground(const CarouselItemBox& itemBoxToDraw, AllegroBitmap* carouselAllegroBitmap, const std::vector<std::pair<MovableObject*, MovableObject*>>& equippedItems) const {
 	std::vector<BITMAP*> itemIcons;
 	float totalItemMass = 0;
-	itemBoxToDraw.GetIconsAndMass(itemIcons, totalItemMass, &m_InventoryActorEquippedItems);
+	itemBoxToDraw.GetIconsAndMass(itemIcons, totalItemMass, &equippedItems);
 
 	Vector spriteZeroIndexSizeOffset(1, 1);
 	Vector multiItemDrawOffset = Vector(c_MultipleItemInBoxOffset * static_cast<float>(itemIcons.size() - 1), -c_MultipleItemInBoxOffset * static_cast<float>(itemIcons.size() - 1));

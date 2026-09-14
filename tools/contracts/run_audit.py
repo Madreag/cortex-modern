@@ -127,11 +127,34 @@ def unexpected_errors(item):
     return [line for line in item['errors'] if not exempt or CRASH_ERROR.search(line)]
 
 
+def fixtures_expected(item, expect_load):
+    """Applying transitions and accepted loads must run the scripted fixtures."""
+    base = item['operation'].split(':', 1)[0]
+    if base in LOAD_OPERATIONS or base in STAGE_TRANSACTIONS:
+        return expect_load == 'accepted'
+    return True
+
+
+def armed_names(item):
+    names = []
+    for entry in item.get('armed_fixtures') or []:
+        name = entry['name'] if isinstance(entry, dict) else entry
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def fixture_checks(item, name):
+    if name == 'native':
+        return list(item.get('native_checks') or [])
+    return [check for check in (item.get('contract_checks') or []) if check.get('family') == name]
+
+
 def gate(item, expect_load, exe_hash):
     """The recorded outcome of the transition, not just a clean process."""
     base = item['operation'].split(':', 1)[0]
     must_apply = base in APPLYING_OPERATIONS or (base in LOAD_OPERATIONS and expect_load == 'accepted')
-    return [name for name, passed in (
+    failures = [name for name, passed in (
         ('completed', item['completed']),
         ('process_clean', item['process_clean']),
         ('desktop_unchanged', item['desktop_unchanged']),
@@ -141,6 +164,23 @@ def gate(item, expect_load, exe_hash):
         ('graph_capture', not item['graph_capture_problems']),
         ('graphs_serialized', all(observation['serialized'] and observation['problem_count'] == 0
                                   for observation in item['graph_observations']))) if not passed]
+    armed = armed_names(item)
+    if fixtures_expected(item, expect_load) and not armed:
+        failures.append('fixture_armed')
+    for name in armed:
+        if not fixture_checks(item, name):
+            failures.append(f'{name}_checks')
+    for line in item.get('native_mismatches') or []:
+        failures.append('native_mismatches:' + line)
+    if not (item.get('native_mismatches') or []) and any(
+            check.get('mismatches', 0) > 0 for check in (item.get('native_checks') or [])):
+        failures.append('native_mismatches')
+    for line in item.get('contract_mismatches') or []:
+        failures.append('contract_mismatches:' + line)
+    if not (item.get('contract_mismatches') or []) and any(
+            check.get('mismatches', 0) > 0 for check in (item.get('contract_checks') or [])):
+        failures.append('contract_mismatches')
+    return failures
 
 
 def main():
@@ -272,6 +312,8 @@ def main():
             'completed': bool(match), 'process_clean': record['exit_code'] == 0 and not record['timed_out'],
             'desktop_unchanged': record['input_desktop_before'] == record['input_desktop_after'], 'binary': record['exe_sha256'], 'errors': errors}
         if variant: result['variant'] = variant
+        result['armed_fixtures'] = [{'name': name, 'uid': uid}
+            for name, uid in dict.fromkeys(re.findall(r'\[([a-z0-9-]+)-contract-check\] ARMED uid=(\S+)', log))]
         result['native_checks'] = [{'observation': item[0], 'owners': int(item[1]), 'checked': int(item[2]), 'mismatches': int(item[3])}
             for item in re.findall(r'\[native-contract-check\] (\S+) owners=(\d+) checked=(\d+) mismatches=(\d+)', log)]
         result['native_mismatches'] = list(dict.fromkeys(re.findall(r'^.*\[native-contract-mismatch\].*$', log, re.M)))

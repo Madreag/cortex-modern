@@ -22,7 +22,7 @@ python tools/session_directory/test_session_directory.py -v
 - `test_session_directory.py` — loopback tests (`python test_session_directory.py -v`)
 - `com.cortex.session-directory.plist` — macOS LaunchDaemon
 
-Listen address and port: `--bind` and `--port` (default `8443`). TLS when both `--cert` and `--key` are set. Plain HTTP only with `--insecure-http` (tests and LAN trials). `--expiry-s` default 15. `--heartbeat-s` default 5 (also returned on register). `--log-file` is a rotating log (5 × 5 MB).
+Listen address and port: `--bind` and `--port` (default `0`, an ephemeral port printed at start; the daemon and the Windows task pass `--port 8443`). TLS when both `--cert` and `--key` are set. Plain HTTP only with `--insecure-http` (tests and LAN trials). `--expiry-s` default 15. `--heartbeat-s` default 5 (also returned on register). `--log-file` is a rotating log (5 × 5 MB).
 
 ## What the install key is
 
@@ -34,6 +34,18 @@ Two limiters apply on every `/v1/` request; the stricter wins (`429 {"error":"ra
 - Per source IP: 30 registers/min, 300 requests/min.
 
 Per session signal caps: at most 16 destination queues and at most 1 MiB of undrained decoded payload. A destination queue that is not drained for 120 s is dropped. The host queue is never dropped while the session lives. Over those caps: `400 {"error":"queue_full"}`. Per-queue cap remains 256 entries; per-signal decoded payload remains 64 KiB.
+
+Idle rate-limit buckets (install key or address with no refill for 10 minutes) are dropped on every 256th check or when a limiter map exceeds 10 000 entries. A pruned key starts with a fresh budget.
+
+## Listing sessions
+
+`GET /v1/sessions` returns live rows ordered by `(created_at, session_id)` ascending.
+
+- `limit` — page size, 1..200, default 100.
+- `cursor` — opaque token from a previous `next_cursor` (base64 of `created_at:session_id`). A malformed cursor is `400 {"error":"invalid_field","field":"cursor"}`.
+- The reply always includes `total` (live rows matching the filters). When more rows remain it also includes `next_cursor`.
+
+Optional filters `mode`, `activity`, and `state` still apply before the page is cut.
 
 ## Mac install
 
@@ -51,10 +63,18 @@ mkdir -p /Users/erol/cortex-directory/logs
 
 ```bash
 cd /Users/erol/cortex-directory
-openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=cortex-directory"
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=cortex-directory" -addext "subjectAltName=IP:<lan-ip>"
 ```
 
-Clients trust the system store or a user-supplied CA file. Do not pin a certificate hash in the engine.
+Use `DNS:<name>` instead of `IP:<lan-ip>` when the directory is reached by name.
+
+Pin the leaf (64 lowercase hex):
+
+```bash
+openssl x509 -in cert.pem -outform DER | openssl dgst -sha256
+```
+
+Every client sets `SessionDirectoryCertSha256 = <hex>` in Settings.ini for a self-signed directory. An unpinned client needs a certificate the system store trusts (Let's Encrypt with a public DNS name). Pinned mode does not consult the chain, the name or the dates.
 
 4. Load the daemon (starts at boot, survives logout, KeepAlive):
 
@@ -80,4 +100,4 @@ Start in: D:\path\to
 
 Allow inbound TCP 8443 for that Python executable (elevated firewall rule). Clients set the directory URL to this PC. There is no launchd job and no `gui/501` requirement.
 
-Self-signed certificate (same `openssl` command as above) unless a public DNS name exists for Let's Encrypt.
+Self-signed certificate (same `openssl` command as above, including the SAN) unless a public DNS name exists for Let's Encrypt. Clients pin that certificate as in step 3.

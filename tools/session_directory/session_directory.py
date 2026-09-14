@@ -35,11 +35,17 @@ REQ_PER_MIN = 120
 IP_REG_PER_MIN = 30
 IP_REQ_PER_MIN = 300
 RATE_WINDOW_S = 60.0
+RATE_IDLE_S = 600.0
+PRUNE_EVERY_N = 256
+PRUNE_MAP_MAX = 10000
+LIST_LIMIT_DEFAULT = 100
+LIST_LIMIT_MAX = 200
 MAX_DEST_QUEUES = 16
 MAX_SESSION_PAYLOAD = 1024 * 1024
 QUEUE_IDLE_S = 120.0
 HANDLER_TIMEOUT_S = 10
 HANDSHAKE_TIMEOUT_S = 5
+MAX_SIGNAL_WAIT_S = 25.0
 INSTALL_KEY_MIN = 16
 INSTALL_KEY_MAX = 32
 INSTALL_KEY_CHARS = frozenset(
@@ -155,16 +161,38 @@ def as_json_int(value: float) -> int:
     return int(value)
 
 
+def encode_list_cursor(created_at: float, session_id: str) -> str:
+    raw = f"{created_at}:{session_id}"
+    return base64.b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def decode_list_cursor(cursor: str) -> tuple[float, str]:
+    try:
+        raw = base64.b64decode(cursor.encode("ascii"), validate=True).decode("utf-8")
+    except (ValueError, binascii.Error, UnicodeDecodeError) as exc:
+        raise FieldError("invalid_field", "cursor") from exc
+    created_s, sep, session_id = raw.partition(":")
+    if not sep or not created_s or not session_id:
+        raise FieldError("invalid_field", "cursor")
+    try:
+        created_at = float(created_s)
+    except ValueError as exc:
+        raise FieldError("invalid_field", "cursor") from exc
+    return created_at, session_id
+
+
 class RateLimiter:
     def __init__(self, req_per_min: int, reg_per_min: int) -> None:
         self.req_per_min = req_per_min
         self.reg_per_min = reg_per_min
         self._requests: dict[str, list[float]] = {}
         self._registers: dict[str, list[float]] = {}
+        self._last: dict[str, float] = {}
 
     def _trim(self, bucket: dict[str, list[float]], key: str, now: float) -> list[float]:
         kept = [ts for ts in bucket.get(key, []) if now - ts < RATE_WINDOW_S]
-        bucket[key] = kept
+        if key in bucket:
+            bucket[key] = kept
         return kept
 
     def _retry_after(self, events: list[float], now: float) -> int:
@@ -201,10 +229,19 @@ class RateLimiter:
         reqs = self._trim(self._requests, key, now)
         reqs.append(now)
         self._requests[key] = reqs
+        self._last[key] = now
         if is_register:
             regs = self._trim(self._registers, key, now)
             regs.append(now)
             self._registers[key] = regs
+
+    def prune_idle(self, now: float) -> None:
+        cutoff = now - RATE_IDLE_S
+        dead = [key for key, ts in self._last.items() if ts < cutoff]
+        for key in dead:
+            self._requests.pop(key, None)
+            self._registers.pop(key, None)
+            self._last.pop(key, None)
 
 
 class DualRateLimiter:
@@ -212,6 +249,7 @@ class DualRateLimiter:
         self._lock = threading.Lock()
         self._by_key = RateLimiter(REQ_PER_MIN, REG_PER_MIN)
         self._by_ip = RateLimiter(IP_REQ_PER_MIN, IP_REG_PER_MIN)
+        self._checks = 0
 
     def _stricter(
         self,
@@ -226,10 +264,22 @@ class DualRateLimiter:
         right_wait = int(right[1]["retry_after_s"])
         return left if left_wait >= right_wait else right
 
+    def _map_size(self) -> int:
+        return max(
+            len(self._by_key._requests),
+            len(self._by_key._registers),
+            len(self._by_ip._requests),
+            len(self._by_ip._registers),
+        )
+
     def check(
         self, install_key: str, client_ip: str, now: float, is_register: bool
     ) -> Optional[tuple[int, dict[str, Any]]]:
         with self._lock:
+            self._checks += 1
+            if self._checks % PRUNE_EVERY_N == 0 or self._map_size() > PRUNE_MAP_MAX:
+                self._by_key.prune_idle(now)
+                self._by_ip.prune_idle(now)
             key_hit = self._by_key.probe(install_key, now, is_register)
             ip_hit = self._by_ip.probe(client_ip, now, is_register)
             blocked = self._stricter(key_hit, ip_hit)
@@ -280,6 +330,7 @@ class Session:
         self.created_at = created_at
         self.last_beat = created_at
         self.state = "lobby"
+        self.listed = True
         self.queues: dict[str, list[Signal]] = {}
         self.next_seq: dict[str, int] = {}
         self.queue_drain_at: dict[str, float] = {}
@@ -305,6 +356,7 @@ class SessionDirectory:
         self.heartbeat_s = heartbeat_s
         self.queue_idle_s = queue_idle_s
         self._lock = threading.RLock()
+        self._signals_changed = threading.Condition(self._lock)
         self._sessions: dict[str, Session] = {}
         self.limiter = DualRateLimiter()
         self._stop = threading.Event()
@@ -378,6 +430,7 @@ class SessionDirectory:
             "expires_in_s": as_json_int(self.expiry_s),
             "heartbeat_s": as_json_int(self.heartbeat_s),
             "observed_ip": observed_ip,
+            "supports_unlisted": True,
         }
 
     def heartbeat(
@@ -394,6 +447,12 @@ class SessionDirectory:
             state = require_str(data, "state")
             if state not in VALID_STATES:
                 raise FieldError("invalid_field", "state")
+        listed: Optional[bool] = None
+        if "listed" in data:
+            value = data["listed"]
+            if not isinstance(value, bool):
+                raise FieldError("invalid_field", "listed")
+            listed = value
         with self._lock:
             sess = self._get(session_id, now)
             if sess is None:
@@ -406,10 +465,14 @@ class SessionDirectory:
                 sess.fields["listen_addrs"] = listen_addrs
             if state is not None:
                 sess.state = state
+            if listed is not None:
+                sess.listed = listed
             sess.last_beat = now
+            listed_now = sess.listed
         return {
             "expires_in_s": as_json_int(self.expiry_s),
             "heartbeat_s": as_json_int(self.heartbeat_s),
+            "listed": listed_now,
         }
 
     def delete(self, session_id: str, data: dict[str, Any], now: float) -> dict[str, Any]:
@@ -421,6 +484,7 @@ class SessionDirectory:
             if not tokens_equal(token, sess.token):
                 raise PermissionError("forbidden")
             del self._sessions[session_id]
+            self._signals_changed.notify_all()
         return {"ok": True}
 
     def list_sessions(
@@ -429,19 +493,42 @@ class SessionDirectory:
         mode: Optional[str],
         activity: Optional[str],
         state: Optional[str],
+        limit: int = LIST_LIMIT_DEFAULT,
+        cursor: Optional[str] = None,
     ) -> dict[str, Any]:
+        start_key: Optional[tuple[float, str]] = None
+        if cursor is not None:
+            start_key = decode_list_cursor(cursor)
         with self._lock:
             self.prune(now)
-            rows: list[dict[str, Any]] = []
+            matched: list[Session] = []
             for sess in self._sessions.values():
+                if not sess.listed:
+                    continue
                 if mode is not None and sess.fields["mode"] != mode:
                     continue
                 if activity is not None and sess.fields["activity"] != activity:
                     continue
                 if state is not None and sess.state != state:
                     continue
-                rows.append(sess.as_list_row(now))
-        return {"sessions": rows}
+                matched.append(sess)
+            matched.sort(key=lambda item: (item.created_at, item.session_id))
+            total = len(matched)
+            if start_key is not None:
+                matched = [
+                    sess
+                    for sess in matched
+                    if (sess.created_at, sess.session_id) > start_key
+                ]
+            page = matched[:limit]
+            body: dict[str, Any] = {
+                "sessions": [sess.as_list_row(now) for sess in page],
+                "total": total,
+            }
+            if len(matched) > limit:
+                last = page[-1]
+                body["next_cursor"] = encode_list_cursor(last.created_at, last.session_id)
+        return body
 
     def post_signal(
         self, session_id: str, data: dict[str, Any], now: float
@@ -482,6 +569,7 @@ class SessionDirectory:
             sess.next_seq[to_peer] = seq + 1
             queue.append(Signal(seq, from_peer, to_peer, payload_b64, len(raw)))
             sess.undrained_bytes += len(raw)
+            self._signals_changed.notify_all()
         return {"ok": True, "seq": seq}
 
     def get_signals(
@@ -491,6 +579,7 @@ class SessionDirectory:
         after: int,
         host_token: Optional[str],
         now: float,
+        wait_s: float = 0.0,
     ) -> dict[str, Any]:
         if not valid_peer(peer):
             raise FieldError("invalid_field", "peer")
@@ -501,6 +590,21 @@ class SessionDirectory:
             if peer == "host":
                 if host_token is None or not tokens_equal(host_token, sess.token):
                     raise PermissionError("forbidden")
+            deadline = now + wait_s
+            # Long-poll: hold the request until this peer's queue gains a signal past
+            # `after`, the session goes away, or the wait elapses.
+            while wait_s > 0:
+                queue = sess.queues.get(peer)
+                if queue is not None and any(item.seq > after for item in queue):
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._signals_changed.wait(remaining)
+                sess = self._sessions.get(session_id)
+                if sess is None:
+                    raise KeyError("not_found")
+            now = time.monotonic()
             queue = sess.queues.get(peer)
             if queue is None:
                 return {"signals": []}
@@ -569,7 +673,16 @@ def configure_logging(log_file: Optional[Path]) -> None:
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Self-hosted session directory")
     parser.add_argument("--bind", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8443)
+    # 0 = ephemeral; the bound port is printed at start. Game-port fixture
+    # defaults live above 47600, each different:
+    #   test_lobby_rejection.py            47611
+    #   test_lobby_lifecycle.py            47612
+    #   test_lobby_input_delay.py          47613
+    #   test_hold_panel_probe.py           47614
+    #   test_reconnect_menu_recovery.py    47615
+    #   test_reconnect_startup_offer.py    47616
+    #   test_substitute_application.py     47617
+    parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--cert", type=Path, default=None)
     parser.add_argument("--key", type=Path, default=None)
     parser.add_argument("--insecure-http", action="store_true")
@@ -696,6 +809,15 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                     return
                 now = time.monotonic()
                 if parts == ["v1", "sessions"]:
+                    limit = LIST_LIMIT_DEFAULT
+                    limit_raw = self._q1(query, "limit")
+                    if limit_raw is not None:
+                        try:
+                            limit = int(limit_raw)
+                        except ValueError:
+                            raise FieldError("invalid_field", "limit") from None
+                        if limit < 1 or limit > LIST_LIMIT_MAX:
+                            raise FieldError("invalid_field", "limit")
                     self._send(
                         200,
                         store.list_sessions(
@@ -703,6 +825,8 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                             self._q1(query, "mode"),
                             self._q1(query, "activity"),
                             self._q1(query, "state"),
+                            limit,
+                            self._q1(query, "cursor"),
                         ),
                     )
                     return
@@ -721,6 +845,15 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                             after = int(after_raw)
                         except ValueError:
                             raise FieldError("invalid_field", "after") from None
+                    wait_raw = self._q1(query, "wait")
+                    wait_s = 0.0
+                    if wait_raw is not None:
+                        try:
+                            wait_s = float(wait_raw)
+                        except ValueError:
+                            raise FieldError("invalid_field", "wait") from None
+                        if not 0.0 <= wait_s <= MAX_SIGNAL_WAIT_S:
+                            raise FieldError("invalid_field", "wait")
                     token = self._q1(query, "token") or self.headers.get(
                         "X-Session-Token"
                     )
@@ -730,7 +863,10 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                         self._observed_ip(),
                         peer_via,
                     )
-                    self._send(200, store.get_signals(sid, peer, after, token, now))
+                    self._send(
+                        200,
+                        store.get_signals(sid, peer, after, token, now, wait_s),
+                    )
                     return
                 self._send(404, {"error": "not_found"})
             except TimeoutError:
@@ -908,6 +1044,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         key=args.key if use_tls else None,
         log_file=args.log_file,
     )
+    print(f"session_directory listening on {args.bind}:{server.port}", flush=True)
     try:
         server.thread.join()
     except KeyboardInterrupt:

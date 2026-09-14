@@ -415,6 +415,7 @@ namespace RTE {
 		uint32_t relayObservationOverflows = 0; //!< Forwards that could not carry a frame's whole observation set; the tables would disagree.
 		uint32_t peersDroppedSilent = 0; //!< Remotes the host adjudicated gone for going quiet, not for closing their socket.
 		uint32_t stopsFromLeftPeers = 0; //!< Stops a peer sent after the round had already dropped its seat.
+		uint32_t stopsAdjudicatedAsLeaves = 0; //!< Non-recovery client Stops the relay host treated as that client's leave.
 		uint32_t peerFramesWaived = 0; //!< Fenced incarnations the round stopped requiring frames from; not seat drops.
 		uint32_t connectionsClosedOnEviction = 0; //!< Connections the host closed because the round took the seat.
 		uint32_t timeouts = 0;
@@ -429,7 +430,7 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 20;
+		static constexpr uint16_t c_Version = 21;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
@@ -441,9 +442,11 @@ namespace RTE {
 		// Version 18 carries each peer's local player bindings with its applied inputs.
 		// Version 19 carries host hold resolutions (Reclaimed / Substituted / Expired) on the stop wire.
 		// Version 20 carries local-AI number and string value observations next to the sound readings.
+		// Version 21 appends writerUID on AIOrder; v<=20 still decodes with writerUID 0.
 		static constexpr uint16_t c_HoldResolutionVersion = 19;
 		static constexpr uint16_t c_PlayerBindingsVersion = 18;
 		static constexpr uint16_t c_ValueObservationVersion = 20;
+		static constexpr uint16_t c_AIOrderWriterVersion = 21;
 		static constexpr uint16_t c_SeatSnapshotVersion = 17;
 		static constexpr uint16_t c_MinVersion = 8;
 		static constexpr uint16_t c_RoundVersion = 11;
@@ -596,6 +599,8 @@ namespace RTE {
 		/// remote has left and at least one of their seats is inside its window. Nobody can disagree
 		/// with this peer about it, because while it holds there is no other peer in the round.
 		bool IsHoldingSeatForReclaim() const;
+		/// Whether this peer's left seat is still held, from the same set AnyLeftSeatHeld reads.
+		bool IsSeatHeldForReclaim(uint8_t peerId) const;
 		// Kept for UI estimates that still speak in frames (HoldSeconds(1200) == 20). The hold itself
 		// is the admission wall-clock; commits do not advance while a dropped seat is unresolved.
 		static constexpr uint64_t c_ReclaimHoldFrames = 1200;
@@ -631,6 +636,7 @@ namespace RTE {
 
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
+		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 
 	private:
 		bool QueueInputAtTarget(uint64_t targetFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations = {});

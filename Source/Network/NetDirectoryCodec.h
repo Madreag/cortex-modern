@@ -11,6 +11,9 @@ namespace RTE {
 	// Field limits mirrored from tools/session_directory/session_directory.py (the API of record).
 	namespace NetDirectoryLimits {
 		inline constexpr size_t c_MaxStringChars = 64;        // MAX_STR
+		inline constexpr size_t c_MaxPeerChars = 64;          // peer string cap (not 7+MAX_STR)
+		inline constexpr size_t c_MaxListRows = 4096;         // MAX_ROWS
+		inline constexpr size_t c_MaxSignalRows = 256;        // MAX_QUEUE
 		inline constexpr size_t c_MaxListenAddrs = 8;         // MAX_ARR
 		inline constexpr size_t c_MaxBodyBytes = 128 * 1024;  // MAX_BODY
 		inline constexpr size_t c_MaxPayloadB64Chars = 87384; // 64 KiB decoded payload, base64 on the wire
@@ -49,17 +52,19 @@ namespace RTE {
 		int64_t expiresInS = 0;
 		int64_t heartbeatS = 0;
 		std::string observedIp;
+		bool supportsUnlisted = false; //!< Server-advertised unlisted-session capability; absent or false means unsupported.
 
 		bool operator==(const NetDirectoryRegisterResponse&) const = default;
 	};
 
-	// POST /v1/sessions/{id}/heartbeat request body. listen_addrs and state are optional.
+	// POST /v1/sessions/{id}/heartbeat request body. listen_addrs, state and listed are optional.
 	struct NetDirectoryHeartbeatRequest {
 		std::string token;
 		int64_t peerCount = 0;
 		int64_t seatsFree = 0;
 		std::optional<std::vector<std::string>> listenAddrs;
 		std::optional<std::string> state; //!< "lobby" | "running"
+		std::optional<bool> listed; //!< Absent keeps current visibility; false hides, true relists.
 
 		bool operator==(const NetDirectoryHeartbeatRequest&) const = default;
 	};
@@ -68,6 +73,7 @@ namespace RTE {
 	struct NetDirectoryHeartbeatResponse {
 		int64_t expiresInS = 0;
 		int64_t heartbeatS = 0;
+		std::optional<bool> listed; //!< Absent on replies from services without unlisted-session support.
 
 		bool operator==(const NetDirectoryHeartbeatResponse&) const = default;
 	};
@@ -116,6 +122,8 @@ namespace RTE {
 	// GET /v1/sessions 200 response body.
 	struct NetDirectoryListResponse {
 		std::vector<NetDirectorySessionRow> sessions;
+		int64_t total = 0;
+		std::string nextCursor; //!< Empty when this is the last page.
 
 		bool operator==(const NetDirectoryListResponse&) const = default;
 	};

@@ -8,6 +8,7 @@
 #include "SimChecksum.h"
 #include "RTETools.h"
 #include "LuaThreadCodec.h"
+#include "ScenarioRunner.h"
 #include "ContentFile.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
@@ -38,6 +39,7 @@
 #include "GUIBanner.h"
 #include "GUICheckpoint.h"
 #include "OwnedMovableObjects.h"
+#include "Vector.h"
 #include "SLBackground.h"
 #include "Writer.h"
 #include "Reader.h"
@@ -45,17 +47,22 @@
 
 #include "luabind/detail/object_rep.hpp"
 
+#include <atomic>
 #include <cmath>
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <future>
 #include <map>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <thread>
 #include <type_traits>
+#include <iostream>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyLua.hpp"
@@ -2051,7 +2058,220 @@ local stitchedRestored = resumed(ra.stitched)
 check("coroutine_stitch_continues", stitchedRestored == stitchedReference and stitchedRestored == "true/9/suspended" and resumed(ra.stitched) == "true/10/suspended", stitchedRestored .. " vs " .. stitchedReference)
 local interpretedRestored = resumed(ra.interpreted)
 check("coroutine_interpreted_continues", interpretedRestored == interpretedReference and interpretedRestored == "true/9/suspended", interpretedRestored .. " vs " .. interpretedReference)
-
+)lua"
+	    R"lua(
+-- A yielded top inside the C API limit whose leaf frame reaches just past it: the leaf yields from slot 0 below its pads.
+do
+	local function program(pads)
+		local names, values = {}, {}
+		for i = 1, pads do
+			names[i] = "p" .. i
+			values[i] = i < pads and tostring(i) or "v"
+		end
+		return "local leaf\nlocal function dive(n)\n\tif n > 0 then\n\t\tlocal r = dive(n - 1)\n\t\treturn r\n\tend\n\tlocal v = leaf()\n\treturn v\nend\nleaf = function()\n\tlocal v = coroutine.yield(\"edge\")\n\tlocal " .. table.concat(names, ", ") .. " = " .. table.concat(values, ", ") .. "\n\treturn p" .. pads .. "\nend\nreturn dive"
+	end
+	-- { depth, pads, top, needed }: top = 9 + 3 * depth, needed = top + pads - 1.
+	for _, case in ipairs({ { 2657, 5, 7980, 7984 }, { 2658, 3, 7983, 7985 }, { 2658, 28, 7983, 8010 }, { 2658, 29, 7983, 8011 } }) do
+		local depth, pads, wantTop, wantNeeded = case[1], case[2], case[3], case[4]
+		local chunk = assert(loadstring(program(pads)))
+		jit.off(chunk, true)
+		local original = coroutine.create(chunk())
+		local startOk, startValue = coroutine.resume(original, depth)
+		local desc = _ScriptGraphThreadCapture(original)
+		local top = desc and desc.top or -1
+		local needed, restoredMax = nil, nil
+		if _ScriptGraphThreadStackFits then needed = select(2, _ScriptGraphThreadStackFits(original)) end
+		local text = _ScriptGraph.serialize({ ["1"] = { co = original } })
+		local roots, problems = _ScriptGraph.deserialize(text)
+		local restored = roots and roots["1"] and roots["1"].co
+		local refusal = problems and #problems > 0 and table.concat(problems, " | ") or nil
+		local restoredStatus = restored and coroutine.status(restored) or "none"
+		if restoredStatus == "suspended" and _ScriptGraphThreadStackFits then restoredMax = select(3, _ScriptGraphThreadStackFits(restored)) end
+		local oOk, oValue = coroutine.resume(original, "done")
+		local rOk, rValue = false, nil
+		if restoredStatus == "suspended" then rOk, rValue = coroutine.resume(restored, "done") end
+		local detail = string.format("top %d needed %s maxstack %s restored %s resumed %s/%s%s", top, tostring(needed), tostring(restoredMax), restoredStatus, tostring(rOk), tostring(rValue), refusal and (" refused: " .. refusal) or "")
+		check("coroutine_near_cstack_limit_" .. wantNeeded, startOk and startValue == "edge" and top == wantTop and (needed == nil or needed == wantNeeded) and refusal == nil and restoredStatus == "suspended" and (wantNeeded <= 8010 or (restoredMax ~= nil and restoredMax > 8010)) and oOk and oValue == "done" and rOk and rValue == "done" and coroutine.status(original) == "dead" and coroutine.status(restored) == "dead", detail)
+	end
+	-- A link above the saved top is malformed: the refusal must leave the coroutine's stack as it was.
+	local fresh = select(3, _ScriptGraphThreadStackFits(coroutine.create(function() end)))
+	local holder = coroutine.create(function() end)
+	local far, farError = _ScriptGraphThreadRestore({ status = "suspended", base = 10, top = 10, slots = { [69999] = program }, links = { [70000] = { pcslot = 69999, pos = 1 } }, conts = {} }, holder)
+	local holderMax = select(3, _ScriptGraphThreadStackFits(holder))
+	check("negative_coroutine_link_above_top", far == nil and type(farError) == "string" and holderMax == fresh, tostring(farError) .. "; maxstack " .. tostring(holderMax) .. " fresh " .. tostring(fresh))
+end
+)lua"
+	    R"lua(
+-- The same growth, into a used suspended placeholder the restore must reuse, keep and rejoin.
+do
+	local function program(pads)
+		local names, values = {}, {}
+		for i = 1, pads do
+			names[i] = "p" .. i
+			values[i] = i < pads and tostring(i) or "v"
+		end
+		return "local leaf\nlocal function dive(n)\n\tif n > 0 then\n\t\tlocal r = dive(n - 1)\n\t\treturn r\n\tend\n\tlocal v = leaf()\n\treturn v\nend\nleaf = function()\n\tlocal shared = 1\n\tlocal alias = function(value)\n\t\tif value then shared = value end\n\t\treturn shared\n\tend\n\tlocal v = coroutine.yield(alias)\n\tlocal " .. table.concat(names, ", ") .. " = " .. table.concat(values, ", ") .. "\n\treturn tostring(p" .. pads .. ") .. \"/\" .. tostring(shared)\nend\nreturn dive"
+	end
+	local function usedPlaceholder()
+		local co = coroutine.create(function(seed)
+			local kept = seed
+			coroutine.yield(kept)
+			return kept + 1
+		end)
+		coroutine.resume(co, 5)
+		return co
+	end
+	for _, case in ipairs({ { "shallow", 3, 96 }, { "near_limit", 2640, 90 } }) do
+		local tag, depth, pads = case[1], case[2], case[3]
+		local chunk = assert(loadstring(program(pads)))
+		jit.off(chunk, true)
+		local original = coroutine.create(chunk())
+		local startOk, alias = coroutine.resume(original, depth)
+		local slot
+		for _, info in pairs(_ScriptGraphOpenUpvalues()) do
+			if info.thread == original then slot = info.slot end
+		end
+		local needed = select(2, _ScriptGraphThreadStackFits(original))
+		local placeholder = usedPlaceholder()
+		local placeholderMax = select(3, _ScriptGraphThreadStackFits(placeholder))
+		local desc = _ScriptGraphThreadCapture(original)
+		local reused, reuseError = _ScriptGraphThreadRestore(desc, placeholder)
+		local fits, restoredNeeded, restoredMax = false, nil, nil
+		if reused then fits, restoredNeeded, restoredMax = _ScriptGraphThreadStackFits(reused) end
+		local detail = string.format("needed %s placeholder %s restored %s/%s status %s refused %s", tostring(needed), tostring(placeholderMax), tostring(restoredNeeded), tostring(restoredMax), reused and coroutine.status(reused) or "none", tostring(reuseError))
+		check("coroutine_reused_placeholder_grows_" .. tag, startOk and type(alias) == "function" and slot ~= nil and needed > placeholderMax and reused == placeholder and reuseError == nil and fits and restoredNeeded == needed and restoredMax >= needed and coroutine.status(reused) == "suspended", detail)
+		-- A restore rejoins open upvalues onto the restored slots, so a write through the alias must reach the resumed frame.
+		local joined = reused ~= nil and slot ~= nil and coroutine.status(reused) == "suspended" and _ScriptGraphJoinOpenUpvalue(alias, 1, reused, slot)
+		local aliasBefore = joined and alias()
+		if joined then alias(7) end
+		collectgarbage("collect")
+		collectgarbage("collect")
+		local oOk, oValue = coroutine.resume(original, "done")
+		local rOk, rValue = false, nil
+		if reused and coroutine.status(reused) == "suspended" then rOk, rValue = coroutine.resume(reused, "done") end
+		check("coroutine_reused_placeholder_alias_survives_collection_" .. tag, joined == true and aliasBefore == 1 and oOk and oValue == "done/1" and rOk and rValue == "done/7" and coroutine.status(reused) == "dead", string.format("alias %s original %s reused %s", tostring(aliasBefore), tostring(oValue), tostring(rValue)))
+	end
+end
+)lua"
+	    R"lua(
+-- Frozen graph bytes: CC_TEST_SG_ARTIFACT names the file one build writes and another build reads.
+do
+	local path = os.getenv("CC_TEST_SG_ARTIFACT")
+	if path then
+		local pads, depth = 90, 2640
+		local names, values = {}, {}
+		for i = 1, pads do
+			names[i] = "p" .. i
+			values[i] = i < pads and tostring(i) or "v"
+		end
+		local source = "local leaf\nlocal function dive(n)\n\tif n > 0 then\n\t\tlocal r = dive(n - 1)\n\t\treturn r\n\tend\n\tlocal v = leaf()\n\treturn v\nend\nleaf = function()\n\tlocal v = coroutine.yield(\"edge\")\n\tlocal " .. table.concat(names, ", ") .. " = " .. table.concat(values, ", ") .. "\n\treturn p" .. pads .. "\nend\nreturn dive"
+		if os.getenv("CC_TEST_SG_ARTIFACT_READ") then
+			local file = io.open(path, "rb")
+			local text = file and file:read("*a")
+			if file then file:close() end
+			local roots, problems
+			if text then roots, problems = _ScriptGraph.deserialize(text) end
+			local restored = roots and roots["1"] and roots["1"].co
+			local refusal = problems and #problems > 0 and table.concat(problems, " | ") or nil
+			local status = restored and coroutine.status(restored) or "none"
+			local fits, needed, maxstack = false, nil, nil
+			if status == "suspended" then fits, needed, maxstack = _ScriptGraphThreadStackFits(restored) end
+			local ok, value = false, nil
+			if status == "suspended" then ok, value = coroutine.resume(restored, "done") end
+			check("frozen_graph_reader_continues", text ~= nil and refusal == nil and status == "suspended" and fits and ok and value == "done" and coroutine.status(restored) == "dead",
+				string.format("bytes %s needed %s maxstack %s status %s resumed %s/%s refused %s", tostring(text and #text), tostring(needed), tostring(maxstack), status, tostring(ok), tostring(value), tostring(refusal)))
+		else
+			local chunk = assert(loadstring(source))
+			jit.off(chunk, true)
+			local original = coroutine.create(chunk())
+			local startOk, startValue = coroutine.resume(original, depth)
+			local needed = select(2, _ScriptGraphThreadStackFits(original))
+			local text, problems = _ScriptGraph.serialize({ ["1"] = { co = original } })
+			local file = text and io.open(path, "wb")
+			if file then
+				file:write(text)
+				file:close()
+			end
+			check("frozen_graph_writer_saved", startOk and startValue == "edge" and text ~= nil and (problems == nil or #problems == 0) and file ~= nil,
+				string.format("needed %s bytes %s problems %s", tostring(needed), tostring(text and #text), problems and table.concat(problems, " | ") or "none"))
+		end
+	end
+end
+)lua"
+	    R"lua(
+do
+	local names, values = {}, {}
+	for i = 1, 96 do
+		names[i] = "a" .. i
+		values[i] = tostring(i)
+	end
+	local extras, extraVals = {}, {}
+	for i = 1, 80 do
+		extras[i] = "z" .. i
+		extraVals[i] = "0"
+	end
+	local source = "local " .. table.concat(names, ", ") .. " = " .. table.concat(values, ", ") .. "\ncoroutine.yield(a96)\nlocal " .. table.concat(extras, ", ") .. " = " .. table.concat(extraVals, ", ") .. "\nlocal t = setmetatable({}, { __index = function(_, k) return k .. \"!\" end })\nreturn t.probe, a1 + a96"
+	local fn = assert(loadstring(source))
+	jit.off(fn, true)
+	local original = coroutine.create(fn)
+	coroutine.resume(original)
+	local bigText = _ScriptGraph.serialize({ ["1"] = { co = original } })
+	local restoredRoots = _ScriptGraph.deserialize(bigText)
+	local restored = restoredRoots and restoredRoots["1"] and restoredRoots["1"].co
+	local fits, needed, maxstack = _ScriptGraphThreadStackFits(restored)
+	check("coroutine_big_frame_stack_fits", fits, tostring(needed) .. "/" .. tostring(maxstack))
+	local function finish(co)
+		local ok, a, b = coroutine.resume(co)
+		return ok, a, b, coroutine.status(co)
+	end
+	local oOk, oA, oB, oSt = finish(original)
+	local rOk, rA, rB, rSt = finish(restored)
+	check("coroutine_big_frame_resumes", rOk and rA == "probe!" and rB == 97 and rSt == "dead" and rOk == oOk and rA == oA and rB == oB and rSt == oSt, tostring(rA) .. "/" .. tostring(rB) .. "/" .. tostring(rSt))
+end
+)lua"
+	    R"lua(
+-- The same big frame a call below the yield: the main function is suspended inside a helper, and inside a metamethod.
+do
+	local names, values = {}, {}
+	for i = 1, 96 do
+		names[i] = "a" .. i
+		values[i] = tostring(i)
+	end
+	local extras, extraVals = {}, {}
+	for i = 1, 96 do
+		extras[i] = "z" .. i
+		extraVals[i] = "0"
+	end
+	local head = "local " .. table.concat(names, ", ") .. " = " .. table.concat(values, ", ") .. "\n"
+	local tail = "local " .. table.concat(extras, ", ") .. " = " .. table.concat(extraVals, ", ") .. "\nlocal t = setmetatable({}, { __index = function(_, k) return k .. \"!\" end })\nreturn t[probe], a1 + a96 + " .. table.concat(extras, " + ")
+	local arms = {
+		{ "coroutine_helper_big_frame", "local function helper() coroutine.yield(\"helper\") return \"probe\" end\n" .. head .. "local probe = helper()\n" .. tail, "helper" },
+		{ "coroutine_metamethod_big_frame", "local meta = { __index = function(_, k) coroutine.yield(\"meta\") return k end }\n" .. head .. "local probe = setmetatable({}, meta).probe\n" .. tail, "meta" },
+	}
+	local function finish(co)
+		local ok, a, b = coroutine.resume(co)
+		return ok, a, b, coroutine.status(co)
+	end
+	for _, arm in ipairs(arms) do
+		local name, source, yielded = arm[1], arm[2], arm[3]
+		local fn = assert(loadstring(source))
+		jit.off(fn, true)
+		local original = coroutine.create(fn)
+		local startOk, startValue = coroutine.resume(original)
+		local text = _ScriptGraph.serialize({ ["1"] = { co = original } })
+		local roots = text and _ScriptGraph.deserialize(text)
+		local restored = roots and roots["1"] and roots["1"].co
+		local fits, needed, maxstack = false, -1, -1
+		if restored then fits, needed, maxstack = _ScriptGraphThreadStackFits(restored) end
+		check(name .. "_stack_fits", startOk and startValue == yielded and restored ~= nil and fits, tostring(needed) .. "/" .. tostring(maxstack))
+		local oOk, oA, oB, oSt = finish(original)
+		local rOk, rA, rB, rSt = false, nil, nil, nil
+		if restored then rOk, rA, rB, rSt = finish(restored) end
+		check(name .. "_resumes", rOk and rA == "probe!" and rB == 97 and rSt == "dead" and rOk == oOk and rA == oA and rB == oB and rSt == oSt, tostring(rA) .. "/" .. tostring(rB) .. "/" .. tostring(rSt))
+	end
+end
+)lua"
+	    R"lua(
 -- Every dumped closure in the captured graph must load and re-dump to the same bytes in this engine.
 do
 	local unstable, first, total = 0, nil, 0
@@ -3902,6 +4122,13 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_pushcfunction(m_State, ScriptGraphEndCapture);
 		lua_setglobal(m_State, "_ScriptGraphEndCapture");
 		LuaThreadCodec::Register(m_State);
+		if (const char* probe = std::getenv("CC_TEST_F21_INVENTORY"); probe && std::strcmp(probe, "1") == 0) {
+			lua_pushcfunction(m_State, [](lua_State* state) -> int {
+				lua_pushboolean(state, GameActivity::RunNetInventoryRelaunchProbe(luaL_checkstring(state, 1)));
+				return 1;
+			});
+			lua_setglobal(m_State, "_ScriptGraphInventoryProbe");
+		}
 		RunScriptString(c_ScriptGraphHelper);
 		m_ScriptGraphHelperLoaded = true;
 	}
@@ -4079,6 +4306,9 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 		}
 	}
 	RestoreScriptCallbacks(problems, !reuseHeld);
+	if (this == &g_LuaMan.GetMasterScriptState()) {
+		if (const char* probe = std::getenv("CC_TEST_F21_INVENTORY"); probe && std::strcmp(probe, "1") == 0) GameActivity::RunNetInventoryRelaunchProbe("held");
+	}
 	lua_settop(m_State, top);
 	return problems.size() == before;
 }
@@ -4688,6 +4918,23 @@ void LuaMan::Clear() {
 	ResetPathCallbacks();
 }
 
+static std::atomic<bool> s_DeterministicCollection{false};
+static std::atomic<bool> s_CollectorModeAnnounced{false};
+
+static void PrintCollectorMode(bool deterministic) {
+	std::cout << "[lua] collector: " << (deterministic ? "full collection" : "incremental step") << " at every tick end" << std::endl;
+}
+
+void LuaMan::SetDeterministicCollection(bool deterministic) {
+	if (s_DeterministicCollection.exchange(deterministic) != deterministic && s_CollectorModeAnnounced) {
+		PrintCollectorMode(deterministic);
+	}
+}
+
+bool LuaMan::IsDeterministicCollection() {
+	return s_DeterministicCollection;
+}
+
 void LuaMan::Initialize() {
 	m_MasterScriptState.Initialize();
 
@@ -4701,6 +4948,9 @@ void LuaMan::Initialize() {
 	m_ScriptStates = std::vector<LuaStateWrapper>(luaStateCount);
 	for (LuaStateWrapper& luaState: m_ScriptStates) {
 		luaState.Initialize();
+	}
+	if (!s_CollectorModeAnnounced.exchange(true)) {
+		PrintCollectorMode(s_DeterministicCollection);
 	}
 }
 
@@ -4734,6 +4984,113 @@ LuaStateWrapper& LuaMan::GetStateByIndex(int index) {
 	return m_ScriptStates[static_cast<size_t>(index - 1) % m_ScriptStates.size()];
 }
 
+static std::string LuaStateTickHash() {
+	g_SimChecksum.BeginTick(0);
+	g_LuaMan.HashAllLuaStatesIntoSimChecksum();
+	const SimChecksum::Result result = g_SimChecksum.EndTick();
+	const auto found = result.per_subsystem.find("lua_state");
+	return found == result.per_subsystem.end() ? std::string("-") : SimChecksum::HashHex(found->second);
+}
+
+static bool RunThreadedScriptWriteHashSelfTest() {
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL lua_state_sees_threaded_script_writes no threaded Lua states" << std::endl;
+		return false;
+	}
+	const long counter = MovableObject::GetUniqueIDCounter();
+	std::vector<MOPixel*> objects;
+	// The same unique IDs on every build, so both layouts hold the same objects.
+	const auto build = [&](bool spread) {
+		MovableObject::PinUniqueIDCounter(counter + 1000);
+		for (size_t index = 0; index < 4; ++index) {
+			auto* object = new MOPixel;
+			object->Create();
+			object->MoveScriptsToState(states[spread ? index % states.size() : 0]);
+			object->AdoptScriptObject();
+			objects.push_back(object);
+		}
+	};
+	const auto write = [&](const std::string& body) {
+		for (size_t index = 0; index < objects.size(); ++index) {
+			LuaStateWrapper& state = *objects[index]->GetLuaState();
+			const std::string argument = std::to_string(index);
+			state.RunScriptString("function _LuaStateHashSelfTestWrite(self, index) " + body + " end");
+			state.RunScriptFunctionString("_LuaStateHashSelfTestWrite", "_ScriptedObjects[\"" + std::to_string(objects[index]->GetUniqueID()) + "\"]", {}, {}, {argument});
+			state.RunScriptString("_LuaStateHashSelfTestWrite = nil");
+		}
+	};
+	const auto clear = [&]() {
+		for (MOPixel* object: objects) {
+			object->DestroyScriptState();
+			delete object;
+		}
+		objects.clear();
+	};
+	build(true);
+	write("self.Probe = {}");
+	const std::string before = LuaStateTickHash();
+	write("self.Probe.value = 7 + index");
+	const std::string spread = LuaStateTickHash();
+	clear();
+	build(false);
+	write("self.Probe = {}");
+	write("self.Probe.value = 7 + index");
+	const std::string single = LuaStateTickHash();
+	clear();
+	MovableObject::PinUniqueIDCounter(counter);
+	const bool seen = spread != before;
+	const bool layoutFree = single == spread;
+	std::cout << "[script-graph-selftest] " << (seen ? "PASS" : "FAIL") << " lua_state_sees_threaded_script_writes states=" << states.size() << " before=" << before << " after=" << spread << std::endl;
+	std::cout << "[script-graph-selftest] " << (layoutFree ? "PASS" : "FAIL") << " lua_state_same_writes_hash_the_same_on_one_state_and_spread states=" << states.size() << " one_state=" << single << " spread=" << spread << std::endl;
+	return seen && layoutFree;
+}
+
+static bool RunTickEndCollectionSelfTest() {
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL dropped_lua_owned_object_dies_at_the_next_tick_end no threaded Lua states" << std::endl;
+		return false;
+	}
+	LuaStateWrapper& state = states.front();
+	const long counter = MovableObject::GetUniqueIDCounter();
+	// Tick-end passes until a dropped Lua-owned object is gone, with `ballast` extra live tables on its state.
+	const auto passesToDestroy = [&state](int ballast) {
+		g_LuaMan.CollectGarbageForCheckpoint();
+		state.RunScriptString("_TickEndBallast = {}; for i = 1, " + std::to_string(ballast) + " do _TickEndBallast[i] = {i} end");
+		state.RunScriptString("_TickEndUID = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\").UniqueID");
+		long uid = 0;
+		{
+			std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
+			lua_getglobal(state.GetLuaState(), "_TickEndUID");
+			uid = static_cast<long>(lua_tonumber(state.GetLuaState(), -1));
+			lua_pop(state.GetLuaState(), 1);
+		}
+		int passes = 0;
+		while (uid > 0 && passes < 1000 && g_MovableMan.FindObjectByUniqueID(uid) != nullptr) {
+			g_LuaMan.StartAsyncGarbageCollection();
+			g_LuaMan.WaitForAsyncGarbageCollection();
+			++passes;
+		}
+		state.RunScriptString("_TickEndBallast = nil; _TickEndUID = nil");
+		g_LuaMan.CollectGarbageForCheckpoint();
+		return uid > 0 ? passes : -1;
+	};
+	const bool previousMode = LuaMan::IsDeterministicCollection();
+	LuaMan::SetDeterministicCollection(true);
+	const int smallHeap = passesToDestroy(0);
+	const int largeHeap = passesToDestroy(200000);
+	LuaMan::SetDeterministicCollection(false);
+	const int largeHeapIncremental = passesToDestroy(200000);
+	LuaMan::SetDeterministicCollection(previousMode);
+	MovableObject::PinUniqueIDCounter(counter);
+	const bool fullPass = smallHeap == 1 && largeHeap == 1;
+	const bool incrementalPass = largeHeapIncremental > 1;
+	std::cout << "[script-graph-selftest] " << (fullPass ? "PASS" : "FAIL") << " dropped_lua_owned_object_dies_at_the_next_tick_end states=" << states.size() << " passes_small_heap=" << smallHeap << " passes_large_heap=" << largeHeap << std::endl;
+	std::cout << "[script-graph-selftest] " << (incrementalPass ? "PASS" : "FAIL") << " incremental_step_needs_more_than_one_tick_end_on_a_large_heap states=" << states.size() << " passes_large_heap=" << largeHeapIncremental << std::endl;
+	return fullPass && incrementalPass;
+}
+
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
 	const int id = AllocatePathCallback(m_PathCallbacks, state);
@@ -4749,7 +5106,16 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	m_MasterScriptState.RunScriptString("_PathCallbackPurgeTest = nil");
 	ResetPathCallbacks(true);
 	std::cout << "[script-graph-selftest] " << (purgePreserved ? "PASS" : "FAIL") << " native_path_callback_survives_purge" << std::endl;
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved;
+	const bool threadedWrites = RunThreadedScriptWriteHashSelfTest();
+	const bool tickEndCollection = RunTickEndCollectionSelfTest();
+	LuaStatesArray setAside;
+	setAside.swap(m_ScriptStates);
+	LuaStateWrapper* emptyPick = GetAndLockFreeScriptState();
+	const bool emptySetPicksMaster = emptyPick == &m_MasterScriptState;
+	emptyPick->GetMutex().unlock();
+	m_ScriptStates.swap(setAside);
+	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && tickEndCollection && emptySetPicksMaster;
 }
 
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
@@ -5689,6 +6055,13 @@ LuaStateWrapper* LuaMan::GetAndLockFreeScriptState() {
 		// We're creating this object in a multithreaded environment, ensure that it's assigned to the same script state as us
 		bool success = s_luaStateOverride->GetMutex().try_lock();
 		RTEAssert(success, "Our lua state override for our thread already belongs to another thread!") return s_luaStateOverride;
+	}
+
+	// With no threaded states every object script shares the master state.
+	if (m_ScriptStates.empty()) {
+		bool masterLocked = m_MasterScriptState.GetMutex().try_lock();
+		RTEAssert(masterLocked, "Script mutex was already locked while in a non-multithreaded environment!");
+		return &m_MasterScriptState;
 	}
 
 	// TODO
@@ -6860,13 +7233,19 @@ void LuaMan::StartAsyncGarbageCollection() {
 		allStates.push_back(&wrapper);
 	}
 
+	const bool fullCollection = IsDeterministicCollection();
 	m_GarbageCollectionTask = BS::multi_future<void>();
 	for (LuaStateWrapper* luaState: allStates) {
 		m_GarbageCollectionTask.push_back(
-		    g_ThreadMan.GetPriorityThreadPool().submit([luaState]() {
+		    g_ThreadMan.GetPriorityThreadPool().submit([luaState, fullCollection]() {
 			    ZoneScopedN("Lua Garbage Collection");
 			    std::lock_guard<std::recursive_mutex> lock(luaState->GetMutex());
-			    lua_gc(luaState->GetLuaState(), LUA_GCSTEP, 100);
+			    if (fullCollection) {
+				    // A whole cycle every tick, so the tick a dropped object dies on does not follow its state's heap size.
+				    lua_gc(luaState->GetLuaState(), LUA_GCCOLLECT, 0);
+			    } else {
+				    lua_gc(luaState->GetLuaState(), LUA_GCSTEP, 100);
+			    }
 			    lua_gc(luaState->GetLuaState(), LUA_GCSTOP, 0);
 		    }));
 	}
@@ -6881,15 +7260,20 @@ void LuaMan::SeedAllLuaRNGs(uint64_t baseSeed) {
 	}
 }
 
+static std::vector<uint64_t> HashScriptObjectGraphs(LuaStateWrapper& master, LuaStatesArray& threaded);
+
 void LuaMan::HashAllLuaStatesIntoSimChecksum() {
-	if (!g_SimChecksum.IsActive()) {
+	if (!g_SimChecksum.IsActive() || g_SimChecksum.IsSuppressed()) {
 		return;
 	}
-	// Hash the master state only — threaded per-MO Lua work is redirected to per-MO RNGs, so the
-	// threaded states carry no sim-observable RNG state. Master is the thread-count-invariant,
-	// sim-authoritative Lua RNG.
 	const std::string masterState = m_MasterScriptState.GetRandomGeneratorStateForHashing();
 	g_SimChecksum.Update("lua_state", masterState.data(), masterState.size());
+	// Where AI hooks run on one peer or on none, an object's script graph is per machine.
+	if (ScenarioRunner::HasLockstepCoordinator() || ScenarioRunner::IsLockstepReplayPlayback() || ScenarioRunner::IsControllerReplayStrict()) {
+		return;
+	}
+	const std::vector<uint64_t> objects = HashScriptObjectGraphs(m_MasterScriptState, m_ScriptStates);
+	g_SimChecksum.Update("lua_state", objects.data(), objects.size() * sizeof(uint64_t));
 }
 
 void LuaMan::ClearScriptTimings() {
@@ -6901,4 +7285,1092 @@ void LuaMan::ClearScriptTimings() {
 
 void LuaStateWrapper::DiscardStashedScriptObject(long uniqueID) {
 	RunScriptString("if _ScriptFieldsStash then _ScriptFieldsStash[\"" + std::to_string(uniqueID) + "\"] = nil; end");
+}
+
+// Read in place: the walk never allocates, runs Lua or reaches a metamethod.
+extern "C" {
+#include "lj_obj.h"
+#include "lj_tab.h"
+}
+
+namespace {
+	enum GraphToken : uint64_t {
+		TokenNil = 1,
+		TokenFalse,
+		TokenTrue,
+		TokenNumber,
+		TokenNaN,
+		TokenString,
+		TokenTable,
+		TokenSeen,
+		TokenGlobals,
+		TokenEngine,
+		TokenLuaFunction,
+		TokenNativeFunction,
+		TokenUpvalue,
+		TokenUserdata,
+		TokenLuabind,
+		TokenFields,
+		TokenThread,
+		TokenLightUserdata,
+		TokenCData,
+		TokenOther,
+		TokenTooDeep,
+		TokenKey,
+		TokenObjects,
+		TokenNoScriptObject,
+		TokenStale,
+	};
+
+	constexpr int c_MaxGraphDepth = 1000;
+
+	// Integer-only rounds, so every platform reaches the same digest.
+	struct GraphDigest {
+		uint64_t state = 0x27D4EB2F165667C5ULL;
+
+		void Word(uint64_t word) {
+			state += word * 0xC2B2AE3D27D4EB4FULL;
+			state = (state << 31) | (state >> 33);
+			state *= 0x9E3779B185EBCA87ULL;
+		}
+
+		void Bytes(const char* data, size_t size) {
+			Word(size);
+			for (size_t offset = 0; offset < size; offset += 8) {
+				uint64_t word = 0;
+				for (size_t byte = 0; byte < 8 && offset + byte < size; ++byte) {
+					word |= static_cast<uint64_t>(static_cast<unsigned char>(data[offset + byte])) << (8 * byte);
+				}
+				Word(word);
+			}
+		}
+
+		uint64_t Finish() const {
+			uint64_t mixed = state;
+			mixed ^= mixed >> 33;
+			mixed *= 0xFF51AFD7ED558CCDULL;
+			mixed ^= mixed >> 33;
+			mixed *= 0xC4CEB9FE1A85EC53ULL;
+			mixed ^= mixed >> 33;
+			return mixed;
+		}
+	};
+
+	const TValue* FindStringField(const GCtab* table, std::string_view name) {
+		const ::Node* nodes = noderef(table->node);
+		for (uint32_t index = 0; index <= table->hmask; ++index) {
+			const ::Node& node = nodes[index];
+			if (!tvisnil(&node.val) && tvisstr(&node.key)) {
+				const GCstr* key = strV(&node.key);
+				if (key->len == name.size() && std::memcmp(strdata(key), name.data(), name.size()) == 0) {
+					return &node.val;
+				}
+			}
+		}
+		return nullptr;
+	}
+
+	struct GraphState {
+		lua_State* lua = nullptr;
+		GCtab* globals = nullptr;
+		GCtab* enginePaths = nullptr;
+		std::unordered_map<const GCtab*, bool> luabindMetatables;
+	};
+
+	// A borrowed native object may be gone; only the registry can vouch for it.
+	struct KnownObjects {
+		bool built = false;
+		std::vector<const MovableObject*> sorted;
+
+		bool Contains(const MovableObject* object) {
+			if (!built) {
+				for (const MovableObject* known: g_MovableMan.SnapshotKnownObjects()) {
+					sorted.push_back(known);
+				}
+				std::sort(sorted.begin(), sorted.end(), std::less<const MovableObject*>());
+				built = true;
+			}
+			return std::binary_search(sorted.begin(), sorted.end(), object, std::less<const MovableObject*>());
+		}
+	};
+
+	class ObjectGraphWalk {
+	public:
+		ObjectGraphWalk(GraphState& state, KnownObjects& known, const MovableObject* root, int depth = 0) :
+		    m_State(state), m_Known(known), m_Root(root), m_Depth(depth) {}
+
+		uint64_t Digest(const TValue* value) {
+			Value(value);
+			return m_Digest.Finish();
+		}
+
+	private:
+		struct Entry {
+			const TValue* value;
+			int rank;
+			double number = 0;
+			const GCstr* string = nullptr;
+			uint64_t keyDigest = 0;
+			uint64_t valueDigest = 0;
+		};
+
+		GraphState& m_State;
+		KnownObjects& m_Known;
+		const MovableObject* m_Root;
+		int m_Depth;
+		GraphDigest m_Digest;
+		std::unordered_map<const void*, uint64_t> m_Seen;
+
+		void Word(uint64_t word) { m_Digest.Word(word); }
+
+		void Text(const std::string& text) { m_Digest.Bytes(text.data(), text.size()); }
+
+		// A value reached again is named by when it was first reached, which the sorted walk fixes.
+		bool Seen(const void* object) {
+			const auto [entry, inserted] = m_Seen.try_emplace(object, m_Seen.size() + 1);
+			if (inserted) {
+				return false;
+			}
+			Word(TokenSeen);
+			Word(entry->second);
+			return true;
+		}
+
+		void Number(double number) {
+			if (number != number) {
+				Word(TokenNaN);
+				return;
+			}
+			uint64_t bits;
+			std::memcpy(&bits, &number, sizeof(bits));
+			Word(TokenNumber);
+			Word(bits);
+		}
+
+		void String(const GCstr* string) {
+			Word(TokenString);
+			m_Digest.Bytes(strdata(string), string->len);
+		}
+
+		void Value(const TValue* value) {
+			if (tvisnil(value)) {
+				Word(TokenNil);
+			} else if (tvisfalse(value)) {
+				Word(TokenFalse);
+			} else if (tvistrue(value)) {
+				Word(TokenTrue);
+			} else if (tvisint(value)) {
+				Number(static_cast<double>(intV(value)));
+			} else if (tvisnum(value)) {
+				Number(numV(value));
+			} else if (tvisstr(value)) {
+				String(strV(value));
+			} else if (tvislightud(value)) {
+				Word(TokenLightUserdata);
+			} else if (tviscdata(value)) {
+				Word(TokenCData);
+			} else if (m_Depth >= c_MaxGraphDepth) {
+				Word(TokenTooDeep);
+			} else {
+				++m_Depth;
+				if (tvistab(value)) {
+					Table(tabV(value), value);
+				} else if (tvisfunc(value)) {
+					Function(funcV(value), value);
+				} else if (tvisudata(value)) {
+					Userdata(udataV(value), value);
+				} else if (tvisthread(value)) {
+					Thread(threadV(value));
+				} else {
+					Word(TokenOther);
+				}
+				--m_Depth;
+			}
+		}
+
+		bool Engine(const TValue* value) {
+			if (!m_State.enginePaths) {
+				return false;
+			}
+			const TValue* path = lj_tab_get(m_State.lua, m_State.enginePaths, value);
+			if (!path || !tvistab(path)) {
+				return false;
+			}
+			Word(TokenEngine);
+			const GCtab* segments = tabV(path);
+			const TValue* array = tvref(segments->array);
+			for (uint32_t index = 1; index < segments->asize && tvisstr(&array[index]); ++index) {
+				String(strV(&array[index]));
+			}
+			return true;
+		}
+
+		static bool EntryLess(const Entry& a, const Entry& b) {
+			if (a.rank != b.rank) {
+				return a.rank < b.rank;
+			}
+			if (a.rank == 1) {
+				const size_t common = std::min(a.string->len, b.string->len);
+				const int order = std::memcmp(strdata(a.string), strdata(b.string), common);
+				return order != 0 ? order < 0 : a.string->len < b.string->len;
+			}
+			if (a.rank == 3) {
+				return a.keyDigest != b.keyDigest ? a.keyDigest < b.keyDigest : a.valueDigest < b.valueDigest;
+			}
+			return a.number < b.number;
+		}
+
+		Entry MakeEntry(const TValue* key, const TValue* value) {
+			Entry entry{value, 3};
+			if (tvisint(key)) {
+				entry.rank = 0;
+				entry.number = static_cast<double>(intV(key));
+			} else if (tvisnum(key)) {
+				entry.rank = 0;
+				entry.number = numV(key);
+			} else if (tvisstr(key)) {
+				entry.rank = 1;
+				entry.string = strV(key);
+			} else if (tvisbool(key)) {
+				entry.rank = 2;
+				entry.number = tvistrue(key) ? 1 : 0;
+			} else {
+				entry.keyDigest = ObjectGraphWalk(m_State, m_Known, m_Root, m_Depth).Digest(key);
+				entry.valueDigest = ObjectGraphWalk(m_State, m_Known, m_Root, m_Depth).Digest(value);
+			}
+			return entry;
+		}
+
+		void Table(GCtab* table, const TValue* value) {
+			if (Seen(table)) {
+				return;
+			}
+			if (table == m_State.globals) {
+				Word(TokenGlobals);
+				return;
+			}
+			if (Engine(value)) {
+				return;
+			}
+			Word(TokenTable);
+			if (GCtab* meta = tabref(table->metatable)) {
+				TValue metaValue;
+				settabV(m_State.lua, &metaValue, meta);
+				Value(&metaValue);
+			} else {
+				Word(TokenNil);
+			}
+			// Array or hash placement follows the table's history, so entries go in key order.
+			std::vector<Entry> entries;
+			const TValue* array = tvref(table->array);
+			for (uint32_t index = 0; index < table->asize; ++index) {
+				if (!tvisnil(&array[index])) {
+					Entry entry{&array[index], 0};
+					entry.number = static_cast<double>(index);
+					entries.push_back(entry);
+				}
+			}
+			const ::Node* nodes = noderef(table->node);
+			for (uint32_t index = 0; index <= table->hmask; ++index) {
+				if (!tvisnil(&nodes[index].val)) {
+					entries.push_back(MakeEntry(&nodes[index].key, &nodes[index].val));
+				}
+			}
+			std::sort(entries.begin(), entries.end(), EntryLess);
+			Word(entries.size());
+			for (const Entry& entry: entries) {
+				if (entry.rank == 0) {
+					Number(entry.number);
+				} else if (entry.rank == 1) {
+					String(entry.string);
+				} else if (entry.rank == 2) {
+					Word(entry.number != 0 ? TokenTrue : TokenFalse);
+				} else {
+					Word(TokenKey);
+					Word(entry.keyDigest);
+				}
+				Value(entry.value);
+			}
+		}
+
+		void Function(GCfunc* function, const TValue* value) {
+			if (Seen(function)) {
+				return;
+			}
+			if (Engine(value)) {
+				return;
+			}
+			if (!isluafunc(function)) {
+				Word(TokenNativeFunction);
+				Word(function->c.ffid);
+				Word(function->c.nupvalues);
+				for (uint32_t index = 0; index < function->c.nupvalues; ++index) {
+					Value(&function->c.upvalue[index]);
+				}
+				return;
+			}
+			// The prototype by where it was written; traces patch its bytecode per state.
+			const GCproto* proto = funcproto(function);
+			Word(TokenLuaFunction);
+			String(proto_chunkname(proto));
+			Word(static_cast<uint64_t>(proto->firstline));
+			Word(static_cast<uint64_t>(proto->numline));
+			Word(proto->numparams);
+			Word(proto->sizebc);
+			Word(function->l.nupvalues);
+			for (uint32_t index = 0; index < function->l.nupvalues; ++index) {
+				GCupval* upvalue = &gcref(function->l.uvptr[index])->uv;
+				if (!Seen(upvalue)) {
+					Word(TokenUpvalue);
+					Value(uvval(upvalue));
+				}
+			}
+			if (GCtab* environment = tabref(function->l.env)) {
+				TValue environmentValue;
+				settabV(m_State.lua, &environmentValue, environment);
+				Value(&environmentValue);
+			} else {
+				Word(TokenNil);
+			}
+		}
+
+		bool IsLuabindInstance(const GCtab* meta) {
+			const auto [entry, inserted] = m_State.luabindMetatables.try_emplace(meta, false);
+			if (inserted) {
+				const TValue* flag = FindStringField(meta, "__luabind_class");
+				entry->second = flag && !tvisnil(flag) && !tvisfalse(flag);
+			}
+			return entry->second;
+		}
+
+		void Preset(const Entity& entity) {
+			if (const Entity* preset = entity.GetPresetForCopy()) {
+				Text(preset->GetPresetName());
+				Text(preset->GetModuleName());
+			} else {
+				Word(TokenNil);
+			}
+		}
+
+		// Owned values are read; a borrowed one only when the registry vouches for it.
+		void NativeIdentity(const luabind::detail::object_rep& rep) {
+			const luabind::detail::class_rep* crep = rep.crep();
+			const bool owned = (rep.flags() & luabind::detail::object_rep::owner) != 0;
+			const char* className = crep->name();
+			Word(owned ? 1 : 0);
+			m_Digest.Bytes(className, std::strlen(className));
+			const void* pointer = rep.ptr();
+			if (!pointer) {
+				Word(TokenNil);
+				return;
+			}
+			if (std::strcmp(className, "Vector") == 0) {
+				if (owned) {
+					const Vector* vector = static_cast<const Vector*>(pointer);
+					Number(vector->m_X);
+					Number(vector->m_Y);
+				}
+				return;
+			}
+			if (std::strcmp(className, "Timer") == 0) {
+				// The real-time start is the wall clock, not sim state.
+				if (owned) {
+					const Timer* timer = static_cast<const Timer*>(pointer);
+					Word(static_cast<uint64_t>(timer->GetStartSimTimeMS()));
+					Word(static_cast<uint64_t>(timer->GetSimTimeLimitTicks()));
+					Number(timer->GetRealTimeLimitMS());
+				}
+				return;
+			}
+			if (ClassDerivesFrom(crep, "MovableObject")) {
+				const MovableObject* object = static_cast<const MovableObject*>(pointer);
+				if (!owned && object != m_Root && !m_Known.Contains(object)) {
+					Word(TokenStale);
+					return;
+				}
+				Word(static_cast<uint64_t>(object->GetUniqueID()));
+				if (owned) {
+					Preset(*object);
+				}
+				return;
+			}
+			if (owned && ClassDerivesFrom(crep, "Entity")) {
+				Preset(*static_cast<const Entity*>(pointer));
+				return;
+			}
+			Word(pointer == static_cast<const void*>(g_ActivityMan.GetActivity()) ? 1 : (pointer == static_cast<const void*>(g_SceneMan.GetScene()) ? 2 : 0));
+		}
+
+		void Userdata(GCudata* userdata, const TValue* value) {
+			if (Seen(userdata)) {
+				return;
+			}
+			if (Engine(value)) {
+				return;
+			}
+			Word(TokenUserdata);
+			Word(userdata->udtype);
+			const GCtab* meta = tabref(userdata->metatable);
+			if (userdata->udtype != UDTYPE_USERDATA || !meta || !IsLuabindInstance(meta)) {
+				return;
+			}
+			auto* rep = static_cast<luabind::detail::object_rep*>(uddata(userdata));
+			if (!rep->crep()) {
+				Word(TokenOther);
+				return;
+			}
+			Word(TokenLuabind);
+			NativeIdentity(*rep);
+			const luabind::detail::lua_reference& fields = rep->get_lua_table();
+			if (!fields.is_valid()) {
+				Word(TokenNil);
+				return;
+			}
+			fields.get(m_State.lua);
+			const TValue fieldsValue = *(m_State.lua->top - 1);
+			lua_pop(m_State.lua, 1);
+			Word(TokenFields);
+			Value(&fieldsValue);
+		}
+
+		void Thread(lua_State* thread) {
+			if (Seen(thread)) {
+				return;
+			}
+			Word(TokenThread);
+			const TValue* stack = tvref(thread->stack);
+			uint64_t status = 0;
+			if (thread == m_State.lua) {
+				status = 4;
+			} else if (thread->status == LUA_YIELD) {
+				status = 1;
+			} else if (thread->status != LUA_OK) {
+				status = 3;
+			} else if (thread->base > stack + 1 + LJ_FR2) {
+				status = 5;
+			} else if (thread->top == thread->base) {
+				status = 2;
+			}
+			Word(status);
+			// Frame slots depend on whether a trace ran, and hotness is per state.
+			const TValue* body = stack + 1 + LJ_FR2;
+			if ((status == 0 || status == 1) && body < thread->top && tvisfunc(body)) {
+				Value(body);
+			} else {
+				Word(TokenNil);
+			}
+		}
+	};
+} // namespace
+
+// Unique ID order across every state, so neither the state count nor an object's state moves the fold.
+static std::vector<uint64_t> HashScriptObjectGraphs(LuaStateWrapper& master, LuaStatesArray& threaded) {
+	struct ObjectDigest {
+		long uniqueID;
+		uint64_t digest;
+	};
+	std::vector<ObjectDigest> digests;
+	KnownObjects known;
+	const auto hashState = [&digests, &known](LuaStateWrapper& wrapper) {
+		std::lock_guard<std::recursive_mutex> lock(wrapper.GetMutex());
+		std::vector<const MovableObject*> objects;
+		for (const MovableObject* object: wrapper.GetRegisteredMOs()) {
+			if (object->ObjectScriptsInitialized()) {
+				objects.push_back(object);
+			}
+		}
+		for (MovableObject* object: wrapper.GetPendingRegisteredMOs()) {
+			if (object->ObjectScriptsInitialized() && !wrapper.GetRegisteredMOs().contains(object)) {
+				objects.push_back(object);
+			}
+		}
+		if (objects.empty()) {
+			return;
+		}
+		GraphState state;
+		state.lua = wrapper.GetLuaState();
+		state.globals = tabref(state.lua->env);
+		if (const TValue* baseline = FindStringField(state.globals, "_ScriptGraphBaseline"); baseline && tvistab(baseline)) {
+			if (const TValue* paths = FindStringField(tabV(baseline), "paths"); paths && tvistab(paths)) {
+				state.enginePaths = tabV(paths);
+			}
+		}
+		std::unordered_map<long, const TValue*> selves;
+		if (const TValue* scripted = FindStringField(state.globals, "_ScriptedObjects"); scripted && tvistab(scripted)) {
+			const GCtab* table = tabV(scripted);
+			const ::Node* nodes = noderef(table->node);
+			for (uint32_t index = 0; index <= table->hmask; ++index) {
+				if (tvisnil(&nodes[index].val) || !tvisstr(&nodes[index].key)) {
+					continue;
+				}
+				const GCstr* key = strV(&nodes[index].key);
+				long uniqueID = 0;
+				const auto [end, error] = std::from_chars(strdata(key), strdata(key) + key->len, uniqueID);
+				if (error == std::errc() && end == strdata(key) + key->len) {
+					selves.emplace(uniqueID, &nodes[index].val);
+				}
+			}
+		}
+		for (const MovableObject* object: objects) {
+			const auto self = selves.find(object->GetUniqueID());
+			digests.push_back({object->GetUniqueID(), self == selves.end() ? static_cast<uint64_t>(TokenNoScriptObject) : ObjectGraphWalk(state, known, object).Digest(self->second)});
+		}
+	};
+	hashState(master);
+	for (LuaStateWrapper& wrapper: threaded) {
+		hashState(wrapper);
+	}
+	std::sort(digests.begin(), digests.end(), [](const ObjectDigest& a, const ObjectDigest& b) { return a.uniqueID != b.uniqueID ? a.uniqueID < b.uniqueID : a.digest < b.digest; });
+	std::vector<uint64_t> fold{TokenObjects, digests.size()};
+	for (const ObjectDigest& entry: digests) {
+		fold.push_back(static_cast<uint64_t>(entry.uniqueID));
+		fold.push_back(entry.digest);
+	}
+	return fold;
+}
+
+std::unordered_set<const MovableObject*> LuaMan::s_PreviewClones;
+std::unordered_set<long> LuaMan::s_PreviewFrozenUIDs;
+std::vector<std::pair<LuaStateWrapper*, std::string>> LuaMan::s_PreviewGlobalSnapshots;
+static std::vector<std::pair<long, LuaStateWrapper*>> s_PreviewCloneBindings;
+
+namespace {
+	std::vector<std::unique_ptr<SoundContainer>> s_PreviewSoundCopies;
+
+	bool IsPreviewSoundCopy(const SoundContainer* sound) {
+		return std::any_of(s_PreviewSoundCopies.begin(), s_PreviewSoundCopies.end(), [sound](const std::unique_ptr<SoundContainer>& copy) { return copy.get() == sound; });
+	}
+
+	int AbsoluteLuaIndex(lua_State* L, int index) {
+		return index < 0 ? lua_gettop(L) + index + 1 : index;
+	}
+
+	void PushPreviewClone(lua_State* L, int src, int seen, std::vector<std::string>& problems) {
+		src = AbsoluteLuaIndex(L, src);
+		seen = AbsoluteLuaIndex(L, seen);
+		const int type = lua_type(L, src);
+		if (type == LUA_TTHREAD) {
+			problems.emplace_back("preview clone refused a coroutine");
+			lua_pushvalue(L, src);
+			return;
+		}
+		if (type == LUA_TUSERDATA) {
+			if (const auto* object = luabind::detail::is_class_object(L, src)) {
+				if (object->crep() && std::strcmp(object->crep()->name(), "Vector") == 0) {
+					const auto* vector = static_cast<const Vector*>(object->ptr());
+					lua_getglobal(L, "Vector");
+					lua_pushnumber(L, vector->GetX());
+					lua_pushnumber(L, vector->GetY());
+					if (lua_pcall(L, 2, 1, 0) != 0) {
+						lua_pop(L, 1);
+						lua_pushvalue(L, src);
+					}
+					return;
+				}
+				if (object->crep() && std::strcmp(object->crep()->name(), "SoundContainer") == 0) {
+					auto* source = static_cast<SoundContainer*>(object->ptr());
+					lua_pushlightuserdata(L, source);
+					lua_rawget(L, seen);
+					if (!lua_isnil(L, -1)) {
+						return;
+					}
+					lua_pop(L, 1);
+					SoundContainer* copy = nullptr;
+					{
+						MovableObject::FaithfulCloneScope scope(false);
+						copy = dynamic_cast<SoundContainer*>(source->Clone());
+					}
+					if (!copy) {
+						lua_pushvalue(L, src);
+						return;
+					}
+					copy->SetPreviewOrigin(source->PreviewPlaybackOwner());
+					s_PreviewSoundCopies.emplace_back(copy);
+					luabind::object(L, copy).push(L);
+					lua_pushlightuserdata(L, source);
+					lua_pushvalue(L, -2);
+					lua_rawset(L, seen);
+					return;
+				}
+			}
+			lua_pushvalue(L, src);
+			return;
+		}
+		if (type != LUA_TTABLE) {
+			lua_pushvalue(L, src);
+			return;
+		}
+		lua_pushvalue(L, src);
+		lua_rawget(L, seen);
+		if (!lua_isnil(L, -1)) {
+			return;
+		}
+		lua_pop(L, 1);
+		lua_newtable(L);
+		const int copy = lua_gettop(L);
+		lua_pushvalue(L, src);
+		lua_pushvalue(L, copy);
+		lua_rawset(L, seen);
+		lua_pushnil(L);
+		while (lua_next(L, src) != 0) {
+			const int value = lua_gettop(L);
+			const int key = value - 1;
+			PushPreviewClone(L, key, seen, problems);
+			PushPreviewClone(L, value, seen, problems);
+			lua_rawset(L, copy);
+			lua_pop(L, 1);
+		}
+	}
+
+	std::unordered_map<long, MovableObject*> s_PreviewRootByUID;
+	std::unordered_map<long, MovableObject*> s_PreviewPartByUID;
+	std::unordered_set<long> s_PreviewFrozenPrinted;
+
+	bool LiveWorldMO(MovableObject* mo) {
+		if (!mo) {
+			return false;
+		}
+		if (g_MovableMan.IsResident(mo) || g_MovableMan.ValidMO(mo)) {
+			return true;
+		}
+		MovableObject* root = mo->GetRootParent();
+		return root && root != mo && (g_MovableMan.IsResident(root) || g_MovableMan.ValidMO(root));
+	}
+
+	bool RemapPreviewUserdata(lua_State* L, int index, std::string& freezeClass) {
+		index = AbsoluteLuaIndex(L, index);
+		const auto* object = luabind::detail::is_class_object(L, index);
+		if (!object || !object->crep()) {
+			freezeClass = "userdata";
+			return false;
+		}
+		const char* className = object->crep()->name();
+		if (std::strcmp(className, "Vector") == 0) {
+			return true;
+		}
+		if (!ClassDerivesFrom(object->crep(), "MovableObject")) {
+			if (std::strcmp(className, "SoundContainer") == 0 && IsPreviewSoundCopy(static_cast<const SoundContainer*>(object->ptr()))) {
+				return true;
+			}
+			if (ClassDerivesFrom(object->crep(), "Entity")) {
+				freezeClass = className;
+				return false;
+			}
+			return true;
+		}
+		auto* mo = static_cast<MovableObject*>(object->ptr());
+		if (!mo) {
+			freezeClass = className;
+			return false;
+		}
+		if (LuaMan::IsPreviewClone(mo)) {
+			return true;
+		}
+		MovableObject* mapped = nullptr;
+		if (const auto found = s_PreviewRootByUID.find(mo->GetUniqueID()); found != s_PreviewRootByUID.end() && found->second != mo) {
+			mapped = found->second;
+		} else if (const auto part = s_PreviewPartByUID.find(mo->GetUniqueID()); part != s_PreviewPartByUID.end() && part->second != mo) {
+			mapped = part->second;
+		} else if (LiveWorldMO(mo)) {
+			mapped = g_MovableMan.ViewIfSpeculating(mo);
+		} else {
+			freezeClass = mo->GetClassName();
+			return false;
+		}
+		if (!mapped) {
+			freezeClass = className;
+			return false;
+		}
+		if (mapped == mo) {
+			return true;
+		}
+		if (!ScriptGraphPushEntity(L, mapped, className) && !ScriptGraphPushEntity(L, mapped, mapped->GetClassName())) {
+			freezeClass = className;
+			return false;
+		}
+		lua_replace(L, index);
+		return true;
+	}
+
+	bool RemapPreviewValue(lua_State* L, int index, int seen, std::string& freezeClass) {
+		index = AbsoluteLuaIndex(L, index);
+		seen = AbsoluteLuaIndex(L, seen);
+		const int type = lua_type(L, index);
+		if (type == LUA_TUSERDATA) {
+			return RemapPreviewUserdata(L, index, freezeClass);
+		}
+		if (type != LUA_TTABLE) {
+			return true;
+		}
+		lua_pushvalue(L, index);
+		lua_rawget(L, seen);
+		if (!lua_isnil(L, -1)) {
+			lua_pop(L, 1);
+			return true;
+		}
+		lua_pop(L, 1);
+		lua_pushvalue(L, index);
+		lua_pushboolean(L, 1);
+		lua_rawset(L, seen);
+
+		lua_newtable(L);
+		const int keys = lua_gettop(L);
+		int count = 0;
+		lua_pushnil(L);
+		while (lua_next(L, index) != 0) {
+			lua_pop(L, 1);
+			lua_pushvalue(L, -1);
+			lua_rawseti(L, keys, ++count);
+		}
+		for (int i = 1; i <= count; ++i) {
+			lua_rawgeti(L, keys, i);
+			const int oldKey = lua_gettop(L);
+			lua_pushvalue(L, oldKey);
+			lua_rawget(L, index);
+			const int value = lua_gettop(L);
+			if (!RemapPreviewValue(L, value, seen, freezeClass)) {
+				return false;
+			}
+			lua_pushvalue(L, oldKey);
+			if (!RemapPreviewValue(L, -1, seen, freezeClass)) {
+				return false;
+			}
+			const int newKey = lua_gettop(L);
+			if (!lua_rawequal(L, oldKey, newKey)) {
+				lua_pushvalue(L, oldKey);
+				lua_pushnil(L);
+				lua_rawset(L, index);
+			}
+			lua_pushvalue(L, newKey);
+			lua_pushvalue(L, value);
+			lua_rawset(L, index);
+			lua_pop(L, 3);
+		}
+		lua_pop(L, 1);
+		return true;
+	}
+
+	void DropPreviewSoundCopies() {
+		s_PreviewSoundCopies.clear();
+	}
+}
+
+bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector<std::string>& problems) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	const int top = lua_gettop(m_State);
+	const std::string uid = std::to_string(uniqueID);
+	PushScriptObjectInstanceTable(m_State, uniqueID);
+	if (lua_isnil(m_State, -1)) {
+		lua_pop(m_State, 1);
+		lua_newtable(m_State);
+	}
+	lua_newtable(m_State);
+	const int seen = lua_gettop(m_State);
+	PushPreviewClone(m_State, -2, seen, problems);
+	if (!lua_istable(m_State, -1)) {
+		problems.emplace_back("preview self clone produced no table");
+		lua_settop(m_State, top);
+		return false;
+	}
+	lua_getglobal(m_State, "_ScriptFieldsStash");
+	if (!lua_istable(m_State, -1)) {
+		lua_pop(m_State, 1);
+		lua_newtable(m_State);
+		lua_pushvalue(m_State, -1);
+		lua_setglobal(m_State, "_ScriptFieldsStash");
+	}
+	lua_pushstring(m_State, ("preview:" + uid).c_str());
+	lua_pushvalue(m_State, -3);
+	lua_settable(m_State, -3);
+	lua_settop(m_State, top);
+	return problems.empty();
+}
+
+bool LuaStateWrapper::SnapshotPreviewGlobals(std::string& text, std::vector<std::string>& problems) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	LoadScriptGraphHelper();
+	const int top = lua_gettop(m_State);
+	text.clear();
+	lua_newtable(m_State);
+	lua_getglobal(m_State, "_ScriptGraph");
+	lua_getfield(m_State, -1, "serialize");
+	lua_pushvalue(m_State, -3);
+	if (lua_pcall(m_State, 1, 2, 0) != 0) {
+		problems.push_back(std::string("preview globals serialize failed: ") + (lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?"));
+		lua_settop(m_State, top);
+		return false;
+	}
+	size_t length = 0;
+	const char* data = lua_tolstring(m_State, -2, &length);
+	text = data ? std::string(data, length) : std::string();
+	CollectStrings(m_State, -1, problems);
+	lua_settop(m_State, top);
+	return !text.empty();
+}
+
+bool LuaStateWrapper::RestorePreviewGlobals(const std::string& text, std::vector<std::string>& problems) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	LoadScriptGraphHelper();
+	const int top = lua_gettop(m_State);
+	lua_getglobal(m_State, "_ScriptGraph");
+	lua_getfield(m_State, -1, "deserialize");
+	lua_pushlstring(m_State, text.data(), text.size());
+	lua_pushboolean(m_State, 0);
+	lua_pushboolean(m_State, 0);
+	if (lua_pcall(m_State, 3, 2, 0) != 0) {
+		problems.push_back(std::string("preview globals restore failed: ") + (lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?"));
+		lua_settop(m_State, top);
+		return false;
+	}
+	CollectStrings(m_State, -1, problems);
+	lua_settop(m_State, top);
+	return true;
+}
+
+bool LuaStateWrapper::BindPreviewScriptObject(MovableObject* clone, bool sharedSlot) {
+	if (!clone) {
+		return false;
+	}
+	const std::string uid = std::to_string(clone->GetUniqueID());
+	RegisterMO(clone);
+	SetTempEntity(clone);
+	if (sharedSlot) {
+		clone->m_ScriptObjectName = "_ScriptedObjects[\"" + uid + "\"]";
+		return clone->InitializeObjectScripts(false) >= 0;
+	}
+	const std::string dest = uid + "#preview";
+	if (RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; _ScriptedObjects[\"" + dest + "\"] = To" + clone->GetClassName() + "(LuaMan.TempEntity);") < 0) {
+		return false;
+	}
+	if (RunScriptString("local hold = _ScriptFieldsStash and _ScriptFieldsStash[\"preview:" + uid + "\"]; local dest = _ScriptedObjects[\"" + dest + "\"]; if dest and hold and _ScriptGraphSetInstance then _ScriptGraphSetInstance(dest, hold) end") < 0) {
+		return false;
+	}
+	clone->m_ScriptObjectName = "_ScriptedObjects[\"" + dest + "\"]";
+	return clone->InitializeObjectScripts(false) >= 0 && TableEntryIsDefined("_ScriptedObjects", dest);
+}
+
+bool LuaStateWrapper::RemapPreviewHoldReferences(long uniqueID, std::string& freezeClass) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	freezeClass.clear();
+	const int top = lua_gettop(m_State);
+	lua_getglobal(m_State, "_ScriptFieldsStash");
+	if (!lua_istable(m_State, -1)) {
+		lua_settop(m_State, top);
+		return true;
+	}
+	lua_pushstring(m_State, ("preview:" + std::to_string(uniqueID)).c_str());
+	lua_gettable(m_State, -2);
+	if (!lua_istable(m_State, -1)) {
+		lua_settop(m_State, top);
+		return true;
+	}
+	lua_newtable(m_State);
+	const bool ok = RemapPreviewValue(m_State, -2, lua_gettop(m_State), freezeClass);
+	lua_settop(m_State, top);
+	return ok;
+}
+
+void LuaStateWrapper::DropPreviewScriptObject(long uniqueID) {
+	const std::string uid = std::to_string(uniqueID);
+	RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; _ScriptedObjects[\"" + uid + "#preview\"] = nil; if _ScriptFieldsStash then _ScriptFieldsStash[\"preview:" + uid + "\"] = nil; end");
+}
+
+bool LuaStateWrapper::AttachPreviewInvStride(MovableObject* object) {
+	if (!object) {
+		return false;
+	}
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	if (RunScriptString("_PreviewInvOnStride = _PreviewInvOnStride or function(self) self.previewInvCounter = (self.previewInvCounter or 0) + 1 end") < 0) {
+		return false;
+	}
+	auto& functions = object->m_FunctionsAndScripts["OnStride"];
+	const std::string selfKey = LuaMan::PreviewScriptKey(object);
+	for (const MovableObject::LuaFunction& existing: functions) {
+		if (existing.m_LuaFunction && existing.m_LuaFunction->GetFilePath() == "preview-inv-stride.lua") {
+			RunScriptString("local s = _ScriptedObjects and _ScriptedObjects[\"" + selfKey + "\"]; if s then s.previewInvCounter = s.previewInvCounter or 0 end");
+			return true;
+		}
+	}
+	lua_getglobal(m_State, "_PreviewInvOnStride");
+	if (!lua_isfunction(m_State, -1)) {
+		lua_pop(m_State, 1);
+		return false;
+	}
+	auto* luaObject = new luabind::adl::object(luabind::from_stack(m_State, -1));
+	lua_pop(m_State, 1);
+	MovableObject::LuaFunction function;
+	function.m_ScriptIsEnabled = true;
+	function.m_LuaFunction = std::make_unique<LuabindObjectWrapper>(luaObject, "preview-inv-stride.lua");
+	functions.push_back(std::move(function));
+	RunScriptString("local s = _ScriptedObjects and _ScriptedObjects[\"" + selfKey + "\"]; if s then s.previewInvCounter = s.previewInvCounter or 0 end");
+	return true;
+}
+
+namespace {
+	void ForEachLuaState(const std::function<void(LuaStateWrapper&)>& visit) {
+		visit(g_LuaMan.GetMasterScriptState());
+		for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
+			visit(state);
+		}
+	}
+
+	void WalkOwned(const MovableObject* root, const std::function<void(MovableObject*)>& visit) {
+		if (!root) {
+			return;
+		}
+		std::unordered_set<const Entity*> entities;
+		std::unordered_set<const MovableObject*> objects;
+		CollectOwnedMovableObjects(root, entities, objects);
+		for (const MovableObject* mo: objects) {
+			if (mo) {
+				visit(const_cast<MovableObject*>(mo));
+			}
+		}
+	}
+}
+
+bool LuaMan::IsPreviewClone(const MovableObject* mo) {
+	return mo && s_PreviewClones.count(mo) > 0;
+}
+
+std::vector<const MovableObject*> LuaMan::PreviewRoots() {
+	std::vector<const MovableObject*> roots;
+	roots.reserve(s_PreviewRootByUID.size());
+	for (const auto& [uid, root]: s_PreviewRootByUID) {
+		roots.push_back(root);
+	}
+	return roots;
+}
+
+bool LuaMan::IsPreviewEdgeHook(const std::string& functionName) {
+	return functionName == "OnFire" || functionName == "OnStride" || functionName == "OnReload" || functionName == "OnAttach" || functionName == "OnDetach" || functionName == "OnCollideWithMO" || functionName == "OnCollideWithTerrain";
+}
+
+bool LuaMan::ShouldRunPreviewHook(const MovableObject* mo, const std::string& functionName) {
+	if (!mo || !IsPreviewClone(mo) || !IsPreviewEdgeHook(functionName)) {
+		return false;
+	}
+	return s_PreviewSharedSlot || s_PreviewFrozenUIDs.count(mo->GetUniqueID()) == 0;
+}
+
+std::string LuaMan::PreviewScriptKey(const MovableObject* mo) {
+	if (!mo) {
+		return {};
+	}
+	const std::string uid = std::to_string(mo->GetUniqueID());
+	if (s_PreviewSharedSlot || !IsPreviewClone(mo) || s_PreviewFrozenUIDs.count(mo->GetUniqueID()) > 0) {
+		return uid;
+	}
+	return uid + "#preview";
+}
+
+void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& roots, bool sharedSlot) {
+	DropPreviewSoundCopies();
+	s_PreviewFrozenUIDs.clear();
+	s_PreviewGlobalSnapshots.clear();
+	if (!sharedSlot) {
+		for (const MovableObject* root: roots) {
+			WalkOwned(root, [](MovableObject* mo) {
+				LuaStateWrapper* state = mo->GetLuaState();
+				if (!state || !mo->ObjectScriptsInitialized()) {
+					return;
+				}
+				std::vector<std::string> problems;
+				if (!state->CopyScriptInstanceToPreviewHold(mo->GetUniqueID(), problems)) {
+					s_PreviewFrozenUIDs.insert(mo->GetUniqueID());
+					++s_PreviewCodecFallbacks;
+				}
+			});
+		}
+	}
+	static const bool snapshotGlobals = [] {
+		const char* value = std::getenv("CC_PREVIEW_GLOBALS_SNAPSHOT");
+		return value && value[0] == '1' && value[1] == '\0';
+	}();
+	if (snapshotGlobals) {
+		ForEachLuaState([](LuaStateWrapper& state) {
+			std::string text;
+			std::vector<std::string> problems;
+			if (state.SnapshotPreviewGlobals(text, problems) && !text.empty()) {
+				s_PreviewGlobalSnapshots.emplace_back(&state, std::move(text));
+			}
+		});
+	}
+}
+
+void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot) {
+	s_PreviewClones.clear();
+	s_PreviewRootByUID.clear();
+	s_PreviewPartByUID.clear();
+	s_PreviewCloneBindings.clear();
+	s_PreviewSharedSlot = sharedSlot;
+	for (MovableObject* clone: clones) {
+		if (clone) {
+			s_PreviewRootByUID[clone->GetUniqueID()] = clone;
+		}
+		WalkOwned(clone, [](MovableObject* mo) {
+			s_PreviewClones.insert(mo);
+			if (mo) {
+				s_PreviewPartByUID[mo->GetUniqueID()] = mo;
+			}
+		});
+	}
+	for (MovableObject* clone: clones) {
+		WalkOwned(clone, [sharedSlot](MovableObject* mo) {
+			LuaStateWrapper* state = mo->GetLuaState();
+			const long uid = mo->GetUniqueID();
+			if (state) {
+				s_PreviewCloneBindings.push_back({uid, state});
+			}
+			if (!state) {
+				mo->m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(uid) + "#preview\"]";
+				return;
+			}
+			if (sharedSlot) {
+				state->BindPreviewScriptObject(mo, true);
+				return;
+			}
+			if (s_PreviewFrozenUIDs.count(uid) > 0) {
+				mo->m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(uid) + "#preview\"]";
+				return;
+			}
+			if (!state->BindPreviewScriptObject(mo, false)) {
+				s_PreviewFrozenUIDs.insert(uid);
+				++s_PreviewCodecFallbacks;
+				mo->m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(uid) + "#preview\"]";
+				return;
+			}
+			std::string freezeClass;
+			// Held MO refs become the clone or a speculation shadow.
+			if (!state->RemapPreviewHoldReferences(uid, freezeClass)) {
+				if (s_PreviewFrozenPrinted.insert(uid).second) {
+					std::cout << "[preview] frozen uid=" << uid << " class=" << freezeClass << std::endl;
+				}
+				s_PreviewFrozenUIDs.insert(uid);
+				++s_PreviewCodecFallbacks;
+				state->DropPreviewScriptObject(uid);
+				mo->m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(uid) + "#preview\"]";
+			}
+		});
+	}
+}
+
+void LuaMan::EndPreviewScripts() {
+	s_PreviewGlobalSnapshots.clear();
+	std::unordered_set<long> dropped;
+	for (const auto& [uid, state]: s_PreviewCloneBindings) {
+		if (!state || !dropped.insert(uid).second) {
+			continue;
+		}
+		state->DropPreviewScriptObject(uid);
+	}
+	s_PreviewCloneBindings.clear();
+	s_PreviewClones.clear();
+	s_PreviewRootByUID.clear();
+	s_PreviewPartByUID.clear();
+	s_PreviewFrozenUIDs.clear();
+	s_PreviewGlobalSnapshots.clear();
+	s_PreviewSharedSlot = false;
+	s_RunningPreviewHook = false;
+	DropPreviewSoundCopies();
 }

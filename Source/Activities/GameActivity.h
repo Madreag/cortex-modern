@@ -67,6 +67,10 @@ namespace RTE {
 		void VisitCheckpointOwnedObjects(const std::function<void(const Entity*)>& visit) const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) override;
 		bool ResolveCheckpointReferences() override;
+		void ClearNonOwnedActorSlots() override;
+		void RebindNonOwnedActorSlots() override;
+		void ForgetDestroyedActor(const Actor* actor) override;
+		void ClearCheckpointActorIDs() override;
 		bool PrepareCheckpointUI() override;
 		SerializableOverrideMethods;
 		ClassInfoGetters;
@@ -181,6 +185,7 @@ namespace RTE {
 		/// @return A pointer to a SceneEditorGUI. Ownership is NOT transferred!
 		SceneEditorGUI* GetEditorGUI(unsigned int which = 0) const { return m_pEditorGUI[which]; }
 		static bool RunNetLocalUIRestoreSelfTest();
+		static bool RunNetInventoryRelaunchProbe(std::string_view phase);
 
 		/// Locks a player controlled actor to a specific controller mode.
 		/// Locking the actor will disable player input, including switching actors.
@@ -690,6 +695,8 @@ namespace RTE {
 	private:
 		bool LoadNetLocalGameState(std::string_view text);
 		bool CreateNetLocalUI();
+		/// Points a relaunch's pending marked-actor links at the marks as they stand, so its deferred rebinds keep them.
+		void RefreshCheckpointMarkedActorIDs();
 		std::string SaveValueCheckpoint() const;
 		bool LoadValueCheckpoint(std::string_view text, bool validateOnly = false);
 		std::array<long, Players::MaxPlayerCount> m_CheckpointMarkedActorIDs{};

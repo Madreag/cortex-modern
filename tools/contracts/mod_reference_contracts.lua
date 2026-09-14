@@ -23,12 +23,14 @@ local factories = {
 
 function Create(self)
     self.testCreate, self.testUpdate = 1, 0
+    if _ContractAuditOwner == nil then _ContractAuditOwner = self.UniqueID end
 end
 
 function Update(self)
     self.testUpdate = self.testUpdate + 1
     self:SetNumberValue("TestUpdates", self.testUpdate)
-    if self.UniqueID ~= 1048577 or self.referenceContracts then return end
+    if _ContractAuditOwner == nil then _ContractAuditOwner = self.UniqueID end
+    if self.UniqueID ~= _ContractAuditOwner or self.referenceContracts then return end
     local key = os.getenv("CC_CONTRACT_REFERENCE")
     assert(factories[key], "unknown reference contract " .. tostring(key))
     local value = factories[key](ToGameActivity(ActivityMan:GetActivity()))
@@ -83,5 +85,6 @@ function Update(self)
         end
         print("[reference-contract-check] " .. stage .. " checked=" .. checked .. " mismatches=" .. failures)
     end
+    print("[reference-contract-check] ARMED uid=" .. tostring(self.UniqueID))
     print("[native-reference-fixture] constructed=" .. key .. " type=" .. type(value))
 end

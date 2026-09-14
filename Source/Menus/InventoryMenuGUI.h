@@ -80,6 +80,16 @@ namespace RTE {
 		/// @param actor The new Actor whose inventory this GUI will display. Ownership is NOT transferred!
 		void SetInventoryActor(Actor* newInventoryActor);
 
+		/// Presentation-only stand-in for Draw; Update still reads m_InventoryActor.
+		static void SetRenderSubstituteActor(Actor* actor);
+		static Actor* GetRenderSubstituteActor(const Actor* inventoryActor);
+		Actor* GetDrawActor() const;
+		Vector GetDrawCenter() const;
+		MovableObject* GetDrawEquippedItem() const;
+		static Actor* GetLastDrawActor() { return s_LastDrawActor; }
+		static Vector GetLastDrawCenter() { return s_LastDrawCenter; }
+		static const std::string& GetLastDrawEquippedName() { return s_LastDrawEquippedName; }
+
 		/// Gets the MenuMode this InventoryMenuGUI is currently in.
 		/// @return The current MenuMode of this InventoryMenuGUI.
 		MenuMode GetMenuMode() const { return m_MenuMode; }
@@ -210,6 +220,10 @@ namespace RTE {
 		static constexpr int c_FullMenuVerticalOffset = 50; //!< How high above its target the full GUI will be. Used in Full/Transfer MenuModes.
 
 		static BITMAP* s_CursorBitmap; //!< The cursor image shared by all GUIs.
+		static Actor* s_RenderSubstituteActor; //!< Preview clone Draw should follow; not owned.
+		static Actor* s_LastDrawActor;
+		static Vector s_LastDrawCenter;
+		static std::string s_LastDrawEquippedName;
 
 		GUIFont* m_SmallFont; //!< A pointer to the small font from FrameMan. Not owned here.
 		GUIFont* m_LargeFont; //!< A pointer to the large font from FrameMan. Not owned here.
@@ -397,7 +411,7 @@ namespace RTE {
 		/// Draws the InventoryMenuGUI when it's in Carousel MenuMode.
 		/// @param targetBitmap A pointer to a BITMAP to draw on. Generally a screen BITMAP.
 		/// @param drawPos The position at which to draw the carousel.
-		void DrawCarouselMode(BITMAP* targetBitmap, const Vector& drawPos) const;
+		void DrawCarouselMode(BITMAP* targetBitmap, const Vector& drawPos, const std::vector<std::pair<MovableObject*, MovableObject*>>& equippedItems) const;
 
 		/// Draws the InventoryMenuGUI when it's in Full MenuMode.
 		/// @param targetBitmap A pointer to a BITMAP to draw on. Generally a screen BITMAP.
@@ -411,7 +425,7 @@ namespace RTE {
 		/// Draws the specified CarouselItemBox's item(s) and mass text to the carousel Bitmap.
 		/// @param itemBoxToDraw The CarouselItemBox to draw.
 		/// @param carouselAllegroBitmap An AllegroBitmap of the bitmap the CarouselItemBox should draw its foreground to. Used for drawing mass strings, and predefined to avoid needless creation.
-		void DrawCarouselItemBoxForeground(const CarouselItemBox& itemBoxToDraw, AllegroBitmap* carouselAllegroBitmap) const;
+		void DrawCarouselItemBoxForeground(const CarouselItemBox& itemBoxToDraw, AllegroBitmap* carouselAllegroBitmap, const std::vector<std::pair<MovableObject*, MovableObject*>>& equippedItems) const;
 #pragma endregion
 
 		/// Clears all the member variables of this InventoryMenuGUI, effectively resetting the members of this abstraction level only.

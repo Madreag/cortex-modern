@@ -535,6 +535,9 @@
     <ClInclude Include="Source\Network\NetDirectorySignalChannel.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetMuxTransport.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetHttpClient.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -578,6 +581,9 @@
       <Filter>Network</Filter>
     </ClInclude>
     <ClInclude Include="Source\Network\NetMatchSelfTest.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetPortMap.h">
       <Filter>Network</Filter>
     </ClInclude>
     <ClInclude Include="Source\Network\NetProtocol.h">
@@ -874,6 +880,9 @@
     <ClCompile Include="Source\Network\NetDirectorySignalChannel.cpp">
       <Filter>Network</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Network\NetMuxTransport.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Network\NetHttpClient.cpp">
       <Filter>Network</Filter>
     </ClCompile>
@@ -958,6 +967,12 @@
     <ClCompile Include="Source\Network\NetMatchSelfTest.cpp">
       <Filter>Network</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Network\NetPortMap.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetPortMapSelfTest.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Network\NetProtocol.cpp">
       <Filter>Network</Filter>
     </ClCompile>
@@ -1022,6 +1037,9 @@
       <Filter>Managers</Filter>
     </ClCompile>
     <ClCompile Include="Source\Managers\PreviewEventLedger.cpp">
+      <Filter>Managers</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Managers\PreviewScriptSelfTest.cpp">
       <Filter>Managers</Filter>
     </ClCompile>
     <ClCompile Include="Source\Managers\TerrainLayerSnapshot.cpp">
