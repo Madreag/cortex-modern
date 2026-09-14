@@ -506,6 +506,7 @@ int ShutDown(int exitCode) {
 	}
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
 	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
+	g_ActivityMan.WaitForAutosaveTasks();
 	LocalPrediction::Clear();
 	PreviewEventLedger::Clear();
 	if (s_rbProbeOriginals.held) {
