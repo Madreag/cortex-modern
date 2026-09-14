@@ -6,7 +6,6 @@
 #include "lj_gc.h"
 #include "lj_err.h"
 #include "lj_tab.h"
-#include "lj_frame.h"
 #include "lj_dispatch.h"
 #include "lj_preview.h"
 #include "luajit.h"
@@ -194,12 +193,10 @@ LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t n
           !preview_object(p, gcref(ud->metatable))) goto fail;
     } else {
       lua_State *th = gco2th(o);
-      TValue *v, *frame;
+      TValue *v;
       if (!preview_object(p, gcref(th->env))) goto fail;
       for (v = tvref(th->stack)+1+LJ_FR2; v < th->top; v++)
         if (!preview_value(p, v)) goto fail;
-      for (frame = th->base-1; frame > tvref(th->stack)+LJ_FR2; frame = frame_prev(frame))
-        if (!preview_object(p, obj2gco(frame_func(frame)))) goto fail;
     }
   }
   p->root = root;
