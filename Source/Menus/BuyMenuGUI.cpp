@@ -156,34 +156,32 @@ int BuyMenuGUI::Create(Controller* pController) {
 	// Stretch the invisible root box to fill the screen
 	dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("base"))->SetSize(g_WindowMan.GetResX(), g_WindowMan.GetResY());
 
-	// Make sure we have convenient points to teh containing GUI colleciton boxes that we will manipulate the positions of
-	if (!m_pParentBox) {
-		m_pParentBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("BuyGUIBox"));
-		m_pParentBox->SetDrawBackground(true);
-		m_pParentBox->SetDrawType(GUICollectionBox::Color);
+	// Make sure we have convenient points to teh containing GUI colleciton boxes that we will manipulate the positions of.
+	// The manager above deleted every control it owned, so each cached pointer is re-fetched.
+	m_pParentBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("BuyGUIBox"));
+	m_pParentBox->SetDrawBackground(true);
+	m_pParentBox->SetDrawType(GUICollectionBox::Color);
 
-		m_Banner = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CatalogHeader"));
-		SetBannerImage(c_DefaultBannerImagePath);
+	m_Banner = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CatalogHeader"));
+	SetBannerImage(c_DefaultBannerImagePath);
 
-		m_Logo = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CatalogLogo"));
-		SetLogoImage(c_DefaultLogoImagePath);
-	}
+	m_Logo = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CatalogLogo"));
+	SetLogoImage(c_DefaultLogoImagePath);
+
 	m_pParentBox->SetPositionAbs(-m_pParentBox->GetWidth(), 0);
 	m_pParentBox->SetEnabled(false);
 	m_pParentBox->SetVisible(false);
 
-	if (!m_pPopupBox) {
-		m_pPopupBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("BuyGUIPopup"));
-		m_pPopupText = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("PopupText"));
+	m_pPopupBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("BuyGUIPopup"));
+	m_pPopupText = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("PopupText"));
 
-		m_pPopupBox->SetDrawType(GUICollectionBox::Panel);
-		m_pPopupBox->SetDrawBackground(true);
-		// Never enable the popup, because it steals focus and cuases other windows to think teh cursor left them
-		m_pPopupBox->SetEnabled(false);
-		m_pPopupBox->SetVisible(false);
-		// Set the font
-		m_pPopupText->SetFont(m_pGUIController->GetSkin()->GetFont("FontSmall.png"));
-	}
+	m_pPopupBox->SetDrawType(GUICollectionBox::Panel);
+	m_pPopupBox->SetDrawBackground(true);
+	// Never enable the popup, because it steals focus and cuases other windows to think teh cursor left them
+	m_pPopupBox->SetEnabled(false);
+	m_pPopupBox->SetVisible(false);
+	// Set the font
+	m_pPopupText->SetFont(m_pGUIController->GetSkin()->GetFont("FontSmall.png"));
 
 	m_pCategoryTabs[CRAFT] = dynamic_cast<GUITab*>(m_pGUIController->GetControl("CraftTab"));
 	m_pCategoryTabs[BODIES] = dynamic_cast<GUITab*>(m_pGUIController->GetControl("BodiesTab"));
