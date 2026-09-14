@@ -180,9 +180,9 @@ def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
         script.write_text("wait 12\nassert_screen Pause\nassert_control ButtonSaveDiagnostics\n"
                           "assert_enabled ButtonSaveDiagnostics 1\nassert_label ButtonSaveDiagnostics save diagnostics\n"
                           "screenshot diagnostics_pause\npost_command ButtonSaveDiagnostics\n"
-                          "wait 2\nassert_enabled ButtonSaveDiagnostics 0\nassert_label ButtonSaveDiagnostics Saving...\n"
+                          "wait 2\nassert_enabled ButtonSaveDiagnostics 0\nassert_label ButtonSaveDiagnostics saving...\n"
                           "screenshot diagnostics_pause_busy\n"
-                          "assert_enabled ButtonSaveDiagnostics 0\nassert_label ButtonSaveDiagnostics Saving...\n"
+                          "assert_enabled ButtonSaveDiagnostics 0\nassert_label ButtonSaveDiagnostics saving...\n"
                           "screenshot diagnostics_pause_busy_confirmed\n"
                           "wait_file Telemetry/diag-*.zip\nwait_ms 50\n"
                           "assert_enabled ButtonSaveDiagnostics 1\nassert_label ButtonSaveDiagnostics save diagnostics\n"
@@ -225,7 +225,7 @@ def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
                 assert log.count("assert_enabled ButtonSaveDiagnostics expected=1 actual=1 PASS") == 2, "terminal button was not enabled"
                 assert log.count('assert_label ButtonSaveDiagnostics "save diagnostics" text="save diagnostics" PASS') == 2, "terminal label differs"
                 assert log.count("assert_enabled ButtonSaveDiagnostics expected=0 actual=0 PASS") == 2, "busy button was not disabled"
-                assert log.count('assert_label ButtonSaveDiagnostics "Saving..." text="Saving..." PASS') == 2, "busy label differs"
+                assert log.count('assert_label ButtonSaveDiagnostics "saving..." text="saving..." PASS') == 2, "busy label differs"
                 details["peers"][who] = {"pictures": pictures, "bundle": inspect_bundle(run.cwd, exe_sha)}
             except Exception as error:
                 details["errors"][who] = str(error)
