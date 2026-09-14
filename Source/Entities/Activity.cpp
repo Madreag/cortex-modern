@@ -445,12 +445,16 @@ void Activity::ConfigureHumanRoster(const NetMatchConfig& config, uint8_t localP
 	ClearPlayers(false);
 	m_SharedPlayerSeats = true;
 	std::fill(std::begin(m_Team), std::end(m_Team), Teams::NoTeam);
+	std::array<bool, Teams::MaxTeamCount> cpuTeams{};
 	int player = Players::PlayerOne;
 	for (const NetMatchPlayerSlot& slot: config.players) {
 		const bool firstOnTeam = !m_TeamActive[slot.team];
 		if (firstOnTeam) ++m_TeamCount;
 		ForceSetTeamAsActive(slot.team);
-		if (slot.cpu) continue;
+		if (slot.cpu) {
+			cpuTeams[slot.team] = true;
+			continue;
+		}
 		RTEAssert(player < Players::MaxPlayerCount, "The match roster exceeds the human seat capacity");
 		m_IsActive[player] = m_IsHuman[player] = true;
 		m_Team[player] = slot.team;
@@ -459,6 +463,7 @@ void Activity::ConfigureHumanRoster(const NetMatchConfig& config, uint8_t localP
 		++player;
 	}
 	m_PlayerCount = player;
+	if (auto* gameActivity = dynamic_cast<GameActivity*>(this)) gameActivity->ConfigureLockstepCPUTeams(cpuTeams);
 	MapLocalPlayers(config, localPeer);
 }
 
@@ -526,9 +531,24 @@ bool Activity::RunSharedSeatSelfTest() {
 	copied.MapLocalPlayers(config, 2);
 	const bool rebound = copied.m_LocalInputPlayers[1] == 0 && copied.ScreenOfPlayer(1) == 0 && copied.ScreenOfPlayer(0) == -1 &&
 		copied.GetHumanCount() == host.GetHumanCount() && copied.GetTeamOfPlayer(1) == host.GetTeamOfPlayer(1);
+	const bool cpuRoster = host.TeamIsCPU(2) && client.TeamIsCPU(2) && dedicated.TeamIsCPU(2) &&
+		host.GetCPUTeam() == 2 && client.GetCPUTeam() == 2 && !host.TeamIsCPU(1) && !client.TeamIsCPU(1);
+	NetMatchConfig multiCPU;
+	multiCPU.players = {{0, 3, true, "CPU3"}, {1, 1, false, "First"}, {0, 2, true, "CPU2"}, {2, 1, false, "Second"}};
+	GameActivity multipleHost, multipleClient;
+	multipleHost.ConfigureHumanRoster(multiCPU, 1);
+	std::reverse(multiCPU.players.begin(), multiCPU.players.end());
+	multipleClient.ConfigureHumanRoster(multiCPU, 2);
+	const bool cpuOrder = multipleHost.GetCPUTeam() == 2 && multipleClient.GetCPUTeam() == 2 &&
+		multipleHost.TeamIsCPU(2) && multipleHost.TeamIsCPU(3) && multipleClient.TeamIsCPU(2) && multipleClient.TeamIsCPU(3);
+	multiCPU.players = {{1, 0, false, "First"}, {2, 1, false, "Second"}};
+	multipleHost.ConfigureHumanRoster(multiCPU, 1);
+	bool cpuReset = multipleHost.GetCPUTeam() == Teams::NoTeam;
+	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) cpuReset = cpuReset && !multipleHost.TeamIsCPU(team);
 	std::cout << "[shared-seat-selftest] " << (passed ? "PASS" : "FAIL") << " roster=" << roster << " local=" << local << " offline=" << offlineSame << std::endl;
 	std::cout << "[shared-seat-selftest] " << (rebound ? "PASS" : "FAIL") << " copied_peer_map=" << rebound << std::endl;
-	return passed && rebound;
+	std::cout << "[shared-seat-selftest] " << (cpuRoster && cpuOrder && cpuReset ? "PASS" : "FAIL") << " cpu_roster=" << cpuRoster << " cpu_order=" << cpuOrder << " cpu_reset=" << cpuReset << std::endl;
+	return passed && rebound && cpuRoster && cpuOrder && cpuReset;
 }
 
 bool Activity::DeactivatePlayer(int playerToDeactivate) {

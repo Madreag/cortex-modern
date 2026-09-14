@@ -4730,6 +4730,9 @@ bool ConfigureNetMatchActivity(const std::string& activityPreset, int localTeam,
 			if (team == localTeam || ScenarioRunner::IsLockstepActiveTeam(team)) {
 				gameActivity->ForceSetTeamAsActive(team);
 				gameActivity->SetTeamFunds(0, team);
+				if (s_netMatchServiceE2E) {
+					std::cout << "[e2e] TeamIsCPU team=" << team << " value=" << (gameActivity->TeamIsCPU(team) ? 1 : 0) << std::endl;
+				}
 			}
 		}
 	}

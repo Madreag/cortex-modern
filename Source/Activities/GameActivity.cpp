@@ -370,6 +370,15 @@ void GameActivity::SetCPUTeam(int team) {
 	*/
 }
 
+void GameActivity::ConfigureLockstepCPUTeams(const std::array<bool, Teams::MaxTeamCount>& cpuTeams) {
+	m_CPUTeam = Teams::NoTeam;
+	std::fill(std::begin(m_TeamIsCPU), std::end(m_TeamIsCPU), false);
+	// Every CPU flag is shared; the legacy scalar selects the lowest numbered CPU team.
+	for (int team = Teams::MaxTeamCount - 1; team >= Teams::TeamOne; --team) {
+		if (cpuTeams[team]) SetCPUTeam(team);
+	}
+}
+
 bool GameActivity::IsBuyGUIVisible(int which) const {
 	if (which == -1) {
 		const int playerLimit = m_SharedPlayerSeats ? Players::MaxPlayerCount : GetPlayerCount();

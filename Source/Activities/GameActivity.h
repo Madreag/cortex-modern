@@ -130,6 +130,7 @@ namespace RTE {
 		/// Sets the current CPU-assisted team, if any (NoTeam) - LEGACY function
 		/// @param team The new setting. NoTeam is no team is assisted. (default: Activity::NoTeam)
 		void SetCPUTeam(int team = Activity::NoTeam);
+		void ConfigureLockstepCPUTeams(const std::array<bool, Teams::MaxTeamCount>& cpuTeams);
 
 		/// Sets the observation sceneman scroll targets, for when the game is
 		/// over or a player is in observation mode
