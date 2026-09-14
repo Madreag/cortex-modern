@@ -1,0 +1,9 @@
+# F23c site C: GameActivity.cpp FullInventory pie SetEnabled(false).
+# L_LEFT hovers the Left quadrant's middle slice (Cycle); L_DOWN is counter-clockwise from Left and
+# steps to the next flattened slice (Inventory = Show Full Inventory). FIRE activates it with
+# PIEMENU_DIGITAL still held, so the seat's local close is the only thing that shuts the menu.
+30 31 NEXT
+150 220 PIEMENU_DIGITAL
+160 161 L_LEFT
+170 171 L_DOWN
+180 181 FIRE

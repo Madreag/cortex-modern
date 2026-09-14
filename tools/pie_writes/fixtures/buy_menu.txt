@@ -1,0 +1,6 @@
+# F23c site A: GameActivity.cpp RemovePieSlicesByType(BuyMenu) while the pie is Enabling.
+# Seat the spawned Crab, then open its pie. PieWriteObserver turns the activity's buy menu
+# off on every peer before the menu opens, which is the only condition the site reads.
+# The crab's Up quadrant is Reload (middle) + BuyMenu, so the removal takes 8 slices to 7.
+30 31 NEXT
+150 220 PIEMENU_DIGITAL
