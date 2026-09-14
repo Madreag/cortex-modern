@@ -126,7 +126,7 @@ namespace RTE {
 		if (m_State != NetMatchServiceState::Running || m_LastMatchSummary || m_CurrentMatchSummary.identityLine.empty()) return;
 		UpdateSummarySeatsLocked();
 		m_CurrentMatchSummary.result = result.empty() ? "Match complete" : result;
-		if (m_Coordinator) {
+		if (m_Coordinator && result == "The other player left the match") {
 			// A received clean stop already carries the match-over reason.
 			const std::string& endReason = m_Coordinator->GetStats().timeoutReason;
 			if (endReason.starts_with("Complete:") && endReason.size() > 9) m_CurrentMatchSummary.result = endReason.substr(9);
