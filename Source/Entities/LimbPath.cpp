@@ -8,7 +8,7 @@
 #include "PrimitiveMan.h"
 
 #include <algorithm>
-#include <charconv>
+#include "FloatText.h"
 
 using namespace RTE;
 
@@ -166,7 +166,7 @@ std::string LimbPath::PackTraversalState(bool forHashing) const {
 	state.reserve(512 + 24 * m_Segments.size());
 	const auto appendValue = [&state](auto value) {
 		char buffer[64];
-		const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+		const auto result = ToCharsExact(buffer, buffer + sizeof(buffer), value);
 		RTEAssert(result.ec == std::errc(), "Could not write limb path checkpoint");
 		state.push_back(' ');
 		state.append(buffer, result.ptr);
@@ -232,7 +232,7 @@ void LimbPath::ApplyTraversalState(const std::string& state) {
 		while (cursor != end && *cursor == ' ') {
 			++cursor;
 		}
-		const auto result = std::from_chars(cursor, end, value);
+		const auto result = FromCharsExact(cursor, end, value);
 		RTEAssert(result.ec == std::errc(), "Invalid limb path checkpoint");
 		cursor = result.ptr;
 	};

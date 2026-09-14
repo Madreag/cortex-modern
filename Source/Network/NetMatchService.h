@@ -366,6 +366,7 @@ namespace RTE {
 		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
 		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
 		friend bool TestCompletedLobbyExpires(std::string* error);
+		friend bool TestChatSendRefusedOutsideCarry(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();

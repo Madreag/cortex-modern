@@ -1260,7 +1260,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	// A shrunken box still reads top-down: Middle would anchor a tall error on its middle lines.
 	m_MultiplayerErrorLabel->SetVAlignment(
 	    m_MultiplayerErrorLabel->GetTextHeight() > errorHeight ? GUIFont::Top : GUIFont::Middle);
-	const int chatTop = 241 + extraHeight;
+	// The Leave/Seats row ends at rel 240; the first chat row keeps a 4px gap under it.
+	const int chatTop = 245 + extraHeight;
 	const int chatRows = std::min<int>(m_MultiplayerLobbyChatLabels.size(),
 	                                   std::max(0, (panelCap - chatTop - inputBlock) / 10));
 	const int contentHeight = chatTop + chatRows * 10 + inputBlock;
@@ -1471,6 +1472,26 @@ bool MainMenuGUI::AutomationSetCheck(const std::string& controlName, bool checke
 }
 
 bool MainMenuGUI::AutomationLabelText(const std::string& controlName, std::string& text) const {
+	// The chat rows' count moves with the layout budget, so scripts address them by role, not
+	// index: LabelLobbyChatNewest is the last drawn row, LabelLobbyChatAny every drawn row's
+	// text joined - an assert_label substring hit proves the line reached a rendered row.
+	if (controlName == "LabelLobbyChatNewest" || controlName == "LabelLobbyChatAny") {
+		// Drawn rows are exactly the labels carrying text: the refresh blanks every row the
+		// budget hides, and the top-gap rows never get text.
+		std::string joined;
+		for (const GUILabel* label : m_MultiplayerLobbyChatLabels) {
+			if (label && !label->GetText().empty()) {
+				if (controlName == "LabelLobbyChatNewest") {
+					text = label->GetText();
+				} else {
+					if (!joined.empty()) joined += "\n";
+					joined += label->GetText();
+				}
+			}
+		}
+		if (controlName == "LabelLobbyChatAny") text = joined;
+		return !text.empty();
+	}
 	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
 	if (!control) {
 		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
