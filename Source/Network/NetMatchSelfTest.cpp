@@ -156,6 +156,26 @@ namespace RTE {
 				}
 				return true;
 			};
+			NetMatchConfig historical = MakeConfig();
+			historical.version = 2;
+			std::vector<uint8_t> historicalWire;
+			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{historical}}, historicalWire)) return false;
+			historicalWire[4] = 3;
+			const auto networkDecode = NetLobbyProtocol::Decode(historicalWire);
+			if (networkDecode.ok || networkDecode.error.code != NetLobbyErrorCode::UnsupportedVersion) {
+				*error = "network decode accepted a recorded v3 config envelope";
+				return false;
+			}
+			std::vector<uint8_t> historicalReplay(original.begin(), original.begin() + 12);
+			write32(historicalReplay, 8, static_cast<uint32_t>(historicalWire.size()));
+			historicalReplay.insert(historicalReplay.end(), historicalWire.begin(), historicalWire.end());
+			historicalReplay.insert(historicalReplay.end(), original.begin() + recordOffset, original.end());
+			if (!writeFile(historicalReplay) || !reader.Open(path.string(), error) || reader.GetConfig() != historical ||
+			    !reader.ReadFrame(decoded, eof, error) || decoded != first) {
+				*error = "recorded v3 lobby/v2 config did not retain its defaults and commands";
+				return false;
+			}
+			reader.Close();
 			auto bytes = original;
 			bytes[16] = 2;
 			const std::vector<uint8_t> legacyConfig(bytes.begin() + 12, bytes.begin() + recordOffset);
@@ -393,7 +413,172 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestMatchRulesCodec(std::string* error) {
+			NetMatchConfig config = MakeConfig();
+			config.roundId = 7;
+			config.configRevision = 13;
+			config.activityModule = "Example.rte";
+			config.sceneModule = "Maps.rte";
+			config.difficulty = 81;
+			config.startingGold = 12345;
+			config.fogOfWar = config.requireClearPathToOrbit = config.deployUnits = true;
+			config.autosaveEnabled = true;
+			config.autosaveIntervalSeconds = 120;
+			config.idleWaitMinutes = 4;
+			config.automaticRepair = false;
+			config.delayPolicy = NetMatchDelayPolicy::Fixed;
+			config.inputDelayFrames = 2;
+			config.peerInputDelayFrames = {3, 7};
+			for (size_t i = 0; i < config.teamRules.size(); ++i) {
+				config.teamRules[i] = {"-Random-", "Coalition.rte", static_cast<uint8_t>(40 + i)};
+			}
+			if (!RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
+			using Edit = std::pair<std::string, std::function<void(NetMatchConfig&)>>;
+			const std::vector<Edit> edits = {
+				{"session", [](auto& c) { ++c.sessionId; }}, {"round", [](auto& c) { ++c.roundId; }},
+				{"revision", [](auto& c) { ++c.configRevision; }}, {"activity_module", [](auto& c) { c.activityModule = "Other.rte"; }},
+				{"activity_class", [](auto& c) { c.activityType = "GameActivity"; }}, {"activity_preset", [](auto& c) { c.activityPreset += " 2"; }},
+				{"scene_module", [](auto& c) { c.sceneModule = "Other.rte"; }}, {"scene", [](auto& c) { c.sceneName += " 2"; }},
+				{"mode", [](auto& c) { c.mode = NetMatchMode::CoopPvE; }}, {"mode_preset", [](auto& c) { c.modePreset = "Co-op"; }},
+				{"difficulty", [](auto& c) { ++c.difficulty; }}, {"gold", [](auto& c) { ++c.startingGold; }},
+				{"fog", [](auto& c) { c.fogOfWar = false; }}, {"orbit", [](auto& c) { c.requireClearPathToOrbit = false; }},
+				{"deploy", [](auto& c) { c.deployUnits = false; }}, {"autosave", [](auto& c) { c.autosaveEnabled = false; }},
+				{"interval", [](auto& c) { ++c.autosaveIntervalSeconds; }}, {"idle_wait", [](auto& c) { ++c.idleWaitMinutes; }},
+				{"repair", [](auto& c) { c.automaticRepair = true; }}, {"policy", [](auto& c) { c.delayPolicy = NetMatchDelayPolicy::Auto; }},
+				{"floor", [](auto& c) { ++c.inputDelayFrames; }}, {"sender_1", [](auto& c) { ++c.peerInputDelayFrames[0]; }},
+				{"sender_2", [](auto& c) { ++c.peerInputDelayFrames[1]; }},
+			};
+			const NetHash32 hash = NetMatchConfigUtil::HashConfig(config);
+			NetMatchConfig arbitraryBytes = config;
+			arbitraryBytes.activityModule = std::string(1, static_cast<char>(0xFF)) + ".rte";
+			if (NetMatchConfigUtil::HashConfig(arbitraryBytes) == hash) { *error = "rules hash omitted module bytes"; return false; }
+			auto checkEdit = [&](const Edit& edit) {
+				NetMatchConfig changed = config;
+				edit.second(changed);
+				if (NetMatchConfigUtil::HashConfig(changed) == hash) {
+					*error = "rules hash omitted " + edit.first;
+					return false;
+				}
+				return RoundTrip(NetLobbyMatchConfig{changed}, error);
+			};
+			for (const auto& edit : edits) if (!checkEdit(edit)) return false;
+			for (size_t i = 0; i < config.teamRules.size(); ++i) {
+				if (!checkEdit({"technology intent", [i](auto& c) { c.teamRules[i].technologyIntent = "Coalition.rte"; }}) ||
+				    !checkEdit({"technology module", [i](auto& c) { c.teamRules[i].technologyModule = "Dummy.rte"; }}) ||
+				    !checkEdit({"AI skill", [i](auto& c) { ++c.teamRules[i].aiSkill; }})) return false;
+			}
+			for (const uint32_t gold : {0U, 29999U, NetMatchConfigUtil::c_InfiniteGold}) {
+				config.startingGold = gold;
+				if (!RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
+			}
+			NetMatchConfig boundary = MakeConfig();
+			for (const uint8_t high : {0, 1}) {
+				boundary.mode = NetMatchMode::PvPvE;
+				boundary.difficulty = high ? 100 : 0;
+				boundary.teamRules[0].aiSkill = high ? 100 : 1;
+				boundary.autosaveIntervalSeconds = std::numeric_limits<uint32_t>::max();
+				boundary.inputDelayFrames = high ? 60 : 0;
+				boundary.peerInputDelayFrames = {boundary.inputDelayFrames, boundary.inputDelayFrames};
+				boundary.idleWaitMinutes = high ? 60 : 0;
+				if (!RoundTrip(NetLobbyMatchConfig{boundary}, error)) return false;
+			}
+			std::cout << "[net-match-selftest] PASS rules_roundtrip" << std::endl;
+			std::cout << "[net-match-selftest] PASS rules_hash_sensitivity" << std::endl;
+			const std::vector<Edit> invalid = {
+				{"round", [](auto& c) { c.roundId = 0; }}, {"revision", [](auto& c) { c.configRevision = 0; }},
+				{"difficulty", [](auto& c) { c.difficulty = 101; }}, {"gold slider top", [](auto& c) { c.startingGold = 30000; }},
+				{"gold above slider", [](auto& c) { c.startingGold = 30001; }},
+				{"module path", [](auto& c) { c.activityModule = "../Base.rte"; }}, {"scene module", [](auto& c) { c.sceneModule = "Maps"; }},
+				{"empty scene", [](auto& c) { c.sceneName.clear(); }}, {"empty class", [](auto& c) { c.activityType.clear(); }},
+				{"module control", [](auto& c) { c.activityModule = "Bad\n.rte"; }},
+				{"module bytes", [](auto& c) { c.activityModule = std::string(1, static_cast<char>(0xFF)) + ".rte"; }},
+				{"module wildcard", [](auto& c) { c.sceneModule = "*.rte"; }},
+				{"module length", [](auto& c) { c.sceneModule = std::string(129, 'x') + ".rte"; }},
+				{"unresolved random", [](auto& c) { c.teamRules[0].technologyModule = "-Random-"; }},
+				{"unresolved all", [](auto& c) { c.teamRules[0].technologyModule = "-All-"; }},
+				{"technology intent", [](auto& c) { c.teamRules[0].technologyIntent = "Dummy.rte"; }},
+				{"AI low", [](auto& c) { c.teamRules[0].aiSkill = 0; }}, {"AI high", [](auto& c) { c.teamRules[0].aiSkill = 101; }},
+				{"autosave interval", [](auto& c) { c.autosaveIntervalSeconds = 0; }}, {"idle wait", [](auto& c) { c.idleWaitMinutes = 61; }},
+				{"policy", [](auto& c) { c.delayPolicy = static_cast<NetMatchDelayPolicy>(3); }},
+				{"mode", [](auto& c) { c.mode = static_cast<NetMatchMode>(4); }},
+				{"delay count", [](auto& c) { c.peerInputDelayFrames.pop_back(); }},
+				{"delay range", [](auto& c) { c.peerInputDelayFrames[0] = 61; }},
+				{"lossy downgrade", [](auto& c) { c.version = 2; }},
+			};
+			for (const auto& edit : invalid) {
+				NetMatchConfig changed = config;
+				edit.second(changed);
+				std::vector<uint8_t> bytes;
+				NetLobbyError rejected;
+				if (NetMatchConfigUtil::ValidateLocalAlpha(changed) || NetLobbyProtocol::Encode({NetLobbyMatchConfig{changed}}, bytes, &rejected) || rejected.message.empty()) {
+					*error = "rules validation accepted " + edit.first;
+					return false;
+				}
+			}
+			std::vector<uint8_t> bytes;
+			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{config}}, bytes)) return false;
+			NetMatchConfig prefix = MakeConfig();
+			prefix.version = 2;
+			prefix.inputDelayFrames = config.inputDelayFrames;
+			prefix.peerInputDelayFrames = config.peerInputDelayFrames;
+			std::vector<uint8_t> prefixBytes;
+			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{prefix}}, prefixBytes)) return false;
+			const size_t difficultyOffset = prefixBytes.size() + 20 + config.activityModule.size() + config.sceneModule.size();
+			for (const auto& [offset, value] : std::vector<std::pair<size_t, uint8_t>>{{difficultyOffset, 101}, {bytes.size() - 9, 0}, {bytes.size() - 3, 61}}) {
+				auto invalidWire = bytes;
+				invalidWire.at(offset) = value;
+				const auto decoded = NetLobbyProtocol::Decode(invalidWire);
+				if (decoded.ok || decoded.error.code != NetLobbyErrorCode::InvalidValue) { *error = "out-of-range rules decoded"; return false; }
+			}
+			for (const size_t offset : {size_t(4), size_t(NetLobbyProtocol::c_HeaderBytes)}) {
+				auto newer = bytes;
+				newer[offset] = 255;
+				const auto decoded = NetLobbyProtocol::Decode(newer);
+				if (decoded.ok || decoded.error.code != NetLobbyErrorCode::UnsupportedVersion || decoded.error.message.empty()) {
+					*error = "newer rules/lobby version was not refused with a version reason";
+					return false;
+				}
+			}
+			for (size_t length = NetLobbyProtocol::c_HeaderBytes; length < bytes.size(); ++length) {
+				auto truncated = std::vector<uint8_t>(bytes.begin(), bytes.begin() + length);
+				for (size_t i = 0; i < 4; ++i) truncated[12 + i] = static_cast<uint8_t>((length - NetLobbyProtocol::c_HeaderBytes) >> (8 * i));
+				if (NetLobbyProtocol::Decode(truncated).ok) { *error = "truncated rules decoded"; return false; }
+			}
+			for (const size_t offset : {bytes.size() - 8, bytes.size() - 2, bytes.size() - 1}) {
+				auto invalidWire = bytes;
+				invalidWire[offset] = 3;
+				if (NetLobbyProtocol::Decode(invalidWire).ok) { *error = "invalid rules bool/policy decoded"; return false; }
+			}
+			std::cout << "[net-match-selftest] PASS rules_invalid_refused" << std::endl;
+			const std::string legacyHex = "43434c340300100003000000590000000200010000000000000001020000010200000a00474153637269707465641000536b69726d69736820446566656e73650a0047726173736c616e6473030050765002010000000400486f7374020100000600436c69656e7400";
+			std::vector<uint8_t> legacy;
+			for (size_t i = 0; i < legacyHex.size(); i += 2) legacy.push_back(static_cast<uint8_t>(std::stoul(legacyHex.substr(i, 2), nullptr, 16)));
+			NetMatchConfig expected = MakeConfig();
+			expected.version = 2;
+			expected.sessionId = 1;
+			for (const uint8_t version : {2, 1}) {
+				legacy[16] = version;
+				if (version == 1) { legacy.pop_back(); --legacy[12]; }
+				const auto networkDecode = NetLobbyProtocol::Decode(legacy);
+				if (networkDecode.ok || networkDecode.error.code != NetLobbyErrorCode::UnsupportedVersion) {
+					*error = "network decode accepted a legacy config envelope";
+					return false;
+				}
+				const auto decoded = NetLobbyProtocol::Decode(legacy, NetLobbyDecodeOptions{true});
+				const auto* payload = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
+				if (!payload || payload->config != expected || NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(payload->config)) !=
+				    "7c8b173644be7dd32f0a7c149e386e04319f836f74c3c7de64397e743e68e397") {
+					*error = "legacy rules defaults or config hash changed: " + decoded.error.message;
+					return false;
+				}
+			}
+			std::cout << "[net-match-selftest] legacy_config_hash=" << NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(expected)) << std::endl;
+			std::cout << "[net-match-selftest] PASS rules_legacy_defaults" << std::endl;
+			return true;
+		}
+
 		bool TestLobbyCodecRoundTrips(std::string* error) {
+			if (!TestMatchRulesCodec(error)) return false;
 			const NetMatchConfig config = MakeConfig();
 			const NetHash32 configHash = NetMatchConfigUtil::HashConfig(config);
 			if (!RoundTrip(NetLobbyHello{1, 1, 1, "Host", "host"}, error) ||

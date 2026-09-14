@@ -6,6 +6,7 @@
 #include "LuaMan.h"
 #include "MovableMan.h"
 #include "NetLockstep.h"
+#include "NetLobbyProtocol.h"
 #include "PresetMan.h"
 #include "SettingsMan.h"
 #include "System.h"
@@ -135,6 +136,8 @@ namespace RTE {
 			AppendField(hasher, "selected_module", config.selectedModule);
 			AppendBool(hasher, "scenario_test_module_loaded", config.scenarioTestModuleLoaded);
 			AppendInt(hasher, "lockstep_codec_version", config.lockstepCodecVersion);
+			AppendInt(hasher, "match_config_version", config.matchConfigVersion);
+			AppendInt(hasher, "lobby_protocol_version", config.lobbyProtocolVersion);
 			AppendField(hasher, "enabled_global_scripts", config.enabledGlobalScripts);
 			return hasher.Finalize();
 		}
@@ -315,6 +318,8 @@ namespace RTE {
 				{"selected_module", config.selectedModule},
 				{"scenario_test_module_loaded", config.scenarioTestModuleLoaded},
 				{"lockstep_codec_version", config.lockstepCodecVersion},
+				{"match_config_version", config.matchConfigVersion},
+				{"lobby_protocol_version", config.lobbyProtocolVersion},
 				{"enabled_global_scripts", config.enabledGlobalScripts},
 			};
 		}
@@ -420,6 +425,8 @@ namespace RTE {
 		manifest.deterministicConfig.selectedModule = g_PresetMan.GetSingleModuleToLoad();
 		manifest.deterministicConfig.scenarioTestModuleLoaded = g_PresetMan.GetModuleID("Tests.rte") >= 0;
 		manifest.deterministicConfig.lockstepCodecVersion = NetLockstepCodec::c_Version;
+		manifest.deterministicConfig.matchConfigVersion = NetMatchConfigUtil::c_Version;
+		manifest.deterministicConfig.lobbyProtocolVersion = NetLobbyProtocol::c_Version;
 		manifest.deterministicConfig.enabledGlobalScripts = g_SettingsMan.GetEnabledGlobalScriptsCSV();
 
 		const std::string workingDirectory = System::GetWorkingDirectory();
