@@ -434,6 +434,7 @@ namespace RTE {
 				{"revision", [](auto& c) { ++c.configRevision; }}, {"activity_module", [](auto& c) { c.activityModule = "Other.rte"; }},
 				{"activity_class", [](auto& c) { c.activityType = "GameActivity"; }}, {"activity_preset", [](auto& c) { c.activityPreset += " 2"; }},
 				{"scene_module", [](auto& c) { c.sceneModule = "Other.rte"; }}, {"scene", [](auto& c) { c.sceneName += " 2"; }},
+				{"module bytes", [](auto& c) { c.activityModule = std::string(1, static_cast<char>(0xFF)) + ".rte"; }},
 				{"mode", [](auto& c) { c.mode = NetMatchMode::CoopPvE; }}, {"mode_preset", [](auto& c) { c.modePreset = "Co-op"; }},
 				{"difficulty", [](auto& c) { ++c.difficulty; }}, {"gold", [](auto& c) { ++c.startingGold; }},
 				{"fog", [](auto& c) { c.fogOfWar = false; }}, {"orbit", [](auto& c) { c.requireClearPathToOrbit = false; }},
