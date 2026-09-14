@@ -1322,10 +1322,35 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 	preparedGraph = nil
 	local baseline = _ScriptGraphBaseline or { globals = {}, loaded = {} }
 	for name, value in pairs(baseline.values or {}) do rawset(_G, name, value) end
+	local wiped = {}
 	for _, saved in ipairs(baseline.tables or {}) do
-		for key in pairs(saved.object) do if carriesKey(saved, key) then rawset(saved.object, key, nil) end end
+		for key in pairs(saved.object) do
+			if carriesKey(saved, key) then
+				-- Only a key the baseline never had goes missing here; the rest come back below.
+				if saved.entries[key] == nil then
+					local gone = wiped[saved.object]
+					if not gone then gone = {} wiped[saved.object] = gone end
+					gone[key] = rawget(saved.object, key)
+				end
+				rawset(saved.object, key, nil)
+			end
+		end
 		for key, value in pairs(saved.entries) do rawset(saved.object, key, value) end
 		setmetatable(saved.object, saved.meta)
+	end
+	-- A key a script added to a library table is named by path, and the wipe above has just taken it.
+	local function wipedPath(segments)
+		local value = _G
+		for _, segment in ipairs(segments) do
+			if type(value) ~= "table" and type(value) ~= "userdata" then return nil end
+			local found = value[segment]
+			if found == nil then
+				local gone = wiped[value]
+				found = gone and gone[segment]
+			end
+			value = found
+		end
+		return value
 	end
 	local function fail(message) problems[#problems + 1] = message end
 	local note = fail
@@ -1337,6 +1362,7 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 		elseif t == "ref" then return objects[token.id]
 		elseif t == "path" then
 			local value = resolvePath(token.segments)
+			if value == nil then value = wipedPath(token.segments) end
 			if value == nil then note("the named value " .. pathText(token.segments) .. " is missing") end
 			return value
 		elseif t == "entity" then
