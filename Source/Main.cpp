@@ -2006,9 +2006,6 @@ static void DrawFrameWithPreviews() {
 	LocalPredictionHudSelfTest::SampleDuringRender();
 	g_FrameMan.Draw();
 	LocalPredictionHudSelfTest::SampleAfterDraw();
-	if (auto* panel = g_MenuMan.GetNetworkPanel()) {
-		panel->SetMatchPace(s_paceSimTicks, s_paceUpdateUs + s_paceDrawUs);
-	}
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts();
 	g_WindowMan.DrawPostProcessBuffer();

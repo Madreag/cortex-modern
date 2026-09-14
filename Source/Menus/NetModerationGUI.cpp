@@ -253,10 +253,6 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	font->DrawAligned(&bitmap, 14, y + 6, text, GUIFont::Left, GUIFont::Top);
 }
 
-void NetModerationGUI::SetMatchPace(uint64_t ticks, long long wallUs) {
-	m_MatchPaceTps = wallUs > 0 ? static_cast<double>(ticks) * 1000000.0 / static_cast<double>(wallUs) : 0.0;
-}
-
 void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	CreateOverlay();
 	BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
