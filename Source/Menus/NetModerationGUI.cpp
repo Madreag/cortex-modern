@@ -274,7 +274,7 @@ bool NetModerationGUI::MatchStatusWanted() const {
 			active = ScenarioRunner::DescribeLockstepHoldPause(holdWho, holdSeconds);
 		}
 	}
-	const int64_t nowUs = g_TimerMan.GetAbsoluteTime();
+	const long long nowUs = g_TimerMan.GetAbsoluteTime();
 	if (active) {
 		m_AutoShowUntilUs = nowUs + 3000000;
 	}
