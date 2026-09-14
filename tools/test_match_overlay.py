@@ -17,7 +17,7 @@ import threading
 
 SCRATCH = Path("D:/mx/astra-match-overlay-20260913")
 TICKS = 900
-CAPTURE_TICKS = (60, 270, 500, 880)
+CAPTURE_TICKS = (60, 270, 500, 680, 880)
 BOX_WIDTH, BOX_HEIGHT, BOX_TOP, BOX_MARGIN = 252, 76, 32, 8
 STATUS = "LabelNetMatchStatus"
 TOAST = "LabelNetMatchToastNewest"
