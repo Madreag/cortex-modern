@@ -192,7 +192,9 @@ namespace RTE {
 			if (error) *error = "session_id must be nonzero";
 			return false;
 		}
-		if (config.peerCount < c_MinPeerCount || config.peerCount > c_MaxPeerCount) {
+		const size_t humanCount = std::count_if(config.players.begin(), config.players.end(), [](const auto& slot) { return !slot.cpu; });
+		const bool soleCPUHost = config.dedicated && humanCount == 0 && !config.players.empty();
+		if (config.peerCount < (soleCPUHost ? 1 : c_MinPeerCount) || config.peerCount > c_MaxPeerCount) {
 			if (error) *error = "peer_count is out of range";
 			return false;
 		}
@@ -231,7 +233,7 @@ namespace RTE {
 		}
 		std::vector<bool> seen(config.peerCount + 1, false);
 		bool sawHost = false;
-		bool sawRemoteHuman = false;
+		std::array<bool, 4> cpuTeams{}, humanTeams{};
 		for (const NetMatchPlayerSlot& player : config.players) {
 			// A CPU slot has no peer: it marks a machine-run team the host's AI drives over the wire.
 			if (player.cpu) {
@@ -251,11 +253,16 @@ namespace RTE {
 				seen[player.peerId] = true;
 			}
 			sawHost = sawHost || player.peerId == config.hostPeerId;
-			sawRemoteHuman = sawRemoteHuman || (!player.cpu && player.peerId >= 2);
 			if (player.team >= 4) {
 				// Engine teams are 0..3; MaxTeamCount (4) is the exclusive sentinel, so team 4 is invalid.
 				if (error) *error = "player team is out of range";
 				return false;
+			}
+			if (player.cpu) {
+				if (cpuTeams[player.team]) return refuse("duplicate cpu team");
+				cpuTeams[player.team] = true;
+			} else {
+				humanTeams[player.team] = true;
 			}
 			if (!ValidateText(player.displayName, c_MaxNameBytes, "player display_name", error)) {
 				return false;
@@ -266,13 +273,14 @@ namespace RTE {
 				if (error) *error = "dedicated config must not seat the host peer";
 				return false;
 			}
-			if (!sawRemoteHuman) {
-				if (error) *error = "dedicated config has no client player slot";
-				return false;
-			}
 		} else if (!sawHost) {
 			if (error) *error = "host player slot is missing";
 			return false;
+		}
+		if (humanCount > config.peerCount - (config.dedicated ? 1 : 0)) return refuse("human seats exceed peer capacity");
+		if (config.mode == NetMatchMode::PvPvE && humanCount == 4) return refuse("four-human PvPvE exceeds team capacity");
+		for (size_t team = 0; team < cpuTeams.size(); ++team) {
+			if (cpuTeams[team] && humanTeams[team]) return refuse("cpu slot shares a human team");
 		}
 		return true;
 	}

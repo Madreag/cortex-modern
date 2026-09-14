@@ -280,6 +280,8 @@ static uint64_t s_netLockstepTicks = 0;
 static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
 static uint16_t s_netLockstepInputDelay = 0;
 static uint8_t s_netMatchPeers = 2;
+static std::optional<uint32_t> s_netMatchHumans;
+static std::optional<uint32_t> s_netMatchCPUSlots;
 static std::string s_netMatchMode = "pvp";
 static std::string s_netMatchOwnershipPolicy = "team-owner";
 static bool s_netMatchServiceE2EEnteredEditor = false;
@@ -964,6 +966,18 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-mode") {
 			s_netMatchMode = argValue[++i];
+			continue;
+		}
+		if (currentArg == "-net-match-humans" || currentArg == "-net-match-cpu-slots") {
+			uint32_t count = 0;
+			const std::string value = lastArg ? "" : argValue[i + 1];
+			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), count);
+			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
+				std::cerr << "[net-match-service-e2e] " << currentArg << " requires a nonnegative 32-bit integer" << std::endl;
+				return false;
+			}
+			(currentArg == "-net-match-humans" ? s_netMatchHumans : s_netMatchCPUSlots) = count;
+			++i;
 			continue;
 		}
 
@@ -5127,6 +5141,8 @@ int RunNetMatchServiceE2E() {
 		request.ownershipPolicy = NetMatchConfigUtil::ParseOwnershipPolicy(s_netMatchOwnershipPolicy, e2ePolicy) ? e2ePolicy : NetActorOwnershipPolicy::TeamOwner;
 		request.inputDelayFrames = s_netLockstepInputDelay;
 		request.peerCount = s_netMatchPeers;
+		request.humans = s_netMatchHumans;
+		request.cpuSlots = s_netMatchCPUSlots;
 		NetMatchMode parsedMode;
 		if (NetMatchConfigUtil::ParseMode(s_netMatchMode, parsedMode)) {
 			request.mode = parsedMode;
@@ -5189,6 +5205,14 @@ int RunNetMatchServiceE2E() {
 
 	if (setupError.empty()) {
 		// A reconnecting peer's first lobby round carried the live match's snapshot; launch from it.
+		if (const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig()) {
+			std::cout << "[net-match-service-e2e] roster:";
+			for (const NetMatchPlayerSlot& slot : config->players) {
+				std::cout << " peer" << static_cast<int>(slot.peerId) << "=" << slot.displayName
+				          << "(team" << static_cast<int>(slot.team) << (slot.cpu ? ",cpu)" : ",human)");
+			}
+			std::cout << std::endl;
+		}
 		const bool staged = g_NetMatchService.HasPendingResyncLoad()
 			? StageResyncedMatchActivity(&setupError)
 			: ConfigureNetMatchServiceE2EActivity(activityPreset, &setupError);
