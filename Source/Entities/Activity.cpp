@@ -1337,6 +1337,17 @@ static Actor* LiveCheckpointBrain(long uid) {
 	return actor && OwnedByWorldActor(actor) ? actor : nullptr;
 }
 
+// A slot that names a live actor other than its saved link's was written after the world was replaced,
+// so it holds a newer truth than the relaunch's deferred rebind and keeps it. Pointers are only compared.
+static bool HoldsNewerBinding(const Actor* slot, const Actor* link) {
+	return slot && slot != link && g_MovableMan.IsActor(slot);
+}
+
+// A brain slot counts a brain riding in a world actor's inventory as live too.
+static bool HoldsNewerBrainBinding(const Actor* slot, const Actor* link) {
+	return slot && slot != link && (g_MovableMan.IsActor(slot) || OwnedByWorldActor(slot));
+}
+
 void Activity::ClearNonOwnedActorSlots() {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		m_Brain[player] = nullptr;
@@ -1348,9 +1359,12 @@ void Activity::ClearNonOwnedActorSlots() {
 void Activity::RebindNonOwnedActorSlots() {
 	if (!m_HasCheckpointActorIDs) return;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		m_Brain[player] = LiveCheckpointBrain(m_CheckpointActorIDs[player][0]);
-		m_ControlledActor[player] = LiveCheckpointActor(m_CheckpointActorIDs[player][1]);
-		m_PlayerController[player].SetControlledActor(LiveCheckpointActor(m_CheckpointActorIDs[player][2]));
+		Actor* brain = LiveCheckpointBrain(m_CheckpointActorIDs[player][0]);
+		Actor* controlled = LiveCheckpointActor(m_CheckpointActorIDs[player][1]);
+		Actor* controller = LiveCheckpointActor(m_CheckpointActorIDs[player][2]);
+		if (!HoldsNewerBrainBinding(m_Brain[player], brain)) m_Brain[player] = brain;
+		if (!HoldsNewerBinding(m_ControlledActor[player], controlled)) m_ControlledActor[player] = controlled;
+		if (!HoldsNewerBinding(m_PlayerController[player].GetControlledActor(), controller)) m_PlayerController[player].SetControlledActor(controller);
 	}
 }
 
