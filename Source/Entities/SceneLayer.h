@@ -6,6 +6,10 @@
 
 #include <future>
 #include <memory>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
 
 namespace RTE {
 
@@ -14,6 +18,49 @@ namespace RTE {
 	struct SceneLayerInfo {
 		std::string name;
 		std::unique_ptr<BITMAP> bitmap;
+	};
+
+	/// Immutable pixel rows owned independently of their live scene layer.
+	struct BitmapSnapshot {
+		struct BitmapDeleter {
+			void operator()(BITMAP* bitmap) const;
+		};
+		using BitmapPtr = std::unique_ptr<BITMAP, BitmapDeleter>;
+
+		int width = 0;
+		int height = 0;
+		int depth = 0;
+		size_t rowBytes = 0;
+		size_t copiedBytes = 0;
+		size_t scannedBytes = 0;
+		size_t markedBytes = 0;
+		size_t dirtyBytes = 0;
+		size_t unmarkedDirtyBytes = 0;
+		size_t dirtyRegionCount = 0;
+		size_t reusedRows = 0;
+		unsigned int fullCopyPercent = 50;
+		bool fullCopy = false;
+
+		/// Reconstructs a bitmap from owned pixels on the save worker.
+		BitmapPtr CopyBitmap() const;
+		/// Flattens owned rows for the checkpoint codec on the save worker.
+		std::string PixelBytes() const;
+		/// Counts retained pixel allocations, including partially shared blocks, on the save worker.
+		size_t OwnedBytes() const;
+		size_t LogicalBytes() const { return rowBytes * static_cast<size_t>(height); }
+
+	private:
+		template <bool, bool> friend class SceneLayerImpl;
+		struct Pixels {
+			explicit Pixels(size_t size): bytes(new uint8_t[size]), size(size) {}
+			std::unique_ptr<uint8_t[]> bytes;
+			size_t size;
+		};
+		struct Row {
+			std::shared_ptr<const Pixels> pixels;
+			size_t offset = 0;
+		};
+		std::vector<Row> rows;
 	};
 
 	/// A scrolling layer of the Scene.
@@ -102,6 +149,9 @@ namespace RTE {
 		/// Copies the bitmap.
 		/// @return The copied bitmap.
 		std::unique_ptr<BITMAP> CopyBitmap() const;
+
+		/// Captures changed pixel rows at a completed sim tick without image encoding.
+		std::shared_ptr<const BitmapSnapshot> CaptureBitmapSnapshot() const;
 #pragma endregion
 
 #pragma region Getters and Setters
@@ -153,7 +203,7 @@ namespace RTE {
 		/// @param materialID The color index to set the pixel to.
 		void SetPixel(int pixelX, int pixelY, int materialID);
 
-		void SetUpdated() { m_MainBitmapUpdated = true; }
+		void SetUpdated() { m_MainBitmapUpdated = true; m_BitmapSnapshotAllDirty = true; }
 
 		/// Returns whether the integer coordinates passed in are within the bounds of this SceneLayer.
 		/// @param pixelX The X coordinates of the pixel.
@@ -271,6 +321,13 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		mutable std::shared_ptr<const BitmapSnapshot> m_BitmapSnapshot;
+		mutable std::vector<uint8_t> m_BitmapSnapshotDirtyRows;
+		mutable bool m_BitmapSnapshotAllDirty = true;
+
+		void ResetBitmapSnapshot() const;
+		void MarkBitmapSnapshotDirty(int left, int top, int right, int bottom);
+
 		/// Clears any tracked and drawn-to areas.
 		/// @param clearTo Color to clear to.
 		void ClearDrawings(BITMAP* bitmap, const std::vector<IntRect>& drawings, ColorKeys clearTo) const;
