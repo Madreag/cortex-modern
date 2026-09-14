@@ -1,6 +1,7 @@
 #pragma once
 
-#include <charconv>
+#include "FloatText.h"
+
 #include <string>
 #include <memory>
 #include <ostream>
@@ -215,7 +216,11 @@ namespace RTE {
 		/// Writes a float in shortest round-trip form, locale-independent and allocation-free.
 		template <typename FloatType> void WriteShortestRoundTrip(FloatType var) {
 			char buffer[64];
-			const std::to_chars_result result = std::to_chars(buffer, buffer + sizeof(buffer), var);
+			const std::to_chars_result result = ToCharsExact(buffer, buffer + sizeof(buffer), var);
+			if (result.ec != std::errc()) {
+				m_Stream->setstate(std::ios::failbit);
+				return;
+			}
 			m_Stream->write(buffer, result.ptr - buffer);
 		}
 
