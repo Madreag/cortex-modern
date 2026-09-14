@@ -272,7 +272,9 @@ def semantic_checks(case, actors, activities, stdout, sp=False):
                 for tick in range(switch, handoff):
                     if values(old[tick])[2] not in (0, 1) or not values(old[tick])[1] & (1 << 20):
                         errors.append(f'tick {tick} loses open pie before committed handoff')
-            start = handoff + (4 if sp else 1)
+            # The 50 ms disable animation runs for four sim ticks from the tick the handoff commits, in SP
+            # and under lockstep alike; SP is Disabling at handoff..handoff+3 and Disabled from handoff+4.
+            start = handoff + 4
             for tick in range(start, HI + 1):
                 if values(old[tick])[2] != 3:
                     errors.append(f'departing actor {departing} tick {tick} pie {old[tick]["pie"]}, SP reference Disabled (3)')
@@ -361,7 +363,9 @@ def check(run, case, sp=False, reference=None, allow_synthetic=False):
         ref_text = (reference / 'sp/runtime/LogConsole.txt').read_text(encoding='utf-8-sig')
         ref_obs, ref_observation_failures = load_observations(ref_text, ref_actors, True)
         errors += ref_failures + ref_observation_failures
-        start, delay = (205, 0) if case in ('next', 'prev') else (196, 3)
+        # Every case reads the SP reference through the input delay: the committed handoff, and the
+        # closing animation it starts, land three ticks later than the same events in SP.
+        start, delay = (201, 3) if case in ('next', 'prev') else (196, 3)
         for peer in peers:
             for tick in range(start, HI + 1 - delay):
                 target_tick = tick + delay
