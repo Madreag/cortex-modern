@@ -558,6 +558,16 @@ void MainMenuGUI::OfferStoredRejoinOnEntry() {
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 }
 
+void MainMenuGUI::OfferRematchLobbyOnEntry() {
+	if (!g_NetMatchService.NeedsCompletedLobbyPump()) {
+		return;
+	}
+	SetActiveMenuScreen(MenuScreen::MultiplayerScreen, false);
+	// UpdateMultiplayerScreen reconvenes the session and reconciles this panel from the snapshot;
+	// naming it here keeps the first frame on the lobby instead of the landing panel.
+	m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
+}
+
 void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
 	if ((!m_ActiveDialogBox || m_ActiveDialogBox == m_MainMenuScreens[MenuScreen::QuitScreen]) && (backButtonPressed || g_UInputMan.KeyPressed(SDLK_ESCAPE))) {
 		if (m_ActiveMenuScreen != MenuScreen::MainScreen) {
