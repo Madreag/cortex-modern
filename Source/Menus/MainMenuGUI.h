@@ -155,6 +155,7 @@ namespace RTE {
 			MultiplayerJoinBackButton,
 			MultiplayerModerateButton,
 			MultiplayerModerationBackButton,
+			SaveDiagnosticsButton,
 			PlayTutorialButton,
 			MetaGameContinueButton,
 			QuitConfirmButton,
@@ -377,6 +378,8 @@ namespace RTE {
 		void FitMultiplayerPanelWidth(GUICollectionBox* panel, GUILabel* diagnosticLabel, int width, const std::vector<GUILabel*>& fillLabels = {});
 		/// Resizes the MultiplayerScreen and keeps it centered, moving up from its baseline Y only when the height no longer fits the viewport.
 		void FitMultiplayerScreen(int width, int height);
+		/// Keeps the back and diagnostics actions together below every multiplayer panel.
+		void LayoutMultiplayerFooter(int width, int y);
 
 		/// Real-time clock for the reconnect schedule; the menu runs outside the sim.
 		static uint64_t MenuClockMs();

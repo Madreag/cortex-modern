@@ -6,6 +6,7 @@
 #include "ActivityMan.h"
 #include "UInputMan.h"
 #include "SettingsMan.h"
+#include "TelemetryBundle.h"
 
 #include "SaveLoadMenuGUI.h"
 #include "SettingsGUI.h"
@@ -63,6 +64,7 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 	m_PauseMenuButtons[PauseMenuButton::SaveOrLoadGameButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonSaveOrLoadGame"));
 	m_PauseMenuButtons[PauseMenuButton::SettingsButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonSettings"));
 	m_PauseMenuButtons[PauseMenuButton::ModManagerButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonModManager"));
+	m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonSaveDiagnostics"));
 	m_PauseMenuButtons[PauseMenuButton::ResumeButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonResume"));
 
 	for (size_t pauseMenuButton = 0; pauseMenuButton < m_PauseMenuButtons.size(); ++pauseMenuButton) {
@@ -121,6 +123,7 @@ void PauseMenuGUI::EnableOrDisablePauseMenuFeatures() {
 		int yOffset = m_PauseMenuButtons[PauseMenuButton::ModManagerButton]->GetHeight();
 
 		m_PauseMenuButtons[PauseMenuButton::ResumeButton]->MoveRelative(0, yOffset * (disableModManager ? -1 : 1));
+		m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton]->MoveRelative(0, yOffset * (disableModManager ? -1 : 1));
 		m_PauseMenuBox->MoveRelative(0, yOffset / 2 * -1);
 
 		m_ModManagerButtonDisabled = disableModManager;
@@ -141,6 +144,7 @@ void PauseMenuGUI::SetActiveMenuScreen(PauseMenuScreen screenToShow, bool playBu
 
 PauseMenuGUI::PauseMenuUpdateResult PauseMenuGUI::Update() {
 	m_UpdateResult = PauseMenuUpdateResult::NoEvent;
+	m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton]->SetEnabled(!TelemetryBundle::IsBusy());
 
 	if (g_ConsoleMan.IsEnabled() && !g_ConsoleMan.IsReadOnly()) {
 		return m_UpdateResult;
@@ -211,6 +215,8 @@ bool PauseMenuGUI::HandleInputEvents() {
 				SetActiveMenuScreen(PauseMenuScreen::SettingsScreen);
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::ModManagerButton]) {
 				SetActiveMenuScreen(PauseMenuScreen::ModManagerScreen);
+			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton]) {
+				if (TelemetryBundle::RequestCapture()) g_ConsoleMan.PrintString("SYSTEM: Saving diagnostics...");
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::BackToMainButton]) {
 				g_GUISound.BackButtonPressSound()->Play();
 				m_UpdateResult = PauseMenuUpdateResult::BackToMain;
