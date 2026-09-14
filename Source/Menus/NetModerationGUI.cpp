@@ -258,19 +258,27 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 }
 
 bool NetModerationGUI::MatchStatusWanted() const {
+	switch (g_SettingsMan.GetNetworkMatchStatusMode()) {
+		case SettingsMan::NetworkMatchStatusMode::Off: return false;
+		case SettingsMan::NetworkMatchStatusMode::Always: return true;
+		default: break;
+	}
 	// The countdown is still a pause state, so it must not blink the widget off.
-	if (m_Open || g_SettingsMan.ShowMatchStatus() || g_NetMatchService.IsMatchResyncing() || ScenarioRunner::IsLockstepPaused() || ScenarioRunner::GetLockstepResumeCountdown() > 0) {
-		return true;
+	bool active = m_Open || g_NetMatchService.IsMatchResyncing() || ScenarioRunner::IsLockstepPaused() || ScenarioRunner::GetLockstepResumeCountdown() > 0;
+	if (!active && ScenarioRunner::IsLockstepControllerSyncActive()) {
+		if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame()) {
+			active = true;
+		} else {
+			std::string holdWho;
+			uint32_t holdSeconds = 0;
+			active = ScenarioRunner::DescribeLockstepHoldPause(holdWho, holdSeconds);
+		}
 	}
-	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
-		return false;
+	const int64_t nowUs = g_TimerMan.GetAbsoluteTime();
+	if (active) {
+		m_AutoShowUntilUs = nowUs + 3000000;
 	}
-	if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame()) {
-		return true;
-	}
-	std::string holdWho;
-	uint32_t holdSeconds = 0;
-	return ScenarioRunner::DescribeLockstepHoldPause(holdWho, holdSeconds);
+	return active || nowUs < m_AutoShowUntilUs;
 }
 
 void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {

@@ -48,7 +48,7 @@ namespace RTE {
 		void DrawRoster(const NetLobbySnapshot& snapshot);
 		/// Creates presentation controls only when an online match draws them.
 		void CreateOverlay();
-		/// Whether the status widget should be up: pauses, stalls, reconnect waits and resyncs always show it; ordinary play only when the seats panel is open or the setting asks.
+		/// Whether the status widget should be up, per NetworkMatchStatusMode: Off never, Always always, Auto on events and three seconds past recovery.
 		bool MatchStatusWanted() const;
 		/// Draws the status widget: the box on tall screens, a single-line strip in the top HUD gap on short ones.
 		void DrawMatchStatus(const NetLobbySnapshot& snapshot);
@@ -60,6 +60,7 @@ namespace RTE {
 		GUILabel* m_NetStatus = nullptr;
 		std::array<GUILabel*, 3> m_Toasts{};
 		std::string m_StripText;
+		mutable int64_t m_AutoShowUntilUs = 0;
 		uint16_t m_MatchDelayFrames = 0;
 		uint16_t m_BaseDelayFrames = 0;
 		GUICollectionBox* m_Panel = nullptr;
