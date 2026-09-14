@@ -200,6 +200,7 @@ namespace RTE {
 		HeldDevice* GetHeldDeviceThisArmIsTryingToSupport() const { return m_HeldDeviceThisArmIsTryingToSupport; }
 
 		void ResolveFaithfulLinks() override;
+		void RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) override;
 
 		/// Sets the HeldDevice being this Arm is trying to support.
 		/// @param newHeldDeviceForThisArmToTryToSupport The new HeldDevice this Arm should try to support. Ownership is NOT transferred.

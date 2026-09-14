@@ -1142,8 +1142,8 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-lpinv-overlay-links") {
 			// b spawn and shadow links, r a shadow item in reach, c spawn parts, wounds and a shadow part.
 			const std::string modes = argValue[++i];
-			if (modes.empty() || modes.find_first_not_of("brc") != std::string::npos) {
-				std::cerr << "[lpinv] bad overlay-link modes '" << modes << "': expected letters from brc" << std::endl;
+			if (modes.empty() || modes.find_first_not_of("brcitmqxonla") != std::string::npos) {
+				std::cerr << "[lpinv] bad overlay-link modes '" << modes << "': expected letters from brcitmqxonla" << std::endl;
 				return false;
 			}
 			s_lpOverlayLinkModes = modes;
@@ -2017,6 +2017,28 @@ static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, 
 		std::cout << "[lpinv] PASS " << label << ": " << what << std::endl;
 	};
 	++cases;
+	if (std::string("itmqxonla").find(mode) != std::string::npos) {
+		LocalPrediction::Clear();
+		g_MovableMan.DropAllPreviewGhosts();
+		if (!PreviewScriptSelfTest::RunRetirementArm(mode)) {
+			caseFailed = true;
+		}
+		std::vector<std::string> problems;
+		const std::string after = DumpSimStateToString() + DescribeCanonicalExtras(problems);
+		for (const std::string& problem: problems) {
+			fail("cannot capture canonical Lua state: " + problem);
+		}
+		if (after != before) {
+			WriteProbeText(std::string("lpinv_after_overlay_") + mode, after);
+			fail("canonical state changed after retirement arm");
+		}
+		if (caseFailed) {
+			++failures;
+		} else {
+			pass("canonical state byte-identical");
+		}
+		return;
+	}
 	Activity* activity = g_ActivityMan.GetActivity();
 	// Clear item-in-reach and arm support so faithful resolution cannot overwrite the probe's links.
 	std::vector<std::pair<Actor*, HeldDevice*>> reach;
