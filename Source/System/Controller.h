@@ -190,6 +190,7 @@ namespace RTE {
 			if (m_Disabled != disabled) {
 				m_ReleaseTimer.Reset();
 				ResetCommandState();
+				m_LocalProductionValid = false;
 			}
 			m_Disabled = disabled;
 		}
@@ -417,6 +418,14 @@ namespace RTE {
 
 		/// Refreshes analog values (mouse, joystick) so the visual cursor tracks the latest input each render frame. Player-controlled only; no ControlStates writes.
 		void RenderUpdate();
+
+		/// Hands this to the producing pass, which starts from the input this seat itself produced last
+		/// tick. The committed frame the sim runs on is held aside until the pass ends; a seat that just
+		/// changed starts from no input, so nothing the previous seat produced is produced again.
+		void BeginLocalProduction();
+
+		/// Ends the producing pass: keeps what the seat produced for the next one and gives the sim its committed input back.
+		void EndLocalProduction();
 #pragma endregion
 
 #pragma region Operator Overloads
@@ -475,6 +484,22 @@ namespace RTE {
 		Timer m_KeyAccelTimer; //!< Timer for measuring keyboard-controlled cursor acceleration.
 
 		Vector m_MouseMovement; //!< Relative mouse movement, if this player uses the mouse.
+
+		//!< The command state of one input sample: what a producing pass makes and what a wire frame carries.
+		struct InputSample {
+			std::array<bool, ControlState::CONTROLSTATECOUNT> controlStates{};
+			Vector analogMove;
+			Vector analogAim;
+			Vector analogCursor;
+			Vector mouseMovement;
+		};
+
+		InputSample m_LocalProduction; //!< The input this machine's seat produced last tick.
+		InputSample m_CommittedInput; //!< The sim-facing input held aside while the producing pass runs.
+		InputMode m_LocalProductionSeatMode; //!< The seat the carried production belongs to.
+		int m_LocalProductionSeatPlayer;
+		bool m_LocalProductionValid; //!< Whether the carried production still belongs to the current seat.
+		bool m_ProducingLocalInput; //!< Whether the producing pass holds this controller right now.
 
 		std::pair<std::pair<float, float>, bool> m_AnalogCursorAngleLimits; //!< Analog aim value limits, as well as whether or not the limit is actually enabled.
 

@@ -51,6 +51,12 @@ void Controller::Clear() {
 	m_ReleaseTimer.Reset();
 	m_JoyAccelTimer.Reset();
 	m_KeyAccelTimer.Reset();
+	m_LocalProduction = InputSample();
+	m_CommittedInput = InputSample();
+	m_LocalProductionSeatMode = InputMode::CIM_PLAYER;
+	m_LocalProductionSeatPlayer = 0;
+	m_LocalProductionValid = false;
+	m_ProducingLocalInput = false;
 }
 
 int Controller::Create(InputMode mode, Actor* controlledActor) {
@@ -346,6 +352,50 @@ void Controller::ResetCommandState() {
 	m_AnalogAim.Reset();
 	m_AnalogCursor.Reset();
 	m_MouseMovement.Reset();
+}
+
+// What the sim reads is the frame the wire committed for this tick; what this machine produces has to
+// carry on from its own last sample instead, or a frame that was committed input-delay ticks ago gets
+// sampled back out as fresh input and circulates for the rest of the match.
+void Controller::BeginLocalProduction() {
+	m_CommittedInput.controlStates = m_ControlStates;
+	m_CommittedInput.analogMove = m_AnalogMove;
+	m_CommittedInput.analogAim = m_AnalogAim;
+	m_CommittedInput.analogCursor = m_AnalogCursor;
+	m_CommittedInput.mouseMovement = m_MouseMovement;
+	m_ProducingLocalInput = true;
+
+	// The carry belongs to the seat that made it; a seat that just took this actor starts from no input.
+	if (!m_LocalProductionValid || m_LocalProductionSeatMode != m_SeatMode || m_LocalProductionSeatPlayer != m_SeatPlayer) {
+		ResetCommandState();
+		return;
+	}
+	m_ControlStates = m_LocalProduction.controlStates;
+	m_AnalogMove = m_LocalProduction.analogMove;
+	m_AnalogAim = m_LocalProduction.analogAim;
+	m_AnalogCursor = m_LocalProduction.analogCursor;
+	m_MouseMovement = m_LocalProduction.mouseMovement;
+}
+
+void Controller::EndLocalProduction() {
+	if (!m_ProducingLocalInput) {
+		return;
+	}
+	m_LocalProduction.controlStates = m_ControlStates;
+	m_LocalProduction.analogMove = m_AnalogMove;
+	m_LocalProduction.analogAim = m_AnalogAim;
+	m_LocalProduction.analogCursor = m_AnalogCursor;
+	m_LocalProduction.mouseMovement = m_MouseMovement;
+	m_LocalProductionSeatMode = m_SeatMode;
+	m_LocalProductionSeatPlayer = m_SeatPlayer;
+	m_LocalProductionValid = true;
+	m_ProducingLocalInput = false;
+
+	m_ControlStates = m_CommittedInput.controlStates;
+	m_AnalogMove = m_CommittedInput.analogMove;
+	m_AnalogAim = m_CommittedInput.analogAim;
+	m_AnalogCursor = m_CommittedInput.analogCursor;
+	m_MouseMovement = m_CommittedInput.mouseMovement;
 }
 
 void Controller::GetInputFromPlayer() {
