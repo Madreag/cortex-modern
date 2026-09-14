@@ -114,7 +114,7 @@ namespace {
 		    {"prev_x", actor->GetPrevPos().m_X}, {"prev_y", actor->GetPrevPos().m_Y},
 		    {"vx", actor->GetVel().m_X}, {"vy", actor->GetVel().m_Y},
 		    {"aim", actor->GetAimAngle()}, {"health", actor->GetHealth()}, {"fired", false}};
-		if (const Controller* controller = actor->GetController()) {
+		if (const Controller* controller = const_cast<Actor*>(actor)->GetController()) {
 			const Vector aim = controller->GetAnalogAim();
 			value["input"] = {{"move_left", controller->IsState(ControlState::MOVE_LEFT)}, {"move_right", controller->IsState(ControlState::MOVE_RIGHT)},
 			    {"fire", controller->IsState(ControlState::WEAPON_FIRE)}, {"aim_x", aim.m_X}, {"aim_y", aim.m_Y}};
