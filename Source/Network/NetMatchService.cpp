@@ -874,14 +874,23 @@ static std::string ResyncSaveName() {
 				continue;
 			}
 			const std::string previous = last.first;
+			const std::string previousLine = last.second;
 			last = {state, line};
-			if (!previous.empty()) {
-				const std::string who = member.displayName.empty() ? "Player " + std::to_string(member.peerId) : member.displayName;
+			if (!member.cpu) {
+				const auto seat = m_SeatPresence.GetSeats().find(member.peerId);
+				const std::string name = seat != m_SeatPresence.GetSeats().end() && !seat->second.holderName.empty() ? seat->second.holderName : member.displayName;
+				const std::string who = name.empty() ? "Player " + std::to_string(member.peerId) : name;
 				const bool wasAway = previous == "Disconnected" || previous == "Reconnecting" || previous == "Left";
-				if ((state == "Disconnected" || state == "Left") && !wasAway) {
+				if (previous.empty() && state == "Present" && member.peerId != m_LocalPeerId) {
+					ScenarioRunner::PushNetUiToast("player_joined", who + " joined");
+				} else if (state == "Disconnected" && !previous.empty() && !wasAway) {
+					ScenarioRunner::PushNetUiToast("player_dropped", who + " dropped");
+				} else if (state == "Left" && !previous.empty() && previous != "Left") {
 					ScenarioRunner::PushNetUiToast("player_left", who + " left");
 				} else if (state == "Present" && wasAway) {
 					ScenarioRunner::PushNetUiToast("player_rejoined", who + " rejoined");
+				} else if (state == "Substituted" && (previous != state || previousLine != line)) {
+					ScenarioRunner::PushNetUiToast("player_substituted", who + " joined as substitute");
 				}
 			}
 			if (m_RosterTransitions.size() >= 256) {
@@ -2583,9 +2592,20 @@ static std::string ResyncSaveName() {
 		}
 		const uint64_t nowMs = AdmissionNowMs();
 		const NetH4ModerationResult result = m_ReconnectHost.ApplyModeration(selection, action, nowMs);
+		if (result == NetH4ModerationResult::Ok) {
+			RecordModerationAction(selection.stableSeat, action);
+		}
 		m_Session->TickAdmissionPlane(nowMs);
 		PublishModerationView();
 		return result;
+	}
+
+	void NetMatchService::RecordModerationAction(uint16_t stableSeat, NetModerationAction action) {
+		const std::string who = m_LocalName.empty() ? "Host" : m_LocalName;
+		const std::string seat = " for seat " + std::to_string(stableSeat);
+		const char* verb = action == NetModerationAction::Wait ? " waits for the player" :
+		                   action == NetModerationAction::Substitute ? " approved a substitute" : " cancelled substitution";
+		ScenarioRunner::PushNetUiToast("moderation", who + verb + seat);
 	}
 
 	void NetMatchService::DriveAutoSubstitution(uint64_t nowMs) {
@@ -2603,11 +2623,18 @@ static std::string ResyncSaveName() {
 				return;
 			}
 			const NetH4ModerationResult result = m_ReconnectHost.SubstituteApplicant(seat.stableSeat, seat.applicants.front().connection, nowMs);
+			if (result == NetH4ModerationResult::Ok) {
+				RecordModerationAction(seat.stableSeat, NetModerationAction::Substitute);
+			}
 			std::cout << "[net-reconnect] moderation: substitute seat " << seat.stableSeat << " -> "
 			          << NetH4ModerationResultName(result) << std::endl;
 			if (result == NetH4ModerationResult::Ok && s_AutoSubstituteThenCancel) {
+				const NetH4ModerationResult cancelled = m_ReconnectHost.CancelSubstitution(seat.stableSeat, nowMs);
 				std::cout << "[net-reconnect] moderation: cancel seat " << seat.stableSeat << " -> "
-				          << NetH4ModerationResultName(m_ReconnectHost.CancelSubstitution(seat.stableSeat, nowMs)) << std::endl;
+				          << NetH4ModerationResultName(cancelled) << std::endl;
+				if (cancelled == NetH4ModerationResult::Ok) {
+					RecordModerationAction(seat.stableSeat, NetModerationAction::Cancel);
+				}
 			}
 			m_AutoSubstituteDone = true;
 			return;
