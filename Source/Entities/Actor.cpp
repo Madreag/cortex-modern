@@ -1001,6 +1001,19 @@ bool Actor::HandlePieCommand(PieSliceType pieSliceType) {
 	return false;
 }
 
+int Actor::WhilePieMenuOpenListener(const PieMenu* pieMenu) {
+	int result = MovableObject::WhilePieMenuOpenListener(pieMenu);
+
+	// Only the seat's own machine runs the activity's per-player menu code, so under lockstep the
+	// buy menu setting has to take its slice out here, where every peer refreshes this pie menu.
+	if (m_PieMenu && m_PieMenu->IsEnabling() && m_Controller.IsPlayerControlled() && ScenarioRunner::IsLockstepControllerSyncActive()) {
+		if (const GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity()); gameActivity && !gameActivity->GetBuyMenuEnabled()) {
+			m_PieMenu->RemovePieSlicesByType(PieSliceType::BuyMenu);
+		}
+	}
+	return result;
+}
+
 void Actor::FormSquad(const Vector& selectionEdge) {
 	SetAIMode(AIMODE_SENTRY);
 	const float sqrRadius = g_SceneMan.ShortestDistance(selectionEdge, m_Pos, true).GetSqrMagnitude();
