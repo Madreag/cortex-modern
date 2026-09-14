@@ -31,6 +31,8 @@ FIXTURES = Path('D:/Projects/stage2_p4/fixtures')
 LEGACY_FIXTURES = ('Data/Tests.rte', 'tools/pie_lockstep/fixtures', 'tools/pie_writes/fixtures')
 PORT_LO, PORT_HI = 48250, 48259
 LIMIT_MS = 0.5
+ENVIRONMENT = {'CCCP_HEADLESS': '1', 'CC_PREVIEW_GLOBALS_FENCE': '1',
+               'CC_PREVIEW_FENCE_DEPTH': '1', 'CC_PREVIEW_FENCE_NAMES': '0', 'CC_PREVIEW_BARRIER_STATS': '1'}
 STATS = re.compile(r'\[localpred\] previews=(\d+) actor_ticks=\d+ ms_total=([\d.]+) avg_ms=([\d.]+)')
 NATIVE = re.compile(r'\[preview-write-barrier\] (.*)')
 FAIL = re.compile(r'^\[script-graph-selftest\] FAIL(?: (.*))?$', re.M)
@@ -206,7 +208,7 @@ def run_case(name, flags, files=None, activity=None, quiet=False):
     out = ROOT / name
     identity = sha(REPO / 'Cortex Command.exe')
     args = [*map(str, flags), '-out', str(out / 'trace.json')]
-    env = {'CCCP_HEADLESS': '1', 'CC_PREVIEW_BARRIER_STATS': '1'}
+    env = dict(ENVIRONMENT)
     run = make_run(REPO, args, out, timeout=900, env=env)
     if files:
         install(run, files, activity)
@@ -408,6 +410,7 @@ def phase_b(authorized):
     if not authorized:
         raise RuntimeError('requires the explicit FAMILY ENDED — BUILD resume')
     gate()
+    os.environ.update(ENVIRONMENT)
     if ROOT.exists():
         raise RuntimeError('use a new --out directory; retained evidence is never overwritten')
     if git('status', '--porcelain').strip():
@@ -421,7 +424,7 @@ def phase_b(authorized):
     branch = git('branch', '--show-current').decode().strip()
     tip = git('rev-parse', 'HEAD').decode().strip()
     write(ROOT / 'fixtures.json', fixture_hashes())
-    write(ROOT / 'authorization.json', dict(date=stamp(), message='FAMILY ENDED — BUILD', branch=branch, tip=tip, red=RED))
+    write(ROOT / 'authorization.json', dict(date=stamp(), message='FAMILY ENDED — BUILD', branch=branch, tip=tip, red=RED, environment=ENVIRONMENT))
     green_binary = None
     try:
         red_binary = build('red', RED)
@@ -479,6 +482,7 @@ def main():
     if args.action == 'plan':
         plan = dict(date=stamp(), status='PHASE A unbuilt', red=RED, reference=str(REFERENCE), reference_sha256=sha(REFERENCE),
                     driver_sha256=DRIVER_SHA, family_locked=LOCKS[0].exists(), budget_ms=LIMIT_MS,
+                    environment=ENVIRONMENT,
                     command=['python', str(REPO / 'tools/run_preview_write_barrier.py'), 'phase-b', '--family-ended-build', '--out', str(ROOT)],
                     fixture_sha256=fixture_hashes(), retained_cost_actor_count=4, new_cost_actor_count_required=240)
         write(LANE / 'phase-b-plan.json', plan)
