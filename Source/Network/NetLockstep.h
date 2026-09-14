@@ -19,6 +19,7 @@
 #include <vector>
 
 namespace RTE {
+	class Actor;
 	struct NetResyncPendingCommand;
 
 	/// The live match's lockstep clock: monotonic milliseconds every caller that drives a coordinator
@@ -333,6 +334,7 @@ namespace RTE {
 
 	struct NetLockstepReadyFrame {
 		uint64_t frame = 0;
+		std::vector<uint8_t> departedPeerIds;
 		bool hasLocalInput = false;
 		std::map<uint8_t, size_t> remoteFrameCounts;
 		std::vector<ControllerFrame> localFrames;
@@ -344,6 +346,9 @@ namespace RTE {
 		std::vector<NetValueObservation> localValueObservations;
 		std::vector<NetValueObservation> remoteValueObservations;
 	};
+
+	/// Applies the committed frame's departures before its game commands.
+	void ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors);
 
 	/// One remote's share of the round, enough to tell a peer that stopped SENDING from one the host
 	/// stopped RELAYING to, and from one whose frames arrived and were refused.
