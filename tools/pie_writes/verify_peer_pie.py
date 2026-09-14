@@ -271,7 +271,14 @@ def main():
         failures += errors
         peers[peer], raw[peer] = actors, data
         traces[peer] = load_trace(run / (peer + '_trace.json'))
+        # Lua print lands in the peer's own console log, not on the runner's stdout.
         stdout[peer] = (run / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace')
+        console = run / peer / 'runtime/LogConsole.txt'
+        if console.exists():
+            stdout[peer] += '\n' + console.read_text(encoding='utf-8-sig', errors='replace')
+    for peer in ('host', 'client'):
+        if re.search(r'ERROR|stack traceback|attempt to |Lua error', stdout[peer]):
+            failures.append(f'{peer} console holds an engine or Lua error')
     if not failures:
         failures += stimulus_failures(args.case, peers, stdout)
         failures += compare_peers(peers, traces)
