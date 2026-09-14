@@ -149,6 +149,10 @@ namespace RTE {
 		NetLobbyError error;
 	};
 
+	struct NetLobbyDecodeOptions {
+		bool allowRecordedConfigVersions = false;
+	};
+
 	class NetLobbyProtocol {
 	public:
 		static constexpr uint32_t c_Magic = 0x344C4343U;
@@ -172,8 +176,8 @@ namespace RTE {
 		static const char* ErrorCodeName(NetLobbyErrorCode code);
 
 		static bool Encode(const NetLobbyMessage& message, std::vector<uint8_t>& outBytes, NetLobbyError* error = nullptr);
-		static NetLobbyDecodeResult Decode(const uint8_t* data, size_t size);
-		static NetLobbyDecodeResult Decode(const std::vector<uint8_t>& bytes);
+		static NetLobbyDecodeResult Decode(const uint8_t* data, size_t size, NetLobbyDecodeOptions options = {});
+		static NetLobbyDecodeResult Decode(const std::vector<uint8_t>& bytes, NetLobbyDecodeOptions options = {});
 	};
 
 } // namespace RTE

@@ -161,6 +161,11 @@ namespace RTE {
 			std::vector<uint8_t> historicalWire;
 			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{historical}}, historicalWire)) return false;
 			historicalWire[4] = 3;
+			const auto networkDecode = NetLobbyProtocol::Decode(historicalWire);
+			if (networkDecode.ok || networkDecode.error.code != NetLobbyErrorCode::UnsupportedVersion) {
+				*error = "network decode accepted a recorded v3 config envelope";
+				return false;
+			}
 			std::vector<uint8_t> historicalReplay(original.begin(), original.begin() + 12);
 			write32(historicalReplay, 8, static_cast<uint32_t>(historicalWire.size()));
 			historicalReplay.insert(historicalReplay.end(), historicalWire.begin(), historicalWire.end());
@@ -553,7 +558,12 @@ namespace RTE {
 			for (const uint8_t version : {2, 1}) {
 				legacy[16] = version;
 				if (version == 1) { legacy.pop_back(); --legacy[12]; }
-				const auto decoded = NetLobbyProtocol::Decode(legacy);
+				const auto networkDecode = NetLobbyProtocol::Decode(legacy);
+				if (networkDecode.ok || networkDecode.error.code != NetLobbyErrorCode::UnsupportedVersion) {
+					*error = "network decode accepted a legacy config envelope";
+					return false;
+				}
+				const auto decoded = NetLobbyProtocol::Decode(legacy, NetLobbyDecodeOptions{true});
 				const auto* payload = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
 				if (!payload || payload->config != expected || NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(payload->config)) !=
 				    "7c8b173644be7dd32f0a7c149e386e04319f836f74c3c7de64397e743e68e397") {
