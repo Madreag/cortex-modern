@@ -1,8 +1,8 @@
 """Check a capped menu match's retained report at 640x360 and 960x540.
 
 Requires the menu-match tick cap and rematch routing from the post-match lobby
-branch. Run this unchanged on the wave before the report change, then on the tip.
-The expected wave failure is an unknown LabelLastMatchSummary alias.
+branch. Run this unchanged on the control executable, then on the tip.
+The control executable leaves the Last match label empty with the tip skin.
 """
 
 import argparse
@@ -17,7 +17,7 @@ import subprocess
 from run_sim_test import make_run
 from test_lobby_chat import read_log, set_resolution
 from test_lobby_lifecycle import wait_for_log
-from test_viewport_fit import is_gold_ink, panel_extent, panel_vertical, png_size
+from test_viewport_fit import panel_extent, panel_vertical, png_size
 
 
 SIZES = ((640, 360), (960, 540))
@@ -55,7 +55,7 @@ def capture_geometry(path, size):
     top, bottom = panel_vertical(pixels, width, height)
     inside = bool(extent and top is not None and bottom is not None and
                   extent[1] >= 3 and extent[2] <= width - 4 and 0 <= top < bottom < height)
-    return {"path": str(path), "dimensions": png_size(path), "expected_dimensions": list(size),
+    return {"path": str(path), "sha256": sha256(path), "dimensions": png_size(path), "expected_dimensions": list(size),
             "inside_viewport": inside, "panel": extent, "top": top, "bottom": bottom}
 
 
@@ -74,7 +74,7 @@ def captured_chat_rows(path):
     # "Host: chatrow", away from the centered action buttons.
     left = extent[1]
     ink_rows = [y for y in range(max(0, bottom - 104), bottom - 24)
-                if sum(is_gold_ink(pixels[x, y]) for x in range(left + 10, min(width, left + 98))) >= 8]
+                if sum(pixels[x, y] == (255, 255, 255) for x in range(left + 10, min(width, left + 98))) >= 8]
     bands = []
     for y in ink_rows:
         if not bands or y > bands[-1][-1] + 1:
@@ -101,6 +101,8 @@ def menu_script(who, port):
                    "wait_connected 2\nactivate ButtonMultiplayerReady\n")
     script += ("wait_state Running 120\nwait_state Starting 240\nwait 20\n"
                "assert_screen MultiplayerScreen\nassert_substate Lobby\n"
+               "assert_control LabelLastMatchSummary\nassert_control ButtonLastMatchDetails\n"
+               "assert_label LabelMultiplayerStatus ready up for a rematch\nscreenshot report_lobby\n"
                "assert_label LabelLastMatchSummary Last match: draw\n"
                "assert_label LabelLastMatchSummary 00:02\n"
                "assert_label LabelLastMatchSummary Host, Guest\n"
@@ -142,8 +144,17 @@ def run_size(repo, root, size, port, expected):
         runs["Guest"].start()
         with ThreadPoolExecutor(max_workers=2) as pool:
             records = dict(pool.map(lambda item: (item[0], item[1].finish()), runs.items()))
+        logs = {who: read_log(run.out) for who, run in runs.items()}
+        announced_delays = {}
+        for who, log in logs.items():
+            delays = set(re.findall(r'\[menu-script\] dump_lobby .* input_delay="Input delay: (\d+)', log))
+            if len(delays) == 1:
+                announced_delays[who] = int(delays.pop())
+        details["announced_delays"] = announced_delays
         for who, run in runs.items():
-            log = read_log(run.out)
+            log = logs[who]
+            console_path = run.cwd / "LogConsole.txt"
+            console = console_path.read_text(encoding="utf-8", errors="replace") if console_path.exists() else ""
             labels = LABELS.findall(log)
             record = records[who]
             failures = re.findall(r"^.*(?:FAILED|FAIL|EXCEPTION_|RTE Assert|RTE Abort|Runtime Error).*$", log, re.M)
@@ -151,26 +162,24 @@ def run_size(repo, root, size, port, expected):
             checks[who + "_desktop"] = record["input_desktop_before"] == record["input_desktop_after"]
             checks[who + "_exe"] = record["exe_sha256"] == expected
             checks[who + "_launched"] = "[menu-mp] launching the match" in log
-            checks[who + "_ended"] = "NETWORK: Match complete" in log
+            checks[who + "_ended"] = "NETWORK: Match complete" in console
             checks[who + "_two_rounds"] = log.count("[menu-mp] launching the match") == 2
             checks[who + "_cleared_on_start"] = all(any(name == alias and text == "" and status == "PASS" for name, text, status in labels)
                                                     for alias in ("LabelLastMatchSummary", "LabelLastMatchDetails"))
             checks[who + "_assertions"] = not failures and len(labels) >= 14 and all(status == "PASS" for _, _, status in labels)
-            details[who] = {"failures": failures, "labels": labels, "record": record}
+            details[who] = {"failures": failures, "labels": labels, "record": record, "console_path": str(console_path)}
             report_path = root / f"{who}_report.json"
             report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}
             summary = report.get("last_match", report.get("service", {}).get("last_match"))
             details[who]["summary"] = summary
             checks[who + "_summary"] = bool(summary and summary["running_ticks"] == TICKS and summary["winner_team"] == -1 and
                                            [peer["name"] for peer in summary["peers"]] == ["Host", "Guest"])
-            config = report.get("runner", report.get("service", {}).get("runner", {})).get("match_config", {})
-            delays = config.get("peer_input_delays") or [config.get("input_delay_frames")] * 2
-            checks[who + "_peer_details"] = bool(summary and len(delays) == 2 and all(
-                peer["input_delay"] == delays[peer["peer_id"] - 1] and any(
+            checks[who + "_peer_details"] = bool(summary and len(announced_delays) == 2 and all(
+                peer["input_delay"] == announced_delays.get(peer["name"]) and any(
                     name == "LabelLastMatchDetails" and f'{peer["name"]} | team {peer["team"] + 1} | seat {peer["seat"]} | delay {peer["input_delay"]}' in text
                     for name, text, _ in labels) for peer in summary["peers"]))
             checks[who + "_identity"] = any(name == "LabelLastMatchDetails" and expected in text for name, text, _ in labels)
-            for stem in ("report_summary", "report_details"):
+            for stem in ("report_lobby", "report_summary", "report_details"):
                 capture = capture_geometry(latest_capture(run, stem), size)
                 details[who][stem] = capture
                 checks[who + "_" + stem] = capture["dimensions"] == list(size) and capture["inside_viewport"]
@@ -180,6 +189,9 @@ def run_size(repo, root, size, port, expected):
         before_shot = latest_capture(runs["Host"], "report_before")
         details["chat_before"] = {"capture": str(before_shot), **captured_chat_rows(before_shot)}
         checks["before_chat_rows"] = details["chat_before"]["count"] >= 5
+        shared_fields = ("winner_team", "running_ticks", "duration", "peers", "resyncs", "drops", "reclaims", "substitutions")
+        checks["peer_agreement"] = bool(details["Host"]["summary"] and details["Guest"]["summary"] and all(
+            details["Host"]["summary"][field] == details["Guest"]["summary"][field] for field in shared_fields))
         checks["pin_unchanged"] = pin(repo, expected) == before
     except Exception as error:
         details["error"] = repr(error)
