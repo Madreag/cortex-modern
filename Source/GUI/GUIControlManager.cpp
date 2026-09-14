@@ -76,6 +76,13 @@ std::string GUICheckpoint::SaveBitmap(const BITMAP* bitmap) {
 	writer(bitmap != nullptr);
 	if (bitmap) {
 		const int depth = bitmap_color_depth(const_cast<BITMAP*>(bitmap));
+		if (CheckpointWriter::IsCapturing()) {
+			CheckpointCache temporary;
+			auto* cache = CheckpointWriter::CurrentCache();
+			writer(depth, bitmap->w, bitmap->h, bitmap->clip, bitmap->cl, bitmap->cr, bitmap->ct, bitmap->cb,
+			       (cache ? cache : &temporary)->CapturePixels(bitmap));
+			return writer.Text();
+		}
 		const size_t stride = static_cast<size_t>(bitmap->w) * ((depth + 7) / 8);
 		std::string pixels;
 		pixels.reserve(stride * bitmap->h);

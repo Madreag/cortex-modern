@@ -158,7 +158,7 @@ namespace RTE {
 		std::unique_ptr<BITMAP> CopyBitmap() const;
 
 		/// Captures changed pixel rows at a completed sim tick without image encoding.
-		std::shared_ptr<const BitmapSnapshot> CaptureBitmapSnapshot() const;
+		std::shared_ptr<const BitmapSnapshot> CaptureBitmapSnapshot(std::vector<std::shared_ptr<const BitmapSnapshot>>* retired = nullptr) const;
 #pragma endregion
 
 #pragma region Getters and Setters

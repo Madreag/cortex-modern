@@ -32,17 +32,26 @@ namespace RTE {
 	class CheckpointWriter {
 	public:
 		explicit CheckpointWriter(std::string_view version) : m_Recording(IsCapturing()) { Value(std::string(version)); }
-		std::string Text() const {
+		const std::string& Text() const {
 			if (!m_Recording) return m_Text;
 			if (s_Capture->output) throw std::logic_error("nested checkpoint capture requires Native");
 			s_Capture->output = m_Capture.Finish();
-			return {};
+			return m_Text;
 		}
 		static bool IsCapturing() { return s_Capture != nullptr; }
+		class CacheScope {
+		public:
+			explicit CacheScope(CheckpointCache* cache) : m_Previous(s_Cache) { s_Cache = cache; }
+			~CacheScope() { s_Cache = m_Previous; }
+		private:
+			CheckpointCache* m_Previous;
+		};
+		static CheckpointCache* CurrentCache() { return s_Cache; }
 		/// Captures an existing checkpoint visitor into owned values.
 		static CheckpointText CaptureNative(const std::function<std::string()>& visit) {
 			CaptureScope scope;
 			std::string existing = visit();
+			if (scope.output && !existing.empty()) throw std::logic_error("checkpoint capture result has uncaptured text");
 			return scope.output ? std::move(*scope.output) : CheckpointText(std::move(existing));
 		}
 		static CheckpointText Native(const std::function<std::string()>& visit) {
@@ -105,7 +114,11 @@ namespace RTE {
 		template <class K, class V> void Value(const std::map<K, V>& values) { Value(values.size()); for (const auto& [key, value]: values) (*this)(key, value); }
 		template <class K, class V> void Value(const std::unordered_map<K, V>& values) { Value(std::map<K, V>(values.begin(), values.end())); }
 		template <class T> requires requires(const T& value) { value.SaveCheckpoint(); }
-		void Value(const T& value) { Value(Native([&value] { return value.SaveCheckpoint(); })); }
+		void Value(const T& value) {
+			CheckpointText captured = Native([&value] { return value.SaveCheckpoint(); });
+			if (m_Recording && s_Cache) captured = s_Cache->Remember(&value, 0, std::move(captured));
+			Value(captured);
+		}
 
 	private:
 		struct CaptureScope {
@@ -115,6 +128,7 @@ namespace RTE {
 			~CaptureScope() { s_Capture = previous; }
 		};
 		inline static thread_local CaptureScope* s_Capture = nullptr;
+		inline static thread_local CheckpointCache* s_Cache = nullptr;
 		bool m_Recording = false;
 		mutable CheckpointBuffer m_Capture;
 		std::string m_Text;

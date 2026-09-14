@@ -290,6 +290,8 @@ namespace RTE {
 		/// Shares the checkpoint encoding while keeping automatic capture independent of user saves.
 		bool QueueSaveSnapshot(const std::string& fileName, const std::string& path, SaveCompression compression,
 		                       std::shared_future<bool>& task, const std::string& matchId = "", uint64_t tick = 0, size_t* capturedBytes = nullptr);
+		bool QueueIncrementalAutosave(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
+		                              std::shared_future<bool>& task, size_t& bytes, std::function<void(double)>& publishBoundary);
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage) const;
 
 		std::string m_DefaultActivityType; //!< The type name of the default Activity to be loaded if nothing else is available.
@@ -326,6 +328,7 @@ namespace RTE {
 
 		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.
 		std::vector<std::shared_future<bool>> m_AutosaveTasks; //!< Captured checkpoints awaiting disk IO.
+		std::unique_ptr<CheckpointCache> m_AutosaveCache;
 		long long m_LastSaveMainMs = 0;
 		long long m_LastSaveZipMs = 0;
 

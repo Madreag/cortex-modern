@@ -494,8 +494,9 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::CaptureRows(const BITMAP* 
 }
 
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
-std::shared_ptr<const BitmapSnapshot> SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::CaptureBitmapSnapshot() const {
+std::shared_ptr<const BitmapSnapshot> SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::CaptureBitmapSnapshot(std::vector<std::shared_ptr<const BitmapSnapshot>>* retired) const {
 	auto snapshot = BitmapSnapshot::CaptureRows(m_MainBitmap, m_BitmapSnapshot, &m_BitmapSnapshotDirtyRows, m_BitmapSnapshotAllDirty);
+	if (retired && m_BitmapSnapshot) retired->push_back(std::move(m_BitmapSnapshot));
 	if (!snapshot) {
 		ResetBitmapSnapshot();
 		return {};

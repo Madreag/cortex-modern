@@ -144,6 +144,16 @@ namespace RTE {
 			const void* scene = nullptr;
 		};
 		void SetSaveOverrides(const SaveOverrides* overrides) { m_SaveOverrides = overrides; }
+		const SaveOverrides* GetSaveOverrides() const { return m_SaveOverrides; }
+		class SaveOverridesScope {
+			Writer& m_Writer;
+			const SaveOverrides* m_Previous;
+		public:
+			SaveOverridesScope(Writer& writer, const SaveOverrides& overrides) : m_Writer(writer), m_Previous(writer.m_SaveOverrides) { writer.m_SaveOverrides = &overrides; }
+			~SaveOverridesScope() { m_Writer.m_SaveOverrides = m_Previous; }
+			SaveOverridesScope(const SaveOverridesScope&) = delete;
+			SaveOverridesScope& operator=(const SaveOverridesScope&) = delete;
+		};
 		const SaveOverrides::Identity* IdentityOverride(const void* object) const {
 			if (!m_SaveOverrides) return nullptr;
 			auto found = m_SaveOverrides->identities.find(object);
