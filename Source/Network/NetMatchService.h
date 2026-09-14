@@ -167,6 +167,10 @@ namespace RTE {
 		/// gate can be bisected against the pre-admission handshake without a rebuild.
 		static void SetAdmissionEnabled(bool enabled) { s_AdmissionEnabled = enabled; }
 		static bool IsAdmissionEnabled() { return s_AdmissionEnabled; }
+		/// Sets this machine's checkpoint cadence in sim seconds; zero disables it.
+		static void SetAutosaveSeconds(uint32_t seconds) { s_AutosaveSeconds = seconds; }
+		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
+		void AutosaveAtTickBoundary(uint64_t tick);
 		/// §11: the multiprocess reconnect test shares one Userdata, so each process gets its own
 		/// recovery-record path instead of racing over the default one.
 		static void SetTicketStorePath(std::string path);
@@ -286,6 +290,12 @@ namespace RTE {
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
 		std::string BuildReportJson() const;
+		/// Builds diagnostic identity on request; match startup supplies the cached join inputs.
+		bool RefreshDiagnosticIdentity(std::string* error = nullptr, double* buildMs = nullptr);
+		/// Returns the cached join inputs without reading settings, modules, or simulation state.
+		std::string ExportDiagnosticIdentity() const;
+		/// Returns the last runtime error and heal record without exposing reconnect credentials.
+		std::string ExportDiagnosticDesyncHeal() const;
 		uint8_t GetLocalPeerId() const;
 		int GetLocalTeam() const;
 
@@ -412,10 +422,17 @@ namespace RTE {
 		/// Elapsed milliseconds since this session began, for every admission deadline.
 		uint64_t AdmissionNowMs() const;
 		void CaptureA7SeatView();
+		void CacheDiagnosticIdentity(const NetIdentityManifest& manifest);
 		bool WaitForA7ConnectGate(std::string* error);
 
 
 		mutable std::mutex m_Mutex;
+		std::string m_DiagnosticIdentity;
+		std::string m_DiagnosticRuntimeError;
+		static uint32_t s_AutosaveSeconds;
+		std::string m_AutosaveMatchId;
+		int64_t m_NextAutosaveSimTime = -1;
+		int64_t m_LastAutosaveSimTime = -1;
 		NetMatchServiceState m_State = NetMatchServiceState::Idle;
 		std::string m_StatusText = "Idle";
 		std::string m_ErrorText;

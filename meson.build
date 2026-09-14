@@ -332,6 +332,7 @@ endif
 #### Sources Setup ####
 source_inc_dirs = []
 subdir('Source')
+sources += files('Source/System/TelemetryBundle.cpp')
 subdir('Resources')
 
 

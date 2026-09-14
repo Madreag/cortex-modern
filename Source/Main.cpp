@@ -85,6 +85,7 @@
 #include "NetLanDiscovery.h"
 #include "NetLockstep.h"
 #include "NetMatchReplay.h"
+#include "TelemetryBundle.h"
 #include "NetLockstepSelfTest.h"
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
@@ -129,9 +130,12 @@
 #include <immintrin.h>
 #endif
 #include <chrono>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
+#include <format>
 #include <iostream>
 #include <random>
 #include <deque>
@@ -152,6 +156,7 @@ using namespace RTE;
 
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
+static bool s_telemetryBundleOnExit = false;
 static std::string s_menuMpTraceError;
 static bool s_bitmapSaveSelfTest = false;
 static int s_bitmapSaveSelfTestResult = -1;
@@ -162,6 +167,8 @@ static std::string s_saveIoSelfTestName;
 static bool s_saveMenuSelfTest = false;
 static bool s_saveMenuSelfTestPassed = true;
 static bool s_menuScriptFailed = false;
+static bool s_menuScriptComplete = false;
+static bool s_menuScriptHoldE2ePause = false;
 static std::string s_snapshotRoundtripSelfTestName;
 static bool s_snapshotRoundtripSelfTestPassed = false;
 static bool s_snapshotRoundtripLockAudio = false;
@@ -512,6 +519,7 @@ int ShutDown(int exitCode) {
 	}
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
 	g_ThreadMan.GetBackgroundThreadPool().wait_for_tasks();
+	g_ActivityMan.WaitForAutosaveTasks();
 	LocalPrediction::Clear();
 	PreviewEventLedger::Clear();
 	if (s_rbProbeOriginals.held) {
@@ -522,8 +530,18 @@ int ShutDown(int exitCode) {
 		exitCode = EXIT_FAILURE;
 	}
 	s_rbProbeWorld.Clear();
+	ScenarioRunner::CloseLockstepReplayRecord();
+	if (s_telemetryBundleOnExit) {
+		TelemetryBundle::Flush();
+		TelemetryBundle::RequestCapture();
+		if (!TelemetryBundle::CaptureAtTickBoundary()) exitCode = EXIT_FAILURE;
+	} else {
+		TelemetryBundle::CaptureAtTickBoundary();
+	}
+	if (!TelemetryBundle::Flush()) exitCode = EXIT_FAILURE;
 	g_ConsoleMan.SaveAllText("LogConsole.txt");
 	DestroyManagers();
+	TelemetryBundle::Finish();
 	allegro_exit();
 	SDL_Quit();
 	std::cout.flush();
@@ -965,9 +983,27 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (currentArg == "-telemetry-bundle") {
+			s_telemetryBundleOnExit = true;
+			++i;
+			continue;
+		}
+
 		if (!lastArg && currentArg == "-net-replay-out") {
 			s_netReplayOutPath = argValue[++i];
 			ScenarioRunner::ArmLockstepReplayRecord(s_netReplayOutPath);
+			continue;
+		}
+		if (currentArg == "-net-autosave-seconds") {
+			uint32_t seconds = 0;
+			const std::string value = lastArg ? "" : argValue[i + 1];
+			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), seconds);
+			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
+				std::cerr << "[autosave] -net-autosave-seconds requires a nonnegative 32-bit integer" << std::endl;
+				return false;
+			}
+			NetMatchService::SetAutosaveSeconds(seconds);
+			i += 2;
 			continue;
 		}
 
@@ -1325,8 +1361,27 @@ static void MenuScriptFail(const std::string& reason) {
 	System::SetQuit(true);
 }
 
-// Drives the real MainMenuGUI from a script for automated UI testing: one step per call, after the
-// interactive main menu is up. Screenshots use the normal render path. Quits when the script ends.
+static void CompleteMenuScript() {
+	s_menuScriptComplete = true;
+	if (!s_menuScriptHoldE2ePause) System::SetQuit(true);
+}
+
+static bool MenuScriptFileExists(const std::string& pattern) {
+	const std::filesystem::path path(pattern);
+	const std::string name = path.filename().string();
+	const size_t star = name.find('*');
+	std::error_code error;
+	if (star == std::string::npos) return std::filesystem::is_regular_file(path, error);
+	const std::string prefix = name.substr(0, star), suffix = name.substr(star + 1);
+	std::filesystem::directory_iterator entry(path.has_parent_path() ? path.parent_path() : ".", error), end;
+	for (; !error && entry != end; entry.increment(error)) {
+		const std::string candidate = entry->path().filename().string();
+		if (candidate.size() >= prefix.size() + suffix.size() && candidate.starts_with(prefix) && candidate.ends_with(suffix) && entry->is_regular_file(error)) return true;
+	}
+	return false;
+}
+
+// Menu scripts use real controls and the normal screenshot render path.
 void ProcessMenuScript() {
 	static std::vector<std::string> steps;
 	static size_t stepIndex = 0;
@@ -1356,7 +1411,8 @@ void ProcessMenuScript() {
 	}
 	static bool introSkipped = false;
 	static uint64_t awaySinceMs = 0;
-	if (!g_MenuMan.IsMainMenuInteractive()) {
+	PauseMenuGUI* pauseMenu = g_MenuMan.GetActivePauseMenu();
+	if (!g_MenuMan.IsMainMenuInteractive() && !pauseMenu) {
 		if (awaySinceMs == 0) {
 			awaySinceMs = MenuScriptNowMs();
 		}
@@ -1385,7 +1441,9 @@ void ProcessMenuScript() {
 	if (!waitCond.empty()) {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		bool met = false;
-		if (waitCond.rfind("members:", 0) == 0) {
+		if (waitCond.starts_with("file:")) {
+			met = MenuScriptFileExists(waitCond.substr(5));
+		} else if (waitCond.rfind("members:", 0) == 0) {
 			met = static_cast<int>(snapshot.members.size()) >= std::atoi(waitCond.c_str() + 8);
 		} else if (waitCond.rfind("connected:", 0) == 0) {
 			met = std::count_if(snapshot.members.begin(), snapshot.members.end(), [](const NetLobbyMember& member) { return member.connected; }) == std::atoi(waitCond.c_str() + 10);
@@ -1404,7 +1462,7 @@ void ProcessMenuScript() {
 		// keeps the frame budget it has always had.
 		const bool expired = waitCondDeadlineMs != 0 ? MenuScriptNowMs() >= waitCondDeadlineMs : --waitCondTimeout <= 0;
 		if (met || expired) {
-			std::cout << "[menu-script] " << waitCond << " -> " << (met ? "OK" : "TIMEOUT") << " (members=" << snapshot.members.size() << " state=" << snapshot.serviceState << ")" << std::endl;
+			std::cout << std::format("[menu-script] {} -> {} (members={} state={})\n", waitCond, met ? "OK" : "TIMEOUT", snapshot.members.size(), snapshot.serviceState) << std::flush;
 			if (!met) { return MenuScriptFail("condition wait timed out: " + waitCond); }
 			waitCond.clear();
 			waitCondDeadlineMs = 0;
@@ -1413,7 +1471,7 @@ void ProcessMenuScript() {
 	}
 	if (stepIndex >= steps.size()) {
 		std::cout << "[menu-script] complete" << std::endl;
-		System::SetQuit(true);
+		CompleteMenuScript();
 		return;
 	}
 	std::istringstream iss(steps[stepIndex++]);
@@ -1426,6 +1484,13 @@ void ProcessMenuScript() {
 		int milliseconds = 0;
 		iss >> milliseconds;
 		waitUntilMs = MenuScriptNowMs() + static_cast<uint64_t>(std::max(0, milliseconds));
+	} else if (cmd == "wait_file") {
+		std::string path;
+		int seconds = 30;
+		iss >> path >> std::ws;
+		if (path.empty() || (!iss.eof() && !(iss >> seconds)) || seconds <= 0) return MenuScriptFail("wait_file requires a path and positive timeout");
+		waitCond = "file:" + path;
+		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000ULL;
 	} else if (cmd == "wait_members") {
 		int n = 0;
 		iss >> n;
@@ -1471,23 +1536,23 @@ void ProcessMenuScript() {
 		iss >> name;
 		// SaveScreenToPNG prepends System::GetScreenshotDirectory() ("ScreenShots/"); use a plain name.
 		g_FrameMan.SaveScreenToPNG(name.c_str());
-		std::cout << "[menu-script] screenshot ScreenShots/" << name << " screen=" << menu->AutomationActiveScreenName() << std::endl;
+		std::cout << "[menu-script] screenshot ScreenShots/" << name << " screen=" << (pauseMenu ? "Pause" : menu->AutomationActiveScreenName()) << std::endl;
 	} else if (cmd == "activate") {
 		std::string control;
 		iss >> control;
-		const bool ok = menu->AutomationActivateControl(control);
+		const bool ok = pauseMenu ? pauseMenu->AutomationPostCommand(control) : menu->AutomationActivateControl(control);
 		std::cout << "[menu-script] activate " << control << " ok=" << ok << std::endl;
 		if (!ok) { return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control); }
 	} else if (cmd == "post_command") {
 		std::string control;
 		iss >> control;
-		const bool ok = menu->AutomationPostCommand(control);
+		const bool ok = pauseMenu ? pauseMenu->AutomationPostCommand(control) : menu->AutomationPostCommand(control);
 		std::cout << "[menu-script] post_command " << control << " ok=" << ok << std::endl;
 		if (!ok) { return MenuScriptFail("post_command failed (control missing, disabled, or hidden): " + control); }
 	} else if (cmd == "assert_control") {
 		std::string control;
 		iss >> control;
-		const bool exists = menu->AutomationControlExists(control);
+		const bool exists = pauseMenu ? pauseMenu->AutomationControlExists(control) : menu->AutomationControlExists(control);
 		std::cout << "[menu-script] assert_control " << control << " " << (exists ? "PASS" : "FAIL") << std::endl;
 		if (!exists) { return MenuScriptFail("assert_control names no control in the skin: " + control); }
 	} else if (cmd == "moderate") {
@@ -1521,14 +1586,14 @@ void ProcessMenuScript() {
 		std::getline(iss, sub);
 		if (!sub.empty() && sub[0] == ' ') { sub.erase(0, 1); }
 		std::string text;
-		const bool found = menu->AutomationLabelText(control, text);
+		const bool found = pauseMenu ? pauseMenu->AutomationLabelText(control, text) : menu->AutomationLabelText(control, text);
 		const bool pass = found && text.find(sub) != std::string::npos;
 		std::cout << "[menu-script] assert_label " << control << " \"" << sub << "\" text=\"" << text << "\" " << (pass ? "PASS" : "FAIL") << std::endl;
 		if (!pass) { return MenuScriptFail("assert_label " + control + " missing substring: " + sub); }
 	} else if (cmd == "assert_screen") {
 		std::string expected;
 		iss >> expected;
-		const std::string actual = menu->AutomationActiveScreenName();
+		const std::string actual = pauseMenu ? "Pause" : menu->AutomationActiveScreenName();
 		const bool pass = actual == expected;
 		std::cout << "[menu-script] assert_screen expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
 		if (!pass) { return MenuScriptFail("assert_screen expected " + expected + " got " + actual); }
@@ -1596,12 +1661,12 @@ void ProcessMenuScript() {
 		std::string control;
 		int expected = 0;
 		iss >> control >> expected;
-		const int actual = menu->AutomationControlEnabled(control) ? 1 : 0;
+		const int actual = (pauseMenu ? pauseMenu->AutomationControlEnabled(control) : menu->AutomationControlEnabled(control)) ? 1 : 0;
 		const bool pass = actual == expected;
 		std::cout << "[menu-script] assert_enabled " << control << " expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
 		if (!pass) { return MenuScriptFail("assert_enabled " + control + " expected " + std::to_string(expected)); }
 	} else if (cmd == "exit") {
-		System::SetQuit(true);
+		CompleteMenuScript();
 	} else {
 		return MenuScriptFail("unknown command: " + cmd);
 	}
@@ -1639,6 +1704,7 @@ void RunMenuLoop() {
 
 		g_ConsoleMan.Update();
 
+		TelemetryBundle::CaptureAtTickBoundary();
 		g_UInputMan.EndFrame();
 		g_WindowMan.GetScreenBuffer()->Begin();
 		g_MenuMan.Draw();
@@ -1648,6 +1714,7 @@ void RunMenuLoop() {
 
 		if (!s_menuScriptPath.empty()) {
 			ProcessMenuScript();
+			if (s_menuScriptHoldE2ePause && s_menuScriptComplete) break;
 		}
 	}
 
@@ -3767,6 +3834,8 @@ void RunGameLoop() {
 			// Sim consumed this tick's accumulated input edges; clear before next tick reads
 			g_UInputMan.EndSimUpdate();
 			if (probeTickResult) RollbackProbeOnHashedTick(simTick, *probeTickResult);
+			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
+			TelemetryBundle::CaptureAtTickBoundary();
 
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 
@@ -4208,6 +4277,13 @@ void RunGameLoop() {
 				g_TimerMan.PauseSim(true);
 
 				if (!g_ActivityMan.ActivitySetToRestart()) {
+					if (s_netMatchServiceE2E && !s_menuScriptPath.empty() && !s_menuScriptComplete && !s_menuScriptFailed) {
+						s_menuScriptHoldE2ePause = true;
+						g_MenuMan.HandleTransitionIntoMenuLoop();
+						RunMenuLoop();
+						s_menuScriptHoldE2ePause = false;
+						if (!s_menuScriptComplete && !System::IsSetToQuit()) continue;
+					}
 					// Leaving a running net match: a clean leave lets N-peer survivors keep playing and,
 					// with nobody left, ends their match at once - unlike a drop, which holds the seat
 					// open for its reclaim window. The §7 exchange runs before the link goes down.
@@ -5683,13 +5759,17 @@ int main(int argc, char** argv) {
 	SeedRNG();
 	InstallRNGDrawTraceIfArmed();
 
+	TelemetryBundle::Initialize("unavailable");
 	InitializeManagers();
 	ScenarioRunner::SetStallEventPoll(&PollSDLEvents);
 	// Same arming condition as the probe itself, so only a probe run pumps the panel from a stall.
 	const char* netUiProbeScript = std::getenv("CC_TEST_NET_UI_SCRIPT");
 	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');
 
-	if (!HandleMainArgs(argc, argv)) return ShutDown(EXIT_FAILURE);
+	const bool mainArgsValid = HandleMainArgs(argc, argv);
+	const auto* gpu = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+	TelemetryBundle::SetGpuDescription(gpu ? gpu : "unavailable");
+	if (!mainArgsValid) return ShutDown(EXIT_FAILURE);
 
 	// The chat script drives session traffic — only a headless e2e match may carry it.
 	if (!s_netChatScriptPath.empty() && !s_netMatchServiceE2E) {

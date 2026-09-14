@@ -55,10 +55,15 @@ namespace RTE {
 		void Close();
 		bool IsOpen() const { return m_Out.is_open(); }
 		uint64_t GetFramesWritten() const { return m_FramesWritten; }
+		/// Copies complete recorded ticks from memory, with an end marker; call only at a tick boundary.
+		bool CopyDiagnosticReplay(std::string& bytes, bool& truncated) const;
 
 	private:
 		std::ofstream m_Out;
 		uint64_t m_FramesWritten = 0;
+		std::vector<uint8_t> m_DiagnosticBytes;
+		uint64_t m_DiagnosticFrames = 0;
+		bool m_DiagnosticTruncated = false;
 	};
 
 	class NetMatchReplayReader {

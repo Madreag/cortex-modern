@@ -61,6 +61,15 @@ namespace RTE {
 
 		/// Draws the PauseMenuGUI to the screen.
 		void Draw();
+
+		/// Posts a command through the visible pause menu's event queue.
+		bool AutomationPostCommand(const std::string& controlName);
+		/// Checks whether the pause menu contains a control.
+		bool AutomationControlExists(const std::string& controlName) const;
+		/// Checks whether a pause-menu control is visible and enabled.
+		bool AutomationControlEnabled(const std::string& controlName) const;
+		/// Reads the text of a pause-menu button.
+		bool AutomationLabelText(const std::string& controlName, std::string& text) const;
 #pragma endregion
 
 	private:
@@ -79,6 +88,7 @@ namespace RTE {
 			SaveOrLoadGameButton,
 			SettingsButton,
 			ModManagerButton,
+			SaveDiagnosticsButton,
 			ResumeButton,
 			ButtonCount
 		};
@@ -101,7 +111,10 @@ namespace RTE {
 		// Right now the way this works is the font graphic has different character visuals for uppercase and lowercase and the visual change happens by applying the appropriate case string when hovering/unhovering.
 		std::array<std::string, PauseMenuButton::ButtonCount> m_ButtonHoveredText; //!< Array containing uppercase strings of the pause menu buttons text that are used to display the larger font when a button is hovered over.
 		std::array<std::string, PauseMenuButton::ButtonCount> m_ButtonUnhoveredText; //!< Array containing lowercase strings of the pause menu buttons text that are used to display the smaller font when a button is not hovered over.
+		std::array<std::string, 2> m_DiagnosticsIdleText; //!< The idle hovered/unhovered texts restored after a save.
+		bool m_DiagnosticsBusy; //!< The last busy state applied to the arrays.
 		GUIButton* m_HoveredButton; //!< The currently hovered pause menu button.
+		std::string m_PendingAutomationCommand;
 		int m_PrevHoveredButtonIndex; //!< The index of the previously hovered pause menu button in the main menu button array.
 
 		bool m_SavingButtonsDisabled; //!< Whether the save and load buttons are disabled and hidden.

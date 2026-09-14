@@ -145,6 +145,10 @@ namespace RTE {
 		/// @param compression Fast is the user's save level; Small is for resync snapshots.
 		/// @return Whether the save was queued. WaitForSaveGameTask returns its result.
 		bool SaveCurrentGame(const std::string& fileName, SaveCompression compression = SaveCompression::Fast);
+		/// Captures a callback-free checkpoint at a completed sim tick and queues its archive write.
+		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick);
+		/// Drains checkpoint writes at shutdown, after simulation has ended.
+		void WaitForAutosaveTasks() const;
 		long long LastSaveMainMs() const { return m_LastSaveMainMs; }
 		long long LastSaveZipMs() const { return m_LastSaveZipMs; }
 		std::string CaptureRuntimeGlobals() const;
@@ -283,6 +287,10 @@ namespace RTE {
 		/// Reads a .ccsave into its Scene, Activity, and restart metadata; shared by the launch and
 		/// stage-for-restart load paths.
 		bool ReadSavedGame(const std::string& fileName, PendingCheckpoint& out);
+		/// Shares the checkpoint encoding while keeping automatic capture independent of user saves.
+		bool QueueSaveSnapshot(const std::string& fileName, const std::string& path, SaveCompression compression,
+		                       std::shared_future<bool>& task, const std::string& matchId = "", uint64_t tick = 0, size_t* capturedBytes = nullptr);
+		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage) const;
 
 		std::string m_DefaultActivityType; //!< The type name of the default Activity to be loaded if nothing else is available.
 		std::string m_DefaultActivityName; //!< The preset name of the default Activity to be loaded if nothing else is available.
@@ -317,6 +325,7 @@ namespace RTE {
 		int m_StaleActivitySlots = 0;
 
 		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.
+		std::vector<std::shared_future<bool>> m_AutosaveTasks; //!< Captured checkpoints awaiting disk IO.
 		long long m_LastSaveMainMs = 0;
 		long long m_LastSaveZipMs = 0;
 

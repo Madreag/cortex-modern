@@ -13,6 +13,7 @@
 #include "PresetMan.h"
 #include "SceneMan.h"
 #include "ScenarioRunner.h"
+#include "TelemetryBundle.h"
 
 #include "Activity.h"
 #include "Entity.h"
@@ -203,6 +204,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MainMenuButtons[MenuButton::MultiplayerJoinBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonJoinBack"));
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerModerate"));
 	m_MainMenuButtons[MenuButton::MultiplayerModerationBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonModerationBack"));
+	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonSaveDiagnostics"));
 
 	m_MultiplayerNameTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextMultiplayerName"));
 	m_MultiplayerHostPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostPort"));
@@ -702,7 +704,9 @@ void MainMenuGUI::HandleMainScreenInputEvents(const GUIControl* guiEventControl)
 }
 
 void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventControl) {
-	if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerHostGameButton]) {
+	if (guiEventControl == m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]) {
+		if (TelemetryBundle::RequestCapture()) g_ConsoleMan.PrintString("SYSTEM: Saving diagnostics...");
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerHostGameButton]) {
 		m_MultiplayerLandingStatusLabel->SetText("");
 		m_MultiplayerHostPortMapCheckbox->SetCheck(g_SettingsMan.GetNetworkPortMapEnable() ? GUICheckbox::Checked : GUICheckbox::Unchecked);
 		m_MultiplayerSubScreen = MultiplayerSubScreen::HostSetup;
@@ -1043,7 +1047,18 @@ void MainMenuGUI::FitMultiplayerScreen(int width, int height) {
 	}
 }
 
+void MainMenuGUI::LayoutMultiplayerFooter(int width, int y) {
+	GUIButton* back = m_MainMenuButtons[MenuButton::BackToMainButton];
+	GUIButton* diagnostics = m_MainMenuButtons[MenuButton::SaveDiagnosticsButton];
+	const int left = (width - back->GetWidth() - diagnostics->GetWidth() - 8) / 2;
+	back->SetPositionRel(left, y);
+	diagnostics->SetPositionRel(left + back->GetWidth() + 8, y);
+}
+
 void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot) {
+	const bool savingDiagnostics = TelemetryBundle::IsBusy();
+	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetEnabled(!savingDiagnostics);
+	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetText(savingDiagnostics ? "Saving..." : "Save Diagnostics");
 	const bool lobby = m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby;
 	m_MultiplayerLandingPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::Landing);
 	m_MultiplayerHostPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup);
@@ -1095,7 +1110,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		}
 		const int screenHeight = contentHeight + m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
 		FitMultiplayerScreen(contentWidth, screenHeight);
-		m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((contentWidth - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, contentHeight);
+		LayoutMultiplayerFooter(contentWidth, contentHeight);
 		return;
 	}
 
@@ -1328,7 +1343,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55 + buttonShift, 192 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55 + buttonShift, 192 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(90 + buttonShift, 220 + extraHeight);
-	m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((contentWidth - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, contentHeight);
+	LayoutMultiplayerFooter(contentWidth, contentHeight);
 
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetEnabled(!snapshot.isHost && snapshot.inLobby);

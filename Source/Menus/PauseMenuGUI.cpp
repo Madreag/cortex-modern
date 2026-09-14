@@ -6,6 +6,7 @@
 #include "ActivityMan.h"
 #include "UInputMan.h"
 #include "SettingsMan.h"
+#include "TelemetryBundle.h"
 
 #include "SaveLoadMenuGUI.h"
 #include "SettingsGUI.h"
@@ -37,7 +38,10 @@ void PauseMenuGUI::Clear() {
 
 	m_ButtonHoveredText.fill(std::string());
 	m_ButtonUnhoveredText.fill(std::string());
+	m_DiagnosticsIdleText.fill(std::string());
+	m_DiagnosticsBusy = false;
 	m_HoveredButton = nullptr;
+	m_PendingAutomationCommand.clear();
 	m_PrevHoveredButtonIndex = 0;
 
 	m_SavingButtonsDisabled = false;
@@ -63,6 +67,7 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 	m_PauseMenuButtons[PauseMenuButton::SaveOrLoadGameButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonSaveOrLoadGame"));
 	m_PauseMenuButtons[PauseMenuButton::SettingsButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonSettings"));
 	m_PauseMenuButtons[PauseMenuButton::ModManagerButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonModManager"));
+	m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonSaveDiagnostics"));
 	m_PauseMenuButtons[PauseMenuButton::ResumeButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonResume"));
 
 	for (size_t pauseMenuButton = 0; pauseMenuButton < m_PauseMenuButtons.size(); ++pauseMenuButton) {
@@ -76,6 +81,7 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 		m_PauseMenuButtons[pauseMenuButton]->SetText(m_ButtonUnhoveredText[pauseMenuButton]);
 		m_PauseMenuButtons[pauseMenuButton]->CenterInParent(true, false);
 	}
+	m_DiagnosticsIdleText = {m_ButtonHoveredText[PauseMenuButton::SaveDiagnosticsButton], m_ButtonUnhoveredText[PauseMenuButton::SaveDiagnosticsButton]};
 
 	if (m_BackdropBitmap) {
 		destroy_bitmap(m_BackdropBitmap);
@@ -121,6 +127,7 @@ void PauseMenuGUI::EnableOrDisablePauseMenuFeatures() {
 		int yOffset = m_PauseMenuButtons[PauseMenuButton::ModManagerButton]->GetHeight();
 
 		m_PauseMenuButtons[PauseMenuButton::ResumeButton]->MoveRelative(0, yOffset * (disableModManager ? -1 : 1));
+		m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton]->MoveRelative(0, yOffset * (disableModManager ? -1 : 1));
 		m_PauseMenuBox->MoveRelative(0, yOffset / 2 * -1);
 
 		m_ModManagerButtonDisabled = disableModManager;
@@ -141,6 +148,15 @@ void PauseMenuGUI::SetActiveMenuScreen(PauseMenuScreen screenToShow, bool playBu
 
 PauseMenuGUI::PauseMenuUpdateResult PauseMenuGUI::Update() {
 	m_UpdateResult = PauseMenuUpdateResult::NoEvent;
+	const bool savingDiagnostics = TelemetryBundle::IsBusy();
+	GUIButton* diagnosticsButton = m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton];
+	diagnosticsButton->SetEnabled(!savingDiagnostics);
+	if (savingDiagnostics != m_DiagnosticsBusy) {
+		m_DiagnosticsBusy = savingDiagnostics;
+		m_ButtonHoveredText[PauseMenuButton::SaveDiagnosticsButton] = savingDiagnostics ? "SAVING" : m_DiagnosticsIdleText[0];
+		m_ButtonUnhoveredText[PauseMenuButton::SaveDiagnosticsButton] = savingDiagnostics ? "saving" : m_DiagnosticsIdleText[1];
+		diagnosticsButton->SetText(m_HoveredButton == diagnosticsButton ? m_ButtonHoveredText[PauseMenuButton::SaveDiagnosticsButton] : m_ButtonUnhoveredText[PauseMenuButton::SaveDiagnosticsButton]);
+	}
 
 	if (g_ConsoleMan.IsEnabled() && !g_ConsoleMan.IsReadOnly()) {
 		return m_UpdateResult;
@@ -199,6 +215,12 @@ bool PauseMenuGUI::HandleInputEvents() {
 		UpdateHoveredButton(dynamic_cast<GUIButton*>(m_GUIControlManager->GetControlUnderPoint(mousePosX, mousePosY, m_PauseMenuBox, 1)));
 	}
 	m_GUIControlManager->Update();
+	if (!m_PendingAutomationCommand.empty()) {
+		GUIControl* control = m_GUIControlManager->GetControl(m_PendingAutomationCommand);
+		const bool enabled = AutomationControlEnabled(m_PendingAutomationCommand);
+		m_PendingAutomationCommand.clear();
+		if (control && enabled) control->AddEvent(GUIEvent::Command, 0, 0);
+	}
 
 	GUIEvent guiEvent;
 	while (m_GUIControlManager->GetEvent(&guiEvent)) {
@@ -211,6 +233,8 @@ bool PauseMenuGUI::HandleInputEvents() {
 				SetActiveMenuScreen(PauseMenuScreen::SettingsScreen);
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::ModManagerButton]) {
 				SetActiveMenuScreen(PauseMenuScreen::ModManagerScreen);
+			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton]) {
+				if (TelemetryBundle::RequestCapture()) g_ConsoleMan.PrintString("SYSTEM: Saving diagnostics...");
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::BackToMainButton]) {
 				g_GUISound.BackButtonPressSound()->Play();
 				m_UpdateResult = PauseMenuUpdateResult::BackToMain;
@@ -221,6 +245,32 @@ bool PauseMenuGUI::HandleInputEvents() {
 		}
 	}
 	return false;
+}
+
+bool PauseMenuGUI::AutomationPostCommand(const std::string& controlName) {
+	if (!AutomationControlEnabled(controlName)) return false;
+	m_PendingAutomationCommand = controlName;
+	return true;
+}
+
+bool PauseMenuGUI::AutomationControlExists(const std::string& controlName) const {
+	return m_GUIControlManager->GetControl(controlName) != nullptr;
+}
+
+bool PauseMenuGUI::AutomationControlEnabled(const std::string& controlName) const {
+	GUIControl* control = m_GUIControlManager->GetControl(controlName);
+	if (!control || m_ActiveMenuScreen != PauseMenuScreen::MainScreen || m_ActiveDialogBox) return false;
+	for (GUIControl* node = control; node; node = node->GetParent()) {
+		if (!node->GetEnabled() || !node->GetVisible()) return false;
+	}
+	return true;
+}
+
+bool PauseMenuGUI::AutomationLabelText(const std::string& controlName, std::string& text) const {
+	const auto* button = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl(controlName));
+	if (!button) return false;
+	text = button->GetText();
+	return true;
 }
 
 void PauseMenuGUI::UpdateHoveredButton(const GUIButton* hoveredButton) {
