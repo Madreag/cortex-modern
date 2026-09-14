@@ -224,6 +224,13 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerLobbyPlayerLabels[3] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer3"));
 	m_MultiplayerLobbyPortMapLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPortMap"));
 
+	m_MultiplayerLobbyPlayerRowFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png");
+	for (GUILabel* label : m_MultiplayerLobbyPlayerLabels) {
+		if (label && m_MultiplayerLobbyPlayerRowFont) {
+			label->SetFont(m_MultiplayerLobbyPlayerRowFont);
+		}
+	}
+
 	m_MultiplayerModerationSummaryLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationSummary"));
 	m_MultiplayerModerationStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationStatus"));
 	for (size_t row = 0; row < m_ModerationSeatLabels.size(); ++row) {
@@ -1052,20 +1059,40 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			continue;
 		}
 		const NetLobbyMember& member = snapshot.members[i];
-		const std::string name = member.displayName.size() > 14 ? member.displayName.substr(0, 13) + "." : member.displayName;
-		std::string row = name + (member.isLocal ? " (you)" : "") + " - Team " + std::to_string(member.team + 1);
-		row += member.peerId == 1 ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
-		// §11's persistent line for the seat, derived on this peer; the short mark while there is none.
-		row += member.statusLine.empty() ? std::string(NetReconnectUx::RosterMark(member.dropped, member.reclaiming)) : " - " + member.statusLine;
-		if (member.isLocal && !snapshot.inputDelayText.empty()) {
-			row += " - " + snapshot.inputDelayText;
-		}
-		if (!member.isLocal && member.connected) {
-			row += " - ";
-			row += NetConnectionQualityName(ClassifyConnectionQuality(member.pingMs));
-			if (member.pingMs > 0) {
-				row += " (" + std::to_string(member.pingMs) + "ms)";
+		// The seat line is the verbose form of the seat mark; the row keeps whichever fits.
+		const std::string seatMark = std::string(NetReconnectUx::RosterMark(member.dropped, member.reclaiming));
+		const auto buildTail = [&member, &snapshot](const std::string& seat) {
+			std::string tail = member.isLocal ? " (you)" : "";
+			tail += " - Team " + std::to_string(member.team + 1);
+			tail += member.peerId == 1 ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
+			tail += seat;
+			if (member.isLocal && !snapshot.inputDelayText.empty()) {
+				tail += " - " + snapshot.inputDelayText;
 			}
+			if (!member.isLocal && member.connected) {
+				tail += " - ";
+				tail += NetConnectionQualityName(ClassifyConnectionQuality(member.pingMs));
+				if (member.pingMs > 0) {
+					tail += " (" + std::to_string(member.pingMs) + "ms)";
+				}
+			}
+			return tail;
+		};
+		const int rowWidth = label->GetWidth();
+		const auto fitRow = [this, rowWidth](const std::string& name, const std::string& tail) {
+			std::string row = name + tail;
+			if (!m_MultiplayerLobbyPlayerRowFont || m_MultiplayerLobbyPlayerRowFont->CalculateWidth(row) <= rowWidth) {
+				return row;
+			}
+			std::string trimmed = name;
+			while (!trimmed.empty() && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(trimmed + "\x85" + tail) > rowWidth) {
+				trimmed.pop_back();
+			}
+			return trimmed + "\x85" + tail;
+		};
+		std::string row = fitRow(member.displayName, buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine));
+		if (m_MultiplayerLobbyPlayerRowFont && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(row) > rowWidth) {
+			row = fitRow(member.displayName, buildTail(seatMark));
 		}
 		label->SetText(row);
 		label->SetVisible(true);
