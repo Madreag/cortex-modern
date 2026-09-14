@@ -479,23 +479,53 @@ namespace RTE::FloatTextSelfTest {
 			std::string (*expectedText)() = nullptr; //!< Built expectation, for text whose spelling is the platform's %a.
 		};
 
-		/// Installs a locale whose decimal point is a comma, and reports which one it got.
-		std::string InstallCommaLocale() {
-			for (const char* name: {"de-DE", "de_DE.UTF-8", "German_Germany.1252", "de_DE"}) {
-				try {
-					std::locale::global(std::locale(name));
-				} catch (const std::exception&) {
+		constexpr const char* CommaLocaleNames[] = {"de-DE", "de_DE.UTF-8", "German_Germany.1252", "de_DE"};
+
+		// libstdc++ on Darwin is built with the generic locale model, where no named C++ locale exists at all.
+#if defined(__GLIBCXX__) && defined(__APPLE__)
+		constexpr bool NamedCxxLocalesExist = false;
+#else
+		constexpr bool NamedCxxLocalesExist = true;
+#endif
+
+		void RestoreClassicLocales() {
+			std::locale::global(std::locale::classic());
+			std::setlocale(LC_ALL, "C");
+		}
+
+		/// Installs the C library locale whose decimal point is a comma, proven by what printf writes: a name
+		/// that installs can still spell a number with a point.
+		std::string InstallCommaLocaleC() {
+			for (const char* name: CommaLocaleNames) {
+				if (!std::setlocale(LC_ALL, name)) {
 					continue;
 				}
-				std::setlocale(LC_ALL, name);
 				char probe[32] = {};
 				std::snprintf(probe, sizeof(probe), "%.1f", 1.5);
 				if (std::string(probe) == "1,5") {
 					return name;
 				}
-				std::locale::global(std::locale::classic());
-				std::setlocale(LC_ALL, "C");
 			}
+			std::setlocale(LC_ALL, "C");
+			return std::string();
+		}
+
+		/// Installs the C++ global locale, which every stream built afterwards copies, proven by its decimal point.
+		std::string InstallCommaLocaleCxx() {
+			if constexpr (!NamedCxxLocalesExist) {
+				return std::string();
+			}
+			for (const char* name: CommaLocaleNames) {
+				try {
+					std::locale::global(std::locale(name));
+				} catch (const std::exception&) {
+					continue;
+				}
+				if (std::use_facet<std::numpunct<char>>(std::locale()).decimal_point() == ',') {
+					return name;
+				}
+			}
+			std::locale::global(std::locale::classic());
 			return std::string();
 		}
 
@@ -531,24 +561,33 @@ namespace RTE::FloatTextSelfTest {
 					Fail(std::string("locale=C ") + probes[index].name + " '" + references[index] + "' expected '" + expected + "'");
 				}
 			}
-			const std::string locale = InstallCommaLocale();
-			std::cout << Tag << " locale=" << (locale.empty() ? "none" : locale) << std::endl;
-			if (locale.empty()) {
+			const std::string cxxLocale = InstallCommaLocaleCxx();
+			// std::locale::global also sets the C locale, so the C half goes last and its probe is the final word.
+			const std::string cLocale = InstallCommaLocaleC();
+			const std::string cxxText = NamedCxxLocalesExist ? (cxxLocale.empty() ? std::string("none") : cxxLocale) : std::string("unavailable(libstdc++ generic model)");
+			std::cout << Tag << " locale=" << (cLocale.empty() ? std::string("none") : cLocale) << " cxx_locale=" << cxxText << std::endl;
+			if (cLocale.empty()) {
+				RestoreClassicLocales();
 				Fail("no comma locale: the half of this arm that detects the defect did not run");
 				return;
 			}
+			if (NamedCxxLocalesExist && cxxLocale.empty()) {
+				RestoreClassicLocales();
+				Fail("no C++ comma locale: the stream half of this arm did not run");
+				return;
+			}
+			const std::string label = "locale=" + cLocale + " cxx_locale=" + cxxText;
 			for (size_t index = 0; index < std::size(probes); ++index) {
 				const std::string result = probes[index].run();
 				if (result != references[index]) {
-					Fail(std::string("locale=") + locale + " " + probes[index].name + " '" + result + "' but locale=C gives '" + references[index] + "'");
+					Fail(label + " " + probes[index].name + " '" + result + "' but locale=C gives '" + references[index] + "'");
 				}
 				const std::string expected = expectationOf(probes[index]);
 				if (!expected.empty() && result != expected) {
-					Fail(std::string("locale=") + locale + " " + probes[index].name + " '" + result + "' expected '" + expected + "'");
+					Fail(label + " " + probes[index].name + " '" + result + "' expected '" + expected + "'");
 				}
 			}
-			std::locale::global(std::locale::classic());
-			std::setlocale(LC_ALL, "C");
+			RestoreClassicLocales();
 		}
 
 	} // namespace
