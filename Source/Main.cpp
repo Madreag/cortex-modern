@@ -4209,6 +4209,7 @@ void RunGameLoop() {
 			}
 			if (!System::IsSetToQuit()) {
 				g_TimerMan.PauseSim(false);
+				s_pacePrevActive = false;
 				if (g_ActivityMan.ActivitySetToRestart()) {
 					g_LoadingScreen.DrawLoadingSplash();
 					g_WindowMan.UploadFrame();
