@@ -637,6 +637,7 @@ void Activity::SetTeamOfPlayer(int player, int team) {
 }
 
 int Activity::PlayerOfScreen(int screen) const {
+	if (screen < 0 || screen >= c_MaxScreenCount) return Players::NoPlayer;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (m_PlayerScreen[player] == screen) {
 			return player;
