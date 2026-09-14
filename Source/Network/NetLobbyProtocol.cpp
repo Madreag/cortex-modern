@@ -728,7 +728,7 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLobbyErrorCode::BadMagic, 0, "bad lobby protocol magic");
 		}
-		const bool recordedConfig = options.allowRecordedConfigVersions && (version == 2 || version == 3) &&
+		const bool recordedConfig = options.allowRecordedConfigVersions && version >= 2 && version < c_Version &&
 		                            rawType == static_cast<uint16_t>(NetLobbyMessageType::MatchConfig);
 		if (version != c_Version && !recordedConfig) {
 			return Fail(NetLobbyErrorCode::UnsupportedVersion, 4, "unsupported lobby protocol version");
