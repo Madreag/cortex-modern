@@ -3180,6 +3180,9 @@ void RunGameLoop() {
 		while (g_TimerMan.TimeForSimUpdate()) {
 			ZoneScopedN("Simulation Update");
 
+			// The probe's sim-rate keys land before the update that reads them; SDL events only arrive per frame.
+			NetModerationGUIProbe::OnSimTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
 			g_PerformanceMan.NewPerformanceSample();
 			g_PerformanceMan.UpdateMSPSU();
