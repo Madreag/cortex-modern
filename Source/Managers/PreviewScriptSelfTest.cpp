@@ -202,7 +202,8 @@ end
 		}
 		for (int round = 0; round < 2 && passed; ++round) {
 			for (int index = 0; index < static_cast<int>(states.size()); ++index) {
-				check("preview_barrier_prepared", index, round, states[index]->RunScriptString("collectgarbage('stop'); _PreviewBarrierProbe.prepare(); _ScriptFieldsStash['preview:-7654321'] = {}", false));
+				// The stash is a lazily created per-state global; a threaded state has none until something stashes.
+				check("preview_barrier_prepared", index, round, states[index]->RunScriptString("_ScriptFieldsStash = _ScriptFieldsStash or {}; collectgarbage('stop'); _PreviewBarrierProbe.prepare(); _ScriptFieldsStash['preview:-7654321'] = {}", false));
 				// Only the registry holds this one, so nothing the walk reaches from the globals refers to it.
 				lua_State* armed = states[index]->GetLuaState();
 				lua_newtable(armed);
@@ -267,7 +268,7 @@ end
 			}
 		}
 		for (LuaStateWrapper* state: states) {
-			state->RunScriptString("debug.sethook(); if _PreviewBarrierProbe and _PreviewBarrierProbe.cleanup then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; _PreviewBarrierUpvalueSlot = nil; rawset(_G, '_ScriptFieldsStash\\0probe', nil); _ScriptFieldsStash['preview:-7654321'] = nil; _ScriptFieldsStash['preview:gc'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
+			state->RunScriptString("_ScriptFieldsStash = _ScriptFieldsStash or {}; debug.sethook(); if _PreviewBarrierProbe and _PreviewBarrierProbe.cleanup then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; _PreviewBarrierUpvalueSlot = nil; rawset(_G, '_ScriptFieldsStash\\0probe', nil); _ScriptFieldsStash['preview:-7654321'] = nil; _ScriptFieldsStash['preview:gc'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
 			lua_State* done = state->GetLuaState();
 			lua_pushnil(done);
 			lua_setfield(done, LUA_REGISTRYINDEX, "_PreviewBarrierRegistry");
