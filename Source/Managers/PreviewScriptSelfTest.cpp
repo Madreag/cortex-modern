@@ -40,9 +40,11 @@ local p = {data = {1, 2, 3, x = 4}, list = {4, 1, 3, 2}, capi = {x = 11, [1] = 1
 _PreviewBarrierProbe = p
 local priorUtil = package.loaded['jit.util']
 local priorClear = package.loaded['table.clear']
+-- Opening table.clear writes the key into the live table library, which no baseline holds.
+local priorLibClear = rawget(table, 'clear')
 local util = jit and require('jit.util')
 local clear = require('table.clear')
-p.cleanup = function() package.loaded['jit.util'] = priorUtil; package.loaded['table.clear'] = priorClear end
+p.cleanup = function() package.loaded['jit.util'] = priorUtil; package.loaded['table.clear'] = priorClear; rawset(table, 'clear', priorLibClear) end
 p.clearData = {1, 2, key = 3}
 p.namedRoot = {value = 1}
 rawset(_G, '_ScriptFieldsStash\0probe', p.namedRoot)
