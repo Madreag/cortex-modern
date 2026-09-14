@@ -115,13 +115,18 @@ def prepare_setting(runtime: Path, seconds) -> None:
         "lines": [line for line in text.splitlines() if re.match(r"[ \t]*AutosaveSeconds[ \t]*=", line)]}, indent=2) + "\n", encoding="utf-8")
 
 
-def inspect_setting(root: Path, who: str, expected: int) -> dict:
+def inspect_setting(root: Path, who: str, persisted) -> dict:
+    """A staged Settings.ini is already fully populated, so the engine never rewrites it: a None row
+    proves the cadence came from the shipped default and not from a file the harness wrote."""
     path = root / who / "runtime/Userdata/Settings.ini"
     lines = [{"source": str(path), "line": index, "raw": line, "seconds": int(match[1])}
              for index, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1)
              if (match := re.fullmatch(r"[ \t]*AutosaveSeconds[ \t]*=[ \t]*(\d+)[ \t]*", line))]
-    assert len(lines) == 1 and lines[0]["seconds"] == expected, f"persisted autosave setting differs: {lines}"
-    return {"expected_seconds": expected, "lines": lines,
+    if persisted is None:
+        assert not lines, f"the default row carries a persisted autosave setting: {lines}"
+    else:
+        assert len(lines) == 1 and lines[0]["seconds"] == persisted, f"persisted autosave setting differs: {lines}"
+    return {"persisted_seconds": persisted, "lines": lines,
             "prepared": json.loads((root / who / "prepared-settings.json").read_text())}
 
 
@@ -225,7 +230,7 @@ def main() -> int:
                         flag = records[who]["argv"].index("-net-autosave-seconds")
                         assert records[who]["argv"][flag + 1] == "0", "flag-off override is not zero"
                     expected = DEFAULT_SECONDS if arm == "default" else setting
-                    details[who]["setting"] = inspect_setting(arm_root, who, expected)
+                    details[who]["setting"] = inspect_setting(arm_root, who, setting)
                     if enabled:
                         saved_ticks = [row["tick"] for row in details[who]["captures"]]
                         assert all(b - a == expected * 60 for a, b in zip(saved_ticks, saved_ticks[1:])), saved_ticks
@@ -266,7 +271,7 @@ def main() -> int:
             details["passed"] = True
             if args.arm == "default":
                 counts = {who: {"captures": len(details[who]["captures"]), "files": len(details[who]["files"])} for who in cadence}
-                print(f"PASS {arm}: {ticks} peer ticks match; persisted_seconds={expected}; {counts}", flush=True)
+                print(f"PASS {arm}: {ticks} peer ticks match; cadence_seconds={expected} persisted={setting}; {counts}", flush=True)
             elif arm == "peer-shared":
                 print(f"PASS peer-shared: {ticks} peer ticks match; every retained checkpoint matches the approved shared-state comparer", flush=True)
             elif arm == "restore":
