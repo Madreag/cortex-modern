@@ -687,6 +687,7 @@ namespace RTE {
 		static std::unordered_set<long> s_PreviewFrozenUIDs;
 		static inline uint64_t s_PreviewGlobalsUndone = 0;
 		static inline bool s_PreviewGlobalsReported = false;
+		static inline int s_PreviewScriptStateCursor = 0;
 	};
 
 	/// RAII redirect of the C++ sim-RNG free functions and Lua math.random to one

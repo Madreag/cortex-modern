@@ -8554,6 +8554,8 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 		}
 	}
 	if (PreviewGlobalFenceEnabled()) {
+		// The shared cursor is preview-visible state too: a script the window loads takes the next state from it.
+		s_PreviewScriptStateCursor = g_LuaMan.GetScriptStateCursor();
 		// Only the states a preview runs code in: the clones script in their originals' states, and the master runs the global scripts.
 		g_LuaMan.GetMasterScriptState().CapturePreviewGlobalFence();
 		for (const MovableObject* root: roots) {
@@ -8651,6 +8653,7 @@ void LuaMan::EndPreviewScripts() {
 	// Last, so a global the drops themselves make is undone too: a preview leaves every state's globals as it found them.
 	if (PreviewGlobalFenceEnabled()) {
 		ForEachLuaState([](LuaStateWrapper& state) { s_PreviewGlobalsUndone += state.ReleasePreviewGlobalFence(); });
+		g_LuaMan.SetScriptStateCursor(s_PreviewScriptStateCursor);
 		if (s_PreviewGlobalsUndone > 0 && !s_PreviewGlobalsReported) {
 			s_PreviewGlobalsReported = true;
 			std::cout << "[preview-globals] undone=" << s_PreviewGlobalsUndone << " at the first preview that wrote one" << std::endl;
