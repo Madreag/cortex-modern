@@ -57,7 +57,6 @@ namespace RTE {
 		GUICheckbox* m_ChatNotifyCheckbox = nullptr;
 		GUIComboBox* m_ChatScopeCombo = nullptr;
 		GUIComboBox* m_ChatTextSizeCombo = nullptr;
-		GUIButton* m_MutedPlayersButton = nullptr;
 		GUILabel* m_ChatError = nullptr;
 
 		// Recovery page.
@@ -71,12 +70,9 @@ namespace RTE {
 		GUILabel* m_RecoveryError = nullptr;
 
 		// Files page.
-		GUILabel* m_AutosaveLabel = nullptr;
-		GUILabel* m_AutosaveIntervalLabel = nullptr;
 		GUILabel* m_AutosaveInfoLabel = nullptr;
 		GUITextBox* m_DiagDirBox = nullptr;
 		GUIButton* m_SaveDiagButton = nullptr;
-		GUIButton* m_ReplaysButton = nullptr;
 		GUICheckbox* m_RecordReplaysCheckbox = nullptr;
 		GUILabel* m_FilesMessage = nullptr;
 
@@ -105,18 +101,10 @@ namespace RTE {
 		/// the state-dependent buttons, and enables Apply only while edits or a failed save are pending.
 		void UpdateStatusLines();
 
-		/// Refreshes the diagnostics capture status line while a bundle request is in flight.
-		void UpdateDiagnosticsStatus();
-
 		/// Shows an inline error on the given page and switches to it.
 		void FailOnPage(Page page, const std::string& text, GUIControl* focus);
 
-		/// Fills the match status combo with the mode entries and selects the persisted mode.
 		void CreateStatusModeCombo();
-
-		/// Handles the match status combo closing; the selection is staged until Apply.
 		void OnStatusModeEvent(GUIEvent& guiEvent);
-
-		bool m_DiagWasBusy = false; //!< Tracks the diagnostics capture so its status line can report completion.
 	};
 }

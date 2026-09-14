@@ -21,7 +21,6 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <system_error>
 
 using namespace RTE;
 
@@ -159,17 +158,11 @@ SettingsMultiplayerGUI::SettingsMultiplayerGUI(GUIControlManager* parentControlM
     m_GUIControlManager(parentControlManager) {
 	m_MultiplayerSettingsBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxMultiplayerSettings"));
 
-	m_PageTabs[static_cast<int>(Page::Player)] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl("TabMpPagePlayer"));
-	m_PageTabs[static_cast<int>(Page::Chat)] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl("TabMpPageChat"));
-	m_PageTabs[static_cast<int>(Page::Recovery)] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl("TabMpPageRecovery"));
-	m_PageTabs[static_cast<int>(Page::Files)] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl("TabMpPageFiles"));
-	m_PageTabs[static_cast<int>(Page::Internet)] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl("TabMpPageInternet"));
-
-	m_PageBoxes[static_cast<int>(Page::Player)] = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxMpPagePlayer"));
-	m_PageBoxes[static_cast<int>(Page::Chat)] = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxMpPageChat"));
-	m_PageBoxes[static_cast<int>(Page::Recovery)] = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxMpPageRecovery"));
-	m_PageBoxes[static_cast<int>(Page::Files)] = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxMpPageFiles"));
-	m_PageBoxes[static_cast<int>(Page::Internet)] = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxMpPageInternet"));
+	const char* pages[] = {"Player", "Chat", "Recovery", "Files", "Internet"};
+	for (int index = 0; index < static_cast<int>(Page::Count); ++index) {
+		m_PageTabs[index] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl(std::string("TabMpPage") + pages[index]));
+		m_PageBoxes[index] = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl(std::string("CollectionBoxMpPage") + pages[index]));
+	}
 
 	m_ApplyButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonMultiplayerApply"));
 
@@ -189,7 +182,6 @@ SettingsMultiplayerGUI::SettingsMultiplayerGUI(GUIControlManager* parentControlM
 	m_ChatTextSizeCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboMpChatTextSize"));
 	m_ChatTextSizeCombo->AddItem("Small");
 	m_ChatTextSizeCombo->AddItem("Large");
-	m_MutedPlayersButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonMpMutedPlayers"));
 	m_ChatError = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelMpChatError"));
 
 	m_AutoReconnectCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxMpAutoReconnect"));
@@ -201,12 +193,9 @@ SettingsMultiplayerGUI::SettingsMultiplayerGUI(GUIControlManager* parentControlM
 	m_CancelRecoveryButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonMpCancelRecovery"));
 	m_RecoveryError = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelMpRecoveryError"));
 
-	m_AutosaveLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelMpAutosave"));
-	m_AutosaveIntervalLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelMpAutosaveInterval"));
 	m_AutosaveInfoLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelMpAutosaveInfo"));
 	m_DiagDirBox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextMpDiagDir"));
 	m_SaveDiagButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonMpSaveDiagnostics"));
-	m_ReplaysButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonMpReplays"));
 	m_RecordReplaysCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxMpRecordReplays"));
 	m_FilesMessage = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelMpFilesMessage"));
 
@@ -301,12 +290,8 @@ bool SettingsMultiplayerGUI::DraftMatchesSettings() const {
 
 void SettingsMultiplayerGUI::FailOnPage(Page page, const std::string& text, GUIControl* focus) {
 	SetActivePage(page);
-	GUILabel* error = m_PlayerError;
-	if (page == Page::Chat) error = m_ChatError;
-	else if (page == Page::Recovery) error = m_RecoveryError;
-	else if (page == Page::Files) error = m_FilesMessage;
-	else if (page == Page::Internet) error = m_InternetError;
-	error->SetText(text);
+	GUILabel* errors[] = {m_PlayerError, m_ChatError, m_RecoveryError, m_FilesMessage, m_InternetError};
+	errors[static_cast<int>(page)]->SetText(text);
 	if (focus && focus->GetPanel()) m_GUIControlManager->GetManager()->SetFocus(focus->GetPanel());
 }
 
@@ -359,21 +344,6 @@ void SettingsMultiplayerGUI::ApplyDraft() {
 	}
 }
 
-void SettingsMultiplayerGUI::UpdateDiagnosticsStatus() {
-	if (TelemetryBundle::IsBusy()) {
-		m_FilesMessage->SetText("Saving diagnostics…");
-		m_DiagWasBusy = true;
-		return;
-	}
-	const std::string latest = latestFileName(effectiveTelemetryDirectory(), ".zip");
-	if (m_DiagWasBusy) {
-		m_FilesMessage->SetText(latest.empty() ? "Diagnostics saved." : "Diagnostics saved: " + latest);
-		m_DiagWasBusy = false;
-	} else {
-		m_FilesMessage->SetText(latest.empty() ? "No diagnostics saved yet." : "Latest: " + latest);
-	}
-}
-
 void SettingsMultiplayerGUI::UpdateStatusLines() {
 	NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
 	m_LastHostLabel->SetText(reconnect.GetOfferAddress().empty() ? "—" : reconnect.GetOfferAddress());
@@ -394,7 +364,12 @@ void SettingsMultiplayerGUI::UpdateStatusLines() {
 	const std::string latestSave = latestFileName(autosavesDirectory(), ".ccsave");
 	m_AutosaveInfoLabel->SetText("Keep 3 / Latest: " + (latestSave.empty() ? "—" : latestSave));
 
-	UpdateDiagnosticsStatus();
+	if (TelemetryBundle::IsBusy()) {
+		m_FilesMessage->SetText("Saving diagnostics…");
+	} else {
+		const std::string latest = latestFileName(effectiveTelemetryDirectory(), ".zip");
+		m_FilesMessage->SetText(latest.empty() ? "No diagnostics saved yet." : "Latest: " + latest);
+	}
 	m_DirStatusLabel->SetText(g_SettingsMan.GetSessionDirectoryUrl().empty() ? "Not configured" : "Configured");
 	m_SaveDiagButton->SetEnabled(!TelemetryBundle::IsBusy());
 	m_ApplyButton->SetEnabled(m_PendingSave || !DraftMatchesSettings());
