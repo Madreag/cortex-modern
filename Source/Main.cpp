@@ -4215,6 +4215,8 @@ void RunGameLoop() {
 				g_TimerMan.PauseSim(false);
 				s_pacePrevActive = false;
 				if (g_ActivityMan.ActivitySetToRestart()) {
+					s_netReplayReturnPending = false;
+					s_netReplayReturnStatus.clear();
 					g_LoadingScreen.DrawLoadingSplash();
 					g_WindowMan.UploadFrame();
 					if (!g_ActivityMan.RestartActivity() && !HandleFailedActivityLaunch()) return;
