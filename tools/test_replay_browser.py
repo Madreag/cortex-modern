@@ -22,13 +22,22 @@ FIXTURE = Path("D:/Projects/stage2_p4/fixtures/pickup_fire.ccreplay")
 PLAYBACK = re.compile(r"\[net-replay\] playback finished[^\n]*ticks=(\d+)[^\n]*outcome=completed[^\n]*frames=(\d+)[^\n]*end_marker=1")
 
 
-def menu_script(date):
+def duration_agreement(row_text, summary):
+    ticks = summary.get("running_ticks") if summary else None
+    seconds = ticks // 60 if isinstance(ticks, int) else None
+    expected = f"{seconds // 60:02d}:{seconds % 60:02d}" if seconds is not None else None
+    actual = row_text.rsplit(" | ", 1)[-1]
+    return {"pass": bool(expected) and actual == expected == summary.get("duration"),
+            "row": actual, "summary": expected, "running_ticks": ticks}
+
+
+def menu_script(date, duration=None):
     script = ("wait 40\nactivate ButtonMainToMultiplayer\nwait 12\n"
               "assert_screen MultiplayerScreen\nassert_control ButtonMultiplayerReplays\n"
               "activate ButtonMultiplayerReplays\nwait 10\nassert_substate ReplayBrowser\n"
               "assert_control ListReplays\nassert_control LabelReplaySelected\n")
     for index, name in enumerate(NAMES):
-        for expected in (name, date, "P4 Alpha Duel / Grasslands", "2 peers"):
+        for expected in (name, date, "P4 Alpha Duel / Grasslands", "2 peers", *(("| " + duration,) if duration else ())):
             script += f"assert_label LabelReplayRow{index} {expected}\n"
     script += ("assert_label LabelReplaySelected 01-first.ccreplay\nscreenshot replays_list\n"
                "activate LabelReplayRow1\nwait 10\nassert_label LabelReplaySelected 02-second.ccreplay\n"
@@ -122,14 +131,15 @@ def first_row_ink(repo, path, text, geometry):
                            max(x for x, _, _ in expected), max(y for _, y, _ in expected)]}
 
 
-def run_size(repo, root, size, fixture, expected):
+def run_size(repo, root, size, fixture, expected, summary=None):
     root.mkdir(parents=True, exist_ok=False)
     checks, details = {}, {}
     before = pin(repo, expected)
     fixture_hash = sha256(fixture)
     date = datetime.fromtimestamp(fixture.stat().st_mtime, timezone(timedelta(hours=-7))).strftime("%Y-%m-%d %H:%M MST")
     script = root / "browser.txt"
-    script.write_text(menu_script(date), encoding="utf-8")
+    expected_duration = duration_agreement("", summary)["summary"] if summary else None
+    script.write_text(menu_script(date, expected_duration), encoding="utf-8")
     run = make_run(repo, ["-menu-script", script, "-num-lua-states", 4], root / "browser", 240,
                    env={"CCCP_HEADLESS": "1"})
     try:
@@ -147,6 +157,10 @@ def run_size(repo, root, size, fixture, expected):
         failures = re.findall(r"^.*(?:FAILED|FAIL|EXCEPTION_|RTE Assert|RTE Abort|Runtime Error).*$", log, re.M)
         details["failures"] = failures
         details["labels"] = labels
+        if summary is not None:
+            details["duration_agreement"] = [duration_agreement(text, summary) for name, text, _ in labels
+                                             if name in ("LabelReplayRow0", "LabelReplayRow1")]
+            checks["duration_matches_summary"] = bool(details["duration_agreement"]) and all(row["pass"] for row in details["duration_agreement"])
         checks["process"] = record["exit_code"] == 0 and not record["timed_out"]
         checks["desktop"] = record["input_desktop_before"] == record["input_desktop_after"]
         checks["exe"] = record["exe_sha256"] == expected
@@ -188,13 +202,18 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--exe-sha256", required=True)
     parser.add_argument("--fixture", type=Path, default=FIXTURE)
+    parser.add_argument("--summary", type=Path, help="report JSON from the same match as --fixture; checks row duration against its running ticks")
     args = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("family lock exists; no driver may run")
     os.environ["CCCP_HEADLESS"] = "1"
     root = args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    results = {f"{w}x{h}": run_size(args.repo.resolve(), root / f"{w}x{h}", (w, h), args.fixture, args.exe_sha256.lower())
+    report = json.loads(args.summary.read_text(encoding="utf-8")) if args.summary else None
+    summary = report.get("last_match", report.get("service", {}).get("last_match")) if report else None
+    if args.summary and not summary:
+        parser.error("--summary must contain last_match from the recorded match")
+    results = {f"{w}x{h}": run_size(args.repo.resolve(), root / f"{w}x{h}", (w, h), args.fixture, args.exe_sha256.lower(), summary)
                for w, h in SIZES}
     result = {"pass": all(row["pass"] for row in results.values()), "runs": results,
               "driver_sha256": sha256(__file__), "fixture_sha256": sha256(args.fixture)}
