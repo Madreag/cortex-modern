@@ -6,11 +6,16 @@ and the long diagnostic must stay reachable through the label's overflow scroll.
         --out D:/mx/ui-viewport-complete-20260913/detector --port 47871 \
         --exe-sha256 <exe hash>
 
-One phase, one host + one refused joiner on loopback. The joiner stages the
-shared Base1.rte plus one 'ß'*70 + '.rte' directory (the unchanged encoded-name
-fixture; the wire name arrives as 64 x 0xDF). The joiner's landing status label
-holds the long 'Remove: <name> (module_manifest_hash: ...)' line, the host's
-lobby error label holds the matching sentence.
+Two phases, each one host + one refused joiner on loopback:
+
+  viewport  the joiner stages Base1.rte plus 'ß'*70 + '.rte' (the unchanged
+            encoded-name fixture; the wire name arrives as 64 x 0xDF), then
+            presses Back via 'post_command ButtonBackToMain' - the same
+            GUIEvent::Command path a click takes - and must reach MainScreen.
+  tall      the joiner's mod set fills Install/Remove/Update so the status
+            wraps past the status room in the minimum-width panel; the timed
+            frames must show the label band moving while every pixel outside
+            it stays put. Skipped by --no-scroll-input, which must fail closed.
 
 Geometry/visibility assertions are pixel checks on the menu-script screenshots
 (no control-rect readback seam exists; documented, not invented):
@@ -49,6 +54,15 @@ LABEL = "LabelMultiplayerLandingStatus"
 PREFIX = "This host's mods do not match yours."
 BASE_NAME = "Base1.rte"
 SZ70_NAME = "ß" * 70 + ".rte"
+# Install+Remove+Update groups each list up to 6 names; filling all three makes
+# the status wrap past the 153px room at 640x360, so the label's vertical
+# overflow scroll has to engage. Updates are the same dirs at Version 1 vs 2.
+TALL_JOINER_MODS = [(BASE_NAME, "Base1", 1)] + \
+    [("RemovedModule%02d.rte" % i, "Removed%02d" % i, 1) for i in range(6)] + \
+    [("UpdatedModule%02d.rte" % i, "Updated%02d" % i, 1) for i in range(6)]
+TALL_HOST_MODS = [(BASE_NAME, "Base1", 1)] + \
+    [("InstalledModule%02d.rte" % i, "Installed%02d" % i, 1) for i in range(6)] + \
+    [("UpdatedModule%02d.rte" % i, "Updated%02d" % i, 2) for i in range(6)]
 PANEL_GRAY = (59, 65, 83)
 BUTTON_BLUE = (108, 118, 168)
 GOLD = (170, 120, 0)
@@ -114,13 +128,14 @@ def resolve_tools(repo):
     return run_sim_test.make_run, test_lobby_lifecycle.wait_for_log
 
 
-def stage_module(run, dir_name, friendly, game_ver):
+def stage_module(run, dir_name, friendly, game_ver, module_version=1):
     module_dir = run.cwd / "Mods" / dir_name
     index_path = module_dir / "Index.ini"
     if len(str(index_path)) > 259:
         raise RuntimeError("path too long before staging: " + str(index_path))
     module_dir.mkdir()
-    ini = f"DataModule\n\tModuleName = {friendly}\n\tSupportedGameVersion = {game_ver}\n"
+    ini = (f"DataModule\n\tModuleName = {friendly}\n\tSupportedGameVersion = {game_ver}\n"
+           f"\tVersion = {module_version}\n")
     (module_dir / "Index.ini").write_text(ini, encoding="utf-8")
     return module_dir
 
@@ -288,6 +303,39 @@ def font_cell_width(png_path, char_index):
     return 0
 
 
+def outside_band_diff(img_a, img_b, excl):
+    """Fraction of changed pixels over the whole frame, skipping the exclusion
+    rectangle (x0, x1, y0, y1). Scrolling inside the label band must leave every
+    other pixel untouched."""
+    x0, x1, y0, y1 = excl
+    pa, pb = img_a.load(), img_b.load()
+    width, height = img_a.size
+    total = diff = 0
+    for y in range(height):
+        for x in range(width):
+            if x0 <= x < x1 and y0 <= y < y1:
+                continue
+            total += 1
+            a, b = pa[x, y][:3], pb[x, y][:3]
+            if abs(a[0] - b[0]) > 24 or abs(a[1] - b[1]) > 24 or abs(a[2] - b[2]) > 24:
+                diff += 1
+    return diff / max(1, total)
+
+
+def wrapped_height_px(text, inner_px, cell_w):
+    """Greedy word-wrap replication of GUIFont::DrawAligned: words break on
+    spaces only; a word that does not fit the remaining line starts a new one.
+    Returns the predicted text height in pixels (FontLarge rows are 15px)."""
+    lines, cur = 1, 0
+    for word in text.split(" "):
+        width = sum(cell_w(b) for b in word.encode("utf-8"))
+        if cur and cur + 1 + width > inner_px:
+            lines += 1
+            cur = 0
+        cur += width if cur == 0 else 1 + width
+    return lines * 15
+
+
 def button_extent(px, width, y0, y1):
     """The Back button's horizontal extent: the first contiguous run of the
     button frame blue between 60 and 220px long inside the y-band."""
@@ -317,6 +365,8 @@ def main():
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=360)
     parser.add_argument("--exe-sha256", required=True)
+    parser.add_argument("--no-scroll-input", action="store_true",
+                        help="omit the scrollwide/scrolltall joiner inputs; the scroll checks must then fail closed")
     options = parser.parse_args()
     if not (320 <= options.width <= 7680 and 240 <= options.height <= 4320):
         parser.error("dimensions out of range")
@@ -340,7 +390,7 @@ def main():
     runs, records = {}, {}
     phase = "viewport"
 
-    def start(name, host, port, suffix, modules):
+    def start(name, host, port, suffix, modules, phase="viewport"):
         require_pin(repo, options.exe_sha256, before, checks, f"{name}_prelaunch")
         script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
         if host:
@@ -354,7 +404,8 @@ def main():
         path.write_text(script + suffix, encoding="utf-8")
         run = make_run(repo, ["-menu-script", path, "-num-lua-states", 4], root / phase / name, 200)
         runs[name] = run
-        staged = [str(stage_module(run, d, f, version)) for d, f in modules]
+        staged = [str(stage_module(run, m[0], m[1], version, m[2] if len(m) > 2 else 1))
+                  for m in modules]
         settings = set_resolution(run, options.width, options.height)
         details[f"staged_{name.lower()}"] = staged
         details[f"settings_{name.lower()}"] = settings
@@ -369,14 +420,60 @@ def main():
                        "goto_main\nassert_screen MainScreen\nexit\n")
         host = start("Host", True, options.port, host_script, [(BASE_NAME, "Base1")])
         wait_for_log(host, "activate ButtonMultiplayerCreate ok=1")
-        joiner_script = (f"wait_state Failed\nwait 5\nassert_substate Landing\nassert_label {LABEL} yours\n"
-                         "dump_lobby\nscreenshot viewport-t0\nwait_ms 9000\nscreenshot viewport-t1\n"
-                         "wait_ms 9000\nscreenshot viewport-t2\nwait_ms 9000\nscreenshot viewport-t3\n"
-                         "goto_main\nassert_screen MainScreen\nexit\n")
+        # post_command raises the button's Command event after the GUI update,
+        # the same route a real click takes through HandleInputEvents. The
+        # timed t1-t3 frames are the scripted scroll input; --no-scroll-input
+        # drops them so the scroll checks below have nothing to measure.
+        if options.no_scroll_input:
+            joiner_script = (f"wait_state Failed\nwait 5\nassert_substate Landing\nassert_label {LABEL} yours\n"
+                             "dump_lobby\nscreenshot viewport-t0\n"
+                             "post_command ButtonBackToMain\nwait 12\nassert_screen MainScreen\nexit\n")
+        else:
+            joiner_script = (f"wait_state Failed\nwait 5\nassert_substate Landing\nassert_label {LABEL} yours\n"
+                             "dump_lobby\nscreenshot viewport-t0\nwait_ms 9000\nscreenshot viewport-t1\n"
+                             "wait_ms 9000\nscreenshot viewport-t2\nwait_ms 9000\nscreenshot viewport-t3\n"
+                             "post_command ButtonBackToMain\nwait 12\nassert_screen MainScreen\nexit\n")
         start("Joiner", False, options.port, joiner_script,
               [(BASE_NAME, "Base1"), (SZ70_NAME, "Sz70")])
         records["Joiner"] = runs["Joiner"].finish()
         records["Host"] = runs["Host"].finish()
+
+        # --- Phase "tall": many short names wrap the "Remove:" list past the
+        # status room in the 300px panel, so the label's vertical overflow
+        # scroll must move the band. Skipped entirely when --no-scroll-input
+        # removes the scripted input; the checks below then fail closed.
+        tall_shots = []
+        tall_label = None
+        if not options.no_scroll_input:
+            start("TallHost", True, options.port + 1,
+                  "wait_error could not join\nwait_ms 3000\ngoto_main\nassert_screen MainScreen\nexit\n",
+                  [(d, f, v) for d, f, v in TALL_HOST_MODS], phase="tall")
+            wait_for_log(runs["TallHost"], "activate ButtonMultiplayerCreate ok=1")
+            tall_script = ("wait_state Failed\nwait 5\nassert_substate Landing\n"
+                           "assert_label %s yours\nscreenshot tall-t0\nwait_ms 9000\n"
+                           "screenshot tall-t1\nwait_ms 9000\nscreenshot tall-t2\n"
+                           "post_command ButtonBackToMain\nwait 12\n"
+                           "assert_screen MainScreen\nexit\n" % LABEL)
+            start("TallJoiner", False, options.port + 1, tall_script,
+                  [(d, f, v) for d, f, v in TALL_JOINER_MODS], phase="tall")
+            records["TallJoiner"] = runs["TallJoiner"].finish()
+            records["TallHost"] = runs["TallHost"].finish()
+            tall_raw = (root / "tall" / "TallJoiner" / "stdout.log").read_bytes()
+            tall_log = tall_raw.decode("utf-8", errors="replace")
+            m = re.search(r'assert_label ' + LABEL + ' "yours" text="(.*?)" (?:PASS|FAIL)', tall_log, re.S)
+            tall_label = m.group(1) if m else None
+            tall_shots = sorted((root / "tall" / "TallJoiner" / "runtime/ScreenShots").glob("tall-t*_*.png"))
+            details["tall_screenshots"] = [str(p) for p in tall_shots]
+            checks["tall_landed"] = "assert_substate expected=Landing actual=Landing PASS" in tall_log
+            checks["tall_shot_count"] = len(tall_shots) == 3
+            checks["tall_back_command_posted"] = "post_command ButtonBackToMain ok=1" in tall_log
+            checks["tall_returned_to_main"] = "assert_screen expected=MainScreen actual=MainScreen PASS" in tall_log
+        else:
+            details["tall_scroll_input"] = "omitted by --no-scroll-input"
+            for key in ("tall_landed", "tall_shot_count", "tall_back_command_posted",
+                        "tall_returned_to_main"):
+                checks[key] = False
+
 
         logs, raw = {}, {}
         for name in ("Host", "Joiner"):
@@ -406,6 +503,7 @@ def main():
         checks["host_stayed_in_lobby"] = "assert_substate expected=Lobby actual=Lobby PASS" in logs["Host"]
         checks["host_returned_to_main"] = "assert_screen expected=MainScreen actual=MainScreen PASS" in logs["Host"]
         checks["joiner_returned_to_main"] = "assert_screen expected=MainScreen actual=MainScreen PASS" in logs["Joiner"]
+        checks["back_command_posted"] = "post_command ButtonBackToMain ok=1" in logs["Joiner"]
 
         from PIL import Image
         joiner_shots = sorted((root / phase / "Joiner" / "runtime/ScreenShots").glob("viewport-t*_*.png"))
@@ -465,7 +563,10 @@ def main():
                 checks["back_button_found"] = button is not None and button[2] - button[1] >= 60
                 if button:
                     checks["back_button_inside_viewport"] = button[1] >= 3 and button[2] <= width - 4
-                    checks["back_button_within_drawn_container"] = button[1] >= left - 2 and button[2] <= right + 2
+                    # Horizontal containment only: the button's columns sit inside the
+                    # panel's drawn columns. Vertical order is proven separately below.
+                    checks["back_button_within_panel_columns"] = button[1] >= left - 2 and button[2] <= right + 2
+                    checks["back_button_rows_below_panel"] = bottom is None or button[0] > bottom
 
                 # The wire name is 64 x 0xDF; the label picks a skin font whose
                 # atlas can draw it, so the token is one near-contiguous ink run.
@@ -503,11 +604,51 @@ def main():
                                for img in images[1:]]
                 details["scroll_right_diffs"] = right_diffs
                 checks["scroll_tail_reached"] = (not scroll_expected) or max(right_diffs, default=0) > 0.08
+                if options.no_scroll_input:
+                    checks["scroll_motion"] = checks["scroll_tail_reached"] = False
                 checks["name_ink_within_panel"] = bool(name_run) and name_run[2] >= left - 2 and name_run[3] <= right + 2
                 checks["name_token_fully_visible"] = scroll_expected or (bool(name_run) and name_run[0] >= token_small - 8)
 
             details["frame_shas"] = [sha256_file(p)[:16] for p in joiner_shots]
             checks["frames_not_identical"] = len(set(details["frame_shas"])) >= 2
+
+        if not options.no_scroll_input and tall_shots:
+            from PIL import Image as _Image
+            tall_imgs = [_Image.open(p).convert("RGB") for p in tall_shots]
+            tpx = tall_imgs[0].load()
+            tw, th = tall_imgs[0].size
+            textent = panel_extent(tpx, tw, th)
+            details["tall_panel_extent"] = textent
+            if textent:
+                trow, tleft, tright, _ = textent
+                ttop, tbottom = panel_vertical(tpx, tw, th)
+                # The status label is the panel minus its 24px horizontal inset;
+                # statusRoom = ResY - (Back 20+5) - labelRelY 168 - bottomPad 14.
+                inner = (tright - tleft + 1) - 24
+                room = th - 25 - 168 - 14
+                skin_dir = repo / "Data/Base.rte/GUIs/Skins/Menus"
+                cell = lambda b: font_cell_width(skin_dir / "FontLarge.png", b)
+                predicted_h = wrapped_height_px(tall_label or "", inner, cell)
+                scroll_expected = predicted_h + 4 > room
+                details["tall_scroll"] = {"inner": inner, "room": room,
+                                        "predicted_text_px": predicted_h,
+                                        "scroll_expected": scroll_expected}
+                ly0, ly1 = (ttop or 0) + 120, (tbottom or th - 1) - 2
+                band = (max(0, tleft - 2), min(tw, tright + 3), ly0, ly1)
+                td = [band_diff(tall_imgs[0], img, *band)
+                      for img in tall_imgs[1:]]
+                tout = [outside_band_diff(tall_imgs[0], img, band) for img in tall_imgs[1:]]
+                details["tall_band_diffs"] = td
+                details["tall_outside_diffs"] = tout
+                # The 512-byte wire cap bounds the status to ~14 wrapped lines:
+                # it overflows the ~153px room at 640x360 but fits at 960x540,
+                # so motion is only demanded when the geometry predicts scroll.
+                checks["tall_scroll_motion"] = (not scroll_expected) or sum(1 for d in td if d > 0.03) >= 2
+                checks["tall_scroll_confined"] = max(tout, default=1.0) < 0.01
+            else:
+                checks["tall_scroll_motion"] = checks["tall_scroll_confined"] = False
+        elif options.no_scroll_input:
+            checks["tall_scroll_motion"] = checks["tall_scroll_confined"] = False
 
         result["pin_after"] = require_pin(repo, options.exe_sha256, before, checks, "final")
         result.update({"checks": checks, "details": details})
