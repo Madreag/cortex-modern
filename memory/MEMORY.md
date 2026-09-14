@@ -11,3 +11,4 @@
 - [Worker test-only production code](worker-test-only-production-code.md) — Grok lanes add branches only the test reaches and inverted FAIL messages; read for both
 - [Arizona local time only](arizona-local-time-only.md) — every stamp in MST (UTC-7, no DST), never UTC; read the clock first
 - [Mac job uploads only run.zsh](mac-job-uploads-only-run-zsh.md) — scp prompt/policy/rules/build.zsh to the Mac lane first; clear stale exit.txt; local cli_runs dir must not pre-exist
+- [Mac TCC prompts pre-granted](mac-tcc-prompts-pregranted.md) — approval dialogs = TCC for the agent binaries; user db writable over ssh (mac_tcc_grant.py), system db (FDA) is not; never send the user to System Settings
