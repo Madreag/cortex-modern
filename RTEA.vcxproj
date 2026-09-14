@@ -883,6 +883,7 @@
     <ClInclude Include="Source\Menus\SettingsInputMappingGUI.h" />
     <ClInclude Include="Source\Menus\SettingsInputMappingWizardGUI.h" />
     <ClInclude Include="Source\Menus\SettingsMiscGUI.h" />
+    <ClInclude Include="Source\Menus\SettingsMultiplayerGUI.h" />
     <ClInclude Include="Source\Menus\SettingsVideoGUI.h" />
     <ClInclude Include="Source\Menus\TitleScreen.h" />
     <ClInclude Include="Resources\Credits.h" />
@@ -1211,6 +1212,7 @@
     <ClCompile Include="Source\Menus\SettingsInputMappingGUI.cpp" />
     <ClCompile Include="Source\Menus\SettingsInputMappingWizardGUI.cpp" />
     <ClCompile Include="Source\Menus\SettingsMiscGUI.cpp" />
+    <ClCompile Include="Source\Menus\SettingsMultiplayerGUI.cpp" />
     <ClCompile Include="Source\Menus\SettingsVideoGUI.cpp" />
     <ClCompile Include="Source\Menus\TitleScreen.cpp" />
     <ClCompile Include="Source\Menus\InventoryMenuGUI.cpp" />

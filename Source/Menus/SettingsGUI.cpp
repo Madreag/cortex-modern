@@ -50,12 +50,16 @@ SettingsGUI::SettingsGUI(AllegroScreen* guiScreen, GUIInputWrapper* guiInput, bo
 	m_SettingsMenuTabs[SettingsMenuScreen::InputSettingsMenu] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl("TabInputSettings"));
 	m_SettingsMenuTabs[SettingsMenuScreen::GameplaySettingsMenu] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl("TabGameplaySettings"));
 	m_SettingsMenuTabs[SettingsMenuScreen::MiscSettingsMenu] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl("TabMiscSettings"));
+	m_SettingsMenuTabs[SettingsMenuScreen::MultiplayerSettingsMenu] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl("TabMultiplayerSettings"));
+
+	m_MultiplayerApplyButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonMultiplayerApply"));
 
 	m_VideoSettingsMenu = std::make_unique<SettingsVideoGUI>(m_GUIControlManager.get());
 	m_AudioSettingsMenu = std::make_unique<SettingsAudioGUI>(m_GUIControlManager.get());
 	m_InputSettingsMenu = std::make_unique<SettingsInputGUI>(m_GUIControlManager.get());
 	m_GameplaySettingsMenu = std::make_unique<SettingsGameplayGUI>(m_GUIControlManager.get());
 	m_MiscSettingsMenu = std::make_unique<SettingsMiscGUI>(m_GUIControlManager.get());
+	m_MultiplayerSettingsMenu = std::make_unique<SettingsMultiplayerGUI>(m_GUIControlManager.get());
 
 	if (createForPauseMenu) {
 		m_SettingsTabberBox->SetPositionAbs((rootBox->GetWidth() - m_SettingsTabberBox->GetWidth()) / 2, (rootBox->GetHeight() - m_SettingsTabberBox->GetHeight() - 30) / 2);
@@ -65,6 +69,7 @@ SettingsGUI::SettingsGUI(AllegroScreen* guiScreen, GUIInputWrapper* guiInput, bo
 	} else {
 		SetActiveSettingsMenuScreen(SettingsMenuScreen::VideoSettingsMenu, false);
 	}
+	m_MultiplayerApplyButton->SetPositionAbs(m_BackToMainButton->GetXPos() - m_MultiplayerApplyButton->GetWidth() - 8, m_BackToMainButton->GetYPos());
 	m_SettingsMenuTabs[m_ActiveSettingsMenuScreen]->SetCheck(true);
 }
 
@@ -113,6 +118,8 @@ void SettingsGUI::SetActiveSettingsMenuScreen(SettingsMenuScreen activeMenu, boo
 	m_InputSettingsMenu->SetEnabled(false);
 	m_GameplaySettingsMenu->SetEnabled(false);
 	m_MiscSettingsMenu->SetEnabled(false);
+	m_MultiplayerSettingsMenu->SetEnabled(false);
+	m_MultiplayerApplyButton->SetVisible(false);
 
 	switch (activeMenu) {
 		case SettingsMenuScreen::VideoSettingsMenu:
@@ -129,6 +136,10 @@ void SettingsGUI::SetActiveSettingsMenuScreen(SettingsMenuScreen activeMenu, boo
 			break;
 		case SettingsMenuScreen::MiscSettingsMenu:
 			m_MiscSettingsMenu->SetEnabled(true);
+			break;
+		case SettingsMenuScreen::MultiplayerSettingsMenu:
+			m_MultiplayerSettingsMenu->SetEnabled(true);
+			m_MultiplayerApplyButton->SetVisible(true);
 			break;
 		default:
 			RTEAbort("Invalid settings menu passed to SettingsGUI::SetActiveSettingsMenuScreen!");
@@ -169,6 +180,8 @@ bool SettingsGUI::HandleInputEvents() {
 					SetActiveSettingsMenuScreen(SettingsMenuScreen::GameplaySettingsMenu);
 				} else if (guiEvent.GetControl() == m_SettingsMenuTabs[SettingsMenuScreen::MiscSettingsMenu]) {
 					SetActiveSettingsMenuScreen(SettingsMenuScreen::MiscSettingsMenu);
+				} else if (guiEvent.GetControl() == m_SettingsMenuTabs[SettingsMenuScreen::MultiplayerSettingsMenu]) {
+					SetActiveSettingsMenuScreen(SettingsMenuScreen::MultiplayerSettingsMenu);
 				}
 			}
 		}
@@ -187,6 +200,9 @@ bool SettingsGUI::HandleInputEvents() {
 				break;
 			case SettingsMenuScreen::MiscSettingsMenu:
 				m_MiscSettingsMenu->HandleInputEvents(guiEvent);
+				break;
+			case SettingsMenuScreen::MultiplayerSettingsMenu:
+				m_MultiplayerSettingsMenu->HandleInputEvents(guiEvent);
 				break;
 			default:
 				RTEAbort("Trying to handle input events for an invalid settings menu in SettingsGUI::HandleInputEvents!");
@@ -348,8 +364,14 @@ namespace RTE::MenuAutomation {
 					auto* panel = item->GetPanel();
 					auto* parent = dynamic_cast<GUIControl*>(panel->GetParentPanel());
 					std::string text; Text(item, text);
-					result["controls"].push_back({{"name", item->GetName()}, {"rect", Rectangle(panel)}, {"parent", parent ? parent->GetName() : ""},
-						{"parent_rect", Rectangle(panel->GetParentPanel())}, {"text", text}, {"enabled", Enabled(item)}, {"visible", true}, {"focus", panel->HasFocus()}});
+					Json entry = {{"name", item->GetName()}, {"rect", Rectangle(panel)}, {"parent", parent ? parent->GetName() : ""},
+						{"parent_rect", Rectangle(panel->GetParentPanel())}, {"text", text}, {"enabled", Enabled(item)}, {"visible", true}, {"focus", panel->HasFocus()}};
+					if (auto* box = dynamic_cast<GUICheckbox*>(item)) {
+						entry["checked"] = box->GetCheck() != GUICheckbox::Unchecked;
+					} else if (auto* tab = dynamic_cast<GUITab*>(item)) {
+						entry["checked"] = tab->GetCheck();
+					}
+					result["controls"].push_back(entry);
 				}
 				std::ofstream output(path.string() + ".json");
 				output << result.dump(2) << '\n';

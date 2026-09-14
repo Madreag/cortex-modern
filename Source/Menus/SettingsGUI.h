@@ -5,6 +5,7 @@
 #include "SettingsInputGUI.h"
 #include "SettingsGameplayGUI.h"
 #include "SettingsMiscGUI.h"
+#include "SettingsMultiplayerGUI.h"
 
 #include <array>
 #include <memory>
@@ -72,6 +73,7 @@ namespace RTE {
 			InputSettingsMenu,
 			GameplaySettingsMenu,
 			MiscSettingsMenu,
+			MultiplayerSettingsMenu,
 			SettingsMenuCount
 		};
 
@@ -84,10 +86,12 @@ namespace RTE {
 		std::unique_ptr<SettingsInputGUI> m_InputSettingsMenu; //!< The input settings sub-menu.
 		std::unique_ptr<SettingsGameplayGUI> m_GameplaySettingsMenu; //!< The gameplay settings sub-menu.
 		std::unique_ptr<SettingsMiscGUI> m_MiscSettingsMenu; //!< The misc settings sub-menu.
+		std::unique_ptr<SettingsMultiplayerGUI> m_MultiplayerSettingsMenu; //!< The multiplayer settings sub-menu.
 
 		/// GUI elements that compose the settings menu screen.
 		GUICollectionBox* m_SettingsTabberBox;
 		GUIButton* m_BackToMainButton;
+		GUIButton* m_MultiplayerApplyButton; //!< Applies the staged multiplayer settings; shown only while the multiplayer tab is active.
 		std::array<GUITab*, SettingsMenuScreen::SettingsMenuCount> m_SettingsMenuTabs;
 
 #pragma region Settings Menu Handling
