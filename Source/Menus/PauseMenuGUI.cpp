@@ -14,7 +14,6 @@
 
 #include "NetLockstep.h"
 #include "NetMatchService.h"
-#include "NetReconnectUx.h"
 #include "ScenarioRunner.h"
 
 #include "GUI.h"
@@ -255,9 +254,10 @@ void PauseMenuGUI::UpdateMatchPauseRow(bool force) {
 
 std::string PauseMenuGUI::LeaveConsequenceText() const {
 	if (g_NetMatchService.IsHost()) {
-		return "Leave the match?\nThe match ends for everyone unless a peer takes over.";
+		return "Leave the match?\nThe match ends for everyone.";
 	}
-	return "Leave the match?\nYour seat is held for reclaim for " + std::to_string(NetSeatPresence::HoldSeconds(NetLockstepCoordinator::c_ReclaimHoldFrames)) + " seconds.";
+	// An announced leave holds nothing: the drop window is for peers that vanish, not for this one.
+	return "Leave the match?\nThe others play on; your units fall to a teammate or to the AI. Your seat cannot be reclaimed.";
 }
 
 void PauseMenuGUI::ShowLeaveConfirm(bool show) {
