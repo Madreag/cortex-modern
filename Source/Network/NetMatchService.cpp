@@ -2073,6 +2073,11 @@ static std::string ResyncSaveName() {
 			}
 			roster = adopted;
 		}
+		json rosterPlayers = json::array();
+		for (const NetMatchPlayerSlot& slot : roster.players) {
+			rosterPlayers.push_back({{"peer_id", static_cast<int>(slot.peerId)}, {"team", static_cast<int>(slot.team)},
+			                         {"cpu", slot.cpu}, {"display_name", slot.displayName}});
+		}
 		json report{
 			{"pending_lobby_events", m_PendingLobbyEvents.size()},
 			{"pending_lobby_overflow", m_PendingLobbyOverflow},
@@ -2087,7 +2092,8 @@ static std::string ResyncSaveName() {
 			{"dedicated", dedicated},
 			{"human_seats", humanSeats},
 			// The seated roster, CPU flags and all, so a gate reads who plays from the report alone.
-			{"match_config", roster.players.empty() ? json::object() : json::parse(NetMatchConfigUtil::BuildReportJson(roster))},
+			{"match_config_hash", roster.players.empty() ? std::string() : NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(roster))},
+			{"players", std::move(rosterPlayers)},
 		};
 		json reconnect{
 			{"admission_enabled", s_AdmissionEnabled},
@@ -2309,7 +2315,9 @@ static std::string ResyncSaveName() {
 				  {"stats", {{"fenced_disconnects", stats.fencedDisconnects}, {"fenced_packets", stats.fencedPackets}}}}},
 			};
 		}
-		return report.dump();
+		// A remote display name rides the roster and is only checked for control characters, so a
+		// strict dump would throw on its first invalid byte.
+		return report.dump(-1, ' ', false, json::error_handler_t::replace);
 	}
 
 	uint8_t NetMatchService::GetLocalPeerId() const {
