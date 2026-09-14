@@ -2,6 +2,7 @@
 
 #include "NetMatchService.h"
 #include "ScenarioRunner.h"
+#include "SettingsMan.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
 #include "UInputMan.h"
@@ -24,6 +25,9 @@
 using namespace RTE;
 
 namespace {
+	/// Screens shorter than this get the single-line strip instead of the box.
+	constexpr int c_CompactMaxHeight = 480;
+
 	std::string DisplayName(std::string text) {
 		for (char& c: text) if (static_cast<unsigned char>(c) < 32) c = ' ';
 		return text;
@@ -253,31 +257,32 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	font->DrawAligned(&bitmap, 14, y + 6, text, GUIFont::Left, GUIFont::Top);
 }
 
+bool NetModerationGUI::MatchStatusWanted() const {
+	// The countdown is still a pause state, so it must not blink the widget off.
+	if (m_Open || g_SettingsMan.ShowMatchStatus() || g_NetMatchService.IsMatchResyncing() || ScenarioRunner::IsLockstepPaused() || ScenarioRunner::GetLockstepResumeCountdown() > 0) {
+		return true;
+	}
+	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return false;
+	}
+	if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame()) {
+		return true;
+	}
+	std::string holdWho;
+	uint32_t holdSeconds = 0;
+	return ScenarioRunner::DescribeLockstepHoldPause(holdWho, holdSeconds);
+}
+
 void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
-	CreateOverlay();
 	BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
-	const int width = std::min(252, backbuffer->w - 16);
-	const int x = backbuffer->w - width - 8;
-	constexpr int y = 32;
-	constexpr int height = 76;
-	m_NetStatusBox->Move(x, y);
-	if (m_NetStatusBox->GetWidth() != width) m_NetStatusBox->Resize(width, height);
-	m_NetStatusBox->SetVisible(true);
-	m_NetStatus->SetFont(font);
-	m_NetStatus->Resize(width - 12, height - 12);
 	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
 		m_MatchDelayFrames = ScenarioRunner::GetLockstepLocalInputDelay();
 		m_BaseDelayFrames = ScenarioRunner::GetLockstepInputDelayFrames();
 	}
 	char metrics[128];
 	std::snprintf(metrics, sizeof(metrics), "D %u ticks / %.1f ms", static_cast<unsigned>(m_MatchDelayFrames), static_cast<double>(m_MatchDelayFrames) * 1000.0 / 60.0);
-	std::string text = std::string("NET STATUS  /  SEATS [F6]\n") + metrics;
-	if (m_MatchDelayFrames != m_BaseDelayFrames) {
-		text += " (base " + std::to_string(m_BaseDelayFrames) + ")";
-	}
 	const auto ping = g_NetMatchService.GetMatchPingMs();
-	text += "\nRTT " + (ping ? std::to_string(*ping) : "--") + " ms / " + (snapshot.isHost ? "max peer" : "host link");
 	// Sim updates against wall time over the last second, so a stalled or paused match reads its true pace
 	static long long s_paceMarkUs = 0;
 	static uint64_t s_paceMarkUpdates = 0;
@@ -295,23 +300,83 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 			s_paceMarkUpdates = paceUpdates;
 		}
 	}
-	std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", s_paceTps);
-	text += metrics;
 	std::string holdName;
 	uint32_t holdSeconds = 0;
-	bool waiting = false;
-	if (g_NetMatchService.IsMatchResyncing()) {
+	const bool resyncing = g_NetMatchService.IsMatchResyncing();
+	const bool holdPause = !resyncing && ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds);
+	const bool missingFrames = !resyncing && !holdPause &&
+	    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame();
+	const bool paused = !resyncing && !holdPause && !missingFrames && ScenarioRunner::IsLockstepPaused();
+	const int countdown = paused ? ScenarioRunner::GetLockstepResumeCountdown() : 0;
+	const bool waiting = resyncing || holdPause || missingFrames;
+	if (backbuffer->h < c_CompactMaxHeight) {
+		// The short-screen layout is one line in the gap between the funds block and the controller icon.
+		const int freeLeft = 152;
+		const int freeRight = backbuffer->w - 40;
+		const int maxTextWidth = freeRight - freeLeft - 14;
+		const std::string pingText = ping ? std::to_string(*ping) : "--";
+		char tail[96];
+		std::snprintf(tail, sizeof(tail), " / D %u / RTT %s ms / PACE %.1f tps", static_cast<unsigned>(m_MatchDelayFrames), pingText.c_str(), s_paceTps);
+		m_StripText = "NET [F6] / ";
+		if (resyncing) {
+			m_StripText += "RESYNCING MATCH";
+		} else if (holdPause) {
+			const int room = maxTextWidth - font->CalculateWidth(m_StripText + "WAITING FOR  " + tail) - font->CalculateWidth(" (999 s)");
+			m_StripText += "WAITING FOR " + FitLine(font, holdName.empty() ? "a player" : holdName, room) + " (" + std::to_string(holdSeconds) + " s)";
+		} else if (missingFrames) {
+			m_StripText += "WAITING FOR FRAMES";
+		} else if (paused) {
+			m_StripText += countdown > 0 ? "RESUMING IN " + std::to_string((countdown + 59) / 60) + " S" : "PAUSED / P RESUMES";
+		} else {
+			m_StripText += "LIVE";
+		}
+		m_StripText += tail;
+		if (font->CalculateWidth(m_StripText) > maxTextWidth) {
+			m_StripText = FitLine(font, m_StripText, maxTextWidth);
+		}
+		const int height = font->GetFontHeight() + 7;
+		const int width = std::min(freeRight - freeLeft, font->CalculateWidth(m_StripText) + 14);
+		const int x = freeLeft + (freeRight - freeLeft - width) / 2;
+		constexpr int y = 2;
+		m_NetStatusBox->Move(x, y);
+		if (m_NetStatusBox->GetWidth() != width || m_NetStatusBox->GetHeight() != height) m_NetStatusBox->Resize(width, height);
+		m_NetStatusBox->SetVisible(true);
+		m_NetStatus->SetFont(font);
+		m_NetStatus->Move(7, 4);
+		m_NetStatus->Resize(width - 14, height - 6);
+		m_NetStatus->SetText(m_StripText);
+		AllegroBitmap bitmap(backbuffer);
+		rectfill(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(20, 22, 27, 255));
+		rect(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(59, 65, 83, 255));
+		hline(backbuffer, x + 1, y + 1, x + width - 2, waiting ? makeacol32(170, 120, 0, 255) : makeacol32(108, 118, 168, 255));
+		m_NetStatus->Draw(&bitmap, false);
+		return;
+	}
+	const int width = std::min(252, backbuffer->w - 16);
+	const int x = backbuffer->w - width - 8;
+	constexpr int y = 32;
+	constexpr int height = 76;
+	m_NetStatusBox->Move(x, y);
+	if (m_NetStatusBox->GetWidth() != width) m_NetStatusBox->Resize(width, height);
+	m_NetStatusBox->SetVisible(true);
+	m_NetStatus->SetFont(font);
+	m_NetStatus->Move(6, 6);
+	m_NetStatus->Resize(width - 12, height - 12);
+	std::string text = std::string("NET STATUS  /  SEATS [F6]\n") + metrics;
+	if (m_MatchDelayFrames != m_BaseDelayFrames) {
+		text += " (base " + std::to_string(m_BaseDelayFrames) + ")";
+	}
+	text += "\nRTT " + (ping ? std::to_string(*ping) : "--") + " ms / " + (snapshot.isHost ? "max peer" : "host link");
+	std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", s_paceTps);
+	text += metrics;
+	if (resyncing) {
 		text += "\nRESYNCING MATCH";
-		waiting = true;
-	} else if (ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds)) {
+	} else if (holdPause) {
 		const int room = width - 12 - font->CalculateWidth("Waiting for  to reconnect");
 		text += "\nWaiting for " + FitLine(font, holdName.empty() ? "a player" : holdName, room) + " to reconnect\n" + std::to_string(holdSeconds) + " s left";
-		waiting = true;
-	} else if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame()) {
+	} else if (missingFrames) {
 		text += "\nWAITING FOR FRAMES\n" + FitLine(font, ScenarioRunner::GetLockstepMissingPeers(), width - 12);
-		waiting = true;
-	} else if (ScenarioRunner::IsLockstepPaused()) {
-		const int countdown = ScenarioRunner::GetLockstepResumeCountdown();
+	} else if (paused) {
 		text += countdown > 0 ? "\nResuming in " + std::to_string((countdown + 59) / 60) + " s" : "\nPAUSED / P to resume";
 	} else {
 		text += "\nLIVE";
@@ -371,8 +436,11 @@ void NetModerationGUI::Draw() {
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	if (ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.IsMatchResyncing()) {
-		DrawMatchStatus(snapshot);
-		m_NetStatus->SetVisible(true);
+		CreateOverlay();
+		if (MatchStatusWanted()) {
+			DrawMatchStatus(snapshot);
+			m_NetStatus->SetVisible(true);
+		}
 	} else {
 		DrawRoster(snapshot);
 	}

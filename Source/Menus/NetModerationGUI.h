@@ -5,6 +5,7 @@
 #include <array>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace RTE {
 	class AllegroScreen;
@@ -47,7 +48,9 @@ namespace RTE {
 		void DrawRoster(const NetLobbySnapshot& snapshot);
 		/// Creates presentation controls only when an online match draws them.
 		void CreateOverlay();
-		/// Draws the status widget beneath the controller icon, outside the funds HUD.
+		/// Whether the status widget should be up: pauses, stalls, reconnect waits and resyncs always show it; ordinary play only when the seats panel is open or the setting asks.
+		bool MatchStatusWanted() const;
+		/// Draws the status widget: the box on tall screens, a single-line strip in the top HUD gap on short ones.
 		void DrawMatchStatus(const NetLobbySnapshot& snapshot);
 		AllegroScreen* m_Screen = nullptr;
 		std::unique_ptr<GUIInputWrapper> m_Input;
@@ -56,6 +59,7 @@ namespace RTE {
 		GUICollectionBox* m_NetStatusBox = nullptr;
 		GUILabel* m_NetStatus = nullptr;
 		std::array<GUILabel*, 3> m_Toasts{};
+		std::string m_StripText;
 		uint16_t m_MatchDelayFrames = 0;
 		uint16_t m_BaseDelayFrames = 0;
 		GUICollectionBox* m_Panel = nullptr;
