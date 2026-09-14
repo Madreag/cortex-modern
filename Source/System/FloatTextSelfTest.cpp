@@ -332,7 +332,8 @@ namespace RTE::FloatTextSelfTest {
 			    {0x00800000, "1.1754944e-38"},
 			    {0x47C35000, "1e+05"},
 			    {0x3727C5AC, "1e-05"},
-			    {0x4CEB79A3, "123456790"},
+			    // Two shortest forms are nine characters here; both codecs write the value's own digits.
+			    {0x4CEB79A3, "123456792"},
 			    {0x80000000, "-0"},
 			    {0x34000000, "1.1920929e-07"},
 			};
@@ -470,7 +471,9 @@ namespace RTE::FloatTextSelfTest {
 		/// locale run must match it character for character.
 		void CheckLocaleIndependence() {
 			ConstructManagersForEntities();
+			std::cout << Tag << " stage=managers" << std::endl;
 			CheckHexFloatMatchesTheStream();
+			std::cout << Tag << " stage=hexfloat" << std::endl;
 			static const LocaleProbe probes[] = {
 			    {"reader_float", ProbeReaderFloat, "0x3fc00000/0x3f800000"},
 			    {"reader_double", ProbeReaderDouble, "0xbfb999999999999a/0xbff0000000000000"},
@@ -485,6 +488,8 @@ namespace RTE::FloatTextSelfTest {
 			};
 			std::string references[std::size(probes)];
 			for (size_t index = 0; index < std::size(probes); ++index) {
+				// Named as it starts: a site that reaches for an engine manager it has not got dies here.
+				std::cout << Tag << " probe=" << probes[index].name << std::endl;
 				references[index] = probes[index].run();
 				if (probes[index].expected != nullptr && references[index] != probes[index].expected) {
 					Fail(std::string("locale=C ") + probes[index].name + " '" + references[index] + "' expected '" + probes[index].expected + "'");
