@@ -571,7 +571,7 @@ namespace RTE {
 		// possible whenever we can still write that version's payload schema. When we cannot, sending
 		// one stamped at OUR version would be undecodable noise, so the disconnect reason carries it.
 		if (haveVersion && NetProtocol::CanEncodeAtVersion(claimedVersion)) {
-				NetMessage rejection;
+			NetMessage rejection;
 			rejection.sequence = m_NextSequence++;
 			rejection.payload = NetJoinRejected{NetRejectReason::ProtocolMismatch, summary, "protocol_version", std::to_string(NetProtocol::c_Version), haveVersion ? std::to_string(claimedVersion) : std::string("unknown")};
 			std::vector<uint8_t> encoded;
