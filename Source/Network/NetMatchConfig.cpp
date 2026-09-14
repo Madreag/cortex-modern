@@ -94,8 +94,8 @@ namespace RTE {
 
 		bool ValidateModule(const std::string& module, const char* field, std::string* error) {
 			if (!ValidateText(module, NetMatchConfigUtil::c_MaxPresetBytes, field, error)) return false;
-			if (module.size() <= 4 || !module.ends_with(".rte") || module.find_first_of("/\\:") != std::string::npos) {
-				if (error) *error = std::string(field) + " must be a module name ending in .rte";
+			if (module.size() <= 4 || !module.ends_with(".rte") || !NetProtocol::IsValidUtf8(module) || module.find_first_of("/\\:*?\"<>|") != std::string::npos) {
+				if (error) *error = std::string(field) + " must be a UTF-8 module name ending in .rte";
 				return false;
 			}
 			return true;
