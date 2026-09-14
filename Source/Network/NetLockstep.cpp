@@ -4107,7 +4107,12 @@ namespace RTE {
 						++m_Stats.unresolvedObservationPackets;
 						return;
 					}
-					if (decoded.error.code == NetLockstepErrorCode::BadMagic && NetProtocol::Decode(event.bytes).ok) {
+					// A chat line that fails decode is still chat: the session counts it malformed and
+					// drops it, and no peer loses its connection over presentation traffic.
+					uint16_t peekedType = 0;
+					const bool chatTyped = NetProtocol::PeekMessageType(event.bytes.data(), event.bytes.size(), peekedType) &&
+					                       peekedType == static_cast<uint16_t>(NetMessageType::Chat);
+					if (decoded.error.code == NetLockstepErrorCode::BadMagic && (NetProtocol::Decode(event.bytes).ok || chatTyped)) {
 						// Session-protocol traffic mid-match is a reconnect handshake; hand it over.
 						if (m_SessionEventSink) {
 							m_SessionEventSink(event);
@@ -4117,7 +4122,8 @@ namespace RTE {
 						return;
 					}
 					if (decoded.error.code == NetLockstepErrorCode::BadMagic && NetLobbyProtocol::Decode(event.bytes).ok) {
-						++m_Stats.ignoredSessionPackets;
+						if (m_SessionEventSink) m_SessionEventSink(event);
+						else ++m_Stats.ignoredSessionPackets;
 						return;
 					}
 					// Malformed admission traffic cannot stop a round it never joined.

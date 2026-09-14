@@ -190,6 +190,7 @@ namespace RTE {
 			if (m_Disabled != disabled) {
 				m_ReleaseTimer.Reset();
 				ResetCommandState();
+				m_LocalProductionValid = false;
 			}
 			m_Disabled = disabled;
 		}
@@ -384,6 +385,9 @@ namespace RTE {
 		/// @return Whether the quick disabled flag is set.
 		bool IsQuickDisabled() const { return m_Disabled; }
 
+		/// Whether the producing pass holds this controller, so the sim's committed input is still held aside.
+		bool IsProducingLocalInput() const { return m_ProducingLocalInput; }
+
 		/// Replaces the sim-facing controller state from a decoded wire frame.
 		void ApplyWireState(const std::array<bool, ControlState::CONTROLSTATECOUNT>& controlStates, const Vector& analogMove, const Vector& analogAim, const Vector& analogCursor, const Vector& mouseMovement, InputMode inputMode, int playerRaw, bool quickDisabled);
 
@@ -417,6 +421,14 @@ namespace RTE {
 
 		/// Refreshes analog values (mouse, joystick) so the visual cursor tracks the latest input each render frame. Player-controlled only; no ControlStates writes.
 		void RenderUpdate();
+
+		/// Hands this to the producing pass, which starts from the input this seat itself produced last
+		/// tick. The committed frame the sim runs on is held aside until the pass ends; a seat that just
+		/// changed starts from no input, so nothing the previous seat produced is produced again.
+		void BeginLocalProduction();
+
+		/// Ends the producing pass: keeps what the seat produced for the next one and gives the sim its committed input back.
+		void EndLocalProduction();
 #pragma endregion
 
 #pragma region Operator Overloads
@@ -476,6 +488,25 @@ namespace RTE {
 
 		Vector m_MouseMovement; //!< Relative mouse movement, if this player uses the mouse.
 
+		//!< The command state of one input sample: what a producing pass makes and what a wire frame carries.
+		struct InputSample {
+			std::array<bool, ControlState::CONTROLSTATECOUNT> controlStates{};
+			Vector analogMove;
+			Vector analogAim;
+			Vector analogCursor;
+			Vector mouseMovement;
+		};
+
+		InputSample m_LocalProduction; //!< The input this machine's seat produced last tick.
+		InputMode m_LocalProductionSeatMode; //!< The seat the carried production belongs to.
+		int m_LocalProductionSeatPlayer;
+		bool m_LocalProductionValid; //!< Whether the carried production still belongs to the current seat.
+
+		// The producing pass owns these two, not the controller's contents: a script that replaces the
+		// whole controller inside the pass must still get the sim's committed input back at its end.
+		InputSample m_CommittedInput; //!< The sim-facing input held aside while the producing pass runs.
+		bool m_ProducingLocalInput = false; //!< Whether the producing pass holds this controller right now.
+
 		std::pair<std::pair<float, float>, bool> m_AnalogCursorAngleLimits; //!< Analog aim value limits, as well as whether or not the limit is actually enabled.
 
 	private:
@@ -486,6 +517,15 @@ namespace RTE {
 				self.m_WeaponChangeNextIgnore, self.m_WeaponChangePrevIgnore, self.m_WeaponPickupIgnore, self.m_WeaponDropIgnore,
 				self.m_WeaponReloadIgnore, self.m_WeaponPrimaryHotkeyIgnore, self.m_ReleaseTimer, self.m_JoyAccelTimer,
 				self.m_KeyAccelTimer, self.m_MouseMovement, self.m_AnalogCursorAngleLimits);
+		}
+		/// The producer's own baseline, so a restored controller carries on from the input it was producing
+		/// instead of re-deriving a held button as a fresh press.
+		template <class Archive, class Self> static void VisitLocalProduction(Archive& archive, Self& self) {
+			archive(self.m_LocalProduction.controlStates, self.m_LocalProduction.analogMove, self.m_LocalProduction.analogAim,
+				self.m_LocalProduction.analogCursor, self.m_LocalProduction.mouseMovement,
+				self.m_LocalProductionSeatMode, self.m_LocalProductionSeatPlayer, self.m_LocalProductionValid,
+				self.m_CommittedInput.controlStates, self.m_CommittedInput.analogMove, self.m_CommittedInput.analogAim,
+				self.m_CommittedInput.analogCursor, self.m_CommittedInput.mouseMovement, self.m_ProducingLocalInput);
 		}
 #pragma region Update Breakdown
 		/// Updates the player's inputs portion of this Controller. For breaking down Update into more comprehensible chunks.

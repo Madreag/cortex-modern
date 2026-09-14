@@ -12,6 +12,7 @@
 #include "ModManagerGUI.h"
 
 #include <array>
+#include <deque>
 #include <optional>
 
 namespace RTE {
@@ -23,6 +24,7 @@ namespace RTE {
 	class GUIButton;
 	class GUILabel;
 	class GUIControl;
+	class GUIFont;
 	class GUITextBox;
 	class GUIListBox;
 	class GUICheckbox;
@@ -70,6 +72,10 @@ namespace RTE {
 		/// §11: reads the recovery record on the way into the main menu and, when one applies, opens the
 		/// multiplayer screen's landing panel on the offer instead of leaving the player to find it.
 		void OfferStoredRejoinOnEntry();
+
+		/// Opens the multiplayer screen on the lobby panel when the match that just ended left a
+		/// rematch lobby waiting, so the player comes out of the match where the rematch is.
+		void OfferRematchLobbyOnEntry();
 #pragma endregion
 
 #pragma region Automation
@@ -241,8 +247,15 @@ namespace RTE {
 		NetModerationUx m_ModerationUx; //!< §9b's panel model; the buttons and the headless driver share it.
 		std::map<const GUIControl*, NetModerationUx::Row> m_PressedModeration;
 		std::array<GUILabel*, 4> m_MultiplayerLobbyPlayerLabels;
+		GUIFont* m_MultiplayerLobbyPlayerRowFont = nullptr; //!< The font the player rows draw in, so the row text is measured against what draws it.
+		GUIFont* m_MultiplayerLobbyPlayerRowFallbackFont = nullptr; //!< Supplies the row bytes the primary font's atlas has no ink for.
+		GUILabel* m_MultiplayerLobbyPlayersHeader = nullptr; //!< The "Players" column header; it moves with the rows when the panel widens.
 		GUILabel* m_MultiplayerLobbyPortMapLabel;
 		uint32_t m_PortMapSerialShown; //!< The last lobby port-map serial this panel rendered.
+		// The lobby's chat is built in code so the panel can grow for it without touching the skin file.
+		std::array<GUILabel*, 8> m_MultiplayerLobbyChatLabels;
+		GUITextBox* m_MultiplayerLobbyChatInput;
+		std::deque<std::string> m_MultiplayerLobbyChatLines; //!< Newest at the back; the labels show the last eight.
 		MultiplayerSubScreen m_MultiplayerSubScreen;
 		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
 		std::string m_PendingAutomationCommand; //!< Control waiting to raise Command after Update clears the queue.
@@ -335,6 +348,10 @@ namespace RTE {
 		/// @param guiEventControl Pointer to the GUI element that the player interacted with.
 		void HandleMultiplayerScreenInputEvents(const GUIControl* guiEventControl);
 
+		/// Sends the lobby chat box's line: Enter for All, Ctrl+Enter for Team. The line is cleared
+		/// only when the session accepted it.
+		void SendLobbyChat();
+
 		/// Handles the player interaction with the editor selection screen GUI elements.
 		/// @param guiEventControl Pointer to the GUI element that the player interacted with.
 		void HandleEditorsScreenInputEvents(const GUIControl* guiEventControl);
@@ -361,7 +378,7 @@ namespace RTE {
 		void RefreshReconnectControls();
 
 		/// Resizes a multiplayer sub-panel's width: the diagnostic label keeps its 12px side margins and every other child keeps its center offset.
-		void FitMultiplayerPanelWidth(GUICollectionBox* panel, GUILabel* diagnosticLabel, int width);
+		void FitMultiplayerPanelWidth(GUICollectionBox* panel, GUILabel* diagnosticLabel, int width, const std::vector<GUILabel*>& fillLabels = {});
 		/// Resizes the MultiplayerScreen and keeps it centered, moving up from its baseline Y only when the height no longer fits the viewport.
 		void FitMultiplayerScreen(int width, int height);
 

@@ -24,6 +24,8 @@ namespace RTE {
 		static void NotePreviewStride(bool initialized);
 		static bool PreviewStrideRan() { return s_PreviewStrideSeen; }
 		static bool CheckNestedHookScope();
+		/// Exercises retirement ownership and observes links before and after disposal.
+		static bool RunRetirementArm(char mode);
 
 		/// What the overlay link probe rigged inside the preview it was armed for; link targets are compared by address afterwards, never read.
 		struct OverlayLinkProbe {

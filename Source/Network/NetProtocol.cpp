@@ -1202,6 +1202,30 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetProtocol::IsValidUtf8(const std::string& value) {
+		return RTE::IsValidUtf8(value);
+	}
+
+	bool NetProtocol::PeekMessageType(const uint8_t* data, size_t size, uint16_t& outType) {
+		if (data == nullptr || size < c_HeaderBytes) {
+			return false;
+		}
+		ByteReader reader(data, c_HeaderBytes);
+		uint32_t magic = 0;
+		uint16_t version = 0;
+		uint16_t headerBytes = 0;
+		uint16_t type = 0;
+		reader.ReadU32LE(magic);
+		reader.ReadU16LE(version);
+		reader.ReadU16LE(headerBytes);
+		reader.ReadU16LE(type);
+		if (magic != c_Magic || version != c_Version || headerBytes != c_HeaderBytes) {
+			return false;
+		}
+		outType = type;
+		return true;
+	}
+
 	bool NetProtocol::EncodeAtVersion(const NetMessage& message, uint16_t headerVersion, std::vector<uint8_t>& outBytes, NetProtocolError* error) {
 		outBytes.clear();
 		if (!CanEncodeAtVersion(headerVersion)) {

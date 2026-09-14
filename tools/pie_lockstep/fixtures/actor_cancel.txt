@@ -1,0 +1,3 @@
+# Enter ActorSelect through the unchanged Lua fixture, then cancel with secondary.
+30 31 NEXT
+199 200 PIEMENU_DIGITAL

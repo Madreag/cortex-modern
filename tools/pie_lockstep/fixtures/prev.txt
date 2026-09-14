@@ -1,0 +1,4 @@
+# Seat the second sentry, open its pie, then switch back with PREV while held.
+30 31 NEXT
+150 220 PIEMENU_DIGITAL
+199 200 PREV

@@ -6,8 +6,10 @@
 #include "NetTransport.h"
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -76,6 +78,22 @@ namespace RTE {
 		uint32_t moduleDigestsSent = 0;
 		uint32_t moduleDigestsReceived = 0;
 		uint32_t moduleDigestExchangesExpired = 0; //!< Peers that never answered; the refusal went out on its plain summary.
+		uint32_t chatMessagesSent = 0;
+		uint32_t chatMessagesReceived = 0;
+		uint32_t chatMessagesRelayed = 0; //!< Host: copies of one peer's line forwarded to its recipients.
+		uint32_t chatDroppedInvalid = 0; //!< Oversize, malformed or wrongly-stamped chat, send side and receive side.
+		uint32_t chatDroppedRate = 0; //!< Past the per-peer window; presentation-only traffic gets a budget, not a kick.
+		uint32_t chatDroppedMalformed = 0; //!< Chat-typed packets that failed decode; counted here so a bad line is never a dropped peer.
+	};
+
+	/// One presentation-queue line. Chat is never a sim command and never enters a tick hash, so it
+	/// lives in this bounded queue the UI drains instead of any command stream.
+	struct NetChatEntry {
+		uint64_t receivedTick = 0; //!< The lockstep frame current when it arrived (lobby phase: 0).
+		uint8_t senderPeerId = 0; //!< Session-assigned id of the author; the host's own seat is 0.
+		std::string senderName; //!< Filled when this session knows the name; the UI resolves the rest.
+		uint8_t scope = c_NetChatScopeAll;
+		std::string text;
 	};
 
 	// A connected peer as seen by the match runner: its transport id and session-assigned id.
@@ -104,6 +122,10 @@ namespace RTE {
 		/// Sends session heartbeats without polling the transport or checking timeouts, so another
 		/// phase (the lobby) can own the shared event queue while peers still see us alive.
 		void TickKeepalive(uint64_t nowMs);
+		/// Records valid traffic from another phase on a Ready peer's wire.
+		void NotePeerTraffic(NetPeerId peerId, uint64_t nowMs);
+		/// Refuses one Ready client without ending the host's session.
+		void DisconnectReadyPeer(NetPeerId peerId, NetRejectReason reason, const std::string& message);
 		/// Feeds one transport event when another phase owns the queue (a reconnect handshake the
 		/// lockstep coordinator hands over mid-match).
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs);
@@ -123,6 +145,25 @@ namespace RTE {
 		NetReconnectClient* GetReconnectClient() const { return m_ReconnectClient; }
 		/// The frame a seat drop is recorded against; the match runner keeps it current.
 		void SetLockstepFrame(uint64_t frame) { m_LockstepFrame = frame; }
+
+		/// Queues a chat line for the session's own pump thread to put on the wire, so the caller
+		/// (usually the UI) never touches peers, the transport or session state. Presentation only:
+		/// it never becomes a lockstep command and no part of it reaches a tick hash. The host's
+		/// line relays to every Ready peer; a client's line goes to the host, which relays it.
+		/// @return false when the line was refused outright (bad scope, oversize, malformed text, or
+		/// a full outbox); a queued line can still be rate-dropped at the pump - the counters tell.
+		bool SendChat(uint8_t scope, const std::string& text);
+		/// Drains the bounded presentation queue (newest 64 kept). Safe from the UI thread while the
+		/// runner worker owns the transport pump.
+		std::vector<NetChatEntry> TakeChatEntries();
+		/// Session-assigned id -> team, pushed by the match service when it knows the roster. The
+		/// host relays a team-scoped line only to the sender's own team.
+		void SetChatTeams(std::map<uint8_t, int> teamsByPeerId);
+		/// Moves the UI's queued lines onto the wire. Call only from the thread that owns the
+		/// session's pump; mid-match that is the service's PumpSessionEvents, not Tick.
+		void PumpChatOutbox();
+		/// Rate-window keys currently held: seats plus the single shared unknown-sender budget.
+		size_t ChatRateWindowCount() const;
 
 		/// Host: re-seats the Ready peers on the ids a rematch roster gives them, so a roster that lost
 		/// a player is dense again. Keyed and valued by session-assigned id. Refuses rather than take an
@@ -227,6 +268,14 @@ namespace RTE {
 		NetReadyState BuildReadyState(bool ready) const;
 		/// @return Whether the payload was an admission message the reconnect plane took.
 		bool RouteAdmissionMessage(NetPeerId peerId, const NetPayload& payload);
+		/// Routes one decoded chat message: sink it, and on the host relay it to its recipients.
+		void HandleChatMessage(NetPeerId transportPeerId, const PeerState* sender, const NetChat& chat);
+		/// Send-side sanitiser: strips control bytes, refuses oversize or non-UTF-8 text.
+		static bool SanitizeChatText(std::string& text);
+		/// The per-peer 5-per-second window. Caller holds m_ChatMutex.
+		bool AdmitChatRate(uint64_t key, uint64_t nowMs);
+		/// Appends to the bounded presentation queue. Caller holds m_ChatMutex.
+		void DeliverChat(NetChatEntry entry);
 		void FlushReconnectOutbound();
 		/// Client: turns a committed admission transaction into Ready on the seat's own peer id, and a
 		/// settled-but-uncommitted one into a legible session failure.
@@ -284,6 +333,20 @@ namespace RTE {
 		NetReconnectClient* m_ReconnectClient = nullptr;
 		uint64_t m_LockstepFrame = 0;
 		std::vector<PeerState> m_Peers;
+
+		// Chat state lives behind its own lock: the UI enqueues and drains, the session's own pump
+		// thread is the only side that sends, relays or stamps a line.
+		struct NetChatOutbound {
+			uint8_t scope;
+			std::string text;
+		};
+		mutable std::mutex m_ChatMutex;
+		std::deque<NetChatOutbound> m_ChatOutbox;
+		std::deque<NetChatEntry> m_ChatLog;
+		std::map<uint8_t, int> m_ChatTeams;
+		// windowStartMs -> count pairs, keyed by the author's session id (local sends use a key no
+		// peer id can hold; malformed packets fall back to a per-transport key).
+		std::map<uint64_t, std::pair<uint64_t, uint32_t>> m_ChatRate;
 	};
 
 } // namespace RTE

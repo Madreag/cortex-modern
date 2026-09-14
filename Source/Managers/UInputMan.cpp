@@ -1144,6 +1144,20 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 	}
 }
 
+void UInputMan::SetProbeKeySim(SDL_Keycode keycodeToSet, bool down) {
+	const SDL_Scancode scancode = SDL_GetScancodeFromKey(keycodeToSet, NULL);
+	if (scancode == SDL_SCANCODE_UNKNOWN) {
+		return;
+	}
+	// The keyboard the sim-rate reads use, and only its held state and sim edges: the changed state is a
+	// render-frame edge that EndFrame owns.
+	Keyboard& keyboard = m_KeyboardStates[0];
+	if (down != keyboard.keyStates[scancode]) {
+		(down ? keyboard.pressedSinceSim : keyboard.releasedSinceSim)[scancode] = true;
+	}
+	keyboard.keyStates[scancode] = down;
+}
+
 int UInputMan::Update(bool handleSpecialInput) {
 	for (auto& [mouseID, mouse]: m_MouseStates) {
 		mouse.relativeMotion *= m_MouseSensitivity;
