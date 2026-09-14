@@ -391,6 +391,25 @@ namespace RTE::FloatTextSelfTest {
 			return value;
 		}
 
+		/// The value and the stream's state after the read, so "the read still fails" is measured, not argued.
+		template <class FloatType> std::string ReadWithState(const std::string& text) {
+			Reader reader(std::make_unique<std::istringstream>(text), "float-text-selftest.ini");
+			FloatType value = 0;
+			reader >> value;
+			const std::ios::iostate state = reader.GetStream()->rdstate();
+			std::string flags;
+			if (state & std::ios::failbit) {
+				flags += "fail";
+			}
+			if (state & std::ios::badbit) {
+				flags += flags.empty() ? "bad" : "+bad";
+			}
+			if (state & std::ios::eofbit) {
+				flags += flags.empty() ? "eof" : "+eof";
+			}
+			return Hex(value) + ":" + (flags.empty() ? "good" : flags);
+		}
+
 		std::string ProbeReaderFloat() { return Hex(ReadThroughReader<float>("1.5\n")) + "/" + Hex(ReadThroughReader<float>("1\n")); }
 
 		std::string ProbeReaderDouble() { return Hex(ReadThroughReader<double>("-0.1\n")) + "/" + Hex(ReadThroughReader<double>("-1\n")); }
@@ -398,8 +417,8 @@ namespace RTE::FloatTextSelfTest {
 		/// A float read as a double and narrowed rounds twice, and lands one ulp below on this value.
 		std::string ProbeReaderSingleRounding() { return Hex(ReadThroughReader<float>("1.000000059604644775390625000000000000001\n")); }
 
-		/// Not pinned here: what the stream stored on an out of range read is compared control against tip.
-		std::string ProbeReaderOutOfRange() { return Hex(ReadThroughReader<double>("1e400\n")) + "/" + Hex(ReadThroughReader<double>("-1e400\n")) + "/" + Hex(ReadThroughReader<float>("1e-400\n")); }
+		/// Both halves of what the stream's extraction did on an out of range read: the value and the state.
+		std::string ProbeReaderOutOfRange() { return ReadWithState<double>("1e400\n") + "/" + ReadWithState<double>("-1e400\n") + "/" + ReadWithState<float>("1e-400\n"); }
 
 		std::string ProbeWriter() {
 			Writer writer(std::make_unique<std::ostringstream>());
@@ -494,7 +513,7 @@ namespace RTE::FloatTextSelfTest {
 			    // 0x3f800000 is the answer when Reader::c_ReadFloatsAsFloats is false: flipping that switch flips this.
 			    {"reader_single_rounding", ProbeReaderSingleRounding, "0x3f800001"},
 			    // Measured on the pre-change build: the stream stored an infinity, and zero on underflow.
-			    {"reader_out_of_range", ProbeReaderOutOfRange, "0x7ff0000000000000/0xfff0000000000000/0x0"},
+			    {"reader_out_of_range", ProbeReaderOutOfRange, "0x7ff0000000000000:fail/0xfff0000000000000:fail/0x0:fail"},
 			    {"writer_float", ProbeWriter, "1.5|-0.1"},
 			    {"arm_hand_target", ProbeArmHandTarget, nullptr, ArmHandTargetText},
 			    {"pie_menu_cursor_angle", ProbePieMenuState, nullptr, PieMenuStateText},
@@ -515,6 +534,7 @@ namespace RTE::FloatTextSelfTest {
 			const std::string locale = InstallCommaLocale();
 			std::cout << Tag << " locale=" << (locale.empty() ? "none" : locale) << std::endl;
 			if (locale.empty()) {
+				Fail("no comma locale: the half of this arm that detects the defect did not run");
 				return;
 			}
 			for (size_t index = 0; index < std::size(probes); ++index) {
