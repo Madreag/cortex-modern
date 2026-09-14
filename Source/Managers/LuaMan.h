@@ -188,7 +188,7 @@ namespace RTE {
 		/// Arms the native barrier for tables reachable from this state's globals and require caches.
 		void CapturePreviewGlobalFence();
 		/// Puts them back as the fence found them: keys the preview added go, values it changed or removed come back.
-		/// @return How many entries were put back.
+		/// @return How many tables and cached scripts were put back.
 		int ReleasePreviewGlobalFence();
 		bool BindPreviewScriptObject(MovableObject* clone, bool sharedSlot);
 		bool RemapPreviewHoldReferences(long uniqueID, std::string& freezeClass);

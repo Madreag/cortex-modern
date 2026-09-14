@@ -332,8 +332,13 @@ def assess_cost(red, green, scene, red_census, census):
     ok = ok and green['exit_code'] == 0 and maximum is not None and maximum < LIMIT_MS
     ok = ok and delta is not None and delta < LIMIT_MS
     ok = ok and (census == red_census == 240 if scene == '240' else red['exit_code'] == 0)
+    restore = {label: sum(entry.get('restore_ms', 0.0) for entry in row.get('native', []))
+               for label, row in (('red', red), ('green', green))}
+    windows = sum(entry.get('windows', 0.0) for entry in native)
     return dict(scene=scene, red_ms=red['preview_ms'], green_ms=green['preview_ms'], delta_ms=delta,
-                native_max_ms_sum=maximum, actors=census, red_actors=red_census, pass_check=ok)
+                native_max_ms_sum=maximum, actors=census, red_actors=red_census,
+                red_restore_ms=restore['red'], green_restore_ms=restore['green'],
+                green_windows=windows, pass_check=ok)
 
 
 def assess_selftests(summary, identity):

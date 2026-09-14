@@ -304,35 +304,6 @@ void lj_preview_forget(global_State *g, GCtab *t)
   e->table = NULL;
 }
 
-static size_t preview_changes(lua_State *L, GCtab *t, GCtab *s)
-{
-  size_t changes = gcref(t->metatable) != gcref(s->metatable);
-  size_t i;
-  for (i = 0; i < s->asize; i++) {
-    cTValue *before = arrayslot(s, i);
-    cTValue *after = lj_tab_getint(t, (int32_t)i);
-    if (!tvisnil(before) && (!after || !lj_obj_equal(before, after))) changes++;
-  }
-  if (s->hmask) {
-    for (i = 0; i <= s->hmask; i++) {
-      Node *n = &noderef(s->node)[i];
-      if (!tvisnil(&n->val) && !lj_obj_equal(&n->val, lj_tab_get(L, t, &n->key))) changes++;
-    }
-  }
-  for (i = 0; i < t->asize; i++) {
-    cTValue *after = arrayslot(t, i);
-    cTValue *before = lj_tab_getint(s, (int32_t)i);
-    if (!tvisnil(after) && (!before || tvisnil(before))) changes++;
-  }
-  if (t->hmask) {
-    for (i = 0; i <= t->hmask; i++) {
-      Node *n = &noderef(t->node)[i];
-      if (!tvisnil(&n->val) && tvisnil(lj_tab_get(L, s, &n->key))) changes++;
-    }
-  }
-  return changes;
-}
-
 LUA_API size_t luaJIT_preview_end(lua_State *L)
 {
   global_State *g = G(L);
@@ -350,7 +321,7 @@ LUA_API size_t luaJIT_preview_end(lua_State *L)
     size_t hbytes = s->hmask ? (s->hmask+1)*sizeof(Node) : 0;
     p->lastwrite = e->previous;
     if (!t) continue;
-    changes += preview_changes(L, t, s);
+    changes++;
     if (t->hmask) lj_mem_freevec(g, noderef(t->node), t->hmask+1, Node);
     if (t->asize && t->colo <= 0)
       lj_mem_freevec(g, tvref(t->array), t->asize, TValue);
