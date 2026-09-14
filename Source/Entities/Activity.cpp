@@ -1153,6 +1153,15 @@ void Activity::HandleCraftEnteringOrbit(ACraft* orbitedCraft) {
 	m_TeamDeaths[orbitedCraftTeam]--;
 }
 
+bool Activity::BrainlessHumansSpectate() const {
+	// Only a lockstep match carries the host's rule, so single player keeps the original end rules.
+	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return false;
+	}
+	const NetMatchConfig* matchConfig = ScenarioRunner::GetLockstepMatchConfig();
+	return matchConfig && matchConfig->brainlessHumansSpectate;
+}
+
 int Activity::GetBrainCount(bool getForHuman) const {
 	int brainCount = 0;
 
