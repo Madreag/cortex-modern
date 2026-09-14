@@ -45,6 +45,8 @@ namespace RTE {
 		std::string activityPreset = "Skirmish Defense";
 		std::string sceneName;
 		std::string modePreset = "PvP";
+		bool autosaveEnabled = false; // The host's periodic checkpoint option; every peer keeps its cadence.
+		uint16_t autosaveIntervalSeconds = 0; // Simulation seconds between checkpoints; zero while autosaves are off.
 		std::vector<NetMatchPlayerSlot> players;
 
 		bool operator==(const NetMatchConfig&) const = default;
@@ -59,6 +61,7 @@ namespace RTE {
 		static constexpr size_t c_MaxPlayers = 5; // Four human peers plus one peerless CPU slot.
 		static constexpr size_t c_MaxNameBytes = 64;
 		static constexpr size_t c_MaxPresetBytes = 128;
+		static constexpr uint16_t c_MaxAutosaveIntervalSeconds = 3600; // An hour is the longest cadence a host may announce.
 
 		static NetMatchConfig MakeDefault(uint64_t sessionId = 0);
 		/// The roster a rematch is played on: the peers still here keep their relative seat order and

@@ -1570,6 +1570,7 @@ static std::string ResyncSaveName() {
 			ResetRosterTransitionHistory();
 			m_AutosaveMatchId = m_Runner ? std::format("{:x}-{:x}-{:x}", m_Runner->GetMatchConfig().sessionId, System::GetProcessID(),
 			                                        std::chrono::system_clock::now().time_since_epoch().count()) : "";
+			m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
 		}
@@ -1583,10 +1584,12 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
-		if (s_AutosaveSeconds == 0 || !ScenarioRunner::IsLockstepControllerSyncActive() ||
+		// Every peer keeps the schedule the host announced in the agreed config, not its own setting.
+		const uint32_t seconds = m_MatchAutosaveSeconds;
+		if (seconds == 0 || !ScenarioRunner::IsLockstepControllerSyncActive() ||
 		    !g_ActivityMan.ActivityRunning() || m_AutosaveMatchId.empty()) return;
 		const int64_t now = g_TimerMan.GetSimTimeTicks();
-		const int64_t interval = static_cast<int64_t>(s_AutosaveSeconds) * g_TimerMan.GetTicksPerSecond();
+		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
 		if (m_NextAutosaveSimTime < 0 || now < m_LastAutosaveSimTime) {
 			m_NextAutosaveSimTime = now - g_TimerMan.GetDeltaTimeTicks() + interval;
 		}
@@ -2903,6 +2906,12 @@ static std::string ResyncSaveName() {
 		config.inputDelayFrames = request.inputDelayFrames;
 		config.peerCount = peerCount;
 		config.dedicated = request.dedicated;
+		// The host publishes the checkpoint cadence the whole match follows; a client's own setting never steers one.
+		if (request.host) {
+			const uint32_t seconds = std::min<uint32_t>(GetAutosaveSeconds(), NetMatchConfigUtil::c_MaxAutosaveIntervalSeconds);
+			config.autosaveEnabled = seconds > 0;
+			config.autosaveIntervalSeconds = static_cast<uint16_t>(seconds);
+		}
 		// The host authors the roster; clients adopt it via the lobby config sync. PvP seats one team
 		// per peer; co-op PvE seats every human on team 0; PvPvE keeps per-peer teams. A dedicated host
 		// seats peers 2..peerCount instead, so peer 1 stays the seatless lockstep host. The PvE modes

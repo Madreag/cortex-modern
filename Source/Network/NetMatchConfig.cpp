@@ -154,6 +154,15 @@ namespace RTE {
 				}
 			}
 		}
+		if (config.autosaveEnabled) {
+			if (config.autosaveIntervalSeconds == 0 || config.autosaveIntervalSeconds > c_MaxAutosaveIntervalSeconds) {
+				if (error) *error = "autosave_interval_seconds is out of range";
+				return false;
+			}
+		} else if (config.autosaveIntervalSeconds != 0) {
+			if (error) *error = "autosave_interval_seconds must be zero while autosaves are off";
+			return false;
+		}
 		if (!ValidateText(config.activityType, c_MaxPresetBytes, "activity_type", error) ||
 		    !ValidateText(config.activityPreset, c_MaxPresetBytes, "activity_preset", error) ||
 		    !ValidateText(config.modePreset, c_MaxPresetBytes, "mode_preset", error)) {
@@ -245,6 +254,10 @@ namespace RTE {
 		if (config.dedicated) {
 			fields.emplace_back("dedicated", "true");
 		}
+		// Same for the cadence: a match without autosaves hashes exactly as it did before the option existed.
+		if (config.autosaveEnabled) {
+			fields.emplace_back("autosave_interval_seconds", std::to_string(config.autosaveIntervalSeconds));
+		}
 		return NetIdentity::HashCanonicalText("NetMatchConfig/v2", fields);
 	}
 
@@ -267,6 +280,8 @@ namespace RTE {
 			{"activity_preset", config.activityPreset},
 			{"scene_name", config.sceneName},
 			{"mode_preset", config.modePreset},
+			{"autosave_enabled", config.autosaveEnabled},
+			{"autosave_interval_seconds", config.autosaveIntervalSeconds},
 			{"match_config_hash", NetIdentity::HashHex(HashConfig(config))},
 			{"players", std::move(players)},
 		};

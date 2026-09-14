@@ -243,8 +243,8 @@ namespace RTE {
 			AppendU16LE(out, config.inputDelayFrames);
 			AppendU8(out, static_cast<uint8_t>(config.mode));
 			AppendU8(out, static_cast<uint8_t>(config.ownershipPolicy));
-			// Reserved bit 0 carries the dedicated flag; old builds refuse the nonzero word.
-			AppendU16LE(out, config.dedicated ? 1 : 0);
+			// Reserved bit 0 carries the dedicated flag, bit 1 the host's autosave option; old builds refuse the nonzero word.
+			AppendU16LE(out, static_cast<uint16_t>((config.dedicated ? 1 : 0) | (config.autosaveEnabled ? 2 : 0)));
 			if (!AppendString(out, config.activityType, NetLobbyProtocol::c_MaxShortTextBytes, "activity_type", error) ||
 			    !AppendString(out, config.activityPreset, NetLobbyProtocol::c_MaxShortTextBytes, "activity_preset", error) ||
 			    !AppendString(out, config.sceneName, NetLobbyProtocol::c_MaxShortTextBytes, "scene_name", error) ||
@@ -263,6 +263,10 @@ namespace RTE {
 			for (uint16_t delay : config.peerInputDelayFrames) {
 				AppendU16LE(out, delay);
 			}
+			// Only a config that turns autosaves on carries the cadence, so an off config encodes byte for byte as before.
+			if (config.autosaveEnabled) {
+				AppendU16LE(out, config.autosaveIntervalSeconds);
+			}
 			return true;
 		}
 
@@ -280,7 +284,8 @@ namespace RTE {
 				return false;
 			}
 			out.dedicated = (reserved & 1) != 0;
-			if (reserved & ~static_cast<uint16_t>(1)) {
+			out.autosaveEnabled = (reserved & 2) != 0;
+			if (reserved & ~static_cast<uint16_t>(3)) {
 				SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 2, "config reserved field must be zero");
 				return false;
 			}
@@ -321,6 +326,11 @@ namespace RTE {
 					}
 					out.peerInputDelayFrames.push_back(delay);
 				}
+			}
+			out.autosaveIntervalSeconds = 0;
+			if (out.autosaveEnabled &&
+			    !ReadOrTruncated(reader.ReadU16LE(out.autosaveIntervalSeconds), reader, error, "config.autosave_interval_seconds")) {
+				return false;
 			}
 			std::string validateError;
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(out, &validateError)) {
