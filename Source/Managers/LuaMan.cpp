@@ -6089,6 +6089,8 @@ _PrimitiveQueueCapture = nil
 			RunScriptString("_PreviewFenceDeep.count = _PreviewFenceDeep.count + 1; table.insert(_PreviewFenceDeep.list, 7); _PreviewFenceDeep.nested.inner = \"b\"; _PreviewFenceDeep.added = true");
 		}
 		LuaMan::EndPreviewScripts();
+		// Read the graphs before the row's own probe writes a global, so the only difference left is the leak.
+		const bool deepGraphsRead = deepGraphsObserved && g_MovableMan.SerializeScriptGraphs(deepGraphsAfter, deepGraphProblems);
 		lua_getglobal(m_State, "_PreviewFenceNew");
 		const bool addedGlobalGone = lua_isnil(m_State, -1);
 		lua_pop(m_State, 1);
@@ -6132,7 +6134,6 @@ _PrimitiveQueueCapture = nil
 		          << " added=" << (deepAdded ? "true" : "false") << std::endl;
 		previewDeepGlobalWritesUndone = deepCount == 1 && deepListLength == 0 && deepInner == "a" && !deepAdded;
 		// The graph is the checkpoint oracle, so what it does not carry is what a non-previewing peer cannot be shown to miss.
-		const bool deepGraphsRead = deepGraphsObserved && g_MovableMan.SerializeScriptGraphs(deepGraphsAfter, deepGraphProblems);
 		std::string deepGraphDelta;
 		for (size_t index = 0; index < std::max(deepGraphsBefore.size(), deepGraphsAfter.size()); ++index) {
 			const std::string first = index < deepGraphsBefore.size() ? deepGraphsBefore[index] : std::string();
@@ -6144,7 +6145,8 @@ _PrimitiveQueueCapture = nil
 			while (at < first.size() && at < second.size() && first[at] == second[at]) {
 				++at;
 			}
-			deepGraphDelta += " state " + std::to_string(index) + ": " + std::to_string(first.size()) + "->" + std::to_string(second.size()) + " at " + std::to_string(at) + " '" + second.substr(at, 60) + "'";
+			const size_t back = at > 40 ? at - 40 : 0;
+			deepGraphDelta += " state " + std::to_string(index) + ": " + std::to_string(first.size()) + "->" + std::to_string(second.size()) + " at " + std::to_string(at) + " before '" + first.substr(back, 100) + "' after '" + second.substr(back, 100) + "'";
 		}
 		size_t deepGraphBytesBefore = 0;
 		size_t deepGraphBytesAfter = 0;
@@ -8204,6 +8206,94 @@ namespace {
 		return changes;
 	}
 
+	// Scratch F44 cost prototype, off unless CC_PREVIEW_FENCE_DEPTH names a depth above 1: depth 1 is the shipped
+	// binding-level record, depth N also records the contents of the tables reachable from _G in N-1 steps.
+	int PreviewFenceDepth() {
+		static const int depth = []() {
+			const char* value = std::getenv("CC_PREVIEW_FENCE_DEPTH");
+			const long parsed = value ? std::strtol(value, nullptr, 10) : 1;
+			return static_cast<int>(parsed < 1 ? 1 : (parsed > 8 ? 8 : parsed));
+		}();
+		return depth;
+	}
+
+	size_t s_PreviewFenceDeepTables = 0;
+
+	// Records the contents of every table reachable from src within depth steps into map[table] = record, reusing the
+	// record a previous preview built for the same table. The visited set is also the cycle guard.
+	void FillDeepRecords(lua_State* L, int src, int map, int visited, int depth) {
+		src = AbsoluteLuaIndex(L, src);
+		map = AbsoluteLuaIndex(L, map);
+		visited = AbsoluteLuaIndex(L, visited);
+		if (depth < 1 || lua_checkstack(L, 8) == 0) {
+			return;
+		}
+		lua_pushnil(L);
+		while (lua_next(L, src) != 0) {
+			if (lua_istable(L, -1)) {
+				const int value = lua_gettop(L);
+				lua_pushvalue(L, value);
+				lua_rawget(L, visited);
+				const bool seen = !lua_isnil(L, -1);
+				lua_pop(L, 1);
+				if (!seen) {
+					lua_pushvalue(L, value);
+					lua_pushboolean(L, 1);
+					lua_rawset(L, visited);
+					lua_pushvalue(L, value);
+					lua_rawget(L, map);
+					if (!lua_istable(L, -1)) {
+						lua_pop(L, 1);
+						lua_newtable(L);
+						lua_pushvalue(L, value);
+						lua_pushvalue(L, -2);
+						lua_rawset(L, map);
+					}
+					FillShallowCopy(L, value, lua_gettop(L));
+					++s_PreviewFenceDeepTables;
+					if (depth > 1) {
+						FillDeepRecords(L, value, map, visited, depth - 1);
+					}
+					lua_settop(L, value);
+				}
+			}
+			lua_pop(L, 1);
+		}
+	}
+
+	// Drops the records of tables this preview no longer reaches, so a long run does not pin dead tables.
+	void PruneDeepRecords(lua_State* L, int map, int visited) {
+		map = AbsoluteLuaIndex(L, map);
+		visited = AbsoluteLuaIndex(L, visited);
+		lua_pushnil(L);
+		while (lua_next(L, map) != 0) {
+			lua_pop(L, 1);
+			lua_pushvalue(L, -1);
+			lua_rawget(L, visited);
+			const bool kept = !lua_isnil(L, -1);
+			lua_pop(L, 1);
+			if (!kept) {
+				lua_pushvalue(L, -1);
+				lua_pushnil(L);
+				lua_rawset(L, map);
+			}
+		}
+	}
+
+	// Puts every recorded table back the way its record found it.
+	int RestoreDeepRecords(lua_State* L, int map) {
+		map = AbsoluteLuaIndex(L, map);
+		int changes = 0;
+		lua_pushnil(L);
+		while (lua_next(L, map) != 0) {
+			if (lua_istable(L, -2) && lua_istable(L, -1)) {
+				changes += RestoreFromShallowCopy(L, -2, -1);
+			}
+			lua_pop(L, 1);
+		}
+		return changes;
+	}
+
 	std::unordered_map<long, MovableObject*> s_PreviewRootByUID;
 	std::unordered_map<long, MovableObject*> s_PreviewPartByUID;
 	std::unordered_set<long> s_PreviewFrozenPrinted;
@@ -8434,6 +8524,31 @@ void LuaStateWrapper::CapturePreviewGlobalFence() {
 	lua_pushvalue(m_State, LUA_GLOBALSINDEX);
 	FillShallowCopy(m_State, -1, -2);
 	lua_pop(m_State, 2);
+	// Scratch F44 cost prototype, reached only when CC_PREVIEW_FENCE_DEPTH asks for it.
+	if (PreviewFenceDepth() > 1) {
+		lua_getfield(m_State, fence, "deep");
+		if (!lua_istable(m_State, -1)) {
+			lua_pop(m_State, 1);
+			lua_newtable(m_State);
+			lua_pushvalue(m_State, -1);
+			lua_setfield(m_State, fence, "deep");
+		}
+		const int map = lua_gettop(m_State);
+		lua_newtable(m_State);
+		const int visited = lua_gettop(m_State);
+		// _G is already recorded above, so marking it visited keeps _G._G from being recorded twice.
+		lua_pushvalue(m_State, LUA_GLOBALSINDEX);
+		lua_pushboolean(m_State, 1);
+		lua_rawset(m_State, visited);
+		s_PreviewFenceDeepTables = 0;
+		lua_pushvalue(m_State, LUA_GLOBALSINDEX);
+		FillDeepRecords(m_State, -1, map, visited, PreviewFenceDepth() - 1);
+		lua_pop(m_State, 1);
+		PruneDeepRecords(m_State, map, visited);
+		lua_pushnumber(m_State, static_cast<lua_Number>(s_PreviewFenceDeepTables));
+		lua_setfield(m_State, fence, "deepcount");
+		lua_settop(m_State, fence);
+	}
 	// A module the preview requires must not stay loaded: the next canonical require has to run the chunk itself.
 	lua_getfield(m_State, fence, "loaded");
 	lua_getglobal(m_State, "package");
@@ -8488,6 +8603,25 @@ int LuaStateWrapper::ReleasePreviewGlobalFence() {
 	lua_pushvalue(m_State, LUA_GLOBALSINDEX);
 	changes += RestoreFromShallowCopy(m_State, -1, -2);
 	lua_pop(m_State, 2);
+	// Scratch F44 cost prototype, reached only when CC_PREVIEW_FENCE_DEPTH asks for it.
+	if (PreviewFenceDepth() > 1) {
+		int deepChanges = 0;
+		lua_getfield(m_State, fence, "deep");
+		if (lua_istable(m_State, -1)) {
+			deepChanges = RestoreDeepRecords(m_State, -1);
+		}
+		lua_pop(m_State, 1);
+		lua_getfield(m_State, fence, "deepcount");
+		const long deepTables = static_cast<long>(lua_tonumber(m_State, -1));
+		lua_pop(m_State, 1);
+		// Capped so the line itself does not enter the per-preview cost this prototype exists to measure.
+		static int reported = 0;
+		if (reported < 8) {
+			++reported;
+			std::cout << "[preview-fence-depth] depth=" << PreviewFenceDepth() << " tables=" << deepTables << " undone=" << deepChanges << std::endl;
+		}
+		changes += deepChanges;
+	}
 	lua_getfield(m_State, fence, "loaded");
 	lua_getglobal(m_State, "package");
 	if (lua_istable(m_State, -1)) {
