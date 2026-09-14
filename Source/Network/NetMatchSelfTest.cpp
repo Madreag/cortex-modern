@@ -5671,7 +5671,19 @@ namespace RTE {
 			bool Finished() override { return true; }
 			NetDirectoryClient::Reply Take() override {
 				// An exhausted script keeps the lease healthy, so a pump length never decides a verdict.
-				if (m_Wire->replies.empty()) return {200, R"({"expires_in_s":15,"heartbeat_s":1,"listed":true})", ""};
+				// The echo repeats the visibility the request asked for: a service that contradicts it
+				// is a protocol failure the client backs off from, which is not what these cases test.
+				if (m_Wire->replies.empty()) {
+					bool listed = true;
+					if (!m_Wire->sent.empty()) {
+						try {
+							const nlohmann::json body = nlohmann::json::parse(m_Wire->sent.back().body);
+							if (body.contains("listed")) listed = body["listed"].get<bool>();
+						} catch (const nlohmann::json::exception&) {
+						}
+					}
+					return {200, std::string(R"({"expires_in_s":15,"heartbeat_s":1,"listed":)") + (listed ? "true" : "false") + "}", ""};
+				}
 				NetDirectoryClient::Reply reply = m_Wire->replies.front();
 				m_Wire->replies.pop_front();
 				return reply;
@@ -5703,6 +5715,14 @@ namespace RTE {
 		const auto fail = [&](const std::string& step) {
 			*error = "completed lobby expiry: " + step;
 			return false;
+		};
+		// Every request the directory client made, so a miss names the exchange that produced it.
+		const auto trail = [](const Wire& wire) {
+			std::string text;
+			for (const NetDirectoryClient::Request& request : wire.sent) {
+				text += (text.empty() ? "" : ", ") + request.method + " " + request.path;
+			}
+			return " [wire: " + text + "]";
 		};
 		const auto count = [](const Wire& wire, const std::string& method, const std::string& path) {
 			return static_cast<size_t>(std::count_if(wire.sent.begin(), wire.sent.end(), [&](const NetDirectoryClient::Request& request) { return request.method == method && request.path == path; }));
@@ -5833,7 +5853,7 @@ namespace RTE {
 			}
 			service.m_CancelRequested.store(true);
 			service.Destroy();
-			if (!step.empty()) return fail("seated: " + step);
+			if (!step.empty()) return fail("seated: " + step + trail(*wire));
 		}
 
 		{   // one peer only: the wait runs out, the lobby and its lease go
@@ -5870,6 +5890,14 @@ namespace RTE {
 						pump(service, 1);
 					}
 					const size_t beatsAtExpiry = count(*wire, "POST", beat);
+					{
+						// What the lease looked like when the expiry destroyed it.
+						std::lock_guard<std::mutex> lock(service.m_Mutex);
+						std::cout << "[expiry-arm] dir_state=" << NetDirectoryClient::StateName(service.m_Directory.GetState())
+								  << " session=\"" << service.m_Directory.GetSessionId() << "\" bound=\"" << service.m_IceBoundSessionId
+								  << "\" hidden=" << service.m_DirectoryHidden << " retracted=" << service.m_DirectoryRetracted
+								  << " beats=" << beatsAtExpiry << std::endl;
+					}
 					if (service.GetState() != NetMatchServiceState::Idle) {
 						step = "the expired lobby was not destroyed: state=" + std::string(NetMatchService::StateName(service.GetState()));
 					} else if (count(*wire, "DELETE", "/v1/sessions/" + id) != 1) {
@@ -5893,7 +5921,7 @@ namespace RTE {
 			}
 			service.m_CancelRequested.store(true);
 			service.Destroy();
-			if (!step.empty()) return fail("one peer: " + step);
+			if (!step.empty()) return fail("one peer: " + step + trail(*wire));
 		}
 		return true;
 	}
