@@ -22,6 +22,7 @@ namespace RTE {
 	class LuabindObjectWrapper;
 	class MovableObject;
 	class Scene;
+	class CheckpointText;
 	struct PathRequest;
 	struct LuaPathCallbackContext;
 
@@ -77,6 +78,7 @@ namespace RTE {
 
 		/// Captures this state's random generator for restoration.
 		std::string GetRandomGeneratorCheckpoint() const { return m_RandomGenerator.SerializeCheckpoint(); }
+		CheckpointText CaptureRandomGeneratorCheckpoint() const;
 
 		/// Restores this state's random generator from a checkpoint.
 		bool RestoreRandomGeneratorCheckpoint(std::string_view text) { return m_RandomGenerator.RestoreCheckpoint(text); }
@@ -146,6 +148,7 @@ namespace RTE {
 		/// @param problems Receives what could not be carried; any entry means the capture is not faithful.
 		/// @return Whether the graph carries everything.
 		bool SerializeScriptGraph(std::string& text, std::vector<std::string>& problems);
+		bool CaptureScriptGraph(CheckpointText& text, std::vector<std::string>& problems);
 
 		/// The unique ids of the objects a graph text holds fields for.
 		std::vector<long> ListScriptGraphRoots(const std::string& text);
@@ -317,6 +320,8 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		bool CollectScriptGraph(std::string* serialized, CheckpointText* captured, std::vector<std::string>& problems);
+
 		/// Gets a random integer between minInclusive and maxInclusive.
 		/// @return A random integer between minInclusive and maxInclusive.
 		int SelectRand(int minInclusive, int maxInclusive);
