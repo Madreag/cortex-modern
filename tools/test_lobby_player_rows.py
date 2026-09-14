@@ -22,7 +22,7 @@ The oracle is pixel-only, measured inside each row's label box - the ini box
 On the control build the host row wraps, so the band/clip checks fail.
 On the repaired build the panel widens (contentWidth = max(300, widest row + 24)
 capped at m_RootBoxMaxWidth - 12) and only when the cap still cannot hold the
-row is the name elided with 0x85, so all checks pass and the log's
+row is the name elided with "...", so all checks pass and the log's
 assert_label dumps prove the delay text stayed whole.
 
 --reference <png> compares a control-run capture of the same lobby. The panel
@@ -51,7 +51,7 @@ PANEL_GRAY = (59, 65, 83)
 ROW_X_INI, ROW_W_INI, ROW_H, ROW_Y0, ROW_STEP = 8, 288, 16, 66, 18
 HEADER_Y, HEADER_H = 50, 14
 PANEL_W_INI = 300
-ELLIPSIS = b"\x85"
+ELLIPSIS = b"..."
 
 HOST_NAME = "H" * 64
 JOINER_NAMES = [
