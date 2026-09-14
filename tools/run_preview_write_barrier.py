@@ -313,6 +313,10 @@ def fixture_output(folder, peer):
     return OBSERVE.findall(path.read_text(encoding='utf-8-sig', errors='replace'))
 
 
+def count_actors(data):
+    return len(re.findall(rb'^\d+ actor uid=\d+ ', data, re.M))
+
+
 def assess_cost(red, green, scene, red_census, census):
     native = green.get('native', [])
     valid = bool(native) and all(all(key in row and math.isfinite(row[key]) and row[key] >= 0
@@ -393,9 +397,9 @@ def score():
         for scene in ('retained', '240'):
             a, b = (read_row(f'cost-{scene}/{label}-{repeat}') for label in ('red', 'green'))
             before = ROOT / f'cost-{scene}/green-{repeat}/trace.json.lpinv_before.simstate.txt'
-            census = len(re.findall(r'^\d+ actor ', before.read_text(), re.M))
+            census = count_actors(before.read_bytes())
             red_before = ROOT / f'cost-{scene}/red-{repeat}/trace.json.lpinv_before.simstate.txt'
-            red_census = len(re.findall(r'^\d+ actor ', red_before.read_text(), re.M))
+            red_census = count_actors(red_before.read_bytes())
             cost = assess_cost(a, b, scene, red_census, census)
             cost['repeat'] = repeat
             costs.append(cost)
