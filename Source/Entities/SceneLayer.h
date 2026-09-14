@@ -41,6 +41,10 @@ namespace RTE {
 		unsigned int fullCopyPercent = 50;
 		bool fullCopy = false;
 
+		/// Copies a live bitmap at the sim boundary, reusing unchanged owned rows.
+		static std::shared_ptr<const BitmapSnapshot> Capture(const BITMAP* source, std::shared_ptr<const BitmapSnapshot> previous = {});
+		/// Compares owned pixels exactly, using shared rows as the fast path.
+		bool SamePixels(const BitmapSnapshot& other) const;
 		/// Reconstructs a bitmap from owned pixels on the save worker.
 		BitmapPtr CopyBitmap() const;
 		/// Flattens owned rows for the checkpoint codec on the save worker.
@@ -51,6 +55,7 @@ namespace RTE {
 
 	private:
 		template <bool, bool> friend class SceneLayerImpl;
+		static std::shared_ptr<const BitmapSnapshot> CaptureRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll);
 		struct Pixels {
 			explicit Pixels(size_t size): bytes(new uint8_t[size]), size(size) {}
 			std::unique_ptr<uint8_t[]> bytes;

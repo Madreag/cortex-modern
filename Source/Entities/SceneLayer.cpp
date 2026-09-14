@@ -48,6 +48,22 @@ void BitmapSnapshot::BitmapDeleter::operator()(BITMAP* bitmap) const {
 	if (bitmap) destroy_bitmap(bitmap);
 }
 
+std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::Capture(const BITMAP* source, std::shared_ptr<const BitmapSnapshot> previous) {
+	return CaptureRows(source, previous, nullptr, false);
+}
+
+bool BitmapSnapshot::SamePixels(const BitmapSnapshot& other) const {
+	if (this == &other) return true;
+	if (width != other.width || height != other.height || depth != other.depth || rowBytes != other.rowBytes) return false;
+	for (int y = 0; y < height; ++y) {
+		const Row& left = rows[y];
+		const Row& right = other.rows[y];
+		if (left.pixels == right.pixels && left.offset == right.offset) continue;
+		if (std::memcmp(left.pixels->bytes.get() + left.offset, right.pixels->bytes.get() + right.offset, rowBytes) != 0) return false;
+	}
+	return true;
+}
+
 BitmapSnapshot::BitmapPtr BitmapSnapshot::CopyBitmap() const {
 	if (width <= 0 || height <= 0) return {};
 	BitmapPtr bitmap(create_bitmap_ex(depth, width, height));
@@ -314,16 +330,12 @@ std::unique_ptr<BITMAP> SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::CopyBitm
 	return std::unique_ptr<BITMAP>(outputBitmap);
 }
 
-template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
-std::shared_ptr<const BitmapSnapshot> SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::CaptureBitmapSnapshot() const {
-	if (!m_MainBitmap) {
-		ResetBitmapSnapshot();
-		return {};
-	}
+std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::CaptureRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll) {
+	if (!source) return {};
 	auto snapshot = std::make_shared<BitmapSnapshot>();
-	snapshot->width = m_MainBitmap->w;
-	snapshot->height = m_MainBitmap->h;
-	snapshot->depth = bitmap_color_depth(m_MainBitmap);
+	snapshot->width = source->w;
+	snapshot->height = source->h;
+	snapshot->depth = source->vtable->color_depth;
 	snapshot->fullCopyPercent = BitmapFullCopyPercent();
 	if (snapshot->width <= 0 || snapshot->height <= 0 ||
 	    (snapshot->depth != 8 && snapshot->depth != 15 && snapshot->depth != 16 && snapshot->depth != 24 && snapshot->depth != 32)) {
@@ -331,21 +343,21 @@ std::shared_ptr<const BitmapSnapshot> SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXT
 	}
 	snapshot->rowBytes = static_cast<size_t>(snapshot->width) * ((snapshot->depth + 7) / 8);
 	if (snapshot->rowBytes > std::numeric_limits<size_t>::max() / static_cast<size_t>(snapshot->height)) throw std::bad_alloc();
-	const bool compatible = m_BitmapSnapshot && m_BitmapSnapshot->width == snapshot->width &&
-	    m_BitmapSnapshot->height == snapshot->height && m_BitmapSnapshot->depth == snapshot->depth;
-	const bool markedAll = !compatible || m_BitmapSnapshotAllDirty || m_BitmapSnapshotDirtyRows.size() != static_cast<size_t>(snapshot->height);
+	const bool compatible = previous && previous->width == snapshot->width &&
+	    previous->height == snapshot->height && previous->depth == snapshot->depth;
+	markedAll = markedAll || (markedRows && markedRows->size() != static_cast<size_t>(snapshot->height));
 	std::vector<uint8_t> dirtyRows(snapshot->height, compatible ? 0 : 1);
-	if (compatible) snapshot->rows = m_BitmapSnapshot->rows;
+	if (compatible) snapshot->rows = previous->rows;
 	else snapshot->rows.resize(snapshot->height);
 	bool previousDirty = false;
 	for (int y = 0; y < snapshot->height; ++y) {
-		const bool marked = markedAll || m_BitmapSnapshotDirtyRows[y] != 0;
+		const bool marked = markedAll || (markedRows && (*markedRows)[y] != 0);
 		if (marked) snapshot->markedBytes += snapshot->rowBytes;
 		if (compatible) {
-			const BitmapSnapshot::Row& previous = m_BitmapSnapshot->rows[y];
+			const Row& previousRow = previous->rows[y];
 			// Raw bitmap aliases remain writable, so unmarked rows also need an exact comparison.
 			snapshot->scannedBytes += snapshot->rowBytes;
-			dirtyRows[y] = std::memcmp(previous.pixels->bytes.get() + previous.offset, m_MainBitmap->line[y], snapshot->rowBytes) != 0;
+			dirtyRows[y] = std::memcmp(previousRow.pixels->bytes.get() + previousRow.offset, source->line[y], snapshot->rowBytes) != 0;
 		}
 		if (dirtyRows[y]) {
 			snapshot->dirtyBytes += snapshot->rowBytes;
@@ -365,14 +377,24 @@ std::shared_ptr<const BitmapSnapshot> SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXT
 		}
 		// Separate sparse rows bound retained storage when later changes split dirty regions.
 		const int end = snapshot->fullCopy ? snapshot->height : first + 1;
-		auto pixels = std::make_shared<BitmapSnapshot::Pixels>(snapshot->rowBytes * static_cast<size_t>(end - first));
+		auto pixels = std::make_shared<Pixels>(snapshot->rowBytes * static_cast<size_t>(end - first));
 		for (int y = first; y < end; ++y) {
 			const size_t offset = static_cast<size_t>(y - first) * snapshot->rowBytes;
-			std::memcpy(pixels->bytes.get() + offset, m_MainBitmap->line[y], snapshot->rowBytes);
+			std::memcpy(pixels->bytes.get() + offset, source->line[y], snapshot->rowBytes);
 			snapshot->rows[y] = {pixels, offset};
 		}
 		snapshot->copiedBytes += pixels->size;
 		first = end;
+	}
+	return snapshot;
+}
+
+template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
+std::shared_ptr<const BitmapSnapshot> SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::CaptureBitmapSnapshot() const {
+	auto snapshot = BitmapSnapshot::CaptureRows(m_MainBitmap, m_BitmapSnapshot, &m_BitmapSnapshotDirtyRows, m_BitmapSnapshotAllDirty);
+	if (!snapshot) {
+		ResetBitmapSnapshot();
+		return {};
 	}
 	m_BitmapSnapshot = snapshot;
 	m_BitmapSnapshotDirtyRows.assign(snapshot->height, 0);
