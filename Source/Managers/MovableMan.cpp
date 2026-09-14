@@ -997,6 +997,8 @@ static void DumpAttachableTree(uint64_t tick, const MOSRotating* parent, std::os
 }
 
 void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
+	// The queued MOID draw renumbers m_MOID on the pool while this reads it; join it so one dump holds one tick's numbering.
+	g_MovableMan.CompleteQueuedMOIDDrawings();
 	auto dumpMO = [&](const char* kind, MovableObject* mo) {
 		out << tick << " " << kind << " uid=" << mo->GetUniqueID() << " " << mo->GetPresetName()
 		    << " pos=" << std::hexfloat << mo->GetPos().m_X << "," << mo->GetPos().m_Y
