@@ -5,6 +5,7 @@
 #include "Matrix.h"
 
 #include <array>
+#include <functional>
 #include <string>
 
 namespace RTE {
@@ -89,6 +90,10 @@ namespace RTE {
 		/// Sets the MovableObject this PieMenu should affect. Ownership is NOT transferred!
 		/// @param affectedObject The new MovableObject affected by this PieMenu. Ownership is NOT transferred!
 		void SetAffectedObject(MovableObject* affectedObject) { m_AffectedObject = affectedObject; }
+
+		/// Points the affected object of this PieMenu and its sub-PieMenus through the passed in map, for the objects that outlive a preview.
+		/// @param map The mapping from an object to the one that survives, or nullptr when none does.
+		void RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map);
 
 		/// Gets whether this PieMenu is a sub-PieMenu, i.e. it's owned by a PieSlice.
 		/// @return Whether or not this PieMenu is a sub-PieMenu.

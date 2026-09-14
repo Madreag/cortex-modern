@@ -1159,8 +1159,8 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-lpinv-overlay-links") {
 			// b spawn and shadow links, r a shadow item in reach, c spawn parts, wounds and a shadow part.
 			const std::string modes = argValue[++i];
-			if (modes.empty() || modes.find_first_not_of("brcitmqxonla") != std::string::npos) {
-				std::cerr << "[lpinv] bad overlay-link modes '" << modes << "': expected letters from brcitmqxonla" << std::endl;
+			if (modes.empty() || modes.find_first_not_of("brcitmqxonlap") != std::string::npos) {
+				std::cerr << "[lpinv] bad overlay-link modes '" << modes << "': expected letters from brcitmqxonlap" << std::endl;
 				return false;
 			}
 			s_lpOverlayLinkModes = modes;
@@ -2033,8 +2033,37 @@ static std::string CheckPreviewOutcome(long long startTick, long long horizon) {
 	return "";
 }
 
+// The first differing lines of two canonical-state captures, so a failure names what moved.
+static std::string DescribeStateDifference(const std::string& before, const std::string& after) {
+	const auto split = [](const std::string& text) {
+		std::vector<std::string> lines;
+		std::istringstream stream(text);
+		std::string line;
+		while (std::getline(stream, line)) {
+			lines.push_back(line);
+		}
+		return lines;
+	};
+	const std::vector<std::string> first = split(before);
+	const std::vector<std::string> second = split(after);
+	std::string detail;
+	size_t differing = 0;
+	size_t shown = 0;
+	for (size_t index = 0; index < std::min(first.size(), second.size()); ++index) {
+		if (first[index] == second[index]) {
+			continue;
+		}
+		++differing;
+		if (shown < 3) {
+			++shown;
+			detail += " line " + std::to_string(index + 1) + ": '" + first[index].substr(0, 60) + "' -> '" + second[index].substr(0, 60) + "'";
+		}
+	}
+	return "lines " + std::to_string(first.size()) + "->" + std::to_string(second.size()) + " differing=" + std::to_string(differing) + detail;
+}
+
 // One depth-1 preview per overlay-link mode; survivor links must miss retired objects and the canonical world must stay identical.
-static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, int& failures) {
+static void RunOverlayLinkArm(char mode, int& cases, int& failures) {
 	const std::string label = std::string("overlay-links ") + mode;
 	bool caseFailed = false;
 	const auto fail = [&caseFailed, &label](const std::string& what) {
@@ -2045,20 +2074,27 @@ static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, 
 		std::cout << "[lpinv] PASS " << label << ": " << what << std::endl;
 	};
 	++cases;
-	if (std::string("itmqxonla").find(mode) != std::string::npos) {
-		LocalPrediction::Clear();
-		g_MovableMan.DropAllPreviewGhosts();
+	// The letters run in sequence in one process, so each is compared against the state it started from.
+	LocalPrediction::Clear();
+	g_MovableMan.DropAllPreviewGhosts();
+	std::vector<std::string> problems;
+	const std::string before = DumpSimStateToString() + DescribeCanonicalExtras(problems);
+	for (const std::string& problem: problems) {
+		fail("cannot capture canonical Lua state: " + problem);
+	}
+	if (std::string("itmqxonlap").find(mode) != std::string::npos) {
 		if (!PreviewScriptSelfTest::RunRetirementArm(mode)) {
 			caseFailed = true;
 		}
-		std::vector<std::string> problems;
+		problems.clear();
 		const std::string after = DumpSimStateToString() + DescribeCanonicalExtras(problems);
 		for (const std::string& problem: problems) {
 			fail("cannot capture canonical Lua state: " + problem);
 		}
 		if (after != before) {
+			WriteProbeText(std::string("lpinv_before_overlay_") + mode, before);
 			WriteProbeText(std::string("lpinv_after_overlay_") + mode, after);
-			fail("canonical state changed after retirement arm");
+			fail(std::string("canonical state changed after retirement arm (lpinv_before_overlay_") + mode + " vs lpinv_after_overlay_" + mode + ")");
 		}
 		if (caseFailed) {
 			++failures;
@@ -2184,14 +2220,15 @@ static void RunOverlayLinkArm(char mode, const std::string& before, int& cases, 
 	for (auto entry = support.rbegin(); entry != support.rend(); ++entry) {
 		entry->first->SetHeldDeviceThisArmIsTryingToSupport(entry->second);
 	}
-	std::vector<std::string> problems;
+	problems.clear();
 	const std::string after = DumpSimStateToString() + DescribeCanonicalExtras(problems);
 	for (const std::string& problem: problems) {
 		fail("cannot capture canonical Lua state: " + problem);
 	}
 	if (after != before) {
+		WriteProbeText(std::string("lpinv_before_overlay_") + mode, before);
 		WriteProbeText(std::string("lpinv_after_overlay_") + mode, after);
-		fail(std::string("canonical state changed after the overlay-link preview (lpinv_before vs lpinv_after_overlay_") + mode + ")");
+		fail(std::string("canonical state changed after the overlay-link preview (lpinv_before_overlay_") + mode + " vs lpinv_after_overlay_" + mode + ")");
 	}
 	if (caseFailed) {
 		++failures;
@@ -2427,8 +2464,28 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 			}
 		}
 	}
-	for (const char mode: s_lpOverlayLinkModes) {
-		RunOverlayLinkArm(mode, before, cases, failures);
+	if (!s_lpOverlayLinkModes.empty()) {
+		// Each letter is compared against its own baseline, so the set keeps its own end-to-end compare for drift across letters.
+		problems.clear();
+		const std::string setBefore = DumpSimStateToString() + DescribeCanonicalExtras(problems);
+		for (const char mode: s_lpOverlayLinkModes) {
+			RunOverlayLinkArm(mode, cases, failures);
+		}
+		++cases;
+		const std::string setAfter = DumpSimStateToString() + DescribeCanonicalExtras(problems);
+		if (!problems.empty()) {
+			++failures;
+			for (const std::string& problem: problems) {
+				std::cout << "[lpinv] FAIL overlay-links set: cannot capture canonical Lua state: " << problem << std::endl;
+			}
+		} else if (setAfter != setBefore) {
+			WriteProbeText("lpinv_before_overlay_set", setBefore);
+			WriteProbeText("lpinv_after_overlay_set", setAfter);
+			++failures;
+			std::cout << "[lpinv] FAIL overlay-links set: canonical state changed: " << DescribeStateDifference(setBefore, setAfter) << std::endl;
+		} else {
+			std::cout << "[lpinv] PASS overlay-links set: canonical state byte-identical" << std::endl;
+		}
 	}
 	LocalPrediction::SetDepthOverride(savedDepth);
 	PreviewScriptSelfTest::SetStrideCounter(false);
