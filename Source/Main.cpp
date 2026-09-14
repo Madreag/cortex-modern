@@ -4781,7 +4781,7 @@ bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string*
 		}
 	}
 	if (!ConfigureNetMatchActivity(replayConfig.activityPreset, localTeam, &setupError)) {
-		if (error) *error = setupError;
+		if (error) *error = (fromMenu ? "" : "setup failed: ") + setupError;
 		CloseNetReplayPlayback();
 		return false;
 	}
