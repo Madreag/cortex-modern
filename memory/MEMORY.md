@@ -12,3 +12,4 @@
 - [Arizona local time only](arizona-local-time-only.md) — every stamp in MST (UTC-7, no DST), never UTC; read the clock first
 - [Mac job uploads only run.zsh](mac-job-uploads-only-run-zsh.md) — scp prompt/policy/rules/build.zsh to the Mac lane first; clear stale exit.txt; local cli_runs dir must not pre-exist
 - [Mac TCC prompts pre-granted](mac-tcc-prompts-pregranted.md) — approval dialogs = TCC for the agent binaries; user db writable over ssh (mac_tcc_grant.py), system db (FDA) is not; never send the user to System Settings
+- [Family precondition counts idle MSBuild nodes](family-precondition-counts-idle-msbuild.md) — stop idle MSBuild.exe before run_family.py; move a failed family-source<N>.json aside, never delete
