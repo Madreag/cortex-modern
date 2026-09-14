@@ -2758,7 +2758,10 @@ void GameActivity::RebindNonOwnedActorSlots() {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		const long uid = m_CheckpointMarkedActorIDs[player];
 		Actor* actor = uid ? dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(uid)) : nullptr;
-		m_pLastMarkedActor[player] = (actor && g_MovableMan.ValidMO(actor) && g_MovableMan.IsActor(actor)) ? actor : nullptr;
+		Actor* link = (actor && g_MovableMan.ValidMO(actor) && g_MovableMan.IsActor(actor)) ? actor : nullptr;
+		// A mark on a live actor other than the saved link's was made after the world was replaced, so it stays.
+		const Actor* marked = m_pLastMarkedActor[player];
+		if (!marked || marked == link || !g_MovableMan.IsActor(marked)) m_pLastMarkedActor[player] = link;
 	}
 }
 
