@@ -127,8 +127,32 @@ def unexpected_errors(item):
     return [line for line in item['errors'] if not exempt or CRASH_ERROR.search(line)]
 
 
-def fixtures_expected(item, expect_load):
-    """Applying transitions and accepted loads must run the scripted fixtures."""
+def is_contract_fixture(path):
+    """A tools/contracts file that prints an ARMED contract-check line."""
+    path = Path(path)
+    parts = path.parts
+    if not any(parts[i] == 'tools' and parts[i + 1] == 'contracts' for i in range(len(parts) - 1)):
+        return False
+    try:
+        return '-contract-check] ARMED' in path.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return False
+
+
+def _configured_scripts(item, scripts=None):
+    if scripts is not None:
+        return [Path(path) for path in scripts if path]
+    stored = item.get('configured_scripts')
+    if stored is not None:
+        return [Path(path) for path in stored if path]
+    return None
+
+
+def fixtures_expected(item, expect_load, scripts=None):
+    """Applying transitions and accepted loads must arm a configured contract fixture."""
+    paths = _configured_scripts(item, scripts)
+    if paths is not None and not any(is_contract_fixture(path) for path in paths):
+        return False
     base = item['operation'].split(':', 1)[0]
     if base in LOAD_OPERATIONS or base in STAGE_TRANSACTIONS:
         return expect_load == 'accepted'
@@ -150,7 +174,7 @@ def fixture_checks(item, name):
     return [check for check in (item.get('contract_checks') or []) if check.get('family') == name]
 
 
-def gate(item, expect_load, exe_hash):
+def gate(item, expect_load, exe_hash, scripts=None):
     """The recorded outcome of the transition, not just a clean process."""
     base = item['operation'].split(':', 1)[0]
     must_apply = base in APPLYING_OPERATIONS or (base in LOAD_OPERATIONS and expect_load == 'accepted')
@@ -165,7 +189,9 @@ def gate(item, expect_load, exe_hash):
         ('graphs_serialized', all(observation['serialized'] and observation['problem_count'] == 0
                                   for observation in item['graph_observations']))) if not passed]
     armed = armed_names(item)
-    if fixtures_expected(item, expect_load) and not armed:
+    paths = _configured_scripts(item, scripts)
+    item['contract_fixtures_configured'] = [str(path) for path in (paths or []) if is_contract_fixture(path)]
+    if fixtures_expected(item, expect_load, scripts) and not armed:
         failures.append('fixture_armed')
     for name in armed:
         if not fixture_checks(item, name):
@@ -456,7 +482,8 @@ def main():
             print(json.dumps({'case': result['case'], 'continuation_status': continuation['status'], 'failed_checks': [key for key, passed in checks.items() if not passed]}), flush=True)
 
     for item in results:
-        item['gate_failures'] = gate(item, options.expect_load, exe_hash)
+        scripts = [path for path in (options.script, options.global_script, *options.snapshots) if path]
+        item['gate_failures'] = gate(item, options.expect_load, exe_hash, scripts)
         (Path(item['out']) / 'result.json').write_text(json.dumps(item, indent=2))
     unchanged = unchanged_inputs()
     complete = unchanged and not any(item['gate_failures'] for item in results)
