@@ -1,6 +1,7 @@
 #include "Arm.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
+#include "FloatText.h"
 
 #include <cstdlib>
 #include <sstream>
@@ -467,9 +468,8 @@ std::vector<std::string> Arm::GetHandTargetsForSave() const {
 	std::vector<std::string> packed;
 	for (std::queue<HandTarget> targets = m_HandTargets; !targets.empty(); targets.pop()) {
 		const HandTarget& target = targets.front();
-		std::ostringstream out;
-		out << std::hexfloat << target.TargetOffset.m_X << "|" << target.TargetOffset.m_Y << "|" << target.DelayAtTarget << "|" << (target.HFlippedWhenTargetWasCreated ? 1 : 0) << "|" << target.Description;
-		packed.push_back(out.str());
+		// A stream's hexfloat takes its decimal point from the global locale; this saved state must not.
+		packed.push_back(HexFloatString(target.TargetOffset.m_X) + "|" + HexFloatString(target.TargetOffset.m_Y) + "|" + HexFloatString(target.DelayAtTarget) + "|" + (target.HFlippedWhenTargetWasCreated ? "1" : "0") + "|" + target.Description);
 	}
 	return packed;
 }
@@ -486,7 +486,18 @@ void Arm::AddHandTargetFromSave(const std::string& packed) {
 	std::getline(in, delay, '|');
 	std::getline(in, flipped, '|');
 	std::getline(in, description);
-	m_HandTargets.emplace(description, Vector(std::strtof(x.c_str(), nullptr), std::strtof(y.c_str(), nullptr)), std::strtof(delay.c_str(), nullptr), flipped == "1");
+	// strtof read the saved hexfloat through the global locale and gave 0 for a field it could not read.
+	const auto parseField = [](const std::string& field) {
+		float value = 0.0F;
+		if (ParseHexFloatExact(field.data(), field.data() + field.size(), value).ec != std::errc()) {
+			value = 0.0F;
+		}
+		return value;
+	};
+	const float targetOffsetX = parseField(x);
+	const float targetOffsetY = parseField(y);
+	const float delayAtTarget = parseField(delay);
+	m_HandTargets.emplace(description, Vector(targetOffsetX, targetOffsetY), delayAtTarget, flipped == "1");
 }
 
 void Arm::AdoptPersistedUniqueID() {
