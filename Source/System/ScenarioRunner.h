@@ -209,10 +209,10 @@ namespace RTE {
 			uint64_t tick = 0;
 			std::string kind;
 			std::string text;
+			uint8_t senderPeerId = 0;
 		};
-		/// Presentation only: queues a top-centre banner (~3s wall clock) and logs it for the report.
-		/// Lives outside every serialized, hashed or saved structure; never read by the sim.
-		static void PushNetUiToast(const std::string& kind, const std::string& text);
+		/// Exports a presentation event; the renderer resolves its optional sender into a display name.
+		static void PushNetUiToast(const std::string& kind, const std::string& text, uint8_t senderPeerId = 0);
 		/// Drops the on-screen queue (a resync relaunch clears it); the report log is kept.
 		static void ClearNetUiToasts();
 		/// Draws at most three unexpired toast rows at bottom centre, outside simulation state.
@@ -288,7 +288,8 @@ namespace RTE {
 		/// shared null-tick countdown, while the wire keeps exchanging empty frames.
 		static bool IsLockstepPaused();
 		static int GetLockstepResumeCountdown();
-		static void ApplyLockstepPauseCommand(bool pause);
+		/// Applies the shared pause and exports its sender for presentation only.
+		static void ApplyLockstepPauseCommand(bool pause, uint8_t senderPeerId = 0);
 		static void AdvanceLockstepPausedTick();
 		static bool QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error = nullptr);
 		static bool WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);

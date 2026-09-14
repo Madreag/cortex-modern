@@ -672,7 +672,7 @@ namespace RTE {
 		s_SeatPresence = presence;
 	}
 
-	void ScenarioRunner::PushNetUiToast(const std::string& kind, const std::string& text) {
+	void ScenarioRunner::PushNetUiToast(const std::string& kind, const std::string& text, uint8_t senderPeerId) {
 		// Selftests drive the service before the managers are built, so there is no sim clock to stamp with.
 		uint64_t tick = 0;
 		if (s_LockstepCoordinator) {
@@ -681,7 +681,7 @@ namespace RTE {
 			tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 		}
 		NetUiToast toast;
-		toast.record = {tick, kind, text};
+		toast.record = {tick, kind, text, senderPeerId};
 		toast.shownAtMs = NetLockstepNowMs();
 		s_NetUiToasts.push_back(toast);
 		s_NetUiToastLog.push_back(toast.record);
@@ -978,7 +978,7 @@ namespace RTE {
 		return s_LockstepResumeCountdown;
 	}
 
-	void ScenarioRunner::ApplyLockstepPauseCommand(bool pause) {
+	void ScenarioRunner::ApplyLockstepPauseCommand(bool pause, uint8_t senderPeerId) {
 		if (pause && !s_LockstepPaused) {
 			s_LockstepPaused = true;
 			s_LockstepResumeCountdown = -1;
@@ -986,12 +986,13 @@ namespace RTE {
 			const std::string line = "match paused at tick " + std::to_string(g_TimerMan.GetSimUpdateCount()) + " sim ms " + std::to_string(g_TimerMan.GetSimTimeMS());
 			g_ConsoleMan.PrintString("NETWORK: " + line);
 			std::cout << "[net-match] " << line << std::endl;
-			PushNetUiToast("paused", "Match paused");
+			PushNetUiToast("paused", "Match paused", senderPeerId);
 		} else if (!pause && s_LockstepPaused && s_LockstepResumeCountdown < 0) {
 			s_LockstepResumeCountdown = static_cast<int>(3.0F / c_DefaultDeltaTimeS + 0.5F);
 			const std::string line = "match resuming in " + std::to_string(s_LockstepResumeCountdown) + " ticks";
 			g_ConsoleMan.PrintString("NETWORK: " + line);
 			std::cout << "[net-match] " << line << std::endl;
+			PushNetUiToast("resuming", "Resume requested", senderPeerId);
 		}
 	}
 
