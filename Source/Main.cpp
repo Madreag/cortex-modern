@@ -129,6 +129,7 @@
 #include <immintrin.h>
 #endif
 #include <chrono>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -926,6 +927,18 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-net-replay-out") {
 			s_netReplayOutPath = argValue[++i];
 			ScenarioRunner::ArmLockstepReplayRecord(s_netReplayOutPath);
+			continue;
+		}
+		if (currentArg == "-net-autosave-seconds") {
+			uint32_t seconds = 0;
+			const std::string value = lastArg ? "" : argValue[i + 1];
+			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), seconds);
+			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || seconds > 86400) {
+				std::cerr << "[autosave] -net-autosave-seconds requires an integer in 0..86400" << std::endl;
+				return false;
+			}
+			NetMatchService::SetAutosaveSeconds(seconds);
+			i += 2;
 			continue;
 		}
 
@@ -3513,6 +3526,7 @@ void RunGameLoop() {
 			// Sim consumed this tick's accumulated input edges; clear before next tick reads
 			g_UInputMan.EndSimUpdate();
 			if (probeTickResult) RollbackProbeOnHashedTick(simTick, *probeTickResult);
+			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
 
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 

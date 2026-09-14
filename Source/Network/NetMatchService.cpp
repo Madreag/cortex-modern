@@ -91,6 +91,7 @@ namespace RTE {
 	}
 
 	bool NetMatchService::s_AdmissionEnabled = true;
+	uint32_t NetMatchService::s_AutosaveSeconds = 60;
 	std::string NetMatchService::s_TicketStorePath;
 	std::string NetMatchService::s_JoinWaitPath;
 	bool NetMatchService::s_ApplyForSeat = false;
@@ -1503,11 +1504,29 @@ static std::string ResyncSaveName() {
 		m_MatchWasRunning = true;
 		if (!m_PendingResyncState.has_value()) {
 			ResetRosterTransitionHistory();
+			m_AutosaveMatchId = m_Runner ? std::format("{:x}-{:x}-{:x}", m_Runner->GetMatchConfig().sessionId, System::GetProcessID(),
+			                                        std::chrono::system_clock::now().time_since_epoch().count()) : "";
+			m_NextAutosaveSimTime = -1;
+			m_LastAutosaveSimTime = -1;
 		}
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
 		CaptureA7SeatView();
 		return true;
+	}
+
+	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
+		if (s_AutosaveSeconds == 0 || !ScenarioRunner::IsLockstepControllerSyncActive() ||
+		    !g_ActivityMan.ActivityRunning() || m_AutosaveMatchId.empty()) return;
+		const int64_t now = g_TimerMan.GetSimTimeTicks();
+		const int64_t interval = static_cast<int64_t>(s_AutosaveSeconds) * g_TimerMan.GetTicksPerSecond();
+		if (m_NextAutosaveSimTime < 0 || now < m_LastAutosaveSimTime) {
+			m_NextAutosaveSimTime = now - g_TimerMan.GetDeltaTimeTicks() + interval;
+		}
+		m_LastAutosaveSimTime = now;
+		if (now < m_NextAutosaveSimTime) return;
+		m_NextAutosaveSimTime += ((now - m_NextAutosaveSimTime) / interval + 1) * interval;
+		g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick);
 	}
 
 	void NetMatchService::PumpSeatPresence() {

@@ -96,8 +96,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=48212)
     parser.add_argument("--ticks", type=int, default=400)
     args = parser.parse_args()
-    if not 48211 <= args.port <= 48217 or args.ticks < 400:
-        parser.error("three ports must fit 48211..48219 and at least 400 ticks are required")
+    if not 48211 <= args.port <= 48216 or args.ticks < 400:
+        parser.error("four ports must fit 48211..48219 and at least 400 ticks are required")
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = args.repo.resolve(), args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -105,7 +105,7 @@ def main() -> int:
         exe_sha = hashlib.file_digest(exe, "sha256").hexdigest()
     result = {"exe_sha256": exe_sha, "arms": {}}
     arms = {"off": {"host": 0, "client": 0}, "on": {"host": 2, "client": 2},
-            "asymmetric": {"host": 2, "client": 0}}
+            "asymmetric": {"host": 2, "client": 0}, "rotation": {"host": 1, "client": 1}}
     for index, (arm, cadence) in enumerate(arms.items()):
         arm_root = root / arm
         details = {"cadence_seconds": cadence}
@@ -116,6 +116,8 @@ def main() -> int:
             for who in cadence:
                 assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
                 details[who] = inspect_autosaves(arm_root, who, cadence[who] > 0)
+                if arm == "rotation":
+                    assert len(details[who]["captures"]) > 3, "rotation arm never exceeded the retention limit"
             passed, comparison = strict_compare(arm_root / "host_trace.json", arm_root / "client_trace.json", args.ticks)
             details["peer_comparison"] = comparison
             assert passed, comparison
