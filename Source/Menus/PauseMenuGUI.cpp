@@ -153,8 +153,8 @@ PauseMenuGUI::PauseMenuUpdateResult PauseMenuGUI::Update() {
 	diagnosticsButton->SetEnabled(!savingDiagnostics);
 	if (savingDiagnostics != m_DiagnosticsBusy) {
 		m_DiagnosticsBusy = savingDiagnostics;
-		m_ButtonHoveredText[PauseMenuButton::SaveDiagnosticsButton] = savingDiagnostics ? "SAVING..." : m_DiagnosticsIdleText[0];
-		m_ButtonUnhoveredText[PauseMenuButton::SaveDiagnosticsButton] = savingDiagnostics ? "saving..." : m_DiagnosticsIdleText[1];
+		m_ButtonHoveredText[PauseMenuButton::SaveDiagnosticsButton] = savingDiagnostics ? "SAVING" : m_DiagnosticsIdleText[0];
+		m_ButtonUnhoveredText[PauseMenuButton::SaveDiagnosticsButton] = savingDiagnostics ? "saving" : m_DiagnosticsIdleText[1];
 		diagnosticsButton->SetText(m_HoveredButton == diagnosticsButton ? m_ButtonHoveredText[PauseMenuButton::SaveDiagnosticsButton] : m_ButtonUnhoveredText[PauseMenuButton::SaveDiagnosticsButton]);
 	}
 

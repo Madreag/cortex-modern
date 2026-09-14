@@ -167,6 +167,49 @@ def inspect_pictures(runtime: Path, prefix: str, width: int, height: int, count:
     return pictures
 
 
+def measure_pause_busy_centre(initial_path: Path, busy_path: Path) -> dict:
+    from collections import Counter
+    from PIL import Image
+
+    with Image.open(initial_path) as source:
+        initial = source.convert("RGB")
+    with Image.open(busy_path) as source:
+        busy = source.convert("RGB")
+    assert initial.size == busy.size, "pause frame sizes differ"
+    width, height = initial.size
+    old, new = initial.load(), busy.load()
+    colors = Counter(old[x, y] for y in range(height) for x in range(width)
+                     if old[x, y][0] >= 200 and old[x, y][1] >= 120 and old[x, y][2] <= 80
+                     and old[x, y][0] > old[x, y][1])
+    assert colors, "initial pause frame has no amber ink"
+    ink = colors.most_common(1)[0][0]
+    initial_rows = [sum(old[x, y] == ink for x in range(width)) for y in range(height)]
+    removed_rows = [sum(old[x, y] == ink and new[x, y] != ink for x in range(width)) for y in range(height)]
+    bands, start = [], None
+    for y, count in enumerate(initial_rows + [0]):
+        if count and start is None:
+            start = y
+        elif not count and start is not None:
+            bands.append((start, y))
+            start = None
+    selected = max(range(len(bands)), key=lambda index: sum(removed_rows[bands[index][0]:bands[index][1]]))
+    idle_band = bands[selected]
+    removed = sum(removed_rows[idle_band[0]:idle_band[1]])
+    assert removed > 0, "pause busy frame does not replace an idle text row"
+    # Adjacent idle rows define the cell, including room below the glyph baseline.
+    top = (bands[selected - 1][1] + idle_band[0]) // 2 if selected else 0
+    bottom = (idle_band[1] + bands[selected + 1][0] + 1) // 2 if selected + 1 < len(bands) else height
+    added = [(x, y) for y in range(top, bottom) for x in range(width) if new[x, y] == ink and old[x, y] != ink]
+    assert added, "pause busy row has no new amber ink"
+    left, right = min(x for x, y in added), max(x for x, y in added)
+    centre, axis = (left + right) / 2, width / 2
+    return {"initial": str(initial_path), "busy": str(busy_path), "ink_rgb": list(ink),
+            "initial_bands": bands, "idle_band": idle_band, "measurement_band": [top, bottom],
+            "removed_pixels": removed, "added_pixels": len(added), "ink_left": left, "ink_right": right,
+            "centre": centre, "axis": axis, "offset": centre - axis, "limit_px": 3,
+            "passed": abs(centre - axis) <= 3}
+
+
 def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
     root.mkdir(parents=True, exist_ok=False)
     rows = {}
@@ -180,9 +223,9 @@ def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
         script.write_text("wait 12\nassert_screen Pause\nassert_control ButtonSaveDiagnostics\n"
                           "assert_enabled ButtonSaveDiagnostics 1\nassert_label ButtonSaveDiagnostics save diagnostics\n"
                           "screenshot diagnostics_pause\npost_command ButtonSaveDiagnostics\n"
-                          "wait 2\nassert_enabled ButtonSaveDiagnostics 0\nassert_label ButtonSaveDiagnostics saving...\n"
+                          "wait 2\nassert_enabled ButtonSaveDiagnostics 0\nassert_label ButtonSaveDiagnostics saving\n"
                           "screenshot diagnostics_pause_busy\n"
-                          "assert_enabled ButtonSaveDiagnostics 0\nassert_label ButtonSaveDiagnostics saving...\n"
+                          "assert_enabled ButtonSaveDiagnostics 0\nassert_label ButtonSaveDiagnostics saving\n"
                           "screenshot diagnostics_pause_busy_confirmed\n"
                           "wait_file Telemetry/diag-*.zip\nwait_ms 50\n"
                           "assert_enabled ButtonSaveDiagnostics 1\nassert_label ButtonSaveDiagnostics save diagnostics\n"
@@ -218,6 +261,12 @@ def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
             try:
                 assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
                 pictures = inspect_pictures(run.cwd, "diagnostics_pause", width, height, 4)
+                initial = next(Path(picture["path"]) for picture in pictures if Path(picture["path"]).name.startswith("diagnostics_pause_20"))
+                busy = next(Path(picture["path"]) for picture in pictures if Path(picture["path"]).name.startswith("diagnostics_pause_busy_20"))
+                centre = measure_pause_busy_centre(initial, busy)
+                details["peers"][who] = {"pictures": pictures, "busy_centre": centre}
+                print(f"pause busy row centre {centre['centre']:.1f} axis {centre['axis']:.1f} {'PASS' if centre['passed'] else 'FAIL'} ({tag}/{who})", flush=True)
+                assert centre["passed"], f"pause busy row is {centre['offset']:.1f} px from its axis"
                 log = read_log(run.out)
                 assert "assert_screen expected=Pause actual=Pause PASS" in log, "pause screen was not asserted"
                 assert "post_command ButtonSaveDiagnostics ok=1" in log, "diagnostics command was not accepted"
@@ -225,8 +274,8 @@ def run_pause(repo: Path, root: Path, port: int, exe_sha: str) -> dict:
                 assert log.count("assert_enabled ButtonSaveDiagnostics expected=1 actual=1 PASS") == 2, "terminal button was not enabled"
                 assert log.count('assert_label ButtonSaveDiagnostics "save diagnostics" text="save diagnostics" PASS') == 2, "terminal label differs"
                 assert log.count("assert_enabled ButtonSaveDiagnostics expected=0 actual=0 PASS") == 2, "busy button was not disabled"
-                assert log.count('assert_label ButtonSaveDiagnostics "saving..." text="saving..." PASS') == 2, "busy label differs"
-                details["peers"][who] = {"pictures": pictures, "bundle": inspect_bundle(run.cwd, exe_sha)}
+                assert log.count('assert_label ButtonSaveDiagnostics "saving" text="saving" PASS') == 2, "busy label differs"
+                details["peers"][who]["bundle"] = inspect_bundle(run.cwd, exe_sha)
             except Exception as error:
                 details["errors"][who] = str(error)
         details["passed"] = not details["errors"]
