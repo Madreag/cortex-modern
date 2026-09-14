@@ -4631,15 +4631,16 @@ void MovableMan::UpdateControllers() {
 			}
 		}
 	}
-	// Record every registered actor's owner once, here, where the wire takes over: the policy would
-	// otherwise re-derive it from the control mode a switch is about to change.
+	// Record every registered actor's owner once per team it plays for, here, where the wire takes
+	// over: the policy would otherwise re-derive it from the control mode a switch is about to change.
+	// A live claim is not the owner to return to, so the entry takes the policy's peer, not the claimant.
 	if (lockstepActive) {
 		for (const Actor* actor: m_Actors) {
 			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
 			// The ownership query normalizes a negative team to 0; the seed records the team it was resolved at.
 			const uint8_t team = actor->GetTeam() < 0 ? uint8_t{0} : static_cast<uint8_t>(actor->GetTeam());
-			if (!NetActorOwnership::HasSeededOwner(uid)) {
-				NetActorOwnership::SeedOwner(uid, ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()), team);
+			if (!NetActorOwnership::HasSeededOwnerForTeam(uid, team)) {
+				NetActorOwnership::SeedOwner(uid, ScenarioRunner::GetLockstepPolicyActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()), team);
 			}
 		}
 	}

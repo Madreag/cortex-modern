@@ -55,8 +55,9 @@ namespace RTE {
 	}
 
 	uint8_t NetActorOwnership::ResolveOwnerPeer(const NetMatchConfig& config, const NetActorOwnershipQuery& query) {
-		// An actor the world already seeded keeps that owner; only an unseeded query reads the policy.
-		if (const auto seeded = s_SeededOwners.find(query.actorUniqueID); seeded != s_SeededOwners.end()) {
+		// The seed freezes the control-mode input at the team it was taken at; the actor's own team is
+		// still an input, so a query at another team resolves from the policy again.
+		if (const auto seeded = s_SeededOwners.find(query.actorUniqueID); seeded != s_SeededOwners.end() && seeded->second.team == query.team) {
 			return seeded->second.ownerPeerId;
 		}
 		switch (config.ownershipPolicy) {

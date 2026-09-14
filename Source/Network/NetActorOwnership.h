@@ -31,8 +31,8 @@ namespace RTE {
 		static uint8_t ResolveOwnerPeer(const NetMatchConfig& config, const NetActorOwnershipQuery& query);
 
 		/// Records the owner an actor was resolved to when it entered the world, and the team it was
-		/// resolved at. The policy reads this first afterwards, so a control-mode change cannot move
-		/// frame production under a live actor.
+		/// resolved at. A query at that team reads this first afterwards, so a control-mode change
+		/// cannot move frame production under a live actor; a query at another team reads the policy.
 		/// @param actorUniqueID The actor's unique id.
 		/// @param ownerPeerId The peer that owns it from now on.
 		/// @param team The team the owner was resolved at.
