@@ -226,6 +226,8 @@ void ConsoleMan::ClearLog() {
 }
 
 void ConsoleMan::PrintString(const std::string& stringToPrint) {
+	static std::mutex printStringMutex;
+	std::scoped_lock printLock(printStringMutex);
 	AppendLogEntry("\n" + stringToPrint);
 	if (System::IsLoggingToCLI()) {
 		System::PrintToCLI(stringToPrint);
