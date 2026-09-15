@@ -156,6 +156,8 @@ using namespace RTE;
 
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
+// The live desync check. On everywhere by default; -net-desync-check off opts a measurement run out.
+static bool s_netDesyncCheck = true;
 static bool s_telemetryBundleOnExit = false;
 static std::string s_menuMpTraceError;
 static bool s_bitmapSaveSelfTest = false;
@@ -957,6 +959,13 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-net-match-e2e-resync") {
 			s_netMatchResyncOnDesync = true;
 			++i;
+			continue;
+		}
+
+		// A measurement run that must play past a divergence instead of stopping on it opts out here.
+		// Never a default and never passed by a gate script: an unarmed detector is a silent desync.
+		if (!lastArg && currentArg == "-net-desync-check") {
+			s_netDesyncCheck = std::string(argValue[++i]) != "off";
 			continue;
 		}
 
@@ -3491,10 +3500,11 @@ void RunGameLoop() {
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
 			const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-			// Sample the sim hash on an interval during live lockstep for the runtime desync check. NOT under
-			// -tick-hashes recording (the offline gate is the check there); a real menu match has no -tick-hashes.
+			// Sample the sim hash on an interval during live lockstep for the runtime desync check. It runs
+			// under -tick-hashes too: an offline trace compare only reads the divergence after the run, so
+			// skipping it there left the live check dead in every two-peer harness arm.
 			constexpr uint64_t c_DesyncCheckIntervalTicks = 30;
-			const bool desyncSampleTick = ScenarioRunner::IsLockstepControllerSyncActive() && !s_recordTickHashes &&
+			const bool desyncSampleTick = s_netDesyncCheck && ScenarioRunner::IsLockstepControllerSyncActive() &&
 			                              (simTick % c_DesyncCheckIntervalTicks == 0);
 			const bool a7HashTick = NetA7Journal::Enabled() && ScenarioRunner::IsLockstepControllerSyncActive();
 			const bool hashThisTick = s_recordTickHashes || desyncSampleTick || a7HashTick;
@@ -3828,8 +3838,12 @@ void RunGameLoop() {
 				if (s_recordTickHashes && s_rbProbePhase != 3) {
 					g_MetricsCollector.RecordTickHash(tickResult, lockstepPausedTick);
 				}
-				if (desyncSampleTick) {
-					ScenarioRunner::SubmitLockstepChecksum(simTick, SimChecksum::SimGatedHash(tickResult));
+				// Key the exchange on the frame the sim applied, not on the local tick: after a resync
+				// relaunch a peer can tick past the round's stop, and a hash labelled with that tick
+				// would file two different states under one frame number.
+				if (const uint64_t appliedFrame = ScenarioRunner::GetLockstepAppliedFrame();
+				    desyncSampleTick && appliedFrame == simTick) {
+					ScenarioRunner::SubmitLockstepChecksum(appliedFrame, SimChecksum::SimGatedHash(tickResult));
 				}
 				if ((s_rbProbeAtTick > 0 || s_rbProbeFuzzCount > 0) && (ScenarioRunner::IsActive() || ScenarioRunner::IsLockstepReplayPlayback())) {
 					probeTickResult = tickResult;
@@ -4690,6 +4704,7 @@ bool PrepareNetLockstepScenario(GnsTransport& transport, NetSession& session, Ne
 }
 
 std::string BuildControllerBoundaryJson();
+std::string BuildDesyncCheckJson();
 
 std::string BuildNetLockstepReportJson(const NetSession& session, const NetLockstepCoordinator& coordinator, const NetMatchRunner& runner, int scenarioExitCode, const std::string& setupError) {
 	const MetricsCollector::AggregatedRun run = g_MetricsCollector.GetCurrentRun();
@@ -4711,6 +4726,7 @@ std::string BuildNetLockstepReportJson(const NetSession& session, const NetLocks
 	out << "\"ownership_policy\":\"" << JsonEscape(NetMatchConfigUtil::OwnershipPolicyName(runner.GetMatchConfig().ownershipPolicy)) << "\",";
 	out << "\"input_delay_frames\":" << stats.inputDelayFrames << ",";
 	out << "\"controller_boundary\":" << BuildControllerBoundaryJson() << ",";
+	out << "\"desync_check\":" << BuildDesyncCheckJson() << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : ScenarioRunner::GetArgs().maxTicks) << ",";
 	out << "\"frames_sent\":" << stats.framePacketsSent << ",";
 	out << "\"frames_received\":" << stats.framePacketsReceived << ",";
@@ -4757,6 +4773,16 @@ std::string BuildControllerBoundaryJson() {
 	std::ostringstream out;
 	out << "{\"equip_commands\":" << stats.equipCommands << ",\"sound_commands\":" << stats.soundCommands << ",\"aim_intents\":" << stats.aimIntents
 	    << ",\"flip_intents\":" << stats.flipIntents << ",\"direct_writes\":" << stats.directWrites << "}";
+	return out.str();
+}
+
+// What the runtime desync check did this match. Zero submissions in a finished lockstep match means
+// the detector never ran, which every other number in the report would have hidden.
+std::string BuildDesyncCheckJson() {
+	const ScenarioRunner::LockstepChecksumCounters counters = ScenarioRunner::GetLockstepChecksumCounters();
+	std::ostringstream out;
+	out << "{\"submissions\":" << counters.submissions << ",\"sends\":" << counters.sends
+	    << ",\"compares\":" << counters.compares << ",\"mismatches\":" << counters.mismatches << "}";
 	return out.str();
 }
 
@@ -4845,6 +4871,7 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	    << ",\"events_retimed\":" << PreviewEventLedger::GetCounters().retimed
 	    << ",\"event_starts\":" << BuildPreviewEventStartsJson() << "},";
 	out << "\"controller_boundary\":" << BuildControllerBoundaryJson() << ",";
+	out << "\"desync_check\":" << BuildDesyncCheckJson() << ",";
 	out << "\"replay_recording\":{\"frames\":" << ScenarioRunner::GetLockstepReplayRecordFrames()
 	    << ",\"closed\":" << (ScenarioRunner::WasLockstepReplayRecordClosed() ? "true" : "false") << "},";
 	out << "\"setup_surface\":\"fixed-alpha-duel\",";

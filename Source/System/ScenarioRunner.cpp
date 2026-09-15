@@ -55,6 +55,7 @@ namespace RTE {
 		std::unique_ptr<ControllerLog> s_ControllerReplayLog;
 		std::string s_ControllerReplayError;
 		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
+		ScenarioRunner::LockstepChecksumCounters s_RetiredChecksumCounters;
 		uint64_t s_LockstepAppliedFrame = 0;
 		std::function<void()> s_SessionPump;
 		const NetSeatPresence* s_SeatPresence = nullptr;
@@ -753,6 +754,14 @@ namespace RTE {
 				if (newest > NetLockstepCodec::c_MaxFutureFrameSkew) s_LocalInputHistory.erase(s_LocalInputHistory.begin(), s_LocalInputHistory.lower_bound(newest - NetLockstepCodec::c_MaxFutureFrameSkew));
 			}
 		}
+		// A resync builds a new coordinator; the retiring one's desync-check traffic still counts.
+		if (s_LockstepCoordinator && s_LockstepCoordinator != coordinator) {
+			const NetLockstepStats& retiring = s_LockstepCoordinator->GetStats();
+			s_RetiredChecksumCounters.submissions += retiring.checksumSubmissions;
+			s_RetiredChecksumCounters.sends += retiring.checksumSends;
+			s_RetiredChecksumCounters.compares += retiring.checksumCompares;
+			s_RetiredChecksumCounters.mismatches += retiring.checksumMismatches;
+		}
 		s_LockstepCoordinator = coordinator;
 		if (!coordinator) {
 			s_SeatPresence = nullptr;
@@ -892,6 +901,18 @@ namespace RTE {
 
 	uint64_t ScenarioRunner::GetLockstepAppliedFrame() {
 		return s_LockstepAppliedFrame;
+	}
+
+	ScenarioRunner::LockstepChecksumCounters ScenarioRunner::GetLockstepChecksumCounters() {
+		LockstepChecksumCounters totals = s_RetiredChecksumCounters;
+		if (s_LockstepCoordinator) {
+			const NetLockstepStats& live = s_LockstepCoordinator->GetStats();
+			totals.submissions += live.checksumSubmissions;
+			totals.sends += live.checksumSends;
+			totals.compares += live.checksumCompares;
+			totals.mismatches += live.checksumMismatches;
+		}
+		return totals;
 	}
 
 	uint64_t ScenarioRunner::GetLockstepCompletedFrame() {
