@@ -114,6 +114,9 @@ void GUITextBox::Draw(GUIScreen* Screen) {
 	m_DrawBitmap->Draw(Screen->GetBitmap(), m_X, m_Y, nullptr);
 
 	GUITextPanel::Draw(Screen);
+	if (!m_Enabled && m_Skin) {
+		m_Skin->DimRect(Screen->GetBitmap(), m_X, m_Y, m_Width, m_Height);
+	}
 }
 
 GUIPanel* GUITextBox::GetPanel() {

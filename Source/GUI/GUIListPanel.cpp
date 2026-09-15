@@ -408,6 +408,9 @@ void GUIListPanel::Draw(GUIScreen* Screen) {
 
 	// Draw any children
 	GUIPanel::Draw(Screen);
+	if (!m_Enabled && m_Skin) {
+		m_Skin->DimRect(Screen->GetBitmap(), m_X, m_Y, m_Width, m_Height);
+	}
 }
 
 void GUIListPanel::OnMouseDown(int X, int Y, int Buttons, int Modifier) {
