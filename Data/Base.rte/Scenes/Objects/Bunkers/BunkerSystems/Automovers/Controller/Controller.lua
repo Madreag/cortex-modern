@@ -221,14 +221,57 @@ function Destroy(self)
 	AutomoverData[self.Team].teleporterNodesCount = 0;
 end
 
+local sortedAffectedActorIDsScratch = {};
+local sortedNodeKeysScratch = {};
+
 automoverUtilityFunctions.sortedAffectedActorIDs = function(self)
 	-- The order two stuck actors draw their nudges must not follow the table's hash.
-	local ids = {};
+	local ids = sortedAffectedActorIDsScratch;
+	for i = #ids, 1, -1 do
+		ids[i] = nil;
+	end
+	local first = next(self.affectedActors);
+	if first == nil then
+		return ids;
+	end
+	if next(self.affectedActors, first) == nil then
+		ids[1] = first;
+		return ids;
+	end
 	for actorUniqueID, _ in pairs(self.affectedActors) do
 		ids[#ids + 1] = actorUniqueID;
 	end
 	table.sort(ids);
 	return ids;
+end
+
+automoverUtilityFunctions.sortedNodeKeys = function(self, tbl)
+	-- Node-object pairs follow addresses; UniqueID order does not.
+	local keys = sortedNodeKeysScratch;
+	for i = #keys, 1, -1 do
+		keys[i] = nil;
+	end
+	local first = next(tbl);
+	if first == nil then
+		return keys;
+	end
+	if next(tbl, first) == nil then
+		keys[1] = first;
+		return keys;
+	end
+	for node, _ in pairs(tbl) do
+		keys[#keys + 1] = node;
+	end
+	table.sort(keys, function(a, b) return a.UniqueID < b.UniqueID; end);
+	-- Copy when a coroutine may yield while still iterating the list.
+	if coroutine.running() then
+		local copy = {};
+		for i = 1, #keys do
+			copy[i] = keys[i];
+		end
+		return copy;
+	end
+	return keys;
 end
 
 automoverActorFunctions.actorMovementUpdate = function(self)
@@ -554,7 +597,8 @@ automoverUtilityFunctions.addAllBoxes = function(self)
 	local teamNodeTable = AutomoverData[self.Team].nodeData;
 
 	local addedNodeCount = 0;
-	for node, nodeData in pairs(teamNodeTable) do
+	for _, node in ipairs(self:sortedNodeKeys(teamNodeTable)) do
+		local nodeData = teamNodeTable[node];
 		if nodeData.zoneBox ~= nil then
 			self.combinedAutomoverArea:AddBox(nodeData.zoneBox);
 			SceneMan.Scene:GetArea("NoGravityArea"):AddBox(nodeData.zoneBox);
@@ -636,7 +680,8 @@ automoverUtilityFunctions.addAllPaths = function(self)
 		while next(tentativeNodes) ~= nil do
 			local closestNode;
 			local distanceToClosestNode;
-			for tentativeNode, tentativeNodeData in pairs(tentativeNodes) do
+			for _, tentativeNode in ipairs(self:sortedNodeKeys(tentativeNodes)) do
+				local tentativeNodeData = tentativeNodes[tentativeNode];
 				if distanceToClosestNode == nil or tentativeNodeData.distance < distanceToClosestNode then
 					closestNode = tentativeNode;
 					distanceToClosestNode = tentativeNodeData.distance;
@@ -694,7 +739,7 @@ automoverUtilityFunctions.findClosestNode = function(self, positionToFindClosest
 
 	local closestNode;
 	local distanceToClosestNodeSqr;
-	for node, _ in pairs(nodesToCheck) do
+	for _, node in ipairs(self:sortedNodeKeys(nodesToCheck)) do
 		local nodeData = teamNodeTable[node];
 		local distanceToNode = SceneMan:ShortestDistance(node.Pos, positionToFindClosestNodeFor, self.checkWrapping);
 		if distanceToClosestNodeSqr == nil or distanceToNode.SqrMagnitude < distanceToClosestNodeSqr then
@@ -1043,7 +1088,7 @@ automoverActorFunctions.setupManualTeleporterData = function(self, actorData)
 	local startingTeleporter = self:findClosestNode(actor.Pos, nil, false, false);
 	manualTeleporterData.sortedTeleporters = {{ node = startingTeleporter, distance = 0 }};
 
-	for teleporterNode, _ in pairs(teamTeleporterTable) do
+	for _, teleporterNode in ipairs(self:sortedNodeKeys(teamTeleporterTable)) do
 		if teleporterNode.UniqueID ~= startingTeleporter.UniqueID then
 			local xDistanceToTeleporter = SceneMan:ShortestDistance(startingTeleporter.Pos, teleporterNode.Pos, self.checkWrapping).X;
 
@@ -1400,7 +1445,7 @@ automoverActorFunctions.handleTeleportingActorToAppropriateTeleporterForWaypoint
 				waypointData.nextNode = waypointData.endNode;
 			else
 				local closestTeleporterDistance;
-				for teleporterNode, _ in pairs(teamTeleporterTable) do
+				for _, teleporterNode in ipairs(self:sortedNodeKeys(teamTeleporterTable)) do
 					if self.pathTable[teleporterNode][waypointData.endNode] ~= nil and (closestTeleporterDistance == nil or self.pathTable[teleporterNode][waypointData.endNode].distance < closestTeleporterDistance) then
 						closestTeleporterDistance = self.pathTable[teleporterNode][waypointData.endNode].distance;
 						waypointData.nextNode = teleporterNode;
