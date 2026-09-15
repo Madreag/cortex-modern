@@ -595,12 +595,13 @@ namespace RTE {
 #pragma endregion
 
 #pragma region Actor Handling
-		/// Gets the currently controlled actor of a specific player.
+		/// Gets the actor a player's seat plays, as every peer of the match agrees on it.
 		/// @param player Which player to get the controlled actor of.
 		/// @return A pointer to the controlled Actor. Ownership is NOT transferred! 0 If no actor is currently controlled by this player.
 		Actor* GetControlledActor(int player = 0);
 
-		/// The seat's actor as THIS machine presents it: null for a seat another peer plays. Presentation only.
+		/// The seat's actor as THIS machine drives it right now: it carries a local switch before the wire does,
+		/// and it is null for a seat another peer plays. Presentation, prediction and local input only.
 		Actor* GetLocallyControlledActor(int player) const { return (player >= Players::PlayerOne && player < Players::MaxPlayerCount) ? m_ControlledActor[player] : nullptr; }
 
 		/// Records which seat the wire says an actor is played by; every peer applies the same frames.
