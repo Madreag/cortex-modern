@@ -320,6 +320,8 @@ namespace RTE {
 		/// The module a module-less activity preset belongs to, from the modules that define it. Reads no
 		/// manager: the caller lists the candidates.
 		static bool ResolveActivityModule(const std::string& preset, const std::vector<std::string>& definingModules, std::string& outModule, std::string* error = nullptr);
+		/// Fills an unset request module with the loaded module that defines the preset.
+		static bool SeatActivityModule(NetMatchServiceRequest& request, std::string* error = nullptr);
 		/// Fills the request's unset options from the saved settings, where a real host starts a match.
 		static void SeatSavedOptions(NetMatchServiceRequest& request);
 		/// Builds diagnostic identity on request; match startup supplies the cached join inputs.

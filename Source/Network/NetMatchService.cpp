@@ -298,6 +298,14 @@ static std::string ResyncSaveName() {
 		// Past the refusals: the settings are read once here, where a real host starts, and ride the
 		// request to both roster builds, so the worker's copy cannot pick up a later menu edit.
 		SeatSavedOptions(request);
+		// A launch config names its own module; any other request resolves one here, where the loaded
+		// modules are known and both roster builds see the answer.
+		std::string moduleError;
+		if (!request.standardRules && !SeatActivityModule(request, &moduleError)) {
+			if (error) *error = moduleError;
+			SetState(NetMatchServiceState::Failed, "Match activity refused", moduleError);
+			return false;
+		}
 		NetMatchConfig matchConfig;
 		std::string configError;
 		if (!BuildMatchConfig(request, c_UiSessionId, matchConfig, &configError)) {
@@ -2991,9 +2999,35 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::ResolveActivityModule(const std::string& preset, const std::vector<std::string>& definingModules, std::string& outModule, std::string* error) {
-		// A module-less preset takes the config's default module.
-		outModule.clear();
+		if (definingModules.size() > 1) {
+			// Never pick one silently: the caller has to say which module it means.
+			std::string named;
+			for (const std::string& module: definingModules) {
+				named += named.empty() ? module : ", " + module;
+			}
+			if (error) *error = "match activity " + preset + " is defined by " + named + "; name its module";
+			return false;
+		}
+		// No definition leaves the module unset, so the launch refuses by the name the config carries.
+		outModule = definingModules.empty() ? "" : definingModules.front();
 		return true;
+	}
+
+	bool NetMatchService::SeatActivityModule(NetMatchServiceRequest& request, std::string* error) {
+		if (!request.activityModule.empty()) {
+			return true;
+		}
+		const NetMatchStandardRules defaults;
+		const std::string preset = request.activityPreset.empty() ? defaults.activityPreset : request.activityPreset;
+		std::vector<std::string> definingModules;
+		for (int moduleId = 0; moduleId < g_PresetMan.GetTotalModuleCount(); ++moduleId) {
+			// GetEntityPreset falls back to the official modules, so only a module's own definition counts.
+			const Entity* found = g_PresetMan.GetEntityPreset(defaults.activityType, preset, moduleId);
+			if (found && found->GetModuleID() == moduleId) {
+				definingModules.push_back(g_PresetMan.GetDataModuleName(moduleId));
+			}
+		}
+		return ResolveActivityModule(preset, definingModules, request.activityModule, error);
 	}
 
 	void NetMatchService::SeatSavedOptions(NetMatchServiceRequest& request) {
