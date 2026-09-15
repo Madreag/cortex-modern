@@ -1011,6 +1011,32 @@ int Activity::GetLockstepHumanSlotIndex(int team) const {
 	return ScenarioRunner::GetLockstepHumanSlotIndex(team);
 }
 
+// A seat another peer plays has no slot on this machine; every peer answers the seat's synced control
+// binding instead, so a script asking who plays a seat gets the same actor everywhere.
+Actor* Activity::GetControlledActor(int player) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return nullptr;
+	}
+	if (m_SharedPlayerSeats && LocalInputOfPlayer(player) == Players::NoPlayer) {
+		return ResolveNetActor(m_LockstepControlUID[player]);
+	}
+	return m_ControlledActor[player];
+}
+
+// The committed frame carries the seat its actor is played by, so the binding an actor leaves is dropped.
+void Activity::NoteLockstepControlBinding(int64_t uid, int player) {
+	if (uid <= 0) {
+		return;
+	}
+	for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
+		if (seat == player) {
+			m_LockstepControlUID[seat] = uid;
+		} else if (m_LockstepControlUID[seat] == uid) {
+			m_LockstepControlUID[seat] = 0;
+		}
+	}
+}
+
 bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || !IsLocalHumanSeat(player)) {
 		return false;
@@ -1633,6 +1659,7 @@ void Activity::ForgetDestroyedActor(const Actor* actor) {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (m_Brain[player] == actor) m_Brain[player] = nullptr;
 		if (m_ControlledActor[player] == actor) m_ControlledActor[player] = nullptr;
+		if (m_LockstepControlUID[player] == static_cast<int64_t>(actor->GetUniqueID())) m_LockstepControlUID[player] = 0;
 		if (m_PlayerController[player].GetControlledActor() == actor) m_PlayerController[player].SetControlledActor(nullptr);
 	}
 }

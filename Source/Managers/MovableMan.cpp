@@ -407,6 +407,10 @@ bool MovableMan::ApplyLockstepFrameToActor(Actor& actor, const ControllerFrame& 
 		return false;
 	}
 	controller.SetWireApplyTick(static_cast<int64_t>(simTick));
+	// Every peer applies this frame, so the seat it names is where the shared control binding comes from.
+	if (Activity* activity = g_ActivityMan.GetActivity()) {
+		activity->NoteLockstepControlBinding(static_cast<int64_t>(actor.GetUniqueID()), controller.GetPlayer());
+	}
 	if (controller.GetInputMode() != previousMode || controller.GetPlayer() != previousPlayer) {
 		actor.OnControllerInputModeChanged(previousMode, previousPlayer);
 	}
@@ -839,7 +843,8 @@ void MovableMan::ReconcileLockstepControlBindings() {
 	}
 	const uint8_t localPeerId = ScenarioRunner::GetLockstepLocalPeerId();
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		const Actor* controlled = activity->GetControlledActor(player);
+		// Only a seat this machine presents holds a binding to release; the shared one belongs to its owner.
+		const Actor* controlled = activity->GetLocallyControlledActor(player);
 		if (!controlled || !g_MovableMan.IsActor(const_cast<Actor*>(controlled))) {
 			continue;
 		}
