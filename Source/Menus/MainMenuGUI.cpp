@@ -1366,7 +1366,11 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	const int buttonShift = (contentWidth - 300) / 2;
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55 + buttonShift, 192 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55 + buttonShift, 192 + extraHeight);
-	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(90 + buttonShift, 220 + extraHeight);
+	// The Leave/Seats pair centres on the panel the way Start does; the gap between them holds parity.
+	const int leaveWidth = m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->GetWidth();
+	const int seatsWidth = m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->GetWidth();
+	const int pairLeft = (contentWidth - leaveWidth - 2 - seatsWidth) / 2;
+	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(pairLeft, 220 + extraHeight);
 	LayoutMultiplayerFooter(contentWidth, contentHeight);
 
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
@@ -1376,7 +1380,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
 	// §9b: moderation is a match feature - a lobby seat whose holder leaves goes straight back in the pool.
-	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(212 + buttonShift, 220 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(contentWidth - pairLeft - seatsWidth, 220 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetVisible(snapshot.isHost);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetEnabled(snapshot.isHost && snapshot.running);
 }
