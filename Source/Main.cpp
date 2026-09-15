@@ -5589,6 +5589,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-float-text-selftest") {
 			return FloatTextSelfTest::Run();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-settings-preferences-selftest") {
+			return SettingsMan::RunNetworkPreferencesSelfTest();
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-controller-frame-selftest") {
 			return ControllerFrameSelfTest::Run();
 		}
