@@ -826,7 +826,8 @@ void MovableMan::ApplyLockstepControlHandoffToActor(Actor& actor, bool seated) {
 static uint64_t s_LockstepPausedFrames = 0;
 
 uint64_t RTE::LockstepPlayedFrame() {
-	return ScenarioRunner::GetLockstepAppliedFrame();
+	const uint64_t applied = ScenarioRunner::GetLockstepAppliedFrame();
+	return applied > s_LockstepPausedFrames ? applied - s_LockstepPausedFrames : 0;
 }
 
 void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors, bool paused) {
