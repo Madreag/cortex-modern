@@ -657,6 +657,9 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 					case NetGameAIOrder::PopWaypoint:
 						actor->PopFrontWaypoint(Vector(order->x, order->y));
 						break;
+					case NetGameAIOrder::SetMOMoveTarget:
+						actor->SetMOMoveTarget(order->targetUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order->targetUID)) : nullptr);
+						break;
 					default:
 						break;
 				}
