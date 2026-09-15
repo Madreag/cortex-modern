@@ -31,6 +31,8 @@
 #include "BunkerAssembly.h"
 #include "SLBackground.h"
 #include "EditorActivity.h"
+#include "ScenarioRunner.h"
+#include "Controller.h"
 
 #include "AEmitter.h"
 #include "AEJetpack.h"
@@ -2954,6 +2956,9 @@ float Scene::CalculatePath(const Vector& start, const Vector& end, std::list<Vec
 }
 
 std::shared_ptr<volatile PathRequest> Scene::CalculatePathAsync(const Vector& start, const Vector& end, float jumpHeight, float digStrength, Activity::Teams team, PathCompleteCallback callback) {
+	if (!callback && ScenarioRunner::IsLockstepControllerSyncActive() && g_CurrentAIActor == nullptr && !g_MovableMan.IsSpeculative() && !LuaMan::IsDirectPathCompute()) {
+		return LuaMan::RegisterSharedNativePath(g_LuaMan.GetPathCallbackContext(), this, start, end, jumpHeight, digStrength, static_cast<int>(team));
+	}
 	return GetPathFinder(team).CalculatePathAsync(start, end, jumpHeight, digStrength, callback);
 }
 

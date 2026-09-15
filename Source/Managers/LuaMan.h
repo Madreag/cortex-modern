@@ -528,6 +528,12 @@ namespace RTE {
 		/// Completes the Lua callback from a committed shared path answer.
 		void ApplySharedPathResult(const NetGameScriptPath& payload);
 
+		/// True while the host is running a local path compute that must not re-enter the shared hook.
+		static bool IsDirectPathCompute();
+
+		/// Registers a native (C++) shared path and returns the request every peer completes from the committed answer.
+		static std::shared_ptr<volatile PathRequest> RegisterSharedNativePath(const std::shared_ptr<LuaPathCallbackContext>& context, Scene* scene, const Vector& start, const Vector& end, float jumpHeight, float digStrength, int team);
+
 		/// Starts a fresh callback queue, optionally releasing old Lua closures.
 		void ResetPathCallbacks(bool clearLua = false);
 

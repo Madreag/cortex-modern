@@ -96,6 +96,7 @@ struct RTE::LuaPathCallbackContext {
 		lua_State* state = nullptr;
 		int localId = 0;
 		Scene* scene = nullptr;
+		std::shared_ptr<PathRequest> nativeResult;
 		Vector start;
 		Vector end;
 		float jumpHeight = 0.0F;
@@ -6493,7 +6494,21 @@ int LuaMan::AllocatePathCallback(const std::shared_ptr<LuaPathCallbackContext>& 
 	return context->nextId[state]++;
 }
 
+namespace {
+	thread_local int g_DirectPathCompute = 0;
+
+	struct DirectPathComputeScope {
+		DirectPathComputeScope() { ++g_DirectPathCompute; }
+		~DirectPathComputeScope() { --g_DirectPathCompute; }
+	};
+}
+
+bool LuaMan::IsDirectPathCompute() {
+	return g_DirectPathCompute > 0;
+}
+
 static void DispatchPathCallback(const std::shared_ptr<LuaPathCallbackContext>& context, const LuaPathCallbackContext::Request& request) {
+	const DirectPathComputeScope direct;
 	request.scene->CalculatePathAsync(request.start, request.end, request.jumpHeight, request.digStrength, request.team,
 	    [context, state = request.state, id = request.id](std::shared_ptr<volatile PathRequest> result) {
 		    LuaMan::CompletePathCallback(context, state, id, const_cast<const PathRequest&>(*result));
@@ -6550,6 +6565,23 @@ void LuaMan::RegisterSharedPathRequest(const std::shared_ptr<LuaPathCallbackCont
 	request.digStrength = digStrength;
 	request.team = static_cast<Activity::Teams>(team);
 	context->unassignedShared.push_back(request);
+}
+
+std::shared_ptr<volatile PathRequest> LuaMan::RegisterSharedNativePath(const std::shared_ptr<LuaPathCallbackContext>& context, Scene* scene, const Vector& start, const Vector& end, float jumpHeight, float digStrength, int team) {
+	auto result = std::make_shared<PathRequest>();
+	result->startPos = start;
+	result->targetPos = end;
+	std::scoped_lock lock(context->mutex);
+	LuaPathCallbackContext::SharedRequest request;
+	request.scene = scene;
+	request.nativeResult = result;
+	request.start = start;
+	request.end = end;
+	request.jumpHeight = jumpHeight;
+	request.digStrength = digStrength;
+	request.team = static_cast<Activity::Teams>(team);
+	context->unassignedShared.push_back(request);
+	return std::shared_ptr<volatile PathRequest>(result, result.get());
 }
 
 static bool SharedRequestLess(const LuaPathCallbackContext::SharedRequest& a, const LuaPathCallbackContext::SharedRequest& b) {
@@ -6614,6 +6646,7 @@ void LuaMan::StartSharedPathComputation(const std::shared_ptr<LuaPathCallbackCon
 		found->second.submitted = true;
 		request = found->second;
 	}
+	const DirectPathComputeScope direct;
 	request.scene->CalculatePathAsync(request.start, request.end, request.jumpHeight, request.digStrength, request.team,
 	    [context, sharedId](std::shared_ptr<volatile PathRequest> result) {
 		    auto ready = MakeSharedPathResult(sharedId, const_cast<const PathRequest&>(*result));
@@ -6660,17 +6693,24 @@ void LuaMan::ApplySharedPathResult(const NetGameScriptPath& payload) {
 	}
 	lua_State* state = nullptr;
 	int localId = -1;
+	std::shared_ptr<PathRequest> native;
 	{
 		std::scoped_lock lock(m_PathCallbacks->mutex);
-		const auto found = m_PathCallbacks->sharedToLocal.find(payload.requestId);
-		if (found == m_PathCallbacks->sharedToLocal.end()) {
+		const auto mapped = m_PathCallbacks->sharedToLocal.find(payload.requestId);
+		const auto pending = m_PathCallbacks->pendingShared.find(payload.requestId);
+		if (mapped == m_PathCallbacks->sharedToLocal.end() && pending == m_PathCallbacks->pendingShared.end()) {
 			PrintNetPathRefuse("[net-path] refused: unknown shared request " + std::to_string(payload.requestId));
 			return;
 		}
-		state = found->second.first;
-		localId = found->second.second;
-		m_PathCallbacks->sharedToLocal.erase(found);
-		m_PathCallbacks->pendingShared.erase(payload.requestId);
+		if (mapped != m_PathCallbacks->sharedToLocal.end()) {
+			state = mapped->second.first;
+			localId = mapped->second.second;
+			m_PathCallbacks->sharedToLocal.erase(mapped);
+		}
+		if (pending != m_PathCallbacks->pendingShared.end()) {
+			native = pending->second.nativeResult;
+			m_PathCallbacks->pendingShared.erase(pending);
+		}
 	}
 	PathRequest result;
 	result.complete = true;
@@ -6680,7 +6720,12 @@ void LuaMan::ApplySharedPathResult(const NetGameScriptPath& payload) {
 	result.totalCost = payload.totalCost;
 	result.startPos = payload.startPos;
 	result.targetPos = payload.targetPos;
-	CompletePathCallback(m_PathCallbacks, state, localId, result);
+	if (native) {
+		*native = result;
+	}
+	if (state) {
+		CompletePathCallback(m_PathCallbacks, state, localId, result);
+	}
 }
 
 void LuaMan::ResetPathCallbacks(bool clearLua) {
