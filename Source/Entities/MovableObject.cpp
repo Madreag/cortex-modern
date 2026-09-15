@@ -1517,27 +1517,26 @@ int MovableObject::UpdateScripts() {
 }
 
 void MovableObject::GibThisFromScript() {
+	GibThisFromScript(Vector(), nullptr);
+}
+
+void MovableObject::GibThisFromScript(const Vector& impactImpulse, MovableObject* movableObjectToIgnore) {
 	// Only a rotating object has gibs; every scripted gib goes through MOSRotating.
 	MOSRotating* rotating = dynamic_cast<MOSRotating*>(this);
 	if (!rotating) {
 		return;
 	}
 	// A gib spawns particles and takes the object out of the world, none of which the producing boundary
-	// can undo, so the AI pass's gib crosses the wire and every peer gibs at the committed tick.
-	if (Actor::QueueAIPassGib(this, Vector(), nullptr)) {
+	// can undo, so the AI pass's gib crosses the wire, with the call it was made with, and every peer
+	// gibs at the committed tick.
+	if (Actor::QueueAIPassGib(this, impactImpulse, movableObjectToIgnore)) {
 		return;
 	}
 	if (Actor::DeferringAIPassWrite(nullptr)) {
 		// The pass gibbed something the world does not hold, so no peer can be told which object it was.
 		g_MovableMan.ReportControllerBoundaryViolation("an unnameable gib", dynamic_cast<const Actor*>(this));
 	}
-	rotating->GibThis();
-}
-
-void MovableObject::GibThisFromScript(const Vector& impactImpulse, MovableObject* movableObjectToIgnore) {
-	if (MOSRotating* rotating = dynamic_cast<MOSRotating*>(this)) {
-		rotating->GibThis(impactImpulse, movableObjectToIgnore);
-	}
+	rotating->GibThis(impactImpulse, movableObjectToIgnore);
 }
 
 void MovableObject::SendScriptedMessage(const std::string& message, uint8_t context, double number, int64_t contextUID, const std::string& text, LuabindObjectWrapper* directContext) {
