@@ -2571,9 +2571,12 @@ void MovableMan::ReportSpeculationViolation(const char* what, const MovableObjec
 
 MovableMan::ControllerBoundaryBaseline MovableMan::CaptureControllerBoundary(Actor* actor) {
 	const AHuman* human = dynamic_cast<const AHuman*>(actor);
+	const ACraft* craft = dynamic_cast<const ACraft*>(actor);
 	return {actor, actor->GetAimAngle(false), actor->IsHFlipped(),
 	        human && human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0,
-	        human && human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0};
+	        human && human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0,
+	        craft ? craft->GetHatchState() : 0u,
+	        craft ? craft->GetHatchTimerStartTicks() : 0};
 }
 
 void MovableMan::RestoreControllerBoundary(const ControllerBoundaryBaseline& before, long long simTick) {
@@ -2587,6 +2590,12 @@ void MovableMan::RestoreControllerBoundary(const ControllerBoundaryBaseline& bef
 		actor->MarkOffWireFlip(simTick, flipped);
 		actor->SetHFlipped(before.flipped);
 		++m_ControllerBoundaryStats.flipIntents;
+	}
+	if (ACraft* craft = dynamic_cast<ACraft*>(actor)) {
+		if (const unsigned int hatch = craft->GetHatchState(); hatch != before.hatch) {
+			craft->MarkOffWireHatch(simTick, hatch == ACraft::OPENING || hatch == ACraft::OPEN);
+			craft->RestoreHatch(before.hatch, before.hatchTimerStart);
+		}
 	}
 	if (AHuman* human = dynamic_cast<AHuman*>(actor)) {
 		const int64_t fg = human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0;
@@ -4759,8 +4768,8 @@ void MovableMan::UpdateControllers() {
 			}
 		}
 
-		// Under lockstep the AI pass may not change the canonical actor: its aim and facing writes are
-		// taken as one-shot intents and undone here, its equip calls become commands, and every peer
+		// Under lockstep the AI pass may not change the canonical actor: its aim, facing and hatch writes
+		// are taken as one-shot intents and undone here, its equip calls become commands, and every peer
 		// (this one included) applies them at the committed tick.
 		std::vector<ControllerBoundaryBaseline> directBefore;
 		if (lockstepActive) {

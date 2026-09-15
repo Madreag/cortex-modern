@@ -210,6 +210,9 @@ namespace RTE {
 			frame.aimAngle = aimIntent ? actor->GetOffWireAim() : actor->GetAimAngle(false);
 			frame.SetAimIntent(aimIntent);
 			frame.SetFlipIntent(flipIntent);
+			if (const ACraft* craft = dynamic_cast<const ACraft*>(actor); craft && craft->GetOffWireHatchTick() == simTick) {
+				frame.hatchCommand = static_cast<uint8_t>(craft->GetOffWireHatchOpen() ? ControllerFrame::HatchCommand::Open : ControllerFrame::HatchCommand::Close);
+			}
 			const Vector viewPoint = actor->GetViewPoint();
 			frame.viewPointX = viewPoint.m_X;
 			frame.viewPointY = viewPoint.m_Y;
