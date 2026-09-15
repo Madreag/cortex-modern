@@ -302,13 +302,29 @@ def run_case(options, case, root, failing=None):
                     "peer": who, "case": case, "logical_size": options.size})
         if not failing:
             assert images, "no paired dumps/PNGs"
+            # A peer scripted to dump must have written one: the global count passed on its peer's captures.
+            scripted = {who: texts[who] + json.dumps(probes.get(who, {})) for who in runs}
+            silent = [who for who, script in scripted.items()
+                      if "dump_" in script and not any(image["peer"] == who for image in images)]
+            assert not silent, f"no readback capture from {silent}"
         for who in probes:
             observation = json.loads((probe_root(root, who) / "net-ui-result.json").read_text(encoding="utf-8"))
             result["probes"][who] = observation
             assert observation["pass"] and observation["complete"], (who, observation)
         if case in ("disabled", "scope-off"):
             first, last = images[0], images[-1]
-            assert [c["name"] for c in first["controls"] if c["focus"]] == [c["name"] for c in last["controls"] if c["focus"]]
+            focused = [[c["name"] for c in capture["controls"] if c["focus"]] for capture in (first, last)]
+            # Each case claims something about one named control, so equal focus lists alone prove nothing:
+            # scope-off keeps its textbox focused through the ignored input, and the greyed-out Start button
+            # must never take focus. Either way the control has to be drawn in both captures.
+            watched = "TextMultiplayerName" if case == "scope-off" else "ButtonMultiplayerStart"
+            for capture in (first, last):
+                assert any(c["name"] == watched for c in capture["controls"]), f"{watched} is not in {capture['json']}"
+            if case == "scope-off":
+                assert focused[0] == [watched], f"{watched} is not the focused control: {focused}"
+            else:
+                assert watched not in focused[0] + focused[1], f"the disabled {watched} took focus: {focused}"
+            assert focused[0] == focused[1], f"the focused control changed across the run: {focused}"
             assert first["screen"] == last["screen"] == "MultiplayerScreen"
             assert first["service"] == last["service"], (first["service"], last["service"])
         if case == "pause":
@@ -367,8 +383,8 @@ def main():
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("LEAD_FAMILY.lock exists; no engine launch")
-    if not (48270 <= options.port <= 48279 or 48380 <= options.port <= 48389 or 48540 <= options.port <= 48549):
-        parser.error("this detector owns ports 48270-48279, 48380-48389 and 48540-48549")
+    if not any(low <= options.port <= low + 9 for low in (48270, 48380, 48540, 48550)):
+        parser.error("this detector owns ports 48270-48279, 48380-48389, 48540-48549 and 48550-48559")
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)
     options.revision = subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip()

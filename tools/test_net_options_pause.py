@@ -48,10 +48,14 @@ def sha(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def read_log(out):
+def log_sources(out):
     # The pause and leave notices are console lines, so the engine's own console log is part of the log.
     sources = (out / "stdout.log", out / "stderr.log", out / "runtime" / "LogConsole.txt")
-    return "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in sources if path.exists())
+    return [path for path in sources if path.exists()]
+
+
+def read_log(out):
+    return "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in log_sources(out))
 
 
 def menu_step(command, accepted=True):
@@ -312,6 +316,10 @@ def inspect(arm, root, outcome, strict_compare):
     logs = {who: read_log(root / who) for who in outcome["peers"]}
     for who in outcome["peers"]:
         record = outcome["records"].get(who, {})
+        sources = [str(path) for path in log_sources(root / who)]
+        details.setdefault("log_sources", {})[who] = sources
+        # Every absence check below reads this log; over zero sources they all pass having read nothing.
+        checks[f"{who}_log_read"] = bool(sources)
         checks[f"{who}_ran"] = record.get("timed_out") is False and record.get("exit_code") is not None
         checks[f"{who}_no_fatal"] = "FATAL" not in logs[who]
         details["lines"][who] = [line for line in logs[who].splitlines()
@@ -386,8 +394,12 @@ def inspect(arm, root, outcome, strict_compare):
             checks["leaver_left"] = LEFT_LOCAL in logs["client"]
             checks["host_saw_the_leave"] = any(LEFT_REMOTE.match(line) for line in logs["host"].splitlines())
             checks["leave_was_signalled"] = (root / "client_inputs" / "leaving.json").exists()
+    owners = ("sp",) if arm == "sp" else probe_owners(arm)
     for who in outcome["peers"]:
         probe = probe_result(root, who)
+        if who in owners:
+            # A missing net-ui-result.json used to delete the probe check instead of failing the arm.
+            checks[f"{who}_probe_reported"] = bool(probe)
         if not probe:
             continue
         details["probes"][who] = {"error": probe.get("error"), "failed_step": probe.get("failed_step"),
