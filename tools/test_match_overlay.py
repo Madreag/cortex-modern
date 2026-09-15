@@ -251,15 +251,14 @@ def probe_script(who, size, arm, mode):
             ]
     if arm.get("stall"):
         if who == "Host":
-            steps += [{"op": "wait", "sim_at_least": 290}]
+            # Two seconds into the guest's 8 s sleep, whatever the mode had up before it. A visibility
+            # wait cannot mark the stall: Always already has the widget up, so it would never wait.
+            steps += [{"op": "wait", "sim_at_least": 290}, {"op": "wait", "elapsed_ms": 2000}]
             if mode == "off":
-                # Inside the guest's 8 s sleep: no widget, no read, just the frame.
-                steps += [{"op": "wait", "elapsed_ms": 2000}, hidden,
-                          {"op": "screenshot", "name": "widget-stall-off-host"}]
+                steps += [hidden, {"op": "screenshot", "name": "widget-stall-off-host"}]
             else:
                 # The stall UI pump keeps drawing and polling while the guest sleeps.
                 steps += [
-                    {"op": "wait", "control": STATUS, "equals": {"visible": True}},
                     shown,
                     label_assert(STATUS, "WAITING FOR FRAMES"),
                     {"op": "screenshot", "name": "widget-stalled-host"},
