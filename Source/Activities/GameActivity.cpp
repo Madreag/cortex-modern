@@ -4386,6 +4386,20 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 		}
 		{
 			// Gatling Drone AimRange is 0.6 and the INI leaves Upper/Lower unset, so they copy AimRange.
+			struct SceneRestore {
+				MovableMan::WorldSetAside world;
+				SceneMan::SceneSetAside scene;
+				SceneRestore() {
+					if (!g_MovableMan.SetAsideWorld(world, false)) throw std::runtime_error("boundary fixture world hold failed");
+					g_SceneMan.SetAsideScene(scene);
+				}
+				~SceneRestore() {
+					g_MovableMan.PurgeAllMOs();
+					g_SceneMan.ReinstateScene(scene);
+					g_MovableMan.ReinstateWorld(world);
+				}
+			} sceneRestore;
+			if (g_SceneMan.LoadScene("Null Scene", false, false) < 0) throw std::runtime_error("boundary fixture scene failed");
 			const auto* dronePreset = dynamic_cast<const ACrab*>(g_PresetMan.GetEntityPreset("ACrab", "Gatling Drone", "Coalition.rte"));
 			if (!dronePreset) throw std::runtime_error("Gatling Drone fixture preset unavailable");
 			std::unique_ptr<ACrab> crab(static_cast<ACrab*>(dronePreset->Clone()));
