@@ -145,6 +145,7 @@ void SettingsGUI::SetActiveSettingsMenuScreen(SettingsMenuScreen activeMenu, boo
 
 bool SettingsGUI::HandleInputEvents() {
 	m_GUIControlManager->Update();
+	MenuAutomation::ApplyQueuedPage(m_GUIControlManager.get());
 
 	GUIEvent guiEvent;
 	while (m_GUIControlManager->GetEvent(&guiEvent)) {
@@ -235,6 +236,42 @@ namespace RTE::MenuAutomation {
 		for (auto* node = control->GetPanel(); node; node = node->GetParentPanel()) if (!node->_GetEnabled()) return false;
 		return true;
 	}
+	// Both settings skins name a page's tab and box after the page, so scripts address pages by name.
+	constexpr std::array<std::string_view, 5> c_SettingsPages{"Video", "Audio", "Input", "Gameplay", "Misc"};
+
+	std::string SettingsPage(GUIControlManager* manager) {
+		for (const std::string_view page: c_SettingsPages) {
+			if (manager && Visible(manager->GetControl("CollectionBox" + std::string(page) + "Settings"))) return std::string(page);
+		}
+		return "";
+	}
+
+	// A manager's Update clears its event queue, so a page request waits for the settings menu's own pass.
+	static GUIControlManager* s_PageManager = nullptr;
+	static std::string s_PendingPage;
+
+	GUITab* PageTab(GUIControlManager* manager, const std::string& page) {
+		const bool known = std::find(c_SettingsPages.begin(), c_SettingsPages.end(), page) != c_SettingsPages.end();
+		return known && manager ? dynamic_cast<GUITab*>(manager->GetControl("Tab" + page + "Settings")) : nullptr;
+	}
+
+	bool QueuePage(GUIControlManager* manager, const std::string& page) {
+		if (!Enabled(PageTab(manager, page))) return false;
+		s_PageManager = manager;
+		s_PendingPage = page;
+		return true;
+	}
+
+	void ApplyQueuedPage(GUIControlManager* manager) {
+		if (!manager || manager != s_PageManager) return;
+		GUITab* tab = PageTab(manager, s_PendingPage);
+		s_PageManager = nullptr;
+		s_PendingPage.clear();
+		if (!Enabled(tab)) return;
+		// The settings menu switches pages on the notification a tab click raises, so raise that.
+		tab->SetCheck(true);
+		tab->AddEvent(GUIEvent::Notification, GUITab::UnPushed, 0);
+	}
 	bool Text(GUIControl* control, std::string& text) {
 		if (auto* value = dynamic_cast<GUILabel*>(control)) text = value->GetText();
 		else if (auto* value = dynamic_cast<GUIButton*>(control)) text = value->GetText();
@@ -269,7 +306,7 @@ namespace RTE::MenuAutomation {
 		}
 		std::string section = dynamic_cast<GUIButton*>(control) ? "Button_Up" : dynamic_cast<GUITab*>(control) ? "Tab" :
 			dynamic_cast<GUICheckbox*>(control) ? "Checkbox" : dynamic_cast<GUIRadioButton*>(control) ? "RadioButton" :
-			dynamic_cast<GUITextBox*>(control) ? "TextBox" : "Label";
+			dynamic_cast<GUITextBox*>(control) || dynamic_cast<GUIComboBox*>(control) ? "TextBox" : "Label";
 		std::string fontName;
 		auto* skin = manager->GetSkin();
 		if (!skin->GetValue(section, "Font", &fontName)) return false;
@@ -294,6 +331,8 @@ namespace RTE::MenuAutomation {
 			int margin = 3, top = 0;
 			skin->GetValue(section, "WidthMargin", &margin); skin->GetValue(section, "HeightMargin", &top);
 			width -= 2 * margin; height -= top;
+			// A combo box shows its selected item in a text panel the 17 pixel drop-down button covers.
+			if (dynamic_cast<GUIComboBox*>(control)) width -= 17;
 		}
 		const int textWidth = font->CalculateWidth(text), textHeight = font->CalculateHeight(text);
 		observation += " measured=" + Json({textWidth, textHeight}).dump() + " available=" + Json({width, height}).dump();
@@ -303,7 +342,8 @@ namespace RTE::MenuAutomation {
 	}
 	bool Handles(const std::string& command) {
 		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_text_fits" ||
-			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad";
+			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
+			command == "select_settings_page" || command == "assert_settings_page";
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
 		try {
@@ -336,20 +376,30 @@ namespace RTE::MenuAutomation {
 				observation = target->GetName();
 				return true;
 			}
+			if (command == "select_settings_page" || command == "assert_settings_page") {
+				observation = name + " active=" + SettingsPage(manager);
+				if (!argument.empty()) return false;
+				if (command == "assert_settings_page") return SettingsPage(manager) == name;
+				return QueuePage(manager, name);
+			}
 			if (command == "dump_host_options" || command == "dump_player_options") {
 				if (!name.empty()) return false;
 				static unsigned int capture = 0;
 				const auto path = std::filesystem::path("ScreenShots") / (command + "_" + std::to_string(capture++));
 				const auto lobby = g_NetMatchService.GetLobbySnapshot();
-				Json result = {{"schema", 1}, {"screen", screen}, {"viewport", Rectangle(nullptr)}, {"service", lobby.serviceState},
+				Json result = {{"schema", 1}, {"screen", screen}, {"settings_page", SettingsPage(manager)}, {"viewport", Rectangle(nullptr)}, {"service", lobby.serviceState},
 					{"phase", "after_draw"}, {"sim_frame", g_TimerMan.GetSimUpdateCount()}, {"host", lobby.isHost}, {"peer_id", lobby.localPeerId}, {"controls", Json::array()}};
 				for (auto* item : *manager->GetControlList()) {
 					if (!Visible(item)) continue;
 					auto* panel = item->GetPanel();
 					auto* parent = dynamic_cast<GUIControl*>(panel->GetParentPanel());
-					std::string text; Text(item, text);
-					result["controls"].push_back({{"name", item->GetName()}, {"rect", Rectangle(panel)}, {"parent", parent ? parent->GetName() : ""},
-						{"parent_rect", Rectangle(panel->GetParentPanel())}, {"text", text}, {"enabled", Enabled(item)}, {"visible", true}, {"focus", panel->HasFocus()}});
+					std::string text;
+					Json row = {{"name", item->GetName()}, {"rect", Rectangle(panel)}, {"parent", parent ? parent->GetName() : ""},
+						{"parent_rect", Rectangle(panel->GetParentPanel())}, {"text", Text(item, text) ? text : ""}, {"enabled", Enabled(item)}, {"visible", true}, {"focus", panel->HasFocus()}};
+					// Measure every drawn caption here so a layout review reads the whole page, not the named controls.
+					std::string measured;
+					if (!text.empty()) { row["text_fits"] = TextFits(manager, item, measured); row["text_measure"] = measured; }
+					result["controls"].push_back(row);
 				}
 				std::ofstream output(path.string() + ".json");
 				output << result.dump(2) << '\n';
