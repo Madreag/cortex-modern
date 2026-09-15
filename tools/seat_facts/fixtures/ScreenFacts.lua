@@ -51,7 +51,9 @@ function ScreenFacts:StartActivity(startNewGame)
     for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
         if self:PlayerHuman(player) and self:ScreenOfPlayer(player) == -1 then
             remoteCount = remoteCount + 1;
+            -- Identity travels as the shared UniqueID; luabind defines no equality operator for an Actor.
             local brain = self:GetPlayerBrain(player);
+            local brainID = brain and brain.UniqueID;
             self:SetObservationTarget(Vector(12, 34), player);
             self:SetDeathViewTarget(Vector(12, 34), player);
             self:SetLandingZone(Vector(12, 34), player);
@@ -67,7 +69,7 @@ function ScreenFacts:StartActivity(startNewGame)
             assert(self:GetBanner(0, player) == nil, "remote banner");
             assert(not self:IsBuyGUIVisible(player), "remote buy visibility");
             assert(not self:CreateDelivery(player), "remote delivery input");
-            assert(self:GetPlayerBrain(player) == brain and brain ~= nil, "shared brain changed");
+            assert(brain ~= nil and self:GetPlayerBrain(player) ~= nil and self:GetPlayerBrain(player).UniqueID == brainID, "shared brain changed");
             sound:Play(player);
             sound:Play(Vector(0, 0), player);
             sound:Stop(player);
