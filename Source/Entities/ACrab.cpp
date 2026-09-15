@@ -973,7 +973,7 @@ bool ACrab::Look(float FOVSpread, float range) {
 MovableObject* ACrab::LookForMOs(float FOVSpread, unsigned char ignoreMaterial, bool ignoreAllTerrain) {
 	MovableObject* pSeenMO = 0;
 	Vector aimPos = m_Pos;
-	float aimDistance = m_AimDistance + g_FrameMan.GetPlayerScreenWidth() * 0.51; // Set the length of the look vector
+	float aimDistance = m_AimDistance + c_DefaultResX * 0.51; // Set the length of the look vector; the window is per-machine
 
 	// If aiming down the barrel, look through that
 	if (m_Controller.IsState(AIM_SHARP) && m_pTurret && m_pTurret->IsAttached() && m_pTurret->HasMountedDevice()) {
