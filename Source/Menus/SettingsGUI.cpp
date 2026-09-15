@@ -50,12 +50,17 @@ SettingsGUI::SettingsGUI(AllegroScreen* guiScreen, GUIInputWrapper* guiInput, bo
 	m_SettingsMenuTabs[SettingsMenuScreen::InputSettingsMenu] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl("TabInputSettings"));
 	m_SettingsMenuTabs[SettingsMenuScreen::GameplaySettingsMenu] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl("TabGameplaySettings"));
 	m_SettingsMenuTabs[SettingsMenuScreen::MiscSettingsMenu] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl("TabMiscSettings"));
+	// The pause menu's skin carries no network page: its preferences belong to a session that has not started yet.
+	m_SettingsMenuTabs[SettingsMenuScreen::NetworkSettingsMenu] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl("TabNetworkSettings"));
 
 	m_VideoSettingsMenu = std::make_unique<SettingsVideoGUI>(m_GUIControlManager.get());
 	m_AudioSettingsMenu = std::make_unique<SettingsAudioGUI>(m_GUIControlManager.get());
 	m_InputSettingsMenu = std::make_unique<SettingsInputGUI>(m_GUIControlManager.get());
 	m_GameplaySettingsMenu = std::make_unique<SettingsGameplayGUI>(m_GUIControlManager.get());
 	m_MiscSettingsMenu = std::make_unique<SettingsMiscGUI>(m_GUIControlManager.get());
+	if (m_SettingsMenuTabs[SettingsMenuScreen::NetworkSettingsMenu] && m_GUIControlManager->GetControl("CollectionBoxNetworkSettings")) {
+		m_NetworkSettingsMenu = std::make_unique<SettingsNetworkGUI>(m_GUIControlManager.get());
+	}
 
 	if (createForPauseMenu) {
 		m_SettingsTabberBox->SetPositionAbs((rootBox->GetWidth() - m_SettingsTabberBox->GetWidth()) / 2, (rootBox->GetHeight() - m_SettingsTabberBox->GetHeight() - 30) / 2);
@@ -103,7 +108,9 @@ void SettingsGUI::CloseActiveDialogBox() const {
 void SettingsGUI::DisableSettingsMenuNavigation(bool disable) const {
 	m_BackToMainButton->SetEnabled(!disable);
 	for (GUITab* settingsTabberTab: m_SettingsMenuTabs) {
-		settingsTabberTab->SetEnabled(!disable);
+		if (settingsTabberTab) {
+			settingsTabberTab->SetEnabled(!disable);
+		}
 	}
 }
 
@@ -113,6 +120,9 @@ void SettingsGUI::SetActiveSettingsMenuScreen(SettingsMenuScreen activeMenu, boo
 	m_InputSettingsMenu->SetEnabled(false);
 	m_GameplaySettingsMenu->SetEnabled(false);
 	m_MiscSettingsMenu->SetEnabled(false);
+	if (m_NetworkSettingsMenu) {
+		m_NetworkSettingsMenu->SetEnabled(false);
+	}
 
 	switch (activeMenu) {
 		case SettingsMenuScreen::VideoSettingsMenu:
@@ -129,6 +139,9 @@ void SettingsGUI::SetActiveSettingsMenuScreen(SettingsMenuScreen activeMenu, boo
 			break;
 		case SettingsMenuScreen::MiscSettingsMenu:
 			m_MiscSettingsMenu->SetEnabled(true);
+			break;
+		case SettingsMenuScreen::NetworkSettingsMenu:
+			m_NetworkSettingsMenu->SetEnabled(true);
 			break;
 		default:
 			RTEAbort("Invalid settings menu passed to SettingsGUI::SetActiveSettingsMenuScreen!");
@@ -170,6 +183,8 @@ bool SettingsGUI::HandleInputEvents() {
 					SetActiveSettingsMenuScreen(SettingsMenuScreen::GameplaySettingsMenu);
 				} else if (guiEvent.GetControl() == m_SettingsMenuTabs[SettingsMenuScreen::MiscSettingsMenu]) {
 					SetActiveSettingsMenuScreen(SettingsMenuScreen::MiscSettingsMenu);
+				} else if (m_NetworkSettingsMenu && guiEvent.GetControl() == m_SettingsMenuTabs[SettingsMenuScreen::NetworkSettingsMenu]) {
+					SetActiveSettingsMenuScreen(SettingsMenuScreen::NetworkSettingsMenu);
 				}
 			}
 		}
@@ -188,6 +203,9 @@ bool SettingsGUI::HandleInputEvents() {
 				break;
 			case SettingsMenuScreen::MiscSettingsMenu:
 				m_MiscSettingsMenu->HandleInputEvents(guiEvent);
+				break;
+			case SettingsMenuScreen::NetworkSettingsMenu:
+				m_NetworkSettingsMenu->HandleInputEvents(guiEvent);
 				break;
 			default:
 				RTEAbort("Trying to handle input events for an invalid settings menu in SettingsGUI::HandleInputEvents!");
@@ -237,7 +255,7 @@ namespace RTE::MenuAutomation {
 		return true;
 	}
 	// Both settings skins name a page's tab and box after the page, so scripts address pages by name.
-	constexpr std::array<std::string_view, 5> c_SettingsPages{"Video", "Audio", "Input", "Gameplay", "Misc"};
+	constexpr std::array<std::string_view, 6> c_SettingsPages{"Video", "Audio", "Input", "Gameplay", "Misc", "Network"};
 
 	std::string SettingsPage(GUIControlManager* manager) {
 		for (const std::string_view page: c_SettingsPages) {
@@ -343,6 +361,7 @@ namespace RTE::MenuAutomation {
 	bool Handles(const std::string& command) {
 		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_text_fits" ||
 			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
+			command == "set_text" ||
 			command == "select_settings_page" || command == "assert_settings_page";
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
@@ -416,6 +435,14 @@ namespace RTE::MenuAutomation {
 			if (command == "assert_focus") {
 				observation += " actual=" + std::to_string(Visible(control) && control->GetPanel()->HasFocus());
 				return argument.empty() && Visible(control) && control->GetPanel()->HasFocus();
+			}
+			if (command == "set_text") {
+				// The typed-entry seam for a settings page: the box takes the value and raises the notification a typed entry raises.
+				auto* box = dynamic_cast<GUITextBox*>(control);
+				if (!box || !Enabled(box) || argument.empty()) return false;
+				box->SetText(argument);
+				box->AddEvent(GUIEvent::Notification, GUITextBox::Enter, 0);
+				return true;
 			}
 			if (command == "assert_text_fits") return argument.empty() && TextFits(manager, control, observation);
 			if (command == "assert_rect_inside") {
