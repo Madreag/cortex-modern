@@ -916,7 +916,8 @@ namespace RTE {
 			previous = NetActorOwnership::GetSeededOwner(actorUniqueID);
 		}
 		s_LockstepControlOverrides[actorUniqueID] = ownerPeerId;
-		if (ownerPeerId != previous) {
+		// Skip the first claim onto an unseeded uid.
+		if (previous != 0 && ownerPeerId != previous) {
 			NoteE2eOwnerTransfer(actorUniqueID);
 		}
 	}
