@@ -1950,6 +1950,10 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetLockstepCodec::IsWireString(const std::string& value, size_t maxBytes) {
+		return value.size() <= maxBytes && value.size() <= std::numeric_limits<uint16_t>::max() && !HasControlChars(value);
+	}
+
 	NetLockstepPacketType NetLockstepCodec::PacketTypeOf(const NetLockstepPayload& payload) {
 		return std::visit(Overloaded{
 			[](const NetLockstepStart&) { return NetLockstepPacketType::Start; },
