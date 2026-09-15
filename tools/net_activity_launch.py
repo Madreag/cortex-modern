@@ -162,7 +162,14 @@ REFUSED_PRESET = "No Such Brain"
 PLACE_REFUSED = ("Place your brain in a valid spot first", "Pick what you want to place next",
                  "Click to INSTALL your governor brain")
 READY_TEXT = "READY to start"
+# The tall box spells the wait out; the one-line strip a short screen gets says it in its own words.
 WAIT_BANNER = "to place their brains"
+COMPACT_WAIT_BANNER = "TO PLACE"
+COMPACT_MAX_HEIGHT = 480
+
+
+def wait_banner(resolution):
+    return COMPACT_WAIT_BANNER if resolution and resolution[1] < COMPACT_MAX_HEIGHT else WAIT_BANNER
 
 
 def shots(peer, name):
@@ -171,7 +178,7 @@ def shots(peer, name):
             {"op": "screenshot", "name": f"{peer}_{name}_world", "composited": True}]
 
 
-def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusal=False):
+def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusal=False, resolution=None):
     """The UI probe script that drives this peer's own seat through the setup editor, the way a player does."""
     seat = EDITOR_SEATS[peer]
     player = seat["player"]
@@ -188,7 +195,8 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
     # DONE before a brain is placed: refused, so the seat stays unready, commits nothing and is sent back
     # to place a brain.
     steps += [{"op": "editor_done", "player": player},
-              {"op": "assert_editor", "player": player, "equals": {"ready": False, "submitted": False, "resident": False}}]
+              {"op": "assert_editor", "player": player, "name": "done_refusal",
+               "equals": {"ready": False, "submitted": False, "resident": False}}]
     if capture:
         steps += shots(peer, "refusal")
     if place_after:
@@ -207,7 +215,7 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
         # line and its own strip must name who the held world is waiting for.
         steps += [{"op": "assert", "equals": {"editing": True}},
                   {"op": "wait", "player": player, "seat_text_contains": READY_TEXT},
-                  {"op": "assert_control", "control": "LabelNetMatchStatus", "text_contains": WAIT_BANNER,
+                  {"op": "assert_control", "control": "LabelNetMatchStatus", "text_contains": wait_banner(resolution),
                    "equals": {"visible": True}, "fits": True}]
         if capture:
             steps += shots(peer, "waiting_banner")
@@ -325,7 +333,7 @@ def launch(options):
                 script.parent.mkdir(parents=True, exist_ok=False)
                 delay = 0 if options.variant == "resync-skirmish" else ((90 if hold_desync else 45) if peer == "client" else 0)
                 script.write_text(json.dumps(editor_script(peer, captures, delay, hold_desync and not hold_resync,
-                                                           options.variant == "wire-refusal"), indent=2), encoding="utf-8")
+                                                           options.variant == "wire-refusal", resolution), indent=2), encoding="utf-8")
                 env["CC_TEST_NET_UI_SCRIPT"] = str(script)
             if hold_desync and peer == "host":
                 # One genuine divergence inside the hold: the held ticks' own hashes have to catch it.
@@ -406,8 +414,13 @@ def launch(options):
             checks["ui_probe_pass"] = all(result["probes"][peer].get("pass") and result["probes"][peer].get("complete") for peer in runs)
             # The refusal the production path shows a player who presses DONE with no brain placed: the seat
             # stays unready and uncommitted, and the stock editor asks for the brain again.
-            result["refusals"] = {peer: next((step["observed"]["editor_seats"] for step in result["probes"][peer].get("steps", [])
-                                              if step.get("op") == "assert_editor"), []) for peer in runs}
+            # The DONE-refusal assertion names itself, so the arm reads that step and no other.
+            def refusal_rows(probe):
+                named = [index for index, step in enumerate(probe.get("script", {}).get("steps", []))
+                         if step.get("name") == "done_refusal"]
+                return next((step["observed"]["editor_seats"] for step in probe.get("steps", [])
+                             if step["index"] in named), [])
+            result["refusals"] = {peer: refusal_rows(result["probes"][peer]) for peer in runs}
             checks["refusal_keeps_seat_unready"] = all(
                 rows and all(not row["ready"] and not row["submitted"] and not row["resident"] and
                              any(text in row["screen_text"] for text in PLACE_REFUSED) for row in rows)
@@ -416,7 +429,7 @@ def launch(options):
             result["toasts"] = {peer: reports[peer].get("ui", {}).get("toasts", []) for peer in runs}
             checks["placement_toasts"] = all(sum(1 for toast in result["toasts"][peer] if toast.get("kind") == "brain_placed") == 2 for peer in runs)
             waits = [step for step in result["probes"]["host"].get("steps", []) if step.get("op") == "assert_control"]
-            checks["waiting_banner_shown"] = any(WAIT_BANNER in json.dumps(step) for step in waits)
+            checks["waiting_banner_shown"] = any(wait_banner(resolution) in json.dumps(step["observed"].get("control", {})) for step in waits)
             if captures:
                 result["captures"] = sorted([str(path) for peer in runs for path in (root / (peer + "-ui")).glob("*.png")] +
                                             [str(path) for peer in runs for path in (root / peer / "runtime" / "ScreenShots").glob("*.png")])
