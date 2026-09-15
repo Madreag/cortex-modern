@@ -1066,12 +1066,17 @@ bool Actor::DisbandSquad() {
 	return hadSquad;
 }
 
-// Queue on the running AI actor so one thread owns the pending list; actorUID names the written actor.
-static bool DeferAIPassMutation(const Actor* actor) {
+bool Actor::DeferringAIPassWrite(const MovableObject* target) {
 	if (!g_CurrentAIActor || !ScenarioRunner::IsLockstepControllerSyncActive()) {
 		return false;
 	}
-	return g_MovableMan.FindObjectByUniqueID(actor->GetUniqueID()) == actor;
+	// A scratch object the world does not hold has no identity the other peer can resolve, so it stays local.
+	return target && g_MovableMan.FindObjectByUniqueID(target->GetUniqueID()) == target;
+}
+
+// Queue on the running AI actor so one thread owns the pending list; actorUID names the written actor.
+static bool DeferAIPassMutation(const Actor* actor) {
+	return Actor::DeferringAIPassWrite(actor);
 }
 
 void Actor::QueueAIModeOnRunning(AIMode newMode) {
@@ -1193,6 +1198,9 @@ void Actor::BuildLogicalWaypoints(std::vector<std::pair<Vector, const MovableObj
 		items.push_back({point, target});
 	}
 	auto apply = [&](const DeferredWaypoint& waypoint) {
+		if (waypoint.op == DeferredWaypoint::MOTargetSet) {
+			return;
+		}
 		if (waypoint.op == DeferredWaypoint::Clear) {
 			items.clear();
 			return;
@@ -1223,6 +1231,9 @@ bool Actor::LogicalWaypointClearSeen() const {
 		bool seen = false;
 		bool any = false;
 		for (const DeferredWaypoint& waypoint: calls) {
+			if (waypoint.op == DeferredWaypoint::MOTargetSet) {
+				continue;
+			}
 			if (filterPending && !DeferredTargetsActor(waypoint, this, pendingOwner)) {
 				continue;
 			}
@@ -1249,7 +1260,7 @@ void Actor::ConsumeInflightWaypoint(DeferredWaypoint::Op op, float x, float y, i
 		if (op == DeferredWaypoint::Scene && (it->x != x || it->y != y)) {
 			continue;
 		}
-		if (op == DeferredWaypoint::MOTarget && it->targetUID != targetUID) {
+		if ((op == DeferredWaypoint::MOTarget || op == DeferredWaypoint::MOTargetSet) && it->targetUID != targetUID) {
 			continue;
 		}
 		m_InflightWaypoints.erase(it);
@@ -1306,6 +1317,42 @@ std::vector<Actor::DeferredWaypoint> Actor::TakePendingDeferredWaypoints() {
 	return taken;
 }
 
+void Actor::SetMOMoveTarget(const MovableObject* object) {
+	m_pMOMoveTarget = object;
+	m_FaithfulMOMoveTargetUID = 0;
+}
+
+// The pass reads back the target its own order is carrying, so a script that clears it and checks it
+// keeps its state machine; the sim, the checkpoint and a synced squad disband keep the committed one.
+const MovableObject* Actor::GetMOMoveTargetSeenByAIPass() const {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return m_pMOMoveTarget;
+	}
+	const Actor* pendingOwner = g_CurrentAIActor;
+	const auto lastWrite = [&](const std::vector<DeferredWaypoint>& calls, bool filterPending, const MovableObject** seen) {
+		for (auto itr = calls.rbegin(); itr != calls.rend(); ++itr) {
+			if (filterPending && !DeferredTargetsActor(*itr, this, pendingOwner)) {
+				continue;
+			}
+			if (itr->op == DeferredWaypoint::MOTargetSet) {
+				*seen = itr->targetUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(itr->targetUID)) : nullptr;
+				return true;
+			}
+			// A cleared waypoint queue takes the move target with it.
+			if (itr->op == DeferredWaypoint::Clear) {
+				*seen = nullptr;
+				return true;
+			}
+		}
+		return false;
+	};
+	const MovableObject* seen = nullptr;
+	if (lastWrite(pendingOwner->m_PendingDeferredWaypoints, true, &seen) || lastWrite(m_InflightWaypoints, false, &seen)) {
+		return seen;
+	}
+	return m_pMOMoveTarget;
+}
+
 void Actor::ExecuteDeferredWaypoint(const DeferredWaypoint& waypoint) {
 	Actor* target = this;
 	if (waypoint.actorUID && waypoint.actorUID != static_cast<int64_t>(GetUniqueID())) {
@@ -1328,6 +1375,9 @@ void Actor::ExecuteDeferredWaypoint(const DeferredWaypoint& waypoint) {
 		case DeferredWaypoint::Clear:
 			target->ClearAIWaypoints();
 			break;
+		case DeferredWaypoint::MOTargetSet:
+			target->SetMOMoveTarget(waypoint.targetUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(waypoint.targetUID)) : nullptr);
+			break;
 	}
 	g_CurrentAIActor = running;
 }
@@ -1347,7 +1397,20 @@ void Actor::SendDeferredWaypoints() {
 		if (!ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled())) {
 			continue;
 		}
-		const uint8_t op = waypoint.op == DeferredWaypoint::Scene ? NetGameAIOrder::SceneWaypoint : (waypoint.op == DeferredWaypoint::MOTarget ? NetGameAIOrder::MOWaypoint : NetGameAIOrder::ClearWaypoints);
+		uint8_t op = NetGameAIOrder::ClearWaypoints;
+		switch (waypoint.op) {
+			case DeferredWaypoint::Scene:
+				op = NetGameAIOrder::SceneWaypoint;
+				break;
+			case DeferredWaypoint::MOTarget:
+				op = NetGameAIOrder::MOWaypoint;
+				break;
+			case DeferredWaypoint::MOTargetSet:
+				op = NetGameAIOrder::SetMOMoveTarget;
+				break;
+			case DeferredWaypoint::Clear:
+				break;
+		}
 		const int64_t writerUID = (targetUID != static_cast<int64_t>(GetUniqueID())) ? static_cast<int64_t>(GetUniqueID()) : 0;
 		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{targetUID, m_Team, op, waypoint.x, waypoint.y, waypoint.targetUID, writerUID}});
 		target->m_InflightWaypoints.push_back(waypoint);
@@ -1371,6 +1434,54 @@ void Actor::SendDeferredAIModes() {
 			continue;
 		}
 		target->RequestAIMode(static_cast<AIMode>(request.mode));
+	}
+}
+
+std::vector<Actor::DeferredScriptMessage> Actor::TakePendingDeferredScriptMessages() {
+	std::vector<DeferredScriptMessage> taken;
+	taken.swap(m_PendingDeferredScriptMessages);
+	return taken;
+}
+
+bool Actor::QueueAIPassScriptMessage(const MovableObject* receiver, uint8_t context, double number, int64_t contextUID, const std::string& message, const std::string& text) {
+	if (!DeferringAIPassWrite(receiver)) {
+		return false;
+	}
+	g_CurrentAIActor->m_PendingDeferredScriptMessages.push_back({static_cast<int64_t>(receiver->GetUniqueID()), context, number, contextUID, message, text});
+	return true;
+}
+
+void Actor::SendDeferredScriptMessages() {
+	const std::vector<DeferredScriptMessage> queued = TakePendingDeferredScriptMessages();
+	if (!ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled())) {
+		return;
+	}
+	for (const DeferredScriptMessage& message: queued) {
+		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIScriptMessage{static_cast<int64_t>(GetUniqueID()), message.objectUID, m_Team, message.context, message.number, message.contextUID, message.message, message.text}});
+	}
+}
+
+std::vector<int64_t> Actor::TakePendingDeferredGibs() {
+	std::vector<int64_t> taken;
+	taken.swap(m_PendingDeferredGibs);
+	return taken;
+}
+
+bool Actor::QueueAIPassGib(const MovableObject* target) {
+	if (!DeferringAIPassWrite(target)) {
+		return false;
+	}
+	g_CurrentAIActor->m_PendingDeferredGibs.push_back(static_cast<int64_t>(target->GetUniqueID()));
+	return true;
+}
+
+void Actor::SendDeferredGibs() {
+	const std::vector<int64_t> queued = TakePendingDeferredGibs();
+	if (!ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled())) {
+		return;
+	}
+	for (const int64_t objectUID: queued) {
+		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIGib{static_cast<int64_t>(GetUniqueID()), objectUID, m_Team}});
 	}
 }
 

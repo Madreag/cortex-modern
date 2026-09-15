@@ -176,6 +176,11 @@ namespace RTE {
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		int RunScriptedFunctionInAppropriateScripts(const std::string& functionName, bool runOnDisabledScripts = false, bool stopOnError = false, const std::vector<const Entity*>& functionEntityArguments = std::vector<const Entity*>(), const std::vector<std::string_view>& functionLiteralArguments = std::vector<std::string_view>(), const std::vector<LuabindObjectWrapper*>& functionObjectArguments = std::vector<LuabindObjectWrapper*>());
 
+		/// Delivers a message an AI pass sent, as the wire carried it, to this object's scripts. Defined
+		/// beside the send it mirrors, where luabind can rebuild the context the pass passed.
+		/// @param context Which kind of context the message carries (NetGameAIScriptMessage::Context).
+		void DeliverSyncedScriptMessage(uint8_t context, double number, int64_t contextUID, const std::string& message, const std::string& text);
+
 		/// Cleans up and destroys the script state of this object, calling the Destroy callback in lua
 		virtual void DestroyScriptState();
 

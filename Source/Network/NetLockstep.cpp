@@ -820,6 +820,27 @@ namespace RTE {
 						AppendU64LE(out, static_cast<uint64_t>(order.writerUID));
 						break;
 					}
+					case NetGameCommandType::AIScriptMessage: {
+						const NetGameAIScriptMessage& scriptMessage = std::get<NetGameAIScriptMessage>(command.payload);
+						AppendU64LE(out, static_cast<uint64_t>(scriptMessage.writerUID));
+						AppendU64LE(out, static_cast<uint64_t>(scriptMessage.objectUID));
+						AppendU32LE(out, static_cast<uint32_t>(scriptMessage.team));
+						AppendU8(out, scriptMessage.context);
+						AppendU64LE(out, DoubleToBitsLE(scriptMessage.number));
+						AppendU64LE(out, static_cast<uint64_t>(scriptMessage.contextUID));
+						if (!AppendString(out, scriptMessage.message, NetLockstepCodec::c_MaxValueKeyBytes, "ai_message_name", error) ||
+						    !AppendString(out, scriptMessage.text, NetLockstepCodec::c_MaxValueStringBytes, "ai_message_text", error)) {
+							return false;
+						}
+						break;
+					}
+					case NetGameCommandType::AIGib: {
+						const NetGameAIGib& gib = std::get<NetGameAIGib>(command.payload);
+						AppendU64LE(out, static_cast<uint64_t>(gib.writerUID));
+						AppendU64LE(out, static_cast<uint64_t>(gib.objectUID));
+						AppendU32LE(out, static_cast<uint32_t>(gib.team));
+						break;
+					}
 				}
 				if (recovery && out.size() > NetLockstepCodec::c_MaxRecoveryInputBytes - 10) {
 					SetError(error, NetLockstepErrorCode::PayloadTooLarge, out.size(), "recovery input exceeds maximum");
@@ -1667,7 +1688,9 @@ namespace RTE {
 						    !ReadOrTruncated(reader.ReadU64LE(targetUID), reader, error, "ai_order_target_uid")) {
 							return false;
 						}
-						if (order.op > NetGameAIOrder::PopWaypoint) {
+						// The move-target op arrived with version 22; below it the byte can only be a stray.
+						if (order.op > NetGameAIOrder::SetMOMoveTarget ||
+						    (order.op == NetGameAIOrder::SetMOMoveTarget && version < NetLockstepCodec::c_AIPassEventVersion)) {
 							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ai order op is invalid");
 							return false;
 						}
@@ -1709,6 +1732,59 @@ namespace RTE {
 						}
 						reseat.team = static_cast<int32_t>(team);
 						command.payload = std::move(reseat);
+						break;
+					}
+					case NetGameCommandType::AIScriptMessage: {
+						if (version < NetLockstepCodec::c_AIPassEventVersion) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ai script message needs a newer frame version");
+							return false;
+						}
+						NetGameAIScriptMessage scriptMessage;
+						uint64_t writerUID = 0;
+						uint64_t objectUID = 0;
+						uint64_t contextUID = 0;
+						uint64_t numberBits = 0;
+						uint32_t team = 0;
+						if (!ReadOrTruncated(reader.ReadU64LE(writerUID), reader, error, "ai_message_writer_uid") ||
+						    !ReadOrTruncated(reader.ReadU64LE(objectUID), reader, error, "ai_message_object_uid") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "ai_message_team") ||
+						    !ReadOrTruncated(reader.ReadU8(scriptMessage.context), reader, error, "ai_message_context") ||
+						    !ReadOrTruncated(reader.ReadU64LE(numberBits), reader, error, "ai_message_number") ||
+						    !ReadOrTruncated(reader.ReadU64LE(contextUID), reader, error, "ai_message_context_uid") ||
+						    !reader.ReadString(scriptMessage.message, NetLockstepCodec::c_MaxValueKeyBytes, "ai_message_name", error) ||
+						    !reader.ReadString(scriptMessage.text, NetLockstepCodec::c_MaxValueStringBytes, "ai_message_text", error)) {
+							return false;
+						}
+						if (scriptMessage.context >= NetGameAIScriptMessage::ContextCount || scriptMessage.message.empty()) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ai script message is invalid");
+							return false;
+						}
+						scriptMessage.writerUID = static_cast<int64_t>(writerUID);
+						scriptMessage.objectUID = static_cast<int64_t>(objectUID);
+						scriptMessage.team = static_cast<int32_t>(team);
+						scriptMessage.number = DoubleFromBitsLE(numberBits);
+						scriptMessage.contextUID = static_cast<int64_t>(contextUID);
+						command.payload = std::move(scriptMessage);
+						break;
+					}
+					case NetGameCommandType::AIGib: {
+						if (version < NetLockstepCodec::c_AIPassEventVersion) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ai gib needs a newer frame version");
+							return false;
+						}
+						NetGameAIGib gib;
+						uint64_t writerUID = 0;
+						uint64_t objectUID = 0;
+						uint32_t team = 0;
+						if (!ReadOrTruncated(reader.ReadU64LE(writerUID), reader, error, "ai_gib_writer_uid") ||
+						    !ReadOrTruncated(reader.ReadU64LE(objectUID), reader, error, "ai_gib_object_uid") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "ai_gib_team")) {
+							return false;
+						}
+						gib.writerUID = static_cast<int64_t>(writerUID);
+						gib.objectUID = static_cast<int64_t>(objectUID);
+						gib.team = static_cast<int32_t>(team);
+						command.payload = gib;
 						break;
 					}
 					default:

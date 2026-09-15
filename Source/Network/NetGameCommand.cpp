@@ -33,6 +33,10 @@ namespace RTE {
 				return NetGameCommandType::SoundOp;
 			} else if constexpr (std::is_same_v<T, NetGamePlayerBindings>) {
 				return NetGameCommandType::PlayerBindings;
+			} else if constexpr (std::is_same_v<T, NetGameAIScriptMessage>) {
+				return NetGameCommandType::AIScriptMessage;
+			} else if constexpr (std::is_same_v<T, NetGameAIGib>) {
+				return NetGameCommandType::AIGib;
 			}
 		}, payload);
 	}
@@ -72,6 +76,10 @@ namespace RTE {
 				return "SoundOp";
 			case NetGameCommandType::PlayerBindings:
 				return "PlayerBindings";
+			case NetGameCommandType::AIScriptMessage:
+				return "AIScriptMessage";
+			case NetGameCommandType::AIGib:
+				return "AIGib";
 		}
 		return "Unknown";
 	}
