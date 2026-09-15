@@ -682,6 +682,15 @@ bool UInputMan::AnyJoyButtonPress(int whichJoy) const {
 	return false;
 }
 
+bool UInputMan::ScriptedEdgeThisFrame(ScriptedEdges& edges, int whichPlayer, int whichElement, long long tick) {
+	ScriptedEdge& edge = edges[whichPlayer][whichElement];
+	if (edge.tick != tick) {
+		edge = {tick, m_RenderFrameCount};
+		return true;
+	}
+	return edge.frame == m_RenderFrameCount;
+}
+
 bool UInputMan::GetInputElementState(int whichPlayer, int whichElement, InputState whichState) {
 	// A scripted player's devices are the script: held ranges, with press/release edges at the range ends.
 	if (InputScript::DrivesPlayer(whichPlayer)) {
@@ -701,12 +710,13 @@ bool UInputMan::GetInputElementState(int whichPlayer, int whichElement, InputSta
 						s_lastLoggedElement = whichElement;
 						std::cout << "[input-script] tick " << tick << " player " << whichPlayer << " pressed " << InputScript::ElementName(whichElement) << std::endl;
 					}
-					return true;
+					// The sim-rate read owns the whole tick; the frame-rate read is an edge and owns one frame.
+					return whichState == InputState::PressedSim || ScriptedEdgeThisFrame(m_ScriptedPresses, whichPlayer, whichElement, static_cast<long long>(tick));
 				}
 				return false;
 			case InputState::Released:
 			case InputState::ReleasedSim:
-				return !held && heldBefore;
+				return !held && heldBefore && (whichState == InputState::ReleasedSim || ScriptedEdgeThisFrame(m_ScriptedReleases, whichPlayer, whichElement, static_cast<long long>(tick)));
 			default:
 				return false;
 		}
@@ -1173,6 +1183,8 @@ int UInputMan::Update(bool handleSpecialInput) {
 }
 
 void UInputMan::EndFrame() {
+	// The frame a device edge was readable in ends here, and so does a scripted element's.
+	++m_RenderFrameCount;
 	m_LastDeviceWhichControlledGUICursor = InputDevice::DEVICE_KEYB_ONLY;
 
 	for (auto& [keyboardID, keyboard] : m_KeyboardStates) {
