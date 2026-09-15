@@ -1070,8 +1070,9 @@ bool Actor::DeferringAIPassWrite(const MovableObject* target) {
 	if (!g_CurrentAIActor || !ScenarioRunner::IsLockstepControllerSyncActive()) {
 		return false;
 	}
-	// A scratch object the world does not hold has no identity the other peer can resolve, so it stays local.
-	return target && g_MovableMan.FindObjectByUniqueID(target->GetUniqueID()) == target;
+	// A scratch object the world does not hold has no identity the other peer can resolve, so it stays
+	// local; asking without a target is the question "is this an AI pass at all".
+	return !target || g_MovableMan.FindObjectByUniqueID(target->GetUniqueID()) == target;
 }
 
 // Queue on the running AI actor so one thread owns the pending list; actorUID names the written actor.
@@ -1318,6 +1319,14 @@ std::vector<Actor::DeferredWaypoint> Actor::TakePendingDeferredWaypoints() {
 }
 
 void Actor::SetMOMoveTarget(const MovableObject* object) {
+	const int64_t identity = (object && g_MovableMan.ValidMO(object)) ? static_cast<int64_t>(object->GetUniqueID()) : 0;
+	// Every peer's Update reads the move target, the checkpoint carries its identity and a synced squad
+	// disband picks its members by it, so an AI pass write rides the same order its waypoints do.
+	if (DeferAIPassMutation(this)) {
+		QueueDeferredOnRunning({DeferredWaypoint::MOTargetSet, 0.0F, 0.0F, identity});
+		return;
+	}
+	ConsumeInflightWaypoint(DeferredWaypoint::MOTargetSet, 0.0F, 0.0F, identity);
 	m_pMOMoveTarget = object;
 	m_FaithfulMOMoveTargetUID = 0;
 }

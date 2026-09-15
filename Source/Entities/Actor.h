@@ -536,6 +536,7 @@ namespace RTE {
 		/// @return Whether the call was queued; outside a deferring pass the gib happens directly as before.
 		static bool QueueAIPassGib(const MovableObject* target);
 		/// Whether a write to this object made right here belongs to a lockstep AI pass and must be deferred.
+		/// @param target What is written; no target asks only whether a lockstep AI pass is running here.
 		static bool DeferringAIPassWrite(const MovableObject* target);
 		/// Hands out the messages the AI pass queued this tick, in call order; mods don't call this.
 		std::vector<DeferredScriptMessage> TakePendingDeferredScriptMessages();
