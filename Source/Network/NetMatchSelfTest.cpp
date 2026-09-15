@@ -844,13 +844,41 @@ namespace RTE {
 				return false;
 			}
 			// The hash the build that wrote the recording reported for this very config.
-			if (NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(recordedConfig->config)) != "ea11e9d32b43d4c9f71d41d56ffdb6b3642605761bfe3f7696e674bfa565ed7c") {
-				*error = "a pre-spectate config no longer hashes as the build that recorded it did";
+			const std::string recordedHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(recordedConfig->config));
+			if (recordedHash != "ea11e9d32b43d4c9f71d41d56ffdb6b3642605761bfe3f7696e674bfa565ed7c") {
+				*error = "a pre-spectate config no longer hashes as the build that recorded it did: " + recordedHash;
 				return false;
 			}
+			// The CPU team key reached the hash in v4, so the same roster re-versioned hashes by team.
+			NetMatchConfig atCurrentVersion = recordedConfig->config;
+			atCurrentVersion.version = NetMatchConfigUtil::c_Version;
+			const std::string currentHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(atCurrentVersion));
+			if (currentHash != "87e848dea8853ff7762ffbabf6aa0c71d09e13f979382b970b69ef305fa0f5ae") {
+				*error = "a current-version roster no longer hashes by CPU team: " + currentHash;
+				return false;
+			}
+			// The envelope stamps this build's protocol version, and a recorded envelope is older by
+			// definition, so the recording is reproduced payload byte for payload byte and its header
+			// field by field: only the version word may differ, and only to this build's.
+			constexpr size_t header = NetLobbyProtocol::c_HeaderBytes;
+			constexpr uint16_t recordedProtocolVersion = 4;
+			const auto u16At = [](const std::vector<uint8_t>& bytes, size_t at) { return static_cast<uint16_t>(bytes[at] | (bytes[at + 1] << 8)); };
 			std::vector<uint8_t> reEncoded;
-			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{recordedConfig->config}}, reEncoded) || reEncoded != recorded) {
-				*error = "re-encoding a pre-spectate config did not reproduce its recorded bytes";
+			NetLobbyError reEncodeError;
+			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{recordedConfig->config}}, reEncoded, &reEncodeError)) {
+				*error = "a pre-spectate config did not re-encode: " + reEncodeError.message;
+				return false;
+			}
+			if (reEncoded.size() != recorded.size() || !std::equal(reEncoded.begin() + header, reEncoded.end(), recorded.begin() + header)) {
+				const size_t at = static_cast<size_t>(std::mismatch(reEncoded.begin(), reEncoded.end(), recorded.begin(), recorded.end()).first - reEncoded.begin());
+				*error = "re-encoding a pre-spectate config did not reproduce its recorded payload: differs at byte " +
+				         std::to_string(at) + " of " + std::to_string(recorded.size()) + ", re-encoded " + std::to_string(reEncoded.size());
+				return false;
+			}
+			if (!std::equal(reEncoded.begin(), reEncoded.begin() + 4, recorded.begin()) ||
+			    !std::equal(reEncoded.begin() + 6, reEncoded.begin() + header, recorded.begin() + 6) ||
+			    u16At(recorded, 4) != recordedProtocolVersion || u16At(reEncoded, 4) != NetLobbyProtocol::c_Version) {
+				*error = "the re-encoded envelope differs from the recording outside its protocol version word";
 				return false;
 			}
 			NetMatchConfig carriesTheRule = recordedConfig->config;
@@ -859,7 +887,8 @@ namespace RTE {
 				*error = "a pre-spectate config was allowed to carry the spectate rule";
 				return false;
 			}
-			std::cout << "[net-match-selftest] recorded_v3_config_hash=" << NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(recordedConfig->config)) << std::endl;
+			std::cout << "[net-match-selftest] recorded_v3_config_hash=" << recordedHash << std::endl;
+			std::cout << "[net-match-selftest] recorded_v4_config_hash=" << currentHash << std::endl;
 			std::cout << "[net-match-selftest] PASS rules_recorded_v3" << std::endl;
 			return true;
 		}

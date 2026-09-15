@@ -157,6 +157,10 @@ namespace RTE {
 		std::optional<uint32_t> cpuSlots; // Omitted keeps the mode's default CPU count.
 		NetMatchMode mode = NetMatchMode::PvPSkirmish; // Shapes the roster: PvP (a team per peer), co-op PvE (one shared team vs CPU), PvPvE (teams + CPU).
 		std::optional<bool> brainlessHumansSpectate; // Host rule: the round survives the last human brain. Unset takes the host's Gameplay setting.
+		// The host's saved session options. Unset keeps the config default; NetMatchService::SeatSavedOptions fills them from the settings.
+		std::optional<NetMatchDelayPolicy> delayPolicy;
+		std::optional<uint8_t> idleWaitMinutes;
+		std::optional<bool> automaticRepair;
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
 		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
 		std::string sessionId; // Client only: join the directory session with this id instead of an address.
@@ -310,7 +314,10 @@ namespace RTE {
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
 		std::string BuildReportJson() const;
+		/// Builds the match roster from the request alone; it reads no manager, so a self-test can build one.
 		static bool BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId, NetMatchConfig& outConfig, std::string* error = nullptr);
+		/// Fills the request's unset options from the saved settings, where a real host starts a match.
+		static void SeatSavedOptions(NetMatchServiceRequest& request);
 		/// Builds diagnostic identity on request; match startup supplies the cached join inputs.
 		bool RefreshDiagnosticIdentity(std::string* error = nullptr, double* buildMs = nullptr);
 		/// Returns the cached join inputs without reading settings, modules, or simulation state.
