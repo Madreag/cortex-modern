@@ -120,6 +120,7 @@ local function publishHotTrace(note)
   armNote = (armNote ~= '' and (armNote..'|') or '')..note
   _PreviewBarrierHotTrace = armNote
 end
+p.hotNote = function() return armNote end
 local function armHotTrace(label)
   if not jitEnabled then
     if label == 'setup' then armNote = '' end
@@ -327,6 +328,8 @@ end
 					check("preview_barrier_upvalue_slot_limit", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.upvalueSlotReport()", false));
 				}
 				check("preview_barrier_gc_released", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.released()", false));
+				// Preview rollback drops the global; the note upvalue is the live one.
+				states[index]->RunScriptString("if _PreviewBarrierProbe and _PreviewBarrierProbe.hotNote then _PreviewBarrierHotTrace = _PreviewBarrierProbe.hotNote() end", false);
 				lua_State* observed = states[index]->GetLuaState();
 				const int slotTop = lua_gettop(observed);
 				lua_getglobal(observed, "_PreviewBarrierUpvalueSlot");
