@@ -847,14 +847,14 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		request.address = m_MultiplayerJoinAddressTextBox->GetText();
 	}
 	request.port = static_cast<uint16_t>(parsedPort);
-	// Hosting or joining under a name saves it; a name the settings refuse gives way to the saved one.
+	// Hosting or joining under a name saves it, but saving is best effort: the wire carries more
+	// bytes than the box takes typed, so a name the settings will not hold still goes out as typed.
 	const std::string typedName = m_MultiplayerNameTextBox->GetText();
-	if (!typedName.empty()) {
+	request.playerName = typedName.empty() ? (host ? "Host" : "Client") : typedName;
+	if (!typedName.empty() && typedName != g_SettingsMan.GetNetworkDisplayName()) {
 		g_SettingsMan.SetNetworkDisplayName(typedName);
-		m_MultiplayerNameTextBox->SetText(g_SettingsMan.GetNetworkDisplayName());
 		g_SettingsMan.UpdateSettingsFile();
 	}
-	request.playerName = typedName.empty() ? (host ? "Host" : "Client") : g_SettingsMan.GetNetworkDisplayName();
 	request.activityPreset = "P4 Alpha Duel";
 	request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 	// Headed matches self-heal: a desync (or a rejoiner) reloads everyone from the host's snapshot.
