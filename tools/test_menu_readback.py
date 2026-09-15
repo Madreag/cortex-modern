@@ -60,7 +60,9 @@ def scripts(case, port, root):
             text += checks(f"Tab{tab}Settings", "CollectionBoxSettingsBase") + "dump_player_options\n"
         text += "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n"
     elif case == "lobby":
-        text = host_lobby(port) + checks("ButtonMultiplayerReady", "MultiplayerLobbyPanel")
+        # The host starts the match, so its lobby hides the ready button the joining peers get.
+        text = host_lobby(port) + "assert_visible ButtonMultiplayerReady 0\n"
+        text += checks("ButtonMultiplayerLeave", "MultiplayerLobbyPanel")
         text += "assert_enabled ButtonMultiplayerStart 0\ndump_host_options\nexit\n"
     elif case == "pause":
         text = "wait 12\nassert_screen Pause\n" + checks("ButtonSettings", "PauseScreen")
