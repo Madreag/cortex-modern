@@ -131,6 +131,16 @@ namespace RTE {
 			return AppendString(out, value, NetProtocol::c_MaxShortTextBytes, "chat_text", error);
 		}
 
+		// A display name is the other field a player types, so it is held to the same rule: a stray byte
+		// rides the roster into every diagnostic dump.
+		bool AppendName(std::vector<uint8_t>& out, const std::string& value, const char* fieldName, NetProtocolError* error) {
+			if (!IsValidUtf8(value)) {
+				SetError(error, NetProtocolErrorCode::InvalidString, out.size(), std::string(fieldName) + " is not valid UTF-8");
+				return false;
+			}
+			return AppendString(out, value, NetProtocol::c_MaxDisplayNameBytes, fieldName, error);
+		}
+
 		void AppendHash(std::vector<uint8_t>& out, const NetHash32& hash) {
 			out.insert(out.end(), hash.begin(), hash.end());
 		}
@@ -213,6 +223,19 @@ namespace RTE {
 				return true;
 			}
 
+			// A remote display name reaches the roster and every diagnostic dump, so it is held to valid UTF-8.
+			bool ReadName(std::string& out, const char* fieldName, NetProtocolError* error) {
+				const size_t lengthOffset = m_Offset;
+				if (!ReadString(out, NetProtocol::c_MaxDisplayNameBytes, fieldName, error)) {
+					return false;
+				}
+				if (!IsValidUtf8(out)) {
+					SetError(error, NetProtocolErrorCode::InvalidString, lengthOffset, std::string(fieldName) + " is not valid UTF-8");
+					return false;
+				}
+				return true;
+			}
+
 			bool ReadHash(NetHash32& out) {
 				return ReadBytes(out);
 			}
@@ -281,7 +304,7 @@ namespace RTE {
 			AppendU16LE(out, payload.controllerFrameVersion);
 			AppendU16LE(out, payload.controllerFrameEncodedSize);
 			AppendU8(out, payload.platformId);
-			if (!AppendString(out, payload.displayName, NetProtocol::c_MaxDisplayNameBytes, "display_name", error) ||
+			if (!AppendName(out, payload.displayName, "display_name", error) ||
 			    !AppendString(out, payload.gameVersion, NetProtocol::c_MaxShortTextBytes, "game_version", error) ||
 			    !AppendString(out, payload.buildId, NetProtocol::c_MaxShortTextBytes, "build_id", error)) {
 				return false;
@@ -308,7 +331,7 @@ namespace RTE {
 			AppendU8(out, payload.hostPlatformId);
 			AppendU8(out, 0);
 			if (!AppendString(out, payload.gameVersion, NetProtocol::c_MaxShortTextBytes, "game_version", error) ||
-			    !AppendString(out, payload.hostName, NetProtocol::c_MaxDisplayNameBytes, "host_name", error) ||
+			    !AppendName(out, payload.hostName, "host_name", error) ||
 			    !AppendString(out, payload.buildId, NetProtocol::c_MaxShortTextBytes, "build_id", error)) {
 				return false;
 			}
@@ -409,7 +432,7 @@ namespace RTE {
 			AppendU16LE(out, payload.h4Version);
 			AppendBytes(out, payload.txId);
 			return AppendH4Identity(out, payload.identity, error) &&
-			       AppendString(out, payload.displayName, NetProtocol::c_MaxDisplayNameBytes, "display_name", error);
+			       AppendName(out, payload.displayName, "display_name", error);
 		}
 
 		bool EncodePayload(const NetH4TicketOffer& payload, std::vector<uint8_t>& out, NetProtocolError*) {
@@ -450,7 +473,7 @@ namespace RTE {
 			AppendU16LE(out, payload.stableSeat);
 			AppendU32LE(out, payload.holderGeneration);
 			return AppendH4Identity(out, payload.identity, error) &&
-			       AppendString(out, payload.displayName, NetProtocol::c_MaxDisplayNameBytes, "display_name", error);
+			       AppendName(out, payload.displayName, "display_name", error);
 		}
 
 		bool EncodePayload(const NetH4Challenge& payload, std::vector<uint8_t>& out, NetProtocolError*) {
@@ -495,7 +518,7 @@ namespace RTE {
 			AppendBytes(out, payload.txId);
 			AppendU16LE(out, payload.stableSeat);
 			return AppendH4Identity(out, payload.identity, error) &&
-			       AppendString(out, payload.displayName, NetProtocol::c_MaxDisplayNameBytes, "display_name", error);
+			       AppendName(out, payload.displayName, "display_name", error);
 		}
 
 		bool EncodePayload(const NetH4ApplicantAck& payload, std::vector<uint8_t>& out, NetProtocolError*) {
@@ -607,7 +630,7 @@ namespace RTE {
 			    !ReadOrTruncated(reader.ReadU8(payload.platformId), reader, error, "platform_id")) {
 				return false;
 			}
-			if (!reader.ReadString(payload.displayName, NetProtocol::c_MaxDisplayNameBytes, "display_name", error) ||
+			if (!reader.ReadName(payload.displayName, "display_name", error) ||
 			    !reader.ReadString(payload.gameVersion, NetProtocol::c_MaxShortTextBytes, "game_version", error) ||
 			    !reader.ReadString(payload.buildId, NetProtocol::c_MaxShortTextBytes, "build_id", error)) {
 				return false;
@@ -658,7 +681,7 @@ namespace RTE {
 				return false;
 			}
 			if (!reader.ReadString(payload.gameVersion, NetProtocol::c_MaxShortTextBytes, "game_version", error) ||
-			    !reader.ReadString(payload.hostName, NetProtocol::c_MaxDisplayNameBytes, "host_name", error) ||
+			    !reader.ReadName(payload.hostName, "host_name", error) ||
 			    !reader.ReadString(payload.buildId, NetProtocol::c_MaxShortTextBytes, "build_id", error)) {
 				return false;
 			}
@@ -818,7 +841,7 @@ namespace RTE {
 			return ReadH4Version(reader, payload.h4Version, error) &&
 			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
 			       ReadH4Identity(reader, payload.identity, error) &&
-			       reader.ReadString(payload.displayName, NetProtocol::c_MaxDisplayNameBytes, "display_name", error);
+			       reader.ReadName(payload.displayName, "display_name", error);
 		}
 
 		bool DecodePayload(ByteReader& reader, NetH4TicketOffer& payload, NetProtocolError* error) {
@@ -865,7 +888,7 @@ namespace RTE {
 			       ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") &&
 			       ReadH4HolderGeneration(reader, payload.holderGeneration, error) &&
 			       ReadH4Identity(reader, payload.identity, error) &&
-			       reader.ReadString(payload.displayName, NetProtocol::c_MaxDisplayNameBytes, "display_name", error);
+			       reader.ReadName(payload.displayName, "display_name", error);
 		}
 
 		bool DecodePayload(ByteReader& reader, NetH4Challenge& payload, NetProtocolError* error) {
@@ -907,7 +930,7 @@ namespace RTE {
 			       ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") &&
 			       ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") &&
 			       ReadH4Identity(reader, payload.identity, error) &&
-			       reader.ReadString(payload.displayName, NetProtocol::c_MaxDisplayNameBytes, "display_name", error);
+			       reader.ReadName(payload.displayName, "display_name", error);
 		}
 
 		bool DecodePayload(ByteReader& reader, NetH4ApplicantAck& payload, NetProtocolError* error) {
