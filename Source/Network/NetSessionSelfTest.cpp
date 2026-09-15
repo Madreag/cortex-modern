@@ -4,7 +4,10 @@
 #include "LoopbackTransport.h"
 #include "NetLobbySession.h"
 #include "NetLockstep.h"
+#include "NetMatchRunner.h"
 #include "NetSession.h"
+
+#include "nlohmann/json.hpp"
 
 #include <algorithm>
 #include <array>
@@ -128,6 +131,123 @@ namespace RTE {
 			}
 			(void)port;
 			return true;
+		}
+
+		bool TestHandshakeNameAndReportDump(std::string* error) {
+			// Independent checks accumulate so the handshake refusal and the report dump cannot hide each other.
+			std::vector<std::string> failures;
+			const uint16_t port = 42061;
+			ScriptedHostTransport transport;
+			NetSession host;
+			if (!host.StartHost(transport, MakeConfig(port, 6101, "Host"), error)) {
+				return false;
+			}
+			NetMessage helloMessage;
+			helloMessage.sequence = 1;
+			helloMessage.payload = MakeClientHello(MakeConfig(port, 6201, "Player"));
+			std::vector<uint8_t> helloBytes;
+			NetProtocolError encodeError;
+			if (!NetProtocol::Encode(helloMessage, helloBytes, &encodeError)) {
+				*error = "could not encode the scripted ClientHello: " + encodeError.message;
+				return false;
+			}
+			const std::string needle = "Player";
+			const auto found = std::search(helloBytes.begin(), helloBytes.end(), needle.begin(), needle.end());
+			if (found == helloBytes.end()) {
+				*error = "the ClientHello display name is not where this arm patches it";
+				return false;
+			}
+			*found = 0xC3;
+			transport.Push({NetTransportEventType::PeerConnected, 300, NetTransportLane::ControlReliable, {}, ""});
+			transport.Push({NetTransportEventType::PacketReceived, 300, NetTransportLane::ControlReliable, helloBytes, ""});
+			host.Tick(0);
+			if (host.GetState() == NetSessionState::Accepted) {
+				failures.emplace_back("the handshake admitted a display name with a truncated two-byte lead");
+			}
+			try {
+				const std::string report = host.BuildReportJson();
+				if (nlohmann::json::parse(report, nullptr, false).is_discarded()) {
+					failures.emplace_back("the session report of a smuggled handshake name did not parse back");
+				}
+			} catch (const std::exception& thrown) {
+				failures.emplace_back(std::string("the session report dump threw on a smuggled handshake name: ") + thrown.what());
+			}
+			// A host's rejection text is remote free-form diagnostics, never held to UTF-8, and the client
+			// stores it verbatim (NetSession.cpp:1066); both live reports must survive whatever it carries.
+			const uint16_t rejectPort = 42062;
+			LoopbackTransport rejectHostTransport;
+			LoopbackTransport rejectClientTransport;
+			if (!rejectHostTransport.StartHost(rejectPort, error) || !rejectClientTransport.Connect("loopback", rejectPort, error)) {
+				return false;
+			}
+			NetPeerId rejectHostRemote = c_InvalidNetPeerId;
+			NetSession rejectedSession;
+			if (!rejectedSession.StartClient(rejectClientTransport, "loopback", MakeConfig(rejectPort, 6301, "Player"), error)) {
+				return false;
+			}
+			for (uint64_t now = 0; now <= 100 && rejectHostRemote == c_InvalidNetPeerId; now += 10) {
+				rejectedSession.Tick(now);
+				rejectClientTransport.AdvanceTimeMs(10);
+				for (const NetTransportEvent& event: rejectHostTransport.PollEvents()) {
+					if (event.type == NetTransportEventType::PeerConnected) rejectHostRemote = event.peerId;
+				}
+				rejectHostTransport.AdvanceTimeMs(10);
+			}
+			if (rejectHostRemote == c_InvalidNetPeerId) {
+				*error = "the scripted reject host never saw the client connect";
+				return false;
+			}
+			NetMessage rejectMessage;
+			rejectMessage.sequence = 1;
+			rejectMessage.payload = NetJoinRejected{NetRejectReason::InternalError, std::string("summary\xFF"), std::string("mismatch\xC3" "key"), "expected", "actual"};
+			std::vector<uint8_t> rejectBytes;
+			NetProtocolError rejectError;
+			if (!NetProtocol::Encode(rejectMessage, rejectBytes, &rejectError)) {
+				*error = "could not encode a rejection with bad diagnostic bytes: " + rejectError.message;
+				return false;
+			}
+			if (!rejectHostTransport.Send(rejectHostRemote, NetTransportLane::ControlReliable, rejectBytes, error)) {
+				return false;
+			}
+			for (uint64_t now = 110; now <= 300 && !rejectedSession.IsRejected(); now += 10) {
+				rejectClientTransport.AdvanceTimeMs(10);
+				rejectedSession.Tick(now);
+			}
+			if (!rejectedSession.IsRejected()) {
+				*error = "the scripted rejection never reached the client session";
+				return false;
+			}
+			try {
+				const std::string report = rejectedSession.BuildReportJson();
+				if (nlohmann::json::parse(report, nullptr, false).is_discarded()) {
+					failures.emplace_back("the session report of a smuggled reject text did not parse back");
+				} else if (report.find("\xEF\xBF\xBD") == std::string::npos) {
+					failures.emplace_back("the session report dropped the bad reject bytes instead of replacing them");
+				}
+			} catch (const std::exception& thrown) {
+				failures.emplace_back(std::string("the session report dump threw on a smuggled reject text: ") + thrown.what());
+			}
+			// The runner report parses the session report in, so the host's live report follows it.
+			NetMatchRunner runner;
+			NetLockstepCoordinator coordinator;
+			try {
+				const std::string report = runner.BuildReportJson(rejectedSession, coordinator);
+				if (nlohmann::json::parse(report, nullptr, false).is_discarded()) {
+					failures.emplace_back("the runner report of a smuggled reject text did not parse back");
+				} else if (report.find("\xEF\xBF\xBD") == std::string::npos) {
+					failures.emplace_back("the runner report dropped the bad reject bytes instead of replacing them");
+				}
+			} catch (const std::exception& thrown) {
+				failures.emplace_back(std::string("the runner report dump threw on a smuggled reject text: ") + thrown.what());
+			}
+			if (failures.empty()) {
+				return true;
+			}
+			*error = failures.front();
+			for (size_t index = 1; index < failures.size(); ++index) {
+				*error += " | " + failures[index];
+			}
+			return false;
 		}
 
 		bool TestHappyPath(std::string* error) {
@@ -1217,6 +1337,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestHappyPath(&error)) return fail(error);
+		if (!TestHandshakeNameAndReportDump(&error)) return fail(error);
 		if (!TestAssignedPeerIdIgnoresTransportPeerId(&error)) return fail(error);
 		if (!TestReadyRequiresAcceptedConnection(&error)) return fail(error);
 		if (!TestHostWithNoRemoteSeatIsReady(&error)) return fail(error);

@@ -1699,7 +1699,9 @@ namespace RTE {
 				{"chat_dropped_malformed", chatStats.chatDroppedMalformed},
 			}},
 		};
-		return report.dump(2);
+		// A peer's rejection text is free-form remote diagnostics, so a stray byte is replaced rather
+		// than thrown: this report is built while a match runs.
+		return report.dump(2, ' ', false, json::error_handler_t::replace);
 	}
 
 	const char* NetSession::RoleName(NetSessionRole role) {
