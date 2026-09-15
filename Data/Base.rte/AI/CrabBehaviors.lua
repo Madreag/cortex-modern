@@ -352,7 +352,8 @@ function CrabBehaviors.ShootTarget(AI, Owner, Abort)
 			if AimPoint and (not AI.isPlayerOwned or not SceneMan:IsUnseen(AimPoint.X, AimPoint.Y, Owner.Team)) then
 				-- periodically check that we can see the target
 				local Dist = SceneMan:ShortestDistance(Owner.EyePos, AimPoint, false);
-				local viewLen = SceneMan:ShortestDistance(Owner.EyePos, Owner.ViewPoint, false).Magnitude + FrameMan.PlayerScreenWidth * 0.55; -- TODO: get AimDistance and SharpLength from the ini
+				-- The pinned screen size: every machine's AI must reach the same decision, replays included.
+				local viewLen = SceneMan:ShortestDistance(Owner.EyePos, Owner.ViewPoint, false).Magnitude + FrameMan.SimScreenWidth * 0.55; -- TODO: get AimDistance and SharpLength from the ini
 
 				if Dist:MagnitudeIsLessThan(viewLen) then
 					local ID = SceneMan:CastMORay(Owner.EyePos, Dist, Owner.ID, Owner.IgnoresWhichTeam, rte.grassID, false, 9);
@@ -391,7 +392,7 @@ function CrabBehaviors.ShootTarget(AI, Owner, Abort)
 				if ClosestEnemy then
 					-- check if the target is inside our "screen"
 					local ViewDist = SceneMan:ShortestDistance(Owner.ViewPoint, ClosestEnemy.Pos, false);
-					if (math.abs(ViewDist.X) - ClosestEnemy.Radius < FrameMan.PlayerScreenWidth * 0.5) and (math.abs(ViewDist.Y) - ClosestEnemy.Radius < FrameMan.PlayerScreenHeight * 0.5) then
+					if (math.abs(ViewDist.X) - ClosestEnemy.Radius < FrameMan.SimScreenWidth * 0.5) and (math.abs(ViewDist.Y) - ClosestEnemy.Radius < FrameMan.SimScreenHeight * 0.5) then
 						if not AI.isPlayerOwned or not SceneMan:IsUnseen(ClosestEnemy.Pos.X, ClosestEnemy.Pos.Y, Owner.Team) then	-- AI-teams ignore the fog
 							if SceneMan:CastStrengthSumRay(Owner.EyePos, ClosestEnemy.Pos, 6, rte.grassID) < 120 then
 								AI.Target = ClosestEnemy;
