@@ -13,6 +13,7 @@
 #include "System/ScenarioRunner.h"
 #include "ActivityMan.h"
 #include "Activity.h"
+#include "ACDropShip.h"
 #include "Actor.h"
 #include "AudioMan.h"
 #include "Controller.h"
@@ -1628,6 +1629,83 @@ namespace RTE {
 				return false;
 			}
 			return DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error);
+		}
+
+		// A craft a Lua activity spawns is no network delivery, so its owner's AI hatch call would land on
+		// the producer alone; the boundary must leave an intent every peer runs at the committed tick.
+		bool TestAICraftHatchCrossesTheWire(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			if (!StartOwnedPair(43025, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x5732315448415443ULL, hostTransport, clientTransport, host, client, error)) {
+				return false;
+			}
+			ACDropShip* ownerView = new ACDropShip();
+			ACDropShip* peerView = new ACDropShip();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (ownerView->MovableObject::Create(1.0F) < 0 || peerView->MovableObject::Create(1.0F) < 0) {
+				return finish("selftest craft could not be created");
+			}
+			ownerView->SetTeam(0);
+			peerView->SetTeam(0);
+			ownerView->GetController()->SetControlledActor(ownerView);
+			peerView->GetController()->SetControlledActor(peerView);
+			// The Lua spawn path: MovableMan:AddActor never marks a craft as a network delivery.
+			g_MovableMan.AddActor(ownerView);
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+			if (ownerView->IsNetworkDelivery() || peerView->IsNetworkDelivery()) {
+				return finish("a Lua-spawned craft must not be a network delivery");
+			}
+			if (ownerView->GetHatchState() != static_cast<unsigned int>(ACraft::CLOSED) || peerView->GetHatchState() != static_cast<unsigned int>(ACraft::CLOSED)) {
+				return finish("the selftest craft did not start with a closed hatch");
+			}
+
+			const long long simTick = static_cast<long long>(g_TimerMan.GetSimUpdateCount());
+			const MovableMan::ControllerBoundaryBaseline before = MovableMan::CaptureControllerBoundary(ownerView);
+			// The owner's AI pass: NativeDropShipAI's Owner:OpenHatch() lands exactly here.
+			g_CurrentAIActor = ownerView;
+			ownerView->OpenHatch();
+			g_CurrentAIActor = nullptr;
+			g_MovableMan.RestoreControllerBoundary(before, simTick);
+			if (ownerView->GetHatchState() != static_cast<unsigned int>(ACraft::CLOSED)) {
+				return finish("the AI pass opened the producer's hatch instead of leaving an intent");
+			}
+			const ControllerFrame frame = ControllerFrameCodec::Snapshot(static_cast<int64_t>(ownerView->GetUniqueID()), *ownerView->GetController(), ownerView);
+			if (frame.hatchCommand != static_cast<uint8_t>(ControllerFrame::HatchCommand::Open)) {
+				return finish("the produced frame carries no hatch-open intent");
+			}
+
+			// Every peer, the producer included, makes the call at the committed tick.
+			for (Actor* view: {static_cast<Actor*>(ownerView), static_cast<Actor*>(peerView)}) {
+				std::string applyError;
+				if (!ControllerFrameCodec::ApplyActorStateIntents(frame, *view, &applyError)) {
+					return finish("the hatch intent did not apply");
+				}
+			}
+			if (ownerView->GetHatchState() != static_cast<unsigned int>(ACraft::OPENING) || peerView->GetHatchState() != static_cast<unsigned int>(ACraft::OPENING)) {
+				return finish("the two peers hold different hatch states after the committed tick");
+			}
+			// A frame without the intent must leave every peer's hatch alone.
+			ControllerFrame quiet = frame;
+			quiet.hatchCommand = static_cast<uint8_t>(ControllerFrame::HatchCommand::None);
+			std::string quietError;
+			if (!ControllerFrameCodec::ApplyActorStateIntents(quiet, *peerView, &quietError) || peerView->GetHatchState() != static_cast<unsigned int>(ACraft::OPENING)) {
+				return finish("a frame with no hatch intent changed the hatch");
+			}
+			std::cout << "[net-lockstep-selftest] PASS ai craft hatch crosses the wire: cmd=" << static_cast<int>(frame.hatchCommand)
+			          << " owner=" << ownerView->GetHatchState() << " peer=" << peerView->GetHatchState() << std::endl;
+			return finish(nullptr);
 		}
 
 		// Owner = host, team authority = the client: the host's pop of a CPU actor on that team must apply.
@@ -10860,6 +10938,7 @@ namespace RTE {
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
 		    !TestAIWaypointReadThroughSamePass(&error) ||
 		    !TestAIWaypointCrossActorWrites(&error) ||
+		    !TestAICraftHatchCrossesTheWire(&error) ||
 		    !TestHostRunCpuActorOnAHumanTeamPopsItsWaypoint(&error) ||
 		    !TestAnOwnedWriterMayWriteAnotherOwnersActor(&error) ||
 		    !TestAStrangerMayNotWriteAQueue(&error) ||
