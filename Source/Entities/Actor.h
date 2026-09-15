@@ -1232,6 +1232,7 @@ namespace RTE {
 		bool LogicalWaypointClearSeen() const;
 		void ConsumeInflightWaypoint(DeferredWaypoint::Op op, float x, float y, int64_t targetUID);
 		void QueueDeferredOnRunning(const DeferredWaypoint& waypoint);
+		void QueueAIModeOnRunning(AIMode newMode);
 		int GetAIModeSeenByAIPass() const;
 		AIMode PendingAIMode() const;
 

@@ -1074,11 +1074,15 @@ static bool DeferAIPassMutation(const Actor* actor) {
 	return g_MovableMan.FindObjectByUniqueID(actor->GetUniqueID()) == actor;
 }
 
+void Actor::QueueAIModeOnRunning(AIMode newMode) {
+	g_CurrentAIActor->m_PendingDeferredAIModes.push_back({static_cast<int64_t>(GetUniqueID()), static_cast<uint8_t>(newMode)});
+}
+
 void Actor::SetAIMode(AIMode newMode) {
 	// The AI pass runs on the machine that owns the actor, so a mode written there would land on that
 	// peer alone while the hash and the checkpoint carry it; queue it for the synced request instead.
 	if (DeferAIPassMutation(this)) {
-		g_CurrentAIActor->m_PendingDeferredAIModes.push_back({static_cast<int64_t>(GetUniqueID()), static_cast<uint8_t>(newMode)});
+		QueueAIModeOnRunning(newMode);
 		return;
 	}
 	m_AIMode = newMode;
@@ -1091,6 +1095,12 @@ Actor::AIMode Actor::PendingAIMode() const {
 }
 
 void Actor::RequestAIMode(AIMode newMode) {
+	// The AI pass runs on a pool thread and the local command queue is the sim thread's, so a request
+	// made in there rides the same per-actor queue the pass's mode writes do.
+	if (DeferAIPassMutation(this)) {
+		QueueAIModeOnRunning(newMode);
+		return;
+	}
 	// A request still on the wire is the mode this actor is heading to; it is not asked for twice.
 	if (PendingAIMode() == newMode) {
 		return;
