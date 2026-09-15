@@ -4882,7 +4882,7 @@ void LuaStateWrapper::Initialize() {
 	LoadScriptGraphHelper();
 	CaptureScriptGraphBaseline();
 
-	LuabindObjectWrapper::InstallSimThreadDeletion(m_State);
+	LuabindObjectWrapper::InstallSimThreadDeletion(m_State, g_LuaMan.GetStateIndex(this));
 
 	if (g_SettingsMan.EnableLuaDebugging()) {
 		luaL_dostring(m_State, "require(\"mobdebug\").coro(); require(\"mobdebug\").start();");
@@ -6351,7 +6351,7 @@ LuaStateWrapper* LuaMan::GetAndLockFreeScriptState() {
 }
 
 void LuaMan::ClearUserModuleCache() {
-	m_GarbageCollectionTask.wait();
+	WaitForAsyncGarbageCollection();
 
 	m_MasterScriptState.ClearLuaScriptCache();
 	for (LuaStateWrapper& luaState: m_ScriptStates) {
@@ -6603,6 +6603,7 @@ const std::unordered_map<std::string, PerformanceMan::ScriptTiming> LuaMan::GetS
 }
 
 void LuaMan::Destroy() {
+	WaitForAsyncGarbageCollection();
 	for (int i = 0; i < c_MaxOpenFiles; ++i) {
 		FileClose(i);
 	}
@@ -7456,7 +7457,7 @@ void LuaMan::Update() {
 	}
 
 	// Make sure a GC run isn't happening while we try to apply deletions
-	m_GarbageCollectionTask.wait();
+	WaitForAsyncGarbageCollection();
 
 	// Apply all deletions queued from lua
 	LuabindObjectWrapper::ApplyQueuedDeletions();
@@ -7464,10 +7465,12 @@ void LuaMan::Update() {
 
 void LuaMan::WaitForAsyncGarbageCollection() {
 	m_GarbageCollectionTask.wait();
+	// The collecting threads only unlink; the destructors are ours to run, in state order.
+	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
 }
 
 void LuaMan::CollectGarbageForCheckpoint() {
-	m_GarbageCollectionTask.wait();
+	WaitForAsyncGarbageCollection();
 	// A finalizer keeps its own object, and anything only it reaches, alive for the cycle that runs
 	// it, so one pass does not settle a chain. Repeat while a full collection still frees something.
 	const auto collect = [](LuaStateWrapper& luaState) {
