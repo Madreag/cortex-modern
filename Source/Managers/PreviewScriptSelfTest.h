@@ -26,6 +26,8 @@ namespace RTE {
 		static bool CheckNestedHookScope();
 		/// Exercises table stores and exact rollback through the production preview boundary.
 		static bool CheckGlobalWriteBarrier();
+		/// A leftover recorder abort must not leave the state interpreter-only.
+		static bool CheckHotcountAfterAbort();
 		/// Exercises retirement ownership and observes links before and after disposal.
 		static bool RunRetirementArm(char mode);
 
