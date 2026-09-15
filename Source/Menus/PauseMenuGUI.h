@@ -15,6 +15,7 @@ namespace RTE {
 	class GUIControlManager;
 	class GUICollectionBox;
 	class GUIButton;
+	class GUILabel;
 	class SettingsGUI;
 	class ModManagerGUI;
 	class SaveLoadMenuGUI;
@@ -27,7 +28,8 @@ namespace RTE {
 		enum class PauseMenuUpdateResult {
 			NoEvent,
 			BackToMain,
-			ActivityResumed
+			ActivityResumed,
+			MatchLeft
 		};
 
 #pragma region Creation
@@ -55,12 +57,20 @@ namespace RTE {
 		/// Enables or disables buttons depending on the current Activity.
 		void EnableOrDisablePauseMenuFeatures();
 
+		/// Shows the match rows instead of the single-player ones, for a pause menu over a running network match.
+		/// @param networkMatch Whether this menu is the local menu of a network match.
+		void SetNetworkMatchMode(bool networkMatch);
+
+		/// Asks for the same back navigation the escape key does, for the pad's start button.
+		void RequestBack() { m_BackRequested = true; }
+
 		/// Updates the PauseMenuGUI state.
 		/// @return The result of the PauseMenuGUI input and event update. See PauseMenuUpdateResult enumeration.
 		PauseMenuUpdateResult Update();
 
 		/// Draws the PauseMenuGUI to the screen.
-		void Draw();
+		/// @param drawPostProcessBuffer Whether to present the post-process buffer first; a live match frame already has.
+		void Draw(bool drawPostProcessBuffer = true);
 
 		/// Posts a command through the visible pause menu's event queue.
 		bool AutomationPostCommand(const std::string& controlName);
@@ -92,7 +102,12 @@ namespace RTE {
 			SettingsButton,
 			ModManagerButton,
 			SaveDiagnosticsButton,
+			PauseMatchButton,
+			LeaveMatchButton,
 			ResumeButton,
+			// The confirmation's buttons follow the rows, in their own box: the row layout stops at the resume row.
+			LeaveConfirmButton,
+			LeaveCancelButton,
 			ButtonCount
 		};
 
@@ -115,17 +130,29 @@ namespace RTE {
 		std::array<std::string, PauseMenuButton::ButtonCount> m_ButtonHoveredText; //!< Array containing uppercase strings of the pause menu buttons text that are used to display the larger font when a button is hovered over.
 		std::array<std::string, PauseMenuButton::ButtonCount> m_ButtonUnhoveredText; //!< Array containing lowercase strings of the pause menu buttons text that are used to display the smaller font when a button is not hovered over.
 		std::array<std::string, 2> m_DiagnosticsIdleText; //!< The idle hovered/unhovered texts restored after a save.
+		std::array<std::string, 2> m_MatchPauseText; //!< The hovered/unhovered texts of the match pause row while the match runs.
+		std::array<std::string, 2> m_MatchResumeText; //!< The hovered/unhovered texts of the match pause row while the match is paused.
 		bool m_DiagnosticsBusy; //!< The last busy state applied to the arrays.
+		bool m_MatchPausedShown; //!< The last shared pause state applied to the match pause row.
 		GUIButton* m_HoveredButton; //!< The currently hovered pause menu button.
 		std::string m_PendingAutomationCommand;
 		int m_PrevHoveredButtonIndex; //!< The index of the previously hovered pause menu button in the main menu button array.
 
 		bool m_SavingButtonsDisabled; //!< Whether the save and load buttons are disabled and hidden.
 		bool m_ModManagerButtonDisabled; //!< Whether the mod manager button is disabled and hidden.
+		bool m_NetworkMatchMode; //!< Whether this menu is the local menu of a running network match.
+		bool m_LeaveConfirmShown; //!< Whether the leave confirmation is up instead of the menu rows.
+		bool m_BackRequested; //!< A back navigation asked for by the pad's start button.
 
 		/// GUI elements that compose the pause menu screen.
 		GUICollectionBox* m_PauseMenuBox;
 		std::array<GUIButton*, PauseMenuButton::ButtonCount> m_PauseMenuButtons;
+		std::array<int, PauseMenuButton::ButtonCount> m_ButtonHomeY; //!< Each button's row offset inside the menu box, as the skin places it.
+		int m_PauseMenuBoxHomeY; //!< The menu box position the skin places, before any row set moves it.
+
+		/// GUI elements of the leave confirmation, which replaces the menu rows while it is up.
+		GUICollectionBox* m_LeaveConfirmBox;
+		GUILabel* m_LeaveConfirmLabel;
 
 #pragma region Menu Screen Handling
 		/// Sets the PauseMenuGUI to display a menu screen.
@@ -149,6 +176,19 @@ namespace RTE {
 
 		/// Animates (blinking) the resume game button.
 		void BlinkResumeButton();
+
+		/// Puts a button's row at an offset inside the menu box.
+		void PlaceButtonRow(int button, int rowOffset);
+
+		/// Shows or hides the leave confirmation in place of the menu rows.
+		void ShowLeaveConfirm(bool show);
+
+		/// The one line of what leaving costs this player, from the session's own hold.
+		std::string LeaveConsequenceText() const;
+
+		/// Follows the shared pause state on the match pause row's label.
+		/// @param force Whether to write the label even when the shared state has not changed.
+		void UpdateMatchPauseRow(bool force = false);
 #pragma endregion
 
 		/// Clears all the member variables of this PauseMenuGUI, effectively resetting the members of this object.

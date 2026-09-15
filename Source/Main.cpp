@@ -2094,6 +2094,7 @@ static void DrawFrameWithPreviews() {
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts();
 	g_WindowMan.DrawPostProcessBuffer();
+	g_MenuMan.DrawLocalPauseMenu();
 	g_WindowMan.UploadFrame();
 	if (NetMatchScreenshotDue()) {
 		const uint64_t tick = ScenarioRunner::GetLockstepCompletedFrame();
@@ -2116,6 +2117,7 @@ static void UpdateResyncUI(uint32_t elapsedSeconds) {
 		g_MenuMan.ToggleNetworkPanel();
 	}
 	g_MenuMan.UpdateNetworkUI();
+	g_MenuMan.UpdateLocalPauseMenu();
 	g_WindowMan.ClearBackbuffer();
 	clear_to_color(g_FrameMan.GetBackBuffer32(), makeacol32(20, 22, 27, 255));
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
@@ -2127,6 +2129,7 @@ static void UpdateResyncUI(uint32_t elapsedSeconds) {
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts();
 	ScenarioRunner::NoteResyncOverlayFrame();
+	g_MenuMan.DrawLocalPauseMenu();
 	g_WindowMan.UploadFrame();
 	NetModerationGUIProbe::AfterDraw();
 	g_UInputMan.EndFrame();
@@ -4416,6 +4419,7 @@ void RunGameLoop() {
 			g_SceneMan.SetRenderDrawContext(true);
 			g_UInputMan.Update();
 			g_MenuMan.UpdateNetworkUI();
+			g_MenuMan.UpdateLocalPauseMenu();
 			g_ActivityMan.RenderUpdate();
 			g_UInputMan.EndFrame();
 			g_SceneMan.SetRenderDrawContext(false);

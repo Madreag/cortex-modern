@@ -1216,6 +1216,11 @@ void UInputMan::EndSimUpdate() {
 
 void UInputMan::HandleSpecialInput() {
 	if (g_ActivityMan.IsInActivity()) {
+		if (g_MenuMan.IsLocalPauseMenuOpen()) {
+			// The menu owns input: escape belongs to its own back navigation, start is the pad's way back.
+			if (AnyStartPress(false) && !KeyPressed(SDLK_ESCAPE)) g_MenuMan.RequestLocalPauseMenuBack();
+			return;
+		}
 		if (KeyPressed(SDLK_F6) && g_MenuMan.ToggleNetworkPanel()) return;
 		if (g_MenuMan.IsNetworkPanelOpen()) {
 			if (AnyStartPress(false)) g_MenuMan.ToggleNetworkPanel();
@@ -1232,6 +1237,10 @@ void UInputMan::HandleSpecialInput() {
 		const GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 		// Don't allow pausing and returning to main menu when running in server mode to not disrupt the simulation for the clients
 		if (AnyStartPress(false) && (!gameActivity || !gameActivity->IsBuyGUIVisible(-1))) {
+			// A network match keeps running under its pause menu, which is local; everything else pauses.
+			if (g_MenuMan.ToggleLocalPauseMenu()) {
+				return;
+			}
 			g_ActivityMan.PauseActivity(true, FlagShiftState());
 			return;
 		}

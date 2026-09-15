@@ -334,7 +334,7 @@ void Controller::Update() {
 }
 
 void Controller::RenderUpdate() {
-	if (m_Disabled || m_SeatMode != InputMode::CIM_PLAYER || g_MenuMan.IsNetworkPanelOpen()) {
+	if (m_Disabled || m_SeatMode != InputMode::CIM_PLAYER || g_MenuMan.IsLiveMenuOwningInput()) {
 		return;
 	}
 	if (m_ControlledActor && (m_ControlledActor->GetHealth() == 0.0f || m_ControlledActor->GetStatus() == Actor::DYING || m_ControlledActor->GetStatus() == Actor::DEAD)) {
@@ -421,7 +421,7 @@ void Controller::GetInputFromPlayer() {
 	std::array<bool, ControlState::CONTROLSTATECOUNT> lastControlStates = m_ControlStates;
 	ResetCommandState();
 
-	if ((g_ConsoleMan.IsEnabled() && !g_ConsoleMan.IsReadOnly()) || m_SeatPlayer < 0 || g_MenuMan.IsNetworkPanelOpen()) {
+	if ((g_ConsoleMan.IsEnabled() && !g_ConsoleMan.IsReadOnly()) || m_SeatPlayer < 0 || g_MenuMan.IsLiveMenuOwningInput()) {
 		return;
 	}
 
