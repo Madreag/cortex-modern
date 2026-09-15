@@ -52,6 +52,7 @@
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <functional>
 #include <future>
 #include <map>
@@ -5156,13 +5157,28 @@ static bool RunGarbageCollectionThreadSelfTest() {
 	const uint64_t offSimThread = LuabindObjectWrapper::OffSimThreadDeletionCount() - offSimThreadBefore;
 	const uint64_t simThread = LuabindObjectWrapper::SimThreadDeletionCount() - simThreadBefore;
 	const bool bothGone = uids[0] > 0 && uids[1] > 0 && !g_MovableMan.FindObjectByUniqueID(uids[0]) && !g_MovableMan.FindObjectByUniqueID(uids[1]);
+
+	// What the same GC-heavy tick costs, averaged over rounds that drop the same batch again.
+	constexpr int c_TimedRounds = 5;
+	long long passMicroseconds = 0;
+	for (int round = 0; round < c_TimedRounds; ++round) {
+		for (int index = 0; index < 2; ++index) {
+			states[index].RunScriptString("_GCThreadDrop = {}; for i = 1, " + std::to_string(c_DropsPerState) + " do _GCThreadDrop[#_GCThreadDrop + 1] = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\"); _GCThreadDrop[#_GCThreadDrop + 1] = CreateSoundContainer(\"Funds Changed\", \"Base.rte\"); end; _GCThreadDrop = nil");
+		}
+		const auto started = std::chrono::steady_clock::now();
+		g_LuaMan.StartAsyncGarbageCollection();
+		g_LuaMan.WaitForAsyncGarbageCollection();
+		passMicroseconds += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+	}
+	passMicroseconds /= c_TimedRounds;
+
 	LuaMan::SetDeterministicCollection(previousMode);
 	g_LuaMan.CollectGarbageForCheckpoint();
 	MovableObject::PinUniqueIDCounter(counter);
 
 	const bool collected = offSimThread + simThread >= static_cast<uint64_t>(2 * c_DropsPerState) && bothGone;
 	const bool onSimThread = offSimThread == 0;
-	std::cout << "[script-graph-selftest] " << (collected ? "PASS" : "FAIL") << " two_states_drop_lua_owned_entities_in_one_parallel_pass states=" << states.size() << " destructed=" << (offSimThread + simThread) << " dropped_uids_gone=" << (bothGone ? "yes" : "no") << std::endl;
+	std::cout << "[script-graph-selftest] " << (collected ? "PASS" : "FAIL") << " two_states_drop_lua_owned_entities_in_one_parallel_pass states=" << states.size() << " destructed=" << (offSimThread + simThread) << " dropped_uids_gone=" << (bothGone ? "yes" : "no") << " pass_us=" << passMicroseconds << std::endl;
 	std::cout << "[script-graph-selftest] " << (onSimThread ? "PASS" : "FAIL") << " lua_owned_entities_are_destructed_on_the_sim_thread off_sim_thread=" << offSimThread << " sim_thread=" << simThread << std::endl;
 	return collected && onSimThread;
 }
