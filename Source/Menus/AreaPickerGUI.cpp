@@ -77,17 +77,9 @@ int AreaPickerGUI::Create(Controller* pController, const std::string& onlyOfType
 	// Stretch the invisible root box to fill the screen
 	dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("base"))->SetSize(g_WindowMan.GetResX(), g_WindowMan.GetResY());
 
-	// Make sure we have convenient points to the containing GUI colleciton boxes that we will manipulate the positions of
-	if (!m_pParentBox) {
-		m_pParentBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("PickerGUIBox"));
-
-		// Set the background image of the parent collection box
-		//        ContentFile backgroundFile("Base.rte/GUIs/BuyMenuBackground.png");
-		//        m_pParentBox->SetDrawImage(new AllegroBitmap(backgroundFile.GetAsBitmap()));
-		//        m_pParentBox->SetDrawBackground(true);
-		//        m_pParentBox->SetDrawType(GUICollectionBox::Image);
-		m_pParentBox->SetDrawType(GUICollectionBox::Color);
-	}
+	// The load above deleted every control the manager owned, so each cached pointer is re-fetched.
+	m_pParentBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("PickerGUIBox"));
+	m_pParentBox->SetDrawType(GUICollectionBox::Color);
 	m_pParentBox->SetPositionAbs(g_FrameMan.GetPlayerScreenWidth(), 0);
 	m_pParentBox->SetEnabled(false);
 	m_pParentBox->SetVisible(false);
@@ -114,6 +106,11 @@ int AreaPickerGUI::Create(Controller* pController, const std::string& onlyOfType
 	m_RepeatTimer.Reset();
 
 	return 0;
+}
+
+bool AreaPickerGUI::HasLiveCachedControls() {
+	return m_pGUIController && m_pParentBox == m_pGUIController->GetControl("PickerGUIBox") && m_pAreasList == m_pGUIController->GetControl("AreasLB") &&
+	       m_pDeleteAreaButton == m_pGUIController->GetControl("DeleteAreaButton");
 }
 
 void AreaPickerGUI::Destroy() {

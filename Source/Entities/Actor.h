@@ -241,6 +241,10 @@ namespace RTE {
 		/// @return A Vector with the absolute position of this' HUD stack top point.
 		Vector GetAboveHUDPos() const override { return m_Pos + Vector(0, m_HUDStack + 6); }
 
+		/// Gets the sim-side point above this actor's head, independent of the HUD stack.
+		/// @return A Vector at the top of this actor.
+		Vector GetAboveHeadPos() const { return m_Pos + Vector(0, -m_CharHeight / 2); }
+
 		/// Gets the offset position of the holster where this Actor draws his devices from.
 		/// @return The offset position of the holster.
 		Vector GetHolsterOffset() const { return m_HolsterOffset; }

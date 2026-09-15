@@ -662,7 +662,19 @@ bool ObjectPickerGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		if (validateOnly) { reader.Finish(); return true; }
 		if (!m_Controller) { reader.Finish(); m_PendingCheckpoint.assign(text); return true; }
 		const auto* object = dynamic_cast<const SceneObject*>(GUICheckpoint::LoadEntityReference(picked));
-		if (hasControls && (!m_GUIControlManager || !m_GUIControlManager->LoadCheckpoint(controls))) return false;
+		if (hasControls) {
+			if (!m_GUIControlManager) return false;
+			if (const std::string missing = GUICheckpoint::FirstMissingControl(controls, {"PickerGUIBox", "GroupsLB", "ObjectsLB", "BuyGUIPopup", "PopupText"}); !missing.empty()) {
+				throw std::runtime_error("missing control " + missing + " in layout ObjectPickerGUI");
+			}
+			if (!m_GUIControlManager->LoadCheckpoint(controls)) return false;
+			m_ParentBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("PickerGUIBox"));
+			m_GroupsList = dynamic_cast<GUIListBox*>(m_GUIControlManager->GetControl("GroupsLB"));
+			m_ObjectsList = dynamic_cast<GUIListBox*>(m_GUIControlManager->GetControl("ObjectsLB"));
+			m_PopupBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("BuyGUIPopup"));
+			m_PopupText = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("PopupText"));
+			if (!HasLiveCachedControls()) throw std::runtime_error("missing control in layout ObjectPickerGUI");
+		}
 		reader.Finish(); m_PickedObject = object; m_PendingCheckpoint.clear();
 		return true;
 	} catch (const std::exception& exception) { std::cout << "[gui-checkpoint] object-picker validation=" << validateOnly << " error=" << exception.what() << std::endl; return false; }

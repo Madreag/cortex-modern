@@ -22,7 +22,7 @@ function Update(self)
 					end
 				end
 				local cross = self.healCrossParticle:Clone();
-				cross.Pos = self.AboveHUDPos + Vector(0, 4);
+				cross.Pos = self.AboveHeadPos + Vector(0, 4);
 				MovableMan:AddParticle(cross);
 			else
 				local timerRatio = self.healing.timer.ElapsedSimTimeMS/self.healing.delay;

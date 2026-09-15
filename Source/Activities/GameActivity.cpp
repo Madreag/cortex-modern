@@ -35,6 +35,7 @@
 #include "InventoryMenuGUI.h"
 #include "BuyMenuGUI.h"
 #include "ObjectPickerGUI.h"
+#include "AreaPickerGUI.h"
 #include "SceneEditorGUI.h"
 #include "GUIBanner.h"
 #include "GUICheckpoint.h"
@@ -4361,6 +4362,45 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 				if (step("reset_then_create", picker.Create(controller) >= 0)) step("second_create", picker.Create(controller) >= 0);
 			}
 			check(("net_local_picker_controls_survive_recreate" + (detail.empty() ? std::string{} : " " + detail)).c_str(), detail.empty());
+		}
+		{
+			// A second Create over a live area picker reloads the same layout; cached controls must be the live ones.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			fixture->m_PlayerController[0].Create(Controller::CIM_PLAYER, 0);
+			Controller* controller = &fixture->m_PlayerController[0];
+			AreaPickerGUI picker;
+			std::string detail;
+			const auto step = [&](const char* name, bool applied) {
+				if (!detail.empty()) return false;
+				const bool controls = picker.HasLiveCachedControls();
+				std::cout << "[net-local-area-picker] step=" << name << " applied=" << applied << " controls_live=" << controls << std::endl;
+				if (applied && controls) return true;
+				detail = std::string(name) + " applied=" + std::to_string(applied) + " controls_live=" + std::to_string(controls);
+				return false;
+			};
+			if (step("created", picker.Create(controller) >= 0)) step("second_create", picker.Create(controller) >= 0);
+			check(("net_local_area_picker_controls_survive_recreate" + (detail.empty() ? std::string{} : " " + detail)).c_str(), detail.empty());
+		}
+		{
+			// AboveHeadPos is sim-derived; DrawHUD leftover must not move a write that reads it.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			const auto* robot = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+			if (!robot) throw std::runtime_error("above-head fixture preset unavailable");
+			std::unique_ptr<Actor> actor(static_cast<Actor*>(robot->Clone()));
+			actor->SetTeam(0);
+			actor->SetPos(Vector(320, 240));
+			const Vector hudBefore = actor->GetAboveHUDPos();
+			const Vector headBefore = actor->GetAboveHeadPos();
+			actor->DrawHUD(g_FrameMan.GetBackBuffer8(), Vector(), 0, false);
+			const Vector hudAfter = actor->GetAboveHUDPos();
+			const Vector headAfter = actor->GetAboveHeadPos();
+			std::cout << "[net-local-above-head] hud_before=" << hudBefore.m_Y << " hud_after=" << hudAfter.m_Y
+			          << " head_before=" << headBefore.m_Y << " head_after=" << headAfter.m_Y << std::endl;
+			check("above_hud_pos_moves_with_drawhud", hudBefore != hudAfter);
+			check("above_head_pos_survives_drawhud", headBefore == headAfter);
 		}
 		{
 			// The returner's banner is the same live one after a slot that arrives empty, exactly like its menu.
