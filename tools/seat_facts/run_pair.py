@@ -179,6 +179,7 @@ def main():
     print(json.dumps(result, indent=2))
     return 0 if (result.get("pass") is True and result.get("seat_facts", {"pass": True})["pass"] and
                  all(result.get("screen_facts", {}).values()) and result.get("control_facts", {"pass": True})["pass"] and
+                 result.get("switch_window", {"pass": True})["pass"] and
                  result.get("vessel_facts", {"pass": True})["pass"]) else 1
 
 
