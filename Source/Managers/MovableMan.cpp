@@ -5363,8 +5363,9 @@ std::string MovableMan::SaveCheckpoint() const {
 	std::map<long, std::vector<long>> references;
 	// A row exists to rebind borrowed pointers, so an object that borrows nothing needs none.
 	// Writing one anyway makes the restore demand back an owner the checkpoint never carried.
-	// Only the world this checkpoint writes comes back, so only its objects may be named: a row for a
-	// per-peer object (a setup editor's held one) makes the restore demand an owner it cannot have.
+	// Only the shared world this checkpoint writes comes back under its own identities, so only its
+	// objects may be named. A peer's own setup editor holds objects nothing shared owns, and a row for
+	// one of those can only refuse the archive on the peer that never had it.
 	std::unordered_set<const Entity*> visited;
 	std::unordered_set<const MovableObject*> carried;
 	const auto collect = [&visited, &carried](const auto& roots) {
@@ -5373,8 +5374,6 @@ std::string MovableMan::SaveCheckpoint() const {
 	collect(m_Actors); collect(m_Items); collect(m_Particles);
 	collect(m_AddedActors); collect(m_AddedItems); collect(m_AddedParticles);
 	CollectOwnedMovableObjects(g_SceneMan.GetScene(), visited, carried);
-	CollectOwnedMovableObjects(g_ActivityMan.GetActivity(), visited, carried);
-	CollectOwnedMovableObjects(g_ActivityMan.GetCheckpointStartActivity(), visited, carried);
 	for (const auto& [identity, object]: m_KnownObjects) {
 		if (!carried.contains(object)) continue;
 		std::vector<long> links = object->GetCheckpointBorrowedReferences();
