@@ -1121,9 +1121,15 @@ LUA_API void lua_call(lua_State *L, int nargs, int nresults)
 LUA_API int lua_pcall(lua_State *L, int nargs, int nresults, int errfunc)
 {
   global_State *g = G(L);
-  uint8_t oldh = hook_save(g);
+  uint8_t oldh;
   ptrdiff_t ef;
   int status;
+#if LJ_HASJIT
+  /* Re-install hot counting if an abort left record dispatch on an idle recorder. */
+  if (G2J(g)->state == LJ_TRACE_IDLE)
+    lj_dispatch_update(g);
+#endif
+  oldh = hook_save(g);
   lj_checkapi(L->status == LUA_OK || L->status == LUA_ERRERR,
 	      "thread called in wrong state %d", L->status);
   lj_checkapi_slot(nargs+1);

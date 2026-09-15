@@ -685,8 +685,8 @@ void lj_trace_abort(global_State *g)
   if (J->state != LJ_TRACE_IDLE) {
     trace_pendpatch(J, 1);
     J->state = LJ_TRACE_IDLE;
-    lj_dispatch_update(g);
   }
+  lj_dispatch_update(g);
 }
 
 /* State machine for the trace compiler. Protected callback. */

@@ -478,6 +478,8 @@ ASMFunction LJ_FASTCALL lj_dispatch_call(lua_State *L, const BCIns *pc)
   int missing = call_init(L, fn);
 #if LJ_HASJIT
   J->L = L;
+  if (J->state == LJ_TRACE_IDLE && (g->dispatchmode & DISPMODE_REC))
+    lj_dispatch_update(g);
   if ((uintptr_t)pc & 1) {  /* Marker for hot call. */
 #ifdef LUA_USE_ASSERT
     ptrdiff_t delta = L->top - L->base;
