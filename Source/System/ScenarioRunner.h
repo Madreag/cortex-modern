@@ -254,6 +254,10 @@ namespace RTE {
 		/// Records a synced control handoff: the actor's frames now come from this peer. Co-op players
 		/// share a team, so per-actor control must override the per-team ownership policy.
 		static void SetLockstepControlOverride(int64_t actorUniqueID, uint8_t ownerPeerId);
+		/// Latches the first lockstep owner transfer after the match is running, for the e2e owner log.
+		static void NoteE2eOwnerTransfer(int64_t actorUniqueID);
+		/// The latched transfer uid, or 0 if none has been observed.
+		static int64_t GetE2eOwnerTransferUid();
 		/// Drops handoffs held by peers that have left as of this frame, so their actors revert to the
 		/// team's policy owner (a surviving teammate's AI picks them up). Synced: every peer consumes
 		/// the frame with identical leave knowledge.

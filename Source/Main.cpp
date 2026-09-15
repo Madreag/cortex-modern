@@ -3496,6 +3496,9 @@ static void NoteE2eSwitchOwnerLog(uint64_t tick) {
 		return;
 	}
 	if (s_netMatchE2eSwitchUid == 0) {
+		s_netMatchE2eSwitchUid = ScenarioRunner::GetE2eOwnerTransferUid();
+	}
+	if (s_netMatchE2eSwitchUid == 0) {
 		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
 			std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(team);
 			if (!roster) {
@@ -3518,6 +3521,14 @@ static void NoteE2eSwitchOwnerLog(uint64_t tick) {
 			}
 			if (s_netMatchE2eSwitchUid != 0) {
 				break;
+			}
+		}
+	}
+	if (s_netMatchE2eSwitchUid == 0 && s_netMatchE2eSwitchControlTick > 0) {
+		if (Activity* activity = g_ActivityMan.GetActivity()) {
+			const int player = activity->PlayerOfScreen(0);
+			if (Actor* target = FindE2eSwitchControlTarget(activity, player)) {
+				s_netMatchE2eSwitchUid = static_cast<int64_t>(target->GetUniqueID());
 			}
 		}
 	}
@@ -3560,10 +3571,10 @@ void RunGameLoop() {
 		g_WindowMan.Update();
 		g_WindowMan.ClearBackbuffer();
 
-		if (s_frameStallArmed && !s_frameStallFired && g_TimerMan.GetSimUpdateCount() == s_frameStallTick) {
+		if (s_frameStallArmed && !s_frameStallFired && g_TimerMan.GetSimUpdateCount() >= s_frameStallTick) {
 			s_frameStallFired = true;
-			std::this_thread::sleep_for(std::chrono::milliseconds(s_frameStallMs));
 			std::cout << "[selftest] frame stall tick=" << s_frameStallTick << " ms=" << s_frameStallMs << std::endl;
+			std::this_thread::sleep_for(std::chrono::milliseconds(s_frameStallMs));
 		}
 
 		g_TimerMan.Update();

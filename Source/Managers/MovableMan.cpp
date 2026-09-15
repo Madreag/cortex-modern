@@ -926,6 +926,7 @@ void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, co
 			const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
 			if (seeded != 0 && ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), true) == seeded) {
 				MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
+				ScenarioRunner::NoteE2eOwnerTransfer(uid);
 				std::cout << "[net-match] claim of actor " << uid << " returned to peer " << static_cast<int>(seeded)
 				          << " after seat " << static_cast<int>(claimant) << " expired" << std::endl;
 				continue;
