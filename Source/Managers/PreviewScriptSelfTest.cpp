@@ -384,7 +384,7 @@ end
 jit.flush()
 jit.attach(ev, 'trace')
 local t = {}
-for i = 1, 1024 do t[i % 16 + 1] = i end
+for i = 1, 4096 do t[i % 16 + 1] = i end
 jit.attach(ev)
 _HotcountAbortSeen = seen
 assert(seen > 0, 'no trace event after forced abort path seen='..tostring(seen)..' status='..tostring(jit.status()))
@@ -398,6 +398,10 @@ assert(seen > 0, 'no trace event after forced abort path seen='..tostring(seen).
 				J->state = LJ_TRACE_RECORD;
 				lj_dispatch_update(g);
 				lj_trace_abort(g);
+				std::cout << "[script-graph-selftest] hotcount_abort_state state=" << index
+				          << " jstate=" << static_cast<unsigned>(J->state)
+				          << " mode=" << static_cast<unsigned>(g->dispatchmode)
+				          << " flags=" << J->flags << std::endl;
 			}
 #endif
 			const int status = states[index]->RunScriptString(probe, false);

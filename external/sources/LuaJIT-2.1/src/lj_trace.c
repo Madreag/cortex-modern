@@ -32,8 +32,6 @@
 #include "lj_target.h"
 #include "lj_prng.h"
 #include "lj_fopen.h"
-#include <stdio.h>
-#include <stdlib.h>
 
 /* -- Error handling ------------------------------------------------------ */
 
@@ -296,6 +294,8 @@ int lj_trace_flushall(lua_State *L)
   J->freetrace = 0;
   /* Clear penalty cache. */
   memset(J->penalty, 0, sizeof(J->penalty));
+  /* A flush leaves hashed hotcounts in place, so a penalized slot stays cold. */
+  lj_dispatch_init_hotcount(J2G(J));
   /* Free the whole machine code and invalidate all exit stub groups. */
   lj_mcode_free(J);
   memset(J->exitstubgroup, 0, sizeof(J->exitstubgroup));
@@ -683,12 +683,8 @@ static LJ_AINLINE void trace_pendpatch(jit_State *J, int force)
 void lj_trace_abort(global_State *g)
 {
   jit_State *J = G2J(g);
-  TraceState was = J->state;
   J->state = (TraceState)((uint32_t)J->state & ~(uint32_t)LJ_TRACE_ACTIVE);
   if (J->state != LJ_TRACE_IDLE) {
-    if (getenv("CC_TEST_NET_RECLAIM_DIAG"))
-      fprintf(stderr, "[preview-write-barrier] f91-abort leftover was=%u now=%u mode=%u\n",
-	      (unsigned)was, (unsigned)J->state, (unsigned)g->dispatchmode);
     trace_pendpatch(J, 1);
     J->state = LJ_TRACE_IDLE;
   }
