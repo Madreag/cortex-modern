@@ -16,6 +16,7 @@ namespace RTE {
 		/// and the owner's control scheme; version 5 frames (older recordings) apply the actor state
 		/// absolutely every tick.
 		static constexpr uint16_t c_Version = 7;
+		static constexpr uint16_t c_HatchVersion = 7;
 		static constexpr uint16_t c_PreHatchVersion = 6;
 		static constexpr uint16_t c_LegacyVersion = 5;
 		static constexpr size_t c_EncodedSize = 85;
@@ -67,8 +68,9 @@ namespace RTE {
 		bool HasFlipIntent() const { return (flags & 0x8U) != 0; }
 		void SetFlipIntent(bool intent);
 		bool HasHatchIntent() const { return hatchCommand != static_cast<uint8_t>(HatchCommand::None); }
-		/// Pre-7 frames end at the aim speed; their hatch stays where the sim put it.
-		bool HasHatchChannel() const { return version >= c_Version; }
+		/// Pre-7 frames end at the aim speed; their hatch stays where the sim put it. The channel is keyed
+		/// on the version that introduced it, so a later build still reads a version 7 recording's hatch.
+		bool HasHatchChannel() const { return version >= c_HatchVersion; }
 		bool IsLegacy() const { return version <= c_LegacyVersion; }
 		static constexpr uint8_t c_KnownFlags = 0x0FU;
 		static constexpr uint8_t c_LegacyKnownFlags = 0x03U;
