@@ -34,6 +34,7 @@
 #include "AllegroBitmap.h"
 #include "InventoryMenuGUI.h"
 #include "BuyMenuGUI.h"
+#include "ObjectPickerGUI.h"
 #include "SceneEditorGUI.h"
 #include "GUIBanner.h"
 #include "GUICheckpoint.h"
@@ -43,8 +44,10 @@
 #include "TimerMan.h"
 #include "OwnedMovableObjects.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <iostream>
 #include <sstream>
 
@@ -1068,6 +1071,14 @@ bool GameActivity::MayCommitBrainPlacement(int player) const {
 	return seatPeer != 0 ? seatPeer == local : local == ScenarioRunner::GetLockstepHostPeerId();
 }
 
+Vector GameActivity::GroundSpot(float sceneX) const {
+	Vector spot(sceneX, 0.0F);
+	g_SceneMan.ForceBounds(spot);
+	// Just off the ground, so the brain settles under the same physics on every peer.
+	spot.m_Y = g_SceneMan.FindAltitude(spot, g_SceneMan.GetSceneHeight(), 10, true) - 20.0F;
+	return spot;
+}
+
 Vector GameActivity::DeterministicBrainSpot(int player) const {
 	// Every peer reads the same roster, scene width and terrain, so the spot it derives for a seat is the
 	// same one. Seats stand in even bands across the site, in seat order.
@@ -1082,11 +1093,7 @@ Vector GameActivity::DeterministicBrainSpot(int player) const {
 		}
 		++seats;
 	}
-	Vector spot(static_cast<float>(g_SceneMan.GetSceneWidth()) * static_cast<float>(index + 1) / static_cast<float>(seats + 1), 0.0F);
-	g_SceneMan.ForceBounds(spot);
-	// Just off the ground, so the brain settles under the same physics on every peer.
-	spot.m_Y = g_SceneMan.FindAltitude(spot, g_SceneMan.GetSceneHeight(), 10, true) - 20.0F;
-	return spot;
+	return GroundSpot(static_cast<float>(g_SceneMan.GetSceneWidth()) * static_cast<float>(index + 1) / static_cast<float>(seats + 1));
 }
 
 void GameActivity::SeedLockstepResidentBrains() {
@@ -1115,10 +1122,10 @@ bool GameActivity::PlaceAndSubmitLockstepBrain(int player, const std::string& cl
 		return false;
 	}
 	const Vector spot = DeterministicBrainSpot(player);
-	return CommitLockstepBrainPlacement(player, className, preset, module, spot);
+	return CommitLockstepBrainPlacement(player, className, preset, module, spot, "auto");
 }
 
-bool GameActivity::CommitLockstepBrainPlacement(int player, const std::string& className, const std::string& preset, const std::string& module, const Vector& spot) {
+bool GameActivity::CommitLockstepBrainPlacement(int player, const std::string& className, const std::string& preset, const std::string& module, const Vector& spot, const char* via) {
 	NetGamePlaceBrain placement;
 	placement.team = m_Team[player];
 	placement.player = player;
@@ -1131,7 +1138,7 @@ bool GameActivity::CommitLockstepBrainPlacement(int player, const std::string& c
 	m_LockstepPlacementSubmitted[player] = true;
 	std::cout << "[net-match] brain placement committed: seat=" << player << " team=" << placement.team
 	          << " preset=" << placement.module << "/" << placement.preset
-	          << " pos=" << placement.posX << "," << placement.posY << std::endl;
+	          << " pos=" << placement.posX << "," << placement.posY << " via=" << via << std::endl;
 	return true;
 }
 
@@ -1154,7 +1161,107 @@ bool GameActivity::SubmitLockstepBrainPlacement(int player) {
 		return false;
 	}
 	return CommitLockstepBrainPlacement(player, resident->GetClassName(), resident->GetPresetName(),
-	                                    g_PresetMan.GetDataModuleName(resident->GetModuleID()), resident->GetPos());
+	                                    g_PresetMan.GetDataModuleName(resident->GetModuleID()), resident->GetPos(), "editor");
+}
+
+namespace {
+	// The UI probe's scripted setup-editor gestures, per seat. Test-only: nothing in the game queues one,
+	// so an empty queue leaves DriveScriptedSetupEditor a no-op and the editor entirely in the player's hands.
+	struct ScriptedEditorGesture {
+		bool done = false; //!< A DONE press instead of a placement.
+		float sceneXFraction = 0.5F;
+		std::string className, preset, module;
+		int stage = 0;    //!< 0 pick the brain up, 1 press and release over the spot, 2 read the result.
+		int attempts = 0; //!< Ground spots tried; the editor itself refuses one with no path to the sky.
+		int updates = 0;  //!< Editor updates spent, so a gesture the editor never takes cannot hang the seat.
+	};
+	std::array<std::deque<ScriptedEditorGesture>, Players::MaxPlayerCount> s_ScriptedEditorGestures;
+	std::array<bool, Players::MaxPlayerCount> s_ScriptedEditorFailed{};
+	constexpr int c_ScriptedEditorAttempts = 8;
+	constexpr int c_ScriptedEditorUpdateCap = 400;
+} // namespace
+
+bool GameActivity::QueueSetupEditorGesture(int player, const std::string& kind, float sceneXFraction, const std::string& className, const std::string& preset, const std::string& module) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount || (kind != "place_brain" && kind != "done")) {
+		return false;
+	}
+	ScriptedEditorGesture gesture;
+	gesture.done = kind == "done";
+	gesture.sceneXFraction = std::clamp(sceneXFraction, 0.0F, 1.0F);
+	gesture.className = className;
+	gesture.preset = preset;
+	gesture.module = module;
+	s_ScriptedEditorGestures[player].push_back(std::move(gesture));
+	return true;
+}
+
+int GameActivity::SetupEditorMode(int player) const {
+	return player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_pEditorGUI[player] ? m_pEditorGUI[player]->GetEditorGUIMode() : -1;
+}
+
+int GameActivity::SetupEditorGestureStatus(int player) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount || s_ScriptedEditorFailed[player]) {
+		return 2;
+	}
+	return s_ScriptedEditorGestures[player].empty() ? 0 : 1;
+}
+
+void GameActivity::DriveScriptedSetupEditor(int player) {
+	if (s_ScriptedEditorGestures[player].empty() || !m_pEditorGUI[player]) {
+		return;
+	}
+	ScriptedEditorGesture& gesture = s_ScriptedEditorGestures[player].front();
+	if (gesture.done) {
+		m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::DONEEDITING);
+		s_ScriptedEditorGestures[player].pop_front();
+		return;
+	}
+	const auto give_up = [&] {
+		s_ScriptedEditorFailed[player] = true;
+		s_ScriptedEditorGestures[player].pop_front();
+	};
+	if (++gesture.updates > c_ScriptedEditorUpdateCap) {
+		give_up();
+		return;
+	}
+	Scene* scene = g_SceneMan.GetScene();
+	// Each attempt walks one brain width along the ground: an invalid spot is the editor's own verdict.
+	const Vector spot = GroundSpot(static_cast<float>(g_SceneMan.GetSceneWidth()) * gesture.sceneXFraction + static_cast<float>(gesture.attempts) * 40.0F);
+	const SceneEditorGUI::EditorGUIMode mode = m_pEditorGUI[player]->GetEditorGUIMode();
+	if (gesture.stage == 0) {
+		const Entity* brainPreset = g_PresetMan.GetEntityPreset(gesture.className, gesture.preset, gesture.module);
+		if (!brainPreset || !m_pEditorGUI[player]->SetCurrentObject(dynamic_cast<SceneObject*>(brainPreset->Clone()))) {
+			give_up();
+			return;
+		}
+		m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::INSTALLINGBRAIN);
+		m_pEditorGUI[player]->SetCursorPos(spot);
+		gesture.stage = 1;
+	} else if (gesture.stage == 1) {
+		// The seat's own press and release over the spot; the editor vets the path to the sky like always.
+		const ObjectPickerGUI* picker = m_pEditorGUI[player]->GetCheckpointPicker();
+		if (picker && picker->IsVisible()) {
+			// The picker is still on its way out and would eat the press.
+			return;
+		}
+		m_pEditorGUI[player]->SetCursorPos(spot);
+		if (mode == SceneEditorGUI::INSTALLINGBRAIN) {
+			m_PlayerController[player].SetState(PRESS_PRIMARY, true);
+		} else if (mode == SceneEditorGUI::PLACINGOBJECT) {
+			m_PlayerController[player].SetState(RELEASE_PRIMARY, true);
+		} else {
+			gesture.stage = 2;
+		}
+	} else {
+		const SceneObject* resident = scene ? scene->GetResidentBrain(player) : nullptr;
+		if (resident && resident->GetPresetName() == gesture.preset) {
+			s_ScriptedEditorGestures[player].pop_front();
+		} else if (++gesture.attempts >= c_ScriptedEditorAttempts) {
+			give_up();
+		} else {
+			gesture.stage = 0;
+		}
+	}
 }
 
 bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, uint8_t senderPeerId) {
@@ -1267,6 +1374,9 @@ void GameActivity::UpdateEditing() {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
+
+		// A scripted gesture stands in for this seat's own mouse; only the UI probe queues one.
+		DriveScriptedSetupEditor(player);
 
 		m_pEditorGUI[player]->Update();
 
