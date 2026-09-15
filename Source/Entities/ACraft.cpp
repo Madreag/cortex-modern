@@ -684,6 +684,11 @@ void ACraft::AddInventoryItem(MovableObject* pItemToAdd) {
 }
 
 void ACraft::DropAllInventory() {
+	// The ejection adds actors to the world, draws from the RNG and raises an alarm, none of which the
+	// producing boundary can undo, so a mod AI script calling this in its pass writes on one peer only.
+	if (InOffWireHatchPass()) {
+		g_MovableMan.ReportControllerBoundaryViolation("the dropped inventory", this);
+	}
 	if (m_HatchState == OPEN && !m_Exits.empty()) {
 		// Cancel if we're not due to release
 		if (!m_ExitTimer.IsPastSimMS(m_ExitInterval))

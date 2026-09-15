@@ -1771,6 +1771,60 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		// An ejection cannot be undone at the boundary, so a mod AI script dropping a craft's inventory
+		// inside its own pass must at least be reported as the producer-only write it is.
+		bool TestAIDropAllInventoryIsReported(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			if (!StartOwnedPair(48332, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x57323144524f5044ULL, hostTransport, clientTransport, host, client, error)) {
+				return false;
+			}
+			ACDropShip* craft = new ACDropShip();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				g_MovableMan.UnregisterObject(craft);
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (craft->MovableObject::Create(1.0F) < 0) {
+				return finish("selftest craft could not be created");
+			}
+			craft->SetTeam(0);
+			craft->GetController()->SetControlledActor(craft);
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+			const uint64_t before = g_MovableMan.GetControllerBoundaryStats().directWrites;
+			// A Debug build turns the report into an assert, so the reported call runs in the shipping ones.
+#ifdef DEBUG_BUILD
+			static constexpr uint64_t expectedReports = 0;
+#else
+			static constexpr uint64_t expectedReports = 1;
+			{
+				SoundSimulationScope aiPass(static_cast<uint64_t>(craft->GetUniqueID()), 1, SoundExecutionDomain::LocalSimulation);
+				g_CurrentAIActor = craft;
+				craft->DropAllInventory();
+				g_CurrentAIActor = nullptr;
+			}
+			if (g_MovableMan.GetControllerBoundaryStats().directWrites != before + expectedReports) {
+				return finish("an AI pass drop went unreported at the boundary");
+			}
+#endif
+			// The same call outside the pass is the sim's own on every peer, and nothing is reported.
+			craft->DropAllInventory();
+			if (g_MovableMan.GetControllerBoundaryStats().directWrites != before + expectedReports) {
+				return finish("a drop outside the AI pass was reported as a boundary violation");
+			}
+			std::cout << "[net-lockstep-selftest] PASS ai drop reported: writes=" << (g_MovableMan.GetControllerBoundaryStats().directWrites - before) << std::endl;
+			return finish(nullptr);
+		}
+
 		// The stock AI scripts write Owner.AIMode inside their own pass (NativeHumanAI.lua:455-464 and the
 		// crab and turret alike), and that mode feeds the controller checksum: the write must leave a
 		// request every peer takes at the committed tick, not a mode the producer alone holds.
@@ -11101,6 +11155,7 @@ namespace RTE {
 		    !TestAIWaypointReadThroughSamePass(&error) ||
 		    !TestAIWaypointCrossActorWrites(&error) ||
 		    !TestAICraftHatchCrossesTheWire(&error) ||
+		    !TestAIDropAllInventoryIsReported(&error) ||
 		    !TestAIModeCrossesTheWire(&error) ||
 		    !TestHostRunCpuActorOnAHumanTeamPopsItsWaypoint(&error) ||
 		    !TestAnOwnedWriterMayWriteAnotherOwnersActor(&error) ||
