@@ -277,7 +277,8 @@ static std::string ResyncSaveName() {
 		if (mux) mux->SetPump({});
 	}
 
-	bool NetMatchService::Start(const NetMatchServiceRequest& request, std::string* error) {
+	bool NetMatchService::Start(const NetMatchServiceRequest& incoming, std::string* error) {
+		NetMatchServiceRequest request = incoming;
 		Destroy();
 		m_CancelRequested.store(false);
 		m_ReadyRequested.store(false);
@@ -294,6 +295,9 @@ static std::string ResyncSaveName() {
 			if (error) *error = "join address must not be empty";
 			return false;
 		}
+		// Past the refusals: the settings are read once here, where a real host starts, and ride the
+		// request to both roster builds, so the worker's copy cannot pick up a later menu edit.
+		SeatSavedOptions(request);
 		NetMatchConfig matchConfig;
 		std::string configError;
 		if (!BuildMatchConfig(request, c_UiSessionId, matchConfig, &configError)) {
@@ -2938,8 +2942,8 @@ static std::string ResyncSaveName() {
 		config.modePreset = NetMatchConfigUtil::ModeName(mode);
 		config.ownershipPolicy = request.ownershipPolicy;
 		config.inputDelayFrames = request.inputDelayFrames;
-		// The host's Gameplay setting seats the rule unless the lobby or a request flag picked one.
-		config.brainlessHumansSpectate = request.brainlessHumansSpectate.value_or(g_SettingsMan.GetBrainlessHumansSpectate());
+		// The rule the request carries seats the round; SeatSavedOptions put the host's Gameplay setting there.
+		config.brainlessHumansSpectate = request.brainlessHumansSpectate.value_or(config.brainlessHumansSpectate);
 		config.peerCount = humanCount == 0 ? 1 : request.peerCount;
 		config.dedicated = request.dedicated;
 		// The host publishes the checkpoint cadence the whole match follows; a client's own setting never steers one.
@@ -2948,7 +2952,9 @@ static std::string ResyncSaveName() {
 			config.autosaveEnabled = seconds > 0;
 			config.autosaveIntervalSeconds = seconds;
 			// The rest of the host's saved session options ride the same config to every peer.
-			NetMatchConfigUtil::ApplySavedHostOptions(config);
+			config.delayPolicy = request.delayPolicy.value_or(config.delayPolicy);
+			config.idleWaitMinutes = request.idleWaitMinutes.value_or(config.idleWaitMinutes);
+			config.automaticRepair = request.automaticRepair.value_or(config.automaticRepair);
 		}
 		// CPU teams follow human teams and consume no peer identity.
 		config.players.clear();
@@ -2973,6 +2979,17 @@ static std::string ResyncSaveName() {
 		if (!NetMatchConfigUtil::ValidateLocalAlpha(config, error)) return false;
 		outConfig = std::move(config);
 		return true;
+	}
+
+	void NetMatchService::SeatSavedOptions(NetMatchServiceRequest& request) {
+		if (!request.brainlessHumansSpectate) request.brainlessHumansSpectate = g_SettingsMan.GetBrainlessHumansSpectate();
+		if (!request.host) return;
+		// The saved-to-wire mapping lives with the config, so the values are read through it.
+		NetMatchConfig saved;
+		NetMatchConfigUtil::ApplySavedHostOptions(saved);
+		if (!request.delayPolicy) request.delayPolicy = saved.delayPolicy;
+		if (!request.idleWaitMinutes) request.idleWaitMinutes = saved.idleWaitMinutes;
+		if (!request.automaticRepair) request.automaticRepair = saved.automaticRepair;
 	}
 
 	void NetMatchService::SetState(NetMatchServiceState state, std::string status, std::string error) {
