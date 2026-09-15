@@ -598,7 +598,8 @@ namespace RTE {
 		snapshot.sceneName = rosterConfig.sceneName;
 		snapshot.modeName = NetMatchConfigUtil::ModeName(rosterConfig.mode);
 		snapshot.localReady = m_Lobby.IsLocalReady();
-		snapshot.remoteReady = m_Lobby.IsRemoteReady();
+		// Start waits on a live remote ready, not the idle default (a reject never seats one).
+		snapshot.remoteReady = m_Lobby.GetState() != NetLobbyState::Idle && m_Lobby.IsRemoteReady();
 		if (m_Config.host && session.HasReject() && session.GetReadyPeerCount() < m_Config.sessionConfig.maxPeers) {
 			snapshot.errorText = "A player could not join: " + session.BuildRejectText();
 		}
