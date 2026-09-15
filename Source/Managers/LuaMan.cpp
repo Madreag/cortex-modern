@@ -5162,14 +5162,23 @@ static bool RunGarbageCollectionThreadSelfTest() {
 	// the built base may reach a finalizer's delete. Both instances die on a pool thread; count where each one went.
 	const auto collectOne = [&states](const std::string& script) {
 		states[0].RunScriptString(script);
-		const uint64_t offBefore = LuabindObjectWrapper::OffSimThreadDeletionCount();
-		const uint64_t simBefore = LuabindObjectWrapper::SimThreadDeletionCount();
-		g_LuaMan.StartAsyncGarbageCollection();
-		g_LuaMan.WaitForAsyncGarbageCollection();
-		return std::pair<uint64_t, uint64_t>(LuabindObjectWrapper::OffSimThreadDeletionCount() - offBefore, LuabindObjectWrapper::SimThreadDeletionCount() - simBefore);
+		uint64_t off = 0;
+		uint64_t sim = 0;
+		// An instance reaches its class through a raw pointer, so the pair settles over a few cycles, not one.
+		for (int pass = 0; pass < 4; ++pass) {
+			const uint64_t offBefore = LuabindObjectWrapper::OffSimThreadDeletionCount();
+			const uint64_t simBefore = LuabindObjectWrapper::SimThreadDeletionCount();
+			g_LuaMan.StartAsyncGarbageCollection();
+			g_LuaMan.WaitForAsyncGarbageCollection();
+			off += LuabindObjectWrapper::OffSimThreadDeletionCount() - offBefore;
+			sim += LuabindObjectWrapper::SimThreadDeletionCount() - simBefore;
+		}
+		return std::pair<uint64_t, uint64_t>(off, sim);
 	};
-	const auto [unbuiltOff, unbuiltSim] = collectOne("class 'F82UnbuiltBase' (Box); function F82UnbuiltBase:__init() error('base never built') end; pcall(function() local held = F82UnbuiltBase() end); F82UnbuiltBase = nil");
-	const auto [builtOff, builtSim] = collectOne("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end; do local held = F82BuiltBase() end; F82BuiltBase = nil");
+	// The class globals stay: a Lua class borrows its name from the string that named it, and dropping the global frees it under the class.
+	// luabind leaves the half-built object in the super closure when __init errors, so clearing super is what drops it.
+	const auto [unbuiltOff, unbuiltSim] = collectOne("class 'F82UnbuiltBase' (Box); function F82UnbuiltBase:__init() error('base never built') end; pcall(function() local held = F82UnbuiltBase() end); super = nil");
+	const auto [builtOff, builtSim] = collectOne("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end; do local held = F82BuiltBase() end");
 	const bool sentinelHeld = unbuiltSim == 0 && unbuiltOff >= 1 && builtSim >= 1;
 
 	// What the same GC-heavy tick costs, averaged over rounds that drop the same batch again.
