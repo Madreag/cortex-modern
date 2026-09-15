@@ -1314,6 +1314,46 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 	std::cout << "[net-match] brain placement applied: seat=" << player << " team=" << m_Team[player]
 	          << " peer=" << static_cast<int>(senderPeerId) << " preset=" << placement.module << "/" << placement.preset
 	          << " pos=" << placement.posX << "," << placement.posY << std::endl;
+	// Presentation only: every peer names the seat that just placed, and the waiting strip counts down.
+	ScenarioRunner::PushNetUiToast("brain_placed", LockstepSeatName(player) + " placed their brain");
+	return true;
+}
+
+std::string GameActivity::LockstepSeatName(int player) {
+	// The roster's non-CPU slots fill the seats in order, the way ConfigureHumanRoster seats them.
+	if (const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig()) {
+		int seat = Players::PlayerOne;
+		for (const NetMatchPlayerSlot& slot: config->players) {
+			if (slot.cpu) {
+				continue;
+			}
+			if (seat == player && !slot.displayName.empty()) {
+				return slot.displayName;
+			}
+			++seat;
+		}
+	}
+	return "Player " + std::to_string(player + 1);
+}
+
+bool GameActivity::DescribeLockstepPlacementWait(std::string& names, int& placed, int& total) const {
+	if (!IsLockstepPlacement() || m_ActivityState != ActivityState::Editing) {
+		return false;
+	}
+	names.clear();
+	placed = 0;
+	total = 0;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (!(IsSeatActive(player) && IsHumanSeat(player))) {
+			continue;
+		}
+		++total;
+		if (m_ReadyToStart[player]) {
+			++placed;
+		} else {
+			names += (names.empty() ? "" : ", ") + LockstepSeatName(player);
+		}
+	}
 	return true;
 }
 
@@ -3258,7 +3298,10 @@ bool GameActivity::CaptureNetLocalPlayerState(NetLocalPlayerState& out) const {
 		CheckpointWriter writer("NetLocalGameUI1");
 		writer(m_ObservationTarget, m_DeathViewTarget, m_ActorSelectTimer, m_ActorCursor, m_LandingZone,
 			m_AIReturnCraft, m_NextMultiOrderYOffset, m_LuaLockActor, m_LuaLockActorMode, m_BannerRepeats,
-			m_ReadyToStart, m_BrainLZWidth, m_LZCursorWidth, m_NetworkPlayerNames);
+			m_ReadyToStart, m_BrainLZWidth, m_LZCursorWidth, m_NetworkPlayerNames,
+			// Which seats this peer has already committed is its own business; the placements themselves
+			// come off the wire and ride the shared checkpoint.
+			m_LockstepPlacementSubmitted);
 		for (int player = 0; player < Players::MaxPlayerCount; ++player) {
 			writer(NetActorUID(m_pLastMarkedActor[player]),
 				m_pBuyGUI[player] ? m_pBuyGUI[player]->SaveCheckpoint() : std::string{},
