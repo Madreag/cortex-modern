@@ -4305,6 +4305,30 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			check(("net_local_menu_survives_empty_restore" + (detail.empty() ? std::string{} : " " + detail)).c_str(), detail.empty());
 		}
 		{
+			// The editor's picker is re-created over the live one on a returning peer, so its cached controls must be the live ones.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			fixture->m_PlayerController[0].Create(Controller::CIM_PLAYER, 0);
+			Controller* controller = &fixture->m_PlayerController[0];
+			ObjectPickerGUI picker;
+			std::string detail;
+			const auto step = [&](const char* name, bool applied) {
+				if (!detail.empty()) return false;
+				const bool controls = picker.HasLiveCachedControls();
+				std::cout << "[net-local-picker] step=" << name << " applied=" << applied << " controls_live=" << controls << std::endl;
+				if (applied && controls) return true;
+				detail = std::string(name) + " applied=" + std::to_string(applied) + " controls_live=" + std::to_string(controls);
+				return false;
+			};
+			// The owning editors reset before they re-create; a create straight over the live picker reloads the same layout.
+			if (step("created", picker.Create(controller) >= 0)) {
+				picker.Reset();
+				if (step("reset_then_create", picker.Create(controller) >= 0)) step("second_create", picker.Create(controller) >= 0);
+			}
+			check(("net_local_picker_controls_survive_recreate" + (detail.empty() ? std::string{} : " " + detail)).c_str(), detail.empty());
+		}
+		{
 			// The returner's banner is the same live one after a slot that arrives empty, exactly like its menu.
 			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
 			g_ActivityMan.SwapCheckpointActivity(next);
