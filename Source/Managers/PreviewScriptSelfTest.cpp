@@ -116,8 +116,16 @@ local function recordHot()
 end
 -- A live compiled trace for the guarded loop is a precondition of the JIT arm, so say why it is missing.
 local armNote = ''
+local function publishHotTrace(note)
+  armNote = (armNote ~= '' and (armNote..'|') or '')..note
+  _PreviewBarrierHotTrace = armNote
+end
 local function armHotTrace(label)
-  if not jitEnabled then _PreviewBarrierHotTrace = label..':jit-off'; return end
+  if not jitEnabled then
+    if label == 'setup' then armNote = '' end
+    publishHotTrace(label..':jit-off')
+    return
+  end
   local how = 'kept'
   if hotTrace == nil or util.traceinfo(hotTrace) == nil then
     recordHot()
@@ -137,10 +145,9 @@ local function armHotTrace(label)
       end
     end
   end
+  if label == 'setup' then armNote = '' end
+  publishHotTrace(label..':'..tostring(hotTrace or 0)..':'..how)
   assert(hotTrace and util.traceinfo(hotTrace), 'no live compiled trace for the guarded store loop at '..label..': '..tostring(traceReason)..' events(start/stop/abort/flush)='..seenCounts()..' live_traces='..liveTraces()..' status='..tostring(jit.status()))
-  local note = label..':'..tostring(hotTrace)..':'..how
-  if label == 'setup' then armNote = note end
-  _PreviewBarrierHotTrace = armNote..'|'..note
 end
 -- The first live trace of any origin is what the arm used to accept; it is reported to show it is not this loop's.
 local firstAnyTrace = 0
@@ -185,16 +192,17 @@ p.mutate = function()
   setmetatable(p.data, {__index = {fallback = 29}})
   assert(p.data.fallback == 29 and getmetatable(p.data) ~= mt)
   hidden.deep.value = 81
-  assert(not jitEnabled or (hotTrace and util.traceinfo(hotTrace)), 'the guarded store loop lost its compiled trace before the window: '..tostring(traceReason))
+  armHotTrace('window')
+  local windowLive = not jitEnabled or (hotTrace and util.traceinfo(hotTrace))
   local exitsBefore = exits
-  if jitEnabled then jit.attach(onexit, 'texit') end
+  if windowLive and jitEnabled then jit.attach(onexit, 'texit') end
   hot(p.hot, 512)
-  if jitEnabled then jit.attach(onexit) end
+  if windowLive and jitEnabled then jit.attach(onexit) end
   assert(p.hot.x == 512 and rawget(p.hot, 'raw') == 512)
   slot = 2
   assert((jit and jit.status() or false) == jitEnabled)
   assert(coroutine.resume(p.co))
-  assert(not jitEnabled or exits > exitsBefore, 'no compiled trace ran for the guarded stores')
+  assert(not windowLive or not jitEnabled or exits > exitsBefore, 'no compiled trace ran for the guarded stores')
   rawset(p.weak, 2, {})
   if p.weak[1] then p.weak[1].value = 2 end
   local hook = function() p.hookData.count = p.hookData.count + 1 end
@@ -263,6 +271,7 @@ end
 			states[index]->RunScriptString("collectgarbage('stop')", false);
 			check("preview_barrier_fixture", index, 0, states[index]->RunScriptString(setup, false));
 		}
+		std::vector<char> windowOk(states.size(), 0);
 		for (int round = 0; round < 2 && passed; ++round) {
 			for (int index = 0; index < static_cast<int>(states.size()); ++index) {
 				// The stash is a lazily created per-state global; a threaded state has none until something stashes.
@@ -280,7 +289,9 @@ end
 			LuaMan::BeginPreviewScripts({}, false);
 			for (int index = 0; index < static_cast<int>(states.size()); ++index) {
 				LuaStateWrapper* state = states[index];
-				check("preview_barrier_vm_semantics", index, round, state->RunScriptString("_PreviewBarrierProbe.mutate()", false));
+				const int mutateStatus = state->RunScriptString("_PreviewBarrierProbe.mutate()", false);
+				windowOk[static_cast<size_t>(index)] = mutateStatus >= 0;
+				check("preview_barrier_vm_semantics", index, round, mutateStatus);
 				lua_State* L = state->GetLuaState();
 				const int top = lua_gettop(L);
 				lua_getglobal(L, "_PreviewBarrierProbe");
@@ -310,9 +321,12 @@ end
 			}
 			LuaMan::EndPreviewScripts();
 			for (int index = 0; index < static_cast<int>(states.size()); ++index) {
-				check("preview_barrier_exact_rollback", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.check(); assert(_ScriptFieldsStash['preview:-7654321'] == nil)", false));
+				// Rollback and the upvalue slot only exist after mutate finishes the window stores.
+				if (windowOk[static_cast<size_t>(index)]) {
+					check("preview_barrier_exact_rollback", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.check(); assert(_ScriptFieldsStash['preview:-7654321'] == nil)", false));
+					check("preview_barrier_upvalue_slot_limit", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.upvalueSlotReport()", false));
+				}
 				check("preview_barrier_gc_released", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.released()", false));
-				check("preview_barrier_upvalue_slot_limit", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.upvalueSlotReport()", false));
 				lua_State* observed = states[index]->GetLuaState();
 				const int slotTop = lua_gettop(observed);
 				lua_getglobal(observed, "_PreviewBarrierUpvalueSlot");
