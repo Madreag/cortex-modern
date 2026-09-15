@@ -56,6 +56,7 @@
 #include "ActivityMan.h"
 #include "Actor.h"
 #include "AHuman.h"
+#include "Attachable.h"
 #include "GameActivity.h"
 #include "MovableObject.h"
 #include "RTETools.h"
@@ -142,6 +143,7 @@
 #include <array>
 #include <list>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <thread>
 #include <unordered_set>
@@ -281,6 +283,7 @@ static uint64_t s_netLockstepTicks = 0;
 static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
 static uint16_t s_netLockstepInputDelay = 0;
 static uint8_t s_netMatchPeers = 2;
+static std::optional<bool> s_netMatchBrainlessSpectate;
 static std::string s_netMatchMode = "pvp";
 static std::string s_netMatchOwnershipPolicy = "team-owner";
 static bool s_netMatchServiceE2EEnteredEditor = false;
@@ -288,6 +291,8 @@ static NetMatchE2ETickClock s_netMatchE2ETicks;
 static long s_netMatchE2EActorCensus = -1;
 static long s_netMatchE2EActorCensusPeak = -1; //!< The max actor count seen, so a transient heal double-spawn that later sheds back to normal is still visible.
 static uint64_t s_netMatchE2eSwitchControlTick = 0;
+static uint64_t s_netMatchE2eBrainDamageTick = 0;
+static uint64_t s_netMatchE2eBrainReseatTick = 0;
 static int64_t s_netMatchE2eSwitchUid = 0;
 static bool s_netMatchE2eSwitchIssued = false;
 static bool s_netMatchE2eSwitchHandedBack = false;
@@ -945,6 +950,16 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (!lastArg && currentArg == "-net-match-e2e-brain-damage") {
+			s_netMatchE2eBrainDamageTick = std::strtoull(argValue[++i], nullptr, 10);
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-e2e-brain-reseat") {
+			s_netMatchE2eBrainReseatTick = std::strtoull(argValue[++i], nullptr, 10);
+			continue;
+		}
+
 		if (!lastArg && currentArg == "-net-match-peers") {
 			const unsigned long parsedPeers = std::strtoul(argValue[++i], nullptr, 10);
 			s_netMatchPeers = static_cast<uint8_t>(std::clamp<unsigned long>(parsedPeers, 2, NetMatchConfigUtil::c_MaxPeerCount));
@@ -953,6 +968,16 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-mode") {
 			s_netMatchMode = argValue[++i];
+			continue;
+		}
+
+		if (!lastArg && currentArg == "-net-match-brainless-spectate") {
+			const std::string value = argValue[++i];
+			if (value != "0" && value != "1") {
+				std::cerr << "[net-match] -net-match-brainless-spectate requires 0 or 1" << std::endl;
+				return false;
+			}
+			s_netMatchBrainlessSpectate = value == "1";
 			continue;
 		}
 
@@ -2262,7 +2287,7 @@ static void RunOverlayLinkArm(char mode, int& cases, int& failures) {
 	const Actor* original = nullptr;
 	for (int player = Players::PlayerOne; activity && player < Players::MaxPlayerCount; ++player) {
 		if (Actor* actor = activity->GetControlledActor(player)) {
-			if (!original && activity->PlayerHuman(player)) {
+			if (!original && activity->IsLocalHumanSeat(player)) {
 				original = actor;
 			}
 			reach.emplace_back(actor, actor->GetItemInReach());
@@ -2659,7 +2684,7 @@ static void PreviewEventLedgerFrameOnTick() {
 	}
 	if (g_TimerMan.GetSimUpdateCount() == s_eventLedgerPressTick && s_eventLedgerLuaEmitterUID == 0) {
 		if (Activity* activity = g_ActivityMan.GetActivity()) {
-			if (Actor* actor = activity->GetControlledActor(Players::PlayerOne)) {
+			if (Actor* actor = activity->GetControlledActor(activity->PlayerOfScreen(0))) {
 				if (const AHuman* human = dynamic_cast<const AHuman*>(actor)) {
 					if (const HeldDevice* held = human->GetEquippedItem()) {
 						s_eventLedgerLuaPreset = held->GetPresetName();
@@ -3617,7 +3642,7 @@ void RunGameLoop() {
 				if (s_netMatchServiceE2E && s_netMatchE2eSwitchControlTick > 0 && ScenarioRunner::IsLockstepControllerSyncActive()) {
 					if (!s_netMatchE2eSwitchIssued && simTick == s_netMatchE2eSwitchControlTick) {
 						if (Activity* activity = g_ActivityMan.GetActivity()) {
-							const int player = Players::PlayerOne;
+							const int player = activity->PlayerOfScreen(0);
 							if (Actor* target = FindE2eSwitchControlTarget(activity, player)) {
 								s_netMatchE2eSwitchUid = static_cast<int64_t>(target->GetUniqueID());
 								activity->SwitchToActor(target, player, activity->GetTeamOfPlayer(player));
@@ -3629,7 +3654,7 @@ void RunGameLoop() {
 						}
 					} else if (s_netMatchE2eSwitchIssued && !s_netMatchE2eSwitchHandedBack && simTick == s_netMatchE2eSwitchControlTick + 10) {
 						if (Activity* activity = g_ActivityMan.GetActivity()) {
-							const int player = Players::PlayerOne;
+							const int player = activity->PlayerOfScreen(0);
 							if (Actor* brain = activity->GetPlayerBrain(player)) {
 								activity->SwitchToActor(brain, player, activity->GetTeamOfPlayer(player));
 								std::cout << "[net-match] e2e switch-control: hand-back at tick " << simTick << std::endl;
@@ -3754,6 +3779,54 @@ void RunGameLoop() {
 						if (const int64_t craftUID = g_MovableMan.GetFirstUnloadingCraftUniqueID(0)) {
 							std::cout << "[net-match-service-e2e] brain-kill scuttle: tick=" << simTick << " craft=" << craftUID << std::endl;
 							ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameScuttleCraft{craftUID, 0}});
+						}
+					}
+				}
+				// Test control: every peer hurts every team's brain on the same applied frame, so a
+				// brain-damage reaction only one peer takes stands out as a shared-state difference.
+				// The damage rides an attachable's damage counter because Actor::Update only sees a
+				// drop it collects itself, between saving the previous health and reacting to it.
+				if (s_netMatchE2eBrainDamageTick > 0 && simTick == s_netMatchE2eBrainDamageTick && ScenarioRunner::IsLockstepControllerSyncActive()) {
+					for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+						Actor* brain = g_MovableMan.GetFirstBrainActor(team);
+						if (!brain) {
+							continue;
+						}
+						Attachable* target = nullptr;
+						for (Attachable* attachable: brain->GetAttachables()) {
+							if (attachable->GetDamageMultiplier() > 0.0F && (!target || attachable->GetUniqueID() < target->GetUniqueID())) {
+								target = attachable;
+							}
+						}
+						if (!target) {
+							continue;
+						}
+						target->AddDamage(2.0F / target->GetDamageMultiplier());
+						std::cout << "[net-match-service-e2e] brain-damage: tick=" << simTick << " team=" << team << " brain=" << brain->GetUniqueID()
+						          << " attachable=" << target->GetUniqueID() << " health=" << brain->GetHealth() << std::endl;
+					}
+				}
+
+				// Test control: the seating peer moves its seat to its team's LAST brain, the shape a script
+				// takes when a team has more than one brain and the seat is not at the first of them.
+				if (s_netMatchE2eBrainReseatTick > 0 && simTick == s_netMatchE2eBrainReseatTick && ScenarioRunner::IsLockstepControllerSyncActive()) {
+					if (Activity* activity = g_ActivityMan.GetActivity()) {
+						for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+							if (!activity->PlayerActive(player) || !activity->PlayerHuman(player)) {
+								continue;
+							}
+							const int team = activity->GetTeamOfPlayer(player);
+							Actor* lastBrain = nullptr;
+							for (Actor* actor: *g_MovableMan.GetTeamRoster(team)) {
+								if (actor->HasObjectInGroup("Brains")) {
+									lastBrain = actor;
+								}
+							}
+							if (lastBrain && lastBrain != activity->GetPlayerBrain(player)) {
+								std::cout << "[net-match-service-e2e] brain-reseat: tick=" << simTick << " team=" << team
+								          << " brain=" << lastBrain->GetUniqueID() << std::endl;
+								activity->SetPlayerBrain(lastBrain, player);
+							}
 						}
 					}
 				}
@@ -4919,7 +4992,7 @@ bool ConfigureNetMatchActivity(const std::string& activityPreset, int localTeam,
 	}
 	if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
 		gameActivity->ClearPlayers(false);
-		if (localTeam != Activity::NoTeam) {
+		if (!gameActivity->ConfigureLockstepPlayers() && localTeam != Activity::NoTeam) {
 			gameActivity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
 		}
 		// Activate every team in the synced roster so all peers run the identical team set.
@@ -4927,6 +5000,9 @@ bool ConfigureNetMatchActivity(const std::string& activityPreset, int localTeam,
 			if (team == localTeam || ScenarioRunner::IsLockstepActiveTeam(team)) {
 				gameActivity->ForceSetTeamAsActive(team);
 				gameActivity->SetTeamFunds(0, team);
+				if (s_netMatchServiceE2E) {
+					std::cout << "[e2e] TeamIsCPU team=" << team << " value=" << (gameActivity->TeamIsCPU(team) ? 1 : 0) << std::endl;
+				}
 			}
 		}
 	}
@@ -5111,6 +5187,7 @@ int RunNetMatchServiceE2E() {
 		NetActorOwnershipPolicy e2ePolicy;
 		request.ownershipPolicy = NetMatchConfigUtil::ParseOwnershipPolicy(s_netMatchOwnershipPolicy, e2ePolicy) ? e2ePolicy : NetActorOwnershipPolicy::TeamOwner;
 		request.inputDelayFrames = s_netLockstepInputDelay;
+		request.brainlessHumansSpectate = s_netMatchBrainlessSpectate;
 		request.peerCount = s_netMatchPeers;
 		NetMatchMode parsedMode;
 		if (NetMatchConfigUtil::ParseMode(s_netMatchMode, parsedMode)) {

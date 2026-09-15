@@ -139,7 +139,7 @@ int BuyMenuGUI::Create(Controller* pController) {
 	if (!m_pGUIScreen)
 		m_pGUIScreen = new AllegroScreen(g_FrameMan.GetBackBuffer8());
 	if (!m_pGUIInput)
-		m_pGUIInput = new GUIInputWrapper(pController->GetPlayer());
+		m_pGUIInput = new GUIInputWrapper(pController->GetInputPlayer());
 	if (!m_pGUIController)
 		m_pGUIController = new GUIControlManager();
 	if (!m_pGUIController->Create(m_pGUIScreen, m_pGUIInput, "Base.rte/GUIs/Skins", "DefaultSkin.ini")) {
@@ -357,7 +357,7 @@ bool BuyMenuGUI::LoadAllLoadoutsFromFile() {
 	}
 	// Not a metagame player, just a regular scenario player
 	else {
-		std::snprintf(loadoutPath, sizeof(loadoutPath), "%sLoadoutsP%d.ini", System::GetUserdataDirectory().c_str(), m_pController->GetPlayer() + 1);
+		std::snprintf(loadoutPath, sizeof(loadoutPath), "%sLoadoutsP%d.ini", System::GetUserdataDirectory().c_str(), m_pController->GetInputPlayer() + 1);
 	}
 
 	// Open the file
@@ -449,7 +449,7 @@ bool BuyMenuGUI::SaveAllLoadoutsToFile() {
 		else
 			std::snprintf(loadoutPath, sizeof(loadoutPath), "%s%s - LoadoutsMP%d.ini", (System::GetUserdataDirectory() + c_UserConquestSavesModuleName + "/").c_str(), g_MetaMan.GetGameName().c_str(), m_MetaPlayer + 1);
 	} else
-		std::snprintf(loadoutPath, sizeof(loadoutPath), "%sLoadoutsP%d.ini", System::GetUserdataDirectory().c_str(), m_pController->GetPlayer() + 1);
+		std::snprintf(loadoutPath, sizeof(loadoutPath), "%sLoadoutsP%d.ini", System::GetUserdataDirectory().c_str(), m_pController->GetInputPlayer() + 1);
 
 	// Open the file
 	Writer loadoutFile(loadoutPath, false);
@@ -487,12 +487,12 @@ void BuyMenuGUI::SetEnabled(bool enable) {
 		m_RepeatStartTimer.Reset();
 		m_RepeatTimer.Reset();
 		// Set the mouse cursor free
-		g_UInputMan.TrapMousePos(false, m_pController->GetPlayer());
+		g_UInputMan.TrapMousePos(false, m_pController->GetInputPlayer());
 		// Move the mouse cursor to the middle of the player's screen
 		int mouseOffX, mouseOffY;
 		m_pGUIInput->GetMouseOffset(mouseOffX, mouseOffY);
 		Vector mousePos(-mouseOffX + (g_FrameMan.GetPlayerFrameBufferWidth(m_pController->GetPlayer()) / 2), -mouseOffY + (g_FrameMan.GetPlayerFrameBufferHeight(m_pController->GetPlayer()) / 2));
-		g_UInputMan.SetMousePos(mousePos, m_pController->GetPlayer());
+		g_UInputMan.SetMousePos(mousePos, m_pController->GetInputPlayer());
 
 		// Default focus to the menu button
 		m_LastHoveredMouseIndex = 0;
@@ -508,7 +508,7 @@ void BuyMenuGUI::SetEnabled(bool enable) {
 		EnableEquipmentSelection(false);
 		m_MenuEnabled = DISABLING;
 		// Trap the mouse cursor again
-		g_UInputMan.TrapMousePos(true, m_pController->GetPlayer());
+		g_UInputMan.TrapMousePos(true, m_pController->GetInputPlayer());
 		// Only play switching away sound
 		//        if (!m_PurchaseMade)
 		g_GUISound.ExitMenuSound()->Play(m_pController->GetPlayer());
@@ -1900,7 +1900,7 @@ void BuyMenuGUI::Update() {
 			}
 
 			// We do this down here, because if we have a mouse-up event even outside the cart, we should stop dragging. We also check UInputMan in case the mouse is released entirely outside of the buy menu.
-			if ((anEvent.GetMsg() == GUIListBox::MouseUp && (anEvent.GetData() & GUIListBox::MOUSE_LEFT)) || g_UInputMan.MouseButtonReleased(MouseButtons::MOUSE_LEFT, m_pController->GetPlayer())) {
+			if ((anEvent.GetMsg() == GUIListBox::MouseUp && (anEvent.GetData() & GUIListBox::MOUSE_LEFT)) || g_UInputMan.MouseButtonReleased(MouseButtons::MOUSE_LEFT, m_pController->GetInputPlayer())) {
 				if (m_MenuCategory == LOADOUTS) {
 					// Might've reordered the loadout list, so we need to save the new order
 					SaveAllLoadoutsToFile();

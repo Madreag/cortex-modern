@@ -53,13 +53,14 @@ namespace RTE {
 		bool fogOfWar = false;
 		bool requireClearPathToOrbit = false;
 		bool deployUnits = false;
+		bool brainlessHumansSpectate = true; // Losing every human brain leaves the humans watching instead of ending the round.
 		std::array<NetMatchTeamRules, 4> teamRules;
 		bool operator==(const NetMatchStandardRules&) const = default;
 	};
 
 	// Inherited rules retain the existing activity/mode member names without duplicate values.
 	struct NetMatchConfig : NetMatchStandardRules {
-		uint16_t version = 3;
+		uint16_t version = 4;
 		uint64_t sessionId = 0;
 		uint64_t roundId = 1;
 		uint64_t configRevision = 1;
@@ -82,7 +83,7 @@ namespace RTE {
 
 	class NetMatchConfigUtil {
 	public:
-		static constexpr uint16_t c_Version = 3;
+		static constexpr uint16_t c_Version = 4; // v4 added the spectate rule; v3 and v2 envelopes stay readable.
 		static constexpr uint32_t c_MaxFiniteStartingGold = 29999;
 		static constexpr uint32_t c_InfiniteGold = 1000000000;
 		static constexpr uint8_t c_MinPeerCount = 2;

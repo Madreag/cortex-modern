@@ -371,6 +371,14 @@ namespace RTE {
 		/// Sets whether gold gathered by Actors is automatically added into team funds.
 		/// @param automaticGoldDeposit Whether to deposit gathered gold automatically.
 		void SetAutomaticGoldDeposit(bool automaticGoldDeposit) { m_AutomaticGoldDeposit = automaticGoldDeposit; }
+
+		/// Gets whether losing every human brain leaves the humans spectating instead of ending the round.
+		/// @return Whether the brainless humans spectate. A net match follows the host's match rule instead of this.
+		bool GetBrainlessHumansSpectate() const { return m_BrainlessHumansSpectate; }
+
+		/// Sets whether losing every human brain leaves the humans spectating instead of ending the round.
+		/// @param spectate Whether the brainless humans spectate.
+		void SetBrainlessHumansSpectate(bool spectate) { m_BrainlessHumansSpectate = spectate; }
 #pragma endregion
 
 #pragma region Network Settings
@@ -554,6 +562,7 @@ namespace RTE {
 		bool m_ShowEnemyHUD; //!< Whether the HUD of enemy actors should be visible to the player.
 		bool m_EnableSmartBuyMenuNavigation; //!< Whether swapping to equipment mode and back should change active tabs in the BuyMenu.
 		bool m_AutomaticGoldDeposit; //!< Whether gold gathered by Actors is automatically added into team funds. False means that gold needs to be manually transported into orbit via Craft.
+		bool m_BrainlessHumansSpectate; //!< Whether losing every human brain leaves the humans spectating instead of ending the round. A net match follows the host's rule instead.
 
 		std::string m_PlayerNetworkName; //!< Player name used in network multiplayer matches.
 		std::string m_NetworkServerAddress; //!< LAN server address to connect to.

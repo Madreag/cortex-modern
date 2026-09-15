@@ -16,6 +16,7 @@
 #include "NetGameCommand.h"
 #include "LuaMan.h"
 #include "ActivityMan.h"
+#include "SettingsMan.h"
 
 #include "ACraft.h"
 #include "OwnedMovableObjects.h"
@@ -46,6 +47,8 @@ Activity::~Activity() {
 
 void Activity::Clear() {
 	m_PendingRuntimeCheckpoint.clear();
+	m_BrainRecordReconciled = false;
+	m_SharedPlayerSeats = false;
 	m_CheckpointActorIDs = {};
 	m_HasCheckpointActorIDs = false;
 	m_ActivityState = ActivityState::NotStarted;
@@ -66,6 +69,7 @@ void Activity::Clear() {
 		// Player 1 is active by default, for the editor etc
 		m_IsActive[player] = player == Players::PlayerOne;
 		m_IsHuman[player] = player == Players::PlayerOne;
+		m_LocalInputPlayers[player] = player;
 		m_PlayerScreen[player] = (player == Players::PlayerOne) ? Players::PlayerOne : Players::NoPlayer;
 		m_ViewState[player] = ViewState::Normal;
 		m_DeathTimer[player].Reset();
@@ -121,6 +125,8 @@ int Activity::Create(const Activity& reference) {
 	m_InCampaignStage = reference.m_InCampaignStage;
 	m_PlayerCount = reference.m_PlayerCount;
 	m_TeamCount = reference.m_TeamCount;
+	m_SharedPlayerSeats = reference.m_SharedPlayerSeats;
+	m_LocalInputPlayers = reference.m_LocalInputPlayers;
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		m_Team[player] = reference.m_Team[player];
@@ -154,6 +160,7 @@ int Activity::Create(const Activity& reference) {
 	m_CheckpointActorIDs = reference.m_CheckpointActorIDs;
 	m_HasCheckpointActorIDs = reference.m_HasCheckpointActorIDs;
 	if (MovableObject::IsFaithfulClone() && !Activity::LoadCheckpoint(reference.Activity::SaveCheckpoint())) return -1;
+	if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
 
 	return 0;
 }
@@ -355,8 +362,8 @@ int Activity::Start() {
 		m_PlayerController[player].Create(Controller::CIM_PLAYER, player);
 		m_PlayerController[player].SetTeam(m_Team[player]);
 
-		if (m_IsHuman[player]) {
-			playerControlled.push_back(player);
+		if (IsLocalHumanSeat(player)) {
+			playerControlled.push_back(LocalInputOfPlayer(player));
 		}
 		m_MessageTimer[player].Reset();
 
@@ -389,6 +396,8 @@ void Activity::End() {
 }
 
 void Activity::SetupPlayers() {
+	if (!m_SharedPlayerSeats) ConfigureLockstepPlayers();
+	RefreshLockstepLocalPlayers();
 	m_TeamCount = 0;
 	m_PlayerCount = 0;
 
@@ -396,8 +405,7 @@ void Activity::SetupPlayers() {
 		m_TeamActive[team] = false;
 	}
 
-	// Local players only cover this peer's team; a lockstep match must run the synced roster's
-	// full team set on every peer or the sims diverge on the first TeamActive read.
+	// CPU roster entries activate teams without consuming human player slots.
 	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) {
 		if (ScenarioRunner::IsLockstepActiveTeam(team)) {
 			m_TeamActive[team] = true;
@@ -416,15 +424,132 @@ void Activity::SetupPlayers() {
 
 		// Calculate which screen each human player is using, based on how many non-human players there are before him
 		int screenIndex = -1;
-		if (m_IsActive[player] && m_IsHuman[player]) {
+		if (IsSeatActive(player) && IsLocalHumanSeat(player)) {
 			for (int playerToCheck = Players::PlayerOne; playerToCheck < Players::MaxPlayerCount && playerToCheck <= player; ++playerToCheck) {
-				if (m_IsActive[playerToCheck] && m_IsHuman[playerToCheck]) {
+				if (IsSeatActive(playerToCheck) && IsLocalHumanSeat(playerToCheck)) {
 					screenIndex++;
 				}
 			}
 		}
 		m_PlayerScreen[player] = screenIndex;
 	}
+}
+
+bool Activity::ConfigureLockstepPlayers() {
+	const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+	if (!config) return false;
+	ConfigureHumanRoster(*config, ScenarioRunner::GetLockstepLocalPeerId());
+	return true;
+}
+
+void Activity::ConfigureHumanRoster(const NetMatchConfig& config, uint8_t localPeer) {
+	ClearPlayers(false);
+	m_SharedPlayerSeats = true;
+	std::fill(std::begin(m_Team), std::end(m_Team), Teams::NoTeam);
+	std::array<bool, Teams::MaxTeamCount> cpuTeams{};
+	int player = Players::PlayerOne;
+	for (const NetMatchPlayerSlot& slot: config.players) {
+		const bool firstOnTeam = !m_TeamActive[slot.team];
+		if (firstOnTeam) ++m_TeamCount;
+		ForceSetTeamAsActive(slot.team);
+		if (slot.cpu) {
+			cpuTeams[slot.team] = true;
+			continue;
+		}
+		RTEAssert(player < Players::MaxPlayerCount, "The match roster exceeds the human seat capacity");
+		m_IsActive[player] = m_IsHuman[player] = true;
+		m_Team[player] = slot.team;
+		m_FundsContribution[player] = 0;
+		m_TeamFundsShare[player] = firstOnTeam ? 1.0F : 0.0F;
+		++player;
+	}
+	m_PlayerCount = player;
+	if (auto* gameActivity = dynamic_cast<GameActivity*>(this)) gameActivity->ConfigureLockstepCPUTeams(cpuTeams);
+	MapLocalPlayers(config, localPeer);
+}
+
+void Activity::RefreshLockstepLocalPlayers() {
+	if (const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig()) {
+		MapLocalPlayers(*config, ScenarioRunner::GetLockstepLocalPeerId());
+	}
+}
+
+void Activity::MapLocalPlayers(const NetMatchConfig& config, uint8_t localPeer) {
+	m_SharedPlayerSeats = true;
+	m_LocalInputPlayers.fill(Players::NoPlayer);
+	std::fill(std::begin(m_PlayerScreen), std::end(m_PlayerScreen), Players::NoPlayer);
+	int player = Players::PlayerOne;
+	int input = Players::PlayerOne;
+	int screen = 0;
+	for (const NetMatchPlayerSlot& slot: config.players) {
+		if (slot.cpu) continue;
+		RTEAssert(player < Players::MaxPlayerCount, "The match roster exceeds the human seat capacity");
+		if (slot.peerId == localPeer) {
+			m_LocalInputPlayers[player] = input++;
+			if (IsSeatActive(player) && IsHumanSeat(player)) m_PlayerScreen[player] = screen++;
+		}
+		++player;
+	}
+}
+
+int Activity::LocalInputOfPlayer(int player) const {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return Players::NoPlayer;
+	return m_SharedPlayerSeats && ScenarioRunner::HasLockstepCoordinator() ? m_LocalInputPlayers[player] : player;
+}
+
+uint8_t Activity::GetLocalHumanCount() const {
+	uint8_t humans = 0;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (IsSeatActive(player) && IsLocalHumanSeat(player)) ++humans;
+	}
+	return humans;
+}
+
+bool Activity::RunSharedSeatSelfTest() {
+	GameActivity host, client, dedicated, offline;
+	NetMatchConfig config;
+	config.peerCount = 4;
+	config.players = {{0, 2, true, "CPU"}, {1, 1, false, "First"}, {2, 1, false, "Second"}, {3, 0, false, "Third"}, {4, 3, false, "Fourth"}};
+	host.ConfigureHumanRoster(config, 1);
+	client.ConfigureHumanRoster(config, 2);
+	NetMatchConfig dedicatedConfig = config;
+	dedicatedConfig.dedicated = true;
+	dedicatedConfig.players.erase(dedicatedConfig.players.begin() + 1);
+	dedicated.ConfigureHumanRoster(dedicatedConfig, 1);
+	bool roster = host.GetHumanCount() == 4 && client.GetPlayerCount() == 4 && host.TeamActive(2);
+	bool local = true;
+	bool offlineSame = offline.GetHumanCount() == offline.GetLocalHumanCount();
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		roster = roster && host.IsSeatActive(player) && host.IsHumanSeat(player) && client.PlayerActive(player) && client.PlayerHuman(player) &&
+			host.GetTeamOfPlayer(player) == config.players[player + 1].team && host.GetTeamOfPlayer(player) == client.GetTeamOfPlayer(player);
+		local = local && host.m_LocalInputPlayers[player] == (player == 0 ? 0 : -1) && client.m_LocalInputPlayers[player] == (player == 1 ? 0 : -1) &&
+			dedicated.m_LocalInputPlayers[player] == -1;
+		offlineSame = offlineSame && offline.LocalInputOfPlayer(player) == player && offline.IsHumanSeat(player) == offline.IsLocalHumanSeat(player);
+	}
+	const bool passed = roster && local && offlineSame;
+	GameActivity copied;
+	copied.Create(host);
+	copied.MapLocalPlayers(config, 2);
+	const bool rebound = copied.m_LocalInputPlayers[1] == 0 && copied.ScreenOfPlayer(1) == 0 && copied.ScreenOfPlayer(0) == -1 &&
+		copied.GetHumanCount() == host.GetHumanCount() && copied.GetTeamOfPlayer(1) == host.GetTeamOfPlayer(1);
+	const bool cpuRoster = host.TeamIsCPU(2) && client.TeamIsCPU(2) && dedicated.TeamIsCPU(2) &&
+		host.GetCPUTeam() == 2 && client.GetCPUTeam() == 2 && !host.TeamIsCPU(1) && !client.TeamIsCPU(1);
+	NetMatchConfig multiCPU;
+	multiCPU.players = {{0, 3, true, "CPU3"}, {1, 1, false, "First"}, {0, 2, true, "CPU2"}, {2, 1, false, "Second"}};
+	GameActivity multipleHost, multipleClient;
+	multipleHost.ConfigureHumanRoster(multiCPU, 1);
+	std::reverse(multiCPU.players.begin(), multiCPU.players.end());
+	multipleClient.ConfigureHumanRoster(multiCPU, 2);
+	const bool cpuOrder = multipleHost.GetCPUTeam() == 2 && multipleClient.GetCPUTeam() == 2 &&
+		multipleHost.TeamIsCPU(2) && multipleHost.TeamIsCPU(3) && multipleClient.TeamIsCPU(2) && multipleClient.TeamIsCPU(3);
+	multiCPU.players = {{1, 0, false, "First"}, {2, 1, false, "Second"}};
+	multipleHost.ConfigureHumanRoster(multiCPU, 1);
+	bool cpuReset = multipleHost.GetCPUTeam() == Teams::NoTeam;
+	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) cpuReset = cpuReset && !multipleHost.TeamIsCPU(team);
+	std::cout << "[shared-seat-selftest] " << (passed ? "PASS" : "FAIL") << " roster=" << roster << " local=" << local << " offline=" << offlineSame << std::endl;
+	std::cout << "[shared-seat-selftest] " << (rebound ? "PASS" : "FAIL") << " copied_peer_map=" << rebound << std::endl;
+	std::cout << "[shared-seat-selftest] " << (cpuRoster && cpuOrder && cpuReset ? "PASS" : "FAIL") << " cpu_roster=" << cpuRoster << " cpu_order=" << cpuOrder << " cpu_reset=" << cpuReset << std::endl;
+	return passed && rebound && cpuRoster && cpuOrder && cpuReset;
 }
 
 bool Activity::DeactivatePlayer(int playerToDeactivate) {
@@ -490,9 +615,11 @@ int Activity::AddPlayer(int playerToAdd, bool isHuman, int team, float funds, co
 }
 
 void Activity::ClearPlayers(bool resetFunds) {
+	m_SharedPlayerSeats = false;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		m_IsActive[player] = false;
 		m_IsHuman[player] = false;
+		m_LocalInputPlayers[player] = player;
 
 		if (resetFunds) {
 			m_FundsContribution[player] = 0;
@@ -513,7 +640,7 @@ void Activity::ClearPlayers(bool resetFunds) {
 uint8_t Activity::GetHumanCount() const {
 	uint8_t humans = 0;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (m_IsActive[player] && m_IsHuman[player]) {
+		if (IsSeatActive(player) && IsHumanSeat(player)) {
 			humans++;
 		}
 	}
@@ -531,6 +658,7 @@ void Activity::SetTeamOfPlayer(int player, int team) {
 }
 
 int Activity::PlayerOfScreen(int screen) const {
+	if (screen < 0 || screen >= c_MaxScreenCount) return Players::NoPlayer;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (m_PlayerScreen[player] == screen) {
 			return player;
@@ -547,14 +675,9 @@ std::string Activity::GetTeamName(int whichTeam) const {
 }
 
 bool Activity::IsHumanTeam(int whichTeam) const {
-	// Local player bindings are per-peer in a lockstep match; the synced match config owns team
-	// humanity so sim mutations gated on it (AI jetpack fuel, refunds) are identical on every peer.
-	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
-		return ScenarioRunner::IsLockstepHumanTeam(whichTeam);
-	}
 	if (whichTeam >= Teams::TeamOne && whichTeam < Teams::MaxTeamCount) {
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-			if (m_IsActive[player] && m_Team[player] == whichTeam && m_IsHuman[player]) {
+			if (IsSeatActive(player) && m_Team[player] == whichTeam && IsHumanSeat(player)) {
 				return true;
 			}
 		}
@@ -578,7 +701,7 @@ void Activity::ChangeTeamFunds(float howMuch, int whichTeam) {
 		m_FundsChanged[whichTeam] = true;
 		if (IsHumanTeam(whichTeam)) {
 			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; player++) {
-				if (m_Team[player] == whichTeam) {
+				if (m_Team[player] == whichTeam && (!m_SharedPlayerSeats || IsLocalHumanSeat(player))) {
 					g_GUISound.FundsChangedSound()->Play(player);
 				}
 			}
@@ -631,13 +754,92 @@ float Activity::GetPlayerFundsShare(int player) const {
 }
 
 void Activity::SetPlayerBrain(Actor* newBrain, int player) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return;
 	if ((player >= Players::PlayerOne && player < Players::MaxPlayerCount) && newBrain) {
 		if (newBrain->GetTeam() != m_Team[player]) {
 			newBrain->SetTeam(m_Team[player]);
 		}
 		m_HadBrain[player] = true;
 	}
+	const bool seated = player >= Players::PlayerOne && player < Players::MaxPlayerCount;
+	if (seated && IsHumanSeat(player)) {
+		if (m_Brain[player] && m_Brain[player] != newBrain && !IsOtherPlayerBrain(m_Brain[player], player)) {
+			g_MovableMan.NotePlayerBrain(m_Brain[player]->GetUniqueID(), false);
+		}
+		if (newBrain) {
+			g_MovableMan.NotePlayerBrain(newBrain->GetUniqueID(), true);
+		}
+	}
 	m_Brain[player] = newBrain;
+}
+
+bool Activity::RunPlayerBrainRecordSelfTest(Actor* humanBrain, Actor* aiBrain, bool* legacyReseeded, bool* lastDitchRecorded) {
+	if (legacyReseeded) {
+		*legacyReseeded = false;
+	}
+	if (lastDitchRecorded) {
+		*lastDitchRecorded = false;
+	}
+	if (!humanBrain || !aiBrain || humanBrain == aiBrain) {
+		return false;
+	}
+	constexpr int human = Players::PlayerOne;
+	constexpr int ai = Players::PlayerTwo;
+	Actor* const heldBrains[2] = {m_Brain[human], m_Brain[ai]};
+	const bool heldHuman[2] = {m_IsHuman[human], m_IsHuman[ai]};
+	const bool heldActive[2] = {m_IsActive[human], m_IsActive[ai]};
+	const bool heldHadBrain[2] = {m_HadBrain[human], m_HadBrain[ai]};
+	const int heldTeam[2] = {m_Team[human], m_Team[ai]};
+	const bool heldRecord[2] = {g_MovableMan.IsPlayerBrain(humanBrain), g_MovableMan.IsPlayerBrain(aiBrain)};
+
+	// A single player activity's two seats: one human, one AI, each on the team of the actor it gets.
+	m_Brain[human] = m_Brain[ai] = nullptr;
+	m_IsActive[human] = m_IsActive[ai] = true;
+	m_IsHuman[human] = true;
+	m_IsHuman[ai] = false;
+	m_Team[human] = humanBrain->GetTeam();
+	m_Team[ai] = aiBrain->GetTeam();
+	g_MovableMan.NotePlayerBrain(humanBrain->GetUniqueID(), false);
+	g_MovableMan.NotePlayerBrain(aiBrain->GetUniqueID(), false);
+
+	SetPlayerBrain(humanBrain, human);
+	SetPlayerBrain(aiBrain, ai);
+	const bool recorded = g_MovableMan.IsPlayerBrain(humanBrain) && !g_MovableMan.IsPlayerBrain(aiBrain);
+	// A save from before the record must come back with this seat's brain, not with an empty record.
+	if (legacyReseeded) {
+		*legacyReseeded = g_MovableMan.RunLegacyBrainRecordSelfTest(humanBrain);
+	}
+	// The last-ditch placement must reach the record as well, not write the seat slot behind its back.
+	if (lastDitchRecorded) {
+		if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(this)) {
+			const bool grouped = humanBrain->IsInGroup("Brains");
+			if (!grouped) {
+				humanBrain->AddToGroup("Brains");
+			}
+			SetPlayerBrain(nullptr, human);
+			*lastDitchRecorded = gameActivity->PlaceUnassignedBrain(human) && g_MovableMan.IsPlayerBrain(m_Brain[human]);
+			if (!grouped) {
+				humanBrain->RemoveFromGroup("Brains");
+			}
+		}
+		SetPlayerBrain(humanBrain, human);
+	}
+	SetPlayerBrain(nullptr, human);
+	const bool dropped = !g_MovableMan.IsPlayerBrain(humanBrain) && !g_MovableMan.IsPlayerBrain(aiBrain);
+
+	m_Brain[human] = heldBrains[0];
+	m_Brain[ai] = heldBrains[1];
+	m_IsHuman[human] = heldHuman[0];
+	m_IsHuman[ai] = heldHuman[1];
+	m_IsActive[human] = heldActive[0];
+	m_IsActive[ai] = heldActive[1];
+	m_HadBrain[human] = heldHadBrain[0];
+	m_HadBrain[ai] = heldHadBrain[1];
+	m_Team[human] = heldTeam[0];
+	m_Team[ai] = heldTeam[1];
+	g_MovableMan.NotePlayerBrain(humanBrain->GetUniqueID(), heldRecord[0]);
+	g_MovableMan.NotePlayerBrain(aiBrain->GetUniqueID(), heldRecord[1]);
+	return recorded && dropped;
 }
 
 bool Activity::AnyBrainWasEvacuated() const {
@@ -663,6 +865,14 @@ int Activity::IsBrainOfWhichPlayer(Actor* actor) const {
 		if (actor == m_Brain[player]) {
 			return player;
 		}
+	}
+	return Players::NoPlayer;
+}
+
+int Activity::IsBrainOfWhichLocalPlayer(Actor* actor) const {
+	if (!m_SharedPlayerSeats || !ScenarioRunner::HasLockstepCoordinator()) return IsBrainOfWhichPlayer(actor);
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (IsLocalHumanSeat(player) && actor == m_Brain[player]) return player;
 	}
 	return Players::NoPlayer;
 }
@@ -803,13 +1013,14 @@ int Activity::GetLockstepHumanSlotIndex(int team) const {
 }
 
 bool Activity::SwitchToActor(Actor* actor, int player, int team) {
-	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || player < Players::PlayerOne || player >= Players::MaxPlayerCount || !m_IsHuman[player]) {
+	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || !IsLocalHumanSeat(player)) {
 		return false;
 	}
 	if (!actor || !g_MovableMan.IsActor(actor) || !actor->IsPlayerControllable()) {
 		return false;
 	}
-	if ((actor != m_Brain[player] && actor->GetController()->IsSeatedByPlayer()) || IsOtherPlayerBrain(actor, player)) {
+	if ((actor != m_Brain[player] && actor->GetController()->IsSeatedByPlayer()) ||
+		((!m_SharedPlayerSeats || actor != m_Brain[player]) && IsOtherPlayerBrain(actor, player))) {
 		g_GUISound.UserErrorSound()->Play(player);
 		return false;
 	}
@@ -875,6 +1086,7 @@ void Activity::ReleaseLockstepControlOfActor(int player) {
 }
 
 void Activity::LoseControlOfActor(int player) {
+	if (m_SharedPlayerSeats && !IsLocalHumanSeat(player)) return;
 	if (player >= Players::PlayerOne && player < Players::MaxPlayerCount) {
 		if (Actor* actor = m_ControlledActor[player]; actor && g_MovableMan.IsActor(actor)) {
 			actor->SetControllerMode(Controller::CIM_AI);
@@ -923,9 +1135,11 @@ void Activity::HandleCraftEnteringOrbit(ACraft* orbitedCraft) {
 		if (m_IsActive[player]) {
 			if (brainOnBoard && orbitedCraft == GetPlayerBrain(static_cast<Players>(player))) {
 				m_BrainEvacuated[player] = true;
-				g_FrameMan.ClearScreenText(ScreenOfPlayer(static_cast<Players>(player)));
-				g_FrameMan.SetScreenText("YOUR BRAIN HAS BEEN EVACUATED BACK INTO ORBIT!", ScreenOfPlayer(static_cast<Players>(player)), 0, 3500);
-			} else if (m_Team[player] == orbitedCraftTeam && totalValue > 0.0F) {
+				if (LocalInputOfPlayer(player) != Players::NoPlayer) {
+					g_FrameMan.ClearScreenText(ScreenOfPlayer(static_cast<Players>(player)));
+					g_FrameMan.SetScreenText("YOUR BRAIN HAS BEEN EVACUATED BACK INTO ORBIT!", ScreenOfPlayer(static_cast<Players>(player)), 0, 3500);
+				}
+			} else if (m_Team[player] == orbitedCraftTeam && totalValue > 0.0F && LocalInputOfPlayer(player) != Players::NoPlayer) {
 				g_FrameMan.ClearScreenText(ScreenOfPlayer(static_cast<Players>(player)));
 				g_FrameMan.SetScreenText(messageString, ScreenOfPlayer(static_cast<Players>(player)), 0, 3500);
 				m_MessageTimer[player].Reset();
@@ -940,16 +1154,26 @@ void Activity::HandleCraftEnteringOrbit(ACraft* orbitedCraft) {
 	m_TeamDeaths[orbitedCraftTeam]--;
 }
 
+bool Activity::BrainlessHumansSpectate() const {
+	// A running match follows the host's agreed rule; everything else follows this machine's setting.
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		if (const NetMatchConfig* matchConfig = ScenarioRunner::GetLockstepMatchConfig()) {
+			return matchConfig->brainlessHumansSpectate;
+		}
+	}
+	return g_SettingsMan.GetBrainlessHumansSpectate();
+}
+
 int Activity::GetBrainCount(bool getForHuman) const {
 	int brainCount = 0;
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (getForHuman) {
-			if (m_IsActive[player] && m_IsHuman[player] && m_HadBrain[player] && g_MovableMan.IsActor(m_Brain[player]) && m_Brain[player]->HasObjectInGroup("Brains")) {
+			if (IsSeatActive(player) && IsHumanSeat(player) && m_HadBrain[player] && g_MovableMan.IsActor(m_Brain[player]) && m_Brain[player]->HasObjectInGroup("Brains")) {
 				brainCount++;
 			}
 		} else {
-			if (m_IsActive[player] && !m_IsHuman[player] && m_HadBrain[player] && g_MovableMan.IsActor(m_Brain[player]) && m_Brain[player]->HasObjectInGroup("Brains")) {
+			if (IsSeatActive(player) && !IsHumanSeat(player) && m_HadBrain[player] && g_MovableMan.IsActor(m_Brain[player]) && m_Brain[player]->HasObjectInGroup("Brains")) {
 				brainCount++;
 			}
 		}
@@ -958,7 +1182,7 @@ int Activity::GetBrainCount(bool getForHuman) const {
 }
 
 void Activity::SwitchToPrevOrNextActor(bool nextActor, int player, int team, const Actor* actorToSkip) {
-	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || player < Players::PlayerOne || player >= Players::MaxPlayerCount || !m_IsHuman[player]) {
+	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || !IsLocalHumanSeat(player)) {
 		return;
 	}
 
@@ -988,8 +1212,38 @@ void Activity::SwitchToPrevOrNextActor(bool nextActor, int player, int team, con
 	}
 }
 
-void Activity::Update() {
+void Activity::UpdatePlayerBrainRecord() {
+	if (!m_SharedPlayerSeats || !ScenarioRunner::HasLockstepCoordinator()) return;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (!IsSeatActive(player) || !IsHumanSeat(player)) continue;
+		if (m_Brain[player]) {
+			if (!m_Brain[player]->IsDead()) m_HadBrain[player] = true;
+			g_MovableMan.NotePlayerBrain(m_Brain[player]->GetUniqueID(), true);
+			continue;
+		}
+		if (m_BrainEvacuated[player]) continue;
+		Actor* brain = g_MovableMan.GetUnassignedBrainByID(m_Team[player]);
+		if (!brain) continue;
+		SetPlayerBrain(brain, player);
+		if (!m_BrainRecordReconciled) {
+			m_BrainRecordReconciled = true;
+			std::cout << "[brain-record] fallback seat=" << player << " team=" << m_Team[player] << " uid=" << brain->GetUniqueID() << std::endl;
+		}
+	}
+}
+
+void Activity::RecordSeatedPlayerBrains() {
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (IsSeatActive(player) && IsHumanSeat(player) && m_Brain[player]) {
+			g_MovableMan.NotePlayerBrain(m_Brain[player]->GetUniqueID(), true);
+		}
+	}
+}
+
+void Activity::Update() {
+	UpdatePlayerBrainRecord();
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (LocalInputOfPlayer(player) == Players::NoPlayer) continue;
 		if (m_MessageTimer[player].IsPastSimMS(5000)) {
 			g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
 		}
@@ -1002,7 +1256,7 @@ void Activity::Update() {
 void Activity::RenderUpdate() {
 	// Keep player controllers' analog cursor tracking latest mouse/stick each render frame
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (m_IsActive[player]) {
+		if (IsSeatActive(player) && LocalInputOfPlayer(player) != Players::NoPlayer) {
 			m_PlayerController[player].RenderUpdate();
 		}
 	}
@@ -1099,6 +1353,7 @@ bool Activity::CaptureNetLocalPlayerState(NetLocalPlayerState& out) const {
 }
 
 bool Activity::ApplyNetPlayerSlots(const NetGamePlayerBindings& bindings) {
+	if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
 	for (const auto& player: bindings.players) {
 		if (player.team < Teams::NoTeam || player.team >= Teams::MaxTeamCount || player.viewState > ViewState::UnitSelectCircle ||
 			player.controlledUID < 0 || player.brainUID < 0 || !std::isfinite(player.cameraX) || !std::isfinite(player.cameraY) ||
@@ -1108,16 +1363,19 @@ bool Activity::ApplyNetPlayerSlots(const NetGamePlayerBindings& bindings) {
 	int screen = 0;
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
 		const auto& binding = bindings.players[player];
-		m_IsActive[player] = binding.active;
-		m_IsHuman[player] = binding.human;
-		m_HadBrain[player] = binding.hadBrain;
-		m_BrainEvacuated[player] = binding.brainEvacuated;
-		m_Team[player] = binding.team;
+		// Resync restores shared seat facts from the activity, before restoring this peer's view.
+		if (!m_SharedPlayerSeats) {
+			m_IsActive[player] = binding.active;
+			m_IsHuman[player] = binding.human;
+			m_HadBrain[player] = binding.hadBrain;
+			m_BrainEvacuated[player] = binding.brainEvacuated;
+			m_Team[player] = binding.team;
+			m_Brain[player] = ResolveNetActor(binding.brainUID);
+		}
 		m_ViewState[player] = static_cast<ViewState>(binding.viewState);
-		m_Brain[player] = ResolveNetActor(binding.brainUID);
-		m_ControlledActor[player] = ResolveNetActor(binding.controlledUID);
-		m_PlayerCount += binding.active ? 1 : 0;
-		m_PlayerScreen[player] = binding.active && binding.human ? screen++ : -1;
+		m_ControlledActor[player] = LocalInputOfPlayer(player) != Players::NoPlayer ? ResolveNetActor(binding.controlledUID) : nullptr;
+		m_PlayerCount += IsSeatActive(player) ? 1 : 0;
+		m_PlayerScreen[player] = IsSeatActive(player) && IsLocalHumanSeat(player) ? screen++ : -1;
 	}
 	if (!g_ActivityMan.LockstepRelaunchInProgress()) m_HasCheckpointActorIDs = false;
 	return true;
@@ -1134,16 +1392,19 @@ bool Activity::RestoreNetLocalPlayerState(const NetLocalPlayerState& state) {
 		if (uid <= 0 || !inputs.emplace(uid, &input).second) return false;
 	}
 	if (!ApplyNetPlayerSlots(state.bindings)) return false;
-	m_PlayerCount = state.playerCount;
+	if (!m_SharedPlayerSeats) m_PlayerCount = state.playerCount;
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
 		m_PlayerScreen[player] = state.screens[player];
-		m_TeamFundsShare[player] = state.fundsShare[player];
-		m_FundsContribution[player] = state.fundsContribution[player];
+		if (!m_SharedPlayerSeats) {
+			m_TeamFundsShare[player] = state.fundsShare[player];
+			m_FundsContribution[player] = state.fundsContribution[player];
+		}
 		m_DeathTimer[player] = state.deathTimers[player];
 		m_MessageTimer[player] = state.messageTimers[player];
 		if (!m_PlayerController[player].LoadCheckpoint(state.controllers[player])) return false;
 		m_PlayerController[player].SetControlledActor(ResolveNetActor(state.controllerActorUIDs[player]));
 	}
+	if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
 	RefreshCheckpointActorIDs();
 	for (MovableObject* object: g_MovableMan.SnapshotKnownObjects()) {
 		if (auto* actor = dynamic_cast<Actor*>(object)) {
@@ -1166,9 +1427,11 @@ bool Activity::ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings) {
 		m_PlayerController[player].SetTeam(m_Team[player]);
 		m_DeathTimer[player].Reset();
 		m_MessageTimer[player].Reset();
-		m_TeamFundsShare[player] = 0;
-		m_FundsContribution[player] = 0;
-		if (m_IsActive[player] && m_IsHuman[player] && m_ControlledActor[player]) {
+		if (!m_SharedPlayerSeats) {
+			m_TeamFundsShare[player] = 0;
+			m_FundsContribution[player] = 0;
+		}
+		if (IsSeatActive(player) && IsLocalHumanSeat(player) && m_ControlledActor[player]) {
 			m_ControlledActor[player]->GetController()->ResetLocalInputState(Controller::CIM_PLAYER, player);
 		}
 		if (m_PlayerScreen[player] >= 0) {
@@ -1298,7 +1561,10 @@ bool Activity::LoadCheckpoint(std::string_view text, bool validateOnly) {
 			auto apply = Icon::PrepareCheckpointSet(icons, m_TeamIcons, validateOnly);
 			if (apply) reader.OnCommit(std::move(apply));
 		}
-		reader.OnCommit([this] { m_HasCheckpointActorIDs = true; });
+		reader.OnCommit([this] {
+			m_HasCheckpointActorIDs = true;
+			if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
+		});
 		reader.Finish();
 		return true;
 	} catch (const std::exception&) {
@@ -1374,6 +1640,7 @@ void Activity::ClearCheckpointActorIDs() {
 
 void Activity::ForgetDestroyedActor(const Actor* actor) {
 	if (!actor) return;
+	g_MovableMan.NotePlayerBrain(actor->GetUniqueID(), false);
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (m_Brain[player] == actor) m_Brain[player] = nullptr;
 		if (m_ControlledActor[player] == actor) m_ControlledActor[player] = nullptr;

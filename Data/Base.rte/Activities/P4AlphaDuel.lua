@@ -102,14 +102,29 @@ function P4AlphaDuel:UpdateActivity()
 			end
 		end
 	end
+	-- The host's rule: with every human brain gone the humans watch the match out instead of ending it.
+	local spectating = self:BrainlessHumansSpectate();
 	for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
 		if self:PlayerActive(player) and self:PlayerHuman(player) then
 			local team = self:GetTeamOfPlayer(player);
 			if self.TeamHadBrain[team] and (liveBrains[team] or 0) < 1 then
 				self:ResetMessageTimer(player);
 				local screen = self:ScreenOfPlayer(player);
-				FrameMan:ClearScreenText(screen);
-				FrameMan:SetScreenText("Your brain has been destroyed!", screen, 2000, -1, false);
+				if spectating then
+					-- The loss shows once, then the spectator line; 300 updates is about five seconds.
+					self.spectatorNotice = self.spectatorNotice or {};
+					local notice = (self.spectatorNotice[player] or 0) + 1;
+					self.spectatorNotice[player] = notice;
+					if notice == 1 then
+						FrameMan:ClearScreenText(screen);
+						FrameMan:SetScreenText("Your brain has been destroyed!", screen, 2000, 5000, false);
+					elseif notice == 300 then
+						FrameMan:SetScreenText("Spectating - the match continues", screen, 0, 5000, false);
+					end
+				else
+					FrameMan:ClearScreenText(screen);
+					FrameMan:SetScreenText("Your brain has been destroyed!", screen, 2000, -1, false);
+				end
 			end
 		end
 	end

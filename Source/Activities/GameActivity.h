@@ -70,6 +70,11 @@ namespace RTE {
 		void ClearNonOwnedActorSlots() override;
 		void RebindNonOwnedActorSlots() override;
 		void ForgetDestroyedActor(const Actor* actor) override;
+
+		/// Gives this player the first brain no seat has taken, the last step of brain placement.
+		/// @param player The player to give a brain to.
+		/// @return Whether the player has a brain now.
+		bool PlaceUnassignedBrain(int player);
 		void ClearCheckpointActorIDs() override;
 		bool PrepareCheckpointUI() override;
 		SerializableOverrideMethods;
@@ -125,13 +130,14 @@ namespace RTE {
 		/// Sets the current CPU-assisted team, if any (NoTeam) - LEGACY function
 		/// @param team The new setting. NoTeam is no team is assisted. (default: Activity::NoTeam)
 		void SetCPUTeam(int team = Activity::NoTeam);
+		void ConfigureLockstepCPUTeams(const std::array<bool, Teams::MaxTeamCount>& cpuTeams);
 
 		/// Sets the observation sceneman scroll targets, for when the game is
 		/// over or a player is in observation mode
 		/// @param newTarget The new absolute position to observe.
 		/// @param player Which player to set it for. (default: 0)
 		void SetObservationTarget(const Vector& newTarget, int player = 0) {
-			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount)
+			if (LocalInputOfPlayer(player) != Players::NoPlayer)
 				m_ObservationTarget[player] = newTarget;
 		}
 
@@ -140,7 +146,7 @@ namespace RTE {
 		/// @param newTarget The new absolute position to set as death view.
 		/// @param player Which player to set it for. (default: 0)
 		void SetDeathViewTarget(const Vector& newTarget, int player = 0) {
-			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount)
+			if (LocalInputOfPlayer(player) != Players::NoPlayer)
 				m_DeathViewTarget[player] = newTarget;
 		}
 
@@ -148,7 +154,7 @@ namespace RTE {
 		/// @param newZone The new absolute position to set as the last selected landing zone.
 		/// @param player Which player to set it for. (default: 0)
 		void SetLandingZone(const Vector& newZone, int player = 0) {
-			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount)
+			if (LocalInputOfPlayer(player) != Players::NoPlayer)
 				m_LandingZone[player] = newZone;
 		}
 
@@ -156,7 +162,7 @@ namespace RTE {
 		/// @param player Which player to get it for. (default: 0)
 		/// @return The new absolute position to set as the last selected landing zone.
 		Vector GetLandingZone(int player = 0) {
-			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount)
+			if (LocalInputOfPlayer(player) != Players::NoPlayer)
 				return m_LandingZone[player];
 			else
 				return Vector();
@@ -166,14 +172,14 @@ namespace RTE {
 		/// @param newPos The new absolute position to put the cursor at.
 		/// @param player Which player to set it for. (default: 0)
 		void SetActorSelectCursor(const Vector& newPos, int player = 0) {
-			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount)
+			if (LocalInputOfPlayer(player) != Players::NoPlayer)
 				m_ActorCursor[player] = newPos;
 		}
 
 		/// Gets the an in-game GUI Object for a specific player.
 		/// @param which Which player to get the GUI for. (default: 0)
 		/// @return A pointer to a BuyMenuGUI. Ownership is NOT transferred!
-		BuyMenuGUI* GetBuyGUI(unsigned int which = 0) const { return m_pBuyGUI[which]; }
+		BuyMenuGUI* GetBuyGUI(unsigned int which = 0) const { return which < Players::MaxPlayerCount && LocalInputOfPlayer(which) != Players::NoPlayer ? m_pBuyGUI[which] : nullptr; }
 
 		/// Checks if the in-game GUI Object is visible for a specific player.
 		/// @param which Which player to check the GUI for. -1 will check all players.
@@ -183,7 +189,7 @@ namespace RTE {
 		/// Gets the an in-game editor GUI Object for a specific player.
 		/// @param which Which player to get the GUI for. (default: 0)
 		/// @return A pointer to a SceneEditorGUI. Ownership is NOT transferred!
-		SceneEditorGUI* GetEditorGUI(unsigned int which = 0) const { return m_pEditorGUI[which]; }
+		SceneEditorGUI* GetEditorGUI(unsigned int which = 0) const { return which < Players::MaxPlayerCount && LocalInputOfPlayer(which) != Players::NoPlayer ? m_pEditorGUI[which] : nullptr; }
 		static bool RunNetLocalUIRestoreSelfTest();
 		static bool RunNetInventoryRelaunchProbe(std::string_view phase);
 
@@ -230,12 +236,13 @@ namespace RTE {
 		/// @param whichColor Which color banner to get - see the GameActivity::BannerColor enum. (default: YELLOW)
 		/// @param player Which player's banner to get. (default: Players::PlayerOne)
 		/// @return A pointer to the GUIBanner object that we can
-		GUIBanner* GetBanner(int whichColor = YELLOW, int player = Players::PlayerOne) { return whichColor == YELLOW ? m_pBannerYellow[player] : m_pBannerRed[player]; }
+		GUIBanner* GetBanner(int whichColor = YELLOW, int player = Players::PlayerOne) { return LocalInputOfPlayer(player) != Players::NoPlayer ? (whichColor == YELLOW ? m_pBannerYellow[player] : m_pBannerRed[player]) : nullptr; }
 
 		/// Sets the Area within which a team can land things.
 		/// @param team The number of the team we're setting for.
 		/// @param newArea The Area we're setting to limit their landings within.
 		void SetLZArea(int team, const Scene::Area& newArea) {
+			if (team < Teams::TeamOne || team >= Teams::MaxTeamCount) return;
 			m_LandingZoneArea[team].Reset();
 			m_LandingZoneArea[team].Create(newArea);
 		}
@@ -243,19 +250,22 @@ namespace RTE {
 		/// Gets the Area within which a team can land things. OWNERSHIP IS NOT TRANSFERRED!
 		/// @param team The number of the team we're setting for.
 		/// @return The Area we're using to limit their landings within. OWNERSHIP IS NOT TRANSFERRED!
-		const Scene::Area& GetLZArea(int team) const { return m_LandingZoneArea[team]; }
+		const Scene::Area& GetLZArea(int team) const {
+			static const Scene::Area empty;
+			return team >= Teams::TeamOne && team < Teams::MaxTeamCount ? m_LandingZoneArea[team] : empty;
+		}
 
 		/// Sets the width of the landing zone box that follows around a player's
 		/// brain.
 		/// @param player The number of the in-game player we're setting for.
 		/// @param width The width of the box, in pixels. 0 means disabled.
-		void SetBrainLZWidth(int player, int width) { m_BrainLZWidth[player] = width; }
+		void SetBrainLZWidth(int player, int width) { if (LocalInputOfPlayer(player) != Players::NoPlayer) m_BrainLZWidth[player] = width; }
 
 		/// Gets the width of the landing zone box that follows around a player's
 		/// brain.
 		/// @param player The number of the player we're getting for.
 		/// @return The width in pixels of the landing zone.
-		int GetBrainLZWidth(int player) const { return m_BrainLZWidth[player]; }
+		int GetBrainLZWidth(int player) const { return LocalInputOfPlayer(player) != Players::NoPlayer ? m_BrainLZWidth[player] : 0; }
 
 		/// Created an objective point for one of the teams to show until cleared.
 		/// @param description The team number of the team to give objective. 0 is team #1.
@@ -293,7 +303,7 @@ namespace RTE {
 
 		/// Clears all items from a specific player's override purchase list.
 		/// @param m_PurchaseOverride[player].clear( Which player's override purchase list to clear.
-		void ClearOverridePurchase(int player) { m_PurchaseOverride[player].clear(); }
+		void ClearOverridePurchase(int player) { if (LocalInputOfPlayer(player) != Players::NoPlayer) m_PurchaseOverride[player].clear(); }
 
 		/// Takes the current order out of a player's buy GUI, creates a Delivery
 		/// based off it, and stuffs it into that player's delivery queue.
@@ -352,7 +362,7 @@ namespace RTE {
 		/// Shows how many deliveries this team has pending.
 		/// @param m_Deliveries[team].size( Which team to check the delivery count for.
 		/// @return The number of deliveries this team has coming.
-		int GetDeliveryCount(int team) { return m_Deliveries[team].size(); }
+		int GetDeliveryCount(int team) { return team >= Teams::TeamOne && team < Teams::MaxTeamCount ? m_Deliveries[team].size() : 0; }
 
 		/// Precalculates the player-to-screen index map, counts the number of
 		/// active players etc.
@@ -505,6 +515,12 @@ namespace RTE {
 
 		/// Protected member variable and method declarations
 	protected:
+		/// Runs a brainless human's spectator view: actor cycling, following and the followed-unit line.
+		/// Presentation only - it writes this peer's view, never simulation state.
+		/// @param player Which player's screen to update.
+		/// @param lookedAround Whether the player moved the observation cursor this frame.
+		void UpdateSpectatorView(int player, bool lookedAround);
+
 		/// Takes the current order out of a player's buy GUI, creates a Delivery
 		/// based off it, and stuffs it into that player's delivery queue.
 		/// @param player Which player to create the delivery for. Cargo AI mode waypoint or TargetMO.
@@ -598,6 +614,8 @@ namespace RTE {
 		Vector m_ObservationTarget[Players::MaxPlayerCount];
 		// The player death sceneman scroll targets, for when a player-controlled actor dies and the view should go to his last position
 		Vector m_DeathViewTarget[Players::MaxPlayerCount];
+		// The actor a spectating player's view follows; local presentation, so it stays out of checkpoints
+		Actor* m_SpectatorTarget[Players::MaxPlayerCount];
 		// Times the delay between regular actor swtich, and going into manual siwtch mode
 		Timer m_ActorSelectTimer[Players::MaxPlayerCount];
 		// The cursor for selecting new Actors
