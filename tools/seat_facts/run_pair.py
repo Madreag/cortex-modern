@@ -18,6 +18,7 @@ ROW = re.compile(r"\[seat-facts\] player=(\d+) active=(\d+) human=(\d+) team=(-?
 CONTROL_ROW = re.compile(r"\[control-facts\] tick=(\d+) player=(\d+) uid=(\d+) screen=(-?\d+)")
 VESSEL_ROW = re.compile(r"\[vessel-facts\] tick=(\d+) player=(\d+) uid=(\d+) screen=(-?\d+) (.*)$", re.M)
 SWITCH_ROW = re.compile(r"\[switch-window\] tick=(\d+) player=(\d+) uid=(\d+) screen=(-?\d+)")
+START_ROW = re.compile(r"\[start-window\] tick=(\d+) player=(\d+) uid=(\d+) brain=(\d+) screen=(-?\d+)")
 # arm -> (Lua class, activity preset name); every scripted arm also carries the seat-facts fixture.
 SCRIPTED = {"lua": ("SeatFacts", "Seat Facts"), "screens": ("ScreenFacts", "Screen Facts"), "control": ("ControlFacts", "Control Facts"),
             "vessel": ("VesselBannerFacts", "Vessel Banner Facts"),
@@ -163,6 +164,17 @@ def main():
             differ = [{"tick": key[0], "player": key[1], "host": answers["host"][key], "client": answers["client"][key]}
                       for key in keys if answers["host"][key] != answers["client"][key]]
             result["switch_window"] = {"compared": len(keys), "differ": differ, "pass": bool(keys) and not differ}
+            starts = {peer: START_ROW.findall(log) for peer, log in logs.items()}
+            early = {peer: {(row[0], row[1]): (row[2], row[3]) for row in peer_rows} for peer, peer_rows in starts.items()}
+            startKeys = sorted(set(early["host"]) & set(early["client"]), key=lambda key: (int(key[0]), int(key[1])))
+            startDiffer = [{"tick": key[0], "player": key[1], "host": early["host"][key][0], "client": early["client"][key][0]}
+                           for key in startKeys if early["host"][key][0] != early["client"][key][0]]
+            # A seat that has a brain must answer an actor from the first tick; null is the F1 start window.
+            nulls = [{"tick": key[0], "player": key[1], "peer": peer, "brain": early[peer][key][1]}
+                     for key in startKeys for peer in ("host", "client")
+                     if early[peer][key][0] == "0" and early[peer][key][1] != "0"]
+            result["start_window"] = {"compared": len(startKeys), "differ": startDiffer, "nulls": nulls,
+                                      "pass": bool(startKeys) and not startDiffer and not nulls}
         if args.arm == "vessel":
             rows = {peer: VESSEL_ROW.findall(log) for peer, log in logs.items()}
             # The unchanged mod fixture must reach every seat on both peers with the same answers; only the screen is local.
@@ -180,6 +192,7 @@ def main():
     return 0 if (result.get("pass") is True and result.get("seat_facts", {"pass": True})["pass"] and
                  all(result.get("screen_facts", {}).values()) and result.get("control_facts", {"pass": True})["pass"] and
                  result.get("switch_window", {"pass": True})["pass"] and
+                 result.get("start_window", {"pass": True})["pass"] and
                  result.get("vessel_facts", {"pass": True})["pass"]) else 1
 
 
