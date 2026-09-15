@@ -43,6 +43,18 @@ def prepare_runtime(repo, out):
     return runtime
 
 
+def seed_settings(run, values):
+    # Retargets the prepared runtime's own Settings.ini; the repo copy stays untouched.
+    ini = Path(run.cwd) / "Userdata" / "Settings.ini"
+    text = ini.read_text(encoding="utf-8")
+    for name, value in values.items():
+        text, count = re.subn(rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*",
+                              lambda match: match[1] + str(value), text)
+        if count == 0:
+            text += f"\n\t{name} = {value}\n"
+    ini.write_text(text, encoding="utf-8")
+
+
 def make_run(repo, args, out, timeout=120, env=None, expected=None):
     if sys.platform != "win32":
         return posix_make_run(repo, args, out, timeout, env, expected)

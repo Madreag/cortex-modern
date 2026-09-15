@@ -12,13 +12,13 @@ from pathlib import Path
 import re
 import time
 
-from run_sim_test import make_run
+from run_sim_test import make_run, seed_settings
 
 
 def menu_script(name, host, players, port):
     script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
     if host:
-        return script + f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\nsettext TextHostPlayers {players}\nsettext TextHostInputDelay 3\nactivate ButtonMultiplayerCreate\n"
+        return script + f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\nsettext TextHostPlayers {players}\nactivate ButtonMultiplayerCreate\n"
     return script + f"activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\nwait_connected {players}\nactivate ButtonMultiplayerReady\n"
 
 
@@ -50,7 +50,10 @@ def main():
         path = root / f"{name}.txt"
         path.write_text(script, encoding="utf-8")
         out = root / name
-        runs[name] = make_run(options.repo, ["-menu-script", path], out, 120).start()
+        # The delay box is read-only under the auto policy; the floor the lobby sends is a setting.
+        run = make_run(options.repo, ["-menu-script", path], out, 120)
+        seed_settings(run, {"NetworkInputDelayFrames": 3})
+        runs[name] = run.start()
         return runs[name]
 
     try:
