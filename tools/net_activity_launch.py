@@ -317,10 +317,10 @@ def tick_lines(path, tick="1"):
 # values a seat binding writes normalized away - because the two runs bind their seats in a different order by
 # construction, not because their worlds differ. An offline -scenario run's single local human seat is bound
 # inside tick 1 (Source/Activities/GameActivity.cpp:1825 "never had a brain" -> Activity::SwitchToActor,
-# Source/Entities/Activity.cpp:1092 -> Actor::SetControllerMode, Source/Entities/Actor.cpp:886), and the
+# Source/Entities/Activity.cpp:1091 -> Actor::SetControllerMode, Source/Entities/Actor.cpp:888), and the
 # notification runs there and then (Source/Entities/Actor.cpp:901). A lockstep match's controller is wire-owned:
 # Controller::SetInputMode leaves the sim-facing mode to the wire (Source/System/Controller.h:246),
-# Actor::SetControllerMode skips the notification (Source/Entities/Actor.cpp:894), and the committed frame
+# Actor::SetControllerMode skips the notification (Source/Entities/Actor.cpp:896), and the committed frame
 # applies both through MovableMan::ApplyLockstepControlHandoffToActor (Source/Managers/MovableMan.cpp:888) an
 # input delay later, on every peer at the same tick. Each normalized column is named with the site that writes it.
 SEAT_BINDING_COLUMNS = {
