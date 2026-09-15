@@ -250,6 +250,9 @@ void GUISlider::Draw(GUIScreen* Screen) {
 	} else {
 		m_KnobImage->DrawTrans(Screen->GetBitmap(), m_X + X + Half - m_KnobImage->GetWidth() / 2, m_Y + m_KnobPosition, nullptr);
 	}
+	if (!m_Enabled && m_Skin) {
+		m_Skin->DimRect(Screen->GetBitmap(), m_X, m_Y, m_Width, m_Height);
+	}
 	GUIPanel::Draw(Screen);
 }
 

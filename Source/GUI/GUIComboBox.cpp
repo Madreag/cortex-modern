@@ -193,6 +193,9 @@ void GUIComboBox::Draw(GUIScreen* Screen) {
 	}
 
 	GUIPanel::Draw(Screen);
+	if (!m_Enabled && m_Skin) {
+		m_Skin->DimRect(Screen->GetBitmap(), m_X, m_Y, m_Width, m_Height);
+	}
 }
 
 GUIPanel* GUIComboBox::GetPanel() {
@@ -540,7 +543,8 @@ void GUIComboBoxButton::ChangeSkin(GUISkin* Skin) {
 
 void GUIComboBoxButton::Draw(GUIScreen* Screen) {
 	GUIRect Rect;
-	SetRect(&Rect, 0, m_Pushed ? m_Height : 0, m_Width, m_Pushed ? m_Height * 2 : m_Height);
+	const bool pushed = m_Enabled && m_Pushed;
+	SetRect(&Rect, 0, pushed ? m_Height : 0, m_Width, pushed ? m_Height * 2 : m_Height);
 
 	m_DrawBitmap->Draw(Screen->GetBitmap(), m_X, m_Y, &Rect);
 }
