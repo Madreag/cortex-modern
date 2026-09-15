@@ -396,6 +396,12 @@ def launch(options):
             checks["waiting_banner_shown"] = any(WAIT_BANNER in json.dumps(step) for step in waits)
             if captures:
                 result["captures"] = sorted(str(path) for peer in runs for path in (root / (peer + "-ui")).glob("*.png"))
+        if not places_brains:
+            # An activity that puts its own residents on the site never meets the synchronized editor, and
+            # no placement crosses the wire for it.
+            entered = {peer: json.loads((root / peer / "report.json").read_text(errors="replace")).get("entered_editor") for peer in runs}
+            result["entered_editor"] = entered
+            checks["activity_placed_its_own_brains"] = all(value is False for value in entered.values()) and                 all("[net-match] brain placement" not in log for log in logs.values())
         if places_brains:
             result["placements"] = score_placements(logs)
             checks["brains_placed_on_both_peers"] = result["placements"]["pass"]
@@ -411,6 +417,10 @@ def launch(options):
         replay = make_run(repo, ["-net-replay", str(root / "host/match.ccreplay"), "-tick-hashes", "-out", str(replay_trace),
                                  "-max-ticks", "600", "-seed", "42", "-num-lua-states", "4"], root / "replay", options.timeout,
                           env={"CCCP_HEADLESS": "1", "CC_SIM_DUMP": "1:600"}, expected=[replay_trace])
+        # The playback runs the configuration the peers ran: a window size the peers did not have is a
+        # different run, not a replay of theirs.
+        if resolution:
+            set_resolution(replay.cwd, *resolution)
         try:
             ledger("before_replay")
             result["replay_record"] = replay.start().finish()
