@@ -120,7 +120,7 @@ void LuabindObjectWrapper::ApplyQueuedEntityDeletions() {
 		}
 		for (const auto& [object, destructor]: pending) {
 			destructor(object);
-			++s_SimThreadDeletions;
+			++(s_OnSimThread ? s_SimThreadDeletions : s_OffSimThreadDeletions);
 		}
 	}
 }
