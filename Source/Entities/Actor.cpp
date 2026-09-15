@@ -1311,7 +1311,8 @@ Vector Actor::GetLastAIWaypoint() const {
 		// An order that named an MO follows it, the way the single-player path end does; the identity is
 		// synced, so every peer reads the same live object.
 		if (m_LastOrderedWaypointUID != 0) {
-			if (const MovableObject* ordered = g_MovableMan.FindObjectByUniqueID(static_cast<long int>(m_LastOrderedWaypointUID))) {
+			const MovableObject* ordered = g_MovableMan.FindObjectByUniqueID(static_cast<long int>(m_LastOrderedWaypointUID));
+			if (g_MovableMan.ValidMO(ordered)) {
 				return ordered->GetPos();
 			}
 		}
