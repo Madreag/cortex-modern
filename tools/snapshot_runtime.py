@@ -116,7 +116,9 @@ SCHEMAS["AudioControl1"] = [*fields("paused muted ramp volume pitch low_pass"), 
     *fields("minimum_distance maximum_distance"), ("cone", array(3)),
     *fields("direct_occlusion reverb_occlusion spread level doppler custom_distance_filter custom_level center_frequency"), ("effects", sequence("o"))]
 SCHEMAS["AudioVoice1"] = [*fields("identity owner"), ("path", "s"), *fields("playing bus priority loops position loop_start loop_end frequency minimum_audible_distance"), ("control", "o")]
+SCHEMAS["AudioVoice2"] = SCHEMAS["AudioVoice1"]
 SCHEMAS["AudioSample1"] = [("path", "s"), *fields("mode loop_start loop_end frequency minimum_distance maximum_distance priority loops"), ("cone", array(3))]
+SCHEMAS["AudioSample2"] = [*SCHEMAS["AudioSample1"], *fields("captured")]
 SCHEMAS["AudioEvent1"] = [*fields("state sound_file_hash channel immobile attenuation_start custom_pan panning_multiplier loops priority affected_by_global_pitch"),
     ("position", VECTOR), *fields("volume pitch fade_out_time")]
 SCHEMAS["AudioRuntime1"] = [*fields("enabled next_voice next_sound_container mute_master mute_music mute_sounds mute_on_focus_loss master_volume music_volume sounds_volume global_pitch panning listener_z minimum_panning music_muffled multiplayer"),
@@ -525,6 +527,7 @@ _LOCAL_FIELDS = {
     "AudioRuntime2": {"player_positions", "listeners"},
     "AudioRuntime3": {"player_positions", "listeners"},
     "AudioVoice1": {"position"},
+    "AudioVoice2": {"position"},
     "ActorRuntime1": {"hud_stack"},
     "ActorRuntime2": {"hud_stack"},
     "ActorRuntime3": {"hud_stack"},
