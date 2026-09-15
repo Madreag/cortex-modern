@@ -147,12 +147,20 @@ def load_harness(out: Path, port: int):
     return harness
 
 
-def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float, sim_dump: str | None = None) -> dict:
-    """Two peers on the stock activity; the fixture destroys every human brain at sim second 5."""
+def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float, sim_dump: str | None = None,
+            dedicated: bool = True, delay: int = 0) -> dict:
+    """Two peers on the stock activity; the fixture destroys every human brain at sim second 5.
+
+    The roster decides what the arm can prove. BuildMatchConfig seats one CPU slot, so a two-human
+    PvPvE row leaves exactly one side standing once both brains die and the round ends under either
+    rule. A dedicated host seats no player, which puts the single human on team 0, the roster CPU on
+    team 1 and leaves team 2 for the activity's second AI attacker: two sides stand after the only
+    human brain dies, so the end rule itself is what the two arms differ by.
+    """
     harness = load_harness(out, port)
     lane = {
         "port": port,
-        "delay": 0,
+        "delay": delay,
         "ticks": ticks,
         "timeout": timeout,
         "mode": "normal",
@@ -175,6 +183,10 @@ def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float, sim
     local_setting = not rule_on
 
     def prepare(*positional, **keywords):
+        if dedicated and positional and "-net-host" in positional[0]:
+            # The harness lane always hosts with a seat; this arm needs the seatless host instead.
+            argv = ["-net-dedicated" if item == "-net-host" else item for item in positional[0]]
+            positional = (argv,) + positional[1:]
         run = original_run(*positional, **keywords)
         stage_user_module(Path(run.cwd), local_setting, arm_trace=False)
         if sim_dump:
@@ -190,14 +202,39 @@ def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float, sim
     logs = {peer: peer_log(out / "e2e/brainless_spectate" / peer) for peer in ("host", "client")}
     rows = {peer: probe_rows(text) for peer, text in logs.items()}
     expected_rule = "1" if rule_on else "0"
+    # The roster's human seats: a dedicated host seats only the joining peer, a hosted row seats both.
+    human_seats = 1 if dedicated else 2
     for peer, text in logs.items():
-        check(checks, f"{peer}_brains_destroyed", len(KILL.findall(text)) >= 2,
-              f"brain-kill lines={len(KILL.findall(text))}", [out / "e2e/brainless_spectate" / peer / "stdout.log"])
+        kills = KILL.findall(text)
+        check(checks, f"{peer}_brains_destroyed", len(kills) >= human_seats,
+              f"brain-kill lines={len(kills)} human seats={human_seats}",
+              [out / "e2e/brainless_spectate" / peer / "stdout.log"])
         seat_rows = [row for row in rows[peer] if row["simms"] > 6000]
         check(checks, f"{peer}_seats_observe",
-              bool(seat_rows) and all(all(view == VIEW_OBSERVE for view in row["views"][:2]) for row in seat_rows),
+              bool(seat_rows) and all(all(view == VIEW_OBSERVE for view in row["views"][:human_seats]) for row in seat_rows),
               f"views after the deaths={[row['views'] for row in seat_rows][:4]}",
               [out / "e2e/brainless_spectate" / peer / "stdout.log"])
+        # The end rule itself, on both peers: the dead human seat either watches the AI sides fight on
+        # or takes the round down with it. Only a roster that leaves two sides standing can tell them
+        # apart, so the check runs on the dedicated row and says why when it cannot.
+        kill_ms = int(kills[0][0]) if kills else 0
+        after = [row for row in rows[peer] if row["simms"] >= kill_ms]
+        first_after = after[0] if after else None
+        running = [row for row in after if row["state"] != ACTIVITY_OVER]
+        if not dedicated:
+            check(checks, f"{peer}_round_end_rule_not_provable", True,
+                  "a two-human PvPvE roster leaves one side standing, so both rules end the round here",
+                  [out / "e2e/brainless_spectate" / peer / "stdout.log"])
+        elif rule_on:
+            check(checks, f"{peer}_round_ran_on",
+                  bool(first_after) and first_after["state"] != ACTIVITY_OVER and len(running) >= 5,
+                  f"first row after the death={first_after} running rows={len(running)}",
+                  [out / "e2e/brainless_spectate" / peer / "stdout.log"])
+        else:
+            check(checks, f"{peer}_round_ended",
+                  bool(first_after) and first_after["state"] == ACTIVITY_OVER and first_after["winner"] >= 0,
+                  f"first row after the death={first_after}",
+                  [out / "e2e/brainless_spectate" / peer / "stdout.log"])
         # The host's flag is the match rule on BOTH machines, against both local settings. Only the
         # rows of a RUNNING match say that: once the round is over the lockstep sync is gone and the
         # query answers this machine's own setting again, which is the designed behaviour.
@@ -208,9 +245,6 @@ def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float, sim
               f"{sorted({row['rule'] for row in running_rows})} after the end="
               f"{sorted({row['rule'] for row in rows[peer] if row['state'] == ACTIVITY_OVER})}",
               [out / "e2e/brainless_spectate" / peer / "stdout.log"])
-    # Today's BuildMatchConfig seats exactly one CPU slot, so after both human brains die exactly one
-    # side stands and the round ends under either rule: the two-AI-sides "runs on" row needs L11's N
-    # CPU teams. What the net arms do prove is that the rule crosses the wire and both peers agree.
     # The view fields are deliberately per-machine (each peer watches its own seat), so the peers
     # agree on the SIM fields; the local view is evidence for the sp_view_is_local arm instead.
     sim_rows = {peer: [{key: value for key, value in row.items() if key not in ("scroll", "views")}
@@ -296,6 +330,9 @@ def main() -> int:
                         help="sim time of the brain kill; 0 is the control arm where nobody dies")
     parser.add_argument("--sim-dump", default=None,
                         help="CC_SIM_DUMP=<from>:<to> for both net peers; forensics only, no oracle effect")
+    parser.add_argument("--two-humans", action="store_true",
+                        help="net arms: seat both peers instead of hosting seatlessly; the end rule is then unprovable")
+    parser.add_argument("--delay", type=int, default=0, help="net arms: the match input delay both peers launch with")
     args = parser.parse_args()
     if args.port not in PORT_RANGE:
         parser.error(f"port is outside {PORT_RANGE.start}..{PORT_RANGE.stop - 1}")
@@ -309,11 +346,13 @@ def main() -> int:
     manifest = {"stamp": stamp(), "arm": args.arm, "port": args.port, "ticks": args.ticks,
                 "repo": str(REPO), "exe_sha256": sha256(REPO / "Cortex Command.exe"),
                 "driver_sha256": sha256(__file__), "fixture_sha256": sha256(FIXTURE),
-                "kill_ms": KILL_MS, "sim_dump": args.sim_dump}
+                "kill_ms": KILL_MS, "sim_dump": args.sim_dump, "dedicated": not args.two_humans,
+                "input_delay": args.delay}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     if args.arm.startswith("net_"):
-        result = net_arm(out, args.port, args.arm == "net_rule_on", args.ticks, args.timeout, args.sim_dump)
+        result = net_arm(out, args.port, args.arm == "net_rule_on", args.ticks, args.timeout, args.sim_dump,
+                         dedicated=not args.two_humans, delay=args.delay)
         passed = bool(result.get("pass", True)) and result.get("spectate_pass", False)
     elif args.arm == "sp_view_is_local":
         plain = sp_arm(out / "plain", True, False, args.ticks, args.timeout)
