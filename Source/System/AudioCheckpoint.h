@@ -234,15 +234,18 @@ struct Voice {
 	float frequency = 0, minimumAudibleDistance = 0;
 	Control control;
 	template <class Archive> void Fields(Archive& archive) { archive(identity, owner, path, playing, bus, priority, loops, position, loopStart, loopEnd, frequency, minimumAudibleDistance, control); }
-	std::string SaveCheckpoint() const { CheckpointWriter archive("AudioVoice1"); const_cast<Voice*>(this)->Fields(archive); return archive.Text(); }
+	static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("11 AudioVoice2 ") ? "AudioVoice2" : "AudioVoice1"; }
+	std::string SaveCheckpoint() const { CheckpointWriter archive("AudioVoice2"); const_cast<Voice*>(this)->Fields(archive); return archive.Text(); }
 	bool LoadCheckpoint(std::string_view text, bool validateOnly = false) {
-		try { Voice value; CheckpointReader archive(text, "AudioVoice1"); value.Fields(archive); archive.Finish(); if (value.identity <= 0 || value.path.empty() || value.bus < 0 || value.bus > 2 || value.priority < 0 || value.priority > 256 || value.loops < -1 || value.loopStart > value.loopEnd || !Finite(value.frequency) || !Finite(value.minimumAudibleDistance)) return false; if (!validateOnly) *this = std::move(value); return true; }
+		try { Voice value; CheckpointReader archive(text, CheckpointVersion(text)); value.Fields(archive); archive.Finish(); if (value.identity <= 0 || value.path.empty() || value.bus < 0 || value.bus > 2 || value.priority < 0 || value.priority > 256 || value.loops < -1 || value.loopStart > value.loopEnd || !Finite(value.frequency) || !Finite(value.minimumAudibleDistance)) return false; if (!validateOnly) *this = std::move(value); return true; }
 		catch (const std::exception&) { return false; }
 	}
 	static Voice Capture(int identity, uint64_t owner, const std::string& path, float minimumAudibleDistance, FMOD::Channel* channel, int bus) {
 		Voice voice; voice.identity = identity; voice.owner = owner; voice.path = path; voice.minimumAudibleDistance = minimumAudibleDistance; voice.bus = bus;
-		if (!channel || channel->isPlaying(&voice.playing) != FMOD_OK || !voice.playing) { voice.playing = false; return voice; }
-		Require(channel->getPosition(&voice.position, FMOD_TIMEUNIT_PCM)); Require(channel->getFrequency(&voice.frequency)); Require(channel->getPriority(&voice.priority));
+		// The mixer can report not-playing before SoundChannelEndedCallback retires the voice.
+		voice.playing = true;
+		if (!channel || channel->getPosition(&voice.position, FMOD_TIMEUNIT_PCM) != FMOD_OK) return voice;
+		Require(channel->getFrequency(&voice.frequency)); Require(channel->getPriority(&voice.priority));
 		// A channel that has run out of samples still reports playing, but its length is one past
 		// the last frame a restore can seek to.
 		FMOD::Sound* current = nullptr; unsigned int length = 0;
