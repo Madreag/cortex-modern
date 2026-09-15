@@ -6,6 +6,7 @@
 #include "SceneMan.h"
 #include "TerrainObject.h"
 #include "GameActivity.h"
+#include "ActivityMan.h"
 #include "GAScripted.h"
 #include "BuyMenuGUI.h"
 #include "InventoryMenuGUI.h"
@@ -2100,6 +2101,8 @@ bool GUICheckpoint::RunSelfTest() {
 		}
 		{
 			// A checkpoint from a different layout omits a control the live menu still caches.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
 			Controller controller;
 			controller.Create(Controller::CIM_PLAYER, 0);
 			ObjectPickerGUI picker;
