@@ -1551,6 +1551,14 @@ void Actor::PopFrontWaypoint(const Vector& expected) {
 }
 
 void Actor::AlarmPoint(const Vector& alarmPoint) {
+	// The alarm point, the point it makes this actor look at and the alarm timer are all archived with
+	// the actor, so a write the AI pass makes rides a synced order and every peer raises it at the
+	// committed tick; the sound rides the same order, played once on every peer where the order lands.
+	if (DeferAIPassMutation(this)) {
+		QueueDeferredOnRunning({DeferredWaypoint::AlarmPoint, alarmPoint.m_X, alarmPoint.m_Y, 0});
+		return;
+	}
+	ConsumeInflightWaypoint(DeferredWaypoint::AlarmPoint, alarmPoint.m_X, alarmPoint.m_Y, 0);
 	if (m_AlarmSound && m_AlarmTimer.IsPastSimTimeLimit()) {
 		m_AlarmSound->Play(alarmPoint);
 	}
