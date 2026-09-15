@@ -314,8 +314,16 @@ def run_case(options, case, root, failing=None):
         if case in ("disabled", "scope-off"):
             first, last = images[0], images[-1]
             focused = [[c["name"] for c in capture["controls"] if c["focus"]] for capture in (first, last)]
-            # Two captures with nothing focused compared nothing; the case exists to prove focus held.
-            assert focused[0], f"no focused control in {first['json']}"
+            # Each case claims something about one named control, so equal focus lists alone prove nothing:
+            # scope-off keeps its textbox focused through the ignored input, and the greyed-out Start button
+            # must never take focus. Either way the control has to be drawn in both captures.
+            watched = "TextMultiplayerName" if case == "scope-off" else "ButtonMultiplayerStart"
+            for capture in (first, last):
+                assert any(c["name"] == watched for c in capture["controls"]), (watched, capture["json"])
+            if case == "scope-off":
+                assert focused[0] == [watched], focused
+            else:
+                assert watched not in focused[0] + focused[1], focused
             assert focused[0] == focused[1], focused
             assert first["screen"] == last["screen"] == "MultiplayerScreen"
             assert first["service"] == last["service"], (first["service"], last["service"])
