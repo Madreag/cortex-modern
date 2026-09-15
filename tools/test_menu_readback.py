@@ -148,7 +148,7 @@ def scripts(case, port, root):
         text += f"focus_previous\nassert_focus {ORDER[-1]}\ndump_host_options\nexit\n"
     elif case == "settings":
         text = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\nassert_visible TabVideoSettings 1\n"
-        for tab in ("Video", "Audio", "Input", "Gameplay", "Misc"):
+        for tab in PAGES:
             text += f"activate Tab{tab}Settings\nwait 3\nassert_visible CollectionBox{tab}Settings 1\n"
             text += checks(f"Tab{tab}Settings", "CollectionBoxSettingsBase") + "dump_player_options\n"
         text += "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n"
