@@ -15,6 +15,9 @@
 using namespace RTE;
 
 namespace {
+	// The page's row pitch, by which the rows under the fixed-delay row close up when it is away.
+	constexpr int c_FixedDelayRowHeight = 25;
+
 	// The boxes take typed digits only, so anything else came from a skin edit and is discarded.
 	bool ParseWholeNumber(const std::string& text, int& value) {
 		const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
@@ -41,11 +44,19 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_FixedDelayHintLabel->SetText("frames, 0-" + std::to_string(NetMatchConfigUtil::c_MaxInputDelayFrames));
 
 	m_IdleWaitLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkIdleWait"));
+	m_IdleWaitHintLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkIdleWaitHint"));
 	m_IdleWaitTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkIdleWait"));
 	m_IdleWaitTextbox->SetNumericOnly(true);
 	m_IdleWaitTextbox->SetMaxTextLength(2);
 
 	m_AutoRepairCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkAutoRepair"));
+
+	const auto rowTop = [](GUIControl* control) {
+		int x = 0, y = 0, width = 0, height = 0;
+		control->GetControlRect(&x, &y, &width, &height);
+		return std::make_pair(control, y);
+	};
+	m_RowsUnderFixedDelay = {rowTop(m_IdleWaitLabel), rowTop(m_IdleWaitTextbox), rowTop(m_IdleWaitHintLabel), rowTop(m_AutoRepairCheckbox)};
 
 	ShowSavedValues();
 }
@@ -94,6 +105,12 @@ void SettingsNetworkGUI::UpdateDelayPolicyRow() {
 	for (GUIControl* control: row) {
 		control->SetVisible(fixed);
 		control->SetEnabled(fixed);
+	}
+	// An undrawn row leaves no gap: the rows under it close up onto it.
+	for (const auto& [control, rowY]: m_RowsUnderFixedDelay) {
+		int x = 0, y = 0, width = 0, height = 0;
+		control->GetControlRect(&x, &y, &width, &height);
+		control->Move(x, fixed ? rowY : rowY - c_FixedDelayRowHeight);
 	}
 }
 
