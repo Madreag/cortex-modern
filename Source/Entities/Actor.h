@@ -678,6 +678,10 @@ namespace RTE {
 		/// @return The new scene point this should look at and see if anything dangerous
 		/// is there or (0,0) if nothing is alarming.
 		Vector GetAlarmPoint() {
+			// A running AI pass reads back the point its own order is carrying; the sim keeps the committed one.
+			if (Vector seen; g_CurrentAIActor && AlarmPointSeenByAIPass(seen)) {
+				return seen;
+			}
 			if (m_AlarmTimer.GetElapsedSimTimeMS() > g_TimerMan.GetDeltaTimeMS()) {
 				return Vector();
 			}
