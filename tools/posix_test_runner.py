@@ -428,7 +428,7 @@ class IsolatedRun:
         env_set["CCCP_HEADLESS"] = "1"
         # A FATAL writes the minidump at this cwd-relative path, beside AbortCode.txt.
         if "CC_TEST_CRASH_DUMP" not in extra:
-            self.env.setdefault("CC_TEST_CRASH_DUMP", "1")
+            self.env.setdefault("CC_TEST_CRASH_DUMP", "crash.dmp")
             env_set["CC_TEST_CRASH_DUMP"] = self.env["CC_TEST_CRASH_DUMP"]
         self._proc: subprocess.Popen[bytes] | None = None
         self._stdout: Any = None
