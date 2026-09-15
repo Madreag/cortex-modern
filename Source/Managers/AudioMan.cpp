@@ -1130,14 +1130,12 @@ Vector AudioMan::GetAsVector(FMOD_VECTOR fmodVector) const {
 }
 
 uint64_t AudioMan::AllocateCheckpointSoundContainerID() {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
 	if (m_NextSoundContainerIdentity == std::numeric_limits<uint64_t>::max()) throw std::runtime_error("sound identity space exhausted");
 	return ++m_NextSoundContainerIdentity;
 }
 
 void AudioMan::RegisterCheckpointSoundContainer(SoundContainer* container, uint64_t identity) {
 	if (!identity) return;
-	std::lock_guard lock(m_CheckpointRegistryMutex);
 	m_LiveCheckpointSoundContainers[container] = identity;
 	m_NextSoundContainerIdentity = std::max(m_NextSoundContainerIdentity, identity);
 	auto& owners = m_CheckpointSoundContainers[identity];
@@ -1149,7 +1147,6 @@ void AudioMan::RegisterCheckpointSoundContainer(SoundContainer* container, uint6
 }
 
 void AudioMan::UnregisterCheckpointSoundContainer(SoundContainer* container, uint64_t identity) {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
 	m_LiveCheckpointSoundContainers.erase(container);
 	auto found = m_CheckpointSoundContainers.find(identity);
 	if (found != m_CheckpointSoundContainers.end()) {
@@ -1164,13 +1161,11 @@ void AudioMan::UnregisterCheckpointSoundContainer(SoundContainer* container, uin
 }
 
 SoundContainer* AudioMan::FindCheckpointSoundContainer(uint64_t identity) const {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
 	const auto found = m_CheckpointSoundContainers.find(identity);
 	return found == m_CheckpointSoundContainers.end() || found->second.empty() ? nullptr : found->second.back();
 }
 
 CheckpointSoundRegistry AudioMan::AddedCheckpointSoundRegistrations(const CheckpointSoundRegistry& original) const {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
 	CheckpointSoundRegistry added;
 	for (const auto& [identity, owners]: m_CheckpointSoundContainers) {
 		const auto previous = original.find(identity);
@@ -1182,7 +1177,6 @@ CheckpointSoundRegistry AudioMan::AddedCheckpointSoundRegistrations(const Checkp
 }
 
 void AudioMan::RestoreCheckpointSoundRegistry(CheckpointSoundRegistry original) {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
 	for (auto entry = original.begin(); entry != original.end();) {
 		std::erase_if(entry->second, [this, identity = entry->first](const SoundContainer* owner) {
 			const auto live = m_LiveCheckpointSoundContainers.find(owner);
@@ -1194,7 +1188,6 @@ void AudioMan::RestoreCheckpointSoundRegistry(CheckpointSoundRegistry original) 
 }
 
 void AudioMan::ActivateCheckpointSoundRegistrations(const CheckpointSoundRegistry& candidates) {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
 	for (const auto& [identity, owners]: candidates) for (SoundContainer* owner: owners) {
 		const auto live = m_LiveCheckpointSoundContainers.find(owner);
 		if (live != m_LiveCheckpointSoundContainers.end() && live->second == identity) RegisterCheckpointSoundContainer(owner, identity);
@@ -1234,7 +1227,6 @@ void AudioMan::NoteCarriedSoundIdentity(uint64_t identity) {
 }
 
 void AudioMan::RememberCarriedSoundIdentities(std::unordered_set<uint64_t> carried) {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
 	m_LastCarriedSoundIdentities = std::move(carried);
 }
 
@@ -1331,7 +1323,6 @@ void AudioMan::CollectManagerSoundIdentities(std::unordered_set<uint64_t>& out) 
 }
 
 AudioMan::RestoredSoundRegistryScope::RestoredSoundRegistryScope() {
-	std::lock_guard lock(g_AudioMan.m_CheckpointRegistryMutex);
 	g_AudioMan.m_RestoredSoundContainers.clear();
 	g_AudioMan.m_RestoredManagerIdentities.clear();
 	g_AudioMan.m_RestoredSoundRegistryActive = true;
@@ -1339,7 +1330,6 @@ AudioMan::RestoredSoundRegistryScope::RestoredSoundRegistryScope() {
 }
 
 AudioMan::RestoredSoundRegistryScope::~RestoredSoundRegistryScope() {
-	std::lock_guard lock(g_AudioMan.m_CheckpointRegistryMutex);
 	g_AudioMan.m_RestoredSoundRegistryRecording = false;
 	g_AudioMan.m_RestoredSoundRegistryActive = false;
 	g_AudioMan.m_RestoredSoundContainers.clear();
@@ -1384,12 +1374,10 @@ void AudioMan::RestorePlayPhaseScope::ResetRestorePlayCount() {
 }
 
 void AudioMan::StopRecordingRestoredSoundRegistry() {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
 	m_RestoredSoundRegistryRecording = false;
 }
 
 SoundContainer* AudioMan::FindRestoredCheckpointSoundContainer(uint64_t identity) const {
-	std::lock_guard lock(m_CheckpointRegistryMutex);
 	const auto found = m_RestoredSoundContainers.find(identity);
 	return found == m_RestoredSoundContainers.end() || found->second.empty() ? nullptr : found->second.back();
 }
@@ -1398,13 +1386,11 @@ void AudioMan::RefreshRestoredManagerIdentities() {
 	// Collected before the lock: the managers' visitors take the logical-sound lock, which is held the other way round by RetireFinishedSimulationSounds.
 	std::unordered_set<uint64_t> identities;
 	CollectManagerSoundIdentities(identities);
-	std::lock_guard lock(m_CheckpointRegistryMutex);
 	m_RestoredManagerIdentities = std::move(identities);
 }
 
 SoundContainer* AudioMan::ResolveCheckpointVoiceOwner(uint64_t identity) const {
 	if (!identity) return nullptr;
-	std::lock_guard lock(m_CheckpointRegistryMutex);
 	if (!m_RestoredSoundRegistryActive) return FindCheckpointSoundContainer(identity);
 	if (SoundContainer* owner = FindRestoredCheckpointSoundContainer(identity)) return owner;
 	if (m_RestoredManagerIdentities.contains(identity)) return FindCheckpointSoundContainer(identity);
@@ -1934,7 +1920,6 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 				const std::string preset = named ? named->GetPresetName() : std::string();
 				std::string nearby;
 				{
-					std::lock_guard lock(m_CheckpointRegistryMutex);
 					nearby = NearbyRegisteredIdentities(m_RestoredSoundRegistryActive ? m_RestoredSoundContainers : m_CheckpointSoundContainers, voice.owner);
 					if (m_RestoredSoundRegistryActive) {
 						const std::string liveNearby = NearbyRegisteredIdentities(m_CheckpointSoundContainers, voice.owner);
