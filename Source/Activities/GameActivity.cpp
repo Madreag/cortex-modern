@@ -2928,7 +2928,8 @@ template <class T> bool RestoreNetLocalMenu(T*& target, const std::string& saved
 }
 
 bool RestoreNetLocalBanner(GUIBanner*& target, const std::string& saved, const char* font, const char* blur) {
-	if (saved.empty() && !target) return true;
+	// A seat that was not local on the snapshotting peer carries no banner, so the live one stays as it is.
+	if (saved.empty()) return true;
 	const std::string state = saved.empty() ? GUIBanner{}.SaveCheckpoint() : saved;
 	if (target && target->GetFontHeight() > 0) return target->LoadCheckpoint(state);
 	std::unique_ptr<GUIBanner> candidate;
