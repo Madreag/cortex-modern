@@ -65,6 +65,9 @@ namespace RTE {
 
 		std::string SaveCheckpoint() const override;
 		void VisitCheckpointOwnedObjects(const std::function<void(const Entity*)>& visit) const;
+		/// Visits only the holdings every peer's activity owns identically, without the per-seat GUI ones.
+		void VisitCheckpointSharedObjects(const std::function<void(const Entity*)>& visit) const;
+		static bool RunDeliveryReferenceSelfTest();
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) override;
 		bool ResolveCheckpointReferences() override;
 		void ClearNonOwnedActorSlots() override;

@@ -1833,7 +1833,6 @@ std::string AudioMan::SaveCheckpoint() const {
 std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const SoundContainer*)>& contained) const {
 	AudioRuntime state;
 	state.enabled = m_AudioEnabled; state.nextVoice = m_NextVoiceIdentity;
-	state.nextSoundContainer = GetCheckpointSoundContainerCursor();
 	state.deferredSoundOpTick = m_DeferredSoundOpTick; state.deferredSoundOpOrdinal = m_DeferredSoundOpOrdinal;
 	state.muteMaster = m_MuteMaster; state.muteMusic = m_MuteMusic; state.muteSounds = m_MuteSounds; state.muteOnFocusLoss = m_MuteAudioOnFocusLoss;
 	state.masterVolume = m_MasterVolume; state.musicVolume = m_MusicVolume; state.soundsVolume = m_SoundsVolume; state.globalPitch = m_GlobalPitch;
@@ -1882,6 +1881,9 @@ std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const So
 		}
 		TraceCheckpointBoundary("save-captured");
 	}
+	// One snapshot of both: the cursor is read after the voices and never below an owner this archive names.
+	state.nextSoundContainer = GetCheckpointSoundContainerCursor();
+	for (const AudioCheckpoint::Voice& voice: state.voices) state.nextSoundContainer = std::max(state.nextSoundContainer, voice.owner);
 	return state.Save();
 }
 
@@ -2433,6 +2435,30 @@ bool AudioMan::RunCheckpointSelfTest() {
 			std::cout << "[audio-checkpoint-selftest] PASS carried_owners_match_archive" << std::endl;
 		} catch (const std::exception& error) {
 			std::cout << "[audio-checkpoint-selftest] FAIL carried_owners_match_archive " << error.what() << std::endl;
+			ok = false;
+		}
+		try {
+			// ActivityMan::SaveGame pins the cursor back over the capture's own allocations and writes the
+			// runtime archive after that, so a container that took an identity in between still owns a voice.
+			const uint64_t liveCursor = GetCheckpointSoundContainerCursor();
+			std::unique_ptr<SoundContainer> late(static_cast<SoundContainer*>(preset->Clone()));
+			late->SetPaused(true); late->SetImmobile(true); late->SetLoopSetting(-1);
+			if (!late->Play()) throw std::runtime_error("the late sound did not play");
+			const int lateVoice = *late->GetPlayingChannels()->begin();
+			const uint64_t lateOwner = late->GetCheckpointIdentity();
+			SetCheckpointSoundContainerCursor(liveCursor);
+			const std::string archive = SaveCheckpoint();
+			std::string refusal;
+			const bool accepted = LoadCheckpoint(archive, true, nullptr, &refusal);
+			late->Stop();
+			late.reset();
+			SetCheckpointSoundContainerCursor(liveCursor);
+			if (!accepted) throw std::runtime_error("the archive the save wrote was refused: " + refusal);
+			if (lateOwner <= liveCursor) throw std::runtime_error("the late owner did not take an identity past the pinned cursor");
+			if (ArchivedVoiceOwner(archive, lateVoice) != lateOwner) throw std::runtime_error("the archive dropped the late voice's owner");
+			std::cout << "[audio-checkpoint-selftest] PASS cursor_covers_every_owner_the_archive_names" << std::endl;
+		} catch (const std::exception& error) {
+			std::cout << "[audio-checkpoint-selftest] FAIL cursor_covers_every_owner_the_archive_names " << error.what() << std::endl;
 			ok = false;
 		}
 		try {

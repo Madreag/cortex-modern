@@ -172,7 +172,7 @@ def score_placements(logs, seats=2):
 
 
 # The harness blocks this driver owns; 48540-48559 belong to the menu readback detector.
-PORT_BLOCKS = ((48320, 48539), (48630, 48639))
+PORT_BLOCKS = ((48320, 48539), (48630, 48639), (48640, 48649))
 
 
 # Each peer holds one seat and places a different brain at a different spot, so a placement that failed to

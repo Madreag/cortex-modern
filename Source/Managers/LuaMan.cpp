@@ -1483,12 +1483,34 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 	local ids = {}
 	for id in pairs(graph.nodes) do ids[#ids + 1] = id end
 	table.sort(ids)
+	-- A required module's members are named through package.loaded, so the module table is anchored there
+	-- first, as the table the loader handed out: re-requiring the file would run the module again.
+	local anchored, loadedIds, loadedNames = {}, {}, {}
+	if type(package) == "table" and type(package.loaded) == "table" then
+		for _, entry in ipairs(graph.loaded) do
+			if entry.value.t == "ref" and loadedNames[entry.value.id] == nil then
+				loadedNames[entry.value.id] = entry.name
+				loadedIds[#loadedIds + 1] = entry.value.id
+			end
+		end
+		table.sort(loadedIds)
+		for _, id in ipairs(loadedIds) do
+			local node = graph.nodes[id]
+			if node and node.kind == "T" then
+				local object = (reuseHeld and objects[id]) or (node.path and resolvePath(node.path.segments))
+				if type(object) ~= "table" or (baseline.paths and baseline.paths[object]) or object == _G then object = package.loaded[loadedNames[id]] end
+				if type(object) ~= "table" then object = {} end
+				package.loaded[loadedNames[id]] = object
+				anchored[id] = object
+			end
+		end
+	end
 	for _, id in ipairs(ids) do
 		local node = graph.nodes[id]
 		if node.kind == "T" then
-			local object = reuseHeld and objects[id] or nil
+			local object = (reuseHeld and objects[id]) or anchored[id] or nil
 			if object then
-				if node.path and not assignPath(node.path.segments, object) then fail("cannot restore a held table path") end
+				if node.path and not assignPath(node.path.segments, object) then fail("cannot place the table " .. pathText(node.path.segments)) end
 			elseif node.path then
 				object = resolvePath(node.path.segments)
 				if type(object) ~= "table" or (baseline.paths and baseline.paths[object]) or object == _G then
@@ -2462,6 +2484,34 @@ do
 	local same = #captureProblems == 0 and #restoreProblems == 0
 	for i = 1, #expected do same = LuaMan:SelectRand(0, 1000000) == expected[i] and same end
 	check("native_vm_rng_rewound", same)
+end
+
+-- A required module an activity also holds by name: the graph names the module's members through
+-- package.loaded, so the restore has to put the module table back there before it places them.
+do
+	local Class = {}
+	Class.__index = Class
+	function Class:count() return #self.LZs end
+	local function reader(value) return function() return value end end
+	local Module = setmetatable({ LZs = {}, Lookup = {} }, Class)
+	Module.read = reader(Module.LZs)
+	package.loaded["_SelfTestLZModule"] = Module
+	_SelfTestModuleHolder = { LZmap = Module }
+	local capture, problems = _ScriptGraph.serialize({ ["module"] = { held = Module } })
+	check("module_capture", #problems == 0, table.concat(problems, " | "))
+	if #problems == 0 then
+		-- What the relaunch leaves behind: the module is gone from package.loaded and from its holder.
+		package.loaded["_SelfTestLZModule"] = nil
+		_SelfTestModuleHolder.LZmap = nil
+		local restored, errors = _ScriptGraph.deserialize(capture)
+		check("module_members_placed", #errors == 0, table.concat(errors, " | "))
+		local result = restored["module"] and restored["module"].held
+		check("module_anchored_in_package_loaded", result ~= nil and rawequal(package.loaded["_SelfTestLZModule"], result) and rawequal(_SelfTestModuleHolder.LZmap, result))
+		check("module_member_upvalue_alias", result ~= nil and rawequal(result.read(), result.LZs))
+		check("module_metatable_kept", result ~= nil and getmetatable(result) ~= nil and result:count() == 0)
+	end
+	package.loaded["_SelfTestLZModule"] = nil
+	_SelfTestModuleHolder = nil
 end
 _SelfTestShared, _SelfTestMod, _SelfTestKlass = nil, nil, nil
 _G["selftest.lua"] = nil
@@ -5336,6 +5386,7 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	checkpointValues = BitmapCheckpoint::RunSelfTest() && checkpointValues;
 	checkpointValues = PieMenu::RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunBorrowedReferenceSelfTest() && checkpointValues;
+	checkpointValues = GameActivity::RunDeliveryReferenceSelfTest() && checkpointValues;
 	checkpointValues = MOSprite::RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_PrimitiveMan.RunCheckpointSelfTest() && checkpointValues;
 	{
