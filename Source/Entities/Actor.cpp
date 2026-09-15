@@ -2851,7 +2851,18 @@ bool Actor::RunBorrowedReferenceSelfTest() {
         owner->m_Waypoints.front().second = replacement.get();
         owner.reset();
         replacement->Reset();
-        std::cout << "[native-reference-selftest] reset/deletion, reused address, copied/moved links and owner-first destruction PASS; pool_reused=" << (replacement.get() == retiredAddress) << std::endl;
+        // A checkpoint may only name owners the world it writes carries: an object nothing in that world
+        // owns is gone from the world the restore rebuilds, and its row would refuse the whole archive.
+        {
+            auto offWorld = std::make_unique<Actor>();
+            auto anchor = std::make_unique<Actor>();
+            if (offWorld->MovableObject::Create(1) < 0 || anchor->MovableObject::Create(1) < 0) return false;
+            offWorld->SetWhichMOToNotHit(anchor.get());
+            const std::string archive = g_MovableMan.SaveCheckpoint();
+            offWorld.reset();
+            if (!g_MovableMan.LoadCheckpoint(archive)) throw std::runtime_error("the checkpoint named an off-world owner the restore cannot find");
+        }
+        std::cout << "[native-reference-selftest] reset/deletion, reused address, copied/moved links, owner-first destruction and off-world owners PASS; pool_reused=" << (replacement.get() == retiredAddress) << std::endl;
         return true;
     } catch (const std::exception& error) {
         std::cout << "[native-reference-selftest] " << error.what() << std::endl;
