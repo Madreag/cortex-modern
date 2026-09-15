@@ -55,6 +55,9 @@ struct Effect {
 		catch (const std::exception&) { return false; }
 	}
 	static bool Managed(FMOD_DSP_TYPE type) { return type == FMOD_DSP_TYPE_MULTIBAND_EQ || type == FMOD_DSP_TYPE_COMPRESSOR || type == FMOD_DSP_TYPE_LIMITER; }
+	// FMOD idles a voice's DSP on the mixer thread, so getActive reads that machine's own mixing rather
+	// than shared state. The engine only ever adds a managed effect, so the archive carries that intent.
+	static constexpr bool c_IntendedActive = true;
 	static std::vector<Effect> Capture(FMOD::ChannelControl* control) {
 		int count; Require(control->getNumDSPs(&count));
 		std::vector<Effect> effects;
@@ -63,7 +66,7 @@ struct Effect {
 			Require(control->getDSP(index, &dsp)); Require(dsp->getType(&type));
 			if (!Managed(type)) continue;
 			Effect effect; effect.index = index; effect.type = type;
-			Require(dsp->getActive(&effect.active)); Require(dsp->getBypass(&effect.bypass));
+			effect.active = c_IntendedActive; Require(dsp->getBypass(&effect.bypass));
 			Require(dsp->getWetDryMix(&effect.wetDry[0], &effect.wetDry[1], &effect.wetDry[2]));
 			int parameters; Require(dsp->getNumParameters(&parameters));
 			for (int parameter = 0; parameter < parameters; ++parameter) {
