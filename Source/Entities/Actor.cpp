@@ -1066,6 +1066,14 @@ bool Actor::DisbandSquad() {
 	return hadSquad;
 }
 
+// Queue on the running AI actor so one thread owns the pending list; actorUID names the written actor.
+static bool DeferAIPassMutation(const Actor* actor) {
+	if (!g_CurrentAIActor || !ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return false;
+	}
+	return g_MovableMan.FindObjectByUniqueID(actor->GetUniqueID()) == actor;
+}
+
 void Actor::SetAIMode(AIMode newMode) {
 	// The AI pass runs on the machine that owns the actor, so a mode written there would land on that
 	// peer alone while the hash and the checkpoint carry it; queue it for the synced request instead.
@@ -1108,14 +1116,6 @@ void Actor::BeginGoToOrder() {
 	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
 		m_Controller.HoldDisabledForSyncedOrder(static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
 	}
-}
-
-// Queue on the running AI actor so one thread owns the pending list; actorUID names the written actor.
-static bool DeferAIPassMutation(const Actor* actor) {
-	if (!g_CurrentAIActor || !ScenarioRunner::IsLockstepControllerSyncActive()) {
-		return false;
-	}
-	return g_MovableMan.FindObjectByUniqueID(actor->GetUniqueID()) == actor;
 }
 
 static bool DeferredTargetsActor(const Actor::DeferredWaypoint& waypoint, const Actor* target, const Actor* pendingOwner) {
