@@ -296,11 +296,10 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostPlayersTextBox->SetNumericOnly(true);
 	m_MultiplayerHostPlayersTextBox->SetMaxNumericValue(NetMatchConfigUtil::c_MaxPeerCount);
 	m_MultiplayerHostPlayersTextBox->SetMaxTextLength(1);
-	m_MultiplayerHostInputDelayTextBox->SetText(std::to_string(std::clamp(g_SettingsMan.GetNetworkInputDelayFrames(), 0, static_cast<int>(NetMatchConfigUtil::c_MaxInputDelayFrames))));
 	m_MultiplayerHostInputDelayTextBox->SetNumericOnly(true);
 	m_MultiplayerHostInputDelayTextBox->SetMaxNumericValue(NetMatchConfigUtil::c_MaxInputDelayFrames);
 	m_MultiplayerHostInputDelayTextBox->SetMaxTextLength(2);
-	m_MultiplayerHostInputDelayPolicyLabel->SetText(g_SettingsMan.GetNetworkHostDelayPolicy() == SettingsMan::NetworkHostDelayPolicy::Auto ? "(auto)" : "(fixed)");
+	RefreshHostInputDelayControls();
 	m_MultiplayerHostPortMapCheckbox->SetCheck(g_SettingsMan.GetNetworkPortMapEnable() ? GUICheckbox::Checked : GUICheckbox::Unchecked);
 	m_MultiplayerJoinPortTextBox->SetText("41010");
 	m_MultiplayerJoinPortTextBox->SetNumericOnly(true);
@@ -674,6 +673,13 @@ bool MainMenuGUI::HandleInputEvents() {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUITextBox::Enter && guiEvent.GetControl() == m_MultiplayerLobbyChatInput) {
 			SendLobbyChat();
+		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUITextBox::Changed && guiEvent.GetControl() == m_MultiplayerHostInputDelayTextBox) {
+			// The label names the frames the box would send, so it follows the edit.
+			if (m_MultiplayerHostInputDelayTextBox->GetEnabled()) {
+				const long parsed = std::strtol(m_MultiplayerHostInputDelayTextBox->GetText().c_str(), nullptr, 10);
+				const int frames = std::clamp<int>(static_cast<int>(parsed), 0, NetMatchConfigUtil::c_MaxInputDelayFrames);
+				m_MultiplayerHostInputDelayPolicyLabel->SetText("(fixed, " + std::to_string(frames) + ")");
+			}
 		}
 	}
 	return false;
@@ -731,7 +737,7 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerHostGameButton]) {
 		m_MultiplayerLandingStatusLabel->SetText("");
 		// The saved policy is re-read here, the way the port-map box is, so a settings change is not stale.
-		m_MultiplayerHostInputDelayPolicyLabel->SetText(g_SettingsMan.GetNetworkHostDelayPolicy() == SettingsMan::NetworkHostDelayPolicy::Auto ? "(auto)" : "(fixed)");
+		RefreshHostInputDelayControls();
 		m_MultiplayerHostPortMapCheckbox->SetCheck(g_SettingsMan.GetNetworkPortMapEnable() ? GUICheckbox::Checked : GUICheckbox::Unchecked);
 		RefreshMultiplayerHostActivities();
 		m_MultiplayerSubScreen = MultiplayerSubScreen::HostSetup;
@@ -931,14 +937,18 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		request.peerCount = static_cast<uint8_t>(std::clamp<long>(parsedPlayers, NetMatchConfigUtil::c_MinPeerCount, NetMatchConfigUtil::c_MaxPeerCount));
 		m_MultiplayerHostPlayersTextBox->SetText(std::to_string(request.peerCount));
 		request.mode = m_MultiplayerHostMode;
-		const long parsedDelay = std::strtol(m_MultiplayerHostInputDelayTextBox->GetText().c_str(), nullptr, 10);
-		const int inputDelay = std::clamp<int>(static_cast<int>(parsedDelay), 0, NetMatchConfigUtil::c_MaxInputDelayFrames);
-		m_MultiplayerHostInputDelayTextBox->SetText(std::to_string(inputDelay));
-		g_SettingsMan.SetNetworkInputDelayFrames(inputDelay);
-		request.inputDelayFrames = static_cast<uint16_t>(inputDelay);
-		// The saved policy decides it: automatic keeps the typed delay as the floor and raises it to
-		// cover the measured ping, fixed hosts on the typed value alone.
+		// The saved policy decides it: automatic keeps the saved delay as the floor and raises it to
+		// cover the measured ping; fixed hosts on the box's value, which writes back as the new floor.
 		request.autoInputDelay = g_SettingsMan.GetNetworkHostDelayPolicy() == SettingsMan::NetworkHostDelayPolicy::Auto;
+		if (request.autoInputDelay) {
+			request.inputDelayFrames = static_cast<uint16_t>(std::clamp(g_SettingsMan.GetNetworkInputDelayFrames(), 0, static_cast<int>(NetMatchConfigUtil::c_MaxInputDelayFrames)));
+		} else {
+			const long parsedDelay = std::strtol(m_MultiplayerHostInputDelayTextBox->GetText().c_str(), nullptr, 10);
+			const int inputDelay = std::clamp<int>(static_cast<int>(parsedDelay), 0, NetMatchConfigUtil::c_MaxInputDelayFrames);
+			m_MultiplayerHostInputDelayTextBox->SetText(std::to_string(inputDelay));
+			g_SettingsMan.SetNetworkInputDelayFrames(inputDelay);
+			request.inputDelayFrames = static_cast<uint16_t>(inputDelay);
+		}
 	}
 
 	std::string error;
@@ -1081,8 +1091,10 @@ void MainMenuGUI::RefreshReconnectControls() {
 		return;
 	}
 	// One persistent line, never a toast: the status while recovering, otherwise whatever the startup
-	// scan of the recovery record found - including precisely why it cannot be used.
-	const std::string status = recovering ? reconnect.GetStatusText() : reconnect.GetOfferText();
+	// scan of the recovery record found - including precisely why it cannot be used. No record is the
+	// absence of an offer, not a verdict: it stays silent until the player asks to rejoin.
+	const std::string status = recovering ? reconnect.GetStatusText()
+	                                      : (reconnect.GetOffer() == NetReconnectOffer::Missing ? std::string() : reconnect.GetOfferText());
 	if (status != m_ReconnectStatusShown) {
 		// A recovery in progress owns the line. What the scan of the record found does not: it clears
 		// its own sentence, but never replaces a refusal or an error the screen just put there.
@@ -1091,6 +1103,16 @@ void MainMenuGUI::RefreshReconnectControls() {
 		}
 		m_ReconnectStatusShown = status;
 	}
+}
+
+void MainMenuGUI::RefreshHostInputDelayControls() {
+	const bool automatic = g_SettingsMan.GetNetworkHostDelayPolicy() == SettingsMan::NetworkHostDelayPolicy::Auto;
+	const int frames = std::clamp(g_SettingsMan.GetNetworkInputDelayFrames(), 0, static_cast<int>(NetMatchConfigUtil::c_MaxInputDelayFrames));
+	// Fixed pre-fills the saved frames as the per-match override; under automatic the box only
+	// announces, so it goes grey with the word the label already spells.
+	m_MultiplayerHostInputDelayTextBox->SetEnabled(!automatic);
+	m_MultiplayerHostInputDelayTextBox->SetText(automatic ? "auto" : std::to_string(frames));
+	m_MultiplayerHostInputDelayPolicyLabel->SetText(automatic ? "(auto)" : "(fixed, " + std::to_string(frames) + ")");
 }
 
 void MainMenuGUI::FitMultiplayerPanelWidth(GUICollectionBox* panel, GUILabel* diagnosticLabel, int width, const std::vector<GUILabel*>& fillLabels) {
@@ -1300,6 +1322,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	const int contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
 	std::vector<GUILabel*> fillLabels(m_MultiplayerLobbyPlayerLabels.begin(), m_MultiplayerLobbyPlayerLabels.end());
 	fillLabels.push_back(m_MultiplayerStatusLabel);
+	// The header rides the rows' fill rule so its left edge is theirs at every width.
+	if (m_MultiplayerLobbyPlayersHeader) {
+		fillLabels.push_back(m_MultiplayerLobbyPlayersHeader);
+	}
 	// Chat labels fill like the player rows when the panel widens (X=12, W=contentWidth-24).
 	for (GUILabel* label : m_MultiplayerLobbyChatLabels) {
 		if (label) {
@@ -1307,9 +1333,6 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		}
 	}
 	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth, fillLabels);
-	if (m_MultiplayerLobbyPlayersHeader) {
-		m_MultiplayerLobbyPlayersHeader->SetPositionRel(contentWidth > 300 ? 24 : 20, m_MultiplayerLobbyPlayersHeader->GetRelYPos());
-	}
 	const int rowBoxWidth = contentWidth - 24;
 	for (size_t i = 0; i < lobbyRowName.size(); ++i) {
 		GUILabel* label = m_MultiplayerLobbyPlayerLabels[i];
@@ -1428,7 +1451,11 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	const int buttonShift = (contentWidth - 300) / 2;
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55 + buttonShift, 192 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55 + buttonShift, 192 + extraHeight);
-	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(90 + buttonShift, 220 + extraHeight);
+	// The Leave/Seats pair centres on the panel the way Start does; the gap between them holds parity.
+	const int leaveWidth = m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->GetWidth();
+	const int seatsWidth = m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->GetWidth();
+	const int pairLeft = (contentWidth - leaveWidth - 2 - seatsWidth) / 2;
+	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(pairLeft, 220 + extraHeight);
 	LayoutMultiplayerFooter(contentWidth, contentHeight);
 
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
@@ -1438,7 +1465,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
 	// §9b: moderation is a match feature - a lobby seat whose holder leaves goes straight back in the pool.
-	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(212 + buttonShift, 220 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(contentWidth - pairLeft - seatsWidth, 220 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetVisible(snapshot.isHost);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetEnabled(snapshot.isHost && snapshot.running);
 }

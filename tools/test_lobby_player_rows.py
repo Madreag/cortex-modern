@@ -47,6 +47,7 @@ TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 from test_viewport_fit import (PinDrift, close_all, game_version, near,  # noqa: E402
                                pin_state, require_pin, resolve_tools, set_resolution, sha256_file)
+from run_sim_test import seed_settings  # noqa: E402
 
 PANEL_GRAY = (59, 65, 83)
 ROW_X_INI, ROW_W_INI, ROW_H, ROW_Y0, ROW_STEP = 8, 288, 16, 66, 18
@@ -110,7 +111,7 @@ def menu_script(name, host, port, players):
     script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
     if host:
         return script + (f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\n"
-                         f"settext TextHostPlayers {players}\nsettext TextHostInputDelay 3\n"
+                         f"settext TextHostPlayers {players}\n"
                          "activate ButtonMultiplayerCreate\n")
     return script + ("activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
                      f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n")
@@ -152,6 +153,8 @@ def main():
         run = make_run(repo, ["-menu-script", path, "-num-lua-states", 4], root / name, 200)
         runs[name] = run
         details[f"settings_{name.lower()}"] = set_resolution(run, options.width, options.height)
+        # The delay box is read-only under the auto policy; the floor the host sends is a setting.
+        seed_settings(run, {"NetworkInputDelayFrames": 3})
         run.start()
         return run
 

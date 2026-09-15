@@ -457,6 +457,7 @@ def main():
         parser.error("--exe-sha256 must be 64 lowercase hex chars")
 
     make_run, wait_for_log = resolve_tools(options.repo)
+    from run_sim_test import seed_settings
     repo = options.repo.resolve()
     before = pin_state(repo)
     if before["exe_sha256"] != options.exe_sha256:
@@ -476,7 +477,7 @@ def main():
         script = f"wait 40\nscreenshot main-start\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
         if host:
             script += (f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\n"
-                       "settext TextHostPlayers 2\nsettext TextHostInputDelay 3\nactivate ButtonMultiplayerCreate\n")
+                       "settext TextHostPlayers 2\nactivate ButtonMultiplayerCreate\n")
         else:
             script += ("activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
                        f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n")
@@ -488,6 +489,8 @@ def main():
         staged = [str(stage_module(run, m[0], m[1], version, m[2] if len(m) > 2 else 1))
                   for m in modules]
         settings = set_resolution(run, options.width, options.height)
+        # The delay box is read-only under the auto policy; the floor the host sends is a setting.
+        seed_settings(run, {"NetworkInputDelayFrames": 3})
         details[f"staged_{name.lower()}"] = staged
         details[f"settings_{name.lower()}"] = settings
         run.start()

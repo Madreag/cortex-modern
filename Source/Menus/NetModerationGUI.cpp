@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 using namespace RTE;
@@ -122,6 +123,28 @@ namespace {
 			}
 		}
 		return toast.text + (sender ? " by " + g_NetMatchService.GetPeerDisplayName(sender) : std::string());
+	}
+
+	// The player_* toasts read "<name> <verb>"; on a short line the name elides, never the verb.
+	std::string FitToastText(GUIFont* font, const ScenarioRunner::NetUiToastRecord& toast, int width) {
+		const char* verb = nullptr;
+		if (toast.kind == "player_joined") {
+			verb = " joined";
+		} else if (toast.kind == "player_dropped") {
+			verb = " dropped";
+		} else if (toast.kind == "player_left") {
+			verb = " left";
+		} else if (toast.kind == "player_rejoined") {
+			verb = " rejoined";
+		} else if (toast.kind == "player_substituted") {
+			verb = " joined as substitute";
+		}
+		std::string text = ToastText(toast);
+		const size_t verbLen = verb ? std::strlen(verb) : 0;
+		if (verbLen && text.size() > verbLen && text.compare(text.size() - verbLen, verbLen, verb) == 0) {
+			return FitLine(font, text.substr(0, text.size() - verbLen), width - font->CalculateWidth(verb)) + verb;
+		}
+		return FitLine(font, std::move(text), width);
 	}
 
 	std::string WrapText(GUIFont* font, const std::string& text, int width) {
@@ -425,7 +448,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		const int maxTextWidth = freeRight - freeLeft - 14;
 		const std::string pingText = ping ? std::to_string(*ping) : "--";
 		char tail[96];
-		std::snprintf(tail, sizeof(tail), " / D %u / RTT %s ms / PACE %.1f tps", static_cast<unsigned>(m_MatchDelayFrames), pingText.c_str(), s_paceTps);
+		std::snprintf(tail, sizeof(tail), " / delay %u / RTT %s ms / PACE %.1f tps", static_cast<unsigned>(m_MatchDelayFrames), pingText.c_str(), s_paceTps);
 		auto compose = [&](const std::string& metrics, bool shortenNames) {
 			std::string line = "NET [F6] / ";
 			if (resyncing) {
@@ -588,7 +611,7 @@ void NetModerationGUI::DrawMatchToasts() {
 		GUILabel* label = m_Toasts[row];
 		const bool shown = row < visible.size();
 		label->SetVisible(shown);
-		label->SetText(shown ? FitLine(font, ToastText(visible[row]), width - 16) : std::string());
+		label->SetText(shown ? FitToastText(font, visible[row], width - 16) : std::string());
 		if (!shown) continue;
 		const int y = top + static_cast<int>(row) * rowHeight;
 		label->SetFont(font);
