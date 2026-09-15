@@ -148,6 +148,10 @@ def score_placements(logs, seats=2):
     return scored
 
 
+# The harness blocks this driver owns; 48540-48559 belong to the menu readback detector.
+PORT_BLOCKS = ((48320, 48539), (48630, 48639))
+
+
 # Each peer holds one seat and places a different brain at a different spot, so a placement that failed to
 # cross the wire leaves the peers holding different residents.
 EDITOR_SEATS = {"host": dict(player=0, x_fraction=0.30, cls="Actor", preset="Brain Case"),
@@ -303,8 +307,8 @@ def census_compare(offline_dump, match_dump):
 def launch(options):
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         raise RuntimeError("family lock exists; launch is deferred")
-    if not 48320 <= options.port <= 48539:
-        raise ValueError("port must be in 48320..48539")
+    if not any(low <= options.port <= high for low, high in PORT_BLOCKS):
+        raise ValueError("port must be in " + " or ".join(f"{low}..{high}" for low, high in PORT_BLOCKS))
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = options.repo.resolve(), options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
