@@ -102,13 +102,13 @@ def encode_config(rules, wire, dedicated=False, default=False):
                        wire.match_config_type.value, 0, len(payload)) + payload
 
 
-def config_refusal(logs, wire):
-    """What a peer said when it refused the launch config, beside the versions this run actually wrote."""
+def config_refusal(logs, wire, exe_hash):
+    """What a peer said when it refused the launch config, beside the versions this run wrote and from where."""
     for peer, log in logs.items():
         reasons = re.findall(r"\[net-match-service-e2e\] setup failed: launch config: (.+)", log)
         if reasons:
-            return (f"{peer} refused the launch config: {reasons[0]}; this run wrote {wire.describe()}, "
-                    "so the executable under test was built from other sources")
+            return (f"{peer} refused the launch config: {reasons[0]}; this run wrote {wire.describe()} "
+                    f"from the tree under test, against exe {exe_hash[:16]}")
     return None
 
 
@@ -410,7 +410,7 @@ def launch(options):
     logs = {peer: (root / peer / "stdout.log").read_text(errors="replace") for peer in runs}
     checks, result = {}, {"records": records, "wire": wire.as_json()}
     # A config the engine turned down leaves the other peer with a bare timeout, so the refusal leads every failure.
-    result["config_refusal"] = None if refusal else config_refusal(logs, wire)
+    result["config_refusal"] = None if refusal else config_refusal(logs, wire, exe_hash)
     for peer, log in logs.items():
         for number, line in enumerate(log.splitlines(), 1):
             if line.startswith("[e2e] rules ") or "setup failed:" in line:
