@@ -290,8 +290,10 @@ def native_projection(text):
             if fields[:1] == ["LP2"]:
                 if len(fields) < 47 or not fields[46].isdigit() or len(fields) != 47 + 2 * int(fields[46]):
                     raise ValueError("malformed LP2 limb checkpoint")
-                for field in fields[1:]:
-                    float(field)
+                # A cross-process projection has already replaced the two anchors this pass masks.
+                for index, field in enumerate(fields[1:], 1):
+                    if index not in (38, 41):
+                        float(field)
                 fields[38] = fields[41] = "LOCAL_REAL_CLOCK"
                 replacement, reason = " ".join(fields), "limb real-clock anchors"
         elif owner[1] in ("AEmitter", "AEJetpack") and name in ("SpecialBehaviour_AvgImpulse", "SpecialBehaviour_AvgBurstImpulse"):
@@ -534,15 +536,19 @@ def decode_base64(value):
 
 _SPRITE_CLASSES = _ACTOR_CLASSES | {"MOSprite", "MOSRotating", "MOSParticle", "Attachable", "AEmitter", "AEJetpack",
     "Arm", "Leg", "Turret", "HeldDevice", "HDFirearm", "ThrownDevice", "TDExplosive", "Magazine"}
+_ATTACHABLE_CLASSES = {"Attachable", "AEmitter", "AEJetpack", "Arm", "Leg", "Turret", "HeldDevice", "HDFirearm", "ThrownDevice", "TDExplosive", "Magazine"}
 _NATIVE_RUNTIME_OWNERS = {
     "MovableObject": _SPRITE_CLASSES | {"MovableObject", "MOPixel"},
     "Actor": _ACTOR_CLASSES, "AHuman": {"AHuman"}, "MOSprite": _SPRITE_CLASSES,
     "MOSRotating": _SPRITE_CLASSES - {"MOSprite", "MOSParticle"}, "HeldDevice": {"HeldDevice", "HDFirearm", "ThrownDevice", "TDExplosive"},
     "HDFirearm": {"HDFirearm"}, "AEmitter": {"AEmitter", "AEJetpack"}, "PieMenu": {"PieMenu"},
+    "Attachable": _ATTACHABLE_CLASSES, "Arm": {"Arm"}, "Leg": {"Leg"}, "Magazine": {"Magazine"}, "AEJetpack": {"AEJetpack"},
+    "PEmitter": {"PEmitter"}, "ACrab": {"ACrab"}, "ACraft": {"ACraft", "ACDropShip", "ACRocket"}, "ACRocket": {"ACRocket"},
+    "ACDropShip": {"ACDropShip"}, "ADoor": {"ADoor"},
 }
 
 
-def inventory_reference_roles(text, state):
+def inventory_reference_roles(text, state, local_seat=0):
     """Map only the local controlled actor and its actual serialized descendants.
 
     UIDs elsewhere stay global identities. The ownership path distinguishes two equal
@@ -558,7 +564,8 @@ def inventory_reference_roles(text, state):
         for slot in links
     ):
         raise ValueError("invalid activity actor-link layout")
-    local_actor = links[0][1]
+    # The GUI belongs to the seat this peer plays; under shared seats that is not seat 0 on every peer.
+    local_actor = links[local_seat][1]
     if not local_actor:
         return {}
     root = {"children": {}, "path": (), "actor": None}
@@ -637,7 +644,7 @@ def runtime_payload(value):
     return raw if re.match(rb"\d+ [A-Za-z0-9_]+ ", raw) else None
 
 
-def runtime_projection(text, name, shared, cross_process=False):
+def runtime_projection(text, name, shared, cross_process=False, local_seat=None, asymmetric_seats=()):
     text = canonical_custom_values(text)
     output, ancestry, projected = [], [], []
     for line in text.splitlines(keepends=True):
@@ -658,8 +665,9 @@ def runtime_projection(text, name, shared, cross_process=False):
             if root or (key == "SpecialBehaviour_RuntimeCheckpoint" and activity) or controller or native or emission or sound or checkpoint:
                 state = snapshot_runtime.decode(decode_base64(value.strip()))
                 masks = []
-                roles = inventory_reference_roles(text, state) if shared and activity else None
-                state = snapshot_runtime.project(state, shared, name.encode(), masked=masks, local_roles=roles, cross_process=cross_process)
+                roles = inventory_reference_roles(text, state, 0 if local_seat is None else local_seat) if shared and activity else None
+                state = snapshot_runtime.project(state, shared, name.encode(), masked=masks, local_roles=roles, cross_process=cross_process,
+                    local_seat=local_seat, asymmetric_seats=asymmetric_seats)
                 if shared and key == "SpecialBehaviour_MOSpriteRuntime" and owner == ("Flash", "Attachable") and len(ancestry) > 1 and ancestry[-2][1] == "HDFirearm":
                     state["frame"] = "LOCAL"
                     masks.append(("frame",))
@@ -672,15 +680,30 @@ def runtime_projection(text, name, shared, cross_process=False):
     return "".join(output), projected
 
 
-# Each peer runs as PlayerOne on its own team, so the local player's slot bindings legitimately
-# differ per peer. Everything else in the Activity block (ActivityState, team funds, generic saved
-# values, CPU team, delivery delay, techs, ...) is sim state and MUST match across peers.
+# Without a seat table each peer runs as PlayerOne on its own team, so the local player's slot bindings
+# legitimately differ per peer. Everything else in the Activity block (ActivityState, team funds, generic
+# saved values, CPU team, delivery delay, techs, ...) is sim state and MUST match across peers. When the
+# peers share one seat table these four are activity state as well and are compared (Activity.cpp:1356-1363).
 _ACTIVITY_LOCAL_VIEW = {
     "TeamOfPlayer1",
     "FundsContributionOfPlayer1",
     "TeamFundsShareOfPlayer1",
     "Player1IsHuman",
 }
+_SEATS = 4
+
+
+def report_local_seat(path: Path) -> int:
+    """The seat a peer's own run report says it plays, joined peer -> seat outside the compared payload."""
+    service = json.loads(Path(path).read_text()).get("service", {})
+    peer = service.get("local_peer_id")
+    seats = service.get("reconnect", {}).get("seat_snapshot", {}).get("seats")
+    if not isinstance(peer, int) or not isinstance(seats, list):
+        raise ValueError(f"{path} has no local peer id and seat snapshot")
+    owned = [seat["stable_seat"] for seat in seats if seat.get("peer_id", seat.get("lockstep_peer_id")) == peer]
+    if len(owned) != 1 or not isinstance(owned[0], int):
+        raise ValueError(f"{path} does not name exactly one seat for peer {peer}")
+    return owned[0]
 
 
 def split_activity_props(block: str) -> dict:
@@ -708,7 +731,24 @@ def compare_main() -> int:
     parser.add_argument("snapshot_b")
     parser.add_argument("--full", action="store_true", help="require the complete per-peer checkpoint, including local AI and presentation")
     parser.add_argument("--report", type=Path, help="write machine-readable comparison evidence")
+    parser.add_argument("--cross-process", action="store_true", help="the archives come from two processes, so reach every payload's wall-clock anchors")
+    for side in ("a", "b"):
+        parser.add_argument(f"--local-seat-{side}", type=int, help=f"the seat snapshot {side}'s peer plays under a shared seat table")
+        parser.add_argument(f"--peer-report-{side}", type=Path, help=f"read that seat from snapshot {side}'s peer run report")
     args = parser.parse_args()
+
+    seats = []
+    for side in ("a", "b"):
+        seat, report = getattr(args, f"local_seat_{side}"), getattr(args, f"peer_report_{side}")
+        if seat is not None and report is not None:
+            raise ValueError(f"--local-seat-{side} and --peer-report-{side} name the same seat twice")
+        seats.append(report_local_seat(report) if report is not None else seat)
+    if (seats[0] is None) != (seats[1] is None):
+        raise ValueError("a shared seat table needs the local seat of both peers")
+    if any(seat is not None and not 0 <= seat < _SEATS for seat in seats):
+        raise ValueError("a local seat is outside the activity's player slots")
+    # Seats only one peer plays hold that peer's own view of the match; seats both or neither play are compared.
+    asymmetric = frozenset(seats) if seats[0] != seats[1] else frozenset()
 
     # The save bakes its OWN file name into the scene/terrain PresetNames — metadata, not sim
     # state. Normalize both to a fixed token before comparing.
@@ -731,7 +771,9 @@ def compare_main() -> int:
             return 1
 
         failures = []
-        details = {"mode": "full" if args.full else "shared", "graphs": {}, "projection": {}}
+        details = {"mode": "full" if args.full else "shared", "graphs": {}, "projection": {},
+            "seat_model": "shared" if seats[0] is not None else "per-peer-player-one",
+            "local_seats": seats, "asymmetric_seats": sorted(asymmetric), "cross_process": args.cross_process}
         activity_diff_lines = 0
         for name in names_a:
             data_a = za.read(name)
@@ -739,8 +781,8 @@ def compare_main() -> int:
             if name == "Save.ini":
                 text_a = normalize_snapshot_name(data_a.decode("utf-8"), base_a)
                 text_b = normalize_snapshot_name(data_b.decode("utf-8"), base_b)
-                text_a, runtime_a = runtime_projection(text_a, base_a, not args.full)
-                text_b, runtime_b = runtime_projection(text_b, base_b, not args.full)
+                text_a, runtime_a = runtime_projection(text_a, base_a, not args.full, args.cross_process, seats[0], asymmetric)
+                text_b, runtime_b = runtime_projection(text_b, base_b, not args.full, args.cross_process, seats[1], asymmetric)
                 details["runtime_projection"] = {"a": runtime_a, "b": runtime_b}
                 blocks_a = split_top_level(text_a)
                 blocks_b = split_top_level(text_b)
@@ -776,7 +818,8 @@ def compare_main() -> int:
                             failures.append("Lua VM indexes differ")
                         for index in sorted(graphs_a.keys() & graphs_b.keys()):
                             try:
-                                details["graphs"][str(index)] = compare_graphs(graphs_a[index], graphs_b[index], None if args.full else actor_uids)
+                                details["graphs"][str(index)] = compare_graphs(graphs_a[index], graphs_b[index],
+                                    None if args.full else actor_uids, args.cross_process)
                             except GraphMismatch as error:
                                 failures.append(f"Lua VM {index}: {error}")
                         continue
@@ -793,7 +836,8 @@ def compare_main() -> int:
                         for prop in sorted(set(props_a) | set(props_b)):
                             if props_a.get(prop, []) == props_b.get(prop, []):
                                 continue
-                            if prop in _ACTIVITY_LOCAL_VIEW and not args.full and prop in props_a and prop in props_b and len(props_a[prop]) == len(props_b[prop]):
+                            if (prop in _ACTIVITY_LOCAL_VIEW and seats[0] is None and not args.full
+                                    and prop in props_a and prop in props_b and len(props_a[prop]) == len(props_b[prop])):
                                 activity_diff_lines += 1
                             else:
                                 failures.append(
