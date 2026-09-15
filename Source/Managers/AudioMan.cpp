@@ -49,6 +49,10 @@
 using namespace RTE;
 
 namespace {
+	void ClearPendingAudioArchives();
+}
+
+namespace {
 	thread_local const char* s_RestorePlayPhase = "";
 	int s_RestorePlayCount = 0;
 
@@ -140,6 +144,7 @@ void AudioMan::Clear() {
 	m_LastSentAudibility.clear();
 	m_AudioEnabled = false;
 	m_PlayingVoices.clear();
+	ClearPendingAudioArchives();
 	m_BackendVoiceIdentities.clear();
 	m_NextVoiceIdentity = 0;
 	m_CurrentActivityHumanPlayerPositions.clear();
@@ -275,6 +280,7 @@ bool AudioMan::Initialize() {
 }
 
 void AudioMan::Destroy() {
+	ClearPendingAudioArchives();
 	if (m_AudioEnabled) {
 		StopAll();
 		ContentFile::FreeAllLoadedSounds();
@@ -1608,6 +1614,10 @@ void AudioMan::StopAll() {
 		for (SoundContainer* container: live) container->Stop();
 		// The physical stop is presentation on this machine, exactly as it always was.
 		if (m_AudioEnabled && !s_PlaybackSuppressed) m_MasterChannelGroup->stop();
+		std::vector<int> awaiting;
+		for (const auto& [identity, voice]: m_PlayingVoices) if (voice.awaitingSample) awaiting.push_back(identity);
+		for (int identity: awaiting) RetireVoice(identity);
+		ClearPendingAudioArchives();
 		return;
 	}
 	{
@@ -1616,6 +1626,10 @@ void AudioMan::StopAll() {
 		m_ActiveLogicalSounds.clear();
 	}
 	if (m_AudioEnabled && !s_PlaybackSuppressed) m_MasterChannelGroup->stop();
+	std::vector<int> awaiting;
+	for (const auto& [identity, voice]: m_PlayingVoices) if (voice.awaitingSample) awaiting.push_back(identity);
+	for (int identity: awaiting) RetireVoice(identity);
+	ClearPendingAudioArchives();
 }
 
 void AudioMan::PauseIngameSounds(bool pause) {
@@ -1639,11 +1653,6 @@ namespace {
 	FMOD::Sound* MakeHeldPendingSound(FMOD::System* system) {
 		if (!system) return nullptr;
 		FMOD::Sound* sound = nullptr;
-		if (system->createSound("Data/Base.rte/Sounds/GUIs/__pending_audio_checkpoint.flac", FMOD_CREATESAMPLE | FMOD_3D | FMOD_NONBLOCKING, nullptr, &sound) == FMOD_OK && sound) {
-			if (!SampleReadyForPlayback(sound)) return sound;
-			sound->release();
-			sound = nullptr;
-		}
 		FMOD_CREATESOUNDEXINFO info{};
 		info.cbsize = sizeof(info);
 		info.length = 2048;
@@ -1652,12 +1661,28 @@ namespace {
 		info.format = FMOD_SOUND_FORMAT_PCM16;
 		info.pcmreadcallback = PendingSamplePcmRead;
 		if (system->createSound(nullptr, FMOD_OPENUSER | FMOD_3D | FMOD_NONBLOCKING, &info, &sound) != FMOD_OK || !sound) return nullptr;
-		if (SampleReadyForPlayback(sound)) {
+		FMOD_OPENSTATE open = FMOD_OPENSTATE_ERROR;
+		if (sound->getOpenState(&open, nullptr, nullptr, nullptr) != FMOD_OK || open == FMOD_OPENSTATE_READY || open == FMOD_OPENSTATE_PLAYING || open == FMOD_OPENSTATE_ERROR) {
 			sound->release();
 			return nullptr;
 		}
 		return sound;
 	}
+
+	void ClearPendingAudioArchives() {
+		s_AwaitingSampleVoices.clear();
+		s_PendingSamples.clear();
+	}
+
+	FMOD_OPENSTATE CachedSampleOpenState(FMOD::Sound* sound) {
+		FMOD_OPENSTATE open = FMOD_OPENSTATE_ERROR;
+		if (!sound || sound->getOpenState(&open, nullptr, nullptr, nullptr) != FMOD_OK) return FMOD_OPENSTATE_ERROR;
+		return open;
+	}
+}
+
+std::pair<int, int> AudioMan::PendingAudioCount() const {
+	return {static_cast<int>(s_AwaitingSampleVoices.size()), static_cast<int>(s_PendingSamples.size())};
 }
 
 void AudioMan::RetireVoice(int identity) {
@@ -1679,15 +1704,22 @@ void AudioMan::StartAwaitingSampleVoices() {
 	const std::array<FMOD::ChannelGroup*, 3> buses = {m_SFXChannelGroup, m_UIChannelGroup, m_MusicChannelGroup};
 	AudioCheckpoint::MixerLock mixer(m_AudioSystem);
 	std::vector<std::string> appliedSamples;
+	std::vector<std::string> droppedSamples;
 	for (auto& [path, sample]: s_PendingSamples) {
 		const auto cached = ContentFile::s_LoadedSamples.find(path);
 		FMOD::Sound* sound = cached == ContentFile::s_LoadedSamples.end() ? nullptr : cached->second;
+		if (CachedSampleOpenState(sound) == FMOD_OPENSTATE_ERROR) {
+			droppedSamples.push_back(path);
+			continue;
+		}
 		if (!SampleReadyForPlayback(sound)) continue;
 		sample.Apply(sound);
 		appliedSamples.push_back(path);
 	}
 	for (const auto& path: appliedSamples) s_PendingSamples.erase(path);
+	for (const auto& path: droppedSamples) s_PendingSamples.erase(path);
 	std::vector<int> started;
+	std::vector<int> dropped;
 	for (auto& [identity, description]: s_AwaitingSampleVoices) {
 		const auto found = m_PlayingVoices.find(identity);
 		if (found == m_PlayingVoices.end() || !found->second.awaitingSample) {
@@ -1696,6 +1728,13 @@ void AudioMan::StartAwaitingSampleVoices() {
 		}
 		const auto cached = ContentFile::s_LoadedSamples.find(description.path);
 		FMOD::Sound* sound = cached == ContentFile::s_LoadedSamples.end() ? nullptr : cached->second;
+		const FMOD_OPENSTATE open = CachedSampleOpenState(sound);
+		if (!sound || open == FMOD_OPENSTATE_ERROR) {
+			std::cout << "[audio] deferred voice dropped: " << description.path << " state=" << static_cast<int>(open) << std::endl;
+			dropped.push_back(identity);
+			s_PendingSamples.erase(description.path);
+			continue;
+		}
 		if (!SampleReadyForPlayback(sound)) continue;
 		FMOD::Channel* channel = nullptr;
 		if (m_AudioSystem->playSound(sound, buses[description.bus], true, &channel) != FMOD_OK || !channel) continue;
@@ -1710,6 +1749,7 @@ void AudioMan::StartAwaitingSampleVoices() {
 		AudioCheckpoint::Effect::ApplyActivation(channel, description.control.effects);
 		started.push_back(identity);
 	}
+	for (int identity: dropped) RetireVoice(identity);
 	for (int identity: started) s_AwaitingSampleVoices.erase(identity);
 }
 
@@ -2448,6 +2488,77 @@ bool AudioMan::RunCheckpointSelfTest() {
 			AudioCheckpoint::Require(GetVoiceChannel(identity, &originalChannel));
 		} catch (const std::exception& error) {
 			std::cout << "[audio-checkpoint-selftest] FAIL loading_sample_is_archived " << error.what() << std::endl;
+			ok = false;
+		}
+		try {
+			std::unique_ptr<SoundContainer> errorOwner(static_cast<SoundContainer*>(preset->Clone()));
+			errorOwner->SetPaused(true); errorOwner->SetImmobile(true); errorOwner->SetLoopSetting(0);
+			if (!errorOwner->Play()) throw std::runtime_error("error-sample voice did not play");
+			const int errorId = *errorOwner->GetPlayingChannels()->begin();
+			const std::string errorPath = m_PlayingVoices.at(errorId).soundPath;
+			FMOD::Sound* errorSound = nullptr;
+			if (m_AudioSystem->createSound("Data/Base.rte/Sounds/GUIs/__missing_deferred_voice.flac", FMOD_CREATESAMPLE | FMOD_3D | FMOD_NONBLOCKING, nullptr, &errorSound) != FMOD_OK || !errorSound) {
+				throw std::runtime_error("could not open a missing non-blocking sample");
+			}
+			FMOD_OPENSTATE errorState = FMOD_OPENSTATE_READY;
+			for (int spin = 0; spin < 64; ++spin) {
+				AudioCheckpoint::Require(m_AudioSystem->update());
+				if (errorSound->getOpenState(&errorState, nullptr, nullptr, nullptr) == FMOD_OK && errorState == FMOD_OPENSTATE_ERROR) break;
+			}
+			if (errorState != FMOD_OPENSTATE_ERROR) {
+				errorSound->release();
+				throw std::runtime_error("missing non-blocking sample did not reach ERROR");
+			}
+			FMOD::Sound* ready = nullptr;
+			const auto cached = ContentFile::s_LoadedSamples.find(errorPath);
+			if (cached != ContentFile::s_LoadedSamples.end()) ready = cached->second;
+			const std::string beforeError = SaveCheckpoint();
+			ContentFile::s_LoadedSamples[errorPath] = errorSound;
+			std::string errorSaved;
+			std::string errorRefusal;
+			const bool savedError = [&]() {
+				try { errorSaved = SaveCheckpoint(); return true; } catch (...) { return false; }
+			}();
+			bool dropped = false;
+			if (savedError) {
+				const bool loaded = LoadCheckpoint(errorSaved, false, nullptr, &errorRefusal);
+				Update();
+				dropped = loaded && !m_PlayingVoices.contains(errorId);
+			}
+			ContentFile::s_LoadedSamples[errorPath] = ready;
+			if (errorSound) errorSound->release();
+			if (errorOwner->IsBeingPlayed()) errorOwner->Stop();
+			if (!LoadCheckpoint(beforeError)) throw std::runtime_error("error-sample row did not restore the prior audio checkpoint");
+			reportArm("deferred_voice_drops_on_sample_error", dropped);
+		} catch (const std::exception& error) {
+			std::cout << "[audio-checkpoint-selftest] FAIL deferred_voice_drops_on_sample_error " << error.what() << std::endl;
+			ok = false;
+		}
+		try {
+			std::unique_ptr<SoundContainer> pendingOwner(static_cast<SoundContainer*>(preset->Clone()));
+			pendingOwner->SetPaused(true); pendingOwner->SetImmobile(true); pendingOwner->SetLoopSetting(-1);
+			if (!pendingOwner->Play()) throw std::runtime_error("match-start pending voice did not play");
+			const int pendingId = *pendingOwner->GetPlayingChannels()->begin();
+			const std::string pendingPath = m_PlayingVoices.at(pendingId).soundPath;
+			FMOD::Sound* pending = MakeHeldPendingSound(m_AudioSystem);
+			if (!pending) throw std::runtime_error("could not hold a non-ready sample for match-start clear");
+			FMOD::Sound* ready = nullptr;
+			const auto cached = ContentFile::s_LoadedSamples.find(pendingPath);
+			if (cached != ContentFile::s_LoadedSamples.end()) ready = cached->second;
+			const std::string beforePending = SaveCheckpoint();
+			ContentFile::s_LoadedSamples[pendingPath] = pending;
+			std::string pendingSaved = SaveCheckpoint();
+			const bool loaded = LoadCheckpoint(pendingSaved, false, nullptr, nullptr);
+			const auto held = PendingAudioCount();
+			StopAll();
+			const auto cleared = PendingAudioCount();
+			ContentFile::s_LoadedSamples[pendingPath] = ready;
+			if (pending) pending->release();
+			if (pendingOwner->IsBeingPlayed()) pendingOwner->Stop();
+			if (!LoadCheckpoint(beforePending)) throw std::runtime_error("match-start row did not restore the prior audio checkpoint");
+			reportArm("pending_audio_clears_on_match_start", loaded && (held.first > 0 || held.second > 0) && cleared.first == 0 && cleared.second == 0);
+		} catch (const std::exception& error) {
+			std::cout << "[audio-checkpoint-selftest] FAIL pending_audio_clears_on_match_start " << error.what() << std::endl;
 			ok = false;
 		}
 		AudioCheckpoint::Require(GetVoiceChannel(identity, &originalChannel));
