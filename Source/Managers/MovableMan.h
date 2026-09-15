@@ -337,6 +337,8 @@ namespace RTE {
 			bool flipped = false;
 			int64_t fg = 0;
 			int64_t bg = 0;
+			unsigned int hatch = 0;
+			int64_t hatchTimerStart = 0;
 		};
 		/// Reads the boundary state before the owner's AI pass runs.
 		static ControllerBoundaryBaseline CaptureControllerBoundary(Actor* actor);
