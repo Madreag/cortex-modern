@@ -1647,6 +1647,9 @@ namespace RTE {
 				g_CurrentAIActor = nullptr;
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
 				ScenarioRunner::DrainLocalGameCommands();
+				// These two are not on a scene, so they leave the object registry with the arm.
+				g_MovableMan.UnregisterObject(ownerView);
+				g_MovableMan.UnregisterObject(peerView);
 				if (message) *error = message;
 				return message == nullptr;
 			};
@@ -1657,13 +1660,12 @@ namespace RTE {
 			peerView->SetTeam(0);
 			ownerView->GetController()->SetControlledActor(ownerView);
 			peerView->GetController()->SetControlledActor(peerView);
-			// The Lua spawn path: MovableMan:AddActor never marks a craft as a network delivery.
-			g_MovableMan.AddActor(ownerView);
 			ScenarioRunner::SetLockstepCoordinator(&host);
 			ScenarioRunner::DrainLocalGameCommands();
 			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
 				return finish("coordinator is not running");
 			}
+			// A craft MovableMan:AddActor puts in the world is never marked as a network delivery.
 			if (ownerView->IsNetworkDelivery() || peerView->IsNetworkDelivery()) {
 				return finish("a Lua-spawned craft must not be a network delivery");
 			}
