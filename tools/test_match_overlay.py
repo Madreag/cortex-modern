@@ -269,9 +269,9 @@ def probe_script(who, size, arm, mode):
             # The driver drops the guest on this signal, so the host is always past 290 when its link dies.
             steps += [{"op": "wait", "sim_at_least": 290}, {"op": "signal", "name": DROP_SIGNAL}]
             if mode == "off":
-                # The hold toast is the required banner in Off; the widget stays away.
+                # The drop toast is the required banner in Off; the widget stays away.
                 steps += [{"op": "wait", "control": TOAST, "equals": {"visible": True}},
-                          label_assert(TOAST, "waiting for"), hidden,
+                          label_assert(TOAST, "dropped"), hidden,
                           {"op": "screenshot", "name": "widget-hold-off-host"}]
             else:
                 steps += [
@@ -521,7 +521,7 @@ def inspect_pair(root, records, size, arm, mode, name):
                           if step.get("control") == STATUS and obs.get("control", {}).get("visible")
                           and ("WAITING FOR" in obs["control"].get("text", "") or "Waiting for" in obs["control"].get("text", ""))]
             hold_toast_reads = [obs for step, obs in observations
-                                if step.get("control") == TOAST and "waiting for" in obs.get("control", {}).get("text", "")]
+                                if step.get("control") == TOAST and "dropped" in obs.get("control", {}).get("text", "")]
             details["events"].setdefault(who, {})["hold_reads"] = hold_reads
             details["events"][who]["hold_toast_reads"] = hold_toast_reads
             if who == "Host":
