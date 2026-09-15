@@ -31,6 +31,7 @@ extern "C" {
 #include "lj_jit.h"
 #include "lj_dispatch.h"
 #include "lj_trace.h"
+#include "lj_bc.h"
 }
 
 #include <iostream>
@@ -395,6 +396,13 @@ assert(seen > 0, 'no trace event after forced abort path seen='..tostring(seen).
 			{
 				jit_State* J = L2J(L);
 				global_State* g = G(L);
+				J->cur.traceno = 0;
+				J->parent = 0;
+				J->exitno = 0;
+				J->curfinal = NULL;
+				setgcrefnull(J->cur.startpt);
+				setmrefu(J->cur.startpc, 0);
+				J->cur.startins = BC_RET;
 				J->state = LJ_TRACE_RECORD;
 				lj_dispatch_update(g);
 				lj_trace_abort_leftover(L);
