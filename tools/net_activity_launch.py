@@ -195,6 +195,9 @@ COMPACT_WAIT_BANNER = "TO PLACE"
 COMPACT_MAX_HEIGHT = 480
 # Both seats, in the order the roster seats them, as the strip names them while neither has placed.
 PLACEMENT_NAMES = "Host, Client"
+# The client's placement waits on this signal from the host's probe, so the waiting window never
+# depends on either peer's pacing.
+WAITING_SEEN_SIGNAL = "host_waiting_seen"
 
 
 def wait_banner(resolution):
@@ -211,7 +214,8 @@ def shots(peer, name):
             {"op": "screenshot", "name": f"{peer}_{name}_world", "composited": True}]
 
 
-def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusal=False, resolution=None):
+def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusal=False, resolution=None,
+                  host_signal=None):
     """The UI probe script that drives this peer's own seat through the setup editor, the way a player does."""
     seat = EDITOR_SEATS[peer]
     player = seat["player"]
@@ -251,6 +255,8 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
         steps += shots(peer, "refusal")
     if place_after:
         steps.append({"op": "wait", "sim_at_least": place_after})
+    if peer != "host" and host_signal:
+        steps.append({"op": "wait_file", "path": str(host_signal)})
     steps += [{"op": "editor_place_brain", "player": player, "x_fraction": seat["x_fraction"],
                "class": seat["cls"], "preset": seat["preset"], "module": "Base.rte"},
               # Placing alone commits nothing: the wire only carries the seat's DONE.
@@ -263,17 +269,23 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
         steps += shots(peer, "ready")
     steps += [{"op": "assert_editor", "player": player, "equals": {"ready": True, "submitted": True}}]
     if peer == "host":
-        # The host places first, so while the client is still placing its screen must carry the stock READY
-        # line and its own strip must name who the held world is waiting for.
-        steps += [{"op": "assert", "equals": {"editing": True}},
+        # The client still holds its placement on the signal below, so a seat is unready here: the
+        # strip's count is the wire's report of that, and it only draws while the editor is open.
+        steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "text_contains": "1 of 2",
+                   "equals": {"visible": True}},
+                  {"op": "assert", "equals": {"editing": True}},
                   {"op": "wait", "player": player, "seat_text_contains": READY_TEXT},
                   {"op": "assert_control", "control": "LabelNetMatchStatus", "text_contains": wait_banner(resolution),
                    "equals": {"visible": True}, "fits": True}]
         if capture:
             steps += shots(peer, "waiting_banner")
+        steps.append({"op": "signal", "name": WAITING_SEEN_SIGNAL})
     if not finish_at_ready:
-        # The arm that plays on: the match leaves the editor and runs.
-        steps += [{"op": "wait", "editing": False}, {"op": "wait", "sim_at_least": 200}]
+        # The arm that plays on: both seats done, so the editor has closed and the match runs.
+        steps.append({"op": "wait", "editing": False})
+        if peer == "host":
+            steps.append({"op": "assert", "equals": {"editing": False}})
+        steps.append({"op": "wait", "sim_at_least": 200})
         if capture:
             steps += shots(peer, "match_started")
     steps.append({"op": "finish"})
@@ -493,9 +505,13 @@ def launch(options):
                 # The client holds the world in the editor long enough for the hold itself to be under test.
                 script = root / (peer + "-ui") / "ui-script.json"
                 script.parent.mkdir(parents=True, exist_ok=False)
-                delay = 0 if options.variant == "resync-skirmish" else ((90 if hold_desync else 45) if peer == "client" else 0)
+                # resync-skirmish seats both place past the injected desync (tick 50, resync ~tick 60):
+                # the resync has to land while the seats are still placing, so the hold outlasts it.
+                delay = 90 if options.variant == "resync-skirmish" else ((90 if hold_desync else 45) if peer == "client" else 0)
                 script.write_text(json.dumps(editor_script(peer, captures, delay, hold_desync and not hold_resync,
-                                                           options.variant == "wire-refusal", resolution), indent=2), encoding="utf-8")
+                                                           options.variant == "wire-refusal", resolution,
+                                                           host_signal=root / "host-ui" / (WAITING_SEEN_SIGNAL + ".json")),
+                                             indent=2), encoding="utf-8")
                 env["CC_TEST_NET_UI_SCRIPT"] = str(script)
             if hold_desync and peer == "host":
                 # One genuine divergence inside the hold: the held ticks' own hashes have to catch it.
