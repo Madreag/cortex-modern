@@ -1,8 +1,12 @@
 #include "SettingsNetworkGUI.h"
 #include "SettingsMan.h"
 #include "NetMatchConfig.h"
+#include "NetMatchService.h"
+#include "NetReconnectUx.h"
+#include "NetLockstep.h"
 
 #include "GUI.h"
+#include "GUIButton.h"
 #include "GUICollectionBox.h"
 #include "GUICheckbox.h"
 #include "GUIComboBox.h"
@@ -13,6 +17,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <string>
 
 using namespace RTE;
 
@@ -79,6 +84,15 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_ChatTextSizeCombo->AddItem("Small");
 	m_ChatTextSizeCombo->AddItem("Large");
 
+	m_AutoReconnectCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkAutoReconnect"));
+	m_OfferRejoinCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkOfferRejoin"));
+	m_LastHostLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetLastHost"));
+	m_RecoveryRecordLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetRecoveryRecord"));
+	m_RecoveryStatusLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetRecoveryStatus"));
+	m_RecoveryError = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetRecoveryError"));
+	m_RejoinButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonNetRejoin"));
+	m_CancelRecoveryButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonNetCancelRecovery"));
+
 	const auto rowTop = [](GUIControl* control) {
 		int x = 0, y = 0, width = 0, height = 0;
 		control->GetControlRect(&x, &y, &width, &height);
@@ -117,6 +131,8 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_ChatNotifyCheckbox->SetCheck(g_SettingsMan.GetNetworkChatNotify());
 	m_ChatScopeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkChatDefaultScope()));
 	m_ChatTextSizeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkChatTextSize()));
+	m_AutoReconnectCheckbox->SetCheck(g_SettingsMan.GetNetworkAutoReconnect());
+	m_OfferRejoinCheckbox->SetCheck(g_SettingsMan.GetNetworkOfferStoredRejoin());
 	UpdateDelayPolicyRow();
 	UpdateStatusLines();
 }
@@ -161,13 +177,51 @@ void SettingsNetworkGUI::SetActivePage(Page page) {
 		m_PageBoxes[index]->SetVisible(index == static_cast<int>(page));
 		m_PageTabs[index]->SetCheck(index == static_cast<int>(page));
 	}
+	m_RecoveryError->SetText("");
 	UpdateStatusLines();
 }
 
 void SettingsNetworkGUI::UpdateStatusLines() {
+	NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
+	m_LastHostLabel->SetText(reconnect.GetOfferAddress().empty() ? "-" : reconnect.GetOfferAddress());
+	const char* record = "-";
+	switch (reconnect.GetOffer()) {
+		case NetReconnectOffer::Available: record = "Rejoin available"; break;
+		case NetReconnectOffer::Corrupt: record = "Unreadable"; break;
+		case NetReconnectOffer::Stale: record = "Expired"; break;
+		case NetReconnectOffer::Missing: record = "No recovery record"; break;
+		default: break;
+	}
+	m_RecoveryRecordLabel->SetText(record);
+	const std::string status = reconnect.GetStatusText();
+	m_RecoveryStatusLabel->SetText(status.empty() ? "-" : status);
+	m_RejoinButton->SetEnabled(reconnect.GetOffer() == NetReconnectOffer::Available || reconnect.CanRetryManually());
+	m_CancelRecoveryButton->SetEnabled(reconnect.CanCancel());
 }
 
 void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
+	if (guiEvent.GetType() == GUIEvent::Command) {
+		if (guiEvent.GetControl() == m_RejoinButton) {
+			NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
+			reconnect.RequestManualRetry(NetLockstepNowMs());
+			reconnect.DismissOffer();
+			std::string rejoinError;
+			if (!g_NetMatchService.BeginTicketRejoin(&rejoinError)) {
+				reconnect.NoteAttemptFailed(NetLockstepNowMs(), rejoinError);
+				m_RecoveryError->SetText(rejoinError.empty() ? "Rejoin failed." : rejoinError);
+			} else {
+				reconnect.NoteAttemptStarted(NetLockstepNowMs());
+			}
+		} else if (guiEvent.GetControl() == m_CancelRecoveryButton) {
+			NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
+			reconnect.Cancel(NetLockstepNowMs());
+			reconnect.DismissOffer();
+		} else {
+			return;
+		}
+		UpdateStatusLines();
+		return;
+	}
 	if (guiEvent.GetType() != GUIEvent::Notification) {
 		return;
 	}
@@ -201,6 +255,10 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		g_SettingsMan.SetNetworkChatDefaultScope(static_cast<SettingsMan::NetworkChatDefaultScope>(m_ChatScopeCombo->GetSelectedIndex()));
 	} else if (guiEvent.GetControl() == m_ChatTextSizeCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
 		g_SettingsMan.SetNetworkChatTextSize(static_cast<SettingsMan::NetworkChatTextSize>(m_ChatTextSizeCombo->GetSelectedIndex()));
+	} else if (guiEvent.GetControl() == m_AutoReconnectCheckbox) {
+		g_SettingsMan.SetNetworkAutoReconnect(m_AutoReconnectCheckbox->GetCheck());
+	} else if (guiEvent.GetControl() == m_OfferRejoinCheckbox) {
+		g_SettingsMan.SetNetworkOfferStoredRejoin(m_OfferRejoinCheckbox->GetCheck());
 	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_FixedDelayTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
 		ApplyTextboxes();
 		// Clicking off a focused text box must commit it too, otherwise it keeps the keyboard.

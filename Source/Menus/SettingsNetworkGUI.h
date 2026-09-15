@@ -80,6 +80,7 @@ namespace RTE {
 		GUILabel* m_LastHostLabel;
 		GUILabel* m_RecoveryRecordLabel;
 		GUILabel* m_RecoveryStatusLabel;
+		GUILabel* m_RecoveryError;
 		GUIButton* m_RejoinButton;
 		GUIButton* m_CancelRecoveryButton;
 
