@@ -2614,6 +2614,26 @@ namespace RTE {
 			if (target->GetWaypointsSize() != 1 || peerTarget->GetWaypointsSize() != 1) {
 				return finish("the writerUID op must apply on both fixtures");
 			}
+
+			// The same writer's message and gib take the same road: the peer that drives the writing
+			// actor may send them even though another peer commands the team. The plain team gate alone
+			// would drop both here, which is what tells the two gates apart.
+			g_CurrentAIActor = writer;
+			target->SendScriptedMessage("AI_IsFlying", NetGameAIScriptMessage::Boolean, 1.0, 0, "", nullptr);
+			peerTarget->GibThisFromScript();
+			g_CurrentAIActor = nullptr;
+			writer->SendDeferredScriptMessages();
+			writer->SendDeferredGibs();
+			const std::vector<NetGameCommand> writes = ScenarioRunner::DrainLocalGameCommands();
+			if (writes.size() != 2) {
+				return finish("an owned writer's message and gib did not reach the wire");
+			}
+			const NetGameAIScriptMessage* carried = std::get_if<NetGameAIScriptMessage>(&writes[0].payload);
+			const NetGameAIGib* gib = std::get_if<NetGameAIGib>(&writes[1].payload);
+			if (!carried || carried->writerUID != writerUID || carried->objectUID != targetUID ||
+			    !gib || gib->writerUID != writerUID || gib->objectUID != static_cast<int64_t>(peerTarget->GetUniqueID())) {
+				return finish("the owned writer's message and gib do not name it as the writer");
+			}
 			std::cout << "[net-lockstep-selftest] PASS an_owned_writer_may_write_another_owner_s_actor writer=" << writerUID << " target=" << targetUID << std::endl;
 			return finish(nullptr);
 		}
