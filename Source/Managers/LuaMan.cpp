@@ -5035,6 +5035,18 @@ void LuaMan::Initialize() {
 	}
 }
 
+void LuaStateWrapper::VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	if (m_State) VisitScriptOwnedObjects(m_State, visit);
+}
+
+void LuaMan::VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit) {
+	m_MasterScriptState.VisitScriptHeldMovableObjects(visit);
+	for (LuaStateWrapper& state: m_ScriptStates) {
+		state.VisitScriptHeldMovableObjects(visit);
+	}
+}
+
 LuaStateWrapper& LuaMan::GetMasterScriptState() {
 	return m_MasterScriptState;
 }
