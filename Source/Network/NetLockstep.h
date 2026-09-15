@@ -485,6 +485,10 @@ namespace RTE {
 		// per-frame maps without bound.
 		static constexpr uint64_t c_MaxFutureFrameSkew = 4ULL * c_MaxInputDelayFrames;
 
+		/// Whether a string can ride the wire as a field, asked with the encoder's own rule so a caller
+		/// that must not queue an unsendable call never keeps a second copy of it.
+		static bool IsWireString(const std::string& value, size_t maxBytes);
+
 		static NetLockstepPacketType PacketTypeOf(const NetLockstepPayload& payload);
 		static const char* PacketTypeName(NetLockstepPacketType type);
 		static const char* StopReasonName(NetLockstepStopReason reason);

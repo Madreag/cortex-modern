@@ -32,6 +32,7 @@
 #include "PostProcessMan.h"
 
 #include "NetGameCommand.h"
+#include "NetLockstep.h"
 #include "Base64/base64.h"
 #include "tracy/Tracy.hpp"
 
@@ -1542,12 +1543,19 @@ void MovableObject::GibThisFromScript(const Vector& impactImpulse, MovableObject
 void MovableObject::SendScriptedMessage(const std::string& message, uint8_t context, double number, int64_t contextUID, const std::string& text, LuabindObjectWrapper* directContext) {
 	// The pass runs on the machine that owns the actor while the receiver's script runs on every peer, so
 	// the message crosses the wire and every peer delivers it at the committed tick.
-	if (context < NetGameAIScriptMessage::ContextCount && Actor::QueueAIPassScriptMessage(this, context, number, contextUID, message, text)) {
+	// The wire cannot carry every string Lua can make one: an empty name the decoder refuses, a name or
+	// a text over the field's length, a control character. Asked with the codec's own rule so the two
+	// cannot drift, and a call it refuses is made here instead of silently killing the whole frame.
+	const bool wireCanCarry = context < NetGameAIScriptMessage::ContextCount && !message.empty() &&
+	                          NetLockstepCodec::IsWireString(message, NetLockstepCodec::c_MaxValueKeyBytes) &&
+	                          NetLockstepCodec::IsWireString(text, NetLockstepCodec::c_MaxValueStringBytes);
+	if (wireCanCarry && Actor::QueueAIPassScriptMessage(this, context, number, contextUID, message, text)) {
 		return;
 	}
 	if (Actor::DeferringAIPassWrite(nullptr)) {
-		// A context or a receiver no peer can name the same way cannot ride the wire: a table context, an
-		// object the world does not hold. The call stays where it was made, and says so.
+		// A context, a name or a receiver no peer can name the same way cannot ride the wire: a table
+		// context, a control character, an object the world does not hold. The call stays where it was
+		// made, and says so.
 		g_MovableMan.ReportControllerBoundaryViolation("a script message the wire cannot carry", dynamic_cast<const Actor*>(this));
 	}
 	if (directContext) {
