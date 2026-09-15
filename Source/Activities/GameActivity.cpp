@@ -3165,6 +3165,16 @@ void GameActivity::SetNetworkPlayerName(int player, std::string name) {
 		m_NetworkPlayerNames[player] = std::move(name);
 }
 
+namespace {
+// Whether a restored UI object says it was built; a banner has no such flag and rebuilds its font safely.
+template <class T> bool CheckpointMenuBuilt(const T* menu) {
+	if constexpr (requires { menu->IsCheckpointInitialized(); })
+		return menu->IsCheckpointInitialized();
+	else
+		return false;
+}
+}
+
 std::string GameActivity::SaveValueCheckpoint() const {
 	CheckpointWriter writer("GameActivity3");
 	writer(Activity::SaveCheckpoint());
@@ -3198,7 +3208,16 @@ bool GameActivity::LoadValueCheckpoint(std::string_view text, bool validateOnly)
 				if (state.empty()) { delete target; target = nullptr; }
 				else {
 					if (!target) target = new T();
+					const bool built = CheckpointMenuBuilt(target);
 					if (!target->LoadCheckpoint(state)) throw std::runtime_error("could not apply activity UI checkpoint: " + label);
+					// A menu the saving peer never built says so in its state, and a live one would then own a
+					// layout it claims not to have - the local UI restore builds a second one over those very
+					// controls. Replace it instead, so the menu and its state agree.
+					if (built && !CheckpointMenuBuilt(target)) {
+						delete target;
+						target = new T();
+						if (!target->LoadCheckpoint(state)) throw std::runtime_error("could not apply activity UI checkpoint: " + label);
+					}
 				}
 			});
 		};
