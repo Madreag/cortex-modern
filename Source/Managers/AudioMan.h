@@ -12,6 +12,7 @@
 #include "fmod/fmod.hpp"
 #include <functional>
 #include <map>
+#include <mutex>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
@@ -78,9 +79,9 @@ namespace RTE {
 		float GetCommittedAudibility(const SoundContainer& container) const;
 		size_t GetCommittedAudibilityCount() const { return m_CommittedAudibility.size(); }
 		void ClearCommittedAudibility();
-		uint64_t GetCheckpointSoundContainerCursor() const { return m_NextSoundContainerIdentity; }
-		void SetCheckpointSoundContainerCursor(uint64_t value) { m_NextSoundContainerIdentity = value; }
-		CheckpointSoundRegistry CaptureCheckpointSoundRegistry() const { return m_CheckpointSoundContainers; }
+		uint64_t GetCheckpointSoundContainerCursor() const { std::lock_guard lock(m_CheckpointRegistryMutex); return m_NextSoundContainerIdentity; }
+		void SetCheckpointSoundContainerCursor(uint64_t value) { std::lock_guard lock(m_CheckpointRegistryMutex); m_NextSoundContainerIdentity = value; }
+		CheckpointSoundRegistry CaptureCheckpointSoundRegistry() const { std::lock_guard lock(m_CheckpointRegistryMutex); return m_CheckpointSoundContainers; }
 		CheckpointSoundRegistry AddedCheckpointSoundRegistrations(const CheckpointSoundRegistry& original) const;
 		void RestoreCheckpointSoundRegistry(CheckpointSoundRegistry original);
 		void ActivateCheckpointSoundRegistrations(const CheckpointSoundRegistry& candidates);
@@ -492,6 +493,8 @@ namespace RTE {
 		std::map<int, PlayingVoice> m_PlayingVoices;
 		std::unordered_map<int, int> m_BackendVoiceIdentities;
 		int m_NextVoiceIdentity = 0;
+		// A Lua GC finalizer frees sound containers on whichever pool thread collects its state, and several states collect at once, so every read and write below is locked.
+		mutable std::recursive_mutex m_CheckpointRegistryMutex;
 		CheckpointSoundRegistry m_CheckpointSoundContainers;
 		std::unordered_map<const SoundContainer*, uint64_t> m_LiveCheckpointSoundContainers;
 		CheckpointSoundRegistry m_RestoredSoundContainers;

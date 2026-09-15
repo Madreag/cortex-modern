@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <atomic>
 #include <cstring>
 #include <functional>
 #include <iostream>
@@ -10662,6 +10663,74 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		bool TestSoundRegistrySurvivesConcurrentRelease(std::string* error) {
+			const char* name = "sound_registry_survives_concurrent_release";
+			const uint64_t startCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+			auto finish = [&](const char* message) {
+				g_AudioMan.SetCheckpointSoundContainerCursor(startCursor);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+
+			// A Lua GC finalizer frees sound containers on whichever pool thread collects its state, and
+			// LuaMan::StartAsyncGarbageCollection collects every state at once, so releases really do overlap.
+			constexpr int releaseThreads = 8;
+			constexpr int perThread = 300;
+			const auto before = g_AudioMan.CaptureCheckpointSoundRegistry();
+			std::vector<std::vector<std::unique_ptr<SoundContainer>>> owned(releaseThreads);
+			std::vector<uint64_t> identities;
+			for (int thread = 0; thread < releaseThreads; ++thread) {
+				for (int index = 0; index < perThread; ++index) {
+					owned[thread].push_back(std::make_unique<SoundContainer>());
+					identities.push_back(owned[thread].back()->GetCheckpointIdentity());
+				}
+			}
+			for (uint64_t identity: identities) {
+				if (g_AudioMan.FindSimulationSoundContainer(identity) == nullptr) {
+					return finish(("a fresh sound container did not register as " + std::to_string(identity)).c_str());
+				}
+			}
+
+			std::atomic<int> ready{0};
+			std::atomic<bool> release{false};
+			std::vector<std::thread> workers;
+			for (int thread = 0; thread < releaseThreads; ++thread) {
+				workers.emplace_back([&owned, &ready, &release, thread] {
+					++ready;
+					while (!release.load()) {
+						std::this_thread::yield();
+					}
+					owned[thread].clear();
+				});
+			}
+			while (ready.load() < releaseThreads) {
+				std::this_thread::yield();
+			}
+			release.store(true);
+			for (std::thread& worker: workers) {
+				worker.join();
+			}
+
+			const auto after = g_AudioMan.CaptureCheckpointSoundRegistry();
+			if (after != before) {
+				return finish(("the registry holds " + std::to_string(after.size()) + " identities after the release, not the " +
+				               std::to_string(before.size()) + " it held before").c_str());
+			}
+			for (uint64_t identity: identities) {
+				if (g_AudioMan.FindSimulationSoundContainer(identity) != nullptr) {
+					return finish(("released sound container " + std::to_string(identity) + " is still registered").c_str());
+				}
+			}
+			return finish(nullptr);
+		}
+
 		bool TestClaimedActorReturnsToCpuAfterTheClaimantExpires(std::string* error) {
 			const char* name = "claimed_actor_returns_to_cpu_after_the_claimant_expires";
 			EnsureSwitchTestManagers();
@@ -10938,6 +11007,7 @@ namespace RTE {
 		if (!TestRestoredControllerKeepsItsProductionBaseline(&error) ||
 		    !TestProducingPassSurvivesAnOverride(&error) ||
 		    !TestSoundIdentityPinAgreesAcrossHistories(&error) ||
+		    !TestSoundRegistrySurvivesConcurrentRelease(&error) ||
 		    !TestRoundTrips(&error) ||
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
