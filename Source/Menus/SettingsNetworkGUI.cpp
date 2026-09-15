@@ -37,6 +37,8 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_FixedDelayTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkFixedDelay"));
 	m_FixedDelayTextbox->SetNumericOnly(true);
 	m_FixedDelayTextbox->SetMaxTextLength(2);
+	m_FixedDelayHintLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkFixedDelayHint"));
+	m_FixedDelayHintLabel->SetText("frames, 0-" + std::to_string(NetMatchConfigUtil::c_MaxInputDelayFrames));
 
 	m_IdleWaitLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkIdleWait"));
 	m_IdleWaitTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkIdleWait"));
@@ -85,9 +87,14 @@ void SettingsNetworkGUI::ApplyTextboxes() {
 }
 
 void SettingsNetworkGUI::UpdateDelayPolicyRow() {
+	// The video page hides the resolution rows its radio does not apply to; the same cue here, because
+	// a label has no disabled look and a bright caption over a dim box reads as an error.
 	const bool fixed = g_SettingsMan.GetNetworkHostDelayPolicy() == SettingsMan::NetworkHostDelayPolicy::Fixed;
-	m_FixedDelayLabel->SetEnabled(fixed);
-	m_FixedDelayTextbox->SetEnabled(fixed);
+	GUIControl* const row[] = {m_FixedDelayLabel, m_FixedDelayTextbox, m_FixedDelayHintLabel};
+	for (GUIControl* control: row) {
+		control->SetVisible(fixed);
+		control->SetEnabled(fixed);
+	}
 }
 
 void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
@@ -96,7 +103,8 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 	}
 	if (guiEvent.GetControl() == m_DelayPolicyAutoRadio || guiEvent.GetControl() == m_DelayPolicyFixedRadio) {
 		g_SettingsMan.SetNetworkHostDelayPolicy(m_DelayPolicyFixedRadio->GetCheck() ? SettingsMan::NetworkHostDelayPolicy::Fixed : SettingsMan::NetworkHostDelayPolicy::Auto);
-		UpdateDelayPolicyRow();
+		// Commit what is typed before the row holding it leaves the page.
+		ApplyTextboxes();
 	} else if (guiEvent.GetControl() == m_AutoRepairCheckbox) {
 		g_SettingsMan.SetNetworkHostAutoRepair(m_AutoRepairCheckbox->GetCheck());
 	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_FixedDelayTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
