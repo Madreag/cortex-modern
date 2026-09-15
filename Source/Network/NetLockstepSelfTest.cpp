@@ -10395,6 +10395,172 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		// A match starts before any frame has been committed, so the wire has named nothing yet. The game hands
+		// every seat its brain there, and every peer has the same brain for the same seat, so that is the answer a
+		// script must get on the first ticks - never null, and never something a later committed frame disagrees with.
+		bool TestStartWindowAnswersTheSeatedBrain(std::string* error) {
+			const char* name = "start_window_answers_the_seated_brain";
+			EnsureSwitchTestManagers();
+			const uint16_t port = 48474;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5354415254574e44ULL);
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::HostCpuRemoteHuman;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, port, 3, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, port, 3, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "host-cpu-remote-human";
+			clientConfig.ownershipPolicy = "host-cpu-remote-human";
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return finish(error && !error->empty() ? error->c_str() : "coordinator pair failed");
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 4000)) {
+				return finish(error && !error->empty() ? error->c_str() : "pair did not reach Running");
+			}
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			std::unique_ptr<Activity> activity(new Activity());
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Activity* match = g_ActivityMan.GetActivity();
+			if (!match || !match->ConfigureLockstepPlayers()) {
+				return finish("the match roster did not reach the activity");
+			}
+			Actor* hostSeatBrain = MakeSwitchTestActor(Activity::TeamOne);
+			Actor* localSeatBrain = MakeSwitchTestActor(Activity::TeamTwo);
+			Actor* bought = MakeSwitchTestActor(Activity::TeamTwo);
+			if (!hostSeatBrain || !localSeatBrain || !bought) {
+				return finish("selftest actors could not be created");
+			}
+			AddSwitchTestActor(hostSeatBrain);
+			AddSwitchTestActor(localSeatBrain);
+			AddSwitchTestActor(bought);
+			const auto uidOf = [](const Actor* actor) { return actor ? static_cast<int64_t>(actor->GetUniqueID()) : 0; };
+			// The start of a match: the scene's brains reach the seats and no frame has been committed yet.
+			match->SetPlayerBrain(hostSeatBrain, Players::PlayerOne);
+			match->SetPlayerBrain(localSeatBrain, Players::PlayerTwo);
+			const int seats[2] = {Players::PlayerOne, Players::PlayerTwo};
+			Actor* brains[2] = {hostSeatBrain, localSeatBrain};
+			for (int index = 0; index < 2; ++index) {
+				if (match->GetControlledActor(seats[index]) != brains[index]) {
+					return finish(("a seat answered nothing while the match handed it a brain: seat " + std::to_string(seats[index]) +
+					               " answers " + std::to_string(uidOf(match->GetControlledActor(seats[index]))) + " brain " + std::to_string(uidOf(brains[index])) +
+					               " - every script that reads the seat on the first screen of a match reads null instead")
+					                  .c_str());
+				}
+			}
+			// The committed frame is still the authority: it moves the seat off its brain.
+			match->NoteLockstepControlBinding(uidOf(bought), Players::PlayerTwo);
+			if (match->GetControlledActor(Players::PlayerTwo) != bought) {
+				return finish(("the committed frame did not move the seat off its brain: seat 1 answers " +
+				               std::to_string(uidOf(match->GetControlledActor(Players::PlayerTwo))))
+				                  .c_str());
+			}
+			// A brain handed to a seat that already plays something does not pull the answer back.
+			match->SetPlayerBrain(localSeatBrain, Players::PlayerTwo);
+			if (match->GetControlledActor(Players::PlayerTwo) != bought) {
+				return finish(("a brain record pulled a seat back off the actor the wire named: seat 1 answers " +
+				               std::to_string(uidOf(match->GetControlledActor(Players::PlayerTwo))) + ", the wire named " + std::to_string(uidOf(bought)))
+				                  .c_str());
+			}
+			return finish(nullptr);
+		}
+
+		// A peer that heals from another peer's snapshot rebuilds its activity from the checkpoint. The control
+		// binding has to travel with it, or the healed peer answers null while everyone else answers the actor.
+		bool TestControlBindingSurvivesACheckpoint(std::string* error) {
+			const char* name = "control_binding_survives_a_checkpoint";
+			EnsureSwitchTestManagers();
+			const uint16_t port = 48479;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x4845414c42494e44ULL);
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::HostCpuRemoteHuman;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, port, 3, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, port, 3, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "host-cpu-remote-human";
+			clientConfig.ownershipPolicy = "host-cpu-remote-human";
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			std::unique_ptr<Activity> healed;
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return finish(error && !error->empty() ? error->c_str() : "coordinator pair failed");
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 4000)) {
+				return finish(error && !error->empty() ? error->c_str() : "pair did not reach Running");
+			}
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			std::unique_ptr<Activity> activity(new Activity());
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Activity* match = g_ActivityMan.GetActivity();
+			if (!match || !match->ConfigureLockstepPlayers()) {
+				return finish("the match roster did not reach the activity");
+			}
+			Actor* brain = MakeSwitchTestActor(Activity::TeamTwo);
+			Actor* played = MakeSwitchTestActor(Activity::TeamTwo);
+			if (!brain || !played) {
+				return finish("selftest actors could not be created");
+			}
+			AddSwitchTestActor(brain);
+			AddSwitchTestActor(played);
+			const auto uidOf = [](const Actor* actor) { return actor ? static_cast<int64_t>(actor->GetUniqueID()) : 0; };
+			match->SetPlayerBrain(brain, Players::PlayerTwo);
+			// The seat has switched away from its brain and the wire has carried it.
+			match->NoteLockstepControlBinding(uidOf(played), Players::PlayerTwo);
+			const std::string text = match->SaveCheckpoint();
+			healed = std::make_unique<Activity>();
+			g_ActivityMan.SwapCheckpointActivity(healed);
+			Activity* restored = g_ActivityMan.GetActivity();
+			if (!restored || !restored->ConfigureLockstepPlayers()) {
+				return finish("the match roster did not reach the healed activity");
+			}
+			if (!restored->LoadCheckpoint(text)) {
+				return finish("the healed activity could not load the checkpoint");
+			}
+			if (restored->GetControlledActor(Players::PlayerTwo) != played) {
+				return finish(("a healed peer lost the seat's control binding: seat 1 answers " +
+				               std::to_string(uidOf(restored->GetControlledActor(Players::PlayerTwo))) + " where the other peers answer " +
+				               std::to_string(uidOf(played)))
+				                  .c_str());
+			}
+			return finish(nullptr);
+		}
+
 		bool TestSimultaneousClaimTieBreak(std::string* error) {
 			const char* name = "simultaneous_claim_tie_break";
 			EnsureSwitchTestManagers();
@@ -11377,8 +11543,12 @@ namespace RTE {
 		const bool sharedSeatAnswer = TestSharedSeatAnswerFollowsTheWire(&sharedSeatAnswerError);
 		std::string speculativeBindingError;
 		const bool speculativeBinding = TestSpeculativeApplyKeepsTheSharedBinding(&speculativeBindingError);
+		std::string startWindowError;
+		const bool startWindow = TestStartWindowAnswersTheSeatedBrain(&startWindowError);
+		std::string checkpointBindingError;
+		const bool checkpointBinding = TestControlBindingSurvivesACheckpoint(&checkpointBindingError);
 		if (!switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner || !remoteSeatInput || !seatMapSurvivesEnd ||
-		    !sharedSeatAnswer || !speculativeBinding) {
+		    !sharedSeatAnswer || !speculativeBinding || !startWindow || !checkpointBinding) {
 			return 1;
 		}
 		std::cout << "[net-lockstep-selftest] PASS" << std::endl;
