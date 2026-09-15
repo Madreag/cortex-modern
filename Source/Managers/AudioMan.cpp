@@ -2204,11 +2204,20 @@ bool AudioMan::RunCheckpointSelfTest() {
 			AudioCheckpoint::Require(m_AudioSystem->createDSPByType(FMOD_DSP_TYPE_MULTIBAND_EQ, &effect));
 			AudioCheckpoint::Require(originalChannel->addDSP(0, effect));
 			AudioCheckpoint::Require(originalChannel->setPaused(false));
+			const auto arm = [&ok](const char* name, bool passed) { std::cout << "[audio-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << name << std::endl; ok = ok && passed; };
+			// The mixer idles a voice's DSP on its own thread, which is how two peers' saves disagree on the flag.
 			AudioCheckpoint::Require(effect->setActive(false));
 			const auto control = AudioCheckpoint::Control::Capture(originalChannel, false);
-			control.Apply(m_AudioSystem, originalChannel, true);
+			if (control.effects.size() != 1) throw std::runtime_error("the checkpoint test voice lost its managed effect");
+			arm("idled_effect_archives_engine_intent", control.effects.front().active);
+			AudioCheckpoint::Control disabled = control;
+			disabled.effects.front().active = false;
+			disabled.Apply(m_AudioSystem, originalChannel, true);
 			bool active; AudioCheckpoint::Require(effect->getActive(&active));
-			if (active) throw std::runtime_error("unpausing activated a checkpoint-disabled effect");
+			arm("unpause_keeps_a_checkpoint_disabled_effect", !active);
+			control.Apply(m_AudioSystem, originalChannel, true);
+			AudioCheckpoint::Require(effect->getActive(&active));
+			arm("restore_reactivates_an_idled_effect", active);
 			AudioCheckpoint::Require(originalChannel->setPaused(true));
 		}
 		AudioCheckpoint::Require(originalChannel->setPosition(123, FMOD_TIMEUNIT_PCM));
