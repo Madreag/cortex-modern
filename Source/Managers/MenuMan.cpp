@@ -358,6 +358,15 @@ void MenuMan::UpdatePauseMenu() const {
 		case PauseMenuGUI::PauseMenuUpdateResult::BackToMain:
 			m_TitleScreen->SetTitleTransitionState(g_MetaMan.GameInProgress() ? TitleScreen::TitleTransition::MetaGameFadeIn : TitleScreen::TitleTransition::ScenarioFadeIn);
 			break;
+		case PauseMenuGUI::PauseMenuUpdateResult::MatchLeft:
+			// The match rows only show under the local pause menu, so this case is the safety net: a leave
+			// announced here takes the same running-service path the activity exit does, then lands on the
+			// main menu where the rejoin offer and the rematch lobby are.
+			if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+				g_NetMatchService.LeaveMatch("Match left");
+			}
+			m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::ScrollingFadeIn);
+			break;
 		default:
 			break;
 	}
