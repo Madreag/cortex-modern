@@ -28,6 +28,9 @@ namespace RTE {
 		static void EndRender();
 		static bool IsRendering() { return s_Rendering; }
 
+		/// Frozen-script contract of the render window, for -render-window-scripts-selftest.
+		static bool RunRenderWindowScriptsSelfTest();
+
 		/// Drops the previews outright (a match teardown).
 		static void Clear();
 		/// One line of counters for the match report; empty when nothing was previewed.

@@ -6093,6 +6093,10 @@ int main(int argc, char** argv) {
 	g_SettingsMan.SetNetworkPortMapEnableOverride(s_netPortMapCli);
 	NetPortMap::SetProbeOverrides(s_netPortMapGateway, s_netPortMapIgd);
 
+	if (ScenarioRunner::GetArgs().renderWindowScriptsSelfTest) {
+		return ShutDown(LocalPrediction::RunRenderWindowScriptsSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE);
+	}
+
 	if (s_cameraNullSceneSelfTest) {
 		// The scroll update runs from the sim tick, which keeps ticking for a frame after an activity
 		// ends or an activity launch fails. With no scene it must do nothing rather than fault, and

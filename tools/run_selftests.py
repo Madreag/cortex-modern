@@ -29,6 +29,7 @@ SELFTESTS = [
     "float-text",
     "settings-preferences",
     "single-module-harness",
+    "render-window-scripts",
 ]
 FATAL = re.compile(
     r"^.*(?:\bFAIL\b|RTE Assert|RTE Abort|stack traceback|Stack trace \(most recent call last\)).*$",

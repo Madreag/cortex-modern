@@ -388,6 +388,40 @@ namespace RTE {
 		}
 	}
 
+	bool LocalPrediction::RunRenderWindowScriptsSelfTest() {
+		constexpr const char* Tag = "[render-window-scripts-selftest]";
+		int failures = 0;
+		const auto check = [&](bool ok, const char* name, const std::string& detail) {
+			std::cout << Tag << (ok ? " PASS " : " FAIL ") << name;
+			if (!detail.empty()) {
+				std::cout << ": " << detail;
+			}
+			std::cout << std::endl;
+			if (!ok) {
+				++failures;
+			}
+		};
+		s_Previews.push_back(Preview{});
+		const bool before = LuaMan::AreScriptsFrozen();
+		BeginRender();
+		const bool inside = LuaMan::AreScriptsFrozen();
+		EndRender();
+		const bool after = LuaMan::AreScriptsFrozen();
+		check(inside, "frozen_inside_render", inside ? "" : "inside read is false");
+		check(after == before, "restored_after_render", after == before ? "" : "pre-render state was not restored");
+		LuaMan::SetScriptsFrozen(true);
+		const bool nestBefore = LuaMan::AreScriptsFrozen();
+		BeginRender();
+		const bool nestInside = LuaMan::AreScriptsFrozen();
+		EndRender();
+		const bool nestAfter = LuaMan::AreScriptsFrozen();
+		check(nestBefore && nestInside && nestAfter, "nesting_preview_freeze", nestInside ? "" : "inside read is false");
+		LuaMan::SetScriptsFrozen(false);
+		Clear();
+		std::cout << Tag << (failures == 0 ? " PASS" : " FAIL") << std::endl;
+		return failures == 0;
+	}
+
 	void LocalPrediction::Clear() {
 		EndRender();
 		{
