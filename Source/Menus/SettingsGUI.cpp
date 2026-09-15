@@ -461,8 +461,10 @@ namespace RTE::MenuAutomation {
 				auto* box = dynamic_cast<GUITextBox*>(control);
 				if (!box || !Enabled(box) || argument.empty()) return false;
 				box->SetText(argument);
-				box->AddEvent(GUIEvent::Notification, GUITextBox::Enter, 0);
-				return true;
+				// The event queue clears at the top of every Update, so the Enter has to be raised
+				// inside one - the same channel a scripted click takes.
+				auto* input = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
+				return input && input->QueueAutomationCommand([box] { box->AddEvent(GUIEvent::Notification, GUITextBox::Enter, 0); });
 			}
 			if (command == "assert_text_fits") return argument.empty() && TextFits(manager, control, observation);
 			if (command == "assert_rect_inside") {

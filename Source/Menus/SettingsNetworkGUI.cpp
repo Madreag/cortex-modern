@@ -85,19 +85,18 @@ namespace {
 		return latest;
 	}
 
-	// Empty disables the directory; a configured one names its scheme so a typo cannot
-	// silently send the install key somewhere plain-http.
+	// The ini reader cuts values at "//" (a comment), so the persisted form is the
+	// scheme-less host[:port][/path] the directory client puts https:// back in front of.
+	// A pasted https:// prefix is normalized away before this sees the value; the rest
+	// of what cannot persist (an http:// scheme, any remaining "//", whitespace) refuses.
 	bool ValidDirectoryUrl(const std::string& url) {
 		if (url.empty()) {
 			return true;
 		}
-		for (const char* scheme: {"http://", "https://"}) {
-			const size_t schemeLength = std::string(scheme).size();
-			if (url.compare(0, schemeLength, scheme) == 0) {
-				return url.size() > schemeLength;
-			}
+		if (url.compare(0, 7, "http://") == 0 || url.find("//") != std::string::npos) {
+			return false;
 		}
-		return false;
+		return url.find_first_of(" \t") == std::string::npos;
 	}
 
 	// A pin is a SHA-256 hex digest; pasted values may carry colons or spaces, which are
@@ -262,10 +261,14 @@ void SettingsNetworkGUI::ApplyTextboxes() {
 	// Each box commits only when its own value passes; a refused value keeps the stored
 	// setting and the box reverts to it through ShowSavedValues.
 	std::string internetError;
-	if (ValidDirectoryUrl(m_DirUrlTextbox->GetText())) {
-		g_SettingsMan.SetSessionDirectoryUrl(m_DirUrlTextbox->GetText());
+	std::string url = m_DirUrlTextbox->GetText();
+	if (url.compare(0, 8, "https://") == 0) {
+		url.erase(0, 8);
+	}
+	if (ValidDirectoryUrl(url)) {
+		g_SettingsMan.SetSessionDirectoryUrl(url);
 	} else {
-		internetError = "Session directory must start with http:// or https://.";
+		internetError = "Enter the directory as host[:port][/path] - https:// is implied.";
 	}
 	std::string pin;
 	if (NormalizeCertPin(m_DirPinTextbox->GetText(), pin)) {

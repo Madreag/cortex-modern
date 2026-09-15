@@ -57,10 +57,12 @@ RECOVERY_SEED = {"NetworkAutoReconnect": "1", "NetworkOfferStoredRejoin": "1"}
 RECOVERY_SAVED = {"NetworkAutoReconnect": "0", "NetworkOfferStoredRejoin": "0"}
 FILES_SEED = {"AutosaveSeconds": "45", "NetworkRecordReplays": "0"}
 FILES_SAVED = {"NetworkDiagnosticsDirectory": "D:/diag-lane", "NetworkRecordReplays": "1"}
-INTERNET_SEED = {"SessionDirectoryUrl": "https://dir.example.test/serve",
+# The settings reader cuts values at "//", so the directory url persists scheme-less;
+# NetDirectoryClient puts https:// back on (NetDirectoryClient.cpp:117).
+INTERNET_SEED = {"SessionDirectoryUrl": "dir.example.test/serve",
                  "SessionDirectoryCertSha256": "a" * 64}
-INTERNET_SAVED = {"SessionDirectoryUrl": "https://newdir.example.test/serve",
-                  "SessionDirectoryCertSha256": "a" * 64}
+INTERNET_SAVED = {"SessionDirectoryUrl": "newdir.example.test/serve",
+                  "SessionDirectoryCertSha256": "b" * 64}
 # The host's saved session options steer the match; the client's own copy differs and must not.
 HOST_OPTIONS = {"NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0"}
 CLIENT_OPTIONS = {"NetworkHostDelayPolicy": "Auto", "NetworkHostIdleWaitMinutes": "5", "NetworkHostAutoRepair": "1"}
@@ -323,10 +325,12 @@ def scripts(case, port, root):
                  "assert_label LabelNetInternetError 64 hexadecimal\n"
                  "assert_label TextNetworkDirPin aaaa\n"
                  "set_text TextNetworkDirUrl ftp://bogus\n"
-                 "assert_label LabelNetInternetError http://\n"
+                 "assert_label LabelNetInternetError host[:port]\n"
                  "assert_label TextNetworkDirUrl " + INTERNET_SEED["SessionDirectoryUrl"] + "\n"
                  "set_text TextNetworkDirUrl " + INTERNET_SAVED["SessionDirectoryUrl"] + "\n"
                  "assert_label TextNetworkDirUrl " + INTERNET_SAVED["SessionDirectoryUrl"] + "\n"
+                 "set_text TextNetworkDirPin " + INTERNET_SAVED["SessionDirectoryCertSha256"] + "\n"
+                 "assert_label TextNetworkDirPin " + INTERNET_SAVED["SessionDirectoryCertSha256"] + "\n"
                  "dump_player_options\n"
                  "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n")
     elif case == "misc-page":
@@ -334,7 +338,9 @@ def scripts(case, port, root):
         text = OPTIONS + "select_settings_page Misc\nwait 3\nassert_settings_page Misc\n"
         text += "assert_visible CollectionBoxMiscSettings 1\n"
         for control in MISC_ROWS:
-            text += checks(control, "CollectionBoxMiscSettings")
+            # A slider carries no caption, so it answers the placement checks only.
+            text += checks(control, "CollectionBoxMiscSettings") if control != "SliderSceneBackgroundAutoScale" else \
+                f"assert_visible {control} 1\nassert_rect_inside {control} CollectionBoxMiscSettings\n"
         text += "dump_player_options\npost_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n"
     elif case == "lobby-name":
         # The name box starts from the saved name, and the name it is hosted with is saved again.
@@ -703,7 +709,7 @@ def run_case(options, case, root, failing=None):
             if case == "net-internet":
                 # The refused pin/URL kept the stored values and the last good commit cleared the reason.
                 assert rows["TextNetworkDirUrl"]["text"] == INTERNET_SAVED["SessionDirectoryUrl"], rows["TextNetworkDirUrl"]
-                assert rows["TextNetworkDirPin"]["text"] == INTERNET_SEED["SessionDirectoryCertSha256"], rows["TextNetworkDirPin"]
+                assert rows["TextNetworkDirPin"]["text"] == INTERNET_SAVED["SessionDirectoryCertSha256"], rows["TextNetworkDirPin"]
                 assert rows["LabelNetInternetError"]["text"] == "", rows["LabelNetInternetError"]
                 result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(INTERNET_SAVED))
                 assert result["saved"] == INTERNET_SAVED, result["saved"]
