@@ -1,6 +1,11 @@
 #pragma once
 
+#include <array>
+#include <utility>
+
 namespace RTE {
+
+	class GUIControl;
 
 	class GUIControlManager;
 	class GUICollectionBox;
@@ -42,8 +47,11 @@ namespace RTE {
 		GUITextBox* m_FixedDelayTextbox;
 		GUILabel* m_FixedDelayHintLabel;
 		GUILabel* m_IdleWaitLabel;
+		GUILabel* m_IdleWaitHintLabel;
 		GUITextBox* m_IdleWaitTextbox;
 		GUICheckbox* m_AutoRepairCheckbox;
+		/// Every row drawn under the fixed-delay row, with the y it sits at while that row is drawn.
+		std::array<std::pair<GUIControl*, int>, 4> m_RowsUnderFixedDelay;
 
 #pragma region Network Settings Handling
 		/// Shows what is saved, so an opened page never states anything the settings do not hold.
