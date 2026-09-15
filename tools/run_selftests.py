@@ -28,6 +28,7 @@ SELFTESTS = [
     "rotate-primitive",
     "float-text",
     "settings-preferences",
+    "single-module-harness",
 ]
 FATAL = re.compile(
     r"^.*(?:\bFAIL\b|RTE Assert|RTE Abort|stack traceback|Stack trace \(most recent call last\)).*$",
@@ -122,20 +123,27 @@ def main():
     results = {}
     for name in SELFTESTS:
         case = out / f"{name}-selftest"
-        run = make_run(options.repo, [f"-{name}-selftest"], case, options.timeout)
-        try:
-            record = run.start().finish()
-        finally:
-            run.close()
-        stdout = (
-            (case / "stdout.log").read_text(errors="replace")
-            if (case / "stdout.log").exists()
-            else ""
-        )
-        scored = score_selftest(
-            stdout, record.get("exit_code"), record.get("timed_out"), f"{name}-selftest"
-        )
-        scored["binary"] = record.get("exe_sha256")
+        if name == "single-module-harness":
+            from test_single_module_harness import run_case, score_detect  # noqa: PLC0415
+
+            case_data = run_case(options.repo, case, options.timeout, ["-module", "Tests.rte"])
+            scored = score_detect(case_data)
+            scored["binary"] = case_data.get("exe_sha256")
+        else:
+            run = make_run(options.repo, [f"-{name}-selftest"], case, options.timeout)
+            try:
+                record = run.start().finish()
+            finally:
+                run.close()
+            stdout = (
+                (case / "stdout.log").read_text(errors="replace")
+                if (case / "stdout.log").exists()
+                else ""
+            )
+            scored = score_selftest(
+                stdout, record.get("exit_code"), record.get("timed_out"), f"{name}-selftest"
+            )
+            scored["binary"] = record.get("exe_sha256")
         results[name] = scored
         print(json.dumps({"selftest": name, **{k: v for k, v in scored.items() if k != "binary"}}), flush=True)
     summary = {
