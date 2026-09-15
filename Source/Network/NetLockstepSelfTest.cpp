@@ -10454,8 +10454,8 @@ namespace RTE {
 			AddSwitchTestActor(bought);
 			const auto uidOf = [](const Actor* actor) { return actor ? static_cast<int64_t>(actor->GetUniqueID()) : 0; };
 			// The start of a match: the scene's brains reach the seats and no frame has been committed yet.
-			match->SetPlayerBrain(hostSeatBrain, Players::PlayerOne);
-			match->SetPlayerBrain(localSeatBrain, Players::PlayerTwo);
+			match->AssignSeatBrain(hostSeatBrain, Players::PlayerOne);
+			match->AssignSeatBrain(localSeatBrain, Players::PlayerTwo);
 			const int seats[2] = {Players::PlayerOne, Players::PlayerTwo};
 			Actor* brains[2] = {hostSeatBrain, localSeatBrain};
 			for (int index = 0; index < 2; ++index) {
@@ -10474,10 +10474,30 @@ namespace RTE {
 				                  .c_str());
 			}
 			// A brain handed to a seat that already plays something does not pull the answer back.
-			match->SetPlayerBrain(localSeatBrain, Players::PlayerTwo);
+			match->AssignSeatBrain(localSeatBrain, Players::PlayerTwo);
 			if (match->GetControlledActor(Players::PlayerTwo) != bought) {
 				return finish(("a brain record pulled a seat back off the actor the wire named: seat 1 answers " +
 				               std::to_string(uidOf(match->GetControlledActor(Players::PlayerTwo))) + ", the wire named " + std::to_string(uidOf(bought)))
+				                  .c_str());
+			}
+			// SetPlayerBrain is what a mod calls, possibly on one peer's branch, so it may only set this
+			// machine's record; the shared answer moves on the engine's own placement and on the wire.
+			Actor* scriptedBrain = MakeSwitchTestActor(Activity::TeamOne);
+			if (!scriptedBrain) {
+				return finish("the scripted-brain selftest actor could not be created");
+			}
+			AddSwitchTestActor(scriptedBrain);
+			match->SetPlayerBrain(scriptedBrain, Players::PlayerThree);
+			if (match->GetControlledActor(Players::PlayerThree) != nullptr) {
+				return finish(("a script's brain assignment moved a seat's shared answer: seat 2 answers " +
+				               std::to_string(uidOf(match->GetControlledActor(Players::PlayerThree))) +
+				               " while the wire has named nothing for it")
+				                  .c_str());
+			}
+			match->AssignSeatBrain(scriptedBrain, Players::PlayerThree);
+			if (match->GetControlledActor(Players::PlayerThree) != scriptedBrain) {
+				return finish(("the engine's own brain placement stopped seeding the seat: seat 2 answers " +
+				               std::to_string(uidOf(match->GetControlledActor(Players::PlayerThree))) + " for brain " + std::to_string(uidOf(scriptedBrain)))
 				                  .c_str());
 			}
 			return finish(nullptr);

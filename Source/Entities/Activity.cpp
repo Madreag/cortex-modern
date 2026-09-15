@@ -377,7 +377,7 @@ int Activity::Start() {
 		// TODO currently this sets brains to players arbitrarily. We should save information on which brain is for which player in the scene so we can set them properly!
 		if (m_IsActive[player]) {
 			if (Actor* brain = g_MovableMan.GetUnassignedBrain(GetTeamOfPlayer(player))) {
-				SetPlayerBrain(brain, player);
+				AssignSeatBrain(brain, player);
 			}
 		}
 	}
@@ -793,6 +793,10 @@ void Activity::SetPlayerBrain(Actor* newBrain, int player) {
 	if (m_SharedPlayerSeats && newBrain && m_LockstepControlUID[player] == 0) {
 		NoteLockstepControlBinding(NetActorUID(newBrain), player);
 	}
+}
+
+void Activity::AssignSeatBrain(Actor* newBrain, int player) {
+	SetPlayerBrain(newBrain, player);
 }
 
 bool Activity::RunPlayerBrainRecordSelfTest(Actor* humanBrain, Actor* aiBrain, bool* legacyReseeded, bool* lastDitchRecorded) {
@@ -1263,7 +1267,7 @@ void Activity::UpdatePlayerBrainRecord() {
 		if (m_BrainEvacuated[player]) continue;
 		Actor* brain = g_MovableMan.GetUnassignedBrainByID(m_Team[player]);
 		if (!brain) continue;
-		SetPlayerBrain(brain, player);
+		AssignSeatBrain(brain, player);
 		if (!m_BrainRecordReconciled) {
 			m_BrainRecordReconciled = true;
 			std::cout << "[brain-record] fallback seat=" << player << " team=" << m_Team[player] << " uid=" << brain->GetUniqueID() << std::endl;

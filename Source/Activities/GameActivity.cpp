@@ -2832,7 +2832,7 @@ void GameActivity::ClearCheckpointActorIDs() {
 }
 
 bool GameActivity::PlaceUnassignedBrain(int player) {
-	SetPlayerBrain(g_MovableMan.GetUnassignedBrain(m_Team[player]), player);
+	AssignSeatBrain(g_MovableMan.GetUnassignedBrain(m_Team[player]), player);
 	return m_Brain[player] != nullptr;
 }
 
