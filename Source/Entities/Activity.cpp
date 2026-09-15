@@ -48,6 +48,7 @@ void Activity::Clear() {
 	m_PendingRuntimeCheckpoint.clear();
 	m_BrainRecordReconciled = false;
 	m_SharedPlayerSeats = false;
+	m_SharedSeatsEngaged = false;
 	m_CheckpointActorIDs = {};
 	m_HasCheckpointActorIDs = false;
 	m_ActivityState = ActivityState::NotStarted;
@@ -477,6 +478,7 @@ void Activity::RefreshLockstepLocalPlayers() {
 
 void Activity::MapLocalPlayers(const NetMatchConfig& config, uint8_t localPeer) {
 	m_SharedPlayerSeats = true;
+	m_SharedSeatsEngaged = true;
 	m_LocalInputPlayers.fill(Players::NoPlayer);
 	std::fill(std::begin(m_PlayerScreen), std::end(m_PlayerScreen), Players::NoPlayer);
 	int player = Players::PlayerOne;
@@ -499,7 +501,9 @@ void Activity::MapLocalPlayers(const NetMatchConfig& config, uint8_t localPeer) 
 
 int Activity::LocalInputOfPlayer(int player) const {
 	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return Players::NoPlayer;
-	return m_SharedPlayerSeats && ScenarioRunner::HasLockstepCoordinator() ? m_LocalInputPlayers[player] : player;
+	// The roster's seat map outlives the match's coordinator: a seat another peer played stays theirs while the
+	// activity keeps updating after the match ends.
+	return m_SharedPlayerSeats && (m_SharedSeatsEngaged || ScenarioRunner::HasLockstepCoordinator()) ? m_LocalInputPlayers[player] : player;
 }
 
 uint8_t Activity::GetLocalHumanCount() const {
@@ -627,6 +631,7 @@ int Activity::AddPlayer(int playerToAdd, bool isHuman, int team, float funds, co
 
 void Activity::ClearPlayers(bool resetFunds) {
 	m_SharedPlayerSeats = false;
+	m_SharedSeatsEngaged = false;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		m_IsActive[player] = false;
 		m_IsHuman[player] = false;
