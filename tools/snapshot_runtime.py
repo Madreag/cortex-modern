@@ -168,6 +168,9 @@ SCHEMAS["GameActivity1"] = [
     "fog_switch_enabled deploy_switch_enabled gold_switch_enabled clear_orbit_switch_enabled buy_enabled"),
     ("lz_cursor_width", array(4)), ("delivery_delay", "n"), *fields("cursor_timer game_timer game_over_timer", TIMER),
     *fields("game_over_period winner_team"), ("network_names", array(4, "s")),
+    # The synchronized setup editor's shared state: the id base, the seed pass and each seat's committed brain.
+    *fields("lockstep_placement_uid_base lockstep_placement_seeded"),
+    ("lockstep_seat_brains", array(4, structure(*fields("team player pos_x pos_y"), *fields("class preset module", "s")))),
     ("player_ui", array(4, structure(*fields("buy editor inventory banner_red banner_yellow", "o"))))]
 SCHEMAS["GameActivity2"] = [("values", "o"), ("players", array(4, structure(("marked_actor", "n"),
     ("purchases", sequence(array(3, "s"))), ("strategic_menu", "s")))),

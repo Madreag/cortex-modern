@@ -3362,7 +3362,7 @@ bool GameActivity::LoadNetLocalGameState(std::string_view text) {
 		CheckpointReader reader(text, "NetLocalGameUI1");
 		reader(m_ObservationTarget, m_DeathViewTarget, m_ActorSelectTimer, m_ActorCursor, m_LandingZone,
 			m_AIReturnCraft, m_NextMultiOrderYOffset, m_LuaLockActor, m_LuaLockActorMode, m_BannerRepeats,
-			m_ReadyToStart, m_BrainLZWidth, m_LZCursorWidth, m_NetworkPlayerNames);
+			m_ReadyToStart, m_BrainLZWidth, m_LZCursorWidth, m_NetworkPlayerNames, m_LockstepPlacementSubmitted);
 		struct Slot {
 			int64_t marked = 0;
 			std::string buy, editor, inventory, red, yellow, strategic;

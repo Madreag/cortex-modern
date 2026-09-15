@@ -835,6 +835,19 @@ Field(path + ".GameActivity.m_GameOverTimer", object.m_GameOverTimer);
 Field(path + ".GameActivity.m_GameOverPeriod", object.m_GameOverPeriod);
 Field(path + ".GameActivity.m_WinnerTeam", object.m_WinnerTeam);
 Field(path + ".GameActivity.m_NetworkPlayerNames", object.m_NetworkPlayerNames);
+Field(path + ".GameActivity.m_LockstepPlacementSubmitted", object.m_LockstepPlacementSubmitted);
+Field(path + ".GameActivity.m_LockstepSeatBrains", object.m_LockstepSeatBrains);
+Field(path + ".GameActivity.m_LockstepPlacementUidBase", object.m_LockstepPlacementUidBase);
+Field(path + ".GameActivity.m_LockstepPlacementSeeded", object.m_LockstepPlacementSeeded);
+}
+void Visit(const NetGamePlaceBrain& object, const std::string& path) {
+Field(path + ".NetGamePlaceBrain.team", object.team);
+Field(path + ".NetGamePlaceBrain.player", object.player);
+Field(path + ".NetGamePlaceBrain.posX", object.posX);
+Field(path + ".NetGamePlaceBrain.posY", object.posY);
+Field(path + ".NetGamePlaceBrain.className", object.className);
+Field(path + ".NetGamePlaceBrain.preset", object.preset);
+Field(path + ".NetGamePlaceBrain.module", object.module);
 }
 void Visit(const GameActivity::Delivery& object, const std::string& path) {
 Field(path + ".GameActivity::Delivery.pCraft", object.pCraft);
