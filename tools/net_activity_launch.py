@@ -231,6 +231,10 @@ def launch(options):
         if options.variant == "brains":
             result["placements"] = score_placements(logs)
             checks["brains_placed_on_both_peers"] = result["placements"]["pass"]
+            # The setup editor's held ticks carry no actors, so compare the raw per-MO dumps of every tick
+            # byte for byte as well: that covers the placement window the subsystem hashes cannot.
+            host_dump, client_dump = root / "host/trace.json.simdump.txt", root / "client/trace.json.simdump.txt"
+            checks["host_client_dump_bytes"] = host_dump.is_file() and client_dump.is_file() and host_dump.read_bytes() == client_dump.read_bytes()
             # The match must actually leave the setup editor and play, or the traces agree on nothing happening.
             checks["left_setup_editor"] = all("[net-match] brain placed: seat=1" in log for log in logs.values()) and \
                 all(record.get("exit_code") == 0 for record in records.values())
@@ -247,6 +251,10 @@ def launch(options):
             replay.close()
         checks["replay_process"] = result["replay_record"].get("exit_code") == 0 and not result["replay_record"].get("timed_out")
         checks["replay_exact"], result["replay_simulation"] = strict_compare(root / "host/trace.json", replay_trace, 600)
+        if options.variant == "brains":
+            replay_dump = root / "replay/trace.json.simdump.txt"
+            host_dump = root / "host/trace.json.simdump.txt"
+            checks["replay_dump_bytes"] = replay_dump.is_file() and host_dump.is_file() and replay_dump.read_bytes() == host_dump.read_bytes()
         result["replay_rules"] = score_rules((root / "replay/stdout.log").read_text(errors="replace"), rules, default)
         checks["replay_rules"] = result["replay_rules"]["pass"]
         if options.variant == "census":
