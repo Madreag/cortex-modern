@@ -93,6 +93,7 @@ static void gc_mark(global_State *g, GCobj *o)
 static void gc_mark_gcroot(global_State *g)
 {
   ptrdiff_t i;
+  if (g->preview && g->preview->active) gc_markobj(g, g->preview->root);
   for (i = 0; i < GCROOT_MAX; i++)
     if (gcref(g->gcroot[i]) != NULL)
       gc_markobj(g, gcref(g->gcroot[i]));
@@ -171,11 +172,35 @@ size_t lj_gc_separateudata(global_State *g, int all)
 /* -- Propagation phase --------------------------------------------------- */
 
 /* Traverse a table. */
+static void gc_traverse_preview(global_State *g, GCtab *t)
+{
+  GCtab *s = lj_preview_saved(g, t);
+  if (s) {
+    size_t i;
+    int weak = lj_preview_weak(g, s);
+    GCtab *mt = tabref(s->metatable);
+    if (mt) gc_markobj(g, mt);
+    if (!(weak & LJ_GC_WEAKVAL)) {
+      for (i = 0; i < s->asize; i++) gc_marktv(g, arrayslot(s, i));
+    }
+    if (s->hmask) {
+      for (i = 0; i <= s->hmask; i++) {
+        Node *n = &noderef(s->node)[i];
+        if (!tvisnil(&n->val)) {
+          if (!(weak & LJ_GC_WEAKKEY)) gc_marktv(g, &n->key);
+          if (!(weak & LJ_GC_WEAKVAL)) gc_marktv(g, &n->val);
+        }
+      }
+    }
+  }
+}
+
 static int gc_traverse_tab(global_State *g, GCtab *t)
 {
   int weak = 0;
   cTValue *mode;
   GCtab *mt = tabref(t->metatable);
+  if (t->preview) gc_traverse_preview(g, t);
   if (mt)
     gc_markobj(g, mt);
   mode = lj_meta_fastg(g, mt, MM_mode);
@@ -470,6 +495,34 @@ static int gc_mayclear(cTValue *o, int val)
 }
 
 /* Clear collected entries from weak tables. */
+static void gc_clear_preview(global_State *g)
+{
+  LJPreview *p = g->preview;
+  size_t i, j;
+  if (!p || !p->active) return;
+  for (i = 0; i < p->ntables; i++) {
+    LJPreviewTable *e = &p->tables[i];
+    GCtab *s = &e->saved;
+    int weak;
+    if (!e->captured) continue;
+    weak = lj_preview_weak(g, s);
+    if (weak & LJ_GC_WEAKVAL) {
+      for (j = 0; j < s->asize; j++) {
+        TValue *v = arrayslot(s, j);
+        if (gc_mayclear(v, 1)) setnilV(v);
+      }
+    }
+    if (weak && s->hmask) {
+      for (j = 0; j <= s->hmask; j++) {
+        Node *n = &noderef(s->node)[j];
+        if (!tvisnil(&n->val) &&
+            (((weak & LJ_GC_WEAKKEY) && gc_mayclear(&n->key, 0)) ||
+             ((weak & LJ_GC_WEAKVAL) && gc_mayclear(&n->val, 1)))) setnilV(&n->val);
+      }
+    }
+  }
+}
+
 static void gc_clearweak(global_State *g, GCobj *o)
 {
   UNUSED(g);
@@ -643,6 +696,7 @@ static void atomic(global_State *g, lua_State *L)
 
   /* All marking done, clear weak tables. */
   gc_clearweak(g, gcref(g->gc.weak));
+  gc_clear_preview(g);
 
   lj_buf_shrink(L, &g->tmpbuf);  /* Shrink temp buffer. */
 

@@ -255,6 +255,7 @@ static void LJ_FASTCALL recff_setmetatable(jit_State *J, RecordFFData *rd)
     ix.tab = tr;
     copyTV(J->L, &ix.tabv, &rd->argv[0]);
     lj_record_mm_lookup(J, &ix, MM_metatable); /* Guard for no __metatable. */
+    lj_record_preview(J, tr, tabV(&rd->argv[0]));
     fref = emitir(IRT(IR_FREF, IRT_PGC), tr, IRFL_TAB_META);
     mtref = tref_isnil(mt) ? lj_ir_knull(J, IRT_TAB) : mt;
     emitir(IRT(IR_FSTORE, IRT_TAB), fref, mtref);
@@ -1483,6 +1484,7 @@ static void LJ_FASTCALL recff_table_clear(jit_State *J, RecordFFData *rd)
   TRef tr = J->base[0];
   if (tref_istab(tr)) {
     rd->nres = 0;
+    lj_record_preview(J, tr, tabV(&rd->argv[0]));
     lj_ir_call(J, IRCALL_lj_tab_clear, tr);
     J->needsnap = 1;
   }  /* else: Interpreter will throw. */

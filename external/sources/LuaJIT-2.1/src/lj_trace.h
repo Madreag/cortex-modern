@@ -44,6 +44,8 @@ LJ_FUNC uintptr_t LJ_FASTCALL lj_trace_unwind(jit_State *J, uintptr_t addr, Exit
 /* Signal asynchronous abort of trace or end of trace. */
 #define lj_trace_abort(g)	(G2J(g)->state &= ~LJ_TRACE_ACTIVE)
 #define lj_trace_end(J)		(J->state = LJ_TRACE_END)
+/* Drive a leftover abort through the recorder at a C boundary. */
+LJ_FUNC void lj_trace_abort_leftover(lua_State *L);
 
 #else
 
@@ -51,6 +53,7 @@ LJ_FUNC uintptr_t LJ_FASTCALL lj_trace_unwind(jit_State *J, uintptr_t addr, Exit
 #define lj_trace_initstate(g)	UNUSED(g)
 #define lj_trace_freestate(g)	UNUSED(g)
 #define lj_trace_abort(g)	UNUSED(g)
+#define lj_trace_abort_leftover(L)	UNUSED(L)
 #define lj_trace_end(J)		UNUSED(J)
 
 #endif

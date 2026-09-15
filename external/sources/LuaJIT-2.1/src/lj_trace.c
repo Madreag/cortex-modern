@@ -294,6 +294,8 @@ int lj_trace_flushall(lua_State *L)
   J->freetrace = 0;
   /* Clear penalty cache. */
   memset(J->penalty, 0, sizeof(J->penalty));
+  /* A flush leaves hashed hotcounts in place, so a penalized slot stays cold. */
+  lj_dispatch_init_hotcount(J2G(J));
   /* Free the whole machine code and invalidate all exit stub groups. */
   lj_mcode_free(J);
   memset(J->exitstubgroup, 0, sizeof(J->exitstubgroup));
@@ -775,6 +777,20 @@ void lj_trace_ins(jit_State *J, const BCIns *pc)
   J->fn = curr_func(J->L);
   J->pt = isluafunc(J->fn) ? funcproto(J->fn) : NULL;
   while (lj_vm_cpcall(J->L, NULL, (void *)J, trace_state) != 0)
+    J->state = LJ_TRACE_ERR;
+}
+
+/* A leftover 1..6 is driven through trace_state so the real abort runs. */
+void lj_trace_abort_leftover(lua_State *L)
+{
+  jit_State *J = L2J(L);
+  J->state = (TraceState)((uint32_t)J->state & ~(uint32_t)LJ_TRACE_ACTIVE);
+  if (J->state == LJ_TRACE_IDLE) {
+    lj_dispatch_update(G(L));
+    return;
+  }
+  J->L = L;
+  while (lj_vm_cpcall(L, NULL, (void *)J, trace_state) != 0)
     J->state = LJ_TRACE_ERR;
 }
 

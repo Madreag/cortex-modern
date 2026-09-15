@@ -1099,6 +1099,8 @@ static void build_subroutines(BuildCtx *ctx)
   |.ffunc_2 setmetatable
   |  // Fast path: no mt for table yet and not clearing the mt.
   |  checktp TMP1, CARG1, LJ_TTAB, ->fff_fallback
+  |  ldr TMP0w, TAB:TMP1->preview
+  |  tbnz TMP0w, #31, ->fff_fallback
   |   ldr TAB:TMP0, TAB:TMP1->metatable
   |  asr ITYPE, CARG2, #47
   |   ldrb TMP2w, TAB:TMP1->marked
@@ -3237,6 +3239,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  ldr CARG2, [BASE, RB, lsl #3]
     |   ldr TMP1, [BASE, RC, lsl #3]
     |  checktab CARG2, ->vmeta_tsetv
+    |  ldr TMP0w, TAB:CARG2->preview
+    |  tbnz TMP0w, #31, ->vmeta_tsetv
     |  checkint TMP1, >9		// Integer key?
     |  ldr CARG3, TAB:CARG2->array
     |   ldr CARG1w, TAB:CARG2->asize
@@ -3290,6 +3294,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  movn CARG4, #~LJ_TSTR
     |    add NODE:CARG3, NODE:CARG3, TMP1, lsl #3  // node = tab->node + idx*3*8
     |  add CARG4, STR:RC, CARG4, lsl #47	// Tagged key to look for.
+    |  ldr TMP1w, TAB:CARG2->preview
+    |  tbnz TMP1w, #31, ->vmeta_tsets
     |   strb wzr, TAB:CARG2->nomm	// Clear metamethod cache.
     |1:
     |  ldp TMP1, CARG1, NODE:CARG3->val
@@ -3349,6 +3355,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  // RA = src, RB = table, RC = index
     |  ldr CARG2, [BASE, RB, lsl #3]
     |  checktab CARG2, ->vmeta_tsetb
+    |  ldr TMP0w, TAB:CARG2->preview
+    |  tbnz TMP0w, #31, ->vmeta_tsetb
     |  ldr CARG3, TAB:CARG2->array
     |   ldr CARG1w, TAB:CARG2->asize
     |  add CARG3, CARG3, RC, lsl #3
@@ -3383,6 +3391,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  ldr CARG2, [BASE, RB, lsl #3]
     |   ldr TMP1, [BASE, RC, lsl #3]
     |  and TAB:CARG2, CARG2, #LJ_GCVMASK
+    |  ldr TMP0w, TAB:CARG2->preview
+    |  tbnz TMP0w, #31, ->vmeta_tsetr
     |  ldr CARG1, TAB:CARG2->array
     |    ldrb TMP2w, TAB:CARG2->marked
     |   ldr CARG4w, TAB:CARG2->asize
@@ -3411,6 +3421,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |    sub RB, RB, #8
     |    cbz RB, >4			// Nothing to copy?
     |  and TAB:CARG2, CARG2, #LJ_GCVMASK
+    |  ldr TMP0w, TAB:CARG2->preview
+    |  tbnz TMP0w, #31, >8
     |  ldr CARG1w, TAB:CARG2->asize
     |   add CARG3w, TMP1w, RBw, lsr #3
     |   ldr CARG4, TAB:CARG2->array
@@ -3434,6 +3446,13 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   str PC, SAVE_PC
     |  bl extern lj_tab_reasize		// (lua_State *L, GCtab *t, int nasize)
     |  // Must not reallocate the stack.
+    |  b <1
+    |
+    |8:
+    |  str BASE, L->base
+    |  mov CARG1, L
+    |  str PC, SAVE_PC
+    |  bl extern lj_preview_write
     |  b <1
     |
     |7:  // Possible table write barrier for any value. Skip valiswhite check.

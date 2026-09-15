@@ -43,6 +43,9 @@ namespace RTE {
 
 		/// Destroys and resets (through Clear()) the LuaStateWrapper object.
 		void Destroy();
+
+		/// Prints this state's native preview barrier stats row once, when they were collected.
+		void ReportPreviewBarrierStats();
 #pragma endregion
 
 #pragma region Getters and Setters
@@ -192,10 +195,11 @@ namespace RTE {
 
 		/// Whether this state's globals are recorded for the running preview.
 		bool PreviewGlobalFenceArmed() const { return m_PreviewGlobalFenceArmed; }
-		/// Records this state's globals and require caches so a preview's writes to them can be undone.
+		/// Arms the native barrier for tables reachable from this state's globals and require caches.
+		/// It undoes table writes only: upvalue slots, setfenv envs, registry-only tables and stack-only tables keep what a preview wrote.
 		void CapturePreviewGlobalFence();
 		/// Puts them back as the fence found them: keys the preview added go, values it changed or removed come back.
-		/// @return How many entries were put back.
+		/// @return How many tables and cached scripts were put back.
 		int ReleasePreviewGlobalFence();
 		bool BindPreviewScriptObject(MovableObject* clone, bool sharedSlot);
 		bool RemapPreviewHoldReferences(long uniqueID, std::string& freezeClass);
@@ -373,8 +377,10 @@ namespace RTE {
 
 		lua_State* m_State;
 		bool m_ScriptGraphHelperLoaded = false; //!< Whether the script graph codec has been installed in this state.
-		bool m_PreviewGlobalFenceArmed = false; //!< Whether a preview's record of this state's globals is waiting to be put back.
+		bool m_PreviewGlobalFenceArmed = false; //!< Whether the VM's native table barrier is armed for this state.
+		bool m_PreviewStatsReported = false; //!< Whether this state's barrier stats row has been printed.
 		std::unordered_set<std::string> m_PreviewScriptCacheKeys; //!< The script files this state had cached when the preview's record was taken.
+		std::unordered_map<std::string, std::unordered_map<std::string, LuabindObjectWrapper*>> m_PreviewScriptCacheHeld; //!< The cached function objects a reload replaced inside the preview, held for the release to put back.
 		Entity* m_TempEntity; //!< Temporary holder for an Entity object that we want to pass into the Lua state without fuss. Lets you export objects to lua easily.
 		std::vector<Entity*> m_TempEntityVector; //!< Temporary holder for a vector of Entities that we want to pass into the Lua state without a fuss. Usually used to pass arguments to special Lua functions.
 		std::string m_LastError; //!< Description of the last error that occurred in the script execution.

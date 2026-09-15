@@ -1051,6 +1051,9 @@ static void build_subroutines(BuildCtx *ctx)
   |    ldrbeq CARG4, TAB:CARG1->marked
   |   cmpeq TAB:RB, #0
   |  bne ->fff_fallback
+  |  ldr RB, TAB:CARG1->preview
+  |  tst RB, #LJ_PREVIEW_PENDING
+  |  bne ->fff_fallback
   |    tst CARG4, #LJ_GC_BLACK		// isblack(table)
   |     str TAB:CARG3, TAB:CARG1->metatable
   |    beq ->fff_restv
@@ -3790,6 +3793,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  ldrd TAB:CARG12, [BASE, RB]
     |   ldrd CARG34, [BASE, RC]
     |  checktab CARG2, ->vmeta_tsetv  // STALL: load CARG12.
+    |  ldr CARG2, TAB:CARG1->preview
+    |  tst CARG2, #LJ_PREVIEW_PENDING
+    |  bne ->vmeta_tsetv
     |   checktp CARG4, LJ_TISNUM	// Integer key?
     |  ldreq CARG2, TAB:CARG1->array
     |    ldreq CARG4, TAB:CARG1->asize
@@ -3848,6 +3854,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   ldr CARG4, STR:RC->sid
     |    ldr NODE:INS, TAB:CARG1->node
     |     mov TAB:RB, TAB:CARG1
+    |  ldr CARG2, TAB:RB->preview
+    |  tst CARG2, #LJ_PREVIEW_PENDING
+    |  bne ->vmeta_tsets
     |  and CARG3, CARG3, CARG4			// idx = str->sid & tab->hmask
     |  add CARG3, CARG3, CARG3, lsl #1
     |   mov CARG4, #0
@@ -3918,6 +3927,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  // RA = src*8, RB = table*8, RC = index
     |  ldrd CARG12, [BASE, RB]
     |  checktab CARG2, ->vmeta_tsetb  // STALL: load CARG12.
+    |  ldr CARG3, TAB:CARG1->preview
+    |  tst CARG3, #LJ_PREVIEW_PENDING
+    |  bne ->vmeta_tsetb
     |   ldr CARG3, TAB:CARG1->asize
     |  ldr RB, TAB:CARG1->array
     |  lsl CARG2, RC, #3
@@ -3958,6 +3970,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  // RA = src*8, RB = table*8, RC = key*8
     |  ldr TAB:CARG2, [BASE, RB]
     |   ldr CARG3, [BASE, RC]
+    |  ldr CARG4, TAB:CARG2->preview
+    |  tst CARG4, #LJ_PREVIEW_PENDING
+    |  bne ->vmeta_tsetr
     |     ldrb INS, TAB:CARG2->marked
     |  ldr CARG1, TAB:CARG2->array
     |    ldr CARG4, TAB:CARG2->asize
@@ -3985,6 +4000,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |1:
     |   ldr RB, SAVE_MULTRES
     |  ldr TAB:CARG2, [RA, #-8]		// Guaranteed to be a table.
+    |  ldr CARG4, TAB:CARG2->preview
+    |  tst CARG4, #LJ_PREVIEW_PENDING
+    |  bne >8
     |  ldr CARG1, [KBASE, RC, lsl #3]	// Integer constant is in lo-word.
     |   subs RB, RB, #8
     |  ldr CARG4, TAB:CARG2->asize
@@ -4012,6 +4030,14 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   str PC, SAVE_PC
     |  bl extern lj_tab_reasize		// (lua_State *L, GCtab *t, int nasize)
     |  // Must not reallocate the stack.
+    |  .IOS ldr BASE, L->base
+    |  b <1
+    |
+    |8:
+    |  str BASE, L->base
+    |  mov CARG1, L
+    |  str PC, SAVE_PC
+    |  bl extern lj_preview_write
     |  .IOS ldr BASE, L->base
     |  b <1
     |

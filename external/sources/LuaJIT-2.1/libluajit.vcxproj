@@ -305,6 +305,7 @@
     <ClCompile Include="src\lj_strfmt_num.c" />
     <ClCompile Include="src\lj_strscan.c" />
     <ClCompile Include="src\lj_tab.c" />
+    <ClCompile Include="src\lj_preview.c" />
     <ClCompile Include="src\lj_trace.c" />
     <ClCompile Include="src\lj_udata.c" />
     <ClCompile Include="src\lj_vmevent.c" />
