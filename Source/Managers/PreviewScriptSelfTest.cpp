@@ -81,17 +81,38 @@ local function hot(t, n)
     t.x = i; t[i % 16 + 1] = i; rawset(t, 'raw', i)
   end
 end
-local warm = {}
-hot(warm, 512); hot(warm, 512)
 local jitEnabled = jit and jit.status() or false
-local compiled = false
-if jitEnabled then
-  for i = 1, 65535 do
-    local info = util.traceinfo(i)
-    if info and util.traceir(i, 1) then compiled = true; break end
+local traceStarts, hotTrace, traceReason = {}, nil, 'no trace event'
+local function traceEvent(what, tr, func, pos, errmsg)
+  if what == 'flush' then
+    traceStarts, hotTrace, traceReason = {}, nil, 'trace cache flushed'
+  elseif what == 'start' then
+    -- A flushed trace number is handed out again, so the recorded one only counts while it keeps its number.
+    if tr == hotTrace then hotTrace, traceReason = nil, 'trace number reused' end
+    traceStarts[tr] = func
+  elseif what == 'stop' then
+    if traceStarts[tr] == hot or func == hot then hotTrace, traceReason = tr, 'recorded' end
+    traceStarts[tr] = nil
+  elseif what == 'abort' then
+    if traceStarts[tr] == hot or func == hot then traceReason = 'aborted at pc '..tostring(pos)..': '..tostring(errmsg) end
+    traceStarts[tr] = nil
   end
-  assert(compiled, 'hot store trace was not compiled')
 end
+-- A live compiled trace for the guarded loop is a precondition of the JIT arm, so say why it is missing.
+local function armHotTrace(label)
+  if not jitEnabled then _PreviewBarrierHotTrace = label..':jit-off'; return end
+  local kept = hotTrace ~= nil and util.traceinfo(hotTrace) ~= nil
+  if not kept then
+    hotTrace, traceReason = nil, 'no trace event'
+    jit.attach(traceEvent, 'trace')
+    local scratch = {}
+    hot(scratch, 512); hot(scratch, 512)
+    jit.attach(traceEvent)
+  end
+  assert(hotTrace and util.traceinfo(hotTrace), 'no live compiled trace for the guarded store loop at '..label..': '..tostring(traceReason))
+  _PreviewBarrierHotTrace = label..':'..tostring(hotTrace)..(kept and ':kept' or ':recorded')
+end
+armHotTrace('setup')
 local exits = 0
 local function onexit() exits = exits + 1 end
 local slot = 1
@@ -105,6 +126,7 @@ p.prepare = function()
   end)
   assert(coroutine.resume(p.co))
   p.weak[1] = {value = 1}
+  armHotTrace('prepare')
 end
 p.mutate = function()
   assert(rawequal(p.data, p.alias) and p.cycle == p)
@@ -125,15 +147,16 @@ p.mutate = function()
   setmetatable(p.data, {__index = {fallback = 29}})
   assert(p.data.fallback == 29 and getmetatable(p.data) ~= mt)
   hidden.deep.value = 81
+  assert(not jitEnabled or (hotTrace and util.traceinfo(hotTrace)), 'the guarded store loop lost its compiled trace before the window: '..tostring(traceReason))
   local exitsBefore = exits
   if jitEnabled then jit.attach(onexit, 'texit') end
   hot(p.hot, 512)
   if jitEnabled then jit.attach(onexit) end
   assert(p.hot.x == 512 and rawget(p.hot, 'raw') == 512)
-  assert(not jitEnabled or exits > exitsBefore, 'no compiled trace ran for the guarded stores')
   slot = 2
   assert((jit and jit.status() or false) == jitEnabled)
   assert(coroutine.resume(p.co))
+  assert(not jitEnabled or exits > exitsBefore, 'no compiled trace ran for the guarded stores')
   rawset(p.weak, 2, {})
   if p.weak[1] then p.weak[1].value = 2 end
   local hook = function() p.hookData.count = p.hookData.count + 1 end
@@ -261,16 +284,19 @@ end
 					lua_getfield(observed, -1, "value");
 					registryValue = lua_isnumber(observed, -1) ? static_cast<int>(lua_tointeger(observed, -1)) : -1;
 				}
+				lua_getglobal(observed, "_PreviewBarrierHotTrace");
+				const char* hotTrace = lua_isstring(observed, -1) ? lua_tostring(observed, -1) : "none";
 				// Both are documented limits, so the observed values are printed and a contract change shows up here.
 				std::cout << "[preview-barrier] state=" << index << " round=" << round
 				          << " upvalue_slot_after_end=" << (lua_isnumber(observed, slotTop + 1) ? static_cast<int>(lua_tointeger(observed, slotTop + 1)) : -1)
-				          << " registry_table_after_end=" << registryValue << std::endl;
+				          << " registry_table_after_end=" << registryValue
+				          << " hot_trace=" << hotTrace << std::endl;
 				lua_settop(observed, slotTop);
 				check("preview_barrier_registry_table", index, round, registryValue == 2 ? 0 : -1);
 			}
 		}
 		for (LuaStateWrapper* state: states) {
-			state->RunScriptString("_ScriptFieldsStash = _ScriptFieldsStash or {}; debug.sethook(); if _PreviewBarrierProbe and _PreviewBarrierProbe.cleanup then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; _PreviewBarrierUpvalueSlot = nil; rawset(_G, '_ScriptFieldsStash\\0probe', nil); _ScriptFieldsStash['preview:-7654321'] = nil; _ScriptFieldsStash['preview:gc'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
+			state->RunScriptString("_ScriptFieldsStash = _ScriptFieldsStash or {}; debug.sethook(); if _PreviewBarrierProbe and _PreviewBarrierProbe.cleanup then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; _PreviewBarrierUpvalueSlot = nil; _PreviewBarrierHotTrace = nil; rawset(_G, '_ScriptFieldsStash\\0probe', nil); _ScriptFieldsStash['preview:-7654321'] = nil; _ScriptFieldsStash['preview:gc'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
 			lua_State* done = state->GetLuaState();
 			lua_pushnil(done);
 			lua_setfield(done, LUA_REGISTRYINDEX, "_PreviewBarrierRegistry");
