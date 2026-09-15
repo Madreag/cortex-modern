@@ -39,6 +39,8 @@ namespace RTE {
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings = nullptr, std::string* refusal = nullptr);
 		std::string GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const;
 		bool RunCheckpointSelfTest();
+		/// Test accessor: deferred voices and pending sample archives still held.
+		std::pair<int, int> PendingAudioCount() const;
 		void SetCheckpointTraceEnabled(bool enabled);
 		void TraceCheckpointBoundary(const char* stage) const;
 		bool PerturbCheckpointCursorForSelfTest();
@@ -501,6 +503,7 @@ namespace RTE {
 			float minimumAudibleDistance = 0;
 			SoundExecutionDomain domain = SoundExecutionDomain::Presentation;
 			bool predicted = false; //!< Started by a preview and not yet adopted, so it belongs to no checkpoint.
+			bool awaitingSample = false; //!< Held until the referenced sample reports ready.
 		};
 		std::map<int, PlayingVoice> m_PlayingVoices;
 		std::unordered_map<int, int> m_BackendVoiceIdentities;
@@ -547,6 +550,7 @@ namespace RTE {
 		FMOD_RESULT GetVoiceChannel(int voiceIdentity, FMOD::Channel** channel) const;
 		bool OwnsVoice(int voiceIdentity, const SoundContainer* owner) const;
 		void RetireVoice(int identity);
+		void StartAwaitingSampleVoices();
 		bool MakeVoiceSlotAvailable();
 
 #pragma region Sound Container Actions and Modifications
