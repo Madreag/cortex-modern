@@ -1333,12 +1333,15 @@ bool Actor::OrderedWaypointsPending() const {
 	return !m_Waypoints.empty();
 }
 
-bool Actor::FirstOrderedWaypoint(Vector& point) const {
+bool Actor::FirstOrderedWaypoint(Vector& point, const MovableObject** target) const {
 	if (SeeingLogicalWaypoints()) {
 		std::vector<std::pair<Vector, const MovableObject*>> items;
 		BuildLogicalWaypoints(items);
 		if (!items.empty()) {
 			point = items.front().first;
+			if (target) {
+				*target = items.front().second;
+			}
 			return true;
 		}
 		return false;
@@ -1347,6 +1350,9 @@ bool Actor::FirstOrderedWaypoint(Vector& point) const {
 		return false;
 	}
 	point = m_Waypoints.front().first;
+	if (target) {
+		*target = m_Waypoints.front().second;
+	}
 	return true;
 }
 
@@ -1387,6 +1393,23 @@ Vector Actor::GetOrderedMoveEnd() const {
 		return m_Pos;
 	}
 	return GetLastAIWaypoint();
+}
+
+// The loaded MO target is this machine's own; the ordered one is what every peer follows.
+const MovableObject* Actor::GetOrderedMOMoveTarget() const {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return GetMOMoveTarget();
+	}
+	Vector point;
+	const MovableObject* target = nullptr;
+	if (FirstOrderedWaypoint(point, &target)) {
+		return g_MovableMan.ValidMO(target) ? target : nullptr;
+	}
+	if (m_HasOrderedWaypoint && m_LastOrderedWaypointUID != 0) {
+		const MovableObject* ordered = g_MovableMan.FindObjectByUniqueID(static_cast<long int>(m_LastOrderedWaypointUID));
+		return g_MovableMan.ValidMO(ordered) ? ordered : nullptr;
+	}
+	return nullptr;
 }
 
 const std::list<std::pair<Vector, MovableObjectReference>>& Actor::GetWaypointList() const {
