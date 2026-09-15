@@ -728,6 +728,7 @@ namespace RTE {
 		bool m_IsActive[Players::MaxPlayerCount]; //!< Whether a specific player is at all active and playing this Activity.
 		bool m_IsHuman[Players::MaxPlayerCount]; //!< Whether a human plays each shared seat.
 		bool m_SharedPlayerSeats; //!< Whether the player slots come from the synced match roster.
+		bool m_SharedSeatsEngaged; //!< Whether a live match mapped those slots, so the map outlives its coordinator.
 		std::array<int, Players::MaxPlayerCount> m_LocalInputPlayers; //!< Physical input slots, or NoPlayer for remote seats.
 
 		int m_PlayerScreen[Players::MaxPlayerCount]; //!< The screen index of each player - only applicable to human players. -1 if AI or other.
