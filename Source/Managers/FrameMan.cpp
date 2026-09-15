@@ -1059,7 +1059,9 @@ FrameMan::ScreenTextLayout FrameMan::GetScreenTextLayout(int playerScreen, bool 
 		screenOcclusionOffsetX = 0;
 	}
 	layout.text = decorated ? ">>> " + m_ScreenText[playerScreen] + " <<<" : m_ScreenText[playerScreen];
-	layout.text = SplitStringToFitWidth(layout.text, screenWidth, false);
+	// The message is centred on what a slid-in panel leaves the seat, so it wraps to that band, not the screen.
+	const int band = screenOcclusionOffsetX < 0 ? screenWidth + screenOcclusionOffsetX : screenWidth - screenOcclusionOffsetX;
+	layout.text = SplitStringToFitWidth(layout.text, std::max(1, band), false);
 	GUIFont* font = GetLargeFont();
 	layout.width = font->CalculateWidth(layout.text);
 	layout.height = font->CalculateHeight(layout.text);
