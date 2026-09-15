@@ -10145,9 +10145,9 @@ namespace RTE {
 					claimed = candidate;
 				} else if (candidate && !peerView) {
 					peerView = candidate;
-				} else if (candidate) {
-					delete candidate;
 				}
+				// A surplus candidate is left where it is: this process has no LuaMan, so destroying a
+				// registered MovableObject faults in ForgetDestroyedObject.
 			}
 			if (!claimed) {
 				return finish("no actor UID with owner peer 1");
