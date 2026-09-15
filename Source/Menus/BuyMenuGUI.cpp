@@ -140,11 +140,7 @@ int BuyMenuGUI::Create(Controller* pController) {
 		m_pGUIScreen = new AllegroScreen(g_FrameMan.GetBackBuffer8());
 	if (!m_pGUIInput)
 		m_pGUIInput = new GUIInputWrapper(pController->GetInputPlayer());
-	// Loading the layout below deletes every control, so a menu that is already built drops its old
-	// manager and skin here and re-reads all of its controls further down.
-	if (m_pGUIController)
-		m_pGUIController->Destroy();
-	else
+	if (!m_pGUIController)
 		m_pGUIController = new GUIControlManager();
 	if (!m_pGUIController->Create(m_pGUIScreen, m_pGUIInput, "Base.rte/GUIs/Skins", "DefaultSkin.ini")) {
 		RTEAbort("Failed to create GUI Control Manager and load it from Base.rte/GUIs/Skins/DefaultSkin.ini");
@@ -161,30 +157,33 @@ int BuyMenuGUI::Create(Controller* pController) {
 	dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("base"))->SetSize(g_WindowMan.GetResX(), g_WindowMan.GetResY());
 
 	// Make sure we have convenient points to teh containing GUI colleciton boxes that we will manipulate the positions of
-	m_pParentBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("BuyGUIBox"));
-	m_pParentBox->SetDrawBackground(true);
-	m_pParentBox->SetDrawType(GUICollectionBox::Color);
+	if (!m_pParentBox) {
+		m_pParentBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("BuyGUIBox"));
+		m_pParentBox->SetDrawBackground(true);
+		m_pParentBox->SetDrawType(GUICollectionBox::Color);
 
-	m_Banner = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CatalogHeader"));
-	SetBannerImage(c_DefaultBannerImagePath);
+		m_Banner = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CatalogHeader"));
+		SetBannerImage(c_DefaultBannerImagePath);
 
-	m_Logo = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CatalogLogo"));
-	SetLogoImage(c_DefaultLogoImagePath);
-
+		m_Logo = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CatalogLogo"));
+		SetLogoImage(c_DefaultLogoImagePath);
+	}
 	m_pParentBox->SetPositionAbs(-m_pParentBox->GetWidth(), 0);
 	m_pParentBox->SetEnabled(false);
 	m_pParentBox->SetVisible(false);
 
-	m_pPopupBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("BuyGUIPopup"));
-	m_pPopupText = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("PopupText"));
+	if (!m_pPopupBox) {
+		m_pPopupBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("BuyGUIPopup"));
+		m_pPopupText = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("PopupText"));
 
-	m_pPopupBox->SetDrawType(GUICollectionBox::Panel);
-	m_pPopupBox->SetDrawBackground(true);
-	// Never enable the popup, because it steals focus and cuases other windows to think teh cursor left them
-	m_pPopupBox->SetEnabled(false);
-	m_pPopupBox->SetVisible(false);
-	// Set the font
-	m_pPopupText->SetFont(m_pGUIController->GetSkin()->GetFont("FontSmall.png"));
+		m_pPopupBox->SetDrawType(GUICollectionBox::Panel);
+		m_pPopupBox->SetDrawBackground(true);
+		// Never enable the popup, because it steals focus and cuases other windows to think teh cursor left them
+		m_pPopupBox->SetEnabled(false);
+		m_pPopupBox->SetVisible(false);
+		// Set the font
+		m_pPopupText->SetFont(m_pGUIController->GetSkin()->GetFont("FontSmall.png"));
+	}
 
 	m_pCategoryTabs[CRAFT] = dynamic_cast<GUITab*>(m_pGUIController->GetControl("CraftTab"));
 	m_pCategoryTabs[BODIES] = dynamic_cast<GUITab*>(m_pGUIController->GetControl("BodiesTab"));
