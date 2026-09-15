@@ -567,7 +567,13 @@ void NetModerationGUI::DrawMatchToasts() {
 	const int rowHeight = std::max(12, font->GetFontHeight()) + 8;
 	const EditorArea editor = FreeArea(backbuffer->w);
 	// The status widget takes the bottom while the editor holds the world, so the rows stack above it.
-	const int bottom = editor.editing && m_StatusRect.visible ? m_StatusRect.y - 4 : backbuffer->h - 8;
+	int bottom = editor.editing && m_StatusRect.visible ? m_StatusRect.y - 4 : backbuffer->h - 8;
+	if (m_Open) {
+		// The seats panel owns its rows too: a stack that would cross them piles up above it instead.
+		int panelX, panelTop, panelWidth, panelHeight;
+		m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
+		bottom = std::min(bottom, panelTop - 4);
+	}
 	const int top = bottom - static_cast<int>(visible.size()) * rowHeight;
 	int freeLeft = 0, freeRight = backbuffer->w;
 	editor.FreeSpan(top, bottom, backbuffer->w, freeLeft, freeRight);
