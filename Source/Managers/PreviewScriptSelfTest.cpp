@@ -30,6 +30,7 @@ extern "C" {
 #include "lj_obj.h"
 #include "lj_jit.h"
 #include "lj_dispatch.h"
+#include "lj_trace.h"
 }
 
 #include <iostream>
@@ -396,8 +397,7 @@ assert(seen > 0, 'no trace event after forced abort path seen='..tostring(seen).
 				global_State* g = G(L);
 				J->state = LJ_TRACE_RECORD;
 				lj_dispatch_update(g);
-				J->state = static_cast<TraceState>(static_cast<unsigned>(J->state) & ~static_cast<unsigned>(LJ_TRACE_ACTIVE));
-				if (J->state != LJ_TRACE_IDLE) J->state = LJ_TRACE_IDLE;
+				lj_trace_abort(g);
 			}
 #endif
 			const int status = states[index]->RunScriptString(probe, false);
