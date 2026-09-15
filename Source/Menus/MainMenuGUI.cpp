@@ -1238,6 +1238,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	const int contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
 	std::vector<GUILabel*> fillLabels(m_MultiplayerLobbyPlayerLabels.begin(), m_MultiplayerLobbyPlayerLabels.end());
 	fillLabels.push_back(m_MultiplayerStatusLabel);
+	// The header rides the rows' fill rule so its left edge is theirs at every width.
+	if (m_MultiplayerLobbyPlayersHeader) {
+		fillLabels.push_back(m_MultiplayerLobbyPlayersHeader);
+	}
 	// Chat labels fill like the player rows when the panel widens (X=12, W=contentWidth-24).
 	for (GUILabel* label : m_MultiplayerLobbyChatLabels) {
 		if (label) {
@@ -1245,9 +1249,6 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		}
 	}
 	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth, fillLabels);
-	if (m_MultiplayerLobbyPlayersHeader) {
-		m_MultiplayerLobbyPlayersHeader->SetPositionRel(contentWidth > 300 ? 24 : 20, m_MultiplayerLobbyPlayersHeader->GetRelYPos());
-	}
 	const int rowBoxWidth = contentWidth - 24;
 	for (size_t i = 0; i < lobbyRowName.size(); ++i) {
 		GUILabel* label = m_MultiplayerLobbyPlayerLabels[i];
