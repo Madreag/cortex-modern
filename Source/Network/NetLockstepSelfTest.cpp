@@ -1291,11 +1291,21 @@ namespace RTE {
 				*error = "host enqueued an AIOrder for a team it does not control";
 				return false;
 			}
+			// An AI pass's message and gib are vetted by the same writer-aware gate.
+			ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{1, NetGameAIScriptMessage{1002, 1002, 1, NetGameAIScriptMessage::None, 0.0, 0, "AI_IsFlying", ""}});
+			ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{1, NetGameAIGib{1002, 1003, 0, 1, 0.0F, 0.0F}});
+			if (!ScenarioRunner::DrainLocalGameCommands().empty()) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				*error = "host enqueued an AI pass write for a team it does not control";
+				return false;
+			}
 			ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{1, NetGameAIOrder{1001, 0, NetGameAIOrder::PopWaypoint, 10.0F, 20.0F, 0}});
+			ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{1, NetGameAIScriptMessage{1001, 1001, 0, NetGameAIScriptMessage::None, 0.0, 0, "AI_IsFlying", ""}});
+			ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{1, NetGameAIGib{1001, 1004, 0, 0, 0.0F, 0.0F}});
 			const std::vector<NetGameCommand> kept = ScenarioRunner::DrainLocalGameCommands();
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
-			if (kept.size() != 1) {
-				*error = "host dropped an AIOrder for the team it controls";
+			if (kept.size() != 3) {
+				*error = "host dropped an AI pass write for the team it controls";
 				return false;
 			}
 			return true;
@@ -2016,6 +2026,40 @@ namespace RTE {
 			}
 			if (g_MovableMan.GetControllerBoundaryStats().directWrites != reportsBefore + 1) {
 				return finish("a message the wire cannot carry was not reported at the boundary");
+			}
+
+			// A name or a text the codec refuses would kill the whole frame at encode time, so it never
+			// reaches the queue: the call is made here and reported, like an unnameable context.
+			const uint64_t reportsBeforeStrings = g_MovableMan.GetControllerBoundaryStats().directWrites;
+			g_CurrentAIActor = ownerView;
+			ownerView->SendScriptedMessage("", NetGameAIScriptMessage::None, 0.0, 0, "", nullptr);
+			ownerView->SendScriptedMessage("AI_Text", NetGameAIScriptMessage::Text, 0.0, 0, "line\nbreak", nullptr);
+			ownerView->SendScriptedMessage(std::string(NetLockstepCodec::c_MaxValueKeyBytes + 1, 'n'), NetGameAIScriptMessage::None, 0.0, 0, "", nullptr);
+			g_CurrentAIActor = nullptr;
+			ownerView->SendDeferredScriptMessages();
+			if (!ScenarioRunner::DrainLocalGameCommands().empty()) {
+				return finish("a message the codec refuses was queued anyway");
+			}
+			if (g_MovableMan.GetControllerBoundaryStats().directWrites != reportsBeforeStrings + 3) {
+				return finish("a message the codec refuses was not reported at the boundary");
+			}
+			// A name at the limit is carried, and the encoder agrees with the rule the queue asked.
+			const std::string longestName(NetLockstepCodec::c_MaxValueKeyBytes, 'n');
+			g_CurrentAIActor = ownerView;
+			ownerView->SendScriptedMessage(longestName, NetGameAIScriptMessage::None, 0.0, 0, "", nullptr);
+			g_CurrentAIActor = nullptr;
+			ownerView->SendDeferredScriptMessages();
+			const std::vector<NetGameCommand> longest = ScenarioRunner::DrainLocalGameCommands();
+			if (longest.size() != 1) {
+				return finish("a name the wire can carry did not cross");
+			}
+			NetLockstepFrame longestFrame;
+			longestFrame.senderPeerId = 1;
+			longestFrame.targetFrame = 9;
+			longestFrame.commands.push_back(NetGameCommand{1, longest[0].payload, 4});
+			std::vector<uint8_t> longestBytes;
+			if (!NetLockstepCodec::Encode(NetLockstepPacket{longestFrame}, longestBytes)) {
+				return finish("the queue accepted a message the encoder refuses");
 			}
 
 			// The wire keeps every field of the message it carries.
