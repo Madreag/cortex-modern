@@ -117,6 +117,8 @@ bool PresetMan::LoadDataModule(const std::string& moduleName, bool official, boo
 	return true;
 }
 
+bool HarnessMatchRunActive(); //!< Main.cpp: a -net-match-service-e2e match or the -net-replay playback of one.
+
 bool PresetMan::LoadAllDataModules() {
 	auto moduleLoadTimerStart = std::chrono::steady_clock::now();
 
@@ -134,7 +136,7 @@ bool PresetMan::LoadAllDataModules() {
 
 	// Load the bundled determinism test module only when the test harness is driving the run,
 	// so a normal launch never loads it.
-	if (ScenarioRunner::IsActive() && std::filesystem::exists(System::GetWorkingDirectory() + System::GetDataDirectory() + "Tests.rte/Index.ini")) {
+	if ((ScenarioRunner::IsActive() || HarnessMatchRunActive()) && std::filesystem::exists(System::GetWorkingDirectory() + System::GetDataDirectory() + "Tests.rte/Index.ini")) {
 		LoadDataModule("Tests.rte", false, false, LoadingScreen::LoadingSplashProgressReport);
 	}
 
