@@ -231,6 +231,16 @@ automoverUtilityFunctions.sortedAffectedActorIDs = function(self)
 	return ids;
 end
 
+automoverUtilityFunctions.sortedNodeKeys = function(self, tbl)
+	-- Node-object pairs follow addresses; UniqueID order does not.
+	local keys = {};
+	for node, _ in pairs(tbl) do
+		keys[#keys + 1] = node;
+	end
+	table.sort(keys, function(a, b) return a.UniqueID < b.UniqueID; end);
+	return keys;
+end
+
 automoverActorFunctions.actorMovementUpdate = function(self)
 	tracy.ZoneBegin();
 	local ids = self:sortedAffectedActorIDs();
@@ -636,7 +646,8 @@ automoverUtilityFunctions.addAllPaths = function(self)
 		while next(tentativeNodes) ~= nil do
 			local closestNode;
 			local distanceToClosestNode;
-			for tentativeNode, tentativeNodeData in pairs(tentativeNodes) do
+			for _, tentativeNode in ipairs(self:sortedNodeKeys(tentativeNodes)) do
+				local tentativeNodeData = tentativeNodes[tentativeNode];
 				if distanceToClosestNode == nil or tentativeNodeData.distance < distanceToClosestNode then
 					closestNode = tentativeNode;
 					distanceToClosestNode = tentativeNodeData.distance;
@@ -694,7 +705,7 @@ automoverUtilityFunctions.findClosestNode = function(self, positionToFindClosest
 
 	local closestNode;
 	local distanceToClosestNodeSqr;
-	for node, _ in pairs(nodesToCheck) do
+	for _, node in ipairs(self:sortedNodeKeys(nodesToCheck)) do
 		local nodeData = teamNodeTable[node];
 		local distanceToNode = SceneMan:ShortestDistance(node.Pos, positionToFindClosestNodeFor, self.checkWrapping);
 		if distanceToClosestNodeSqr == nil or distanceToNode.SqrMagnitude < distanceToClosestNodeSqr then
@@ -1043,7 +1054,7 @@ automoverActorFunctions.setupManualTeleporterData = function(self, actorData)
 	local startingTeleporter = self:findClosestNode(actor.Pos, nil, false, false);
 	manualTeleporterData.sortedTeleporters = {{ node = startingTeleporter, distance = 0 }};
 
-	for teleporterNode, _ in pairs(teamTeleporterTable) do
+	for _, teleporterNode in ipairs(self:sortedNodeKeys(teamTeleporterTable)) do
 		if teleporterNode.UniqueID ~= startingTeleporter.UniqueID then
 			local xDistanceToTeleporter = SceneMan:ShortestDistance(startingTeleporter.Pos, teleporterNode.Pos, self.checkWrapping).X;
 
@@ -1400,7 +1411,7 @@ automoverActorFunctions.handleTeleportingActorToAppropriateTeleporterForWaypoint
 				waypointData.nextNode = waypointData.endNode;
 			else
 				local closestTeleporterDistance;
-				for teleporterNode, _ in pairs(teamTeleporterTable) do
+				for _, teleporterNode in ipairs(self:sortedNodeKeys(teamTeleporterTable)) do
 					if self.pathTable[teleporterNode][waypointData.endNode] ~= nil and (closestTeleporterDistance == nil or self.pathTable[teleporterNode][waypointData.endNode].distance < closestTeleporterDistance) then
 						closestTeleporterDistance = self.pathTable[teleporterNode][waypointData.endNode].distance;
 						waypointData.nextNode = teleporterNode;
