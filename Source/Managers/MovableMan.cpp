@@ -482,6 +482,17 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				std::cout << line << std::endl;
 				continue;
 			}
+		} else if (const NetGameAIScriptMessage* message = std::get_if<NetGameAIScriptMessage>(&command.payload)) {
+			// An AI pass's message and gib are authorized by their writer, like the AI orders they sit beside.
+			if (!ScenarioRunner::IsLockstepAIWriteAuthorized(command.senderPeerId, message->team, message->writerUID, message->writerUID)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected an AIScriptMessage command from a peer that does not drive actor " + std::to_string(message->writerUID));
+				continue;
+			}
+		} else if (const NetGameAIGib* gibCommand = std::get_if<NetGameAIGib>(&command.payload)) {
+			if (!ScenarioRunner::IsLockstepAIWriteAuthorized(command.senderPeerId, gibCommand->team, gibCommand->writerUID, gibCommand->writerUID)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected an AIGib command from a peer that does not drive actor " + std::to_string(gibCommand->writerUID));
+				continue;
+			}
 		} else if (!ScenarioRunner::IsLockstepTeamCommandSender(commandTeam, command.senderPeerId)) {
 			g_ConsoleMan.PrintString("ERROR: Rejected a " + std::string(NetGameCommandTypeName(NetGameCommandTypeOf(command.payload))) + " command from a peer that does not control team " + std::to_string(commandTeam));
 			continue;
@@ -657,6 +668,12 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 					case NetGameAIOrder::PopWaypoint:
 						actor->PopFrontWaypoint(Vector(order->x, order->y));
 						break;
+					case NetGameAIOrder::SetMOMoveTarget:
+						actor->SetMOMoveTarget(order->targetUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order->targetUID)) : nullptr);
+						break;
+					case NetGameAIOrder::SetAlarmPoint:
+						actor->AlarmPoint(Vector(order->x, order->y));
+						break;
 					default:
 						break;
 				}
@@ -750,6 +767,46 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			deferred.moduleName = equip->moduleName;
 			deferred.presetName = equip->presetName;
 			human->ExecuteDeferredEquip(deferred);
+		} else if (const NetGameAIScriptMessage* scriptMessage = std::get_if<NetGameAIScriptMessage>(&command.payload)) {
+			// The AI's message runs here on every peer, so a receiver script that gates a sim write on it
+			// decides alike everywhere; only the peer driving the writing actor may issue it.
+			const Actor* writer = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(scriptMessage->writerUID)));
+			if (!writer) {
+				g_ConsoleMan.PrintString("NETWORK: AI message command writer not found: UID " + std::to_string(scriptMessage->writerUID));
+				std::cout << "[net-match] AI message command writer not found: UID " << scriptMessage->writerUID << std::endl;
+				continue;
+			}
+			if (writer->GetTeam() != scriptMessage->team || !ScenarioRunner::IsLockstepActorOwner(scriptMessage->writerUID, writer->GetTeam(), !writer->IsPlayerControlled(), command.senderPeerId)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected an AI message command from a peer that does not drive actor " + std::to_string(scriptMessage->writerUID));
+				continue;
+			}
+			MovableObject* receiver = g_MovableMan.FindObjectByUniqueID(static_cast<long int>(scriptMessage->objectUID));
+			if (!receiver) {
+				g_ConsoleMan.PrintString("NETWORK: AI message command target not found: UID " + std::to_string(scriptMessage->objectUID));
+				std::cout << "[net-match] AI message command target not found: UID " << scriptMessage->objectUID << std::endl;
+				continue;
+			}
+			receiver->DeliverSyncedScriptMessage(scriptMessage->context, scriptMessage->number, scriptMessage->contextUID, scriptMessage->message, scriptMessage->text);
+		} else if (const NetGameAIGib* gib = std::get_if<NetGameAIGib>(&command.payload)) {
+			// The AI's gib runs here on every peer, at one tick; only the peer driving the writing actor may issue it.
+			const Actor* writer = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(gib->writerUID)));
+			if (!writer) {
+				g_ConsoleMan.PrintString("NETWORK: AI gib command writer not found: UID " + std::to_string(gib->writerUID));
+				std::cout << "[net-match] AI gib command writer not found: UID " << gib->writerUID << std::endl;
+				continue;
+			}
+			if (writer->GetTeam() != gib->team || !ScenarioRunner::IsLockstepActorOwner(gib->writerUID, writer->GetTeam(), !writer->IsPlayerControlled(), command.senderPeerId)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected an AI gib command from a peer that does not drive actor " + std::to_string(gib->writerUID));
+				continue;
+			}
+			MOSRotating* gibbed = dynamic_cast<MOSRotating*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(gib->objectUID)));
+			if (!gibbed) {
+				g_ConsoleMan.PrintString("NETWORK: AI gib command target not found: UID " + std::to_string(gib->objectUID));
+				std::cout << "[net-match] AI gib command target not found: UID " << gib->objectUID << std::endl;
+				continue;
+			}
+			MovableObject* ignored = gib->ignoreUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(gib->ignoreUID)) : nullptr;
+			gibbed->GibThis(Vector(gib->impulseX, gib->impulseY), ignored);
 		} else if (const NetGameSoundOp* sound = std::get_if<NetGameSoundOp>(&command.payload)) {
 			// The AI's sound call runs here on every peer; only the peer driving the actor may issue it.
 			Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(sound->actorUID)));
@@ -4860,6 +4917,39 @@ void MovableMan::UpdateControllers() {
 				}
 			}
 		};
+		auto drainDeferredAIModes = [&]() {
+			// The AI modes the AI pass wrote, in MOID order: the owner sends them as synced requests so
+			// every peer takes the mode at the same tick. A non-owner's queued writes are dropped.
+			for (Actor* actor: m_Actors) {
+				if (isLocalControllerActor(actor)) {
+					actor->SendDeferredAIModes();
+				} else {
+					actor->TakePendingDeferredAIModes();
+				}
+			}
+		};
+		auto drainDeferredScriptMessages = [&]() {
+			// The messages the AI pass sent, in MOID order: the owner sends them so every peer's receiver
+			// script hears them at the same tick. A non-owner's queued messages are dropped.
+			for (Actor* actor: m_Actors) {
+				if (isLocalControllerActor(actor)) {
+					actor->SendDeferredScriptMessages();
+				} else {
+					actor->TakePendingDeferredScriptMessages();
+				}
+			}
+		};
+		auto drainDeferredGibs = [&]() {
+			// The gibs the AI pass asked for, in MOID order: the owner sends them so every peer gibs at the
+			// same tick. A non-owner's queued gibs are dropped.
+			for (Actor* actor: m_Actors) {
+				if (isLocalControllerActor(actor)) {
+					actor->SendDeferredGibs();
+				} else {
+					actor->TakePendingDeferredGibs();
+				}
+			}
+		};
 		auto drainDeferredSoundOps = [&]() {
 			// The sound calls the AI queued, in checkpoint-identity order: performed now, or sent as
 			// commands under lockstep. A container the AI only read hands out nothing.
@@ -4930,6 +5020,9 @@ void MovableMan::UpdateControllers() {
 
 		drainDeferredEquips();
 		drainDeferredWaypoints();
+		drainDeferredAIModes();
+		drainDeferredScriptMessages();
+		drainDeferredGibs();
 		drainDeferredSoundOps();
 
 		// The serial UpdateAI pass mutates directly outside lockstep; under it the calls defer like the threaded ones.
@@ -4946,12 +5039,18 @@ void MovableMan::UpdateControllers() {
 			drainDeferredEquips();
 		}
 		drainDeferredWaypoints();
+		drainDeferredAIModes();
+		drainDeferredScriptMessages();
+		drainDeferredGibs();
 		drainDeferredSoundOps();
 		// A fixture's scripted writes come last, so they are the pass's final word on the actor.
 		if (AIWriteScript::IsActive()) {
 			AIWriteScript::RunTick(simTick, m_Actors, isLocalControllerActor);
 			drainDeferredEquips();
 			drainDeferredWaypoints();
+			drainDeferredAIModes();
+			drainDeferredScriptMessages();
+			drainDeferredGibs();
 			drainDeferredSoundOps();
 		}
 
