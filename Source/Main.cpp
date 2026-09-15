@@ -280,6 +280,7 @@ static std::string s_netJoinSessionId; //!< -net-join-session: the directory ses
 // input-delay behind needs those forwards to finish its own last tick.
 static constexpr uint32_t c_CappedStopDrainMs = 8000;
 static constexpr uint32_t c_CappedStopLingerMs = 1500;
+static constexpr uint64_t c_NetMatchE2EEditorTickCap = 120; //!< A synchronized setup editor that has not finished by here is stuck, not slow.
 static uint64_t s_netLockstepTicks = 0;
 static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
 static uint16_t s_netLockstepInputDelay = 0;
@@ -287,6 +288,8 @@ static uint8_t s_netMatchPeers = 2;
 static std::string s_netMatchMode = "pvp";
 static std::string s_netMatchOwnershipPolicy = "team-owner";
 static bool s_netMatchServiceE2EEnteredEditor = false;
+static bool s_netMatchE2EBrainPlacement = false; //!< -net-match-e2e-brain-placement: this peer places its own seats' brains in the synchronized setup editor.
+static uint64_t s_netMatchE2EEditorTicks = 0; //!< Ticks the activity has spent in the setup editor, so a match that never leaves it fails instead of idling.
 static NetMatchE2ETickClock s_netMatchE2ETicks;
 static long s_netMatchE2EActorCensus = -1;
 static long s_netMatchE2EActorCensusPeak = -1; //!< The max actor count seen, so a transient heal double-spawn that later sheds back to normal is still visible.
@@ -893,6 +896,12 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-ticks") {
 			s_netLockstepTicks = static_cast<uint64_t>(std::strtoull(argValue[++i], nullptr, 10));
+			continue;
+		}
+
+		if (currentArg == "-net-match-e2e-brain-placement") {
+			// Stand in for each local player's DONE in the setup editor: place this peer's own seats' brains.
+			s_netMatchE2EBrainPlacement = true;
 			continue;
 		}
 
@@ -3554,6 +3563,25 @@ void RunGameLoop() {
 					g_ActivityMan.EndActivity();
 				}
 			}
+			// E2E control: stand in for each local player's DONE in the synchronized setup editor. The two
+			// seats place different brains at different spots, so a placement that failed to cross the wire
+			// leaves the peers holding different brains and the shared tick hashes part.
+			if (s_netMatchServiceE2E && s_netMatchE2EBrainPlacement && ScenarioRunner::IsLockstepControllerSyncActive()) {
+				if (auto* placementActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+				    placementActivity && placementActivity->GetActivityState() == Activity::Editing) {
+					static const std::pair<const char*, const char*> s_e2eBrains[] = {{"Actor", "Brain Case"}, {"AHuman", "Brain Robot"}, {"Actor", "Brain Case"}, {"AHuman", "Brain Robot"}};
+					for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+						if (!placementActivity->IsSeatActive(player) || !placementActivity->IsLocalHumanSeat(player)) {
+							continue;
+						}
+						if (placementActivity->PlaceAndSubmitLockstepBrain(player, s_e2eBrains[player].first, s_e2eBrains[player].second, "Base.rte")) {
+							std::cout << "[net-match-service-e2e] brain placement submitted: seat=" << player
+							          << " preset=" << s_e2eBrains[player].second << " tick=" << simTick << std::endl;
+						}
+					}
+				}
+			}
+
 			const bool lockstepPausedTick = ScenarioRunner::IsLockstepPaused();
 			if (lockstepPausedTick) {
 				// The sim holds still: read the sim-rate resume key, exchange an empty frame so
@@ -4259,12 +4287,22 @@ void RunGameLoop() {
 				const Activity::ActivityState activityState = activity->GetActivityState();
 				if (activityState == Activity::Editing) {
 					s_netMatchServiceE2EEnteredEditor = true;
-					s_netMatchServiceE2EError = "activity entered unsynchronized setup editor";
-					s_netMatchServiceE2EExitCode = 1;
-					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
-					g_ActivityMan.EndActivity();
-					System::SetQuit(true);
-					break;
+					// A lockstep match's setup editor is synchronized: seats commit their placements over the
+					// wire and every peer starts on the same frame. Only an unsynchronized one is an error.
+					std::string editorError;
+					if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+						editorError = "activity entered unsynchronized setup editor";
+					} else if (++s_netMatchE2EEditorTicks > c_NetMatchE2EEditorTickCap) {
+						editorError = "setup editor did not finish within " + std::to_string(c_NetMatchE2EEditorTickCap) + " ticks";
+					}
+					if (!editorError.empty()) {
+						s_netMatchServiceE2EError = editorError;
+						s_netMatchServiceE2EExitCode = 1;
+						g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
+						g_ActivityMan.EndActivity();
+						System::SetQuit(true);
+						break;
+					}
 				}
 				// E2E rematch ride-through: match 1 ended, so finish it, reconvene the live session in the
 				// lobby, and relaunch — round 2 is policed by the live desync exchange like any match.

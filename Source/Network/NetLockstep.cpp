@@ -820,6 +820,19 @@ namespace RTE {
 						AppendU64LE(out, static_cast<uint64_t>(order.writerUID));
 						break;
 					}
+					case NetGameCommandType::PlaceBrain: {
+						const NetGamePlaceBrain& place = std::get<NetGamePlaceBrain>(command.payload);
+						AppendU32LE(out, static_cast<uint32_t>(place.team));
+						AppendU32LE(out, static_cast<uint32_t>(place.player));
+						AppendU32LE(out, FloatToBitsLE(place.posX));
+						AppendU32LE(out, FloatToBitsLE(place.posY));
+						if (!AppendString(out, place.className, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_class_name", error) ||
+						    !AppendString(out, place.preset, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_preset", error) ||
+						    !AppendString(out, place.module, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_module", error)) {
+							return false;
+						}
+						break;
+					}
 				}
 				if (recovery && out.size() > NetLockstepCodec::c_MaxRecoveryInputBytes - 10) {
 					SetError(error, NetLockstepErrorCode::PayloadTooLarge, out.size(), "recovery input exceeds maximum");
@@ -1709,6 +1722,34 @@ namespace RTE {
 						}
 						reseat.team = static_cast<int32_t>(team);
 						command.payload = std::move(reseat);
+						break;
+					}
+					case NetGameCommandType::PlaceBrain: {
+						if (version < NetLockstepCodec::c_PlaceBrainVersion) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset() - 2, "game command has invalid type");
+							return false;
+						}
+						NetGamePlaceBrain place;
+						uint32_t team = 0;
+						uint32_t player = 0;
+						uint32_t xBits = 0;
+						uint32_t yBits = 0;
+						if (!ReadOrTruncated(reader.ReadU32LE(team), reader, error, "place_brain_team") ||
+						    !ReadOrTruncated(reader.ReadU32LE(player), reader, error, "place_brain_player") ||
+						    !ReadOrTruncated(reader.ReadU32LE(xBits), reader, error, "place_brain_x") ||
+						    !ReadOrTruncated(reader.ReadU32LE(yBits), reader, error, "place_brain_y")) {
+							return false;
+						}
+						if (!reader.ReadString(place.className, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_class_name", error) ||
+						    !reader.ReadString(place.preset, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_preset", error) ||
+						    !reader.ReadString(place.module, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_module", error)) {
+							return false;
+						}
+						place.team = static_cast<int32_t>(team);
+						place.player = static_cast<int32_t>(player);
+						place.posX = FloatFromBitsLE(xBits);
+						place.posY = FloatFromBitsLE(yBits);
+						command.payload = std::move(place);
 						break;
 					}
 					default:

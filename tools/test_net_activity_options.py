@@ -21,7 +21,7 @@ def main() -> int:
     parser.add_argument("--case", choices=["codec", "launch"], required=True)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--port", type=int, default=48320)
-    parser.add_argument("--variant", default="rules", choices=["rules", "default", "infinite", "site", "stock", "census", "missing-activity", "missing-scene", "missing-module", "missing-tech"])
+    parser.add_argument("--variant", default="rules", choices=["rules", "default", "infinite", "site", "stock", "brains", "census", "missing-activity", "missing-scene", "missing-module", "missing-tech"])
     parser.add_argument("--dedicated", action="store_true")
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--offline-repo", type=Path, help="repo whose exe runs the census case's offline -scenario arm")

@@ -33,6 +33,8 @@ namespace RTE {
 				return NetGameCommandType::SoundOp;
 			} else if constexpr (std::is_same_v<T, NetGamePlayerBindings>) {
 				return NetGameCommandType::PlayerBindings;
+			} else if constexpr (std::is_same_v<T, NetGamePlaceBrain>) {
+				return NetGameCommandType::PlaceBrain;
 			}
 		}, payload);
 	}
@@ -72,6 +74,8 @@ namespace RTE {
 				return "SoundOp";
 			case NetGameCommandType::PlayerBindings:
 				return "PlayerBindings";
+			case NetGameCommandType::PlaceBrain:
+				return "PlaceBrain";
 		}
 		return "Unknown";
 	}

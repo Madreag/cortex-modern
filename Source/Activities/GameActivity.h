@@ -75,6 +75,25 @@ namespace RTE {
 		/// @param player The player to give a brain to.
 		/// @return Whether the player has a brain now.
 		bool PlaceUnassignedBrain(int player);
+
+		/// Installs a seat's committed brain from the wire. Every peer builds the identical resident from
+		/// the named preset at the named spot, so the brains that enter the sim match, and the seat counts
+		/// as ready to start on every peer at the same frame.
+		/// @return False, with nothing changed, when the placement names a seat, team, sender or preset this peer refuses.
+		bool ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, uint8_t senderPeerId);
+
+		/// Commits one of this peer's own seats' brain placements to the wire. Where the brain goes is the
+		/// player's own decision, read off their local editor; the command carries it to every peer.
+		/// @return Whether the seat had a brain in a spot this machine accepts.
+		bool SubmitLockstepBrainPlacement(int player);
+
+		/// A brain spot every peer derives identically: the seat's landing zone at ground level. Used by a
+		/// seat no peer drives and by the end-to-end arm that stands in for a player's placement.
+		Vector DeterministicBrainSpot(int player) const;
+
+		/// Puts the seat's brain where the local editor would and commits it, the way a player's DONE does.
+		/// @return Whether the placement was committed.
+		bool PlaceAndSubmitLockstepBrain(int player, const std::string& className, const std::string& preset, const std::string& module);
 		void ClearCheckpointActorIDs() override;
 		bool PrepareCheckpointUI() override;
 		SerializableOverrideMethods;
@@ -703,6 +722,18 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		/// The peer that drives a seat in the agreed roster, or 0 when no peer holds it.
+		static uint8_t LockstepSeatPeerId(int player);
+		/// Makes every brain already standing in the scene its seat's resident, identically on every peer, so
+		/// a local editor's residence test can never take an actor out of one peer's sim alone.
+		void SeedLockstepResidentBrains();
+		/// True while the match's setup editor is the synchronized one: placements cross the wire.
+		static bool IsLockstepPlacement();
+		/// Whether this peer is the one that commits a seat's brain placement.
+		bool MayCommitBrainPlacement(int player) const;
+		std::array<bool, Players::MaxPlayerCount> m_LockstepPlacementSubmitted{}; //!< Per-seat, local only: this peer has committed that seat's placement.
+		bool m_LockstepPlacementSeeded = false; //!< The one-time seed pass has run for this editing phase.
+
 		bool LoadNetLocalGameState(std::string_view text);
 		bool CreateNetLocalUI();
 		/// Points a relaunch's pending marked-actor links at the marks as they stand, so its deferred rebinds keep them.

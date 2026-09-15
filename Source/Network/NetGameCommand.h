@@ -25,6 +25,7 @@ namespace RTE {
 		Reseat = 11,
 		SoundOp = 12,
 		PlayerBindings = 13,
+		PlaceBrain = 14,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -253,6 +254,21 @@ namespace RTE {
 		bool operator==(const NetPlayerBinding&) const = default;
 	};
 
+	// A seat's committed brain placement in the setup editor. Where to put the brain is the player's own
+	// decision on their own machine (off-wire); the committed brain crosses so every peer installs the
+	// identical resident from the named preset before the first seat starts the match.
+	struct NetGamePlaceBrain {
+		int32_t team = 0;
+		int32_t player = -1; //!< The seat the brain belongs to; a team can hold several.
+		float posX = 0.0F;
+		float posY = 0.0F;
+		std::string className;
+		std::string preset;
+		std::string module;
+
+		bool operator==(const NetGamePlaceBrain&) const = default;
+	};
+
 	/// Complete local slots; an empty slot clears the previous binding without changing the world.
 	struct NetGamePlayerBindings {
 		std::array<NetPlayerBinding, 4> players{};
@@ -260,7 +276,7 @@ namespace RTE {
 		bool operator==(const NetGamePlayerBindings&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings>;
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGamePlaceBrain>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;
