@@ -333,6 +333,7 @@ static std::string ResyncSaveName() {
 		if (!request.host && !WaitForJoinTrigger(s_JoinWaitPath, c_JoinWaitBudgetMs, error)) return false;
 
 		m_ActivityPreset = request.activityPreset;
+		m_ActivityModule = request.activityModule;
 		SetState(NetMatchServiceState::Starting, request.host ? "Hosting direct-IP match" : "Joining direct-IP match");
 		// The directory row advertises the same identity fields the probe registers; only the counts
 		// move afterwards. Only a host ever lists itself.
@@ -1933,6 +1934,9 @@ static std::string ResyncSaveName() {
 		snapshot.portMapSerial = s_PortMapSerial;
 		if (snapshot.activityPreset.empty()) {
 			snapshot.activityPreset = m_ActivityPreset;
+		}
+		if (snapshot.activityModule.empty()) {
+			snapshot.activityModule = m_ActivityModule;
 		}
 		if (snapshot.members.empty() && snapshot.active) {
 			NetLobbyMember local;

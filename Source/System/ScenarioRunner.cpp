@@ -412,6 +412,12 @@ namespace RTE {
 			s_Args.selftestSnapshot = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-shared-seat") {
+			// Arm the second local seat: this peer presents one more human seat than its roster slots.
+			// Boolean flag.
+			s_Args.selftestSharedSeat = true;
+			return 1;
+		}
 		if (a == "-net-match-e2e-inventory-command") {
 			// Arm the host-issued inventory ops. Boolean flag.
 			s_Args.selftestInventoryCommand = true;

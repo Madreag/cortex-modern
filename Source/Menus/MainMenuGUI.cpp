@@ -78,6 +78,10 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerHostInputDelayPolicyLabel = nullptr;
 	m_MultiplayerHostPortMapCheckbox = nullptr;
 	m_MultiplayerHostModeButton = nullptr;
+	m_MultiplayerHostActivityButton = nullptr;
+	m_MultiplayerHostInfoLabel = nullptr;
+	m_MultiplayerHostActivities.clear();
+	m_MultiplayerHostActivityIndex = 0;
 	m_MultiplayerHostMode = NetMatchMode::PvPSkirmish;
 	m_MultiplayerJoinAddressTextBox = nullptr;
 	m_MultiplayerJoinPortTextBox = nullptr;
@@ -222,6 +226,9 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostInputDelayPolicyLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInputDelayPolicy"));
 	m_MultiplayerHostPortMapCheckbox = dynamic_cast<GUICheckbox*>(m_SubMenuScreenGUIControlManager->GetControl("CheckHostPortMap"));
 	m_MultiplayerHostModeButton = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostMode"));
+	m_MultiplayerHostActivityButton = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostActivity"));
+	m_MultiplayerHostInfoLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInfo"));
+	ApplyMultiplayerHostActivity();
 	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinAddress"));
 	m_MultiplayerJoinPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinPort"));
 	m_MultiplayerLanGamesList = dynamic_cast<GUIListBox*>(m_SubMenuScreenGUIControlManager->GetControl("ListLanGames"));
@@ -726,6 +733,7 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		// The saved policy is re-read here, the way the port-map box is, so a settings change is not stale.
 		m_MultiplayerHostInputDelayPolicyLabel->SetText(g_SettingsMan.GetNetworkHostDelayPolicy() == SettingsMan::NetworkHostDelayPolicy::Auto ? "(auto)" : "(fixed)");
 		m_MultiplayerHostPortMapCheckbox->SetCheck(g_SettingsMan.GetNetworkPortMapEnable() ? GUICheckbox::Checked : GUICheckbox::Unchecked);
+		RefreshMultiplayerHostActivities();
 		m_MultiplayerSubScreen = MultiplayerSubScreen::HostSetup;
 		g_GUISound.ButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerJoinGameButton]) {
@@ -749,6 +757,14 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		m_MultiplayerHostMode = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? NetMatchMode::CoopPvE : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? NetMatchMode::PvPvE : NetMatchMode::PvPSkirmish);
 		const char* modeText = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? "Mode: PvP" : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? "Mode: Co-op PvE" : "Mode: PvPvE");
 		m_MultiplayerHostModeButton->SetText(modeText);
+		ApplyMultiplayerHostActivity();
+		g_GUISound.ButtonPressSound()->Play();
+	} else if (guiEventControl == m_MultiplayerHostActivityButton) {
+		// The button is the picker: each press moves to the next lockstep-runnable activity.
+		if (!m_MultiplayerHostActivities.empty()) {
+			m_MultiplayerHostActivityIndex = (m_MultiplayerHostActivityIndex + 1) % m_MultiplayerHostActivities.size();
+		}
+		ApplyMultiplayerHostActivity();
 		g_GUISound.ButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReadyButton]) {
 		g_NetMatchService.SetReady();
@@ -833,6 +849,44 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 	}
 }
 
+void MainMenuGUI::RefreshMultiplayerHostActivities() {
+	// The host's picker offers the scripted activities a lockstep match can run, each pinned to the
+	// module that defines it so a same-named preset elsewhere cannot swap in silently. The presets do
+	// not exist until the modules load, so the list is built on entry to the host setup screen.
+	const std::pair<std::string, std::string> current =
+		m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size() ? m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex] : std::pair<std::string, std::string>{"P4 Alpha Duel", "Base.rte"};
+	m_MultiplayerHostActivities.clear();
+	std::list<Entity*> presets;
+	if (g_PresetMan.GetAllOfType(presets, "Activity")) {
+		for (const Entity* entity: presets) {
+			const auto* activity = dynamic_cast<const Activity*>(entity);
+			if (!activity || activity->GetClassName() != "GAScripted" || activity->IsTestActivity()) continue;
+			m_MultiplayerHostActivities.emplace_back(activity->GetPresetName(), g_PresetMan.GetDataModuleName(activity->GetModuleID()));
+		}
+	}
+	m_MultiplayerHostActivityIndex = 0;
+	for (size_t i = 0; i < m_MultiplayerHostActivities.size(); ++i) {
+		if (m_MultiplayerHostActivities[i] == current) {
+			m_MultiplayerHostActivityIndex = i;
+		}
+	}
+	ApplyMultiplayerHostActivity();
+}
+
+void MainMenuGUI::ApplyMultiplayerHostActivity() {
+	const auto* picked = m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size()
+	                         ? &m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex] : nullptr;
+	const std::string preset = picked ? picked->first : "P4 Alpha Duel";
+	const std::string module = picked ? picked->second : "Base.rte";
+	if (m_MultiplayerHostActivityButton) {
+		m_MultiplayerHostActivityButton->SetText(preset + (module.empty() ? "" : " (" + module + ")"));
+	}
+	if (m_MultiplayerHostInfoLabel) {
+		const char* modeText = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? "PvP" : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? "Co-op PvE" : "PvPvE");
+		m_MultiplayerHostInfoLabel->SetText(std::string("Grasslands - ") + modeText);
+	}
+}
+
 void MainMenuGUI::StartMultiplayer(bool host) {
 	const std::string portText = (host ? m_MultiplayerHostPortTextBox : m_MultiplayerJoinPortTextBox)->GetText();
 	char* parseEnd = nullptr;
@@ -862,6 +916,11 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		g_SettingsMan.UpdateSettingsFile();
 	}
 	request.activityPreset = "P4 Alpha Duel";
+	if (host && m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size()) {
+		// The host's picker names both fields, so the lobby never resolves a bare preset name.
+		request.activityPreset = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].first;
+		request.activityModule = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].second;
+	}
 	request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 	// Headed matches self-heal: a desync (or a rejoiner) reloads everyone from the host's snapshot.
 	request.resyncOnDesync = true;
@@ -1139,6 +1198,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	}
 
 	std::string matchInfo = snapshot.activityPreset;
+	if (!snapshot.activityModule.empty()) {
+		matchInfo += " (" + snapshot.activityModule + ")";
+	}
 	if (!snapshot.sceneName.empty()) {
 		matchInfo += " - " + snapshot.sceneName;
 	}

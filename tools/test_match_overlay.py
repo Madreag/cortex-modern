@@ -533,9 +533,8 @@ def probe_shot_oracle(path, size, expected_visible, panel_rect):
         return result
     result["occluding"] = occluding_rects(box, size) if box else ["widget_missing"]
     result["interior_ink"] = interior_ink(image, box) if box else 0
-    # A short screen has no rows for both, so the strip draws over the panel; a tall one must clear it.
-    panel_clear = box is None or panel_rect is None or size[1] < COMPACT_MAX_HEIGHT \
-        or not rects_intersect(box, panel_rect)
+    # A short screen has no rows for both, so the strip lifts above the panel instead of crossing it.
+    panel_clear = box is None or panel_rect is None or not rects_intersect(box, panel_rect)
     result["checks"] = {"paint_found": box is not None, "occluding": result["occluding"],
                         "text_in_widget": result["interior_ink"] > 0,
                         "in_free_zone": in_free_zone(box, size), "panel_clear": panel_clear}

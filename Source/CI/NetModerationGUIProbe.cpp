@@ -134,18 +134,25 @@ namespace {
 	}
 
 	/// The slide-in panel's visible column, which every editor reports as the seat's screen occlusion.
+	/// The occlusion is in the seat's framebuffer space, so a split screen's own offset translates it
+	/// into the window space the overlay rects already live in.
 	Json PickerRect(int screen) {
 		const int occlusion = g_CameraMan.GetScreenOcclusion(screen).GetRoundIntX();
+		Vector offset;
+		g_FrameMan.GetScreenOffsetForSplitScreen(screen, offset);
+		const int x = offset.GetRoundIntX(), y = offset.GetRoundIntY();
 		const int height = g_FrameMan.GetPlayerScreenHeight();
-		if (occlusion < 0) return Rect(g_FrameMan.GetPlayerScreenWidth() + occlusion, 0, -occlusion, height, true);
-		return Rect(0, 0, occlusion, height, true);
+		if (occlusion < 0) return Rect(x + g_FrameMan.GetPlayerScreenWidth() + occlusion, y, -occlusion, height, true);
+		return Rect(x, y, occlusion, height, true);
 	}
 
 	/// The band the seat's own message occupies, read from the manager that lays it out. Measured in its
 	/// blinking form whether or not this frame draws it, so the rect does not pulse.
 	Json ScreenTextRect(int screen) {
 		const FrameMan::ScreenTextLayout layout = g_FrameMan.GetScreenTextLayout(screen, true);
-		return Rect(layout.x, layout.y, layout.width, layout.height, !layout.text.empty());
+		Vector offset;
+		g_FrameMan.GetScreenOffsetForSplitScreen(screen, offset);
+		return Rect(layout.x + offset.GetRoundIntX(), layout.y + offset.GetRoundIntY(), layout.width, layout.height, !layout.text.empty());
 	}
 
 	Json OverlayRect(const NetModerationGUI::OverlayRect& rect) {
@@ -181,8 +188,16 @@ namespace {
 		}
 		// What the network overlay drew this frame, so a script can require it to stay off the editor's own UI.
 		const NetModerationGUI* panel = g_MenuMan.GetNetworkPanel();
+		Json seats = Rect(0, 0, 0, 0, false);
+		if (panel) {
+			if (GUIControl* box = panel->GetControl("NetworkSeats")) {
+				int x, y, w, h;
+				box->GetControlRect(&x, &y, &w, &h);
+				seats = Rect(x, y, w, h, g_MenuMan.IsNetworkPanelOpen());
+			}
+		}
 		observed["net_ui"] = {{"status", panel ? OverlayRect(panel->GetStatusRect()) : Rect(0, 0, 0, 0, false)},
-		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)}};
+		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)}, {"seats_panel", seats}};
 		return observed;
 	}
 
@@ -262,7 +277,7 @@ namespace {
 			return command.starts_with("assert_") || command.starts_with("dump_") ? Phase::Draw : Phase::Poll;
 		}
 		if (op == "assert" || op == "assert_control" || op == "assert_editor" || op == "assert_net_ui_clear" ||
-		    op == "screenshot" || op == "finish") return Phase::Draw;
+		    op == "screenshot" || op == "screenshot_pair" || op == "finish") return Phase::Draw;
 		if ((op == "key_down" || op == "key_up") && SimRateKey(step.value("key", ""))) return Phase::Sim;
 		return Phase::Poll;
 	}
@@ -445,15 +460,38 @@ namespace {
 			if (step.value("screen_text", false)) Require(seat->at("screen_text_rect").at("visible") == true, "the seat's screen carries no editor message");
 			const Json& band = seat->at("screen_text_rect");
 			if (band.at("visible").get<bool>()) {
-				Require(band["x"].get<int>() >= 0 && band["x"].get<int>() + band["w"].get<int>() <= g_FrameMan.GetPlayerScreenWidth(),
+				// The band reads in window space, so it is held against the seat's own framebuffer rect.
+				const auto* game = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+				Vector offset;
+				g_FrameMan.GetScreenOffsetForSplitScreen(game ? game->ScreenOfPlayer(player) : 0, offset);
+				Require(band["x"].get<int>() >= offset.GetRoundIntX() && band["y"].get<int>() >= offset.GetRoundIntY() &&
+				    band["x"].get<int>() + band["w"].get<int>() <= offset.GetRoundIntX() + g_FrameMan.GetPlayerScreenWidth() &&
+				    band["y"].get<int>() + band["h"].get<int>() <= offset.GetRoundIntY() + g_FrameMan.GetPlayerScreenHeight(),
 				    "the seat's message is drawn off its own screen");
 			}
+			const Json& seatsPanel = observed["net_ui"].at("seats_panel");
 			for (const std::string& element: {"status", "toasts"}) {
+				// An open seats panel owns its rows too - the overlay lifts above it rather than draw over it.
+				Require(!Overlaps(observed["net_ui"].at(element), seatsPanel),
+				    "the network " + element + " overlaps the seats panel");
 				for (const std::string& area: {"picker", "screen_text_rect"}) {
 					Require(!Overlaps(observed["net_ui"].at(element), seat->at(area)),
 					    "the network " + element + " overlaps the editor's " + area);
 				}
 			}
+		} else if (op == "screenshot_pair") {
+			// Both shots of one capture inside a single step, so the overlay readback and the composited
+			// screen buffer are the same rendered frame.
+			const std::string name = step.at("name").get<std::string>();
+			auto path = Leaf(name);
+			path += ".png";
+			Require(!std::filesystem::exists(path), "screenshot already exists");
+			Require(g_FrameMan.SaveBitmapToPNG(g_FrameMan.GetBackBuffer32(), path.string().c_str()) == 0, "screenshot save failed");
+			const std::string composited = step.value("composited_name", name + "_composited");
+			(void)Leaf(composited);
+			Require(g_FrameMan.SaveScreenToPNG(composited.c_str()) == 0, "composited screenshot save failed");
+			observed["screenshot"] = path.string();
+			observed["screenshot_composited"] = composited;
 		} else if (op == "screenshot") {
 			const std::string name = step.at("name").get<std::string>();
 			if (step.value("composited", false)) {
