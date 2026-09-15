@@ -491,6 +491,10 @@ void Activity::MapLocalPlayers(const NetMatchConfig& config, uint8_t localPeer) 
 		}
 		++player;
 	}
+	// A seat this machine does not present has no view of its own, so a restore never leaves it the donor's.
+	for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
+		if (m_LocalInputPlayers[seat] == Players::NoPlayer) m_ViewState[seat] = ViewState::Observe;
+	}
 }
 
 int Activity::LocalInputOfPlayer(int player) const {
