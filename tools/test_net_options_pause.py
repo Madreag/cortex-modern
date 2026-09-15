@@ -18,7 +18,9 @@ from pathlib import Path
 
 SCRATCH = Path("D:/mx/opus-l03-pause-session-20260914")
 PORTS = range(48350, 48370)
-TICKS = 600
+# The match must outlast the probe script on a loaded machine: a step costs a rendered frame, which a
+# contended peer produces far more slowly than the fixed timestep produces ticks.
+TICKS = 1800
 SIZES = ((640, 360), (960, 540))
 MATCH_ROWS = ("ButtonLeaveMatch", "ButtonPauseMatch", "ButtonSettings", "ButtonSaveDiagnostics", "ButtonResume")
 SINGLE_PLAYER_ROWS = ("ButtonBackToMain", "ButtonSaveOrLoadGame", "ButtonModManager")
@@ -107,14 +109,15 @@ def lifecycle_steps(arm, who, tag):
                   {"op": "assert", "equals": {"screen": "Gameplay", "service": "Running", "paused": False}, "sim_at_least": 360},
                   {"op": "wait", "sim_at_least": 480}, {"op": "finish"}]
     elif arm == "pause":
+        # The row follows the shared state, and a resume is a countdown, so each press waits for the state itself.
         steps += [menu_step("post_command ButtonPauseMatch"),
-                  {"op": "wait", "scope": "menu", "control": "ButtonPauseMatch", "equals": {"visible": True}},
-                  {"op": "wait", "renders": 30},
+                  {"op": "wait", "scope": "menu", "control": "ButtonPauseMatch", "equals": {"visible": True, "text": "resume match"}},
                   {"op": "assert_control", "scope": "menu", "control": "ButtonPauseMatch", "text_contains": "resume match",
                    "equals": {"visible": True}, "fits": True},
                   {"op": "screenshot", "name": f"{tag}_paused"},
                   {"op": "assert", "equals": {"screen": "Pause", "service": "Running", "paused": False}},
-                  menu_step("post_command ButtonPauseMatch"), {"op": "wait", "renders": 30},
+                  menu_step("post_command ButtonPauseMatch"),
+                  {"op": "wait", "scope": "menu", "control": "ButtonPauseMatch", "equals": {"visible": True, "text": "pause match"}},
                   {"op": "assert_control", "scope": "menu", "control": "ButtonPauseMatch", "text_contains": "pause match",
                    "equals": {"visible": True}, "fits": True},
                   menu_step("post_command ButtonResume"), {"op": "wait", "screen": "Gameplay"},
@@ -133,7 +136,9 @@ def lifecycle_steps(arm, who, tag):
                   menu_step("post_command ButtonLeaveCancel"), {"op": "wait", "screen": "Pause"},
                   {"op": "assert", "equals": {"screen": "Pause", "service": "Running", "paused": False}},
                   menu_step("post_command ButtonLeaveMatch"), {"op": "wait", "screen": "PauseLeaveConfirm"},
-                  {"op": "signal", "name": "leaving"}, menu_step("post_command ButtonLeaveConfirm")]
+                  {"op": "signal", "name": "leaving"}, menu_step("post_command ButtonLeaveConfirm"),
+                  # The engine's own leave ends this process; the script parks so the probe does not end it first.
+                  {"op": "wait", "service": "Idle"}]
     else:
         raise ValueError(arm)
     # The probe refuses a deadline over its own 180 s bound.
