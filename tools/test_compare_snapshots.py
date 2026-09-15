@@ -535,6 +535,7 @@ class RuntimeProjectionTests(unittest.TestCase):
         for version, fields in (("MovableObjectRuntime1", ("ever_added", "updated", "screen_effect_hash", "mass", "already_hit_by")),
                 ("AudioRuntime1", ("voices", "events", "master_volume", "next_sound_container")),
                 ("AudioVoice1", ("owner", "path", "loops")),
+                ("AudioVoice2", ("owner", "path", "loops")),
                 ("SoundContainer1", ("identity", "playing_channels", "paused", "pitch"))):
             value = dict(version=version, **dict.fromkeys(fields, 1))
             for key in fields:
@@ -675,6 +676,11 @@ class RuntimeProjectionTests(unittest.TestCase):
         for key in ("owner", "path", "loops"):
             with self.subTest(key=key):
                 self.assert_field(voice, (key,), False)
+        voice2 = dict(version="AudioVoice2", owner=1, path=1, position=1, loops=1)
+        self.assert_field(voice2, ("position",), True)
+        for key in ("owner", "path", "loops"):
+            with self.subTest(key=key):
+                self.assert_field(voice2, (key,), False)
         runtime_state = dict(version="AudioRuntime2", player_positions=1, listeners=1, audibility=1,
             samples=1, voices=1, groups=1, events=1, minimum_distances=1, next_voice=1, next_sound_container=1)
         for key in ("player_positions", "listeners"):
