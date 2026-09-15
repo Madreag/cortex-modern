@@ -21,6 +21,8 @@
 
 #include <SDL3/SDL.h>
 #include <array>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <unordered_map>
 
@@ -680,6 +682,15 @@ bool UInputMan::AnyJoyButtonPress(int whichJoy) const {
 	return false;
 }
 
+bool UInputMan::ScriptedEdgeThisFrame(ScriptedEdges& edges, int whichPlayer, int whichElement, long long tick) {
+	ScriptedEdge& edge = edges[whichPlayer][whichElement];
+	if (edge.tick != tick) {
+		edge = {tick, m_RenderFrameCount};
+		return true;
+	}
+	return edge.frame == m_RenderFrameCount;
+}
+
 bool UInputMan::GetInputElementState(int whichPlayer, int whichElement, InputState whichState) {
 	// A scripted player's devices are the script: held ranges, with press/release edges at the range ends.
 	if (InputScript::DrivesPlayer(whichPlayer)) {
@@ -699,12 +710,13 @@ bool UInputMan::GetInputElementState(int whichPlayer, int whichElement, InputSta
 						s_lastLoggedElement = whichElement;
 						std::cout << "[input-script] tick " << tick << " player " << whichPlayer << " pressed " << InputScript::ElementName(whichElement) << std::endl;
 					}
-					return true;
+					// The sim-rate read owns the whole tick; the frame-rate read is an edge and owns one frame.
+					return whichState == InputState::PressedSim || ScriptedEdgeThisFrame(m_ScriptedPresses, whichPlayer, whichElement, static_cast<long long>(tick));
 				}
 				return false;
 			case InputState::Released:
 			case InputState::ReleasedSim:
-				return !held && heldBefore;
+				return !held && heldBefore && (whichState == InputState::ReleasedSim || ScriptedEdgeThisFrame(m_ScriptedReleases, whichPlayer, whichElement, static_cast<long long>(tick)));
 			default:
 				return false;
 		}
@@ -1171,6 +1183,8 @@ int UInputMan::Update(bool handleSpecialInput) {
 }
 
 void UInputMan::EndFrame() {
+	// The frame a device edge was readable in ends here, and so does a scripted element's.
+	++m_RenderFrameCount;
 	m_LastDeviceWhichControlledGUICursor = InputDevice::DEVICE_KEYB_ONLY;
 
 	for (auto& [keyboardID, keyboard] : m_KeyboardStates) {
@@ -1667,4 +1681,43 @@ bool UInputMan::RunCheckpointSelfTest() {
     passed = LoadCheckpoint(original) && passed;
     std::cout << "[input-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << "complete checked=" << checked << std::endl;
     return passed;
+}
+
+bool UInputMan::RunScriptedInputEdgeSelfTest() {
+	bool passed = true;
+	const auto check = [&passed](const char* name, bool valid) {
+		passed = valid && passed;
+		std::cout << "[input-edge-selftest] " << (valid ? "PASS " : "FAIL ") << name << std::endl;
+	};
+	const std::filesystem::path path = std::filesystem::current_path() / "scripted-edge-selftest.txt";
+	{
+		std::ofstream script(path);
+		script << "player=0 10 12 START\nplayer=0 20 22 START\n";
+	}
+	std::string error;
+	check("script_drives_the_player", InputScript::Load(path.string(), &error) && InputScript::DrivesPlayer(Players::PlayerOne));
+	// The element AnyStartPress reads once per render frame; Controller reads the sim-rate variants of it.
+	const auto framesReading = [this](long long tick, int frames, InputState state) {
+		int reads = 0;
+		g_TimerMan.RewindSimTo(tick, 0);
+		for (int frame = 0; frame < frames; ++frame) {
+			reads += GetInputElementState(Players::PlayerOne, InputElements::INPUT_START, state) ? 1 : 0;
+			EndFrame();
+		}
+		return reads;
+	};
+	check("no_press_before_the_range", framesReading(9, 4, InputState::Pressed) == 0);
+	check("press_edges_on_one_render_frame", framesReading(10, 4, InputState::Pressed) == 1);
+	check("sim_press_spans_the_whole_tick", framesReading(10, 4, InputState::PressedSim) == 4);
+	check("held_spans_the_whole_tick", framesReading(11, 4, InputState::Held) == 4);
+	check("release_edges_on_one_render_frame", framesReading(13, 4, InputState::Released) == 1);
+	check("sim_release_spans_the_whole_tick", framesReading(13, 4, InputState::ReleasedSim) == 4);
+	// A device edge is readable as often as the frame asks; only the next frame drops it.
+	g_TimerMan.RewindSimTo(20, 0);
+	const bool firstRead = GetInputElementState(Players::PlayerOne, InputElements::INPUT_START, InputState::Pressed);
+	check("press_survives_a_second_read_in_its_frame", firstRead && GetInputElementState(Players::PlayerOne, InputElements::INPUT_START, InputState::Pressed));
+	std::error_code removeError;
+	std::filesystem::remove(path, removeError);
+	std::cout << "[input-edge-selftest] " << (passed ? "PASS " : "FAIL ") << "complete" << std::endl;
+	return passed;
 }

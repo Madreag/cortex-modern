@@ -14,6 +14,8 @@ using namespace RTE;
 
 namespace {
 	bool automationDriving = false;
+	// Both the menu script and the net UI probe attach a pad, and the hint they need is process-global.
+	int joystickBackgroundEventHolders = 0;
 	std::vector<GUIInputWrapper*> automationInputs;
 	class ScriptedGUIInput final : public GUIInputWrapper {
 		std::array<bool, SDL_SCANCODE_COUNT> m_Keys{};
@@ -64,7 +66,7 @@ namespace {
 			if (device != "pad" || button == SDL_GAMEPAD_BUTTON_INVALID) return false;
 			if (!m_Pad) {
 				// SDL drops a controller press while no window holds keyboard focus, which a headless run never does.
-				SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+				GUIInputWrapper::AcquireJoystickBackgroundEvents();
 				SDL_VirtualJoystickDesc desc{};
 				SDL_INIT_INTERFACE(&desc);
 				desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
@@ -74,9 +76,9 @@ namespace {
 				desc.axis_mask = (1U << SDL_GAMEPAD_AXIS_COUNT) - 1;
 				desc.name = "Menu script controller";
 				const auto id = SDL_AttachVirtualJoystick(&desc);
-				if (!id) return false;
+				if (!id) { GUIInputWrapper::ReleaseJoystickBackgroundEvents(); return false; }
 				m_Pad = SDL_OpenJoystick(id);
-				if (!m_Pad) { SDL_DetachVirtualJoystick(id); return false; }
+				if (!m_Pad) { SDL_DetachVirtualJoystick(id); GUIInputWrapper::ReleaseJoystickBackgroundEvents(); return false; }
 				// SDL only reports gamepad buttons for an open gamepad, and the engine ignores plain
 				// joystick buttons on a device that has a mapping, so open it before the first press.
 				m_PadGamepad = SDL_OpenGamepad(id);
@@ -100,7 +102,7 @@ namespace {
 				SDL_CloseJoystick(m_Pad);
 				SDL_DetachVirtualJoystick(id);
 				m_Pad = nullptr;
-				SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "0");
+				GUIInputWrapper::ReleaseJoystickBackgroundEvents();
 			}
 		}
 	};
@@ -109,6 +111,14 @@ namespace {
 void GUIInputWrapper::SetAutomationDriving(bool enabled) {
 	if (!enabled) for (auto* input : automationInputs) input->ReleaseAutomationInput();
 	automationDriving = enabled;
+}
+
+void GUIInputWrapper::AcquireJoystickBackgroundEvents() {
+	if (joystickBackgroundEventHolders++ == 0) SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+}
+
+void GUIInputWrapper::ReleaseJoystickBackgroundEvents() {
+	if (joystickBackgroundEventHolders > 0 && --joystickBackgroundEventHolders == 0) SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "0");
 }
 
 std::unique_ptr<GUIInputWrapper> GUIInputWrapper::CreateAutomationInput() {

@@ -67,8 +67,9 @@ namespace {
 	/// The probe's own gamepad, so a start button is the device press the seat reads, not a key.
 	SDL_Joystick* ProbePad() {
 		if (!probe.pad) {
-			// A headless run never holds keyboard focus, and SDL drops device presses without it.
-			SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+			// A headless run never holds keyboard focus, and SDL drops device presses without it. The menu
+			// script holds the same hint for its own pad, so it is shared and only the last pad gives it back.
+			GUIInputWrapper::AcquireJoystickBackgroundEvents();
 			SDL_VirtualJoystickDesc description{};
 			SDL_INIT_INTERFACE(&description);
 			description.type = SDL_JOYSTICK_TYPE_GAMEPAD;
@@ -78,11 +79,16 @@ namespace {
 			description.axis_mask = (1U << SDL_GAMEPAD_AXIS_COUNT) - 1;
 			description.name = "Net UI probe controller";
 			const SDL_JoystickID attached = SDL_AttachVirtualJoystick(&description);
-			Require(attached != 0, std::string("SDL_AttachVirtualJoystick: ") + SDL_GetError());
+			if (!attached) {
+				const std::string reason = SDL_GetError();
+				GUIInputWrapper::ReleaseJoystickBackgroundEvents();
+				Require(false, "SDL_AttachVirtualJoystick: " + reason);
+			}
 			probe.pad = SDL_OpenJoystick(attached);
 			if (!probe.pad) {
 				const std::string reason = SDL_GetError();
 				SDL_DetachVirtualJoystick(attached);
+				GUIInputWrapper::ReleaseJoystickBackgroundEvents();
 				Require(false, "SDL_OpenJoystick: " + reason);
 			}
 		}
@@ -95,6 +101,7 @@ namespace {
 			SDL_CloseJoystick(probe.pad);
 			SDL_DetachVirtualJoystick(attached);
 			probe.pad = nullptr;
+			GUIInputWrapper::ReleaseJoystickBackgroundEvents();
 		}
 	}
 
