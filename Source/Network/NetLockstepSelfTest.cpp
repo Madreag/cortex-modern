@@ -2222,6 +2222,21 @@ namespace RTE {
 				return finish("a write outside the AI pass did not land on the map");
 			}
 
+			g_CurrentAIActor = nullptr;
+			{
+				SoundSimulationScope local(static_cast<uint64_t>(ownerView->GetUniqueID()), 1, SoundExecutionDomain::LocalSimulation);
+				ownerView->SetNumberValue("scoped", 2.0);
+				if (ownerView->GetNumberValue("scoped") != 2.0 || ownerView->GetNumberValueMap().count("scoped")) {
+					return finish("a scoped AI pass did not hold the value off the map");
+				}
+			}
+			ownerView->SendDeferredAIValues();
+			const std::vector<NetGameCommand> scoped = ScenarioRunner::DrainLocalGameCommands();
+			const NetGameAIValue* scopedValue = scoped.size() == 1 ? std::get_if<NetGameAIValue>(&scoped[0].payload) : nullptr;
+			if (!scopedValue || scopedValue->key != "scoped" || scopedValue->number != 2.0) {
+				return finish("a scoped AI pass did not cross without g_CurrentAIActor");
+			}
+
 			std::cout << "[net-lockstep-selftest] PASS ai value crosses the wire: sent=" << sent.size()
 			          << " op=" << static_cast<int>(carried->op) << std::endl;
 			return finish(nullptr);

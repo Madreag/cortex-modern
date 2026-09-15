@@ -5005,6 +5005,7 @@ void MovableMan::UpdateControllers() {
 			// applies them at the same tick. A non-owner's queued writes are dropped.
 			for (Actor* actor: m_Actors) {
 				if (isLocalControllerActor(actor)) {
+					m_ControllerBoundaryStats.valueCommands += actor->PendingDeferredAIValueCount();
 					actor->SendDeferredAIValues();
 				} else {
 					actor->TakePendingDeferredAIValues();

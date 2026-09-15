@@ -32,6 +32,8 @@
 #include "PieMenu.h"
 #include "ScenarioRunner.h"
 #include "NetGameCommand.h"
+#include "SoundSimulation.h"
+#include "MovableMan.h"
 
 #include "GUI.h"
 #include "AllegroBitmap.h"
@@ -1073,13 +1075,27 @@ bool Actor::DisbandSquad() {
 	return hadSquad;
 }
 
+Actor* Actor::AIPassWriter() {
+	if (g_CurrentAIActor) {
+		return g_CurrentAIActor;
+	}
+	if (!ScenarioRunner::IsLockstepControllerSyncActive() || !MovableObject::InLocalAIValueDomain()) {
+		return nullptr;
+	}
+	const uint64_t uid = SoundSimulationScope::CurrentKey().objectUID;
+	return uid ? dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(uid))) : nullptr;
+}
+
 bool Actor::DeferringAIPassWrite(const MovableObject* target) {
-	if (!g_CurrentAIActor || !ScenarioRunner::IsLockstepControllerSyncActive()) {
+	Actor* writer = AIPassWriter();
+	if (!writer || !ScenarioRunner::IsLockstepControllerSyncActive()) {
 		return false;
 	}
-	// A scratch object the world does not hold has no identity the other peer can resolve, so it stays
-	// local; asking without a target is the question "is this an AI pass at all".
-	return !target || g_MovableMan.FindObjectByUniqueID(target->GetUniqueID()) == target;
+	// The running actor is in the world; a scratch object the world does not hold stays local.
+	if (!target || target == writer) {
+		return true;
+	}
+	return g_MovableMan.FindObjectByUniqueID(target->GetUniqueID()) == target;
 }
 
 // Queue on the running AI actor so one thread owns the pending list; actorUID names the written actor.
@@ -1636,7 +1652,11 @@ bool Actor::QueueAIPassValue(const MovableObject* target, uint8_t op, const std:
 	if (!DeferringAIPassWrite(target)) {
 		return false;
 	}
-	g_CurrentAIActor->m_PendingDeferredAIValues.push_back({static_cast<int64_t>(target->GetUniqueID()), op, number, valueUID, key, text});
+	Actor* writer = AIPassWriter();
+	if (!writer || !target) {
+		return false;
+	}
+	writer->m_PendingDeferredAIValues.push_back({static_cast<int64_t>(target->GetUniqueID()), op, number, valueUID, key, text});
 	return true;
 }
 
@@ -1651,10 +1671,11 @@ void Actor::SendDeferredAIValues() {
 }
 
 const Actor::DeferredAIValue* Actor::PendingAIValueSeenByAIPass(int64_t objectUID, const std::string& key, uint8_t setOp, uint8_t removeOp) {
-	if (!g_CurrentAIActor || !ScenarioRunner::IsLockstepControllerSyncActive()) {
+	Actor* writer = AIPassWriter();
+	if (!writer || !ScenarioRunner::IsLockstepControllerSyncActive()) {
 		return nullptr;
 	}
-	for (auto itr = g_CurrentAIActor->m_PendingDeferredAIValues.rbegin(); itr != g_CurrentAIActor->m_PendingDeferredAIValues.rend(); ++itr) {
+	for (auto itr = writer->m_PendingDeferredAIValues.rbegin(); itr != writer->m_PendingDeferredAIValues.rend(); ++itr) {
 		if (itr->objectUID == objectUID && itr->key == key && (itr->op == setOp || itr->op == removeOp)) {
 			return &*itr;
 		}

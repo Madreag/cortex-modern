@@ -543,6 +543,8 @@ namespace RTE {
 		/// Queues a gib an AI pass asked for, so every peer gibs at the committed tick with the same call.
 		/// @return Whether the call was queued; outside a deferring pass the gib happens directly as before.
 		static bool QueueAIPassGib(const MovableObject* target, const Vector& impactImpulse, const MovableObject* movableObjectToIgnore);
+		/// The actor whose AI pass is running on this thread, or the lockstep LocalSimulation scope's actor.
+		static Actor* AIPassWriter();
 		/// Whether a write to this object made right here belongs to a lockstep AI pass and must be deferred.
 		/// @param target What is written; no target asks only whether a lockstep AI pass is running here.
 		static bool DeferringAIPassWrite(const MovableObject* target);
@@ -574,6 +576,8 @@ namespace RTE {
 		std::vector<DeferredAIValue> TakePendingDeferredAIValues();
 		/// Sends this tick's queued custom-value writes as synced commands; an actor this machine does not own is dropped.
 		void SendDeferredAIValues();
+		/// How many custom-value writes this pass still holds.
+		size_t PendingDeferredAIValueCount() const { return m_PendingDeferredAIValues.size(); }
 		/// The latest pending write this pass made to objectUID/key, if it wrote that map.
 		static const DeferredAIValue* PendingAIValueSeenByAIPass(int64_t objectUID, const std::string& key, uint8_t setOp, uint8_t removeOp);
 

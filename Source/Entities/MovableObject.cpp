@@ -33,6 +33,7 @@
 
 #include "NetGameCommand.h"
 #include "NetLockstep.h"
+#include "ScenarioRunner.h"
 #include "Base64/base64.h"
 #include "tracy/Tracy.hpp"
 
@@ -1738,7 +1739,7 @@ Entity* MovableObject::GetObjectValue(const std::string& key) const {
 }
 
 static bool DeferLockstepAIValue(const MovableObject* target, uint8_t op, const std::string& key, double number, const std::string& text, int64_t valueUID) {
-	if (!Actor::DeferringAIPassWrite(target)) {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
 		return false;
 	}
 	const bool wireCanCarry = op < NetGameAIValue::OpCount && !key.empty() &&
@@ -1747,8 +1748,11 @@ static bool DeferLockstepAIValue(const MovableObject* target, uint8_t op, const 
 	if (wireCanCarry && Actor::QueueAIPassValue(target, op, key, number, text, valueUID)) {
 		return true;
 	}
+	if (!Actor::DeferringAIPassWrite(target) && !MovableObject::InLocalAIValueDomain()) {
+		return false;
+	}
 	g_MovableMan.ReportControllerBoundaryViolation("a custom value the wire cannot carry", dynamic_cast<const Actor*>(target));
-	return false;
+	return true;
 }
 
 void MovableObject::SetStringValue(const std::string& key, const std::string& value) {

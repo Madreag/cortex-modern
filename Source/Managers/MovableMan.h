@@ -325,6 +325,7 @@ namespace RTE {
 		struct ControllerBoundaryStats {
 			uint64_t equipCommands = 0;
 			uint64_t soundCommands = 0;
+			uint64_t valueCommands = 0;
 			uint64_t aimIntents = 0;
 			uint64_t flipIntents = 0;
 			uint64_t directWrites = 0;
