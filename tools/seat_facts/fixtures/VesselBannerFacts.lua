@@ -42,7 +42,7 @@ function VesselBannerFacts:UpdateActivity()
             banner.Kerning = 7;
             banner:ClearText();
             menu.ShowOnlyOwnedItems = true;
-            menu.EnforceMaxMassConstraint = true;
+            menu.EnforceMaxMassConstraint = false;
             menu:SetMetaPlayer(player);
             menu:SetNativeTechModule(0);
             menu:SetForeignCostMultiplier(2.0);
@@ -63,7 +63,7 @@ function VesselBannerFacts:UpdateActivity()
             editor:TestBrainResidence(false);
             editor:Update();
             assert(bannerFacts(banner) == "text= anim=0 kerning=0 visible=0", "absent seat banner kept state: " .. bannerFacts(banner));
-            assert(not menu.ShowOnlyOwnedItems and not menu.EnforceMaxMassConstraint, "absent seat menu kept a flag");
+            assert(not menu.ShowOnlyOwnedItems and menu.EnforceMaxMassConstraint, "absent seat menu took a flag");
             assert(menu:GetOwnedItemsAmount("Vessel Test Item") == 0, "absent seat menu kept an owned item");
             assert(menu:GetTotalCartCost() == 0 and menu:GetTotalOrderCost() == 0, "absent seat menu has a cost");
             assert(menu:GetTotalOrderMass() == 0 and menu:GetTotalOrderPassengers() == 0, "absent seat menu has an order");
