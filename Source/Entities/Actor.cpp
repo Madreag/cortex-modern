@@ -1324,6 +1324,71 @@ Vector Actor::GetLastAIWaypoint() const {
 	return m_Pos;
 }
 
+bool Actor::OrderedWaypointsPending() const {
+	if (SeeingLogicalWaypoints()) {
+		std::vector<std::pair<Vector, const MovableObject*>> items;
+		BuildLogicalWaypoints(items);
+		return !items.empty();
+	}
+	return !m_Waypoints.empty();
+}
+
+bool Actor::FirstOrderedWaypoint(Vector& point) const {
+	if (SeeingLogicalWaypoints()) {
+		std::vector<std::pair<Vector, const MovableObject*>> items;
+		BuildLogicalWaypoints(items);
+		if (!items.empty()) {
+			point = items.front().first;
+			return true;
+		}
+		return false;
+	}
+	if (m_Waypoints.empty()) {
+		return false;
+	}
+	point = m_Waypoints.front().first;
+	return true;
+}
+
+// The move path is this machine's own pathfinder answer, so the scripts that steer shared sim state with
+// it read the order every peer shares instead; single player keeps reading the path itself.
+bool Actor::IsWaitingOnOrderedMove() const {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return IsWaitingOnNewMovePath();
+	}
+	// An ordered point still in the queue is a move this actor has not started.
+	return OrderedWaypointsPending();
+}
+
+bool Actor::HasOrderedMove() const {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return !m_MovePath.empty();
+	}
+	return m_HasOrderedWaypoint || OrderedWaypointsPending();
+}
+
+Vector Actor::GetOrderedMoveStep() const {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return m_MovePath.empty() ? m_Pos : m_MovePath.front();
+	}
+	Vector queued;
+	if (FirstOrderedWaypoint(queued)) {
+		return queued;
+	}
+	return GetLastAIWaypoint();
+}
+
+Vector Actor::GetOrderedMoveEnd() const {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return GetMovePathEnd();
+	}
+	// A queued route is read from the queue itself; naming its last point here would reorder it.
+	if (OrderedWaypointsPending()) {
+		return m_Pos;
+	}
+	return GetLastAIWaypoint();
+}
+
 const std::list<std::pair<Vector, MovableObjectReference>>& Actor::GetWaypointList() const {
 	if (!SeeingLogicalWaypoints()) {
 		return m_Waypoints;
