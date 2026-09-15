@@ -430,7 +430,7 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 21;
+		static constexpr uint16_t c_Version = 22;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
@@ -447,6 +447,7 @@ namespace RTE {
 		static constexpr uint16_t c_PlayerBindingsVersion = 18;
 		static constexpr uint16_t c_ValueObservationVersion = 20;
 		static constexpr uint16_t c_AIOrderWriterVersion = 21;
+		static constexpr uint16_t c_PlaceBrainVersion = 22;
 		static constexpr uint16_t c_SeatSnapshotVersion = 17;
 		static constexpr uint16_t c_MinVersion = 8;
 		static constexpr uint16_t c_RoundVersion = 11;

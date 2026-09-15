@@ -762,6 +762,11 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				continue;
 			}
 			ApplyDeferredSoundOp(*sound);
+		} else if (const NetGamePlaceBrain* placeBrain = std::get_if<NetGamePlaceBrain>(&command.payload)) {
+			// A seat's committed brain placement in the synchronized setup editor.
+			if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
+				gameActivity->ApplyNetBrainPlacement(*placeBrain, command.senderPeerId);
+			}
 		}
 	}
 	MovableMan::ReconcileLockstepControlBindings();

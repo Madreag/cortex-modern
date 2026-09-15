@@ -41,6 +41,11 @@ def rules_for(variant):
         # lockstep refuses, so the stock arm plays it on the site it ships with.
         rules["activity_preset"] = "Skirmish Defense"
         rules["scene_name"] = "Ketanot Hills"
+    elif variant == "brains":
+        # Skirmish Defense on a site with no brain on it: every human seat has to place its own brain in
+        # the setup editor, which is the start a lockstep match has to synchronize.
+        rules["activity_preset"] = "Skirmish Defense"
+        rules["scene_name"] = "Grasslands"
     elif variant == "census":
         # The offline leg is the stock command line launch, and -scenario resolves "Determinism <name>"
         # presets only, so the census runs the one activity both paths can launch. What that offline launch
@@ -111,6 +116,30 @@ def score_rules(log, rules, default=False):
     return {"pass": len(rows) == 1 and not differences, "observations": rows, "differences": differences}
 
 
+def placements(log):
+    """Every applied placement a peer logged, keyed by seat: what its scene actually holds."""
+    applied = {}
+    for line in log.splitlines():
+        if not line.startswith("[net-match] brain placed: "):
+            continue
+        row = dict(token.split("=", 1) for token in line.removeprefix("[net-match] brain placed: ").split(" ") if "=" in token)
+        applied[row.get("seat")] = row
+    return applied
+
+
+def score_placements(logs, seats=2):
+    """Both peers must apply every seat's placement, from that seat's own peer, identically."""
+    applied = {peer: placements(log) for peer, log in logs.items()}
+    expected_seats = [str(seat) for seat in range(seats)]
+    complete = all(sorted(rows) == expected_seats for rows in applied.values())
+    # Seat N is issued by peer N+1: a placement each peer computed locally would not carry the other's id.
+    issuers = all(rows.get(seat, {}).get("peer") == str(index + 1)
+                  for rows in applied.values() for index, seat in enumerate(expected_seats))
+    identical = len({json.dumps(rows, sort_keys=True) for rows in applied.values()}) == 1
+    return {"pass": bool(complete and issuers and identical), "complete": complete, "issuers": issuers,
+            "identical": identical, "applied": applied}
+
+
 def tick_lines(path, tick="1"):
     """Every per-MO CC_SIM_DUMP line of one tick: the census of what the launch actually placed."""
     if not Path(path).is_file():
@@ -161,6 +190,9 @@ def launch(options):
     common = ["-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
               "-net-match-mode", "pvp" if default else "coop-pve", "-net-match-ticks", "600", "-max-ticks", "600",
               "-net-match-input-delay", "3", "-seed", "42", "-num-lua-states", "4", "-tick-hashes"]
+    if options.variant == "brains":
+        # Every peer stands in for its own players' DONE in the synchronized setup editor.
+        common.append("-net-match-e2e-brain-placement")
     runs, records = {}, {}
     try:
         for peer in ("host", "client"):
@@ -196,6 +228,12 @@ def launch(options):
         for peer in runs:
             checks[peer + "_process"] = records[peer].get("exit_code") == 0 and not records[peer].get("timed_out") and records[peer].get("evidence_complete", False)
             checks[peer + "_rules"] = result["rules"][peer]["pass"]
+        if options.variant == "brains":
+            result["placements"] = score_placements(logs)
+            checks["brains_placed_on_both_peers"] = result["placements"]["pass"]
+            # The match must actually leave the setup editor and play, or the traces agree on nothing happening.
+            checks["left_setup_editor"] = all("[net-match] brain placed: seat=1" in log for log in logs.values()) and \
+                all(record.get("exit_code") == 0 for record in records.values())
         checks["shared_600_ticks"], result["simulation"] = strict_compare(root / "host/trace.json", root / "client/trace.json", 600)
         replay_trace = root / "replay/trace.json"
         replay = make_run(repo, ["-net-replay", str(root / "host/match.ccreplay"), "-tick-hashes", "-out", str(replay_trace),
