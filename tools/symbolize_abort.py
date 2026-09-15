@@ -17,7 +17,7 @@ EXCEPTION_STREAM = 6
 MODULE_LIST_STREAM = 4
 
 FATAL_RE = re.compile(
-    r"FATAL:\s+unhandled exception\s+0x([0-9A-Fa-f]+)\s+at\s+0x([0-9A-Fa-f]+)",
+    r"FATAL:\s+unhandled exception\s+0x([0-9A-Fa-f]+)\s+at\s+0x([0-9A-Fa-f]+)(?:\s+\(exe\+0x([0-9A-Fa-f]+)\))?",
     re.I,
 )
 STACK_RE = re.compile(r"exe\+0x([0-9A-Fa-f]+)", re.I)
@@ -172,6 +172,8 @@ def parse_abort(text):
     match = FATAL_RE.search(text)
     if match:
         fatal = {"code": int(match.group(1), 16), "address": int(match.group(2), 16)}
+        if match.group(3):
+            fatal["offset"] = int(match.group(3), 16)
     frames = []
     for line in text.splitlines():
         found = STACK_RE.search(line)
@@ -223,7 +225,12 @@ def symbolize(exe, abort_path, dump_path=None):
             if not resolved["name"]:
                 unresolved += 1
         if fatal:
-            if dump and dump.get("module_base"):
+            if "offset" in fatal:
+                resolved = session.resolve(session.base + fatal["offset"])
+                rows.append(format_row(f"FATAL 0x{fatal['address']:X}", resolved))
+                if not resolved["name"]:
+                    unresolved += 1
+            elif dump and dump.get("module_base"):
                 resolved = session.resolve(fatal["address"])
                 rows.append(format_row(f"FATAL 0x{fatal['address']:X}", resolved))
                 if not resolved["name"]:
