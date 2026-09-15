@@ -590,12 +590,32 @@ def inspect_pair(root, records, size, arm, mode, name):
         # Only the host reads the widget through a stall or a hold; in Auto its peer never sees one.
         expect_status = mode == "always" or (mode == "auto" and (arm.get("event") or ((arm.get("stall") or arm.get("leave")) and who == "Host")))
         if expect_status:
+            waiting_for = [text for text in status_texts if re.search(r"waiting for", text, re.I)]
+            running = [text for text in status_texts if not re.search(r"waiting for", text, re.I)]
+            # The compact strip gives up its metrics tail before it shortens a name, so a
+            # wire-max guest name's wait banner legitimately carries no RTT/PACE there.
+            # "WAITING FOR FRAMES" still fits whole, so it keeps its metrics asserted.
+            metrics_dropped = arm.get("long_name") and size[1] < COMPACT_MAX_HEIGHT
+            named_waits = [text for text in waiting_for if "FRAMES" not in text]
+            metric_texts = running + [text for text in waiting_for
+                                      if not metrics_dropped or "FRAMES" in text]
             # A held seat has no peer left to measure, so its read carries the dash instead of a number.
             checks[f"{who}_live_rtt"] = bool(status_texts) and all(
                 re.search(r"(?:^|\n| )RTT (?:\d+|--) ms", text) if re.search(r"waiting for", text, re.I)
-                else re.search(r"(?:^|\n| )RTT \d+ ms", text) for text in status_texts)
-            checks[f"{who}_pace_field"] = bool(status_texts) and all(re.search(r"PACE \d+(?:\.\d+)? tps", text) for text in status_texts)
-            running = [text for text in status_texts if not re.search(r"waiting for", text, re.I)]
+                else re.search(r"(?:^|\n| )RTT \d+ ms", text) for text in metric_texts)
+            checks[f"{who}_pace_field"] = bool(status_texts) and all(re.search(r"PACE \d+(?:\.\d+)? tps", text) for text in metric_texts)
+            if metrics_dropped:
+                # What the fallback keeps is still asserted: the name (whole or its
+                # ellipsis) and the line's own count; the metrics are asserted gone.
+                # The hold banner is the host's - the dropped peer's lines carry no
+                # wait, so the non-empty requirement is the host's alone.
+                must_hold = who == "Host"
+                checks[f"{who}_fallback_name_kept"] = (not must_hold or bool(named_waits)) and all(
+                    LONG_GUEST_NAME in text or "..." in text for text in named_waits)
+                checks[f"{who}_fallback_count_kept"] = all(
+                    re.search(r"\(\d+ s\)|\d+ of \d+", text) for text in named_waits)
+                checks[f"{who}_fallback_metrics_dropped"] = all(
+                    "RTT" not in text and "PACE" not in text for text in named_waits)
             # An arm that read no status text at all passed both pace checks vacuously, so the guard stays.
             # A stalled or held Host has no peer left to pace against, so only it may read waiting-for alone.
             held = who == "Host" and bool(arm.get("stall") or arm.get("leave"))
