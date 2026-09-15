@@ -50,7 +50,7 @@ function Update(self)
 						if self.crossTimer:IsPastSimTimeLimit() then
 							local cross = CreateMOSParticle("Particle Heal Effect", "Base.rte");
 							if cross then
-								cross.Pos = healTarget.AboveHUDPos + Vector(0, 4);
+								cross.Pos = healTarget.AboveHeadPos + Vector(0, 4);
 								MovableMan:AddParticle(cross);
 							end
 							healTarget:RemoveWounds(self.healStrength);
