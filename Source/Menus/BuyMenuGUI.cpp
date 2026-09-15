@@ -57,8 +57,6 @@ void BuyMenuGUI::Clear() {
 	m_pGUIScreen = 0;
 	m_pGUIInput = 0;
 	m_pGUIController = 0;
-	// Only Create() fills these flags, and Destroy() deletes them whether it ran or not.
-	m_aExpandedModules = nullptr;
 	m_MenuEnabled = DISABLED;
 	m_MenuFocus = OK;
 	m_FocusChange = false;
