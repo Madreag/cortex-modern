@@ -1624,6 +1624,7 @@ void AudioMan::PauseIngameSounds(bool pause) {
 
 namespace {
 	std::map<int, AudioCheckpoint::Voice> s_AwaitingSampleVoices;
+	std::map<std::string, AudioCheckpoint::Sample> s_PendingSamples;
 
 	bool SampleReadyForPlayback(FMOD::Sound* sound) {
 		if (!sound) return false;
@@ -1647,9 +1648,18 @@ void AudioMan::RetireVoice(int identity) {
 }
 
 void AudioMan::StartAwaitingSampleVoices() {
-	if (!m_AudioEnabled || s_AwaitingSampleVoices.empty()) return;
+	if (!m_AudioEnabled || (s_AwaitingSampleVoices.empty() && s_PendingSamples.empty())) return;
 	const std::array<FMOD::ChannelGroup*, 3> buses = {m_SFXChannelGroup, m_UIChannelGroup, m_MusicChannelGroup};
 	AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+	std::vector<std::string> appliedSamples;
+	for (auto& [path, sample]: s_PendingSamples) {
+		const auto cached = ContentFile::s_LoadedSamples.find(path);
+		FMOD::Sound* sound = cached == ContentFile::s_LoadedSamples.end() ? nullptr : cached->second;
+		if (!SampleReadyForPlayback(sound)) continue;
+		sample.Apply(sound);
+		appliedSamples.push_back(path);
+	}
+	for (const auto& path: appliedSamples) s_PendingSamples.erase(path);
 	std::vector<int> started;
 	for (auto& [identity, description]: s_AwaitingSampleVoices) {
 		const auto found = m_PlayingVoices.find(identity);
@@ -1960,6 +1970,8 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			if (!data || !sounds.contains(path)) throw std::runtime_error("music sample is absent from audio checkpoint: " + path);
 			stagedSamples.emplace(data, sounds.at(path));
 		}
+		std::map<int, AudioCheckpoint::Voice> awaitingVoices;
+		std::map<std::string, AudioCheckpoint::Sample> pendingSamples;
 		std::map<int, PlayingVoice> candidates;
 		std::map<SoundContainer*, std::unordered_set<int>> ownerChannels;
 		for (const auto& [identity, voice]: m_PlayingVoices) if (voice.owner) ownerChannels.try_emplace(voice.owner);
@@ -2016,7 +2028,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			if (!voice.playing) continue;
 			if (!SampleReadyForPlayback(sounds.at(voice.path))) {
 				candidates.at(voice.identity).awaitingSample = true;
-				s_AwaitingSampleVoices[voice.identity] = voice;
+				awaitingVoices[voice.identity] = voice;
 				continue;
 			}
 			FMOD::Channel* channel = nullptr;
@@ -2043,6 +2055,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 				if (state.enabled) originalEffects.Detach();
 				for (const auto& sample: state.samples) {
 					if (SampleReadyForPlayback(sounds.at(sample.path))) sample.Apply(sounds.at(sample.path));
+					else pendingSamples.emplace(sample.path, sample);
 				}
 				if (state.enabled) for (size_t index = 0; index < groups.size(); ++index) state.groups[index].Apply(m_AudioSystem, groups[index], true);
 				for (const auto& [identity, channel]: backendCandidates) {
@@ -2077,6 +2090,8 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		// containers may have stopped or played additional sounds during staging.
 		for (auto& [owner, channels]: ownerChannels) owner->m_PlayingChannels.swap(channels);
 		m_PlayingVoices = std::move(candidates);
+		s_AwaitingSampleVoices = std::move(awaitingVoices);
+		s_PendingSamples = std::move(pendingSamples);
 		for (const auto& [path, sample]: newSamples) {
 			const auto old = ContentFile::s_LoadedSamples.find(path);
 			if (old != ContentFile::s_LoadedSamples.end() && !old->second) ContentFile::s_LoadedSamples.erase(old);
@@ -2339,7 +2354,22 @@ bool AudioMan::RunCheckpointSelfTest() {
 			FMOD::Sound* ready = nullptr;
 			const auto cached = ContentFile::s_LoadedSamples.find(path);
 			if (cached != ContentFile::s_LoadedSamples.end()) ready = cached->second;
+			if (!ready) throw std::runtime_error("loading-sample row has no cached ready sound");
+			unsigned int originalLoopStart = 0, originalLoopEnd = 0, sampleLength = 0;
+			FMOD_MODE originalMode = 0;
+			int originalLoops = 0;
+			AudioCheckpoint::Require(ready->getLoopPoints(&originalLoopStart, FMOD_TIMEUNIT_PCM, &originalLoopEnd, FMOD_TIMEUNIT_PCM));
+			AudioCheckpoint::Require(ready->getMode(&originalMode));
+			AudioCheckpoint::Require(ready->getLoopCount(&originalLoops));
+			AudioCheckpoint::Require(ready->getLength(&sampleLength, FMOD_TIMEUNIT_PCM));
+			if (sampleLength < 4) throw std::runtime_error("loading-sample row sound is too short to archive loop points");
+			const unsigned int archivedLoopStart = 1;
+			const unsigned int archivedLoopEnd = sampleLength - 2;
+			const FMOD_MODE archivedMode = originalMode | FMOD_LOOP_NORMAL;
 			const std::string beforeLoading = SaveCheckpoint();
+			AudioCheckpoint::Require(ready->setMode(archivedMode));
+			AudioCheckpoint::Require(ready->setLoopPoints(archivedLoopStart, FMOD_TIMEUNIT_PCM, archivedLoopEnd, FMOD_TIMEUNIT_PCM));
+			const std::string withLoops = SaveCheckpoint();
 			ContentFile::s_LoadedSamples[path] = loading;
 			std::string saved;
 			std::string refusal;
@@ -2351,6 +2381,9 @@ bool AudioMan::RunCheckpointSelfTest() {
 				for (const auto& sample: state.samples) if (sample.path == path) archived = true;
 			} catch (...) {
 				ContentFile::s_LoadedSamples[path] = ready;
+				ready->setMode(originalMode);
+				ready->setLoopPoints(originalLoopStart, FMOD_TIMEUNIT_PCM, originalLoopEnd, FMOD_TIMEUNIT_PCM);
+				ready->setLoopCount(originalLoops);
 				if (loading) loading->release();
 				throw;
 			}
@@ -2358,14 +2391,21 @@ bool AudioMan::RunCheckpointSelfTest() {
 			if (!archived) std::cout << "[audio-checkpoint-selftest] loading_sample refusal " << refusal << std::endl;
 			bool deferredVoice = false;
 			if (archived) {
-				const bool loaded = LoadCheckpoint(saved, false, nullptr, &refusal);
+				const bool loaded = LoadCheckpoint(withLoops, false, nullptr, &refusal);
 				ContentFile::s_LoadedSamples[path] = ready;
 				Update();
+				unsigned int loopStart = 0, loopEnd = 0;
+				FMOD_MODE mode = 0;
+				AudioCheckpoint::Require(ready->getLoopPoints(&loopStart, FMOD_TIMEUNIT_PCM, &loopEnd, FMOD_TIMEUNIT_PCM));
+				AudioCheckpoint::Require(ready->getMode(&mode));
 				const auto found = m_PlayingVoices.find(loadingId);
-				deferredVoice = loaded && found != m_PlayingVoices.end() && found->second.channel;
+				deferredVoice = loaded && found != m_PlayingVoices.end() && found->second.channel && loopStart == archivedLoopStart && loopEnd == archivedLoopEnd && (mode & FMOD_LOOP_NORMAL);
 			} else {
 				ContentFile::s_LoadedSamples[path] = ready;
 			}
+			ready->setMode(originalMode);
+			ready->setLoopPoints(originalLoopStart, FMOD_TIMEUNIT_PCM, originalLoopEnd, FMOD_TIMEUNIT_PCM);
+			ready->setLoopCount(originalLoops);
 			reportArm("load_defers_a_loading_sample_voice", deferredVoice);
 			if (loadingOwner->IsBeingPlayed()) loadingOwner->Stop();
 			if (loading) loading->release();
