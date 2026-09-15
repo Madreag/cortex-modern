@@ -284,7 +284,6 @@ static std::string s_netJoinSessionId; //!< -net-join-session: the directory ses
 static constexpr uint32_t c_CappedStopDrainMs = 8000;
 static constexpr uint32_t c_CappedStopLingerMs = 1500;
 static constexpr uint64_t c_NetMatchE2EEditorTickCap = 120; //!< A synchronized setup editor that has not finished by here is stuck, not slow.
-static constexpr uint64_t c_NetMatchE2EUnsyncedEditorGrace = 30; //!< Ticks the editor may hold while a resync rebuilds the coordinator around it.
 static uint64_t s_netLockstepTicks = 0;
 static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
 static uint16_t s_netLockstepInputDelay = 0;
@@ -295,7 +294,6 @@ static std::string s_netMatchOwnershipPolicy = "team-owner";
 static bool s_netMatchServiceE2EEnteredEditor = false;
 static bool s_netMatchE2EBrainPlacement = false; //!< -net-match-e2e-brain-placement: this peer places its own seats' brains in the synchronized setup editor.
 static uint64_t s_netMatchE2EEditorTicks = 0; //!< Ticks the activity has spent in the setup editor, so a match that never leaves it fails instead of idling.
-static uint64_t s_netMatchE2EUnsyncedEditorTicks = 0; //!< Consecutive editor ticks with no active coordinator.
 static NetMatchE2ETickClock s_netMatchE2ETicks;
 static long s_netMatchE2EActorCensus = -1;
 static long s_netMatchE2EActorCensusPeak = -1; //!< The max actor count seen, so a transient heal double-spawn that later sheds back to normal is still visible.
@@ -2128,6 +2126,19 @@ static std::string DescribeCanonicalExtras(std::vector<std::string>& problems) {
 // The probe's save file is per process, so concurrent probes never read each other's world.
 static std::string RollbackProbeSaveName() {
 	return "rbprobe_" + std::to_string(System::GetProcessID());
+}
+
+/// Whether a resync is taking the coordinator down and rebuilding it: the snapshot is being made, sent or
+/// loaded, or the stop that starts all that is still waiting to be read. The world holds meanwhile.
+static bool NetMatchResyncRebuilding() {
+	if (g_NetMatchService.IsMatchResyncing() || g_ActivityMan.LockstepRelaunchInProgress()) {
+		return true;
+	}
+	if (!g_NetMatchService.IsResyncOnDesyncEnabled() || !ScenarioRunner::HasControllerReplayError()) {
+		return false;
+	}
+	const std::string& stop = ScenarioRunner::GetControllerReplayError();
+	return stop.find("Desync") != std::string::npos || stop.find("ResyncRequested") != std::string::npos;
 }
 
 /// Whether this completed update batch has a harness frame to present.
@@ -4353,8 +4364,7 @@ void RunGameLoop() {
 					std::string editorError;
 					// A resync takes the coordinator down and rebuilds it around the host's snapshot, and the
 					// editor holds while that happens. An editor nobody synchronizes never gets one back.
-					s_netMatchE2EUnsyncedEditorTicks = ScenarioRunner::IsLockstepControllerSyncActive() ? 0 : s_netMatchE2EUnsyncedEditorTicks + 1;
-					if (s_netMatchE2EUnsyncedEditorTicks > c_NetMatchE2EUnsyncedEditorGrace) {
+					if (!ScenarioRunner::IsLockstepControllerSyncActive() && !NetMatchResyncRebuilding()) {
 						editorError = "activity entered unsynchronized setup editor";
 					} else if (++s_netMatchE2EEditorTicks > c_NetMatchE2EEditorTickCap) {
 						editorError = "setup editor did not finish within " + std::to_string(c_NetMatchE2EEditorTickCap) + " ticks";
