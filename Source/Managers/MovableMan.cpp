@@ -372,6 +372,10 @@ static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& acto
 		if (!MovableMan::ApplyLockstepFrameToActor(*actorIt->second, frame, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), &error)) {
 			return false;
 		}
+		// Every peer applies this committed frame, so the seat it names is where the shared control binding comes from.
+		if (Activity* activity = g_ActivityMan.GetActivity()) {
+			activity->NoteLockstepControlBinding(frame.actorUniqueID, actorIt->second->GetController()->GetPlayer());
+		}
 		applied.insert(frame.actorUniqueID);
 	}
 	return true;
@@ -407,10 +411,6 @@ bool MovableMan::ApplyLockstepFrameToActor(Actor& actor, const ControllerFrame& 
 		return false;
 	}
 	controller.SetWireApplyTick(static_cast<int64_t>(simTick));
-	// Every peer applies this frame, so the seat it names is where the shared control binding comes from.
-	if (Activity* activity = g_ActivityMan.GetActivity()) {
-		activity->NoteLockstepControlBinding(static_cast<int64_t>(actor.GetUniqueID()), controller.GetPlayer());
-	}
 	if (controller.GetInputMode() != previousMode || controller.GetPlayer() != previousPlayer) {
 		actor.OnControllerInputModeChanged(previousMode, previousPlayer);
 	}
