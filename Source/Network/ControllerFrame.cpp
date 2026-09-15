@@ -538,6 +538,16 @@ namespace RTE {
 			return fail("the current version did not carry a hatch intent");
 		}
 
+		// A supported version carries the hatch channel exactly when its encoded size has the byte for it;
+		// this row fails the moment a version bump leaves the channel keyed on the build's own version.
+		for (const uint16_t supported: {ControllerFrame::c_LegacyVersion, ControllerFrame::c_PreHatchVersion, ControllerFrame::c_HatchVersion, ControllerFrame::c_Version}) {
+			ControllerFrame probe;
+			probe.version = supported;
+			if (probe.HasHatchChannel() != (ControllerFrameCodec::EncodedSizeFor(supported) > ControllerFrame::c_PreHatchEncodedSize)) {
+				return fail("version " + std::to_string(supported) + " reads its hatch channel against the wrong version");
+			}
+		}
+
 		// A version 6 frame is the first 84 bytes: it keeps the intent semantics and simply has no hatch channel.
 		std::vector<uint8_t> preHatchBytes(encoded.begin(), encoded.begin() + static_cast<std::ptrdiff_t>(ControllerFrame::c_PreHatchEncodedSize));
 		ControllerFrame preHatch;
