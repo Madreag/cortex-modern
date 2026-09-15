@@ -5374,6 +5374,9 @@ std::string MovableMan::SaveCheckpoint() const {
 	collect(m_Actors); collect(m_Items); collect(m_Particles);
 	collect(m_AddedActors); collect(m_AddedItems); collect(m_AddedParticles);
 	CollectOwnedMovableObjects(g_SceneMan.GetScene(), visited, carried);
+	g_LuaMan.VisitScriptHeldMovableObjects([&visited, &carried](MovableObject* object) {
+		CollectOwnedMovableObjects(object, visited, carried);
+	});
 	const auto shared = [&visited, &carried](const Activity* activity) {
 		if (const auto* game = dynamic_cast<const GameActivity*>(activity)) {
 			game->VisitCheckpointSharedObjects([&visited, &carried](const Entity* child) { CollectOwnedMovableObjects(child, visited, carried); });

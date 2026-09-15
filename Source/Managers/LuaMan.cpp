@@ -19,6 +19,7 @@
 #include "Entity.h"
 #include "Attachable.h"
 #include "AEmitter.h"
+#include "Actor.h"
 #include "AHuman.h"
 #include "ACrab.h"
 #include "ACraft.h"
@@ -5035,6 +5036,18 @@ void LuaMan::Initialize() {
 	}
 }
 
+void LuaStateWrapper::VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	if (m_State) VisitScriptOwnedObjects(m_State, visit);
+}
+
+void LuaMan::VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit) {
+	m_MasterScriptState.VisitScriptHeldMovableObjects(visit);
+	for (LuaStateWrapper& state: m_ScriptStates) {
+		state.VisitScriptHeldMovableObjects(visit);
+	}
+}
+
 LuaStateWrapper& LuaMan::GetMasterScriptState() {
 	return m_MasterScriptState;
 }
@@ -5289,6 +5302,71 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && tickEndCollection && collectionThread && emptySetPicksMaster;
 }
 
+bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
+	bool survived = false;
+	bool refused = false;
+	{
+		MovableMan::ConstructionRegistryScope registryScope;
+		try {
+			auto world = std::make_unique<Actor>();
+			if (world->MovableObject::Create(1) < 0) throw std::runtime_error("the world actor could not be created");
+			const bool created = RunScriptString(
+				"_LuaHeldMO = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\");"
+				"_LuaHeldUID = _LuaHeldMO.UniqueID") == 0;
+			lua_getglobal(m_State, "_LuaHeldUID");
+			MovableObject* held = g_MovableMan.FindObjectByUniqueID(static_cast<long>(lua_tonumber(m_State, -1)));
+			lua_pop(m_State, 1);
+			if (!created || !held) throw std::runtime_error(std::string("the lua-held object could not be created") + (GetLastError().empty() ? "" : (": " + GetLastError())));
+			held->SetWhichMOToNotHit(world.get());
+			if (held->GetWhichMOToNotHit() != world.get()) throw std::runtime_error("the lua-held object did not take the world actor");
+			const std::string archive = g_MovableMan.SaveCheckpoint();
+			held->SetWhichMOToNotHit(nullptr);
+			const bool applied = g_MovableMan.LoadCheckpoint(archive);
+			const bool rebound = held->GetWhichMOToNotHit() == world.get();
+			RunScriptString("_LuaHeldMO = nil; _LuaHeldUID = nil");
+			SetTempEntity(nullptr);
+			if (!applied) throw std::runtime_error("the archive holding a lua-held object was refused");
+			if (!rebound) throw std::runtime_error("a lua-held object's borrowed reference did not survive the checkpoint");
+			std::cout << "[native-reference-selftest] a_lua_held_objects_borrowed_reference_survives_the_checkpoint PASS" << std::endl;
+			survived = true;
+		} catch (const std::exception& error) {
+			std::cout << "[native-reference-selftest] a_lua_held_objects_borrowed_reference_survives_the_checkpoint FAIL " << error.what() << std::endl;
+			RunScriptString("_LuaHeldMO = nil; _LuaHeldUID = nil");
+			SetTempEntity(nullptr);
+		}
+	}
+	{
+		MovableMan::ConstructionRegistryScope registryScope;
+		try {
+			auto target = std::make_unique<Actor>();
+			if (target->MovableObject::Create(1) < 0) throw std::runtime_error("the off-world target could not be created");
+			const bool created = RunScriptString(
+				"_LuaHeldOff = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\");"
+				"_LuaHeldOffUID = _LuaHeldOff.UniqueID") == 0;
+			lua_getglobal(m_State, "_LuaHeldOffUID");
+			const long owner = static_cast<long>(lua_tonumber(m_State, -1));
+			MovableObject* held = g_MovableMan.FindObjectByUniqueID(owner);
+			lua_pop(m_State, 1);
+			if (!created || !held || owner <= 0) throw std::runtime_error(std::string("the lua-held off-world owner could not be created") + (GetLastError().empty() ? "" : (": " + GetLastError())));
+			held->SetWhichMOToNotHit(target.get());
+			const std::string archive = g_MovableMan.SaveCheckpoint();
+			g_MovableMan.UnregisterObject(held);
+			const bool applied = g_MovableMan.LoadCheckpoint(archive);
+			g_MovableMan.RegisterObject(held);
+			RunScriptString("_LuaHeldOff = nil; _LuaHeldOffUID = nil");
+			SetTempEntity(nullptr);
+			if (applied) throw std::runtime_error("a lua-held object's off-world owner was accepted without a refusal");
+			std::cout << "[native-reference-selftest] a_lua_held_objects_off_world_owner_is_refused PASS owner=" << owner << std::endl;
+			refused = true;
+		} catch (const std::exception& error) {
+			std::cout << "[native-reference-selftest] a_lua_held_objects_off_world_owner_is_refused FAIL " << error.what() << std::endl;
+			RunScriptString("_LuaHeldOff = nil; _LuaHeldOffUID = nil");
+			SetTempEntity(nullptr);
+		}
+	}
+	return survived && refused;
+}
+
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
 	LoadScriptGraphHelper();
@@ -5482,6 +5560,7 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	checkpointValues = PieMenu::RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunBorrowedReferenceSelfTest() && checkpointValues;
 	checkpointValues = GameActivity::RunDeliveryReferenceSelfTest() && checkpointValues;
+	checkpointValues = RunLuaHeldReferenceSelfTest() && checkpointValues;
 	checkpointValues = MOSprite::RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_PrimitiveMan.RunCheckpointSelfTest() && checkpointValues;
 	{
