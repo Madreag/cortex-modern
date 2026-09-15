@@ -19,6 +19,7 @@
 #include "Controller.h"
 #include "FrameMan.h"
 #include "GUISound.h"
+#include "LuaMan.h"
 #include "MovableMan.h"
 #include "SoundContainer.h"
 #include "NetActorOwnership.h"
@@ -9789,6 +9790,9 @@ namespace RTE {
 			if (!SceneMan::IsConstructed()) {
 				install_allegro(SYSTEM_NONE, &errno, std::atexit); // SceneMan::Clear creates a bitmap.
 				SceneMan::Construct();
+			}
+			if (!LuaMan::IsConstructed()) {
+				LuaMan::Construct(); // A destroyed MovableObject drops itself from the script update lists.
 			}
 		}
 
