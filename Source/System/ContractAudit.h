@@ -246,6 +246,8 @@ Field(path + ".ACraft.m_AltitudeControl", object.m_AltitudeControl);
 Field(path + ".ACraft.m_DeliveryDelayMultiplier", object.m_DeliveryDelayMultiplier);
 Field(path + ".ACraft.m_NetworkDelivery", object.m_NetworkDelivery);
 Field(path + ".ACraft.m_NetworkDeliveryTimer", object.m_NetworkDeliveryTimer);
+Field(path + ".ACraft.m_OffWireHatchTick", object.m_OffWireHatchTick);
+Field(path + ".ACraft.m_OffWireHatchOpen", object.m_OffWireHatchOpen);
 }
 void Visit(const ACraft::Exit& object, const std::string& path) {
 Field(path + ".ACraft::Exit.m_Offset", object.m_Offset);
