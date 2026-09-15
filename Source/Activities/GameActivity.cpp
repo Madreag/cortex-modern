@@ -3470,6 +3470,10 @@ bool GameActivity::ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings)
 		m_LuaLockActorMode[player] = Controller::CIM_AI;
 		m_BannerRepeats[player] = 0;
 		m_ReadyToStart[player] = false;
+		// Readiness, the committed placement and the commit latch are one state: a seat rebound mid-editor
+		// has to be able to place its brain again, and both commit paths refuse while the latch is set.
+		m_LockstepPlacementSubmitted[player] = false;
+		m_LockstepSeatBrains[player] = NetGamePlaceBrain{};
 		m_PurchaseOverride[player].clear();
 		m_BrainLZWidth[player] = BRAINLZWIDTHDEFAULT;
 		m_LZCursorWidth[player] = 0;
