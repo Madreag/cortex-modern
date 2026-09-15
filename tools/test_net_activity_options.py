@@ -21,7 +21,7 @@ def main() -> int:
     parser.add_argument("--case", choices=["codec", "launch"], required=True)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--port", type=int, default=48320)
-    parser.add_argument("--variant", default="rules", choices=["rules", "default", "infinite", "site", "stock", "brains", "brains-auto", "hold-desync", "census", "missing-activity", "missing-scene", "missing-module", "missing-tech"])
+    parser.add_argument("--variant", default="rules", choices=["rules", "default", "infinite", "site", "stock", "brains", "brains-auto", "hold-desync", "hold-resync", "resync-duel", "resync-skirmish", "census", "missing-activity", "missing-scene", "missing-module", "missing-tech"])
     parser.add_argument("--dedicated", action="store_true")
     parser.add_argument("--captures", action="store_true", help="save the setup editor's UI captures for the visual review")
     parser.add_argument("--resolution", help="private window size for the captures, as WIDTHxHEIGHT")
