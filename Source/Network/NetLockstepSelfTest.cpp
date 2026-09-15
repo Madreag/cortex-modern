@@ -1036,7 +1036,7 @@ namespace RTE {
 			frame.roundId = 0x5EED0000C0FFEE01ULL;
 			frame.observations = {NetSoundObservation{2, 1048601, 31, 0x1122334455667788ULL, 7, 3, 0.25F}, NetSoundObservation{2, 0, 12, 99, 0, 1, 0.75F}};
 			frame.frames = {MakeFrame(100, 1), MakeFrame(200, 2)};
-			frame.commands = {NetGameCommand{2, NetGameSetTeamFunds{0, 1500}}, NetGameCommand{2, NetGameSetTeamFunds{1, -250}}, NetGameCommand{2, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1234.5F, -67.25F, 1}}, NetGameCommand{2, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 48.5F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Robot 1", "Base.rte"}}}}, NetGameCommand{2, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", 512.0F, 300.0F, 1, {{"AHuman", "Green Dummy", "Base.rte"}}, true, 137.5F, false, 4, 600.0F, 350.25F, 424242, 1, -32.0F}}, NetGameCommand{2, NetGameScuttleCraft{17143, 0}}, NetGameCommand{2, NetGameInventoryOp{9001, 1, NetGameInventoryOp::Drop, 0, 2, true, 0.5F, -0.25F}}, NetGameCommand{2, NetGamePauseMatch{1, true}}, NetGameCommand{2, NetGamePauseMatch{0, false}}, NetGameCommand{2, NetGameSetActorAIMode{31337, 1, 6}}, NetGameCommand{2, NetGameSwitchControl{41414, 0, 2}}, NetGameCommand{2, NetGameAIEquip{51515, 1, NetGameAIEquip::LoadedFirearmInGroup, false, "Weapons - Primary", "Weapons - Explosive", "", ""}}, NetGameCommand{2, NetGameAIEquip{51516, 0, NetGameAIEquip::NamedDevice, false, "", "", "Base.rte", "Battle Rifle"}}, NetGameCommand{2, NetGameAIEquip{51517, 1, NetGameAIEquip::ShieldInBGArm, true, "", "", "", ""}}, NetGameCommand{2, NetGameAIEquip{51518, 0, NetGameAIEquip::UnequipFGArm, false, "", "", "", ""}}, NetGameCommand{2, NetGameAIOrder{61616, 0, NetGameAIOrder::FormSquad, 512.5F, -12.25F, 61617, 9001}}, NetGameCommand{2, NetGameAIOrder{61618, 1, NetGameAIOrder::MOWaypoint, 0.0F, 0.0F, 61616}}, NetGameCommand{2, NetGameAIOrder{61619, 0, NetGameAIOrder::SceneWaypoint, -128.25F, 96.5F, 0}}, NetGameCommand{2, NetGameAIOrder{61620, 1, NetGameAIOrder::ClearWaypoints, 0.0F, 0.0F, 0}}, NetGameCommand{2, NetGameSoundOp{71717, 1, 0x00FF00FF00FF0001ULL, NetGameSoundOp::Play, 0, 3, 0, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71718, 0, 0x0000000000000002ULL, NetGameSoundOp::SetProperty, 13, -1, 0, -12.5F, 88.25F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71719, 1, 0x0000000000000003ULL, NetGameSoundOp::SelectSounds, 0, -1, 0, 0.0F, 0.0F, {2, 0, 7}, ""}}, NetGameCommand{2, NetGameSoundOp{71720, 0, 0x0000000000000004ULL, NetGameSoundOp::FadeOut, 0, -1, 250, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71721, 1, 0x0000000000000005ULL, NetGameSoundOp::AddSound, 0, -1, 0, 0.0F, 0.0F, {1}, "9 SoundData1 31 Base.rte/Sounds/GUIs/Click.flac 0 0 0 3212836864 "}}, NetGameCommand{2, NetGameSoundOp{71722, 0, 0x0000000000000006ULL, NetGameSoundOp::SetCycleMode, 0, -1, 2, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGamePlaceBrain{0, 0, 512.25F, -48.5F, "Actor", "Brain Case", "Base.rte"}}, NetGameCommand{2, NetGamePlaceBrain{1, 3, -1024.5F, 2048.75F, "AHuman", "Brain Robot", "Base.rte"}}};
+			frame.commands = {NetGameCommand{2, NetGameSetTeamFunds{0, 1500}}, NetGameCommand{2, NetGameSetTeamFunds{1, -250}}, NetGameCommand{2, NetGameSpawnActor{"AHuman", "Green Dummy", "Base.rte", 1234.5F, -67.25F, 1}}, NetGameCommand{2, NetGameDeliverCargo{"ACDropShip", "Dropship MK1", "Base.rte", 880.0F, 48.5F, 0, {{"AHuman", "Green Dummy", "Base.rte"}, {"AHuman", "Robot 1", "Base.rte"}}}}, NetGameCommand{2, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", 512.0F, 300.0F, 1, {{"AHuman", "Green Dummy", "Base.rte"}}, true, 137.5F, false, 4, 600.0F, 350.25F, 424242, 1, -32.0F}}, NetGameCommand{2, NetGameScuttleCraft{17143, 0}}, NetGameCommand{2, NetGameInventoryOp{9001, 1, NetGameInventoryOp::Drop, 0, 2, true, 0.5F, -0.25F}}, NetGameCommand{2, NetGamePauseMatch{1, true}}, NetGameCommand{2, NetGamePauseMatch{0, false}}, NetGameCommand{2, NetGameSetActorAIMode{31337, 1, 6}}, NetGameCommand{2, NetGameSwitchControl{41414, 0, 2}}, NetGameCommand{2, NetGameAIEquip{51515, 1, NetGameAIEquip::LoadedFirearmInGroup, false, "Weapons - Primary", "Weapons - Explosive", "", ""}}, NetGameCommand{2, NetGameAIEquip{51516, 0, NetGameAIEquip::NamedDevice, false, "", "", "Base.rte", "Battle Rifle"}}, NetGameCommand{2, NetGameAIEquip{51517, 1, NetGameAIEquip::ShieldInBGArm, true, "", "", "", ""}}, NetGameCommand{2, NetGameAIEquip{51518, 0, NetGameAIEquip::UnequipFGArm, false, "", "", "", ""}}, NetGameCommand{2, NetGameAIOrder{61616, 0, NetGameAIOrder::FormSquad, 512.5F, -12.25F, 61617, 9001}}, NetGameCommand{2, NetGameAIOrder{61618, 1, NetGameAIOrder::MOWaypoint, 0.0F, 0.0F, 61616}}, NetGameCommand{2, NetGameAIOrder{61619, 0, NetGameAIOrder::SceneWaypoint, -128.25F, 96.5F, 0}}, NetGameCommand{2, NetGameAIOrder{61620, 1, NetGameAIOrder::ClearWaypoints, 0.0F, 0.0F, 0}}, NetGameCommand{2, NetGameSoundOp{71717, 1, 0x00FF00FF00FF0001ULL, NetGameSoundOp::Play, 0, 3, 0, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71718, 0, 0x0000000000000002ULL, NetGameSoundOp::SetProperty, 13, -1, 0, -12.5F, 88.25F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71719, 1, 0x0000000000000003ULL, NetGameSoundOp::SelectSounds, 0, -1, 0, 0.0F, 0.0F, {2, 0, 7}, ""}}, NetGameCommand{2, NetGameSoundOp{71720, 0, 0x0000000000000004ULL, NetGameSoundOp::FadeOut, 0, -1, 250, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGameSoundOp{71721, 1, 0x0000000000000005ULL, NetGameSoundOp::AddSound, 0, -1, 0, 0.0F, 0.0F, {1}, "9 SoundData1 31 Base.rte/Sounds/GUIs/Click.flac 0 0 0 3212836864 "}}, NetGameCommand{2, NetGameSoundOp{71722, 0, 0x0000000000000006ULL, NetGameSoundOp::SetCycleMode, 0, -1, 2, 0.0F, 0.0F, {}, ""}}, NetGameCommand{2, NetGamePlaceBrain{0, 0, 512.25F, -48.5F, "Actor", "Brain Case", "Base.rte"}}, NetGameCommand{2, NetGamePlaceBrain{1, 3, -1024.5F, 2048.75F, "AHuman", "Brain Robot", "Base.rte"}}, NetGameCommand{2, NetGameAIValue{9001, 9002, NetGameAIValue::SetNumber, "AI_StuckForTime", 1500.0, "", 0}}, NetGameCommand{2, NetGameAIValue{9001, 9002, NetGameAIValue::SetString, "AI_Note", 0.0, "stuck", 0}}, NetGameCommand{2, NetGameAIValue{9001, 9003, NetGameAIValue::SetObject, "AI_Target", 0.0, "", 9004}}, NetGameCommand{2, NetGameAIValue{9001, 9002, NetGameAIValue::RemoveNumber, "AI_StuckForTime", 0.0, "", 0}}, NetGameCommand{2, NetGameAIValue{9001, 9002, NetGameAIValue::RemoveString, "AI_Note", 0.0, "", 0}}, NetGameCommand{2, NetGameAIValue{9001, 9003, NetGameAIValue::RemoveObject, "AI_Target", 0.0, "", 0}}};
 			if (!RoundTrip({frame}, error)) {
 				return false;
 			}
@@ -1075,6 +1075,46 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestAIValueCodec(std::string* error) {
+			const NetGameAIValue values[] = {
+				NetGameAIValue{11, 22, NetGameAIValue::SetNumber, "n", 3.5, "", 0},
+				NetGameAIValue{11, 22, NetGameAIValue::SetString, "s", 0.0, "hi", 0},
+				NetGameAIValue{11, 23, NetGameAIValue::SetObject, "o", 0.0, "", 44},
+				NetGameAIValue{11, 22, NetGameAIValue::RemoveNumber, "n", 0.0, "", 0},
+				NetGameAIValue{11, 22, NetGameAIValue::RemoveString, "s", 0.0, "", 0},
+				NetGameAIValue{11, 23, NetGameAIValue::RemoveObject, "o", 0.0, "", 0},
+			};
+			for (const NetGameAIValue& value: values) {
+				NetLockstepFrame frame;
+				frame.senderPeerId = 1;
+				frame.targetFrame = 8;
+				frame.commands.push_back(NetGameCommand{1, value, 5});
+				if (!RoundTrip({frame}, error)) {
+					return false;
+				}
+			}
+			auto refuse = [&](NetGameAIValue bad, const char* name) {
+				NetLockstepFrame frame;
+				frame.senderPeerId = 1;
+				frame.targetFrame = 9;
+				frame.commands.push_back(NetGameCommand{1, std::move(bad), 6});
+				std::vector<uint8_t> bytes;
+				NetLockstepError encodeError;
+				if (NetLockstepCodec::Encode(NetLockstepPacket{frame}, bytes, &encodeError)) {
+					*error = std::string(name) + " encoded";
+					return false;
+				}
+				return true;
+			};
+			if (!refuse(NetGameAIValue{11, 22, NetGameAIValue::OpCount, "n", 0.0, "", 0}, "op >= OpCount") ||
+			    !refuse(NetGameAIValue{11, 22, NetGameAIValue::SetNumber, "", 1.0, "", 0}, "empty key") ||
+			    !refuse(NetGameAIValue{11, 22, NetGameAIValue::SetString, "s", 0.0, std::string(NetLockstepCodec::c_MaxValueStringBytes + 1, 'x'), 0}, "text over cap")) {
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS ai_value_codec ops=6 malformed=3" << std::endl;
+			return true;
+		}
+
 		bool TestCanonicalHeader(std::string* error) {
 			std::vector<uint8_t> bytes;
 			if (!EncodePacket({NetLockstepAck{1, 0x1122334455667788ULL, 0xAABBCCDDU}}, bytes, error)) {
@@ -1086,7 +1126,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x16, 0x00,
+				0x17, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -2095,6 +2135,98 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		bool TestAIValueCrossesTheWire(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			if (!StartOwnedPair(48341, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x5732314149564CULL, hostTransport, clientTransport, host, client, error)) {
+				return false;
+			}
+			Actor* ownerView = new Actor();
+			Actor* peerView = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				g_MovableMan.UnregisterObject(ownerView);
+				g_MovableMan.UnregisterObject(peerView);
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (ownerView->MovableObject::Create(1) < 0 || peerView->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			ownerView->SetTeam(0);
+			peerView->SetTeam(0);
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+
+			g_CurrentAIActor = ownerView;
+			ownerView->SetNumberValue("AI_StuckForTime", 1500.0);
+			if (ownerView->GetNumberValue("AI_StuckForTime") != 1500.0 || !ownerView->NumberValueExists("AI_StuckForTime")) {
+				return finish("the pass did not read back the value it just wrote");
+			}
+			if (ownerView->GetNumberValueMap().count("AI_StuckForTime")) {
+				return finish("the AI pass wrote the committed map");
+			}
+			g_CurrentAIActor = nullptr;
+			if (ownerView->NumberValueExists("AI_StuckForTime") || ownerView->GetNumberValue("AI_StuckForTime") != 0.0) {
+				return finish("a shared read saw the uncommitted value");
+			}
+			ownerView->SendDeferredAIValues();
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			const int64_t ownerUID = static_cast<int64_t>(ownerView->GetUniqueID());
+			if (sent.size() != 1) {
+				return finish("the AI pass delivered its value on the producer alone");
+			}
+			const NetGameAIValue* carried = std::get_if<NetGameAIValue>(&sent[0].payload);
+			if (!carried || !(*carried == NetGameAIValue{ownerUID, ownerUID, NetGameAIValue::SetNumber, "AI_StuckForTime", 1500.0, "", 0})) {
+				return finish("the sent value does not name the writer, the object, the key and the number");
+			}
+			ownerView->ApplyAIValueOrder(carried->op, carried->key, carried->number, carried->text, carried->valueUID);
+			peerView->ApplyAIValueOrder(carried->op, carried->key, carried->number, carried->text, carried->valueUID);
+			if (ownerView->GetNumberValue("AI_StuckForTime") != 1500.0 || peerView->GetNumberValue("AI_StuckForTime") != 1500.0) {
+				return finish("the two peers hold different values after the committed tick");
+			}
+
+			g_CurrentAIActor = ownerView;
+			ownerView->RemoveNumberValue("AI_StuckForTime");
+			if (ownerView->NumberValueExists("AI_StuckForTime")) {
+				return finish("the pass did not read back the removal");
+			}
+			g_CurrentAIActor = nullptr;
+			if (!ownerView->NumberValueExists("AI_StuckForTime")) {
+				return finish("a shared read lost the committed value before the removal landed");
+			}
+			ownerView->SendDeferredAIValues();
+			const std::vector<NetGameCommand> removed = ScenarioRunner::DrainLocalGameCommands();
+			const NetGameAIValue* removal = removed.size() == 1 ? std::get_if<NetGameAIValue>(&removed[0].payload) : nullptr;
+			if (!removal || removal->op != NetGameAIValue::RemoveNumber) {
+				return finish("the removal did not cross");
+			}
+
+			g_CurrentAIActor = peerView;
+			peerView->SetNumberValue("AI_StuckForTime", 9.0);
+			g_CurrentAIActor = nullptr;
+			peerView->TakePendingDeferredAIValues();
+			if (!ScenarioRunner::DrainLocalGameCommands().empty()) {
+				return finish("a non-producing pass queued a value");
+			}
+
+			ownerView->SetNumberValue("offline", 4.0);
+			if (ownerView->GetNumberValue("offline") != 4.0) {
+				return finish("a write outside the AI pass did not land on the map");
+			}
+
+			std::cout << "[net-lockstep-selftest] PASS ai value crosses the wire: sent=" << sent.size()
+			          << " op=" << static_cast<int>(carried->op) << std::endl;
+			return finish(nullptr);
+		}
+
 		// NativeTurretAI.lua:142 and HumanBehaviors.lua:672,792,1520 clear Owner.MOMoveTarget inside the pass.
 		// Every peer's Actor::Update reads the member (the goal check drops an actor to sentry by it), the
 		// checkpoint carries its identity and a synced squad disband picks its members by it, so the write
@@ -2502,6 +2634,7 @@ namespace RTE {
 		}
 
 		bool TestAnOwnedWriterMayWriteAnotherOwnersActor(std::string* error);
+		bool TestAIValueCrossesTheWire(std::string* error);
 
 		// One build has to show every one of these reds at once, so they report per arm instead of
 		// short-circuiting the suite at the first one.
@@ -2509,6 +2642,7 @@ namespace RTE {
 			using Arm = std::pair<const char*, bool (*)(std::string*)>;
 			bool allPassed = true;
 			for (const Arm& arm: {Arm{"ai script message", &TestAIScriptMessageCrossesTheWire},
+			                      Arm{"ai value", &TestAIValueCrossesTheWire},
 			                      Arm{"ai move target", &TestAIMoveTargetCrossesTheWire},
 			                      Arm{"ai gib", &TestAIGibCrossesTheWire},
 			                      Arm{"ai alarm point", &TestAIAlarmPointCrossesTheWire},
@@ -4457,7 +4591,7 @@ namespace RTE {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x16, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x17, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
@@ -13275,6 +13409,7 @@ namespace RTE {
 		    !TestSoundRegistrySurvivesConcurrentRelease(&error) ||
 		    !TestSoundRegistrySurvivesConcurrentRegistration(&error) ||
 		    !TestRoundTrips(&error) ||
+		    !TestAIValueCodec(&error) ||
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
