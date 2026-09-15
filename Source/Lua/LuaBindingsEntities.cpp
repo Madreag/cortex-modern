@@ -196,6 +196,7 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, Actor) {
 	    .property("ItemInReach", &Actor::GetItemInReach, &Actor::SetItemInReach)
 	    .property("SharpAimProgress", &Actor::GetSharpAimProgress)
 	    .property("Height", &Actor::GetHeight)
+	    .property("AboveHeadPos", &Actor::GetAboveHeadPos)
 	    .property("AIMode", &Actor::GetAIMode, &Actor::SetAIMode)
 	    .def("RequestAIMode", &Actor::RequestAIMode)
 	    .property("DeploymentID", &Actor::GetDeploymentID)

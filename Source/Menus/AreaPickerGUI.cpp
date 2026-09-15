@@ -116,6 +116,11 @@ int AreaPickerGUI::Create(Controller* pController, const std::string& onlyOfType
 	return 0;
 }
 
+bool AreaPickerGUI::HasLiveCachedControls() {
+	return m_pGUIController && m_pParentBox == m_pGUIController->GetControl("PickerGUIBox") && m_pAreasList == m_pGUIController->GetControl("AreasLB") &&
+	       m_pDeleteAreaButton == m_pGUIController->GetControl("DeleteAreaButton");
+}
+
 void AreaPickerGUI::Destroy() {
 	delete m_pGUIController;
 	delete m_pGUIInput;
