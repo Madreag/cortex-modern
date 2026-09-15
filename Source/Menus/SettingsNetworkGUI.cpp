@@ -16,7 +16,7 @@ using namespace RTE;
 
 namespace {
 	// The page's row pitch, by which the rows under the fixed-delay row close up when it is away.
-	constexpr int c_FixedDelayRowHeight = 25;
+	constexpr int c_FixedDelayRowHeight = 20;
 
 	// The boxes take typed digits only, so anything else came from a skin edit and is discarded.
 	bool ParseWholeNumber(const std::string& text, int& value) {
