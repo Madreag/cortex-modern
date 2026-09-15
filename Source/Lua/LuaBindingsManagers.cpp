@@ -6,8 +6,21 @@
 using namespace RTE;
 
 namespace {
+	// A CLI trace run owns the metrics run and the tick-hash trace it armed, so a scenario script starting
+	// under one joins that run and only names itself in it.
 	void MetricsCollectorBeginRun(MetricsCollector* self, const std::string& scenario, double seed) {
+		if (self->IsHostRunActive()) {
+			self->RecordString("scenario", scenario);
+			return;
+		}
 		self->BeginRun(scenario, static_cast<uint64_t>(seed));
+	}
+
+	// The trace path ends the run it began, after its own loop.
+	void MetricsCollectorEndRun(MetricsCollector* self) {
+		if (!self->IsHostRunActive()) {
+			self->EndRun();
+		}
 	}
 
 	bool MetricsCollectorWriteReport(MetricsCollector* self, const std::string& path) {
@@ -416,7 +429,7 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, MetricsCollector
 	return luabind::class_<MetricsCollector>("MetricsCollectorManager")
 
 	    .def("BeginRun", &MetricsCollectorBeginRun)
-	    .def("EndRun", &MetricsCollector::EndRun)
+	    .def("EndRun", &MetricsCollectorEndRun)
 	    .def("Record", &MetricsCollector::Record)
 	    .def("RecordString", &MetricsCollector::RecordString)
 	    .def("SetResult", &MetricsCollector::SetResult)

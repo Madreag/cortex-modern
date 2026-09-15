@@ -34,6 +34,10 @@ namespace RTE {
 		/// Begin a new run. Resets per-run state. `scenario` and `seed` are recorded.
 		void BeginRun(const std::string& scenario, uint64_t seed);
 
+		/// Begin a run owned by the CLI trace path that armed it. A scenario script's own BeginRun joins
+		/// this run instead of replacing it, so the armed tick-hash trace survives the activity's start.
+		void BeginHostRun(const std::string& scenario, uint64_t seed);
+
 		/// End the current run. Records the final pass/fail + summary.
 		void EndRun();
 
@@ -83,6 +87,13 @@ namespace RTE {
 		bool IsRunActive() const {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			return !m_Scenario.empty();
+		}
+
+		/// True while a CLI trace run owns the collector; a scenario script joins that run rather than
+		/// beginning or ending one of its own.
+		bool IsHostRunActive() const {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			return m_HostRun;
 		}
 
 		/// Get the number of ticks recorded.
@@ -137,6 +148,9 @@ namespace RTE {
 		std::unordered_map<std::string, double>       m_Numeric;
 		std::unordered_map<std::string, std::string>  m_Strings;
 		std::string                                   m_FinalTotalHashHex;
+
+		// Whether the CLI trace path owns this run. See BeginHostRun above.
+		bool                                          m_HostRun = false;
 
 		// Per-tick hash trace. See SetRecordTickHashes/RecordTickHash above.
 		bool                                          m_RecordTickHashes = false;

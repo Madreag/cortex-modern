@@ -313,18 +313,127 @@ def tick_lines(path, tick="1"):
     return [line for line in Path(path).read_text(errors="replace").splitlines() if line.split(" ", 1)[0] == tick]
 
 
-def census_compare(offline_dump, match_dump):
-    left, right = tick_lines(offline_dump), tick_lines(match_dump)
-    if left is None or right is None:
-        return {"pass": False, "reason": "a census dump is missing", "offline_dump": str(offline_dump), "match_dump": str(match_dump)}
-    first = next((index for index, (a, b) in enumerate(zip(left, right)) if a != b), None)
-    if first is None and len(left) != len(right):
-        first = min(len(left), len(right))
-    return {"pass": left == right, "offline_lines": len(left), "match_lines": len(right),
+# THE CENSUS CONTRACT: the census compares what the two launches placed, byte for byte, with exactly the three
+# values a seat binding writes normalized away - because the two runs bind their seats in a different order by
+# construction, not because their worlds differ. An offline -scenario run's single local human seat is bound
+# inside tick 1 (Source/Activities/GameActivity.cpp:1825 "never had a brain" -> Activity::SwitchToActor,
+# Source/Entities/Activity.cpp:1091 -> Actor::SetControllerMode, Source/Entities/Actor.cpp:888), and the
+# notification runs there and then (Source/Entities/Actor.cpp:901). A lockstep match's controller is wire-owned:
+# Controller::SetInputMode leaves the sim-facing mode to the wire (Source/System/Controller.h:246),
+# Actor::SetControllerMode skips the notification (Source/Entities/Actor.cpp:896), and the committed frame
+# applies both through MovableMan::ApplyLockstepControlHandoffToActor (Source/Managers/MovableMan.cpp:888) an
+# input delay later, on every peer at the same tick. Each normalized column is named with the site that writes it.
+SEAT_BINDING_COLUMNS = {
+    "mode": "Controller::m_InputMode; the wire owns it under lockstep (Source/System/Controller.h:246)",
+    "pie": "PieMenu enabled state (field 0), set by DoDisableAnimation on the handoff (Source/Entities/Actor.cpp:909)",
+    "atmr": "the new-control timer (field 4 of 5), reset on the handoff (Source/Entities/Actor.cpp:903)",
+}
+SEAT = "<seat-binding>"
+# A seated actor reads CIM_PLAYER (Source/System/Controller.h:99); every other mode is unseated.
+SEATED_MODE = "1"
+
+
+def normalize_seat_binding(line):
+    """The line with the seat binding's own values replaced, and the raw values it replaced."""
+    tokens, replaced = line.split(" "), {}
+    for index, token in enumerate(tokens):
+        name, sign, value = token.partition("=")
+        if not sign or name not in SEAT_BINDING_COLUMNS:
+            continue
+        if name == "mode":
+            normalized = SEAT
+        elif name == "pie":
+            # Only the enabled state is the binding's; the slice census behind it stays under the compare.
+            fields = value.split(":")
+            normalized = ":".join([SEAT, *fields[1:]]) if len(fields) > 1 else value
+        else:
+            # Only the 4th of the actor's five timers is the new-control one; the other four stay.
+            fields = value.split("/")
+            normalized = "/".join([*fields[:3], SEAT, *fields[4:]]) if len(fields) == 5 else value
+        if normalized == value:
+            # A column whose shape is not the one this rule was read from is left to the compare.
+            continue
+        replaced[name] = value
+        tokens[index] = name + "=" + normalized
+    return " ".join(tokens), replaced
+
+
+def seated_actors(lines):
+    """The uid of every actor a run has already seated at this tick."""
+    seated = []
+    for line in lines:
+        fields = line.split(" ")
+        if len(fields) > 2 and fields[1] == "actor" and f"mode={SEATED_MODE}" in fields:
+            seated.append(fields[2].removeprefix("uid="))
+    return seated
+
+
+def compare_census_lines(left, right):
+    """The contract's compare: the launch census line by line, each line's seat-binding columns aside."""
+    normalized = [[normalize_seat_binding(line) for line in lines] for lines in (left, right)]
+    lines = [[line for line, _ in side] for side in normalized]
+    first = next((index for index, (a, b) in enumerate(zip(*lines)) if a != b), None)
+    if first is None and len(lines[0]) != len(lines[1]):
+        first = min(len(lines[0]), len(lines[1]))
+    differences = [{"index": index, "column": column, "offline": raw[column],
+                    "match": normalized[1][index][1].get(column)}
+                   for index, (_, raw) in enumerate(normalized[0]) if index < len(normalized[1])
+                   for column in raw if raw[column] != normalized[1][index][1].get(column)]
+    return {"pass": lines[0] == lines[1], "offline_lines": len(left), "match_lines": len(right),
+            "seat_binding_differences": differences,
             "first_difference": None if first is None else {
                 "index": first,
                 "offline": left[first] if first < len(left) else None,
                 "match": right[first] if first < len(right) else None}}
+
+
+def census_injection_selftest(left, right, baseline):
+    """The compare's own RED: a real census difference must still fail, a seat-binding one must not decide."""
+    def line_of(lines, kind):
+        index = next((index for index, line in enumerate(lines) if line.split(" ")[1:2] == [kind]), None)
+        if index is None:
+            raise RuntimeError(f"census injection found no {kind} line to perturb")
+        return index
+    def inject(lines, kind, column, value, separator=None, field=None):
+        index = line_of(lines, kind)
+        perturbed = list(lines)
+        if separator is not None:
+            # Perturb one field of a column the rule normalizes elsewhere: the neighbours must still be compared.
+            current = re.search(rf"(?<= ){re.escape(column)}=(\S+)", perturbed[index])
+            fields = current[1].split(separator)
+            fields[field] = value
+            value = separator.join(fields)
+        perturbed[index] = re.sub(rf"(?<= ){re.escape(column)}=\S+", f"{column}={value}", perturbed[index], count=1)
+        if perturbed[index] == lines[index]:
+            raise RuntimeError(f"census injection {column}={value} did not apply to the {kind} line")
+        return perturbed
+    def fails(perturbed):
+        return not compare_census_lines(perturbed, right)["pass"]
+    # A moved actor, a different team roster, a different pie census and a different actor timer are real
+    # census differences; only the binding's own field of a normalized column is not one.
+    checks = {"injected_actor_position_fails": fails(inject(left, "actor", "pos", "0x1.0000000000000p+0,0x1.0000000000000p+0")),
+              "injected_team_roster_fails": fails(inject(left, "activity", "t0", "9/9")),
+              "injected_pie_slice_count_fails": fails(inject(left, "actor", "pie", "99", ":", 1)),
+              "injected_other_actor_timer_fails": fails(inject(left, "actor", "atmr", "0x0.0000000000000p+0", "/", 0)),
+              "injected_seat_binding_does_not_decide":
+                  compare_census_lines(inject(left, "actor", "mode", "7"), right)["pass"] == baseline}
+    return {"pass": all(checks.values()), "checks": checks}
+
+
+def census_compare(offline_dump, match_dump):
+    left, right = tick_lines(offline_dump), tick_lines(match_dump)
+    if left is None or right is None:
+        return {"pass": False, "reason": "a census dump is missing", "offline_dump": str(offline_dump), "match_dump": str(match_dump)}
+    result = compare_census_lines(left, right)
+    # The rule is asserted, not assumed: the offline run seats its own actor inside tick 1 and the match,
+    # whose binding waits for the committed frame, has seated nothing yet.
+    seated = {"offline": seated_actors(left), "match": seated_actors(right)}
+    bindings_as_declared = bool(seated["offline"]) and not seated["match"]
+    result.update(seat_binding_columns=SEAT_BINDING_COLUMNS, seated_actors=seated,
+                  bindings_as_declared=bindings_as_declared,
+                  injection_selftest=census_injection_selftest(left, right, result["pass"]))
+    result["pass"] = result["pass"] and bindings_as_declared and result["injection_selftest"]["pass"]
+    return result
 
 
 def launch(options):
