@@ -273,7 +273,9 @@ namespace RTE {
 				AppendBool(out, config.fogOfWar);
 				AppendBool(out, config.requireClearPathToOrbit);
 				AppendBool(out, config.deployUnits);
-				AppendBool(out, config.brainlessHumansSpectate);
+				if (config.version >= 4) {
+					AppendBool(out, config.brainlessHumansSpectate);
+				}
 				for (const auto& team : config.teamRules) {
 					if (!AppendString(out, team.technologyIntent, NetMatchConfigUtil::c_MaxPresetBytes, "technology_intent", error) ||
 					    !AppendString(out, team.technologyModule, NetMatchConfigUtil::c_MaxPresetBytes, "technology_module", error)) return false;
@@ -288,11 +290,12 @@ namespace RTE {
 			return true;
 		}
 
-		bool DecodeConfig(ByteReader& reader, NetMatchConfig& out, NetLobbyError* error) {
+		bool DecodeConfig(ByteReader& reader, NetMatchConfig& out, NetLobbyError* error, bool allowRecordedVersions) {
 			uint16_t reserved = 0;
 			uint8_t playerCount = 0;
 			if (!ReadOrTruncated(reader.ReadU16LE(out.version), reader, error, "config.version")) return false;
-			if (out.version == 0 || out.version > NetMatchConfigUtil::c_Version) {
+			// A live peer speaks the current layout; an older one is only read back out of a recording.
+			if (out.version == 0 || out.version > NetMatchConfigUtil::c_Version || (out.version < NetMatchConfigUtil::c_Version && !allowRecordedVersions)) {
 				SetError(error, NetLobbyErrorCode::UnsupportedVersion, reader.Offset() - 2, "unsupported match config version " + std::to_string(out.version));
 				return false;
 			}
@@ -348,15 +351,15 @@ namespace RTE {
 					out.peerInputDelayFrames.push_back(delay);
 				}
 			}
-			// A pre-rules config keeps the pre-rules end rule: its humans' brains end the round.
+			// A pre-spectate config keeps the pre-spectate end rule: its humans' brains end the round.
 			out.brainlessHumansSpectate = false;
 			if (out.version >= 3) {
 				if (!ReadOrTruncated(reader.ReadU64LE(out.roundId) && reader.ReadU64LE(out.configRevision), reader, error, "config revision binding") ||
 				    !reader.ReadString(out.activityModule, NetMatchConfigUtil::c_MaxPresetBytes, "activity_module", error) ||
 				    !reader.ReadString(out.sceneModule, NetMatchConfigUtil::c_MaxPresetBytes, "scene_module", error) ||
 				    !ReadOrTruncated(reader.ReadU8(out.difficulty) && reader.ReadU32LE(out.startingGold) && reader.ReadBool(out.fogOfWar) &&
-				                     reader.ReadBool(out.requireClearPathToOrbit) && reader.ReadBool(out.deployUnits) &&
-				                     reader.ReadBool(out.brainlessHumansSpectate), reader, error, "standard rules")) return false;
+				                     reader.ReadBool(out.requireClearPathToOrbit) && reader.ReadBool(out.deployUnits), reader, error, "standard rules")) return false;
+				if (out.version >= 4 && !ReadOrTruncated(reader.ReadBool(out.brainlessHumansSpectate), reader, error, "spectate rule")) return false;
 				for (auto& team : out.teamRules) {
 					if (!reader.ReadString(team.technologyIntent, NetMatchConfigUtil::c_MaxPresetBytes, "technology_intent", error) ||
 					    !reader.ReadString(team.technologyModule, NetMatchConfigUtil::c_MaxPresetBytes, "technology_module", error) ||
@@ -470,7 +473,7 @@ namespace RTE {
 			return true;
 		}
 
-		bool DecodePayload(NetLobbyMessageType type, ByteReader& reader, NetLobbyPayload& out, NetLobbyError* error) {
+		bool DecodePayload(NetLobbyMessageType type, ByteReader& reader, NetLobbyPayload& out, NetLobbyError* error, bool allowRecordedVersions) {
 			switch (type) {
 				case NetLobbyMessageType::Hello: {
 					NetLobbyHello payload;
@@ -508,7 +511,7 @@ namespace RTE {
 				}
 				case NetLobbyMessageType::MatchConfig: {
 					NetLobbyMatchConfig payload;
-					if (!DecodeConfig(reader, payload.config, error)) return false;
+					if (!DecodeConfig(reader, payload.config, error, allowRecordedVersions)) return false;
 					out = std::move(payload);
 					return true;
 				}
@@ -755,7 +758,7 @@ namespace RTE {
 		}
 		NetLobbyDecodeResult result;
 		NetLobbyPayload payload;
-		if (!DecodePayload(type, reader, payload, &result.error)) {
+		if (!DecodePayload(type, reader, payload, &result.error, options.allowRecordedConfigVersions)) {
 			return result;
 		}
 		if (!reader.AtEnd()) {

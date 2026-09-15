@@ -580,8 +580,42 @@ namespace RTE {
 			}
 			std::cout << "[net-match-selftest] legacy_config_hash=" << NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(expected)) << std::endl;
 			std::cout << "[net-match-selftest] PASS rules_legacy_defaults" << std::endl;
+			// The match config of a recording written before the spectate byte reached the wire.
+			const std::string recordedHex = "43434c340400100003000000d50000000300345032454741545301020300020200000a00474153637269707465640d00503420416c706861204475656c0a0047726173736c616e64730800636f6f702d70766503010000000400486f7374020000000600436c69656e7400010100030043505500010000000000000001000000000000000800426173652e7274650800426173652e727465508813000001010105002d416c6c2d0000320d00436f616c6974696f6e2e7274650d00436f616c6974696f6e2e7274654605002d416c6c2d00003205002d416c6c2d00003200000000000a0101";
+			std::vector<uint8_t> recorded;
+			for (size_t i = 0; i < recordedHex.size(); i += 2) recorded.push_back(static_cast<uint8_t>(std::stoul(recordedHex.substr(i, 2), nullptr, 16)));
+			const auto liveDecode = NetLobbyProtocol::Decode(recorded);
+			if (liveDecode.ok || liveDecode.error.code != NetLobbyErrorCode::UnsupportedVersion) {
+				*error = "network decode accepted a pre-spectate match config";
+				return false;
+			}
+			const auto recordedDecode = NetLobbyProtocol::Decode(recorded, NetLobbyDecodeOptions{true});
+			const auto* recordedConfig = recordedDecode.ok ? std::get_if<NetLobbyMatchConfig>(&recordedDecode.message.payload) : nullptr;
+			if (!recordedConfig || recordedConfig->config.version != 3 || recordedConfig->config.brainlessHumansSpectate) {
+				*error = "a pre-spectate recording did not open with the pre-spectate end rule: " + recordedDecode.error.message;
+				return false;
+			}
+			// The hash the build that wrote the recording reported for this very config.
+			if (NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(recordedConfig->config)) != "ea11e9d32b43d4c9f71d41d56ffdb6b3642605761bfe3f7696e674bfa565ed7c") {
+				*error = "a pre-spectate config no longer hashes as the build that recorded it did";
+				return false;
+			}
+			std::vector<uint8_t> reEncoded;
+			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{recordedConfig->config}}, reEncoded) || reEncoded != recorded) {
+				*error = "re-encoding a pre-spectate config did not reproduce its recorded bytes";
+				return false;
+			}
+			NetMatchConfig carriesTheRule = recordedConfig->config;
+			carriesTheRule.brainlessHumansSpectate = true;
+			if (NetMatchConfigUtil::ValidateLocalAlpha(carriesTheRule)) {
+				*error = "a pre-spectate config was allowed to carry the spectate rule";
+				return false;
+			}
+			std::cout << "[net-match-selftest] recorded_v3_config_hash=" << NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(recordedConfig->config)) << std::endl;
+			std::cout << "[net-match-selftest] PASS rules_recorded_v3" << std::endl;
 			return true;
 		}
+
 
 		bool TestLobbyCodecRoundTrips(std::string* error) {
 			if (!TestMatchRulesCodec(error)) return false;
