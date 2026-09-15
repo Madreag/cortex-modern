@@ -148,6 +148,7 @@ namespace RTE {
 		uint16_t port = 41010;
 		std::string playerName = "Player";
 		std::string activityPreset = "Skirmish Defense";
+		std::string activityModule; // The module that defines the preset; empty resolves to the module defining it.
 		std::optional<NetMatchStandardRules> standardRules;
 		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		uint16_t inputDelayFrames = 0; // Lockstep input-delay buffer; the host picks it, the client agrees at the start handshake.
@@ -316,6 +317,11 @@ namespace RTE {
 		std::string BuildReportJson() const;
 		/// Builds the match roster from the request alone; it reads no manager, so a self-test can build one.
 		static bool BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId, NetMatchConfig& outConfig, std::string* error = nullptr);
+		/// The module a module-less activity preset belongs to, from the modules that define it. Reads no
+		/// manager: the caller lists the candidates.
+		static bool ResolveActivityModule(const std::string& preset, const std::vector<std::string>& definingModules, std::string& outModule, std::string* error = nullptr);
+		/// Fills an unset request module with the loaded module that defines the preset.
+		static bool SeatActivityModule(NetMatchServiceRequest& request, std::string* error = nullptr);
 		/// Fills the request's unset options from the saved settings, where a real host starts a match.
 		static void SeatSavedOptions(NetMatchServiceRequest& request);
 		/// Builds diagnostic identity on request; match startup supplies the cached join inputs.

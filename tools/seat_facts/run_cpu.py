@@ -87,7 +87,9 @@ def main():
     harness.REPO, harness.EXE = REPO, REPO / "Cortex Command.exe"
     harness.ROOT, harness.OUT = args.out, args.out / "e2e"
     preset, lua_class, original_preset, mode, cpu = ARMS[args.arm]
-    flags = ["-net-match-service-preset", preset, "-net-match-mode", mode, "-seed", "42", "-num-lua-states", "4"]
+    # The arm's activity is staged into the run's own UserScenes module, so the match names it.
+    flags = ["-net-match-service-preset", preset, "-net-match-service-module", "UserScenes.rte",
+             "-net-match-mode", mode, "-seed", "42", "-num-lua-states", "4"]
     lane = {"port": args.port, "ticks": 600, "delay": 3, "mode": "normal", "host": flags[:], "client": flags[:],
             "what": "shared roster CPU facts at start and first tick, and exact replay"}
     manifest = {"stamp": stamp(), "arm": args.arm, "cpu_team": cpu, "lane": lane,
