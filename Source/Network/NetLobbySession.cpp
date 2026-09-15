@@ -535,6 +535,10 @@ namespace RTE {
 	}
 
 	bool NetLobbySession::AllRemoteReady() const {
+		// An unstarted lobby has no remotes to be ready; the empty default config would otherwise say yes.
+		if (m_State == NetLobbyState::Idle) {
+			return false;
+		}
 		if (m_Config.host && m_RemotePeerIds.size() + 1 != m_Config.matchConfig.peerCount) {
 			return false;
 		}
