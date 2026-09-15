@@ -3137,7 +3137,7 @@ void GameActivity::SetNetworkPlayerName(int player, std::string name) {
 }
 
 std::string GameActivity::SaveValueCheckpoint() const {
-	CheckpointWriter writer("GameActivity1");
+	CheckpointWriter writer("GameActivity3");
 	writer(Activity::SaveCheckpoint());
 	VisitCheckpoint(writer, *this);
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
@@ -3152,7 +3152,7 @@ std::string GameActivity::SaveValueCheckpoint() const {
 
 bool GameActivity::LoadValueCheckpoint(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader reader(text, "GameActivity1", validateOnly);
+		CheckpointReader reader(text, "GameActivity3", validateOnly);
 		std::string base;
 		reader.Value(base);
 		if (!Activity::LoadCheckpoint(base, true)) return false;
@@ -3252,7 +3252,7 @@ std::string GameActivity::SaveCheckpoint() const {
 }
 
 bool GameActivity::LoadCheckpoint(std::string_view text, bool validateOnly) {
-    if (text.starts_with("13 GameActivity1 ")) return LoadValueCheckpoint(text, validateOnly);
+    if (text.starts_with("13 GameActivity3 ")) return LoadValueCheckpoint(text, validateOnly);
     try {
         CheckpointReader reader(text, "GameActivity2");
         std::string values;
@@ -3408,7 +3408,7 @@ bool GameActivity::CaptureNetLocalPlayerState(NetLocalPlayerState& out) const {
 	if (!Activity::CaptureNetLocalPlayerState(state)) return false;
 	try {
 		GUICheckpoint::NetLocalCaptureScope localUI;
-		CheckpointWriter writer("NetLocalGameUI1");
+		CheckpointWriter writer("NetLocalGameUI2");
 		writer(m_ObservationTarget, m_DeathViewTarget, m_ActorSelectTimer, m_ActorCursor, m_LandingZone,
 			m_AIReturnCraft, m_NextMultiOrderYOffset, m_LuaLockActor, m_LuaLockActorMode, m_BannerRepeats,
 			m_ReadyToStart, m_BrainLZWidth, m_LZCursorWidth, m_NetworkPlayerNames,
@@ -3459,7 +3459,7 @@ bool RestoreNetLocalBanner(GUIBanner*& target, const std::string& saved, const c
 bool GameActivity::LoadNetLocalGameState(std::string_view text) {
 	try {
 		GUICheckpoint::NetLocalRestoreScope localUI;
-		CheckpointReader reader(text, "NetLocalGameUI1");
+		CheckpointReader reader(text, "NetLocalGameUI2");
 		reader(m_ObservationTarget, m_DeathViewTarget, m_ActorSelectTimer, m_ActorCursor, m_LandingZone,
 			m_AIReturnCraft, m_NextMultiOrderYOffset, m_LuaLockActor, m_LuaLockActorMode, m_BannerRepeats,
 			m_ReadyToStart, m_BrainLZWidth, m_LZCursorWidth, m_NetworkPlayerNames, m_LockstepPlacementSubmitted);
