@@ -5310,15 +5310,14 @@ bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
 		try {
 			auto world = std::make_unique<Actor>();
 			if (world->MovableObject::Create(1) < 0) throw std::runtime_error("the world actor could not be created");
-			SetTempEntity(world.get());
 			const bool created = RunScriptString(
 				"_LuaHeldMO = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\");"
-				"_LuaHeldMO:SetWhichMOToNotHit(ToActor(LuaMan.TempEntity));"
 				"_LuaHeldUID = _LuaHeldMO.UniqueID") == 0;
 			lua_getglobal(m_State, "_LuaHeldUID");
 			MovableObject* held = g_MovableMan.FindObjectByUniqueID(static_cast<long>(lua_tonumber(m_State, -1)));
 			lua_pop(m_State, 1);
-			if (!created || !held) throw std::runtime_error("the lua-held object could not be created");
+			if (!created || !held) throw std::runtime_error(std::string("the lua-held object could not be created") + (GetLastError().empty() ? "" : (": " + GetLastError())));
+			held->SetWhichMOToNotHit(world.get());
 			if (held->GetWhichMOToNotHit() != world.get()) throw std::runtime_error("the lua-held object did not take the world actor");
 			const std::string archive = g_MovableMan.SaveCheckpoint();
 			held->SetWhichMOToNotHit(nullptr);
@@ -5341,16 +5340,15 @@ bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
 		try {
 			auto target = std::make_unique<Actor>();
 			if (target->MovableObject::Create(1) < 0) throw std::runtime_error("the off-world target could not be created");
-			SetTempEntity(target.get());
 			const bool created = RunScriptString(
 				"_LuaHeldOff = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\");"
-				"_LuaHeldOff:SetWhichMOToNotHit(ToActor(LuaMan.TempEntity));"
 				"_LuaHeldOffUID = _LuaHeldOff.UniqueID") == 0;
 			lua_getglobal(m_State, "_LuaHeldOffUID");
 			const long owner = static_cast<long>(lua_tonumber(m_State, -1));
 			MovableObject* held = g_MovableMan.FindObjectByUniqueID(owner);
 			lua_pop(m_State, 1);
-			if (!created || !held || owner <= 0) throw std::runtime_error("the lua-held off-world owner could not be created");
+			if (!created || !held || owner <= 0) throw std::runtime_error(std::string("the lua-held off-world owner could not be created") + (GetLastError().empty() ? "" : (": " + GetLastError())));
+			held->SetWhichMOToNotHit(target.get());
 			const std::string archive = g_MovableMan.SaveCheckpoint();
 			g_MovableMan.UnregisterObject(held);
 			const bool applied = g_MovableMan.LoadCheckpoint(archive);
