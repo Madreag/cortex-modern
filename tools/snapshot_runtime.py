@@ -241,7 +241,8 @@ SCHEMAS["ActorRuntime1"] = [*fields("player_controllable status health max_healt
     *fields("sight_distance perceptiveness pain_threshold reveal_unseen character_height"), *fields("holster_offset reload_offset view_point", VECTOR),
     *fields("max_inventory_mass off_wire_aim_tick off_wire_aim off_wire_flip_tick off_wire_flip"), ("hotkey_activated", array(2)),
     *fields("hud_stack deployment_id passenger_slots ai_dig_strength base_mass ai_mode waypoint_cursor draw_waypoints"),
-    *fields("move_target previous_path_target move_vector", VECTOR), *fields("update_path move_proximity movement_state organic mechanical limb_forces_disabled"),
+    *fields("move_target previous_path_target", VECTOR), ("last_ordered_waypoint", VECTOR), ("has_ordered_waypoint", "n"),
+    ("move_vector", VECTOR), *fields("update_path move_proximity movement_state organic mechanical limb_forces_disabled"),
     *fields("team_icon controller_icon", "s")]
 SCHEMAS["AHumanRuntime1"] = [*fields("look_aim_ratio activate_background trigger_pulled reload_offhand"), ("icon_blink_timer", TIMER),
     *fields("arms_state prone_state"), ("prone_timer", TIMER), *fields("max_crouch_shift crouch_amount crouch_override"),
