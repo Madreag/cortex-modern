@@ -92,6 +92,7 @@ namespace RTE {
 
 	bool NetMatchService::s_AdmissionEnabled = true;
 	uint32_t NetMatchService::s_AutosaveSeconds = 0;
+	bool NetMatchService::s_AutosaveSecondsOverridden = false;
 	std::string NetMatchService::s_TicketStorePath;
 	std::string NetMatchService::s_JoinWaitPath;
 	bool NetMatchService::s_ApplyForSeat = false;
@@ -1571,6 +1572,7 @@ static std::string ResyncSaveName() {
 			ResetRosterTransitionHistory();
 			m_AutosaveMatchId = m_Runner ? std::format("{:x}-{:x}-{:x}", m_Runner->GetMatchConfig().sessionId, System::GetProcessID(),
 			                                        std::chrono::system_clock::now().time_since_epoch().count()) : "";
+			m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
 		}
@@ -1584,10 +1586,12 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
-		if (s_AutosaveSeconds == 0 || !ScenarioRunner::IsLockstepControllerSyncActive() ||
+		// Every peer keeps the schedule the host announced in the agreed config, not its own setting.
+		const uint32_t seconds = m_MatchAutosaveSeconds;
+		if (seconds == 0 || !ScenarioRunner::IsLockstepControllerSyncActive() ||
 		    !g_ActivityMan.ActivityRunning() || m_AutosaveMatchId.empty()) return;
 		const int64_t now = g_TimerMan.GetSimTimeTicks();
-		const int64_t interval = static_cast<int64_t>(s_AutosaveSeconds) * g_TimerMan.GetTicksPerSecond();
+		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
 		if (m_NextAutosaveSimTime < 0 || now < m_LastAutosaveSimTime) {
 			m_NextAutosaveSimTime = now - g_TimerMan.GetDeltaTimeTicks() + interval;
 		}
@@ -2905,8 +2909,16 @@ static std::string ResyncSaveName() {
 		config.modePreset = NetMatchConfigUtil::ModeName(mode);
 		config.ownershipPolicy = request.ownershipPolicy;
 		config.inputDelayFrames = request.inputDelayFrames;
+		// The host's Gameplay setting seats the rule unless the lobby or a request flag picked one.
+		config.brainlessHumansSpectate = request.brainlessHumansSpectate.value_or(g_SettingsMan.GetBrainlessHumansSpectate());
 		config.peerCount = peerCount;
 		config.dedicated = request.dedicated;
+		// The host publishes the checkpoint cadence the whole match follows; a client's own setting never steers one.
+		if (request.host) {
+			const uint32_t seconds = std::min(GetAutosaveSeconds(), c_MaxAutosaveIntervalSeconds);
+			config.autosaveEnabled = seconds > 0;
+			config.autosaveIntervalSeconds = seconds;
+		}
 		// The host authors the roster; clients adopt it via the lobby config sync. PvP seats one team
 		// per peer; co-op PvE seats every human on team 0; PvPvE keeps per-peer teams. A dedicated host
 		// seats peers 2..peerCount instead, so peer 1 stays the seatless lockstep host. The PvE modes

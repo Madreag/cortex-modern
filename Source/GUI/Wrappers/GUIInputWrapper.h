@@ -5,6 +5,7 @@
 
 #include <array>
 #include <memory>
+#include <functional>
 
 namespace RTE {
 
@@ -16,6 +17,16 @@ namespace RTE {
 	public:
 		std::string SaveCheckpoint() const override;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) override;
+		/// Enables scoped input only for an active automation driver.
+		static void SetAutomationDriving(bool enabled);
+		/// Creates a scripted wrapper; ordinary menus keep their existing input object.
+		std::unique_ptr<GUIInputWrapper> CreateAutomationInput();
+		bool GetKeyJoyMouseCursor() const { return m_KeyJoyMouseCursor; }
+		/// Queues a device event for the next poll; inactive wrappers refuse it.
+		virtual bool QueueAutomationInput(const std::string& device, const std::string& name, bool down) { return false; }
+		/// Queues a control's own handler after the input update clears its event queue.
+		virtual bool QueueAutomationCommand(std::function<void()> command) { return false; }
+		virtual void ReleaseAutomationInput() {}
 #pragma region Creation
 		/// Constructor method used to instantiate a GUIInputWrapper object in system memory.
 		/// @param whichPlayer Which player this GUIInputWrapper will handle input for. -1 means no specific player and will default to player 1.
@@ -37,6 +48,9 @@ namespace RTE {
 		void StopTextInput() override;
 #pragma endregion
 
+	protected:
+		/// Converts one keyboard snapshot through the normal GUI input path.
+		void UpdateWithKeyboard(const bool* keys);
 	private:
 		const float m_KeyRepeatDelay = 0.10F; //!< The delay a key needs to be held to be considered a repeating input. TODO: Make this use proper OS repeating instead of this shit...
 		std::array<float, GUIInput::Constants::KEYBOARD_BUFFER_SIZE> m_KeyHoldDuration; //!< How long each key has been held in order to set repeating inputs.
@@ -45,14 +59,14 @@ namespace RTE {
 		std::unique_ptr<Timer> m_CursorAccelTimer; //!< Timer to calculate the mouse cursor acceleration when it is controller with the keyboard or joysticks.
 
 		/// Converts from SDL's key push to that used by this GUI lib, with timings for repeats taken into consideration.
-		/// @param sdlKey The key scancode.
+		/// @param down The device's held state.
 		/// @param guilibKey The corresponding GUIlib scancode
 		/// @param elapsedS The elapsed time since the last update, in seconds.
-		void ConvertKeyEvent(SDL_Scancode sdlKey, int guilibKey, float elapsedS);
+		void ConvertKeyEvent(bool down, int guilibKey, float elapsedS);
 
 #pragma region Update Breakdown
 		/// Updates the keyboard input.
-		void UpdateKeyboardInput(float keyElapsedTime);
+		void UpdateKeyboardInput(float keyElapsedTime, const bool* keys);
 
 		/// Updates the mouse input.
 		void UpdateMouseInput();

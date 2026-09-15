@@ -13,9 +13,12 @@ from compare_sim_traces import strict_compare
 from run_sim_test import make_run
 
 CAPTURE = re.compile(r"^\[autosave\] tick=(\d+) capture_ms=(\d+(?:\.\d+)?) bytes=(\d+)$", re.MULTILINE)
+FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
 
 
-def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int) -> dict:
+def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int, *, prepare=None) -> dict:
+    if FAMILY_LOCK.exists():
+        raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
     root.mkdir(parents=True, exist_ok=False)
     runs, records = {}, {}
     for who in ("host", "client"):
@@ -27,6 +30,8 @@ def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int) -> di
                  "-net-match-report", str(root / f"{who}_report.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
         runs[who] = make_run(repo, args, root / who, 360, env={"CCCP_HEADLESS": "1"})
+        if prepare:
+            prepare(who, runs[who].cwd)
 
     def drive(who: str) -> None:
         try:
@@ -45,6 +50,35 @@ def run_pair(repo: Path, root: Path, port: int, seconds: dict, ticks: int) -> di
         for run in runs.values():
             run.close()
     return records
+
+
+def prepare_setting(runtime: Path, seconds) -> None:
+    path = runtime / "Userdata/Settings.ini"
+    before = path.read_text(encoding="utf-8-sig")
+    text = re.sub(r"(?m)^[ \t]*AutosaveSeconds[ \t]*=[^\r\n]*(?:\r?\n|$)", "", before)
+    if seconds is not None:
+        text += f"\n\tAutosaveSeconds = {seconds}\n"
+    path.write_text(text, encoding="utf-8")
+    (runtime.parent / "prepared-settings.json").write_text(json.dumps({
+        "path": str(path), "autosave_seconds": seconds,
+        "source_sha256": hashlib.sha256(before.encode()).hexdigest(),
+        "prepared_sha256": hashlib.sha256(text.encode()).hexdigest(),
+        "lines": [line for line in text.splitlines() if re.match(r"[ \t]*AutosaveSeconds[ \t]*=", line)]}, indent=2) + "\n", encoding="utf-8")
+
+
+def inspect_setting(root: Path, who: str, persisted) -> dict:
+    """A staged Settings.ini is already fully populated, so the engine never rewrites it: a None row
+    proves the cadence came from the shipped default and not from a file the harness wrote."""
+    path = root / who / "runtime/Userdata/Settings.ini"
+    lines = [{"source": str(path), "line": index, "raw": line, "seconds": int(match[1])}
+             for index, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1)
+             if (match := re.fullmatch(r"[ \t]*AutosaveSeconds[ \t]*=[ \t]*(\d+)[ \t]*", line))]
+    if persisted is None:
+        assert not lines, f"the row carries a persisted autosave setting: {lines}"
+    else:
+        assert len(lines) == 1 and lines[0]["seconds"] == persisted, f"persisted autosave setting differs: {lines}"
+    return {"persisted_seconds": persisted, "lines": lines,
+            "prepared": json.loads((root / who / "prepared-settings.json").read_text())}
 
 
 def inspect_autosaves(root: Path, who: str, enabled: bool) -> dict:
@@ -97,10 +131,10 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=48212)
     parser.add_argument("--ticks", type=int, default=400)
-    parser.add_argument("--arm", choices=("all", "default"), default="all")
+    parser.add_argument("--arm", choices=("all", "default", "host-option"), default="all")
     args = parser.parse_args()
-    if not 48211 <= args.port <= 48216 or args.ticks < 400:
-        parser.error("four ports must fit 48211..48219 and at least 400 ticks are required")
+    if not (48211 <= args.port <= 48216 or 48500 <= args.port <= 48516) or args.ticks < 400:
+        parser.error("four ports must fit 48211..48219 or 48500..48519; at least 400 ticks are required")
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = args.repo.resolve(), args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -110,37 +144,78 @@ def main() -> int:
     arms = {"off": {"host": 0, "client": 0}, "on": {"host": 2, "client": 2},
             "asymmetric": {"host": 2, "client": 0}, "rotation": {"host": 1, "client": 1}}
     if args.arm == "default":
-        arms = {"default": {"host": None, "client": None}}
+        arms = {"default": {"host": None, "client": None}, "setting": {"host": None, "client": None},
+                "setting-off": {"host": None, "client": None}, "flag-off": {"host": 0, "client": 0}}
+    elif args.arm == "host-option":
+        arms = {"host-option": {"host": 2, "client": None}}
     for index, (arm, cadence) in enumerate(arms.items()):
         arm_root = root / arm
         details = {"cadence_seconds": cadence}
         result["arms"][arm] = details
         try:
-            records = run_pair(repo, arm_root, args.port + index, cadence, args.ticks)
+            prepare, setting = None, None
+            if arm == "host-option":
+                # Only the host is given a cadence; the client's own setting is staged off.
+                def prepare(who, runtime):
+                    prepare_setting(runtime, 0 if who == "client" else None)
+
+            if args.arm == "default":
+                setting = {"default": None, "setting": 2, "setting-off": 0, "flag-off": 2}[arm]
+                details["initial_setting_seconds"] = setting
+
+                def prepare(who, runtime):
+                    prepare_setting(runtime, setting)
+
+            autosaving = arm in ("host-option", "setting")
+            records = run_pair(repo, arm_root, args.port + index, cadence, args.ticks, prepare=prepare)
             details["records"] = records
             for who in cadence:
                 assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
-                details[who] = inspect_autosaves(arm_root, who, cadence[who] is not None and cadence[who] > 0)
-                if arm == "default":
-                    assert "-net-autosave-seconds" not in records[who]["argv"], "default row supplied the autosave flag"
-                    log = (arm_root / who / "stdout.log").read_text(encoding="utf-8", errors="replace")
-                    assert "[autosave]" not in log, "default row emitted an autosave line"
+                enabled = autosaving or cadence[who] is not None and cadence[who] > 0
+                details[who] = inspect_autosaves(arm_root, who, enabled)
+                if args.arm == "default":
+                    if arm == "flag-off":
+                        flag = records[who]["argv"].index("-net-autosave-seconds")
+                        assert records[who]["argv"][flag + 1] == "0", "flag-off override is not zero"
+                    else:
+                        assert "-net-autosave-seconds" not in records[who]["argv"], f"{arm} row supplied the autosave flag"
+                    details[who]["setting"] = inspect_setting(arm_root, who, setting)
                     directory = arm_root / who / "runtime/Autosaves"
                     listing = sorted(str(path) for path in directory.iterdir()) if directory.exists() else []
-                    assert not listing, f"default row produced Autosaves entries: {listing}"
                     details[who]["listing"] = {"directory": str(directory), "exists": directory.exists(), "files": listing}
-                    print(f"FILES default/{who}: {listing} directory={directory} exists={directory.exists()}", flush=True)
+                    if enabled:
+                        saved_ticks = [row["tick"] for row in details[who]["captures"]]
+                        assert all(b - a == setting * 60 for a, b in zip(saved_ticks, saved_ticks[1:])), saved_ticks
+                    else:
+                        log = (arm_root / who / "stdout.log").read_text(encoding="utf-8", errors="replace")
+                        assert "[autosave]" not in log, f"{arm} row emitted an autosave line"
+                        assert not listing, f"{arm} row produced Autosaves entries: {listing}"
+                    print(f"FILES {arm}/{who}: {listing} directory={directory} exists={directory.exists()}", flush=True)
+                if arm == "host-option":
+                    details[who]["setting"] = inspect_setting(arm_root, who, 0 if who == "client" else None)
+                    if who == "client":
+                        assert "-net-autosave-seconds" not in records[who]["argv"], "the client was handed the autosave flag"
+                    saved_ticks = [row["tick"] for row in details[who]["captures"]]
+                    assert all(b - a == 2 * 60 for a, b in zip(saved_ticks, saved_ticks[1:])), saved_ticks
                 if arm == "rotation":
                     assert len(details[who]["captures"]) > 3, "rotation arm never exceeded the retention limit"
             passed, comparison = strict_compare(arm_root / "host_trace.json", arm_root / "client_trace.json", args.ticks)
             details["peer_comparison"] = comparison
             assert passed, comparison
-            if arm not in ("off", "default"):
+            if arm == "host-option":
+                ticks_by_peer = {who: [row["tick"] for row in details[who]["captures"]] for who in cadence}
+                details["capture_ticks"] = ticks_by_peer
+                assert ticks_by_peer["host"] == ticks_by_peer["client"], ticks_by_peer
+            if args.arm == "all" and arm != "off":
                 for who in cadence:
                     exact_role_compare(root / "off" / f"{who}_trace.json", arm_root / f"{who}_trace.json", args.ticks)
             details["passed"] = True
-            if arm == "default":
-                print(f"PASS default: {args.ticks} peer ticks match; autosave flag absent; capture_lines=0 files_host=0 files_client=0", flush=True)
+            if args.arm == "default":
+                counts = {who: {"captures": len(details[who]["captures"]), "files": len(details[who]["files"])} for who in cadence}
+                print(f"PASS {arm}: {args.ticks} peer ticks match; persisted_setting={setting} autosaving={autosaving}; {counts}", flush=True)
+            elif arm == "host-option":
+                print(f"PASS host-option: the client autosaved at the host's cadence at ticks "
+                      f"{details['capture_ticks']['client']} with its own setting off", flush=True)
             else:
                 print(f"PASS {arm}: {args.ticks} peer ticks match; checkpoint rotation and same-peer full hashes match", flush=True)
         except Exception as error:

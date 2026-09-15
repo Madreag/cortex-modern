@@ -259,6 +259,24 @@ namespace RTE {
 		/// @return Whether this is a network-synced delivery.
 		bool IsNetworkDelivery() const { return m_NetworkDelivery; }
 
+		/// What the owner's AI pass asked the hatch to do this tick; the wire carries it as a one-shot
+		/// command and every peer, the owner included, makes the call at the committed tick.
+		void MarkOffWireHatch(long long simTick, bool open) {
+			m_OffWireHatchTick = simTick;
+			m_OffWireHatchOpen = open;
+		}
+		long long GetOffWireHatchTick() const { return m_OffWireHatchTick; }
+		bool GetOffWireHatchOpen() const { return m_OffWireHatchOpen; }
+
+		/// The hatch timer's raw anchor, so the producing boundary can undo an AI pass's write exactly.
+		int64_t GetHatchTimerStartTicks() const { return m_HatchTimer.GetStartSimTimeMS(); }
+
+		/// Puts the hatch back where the owner's AI pass found it; the producing boundary's undo.
+		void RestoreHatch(unsigned int hatchState, int64_t hatchTimerStartTicks) {
+			m_HatchState = hatchState;
+			m_HatchTimer.SetStartSimTimeTicks(hatchTimerStartTicks);
+		}
+
 		void ResolveFaithfulLinks() override;
 		void RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) override;
 
@@ -452,6 +470,9 @@ namespace RTE {
 		bool m_NetworkDelivery;
 		// Times a network delivery for its deterministic unload fallback.
 		Timer m_NetworkDeliveryTimer;
+		// The tick the owner's AI pass last wrote the hatch on, and what it asked for.
+		long long m_OffWireHatchTick;
+		bool m_OffWireHatchOpen;
 
 		/// Private member variable and method declarations
 	private:

@@ -16,6 +16,7 @@
 #include "NetGameCommand.h"
 #include "LuaMan.h"
 #include "ActivityMan.h"
+#include "SettingsMan.h"
 
 #include "ACraft.h"
 #include "OwnedMovableObjects.h"
@@ -1151,6 +1152,16 @@ void Activity::HandleCraftEnteringOrbit(ACraft* orbitedCraft) {
 
 	// The craft entering orbit will count as a death for the team because it's being deleted, so we need to decrement the team's death count to keep it correct.
 	m_TeamDeaths[orbitedCraftTeam]--;
+}
+
+bool Activity::BrainlessHumansSpectate() const {
+	// A running match follows the host's agreed rule; everything else follows this machine's setting.
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		if (const NetMatchConfig* matchConfig = ScenarioRunner::GetLockstepMatchConfig()) {
+			return matchConfig->brainlessHumansSpectate;
+		}
+	}
+	return g_SettingsMan.GetBrainlessHumansSpectate();
 }
 
 int Activity::GetBrainCount(bool getForHuman) const {

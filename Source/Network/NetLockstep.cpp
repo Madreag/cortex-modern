@@ -2915,6 +2915,7 @@ namespace RTE {
 			return true;
 		}
 		m_LocalChecksums[frame] = hash;
+		++m_Stats.checksumSubmissions;
 		NetLockstepChecksum packet;
 		packet.senderPeerId = m_Config.localPeerId;
 		packet.frame = frame;
@@ -2927,6 +2928,7 @@ namespace RTE {
 		if (!SendPacket({packet}, m_Config.frameLane, error)) {
 			return false;
 		}
+		++m_Stats.checksumSends;
 		CompareChecksums(frame);
 		return true;
 	}
@@ -3324,7 +3326,12 @@ namespace RTE {
 		// A desync on ANY peer aborts, naming it; only verify (and prune) once every REQUIRED remote
 		// agrees. A cleanly-left peer's last hashes still compare, but nobody waits on it.
 		for (const auto& [peerId, hash]: remoteIt->second) {
+			++m_Stats.checksumCompares;
 			if (localIt->second != hash) {
+				++m_Stats.checksumMismatches;
+				std::cout << "[lockstep] desync at frame " << frame << " against " << DescribePeer(peerId)
+				          << " (submitted " << m_Stats.checksumSubmissions << ", sent " << m_Stats.checksumSends
+				          << ", compared " << m_Stats.checksumCompares << ")" << std::endl;
 				ScheduleRecoveryStop(NetLockstepStopReason::Desync, frame, "sim state diverged at tick " + std::to_string(frame) + " (" + DescribePeer(peerId) + ")");
 				return;
 			}
@@ -3527,6 +3534,9 @@ namespace RTE {
 		}
 		outFrame = std::move(m_ReadyFrames.front());
 		m_ReadyFrames.pop_front();
+		for (const auto& [peerId, leaveFrame]: m_PeerLeaveFrames) {
+			if (leaveFrame <= outFrame.frame) outFrame.departedPeerIds.push_back(peerId);
+		}
 		return true;
 	}
 
@@ -3561,10 +3571,8 @@ namespace RTE {
 		// lockstep gate synchronizes leave knowledge, so every peer re-resolves identically.
 		if (m_PeerLeaveFrames.find(ownerPeerId) != m_PeerLeaveFrames.end()) {
 			const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
-			// H4 §4: a seat inside its reclaim window has not lost its player. With no surviving
-			// teammate the relay host plays its units until the holder returns, instead of standing
-			// them down to be shot where they stand - the round is held open only while it is alone.
-			ownerPeerId = survivor != 0 ? survivor : (IsHoldingSeatForReclaim() ? m_Config.matchConfig.hostPeerId : survivor);
+			// The host produces AI controllers for a departed team while the round continues.
+			ownerPeerId = survivor != 0 ? survivor : (IsRunning() || IsHoldingSeatForReclaim() ? m_Config.matchConfig.hostPeerId : survivor);
 		}
 		return ownerPeerId;
 	}
@@ -3591,9 +3599,7 @@ namespace RTE {
 		if (!IsPeerGoneAtFrame(NetActorOwnership::ResolveOwnerPeer(m_Config.matchConfig, {actorUniqueID, team, cpuControlled}), frame)) {
 			return false;
 		}
-		// The team's units fall to the next surviving human peer; only an ownerless team stands down,
-		// and a seat still inside its reclaim window is not ownerless (the relay host plays it).
-		return FirstAliveHumanPeerForTeam(team, frame) == 0 && !IsHoldingSeatForReclaim();
+		return FirstAliveHumanPeerForTeam(team, frame) == 0 && !IsRunning() && !IsHoldingSeatForReclaim();
 	}
 
 	bool NetLockstepCoordinator::IsPeerGoneAtFrame(uint8_t peerId, uint64_t frame) const {
@@ -4785,6 +4791,13 @@ namespace RTE {
 		}
 		ForgetCongestion(peerId);
 		m_LastLeaveMessage = message;
+		// The relay host is the star's hub: with it gone no survivor can reach another, and its own team
+		// would keep resolving to a peer that produces nothing for it. The round ends for every survivor.
+		if (peerId == m_Config.matchConfig.hostPeerId && peerId != m_Config.localPeerId) {
+			m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":the host left the match: " + message;
+			m_State = NetLockstepState::Stopped;
+			return;
+		}
 		// A dropped seat pauses commits until the host resolves it; an announced leave still ends a last-player match at once.
 		if (LeftPeersNotRefilling() >= m_RemotePeerIds.size() && (announced || !AnyLeftSeatHeld()) && !ReclaimResyncPending()) {
 			// Nobody left to play with.

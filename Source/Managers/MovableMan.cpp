@@ -829,11 +829,51 @@ void MovableMan::ApplyLockstepControlHandoffToActor(Actor& actor, bool seated) {
 	const Controller::InputMode handedMode = seated ? Controller::CIM_PLAYER : Controller::CIM_AI;
 	const Controller::InputMode previousMode = controller.GetInputMode();
 	const int previousPlayer = controller.GetPlayer();
+	if (!seated) controller.ResetLocalInputState();
 	if (previousMode == handedMode) {
 		return;
 	}
 	controller.ApplyWireMode(handedMode, controller.GetPlayerRaw());
 	actor.OnControllerInputModeChanged(previousMode, previousPlayer);
+}
+
+// Frames a synced pause committed: the sim does not advance on them, so they are not frames the match played.
+static uint64_t s_LockstepPausedFrames = 0;
+
+uint64_t RTE::LockstepPlayedFrame() {
+	const uint64_t applied = ScenarioRunner::GetLockstepAppliedFrame();
+	return applied > s_LockstepPausedFrames ? applied - s_LockstepPausedFrames : 0;
+}
+
+void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors, bool paused) {
+	// A round that restarts its frame numbering restarts the count with it.
+	if (readyFrame.frame <= ScenarioRunner::GetLockstepAppliedFrame()) {
+		s_LockstepPausedFrames = 0;
+	}
+	if (paused) {
+		++s_LockstepPausedFrames;
+	}
+	ScenarioRunner::SetLockstepAppliedFrame(readyFrame.frame);
+	ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(readyFrame.frame);
+	for (Actor* actor: actors) {
+		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+		const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
+		if (actor->IsPlayerControlled() && std::find(readyFrame.departedPeerIds.begin(), readyFrame.departedPeerIds.end(), claimant) != readyFrame.departedPeerIds.end()) {
+			MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
+		}
+		if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame)) {
+			const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
+			if (seeded != 0 && ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), true) == seeded) {
+				MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
+				std::cout << "[net-match] claim of actor " << uid << " returned to peer " << static_cast<int>(seeded)
+				          << " after seat " << static_cast<int>(claimant) << " expired" << std::endl;
+				continue;
+			}
+		}
+		if (ScenarioRunner::IsLockstepActorOwnerGone(uid, actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame)) {
+			actor->GetController()->SetDisabled(true);
+		}
+	}
 }
 
 std::vector<long int> MovableMan::BeginLockstepProducingPass(const std::deque<Actor*>& actors, const std::function<bool(const Actor*)>& isLocal) {
@@ -1017,6 +1057,7 @@ bool MovableMan::RunLockstepPausedTick() {
 		ScenarioRunner::SetControllerReplayError("tick " + std::to_string(simTick) + " paused wait: " + error);
 		return false;
 	}
+	ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, true);
 	// Only the game commands apply on a paused tick; the sim itself holds still.
 	g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 	CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
@@ -2682,6 +2723,43 @@ void MovableMan::ReportSpeculationViolation(const char* what, const MovableObjec
 #ifdef DEBUG_BUILD
 	RTEAssert(false, "Speculative execution wrote to the world: " + std::string(what) + " " + subject);
 #endif
+}
+
+MovableMan::ControllerBoundaryBaseline MovableMan::CaptureControllerBoundary(Actor* actor) {
+	const AHuman* human = dynamic_cast<const AHuman*>(actor);
+	const ACraft* craft = dynamic_cast<const ACraft*>(actor);
+	return {actor, actor->GetAimAngle(false), actor->IsHFlipped(),
+	        human && human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0,
+	        human && human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0,
+	        craft ? craft->GetHatchState() : 0u,
+	        craft ? craft->GetHatchTimerStartTicks() : 0};
+}
+
+void MovableMan::RestoreControllerBoundary(const ControllerBoundaryBaseline& before, long long simTick) {
+	Actor* actor = before.actor;
+	if (const float aim = actor->GetAimAngle(false); aim != before.aim) {
+		actor->MarkOffWireAim(simTick, aim);
+		actor->SetAimAngle(before.aim);
+		++m_ControllerBoundaryStats.aimIntents;
+	}
+	if (const bool flipped = actor->IsHFlipped(); flipped != before.flipped) {
+		actor->MarkOffWireFlip(simTick, flipped);
+		actor->SetHFlipped(before.flipped);
+		++m_ControllerBoundaryStats.flipIntents;
+	}
+	if (ACraft* craft = dynamic_cast<ACraft*>(actor)) {
+		if (const unsigned int hatch = craft->GetHatchState(); hatch != before.hatch) {
+			craft->MarkOffWireHatch(simTick, hatch == ACraft::OPENING || hatch == ACraft::OPEN);
+			craft->RestoreHatch(before.hatch, before.hatchTimerStart);
+		}
+	}
+	if (AHuman* human = dynamic_cast<AHuman*>(actor)) {
+		const int64_t fg = human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0;
+		const int64_t bg = human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0;
+		if (fg != before.fg || bg != before.bg) {
+			ReportControllerBoundaryViolation("the equipment", actor);
+		}
+	}
 }
 
 void MovableMan::ReportControllerBoundaryViolation(const char* what, const Actor* actor) {
@@ -4751,24 +4829,14 @@ void MovableMan::UpdateControllers() {
 			}
 		}
 
-		// Under lockstep the AI pass may not change the canonical actor: its aim and facing writes are
-		// taken as one-shot intents and undone here, its equip calls become commands, and every peer
+		// Under lockstep the AI pass may not change the canonical actor: its aim, facing and hatch writes
+		// are taken as one-shot intents and undone here, its equip calls become commands, and every peer
 		// (this one included) applies them at the committed tick.
-		struct DirectState {
-			Actor* actor;
-			float aim;
-			bool flipped;
-			int64_t fg;
-			int64_t bg;
-		};
-		std::vector<DirectState> directBefore;
+		std::vector<ControllerBoundaryBaseline> directBefore;
 		if (lockstepActive) {
 			for (Actor* actor: m_Actors) {
 				if (isLocalControllerActor(actor)) {
-					const AHuman* human = dynamic_cast<const AHuman*>(actor);
-					directBefore.push_back({actor, actor->GetAimAngle(false), actor->IsHFlipped(),
-					                        human && human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0,
-					                        human && human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0});
+					directBefore.push_back(CaptureControllerBoundary(actor));
 				}
 			}
 		}
@@ -4907,25 +4975,8 @@ void MovableMan::UpdateControllers() {
 			drainDeferredSoundOps();
 		}
 
-		for (const DirectState& before: directBefore) {
-			Actor* actor = before.actor;
-			if (const float aim = actor->GetAimAngle(false); aim != before.aim) {
-				actor->MarkOffWireAim(static_cast<long long>(simTick), aim);
-				actor->SetAimAngle(before.aim);
-				++m_ControllerBoundaryStats.aimIntents;
-			}
-			if (const bool flipped = actor->IsHFlipped(); flipped != before.flipped) {
-				actor->MarkOffWireFlip(static_cast<long long>(simTick), flipped);
-				actor->SetHFlipped(before.flipped);
-				++m_ControllerBoundaryStats.flipIntents;
-			}
-			if (AHuman* human = dynamic_cast<AHuman*>(actor)) {
-				const int64_t fg = human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0;
-				const int64_t bg = human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0;
-				if (fg != before.fg || bg != before.bg) {
-					ReportControllerBoundaryViolation("the equipment", actor);
-				}
-			}
+		for (const ControllerBoundaryBaseline& before: directBefore) {
+			RestoreControllerBoundary(before, static_cast<long long>(simTick));
 		}
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsAI);
@@ -4973,27 +5024,7 @@ void MovableMan::UpdateControllers() {
 			return;
 		}
 		NeutralizeUnframedLockstepActors(m_Actors, applied);
-		// A leaver's actors dropped off the wire: their control handoffs revert to the policy owner
-		// (a surviving teammate's AI picks them up), and actors with no surviving owner stand down —
-		// on every survivor at the same tick.
-		ScenarioRunner::SetLockstepAppliedFrame(readyFrame.frame);
-		ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(readyFrame.frame);
-		for (Actor* actor: m_Actors) {
-			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
-			const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
-			if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame)) {
-				const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
-				if (seeded != 0 && ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), true) == seeded) {
-					ApplyLockstepControlHandoffToActor(*actor, false);
-					std::cout << "[net-match] claim of actor " << uid << " returned to peer " << static_cast<int>(seeded)
-					          << " after seat " << static_cast<int>(claimant) << " expired" << std::endl;
-					continue;
-				}
-			}
-			if (ScenarioRunner::IsLockstepActorOwnerGone(uid, actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame)) {
-				actor->GetController()->SetDisabled(true);
-			}
-		}
+		ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, false);
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 		CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);

@@ -207,6 +207,16 @@ namespace RTE {
 		static uint64_t GetLockstepCompletedFrame();
 		static uint64_t GetLockstepRoundId();
 
+		/// What the runtime desync check actually did, summed across a resync's coordinator handoff.
+		struct LockstepChecksumCounters {
+			uint64_t submissions = 0;
+			uint64_t sends = 0;
+			uint64_t compares = 0;
+			uint64_t mismatches = 0;
+		};
+		/// A finished match whose submissions are zero never ran the check; nothing else reports that.
+		static LockstepChecksumCounters GetLockstepChecksumCounters();
+
 		/// The session upkeep the match service owns. A peer that stops sending frames parks the sim
 		/// thread in the lockstep wait, so without this the admission plane cannot answer anything -
 		/// including the leave the waited-for peer is waiting to have acknowledged.

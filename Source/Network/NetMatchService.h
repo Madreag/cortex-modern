@@ -17,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -153,6 +154,7 @@ namespace RTE {
 		bool autoInputDelay = false; // Host: raise the delay to cover the measured peer RTT (the manual value stays the floor).
 		uint8_t peerCount = 2; // Total players (2..4); the host listens for peerCount-1 clients.
 		NetMatchMode mode = NetMatchMode::PvPSkirmish; // Shapes the roster: PvP (a team per peer), co-op PvE (one shared team vs CPU), PvPvE (teams + CPU).
+		std::optional<bool> brainlessHumansSpectate; // Host rule: the round survives the last human brain. Unset takes the host's Gameplay setting.
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
 		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
 		std::string sessionId; // Client only: join the directory session with this id instead of an address.
@@ -168,8 +170,23 @@ namespace RTE {
 		/// gate can be bisected against the pre-admission handshake without a rebuild.
 		static void SetAdmissionEnabled(bool enabled) { s_AdmissionEnabled = enabled; }
 		static bool IsAdmissionEnabled() { return s_AdmissionEnabled; }
-		/// Sets this machine's checkpoint cadence in sim seconds; zero disables it.
-		static void SetAutosaveSeconds(uint32_t seconds) { s_AutosaveSeconds = seconds; }
+		/// Overrides this run's checkpoint cadence in simulation seconds; zero disables it.
+		static void SetAutosaveSeconds(uint32_t seconds) {
+			s_AutosaveSeconds = seconds;
+			s_AutosaveSecondsOverridden = true;
+		}
+		/// Applies the saved cadence while preserving any command-line override.
+		static void SetAutosaveSecondsSetting(uint32_t seconds) {
+			if (!s_AutosaveSecondsOverridden) s_AutosaveSeconds = seconds;
+		}
+		/// Gets this run's checkpoint cadence, including its command-line override.
+		static uint32_t GetAutosaveSeconds() { return s_AutosaveSeconds; }
+		static constexpr uint32_t c_MaxAutosaveIntervalSeconds = 3600; // An hour is the longest cadence a host may announce.
+		/// The cadence a running match keeps: the command-line override when one was given, else the host's announced option.
+		static uint32_t MatchAutosaveSeconds(const NetMatchConfig& config) {
+			if (s_AutosaveSecondsOverridden) return s_AutosaveSeconds;
+			return config.autosaveEnabled ? config.autosaveIntervalSeconds : 0;
+		}
 		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
 		void AutosaveAtTickBoundary(uint64_t tick);
 		/// §11: the multiprocess reconnect test shares one Userdata, so each process gets its own
@@ -431,7 +448,9 @@ namespace RTE {
 		std::string m_DiagnosticIdentity;
 		std::string m_DiagnosticRuntimeError;
 		static uint32_t s_AutosaveSeconds;
+		static bool s_AutosaveSecondsOverridden;
 		std::string m_AutosaveMatchId;
+		uint32_t m_MatchAutosaveSeconds = 0; //!< The cadence the round agreed on, read once so the tick path never chases the runner.
 		int64_t m_NextAutosaveSimTime = -1;
 		int64_t m_LastAutosaveSimTime = -1;
 		NetMatchServiceState m_State = NetMatchServiceState::Idle;

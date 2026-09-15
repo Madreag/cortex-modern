@@ -146,6 +146,7 @@
 #include <array>
 #include <list>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <thread>
 #include <unordered_set>
@@ -160,6 +161,8 @@ using namespace RTE;
 
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
+// The live desync check. On everywhere by default; -net-desync-check off opts a measurement run out.
+static bool s_netDesyncCheck = true;
 static bool s_telemetryBundleOnExit = false;
 static std::string s_menuMpTraceError;
 static bool s_bitmapSaveSelfTest = false;
@@ -286,6 +289,7 @@ static uint64_t s_netLockstepTicks = 0;
 static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
 static uint16_t s_netLockstepInputDelay = 0;
 static uint8_t s_netMatchPeers = 2;
+static std::optional<bool> s_netMatchBrainlessSpectate;
 static std::string s_netMatchMode = "pvp";
 static std::string s_netMatchOwnershipPolicy = "team-owner";
 static bool s_netMatchServiceE2EEnteredEditor = false;
@@ -987,9 +991,26 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (!lastArg && currentArg == "-net-match-brainless-spectate") {
+			const std::string value = argValue[++i];
+			if (value != "0" && value != "1") {
+				std::cerr << "[net-match] -net-match-brainless-spectate requires 0 or 1" << std::endl;
+				return false;
+			}
+			s_netMatchBrainlessSpectate = value == "1";
+			continue;
+		}
+
 		if (currentArg == "-net-match-e2e-resync") {
 			s_netMatchResyncOnDesync = true;
 			++i;
+			continue;
+		}
+
+		// A measurement run that must play past a divergence instead of stopping on it opts out here.
+		// Never a default and never passed by a gate script: an unarmed detector is a silent desync.
+		if (!lastArg && currentArg == "-net-desync-check") {
+			s_netDesyncCheck = std::string(argValue[++i]) != "off";
 			continue;
 		}
 
@@ -1387,14 +1408,25 @@ static uint64_t MenuScriptNowMs() {
 	return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
+static void ConfigureMenuScriptInput(int argc, char** argv) {
+	const char* probe = std::getenv("CC_TEST_NET_UI_SCRIPT");
+	bool driving = probe && *probe;
+	for (int i = 1; i + 1 < argc; ++i) {
+		if (argv[i] && std::string_view(argv[i]) == "-menu-script" && argv[i + 1] && *argv[i + 1]) driving = true;
+	}
+	GUIInputWrapper::SetAutomationDriving(driving);
+}
+
 // A scripted-menu step failed: print it and exit non-zero so the automation harness can't false-green.
 static void MenuScriptFail(const std::string& reason) {
+	GUIInputWrapper::SetAutomationDriving(false);
 	std::cerr << "[menu-script] FAILED: " << reason << std::endl;
 	s_menuScriptFailed = true;
 	System::SetQuit(true);
 }
 
 static void CompleteMenuScript() {
+	GUIInputWrapper::SetAutomationDriving(false);
 	s_menuScriptComplete = true;
 	if (!s_menuScriptHoldE2ePause) System::SetQuit(true);
 }
@@ -1416,6 +1448,7 @@ static bool MenuScriptFileExists(const std::string& pattern) {
 
 // Menu scripts use real controls and the normal screenshot render path.
 void ProcessMenuScript() {
+	NetModerationGUIProbe::AfterMenuDraw();
 	static std::vector<std::string> steps;
 	static size_t stepIndex = 0;
 	static int waitFrames = 0;
@@ -1511,7 +1544,13 @@ void ProcessMenuScript() {
 	std::string cmd;
 	iss >> cmd;
 	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
-	if (cmd == "wait") {
+	if (MenuAutomation::Handles(cmd)) {
+		std::string observation;
+		const bool pass = MenuAutomation::Execute(pauseMenu ? pauseMenu->AutomationManager() : menu->AutomationManager(),
+			pauseMenu ? pauseMenu->AutomationActiveScreenName() : menu->AutomationActiveScreenName(), cmd, iss, observation);
+		std::cout << "[menu-script] " << cmd << " " << observation << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		if (!pass) return MenuScriptFail(cmd + " " + observation);
+	} else if (cmd == "wait") {
 		iss >> waitFrames;
 	} else if (cmd == "wait_ms") {
 		int milliseconds = 0;
@@ -1626,7 +1665,7 @@ void ProcessMenuScript() {
 	} else if (cmd == "assert_screen") {
 		std::string expected;
 		iss >> expected;
-		const std::string actual = pauseMenu ? "Pause" : menu->AutomationActiveScreenName();
+		const std::string actual = pauseMenu ? pauseMenu->AutomationActiveScreenName() : menu->AutomationActiveScreenName();
 		const bool pass = actual == expected;
 		std::cout << "[menu-script] assert_screen expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
 		if (!pass) { return MenuScriptFail("assert_screen expected " + expected + " got " + actual); }
@@ -2109,6 +2148,7 @@ static void DrawFrameWithPreviews() {
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts();
 	g_WindowMan.DrawPostProcessBuffer();
+	g_MenuMan.DrawLocalPauseMenu();
 	g_WindowMan.UploadFrame();
 	if (NetMatchScreenshotDue()) {
 		const uint64_t tick = ScenarioRunner::GetLockstepCompletedFrame();
@@ -2131,6 +2171,7 @@ static void UpdateResyncUI(uint32_t elapsedSeconds) {
 		g_MenuMan.ToggleNetworkPanel();
 	}
 	g_MenuMan.UpdateNetworkUI();
+	g_MenuMan.UpdateLocalPauseMenu();
 	g_WindowMan.ClearBackbuffer();
 	clear_to_color(g_FrameMan.GetBackBuffer32(), makeacol32(20, 22, 27, 255));
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
@@ -2142,6 +2183,7 @@ static void UpdateResyncUI(uint32_t elapsedSeconds) {
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts();
 	ScenarioRunner::NoteResyncOverlayFrame();
+	g_MenuMan.DrawLocalPauseMenu();
 	g_WindowMan.UploadFrame();
 	NetModerationGUIProbe::AfterDraw();
 	g_UInputMan.EndFrame();
@@ -3518,10 +3560,11 @@ void RunGameLoop() {
 					          << " scene=" << std::quoted(loadedScene ? loadedScene->GetModuleAndPresetName() : std::string()) << std::endl;
 				}
 			}
-			// Sample the sim hash on an interval during live lockstep for the runtime desync check. NOT under
-			// -tick-hashes recording (the offline gate is the check there); a real menu match has no -tick-hashes.
+			// Sample the sim hash on an interval during live lockstep for the runtime desync check. It runs
+			// under -tick-hashes too: an offline trace compare only reads the divergence after the run, so
+			// skipping it there left the live check dead in every two-peer harness arm.
 			constexpr uint64_t c_DesyncCheckIntervalTicks = 30;
-			const bool desyncSampleTick = ScenarioRunner::IsLockstepControllerSyncActive() && !s_recordTickHashes &&
+			const bool desyncSampleTick = s_netDesyncCheck && ScenarioRunner::IsLockstepControllerSyncActive() &&
 			                              (simTick % c_DesyncCheckIntervalTicks == 0);
 			const bool a7HashTick = NetA7Journal::Enabled() && ScenarioRunner::IsLockstepControllerSyncActive();
 			const bool hashThisTick = s_recordTickHashes || desyncSampleTick || a7HashTick;
@@ -3933,8 +3976,12 @@ void RunGameLoop() {
 				if (s_recordTickHashes && s_rbProbePhase != 3) {
 					g_MetricsCollector.RecordTickHash(tickResult, lockstepPausedTick);
 				}
-				if (desyncSampleTick) {
-					ScenarioRunner::SubmitLockstepChecksum(simTick, SimChecksum::SimGatedHash(tickResult));
+				// Key the exchange on the frame the sim applied, not on the local tick: after a resync
+				// relaunch a peer can tick past the round's stop, and a hash labelled with that tick
+				// would file two different states under one frame number.
+				if (const uint64_t appliedFrame = ScenarioRunner::GetLockstepAppliedFrame();
+				    desyncSampleTick && appliedFrame == simTick) {
+					ScenarioRunner::SubmitLockstepChecksum(appliedFrame, SimChecksum::SimGatedHash(tickResult));
 				}
 				if ((s_rbProbeAtTick > 0 || s_rbProbeFuzzCount > 0) && (ScenarioRunner::IsActive() || ScenarioRunner::IsLockstepReplayPlayback())) {
 					probeTickResult = tickResult;
@@ -4264,10 +4311,10 @@ void RunGameLoop() {
 			if (!ScenarioRunner::IsActive() && !s_netMatchServiceE2E && !s_recordTickHashes && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 				static uint64_t s_matchOverTick = UINT64_MAX;
 				const Activity* matchActivity = g_ActivityMan.GetActivity();
-				// -net-match-ticks ends a menu-launched match at an applied frame every peer reaches,
+				// -net-match-ticks ends a menu-launched match at a played frame every peer reaches,
 				// so an unattended run finishes one the same way a win condition does.
 				const bool cappedEnd = s_netLockstepTicks > 0 && ScenarioRunner::HasLockstepCoordinator() &&
-				                       ScenarioRunner::GetLockstepAppliedFrame() >= s_netLockstepTicks;
+				                       LockstepPlayedFrame() >= s_netLockstepTicks;
 				if ((matchActivity && matchActivity->IsOver()) || cappedEnd) {
 					const uint64_t nowTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 					if (s_matchOverTick == UINT64_MAX) {
@@ -4537,6 +4584,7 @@ void RunGameLoop() {
 			g_SceneMan.SetRenderDrawContext(true);
 			g_UInputMan.Update();
 			g_MenuMan.UpdateNetworkUI();
+			g_MenuMan.UpdateLocalPauseMenu();
 			g_ActivityMan.RenderUpdate();
 			g_UInputMan.EndFrame();
 			g_SceneMan.SetRenderDrawContext(false);
@@ -4807,6 +4855,7 @@ bool PrepareNetLockstepScenario(GnsTransport& transport, NetSession& session, Ne
 }
 
 std::string BuildControllerBoundaryJson();
+std::string BuildDesyncCheckJson();
 
 std::string BuildNetLockstepReportJson(const NetSession& session, const NetLockstepCoordinator& coordinator, const NetMatchRunner& runner, int scenarioExitCode, const std::string& setupError) {
 	const MetricsCollector::AggregatedRun run = g_MetricsCollector.GetCurrentRun();
@@ -4828,6 +4877,7 @@ std::string BuildNetLockstepReportJson(const NetSession& session, const NetLocks
 	out << "\"ownership_policy\":\"" << JsonEscape(NetMatchConfigUtil::OwnershipPolicyName(runner.GetMatchConfig().ownershipPolicy)) << "\",";
 	out << "\"input_delay_frames\":" << stats.inputDelayFrames << ",";
 	out << "\"controller_boundary\":" << BuildControllerBoundaryJson() << ",";
+	out << "\"desync_check\":" << BuildDesyncCheckJson() << ",";
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : ScenarioRunner::GetArgs().maxTicks) << ",";
 	out << "\"frames_sent\":" << stats.framePacketsSent << ",";
 	out << "\"frames_received\":" << stats.framePacketsReceived << ",";
@@ -4874,6 +4924,16 @@ std::string BuildControllerBoundaryJson() {
 	std::ostringstream out;
 	out << "{\"equip_commands\":" << stats.equipCommands << ",\"sound_commands\":" << stats.soundCommands << ",\"aim_intents\":" << stats.aimIntents
 	    << ",\"flip_intents\":" << stats.flipIntents << ",\"direct_writes\":" << stats.directWrites << "}";
+	return out.str();
+}
+
+// What the runtime desync check did this match. Zero submissions in a finished lockstep match means
+// the detector never ran, which every other number in the report would have hidden.
+std::string BuildDesyncCheckJson() {
+	const ScenarioRunner::LockstepChecksumCounters counters = ScenarioRunner::GetLockstepChecksumCounters();
+	std::ostringstream out;
+	out << "{\"submissions\":" << counters.submissions << ",\"sends\":" << counters.sends
+	    << ",\"compares\":" << counters.compares << ",\"mismatches\":" << counters.mismatches << "}";
 	return out.str();
 }
 
@@ -4962,6 +5022,7 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	    << ",\"events_retimed\":" << PreviewEventLedger::GetCounters().retimed
 	    << ",\"event_starts\":" << BuildPreviewEventStartsJson() << "},";
 	out << "\"controller_boundary\":" << BuildControllerBoundaryJson() << ",";
+	out << "\"desync_check\":" << BuildDesyncCheckJson() << ",";
 	out << "\"replay_recording\":{\"frames\":" << ScenarioRunner::GetLockstepReplayRecordFrames()
 	    << ",\"closed\":" << (ScenarioRunner::WasLockstepReplayRecordClosed() ? "true" : "false") << "},";
 	out << "\"setup_surface\":\"fixed-alpha-duel\",";
@@ -5205,6 +5266,7 @@ int RunNetMatchServiceE2E() {
 		NetActorOwnershipPolicy e2ePolicy;
 		request.ownershipPolicy = NetMatchConfigUtil::ParseOwnershipPolicy(s_netMatchOwnershipPolicy, e2ePolicy) ? e2ePolicy : NetActorOwnershipPolicy::TeamOwner;
 		request.inputDelayFrames = s_netLockstepInputDelay;
+		request.brainlessHumansSpectate = s_netMatchBrainlessSpectate;
 		request.peerCount = s_netMatchPeers;
 		NetMatchMode parsedMode;
 		if (NetMatchConfigUtil::ParseMode(s_netMatchMode, parsedMode)) {
@@ -5736,6 +5798,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-float-text-selftest") {
 			return FloatTextSelfTest::Run();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-settings-preferences-selftest") {
+			return SettingsMan::RunNetworkPreferencesSelfTest();
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-controller-frame-selftest") {
 			return ControllerFrameSelfTest::Run();
 		}
@@ -5907,6 +5972,7 @@ int main(int argc, char** argv) {
 	InstallRNGDrawTraceIfArmed();
 
 	TelemetryBundle::Initialize("unavailable");
+	ConfigureMenuScriptInput(argc, argv);
 	InitializeManagers();
 	ScenarioRunner::SetStallEventPoll(&PollSDLEvents);
 	// Same arming condition as the probe itself, so only a probe run pumps the panel from a stall.

@@ -4,6 +4,7 @@
 #include "GameActivity.h"
 #include "NetMatchService.h"
 #include "ScenarioRunner.h"
+#include "SettingsMan.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
 #include "UInputMan.h"
@@ -26,6 +27,21 @@
 using namespace RTE;
 
 namespace {
+	/// Screens shorter than this get the single-line strip instead of the box.
+	constexpr int c_CompactMaxHeight = 480;
+	/// The status box on a tall screen, and the rows the compact strip owns at the top of a short one.
+	constexpr int c_StatusBoxTop = 32, c_StatusBoxHeight = 76, c_StatusBoxWidth = 252, c_StatusBoxMargin = 8;
+	constexpr int c_StripBandBottom = 20;
+	/// The seats panel, and the gap it keeps from the screen edges.
+	constexpr int c_PanelWidth = 600, c_PanelHeight = 344, c_PanelGap = 4;
+
+	/// The panel's top row: centred, but under the status widget's band on a screen with the rows for both.
+	int PanelTop(int screenHeight) {
+		const int band = (screenHeight < c_CompactMaxHeight ? c_StripBandBottom : c_StatusBoxTop + c_StatusBoxHeight) + c_PanelGap;
+		const int lowest = std::max(0, screenHeight - c_PanelHeight - c_PanelGap);
+		return std::clamp((screenHeight - c_PanelHeight) / 2, std::min(band, lowest), lowest);
+	}
+
 	std::string DisplayName(std::string text) {
 		for (char& c: text) if (static_cast<unsigned char>(c) < 32) c = ' ';
 		return text;
@@ -85,9 +101,9 @@ NetModerationGUI::NetModerationGUI(AllegroScreen* screen) :
 	std::string fontName;
 	m_Controls->GetSkin()->GetValue("Label", "Font", &fontName);
 	m_LabelFont = m_Controls->GetSkin()->GetFont(fontName);
-	const int width = std::min(600, g_WindowMan.GetResX() - 12);
+	const int width = std::min(c_PanelWidth, g_WindowMan.GetResX() - 12);
 	m_Panel = dynamic_cast<GUICollectionBox*>(m_Controls->AddControl("NetworkSeats", "COLLECTIONBOX", nullptr,
-	    (g_WindowMan.GetResX() - width) / 2, (g_WindowMan.GetResY() - 344) / 2, width, 344));
+	    (g_WindowMan.GetResX() - width) / 2, PanelTop(g_WindowMan.GetResY()), width, c_PanelHeight));
 	m_Panel->SetDrawBackground(true);
 	m_Panel->SetDrawType(GUICollectionBox::Image);
 	auto label = [&](const std::string& name, int y, int height) {
@@ -255,28 +271,40 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	font->DrawAligned(&bitmap, 14, y + 6, text, GUIFont::Left, GUIFont::Top);
 }
 
+bool NetModerationGUI::MatchStatusWanted() const {
+	switch (g_SettingsMan.GetNetworkMatchStatusMode()) {
+		case SettingsMan::NetworkMatchStatusMode::Off: return false;
+		case SettingsMan::NetworkMatchStatusMode::Always: return true;
+		default: break;
+	}
+	// The countdown is still a pause state, so it must not blink the widget off.
+	bool active = m_Open || g_NetMatchService.IsMatchResyncing() || ScenarioRunner::IsLockstepPaused() || ScenarioRunner::GetLockstepResumeCountdown() > 0;
+	if (!active && ScenarioRunner::IsLockstepControllerSyncActive()) {
+		if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame()) {
+			active = true;
+		} else {
+			std::string holdWho;
+			uint32_t holdSeconds = 0;
+			active = ScenarioRunner::DescribeLockstepHoldPause(holdWho, holdSeconds);
+		}
+	}
+	const long long nowUs = g_TimerMan.GetAbsoluteTime();
+	if (active) {
+		m_AutoShowUntilUs = nowUs + 3000000;
+	}
+	return active || nowUs < m_AutoShowUntilUs;
+}
+
 void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
-	CreateOverlay();
 	BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
-	const int width = std::min(252, backbuffer->w - 16);
-	const int x = backbuffer->w - width - 8;
-	constexpr int y = 32;
-	m_NetStatusBox->SetVisible(true);
-	m_NetStatus->SetFont(font);
-	m_NetStatus->Resize(width - 12, backbuffer->h);
 	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
 		m_MatchDelayFrames = ScenarioRunner::GetLockstepLocalInputDelay();
 		m_BaseDelayFrames = ScenarioRunner::GetLockstepInputDelayFrames();
 	}
 	char metrics[128];
 	std::snprintf(metrics, sizeof(metrics), "D %u ticks / %.1f ms", static_cast<unsigned>(m_MatchDelayFrames), static_cast<double>(m_MatchDelayFrames) * 1000.0 / 60.0);
-	std::string text = std::string("NET STATUS  /  SEATS [F6]\n") + metrics;
-	if (m_MatchDelayFrames != m_BaseDelayFrames) {
-		text += " (base " + std::to_string(m_BaseDelayFrames) + ")";
-	}
 	const auto ping = g_NetMatchService.GetMatchPingMs();
-	text += "\nRTT " + (ping ? std::to_string(*ping) : "--") + " ms / " + (snapshot.isHost ? "max peer" : "host link");
 	// Sim updates against wall time over the last second, so a stalled or paused match reads its true pace
 	static long long s_paceMarkUs = 0;
 	static uint64_t s_paceMarkUpdates = 0;
@@ -294,41 +322,105 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 			s_paceMarkUpdates = paceUpdates;
 		}
 	}
-	std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", s_paceTps);
-	text += metrics;
 	std::string holdName;
 	uint32_t holdSeconds = 0;
-	bool waiting = false;
+	const bool resyncing = g_NetMatchService.IsMatchResyncing();
+	// The seats that still owe the synchronized setup editor a brain: the world is held while they place.
 	std::string placementNames;
 	int placed = 0, seats = 0;
 	const auto* setupActivity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
-	if (g_NetMatchService.IsMatchResyncing()) {
+	const bool placing = !resyncing && setupActivity && setupActivity->DescribeLockstepPlacementWait(placementNames, placed, seats);
+	const bool holdPause = !resyncing && !placing && ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds);
+	const bool missingFrames = !resyncing && !placing && !holdPause &&
+	    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame();
+	const bool paused = !resyncing && !placing && !holdPause && !missingFrames && ScenarioRunner::IsLockstepPaused();
+	const int countdown = paused ? ScenarioRunner::GetLockstepResumeCountdown() : 0;
+	const bool waiting = resyncing || placing || holdPause || missingFrames;
+	if (backbuffer->h < c_CompactMaxHeight) {
+		// The short-screen layout is one line in the gap between the funds block and the controller icon.
+		const int freeLeft = 152;
+		const int freeRight = backbuffer->w - 40;
+		const int maxTextWidth = freeRight - freeLeft - 14;
+		const std::string pingText = ping ? std::to_string(*ping) : "--";
+		char tail[96];
+		std::snprintf(tail, sizeof(tail), " / D %u / RTT %s ms / PACE %.1f tps", static_cast<unsigned>(m_MatchDelayFrames), pingText.c_str(), s_paceTps);
+		m_StripText = "NET [F6] / ";
+		if (resyncing) {
+			m_StripText += "RESYNCING MATCH";
+		} else if (placing) {
+			const std::string count = " / " + std::to_string(placed) + " of " + std::to_string(seats);
+			const int room = maxTextWidth - font->CalculateWidth(m_StripText + "WAITING FOR  TO PLACE" + count + tail);
+			m_StripText += placementNames.empty() ? "ALL BRAINS PLACED" : "WAITING FOR " + FitLine(font, placementNames, room) + " TO PLACE";
+			m_StripText += count;
+		} else if (holdPause) {
+			const int room = maxTextWidth - font->CalculateWidth(m_StripText + "WAITING FOR  " + tail) - font->CalculateWidth(" (999 s)");
+			m_StripText += "WAITING FOR " + FitLine(font, holdName.empty() ? "a player" : holdName, room) + " (" + std::to_string(holdSeconds) + " s)";
+		} else if (missingFrames) {
+			m_StripText += "WAITING FOR FRAMES";
+		} else if (paused) {
+			m_StripText += countdown > 0 ? "RESUMING IN " + std::to_string((countdown + 59) / 60) + " S" : "PAUSED / P RESUMES";
+		} else {
+			m_StripText += "LIVE";
+		}
+		m_StripText += tail;
+		if (font->CalculateWidth(m_StripText) > maxTextWidth) {
+			m_StripText = FitLine(font, m_StripText, maxTextWidth);
+		}
+		const int height = font->GetFontHeight() + 7;
+		const int width = std::min(freeRight - freeLeft, font->CalculateWidth(m_StripText) + 14);
+		const int x = freeLeft + (freeRight - freeLeft - width) / 2;
+		constexpr int y = 2;
+		m_NetStatusBox->Move(x, y);
+		if (m_NetStatusBox->GetWidth() != width || m_NetStatusBox->GetHeight() != height) m_NetStatusBox->Resize(width, height);
+		m_NetStatusBox->SetVisible(true);
+		m_NetStatus->SetFont(font);
+		// GUILabel::Move is in screen coordinates, so the inset is measured from the strip itself.
+		m_NetStatus->Move(x + 7, y + 4);
+		m_NetStatus->Resize(width - 14, height - 6);
+		m_NetStatus->SetText(m_StripText);
+		AllegroBitmap bitmap(backbuffer);
+		rectfill(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(20, 22, 27, 255));
+		rect(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(59, 65, 83, 255));
+		hline(backbuffer, x + 1, y + 1, x + width - 2, waiting ? makeacol32(170, 120, 0, 255) : makeacol32(108, 118, 168, 255));
+		m_NetStatus->Draw(&bitmap, false);
+		return;
+	}
+	const int width = std::min(c_StatusBoxWidth, backbuffer->w - 2 * c_StatusBoxMargin);
+	const int x = backbuffer->w - width - c_StatusBoxMargin;
+	constexpr int y = c_StatusBoxTop;
+	m_NetStatusBox->SetVisible(true);
+	m_NetStatus->SetFont(font);
+	// Measured at the final width, so the height below is the height these rows really need.
+	m_NetStatus->Resize(width - 12, backbuffer->h);
+	std::string text = std::string("NET STATUS  /  SEATS [F6]\n") + metrics;
+	if (m_MatchDelayFrames != m_BaseDelayFrames) {
+		text += " (base " + std::to_string(m_BaseDelayFrames) + ")";
+	}
+	text += "\nRTT " + (ping ? std::to_string(*ping) : "--") + " ms / " + (snapshot.isHost ? "max peer" : "host link");
+	std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", s_paceTps);
+	text += metrics;
+	if (resyncing) {
 		text += "\nRESYNCING MATCH";
-		waiting = true;
-	} else if (setupActivity && setupActivity->DescribeLockstepPlacementWait(placementNames, placed, seats)) {
-		// The world is held while every seat places its brain, so say who is still being waited on.
+	} else if (placing) {
 		const int room = width - 12 - font->CalculateWidth("Waiting for  to place their brains");
 		text += placementNames.empty() ? "\nAll brains placed" : "\nWaiting for " + FitLine(font, placementNames, room) + " to place their brains";
 		text += "\n" + std::to_string(placed) + " of " + std::to_string(seats) + " placed";
-		waiting = true;
-	} else if (ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds)) {
+	} else if (holdPause) {
 		const int room = width - 12 - font->CalculateWidth("Waiting for  to reconnect");
 		text += "\nWaiting for " + FitLine(font, holdName.empty() ? "a player" : holdName, room) + " to reconnect\n" + std::to_string(holdSeconds) + " s left";
-		waiting = true;
-	} else if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame()) {
+	} else if (missingFrames) {
 		text += "\nWAITING FOR FRAMES\n" + FitLine(font, ScenarioRunner::GetLockstepMissingPeers(), width - 12);
-		waiting = true;
-	} else if (ScenarioRunner::IsLockstepPaused()) {
-		const int countdown = ScenarioRunner::GetLockstepResumeCountdown();
+	} else if (paused) {
 		text += countdown > 0 ? "\nResuming in " + std::to_string((countdown + 59) / 60) + " s" : "\nPAUSED / P to resume";
 	} else {
 		text += "\nLIVE";
 	}
 	m_NetStatus->SetText(text);
-	// The strip grows for a state that needs more rows than the four metrics ones.
-	const int height = std::max(76, m_NetStatus->GetTextHeight() + 12);
+	// The box grows for a state that needs more rows than the metric ones; those keep the stock height.
+	const int height = std::max(c_StatusBoxHeight, m_NetStatus->GetTextHeight() + 12);
 	m_NetStatusBox->Move(x, y);
 	if (m_NetStatusBox->GetWidth() != width || m_NetStatusBox->GetHeight() != height) m_NetStatusBox->Resize(width, height);
+	m_NetStatus->Move(x + 6, y + 6);
 	m_NetStatus->Resize(width - 12, height - 12);
 	AllegroBitmap bitmap(backbuffer);
 	rectfill(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(20, 22, 27, 255));
@@ -383,16 +475,20 @@ void NetModerationGUI::Draw() {
 	if (snapshot.serviceState != "Running" && snapshot.serviceState != "Starting" && snapshot.serviceState != "ReadyToLaunch" && !m_Open) return;
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
-	if (ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.IsMatchResyncing()) {
-		DrawMatchStatus(snapshot);
-		m_NetStatus->SetVisible(true);
+	const bool inMatch = ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.IsMatchResyncing();
+	if (inMatch) {
+		CreateOverlay();
 	} else {
 		DrawRoster(snapshot);
 	}
-	if (m_Open) {
-		m_Controls->Draw();
-		m_Controls->DrawMouse();
+	if (m_Open) m_Controls->Draw();
+	// Opening the panel is one of the status widget's triggers, so the status draws over it: a screen too
+	// short for both still owes the player the reading it just asked for.
+	if (inMatch && MatchStatusWanted()) {
+		DrawMatchStatus(snapshot);
+		m_NetStatus->SetVisible(true);
 	}
+	if (m_Open) m_Controls->DrawMouse();
 	t_simRNGOverride = previousRNG;
 }
 

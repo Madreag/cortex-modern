@@ -1322,10 +1322,35 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 	preparedGraph = nil
 	local baseline = _ScriptGraphBaseline or { globals = {}, loaded = {} }
 	for name, value in pairs(baseline.values or {}) do rawset(_G, name, value) end
+	local wiped = {}
 	for _, saved in ipairs(baseline.tables or {}) do
-		for key in pairs(saved.object) do if carriesKey(saved, key) then rawset(saved.object, key, nil) end end
+		for key in pairs(saved.object) do
+			if carriesKey(saved, key) then
+				-- Only a key the baseline never had goes missing here; the rest come back below.
+				if saved.entries[key] == nil then
+					local gone = wiped[saved.object]
+					if not gone then gone = {} wiped[saved.object] = gone end
+					gone[key] = rawget(saved.object, key)
+				end
+				rawset(saved.object, key, nil)
+			end
+		end
 		for key, value in pairs(saved.entries) do rawset(saved.object, key, value) end
 		setmetatable(saved.object, saved.meta)
+	end
+	-- A key a script added to a library table is named by path, and the wipe above has just taken it.
+	local function wipedPath(segments)
+		local value = _G
+		for _, segment in ipairs(segments) do
+			if type(value) ~= "table" and type(value) ~= "userdata" then return nil end
+			local found = value[segment]
+			if found == nil then
+				local gone = wiped[value]
+				found = gone and gone[segment]
+			end
+			value = found
+		end
+		return value
 	end
 	local function fail(message) problems[#problems + 1] = message end
 	local note = fail
@@ -1337,6 +1362,7 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 		elseif t == "ref" then return objects[token.id]
 		elseif t == "path" then
 			local value = resolvePath(token.segments)
+			if value == nil then value = wipedPath(token.segments) end
 			if value == nil then note("the named value " .. pathText(token.segments) .. " is missing") end
 			return value
 		elseif t == "entity" then
@@ -6162,6 +6188,54 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (previewLateScriptLoadLeavesStatesAsFound ? "PASS" : "FAIL") << " preview_late_script_load_leaves_states_as_found" << std::endl;
 	checkpointValues = previewLateScriptLoadLeavesStatesAsFound && checkpointValues;
+	// A mod may add a key to a library table, by require("table.clear") or by a plain string.trim = f. The graph
+	// names such a value by its path, which is the very key the restore's wipe takes, so a set-aside must keep it.
+	bool addedLibraryKeyReinstates = false;
+	std::string addedLibraryKeyDetail;
+	{
+		const auto readFlag = [this](const char* name) {
+			lua_getglobal(m_State, name);
+			const bool set = lua_toboolean(m_State, -1) != 0;
+			lua_pop(m_State, 1);
+			return set;
+		};
+		RunScriptString(
+		    "local clear = require('table.clear');"
+		    "string.f69probe = function() return 69 end;"
+		    "_AddedLibraryKeyStaged = type(rawget(table, 'clear')) == 'function' and type(rawget(string, 'f69probe')) == 'function'");
+		const bool staged = readFlag("_AddedLibraryKeyStaged");
+		RunScriptString("_AddedLibraryKeyStaged = nil");
+		std::vector<std::string> before;
+		std::vector<std::string> after;
+		std::vector<std::string> graphProblems;
+		MovableMan::WorldSetAside aside;
+		const bool captured = staged && g_MovableMan.SerializeScriptGraphs(before, graphProblems);
+		const bool settled = captured && g_MovableMan.SetAsideWorld(aside, false) && g_MovableMan.ReinstateWorld(aside);
+		const bool recaptured = settled && g_MovableMan.SerializeScriptGraphs(after, graphProblems);
+		const bool graphsEqual = recaptured && after == before;
+		RunScriptString(
+		    "local probe = { 1, 2 };"
+		    "local clear = rawget(table, 'clear');"
+		    "if type(clear) == 'function' then pcall(clear, probe) end;"
+		    "_AddedLibraryKeyClear = type(clear) == 'function' and next(probe) == nil;"
+		    "_AddedLibraryKeyProbe = type(rawget(string, 'f69probe')) == 'function' and string.f69probe() == 69");
+		const bool clearKept = readFlag("_AddedLibraryKeyClear");
+		const bool probeKept = readFlag("_AddedLibraryKeyProbe");
+		addedLibraryKeyReinstates = staged && settled && clearKept && probeKept && graphsEqual;
+		std::ostringstream detail;
+		detail << "staged=" << staged << " settled=" << settled << " graphs_equal=" << graphsEqual
+		       << " table.clear=" << (clearKept ? "kept" : "missing") << " string.f69probe=" << (probeKept ? "kept" : "missing")
+		       << " graph_problems=" << graphProblems.size();
+		addedLibraryKeyDetail = detail.str();
+		// The keys are this arm's own, so the libraries reach whatever runs next as it found them.
+		RunScriptString(
+		    "rawset(table, 'clear', nil); rawset(string, 'f69probe', nil);"
+		    "package.loaded['table.clear'] = nil; _RequiredPackages['table.clear'] = nil;"
+		    "_AddedLibraryKeyClear = nil; _AddedLibraryKeyProbe = nil");
+		g_LuaMan.CollectGarbageForCheckpoint();
+	}
+	std::cout << "[script-graph-selftest] " << (addedLibraryKeyReinstates ? "PASS" : "FAIL") << " graph_reinstates_added_library_key " << addedLibraryKeyDetail << std::endl;
+	checkpointValues = addedLibraryKeyReinstates && checkpointValues;
 	const std::string report = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
 	lua_pop(L, 1);
 	std::cout << report << std::endl;
