@@ -237,7 +237,7 @@ def menu_script(who, port, name=None):
     text = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name or who}\n"
     if who == "Host":
         text += ("activate ButtonMultiplayerHostGame\nwait 10\n"
-                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\nsettext TextHostInputDelay 3\n"
+                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                  "activate ButtonMultiplayerCreate\nwait_connected 2\nwait_remote_ready\n"
                  "wait_all_ready\nactivate ButtonMultiplayerStart\n")
     else:
@@ -406,7 +406,9 @@ def run_pair(repo, root, port, size, arm, mode, timeout, expected_pin):
             runs[who] = make_run(repo, flags, root / who, timeout,
                                  env={"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)})
             values = {"ResolutionX": size[0], "ResolutionY": size[1],
-                      "NetworkMatchStatusMode": MODE_INI[mode]}
+                      "NetworkMatchStatusMode": MODE_INI[mode],
+                      # The delay box is read-only under the auto policy; the floor is a setting.
+                      "NetworkInputDelayFrames": 3}
             set_settings(runs[who].cwd, values)
 
         def drive(who):

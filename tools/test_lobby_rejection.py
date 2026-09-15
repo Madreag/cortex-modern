@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 
 from compare_sim_traces import strict_compare
-from run_sim_test import make_run
+from run_sim_test import make_run, seed_settings
 from test_lobby_lifecycle import wait_for_log
 
 
@@ -26,7 +26,7 @@ def main():
     def start(name, host, suffix, extra=(), trace=False):
         script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
         if host:
-            script += f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {options.port}\nsettext TextHostPlayers 2\nsettext TextHostInputDelay 3\nactivate ButtonMultiplayerCreate\n"
+            script += f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {options.port}\nsettext TextHostPlayers 2\nactivate ButtonMultiplayerCreate\n"
         else:
             script += f"activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {options.port}\nactivate ButtonMultiplayerConnect\n"
         path = root / f"{name}.txt"
@@ -35,6 +35,8 @@ def main():
         if trace:
             args += ["-tick-hashes", "-max-ticks", 180, "-out", root / name / "trace.json"]
         run = make_run(options.repo, args, root / name, 150)
+        # The delay box is read-only under the auto policy; the floor the host sends is a setting.
+        seed_settings(run, {"NetworkInputDelayFrames": 3})
         runs[name] = run.start()
         return run
 

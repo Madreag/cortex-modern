@@ -24,7 +24,7 @@ import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_sim_test import make_run  # noqa: E402
+from run_sim_test import make_run, seed_settings  # noqa: E402
 from compare_sim_traces import strict_compare  # noqa: E402
 
 CHAT_LINE = re.compile(r"^\[chat\] tick=(\d+) from=(\d+) scope=(all|team) text=(.*)$")
@@ -79,6 +79,8 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, scripts: dict) -> di
         script_paths[who].write_text(text, encoding="utf-8")
     runs = {who: make_run(repo, peer_args(root, who, port, ticks, script_paths.get(who)), root / who, 300)
             for who in ("host", "client")}
+    # The delay box is read-only under the auto policy; the floor the host sends is a setting.
+    seed_settings(runs["host"], {"NetworkInputDelayFrames": 3})
     records = {}
 
     def drive(who: str) -> None:
@@ -116,7 +118,7 @@ def shots_menu_script(who: str, port: int, res_tag: str) -> str:
     head = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {who}\n"
     if who == "Host":
         return (head + "activate ButtonMultiplayerHostGame\nwait 10\n"
-                f"settext TextHostPort {port}\nsettext TextHostPlayers 2\nsettext TextHostInputDelay 3\n"
+                f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait_connected 2\n"
                 "chat all lobby hello at minimum viewport\nwait 15\n"
                 "chat team for my team only\nwait 15\n"
@@ -157,7 +159,7 @@ def game_version(repo: Path) -> str:
 def mismatch_menu_script(port: int, res_tag: str) -> str:
     return (f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName Host\n"
             f"activate ButtonMultiplayerHostGame\nwait 10\n"
-            f"settext TextHostPort {port}\nsettext TextHostPlayers 2\nsettext TextHostInputDelay 3\n"
+            f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
             f"activate ButtonMultiplayerCreate\n"
             f"wait_error could not join\n"
             f"chat all lobby line beside the error\nwait 10\n"
@@ -198,6 +200,7 @@ def run_mismatch_shots(repo: Path, root: Path, port: int) -> dict:
                 "joiner": make_run(repo, ["-menu-script", str(joiner_script)], arm / "joiner", 240),
             }
             set_resolution(runs["host"].cwd, *res)
+            seed_settings(runs["host"], {"NetworkInputDelayFrames": 3})
             for name in LONG_MODULES:
                 stage_module(runs["joiner"], name, name[:-4], version)
             records = {}
