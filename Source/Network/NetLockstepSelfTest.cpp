@@ -2188,8 +2188,17 @@ namespace RTE {
 			if (!gib || !(*gib == NetGameAIGib{ownerUID, static_cast<int64_t>(ownerVictim->GetUniqueID()), 0})) {
 				return finish("the AI pass did not send its gib as a synced command");
 			}
-			if (g_MovableMan.GetControllerBoundaryStats().directWrites != reportsBefore + 1) {
-				return finish("an AI pass gib was not reported at the boundary");
+			if (g_MovableMan.GetControllerBoundaryStats().directWrites != reportsBefore) {
+				return finish("a gib the wire carries was counted as a direct write");
+			}
+			// A gib of something the world does not hold cannot be named on the wire: it stays local and says so.
+			MOSRotating* unheld = new MOSRotating();
+			g_CurrentAIActor = ownerView;
+			unheld->GibThisFromScript();
+			g_CurrentAIActor = nullptr;
+			const bool unheldGibbed = unheld->IsSetToDelete();
+			if (!unheldGibbed || g_MovableMan.GetControllerBoundaryStats().directWrites != reportsBefore + 1) {
+				return finish("a gib the wire cannot name was not made and reported where it was asked for");
 			}
 			// Every peer, the producer included, gibs at the committed tick.
 			ownerVictim->GibThis();
