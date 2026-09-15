@@ -20,6 +20,7 @@
 
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <filesystem>
 #include <string>
@@ -82,6 +83,45 @@ namespace {
 			}
 		}
 		return latest;
+	}
+
+	// Empty disables the directory; a configured one names its scheme so a typo cannot
+	// silently send the install key somewhere plain-http.
+	bool ValidDirectoryUrl(const std::string& url) {
+		if (url.empty()) {
+			return true;
+		}
+		for (const char* scheme: {"http://", "https://"}) {
+			const size_t schemeLength = std::string(scheme).size();
+			if (url.compare(0, schemeLength, scheme) == 0) {
+				return url.size() > schemeLength;
+			}
+		}
+		return false;
+	}
+
+	// A pin is a SHA-256 hex digest; pasted values may carry colons or spaces, which are
+	// not part of the pin. Anything left that is not exactly 64 hex characters is refused.
+	bool NormalizeCertPin(const std::string& raw, std::string& normalized) {
+		normalized.clear();
+		for (unsigned char character: raw) {
+			if (character == ':' || std::isspace(character)) {
+				continue;
+			}
+			normalized += static_cast<char>(std::tolower(character));
+		}
+		if (normalized.empty()) {
+			return true;
+		}
+		if (normalized.size() != 64) {
+			return false;
+		}
+		for (char character: normalized) {
+			if (!std::isxdigit(static_cast<unsigned char>(character))) {
+				return false;
+			}
+		}
+		return true;
 	}
 } // namespace
 
@@ -151,6 +191,11 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_RecordReplaysCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkRecordReplays"));
 	m_FilesMessage = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetFilesMessage"));
 
+	m_DirUrlTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkDirUrl"));
+	m_DirPinTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkDirPin"));
+	m_DirStatusLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetDirStatus"));
+	m_InternetError = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetInternetError"));
+
 	const auto rowTop = [](GUIControl* control) {
 		int x = 0, y = 0, width = 0, height = 0;
 		control->GetControlRect(&x, &y, &width, &height);
@@ -193,6 +238,8 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_OfferRejoinCheckbox->SetCheck(g_SettingsMan.GetNetworkOfferStoredRejoin());
 	m_DiagDirTextbox->SetText(g_SettingsMan.GetNetworkDiagnosticsDirectory());
 	m_RecordReplaysCheckbox->SetCheck(g_SettingsMan.GetNetworkRecordReplays());
+	m_DirUrlTextbox->SetText(g_SettingsMan.GetSessionDirectoryUrl());
+	m_DirPinTextbox->SetText(g_SettingsMan.GetSessionDirectoryCertSha256());
 	UpdateDelayPolicyRow();
 	UpdateStatusLines();
 }
@@ -208,11 +255,28 @@ void SettingsNetworkGUI::ApplyTextboxes() {
 	const std::string diagDir = m_DiagDirTextbox->GetText();
 	g_SettingsMan.SetNetworkDiagnosticsDirectory(diagDir);
 	const bool diagDirRefused = g_SettingsMan.GetNetworkDiagnosticsDirectory() != diagDir;
+
+	// Each box commits only when its own value passes; a refused value keeps the stored
+	// setting and the box reverts to it through ShowSavedValues.
+	std::string internetError;
+	if (ValidDirectoryUrl(m_DirUrlTextbox->GetText())) {
+		g_SettingsMan.SetSessionDirectoryUrl(m_DirUrlTextbox->GetText());
+	} else {
+		internetError = "Session directory must start with http:// or https://.";
+	}
+	std::string pin;
+	if (NormalizeCertPin(m_DirPinTextbox->GetText(), pin)) {
+		g_SettingsMan.SetSessionDirectoryCertSha256(pin);
+	} else {
+		internetError = "Certificate pin must be 64 hexadecimal characters.";
+	}
+
 	// A refused value never stays on screen: the settings are what the page states.
 	ShowSavedValues();
 	if (diagDirRefused) {
 		m_FilesMessage->SetText("Diagnostics folder refused: no control characters allowed.");
 	}
+	m_InternetError->SetText(internetError);
 	m_NetworkSettingsBox->SetFocus();
 }
 
@@ -244,6 +308,7 @@ void SettingsNetworkGUI::SetActivePage(Page page) {
 		m_PageTabs[index]->SetCheck(index == static_cast<int>(page));
 	}
 	m_RecoveryError->SetText("");
+	m_InternetError->SetText("");
 	UpdateStatusLines();
 }
 
@@ -277,6 +342,8 @@ void SettingsNetworkGUI::UpdateStatusLines() {
 		const std::string latest = LatestFileName(EffectiveTelemetryDirectory(), ".zip");
 		m_FilesMessage->SetText(latest.empty() ? "No diagnostics saved yet." : "Latest: " + latest);
 	}
+
+	m_DirStatusLabel->SetText(g_SettingsMan.GetSessionDirectoryUrl().empty() ? "Not configured" : "Configured");
 }
 
 void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
@@ -361,7 +428,7 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		g_SettingsMan.SetNetworkOfferStoredRejoin(m_OfferRejoinCheckbox->GetCheck());
 	} else if (guiEvent.GetControl() == m_RecordReplaysCheckbox) {
 		g_SettingsMan.SetNetworkRecordReplays(m_RecordReplaysCheckbox->GetCheck());
-	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_FixedDelayTextbox || guiEvent.GetControl() == m_DiagDirTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
+	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_FixedDelayTextbox || guiEvent.GetControl() == m_DiagDirTextbox || guiEvent.GetControl() == m_DirUrlTextbox || guiEvent.GetControl() == m_DirPinTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
 		ApplyTextboxes();
 		// Clicking off a focused text box must commit it too, otherwise it keeps the keyboard.
 	} else if (guiEvent.GetMsg() == GUICollectionBox::Clicked &&
