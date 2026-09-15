@@ -147,7 +147,7 @@ def load_harness(out: Path, port: int):
     return harness
 
 
-def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float) -> dict:
+def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float, sim_dump: str | None = None) -> dict:
     """Two peers on the stock activity; the fixture destroys every human brain at sim second 5."""
     harness = load_harness(out, port)
     lane = {
@@ -177,6 +177,11 @@ def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float) -> 
     def prepare(*positional, **keywords):
         run = original_run(*positional, **keywords)
         stage_user_module(Path(run.cwd), local_setting, arm_trace=False)
+        if sim_dump:
+            # Per-MO forensics for both peers; recorded in launch.json so the env difference is visible.
+            run.env["CC_SIM_DUMP"] = sim_dump
+            run.record["env_set"]["CC_SIM_DUMP"] = sim_dump
+            run._save()
         return run
 
     harness.run_isolated = prepare
@@ -289,6 +294,8 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=420)
     parser.add_argument("--kill-ms", type=int, default=KILL_MS,
                         help="sim time of the brain kill; 0 is the control arm where nobody dies")
+    parser.add_argument("--sim-dump", default=None,
+                        help="CC_SIM_DUMP=<from>:<to> for both net peers; forensics only, no oracle effect")
     args = parser.parse_args()
     if args.port not in PORT_RANGE:
         parser.error(f"port is outside {PORT_RANGE.start}..{PORT_RANGE.stop - 1}")
@@ -302,11 +309,11 @@ def main() -> int:
     manifest = {"stamp": stamp(), "arm": args.arm, "port": args.port, "ticks": args.ticks,
                 "repo": str(REPO), "exe_sha256": sha256(REPO / "Cortex Command.exe"),
                 "driver_sha256": sha256(__file__), "fixture_sha256": sha256(FIXTURE),
-                "kill_ms": KILL_MS}
+                "kill_ms": KILL_MS, "sim_dump": args.sim_dump}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     if args.arm.startswith("net_"):
-        result = net_arm(out, args.port, args.arm == "net_rule_on", args.ticks, args.timeout)
+        result = net_arm(out, args.port, args.arm == "net_rule_on", args.ticks, args.timeout, args.sim_dump)
         passed = bool(result.get("pass", True)) and result.get("spectate_pass", False)
     elif args.arm == "sp_view_is_local":
         plain = sp_arm(out / "plain", True, False, args.ticks, args.timeout)
