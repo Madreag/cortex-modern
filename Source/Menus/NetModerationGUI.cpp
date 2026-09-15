@@ -407,7 +407,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		const int maxTextWidth = freeRight - freeLeft - 14;
 		const std::string pingText = ping ? std::to_string(*ping) : "--";
 		char tail[96];
-		std::snprintf(tail, sizeof(tail), " / D %u / RTT %s ms / PACE %.1f tps", static_cast<unsigned>(m_MatchDelayFrames), pingText.c_str(), s_paceTps);
+		std::snprintf(tail, sizeof(tail), " / delay %u / RTT %s ms / PACE %.1f tps", static_cast<unsigned>(m_MatchDelayFrames), pingText.c_str(), s_paceTps);
 		auto compose = [&](const std::string& metrics, bool shortenNames) {
 			std::string line = "NET [F6] / ";
 			if (resyncing) {
