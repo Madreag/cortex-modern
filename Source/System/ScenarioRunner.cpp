@@ -1859,15 +1859,18 @@ namespace RTE {
 				const std::string missing = s_LockstepCoordinator->DescribeMissingPeers();
 				if (!stalled) {
 					stalled = true;
-					stalledOnHold = holdPause;
-					if (holdPause) {
-						const std::string who = holdName.empty() ? "a player" : holdName;
-						std::cout << "[net-match] match paused waiting for " << who
-						          << " (" << holdSeconds << "s left, tick " << tick << ")" << std::endl;
-						PushNetUiToast("paused", "Match paused: waiting for " + who + " to return");
-					} else {
+					if (!holdPause) {
 						std::cout << "[net-match] waiting on peer frames (tick " << tick << (missing.empty() ? "" : ", " + missing) << ")" << std::endl;
 					}
+				}
+				// The seat hold engages seconds after the drop the stall began with, so the wait banner
+				// follows the hold instead of only the moment the stall was first noticed.
+				if (holdPause && !stalledOnHold) {
+					stalledOnHold = true;
+					const std::string who = holdName.empty() ? "a player" : holdName;
+					std::cout << "[net-match] match paused waiting for " << who
+					          << " (" << holdSeconds << "s left, tick " << tick << ")" << std::endl;
+					PushNetUiToast("paused", "Match paused: waiting for " + who + " to return (" + std::to_string(holdSeconds) + "s left)");
 				}
 				if (s_LockstepStallOverlayEnabled || s_LockstepStallUiProbeArmed) {
 					PumpLockstepStallUI();
