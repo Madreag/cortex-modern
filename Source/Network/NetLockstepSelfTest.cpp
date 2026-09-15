@@ -2489,6 +2489,8 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		bool TestAnOwnedWriterMayWriteAnotherOwnersActor(std::string* error);
+
 		// One build has to show every one of these reds at once, so they report per arm instead of
 		// short-circuiting the suite at the first one.
 		bool RunAIOffWireArms(std::string* error) {
@@ -2498,7 +2500,8 @@ namespace RTE {
 			                      Arm{"ai move target", &TestAIMoveTargetCrossesTheWire},
 			                      Arm{"ai gib", &TestAIGibCrossesTheWire},
 			                      Arm{"ai alarm point", &TestAIAlarmPointCrossesTheWire},
-			                      Arm{"ai rocket hatch", &TestAIRocketHatchCrossesTheWire}}) {
+			                      Arm{"ai rocket hatch", &TestAIRocketHatchCrossesTheWire},
+			                      Arm{"owned writer", &TestAnOwnedWriterMayWriteAnotherOwnersActor}}) {
 				std::string armError;
 				if (!arm.second(&armError)) {
 					std::cerr << "[net-lockstep-selftest] FAIL: " << arm.first << ": " << armError << std::endl;
@@ -11766,7 +11769,6 @@ namespace RTE {
 		    !TestAIModeCrossesTheWire(&error) ||
 		    !RunAIOffWireArms(&error) ||
 		    !TestHostRunCpuActorOnAHumanTeamPopsItsWaypoint(&error) ||
-		    !TestAnOwnedWriterMayWriteAnotherOwnersActor(&error) ||
 		    !TestAStrangerMayNotWriteAQueue(&error) ||
 		    !TestPathUpdateStaysArmedWhileWaypointAddIsInFlight(&error) ||
 		    !TestCoordinatorOwedFrameRetryEndsWithTheRound(&error) ||
