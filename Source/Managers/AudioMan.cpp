@@ -1234,6 +1234,7 @@ void AudioMan::NoteCarriedSoundIdentity(uint64_t identity) {
 }
 
 void AudioMan::RememberCarriedSoundIdentities(std::unordered_set<uint64_t> carried) {
+	std::lock_guard lock(m_CheckpointRegistryMutex);
 	m_LastCarriedSoundIdentities = std::move(carried);
 }
 
@@ -1924,7 +1925,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		for (const auto& [identity, voice]: m_PlayingVoices) if (voice.owner) ownerChannels.try_emplace(voice.owner);
 		std::map<int, const AudioCheckpoint::Voice*> descriptions;
 		std::map<int, FMOD::Channel*> backendCandidates;
-		if (m_RestoredSoundRegistryActive) RefreshRestoredManagerIdentities();
+		if (RestoredSoundRegistryActive()) RefreshRestoredManagerIdentities();
 		for (const auto& voice: state.voices) {
 			SoundContainer* owner = voice.owner ? ResolveCheckpointVoiceOwner(voice.owner) : nullptr;
 			if (voice.owner && !owner) {
