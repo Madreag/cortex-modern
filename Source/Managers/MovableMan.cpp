@@ -482,17 +482,6 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				std::cout << line << std::endl;
 				continue;
 			}
-		} else if (const NetGameAIScriptMessage* message = std::get_if<NetGameAIScriptMessage>(&command.payload)) {
-			// An AI pass's message and gib are authorized by their writer, like the AI orders they sit beside.
-			if (!ScenarioRunner::IsLockstepAIWriteAuthorized(command.senderPeerId, message->team, message->writerUID, message->writerUID)) {
-				g_ConsoleMan.PrintString("ERROR: Rejected an AIScriptMessage command from a peer that does not drive actor " + std::to_string(message->writerUID));
-				continue;
-			}
-		} else if (const NetGameAIGib* gibCommand = std::get_if<NetGameAIGib>(&command.payload)) {
-			if (!ScenarioRunner::IsLockstepAIWriteAuthorized(command.senderPeerId, gibCommand->team, gibCommand->writerUID, gibCommand->writerUID)) {
-				g_ConsoleMan.PrintString("ERROR: Rejected an AIGib command from a peer that does not drive actor " + std::to_string(gibCommand->writerUID));
-				continue;
-			}
 		} else if (!ScenarioRunner::IsLockstepTeamCommandSender(commandTeam, command.senderPeerId)) {
 			g_ConsoleMan.PrintString("ERROR: Rejected a " + std::string(NetGameCommandTypeName(NetGameCommandTypeOf(command.payload))) + " command from a peer that does not control team " + std::to_string(commandTeam));
 			continue;

@@ -1307,15 +1307,6 @@ namespace RTE {
 				if (!IsLockstepAIOrderAuthorized(sender, *order)) {
 					return;
 				}
-			} else if (const NetGameAIScriptMessage* message = std::get_if<NetGameAIScriptMessage>(&command.payload)) {
-				// The writer is the authority for a message its pass sent, exactly as for an AI order.
-				if (!IsLockstepAIWriteAuthorized(sender, message->team, message->writerUID, message->writerUID)) {
-					return;
-				}
-			} else if (const NetGameAIGib* gib = std::get_if<NetGameAIGib>(&command.payload)) {
-				if (!IsLockstepAIWriteAuthorized(sender, gib->team, gib->writerUID, gib->writerUID)) {
-					return;
-				}
 			} else if (!IsLockstepTeamCommandSender(NetGameCommandTeam(command.payload), sender)) {
 				return;
 			}
