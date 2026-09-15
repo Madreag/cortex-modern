@@ -240,10 +240,10 @@ struct Voice {
 		try { Voice value; CheckpointReader archive(text, CheckpointVersion(text)); value.Fields(archive); archive.Finish(); if (value.identity <= 0 || value.path.empty() || value.bus < 0 || value.bus > 2 || value.priority < 0 || value.priority > 256 || value.loops < -1 || value.loopStart > value.loopEnd || !Finite(value.frequency) || !Finite(value.minimumAudibleDistance)) return false; if (!validateOnly) *this = std::move(value); return true; }
 		catch (const std::exception&) { return false; }
 	}
-	static Voice Capture(int identity, uint64_t owner, const std::string& path, float minimumAudibleDistance, FMOD::Channel* channel, int bus) {
+	static Voice Capture(int identity, uint64_t owner, const std::string& path, float minimumAudibleDistance, FMOD::Channel* channel, int bus, bool awaitingSample) {
 		Voice voice; voice.identity = identity; voice.owner = owner; voice.path = path; voice.minimumAudibleDistance = minimumAudibleDistance; voice.bus = bus;
-		// The mixer can report not-playing before SoundChannelEndedCallback retires the voice.
-		voice.playing = true;
+		// A voice is playing while its channel is bound or while it waits for its sample.
+		voice.playing = channel != nullptr || awaitingSample;
 		if (!channel || channel->getPosition(&voice.position, FMOD_TIMEUNIT_PCM) != FMOD_OK) return voice;
 		Require(channel->getFrequency(&voice.frequency)); Require(channel->getPriority(&voice.priority));
 		// A channel that has run out of samples still reports playing, but its length is one past
