@@ -319,12 +319,12 @@ def run_case(options, case, root, failing=None):
             # must never take focus. Either way the control has to be drawn in both captures.
             watched = "TextMultiplayerName" if case == "scope-off" else "ButtonMultiplayerStart"
             for capture in (first, last):
-                assert any(c["name"] == watched for c in capture["controls"]), (watched, capture["json"])
+                assert any(c["name"] == watched for c in capture["controls"]), f"{watched} is not in {capture['json']}"
             if case == "scope-off":
-                assert focused[0] == [watched], focused
+                assert focused[0] == [watched], f"{watched} is not the focused control: {focused}"
             else:
-                assert watched not in focused[0] + focused[1], focused
-            assert focused[0] == focused[1], focused
+                assert watched not in focused[0] + focused[1], f"the disabled {watched} took focus: {focused}"
+            assert focused[0] == focused[1], f"the focused control changed across the run: {focused}"
             assert first["screen"] == last["screen"] == "MultiplayerScreen"
             assert first["service"] == last["service"], (first["service"], last["service"])
         if case == "pause":
