@@ -346,6 +346,12 @@ namespace {
 				    rect[1].get<int>() + rect[3].get<int>() <= g_WindowMan.GetResY(), "control exceeds viewport");
 				if (value.contains("text_height")) Require(value["text_height"].get<int>() <= rect[3].get<int>(), "label text exceeds its height");
 			}
+		} else if (op == "place_brain_command") {
+			// A placement exactly as issued, for the commands every peer has to refuse.
+			Require(GameActivity::EnqueueRawBrainPlacement(step.value("player", 0), step.value("team", 0),
+			            step.value("x", 0.0F), step.value("y", 0.0F), step.value("class", std::string("Actor")),
+			            step.value("preset", std::string("Brain Case")), step.value("module", std::string("Base.rte"))),
+			    "the match cannot take a placement command");
 		} else if (op == "editor_place_brain" || op == "editor_done") {
 			// The seat's own editor does the work: the gesture is queued once and the step waits it out.
 			const int player = step.value("player", 0);

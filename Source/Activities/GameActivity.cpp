@@ -1298,6 +1298,22 @@ void GameActivity::RefuseBrainPlacement(int player, const std::string& reason, b
 	}
 }
 
+bool GameActivity::EnqueueRawBrainPlacement(int player, int team, float posX, float posY, const std::string& className, const std::string& preset, const std::string& module) {
+	if (!IsLockstepPlacement() || player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return false;
+	}
+	NetGamePlaceBrain placement;
+	placement.team = team;
+	placement.player = player;
+	placement.posX = posX;
+	placement.posY = posY;
+	placement.className = className;
+	placement.preset = preset;
+	placement.module = module;
+	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, placement});
+	return true;
+}
+
 bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, uint8_t senderPeerId) {
 	Scene* scene = g_SceneMan.GetScene();
 	const int player = placement.player;
