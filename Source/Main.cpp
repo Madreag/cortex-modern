@@ -3390,6 +3390,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 						                             ? ScenarioRunner::GetLockstepResumeFrame()
 						                             : static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1;
 					s_netMatchE2ETicks.OnResyncRelaunch(resumeFrame);
+					// The relaunch restarts the editor phase, so its budget restarts.
+					s_netMatchE2EEditorTicks = 0;
 				}
 			} else if (resyncError == "match over") {
 				g_NetMatchService.FinishMatch("match over");
