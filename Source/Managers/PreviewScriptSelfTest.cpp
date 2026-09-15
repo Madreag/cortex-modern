@@ -102,6 +102,11 @@ end
 local function seenCounts()
   return tostring(traceSeen.start or 0)..'/'..tostring(traceSeen.stop or 0)..'/'..tostring(traceSeen.abort or 0)..'/'..tostring(traceSeen.flush or 0)
 end
+local function liveTraces()
+  local live = 0
+  for i = 1, 1024 do if util.traceinfo(i) then live = live + 1 end end
+  return live
+end
 local function recordHot()
   traceStarts, hotTrace, traceReason, traceSeen = {}, nil, 'no trace event', {}
   jit.attach(traceEvent, 'trace')
@@ -119,13 +124,20 @@ local function armHotTrace(label)
     how = 'recorded'
     if hotTrace == nil then
       -- A full trace cache and an already patched loop are both ignored in silence, so clear them and record again.
-      local first = seenCounts()
+      local first = seenCounts()..'@'..liveTraces()
       jit.flush()
       recordHot()
-      how = 'reflushed('..first..')'
+      how = 'flushed('..first..')'
+      if hotTrace == nil then
+        -- A recorder left mid-trace stops hot counting for the whole state, and only a mode change aborts it.
+        local second = seenCounts()..'@'..liveTraces()
+        jit.off(); jit.on(); jit.flush()
+        recordHot()
+        how = 'restarted('..first..','..second..')'
+      end
     end
   end
-  assert(hotTrace and util.traceinfo(hotTrace), 'no live compiled trace for the guarded store loop at '..label..': '..tostring(traceReason)..' events(start/stop/abort/flush)='..seenCounts())
+  assert(hotTrace and util.traceinfo(hotTrace), 'no live compiled trace for the guarded store loop at '..label..': '..tostring(traceReason)..' events(start/stop/abort/flush)='..seenCounts()..' live_traces='..liveTraces()..' status='..tostring(jit.status()))
   local note = label..':'..tostring(hotTrace)..':'..how
   if label == 'setup' then armNote = note end
   _PreviewBarrierHotTrace = armNote..'|'..note
