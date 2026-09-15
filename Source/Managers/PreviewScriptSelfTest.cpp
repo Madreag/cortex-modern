@@ -438,13 +438,16 @@ local after = 0
 local function ev2(what)
   if what == 'start' then after = after + 1 end
 end
+local function boom()
+  error('f91-abort')
+end
 local function body()
   local t = {}
   for i = 1, 128 do
     t.x = i
     t[i % 16 + 1] = i
     rawset(t, 'raw', i)
-    if i == 57 then error('f91-abort') end
+    if i == 57 then boom() end
   end
 end
 local ok, err = pcall(function()
