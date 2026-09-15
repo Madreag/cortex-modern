@@ -470,7 +470,10 @@ def inspect_pair(root, records, size, arm, mode, name):
         # Only the host reads the widget through a stall or a hold; in Auto its peer never sees one.
         expect_status = mode == "always" or (mode == "auto" and (arm.get("event") or ((arm.get("stall") or arm.get("leave")) and who == "Host")))
         if expect_status:
-            checks[f"{who}_live_rtt"] = bool(status_texts) and all(re.search(r"(?:^|\n| )RTT \d+ ms", text) for text in status_texts)
+            # A held seat has no peer left to measure, so its read carries the dash instead of a number.
+            checks[f"{who}_live_rtt"] = bool(status_texts) and all(
+                re.search(r"(?:^|\n| )RTT (?:\d+|--) ms", text) if re.search(r"waiting for", text, re.I)
+                else re.search(r"(?:^|\n| )RTT \d+ ms", text) for text in status_texts)
             checks[f"{who}_pace_field"] = all(re.search(r"PACE \d+(?:\.\d+)? tps", text) for text in status_texts)
             running = [text for text in status_texts if not re.search(r"waiting for", text, re.I)]
             checks[f"{who}_measured_pace"] = all(re.search(r"PACE (?:[1-9]\d*(?:\.\d+)?|0\.[1-9]\d*) tps", text) for text in running)
