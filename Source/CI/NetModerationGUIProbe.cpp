@@ -5,6 +5,9 @@
 #include "GUI.h"
 #include "GUIButton.h"
 #include "GUILabel.h"
+#include "GUIInputWrapper.h"
+#include "MainMenuGUI.h"
+#include "PauseMenuGUI.h"
 #include "MenuMan.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchService.h"
@@ -23,6 +26,7 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <sstream>
 
 namespace RTE::NetModerationGUIProbe {
 namespace {
@@ -42,6 +46,15 @@ namespace {
 		Json script, result;
 	};
 	Probe probe;
+
+	GUIControlManager* MenuControls() {
+		if (auto* pause = g_MenuMan.GetActivePauseMenu()) return pause->AutomationManager();
+		return g_MenuMan.IsMainMenuInteractive() ? g_MenuMan.GetMainMenu()->AutomationManager() : nullptr;
+	}
+	std::string MenuScreen() {
+		if (auto* pause = g_MenuMan.GetActivePauseMenu()) return pause->AutomationActiveScreenName();
+		return g_MenuMan.IsMainMenuInteractive() ? g_MenuMan.GetMainMenu()->AutomationActiveScreenName() : "Gameplay";
+	}
 
 	/// P is read inside the sim tick (KeyPressedSim); F6 and Escape are menu keys read per render frame.
 	bool SimRateKey(const std::string& key) { return key == "P"; }
@@ -64,6 +77,7 @@ namespace {
 	Json Observe() {
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 		Json observed = {{"at_ms", NowMs()}, {"render", probe.renders}, {"sim_frame", g_TimerMan.GetSimUpdateCount()},
+		    {"screen", MenuScreen()},
 		    {"service", snapshot.serviceState}, {"host", snapshot.isHost}, {"panel_open", g_MenuMan.IsNetworkPanelOpen()},
 		    {"paused", g_ActivityMan.ActivityPaused()}, {"seats", Json::array()}};
 		for (const auto& seat: g_NetMatchService.GetModerationSeats()) {
@@ -112,6 +126,12 @@ namespace {
 	}
 
 	GUIControl* Control(const Json& step) {
+		if (step.value("scope", "") == "menu") {
+			auto* manager = MenuControls();
+			auto* control = manager ? manager->GetControl(step.at("control").get<std::string>()) : nullptr;
+			Require(control != nullptr, "unknown active menu control: " + step.at("control").get<std::string>());
+			return control;
+		}
 		auto* menu = g_MenuMan.GetNetworkPanel();
 		Require(menu != nullptr, "network panel has not been constructed");
 		auto* control = menu->GetControl(step.at("control").get<std::string>());
@@ -123,6 +143,7 @@ namespace {
 		int x, y, w, h;
 		control->GetControlRect(&x, &y, &w, &h);
 		Json value = {{"rect", {x, y, w, h}}, {"visible", control->GetVisible()}, {"enabled", control->GetEnabled()}};
+		value["focus"] = control->GetPanel() && control->GetPanel()->HasFocus();
 		if (auto* label = dynamic_cast<GUILabel*>(control)) {
 			value["text"] = label->GetText();
 			value["text_height"] = label->GetTextHeight();
@@ -139,6 +160,10 @@ namespace {
 
 	Phase StepPhase(const Json& step) {
 		const std::string op = step.at("op");
+		if (op == "menu") {
+			const std::string command = step.at("command");
+			return command.starts_with("assert_") || command.starts_with("dump_") ? Phase::Draw : Phase::Poll;
+		}
 		if (op == "assert" || op == "assert_control" || op == "screenshot" || op == "finish") return Phase::Draw;
 		if ((op == "key_down" || op == "key_up") && SimRateKey(step.value("key", ""))) return Phase::Sim;
 		return Phase::Poll;
@@ -148,7 +173,8 @@ namespace {
 		const std::string op = step.at("op");
 		if (op == "wait") {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("renders") ||
-			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control"), "wait has no predicate");
+			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen"), "wait has no predicate");
+			if (step.contains("screen") && observed["screen"] != step["screen"]) return false;
 			if (step.contains("service") && observed["service"] != step["service"]) return false;
 			if (step.contains("sim_at_least") && observed["sim_frame"].get<long long>() < step["sim_at_least"].get<long long>()) return false;
 			if (step.contains("renders") && probe.renders - probe.stepRender < step["renders"].get<uint64_t>()) return false;
@@ -178,9 +204,30 @@ namespace {
 			event.key.key = key == "F6" ? SDLK_F6 : key == "P" ? SDLK_P : SDLK_ESCAPE;
 			event.key.down = op == "key_down";
 			Push(event);
-		} else if (op == "mouse_down" || op == "mouse_up") {
+		} else if (op == "input_scope") {
+			GUIInputWrapper::SetAutomationDriving(step.at("enabled").get<bool>());
+		} else if (op == "menu") {
+			std::istringstream args(step.at("command").get<std::string>());
+			std::string command, name, detail;
+			args >> command;
+			bool accepted = false;
+			if (command == "activate" || command == "post_command") {
+				args >> name;
+				if (auto* pause = g_MenuMan.GetActivePauseMenu()) accepted = pause->AutomationPostCommand(name);
+				else if (g_MenuMan.IsMainMenuInteractive()) accepted = g_MenuMan.GetMainMenu()->AutomationPostCommand(name);
+			} else if (command == "assert_enabled") {
+				int expected = -1; args >> name >> expected;
+				accepted = MenuControls() && (expected == 0 || expected == 1) && MenuControls()->GetControl(name) && MenuAutomation::Enabled(MenuControls()->GetControl(name)) == (expected == 1);
+			} else {
+				Require(MenuAutomation::Handles(command), "unknown menu operation: " + command);
+				accepted = MenuAutomation::Execute(MenuControls(), MenuScreen(), command, args, detail);
+			}
+			observed["accepted"] = accepted;
+			observed["menu_observation"] = detail;
+			Require(accepted == step.value("accepted", true), "menu operation refused: " + step.at("command").get<std::string>() + " " + detail);
+		} else if (op == "mouse_down" || op == "mouse_up" || op == "mouse_move") {
 			auto* control = Control(step);
-			Require(g_MenuMan.IsNetworkPanelOpen() && control->GetVisible(), "mouse target is not visible");
+			Require((step.value("scope", "") == "menu" ? MenuAutomation::Visible(control) : g_MenuMan.IsNetworkPanelOpen() && control->GetVisible()), "mouse target is not visible");
 			int x, y, w, h;
 			control->GetControlRect(&x, &y, &w, &h);
 			const float mouseX = static_cast<float>((x + w / 2) * g_WindowMan.GetResMultiplier());
@@ -191,6 +238,7 @@ namespace {
 			motion.motion.x = mouseX;
 			motion.motion.y = mouseY;
 			Push(motion);
+			if (op == "mouse_move") return true;
 			SDL_Event event{};
 			event.type = op == "mouse_down" ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
 			event.button.windowID = motion.motion.windowID;
@@ -234,6 +282,7 @@ namespace {
 		} else if (op == "wait_file") {
 			if (!std::filesystem::is_regular_file(step.at("path").get<std::string>())) return false;
 		} else if (op == "finish") {
+			GUIInputWrapper::SetAutomationDriving(false);
 			Require(probe.index + 1 == probe.script["steps"].size(), "finish must be last");
 			probe.done = true;
 			probe.result["complete"] = true;
@@ -270,6 +319,7 @@ namespace {
 			WriteResult();
 			if (probe.done) std::cout << "[net-ui-probe] PASS: completed " << probe.index << " steps" << std::endl;
 		} catch (const std::exception& error) {
+			GUIInputWrapper::SetAutomationDriving(false);
 			probe.done = true;
 			probe.result["pass"] = false;
 			probe.result["error"] = error.what();

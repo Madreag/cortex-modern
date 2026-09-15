@@ -64,6 +64,8 @@ namespace RTE {
 
 		/// Posts a command through the visible pause menu's event queue.
 		bool AutomationPostCommand(const std::string& controlName);
+		GUIControlManager* AutomationManager() const;
+		std::string AutomationActiveScreenName() const;
 		/// Checks whether the pause menu contains a control.
 		bool AutomationControlExists(const std::string& controlName) const;
 		/// Checks whether a pause-menu control is visible and enabled.
@@ -73,6 +75,7 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		std::unique_ptr<GUIInputWrapper> m_AutomationInput;
 		/// Enumeration for the different sub-menu screens of the pause menu.
 		enum PauseMenuScreen {
 			MainScreen,

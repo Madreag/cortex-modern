@@ -1354,14 +1354,25 @@ static uint64_t MenuScriptNowMs() {
 	return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
+static void ConfigureMenuScriptInput(int argc, char** argv) {
+	const char* probe = std::getenv("CC_TEST_NET_UI_SCRIPT");
+	bool driving = probe && *probe;
+	for (int i = 1; i + 1 < argc; ++i) {
+		if (argv[i] && std::string_view(argv[i]) == "-menu-script" && argv[i + 1] && *argv[i + 1]) driving = true;
+	}
+	GUIInputWrapper::SetAutomationDriving(driving);
+}
+
 // A scripted-menu step failed: print it and exit non-zero so the automation harness can't false-green.
 static void MenuScriptFail(const std::string& reason) {
+	GUIInputWrapper::SetAutomationDriving(false);
 	std::cerr << "[menu-script] FAILED: " << reason << std::endl;
 	s_menuScriptFailed = true;
 	System::SetQuit(true);
 }
 
 static void CompleteMenuScript() {
+	GUIInputWrapper::SetAutomationDriving(false);
 	s_menuScriptComplete = true;
 	if (!s_menuScriptHoldE2ePause) System::SetQuit(true);
 }
@@ -1383,6 +1394,7 @@ static bool MenuScriptFileExists(const std::string& pattern) {
 
 // Menu scripts use real controls and the normal screenshot render path.
 void ProcessMenuScript() {
+	NetModerationGUIProbe::AfterDraw();
 	static std::vector<std::string> steps;
 	static size_t stepIndex = 0;
 	static int waitFrames = 0;
@@ -1478,7 +1490,13 @@ void ProcessMenuScript() {
 	std::string cmd;
 	iss >> cmd;
 	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
-	if (cmd == "wait") {
+	if (MenuAutomation::Handles(cmd)) {
+		std::string observation;
+		const bool pass = MenuAutomation::Execute(pauseMenu ? pauseMenu->AutomationManager() : menu->AutomationManager(),
+			pauseMenu ? pauseMenu->AutomationActiveScreenName() : menu->AutomationActiveScreenName(), cmd, iss, observation);
+		std::cout << "[menu-script] " << cmd << " " << observation << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		if (!pass) return MenuScriptFail(cmd + " " + observation);
+	} else if (cmd == "wait") {
 		iss >> waitFrames;
 	} else if (cmd == "wait_ms") {
 		int milliseconds = 0;
@@ -1593,7 +1611,7 @@ void ProcessMenuScript() {
 	} else if (cmd == "assert_screen") {
 		std::string expected;
 		iss >> expected;
-		const std::string actual = pauseMenu ? "Pause" : menu->AutomationActiveScreenName();
+		const std::string actual = pauseMenu ? pauseMenu->AutomationActiveScreenName() : menu->AutomationActiveScreenName();
 		const bool pass = actual == expected;
 		std::cout << "[menu-script] assert_screen expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
 		if (!pass) { return MenuScriptFail("assert_screen expected " + expected + " got " + actual); }
@@ -5763,6 +5781,7 @@ int main(int argc, char** argv) {
 	InstallRNGDrawTraceIfArmed();
 
 	TelemetryBundle::Initialize("unavailable");
+	ConfigureMenuScriptInput(argc, argv);
 	InitializeManagers();
 	ScenarioRunner::SetStallEventPoll(&PollSDLEvents);
 	// Same arming condition as the probe itself, so only a probe run pumps the panel from a stall.
