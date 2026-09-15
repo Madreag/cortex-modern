@@ -344,7 +344,7 @@ def assess_cost(red, green, scene, red_census, census):
 def assess_selftests(summary, identity):
     from run_selftests import SELFTESTS
     rows = summary.get('results', {})
-    return (summary.get('passed') == summary.get('total') == len(SELFTESTS) == 13 and
+    return (summary.get('passed') == summary.get('total') == len(SELFTESTS) and
             summary.get('exe_sha256') == identity and set(rows) == set(SELFTESTS) and
             all(row.get('pass') is True and row.get('binary') == identity for row in rows.values()))
 

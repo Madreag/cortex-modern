@@ -54,7 +54,7 @@ class CostChecks(unittest.TestCase):
     def test_selftest_summary_requires_every_named_row_and_identity(self):
         from run_selftests import SELFTESTS
         identity = 'a' * 64
-        summary = dict(passed=13, total=13, exe_sha256=identity,
+        summary = dict(passed=len(SELFTESTS), total=len(SELFTESTS), exe_sha256=identity,
                        results={name: {'pass': True, 'binary': identity} for name in SELFTESTS})
         self.assertTrue(driver.assess_selftests(summary, identity))
         summary['results'][SELFTESTS[0]]['binary'] = 'b' * 64
