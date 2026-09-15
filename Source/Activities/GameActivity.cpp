@@ -46,6 +46,7 @@
 #include "OwnedMovableObjects.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
@@ -4382,6 +4383,69 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			};
 			if (step("created", picker.Create(controller) >= 0)) step("second_create", picker.Create(controller) >= 0);
 			check(("net_local_area_picker_controls_survive_recreate" + (detail.empty() ? std::string{} : " " + detail)).c_str(), detail.empty());
+		}
+		{
+			// Gatling Drone AimRange is 0.6 and the INI leaves Upper/Lower unset, so they copy AimRange.
+			struct SceneRestore {
+				MovableMan::WorldSetAside world;
+				SceneMan::SceneSetAside scene;
+				SceneRestore() {
+					if (!g_MovableMan.SetAsideWorld(world, false)) throw std::runtime_error("boundary fixture world hold failed");
+					g_SceneMan.SetAsideScene(scene);
+				}
+				~SceneRestore() {
+					g_MovableMan.PurgeAllMOs();
+					g_SceneMan.ReinstateScene(scene);
+					g_MovableMan.ReinstateWorld(world);
+				}
+			} sceneRestore;
+			if (g_SceneMan.LoadScene("Null Scene", false, false) < 0) throw std::runtime_error("boundary fixture scene failed");
+			const auto* dronePreset = dynamic_cast<const ACrab*>(g_PresetMan.GetEntityPreset("ACrab", "Gatling Drone", "Coalition.rte"));
+			if (!dronePreset) throw std::runtime_error("Gatling Drone fixture preset unavailable");
+			std::unique_ptr<ACrab> crab(static_cast<ACrab*>(dronePreset->Clone()));
+			crab->SetTeam(0);
+			crab->SetPos(Vector(320, 240));
+			// Rotated so the crab's PreController clamp sits outside ±AimRange (1.3 rad → lower 0.7 when unflipped).
+			crab->SetRotAngle(1.3F);
+			crab->PreControllerUpdate();
+			const float rawAim = crab->GetAimAngle(false);
+			const float aimRange = crab->GetAimRange();
+			const float rot = crab->GetRotAngle();
+			const float adjUpper = crab->IsHFlipped() ? crab->GetAimRangeUpperLimit() - rot : crab->GetAimRangeUpperLimit() + rot;
+			const float adjLower = crab->IsHFlipped() ? -crab->GetAimRangeLowerLimit() - rot : -crab->GetAimRangeLowerLimit() + rot;
+			char rawHex[32];
+			std::snprintf(rawHex, sizeof(rawHex), "%a", rawAim);
+			std::cout << "[controller-boundary-selftest] preset=Gatling Drone AimRange=" << aimRange
+			          << " rot=" << rot << " adj_upper=" << adjUpper << " adj_lower=" << adjLower
+			          << " raw_aim=" << rawHex << " flipped=" << crab->IsHFlipped() << std::endl;
+			const bool flippedBefore = crab->IsHFlipped();
+			const MovableMan::ControllerBoundaryBaseline captured = MovableMan::CaptureControllerBoundary(crab.get());
+			crab->SetAimAngle(0);
+			crab->SetHFlipped(!flippedBefore);
+			g_MovableMan.RestoreControllerBoundary(captured, 0);
+			check("controller_boundary_raw_aim_outside_range", rawAim > aimRange || rawAim < -aimRange);
+			check("controller_boundary_restore_is_identity", crab->GetAimAngle(false) == captured.aim);
+			check("controller_boundary_flip_restore_is_identity", crab->IsHFlipped() == captured.flipped);
+		}
+		{
+			const auto* craftPreset = dynamic_cast<const ACraft*>(g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte"));
+			if (!craftPreset) throw std::runtime_error("Dropship MK1 fixture preset unavailable");
+			std::unique_ptr<ACraft> craft(static_cast<ACraft*>(craftPreset->Clone()));
+			const MovableMan::ControllerBoundaryBaseline captured = MovableMan::CaptureControllerBoundary(craft.get());
+			craft->OpenHatch();
+			g_MovableMan.RestoreControllerBoundary(captured, 0);
+			check("controller_boundary_hatch_restore_is_identity",
+			      craft->GetHatchState() == captured.hatch && craft->GetHatchTimerStartTicks() == captured.hatchTimerStart);
+		}
+		{
+			const auto* humanPreset = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+			if (!humanPreset) throw std::runtime_error("Brain Robot fixture preset unavailable");
+			std::unique_ptr<AHuman> human(static_cast<AHuman*>(humanPreset->Clone()));
+			const MovableMan::ControllerBoundaryBaseline captured = MovableMan::CaptureControllerBoundary(human.get());
+			g_MovableMan.RestoreControllerBoundary(captured, 0);
+			const int64_t fg = human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0;
+			const int64_t bg = human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0;
+			check("controller_boundary_equipment_ids_unchanged", fg == captured.fg && bg == captured.bg);
 		}
 		{
 			// AboveHeadPos is sim-derived; DrawHUD leftover must not move a write that reads it.
