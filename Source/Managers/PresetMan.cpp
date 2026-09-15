@@ -142,7 +142,8 @@ bool PresetMan::LoadAllDataModules() {
 
 	// If a single module is specified, skip loading all other unofficial modules and load specified module only.
 	if (!m_SingleModuleToLoad.empty() && !IsModuleOfficial(m_SingleModuleToLoad)) {
-		if (!LoadDataModule(m_SingleModuleToLoad, false, false, LoadingScreen::LoadingSplashProgressReport)) {
+		// A module the harness already loaded is not loaded twice.
+		if (GetModuleID(m_SingleModuleToLoad) < 0 && !LoadDataModule(m_SingleModuleToLoad, false, false, LoadingScreen::LoadingSplashProgressReport)) {
 			g_ConsoleMan.PrintString("ERROR: Failed to load DataModule \"" + m_SingleModuleToLoad + "\"! Only official modules were loaded!");
 			return false;
 		}
