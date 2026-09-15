@@ -431,8 +431,7 @@ assert(seen > 0, 'no trace event after forced abort path seen='..tostring(seen).
 		for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) states.push_back(&state);
 		bool passed = true;
 		static const char* probe = R"lua(
-local util = jit and require('jit.util')
-if not (jit and jit.status() and util) then
+if not (jit and jit.status()) then
   return
 end
 local starts, stops, aborts, lastTr, lastWhy = 0, 0, 0, 0, ''
@@ -463,21 +462,14 @@ end
 local ok, err = pcall(function()
   jit.flush()
   jit.attach(ev, 'trace')
-  local abortTr, infoAfterAbort = 0, false
-  for _ = 1, 40 do
-    pcall(body)
-    if abortTr == 0 and aborts > 0 then
-      abortTr = lastTr
-      infoAfterAbort = abortTr > 0 and util.traceinfo(abortTr) or nil
-    end
-  end
+  for _ = 1, 40 do pcall(body) end
   jit.attach(ev)
   jit.attach(ev2, 'trace')
   pcall(body)
   pcall(body)
   jit.attach(ev2)
   assert(aborts > 0 and lastWhy ~= '', 'no TRACE abort event aborts='..tostring(aborts)..' why='..tostring(lastWhy)..' starts='..tostring(starts)..' stops='..tostring(stops))
-  assert(infoAfterAbort == nil, 'trace slot still live tr='..tostring(abortTr))
+  assert(stops == 0, 'aborted recording still compiled a trace stops='..tostring(stops)..' tr='..tostring(lastTr))
   assert(after == 0, 'bytecode still starting after repeats after='..tostring(after)..' starts='..tostring(starts))
 end)
 pcall(function() jit.attach(ev) end)
