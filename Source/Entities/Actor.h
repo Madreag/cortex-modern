@@ -852,6 +852,10 @@ namespace RTE {
 		/// @return The end of the ordered move, or this' position when the queue already names the route.
 		Vector GetOrderedMoveEnd() const;
 
+		/// Gets the MO the ordered move follows, the loaded MO target outside lockstep.
+		/// @return The MO the ordered move follows, or nullptr when the order names a point.
+		const MovableObject* GetOrderedMOMoveTarget() const;
+
 		/// Estimates what material strength this actor can penetrate.
 		/// @return The actor's dig strength.
 		virtual float EstimateDigStrength() const;
@@ -1302,7 +1306,7 @@ namespace RTE {
 		void BuildLogicalWaypoints(std::vector<std::pair<Vector, const MovableObject*>>& items) const;
 		bool LogicalWaypointClearSeen() const;
 		bool OrderedWaypointsPending() const;
-		bool FirstOrderedWaypoint(Vector& point) const;
+		bool FirstOrderedWaypoint(Vector& point, const MovableObject** target = nullptr) const;
 		void ConsumeInflightWaypoint(DeferredWaypoint::Op op, float x, float y, int64_t targetUID);
 		void QueueDeferredOnRunning(const DeferredWaypoint& waypoint);
 		void QueueAIModeOnRunning(AIMode newMode);
