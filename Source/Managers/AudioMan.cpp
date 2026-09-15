@@ -2270,6 +2270,69 @@ bool AudioMan::RunCheckpointSelfTest() {
 			std::cout << "[audio-checkpoint-selftest] FAIL held_voice_playing_is_stable_across_mixer_progress " << error.what() << std::endl;
 			ok = false;
 		}
+		try {
+			std::unique_ptr<SoundContainer> loadingOwner(static_cast<SoundContainer*>(preset->Clone()));
+			loadingOwner->SetPaused(true); loadingOwner->SetImmobile(true); loadingOwner->SetLoopSetting(-1);
+			if (!loadingOwner->Play()) throw std::runtime_error("loading-sample voice did not play");
+			const int loadingId = *loadingOwner->GetPlayingChannels()->begin();
+			const std::string path = m_PlayingVoices.at(loadingId).soundPath;
+			FMOD::Sound* loading = nullptr;
+			AudioCheckpoint::Require(m_AudioSystem->createSound(path.c_str(), FMOD_CREATESAMPLE | FMOD_3D | FMOD_NONBLOCKING, nullptr, &loading));
+			FMOD_OPENSTATE open = FMOD_OPENSTATE_ERROR;
+			if (!loading || loading->getOpenState(&open, nullptr, nullptr, nullptr) != FMOD_OK) throw std::runtime_error("private non-blocking sound did not report an open state");
+			if (open == FMOD_OPENSTATE_READY || open == FMOD_OPENSTATE_PLAYING) {
+				loading->release();
+				loading = nullptr;
+				AudioCheckpoint::Require(m_AudioSystem->createSound(path.c_str(), FMOD_CREATESTREAM | FMOD_3D | FMOD_NONBLOCKING, nullptr, &loading));
+				if (!loading || loading->getOpenState(&open, nullptr, nullptr, nullptr) != FMOD_OK) throw std::runtime_error("private streamed sound did not report an open state");
+			}
+			if (open == FMOD_OPENSTATE_READY || open == FMOD_OPENSTATE_PLAYING) {
+				if (loading) loading->release();
+				throw std::runtime_error("private sound was ready before save");
+			}
+			FMOD::Sound* ready = nullptr;
+			const auto cached = ContentFile::s_LoadedSamples.find(path);
+			if (cached != ContentFile::s_LoadedSamples.end()) ready = cached->second;
+			ContentFile::s_LoadedSamples[path] = loading;
+			std::string saved;
+			std::string refusal;
+			bool archived = false;
+			try {
+				saved = SaveCheckpoint();
+				AudioRuntime state;
+				state.Load(saved, &refusal);
+				for (const auto& sample: state.samples) if (sample.path == path) archived = true;
+			} catch (...) {
+				ContentFile::s_LoadedSamples[path] = ready;
+				if (loading) loading->release();
+				throw;
+			}
+			reportArm("loading_sample_is_archived", archived);
+			if (!archived) std::cout << "[audio-checkpoint-selftest] loading_sample refusal " << refusal << std::endl;
+			bool deferredVoice = false;
+			if (archived) {
+				const bool loaded = LoadCheckpoint(saved, false, nullptr, &refusal);
+				const auto sampleReady = [](FMOD::Sound* sound) {
+					if (!sound) return false;
+					FMOD_OPENSTATE state = FMOD_OPENSTATE_ERROR;
+					return sound->getOpenState(&state, nullptr, nullptr, nullptr) == FMOD_OK && (state == FMOD_OPENSTATE_READY || state == FMOD_OPENSTATE_PLAYING);
+				};
+				for (int step = 0; step < 1000 && loading && !sampleReady(loading); ++step) {
+					m_AudioSystem->update();
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}
+				Update();
+				const auto found = m_PlayingVoices.find(loadingId);
+				deferredVoice = loaded && found != m_PlayingVoices.end() && found->second.channel;
+			}
+			reportArm("load_defers_a_loading_sample_voice", deferredVoice);
+			ContentFile::s_LoadedSamples[path] = ready;
+			if (loading) loading->release();
+			loadingOwner->Stop();
+		} catch (const std::exception& error) {
+			std::cout << "[audio-checkpoint-selftest] FAIL loading_sample_is_archived " << error.what() << std::endl;
+			ok = false;
+		}
 		AudioCheckpoint::Require(originalChannel->setPosition(123, FMOD_TIMEUNIT_PCM));
 		const std::string native = source->SaveCheckpoint();
 		const std::string playback = GetSoundContainerPlaybackCheckpoint(source.get());
