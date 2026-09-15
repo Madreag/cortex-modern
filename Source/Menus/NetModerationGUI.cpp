@@ -27,6 +27,18 @@ using namespace RTE;
 namespace {
 	/// Screens shorter than this get the single-line strip instead of the box.
 	constexpr int c_CompactMaxHeight = 480;
+	/// The status box on a tall screen, and the rows the compact strip owns at the top of a short one.
+	constexpr int c_StatusBoxTop = 32, c_StatusBoxHeight = 76, c_StatusBoxWidth = 252, c_StatusBoxMargin = 8;
+	constexpr int c_StripBandBottom = 20;
+	/// The seats panel, and the gap it keeps from the screen edges.
+	constexpr int c_PanelWidth = 600, c_PanelHeight = 344, c_PanelGap = 4;
+
+	/// The panel's top row: centred, but under the status widget's band on a screen with the rows for both.
+	int PanelTop(int screenHeight) {
+		const int band = (screenHeight < c_CompactMaxHeight ? c_StripBandBottom : c_StatusBoxTop + c_StatusBoxHeight) + c_PanelGap;
+		const int lowest = std::max(0, screenHeight - c_PanelHeight - c_PanelGap);
+		return std::clamp((screenHeight - c_PanelHeight) / 2, std::min(band, lowest), lowest);
+	}
 
 	std::string DisplayName(std::string text) {
 		for (char& c: text) if (static_cast<unsigned char>(c) < 32) c = ' ';
@@ -87,9 +99,9 @@ NetModerationGUI::NetModerationGUI(AllegroScreen* screen) :
 	std::string fontName;
 	m_Controls->GetSkin()->GetValue("Label", "Font", &fontName);
 	m_LabelFont = m_Controls->GetSkin()->GetFont(fontName);
-	const int width = std::min(600, g_WindowMan.GetResX() - 12);
+	const int width = std::min(c_PanelWidth, g_WindowMan.GetResX() - 12);
 	m_Panel = dynamic_cast<GUICollectionBox*>(m_Controls->AddControl("NetworkSeats", "COLLECTIONBOX", nullptr,
-	    (g_WindowMan.GetResX() - width) / 2, (g_WindowMan.GetResY() - 344) / 2, width, 344));
+	    (g_WindowMan.GetResX() - width) / 2, PanelTop(g_WindowMan.GetResY()), width, c_PanelHeight));
 	m_Panel->SetDrawBackground(true);
 	m_Panel->SetDrawType(GUICollectionBox::Image);
 	auto label = [&](const std::string& name, int y, int height) {
@@ -361,10 +373,10 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		m_NetStatus->Draw(&bitmap, false);
 		return;
 	}
-	const int width = std::min(252, backbuffer->w - 16);
-	const int x = backbuffer->w - width - 8;
-	constexpr int y = 32;
-	constexpr int height = 76;
+	const int width = std::min(c_StatusBoxWidth, backbuffer->w - 2 * c_StatusBoxMargin);
+	const int x = backbuffer->w - width - c_StatusBoxMargin;
+	constexpr int y = c_StatusBoxTop;
+	constexpr int height = c_StatusBoxHeight;
 	m_NetStatusBox->Move(x, y);
 	if (m_NetStatusBox->GetWidth() != width) m_NetStatusBox->Resize(width, height);
 	m_NetStatusBox->SetVisible(true);
@@ -444,19 +456,20 @@ void NetModerationGUI::Draw() {
 	if (snapshot.serviceState != "Running" && snapshot.serviceState != "Starting" && snapshot.serviceState != "ReadyToLaunch" && !m_Open) return;
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
-	if (ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.IsMatchResyncing()) {
+	const bool inMatch = ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.IsMatchResyncing();
+	if (inMatch) {
 		CreateOverlay();
-		if (MatchStatusWanted()) {
-			DrawMatchStatus(snapshot);
-			m_NetStatus->SetVisible(true);
-		}
 	} else {
 		DrawRoster(snapshot);
 	}
-	if (m_Open) {
-		m_Controls->Draw();
-		m_Controls->DrawMouse();
+	if (m_Open) m_Controls->Draw();
+	// Opening the panel is one of the status widget's triggers, so the status draws over it: a screen too
+	// short for both still owes the player the reading it just asked for.
+	if (inMatch && MatchStatusWanted()) {
+		DrawMatchStatus(snapshot);
+		m_NetStatus->SetVisible(true);
 	}
+	if (m_Open) m_Controls->DrawMouse();
 	t_simRNGOverride = previousRNG;
 }
 
