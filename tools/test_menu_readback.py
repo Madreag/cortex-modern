@@ -15,10 +15,27 @@ from run_sim_test import make_run
 from test_telemetry_bundle import set_visual_resolution
 
 
-CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled", "scope-off", "oracles")
+CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled",
+         "scope-off", "network", "lobby-name", "net-options", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
-PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc")
+PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
+# Every control the network page owns, measured where it is drawn. The fixed-delay row belongs to
+# the fixed policy, so it is drawn only there - the cue the video page's resolution rows already use.
+NETWORK_ROWS = ("LabelNetworkDisplayName", "TextNetworkDisplayName", "LabelNetworkDelayPolicy",
+                "RadioNetworkDelayAuto", "RadioNetworkDelayFixed", "LabelNetworkIdleWait",
+                "TextNetworkIdleWait", "LabelNetworkIdleWaitHint", "CheckboxNetworkAutoRepair")
+NETWORK_FIXED_ROWS = ("LabelNetworkFixedDelay", "TextNetworkFixedDelay", "LabelNetworkFixedDelayHint")
+MAX_INPUT_DELAY_FRAMES = 60  # NetMatchConfigUtil::c_MaxInputDelayFrames, which the hint states.
+# The saved preferences a case starts from, and what the page must have written when it ends.
+NETWORK_SEED = {"NetworkDisplayName": "ScoutLead", "NetworkHostDelayPolicy": "Auto",
+                "NetworkHostIdleWaitMinutes": "10", "NetworkHostAutoRepair": "1", "NetworkInputDelayFrames": "0"}
+NETWORK_SAVED = {"NetworkDisplayName": "WingCmd", "NetworkHostDelayPolicy": "Fixed",
+                 "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0", "NetworkInputDelayFrames": "7"}
+# The host's saved session options steer the match; the client's own copy differs and must not.
+HOST_OPTIONS = {"NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0"}
+CLIENT_OPTIONS = {"NetworkHostDelayPolicy": "Auto", "NetworkHostIdleWaitMinutes": "5", "NetworkHostAutoRepair": "1"}
+MATCH_RULES = {"delay_policy": 2, "idle_wait_minutes": 25, "automatic_repair": False}
 # A combo box draws its selected item left of the drop-down button, so its text budget is narrower than its rect.
 COMBO_BUTTON = 17
 FIT_LINE = re.compile(r"assert_text_fits (\w+).*?rect=\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\].*?available=\[(-?\d+),(-?\d+)\]")
@@ -46,6 +63,33 @@ def sha(path):
 def checks(control, parent):
     return (f"assert_visible {control} 1\nassert_rect_inside {control} {parent}\n"
             f"assert_rect_inside {control} viewport\nassert_text_fits {control}\n")
+
+
+def seed_settings(path, values):
+    """Put saved preferences in front of a run the way a player's own Settings.ini would."""
+    text = path.read_text(encoding="utf-8-sig")
+    for name, value in values.items():
+        text, count = re.subn(rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*", lambda match: match[1] + value, text)
+        if count == 0:
+            text += f"\n\t{name} = {value}\n"
+    path.write_text(text, encoding="utf-8")
+
+
+def read_settings(path, names):
+    values = {}
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key.strip() in names:
+            values[key.strip()] = value.strip()
+    return values
+
+
+def seeds(case):
+    if case in ("network", "lobby-name"):
+        return {"host": NETWORK_SEED}
+    if case == "net-options":
+        return {"host": HOST_OPTIONS, "client": CLIENT_OPTIONS}
+    return {}
 
 
 def host_lobby(port):
@@ -106,7 +150,7 @@ def scripts(case, port, root):
         text += f"focus_previous\nassert_focus {ORDER[-1]}\ndump_host_options\nexit\n"
     elif case == "settings":
         text = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\nassert_visible TabVideoSettings 1\n"
-        for tab in ("Video", "Audio", "Input", "Gameplay", "Misc"):
+        for tab in PAGES:
             text += f"activate Tab{tab}Settings\nwait 3\nassert_visible CollectionBox{tab}Settings 1\n"
             text += checks(f"Tab{tab}Settings", "CollectionBoxSettingsBase") + "dump_player_options\n"
         text += "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n"
@@ -118,6 +162,47 @@ def scripts(case, port, root):
             text += f"assert_visible CollectionBox{page}Settings 1\n"
             text += checks(f"Tab{page}Settings", "CollectionBoxSettingsBase") + "dump_player_options\n"
         text += "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n"
+    elif case == "network":
+        # The saved preferences reach the page, an edit on the page reaches the settings, and the
+        # lobby's own name box shows what the page saved.
+        text = OPTIONS + "select_settings_page Network\nwait 3\nassert_settings_page Network\n"
+        text += "assert_visible CollectionBoxNetworkSettings 1\n"
+        text += checks("TabNetworkSettings", "CollectionBoxSettingsBase")
+        for control in NETWORK_ROWS:
+            text += checks(control, "CollectionBoxNetworkSettings")
+        text += ("assert_label TextNetworkDisplayName " + NETWORK_SEED["NetworkDisplayName"] + "\n"
+                 "assert_label TextNetworkIdleWait " + NETWORK_SEED["NetworkHostIdleWaitMinutes"] + "\n")
+        # The saved policy is automatic here, so the fixed-delay row is not on the page at all.
+        for control in NETWORK_FIXED_ROWS:
+            text += f"assert_visible {control} 0\n"
+        text += "dump_player_options\npost_command RadioNetworkDelayFixed\nwait 3\n"
+        for control in NETWORK_FIXED_ROWS:
+            text += checks(control, "CollectionBoxNetworkSettings")
+        text += (f"assert_label LabelNetworkFixedDelayHint frames, 0-{MAX_INPUT_DELAY_FRAMES}\n"
+                 "set_text TextNetworkDisplayName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
+                 "set_text TextNetworkFixedDelay " + NETWORK_SAVED["NetworkInputDelayFrames"] + "\n"
+                 "set_text TextNetworkIdleWait " + NETWORK_SAVED["NetworkHostIdleWaitMinutes"] + "\n"
+                 "post_command CheckboxNetworkAutoRepair\nwait 3\ndump_player_options\n"
+                 "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\n")
+        text += LANDING + "assert_label TextMultiplayerName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
+        text += "dump_host_options\nexit\n"
+    elif case == "lobby-name":
+        # The name box starts from the saved name, and the name it is hosted with is saved again.
+        text = LANDING + "assert_label TextMultiplayerName " + NETWORK_SEED["NetworkDisplayName"] + "\n"
+        text += ("dump_host_options\nsettext TextMultiplayerName Recon7\n"
+                 "activate ButtonMultiplayerHostGame\nwait 5\n"
+                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+                 "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
+                 "dump_host_options\nexit\n")
+    elif case == "net-options":
+        # Two real peers: the host's saved session options ride the lobby config onto both rosters.
+        return ({who: f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n" for who in ("host", "client")},
+                {"host": {"schema": 1, "timeout_ms": 90000, "steps": [
+                    {"op": "wait", "sim_at_least": 150},
+                    {"op": "assert", "equals": {"service": "Running", "paused": False}, "sim_at_least": 150},
+                    {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
+                    {"op": "wait", "screen": "Pause"}, menu_step("dump_host_options"),
+                    {"op": "signal", "name": "done"}, {"op": "finish"}]}})
     elif case == "combo-fit":
         # Reached by the tab control so the measurement runs on a build that has no page op yet.
         text = (OPTIONS + "activate TabVideoSettings\nwait 3\nassert_visible ComboPresetResolution 1\n"
@@ -244,9 +329,10 @@ def run_case(options, case, root, failing=None):
         texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
     inputs = root / "input.txt"
     inputs.write_text(INPUT_SCRIPT, encoding="utf-8")
-    paired = case in ("pause", "live")
+    paired = case in ("pause", "live", "net-options")
+    seeded = {} if failing else seeds(case)
     runs, records, argv, images = {}, {}, {}, []
-    result = {"pass": False, "case": case, "scripts": {}, "records": records, "probes": {}}
+    result = {"pass": False, "case": case, "scripts": {}, "records": records, "probes": {}, "seeds": seeded}
     try:
         for who in (("host", "client") if paired else ("host",)):
             script = root / f"{who}-menu.txt"
@@ -269,6 +355,8 @@ def run_case(options, case, root, failing=None):
             argv[who] = args
             runs[who] = make_run(options.repo, args, root / who, 180, env=env)
             set_visual_resolution(runs[who], *map(int, options.size.split("x")))
+            if who in seeded:
+                seed_settings(runs[who].cwd / "Userdata/Settings.ini", seeded[who])
 
         def drive(who):
             try:
@@ -355,6 +443,37 @@ def run_case(options, case, root, failing=None):
             assert result["combo_fit"], "no assert_text_fits observation in the log"
             for name, rect, available in result["combo_fit"]:
                 assert available[0] <= rect[2] - COMBO_BUTTON, (name, rect, available)
+        if case == "network":
+            # The page shows the saved name, the page's own edits are saved, and the lobby box starts from them.
+            page = [capture for capture in images if capture["settings_page"] == "Network"]
+            assert len(page) == 2, [capture["settings_page"] for capture in images]
+            rows = {control["name"]: control for control in page[0]["controls"]}
+            assert set(NETWORK_ROWS) <= rows.keys(), sorted(rows)
+            assert not set(NETWORK_FIXED_ROWS) & rows.keys(), sorted(rows)
+            assert all(rows[name]["text_fits"] for name in NETWORK_ROWS if rows[name]["text"]), rows
+            after = {control["name"]: control for control in page[1]["controls"]}
+            assert set(NETWORK_ROWS) | set(NETWORK_FIXED_ROWS) <= after.keys(), sorted(after)
+            assert all(after[name]["text_fits"] for name in NETWORK_FIXED_ROWS if after[name]["text"]), after
+            result["page_text"] = {name: [rows[name]["text"], after[name]["text"]] for name in NETWORK_ROWS}
+            assert result["page_text"]["TextNetworkDisplayName"] == [NETWORK_SEED["NetworkDisplayName"], NETWORK_SAVED["NetworkDisplayName"]], result["page_text"]
+            result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(NETWORK_SAVED))
+            assert result["saved"] == NETWORK_SAVED, result["saved"]
+            assert next(c["text"] for c in images[-1]["controls"] if c["name"] == "TextMultiplayerName") == NETWORK_SAVED["NetworkDisplayName"]
+        if case == "lobby-name":
+            assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == NETWORK_SEED["NetworkDisplayName"]
+            result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", {"NetworkDisplayName"})
+            assert result["saved"] == {"NetworkDisplayName": "Recon7"}, result["saved"]
+            # The seeded policy is automatic, so the lobby row must not call the delay fixed.
+            result["lobby_row"] = next(c["text"] for c in images[-1]["controls"] if c["name"] == "LabelLobbyPlayer0")
+            assert "(auto" in result["lobby_row"] and "(fixed)" not in result["lobby_row"], result["lobby_row"]
+        if case == "net-options":
+            # Both peers' rosters carry the host's saved options; the client's own copy differs and loses.
+            result["match_rules"] = {}
+            for who in ("host", "client"):
+                report = json.loads((root / f"{who}-match.json").read_text(encoding="utf-8"))
+                rules = report["service"]["runner"]["match_config"]["rules"]
+                result["match_rules"][who] = {name: rules[name] for name in MATCH_RULES}
+                assert result["match_rules"][who] == MATCH_RULES, (who, result["match_rules"][who])
         if case == "input":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == "ab"
         if case == "input-parity":
@@ -383,8 +502,8 @@ def main():
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("LEAD_FAMILY.lock exists; no engine launch")
-    if not any(low <= options.port <= low + 9 for low in (48270, 48380, 48540, 48550)):
-        parser.error("this detector owns ports 48270-48279, 48380-48389, 48540-48549 and 48550-48559")
+    if not any(low <= options.port <= low + 9 for low in (48270, 48380, 48530, 48540, 48550)):
+        parser.error("this detector owns ports 48270-48279, 48380-48389, 48530-48539, 48540-48549 and 48550-48559")
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)
     options.revision = subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip()

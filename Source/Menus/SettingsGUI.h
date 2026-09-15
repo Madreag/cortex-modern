@@ -5,6 +5,7 @@
 #include "SettingsInputGUI.h"
 #include "SettingsGameplayGUI.h"
 #include "SettingsMiscGUI.h"
+#include "SettingsNetworkGUI.h"
 
 #include <array>
 #include <memory>
@@ -78,6 +79,7 @@ namespace RTE {
 			InputSettingsMenu,
 			GameplaySettingsMenu,
 			MiscSettingsMenu,
+			NetworkSettingsMenu,
 			SettingsMenuCount
 		};
 
@@ -90,6 +92,7 @@ namespace RTE {
 		std::unique_ptr<SettingsInputGUI> m_InputSettingsMenu; //!< The input settings sub-menu.
 		std::unique_ptr<SettingsGameplayGUI> m_GameplaySettingsMenu; //!< The gameplay settings sub-menu.
 		std::unique_ptr<SettingsMiscGUI> m_MiscSettingsMenu; //!< The misc settings sub-menu.
+		std::unique_ptr<SettingsNetworkGUI> m_NetworkSettingsMenu; //!< The network settings sub-menu. Null in a skin without the page, like the pause menu's.
 
 		/// GUI elements that compose the settings menu screen.
 		GUICollectionBox* m_SettingsTabberBox;

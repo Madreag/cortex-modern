@@ -2552,8 +2552,11 @@ static std::string ResyncSaveName() {
 					pingMs = member.pingMs;
 				}
 			}
+			// The readout states the host's policy, not whether a per-sender set has arrived yet: an
+			// automatic delay reads automatic from the first frame and gains the measured ping later.
+			const std::string measured = config.peerInputDelayFrames.empty() ? ")" : ", " + std::to_string(pingMs) + "ms ping)";
 			m_InputDelayText = "Input delay: " + std::to_string(NetMatchConfigUtil::PeerInputDelay(config, localPeerId)) +
-			    (config.peerInputDelayFrames.empty() ? " (fixed)" : " (auto, " + std::to_string(pingMs) + "ms ping)");
+			    (config.delayPolicy == NetMatchDelayPolicy::Fixed ? " (fixed)" : " (auto" + measured);
 			if (m_ChatSession) {
 				// The roster's lockstep ids are the session's assigned ids plus one; the host relays
 				// team scope only inside the sender's team.
@@ -2913,6 +2916,8 @@ static std::string ResyncSaveName() {
 			const uint32_t seconds = std::min(GetAutosaveSeconds(), c_MaxAutosaveIntervalSeconds);
 			config.autosaveEnabled = seconds > 0;
 			config.autosaveIntervalSeconds = seconds;
+			// The rest of the host's saved session options ride the same config to every peer.
+			NetMatchConfigUtil::ApplySavedHostOptions(config);
 		}
 		// The host authors the roster; clients adopt it via the lobby config sync. PvP seats one team
 		// per peer; co-op PvE seats every human on team 0; PvPvE keeps per-peer teams. A dedicated host

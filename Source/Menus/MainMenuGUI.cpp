@@ -39,6 +39,11 @@
 
 using namespace RTE;
 
+// The lobby and the network settings page show one saved name; "Player" is only the empty fallback.
+static std::string SavedMultiplayerName() {
+	return g_SettingsMan.GetNetworkDisplayName().empty() ? "Player" : g_SettingsMan.GetNetworkDisplayName();
+}
+
 void MainMenuGUI::Clear() {
 	m_RootBoxMaxWidth = 0;
 
@@ -269,7 +274,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 		m_ModerationCancelButtons[row] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonModerationCancel" + suffix));
 	}
 
-	m_MultiplayerNameTextBox->SetText("Player");
+	m_MultiplayerNameTextBox->SetText(SavedMultiplayerName());
 	m_MultiplayerNameTextBox->SetMaxTextLength(24);
 	m_MultiplayerJoinAddressTextBox->SetText("127.0.0.1");
 	m_MultiplayerJoinAddressTextBox->SetMaxTextLength(64);
@@ -393,6 +398,10 @@ void MainMenuGUI::ShowMultiplayerScreen() {
 		g_NetMatchService.ScanStoredTicket();
 	}
 	m_MultiplayerSubScreen = (netMatchState == NetMatchServiceState::Idle || netMatchState == NetMatchServiceState::Completed) ? MultiplayerSubScreen::Landing : MultiplayerSubScreen::Lobby;
+	// The saved name is what an unconnected landing starts from; a live lobby keeps the name it joined under.
+	if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
+		m_MultiplayerNameTextBox->SetText(SavedMultiplayerName());
+	}
 	RefreshMultiplayerScreenControls(g_NetMatchService.GetLobbySnapshot());
 	m_MenuScreenChange = false;
 }
@@ -838,7 +847,14 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		request.address = m_MultiplayerJoinAddressTextBox->GetText();
 	}
 	request.port = static_cast<uint16_t>(parsedPort);
-	request.playerName = m_MultiplayerNameTextBox->GetText().empty() ? (host ? "Host" : "Client") : m_MultiplayerNameTextBox->GetText();
+	// Hosting or joining under a name saves it, but saving is best effort: the wire carries more
+	// bytes than the box takes typed, so a name the settings will not hold still goes out as typed.
+	const std::string typedName = m_MultiplayerNameTextBox->GetText();
+	request.playerName = typedName.empty() ? (host ? "Host" : "Client") : typedName;
+	if (!typedName.empty() && typedName != g_SettingsMan.GetNetworkDisplayName()) {
+		g_SettingsMan.SetNetworkDisplayName(typedName);
+		g_SettingsMan.UpdateSettingsFile();
+	}
 	request.activityPreset = "P4 Alpha Duel";
 	request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 	// Headed matches self-heal: a desync (or a rejoiner) reloads everyone from the host's snapshot.
@@ -855,9 +871,9 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		m_MultiplayerHostInputDelayTextBox->SetText(std::to_string(inputDelay));
 		g_SettingsMan.SetNetworkInputDelayFrames(inputDelay);
 		request.inputDelayFrames = static_cast<uint16_t>(inputDelay);
-		// The typed delay is the floor; the host raises it to cover the measured ping so high-RTT
-		// matches run stall-free out of the box.
-		request.autoInputDelay = true;
+		// The saved policy decides it: automatic keeps the typed delay as the floor and raises it to
+		// cover the measured ping, fixed hosts on the typed value alone.
+		request.autoInputDelay = g_SettingsMan.GetNetworkHostDelayPolicy() == SettingsMan::NetworkHostDelayPolicy::Auto;
 	}
 
 	std::string error;

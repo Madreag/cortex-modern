@@ -108,6 +108,9 @@ namespace RTE {
 		static bool ParseMode(const std::string& text, NetMatchMode& outMode);
 		static const char* OwnershipPolicyName(NetActorOwnershipPolicy policy);
 		static bool ParseOwnershipPolicy(const std::string& text, NetActorOwnershipPolicy& outPolicy);
+		/// Puts the host's saved session preferences on the config it publishes. Only a host calls
+		/// this: a client adopts these rules with the roster, its own saved copy steers nothing.
+		static void ApplySavedHostOptions(NetMatchConfig& config);
 	};
 
 } // namespace RTE
