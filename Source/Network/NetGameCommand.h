@@ -28,6 +28,7 @@ namespace RTE {
 		AIScriptMessage = 14,
 		AIGib = 15,
 		PlaceBrain = 16, //!< 14 and 15 carry the AI intent commands.
+		AIValue = 17, //!< A custom-value write the AI pass made; every peer applies it at the committed tick.
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -273,6 +274,31 @@ namespace RTE {
 		bool operator==(const NetGameAIScriptMessage&) const = default;
 	};
 
+	// A custom-value write an AI hook made from inside its own pass. The AI decides per-machine
+	// (off-wire); the write is sim state a shared script can read, so it crosses the wire and every
+	// peer, the producer included, applies it at the committed tick.
+	struct NetGameAIValue {
+		enum Op : uint8_t {
+			SetNumber = 0,
+			SetString = 1,
+			SetObject = 2,
+			RemoveNumber = 3,
+			RemoveString = 4,
+			RemoveObject = 5,
+			OpCount = 6
+		};
+
+		int64_t writerUID = 0; //!< The AI actor whose pass made the call; the authority for it.
+		int64_t objectUID = 0; //!< The MO written.
+		uint8_t op = SetNumber;
+		std::string key;
+		double number = 0.0;
+		std::string text;
+		int64_t valueUID = 0; //!< The object value's UniqueID; 0 or a dead object applies as a removal.
+
+		bool operator==(const NetGameAIValue&) const = default;
+	};
+
 	// A gib an AI hook asked for from inside its own pass. The gib spawns particles and takes the object out
 	// of the world, which the producing boundary cannot undo, so the call crosses the wire and every peer,
 	// the producer included, gibs at the committed tick.
@@ -321,7 +347,7 @@ namespace RTE {
 		bool operator==(const NetGamePlayerBindings&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain>;
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain, NetGameAIValue>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;

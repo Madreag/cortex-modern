@@ -857,6 +857,23 @@ namespace RTE {
 						}
 						break;
 					}
+					case NetGameCommandType::AIValue: {
+						const NetGameAIValue& value = std::get<NetGameAIValue>(command.payload);
+						if (value.op >= NetGameAIValue::OpCount || value.key.empty()) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, out.size(), "ai value is invalid");
+							return false;
+						}
+						AppendU64LE(out, static_cast<uint64_t>(value.writerUID));
+						AppendU64LE(out, static_cast<uint64_t>(value.objectUID));
+						AppendU8(out, value.op);
+						AppendU64LE(out, DoubleToBitsLE(value.number));
+						AppendU64LE(out, static_cast<uint64_t>(value.valueUID));
+						if (!AppendString(out, value.key, NetLockstepCodec::c_MaxValueKeyBytes, "ai_value_key", error) ||
+						    !AppendString(out, value.text, NetLockstepCodec::c_MaxValueStringBytes, "ai_value_text", error)) {
+							return false;
+						}
+						break;
+					}
 				}
 				if (recovery && out.size() > NetLockstepCodec::c_MaxRecoveryInputBytes - 10) {
 					SetError(error, NetLockstepErrorCode::PayloadTooLarge, out.size(), "recovery input exceeds maximum");
@@ -1838,6 +1855,36 @@ namespace RTE {
 						place.posX = FloatFromBitsLE(xBits);
 						place.posY = FloatFromBitsLE(yBits);
 						command.payload = std::move(place);
+						break;
+					}
+					case NetGameCommandType::AIValue: {
+						if (version < NetLockstepCodec::c_AIValueVersion) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ai value needs a newer frame version");
+							return false;
+						}
+						NetGameAIValue value;
+						uint64_t writerUID = 0;
+						uint64_t objectUID = 0;
+						uint64_t numberBits = 0;
+						uint64_t valueUID = 0;
+						if (!ReadOrTruncated(reader.ReadU64LE(writerUID), reader, error, "ai_value_writer_uid") ||
+						    !ReadOrTruncated(reader.ReadU64LE(objectUID), reader, error, "ai_value_object_uid") ||
+						    !ReadOrTruncated(reader.ReadU8(value.op), reader, error, "ai_value_op") ||
+						    !ReadOrTruncated(reader.ReadU64LE(numberBits), reader, error, "ai_value_number") ||
+						    !ReadOrTruncated(reader.ReadU64LE(valueUID), reader, error, "ai_value_value_uid") ||
+						    !reader.ReadString(value.key, NetLockstepCodec::c_MaxValueKeyBytes, "ai_value_key", error) ||
+						    !reader.ReadString(value.text, NetLockstepCodec::c_MaxValueStringBytes, "ai_value_text", error)) {
+							return false;
+						}
+						if (value.op >= NetGameAIValue::OpCount || value.key.empty()) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ai value is invalid");
+							return false;
+						}
+						value.writerUID = static_cast<int64_t>(writerUID);
+						value.objectUID = static_cast<int64_t>(objectUID);
+						value.number = DoubleFromBitsLE(numberBits);
+						value.valueUID = static_cast<int64_t>(valueUID);
+						command.payload = std::move(value);
 						break;
 					}
 					default:
