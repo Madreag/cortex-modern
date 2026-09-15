@@ -1483,12 +1483,34 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 	local ids = {}
 	for id in pairs(graph.nodes) do ids[#ids + 1] = id end
 	table.sort(ids)
+	-- A required module's members are named through package.loaded, so the module table is anchored there
+	-- first, as the table the loader handed out: re-requiring the file would run the module again.
+	local anchored, loadedIds, loadedNames = {}, {}, {}
+	if type(package) == "table" and type(package.loaded) == "table" then
+		for _, entry in ipairs(graph.loaded) do
+			if entry.value.t == "ref" and loadedNames[entry.value.id] == nil then
+				loadedNames[entry.value.id] = entry.name
+				loadedIds[#loadedIds + 1] = entry.value.id
+			end
+		end
+		table.sort(loadedIds)
+		for _, id in ipairs(loadedIds) do
+			local node = graph.nodes[id]
+			if node and node.kind == "T" then
+				local object = (reuseHeld and objects[id]) or (node.path and resolvePath(node.path.segments))
+				if type(object) ~= "table" or (baseline.paths and baseline.paths[object]) or object == _G then object = package.loaded[loadedNames[id]] end
+				if type(object) ~= "table" then object = {} end
+				package.loaded[loadedNames[id]] = object
+				anchored[id] = object
+			end
+		end
+	end
 	for _, id in ipairs(ids) do
 		local node = graph.nodes[id]
 		if node.kind == "T" then
-			local object = reuseHeld and objects[id] or nil
+			local object = (reuseHeld and objects[id]) or anchored[id] or nil
 			if object then
-				if node.path and not assignPath(node.path.segments, object) then fail("cannot restore a held table path") end
+				if node.path and not assignPath(node.path.segments, object) then fail("cannot place the table " .. pathText(node.path.segments)) end
 			elseif node.path then
 				object = resolvePath(node.path.segments)
 				if type(object) ~= "table" or (baseline.paths and baseline.paths[object]) or object == _G then
