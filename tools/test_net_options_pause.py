@@ -32,7 +32,7 @@ ARM_TICKS = {"desync": 300, "desync_clean": 300}
 DESYNC_INTERVAL = 30
 PERTURB_TICK = 50
 SIZES = ((640, 360), (960, 540))
-FIRST_SIZE_ONLY = ("peers4", "resync", "pad", "desync", "desync_clean")
+FIRST_SIZE_ONLY = ("peers4", "resync", "pad", "pad_hint", "desync", "desync_clean")
 MATCH_ROWS = ("ButtonLeaveMatch", "ButtonPauseMatch", "ButtonSettings", "ButtonSaveDiagnostics", "ButtonResume")
 SINGLE_PLAYER_ROWS = ("ButtonBackToMain", "ButtonSaveOrLoadGame", "ButtonModManager")
 LEFT_LOCAL = "NETWORK: Match left"
@@ -101,10 +101,36 @@ def pad_steps(tag):
     return {"schema": 1, "timeout_ms": 180000, "steps": steps}
 
 
+def pad_hint_steps(tag):
+    """Two virtual pads in one process. The menu script attaches its own pad and gives it back while the
+    probe's pad is still attached; SDL's background-events hint is process-global, so a release that turns
+    it off drops every later probe press at a window that never holds keyboard focus."""
+    steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "sim_at_least": 200},
+             pad("up"), {"op": "wait", "renders": 4},
+             pad("down"), {"op": "wait", "screen": "Pause"}, pad("up"),
+             {"op": "assert", "equals": {"screen": "Pause", "service": "Running", "paused": False}},
+             # The menu script's pad joins on this release, and the scope hands it back.
+             menu_step("pad south up"), {"op": "wait", "renders": 2},
+             {"op": "input_scope", "enabled": False}, {"op": "input_scope", "enabled": True},
+             {"op": "wait", "renders": 4}]
+    steps += live_menu_assertions(f"{tag}_open")
+    steps += [pad("down"), {"op": "wait", "screen": "Gameplay"}, pad("up"),
+              {"op": "assert", "equals": {"screen": "Gameplay", "service": "Running", "paused": False}},
+              {"op": "wait", "sim_at_least": 360},
+              # And once more, so the pad that survived the release is still the one the seat reads.
+              pad("down"), {"op": "wait", "screen": "Pause"}, pad("up"),
+              {"op": "assert", "equals": {"screen": "Pause", "service": "Running", "paused": False}},
+              menu_step("post_command ButtonResume"), {"op": "wait", "screen": "Gameplay"},
+              {"op": "wait", "sim_at_least": 480}, {"op": "finish"}]
+    return {"schema": 1, "timeout_ms": 180000, "steps": steps}
+
+
 def lifecycle_steps(arm, who, tag):
     """The probe script of one peer. Every arm opens the local menu the same way."""
     if arm == "pad":
         return pad_steps(tag)
+    if arm == "pad_hint":
+        return pad_hint_steps(tag)
     steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "sim_at_least": 200}]
     steps += escape()
     steps += [{"op": "wait", "screen": "Pause"},
@@ -351,6 +377,11 @@ def inspect(arm, root, outcome, strict_compare):
             details["pause_ticks"], details["resume_ticks"] = pauses, resumes
             checks["pause_on_every_peer"] = all(len(value) == 1 for value in pauses.values()) and len(set(map(tuple, pauses.values()))) == 1
             checks["resume_on_every_peer"] = all(len(value) == 1 for value in resumes.values()) and len(set(map(tuple, resumes.values()))) == 1
+        if arm == "pad_hint":
+            # The presses after the menu script's pad release are what the hint's ownership decides.
+            commands = executed_commands(probe_result(root, "host"))
+            after = commands[commands.index("input_scope"):] if "input_scope" in commands else []
+            checks["pad_pressed_after_the_menu_pad_release"] = after.count("pad_down") >= 2
         if arm == "leave":
             checks["leaver_left"] = LEFT_LOCAL in logs["client"]
             checks["host_saw_the_leave"] = any(LEFT_REMOTE.match(line) for line in logs["host"].splitlines())
@@ -366,7 +397,7 @@ def inspect(arm, root, outcome, strict_compare):
             checks[f"{who}_probe_confirmed_leave"] = "post_command ButtonLeaveConfirm" in executed_commands(probe)
         else:
             checks[f"{who}_probe_complete"] = probe.get("pass") is True and probe.get("complete") is True
-    if arm in ("menu", "peers4", "pad"):
+    if arm in ("menu", "peers4", "pad", "pad_hint"):
         first = outcome["peers"][0]
         for other in outcome["peers"][1:]:
             # The capped match hashes its completion tick too, so the trace holds one tick more than the cap.
@@ -384,7 +415,7 @@ def main():
     parser.add_argument("--exe-sha256", required=True)
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--arms", nargs="*",
-                        default=["menu", "pause", "leave", "sp", "peers4", "resync", "pad", "desync", "desync_clean"])
+                        default=["menu", "pause", "leave", "sp", "peers4", "resync", "pad", "pad_hint", "desync", "desync_clean"])
     # A later lane runs the same arms from its own scratch root and its own ports.
     parser.add_argument("--scratch-root", type=Path, default=SCRATCH)
     parser.add_argument("--port-base", type=int, default=PORT_BASE)
