@@ -119,7 +119,9 @@ namespace RTE {
 
 		/// Sets the multiplier of the cost of any foreign Tech items.
 		/// @param newMultiplier The scalar multiplier of the costs of foreign Tech items.
-		void SetForeignCostMultiplier(float newMultiplier) { m_ForeignCostMult = newMultiplier; }
+		void SetForeignCostMultiplier(float newMultiplier) {
+			if (!IsInert()) m_ForeignCostMult = newMultiplier;
+		}
 
 		/// Sets whether a data module shown in the item menu should be expanded
 		/// or not.
@@ -199,7 +201,9 @@ namespace RTE {
 
 		/// Sets whether passenger count constraints are enforced by this buy menu.
 		/// @param enforce True to enforce passenger constraints by this menu, false otherwise
-		void SetEnforceMaxPassengersConstraint(bool enforce) { m_EnforceMaxPassengersConstraint = enforce; };
+		void SetEnforceMaxPassengersConstraint(bool enforce) {
+			if (!IsInert()) m_EnforceMaxPassengersConstraint = enforce;
+		};
 
 		/// Sets whether mass constraints are enforced by this buy menu.
 		/// @param True if mass constraints are enforced by this menu, false otherwise
@@ -207,13 +211,17 @@ namespace RTE {
 
 		/// Sets whether mass constraints are enforced by this buy menu.
 		/// @param enforce True to enforce mass constraints by this menu, false otherwise
-		void SetEnforceMaxMassConstraint(bool enforce) { m_EnforceMaxMassConstraint = enforce; };
+		void SetEnforceMaxMassConstraint(bool enforce) {
+			if (!IsInert()) m_EnforceMaxMassConstraint = enforce;
+		};
 
 		/// Adds an item to the list of allowed items.
 		/// If the list is not empty then everything not in the list is removed from the buy menu
 		/// Items will be removed from the buy menu when it's called, category changed or after a ForceRefresh().
 		/// @param presetName Full preset name to add.
-		void AddAllowedItem(std::string presetName) { m_AllowedItems[std::move(presetName)] = true; };
+		void AddAllowedItem(std::string presetName) {
+			if (!IsInert()) m_AllowedItems[std::move(presetName)] = true;
+		};
 
 		/// Removes an item from the list of allowed items.
 		/// @param m_AllowedItems.erase(presetName Full preset name to remove.
@@ -228,7 +236,9 @@ namespace RTE {
 
 		/// Adds an item to the list of always allowed items. This list overrides all previous constraints.
 		/// @param presetName Full preset name to add.
-		void AddAlwaysAllowedItem(std::string presetName) { m_AlwaysAllowedItems[std::move(presetName)] = true; };
+		void AddAlwaysAllowedItem(std::string presetName) {
+			if (!IsInert()) m_AlwaysAllowedItems[std::move(presetName)] = true;
+		};
 
 		/// Removes an item from the list of always allowed items.
 		/// @param m_AlwaysAllowedItems.erase(presetName Full preset name to remove.
@@ -244,7 +254,9 @@ namespace RTE {
 		/// Adds an item prohibited to buy from the buy menu.
 		/// The item will be removed from the buy menu when it's called, category changed or after a ForceRefresh().
 		/// @param presetName Full preset name to add.
-		void AddProhibitedItem(std::string presetName) { m_ProhibitedItems[std::move(presetName)] = true; };
+		void AddProhibitedItem(std::string presetName) {
+			if (!IsInert()) m_ProhibitedItems[std::move(presetName)] = true;
+		};
 
 		/// Removes item from the list of prohibited items
 		/// @param m_ProhibitedItems.erase(presetName Full preset name to remove.
@@ -280,7 +292,9 @@ namespace RTE {
 
 		/// If set to true only owned items will be shown in buy menu. Overriden by AlwaysAllowed list.
 		/// @param value Value.
-		void SetOnlyShowOwnedItems(bool value) { m_OnlyShowOwnedItems = value; }
+		void SetOnlyShowOwnedItems(bool value) {
+			if (!IsInert()) m_OnlyShowOwnedItems = value;
+		}
 
 		/// Returns whether only owned items will be shown in buy menu. Overriden by AlwaysAllowed list.
 		/// @return Whether only owned items will be shown in buy menu.
@@ -288,7 +302,9 @@ namespace RTE {
 
 		/// Sets the amount of specified items to be owned in this buy menu
 		/// @param presetName Full preset name of item to own. Amount of owned items.
-		void SetOwnedItemsAmount(std::string presetName, int amount) { m_OwnedItems[std::move(presetName)] = amount; };
+		void SetOwnedItemsAmount(std::string presetName, int amount) {
+			if (!IsInert()) m_OwnedItems[std::move(presetName)] = amount;
+		};
 
 		/// Returns the amount of specified items owned in this buy menu
 		/// @param presetName Full preset name of item.
