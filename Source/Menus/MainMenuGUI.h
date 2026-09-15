@@ -222,6 +222,7 @@ namespace RTE {
 		GUITextBox* m_MultiplayerHostPortTextBox;
 		GUITextBox* m_MultiplayerHostPlayersTextBox;
 		GUITextBox* m_MultiplayerHostInputDelayTextBox;
+		GUILabel* m_MultiplayerHostInputDelayPolicyLabel; //!< Names the saved delay policy beside the box, the same parenthetical the lobby row carries.
 		GUICheckbox* m_MultiplayerHostPortMapCheckbox;
 		GUIButton* m_MultiplayerHostModeButton;
 		NetMatchMode m_MultiplayerHostMode;

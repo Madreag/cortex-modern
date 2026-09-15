@@ -118,10 +118,10 @@ def pause_rows():
             [menu_step(f"assert_visible {row} 0") for row in SINGLE_PLAYER_ROWS])
 
 
-def pause_probe():
+def pause_probe(who, root):
     """One peer's local match pause menu: its rows, its settings pages, and a match that keeps running."""
     running = {"op": "assert", "equals": {"service": "Running", "paused": False}, "sim_at_least": 150}
-    return {"schema": 1, "timeout_ms": 90000, "steps": [
+    steps = [
         {"op": "wait", "sim_at_least": 150},
         {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
         {"op": "wait", "screen": "Pause"}, running, *pause_rows(), menu_step("dump_host_options"),
@@ -132,15 +132,32 @@ def pause_probe():
         menu_step("select_settings_page Misc"), {"op": "wait", "renders": 3},
         menu_step("assert_settings_page Misc"), menu_step("dump_player_options"),
         menu_step("post_command ButtonBackToMainMenu"), {"op": "wait", "screen": "Pause"},
-        *pause_rows(), menu_step("dump_host_options"), running,
-        {"op": "signal", "name": "done"}, {"op": "finish"}]}
+        *pause_rows(), menu_step("dump_host_options"), running]
+    if who == "client":
+        # The leaver's drive starts only once the host's checks are done, so the clean leave cannot
+        # beat the running-match assertions. The menu pump that follows the leave still serves the
+        # probe's menu-scope steps, so its finish lands there.
+        steps += [{"op": "wait_file", "path": str(probe_root(root, "host") / "done.json")},
+                  {"op": "signal", "name": "done"},
+                  menu_step("activate ButtonLeaveMatch"), {"op": "wait", "screen": "PauseLeaveConfirm"},
+                  menu_step("assert_rect_inside LeaveConfirmBox viewport"),
+                  *row_checks("LabelLeaveConfirm", "LeaveConfirmBox"),
+                  *row_checks("ButtonLeaveConfirm", "LeaveConfirmBox"),
+                  *row_checks("ButtonLeaveCancel", "LeaveConfirmBox"),
+                  {"op": "assert_control", "scope": "menu", "control": "LabelLeaveConfirm",
+                   "equals": {}, "text_contains": "Leave the match"},
+                  menu_step("dump_host_options"), menu_step("activate ButtonLeaveConfirm")]
+    else:
+        steps += [{"op": "signal", "name": "done"}]
+    steps += [{"op": "finish"}]
+    return {"schema": 1, "timeout_ms": 90000, "steps": steps}
 
 
 def scripts(case, port, root):
     if case == "pause":
         # Each peer's match pause menu is its own local surface, so each peer drives its own probe.
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
-                {who: pause_probe() for who in ("host", "client")})
+                {who: pause_probe(who, root) for who in ("host", "client")})
     probe = None
     if case == "landing":
         text = LANDING + checks("ButtonMultiplayerHostGame", "MultiplayerLandingPanel")
@@ -185,24 +202,38 @@ def scripts(case, port, root):
                  "post_command CheckboxNetworkAutoRepair\nwait 3\ndump_player_options\n"
                  "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\n")
         text += LANDING + "assert_label TextMultiplayerName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
-        text += "dump_host_options\nexit\n"
+        text += checks("LabelMultiplayerNamePrompt", "MultiplayerLandingPanel")
+        text += checks("TextMultiplayerName", "MultiplayerLandingPanel")
+        text += "dump_host_options\n"
+        # The host screen names the saved policy beside its delay box; the page flipped it to Fixed.
+        text += ("activate ButtonMultiplayerHostGame\nwait 5\nassert_substate HostSetup\n"
+                 "assert_visible LabelHostInputDelayPolicy 1\nassert_label LabelHostInputDelayPolicy (fixed)\n"
+                 + checks("LabelHostInputDelayPolicy", "MultiplayerHostPanel") +
+                 "dump_host_options\n"
+                 "post_command ButtonHostBack\nwait 4\nassert_substate Landing\ndump_host_options\nexit\n")
     elif case == "lobby-name":
         # The name box starts from the saved name, and the name it is hosted with is saved again.
         text = LANDING + "assert_label TextMultiplayerName " + NETWORK_SEED["NetworkDisplayName"] + "\n"
         text += ("dump_host_options\nsettext TextMultiplayerName Recon7\n"
                  "activate ButtonMultiplayerHostGame\nwait 5\n"
+                 "assert_visible LabelHostInputDelayPolicy 1\nassert_label LabelHostInputDelayPolicy (auto)\n"
                  f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                  "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
                  "dump_host_options\nexit\n")
     elif case == "net-options":
-        # Two real peers: the host's saved session options ride the lobby config onto both rosters.
-        return ({who: f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n" for who in ("host", "client")},
+        # Two real peers: the host's saved session options ride the lobby config onto both rosters. A
+        # match end quits e2e peers outright, so the host's own pause-menu leave is what pauses the
+        # activity and lets its menu loop run the dump while the roster is still up.
+        return ({"host": f"dump_lobby\nwait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n",
+                 "client": f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n"},
                 {"host": {"schema": 1, "timeout_ms": 90000, "steps": [
                     {"op": "wait", "sim_at_least": 150},
                     {"op": "assert", "equals": {"service": "Running", "paused": False}, "sim_at_least": 150},
                     {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
                     {"op": "wait", "screen": "Pause"}, menu_step("dump_host_options"),
-                    {"op": "signal", "name": "done"}, {"op": "finish"}]}})
+                    {"op": "signal", "name": "done"},
+                    menu_step("activate ButtonLeaveMatch"), {"op": "wait", "screen": "PauseLeaveConfirm"},
+                    menu_step("activate ButtonLeaveConfirm"), {"op": "finish"}]}})
     elif case == "combo-fit":
         # Reached by the tab control so the measurement runs on a build that has no page op yet.
         text = (OPTIONS + "activate TabVideoSettings\nwait 3\nassert_visible ComboPresetResolution 1\n"
@@ -416,15 +447,29 @@ def run_case(options, case, root, failing=None):
             assert first["screen"] == last["screen"] == "MultiplayerScreen"
             assert first["service"] == last["service"], (first["service"], last["service"])
         if case == "pause":
-            # Both peers read the same menu: the match rows, no single-player row, and the two settings pages.
+            # Both peers read the same menu: the match rows, no single-player row, and the two settings
+            # pages. The client goes on to drive the leave-confirm surface its match rows open.
+            expected_screens = {"host": ["Pause", "PauseSettings", "PauseSettings", "Pause"],
+                                "client": ["Pause", "PauseSettings", "PauseSettings", "Pause", "PauseLeaveConfirm"]}
             for who in ("host", "client"):
                 peer = [capture for capture in images if capture["peer"] == who]
-                assert [capture["screen"] for capture in peer] == ["Pause", "PauseSettings", "PauseSettings", "Pause"], (who, peer)
+                assert [capture["screen"] for capture in peer] == expected_screens[who], (who, peer)
                 assert [capture["settings_page"] for capture in peer[1:3]] == ["Gameplay", "Misc"], (who, peer)
-                for capture in (peer[0], peer[-1]):
+                pauses = [capture for capture in peer if capture["screen"] == "Pause"]
+                for capture in (pauses[0], pauses[-1]):
                     drawn = {control["name"] for control in capture["controls"]}
                     assert set(MATCH_ROWS) <= drawn, (who, sorted(drawn))
                     assert not set(SINGLE_PLAYER_ROWS) & drawn, (who, sorted(drawn))
+            confirm = [capture for capture in images if capture["screen"] == "PauseLeaveConfirm"]
+            assert len(confirm) == 1 and confirm[0]["peer"] == "client", confirm
+            drawn = {control["name"] for control in confirm[0]["controls"]}
+            assert {"LeaveConfirmBox", "LabelLeaveConfirm", "ButtonLeaveConfirm", "ButtonLeaveCancel"} <= drawn, sorted(drawn)
+            # The clean leave, read from each side's own match report: the survivor's match ends
+            # complete, not broken, and the leaver's records its leave, not a crash.
+            reports = {who: json.loads((root / f"{who}-match.json").read_text(encoding="utf-8"))
+                       for who in ("host", "client")}
+            assert reports["host"]["service"]["status"] == "The other player left the match", reports["host"]["service"]["status"]
+            assert reports["client"]["service"]["status"] == "Match left", reports["client"]["service"]["status"]
         if case == "pages":
             assert [capture["settings_page"] for capture in images] == list(PAGES), [c["settings_page"] for c in images]
             captioned = [control for capture in images for control in capture["controls"] if control["text"]]
@@ -458,7 +503,23 @@ def run_case(options, case, root, failing=None):
             assert result["page_text"]["TextNetworkDisplayName"] == [NETWORK_SEED["NetworkDisplayName"], NETWORK_SAVED["NetworkDisplayName"]], result["page_text"]
             result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(NETWORK_SAVED))
             assert result["saved"] == NETWORK_SAVED, result["saved"]
+            # The page sits on the Misc page's grid: a 20px row pitch, and under the automatic policy
+            # the hidden fixed row leaves no gap behind it.
+            pitch = ("LabelNetworkDisplayName", "LabelNetworkDelayPolicy", "LabelNetworkFixedDelay",
+                     "LabelNetworkIdleWait", "CheckboxNetworkAutoRepair")
+            deltas = [after[b]["rect"][1] - after[a]["rect"][1] for a, b in zip(pitch, pitch[1:])]
+            assert deltas == [20, 20, 20, 20], deltas
+            closed = [rows[b]["rect"][1] - rows[a]["rect"][1] for a, b in zip(pitch[:2] + pitch[3:], (pitch[:2] + pitch[3:])[1:])]
+            assert closed == [20, 20, 20], closed
+            # The landing's name row shares the Host/Join block's centre line; doubled centres avoid halves.
+            landing = {c["name"]: c for c in images[-1]["controls"]}
+            prompt, box = landing["LabelMultiplayerNamePrompt"]["rect"], landing["TextMultiplayerName"]["rect"]
+            host_button, join_button = landing["ButtonMultiplayerHostGame"]["rect"], landing["ButtonMultiplayerJoinGame"]["rect"]
+            assert prompt[0] + box[0] + box[2] == host_button[0] + join_button[0] + join_button[2], (prompt, box, host_button, join_button)
             assert next(c["text"] for c in images[-1]["controls"] if c["name"] == "TextMultiplayerName") == NETWORK_SAVED["NetworkDisplayName"]
+            # The host screen's own readback: the label sits beside the delay box and names the saved policy.
+            policy = next((c for c in images[-2]["controls"] if c["name"] == "LabelHostInputDelayPolicy"), None)
+            assert policy and policy["text"] == "(fixed)", policy
         if case == "lobby-name":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == NETWORK_SEED["NetworkDisplayName"]
             result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", {"NetworkDisplayName"})
@@ -474,6 +535,15 @@ def run_case(options, case, root, failing=None):
                 rules = report["service"]["runner"]["match_config"]["rules"]
                 result["match_rules"][who] = {name: rules[name] for name in MATCH_RULES}
                 assert result["match_rules"][who] == MATCH_RULES, (who, result["match_rules"][who])
+            # The announced delay text is host-authored and synced: the host's post-leave menu loop is
+            # the only pump a script gets before a match end quits e2e peers, so it is where the
+            # (fixed) branch is read. Each report records the same leave from its own side.
+            lobby = [line for line in logs["host"].splitlines() if "[menu-script] dump_lobby" in line]
+            assert lobby and 'input_delay="Input delay: 3 (fixed)"' in lobby[-1], lobby
+            reports = {who: json.loads((root / f"{who}-match.json").read_text(encoding="utf-8"))
+                       for who in ("host", "client")}
+            assert reports["host"]["service"]["status"] == "Match left", reports["host"]["service"]["status"]
+            assert reports["client"]["service"]["status"] == "The other player left the match", reports["client"]["service"]["status"]
         if case == "input":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == "ab"
         if case == "input-parity":
