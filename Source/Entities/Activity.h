@@ -598,7 +598,15 @@ namespace RTE {
 		/// Gets the currently controlled actor of a specific player.
 		/// @param player Which player to get the controlled actor of.
 		/// @return A pointer to the controlled Actor. Ownership is NOT transferred! 0 If no actor is currently controlled by this player.
-		Actor* GetControlledActor(int player = 0) { return (player >= Players::PlayerOne && player < Players::MaxPlayerCount) ? m_ControlledActor[player] : nullptr; }
+		Actor* GetControlledActor(int player = 0);
+
+		/// The seat's actor as THIS machine presents it: null for a seat another peer plays. Presentation only.
+		Actor* GetLocallyControlledActor(int player) const { return (player >= Players::PlayerOne && player < Players::MaxPlayerCount) ? m_ControlledActor[player] : nullptr; }
+
+		/// Records which seat the wire says an actor is played by; every peer applies the same frames.
+		/// @param uid The actor's unique id.
+		/// @param player The seat the frame named, or NoPlayer.
+		void NoteLockstepControlBinding(int64_t uid, int player);
 
 		/// Points the per-player controlled-actor and brain slots at a render substitute (and back); presentation only.
 		void SubstituteActorForRender(Actor* original, Actor* substitute) {
@@ -746,6 +754,7 @@ namespace RTE {
 		bool m_BrainEvacuated[Players::MaxPlayerCount]; //!< Whether a player has evacuated his Brain into orbit.
 
 		Actor* m_ControlledActor[Players::MaxPlayerCount]; //!< Currently controlled actor, not owned.
+		std::array<int64_t, Players::MaxPlayerCount> m_LockstepControlUID{}; //!< Which actor the wire says each seat plays; the same on every peer.
 		Controller m_PlayerController[Players::MaxPlayerCount]; //!< The Controllers of all the players for the GUIs.
 
 		Timer m_MessageTimer[Players::MaxPlayerCount]; //!< Message timer for each player.
