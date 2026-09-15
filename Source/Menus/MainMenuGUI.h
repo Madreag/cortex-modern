@@ -79,6 +79,8 @@ namespace RTE {
 #pragma endregion
 
 #pragma region Automation
+		/// Gets the control manager for the screen currently drawn.
+		GUIControlManager* AutomationManager() const;
 		/// Activates a control by name, dispatching to the active screen handler exactly as a click does.
 		/// @return Whether the control was found.
 		bool AutomationActivateControl(const std::string& controlName);
@@ -119,6 +121,7 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		std::unique_ptr<GUIInputWrapper> m_AutomationInput;
 		/// Enumeration for the different sub-menu screens of the main menu.
 		enum MenuScreen {
 			MainScreen,
