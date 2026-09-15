@@ -86,7 +86,8 @@ namespace RTE {
 			m_ChatTeams.clear();
 			m_ChatRate.clear();
 		}
-		if (m_Config.maxPeers == 0) {
+		// Only a round that seats no remote peer may offer no seat at all.
+		if (m_Config.maxPeers == 0 && !m_Config.readyWithoutPeers) {
 			if (error) *error = "host maxPeers must be nonzero";
 			m_State = NetSessionState::Failed;
 			return false;
@@ -95,7 +96,7 @@ namespace RTE {
 			m_State = NetSessionState::Failed;
 			return false;
 		}
-		m_State = NetSessionState::Listening;
+		m_State = m_Config.readyWithoutPeers ? NetSessionState::Ready : NetSessionState::Listening;
 		m_StateStartedMs = m_NowMs;
 		if (NetA7Journal::Enabled()) NetA7Journal::Session("listening", m_NowMs, {{"port", m_Config.port}});
 		return true;
@@ -630,6 +631,11 @@ namespace RTE {
 			}
 			uint8_t assignedPeerId = AllocatePeerId();
 			if (assignedPeerId == 0) {
+				if (m_Config.maxPeers == 0) {
+					// A round with no remote seat has none to reconnect into either, so say so instead of "full".
+					RejectPeer(*peer, NetRejectReason::SessionFull, "peer_count", "0", std::to_string(ActivePeerCount()), "session seats no remote player");
+					return;
+				}
 				// §6: the seat's own id is still held by the incarnation this joiner may be about to
 				// supersede, so it proves on a provisional one and takes the seat's id from the commit.
 				assignedPeerId = AllocatePendingAdmissionPeerId();
@@ -1362,10 +1368,12 @@ namespace RTE {
 		const bool hasHandshake = std::any_of(m_Peers.begin(), m_Peers.end(), [](const PeerState& peer) {
 			return peer.state == NetSessionState::Handshake;
 		});
+		// A round with no remote seat has everyone it needs the moment it is hosted.
+		const NetSessionState idleState = m_Config.readyWithoutPeers ? NetSessionState::Ready : NetSessionState::Listening;
 		const NetSessionState nextState = hasReady ? NetSessionState::Ready :
 		                                  hasAccepted ? NetSessionState::Accepted :
 		                                  hasHandshake ? NetSessionState::Handshake :
-		                                  NetSessionState::Listening;
+		                                  idleState;
 		if (m_State != nextState) {
 			m_State = nextState;
 			m_StateStartedMs = m_NowMs;
@@ -1691,7 +1699,9 @@ namespace RTE {
 				{"chat_dropped_malformed", chatStats.chatDroppedMalformed},
 			}},
 		};
-		return report.dump(2);
+		// A peer's rejection text is free-form remote diagnostics, so a stray byte is replaced rather
+		// than thrown: this report is built while a match runs.
+		return report.dump(2, ' ', false, json::error_handler_t::replace);
 	}
 
 	const char* NetSession::RoleName(NetSessionRole role) {

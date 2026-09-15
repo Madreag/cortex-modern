@@ -246,6 +246,8 @@ Field(path + ".ACraft.m_AltitudeControl", object.m_AltitudeControl);
 Field(path + ".ACraft.m_DeliveryDelayMultiplier", object.m_DeliveryDelayMultiplier);
 Field(path + ".ACraft.m_NetworkDelivery", object.m_NetworkDelivery);
 Field(path + ".ACraft.m_NetworkDeliveryTimer", object.m_NetworkDeliveryTimer);
+Field(path + ".ACraft.m_OffWireHatchTick", object.m_OffWireHatchTick);
+Field(path + ".ACraft.m_OffWireHatchOpen", object.m_OffWireHatchOpen);
 }
 void Visit(const ACraft::Exit& object, const std::string& path) {
 Field(path + ".ACraft::Exit.m_Offset", object.m_Offset);
@@ -532,6 +534,9 @@ Field(path + ".Actor.m_AIMode", object.m_AIMode);
 Field(path + ".Actor.m_Waypoints", object.m_Waypoints);
 Field(path + ".Actor.m_PendingDeferredWaypoints", object.m_PendingDeferredWaypoints);
 Field(path + ".Actor.m_InflightWaypoints", object.m_InflightWaypoints);
+Field(path + ".Actor.m_LastOrderedWaypoint", object.m_LastOrderedWaypoint);
+Field(path + ".Actor.m_HasOrderedWaypoint", object.m_HasOrderedWaypoint);
+Field(path + ".Actor.m_LastOrderedWaypointUID", object.m_LastOrderedWaypointUID);
 Field(path + ".Actor.m_WaypointCursor", object.m_WaypointCursor);
 Field(path + ".Actor.m_DrawWaypoints", object.m_DrawWaypoints);
 Field(path + ".Actor.m_MoveTarget", object.m_MoveTarget);
@@ -835,6 +840,19 @@ Field(path + ".GameActivity.m_GameOverTimer", object.m_GameOverTimer);
 Field(path + ".GameActivity.m_GameOverPeriod", object.m_GameOverPeriod);
 Field(path + ".GameActivity.m_WinnerTeam", object.m_WinnerTeam);
 Field(path + ".GameActivity.m_NetworkPlayerNames", object.m_NetworkPlayerNames);
+Field(path + ".GameActivity.m_LockstepPlacementSubmitted", object.m_LockstepPlacementSubmitted);
+Field(path + ".GameActivity.m_LockstepSeatBrains", object.m_LockstepSeatBrains);
+Field(path + ".GameActivity.m_LockstepPlacementUidBase", object.m_LockstepPlacementUidBase);
+Field(path + ".GameActivity.m_LockstepPlacementSeeded", object.m_LockstepPlacementSeeded);
+}
+void Visit(const NetGamePlaceBrain& object, const std::string& path) {
+Field(path + ".NetGamePlaceBrain.team", object.team);
+Field(path + ".NetGamePlaceBrain.player", object.player);
+Field(path + ".NetGamePlaceBrain.posX", object.posX);
+Field(path + ".NetGamePlaceBrain.posY", object.posY);
+Field(path + ".NetGamePlaceBrain.className", object.className);
+Field(path + ".NetGamePlaceBrain.preset", object.preset);
+Field(path + ".NetGamePlaceBrain.module", object.module);
 }
 void Visit(const GameActivity::Delivery& object, const std::string& path) {
 Field(path + ".GameActivity::Delivery.pCraft", object.pCraft);

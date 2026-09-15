@@ -83,7 +83,8 @@ function GameIntensityCalculator:UpdateGameIntensityCalculator()
 
 	for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
 		if self.Activity:PlayerActive(player) and self.Activity:PlayerHuman(player) then
-			local screenBox = Box(CameraMan:GetOffset(player), CameraMan:GetOffset(player) + Vector(FrameMan.PlayerScreenWidth, FrameMan.PlayerScreenHeight));
+			-- The pinned screen size: the intensity this measures is saved with the game.
+			local screenBox = Box(CameraMan:GetOffset(player), CameraMan:GetOffset(player) + Vector(FrameMan.SimScreenWidth, FrameMan.SimScreenHeight));
 			for mo in MovableMan:GetMOsInBox(screenBox, -1, true) do
 				if IsActor(mo) then
 					mo = ToActor(mo);

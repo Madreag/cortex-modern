@@ -14,6 +14,7 @@
 #include "PresetMan.h"
 #include "SceneMan.h"
 #include "ScenarioRunner.h"
+#include "NetMatchConfig.h"
 #include "DataModule.h"
 #include "PostProcessMan.h"
 #include "Controller.h"
@@ -33,6 +34,7 @@
 #include "AllegroBitmap.h"
 #include "InventoryMenuGUI.h"
 #include "BuyMenuGUI.h"
+#include "ObjectPickerGUI.h"
 #include "SceneEditorGUI.h"
 #include "GUIBanner.h"
 #include "GUICheckpoint.h"
@@ -42,8 +44,10 @@
 #include "TimerMan.h"
 #include "OwnedMovableObjects.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <iostream>
 #include <sstream>
 
@@ -81,6 +85,7 @@ void GameActivity::Clear() {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		m_ObservationTarget[player].Reset();
 		m_DeathViewTarget[player].Reset();
+		m_SpectatorTarget[player] = nullptr;
 		m_ActorSelectTimer[player].Reset();
 		m_ActorCursor[player].Reset();
 		m_pLastMarkedActor[player] = 0;
@@ -98,10 +103,14 @@ void GameActivity::Clear() {
 		m_pBannerYellow[player] = 0;
 		m_BannerRepeats[player] = 0;
 		m_ReadyToStart[player] = false;
+		m_LockstepPlacementSubmitted[player] = false;
+		m_LockstepSeatBrains[player] = NetGamePlaceBrain{};
 		m_PurchaseOverride[player].clear();
 		m_BrainLZWidth[player] = BRAINLZWIDTHDEFAULT;
 		m_NetworkPlayerNames[player] = "";
 	}
+	m_LockstepPlacementSeeded = false;
+	m_LockstepPlacementUidBase = 0;
 
 	m_StartingGold = 0;
 	m_FogOfWarEnabled = false;
@@ -370,20 +379,61 @@ void GameActivity::SetCPUTeam(int team) {
 	*/
 }
 
+void GameActivity::ConfigureLockstepCPUTeams(const std::array<bool, Teams::MaxTeamCount>& cpuTeams) {
+	m_CPUTeam = Teams::NoTeam;
+	std::fill(std::begin(m_TeamIsCPU), std::end(m_TeamIsCPU), false);
+	// Every CPU flag is shared; the legacy scalar selects the lowest numbered CPU team.
+	for (int team = Teams::MaxTeamCount - 1; team >= Teams::TeamOne; --team) {
+		if (cpuTeams[team]) SetCPUTeam(team);
+	}
+}
+
+// A seat this machine does not present has no menu, editor or banner of its own, and a script that asks for one
+// gets an inert object of the same type: it is never created, so its every method is a no-op and its every getter
+// answers neutral. Offline every seat is this machine's own and the live objects are handed out as before.
+namespace {
+template <class T> T* SeatStub(std::unique_ptr<T>& stub) {
+	if (!stub) stub = std::make_unique<T>();
+	return stub.get();
+}
+} // namespace
+
+BuyMenuGUI* GameActivity::GetBuyGUI(unsigned int which) const {
+	if (which >= Players::MaxPlayerCount) return nullptr;
+	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
+	return presented && m_pBuyGUI[which] ? m_pBuyGUI[which] : SeatStub(m_SeatStubBuyGUI[which]);
+}
+
+SceneEditorGUI* GameActivity::GetEditorGUI(unsigned int which) const {
+	if (which >= Players::MaxPlayerCount) return nullptr;
+	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
+	return presented && m_pEditorGUI[which] ? m_pEditorGUI[which] : SeatStub(m_SeatStubEditorGUI[which]);
+}
+
+GUIBanner* GameActivity::GetBanner(int whichColor, int player) const {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return nullptr;
+	GUIBanner* const live = whichColor == YELLOW ? m_pBannerYellow[player] : m_pBannerRed[player];
+	const bool presented = LocalInputOfPlayer(player) != Players::NoPlayer;
+	return presented && live ? live : SeatStub(m_SeatStubBanner[whichColor == YELLOW ? YELLOW : RED][player]);
+}
+
 bool GameActivity::IsBuyGUIVisible(int which) const {
 	if (which == -1) {
-		for (short player = Players::PlayerOne; player < this->GetPlayerCount(); player++) {
-			if (this->GetBuyGUI(player)->IsVisible()) {
+		const int playerLimit = m_SharedPlayerSeats ? Players::MaxPlayerCount : GetPlayerCount();
+		for (int player = Players::PlayerOne; player < playerLimit; player++) {
+			if (m_SharedPlayerSeats && !(IsSeatActive(player) && IsLocalHumanSeat(player))) continue;
+			if (const BuyMenuGUI* menu = GetBuyGUI(player); menu && menu->IsVisible()) {
 				return true;
 			}
 		}
 		return false;
 	}
-	return this->GetBuyGUI(which)->IsVisible();
+	const BuyMenuGUI* menu = GetBuyGUI(which);
+	return menu && menu->IsVisible();
 }
 
 bool GameActivity::LockControlledActor(Players player, bool lock, Controller::InputMode lockToMode) {
-	if (player >= Players::PlayerOne && player < Players::MaxPlayerCount) {
+	if (LocalInputOfPlayer(player) != Players::NoPlayer) {
 		bool prevLock = m_LuaLockActor[player];
 		m_LuaLockActor[player] = lock;
 		m_LuaLockActorMode[player] = lockToMode;
@@ -394,7 +444,7 @@ bool GameActivity::LockControlledActor(Players player, bool lock, Controller::In
 
 bool GameActivity::SwitchToActor(Actor* pActor, int player, int team) {
 	// Computer players don't focus on any Actor
-	if (!m_IsHuman[player])
+	if (!IsLocalHumanSeat(player))
 		return false;
 
 	m_InventoryMenuGUI[player]->SetEnabled(false);
@@ -407,6 +457,7 @@ bool GameActivity::SwitchToActor(Actor* pActor, int player, int team) {
 }
 
 void GameActivity::SwitchToNextActor(int player, int team, Actor* pSkip) {
+	if (m_SharedPlayerSeats && !IsLocalHumanSeat(player)) return;
 	m_InventoryMenuGUI[player]->SetEnabled(false);
 
 	// Disable the AI command mode since it's connected to the current actor
@@ -417,6 +468,7 @@ void GameActivity::SwitchToNextActor(int player, int team, Actor* pSkip) {
 }
 
 void GameActivity::SwitchToPrevActor(int player, int team, Actor* pSkip) {
+	if (m_SharedPlayerSeats && !IsLocalHumanSeat(player)) return;
 	m_InventoryMenuGUI[player]->SetEnabled(false);
 
 	// Disable the AI command mode since it's connected to the current actor
@@ -435,7 +487,7 @@ void GameActivity::YSortObjectivePoints() {
 }
 
 int GameActivity::AddOverridePurchase(const SceneObject* pPurchase, int player) {
-	if (player >= Players::PlayerOne && player < Players::MaxPlayerCount) {
+	if (LocalInputOfPlayer(player) != Players::NoPlayer) {
 		// Add to purchase list if valid item
 		if (pPurchase) {
 			// Get the preset of this instance passed in, so we make sure we are only storing non-owned instances
@@ -467,6 +519,7 @@ int GameActivity::AddOverridePurchase(const SceneObject* pPurchase, int player) 
 }
 
 int GameActivity::SetOverridePurchaseList(const Loadout* pLoadout, int player) {
+	if (LocalInputOfPlayer(player) == Players::NoPlayer) return 0;
 	// First clear out the list
 	ClearOverridePurchase(player);
 
@@ -507,6 +560,7 @@ int GameActivity::SetOverridePurchaseList(const Loadout* pLoadout, int player) {
 }
 
 int GameActivity::SetOverridePurchaseList(const std::string& loadoutName, int player) {
+	if (LocalInputOfPlayer(player) == Players::NoPlayer) return 0;
 	// Find out the native module of this player
 	int nativeModule = 0;
 	MetaPlayer* pMetaPlayer = g_MetaMan.GetMetaPlayerOfInGamePlayer(player);
@@ -524,6 +578,8 @@ int GameActivity::SetOverridePurchaseList(const std::string& loadoutName, int pl
 }
 
 bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor* pTargetMO) {
+	if (LocalInputOfPlayer(player) == Players::NoPlayer) return false;
+	if (!m_pBuyGUI[player]) return false;
 	int team = m_Team[player];
 	if (team == Teams::NoTeam)
 		return false;
@@ -735,7 +791,7 @@ bool GameActivity::QueuePurchaseDelivery(ACraft* pDeliveryCraft, const PurchaseO
 	m_TeamFunds[order.team] -= order.totalCost;
 
 	// Go 'ding!', but only if player is human, or it may be confusing
-	if (order.orderedByPlayer >= Players::PlayerOne && order.orderedByPlayer < Players::MaxPlayerCount && PlayerHuman(order.orderedByPlayer))
+	if (order.orderedByPlayer >= Players::PlayerOne && order.orderedByPlayer < Players::MaxPlayerCount && IsLocalHumanSeat(order.orderedByPlayer))
 		g_GUISound.ConfirmSound()->Play(order.orderedByPlayer);
 
 	return true;
@@ -762,7 +818,7 @@ void GameActivity::SetupPlayers() {
 
 int GameActivity::Start() {
 	// Set the split screen config before the Scene (and it SceneLayers, specifially) are loaded
-	uint8_t humanCount = GetHumanCount();
+	uint8_t humanCount = GetLocalHumanCount();
 	// Depending on the resolution aspect ratio, split first horizontally (if wide screen)
 	if (((float)g_WindowMan.GetResX() / (float)g_WindowMan.GetResY()) >= 1.6)
 		g_FrameMan.ResetSplitScreens(humanCount > 1, humanCount > 2);
@@ -805,7 +861,7 @@ int GameActivity::Start() {
 	// Set up human players
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
 		// Set the team associations with each screen displayed
@@ -907,7 +963,7 @@ int GameActivity::Start() {
 		m_LandingZone[player].Reset();
 
 		// Set the initial landing zones to be above the respective brains, but not for the observer player in a three player game
-		if (m_Brain[player] && !(m_PlayerCount == 3 && ScreenOfPlayer(player) == 3)) {
+		if (m_Brain[player] && !(GetLocalHumanCount() == 3 && ScreenOfPlayer(player) == 3)) {
 			// Also set the brain to be the selected actor at start
 			SwitchToActor(m_Brain[player], player, m_Team[player]);
 			m_ActorCursor[player] = m_Brain[player]->GetPos();
@@ -961,7 +1017,7 @@ void GameActivity::End() {
 
 	// Disable control of actors.. will be handed over to the observation targets instead
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
 		g_CameraMan.SetScreenOcclusion(Vector(), ScreenOfPlayer(player));
@@ -1012,27 +1068,485 @@ void GameActivity::End() {
 	m_GameOverTimer.Reset();
 }
 
+bool GameActivity::IsLockstepPlacement() {
+	return ScenarioRunner::IsLockstepControllerSyncActive();
+}
+
+uint8_t GameActivity::LockstepSeatPeerId(int player) {
+	const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+	if (!config || player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return 0;
+	}
+	// The roster's non-CPU slots fill the seats in order, the way ConfigureHumanRoster seats them.
+	int seat = Players::PlayerOne;
+	for (const NetMatchPlayerSlot& slot: config->players) {
+		if (slot.cpu) {
+			continue;
+		}
+		if (seat == player) {
+			return slot.peerId;
+		}
+		++seat;
+	}
+	return 0;
+}
+
+bool GameActivity::MayCommitBrainPlacement(int player) const {
+	if (!(IsSeatActive(player) && IsHumanSeat(player))) {
+		return false;
+	}
+	const uint8_t seatPeer = LockstepSeatPeerId(player);
+	const uint8_t local = ScenarioRunner::GetLockstepLocalPeerId();
+	// A seat no peer holds (a dedicated or AI filled one) is the host's to fill.
+	return seatPeer != 0 ? seatPeer == local : local == ScenarioRunner::GetLockstepHostPeerId();
+}
+
+Vector GameActivity::GroundSpot(float sceneX) const {
+	Vector spot(sceneX, 0.0F);
+	g_SceneMan.ForceBounds(spot);
+	// Just off the ground, so the brain settles under the same physics on every peer.
+	spot.m_Y = g_SceneMan.FindAltitude(spot, g_SceneMan.GetSceneHeight(), 10, true) - 20.0F;
+	return spot;
+}
+
+Vector GameActivity::DeterministicBrainSpot(int player) const {
+	// Every peer reads the same roster, scene width and terrain, so the spot it derives for a seat is the
+	// same one. Seats stand in even bands across the site, in seat order.
+	int seats = 0;
+	int index = 0;
+	for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
+		if (!(IsSeatActive(seat) && IsHumanSeat(seat))) {
+			continue;
+		}
+		if (seat < player) {
+			++index;
+		}
+		++seats;
+	}
+	return GroundSpot(static_cast<float>(g_SceneMan.GetSceneWidth()) * static_cast<float>(index + 1) / static_cast<float>(seats + 1));
+}
+
+void GameActivity::SeedLockstepResidentBrains() {
+	Scene* scene = g_SceneMan.GetScene();
+	if (!scene) {
+		return;
+	}
+	// Every peer runs this identically, so a brain already standing in the scene becomes its seat's resident
+	// on all of them at once. After it no local residence test can take an actor out of one peer's sim alone.
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (!(IsSeatActive(player) && IsHumanSeat(player)) || scene->GetResidentBrain(player)) {
+			continue;
+		}
+		if (Actor* unassigned = g_MovableMan.GetUnassignedBrain(m_Team[player])) {
+			scene->SetResidentBrain(player, unassigned);
+			g_MovableMan.RemoveMO(unassigned);
+		}
+	}
+}
+
+bool GameActivity::PlaceAndSubmitLockstepBrain(int player, const std::string& className, const std::string& preset, const std::string& module) {
+	if (!IsLockstepPlacement() || !MayCommitBrainPlacement(player) || m_LockstepPlacementSubmitted[player] || m_ReadyToStart[player]) {
+		return false;
+	}
+	if (!g_PresetMan.GetEntityPreset(className, preset, module)) {
+		return false;
+	}
+	const Vector spot = DeterministicBrainSpot(player);
+	return CommitLockstepBrainPlacement(player, className, preset, module, spot, "auto");
+}
+
+bool GameActivity::CommitLockstepBrainPlacement(int player, const std::string& className, const std::string& preset, const std::string& module, const Vector& spot, const char* via) {
+	NetGamePlaceBrain placement;
+	placement.team = m_Team[player];
+	placement.player = player;
+	placement.posX = spot.m_X;
+	placement.posY = spot.m_Y;
+	placement.className = className;
+	placement.preset = preset;
+	placement.module = module;
+	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, placement});
+	m_LockstepPlacementSubmitted[player] = true;
+	std::cout << "[net-match] brain placement committed: seat=" << player << " team=" << placement.team
+	          << " preset=" << placement.module << "/" << placement.preset
+	          << " pos=" << placement.posX << "," << placement.posY << " via=" << via << std::endl;
+	return true;
+}
+
+bool GameActivity::SubmitLockstepBrainPlacement(int player) {
+	// One command per placement gesture: the commit is in flight until it comes back off the wire.
+	if (!IsLockstepPlacement() || !MayCommitBrainPlacement(player) || m_LockstepPlacementSubmitted[player] || m_ReadyToStart[player]) {
+		return false;
+	}
+	Scene* scene = g_SceneMan.GetScene();
+	if (!scene || !scene->GetResidentBrain(player)) {
+		return false;
+	}
+	// This machine vets its own player's spot - the choice is off the wire, like every other menu decision.
+	if (m_pEditorGUI[player] && !m_pEditorGUI[player]->TestBrainResidence()) {
+		return false;
+	}
+	// A refused residence test clears the resident, so read it back before committing.
+	const SceneObject* resident = scene->GetResidentBrain(player);
+	if (!resident || resident->GetPresetName().empty()) {
+		return false;
+	}
+	return CommitLockstepBrainPlacement(player, resident->GetClassName(), resident->GetPresetName(),
+	                                    g_PresetMan.GetDataModuleName(resident->GetModuleID()), resident->GetPos(), "editor");
+}
+
+namespace {
+	// The UI probe's scripted setup-editor gestures, per seat. Test-only: nothing in the game queues one,
+	// so an empty queue leaves DriveScriptedSetupEditor a no-op and the editor entirely in the player's hands.
+	struct ScriptedEditorGesture {
+		bool done = false; //!< A DONE press instead of a placement.
+		float sceneXFraction = 0.5F;
+		std::string className, preset, module;
+		int stage = 0;    //!< 0 pick the brain up, 1 press and release over the spot, 2 read the result.
+		int attempts = 0; //!< Ground spots tried; the editor itself refuses one with no path to the sky.
+		int updates = 0;  //!< Editor updates spent, so a gesture the editor never takes cannot hang the seat.
+	};
+	// A per-machine setup editor is local presentation while the lockstep world is held: every peer edits a
+	// different brain over a different spot, so its previews, clones and residence tests must draw from the
+	// render stream. The shared one has to read the same on every peer when the match starts.
+	struct ScopedEditorRNG {
+		RandomGenerator* m_Prev;
+		bool m_Active;
+		explicit ScopedEditorRNG(bool active) :
+		    m_Prev(t_simRNGOverride), m_Active(active) {
+			if (active) {
+				t_simRNGOverride = &g_RenderRNG;
+			}
+		}
+		~ScopedEditorRNG() {
+			if (m_Active) {
+				t_simRNGOverride = m_Prev;
+			}
+		}
+		ScopedEditorRNG(const ScopedEditorRNG&) = delete;
+		ScopedEditorRNG& operator=(const ScopedEditorRNG&) = delete;
+	};
+
+	std::array<std::deque<ScriptedEditorGesture>, Players::MaxPlayerCount> s_ScriptedEditorGestures;
+	std::array<bool, Players::MaxPlayerCount> s_ScriptedEditorFailed{};
+	constexpr int c_ScriptedEditorAttempts = 8;
+	constexpr int c_ScriptedEditorUpdateCap = 400;
+} // namespace
+
+bool GameActivity::QueueSetupEditorGesture(int player, const std::string& kind, float sceneXFraction, const std::string& className, const std::string& preset, const std::string& module) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount || (kind != "place_brain" && kind != "done")) {
+		return false;
+	}
+	ScriptedEditorGesture gesture;
+	gesture.done = kind == "done";
+	gesture.sceneXFraction = std::clamp(sceneXFraction, 0.0F, 1.0F);
+	gesture.className = className;
+	gesture.preset = preset;
+	gesture.module = module;
+	s_ScriptedEditorGestures[player].push_back(std::move(gesture));
+	return true;
+}
+
+int GameActivity::SetupEditorMode(int player) const {
+	return player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_pEditorGUI[player] ? m_pEditorGUI[player]->GetEditorGUIMode() : -1;
+}
+
+int GameActivity::SetupEditorGestureStatus(int player) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount || s_ScriptedEditorFailed[player]) {
+		return 2;
+	}
+	return s_ScriptedEditorGestures[player].empty() ? 0 : 1;
+}
+
+void GameActivity::DriveScriptedSetupEditor(int player) {
+	if (s_ScriptedEditorGestures[player].empty() || !m_pEditorGUI[player]) {
+		return;
+	}
+	ScriptedEditorGesture& gesture = s_ScriptedEditorGestures[player].front();
+	if (gesture.done) {
+		m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::DONEEDITING);
+		s_ScriptedEditorGestures[player].pop_front();
+		return;
+	}
+	const auto give_up = [&] {
+		s_ScriptedEditorFailed[player] = true;
+		s_ScriptedEditorGestures[player].pop_front();
+	};
+	if (++gesture.updates > c_ScriptedEditorUpdateCap) {
+		give_up();
+		return;
+	}
+	Scene* scene = g_SceneMan.GetScene();
+	// Each attempt walks one brain width along the ground: an invalid spot is the editor's own verdict.
+	const Vector spot = GroundSpot(static_cast<float>(g_SceneMan.GetSceneWidth()) * gesture.sceneXFraction + static_cast<float>(gesture.attempts) * 40.0F);
+	const SceneEditorGUI::EditorGUIMode mode = m_pEditorGUI[player]->GetEditorGUIMode();
+	if (gesture.stage == 0) {
+		const Entity* brainPreset = g_PresetMan.GetEntityPreset(gesture.className, gesture.preset, gesture.module);
+		if (!brainPreset || !m_pEditorGUI[player]->SetCurrentObject(dynamic_cast<SceneObject*>(brainPreset->Clone()))) {
+			give_up();
+			return;
+		}
+		m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::INSTALLINGBRAIN);
+		m_pEditorGUI[player]->SetCursorPos(spot);
+		gesture.stage = 1;
+	} else if (gesture.stage == 1) {
+		// The seat's own press and release over the spot; the editor vets the path to the sky like always.
+		const ObjectPickerGUI* picker = m_pEditorGUI[player]->GetCheckpointPicker();
+		if (picker && picker->IsVisible()) {
+			// The picker is still on its way out and would eat the press.
+			return;
+		}
+		m_pEditorGUI[player]->SetCursorPos(spot);
+		if (mode == SceneEditorGUI::INSTALLINGBRAIN) {
+			m_PlayerController[player].SetState(PRESS_PRIMARY, true);
+		} else if (mode == SceneEditorGUI::PLACINGOBJECT) {
+			m_PlayerController[player].SetState(RELEASE_PRIMARY, true);
+		} else {
+			gesture.stage = 2;
+		}
+	} else {
+		const SceneObject* resident = scene ? scene->GetResidentBrain(player) : nullptr;
+		if (resident && resident->GetPresetName() == gesture.preset) {
+			s_ScriptedEditorGestures[player].pop_front();
+		} else if (++gesture.attempts >= c_ScriptedEditorAttempts) {
+			give_up();
+		} else {
+			gesture.stage = 0;
+		}
+	}
+}
+
+void GameActivity::RefuseBrainPlacement(int player, const std::string& reason, bool banner) {
+	g_ConsoleMan.PrintString("ERROR: " + reason);
+	if (IsLocalHumanSeat(player)) {
+		g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
+		g_FrameMan.SetScreenText(reason, ScreenOfPlayer(player), 250, 3500);
+		m_MessageTimer[player].Reset();
+	}
+	if (banner) {
+		ScenarioRunner::PushNetUiToast("brain_refused", reason);
+	}
+}
+
+bool GameActivity::EnqueueRawBrainPlacement(int player, int team, float posX, float posY, const std::string& className, const std::string& preset, const std::string& module) {
+	if (!IsLockstepPlacement() || player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return false;
+	}
+	NetGamePlaceBrain placement;
+	placement.team = team;
+	placement.player = player;
+	placement.posX = posX;
+	placement.posY = posY;
+	placement.className = className;
+	placement.preset = preset;
+	placement.module = module;
+	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, placement});
+	return true;
+}
+
+bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, uint8_t senderPeerId) {
+	Scene* scene = g_SceneMan.GetScene();
+	const int player = placement.player;
+	if (!scene || player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return false;
+	}
+	if (!(IsSeatActive(player) && IsHumanSeat(player)) || placement.team != m_Team[player]) {
+		return false;
+	}
+	if (!std::isfinite(placement.posX) || !std::isfinite(placement.posY)) {
+		return false;
+	}
+	// A refusal is silent on the wire, so the player who tried reads the reason on their own screen.
+	const auto refuse = [&](const std::string& reason) {
+		std::cout << "[net-match] brain placement refused: seat=" << player << " peer=" << static_cast<int>(senderPeerId)
+		          << " reason=" << reason << std::endl;
+		RefuseBrainPlacement(player, reason, senderPeerId == ScenarioRunner::GetLockstepLocalPeerId());
+		return false;
+	};
+	// Only the peer holding the seat may place its brain; every peer resolves that the same way.
+	const uint8_t seatPeer = LockstepSeatPeerId(player);
+	if (senderPeerId != (seatPeer != 0 ? seatPeer : ScenarioRunner::GetLockstepHostPeerId())) {
+		return refuse("Rejected a brain placement for seat " + std::to_string(player) + " from a peer that does not hold it");
+	}
+	if (!g_PresetMan.GetEntityPreset(placement.className, placement.preset, placement.module)) {
+		return refuse("Brain placement rejected - unknown preset \"" + placement.preset + "\"");
+	}
+	// Recorded, not built: the brains are all made at the start, off a counter every peer shares, so a
+	// local editor's own preview objects cannot shift the unique ids the sim ends up with.
+	m_LockstepSeatBrains[player] = placement;
+	m_ReadyToStart[player] = true;
+	std::cout << "[net-match] brain placement applied: seat=" << player << " team=" << m_Team[player]
+	          << " peer=" << static_cast<int>(senderPeerId) << " preset=" << placement.module << "/" << placement.preset
+	          << " pos=" << placement.posX << "," << placement.posY << std::endl;
+	// Presentation only: every peer names the seat that just placed, and the waiting strip counts down.
+	ScenarioRunner::PushNetUiToast("brain_placed", IsLocalHumanSeat(player) ? std::string("You placed your brain")
+	                                                                            : LockstepSeatName(player) + " placed their brain");
+	return true;
+}
+
+std::string GameActivity::LockstepSeatName(int player) {
+	// The roster's non-CPU slots fill the seats in order, the way ConfigureHumanRoster seats them.
+	if (const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig()) {
+		int seat = Players::PlayerOne;
+		for (const NetMatchPlayerSlot& slot: config->players) {
+			if (slot.cpu) {
+				continue;
+			}
+			if (seat == player && !slot.displayName.empty()) {
+				return slot.displayName;
+			}
+			++seat;
+		}
+	}
+	return "Player " + std::to_string(player + 1);
+}
+
+bool GameActivity::DescribeLockstepPlacementWait(std::string& names, int& placed, int& total) const {
+	if (!IsLockstepPlacement() || m_ActivityState != ActivityState::Editing) {
+		return false;
+	}
+	names.clear();
+	placed = 0;
+	total = 0;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (!(IsSeatActive(player) && IsHumanSeat(player))) {
+			continue;
+		}
+		++total;
+		if (m_ReadyToStart[player]) {
+			++placed;
+		} else {
+			names += (names.empty() ? "" : ", ") + LockstepSeatName(player);
+		}
+	}
+	return true;
+}
+
+bool GameActivity::BuildLockstepSeatBrains() {
+	Scene* scene = g_SceneMan.GetScene();
+	if (!scene) {
+		return false;
+	}
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if ((IsSeatActive(player) && IsHumanSeat(player)) && m_LockstepSeatBrains[player].player != player) {
+			return false;
+		}
+	}
+	// Drop every local preview first, then put the counter back in step: a peer whose own editor spent more
+	// ids than the reserve would build different ones, so say so instead of starting a match that will part.
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (IsSeatActive(player) && IsHumanSeat(player)) {
+			scene->SetResidentBrain(player, nullptr);
+		}
+	}
+	if (MovableObject::GetUniqueIDCounter() > m_LockstepPlacementUidBase + c_SetupEditorUidReserve) {
+		const std::string line = "ERROR: the setup editor spent more than " + std::to_string(c_SetupEditorUidReserve) + " unique ids";
+		g_ConsoleMan.PrintString(line);
+		std::cout << "[net-match] " << line << std::endl;
+		return false;
+	}
+	MovableObject::PinUniqueIDCounter(m_LockstepPlacementUidBase + c_SetupEditorUidReserve);
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (!(IsSeatActive(player) && IsHumanSeat(player))) {
+			continue;
+		}
+		const NetGamePlaceBrain& placement = m_LockstepSeatBrains[player];
+		const Entity* brainPreset = g_PresetMan.GetEntityPreset(placement.className, placement.preset, placement.module);
+		Entity* clone = brainPreset ? brainPreset->Clone() : nullptr;
+		SceneObject* brain = dynamic_cast<SceneObject*>(clone);
+		if (!brain) {
+			delete clone;
+			return false;
+		}
+		brain->SetTeam(m_Team[player]);
+		brain->SetPos(Vector(placement.posX, placement.posY));
+		scene->SetResidentBrain(player, brain);
+		std::cout << "[net-match] brain placed: seat=" << player << " team=" << m_Team[player]
+		          << " peer=" << static_cast<int>(LockstepSeatPeerId(player)) << " preset=" << placement.module << "/" << placement.preset
+		          << " pos=" << placement.posX << "," << placement.posY
+		          << " uid=" << (dynamic_cast<const MovableObject*>(brain) ? dynamic_cast<const MovableObject*>(brain)->GetUniqueID() : 0) << std::endl;
+	}
+	return true;
+}
+
 void GameActivity::UpdateEditing() {
 	// Editing the scene, just update the editor guis and see if players are ready to start or not
 	if (m_ActivityState != ActivityState::Editing)
 		return;
 
+	// In a match the setup editor is synchronized: each seat picks its own spot on its own machine and the
+	// committed brain crosses the wire, so every peer installs the identical one before the match starts.
+	const bool lockstep = IsLockstepPlacement();
+	if (lockstep && !m_LockstepPlacementSeeded) {
+		m_LockstepPlacementSeeded = true;
+		// Read before any local editor runs, so every peer starts its reserve from the same id.
+		m_LockstepPlacementUidBase = MovableObject::GetUniqueIDCounter();
+		SeedLockstepResidentBrains();
+		// A seat no peer drives gets its brain from the host, at the spot every peer derives.
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			if (IsSeatActive(player) && IsHumanSeat(player) && LockstepSeatPeerId(player) == 0 && MayCommitBrainPlacement(player)) {
+				if (!g_SceneMan.GetScene() || !g_SceneMan.GetScene()->GetResidentBrain(player)) {
+					PlaceAndSubmitLockstepBrain(player, "Actor", "Brain Case", "Base.rte");
+				} else {
+					SubmitLockstepBrainPlacement(player);
+				}
+			}
+		}
+	}
+
 	///////////////////////////////////////////
 	// Iterate through all human players
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
-		m_pEditorGUI[player]->Update();
+		// Everything this seat's own editor does is local to this machine while the world is held.
+		const ScopedEditorRNG editorRNG(lockstep);
+
+		// A scripted gesture stands in for this seat's own mouse; only the UI probe queues one.
+		DriveScriptedSetupEditor(player);
+
+		// The editor answers a DONE it refuses by taking the seat back to placing a brain, which says nothing
+		// about the match; the seat hears the same refusal a wire-refused placement gives it.
+		const bool askedDone = m_pEditorGUI[player]->GetEditorGUIMode() == SceneEditorGUI::DONEEDITING;
+
+		GetEditorGUI(player)->Update();
+
+		if (lockstep && askedDone && !m_ReadyToStart[player] && !m_LockstepPlacementSubmitted[player] &&
+		    m_pEditorGUI[player]->GetEditorGUIMode() != SceneEditorGUI::DONEEDITING) {
+			RefuseBrainPlacement(player, "Place your brain in a valid spot first", true);
+		}
 
 		// Set the team associations with each screen displayed
 		g_CameraMan.SetScreenTeam(m_Team[player], ScreenOfPlayer(player));
 
+		// A player who picks the brain up again may commit a new spot; the last committed one wins everywhere.
+		if (lockstep && (m_pEditorGUI[player]->GetEditorGUIMode() == SceneEditorGUI::INSTALLINGBRAIN ||
+		                 m_pEditorGUI[player]->GetEditorGUIMode() == SceneEditorGUI::PLACINGOBJECT)) {
+			m_LockstepPlacementSubmitted[player] = false;
+		}
+
 		// Check if the player says he's done editing, and if so, make sure he really is good to go
-		if (m_pEditorGUI[player]->GetEditorGUIMode() == SceneEditorGUI::DONEEDITING) {
+		if (GetEditorGUI(player)->GetEditorGUIMode() == SceneEditorGUI::DONEEDITING) {
+			// A match seat commits its placement instead of starting on its own: readiness comes back from
+			// the wire, on the same frame, for every peer.
+			if (lockstep) {
+				if (!m_ReadyToStart[player] && !m_LockstepPlacementSubmitted[player] && !SubmitLockstepBrainPlacement(player)) {
+					const Entity* pBrain = g_PresetMan.GetEntityPreset("Actor", "Brain Case");
+					if (pBrain)
+						m_pEditorGUI[player]->SetCurrentObject(dynamic_cast<SceneObject*>(pBrain->Clone()));
+					m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::INSTALLINGBRAIN);
+					g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
+					g_FrameMan.SetScreenText("PLACE YOUR BRAIN IN A VALID SPOT FIRST!", ScreenOfPlayer(player), 250, 3500);
+					m_MessageTimer[player].Reset();
+				} else if (m_LockstepPlacementSubmitted[player]) {
+					g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
+					g_FrameMan.SetScreenText("READY to start - wait for others to finish...", ScreenOfPlayer(player), 333);
+					m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::ADDINGOBJECT);
+				}
+			}
 			// See if a brain has been placed yet by this player - IN A VALID LOCATION
-			if (!m_pEditorGUI[player]->TestBrainResidence()) {
+			else if (!m_pEditorGUI[player]->TestBrainResidence()) {
 				// Hm not ready yet without resident brain in the right spot, so let user know
 				m_ReadyToStart[player] = false;
 				const Entity* pBrain = g_PresetMan.GetEntityPreset("Actor", "Brain Case");
@@ -1060,7 +1574,7 @@ void GameActivity::UpdateEditing() {
 	// Have all players flagged themselves as ready to start the game?
 	bool allReady = true;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsHumanSeat(player)))
 			continue;
 		if (!m_ReadyToStart[player])
 			allReady = false;
@@ -1068,9 +1582,10 @@ void GameActivity::UpdateEditing() {
 
 	// YES, we are allegedly all ready to stop editing and start the game!
 	if (allReady) {
-		// Make sure any players haven't moved or entombed their brains in the period after flagging themselves "done"
-		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-			if (!(m_IsActive[player] && m_IsHuman[player]))
+		// Make sure any players haven't moved or entombed their brains in the period after flagging themselves "done".
+		// A committed placement cannot move after it crosses, and this test only runs on the seat's own machine.
+		for (int player = Players::PlayerOne; !lockstep && player < Players::MaxPlayerCount; ++player) {
+			if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 				continue;
 			// See if a brain has been placed yet by this player - IN A VALID LOCATION
 			if (!m_pEditorGUI[player]->TestBrainResidence()) {
@@ -1087,11 +1602,16 @@ void GameActivity::UpdateEditing() {
 			}
 		}
 
+		// Every seat's committed brain is built here, identically on every peer, and only then placed.
+		if (allReady && lockstep && !BuildLockstepSeatBrains()) {
+			allReady = false;
+		}
+
 		// Still good to go??
 		if (allReady) {
 			// All resident brains are still in valid spots - place them into the simulation
 			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-				if (!(m_IsActive[player] && m_IsHuman[player]))
+				if (!(IsSeatActive(player) && IsHumanSeat(player)))
 					continue;
 
 				// Place this player's resident brain into the simulation and set it as the player's assigned brain
@@ -1099,7 +1619,7 @@ void GameActivity::UpdateEditing() {
 
 				// Still no brain of this player? Last ditch effort to find one and assign it to this player
 				if (!m_Brain[player])
-					m_Brain[player] = g_MovableMan.GetUnassignedBrain(m_Team[player]);
+					PlaceUnassignedBrain(player);
 				// Um, something went wrong.. we're not done placing brains after all??
 				if (!m_Brain[player]) {
 					allReady = false;
@@ -1142,6 +1662,74 @@ void GameActivity::UpdateEditing() {
 	}
 }
 
+// The spectator's cycle: every living actor of every team, in team and roster order.
+static Actor* NextSpectatorActor(const Actor* current, bool forward) {
+	Actor* first = nullptr;
+	Actor* last = nullptr;
+	Actor* before = nullptr;
+	Actor* after = nullptr;
+	bool seenCurrent = false;
+
+	for (int team = Activity::Teams::TeamOne; team < Activity::Teams::MaxTeamCount; ++team) {
+		const std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(team);
+		if (!roster) {
+			continue;
+		}
+		for (Actor* actor: *roster) {
+			if (!actor || actor->IsDead()) {
+				continue;
+			}
+			if (!first) {
+				first = actor;
+			}
+			if (actor == current) {
+				seenCurrent = true;
+			} else if (seenCurrent) {
+				if (!after) {
+					after = actor;
+				}
+			} else {
+				before = actor;
+			}
+			last = actor;
+		}
+	}
+	// A followed unit that died drops the cycle back to the start.
+	if (!seenCurrent) {
+		return first;
+	}
+	return forward ? (after ? after : first) : (before ? before : last);
+}
+
+void GameActivity::UpdateSpectatorView(int player, bool lookedAround) {
+	// Only a brainless human under the host's rule spectates; every other observer keeps the old view.
+	if (!BrainlessHumansSpectate() || !m_HadBrain[player] || (m_Brain[player] && !m_Brain[player]->IsDead())) {
+		return;
+	}
+
+	const int screen = ScreenOfPlayer(player);
+	if (!g_MovableMan.IsActor(m_SpectatorTarget[player])) {
+		m_SpectatorTarget[player] = nullptr;
+	}
+	// Looking around by hand drops the followed unit.
+	if (lookedAround && m_SpectatorTarget[player]) {
+		m_SpectatorTarget[player] = nullptr;
+		g_FrameMan.ClearScreenText(screen);
+	}
+
+	const bool forward = m_PlayerController[player].IsState(ACTOR_NEXT);
+	if (forward || m_PlayerController[player].IsState(ACTOR_PREV)) {
+		m_SpectatorTarget[player] = NextSpectatorActor(m_SpectatorTarget[player], forward);
+		g_FrameMan.ClearScreenText(screen);
+	}
+
+	if (const Actor* followed = m_SpectatorTarget[player]) {
+		// Following holds the view on the unit and names it until the player looks around again.
+		m_ObservationTarget[player] = followed->GetPos();
+		g_FrameMan.SetScreenText(GetTeamName(followed->GetTeam()) + " - " + followed->GetPresetName(), screen, 0, -1, false);
+	}
+}
+
 void GameActivity::Update() {
 	if (g_ActivityMan.LockstepRelaunchInProgress()) {
 		g_ActivityMan.NoteStaleActivitySlots(CountStaleRelaunchSlots(static_cast<int>(g_TimerMan.GetSimUpdateCount())));
@@ -1162,7 +1750,7 @@ void GameActivity::Update() {
 	// Iterate through all human players
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
 		// The current player's team
@@ -1245,7 +1833,7 @@ void GameActivity::Update() {
 			if (m_PlayerController[player].IsState(ACTOR_BRAIN) && m_ViewState[player] != ViewState::ActorSelect) {
 				SwitchToActor(m_Brain[player], player, team);
 				m_ViewState[player] = ViewState::Normal;
-			} else if (m_PlayerController[player].IsState(ACTOR_NEXT) && m_ViewState[player] != ViewState::ActorSelect && !m_pBuyGUI[player]->IsVisible() && !m_LuaLockActor[player]) {
+			} else if (m_PlayerController[player].IsState(ACTOR_NEXT) && m_ViewState[player] != ViewState::ActorSelect && !IsBuyGUIVisible(player) && !m_LuaLockActor[player]) {
 				// Switch to next actor if the player wants to. Don't do it while the buy menu is open
 				// The synchronized actor controller closes shared pie state.
 				if (localPieAnimations && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
@@ -1257,7 +1845,7 @@ void GameActivity::Update() {
 				g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
 			}
 			// Switch to prev actor if the player wants to. Don't do it while the buy menu is open
-			else if (m_PlayerController[player].IsState(ACTOR_PREV) && m_ViewState[player] != ViewState::ActorSelect && !m_pBuyGUI[player]->IsVisible()) {
+			else if (m_PlayerController[player].IsState(ACTOR_PREV) && m_ViewState[player] != ViewState::ActorSelect && !IsBuyGUIVisible(player)) {
 				if (localPieAnimations && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
 					m_ControlledActor[player]->GetPieMenu()->SetEnabled(false);
 				}
@@ -1265,7 +1853,7 @@ void GameActivity::Update() {
 				SwitchToPrevActor(player, team);
 				m_ViewState[player] = ViewState::Normal;
 				g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
-			} else if (m_ViewState[player] != ViewState::ActorSelect && !m_pBuyGUI[player]->IsVisible() && !m_LuaLockActor[player] && (m_PlayerController[player].IsState(ACTOR_NEXT_PREP) || m_PlayerController[player].IsState(ACTOR_PREV_PREP))) {
+			} else if (m_ViewState[player] != ViewState::ActorSelect && !IsBuyGUIVisible(player) && !m_LuaLockActor[player] && (m_PlayerController[player].IsState(ACTOR_NEXT_PREP) || m_PlayerController[player].IsState(ACTOR_PREV_PREP))) {
 				// Go into manual actor select mode if either actor switch buttons are held for a duration
 				// Sim time, so a held switch trips on the same tick for every peer and a stalled frame can't trip it
 				if (m_ActorSelectTimer[player].IsPastSimMS(250)) {
@@ -1293,7 +1881,8 @@ void GameActivity::Update() {
 			// If we're observing game over state, freeze the view for a bit so the player's input doesn't ruin the focus
 			if (!(m_ActivityState == ActivityState::Over && !m_GameOverTimer.IsPastRealMS(1000))) {
 				// Get cursor input
-				m_PlayerController[player].RelativeCursorMovement(m_ObservationTarget[player], 1.2f);
+				const bool lookedAround = m_PlayerController[player].RelativeCursorMovement(m_ObservationTarget[player], 1.2f);
+				UpdateSpectatorView(player, lookedAround);
 			}
 			// Set the view to the observation position
 			g_SceneMan.ForceBounds(m_ObservationTarget[player]);
@@ -1318,7 +1907,7 @@ void GameActivity::Update() {
 			if (m_PlayerController[player].IsState(PRESS_SECONDARY)) {
 				// Reset the mouse so the actor doesn't change aim because mouse has been moved
 				if (m_PlayerController[player].IsMouseControlled()) {
-					g_UInputMan.SetMouseValueMagnitude(0, player);
+					g_UInputMan.SetMouseValueMagnitude(0, LocalInputOfPlayer(player));
 				}
 
 				m_ViewState[player] = ViewState::Normal;
@@ -1338,7 +1927,7 @@ void GameActivity::Update() {
 			else if (m_PlayerController[player].IsState(ACTOR_NEXT) || m_PlayerController[player].IsState(ACTOR_PREV) || m_PlayerController[player].IsState(PRESS_FACEBUTTON) || m_PlayerController[player].IsState(PRESS_PRIMARY)) {
 				// Reset the mouse so the actor doesn't change aim because mouse has been moved
 				if (m_PlayerController[player].IsMouseControlled()) {
-					g_UInputMan.SetMouseValueMagnitude(0, player);
+					g_UInputMan.SetMouseValueMagnitude(0, LocalInputOfPlayer(player));
 				}
 
 				if (pMarkedActor) {
@@ -1738,7 +2327,7 @@ void GameActivity::Update() {
 			}
 
 			m_InventoryMenuGUI[player]->SetInventoryActor(m_ControlledActor[player]);
-			if (g_MenuMan.IsNetworkPanelOpen()) m_InventoryMenuGUI[player]->SetEnabled(false);
+			if (g_MenuMan.IsLiveMenuOwningInput()) m_InventoryMenuGUI[player]->SetEnabled(false);
 			m_InventoryMenuGUI[player]->Update();
 		}
 
@@ -1747,17 +2336,18 @@ void GameActivity::Update() {
 
 		// Enable or disable the Buy Menus if the brain is selected, Skip if an LZ selection button press was just performed
 		if (!skipBuyUpdate) {
-			if (g_MenuMan.IsNetworkPanelOpen()) m_pBuyGUI[player]->SetEnabled(false);
+			if (g_MenuMan.IsLiveMenuOwningInput()) m_pBuyGUI[player]->SetEnabled(false);
 			//            m_pBuyGUI[player]->SetEnabled(m_ControlledActor[player] == m_Brain[player] && m_ViewState[player] != ViewState::LandingZoneSelect && m_ActivityState != ActivityState::Over);
 			m_pBuyGUI[player]->Update();
 		}
 
 		// Trap the mouse if we're in gameplay and not in menus
-		g_UInputMan.TrapMousePos(!g_MenuMan.IsNetworkPanelOpen() && !m_pBuyGUI[player]->IsEnabled() && !m_InventoryMenuGUI[player]->IsEnabledAndNotCarousel() && !m_LuaLockActor[player], player);
+		g_UInputMan.TrapMousePos(!g_MenuMan.IsLiveMenuOwningInput() && !m_pBuyGUI[player]->IsEnabled() && !m_InventoryMenuGUI[player]->IsEnabledAndNotCarousel() && !m_LuaLockActor[player], LocalInputOfPlayer(player));
 
 		// Start LZ picking mode if a purchase was made
 		if (m_pBuyGUI[player]->PurchaseMade()) {
-			m_LZCursorWidth[player] = std::min(m_pBuyGUI[player]->GetDeliveryWidth(), g_FrameMan.GetPlayerScreenWidth() - 24);
+			// Store the delivery's own width; the window clamp belongs to the draw, since this is checkpointed state.
+			m_LZCursorWidth[player] = m_pBuyGUI[player]->GetDeliveryWidth();
 			m_pBuyGUI[player]->SetEnabled(false);
 			//            SwitchToPrevActor(player, team, m_Brain[player]);
 			// Start selecting the landing zone
@@ -1791,7 +2381,7 @@ void GameActivity::Update() {
 
 		if (m_ControlledActor[player] && m_ControlledActor[player]->GetController()->GetSeatPlayerRaw() == player) {
 			// Don't disable when pie menu is active; it is done inside the Controller Update
-			if (m_pBuyGUI[player]->IsVisible() || m_ViewState[player] == ViewState::ActorSelect || m_ViewState[player] == ViewState::LandingZoneSelect || m_ViewState[player] == ViewState::Observe) {
+			if (IsBuyGUIVisible(player) || m_ViewState[player] == ViewState::ActorSelect || m_ViewState[player] == ViewState::LandingZoneSelect || m_ViewState[player] == ViewState::Observe) {
 				m_ControlledActor[player]->GetController()->SetInputMode(Controller::CIM_AI);
 			} else if (m_InventoryMenuGUI[player]->IsEnabledAndNotCarousel()) {
 				m_ControlledActor[player]->GetController()->SetInputMode(Controller::CIM_DISABLED);
@@ -1945,11 +2535,11 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 
 	// Iterate through all players, drawing each currently used LZ cursor.
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
 		if (m_ViewState[player] == ViewState::LandingZoneSelect) {
-			int halfWidth = std::max(m_LZCursorWidth[player] / 2, 36);
+			int halfWidth = std::max(std::min(m_LZCursorWidth[player], g_FrameMan.GetPlayerScreenWidth() - 24) / 2, 36);
 			team = m_Team[player];
 			if (team == Teams::NoTeam)
 				continue;
@@ -2026,7 +2616,7 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 		return;
 
 	// None of the following player-specific GUI elements apply if this isn't a played human actor
-	if (!(m_IsActive[PoS] && m_IsHuman[PoS]))
+	if (!(IsSeatActive(PoS) && IsLocalHumanSeat(PoS)))
 		return;
 
 	// Get all possible wrapped boxes of the screen
@@ -2124,8 +2714,8 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 	if (m_GameTimer.GetElapsedRealTimeS() < 30) {
 		// TODO: Only blink if there hasn't been any input on a controller since start of game??
 		// Blink them at first, but only if there's more than one human player
-		if (m_GameTimer.GetElapsedRealTimeS() > 4 || m_GameTimer.AlternateReal(150) || GetHumanCount() < 2) {
-			pIcon = g_UInputMan.GetSchemeIcon(PoS);
+		if (m_GameTimer.GetElapsedRealTimeS() > 4 || m_GameTimer.AlternateReal(150) || GetLocalHumanCount() < 2) {
+			pIcon = g_UInputMan.GetSchemeIcon(LocalInputOfPlayer(PoS));
 			if (pIcon) {
 				draw_sprite(pTargetBitmap, pIcon->GetBitmaps8()[0], MIN(pTargetBitmap->w - pIcon->GetBitmaps8()[0]->w - 2, pTargetBitmap->w - pIcon->GetBitmaps8()[0]->w - 2 + g_CameraMan.GetScreenOcclusion(which).m_X), yTextPos);
 				// TODO: make a black Activity intro screen, saying "Player X, press any key/button to show that you are ready!, and display their controller icon, then fade into the scene"
@@ -2144,7 +2734,7 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 	}
 
 	// Draw actor picking crosshairs if applicable
-	if (m_ViewState[PoS] == ViewState::ActorSelect && m_IsActive[PoS] && m_IsHuman[PoS]) {
+	if (m_ViewState[PoS] == ViewState::ActorSelect && IsSeatActive(PoS) && IsLocalHumanSeat(PoS)) {
 		Vector center = m_ActorCursor[PoS] - targetPos;
 		circle(pTargetBitmap, center.m_X, center.m_Y, m_CursorTimer.AlternateReal(150) ? 6 : 8, g_YellowGlowColor);
 		// Add pixel glow area around it, in scene coordinates
@@ -2297,11 +2887,11 @@ void GameActivity::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 
 	// Iterate through all players, drawing each currently used LZ cursor.
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player]))
+		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
 		if (m_ViewState[player] == ViewState::LandingZoneSelect) {
-			int halfWidth = std::max(m_LZCursorWidth[player] / 2, 36);
+			int halfWidth = std::max(std::min(m_LZCursorWidth[player], g_FrameMan.GetPlayerScreenWidth() - 24) / 2, 36);
 			int team = m_Team[player];
 			if (team == Teams::NoTeam)
 				continue;
@@ -2576,8 +3166,18 @@ void GameActivity::SetNetworkPlayerName(int player, std::string name) {
 		m_NetworkPlayerNames[player] = std::move(name);
 }
 
+namespace {
+// Whether a restored UI object says it was built; a banner has no such flag and rebuilds its font safely.
+template <class T> bool CheckpointMenuBuilt(const T* menu) {
+	if constexpr (requires { menu->IsCheckpointInitialized(); })
+		return menu->IsCheckpointInitialized();
+	else
+		return false;
+}
+}
+
 std::string GameActivity::SaveValueCheckpoint() const {
-	CheckpointWriter writer("GameActivity1");
+	CheckpointWriter writer("GameActivity3");
 	writer(Activity::SaveCheckpoint());
 	VisitCheckpoint(writer, *this);
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
@@ -2592,7 +3192,7 @@ std::string GameActivity::SaveValueCheckpoint() const {
 
 bool GameActivity::LoadValueCheckpoint(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader reader(text, "GameActivity1", validateOnly);
+		CheckpointReader reader(text, "GameActivity3", validateOnly);
 		std::string base;
 		reader.Value(base);
 		if (!Activity::LoadCheckpoint(base, true)) return false;
@@ -2609,7 +3209,16 @@ bool GameActivity::LoadValueCheckpoint(std::string_view text, bool validateOnly)
 				if (state.empty()) { delete target; target = nullptr; }
 				else {
 					if (!target) target = new T();
+					const bool built = CheckpointMenuBuilt(target);
 					if (!target->LoadCheckpoint(state)) throw std::runtime_error("could not apply activity UI checkpoint: " + label);
+					// A menu the saving peer never built says so in its state, and a live one would then own a
+					// layout it claims not to have - the local UI restore builds a second one over those very
+					// controls. Replace it instead, so the menu and its state agree.
+					if (built && !CheckpointMenuBuilt(target)) {
+						delete target;
+						target = new T();
+						if (!target->LoadCheckpoint(state)) throw std::runtime_error("could not apply activity UI checkpoint: " + label);
+					}
 				}
 			});
 		};
@@ -2692,7 +3301,7 @@ std::string GameActivity::SaveCheckpoint() const {
 }
 
 bool GameActivity::LoadCheckpoint(std::string_view text, bool validateOnly) {
-    if (text.starts_with("13 GameActivity1 ")) return LoadValueCheckpoint(text, validateOnly);
+    if (text.starts_with("13 GameActivity3 ")) return LoadValueCheckpoint(text, validateOnly);
     try {
         CheckpointReader reader(text, "GameActivity2");
         std::string values;
@@ -2785,6 +3394,11 @@ void GameActivity::ClearCheckpointActorIDs() {
 	m_HasCheckpointMarkedActorIDs = false;
 }
 
+bool GameActivity::PlaceUnassignedBrain(int player) {
+	AssignSeatBrain(g_MovableMan.GetUnassignedBrain(m_Team[player]), player);
+	return m_Brain[player] != nullptr;
+}
+
 void GameActivity::ForgetDestroyedActor(const Actor* actor) {
 	Activity::ForgetDestroyedActor(actor);
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
@@ -2816,7 +3430,42 @@ void GameActivity::VisitCheckpointOwnedObjects(const std::function<void(const En
     }
 }
 
+// A delivery queue is sim state, so every peer's activity owns the same crafts and cargo; a seat's
+// setup editor holds objects only its own peer ever had, and those stay out.
+void GameActivity::VisitCheckpointSharedObjects(const std::function<void(const Entity*)>& visit) const {
+    for (const auto& queue: m_Deliveries) for (const Delivery& delivery: queue) visit(delivery.pCraft);
+}
+
+bool GameActivity::RunDeliveryReferenceSelfTest() {
+    MovableMan::ConstructionRegistryScope registryScope;
+    try {
+        std::unique_ptr<Activity> fixture(new GameActivity());
+        auto* activity = static_cast<GameActivity*>(fixture.get());
+        auto anchor = std::make_unique<Actor>();
+        if (anchor->MovableObject::Create(1) < 0) throw std::runtime_error("the delivery anchor could not be created");
+        auto* craft = new ACDropShip();
+        if (craft->MovableObject::Create(1) < 0) { delete craft; throw std::runtime_error("the delivery craft could not be created"); }
+        craft->SetWhichMOToNotHit(anchor.get());
+        activity->m_Deliveries[Teams::TeamOne].push_back(Delivery{craft, Players::PlayerOne, Vector(), 0.0F, 0, Timer()});
+        g_ActivityMan.SwapCheckpointStartActivity(fixture);
+        const std::string archive = g_MovableMan.SaveCheckpoint();
+        g_ActivityMan.SwapCheckpointStartActivity(fixture);
+        craft->SetWhichMOToNotHit(nullptr);
+        const bool applied = g_MovableMan.LoadCheckpoint(archive);
+        const bool rebound = craft->GetWhichMOToNotHit() == anchor.get();
+        fixture.reset();
+        if (!applied) throw std::runtime_error("the archive holding a delivery craft was refused");
+        if (!rebound) throw std::runtime_error("a delivery craft's borrowed reference did not survive the checkpoint");
+        std::cout << "[native-reference-selftest] a delivery craft's borrowed reference survives the checkpoint PASS" << std::endl;
+        return true;
+    } catch (const std::exception& error) {
+        std::cout << "[native-reference-selftest] " << error.what() << std::endl;
+        return false;
+    }
+}
+
 bool GameActivity::PrepareCheckpointUI() {
+    if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
     const std::string values = SaveValueCheckpoint();
     for (int player = 0; player < Players::MaxPlayerCount; ++player) {
         if (m_InventoryMenuGUI[player] && m_InventoryMenuGUI[player]->IsCheckpointInitialized() && m_InventoryMenuGUI[player]->Create(&m_PlayerController[player]) < 0) return false;
@@ -2842,10 +3491,13 @@ bool GameActivity::CaptureNetLocalPlayerState(NetLocalPlayerState& out) const {
 	if (!Activity::CaptureNetLocalPlayerState(state)) return false;
 	try {
 		GUICheckpoint::NetLocalCaptureScope localUI;
-		CheckpointWriter writer("NetLocalGameUI1");
+		CheckpointWriter writer("NetLocalGameUI2");
 		writer(m_ObservationTarget, m_DeathViewTarget, m_ActorSelectTimer, m_ActorCursor, m_LandingZone,
 			m_AIReturnCraft, m_NextMultiOrderYOffset, m_LuaLockActor, m_LuaLockActorMode, m_BannerRepeats,
-			m_ReadyToStart, m_BrainLZWidth, m_LZCursorWidth, m_NetworkPlayerNames);
+			m_ReadyToStart, m_BrainLZWidth, m_LZCursorWidth, m_NetworkPlayerNames,
+			// Which seats this peer has already committed is its own business; the placements themselves
+			// come off the wire and ride the shared checkpoint.
+			m_LockstepPlacementSubmitted);
 		for (int player = 0; player < Players::MaxPlayerCount; ++player) {
 			writer(NetActorUID(m_pLastMarkedActor[player]),
 				m_pBuyGUI[player] ? m_pBuyGUI[player]->SaveCheckpoint() : std::string{},
@@ -2864,19 +3516,20 @@ bool GameActivity::CaptureNetLocalPlayerState(NetLocalPlayerState& out) const {
 
 namespace {
 template <class T> bool RestoreNetLocalMenu(T*& target, const std::string& saved, Controller* controller) {
-	if (saved.empty() && !target) return true;
-	const std::string state = saved.empty() ? T{}.SaveCheckpoint() : saved;
-	if (target && target->IsCheckpointInitialized()) return target->LoadCheckpoint(state);
+	// A seat that was not local on the snapshotting peer carries no local UI, so the live menu stays as it is.
+	if (saved.empty()) return true;
+	if (target && target->IsCheckpointInitialized()) return target->LoadCheckpoint(saved);
 	std::unique_ptr<T> candidate;
 	if (!target) { candidate = std::make_unique<T>(); target = candidate.get(); }
-	const bool restored = target->LoadCheckpoint(state) &&
-		(!target->IsCheckpointInitialized() || target->Create(controller) >= 0) && target->LoadCheckpoint(state);
+	const bool restored = target->LoadCheckpoint(saved) &&
+		(!target->IsCheckpointInitialized() || target->Create(controller) >= 0) && target->LoadCheckpoint(saved);
 	if (candidate) { if (restored) candidate.release(); else target = nullptr; }
 	return restored;
 }
 
 bool RestoreNetLocalBanner(GUIBanner*& target, const std::string& saved, const char* font, const char* blur) {
-	if (saved.empty() && !target) return true;
+	// A seat that was not local on the snapshotting peer carries no banner, so the live one stays as it is.
+	if (saved.empty()) return true;
 	const std::string state = saved.empty() ? GUIBanner{}.SaveCheckpoint() : saved;
 	if (target && target->GetFontHeight() > 0) return target->LoadCheckpoint(state);
 	std::unique_ptr<GUIBanner> candidate;
@@ -2890,10 +3543,10 @@ bool RestoreNetLocalBanner(GUIBanner*& target, const std::string& saved, const c
 bool GameActivity::LoadNetLocalGameState(std::string_view text) {
 	try {
 		GUICheckpoint::NetLocalRestoreScope localUI;
-		CheckpointReader reader(text, "NetLocalGameUI1");
+		CheckpointReader reader(text, "NetLocalGameUI2");
 		reader(m_ObservationTarget, m_DeathViewTarget, m_ActorSelectTimer, m_ActorCursor, m_LandingZone,
 			m_AIReturnCraft, m_NextMultiOrderYOffset, m_LuaLockActor, m_LuaLockActorMode, m_BannerRepeats,
-			m_ReadyToStart, m_BrainLZWidth, m_LZCursorWidth, m_NetworkPlayerNames);
+			m_ReadyToStart, m_BrainLZWidth, m_LZCursorWidth, m_NetworkPlayerNames, m_LockstepPlacementSubmitted);
 		struct Slot {
 			int64_t marked = 0;
 			std::string buy, editor, inventory, red, yellow, strategic;
@@ -2948,8 +3601,9 @@ bool GameActivity::RestoreNetLocalPlayerState(const NetLocalPlayerState& state) 
 }
 
 bool GameActivity::CreateNetLocalUI() {
+	if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
 	GUICheckpoint::NetLocalRestoreScope localUI;
-	const uint8_t humanCount = GetHumanCount();
+	const uint8_t humanCount = GetLocalHumanCount();
 	const bool wide = static_cast<float>(g_WindowMan.GetResX()) / g_WindowMan.GetResY() >= 1.6F;
 	g_FrameMan.ResetSplitScreens(wide ? humanCount > 1 : humanCount > 2, wide ? humanCount > 2 : humanCount > 1);
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
@@ -2959,7 +3613,7 @@ bool GameActivity::CreateNetLocalUI() {
 		BuyMenuGUI buy;
 		GUIBanner red, yellow;
 		Controller* controller = &m_PlayerController[player];
-		if (m_IsActive[player] && m_IsHuman[player]) {
+		if (IsSeatActive(player) && IsLocalHumanSeat(player)) {
 			if (inventory.Create(controller, m_ControlledActor[player]) < 0 || editor.Create(controller) < 0 || buy.Create(controller) < 0 ||
 				!red.Create("Base.rte/GUIs/Fonts/BannerFontRedReg.png", "Base.rte/GUIs/Fonts/BannerFontRedBlur.png", 8) ||
 				!yellow.Create("Base.rte/GUIs/Fonts/BannerFontYellowReg.png", "Base.rte/GUIs/Fonts/BannerFontYellowBlur.png", 8)) return false;
@@ -3000,6 +3654,10 @@ bool GameActivity::ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings)
 		m_LuaLockActorMode[player] = Controller::CIM_AI;
 		m_BannerRepeats[player] = 0;
 		m_ReadyToStart[player] = false;
+		// Readiness, the committed placement and the commit latch are one state: a seat rebound mid-editor
+		// has to be able to place its brain again, and both commit paths refuse while the latch is set.
+		m_LockstepPlacementSubmitted[player] = false;
+		m_LockstepSeatBrains[player] = NetGamePlaceBrain{};
 		m_PurchaseOverride[player].clear();
 		m_BrainLZWidth[player] = BRAINLZWIDTHDEFAULT;
 		m_LZCursorWidth[player] = 0;
@@ -3646,6 +4304,127 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			}
 			fixture->ClearCheckpointActorIDs();
 			if (!restore.relaunching) g_ActivityMan.EndLockstepRelaunch();
+		}
+		{
+			// A peer that did not own a seat carries no local UI for it, so a returner's saved slot arrives empty.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			fixture->m_PlayerController[0].Create(Controller::CIM_PLAYER, 0);
+			Controller* controller = &fixture->m_PlayerController[0];
+			fixture->m_pBuyGUI[0] = new BuyMenuGUI();
+			GUICheckpoint::NetLocalRestoreScope localUI;
+			if (fixture->m_pBuyGUI[0]->Create(controller) < 0) throw std::runtime_error("buy menu fixture creation failed");
+			BuyMenuGUI* const menu = fixture->m_pBuyGUI[0];
+			const std::string live = menu->SaveCheckpoint();
+			std::string detail;
+			const auto step = [&](const char* name, bool applied) {
+				if (!detail.empty()) return false;
+				const bool same = fixture->m_pBuyGUI[0] == menu, initialized = menu->IsCheckpointInitialized(), controls = menu->HasLiveCachedControls();
+				std::cout << "[net-local-menu] step=" << name << " applied=" << applied << " same_menu=" << same << " initialized=" << initialized << " controls_live=" << controls << std::endl;
+				if (applied && same && initialized && controls) return true;
+				detail = std::string(name) + " applied=" + std::to_string(applied) + " same_menu=" + std::to_string(same) +
+				         " initialized=" + std::to_string(initialized) + " controls_live=" + std::to_string(controls);
+				return false;
+			};
+			// Each step creates over or restores into the live menu the returner's seat already owns.
+			if (step("created", true) && step("second_create", menu->Create(controller) >= 0) &&
+			    step("empty_restore", RestoreNetLocalMenu(fixture->m_pBuyGUI[0], std::string{}, controller)) &&
+			    step("saved_restore", RestoreNetLocalMenu(fixture->m_pBuyGUI[0], live, controller))) {
+				BuyMenuGUI peer;
+				if (peer.Create(controller) < 0) throw std::runtime_error("buy menu peer fixture creation failed");
+				GUICheckpoint::NetLocalCaptureScope localValues;
+				step("create_net_local_ui", RestoreNetLocalMenu(fixture->m_pBuyGUI[0], peer.SaveCheckpoint(), controller));
+			}
+			check(("net_local_menu_survives_empty_restore" + (detail.empty() ? std::string{} : " " + detail)).c_str(), detail.empty());
+		}
+		{
+			// The editor's picker is re-created over the live one on a returning peer, so its cached controls must be the live ones.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			fixture->m_PlayerController[0].Create(Controller::CIM_PLAYER, 0);
+			Controller* controller = &fixture->m_PlayerController[0];
+			ObjectPickerGUI picker;
+			std::string detail;
+			const auto step = [&](const char* name, bool applied) {
+				if (!detail.empty()) return false;
+				const bool controls = picker.HasLiveCachedControls();
+				std::cout << "[net-local-picker] step=" << name << " applied=" << applied << " controls_live=" << controls << std::endl;
+				if (applied && controls) return true;
+				detail = std::string(name) + " applied=" + std::to_string(applied) + " controls_live=" + std::to_string(controls);
+				return false;
+			};
+			// The owning editors reset before they re-create; a create straight over the live picker reloads the same layout.
+			if (step("created", picker.Create(controller) >= 0)) {
+				picker.Reset();
+				if (step("reset_then_create", picker.Create(controller) >= 0)) step("second_create", picker.Create(controller) >= 0);
+			}
+			check(("net_local_picker_controls_survive_recreate" + (detail.empty() ? std::string{} : " " + detail)).c_str(), detail.empty());
+		}
+		{
+			// The returner's banner is the same live one after a slot that arrives empty, exactly like its menu.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			const char* font = "Base.rte/GUIs/Fonts/BannerFontYellowReg.png";
+			const char* blur = "Base.rte/GUIs/Fonts/BannerFontYellowBlur.png";
+			fixture->m_pBannerYellow[0] = new GUIBanner();
+			GUIBanner* const banner = fixture->m_pBannerYellow[0];
+			GUICheckpoint::NetLocalRestoreScope localUI;
+			const bool created = banner->Create(font, blur, 8);
+			banner->SetKerning(3);
+			banner->ShowText("RETURNER", GUIBanner::BLINKING, -1, Vector(640, 480), 0.5F);
+			const std::string live = banner->SaveCheckpoint();
+			const bool applied = RestoreNetLocalBanner(fixture->m_pBannerYellow[0], std::string{}, font, blur);
+			const bool same = fixture->m_pBannerYellow[0] == banner;
+			const bool kept = banner->GetFontHeight() > 0 && banner->GetBannerText() == "RETURNER" && banner->SaveCheckpoint() == live;
+			std::cout << "[net-local-banner] created=" << created << " applied=" << applied << " same_banner=" << same
+			          << " font=" << banner->GetFontHeight() << " kerning=" << banner->GetKerning() << " text=" << banner->GetBannerText() << std::endl;
+			check("net_local_banner_survives_empty_restore", created && applied && same && kept);
+		}
+		{
+			// A seat with no local menu, editor or banner answers with an inert object of the same type: a script
+			// that drives it the way it drives its own seat's changes nothing and reads neutral values back.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			const int result = lua.RunScriptString(R"lua(
+local activity = ToGameActivity(ActivityMan:GetActivity())
+local menu = activity:GetBuyGUI(0)
+local editor = activity:GetEditorGUI(0)
+local banner = activity:GetBanner(GUIBanner.YELLOW, 0)
+assert(menu ~= nil and editor ~= nil and banner ~= nil, "a seat with no local UI answered with nil")
+assert(_ScriptGraphNativeAddress(menu) == _ScriptGraphNativeAddress(activity:GetBuyGUI(0)), "the inert menu changed identity")
+assert(_ScriptGraphNativeAddress(editor) == _ScriptGraphNativeAddress(activity:GetEditorGUI(0)), "the inert editor changed identity")
+assert(_ScriptGraphNativeAddress(banner) == _ScriptGraphNativeAddress(activity:GetBanner(GUIBanner.YELLOW, 0)), "the inert banner changed identity")
+assert(_ScriptGraphNativeAddress(banner) ~= _ScriptGraphNativeAddress(activity:GetBanner(GUIBanner.RED, 0)), "both banner colors share one object")
+banner:ShowText("STUB", GUIBanner.FLYBYLEFTWARD, 1000, Vector(640, 480), 0.5, 1500, 500)
+banner:HideText(1500, 100)
+banner.Kerning = 5
+banner:ClearText()
+assert(banner.BannerText == "" and banner.AnimState == GUIBanner.NOTSTARTED, "the inert banner kept text")
+assert(not banner:IsVisible() and banner.Kerning == 0, "the inert banner became visible")
+menu.ShowOnlyOwnedItems = true
+menu.EnforceMaxMassConstraint = false
+menu:SetOwnedItemsAmount("Stub Item", 3)
+menu:ClearCartList()
+menu:LoadDefaultLoadoutToCart()
+menu:ForceRefresh()
+assert(not menu.ShowOnlyOwnedItems and menu.EnforceMaxMassConstraint, "the inert menu took a flag")
+assert(menu:GetOwnedItemsAmount("Stub Item") == 0, "the inert menu kept an owned item")
+assert(menu:GetTotalOrderCost() == 0 and menu:GetTotalCartCost() == 0, "the inert menu has a cost")
+assert(menu:GetTotalOrderMass() == 0 and menu:GetTotalOrderPassengers() == 0, "the inert menu has an order")
+editor.EditorMode = SceneEditorGUI.PLACINGOBJECT
+editor:SetCursorPos(Vector(9, 9))
+editor:Update()
+assert(editor.EditorMode == SceneEditorGUI.INACTIVE, "the inert editor changed mode")
+assert(editor:GetCurrentObject() == nil, "the inert editor holds an object")
+assert(activity:GetBuyGUI(Activity.MAXPLAYERCOUNT) == nil, "buy menu of an absent seat")
+assert(activity:GetEditorGUI(Activity.MAXPLAYERCOUNT) == nil, "editor of an absent seat")
+assert(activity:GetBanner(GUIBanner.YELLOW, Activity.MAXPLAYERCOUNT) == nil, "banner of an absent seat")
+)lua");
+			std::cout << "[net-local-ui-selftest] absent_local_ui result=" << result << " error=" << (result == 0 ? std::string{} : lua.GetLastError()) << std::endl;
+			check("absent_local_ui_returns_inert_stub", result == 0);
 		}
 	} catch (const std::exception& exception) { check(exception.what(), false); }
 	for (long uid: scriptIdentities) lua.RunScriptString("if _ScriptedObjects then _ScriptedObjects[\"" + std::to_string(uid) + "\"] = nil end");

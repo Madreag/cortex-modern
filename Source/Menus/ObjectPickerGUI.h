@@ -26,6 +26,8 @@ namespace RTE {
 
 		bool HasPendingCheckpoint() const { return !m_PendingCheckpoint.empty(); }
 		bool IsCheckpointInitialized() const { return m_CheckpointInitialized; }
+		/// Whether the cached control pointers are the ones the loaded control manager owns.
+		bool HasLiveCachedControls();
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 #pragma region Creation

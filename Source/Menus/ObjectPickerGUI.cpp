@@ -70,7 +70,7 @@ int ObjectPickerGUI::Create(Controller* controller, int whichModuleSpace, const 
 		m_GUIScreen = std::make_unique<AllegroScreen>(g_FrameMan.GetBackBuffer8());
 	}
 	if (!m_GUIInput) {
-		m_GUIInput = std::make_unique<GUIInputWrapper>(controller->GetPlayer());
+		m_GUIInput = std::make_unique<GUIInputWrapper>(controller->GetInputPlayer());
 	}
 	if (!m_GUIControlManager) {
 		m_GUIControlManager = std::make_unique<GUIControlManager>();
@@ -87,9 +87,8 @@ int ObjectPickerGUI::Create(Controller* controller, int whichModuleSpace, const 
 
 	dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("base"))->SetSize(g_WindowMan.GetResX(), g_WindowMan.GetResY());
 
-	if (!m_ParentBox) {
-		m_ParentBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("PickerGUIBox"));
-	}
+	// The load above deleted every control the manager owned, so each cached pointer is re-fetched.
+	m_ParentBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("PickerGUIBox"));
 	m_ParentBox->SetPositionAbs(g_FrameMan.GetPlayerFrameBufferWidth(m_Controller->GetPlayer()), 0);
 	m_ParentBox->SetEnabled(false);
 	m_ParentBox->SetVisible(false);
@@ -111,15 +110,13 @@ int ObjectPickerGUI::Create(Controller* controller, int whichModuleSpace, const 
 		m_ObjectsList->SetSize(m_ObjectsList->GetWidth(), m_ObjectsList->GetHeight() + stretchAmount);
 	}
 
-	if (!m_PopupBox) {
-		m_PopupBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("BuyGUIPopup"));
-		m_PopupText = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("PopupText"));
-		m_PopupText->SetFont(m_GUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+	m_PopupBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("BuyGUIPopup"));
+	m_PopupText = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("PopupText"));
+	m_PopupText->SetFont(m_GUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 
-		// Never enable the popup box because it steals focus and causes other windows to think the cursor left them
-		m_PopupBox->SetEnabled(false);
-		m_PopupBox->SetVisible(false);
-	}
+	// Never enable the popup box because it steals focus and causes other windows to think the cursor left them
+	m_PopupBox->SetEnabled(false);
+	m_PopupBox->SetVisible(false);
 
 	SetModuleSpace(whichModuleSpace);
 	ShowOnlyType(onlyOfType);
@@ -127,12 +124,17 @@ int ObjectPickerGUI::Create(Controller* controller, int whichModuleSpace, const 
 	return 0;
 }
 
+bool ObjectPickerGUI::HasLiveCachedControls() {
+	return m_GUIControlManager && m_ParentBox == m_GUIControlManager->GetControl("PickerGUIBox") && m_GroupsList == m_GUIControlManager->GetControl("GroupsLB") &&
+	       m_ObjectsList == m_GUIControlManager->GetControl("ObjectsLB") && m_PopupBox == m_GUIControlManager->GetControl("BuyGUIPopup") && m_PopupText == m_GUIControlManager->GetControl("PopupText");
+}
+
 void ObjectPickerGUI::SetEnabled(bool enable) {
 	if (enable && m_PickerState != PickerState::Enabled && m_PickerState != PickerState::Enabling) {
 		m_PickerState = PickerState::Enabling;
-		g_UInputMan.TrapMousePos(false, m_Controller->GetPlayer());
+		g_UInputMan.TrapMousePos(false, m_Controller->GetInputPlayer());
 		Vector playerFramebufferCenter = Vector(static_cast<float>(g_FrameMan.GetPlayerFrameBufferWidth(m_Controller->GetPlayer())), static_cast<float>(g_FrameMan.GetPlayerFrameBufferHeight(m_Controller->GetPlayer()))) / 2;
-		g_UInputMan.SetMousePos(playerFramebufferCenter, m_Controller->GetPlayer());
+		g_UInputMan.SetMousePos(playerFramebufferCenter, m_Controller->GetInputPlayer());
 
 		SetListFocus(m_ObjectsList->GetItemList()->empty() ? PickerFocus::GroupList : PickerFocus::ObjectList);
 
@@ -142,7 +144,7 @@ void ObjectPickerGUI::SetEnabled(bool enable) {
 		g_GUISound.EnterMenuSound()->Play(m_Controller->GetPlayer());
 	} else if (!enable && m_PickerState != PickerState::Disabled && m_PickerState != PickerState::Disabling) {
 		m_PickerState = PickerState::Disabling;
-		g_UInputMan.TrapMousePos(true, m_Controller->GetPlayer());
+		g_UInputMan.TrapMousePos(true, m_Controller->GetInputPlayer());
 		g_GUISound.ExitMenuSound()->Play(m_Controller->GetPlayer());
 	}
 }

@@ -153,6 +153,7 @@ SCHEMAS["Activity1"] = [
     ("saved_numbers", NUMBER_MAP), ("actor_links", array(4, array(3)))]
 SCHEMAS["Activity2"] = [*SCHEMAS["Activity1"], ("team_icons", array(4, "o"))]
 SCHEMAS["Activity3"] = [*SCHEMAS["Activity1"], ("team_icons", "o")]
+SCHEMAS["Activity4"] = [*SCHEMAS["Activity1"], ("lockstep_control_uid", array(4)), ("team_icons", "o")]
 SCHEMAS["Icon1"] = [("base", "o"), ("bitmap_file", "o"), ("frame_count", "n"),
                     ("images", sequence("o")), ("indexed_frames", sequence("n")), ("true_color_frames", sequence("n"))]
 SCHEMAS["IconSet1"] = [("images", sequence("o")), ("icons", sequence("o"))]
@@ -169,6 +170,11 @@ SCHEMAS["GameActivity1"] = [
     ("lz_cursor_width", array(4)), ("delivery_delay", "n"), *fields("cursor_timer game_timer game_over_timer", TIMER),
     *fields("game_over_period winner_team"), ("network_names", array(4, "s")),
     ("player_ui", array(4, structure(*fields("buy editor inventory banner_red banner_yellow", "o"))))]
+# v3 adds the synchronized setup editor's shared state: the id base, the seed pass and each seat's committed brain.
+SCHEMAS["GameActivity3"] = [*SCHEMAS["GameActivity1"][:-1],
+    *fields("lockstep_placement_uid_base lockstep_placement_seeded"),
+    ("lockstep_seat_brains", array(4, structure(*fields("team player pos_x pos_y"), *fields("class preset module", "s")))),
+    SCHEMAS["GameActivity1"][-1]]
 SCHEMAS["GameActivity2"] = [("values", "o"), ("players", array(4, structure(("marked_actor", "n"),
     ("purchases", sequence(array(3, "s"))), ("strategic_menu", "s")))),
     ("deliveries", array(4, sequence(structure(*fields("ordered_by_player"), ("landing_zone", VECTOR),
@@ -226,7 +232,7 @@ SCHEMAS["LimbPath1"] = [("entity", "o"), ("start", VECTOR), *fields("start_segme
     "travel_speed segment_threshold base_speed_multiplier current_speed_multiplier"), *fields("base_scale current_scale", VECTOR), ("push_force", "n"),
     *fields("joint_position joint_velocity", VECTOR), ("rotation", "o"), *fields("rotation_offset position_offset", VECTOR), ("time_left", "n"),
     *fields("path_timer segment_timer", TIMER), *fields("total_length regular_length segment_done ended flipped"), ("segments", sequence(VECTOR)), ("cursor", "n")]
-SCHEMAS["ActorRuntime1"] = [*fields("player_controllable status health max_health previous_health"), ("last_second_timer", TIMER),
+_ACTOR_RUNTIME_HEAD = [*fields("player_controllable status health max_health previous_health"), ("last_second_timer", TIMER),
     *fields("last_second_position recent_movement", VECTOR), ("travel_impulse_damage", "n"), ("stable_recover_timer", TIMER),
     ("stable_velocity", VECTOR), ("stable_recover_delay", "n"), *fields("heartbeat new_control_timer death_timer", TIMER),
     *fields("gold_carried gold_picked can_run crouch_walk_multiplier aim_state aim_range aim_angle aim_distance"),
@@ -235,8 +241,14 @@ SCHEMAS["ActorRuntime1"] = [*fields("player_controllable status health max_healt
     *fields("sight_distance perceptiveness pain_threshold reveal_unseen character_height"), *fields("holster_offset reload_offset view_point", VECTOR),
     *fields("max_inventory_mass off_wire_aim_tick off_wire_aim off_wire_flip_tick off_wire_flip"), ("hotkey_activated", array(2)),
     *fields("hud_stack deployment_id passenger_slots ai_dig_strength base_mass ai_mode waypoint_cursor draw_waypoints"),
-    *fields("move_target previous_path_target move_vector", VECTOR), *fields("update_path move_proximity movement_state organic mechanical limb_forces_disabled"),
+    *fields("move_target previous_path_target", VECTOR)]
+_ACTOR_RUNTIME_TAIL = [("move_vector", VECTOR), *fields("update_path move_proximity movement_state organic mechanical limb_forces_disabled"),
     *fields("team_icon controller_icon", "s")]
+SCHEMAS["ActorRuntime1"] = [*_ACTOR_RUNTIME_HEAD, *_ACTOR_RUNTIME_TAIL]
+# v2 keeps the waypoint this actor was ordered to, which v1 texts do not carry; v3 adds the MO that order named.
+_ACTOR_ORDERED = [("last_ordered_waypoint", VECTOR), ("has_ordered_waypoint", "n")]
+SCHEMAS["ActorRuntime2"] = [*_ACTOR_RUNTIME_HEAD, *_ACTOR_ORDERED, *_ACTOR_RUNTIME_TAIL]
+SCHEMAS["ActorRuntime3"] = [*_ACTOR_RUNTIME_HEAD, *_ACTOR_ORDERED, ("last_ordered_waypoint_uid", "n"), *_ACTOR_RUNTIME_TAIL]
 SCHEMAS["AHumanRuntime1"] = [*fields("look_aim_ratio activate_background trigger_pulled reload_offhand"), ("icon_blink_timer", TIMER),
     *fields("arms_state prone_state"), ("prone_timer", TIMER), *fields("max_crouch_shift crouch_amount crouch_override"),
     ("paths", array(2, array(11, "o"))), ("rotation_targets", array(11)), ("aiming", "n"), ("arm_climbing", array(2)),
@@ -264,6 +276,8 @@ SCHEMAS["HeldDeviceRuntime1"] = [*fields("type activated"), ("hotkey_activated",
     ("hotkey_timer", array(2, TIMER)), *fields("one_handed dual_wieldable"), *fields("stance sharp_stance support_offset", VECTOR),
     *fields("support_while_reload sharp_aim max_sharp_length supportable supported support_available unpickable"), ("seen_by_player", array(4)),
     ("grip_multiplier", "n"), ("blink_timer", TIMER), *fields("loudness explosive held_collisions visual_recoil")]
+# seen_by_player is per viewing player on one machine and only DrawHUD writes it, so it left the layout.
+SCHEMAS["HeldDeviceRuntime2"] = [entry for entry in SCHEMAS["HeldDeviceRuntime1"] if entry[0] != "seen_by_player"]
 SCHEMAS["HDFirearmRuntime1"] = [*fields("reload_end_offset reload_sound_played rate_of_fire activation_delay deactivation_delay reloading done_reloading "
     "base_reload_time full_auto ignore_self reloadable one_handed_reload_time dual_reloadable reload_angle one_handed_reload_angle"),
     *fields("last_fire_timer reload_timer", TIMER), *fields("muzzle_offset eject_offset magazine_offset", VECTOR),
@@ -275,6 +289,38 @@ SCHEMAS["AEmitterRuntime1"] = [*fields("enabled was_emitting emit_count count_li
     *fields("flash_scale average_burst_impulse average_impulse loudness flash_burst_only sustain_sound sound_follows_emitter")]
 SCHEMAS["Emission1"] = [("entity", "o"), *fields("ppm burst_size accumulator spread min_velocity max_velocity life_variation pushes_emitter inherits_velocity inherits_angular_velocity"),
     *fields("start_timer stop_timer", TIMER), ("offset", VECTOR), ("particle_count", "n")]
+SCHEMAS["PEmitterRuntime1"] = [*fields("enabled was_emitting emit_count count_limit negative_throttle positive_throttle throttle ignore_self burst_scale "
+    "burst_triggered burst_spacing"), ("burst_timer", TIMER), ("play_burst_sound", "n"), ("emit_angle", "o"), ("emission_offset", VECTOR),
+    ("last_emit_timer", TIMER), *fields("flash_scale average_burst_impulse average_impulse loudness flash_burst_only sustain_sound sound_follows_emitter")]
+SCHEMAS["AttachableRuntime1"] = [("parent_offset", VECTOR),
+    *fields("draw_after_parent drawn_normally_by_parent delete_when_removed_from_parent gib_when_removed_from_parent "
+            "apply_transferred_forces_at_offset gib_with_parent_chance parent_gib_blast_strength_multiplier is_wound joint_strength joint_stiffness"),
+    *fields("joint_offset joint_position", VECTOR), ("damage_count", "n"),
+    *fields("inherits_flipped inherits_rot_angle inherited_rot_angle_offset mounted_rot_angle_offset inherits_frame inherits_velocity_when_detached "
+            "inherits_angular_velocity_when_detached atom_subgroup_id collides_with_terrain_while_attached ignores_particles_while_attached"),
+    *fields("previous_parent_offset previous_joint_offset", VECTOR), *fields("previous_rot_angle_offset pre_update_has_run_this_frame")]
+SCHEMAS["ArmRuntime1"] = [*fields("max_length move_speed"), ("hand_idle_offset", VECTOR), ("hand_idle_rotation", "n"),
+    *fields("hand_current_offset hand_previous_position hand_position", VECTOR), ("hand_movement_delay_timer", TIMER),
+    *fields("hand_reached_target grip_strength throw_strength"), ("hand_targets", sequence("o"))]
+SCHEMAS["HandTarget1"] = [("description", "s"), ("offset", VECTOR), *fields("delay flipped")]
+SCHEMAS["LegRuntime1"] = [*fields("contracted_offset extended_offset", VECTOR), *fields("min_extension max_extension normalized_extension"),
+    *fields("target_position idle_offset ankle_offset", VECTOR), *fields("will_idle move_speed")]
+SCHEMAS["MagazineRuntime1"] = fields("round_count full_capacity round_to_travel_ratio discardable ai_aim_velocity ai_aim_max_distance ai_aim_penetration ai_blast_radius")
+SCHEMAS["AEJetpackRuntime1"] = fields("jetpack_type jet_time_total jet_time_left jet_thrust_bonus_multiplier jet_replenish_rate minimum_fuel_ratio "
+    "jet_angle_range can_adjust_angle_while_firing adjusts_throttle_for_weight")
+SCHEMAS["ACraftRuntime1"] = [("hatch_state", "n"), ("hatch_timer", TIMER), *fields("hatch_delay exit_interval"), ("exit_timer", TIMER),
+    *fields("exit_incoming_cursor exit_line_phase has_delivered landing_craft"), *fields("flipped_timer crash_timer", TIMER),
+    *fields("can_enter_orbit max_passengers scuttle_if_flipped_time scuttle_on_death delivery_state altitude_move_state altitude_control "
+            "delivery_delay_multiplier network_delivery"), ("network_delivery_timer", TIMER)]
+SCHEMAS["ACRocketRuntime1"] = [("gear_state", "n"), ("paths", array(2, array(4, "o"))), ("max_gimbal_angle", "n"), ("foot_groups", array(2, "s"))]
+SCHEMAS["ACDropShipRuntime1"] = [("hatch_swing_range", "o"),
+    *fields("hatch_openness lateral_control lateral_control_speed auto_stabilize max_engine_angle hover_height_modifier")]
+SCHEMAS["ADoorRuntime1"] = [("initial_sprite_anim_duration", "n"), ("sensor_timer", TIMER),
+    *fields("sensor_interval door_state door_state_on_stop closed_by_default"), *fields("open_offset closed_offset", VECTOR),
+    *fields("open_angle closed_angle"), ("door_move_timer", TIMER),
+    *fields("door_move_time resume_after_stop changed_direction_after_stop door_move_stop_time"), ("reset_to_default_state_timer", TIMER),
+    *fields("reset_to_default_state_delay draw_material_layer_when_open draw_material_layer_when_closed door_material_id door_material_drawn "
+            "door_material_temp_erased"), ("door_material_redraw_timer", TIMER), ("last_door_material_position", VECTOR)]
 SCHEMAS["SLBackground1"] = [("bitmap_file", "s"), *fields("frame_count frame animation_mode animation_duration animation_reversing"),
     ("animation_timer", TIMER), *fields("manual_animation scroll_x scroll_y"), ("scroll_step", VECTOR), ("scroll_interval", "n"),
     ("scroll_timer", TIMER), ("auto_offset", VECTOR), *fields("fill_left fill_right fill_up fill_down ignore_autoscale clear_color bitmap_updated masked wrap_x wrap_y"),
@@ -421,7 +467,7 @@ def decode(data):
             owner = song["fallback"] if section == -1 else song["sections"][section]
             if not 0 <= index < len(owner["transitions" if bucket else "sounds"]):
                 raise ValueError("invalid music next-sound reference")
-    if version == "Activity3" and (not isinstance(result["team_icons"], dict) or result["team_icons"].get("version") != "IconSet1" or len(result["team_icons"]["icons"]) != 4):
+    if version in ("Activity3", "Activity4") and (not isinstance(result["team_icons"], dict) or result["team_icons"].get("version") != "IconSet1" or len(result["team_icons"]["icons"]) != 4):
         raise ValueError("invalid activity icon set")
     if version in ("PrimitiveMan1", "PrimitiveValue1", "MOSpriteRuntime2", "Icon1", "IconSet1"):
         cache_owners = set()
@@ -466,9 +512,12 @@ _LOCAL_FIELDS = {
     "Controller1": set("input_mode seat_mode player seat_player team next_ignore prev_ignore weapon_next_ignore weapon_prev_ignore pickup_ignore drop_ignore reload_ignore primary_hotkey_ignore".split()),
     "Controller2": set("input_mode seat_mode player seat_player team next_ignore prev_ignore weapon_next_ignore weapon_prev_ignore pickup_ignore drop_ignore reload_ignore primary_hotkey_ignore".split()),
     "Screen1": {name for name, _ in SCHEMAS["Screen1"]},
-    "FrameMan1": {"flashed_last_frame", "flash_timer"},
-    "FrameMan2": {"flashed_last_frame", "flash_timer"},
-    "FrameMan3": {"flashed_last_frame", "flash_timer"},
+    # A resync applies the host's FrameMan checkpoint and then puts this machine's own FrameManLocal1 state
+    # back over it (NetMatchService.cpp:824, 831); that record is FrameMan1's whole field list
+    # (FrameMan.cpp:1356-1361 over FrameMan.h:342-344), so only FrameMan3's fonts and palette come from the host.
+    "FrameMan1": {name for name, _ in SCHEMAS["FrameMan1"]},
+    "FrameMan2": {name for name, _ in SCHEMAS["FrameMan1"]},
+    "FrameMan3": {name for name, _ in SCHEMAS["FrameMan1"]},
     # The live Allegro colour table and blend alpha are whatever the last blit selected.
     "FramePalette1": {"selected_key", "alpha"},
     # The FMOD listener is the local camera, and a voice's PCM cursor rides the local device clock.
@@ -477,6 +526,8 @@ _LOCAL_FIELDS = {
     "AudioRuntime3": {"player_positions", "listeners"},
     "AudioVoice1": {"position"},
     "ActorRuntime1": {"hud_stack"},
+    "ActorRuntime2": {"hud_stack"},
+    "ActorRuntime3": {"hud_stack"},
     "AEmitterRuntime1": {"average_burst_impulse", "average_impulse"},
     "HDFirearmRuntime1": {"ai_fire_velocity", "ai_bullet_lifetime", "ai_bullet_acceleration"},
 }
@@ -493,21 +544,39 @@ _LOCAL_FIELDS["Controller3"] = _LOCAL_FIELDS["Controller2"] | set(
     "committed_analog_cursor committed_mouse_movement producing_local_input".split())
 
 
-def project(value, shared=False, snapshot_name=None, path=(), masked=None, local_roles=None, cross_process=False):
-    """Return a structural value, projecting only the named local fields and timer anchors."""
+def project(value, shared=False, snapshot_name=None, path=(), masked=None, local_roles=None, cross_process=False,
+            local_seat=None, asymmetric_seats=()):
+    """Return a structural value, projecting only the named local fields and timer anchors.
+
+    local_seat is this archive's own seat when the two peers share one seat table; None keeps the
+    legacy model where each peer runs as PlayerOne and slot 0 holds its own bindings. asymmetric_seats
+    names the seats only one of the two archives owns, whose per-seat local view is not comparable.
+    """
     if masked is None:
         masked = []
     if isinstance(value, list):
-        return [project(item, shared, snapshot_name, (*path, index), masked, local_roles, cross_process) for index, item in enumerate(value)]
+        return [project(item, shared, snapshot_name, (*path, index), masked, local_roles, cross_process, local_seat, asymmetric_seats)
+                for index, item in enumerate(value)]
     if not isinstance(value, dict):
         return value
-    result = {key: project(item, shared, snapshot_name, (*path, key), masked, local_roles, cross_process) for key, item in value.items()}
+    result = {key: project(item, shared, snapshot_name, (*path, key), masked, local_roles, cross_process, local_seat, asymmetric_seats)
+              for key, item in value.items()}
     version = value.get("version")
 
     def mask(key):
         if key in result:
             result[key] = "LOCAL"
             masked.append((*path, key))
+
+    def mask_seat(key, seat, *rest):
+        owner, location = result[key][seat], (*path, key, seat)
+        for step in rest[:-1]:
+            owner, location = owner[step], (*location, step)
+        if rest:
+            owner[rest[-1]], location = "LOCAL", (*location, rest[-1])
+        else:
+            result[key][seat] = "LOCAL"
+        masked.append(location)
 
     # Timer::m_StartRealTime is a wall-clock reading (TimerMan.h), so two processes never agree on it.
     if (shared or cross_process) and set(value) == {"sim_start", "sim_limit", "real_start", "real_limit"}:
@@ -517,6 +586,10 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
             mask(key)
         if version in ("RuntimeGlobals1", "RuntimeGlobals2", "RuntimeGlobals3", "RuntimeGlobals4", "RuntimeGlobals5", "RuntimeGlobals6", "RuntimeGlobals7", "RuntimeGlobals8", "RuntimeGlobals9"):
             mask("render_rng")
+            # A resync keeps this machine's own device and shared GUI input whole and drops the host's
+            # (NetMatchService.cpp:822-823 captures them, 831 puts them back after RestoreRuntimeGlobals).
+            mask("input")
+            mask("gui_input")
         # A voice's mixer gain and 3D blend are attenuated against that peer's own listener; the four
         # group buses carry settings, so only a control reached through audio.voices is local.
         if version == "AudioControl1" and len(path) >= 3 and path[-3] == "voices" and path[-1] == "control":
@@ -531,17 +604,38 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
             for key in ("release_timer", "joy_accel_timer", "key_accel_timer"):
                 result[key]["sim_start"] = "LOCAL"
                 masked.append((*path, key, "sim_start"))
-            if len(path) >= 2 and path[-2:] == ("player_controller", 0):
-                mask("team")
-        if version in ("Activity1", "Activity2", "Activity3"):
-            for key in ("player_team", "team_funds_share", "funds_contribution", "human", "actor_links"):
-                result[key][0] = "LOCAL"
-                masked.append((*path, key, 0))
-        if version == "GameActivity1":
-            for key in ("observation_target", "death_view_target", "actor_cursor", "landing_zone"):
-                result[key][0] = "LOCAL"
-                masked.append((*path, key, 0))
-        if version in ("InventoryMenuGUI1", "InventoryMenuGUI2") and path[-3:] == ("player_ui", 0, "inventory"):
+            # MOVE_IDLE and the rest of the state vector come from this machine's hardware (Controller.cpp:541-562).
+            if len(path) >= 2 and path[-2] == "player_controller" and path[-1] in asymmetric_seats:
+                mask("states")
+        if version in ("Activity1", "Activity2", "Activity3", "Activity4"):
+            if local_seat is None:
+                for key in ("player_team", "team_funds_share", "funds_contribution", "human", "actor_links"):
+                    result[key][0] = "LOCAL"
+                    masked.append((*path, key, 0))
+            for seat in sorted(asymmetric_seats):
+                # Activity::CaptureNetLocalPlayerState (Activity.cpp:1319-1342) names the per-seat local view;
+                # the controlled actor and its cursor are nulled for a non-local seat (Activity.cpp:1365).
+                mask_seat("actor_links", seat, 1)
+                mask_seat("actor_links", seat, 2)
+                mask_seat("player_screen", seat)
+                # A seat's view state is its own peer's: SetViewState refuses a seat without local input
+                # (Activity.h:344) and it rides that peer's local player reference (NetGameCommand.h:289-294).
+                mask_seat("view_state", seat)
+                for key in ("death_timer", "message_timer"):
+                    mask_seat(key, seat, "sim_start")
+        if version in ("GameActivity1", "GameActivity3"):
+            if local_seat is None:
+                for key in ("observation_target", "death_view_target", "actor_cursor", "landing_zone"):
+                    result[key][0] = "LOCAL"
+                    masked.append((*path, key, 0))
+            for seat in sorted(asymmetric_seats):
+                # GameActivity::CaptureNetLocalPlayerState (GameActivity.cpp:2863-2876); the GUIs themselves are
+                # built only for a local human seat (GameActivity.cpp:826-827, 1181-1182) and the select timer is
+                # wall-clock (GameActivity.cpp:1288 IsPastRealMS).
+                for key in ("observation_target", "death_view_target", "actor_cursor", "landing_zone", "player_ui"):
+                    mask_seat(key, seat)
+                mask_seat("actor_select_timer", seat, "sim_start")
+        if version in ("InventoryMenuGUI1", "InventoryMenuGUI2") and path[-3:] == ("player_ui", 0 if local_seat is None else local_seat, "inventory"):
             mask("center")
             if local_roles:
                 def remap(item, location):
@@ -593,9 +687,12 @@ def _emit(kind):
     return b"0 "  # sequence: a zero count
 
 
-def _payload(version):
+def _payload(version, **records):
+    """A minimal payload; a named object field carries the given record instead of an empty string."""
     tag = version.encode()
-    return str(len(tag)).encode() + b" " + tag + b" " + b"".join(_emit(kind) for _name, kind in SCHEMAS[version])
+    body = b"".join(str(len(records[name])).encode() + b" " + records[name] + b" " if name in records else _emit(kind)
+                    for name, kind in SCHEMAS[version])
+    return str(len(tag)).encode() + b" " + tag + b" " + body
 
 
 _CHECKPOINT_ARCHIVE = re.compile(r"Checkpoint(?:Writer|Reader)\s*\w*\s*\(")
@@ -667,8 +764,66 @@ def selftest():
         check("unschemad_version_refused", False)
     except ValueError as error:
         check("unschemad_version_refused", "Controller4" in str(error))
+    # A record that grew keeps the older reader honest: the tag is the gate, and the payload does not fit.
+    grown = _payload("GameActivity3")
+    try:
+        decode(grown.replace(b"13 GameActivity3", b"13 GameActivity1", 1))
+        check("game_activity3_refused_as_game_activity1", False)
+    except ValueError as error:
+        check("game_activity3_refused_as_game_activity1", "trailing" in str(error) or "invalid runtime checkpoint" in str(error))
+    check("game_activity3_decodes", decode(grown)["version"] == "GameActivity3" and
+          "lockstep_seat_brains" in decode(grown) and len(decode(grown)["lockstep_seat_brains"]) == 4)
+    # HeldDeviceRuntime1 texts stay readable; HeldDevice.cpp:577 keys its legacy branch on this exact header.
+    v1 = _payload("HeldDeviceRuntime1")
+    check("held_device_runtime1_still_decodes", v1.startswith(b"18 HeldDeviceRuntime1 ") and
+          decode(v1)["version"] == "HeldDeviceRuntime1" and "seen_by_player" in decode(v1))
+    # A v2 record mislabelled as v1 is still refused: the tag is the gate, and the payload runs out.
+    shrunk = _payload("HeldDeviceRuntime2")
+    try:
+        decode(shrunk.replace(b"18 HeldDeviceRuntime2", b"18 HeldDeviceRuntime1", 1))
+        check("held_device2_refused_as_held_device1", False)
+    except ValueError as error:
+        check("held_device2_refused_as_held_device1", "truncated" in str(error) or "trailing" in str(error) or
+              "invalid runtime checkpoint" in str(error))
+    check("held_device2_decodes", decode(shrunk)["version"] == "HeldDeviceRuntime2" and
+          "seen_by_player" not in decode(shrunk) and "blink_timer" in decode(shrunk))
+
+    ordered = decode(_payload("ActorRuntime3"))
+    check("actor_runtime3_decodes", ordered["version"] == "ActorRuntime3" and
+          "last_ordered_waypoint" in ordered and "has_ordered_waypoint" in ordered and "last_ordered_waypoint_uid" in ordered)
+    older = decode(_payload("ActorRuntime2"))
+    check("actor_runtime2_still_decodes", "last_ordered_waypoint" in older and "last_ordered_waypoint_uid" not in older)
+    check("actor_runtime1_still_decodes", "last_ordered_waypoint" not in decode(_payload("ActorRuntime1")))
+    for older_tag in (b"13 ActorRuntime1", b"13 ActorRuntime2"):
+        try:
+            decode(_payload("ActorRuntime3").replace(b"13 ActorRuntime3", older_tag, 1))
+            check("actor_runtime3_refused_as_" + older_tag.decode().split()[1].lower(), False)
+        except ValueError as error:
+            check("actor_runtime3_refused_as_" + older_tag.decode().split()[1].lower(),
+                  "trailing" in str(error) or "invalid runtime checkpoint" in str(error))
+
     unclassified = b"9 NoSchema1 0 "
     check("unclassified_tag_stays_raw", decode(unclassified) == unclassified)
+
+    # The resync keeps this machine's input, shared GUI input and FrameManLocal1 state; everything else
+    # in the block, the host's own FrameMan fonts and palette included, is restored from its snapshot.
+    globals_state = decode(_payload("RuntimeGlobals9", sim_rng=b"MT1 7", timer=_payload("TimerMan1"),
+        movable=_payload("MovableMan2"), frame=_payload("FrameMan3"), gui_input=_payload("GUISharedInput2"),
+        input=_payload("UInputMan1")))
+    held = []
+    globals_projected = project(globals_state, shared=True, masked=held, cross_process=True)
+    local_paths = {".".join(map(str, path)) for path in held}
+    check("runtime_globals_local_fields_masked",
+          globals_projected["input"] == "LOCAL" and globals_projected["gui_input"] == "LOCAL" and
+          {"input", "gui_input", "render_rng"} <= local_paths and
+          all(globals_projected["frame"][name] == "LOCAL" for name, _ in SCHEMAS["FrameMan1"]))
+    check("runtime_globals_shared_fields_kept",
+          globals_projected["sim_rng"] == b"MT1 7" and "sim_rng" not in local_paths and
+          globals_projected["frame"]["fonts"] == globals_state["frame"]["fonts"] and
+          globals_projected["frame"]["palette"] == globals_state["frame"]["palette"] and
+          globals_projected["timer"]["sim_update_count"] != "LOCAL" and
+          globals_projected["movable"]["sim_update_frame"] != "LOCAL" and
+          all(globals_projected[name] != "LOCAL" for name in ("audio", "camera", "scene", "movable", "timer")))
     return all(checks)
 
 

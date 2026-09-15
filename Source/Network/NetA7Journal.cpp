@@ -257,7 +257,7 @@ namespace RTE {
 		for (size_t i = 0; i < c_QueueSize; ++i) (*s_State.slots)[i].turn.store(i);
 		s_State.enabled.store(true);
 		Emit("ready", {{"schema", 1}, {"exe_sha256", s_State.exeSha}, {"fault", s_State.fault},
-			{"capabilities", {"identity", "listening", "commit", "running", "progress", "terminal", "connect_gate", "handshake_age", "drop", "reclaim", "resumption", "leave_exchange", "save_gap", "owner_observation", "decision_clock_v1", "journal_integrity_v1", "loaded_ticket_sha256_v1", "leave_queue_clock_v1", "local_player_view_v1"}},
+			{"capabilities", {"identity", "listening", "commit", "running", "progress", "terminal", "connect_gate", "handshake_age", "drop", "reclaim", "resumption", "leave_exchange", "save_gap", "owner_observation", "decision_clock_v1", "journal_integrity_v1", "loaded_ticket_sha256_v1", "leave_queue_clock_v1", "local_player_view_v1", "shared_seat_view_v1"}},
 			{"shared_hash_algorithm", c_HashAlgorithm}, {"shared_hash_scope", "existing approved SimGatedHash feeds; lua_state is RNG only"},
 			{"clock_domains", {{"at_ms", "journal_writer_delivery"}, {"captured_ms", "journal_producer_capture"}, {"session_ms", "authority_session_decision"}}}});
 		s_State.writer = std::thread(DrainJournal);

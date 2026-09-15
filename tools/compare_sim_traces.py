@@ -7,6 +7,9 @@ import re
 import sys
 
 CORE = frozenset({"actors", "terrain", "sim_rng", "scene", "funds", "lua_state", "rot_angle", "rot_angvel", "tick"})
+# What a held tick must hash: the state a paused sim can still move. The per-object subsystems join it
+# whenever the world holds objects, and the comparison covers every subsystem both peers reported.
+PAUSED_CORE = frozenset({"tick", "terrain", "sim_rng", "scene", "funds", "lua_state"})
 HASH = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -40,8 +43,10 @@ def load_trace(path):
         if not isinstance(entry.get("total"), str) or not HASH.fullmatch(entry["total"]):
             raise ValueError(f"tick {tick}: invalid total hash")
         if paused:
-            if set(subs) != {"tick", "terrain"}:
-                raise ValueError(f"tick {tick}: unexpected paused-tick schema")
+            # A held tick applies commands and runs the activity, so it hashes the same end-of-tick census a
+            # simulated one does; the per-object subsystems are in it only when the world holds objects.
+            if not PAUSED_CORE <= subs.keys():
+                raise ValueError(f"tick {tick}: paused tick is missing {sorted(PAUSED_CORE - subs.keys())}")
         elif not CORE <= subs.keys():
             raise ValueError(f"tick {tick}: core subsystems missing {sorted(CORE - subs.keys())}")
         ticks[tick] = (subs, paused)
@@ -101,7 +106,7 @@ def strict_compare(host, client, expected_ticks=None, *, first_tick=1, min_ticks
         result["compared_ticks"] += 1
         result["paused_ticks"] += int(hp)
     result["subsystem_sets_seen"] = [list(s) for s in sorted(schemas)]
-    result["coverage"] = "active core hashes; paused ticks cover tick and terrain only"
+    result["coverage"] = "active core hashes; paused ticks cover the same census, per-object subsystems only when the world holds objects"
     return not result["reasons"], result
 
 

@@ -139,7 +139,7 @@ int BuyMenuGUI::Create(Controller* pController) {
 	if (!m_pGUIScreen)
 		m_pGUIScreen = new AllegroScreen(g_FrameMan.GetBackBuffer8());
 	if (!m_pGUIInput)
-		m_pGUIInput = new GUIInputWrapper(pController->GetPlayer());
+		m_pGUIInput = new GUIInputWrapper(pController->GetInputPlayer());
 	if (!m_pGUIController)
 		m_pGUIController = new GUIControlManager();
 	if (!m_pGUIController->Create(m_pGUIScreen, m_pGUIInput, "Base.rte/GUIs/Skins", "DefaultSkin.ini")) {
@@ -156,34 +156,32 @@ int BuyMenuGUI::Create(Controller* pController) {
 	// Stretch the invisible root box to fill the screen
 	dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("base"))->SetSize(g_WindowMan.GetResX(), g_WindowMan.GetResY());
 
-	// Make sure we have convenient points to teh containing GUI colleciton boxes that we will manipulate the positions of
-	if (!m_pParentBox) {
-		m_pParentBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("BuyGUIBox"));
-		m_pParentBox->SetDrawBackground(true);
-		m_pParentBox->SetDrawType(GUICollectionBox::Color);
+	// Make sure we have convenient points to teh containing GUI colleciton boxes that we will manipulate the positions of.
+	// The manager above deleted every control it owned, so each cached pointer is re-fetched.
+	m_pParentBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("BuyGUIBox"));
+	m_pParentBox->SetDrawBackground(true);
+	m_pParentBox->SetDrawType(GUICollectionBox::Color);
 
-		m_Banner = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CatalogHeader"));
-		SetBannerImage(c_DefaultBannerImagePath);
+	m_Banner = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CatalogHeader"));
+	SetBannerImage(c_DefaultBannerImagePath);
 
-		m_Logo = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CatalogLogo"));
-		SetLogoImage(c_DefaultLogoImagePath);
-	}
+	m_Logo = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CatalogLogo"));
+	SetLogoImage(c_DefaultLogoImagePath);
+
 	m_pParentBox->SetPositionAbs(-m_pParentBox->GetWidth(), 0);
 	m_pParentBox->SetEnabled(false);
 	m_pParentBox->SetVisible(false);
 
-	if (!m_pPopupBox) {
-		m_pPopupBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("BuyGUIPopup"));
-		m_pPopupText = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("PopupText"));
+	m_pPopupBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("BuyGUIPopup"));
+	m_pPopupText = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("PopupText"));
 
-		m_pPopupBox->SetDrawType(GUICollectionBox::Panel);
-		m_pPopupBox->SetDrawBackground(true);
-		// Never enable the popup, because it steals focus and cuases other windows to think teh cursor left them
-		m_pPopupBox->SetEnabled(false);
-		m_pPopupBox->SetVisible(false);
-		// Set the font
-		m_pPopupText->SetFont(m_pGUIController->GetSkin()->GetFont("FontSmall.png"));
-	}
+	m_pPopupBox->SetDrawType(GUICollectionBox::Panel);
+	m_pPopupBox->SetDrawBackground(true);
+	// Never enable the popup, because it steals focus and cuases other windows to think teh cursor left them
+	m_pPopupBox->SetEnabled(false);
+	m_pPopupBox->SetVisible(false);
+	// Set the font
+	m_pPopupText->SetFont(m_pGUIController->GetSkin()->GetFont("FontSmall.png"));
 
 	m_pCategoryTabs[CRAFT] = dynamic_cast<GUITab*>(m_pGUIController->GetControl("CraftTab"));
 	m_pCategoryTabs[BODIES] = dynamic_cast<GUITab*>(m_pGUIController->GetControl("BodiesTab"));
@@ -265,6 +263,11 @@ int BuyMenuGUI::Create(Controller* pController) {
 	return 0;
 }
 
+bool BuyMenuGUI::HasLiveCachedControls() {
+	return m_pGUIController && m_pParentBox == m_pGUIController->GetControl("BuyGUIBox") && m_Banner == m_pGUIController->GetControl("CatalogHeader") &&
+	       m_Logo == m_pGUIController->GetControl("CatalogLogo") && m_pPopupBox == m_pGUIController->GetControl("BuyGUIPopup") && m_pPopupText == m_pGUIController->GetControl("PopupText");
+}
+
 void BuyMenuGUI::Destroy() {
 	delete m_pGUIController;
 	delete m_pGUIInput;
@@ -276,28 +279,33 @@ void BuyMenuGUI::Destroy() {
 }
 
 void BuyMenuGUI::SetBannerImage(const std::string& imagePath) {
+	if (IsInert()) return;
 	ContentFile bannerFile((imagePath.empty() ? c_DefaultBannerImagePath : imagePath).c_str());
 	m_Banner->SetDrawImage(new AllegroBitmap(bannerFile.GetAsBitmap()));
 	m_Banner->SetDrawType(GUICollectionBox::Image);
 }
 
 void BuyMenuGUI::SetLogoImage(const std::string& imagePath) {
+	if (IsInert()) return;
 	ContentFile logoFile((imagePath.empty() ? c_DefaultLogoImagePath : imagePath).c_str());
 	m_Logo->SetDrawImage(new AllegroBitmap(logoFile.GetAsBitmap()));
 	m_Logo->SetDrawType(GUICollectionBox::Image);
 }
 
 void BuyMenuGUI::ClearCartList() {
+	if (IsInert()) return;
 	m_pCartList->ClearList();
 	m_ListItemIndex = 0;
 }
 
 void BuyMenuGUI::AddCartItem(const std::string& name, const std::string& rightText, GUIBitmap* pBitmap, const Entity* pEntity, const int extraIndex) {
+	if (IsInert()) return;
 	m_pCartList->AddItem(name, rightText, pBitmap, pEntity, extraIndex);
 	UpdateItemNestingLevels();
 }
 
 void BuyMenuGUI::DuplicateCartItem(const int itemIndex) {
+	if (IsInert()) return;
 	if (m_pCartList->GetItemList()->empty()) {
 		return;
 	}
@@ -339,6 +347,7 @@ void BuyMenuGUI::DuplicateCartItem(const int itemIndex) {
 }
 
 bool BuyMenuGUI::LoadAllLoadoutsFromFile() {
+	if (IsInert()) return false;
 	// First clear out all loadouts
 	m_Loadouts.clear();
 	m_SelectedLoadoutIndex = -1;
@@ -357,7 +366,7 @@ bool BuyMenuGUI::LoadAllLoadoutsFromFile() {
 	}
 	// Not a metagame player, just a regular scenario player
 	else {
-		std::snprintf(loadoutPath, sizeof(loadoutPath), "%sLoadoutsP%d.ini", System::GetUserdataDirectory().c_str(), m_pController->GetPlayer() + 1);
+		std::snprintf(loadoutPath, sizeof(loadoutPath), "%sLoadoutsP%d.ini", System::GetUserdataDirectory().c_str(), m_pController->GetInputPlayer() + 1);
 	}
 
 	// Open the file
@@ -434,6 +443,7 @@ bool BuyMenuGUI::LoadAllLoadoutsFromFile() {
 }
 
 bool BuyMenuGUI::SaveAllLoadoutsToFile() {
+	if (IsInert()) return false;
 	// Nothing to save
 	if (m_Loadouts.empty())
 		return true;
@@ -449,7 +459,7 @@ bool BuyMenuGUI::SaveAllLoadoutsToFile() {
 		else
 			std::snprintf(loadoutPath, sizeof(loadoutPath), "%s%s - LoadoutsMP%d.ini", (System::GetUserdataDirectory() + c_UserConquestSavesModuleName + "/").c_str(), g_MetaMan.GetGameName().c_str(), m_MetaPlayer + 1);
 	} else
-		std::snprintf(loadoutPath, sizeof(loadoutPath), "%sLoadoutsP%d.ini", System::GetUserdataDirectory().c_str(), m_pController->GetPlayer() + 1);
+		std::snprintf(loadoutPath, sizeof(loadoutPath), "%sLoadoutsP%d.ini", System::GetUserdataDirectory().c_str(), m_pController->GetInputPlayer() + 1);
 
 	// Open the file
 	Writer loadoutFile(loadoutPath, false);
@@ -466,6 +476,7 @@ bool BuyMenuGUI::SaveAllLoadoutsToFile() {
 }
 
 void BuyMenuGUI::SetEnabled(bool enable) {
+	if (IsInert()) return;
 	if (enable && m_MenuEnabled != ENABLED && m_MenuEnabled != ENABLING) {
 		// If we're not split screen horizontally, then stretch out the layout for all the relevant controls
 		int stretchAmount = g_FrameMan.GetPlayerScreenHeight() - m_pParentBox->GetHeight();
@@ -487,12 +498,12 @@ void BuyMenuGUI::SetEnabled(bool enable) {
 		m_RepeatStartTimer.Reset();
 		m_RepeatTimer.Reset();
 		// Set the mouse cursor free
-		g_UInputMan.TrapMousePos(false, m_pController->GetPlayer());
+		g_UInputMan.TrapMousePos(false, m_pController->GetInputPlayer());
 		// Move the mouse cursor to the middle of the player's screen
 		int mouseOffX, mouseOffY;
 		m_pGUIInput->GetMouseOffset(mouseOffX, mouseOffY);
 		Vector mousePos(-mouseOffX + (g_FrameMan.GetPlayerFrameBufferWidth(m_pController->GetPlayer()) / 2), -mouseOffY + (g_FrameMan.GetPlayerFrameBufferHeight(m_pController->GetPlayer()) / 2));
-		g_UInputMan.SetMousePos(mousePos, m_pController->GetPlayer());
+		g_UInputMan.SetMousePos(mousePos, m_pController->GetInputPlayer());
 
 		// Default focus to the menu button
 		m_LastHoveredMouseIndex = 0;
@@ -508,7 +519,7 @@ void BuyMenuGUI::SetEnabled(bool enable) {
 		EnableEquipmentSelection(false);
 		m_MenuEnabled = DISABLING;
 		// Trap the mouse cursor again
-		g_UInputMan.TrapMousePos(true, m_pController->GetPlayer());
+		g_UInputMan.TrapMousePos(true, m_pController->GetInputPlayer());
 		// Only play switching away sound
 		//        if (!m_PurchaseMade)
 		g_GUISound.ExitMenuSound()->Play(m_pController->GetPlayer());
@@ -516,10 +527,12 @@ void BuyMenuGUI::SetEnabled(bool enable) {
 }
 
 void BuyMenuGUI::SetPosOnScreen(int newPosX, int newPosY) {
+	if (IsInert()) return;
 	m_pGUIController->SetPosOnScreen(newPosX, newPosY);
 }
 
 void BuyMenuGUI::SetMetaPlayer(int metaPlayer) {
+	if (IsInert()) return;
 	if (metaPlayer >= Players::PlayerOne && metaPlayer < g_MetaMan.GetPlayerCount()) {
 		m_MetaPlayer = metaPlayer;
 		SetNativeTechModule(g_MetaMan.GetPlayer(m_MetaPlayer)->GetNativeTechModule());
@@ -528,6 +541,7 @@ void BuyMenuGUI::SetMetaPlayer(int metaPlayer) {
 }
 
 void BuyMenuGUI::SetNativeTechModule(int whichModule) {
+	if (IsInert()) return;
 	if (whichModule >= 0 && whichModule < g_PresetMan.GetTotalModuleCount()) {
 		m_NativeTechModule = whichModule;
 		SetModuleExpanded(m_NativeTechModule);
@@ -557,6 +571,7 @@ void BuyMenuGUI::SetNativeTechModule(int whichModule) {
 }
 
 void BuyMenuGUI::SetModuleExpanded(int whichModule, bool expanded) {
+	if (IsInert()) return;
 	int moduleCount = g_PresetMan.GetTotalModuleCount();
 	if (whichModule > 0 && whichModule < moduleCount) {
 		m_aExpandedModules[whichModule] = expanded;
@@ -571,6 +586,7 @@ void BuyMenuGUI::SetModuleExpanded(int whichModule, bool expanded) {
 }
 
 bool BuyMenuGUI::GetOrderList(std::list<const SceneObject*>& listToFill) const {
+	if (IsInert()) return false;
 	if (m_pCartList->GetItemList()->empty())
 		return false;
 
@@ -584,6 +600,7 @@ bool BuyMenuGUI::GetOrderList(std::list<const SceneObject*>& listToFill) const {
 }
 
 bool BuyMenuGUI::CommitPurchase(std::string presetName) {
+	if (IsInert()) return false;
 	if (m_OwnedItems.size() > 0) {
 		if (m_OwnedItems.find(presetName) != m_OwnedItems.end() && m_OwnedItems[presetName] > 0) {
 			m_OwnedItems[presetName] -= 1;
@@ -595,6 +612,7 @@ bool BuyMenuGUI::CommitPurchase(std::string presetName) {
 }
 
 float BuyMenuGUI::GetTotalCost(bool includeDelivery) const {
+	if (IsInert()) return 0.0F;
 	float totalCost = 0;
 
 	if (m_OwnedItems.size() > 0) {
@@ -649,6 +667,7 @@ float BuyMenuGUI::GetTotalCost(bool includeDelivery) const {
 }
 
 float BuyMenuGUI::GetTotalOrderMass() const {
+	if (IsInert()) return 0.0F;
 	float totalMass = 0.0F;
 
 	for (const GUIListPanel::Item* cartItem: *m_pCartList->GetItemList()) {
@@ -664,6 +683,7 @@ float BuyMenuGUI::GetTotalOrderMass() const {
 }
 
 float BuyMenuGUI::GetCraftMass() {
+	if (IsInert()) return 0.0F;
 	float totalMass = 0;
 
 	// Add the delivery craft's mass
@@ -674,6 +694,7 @@ float BuyMenuGUI::GetCraftMass() {
 }
 
 int BuyMenuGUI::GetTotalOrderPassengers() const {
+	if (IsInert()) return 0;
 	int passengers = 0;
 	for (std::vector<GUIListPanel::Item*>::iterator itr = m_pCartList->GetItemList()->begin(); itr != m_pCartList->GetItemList()->end(); ++itr) {
 		const Actor* passenger = dynamic_cast<const Actor*>((*itr)->m_pEntity);
@@ -686,6 +707,7 @@ int BuyMenuGUI::GetTotalOrderPassengers() const {
 }
 
 void BuyMenuGUI::EnableEquipmentSelection(bool enabled) {
+	if (IsInert()) return;
 	if (enabled != m_SelectingEquipment && g_SettingsMan.SmartBuyMenuNavigationEnabled()) {
 		m_SelectingEquipment = enabled;
 		RefreshTabDisabledStates();
@@ -710,6 +732,7 @@ void BuyMenuGUI::EnableEquipmentSelection(bool enabled) {
 }
 
 void BuyMenuGUI::UpdateItemNestingLevels() {
+	if (IsInert()) return;
 	const int ownedDeviceOffsetX = 8;
 
 	int nextHeldDeviceBelongsToAHuman = false;
@@ -739,6 +762,7 @@ void BuyMenuGUI::RefreshTabDisabledStates() {
 }
 
 void BuyMenuGUI::Update() {
+	if (IsInert()) return;
 	// Enable mouse input if the controller allows it
 	m_pGUIController->EnableMouse(m_pController->IsMouseControlled());
 
@@ -1900,7 +1924,7 @@ void BuyMenuGUI::Update() {
 			}
 
 			// We do this down here, because if we have a mouse-up event even outside the cart, we should stop dragging. We also check UInputMan in case the mouse is released entirely outside of the buy menu.
-			if ((anEvent.GetMsg() == GUIListBox::MouseUp && (anEvent.GetData() & GUIListBox::MOUSE_LEFT)) || g_UInputMan.MouseButtonReleased(MouseButtons::MOUSE_LEFT, m_pController->GetPlayer())) {
+			if ((anEvent.GetMsg() == GUIListBox::MouseUp && (anEvent.GetData() & GUIListBox::MOUSE_LEFT)) || g_UInputMan.MouseButtonReleased(MouseButtons::MOUSE_LEFT, m_pController->GetInputPlayer())) {
 				if (m_MenuCategory == LOADOUTS) {
 					// Might've reordered the loadout list, so we need to save the new order
 					SaveAllLoadoutsToFile();
@@ -1923,6 +1947,7 @@ void BuyMenuGUI::Update() {
 }
 
 void BuyMenuGUI::Draw(BITMAP* drawBitmap) const {
+	if (IsInert()) return;
 	AllegroScreen drawScreen(drawBitmap);
 	m_pGUIController->Draw(&drawScreen);
 	if (IsEnabled() && m_pController->IsMouseControlled()) {
@@ -1979,6 +2004,7 @@ void BuyMenuGUI::FocusChange()
 */
 
 void BuyMenuGUI::CategoryChange(bool focusOnCategoryTabs) {
+	if (IsInert()) return;
 	// Re-set the GUI manager's focus on the tabs if we're supposed to
 	// We don't want to do that if we're just refreshing the same category, like in the case of of expanding a module group item
 	if (focusOnCategoryTabs) {
@@ -2093,6 +2119,7 @@ void BuyMenuGUI::CategoryChange(bool focusOnCategoryTabs) {
 }
 
 void BuyMenuGUI::SaveCurrentLoadout() {
+	if (IsInert()) return;
 	Loadout newSet;
 
 	// Abort if there's no cargo to save into the preset
@@ -2116,6 +2143,7 @@ void BuyMenuGUI::SaveCurrentLoadout() {
 }
 
 bool BuyMenuGUI::DeployLoadout(int index) {
+	if (IsInert()) return false;
 	if (index < 0 || index >= m_Loadouts.size()) {
 		m_SelectedLoadoutIndex = -1;
 		return false;
@@ -2411,6 +2439,7 @@ void BuyMenuGUI::UpdateTotalPassengersLabel(const ACraft* pCraft, GUILabel* pLab
 }
 
 void BuyMenuGUI::TryPurchase() {
+	if (IsInert()) return;
 	int player = m_pController->GetPlayer();
 	// Switch to the Craft category to give the user a hint
 	if (!m_pSelectedCraft) {

@@ -169,6 +169,7 @@ int GUIBanner::SpaceBetween(const FlyingChar& first, FontMode firstMode, const F
 }
 
 void GUIBanner::ShowText(const std::string& text, AnimMode mode, long duration, Vector targetSize, float yOnTarget, int flySpeed, int flySpacing) {
+	if (IsInert()) return;
 	m_BannerText = text;
 	m_AnimMode = mode;
 	m_AnimState = SHOWING;
@@ -232,6 +233,7 @@ void GUIBanner::HideText()
 */
 
 void GUIBanner::Update() {
+	if (IsInert()) return;
 	double deltaS = m_FrameTimer.GetElapsedRealTimeS();
 
 	// Only bother updating if things are visible at all

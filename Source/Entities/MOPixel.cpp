@@ -4,7 +4,6 @@
 #include "Atom.h"
 #include "ConsoleMan.h"
 #include "PostProcessMan.h"
-#include "FrameMan.h"
 
 using namespace RTE;
 
@@ -26,7 +25,8 @@ void MOPixel::Clear() {
 	m_PersistedLethalRange = 0.0F;
 	m_HasPersistedLethalRange = false;
 	m_Color.Reset();
-	m_LethalRange = std::max(g_FrameMan.GetPlayerScreenWidth(), g_FrameMan.GetPlayerScreenHeight());
+	// Lethal range is sim state every peer shares, so scale it by the default screen, not this window.
+	m_LethalRange = std::max(c_DefaultResX, c_DefaultResY);
 	m_MinLethalRange = 1;
 	m_MaxLethalRange = 1;
 	m_LethalSharpness = 1;

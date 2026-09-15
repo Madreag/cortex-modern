@@ -444,17 +444,17 @@ namespace RTE {
 		/// @return Whether any unit was following.
 		bool DisbandSquad();
 
-		/// Gets this' AI mode.
+		/// Gets this' AI mode. A running AI pass sees the mode it asked for, the sim the committed one.
 		/// @return The current AI mode.
-		int GetAIMode() const { return m_AIMode; }
+		int GetAIMode() const { return g_CurrentAIActor ? GetAIModeSeenByAIPass() : m_AIMode; }
 
 		/// Gets the icon bitmap associated with this' current AI mode and team.
 		/// @return The current AI mode icon of this. Ownership is NOT transferred!
 		BITMAP* GetAIModeIcon();
 
-		/// Sets this' AI mode.
+		/// Sets this' AI mode. A write from inside a lockstep AI pass becomes a synced mode request.
 		/// @param newMode The new AI mode. (default: AIMODE_SENTRY)
-		void SetAIMode(AIMode newMode = AIMODE_SENTRY) { m_AIMode = newMode; }
+		void SetAIMode(AIMode newMode = AIMODE_SENTRY);
 
 		/// Sets this' AI mode through the lockstep wire when a net match is running, directly otherwise.
 		/// @param newMode The new AI mode.
@@ -492,6 +492,8 @@ namespace RTE {
 				Scene = 0,
 				MOTarget = 1,
 				Clear = 2,
+				MOTargetSet = 3, //!< Sets the move target itself; targetUID 0 clears it.
+				AlarmPoint = 4, //!< Raises the alarm point the pass wrote.
 			};
 			Op op = Scene;
 			float x = 0.0F;
@@ -505,6 +507,53 @@ namespace RTE {
 		void ExecuteDeferredWaypoint(const DeferredWaypoint& waypoint);
 		/// Sends this tick's queued waypoint calls over the wire, or performs them when no match is running.
 		void SendDeferredWaypoints();
+
+		/// An AI mode this actor's AI pass wrote this tick; under lockstep it crosses the wire as the
+		/// same request a pie order sends, so every peer takes the mode at the committed tick.
+		struct DeferredAIMode {
+			int64_t actorUID = 0;
+			uint8_t mode = 0;
+		};
+		/// Hands out the AI mode writes the AI pass queued this tick, in call order; mods don't call this.
+		std::vector<DeferredAIMode> TakePendingDeferredAIModes();
+		/// Sends this tick's queued AI mode writes as synced requests; the writes of an actor this
+		/// machine does not own are dropped.
+		void SendDeferredAIModes();
+
+		/// A message this actor's AI pass sent this tick. The receiving script runs on every peer, so under
+		/// lockstep the call crosses the wire and every peer delivers it at the committed tick.
+		struct DeferredScriptMessage {
+			int64_t objectUID = 0;
+			uint8_t context = 0;
+			double number = 0.0;
+			int64_t contextUID = 0;
+			std::string message;
+			std::string text;
+		};
+		/// Queues a message an AI pass sent, so its owner's drain crosses it to every peer.
+		/// @return Whether the call was queued; outside a deferring pass it is made directly as before.
+		static bool QueueAIPassScriptMessage(const MovableObject* receiver, uint8_t context, double number, int64_t contextUID, const std::string& message, const std::string& text);
+		/// A gib this actor's AI pass asked for, with the call it was made with.
+		struct DeferredGib {
+			int64_t objectUID = 0;
+			int64_t ignoreUID = 0;
+			float impulseX = 0.0F;
+			float impulseY = 0.0F;
+		};
+		/// Queues a gib an AI pass asked for, so every peer gibs at the committed tick with the same call.
+		/// @return Whether the call was queued; outside a deferring pass the gib happens directly as before.
+		static bool QueueAIPassGib(const MovableObject* target, const Vector& impactImpulse, const MovableObject* movableObjectToIgnore);
+		/// Whether a write to this object made right here belongs to a lockstep AI pass and must be deferred.
+		/// @param target What is written; no target asks only whether a lockstep AI pass is running here.
+		static bool DeferringAIPassWrite(const MovableObject* target);
+		/// Hands out the messages the AI pass queued this tick, in call order; mods don't call this.
+		std::vector<DeferredScriptMessage> TakePendingDeferredScriptMessages();
+		/// Sends this tick's queued messages as synced commands; an actor this machine does not own is dropped.
+		void SendDeferredScriptMessages();
+		/// Hands out the gibs the AI pass queued this tick, in call order; mods don't call this.
+		std::vector<DeferredGib> TakePendingDeferredGibs();
+		/// Sends this tick's queued gibs as synced commands; an actor this machine does not own is dropped.
+		void SendDeferredGibs();
 
 		/// Gets the last or furthest set AI waypoint of this. If none, this' pos
 		/// is returned.
@@ -585,10 +634,12 @@ namespace RTE {
 			return false;
 		}
 
-		/// Gets a pointer to the MovableObject move target of this Actor.
+		/// Gets a pointer to the MovableObject move target of this Actor. A running AI pass sees the target
+		/// its own order is carrying, the sim the committed one.
 		/// @return A pointer to the MovableObject move target of this Actor.
-		const MovableObject* GetMOMoveTarget() const { return m_pMOMoveTarget; }
-		void SetMOMoveTarget(const MovableObject* object) { m_pMOMoveTarget = object; m_FaithfulMOMoveTargetUID = 0; }
+		const MovableObject* GetMOMoveTarget() const { return g_CurrentAIActor ? GetMOMoveTargetSeenByAIPass() : m_pMOMoveTarget.get(); }
+		/// Sets this' MovableObject move target. A write from inside a lockstep AI pass becomes a synced order.
+		void SetMOMoveTarget(const MovableObject* object);
 		static bool RunBorrowedReferenceSelfTest();
 		std::vector<long> GetCheckpointBorrowedReferences() const override;
 		bool RebindCheckpointBorrowedReferences(const std::vector<long>& identities, bool validateOnly = false) override;
@@ -627,6 +678,10 @@ namespace RTE {
 		/// @return The new scene point this should look at and see if anything dangerous
 		/// is there or (0,0) if nothing is alarming.
 		Vector GetAlarmPoint() {
+			// A running AI pass reads back the point its own order is carrying; the sim keeps the committed one.
+			if (Vector seen; g_CurrentAIActor && AlarmPointSeenByAIPass(seen)) {
+				return seen;
+			}
 			if (m_AlarmTimer.GetElapsedSimTimeMS() > g_TimerMan.GetDeltaTimeMS()) {
 				return Vector();
 			}
@@ -778,6 +833,24 @@ namespace RTE {
 		/// Returns whether we're waiting on a new pending movepath.
 		/// @return Whether we're waiting on a new pending movepath.
 		bool IsWaitingOnNewMovePath() const { return m_PathRequest != nullptr || m_UpdateMovePath; }
+
+		/// Returns whether this is still waiting to start the move it was ordered to make. The move path is
+		/// this machine's own pathfinder answer, so under lockstep the ordered waypoints answer instead.
+		/// @return Whether an ordered move has not been started yet.
+		bool IsWaitingOnOrderedMove() const;
+
+		/// Returns whether this has anywhere it was ordered to go, the move path under lockstep aside.
+		/// @return Whether this is under an order to move.
+		bool HasOrderedMove() const;
+
+		/// Gets the next point of the ordered move, the move path's next node outside lockstep.
+		/// @return The next point of the ordered move, or this' position when there is no order.
+		Vector GetOrderedMoveStep() const;
+
+		/// Gets the end of the ordered move the waypoint queue does not already name, the move path's end
+		/// outside lockstep.
+		/// @return The end of the ordered move, or this' position when the queue already names the route.
+		Vector GetOrderedMoveEnd() const;
 
 		/// Estimates what material strength this actor can penetrate.
 		/// @return The actor's dig strength.
@@ -1179,6 +1252,22 @@ namespace RTE {
 		std::vector<DeferredWaypoint> m_PendingDeferredWaypoints;
 		// Sent calls still in flight; the running actor's reads keep seeing them until the apply lands.
 		std::vector<DeferredWaypoint> m_InflightWaypoints;
+		// AI mode writes the AI pass queued; the owner sends them so every peer takes the mode at one tick.
+		std::vector<DeferredAIMode> m_PendingDeferredAIModes;
+		// Messages the AI pass sent; the owner sends them so every peer's receiver script hears them at one tick.
+		std::vector<DeferredScriptMessage> m_PendingDeferredScriptMessages;
+		// Gibs the AI pass asked for; the owner sends them so every peer gibs at one tick.
+		std::vector<DeferredGib> m_PendingDeferredGibs;
+		// The mode a sent request is carrying and the last tick the AI pass may read it back, so the AI
+		// keeps a coherent view while the request flies. Per machine: never archived, never checksummed.
+		AIMode m_InflightAIMode;
+		int64_t m_InflightAIModeUntil;
+		// The last waypoint this actor was ordered to, kept after the queue drains. The move path is the
+		// local pathfinder's own answer, so only the ordered point is a destination every peer agrees on.
+		Vector m_LastOrderedWaypoint;
+		bool m_HasOrderedWaypoint;
+		// The MO that order named, if it named one: a follower answers where its target is now.
+		int64_t m_LastOrderedWaypointUID;
 		// Under lockstep the owner's AI loads waypoints ahead of the drops it sent over the wire; this many front entries are already loaded.
 		int m_WaypointCursor;
 		// Whether to draw the waypoints or not in the HUD
@@ -1212,8 +1301,15 @@ namespace RTE {
 		bool SeeingLogicalWaypoints() const;
 		void BuildLogicalWaypoints(std::vector<std::pair<Vector, const MovableObject*>>& items) const;
 		bool LogicalWaypointClearSeen() const;
+		bool OrderedWaypointsPending() const;
+		bool FirstOrderedWaypoint(Vector& point) const;
 		void ConsumeInflightWaypoint(DeferredWaypoint::Op op, float x, float y, int64_t targetUID);
 		void QueueDeferredOnRunning(const DeferredWaypoint& waypoint);
+		void QueueAIModeOnRunning(AIMode newMode);
+		int GetAIModeSeenByAIPass() const;
+		const MovableObject* GetMOMoveTargetSeenByAIPass() const;
+		bool AlarmPointSeenByAIPass(Vector& seen) const;
+		AIMode PendingAIMode() const;
 
 		std::string m_PersistedActorRuntime;
 		std::array<std::string, 2> m_PersistedActorIconReferences;

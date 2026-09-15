@@ -104,9 +104,15 @@ namespace RTE {
 		/// @param newPosX The new screen position of this entire GUI.
 		void SetPosOnScreen(int newPosX, int newPosY);
 
+		/// Whether this editor has no picker, which is what a seat this machine does not present is answered with:
+		/// every call on it is a no-op and every getter answers neutral.
+		bool IsInert() const { return !m_pPicker; }
+
 		/// Sets the absolute scene coordinates of the cursor of this Editor.
 		/// @param newCursorPos The new cursor position in absolute scene units.
-		void SetCursorPos(const Vector& newCursorPos) { m_CursorPos = newCursorPos; }
+		void SetCursorPos(const Vector& newCursorPos) {
+			if (!IsInert()) m_CursorPos = newCursorPos;
+		}
 
 		/// Sets the new Object to be held at the cursor of this Editor. Ownership
 		/// IS transferred!
@@ -130,11 +136,13 @@ namespace RTE {
 
 		/// Sets the current mode of this editor.
 		/// @param newMode The new mode to set to, see the EditorGUIMode enum.
-		void SetEditorGUIMode(EditorGUIMode newMode) { m_EditorGUIMode = newMode; }
+		void SetEditorGUIMode(EditorGUIMode newMode) {
+			if (!IsInert()) m_EditorGUIMode = newMode;
+		}
 
 		/// Gets the current mode of this editor.
 		/// @return The current mode this is set to; see the EditorGUIMode enum.
-		EditorGUIMode GetEditorGUIMode() const { return m_EditorGUIMode; }
+		EditorGUIMode GetEditorGUIMode() const { return IsInert() ? INACTIVE : m_EditorGUIMode; }
 
 		/// Sets which DataModule space to be picking objects from. If -1, then
 		/// let the player pick from all loaded modules.

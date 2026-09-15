@@ -2,7 +2,10 @@
 import argparse
 import json
 from pathlib import Path
+import sys
 
+# A driver that runs this file in its own process does not put this directory on the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import verify_pie_close as verify
 
 

@@ -55,6 +55,7 @@ namespace RTE {
 		std::unique_ptr<ControllerLog> s_ControllerReplayLog;
 		std::string s_ControllerReplayError;
 		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
+		ScenarioRunner::LockstepChecksumCounters s_RetiredChecksumCounters;
 		uint64_t s_LockstepAppliedFrame = 0;
 		std::function<void()> s_SessionPump;
 		const NetSeatPresence* s_SeatPresence = nullptr;
@@ -753,6 +754,14 @@ namespace RTE {
 				if (newest > NetLockstepCodec::c_MaxFutureFrameSkew) s_LocalInputHistory.erase(s_LocalInputHistory.begin(), s_LocalInputHistory.lower_bound(newest - NetLockstepCodec::c_MaxFutureFrameSkew));
 			}
 		}
+		// A resync builds a new coordinator; the retiring one's desync-check traffic still counts.
+		if (s_LockstepCoordinator && s_LockstepCoordinator != coordinator) {
+			const NetLockstepStats& retiring = s_LockstepCoordinator->GetStats();
+			s_RetiredChecksumCounters.submissions += retiring.checksumSubmissions;
+			s_RetiredChecksumCounters.sends += retiring.checksumSends;
+			s_RetiredChecksumCounters.compares += retiring.checksumCompares;
+			s_RetiredChecksumCounters.mismatches += retiring.checksumMismatches;
+		}
 		s_LockstepCoordinator = coordinator;
 		if (!coordinator) {
 			s_SeatPresence = nullptr;
@@ -894,6 +903,18 @@ namespace RTE {
 		return s_LockstepAppliedFrame;
 	}
 
+	ScenarioRunner::LockstepChecksumCounters ScenarioRunner::GetLockstepChecksumCounters() {
+		LockstepChecksumCounters totals = s_RetiredChecksumCounters;
+		if (s_LockstepCoordinator) {
+			const NetLockstepStats& live = s_LockstepCoordinator->GetStats();
+			totals.submissions += live.checksumSubmissions;
+			totals.sends += live.checksumSends;
+			totals.compares += live.checksumCompares;
+			totals.mismatches += live.checksumMismatches;
+		}
+		return totals;
+	}
+
 	uint64_t ScenarioRunner::GetLockstepCompletedFrame() {
 		const uint64_t resumeFrame = GetLockstepResumeFrame();
 		return resumeFrame > 0 ? resumeFrame - 1 : 0;
@@ -941,25 +962,29 @@ namespace RTE {
 		return NetActorOwnership::IsTeamCommandAuthority(s_LockstepCoordinator->GetConfig().matchConfig, static_cast<uint8_t>(team), senderPeerId);
 	}
 
-	bool ScenarioRunner::IsLockstepAIOrderAuthorized(uint8_t senderPeerId, const NetGameAIOrder& order) {
-		if (IsLockstepTeamCommandSender(order.team, senderPeerId)) {
+	bool ScenarioRunner::IsLockstepAIWriteAuthorized(uint8_t senderPeerId, int32_t team, int64_t actorUID, int64_t writerUID) {
+		if (IsLockstepTeamCommandSender(team, senderPeerId)) {
 			return true;
 		}
 		auto cpuControlledOf = [](int64_t uid) {
 			const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(uid)));
 			return !actor || !actor->IsPlayerControlled();
 		};
-		if (GetLockstepActorOwner(order.actorUID, order.team, cpuControlledOf(order.actorUID)) == senderPeerId) {
+		if (GetLockstepActorOwner(actorUID, team, cpuControlledOf(actorUID)) == senderPeerId) {
 			return true;
 		}
-		if (order.writerUID != 0) {
-			const Actor* writer = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order.writerUID)));
-			const int writerTeam = writer ? writer->GetTeam() : order.team;
-			if (writerTeam == order.team && GetLockstepActorOwner(order.writerUID, writerTeam, cpuControlledOf(order.writerUID)) == senderPeerId) {
+		if (writerUID != 0) {
+			const Actor* writer = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(writerUID)));
+			const int writerTeam = writer ? writer->GetTeam() : team;
+			if (writerTeam == team && GetLockstepActorOwner(writerUID, writerTeam, cpuControlledOf(writerUID)) == senderPeerId) {
 				return true;
 			}
 		}
 		return false;
+	}
+
+	bool ScenarioRunner::IsLockstepAIOrderAuthorized(uint8_t senderPeerId, const NetGameAIOrder& order) {
+		return IsLockstepAIWriteAuthorized(senderPeerId, order.team, order.actorUID, order.writerUID);
 	}
 
 	int ScenarioRunner::GetLockstepHumanSlotIndex(int team) {
@@ -990,6 +1015,22 @@ namespace RTE {
 
 	uint8_t ScenarioRunner::GetLockstepLocalPeerId() {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().localPeerId : 0;
+	}
+
+	const NetMatchConfig* ScenarioRunner::GetLockstepMatchConfig() {
+		if (!s_LockstepCoordinator) {
+			return nullptr;
+		}
+		const NetMatchConfig& matchConfig = s_LockstepCoordinator->GetConfig().matchConfig;
+		if (!matchConfig.players.empty()) {
+			return &matchConfig;
+		}
+		// A running match has adopted a roster. Without one the shared rules it answers would come from
+		// this machine's own settings, so the match stops instead of deciding per peer.
+		if (s_LockstepCoordinator->IsRunning() && !HasControllerReplayError()) {
+			SetControllerReplayError("the running match has no adopted roster at tick " + std::to_string(GetLockstepAppliedFrame()));
+		}
+		return nullptr;
 	}
 
 	bool ScenarioRunner::IsLockstepPaused() {
@@ -1296,6 +1337,15 @@ namespace RTE {
 			const uint8_t sender = command.senderPeerId != 0 ? command.senderPeerId : GetLockstepLocalPeerId();
 			if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
 				if (!IsLockstepAIOrderAuthorized(sender, *order)) {
+					return;
+				}
+			} else if (const NetGameAIScriptMessage* message = std::get_if<NetGameAIScriptMessage>(&command.payload)) {
+				// The writer is the authority for a message its pass sent, exactly as for an AI order.
+				if (!IsLockstepAIWriteAuthorized(sender, message->team, message->writerUID, message->writerUID)) {
+					return;
+				}
+			} else if (const NetGameAIGib* gib = std::get_if<NetGameAIGib>(&command.payload)) {
+				if (!IsLockstepAIWriteAuthorized(sender, gib->team, gib->writerUID, gib->writerUID)) {
 					return;
 				}
 			} else if (!IsLockstepTeamCommandSender(NetGameCommandTeam(command.payload), sender)) {
@@ -1859,15 +1909,18 @@ namespace RTE {
 				const std::string missing = s_LockstepCoordinator->DescribeMissingPeers();
 				if (!stalled) {
 					stalled = true;
-					stalledOnHold = holdPause;
-					if (holdPause) {
-						const std::string who = holdName.empty() ? "a player" : holdName;
-						std::cout << "[net-match] match paused waiting for " << who
-						          << " (" << holdSeconds << "s left, tick " << tick << ")" << std::endl;
-						PushNetUiToast("paused", "Match paused: waiting for " + who + " to return");
-					} else {
+					if (!holdPause) {
 						std::cout << "[net-match] waiting on peer frames (tick " << tick << (missing.empty() ? "" : ", " + missing) << ")" << std::endl;
 					}
+				}
+				// The seat hold engages seconds after the drop the stall began with, so the wait banner
+				// follows the hold instead of only the moment the stall was first noticed.
+				if (holdPause && !stalledOnHold) {
+					stalledOnHold = true;
+					const std::string who = holdName.empty() ? "a player" : holdName;
+					std::cout << "[net-match] match paused waiting for " << who
+					          << " (" << holdSeconds << "s left, tick " << tick << ")" << std::endl;
+					PushNetUiToast("paused", "Match paused: waiting for " + who + " to return (" + std::to_string(holdSeconds) + "s left)");
 				}
 				if (s_LockstepStallOverlayEnabled || s_LockstepStallUiProbeArmed) {
 					PumpLockstepStallUI();

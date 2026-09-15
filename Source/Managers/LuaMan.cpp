@@ -53,6 +53,7 @@
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <functional>
 #include <future>
 #include <map>
@@ -1323,10 +1324,35 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 	preparedGraph = nil
 	local baseline = _ScriptGraphBaseline or { globals = {}, loaded = {} }
 	for name, value in pairs(baseline.values or {}) do rawset(_G, name, value) end
+	local wiped = {}
 	for _, saved in ipairs(baseline.tables or {}) do
-		for key in pairs(saved.object) do if carriesKey(saved, key) then rawset(saved.object, key, nil) end end
+		for key in pairs(saved.object) do
+			if carriesKey(saved, key) then
+				-- Only a key the baseline never had goes missing here; the rest come back below.
+				if saved.entries[key] == nil then
+					local gone = wiped[saved.object]
+					if not gone then gone = {} wiped[saved.object] = gone end
+					gone[key] = rawget(saved.object, key)
+				end
+				rawset(saved.object, key, nil)
+			end
+		end
 		for key, value in pairs(saved.entries) do rawset(saved.object, key, value) end
 		setmetatable(saved.object, saved.meta)
+	end
+	-- A key a script added to a library table is named by path, and the wipe above has just taken it.
+	local function wipedPath(segments)
+		local value = _G
+		for _, segment in ipairs(segments) do
+			if type(value) ~= "table" and type(value) ~= "userdata" then return nil end
+			local found = value[segment]
+			if found == nil then
+				local gone = wiped[value]
+				found = gone and gone[segment]
+			end
+			value = found
+		end
+		return value
 	end
 	local function fail(message) problems[#problems + 1] = message end
 	local note = fail
@@ -1338,6 +1364,7 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 		elseif t == "ref" then return objects[token.id]
 		elseif t == "path" then
 			local value = resolvePath(token.segments)
+			if value == nil then value = wipedPath(token.segments) end
 			if value == nil then note("the named value " .. pathText(token.segments) .. " is missing") end
 			return value
 		elseif t == "entity" then
@@ -1458,12 +1485,34 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 	local ids = {}
 	for id in pairs(graph.nodes) do ids[#ids + 1] = id end
 	table.sort(ids)
+	-- A required module's members are named through package.loaded, so the module table is anchored there
+	-- first, as the table the loader handed out: re-requiring the file would run the module again.
+	local anchored, loadedIds, loadedNames = {}, {}, {}
+	if type(package) == "table" and type(package.loaded) == "table" then
+		for _, entry in ipairs(graph.loaded) do
+			if entry.value.t == "ref" and loadedNames[entry.value.id] == nil then
+				loadedNames[entry.value.id] = entry.name
+				loadedIds[#loadedIds + 1] = entry.value.id
+			end
+		end
+		table.sort(loadedIds)
+		for _, id in ipairs(loadedIds) do
+			local node = graph.nodes[id]
+			if node and node.kind == "T" then
+				local object = (reuseHeld and objects[id]) or (node.path and resolvePath(node.path.segments))
+				if type(object) ~= "table" or (baseline.paths and baseline.paths[object]) or object == _G then object = package.loaded[loadedNames[id]] end
+				if type(object) ~= "table" then object = {} end
+				package.loaded[loadedNames[id]] = object
+				anchored[id] = object
+			end
+		end
+	end
 	for _, id in ipairs(ids) do
 		local node = graph.nodes[id]
 		if node.kind == "T" then
-			local object = reuseHeld and objects[id] or nil
+			local object = (reuseHeld and objects[id]) or anchored[id] or nil
 			if object then
-				if node.path and not assignPath(node.path.segments, object) then fail("cannot restore a held table path") end
+				if node.path and not assignPath(node.path.segments, object) then fail("cannot place the table " .. pathText(node.path.segments)) end
 			elseif node.path then
 				object = resolvePath(node.path.segments)
 				if type(object) ~= "table" or (baseline.paths and baseline.paths[object]) or object == _G then
@@ -2437,6 +2486,34 @@ do
 	local same = #captureProblems == 0 and #restoreProblems == 0
 	for i = 1, #expected do same = LuaMan:SelectRand(0, 1000000) == expected[i] and same end
 	check("native_vm_rng_rewound", same)
+end
+
+-- A required module an activity also holds by name: the graph names the module's members through
+-- package.loaded, so the restore has to put the module table back there before it places them.
+do
+	local Class = {}
+	Class.__index = Class
+	function Class:count() return #self.LZs end
+	local function reader(value) return function() return value end end
+	local Module = setmetatable({ LZs = {}, Lookup = {} }, Class)
+	Module.read = reader(Module.LZs)
+	package.loaded["_SelfTestLZModule"] = Module
+	_SelfTestModuleHolder = { LZmap = Module }
+	local capture, problems = _ScriptGraph.serialize({ ["module"] = { held = Module } })
+	check("module_capture", #problems == 0, table.concat(problems, " | "))
+	if #problems == 0 then
+		-- What the relaunch leaves behind: the module is gone from package.loaded and from its holder.
+		package.loaded["_SelfTestLZModule"] = nil
+		_SelfTestModuleHolder.LZmap = nil
+		local restored, errors = _ScriptGraph.deserialize(capture)
+		check("module_members_placed", #errors == 0, table.concat(errors, " | "))
+		local result = restored["module"] and restored["module"].held
+		check("module_anchored_in_package_loaded", result ~= nil and rawequal(package.loaded["_SelfTestLZModule"], result) and rawequal(_SelfTestModuleHolder.LZmap, result))
+		check("module_member_upvalue_alias", result ~= nil and rawequal(result.read(), result.LZs))
+		check("module_metatable_kept", result ~= nil and getmetatable(result) ~= nil and result:count() == 0)
+	end
+	package.loaded["_SelfTestLZModule"] = nil
+	_SelfTestModuleHolder = nil
 end
 _SelfTestShared, _SelfTestMod, _SelfTestKlass = nil, nil, nil
 _G["selftest.lua"] = nil
@@ -4857,6 +4934,8 @@ void LuaStateWrapper::Initialize() {
 	LoadScriptGraphHelper();
 	CaptureScriptGraphBaseline();
 
+	LuabindObjectWrapper::InstallSimThreadDeletion(m_State, g_LuaMan.GetStateIndex(this));
+
 	if (g_SettingsMan.EnableLuaDebugging()) {
 		luaL_dostring(m_State, "require(\"mobdebug\").coro(); require(\"mobdebug\").start();");
 	}
@@ -4952,6 +5031,8 @@ bool LuaMan::IsDeterministicCollection() {
 }
 
 void LuaMan::Initialize() {
+	// Every Lua-owned engine object's destructor belongs to this thread; the pool threads only collect.
+	LuabindObjectWrapper::SetSimThread();
 	m_MasterScriptState.Initialize();
 
 	int luaStateCount = std::thread::hardware_concurrency();
@@ -5107,6 +5188,95 @@ static bool RunTickEndCollectionSelfTest() {
 	return fullPass && incrementalPass;
 }
 
+static bool RunGarbageCollectionThreadSelfTest() {
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL lua_owned_entities_are_destructed_on_the_sim_thread no threaded Lua states" << std::endl;
+		return false;
+	}
+	const long counter = MovableObject::GetUniqueIDCounter();
+	const bool previousMode = LuaMan::IsDeterministicCollection();
+	LuaMan::SetDeterministicCollection(true);
+	g_LuaMan.CollectGarbageForCheckpoint();
+
+	// Every state a pass collects runs on its own pool thread, so two dropping states put two finalizers on the same managers at once.
+	constexpr int c_DropsPerState = 64;
+	const size_t droppingStates = states.size() < 2 ? states.size() : 2;
+	std::vector<long> uids(droppingStates, 0);
+	for (size_t index = 0; index < droppingStates; ++index) {
+		LuaStateWrapper& state = states[index];
+		state.RunScriptString("_GCThreadDrop = {}; for i = 1, " + std::to_string(c_DropsPerState) + " do _GCThreadDrop[#_GCThreadDrop + 1] = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\"); _GCThreadDrop[#_GCThreadDrop + 1] = CreateSoundContainer(\"Funds Changed\", \"Base.rte\"); end; _GCThreadUID = _GCThreadDrop[1].UniqueID");
+		{
+			std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
+			lua_getglobal(state.GetLuaState(), "_GCThreadUID");
+			uids[index] = static_cast<long>(lua_tonumber(state.GetLuaState(), -1));
+			lua_pop(state.GetLuaState(), 1);
+		}
+	}
+	const uint64_t offSimThreadBefore = LuabindObjectWrapper::OffSimThreadDeletionCount();
+	const uint64_t simThreadBefore = LuabindObjectWrapper::SimThreadDeletionCount();
+	for (size_t index = 0; index < droppingStates; ++index) {
+		states[index].RunScriptString("_GCThreadDrop = nil; _GCThreadUID = nil");
+	}
+	g_LuaMan.StartAsyncGarbageCollection();
+	g_LuaMan.WaitForAsyncGarbageCollection();
+
+	const uint64_t offSimThread = LuabindObjectWrapper::OffSimThreadDeletionCount() - offSimThreadBefore;
+	const uint64_t simThread = LuabindObjectWrapper::SimThreadDeletionCount() - simThreadBefore;
+	bool allGone = true;
+	for (long uid: uids) {
+		allGone = allGone && uid > 0 && !g_MovableMan.FindObjectByUniqueID(uid);
+	}
+
+	// A Lua-side class over a C++ base holds class_rep::allocate's sentinel until super() builds the base, so only
+	// the built base may reach a finalizer's delete. Both instances die on a pool thread; count where each one went.
+	const auto collectOne = [&states](const std::string& script) {
+		states[0].RunScriptString(script);
+		uint64_t off = 0;
+		uint64_t sim = 0;
+		// An instance reaches its class through a raw pointer, so the pair settles over a few cycles, not one.
+		for (int pass = 0; pass < 4; ++pass) {
+			const uint64_t offBefore = LuabindObjectWrapper::OffSimThreadDeletionCount();
+			const uint64_t simBefore = LuabindObjectWrapper::SimThreadDeletionCount();
+			g_LuaMan.StartAsyncGarbageCollection();
+			g_LuaMan.WaitForAsyncGarbageCollection();
+			off += LuabindObjectWrapper::OffSimThreadDeletionCount() - offBefore;
+			sim += LuabindObjectWrapper::SimThreadDeletionCount() - simBefore;
+		}
+		return std::pair<uint64_t, uint64_t>(off, sim);
+	};
+	// Over a C++ base luabind leaves the instance in the global super closure whether __init finished or not, so clearing
+	// super is what drops it; the class goes too, since a script graph capture refuses a Lua class userdata left in a global.
+	const auto [unbuiltOff, unbuiltSim] = collectOne("class 'F82UnbuiltBase' (Box); function F82UnbuiltBase:__init() error('base never built') end; pcall(function() local held = F82UnbuiltBase() end); super = nil; F82UnbuiltBase = nil");
+	const auto [builtOff, builtSim] = collectOne("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end; do local held = F82BuiltBase() end; super = nil; F82BuiltBase = nil");
+	const bool sentinelHeld = unbuiltSim == 0 && unbuiltOff >= 1 && builtSim >= 1;
+
+	// What the same GC-heavy tick costs, averaged over rounds that drop the same batch again.
+	constexpr int c_TimedRounds = 5;
+	long long passMicroseconds = 0;
+	for (int round = 0; round < c_TimedRounds; ++round) {
+		for (size_t index = 0; index < droppingStates; ++index) {
+			states[index].RunScriptString("_GCThreadDrop = {}; for i = 1, " + std::to_string(c_DropsPerState) + " do _GCThreadDrop[#_GCThreadDrop + 1] = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\"); _GCThreadDrop[#_GCThreadDrop + 1] = CreateSoundContainer(\"Funds Changed\", \"Base.rte\"); end; _GCThreadDrop = nil");
+		}
+		const auto started = std::chrono::steady_clock::now();
+		g_LuaMan.StartAsyncGarbageCollection();
+		g_LuaMan.WaitForAsyncGarbageCollection();
+		passMicroseconds += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+	}
+	passMicroseconds /= c_TimedRounds;
+
+	LuaMan::SetDeterministicCollection(previousMode);
+	g_LuaMan.CollectGarbageForCheckpoint();
+	MovableObject::PinUniqueIDCounter(counter);
+
+	const bool collected = offSimThread + simThread >= droppingStates * c_DropsPerState && allGone;
+	const bool onSimThread = offSimThread == 0;
+	std::cout << "[script-graph-selftest] " << (collected ? "PASS" : "FAIL") << " dropped_lua_owned_entities_are_collected_in_one_parallel_pass states=" << states.size() << " dropping_states=" << droppingStates << " destructed=" << (offSimThread + simThread) << " dropped_uids_gone=" << (allGone ? "yes" : "no") << " pass_us=" << passMicroseconds << std::endl;
+	std::cout << "[script-graph-selftest] " << (onSimThread ? "PASS" : "FAIL") << " lua_owned_entities_are_destructed_on_the_sim_thread off_sim_thread=" << offSimThread << " sim_thread=" << simThread << std::endl;
+	std::cout << "[script-graph-selftest] " << (sentinelHeld ? "PASS" : "FAIL") << " a_lua_class_without_a_built_base_is_never_queued unbuilt_off=" << unbuiltOff << " unbuilt_sim=" << unbuiltSim << " built_off=" << builtOff << " built_sim=" << builtSim << std::endl;
+	return collected && onSimThread && sentinelHeld;
+}
+
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
 	const int id = AllocatePathCallback(m_PathCallbacks, state);
@@ -5124,6 +5294,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	std::cout << "[script-graph-selftest] " << (purgePreserved ? "PASS" : "FAIL") << " native_path_callback_survives_purge" << std::endl;
 	const bool threadedWrites = RunThreadedScriptWriteHashSelfTest();
 	const bool tickEndCollection = RunTickEndCollectionSelfTest();
+	const bool collectionThread = RunGarbageCollectionThreadSelfTest();
 	LuaStatesArray setAside;
 	setAside.swap(m_ScriptStates);
 	LuaStateWrapper* emptyPick = GetAndLockFreeScriptState();
@@ -5131,7 +5302,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	emptyPick->GetMutex().unlock();
 	m_ScriptStates.swap(setAside);
 	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && tickEndCollection && emptySetPicksMaster;
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && tickEndCollection && collectionThread && emptySetPicksMaster;
 }
 
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
@@ -5326,6 +5497,7 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	checkpointValues = BitmapCheckpoint::RunSelfTest() && checkpointValues;
 	checkpointValues = PieMenu::RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunBorrowedReferenceSelfTest() && checkpointValues;
+	checkpointValues = GameActivity::RunDeliveryReferenceSelfTest() && checkpointValues;
 	checkpointValues = MOSprite::RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_PrimitiveMan.RunCheckpointSelfTest() && checkpointValues;
 	{
@@ -5524,7 +5696,9 @@ _PrimitiveQueueCapture = nil
 				const std::string iconSet = Icon::SaveCheckpointSet({target.GetTeamIcon(0), Activity::Teams::MaxTeamCount});
 				const std::string suffix = std::to_string(iconSet.size()) + " " + iconSet + " ";
 				std::string old = activityCheckpoint.substr(0, activityCheckpoint.size() - suffix.size());
-				old.replace(0, std::string("9 Activity3 ").size(), "9 Activity1 ");
+				// Activity1 ended at the actor links; drop the per-seat control binding the newer tags carry.
+				for (int seat = 0; seat < Players::MaxPlayerCount; ++seat) old.resize(old.find_last_of(' ', old.size() - 2) + 1);
+				old.replace(0, std::string("9 Activity4 ").size(), "9 Activity1 ");
 				target.SetDifficulty(33);
 				const std::string before = target.SaveCheckpoint();
 				legacy = target.Activity::LoadCheckpoint(old, true) && target.SaveCheckpoint() == before &&
@@ -6300,6 +6474,54 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (previewLateScriptLoadLeavesStatesAsFound ? "PASS" : "FAIL") << " preview_late_script_load_leaves_states_as_found" << std::endl;
 	checkpointValues = previewLateScriptLoadLeavesStatesAsFound && checkpointValues;
+	// A mod may add a key to a library table, by require("table.clear") or by a plain string.trim = f. The graph
+	// names such a value by its path, which is the very key the restore's wipe takes, so a set-aside must keep it.
+	bool addedLibraryKeyReinstates = false;
+	std::string addedLibraryKeyDetail;
+	{
+		const auto readFlag = [this](const char* name) {
+			lua_getglobal(m_State, name);
+			const bool set = lua_toboolean(m_State, -1) != 0;
+			lua_pop(m_State, 1);
+			return set;
+		};
+		RunScriptString(
+		    "local clear = require('table.clear');"
+		    "string.f69probe = function() return 69 end;"
+		    "_AddedLibraryKeyStaged = type(rawget(table, 'clear')) == 'function' and type(rawget(string, 'f69probe')) == 'function'");
+		const bool staged = readFlag("_AddedLibraryKeyStaged");
+		RunScriptString("_AddedLibraryKeyStaged = nil");
+		std::vector<std::string> before;
+		std::vector<std::string> after;
+		std::vector<std::string> graphProblems;
+		MovableMan::WorldSetAside aside;
+		const bool captured = staged && g_MovableMan.SerializeScriptGraphs(before, graphProblems);
+		const bool settled = captured && g_MovableMan.SetAsideWorld(aside, false) && g_MovableMan.ReinstateWorld(aside);
+		const bool recaptured = settled && g_MovableMan.SerializeScriptGraphs(after, graphProblems);
+		const bool graphsEqual = recaptured && after == before;
+		RunScriptString(
+		    "local probe = { 1, 2 };"
+		    "local clear = rawget(table, 'clear');"
+		    "if type(clear) == 'function' then pcall(clear, probe) end;"
+		    "_AddedLibraryKeyClear = type(clear) == 'function' and next(probe) == nil;"
+		    "_AddedLibraryKeyProbe = type(rawget(string, 'f69probe')) == 'function' and string.f69probe() == 69");
+		const bool clearKept = readFlag("_AddedLibraryKeyClear");
+		const bool probeKept = readFlag("_AddedLibraryKeyProbe");
+		addedLibraryKeyReinstates = staged && settled && clearKept && probeKept && graphsEqual;
+		std::ostringstream detail;
+		detail << "staged=" << staged << " settled=" << settled << " graphs_equal=" << graphsEqual
+		       << " table.clear=" << (clearKept ? "kept" : "missing") << " string.f69probe=" << (probeKept ? "kept" : "missing")
+		       << " graph_problems=" << graphProblems.size();
+		addedLibraryKeyDetail = detail.str();
+		// The keys are this arm's own, so the libraries reach whatever runs next as it found them.
+		RunScriptString(
+		    "rawset(table, 'clear', nil); rawset(string, 'f69probe', nil);"
+		    "package.loaded['table.clear'] = nil; _RequiredPackages['table.clear'] = nil;"
+		    "_AddedLibraryKeyClear = nil; _AddedLibraryKeyProbe = nil");
+		g_LuaMan.CollectGarbageForCheckpoint();
+	}
+	std::cout << "[script-graph-selftest] " << (addedLibraryKeyReinstates ? "PASS" : "FAIL") << " graph_reinstates_added_library_key " << addedLibraryKeyDetail << std::endl;
+	checkpointValues = addedLibraryKeyReinstates && checkpointValues;
 	const std::string report = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
 	lua_pop(L, 1);
 	std::cout << report << std::endl;
@@ -6363,7 +6585,7 @@ LuaStateWrapper* LuaMan::GetAndLockFreeScriptState() {
 }
 
 void LuaMan::ClearUserModuleCache() {
-	m_GarbageCollectionTask.wait();
+	WaitForAsyncGarbageCollection();
 
 	m_MasterScriptState.ClearLuaScriptCache();
 	for (LuaStateWrapper& luaState: m_ScriptStates) {
@@ -6620,6 +6842,7 @@ void LuaMan::Destroy() {
 	for (LuaStateWrapper& state: m_ScriptStates) {
 		state.ReportPreviewBarrierStats();
 	}
+	WaitForAsyncGarbageCollection();
 	for (int i = 0; i < c_MaxOpenFiles; ++i) {
 		FileClose(i);
 	}
@@ -7479,7 +7702,7 @@ void LuaMan::Update() {
 	}
 
 	// Make sure a GC run isn't happening while we try to apply deletions
-	m_GarbageCollectionTask.wait();
+	WaitForAsyncGarbageCollection();
 
 	// Apply all deletions queued from lua
 	LuabindObjectWrapper::ApplyQueuedDeletions();
@@ -7487,10 +7710,12 @@ void LuaMan::Update() {
 
 void LuaMan::WaitForAsyncGarbageCollection() {
 	m_GarbageCollectionTask.wait();
+	// The collecting threads only unlink; the destructors are ours to run, in state order.
+	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
 }
 
 void LuaMan::CollectGarbageForCheckpoint() {
-	m_GarbageCollectionTask.wait();
+	WaitForAsyncGarbageCollection();
 	// A finalizer keeps its own object, and anything only it reaches, alive for the cycle that runs
 	// it, so one pass does not settle a chain. Repeat while a full collection still frees something.
 	const auto collect = [](LuaStateWrapper& luaState) {

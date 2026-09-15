@@ -174,6 +174,8 @@ namespace RTE {
 		static bool SubmitLockstepChecksum(uint64_t tick, const std::array<uint8_t, 32>& hash);
 		static uint16_t GetLockstepInputDelayFrames();
 		static uint8_t GetLockstepLocalPeerId();
+		/// The synced match roster, or null when no roster is attached.
+		static const NetMatchConfig* GetLockstepMatchConfig();
 
 		/// Whether a team has a human player in the synced match config. Local player bindings are
 		/// per-peer in a lockstep match, so sim decisions must resolve team humanity from here.
@@ -204,6 +206,16 @@ namespace RTE {
 		/// The last completed exchange tick, including paused ticks, for presentation.
 		static uint64_t GetLockstepCompletedFrame();
 		static uint64_t GetLockstepRoundId();
+
+		/// What the runtime desync check actually did, summed across a resync's coordinator handoff.
+		struct LockstepChecksumCounters {
+			uint64_t submissions = 0;
+			uint64_t sends = 0;
+			uint64_t compares = 0;
+			uint64_t mismatches = 0;
+		};
+		/// A finished match whose submissions are zero never ran the check; nothing else reports that.
+		static LockstepChecksumCounters GetLockstepChecksumCounters();
 
 		/// The session upkeep the match service owns. A peer that stops sending frames parks the sim
 		/// thread in the lockstep wait, so without this the admission plane cannot answer anything -
@@ -252,6 +264,9 @@ namespace RTE {
 		static bool IsLockstepTeamCommandSender(int team, uint8_t senderPeerId);
 		/// Team authority, or the sender owns the target, or writerUID names a same-team actor the sender owns.
 		static bool IsLockstepAIOrderAuthorized(uint8_t senderPeerId, const NetGameAIOrder& order);
+		/// Whether a peer may make an AI pass's write: it commands the team, drives the written actor, or
+		/// drives the actor whose pass wrote it. The same rule for every call an AI pass defers.
+		static bool IsLockstepAIWriteAuthorized(uint8_t senderPeerId, int32_t team, int64_t actorUID, int64_t writerUID);
 		/// The local peer's index among the team's human slots in the synced roster, or -1 outside a
 		/// lockstep match / off the team. Per-peer view data — for per-peer picks only, never sim decisions.
 		static int GetLockstepHumanSlotIndex(int team);

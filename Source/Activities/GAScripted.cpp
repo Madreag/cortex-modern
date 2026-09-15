@@ -336,7 +336,7 @@ void GAScripted::Update() {
 	GameActivity::Update();
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (!(m_IsActive[player] && m_IsHuman[player])) {
+		if (!(IsSeatActive(player) && IsHumanSeat(player))) {
 			continue;
 		}
 
@@ -416,7 +416,7 @@ int GAScripted::RunLuaConditionalTest(const std::string& functionName, bool& ret
 
 void GAScripted::AddPieSlicesToActiveActorPieMenus() {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		if (m_IsActive[player] && m_IsHuman[player] && m_ControlledActor[player] && m_ViewState[player] != ViewState::DeathWatch && m_ViewState[player] != ViewState::ActorSelect && m_ViewState[player] != ViewState::AIGoToPoint && m_ViewState[player] != ViewState::UnitSelectCircle) {
+		if (IsSeatActive(player) && IsLocalHumanSeat(player) && m_ControlledActor[player] && m_ViewState[player] != ViewState::DeathWatch && m_ViewState[player] != ViewState::ActorSelect && m_ViewState[player] != ViewState::AIGoToPoint && m_ViewState[player] != ViewState::UnitSelectCircle) {
 			PieMenu* controlledActorPieMenu = m_ControlledActor[player]->GetPieMenu();
 			if (controlledActorPieMenu && m_ControlledActor[player]->GetController()->IsState(PIE_MENU_ACTIVE) && controlledActorPieMenu->IsEnabling()) {
 				for (const std::unique_ptr<PieSlice>& pieSlice: m_PieSlicesToAdd) {

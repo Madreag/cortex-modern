@@ -206,7 +206,8 @@ function Create(self)
 
 	self.weapons = {CreateHDFirearm("Blunderpop", "Uzira.rte"), CreateHDFirearm("Blunderbuss", "Uzira.rte"), CreateHDFirearm("Musket", "Uzira.rte"), CreateHDFirearm("Boomstick", "Uzira.rte"), CreateHDFirearm("Crossbow", "Uzira.rte")};
 	
-	self.spawnRadius = math.max(FrameMan.PlayerScreenWidth, FrameMan.PlayerScreenHeight) * 0.1;
+	-- The pinned screen size: the minions this spawns are shared simulation state.
+	self.spawnRadius = math.max(FrameMan.SimScreenWidth, FrameMan.SimScreenHeight) * 0.1;
 	self.minionDecayRadius = self.spawnRadius * 4 + self.minionTemplate.Radius;
 	self.enemySearchRadius = self.minionDecayRadius;
 	self.spawnTerrainTolerance = 70;

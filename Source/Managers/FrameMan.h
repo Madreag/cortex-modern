@@ -118,6 +118,14 @@ namespace RTE {
 		/// @return The height of the player screens.
 		int GetPlayerScreenHeight() const { return GetPlayerFrameBufferHeight(-1); }
 
+		/// Gets the screen width simulation code reads. It is the default window, so every peer and every replay agrees on it whatever this machine's window is.
+		/// @return The pinned screen width for simulation.
+		int GetSimScreenWidth() const { return c_DefaultResX; }
+
+		/// Gets the screen height simulation code reads. It is the default window, so every peer and every replay agrees on it whatever this machine's window is.
+		/// @return The pinned screen height for simulation.
+		int GetSimScreenHeight() const { return c_DefaultResY; }
+
 		/// Gets the resolution multiplier.
 		float GetResolutionMultiplier() const;
 
@@ -173,6 +181,18 @@ namespace RTE {
 		/// @return Current message shown to player.
 		std::string GetScreenText(int whichScreen = 0) const { return (whichScreen >= 0 && whichScreen < c_MaxScreenCount) ? m_ScreenText[whichScreen] : ""; }
 
+		/// The wrapped message and the box it occupies on a player's screen.
+		struct ScreenTextLayout {
+			int x = 0, y = 0, width = 0, height = 0;
+			std::string text;
+		};
+
+		/// Gets the message a player's screen carries, laid out the way DrawScreenText draws it.
+		/// @param whichScreen Which player screen to lay out.
+		/// @param decorated Whether to measure the blinking form of the message.
+		/// @return The drawn text and its box; an empty box when the screen carries no message.
+		ScreenTextLayout GetScreenTextLayout(int whichScreen, bool decorated);
+
 		/// Sets the message to be displayed on top of each player's screen
 		/// @param message An std::string that specifies what should be displayed.
 		/// @param whichScreen Which screen you want to set text to.
@@ -217,6 +237,7 @@ namespace RTE {
 		/// @param color What color to flash it. -1 means no color or flash.
 		/// @param periodMS How long a period to fill the frame with color. If 0, a single-frame flash will happen.
 		void FlashScreen(int screen, int color, float periodMS = 0) {
+			if (screen < 0 || screen >= c_MaxScreenCount) return;
 			m_FlashScreenColor[screen] = color;
 			m_FlashTimer[screen].SetRealTimeLimitMS(periodMS);
 			m_FlashTimer[screen].Reset();
@@ -253,12 +274,12 @@ namespace RTE {
 		/// Gets whether or not the HUD is disabled for a given screen.
 		/// @param screenId The screen to check for.
 		/// @return True if in given screen's HUD is disabled.
-		bool IsHudDisabled(int screenId = 0) const { return m_HUDDisabled[screenId]; }
+		bool IsHudDisabled(int screenId = 0) const { return screenId >= 0 && screenId < c_MaxScreenCount && m_HUDDisabled[screenId]; }
 
 		/// Sets whether or not the HUD is disabled for a given screen.
 		/// @param value Whether the HUD should be disabled.
 		/// @param screenId The screen to set for.
-		void SetHudDisabled(bool value, int screenId = 0) { m_HUDDisabled[screenId] = value; }
+		void SetHudDisabled(bool value, int screenId = 0) { if (screenId >= 0 && screenId < c_MaxScreenCount) m_HUDDisabled[screenId] = value; }
 
 #pragma region Palette Routines
 		/// Loads a palette from a bitmap file and sets it as the currently used screen palette.

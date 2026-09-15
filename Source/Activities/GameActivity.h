@@ -65,11 +65,68 @@ namespace RTE {
 
 		std::string SaveCheckpoint() const override;
 		void VisitCheckpointOwnedObjects(const std::function<void(const Entity*)>& visit) const;
+		/// Visits only the holdings every peer's activity owns identically, without the per-seat GUI ones.
+		void VisitCheckpointSharedObjects(const std::function<void(const Entity*)>& visit) const;
+		static bool RunDeliveryReferenceSelfTest();
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) override;
 		bool ResolveCheckpointReferences() override;
 		void ClearNonOwnedActorSlots() override;
 		void RebindNonOwnedActorSlots() override;
 		void ForgetDestroyedActor(const Actor* actor) override;
+
+		/// Gives this player the first brain no seat has taken, the last step of brain placement.
+		/// @param player The player to give a brain to.
+		/// @return Whether the player has a brain now.
+		bool PlaceUnassignedBrain(int player);
+
+		/// Installs a seat's committed brain from the wire. Every peer builds the identical resident from
+		/// the named preset at the named spot, so the brains that enter the sim match, and the seat counts
+		/// as ready to start on every peer at the same frame.
+		/// @return False, with nothing changed, when the placement names a seat, team, sender or preset this peer refuses.
+		bool ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, uint8_t senderPeerId);
+
+		/// Commits one of this peer's own seats' brain placements to the wire. Where the brain goes is the
+		/// player's own decision, read off their local editor; the command carries it to every peer.
+		/// @return Whether the seat had a brain in a spot this machine accepts.
+		bool SubmitLockstepBrainPlacement(int player);
+
+		/// A brain spot every peer derives identically: the seat's landing zone at ground level. Used by a
+		/// seat no peer drives and by the end-to-end arm that stands in for a player's placement.
+		Vector DeterministicBrainSpot(int player) const;
+
+		/// Commits a named brain at the seat's deterministic spot, for a seat no player is driving and for
+		/// the end-to-end arm that stands in for a player's DONE.
+		/// @return Whether the placement was committed.
+		bool PlaceAndSubmitLockstepBrain(int player, const std::string& className, const std::string& preset, const std::string& module);
+
+		/// Test-only seam: queues one scripted setup-editor gesture for a seat. "place_brain" holds the named
+		/// brain over the ground at a fraction of the scene's width and presses; "done" presses DONE. The
+		/// gesture runs through the seat's own SceneEditorGUI, so the commit takes the path a player's does.
+		/// @return Whether the gesture was queued.
+		static bool QueueSetupEditorGesture(int player, const std::string& kind, float sceneXFraction, const std::string& className, const std::string& preset, const std::string& module);
+
+		/// 0 = nothing queued for the seat, 1 = a gesture is still running, 2 = the seat could not carry it out.
+		static int SetupEditorGestureStatus(int player);
+
+		/// Whether a seat has flagged itself ready to start.
+		bool IsReadyToStart(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_ReadyToStart[player]; }
+
+		/// Whether this peer has already committed the seat's placement; the commit is in flight until it returns.
+		bool HasSubmittedLockstepPlacement(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_LockstepPlacementSubmitted[player]; }
+
+		/// The seat's setup-editor mode, or -1 when the seat has no editor.
+		int SetupEditorMode(int player) const;
+
+		/// Presentation only: who the synchronized setup editor is still waiting on, and how many seats have
+		/// placed. Read by the match status strip; never read by the simulation.
+		/// @return Whether the match is holding in the synchronized setup editor.
+		bool DescribeLockstepPlacementWait(std::string& names, int& placed, int& total) const;
+
+		/// Test-only seam: puts a placement command on the wire exactly as issued, so a command every peer
+		/// has to refuse - an unknown preset, a seat this peer does not hold - can be exercised end to end.
+		/// @return Whether the command was enqueued.
+		static bool EnqueueRawBrainPlacement(int player, int team, float posX, float posY, const std::string& className, const std::string& preset, const std::string& module);
+
 		void ClearCheckpointActorIDs() override;
 		bool PrepareCheckpointUI() override;
 		SerializableOverrideMethods;
@@ -125,13 +182,14 @@ namespace RTE {
 		/// Sets the current CPU-assisted team, if any (NoTeam) - LEGACY function
 		/// @param team The new setting. NoTeam is no team is assisted. (default: Activity::NoTeam)
 		void SetCPUTeam(int team = Activity::NoTeam);
+		void ConfigureLockstepCPUTeams(const std::array<bool, Teams::MaxTeamCount>& cpuTeams);
 
 		/// Sets the observation sceneman scroll targets, for when the game is
 		/// over or a player is in observation mode
 		/// @param newTarget The new absolute position to observe.
 		/// @param player Which player to set it for. (default: 0)
 		void SetObservationTarget(const Vector& newTarget, int player = 0) {
-			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount)
+			if (LocalInputOfPlayer(player) != Players::NoPlayer)
 				m_ObservationTarget[player] = newTarget;
 		}
 
@@ -140,7 +198,7 @@ namespace RTE {
 		/// @param newTarget The new absolute position to set as death view.
 		/// @param player Which player to set it for. (default: 0)
 		void SetDeathViewTarget(const Vector& newTarget, int player = 0) {
-			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount)
+			if (LocalInputOfPlayer(player) != Players::NoPlayer)
 				m_DeathViewTarget[player] = newTarget;
 		}
 
@@ -148,7 +206,7 @@ namespace RTE {
 		/// @param newZone The new absolute position to set as the last selected landing zone.
 		/// @param player Which player to set it for. (default: 0)
 		void SetLandingZone(const Vector& newZone, int player = 0) {
-			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount)
+			if (LocalInputOfPlayer(player) != Players::NoPlayer)
 				m_LandingZone[player] = newZone;
 		}
 
@@ -156,7 +214,7 @@ namespace RTE {
 		/// @param player Which player to get it for. (default: 0)
 		/// @return The new absolute position to set as the last selected landing zone.
 		Vector GetLandingZone(int player = 0) {
-			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount)
+			if (LocalInputOfPlayer(player) != Players::NoPlayer)
 				return m_LandingZone[player];
 			else
 				return Vector();
@@ -166,14 +224,14 @@ namespace RTE {
 		/// @param newPos The new absolute position to put the cursor at.
 		/// @param player Which player to set it for. (default: 0)
 		void SetActorSelectCursor(const Vector& newPos, int player = 0) {
-			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount)
+			if (LocalInputOfPlayer(player) != Players::NoPlayer)
 				m_ActorCursor[player] = newPos;
 		}
 
 		/// Gets the an in-game GUI Object for a specific player.
 		/// @param which Which player to get the GUI for. (default: 0)
 		/// @return A pointer to a BuyMenuGUI. Ownership is NOT transferred!
-		BuyMenuGUI* GetBuyGUI(unsigned int which = 0) const { return m_pBuyGUI[which]; }
+		BuyMenuGUI* GetBuyGUI(unsigned int which = 0) const;
 
 		/// Checks if the in-game GUI Object is visible for a specific player.
 		/// @param which Which player to check the GUI for. -1 will check all players.
@@ -183,7 +241,7 @@ namespace RTE {
 		/// Gets the an in-game editor GUI Object for a specific player.
 		/// @param which Which player to get the GUI for. (default: 0)
 		/// @return A pointer to a SceneEditorGUI. Ownership is NOT transferred!
-		SceneEditorGUI* GetEditorGUI(unsigned int which = 0) const { return m_pEditorGUI[which]; }
+		SceneEditorGUI* GetEditorGUI(unsigned int which = 0) const;
 		static bool RunNetLocalUIRestoreSelfTest();
 		static bool RunNetInventoryRelaunchProbe(std::string_view phase);
 
@@ -230,12 +288,13 @@ namespace RTE {
 		/// @param whichColor Which color banner to get - see the GameActivity::BannerColor enum. (default: YELLOW)
 		/// @param player Which player's banner to get. (default: Players::PlayerOne)
 		/// @return A pointer to the GUIBanner object that we can
-		GUIBanner* GetBanner(int whichColor = YELLOW, int player = Players::PlayerOne) { return whichColor == YELLOW ? m_pBannerYellow[player] : m_pBannerRed[player]; }
+		GUIBanner* GetBanner(int whichColor = YELLOW, int player = Players::PlayerOne) const;
 
 		/// Sets the Area within which a team can land things.
 		/// @param team The number of the team we're setting for.
 		/// @param newArea The Area we're setting to limit their landings within.
 		void SetLZArea(int team, const Scene::Area& newArea) {
+			if (team < Teams::TeamOne || team >= Teams::MaxTeamCount) return;
 			m_LandingZoneArea[team].Reset();
 			m_LandingZoneArea[team].Create(newArea);
 		}
@@ -243,19 +302,21 @@ namespace RTE {
 		/// Gets the Area within which a team can land things. OWNERSHIP IS NOT TRANSFERRED!
 		/// @param team The number of the team we're setting for.
 		/// @return The Area we're using to limit their landings within. OWNERSHIP IS NOT TRANSFERRED!
-		const Scene::Area& GetLZArea(int team) const { return m_LandingZoneArea[team]; }
+		const Scene::Area& GetLZArea(int team) const {
+			return team >= Teams::TeamOne && team < Teams::MaxTeamCount ? m_LandingZoneArea[team] : s_NoLandingZone;
+		}
 
 		/// Sets the width of the landing zone box that follows around a player's
 		/// brain.
 		/// @param player The number of the in-game player we're setting for.
 		/// @param width The width of the box, in pixels. 0 means disabled.
-		void SetBrainLZWidth(int player, int width) { m_BrainLZWidth[player] = width; }
+		void SetBrainLZWidth(int player, int width) { if (LocalInputOfPlayer(player) != Players::NoPlayer) m_BrainLZWidth[player] = width; }
 
 		/// Gets the width of the landing zone box that follows around a player's
 		/// brain.
 		/// @param player The number of the player we're getting for.
 		/// @return The width in pixels of the landing zone.
-		int GetBrainLZWidth(int player) const { return m_BrainLZWidth[player]; }
+		int GetBrainLZWidth(int player) const { return LocalInputOfPlayer(player) != Players::NoPlayer ? m_BrainLZWidth[player] : 0; }
 
 		/// Created an objective point for one of the teams to show until cleared.
 		/// @param description The team number of the team to give objective. 0 is team #1.
@@ -293,7 +354,7 @@ namespace RTE {
 
 		/// Clears all items from a specific player's override purchase list.
 		/// @param m_PurchaseOverride[player].clear( Which player's override purchase list to clear.
-		void ClearOverridePurchase(int player) { m_PurchaseOverride[player].clear(); }
+		void ClearOverridePurchase(int player) { if (LocalInputOfPlayer(player) != Players::NoPlayer) m_PurchaseOverride[player].clear(); }
 
 		/// Takes the current order out of a player's buy GUI, creates a Delivery
 		/// based off it, and stuffs it into that player's delivery queue.
@@ -352,7 +413,7 @@ namespace RTE {
 		/// Shows how many deliveries this team has pending.
 		/// @param m_Deliveries[team].size( Which team to check the delivery count for.
 		/// @return The number of deliveries this team has coming.
-		int GetDeliveryCount(int team) { return m_Deliveries[team].size(); }
+		int GetDeliveryCount(int team) { return team >= Teams::TeamOne && team < Teams::MaxTeamCount ? m_Deliveries[team].size() : 0; }
 
 		/// Precalculates the player-to-screen index map, counts the number of
 		/// active players etc.
@@ -505,6 +566,12 @@ namespace RTE {
 
 		/// Protected member variable and method declarations
 	protected:
+		/// Runs a brainless human's spectator view: actor cycling, following and the followed-unit line.
+		/// Presentation only - it writes this peer's view, never simulation state.
+		/// @param player Which player's screen to update.
+		/// @param lookedAround Whether the player moved the observation cursor this frame.
+		void UpdateSpectatorView(int player, bool lookedAround);
+
 		/// Takes the current order out of a player's buy GUI, creates a Delivery
 		/// based off it, and stuffs it into that player's delivery queue.
 		/// @param player Which player to create the delivery for. Cargo AI mode waypoint or TargetMO.
@@ -598,6 +665,8 @@ namespace RTE {
 		Vector m_ObservationTarget[Players::MaxPlayerCount];
 		// The player death sceneman scroll targets, for when a player-controlled actor dies and the view should go to his last position
 		Vector m_DeathViewTarget[Players::MaxPlayerCount];
+		// The actor a spectating player's view follows; local presentation, so it stays out of checkpoints
+		Actor* m_SpectatorTarget[Players::MaxPlayerCount];
 		// Times the delay between regular actor swtich, and going into manual siwtch mode
 		Timer m_ActorSelectTimer[Players::MaxPlayerCount];
 		// The cursor for selecting new Actors
@@ -622,6 +691,11 @@ namespace RTE {
 		// The in-game important message banners for each player
 		GUIBanner* m_pBannerRed[Players::MaxPlayerCount];
 		GUIBanner* m_pBannerYellow[Players::MaxPlayerCount];
+		// What a script gets for a seat this machine does not present: an inert object of the same type instead of a
+		// nil it would have to check. They are never created, so every call is a no-op and every getter answers neutral.
+		mutable std::unique_ptr<BuyMenuGUI> m_SeatStubBuyGUI[Players::MaxPlayerCount];
+		mutable std::unique_ptr<SceneEditorGUI> m_SeatStubEditorGUI[Players::MaxPlayerCount];
+		mutable std::unique_ptr<GUIBanner> m_SeatStubBanner[2][Players::MaxPlayerCount];
 		// How many times a banner has been repeated.. so we dont' annoy by repeating forever
 		int m_BannerRepeats[Players::MaxPlayerCount];
 		// Whether each player has marked himself as ready to start. Can still edit while this is set, but when all are set, the game starts
@@ -634,6 +708,8 @@ namespace RTE {
 		std::deque<Delivery> m_Deliveries[Teams::MaxTeamCount];
 		// The box within where landing zones can be put
 		Scene::Area m_LandingZoneArea[Teams::MaxTeamCount];
+		// What a team outside the roster lands within: nowhere
+		inline static const Scene::Area s_NoLandingZone;
 		// How wide around the brain the automatic LZ is following
 		int m_BrainLZWidth[Players::MaxPlayerCount];
 		// The objective points for each team
@@ -693,6 +769,37 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		/// The peer that drives a seat in the agreed roster, or 0 when no peer holds it.
+		static uint8_t LockstepSeatPeerId(int player);
+		/// The seat holder's display name from the agreed roster, for the match's own banners.
+		static std::string LockstepSeatName(int player);
+		/// Makes every brain already standing in the scene its seat's resident, identically on every peer, so
+		/// a local editor's residence test can never take an actor out of one peer's sim alone.
+		void SeedLockstepResidentBrains();
+		/// True while the match's setup editor is the synchronized one: placements cross the wire.
+		static bool IsLockstepPlacement();
+		/// Whether this peer is the one that commits a seat's brain placement.
+		bool MayCommitBrainPlacement(int player) const;
+		/// Puts one seat's committed placement on the wire. `via` names the path that read the spot.
+		bool CommitLockstepBrainPlacement(int player, const std::string& className, const std::string& preset, const std::string& module, const Vector& spot, const char* via);
+		/// The ground under a scene x, where a brain settles under the same physics on every peer.
+		Vector GroundSpot(float sceneX) const;
+		/// Puts a refused placement where the player who tried can see it: their own screen for a few seconds,
+		/// the console, and a banner when this peer is the one that was refused.
+		void RefuseBrainPlacement(int player, const std::string& reason, bool banner);
+		/// Runs the seat's queued scripted editor gesture, if it has one, the way that seat's own input would.
+		void DriveScriptedSetupEditor(int player);
+		/// Builds every seat's committed brain, in seat order, from a unique-id counter pinned to the same
+		/// value on every peer. A local editor's own preview objects take ids off that counter on one peer
+		/// alone, so the shared brains are made only after it is put back in step.
+		/// @return Whether every seat's brain was built.
+		bool BuildLockstepSeatBrains();
+		static constexpr long c_SetupEditorUidReserve = 65536; //!< Ids a peer's own setup editor may spend before the shared ones resume.
+		std::array<bool, Players::MaxPlayerCount> m_LockstepPlacementSubmitted{}; //!< Per-seat, local only: this peer has committed that seat's placement.
+		std::array<NetGamePlaceBrain, Players::MaxPlayerCount> m_LockstepSeatBrains{}; //!< Per-seat committed placement; player < 0 means none yet.
+		long m_LockstepPlacementUidBase = 0; //!< The unique-id counter as the editing phase opened, identical on every peer.
+		bool m_LockstepPlacementSeeded = false; //!< The one-time seed pass has run for this editing phase.
+
 		bool LoadNetLocalGameState(std::string_view text);
 		bool CreateNetLocalUI();
 		/// Points a relaunch's pending marked-actor links at the marks as they stand, so its deferred rebinds keep them.
@@ -714,6 +821,13 @@ namespace RTE {
 				self.m_GoldSwitchEnabled, self.m_RequireClearPathToOrbitSwitchEnabled, self.m_BuyMenuEnabled, self.m_LZCursorWidth,
 				self.m_DeliveryDelay, self.m_CursorTimer, self.m_GameTimer, self.m_GameOverTimer,
 				self.m_GameOverPeriod, self.m_WinnerTeam, self.m_NetworkPlayerNames);
+			// The synchronized setup editor's state is shared state: a resync taken while the seats are
+			// still placing has to restore the same placements and the same id base on every peer.
+			archive(self.m_LockstepPlacementUidBase, self.m_LockstepPlacementSeeded);
+			for (auto& placement: self.m_LockstepSeatBrains) {
+				archive(placement.team, placement.player, placement.posX, placement.posY,
+					placement.className, placement.preset, placement.module);
+			}
 		}
 		/// Clears all the member variables of this Activity, effectively
 		/// resetting the members of this abstraction level only.

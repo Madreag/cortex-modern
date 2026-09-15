@@ -17,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -147,11 +148,20 @@ namespace RTE {
 		uint16_t port = 41010;
 		std::string playerName = "Player";
 		std::string activityPreset = "Skirmish Defense";
+		std::string activityModule; // The module that defines the preset; empty resolves to the module defining it.
+		std::optional<NetMatchStandardRules> standardRules;
 		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		uint16_t inputDelayFrames = 0; // Lockstep input-delay buffer; the host picks it, the client agrees at the start handshake.
 		bool autoInputDelay = false; // Host: raise the delay to cover the measured peer RTT (the manual value stays the floor).
-		uint8_t peerCount = 2; // Total players (2..4); the host listens for peerCount-1 clients.
+		uint8_t peerCount = 2; // Connected peers (2..4), including a dedicated host.
+		std::optional<uint32_t> humans; // Omitted seats every available human peer.
+		std::optional<uint32_t> cpuSlots; // Omitted keeps the mode's default CPU count.
 		NetMatchMode mode = NetMatchMode::PvPSkirmish; // Shapes the roster: PvP (a team per peer), co-op PvE (one shared team vs CPU), PvPvE (teams + CPU).
+		std::optional<bool> brainlessHumansSpectate; // Host rule: the round survives the last human brain. Unset takes the host's Gameplay setting.
+		// The host's saved session options. Unset keeps the config default; NetMatchService::SeatSavedOptions fills them from the settings.
+		std::optional<NetMatchDelayPolicy> delayPolicy;
+		std::optional<uint8_t> idleWaitMinutes;
+		std::optional<bool> automaticRepair;
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
 		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
 		std::string sessionId; // Client only: join the directory session with this id instead of an address.
@@ -167,8 +177,23 @@ namespace RTE {
 		/// gate can be bisected against the pre-admission handshake without a rebuild.
 		static void SetAdmissionEnabled(bool enabled) { s_AdmissionEnabled = enabled; }
 		static bool IsAdmissionEnabled() { return s_AdmissionEnabled; }
-		/// Sets this machine's checkpoint cadence in sim seconds; zero disables it.
-		static void SetAutosaveSeconds(uint32_t seconds) { s_AutosaveSeconds = seconds; }
+		/// Overrides this run's checkpoint cadence in simulation seconds; zero disables it.
+		static void SetAutosaveSeconds(uint32_t seconds) {
+			s_AutosaveSeconds = seconds;
+			s_AutosaveSecondsOverridden = true;
+		}
+		/// Applies the saved cadence while preserving any command-line override.
+		static void SetAutosaveSecondsSetting(uint32_t seconds) {
+			if (!s_AutosaveSecondsOverridden) s_AutosaveSeconds = seconds;
+		}
+		/// Gets this run's checkpoint cadence, including its command-line override.
+		static uint32_t GetAutosaveSeconds() { return s_AutosaveSeconds; }
+		static constexpr uint32_t c_MaxAutosaveIntervalSeconds = 3600; // An hour is the longest cadence a host may announce.
+		/// The cadence a running match keeps: the command-line override when one was given, else the host's announced option.
+		static uint32_t MatchAutosaveSeconds(const NetMatchConfig& config) {
+			if (s_AutosaveSecondsOverridden) return s_AutosaveSeconds;
+			return config.autosaveEnabled ? config.autosaveIntervalSeconds : 0;
+		}
 		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
 		void AutosaveAtTickBoundary(uint64_t tick);
 		/// §11: the multiprocess reconnect test shares one Userdata, so each process gets its own
@@ -290,6 +315,15 @@ namespace RTE {
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
 		std::string BuildReportJson() const;
+		/// Builds the match roster from the request alone; it reads no manager, so a self-test can build one.
+		static bool BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId, NetMatchConfig& outConfig, std::string* error = nullptr);
+		/// The module a module-less activity preset belongs to, from the modules that define it. Reads no
+		/// manager: the caller lists the candidates.
+		static bool ResolveActivityModule(const std::string& preset, const std::vector<std::string>& definingModules, std::string& outModule, std::string* error = nullptr);
+		/// Fills an unset request module with the loaded module that defines the preset.
+		static bool SeatActivityModule(NetMatchServiceRequest& request, std::string* error = nullptr);
+		/// Fills the request's unset options from the saved settings, where a real host starts a match.
+		static void SeatSavedOptions(NetMatchServiceRequest& request);
 		/// Builds diagnostic identity on request; match startup supplies the cached join inputs.
 		bool RefreshDiagnosticIdentity(std::string* error = nullptr, double* buildMs = nullptr);
 		/// Returns the cached join inputs without reading settings, modules, or simulation state.
@@ -336,8 +370,8 @@ namespace RTE {
 		/// Refuses a resync with no live match or a lost session; a lost session fails the service. Caller holds the lock.
 		bool CanResyncLocked(std::string* error);
 		bool PrepareReceivedResync(const std::vector<uint8_t>& bytes, const NetLockstepCoordinator& coordinator, std::string& pendingLoad, NetResyncState& state, std::string* error, size_t* archiveBytes = nullptr);
-		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request) const;
-		NetMatchConfig BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const;
+		/// The session the round is hosted on; the adopted match config carries the seats it offers.
+		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig) const;
 		void SetState(NetMatchServiceState state, std::string status, std::string error = "");
 		/// Match end or the host leaving takes the directory row down now rather than at Destroy.
 		/// Game-thread only, like the client it drives.
@@ -372,6 +406,7 @@ namespace RTE {
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
 		friend bool TestRosterTransitionsRecordHoldThenPresent(std::string* error);
 		friend bool TestRosterBannerNamesThePlayerOnce(std::string* error);
+		friend bool TestAiOnlyHostSeatsNoJoiner(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
@@ -430,7 +465,9 @@ namespace RTE {
 		std::string m_DiagnosticIdentity;
 		std::string m_DiagnosticRuntimeError;
 		static uint32_t s_AutosaveSeconds;
+		static bool s_AutosaveSecondsOverridden;
 		std::string m_AutosaveMatchId;
+		uint32_t m_MatchAutosaveSeconds = 0; //!< The cadence the round agreed on, read once so the tick path never chases the runner.
 		int64_t m_NextAutosaveSimTime = -1;
 		int64_t m_LastAutosaveSimTime = -1;
 		NetMatchServiceState m_State = NetMatchServiceState::Idle;
@@ -444,6 +481,7 @@ namespace RTE {
 		int m_LocalTeam = -1;
 		bool m_Dedicated = false;
 		int m_HumanSeats = 0;
+		NetMatchConfig m_MatchConfig; //!< The roster this peer asked for, until the round adopts the host's.
 		bool m_ResyncOnDesync = false;
 		std::string m_PendingResyncLoad;
 		std::optional<NetResyncState> m_PendingResyncState;

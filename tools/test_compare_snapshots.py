@@ -66,7 +66,7 @@ class SnapshotComparisonTests(unittest.TestCase):
         self.assertEqual(checker.runtime_projection(first, "", False)[0], first)
         self.assertNotEqual(checker.runtime_projection(first, "", False), checker.runtime_projection(second, "", False))
 
-    def compare(self, first, second, full=False, entries=None):
+    def compare(self, first, second, full=False, entries=None, seats=None, extra=()):
         with tempfile.TemporaryDirectory() as directory:
             paths = [Path(directory) / name for name in ("a.ccsave", "b.ccsave")]
             for path, text in zip(paths, (first, second)):
@@ -74,7 +74,10 @@ class SnapshotComparisonTests(unittest.TestCase):
                     archive.writestr("Save.ini", text)
                     for name, data in (entries or {}).items():
                         archive.writestr(name, data)
-            with patch.object(sys, "argv", [str(CHECKER), *map(str, paths), *( ["--full"] if full else [])]), contextlib.redirect_stdout(io.StringIO()):
+            options = ["--full"] if full else []
+            if seats is not None:
+                options += [f"--local-seat-{side}={seat}" for side, seat in zip("ab", seats)]
+            with patch.object(sys, "argv", [str(CHECKER), *map(str, paths), *options, *extra]), contextlib.redirect_stdout(io.StringIO()):
                 return checker.main()
 
     def test_matching(self):
@@ -106,6 +109,48 @@ class SnapshotComparisonTests(unittest.TestCase):
     def test_local_activity_binding_must_be_present_on_both_peers(self):
         first = BASE.replace("ActivityState = 3", "ActivityState = 3\n\tTeamOfPlayer1 = 0")
         self.assertEqual(self.compare(first, BASE), 1)
+
+    def test_shared_seats_compare_the_player_one_slot_properties(self):
+        first = BASE.replace("ActivityState = 3", "ActivityState = 3\n\tTeamOfPlayer1 = 0")
+        second = first.replace("TeamOfPlayer1 = 0", "TeamOfPlayer1 = 1")
+        self.assertEqual(self.compare(first, second), 0)
+        for seats in ((0, 1), (1, 0), (0, 0)):
+            with self.subTest(seats=seats):
+                self.assertEqual(self.compare(first, second, seats=seats), 1)
+        self.assertEqual(self.compare(first, first, seats=(0, 1)), 0)
+
+    def test_cross_process_reaches_the_anchors_no_owner_decodes(self):
+        payload = runtime._payload("ArmRuntime1")
+        encoded = lambda data: base64.urlsafe_b64encode(data).decode().replace("=", ".")
+        limb = lambda anchor, length: "LP2 " + " ".join([str(length)] + ["1"] * 36 + [anchor, "1", "1", anchor] + ["1"] * 4 + ["0"])
+        # The owner is not an Arm, so only the cross-process pass reaches the payload's anchor.
+        scene = lambda anchor, length, arm: BASE.replace("\tPresetName = Shared\n", "\tPresetName = Shared\n"
+            f"\tPlaceSceneObject = MOSRotating\n\t\tLimbPathState = {limb(anchor, length)}\n"
+            f"\t\tSpecialBehaviour_ArmRuntime = {encoded(arm)}\n")
+        anchor_only = payload.replace(b"ArmRuntime1 " + b"0 " * 14, b"ArmRuntime1 " + b"0 " * 13 + b"5 ")
+        sim_start = payload.replace(b"ArmRuntime1 " + b"0 " * 12, b"ArmRuntime1 " + b"0 " * 11 + b"5 ")
+        for text, cross, expected in ((scene("9", 3, payload), False, 1), (scene("9", 3, payload), True, 0),
+                (scene("2", 3, anchor_only), False, 1), (scene("2", 3, anchor_only), True, 0),
+                (scene("2", 4, payload), True, 1), (scene("2", 3, sim_start), True, 1)):
+            with self.subTest(cross=cross, text=text[-60:]):
+                self.assertEqual(self.compare(scene("2", 3, payload), text, extra=["--cross-process"] if cross else []), expected)
+
+    def test_local_seats_are_validated_and_named_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / "host_report.json"
+            report.write_text('{"service": {"local_peer_id": 2, "reconnect": {"seat_snapshot": {"seats": ['
+                '{"peer_id": 1, "stable_seat": 0}, {"peer_id": 2, "stable_seat": 1}]}}}}')
+            self.assertEqual(checker.report_local_seat(report), 1)
+            self.assertEqual(self.compare(BASE, BASE, extra=[f"--peer-report-a={report}", "--local-seat-b=0"]), 0)
+            self.assertEqual(self.compare(BASE, BASE, extra=[f"--peer-report-a={report}", "--local-seat-a=0", "--local-seat-b=1"]), 1)
+            for text in ('{"service": {}}', '{"service": {"local_peer_id": 3, "reconnect": {"seat_snapshot": {"seats": ['
+                    '{"peer_id": 1, "stable_seat": 0}]}}}}'):
+                report.write_text(text)
+                self.assertEqual(self.compare(BASE, BASE, extra=[f"--peer-report-a={report}", "--local-seat-b=0"]), 1)
+        for seats in ((0, None), (None, 1), (0, 4), (-1, 0)):
+            with self.subTest(seats=seats):
+                options = [f"--local-seat-{side}={seat}" for side, seat in zip("ab", seats) if seat is not None]
+                self.assertEqual(self.compare(BASE, BASE, extra=options), 1)
 
     def test_configured_start_activity_is_compared_with_local_slot_scope(self):
         first = BASE + "HasCheckpointStartActivity = 1\nCheckpointStartActivity = GameActivity\n\tTeamOfPlayer1 = 0\n\tStartingGold = 100\n"
@@ -299,6 +344,15 @@ class RuntimeProjectionTests(unittest.TestCase):
             with self.subTest(key=key):
                 self.assert_field(value, (key,), key == "render_rng", b"changed")
 
+    def test_the_resyncs_own_input_records_are_local_and_the_rest_of_the_block_is_not(self):
+        # NetMatchService.cpp:822-823, 831 keeps this machine's UInputMan and shared GUI input over the host's.
+        local, shared = ("input", "gui_input"), ("sim_rng", "timer", "movable", "scene", "camera", "primitive", "music", "audio")
+        for version in ("RuntimeGlobals4", "RuntimeGlobals9"):
+            value = dict(version=version, **dict.fromkeys(local + shared, b"peer"))
+            for key in local + shared:
+                with self.subTest(version=version, key=key):
+                    self.assert_field(value, (key,), key in local, b"changed")
+
     def test_native_hud_and_ai_caches_do_not_mask_physical_fields(self):
         examples = [("ActorRuntime1", "hud_stack", "health"),
             ("HDFirearmRuntime1", "ai_fire_velocity", "rounds_fired"),
@@ -339,6 +393,71 @@ class RuntimeProjectionTests(unittest.TestCase):
             self.assert_field(value, (key, 1), False)
         self.assert_field(value, ("team_funds", 0), False)
 
+    def shared_seat_activity(self):
+        timer = lambda seat: dict(sim_start=seat, sim_limit=20, real_start=seat + 1, real_limit=30)
+        controller = lambda seat: dict(version="Controller1", states=[seat, 1, 0], team=seat,
+            **{key: timer(seat) for key in ("release_timer", "joy_accel_timer", "key_accel_timer")})
+        return dict(version="Activity1", player_screen=[0, 1, 2, 3], view_state=[0, 1, 2, 3], team_funds=[20, 20, 20, 20],
+            **{key: [1, 2, 3, 4] for key in ("player_team", "team_funds_share", "funds_contribution", "human")},
+            actor_links=[[seat, seat + 10, seat + 20] for seat in range(4)],
+            player_controller=[controller(seat) for seat in range(4)],
+            **{key: [timer(seat) for seat in range(4)] for key in ("death_timer", "message_timer")})
+
+    def test_shared_seats_compare_every_slot_and_project_only_the_two_seat_views(self):
+        value, shared = self.shared_seat_activity(), dict(local_seat=0, asymmetric_seats=frozenset({0, 1}))
+        for seat in (0, 1):
+            for key in ("player_team", "team_funds_share", "funds_contribution", "human"):
+                self.assert_field(value, (key, seat), False, **shared)
+            self.assert_field(value, ("actor_links", seat, 0), False, **shared)
+            for index in (1, 2):
+                self.assert_field(value, ("actor_links", seat, index), True, **shared)
+            self.assert_field(value, ("player_screen", seat), True, **shared)
+            self.assert_field(value, ("view_state", seat), True, **shared)
+            for key in ("death_timer", "message_timer"):
+                self.assert_field(value, (key, seat, "sim_start"), True, **shared)
+                self.assert_field(value, (key, seat, "sim_limit"), False, **shared)
+            self.assert_field(value, ("player_controller", seat, "states", 0), True, **shared)
+        for field in (("player_team", 2), ("player_screen", 2), ("view_state", 2), ("actor_links", 2, 1), ("team_funds", 0),
+                ("death_timer", 2, "sim_start"), ("player_controller", 2, "states", 0)):
+            self.assert_field(value, field, False, **shared)
+        mirrored = runtime.project(value, True, local_seat=1, asymmetric_seats=frozenset({0, 1}))
+        self.assertEqual(runtime.project(value, True, **shared), mirrored)
+        self.assertNotEqual(runtime.project(value, True, local_seat=0, asymmetric_seats=frozenset({0})), mirrored)
+
+    def test_shared_seats_project_the_game_activity_view_of_both_seats(self):
+        timer = lambda seat: dict(sim_start=seat, sim_limit=20, real_start=seat + 1, real_limit=30)
+        value = dict(version="GameActivity1", cpu_team=1, team_is_cpu=[0, 1, 0, 1], brain_lz_width=[5, 6, 7, 8],
+            **{key: [[seat, seat + 1] for seat in range(4)] for key in
+               ("observation_target", "death_view_target", "actor_cursor", "landing_zone")},
+            actor_select_timer=[timer(seat) for seat in range(4)],
+            player_ui=[dict(buy=seat, editor=seat, inventory=seat) for seat in range(4)])
+        shared = dict(local_seat=1, asymmetric_seats=frozenset({0, 1}))
+        for seat in (0, 1):
+            for key in ("observation_target", "death_view_target", "actor_cursor", "landing_zone"):
+                self.assert_field(value, (key, seat, 0), True, **shared)
+            self.assert_field(value, ("actor_select_timer", seat, "sim_start"), True, **shared)
+            self.assert_field(value, ("actor_select_timer", seat, "sim_limit"), False, **shared)
+            self.assert_field(value, ("player_ui", seat, "buy"), True, **shared)
+        for field in (("observation_target", 2, 0), ("landing_zone", 2, 0), ("actor_cursor", 2, 1), ("player_ui", 2, "buy"),
+                ("actor_select_timer", 2, "sim_start"), ("brain_lz_width", 0), ("cpu_team",), ("team_is_cpu", 0)):
+            self.assert_field(value, field, False, **shared)
+
+    def test_inventory_roles_and_scratch_follow_the_local_seat(self):
+        scene = "Scene = Scene\n"
+        for actor, item in ((10, 11), (20, 21)):
+            scene += f"\tPlaceSceneObject = AHuman\n\t\tUniqueID = {actor}\n\t\tHeldDevice = HDFirearm\n\t\t\tUniqueID = {item}\n"
+        host = dict(version="Activity1", actor_links=[[10, 10, 0], [20, 0, 0], [0, 0, 0], [0, 0, 0]])
+        client = dict(version="Activity1", actor_links=[[10, 0, 0], [20, 20, 0], [0, 0, 0], [0, 0, 0]])
+        self.assertEqual(checker.inventory_reference_roles(scene, client), {})
+        roles = [checker.inventory_reference_roles(scene, state, seat) for state, seat in ((host, 0), (client, 1))]
+        self.assertEqual([sorted(item) for item in roles], [[10, 11], [20, 21]])
+        entity = lambda uid: dict(version="GUIEntity1", value=dict(uid=uid, **{"class": b"HDFirearm", "preset": b"same", "module": b"Base.rte"}))
+        inventory = lambda uid: dict(version="InventoryMenuGUI2", center=[uid, uid], actor=entity(uid), equipment=[entity(uid + 1)])
+        projected = [runtime.project(inventory(uid), True, path=("player_ui", seat, "inventory"), local_roles=role, local_seat=seat)
+                     for uid, seat, role in ((10, 0, roles[0]), (20, 1, roles[1]))]
+        self.assertEqual(*projected)
+        self.assertNotEqual(projected[1], runtime.project(inventory(20), True, path=("player_ui", 1, "inventory"), local_roles=roles[1]))
+
     def test_local_inventory_references_follow_world_ownership_and_preserve_aliases(self):
         scene = "Scene = Scene\n"
         for actor, item in ((10, 11), (20, 21)):
@@ -362,6 +481,29 @@ class RuntimeProjectionTests(unittest.TestCase):
             runtime.project(b, True, path=("player_ui", 1, "inventory"), local_roles=roles_b))
         with self.assertRaises(ValueError):
             checker.inventory_reference_roles(scene, state(999))
+
+    def test_arm_runtime_projects_only_its_hand_delay_anchor(self):
+        payload = runtime._payload("ArmRuntime1").replace(b"ArmRuntime1 " + b"0 " * 11, b"ArmRuntime1 " + b"7 " * 11)
+        value = runtime.decode(payload)
+        self.assertEqual(value["hand_targets"], [])
+        self.assert_field(value, ("hand_movement_delay_timer", "real_start"), True)
+        for field in (("hand_movement_delay_timer", "sim_start"), ("hand_movement_delay_timer", "sim_limit"),
+                ("max_length",), ("move_speed",), ("hand_idle_offset", 0), ("hand_idle_rotation",),
+                ("hand_current_offset", 1), ("hand_position", 0), ("hand_reached_target",), ("grip_strength",), ("throw_strength",)):
+            with self.subTest(field=field):
+                self.assert_field(value, field, False)
+
+    def test_new_native_runtime_schemas_decode_and_stay_strict(self):
+        for version in ("AttachableRuntime1", "ArmRuntime1", "HandTarget1", "LegRuntime1", "MagazineRuntime1", "AEJetpackRuntime1",
+                "PEmitterRuntime1", "ACraftRuntime1", "ACRocketRuntime1", "ACDropShipRuntime1", "ADoorRuntime1"):
+            value = runtime.decode(runtime._payload(version))
+            with self.subTest(version=version):
+                self.assertEqual(value["version"], version)
+                for name, kind in runtime.SCHEMAS[version]:
+                    if kind == "n":
+                        self.assert_field(value, (name,), False)
+                with self.assertRaises(ValueError):
+                    runtime.decode(runtime._payload(version) + b"1 ")
 
     def test_bitmap_parser_rejects_malformed_data_before_scratch_projection(self):
         good = b"10 GUIBitmap1 1 8 2 1 -1 0 2 0 1 2 a\x00 "
@@ -400,13 +542,30 @@ class RuntimeProjectionTests(unittest.TestCase):
                     self.assert_field(value, (key,), False)
 
     def test_new_frame_fonts_and_text_input_remain_strict(self):
-        for version, keys in (("FrameMan2", ("fonts", "hud_disabled")),
+        for version, keys in (("FrameMan2", ("fonts",)), ("FrameMan3", ("fonts", "palette")),
                 ("GUIFont1", ("current_bitmap", "color_cache", "bitmap", "characters")),
                 ("GUISharedInput2", ("text_active", "text_width", "text_cursor", "events"))):
             value = dict(version=version, **dict.fromkeys(keys, 1))
             for key in keys:
                 with self.subTest(version=version, key=key):
                     self.assert_field(value, (key,), False)
+
+    def test_the_frame_managers_net_local_record_is_local_but_its_fonts_and_palette_are_not(self):
+        timer = dict(sim_start=1, sim_limit=2, real_start=3, real_limit=4)
+        for version in ("FrameMan1", "FrameMan2", "FrameMan3"):
+            value = dict(version=version, flash_color=[-1, -1, -1, -1], flashed_last_frame=[0] * 4,
+                flash_timer=[dict(timer) for _ in range(4)], hud_disabled=[0] * 4, screen_text=[b"go"] * 4,
+                text_duration=[5] * 4, horizontal_split=1, fonts=[b"f"] * 4, palette=b"p")
+            with self.subTest(version=version):
+                for screen in range(4):
+                    self.assert_field(value, ("flash_color", screen), True, 13)
+                    self.assert_field(value, ("flashed_last_frame", screen), True)
+                    self.assert_field(value, ("hud_disabled", screen), True)
+                self.assert_field(value, ("screen_text", 0), True, b"stop")
+                self.assert_field(value, ("text_duration", 0), True)
+                self.assert_field(value, ("horizontal_split",), True)
+                self.assert_field(value, ("fonts", 0), False, b"g")
+                self.assert_field(value, ("palette",), False, b"q")
 
     def test_text_input_parser_validates_new_fields(self):
         base = b"15 GUISharedInput2 " + b"0 " * 45
@@ -589,7 +748,7 @@ class RuntimeProjectionTests(unittest.TestCase):
         for version, keys in (("MOSpriteRuntime2", ("sprite_file", "icon_file", "images", "frames", "icon_index", "frame")),
                 ("MOSRotatingRuntime2", ("flip_bitmap", "silhouette_bitmap", "travel_impulse")),
                 ("PieMenuRuntime1", ("quadrants", "center", "cursor_angle", "background_bitmap", "rotation_bitmap", "slices_bitmap")),
-                ("RuntimeGlobals7", ("primitive", "input", "postprocess", "audio"))):
+                ("RuntimeGlobals7", ("primitive", "postprocess", "audio"))):
             value = dict(version=version, **dict.fromkeys(keys, 1))
             for key in keys:
                 with self.subTest(version=version, key=key):

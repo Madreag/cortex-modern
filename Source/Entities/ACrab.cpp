@@ -973,7 +973,7 @@ bool ACrab::Look(float FOVSpread, float range) {
 MovableObject* ACrab::LookForMOs(float FOVSpread, unsigned char ignoreMaterial, bool ignoreAllTerrain) {
 	MovableObject* pSeenMO = 0;
 	Vector aimPos = m_Pos;
-	float aimDistance = m_AimDistance + g_FrameMan.GetPlayerScreenWidth() * 0.51; // Set the length of the look vector
+	float aimDistance = m_AimDistance + c_DefaultResX * 0.51; // Set the length of the look vector; the window is per-machine
 
 	// If aiming down the barrel, look through that
 	if (m_Controller.IsState(AIM_SHARP) && m_pTurret && m_pTurret->IsAttached() && m_pTurret->HasMountedDevice()) {
@@ -1182,9 +1182,9 @@ void ACrab::PreControllerUpdate() {
 		// Clamp the analog aim too, so it doesn't feel "sticky" at the edges of the aim limit
 		// Only the seat that samples this machine's mouse may steer it; a remote actor's aim stays off the local input.
 		if (m_Controller.IsSeatedByPlayer() && m_LockMouseAimInput) {
-			float mouseAngle = g_UInputMan.AnalogAimValues(m_Controller.GetSeatPlayer()).GetAbsRadAngle();
+			float mouseAngle = g_UInputMan.AnalogAimValues(m_Controller.GetInputPlayer()).GetAbsRadAngle();
 			Clamp(mouseAngle, FacingAngle(adjustedAimRangeUpperLimit), FacingAngle(adjustedAimRangeLowerLimit));
-			g_UInputMan.SetMouseValueAngle(mouseAngle, m_Controller.GetSeatPlayer());
+			g_UInputMan.SetMouseValueAngle(mouseAngle, m_Controller.GetInputPlayer());
 		}
 	} else
 		m_AimState = AIMSTILL;
