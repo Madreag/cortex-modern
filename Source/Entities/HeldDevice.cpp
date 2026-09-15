@@ -436,7 +436,8 @@ void HeldDevice::Update() {
 		//        m_aSprite->SetScale(m_Scale);
 	}
 
-	if (m_BlinkTimer.IsPastSimTimeLimit()) {
+	// The blink phase is archived, so the sim holds a held device's cycle at zero; only the aiming player's machine draws it.
+	if (m_Parent || m_BlinkTimer.IsPastSimTimeLimit()) {
 		m_BlinkTimer.Reset();
 	}
 }
@@ -482,7 +483,6 @@ void HeldDevice::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whi
 	if (!IsUnPickupable()) {
 		if (m_Parent) {
 			m_SeenByPlayer.fill(false);
-			m_BlinkTimer.Reset();
 		} else {
 			int viewingPlayer = g_ActivityMan.GetActivity()->PlayerOfScreen(whichScreen);
 			if (viewingPlayer == -1) {
@@ -562,21 +562,29 @@ void HeldDevice::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whi
 	}
 }
 
+// m_SeenByPlayer is per viewing player on this machine and only DrawHUD writes it, so it is not archived.
 std::string HeldDevice::SaveHeldDeviceRuntime() const {
-	CheckpointWriter archive("HeldDeviceRuntime1");
+	CheckpointWriter archive("HeldDeviceRuntime2");
 	archive(m_HeldDeviceType, m_Activated, m_HotkeyActivated, m_ActivationTimer, m_HotkeyActivationTimer, m_OneHanded, m_DualWieldable);
 	archive(m_StanceOffset, m_SharpStanceOffset, m_SupportOffset, m_UseSupportOffsetWhileReloading, m_SharpAim, m_MaxSharpLength, m_Supportable);
-	archive(m_Supported, m_SupportAvailable, m_IsUnPickupable, m_SeenByPlayer, m_GripStrengthMultiplier, m_BlinkTimer, m_Loudness);
+	archive(m_Supported, m_SupportAvailable, m_IsUnPickupable, m_GripStrengthMultiplier, m_BlinkTimer, m_Loudness);
 	archive(m_IsExplosiveWeapon, m_GetsHitByMOsWhenHeld, m_VisualRecoilMultiplier);
 	return archive.Text();
 }
 
 bool HeldDevice::LoadHeldDeviceRuntime(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader archive(text, "HeldDeviceRuntime1", validateOnly);
+		const bool legacy = text.starts_with("18 HeldDeviceRuntime1 ");
+		CheckpointReader archive(text, legacy ? "HeldDeviceRuntime1" : "HeldDeviceRuntime2", validateOnly);
 		archive(m_HeldDeviceType, m_Activated, m_HotkeyActivated, m_ActivationTimer, m_HotkeyActivationTimer, m_OneHanded, m_DualWieldable);
 		archive(m_StanceOffset, m_SharpStanceOffset, m_SupportOffset, m_UseSupportOffsetWhileReloading, m_SharpAim, m_MaxSharpLength, m_Supportable);
-		archive(m_Supported, m_SupportAvailable, m_IsUnPickupable, m_SeenByPlayer, m_GripStrengthMultiplier, m_BlinkTimer, m_Loudness);
+		archive(m_Supported, m_SupportAvailable, m_IsUnPickupable);
+		if (legacy) {
+			// HeldDeviceRuntime1 carried the seen-by-player flags here; the next draw decides them, so read past.
+			std::array<bool, Players::MaxPlayerCount> seenByPlayer{};
+			archive.Value(seenByPlayer);
+		}
+		archive(m_GripStrengthMultiplier, m_BlinkTimer, m_Loudness);
 		archive(m_IsExplosiveWeapon, m_GetsHitByMOsWhenHeld, m_VisualRecoilMultiplier);
 		archive.Finish();
 		return true;
