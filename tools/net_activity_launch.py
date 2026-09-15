@@ -44,7 +44,8 @@ def rules_for(variant):
         # The site this activity ships with. Its seats still meet the setup editor, so the arm drives it.
         rules["activity_preset"] = "Skirmish Defense"
         rules["scene_name"] = "Ketanot Hills"
-    elif variant in ("brains", "brains-auto", "hold-desync", "hold-resync", "resync-skirmish", "brains-longname", "wire-refusal"):
+    elif variant in ("brains", "brains-auto", "hold-desync", "hold-resync", "resync-skirmish", "brains-longname",
+                     "brains-shared", "wire-refusal"):
         # Skirmish Defense on a site with no brain on it: every human seat has to place its own brain in
         # the setup editor, which is the start a lockstep match has to synchronize.
         rules["activity_preset"] = "Skirmish Defense"
@@ -211,13 +212,12 @@ def compact(resolution):
 
 
 def shots(peer, name):
-    """The overlay layer (the strip and toasts) and the composited frame (world, editor and overlay)."""
-    return [{"op": "screenshot", "name": f"{peer}_{name}"},
-            {"op": "screenshot", "name": f"{peer}_{name}_world", "composited": True}]
+    """The overlay layer and the composited frame (world, editor and overlay), both of one rendered frame."""
+    return [{"op": "screenshot_pair", "name": f"{peer}_{name}", "composited_name": f"{peer}_{name}_world"}]
 
 
 def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusal=False, resolution=None,
-                  host_signal=None, long_names=False):
+                  host_signal=None, long_names=False, shared_seat=False):
     """The UI probe script that drives this peer's own seat through the setup editor, the way a player does."""
     seat = EDITOR_SEATS[peer]
     player = seat["player"]
@@ -226,6 +226,18 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
     steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "editing": True},
              {"op": "wait", "player": player, "picker_open": True}, {"op": "wait", "renders": 12},
              {"op": "assert_net_ui_clear", "player": player, "picker_open": True, "screen_text": True}]
+    if shared_seat:
+        # This peer also presents the roster's other human seat, so its window is split and the overlay
+        # owes both pickers and both message bands the same clearance it owes the seat it drives.
+        other = 1 - player
+        steps += [{"op": "wait", "player": other, "picker_open": True}, {"op": "wait", "renders": 4},
+                  {"op": "assert_net_ui_clear", "player": other, "picker_open": True, "screen_text": True},
+                  # The seats panel while the editor holds the world: the strip lifts off its rows.
+                  {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+                  {"op": "wait", "panel_open": True}, {"op": "wait", "renders": 4},
+                  {"op": "assert_net_ui_clear", "player": player, "picker_open": True, "screen_text": True},
+                  {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+                  {"op": "wait", "panel_open": False}]
     if compact(resolution):
         if long_names:
             # A 64-char seat name cannot survive the strip whole: FitLine ellides it, and the count
@@ -240,10 +252,12 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
                        "text_contains": "0 of 2"}]
         else:
             # An open picker leaves the strip under half a short screen: the metrics tail is what gives way,
-            # the seat names stay whole while it can, and the count outlives every fallback.
+            # the seat names stay whole while it can, and the count outlives every fallback. A shared second
+            # picker column can take the names with it, so that arm requires the count alone.
+            if not shared_seat:
+                steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
+                           "text_contains": "WAITING FOR " + PLACEMENT_NAMES + " TO PLACE"}]
             steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
-                       "text_contains": "WAITING FOR " + PLACEMENT_NAMES + " TO PLACE"},
-                      {"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
                        "text_contains": "0 of 2"}]
     elif long_names:
         # The tall box spells the wait out; the host's short name leads and the long one ellides.
@@ -503,7 +517,8 @@ def launch(options):
             raise RuntimeError("executable changed during launch case")
     # The setup editor is driven through the UI probe's own seam, so the arm commits the way a player does.
     editor_driven = options.variant in ("brains", "stock", "hold-desync", "hold-resync", "resync-skirmish",
-                                       "brains-longname", "wire-refusal")
+                                       "brains-longname", "brains-shared", "wire-refusal")
+    shared_seat = options.variant == "brains-shared"
     places_brains = editor_driven or options.variant == "brains-auto"
     # resync-duel is the control: the same perturbation and heal on an activity that never opens the editor.
     hold_resync = options.variant in ("hold-resync", "resync-duel", "resync-skirmish")
@@ -527,6 +542,9 @@ def launch(options):
             if options.variant == "brains-longname":
                 # Each peer announces its own seat name; the flagless service default stays Host/Client.
                 flags += ["-net-player-name", LONG_HOST_NAME if peer == "host" else LONG_SEAT_NAME]
+            if shared_seat:
+                # This peer presents the roster's other human seat too: one window, two split screens.
+                flags.append("-net-match-e2e-shared-seat")
             trace, report = root / peer / "trace.json", root / peer / "report.json"
             flags += ["-out", str(trace), "-net-match-report", str(report), "-net-replay-out", str(root / peer / "match.ccreplay")]
             env = {"CCCP_HEADLESS": "1", "CC_SIM_DUMP": "1:600"}
@@ -540,7 +558,8 @@ def launch(options):
                 script.write_text(json.dumps(editor_script(peer, captures, delay, hold_desync and not hold_resync,
                                                            options.variant == "wire-refusal", resolution,
                                                            host_signal=root / "host-ui" / (WAITING_SEEN_SIGNAL + ".json"),
-                                                           long_names=options.variant == "brains-longname"),
+                                                           long_names=options.variant == "brains-longname",
+                                                           shared_seat=shared_seat),
                                              indent=2), encoding="utf-8")
                 env["CC_TEST_NET_UI_SCRIPT"] = str(script)
             if hold_desync and peer == "host":
@@ -622,13 +641,15 @@ def launch(options):
             checks["ui_probe_pass"] = all(result["probes"][peer].get("pass") and result["probes"][peer].get("complete") for peer in runs)
             # The refusal the production path shows a player who presses DONE with no brain placed: the seat
             # stays unready and uncommitted, and the stock editor asks for the brain again.
-            # The DONE-refusal assertion names itself, so the arm reads that step and no other.
-            def refusal_rows(probe):
+            # The DONE-refusal assertion names itself, so the arm reads that step and no other. A peer
+            # presenting a second seat reads only the seat it drives - the other stays the roster's own.
+            def refusal_rows(probe, peer):
                 named = [index for index, step in enumerate(probe.get("script", {}).get("steps", []))
                          if step.get("name") == "done_refusal"]
-                return next((step["observed"]["editor_seats"] for step in probe.get("steps", [])
+                rows = next((step["observed"]["editor_seats"] for step in probe.get("steps", [])
                              if step["index"] in named), [])
-            result["refusals"] = {peer: refusal_rows(result["probes"][peer]) for peer in runs}
+                return [row for row in rows if row.get("player") == EDITOR_SEATS[peer]["player"]]
+            result["refusals"] = {peer: refusal_rows(result["probes"][peer], peer) for peer in runs}
             checks["refusal_keeps_seat_unready"] = all(
                 rows and all(not row["ready"] and not row["submitted"] and not row["resident"] and
                              any(text in row["screen_text"] for text in PLACE_REFUSED) for row in rows)

@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <vector>
 
 using namespace RTE;
 
@@ -48,7 +49,21 @@ namespace {
 	/// editor reports as the seat's screen occlusion; the picker is 360 px of a window never under 640.
 	struct EditorArea {
 		bool editing = false;
-		int left = 0, right = 0;
+		/// One local seat's picker column in window space. A split screen parks each seat's framebuffer at
+		/// its own offset, so every local seat contributes the column its picker reports, translated here.
+		struct Column { int x = 0, y = 0, w = 0, h = 0; };
+		std::vector<Column> columns;
+
+		/// The window-space span the band [top, bottom) keeps once every picker column crossing it is out.
+		void FreeSpan(int bandTop, int bandBottom, int screenWidth, int& left, int& right) const {
+			left = 0;
+			right = screenWidth;
+			for (const Column& column: columns) {
+				if (column.y >= bandBottom || column.y + column.h <= bandTop) continue;
+				if (column.x + column.w / 2 < screenWidth / 2) left = std::max(left, column.x + column.w);
+				else right = std::min(right, column.x);
+			}
+		}
 	};
 
 	/// The column the stock picker settles into (Base.rte/GUIs/ObjectPickerGUI.ini [PickerGUIBox] Width),
@@ -57,19 +72,25 @@ namespace {
 
 	EditorArea FreeArea(int screenWidth) {
 		EditorArea area;
-		area.right = screenWidth;
 		const auto* game = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
 		if (!game || game->GetActivityState() != Activity::ActivityState::Editing) return area;
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 			if (!(game->IsSeatActive(player) && game->IsLocalHumanSeat(player))) continue;
 			area.editing = true;
-			const int occlusion = g_CameraMan.GetScreenOcclusion(game->ScreenOfPlayer(player)).GetRoundIntX();
-			if (occlusion < 0) {
-				area.right = std::max(0, screenWidth - std::max(c_EditorPanelWidth, -occlusion));
-			} else if (occlusion > 0) {
-				area.left = std::min(screenWidth, std::max(c_EditorPanelWidth, occlusion));
-			}
-			break;
+			const int screen = game->ScreenOfPlayer(player);
+			const int occlusion = g_CameraMan.GetScreenOcclusion(screen).GetRoundIntX();
+			if (occlusion == 0) continue;
+			// The picker measured itself against the seat's own framebuffer, which a split screen parks
+			// at a window offset - the column it owns is translated, not read off the window's width.
+			Vector screenOffset;
+			g_FrameMan.GetScreenOffsetForSplitScreen(screen, screenOffset);
+			EditorArea::Column column;
+			column.y = screenOffset.GetRoundIntY();
+			column.h = g_FrameMan.GetPlayerFrameBufferHeight(player);
+			column.w = std::max(c_EditorPanelWidth, occlusion < 0 ? -occlusion : occlusion);
+			const int frameWidth = g_FrameMan.GetPlayerFrameBufferWidth(player);
+			column.x = occlusion < 0 ? screenOffset.GetRoundIntX() + frameWidth - column.w : screenOffset.GetRoundIntX();
+			area.columns.push_back(column);
 		}
 		return area;
 	}
@@ -379,8 +400,28 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	if (backbuffer->h < c_CompactMaxHeight) {
 		// The short-screen layout is one line in the gap between the funds block and the controller icon;
 		// while the editor holds the world it takes the bottom of what the picker leaves instead.
-		const int freeLeft = editor.editing ? editor.left + 4 : 152;
-		const int freeRight = editor.editing ? editor.right - 4 : backbuffer->w - 40;
+		const int fullHeight = font->GetFontHeight() + 7;
+		int height = fullHeight;
+		int y = editor.editing ? backbuffer->h - height - 2 : 2;
+		if (m_Open) {
+			// An open seats panel reaches the top of a compact screen, so a strip crossing its rows lifts
+			// above it - shrinking to a bare line of them when that is all the room there is.
+			int panelX, panelTop, panelWidth, panelHeight;
+			m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
+			if (y < panelTop + panelHeight && y + height > panelTop) {
+				y = panelTop - height;
+				if (y < 0) {
+					y = 0;
+					height = std::min(height, panelTop);
+				}
+			}
+		}
+		int freeLeft = 152, freeRight = backbuffer->w - 40;
+		if (editor.editing) {
+			editor.FreeSpan(y, y + height, backbuffer->w, freeLeft, freeRight);
+			freeLeft += 4;
+			freeRight -= 4;
+		}
 		const int maxTextWidth = freeRight - freeLeft - 14;
 		const std::string pingText = ping ? std::to_string(*ping) : "--";
 		char tail[96];
@@ -409,25 +450,34 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 			return line + metrics;
 		};
 		// An open picker leaves a short screen 280 px, so the line gives way in this order: the whole line,
-		// then the metrics tail, then the names. The count ends the line, so it outlives all of them.
+		// then a shortening pass, then whatever remains. The count ends the line, so it outlives all of
+		// them - the last resort drops everything but it rather than clip it off the end.
 		m_StripText = compose(tail, false);
 		if (font->CalculateWidth(m_StripText) > maxTextWidth) {
-			m_StripText = compose("", false);
+			// Outside the editor the span is wide and a long line is a long-name problem, so the names
+			// shorten first; the editor's narrow span gives up the metrics tail before touching them.
+			m_StripText = editor.editing ? compose("", false) : compose(tail, true);
 		}
 		if (font->CalculateWidth(m_StripText) > maxTextWidth) {
 			m_StripText = compose("", true);
 		}
-		const int height = font->GetFontHeight() + 7;
-		const int width = std::min(freeRight - freeLeft, font->CalculateWidth(m_StripText) + 14);
-		const int x = freeLeft + (freeRight - freeLeft - width) / 2;
-		const int y = editor.editing ? backbuffer->h - height - 2 : 2;
+		if (placing && font->CalculateWidth(m_StripText) > maxTextWidth) {
+			// Even the shortest line can outrun a collapsed span; keep the "N of M" count on screen.
+			const std::string count = std::to_string(placed) + " of " + std::to_string(seats);
+			m_StripText = font->CalculateWidth(count) <= maxTextWidth ? count : m_StripText;
+		}
+		const int width = std::max(0, std::min(freeRight - freeLeft, font->CalculateWidth(m_StripText) + 14));
+		const int x = freeLeft + std::max(0, (freeRight - freeLeft - width) / 2);
 		m_NetStatusBox->Move(x, y);
 		if (m_NetStatusBox->GetWidth() != width || m_NetStatusBox->GetHeight() != height) m_NetStatusBox->Resize(width, height);
 		m_NetStatusBox->SetVisible(true);
 		m_NetStatus->SetFont(font);
-		// GUILabel::Move is in screen coordinates, so the inset is measured from the strip itself.
-		m_NetStatus->Move(x + 7, y + 4);
-		m_NetStatus->Resize(width - 14, height - 6);
+		// GUILabel::Move is in screen coordinates, so the inset is measured from the strip itself. A strip
+		// squeezed under the seats panel centres its line instead of keeping the usual padding.
+		const bool squeezed = height < fullHeight;
+		const int textPad = squeezed ? std::max(0, (height - font->GetFontHeight()) / 2) : 4;
+		m_NetStatus->Move(x + 7, y + textPad);
+		m_NetStatus->Resize(width - 14, squeezed ? height - 2 * textPad : height - 6);
 		m_NetStatus->SetText(m_StripText);
 		m_StatusRect = {x, y, width, height, true};
 		AllegroBitmap bitmap(backbuffer);
@@ -437,8 +487,12 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		m_NetStatus->Draw(&bitmap, false);
 		return;
 	}
-	const int available = editor.right - editor.left;
-	const int width = std::min(c_StatusBoxWidth, available - 2 * c_StatusBoxMargin);
+	// The box is tall enough that a picker column beside it matters wherever the rows land, so its span
+	// keeps every column out rather than only the ones crossing the box's own band.
+	int freeLeft = 0, freeRight = backbuffer->w;
+	editor.FreeSpan(0, backbuffer->h, backbuffer->w, freeLeft, freeRight);
+	const int available = freeRight - freeLeft;
+	const int width = std::max(0, std::min(c_StatusBoxWidth, available - 2 * c_StatusBoxMargin));
 	m_NetStatusBox->SetVisible(true);
 	m_NetStatus->SetFont(font);
 	// Measured at the final width, so the height below is the height these rows really need.
@@ -470,8 +524,17 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	// The box grows for a state that needs more rows than the metric ones; those keep the stock height.
 	const int height = std::max(c_StatusBoxHeight, m_NetStatus->GetTextHeight() + 12);
 	// The editor's own top band and picker column are its own, so the box takes the bottom of the rest.
-	const int x = editor.editing ? editor.left + (available - width) / 2 : backbuffer->w - width - c_StatusBoxMargin;
-	const int y = editor.editing ? backbuffer->h - height - c_StatusBoxMargin : c_StatusBoxTop;
+	const int x = editor.editing ? freeLeft + (available - width) / 2 : backbuffer->w - width - c_StatusBoxMargin;
+	int y = editor.editing ? backbuffer->h - height - c_StatusBoxMargin : c_StatusBoxTop;
+	if (m_Open) {
+		// The same rule the compact strip follows: an open seats panel owns its rows, so a box crossing
+		// them lifts above it.
+		int panelX, panelTop, panelWidth, panelHeight;
+		m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
+		if (y < panelTop + panelHeight && y + height > panelTop) {
+			y = std::max(0, panelTop - height);
+		}
+	}
 	m_NetStatusBox->Move(x, y);
 	if (m_NetStatusBox->GetWidth() != width || m_NetStatusBox->GetHeight() != height) m_NetStatusBox->Resize(width, height);
 	m_NetStatus->Move(x + 6, y + 6);
@@ -503,12 +566,20 @@ void NetModerationGUI::DrawMatchToasts() {
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
 	const int rowHeight = std::max(12, font->GetFontHeight()) + 8;
 	const EditorArea editor = FreeArea(backbuffer->w);
-	const int available = editor.right - editor.left;
-	const int width = std::min(520, available - 32);
-	const int x = editor.left + (available - width) / 2;
 	// The status widget takes the bottom while the editor holds the world, so the rows stack above it.
-	const int bottom = editor.editing && m_StatusRect.visible ? m_StatusRect.y - 4 : backbuffer->h - 8;
+	int bottom = editor.editing && m_StatusRect.visible ? m_StatusRect.y - 4 : backbuffer->h - 8;
+	if (m_Open) {
+		// The seats panel owns its rows too: a stack that would cross them piles up above it instead.
+		int panelX, panelTop, panelWidth, panelHeight;
+		m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
+		bottom = std::min(bottom, panelTop - 4);
+	}
 	const int top = bottom - static_cast<int>(visible.size()) * rowHeight;
+	int freeLeft = 0, freeRight = backbuffer->w;
+	editor.FreeSpan(top, bottom, backbuffer->w, freeLeft, freeRight);
+	const int available = freeRight - freeLeft;
+	const int width = std::max(0, std::min(520, available - 32));
+	const int x = freeLeft + std::max(0, (available - width) / 2);
 	if (!visible.empty()) {
 		m_ToastRect = {x, top, width, static_cast<int>(visible.size()) * rowHeight - 2, true};
 	}

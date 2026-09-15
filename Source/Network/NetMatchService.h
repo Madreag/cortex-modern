@@ -474,6 +474,7 @@ namespace RTE {
 		std::string m_StatusText = "Idle";
 		std::string m_ErrorText;
 		std::string m_ActivityPreset;
+		std::string m_ActivityModule;
 		std::thread m_Worker;
 		bool m_WorkerDone = false;
 		bool m_IsHost = false;

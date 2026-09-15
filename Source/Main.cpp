@@ -1549,6 +1549,8 @@ void ProcessMenuScript() {
 			met = snapshot.remoteReady;
 		} else if (waitCond.starts_with("error:")) {
 			met = snapshot.errorText.find(waitCond.substr(6)) != std::string::npos;
+		} else if (waitCond.starts_with("activity:")) {
+			met = snapshot.activityPreset.find(waitCond.substr(9)) != std::string::npos;
 		} else if (waitCond.rfind("attempts:", 0) == 0) {
 			met = g_NetMatchService.GetReconnectUx().GetAttempts() >= static_cast<uint32_t>(std::atoi(waitCond.c_str() + 9));
 		}
@@ -1620,6 +1622,14 @@ void ProcessMenuScript() {
 		int n = 0;
 		iss >> n;
 		waitCond = "connected:" + std::to_string(n);
+		waitCondTimeout = 4000;
+	} else if (cmd == "wait_activity") {
+		std::string text;
+		std::getline(iss >> std::ws, text);
+		if (text.empty()) return MenuScriptFail("wait_activity requires a nonempty substring");
+		// A joiner's own placeholder config already fills the roster; only a synced activity name
+		// proves the host's match config actually landed.
+		waitCond = "activity:" + text;
 		waitCondTimeout = 4000;
 	} else if (cmd == "wait_all_ready") {
 		waitCond = "allready";
@@ -1726,6 +1736,7 @@ void ProcessMenuScript() {
 	} else if (cmd == "dump_lobby") {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::cout << "[menu-script] dump_lobby state=" << snapshot.serviceState << " members=" << snapshot.members.size()
+				  << " activity=\"" << snapshot.activityPreset << "\" module=\"" << snapshot.activityModule << "\""
 				  << " error=\"" << snapshot.errorText << "\" status=\"" << snapshot.statusText << "\""
 				  << " input_delay=\"" << snapshot.inputDelayText << "\""
 				  << " port_map=\"" << snapshot.portMap << "\"";

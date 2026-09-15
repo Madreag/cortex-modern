@@ -36,6 +36,7 @@ namespace RTE {
 		std::string errorText;
 		std::string lobbyPhase;
 		std::string activityPreset;
+		std::string activityModule; //!< The module the host's picker named, so a same-named preset cannot swap in.
 		std::string sceneName;
 		std::string modeName;
 		std::string inputDelayText; //!< The announced input delay, host-authored; "" before the lobby has one.

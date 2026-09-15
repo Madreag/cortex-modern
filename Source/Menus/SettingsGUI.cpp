@@ -427,7 +427,8 @@ namespace RTE::MenuAutomation {
 				const auto path = std::filesystem::path("ScreenShots") / (command + "_" + std::to_string(capture++));
 				const auto lobby = g_NetMatchService.GetLobbySnapshot();
 				Json result = {{"schema", 1}, {"screen", screen}, {"settings_page", SettingsPage(manager)}, {"viewport", Rectangle(nullptr)}, {"service", lobby.serviceState},
-					{"phase", "after_draw"}, {"sim_frame", g_TimerMan.GetSimUpdateCount()}, {"host", lobby.isHost}, {"peer_id", lobby.localPeerId}, {"controls", Json::array()}};
+					{"phase", "after_draw"}, {"sim_frame", g_TimerMan.GetSimUpdateCount()}, {"host", lobby.isHost}, {"peer_id", lobby.localPeerId},
+					{"activity_preset", lobby.activityPreset}, {"activity_module", lobby.activityModule}, {"controls", Json::array()}};
 				for (auto* item : *manager->GetControlList()) {
 					if (!Visible(item)) continue;
 					auto* panel = item->GetPanel();
