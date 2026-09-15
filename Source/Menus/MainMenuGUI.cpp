@@ -1022,8 +1022,10 @@ void MainMenuGUI::RefreshReconnectControls() {
 		return;
 	}
 	// One persistent line, never a toast: the status while recovering, otherwise whatever the startup
-	// scan of the recovery record found - including precisely why it cannot be used.
-	const std::string status = recovering ? reconnect.GetStatusText() : reconnect.GetOfferText();
+	// scan of the recovery record found - including precisely why it cannot be used. No record is the
+	// absence of an offer, not a verdict: it stays silent until the player asks to rejoin.
+	const std::string status = recovering ? reconnect.GetStatusText()
+	                                      : (reconnect.GetOffer() == NetReconnectOffer::Missing ? std::string() : reconnect.GetOfferText());
 	if (status != m_ReconnectStatusShown) {
 		// A recovery in progress owns the line. What the scan of the record found does not: it clears
 		// its own sentence, but never replaces a refusal or an error the screen just put there.
