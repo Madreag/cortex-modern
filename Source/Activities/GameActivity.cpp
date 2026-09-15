@@ -1122,7 +1122,8 @@ bool GameActivity::PlaceAndSubmitLockstepBrain(int player, const std::string& cl
 }
 
 bool GameActivity::SubmitLockstepBrainPlacement(int player) {
-	if (!IsLockstepPlacement() || !MayCommitBrainPlacement(player) || m_ReadyToStart[player]) {
+	// One command per placement gesture: the commit is in flight until it comes back off the wire.
+	if (!IsLockstepPlacement() || !MayCommitBrainPlacement(player) || m_LockstepPlacementSubmitted[player] || m_ReadyToStart[player]) {
 		return false;
 	}
 	Scene* scene = g_SceneMan.GetScene();
@@ -1226,6 +1227,12 @@ void GameActivity::UpdateEditing() {
 
 		// Set the team associations with each screen displayed
 		g_CameraMan.SetScreenTeam(m_Team[player], ScreenOfPlayer(player));
+
+		// A player who picks the brain up again may commit a new spot; the last committed one wins everywhere.
+		if (lockstep && (m_pEditorGUI[player]->GetEditorGUIMode() == SceneEditorGUI::INSTALLINGBRAIN ||
+		                 m_pEditorGUI[player]->GetEditorGUIMode() == SceneEditorGUI::PLACINGOBJECT)) {
+			m_LockstepPlacementSubmitted[player] = false;
+		}
 
 		// Check if the player says he's done editing, and if so, make sure he really is good to go
 		if (m_pEditorGUI[player]->GetEditorGUIMode() == SceneEditorGUI::DONEEDITING) {
