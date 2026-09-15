@@ -127,6 +127,11 @@ int ObjectPickerGUI::Create(Controller* controller, int whichModuleSpace, const 
 	return 0;
 }
 
+bool ObjectPickerGUI::HasLiveCachedControls() {
+	return m_GUIControlManager && m_ParentBox == m_GUIControlManager->GetControl("PickerGUIBox") && m_GroupsList == m_GUIControlManager->GetControl("GroupsLB") &&
+	       m_ObjectsList == m_GUIControlManager->GetControl("ObjectsLB") && m_PopupBox == m_GUIControlManager->GetControl("BuyGUIPopup") && m_PopupText == m_GUIControlManager->GetControl("PopupText");
+}
+
 void ObjectPickerGUI::SetEnabled(bool enable) {
 	if (enable && m_PickerState != PickerState::Enabled && m_PickerState != PickerState::Enabling) {
 		m_PickerState = PickerState::Enabling;
