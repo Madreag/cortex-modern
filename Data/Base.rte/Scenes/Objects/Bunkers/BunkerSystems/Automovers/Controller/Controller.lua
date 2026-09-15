@@ -564,7 +564,8 @@ automoverUtilityFunctions.addAllBoxes = function(self)
 	local teamNodeTable = AutomoverData[self.Team].nodeData;
 
 	local addedNodeCount = 0;
-	for node, nodeData in pairs(teamNodeTable) do
+	for _, node in ipairs(self:sortedNodeKeys(teamNodeTable)) do
+		local nodeData = teamNodeTable[node];
 		if nodeData.zoneBox ~= nil then
 			self.combinedAutomoverArea:AddBox(nodeData.zoneBox);
 			SceneMan.Scene:GetArea("NoGravityArea"):AddBox(nodeData.zoneBox);
