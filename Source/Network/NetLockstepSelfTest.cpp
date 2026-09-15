@@ -11099,8 +11099,8 @@ namespace RTE {
 		if (!TestRestoredControllerKeepsItsProductionBaseline(&error) ||
 		    !TestProducingPassSurvivesAnOverride(&error) ||
 		    !TestSoundIdentityPinAgreesAcrossHistories(&error) ||
-		    !TestSoundRegistrySurvivesConcurrentRelease(&error) ||
 		    !TestSoundRegistrySurvivesConcurrentRegistration(&error) ||
+		    !TestSoundRegistrySurvivesConcurrentRelease(&error) ||
 		    !TestRoundTrips(&error) ||
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
