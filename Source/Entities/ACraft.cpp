@@ -988,6 +988,22 @@ void ACraft::Update() {
 		m_FlippedTimer.Reset();
 	}
 
+	// The exit-line crawl is archived state, so the sim tick advances it: a draw runs per frame and per screen.
+	if (m_HatchState == OPEN) {
+		// Things are still coming out, so the dotted lines crawl out of the exit.
+		if (!IsInventoryEmpty()) {
+			if (--m_ExitLinePhase < 0) {
+				m_ExitLinePhase = EXITLINESPACING - 1;
+			}
+		}
+		// The hold is empty and the ejected things have had time to fall away, so the lines crawl back in.
+		else if (m_ExitTimer.IsPastSimMS(EXITSUCKDELAYMS)) {
+			if (++m_ExitLinePhase >= EXITLINESPACING) {
+				m_ExitLinePhase = 0;
+			}
+		}
+	}
+
 	/////////////////////////////////////////
 	// Misc.
 
@@ -1019,26 +1035,12 @@ void ACraft::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichSc
 
 	// Draw hud guides for the Exits, depending on whether the doors are open
 	if (m_HatchState == OPEN /* || m_HatchState == OPENING*/) {
-		// Doors open and inventory not empty yet, so show arrows pointing out of the exits since things are still coming out
-		if (!IsInventoryEmpty()) {
-			//  --------
-			//  |  \  \
-			// -+-  |  |
-			//  |  /  /
-			//  --------
-			// Make the dotted lines crawl out of the exit, indicating that things are still coming out
-			if (--m_ExitLinePhase < 0) {
-				m_ExitLinePhase = EXITLINESPACING - 1;
-			}
-		}
-		// Inventory empty and doors open, so show arrows pointing into the exits IF the delay to allow for things to eject away all the way has passed
-		else if (m_ExitTimer.IsPastSimMS(EXITSUCKDELAYMS)) {
-			// Make the dotted lines crawl back into the exit, inviting people to jump in
-			if (++m_ExitLinePhase >= EXITLINESPACING) {
-				m_ExitLinePhase = 0;
-			}
-		}
-
+		//  --------
+		//  |  \  \
+		// -+-  |  |
+		//  |  /  /
+		//  --------
+		// The crawl phase is advanced by Update; a draw runs once per frame and once per screen.
 		Matrix currentRotation = GetRenderRotMatrix();
 		Vector drawPos(GetRenderPos() - targetPos);
 
