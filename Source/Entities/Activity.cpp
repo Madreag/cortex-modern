@@ -754,14 +754,13 @@ float Activity::GetPlayerFundsShare(int player) const {
 
 void Activity::SetPlayerBrain(Actor* newBrain, int player) {
 	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return;
-	if ((player >= Players::PlayerOne && player < Players::MaxPlayerCount) && newBrain) {
+	if (newBrain) {
 		if (newBrain->GetTeam() != m_Team[player]) {
 			newBrain->SetTeam(m_Team[player]);
 		}
 		m_HadBrain[player] = true;
 	}
-	const bool seated = player >= Players::PlayerOne && player < Players::MaxPlayerCount;
-	if (seated && IsHumanSeat(player)) {
+	if (IsHumanSeat(player)) {
 		if (m_Brain[player] && m_Brain[player] != newBrain && !IsOtherPlayerBrain(m_Brain[player], player)) {
 			g_MovableMan.NotePlayerBrain(m_Brain[player]->GetUniqueID(), false);
 		}

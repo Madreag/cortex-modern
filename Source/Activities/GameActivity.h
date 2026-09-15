@@ -251,8 +251,7 @@ namespace RTE {
 		/// @param team The number of the team we're setting for.
 		/// @return The Area we're using to limit their landings within. OWNERSHIP IS NOT TRANSFERRED!
 		const Scene::Area& GetLZArea(int team) const {
-			static const Scene::Area empty;
-			return team >= Teams::TeamOne && team < Teams::MaxTeamCount ? m_LandingZoneArea[team] : empty;
+			return team >= Teams::TeamOne && team < Teams::MaxTeamCount ? m_LandingZoneArea[team] : s_NoLandingZone;
 		}
 
 		/// Sets the width of the landing zone box that follows around a player's
@@ -644,6 +643,8 @@ namespace RTE {
 		std::deque<Delivery> m_Deliveries[Teams::MaxTeamCount];
 		// The box within where landing zones can be put
 		Scene::Area m_LandingZoneArea[Teams::MaxTeamCount];
+		// What a team outside the roster lands within: nowhere
+		inline static const Scene::Area s_NoLandingZone;
 		// How wide around the brain the automatic LZ is following
 		int m_BrainLZWidth[Players::MaxPlayerCount];
 		// The objective points for each team
