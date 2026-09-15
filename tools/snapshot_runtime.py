@@ -245,8 +245,10 @@ _ACTOR_RUNTIME_HEAD = [*fields("player_controllable status health max_health pre
 _ACTOR_RUNTIME_TAIL = [("move_vector", VECTOR), *fields("update_path move_proximity movement_state organic mechanical limb_forces_disabled"),
     *fields("team_icon controller_icon", "s")]
 SCHEMAS["ActorRuntime1"] = [*_ACTOR_RUNTIME_HEAD, *_ACTOR_RUNTIME_TAIL]
-# v2 keeps the waypoint this actor was ordered to, which v1 texts do not carry.
-SCHEMAS["ActorRuntime2"] = [*_ACTOR_RUNTIME_HEAD, ("last_ordered_waypoint", VECTOR), ("has_ordered_waypoint", "n"), *_ACTOR_RUNTIME_TAIL]
+# v2 keeps the waypoint this actor was ordered to, which v1 texts do not carry; v3 adds the MO that order named.
+_ACTOR_ORDERED = [("last_ordered_waypoint", VECTOR), ("has_ordered_waypoint", "n")]
+SCHEMAS["ActorRuntime2"] = [*_ACTOR_RUNTIME_HEAD, *_ACTOR_ORDERED, *_ACTOR_RUNTIME_TAIL]
+SCHEMAS["ActorRuntime3"] = [*_ACTOR_RUNTIME_HEAD, *_ACTOR_ORDERED, ("last_ordered_waypoint_uid", "n"), *_ACTOR_RUNTIME_TAIL]
 SCHEMAS["AHumanRuntime1"] = [*fields("look_aim_ratio activate_background trigger_pulled reload_offhand"), ("icon_blink_timer", TIMER),
     *fields("arms_state prone_state"), ("prone_timer", TIMER), *fields("max_crouch_shift crouch_amount crouch_override"),
     ("paths", array(2, array(11, "o"))), ("rotation_targets", array(11)), ("aiming", "n"), ("arm_climbing", array(2)),
@@ -522,6 +524,7 @@ _LOCAL_FIELDS = {
     "AudioVoice1": {"position"},
     "ActorRuntime1": {"hud_stack"},
     "ActorRuntime2": {"hud_stack"},
+    "ActorRuntime3": {"hud_stack"},
     "AEmitterRuntime1": {"average_burst_impulse", "average_impulse"},
     "HDFirearmRuntime1": {"ai_fire_velocity", "ai_bullet_lifetime", "ai_bullet_acceleration"},
 }
@@ -758,15 +761,19 @@ def selftest():
     check("game_activity3_decodes", decode(grown)["version"] == "GameActivity3" and
           "lockstep_seat_brains" in decode(grown) and len(decode(grown)["lockstep_seat_brains"]) == 4)
 
-    ordered = decode(_payload("ActorRuntime2"))
-    check("actor_runtime2_decodes", ordered["version"] == "ActorRuntime2" and
-          "last_ordered_waypoint" in ordered and "has_ordered_waypoint" in ordered)
+    ordered = decode(_payload("ActorRuntime3"))
+    check("actor_runtime3_decodes", ordered["version"] == "ActorRuntime3" and
+          "last_ordered_waypoint" in ordered and "has_ordered_waypoint" in ordered and "last_ordered_waypoint_uid" in ordered)
+    older = decode(_payload("ActorRuntime2"))
+    check("actor_runtime2_still_decodes", "last_ordered_waypoint" in older and "last_ordered_waypoint_uid" not in older)
     check("actor_runtime1_still_decodes", "last_ordered_waypoint" not in decode(_payload("ActorRuntime1")))
-    try:
-        decode(_payload("ActorRuntime2").replace(b"13 ActorRuntime2", b"13 ActorRuntime1", 1))
-        check("actor_runtime2_refused_as_actor_runtime1", False)
-    except ValueError as error:
-        check("actor_runtime2_refused_as_actor_runtime1", "trailing" in str(error) or "invalid runtime checkpoint" in str(error))
+    for older_tag in (b"13 ActorRuntime1", b"13 ActorRuntime2"):
+        try:
+            decode(_payload("ActorRuntime3").replace(b"13 ActorRuntime3", older_tag, 1))
+            check("actor_runtime3_refused_as_" + older_tag.decode().split()[1].lower(), False)
+        except ValueError as error:
+            check("actor_runtime3_refused_as_" + older_tag.decode().split()[1].lower(),
+                  "trailing" in str(error) or "invalid runtime checkpoint" in str(error))
 
     unclassified = b"9 NoSchema1 0 "
     check("unclassified_tag_stays_raw", decode(unclassified) == unclassified)
