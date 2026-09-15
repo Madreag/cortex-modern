@@ -1348,6 +1348,12 @@ namespace RTE {
 				if (!IsLockstepAIWriteAuthorized(sender, gib->team, gib->writerUID, gib->writerUID)) {
 					return;
 				}
+			} else if (const NetGameAIValue* value = std::get_if<NetGameAIValue>(&command.payload)) {
+				const Actor* writer = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(value->writerUID)));
+				const int32_t team = writer ? writer->GetTeam() : 0;
+				if (!IsLockstepAIWriteAuthorized(sender, team, value->writerUID, value->writerUID)) {
+					return;
+				}
 			} else if (!IsLockstepTeamCommandSender(NetGameCommandTeam(command.payload), sender)) {
 				return;
 			}

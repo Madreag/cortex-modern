@@ -497,6 +497,13 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				g_ConsoleMan.PrintString("ERROR: Rejected an AIGib command from a peer that does not drive actor " + std::to_string(gibCommand->writerUID));
 				continue;
 			}
+		} else if (const NetGameAIValue* valueCommand = std::get_if<NetGameAIValue>(&command.payload)) {
+			const Actor* writer = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(valueCommand->writerUID)));
+			const int32_t team = writer ? writer->GetTeam() : 0;
+			if (!ScenarioRunner::IsLockstepAIWriteAuthorized(command.senderPeerId, team, valueCommand->writerUID, valueCommand->writerUID)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected an AIValue command from a peer that does not drive actor " + std::to_string(valueCommand->writerUID));
+				continue;
+			}
 		} else if (!ScenarioRunner::IsLockstepTeamCommandSender(commandTeam, command.senderPeerId)) {
 			g_ConsoleMan.PrintString("ERROR: Rejected a " + std::string(NetGameCommandTypeName(NetGameCommandTypeOf(command.payload))) + " command from a peer that does not control team " + std::to_string(commandTeam));
 			continue;
@@ -811,6 +818,24 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			}
 			MovableObject* ignored = gib->ignoreUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(gib->ignoreUID)) : nullptr;
 			gibbed->GibThis(Vector(gib->impulseX, gib->impulseY), ignored);
+		} else if (const NetGameAIValue* value = std::get_if<NetGameAIValue>(&command.payload)) {
+			const Actor* writer = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(value->writerUID)));
+			if (!writer) {
+				g_ConsoleMan.PrintString("NETWORK: AI value command writer not found: UID " + std::to_string(value->writerUID));
+				std::cout << "[net-match] AI value command writer not found: UID " << value->writerUID << std::endl;
+				continue;
+			}
+			if (!ScenarioRunner::IsLockstepActorOwner(value->writerUID, writer->GetTeam(), !writer->IsPlayerControlled(), command.senderPeerId)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected an AI value command from a peer that does not drive actor " + std::to_string(value->writerUID));
+				continue;
+			}
+			MovableObject* target = g_MovableMan.FindObjectByUniqueID(static_cast<long int>(value->objectUID));
+			if (!target) {
+				g_ConsoleMan.PrintString("NETWORK: AI value command target not found: UID " + std::to_string(value->objectUID));
+				std::cout << "[net-match] AI value command target not found: UID " << value->objectUID << std::endl;
+				continue;
+			}
+			target->ApplyAIValueOrder(value->op, value->key, value->number, value->text, value->valueUID);
 		} else if (const NetGameSoundOp* sound = std::get_if<NetGameSoundOp>(&command.payload)) {
 			// The AI's sound call runs here on every peer; only the peer driving the actor may issue it.
 			Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(sound->actorUID)));
@@ -4975,6 +5000,17 @@ void MovableMan::UpdateControllers() {
 				}
 			}
 		};
+		auto drainDeferredAIValues = [&]() {
+			// The custom-value writes the AI pass made, in MOID order: the owner sends them so every peer
+			// applies them at the same tick. A non-owner's queued writes are dropped.
+			for (Actor* actor: m_Actors) {
+				if (isLocalControllerActor(actor)) {
+					actor->SendDeferredAIValues();
+				} else {
+					actor->TakePendingDeferredAIValues();
+				}
+			}
+		};
 		auto drainDeferredSoundOps = [&]() {
 			// The sound calls the AI queued, in checkpoint-identity order: performed now, or sent as
 			// commands under lockstep. A container the AI only read hands out nothing.
@@ -5048,6 +5084,7 @@ void MovableMan::UpdateControllers() {
 		drainDeferredAIModes();
 		drainDeferredScriptMessages();
 		drainDeferredGibs();
+		drainDeferredAIValues();
 		drainDeferredSoundOps();
 
 		// The serial UpdateAI pass mutates directly outside lockstep; under it the calls defer like the threaded ones.
@@ -5067,6 +5104,7 @@ void MovableMan::UpdateControllers() {
 		drainDeferredAIModes();
 		drainDeferredScriptMessages();
 		drainDeferredGibs();
+		drainDeferredAIValues();
 		drainDeferredSoundOps();
 		// A fixture's scripted writes come last, so they are the pass's final word on the actor.
 		if (AIWriteScript::IsActive()) {
@@ -5076,6 +5114,7 @@ void MovableMan::UpdateControllers() {
 			drainDeferredAIModes();
 			drainDeferredScriptMessages();
 			drainDeferredGibs();
+			drainDeferredAIValues();
 			drainDeferredSoundOps();
 		}
 
