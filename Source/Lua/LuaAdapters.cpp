@@ -311,11 +311,8 @@ void LuaAdaptersScene::CalculatePathAsync(Scene* luaSelfObject, const luabind::o
 		luabind::call_function<void>(luaState, "_AddAsyncPathCallback", thisCallbackId, callback);
 	}
 
-	if (ScenarioRunner::IsLockstepControllerSyncActive() && g_CurrentAIActor == nullptr) {
-		const int64_t sharedId = LuaMan::RegisterSharedPathRequest(context, luaState, thisCallbackId, luaSelfObject, start, end, jumpHeight, digStrength, team);
-		if (ScenarioRunner::GetLockstepLocalPeerId() == ScenarioRunner::GetLockstepHostPeerId()) {
-			LuaMan::StartSharedPathComputation(context, sharedId);
-		}
+	if (ScenarioRunner::IsLockstepControllerSyncActive() && g_CurrentAIActor == nullptr && !g_MovableMan.IsSpeculative()) {
+		LuaMan::RegisterSharedPathRequest(context, luaState, thisCallbackId, luaSelfObject, start, end, jumpHeight, digStrength, team);
 		return;
 	}
 

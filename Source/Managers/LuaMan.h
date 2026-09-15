@@ -513,8 +513,11 @@ namespace RTE {
 		/// Queues an immutable path result for delivery on the main thread.
 		static void CompletePathCallback(const std::shared_ptr<LuaPathCallbackContext>& context, lua_State* state, int id, const PathRequest& result);
 
-		/// Allocates a shared-script path id that every peer assigns in the same order.
-		static int64_t RegisterSharedPathRequest(const std::shared_ptr<LuaPathCallbackContext>& context, lua_State* state, int localId, Scene* scene, const Vector& start, const Vector& end, float jumpHeight, float digStrength, int team);
+		/// Queues a shared-script path request; ids are assigned in a stable order later.
+		static void RegisterSharedPathRequest(const std::shared_ptr<LuaPathCallbackContext>& context, lua_State* state, int localId, Scene* scene, const Vector& start, const Vector& end, float jumpHeight, float digStrength, int team);
+
+		/// Numbers queued shared requests the same way on every peer and starts the host computes.
+		void AssignSharedPathRequests();
 
 		/// Starts the host's local computation for a shared path request.
 		static void StartSharedPathComputation(const std::shared_ptr<LuaPathCallbackContext>& context, int64_t sharedId);

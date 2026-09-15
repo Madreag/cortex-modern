@@ -49,6 +49,7 @@
 
 #include "luabind/detail/object_rep.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <charconv>
@@ -121,6 +122,7 @@ struct RTE::LuaPathCallbackContext {
 	std::vector<Request> pending;
 	std::unordered_map<int64_t, std::pair<lua_State*, int>> sharedToLocal;
 	std::unordered_map<int64_t, SharedRequest> pendingShared;
+	std::vector<SharedRequest> unassignedShared;
 	std::vector<SharedResult> sharedIncoming;
 };
 
@@ -6536,12 +6538,9 @@ static LuaPathCallbackContext::SharedResult MakeSharedPathResult(int64_t sharedI
 	return out;
 }
 
-int64_t LuaMan::RegisterSharedPathRequest(const std::shared_ptr<LuaPathCallbackContext>& context, lua_State* state, int localId, Scene* scene, const Vector& start, const Vector& end, float jumpHeight, float digStrength, int team) {
+void LuaMan::RegisterSharedPathRequest(const std::shared_ptr<LuaPathCallbackContext>& context, lua_State* state, int localId, Scene* scene, const Vector& start, const Vector& end, float jumpHeight, float digStrength, int team) {
 	std::scoped_lock lock(context->mutex);
-	const int64_t sharedId = context->sharedNextId++;
-	context->sharedToLocal[sharedId] = {state, localId};
 	LuaPathCallbackContext::SharedRequest request;
-	request.sharedId = sharedId;
 	request.state = state;
 	request.localId = localId;
 	request.scene = scene;
@@ -6550,8 +6549,58 @@ int64_t LuaMan::RegisterSharedPathRequest(const std::shared_ptr<LuaPathCallbackC
 	request.jumpHeight = jumpHeight;
 	request.digStrength = digStrength;
 	request.team = static_cast<Activity::Teams>(team);
-	context->pendingShared[sharedId] = request;
-	return sharedId;
+	context->unassignedShared.push_back(request);
+}
+
+static bool SharedRequestLess(const LuaPathCallbackContext::SharedRequest& a, const LuaPathCallbackContext::SharedRequest& b) {
+	if (a.start.m_X != b.start.m_X) {
+		return a.start.m_X < b.start.m_X;
+	}
+	if (a.start.m_Y != b.start.m_Y) {
+		return a.start.m_Y < b.start.m_Y;
+	}
+	if (a.end.m_X != b.end.m_X) {
+		return a.end.m_X < b.end.m_X;
+	}
+	if (a.end.m_Y != b.end.m_Y) {
+		return a.end.m_Y < b.end.m_Y;
+	}
+	if (a.jumpHeight != b.jumpHeight) {
+		return a.jumpHeight < b.jumpHeight;
+	}
+	if (a.digStrength != b.digStrength) {
+		return a.digStrength < b.digStrength;
+	}
+	return a.team < b.team;
+}
+
+void LuaMan::AssignSharedPathRequests() {
+	if (!m_PathCallbacks || !ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return;
+	}
+	std::vector<int64_t> hostStarts;
+	{
+		std::scoped_lock lock(m_PathCallbacks->mutex);
+		if (m_PathCallbacks->unassignedShared.empty()) {
+			return;
+		}
+		std::vector<LuaPathCallbackContext::SharedRequest> waiting = std::move(m_PathCallbacks->unassignedShared);
+		m_PathCallbacks->unassignedShared.clear();
+		std::sort(waiting.begin(), waiting.end(), SharedRequestLess);
+		const bool host = ScenarioRunner::GetLockstepLocalPeerId() == ScenarioRunner::GetLockstepHostPeerId();
+		for (auto& request: waiting) {
+			const int64_t sharedId = m_PathCallbacks->sharedNextId++;
+			request.sharedId = sharedId;
+			m_PathCallbacks->sharedToLocal[sharedId] = {request.state, request.localId};
+			m_PathCallbacks->pendingShared[sharedId] = request;
+			if (host) {
+				hostStarts.push_back(sharedId);
+			}
+		}
+	}
+	for (const int64_t sharedId: hostStarts) {
+		StartSharedPathComputation(m_PathCallbacks, sharedId);
+	}
 }
 
 void LuaMan::StartSharedPathComputation(const std::shared_ptr<LuaPathCallbackContext>& context, int64_t sharedId) {
@@ -6658,6 +6707,7 @@ void LuaMan::BeginPathCallbackCapture() {
 	m_PathCallbackCapture->sharedNextId = m_PathCallbacks->sharedNextId;
 	m_PathCallbackCapture->sharedToLocal = m_PathCallbacks->sharedToLocal;
 	m_PathCallbackCapture->pendingShared = m_PathCallbacks->pendingShared;
+	m_PathCallbackCapture->unassignedShared = m_PathCallbacks->unassignedShared;
 	m_PathCallbackCapture->sharedIncoming = m_PathCallbacks->sharedIncoming;
 }
 
@@ -6674,6 +6724,7 @@ void LuaMan::PushPathCallbacks(lua_State* state) {
 	std::vector<LuaPathCallbackContext::Request> pending;
 	std::vector<std::pair<int64_t, int>> sharedIds;
 	std::vector<LuaPathCallbackContext::SharedRequest> sharedPending;
+	std::vector<LuaPathCallbackContext::SharedRequest> unassigned;
 	{
 		std::scoped_lock lock(context->mutex);
 		const auto found = context->nextId.find(state);
@@ -6687,6 +6738,9 @@ void LuaMan::PushPathCallbacks(lua_State* state) {
 		}
 		for (const auto& [sharedId, request]: context->pendingShared) {
 			if (request.state == state) sharedPending.push_back(request);
+		}
+		for (const auto& request: context->unassignedShared) {
+			if (request.state == state) unassigned.push_back(request);
 		}
 	}
 	lua_newtable(state);
@@ -6760,6 +6814,25 @@ void LuaMan::PushPathCallbacks(lua_State* state) {
 		lua_rawseti(state, -2, ++index);
 	}
 	lua_setfield(state, -2, "pendingShared");
+	lua_newtable(state);
+	index = 0;
+	for (const auto& request: unassigned) {
+		lua_newtable(state);
+		lua_pushinteger(state, request.localId);
+		lua_setfield(state, -2, "id");
+		luabind::object(state, request.scene).push(state);
+		lua_setfield(state, -2, "scene");
+		const auto number = [state](const char* name, lua_Number value) { lua_pushnumber(state, value); lua_setfield(state, -2, name); };
+		number("startX", request.start.m_X);
+		number("startY", request.start.m_Y);
+		number("endX", request.end.m_X);
+		number("endY", request.end.m_Y);
+		number("jumpHeight", request.jumpHeight);
+		number("digStrength", request.digStrength);
+		number("team", request.team);
+		lua_rawseti(state, -2, ++index);
+	}
+	lua_setfield(state, -2, "unassignedShared");
 }
 
 bool LuaMan::RestorePathCallbacks(lua_State* state, int index) {
@@ -6883,6 +6956,40 @@ bool LuaMan::RestorePathCallbacks(lua_State* state, int index) {
 		lua_pop(state, 2);
 	}
 	lua_settop(state, top);
+	lua_getfield(state, index, "unassignedShared");
+	valid = valid && (lua_isnil(state, -1) || lua_istable(state, -1));
+	std::vector<LuaPathCallbackContext::SharedRequest> unassigned;
+	const int unassignedCount = valid && lua_istable(state, -1) ? static_cast<int>(lua_objlen(state, -1)) : 0;
+	for (int entry = 1; entry <= unassignedCount && valid; ++entry) {
+		lua_rawgeti(state, -1, entry);
+		if (!lua_istable(state, -1)) { valid = false; break; }
+		const auto number = [state, &valid](const char* name) {
+			lua_getfield(state, -1, name);
+			valid = valid && lua_isnumber(state, -1);
+			const lua_Number result = lua_tonumber(state, -1);
+			lua_pop(state, 1);
+			return result;
+		};
+		LuaPathCallbackContext::SharedRequest request{};
+		request.state = state;
+		request.localId = static_cast<int>(number("id"));
+		request.start.m_X = static_cast<float>(number("startX"));
+		request.start.m_Y = static_cast<float>(number("startY"));
+		request.end.m_X = static_cast<float>(number("endX"));
+		request.end.m_Y = static_cast<float>(number("endY"));
+		request.jumpHeight = static_cast<float>(number("jumpHeight"));
+		request.digStrength = static_cast<float>(number("digStrength"));
+		request.team = static_cast<Activity::Teams>(static_cast<int>(number("team")));
+		lua_getfield(state, -1, "scene");
+		const auto* value = luabind::detail::is_class_object(state, -1);
+		valid = valid && request.localId >= 0 && request.localId < nextId && request.team >= Activity::Teams::NoTeam && request.team <= Activity::Teams::TeamFour && value && std::strcmp(value->crep()->name(), "Scene") == 0 && value->ptr();
+		if (valid) {
+			request.scene = static_cast<Scene*>(value->ptr());
+			unassigned.push_back(request);
+		}
+		lua_pop(state, 2);
+	}
+	lua_settop(state, top);
 	if (!valid) return false;
 	std::scoped_lock lock(m_PathCallbacks->mutex);
 	std::erase_if(m_PathCallbacks->callbacks, [state](const auto& callback) { return callback.state == state; });
@@ -6898,6 +7005,8 @@ bool LuaMan::RestorePathCallbacks(lua_State* state, int index) {
 		request.submitted = false;
 		m_PathCallbacks->pendingShared[request.sharedId] = request;
 	}
+	std::erase_if(m_PathCallbacks->unassignedShared, [state](const auto& request) { return request.state == state; });
+	m_PathCallbacks->unassignedShared.insert(m_PathCallbacks->unassignedShared.end(), unassigned.begin(), unassigned.end());
 	m_PathCallbacks->nextId[state] = nextId;
 	m_PathCallbacks->nextOrder = std::max(m_PathCallbacks->nextOrder, nextOrder);
 	m_PathCallbacks->sharedNextId = std::max(m_PathCallbacks->sharedNextId, sharedNextId);
@@ -6932,6 +7041,7 @@ void LuaMan::ResumePathCallbacks() {
 }
 
 void LuaMan::ExecuteLuaScriptCallbacks() {
+	AssignSharedPathRequests();
 	FlushSharedPathCommands();
 	static const long publishAfter = []() { const char* value = std::getenv("CC_TEST_ASYNC_PATH_PUBLICATION_TICK"); return value ? std::strtol(value, nullptr, 10) : 0L; }();
 	if (publishAfter <= 0 || g_TimerMan.GetSimUpdateCount() >= publishAfter) {
