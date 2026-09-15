@@ -3001,6 +3001,29 @@ static bool RunHarnessCaptureSelfTest() {
 		          << " graphs_equal=" << (before == after) << std::endl;
 	}
 	std::cout << "[script-graph-selftest] " << (observeOrder ? "PASS" : "FAIL") << " contract_audit_observation_settles_first" << std::endl;
+	// A scenario script starting under a CLI trace run must join it: its own BeginRun would drop the
+	// armed tick-hash trace and leave the trace file without hashes.
+	bool scriptJoinsTheHostRun = false;
+	{
+		g_MetricsCollector.BeginHostRun("HostOwnedRun", 7);
+		g_MetricsCollector.SetRecordTickHashes(true);
+		SimChecksum::Result sample;
+		sample.tick = 1;
+		g_MetricsCollector.RecordTickHash(sample);
+		const size_t armed = g_MetricsCollector.GetTickHashCount();
+		const int scriptError = g_LuaMan.GetMasterScriptState().RunScriptString(
+		    "MetricsCollector:BeginRun(\"ScriptOwnedRun\", 0); MetricsCollector:EndRun();");
+		const MetricsCollector::AggregatedRun joined = g_MetricsCollector.GetCurrentRun();
+		const auto named = joined.stringValues.find("scenario");
+		scriptJoinsTheHostRun = scriptError == 0 && armed == 1 && joined.tickHashes.size() == 1 &&
+		                        g_MetricsCollector.IsRecordingTickHashes() && joined.scenario == "HostOwnedRun" &&
+		                        named != joined.stringValues.end() && named->second == "ScriptOwnedRun";
+		std::cout << "[harness-order] metrics armed=" << armed << " after_script=" << joined.tickHashes.size()
+		          << " recording=" << g_MetricsCollector.IsRecordingTickHashes() << " run=" << joined.scenario
+		          << " script=" << (named != joined.stringValues.end() ? named->second : std::string("-")) << std::endl;
+		g_MetricsCollector.Destroy();
+	}
+	std::cout << "[script-graph-selftest] " << (scriptJoinsTheHostRun ? "PASS" : "FAIL") << " scenario_script_joins_the_host_metrics_run" << std::endl;
 	// Last in the run: a build that fails this one leaves a world held.
 	bool refusalKeepsTheNextHold = false;
 	{
@@ -3021,7 +3044,7 @@ static bool RunHarnessCaptureSelfTest() {
 		std::cout << "[setaside-latch] refused=" << refused << " still_held=" << stillHeld << " next_hold=" << nextHold << std::endl;
 	}
 	std::cout << "[script-graph-selftest] " << (refusalKeepsTheNextHold ? "PASS" : "FAIL") << " refused_reinstate_leaves_the_next_hold_possible" << std::endl;
-	return probeOrder && observeOrder && refusalKeepsTheNextHold;
+	return probeOrder && observeOrder && scriptJoinsTheHostRun && refusalKeepsTheNextHold;
 }
 
 // Observes completed tick boundaries. All state restoration belongs to the production
@@ -5160,7 +5183,7 @@ int RunNetReplayPlayback() {
 
 	const bool traceRun = s_recordTickHashes && !ScenarioRunner::GetArgs().outPath.empty();
 	if (traceRun) {
-		g_MetricsCollector.BeginRun("P4 Alpha Duel", ScenarioRunner::GetArgs().seed);
+		g_MetricsCollector.BeginHostRun("P4 Alpha Duel", ScenarioRunner::GetArgs().seed);
 		g_MetricsCollector.SetRecordTickHashes(true);
 	}
 	// Playback is not real-time: free-run the sim as fast as it computes (the fixed dt is
@@ -5391,7 +5414,7 @@ int RunNetMatchServiceE2E() {
 		// -scenario stop path + perturb hook; SetRecordTickHashes arms the trace alone.
 		const bool traceRun = s_recordTickHashes && !ScenarioRunner::GetArgs().outPath.empty();
 		if (traceRun) {
-			g_MetricsCollector.BeginRun("P4 Alpha Duel", ScenarioRunner::GetArgs().seed);
+			g_MetricsCollector.BeginHostRun("P4 Alpha Duel", ScenarioRunner::GetArgs().seed);
 			g_MetricsCollector.SetRecordTickHashes(true);
 		}
 		RunGameLoop();
@@ -6247,7 +6270,7 @@ int main(int argc, char** argv) {
 			// menu-driven match can be sim-gated host vs client (same compare as the headless gate).
 			const bool traceMenuMp = g_NetMatchService.WasEverStarted() && s_recordTickHashes && !ScenarioRunner::GetArgs().outPath.empty();
 			if (traceMenuMp) {
-				g_MetricsCollector.BeginRun("P4 Alpha Duel", ScenarioRunner::GetArgs().seed);
+				g_MetricsCollector.BeginHostRun("P4 Alpha Duel", ScenarioRunner::GetArgs().seed);
 				g_MetricsCollector.SetRecordTickHashes(true);
 			}
 
