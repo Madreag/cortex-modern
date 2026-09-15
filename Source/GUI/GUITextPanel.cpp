@@ -1,6 +1,8 @@
 #include "GUI.h"
 #include "GUITextPanel.h"
 
+#include "allegro.h"
+
 #include <cassert>
 
 using namespace RTE;
@@ -108,8 +110,11 @@ void GUITextPanel::Draw(GUIScreen* Screen) {
 
 	std::string Text = m_Text.substr(m_StartIndex);
 
-	// Draw the text
-	m_Font->SetColor(m_FontColor);
+	// A disabled box keeps its text but inks it at the fallback cells' 55% dim.
+	const unsigned long ink = m_Enabled || Screen->GetBitmap()->GetColorDepth() != 32
+	                          ? m_FontColor
+	                          : makeacol32(getr32(m_FontColor) * 55 / 100, getg32(m_FontColor) * 55 / 100, getb32(m_FontColor) * 55 / 100, geta32(m_FontColor));
+	m_Font->SetColor(ink);
 	m_Font->SetKerning(m_FontKerning);
 	m_Font->Draw(Screen->GetBitmap(), m_X + wSpacer, m_Y + hSpacer, Text, m_FontShadow);
 
