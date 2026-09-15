@@ -40,6 +40,7 @@ namespace RTE {
 		GUIRadioButton* m_DelayPolicyFixedRadio;
 		GUILabel* m_FixedDelayLabel;
 		GUITextBox* m_FixedDelayTextbox;
+		GUILabel* m_FixedDelayHintLabel;
 		GUILabel* m_IdleWaitLabel;
 		GUITextBox* m_IdleWaitTextbox;
 		GUICheckbox* m_AutoRepairCheckbox;
@@ -51,7 +52,7 @@ namespace RTE {
 		/// Sends the text boxes through the settings validators and shows what they kept.
 		void ApplyTextboxes();
 
-		/// A fixed delay only applies under the fixed policy, so its row follows the policy.
+		/// A fixed delay only applies under the fixed policy, so its row is drawn only there.
 		void UpdateDelayPolicyRow();
 #pragma endregion
 
