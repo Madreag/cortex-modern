@@ -528,9 +528,13 @@ bool Activity::RunSharedSeatSelfTest() {
 	const bool passed = roster && local && offlineSame;
 	GameActivity copied;
 	copied.Create(host);
+	// The donor peer's own seat arrives with its own view; this peer does not present that seat and must not inherit it.
+	copied.m_ViewState[0] = ViewState::ActorSelect;
+	copied.m_ViewState[1] = ViewState::Normal;
 	copied.MapLocalPlayers(config, 2);
 	const bool rebound = copied.m_LocalInputPlayers[1] == 0 && copied.ScreenOfPlayer(1) == 0 && copied.ScreenOfPlayer(0) == -1 &&
 		copied.GetHumanCount() == host.GetHumanCount() && copied.GetTeamOfPlayer(1) == host.GetTeamOfPlayer(1);
+	const bool ownView = copied.m_ViewState[0] == ViewState::Observe && copied.m_ViewState[1] == ViewState::Normal;
 	const bool cpuRoster = host.TeamIsCPU(2) && client.TeamIsCPU(2) && dedicated.TeamIsCPU(2) &&
 		host.GetCPUTeam() == 2 && client.GetCPUTeam() == 2 && !host.TeamIsCPU(1) && !client.TeamIsCPU(1);
 	NetMatchConfig multiCPU;
@@ -547,8 +551,10 @@ bool Activity::RunSharedSeatSelfTest() {
 	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) cpuReset = cpuReset && !multipleHost.TeamIsCPU(team);
 	std::cout << "[shared-seat-selftest] " << (passed ? "PASS" : "FAIL") << " roster=" << roster << " local=" << local << " offline=" << offlineSame << std::endl;
 	std::cout << "[shared-seat-selftest] " << (rebound ? "PASS" : "FAIL") << " copied_peer_map=" << rebound << std::endl;
+	std::cout << "[shared-seat-selftest] " << (ownView ? "PASS" : "FAIL") << " restored_seat_view_is_its_own remote=" << static_cast<int>(copied.m_ViewState[0])
+	          << " local=" << static_cast<int>(copied.m_ViewState[1]) << std::endl;
 	std::cout << "[shared-seat-selftest] " << (cpuRoster && cpuOrder && cpuReset ? "PASS" : "FAIL") << " cpu_roster=" << cpuRoster << " cpu_order=" << cpuOrder << " cpu_reset=" << cpuReset << std::endl;
-	return passed && rebound && cpuRoster && cpuOrder && cpuReset;
+	return passed && rebound && ownView && cpuRoster && cpuOrder && cpuReset;
 }
 
 bool Activity::DeactivatePlayer(int playerToDeactivate) {

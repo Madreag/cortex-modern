@@ -96,6 +96,10 @@ namespace RTE {
 		/// Destroys the font data
 		void Destroy();
 
+		/// Whether this banner has no font, which is what a seat this machine does not present is answered with:
+		/// every call on it is a no-op and every getter answers neutral.
+		bool IsInert() const { return m_FontHeight <= 0; }
+
 		/// Gets the currently displayed text string.
 		/// @return The currently displayed text string.
 		const std::string& GetBannerText() const { return m_BannerText; }

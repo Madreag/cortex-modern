@@ -40,6 +40,10 @@ namespace RTE {
 		/// Public member variable, method and friend function declarations
 	public:
 
+		/// Whether this menu has no controls, which is what a seat this machine does not present is answered with:
+		/// every call on it is a no-op and every getter answers neutral.
+		bool IsInert() const { return !m_pGUIController; }
+
 		bool HasPendingCheckpoint() const { return !m_PendingCheckpoint.empty(); }
 		bool IsCheckpointInitialized() const { return m_CheckpointInitialized; }
 		/// Whether the cached control pointers are the ones the loaded control manager owns.

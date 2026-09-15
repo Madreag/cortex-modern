@@ -65,8 +65,13 @@ function ScreenFacts:StartActivity(startNewGame)
             assert(self:GetViewState(player) == Activity.OBSERVE, "remote view");
             assert(zero(self:GetLandingZone(player)), "remote landing zone");
             assert(self:GetBrainLZWidth(player) == 0, "remote landing width");
-            assert(self:GetBuyGUI(player) == nil and self:GetEditorGUI(player) == nil, "remote GUI");
-            assert(self:GetBanner(0, player) == nil, "remote banner");
+            local menu = self:GetBuyGUI(player);
+            local editor = self:GetEditorGUI(player);
+            local banner = self:GetBanner(0, player);
+            assert(menu ~= nil and editor ~= nil and banner ~= nil, "remote GUI answered nil");
+            banner:ShowText("REMOTE", GUIBanner.FLYBYLEFTWARD, 1000, Vector(640, 480), 0.5, 1500, 500);
+            assert(banner.BannerText == "" and not banner:IsVisible(), "remote banner kept text");
+            assert(menu:GetTotalOrderCost() == 0 and editor:GetCurrentObject() == nil, "remote menu holds an order");
             assert(not self:IsBuyGUIVisible(player), "remote buy visibility");
             assert(not self:CreateDelivery(player), "remote delivery input");
             assert(brain ~= nil and self:GetPlayerBrain(player) ~= nil and self:GetPlayerBrain(player).UniqueID == brainID, "shared brain changed");
