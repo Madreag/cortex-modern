@@ -26,6 +26,13 @@
 
 #include "lua.hpp"
 
+extern "C" {
+#include "lj_obj.h"
+#include "lj_jit.h"
+#include "lj_dispatch.h"
+#include "lj_trace.h"
+}
+
 #include <iostream>
 #include <functional>
 #include <memory>
@@ -357,6 +364,52 @@ end
 			lua_State* done = state->GetLuaState();
 			lua_pushnil(done);
 			lua_setfield(done, LUA_REGISTRYINDEX, "_PreviewBarrierRegistry");
+		}
+		return passed;
+	}
+
+	bool PreviewScriptSelfTest::CheckHotcountAfterAbort() {
+		std::vector<LuaStateWrapper*> states{&g_LuaMan.GetMasterScriptState()};
+		for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) states.push_back(&state);
+		bool passed = true;
+		static const char* probe = R"lua(
+local seen = 0
+local function ev(what)
+  if what == 'start' or what == 'stop' then seen = seen + 1 end
+end
+if not (jit and jit.status()) then
+  _HotcountAbortSeen = 1
+  return
+end
+jit.attach(ev, 'trace')
+local t = {}
+for i = 1, 1024 do t[i % 16 + 1] = i end
+jit.attach(ev)
+_HotcountAbortSeen = seen
+assert(seen > 0, 'no trace event after forced abort path seen='..tostring(seen)..' status='..tostring(jit.status()))
+)lua";
+		for (int index = 0; index < static_cast<int>(states.size()); ++index) {
+			lua_State* L = states[index]->GetLuaState();
+#if LJ_HASJIT
+			{
+				jit_State* J = L2J(L);
+				global_State* g = G(L);
+				J->state = LJ_TRACE_RECORD;
+				lj_dispatch_update(g);
+				lj_trace_abort(g);
+				if (J->state != LJ_TRACE_IDLE) J->state = LJ_TRACE_IDLE;
+			}
+#endif
+			const int status = states[index]->RunScriptString(probe, false);
+			lua_getglobal(L, "_HotcountAbortSeen");
+			const int seen = lua_isnumber(L, -1) ? static_cast<int>(lua_tointeger(L, -1)) : -1;
+			lua_pop(L, 1);
+			states[index]->RunScriptString("_HotcountAbortSeen = nil", false);
+			std::cout << "[script-graph-selftest] " << (status >= 0 ? "PASS " : "FAIL ")
+			          << "hotcount_survives_forced_abort state=" << index << " seen=" << seen;
+			if (status < 0) std::cout << " " << states[index]->GetLastError();
+			std::cout << std::endl;
+			passed = status >= 0 && passed;
 		}
 		return passed;
 	}
