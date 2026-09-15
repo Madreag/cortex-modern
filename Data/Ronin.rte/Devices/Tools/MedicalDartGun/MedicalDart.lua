@@ -59,7 +59,7 @@ function OnAttach(self, parent)
 		parent = parent:GetRootParent();
 		if IsActor(parent) and MovableMan:IsActor(parent) then
 			local cross = CreateMOSParticle("Particle Heal Effect", "Base.rte");
-			cross.Pos = ToActor(parent).AboveHUDPos + Vector(0, 4);
+			cross.Pos = ToActor(parent).AboveHeadPos + Vector(0, 4);
 			MovableMan:AddParticle(cross);
 		end
 	end
