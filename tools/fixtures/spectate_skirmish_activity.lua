@@ -9,8 +9,15 @@ local stockStart = SpectateSkirmish.StartActivity;
 local stockUpdate = SpectateSkirmish.UpdateActivity;
 local stockEnd = SpectateSkirmish.EndActivity;
 
+-- The driver stages the arm's options beside this file.
+local options = {};
+local loadedOk, loaded = pcall(dofile, "UserScenes.rte/SpectateOptions.lua");
+if loadedOk and type(loaded) == "table" then
+	options = loaded;
+end
+
 local BRAIN_X = 880;
-local KILL_AT_MS = 5000;
+local KILL_AT_MS = options.killAtMs or 5000;
 
 local function HumanTeam(activity, team)
 	for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
@@ -27,9 +34,12 @@ function SpectateSkirmish:StartActivity(isNewGame)
 		-- from it and only the legacy CPUTeam scalar survives the copy, so the flags are set here.
 		-- Assigning CPUTeam both activates the team and marks it CPU.
 		for team = Activity.TEAM_2, Activity.TEAM_3 do
-			self.CPUTeam = team;
-			-- Without a faction the AI's RandomACDropShip finds no craft and the side never attacks.
-			self:SetTeamTech(team, "Coalition.rte");
+			-- A net roster seats humans on these teams; only an empty side becomes an AI attacker.
+			if not HumanTeam(self, team) then
+				self.CPUTeam = team;
+				-- Without a faction the AI's RandomACDropShip finds no craft and the side never attacks.
+				self:SetTeamTech(team, "Coalition.rte");
+			end
 		end
 		self:SetTeamTech(Activity.TEAM_1, "Coalition.rte");
 		-- The AI's first wave is (8000 - 50 * Difficulty) ms in, and it only picks a landing zone while
@@ -55,6 +65,13 @@ function SpectateSkirmish:StartActivity(isNewGame)
 	self.spectateClock = Timer();
 	self.spectateReport = Timer();
 	self.spectateKilled = false;
+	-- Arm the per-tick trace for the single-player arms: RecordTickHash is a no-op until a run is
+	-- open, and that trace is what proves the spectator view writes no simulation state. A net peer
+	-- must NOT do this: BeginRun re-reads the arming state from the scenario runner, which a match
+	-- does not use, and would switch off the recording the match harness already armed.
+	if options.armTrace then
+		MetricsCollector:BeginRun("Spectate Skirmish", 0);
+	end
 	stockStart(self, isNewGame);
 end
 
@@ -64,7 +81,8 @@ function SpectateSkirmish:UpdateActivity()
 		self.spectateReport = Timer();
 	end
 
-	if not self.spectateKilled and self.spectateClock:IsPastSimMS(KILL_AT_MS) then
+	-- killAtMs = 0 is the control arm: nobody dies, so the round cannot end on the brain rule.
+	if KILL_AT_MS > 0 and not self.spectateKilled and self.spectateClock:IsPastSimMS(KILL_AT_MS) then
 		for team = Activity.TEAM_1, Activity.TEAM_4 do
 			if self:TeamActive(team) and HumanTeam(self, team) then
 				-- One pass: a gibbed actor is only removed at the end of the tick, so re-reading the
