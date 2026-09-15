@@ -2569,7 +2569,44 @@ bool BuyMenuGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 			candidates.push_back(*loadout);
 		}
 		const auto* craft = dynamic_cast<const SceneObject*>(GUICheckpoint::LoadEntityReference(selected));
-		if (hasControls && (!m_pGUIController || !m_pGUIController->LoadCheckpoint(controls))) return false;
+		if (hasControls) {
+			if (!m_pGUIController) return false;
+			const std::vector<std::string> required = {"BuyGUIBox", "CatalogHeader", "CatalogLogo", "BuyGUIPopup", "PopupText", "CraftTab", "BodiesTab", "MechaTab", "ToolsTab", "GunsTab", "BombsTab", "ShieldsTab", "LoadoutsTab", "CatalogLB", "OrderLB", "CraftLabel", "CraftTB", "CraftCollection", "CraftNameLabel", "CraftPriceLabel", "CraftPassengersCaptionLabel", "CraftPassengersLabel", "CraftMassCaptionLabel", "CraftMassLabel", "TotalLabel", "BuyButton", "OrderClearButton", "SaveButton", "DeleteButton"};
+			if (const std::string missing = GUICheckpoint::FirstMissingControl(controls, required); !missing.empty()) {
+				throw std::runtime_error("missing control " + missing + " in layout BuyMenuGUI");
+			}
+			if (!m_pGUIController->LoadCheckpoint(controls)) return false;
+			m_pParentBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("BuyGUIBox"));
+			m_Banner = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CatalogHeader"));
+			m_Logo = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CatalogLogo"));
+			m_pPopupBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("BuyGUIPopup"));
+			m_pPopupText = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("PopupText"));
+			m_pCategoryTabs[CRAFT] = dynamic_cast<GUITab*>(m_pGUIController->GetControl("CraftTab"));
+			m_pCategoryTabs[BODIES] = dynamic_cast<GUITab*>(m_pGUIController->GetControl("BodiesTab"));
+			m_pCategoryTabs[MECHA] = dynamic_cast<GUITab*>(m_pGUIController->GetControl("MechaTab"));
+			m_pCategoryTabs[TOOLS] = dynamic_cast<GUITab*>(m_pGUIController->GetControl("ToolsTab"));
+			m_pCategoryTabs[GUNS] = dynamic_cast<GUITab*>(m_pGUIController->GetControl("GunsTab"));
+			m_pCategoryTabs[BOMBS] = dynamic_cast<GUITab*>(m_pGUIController->GetControl("BombsTab"));
+			m_pCategoryTabs[SHIELDS] = dynamic_cast<GUITab*>(m_pGUIController->GetControl("ShieldsTab"));
+			m_pCategoryTabs[LOADOUTS] = dynamic_cast<GUITab*>(m_pGUIController->GetControl("LoadoutsTab"));
+			m_pShopList = dynamic_cast<GUIListBox*>(m_pGUIController->GetControl("CatalogLB"));
+			m_pCartList = dynamic_cast<GUIListBox*>(m_pGUIController->GetControl("OrderLB"));
+			m_pCraftLabel = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("CraftLabel"));
+			m_pCraftBox = dynamic_cast<GUITextBox*>(m_pGUIController->GetControl("CraftTB"));
+			m_pCraftCollectionBox = dynamic_cast<GUICollectionBox*>(m_pGUIController->GetControl("CraftCollection"));
+			m_pCraftNameLabel = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("CraftNameLabel"));
+			m_pCraftPriceLabel = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("CraftPriceLabel"));
+			m_pCraftPassengersCaptionLabel = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("CraftPassengersCaptionLabel"));
+			m_pCraftPassengersLabel = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("CraftPassengersLabel"));
+			m_pCraftMassCaptionLabel = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("CraftMassCaptionLabel"));
+			m_pCraftMassLabel = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("CraftMassLabel"));
+			m_pCostLabel = dynamic_cast<GUILabel*>(m_pGUIController->GetControl("TotalLabel"));
+			m_pBuyButton = dynamic_cast<GUIButton*>(m_pGUIController->GetControl("BuyButton"));
+			m_ClearOrderButton = dynamic_cast<GUIButton*>(m_pGUIController->GetControl("OrderClearButton"));
+			m_pSaveButton = dynamic_cast<GUIButton*>(m_pGUIController->GetControl("SaveButton"));
+			m_pDeleteButton = dynamic_cast<GUIButton*>(m_pGUIController->GetControl("DeleteButton"));
+			if (!HasLiveCachedControls()) throw std::runtime_error("missing control in layout BuyMenuGUI");
+		}
 		reader.Finish();
 		m_Loadouts = std::move(candidates); m_pSelectedCraft = craft;
 		delete[] m_aExpandedModules; m_aExpandedModules = expanded.empty() ? nullptr : new bool[expanded.size()];
