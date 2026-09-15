@@ -43,6 +43,7 @@
 #include <cstring>
 #include <map>
 #include <string_view>
+#include <vector>
 
 using namespace RTE;
 
@@ -382,6 +383,87 @@ std::string FrameMan::SplitStringToFitWidth(const std::string& stringToSplit, in
 	}
 
 	return splitString;
+}
+
+bool FrameMan::RunTextWrapSelfTest() {
+	constexpr const char* Tag = "[text-wrap-selftest]";
+	GUIFont* font = GetSmallFont();
+	if (!font || !GetLargeFont() || font->CalculateWidth("a") <= 0) {
+		std::cout << Tag << " FAIL fonts: small and large fonts did not load" << std::endl;
+		std::cout << Tag << " FAIL" << std::endl;
+		return false;
+	}
+	int failures = 0;
+	const auto check = [&](bool ok, const char* name, const std::string& detail) {
+		std::cout << Tag << (ok ? " PASS " : " FAIL ") << name << ": " << detail << std::endl;
+		if (!ok) {
+			++failures;
+		}
+	};
+	const auto lines_of = [](const std::string& text) {
+		std::vector<std::string> lines;
+		size_t start = 0;
+		for (;;) {
+			const size_t nl = text.find('\n', start);
+			if (nl == std::string::npos) {
+				lines.push_back(text.substr(start));
+				break;
+			}
+			lines.push_back(text.substr(start, nl - start));
+			start = nl + 1;
+		}
+		return lines;
+	};
+	const auto width_ok = [&](const std::string& text, int limit) {
+		for (const std::string& line: lines_of(text)) {
+			if (font->CalculateWidth(line) > limit) {
+				return false;
+			}
+		}
+		return true;
+	};
+	const auto no_edge_spaces = [&](const std::string& text) {
+		for (const std::string& line: lines_of(text)) {
+			if (!line.empty() && (line.front() == ' ' || line.back() == ' ')) {
+				return false;
+			}
+		}
+		return true;
+	};
+
+	const int limitA = font->CalculateWidth("aaa bbb") + 1;
+	const std::string gotA = SplitStringToFitWidth("aaa bbb ccc", limitA, true);
+	check(gotA == "aaa bbb\nccc", "word_break", "got='" + gotA + "'");
+	check(no_edge_spaces(gotA), "break_spaces", "got='" + gotA + "'");
+
+	const std::string wide = "WWWWWWWW";
+	const int limitB = font->CalculateWidth(wide.substr(0, 3));
+	const std::string gotB = SplitStringToFitWidth(wide, limitB, true);
+	check(gotB == "WWW\nWWW\nWW", "hard_break", "got='" + gotB + "'");
+
+	const std::string fits = "aaa bbb";
+	const int limitD = font->CalculateWidth(fits) + 8;
+	const std::string gotD = SplitStringToFitWidth(fits, limitD, true);
+	check(gotD == fits, "unchanged_fit", "got='" + gotD + "'");
+
+	const std::string emptyLine = "aaa\n\nbbb";
+	const int limitE = font->CalculateWidth("aaa") + font->CalculateWidth("bbb") + 8;
+	const std::string gotE = SplitStringToFitWidth(emptyLine, limitE, true);
+	check(gotE == emptyLine, "empty_line_preserved", "got='" + gotE + "'");
+
+	const std::string inputF = "aaa  bbb";
+	const int limitF = font->CalculateWidth("aaa") + 1;
+	const std::string gotF = SplitStringToFitWidth(inputF, limitF, true);
+	const bool hasWords = gotF.find("aaa") != std::string::npos && gotF.find("bbb") != std::string::npos;
+	check(hasWords && no_edge_spaces(gotF), "double_space_break", "got='" + gotF + "'");
+
+	const std::string mixed = "aaa bbb ccc\n\nWWWWWWWW";
+	const int limitG = limitA;
+	const std::string gotG = SplitStringToFitWidth(mixed, limitG, true);
+	check(width_ok(gotA, limitA) && width_ok(gotB, limitB) && width_ok(gotD, limitD) && width_ok(gotE, limitE) && width_ok(gotF, limitF) && width_ok(gotG, limitG), "width_limit_all", "got='" + gotG + "'");
+
+	std::cout << Tag << (failures == 0 ? " PASS" : " FAIL") << std::endl;
+	return failures == 0;
 }
 
 int FrameMan::CalculateTextWidth(const std::string& text, bool isSmall) {

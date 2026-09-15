@@ -6096,6 +6096,9 @@ int main(int argc, char** argv) {
 	if (ScenarioRunner::GetArgs().renderWindowScriptsSelfTest) {
 		return ShutDown(LocalPrediction::RunRenderWindowScriptsSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE);
 	}
+	if (ScenarioRunner::GetArgs().textWrapSelfTest) {
+		return ShutDown(g_FrameMan.RunTextWrapSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE);
+	}
 
 	if (s_cameraNullSceneSelfTest) {
 		// The scroll update runs from the sim tick, which keeps ticking for a frame after an activity
