@@ -144,7 +144,8 @@ def main() -> int:
     arms = {"off": {"host": 0, "client": 0}, "on": {"host": 2, "client": 2},
             "asymmetric": {"host": 2, "client": 0}, "rotation": {"host": 1, "client": 1}}
     if args.arm == "default":
-        arms = {"default": {"host": None, "client": None}}
+        arms = {"default": {"host": None, "client": None}, "setting": {"host": None, "client": None},
+                "setting-off": {"host": None, "client": None}, "flag-off": {"host": 0, "client": 0}}
     elif args.arm == "host-option":
         arms = {"host-option": {"host": 2, "client": None}}
     for index, (arm, cadence) in enumerate(arms.items()):
@@ -152,27 +153,44 @@ def main() -> int:
         details = {"cadence_seconds": cadence}
         result["arms"][arm] = details
         try:
-            prepare = None
+            prepare, setting = None, None
             if arm == "host-option":
                 # Only the host is given a cadence; the client's own setting is staged off.
                 def prepare(who, runtime):
                     prepare_setting(runtime, 0 if who == "client" else None)
 
+            if args.arm == "default":
+                setting = {"default": None, "setting": 2, "setting-off": 0, "flag-off": 2}[arm]
+                details["initial_setting_seconds"] = setting
+
+                def prepare(who, runtime):
+                    prepare_setting(runtime, setting)
+
+            autosaving = arm in ("host-option", "setting")
             records = run_pair(repo, arm_root, args.port + index, cadence, args.ticks, prepare=prepare)
             details["records"] = records
             for who in cadence:
                 assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
-                enabled = arm == "host-option" or cadence[who] is not None and cadence[who] > 0
+                enabled = autosaving or cadence[who] is not None and cadence[who] > 0
                 details[who] = inspect_autosaves(arm_root, who, enabled)
-                if arm == "default":
-                    assert "-net-autosave-seconds" not in records[who]["argv"], "default row supplied the autosave flag"
-                    log = (arm_root / who / "stdout.log").read_text(encoding="utf-8", errors="replace")
-                    assert "[autosave]" not in log, "default row emitted an autosave line"
+                if args.arm == "default":
+                    if arm == "flag-off":
+                        flag = records[who]["argv"].index("-net-autosave-seconds")
+                        assert records[who]["argv"][flag + 1] == "0", "flag-off override is not zero"
+                    else:
+                        assert "-net-autosave-seconds" not in records[who]["argv"], f"{arm} row supplied the autosave flag"
+                    details[who]["setting"] = inspect_setting(arm_root, who, setting)
                     directory = arm_root / who / "runtime/Autosaves"
                     listing = sorted(str(path) for path in directory.iterdir()) if directory.exists() else []
-                    assert not listing, f"default row produced Autosaves entries: {listing}"
                     details[who]["listing"] = {"directory": str(directory), "exists": directory.exists(), "files": listing}
-                    print(f"FILES default/{who}: {listing} directory={directory} exists={directory.exists()}", flush=True)
+                    if enabled:
+                        saved_ticks = [row["tick"] for row in details[who]["captures"]]
+                        assert all(b - a == setting * 60 for a, b in zip(saved_ticks, saved_ticks[1:])), saved_ticks
+                    else:
+                        log = (arm_root / who / "stdout.log").read_text(encoding="utf-8", errors="replace")
+                        assert "[autosave]" not in log, f"{arm} row emitted an autosave line"
+                        assert not listing, f"{arm} row produced Autosaves entries: {listing}"
+                    print(f"FILES {arm}/{who}: {listing} directory={directory} exists={directory.exists()}", flush=True)
                 if arm == "host-option":
                     details[who]["setting"] = inspect_setting(arm_root, who, 0 if who == "client" else None)
                     if who == "client":
@@ -192,8 +210,9 @@ def main() -> int:
                 for who in cadence:
                     exact_role_compare(root / "off" / f"{who}_trace.json", arm_root / f"{who}_trace.json", args.ticks)
             details["passed"] = True
-            if arm == "default":
-                print(f"PASS default: {args.ticks} peer ticks match; autosave flag absent; capture_lines=0 files_host=0 files_client=0", flush=True)
+            if args.arm == "default":
+                counts = {who: {"captures": len(details[who]["captures"]), "files": len(details[who]["files"])} for who in cadence}
+                print(f"PASS {arm}: {args.ticks} peer ticks match; persisted_setting={setting} autosaving={autosaving}; {counts}", flush=True)
             elif arm == "host-option":
                 print(f"PASS host-option: the client autosaved at the host's cadence at ticks "
                       f"{details['capture_ticks']['client']} with its own setting off", flush=True)
