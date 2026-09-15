@@ -170,6 +170,8 @@ void Actor::Clear() {
 	m_PendingDeferredAIModes.clear();
 	m_InflightAIMode = AIMODE_NONE;
 	m_InflightAIModeUntil = -1;
+	m_LastOrderedWaypoint.Reset();
+	m_HasOrderedWaypoint = false;
 	m_WaypointCursor = 0;
 	m_DrawWaypoints = false;
 	m_MoveTarget.Reset();
@@ -351,6 +353,8 @@ int Actor::Create(const Actor& reference) {
 
 	m_AIMode = reference.m_AIMode;
 	m_Waypoints = reference.m_Waypoints;
+	m_LastOrderedWaypoint = reference.m_LastOrderedWaypoint;
+	m_HasOrderedWaypoint = reference.m_HasOrderedWaypoint;
 	m_DrawWaypoints = reference.m_DrawWaypoints;
 	m_MoveTarget = reference.m_MoveTarget;
 	m_pMOMoveTarget = reference.m_pMOMoveTarget;
@@ -1154,6 +1158,8 @@ void Actor::AddAISceneWaypoint(const Vector& waypoint) {
 	}
 	ConsumeInflightWaypoint(DeferredWaypoint::Scene, waypoint.m_X, waypoint.m_Y, 0);
 	m_Waypoints.push_back(std::pair<Vector, MovableObject*>(waypoint, (MovableObject*)NULL));
+	m_LastOrderedWaypoint = waypoint;
+	m_HasOrderedWaypoint = true;
 }
 
 void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
@@ -1172,6 +1178,8 @@ void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
 	if (g_MovableMan.ValidMO(pMOWaypoint) && (m_Waypoints.empty() || m_Waypoints.back().second != pMOWaypoint)) {
 		ConsumeInflightWaypoint(DeferredWaypoint::MOTarget, pMOWaypoint->GetPos().m_X, pMOWaypoint->GetPos().m_Y, static_cast<int64_t>(pMOWaypoint->GetUniqueID()));
 		m_Waypoints.push_back(std::pair<Vector, const MovableObject*>(pMOWaypoint->GetPos(), pMOWaypoint));
+		m_LastOrderedWaypoint = pMOWaypoint->GetPos();
+		m_HasOrderedWaypoint = true;
 	}
 }
 
@@ -1183,6 +1191,8 @@ void Actor::ClearAIWaypoints() {
 	ConsumeInflightWaypoint(DeferredWaypoint::Clear, 0.0F, 0.0F, 0);
 	m_pMOMoveTarget = 0;
 	m_Waypoints.clear();
+	m_LastOrderedWaypoint.Reset();
+	m_HasOrderedWaypoint = false;
 	m_WaypointCursor = 0;
 	m_MovePath.clear();
 	m_MoveTarget = m_Pos;
@@ -1286,7 +1296,13 @@ Vector Actor::GetLastAIWaypoint() const {
 	}
 	if (!m_Waypoints.empty()) {
 		return m_Waypoints.back().first;
-	} else if (!m_MovePath.empty()) {
+	}
+	// The move path is this machine's own pathfinder answer, and the activity scripts that read this
+	// steer shared sim state with it, so under lockstep the ordered point is what every peer reads.
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return m_HasOrderedWaypoint ? m_LastOrderedWaypoint : m_Pos;
+	}
+	if (!m_MovePath.empty()) {
 		return m_MovePath.back();
 	}
 	return m_Pos;
@@ -2761,6 +2777,7 @@ std::string Actor::SaveActorRuntime() const {
 	archive(m_CanRevealUnseen, m_CharHeight, m_HolsterOffset, m_ReloadOffset, m_ViewPoint, m_MaxInventoryMass, m_OffWireAimTick);
 	archive(m_OffWireAim, m_OffWireFlipTick, m_OffWireFlip, m_HotkeyActivated, m_HUDStack, m_DeploymentID, m_PassengerSlots);
 	archive(m_AIBaseDigStrength, m_BaseMass, m_AIMode, m_WaypointCursor, m_DrawWaypoints, m_MoveTarget, m_PrevPathTarget);
+	archive(m_LastOrderedWaypoint, m_HasOrderedWaypoint);
 	archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
 	archive(m_PersistedActorIconReferences[0].empty() ? CaptureActorIconReference(m_pTeamIcon) : m_PersistedActorIconReferences[0], m_PersistedActorIconReferences[1].empty() ? CaptureActorIconReference(m_pControllerIcon) : m_PersistedActorIconReferences[1]);
 	return archive.Text();
@@ -2777,6 +2794,7 @@ bool Actor::LoadActorRuntime(std::string_view text, bool validateOnly) {
 		archive(m_CanRevealUnseen, m_CharHeight, m_HolsterOffset, m_ReloadOffset, m_ViewPoint, m_MaxInventoryMass, m_OffWireAimTick);
 		archive(m_OffWireAim, m_OffWireFlipTick, m_OffWireFlip, m_HotkeyActivated, m_HUDStack, m_DeploymentID, m_PassengerSlots);
 		archive(m_AIBaseDigStrength, m_BaseMass, m_AIMode, m_WaypointCursor, m_DrawWaypoints, m_MoveTarget, m_PrevPathTarget);
+		archive(m_LastOrderedWaypoint, m_HasOrderedWaypoint);
 		archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
 		std::array<std::string, 2> icons;
 		archive.Value(icons);

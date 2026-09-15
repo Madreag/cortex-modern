@@ -1244,6 +1244,10 @@ namespace RTE {
 		// keeps a coherent view while the request flies. Per machine: never archived, never checksummed.
 		AIMode m_InflightAIMode;
 		int64_t m_InflightAIModeUntil;
+		// The last waypoint this actor was ordered to, kept after the queue drains. The move path is the
+		// local pathfinder's own answer, so only the ordered point is a destination every peer agrees on.
+		Vector m_LastOrderedWaypoint;
+		bool m_HasOrderedWaypoint;
 		// Under lockstep the owner's AI loads waypoints ahead of the drops it sent over the wire; this many front entries are already loaded.
 		int m_WaypointCursor;
 		// Whether to draw the waypoints or not in the HUD
