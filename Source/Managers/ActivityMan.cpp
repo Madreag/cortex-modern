@@ -374,8 +374,19 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	Scene* scene = g_SceneMan.GetScene();
 	GAScripted* activity = dynamic_cast<GAScripted*>(GetActivity());
 	if (!scene || !activity || activity->GetActivityState() == Activity::Over) return false;
+	struct PhaseClock {
+		std::chrono::steady_clock::time_point mark = std::chrono::steady_clock::now();
+		double Take() {
+			const auto now = std::chrono::steady_clock::now();
+			const double milliseconds = std::chrono::duration<double, std::milli>(now - mark).count();
+			mark = now;
+			return milliseconds;
+		}
+	} phase;
+	double presyncMs = 0, layerMs = 0, activityMs = 0, luaMs = 0, sceneMs = 0;
 	g_MovableMan.CompleteQueuedMOIDDrawings();
 	g_MovableMan.WaitForActorsSeeTask();
+	presyncMs = phase.Take();
 	struct CaptureAllocationState {
 		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
 		long uid = MovableObject::GetUniqueIDCounter();
@@ -408,11 +419,13 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		layer("FG", scene->GetTerrain()->GetFGSceneLayer());
 		layer("BG", scene->GetTerrain()->GetBGSceneLayer());
 		for (int team = 0; team < Activity::MaxTeamCount; ++team) layer("UST" + std::to_string(team), scene->GetUnseenLayer(team));
+		layerMs = phase.Take();
 		const auto activityText = Writer::Capture([&](Writer& writer) {
 			writer.NewPropertyWithValue("Activity", activity);
 			writer.NewPropertyWithValue("HasCheckpointStartActivity", m_StartActivity != nullptr);
 			if (m_StartActivity) writer.NewPropertyWithValue("CheckpointStartActivity", m_StartActivity.get());
 		});
+		activityMs = phase.Take();
 		std::vector<CheckpointText> graphs;
 		std::vector<std::string> problems;
 		if (!g_MovableMan.CaptureScriptGraphs(graphs, problems)) {
@@ -420,7 +433,9 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			for (const auto& problem: problems) message += ": " + problem;
 			throw std::runtime_error(message);
 		}
+		luaMs = phase.Take();
 		const auto sceneText = scene->CaptureSavedScene(fileName);
+		sceneMs = phase.Take();
 		g_AudioMan.SetCheckpointSoundContainerCursor(liveSoundCursor);
 		allocation.RestoreCounters();
 		const auto globals = CheckpointWriter::Native([&] { return CaptureRuntimeGlobals(carriedSounds.Carried(), false); });
@@ -473,13 +488,16 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	};
 	auto retired = m_AutosaveCache->RetireUnused();
 	task = AutosaveWriter().Submit([main = std::move(main), index = std::move(index), layers = std::move(layers), layerNames = std::move(layerNames),
-	                               retired = std::move(retired), retiredLayers = std::move(retiredLayers), palette, boundary, fileName, path, matchId, tick, bytes]() mutable {
+	                               retired = std::move(retired), retiredLayers = std::move(retiredLayers), palette, boundary, fileName, path, matchId, tick, bytes,
+	                               presyncMs, layerMs, activityMs, luaMs, sceneMs]() mutable {
 		boundary->ready.wait(false, std::memory_order_acquire);
 		retired.clear();
 		retiredLayers.clear();
 		try {
 			if (std::this_thread::get_id() == boundary->thread) throw std::logic_error("autosave serializer ran on capture thread");
 			std::cout << std::format("[autosave] tick={} capture_ms={:.3f} bytes={}\n", tick, boundary->milliseconds, bytes) << std::flush;
+			std::cout << std::format("[autosave-phase] tick={} presync_ms={:.3f} layers_ms={:.3f} activity_ms={:.3f} lua_ms={:.3f} scene_ms={:.3f}\n",
+			                         tick, presyncMs, layerMs, activityMs, luaMs, sceneMs) << std::flush;
 			const auto start = std::chrono::steady_clock::now();
 			const std::string& mainText = main.Text();
 			const std::string& indexText = index.Text();
