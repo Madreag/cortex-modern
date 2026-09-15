@@ -279,6 +279,13 @@ bool NetModerationGUI::MatchStatusWanted() const {
 	}
 	// The countdown is still a pause state, so it must not blink the widget off.
 	bool active = m_Open || g_NetMatchService.IsMatchResyncing() || ScenarioRunner::IsLockstepPaused() || ScenarioRunner::GetLockstepResumeCountdown() > 0;
+	if (!active) {
+		// The seats placing their brains hold the world too, and the player is waiting on exactly that.
+		std::string placementNames;
+		int placed = 0, seats = 0;
+		const auto* setupActivity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+		active = setupActivity && setupActivity->DescribeLockstepPlacementWait(placementNames, placed, seats);
+	}
 	if (!active && ScenarioRunner::IsLockstepControllerSyncActive()) {
 		if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame()) {
 			active = true;
