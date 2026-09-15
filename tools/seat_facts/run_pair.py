@@ -16,8 +16,10 @@ REPO = Path(__file__).resolve().parents[2]
 FIXTURE = Path(__file__).parent / "fixtures/SeatFacts.lua"
 ROW = re.compile(r"\[seat-facts\] player=(\d+) active=(\d+) human=(\d+) team=(-?\d+) brain=(\d+) mark=(\d+) screen=(-?\d+)")
 CONTROL_ROW = re.compile(r"\[control-facts\] tick=(\d+) player=(\d+) uid=(\d+) screen=(-?\d+)")
+VESSEL_ROW = re.compile(r"\[vessel-facts\] tick=(\d+) player=(\d+) uid=(\d+) screen=(-?\d+) (.*)$", re.M)
 # arm -> (Lua class, activity preset name); every scripted arm also carries the seat-facts fixture.
-SCRIPTED = {"lua": ("SeatFacts", "Seat Facts"), "screens": ("ScreenFacts", "Screen Facts"), "control": ("ControlFacts", "Control Facts")}
+SCRIPTED = {"lua": ("SeatFacts", "Seat Facts"), "screens": ("ScreenFacts", "Screen Facts"), "control": ("ControlFacts", "Control Facts"),
+            "vessel": ("VesselBannerFacts", "Vessel Banner Facts")}
 
 
 def sha(path):
@@ -46,10 +48,11 @@ def score_seats(logs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("arm", choices=("snapshot", "damage", "reseat", "lua", "screens", "control"))
+    parser.add_argument("arm", choices=("snapshot", "damage", "reseat", "lua", "screens", "control", "vessel"))
     parser.add_argument("out", type=Path)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--harness", type=Path, default=Path("D:/Projects/stage2_p4/recovery_e2e.py"))
+    parser.add_argument("--exe", type=Path, help="run the arm on a retained executable instead of the tree's own")
     args = parser.parse_args()
     if not (43570 <= args.port <= 43590 or 48470 <= args.port <= 48479):
         parser.error("port is outside 43570..43590 and 48470..48479")
@@ -63,7 +66,7 @@ def main():
     spec = importlib.util.spec_from_file_location("seat_pair_harness", args.harness)
     harness = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(harness)
-    harness.REPO, harness.EXE = REPO, REPO / "Cortex Command.exe"
+    harness.REPO, harness.EXE = REPO, (args.exe.resolve() if args.exe else REPO / "Cortex Command.exe")
     harness.ROOT, harness.OUT = args.out, args.out / "e2e"
     lane = copy.deepcopy(harness.LANES["snapshot_p5"])
     lane["port"] = args.port
@@ -145,10 +148,23 @@ def main():
             # Every peer must name the same controlled actor for every seat; the screen column stays local.
             seats = {peer: [row[:3] for row in peer_rows] for peer, peer_rows in rows.items()}
             result["control_facts"] = {"rows": rows, "pass": len(seats["host"]) == 4 and seats["host"] == seats["client"]}
+        if args.arm == "vessel":
+            rows = {peer: VESSEL_ROW.findall(log) for peer, log in logs.items()}
+            # The unchanged mod fixture must reach every seat on both peers with the same answers; only the screen is local.
+            seats = {peer: [row[:3] for row in peer_rows] for peer, peer_rows in rows.items()}
+            neutral = {peer: [row[4] for row in peer_rows if row[3] == "-1"] for peer, peer_rows in rows.items()}
+            errors = {peer: [line for line in log.splitlines() if "attempt to index" in line or "attempt to call" in line]
+                      for peer, log in logs.items()}
+            result["vessel_facts"] = {"rows": rows, "errors": errors, "remote_neutral": neutral,
+                                      "pass": len(seats["host"]) == 4 and seats["host"] == seats["client"] and not any(errors.values()) and
+                                              len(neutral["host"]) + len(neutral["client"]) == 6 and
+                                              all(value == "text= anim=0 kerning=0 visible=0 menu=1 editor=1 buyvisible=0"
+                                                  for values in neutral.values() for value in values)}
     (args.out / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))
     return 0 if (result.get("pass") is True and result.get("seat_facts", {"pass": True})["pass"] and
-                 all(result.get("screen_facts", {}).values()) and result.get("control_facts", {"pass": True})["pass"]) else 1
+                 all(result.get("screen_facts", {}).values()) and result.get("control_facts", {"pass": True})["pass"] and
+                 result.get("vessel_facts", {"pass": True})["pass"]) else 1
 
 
 if __name__ == "__main__":

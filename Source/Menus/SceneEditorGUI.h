@@ -104,6 +104,10 @@ namespace RTE {
 		/// @param newPosX The new screen position of this entire GUI.
 		void SetPosOnScreen(int newPosX, int newPosY);
 
+		/// Whether this editor has no picker, which is what a seat this machine does not present is answered with:
+		/// every call on it is a no-op and every getter answers neutral.
+		bool IsInert() const { return !m_pPicker; }
+
 		/// Sets the absolute scene coordinates of the cursor of this Editor.
 		/// @param newCursorPos The new cursor position in absolute scene units.
 		void SetCursorPos(const Vector& newCursorPos) { m_CursorPos = newCursorPos; }

@@ -3705,20 +3705,68 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			check(("net_local_menu_survives_empty_restore" + (detail.empty() ? std::string{} : " " + detail)).c_str(), detail.empty());
 		}
 		{
-			// A seat this machine does not present has no menu, editor or banner, and a script asking for one gets nil.
+			// The returner's banner is the same live one after a slot that arrives empty, exactly like its menu.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			const char* font = "Base.rte/GUIs/Fonts/BannerFontYellowReg.png";
+			const char* blur = "Base.rte/GUIs/Fonts/BannerFontYellowBlur.png";
+			fixture->m_pBannerYellow[0] = new GUIBanner();
+			GUIBanner* const banner = fixture->m_pBannerYellow[0];
+			GUICheckpoint::NetLocalRestoreScope localUI;
+			const bool created = banner->Create(font, blur, 8);
+			banner->SetKerning(3);
+			banner->ShowText("RETURNER", GUIBanner::BLINKING, -1, Vector(640, 480), 0.5F);
+			const std::string live = banner->SaveCheckpoint();
+			const bool applied = RestoreNetLocalBanner(fixture->m_pBannerYellow[0], std::string{}, font, blur);
+			const bool same = fixture->m_pBannerYellow[0] == banner;
+			const bool kept = banner->GetFontHeight() > 0 && banner->GetBannerText() == "RETURNER" && banner->SaveCheckpoint() == live;
+			std::cout << "[net-local-banner] created=" << created << " applied=" << applied << " same_banner=" << same
+			          << " font=" << banner->GetFontHeight() << " kerning=" << banner->GetKerning() << " text=" << banner->GetBannerText() << std::endl;
+			check("net_local_banner_survives_empty_restore", created && applied && same && kept);
+		}
+		{
+			// A seat with no local menu, editor or banner answers with an inert object of the same type: a script
+			// that drives it the way it drives its own seat's changes nothing and reads neutral values back.
 			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
 			g_ActivityMan.SwapCheckpointActivity(next);
 			const int result = lua.RunScriptString(R"lua(
 local activity = ToGameActivity(ActivityMan:GetActivity())
-assert(activity:GetBuyGUI(0) == nil, "buy menu of a seat with no local menu")
-assert(activity:GetEditorGUI(0) == nil, "editor of a seat with no local menu")
-assert(activity:GetBanner(GUIBanner.YELLOW, 0) == nil, "banner of a seat with no local menu")
+local menu = activity:GetBuyGUI(0)
+local editor = activity:GetEditorGUI(0)
+local banner = activity:GetBanner(GUIBanner.YELLOW, 0)
+assert(menu ~= nil and editor ~= nil and banner ~= nil, "a seat with no local UI answered with nil")
+assert(_ScriptGraphNativeAddress(menu) == _ScriptGraphNativeAddress(activity:GetBuyGUI(0)), "the inert menu changed identity")
+assert(_ScriptGraphNativeAddress(editor) == _ScriptGraphNativeAddress(activity:GetEditorGUI(0)), "the inert editor changed identity")
+assert(_ScriptGraphNativeAddress(banner) == _ScriptGraphNativeAddress(activity:GetBanner(GUIBanner.YELLOW, 0)), "the inert banner changed identity")
+assert(_ScriptGraphNativeAddress(banner) ~= _ScriptGraphNativeAddress(activity:GetBanner(GUIBanner.RED, 0)), "both banner colors share one object")
+banner:ShowText("STUB", GUIBanner.FLYBYLEFTWARD, 1000, Vector(640, 480), 0.5, 1500, 500)
+banner:HideText()
+banner.Kerning = 5
+banner:ClearText()
+assert(banner.BannerText == "" and banner.AnimState == GUIBanner.NOTSTARTED, "the inert banner kept text")
+assert(not banner:IsVisible() and banner.Kerning == 0, "the inert banner became visible")
+menu.ShowOnlyOwnedItems = true
+menu.EnforceMaxMassConstraint = true
+menu:SetOwnedItemsAmount("Stub Item", 3)
+menu:ClearCartList()
+menu:LoadDefaultLoadoutToCart()
+menu:ForceRefresh()
+assert(not menu.ShowOnlyOwnedItems and not menu.EnforceMaxMassConstraint, "the inert menu kept a flag")
+assert(menu:GetOwnedItemsAmount("Stub Item") == 0, "the inert menu kept an owned item")
+assert(menu:GetTotalOrderCost() == 0 and menu:GetTotalCartCost() == 0, "the inert menu has a cost")
+assert(menu:GetTotalOrderMass() == 0 and menu:GetTotalOrderPassengers() == 0, "the inert menu has an order")
+editor.EditorMode = SceneEditorGUI.PLACINGOBJECT
+editor:SetCursorPos(Vector(9, 9))
+editor:Update()
+assert(editor.EditorMode == SceneEditorGUI.INACTIVE, "the inert editor changed mode")
+assert(editor:GetCurrentObject() == nil, "the inert editor holds an object")
 assert(activity:GetBuyGUI(Activity.MAXPLAYERCOUNT) == nil, "buy menu of an absent seat")
 assert(activity:GetEditorGUI(Activity.MAXPLAYERCOUNT) == nil, "editor of an absent seat")
 assert(activity:GetBanner(GUIBanner.YELLOW, Activity.MAXPLAYERCOUNT) == nil, "banner of an absent seat")
 )lua");
 			std::cout << "[net-local-ui-selftest] absent_local_ui result=" << result << " error=" << (result == 0 ? std::string{} : lua.GetLastError()) << std::endl;
-			check("absent_local_ui_returns_nil", result == 0);
+			check("absent_local_ui_returns_inert_stub", result == 0);
 		}
 	} catch (const std::exception& exception) { check(exception.what(), false); }
 	for (long uid: scriptIdentities) lua.RunScriptString("if _ScriptedObjects then _ScriptedObjects[\"" + std::to_string(uid) + "\"] = nil end");

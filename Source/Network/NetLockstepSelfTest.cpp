@@ -13,7 +13,11 @@
 #include "System/ScenarioRunner.h"
 #include "ActivityMan.h"
 #include "Activity.h"
+#include "GameActivity.h"
 #include "Actor.h"
+#include "BuyMenuGUI.h"
+#include "SceneEditorGUI.h"
+#include "GUIBanner.h"
 #include "AudioMan.h"
 #include "Controller.h"
 #include "GUISound.h"
@@ -10081,10 +10085,110 @@ namespace RTE {
 			if (!local.IsSeatedByPlayer() || local.GetInputPlayer() != Players::PlayerOne) {
 				return finish(("this peer's own seat stopped sampling local input: seat 1 " + seatTuple(local)).c_str());
 			}
-			// Offline and single-player are untouched: with no coordinator every seat is this machine's own.
+			// Offline and single-player are untouched: an activity that takes its seats from itself plays them all.
+			// The roster's own map outlives the coordinator (seat_map_and_ui_survive_the_match_end), so the offline
+			// case is asked of an activity that never took a roster.
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			std::unique_ptr<Activity> ownSeats = std::make_unique<Activity>();
+			g_ActivityMan.SwapCheckpointActivity(ownSeats);
 			if (!remote.IsSeatedByPlayer() || remote.GetInputPlayer() != Players::PlayerOne) {
 				return finish(("an offline seat lost its local input: seat 0 " + seatTuple(remote)).c_str());
+			}
+			return finish(nullptr);
+		}
+
+		// A clean match end drops the coordinator while the activity keeps updating. The roster's seat map has to
+		// outlive it, or every seat reads as this machine's own and GameActivity::Update's per-seat loop runs for a
+		// seat whose menus were never built. A restore under a live match must not remap an activity that takes its
+		// seats from itself either, and a seat this peer does not play answers with inert UI, never with nil.
+		bool TestSeatMapAndUISurviveTheMatchEnd(std::string* error) {
+			const char* name = "seat_map_and_ui_survive_the_match_end";
+			EnsureSwitchTestManagers();
+			const uint16_t port = 48471;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5245414D53454154ULL);
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, port, 2, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, port, 2, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return finish(error && !error->empty() ? error->c_str() : "coordinator pair failed");
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 4000)) {
+				return finish(error && !error->empty() ? error->c_str() : "pair did not reach Running");
+			}
+			// This machine is peer 2: the roster gives it seat 1 and leaves seat 0 to the host.
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			std::unique_ptr<Activity> activity = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			auto* match = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			if (!match || !match->ConfigureLockstepPlayers()) {
+				return finish("the match roster did not reach the activity");
+			}
+			GameActivity ownSeats;
+			ownSeats.RefreshLockstepLocalPlayers();
+			for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
+				if (ownSeats.LocalInputOfPlayer(seat) != seat) {
+					return finish(("a live match remapped an activity that takes its seats from itself: seat " + std::to_string(seat) +
+					               " input=" + std::to_string(ownSeats.LocalInputOfPlayer(seat)))
+					                  .c_str());
+				}
+			}
+			const auto seatUI = [&](const char* when) {
+				const BuyMenuGUI* menu = match->GetBuyGUI(Players::PlayerOne);
+				const SceneEditorGUI* editor = match->GetEditorGUI(Players::PlayerOne);
+				const GUIBanner* banner = match->GetBanner(GameActivity::RED, Players::PlayerOne);
+				std::string detail;
+				if (!menu || !editor || !banner) {
+					detail = "a seat this peer does not play answered a script with nil";
+				} else if (!menu->IsInert() || !editor->IsInert() || !banner->IsInert() || match->IsBuyGUIVisible(Players::PlayerOne)) {
+					detail = "a seat this peer does not play answered with live UI";
+				}
+				return detail.empty() ? detail : detail + " " + when;
+			};
+			if (const std::string detail = seatUI("during the match"); !detail.empty()) {
+				return finish(detail.c_str());
+			}
+			if (match->LocalInputOfPlayer(Players::PlayerOne) != Players::NoPlayer) {
+				return finish("the roster did not leave seat 0 to the host");
+			}
+			// The clean match end: NetMatchService::FinishMatch drops the coordinator, ActivityMan keeps updating.
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (match->LocalInputOfPlayer(Players::PlayerOne) != Players::NoPlayer || match->IsLocalHumanSeat(Players::PlayerOne)) {
+				return finish(("the match end handed a seat another peer played to this machine: input=" + std::to_string(match->LocalInputOfPlayer(Players::PlayerOne)) +
+				               " local_human=" + std::to_string(match->IsLocalHumanSeat(Players::PlayerOne) ? 1 : 0) +
+				               " - GameActivity::Update's per-seat loop then runs for a seat whose menus were never built")
+				                  .c_str());
+			}
+			if (const std::string detail = seatUI("after the match end"); !detail.empty()) {
+				return finish(detail.c_str());
+			}
+			if (match->LocalInputOfPlayer(Players::PlayerTwo) != Players::PlayerOne) {
+				return finish("this peer's own seat lost its input slot at the match end");
+			}
+			for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
+				if (ownSeats.LocalInputOfPlayer(seat) != seat) {
+					return finish(("an activity that takes its seats from itself lost one at the match end: seat " + std::to_string(seat)).c_str());
+				}
 			}
 			return finish(nullptr);
 		}
@@ -11065,7 +11169,9 @@ namespace RTE {
 		const bool teamChangeOwner = TestSeededOwnerFollowsATeamChange(&teamChangeError);
 		std::string remoteSeatInputError;
 		const bool remoteSeatInput = TestRemoteSeatNeverSamplesLocalInput(&remoteSeatInputError);
-		if (!switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner || !remoteSeatInput) {
+		std::string seatMapEndError;
+		const bool seatMapSurvivesEnd = TestSeatMapAndUISurviveTheMatchEnd(&seatMapEndError);
+		if (!switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner || !remoteSeatInput || !seatMapSurvivesEnd) {
 			return 1;
 		}
 		std::cout << "[net-lockstep-selftest] PASS" << std::endl;
