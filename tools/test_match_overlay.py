@@ -547,6 +547,10 @@ def inspect_pair(root, records, size, arm, mode, name):
             banner_reads = [obs for obs in toast_reads
                             if obs["control"].get("visible") and HOLD_BANNER.search(obs["control"].get("text", ""))]
             resumed_toast_reads = [obs for obs in toast_reads if obs["control"].get("text", "").startswith("Match resumed")]
+            # The stack itself carries the order: the drop notice stays the older row under the banner.
+            row_reads = {control: [obs for step, obs in observations
+                                   if step.get("control") == control and "control" in obs]
+                         for control in (TOAST_FIRST, TOAST_SECOND)}
             banner_lines = [{"line": index, "text": line} for index, line in enumerate(log.splitlines(), 1)
                             if HOLD_BANNER_LINE.match(line)]
             details["events"].setdefault(who, {})["hold_reads"] = hold_reads
@@ -558,8 +562,9 @@ def inspect_pair(root, records, size, arm, mode, name):
                 # the reclaim window, then the round's own ending once nobody reclaims the seat.
                 checks["Host_hold_toast_seen"] = bool(hold_toast_reads)
                 checks["Host_hold_banner_seen"] = bool(banner_reads)
-                checks["Host_hold_banner_after_drop"] = bool(hold_toast_reads) and bool(banner_reads) and \
-                    hold_toast_reads[0]["at_ms"] <= banner_reads[0]["at_ms"]
+                checks["Host_hold_banner_after_drop"] = bool(row_reads[TOAST_FIRST]) and bool(row_reads[TOAST_SECOND]) \
+                    and all("dropped" in obs["control"].get("text", "") for obs in row_reads[TOAST_FIRST]) \
+                    and all(HOLD_BANNER.search(obs["control"].get("text", "")) for obs in row_reads[TOAST_SECOND])
                 checks["Host_hold_banner_line"] = len(banner_lines) == 1
                 checks["Host_hold_recovery_or_end"] = bool(resumed_toast_reads) or "lockstep wait: PeerLeft" in log
                 if mode == "off":
