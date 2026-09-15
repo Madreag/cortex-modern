@@ -33,7 +33,7 @@ def parse_size(text: str):
     return int(width), int(height)
 
 
-def peer_args(who: str, port: int, root: Path, ticks: int, seed: int, record_replay: bool = False, preset: str = "", mode: str = ""):
+def peer_args(who: str, port: int, root: Path, ticks: int, seed: int, record_replay: bool = False, preset: str = "", mode: str = "", module: str = ""):
     args = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "2",
             "-net-match-ticks", str(ticks), "-max-ticks", str(ticks), "-net-match-input-delay", "3",
             "-net-autosave-seconds", "0", "-seed", str(seed), "-num-lua-states", "4", "-tick-hashes",
@@ -41,6 +41,9 @@ def peer_args(who: str, port: int, root: Path, ticks: int, seed: int, record_rep
     if preset:
         # The activity decides which simulation paths a window can steer; the default duel has no landing zones.
         args += ["-net-match-service-preset", preset]
+        # A staged preset lives in the run's own module, so the match names it.
+        if module:
+            args += ["-net-match-service-module", module]
     if mode:
         args += ["-net-match-mode", mode]
     if record_replay and who == "host":
@@ -117,7 +120,8 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, seed: int, sizes, ti
     try:
         for who in PEERS:
             env = {"CCCP_HEADLESS": "1", "CC_SIM_DUMP": f"1:{ticks}"}
-            runs[who] = make_run(repo, peer_args(who, port, root, ticks, seed, record_replay, preset, mode), root / who, timeout, env=env)
+            runs[who] = make_run(repo, peer_args(who, port, root, ticks, seed, record_replay, preset, mode,
+                                                 "UserScenes.rte" if module else ""), root / who, timeout, env=env)
             set_visual_resolution(runs[who], *sizes[who])
             stage_user_module(runs[who].cwd, module)
 
