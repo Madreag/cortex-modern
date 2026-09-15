@@ -178,6 +178,12 @@ namespace RTE {
 		}
 		/// Gets this run's checkpoint cadence, including its command-line override.
 		static uint32_t GetAutosaveSeconds() { return s_AutosaveSeconds; }
+		static constexpr uint32_t c_MaxAutosaveIntervalSeconds = 3600; // An hour is the longest cadence a host may announce.
+		/// The cadence a running match keeps: the command-line override when one was given, else the host's announced option.
+		static uint32_t MatchAutosaveSeconds(const NetMatchConfig& config) {
+			if (s_AutosaveSecondsOverridden) return s_AutosaveSeconds;
+			return config.autosaveEnabled ? config.autosaveIntervalSeconds : 0;
+		}
 		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
 		void AutosaveAtTickBoundary(uint64_t tick);
 		/// §11: the multiprocess reconnect test shares one Userdata, so each process gets its own
@@ -441,6 +447,7 @@ namespace RTE {
 		static uint32_t s_AutosaveSeconds;
 		static bool s_AutosaveSecondsOverridden;
 		std::string m_AutosaveMatchId;
+		uint32_t m_MatchAutosaveSeconds = 0; //!< The cadence the round agreed on, read once so the tick path never chases the runner.
 		int64_t m_NextAutosaveSimTime = -1;
 		int64_t m_LastAutosaveSimTime = -1;
 		NetMatchServiceState m_State = NetMatchServiceState::Idle;
