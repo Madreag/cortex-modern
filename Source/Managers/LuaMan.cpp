@@ -6527,6 +6527,7 @@ _PrimitiveQueueCapture = nil
 	std::cout << report << std::endl;
 	checkpointValues = PreviewScriptSelfTest::CheckGlobalWriteBarrier() && checkpointValues;
 	checkpointValues = PreviewScriptSelfTest::CheckHotcountAfterAbort() && checkpointValues;
+	checkpointValues = PreviewScriptSelfTest::CheckAbortPenalizes() && checkpointValues;
 	const bool pass = checkpointValues && settledSoundOwner && scopeForgetsDestroyed && nativeLifetime && registryLifetime && randomRoundtrip && soundSetCopies && textRoundtrip && !report.empty() && report.find("FAIL") == std::string::npos;
 	std::cout << "[script-graph-selftest] " << (pass ? "PASS" : "FAIL") << std::endl;
 	return pass;
