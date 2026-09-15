@@ -65,7 +65,7 @@ namespace RTE {
 		GUICheckbox* m_PredictionCheckbox;
 		GUIComboBox* m_StatusModeCombo;
 		/// Every row drawn under the fixed-delay row, with the y it sits at while that row is drawn.
-		std::array<std::pair<GUIControl*, int>, 4> m_RowsUnderFixedDelay;
+		std::array<std::pair<GUIControl*, int>, 8> m_RowsUnderFixedDelay;
 
 		// Chat page.
 		GUICheckbox* m_ChatVisibleCheckbox;
