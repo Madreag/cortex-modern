@@ -200,7 +200,8 @@ def scripts(case, port, root):
         host = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
                 "assert_label ButtonHostActivity P4 Alpha Duel (Base.rte)\n"
                 "assert_label LabelHostInfo Grasslands - PvP\ndump_host_options\n"
-                "activate ButtonHostActivity\nwait 3\ndump_host_options\n"
+                "activate ButtonHostActivity\nwait 3\n"
+                "assert_label ButtonHostActivity Brain vs Brain (Base.rte)\ndump_host_options\n"
                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
                 "wait_connected 2\nwait 12\ndump_lobby\ndump_host_options\nwait 600\nexit\n")
@@ -208,7 +209,10 @@ def scripts(case, port, root):
                   "activate ButtonMultiplayerJoinGame\nwait 10\n"
                   "settext TextJoinAddress 127.0.0.1\n"
                   f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n"
-                  "wait_connected 2\nwait 12\nassert_substate Lobby\ndump_lobby\ndump_host_options\nexit\n")
+                  # The joiner's own placeholder config already lists two seats, so the link wait
+                  # alone cannot prove the host's config landed - the activity name can.
+                  "wait_connected 2\nwait_activity Brain vs Brain\nwait 12\n"
+                  "assert_substate Lobby\ndump_lobby\ndump_host_options\nexit\n")
         return {"host": host, "client": client}, {}
     elif case == "net-options":
         # Two real peers: the host's saved session options ride the lobby config onto both rosters.
