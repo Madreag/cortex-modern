@@ -25,7 +25,7 @@ namespace RTE {
 		Reseat = 11,
 		SoundOp = 12,
 		PlayerBindings = 13,
-		PlaceBrain = 14,
+		PlaceBrain = 16, //!< 14 and 15 carry the AI intent commands.
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
