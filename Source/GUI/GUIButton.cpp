@@ -3,6 +3,8 @@
 #include "AllegroBitmap.h"
 #include "GUILabel.h"
 
+#include "allegro.h"
+
 using namespace RTE;
 
 GUIButton::GUIButton(GUIManager* Manager, GUIControlManager* ControlManager) :
@@ -134,9 +136,9 @@ void GUIButton::BuildBitmap() {
 		m_DrawBitmap = 0;
 	}
 
-	// Create a new bitmap. Same width, but triple the height to allow for Up, Down
-	// and Over states
-	m_DrawBitmap = m_Skin->CreateBitmap(m_Width, m_Height * 3);
+	// Create a new bitmap. Same width, but four times the height to allow for Up, Down,
+	// Over and Disabled states
+	m_DrawBitmap = m_Skin->CreateBitmap(m_Width, m_Height * 4);
 
 	// Pre-cache the font
 	std::string Filename;
@@ -160,6 +162,10 @@ void GUIButton::BuildBitmap() {
 	SetRect(m_BorderSizes.get(), buttonBorders.left, buttonBorders.top, buttonBorders.right, buttonBorders.bottom);
 	m_Skin->BuildStandardRect(m_DrawBitmap, "Button_Over", 0, m_Height, m_Width, m_Height);
 	m_Skin->BuildStandardRect(m_DrawBitmap, "Button_Down", 0, m_Height * 2, m_Width, m_Height);
+	// A skin without a disabled section draws the Up art dimmed.
+	std::string disabledFilename;
+	const char* disabledSection = m_Skin->GetValue("Button_Disabled", "Filename", &disabledFilename) ? "Button_Disabled" : "Button_Up";
+	m_Skin->BuildStandardRect(m_DrawBitmap, disabledSection, 0, m_Height * 3, m_Width, m_Height);
 
 	// TODO this should be 1 pixel ideally, to give space between content and the border. However, the green skin, which this is primarly used for, has padding built-in and doesn't work properly without it.
 	const int buttonContentPadding = 0;
@@ -199,12 +205,14 @@ void GUIButton::BuildBitmap() {
 			m_Icon->DrawTrans(m_DrawBitmap, iconXPos, iconYPos, nullptr);
 			m_Icon->DrawTrans(m_DrawBitmap, iconXPos, m_Height + iconYPos, nullptr);
 			m_Icon->DrawTrans(m_DrawBitmap, iconXPos + 1, (m_Height * 2) + iconYPos + 1, nullptr);
+			m_Icon->DrawTrans(m_DrawBitmap, iconXPos, (m_Height * 3) + iconYPos, nullptr);
 		} else {
 			int scaledWidth = static_cast<int>(static_cast<float>(m_Icon->GetWidth()) * iconStretchRatio);
 			int scaledHeight = static_cast<int>(static_cast<float>(m_Icon->GetHeight()) * iconStretchRatio);
 			m_Icon->DrawTransScaled(m_DrawBitmap, iconXPos, iconYPos, scaledWidth, scaledHeight);
 			m_Icon->DrawTransScaled(m_DrawBitmap, iconXPos, m_Height + iconYPos, scaledWidth, scaledHeight);
 			m_Icon->DrawTransScaled(m_DrawBitmap, iconXPos + 1, (m_Height * 2) + iconYPos + 1, scaledWidth, scaledHeight);
+			m_Icon->DrawTransScaled(m_DrawBitmap, iconXPos, (m_Height * 3) + iconYPos, scaledWidth, scaledHeight);
 		}
 	}
 
@@ -221,13 +229,34 @@ void GUIButton::BuildBitmap() {
 		m_Text->Draw(m_DrawBitmap, false);
 		m_Text->SetPositionAbs(textXPos + 1, (m_Height * 2) + textYPos + 1);
 		m_Text->Draw(m_DrawBitmap, false);
+		m_Text->SetPositionAbs(textXPos, (m_Height * 3) + textYPos);
+		m_Text->Draw(m_DrawBitmap, false);
+	}
+
+	// The sheets carry no disabled sprite column, so the fourth row is its art at the font's
+	// 55% ink dim - frame and text together.
+	if (m_DrawBitmap->GetColorDepth() == 32) {
+		if (BITMAP* raw = dynamic_cast<AllegroBitmap*>(m_DrawBitmap)->GetBitmap()) {
+			const unsigned long mask = bitmap_mask_color(raw);
+			for (int py = m_Height * 3; py < m_Height * 4; ++py) {
+				for (int px = 0; px < m_Width; ++px) {
+					const unsigned long pixel = getpixel(raw, px, py);
+					if (pixel != mask) {
+						putpixel(raw, px, py, makeacol32(getr32(pixel) * 55 / 100, getg32(pixel) * 55 / 100, getb32(pixel) * 55 / 100, geta32(pixel)));
+					}
+				}
+			}
+		}
 	}
 }
 
 void GUIButton::Draw(GUIScreen* Screen) {
 	GUIRect Rect;
 	int y = 0;
-	if (m_Pushed) {
+	// Disabled wins over the interaction states, same as the other controls' disabled draw.
+	if (!m_Enabled) {
+		y = m_Height * 3;
+	} else if (m_Pushed) {
 		y = m_Height * 2;
 	} else if (m_Over || m_GotFocus) {
 		y = m_Height;
