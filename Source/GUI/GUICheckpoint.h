@@ -67,6 +67,10 @@ namespace RTE {
 		static std::string Save(const GUIControlManager& manager);
 		static bool Load(GUIControlManager& manager, std::string_view text, bool validateOnly = false);
 		static bool Validate(std::string_view text);
+		/// First required control name the saved set does not carry, or empty when every name is present.
+		static std::string FirstMissingControl(std::string_view text, const std::vector<std::string>& required);
+		/// A same-schema archive with one named control dropped, the way a different layout omits it.
+		static std::string OmitNamedControl(std::string_view text, const std::string& name);
 		// Per-module menu flags. A module ID belongs to the installation that saved them, so they
 		// travel keyed by module and come back sized to the modules this installation has.
 		static std::map<std::string, bool> SaveModuleFlags(const std::vector<bool>& flags);

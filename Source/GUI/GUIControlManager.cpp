@@ -6,6 +6,7 @@
 #include "SceneMan.h"
 #include "TerrainObject.h"
 #include "GameActivity.h"
+#include "ActivityMan.h"
 #include "GAScripted.h"
 #include "BuyMenuGUI.h"
 #include "InventoryMenuGUI.h"
@@ -25,6 +26,8 @@
 #include "Actor.h"
 #include "MOPixel.h"
 #include "PresetMan.h"
+#include "Controller.h"
+#include <algorithm>
 #include "GUIButton.h"
 #include "GUICollectionBox.h"
 #include "GUILabel.h"
@@ -1505,6 +1508,135 @@ bool GUICheckpoint::Validate(std::string_view text) {
 	return Load(manager, text, true);
 }
 
+std::string GUICheckpoint::FirstMissingControl(std::string_view text, const std::vector<std::string>& required) {
+	try {
+		CheckpointReader reader(text, "GUIControls1", true);
+		bool present;
+		reader.Value(present);
+		if (!present) return required.empty() ? std::string{} : required.front();
+		int cursor;
+		std::string input, skin, managerValues;
+		reader.Value(cursor);
+		reader.Value(input);
+		reader.Value(skin);
+		reader.Value(managerValues);
+		size_t count;
+		reader.Value(count);
+		if (count > text.size()) return required.empty() ? std::string{} : required.front();
+		std::unordered_set<std::string> names;
+		for (size_t index = 0; index < count; ++index) {
+			std::string name, type, parent;
+			std::vector<std::string> children;
+			int x, y, width, height;
+			reader.Value(name);
+			reader.Value(type);
+			reader.Value(parent);
+			reader.Value(children);
+			reader.Value(x);
+			reader.Value(y);
+			reader.Value(width);
+			reader.Value(height);
+			names.insert(std::move(name));
+		}
+		for (const auto& name: required) {
+			if (!names.contains(name)) return name;
+		}
+		return {};
+	} catch (const std::exception&) { return required.empty() ? std::string{} : required.front(); }
+}
+
+std::string GUICheckpoint::OmitNamedControl(std::string_view text, const std::string& omit) {
+	CheckpointReader reader(text, "GUIControls1");
+	bool present;
+	reader.Value(present);
+	int cursor;
+	std::string input, skin, managerValues;
+	reader.Value(cursor);
+	reader.Value(input);
+	reader.Value(skin);
+	reader.Value(managerValues);
+	size_t count;
+	reader.Value(count);
+	struct Control {
+		std::string name, type, parent;
+		std::vector<std::string> children;
+		int x, y, width, height;
+	};
+	std::vector<Control> controls;
+	for (size_t index = 0; index < count; ++index) {
+		Control control;
+		reader.Value(control.name);
+		reader.Value(control.type);
+		reader.Value(control.parent);
+		reader.Value(control.children);
+		reader.Value(control.x);
+		reader.Value(control.y);
+		reader.Value(control.width);
+		reader.Value(control.height);
+		if (control.name == omit) continue;
+		control.children.erase(std::remove(control.children.begin(), control.children.end(), omit), control.children.end());
+		if (control.parent == omit) control.parent.clear();
+		controls.push_back(std::move(control));
+	}
+	const std::string omitKey = std::to_string(omit.size()) + ":" + omit;
+	const auto dropped = [&](const std::string& key) { return key == omitKey || key.starts_with(omitKey + "/"); };
+	reader.Value(count);
+	struct Panel {
+		std::string key, parent, signal;
+		std::vector<std::string> children;
+		std::string state;
+	};
+	std::vector<Panel> panels;
+	for (size_t index = 0; index < count; ++index) {
+		Panel panel;
+		reader.Value(panel.key);
+		reader.Value(panel.parent);
+		reader.Value(panel.signal);
+		reader.Value(panel.children);
+		reader.Value(panel.state);
+		if (dropped(panel.key)) continue;
+		if (dropped(panel.parent)) panel.parent.clear();
+		if (dropped(panel.signal)) panel.signal.clear();
+		panel.children.erase(std::remove_if(panel.children.begin(), panel.children.end(), dropped), panel.children.end());
+		panels.push_back(std::move(panel));
+	}
+	std::vector<std::string> roots;
+	std::string captured, focus, over, hover;
+	reader.Value(roots);
+	reader.Value(captured);
+	reader.Value(focus);
+	reader.Value(over);
+	reader.Value(hover);
+	reader.Value(count);
+	struct Event {
+		std::string control;
+		int type, message, data;
+	};
+	std::vector<Event> events;
+	for (size_t index = 0; index < count; ++index) {
+		Event event;
+		reader.Value(event.control);
+		reader.Value(event.type);
+		reader.Value(event.message);
+		reader.Value(event.data);
+		if (event.control != omit) events.push_back(std::move(event));
+	}
+	reader.Finish();
+	roots.erase(std::remove_if(roots.begin(), roots.end(), dropped), roots.end());
+	if (dropped(captured)) captured.clear();
+	if (dropped(focus)) focus.clear();
+	if (dropped(over)) over.clear();
+	if (dropped(hover)) hover.clear();
+	CheckpointWriter writer("GUIControls1");
+	writer(present, cursor, input, skin, managerValues, controls.size());
+	for (const auto& control: controls) writer(control.name, control.type, control.parent, control.children, control.x, control.y, control.width, control.height);
+	writer(panels.size());
+	for (const auto& panel: panels) writer(panel.key, panel.parent, panel.signal, panel.children, panel.state);
+	writer(roots, captured, focus, over, hover, events.size());
+	for (const auto& event: events) writer(event.control, event.type, event.message, event.data);
+	return writer.Text();
+}
+
 std::map<std::string, bool> GUICheckpoint::SaveModuleFlags(const std::vector<bool>& flags) {
 	std::map<std::string, bool> saved;
 	for (int module = 0; module < g_PresetMan.GetTotalModuleCount() && module < static_cast<int>(flags.size()); ++module) {
@@ -1966,6 +2098,40 @@ bool GUICheckpoint::RunSelfTest() {
 			const std::vector<bool> chosen = moduleFlags(moduleCount, moduleCount - 1);
 			picker.m_ExpandedModules = chosen;
 			check("object_picker_module_flags_round_trip", picker.LoadCheckpoint(picker.SaveCheckpoint()) && picker.m_ExpandedModules == chosen);
+		}
+		{
+			// A checkpoint from a different layout omits a control the live menu still caches.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			Controller controller;
+			controller.Create(Controller::CIM_PLAYER, 0);
+			ObjectPickerGUI picker;
+			BuyMenuGUI menu;
+			if (picker.Create(&controller) < 0) throw std::runtime_error("object picker layout fixture unavailable");
+			if (menu.Create(&controller) < 0) throw std::runtime_error("buy menu layout fixture unavailable");
+			const auto withOmittedControl = [](const std::string& saved, GUIControlManager& manager, const std::string& omit) {
+				const std::string controls = manager.SaveCheckpoint();
+				const std::string stripped = OmitNamedControl(controls, omit);
+				if (!Validate(stripped)) throw std::runtime_error("omitted-control fixture is not a valid GUIControls1 archive");
+				const std::string needle = std::to_string(controls.size()) + " " + controls + " ";
+				const auto found = saved.find(needle);
+				if (found == std::string::npos) throw std::runtime_error("menu checkpoint does not carry the saved controls");
+				return saved.substr(0, found) + std::to_string(stripped.size()) + " " + stripped + " " + saved.substr(found + needle.size());
+			};
+			const std::string pickerSame = picker.SaveCheckpoint();
+			const std::string pickerDifferent = withOmittedControl(pickerSame, *picker.m_GUIControlManager, "PopupText");
+			const bool pickerApplied = picker.LoadCheckpoint(pickerDifferent);
+			const bool pickerLive = picker.HasLiveCachedControls();
+			std::cout << "[gui-checkpoint-selftest] object_picker_different_layout applied=" << pickerApplied << " controls_live=" << pickerLive << std::endl;
+			check("object_picker_different_layout_refused", !pickerApplied && pickerLive);
+			check("object_picker_same_layout_still_loads", picker.LoadCheckpoint(pickerSame) && picker.HasLiveCachedControls());
+			const std::string menuSame = menu.SaveCheckpoint();
+			const std::string menuDifferent = withOmittedControl(menuSame, *menu.m_pGUIController, "PopupText");
+			const bool menuApplied = menu.LoadCheckpoint(menuDifferent);
+			const bool menuLive = menu.HasLiveCachedControls();
+			std::cout << "[gui-checkpoint-selftest] buy_menu_different_layout applied=" << menuApplied << " controls_live=" << menuLive << std::endl;
+			check("buy_menu_different_layout_refused", !menuApplied && menuLive);
+			check("buy_menu_same_layout_still_loads", menu.LoadCheckpoint(menuSame) && menu.HasLiveCachedControls());
 		}
 	} catch (const std::exception& exception) { std::cout << "[gui-checkpoint-selftest] exception=" << exception.what() << std::endl; passed = false; }
 	if (!GUIInput::LoadSharedCheckpoint(oldSharedInput)) passed = false;

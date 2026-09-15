@@ -44,6 +44,9 @@ namespace RTE {
 		/// Anything below 0 is an error signal.
 		int Create(Controller* pController, const std::string& onlyOfType = "All");
 
+		/// Whether the cached control pointers are the ones the loaded control manager owns.
+		bool HasLiveCachedControls();
+
 		/// Resets the entire AreaPickerGUI, including its inherited members, to
 		/// their default settings or values.
 		void Reset() { Clear(); }

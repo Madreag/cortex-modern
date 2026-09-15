@@ -35,7 +35,7 @@ function OnFire(self)
 				MovableMan:AddParticle(part);
 			end
 			local cross = CreateMOSParticle("Particle Heal Effect", "Base.rte");
-			cross.Pos = target.AboveHUDPos + Vector(0, 5);
+			cross.Pos = target.AboveHeadPos + Vector(0, 5);
 			MovableMan:AddParticle(cross);
 			
 			if target.Status == Actor.DEAD and target.Health == target.MaxHealth and target.WoundCount == 0 then
