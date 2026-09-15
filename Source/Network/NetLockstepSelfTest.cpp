@@ -8613,6 +8613,54 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestSoloRoundRunsWithoutRemotes(std::string* error) {
+			LoopbackTransport transport;
+			if (!transport.StartHost(43136, error)) return false;
+			NetLockstepConfig soloConfig = MakeCoordinatorConfig(1, 0, 0x70000000000000E1ULL, 0, NetTransportLane::ControlReliable);
+			soloConfig.peerCount = 1;
+			soloConfig.remoteTransportPeerId = c_InvalidNetPeerId;
+			NetLockstepCoordinator solo;
+			if (!solo.Start(transport, soloConfig, error)) return false;
+			if (!solo.IsRunning()) {
+				*error = "a one-peer round is not running after its start";
+				return false;
+			}
+			if (!solo.QueueLocalInput(0, {MakeFrame(200, 1)}, {}, error)) return false;
+			solo.Tick(0);
+			NetLockstepReadyFrame ready;
+			if (!solo.PopReadyFrame(ready) || ready.frame != 0 || ready.localFrames.size() != 1 || !ready.remoteFrames.empty()) {
+				*error = "the sole peer's own frame did not commit";
+				return false;
+			}
+
+			// Two peers still need a remote to route to.
+			NetLockstepConfig pairConfig = MakeCoordinatorConfig(1, 0, 0x70000000000000E2ULL, 0, NetTransportLane::ControlReliable);
+			pairConfig.remoteTransportPeerId = c_InvalidNetPeerId;
+			NetLockstepCoordinator pair;
+			std::string refusal;
+			if (pair.Start(transport, pairConfig, &refusal) || refusal != "lockstep peer identity is invalid") {
+				*error = "a two-peer round with no remote transport was accepted: " + refusal;
+				return false;
+			}
+
+			NetLockstepConfig replayConfig = soloConfig;
+			replayConfig.sessionId = 0x70000000000000E3ULL;
+			NetLockstepCoordinator replay;
+			if (!replay.StartReplay(transport, replayConfig, error) || !replay.IsRunning()) {
+				*error = "playback refused a one-peer recording";
+				return false;
+			}
+			if (!replay.QueueReplayFrame(0, {MakeFrame(200, 1)}, {}, error)) return false;
+			replay.Tick(0);
+			NetLockstepReadyFrame replayed;
+			if (!replay.PopReadyFrame(replayed) || replayed.frame != 0 || replayed.remoteFrames.size() != 1) {
+				*error = "a one-peer recording's tick did not commit";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS solo_round_runs_without_remotes" << std::endl;
+			return true;
+		}
+
 		bool TestCoordinatorStoppedRoundStopsResending(std::string* error) {
 			const uint16_t port = 43132;
 			const uint64_t sessionId = 0x70000000000000D2ULL;
@@ -13244,7 +13292,8 @@ namespace RTE {
 		    !TestCongestedRelayHoldsEveryPeer(&error) ||
 		    !TestFourPeerRoundRunsToLength(&error) ||
 		    !TestDeadLinkLosesOnlyItsOwnSeat(&error) ||
-		    !TestDeadLinkHealedInTimeKeepsEverySeat(&error)) {
+		    !TestDeadLinkHealedInTimeKeepsEverySeat(&error) ||
+		    !TestSoloRoundRunsWithoutRemotes(&error)) {
 			return fail(error);
 		}
 

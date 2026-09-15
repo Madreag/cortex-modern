@@ -46,6 +46,18 @@ namespace RTE {
 			return true;
 		}
 
+		// A display name is the one field a player types freely, so it is also held to valid UTF-8.
+		bool ValidateName(const std::string& value, const char* field, std::string* error) {
+			if (!ValidateText(value, NetMatchConfigUtil::c_MaxNameBytes, field, error)) {
+				return false;
+			}
+			if (!NetProtocol::IsValidUtf8(value)) {
+				if (error) *error = std::string(field) + " is not valid UTF-8";
+				return false;
+			}
+			return true;
+		}
+
 		std::vector<NetMatchPlayerSlot> SortedPlayers(const std::vector<NetMatchPlayerSlot>& players) {
 			std::vector<NetMatchPlayerSlot> sorted = players;
 			std::sort(sorted.begin(), sorted.end(), [](const NetMatchPlayerSlot& lhs, const NetMatchPlayerSlot& rhs) {
@@ -228,7 +240,9 @@ namespace RTE {
 			if (error) *error = "session_id must be nonzero";
 			return false;
 		}
-		if (config.peerCount < c_MinPeerCount || config.peerCount > c_MaxPeerCount) {
+		const size_t humanCount = std::count_if(config.players.begin(), config.players.end(), [](const auto& slot) { return !slot.cpu; });
+		const bool soleCPUHost = config.dedicated && humanCount == 0 && !config.players.empty();
+		if (config.peerCount < (soleCPUHost ? 1 : c_MinPeerCount) || config.peerCount > c_MaxPeerCount) {
 			if (error) *error = "peer_count is out of range";
 			return false;
 		}
@@ -267,7 +281,7 @@ namespace RTE {
 		}
 		std::vector<bool> seen(config.peerCount + 1, false);
 		bool sawHost = false;
-		bool sawRemoteHuman = false;
+		std::array<bool, 4> cpuTeams{}, humanTeams{};
 		for (const NetMatchPlayerSlot& player : config.players) {
 			// A CPU slot has no peer: it marks a machine-run team the host's AI drives over the wire.
 			if (player.cpu) {
@@ -287,13 +301,18 @@ namespace RTE {
 				seen[player.peerId] = true;
 			}
 			sawHost = sawHost || player.peerId == config.hostPeerId;
-			sawRemoteHuman = sawRemoteHuman || (!player.cpu && player.peerId >= 2);
 			if (player.team >= 4) {
 				// Engine teams are 0..3; MaxTeamCount (4) is the exclusive sentinel, so team 4 is invalid.
 				if (error) *error = "player team is out of range";
 				return false;
 			}
-			if (!ValidateText(player.displayName, c_MaxNameBytes, "player display_name", error)) {
+			if (player.cpu) {
+				if (cpuTeams[player.team]) return refuse("duplicate cpu team");
+				cpuTeams[player.team] = true;
+			} else {
+				humanTeams[player.team] = true;
+			}
+			if (!ValidateName(player.displayName, "player display_name", error)) {
 				return false;
 			}
 		}
@@ -302,13 +321,14 @@ namespace RTE {
 				if (error) *error = "dedicated config must not seat the host peer";
 				return false;
 			}
-			if (!sawRemoteHuman) {
-				if (error) *error = "dedicated config has no client player slot";
-				return false;
-			}
 		} else if (!sawHost) {
 			if (error) *error = "host player slot is missing";
 			return false;
+		}
+		if (humanCount > config.peerCount - (config.dedicated ? 1 : 0)) return refuse("human seats exceed peer capacity");
+		if (config.mode == NetMatchMode::PvPvE && humanCount == 4) return refuse("four-human PvPvE exceeds team capacity");
+		for (size_t team = 0; team < cpuTeams.size(); ++team) {
+			if (cpuTeams[team] && humanTeams[team]) return refuse("cpu slot shares a human team");
 		}
 		return true;
 	}
@@ -335,7 +355,10 @@ namespace RTE {
 			{"mode_preset", config.modePreset},
 		};
 		for (const NetMatchPlayerSlot& player : SortedPlayers(config.players)) {
-			const std::string prefix = "player." + std::to_string(player.peerId) + ".";
+			// A CPU slot has no peer id, so its team is its key: under a shared player.0 prefix the
+			// canonical sort merges every CPU slot's fields and two rosters that swap their teams hash alike.
+			const std::string prefix = player.cpu ? ("player.cpu" + std::to_string(player.team) + ".")
+			                                      : ("player." + std::to_string(player.peerId) + ".");
 			fields.emplace_back(prefix + "team", std::to_string(player.team));
 			fields.emplace_back(prefix + "cpu", BoolText(player.cpu));
 			fields.emplace_back(prefix + "display_name", player.displayName);
@@ -375,7 +398,9 @@ namespace RTE {
 			{"players", std::move(players)},
 		};
 		report["rules"] = RulesJson(config);
-		return report.dump();
+		// The roster takes a session-handshake name without revalidating it, so a stray byte is replaced
+		// here instead of throwing: the host builds this report while a match runs.
+		return report.dump(-1, ' ', false, json::error_handler_t::replace);
 	}
 
 	uint16_t NetMatchConfigUtil::PeerInputDelay(const NetMatchConfig& config, uint8_t peerId) {

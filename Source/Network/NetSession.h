@@ -51,6 +51,8 @@ namespace RTE {
 		uint64_t sessionId = 0x5354414745325032ULL;
 		uint64_t localNonce = 0x43434D504E4F4E43ULL;
 		uint8_t maxPeers = 1;
+		/// Host: the round seats no remote peer, so the session is Ready with none connected.
+		bool readyWithoutPeers = false;
 		uint32_t heartbeatIntervalMs = 100;
 		uint32_t timeoutMs = 1000;
 		uint16_t minProtocolVersion = NetProtocol::c_Version;

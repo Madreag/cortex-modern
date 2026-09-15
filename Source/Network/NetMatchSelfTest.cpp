@@ -260,6 +260,87 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestDisplayNameUtf8(std::string* error) {
+			// Independent checks accumulate so the entry refusal and the report dump cannot hide each other.
+			std::vector<std::string> failures;
+			const std::array<std::pair<const char*, std::string>, 4> badNames{{
+			    {"truncated two-byte lead", std::string("caf\xC3")},
+			    {"lone continuation byte", std::string("\x80" "abc")},
+			    {"byte that is never a lead", std::string("na\xFF\xFE")},
+			    {"encoded surrogate", std::string("na\xED\xA0\x80")},
+			}};
+			for (const auto& badName: badNames) {
+				NetMatchConfig config = MakeConfig();
+				config.players[0].displayName = badName.second;
+				std::string reason;
+				if (NetMatchConfigUtil::ValidateLocalAlpha(config, &reason)) {
+					failures.emplace_back(std::string("match config validation accepted a display name with a ") + badName.first);
+				} else if (reason != "player display_name is not valid UTF-8") {
+					failures.emplace_back(std::string("a display name with a ") + badName.first + " was refused as: " + reason);
+				}
+				std::vector<uint8_t> bytes;
+				NetLobbyError encodeError;
+				if (NetLobbyProtocol::Encode({NetLobbyHello{1, 1, 2, badName.second, "client"}}, bytes, &encodeError)) {
+					failures.emplace_back(std::string("the lobby hello encoded a display name with a ") + badName.first);
+				} else if (encodeError.message != "display_name is not valid UTF-8") {
+					failures.emplace_back(std::string("the lobby hello refused a ") + badName.first + " as: " + encodeError.message);
+				}
+			}
+			// The joiner writes its own bytes, so the refusal has to hold on the reading side too.
+			std::vector<uint8_t> helloBytes;
+			NetLobbyError helloError;
+			if (!NetLobbyProtocol::Encode({NetLobbyHello{1, 1, 2, "Player", "client"}}, helloBytes, &helloError)) {
+				*error = "could not encode a plain lobby hello: " + helloError.message;
+				return false;
+			}
+			const size_t nameOffset = NetLobbyProtocol::c_HeaderBytes + 8;
+			if (helloBytes.size() <= nameOffset || helloBytes[nameOffset] != 'P') {
+				*error = "the lobby hello display name is not where this arm patches it";
+				return false;
+			}
+			helloBytes[nameOffset] = 0xC3;
+			const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(helloBytes);
+			if (decoded.ok) {
+				failures.emplace_back("the lobby hello decoded a display name with a truncated two-byte lead");
+			} else if (decoded.error.message != "display_name is not valid UTF-8") {
+				failures.emplace_back("the decoded bad display name was refused as: " + decoded.error.message);
+			}
+			// The roster merge copies a session-handshake name into the config without revalidating it,
+			// so the report dump has to survive a byte the lobby boundary never saw.
+			NetMatchConfig smuggled = MakeConfig();
+			smuggled.players[0].displayName = std::string("Bad\xC3" "Name");
+			try {
+				const std::string dumped = NetMatchConfigUtil::BuildReportJson(smuggled);
+				if (nlohmann::json::parse(dumped, nullptr, false).is_discarded()) {
+					failures.emplace_back("the match config report of a smuggled name did not parse back");
+				}
+			} catch (const std::exception& thrown) {
+				failures.emplace_back(std::string("the match config report dump threw on a smuggled name: ") + thrown.what());
+			}
+			// Multi-byte names players actually type stay acceptable.
+			NetMatchConfig good = MakeConfig();
+			good.players[0].displayName = std::string("caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC");
+			std::string goodReason;
+			if (!NetMatchConfigUtil::ValidateLocalAlpha(good, &goodReason)) {
+				failures.emplace_back("validation refused a valid multi-byte UTF-8 display name: " + goodReason);
+			}
+			std::vector<uint8_t> goodBytes;
+			NetLobbyError goodError;
+			if (!NetLobbyProtocol::Encode({NetLobbyHello{1, 1, 2, good.players[0].displayName, "client"}}, goodBytes, &goodError)) {
+				failures.emplace_back("the lobby hello refused a valid multi-byte UTF-8 display name: " + goodError.message);
+			} else if (!NetLobbyProtocol::Decode(goodBytes).ok) {
+				failures.emplace_back("the lobby hello did not decode a valid multi-byte UTF-8 display name");
+			}
+			if (failures.empty()) {
+				return true;
+			}
+			*error = failures.front();
+			for (size_t index = 1; index < failures.size(); ++index) {
+				*error += " | " + failures[index];
+			}
+			return false;
+		}
+
 		bool TestMatchConfigDedicated(std::string* error) {
 			NetMatchConfig dedicated = MakeConfig();
 			dedicated.peerCount = 3;
@@ -290,9 +371,8 @@ namespace RTE {
 			NetMatchConfig noClients = dedicated;
 			noClients.players = {NetMatchPlayerSlot{0, 3, true, "CPU"}};
 			validationError.clear();
-			if (NetMatchConfigUtil::ValidateLocalAlpha(noClients, &validationError) ||
-			    validationError != "dedicated config has no client player slot") {
-				*error = "dedicated roster without a client slot did not fail closed: " + validationError;
+			if (!NetMatchConfigUtil::ValidateLocalAlpha(noClients, &validationError)) {
+				*error = "dedicated CPU roster was refused: " + validationError;
 				return false;
 			}
 			NetMatchConfig plain = MakeConfig();
@@ -317,6 +397,173 @@ namespace RTE {
 				*error = "the config report omitted dedicated=true";
 				return false;
 			}
+			return true;
+		}
+
+		bool TestCPURosterRequests(std::string* error) {
+			for (bool host : {false, true}) {
+				for (bool dedicated : {false, true}) {
+					for (NetMatchMode mode : {NetMatchMode::PvPSkirmish, NetMatchMode::CoopPvE, NetMatchMode::PvPvE}) {
+						NetMatchServiceRequest request;
+						request.host = host;
+						request.dedicated = dedicated;
+						request.peerCount = dedicated ? 3 : 2;
+						request.humans = 2;
+						request.cpuSlots = 2;
+						request.mode = mode;
+						NetMatchConfig config;
+						if (!NetMatchService::BuildMatchConfig(request, 123, config, error)) return false;
+						const uint8_t firstCPU = mode == NetMatchMode::CoopPvE ? 1 : 2;
+						if (config.players.size() != 4 || config.mode != mode ||
+						    config.players[0].peerId != (dedicated ? 2 : 1) || config.players[0].cpu ||
+						    config.players[1].team != (mode == NetMatchMode::CoopPvE ? 0 : 1) ||
+						    config.players[2] != NetMatchPlayerSlot{0, firstCPU, true, "CPU 1"} ||
+						    config.players[3] != NetMatchPlayerSlot{0, static_cast<uint8_t>(firstCPU + 1), true, "CPU 2"}) {
+							*error = "authored CPU roster differs: " + NetMatchConfigUtil::BuildReportJson(config);
+							return false;
+						}
+						if (!RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
+						request.humans = request.peerCount + 1;
+						std::string reason;
+						if (NetMatchService::BuildMatchConfig(request, 123, config, &reason) || reason != "human seats exceed peer capacity") {
+							*error = "human capacity refusal differs: " + reason;
+							return false;
+						}
+					}
+				}
+				NetMatchServiceRequest request;
+				request.host = host;
+				request.peerCount = 4;
+				request.mode = NetMatchMode::PvPvE;
+				NetMatchConfig config;
+				std::string reason;
+				if (NetMatchService::BuildMatchConfig(request, 123, config, &reason) || reason != "four-human PvPvE exceeds team capacity") {
+					*error = "four-human PvPvE refusal differs: " + reason;
+					return false;
+				}
+				request.humans = 0;
+				request.cpuSlots = 2;
+				if (NetMatchService::BuildMatchConfig(request, 123, config, &reason) || reason != "zero human seats require a dedicated host") {
+					*error = "zero-human refusal differs: " + reason;
+					return false;
+				}
+				request.dedicated = true;
+				if (!NetMatchService::BuildMatchConfig(request, 123, config, error) || config.peerCount != 1 || config.players.size() != 2 ||
+				    !RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
+				// The widest roster the wire carries: four co-op humans beside the three CPU teams left.
+				NetMatchServiceRequest crowded;
+				crowded.host = host;
+				crowded.peerCount = 4;
+				crowded.humans = 4;
+				crowded.cpuSlots = 3;
+				crowded.mode = NetMatchMode::CoopPvE;
+				if (!NetMatchService::BuildMatchConfig(crowded, 123, config, error)) return false;
+				if (config.players.size() != NetMatchConfigUtil::c_MaxPlayers) {
+					*error = "the full co-op roster differs: " + NetMatchConfigUtil::BuildReportJson(config);
+					return false;
+				}
+				if (!RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
+				NetMatchConfig oversize = config;
+				oversize.players.push_back({0, 3, true, "CPU 4"});
+				if (NetMatchConfigUtil::ValidateLocalAlpha(oversize, &reason) || reason != "player slot count is out of range") {
+					*error = "player slot capacity refusal differs: " + reason;
+					return false;
+				}
+				std::vector<uint8_t> oversizeBytes;
+				NetLobbyError oversizeError;
+				// The encoder validates first, so an oversize roster is refused there, by the validator's reason.
+				if (NetLobbyProtocol::Encode({NetLobbyMatchConfig{oversize}}, oversizeBytes, &oversizeError) ||
+				    oversizeError.code != NetLobbyErrorCode::InvalidValue || oversizeError.message != "player slot count is out of range") {
+					*error = "the lobby codec accepted a roster past the slot capacity: " + oversizeError.message;
+					return false;
+				}
+				// The AI-only dedicated match the battery launches: no human seat, one lockstep peer.
+				NetMatchServiceRequest aiOnly;
+				aiOnly.host = host;
+				aiOnly.dedicated = true;
+				aiOnly.peerCount = 2;
+				aiOnly.humans = 0;
+				aiOnly.cpuSlots = 2;
+				aiOnly.mode = NetMatchMode::CoopPvE;
+				if (!NetMatchService::BuildMatchConfig(aiOnly, 123, config, error)) return false;
+				if (config.peerCount != 1 || config.players.size() != 2 ||
+				    config.players[0] != NetMatchPlayerSlot{0, 1, true, "CPU 1"} ||
+				    config.players[1] != NetMatchPlayerSlot{0, 2, true, "CPU 2"}) {
+					*error = "authored AI-only roster differs: " + NetMatchConfigUtil::BuildReportJson(config);
+					return false;
+				}
+				if (!RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
+			}
+			std::cout << "[net-match-selftest] PASS cpu_roster_requests" << std::endl;
+			return true;
+		}
+
+		bool TestCPURosterValidation(std::string* error) {
+			NetMatchConfig config = MakeConfig();
+			config.players.push_back({0, 2, true, "CPU 1"});
+			config.players.push_back({0, 3, true, "CPU 2"});
+			if (!RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
+			for (const auto& [team, expected] : std::vector<std::pair<uint8_t, std::string>>{
+			         {0, "cpu slot shares a human team"}, {2, "duplicate cpu team"}, {4, "player team is out of range"}}) {
+				NetMatchConfig invalid = config;
+				invalid.players.back().team = team;
+				for (bool host : {true, false}) {
+					std::string reason;
+					NetLobbySession lobby;
+					LoopbackTransport transport;
+					NetLobbySessionConfig setup;
+					setup.host = host;
+					setup.localPeerId = host ? 1 : 2;
+					setup.remotePeerId = host ? 2 : 1;
+					setup.remoteTransportPeerId = 1;
+					setup.matchConfig = invalid;
+					if (lobby.Start(transport, setup, &reason) || reason != expected) {
+						*error = "CPU roster refusal differs on " + std::string(host ? "host: " : "client: ") + reason;
+						return false;
+					}
+				}
+			}
+			const auto report = nlohmann::json::parse(NetMatchConfigUtil::BuildReportJson(config));
+			if (std::count_if(report["players"].begin(), report["players"].end(), [](const auto& slot) { return slot["cpu"] == true; }) != 2) {
+				*error = "config report lost CPU flags";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS cpu_roster_validation" << std::endl;
+			return true;
+		}
+
+		bool TestCPURosterHash(std::string* error) {
+			NetMatchConfig seated = MakeConfig();
+			seated.players.push_back({0, 2, true, "CPU Alpha"});
+			seated.players.push_back({0, 3, true, "CPU Beta"});
+			if (!NetMatchConfigUtil::ValidateLocalAlpha(seated, error)) return false;
+			const NetHash32 seatedHash = NetMatchConfigUtil::HashConfig(seated);
+			NetMatchConfig reordered = seated;
+			std::swap(reordered.players[2], reordered.players[3]);
+			if (NetMatchConfigUtil::HashConfig(reordered) != seatedHash) {
+				*error = "the CPU roster hash depends on the player vector order";
+				return false;
+			}
+			NetMatchConfig aiOnly;
+			aiOnly.sessionId = seated.sessionId;
+			aiOnly.dedicated = true;
+			aiOnly.peerCount = 1;
+			aiOnly.players = {{0, 0, true, "CPU Alpha"}, {0, 1, true, "CPU Beta"}};
+			if (!NetMatchConfigUtil::ValidateLocalAlpha(aiOnly, error)) return false;
+			NetMatchConfig traded = aiOnly;
+			traded.players[0].displayName = aiOnly.players[1].displayName;
+			traded.players[1].displayName = aiOnly.players[0].displayName;
+			if (NetMatchConfigUtil::HashConfig(traded) == NetMatchConfigUtil::HashConfig(aiOnly)) {
+				*error = "trading two CPU slots between teams left the match config hash unchanged";
+				return false;
+			}
+			NetMatchConfig moved = aiOnly;
+			moved.players.back().team = 2;
+			if (NetMatchConfigUtil::HashConfig(moved) == NetMatchConfigUtil::HashConfig(aiOnly)) {
+				*error = "moving a CPU slot to another team left the match config hash unchanged";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS cpu_roster_hash" << std::endl;
 			return true;
 		}
 
@@ -674,11 +921,14 @@ namespace RTE {
 			    !RoundTrip(NetLobbyStart{config.sessionId, 120, 0, configHash}, error) ||
 			    !RoundTrip(NetLobbyAbort{1, "user cancelled"}, error) ||
 			    !RoundTrip(NetLobbySeatAssign{2}, error) ||
-			    !RoundTrip(NetLobbySeatAssign{static_cast<uint8_t>(NetLobbyProtocol::c_MaxPlayers)}, error)) {
+			    !RoundTrip(NetLobbySeatAssign{static_cast<uint8_t>(NetLobbyProtocol::c_MaxPeers)}, error)) {
 				return false;
 			}
-			// A seat assignment names a real seat; zero and out-of-range must not decode.
-			for (const uint8_t assigned: {uint8_t{0}, static_cast<uint8_t>(NetLobbyProtocol::c_MaxPlayers + 1)}) {
+			// A seat assignment names a lockstep peer, so the peer cap bounds it, not the wider slot cap.
+			static_assert(NetLobbyProtocol::c_MaxPeers == NetMatchConfigUtil::c_MaxPeerCount);
+			for (const uint8_t assigned: {uint8_t{0}, static_cast<uint8_t>(NetLobbyProtocol::c_MaxPeers + 1),
+			                              static_cast<uint8_t>(NetLobbyProtocol::c_MaxPlayers),
+			                              static_cast<uint8_t>(NetLobbyProtocol::c_MaxPlayers + 1)}) {
 				NetLobbyMessage message;
 				message.payload = NetLobbySeatAssign{2};
 				std::vector<uint8_t> bytes;
@@ -691,6 +941,10 @@ namespace RTE {
 				const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(bytes);
 				if (decoded.ok || decoded.error.code != NetLobbyErrorCode::InvalidValue) {
 					*error = "seat assignment peer id " + std::to_string(assigned) + " was not rejected";
+					return false;
+				}
+				if (decoded.error.message.find("peer id") == std::string::npos) {
+					*error = "the refusal of seat assignment peer id " + std::to_string(assigned) + " did not name the field: " + decoded.error.message;
 					return false;
 				}
 			}
@@ -896,6 +1150,83 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestLiveReportDumpsSurviveBadBytes(std::string* error) {
+			// Independent checks accumulate so one throwing dump cannot hide another.
+			std::vector<std::string> failures;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetPeerId hostRemotePeer = c_InvalidNetPeerId;
+			NetPeerId clientRemotePeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(48481, hostTransport, clientTransport, hostRemotePeer, clientRemotePeer, error)) {
+				return false;
+			}
+			NetLobbySession hostLobby;
+			NetLobbySession clientLobby;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remotePeerId = 2;
+			hostConfig.remoteTransportPeerId = hostRemotePeer;
+			hostConfig.matchConfig = MakeConfig();
+			hostConfig.startFrame = 77;
+			hostConfig.displayName = "Host";
+			hostConfig.platform = "windows";
+			hostConfig.autoReady = false;
+			hostConfig.autoStart = false;
+			NetLobbySessionConfig clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			clientConfig.displayName = "Client";
+			if (!hostLobby.Start(hostTransport, hostConfig, error) || !clientLobby.Start(clientTransport, clientConfig, error)) {
+				return false;
+			}
+			for (uint64_t now = 0; now <= 200; now += 10) {
+				hostLobby.Tick(now);
+				clientLobby.Tick(now);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+			}
+			// An abort reason is remote free-form diagnostics, never validated as UTF-8, and
+			// NetLobbySession.cpp:807 stores it verbatim as the failure reason.
+			std::vector<uint8_t> abortBytes;
+			NetLobbyError abortError;
+			if (!NetLobbyProtocol::Encode({NetLobbyAbort{1, std::string("host left\xC3")}}, abortBytes, &abortError)) {
+				*error = "could not encode a lobby abort with a bad reason byte: " + abortError.message;
+				return false;
+			}
+			if (!hostTransport.Send(hostRemotePeer, NetTransportLane::ControlReliable, abortBytes, error)) {
+				return false;
+			}
+			for (uint64_t now = 210; now <= 400 && !clientLobby.IsRejected() && !clientLobby.IsFailed(); now += 10) {
+				clientTransport.AdvanceTimeMs(10);
+				clientLobby.Tick(now);
+			}
+			if (clientLobby.GetFailureReason().find('\xC3') == std::string::npos) {
+				*error = "the lobby abort reason did not reach the client's failure reason";
+				return false;
+			}
+			try {
+				const std::string report = clientLobby.BuildReportJson();
+				if (nlohmann::json::parse(report, nullptr, false).is_discarded()) {
+					failures.emplace_back("the lobby report of a smuggled abort reason did not parse back");
+				} else if (report.find("\xEF\xBF\xBD") == std::string::npos) {
+					failures.emplace_back("the lobby report dropped the bad abort bytes instead of replacing them");
+				}
+			} catch (const std::exception& thrown) {
+				failures.emplace_back(std::string("the lobby report dump threw on a smuggled abort reason: ") + thrown.what());
+			}
+			if (failures.empty()) {
+				return true;
+			}
+			*error = failures.front();
+			for (size_t index = 1; index < failures.size(); ++index) {
+				*error += " | " + failures[index];
+			}
+			return false;
+		}
+
 		bool TestLobbyManualReadyStart(std::string* error) {
 			LoopbackTransport hostTransport;
 			LoopbackTransport clientTransport;
@@ -1039,6 +1370,51 @@ namespace RTE {
 				*error = "early Ready moved host lobby to unexpected state";
 				return false;
 			}
+			return true;
+		}
+
+		bool TestLobbyStartsWithoutRemoteHumanSeats(std::string* error) {
+			NetMatchServiceRequest aiOnly;
+			aiOnly.host = true;
+			aiOnly.dedicated = true;
+			aiOnly.peerCount = 2;
+			aiOnly.humans = 0;
+			aiOnly.cpuSlots = 2;
+			aiOnly.mode = NetMatchMode::CoopPvE;
+			NetMatchConfig aiOnlyConfig;
+			if (!NetMatchService::BuildMatchConfig(aiOnly, 0x4149304E4C593031ULL, aiOnlyConfig, error)) return false;
+
+			LoopbackTransport transport;
+			if (!transport.StartHost(43213, error)) return false;
+			NetLobbySession lobby;
+			NetLobbySessionConfig setup;
+			setup.host = true;
+			setup.localPeerId = 1;
+			setup.matchConfig = aiOnlyConfig;
+			setup.autoStart = true;
+			if (!lobby.Start(transport, setup, error)) return false;
+			lobby.Tick(0);
+			if (!lobby.IsStarted()) {
+				*error = "a dedicated host seating only CPU teams stopped at " + std::string(NetLobbySession::StateName(lobby.GetState()));
+				return false;
+			}
+
+			// A roster that seats a human on another peer still waits for that peer.
+			LoopbackTransport waitingTransport;
+			if (!waitingTransport.StartHost(43214, error)) return false;
+			NetLobbySession waiting;
+			NetLobbySessionConfig waitingSetup;
+			waitingSetup.host = true;
+			waitingSetup.localPeerId = 1;
+			waitingSetup.matchConfig = MakeConfig();
+			waitingSetup.autoStart = true;
+			if (!waiting.Start(waitingTransport, waitingSetup, error)) return false;
+			waiting.Tick(0);
+			if (waiting.IsStarted() || waiting.GetState() != NetLobbyState::WaitingForConfigAck) {
+				*error = "a roster with a remote human seat started at " + std::string(NetLobbySession::StateName(waiting.GetState()));
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS ai_only_lobby_starts" << std::endl;
 			return true;
 		}
 
@@ -4158,6 +4534,97 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestAiOnlyHostSeatsNoJoiner(std::string* error) {
+		// The seats a host offers come from the roster it adopted, so an AI-only round offers none.
+		NetMatchServiceRequest aiOnly;
+		aiOnly.host = true;
+		aiOnly.dedicated = true;
+		aiOnly.port = 43215;
+		aiOnly.peerCount = 2;
+		aiOnly.humans = 0;
+		aiOnly.cpuSlots = 2;
+		aiOnly.mode = NetMatchMode::CoopPvE;
+		aiOnly.playerName = "Host";
+		NetMatchConfig aiOnlyRoster;
+		if (!NetMatchService::BuildMatchConfig(aiOnly, 0x4149304E53454154ULL, aiOnlyRoster, error)) return false;
+
+		NetIdentityManifest manifest;
+		manifest.gameVersion = "7.0.0-test";
+		manifest.networkProtocolVersion = NetProtocol::c_Version;
+		manifest.controllerFrameVersion = ControllerFrame::c_Version;
+		manifest.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		manifest.buildId = "ai-only-seat-selftest";
+		manifest.platform = "test";
+
+		NetMatchService service;
+		NetSessionConfig hostConfig = service.BuildSessionConfig(manifest, aiOnly, aiOnlyRoster);
+		hostConfig.heartbeatIntervalMs = 25;
+		// NetMatchRunner::Start resolves this from the same adopted roster.
+		hostConfig.readyWithoutPeers = aiOnlyRoster.peerCount == 1;
+		NetSessionConfig joinerConfig = hostConfig;
+		joinerConfig.displayName = "Joiner";
+		joinerConfig.readyWithoutPeers = false;
+		++joinerConfig.localNonce;
+
+		LoopbackTransport hostTransport, joinerTransport;
+		NetSession host, joiner;
+		if (!host.StartHost(hostTransport, hostConfig, error) ||
+		    !joiner.StartClient(joinerTransport, "loopback", joinerConfig, error)) {
+			return false;
+		}
+		for (uint64_t now = 0; now <= 2000 && !joiner.IsRejected() && host.GetReadyPeerCount() == 0; now += 10) {
+			host.Tick(now);
+			joiner.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			joinerTransport.AdvanceTimeMs(10);
+		}
+		if (!joiner.IsRejected() || joiner.GetRejectReason() != NetRejectReason::SessionFull ||
+		    joiner.GetRejectSummary() != "session seats no remote player" || host.GetReadyPeerCount() != 0) {
+			*error = "an AI-only host answered a join with maxPeers=" + std::to_string(hostConfig.maxPeers) +
+			         " seated=" + std::to_string(host.GetReadyPeerCount()) + " joiner=" +
+			         NetSession::StateName(joiner.GetState()) + " \"" + joiner.GetRejectSummary() + "\"";
+			return false;
+		}
+		if (!host.IsReady()) {
+			*error = "the refusal left the AI-only round at " + std::string(NetSession::StateName(host.GetState()));
+			return false;
+		}
+
+		// A roster that does seat a second peer still takes its joiner.
+		NetMatchServiceRequest duel = aiOnly;
+		duel.dedicated = false;
+		duel.port = 43216;
+		duel.humans = 2;
+		duel.cpuSlots = 0;
+		duel.mode = NetMatchMode::PvPSkirmish;
+		NetMatchConfig duelRoster;
+		if (!NetMatchService::BuildMatchConfig(duel, 0x4449454C53454154ULL, duelRoster, error)) return false;
+		NetSessionConfig duelHostConfig = service.BuildSessionConfig(manifest, duel, duelRoster);
+		duelHostConfig.heartbeatIntervalMs = 25;
+		NetSessionConfig duelJoinerConfig = duelHostConfig;
+		duelJoinerConfig.displayName = "Joiner";
+		++duelJoinerConfig.localNonce;
+		LoopbackTransport duelHostTransport, duelJoinerTransport;
+		NetSession duelHost, duelJoiner;
+		if (!duelHost.StartHost(duelHostTransport, duelHostConfig, error) ||
+		    !duelJoiner.StartClient(duelJoinerTransport, "loopback", duelJoinerConfig, error)) {
+			return false;
+		}
+		for (uint64_t now = 0; now <= 2000 && duelHost.GetReadyPeerCount() == 0 && !duelJoiner.IsRejected(); now += 10) {
+			duelHost.Tick(now);
+			duelJoiner.Tick(now);
+			duelHostTransport.AdvanceTimeMs(10);
+			duelJoinerTransport.AdvanceTimeMs(10);
+		}
+		if (duelHost.GetReadyPeerCount() != 1 || duelJoiner.IsRejected()) {
+			*error = "a two-human host offered maxPeers=" + std::to_string(duelHostConfig.maxPeers) + " and seated " +
+			         std::to_string(duelHost.GetReadyPeerCount()) + "; joiner=" + NetSession::StateName(duelJoiner.GetState());
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS ai_only_host_seats_no_joiner" << std::endl;
+		return true;
+	}
+
 	bool TestPendingSessionEventSurvivesTeardown(std::string* error) {
 		const uint16_t port = 43219;
 		LoopbackTransport hostTransport, clientTransport;
@@ -6831,7 +7298,11 @@ namespace RTE {
 
 		std::string error;
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
+		if (!TestDisplayNameUtf8(&error)) return fail(error);
 		if (!TestMatchConfigDedicated(&error)) return fail(error);
+		if (!TestCPURosterRequests(&error)) return fail(error);
+		if (!TestCPURosterValidation(&error)) return fail(error);
+		if (!TestCPURosterHash(&error)) return fail(error);
 		if (!TestReplayCommandSenders(&error)) return fail(error);
 		if (!TestOwnershipPolicies(&error)) return fail(error);
 		if (!TestLockstepCoordinatorUsesMatchOwnership(&error)) return fail(error);
@@ -6840,9 +7311,12 @@ namespace RTE {
 		if (!TestMalformedLobbyPayloads(&error)) return fail(error);
 		if (!TestLobbyCodecDedicatedFlag(&error)) return fail(error);
 		if (!TestLobbyStateMachineHappyPath(&error)) return fail(error);
+		if (!TestLiveReportDumpsSurviveBadBytes(&error)) return fail(error);
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);
 		if (!TestLobbyManualReadyCanWait(&error)) return fail(error);
 		if (!TestLobbyReadyDoesNotStartBeforeConfigAck(&error)) return fail(error);
+		if (!TestLobbyStartsWithoutRemoteHumanSeats(&error)) return fail(error);
+		if (!TestAiOnlyHostSeatsNoJoiner(&error)) return fail(error);
 		if (!TestLobbyStateTransfer(&error)) return fail(error);
 		if (!TestLobbyStateChunkBounds(&error)) return fail(error);
 		if (!TestLobbyStateChunkConsistency(&error)) return fail(error);

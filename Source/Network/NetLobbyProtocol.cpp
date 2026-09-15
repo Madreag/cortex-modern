@@ -77,6 +77,16 @@ namespace RTE {
 			return true;
 		}
 
+		// A display name is the one field a player types freely, so it is also held to valid UTF-8: a
+		// stray byte rides the roster into every diagnostic dump.
+		bool AppendName(std::vector<uint8_t>& out, const std::string& value, const char* fieldName, NetLobbyError* error) {
+			if (!NetProtocol::IsValidUtf8(value)) {
+				SetError(error, NetLobbyErrorCode::InvalidString, out.size(), std::string(fieldName) + " is not valid UTF-8");
+				return false;
+			}
+			return AppendString(out, value, NetLobbyProtocol::c_MaxDisplayNameBytes, fieldName, error);
+		}
+
 		void AppendHash(std::vector<uint8_t>& out, const NetHash32& hash) {
 			out.insert(out.end(), hash.begin(), hash.end());
 		}
@@ -86,7 +96,7 @@ namespace RTE {
 			AppendU8(out, player.team);
 			AppendBool(out, player.cpu);
 			AppendU8(out, 0);
-			return AppendString(out, player.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "player.display_name", error);
+			return AppendName(out, player.displayName, "player.display_name", error);
 		}
 
 		class ByteReader {
@@ -175,6 +185,19 @@ namespace RTE {
 				return true;
 			}
 
+			// A remote display name reaches the roster and every diagnostic dump, so it is held to valid UTF-8.
+			bool ReadName(std::string& out, const char* fieldName, NetLobbyError* error) {
+				const size_t lengthOffset = m_Offset;
+				if (!ReadString(out, NetLobbyProtocol::c_MaxDisplayNameBytes, fieldName, error)) {
+					return false;
+				}
+				if (!NetProtocol::IsValidUtf8(out)) {
+					SetError(error, NetLobbyErrorCode::InvalidString, lengthOffset, std::string(fieldName) + " is not valid UTF-8");
+					return false;
+				}
+				return true;
+			}
+
 		private:
 			bool CanRead(size_t bytes) const {
 				return bytes <= m_Size && m_Offset <= m_Size - bytes;
@@ -227,7 +250,7 @@ namespace RTE {
 			       ReadOrTruncated(reader.ReadBool(out.cpu), reader, error, "player.cpu") &&
 			       ReadOrTruncated(reader.ReadU8(reserved), reader, error, "player.reserved") &&
 			       (reserved == 0 || (SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 1, "player reserved field must be zero"), false)) &&
-			       reader.ReadString(out.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "player.display_name", error);
+			       reader.ReadName(out.displayName, "player.display_name", error);
 		}
 
 		bool EncodeConfig(const NetMatchConfig& config, std::vector<uint8_t>& out, NetLobbyError* error) {
@@ -383,7 +406,7 @@ namespace RTE {
 			AppendU16LE(out, payload.maxProtocolVersion);
 			AppendU8(out, payload.peerId);
 			AppendU8(out, 0);
-			if (!AppendString(out, payload.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "display_name", error) ||
+			if (!AppendName(out, payload.displayName, "display_name", error) ||
 			    !AppendString(out, payload.desiredRole, NetLobbyProtocol::c_MaxShortTextBytes, "desired_role", error)) {
 				return false;
 			}
@@ -396,7 +419,7 @@ namespace RTE {
 			AppendU16LE(out, 0);
 			AppendU32LE(out, payload.pingMs);
 			AppendU32LE(out, payload.jitterMs);
-			if (!AppendString(out, payload.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "display_name", error) ||
+			if (!AppendName(out, payload.displayName, "display_name", error) ||
 			    !AppendString(out, payload.platform, NetLobbyProtocol::c_MaxShortTextBytes, "platform", error)) return false;
 			AppendBool(out, payload.connected);
 			return true;
@@ -486,7 +509,7 @@ namespace RTE {
 						SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 1, "reserved field must be zero");
 						return false;
 					}
-					if (!reader.ReadString(payload.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "display_name", error) ||
+					if (!reader.ReadName(payload.displayName, "display_name", error) ||
 					    !reader.ReadString(payload.desiredRole, NetLobbyProtocol::c_MaxShortTextBytes, "desired_role", error)) return false;
 					out = std::move(payload);
 					return true;
@@ -503,7 +526,7 @@ namespace RTE {
 						SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 10, "reserved field must be zero");
 						return false;
 					}
-					if (!reader.ReadString(payload.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "display_name", error) ||
+					if (!reader.ReadName(payload.displayName, "display_name", error) ||
 					    !reader.ReadString(payload.platform, NetLobbyProtocol::c_MaxShortTextBytes, "platform", error) ||
 					    !ReadOrTruncated(reader.ReadBool(payload.connected), reader, error, "connected")) return false;
 					out = std::move(payload);
@@ -600,7 +623,7 @@ namespace RTE {
 						SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 3, "reserved field must be zero");
 						return false;
 					}
-					if (payload.assignedPeerId == 0 || payload.assignedPeerId > NetLobbyProtocol::c_MaxPlayers) {
+					if (payload.assignedPeerId == 0 || payload.assignedPeerId > NetLobbyProtocol::c_MaxPeers) {
 						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset() - 4, "seat assignment peer id is invalid");
 						return false;
 					}
@@ -735,7 +758,7 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLobbyErrorCode::BadMagic, 0, "bad lobby protocol magic");
 		}
-		const bool recordedConfig = options.allowRecordedConfigVersions && (version == 2 || version == 3) &&
+		const bool recordedConfig = options.allowRecordedConfigVersions && version >= 2 && version < c_Version &&
 		                            rawType == static_cast<uint16_t>(NetLobbyMessageType::MatchConfig);
 		if (version != c_Version && !recordedConfig) {
 			return Fail(NetLobbyErrorCode::UnsupportedVersion, 4, "unsupported lobby protocol version");
