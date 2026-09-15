@@ -427,10 +427,10 @@ local util = jit and require('jit.util')
 if not (jit and jit.status() and util) then
   return
 end
-jit.opt.start('hotloop=2')
-local starts, aborts, lastTr, lastWhy = 0, 0, 0, ''
+local starts, stops, aborts, lastTr, lastWhy = 0, 0, 0, 0, ''
 local function ev(what, tr, func, pc, err)
   if what == 'start' then starts = starts + 1; lastTr = tr
+  elseif what == 'stop' then stops = stops + 1
   elseif what == 'abort' then aborts = aborts + 1; lastTr = tr; lastWhy = tostring(err)
   end
 end
@@ -439,28 +439,30 @@ local function ev2(what)
   if what == 'start' then after = after + 1 end
 end
 local function body()
-  local x = 1
-  x = x + 2
-  x = x + 3
-  error('f91-abort')
+  local t = {}
+  for i = 1, 128 do
+    t.x = i
+    t[i % 16 + 1] = i
+    rawset(t, 'raw', i)
+    if i == 57 then error('f91-abort') end
+  end
 end
 local ok, err = pcall(function()
   jit.flush()
   jit.attach(ev, 'trace')
-  for _ = 1, 64 do pcall(body) end
+  for _ = 1, 40 do pcall(body) end
   local info = lastTr > 0 and util.traceinfo(lastTr) or nil
   jit.attach(ev)
   jit.attach(ev2, 'trace')
   pcall(body)
   pcall(body)
   jit.attach(ev2)
-  assert(aborts > 0 and lastWhy ~= '', 'no TRACE abort event aborts='..tostring(aborts)..' why='..tostring(lastWhy)..' starts='..tostring(starts))
+  assert(aborts > 0 and lastWhy ~= '', 'no TRACE abort event aborts='..tostring(aborts)..' why='..tostring(lastWhy)..' starts='..tostring(starts)..' stops='..tostring(stops))
   assert(info == nil, 'trace slot still live tr='..tostring(lastTr))
   assert(after == 0, 'bytecode still starting after repeats after='..tostring(after)..' starts='..tostring(starts))
 end)
 pcall(function() jit.attach(ev) end)
 pcall(function() jit.attach(ev2) end)
-pcall(function() jit.opt.start('hotloop=56') end)
 pcall(jit.flush)
 if not ok then error(err) end
 )lua";
