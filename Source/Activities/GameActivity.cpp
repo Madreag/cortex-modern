@@ -2665,7 +2665,7 @@ void GameActivity::SetNetworkPlayerName(int player, std::string name) {
 }
 
 namespace {
-// Whether a restored UI object has been built; the banners carry no such state.
+// Whether a restored UI object says it was built; a banner has no such flag and rebuilds its font safely.
 template <class T> bool CheckpointMenuBuilt(const T* menu) {
 	if constexpr (requires { menu->IsCheckpointInitialized(); })
 		return menu->IsCheckpointInitialized();
