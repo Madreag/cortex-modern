@@ -8,6 +8,7 @@
 #include "BS_thread_pool.hpp"
 
 #include <array>
+#include <functional>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -138,6 +139,9 @@ namespace RTE {
 
 		/// Runs the script graph's contract tests in this state and prints their lines; true when all pass.
 		bool RunScriptGraphSelfTest();
+
+		/// Every script-owned MovableObject still live in this state's heap.
+		void VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit);
 
 		/// Records which globals and loaded modules the engine itself installed; the graph carries only what scripts added.
 		void CaptureScriptGraphBaseline();
@@ -653,6 +657,9 @@ namespace RTE {
 
 		/// Collects every state fully so a checkpoint captures a settled object graph.
 		void CollectGarbageForCheckpoint();
+
+		/// Every script-owned MovableObject the script graph will capture, every state.
+		void VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit);
 #pragma endregion
 
 		/// Clears Script Timings.
