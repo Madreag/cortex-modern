@@ -234,6 +234,7 @@ static bool s_netDedicated = false;
 static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
 static std::string s_netMatchServiceE2EModule;
 static std::string s_netMatchServiceConfigPath;
+static std::string s_netPlayerName;
 
 // The W97 router port-mapping feature: opt-in by setting or flag, probed headless.
 static int s_netPortMapCli = -1; // -1 unset; -net-port-map off|on forces 0/1 over the setting.
@@ -882,6 +883,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (!lastArg && currentArg == "-net-match-service-config") {
 			s_netMatchServiceConfigPath = argValue[++i];
+			continue;
+		}
+		// The seat name this peer announces; without it the e2e path still defaults to Host/Client.
+		if (!lastArg && currentArg == "-net-player-name") {
+			s_netPlayerName = argValue[++i];
 			continue;
 		}
 
@@ -5304,7 +5310,7 @@ int RunNetMatchServiceE2E() {
 		request.address = s_netJoinAddress.empty() ? "127.0.0.1" : s_netJoinAddress;
 		request.sessionId = s_netJoinSessionId;
 		request.port = s_netPort;
-		request.playerName = e2eHost ? "Host" : "Client";
+		request.playerName = s_netPlayerName.empty() ? (e2eHost ? "Host" : "Client") : s_netPlayerName;
 		request.activityPreset = s_netMatchServiceE2EPreset;
 		request.activityModule = s_netMatchServiceE2EModule;
 		if (e2eHost && !s_netMatchServiceConfigPath.empty()) {

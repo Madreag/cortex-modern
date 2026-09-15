@@ -358,6 +358,13 @@ void MenuMan::UpdatePauseMenu() const {
 		case PauseMenuGUI::PauseMenuUpdateResult::BackToMain:
 			m_TitleScreen->SetTitleTransitionState(g_MetaMan.GameInProgress() ? TitleScreen::TitleTransition::MetaGameFadeIn : TitleScreen::TitleTransition::ScenarioFadeIn);
 			break;
+		case PauseMenuGUI::PauseMenuUpdateResult::MatchLeft:
+			// The match rows normally show only under the local pause menu; leave the service the way the game loop does.
+			if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+				g_NetMatchService.LeaveMatch("Match left");
+			}
+			m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::ScrollingFadeIn);
+			break;
 		default:
 			break;
 	}
