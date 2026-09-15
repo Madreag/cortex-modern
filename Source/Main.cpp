@@ -5198,6 +5198,10 @@ int RunNetMatchServiceE2E() {
 	}
 
 	if (setupError.empty()) {
+		// The report names the adopted activity, which a joining peer's own request does not carry.
+		if (!activityPreset.empty()) {
+			s_netMatchServiceE2EPreset = activityPreset;
+		}
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::cout << "[net-match-service-e2e] lobby_snapshot: state=" << snapshot.serviceState
 				  << " is_host=" << (snapshot.isHost ? 1 : 0) << " members=" << snapshot.members.size()
