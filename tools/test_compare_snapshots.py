@@ -344,6 +344,15 @@ class RuntimeProjectionTests(unittest.TestCase):
             with self.subTest(key=key):
                 self.assert_field(value, (key,), key == "render_rng", b"changed")
 
+    def test_the_resyncs_own_input_records_are_local_and_the_rest_of_the_block_is_not(self):
+        # NetMatchService.cpp:822-823, 831 keeps this machine's UInputMan and shared GUI input over the host's.
+        local, shared = ("input", "gui_input"), ("sim_rng", "timer", "movable", "scene", "camera", "primitive", "music", "audio")
+        for version in ("RuntimeGlobals4", "RuntimeGlobals9"):
+            value = dict(version=version, **dict.fromkeys(local + shared, b"peer"))
+            for key in local + shared:
+                with self.subTest(version=version, key=key):
+                    self.assert_field(value, (key,), key in local, b"changed")
+
     def test_native_hud_and_ai_caches_do_not_mask_physical_fields(self):
         examples = [("ActorRuntime1", "hud_stack", "health"),
             ("HDFirearmRuntime1", "ai_fire_velocity", "rounds_fired"),
@@ -388,7 +397,7 @@ class RuntimeProjectionTests(unittest.TestCase):
         timer = lambda seat: dict(sim_start=seat, sim_limit=20, real_start=seat + 1, real_limit=30)
         controller = lambda seat: dict(version="Controller1", states=[seat, 1, 0], team=seat,
             **{key: timer(seat) for key in ("release_timer", "joy_accel_timer", "key_accel_timer")})
-        return dict(version="Activity1", player_screen=[0, 1, 2, 3], team_funds=[20, 20, 20, 20],
+        return dict(version="Activity1", player_screen=[0, 1, 2, 3], view_state=[0, 1, 2, 3], team_funds=[20, 20, 20, 20],
             **{key: [1, 2, 3, 4] for key in ("player_team", "team_funds_share", "funds_contribution", "human")},
             actor_links=[[seat, seat + 10, seat + 20] for seat in range(4)],
             player_controller=[controller(seat) for seat in range(4)],
@@ -403,11 +412,12 @@ class RuntimeProjectionTests(unittest.TestCase):
             for index in (1, 2):
                 self.assert_field(value, ("actor_links", seat, index), True, **shared)
             self.assert_field(value, ("player_screen", seat), True, **shared)
+            self.assert_field(value, ("view_state", seat), True, **shared)
             for key in ("death_timer", "message_timer"):
                 self.assert_field(value, (key, seat, "sim_start"), True, **shared)
                 self.assert_field(value, (key, seat, "sim_limit"), False, **shared)
             self.assert_field(value, ("player_controller", seat, "states", 0), True, **shared)
-        for field in (("player_team", 2), ("player_screen", 2), ("actor_links", 2, 1), ("team_funds", 0),
+        for field in (("player_team", 2), ("player_screen", 2), ("view_state", 2), ("actor_links", 2, 1), ("team_funds", 0),
                 ("death_timer", 2, "sim_start"), ("player_controller", 2, "states", 0)):
             self.assert_field(value, field, False, **shared)
         mirrored = runtime.project(value, True, local_seat=1, asymmetric_seats=frozenset({0, 1}))
@@ -532,7 +542,7 @@ class RuntimeProjectionTests(unittest.TestCase):
                     self.assert_field(value, (key,), False)
 
     def test_new_frame_fonts_and_text_input_remain_strict(self):
-        for version, keys in (("FrameMan2", ("fonts", "hud_disabled")),
+        for version, keys in (("FrameMan2", ("fonts",)), ("FrameMan3", ("fonts", "palette")),
                 ("GUIFont1", ("current_bitmap", "color_cache", "bitmap", "characters")),
                 ("GUISharedInput2", ("text_active", "text_width", "text_cursor", "events"))):
             value = dict(version=version, **dict.fromkeys(keys, 1))
@@ -540,20 +550,22 @@ class RuntimeProjectionTests(unittest.TestCase):
                 with self.subTest(version=version, key=key):
                     self.assert_field(value, (key,), False)
 
-    def test_screen_flash_is_local_with_its_timer_but_the_rest_of_the_frame_is_not(self):
+    def test_the_frame_managers_net_local_record_is_local_but_its_fonts_and_palette_are_not(self):
         timer = dict(sim_start=1, sim_limit=2, real_start=3, real_limit=4)
         for version in ("FrameMan1", "FrameMan2", "FrameMan3"):
             value = dict(version=version, flash_color=[-1, -1, -1, -1], flashed_last_frame=[0] * 4,
                 flash_timer=[dict(timer) for _ in range(4)], hud_disabled=[0] * 4, screen_text=[b"go"] * 4,
-                text_duration=[5] * 4, horizontal_split=1)
+                text_duration=[5] * 4, horizontal_split=1, fonts=[b"f"] * 4, palette=b"p")
             with self.subTest(version=version):
                 for screen in range(4):
                     self.assert_field(value, ("flash_color", screen), True, 13)
                     self.assert_field(value, ("flashed_last_frame", screen), True)
-                    self.assert_field(value, ("hud_disabled", screen), False)
-                self.assert_field(value, ("screen_text", 0), False, b"stop")
-                self.assert_field(value, ("text_duration", 0), False)
-                self.assert_field(value, ("horizontal_split",), False)
+                    self.assert_field(value, ("hud_disabled", screen), True)
+                self.assert_field(value, ("screen_text", 0), True, b"stop")
+                self.assert_field(value, ("text_duration", 0), True)
+                self.assert_field(value, ("horizontal_split",), True)
+                self.assert_field(value, ("fonts", 0), False, b"g")
+                self.assert_field(value, ("palette",), False, b"q")
 
     def test_text_input_parser_validates_new_fields(self):
         base = b"15 GUISharedInput2 " + b"0 " * 45
@@ -736,7 +748,7 @@ class RuntimeProjectionTests(unittest.TestCase):
         for version, keys in (("MOSpriteRuntime2", ("sprite_file", "icon_file", "images", "frames", "icon_index", "frame")),
                 ("MOSRotatingRuntime2", ("flip_bitmap", "silhouette_bitmap", "travel_impulse")),
                 ("PieMenuRuntime1", ("quadrants", "center", "cursor_angle", "background_bitmap", "rotation_bitmap", "slices_bitmap")),
-                ("RuntimeGlobals7", ("primitive", "input", "postprocess", "audio"))):
+                ("RuntimeGlobals7", ("primitive", "postprocess", "audio"))):
             value = dict(version=version, **dict.fromkeys(keys, 1))
             for key in keys:
                 with self.subTest(version=version, key=key):
