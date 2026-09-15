@@ -25,9 +25,10 @@ function HumanBehaviors.CheckEnemyLOS(AI, Owner, Skill)
 		AI.Enemies = {};
 		local box = Box();
 		local skillFactor = (0.4 + Skill * 0.005);
-		box.Corner = Vector(Owner.ViewPoint.X - (FrameMan.PlayerScreenWidth/2) * skillFactor, Owner.ViewPoint.Y - (FrameMan.PlayerScreenHeight/2) * skillFactor);
-		box.Width = FrameMan.PlayerScreenWidth * skillFactor;
-		box.Height = FrameMan.PlayerScreenHeight * skillFactor;
+		-- The pinned screen size: every machine's AI must reach the same decision, replays included.
+		box.Corner = Vector(Owner.ViewPoint.X - (FrameMan.SimScreenWidth/2) * skillFactor, Owner.ViewPoint.Y - (FrameMan.SimScreenHeight/2) * skillFactor);
+		box.Width = FrameMan.SimScreenWidth * skillFactor;
+		box.Height = FrameMan.SimScreenHeight * skillFactor;
 		for Act in MovableMan:GetMOsInBox(box, Owner.Team, true) do
 			if IsActor(Act) and not AI.isPlayerOwned or not SceneMan:IsUnseen(Act.Pos.X, Act.Pos.Y, Owner.Team) then	-- AI-teams ignore the fog
 				table.insert(AI.Enemies, Act);
@@ -63,7 +64,7 @@ function HumanBehaviors.CheckEnemyLOS(AI, Owner, Skill)
 				-- cast at body
 				if not AI.isPlayerOwned or not SceneMan:IsUnseen(LookTarget.X, LookTarget.Y, Owner.Team) then	-- AI-teams ignore the fog
 					local Dist = SceneMan:ShortestDistance(Owner.ViewPoint, LookTarget, false);
-					if (math.abs(Dist.X) - Enemy.Radius < FrameMan.PlayerScreenWidth * 0.52) and (math.abs(Dist.Y) - Enemy.Radius < FrameMan.PlayerScreenHeight * 0.52) then
+					if (math.abs(Dist.X) - Enemy.Radius < FrameMan.SimScreenWidth * 0.52) and (math.abs(Dist.Y) - Enemy.Radius < FrameMan.SimScreenHeight * 0.52) then
 						local Trace = SceneMan:ShortestDistance(Origin, LookTarget, false);
 						local ID = SceneMan:CastMORay(Origin, Trace, Owner.ID, Owner.IgnoresWhichTeam, rte.grassID, false, 5);
 						if ID ~= rte.NoMOID then
@@ -80,7 +81,7 @@ function HumanBehaviors.CheckEnemyLOS(AI, Owner, Skill)
 				-- no LOS to the body, cast at head
 				if Enemy.EyePos and (not AI.isPlayerOwned or not SceneMan:IsUnseen(Enemy.EyePos.X, Enemy.EyePos.Y, Owner.Team)) then	-- AI-teams ignore the fog
 					local Dist = SceneMan:ShortestDistance(Owner.ViewPoint, Enemy.EyePos, false);
-					if (math.abs(Dist.X) < FrameMan.PlayerScreenWidth * 0.52) and (math.abs(Dist.Y) < FrameMan.PlayerScreenHeight * 0.52) then
+					if (math.abs(Dist.X) < FrameMan.SimScreenWidth * 0.52) and (math.abs(Dist.Y) < FrameMan.SimScreenHeight * 0.52) then
 						local Trace = SceneMan:ShortestDistance(Origin, Enemy.EyePos, false);
 						local ID = SceneMan:CastMORay(Origin, Trace, Owner.ID, Owner.IgnoresWhichTeam, rte.grassID, false, 5);
 						if ID ~= rte.NoMOID then
@@ -367,7 +368,7 @@ function HumanBehaviors.Sentry(AI, Owner, Abort)
 					break; -- restart this behavior
 				elseif AI.TargetLostTimer:IsPastSimTimeLimit() and math.random() < Owner.Perceptiveness then
 					-- turn around occasionally if there is open space behind our back
-					local backAreaRay = Vector(-math.random(FrameMan.PlayerScreenWidth/4, FrameMan.PlayerScreenWidth/2) * Owner.FlipFactor, 0):DegRotate(math.random(-25, 25) * Owner.Perceptiveness);
+					local backAreaRay = Vector(-math.random(FrameMan.SimScreenWidth/4, FrameMan.SimScreenWidth/2) * Owner.FlipFactor, 0):DegRotate(math.random(-25, 25) * Owner.Perceptiveness);
 					if not SceneMan:CastStrengthRay(Owner.EyePos, backAreaRay, 10, Vector(), 10, rte.grassID, SceneMan.SceneWrapsX) then
 						Owner.HFlipped = Owner.FlipFactor == 1 and true or false;
 					end
@@ -573,7 +574,7 @@ function HumanBehaviors.WeaponSearch(AI, Owner, Abort)
 	if AI.isPlayerOwned then
 		maxSearchDistance = 160; -- don't move player actors too far
 	else
-		maxSearchDistance = FrameMan.PlayerScreenWidth * 0.45;
+		maxSearchDistance = FrameMan.SimScreenWidth * 0.45;
 	end
 
 	if Owner.AIMode == Actor.AIMODE_SENTRY then
@@ -707,11 +708,11 @@ end
 function HumanBehaviors.ToolSearch(AI, Owner, Abort)
 	local maxSearchDistance;
 	if Owner.AIMode == Actor.AIMODE_GOLDDIG then
-		maxSearchDistance = FrameMan.PlayerScreenWidth * 0.5; -- move up to half a screen when digging
+		maxSearchDistance = FrameMan.SimScreenWidth * 0.5; -- move up to half a screen when digging
 	elseif AI.isPlayerOwned then
 		maxSearchDistance = 160; -- don't move player actors too far
 	else
-		maxSearchDistance = FrameMan.PlayerScreenWidth * 0.3;
+		maxSearchDistance = FrameMan.SimScreenWidth * 0.3;
 	end
 
 	if Owner.AIMode == Actor.AIMODE_SENTRY then
@@ -964,7 +965,7 @@ function HumanBehaviors.ShootTarget(AI, Owner, Abort)
 				if ClosestEnemy then
 					-- check if the target is inside our "screen"
 					local ViewDist = SceneMan:ShortestDistance(Owner.ViewPoint, ClosestEnemy.Pos, false);
-					if (math.abs(ViewDist.X) - ClosestEnemy.Radius < FrameMan.PlayerScreenWidth * 0.5) and (math.abs(ViewDist.Y) - ClosestEnemy.Radius < FrameMan.PlayerScreenHeight * 0.5) then
+					if (math.abs(ViewDist.X) - ClosestEnemy.Radius < FrameMan.SimScreenWidth * 0.5) and (math.abs(ViewDist.Y) - ClosestEnemy.Radius < FrameMan.SimScreenHeight * 0.5) then
 						if not AI.isPlayerOwned or not SceneMan:IsUnseen(ClosestEnemy.Pos.X, ClosestEnemy.Pos.Y, Owner.Team) then	-- AI-teams ignore the fog
 							if SceneMan:CastStrengthSumRay(Owner.EyePos, ClosestEnemy.Pos, 6, rte.grassID) < 120 then
 								AI.Target = ClosestEnemy;
@@ -1114,7 +1115,7 @@ function HumanBehaviors.ShootTarget(AI, Owner, Abort)
 						AI.TargetLostTimer:SetSimTimeLimitMS(700);
 						local TargetPoint = AI.Target.Pos + AI.TargetOffset;
 
-						if (range < Owner.AimDistance + Weapon.SharpLength + FrameMan.PlayerScreenWidth*0.5) and
+						if (range < Owner.AimDistance + Weapon.SharpLength + FrameMan.SimScreenWidth*0.5) and
 							(not AI.isPlayerOwned or not SceneMan:IsUnseen(TargetPoint.X, TargetPoint.Y, Owner.Team))
 						then
 							if PrjDat.pen > 0 then
@@ -1251,7 +1252,7 @@ function HumanBehaviors.ShootTarget(AI, Owner, Abort)
 							PrjDat = nil;
 						else
 							-- select a secondary instead of reloading if the target is within half a screen
-							if Dist.Largest < (FrameMan.PlayerScreenWidth * 0.5 + AI.Target.Radius + Owner.AimDistance) then
+							if Dist.Largest < (FrameMan.SimScreenWidth * 0.5 + AI.Target.Radius + Owner.AimDistance) then
 								-- select a primary if we have an empty secondary equipped
 								if Owner:EquipLoadedFirearmInGroup("Weapons - Secondary", "None", true) then
 									PrjDat = nil;

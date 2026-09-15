@@ -103,9 +103,10 @@ function SiteScan:UpdateActivity()
 						SceneMan:CastTerrainPenetrationRay(Vector(self.ScanPosX[team], 0), Vector(0, SceneMan.Scene.Height), self.ScanEndPos, 50, SceneMan:GetUnseenResolution(team).Y / 2);
 						SceneMan:RevealUnseenBox(self.ScanPosX[team] - 10, 0, 20, self.ScanEndPos.Y + 10, team);
 						-- Adjust up a bit so one sees more of the sky than blackness
-						self.ScanEndPos.Y = self.ScanEndPos.Y - (FrameMan.PlayerScreenHeight / 4);
+						-- The pinned screen size: the scan this adjusts writes the shared unseen map.
+						self.ScanEndPos.Y = self.ScanEndPos.Y - (FrameMan.SimScreenHeight / 4);
 						-- Also a bit more behind the scanning front so we see more of the terrain
-						self.ScanEndPos.X = self.ScanEndPos.X - (FrameMan.PlayerScreenWidth / 4);
+						self.ScanEndPos.X = self.ScanEndPos.X - (FrameMan.SimScreenWidth / 4);
 						if self.ScanEndPos.X < 0 then
 							self.ScanEndPos.X = 0;
 						end
