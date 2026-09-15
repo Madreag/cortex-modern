@@ -5179,10 +5179,10 @@ static bool RunGarbageCollectionThreadSelfTest() {
 		}
 		return std::pair<uint64_t, uint64_t>(off, sim);
 	};
-	// The class globals stay: a Lua class borrows its name from the string that named it, and dropping the global frees it under the class.
-	// luabind leaves the half-built object in the super closure when __init errors, so clearing super is what drops it.
-	const auto [unbuiltOff, unbuiltSim] = collectOne("class 'F82UnbuiltBase' (Box); function F82UnbuiltBase:__init() error('base never built') end; pcall(function() local held = F82UnbuiltBase() end); super = nil");
-	const auto [builtOff, builtSim] = collectOne("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end; do local held = F82BuiltBase() end");
+	// Over a C++ base luabind leaves the instance in the global super closure whether __init finished or not, so clearing
+	// super is what drops it; the class goes too, since a script graph capture refuses a Lua class userdata left in a global.
+	const auto [unbuiltOff, unbuiltSim] = collectOne("class 'F82UnbuiltBase' (Box); function F82UnbuiltBase:__init() error('base never built') end; pcall(function() local held = F82UnbuiltBase() end); super = nil; F82UnbuiltBase = nil");
+	const auto [builtOff, builtSim] = collectOne("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end; do local held = F82BuiltBase() end; super = nil; F82BuiltBase = nil");
 	const bool sentinelHeld = unbuiltSim == 0 && unbuiltOff >= 1 && builtSim >= 1;
 
 	// What the same GC-heavy tick costs, averaged over rounds that drop the same batch again.
