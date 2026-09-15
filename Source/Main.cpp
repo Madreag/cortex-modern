@@ -1403,7 +1403,7 @@ static bool MenuScriptFileExists(const std::string& pattern) {
 
 // Menu scripts use real controls and the normal screenshot render path.
 void ProcessMenuScript() {
-	NetModerationGUIProbe::AfterDraw();
+	NetModerationGUIProbe::AfterMenuDraw();
 	static std::vector<std::string> steps;
 	static size_t stepIndex = 0;
 	static int waitFrames = 0;
