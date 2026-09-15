@@ -52,6 +52,7 @@
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <functional>
 #include <future>
 #include <map>
@@ -4932,6 +4933,8 @@ void LuaStateWrapper::Initialize() {
 	LoadScriptGraphHelper();
 	CaptureScriptGraphBaseline();
 
+	LuabindObjectWrapper::InstallSimThreadDeletion(m_State, g_LuaMan.GetStateIndex(this));
+
 	if (g_SettingsMan.EnableLuaDebugging()) {
 		luaL_dostring(m_State, "require(\"mobdebug\").coro(); require(\"mobdebug\").start();");
 	}
@@ -5012,6 +5015,8 @@ bool LuaMan::IsDeterministicCollection() {
 }
 
 void LuaMan::Initialize() {
+	// Every Lua-owned engine object's destructor belongs to this thread; the pool threads only collect.
+	LuabindObjectWrapper::SetSimThread();
 	m_MasterScriptState.Initialize();
 
 	int luaStateCount = std::thread::hardware_concurrency();
@@ -5167,6 +5172,95 @@ static bool RunTickEndCollectionSelfTest() {
 	return fullPass && incrementalPass;
 }
 
+static bool RunGarbageCollectionThreadSelfTest() {
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL lua_owned_entities_are_destructed_on_the_sim_thread no threaded Lua states" << std::endl;
+		return false;
+	}
+	const long counter = MovableObject::GetUniqueIDCounter();
+	const bool previousMode = LuaMan::IsDeterministicCollection();
+	LuaMan::SetDeterministicCollection(true);
+	g_LuaMan.CollectGarbageForCheckpoint();
+
+	// Every state a pass collects runs on its own pool thread, so two dropping states put two finalizers on the same managers at once.
+	constexpr int c_DropsPerState = 64;
+	const size_t droppingStates = states.size() < 2 ? states.size() : 2;
+	std::vector<long> uids(droppingStates, 0);
+	for (size_t index = 0; index < droppingStates; ++index) {
+		LuaStateWrapper& state = states[index];
+		state.RunScriptString("_GCThreadDrop = {}; for i = 1, " + std::to_string(c_DropsPerState) + " do _GCThreadDrop[#_GCThreadDrop + 1] = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\"); _GCThreadDrop[#_GCThreadDrop + 1] = CreateSoundContainer(\"Funds Changed\", \"Base.rte\"); end; _GCThreadUID = _GCThreadDrop[1].UniqueID");
+		{
+			std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
+			lua_getglobal(state.GetLuaState(), "_GCThreadUID");
+			uids[index] = static_cast<long>(lua_tonumber(state.GetLuaState(), -1));
+			lua_pop(state.GetLuaState(), 1);
+		}
+	}
+	const uint64_t offSimThreadBefore = LuabindObjectWrapper::OffSimThreadDeletionCount();
+	const uint64_t simThreadBefore = LuabindObjectWrapper::SimThreadDeletionCount();
+	for (size_t index = 0; index < droppingStates; ++index) {
+		states[index].RunScriptString("_GCThreadDrop = nil; _GCThreadUID = nil");
+	}
+	g_LuaMan.StartAsyncGarbageCollection();
+	g_LuaMan.WaitForAsyncGarbageCollection();
+
+	const uint64_t offSimThread = LuabindObjectWrapper::OffSimThreadDeletionCount() - offSimThreadBefore;
+	const uint64_t simThread = LuabindObjectWrapper::SimThreadDeletionCount() - simThreadBefore;
+	bool allGone = true;
+	for (long uid: uids) {
+		allGone = allGone && uid > 0 && !g_MovableMan.FindObjectByUniqueID(uid);
+	}
+
+	// A Lua-side class over a C++ base holds class_rep::allocate's sentinel until super() builds the base, so only
+	// the built base may reach a finalizer's delete. Both instances die on a pool thread; count where each one went.
+	const auto collectOne = [&states](const std::string& script) {
+		states[0].RunScriptString(script);
+		uint64_t off = 0;
+		uint64_t sim = 0;
+		// An instance reaches its class through a raw pointer, so the pair settles over a few cycles, not one.
+		for (int pass = 0; pass < 4; ++pass) {
+			const uint64_t offBefore = LuabindObjectWrapper::OffSimThreadDeletionCount();
+			const uint64_t simBefore = LuabindObjectWrapper::SimThreadDeletionCount();
+			g_LuaMan.StartAsyncGarbageCollection();
+			g_LuaMan.WaitForAsyncGarbageCollection();
+			off += LuabindObjectWrapper::OffSimThreadDeletionCount() - offBefore;
+			sim += LuabindObjectWrapper::SimThreadDeletionCount() - simBefore;
+		}
+		return std::pair<uint64_t, uint64_t>(off, sim);
+	};
+	// Over a C++ base luabind leaves the instance in the global super closure whether __init finished or not, so clearing
+	// super is what drops it; the class goes too, since a script graph capture refuses a Lua class userdata left in a global.
+	const auto [unbuiltOff, unbuiltSim] = collectOne("class 'F82UnbuiltBase' (Box); function F82UnbuiltBase:__init() error('base never built') end; pcall(function() local held = F82UnbuiltBase() end); super = nil; F82UnbuiltBase = nil");
+	const auto [builtOff, builtSim] = collectOne("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end; do local held = F82BuiltBase() end; super = nil; F82BuiltBase = nil");
+	const bool sentinelHeld = unbuiltSim == 0 && unbuiltOff >= 1 && builtSim >= 1;
+
+	// What the same GC-heavy tick costs, averaged over rounds that drop the same batch again.
+	constexpr int c_TimedRounds = 5;
+	long long passMicroseconds = 0;
+	for (int round = 0; round < c_TimedRounds; ++round) {
+		for (size_t index = 0; index < droppingStates; ++index) {
+			states[index].RunScriptString("_GCThreadDrop = {}; for i = 1, " + std::to_string(c_DropsPerState) + " do _GCThreadDrop[#_GCThreadDrop + 1] = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\"); _GCThreadDrop[#_GCThreadDrop + 1] = CreateSoundContainer(\"Funds Changed\", \"Base.rte\"); end; _GCThreadDrop = nil");
+		}
+		const auto started = std::chrono::steady_clock::now();
+		g_LuaMan.StartAsyncGarbageCollection();
+		g_LuaMan.WaitForAsyncGarbageCollection();
+		passMicroseconds += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+	}
+	passMicroseconds /= c_TimedRounds;
+
+	LuaMan::SetDeterministicCollection(previousMode);
+	g_LuaMan.CollectGarbageForCheckpoint();
+	MovableObject::PinUniqueIDCounter(counter);
+
+	const bool collected = offSimThread + simThread >= droppingStates * c_DropsPerState && allGone;
+	const bool onSimThread = offSimThread == 0;
+	std::cout << "[script-graph-selftest] " << (collected ? "PASS" : "FAIL") << " dropped_lua_owned_entities_are_collected_in_one_parallel_pass states=" << states.size() << " dropping_states=" << droppingStates << " destructed=" << (offSimThread + simThread) << " dropped_uids_gone=" << (allGone ? "yes" : "no") << " pass_us=" << passMicroseconds << std::endl;
+	std::cout << "[script-graph-selftest] " << (onSimThread ? "PASS" : "FAIL") << " lua_owned_entities_are_destructed_on_the_sim_thread off_sim_thread=" << offSimThread << " sim_thread=" << simThread << std::endl;
+	std::cout << "[script-graph-selftest] " << (sentinelHeld ? "PASS" : "FAIL") << " a_lua_class_without_a_built_base_is_never_queued unbuilt_off=" << unbuiltOff << " unbuilt_sim=" << unbuiltSim << " built_off=" << builtOff << " built_sim=" << builtSim << std::endl;
+	return collected && onSimThread && sentinelHeld;
+}
+
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
 	const int id = AllocatePathCallback(m_PathCallbacks, state);
@@ -5184,6 +5278,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	std::cout << "[script-graph-selftest] " << (purgePreserved ? "PASS" : "FAIL") << " native_path_callback_survives_purge" << std::endl;
 	const bool threadedWrites = RunThreadedScriptWriteHashSelfTest();
 	const bool tickEndCollection = RunTickEndCollectionSelfTest();
+	const bool collectionThread = RunGarbageCollectionThreadSelfTest();
 	LuaStatesArray setAside;
 	setAside.swap(m_ScriptStates);
 	LuaStateWrapper* emptyPick = GetAndLockFreeScriptState();
@@ -5191,7 +5286,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	emptyPick->GetMutex().unlock();
 	m_ScriptStates.swap(setAside);
 	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && tickEndCollection && emptySetPicksMaster;
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && tickEndCollection && collectionThread && emptySetPicksMaster;
 }
 
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
@@ -6351,7 +6446,7 @@ LuaStateWrapper* LuaMan::GetAndLockFreeScriptState() {
 }
 
 void LuaMan::ClearUserModuleCache() {
-	m_GarbageCollectionTask.wait();
+	WaitForAsyncGarbageCollection();
 
 	m_MasterScriptState.ClearLuaScriptCache();
 	for (LuaStateWrapper& luaState: m_ScriptStates) {
@@ -6603,6 +6698,7 @@ const std::unordered_map<std::string, PerformanceMan::ScriptTiming> LuaMan::GetS
 }
 
 void LuaMan::Destroy() {
+	WaitForAsyncGarbageCollection();
 	for (int i = 0; i < c_MaxOpenFiles; ++i) {
 		FileClose(i);
 	}
@@ -7456,7 +7552,7 @@ void LuaMan::Update() {
 	}
 
 	// Make sure a GC run isn't happening while we try to apply deletions
-	m_GarbageCollectionTask.wait();
+	WaitForAsyncGarbageCollection();
 
 	// Apply all deletions queued from lua
 	LuabindObjectWrapper::ApplyQueuedDeletions();
@@ -7464,10 +7560,12 @@ void LuaMan::Update() {
 
 void LuaMan::WaitForAsyncGarbageCollection() {
 	m_GarbageCollectionTask.wait();
+	// The collecting threads only unlink; the destructors are ours to run, in state order.
+	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
 }
 
 void LuaMan::CollectGarbageForCheckpoint() {
-	m_GarbageCollectionTask.wait();
+	WaitForAsyncGarbageCollection();
 	// A finalizer keeps its own object, and anything only it reaches, alive for the cycle that runs
 	// it, so one pass does not settle a chain. Repeat while a full collection still frees something.
 	const auto collect = [](LuaStateWrapper& luaState) {
