@@ -823,6 +823,11 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				continue;
 			}
 			ApplyDeferredSoundOp(*sound);
+		} else if (const NetGamePlaceBrain* placeBrain = std::get_if<NetGamePlaceBrain>(&command.payload)) {
+			// A seat's committed brain placement in the synchronized setup editor.
+			if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
+				gameActivity->ApplyNetBrainPlacement(*placeBrain, command.senderPeerId);
+			}
 		}
 	}
 	MovableMan::ReconcileLockstepControlBindings();
@@ -997,6 +1002,111 @@ struct ScopedRenderRNG {
 	ScopedRenderRNG& operator=(const ScopedRenderRNG&) = delete;
 };
 
+namespace {
+	// The end-of-tick state every peer has to agree on. A held tick runs no simulation but still applies
+	// commands and runs the activity, so the same census goes in there too - a divergence inside a hold
+	// would otherwise sit under a hash made of terrain alone.
+	void FeedSimChecksum(const std::deque<Actor*>& actors, const std::deque<MovableObject*>& items,
+	                     const std::deque<MovableObject*>& particles, const std::list<Actor*>* rosters) {
+
+		for (Actor* a: actors) {
+			const int64_t uniqueID = static_cast<int64_t>(a->GetUniqueID());
+			g_SimChecksum.Update("actors", &uniqueID, sizeof(uniqueID));
+			const float posX = a->GetPos().m_X;
+			g_SimChecksum.Update("actors", &posX, sizeof(posX));
+			const float posY = a->GetPos().m_Y;
+			g_SimChecksum.Update("actors", &posY, sizeof(posY));
+			const float velX = a->GetVel().m_X;
+			g_SimChecksum.Update("actors", &velX, sizeof(velX));
+			const float velY = a->GetVel().m_Y;
+			g_SimChecksum.Update("actors", &velY, sizeof(velY));
+			const float health = a->GetHealth();
+			g_SimChecksum.Update("actors", &health, sizeof(health));
+			// Rotational state is on-wire but absent from the linear actors fingerprint — angle and angular velocity split into separate subsystems so a divergence localizes to the update vs the integration.
+			const float actorRotAngle = a->GetRotAngle();
+			g_SimChecksum.Update("rot_angle", &actorRotAngle, sizeof(actorRotAngle));
+			const float actorAngVel = a->GetAngularVel();
+			g_SimChecksum.Update("rot_angvel", &actorAngVel, sizeof(actorAngVel));
+		}
+
+		// Controller input state per actor — catches control drift the actors fingerprint misses.
+		for (Actor* a: actors) {
+			const Controller* controller = a->GetController();
+			const int64_t controllerID = static_cast<int64_t>(a->GetUniqueID());
+			g_SimChecksum.Update("controller", &controllerID, sizeof(controllerID));
+			for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
+				const uint8_t pressed = controller->IsState(static_cast<ControlState>(state)) ? 1 : 0;
+				g_SimChecksum.Update("controller", &pressed, sizeof(pressed));
+			}
+			const Vector move = controller->GetAnalogMove();
+			const Vector aim = controller->GetAnalogAim();
+			const Vector cursor = controller->GetAnalogCursor();
+			const float analog[6] = {move.m_X, move.m_Y, aim.m_X, aim.m_Y, cursor.m_X, cursor.m_Y};
+			g_SimChecksum.Update("controller", analog, sizeof(analog));
+			const int32_t inputMode = static_cast<int32_t>(controller->GetInputMode());
+			g_SimChecksum.Update("controller", &inputMode, sizeof(inputMode));
+			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
+			g_SimChecksum.Update("controller", &aiMode, sizeof(aiMode));
+		}
+
+		// Compact per-particle fingerprint — uniqueID + pos + vel.
+		for (MovableObject* p: particles) {
+			const int64_t particleID = static_cast<int64_t>(p->GetUniqueID());
+			g_SimChecksum.Update("particles", &particleID, sizeof(particleID));
+			const float ppX = p->GetPos().m_X;
+			g_SimChecksum.Update("particles", &ppX, sizeof(ppX));
+			const float ppY = p->GetPos().m_Y;
+			g_SimChecksum.Update("particles", &ppY, sizeof(ppY));
+			const float pvX = p->GetVel().m_X;
+			g_SimChecksum.Update("particles", &pvX, sizeof(pvX));
+			const float pvY = p->GetVel().m_Y;
+			g_SimChecksum.Update("particles", &pvY, sizeof(pvY));
+			const float partAngVel = p->GetAngularVel();
+			g_SimChecksum.Update("rot_angvel", &partAngVel, sizeof(partAngVel));
+		}
+
+		// Same fingerprint for free items — a dropped device's state was only visible as a count before.
+		for (MovableObject* i: items) {
+			const int64_t itemID = static_cast<int64_t>(i->GetUniqueID());
+			g_SimChecksum.Update("items", &itemID, sizeof(itemID));
+			const float ipX = i->GetPos().m_X;
+			g_SimChecksum.Update("items", &ipX, sizeof(ipX));
+			const float ipY = i->GetPos().m_Y;
+			g_SimChecksum.Update("items", &ipY, sizeof(ipY));
+			const float ivX = i->GetVel().m_X;
+			g_SimChecksum.Update("items", &ivX, sizeof(ivX));
+			const float ivY = i->GetVel().m_Y;
+			g_SimChecksum.Update("items", &ivY, sizeof(ivY));
+			const float itemAngVel = i->GetAngularVel();
+			g_SimChecksum.Update("rot_angvel", &itemAngVel, sizeof(itemAngVel));
+		}
+
+		// Lightweight population metadata — catches spawn/delete count drift.
+		const int32_t actorCount = static_cast<int32_t>(actors.size());
+		g_SimChecksum.Update("scene", &actorCount, sizeof(actorCount));
+		const int32_t itemCount = static_cast<int32_t>(items.size());
+		g_SimChecksum.Update("scene", &itemCount, sizeof(itemCount));
+		const int32_t particleCount = static_cast<int32_t>(particles.size());
+		g_SimChecksum.Update("scene", &particleCount, sizeof(particleCount));
+		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+			const int32_t rosterSize = static_cast<int32_t>(rosters[team].size());
+			g_SimChecksum.Update("scene", &rosterSize, sizeof(rosterSize));
+		}
+		if (const Activity* activity = g_ActivityMan.GetActivity()) {
+			for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+				const float teamFunds = activity->GetTeamFunds(team);
+				g_SimChecksum.Update("funds", &teamFunds, sizeof(teamFunds));
+			}
+		}
+
+		// Snapshot the sim + Lua RNG states here — before the see-ray and MOID-draw futures launch
+		// and start mutating g_SimRNG on the thread pool — so the snapshot can't be raced.
+		const std::string rngState = g_SimRNG.SerializeStateForHashing();
+		g_SimChecksum.Update("sim_rng", rngState.data(), rngState.size());
+		g_LuaMan.HashAllLuaStatesIntoSimChecksum();
+	}
+} // namespace
+
 bool MovableMan::RunLockstepPausedTick() {
 	const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	std::string error;
@@ -1014,6 +1124,11 @@ bool MovableMan::RunLockstepPausedTick() {
 	g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 	CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
 	ApplyLockstepGameCommands(readyFrame);
+	// A held tick hashes what a simulated one does: the activity, its funds and every Lua state still run
+	// while the world waits, so a divergence inside a setup or pause hold is caught by the same exchange.
+	if (g_SimChecksum.IsActive()) {
+		FeedSimChecksum(m_Actors, m_Items, m_Particles, m_ActorRoster);
+	}
 	return true;
 }
 
@@ -4562,102 +4677,7 @@ void MovableMan::Update() {
 	// Fields go in individually with fixed-width types so the byte stream is cross-OS-stable.
 	if (g_SimChecksum.IsActive()) {
 		DumpControllerDebugSnapshot("end_tick_before_checksum", static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), m_Actors, nullptr, nullptr, &m_Particles);
-
-		for (Actor* a: m_Actors) {
-			const int64_t uniqueID = static_cast<int64_t>(a->GetUniqueID());
-			g_SimChecksum.Update("actors", &uniqueID, sizeof(uniqueID));
-			const float posX = a->GetPos().m_X;
-			g_SimChecksum.Update("actors", &posX, sizeof(posX));
-			const float posY = a->GetPos().m_Y;
-			g_SimChecksum.Update("actors", &posY, sizeof(posY));
-			const float velX = a->GetVel().m_X;
-			g_SimChecksum.Update("actors", &velX, sizeof(velX));
-			const float velY = a->GetVel().m_Y;
-			g_SimChecksum.Update("actors", &velY, sizeof(velY));
-			const float health = a->GetHealth();
-			g_SimChecksum.Update("actors", &health, sizeof(health));
-			// Rotational state is on-wire but absent from the linear actors fingerprint — angle and angular velocity split into separate subsystems so a divergence localizes to the update vs the integration.
-			const float actorRotAngle = a->GetRotAngle();
-			g_SimChecksum.Update("rot_angle", &actorRotAngle, sizeof(actorRotAngle));
-			const float actorAngVel = a->GetAngularVel();
-			g_SimChecksum.Update("rot_angvel", &actorAngVel, sizeof(actorAngVel));
-		}
-
-		// Controller input state per actor — catches control drift the actors fingerprint misses.
-		for (Actor* a: m_Actors) {
-			const Controller* controller = a->GetController();
-			const int64_t controllerID = static_cast<int64_t>(a->GetUniqueID());
-			g_SimChecksum.Update("controller", &controllerID, sizeof(controllerID));
-			for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
-				const uint8_t pressed = controller->IsState(static_cast<ControlState>(state)) ? 1 : 0;
-				g_SimChecksum.Update("controller", &pressed, sizeof(pressed));
-			}
-			const Vector move = controller->GetAnalogMove();
-			const Vector aim = controller->GetAnalogAim();
-			const Vector cursor = controller->GetAnalogCursor();
-			const float analog[6] = {move.m_X, move.m_Y, aim.m_X, aim.m_Y, cursor.m_X, cursor.m_Y};
-			g_SimChecksum.Update("controller", analog, sizeof(analog));
-			const int32_t inputMode = static_cast<int32_t>(controller->GetInputMode());
-			g_SimChecksum.Update("controller", &inputMode, sizeof(inputMode));
-			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
-			g_SimChecksum.Update("controller", &aiMode, sizeof(aiMode));
-		}
-
-		// Compact per-particle fingerprint — uniqueID + pos + vel.
-		for (MovableObject* p: m_Particles) {
-			const int64_t particleID = static_cast<int64_t>(p->GetUniqueID());
-			g_SimChecksum.Update("particles", &particleID, sizeof(particleID));
-			const float ppX = p->GetPos().m_X;
-			g_SimChecksum.Update("particles", &ppX, sizeof(ppX));
-			const float ppY = p->GetPos().m_Y;
-			g_SimChecksum.Update("particles", &ppY, sizeof(ppY));
-			const float pvX = p->GetVel().m_X;
-			g_SimChecksum.Update("particles", &pvX, sizeof(pvX));
-			const float pvY = p->GetVel().m_Y;
-			g_SimChecksum.Update("particles", &pvY, sizeof(pvY));
-			const float partAngVel = p->GetAngularVel();
-			g_SimChecksum.Update("rot_angvel", &partAngVel, sizeof(partAngVel));
-		}
-
-		// Same fingerprint for free items — a dropped device's state was only visible as a count before.
-		for (MovableObject* i: m_Items) {
-			const int64_t itemID = static_cast<int64_t>(i->GetUniqueID());
-			g_SimChecksum.Update("items", &itemID, sizeof(itemID));
-			const float ipX = i->GetPos().m_X;
-			g_SimChecksum.Update("items", &ipX, sizeof(ipX));
-			const float ipY = i->GetPos().m_Y;
-			g_SimChecksum.Update("items", &ipY, sizeof(ipY));
-			const float ivX = i->GetVel().m_X;
-			g_SimChecksum.Update("items", &ivX, sizeof(ivX));
-			const float ivY = i->GetVel().m_Y;
-			g_SimChecksum.Update("items", &ivY, sizeof(ivY));
-			const float itemAngVel = i->GetAngularVel();
-			g_SimChecksum.Update("rot_angvel", &itemAngVel, sizeof(itemAngVel));
-		}
-
-		// Lightweight population metadata — catches spawn/delete count drift.
-		const int32_t actorCount = static_cast<int32_t>(m_Actors.size());
-		g_SimChecksum.Update("scene", &actorCount, sizeof(actorCount));
-		const int32_t itemCount = static_cast<int32_t>(m_Items.size());
-		g_SimChecksum.Update("scene", &itemCount, sizeof(itemCount));
-		const int32_t particleCount = static_cast<int32_t>(m_Particles.size());
-		g_SimChecksum.Update("scene", &particleCount, sizeof(particleCount));
-		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
-			const int32_t rosterSize = static_cast<int32_t>(m_ActorRoster[team].size());
-			g_SimChecksum.Update("scene", &rosterSize, sizeof(rosterSize));
-		}
-		if (const Activity* activity = g_ActivityMan.GetActivity()) {
-			for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
-				const float teamFunds = activity->GetTeamFunds(team);
-				g_SimChecksum.Update("funds", &teamFunds, sizeof(teamFunds));
-			}
-		}
-
-		// Snapshot the sim + Lua RNG states here — before the see-ray and MOID-draw futures launch
-		// and start mutating g_SimRNG on the thread pool — so the snapshot can't be raced.
-		const std::string rngState = g_SimRNG.SerializeStateForHashing();
-		g_SimChecksum.Update("sim_rng", rngState.data(), rngState.size());
-		g_LuaMan.HashAllLuaStatesIntoSimChecksum();
+		FeedSimChecksum(m_Actors, m_Items, m_Particles, m_ActorRoster);
 	}
 
 	// Freeze the material terrain for the threaded vision pass so carves can't race the see-ray reads.

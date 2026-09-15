@@ -173,6 +173,18 @@ namespace RTE {
 		/// @return Current message shown to player.
 		std::string GetScreenText(int whichScreen = 0) const { return (whichScreen >= 0 && whichScreen < c_MaxScreenCount) ? m_ScreenText[whichScreen] : ""; }
 
+		/// The wrapped message and the box it occupies on a player's screen.
+		struct ScreenTextLayout {
+			int x = 0, y = 0, width = 0, height = 0;
+			std::string text;
+		};
+
+		/// Gets the message a player's screen carries, laid out the way DrawScreenText draws it.
+		/// @param whichScreen Which player screen to lay out.
+		/// @param decorated Whether to measure the blinking form of the message.
+		/// @return The drawn text and its box; an empty box when the screen carries no message.
+		ScreenTextLayout GetScreenTextLayout(int whichScreen, bool decorated);
+
 		/// Sets the message to be displayed on top of each player's screen
 		/// @param message An std::string that specifies what should be displayed.
 		/// @param whichScreen Which screen you want to set text to.

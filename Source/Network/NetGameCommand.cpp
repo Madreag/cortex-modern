@@ -37,6 +37,8 @@ namespace RTE {
 				return NetGameCommandType::AIScriptMessage;
 			} else if constexpr (std::is_same_v<T, NetGameAIGib>) {
 				return NetGameCommandType::AIGib;
+			} else if constexpr (std::is_same_v<T, NetGamePlaceBrain>) {
+				return NetGameCommandType::PlaceBrain;
 			}
 		}, payload);
 	}
@@ -80,6 +82,8 @@ namespace RTE {
 				return "AIScriptMessage";
 			case NetGameCommandType::AIGib:
 				return "AIGib";
+			case NetGameCommandType::PlaceBrain:
+				return "PlaceBrain";
 		}
 		return "Unknown";
 	}

@@ -541,7 +541,9 @@ namespace RTE {
 		// Host-star: the host relays each client's frames/checksums to the other clients.
 		lockstepConfig.relayToOtherPeers = config.host;
 		lockstepConfig.frameLane = NetTransportLane::ControlReliable;
-		lockstepConfig.scenario = config.scenario;
+		// Peers compare the activity in the start handshake, so it comes from the adopted config like every
+		// other agreed field; a joining peer's own request only carries its local default.
+		lockstepConfig.scenario = m_UseLobbyProtocol ? m_MatchConfig.activityPreset : config.scenario;
 		lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(m_MatchConfig.ownershipPolicy);
 		lockstepConfig.matchConfig = m_MatchConfig;
 		// The host tags each round so a late packet from the previous round cannot join this one.

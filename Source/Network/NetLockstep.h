@@ -463,6 +463,7 @@ namespace RTE {
 		static constexpr uint16_t c_ValueObservationVersion = 20;
 		static constexpr uint16_t c_AIOrderWriterVersion = 21;
 		static constexpr uint16_t c_AIPassEventVersion = 22;
+		static constexpr uint16_t c_PlaceBrainVersion = 22;
 		static constexpr uint16_t c_SeatSnapshotVersion = 17;
 		static constexpr uint16_t c_MinVersion = 8;
 		static constexpr uint16_t c_RoundVersion = 11;

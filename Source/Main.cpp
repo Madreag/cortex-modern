@@ -58,6 +58,7 @@
 #include "AHuman.h"
 #include "Attachable.h"
 #include "GameActivity.h"
+#include "NetActivitySetup.h"
 #include "MovableObject.h"
 #include "RTETools.h"
 #include "RotatePrimitiveSelfTest.h"
@@ -85,6 +86,7 @@
 #include "NetIdentitySelfTest.h"
 #include "NetLanDiscovery.h"
 #include "NetLockstep.h"
+#include "NetLobbyProtocol.h"
 #include "NetMatchReplay.h"
 #include "TelemetryBundle.h"
 #include "NetLockstepSelfTest.h"
@@ -138,6 +140,7 @@
 #include <filesystem>
 #include <format>
 #include <iostream>
+#include <iomanip>
 #include <random>
 #include <deque>
 #include <array>
@@ -229,6 +232,7 @@ static bool s_netMatch = false;
 static bool s_netMatchServiceE2E = false;
 static bool s_netDedicated = false;
 static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
+static std::string s_netMatchServiceConfigPath;
 
 // The W97 router port-mapping feature: opt-in by setting or flag, probed headless.
 static int s_netPortMapCli = -1; // -1 unset; -net-port-map off|on forces 0/1 over the setting.
@@ -279,6 +283,7 @@ static std::string s_netJoinSessionId; //!< -net-join-session: the directory ses
 // input-delay behind needs those forwards to finish its own last tick.
 static constexpr uint32_t c_CappedStopDrainMs = 8000;
 static constexpr uint32_t c_CappedStopLingerMs = 1500;
+static constexpr uint64_t c_NetMatchE2EEditorTickCap = 120; //!< A synchronized setup editor that has not finished by here is stuck, not slow.
 static uint64_t s_netLockstepTicks = 0;
 static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
 static uint16_t s_netLockstepInputDelay = 0;
@@ -289,6 +294,8 @@ static std::optional<uint32_t> s_netMatchCPUSlots;
 static std::string s_netMatchMode = "pvp";
 static std::string s_netMatchOwnershipPolicy = "team-owner";
 static bool s_netMatchServiceE2EEnteredEditor = false;
+static bool s_netMatchE2EBrainPlacement = false; //!< -net-match-e2e-brain-placement: this peer places its own seats' brains in the synchronized setup editor.
+static uint64_t s_netMatchE2EEditorTicks = 0; //!< Ticks the activity has spent in the setup editor, so a match that never leaves it fails instead of idling.
 static NetMatchE2ETickClock s_netMatchE2ETicks;
 static long s_netMatchE2EActorCensus = -1;
 static long s_netMatchE2EActorCensusPeak = -1; //!< The max actor count seen, so a transient heal double-spawn that later sheds back to normal is still visible.
@@ -863,6 +870,10 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			s_netMatchServiceE2EPreset = argValue[++i];
 			continue;
 		}
+		if (!lastArg && currentArg == "-net-match-service-config") {
+			s_netMatchServiceConfigPath = argValue[++i];
+			continue;
+		}
 
 		if (!lastArg && currentArg == "-menu-script") {
 			s_menuScriptPath = argValue[++i];
@@ -891,6 +902,13 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-ticks") {
 			s_netLockstepTicks = static_cast<uint64_t>(std::strtoull(argValue[++i], nullptr, 10));
+			continue;
+		}
+
+		if (currentArg == "-net-match-e2e-brain-placement") {
+			// Stand in for each local player's DONE in the setup editor: place this peer's own seats' brains.
+			s_netMatchE2EBrainPlacement = true;
+			++i;
 			continue;
 		}
 
@@ -2122,6 +2140,18 @@ static std::string DescribeCanonicalExtras(std::vector<std::string>& problems) {
 // The probe's save file is per process, so concurrent probes never read each other's world.
 static std::string RollbackProbeSaveName() {
 	return "rbprobe_" + std::to_string(System::GetProcessID());
+}
+
+/// Whether a resync is taking the coordinator down and rebuilding it: the snapshot is being made, sent or
+/// loaded, or the stop that starts all that is still waiting to be read. The world holds meanwhile.
+static bool NetMatchResyncRebuilding() {
+	if (g_NetMatchService.IsMatchResyncing() || g_ActivityMan.LockstepRelaunchInProgress()) {
+		return true;
+	}
+	// The stop that starts a resync is read a tick or two after the coordinator goes down, and the peer that
+	// only hears about it reads it later still. A match that heals in place is given that window; the editor's
+	// own tick cap still bounds it, and a match that does not heal fails the moment its coordinator stops.
+	return g_NetMatchService.IsResyncOnDesyncEnabled() && ScenarioRunner::HasLockstepCoordinator();
 }
 
 /// Whether this completed update batch has a harness frame to present.
@@ -3539,6 +3569,21 @@ void RunGameLoop() {
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
 			const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			if (simTick == 1 && (s_netMatchServiceE2E || !s_netReplayInPath.empty() || ScenarioRunner::IsActive())) {
+				if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) {
+					std::cout << "[e2e] rules tick=" << simTick << " difficulty=" << activity->GetDifficulty()
+					          << " gold=" << activity->GetStartingGold() << " fog=" << activity->GetFogOfWarEnabled()
+					          << " orbit=" << activity->GetRequireClearPathToOrbit() << " deploy=" << g_SceneMan.GetPlaceUnitsOnLoad();
+					for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+						std::cout << " team" << team << ".tech=" << std::quoted(activity->GetTeamTech(team))
+						          << " team" << team << ".ai=" << activity->GetTeamAISkill(team)
+						          << " team" << team << ".funds=" << activity->GetTeamFunds(team);
+					}
+					const Scene* loadedScene = g_SceneMan.GetScene();
+					std::cout << " cpu_team=" << activity->GetCPUTeam() << " activity=" << std::quoted(activity->GetModuleAndPresetName())
+					          << " scene=" << std::quoted(loadedScene ? loadedScene->GetModuleAndPresetName() : std::string()) << std::endl;
+				}
+			}
 			// Sample the sim hash on an interval during live lockstep for the runtime desync check. It runs
 			// under -tick-hashes too: an offline trace compare only reads the divergence after the run, so
 			// skipping it there left the live check dead in every two-peer harness arm.
@@ -3588,15 +3633,45 @@ void RunGameLoop() {
 					g_ActivityMan.EndActivity();
 				}
 			}
-			const bool lockstepPausedTick = ScenarioRunner::IsLockstepPaused();
+			// E2E control: stand in for each local player's DONE in the synchronized setup editor. The two
+			// seats place different brains at different spots, so a placement that failed to cross the wire
+			// leaves the peers holding different brains and the shared tick hashes part.
+			if (s_netMatchServiceE2E && s_netMatchE2EBrainPlacement && ScenarioRunner::IsLockstepControllerSyncActive()) {
+				if (auto* placementActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+				    placementActivity && placementActivity->GetActivityState() == Activity::Editing) {
+					static const std::pair<const char*, const char*> s_e2eBrains[] = {{"Actor", "Brain Case"}, {"AHuman", "Brain Robot"}, {"Actor", "Brain Case"}, {"AHuman", "Brain Robot"}};
+					for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+						if (!placementActivity->IsSeatActive(player) || !placementActivity->IsLocalHumanSeat(player)) {
+							continue;
+						}
+						if (placementActivity->PlaceAndSubmitLockstepBrain(player, s_e2eBrains[player].first, s_e2eBrains[player].second, "Base.rte")) {
+							std::cout << "[net-match-service-e2e] brain placement submitted: seat=" << player
+							          << " preset=" << s_e2eBrains[player].second << " tick=" << simTick << std::endl;
+						}
+					}
+				}
+			}
+
+			const bool lockstepPaused = ScenarioRunner::IsLockstepPaused();
+			// The synchronized setup editor holds the world still while the seats place their brains, so a
+			// per-machine editor never edits a sim that is advancing and every peer holds the same ticks.
+			// The editor itself still runs, and the placements ride the held tick's own frame exchange.
+			const Activity* setupActivity = ScenarioRunner::IsLockstepControllerSyncActive() ? g_ActivityMan.GetActivity() : nullptr;
+			const bool lockstepSetupHold = !lockstepPaused && setupActivity && setupActivity->GetActivityState() == Activity::Editing;
+			const bool lockstepPausedTick = lockstepPaused || lockstepSetupHold;
 			if (lockstepPausedTick) {
 				// The sim holds still: read the sim-rate resume key, exchange an empty frame so
 				// commands and stops still flow, and step the shared resume countdown.
-				if (!s_netMatchServiceE2E && g_UInputMan.KeyPressedSim(SDLK_P)) {
+				if (!s_netMatchServiceE2E && lockstepPaused && g_UInputMan.KeyPressedSim(SDLK_P)) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{g_NetMatchService.GetLocalTeam(), false}});
 				}
+				if (lockstepSetupHold) {
+					g_ActivityMan.Update();
+				}
 				g_MovableMan.RunLockstepPausedTick();
-				ScenarioRunner::AdvanceLockstepPausedTick();
+				if (lockstepPaused) {
+					ScenarioRunner::AdvanceLockstepPausedTick();
+				}
 			}
 			if (!lockstepPausedTick) {
 				g_LuaMan.Update();
@@ -4297,12 +4372,24 @@ void RunGameLoop() {
 				const Activity::ActivityState activityState = activity->GetActivityState();
 				if (activityState == Activity::Editing) {
 					s_netMatchServiceE2EEnteredEditor = true;
-					s_netMatchServiceE2EError = "activity entered unsynchronized setup editor";
-					s_netMatchServiceE2EExitCode = 1;
-					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
-					g_ActivityMan.EndActivity();
-					System::SetQuit(true);
-					break;
+					// A lockstep match's setup editor is synchronized: seats commit their placements over the
+					// wire and every peer starts on the same frame. Only an unsynchronized one is an error.
+					std::string editorError;
+					// A resync takes the coordinator down and rebuilds it around the host's snapshot, and the
+					// editor holds while that happens. An editor nobody synchronizes never gets one back.
+					if (!ScenarioRunner::IsLockstepControllerSyncActive() && !NetMatchResyncRebuilding()) {
+						editorError = "activity entered unsynchronized setup editor";
+					} else if (++s_netMatchE2EEditorTicks > c_NetMatchE2EEditorTickCap) {
+						editorError = "setup editor did not finish within " + std::to_string(c_NetMatchE2EEditorTickCap) + " ticks";
+					}
+					if (!editorError.empty()) {
+						s_netMatchServiceE2EError = editorError;
+						s_netMatchServiceE2EExitCode = 1;
+						g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
+						g_ActivityMan.EndActivity();
+						System::SetQuit(true);
+						break;
+					}
 				}
 				// E2E rematch ride-through: match 1 ended, so finish it, reconvene the live session in the
 				// lobby, and relaunch — round 2 is policed by the live desync exchange like any match.
@@ -4983,38 +5070,15 @@ bool StageResyncedMatchActivity(std::string* error) {
 	return g_NetMatchService.StageResyncedMatchLaunch(error);
 }
 
-bool ConfigureNetMatchActivity(const std::string& activityPreset, int localTeam, std::string* error) {
-	const Entity* presetEntity = g_PresetMan.GetEntityPreset("GAScripted", activityPreset);
-	const Activity* presetActivity = dynamic_cast<const Activity*>(presetEntity);
-	if (!presetActivity) {
-		if (error) *error = "could not find multiplayer activity preset";
-		return false;
-	}
-	if (!presetActivity->GetSceneName().empty()) {
-		g_SceneMan.SetSceneToLoad(presetActivity->GetSceneName(), true, false);
-	}
-	Activity* activity = dynamic_cast<Activity*>(presetActivity->Clone());
+bool ConfigureNetMatchActivity(const NetMatchConfig& config, int localTeam, std::string* error) {
+	Activity* activity = NetActivitySetup::CreateConfiguredActivity(config, localTeam, error);
 	if (!activity) {
-		if (error) *error = "could not create multiplayer activity";
 		return false;
 	}
-	// A dedicated host owns no seat: NoTeam means clear the players but still run every roster team.
-	if (localTeam != Activity::NoTeam && (localTeam < Activity::TeamOne || localTeam >= Activity::MaxTeamCount)) {
-		delete activity;
-		if (error) *error = "invalid local team";
-		return false;
-	}
-	if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
-		gameActivity->ClearPlayers(false);
-		if (!gameActivity->ConfigureLockstepPlayers() && localTeam != Activity::NoTeam) {
-			gameActivity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
-		}
-		// Activate every team in the synced roster so all peers run the identical team set.
-		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
-			if (team == localTeam || ScenarioRunner::IsLockstepActiveTeam(team)) {
-				gameActivity->ForceSetTeamAsActive(team);
-				gameActivity->SetTeamFunds(0, team);
-				if (s_netMatchServiceE2E) {
+	if (s_netMatchServiceE2E) {
+		if (const GameActivity* gameActivity = dynamic_cast<const GameActivity*>(activity)) {
+			for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+				if (team == localTeam || ScenarioRunner::IsLockstepActiveTeam(team)) {
 					std::cout << "[e2e] TeamIsCPU team=" << team << " value=" << (gameActivity->TeamIsCPU(team) ? 1 : 0) << std::endl;
 				}
 			}
@@ -5027,7 +5091,17 @@ bool ConfigureNetMatchActivity(const std::string& activityPreset, int localTeam,
 }
 
 bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error) {
-	return ConfigureNetMatchActivity(activityPreset, g_NetMatchService.GetLocalTeam(), error);
+	// The roster's agreed config is the launch descriptor on every peer, the dedicated host and here.
+	const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+	if (!config) {
+		if (error) *error = "the launching match carries no agreed config";
+		return false;
+	}
+	if (!activityPreset.empty() && activityPreset != config->activityPreset) {
+		if (error) *error = "the service's launch activity \"" + activityPreset + "\" differs from the agreed \"" + config->activityPreset + "\"";
+		return false;
+	}
+	return ConfigureNetMatchActivity(*config, g_NetMatchService.GetLocalTeam(), error);
 }
 
 // Drives a recorded match through the standard lockstep apply path: a no-remote coordinator over
@@ -5068,7 +5142,7 @@ int RunNetReplayPlayback() {
 			break;
 		}
 	}
-	if (!ConfigureNetMatchActivity(replayConfig.activityPreset, localTeam, &setupError)) {
+	if (!ConfigureNetMatchActivity(replayConfig, localTeam, &setupError)) {
 		std::cerr << "[net-replay] setup failed: " << setupError << std::endl;
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		return 1;
@@ -5197,6 +5271,20 @@ int RunNetMatchServiceE2E() {
 		request.port = s_netPort;
 		request.playerName = e2eHost ? "Host" : "Client";
 		request.activityPreset = s_netMatchServiceE2EPreset;
+		if (e2eHost && !s_netMatchServiceConfigPath.empty()) {
+			std::ifstream input(s_netMatchServiceConfigPath, std::ios::binary);
+			std::vector<uint8_t> bytes(NetLobbyProtocol::c_HeaderBytes + NetLobbyProtocol::c_MaxPayloadBytes + 1);
+			input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+			bytes.resize(static_cast<size_t>(input.gcount()));
+			const auto decoded = NetLobbyProtocol::Decode(bytes);
+			const auto* payload = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
+			if (!payload || payload->config.dedicated != request.dedicated) {
+				setupError = payload ? "launch config dedicated role differs from command line" : "launch config: " + decoded.error.message;
+			} else {
+				request.standardRules = payload->config;
+				request.activityPreset = payload->config.activityPreset;
+			}
+		}
 		// The e2e honours -net-match-ownership-policy; team-owner is the default so the flagless path is unchanged.
 		NetActorOwnershipPolicy e2ePolicy;
 		request.ownershipPolicy = NetMatchConfigUtil::ParseOwnershipPolicy(s_netMatchOwnershipPolicy, e2ePolicy) ? e2ePolicy : NetActorOwnershipPolicy::TeamOwner;
@@ -5211,7 +5299,7 @@ int RunNetMatchServiceE2E() {
 		}
 		request.resyncOnDesync = s_netMatchResyncOnDesync;
 		request.autoInputDelay = s_netMatchAutoDelay;
-		if (!g_NetMatchService.Start(request, &setupError)) {
+		if (!setupError.empty() || !g_NetMatchService.Start(request, &setupError)) {
 			s_netMatchServiceE2EExitCode = 1;
 		}
 	}
@@ -5252,6 +5340,10 @@ int RunNetMatchServiceE2E() {
 	}
 
 	if (setupError.empty()) {
+		// The report names the adopted activity, which a joining peer's own request does not carry.
+		if (!activityPreset.empty()) {
+			s_netMatchServiceE2EPreset = activityPreset;
+		}
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::cout << "[net-match-service-e2e] lobby_snapshot: state=" << snapshot.serviceState
 				  << " is_host=" << (snapshot.isHost ? 1 : 0) << " members=" << snapshot.members.size()
