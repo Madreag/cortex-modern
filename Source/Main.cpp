@@ -2134,11 +2134,10 @@ static bool NetMatchResyncRebuilding() {
 	if (g_NetMatchService.IsMatchResyncing() || g_ActivityMan.LockstepRelaunchInProgress()) {
 		return true;
 	}
-	if (!g_NetMatchService.IsResyncOnDesyncEnabled() || !ScenarioRunner::HasControllerReplayError()) {
-		return false;
-	}
-	const std::string& stop = ScenarioRunner::GetControllerReplayError();
-	return stop.find("Desync") != std::string::npos || stop.find("ResyncRequested") != std::string::npos;
+	// The stop that starts a resync is read a tick or two after the coordinator goes down, and the peer that
+	// only hears about it reads it later still. A match that heals in place is given that window; the editor's
+	// own tick cap still bounds it, and a match that does not heal fails the moment its coordinator stops.
+	return g_NetMatchService.IsResyncOnDesyncEnabled() && ScenarioRunner::HasLockstepCoordinator();
 }
 
 /// Whether this completed update batch has a harness frame to present.
