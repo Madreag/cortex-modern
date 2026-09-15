@@ -127,6 +127,7 @@ int Activity::Create(const Activity& reference) {
 	m_TeamCount = reference.m_TeamCount;
 	m_SharedPlayerSeats = reference.m_SharedPlayerSeats;
 	m_LocalInputPlayers = reference.m_LocalInputPlayers;
+	m_LockstepControlUID = reference.m_LockstepControlUID;
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		m_Team[player] = reference.m_Team[player];
@@ -636,6 +637,7 @@ void Activity::ClearPlayers(bool resetFunds) {
 		m_IsActive[player] = false;
 		m_IsHuman[player] = false;
 		m_LocalInputPlayers[player] = player;
+		m_LockstepControlUID[player] = 0;
 
 		if (resetFunds) {
 			m_FundsContribution[player] = 0;
