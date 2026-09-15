@@ -51,6 +51,10 @@ namespace {
 		int left = 0, right = 0;
 	};
 
+	/// The column the stock picker settles into (Base.rte/GUIs/ObjectPickerGUI.ini [PickerGUIBox] Width),
+	/// reserved whole from the first frame of its slide so the overlay holds one place while it animates.
+	constexpr int c_EditorPanelWidth = 360;
+
 	EditorArea FreeArea(int screenWidth) {
 		EditorArea area;
 		area.right = screenWidth;
@@ -61,9 +65,9 @@ namespace {
 			area.editing = true;
 			const int occlusion = g_CameraMan.GetScreenOcclusion(game->ScreenOfPlayer(player)).GetRoundIntX();
 			if (occlusion < 0) {
-				area.right = std::max(0, screenWidth + occlusion);
-			} else {
-				area.left = std::min(screenWidth, occlusion);
+				area.right = std::max(0, screenWidth - std::max(c_EditorPanelWidth, -occlusion));
+			} else if (occlusion > 0) {
+				area.left = std::min(screenWidth, std::max(c_EditorPanelWidth, occlusion));
 			}
 			break;
 		}
