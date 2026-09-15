@@ -32,6 +32,8 @@
 #include "lj_target.h"
 #include "lj_prng.h"
 #include "lj_fopen.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 /* -- Error handling ------------------------------------------------------ */
 
@@ -681,8 +683,12 @@ static LJ_AINLINE void trace_pendpatch(jit_State *J, int force)
 void lj_trace_abort(global_State *g)
 {
   jit_State *J = G2J(g);
+  TraceState was = J->state;
   J->state = (TraceState)((uint32_t)J->state & ~(uint32_t)LJ_TRACE_ACTIVE);
   if (J->state != LJ_TRACE_IDLE) {
+    if (getenv("CC_TEST_NET_RECLAIM_DIAG"))
+      fprintf(stderr, "[preview-write-barrier] f91-abort leftover was=%u now=%u mode=%u\n",
+	      (unsigned)was, (unsigned)J->state, (unsigned)g->dispatchmode);
     trace_pendpatch(J, 1);
     J->state = LJ_TRACE_IDLE;
   }

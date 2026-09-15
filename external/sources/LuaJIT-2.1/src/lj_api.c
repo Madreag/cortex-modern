@@ -1116,6 +1116,10 @@ LUA_API void lua_call(lua_State *L, int nargs, int nresults)
 	      "thread called in wrong state %d", L->status);
   lj_checkapi_slot(nargs+1);
   lj_vm_call(L, api_call_base(L, nargs), nresults+1);
+#if LJ_HASJIT
+  if (G2J(G(L))->state != LJ_TRACE_IDLE)
+    lj_trace_abort(G(L));
+#endif
 }
 
 LUA_API int lua_pcall(lua_State *L, int nargs, int nresults, int errfunc)
@@ -1125,9 +1129,9 @@ LUA_API int lua_pcall(lua_State *L, int nargs, int nresults, int errfunc)
   ptrdiff_t ef;
   int status;
 #if LJ_HASJIT
-  /* Re-install hot counting if an abort left record dispatch on an idle recorder. */
-  if (G2J(g)->state == LJ_TRACE_IDLE)
-    lj_dispatch_update(g);
+  /* Leftover 1-6 is below ACTIVE and keeps record dispatch without a recorder. */
+  if (G2J(g)->state < LJ_TRACE_ACTIVE)
+    lj_trace_abort(g);
 #endif
   oldh = hook_save(g);
   lj_checkapi(L->status == LUA_OK || L->status == LUA_ERRERR,
@@ -1141,6 +1145,10 @@ LUA_API int lua_pcall(lua_State *L, int nargs, int nresults, int errfunc)
   }
   status = lj_vm_pcall(L, api_call_base(L, nargs), nresults+1, ef);
   if (status) hook_restore(g, oldh);
+#if LJ_HASJIT
+  if (G2J(g)->state != LJ_TRACE_IDLE)
+    lj_trace_abort(g);
+#endif
   return status;
 }
 
@@ -1197,6 +1205,9 @@ LUA_API int lua_yield(lua_State *L, int nresults)
   void *cf = L->cframe;
   global_State *g = G(L);
   if (cframe_canyield(cf)) {
+#if LJ_HASJIT
+    lj_trace_abort(g);
+#endif
     cf = cframe_raw(cf);
     if (!hook_active(g)) {  /* Regular yield: move results down if needed. */
       cTValue *f = L->top - nresults;
@@ -1235,10 +1246,16 @@ LUA_API int lua_yield(lua_State *L, int nresults)
 
 LUA_API int lua_resume(lua_State *L, int nargs)
 {
-  if (L->cframe == NULL && L->status <= LUA_YIELD)
-    return lj_vm_resume(L,
+  if (L->cframe == NULL && L->status <= LUA_YIELD) {
+    int status = lj_vm_resume(L,
       L->status == LUA_OK ? api_call_base(L, nargs) : L->top - nargs,
       0, 0);
+#if LJ_HASJIT
+    if (G2J(G(L))->state != LJ_TRACE_IDLE)
+      lj_trace_abort(G(L));
+#endif
+    return status;
+  }
   L->top = L->base;
   setstrV(L, L->top, lj_err_str(L, LJ_ERR_COSUSP));
   incr_top(L);
