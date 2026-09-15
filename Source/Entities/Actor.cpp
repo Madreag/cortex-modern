@@ -170,6 +170,9 @@ void Actor::Clear() {
 	m_PendingDeferredAIModes.clear();
 	m_InflightAIMode = AIMODE_NONE;
 	m_InflightAIModeUntil = -1;
+	m_LastOrderedWaypoint.Reset();
+	m_HasOrderedWaypoint = false;
+	m_LastOrderedWaypointUID = 0;
 	m_WaypointCursor = 0;
 	m_DrawWaypoints = false;
 	m_MoveTarget.Reset();
@@ -351,6 +354,9 @@ int Actor::Create(const Actor& reference) {
 
 	m_AIMode = reference.m_AIMode;
 	m_Waypoints = reference.m_Waypoints;
+	m_LastOrderedWaypoint = reference.m_LastOrderedWaypoint;
+	m_HasOrderedWaypoint = reference.m_HasOrderedWaypoint;
+	m_LastOrderedWaypointUID = reference.m_LastOrderedWaypointUID;
 	m_DrawWaypoints = reference.m_DrawWaypoints;
 	m_MoveTarget = reference.m_MoveTarget;
 	m_pMOMoveTarget = reference.m_pMOMoveTarget;
@@ -1154,6 +1160,9 @@ void Actor::AddAISceneWaypoint(const Vector& waypoint) {
 	}
 	ConsumeInflightWaypoint(DeferredWaypoint::Scene, waypoint.m_X, waypoint.m_Y, 0);
 	m_Waypoints.push_back(std::pair<Vector, MovableObject*>(waypoint, (MovableObject*)NULL));
+	m_LastOrderedWaypoint = waypoint;
+	m_LastOrderedWaypointUID = 0;
+	m_HasOrderedWaypoint = true;
 }
 
 void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
@@ -1172,6 +1181,9 @@ void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
 	if (g_MovableMan.ValidMO(pMOWaypoint) && (m_Waypoints.empty() || m_Waypoints.back().second != pMOWaypoint)) {
 		ConsumeInflightWaypoint(DeferredWaypoint::MOTarget, pMOWaypoint->GetPos().m_X, pMOWaypoint->GetPos().m_Y, static_cast<int64_t>(pMOWaypoint->GetUniqueID()));
 		m_Waypoints.push_back(std::pair<Vector, const MovableObject*>(pMOWaypoint->GetPos(), pMOWaypoint));
+		m_LastOrderedWaypoint = pMOWaypoint->GetPos();
+		m_LastOrderedWaypointUID = static_cast<int64_t>(pMOWaypoint->GetUniqueID());
+		m_HasOrderedWaypoint = true;
 	}
 }
 
@@ -1183,6 +1195,9 @@ void Actor::ClearAIWaypoints() {
 	ConsumeInflightWaypoint(DeferredWaypoint::Clear, 0.0F, 0.0F, 0);
 	m_pMOMoveTarget = 0;
 	m_Waypoints.clear();
+	m_LastOrderedWaypoint.Reset();
+	m_HasOrderedWaypoint = false;
+	m_LastOrderedWaypointUID = 0;
 	m_WaypointCursor = 0;
 	m_MovePath.clear();
 	m_MoveTarget = m_Pos;
@@ -1286,7 +1301,24 @@ Vector Actor::GetLastAIWaypoint() const {
 	}
 	if (!m_Waypoints.empty()) {
 		return m_Waypoints.back().first;
-	} else if (!m_MovePath.empty()) {
+	}
+	// The move path is this machine's own pathfinder answer, and the activity scripts that read this
+	// steer shared sim state with it, so under lockstep the ordered point is what every peer reads.
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+		if (!m_HasOrderedWaypoint) {
+			return m_Pos;
+		}
+		// An order that named an MO follows it, the way the single-player path end does; the identity is
+		// synced, so every peer reads the same live object.
+		if (m_LastOrderedWaypointUID != 0) {
+			const MovableObject* ordered = g_MovableMan.FindObjectByUniqueID(static_cast<long int>(m_LastOrderedWaypointUID));
+			if (g_MovableMan.ValidMO(ordered)) {
+				return ordered->GetPos();
+			}
+		}
+		return m_LastOrderedWaypoint;
+	}
+	if (!m_MovePath.empty()) {
 		return m_MovePath.back();
 	}
 	return m_Pos;
@@ -2752,7 +2784,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 }
 
 std::string Actor::SaveActorRuntime() const {
-	CheckpointWriter archive("ActorRuntime1");
+	CheckpointWriter archive("ActorRuntime3");
 	archive(m_PlayerControllable, m_Status, m_Health, m_MaxHealth, m_PrevHealth, m_LastSecondTimer, m_LastSecondPos);
 	archive(m_RecentMovement, m_TravelImpulseDamage, m_StableRecoverTimer, m_StableVel, m_StableRecoverDelay, m_HeartBeat, m_NewControlTmr);
 	archive(m_DeathTmr, m_GoldCarried, m_GoldPicked, m_CanRun, m_CrouchWalkSpeedMultiplier, m_AimState, m_AimRange);
@@ -2761,6 +2793,7 @@ std::string Actor::SaveActorRuntime() const {
 	archive(m_CanRevealUnseen, m_CharHeight, m_HolsterOffset, m_ReloadOffset, m_ViewPoint, m_MaxInventoryMass, m_OffWireAimTick);
 	archive(m_OffWireAim, m_OffWireFlipTick, m_OffWireFlip, m_HotkeyActivated, m_HUDStack, m_DeploymentID, m_PassengerSlots);
 	archive(m_AIBaseDigStrength, m_BaseMass, m_AIMode, m_WaypointCursor, m_DrawWaypoints, m_MoveTarget, m_PrevPathTarget);
+	archive(m_LastOrderedWaypoint, m_HasOrderedWaypoint, m_LastOrderedWaypointUID);
 	archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
 	archive(m_PersistedActorIconReferences[0].empty() ? CaptureActorIconReference(m_pTeamIcon) : m_PersistedActorIconReferences[0], m_PersistedActorIconReferences[1].empty() ? CaptureActorIconReference(m_pControllerIcon) : m_PersistedActorIconReferences[1]);
 	return archive.Text();
@@ -2768,7 +2801,11 @@ std::string Actor::SaveActorRuntime() const {
 
 bool Actor::LoadActorRuntime(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader archive(text, "ActorRuntime1", validateOnly);
+		// A text written before the ordered waypoint was kept reads as an actor that was never given one,
+		// and one written before the ordered MO identity reads as an order that named a scene point.
+		const bool version1 = text.starts_with("13 ActorRuntime1 ");
+		const bool version2 = text.starts_with("13 ActorRuntime2 ");
+		CheckpointReader archive(text, version1 ? "ActorRuntime1" : version2 ? "ActorRuntime2" : "ActorRuntime3", validateOnly);
 		archive(m_PlayerControllable, m_Status, m_Health, m_MaxHealth, m_PrevHealth, m_LastSecondTimer, m_LastSecondPos);
 		archive(m_RecentMovement, m_TravelImpulseDamage, m_StableRecoverTimer, m_StableVel, m_StableRecoverDelay, m_HeartBeat, m_NewControlTmr);
 		archive(m_DeathTmr, m_GoldCarried, m_GoldPicked, m_CanRun, m_CrouchWalkSpeedMultiplier, m_AimState, m_AimRange);
@@ -2777,6 +2814,16 @@ bool Actor::LoadActorRuntime(std::string_view text, bool validateOnly) {
 		archive(m_CanRevealUnseen, m_CharHeight, m_HolsterOffset, m_ReloadOffset, m_ViewPoint, m_MaxInventoryMass, m_OffWireAimTick);
 		archive(m_OffWireAim, m_OffWireFlipTick, m_OffWireFlip, m_HotkeyActivated, m_HUDStack, m_DeploymentID, m_PassengerSlots);
 		archive(m_AIBaseDigStrength, m_BaseMass, m_AIMode, m_WaypointCursor, m_DrawWaypoints, m_MoveTarget, m_PrevPathTarget);
+		if (version1) {
+			archive.OnCommit([this] { m_LastOrderedWaypoint.Reset(); m_HasOrderedWaypoint = false; m_LastOrderedWaypointUID = 0; });
+		} else {
+			archive(m_LastOrderedWaypoint, m_HasOrderedWaypoint);
+			if (version2) {
+				archive.OnCommit([this] { m_LastOrderedWaypointUID = 0; });
+			} else {
+				archive(m_LastOrderedWaypointUID);
+			}
+		}
 		archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
 		std::array<std::string, 2> icons;
 		archive.Value(icons);
