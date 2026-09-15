@@ -10675,13 +10675,27 @@ namespace RTE {
 				if (!host.QueueLocalInput(tick, {MakeFrame(100, tick)}, {}, error) ||
 					!survivor.QueueLocalInput(tick, {MakeFrame(300, tick)}, {}, error)) return finish("survivor input refused");
 			}
+			bool passed = true;
+			// A dropped seat pauses commits until the host resolves it, so the round reaches leaveFrame+1 only past the hold.
+			if (dropped) {
+				host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, 20000);
+				if (!DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor, [&] {
+					return host.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired &&
+						survivor.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired;
+				}, error)) return finish("expiry did not reach both survivors");
+				const bool running = host.IsRunning() && survivor.IsRunning();
+				passed &= running;
+				std::cout << "[net-lockstep-selftest] " << (running ? "PASS " : "FAIL ") << name
+					<< " expired host_state=" << static_cast<int>(host.GetState()) << " survivor_state=" << static_cast<int>(survivor.GetState()) << std::endl;
+			}
 			std::array<std::map<uint64_t, NetLockstepReadyFrame>, 2> committed;
 			if (!DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor, [&] {
 				NetLockstepReadyFrame ready;
 				while (host.PopReadyFrame(ready)) committed[0][ready.frame] = ready;
 				while (survivor.PopReadyFrame(ready)) committed[1][ready.frame] = ready;
 				return committed[0].contains(leaveFrame + 1) && committed[1].contains(leaveFrame + 1);
-			}, error)) return finish("survivors did not commit leaveFrame+1");
+			}, error)) return finish("survivors did not commit leaveFrame+1; committed=" + std::to_string(committed[0].size()) + "/" + std::to_string(committed[1].size()) +
+				" host=" + host.BuildReportJson() + " survivor=" + survivor.BuildReportJson());
 
 			std::unique_ptr<Activity> activity(new Activity());
 			g_ActivityMan.SwapCheckpointActivity(activity);
@@ -10706,7 +10720,6 @@ namespace RTE {
 			g_SceneMan.ReinstateScene(fixtureScene); // Swaps the arm's Scene in; finish() swaps it back out.
 			if (!g_ActivityMan.GetActivity()->ApplyNetPlayerBindings(bindings)) return finish("initial bindings refused");
 			g_ActivityMan.GetActivity()->CaptureNetPlayerBindings(bindings);
-			bool passed = true;
 			std::array<std::array<std::string, 4>, 2> states;
 			std::array<NetLockstepCoordinator*, 2> peers{&host, &survivor};
 			for (size_t view = 0; view < peers.size(); ++view) {
@@ -10748,17 +10761,6 @@ namespace RTE {
 				}
 			}
 			passed &= states[0] == states[1];
-			if (dropped) {
-				host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, 20000);
-				if (!DriveTrio(hostT, leaverT, survivorT, host, leaver, survivor, [&] {
-					return host.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired &&
-						survivor.HeldSeatResolution(2) == NetLockstepHoldResolution::Expired;
-				}, error)) return finish("expiry did not reach both survivors");
-				const bool running = host.IsRunning() && survivor.IsRunning();
-				passed &= running;
-				std::cout << "[net-lockstep-selftest] " << (running ? "PASS " : "FAIL ") << name
-					<< " expired host_state=" << static_cast<int>(host.GetState()) << " survivor_state=" << static_cast<int>(survivor.GetState()) << std::endl;
-			}
 
 			ScenarioRunner::SetLockstepCoordinator(&leaver);
 			if (!g_ActivityMan.GetActivity()->ApplyNetPlayerBindings(bindings)) return finish("returning bindings refused");
