@@ -5,11 +5,21 @@ $taskExe = Join-Path $taskRepo 'Cortex Command.exe'
 if (-not (Test-Path -LiteralPath "$taskRoot/red/completed.json") -or -not (Test-Path -LiteralPath "$taskRoot/reference/completed.json")) {
     throw 'Run the RED and reference phases before building.'
 }
-while (Get-Process -Name cl,link -ErrorAction SilentlyContinue) {
-    Start-Sleep -Seconds 5
+# Two build lanes may run at once, so wait on other worktrees' MSBuild drivers, not on every compiler.
+$foreign = {
+    @(Get-CimInstance Win32_Process -Filter "Name='MSBuild.exe'" -ErrorAction SilentlyContinue | Where-Object {
+        ([string]$_.CommandLine) -match '\.sln' -and ([string]$_.CommandLine) -notmatch [regex]::Escape($taskRepo.Replace('/', '\'))
+    }).Count
 }
-if (Get-Process -Name 'Cortex Command*' -ErrorAction SilentlyContinue) {
-    throw 'An engine is running; the build lane is not available.'
+$deadline = (Get-Date).AddHours(3)
+while ((& $foreign) -ge 2 -and (Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 60
+}
+if ((& $foreign) -ge 2) { throw 'Two other worktrees have been building for three hours; the build lane never opened.' }
+# Only this tree's engine holds this tree's link target; other lanes' engines are their own business.
+if (Get-CimInstance Win32_Process -Filter "Name like 'Cortex Command%'" -ErrorAction SilentlyContinue |
+        Where-Object { ([string]$_.CommandLine) -match [regex]::Escape($taskExe.Replace('/', '\')) }) {
+    throw 'An engine of this tree is running; the build lane is not available.'
 }
 $env:CL = '/MP6'
 $env:CCCP_HEADLESS = '1'
