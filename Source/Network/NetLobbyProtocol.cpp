@@ -63,41 +63,6 @@ namespace RTE {
 			});
 		}
 
-		// Sequence-length tracking: a lead announces 1-3 continuation bytes, each 10xxxxxx; overlongs,
-		// surrogates and truncated sequences are refused.
-		bool IsValidUtf8(const std::string& value) {
-			for (size_t index = 0; index < value.size();) {
-				const unsigned char lead = static_cast<unsigned char>(value[index]);
-				size_t need = 0;
-				if (lead < 0x80U) {
-					need = 0;
-				} else if (lead < 0xC2U) {
-					return false;
-				} else if (lead < 0xE0U) {
-					need = 1;
-				} else if (lead < 0xF0U) {
-					need = 2;
-				} else if (lead < 0xF5U) {
-					need = 3;
-				} else {
-					return false;
-				}
-				if (index + 1 + need > value.size()) return false;
-				for (size_t trail = 1; trail <= need; ++trail) {
-					if ((static_cast<unsigned char>(value[index + trail]) & 0xC0U) != 0x80U) return false;
-				}
-				if (need >= 1) {
-					const unsigned char next = static_cast<unsigned char>(value[index + 1]);
-					if (lead == 0xE0U && next < 0xA0U) return false;
-					if (lead == 0xEDU && next >= 0xA0U) return false;
-					if (lead == 0xF0U && next < 0x90U) return false;
-					if (lead == 0xF4U && next >= 0x90U) return false;
-				}
-				index += 1 + need;
-			}
-			return true;
-		}
-
 		bool AppendString(std::vector<uint8_t>& out, const std::string& value, size_t maxBytes, const char* fieldName, NetLobbyError* error) {
 			if (value.size() > maxBytes || value.size() > std::numeric_limits<uint16_t>::max()) {
 				SetError(error, NetLobbyErrorCode::StringTooLong, out.size(), std::string(fieldName) + " exceeds max encoded length");
@@ -115,7 +80,7 @@ namespace RTE {
 		// A display name is the one field a player types freely, so it is also held to valid UTF-8: a
 		// stray byte rides the roster into every diagnostic dump.
 		bool AppendName(std::vector<uint8_t>& out, const std::string& value, const char* fieldName, NetLobbyError* error) {
-			if (!IsValidUtf8(value)) {
+			if (!NetProtocol::IsValidUtf8(value)) {
 				SetError(error, NetLobbyErrorCode::InvalidString, out.size(), std::string(fieldName) + " is not valid UTF-8");
 				return false;
 			}
@@ -226,7 +191,7 @@ namespace RTE {
 				if (!ReadString(out, NetLobbyProtocol::c_MaxDisplayNameBytes, fieldName, error)) {
 					return false;
 				}
-				if (!IsValidUtf8(out)) {
+				if (!NetProtocol::IsValidUtf8(out)) {
 					SetError(error, NetLobbyErrorCode::InvalidString, lengthOffset, std::string(fieldName) + " is not valid UTF-8");
 					return false;
 				}
