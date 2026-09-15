@@ -381,18 +381,20 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		const std::string pingText = ping ? std::to_string(*ping) : "--";
 		char tail[96];
 		std::snprintf(tail, sizeof(tail), " / D %u / RTT %s ms / PACE %.1f tps", static_cast<unsigned>(m_MatchDelayFrames), pingText.c_str(), s_paceTps);
-		auto compose = [&](const std::string& metrics) {
+		auto compose = [&](const std::string& metrics, bool shortenNames) {
 			std::string line = "NET [F6] / ";
 			if (resyncing) {
 				line += "RESYNCING MATCH";
 			} else if (placing) {
 				const std::string count = " / " + std::to_string(placed) + " of " + std::to_string(seats);
 				const int room = maxTextWidth - font->CalculateWidth(line + "WAITING FOR  TO PLACE" + count + metrics);
-				line += placementNames.empty() ? "ALL BRAINS PLACED" : "WAITING FOR " + FitLine(font, placementNames, room) + " TO PLACE";
+				const std::string names = shortenNames ? FitLine(font, placementNames, room) : DisplayName(placementNames);
+				line += placementNames.empty() ? "ALL BRAINS PLACED" : "WAITING FOR " + names + " TO PLACE";
 				line += count;
 			} else if (holdPause) {
+				const std::string who = holdName.empty() ? "a player" : holdName;
 				const int room = maxTextWidth - font->CalculateWidth(line + "WAITING FOR  " + metrics) - font->CalculateWidth(" (999 s)");
-				line += "WAITING FOR " + FitLine(font, holdName.empty() ? "a player" : holdName, room) + " (" + std::to_string(holdSeconds) + " s)";
+				line += "WAITING FOR " + (shortenNames ? FitLine(font, who, room) : DisplayName(who)) + " (" + std::to_string(holdSeconds) + " s)";
 			} else if (missingFrames) {
 				line += "WAITING FOR FRAMES";
 			} else if (paused) {
@@ -402,13 +404,14 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 			}
 			return line + metrics;
 		};
-		m_StripText = compose(tail);
-		// An open picker leaves a short screen 280 px: the metrics tail gives way before the state does.
+		// An open picker leaves a short screen 280 px, so the line gives way in this order: the whole line,
+		// then the metrics tail, then the names. The count ends the line, so it outlives all of them.
+		m_StripText = compose(tail, false);
 		if (font->CalculateWidth(m_StripText) > maxTextWidth) {
-			m_StripText = compose("");
+			m_StripText = compose("", false);
 		}
 		if (font->CalculateWidth(m_StripText) > maxTextWidth) {
-			m_StripText = FitLine(font, m_StripText, maxTextWidth);
+			m_StripText = compose("", true);
 		}
 		const int height = font->GetFontHeight() + 7;
 		const int width = std::min(freeRight - freeLeft, font->CalculateWidth(m_StripText) + 14);
