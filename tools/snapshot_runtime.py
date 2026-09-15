@@ -275,6 +275,38 @@ SCHEMAS["AEmitterRuntime1"] = [*fields("enabled was_emitting emit_count count_li
     *fields("flash_scale average_burst_impulse average_impulse loudness flash_burst_only sustain_sound sound_follows_emitter")]
 SCHEMAS["Emission1"] = [("entity", "o"), *fields("ppm burst_size accumulator spread min_velocity max_velocity life_variation pushes_emitter inherits_velocity inherits_angular_velocity"),
     *fields("start_timer stop_timer", TIMER), ("offset", VECTOR), ("particle_count", "n")]
+SCHEMAS["PEmitterRuntime1"] = [*fields("enabled was_emitting emit_count count_limit negative_throttle positive_throttle throttle ignore_self burst_scale "
+    "burst_triggered burst_spacing"), ("burst_timer", TIMER), ("play_burst_sound", "n"), ("emit_angle", "o"), ("emission_offset", VECTOR),
+    ("last_emit_timer", TIMER), *fields("flash_scale average_burst_impulse average_impulse loudness flash_burst_only sustain_sound sound_follows_emitter")]
+SCHEMAS["AttachableRuntime1"] = [("parent_offset", VECTOR),
+    *fields("draw_after_parent drawn_normally_by_parent delete_when_removed_from_parent gib_when_removed_from_parent "
+            "apply_transferred_forces_at_offset gib_with_parent_chance parent_gib_blast_strength_multiplier is_wound joint_strength joint_stiffness"),
+    *fields("joint_offset joint_position", VECTOR), ("damage_count", "n"),
+    *fields("inherits_flipped inherits_rot_angle inherited_rot_angle_offset mounted_rot_angle_offset inherits_frame inherits_velocity_when_detached "
+            "inherits_angular_velocity_when_detached atom_subgroup_id collides_with_terrain_while_attached ignores_particles_while_attached"),
+    *fields("previous_parent_offset previous_joint_offset", VECTOR), *fields("previous_rot_angle_offset pre_update_has_run_this_frame")]
+SCHEMAS["ArmRuntime1"] = [*fields("max_length move_speed"), ("hand_idle_offset", VECTOR), ("hand_idle_rotation", "n"),
+    *fields("hand_current_offset hand_previous_position hand_position", VECTOR), ("hand_movement_delay_timer", TIMER),
+    *fields("hand_reached_target grip_strength throw_strength"), ("hand_targets", sequence("o"))]
+SCHEMAS["HandTarget1"] = [("description", "s"), ("offset", VECTOR), *fields("delay flipped")]
+SCHEMAS["LegRuntime1"] = [*fields("contracted_offset extended_offset", VECTOR), *fields("min_extension max_extension normalized_extension"),
+    *fields("target_position idle_offset ankle_offset", VECTOR), *fields("will_idle move_speed")]
+SCHEMAS["MagazineRuntime1"] = fields("round_count full_capacity round_to_travel_ratio discardable ai_aim_velocity ai_aim_max_distance ai_aim_penetration ai_blast_radius")
+SCHEMAS["AEJetpackRuntime1"] = fields("jetpack_type jet_time_total jet_time_left jet_thrust_bonus_multiplier jet_replenish_rate minimum_fuel_ratio "
+    "jet_angle_range can_adjust_angle_while_firing adjusts_throttle_for_weight")
+SCHEMAS["ACraftRuntime1"] = [("hatch_state", "n"), ("hatch_timer", TIMER), *fields("hatch_delay exit_interval"), ("exit_timer", TIMER),
+    *fields("exit_incoming_cursor exit_line_phase has_delivered landing_craft"), *fields("flipped_timer crash_timer", TIMER),
+    *fields("can_enter_orbit max_passengers scuttle_if_flipped_time scuttle_on_death delivery_state altitude_move_state altitude_control "
+            "delivery_delay_multiplier network_delivery"), ("network_delivery_timer", TIMER)]
+SCHEMAS["ACRocketRuntime1"] = [("gear_state", "n"), ("paths", array(2, array(4, "o"))), ("max_gimbal_angle", "n"), ("foot_groups", array(2, "s"))]
+SCHEMAS["ACDropShipRuntime1"] = [("hatch_swing_range", "o"),
+    *fields("hatch_openness lateral_control lateral_control_speed auto_stabilize max_engine_angle hover_height_modifier")]
+SCHEMAS["ADoorRuntime1"] = [("initial_sprite_anim_duration", "n"), ("sensor_timer", TIMER),
+    *fields("sensor_interval door_state door_state_on_stop closed_by_default"), *fields("open_offset closed_offset", VECTOR),
+    *fields("open_angle closed_angle"), ("door_move_timer", TIMER),
+    *fields("door_move_time resume_after_stop changed_direction_after_stop door_move_stop_time"), ("reset_to_default_state_timer", TIMER),
+    *fields("reset_to_default_state_delay draw_material_layer_when_open draw_material_layer_when_closed door_material_id door_material_drawn "
+            "door_material_temp_erased"), ("door_material_redraw_timer", TIMER), ("last_door_material_position", VECTOR)]
 SCHEMAS["SLBackground1"] = [("bitmap_file", "s"), *fields("frame_count frame animation_mode animation_duration animation_reversing"),
     ("animation_timer", TIMER), *fields("manual_animation scroll_x scroll_y"), ("scroll_step", VECTOR), ("scroll_interval", "n"),
     ("scroll_timer", TIMER), ("auto_offset", VECTOR), *fields("fill_left fill_right fill_up fill_down ignore_autoscale clear_color bitmap_updated masked wrap_x wrap_y"),
@@ -466,9 +498,11 @@ _LOCAL_FIELDS = {
     "Controller1": set("input_mode seat_mode player seat_player team next_ignore prev_ignore weapon_next_ignore weapon_prev_ignore pickup_ignore drop_ignore reload_ignore primary_hotkey_ignore".split()),
     "Controller2": set("input_mode seat_mode player seat_player team next_ignore prev_ignore weapon_next_ignore weapon_prev_ignore pickup_ignore drop_ignore reload_ignore primary_hotkey_ignore".split()),
     "Screen1": {name for name, _ in SCHEMAS["Screen1"]},
-    "FrameMan1": {"flashed_last_frame", "flash_timer"},
-    "FrameMan2": {"flashed_last_frame", "flash_timer"},
-    "FrameMan3": {"flashed_last_frame", "flash_timer"},
+    # FlashScreen sets the colour, the timer and the flag together (FrameMan.h:219-222) and only Draw
+    # reads and clears them (FrameMan.cpp:1094-1139); the index is a screen, not a player.
+    "FrameMan1": {"flash_color", "flashed_last_frame", "flash_timer"},
+    "FrameMan2": {"flash_color", "flashed_last_frame", "flash_timer"},
+    "FrameMan3": {"flash_color", "flashed_last_frame", "flash_timer"},
     # The live Allegro colour table and blend alpha are whatever the last blit selected.
     "FramePalette1": {"selected_key", "alpha"},
     # The FMOD listener is the local camera, and a voice's PCM cursor rides the local device clock.
@@ -493,21 +527,39 @@ _LOCAL_FIELDS["Controller3"] = _LOCAL_FIELDS["Controller2"] | set(
     "committed_analog_cursor committed_mouse_movement producing_local_input".split())
 
 
-def project(value, shared=False, snapshot_name=None, path=(), masked=None, local_roles=None, cross_process=False):
-    """Return a structural value, projecting only the named local fields and timer anchors."""
+def project(value, shared=False, snapshot_name=None, path=(), masked=None, local_roles=None, cross_process=False,
+            local_seat=None, asymmetric_seats=()):
+    """Return a structural value, projecting only the named local fields and timer anchors.
+
+    local_seat is this archive's own seat when the two peers share one seat table; None keeps the
+    legacy model where each peer runs as PlayerOne and slot 0 holds its own bindings. asymmetric_seats
+    names the seats only one of the two archives owns, whose per-seat local view is not comparable.
+    """
     if masked is None:
         masked = []
     if isinstance(value, list):
-        return [project(item, shared, snapshot_name, (*path, index), masked, local_roles, cross_process) for index, item in enumerate(value)]
+        return [project(item, shared, snapshot_name, (*path, index), masked, local_roles, cross_process, local_seat, asymmetric_seats)
+                for index, item in enumerate(value)]
     if not isinstance(value, dict):
         return value
-    result = {key: project(item, shared, snapshot_name, (*path, key), masked, local_roles, cross_process) for key, item in value.items()}
+    result = {key: project(item, shared, snapshot_name, (*path, key), masked, local_roles, cross_process, local_seat, asymmetric_seats)
+              for key, item in value.items()}
     version = value.get("version")
 
     def mask(key):
         if key in result:
             result[key] = "LOCAL"
             masked.append((*path, key))
+
+    def mask_seat(key, seat, *rest):
+        owner, location = result[key][seat], (*path, key, seat)
+        for step in rest[:-1]:
+            owner, location = owner[step], (*location, step)
+        if rest:
+            owner[rest[-1]], location = "LOCAL", (*location, rest[-1])
+        else:
+            result[key][seat] = "LOCAL"
+        masked.append(location)
 
     # Timer::m_StartRealTime is a wall-clock reading (TimerMan.h), so two processes never agree on it.
     if (shared or cross_process) and set(value) == {"sim_start", "sim_limit", "real_start", "real_limit"}:
@@ -531,17 +583,35 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
             for key in ("release_timer", "joy_accel_timer", "key_accel_timer"):
                 result[key]["sim_start"] = "LOCAL"
                 masked.append((*path, key, "sim_start"))
-            if len(path) >= 2 and path[-2:] == ("player_controller", 0):
-                mask("team")
+            # MOVE_IDLE and the rest of the state vector come from this machine's hardware (Controller.cpp:541-562).
+            if len(path) >= 2 and path[-2] == "player_controller" and path[-1] in asymmetric_seats:
+                mask("states")
         if version in ("Activity1", "Activity2", "Activity3"):
-            for key in ("player_team", "team_funds_share", "funds_contribution", "human", "actor_links"):
-                result[key][0] = "LOCAL"
-                masked.append((*path, key, 0))
+            if local_seat is None:
+                for key in ("player_team", "team_funds_share", "funds_contribution", "human", "actor_links"):
+                    result[key][0] = "LOCAL"
+                    masked.append((*path, key, 0))
+            for seat in sorted(asymmetric_seats):
+                # Activity::CaptureNetLocalPlayerState (Activity.cpp:1319-1342) names the per-seat local view;
+                # the controlled actor and its cursor are nulled for a non-local seat (Activity.cpp:1365).
+                mask_seat("actor_links", seat, 1)
+                mask_seat("actor_links", seat, 2)
+                mask_seat("player_screen", seat)
+                for key in ("death_timer", "message_timer"):
+                    mask_seat(key, seat, "sim_start")
         if version == "GameActivity1":
-            for key in ("observation_target", "death_view_target", "actor_cursor", "landing_zone"):
-                result[key][0] = "LOCAL"
-                masked.append((*path, key, 0))
-        if version in ("InventoryMenuGUI1", "InventoryMenuGUI2") and path[-3:] == ("player_ui", 0, "inventory"):
+            if local_seat is None:
+                for key in ("observation_target", "death_view_target", "actor_cursor", "landing_zone"):
+                    result[key][0] = "LOCAL"
+                    masked.append((*path, key, 0))
+            for seat in sorted(asymmetric_seats):
+                # GameActivity::CaptureNetLocalPlayerState (GameActivity.cpp:2863-2876); the GUIs themselves are
+                # built only for a local human seat (GameActivity.cpp:826-827, 1181-1182) and the select timer is
+                # wall-clock (GameActivity.cpp:1288 IsPastRealMS).
+                for key in ("observation_target", "death_view_target", "actor_cursor", "landing_zone", "player_ui"):
+                    mask_seat(key, seat)
+                mask_seat("actor_select_timer", seat, "sim_start")
+        if version in ("InventoryMenuGUI1", "InventoryMenuGUI2") and path[-3:] == ("player_ui", 0 if local_seat is None else local_seat, "inventory"):
             mask("center")
             if local_roles:
                 def remap(item, location):
