@@ -180,6 +180,9 @@ namespace RTE {
 		/// the producer included, gibs at the committed tick; everywhere else it happens now.
 		void GibThisFromScript();
 
+		/// The same on a gib a script asked for with an impulse and an object its gibs may not hit.
+		void GibThisFromScript(const Vector& impactImpulse, MovableObject* movableObjectToIgnore);
+
 		/// Sends a message to this object's scripts. Inside a lockstep AI pass the call is queued and crosses
 		/// the wire, so every peer's receiver hears it at the committed tick; everywhere else it runs now.
 		/// @param context Which kind of context the message carries (NetGameAIScriptMessage::Context); past the

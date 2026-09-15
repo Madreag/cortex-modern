@@ -493,6 +493,7 @@ namespace RTE {
 				MOTarget = 1,
 				Clear = 2,
 				MOTargetSet = 3, //!< Sets the move target itself; targetUID 0 clears it.
+				AlarmPoint = 4, //!< Raises the alarm point the pass wrote.
 			};
 			Op op = Scene;
 			float x = 0.0F;
@@ -532,9 +533,16 @@ namespace RTE {
 		/// Queues a message an AI pass sent, so its owner's drain crosses it to every peer.
 		/// @return Whether the call was queued; outside a deferring pass it is made directly as before.
 		static bool QueueAIPassScriptMessage(const MovableObject* receiver, uint8_t context, double number, int64_t contextUID, const std::string& message, const std::string& text);
-		/// Queues a gib an AI pass asked for, so every peer gibs at the committed tick.
+		/// A gib this actor's AI pass asked for, with the call it was made with.
+		struct DeferredGib {
+			int64_t objectUID = 0;
+			int64_t ignoreUID = 0;
+			float impulseX = 0.0F;
+			float impulseY = 0.0F;
+		};
+		/// Queues a gib an AI pass asked for, so every peer gibs at the committed tick with the same call.
 		/// @return Whether the call was queued; outside a deferring pass the gib happens directly as before.
-		static bool QueueAIPassGib(const MovableObject* target);
+		static bool QueueAIPassGib(const MovableObject* target, const Vector& impactImpulse, const MovableObject* movableObjectToIgnore);
 		/// Whether a write to this object made right here belongs to a lockstep AI pass and must be deferred.
 		/// @param target What is written; no target asks only whether a lockstep AI pass is running here.
 		static bool DeferringAIPassWrite(const MovableObject* target);
@@ -543,7 +551,7 @@ namespace RTE {
 		/// Sends this tick's queued messages as synced commands; an actor this machine does not own is dropped.
 		void SendDeferredScriptMessages();
 		/// Hands out the gibs the AI pass queued this tick, in call order; mods don't call this.
-		std::vector<int64_t> TakePendingDeferredGibs();
+		std::vector<DeferredGib> TakePendingDeferredGibs();
 		/// Sends this tick's queued gibs as synced commands; an actor this machine does not own is dropped.
 		void SendDeferredGibs();
 
@@ -1227,7 +1235,7 @@ namespace RTE {
 		// Messages the AI pass sent; the owner sends them so every peer's receiver script hears them at one tick.
 		std::vector<DeferredScriptMessage> m_PendingDeferredScriptMessages;
 		// Gibs the AI pass asked for; the owner sends them so every peer gibs at one tick.
-		std::vector<int64_t> m_PendingDeferredGibs;
+		std::vector<DeferredGib> m_PendingDeferredGibs;
 		// The mode a sent request is carrying and the last tick the AI pass may read it back, so the AI
 		// keeps a coherent view while the request flies. Per machine: never archived, never checksummed.
 		AIMode m_InflightAIMode;
@@ -1270,6 +1278,7 @@ namespace RTE {
 		void QueueAIModeOnRunning(AIMode newMode);
 		int GetAIModeSeenByAIPass() const;
 		const MovableObject* GetMOMoveTargetSeenByAIPass() const;
+		bool AlarmPointSeenByAIPass(Vector& seen) const;
 		AIMode PendingAIMode() const;
 
 		std::string m_PersistedActorRuntime;

@@ -838,7 +838,10 @@ namespace RTE {
 						const NetGameAIGib& gib = std::get<NetGameAIGib>(command.payload);
 						AppendU64LE(out, static_cast<uint64_t>(gib.writerUID));
 						AppendU64LE(out, static_cast<uint64_t>(gib.objectUID));
+						AppendU64LE(out, static_cast<uint64_t>(gib.ignoreUID));
 						AppendU32LE(out, static_cast<uint32_t>(gib.team));
+						AppendU32LE(out, FloatToBitsLE(gib.impulseX));
+						AppendU32LE(out, FloatToBitsLE(gib.impulseY));
 						break;
 					}
 				}
@@ -1688,9 +1691,9 @@ namespace RTE {
 						    !ReadOrTruncated(reader.ReadU64LE(targetUID), reader, error, "ai_order_target_uid")) {
 							return false;
 						}
-						// The move-target op arrived with version 22; below it the byte can only be a stray.
-						if (order.op > NetGameAIOrder::SetMOMoveTarget ||
-						    (order.op == NetGameAIOrder::SetMOMoveTarget && version < NetLockstepCodec::c_AIPassEventVersion)) {
+						// The move-target and alarm-point ops arrived with version 22; below it the byte can only be a stray.
+						if (order.op > NetGameAIOrder::SetAlarmPoint ||
+						    (order.op >= NetGameAIOrder::SetMOMoveTarget && version < NetLockstepCodec::c_AIPassEventVersion)) {
 							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ai order op is invalid");
 							return false;
 						}
@@ -1775,15 +1778,24 @@ namespace RTE {
 						NetGameAIGib gib;
 						uint64_t writerUID = 0;
 						uint64_t objectUID = 0;
+						uint64_t ignoreUID = 0;
 						uint32_t team = 0;
+						uint32_t impulseXBits = 0;
+						uint32_t impulseYBits = 0;
 						if (!ReadOrTruncated(reader.ReadU64LE(writerUID), reader, error, "ai_gib_writer_uid") ||
 						    !ReadOrTruncated(reader.ReadU64LE(objectUID), reader, error, "ai_gib_object_uid") ||
-						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "ai_gib_team")) {
+						    !ReadOrTruncated(reader.ReadU64LE(ignoreUID), reader, error, "ai_gib_ignore_uid") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "ai_gib_team") ||
+						    !ReadOrTruncated(reader.ReadU32LE(impulseXBits), reader, error, "ai_gib_impulse_x") ||
+						    !ReadOrTruncated(reader.ReadU32LE(impulseYBits), reader, error, "ai_gib_impulse_y")) {
 							return false;
 						}
 						gib.writerUID = static_cast<int64_t>(writerUID);
 						gib.objectUID = static_cast<int64_t>(objectUID);
+						gib.ignoreUID = static_cast<int64_t>(ignoreUID);
 						gib.team = static_cast<int32_t>(team);
+						gib.impulseX = FloatFromBitsLE(impulseXBits);
+						gib.impulseY = FloatFromBitsLE(impulseYBits);
 						command.payload = gib;
 						break;
 					}

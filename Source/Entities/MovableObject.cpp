@@ -1524,7 +1524,7 @@ void MovableObject::GibThisFromScript() {
 	}
 	// A gib spawns particles and takes the object out of the world, none of which the producing boundary
 	// can undo, so the AI pass's gib crosses the wire and every peer gibs at the committed tick.
-	if (Actor::QueueAIPassGib(this)) {
+	if (Actor::QueueAIPassGib(this, Vector(), nullptr)) {
 		return;
 	}
 	if (Actor::DeferringAIPassWrite(nullptr)) {
@@ -1532,6 +1532,12 @@ void MovableObject::GibThisFromScript() {
 		g_MovableMan.ReportControllerBoundaryViolation("an unnameable gib", dynamic_cast<const Actor*>(this));
 	}
 	rotating->GibThis();
+}
+
+void MovableObject::GibThisFromScript(const Vector& impactImpulse, MovableObject* movableObjectToIgnore) {
+	if (MOSRotating* rotating = dynamic_cast<MOSRotating*>(this)) {
+		rotating->GibThis(impactImpulse, movableObjectToIgnore);
+	}
 }
 
 void MovableObject::SendScriptedMessage(const std::string& message, uint8_t context, double number, int64_t contextUID, const std::string& text, LuabindObjectWrapper* directContext) {

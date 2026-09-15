@@ -461,6 +461,10 @@ void LuaAdaptersMOSRotating::GibThis(MOSRotating* luaSelfObject) {
 	luaSelfObject->GibThisFromScript();
 }
 
+void LuaAdaptersMOSRotating::GibThisWithImpulse(MOSRotating* luaSelfObject, const Vector& impactImpulse, MovableObject* movableObjectToIgnore) {
+	luaSelfObject->GibThisFromScript(impactImpulse, movableObjectToIgnore);
+}
+
 std::vector<AEmitter*>* LuaAdaptersMOSRotating::GetWounds1(const MOSRotating* luaSelfObject) {
 	return GetWounds2(luaSelfObject, true, false, false);
 }
