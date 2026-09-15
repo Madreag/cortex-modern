@@ -119,6 +119,11 @@ namespace RTE {
 		/// @return Whether the match is holding in the synchronized setup editor.
 		bool DescribeLockstepPlacementWait(std::string& names, int& placed, int& total) const;
 
+		/// Test-only seam: puts a placement command on the wire exactly as issued, so a command every peer
+		/// has to refuse - an unknown preset, a seat this peer does not hold - can be exercised end to end.
+		/// @return Whether the command was enqueued.
+		static bool EnqueueRawBrainPlacement(int player, int team, float posX, float posY, const std::string& className, const std::string& preset, const std::string& module);
+
 		void ClearCheckpointActorIDs() override;
 		bool PrepareCheckpointUI() override;
 		SerializableOverrideMethods;
