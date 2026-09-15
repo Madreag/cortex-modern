@@ -788,15 +788,15 @@ void Activity::SetPlayerBrain(Actor* newBrain, int player) {
 		}
 	}
 	m_Brain[player] = newBrain;
-	// A match hands every seat its brain before the wire has committed a frame for it, and every peer hands the
-	// same one to the same seat, so that is what a script asking who plays the seat gets until a frame names another.
-	if (m_SharedPlayerSeats && newBrain && m_LockstepControlUID[player] == 0) {
-		NoteLockstepControlBinding(NetActorUID(newBrain), player);
-	}
 }
 
 void Activity::AssignSeatBrain(Actor* newBrain, int player) {
 	SetPlayerBrain(newBrain, player);
+	// A match hands every seat its brain before the wire has committed a frame for it, and every peer places the
+	// same one for the same seat, so that is what a script asking who plays the seat gets until a frame names another.
+	if (m_SharedPlayerSeats && newBrain && player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_LockstepControlUID[player] == 0) {
+		NoteLockstepControlBinding(NetActorUID(newBrain), player);
+	}
 }
 
 bool Activity::RunPlayerBrainRecordSelfTest(Actor* humanBrain, Actor* aiBrain, bool* legacyReseeded, bool* lastDitchRecorded) {
