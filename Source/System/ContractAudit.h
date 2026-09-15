@@ -409,6 +409,14 @@ Field(path + ".Actor::DeferredWaypoint.y", object.y);
 Field(path + ".Actor::DeferredWaypoint.targetUID", object.targetUID);
 Field(path + ".Actor::DeferredWaypoint.actorUID", object.actorUID);
 }
+void Visit(const Actor::DeferredAIValue& object, const std::string& path) {
+Field(path + ".Actor::DeferredAIValue.objectUID", object.objectUID);
+Field(path + ".Actor::DeferredAIValue.op", object.op);
+Field(path + ".Actor::DeferredAIValue.number", object.number);
+Field(path + ".Actor::DeferredAIValue.valueUID", object.valueUID);
+Field(path + ".Actor::DeferredAIValue.key", object.key);
+Field(path + ".Actor::DeferredAIValue.text", object.text);
+}
 void Visit(const AHuman::DeferredEquip& object, const std::string& path) {
 Field(path + ".AHuman::DeferredEquip.op", object.op);
 Field(path + ".AHuman::DeferredEquip.depositToFront", object.depositToFront);
@@ -533,6 +541,7 @@ Field(path + ".Actor.m_BaseMass", object.m_BaseMass);
 Field(path + ".Actor.m_AIMode", object.m_AIMode);
 Field(path + ".Actor.m_Waypoints", object.m_Waypoints);
 Field(path + ".Actor.m_PendingDeferredWaypoints", object.m_PendingDeferredWaypoints);
+Field(path + ".Actor.m_PendingDeferredAIValues", object.m_PendingDeferredAIValues);
 Field(path + ".Actor.m_InflightWaypoints", object.m_InflightWaypoints);
 Field(path + ".Actor.m_LastOrderedWaypoint", object.m_LastOrderedWaypoint);
 Field(path + ".Actor.m_HasOrderedWaypoint", object.m_HasOrderedWaypoint);
