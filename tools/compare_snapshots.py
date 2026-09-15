@@ -115,6 +115,8 @@ class GraphReader:
             return kind, owner, middle, self.token()
         if kind in "ijl":
             return kind, self.token(), self.token()
+        if kind == "C":
+            return kind, self.string(), self.string()
         raise ValueError(f"unknown graph token {kind!r} at byte {self.pos - 1}")
 
 
@@ -132,7 +134,7 @@ def graph_references(value):
 def parse_graph(data):
     reader = GraphReader(data)
     version = reader.until()
-    if version not in ("SG1", "SG2", "SG3"):
+    if version not in ("SG1", "SG2", "SG3", "SG4"):
         raise ValueError(f"unsupported graph version {version!r}")
     graph = {"version": version}
     for tag, label in (("r", "roots"), ("G", "globals"), ("L", "loaded")):
@@ -147,7 +149,7 @@ def parse_graph(data):
     if version != "SG1":
         reader.expect("E")
         graph["patches"] = [tuple(reader.token() for _ in range(3)) for _ in range(reader.count())]
-    if version == "SG3":
+    if version in ("SG3", "SG4"):
         reader.expect("R")
         graph["rng"] = reader.token()
     if reader.peek() == "X":

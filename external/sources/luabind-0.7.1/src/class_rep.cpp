@@ -92,7 +92,7 @@ luabind::detail::class_rep::class_rep(LUABIND_TYPE_INFO type
 	, m_adopt_fun(adopt_fun)
 	, m_holder_size(holder_size)
 	, m_holder_alignment(holder_alignment)
-	, m_name(name)
+	, m_name_storage(name ? name : "")
 	, m_class_type(cpp_class)
 	, m_destructor(destructor)
 	, m_const_holder_destructor(const_holder_destructor)
@@ -132,7 +132,7 @@ luabind::detail::class_rep::class_rep(lua_State* L, const char* name)
 	, m_adopt_fun(0)
 	, m_holder_size(0)
 	, m_holder_alignment(1)
-	, m_name(name)
+	, m_name_storage(name ? name : "")
 	, m_class_type(lua_class)
 	, m_destructor(0)
 	, m_const_holder_destructor(0)
@@ -295,7 +295,7 @@ bool luabind::detail::class_rep::settable(lua_State* L)
 			if (j->second.match(L, 3) < 0)
 			{
 				std::string msg("the attribute '");
-				msg += m_name;
+				msg += m_name_storage;
 				msg += ".";
 				msg += key;
 				msg += "' is of type: ";
@@ -317,7 +317,7 @@ bool luabind::detail::class_rep::settable(lua_State* L)
 			// setter for an attribute. We will then fail
 			// because that attribute is read-only
 			std::string msg("the attribute '");
-			msg += m_name;
+			msg += m_name_storage;
 			msg += ".";
 			msg += key;
 			msg += "' is read only";
@@ -470,7 +470,7 @@ int luabind::detail::class_rep::constructor_dispatcher(lua_State* L)
 	{
 		{
 			std::string msg("call of overloaded constructor '");
-			msg += crep->m_name;
+			msg += crep->m_name_storage;
 			msg +=  "(";
 			msg += stack_content_by_name(L, 2);
 			msg += ")' is ambiguous\nnone of the overloads have a best conversion:\n";
@@ -805,7 +805,7 @@ std::string luabind::detail::class_rep::class_info_string(lua_State* L) const
 	std::stringstream ret;
 #endif
 
-	ret << "CLASS: " << m_name << "\n";
+	ret << "CLASS: " << m_name_storage << "\n";
 
 	ret << "dynamic dispatch functions:\n------------------\n";
 
@@ -981,7 +981,7 @@ int luabind::detail::class_rep::super_callback(lua_State* L)
 		{
 			{
 				std::string msg = "no constructor of '";
-				msg += base->m_name;
+				msg += base->m_name_storage;
 				msg += "' matched the arguments (";
 				msg += stack_content_by_name(L, 2);
 				msg += ")";
@@ -993,7 +993,7 @@ int luabind::detail::class_rep::super_callback(lua_State* L)
 		{
 			{
 				std::string msg = "call of overloaded constructor '";
-				msg += base->m_name;
+				msg += base->m_name_storage;
 				msg +=  "(";
 				msg += stack_content_by_name(L, 2);
 				msg += ")' is ambiguous";
@@ -1089,7 +1089,7 @@ int luabind::detail::class_rep::super_callback(lua_State* L)
 		}
 		catch(...)
 		{
-			std::string msg = base->m_name;
+			std::string msg = base->m_name_storage;
 			msg += "() threw an exception";
 			lua_pushstring(L, msg.c_str());
 		}
