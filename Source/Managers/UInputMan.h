@@ -80,6 +80,9 @@ namespace RTE {
 
 		/// Resets the sim-rate edge accumulators. Called at the end of each sim tick.
 		void EndSimUpdate();
+
+		/// Selftest: a scripted element's frame-rate press and release edge once per press, like a device.
+		bool RunScriptedInputEdgeSelfTest();
 #pragma endregion
 
 #pragma region Control Scheme and Input Mapping Handling
