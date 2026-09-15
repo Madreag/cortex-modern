@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-FIXTURE = REPO / "tools/fixtures/brainless_spectate_probe.lua"
+FIXTURE = REPO / "tools/fixtures/spectate_skirmish_activity.lua"
 SCRATCH = Path("D:/mx/opus-l33-brainless-spectate-20260914")
 FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
 BATTERY_LOCK = Path("D:/mx/LEAD_BATTERY.lock")
@@ -39,23 +39,28 @@ HARNESS = Path("D:/Projects/stage2_p4/recovery_e2e.py")
 PORT_RANGE = range(48400, 48420)
 
 PROBE = re.compile(
-    r"\[spectate-probe\] simms=(\d+) state=(-?\d+) views=([-\d,]+) brained_teams=(\d+) winner=(-?\d+)")
+    r"\[spectate-probe\] simms=(\d+) state=(-?\d+) views=([-\d,]+) brained_teams=(\d+) winner=(-?\d+)"
+    r" rule=(1|0|na) scroll=(-?\d+),(-?\d+)")
 KILL = re.compile(r"\[spectate-probe\] brain-kill simms=(\d+) team=(\d+) uid=(\d+)")
 ACTIVITY_OVER = 6  # Activity::ActivityState::Over
 VIEW_OBSERVE = 1  # Activity::ViewState::Observe
 # GetViewState answers Observe for a seat this machine does not own, so only a local seat's row is
 # evidence; the per-peer local seat is read from the match report in PHASE B.
 
-# A three-team skirmish on the STOCK script: one human team and two CPU sides. The preset only
-# names the stock activity file, so the rule under test is the shipped one, not a fixture's copy.
+# A three-team skirmish on the STOCK script: one human team and two CPU sides. The activity subclasses
+# the shipped SkirmishDefense and only seats the brain the scenario menu would place, so the end rule
+# under test is the shipped one, not a fixture's copy. ScenarioRunner::ResolvePresetName pads
+# "Determinism " onto a -scenario name, so the preset carries that prefix and the net service (which
+# takes the name verbatim) gets the same string. The two AI sides are marked by the activity script,
+# not here: the launched activity is a clone of the preset and only the legacy CPUTeam scalar
+# survives that copy, so a preset row would seat one attacker instead of two.
+PRESET = "Determinism Spectate Skirmish"
 SP_INDEX = (
     "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n"
-    "\tAddActivity = GAScripted\n\t\tPresetName = Spectate Skirmish\n"
-    "\t\tSceneName = Grasslands\n\t\tScriptPath = Base.rte/Activities/SkirmishDefense.lua\n"
-    "\t\tLuaClassName = SkirmishDefense\n\t\tMinTeamsRequired = 2\n\t\tMaxPlayerSupport = 1\n"
+    "\tAddActivity = GAScripted\n\t\tPresetName = " + PRESET + "\n"
+    "\t\tSceneName = Grasslands\n\t\tScriptPath = UserScenes.rte/SpectateSkirmish.lua\n"
+    "\t\tLuaClassName = SpectateSkirmish\n\t\tMinTeamsRequired = 2\n\t\tIsTestActivity = 1\n"
     "\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n"
-    "\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 0\n"
-    "\t\tTeamOfPlayer3 = 2\n\t\tPlayer3IsHuman = 0\n"
     "\t\tDefaultFogOfWar = 0\n\t\tDefaultRequireClearPathToOrbit = 0\n\t\tDefaultDeployUnits = 0\n"
 )
 # The spectator's own input: cycle forward twice and back once, well after the brain is gone.
@@ -79,11 +84,35 @@ def refuse_on_locks() -> None:
 
 def probe_rows(text: str) -> list[dict]:
     rows = []
-    for simms, state, views, brained, winner in PROBE.findall(text):
+    for simms, state, views, brained, winner, rule, scroll_x, scroll_y in PROBE.findall(text):
         rows.append({"simms": int(simms), "state": int(state),
                      "views": [int(value) for value in views.split(",")],
-                     "brained_teams": int(brained), "winner": int(winner)})
+                     "brained_teams": int(brained), "winner": int(winner), "rule": rule,
+                     "scroll": [int(scroll_x), int(scroll_y)]})
     return rows
+
+
+def stage_user_module(runtime: Path, settings_value=None) -> Path:
+    """The staged UserScenes module: the three-team preset, its activity script and the probe."""
+    module = Path(runtime) / "Userdata/UserScenes.rte"
+    module.mkdir(parents=True, exist_ok=True)
+    (module / "Index.ini").write_text(SP_INDEX, encoding="utf-8")
+    (module / "SpectateSkirmish.lua").write_bytes(FIXTURE.read_bytes())
+    if settings_value is not None:
+        set_setting(Path(runtime) / "Userdata/Settings.ini", settings_value)
+    return module
+
+
+def set_setting(settings_path: Path, value: bool) -> str:
+    """Write this machine's Gameplay setting; a net peer must follow the host's rule instead of it."""
+    settings = settings_path.read_text(encoding="utf-8-sig")
+    text = "1" if value else "0"
+    settings, count = re.subn(r"(?m)^(\s*BrainlessHumansSpectate\s*=\s*)[^\r\n]*",
+                              lambda match: match[1] + text, settings)
+    if count == 0:
+        settings += f"\n\tBrainlessHumansSpectate = {text}\n"
+    settings_path.write_text(settings, encoding="utf-8")
+    return hashlib.sha256(settings.encode("utf-8")).hexdigest()
 
 
 def peer_log(run_dir: Path) -> str:
@@ -124,22 +153,22 @@ def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float) -> 
         "client": [],
     }
     common = [
-        "-net-match-service-preset", "Spectate Skirmish",
+        "-net-match-service-preset", PRESET,
         "-net-match-mode", "pvpve",
         "-net-match-brainless-spectate", "1" if rule_on else "0",
         "-net-autosave-seconds", "0",
-        "-test-script", "UserScenes.rte/brainless_spectate_probe.lua",
     ]
     lane["host"] += common
     lane["client"] += common
     original_run = harness.run_isolated
 
+    # Both machines' own Gameplay setting is the OPPOSITE of the host's flag, so a peer that read its
+    # local setting instead of the agreed match rule prints the opposite value.
+    local_setting = not rule_on
+
     def prepare(*positional, **keywords):
         run = original_run(*positional, **keywords)
-        module = Path(run.cwd) / "Userdata/UserScenes.rte"
-        module.mkdir(parents=True, exist_ok=True)
-        (module / "Index.ini").write_text(SP_INDEX, encoding="utf-8")
-        (module / "brainless_spectate_probe.lua").write_bytes(FIXTURE.read_bytes())
+        stage_user_module(Path(run.cwd), local_setting)
         return run
 
     harness.run_isolated = prepare
@@ -147,6 +176,7 @@ def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float) -> 
     checks: list[dict] = []
     logs = {peer: peer_log(out / "e2e/brainless_spectate" / peer) for peer in ("host", "client")}
     rows = {peer: probe_rows(text) for peer, text in logs.items()}
+    expected_rule = "1" if rule_on else "0"
     for peer, text in logs.items():
         check(checks, f"{peer}_brains_destroyed", len(KILL.findall(text)) >= 2,
               f"brain-kill lines={len(KILL.findall(text))}", [out / "e2e/brainless_spectate" / peer / "stdout.log"])
@@ -155,12 +185,22 @@ def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float) -> 
               bool(seat_rows) and all(all(view == VIEW_OBSERVE for view in row["views"][:2]) for row in seat_rows),
               f"views after the deaths={[row['views'] for row in seat_rows][:4]}",
               [out / "e2e/brainless_spectate" / peer / "stdout.log"])
-        last = rows[peer][-1] if rows[peer] else None
-        over = bool(last) and last["state"] == ACTIVITY_OVER
-        check(checks, f"{peer}_round_{'ran_on' if rule_on else 'ended'}", over != rule_on,
-              f"last probe row={last}", [out / "e2e/brainless_spectate" / peer / "stdout.log"])
-    check(checks, "peers_agree", rows.get("host") == rows.get("client"),
-          "host and client probe rows are identical", [out / "e2e/brainless_spectate"])
+        # The host's flag is the match rule on BOTH machines, against both local settings.
+        check(checks, f"{peer}_follows_host_rule",
+              bool(rows[peer]) and all(row["rule"] == expected_rule for row in rows[peer]),
+              f"local setting={'1' if local_setting else '0'} rule rows="
+              f"{sorted({row['rule'] for row in rows[peer]})}",
+              [out / "e2e/brainless_spectate" / peer / "stdout.log"])
+    # Today's BuildMatchConfig seats exactly one CPU slot, so after both human brains die exactly one
+    # side stands and the round ends under either rule: the two-AI-sides "runs on" row needs L11's N
+    # CPU teams. What the net arms do prove is that the rule crosses the wire and both peers agree.
+    # The view fields are deliberately per-machine (each peer watches its own seat), so the peers
+    # agree on the SIM fields; the local view is evidence for the sp_view_is_local arm instead.
+    sim_rows = {peer: [{key: value for key, value in row.items() if key not in ("scroll", "views")}
+                       for row in peer_rows] for peer, peer_rows in rows.items()}
+    check(checks, "peers_agree", bool(sim_rows.get("host")) and sim_rows.get("host") == sim_rows.get("client"),
+          f"host rows={len(sim_rows.get('host', []))} client rows={len(sim_rows.get('client', []))}",
+          [out / "e2e/brainless_spectate"])
     result["spectate_checks"] = checks
     result["spectate_pass"] = all(row["status"] == "pass" for row in checks)
     return result
@@ -174,23 +214,12 @@ def sp_arm(out: Path, setting_on: bool, cycle_input: bool, ticks: int, timeout: 
 
     out.mkdir(parents=True, exist_ok=False)
     runtime = prepare_runtime(REPO, out)
-    module = runtime / "Userdata/UserScenes.rte"
-    module.mkdir(parents=True, exist_ok=True)
-    (module / "Index.ini").write_text(SP_INDEX, encoding="utf-8")
-    (module / "brainless_spectate_probe.lua").write_bytes(FIXTURE.read_bytes())
+    stage_user_module(runtime, setting_on)
 
-    settings_path = runtime / "Userdata/Settings.ini"
-    settings = settings_path.read_text(encoding="utf-8-sig")
-    value = "1" if setting_on else "0"
-    settings, count = re.subn(r"(?m)^(\s*BrainlessHumansSpectate\s*=\s*)[^\r\n]*",
-                              lambda match: match[1] + value, settings)
-    if count == 0:
-        settings += f"\n\tBrainlessHumansSpectate = {value}\n"
-    settings_path.write_text(settings, encoding="utf-8")
-
-    flags = ["-scenario", "Spectate Skirmish", "-seed", "42", "-max-ticks", str(ticks),
-             "-tick-hashes", "-out", str(out / "trace.json"),
-             "-test-script", "UserScenes.rte/brainless_spectate_probe.lua"]
+    # Run past the end so BOTH arms report the same number of rows: the round that ends prints its
+    # Over rows instead of simply stopping, which is what tells the two arms apart.
+    flags = ["-scenario", PRESET, "-seed", "42", "-max-ticks", str(ticks),
+             "-scenario-run-past-end", "-tick-hashes", "-out", str(out / "trace.json")]
     if cycle_input:
         input_path = out / "spectator_input.txt"
         input_path.write_text(CYCLE_INPUT, encoding="utf-8")
@@ -207,19 +236,30 @@ def sp_arm(out: Path, setting_on: bool, cycle_input: bool, ticks: int, timeout: 
 
     text = peer_log(out)
     rows = probe_rows(text)
-    last = rows[-1] if rows else None
+    kills = KILL.findall(text)
     checks: list[dict] = []
-    check(checks, "brain_destroyed", bool(KILL.findall(text)), f"kill lines={len(KILL.findall(text))}",
+    check(checks, "brain_destroyed", bool(kills), f"kill lines={len(kills)}", [out / "stdout.log"])
+    # The run's tick cap ends the activity itself, so the last row is Over in both arms. What tells
+    # them apart is the FIRST row after the brain died and how many rows the round then survived.
+    kill_ms = int(kills[0][0]) if kills else 0
+    after = [row for row in rows if row["simms"] >= kill_ms]
+    first_after = after[0] if after else None
+    check(checks, "rows_after_the_death", bool(after), f"rows past the kill={len(after)}",
           [out / "stdout.log"])
-    seat_rows = [row for row in rows if row["simms"] > 6000]
-    check(checks, "seat_observes", bool(seat_rows) and all(row["views"][0] == VIEW_OBSERVE for row in seat_rows),
-          f"seat 0 view after the death={[row['views'][0] for row in seat_rows][:8]}", [out / "stdout.log"])
-    over = bool(last) and last["state"] == ACTIVITY_OVER
-    check(checks, "round_ran_on" if setting_on else "round_ended", over != setting_on,
-          f"last probe row={last}", [out / "stdout.log"])
-    if not setting_on:
-        check(checks, "winner_named", bool(last) and last["winner"] >= 0,
-              f"winner={last['winner'] if last else None}", [out / "stdout.log"])
+    if setting_on:
+        # Only the spectating arm proves anything here: a round that is Over puts every seat in
+        # Observe anyway, so the check would pass on the ended round without meaning it.
+        check(checks, "seat_observes", bool(after) and all(row["views"][0] == VIEW_OBSERVE for row in after),
+              f"seat 0 view after the death={[row['views'][0] for row in after][:8]}", [out / "stdout.log"])
+        running = [row for row in after if row["state"] != ACTIVITY_OVER]
+        check(checks, "round_ran_on",
+              bool(first_after) and first_after["state"] != ACTIVITY_OVER and len(running) >= 5,
+              f"first row after the death={first_after} running rows={len(running)}", [out / "stdout.log"])
+    else:
+        check(checks, "round_ended", bool(first_after) and first_after["state"] == ACTIVITY_OVER,
+              f"first row after the death={first_after}", [out / "stdout.log"])
+        check(checks, "winner_named", bool(first_after) and first_after["winner"] >= 0,
+              f"winner={first_after['winner'] if first_after else None}", [out / "stdout.log"])
     return {"exe": str(exe), "exe_sha256": sha256(exe), "argv": argv, "out": str(out),
             "exit_code": record.get("exit_code"), "timed_out": record.get("timed_out"),
             "trace": str(out / "trace.json"), "probe_rows": rows,
@@ -259,9 +299,22 @@ def main() -> int:
              "--expected-ticks", str(args.ticks)],
             capture_output=True, text=True)
         (out / "compare.log").write_text(compare.stdout + compare.stderr, encoding="utf-8")
+        # Identical hashes only prove "no sim writes" if the cycling input actually reached the
+        # spectator view: the followed unit moves the scroll target away from the plain run's.
+        plain_scroll = [row["scroll"] for row in plain["probe_rows"]]
+        cycled_scroll = [row["scroll"] for row in cycled["probe_rows"]]
+        view_checks: list[dict] = []
+        check(view_checks, "cycling_moved_the_view", plain_scroll != cycled_scroll and bool(cycled_scroll),
+              f"plain scroll={plain_scroll[-4:]} cycled scroll={cycled_scroll[-4:]}",
+              [plain["out"], cycled["out"]])
+        check(view_checks, "sim_rows_identical",
+              [{k: v for k, v in row.items() if k != "scroll"} for row in plain["probe_rows"]] ==
+              [{k: v for k, v in row.items() if k != "scroll"} for row in cycled["probe_rows"]],
+              "every probe field except the local view is identical", [plain["out"], cycled["out"]])
         result = {"plain": plain, "cycled": cycled, "compare_exit": compare.returncode,
-                  "compare_log": str(out / "compare.log")}
-        passed = plain["pass"] and cycled["pass"] and compare.returncode == 0
+                  "compare_log": str(out / "compare.log"), "view_checks": view_checks}
+        passed = (plain["pass"] and cycled["pass"] and compare.returncode == 0
+                  and all(row["status"] == "pass" for row in view_checks))
     else:
         result = sp_arm(out / "run", args.arm == "sp_keep_playing", args.arm == "sp_keep_playing",
                         args.ticks, args.timeout)
