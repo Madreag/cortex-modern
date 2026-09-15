@@ -979,8 +979,10 @@ automoverActorFunctions.convertActorWaypointsToWaypointData = function(self, act
 		waypointData.movableObjectTarget = actor.MOMoveTarget;
 	else
 		waypointData.sceneTargets = {}
-		if actor.MovePathEnd ~= actor.Pos then
-			waypointData.sceneTargets[#waypointData.sceneTargets + 1] = Vector(actor.MovePathEnd.X, actor.MovePathEnd.Y);
+		-- The ordered end, not the move path's: the path is each machine's own and these targets are given back as waypoints.
+		local orderedEnd = actor.OrderedMoveEnd;
+		if orderedEnd ~= actor.Pos then
+			waypointData.sceneTargets[#waypointData.sceneTargets + 1] = Vector(orderedEnd.X, orderedEnd.Y);
 		end
 		for actorSceneWaypoint in actor.SceneWaypoints do
 			waypointData.sceneTargets[#waypointData.sceneTargets + 1] = Vector(actorSceneWaypoint.X, actorSceneWaypoint.Y);
@@ -1115,15 +1117,9 @@ automoverActorFunctions.updateDirectionsFromActorControllerInput = function(self
 
 	local analogMove = actorController.AnalogMove;
 
-	if not actor:IsPlayerControlled() and actor.MovePathSize > 0 then
-		-- Just get the direction to the next waypoint
-		local wptPos;
-
-		-- ugh
-		for pos in actor.MovePath do
-			wptPos = pos;
-			break;
-		end
+	if not actor:IsPlayerControlled() and actor.HasOrderedMove then
+		-- Just get the direction to the next ordered waypoint: the move path is each machine's own and this moves the actor.
+		local wptPos = actor.OrderedMoveStep;
 
 		analogMove = wptPos - actor.Pos;
 
@@ -1194,7 +1190,7 @@ automoverActorFunctions.updateDirectionsFromWaypoints = function(self, actorData
 
 	local actor = actorData.actor;
 
-	if actorData.waypointData == nil and (actor.AIMode == Actor.AIMODE_GOTO or actor.AIMode == Actor.AIMODE_BRAINHUNT or actor.AIMode == Actor.AIMODE_SQUAD) and (actor.MovePathSize > 0 or actor:GetWaypointListSize() > 0) then
+	if actorData.waypointData == nil and (actor.AIMode == Actor.AIMODE_GOTO or actor.AIMode == Actor.AIMODE_BRAINHUNT or actor.AIMode == Actor.AIMODE_SQUAD) and (actor.HasOrderedMove or actor:GetWaypointListSize() > 0) then
 		self:convertActorWaypointsToWaypointData(actorData);
 	end
 
