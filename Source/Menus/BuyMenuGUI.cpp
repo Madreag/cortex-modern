@@ -279,28 +279,33 @@ void BuyMenuGUI::Destroy() {
 }
 
 void BuyMenuGUI::SetBannerImage(const std::string& imagePath) {
+	if (IsInert()) return;
 	ContentFile bannerFile((imagePath.empty() ? c_DefaultBannerImagePath : imagePath).c_str());
 	m_Banner->SetDrawImage(new AllegroBitmap(bannerFile.GetAsBitmap()));
 	m_Banner->SetDrawType(GUICollectionBox::Image);
 }
 
 void BuyMenuGUI::SetLogoImage(const std::string& imagePath) {
+	if (IsInert()) return;
 	ContentFile logoFile((imagePath.empty() ? c_DefaultLogoImagePath : imagePath).c_str());
 	m_Logo->SetDrawImage(new AllegroBitmap(logoFile.GetAsBitmap()));
 	m_Logo->SetDrawType(GUICollectionBox::Image);
 }
 
 void BuyMenuGUI::ClearCartList() {
+	if (IsInert()) return;
 	m_pCartList->ClearList();
 	m_ListItemIndex = 0;
 }
 
 void BuyMenuGUI::AddCartItem(const std::string& name, const std::string& rightText, GUIBitmap* pBitmap, const Entity* pEntity, const int extraIndex) {
+	if (IsInert()) return;
 	m_pCartList->AddItem(name, rightText, pBitmap, pEntity, extraIndex);
 	UpdateItemNestingLevels();
 }
 
 void BuyMenuGUI::DuplicateCartItem(const int itemIndex) {
+	if (IsInert()) return;
 	if (m_pCartList->GetItemList()->empty()) {
 		return;
 	}
@@ -342,6 +347,7 @@ void BuyMenuGUI::DuplicateCartItem(const int itemIndex) {
 }
 
 bool BuyMenuGUI::LoadAllLoadoutsFromFile() {
+	if (IsInert()) return false;
 	// First clear out all loadouts
 	m_Loadouts.clear();
 	m_SelectedLoadoutIndex = -1;
@@ -437,6 +443,7 @@ bool BuyMenuGUI::LoadAllLoadoutsFromFile() {
 }
 
 bool BuyMenuGUI::SaveAllLoadoutsToFile() {
+	if (IsInert()) return false;
 	// Nothing to save
 	if (m_Loadouts.empty())
 		return true;
@@ -469,6 +476,7 @@ bool BuyMenuGUI::SaveAllLoadoutsToFile() {
 }
 
 void BuyMenuGUI::SetEnabled(bool enable) {
+	if (IsInert()) return;
 	if (enable && m_MenuEnabled != ENABLED && m_MenuEnabled != ENABLING) {
 		// If we're not split screen horizontally, then stretch out the layout for all the relevant controls
 		int stretchAmount = g_FrameMan.GetPlayerScreenHeight() - m_pParentBox->GetHeight();
@@ -519,10 +527,12 @@ void BuyMenuGUI::SetEnabled(bool enable) {
 }
 
 void BuyMenuGUI::SetPosOnScreen(int newPosX, int newPosY) {
+	if (IsInert()) return;
 	m_pGUIController->SetPosOnScreen(newPosX, newPosY);
 }
 
 void BuyMenuGUI::SetMetaPlayer(int metaPlayer) {
+	if (IsInert()) return;
 	if (metaPlayer >= Players::PlayerOne && metaPlayer < g_MetaMan.GetPlayerCount()) {
 		m_MetaPlayer = metaPlayer;
 		SetNativeTechModule(g_MetaMan.GetPlayer(m_MetaPlayer)->GetNativeTechModule());
@@ -531,6 +541,7 @@ void BuyMenuGUI::SetMetaPlayer(int metaPlayer) {
 }
 
 void BuyMenuGUI::SetNativeTechModule(int whichModule) {
+	if (IsInert()) return;
 	if (whichModule >= 0 && whichModule < g_PresetMan.GetTotalModuleCount()) {
 		m_NativeTechModule = whichModule;
 		SetModuleExpanded(m_NativeTechModule);
@@ -560,6 +571,7 @@ void BuyMenuGUI::SetNativeTechModule(int whichModule) {
 }
 
 void BuyMenuGUI::SetModuleExpanded(int whichModule, bool expanded) {
+	if (IsInert()) return;
 	int moduleCount = g_PresetMan.GetTotalModuleCount();
 	if (whichModule > 0 && whichModule < moduleCount) {
 		m_aExpandedModules[whichModule] = expanded;
@@ -574,6 +586,7 @@ void BuyMenuGUI::SetModuleExpanded(int whichModule, bool expanded) {
 }
 
 bool BuyMenuGUI::GetOrderList(std::list<const SceneObject*>& listToFill) const {
+	if (IsInert()) return false;
 	if (m_pCartList->GetItemList()->empty())
 		return false;
 
@@ -587,6 +600,7 @@ bool BuyMenuGUI::GetOrderList(std::list<const SceneObject*>& listToFill) const {
 }
 
 bool BuyMenuGUI::CommitPurchase(std::string presetName) {
+	if (IsInert()) return false;
 	if (m_OwnedItems.size() > 0) {
 		if (m_OwnedItems.find(presetName) != m_OwnedItems.end() && m_OwnedItems[presetName] > 0) {
 			m_OwnedItems[presetName] -= 1;
@@ -598,6 +612,7 @@ bool BuyMenuGUI::CommitPurchase(std::string presetName) {
 }
 
 float BuyMenuGUI::GetTotalCost(bool includeDelivery) const {
+	if (IsInert()) return 0.0F;
 	float totalCost = 0;
 
 	if (m_OwnedItems.size() > 0) {
@@ -652,6 +667,7 @@ float BuyMenuGUI::GetTotalCost(bool includeDelivery) const {
 }
 
 float BuyMenuGUI::GetTotalOrderMass() const {
+	if (IsInert()) return 0.0F;
 	float totalMass = 0.0F;
 
 	for (const GUIListPanel::Item* cartItem: *m_pCartList->GetItemList()) {
@@ -667,6 +683,7 @@ float BuyMenuGUI::GetTotalOrderMass() const {
 }
 
 float BuyMenuGUI::GetCraftMass() {
+	if (IsInert()) return 0.0F;
 	float totalMass = 0;
 
 	// Add the delivery craft's mass
@@ -677,6 +694,7 @@ float BuyMenuGUI::GetCraftMass() {
 }
 
 int BuyMenuGUI::GetTotalOrderPassengers() const {
+	if (IsInert()) return 0;
 	int passengers = 0;
 	for (std::vector<GUIListPanel::Item*>::iterator itr = m_pCartList->GetItemList()->begin(); itr != m_pCartList->GetItemList()->end(); ++itr) {
 		const Actor* passenger = dynamic_cast<const Actor*>((*itr)->m_pEntity);
@@ -689,6 +707,7 @@ int BuyMenuGUI::GetTotalOrderPassengers() const {
 }
 
 void BuyMenuGUI::EnableEquipmentSelection(bool enabled) {
+	if (IsInert()) return;
 	if (enabled != m_SelectingEquipment && g_SettingsMan.SmartBuyMenuNavigationEnabled()) {
 		m_SelectingEquipment = enabled;
 		RefreshTabDisabledStates();
@@ -713,6 +732,7 @@ void BuyMenuGUI::EnableEquipmentSelection(bool enabled) {
 }
 
 void BuyMenuGUI::UpdateItemNestingLevels() {
+	if (IsInert()) return;
 	const int ownedDeviceOffsetX = 8;
 
 	int nextHeldDeviceBelongsToAHuman = false;
@@ -742,6 +762,7 @@ void BuyMenuGUI::RefreshTabDisabledStates() {
 }
 
 void BuyMenuGUI::Update() {
+	if (IsInert()) return;
 	// Enable mouse input if the controller allows it
 	m_pGUIController->EnableMouse(m_pController->IsMouseControlled());
 
@@ -1926,6 +1947,7 @@ void BuyMenuGUI::Update() {
 }
 
 void BuyMenuGUI::Draw(BITMAP* drawBitmap) const {
+	if (IsInert()) return;
 	AllegroScreen drawScreen(drawBitmap);
 	m_pGUIController->Draw(&drawScreen);
 	if (IsEnabled() && m_pController->IsMouseControlled()) {
@@ -1982,6 +2004,7 @@ void BuyMenuGUI::FocusChange()
 */
 
 void BuyMenuGUI::CategoryChange(bool focusOnCategoryTabs) {
+	if (IsInert()) return;
 	// Re-set the GUI manager's focus on the tabs if we're supposed to
 	// We don't want to do that if we're just refreshing the same category, like in the case of of expanding a module group item
 	if (focusOnCategoryTabs) {
@@ -2096,6 +2119,7 @@ void BuyMenuGUI::CategoryChange(bool focusOnCategoryTabs) {
 }
 
 void BuyMenuGUI::SaveCurrentLoadout() {
+	if (IsInert()) return;
 	Loadout newSet;
 
 	// Abort if there's no cargo to save into the preset
@@ -2119,6 +2143,7 @@ void BuyMenuGUI::SaveCurrentLoadout() {
 }
 
 bool BuyMenuGUI::DeployLoadout(int index) {
+	if (IsInert()) return false;
 	if (index < 0 || index >= m_Loadouts.size()) {
 		m_SelectedLoadoutIndex = -1;
 		return false;
@@ -2414,6 +2439,7 @@ void BuyMenuGUI::UpdateTotalPassengersLabel(const ACraft* pCraft, GUILabel* pLab
 }
 
 void BuyMenuGUI::TryPurchase() {
+	if (IsInert()) return;
 	int player = m_pController->GetPlayer();
 	// Switch to the Craft category to give the user a hint
 	if (!m_pSelectedCraft) {

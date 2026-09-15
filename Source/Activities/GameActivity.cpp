@@ -379,6 +379,35 @@ void GameActivity::ConfigureLockstepCPUTeams(const std::array<bool, Teams::MaxTe
 	}
 }
 
+// A seat this machine does not present has no menu, editor or banner of its own, and a script that asks for one
+// gets an inert object of the same type: it is never created, so its every method is a no-op and its every getter
+// answers neutral. Offline every seat is this machine's own and the live objects are handed out as before.
+namespace {
+template <class T> T* SeatStub(std::unique_ptr<T>& stub) {
+	if (!stub) stub = std::make_unique<T>();
+	return stub.get();
+}
+} // namespace
+
+BuyMenuGUI* GameActivity::GetBuyGUI(unsigned int which) const {
+	if (which >= Players::MaxPlayerCount) return nullptr;
+	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
+	return presented && m_pBuyGUI[which] ? m_pBuyGUI[which] : SeatStub(m_SeatStubBuyGUI[which]);
+}
+
+SceneEditorGUI* GameActivity::GetEditorGUI(unsigned int which) const {
+	if (which >= Players::MaxPlayerCount) return nullptr;
+	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
+	return presented && m_pEditorGUI[which] ? m_pEditorGUI[which] : SeatStub(m_SeatStubEditorGUI[which]);
+}
+
+GUIBanner* GameActivity::GetBanner(int whichColor, int player) const {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return nullptr;
+	GUIBanner* const live = whichColor == YELLOW ? m_pBannerYellow[player] : m_pBannerRed[player];
+	const bool presented = LocalInputOfPlayer(player) != Players::NoPlayer;
+	return presented && live ? live : SeatStub(m_SeatStubBanner[whichColor == YELLOW ? YELLOW : RED][player]);
+}
+
 bool GameActivity::IsBuyGUIVisible(int which) const {
 	if (which == -1) {
 		const int playerLimit = m_SharedPlayerSeats ? Players::MaxPlayerCount : GetPlayerCount();
@@ -1042,13 +1071,13 @@ void GameActivity::UpdateEditing() {
 		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
-		m_pEditorGUI[player]->Update();
+		GetEditorGUI(player)->Update();
 
 		// Set the team associations with each screen displayed
 		g_CameraMan.SetScreenTeam(m_Team[player], ScreenOfPlayer(player));
 
 		// Check if the player says he's done editing, and if so, make sure he really is good to go
-		if (m_pEditorGUI[player]->GetEditorGUIMode() == SceneEditorGUI::DONEEDITING) {
+		if (GetEditorGUI(player)->GetEditorGUIMode() == SceneEditorGUI::DONEEDITING) {
 			// See if a brain has been placed yet by this player - IN A VALID LOCATION
 			if (!m_pEditorGUI[player]->TestBrainResidence()) {
 				// Hm not ready yet without resident brain in the right spot, so let user know
@@ -1263,7 +1292,7 @@ void GameActivity::Update() {
 			if (m_PlayerController[player].IsState(ACTOR_BRAIN) && m_ViewState[player] != ViewState::ActorSelect) {
 				SwitchToActor(m_Brain[player], player, team);
 				m_ViewState[player] = ViewState::Normal;
-			} else if (m_PlayerController[player].IsState(ACTOR_NEXT) && m_ViewState[player] != ViewState::ActorSelect && !m_pBuyGUI[player]->IsVisible() && !m_LuaLockActor[player]) {
+			} else if (m_PlayerController[player].IsState(ACTOR_NEXT) && m_ViewState[player] != ViewState::ActorSelect && !IsBuyGUIVisible(player) && !m_LuaLockActor[player]) {
 				// Switch to next actor if the player wants to. Don't do it while the buy menu is open
 				// The synchronized actor controller closes shared pie state.
 				if (localPieAnimations && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
@@ -1275,7 +1304,7 @@ void GameActivity::Update() {
 				g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
 			}
 			// Switch to prev actor if the player wants to. Don't do it while the buy menu is open
-			else if (m_PlayerController[player].IsState(ACTOR_PREV) && m_ViewState[player] != ViewState::ActorSelect && !m_pBuyGUI[player]->IsVisible()) {
+			else if (m_PlayerController[player].IsState(ACTOR_PREV) && m_ViewState[player] != ViewState::ActorSelect && !IsBuyGUIVisible(player)) {
 				if (localPieAnimations && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
 					m_ControlledActor[player]->GetPieMenu()->SetEnabled(false);
 				}
@@ -1283,7 +1312,7 @@ void GameActivity::Update() {
 				SwitchToPrevActor(player, team);
 				m_ViewState[player] = ViewState::Normal;
 				g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
-			} else if (m_ViewState[player] != ViewState::ActorSelect && !m_pBuyGUI[player]->IsVisible() && !m_LuaLockActor[player] && (m_PlayerController[player].IsState(ACTOR_NEXT_PREP) || m_PlayerController[player].IsState(ACTOR_PREV_PREP))) {
+			} else if (m_ViewState[player] != ViewState::ActorSelect && !IsBuyGUIVisible(player) && !m_LuaLockActor[player] && (m_PlayerController[player].IsState(ACTOR_NEXT_PREP) || m_PlayerController[player].IsState(ACTOR_PREV_PREP))) {
 				// Go into manual actor select mode if either actor switch buttons are held for a duration
 				if (m_ActorSelectTimer[player].IsPastRealMS(250)) {
 					// Set cursor to start at the head of controlled actor
@@ -1808,7 +1837,7 @@ void GameActivity::Update() {
 
 		if (m_ControlledActor[player] && m_ControlledActor[player]->GetController()->GetSeatPlayerRaw() == player) {
 			// Don't disable when pie menu is active; it is done inside the Controller Update
-			if (m_pBuyGUI[player]->IsVisible() || m_ViewState[player] == ViewState::ActorSelect || m_ViewState[player] == ViewState::LandingZoneSelect || m_ViewState[player] == ViewState::Observe) {
+			if (IsBuyGUIVisible(player) || m_ViewState[player] == ViewState::ActorSelect || m_ViewState[player] == ViewState::LandingZoneSelect || m_ViewState[player] == ViewState::Observe) {
 				m_ControlledActor[player]->GetController()->SetInputMode(Controller::CIM_AI);
 			} else if (m_InventoryMenuGUI[player]->IsEnabledAndNotCarousel()) {
 				m_ControlledActor[player]->GetController()->SetInputMode(Controller::CIM_DISABLED);
