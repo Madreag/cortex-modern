@@ -466,9 +466,11 @@ _LOCAL_FIELDS = {
     "Controller1": set("input_mode seat_mode player seat_player team next_ignore prev_ignore weapon_next_ignore weapon_prev_ignore pickup_ignore drop_ignore reload_ignore primary_hotkey_ignore".split()),
     "Controller2": set("input_mode seat_mode player seat_player team next_ignore prev_ignore weapon_next_ignore weapon_prev_ignore pickup_ignore drop_ignore reload_ignore primary_hotkey_ignore".split()),
     "Screen1": {name for name, _ in SCHEMAS["Screen1"]},
-    "FrameMan1": {"flashed_last_frame", "flash_timer"},
-    "FrameMan2": {"flashed_last_frame", "flash_timer"},
-    "FrameMan3": {"flashed_last_frame", "flash_timer"},
+    # FlashScreen sets the colour, the timer and the flag together (FrameMan.h:219-222) and only Draw
+    # reads and clears them (FrameMan.cpp:1094-1139); the index is a screen, not a player.
+    "FrameMan1": {"flash_color", "flashed_last_frame", "flash_timer"},
+    "FrameMan2": {"flash_color", "flashed_last_frame", "flash_timer"},
+    "FrameMan3": {"flash_color", "flashed_last_frame", "flash_timer"},
     # The live Allegro colour table and blend alpha are whatever the last blit selected.
     "FramePalette1": {"selected_key", "alpha"},
     # The FMOD listener is the local camera, and a voice's PCM cursor rides the local device clock.
