@@ -10453,11 +10453,22 @@ namespace RTE {
 			AddSwitchTestActor(localSeatBrain);
 			AddSwitchTestActor(bought);
 			const auto uidOf = [](const Actor* actor) { return actor ? static_cast<int64_t>(actor->GetUniqueID()) : 0; };
-			// The start of a match: the scene's brains reach the seats and no frame has been committed yet.
-			match->AssignSeatBrain(hostSeatBrain, Players::PlayerOne);
-			match->AssignSeatBrain(localSeatBrain, Players::PlayerTwo);
+			// The stock modes place their brains from the activity's own script (P4AlphaDuel.lua:42), and that
+			// call is a mod's too: it may only set this machine's record, never the answer the match agreed on.
 			const int seats[2] = {Players::PlayerOne, Players::PlayerTwo};
 			Actor* brains[2] = {hostSeatBrain, localSeatBrain};
+			match->SetPlayerBrain(hostSeatBrain, Players::PlayerOne);
+			match->SetPlayerBrain(localSeatBrain, Players::PlayerTwo);
+			for (int index = 0; index < 2; ++index) {
+				if (match->GetControlledActor(seats[index]) != nullptr) {
+					return finish(("a script's brain assignment moved a seat's shared answer: seat " + std::to_string(seats[index]) +
+					               " answers " + std::to_string(uidOf(match->GetControlledActor(seats[index]))) + " while the wire has named nothing for it")
+					                  .c_str());
+				}
+			}
+			// The engine's own brain record runs on every peer at the top of every activity update, before the
+			// script does, so that is where a seat with a brain and no committed frame gets its answer.
+			match->UpdatePlayerBrainRecord();
 			for (int index = 0; index < 2; ++index) {
 				if (match->GetControlledActor(seats[index]) != brains[index]) {
 					return finish(("a seat answered nothing while the match handed it a brain: seat " + std::to_string(seats[index]) +
@@ -10473,8 +10484,9 @@ namespace RTE {
 				               std::to_string(uidOf(match->GetControlledActor(Players::PlayerTwo))))
 				                  .c_str());
 			}
-			// A brain handed to a seat that already plays something does not pull the answer back.
+			// A brain handed to a seat that already plays something does not pull the answer back, by either path.
 			match->AssignSeatBrain(localSeatBrain, Players::PlayerTwo);
+			match->UpdatePlayerBrainRecord();
 			if (match->GetControlledActor(Players::PlayerTwo) != bought) {
 				return finish(("a brain record pulled a seat back off the actor the wire named: seat 1 answers " +
 				               std::to_string(uidOf(match->GetControlledActor(Players::PlayerTwo))) + ", the wire named " + std::to_string(uidOf(bought)))
