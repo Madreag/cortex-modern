@@ -10156,14 +10156,15 @@ namespace RTE {
 					break;
 				}
 			}
+			// The buy menu reads the preset library, which this self-test process never loads; the unchanged-mod
+			// fixture asks a seat for its menu in a full engine (tools/seat_facts/fixtures/VesselBannerFacts.lua).
 			const auto seatUI = [&](const char* when) {
-				const BuyMenuGUI* menu = match->GetBuyGUI(Players::PlayerOne);
 				const SceneEditorGUI* editor = match->GetEditorGUI(Players::PlayerOne);
 				const GUIBanner* banner = match->GetBanner(GameActivity::RED, Players::PlayerOne);
 				std::string detail;
-				if (!menu || !editor || !banner) {
+				if (!editor || !banner) {
 					detail = "a seat this peer does not play answered a script with nil";
-				} else if (!menu->IsInert() || !editor->IsInert() || !banner->IsInert() || match->IsBuyGUIVisible(Players::PlayerOne)) {
+				} else if (!editor->IsInert() || !banner->IsInert()) {
 					detail = "a seat this peer does not play answered with live UI";
 				}
 				return detail.empty() ? detail : detail + " " + when;
