@@ -650,6 +650,21 @@ function BunkerBreach:CalculateInternalReinforcementPositionsToEnemyTargets(numb
 	return internalReinforcementPositionsToEnemyTargets;
 end
 
+function BunkerBreach:SortedPositionKeys(tbl)
+	-- Vector keys follow addresses; (X, Y) order does not.
+	local keys = {};
+	for pos, _ in pairs(tbl) do
+		keys[#keys + 1] = pos;
+	end
+	table.sort(keys, function(a, b)
+		if a.X ~= b.X then
+			return a.X < b.X;
+		end
+		return a.Y < b.Y;
+	end);
+	return keys;
+end
+
 function BunkerBreach:CreateInternalReinforcements(loadout, numberOfReinforcementsToCreate)
 	if loadout == "Any" then
 		loadout = nil;
@@ -661,7 +676,8 @@ function BunkerBreach:CreateInternalReinforcements(loadout, numberOfReinforcemen
 	local internalReinforcementPositionsToEnemyTargets = self:CalculateInternalReinforcementPositionsToEnemyTargets(numberOfReinforcementsToCreate);
 
 	local numberOfReinforcementsCreated = 0;
-	for internalReinforcementPosition, enemyTargetsForPosition in pairs(internalReinforcementPositionsToEnemyTargets) do
+	for _, internalReinforcementPosition in ipairs(self:SortedPositionKeys(internalReinforcementPositionsToEnemyTargets)) do
+		local enemyTargetsForPosition = internalReinforcementPositionsToEnemyTargets[internalReinforcementPosition];
 		if numberOfReinforcementsCreated < numberOfReinforcementsToCreate and self.AI.internalReinforcementBudget > 0 and #enemyTargetsForPosition > 0 then
 			local doorParticle = self.AI.internalReinforcementsDoorParticle:Clone();
 			doorParticle.Pos = internalReinforcementPosition;
