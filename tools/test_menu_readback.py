@@ -29,6 +29,13 @@ RESET_INPUT = ("wait 40\nactivate ButtonMainToOptions\nwait 5\nassert_visible Ta
                "activate TabInputSettings\nwait 3\npost_command ButtonP2Clear\npost_command ButtonP2Clear\n"
                "wait 3\npost_command ButtonP3Clear\npost_command ButtonP3Clear\nwait 3\n"
                "post_command ButtonBackToMainMenu\nwait 5\n")
+# The match pause menu's own rows, and the single-player rows it must not carry on any peer.
+MATCH_ROWS = ("ButtonLeaveMatch", "ButtonPauseMatch", "ButtonSettings", "ButtonSaveDiagnostics", "ButtonResume")
+SINGLE_PLAYER_ROWS = ("ButtonBackToMain", "ButtonSaveOrLoadGame", "ButtonModManager")
+# No scripted press: a scripted element reads as pressed on every render frame of its tick, so a START
+# range opens the match pause menu and asks it for the way back out on alternate frames. The probe's
+# key is one real edge instead.
+INPUT_SCRIPT = "# the probe opens the match pause menu with a real key edge\n"
 
 
 def sha(path):
@@ -51,7 +58,45 @@ def menu_step(command):
     return {"op": "menu", "command": command}
 
 
+def probe_root(root, who):
+    """One directory per peer's probe: the engine writes its result beside the script it was handed."""
+    return root / f"{who}_probe"
+
+
+def row_checks(control, parent):
+    """The layout checks of `checks`, driven against a menu the probe reads inside a running match."""
+    return [menu_step(f"assert_visible {control} 1"), menu_step(f"assert_rect_inside {control} {parent}"),
+            menu_step(f"assert_rect_inside {control} viewport"), menu_step(f"assert_text_fits {control}")]
+
+
+def pause_rows():
+    return ([step for row in MATCH_ROWS for step in row_checks(row, "PauseScreen")] +
+            [menu_step(f"assert_visible {row} 0") for row in SINGLE_PLAYER_ROWS])
+
+
+def pause_probe():
+    """One peer's local match pause menu: its rows, its settings pages, and a match that keeps running."""
+    running = {"op": "assert", "equals": {"service": "Running", "paused": False}, "sim_at_least": 150}
+    return {"schema": 1, "timeout_ms": 90000, "steps": [
+        {"op": "wait", "sim_at_least": 150},
+        {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
+        {"op": "wait", "screen": "Pause"}, running, *pause_rows(), menu_step("dump_host_options"),
+        menu_step("activate ButtonSettings"), {"op": "wait", "screen": "PauseSettings"},
+        menu_step("assert_visible CollectionBoxGameplaySettings 1"),
+        *row_checks("TabGameplaySettings", "CollectionBoxSettingsBase"), menu_step("dump_player_options"),
+        # The pause twin of the page op: the same reach on the settings menu the pause screen owns.
+        menu_step("select_settings_page Misc"), {"op": "wait", "renders": 3},
+        menu_step("assert_settings_page Misc"), menu_step("dump_player_options"),
+        menu_step("post_command ButtonBackToMainMenu"), {"op": "wait", "screen": "Pause"},
+        *pause_rows(), menu_step("dump_host_options"), running,
+        {"op": "signal", "name": "done"}, {"op": "finish"}]}
+
+
 def scripts(case, port, root):
+    if case == "pause":
+        # Each peer's match pause menu is its own local surface, so each peer drives its own probe.
+        return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
+                {who: pause_probe() for who in ("host", "client")})
     probe = None
     if case == "landing":
         text = LANDING + checks("ButtonMultiplayerHostGame", "MultiplayerLandingPanel")
@@ -82,13 +127,6 @@ def scripts(case, port, root):
         text = host_lobby(port) + "assert_visible ButtonMultiplayerReady 0\n"
         text += checks("ButtonMultiplayerLeave", "MultiplayerLobbyPanel")
         text += "assert_enabled ButtonMultiplayerStart 0\ndump_host_options\nexit\n"
-    elif case == "pause":
-        text = "wait 12\nassert_screen Pause\n" + checks("ButtonSettings", "PauseScreen")
-        text += "dump_host_options\nactivate ButtonSettings\nwait 4\nassert_screen PauseSettings\n"
-        text += checks("TabGameplaySettings", "CollectionBoxSettingsBase") + "dump_player_options\n"
-        # The pause twin of the page op: the same reach on the settings menu the pause screen owns.
-        text += "select_settings_page Misc\nwait 3\nassert_settings_page Misc\ndump_player_options\n"
-        text += "post_command ButtonBackToMainMenu\nwait 4\nassert_screen Pause\ndump_host_options\nexit\n"
     elif case == "input":
         text = (RESET_INPUT + "activate ButtonMainToMultiplayer\nwait 5\n"
                 "assert_visible TextMultiplayerName 1\nfocus_next\nassert_focus TextMultiplayerName\n"
@@ -106,10 +144,12 @@ def scripts(case, port, root):
         text += "assert_visible root 1\n"
         if case in ("scope-off", "input-parity"):
             text += "focus_next\nassert_focus TextMultiplayerName\n"
-        text += f"wait_file {root / 'done.json'} 90\nexit\n"
-        steps = [{"op": "wait", "screen": "Pause" if case == "live" else "MultiplayerScreen"}]
+        text += f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n"
+        steps = ([{"op": "wait", "sim_at_least": 150}, {"op": "key_down", "key": "Escape"},
+                  {"op": "key_up", "key": "Escape"}, {"op": "wait", "screen": "Pause"}] if case == "live"
+                 else [{"op": "wait", "screen": "MultiplayerScreen"}])
         if case == "live":
-            # A START press opens the match's pause menu without pausing the shared sim (L03): the menu is a local
+            # The match's pause menu opens without pausing the shared sim (L03): the menu is a local
             # surface, the synchronized pause is its own row. Both peers keep running while it is open.
             steps += [{"op": "assert", "equals": {"service": "Running", "paused": False}, "sim_at_least": 100},
                       menu_step("assert_visible ButtonSettings 1"), menu_step("dump_host_options"),
@@ -157,7 +197,10 @@ def scripts(case, port, root):
         probe = {"schema": 1, "timeout_ms": 90000, "steps": steps}
     else:
         raise ValueError(case)
-    return text, probe
+    texts = {"host": text}
+    if case == "live":
+        texts["client"] = f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n"
+    return texts, {"host": probe} if probe else {}
 
 
 def inside(rect, parent):
@@ -195,22 +238,20 @@ def captures(runtime, metadata):
 
 def run_case(options, case, root, failing=None):
     root.mkdir(parents=True, exist_ok=False)
-    text, probe = scripts(case, options.port, root)
+    texts, probes = scripts(case, options.port, root)
     if failing:
         prelude, setup, assertion = failing
-        text = prelude + setup + assertion + "\nexit\n"
-    script = root / "menu.txt"
-    script.write_text(text, encoding="utf-8")
+        texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
     inputs = root / "input.txt"
-    inputs.write_text("100 100 START\n", encoding="utf-8")
+    inputs.write_text(INPUT_SCRIPT, encoding="utf-8")
     paired = case in ("pause", "live")
     runs, records, argv, images = {}, {}, {}, []
-    result = {"pass": False, "case": case, "scripts": {str(script): sha(script)}, "records": records}
-    if probe:
-        (root / "probe.json").write_text(json.dumps(probe, indent=2) + "\n", encoding="utf-8")
-        result["scripts"][str(root / "probe.json")] = sha(root / "probe.json")
+    result = {"pass": False, "case": case, "scripts": {}, "records": records, "probes": {}}
     try:
         for who in (("host", "client") if paired else ("host",)):
+            script = root / f"{who}-menu.txt"
+            script.write_text(texts[who], encoding="utf-8")
+            result["scripts"][str(script)] = sha(script)
             args = ["-menu-script", str(script)]
             if paired:
                 args += ["-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
@@ -218,12 +259,13 @@ def run_case(options, case, root, failing=None):
                          "-input-script", str(inputs), "-net-match-report", str(root / f"{who}-match.json")]
                 args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
             env = {"CCCP_HEADLESS": "1"}
-            if probe and who == "host":
-                env["CC_TEST_NET_UI_SCRIPT"] = str(root / "probe.json")
-            if case == "live" and who == "client":
-                client = root / "client-menu.txt"
-                client.write_text(f"wait_file {root / 'done.json'} 90\nexit\n", encoding="utf-8")
-                args[1] = str(client)
+            if who in probes:
+                directory = probe_root(root, who)
+                directory.mkdir()
+                path = directory / "probe.json"
+                path.write_text(json.dumps(probes[who], indent=2) + "\n", encoding="utf-8")
+                result["scripts"][str(path)] = sha(path)
+                env["CC_TEST_NET_UI_SCRIPT"] = str(path)
             argv[who] = args
             runs[who] = make_run(options.repo, args, root / who, 180, env=env)
             set_visual_resolution(runs[who], *map(int, options.size.split("x")))
@@ -260,15 +302,25 @@ def run_case(options, case, root, failing=None):
                     "peer": who, "case": case, "logical_size": options.size})
         if not failing:
             assert images, "no paired dumps/PNGs"
-        if probe:
-            observation = json.loads((root / "net-ui-result.json").read_text(encoding="utf-8"))
-            result["probe"] = observation
-            assert observation["pass"] and observation["complete"], observation
-            if case in ("disabled", "scope-off"):
-                first, last = images[0], images[-1]
-                assert [c["name"] for c in first["controls"] if c["focus"]] == [c["name"] for c in last["controls"] if c["focus"]]
-                assert first["screen"] == last["screen"] == "MultiplayerScreen"
-                assert first["service"] == last["service"], (first["service"], last["service"])
+        for who in probes:
+            observation = json.loads((probe_root(root, who) / "net-ui-result.json").read_text(encoding="utf-8"))
+            result["probes"][who] = observation
+            assert observation["pass"] and observation["complete"], (who, observation)
+        if case in ("disabled", "scope-off"):
+            first, last = images[0], images[-1]
+            assert [c["name"] for c in first["controls"] if c["focus"]] == [c["name"] for c in last["controls"] if c["focus"]]
+            assert first["screen"] == last["screen"] == "MultiplayerScreen"
+            assert first["service"] == last["service"], (first["service"], last["service"])
+        if case == "pause":
+            # Both peers read the same menu: the match rows, no single-player row, and the two settings pages.
+            for who in ("host", "client"):
+                peer = [capture for capture in images if capture["peer"] == who]
+                assert [capture["screen"] for capture in peer] == ["Pause", "PauseSettings", "PauseSettings", "Pause"], (who, peer)
+                assert [capture["settings_page"] for capture in peer[1:3]] == ["Gameplay", "Misc"], (who, peer)
+                for capture in (peer[0], peer[-1]):
+                    drawn = {control["name"] for control in capture["controls"]}
+                    assert set(MATCH_ROWS) <= drawn, (who, sorted(drawn))
+                    assert not set(SINGLE_PLAYER_ROWS) & drawn, (who, sorted(drawn))
         if case == "pages":
             assert [capture["settings_page"] for capture in images] == list(PAGES), [c["settings_page"] for c in images]
             captioned = [control for capture in images for control in capture["controls"] if control["text"]]
