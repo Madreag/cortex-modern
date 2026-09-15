@@ -5,6 +5,7 @@
 #include "GUI.h"
 #include "GUICollectionBox.h"
 #include "GUICheckbox.h"
+#include "GUIComboBox.h"
 #include "GUILabel.h"
 #include "GUIRadioButton.h"
 #include "GUITab.h"
@@ -63,6 +64,11 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_ToastsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkToasts"));
 	m_PredictionCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkPrediction"));
 
+	m_StatusModeCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboMatchStatusWidget"));
+	m_StatusModeCombo->AddItem("Off");
+	m_StatusModeCombo->AddItem("Auto");
+	m_StatusModeCombo->AddItem("Always");
+
 	const auto rowTop = [](GUIControl* control) {
 		int x = 0, y = 0, width = 0, height = 0;
 		control->GetControlRect(&x, &y, &width, &height);
@@ -95,6 +101,7 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_AutoRepairCheckbox->SetCheck(g_SettingsMan.GetNetworkHostAutoRepair());
 	m_ToastsCheckbox->SetCheck(g_SettingsMan.GetNetworkToastsEnabled());
 	m_PredictionCheckbox->SetCheck(g_SettingsMan.LocalPredictionEnabled());
+	m_StatusModeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkMatchStatusMode()));
 	UpdateDelayPolicyRow();
 	UpdateStatusLines();
 }
@@ -167,6 +174,8 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		g_SettingsMan.SetNetworkToastsEnabled(m_ToastsCheckbox->GetCheck());
 	} else if (guiEvent.GetControl() == m_PredictionCheckbox) {
 		g_SettingsMan.SetLocalPredictionEnabled(m_PredictionCheckbox->GetCheck());
+	} else if (guiEvent.GetControl() == m_StatusModeCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
+		g_SettingsMan.SetNetworkMatchStatusMode(static_cast<SettingsMan::NetworkMatchStatusMode>(m_StatusModeCombo->GetSelectedIndex()));
 	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_FixedDelayTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
 		ApplyTextboxes();
 		// Clicking off a focused text box must commit it too, otherwise it keeps the keyboard.
