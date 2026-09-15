@@ -492,6 +492,12 @@ namespace RTE {
 		/// @param player Which team to set the brain actor for.
 		void SetPlayerBrain(Actor* newBrain, int player = 0);
 
+		/// Gives a seat the brain the engine placed for it. Only this path seeds the seat's shared control
+		/// binding: what a script sets is this machine's record, not what the match agreed on.
+		/// @param newBrain The brain the placement found.
+		/// @param player Which seat it belongs to.
+		void AssignSeatBrain(Actor* newBrain, int player);
+
 		/// Records assigned human brains and fills empty lockstep seats in deterministic order.
 		void UpdatePlayerBrainRecord();
 
