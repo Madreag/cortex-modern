@@ -37,13 +37,18 @@ def rules_for(variant):
     elif variant == "site":
         rules["scene_name"] = "Fredeleig Plains"
     elif variant == "stock":
+        # This activity expects a brain on the site; an empty one sends it into the setup editor, which
+        # lockstep refuses, so the stock arm plays it on the site it ships with.
         rules["activity_preset"] = "Skirmish Defense"
+        rules["scene_name"] = "Ketanot Hills"
     elif variant == "census":
-        # What an offline "-scenario Skirmish Defense" launch produces: the preset declares no
-        # DefaultGoldMediumDifficulty, so ActivityMan::StartActivity falls back to the activity's own
-        # team funds, and the CLI path stages the activity's own site with units left undeployed.
-        rules.update(activity_preset="Skirmish Defense", scene_name="Ketanot Hills", difficulty=50,
-                     starting_gold=2000, fog_of_war=False, require_clear_path_to_orbit=False, deploy_units=False)
+        # The offline leg is the stock command line launch, and -scenario resolves "Determinism <name>"
+        # presets only, so the census runs the one activity both paths can launch. What that offline launch
+        # produces: the preset declares no DefaultGoldMediumDifficulty, so ActivityMan::StartActivity falls
+        # back to the activity's own team funds, and the CLI path stages its site with units undeployed.
+        rules.update(activity_module="Tests.rte", activity_preset="Determinism SimBaseline",
+                     difficulty=50, starting_gold=2000, fog_of_war=False,
+                     require_clear_path_to_orbit=False, deploy_units=False)
         rules["teams"][1] = dict(technology_intent="-All-", technology_module="", ai_skill=50)
     elif variant == "missing-activity":
         rules["activity_preset"] = "Missing launch activity"
@@ -130,13 +135,14 @@ def census_compare(offline_dump, match_dump):
 def launch(options):
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         raise RuntimeError("family lock exists; launch is deferred")
-    if not 48320 <= options.port <= 48329:
-        raise ValueError("port must be in 48320..48329")
+    if not 48320 <= options.port <= 48539:
+        raise ValueError("port must be in 48320..48539")
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = options.repo.resolve(), options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     rules = rules_for(options.variant)
-    default = options.variant == "default"
+    # The census launches the activity preset's own two seats, which is the roster the default config carries.
+    default = options.variant in ("default", "census")
     refusal = options.variant.startswith("missing-")
     config = root / "launch-config.bin"
     config.write_bytes(encode_config(rules, options.dedicated, default))
@@ -153,14 +159,14 @@ def launch(options):
         if actual != exe_hash:
             raise RuntimeError("executable changed during launch case")
     common = ["-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
-              "-net-match-mode", "pvp" if default else "coop", "-net-match-ticks", "600", "-net-match-input-delay", "3",
-              "-seed", "42", "-num-lua-states", "4", "-tick-hashes"]
+              "-net-match-mode", "pvp" if default else "coop-pve", "-net-match-ticks", "600", "-max-ticks", "600",
+              "-net-match-input-delay", "3", "-seed", "42", "-num-lua-states", "4", "-tick-hashes"]
     runs, records = {}, {}
     try:
         for peer in ("host", "client"):
             flags = ["-net-dedicated" if options.dedicated else "-net-host", "-net-match-service-config", str(config)] if peer == "host" else ["-net-join", "127.0.0.1"]
             trace, report = root / peer / "trace.json", root / peer / "report.json"
-            flags += ["-out", str(trace), "-net-report", str(report), "-net-replay-out", str(root / peer / "match.ccreplay")]
+            flags += ["-out", str(trace), "-net-match-report", str(report), "-net-replay-out", str(root / peer / "match.ccreplay")]
             runs[peer] = make_run(repo, [*common, *flags], root / peer, options.timeout,
                                   env={"CCCP_HEADLESS": "1", "CC_SIM_DUMP": "1:600"}, expected=[report])
         ledger("before_pair")
@@ -193,7 +199,7 @@ def launch(options):
         checks["shared_600_ticks"], result["simulation"] = strict_compare(root / "host/trace.json", root / "client/trace.json", 600)
         replay_trace = root / "replay/trace.json"
         replay = make_run(repo, ["-net-replay", str(root / "host/match.ccreplay"), "-tick-hashes", "-out", str(replay_trace),
-                                 "-seed", "42", "-num-lua-states", "4"], root / "replay", options.timeout,
+                                 "-max-ticks", "600", "-seed", "42", "-num-lua-states", "4"], root / "replay", options.timeout,
                           env={"CCCP_HEADLESS": "1", "CC_SIM_DUMP": "1:600"}, expected=[replay_trace])
         try:
             ledger("before_replay")
