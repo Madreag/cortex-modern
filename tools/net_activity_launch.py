@@ -166,10 +166,16 @@ READY_TEXT = "READY to start"
 WAIT_BANNER = "to place their brains"
 COMPACT_WAIT_BANNER = "TO PLACE"
 COMPACT_MAX_HEIGHT = 480
+# Both seats, in the order the roster seats them, as the strip names them while neither has placed.
+PLACEMENT_NAMES = "Host, Client"
 
 
 def wait_banner(resolution):
     return COMPACT_WAIT_BANNER if resolution and resolution[1] < COMPACT_MAX_HEIGHT else WAIT_BANNER
+
+
+def compact(resolution):
+    return bool(resolution) and resolution[1] < COMPACT_MAX_HEIGHT
 
 
 def shots(peer, name):
@@ -187,6 +193,13 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
     steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "editing": True},
              {"op": "wait", "player": player, "picker_open": True}, {"op": "wait", "renders": 12},
              {"op": "assert_net_ui_clear", "player": player, "picker_open": True, "screen_text": True}]
+    if compact(resolution):
+        # An open picker leaves the strip under half a short screen: the metrics tail is what gives way,
+        # the seat names stay whole while it can, and the count outlives every fallback.
+        steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
+                   "text_contains": "WAITING FOR " + PLACEMENT_NAMES + " TO PLACE"},
+                  {"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
+                   "text_contains": "0 of 2"}]
     if capture:
         steps += shots(peer, "editor_open")
     if wire_refusal:
@@ -196,7 +209,11 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
                       {"op": "wait", "renders": 30},
                       {"op": "assert_editor", "player": player, "equals": {"ready": False, "submitted": False}}]
         # Both peers shoot the same held tick, inside the sender's 3.5 s banner: the banner is the sender's alone.
-        steps += [{"op": "wait", "sim_at_least": 30}] + shots(peer, "wire_refusal")
+        steps += [{"op": "wait", "sim_at_least": 30}]
+        if peer == "host":
+            # The refusal reason is the longest message a seat's screen carries, so it is read where it lands.
+            steps += [{"op": "assert_net_ui_clear", "player": player, "screen_text": True}]
+        steps += shots(peer, "wire_refusal")
     # DONE before a brain is placed: refused, so the seat stays unready, commits nothing and is sent back
     # to place a brain.
     steps += [{"op": "editor_done", "player": player},
@@ -212,10 +229,12 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
               # Placing alone commits nothing: the wire only carries the seat's DONE.
               {"op": "assert_editor", "player": player, "equals": {"resident": True, "ready": False, "submitted": False}},
               {"op": "editor_done", "player": player},
-              {"op": "wait", "seat_ready": player},
-              {"op": "assert_editor", "player": player, "equals": {"ready": True, "submitted": True}}]
+              {"op": "wait", "seat_ready": player}]
+    # The frame the seat's own ready lands on is the one that still says all brains are placed: the editor
+    # leaves a tick or two later, so the shot goes before the assertion that reads the same state.
     if capture and peer != "host":
         steps += shots(peer, "ready")
+    steps += [{"op": "assert_editor", "player": player, "equals": {"ready": True, "submitted": True}}]
     if peer == "host":
         # The host places first, so while the client is still placing its screen must carry the stock READY
         # line and its own strip must name who the held world is waiting for.
