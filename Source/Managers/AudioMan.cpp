@@ -2001,7 +2001,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			if (voice.playing && !sounds.contains(voice.path)) throw std::runtime_error("voice sample is absent: " + voice.path);
 			if (voice.playing && owner && !owner->GetSoundDataForSound(sounds.at(voice.path))) {
 				std::vector<SoundData*> data; owner->GetTopLevelSoundSet().GetFlattenedSoundData(data, false);
-				const bool pathKnown = std::any_of(data.begin(), data.end(), [&](SoundData* value) { return value && value->SoundFile.GetDataPath() == voice.path; });
+				const bool pathKnown = !SampleReadyForPlayback(sounds.at(voice.path)) && std::any_of(data.begin(), data.end(), [&](SoundData* value) { return value && value->SoundFile.GetDataPath() == voice.path; });
 				if (!pathKnown && std::none_of(data.begin(), data.end(), [&](SoundData* value) { return stagedSamples.contains(value) && stagedSamples.at(value) == sounds.at(voice.path); }))
 					throw std::runtime_error("voice " + std::to_string(voice.identity) + " sample is absent from owner " + std::to_string(voice.owner) + ": " + voice.path);
 			}
