@@ -517,7 +517,8 @@ def run_case(options, case, root, failing=None):
             assert len(picker) == 2 and picker[0] == "P4 Alpha Duel (Base.rte)" and picker[1] != picker[0], picker
             assert picker[1] == f"{preset} ({module})", (picker, dumped)
             result["picker_cycle"] = picker
-            expected = f"{preset} ({module}) - Grasslands - PvP"
+            # The lobby label carries the wire mode token, not the host screen's friendly name.
+            expected = f"{preset} ({module}) - Grasslands - pvp-skirmish"
             for who in ("host", "client"):
                 matches = [image for image in images if image["peer"] == who
                            and any(c["name"] == "LabelLobbyMatch" for c in image["controls"])]
