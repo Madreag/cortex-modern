@@ -62,6 +62,8 @@ namespace RTE {
 		}
 
 		NetSessionConfig sessionConfig = config.sessionConfig;
+		// A one-peer roster has no remote to wait for: the host is the whole round.
+		sessionConfig.readyWithoutPeers = config.host && m_MatchConfig.peerCount == 1;
 		const bool sessionStarted = config.host
 			? session.StartHost(transport, std::move(sessionConfig), error)
 			: session.StartClient(transport, config.joinAddress, std::move(sessionConfig), error);
@@ -362,7 +364,9 @@ namespace RTE {
 		if (m_UseLobbyProtocol && m_Lobby.GetState() != NetLobbyState::Idle) {
 			report["lobby"] = json::parse(m_Lobby.BuildReportJson());
 		}
-		return report.dump();
+		// The setup error can be a remote lobby abort reason (SetFailed at RunLobby), so a stray byte is
+		// replaced rather than thrown.
+		return report.dump(-1, ' ', false, json::error_handler_t::replace);
 	}
 
 	const char* NetMatchRunner::StateName(NetMatchRuntimeState state) {
@@ -537,7 +541,9 @@ namespace RTE {
 		// Host-star: the host relays each client's frames/checksums to the other clients.
 		lockstepConfig.relayToOtherPeers = config.host;
 		lockstepConfig.frameLane = NetTransportLane::ControlReliable;
-		lockstepConfig.scenario = config.scenario;
+		// Peers compare the activity in the start handshake, so it comes from the adopted config like every
+		// other agreed field; a joining peer's own request only carries its local default.
+		lockstepConfig.scenario = m_UseLobbyProtocol ? m_MatchConfig.activityPreset : config.scenario;
 		lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(m_MatchConfig.ownershipPolicy);
 		lockstepConfig.matchConfig = m_MatchConfig;
 		// The host tags each round so a late packet from the previous round cannot join this one.

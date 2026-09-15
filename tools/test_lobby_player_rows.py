@@ -172,10 +172,14 @@ def main():
 
         for key, run in runs.items():
             records[key] = run.finish()
+            # A crashed or killed peer is not a lobby whose pixels and dumps may be read.
+            checks[f"{key}_clean_exit"] = (records[key].get("exit_code") == 0
+                                           and records[key].get("timed_out") is False)
 
         shots = sorted((root / HOST_NAME / "runtime/ScreenShots").glob("rows-t0_*.png"))
         details["screenshots"] = [str(p) for p in shots]
-        checks["shot_taken"] = len(shots) >= 1
+        # The host scripts exactly one rows-t0 capture; a second one means the oracle read someone else's.
+        checks["shot_taken"] = len(shots) == 1
         host_log = (root / HOST_NAME / "stdout.log").read_bytes()
 
         for i in range(4):
@@ -183,6 +187,9 @@ def main():
                           + rb' "[^"]*" text="(.*?)" (PASS|FAIL)', host_log, re.S)
             details[f"row{i}_text"] = m.group(1).decode("cp1252") if m else None
             details[f"row{i}_elided"] = bool(m and ELLIPSIS in m.group(1))
+            # The dump carries the engine's own verdict on the row's words; reading it without
+            # asserting it left the joiners' team and role words unchecked.
+            checks[f"row{i}_label_verdict"] = bool(m) and m.group(2) == b"PASS"
         m0 = re.search(rb'assert_label LabelLobbyPlayer0 "[^"]*" text="(.*?)" (PASS|FAIL)', host_log, re.S)
         checks["row0_delay_text_whole"] = bool(m0 and b"(auto," in m0.group(1) and b"ping)" in m0.group(1))
         checks["host_reached_lobby"] = "activate ButtonMultiplayerCreate ok=1" in host_log.decode("cp1252", errors="replace")
@@ -322,6 +329,7 @@ def main():
                     checks["reference_size_matches"] = ref.size == (w, h)
                     rpx = ref.load()
                     ref_panel = find_panel(rpx, w, h) if ref.size == (w, h) else None
+                    checks["reference_panel_found"] = ref_panel is not None
                     bad_rows, dx_seen = [], {}
                     if ref_panel:
                         rtop, rleft, rright, rbottom = ref_panel
@@ -358,7 +366,9 @@ def main():
                     details["shift_dx_histogram"] = dx_seen
                     details["unmatched_pixel_rows"] = bad_rows[:20]
                     details["unmatched_pixel_row_count"] = len(bad_rows)
-                    checks["shared_panel_shifted_identical"] = not bad_rows and len(dx_seen) <= 1
+                    # Exactly one shift, and at least one content row voting for it: a reference with no
+                    # panel, or one where nothing differed under any shift, compared nothing at all.
+                    checks["shared_panel_shifted_identical"] = not bad_rows and len(dx_seen) == 1
     finally:
         errors = close_all(runs)
         if errors:

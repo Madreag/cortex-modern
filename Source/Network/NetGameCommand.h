@@ -25,6 +25,9 @@ namespace RTE {
 		Reseat = 11,
 		SoundOp = 12,
 		PlayerBindings = 13,
+		AIScriptMessage = 14,
+		AIGib = 15,
+		PlaceBrain = 16, //!< 14 and 15 carry the AI intent commands.
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -218,6 +221,8 @@ namespace RTE {
 			FormSquad = 3,
 			DisbandSquad = 4,
 			PopWaypoint = 5,
+			SetMOMoveTarget = 6,
+			SetAlarmPoint = 7,
 		};
 
 		int64_t actorUID = 0;
@@ -241,6 +246,47 @@ namespace RTE {
 		bool operator==(const NetGameReseat&) const = default;
 	};
 
+	// A message an AI hook sent from inside its own pass. The decision is per-machine (off-wire), but the
+	// receiving script runs on every peer, so the call crosses the wire and every peer delivers it at the
+	// committed tick, exactly like the equip calls.
+	struct NetGameAIScriptMessage {
+		// What the message carries beside its name. A context no peer can name the same way (a table, a
+		// function) is not one of these; that call stays on its producer and is reported at the boundary.
+		enum Context : uint8_t {
+			None = 0,
+			Boolean = 1,
+			Number = 2,
+			Text = 3,
+			Object = 4,
+			ContextCount = 5
+		};
+
+		int64_t writerUID = 0; //!< The AI actor whose pass made the call; the authority for it.
+		int64_t objectUID = 0; //!< The receiver.
+		int32_t team = 0;
+		uint8_t context = None;
+		double number = 0.0;
+		int64_t contextUID = 0;
+		std::string message;
+		std::string text;
+
+		bool operator==(const NetGameAIScriptMessage&) const = default;
+	};
+
+	// A gib an AI hook asked for from inside its own pass. The gib spawns particles and takes the object out
+	// of the world, which the producing boundary cannot undo, so the call crosses the wire and every peer,
+	// the producer included, gibs at the committed tick.
+	struct NetGameAIGib {
+		int64_t writerUID = 0; //!< The AI actor whose pass made the call; the authority for it.
+		int64_t objectUID = 0; //!< What to gib.
+		int64_t ignoreUID = 0; //!< What the gibs may not hit; 0 is nothing.
+		int32_t team = 0;
+		float impulseX = 0.0F;
+		float impulseY = 0.0F;
+
+		bool operator==(const NetGameAIGib&) const = default;
+	};
+
 	/// A peer's local player reference, observed alongside its delayed input.
 	struct NetPlayerBinding {
 		bool active = false, human = false, hadBrain = false, brainEvacuated = false;
@@ -253,6 +299,21 @@ namespace RTE {
 		bool operator==(const NetPlayerBinding&) const = default;
 	};
 
+	// A seat's committed brain placement in the setup editor. Where to put the brain is the player's own
+	// decision on their own machine (off-wire); the committed brain crosses so every peer installs the
+	// identical resident from the named preset before the first seat starts the match.
+	struct NetGamePlaceBrain {
+		int32_t team = 0;
+		int32_t player = -1; //!< The seat the brain belongs to; a team can hold several.
+		float posX = 0.0F;
+		float posY = 0.0F;
+		std::string className;
+		std::string preset;
+		std::string module;
+
+		bool operator==(const NetGamePlaceBrain&) const = default;
+	};
+
 	/// Complete local slots; an empty slot clears the previous binding without changing the world.
 	struct NetGamePlayerBindings {
 		std::array<NetPlayerBinding, 4> players{};
@@ -260,7 +321,7 @@ namespace RTE {
 		bool operator==(const NetGamePlayerBindings&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings>;
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;

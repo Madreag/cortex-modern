@@ -7,6 +7,7 @@
 #include "SettingsMan.h"
 #include "TimerMan.h"
 #include "ConsoleMan.h"
+#include "NetActivitySetup.h"
 #include "NetMatchService.h"
 #include "NetIdentity.h"
 #include "NetConnectionQuality.h"
@@ -38,6 +39,11 @@
 #include <thread>
 
 using namespace RTE;
+
+// The lobby and the network settings page show one saved name; "Player" is only the empty fallback.
+static std::string SavedMultiplayerName() {
+	return g_SettingsMan.GetNetworkDisplayName().empty() ? "Player" : g_SettingsMan.GetNetworkDisplayName();
+}
 
 void MainMenuGUI::Clear() {
 	m_RootBoxMaxWidth = 0;
@@ -115,6 +121,8 @@ void MainMenuGUI::Clear() {
 }
 
 void MainMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
+	m_AutomationInput = guiInput->CreateAutomationInput();
+	if (m_AutomationInput) guiInput = m_AutomationInput.get();
 	m_MainMenuScreenGUIControlManager = std::make_unique<GUIControlManager>();
 	RTEAssert(m_MainMenuScreenGUIControlManager->Create(guiScreen, guiInput, "Base.rte/GUIs/Skins/Menus", "MainMenuScreenSkin.ini"), "Failed to create GUI Control Manager and load it from Base.rte/GUIs/Skins/Menus/MainMenuScreenSkin.ini");
 	m_MainMenuScreenGUIControlManager->Load("Base.rte/GUIs/MainMenuGUI.ini");
@@ -267,7 +275,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 		m_ModerationCancelButtons[row] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonModerationCancel" + suffix));
 	}
 
-	m_MultiplayerNameTextBox->SetText("Player");
+	m_MultiplayerNameTextBox->SetText(SavedMultiplayerName());
 	m_MultiplayerNameTextBox->SetMaxTextLength(24);
 	m_MultiplayerJoinAddressTextBox->SetText("127.0.0.1");
 	m_MultiplayerJoinAddressTextBox->SetMaxTextLength(64);
@@ -391,6 +399,10 @@ void MainMenuGUI::ShowMultiplayerScreen() {
 		g_NetMatchService.ScanStoredTicket();
 	}
 	m_MultiplayerSubScreen = (netMatchState == NetMatchServiceState::Idle || netMatchState == NetMatchServiceState::Completed) ? MultiplayerSubScreen::Landing : MultiplayerSubScreen::Lobby;
+	// The saved name is what an unconnected landing starts from; a live lobby keeps the name it joined under.
+	if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
+		m_MultiplayerNameTextBox->SetText(SavedMultiplayerName());
+	}
 	RefreshMultiplayerScreenControls(g_NetMatchService.GetLobbySnapshot());
 	m_MenuScreenChange = false;
 }
@@ -836,7 +848,14 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		request.address = m_MultiplayerJoinAddressTextBox->GetText();
 	}
 	request.port = static_cast<uint16_t>(parsedPort);
-	request.playerName = m_MultiplayerNameTextBox->GetText().empty() ? (host ? "Host" : "Client") : m_MultiplayerNameTextBox->GetText();
+	// Hosting or joining under a name saves it, but saving is best effort: the wire carries more
+	// bytes than the box takes typed, so a name the settings will not hold still goes out as typed.
+	const std::string typedName = m_MultiplayerNameTextBox->GetText();
+	request.playerName = typedName.empty() ? (host ? "Host" : "Client") : typedName;
+	if (!typedName.empty() && typedName != g_SettingsMan.GetNetworkDisplayName()) {
+		g_SettingsMan.SetNetworkDisplayName(typedName);
+		g_SettingsMan.UpdateSettingsFile();
+	}
 	request.activityPreset = "P4 Alpha Duel";
 	request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 	// Headed matches self-heal: a desync (or a rejoiner) reloads everyone from the host's snapshot.
@@ -853,9 +872,9 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		m_MultiplayerHostInputDelayTextBox->SetText(std::to_string(inputDelay));
 		g_SettingsMan.SetNetworkInputDelayFrames(inputDelay);
 		request.inputDelayFrames = static_cast<uint16_t>(inputDelay);
-		// The typed delay is the floor; the host raises it to cover the measured ping so high-RTT
-		// matches run stall-free out of the box.
-		request.autoInputDelay = true;
+		// The saved policy decides it: automatic keeps the typed delay as the floor and raises it to
+		// cover the measured ping, fixed hosts on the typed value alone.
+		request.autoInputDelay = g_SettingsMan.GetNetworkHostDelayPolicy() == SettingsMan::NetworkHostDelayPolicy::Auto;
 	}
 
 	std::string error;
@@ -1410,17 +1429,13 @@ bool MainMenuGUI::AutomationModerate(const std::string& action, int stableSeat) 
 	return m_ModerationUx.Act(row, verb) == NetH4ModerationResult::Ok;
 }
 
-// True only if the control and every ancestor panel are enabled and visible, i.e. a human could actually click it.
+// Follow the panel hierarchy used by drawing and input.
 static bool IsControlClickable(GUIControl* control) {
-	for (GUIControl* node = control; node; node = node->GetParent()) {
-		if (!node->GetEnabled() || !node->GetVisible()) {
-			return false;
-		}
-	}
-	return true;
+	return MenuAutomation::Enabled(control);
 }
 
 bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
+	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return m_SettingsMenu->AutomationPostCommand(controlName);
 	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
 	if (!control) {
 		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
@@ -1440,6 +1455,7 @@ bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
 }
 
 bool MainMenuGUI::AutomationPostCommand(const std::string& controlName) {
+	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return m_SettingsMenu->AutomationPostCommand(controlName);
 	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
 	if (!control) {
 		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
@@ -1460,7 +1476,7 @@ void MainMenuGUI::PostPendingAutomationCommand() {
 		control = m_MainMenuScreenGUIControlManager->GetControl(m_PendingAutomationCommand);
 	}
 	m_PendingAutomationCommand.clear();
-	if (control) {
+	if (control && IsControlClickable(control)) {
 		control->AddEvent(GUIEvent::Command, 0, 0);
 	}
 }
@@ -1491,6 +1507,10 @@ bool MainMenuGUI::AutomationSetCheck(const std::string& controlName, bool checke
 }
 
 bool MainMenuGUI::AutomationLabelText(const std::string& controlName, std::string& text) const {
+	if (auto* manager = AutomationManager()) {
+		if (MenuAutomation::Text(manager->GetControl(controlName), text)) return true;
+		if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return false;
+	}
 	// The chat rows' count moves with the layout budget, so scripts address them by role, not
 	// index: LabelLobbyChatNewest is the last drawn row, LabelLobbyChatAny every drawn row's
 	// text joined - an assert_label substring hit proves the line reached a rendered row.
@@ -1575,17 +1595,24 @@ void MainMenuGUI::AutomationGoToMainScreen() {
 }
 
 bool MainMenuGUI::AutomationControlExists(const std::string& controlName) const {
+	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return m_SettingsMenu->AutomationManager()->GetControl(controlName) != nullptr;
 	return m_SubMenuScreenGUIControlManager->GetControl(controlName) != nullptr ||
 	       m_MainMenuScreenGUIControlManager->GetControl(controlName) != nullptr;
 }
 
 bool MainMenuGUI::AutomationControlEnabled(const std::string& controlName) const {
+	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return MenuAutomation::Enabled(m_SettingsMenu->AutomationManager()->GetControl(controlName));
 	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
 	if (!control) {
 		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
 	}
 	// "Enabled" for automation means interactable as a human would see it: enabled and visible up the chain.
 	return control && IsControlClickable(control);
+}
+
+GUIControlManager* MainMenuGUI::AutomationManager() const {
+	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return m_SettingsMenu->AutomationManager();
+	return m_ActiveMenuScreen == MenuScreen::SaveOrLoadGameScreen || m_ActiveMenuScreen == MenuScreen::ModManagerScreen ? nullptr : m_ActiveGUIControlManager;
 }
 
 void MainMenuGUI::HandleMetaGameNoticeScreenInputEvents(const GUIControl* guiEventControl) {
@@ -1749,30 +1776,26 @@ void MainMenuGUI::MaybeLaunchMultiplayerActivity() {
 		g_GUISound.ExitMenuSound()->Play();
 		return;
 	}
-	const Entity* presetEntity = g_PresetMan.GetEntityPreset("GAScripted", activityPreset);
-	const Activity* presetActivity = dynamic_cast<const Activity*>(presetEntity);
-	if (!presetActivity) {
-		m_MultiplayerErrorLabel->SetText("Could not find multiplayer activity preset.");
+	// The agreed config the roster carries is the launch descriptor here, on every remote peer and on a
+	// dedicated host, so all of them build the identical activity from the identical rules.
+	const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+	if (!config) {
+		m_MultiplayerErrorLabel->SetText("The launching match carries no agreed setup.");
 		g_NetMatchService.Destroy();
 		return;
 	}
-	if (!presetActivity->GetSceneName().empty()) {
-		g_SceneMan.SetSceneToLoad(presetActivity->GetSceneName(), true, false);
-	}
-	Activity* activity = dynamic_cast<Activity*>(presetActivity->Clone());
-	if (!activity) {
-		m_MultiplayerErrorLabel->SetText("Could not create multiplayer activity.");
+	if (!activityPreset.empty() && activityPreset != config->activityPreset) {
+		m_MultiplayerErrorLabel->SetText("The launch activity differs from the agreed setup.");
 		g_NetMatchService.Destroy();
 		return;
 	}
 	const int localTeam = g_NetMatchService.GetLocalTeam();
-	if (localTeam >= Activity::TeamOne && localTeam < Activity::MaxTeamCount) {
-		activity->ClearPlayers(false);
-		activity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
-		activity->ForceSetTeamAsActive(Activity::TeamOne);
-		activity->ForceSetTeamAsActive(Activity::TeamTwo);
-		activity->SetTeamFunds(0, Activity::TeamOne);
-		activity->SetTeamFunds(0, Activity::TeamTwo);
+	std::string setupError;
+	Activity* activity = NetActivitySetup::CreateConfiguredActivity(*config, localTeam, &setupError);
+	if (!activity) {
+		m_MultiplayerErrorLabel->SetText(setupError);
+		g_NetMatchService.Destroy();
+		return;
 	}
 	ScenarioRunner::ApplyDeterministicConfig();
 	g_ActivityMan.SetStartActivity(activity);

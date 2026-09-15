@@ -3,10 +3,12 @@
 #include "LoopbackTransport.h"
 #include "NetProtocol.h"
 
+#include <algorithm>
 #include <array>
 #include <iostream>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace RTE {
@@ -1061,6 +1063,79 @@ namespace RTE {
 
 			return true;
 		}
+
+		bool TestHandshakeNameUtf8(std::string* error) {
+			// Independent checks accumulate so the encode and decode refusals cannot hide each other.
+			std::vector<std::string> failures;
+			const std::array<std::pair<const char*, std::string>, 4> badNames{{
+			    {"truncated two-byte lead", std::string("caf\xC3")},
+			    {"lone continuation byte", std::string("\x80" "abc")},
+			    {"byte that is never a lead", std::string("na\xFF\xFE")},
+			    {"encoded surrogate", std::string("na\xED\xA0\x80")},
+			}};
+			for (const auto& badName: badNames) {
+				NetMessage message;
+				message.sequence = 1;
+				NetClientHello hello = MakeClientHello();
+				hello.displayName = badName.second;
+				message.payload = hello;
+				std::vector<uint8_t> bytes;
+				NetProtocolError encodeError;
+				if (NetProtocol::Encode(message, bytes, &encodeError)) {
+					failures.emplace_back(std::string("the client hello encoded a display name with a ") + badName.first);
+				} else if (encodeError.message != "display_name is not valid UTF-8") {
+					failures.emplace_back(std::string("the client hello refused a ") + badName.first + " as: " + encodeError.message);
+				}
+			}
+			// The joiner writes its own bytes, so the refusal has to hold on the reading side too.
+			NetMessage plain;
+			plain.sequence = 1;
+			plain.payload = MakeClientHello();
+			std::vector<uint8_t> plainBytes;
+			NetProtocolError plainError;
+			if (!NetProtocol::Encode(plain, plainBytes, &plainError)) {
+				*error = "could not encode a plain client hello: " + plainError.message;
+				return false;
+			}
+			const std::string needle = "Player";
+			const auto found = std::search(plainBytes.begin(), plainBytes.end(), needle.begin(), needle.end());
+			if (found == plainBytes.end()) {
+				*error = "the client hello display name is not where this arm patches it";
+				return false;
+			}
+			*found = 0xC3;
+			const NetDecodeResult decoded = NetProtocol::Decode(plainBytes);
+			if (decoded.ok) {
+				failures.emplace_back("the client hello decoded a display name with a truncated two-byte lead");
+			} else if (decoded.error.message != "display_name is not valid UTF-8") {
+				failures.emplace_back("the decoded bad display name was refused as: " + decoded.error.message);
+			}
+			// Multi-byte names players actually type stay acceptable.
+			NetMessage good;
+			good.sequence = 1;
+			NetClientHello goodHello = MakeClientHello();
+			goodHello.displayName = std::string("caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC");
+			good.payload = goodHello;
+			std::vector<uint8_t> goodBytes;
+			NetProtocolError goodError;
+			if (!NetProtocol::Encode(good, goodBytes, &goodError)) {
+				failures.emplace_back("the client hello refused a valid multi-byte UTF-8 display name: " + goodError.message);
+			} else {
+				const NetDecodeResult goodDecoded = NetProtocol::Decode(goodBytes);
+				const auto* payload = goodDecoded.ok ? std::get_if<NetClientHello>(&goodDecoded.message.payload) : nullptr;
+				if (!payload || payload->displayName != goodHello.displayName) {
+					failures.emplace_back("a valid multi-byte UTF-8 display name did not survive the hello round trip");
+				}
+			}
+			if (failures.empty()) {
+				return true;
+			}
+			*error = failures.front();
+			for (size_t index = 1; index < failures.size(); ++index) {
+				*error += " | " + failures[index];
+			}
+			return false;
+		}
 	}
 
 	int NetProtocolSelfTest::Run() {
@@ -1071,6 +1146,9 @@ namespace RTE {
 
 		std::string error;
 		if (!TestRoundTrips(&error)) {
+			return fail(error);
+		}
+		if (!TestHandshakeNameUtf8(&error)) {
 			return fail(error);
 		}
 		if (!TestCanonicalHeader(&error)) {

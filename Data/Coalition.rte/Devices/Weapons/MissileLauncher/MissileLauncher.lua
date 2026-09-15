@@ -5,7 +5,8 @@ function Create(self)
 	self.targetLostTimer = Timer();
 	self.targetLostTimer:SetSimTimeLimitMS(3000);
 
-	self.laserLength = self.SharpLength + math.sqrt(FrameMan.PlayerScreenWidth^2 + FrameMan.PlayerScreenHeight^2) * 0.5;
+	-- The pinned screen size: this device runs on every peer and traces with this length.
+	self.laserLength = self.SharpLength + math.sqrt(FrameMan.SimScreenWidth^2 + FrameMan.SimScreenHeight^2) * 0.5;
 	self.laserPointerOffset = Vector(0, -3);
 
 	self.markerRotAngle = math.random() * math.pi;

@@ -1,6 +1,7 @@
 #include "NetMatchConfig.h"
 
 #include "NetIdentity.h"
+#include "SettingsMan.h"
 
 #include "nlohmann/json.hpp"
 
@@ -10,6 +11,18 @@ namespace RTE {
 
 	namespace {
 		using json = nlohmann::json;
+
+		// The saved preference and the wire policy are separate enumerations whose values differ by
+		// one, so they are mapped, never cast.
+		NetMatchDelayPolicy DelayPolicyFromSetting(SettingsMan::NetworkHostDelayPolicy saved) {
+			switch (saved) {
+				case SettingsMan::NetworkHostDelayPolicy::Fixed:
+					return NetMatchDelayPolicy::Fixed;
+				case SettingsMan::NetworkHostDelayPolicy::Auto:
+					return NetMatchDelayPolicy::Auto;
+			}
+			return NetMatchDelayPolicy::Auto;
+		}
 
 		bool HasControlChars(const std::string& value) {
 			return std::any_of(value.begin(), value.end(), [](unsigned char c) {
@@ -28,6 +41,18 @@ namespace RTE {
 			}
 			if (HasControlChars(value)) {
 				if (error) *error = std::string(field) + " contains control characters";
+				return false;
+			}
+			return true;
+		}
+
+		// A display name is the one field a player types freely, so it is also held to valid UTF-8.
+		bool ValidateName(const std::string& value, const char* field, std::string* error) {
+			if (!ValidateText(value, NetMatchConfigUtil::c_MaxNameBytes, field, error)) {
+				return false;
+			}
+			if (!NetProtocol::IsValidUtf8(value)) {
+				if (error) *error = std::string(field) + " is not valid UTF-8";
 				return false;
 			}
 			return true;
@@ -56,6 +81,59 @@ namespace RTE {
 				{"display_name", player.displayName},
 			};
 		}
+
+		json RulesJson(const NetMatchConfig& config) {
+			json teams = json::array();
+			for (const auto& team : config.teamRules) {
+				teams.push_back({{"technology_intent", team.technologyIntent}, {"technology_module", team.technologyModule}, {"ai_skill", team.aiSkill}});
+			}
+			return {{"round_id", config.roundId}, {"config_revision", config.configRevision},
+			        {"activity_module", config.activityModule}, {"scene_module", config.sceneModule},
+			        {"difficulty", config.difficulty}, {"starting_gold", config.startingGold},
+			        {"fog_of_war", config.fogOfWar}, {"require_clear_path_to_orbit", config.requireClearPathToOrbit},
+			        {"deploy_units", config.deployUnits}, {"brainless_humans_spectate", config.brainlessHumansSpectate},
+			        {"teams", std::move(teams)},
+			        {"autosave_enabled", config.autosaveEnabled}, {"autosave_interval_seconds", config.autosaveIntervalSeconds},
+			        {"idle_wait_minutes", config.idleWaitMinutes}, {"automatic_repair", config.automaticRepair},
+			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)}};
+		}
+
+		std::vector<std::pair<std::string, std::string>> RuleFields(const NetMatchConfig& config) {
+			std::vector<std::pair<std::string, std::string>> fields = {
+				{"round_id", std::to_string(config.roundId)}, {"config_revision", std::to_string(config.configRevision)},
+				{"activity_module", config.activityModule}, {"scene_module", config.sceneModule},
+				{"difficulty", std::to_string(config.difficulty)}, {"starting_gold", std::to_string(config.startingGold)},
+				{"fog_of_war", BoolText(config.fogOfWar)}, {"require_clear_path_to_orbit", BoolText(config.requireClearPathToOrbit)},
+				{"deploy_units", BoolText(config.deployUnits)},
+			};
+			// The spectate rule reached the wire in v4, so an older config hashes without its field.
+			if (config.version >= 4) {
+				fields.emplace_back("brainless_humans_spectate", BoolText(config.brainlessHumansSpectate));
+			}
+			const std::vector<std::pair<std::string, std::string>> tail = {
+				{"autosave_enabled", BoolText(config.autosaveEnabled)},
+				{"autosave_interval_seconds", std::to_string(config.autosaveIntervalSeconds)},
+				{"idle_wait_minutes", std::to_string(config.idleWaitMinutes)}, {"automatic_repair", BoolText(config.automaticRepair)},
+				{"delay_policy", std::to_string(static_cast<uint8_t>(config.delayPolicy))},
+			};
+			fields.insert(fields.end(), tail.begin(), tail.end());
+			for (size_t i = 0; i < config.teamRules.size(); ++i) {
+				const std::string prefix = "team." + std::to_string(i) + ".";
+				fields.emplace_back(prefix + "technology_intent", config.teamRules[i].technologyIntent);
+				fields.emplace_back(prefix + "technology_module", config.teamRules[i].technologyModule);
+				fields.emplace_back(prefix + "ai_skill", std::to_string(config.teamRules[i].aiSkill));
+			}
+			return fields;
+		}
+
+		bool ValidateModule(const std::string& module, const char* field, std::string* error) {
+			if (!ValidateText(module, NetMatchConfigUtil::c_MaxPresetBytes, field, error)) return false;
+			if (module.size() <= 4 || !module.ends_with(".rte") || !NetProtocol::IsValidUtf8(module) || module.find_first_of("/\\:*?\"<>|") != std::string::npos) {
+				if (error) *error = std::string(field) + " must be a UTF-8 module name ending in .rte";
+				return false;
+			}
+			return true;
+		}
 	}
 
 	NetMatchConfig NetMatchConfigUtil::MakeDefault(uint64_t sessionId) {
@@ -66,6 +144,12 @@ namespace RTE {
 			NetMatchPlayerSlot{2, 1, false, "Client"},
 		};
 		return config;
+	}
+
+	void NetMatchConfigUtil::ApplySavedHostOptions(NetMatchConfig& config) {
+		config.delayPolicy = DelayPolicyFromSetting(g_SettingsMan.GetNetworkHostDelayPolicy());
+		config.idleWaitMinutes = static_cast<uint8_t>(std::clamp(g_SettingsMan.GetNetworkHostIdleWaitMinutes(), 0, 60));
+		config.automaticRepair = g_SettingsMan.GetNetworkHostAutoRepair();
 	}
 
 	bool NetMatchConfigUtil::DeriveRematchConfig(const NetMatchConfig& previous, const std::vector<uint8_t>& survivingPeerIds, NetMatchConfig& outConfig, std::map<uint8_t, uint8_t>* outSeatMap, std::string* error) {
@@ -121,15 +205,44 @@ namespace RTE {
 	}
 
 	bool NetMatchConfigUtil::ValidateLocalAlpha(const NetMatchConfig& config, std::string* error) {
-		if (config.version != c_Version) {
+		if (config.version != 2 && config.version != 3 && config.version != c_Version) {
 			if (error) *error = "match config version is unsupported";
 			return false;
+		}
+		auto refuse = [&](const char* reason) { if (error) *error = reason; return false; };
+		if (config.version == 2) {
+			// A v2 config predates the rules block, so it carries the pre-rules end rule too.
+			NetMatchConfig legacyDefaults;
+			legacyDefaults.version = config.version;
+			legacyDefaults.brainlessHumansSpectate = false;
+			if (RuleFields(config) != RuleFields(legacyDefaults)) return refuse("legacy config cannot carry extended rules");
+		}
+		// Every pre-v4 config predates the spectate byte, so it cannot carry anything but the pre-spectate rule.
+		if (config.version < 4 && config.brainlessHumansSpectate) return refuse("pre-spectate config cannot carry the spectate rule");
+		if (config.roundId == 0 || config.configRevision == 0) return refuse("round_id and config_revision must be nonzero");
+		if (config.difficulty > 100) return refuse("difficulty is out of range");
+		if (config.startingGold > c_MaxFiniteStartingGold && config.startingGold != c_InfiniteGold) return refuse("starting_gold is out of range");
+		if (config.autosaveEnabled && config.autosaveIntervalSeconds == 0) return refuse("enabled autosave requires a nonzero interval");
+		if (config.idleWaitMinutes > 60) return refuse("idle_wait_minutes is out of range");
+		if (config.delayPolicy != NetMatchDelayPolicy::Auto && config.delayPolicy != NetMatchDelayPolicy::Fixed) return refuse("delay_policy is invalid");
+		if (config.mode != NetMatchMode::PvPSkirmish && config.mode != NetMatchMode::CoopPvE && config.mode != NetMatchMode::PvPvE) return refuse("match mode is invalid");
+		if (!ValidateModule(config.activityModule, "activity_module", error) || !ValidateModule(config.sceneModule, "scene_module", error)) return false;
+		for (const auto& team : config.teamRules) {
+			if (team.aiSkill < 1 || team.aiSkill > 100) return refuse("team AI skill is out of range");
+			if (team.technologyIntent == "-All-") {
+				if (!team.technologyModule.empty()) return refuse("all technology must resolve to unrestricted factions");
+			} else {
+				if (!ValidateModule(team.technologyModule, "team technology module", error)) return false;
+				if (team.technologyIntent != "-Random-" && team.technologyIntent != team.technologyModule) return refuse("team technology intent does not match its resolved module");
+			}
 		}
 		if (config.sessionId == 0) {
 			if (error) *error = "session_id must be nonzero";
 			return false;
 		}
-		if (config.peerCount < c_MinPeerCount || config.peerCount > c_MaxPeerCount) {
+		const size_t humanCount = std::count_if(config.players.begin(), config.players.end(), [](const auto& slot) { return !slot.cpu; });
+		const bool soleCPUHost = config.dedicated && humanCount == 0 && !config.players.empty();
+		if (config.peerCount < (soleCPUHost ? 1 : c_MinPeerCount) || config.peerCount > c_MaxPeerCount) {
 			if (error) *error = "peer_count is out of range";
 			return false;
 		}
@@ -159,7 +272,7 @@ namespace RTE {
 		    !ValidateText(config.modePreset, c_MaxPresetBytes, "mode_preset", error)) {
 			return false;
 		}
-		if (!config.sceneName.empty() && !ValidateText(config.sceneName, c_MaxPresetBytes, "scene_name", error)) {
+		if ((config.version >= 3 || !config.sceneName.empty()) && !ValidateText(config.sceneName, c_MaxPresetBytes, "scene_name", error)) {
 			return false;
 		}
 		if (config.players.empty() || config.players.size() > c_MaxPlayers) {
@@ -168,7 +281,7 @@ namespace RTE {
 		}
 		std::vector<bool> seen(config.peerCount + 1, false);
 		bool sawHost = false;
-		bool sawRemoteHuman = false;
+		std::array<bool, 4> cpuTeams{}, humanTeams{};
 		for (const NetMatchPlayerSlot& player : config.players) {
 			// A CPU slot has no peer: it marks a machine-run team the host's AI drives over the wire.
 			if (player.cpu) {
@@ -188,13 +301,18 @@ namespace RTE {
 				seen[player.peerId] = true;
 			}
 			sawHost = sawHost || player.peerId == config.hostPeerId;
-			sawRemoteHuman = sawRemoteHuman || (!player.cpu && player.peerId >= 2);
 			if (player.team >= 4) {
 				// Engine teams are 0..3; MaxTeamCount (4) is the exclusive sentinel, so team 4 is invalid.
 				if (error) *error = "player team is out of range";
 				return false;
 			}
-			if (!ValidateText(player.displayName, c_MaxNameBytes, "player display_name", error)) {
+			if (player.cpu) {
+				if (cpuTeams[player.team]) return refuse("duplicate cpu team");
+				cpuTeams[player.team] = true;
+			} else {
+				humanTeams[player.team] = true;
+			}
+			if (!ValidateName(player.displayName, "player display_name", error)) {
 				return false;
 			}
 		}
@@ -203,13 +321,14 @@ namespace RTE {
 				if (error) *error = "dedicated config must not seat the host peer";
 				return false;
 			}
-			if (!sawRemoteHuman) {
-				if (error) *error = "dedicated config has no client player slot";
-				return false;
-			}
 		} else if (!sawHost) {
 			if (error) *error = "host player slot is missing";
 			return false;
+		}
+		if (humanCount > config.peerCount - (config.dedicated ? 1 : 0)) return refuse("human seats exceed peer capacity");
+		if (config.mode == NetMatchMode::PvPvE && humanCount == 4) return refuse("four-human PvPvE exceeds team capacity");
+		for (size_t team = 0; team < cpuTeams.size(); ++team) {
+			if (cpuTeams[team] && humanTeams[team]) return refuse("cpu slot shares a human team");
 		}
 		return true;
 	}
@@ -236,7 +355,11 @@ namespace RTE {
 			{"mode_preset", config.modePreset},
 		};
 		for (const NetMatchPlayerSlot& player : SortedPlayers(config.players)) {
-			const std::string prefix = "player." + std::to_string(player.peerId) + ".";
+			// A CPU slot has no peer id, so its team is its key: under a shared player.0 prefix the
+			// canonical sort merges every CPU slot's fields and two rosters that swap their teams hash alike.
+			// That key reached the hash in v4, so a config recorded before it keeps its peer-id key.
+			const std::string prefix = (player.cpu && config.version >= 4) ? ("player.cpu" + std::to_string(player.team) + ".")
+			                                                              : ("player." + std::to_string(player.peerId) + ".");
 			fields.emplace_back(prefix + "team", std::to_string(player.team));
 			fields.emplace_back(prefix + "cpu", BoolText(player.cpu));
 			fields.emplace_back(prefix + "display_name", player.displayName);
@@ -245,7 +368,12 @@ namespace RTE {
 		if (config.dedicated) {
 			fields.emplace_back("dedicated", "true");
 		}
-		return NetIdentity::HashCanonicalText("NetMatchConfig/v2", fields);
+		if (config.version >= 3) {
+			const auto rules = RuleFields(config);
+			fields.insert(fields.end(), rules.begin(), rules.end());
+		}
+		const char* domain = config.version >= 4 ? "NetMatchConfig/v4" : (config.version >= 3 ? "NetMatchConfig/v3" : "NetMatchConfig/v2");
+		return NetIdentity::HashCanonicalText(domain, fields);
 	}
 
 	std::string NetMatchConfigUtil::BuildReportJson(const NetMatchConfig& config) {
@@ -270,7 +398,10 @@ namespace RTE {
 			{"match_config_hash", NetIdentity::HashHex(HashConfig(config))},
 			{"players", std::move(players)},
 		};
-		return report.dump();
+		report["rules"] = RulesJson(config);
+		// The roster takes a session-handshake name without revalidating it, so a stray byte is replaced
+		// here instead of throwing: the host builds this report while a match runs.
+		return report.dump(-1, ' ', false, json::error_handler_t::replace);
 	}
 
 	uint16_t NetMatchConfigUtil::PeerInputDelay(const NetMatchConfig& config, uint8_t peerId) {

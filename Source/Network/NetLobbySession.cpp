@@ -178,6 +178,10 @@ namespace RTE {
 			return;
 		}
 		if (m_Config.host) {
+			// A roster no remote has to accept is acked the moment it is authored.
+			if (m_State == NetLobbyState::WaitingForConfigAck && AllConfigAcked()) {
+				m_State = NetLobbyState::WaitingForReady;
+			}
 			SendQueuedStateChunks();
 			SendStartIfReady();
 		}
@@ -385,7 +389,9 @@ namespace RTE {
 				{"unbound_disconnects", m_Stats.unboundDisconnects},
 			}},
 		};
-		return report.dump();
+		// A remote abort reason is free-form text the codec never held to UTF-8, so a stray byte is
+		// replaced rather than thrown.
+		return report.dump(-1, ' ', false, json::error_handler_t::replace);
 	}
 
 	void NetLobbySession::SetLocalReady(bool ready) {
@@ -508,6 +514,12 @@ namespace RTE {
 		if (addedPeer && !m_StateBytesToSend.empty()) RestartStateTransfer();
 	}
 
+	bool NetLobbySession::SeatsRemoteHuman() const {
+		return std::any_of(m_Config.matchConfig.players.begin(), m_Config.matchConfig.players.end(), [this](const NetMatchPlayerSlot& slot) {
+			return !slot.cpu && slot.peerId != m_Config.matchConfig.hostPeerId;
+		});
+	}
+
 	bool NetLobbySession::AllConfigAcked() const {
 		if (m_Config.host && m_RemotePeerIds.size() + 1 != m_Config.matchConfig.peerCount) {
 			return false;
@@ -518,7 +530,8 @@ namespace RTE {
 				return false;
 			}
 		}
-		return !m_RemotePeerIds.empty();
+		// A roster with no remote human seat has nobody to accept it; a roster with one still waits.
+		return !m_RemotePeerIds.empty() || !SeatsRemoteHuman();
 	}
 
 	bool NetLobbySession::AllRemoteReady() const {
@@ -531,7 +544,7 @@ namespace RTE {
 				return false;
 			}
 		}
-		return !m_RemotePeerIds.empty();
+		return !m_RemotePeerIds.empty() || !SeatsRemoteHuman();
 	}
 
 	bool NetLobbySession::SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error) {

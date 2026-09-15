@@ -4,7 +4,6 @@
 
 #include "ActivityMan.h"
 #include "CameraMan.h"
-#include "FrameMan.h"
 #include "PresetMan.h"
 #include "PostProcessMan.h"
 
@@ -849,7 +848,8 @@ void HDFirearm::Update() {
 			MOPixel* pPixel;
 			float shake, particleSpread, shellSpread, lethalRange;
 
-			lethalRange = m_MaxSharpLength * m_SharpAim + std::max(g_FrameMan.GetPlayerFrameBufferWidth(-1), g_FrameMan.GetPlayerFrameBufferHeight(-1)) * 0.51F;
+			// Every peer fires the same round, so the range comes from the default screen, not this window.
+			lethalRange = m_MaxSharpLength * m_SharpAim + std::max(c_DefaultResX, c_DefaultResY) * 0.51F;
 			if (pActor) {
 				lethalRange += pActor->GetAimDistance();
 			}

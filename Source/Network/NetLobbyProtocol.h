@@ -149,10 +149,15 @@ namespace RTE {
 		NetLobbyError error;
 	};
 
+	struct NetLobbyDecodeOptions {
+		bool allowRecordedConfigVersions = false;
+	};
+
 	class NetLobbyProtocol {
 	public:
 		static constexpr uint32_t c_Magic = 0x344C4343U;
-		static constexpr uint16_t c_Version = 3;
+		// 5 widens the player_count range to c_MaxPlayers; older peers refuse a roster past their own.
+		static constexpr uint16_t c_Version = 5;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxShortTextBytes = 128;
@@ -162,6 +167,8 @@ namespace RTE {
 		static constexpr uint32_t c_MaxStateChunkCount = (c_MaxTotalStateBytes - 1U) / c_MaxStateChunkBytes + 1U;
 		static_assert(c_MaxStateChunkCount <= 65535U);
 		static constexpr size_t c_MaxPlayers = NetMatchConfigUtil::c_MaxPlayers;
+		// A seat assignment names a lockstep peer, and the peerless CPU teams take slots past the last peer.
+		static constexpr size_t c_MaxPeers = NetMatchConfigUtil::c_MaxPeerCount;
 
 		static constexpr uint16_t GetStateChunkCount(size_t totalBytes) {
 			return totalBytes == 0 || totalBytes > c_MaxTotalStateBytes ? 0 : static_cast<uint16_t>((totalBytes - 1) / c_MaxStateChunkBytes + 1);
@@ -172,8 +179,8 @@ namespace RTE {
 		static const char* ErrorCodeName(NetLobbyErrorCode code);
 
 		static bool Encode(const NetLobbyMessage& message, std::vector<uint8_t>& outBytes, NetLobbyError* error = nullptr);
-		static NetLobbyDecodeResult Decode(const uint8_t* data, size_t size);
-		static NetLobbyDecodeResult Decode(const std::vector<uint8_t>& bytes);
+		static NetLobbyDecodeResult Decode(const uint8_t* data, size_t size, NetLobbyDecodeOptions options = {});
+		static NetLobbyDecodeResult Decode(const std::vector<uint8_t>& bytes, NetLobbyDecodeOptions options = {});
 	};
 
 } // namespace RTE

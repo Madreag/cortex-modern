@@ -12,13 +12,23 @@ namespace RTE {
 	class Actor;
 
 	struct ControllerFrame {
-		/// Version 6 carries one-shot actor intents and the owner's control scheme; version 5 frames
-		/// (older recordings) apply the actor state absolutely every tick.
-		static constexpr uint16_t c_Version = 6;
+		/// Version 7 adds the one-shot hatch command; version 6 carries the other one-shot actor intents
+		/// and the owner's control scheme; version 5 frames (older recordings) apply the actor state
+		/// absolutely every tick.
+		static constexpr uint16_t c_Version = 7;
+		static constexpr uint16_t c_HatchVersion = 7;
+		static constexpr uint16_t c_PreHatchVersion = 6;
 		static constexpr uint16_t c_LegacyVersion = 5;
-		static constexpr size_t c_EncodedSize = 84;
+		static constexpr size_t c_EncodedSize = 85;
+		static constexpr size_t c_PreHatchEncodedSize = 84;
 		static constexpr size_t c_LegacyEncodedSize = 80;
 		static constexpr int c_AnalogScale = 32767;
+
+		/// What the owner's AI asked a craft's hatch to do this tick; every peer makes the call at the committed tick.
+		enum class HatchCommand : uint8_t { None = 0,
+			                                Open,
+			                                Close,
+			                                Count };
 
 		int64_t actorUniqueID = 0;
 		uint64_t stateMask = 0;
@@ -44,6 +54,7 @@ namespace RTE {
 		float bgHandPosX = 0.0F;
 		float bgHandPosY = 0.0F;
 		float digitalAimSpeed = 1.0F;
+		uint8_t hatchCommand = static_cast<uint8_t>(HatchCommand::None);
 		/// The semantics this frame was decoded with; the apply path dispatches on it.
 		uint16_t version = c_Version;
 
@@ -56,7 +67,11 @@ namespace RTE {
 		void SetAimIntent(bool intent);
 		bool HasFlipIntent() const { return (flags & 0x8U) != 0; }
 		void SetFlipIntent(bool intent);
-		bool IsLegacy() const { return version < c_Version; }
+		bool HasHatchIntent() const { return hatchCommand != static_cast<uint8_t>(HatchCommand::None); }
+		/// Pre-7 frames end at the aim speed; their hatch stays where the sim put it. The channel is keyed
+		/// on the version that introduced it, so a later build still reads a version 7 recording's hatch.
+		bool HasHatchChannel() const { return version >= c_HatchVersion; }
+		bool IsLegacy() const { return version <= c_LegacyVersion; }
 		static constexpr uint8_t c_KnownFlags = 0x0FU;
 		static constexpr uint8_t c_LegacyKnownFlags = 0x03U;
 	};
@@ -69,8 +84,11 @@ namespace RTE {
 		/// Applies only the frame's off-wire intents; the sim derives everything else from the controller.
 		static bool ApplyActorStateIntents(const ControllerFrame& frame, Actor& actor, std::string* error = nullptr);
 
-		static bool IsSupportedVersion(uint16_t version) { return version == ControllerFrame::c_Version || version == ControllerFrame::c_LegacyVersion; }
-		static size_t EncodedSizeFor(uint16_t version) { return version < ControllerFrame::c_Version ? ControllerFrame::c_LegacyEncodedSize : ControllerFrame::c_EncodedSize; }
+		static bool IsSupportedVersion(uint16_t version) { return version == ControllerFrame::c_Version || version == ControllerFrame::c_PreHatchVersion || version == ControllerFrame::c_LegacyVersion; }
+		static size_t EncodedSizeFor(uint16_t version) {
+			if (version <= ControllerFrame::c_LegacyVersion) return ControllerFrame::c_LegacyEncodedSize;
+			return version <= ControllerFrame::c_PreHatchVersion ? ControllerFrame::c_PreHatchEncodedSize : ControllerFrame::c_EncodedSize;
+		}
 
 		static std::vector<uint8_t> Encode(const ControllerFrame& frame);
 		static bool Decode(const uint8_t* data, size_t size, ControllerFrame& outFrame, std::string* error = nullptr, uint16_t version = ControllerFrame::c_Version);

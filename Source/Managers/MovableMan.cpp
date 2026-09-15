@@ -1,4 +1,5 @@
 #include "CheckpointArchive.h"
+#include "Constants.h"
 #include "OwnedMovableObjects.h"
 #include "MovableMan.h"
 #include "NetA7Journal.h"
@@ -209,7 +210,7 @@ namespace {
 AlarmEvent::AlarmEvent(const Vector& pos, int team, float range) :
 	m_ScenePos(pos),
 	m_Team((Activity::Teams)team),
-	m_Range(range * g_FrameMan.GetPlayerScreenWidth() * 0.51F) {}
+	m_Range(range * c_DefaultResX * 0.51F) {}
 
 const std::string MovableMan::c_ClassName = "MovableMan";
 
@@ -285,17 +286,26 @@ void MovableMan::RecordA7UnitOwnership(uint64_t round, uint64_t frame) const {
 	if (!NetA7Journal::Enabled()) return;
 	if (Activity* activity = g_ActivityMan.GetActivity()) {
 		const auto uid = [](const Actor* actor) { return actor && g_MovableMan.IsActor(actor) ? static_cast<int64_t>(actor->GetUniqueID()) : int64_t{0}; };
-		Actor* controlled = activity->GetControlledActor(Players::PlayerOne);
-		const int screen = activity->ScreenOfPlayer(Players::PlayerOne);
+		const int player = activity->PlayerOfScreen(0);
+		Actor* controlled = activity->GetLocallyControlledActor(player);
+		const int screen = activity->ScreenOfPlayer(player);
 		json view = {{"round_id", round}, {"frame", frame}, {"peer_id", ScenarioRunner::GetLockstepLocalPeerId()},
-			{"player_active", activity->PlayerActive(Players::PlayerOne)}, {"player_human", activity->PlayerHuman(Players::PlayerOne)},
-			{"team", activity->GetTeamOfPlayer(Players::PlayerOne)}, {"screen", screen},
-			{"controlled_uid", uid(controlled)}, {"brain_uid", uid(activity->GetPlayerBrain(Players::PlayerOne))},
-			{"view_state", static_cast<int>(activity->GetViewState())}, {"camera_target", nullptr},
-			{"seat_mode", nullptr}, {"seat_player", nullptr}};
+			{"player_index", player}, {"input_player", activity->LocalInputOfPlayer(player)},
+			{"player_controller_input", activity->GetPlayerController(player) ? activity->GetPlayerController(player)->GetInputPlayer() : Players::NoPlayer},
+			{"player_active", activity->PlayerActive(player)}, {"player_human", activity->IsLocalHumanSeat(player)},
+			{"team", player >= 0 ? activity->GetTeamOfPlayer(player) : Activity::NoTeam}, {"screen", screen},
+			{"controlled_uid", uid(controlled)}, {"brain_uid", uid(activity->GetPlayerBrain(player))},
+			{"view_state", static_cast<int>(player >= 0 ? activity->GetViewState(player) : Activity::Observe)}, {"camera_target", nullptr},
+			{"seat_mode", nullptr}, {"seat_player", nullptr}, {"controller_input", nullptr}, {"seat_facts", json::array()}};
 		if (uid(controlled) != 0) {
 			view["seat_mode"] = static_cast<int>(controlled->GetController()->GetSeatMode());
 			view["seat_player"] = controlled->GetController()->GetSeatPlayer();
+			view["controller_input"] = controlled->GetController()->GetInputPlayer();
+		}
+		for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
+			view["seat_facts"].push_back({{"player", seat}, {"active", activity->IsSeatActive(seat)},
+				{"human", activity->IsHumanSeat(seat)}, {"team", activity->GetTeamOfPlayer(seat)},
+				{"brain_uid", uid(activity->GetPlayerBrain(seat))}, {"input", activity->LocalInputOfPlayer(seat)}, {"screen", activity->ScreenOfPlayer(seat)}});
 		}
 		if (screen >= 0) {
 			const Vector target = g_CameraMan.GetScrollTarget(screen);
@@ -361,6 +371,10 @@ static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& acto
 
 		if (!MovableMan::ApplyLockstepFrameToActor(*actorIt->second, frame, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), &error)) {
 			return false;
+		}
+		// Every peer applies this committed frame, so the seat it names is where the shared control binding comes from.
+		if (Activity* activity = g_ActivityMan.GetActivity()) {
+			activity->NoteLockstepControlBinding(frame.actorUniqueID, actorIt->second->GetController()->GetPlayer());
 		}
 		applied.insert(frame.actorUniqueID);
 	}
@@ -470,6 +484,17 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				const std::string line = "ERROR: Rejected a AIOrder command from a peer that does not control team " + std::to_string(commandTeam) + " (sender=" + std::to_string(static_cast<int>(command.senderPeerId)) + " owner=" + std::to_string(static_cast<int>(owner)) + " authority=" + std::to_string(static_cast<int>(authority)) + ")";
 				g_ConsoleMan.PrintString(line);
 				std::cout << line << std::endl;
+				continue;
+			}
+		} else if (const NetGameAIScriptMessage* message = std::get_if<NetGameAIScriptMessage>(&command.payload)) {
+			// An AI pass's message and gib are authorized by their writer, like the AI orders they sit beside.
+			if (!ScenarioRunner::IsLockstepAIWriteAuthorized(command.senderPeerId, message->team, message->writerUID, message->writerUID)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected an AIScriptMessage command from a peer that does not drive actor " + std::to_string(message->writerUID));
+				continue;
+			}
+		} else if (const NetGameAIGib* gibCommand = std::get_if<NetGameAIGib>(&command.payload)) {
+			if (!ScenarioRunner::IsLockstepAIWriteAuthorized(command.senderPeerId, gibCommand->team, gibCommand->writerUID, gibCommand->writerUID)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected an AIGib command from a peer that does not drive actor " + std::to_string(gibCommand->writerUID));
 				continue;
 			}
 		} else if (!ScenarioRunner::IsLockstepTeamCommandSender(commandTeam, command.senderPeerId)) {
@@ -647,6 +672,12 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 					case NetGameAIOrder::PopWaypoint:
 						actor->PopFrontWaypoint(Vector(order->x, order->y));
 						break;
+					case NetGameAIOrder::SetMOMoveTarget:
+						actor->SetMOMoveTarget(order->targetUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order->targetUID)) : nullptr);
+						break;
+					case NetGameAIOrder::SetAlarmPoint:
+						actor->AlarmPoint(Vector(order->x, order->y));
+						break;
 					default:
 						break;
 				}
@@ -740,6 +771,46 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			deferred.moduleName = equip->moduleName;
 			deferred.presetName = equip->presetName;
 			human->ExecuteDeferredEquip(deferred);
+		} else if (const NetGameAIScriptMessage* scriptMessage = std::get_if<NetGameAIScriptMessage>(&command.payload)) {
+			// The AI's message runs here on every peer, so a receiver script that gates a sim write on it
+			// decides alike everywhere; only the peer driving the writing actor may issue it.
+			const Actor* writer = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(scriptMessage->writerUID)));
+			if (!writer) {
+				g_ConsoleMan.PrintString("NETWORK: AI message command writer not found: UID " + std::to_string(scriptMessage->writerUID));
+				std::cout << "[net-match] AI message command writer not found: UID " << scriptMessage->writerUID << std::endl;
+				continue;
+			}
+			if (writer->GetTeam() != scriptMessage->team || !ScenarioRunner::IsLockstepActorOwner(scriptMessage->writerUID, writer->GetTeam(), !writer->IsPlayerControlled(), command.senderPeerId)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected an AI message command from a peer that does not drive actor " + std::to_string(scriptMessage->writerUID));
+				continue;
+			}
+			MovableObject* receiver = g_MovableMan.FindObjectByUniqueID(static_cast<long int>(scriptMessage->objectUID));
+			if (!receiver) {
+				g_ConsoleMan.PrintString("NETWORK: AI message command target not found: UID " + std::to_string(scriptMessage->objectUID));
+				std::cout << "[net-match] AI message command target not found: UID " << scriptMessage->objectUID << std::endl;
+				continue;
+			}
+			receiver->DeliverSyncedScriptMessage(scriptMessage->context, scriptMessage->number, scriptMessage->contextUID, scriptMessage->message, scriptMessage->text);
+		} else if (const NetGameAIGib* gib = std::get_if<NetGameAIGib>(&command.payload)) {
+			// The AI's gib runs here on every peer, at one tick; only the peer driving the writing actor may issue it.
+			const Actor* writer = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(gib->writerUID)));
+			if (!writer) {
+				g_ConsoleMan.PrintString("NETWORK: AI gib command writer not found: UID " + std::to_string(gib->writerUID));
+				std::cout << "[net-match] AI gib command writer not found: UID " << gib->writerUID << std::endl;
+				continue;
+			}
+			if (writer->GetTeam() != gib->team || !ScenarioRunner::IsLockstepActorOwner(gib->writerUID, writer->GetTeam(), !writer->IsPlayerControlled(), command.senderPeerId)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected an AI gib command from a peer that does not drive actor " + std::to_string(gib->writerUID));
+				continue;
+			}
+			MOSRotating* gibbed = dynamic_cast<MOSRotating*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(gib->objectUID)));
+			if (!gibbed) {
+				g_ConsoleMan.PrintString("NETWORK: AI gib command target not found: UID " + std::to_string(gib->objectUID));
+				std::cout << "[net-match] AI gib command target not found: UID " << gib->objectUID << std::endl;
+				continue;
+			}
+			MovableObject* ignored = gib->ignoreUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(gib->ignoreUID)) : nullptr;
+			gibbed->GibThis(Vector(gib->impulseX, gib->impulseY), ignored);
 		} else if (const NetGameSoundOp* sound = std::get_if<NetGameSoundOp>(&command.payload)) {
 			// The AI's sound call runs here on every peer; only the peer driving the actor may issue it.
 			Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(sound->actorUID)));
@@ -752,6 +823,11 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				continue;
 			}
 			ApplyDeferredSoundOp(*sound);
+		} else if (const NetGamePlaceBrain* placeBrain = std::get_if<NetGamePlaceBrain>(&command.payload)) {
+			// A seat's committed brain placement in the synchronized setup editor.
+			if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
+				gameActivity->ApplyNetBrainPlacement(*placeBrain, command.senderPeerId);
+			}
 		}
 	}
 	MovableMan::ReconcileLockstepControlBindings();
@@ -814,11 +890,51 @@ void MovableMan::ApplyLockstepControlHandoffToActor(Actor& actor, bool seated) {
 	const Controller::InputMode handedMode = seated ? Controller::CIM_PLAYER : Controller::CIM_AI;
 	const Controller::InputMode previousMode = controller.GetInputMode();
 	const int previousPlayer = controller.GetPlayer();
+	if (!seated) controller.ResetLocalInputState();
 	if (previousMode == handedMode) {
 		return;
 	}
 	controller.ApplyWireMode(handedMode, controller.GetPlayerRaw());
 	actor.OnControllerInputModeChanged(previousMode, previousPlayer);
+}
+
+// Frames a synced pause committed: the sim does not advance on them, so they are not frames the match played.
+static uint64_t s_LockstepPausedFrames = 0;
+
+uint64_t RTE::LockstepPlayedFrame() {
+	const uint64_t applied = ScenarioRunner::GetLockstepAppliedFrame();
+	return applied > s_LockstepPausedFrames ? applied - s_LockstepPausedFrames : 0;
+}
+
+void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors, bool paused) {
+	// A round that restarts its frame numbering restarts the count with it.
+	if (readyFrame.frame <= ScenarioRunner::GetLockstepAppliedFrame()) {
+		s_LockstepPausedFrames = 0;
+	}
+	if (paused) {
+		++s_LockstepPausedFrames;
+	}
+	ScenarioRunner::SetLockstepAppliedFrame(readyFrame.frame);
+	ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(readyFrame.frame);
+	for (Actor* actor: actors) {
+		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+		const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
+		if (actor->IsPlayerControlled() && std::find(readyFrame.departedPeerIds.begin(), readyFrame.departedPeerIds.end(), claimant) != readyFrame.departedPeerIds.end()) {
+			MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
+		}
+		if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame)) {
+			const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
+			if (seeded != 0 && ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), true) == seeded) {
+				MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
+				std::cout << "[net-match] claim of actor " << uid << " returned to peer " << static_cast<int>(seeded)
+				          << " after seat " << static_cast<int>(claimant) << " expired" << std::endl;
+				continue;
+			}
+		}
+		if (ScenarioRunner::IsLockstepActorOwnerGone(uid, actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame)) {
+			actor->GetController()->SetDisabled(true);
+		}
+	}
 }
 
 std::vector<long int> MovableMan::BeginLockstepProducingPass(const std::deque<Actor*>& actors, const std::function<bool(const Actor*)>& isLocal) {
@@ -849,7 +965,8 @@ void MovableMan::ReconcileLockstepControlBindings() {
 	}
 	const uint8_t localPeerId = ScenarioRunner::GetLockstepLocalPeerId();
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		const Actor* controlled = activity->GetControlledActor(player);
+		// Only a seat this machine presents holds a binding to release; the shared one belongs to its owner.
+		const Actor* controlled = activity->GetLocallyControlledActor(player);
 		if (!controlled || !g_MovableMan.IsActor(const_cast<Actor*>(controlled))) {
 			continue;
 		}
@@ -885,6 +1002,111 @@ struct ScopedRenderRNG {
 	ScopedRenderRNG& operator=(const ScopedRenderRNG&) = delete;
 };
 
+namespace {
+	// The end-of-tick state every peer has to agree on. A held tick runs no simulation but still applies
+	// commands and runs the activity, so the same census goes in there too - a divergence inside a hold
+	// would otherwise sit under a hash made of terrain alone.
+	void FeedSimChecksum(const std::deque<Actor*>& actors, const std::deque<MovableObject*>& items,
+	                     const std::deque<MovableObject*>& particles, const std::list<Actor*>* rosters) {
+
+		for (Actor* a: actors) {
+			const int64_t uniqueID = static_cast<int64_t>(a->GetUniqueID());
+			g_SimChecksum.Update("actors", &uniqueID, sizeof(uniqueID));
+			const float posX = a->GetPos().m_X;
+			g_SimChecksum.Update("actors", &posX, sizeof(posX));
+			const float posY = a->GetPos().m_Y;
+			g_SimChecksum.Update("actors", &posY, sizeof(posY));
+			const float velX = a->GetVel().m_X;
+			g_SimChecksum.Update("actors", &velX, sizeof(velX));
+			const float velY = a->GetVel().m_Y;
+			g_SimChecksum.Update("actors", &velY, sizeof(velY));
+			const float health = a->GetHealth();
+			g_SimChecksum.Update("actors", &health, sizeof(health));
+			// Rotational state is on-wire but absent from the linear actors fingerprint — angle and angular velocity split into separate subsystems so a divergence localizes to the update vs the integration.
+			const float actorRotAngle = a->GetRotAngle();
+			g_SimChecksum.Update("rot_angle", &actorRotAngle, sizeof(actorRotAngle));
+			const float actorAngVel = a->GetAngularVel();
+			g_SimChecksum.Update("rot_angvel", &actorAngVel, sizeof(actorAngVel));
+		}
+
+		// Controller input state per actor — catches control drift the actors fingerprint misses.
+		for (Actor* a: actors) {
+			const Controller* controller = a->GetController();
+			const int64_t controllerID = static_cast<int64_t>(a->GetUniqueID());
+			g_SimChecksum.Update("controller", &controllerID, sizeof(controllerID));
+			for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
+				const uint8_t pressed = controller->IsState(static_cast<ControlState>(state)) ? 1 : 0;
+				g_SimChecksum.Update("controller", &pressed, sizeof(pressed));
+			}
+			const Vector move = controller->GetAnalogMove();
+			const Vector aim = controller->GetAnalogAim();
+			const Vector cursor = controller->GetAnalogCursor();
+			const float analog[6] = {move.m_X, move.m_Y, aim.m_X, aim.m_Y, cursor.m_X, cursor.m_Y};
+			g_SimChecksum.Update("controller", analog, sizeof(analog));
+			const int32_t inputMode = static_cast<int32_t>(controller->GetInputMode());
+			g_SimChecksum.Update("controller", &inputMode, sizeof(inputMode));
+			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
+			g_SimChecksum.Update("controller", &aiMode, sizeof(aiMode));
+		}
+
+		// Compact per-particle fingerprint — uniqueID + pos + vel.
+		for (MovableObject* p: particles) {
+			const int64_t particleID = static_cast<int64_t>(p->GetUniqueID());
+			g_SimChecksum.Update("particles", &particleID, sizeof(particleID));
+			const float ppX = p->GetPos().m_X;
+			g_SimChecksum.Update("particles", &ppX, sizeof(ppX));
+			const float ppY = p->GetPos().m_Y;
+			g_SimChecksum.Update("particles", &ppY, sizeof(ppY));
+			const float pvX = p->GetVel().m_X;
+			g_SimChecksum.Update("particles", &pvX, sizeof(pvX));
+			const float pvY = p->GetVel().m_Y;
+			g_SimChecksum.Update("particles", &pvY, sizeof(pvY));
+			const float partAngVel = p->GetAngularVel();
+			g_SimChecksum.Update("rot_angvel", &partAngVel, sizeof(partAngVel));
+		}
+
+		// Same fingerprint for free items — a dropped device's state was only visible as a count before.
+		for (MovableObject* i: items) {
+			const int64_t itemID = static_cast<int64_t>(i->GetUniqueID());
+			g_SimChecksum.Update("items", &itemID, sizeof(itemID));
+			const float ipX = i->GetPos().m_X;
+			g_SimChecksum.Update("items", &ipX, sizeof(ipX));
+			const float ipY = i->GetPos().m_Y;
+			g_SimChecksum.Update("items", &ipY, sizeof(ipY));
+			const float ivX = i->GetVel().m_X;
+			g_SimChecksum.Update("items", &ivX, sizeof(ivX));
+			const float ivY = i->GetVel().m_Y;
+			g_SimChecksum.Update("items", &ivY, sizeof(ivY));
+			const float itemAngVel = i->GetAngularVel();
+			g_SimChecksum.Update("rot_angvel", &itemAngVel, sizeof(itemAngVel));
+		}
+
+		// Lightweight population metadata — catches spawn/delete count drift.
+		const int32_t actorCount = static_cast<int32_t>(actors.size());
+		g_SimChecksum.Update("scene", &actorCount, sizeof(actorCount));
+		const int32_t itemCount = static_cast<int32_t>(items.size());
+		g_SimChecksum.Update("scene", &itemCount, sizeof(itemCount));
+		const int32_t particleCount = static_cast<int32_t>(particles.size());
+		g_SimChecksum.Update("scene", &particleCount, sizeof(particleCount));
+		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+			const int32_t rosterSize = static_cast<int32_t>(rosters[team].size());
+			g_SimChecksum.Update("scene", &rosterSize, sizeof(rosterSize));
+		}
+		if (const Activity* activity = g_ActivityMan.GetActivity()) {
+			for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
+				const float teamFunds = activity->GetTeamFunds(team);
+				g_SimChecksum.Update("funds", &teamFunds, sizeof(teamFunds));
+			}
+		}
+
+		// Snapshot the sim + Lua RNG states here — before the see-ray and MOID-draw futures launch
+		// and start mutating g_SimRNG on the thread pool — so the snapshot can't be raced.
+		const std::string rngState = g_SimRNG.SerializeStateForHashing();
+		g_SimChecksum.Update("sim_rng", rngState.data(), rngState.size());
+		g_LuaMan.HashAllLuaStatesIntoSimChecksum();
+	}
+} // namespace
+
 bool MovableMan::RunLockstepPausedTick() {
 	const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	std::string error;
@@ -897,10 +1119,16 @@ bool MovableMan::RunLockstepPausedTick() {
 		ScenarioRunner::SetControllerReplayError("tick " + std::to_string(simTick) + " paused wait: " + error);
 		return false;
 	}
+	ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, true);
 	// Only the game commands apply on a paused tick; the sim itself holds still.
 	g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 	CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
 	ApplyLockstepGameCommands(readyFrame);
+	// A held tick hashes what a simulated one does: the activity, its funds and every Lua state still run
+	// while the world waits, so a divergence inside a setup or pause hold is caught by the same exchange.
+	if (g_SimChecksum.IsActive()) {
+		FeedSimChecksum(m_Actors, m_Items, m_Particles, m_ActorRoster);
+	}
 	return true;
 }
 
@@ -2559,6 +2787,43 @@ void MovableMan::ReportSpeculationViolation(const char* what, const MovableObjec
 #endif
 }
 
+MovableMan::ControllerBoundaryBaseline MovableMan::CaptureControllerBoundary(Actor* actor) {
+	const AHuman* human = dynamic_cast<const AHuman*>(actor);
+	const ACraft* craft = dynamic_cast<const ACraft*>(actor);
+	return {actor, actor->GetAimAngle(false), actor->IsHFlipped(),
+	        human && human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0,
+	        human && human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0,
+	        craft ? craft->GetHatchState() : 0u,
+	        craft ? craft->GetHatchTimerStartTicks() : 0};
+}
+
+void MovableMan::RestoreControllerBoundary(const ControllerBoundaryBaseline& before, long long simTick) {
+	Actor* actor = before.actor;
+	if (const float aim = actor->GetAimAngle(false); aim != before.aim) {
+		actor->MarkOffWireAim(simTick, aim);
+		actor->SetAimAngle(before.aim);
+		++m_ControllerBoundaryStats.aimIntents;
+	}
+	if (const bool flipped = actor->IsHFlipped(); flipped != before.flipped) {
+		actor->MarkOffWireFlip(simTick, flipped);
+		actor->SetHFlipped(before.flipped);
+		++m_ControllerBoundaryStats.flipIntents;
+	}
+	if (ACraft* craft = dynamic_cast<ACraft*>(actor)) {
+		if (const unsigned int hatch = craft->GetHatchState(); hatch != before.hatch) {
+			craft->MarkOffWireHatch(simTick, hatch == ACraft::OPENING || hatch == ACraft::OPEN);
+			craft->RestoreHatch(before.hatch, before.hatchTimerStart);
+		}
+	}
+	if (AHuman* human = dynamic_cast<AHuman*>(actor)) {
+		const int64_t fg = human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0;
+		const int64_t bg = human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0;
+		if (fg != before.fg || bg != before.bg) {
+			ReportControllerBoundaryViolation("the equipment", actor);
+		}
+	}
+}
+
 void MovableMan::ReportControllerBoundaryViolation(const char* what, const Actor* actor) {
 	++m_ControllerBoundaryStats.directWrites;
 	const std::string subject = actor ? actor->GetPresetName() + " uid=" + std::to_string(actor->GetUniqueID()) : std::string("an actor");
@@ -3114,6 +3379,43 @@ Actor* MovableMan::GetClosestOtherBrainActor(int notOfTeam, const Vector& sceneP
 		}
 	}
 	return static_cast<Actor*>(ViewIfSpeculating(pClosestBrain));
+}
+
+bool MovableMan::IsPlayerBrain(const Actor* actor) const {
+	return actor && m_PlayerBrainIDs.contains(actor->GetUniqueID());
+}
+
+bool MovableMan::HasPlayerBrainOfTeam(int team) {
+	for (long uid: m_PlayerBrainIDs) {
+		const Actor* actor = dynamic_cast<const Actor*>(FindObjectByUniqueID(uid));
+		if (actor && actor->GetTeam() == team) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void MovableMan::NotePlayerBrain(long uniqueID, bool isBrain) {
+	if (uniqueID <= 0) {
+		return;
+	}
+	if (isBrain) {
+		m_PlayerBrainIDs.insert(uniqueID);
+	} else {
+		m_PlayerBrainIDs.erase(uniqueID);
+	}
+}
+
+Actor* MovableMan::GetUnassignedBrainByID(int team) const {
+	if (team < Activity::TeamOne || team >= Activity::MaxTeamCount) return nullptr;
+	Actor* brain = nullptr;
+	const auto consider = [&](Actor* candidate) {
+		if (candidate->GetTeam() == team && !candidate->IsDead() && candidate->HasObjectInGroup("Brains") &&
+			!g_ActivityMan.GetActivity()->IsAssignedBrain(candidate) && (!brain || candidate->GetUniqueID() < brain->GetUniqueID())) brain = candidate;
+	};
+	for (Actor* actor: m_ActorRoster[team]) consider(actor);
+	for (Actor* actor: m_AddedActors) consider(actor);
+	return static_cast<Actor*>(ViewIfSpeculating(brain));
 }
 
 Actor* MovableMan::GetUnassignedBrain(int team) const {
@@ -4375,102 +4677,7 @@ void MovableMan::Update() {
 	// Fields go in individually with fixed-width types so the byte stream is cross-OS-stable.
 	if (g_SimChecksum.IsActive()) {
 		DumpControllerDebugSnapshot("end_tick_before_checksum", static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), m_Actors, nullptr, nullptr, &m_Particles);
-
-		for (Actor* a: m_Actors) {
-			const int64_t uniqueID = static_cast<int64_t>(a->GetUniqueID());
-			g_SimChecksum.Update("actors", &uniqueID, sizeof(uniqueID));
-			const float posX = a->GetPos().m_X;
-			g_SimChecksum.Update("actors", &posX, sizeof(posX));
-			const float posY = a->GetPos().m_Y;
-			g_SimChecksum.Update("actors", &posY, sizeof(posY));
-			const float velX = a->GetVel().m_X;
-			g_SimChecksum.Update("actors", &velX, sizeof(velX));
-			const float velY = a->GetVel().m_Y;
-			g_SimChecksum.Update("actors", &velY, sizeof(velY));
-			const float health = a->GetHealth();
-			g_SimChecksum.Update("actors", &health, sizeof(health));
-			// Rotational state is on-wire but absent from the linear actors fingerprint — angle and angular velocity split into separate subsystems so a divergence localizes to the update vs the integration.
-			const float actorRotAngle = a->GetRotAngle();
-			g_SimChecksum.Update("rot_angle", &actorRotAngle, sizeof(actorRotAngle));
-			const float actorAngVel = a->GetAngularVel();
-			g_SimChecksum.Update("rot_angvel", &actorAngVel, sizeof(actorAngVel));
-		}
-
-		// Controller input state per actor — catches control drift the actors fingerprint misses.
-		for (Actor* a: m_Actors) {
-			const Controller* controller = a->GetController();
-			const int64_t controllerID = static_cast<int64_t>(a->GetUniqueID());
-			g_SimChecksum.Update("controller", &controllerID, sizeof(controllerID));
-			for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state) {
-				const uint8_t pressed = controller->IsState(static_cast<ControlState>(state)) ? 1 : 0;
-				g_SimChecksum.Update("controller", &pressed, sizeof(pressed));
-			}
-			const Vector move = controller->GetAnalogMove();
-			const Vector aim = controller->GetAnalogAim();
-			const Vector cursor = controller->GetAnalogCursor();
-			const float analog[6] = {move.m_X, move.m_Y, aim.m_X, aim.m_Y, cursor.m_X, cursor.m_Y};
-			g_SimChecksum.Update("controller", analog, sizeof(analog));
-			const int32_t inputMode = static_cast<int32_t>(controller->GetInputMode());
-			g_SimChecksum.Update("controller", &inputMode, sizeof(inputMode));
-			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
-			g_SimChecksum.Update("controller", &aiMode, sizeof(aiMode));
-		}
-
-		// Compact per-particle fingerprint — uniqueID + pos + vel.
-		for (MovableObject* p: m_Particles) {
-			const int64_t particleID = static_cast<int64_t>(p->GetUniqueID());
-			g_SimChecksum.Update("particles", &particleID, sizeof(particleID));
-			const float ppX = p->GetPos().m_X;
-			g_SimChecksum.Update("particles", &ppX, sizeof(ppX));
-			const float ppY = p->GetPos().m_Y;
-			g_SimChecksum.Update("particles", &ppY, sizeof(ppY));
-			const float pvX = p->GetVel().m_X;
-			g_SimChecksum.Update("particles", &pvX, sizeof(pvX));
-			const float pvY = p->GetVel().m_Y;
-			g_SimChecksum.Update("particles", &pvY, sizeof(pvY));
-			const float partAngVel = p->GetAngularVel();
-			g_SimChecksum.Update("rot_angvel", &partAngVel, sizeof(partAngVel));
-		}
-
-		// Same fingerprint for free items — a dropped device's state was only visible as a count before.
-		for (MovableObject* i: m_Items) {
-			const int64_t itemID = static_cast<int64_t>(i->GetUniqueID());
-			g_SimChecksum.Update("items", &itemID, sizeof(itemID));
-			const float ipX = i->GetPos().m_X;
-			g_SimChecksum.Update("items", &ipX, sizeof(ipX));
-			const float ipY = i->GetPos().m_Y;
-			g_SimChecksum.Update("items", &ipY, sizeof(ipY));
-			const float ivX = i->GetVel().m_X;
-			g_SimChecksum.Update("items", &ivX, sizeof(ivX));
-			const float ivY = i->GetVel().m_Y;
-			g_SimChecksum.Update("items", &ivY, sizeof(ivY));
-			const float itemAngVel = i->GetAngularVel();
-			g_SimChecksum.Update("rot_angvel", &itemAngVel, sizeof(itemAngVel));
-		}
-
-		// Lightweight population metadata — catches spawn/delete count drift.
-		const int32_t actorCount = static_cast<int32_t>(m_Actors.size());
-		g_SimChecksum.Update("scene", &actorCount, sizeof(actorCount));
-		const int32_t itemCount = static_cast<int32_t>(m_Items.size());
-		g_SimChecksum.Update("scene", &itemCount, sizeof(itemCount));
-		const int32_t particleCount = static_cast<int32_t>(m_Particles.size());
-		g_SimChecksum.Update("scene", &particleCount, sizeof(particleCount));
-		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
-			const int32_t rosterSize = static_cast<int32_t>(m_ActorRoster[team].size());
-			g_SimChecksum.Update("scene", &rosterSize, sizeof(rosterSize));
-		}
-		if (const Activity* activity = g_ActivityMan.GetActivity()) {
-			for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
-				const float teamFunds = activity->GetTeamFunds(team);
-				g_SimChecksum.Update("funds", &teamFunds, sizeof(teamFunds));
-			}
-		}
-
-		// Snapshot the sim + Lua RNG states here — before the see-ray and MOID-draw futures launch
-		// and start mutating g_SimRNG on the thread pool — so the snapshot can't be raced.
-		const std::string rngState = g_SimRNG.SerializeStateForHashing();
-		g_SimChecksum.Update("sim_rng", rngState.data(), rngState.size());
-		g_LuaMan.HashAllLuaStatesIntoSimChecksum();
+		FeedSimChecksum(m_Actors, m_Items, m_Particles, m_ActorRoster);
 	}
 
 	// Freeze the material terrain for the threaded vision pass so carves can't race the see-ray reads.
@@ -4684,24 +4891,14 @@ void MovableMan::UpdateControllers() {
 			}
 		}
 
-		// Under lockstep the AI pass may not change the canonical actor: its aim and facing writes are
-		// taken as one-shot intents and undone here, its equip calls become commands, and every peer
+		// Under lockstep the AI pass may not change the canonical actor: its aim, facing and hatch writes
+		// are taken as one-shot intents and undone here, its equip calls become commands, and every peer
 		// (this one included) applies them at the committed tick.
-		struct DirectState {
-			Actor* actor;
-			float aim;
-			bool flipped;
-			int64_t fg;
-			int64_t bg;
-		};
-		std::vector<DirectState> directBefore;
+		std::vector<ControllerBoundaryBaseline> directBefore;
 		if (lockstepActive) {
 			for (Actor* actor: m_Actors) {
 				if (isLocalControllerActor(actor)) {
-					const AHuman* human = dynamic_cast<const AHuman*>(actor);
-					directBefore.push_back({actor, actor->GetAimAngle(false), actor->IsHFlipped(),
-					                        human && human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0,
-					                        human && human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0});
+					directBefore.push_back(CaptureControllerBoundary(actor));
 				}
 			}
 		}
@@ -4742,6 +4939,39 @@ void MovableMan::UpdateControllers() {
 					actor->SendDeferredWaypoints();
 				} else {
 					actor->TakePendingDeferredWaypoints();
+				}
+			}
+		};
+		auto drainDeferredAIModes = [&]() {
+			// The AI modes the AI pass wrote, in MOID order: the owner sends them as synced requests so
+			// every peer takes the mode at the same tick. A non-owner's queued writes are dropped.
+			for (Actor* actor: m_Actors) {
+				if (isLocalControllerActor(actor)) {
+					actor->SendDeferredAIModes();
+				} else {
+					actor->TakePendingDeferredAIModes();
+				}
+			}
+		};
+		auto drainDeferredScriptMessages = [&]() {
+			// The messages the AI pass sent, in MOID order: the owner sends them so every peer's receiver
+			// script hears them at the same tick. A non-owner's queued messages are dropped.
+			for (Actor* actor: m_Actors) {
+				if (isLocalControllerActor(actor)) {
+					actor->SendDeferredScriptMessages();
+				} else {
+					actor->TakePendingDeferredScriptMessages();
+				}
+			}
+		};
+		auto drainDeferredGibs = [&]() {
+			// The gibs the AI pass asked for, in MOID order: the owner sends them so every peer gibs at the
+			// same tick. A non-owner's queued gibs are dropped.
+			for (Actor* actor: m_Actors) {
+				if (isLocalControllerActor(actor)) {
+					actor->SendDeferredGibs();
+				} else {
+					actor->TakePendingDeferredGibs();
 				}
 			}
 		};
@@ -4815,6 +5045,9 @@ void MovableMan::UpdateControllers() {
 
 		drainDeferredEquips();
 		drainDeferredWaypoints();
+		drainDeferredAIModes();
+		drainDeferredScriptMessages();
+		drainDeferredGibs();
 		drainDeferredSoundOps();
 
 		// The serial UpdateAI pass mutates directly outside lockstep; under it the calls defer like the threaded ones.
@@ -4831,34 +5064,23 @@ void MovableMan::UpdateControllers() {
 			drainDeferredEquips();
 		}
 		drainDeferredWaypoints();
+		drainDeferredAIModes();
+		drainDeferredScriptMessages();
+		drainDeferredGibs();
 		drainDeferredSoundOps();
 		// A fixture's scripted writes come last, so they are the pass's final word on the actor.
 		if (AIWriteScript::IsActive()) {
 			AIWriteScript::RunTick(simTick, m_Actors, isLocalControllerActor);
 			drainDeferredEquips();
 			drainDeferredWaypoints();
+			drainDeferredAIModes();
+			drainDeferredScriptMessages();
+			drainDeferredGibs();
 			drainDeferredSoundOps();
 		}
 
-		for (const DirectState& before: directBefore) {
-			Actor* actor = before.actor;
-			if (const float aim = actor->GetAimAngle(false); aim != before.aim) {
-				actor->MarkOffWireAim(static_cast<long long>(simTick), aim);
-				actor->SetAimAngle(before.aim);
-				++m_ControllerBoundaryStats.aimIntents;
-			}
-			if (const bool flipped = actor->IsHFlipped(); flipped != before.flipped) {
-				actor->MarkOffWireFlip(static_cast<long long>(simTick), flipped);
-				actor->SetHFlipped(before.flipped);
-				++m_ControllerBoundaryStats.flipIntents;
-			}
-			if (AHuman* human = dynamic_cast<AHuman*>(actor)) {
-				const int64_t fg = human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0;
-				const int64_t bg = human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0;
-				if (fg != before.fg || bg != before.bg) {
-					ReportControllerBoundaryViolation("the equipment", actor);
-				}
-			}
+		for (const ControllerBoundaryBaseline& before: directBefore) {
+			RestoreControllerBoundary(before, static_cast<long long>(simTick));
 		}
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsAI);
@@ -4906,27 +5128,7 @@ void MovableMan::UpdateControllers() {
 			return;
 		}
 		NeutralizeUnframedLockstepActors(m_Actors, applied);
-		// A leaver's actors dropped off the wire: their control handoffs revert to the policy owner
-		// (a surviving teammate's AI picks them up), and actors with no surviving owner stand down —
-		// on every survivor at the same tick.
-		ScenarioRunner::SetLockstepAppliedFrame(readyFrame.frame);
-		ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(readyFrame.frame);
-		for (Actor* actor: m_Actors) {
-			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
-			const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
-			if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame)) {
-				const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
-				if (seeded != 0 && ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), true) == seeded) {
-					ApplyLockstepControlHandoffToActor(*actor, false);
-					std::cout << "[net-match] claim of actor " << uid << " returned to peer " << static_cast<int>(seeded)
-					          << " after seat " << static_cast<int>(claimant) << " expired" << std::endl;
-					continue;
-				}
-			}
-			if (ScenarioRunner::IsLockstepActorOwnerGone(uid, actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame)) {
-				actor->GetController()->SetDisabled(true);
-			}
-		}
+		ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, false);
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 		CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
@@ -5161,7 +5363,26 @@ std::string MovableMan::SaveCheckpoint() const {
 	std::map<long, std::vector<long>> references;
 	// A row exists to rebind borrowed pointers, so an object that borrows nothing needs none.
 	// Writing one anyway makes the restore demand back an owner the checkpoint never carried.
+	// Only the shared world this checkpoint writes comes back under its own identities, so only its
+	// objects may be named. A peer's own setup editor holds objects nothing shared owns, and a row for
+	// one of those can only refuse the archive on the peer that never had it.
+	std::unordered_set<const Entity*> visited;
+	std::unordered_set<const MovableObject*> carried;
+	const auto collect = [&visited, &carried](const auto& roots) {
+		for (const Entity* root: roots) CollectOwnedMovableObjects(root, visited, carried);
+	};
+	collect(m_Actors); collect(m_Items); collect(m_Particles);
+	collect(m_AddedActors); collect(m_AddedItems); collect(m_AddedParticles);
+	CollectOwnedMovableObjects(g_SceneMan.GetScene(), visited, carried);
+	const auto shared = [&visited, &carried](const Activity* activity) {
+		if (const auto* game = dynamic_cast<const GameActivity*>(activity)) {
+			game->VisitCheckpointSharedObjects([&visited, &carried](const Entity* child) { CollectOwnedMovableObjects(child, visited, carried); });
+		}
+	};
+	shared(g_ActivityMan.GetActivity());
+	shared(g_ActivityMan.GetCheckpointStartActivity());
 	for (const auto& [identity, object]: m_KnownObjects) {
+		if (!carried.contains(object)) continue;
 		std::vector<long> links = object->GetCheckpointBorrowedReferences();
 		if (std::none_of(links.begin(), links.end(), [](long target) { return target != 0; })) continue;
 		references.emplace(identity, std::move(links));
@@ -5180,7 +5401,13 @@ bool MovableMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
 			// Validate the whole alias table before changing any manager or native field.
 			for (const auto& [identity, links]: references) {
 				auto* object = FindObjectByUniqueID(identity);
-				if (!object || !object->RebindCheckpointBorrowedReferences(links, true)) throw std::runtime_error("unresolved native references for owner " + std::to_string(identity));
+				// Every refusal names itself: which owner, and whether it is the owner, the arity or a target that is missing.
+				if (!object) throw std::runtime_error("unresolved native references for owner " + std::to_string(identity) + ": the owner is not in the restored world");
+				if (!object->RebindCheckpointBorrowedReferences(links, true)) {
+					std::string reason = object->GetClassName() + " " + object->GetPresetName() + " carries " + std::to_string(object->GetCheckpointBorrowedReferences().size()) + " references, the checkpoint names " + std::to_string(links.size());
+					for (long target: links) if (target && !FindObjectByUniqueID(target)) reason += "; target " + std::to_string(target) + " is not in the restored world";
+					throw std::runtime_error("unresolved native references for owner " + std::to_string(identity) + ": " + reason);
+				}
 			}
 		});
 		VisitCheckpoint(reader, *this);
@@ -5216,11 +5443,13 @@ namespace {
 		std::map<long, std::pair<int, int>> actorOwners; // Actor -> its seeded owner and the team that owner was seeded at.
 		std::array<int, Activity::MaxTeamCount> teamMOIDCount{};
 		std::array<std::set<long>, 3> validObjects;
-		// A WorldStructure1 payload predates the owner map and carries no owners field.
-		template <class Archive> void Fields(Archive& archive, bool legacy = false) {
+		std::set<long> playerBrains; // The actors human players depend on as their brains.
+		// A WorldStructure1 payload predates the owner map, a WorldStructure2 payload the brain record.
+		template <class Archive> void Fields(Archive& archive, int version = 3) {
 			archive(cohorts, rosters, sortRoster, alarms, quarantine, moidIndex, contiguousActorIDs);
-			if (!legacy) archive(actorOwners);
+			if (version >= 2) archive(actorOwners);
 			archive(teamMOIDCount, validObjects);
+			if (version >= 3) archive(playerBrains);
 		}
 	};
 }
@@ -5251,18 +5480,25 @@ std::string MovableMan::SaveWorldStructure() const {
 	};
 	for (const Actor* actor: m_Actors) saveOwner(actor);
 	for (const Actor* actor: m_AddedActors) saveOwner(actor);
+	// Same rule for the brain record: only a live actor's entry travels.
+	const auto saveBrain = [this, &state](const Actor* actor) {
+		if (m_PlayerBrainIDs.contains(actor->GetUniqueID())) state.playerBrains.insert(actor->GetUniqueID());
+	};
+	for (const Actor* actor: m_Actors) saveBrain(actor);
+	for (const Actor* actor: m_AddedActors) saveBrain(actor);
 	for (const AlarmEvent* event: m_AlarmEvents) state.alarms[0].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	for (const AlarmEvent* event: m_AddedAlarmEvents) state.alarms[1].emplace_back(event->m_ScenePos, std::pair{static_cast<int>(event->m_Team), event->m_Range});
 	state.quarantine = m_LockstepJoinQuarantine;
-	CheckpointWriter writer("WorldStructure2"); state.Fields(writer); return writer.Text();
+	CheckpointWriter writer("WorldStructure3"); state.Fields(writer); return writer.Text();
 }
 
 bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 	try {
 		WorldStructure state;
-		// A game saved before the owner map keeps loading; its owners are re-derived from the policy.
-		const bool legacy = text.starts_with("15 WorldStructure1 ");
-		CheckpointReader reader(text, legacy ? "WorldStructure1" : "WorldStructure2"); state.Fields(reader, legacy); reader.Finish();
+		// A game saved before the owner map or the brain record keeps loading; the missing fields stay empty.
+		const int version = text.starts_with("15 WorldStructure1 ") ? 1 : (text.starts_with("15 WorldStructure2 ") ? 2 : 3);
+		const char* tag = version == 1 ? "WorldStructure1" : (version == 2 ? "WorldStructure2" : "WorldStructure3");
+		CheckpointReader reader(text, tag); state.Fields(reader, version); reader.Finish();
 		std::set<long> incoming;
 		for (const auto& cohort: state.cohorts) for (long uid: cohort) {
 			if (uid <= 0 || !incoming.insert(uid).second) throw std::runtime_error("invalid or duplicate world member");
@@ -5309,6 +5545,9 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 			if (team < 0 || team > 255) throw std::runtime_error("owner entry names no team");
 			owners.emplace(static_cast<int64_t>(uid), NetSeededActorOwner{static_cast<uint8_t>(owner), static_cast<uint8_t>(team)});
 		}
+		for (long uid: state.playerBrains) {
+			if (!actor(uid)) throw std::runtime_error("player brain entry names no live actor");
+		}
 		// Allocate the incoming events before changing any live membership.
 		std::array<std::vector<std::unique_ptr<AlarmEvent>>, 2> events;
 		for (int group = 0; group < 2; ++group) for (const auto& [position, detail]: state.alarms[group]) {
@@ -5328,6 +5567,14 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 			m_ActorRoster[team].swap(rosters[team]); m_SortTeamRoster[team] = state.sortRoster[team]; m_TeamMOIDCount[team] = state.teamMOIDCount[team];
 		}
 		m_MOIDIndex.swap(index); m_ContiguousActorIDs.swap(contiguous); m_LockstepJoinQuarantine.swap(state.quarantine);
+		// The record decides which brains the players depend on, not what this peer's seats found at start.
+		m_PlayerBrainIDs.swap(state.playerBrains);
+		// A payload from before the record carries none, so re-seed it the way the assignment would have.
+		if (version < 3) {
+			if (Activity* activity = g_ActivityMan.GetActivity()) {
+				activity->RecordSeatedPlayerBrains();
+			}
+		}
 		NetActorOwnership::RestoreSeededOwners(std::move(owners));
 		// A restored tick can be reached again after a resync or a rematch; claims made past it must not decide a later tie.
 		s_LockstepFrameClaims.clear();
@@ -5345,6 +5592,25 @@ bool MovableMan::LoadWorldStructure(std::string_view text, bool validateOnly) {
 	}
 }
 
+bool MovableMan::RunLegacyBrainRecordSelfTest(const Actor* seatBrain) {
+	if (!seatBrain) {
+		return false;
+	}
+	const std::string current = SaveWorldStructure();
+	WorldStructure live;
+	try {
+		CheckpointReader reader(current, "WorldStructure3"); live.Fields(reader); reader.Finish();
+	} catch (const std::exception&) {
+		return false;
+	}
+	bool reseeded = true;
+	for (int version = 1; version <= 2; ++version) {
+		CheckpointWriter writer(version == 1 ? "WorldStructure1" : "WorldStructure2"); live.Fields(writer, version);
+		reseeded = reseeded && LoadWorldStructure(writer.Text()) && IsPlayerBrain(seatBrain);
+	}
+	return LoadWorldStructure(current) && reseeded;
+}
+
 bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	if (!craft) return false;
 	if (m_Actors.empty()) {
@@ -5360,19 +5626,46 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	const bool cleared = RemoveActor(craft) == craft && GetContiguousActorID(craft) < 0;
 
 	const std::string text = SaveWorldStructure();
-	const bool tagged = text.starts_with("15 WorldStructure2 ");
+	const bool tagged = text.starts_with("15 WorldStructure3 ");
 	bool archived = false;
 	bool roundTripped = false;
 	try {
 		WorldStructure parsed;
-		CheckpointReader reader(text, "WorldStructure2"); parsed.Fields(reader); reader.Finish();
+		CheckpointReader reader(text, "WorldStructure3"); parsed.Fields(reader); reader.Finish();
 		const std::set<long> live(parsed.cohorts[0].begin(), parsed.cohorts[0].end());
 		archived = parsed.contiguousActorIDs.size() == m_ContiguousActorIDs.size() && !parsed.contiguousActorIDs.contains(craftUID);
 		for (const auto& entry: parsed.contiguousActorIDs) archived = archived && live.contains(entry.first);
-		CheckpointWriter rewriter("WorldStructure2"); parsed.Fields(rewriter);
+		CheckpointWriter rewriter("WorldStructure3"); parsed.Fields(rewriter);
 		roundTripped = rewriter.Text() == text;
 	} catch (const std::exception&) {
 	}
+
+	// The brain record travels with the world: note a live actor, save, drop it, and read it back from the record.
+	Actor* const recordActor = m_Actors.empty() ? nullptr : m_Actors.front();
+	const long recordUID = recordActor ? recordActor->GetUniqueID() : 0;
+	const bool recordWasBrain = recordActor && IsPlayerBrain(recordActor);
+	bool brainArchived = false;
+	bool brainRestored = false;
+	if (recordActor) {
+		NotePlayerBrain(recordUID, true);
+		const std::string withBrain = SaveWorldStructure();
+		try {
+			WorldStructure parsed;
+			CheckpointReader reader(withBrain, "WorldStructure3"); parsed.Fields(reader); reader.Finish();
+			brainArchived = parsed.playerBrains.contains(recordUID) && parsed.playerBrains.size() == m_PlayerBrainIDs.size();
+		} catch (const std::exception&) {
+		}
+		NotePlayerBrain(recordUID, false);
+		brainRestored = !IsPlayerBrain(recordActor) && LoadWorldStructure(withBrain) && IsPlayerBrain(recordActor);
+		NotePlayerBrain(recordUID, recordWasBrain);
+	}
+	// One human seat and one AI seat: only the human seat's brain is recorded; the legacy load and the
+	// last-ditch placement have to reach the record too.
+	bool brainLegacyReseeded = false;
+	bool brainLastDitch = false;
+	const bool brainSeats = g_ActivityMan.GetActivity() && recordActor && m_Actors.size() > 1 &&
+	                        g_ActivityMan.GetActivity()->RunPlayerBrainRecordSelfTest(recordActor, m_Actors[1], &brainLegacyReseeded, &brainLastDitch);
+	const bool sharedSeats = Activity::RunSharedSeatSelfTest();
 
 	// The shape the crashed resync archives carried: an index entry for an actor the world does not have.
 	WorldStructure clean;
@@ -5382,9 +5675,9 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	orphaned.contiguousActorIDs.emplace(0, 5);
 	WorldStructure stale = clean;
 	stale.contiguousActorIDs.emplace(4242, 5);
-	CheckpointWriter cleanWriter("WorldStructure2"); clean.Fields(cleanWriter);
-	CheckpointWriter orphanedWriter("WorldStructure2"); orphaned.Fields(orphanedWriter);
-	CheckpointWriter staleWriter("WorldStructure2"); stale.Fields(staleWriter);
+	CheckpointWriter cleanWriter("WorldStructure3"); clean.Fields(cleanWriter);
+	CheckpointWriter orphanedWriter("WorldStructure3"); orphaned.Fields(orphanedWriter);
+	CheckpointWriter staleWriter("WorldStructure3"); stale.Fields(staleWriter);
 	const bool accepted = LoadWorldStructure(text, true) && LoadWorldStructure(cleanWriter.Text(), true);
 	const bool refused = !LoadWorldStructure(orphanedWriter.Text(), true) && !LoadWorldStructure(staleWriter.Text(), true);
 
@@ -5394,14 +5687,22 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	};
 	CheckpointWriter legacyWriter("WorldStructure1"); writeLegacyFields(clean, legacyWriter);
 	CheckpointWriter legacyTrailingWriter("WorldStructure1"); writeLegacyFields(clean, legacyTrailingWriter); legacyTrailingWriter.Value(7);
-	CheckpointWriter unknownWriter("WorldStructure3"); clean.Fields(unknownWriter);
+	CheckpointWriter trailingWriter("WorldStructure3"); clean.Fields(trailingWriter); trailingWriter.Value(7);
+	CheckpointWriter unknownWriter("WorldStructure4"); clean.Fields(unknownWriter);
 	// The layout the owner map first shipped as: owners under the old tag, which no reader can tell apart.
 	WorldStructure owned = clean;
 	owned.actorOwners.emplace(1001, std::pair{2, 1});
-	CheckpointWriter intermediateWriter("WorldStructure1"); owned.Fields(intermediateWriter);
-	const bool legacyAccepted = LoadWorldStructure(legacyWriter.Text(), true);
-	const bool legacyRefused = !LoadWorldStructure(legacyTrailingWriter.Text(), true) && !LoadWorldStructure(unknownWriter.Text(), true) &&
-	                           !LoadWorldStructure(intermediateWriter.Text(), true);
+	CheckpointWriter intermediateWriter("WorldStructure1"); owned.Fields(intermediateWriter, 2);
+	// The same mistake for the brain record: the new field carried under the tag before it.
+	WorldStructure brained = clean;
+	brained.playerBrains.insert(1001);
+	CheckpointWriter intermediateBrainWriter("WorldStructure2"); brained.Fields(intermediateBrainWriter, 3);
+	// A game saved before the brain record: owners, no brains.
+	CheckpointWriter legacyOwnersWriter("WorldStructure2"); owned.Fields(legacyOwnersWriter, 2);
+	const bool legacyAccepted = LoadWorldStructure(legacyWriter.Text(), true) && LoadWorldStructure(legacyOwnersWriter.Text(), true);
+	const bool legacyRefused = !LoadWorldStructure(legacyTrailingWriter.Text(), true) && !LoadWorldStructure(trailingWriter.Text(), true) &&
+	                           !LoadWorldStructure(unknownWriter.Text(), true) && !LoadWorldStructure(intermediateWriter.Text(), true) &&
+	                           !LoadWorldStructure(intermediateBrainWriter.Text(), true);
 
 	auto plantAdded = [this](Actor* actor, int id) {
 		if (!actor) {
@@ -5453,11 +5754,14 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 
 	AddActor(craft);
 	const bool passed = indexed && cleared && archived && roundTripped && tagged && accepted && refused && legacyAccepted && legacyRefused &&
+	                    brainArchived && brainRestored && brainSeats && sharedSeats && brainLegacyReseeded && brainLastDitch &&
 	                    addedRemoveCleared && absorbDeleteCleared && discardAddedCleared;
 	std::cout << "[contiguous-index-selftest] " << (passed ? "PASS" : "FAIL") << " indexed=" << indexed << " cleared=" << cleared
 	          << " archived=" << archived << " round_trip=" << roundTripped << " tagged=" << tagged
 	          << " accepted=" << accepted << " refused=" << refused
 	          << " legacy=" << legacyAccepted << " legacy_refused=" << legacyRefused
+	          << " brain_archived=" << brainArchived << " brain_restored=" << brainRestored << " brain_seats=" << brainSeats << " shared_seats=" << sharedSeats
+	          << " brain_legacy_reseeded=" << brainLegacyReseeded << " brain_lastditch=" << brainLastDitch
 	          << " added_remove=" << addedRemoveCleared << " absorb_delete=" << absorbDeleteCleared
 	          << " discard_added=" << discardAddedCleared << std::endl;
 	return passed;

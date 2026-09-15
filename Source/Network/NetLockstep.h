@@ -19,6 +19,7 @@
 #include <vector>
 
 namespace RTE {
+	class Actor;
 	struct NetResyncPendingCommand;
 
 	/// The live match's lockstep clock: monotonic milliseconds every caller that drives a coordinator
@@ -333,6 +334,7 @@ namespace RTE {
 
 	struct NetLockstepReadyFrame {
 		uint64_t frame = 0;
+		std::vector<uint8_t> departedPeerIds;
 		bool hasLocalInput = false;
 		std::map<uint8_t, size_t> remoteFrameCounts;
 		std::vector<ControllerFrame> localFrames;
@@ -344,6 +346,13 @@ namespace RTE {
 		std::vector<NetValueObservation> localValueObservations;
 		std::vector<NetValueObservation> remoteValueObservations;
 	};
+
+	/// Applies the committed frame's departures before its game commands.
+	void ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors, bool paused);
+
+	/// The applied frame with the frames a synced pause committed discounted: a pause commits frames the
+	/// sim never advances on, and those must not spend a capped match's tick budget.
+	uint64_t LockstepPlayedFrame();
 
 	/// One remote's share of the round, enough to tell a peer that stopped SENDING from one the host
 	/// stopped RELAYING to, and from one whose frames arrived and were refused.
@@ -389,6 +398,10 @@ namespace RTE {
 		uint32_t startAnswersSuppressed = 0; //!< Repeated starts left unanswered: their sender had already played this round.
 		uint32_t startsRelayedOnRepeat = 0; //!< Host: other remotes' starts re-sent to a peer that repeated its own.
 		uint32_t preStartFramesBuffered = 0; //!< Frames/checksums held until their sender's start arrived.
+		uint64_t checksumSubmissions = 0; //!< Local desync-check hashes the round took; a zero means the check never ran.
+		uint64_t checksumSends = 0; //!< Those the transport carried to the peers.
+		uint64_t checksumCompares = 0; //!< Local/remote hash pairs actually compared, per remote.
+		uint64_t checksumMismatches = 0; //!< Compares that named a desync.
 		uint64_t localControllerFramesSent = 0;
 		uint64_t remoteControllerFramesReceived = 0;
 		uint64_t remoteControllerFramesAccepted = 0;
@@ -430,7 +443,7 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 21;
+		static constexpr uint16_t c_Version = 22;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
@@ -443,10 +456,14 @@ namespace RTE {
 		// Version 19 carries host hold resolutions (Reclaimed / Substituted / Expired) on the stop wire.
 		// Version 20 carries local-AI number and string value observations next to the sound readings.
 		// Version 21 appends writerUID on AIOrder; v<=20 still decodes with writerUID 0.
+		// Version 22 carries the AI pass's script messages and gibs as commands, and the AIOrder op that
+		// sets a move target; a peer below it never sent them, so it refuses them instead of guessing.
 		static constexpr uint16_t c_HoldResolutionVersion = 19;
 		static constexpr uint16_t c_PlayerBindingsVersion = 18;
 		static constexpr uint16_t c_ValueObservationVersion = 20;
 		static constexpr uint16_t c_AIOrderWriterVersion = 21;
+		static constexpr uint16_t c_AIPassEventVersion = 22;
+		static constexpr uint16_t c_PlaceBrainVersion = 22;
 		static constexpr uint16_t c_SeatSnapshotVersion = 17;
 		static constexpr uint16_t c_MinVersion = 8;
 		static constexpr uint16_t c_RoundVersion = 11;
@@ -481,6 +498,10 @@ namespace RTE {
 		// (input-delay lead plus jitter); anything beyond is dropped so one peer cannot grow the
 		// per-frame maps without bound.
 		static constexpr uint64_t c_MaxFutureFrameSkew = 4ULL * c_MaxInputDelayFrames;
+
+		/// Whether a string can ride the wire as a field, asked with the encoder's own rule so a caller
+		/// that must not queue an unsendable call never keeps a second copy of it.
+		static bool IsWireString(const std::string& value, size_t maxBytes);
 
 		static NetLockstepPacketType PacketTypeOf(const NetLockstepPayload& payload);
 		static const char* PacketTypeName(NetLockstepPacketType type);

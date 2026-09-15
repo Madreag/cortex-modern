@@ -6,6 +6,7 @@
 #include <list>
 #include <cmath>
 #include <algorithm>
+#include <cstdint>
 
 #define g_SettingsMan SettingsMan::Instance()
 
@@ -103,6 +104,12 @@ namespace RTE {
 
 		/// Sets the lockstep input-delay buffer (frames) a hosted match will use.
 		void SetNetworkInputDelayFrames(int newInputDelayFrames) { m_NetworkInputDelayFrames = newInputDelayFrames; }
+
+		/// Gets the saved autosave cadence in simulation seconds; zero disables autosaves.
+		uint32_t GetAutosaveSeconds() const { return m_AutosaveSeconds; }
+
+		/// Sets the saved autosave cadence without replacing a command-line override.
+		void SetAutosaveSeconds(uint32_t seconds);
 
 		/// Gets the base URL of the session-directory service.
 		/// @return The session-directory URL; empty means the directory is disabled.
@@ -217,6 +224,55 @@ namespace RTE {
 		/// Sets whether pathing requests are forced to immediately complete each frame.
 		/// @param force Whether to force immediate pathing request completion.
 		void SetForceImmediatePathingRequestCompletion(bool force) { m_ForceImmediatePathingRequestCompletion = force; }
+
+		enum class NetworkMatchStatusMode { Off, Auto, Always };
+		enum class NetworkChatDefaultScope { All, Team };
+		enum class NetworkChatTextSize { Small, Large };
+		enum class NetworkHostDelayPolicy { Auto, Fixed };
+		enum class NetworkHostVisibility { LAN, Listed, Unlisted };
+
+		/// Persisted multiplayer display name. Default Player; invalid input is ignored.
+		const std::string& GetNetworkDisplayName() const { return m_NetworkDisplayName; }
+		void SetNetworkDisplayName(const std::string& newName);
+		/// Match-status widget. Default Auto.
+		NetworkMatchStatusMode GetNetworkMatchStatusMode() const { return m_NetworkMatchStatusMode; }
+		void SetNetworkMatchStatusMode(NetworkMatchStatusMode mode) { m_NetworkMatchStatusMode = mode; }
+		/// Informational multiplayer toasts. Default on.
+		bool GetNetworkToastsEnabled() const { return m_NetworkToastsEnabled; } void SetNetworkToastsEnabled(bool enabled) { m_NetworkToastsEnabled = enabled; }
+		/// Chat history visibility. Default on.
+		bool GetNetworkChatVisible() const { return m_NetworkChatVisible; } void SetNetworkChatVisible(bool visible) { m_NetworkChatVisible = visible; }
+		/// Default chat send scope. Default All.
+		NetworkChatDefaultScope GetNetworkChatDefaultScope() const { return m_NetworkChatDefaultScope; }
+		void SetNetworkChatDefaultScope(NetworkChatDefaultScope scope) { m_NetworkChatDefaultScope = scope; }
+		/// Chat notification banners. Default on.
+		bool GetNetworkChatNotify() const { return m_NetworkChatNotify; } void SetNetworkChatNotify(bool notify) { m_NetworkChatNotify = notify; }
+		/// Chat notification sound. Default off.
+		bool GetNetworkChatSound() const { return m_NetworkChatSound; } void SetNetworkChatSound(bool sound) { m_NetworkChatSound = sound; }
+		/// Chat text size. Default Small.
+		NetworkChatTextSize GetNetworkChatTextSize() const { return m_NetworkChatTextSize; }
+		void SetNetworkChatTextSize(NetworkChatTextSize size) { m_NetworkChatTextSize = size; }
+		/// Local automatic rejoin. Default on.
+		bool GetNetworkAutoReconnect() const { return m_NetworkAutoReconnect; } void SetNetworkAutoReconnect(bool enabled) { m_NetworkAutoReconnect = enabled; }
+		/// Startup stored-rejoin offer. Default on.
+		bool GetNetworkOfferStoredRejoin() const { return m_NetworkOfferStoredRejoin; } void SetNetworkOfferStoredRejoin(bool enabled) { m_NetworkOfferStoredRejoin = enabled; }
+		/// Diagnostics directory. Empty means the existing working/Telemetry path.
+		const std::string& GetNetworkDiagnosticsDirectory() const { return m_NetworkDiagnosticsDirectory; }
+		void SetNetworkDiagnosticsDirectory(const std::string& directory);
+		/// Record each new round locally. Default on.
+		bool GetNetworkRecordReplays() const { return m_NetworkRecordReplays; } void SetNetworkRecordReplays(bool enabled) { m_NetworkRecordReplays = enabled; }
+		/// New-session host delay policy. Default Auto.
+		NetworkHostDelayPolicy GetNetworkHostDelayPolicy() const { return m_NetworkHostDelayPolicy; }
+		void SetNetworkHostDelayPolicy(NetworkHostDelayPolicy policy) { m_NetworkHostDelayPolicy = policy; }
+		/// New-session automatic match repair. Default on.
+		bool GetNetworkHostAutoRepair() const { return m_NetworkHostAutoRepair; } void SetNetworkHostAutoRepair(bool enabled) { m_NetworkHostAutoRepair = enabled; }
+		/// Idle-lobby wait in minutes. 0 means Never; default 10. Out of 0-60 is ignored.
+		int GetNetworkHostIdleWaitMinutes() const { return m_NetworkHostIdleWaitMinutes; }
+		void SetNetworkHostIdleWaitMinutes(int minutes);
+		/// New-session host visibility. Default LAN.
+		NetworkHostVisibility GetNetworkHostVisibility() const { return m_NetworkHostVisibility; }
+		void SetNetworkHostVisibility(NetworkHostVisibility visibility) { m_NetworkHostVisibility = visibility; }
+		/// Round-trips the Network* preferences through Writer/Reader and checks validation.
+		static int RunNetworkPreferencesSelfTest();
 #pragma endregion
 
 #pragma region Gameplay Settings
@@ -315,6 +371,14 @@ namespace RTE {
 		/// Sets whether gold gathered by Actors is automatically added into team funds.
 		/// @param automaticGoldDeposit Whether to deposit gathered gold automatically.
 		void SetAutomaticGoldDeposit(bool automaticGoldDeposit) { m_AutomaticGoldDeposit = automaticGoldDeposit; }
+
+		/// Gets whether losing every human brain leaves the humans spectating instead of ending the round.
+		/// @return Whether the brainless humans spectate. A net match follows the host's match rule instead of this.
+		bool GetBrainlessHumansSpectate() const { return m_BrainlessHumansSpectate; }
+
+		/// Sets whether losing every human brain leaves the humans spectating instead of ending the round.
+		/// @param spectate Whether the brainless humans spectate.
+		void SetBrainlessHumansSpectate(bool spectate) { m_BrainlessHumansSpectate = spectate; }
 #pragma endregion
 
 #pragma region Network Settings
@@ -498,6 +562,7 @@ namespace RTE {
 		bool m_ShowEnemyHUD; //!< Whether the HUD of enemy actors should be visible to the player.
 		bool m_EnableSmartBuyMenuNavigation; //!< Whether swapping to equipment mode and back should change active tabs in the BuyMenu.
 		bool m_AutomaticGoldDeposit; //!< Whether gold gathered by Actors is automatically added into team funds. False means that gold needs to be manually transported into orbit via Craft.
+		bool m_BrainlessHumansSpectate; //!< Whether losing every human brain leaves the humans spectating instead of ending the round. A net match follows the host's rule instead.
 
 		std::string m_PlayerNetworkName; //!< Player name used in network multiplayer matches.
 		std::string m_NetworkServerAddress; //!< LAN server address to connect to.
@@ -518,6 +583,7 @@ namespace RTE {
 		int m_PathFinderGridNodeSize; //!< The grid size used by the PathFinder, in pixels.
 		int m_AIUpdateInterval; //!< How often actor's AI should be updated, i.e. every n simulation updates.
 		int m_NetworkInputDelayFrames; //!< Lockstep input-delay buffer (frames) a hosted match uses; the client adopts the host's.
+		uint32_t m_AutosaveSeconds; //!< Saved checkpoint cadence in simulation seconds; zero disables autosaves.
 		std::string m_SessionDirectoryUrl; //!< Base URL of the session-directory service; empty disables it.
 		std::string m_SessionDirectoryInstallKey; //!< Per-install rate-limit identity sent as X-Install-Key; generated on the first directory use.
 		std::string m_SessionDirectoryCertSha256; //!< Pinned SHA-256 hex of the directory server's certificate; empty = system chain.
@@ -537,6 +603,15 @@ namespace RTE {
 		bool m_NetworkTurnServersOverridden = false;
 		bool m_LocalPrediction; //!< Whether the local player's actors are previewed through the input delay.
 		int m_LocalPredictionMaxTicks; //!< Cap on how many ticks ahead the preview runs.
+		std::string m_NetworkDisplayName;
+		std::string m_NetworkDiagnosticsDirectory;
+		NetworkMatchStatusMode m_NetworkMatchStatusMode;
+		NetworkChatDefaultScope m_NetworkChatDefaultScope;
+		NetworkChatTextSize m_NetworkChatTextSize;
+		NetworkHostDelayPolicy m_NetworkHostDelayPolicy;
+		NetworkHostVisibility m_NetworkHostVisibility;
+		bool m_NetworkToastsEnabled, m_NetworkChatVisible, m_NetworkChatNotify, m_NetworkChatSound, m_NetworkAutoReconnect, m_NetworkOfferStoredRejoin, m_NetworkRecordReplays, m_NetworkHostAutoRepair;
+		int m_NetworkHostIdleWaitMinutes;
 		int m_NumberOfLuaStatesOverride; //!< Overrides how many threaded Lua states we'll use. -1 for no override, which defaults to the maximum number of concurrent hardware threads.
 		bool m_ForceImmediatePathingRequestCompletion; //!< Whether pathing requests will be forced to immediately complete for the next frame, or if they can take multiple frames to calculate.
 
@@ -563,6 +638,9 @@ namespace RTE {
 
 		/// Clears all the member variables of this SettingsMan, effectively resetting the members of this abstraction level only.
 		void Clear();
+
+		/// Writes the persisted Network* preference keys in canonical form.
+		void WriteNetworkPreferences(Writer& writer) const;
 
 		/// Generates m_SessionDirectoryInstallKey from non-sim entropy.
 		void GenerateSessionDirectoryInstallKey();

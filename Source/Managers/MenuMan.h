@@ -48,6 +48,25 @@ namespace RTE {
 		bool ToggleNetworkPanel();
 		bool IsNetworkPanelOpen() const;
 		NetModerationGUI* GetNetworkPanel() const { return m_NetworkPanel.get(); }
+
+		/// Opens or closes the pause menu as the local menu of a running network match, leaving the session running.
+		/// @return Whether the pause menu took the press; false when there is no network match to keep running.
+		bool ToggleLocalPauseMenu();
+
+		/// Whether the pause menu is up as the local menu of a running network match.
+		bool IsLocalPauseMenuOpen() const { return m_LocalPauseMenuOpen; }
+
+		/// Whether a menu over the running simulation owns local input, so seats sample neutral controller frames.
+		bool IsLiveMenuOwningInput() const { return IsNetworkPanelOpen() || IsLocalPauseMenuOpen(); }
+
+		/// Hands the pad's start button to the open local pause menu as a back navigation.
+		void RequestLocalPauseMenuBack();
+
+		/// Updates the local pause menu of a network match, once per rendered frame.
+		void UpdateLocalPauseMenu();
+
+		/// Draws the local pause menu of a network match over the match's own frame.
+		void DrawLocalPauseMenu() const;
 #pragma endregion
 
 #pragma region Getters/Setters
@@ -63,7 +82,7 @@ namespace RTE {
 		MainMenuGUI* GetMainMenu() const { return m_MainMenu.get(); }
 
 		/// Gets the active pause menu for scripted automation.
-		PauseMenuGUI* GetActivePauseMenu() const { return m_ActiveMenu == PauseMenuActive ? m_PauseMenu.get() : nullptr; }
+		PauseMenuGUI* GetActivePauseMenu() const { return m_ActiveMenu == PauseMenuActive || m_LocalPauseMenuOpen ? m_PauseMenu.get() : nullptr; }
 
 		/// Gets whether the interactive main menu is active (past the title transition).
 		bool IsMainMenuInteractive() const { return m_ActiveMenu == MainMenuActive; }
@@ -84,6 +103,8 @@ namespace RTE {
 		};
 
 		bool m_IsInMenuScreen; //!< Whether we're currently in a menu screen.
+		bool m_LocalPauseMenuOpen; //!< Whether the pause menu is the local menu of a running network match.
+		bool m_LocalPauseMenuOpening; //!< The frame the local pause menu opened on, whose press is not the menu's to read.
 		ActiveMenu m_ActiveMenu; //!< The currently active menu screen that is being updated and drawn. See ActiveMenu enumeration.
 
 		std::unique_ptr<GUIInputWrapper> m_GUIInput; //!< The GUIInput interface of this MenuMan.
@@ -113,6 +134,9 @@ namespace RTE {
 
 		/// Updates the pause menu screen and handles the update results.
 		void UpdatePauseMenu() const;
+
+		/// Closes the local pause menu of a network match and gives input back to the seat.
+		void CloseLocalPauseMenu();
 #pragma endregion
 
 		// Disallow the use of some implicit methods.

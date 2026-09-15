@@ -293,7 +293,9 @@ Vector FrameMan::GetMiddleOfPlayerScreen(int whichPlayer) {
 	if (whichPlayer == -1) {
 		middleOfPlayerScreen.SetXY(static_cast<float>(g_WindowMan.GetResX() / 2), static_cast<float>(g_WindowMan.GetResY() / 2));
 	} else {
-		int playerScreen = g_ActivityMan.GetActivity()->ScreenOfPlayer(whichPlayer);
+		const Activity* activity = g_ActivityMan.GetActivity();
+		const int playerScreen = activity ? activity->ScreenOfPlayer(whichPlayer) : -1;
+		if (playerScreen < 0) return Vector();
 
 		middleOfPlayerScreen.SetXY(static_cast<float>(m_PlayerScreenWidth / 2), static_cast<float>(m_PlayerScreenHeight / 2));
 		if ((playerScreen == 1 && g_FrameMan.GetVSplit()) || playerScreen == 3) {
@@ -1045,33 +1047,40 @@ void FrameMan::Draw() {
 #endif
 }
 
+FrameMan::ScreenTextLayout FrameMan::GetScreenTextLayout(int playerScreen, bool decorated) {
+	ScreenTextLayout layout;
+	if (playerScreen < 0 || playerScreen >= c_MaxScreenCount || m_ScreenText[playerScreen].empty()) {
+		return layout;
+	}
+	const int screenWidth = GetPlayerScreenWidth();
+	int screenOcclusionOffsetX = g_CameraMan.GetScreenOcclusion(playerScreen).GetRoundIntX();
+	// If there's really no room to offset the text into, then don't
+	if (screenWidth <= g_WindowMan.GetResX() / 2) {
+		screenOcclusionOffsetX = 0;
+	}
+	layout.text = decorated ? ">>> " + m_ScreenText[playerScreen] + " <<<" : m_ScreenText[playerScreen];
+	// The message is centred on what a slid-in panel leaves the seat, so it wraps to that band, not the screen.
+	const int band = screenOcclusionOffsetX < 0 ? screenWidth + screenOcclusionOffsetX : screenWidth - screenOcclusionOffsetX;
+	layout.text = SplitStringToFitWidth(layout.text, std::max(1, band), false);
+	GUIFont* font = GetLargeFont();
+	layout.width = font->CalculateWidth(layout.text);
+	layout.height = font->CalculateHeight(layout.text);
+	layout.y = m_TextCentered[playerScreen] ? (GetPlayerScreenHeight() / 2) - 52 : 12;
+	layout.x = (screenWidth + screenOcclusionOffsetX) / 2 - layout.width / 2;
+	return layout;
+}
+
 void FrameMan::DrawScreenText(int playerScreen, AllegroBitmap playerGUIBitmap) {
 	int textPosY = 0;
 	// Only draw screen text to actual human players
-	if (playerScreen < g_ActivityMan.GetActivity()->GetHumanCount()) {
+	if (playerScreen < g_ActivityMan.GetActivity()->GetLocalHumanCount()) {
 		textPosY += 12;
 
 		if (!m_ScreenText[playerScreen].empty()) {
-			int bufferOrScreenWidth = GetPlayerScreenWidth();
-			int bufferOrScreenHeight = GetPlayerScreenHeight();
-
-			if (m_TextCentered[playerScreen]) {
-				textPosY = (bufferOrScreenHeight / 2) - 52;
-			}
-
-			int screenOcclusionOffsetX = g_CameraMan.GetScreenOcclusion(playerScreen).GetRoundIntX();
-			// If there's really no room to offset the text into, then don't
-			if (GetPlayerScreenWidth() <= g_WindowMan.GetResX() / 2) {
-				screenOcclusionOffsetX = 0;
-			}
-
-			std::string screenTextToDraw = m_ScreenText[playerScreen];
-			if (m_TextBlinking[playerScreen] && m_TextBlinkTimer.AlternateReal(m_TextBlinking[playerScreen])) {
-				screenTextToDraw = ">>> " + screenTextToDraw + " <<<";
-			}
-			screenTextToDraw = SplitStringToFitWidth(screenTextToDraw, bufferOrScreenWidth, false);
-			GetLargeFont()->DrawAligned(&playerGUIBitmap, (bufferOrScreenWidth + screenOcclusionOffsetX) / 2, textPosY, screenTextToDraw, GUIFont::Centre);
-			textPosY += 12;
+			const ScreenTextLayout layout = GetScreenTextLayout(playerScreen,
+			    m_TextBlinking[playerScreen] && m_TextBlinkTimer.AlternateReal(m_TextBlinking[playerScreen]));
+			GetLargeFont()->DrawAligned(&playerGUIBitmap, layout.x + layout.width / 2, layout.y, layout.text, GUIFont::Centre);
+			textPosY = layout.y + 12;
 		}
 
 		// Draw info text when in MOID or material layer draw mode

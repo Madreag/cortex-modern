@@ -92,6 +92,7 @@ namespace RTE {
 
 	bool NetMatchService::s_AdmissionEnabled = true;
 	uint32_t NetMatchService::s_AutosaveSeconds = 0;
+	bool NetMatchService::s_AutosaveSecondsOverridden = false;
 	std::string NetMatchService::s_TicketStorePath;
 	std::string NetMatchService::s_JoinWaitPath;
 	bool NetMatchService::s_ApplyForSeat = false;
@@ -276,7 +277,8 @@ static std::string ResyncSaveName() {
 		if (mux) mux->SetPump({});
 	}
 
-	bool NetMatchService::Start(const NetMatchServiceRequest& request, std::string* error) {
+	bool NetMatchService::Start(const NetMatchServiceRequest& incoming, std::string* error) {
+		NetMatchServiceRequest request = incoming;
 		Destroy();
 		m_CancelRequested.store(false);
 		m_ReadyRequested.store(false);
@@ -291,6 +293,24 @@ static std::string ResyncSaveName() {
 		}
 		if (!request.host && request.address.empty() && request.sessionId.empty()) {
 			if (error) *error = "join address must not be empty";
+			return false;
+		}
+		// Past the refusals: the settings are read once here, where a real host starts, and ride the
+		// request to both roster builds, so the worker's copy cannot pick up a later menu edit.
+		SeatSavedOptions(request);
+		// A launch config names its own module; any other request resolves one here, where the loaded
+		// modules are known and both roster builds see the answer.
+		std::string moduleError;
+		if (!request.standardRules && !SeatActivityModule(request, &moduleError)) {
+			if (error) *error = moduleError;
+			SetState(NetMatchServiceState::Failed, "Match activity refused", moduleError);
+			return false;
+		}
+		NetMatchConfig matchConfig;
+		std::string configError;
+		if (!BuildMatchConfig(request, c_UiSessionId, matchConfig, &configError)) {
+			if (error) *error = configError;
+			SetState(NetMatchServiceState::Failed, "Match roster refused", configError);
 			return false;
 		}
 
@@ -336,7 +356,8 @@ static std::string ResyncSaveName() {
 			m_LocalPeerId = request.host ? 1 : 2;
 			m_LocalTeam = request.dedicated ? Activity::NoTeam : (request.host ? 0 : 1);
 			m_Dedicated = request.dedicated;
-			m_HumanSeats = request.dedicated ? std::max(0, static_cast<int>(request.peerCount) - 1) : static_cast<int>(request.peerCount);
+			m_HumanSeats = static_cast<int>(std::count_if(matchConfig.players.begin(), matchConfig.players.end(), [](const auto& slot) { return !slot.cpu; }));
+			m_MatchConfig = matchConfig;
 			m_InputDelayText.clear();
 			m_ResyncOnDesync = request.resyncOnDesync;
 			m_PendingResyncLoad.clear();
@@ -345,7 +366,6 @@ static std::string ResyncSaveName() {
 			m_LocalName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
 			m_JoinRefusedByLiveMatch = false;
 			if (request.host) {
-				const NetMatchConfig matchConfig = BuildMatchConfig(request, c_UiSessionId);
 				m_DirectoryRow.name = m_LocalName;
 				m_DirectoryRow.activity = matchConfig.activityPreset;
 				m_DirectoryRow.scene = matchConfig.sceneName;
@@ -837,7 +857,7 @@ static std::string ResyncSaveName() {
 						break;
 					}
 				}
-				m_HumanSeats = roster.dedicated ? std::max(0, static_cast<int>(roster.peerCount) - 1) : static_cast<int>(roster.peerCount);
+				m_HumanSeats = static_cast<int>(std::count_if(roster.players.begin(), roster.players.end(), [](const auto& slot) { return !slot.cpu; }));
 				if (m_IsHost) {
 					// The beacon and the directory row take their counts from these at the next pump.
 					m_BeaconMaxPlayers = static_cast<uint8_t>(std::max(1, m_HumanSeats));
@@ -1025,6 +1045,7 @@ static std::string ResyncSaveName() {
 			m_LocalTeam = -1;
 			m_Dedicated = false;
 			m_HumanSeats = 0;
+			m_MatchConfig = {};
 			m_ResyncOnDesync = false;
 			m_PendingResyncLoad.clear();
 			m_PendingResyncState.reset();
@@ -1563,12 +1584,15 @@ static std::string ResyncSaveName() {
 			std::string recordError;
 			(void)ScenarioRunner::BeginLockstepReplayRecord(m_Runner->GetMatchConfig(), &recordError);
 		}
-		outActivityPreset = m_ActivityPreset;
+		// The launch names the adopted activity: a joining peer's own request carries only its local default.
+		const std::string& adopted = m_Runner ? m_Runner->GetMatchConfig().activityPreset : m_ActivityPreset;
+		outActivityPreset = adopted.empty() ? m_ActivityPreset : adopted;
 		m_MatchWasRunning = true;
 		if (!m_PendingResyncState.has_value()) {
 			ResetRosterTransitionHistory();
 			m_AutosaveMatchId = m_Runner ? std::format("{:x}-{:x}-{:x}", m_Runner->GetMatchConfig().sessionId, System::GetProcessID(),
 			                                        std::chrono::system_clock::now().time_since_epoch().count()) : "";
+			m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
 		}
@@ -1582,10 +1606,12 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
-		if (s_AutosaveSeconds == 0 || !ScenarioRunner::IsLockstepControllerSyncActive() ||
+		// Every peer keeps the schedule the host announced in the agreed config, not its own setting.
+		const uint32_t seconds = m_MatchAutosaveSeconds;
+		if (seconds == 0 || !ScenarioRunner::IsLockstepControllerSyncActive() ||
 		    !g_ActivityMan.ActivityRunning() || m_AutosaveMatchId.empty()) return;
 		const int64_t now = g_TimerMan.GetSimTimeTicks();
-		const int64_t interval = static_cast<int64_t>(s_AutosaveSeconds) * g_TimerMan.GetTicksPerSecond();
+		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
 		if (m_NextAutosaveSimTime < 0 || now < m_LastAutosaveSimTime) {
 			m_NextAutosaveSimTime = now - g_TimerMan.GetDeltaTimeTicks() + interval;
 		}
@@ -2054,6 +2080,7 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		bool dedicated = m_Dedicated;
 		int humanSeats = m_HumanSeats;
+		NetMatchConfig roster = m_MatchConfig;
 		if (m_Runner) {
 			// Once the lobby round adopts the host's roster it, not the request, is the truth.
 			const NetMatchConfig& adopted = m_Runner->GetMatchConfig();
@@ -2062,6 +2089,12 @@ static std::string ResyncSaveName() {
 			for (const NetMatchPlayerSlot& slot : adopted.players) {
 				humanSeats += slot.cpu ? 0 : 1;
 			}
+			roster = adopted;
+		}
+		json rosterPlayers = json::array();
+		for (const NetMatchPlayerSlot& slot : roster.players) {
+			rosterPlayers.push_back({{"peer_id", static_cast<int>(slot.peerId)}, {"team", static_cast<int>(slot.team)},
+			                         {"cpu", slot.cpu}, {"display_name", slot.displayName}});
 		}
 		json report{
 			{"pending_lobby_events", m_PendingLobbyEvents.size()},
@@ -2076,6 +2109,9 @@ static std::string ResyncSaveName() {
 			{"local_team", m_LocalTeam},
 			{"dedicated", dedicated},
 			{"human_seats", humanSeats},
+			// The seated roster, CPU flags and all, so a gate reads who plays from the report alone.
+			{"match_config_hash", roster.players.empty() ? std::string() : NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(roster))},
+			{"players", std::move(rosterPlayers)},
 		};
 		json reconnect{
 			{"admission_enabled", s_AdmissionEnabled},
@@ -2297,7 +2333,9 @@ static std::string ResyncSaveName() {
 				  {"stats", {{"fenced_disconnects", stats.fencedDisconnects}, {"fenced_packets", stats.fencedPackets}}}}},
 			};
 		}
-		return report.dump();
+		// A remote display name rides the roster and is only checked for control characters, so a
+		// strict dump would throw on its first invalid byte.
+		return report.dump(-1, ' ', false, json::error_handler_t::replace);
 	}
 
 	uint8_t NetMatchService::GetLocalPeerId() const {
@@ -2516,8 +2554,10 @@ static std::string ResyncSaveName() {
 		NetMatchRunnerConfig runnerConfig;
 		runnerConfig.host = request.host;
 		runnerConfig.joinAddress = request.host ? "" : request.address;
-		runnerConfig.sessionConfig = BuildSessionConfig(manifest, request);
-		runnerConfig.matchConfig = BuildMatchConfig(request, runnerConfig.sessionConfig.sessionId);
+		std::string error;
+		// The roster is built first: the session it is hosted on takes its seats from it.
+		bool started = BuildMatchConfig(request, c_UiSessionId, runnerConfig.matchConfig, &error);
+		runnerConfig.sessionConfig = BuildSessionConfig(manifest, request, runnerConfig.matchConfig);
 		runnerConfig.autoInputDelay = request.autoInputDelay;
 		runnerConfig.useLobbyProtocol = true;
 		// Wait patiently for the other player to connect (host listening / client retrying), not the 15s default.
@@ -2548,8 +2588,11 @@ static std::string ResyncSaveName() {
 					pingMs = member.pingMs;
 				}
 			}
+			// The readout states the host's policy, not whether a per-sender set has arrived yet: an
+			// automatic delay reads automatic from the first frame and gains the measured ping later.
+			const std::string measured = config.peerInputDelayFrames.empty() ? ")" : ", " + std::to_string(pingMs) + "ms ping)";
 			m_InputDelayText = "Input delay: " + std::to_string(NetMatchConfigUtil::PeerInputDelay(config, localPeerId)) +
-			    (config.peerInputDelayFrames.empty() ? " (fixed)" : " (auto, " + std::to_string(pingMs) + "ms ping)");
+			    (config.delayPolicy == NetMatchDelayPolicy::Fixed ? " (fixed)" : " (auto" + measured);
 			if (m_ChatSession) {
 				// The roster's lockstep ids are the session's assigned ids plus one; the host relays
 				// team scope only inside the sender's team.
@@ -2570,11 +2613,10 @@ static std::string ResyncSaveName() {
 		}
 		runnerConfig.nowMs = [this] { return AdmissionNowMs(); };
 
-		AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest);
+		// A refused roster leaves matchConfig unauthored; nothing is armed on it.
+		if (started) AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest);
 
-		std::string error;
-		bool started = true;
-		if (iceWanted) {
+		if (started && iceWanted) {
 			started = SetUpIceTransport(request, manifest, *mux, runnerConfig.sessionConfig, runnerConfig.joinAddress, &error);
 #ifdef CCCP_WITH_GNS
 			if (started && m_Dispatcher) {
@@ -2604,7 +2646,7 @@ static std::string ResyncSaveName() {
 			if (started) {
 				// The lockstep peer id is the session-assigned id + 1; the team comes from that slot.
 				const uint8_t localLockstepId = static_cast<uint8_t>(session->GetLocalPeerId() + 1);
-				int localTeam = m_LocalTeam;
+				int localTeam = Activity::NoTeam;
 				for (const NetMatchPlayerSlot& slot : runner->GetMatchConfig().players) {
 					if (slot.peerId == localLockstepId) {
 						localTeam = slot.team;
@@ -2874,41 +2916,67 @@ static std::string ResyncSaveName() {
 		return Start(request, error);
 	}
 
-	NetSessionConfig NetMatchService::BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request) const {
+	NetSessionConfig NetMatchService::BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig) const {
 		NetSessionConfig config;
 		config.localIdentity = manifest;
 		config.displayName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
 		config.port = request.port;
 		config.sessionId = c_UiSessionId;
 		config.localNonce = request.host ? c_HostNonce : MakeClientNonce();
-		config.maxPeers = static_cast<uint8_t>(std::max(1, static_cast<int>(request.peerCount) - 1));
+		// Seats come from the adopted roster, never from the request: a round the host plays alone offers none.
+		config.maxPeers = static_cast<uint8_t>(std::max(0, static_cast<int>(matchConfig.peerCount) - 1));
 		config.heartbeatIntervalMs = 50;
 		config.timeoutMs = 5000;
 		config.rejectUserdataModules = false;
 		return config;
 	}
 
-	NetMatchConfig NetMatchService::BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId) const {
-		const uint8_t peerCount = std::clamp<uint8_t>(request.peerCount, NetMatchConfigUtil::c_MinPeerCount, NetMatchConfigUtil::c_MaxPeerCount);
-		const uint8_t humanCount = request.dedicated ? static_cast<uint8_t>(peerCount - 1) : peerCount;
-		// PvPvE gives the CPU the team after the humans', so it fits three human teams at most.
-		const NetMatchMode mode = (request.mode == NetMatchMode::PvPvE && humanCount >= 4) ? NetMatchMode::PvPSkirmish : request.mode;
+	bool NetMatchService::BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId, NetMatchConfig& outConfig, std::string* error) {
+		auto refuse = [&](const char* reason) { if (error) *error = reason; return false; };
+		if (request.peerCount < NetMatchConfigUtil::c_MinPeerCount || request.peerCount > NetMatchConfigUtil::c_MaxPeerCount) return refuse("peer_count is out of range");
+		const uint32_t capacity = request.peerCount - (request.dedicated ? 1 : 0);
+		const uint32_t humanCount = request.humans.value_or(capacity);
+		const NetMatchMode mode = request.mode;
+		const uint32_t cpuCount = request.cpuSlots.value_or(mode == NetMatchMode::PvPSkirmish ? 0 : 1);
+		if (humanCount > capacity) return refuse("human seats exceed peer capacity");
+		if (humanCount == 0 && !request.dedicated) return refuse("zero human seats require a dedicated host");
+		if (mode == NetMatchMode::PvPvE && humanCount == Activity::Teams::MaxTeamCount) return refuse("four-human PvPvE exceeds team capacity");
+		const uint32_t firstCPUTeam = mode == NetMatchMode::CoopPvE ? 1 : humanCount;
+		if (cpuCount > Activity::Teams::MaxTeamCount || firstCPUTeam + cpuCount > Activity::Teams::MaxTeamCount) return refuse("CPU seats exceed team capacity");
+		// Co-op seats every human on one team, so a full lobby can ask for more slots than the wire carries.
+		if (humanCount + cpuCount > NetMatchConfigUtil::c_MaxPlayers) return refuse("roster exceeds the player slot capacity");
 		NetMatchConfig config = NetMatchConfigUtil::MakeDefault(sessionId);
 		config.activityPreset = request.activityPreset.empty() ? "P4 Alpha Duel" : request.activityPreset;
+		// A named module rides the request; an unnamed one keeps the default the launch config carries.
+		if (!request.activityModule.empty()) {
+			config.activityModule = request.activityModule;
+		}
 		config.sceneName = "Grasslands";
+		if (request.standardRules) {
+			static_cast<NetMatchStandardRules&>(config) = *request.standardRules;
+		}
 		config.mode = mode;
 		config.modePreset = NetMatchConfigUtil::ModeName(mode);
 		config.ownershipPolicy = request.ownershipPolicy;
 		config.inputDelayFrames = request.inputDelayFrames;
-		config.peerCount = peerCount;
+		// The rule the request carries seats the round; SeatSavedOptions put the host's Gameplay setting there.
+		config.brainlessHumansSpectate = request.brainlessHumansSpectate.value_or(config.brainlessHumansSpectate);
+		config.peerCount = humanCount == 0 ? 1 : request.peerCount;
 		config.dedicated = request.dedicated;
-		// The host authors the roster; clients adopt it via the lobby config sync. PvP seats one team
-		// per peer; co-op PvE seats every human on team 0; PvPvE keeps per-peer teams. A dedicated host
-		// seats peers 2..peerCount instead, so peer 1 stays the seatless lockstep host. The PvE modes
-		// add a peerless CPU slot whose team the host's AI drives over the wire.
+		// The host publishes the checkpoint cadence the whole match follows; a client's own setting never steers one.
+		if (request.host) {
+			const uint32_t seconds = std::min(GetAutosaveSeconds(), c_MaxAutosaveIntervalSeconds);
+			config.autosaveEnabled = seconds > 0;
+			config.autosaveIntervalSeconds = seconds;
+			// The rest of the host's saved session options ride the same config to every peer.
+			config.delayPolicy = request.delayPolicy.value_or(config.delayPolicy);
+			config.idleWaitMinutes = request.idleWaitMinutes.value_or(config.idleWaitMinutes);
+			config.automaticRepair = request.automaticRepair.value_or(config.automaticRepair);
+		}
+		// CPU teams follow human teams and consume no peer identity.
 		config.players.clear();
 		const uint8_t firstHumanPeer = request.dedicated ? 2 : 1;
-		for (uint8_t peerId = firstHumanPeer; peerId <= peerCount; ++peerId) {
+		for (uint8_t peerId = firstHumanPeer; peerId < firstHumanPeer + humanCount; ++peerId) {
 			NetMatchPlayerSlot slot;
 			slot.peerId = peerId;
 			slot.team = mode == NetMatchMode::CoopPvE ? 0 : static_cast<uint8_t>(peerId - firstHumanPeer);
@@ -2917,15 +2985,60 @@ static std::string ResyncSaveName() {
 			                                               : ("Client " + std::to_string(peerId));
 			config.players.push_back(slot);
 		}
-		if (mode == NetMatchMode::CoopPvE || mode == NetMatchMode::PvPvE) {
+		for (uint32_t cpu = 0; cpu < cpuCount; ++cpu) {
 			NetMatchPlayerSlot cpuSlot;
 			cpuSlot.peerId = 0;
-			cpuSlot.team = mode == NetMatchMode::CoopPvE ? 1 : humanCount;
+			cpuSlot.team = static_cast<uint8_t>(firstCPUTeam + cpu);
 			cpuSlot.cpu = true;
-			cpuSlot.displayName = "CPU";
+			cpuSlot.displayName = cpuCount == 1 ? "CPU" : "CPU " + std::to_string(cpu + 1);
 			config.players.push_back(cpuSlot);
 		}
-		return config;
+		if (!NetMatchConfigUtil::ValidateLocalAlpha(config, error)) return false;
+		outConfig = std::move(config);
+		return true;
+	}
+
+	bool NetMatchService::ResolveActivityModule(const std::string& preset, const std::vector<std::string>& definingModules, std::string& outModule, std::string* error) {
+		if (definingModules.size() > 1) {
+			// Never pick one silently: the caller has to say which module it means.
+			std::string named;
+			for (const std::string& module: definingModules) {
+				named += named.empty() ? module : ", " + module;
+			}
+			if (error) *error = "match activity " + preset + " is defined by " + named + "; name its module";
+			return false;
+		}
+		// No definition leaves the module unset, so the launch refuses by the name the config carries.
+		outModule = definingModules.empty() ? "" : definingModules.front();
+		return true;
+	}
+
+	bool NetMatchService::SeatActivityModule(NetMatchServiceRequest& request, std::string* error) {
+		if (!request.activityModule.empty()) {
+			return true;
+		}
+		const NetMatchStandardRules defaults;
+		const std::string preset = request.activityPreset.empty() ? defaults.activityPreset : request.activityPreset;
+		std::vector<std::string> definingModules;
+		for (int moduleId = 0; moduleId < g_PresetMan.GetTotalModuleCount(); ++moduleId) {
+			// GetEntityPreset falls back to the official modules, so only a module's own definition counts.
+			const Entity* found = g_PresetMan.GetEntityPreset(defaults.activityType, preset, moduleId);
+			if (found && found->GetModuleID() == moduleId) {
+				definingModules.push_back(g_PresetMan.GetDataModuleName(moduleId));
+			}
+		}
+		return ResolveActivityModule(preset, definingModules, request.activityModule, error);
+	}
+
+	void NetMatchService::SeatSavedOptions(NetMatchServiceRequest& request) {
+		if (!request.brainlessHumansSpectate) request.brainlessHumansSpectate = g_SettingsMan.GetBrainlessHumansSpectate();
+		if (!request.host) return;
+		// The saved-to-wire mapping lives with the config, so the values are read through it.
+		NetMatchConfig saved;
+		NetMatchConfigUtil::ApplySavedHostOptions(saved);
+		if (!request.delayPolicy) request.delayPolicy = saved.delayPolicy;
+		if (!request.idleWaitMinutes) request.idleWaitMinutes = saved.idleWaitMinutes;
+		if (!request.automaticRepair) request.automaticRepair = saved.automaticRepair;
 	}
 
 	void NetMatchService::SetState(NetMatchServiceState state, std::string status, std::string error) {

@@ -368,7 +368,7 @@ end
 			return ok;
 		};
 		Activity* activity = g_ActivityMan.GetActivity();
-		const AHuman* original = activity ? dynamic_cast<const AHuman*>(activity->GetControlledActor(Players::PlayerOne)) : nullptr;
+		const AHuman* original = activity ? dynamic_cast<const AHuman*>(activity->GetControlledActor(activity->PlayerOfScreen(0))) : nullptr;
 		const HeldDevice* device = original ? original->GetEquippedItem() : nullptr;
 		const AEmitter* wound = nullptr;
 		if (original) {

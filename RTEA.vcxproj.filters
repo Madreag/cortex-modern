@@ -406,6 +406,9 @@
     <ClInclude Include="Source\Activities\GibEditor.h">
       <Filter>Activities</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Activities\NetActivitySetup.h">
+      <Filter>Activities</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Activities\SceneEditor.h">
       <Filter>Activities</Filter>
     </ClInclude>
@@ -689,6 +692,9 @@
       <Filter>Menus</Filter>
     </ClInclude>
     <ClInclude Include="Source\Menus\SettingsMiscGUI.h">
+      <Filter>Menus</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Menus\SettingsNetworkGUI.h">
       <Filter>Menus</Filter>
     </ClInclude>
     <ClInclude Include="Source\Menus\SettingsInputMappingGUI.h">
@@ -1306,6 +1312,9 @@
     <ClCompile Include="Source\Activities\GibEditor.cpp">
       <Filter>Activities</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Activities\NetActivitySetup.cpp">
+      <Filter>Activities</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Activities\SceneEditor.cpp">
       <Filter>Activities</Filter>
     </ClCompile>
@@ -1443,6 +1452,9 @@
       <Filter>Menus</Filter>
     </ClCompile>
     <ClCompile Include="Source\Menus\SettingsMiscGUI.cpp">
+      <Filter>Menus</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Menus\SettingsNetworkGUI.cpp">
       <Filter>Menus</Filter>
     </ClCompile>
     <ClCompile Include="Source\Menus\SettingsInputMappingGUI.cpp">

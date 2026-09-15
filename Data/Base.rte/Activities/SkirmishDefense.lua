@@ -286,7 +286,8 @@ function SkirmishDefense:UpdateActivity()
 				for Act in MovableMan.AddedActors do
 					if not IsADoor(Act) then
 						for angle = 0, math.pi * 2, 0.05 do
-							SceneMan:CastSeeRay(Act.Team, Act.EyePos, Vector(150+FrameMan.PlayerScreenWidth * 0.5, 0):RadRotate(angle), Vector(), 25, fogResolution);
+							-- The pinned screen size: the fog this reveals is shared simulation state.
+							SceneMan:CastSeeRay(Act.Team, Act.EyePos, Vector(150+FrameMan.SimScreenWidth * 0.5, 0):RadRotate(angle), Vector(), 25, fogResolution);
 						end
 					end
 				end
@@ -299,6 +300,8 @@ function SkirmishDefense:UpdateActivity()
 		self:ClearObjectivePoints();
 		-- Keep track of which teams we have set objective points for already, since multiple players can be on the same team
 		local setTeam = { [Activity.TEAM_1] = false, [Activity.TEAM_2] = false, [Activity.TEAM_3] = false, [Activity.TEAM_4] = false };
+		-- The host's rule: with every human brain gone the humans watch the match out instead of ending it.
+		local spectating = self:BrainlessHumansSpectate();
 		local teamtally = 0;
 		local playertally = 0;
 		for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
@@ -325,8 +328,21 @@ function SkirmishDefense:UpdateActivity()
 					self:SetPlayerBrain(nil, player);
 					self:ResetMessageTimer(player);
 					local screen = self:ScreenOfPlayer(player);
-					FrameMan:ClearScreenText(screen);
-					FrameMan:SetScreenText("Your brain has been destroyed!", screen, 333, -1, false);
+					if spectating then
+						-- The loss shows once, then the spectator line; 300 updates is about five seconds.
+						self.spectatorNotice = self.spectatorNotice or {};
+						local notice = (self.spectatorNotice[player] or 0) + 1;
+						self.spectatorNotice[player] = notice;
+						if notice == 1 then
+							FrameMan:ClearScreenText(screen);
+							FrameMan:SetScreenText("Your brain has been destroyed!", screen, 333, 5000, false);
+						elseif notice == 300 then
+							FrameMan:SetScreenText("Spectating - the match continues", screen, 0, 5000, false);
+						end
+					else
+						FrameMan:ClearScreenText(screen);
+						FrameMan:SetScreenText("Your brain has been destroyed!", screen, 333, -1, false);
+					end
 				else
 					playertally = playertally + 1;
 					if not setTeam[team] then
@@ -350,9 +366,27 @@ function SkirmishDefense:UpdateActivity()
 			end
 		end
 
+		-- Spectating settles the round on the sides left standing: a team with a brain, or an undefeated CPU.
+		if spectating then
+			local sidesLeft = 0;
+			local lastSide = Activity.NOTEAM;
+			for team = Activity.TEAM_1, Activity.TEAM_4 do
+				if self:TeamActive(team) and (MovableMan:GetFirstBrainActor(team) or (self:TeamIsCPU(team) and self.AI[team] and not self.AI[team].defeated)) then
+					sidesLeft = sidesLeft + 1;
+					lastSide = team;
+				end
+			end
+
+			if sidesLeft < 2 then
+				self.WinnerTeam = lastSide;
+				ActivityMan:EndActivity();
+				return;
+			end
+		end
+
 		-- Win/Lose Conditions player vs player
 		if self.CPUTeamCount == 0 then
-			if teamtally < 2 then
+			if not spectating and teamtally < 2 then
 				for team = Activity.TEAM_1, Activity.TEAM_4 do
 					if setTeam[team] then
 						self.WinnerTeam = team;
@@ -365,7 +399,7 @@ function SkirmishDefense:UpdateActivity()
 			end
 		else
 			-- Win/Lose Conditions player vs AI
-			if playertally < 1 then
+			if not spectating and playertally < 1 then
 				for team = 0, Activity.MAXTEAMCOUNT - 1 do
 					if self:TeamActive(team) and self:TeamIsCPU(team) then
 						self.WinnerTeam = team;

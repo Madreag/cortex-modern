@@ -80,6 +80,9 @@ namespace RTE {
 
 		/// Resets the sim-rate edge accumulators. Called at the end of each sim tick.
 		void EndSimUpdate();
+
+		/// Selftest: a scripted element's frame-rate press and release edge once per press, like a device.
+		bool RunScriptedInputEdgeSelfTest();
 #pragma endregion
 
 #pragma region Control Scheme and Input Mapping Handling
@@ -506,6 +509,13 @@ namespace RTE {
 			InputStateCount
 		};
 
+		/// The render frame that took a scripted element's edge, so later frames of the same tick see none.
+		struct ScriptedEdge {
+			long long tick{-1};
+			uint64_t frame{0};
+		};
+		using ScriptedEdges = std::array<std::array<ScriptedEdge, InputElements::INPUT_COUNT>, Players::MaxPlayerCount>;
+
 		struct Keyboard {
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
@@ -539,6 +549,10 @@ namespace RTE {
 		static std::vector<Gamepad> s_ChangedJoystickStates; //!< Joystick states that have changed.
 
 		std::vector<SDL_Event> m_EventQueue; //!< List of incoming input events.
+
+		uint64_t m_RenderFrameCount{0}; //!< Render frames ended, which is the span a device edge is readable for.
+		ScriptedEdges m_ScriptedPresses{}; //!< The frame that took each scripted press edge.
+		ScriptedEdges m_ScriptedReleases{}; //!< The frame that took each scripted release edge.
 
 		bool m_SkipHandlingSpecialInput; //!< Whether to skip handling any special input (F1-F12, etc.) to avoid shenanigans during manual input mapping.
 
@@ -588,6 +602,15 @@ namespace RTE {
 		/// @param whichState Which state to check for. See InputState enumeration.
 		/// @return Whether the element is in the specified state or not.
 		bool GetInputElementState(int whichPlayer, int whichElement, InputState whichState);
+
+		/// Whether a scripted element's edge belongs to the render frame that is asking. A device edge lives
+		/// for one frame, so the frame-rate readers of a scripted range see its press and release once each.
+		/// @param edges The press or the release table.
+		/// @param whichPlayer Which player the script drives. See Players enumeration.
+		/// @param whichElement Which element the range covers. See InputElements enumeration.
+		/// @param tick The sim tick the range starts or ends at.
+		/// @return Whether this render frame owns the edge.
+		bool ScriptedEdgeThisFrame(ScriptedEdges& edges, int whichPlayer, int whichElement, long long tick);
 
 		/// Gets whether any generic button with the menu cursor is in the specified state.
 		/// @param whichButton Which menu button to check for. See MenuButtons enumeration.

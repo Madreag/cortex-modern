@@ -86,7 +86,8 @@ function Prospecting:UpdateActivity()
 						-- Scan the column, find the end where the ray is blocked
 						SceneMan:CastSeeRay(team, Vector(self.ScanPosX[team], 0), Vector(0, SceneMan.Scene.Height), self.ScanEndPos, 50, SceneMan:GetUnseenResolution(team).Y / 2);
 						-- Adjust up a bit so one sees more of the sky than blackness
-						self.ScanEndPos.Y = self.ScanEndPos.Y - (FrameMan.PlayerScreenHeight / 4);
+						-- The pinned screen size: the scan this adjusts writes the shared unseen map.
+						self.ScanEndPos.Y = self.ScanEndPos.Y - (FrameMan.SimScreenHeight / 4);
 
 						if (self.ScanPosX[team] < SceneMan.Scene.Width) then
 							scanMessage = "Scanning...";

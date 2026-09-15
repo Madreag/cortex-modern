@@ -820,6 +820,43 @@ namespace RTE {
 						AppendU64LE(out, static_cast<uint64_t>(order.writerUID));
 						break;
 					}
+					case NetGameCommandType::AIScriptMessage: {
+						const NetGameAIScriptMessage& scriptMessage = std::get<NetGameAIScriptMessage>(command.payload);
+						AppendU64LE(out, static_cast<uint64_t>(scriptMessage.writerUID));
+						AppendU64LE(out, static_cast<uint64_t>(scriptMessage.objectUID));
+						AppendU32LE(out, static_cast<uint32_t>(scriptMessage.team));
+						AppendU8(out, scriptMessage.context);
+						AppendU64LE(out, DoubleToBitsLE(scriptMessage.number));
+						AppendU64LE(out, static_cast<uint64_t>(scriptMessage.contextUID));
+						if (!AppendString(out, scriptMessage.message, NetLockstepCodec::c_MaxValueKeyBytes, "ai_message_name", error) ||
+						    !AppendString(out, scriptMessage.text, NetLockstepCodec::c_MaxValueStringBytes, "ai_message_text", error)) {
+							return false;
+						}
+						break;
+					}
+					case NetGameCommandType::AIGib: {
+						const NetGameAIGib& gib = std::get<NetGameAIGib>(command.payload);
+						AppendU64LE(out, static_cast<uint64_t>(gib.writerUID));
+						AppendU64LE(out, static_cast<uint64_t>(gib.objectUID));
+						AppendU64LE(out, static_cast<uint64_t>(gib.ignoreUID));
+						AppendU32LE(out, static_cast<uint32_t>(gib.team));
+						AppendU32LE(out, FloatToBitsLE(gib.impulseX));
+						AppendU32LE(out, FloatToBitsLE(gib.impulseY));
+						break;
+					}
+					case NetGameCommandType::PlaceBrain: {
+						const NetGamePlaceBrain& place = std::get<NetGamePlaceBrain>(command.payload);
+						AppendU32LE(out, static_cast<uint32_t>(place.team));
+						AppendU32LE(out, static_cast<uint32_t>(place.player));
+						AppendU32LE(out, FloatToBitsLE(place.posX));
+						AppendU32LE(out, FloatToBitsLE(place.posY));
+						if (!AppendString(out, place.className, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_class_name", error) ||
+						    !AppendString(out, place.preset, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_preset", error) ||
+						    !AppendString(out, place.module, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_module", error)) {
+							return false;
+						}
+						break;
+					}
 				}
 				if (recovery && out.size() > NetLockstepCodec::c_MaxRecoveryInputBytes - 10) {
 					SetError(error, NetLockstepErrorCode::PayloadTooLarge, out.size(), "recovery input exceeds maximum");
@@ -1667,7 +1704,9 @@ namespace RTE {
 						    !ReadOrTruncated(reader.ReadU64LE(targetUID), reader, error, "ai_order_target_uid")) {
 							return false;
 						}
-						if (order.op > NetGameAIOrder::PopWaypoint) {
+						// The move-target and alarm-point ops arrived with version 22; below it the byte can only be a stray.
+						if (order.op > NetGameAIOrder::SetAlarmPoint ||
+						    (order.op >= NetGameAIOrder::SetMOMoveTarget && version < NetLockstepCodec::c_AIPassEventVersion)) {
 							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ai order op is invalid");
 							return false;
 						}
@@ -1709,6 +1748,96 @@ namespace RTE {
 						}
 						reseat.team = static_cast<int32_t>(team);
 						command.payload = std::move(reseat);
+						break;
+					}
+					case NetGameCommandType::AIScriptMessage: {
+						if (version < NetLockstepCodec::c_AIPassEventVersion) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ai script message needs a newer frame version");
+							return false;
+						}
+						NetGameAIScriptMessage scriptMessage;
+						uint64_t writerUID = 0;
+						uint64_t objectUID = 0;
+						uint64_t contextUID = 0;
+						uint64_t numberBits = 0;
+						uint32_t team = 0;
+						if (!ReadOrTruncated(reader.ReadU64LE(writerUID), reader, error, "ai_message_writer_uid") ||
+						    !ReadOrTruncated(reader.ReadU64LE(objectUID), reader, error, "ai_message_object_uid") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "ai_message_team") ||
+						    !ReadOrTruncated(reader.ReadU8(scriptMessage.context), reader, error, "ai_message_context") ||
+						    !ReadOrTruncated(reader.ReadU64LE(numberBits), reader, error, "ai_message_number") ||
+						    !ReadOrTruncated(reader.ReadU64LE(contextUID), reader, error, "ai_message_context_uid") ||
+						    !reader.ReadString(scriptMessage.message, NetLockstepCodec::c_MaxValueKeyBytes, "ai_message_name", error) ||
+						    !reader.ReadString(scriptMessage.text, NetLockstepCodec::c_MaxValueStringBytes, "ai_message_text", error)) {
+							return false;
+						}
+						if (scriptMessage.context >= NetGameAIScriptMessage::ContextCount || scriptMessage.message.empty()) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ai script message is invalid");
+							return false;
+						}
+						scriptMessage.writerUID = static_cast<int64_t>(writerUID);
+						scriptMessage.objectUID = static_cast<int64_t>(objectUID);
+						scriptMessage.team = static_cast<int32_t>(team);
+						scriptMessage.number = DoubleFromBitsLE(numberBits);
+						scriptMessage.contextUID = static_cast<int64_t>(contextUID);
+						command.payload = std::move(scriptMessage);
+						break;
+					}
+					case NetGameCommandType::AIGib: {
+						if (version < NetLockstepCodec::c_AIPassEventVersion) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ai gib needs a newer frame version");
+							return false;
+						}
+						NetGameAIGib gib;
+						uint64_t writerUID = 0;
+						uint64_t objectUID = 0;
+						uint64_t ignoreUID = 0;
+						uint32_t team = 0;
+						uint32_t impulseXBits = 0;
+						uint32_t impulseYBits = 0;
+						if (!ReadOrTruncated(reader.ReadU64LE(writerUID), reader, error, "ai_gib_writer_uid") ||
+						    !ReadOrTruncated(reader.ReadU64LE(objectUID), reader, error, "ai_gib_object_uid") ||
+						    !ReadOrTruncated(reader.ReadU64LE(ignoreUID), reader, error, "ai_gib_ignore_uid") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "ai_gib_team") ||
+						    !ReadOrTruncated(reader.ReadU32LE(impulseXBits), reader, error, "ai_gib_impulse_x") ||
+						    !ReadOrTruncated(reader.ReadU32LE(impulseYBits), reader, error, "ai_gib_impulse_y")) {
+							return false;
+						}
+						gib.writerUID = static_cast<int64_t>(writerUID);
+						gib.objectUID = static_cast<int64_t>(objectUID);
+						gib.ignoreUID = static_cast<int64_t>(ignoreUID);
+						gib.team = static_cast<int32_t>(team);
+						gib.impulseX = FloatFromBitsLE(impulseXBits);
+						gib.impulseY = FloatFromBitsLE(impulseYBits);
+						command.payload = gib;
+						break;
+					}
+					case NetGameCommandType::PlaceBrain: {
+						if (version < NetLockstepCodec::c_PlaceBrainVersion) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset() - 2, "game command has invalid type");
+							return false;
+						}
+						NetGamePlaceBrain place;
+						uint32_t team = 0;
+						uint32_t player = 0;
+						uint32_t xBits = 0;
+						uint32_t yBits = 0;
+						if (!ReadOrTruncated(reader.ReadU32LE(team), reader, error, "place_brain_team") ||
+						    !ReadOrTruncated(reader.ReadU32LE(player), reader, error, "place_brain_player") ||
+						    !ReadOrTruncated(reader.ReadU32LE(xBits), reader, error, "place_brain_x") ||
+						    !ReadOrTruncated(reader.ReadU32LE(yBits), reader, error, "place_brain_y")) {
+							return false;
+						}
+						if (!reader.ReadString(place.className, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_class_name", error) ||
+						    !reader.ReadString(place.preset, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_preset", error) ||
+						    !reader.ReadString(place.module, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_module", error)) {
+							return false;
+						}
+						place.team = static_cast<int32_t>(team);
+						place.player = static_cast<int32_t>(player);
+						place.posX = FloatFromBitsLE(xBits);
+						place.posY = FloatFromBitsLE(yBits);
+						command.payload = std::move(place);
 						break;
 					}
 					default:
@@ -1860,6 +1989,10 @@ namespace RTE {
 			}
 		}
 		return true;
+	}
+
+	bool NetLockstepCodec::IsWireString(const std::string& value, size_t maxBytes) {
+		return value.size() <= maxBytes && value.size() <= std::numeric_limits<uint16_t>::max() && !HasControlChars(value);
 	}
 
 	NetLockstepPacketType NetLockstepCodec::PacketTypeOf(const NetLockstepPayload& payload) {
@@ -2212,7 +2345,9 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error) {
-		if (config.peerCount < 2 || config.peerCount > NetLockstepCodec::c_MaxPeerCount ||
+		// One peer is a round whose only producer is here (an AI-only dedicated host); two or more
+		// still need the remotes below.
+		if (config.peerCount == 0 || config.peerCount > NetLockstepCodec::c_MaxPeerCount ||
 		    config.localPeerId == 0 || config.localPeerId > config.peerCount) {
 			if (error) *error = "lockstep peer identity is invalid";
 			return false;
@@ -2237,7 +2372,7 @@ namespace RTE {
 				}
 				remoteTransports[peerId] = transportId;
 			}
-		} else {
+		} else if (!remotePeerIds.empty()) {
 			if (config.remotePeerId == 0 || config.remotePeerId == config.localPeerId ||
 			    config.remotePeerId > config.peerCount || config.remoteTransportPeerId == c_InvalidNetPeerId) {
 				if (error) *error = "lockstep peer identity is invalid";
@@ -2245,7 +2380,7 @@ namespace RTE {
 			}
 			remoteTransports[config.remotePeerId] = config.remoteTransportPeerId;
 		}
-		if (remoteTransports.empty()) {
+		if (remoteTransports.empty() && !remotePeerIds.empty()) {
 			if (error) *error = "lockstep has no remote transport targets";
 			return false;
 		}
@@ -2338,6 +2473,11 @@ namespace RTE {
 		m_Stats.remotePeerId = config.remotePeerId;
 		m_Stats.nextFrame = m_Stats.effectiveStartFrame;
 
+		// With no remote there is no start to hand out and none to wait for: the round runs at once.
+		if (m_RemotePeerIds.empty()) {
+			m_State = NetLockstepState::Running;
+			return true;
+		}
 		return SendStart(error);
 	}
 
@@ -2608,7 +2748,8 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::StartReplay(INetTransport& transport, const NetLockstepConfig& config, std::string* error) {
-		if (config.peerCount < 2 || config.peerCount > NetLockstepCodec::c_MaxPeerCount ||
+		// A one-peer recording is the AI-only round's; playback has no remotes either way.
+		if (config.peerCount == 0 || config.peerCount > NetLockstepCodec::c_MaxPeerCount ||
 		    config.localPeerId == 0 || config.localPeerId > config.peerCount) {
 			if (error) *error = "replay peer identity is invalid";
 			return false;
@@ -2874,6 +3015,7 @@ namespace RTE {
 			return true;
 		}
 		m_LocalChecksums[frame] = hash;
+		++m_Stats.checksumSubmissions;
 		NetLockstepChecksum packet;
 		packet.senderPeerId = m_Config.localPeerId;
 		packet.frame = frame;
@@ -2886,6 +3028,7 @@ namespace RTE {
 		if (!SendPacket({packet}, m_Config.frameLane, error)) {
 			return false;
 		}
+		++m_Stats.checksumSends;
 		CompareChecksums(frame);
 		return true;
 	}
@@ -3283,7 +3426,12 @@ namespace RTE {
 		// A desync on ANY peer aborts, naming it; only verify (and prune) once every REQUIRED remote
 		// agrees. A cleanly-left peer's last hashes still compare, but nobody waits on it.
 		for (const auto& [peerId, hash]: remoteIt->second) {
+			++m_Stats.checksumCompares;
 			if (localIt->second != hash) {
+				++m_Stats.checksumMismatches;
+				std::cout << "[lockstep] desync at frame " << frame << " against " << DescribePeer(peerId)
+				          << " (submitted " << m_Stats.checksumSubmissions << ", sent " << m_Stats.checksumSends
+				          << ", compared " << m_Stats.checksumCompares << ")" << std::endl;
 				ScheduleRecoveryStop(NetLockstepStopReason::Desync, frame, "sim state diverged at tick " + std::to_string(frame) + " (" + DescribePeer(peerId) + ")");
 				return;
 			}
@@ -3486,6 +3634,9 @@ namespace RTE {
 		}
 		outFrame = std::move(m_ReadyFrames.front());
 		m_ReadyFrames.pop_front();
+		for (const auto& [peerId, leaveFrame]: m_PeerLeaveFrames) {
+			if (leaveFrame <= outFrame.frame) outFrame.departedPeerIds.push_back(peerId);
+		}
 		return true;
 	}
 
@@ -3520,10 +3671,8 @@ namespace RTE {
 		// lockstep gate synchronizes leave knowledge, so every peer re-resolves identically.
 		if (m_PeerLeaveFrames.find(ownerPeerId) != m_PeerLeaveFrames.end()) {
 			const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
-			// H4 §4: a seat inside its reclaim window has not lost its player. With no surviving
-			// teammate the relay host plays its units until the holder returns, instead of standing
-			// them down to be shot where they stand - the round is held open only while it is alone.
-			ownerPeerId = survivor != 0 ? survivor : (IsHoldingSeatForReclaim() ? m_Config.matchConfig.hostPeerId : survivor);
+			// The host produces AI controllers for a departed team while the round continues.
+			ownerPeerId = survivor != 0 ? survivor : (IsRunning() || IsHoldingSeatForReclaim() ? m_Config.matchConfig.hostPeerId : survivor);
 		}
 		return ownerPeerId;
 	}
@@ -3550,9 +3699,7 @@ namespace RTE {
 		if (!IsPeerGoneAtFrame(NetActorOwnership::ResolveOwnerPeer(m_Config.matchConfig, {actorUniqueID, team, cpuControlled}), frame)) {
 			return false;
 		}
-		// The team's units fall to the next surviving human peer; only an ownerless team stands down,
-		// and a seat still inside its reclaim window is not ownerless (the relay host plays it).
-		return FirstAliveHumanPeerForTeam(team, frame) == 0 && !IsHoldingSeatForReclaim();
+		return FirstAliveHumanPeerForTeam(team, frame) == 0 && !IsRunning() && !IsHoldingSeatForReclaim();
 	}
 
 	bool NetLockstepCoordinator::IsPeerGoneAtFrame(uint8_t peerId, uint64_t frame) const {
@@ -4744,6 +4891,13 @@ namespace RTE {
 		}
 		ForgetCongestion(peerId);
 		m_LastLeaveMessage = message;
+		// The relay host is the star's hub: with it gone no survivor can reach another, and its own team
+		// would keep resolving to a peer that produces nothing for it. The round ends for every survivor.
+		if (peerId == m_Config.matchConfig.hostPeerId && peerId != m_Config.localPeerId) {
+			m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":the host left the match: " + message;
+			m_State = NetLockstepState::Stopped;
+			return;
+		}
 		// A dropped seat pauses commits until the host resolves it; an announced leave still ends a last-player match at once.
 		if (LeftPeersNotRefilling() >= m_RemotePeerIds.size() && (announced || !AnyLeftSeatHeld()) && !ReclaimResyncPending()) {
 			// Nobody left to play with.

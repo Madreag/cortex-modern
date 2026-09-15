@@ -8,6 +8,7 @@ namespace RTE {
 	class GUITextBox;
 	class GUISlider;
 	class GUILabel;
+	class GUIComboBox;
 	class GUIEvent;
 
 	/// Handling for gameplay settings through the game settings user interface.
@@ -44,6 +45,7 @@ namespace RTE {
 		GUICheckbox* m_EnableSmartBuyMenuNavigationCheckbox;
 		GUITextBox* m_MaxUnheldItemsTextbox;
 		GUITextBox* m_CrabBombThresholdTextbox;
+		GUIComboBox* m_BrainlessHumansSpectateCombo;
 
 		GUISlider* m_UnheldItemsHUDDisplayRangeSlider;
 		GUILabel* m_UnheldItemsHUDDisplayRangeLabel;

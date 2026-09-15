@@ -1081,8 +1081,8 @@ void ActivityMan::ResumeActivity() {
 
 		std::vector<int> humanPlayers;
 		for (int player = 0; player < MaxPlayerCount; player++) {
-			if (m_Activity->PlayerHuman(player)) {
-				humanPlayers.push_back(player);
+			if (m_Activity->IsLocalHumanSeat(player)) {
+				humanPlayers.push_back(m_Activity->LocalInputOfPlayer(player));
 			}
 		}
 		g_UInputMan.CheckMultiMouseKeyboardEnabled(humanPlayers);
@@ -1136,6 +1136,7 @@ bool ActivityMan::RestartActivityCandidate() {
 		g_ConsoleMan.PrintString("ERROR: the saved activity runtime state did not restore");
 		activityStarted = -1;
 	}
+	if (restoresSnapshot && activityStarted >= 0) m_Activity->RefreshLockstepLocalPlayers();
 	if (restoresSnapshot && activityStarted >= 0 && !m_PendingCheckpoint.worldStructure.empty() && !g_MovableMan.LoadWorldStructure(m_PendingCheckpoint.worldStructure)) {
 		g_ConsoleMan.PrintString("ERROR: the saved world membership did not restore"); activityStarted = -1;
 	}
@@ -1446,7 +1447,11 @@ bool ActivityMan::RestartActivity() {
 		if (restored && m_PendingCheckpoint.hasStartActivity) {
 			g_MovableMan.SetRestoringSnapshot(true);
 			m_StartActivity.reset(m_PendingCheckpoint.startActivity ? static_cast<Activity*>(m_PendingCheckpoint.startActivity->Clone()) : nullptr);
-			if (m_StartActivity) restored = m_StartActivity->ApplyPendingCheckpoint() && m_StartActivity->PrepareCheckpointUI() && m_StartActivity->ResolveCheckpointReferences();
+			if (m_StartActivity) {
+				restored = m_StartActivity->ApplyPendingCheckpoint();
+				m_StartActivity->RefreshLockstepLocalPlayers();
+				restored = restored && m_StartActivity->PrepareCheckpointUI() && m_StartActivity->ResolveCheckpointReferences();
+			}
 		}
 		if (restored && !m_PendingCheckpoint.runtimeGlobals.empty()) restored = RestoreRuntimeGlobals(m_PendingCheckpoint.runtimeGlobals);
 		if (restored && m_PendingCheckpoint.uniqueIDCounter >= 0) MovableObject::PinUniqueIDCounter(m_PendingCheckpoint.uniqueIDCounter);

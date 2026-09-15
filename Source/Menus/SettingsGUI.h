@@ -5,9 +5,11 @@
 #include "SettingsInputGUI.h"
 #include "SettingsGameplayGUI.h"
 #include "SettingsMiscGUI.h"
+#include "SettingsNetworkGUI.h"
 
 #include <array>
 #include <memory>
+#include <iosfwd>
 
 namespace RTE {
 
@@ -16,6 +18,22 @@ namespace RTE {
 	class GUIControlManager;
 	class GUIButton;
 	class GUITab;
+	class GUIControl;
+
+	namespace MenuAutomation {
+		bool Visible(GUIControl* control);
+		bool Enabled(GUIControl* control);
+		bool Text(GUIControl* control, std::string& text);
+		/// Name of the settings page the manager currently shows, empty when it shows no settings page.
+		std::string SettingsPage(GUIControlManager* manager);
+		/// Asks the settings menu owning the manager to show a page on its next event pass.
+		bool QueuePage(GUIControlManager* manager, const std::string& page);
+		/// Raises the queued page's tab notification, which the settings menu answers in the same pass.
+		void ApplyQueuedPage(GUIControlManager* manager);
+		bool Handles(const std::string& command);
+		bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation);
+		void Click(GUIControlManager* manager, const std::string& control);
+	}
 
 	/// Handling for the settings menu screen composition and sub-menu interaction.
 	class SettingsGUI {
@@ -48,6 +66,9 @@ namespace RTE {
 
 		/// Draws the SettingsGUI to the screen.
 		void Draw() const;
+		/// Routes automation to the controls owned by the active settings page.
+		GUIControlManager* AutomationManager() const { return m_GUIControlManager.get(); }
+		bool AutomationPostCommand(const std::string& name);
 #pragma endregion
 
 	private:
@@ -58,6 +79,7 @@ namespace RTE {
 			InputSettingsMenu,
 			GameplaySettingsMenu,
 			MiscSettingsMenu,
+			NetworkSettingsMenu,
 			SettingsMenuCount
 		};
 
@@ -70,6 +92,7 @@ namespace RTE {
 		std::unique_ptr<SettingsInputGUI> m_InputSettingsMenu; //!< The input settings sub-menu.
 		std::unique_ptr<SettingsGameplayGUI> m_GameplaySettingsMenu; //!< The gameplay settings sub-menu.
 		std::unique_ptr<SettingsMiscGUI> m_MiscSettingsMenu; //!< The misc settings sub-menu.
+		std::unique_ptr<SettingsNetworkGUI> m_NetworkSettingsMenu; //!< The network settings sub-menu. Null in a skin without the page, like the pause menu's.
 
 		/// GUI elements that compose the settings menu screen.
 		GUICollectionBox* m_SettingsTabberBox;

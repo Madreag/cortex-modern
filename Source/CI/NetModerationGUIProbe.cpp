@@ -1,11 +1,19 @@
 #include "NetModerationGUIProbe.h"
 
 #include "ActivityMan.h"
+#include "CameraMan.h"
 #include "FrameMan.h"
+#include "GameActivity.h"
 #include "GUI.h"
 #include "GUIButton.h"
+#include "GUIFont.h"
 #include "GUILabel.h"
+#include "GUIInputWrapper.h"
+#include "MainMenuGUI.h"
+#include "PauseMenuGUI.h"
 #include "MenuMan.h"
+#include "Scene.h"
+#include "SceneMan.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchService.h"
 #include "NetModerationGUI.h"
@@ -23,6 +31,7 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <sstream>
 
 namespace RTE::NetModerationGUIProbe {
 namespace {
@@ -35,19 +44,70 @@ namespace {
 	};
 	struct Probe {
 		bool loaded = false, enabled = false, done = false, resultStarted = false;
-		size_t index = 0;
+		size_t index = 0, gestureIndex = SIZE_MAX;
 		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0;
 		Clock::time_point started;
 		std::filesystem::path directory;
 		Json script, result;
+		SDL_Joystick* pad = nullptr;
 	};
 	Probe probe;
+
+	GUIControlManager* MenuControls() {
+		if (auto* pause = g_MenuMan.GetActivePauseMenu()) return pause->AutomationManager();
+		return g_MenuMan.IsMainMenuInteractive() ? g_MenuMan.GetMainMenu()->AutomationManager() : nullptr;
+	}
+	std::string MenuScreen() {
+		if (auto* pause = g_MenuMan.GetActivePauseMenu()) return pause->AutomationActiveScreenName();
+		return g_MenuMan.IsMainMenuInteractive() ? g_MenuMan.GetMainMenu()->AutomationActiveScreenName() : "Gameplay";
+	}
 
 	/// P is read inside the sim tick (KeyPressedSim); F6 and Escape are menu keys read per render frame.
 	bool SimRateKey(const std::string& key) { return key == "P"; }
 
 	void Require(bool condition, const std::string& reason) {
 		if (!condition) throw std::runtime_error(reason);
+	}
+
+	/// The probe's own gamepad, so a start button is the device press the seat reads, not a key.
+	SDL_Joystick* ProbePad() {
+		if (!probe.pad) {
+			// A headless run never holds keyboard focus, and SDL drops device presses without it. The menu
+			// script holds the same hint for its own pad, so it is shared and only the last pad gives it back.
+			GUIInputWrapper::AcquireJoystickBackgroundEvents();
+			SDL_VirtualJoystickDesc description{};
+			SDL_INIT_INTERFACE(&description);
+			description.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+			description.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+			description.naxes = SDL_GAMEPAD_AXIS_COUNT;
+			description.button_mask = (1U << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+			description.axis_mask = (1U << SDL_GAMEPAD_AXIS_COUNT) - 1;
+			description.name = "Net UI probe controller";
+			const SDL_JoystickID attached = SDL_AttachVirtualJoystick(&description);
+			if (!attached) {
+				const std::string reason = SDL_GetError();
+				GUIInputWrapper::ReleaseJoystickBackgroundEvents();
+				Require(false, "SDL_AttachVirtualJoystick: " + reason);
+			}
+			probe.pad = SDL_OpenJoystick(attached);
+			if (!probe.pad) {
+				const std::string reason = SDL_GetError();
+				SDL_DetachVirtualJoystick(attached);
+				GUIInputWrapper::ReleaseJoystickBackgroundEvents();
+				Require(false, "SDL_OpenJoystick: " + reason);
+			}
+		}
+		return probe.pad;
+	}
+
+	void ReleaseProbePad() {
+		if (probe.pad) {
+			const SDL_JoystickID attached = SDL_GetJoystickID(probe.pad);
+			SDL_CloseJoystick(probe.pad);
+			SDL_DetachVirtualJoystick(attached);
+			probe.pad = nullptr;
+			GUIInputWrapper::ReleaseJoystickBackgroundEvents();
+		}
 	}
 
 	uint64_t NowMs() {
@@ -61,9 +121,41 @@ namespace {
 		return probe.directory / name;
 	}
 
+	Json Rect(int x, int y, int width, int height, bool visible) {
+		return {{"x", x}, {"y", y}, {"w", width}, {"h", height}, {"visible", visible && width > 0 && height > 0}};
+	}
+
+	bool Overlaps(const Json& left, const Json& right) {
+		return left.at("visible").get<bool>() && right.at("visible").get<bool>() &&
+		    left["x"].get<int>() < right["x"].get<int>() + right["w"].get<int>() &&
+		    right["x"].get<int>() < left["x"].get<int>() + left["w"].get<int>() &&
+		    left["y"].get<int>() < right["y"].get<int>() + right["h"].get<int>() &&
+		    right["y"].get<int>() < left["y"].get<int>() + left["h"].get<int>();
+	}
+
+	/// The slide-in panel's visible column, which every editor reports as the seat's screen occlusion.
+	Json PickerRect(int screen) {
+		const int occlusion = g_CameraMan.GetScreenOcclusion(screen).GetRoundIntX();
+		const int height = g_FrameMan.GetPlayerScreenHeight();
+		if (occlusion < 0) return Rect(g_FrameMan.GetPlayerScreenWidth() + occlusion, 0, -occlusion, height, true);
+		return Rect(0, 0, occlusion, height, true);
+	}
+
+	/// The band the seat's own message occupies, read from the manager that lays it out. Measured in its
+	/// blinking form whether or not this frame draws it, so the rect does not pulse.
+	Json ScreenTextRect(int screen) {
+		const FrameMan::ScreenTextLayout layout = g_FrameMan.GetScreenTextLayout(screen, true);
+		return Rect(layout.x, layout.y, layout.width, layout.height, !layout.text.empty());
+	}
+
+	Json OverlayRect(const NetModerationGUI::OverlayRect& rect) {
+		return Rect(rect.x, rect.y, rect.width, rect.height, rect.visible);
+	}
+
 	Json Observe() {
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 		Json observed = {{"at_ms", NowMs()}, {"render", probe.renders}, {"sim_frame", g_TimerMan.GetSimUpdateCount()},
+		    {"screen", MenuScreen()},
 		    {"service", snapshot.serviceState}, {"host", snapshot.isHost}, {"panel_open", g_MenuMan.IsNetworkPanelOpen()},
 		    {"paused", g_ActivityMan.ActivityPaused()}, {"seats", Json::array()}};
 		for (const auto& seat: g_NetMatchService.GetModerationSeats()) {
@@ -72,6 +164,25 @@ namespace {
 			    {"applicants", seat.applicants.size()}, {"actions_available", seat.actionsAvailable},
 			    {"holder_generation", seat.holderGeneration}, {"seat_generation", seat.seatGeneration}});
 		}
+		// The setup editor a lockstep match holds in, so a script can drive and read this peer's own seats.
+		auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+		observed["editing"] = game && game->GetActivityState() == Activity::Editing;
+		observed["editor_seats"] = Json::array();
+		const Scene* scene = game ? g_SceneMan.GetScene() : nullptr;
+		for (int player = 0; game && player < Players::MaxPlayerCount; ++player) {
+			if (!(game->IsSeatActive(player) && game->IsLocalHumanSeat(player))) continue;
+			observed["editor_seats"].push_back({{"player", player}, {"ready", game->IsReadyToStart(player)},
+			    {"resident", scene && scene->GetResidentBrain(player) != nullptr},
+			    {"submitted", game->HasSubmittedLockstepPlacement(player)}, {"mode", game->SetupEditorMode(player)},
+			    {"gesture", GameActivity::SetupEditorGestureStatus(player)},
+			    {"screen_text", g_FrameMan.GetScreenText(game->ScreenOfPlayer(player))},
+			    {"picker", PickerRect(game->ScreenOfPlayer(player))},
+			    {"screen_text_rect", ScreenTextRect(game->ScreenOfPlayer(player))}});
+		}
+		// What the network overlay drew this frame, so a script can require it to stay off the editor's own UI.
+		const NetModerationGUI* panel = g_MenuMan.GetNetworkPanel();
+		observed["net_ui"] = {{"status", panel ? OverlayRect(panel->GetStatusRect()) : Rect(0, 0, 0, 0, false)},
+		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)}};
 		return observed;
 	}
 
@@ -112,6 +223,12 @@ namespace {
 	}
 
 	GUIControl* Control(const Json& step) {
+		if (step.value("scope", "") == "menu") {
+			auto* manager = MenuControls();
+			auto* control = manager ? manager->GetControl(step.at("control").get<std::string>()) : nullptr;
+			Require(control != nullptr, "unknown active menu control: " + step.at("control").get<std::string>());
+			return control;
+		}
 		auto* menu = g_MenuMan.GetNetworkPanel();
 		Require(menu != nullptr, "network panel has not been constructed");
 		auto* control = menu->GetControl(step.at("control").get<std::string>());
@@ -123,6 +240,7 @@ namespace {
 		int x, y, w, h;
 		control->GetControlRect(&x, &y, &w, &h);
 		Json value = {{"rect", {x, y, w, h}}, {"visible", control->GetVisible()}, {"enabled", control->GetEnabled()}};
+		value["focus"] = control->GetPanel() && control->GetPanel()->HasFocus();
 		if (auto* label = dynamic_cast<GUILabel*>(control)) {
 			value["text"] = label->GetText();
 			value["text_height"] = label->GetTextHeight();
@@ -139,16 +257,49 @@ namespace {
 
 	Phase StepPhase(const Json& step) {
 		const std::string op = step.at("op");
-		if (op == "assert" || op == "assert_control" || op == "screenshot" || op == "finish") return Phase::Draw;
+		if (op == "menu") {
+			const std::string command = step.at("command");
+			return command.starts_with("assert_") || command.starts_with("dump_") ? Phase::Draw : Phase::Poll;
+		}
+		if (op == "assert" || op == "assert_control" || op == "assert_editor" || op == "assert_net_ui_clear" ||
+		    op == "screenshot" || op == "finish") return Phase::Draw;
 		if ((op == "key_down" || op == "key_up") && SimRateKey(step.value("key", ""))) return Phase::Sim;
 		return Phase::Poll;
+	}
+
+	/// A step the menus can serve on their own. The overlay and the seats panel exist only from the first
+	/// in-match draw, so their steps wait for it; `finish` ends a script that never leaves the menus.
+	bool MenuScopeStep(const Json& step) {
+		const std::string op = step.value("op", "");
+		return op == "menu" || op == "finish" || step.value("scope", "") == "menu";
 	}
 
 	bool Step(const Json& step, Json& observed) {
 		const std::string op = step.at("op");
 		if (op == "wait") {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("renders") ||
-			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control"), "wait has no predicate");
+			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
+			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
+			    step.contains("picker_open"), "wait has no predicate");
+			if (step.contains("screen") && observed["screen"] != step["screen"]) return false;
+			if (step.contains("picker_open")) {
+				const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+				    [&](const Json& row) { return row.at("player") == step.value("player", 0); });
+				if (seat == observed["editor_seats"].end() || seat->at("picker").at("visible") != step["picker_open"]) return false;
+			}
+			if (step.contains("seat_text_contains")) {
+				// A seat's screen carries both its editor's line and its activity's, so wait for the one asked for.
+				const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+				    [&](const Json& row) { return row.at("player") == step.value("player", 0); });
+				if (seat == observed["editor_seats"].end() ||
+				    seat->at("screen_text").get<std::string>().find(step["seat_text_contains"].get<std::string>()) == std::string::npos) return false;
+			}
+			if (step.contains("editing") && observed["editing"] != step["editing"]) return false;
+			if (step.contains("seat_ready")) {
+				const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+				    [&](const Json& row) { return row.at("player") == step["seat_ready"]; });
+				if (seat == observed["editor_seats"].end() || seat->at("ready") != true) return false;
+			}
 			if (step.contains("service") && observed["service"] != step["service"]) return false;
 			if (step.contains("sim_at_least") && observed["sim_frame"].get<long long>() < step["sim_at_least"].get<long long>()) return false;
 			if (step.contains("renders") && probe.renders - probe.stepRender < step["renders"].get<uint64_t>()) return false;
@@ -178,9 +329,38 @@ namespace {
 			event.key.key = key == "F6" ? SDLK_F6 : key == "P" ? SDLK_P : SDLK_ESCAPE;
 			event.key.down = op == "key_down";
 			Push(event);
-		} else if (op == "mouse_down" || op == "mouse_up") {
+		} else if (op == "pad_down" || op == "pad_up") {
+			const std::string name = step.at("button");
+			const SDL_GamepadButton button = SDL_GetGamepadButtonFromString(name.c_str());
+			Require(button != SDL_GAMEPAD_BUTTON_INVALID, "unsupported probe pad button: " + name);
+			SDL_Joystick* pad = ProbePad();
+			Require(SDL_SetJoystickVirtualButton(pad, button, op == "pad_down"), std::string("SDL_SetJoystickVirtualButton: ") + SDL_GetError());
+			SDL_UpdateJoysticks();
+			observed["pad"] = SDL_GetJoystickID(pad);
+		} else if (op == "input_scope") {
+			GUIInputWrapper::SetAutomationDriving(step.at("enabled").get<bool>());
+		} else if (op == "menu") {
+			std::istringstream args(step.at("command").get<std::string>());
+			std::string command, name, detail;
+			args >> command;
+			bool accepted = false;
+			if (command == "activate" || command == "post_command") {
+				args >> name;
+				if (auto* pause = g_MenuMan.GetActivePauseMenu()) accepted = pause->AutomationPostCommand(name);
+				else if (g_MenuMan.IsMainMenuInteractive()) accepted = g_MenuMan.GetMainMenu()->AutomationPostCommand(name);
+			} else if (command == "assert_enabled") {
+				int expected = -1; args >> name >> expected;
+				accepted = MenuControls() && (expected == 0 || expected == 1) && MenuControls()->GetControl(name) && MenuAutomation::Enabled(MenuControls()->GetControl(name)) == (expected == 1);
+			} else {
+				Require(MenuAutomation::Handles(command), "unknown menu operation: " + command);
+				accepted = MenuAutomation::Execute(MenuControls(), MenuScreen(), command, args, detail);
+			}
+			observed["accepted"] = accepted;
+			observed["menu_observation"] = detail;
+			Require(accepted == step.value("accepted", true), "menu operation refused: " + step.at("command").get<std::string>() + " " + detail);
+		} else if (op == "mouse_down" || op == "mouse_up" || op == "mouse_move") {
 			auto* control = Control(step);
-			Require(g_MenuMan.IsNetworkPanelOpen() && control->GetVisible(), "mouse target is not visible");
+			Require((step.value("scope", "") == "menu" ? MenuAutomation::Visible(control) : g_MenuMan.IsNetworkPanelOpen() && control->GetVisible()), "mouse target is not visible");
 			int x, y, w, h;
 			control->GetControlRect(&x, &y, &w, &h);
 			const float mouseX = static_cast<float>((x + w / 2) * g_WindowMan.GetResMultiplier());
@@ -191,6 +371,7 @@ namespace {
 			motion.motion.x = mouseX;
 			motion.motion.y = mouseY;
 			Push(motion);
+			if (op == "mouse_move") return true;
 			SDL_Event event{};
 			event.type = op == "mouse_down" ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
 			event.button.windowID = motion.motion.windowID;
@@ -218,12 +399,76 @@ namespace {
 				    rect[1].get<int>() + rect[3].get<int>() <= g_WindowMan.GetResY(), "control exceeds viewport");
 				if (value.contains("text_height")) Require(value["text_height"].get<int>() <= rect[3].get<int>(), "label text exceeds its height");
 			}
+		} else if (op == "place_brain_command") {
+			// A placement exactly as issued, for the commands every peer has to refuse.
+			Require(GameActivity::EnqueueRawBrainPlacement(step.value("player", 0), step.value("team", 0),
+			            step.value("x", 0.0F), step.value("y", 0.0F), step.value("class", std::string("Actor")),
+			            step.value("preset", std::string("Brain Case")), step.value("module", std::string("Base.rte"))),
+			    "the match cannot take a placement command");
+		} else if (op == "editor_place_brain" || op == "editor_done") {
+			// The seat's own editor does the work: the gesture is queued once and the step waits it out.
+			const int player = step.value("player", 0);
+			if (probe.gestureIndex != probe.index) {
+				Require(observed["editing"] == true, "the activity is not in the setup editor");
+				Require(GameActivity::QueueSetupEditorGesture(player, op == "editor_done" ? "done" : "place_brain",
+				            step.value("x_fraction", 0.5F), step.value("class", std::string("Actor")),
+				            step.value("preset", std::string("Brain Case")), step.value("module", std::string("Base.rte"))),
+				    "the seat cannot take an editor gesture");
+				probe.gestureIndex = probe.index;
+			}
+			const int status = GameActivity::SetupEditorGestureStatus(player);
+			Require(status != 2, "the seat could not carry out its editor gesture");
+			if (status == 1) return false;
+		} else if (op == "assert_editor") {
+			const int player = step.value("player", 0);
+			const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+			    [player](const Json& row) { return row.at("player") == player; });
+			Require(seat != observed["editor_seats"].end(), "seat " + std::to_string(player) + " is not a local editor seat");
+			if (step.contains("equals")) {
+				for (auto it = step["equals"].begin(); it != step["equals"].end(); ++it) {
+					Require(seat->at(it.key()) == it.value(), "editor seat assertion differs: " + it.key());
+				}
+			}
+			if (step.contains("screen_text_contains")) {
+				Require(seat->at("screen_text").get<std::string>().find(step["screen_text_contains"].get<std::string>()) != std::string::npos,
+				    "the seat's screen does not carry the expected message");
+			}
+		} else if (op == "assert_net_ui_clear") {
+			// The network overlay owes the stock setup editor its own surfaces: the picker and the seat's message band.
+			const int player = step.value("player", 0);
+			const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+			    [player](const Json& row) { return row.at("player") == player; });
+			Require(seat != observed["editor_seats"].end(), "seat " + std::to_string(player) + " is not a local editor seat");
+			Require(observed["editing"] == true, "the activity is not in the setup editor");
+			Require(observed["net_ui"]["status"].at("visible") == true, "the network status widget is not on screen");
+			if (step.value("picker_open", false)) Require(seat->at("picker").at("visible") == true, "the editor's object picker is not open");
+			if (step.value("screen_text", false)) Require(seat->at("screen_text_rect").at("visible") == true, "the seat's screen carries no editor message");
+			const Json& band = seat->at("screen_text_rect");
+			if (band.at("visible").get<bool>()) {
+				Require(band["x"].get<int>() >= 0 && band["x"].get<int>() + band["w"].get<int>() <= g_FrameMan.GetPlayerScreenWidth(),
+				    "the seat's message is drawn off its own screen");
+			}
+			for (const std::string& element: {"status", "toasts"}) {
+				for (const std::string& area: {"picker", "screen_text_rect"}) {
+					Require(!Overlaps(observed["net_ui"].at(element), seat->at(area)),
+					    "the network " + element + " overlaps the editor's " + area);
+				}
+			}
 		} else if (op == "screenshot") {
-			auto path = Leaf(step.at("name").get<std::string>());
-			path += ".png";
-			Require(!std::filesystem::exists(path), "screenshot already exists");
-			Require(g_FrameMan.SaveBitmapToPNG(g_FrameMan.GetBackBuffer32(), path.string().c_str()) == 0, "screenshot save failed");
-			observed["screenshot"] = path.string();
+			const std::string name = step.at("name").get<std::string>();
+			if (step.value("composited", false)) {
+				// The frame as it reaches the screen - world, editor and overlay - read back from the screen
+				// buffer into the run's ScreenShots directory, where the harness collects it.
+				(void)Leaf(name); // Validates the name's charset; the file lands under the run's ScreenShots.
+				Require(g_FrameMan.SaveScreenToPNG(name.c_str()) == 0, "composited screenshot save failed");
+				observed["screenshot"] = name;
+			} else {
+				auto path = Leaf(name);
+				path += ".png";
+				Require(!std::filesystem::exists(path), "screenshot already exists");
+				Require(g_FrameMan.SaveBitmapToPNG(g_FrameMan.GetBackBuffer32(), path.string().c_str()) == 0, "screenshot save failed");
+				observed["screenshot"] = path.string();
+			}
 		} else if (op == "signal") {
 			auto path = Leaf(step.at("name").get<std::string>());
 			path += ".json";
@@ -234,6 +479,8 @@ namespace {
 		} else if (op == "wait_file") {
 			if (!std::filesystem::is_regular_file(step.at("path").get<std::string>())) return false;
 		} else if (op == "finish") {
+			GUIInputWrapper::SetAutomationDriving(false);
+			ReleaseProbePad();
 			Require(probe.index + 1 == probe.script["steps"].size(), "finish must be last");
 			probe.done = true;
 			probe.result["complete"] = true;
@@ -244,7 +491,7 @@ namespace {
 		return true;
 	}
 
-	void Process(Phase phase) {
+	void Process(Phase phase, bool menuScopeOnly = false) {
 		try {
 			if (!probe.loaded) {
 				if (phase == Phase::Sim) return;
@@ -256,6 +503,7 @@ namespace {
 			Require(probe.index < probe.script["steps"].size(), "script did not finish explicitly");
 			const auto& step = probe.script["steps"][probe.index];
 			if (StepPhase(step) != phase) return;
+			if (menuScopeOnly && !MenuScopeStep(step)) return;
 			Json observed = Observe();
 			try {
 				if (!Step(step, observed)) return;
@@ -270,6 +518,8 @@ namespace {
 			WriteResult();
 			if (probe.done) std::cout << "[net-ui-probe] PASS: completed " << probe.index << " steps" << std::endl;
 		} catch (const std::exception& error) {
+			GUIInputWrapper::SetAutomationDriving(false);
+			ReleaseProbePad();
 			probe.done = true;
 			probe.result["pass"] = false;
 			probe.result["error"] = error.what();
@@ -283,6 +533,7 @@ namespace {
 
 void BeforePoll() { Process(Phase::Poll); }
 void AfterDraw() { Process(Phase::Draw); }
+void AfterMenuDraw() { Process(Phase::Draw, true); }
 
 void OnSimTick(uint64_t simUpdateCount) {
 	if (!probe.enabled || probe.done) return;

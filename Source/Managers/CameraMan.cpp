@@ -12,6 +12,7 @@
 using namespace RTE;
 
 Vector CameraMan::GetRenderOffset(int screenId) const {
+	if (!IsValidScreen(screenId)) return Vector();
 	const Screen& screen = m_Screens[screenId];
 	return Lerp(screen.PrevOffset, screen.Offset, g_TimerMan.GetSimUpdateProportion());
 }
@@ -49,17 +50,20 @@ void CameraMan::Clear() {
 }
 
 void CameraMan::SetOffset(const Vector& offset, int screenId) {
+	if (!IsValidScreen(screenId)) return;
 	m_Screens[screenId].Offset = offset.GetFloored();
 	CheckOffset(screenId);
 }
 
 Vector CameraMan::GetUnwrappedOffset(int screenId) const {
+	if (!IsValidScreen(screenId)) return Vector();
 	const Screen& screen = m_Screens[screenId];
 	const SLTerrain* terrain = g_SceneMan.GetScene()->GetTerrain();
 	return Vector(screen.Offset.GetX() + static_cast<float>(terrain->GetBitmap()->w * screen.SeamCrossCount[Axes::X]), screen.Offset.GetY() + static_cast<float>(terrain->GetBitmap()->h * screen.SeamCrossCount[Axes::Y]));
 }
 
 void CameraMan::SetScroll(const Vector& center, int screenId) {
+	if (!IsValidScreen(screenId)) return;
 	Screen& screen = m_Screens[screenId];
 	screen.Offset.SetXY(static_cast<float>(center.GetFloorIntX() - (g_WindowMan.GetResX() / 2)), static_cast<float>(center.GetFloorIntY() - (g_WindowMan.GetResY() / 2)));
 	CheckOffset(screenId);
@@ -71,6 +75,13 @@ Vector CameraMan::GetScrollTarget(int screenId) const {
 		return Vector();
 	}
 	return m_Screens[screenId].ScrollTarget;
+}
+
+Vector& CameraMan::GetScreenOcclusion(int screenId) {
+	if (IsValidScreen(screenId)) return m_Screens[screenId].ScreenOcclusion;
+	static thread_local Vector ignored;
+	ignored.Reset();
+	return ignored;
 }
 
 void CameraMan::SetScrollTarget(const Vector& targetCenter, float speed, int screenId) {
@@ -128,6 +139,7 @@ float CameraMan::TargetDistanceScalar(const Vector& point) const {
 }
 
 void CameraMan::CheckOffset(int screenId) {
+	if (!IsValidScreen(screenId)) return;
 	RTEAssert(g_SceneMan.GetScene(), "Trying to check offset before there is a scene or terrain!");
 
 	const SLTerrain* terrain = g_SceneMan.GetScene()->GetTerrain();
@@ -156,6 +168,7 @@ void CameraMan::CheckOffset(int screenId) {
 }
 
 Vector CameraMan::GetFrameSize(int screenId) {
+	if (!IsValidScreen(screenId)) return Vector();
 	int frameWidth = g_WindowMan.GetResX();
 	int frameHeight = g_WindowMan.GetResY();
 	frameWidth = g_FrameMan.GetPlayerFrameBufferWidth(screenId);
@@ -200,6 +213,7 @@ void CameraMan::AddScreenShake(float magnitude, const Vector& position) {
 }
 
 void CameraMan::Update(int screenId) {
+	if (!IsValidScreen(screenId)) return;
 	Scene* scene = g_SceneMan.GetScene();
 	if (!scene) {
 		// Nothing to scroll over: a match that ended, or an activity that would not launch, leaves the
