@@ -355,6 +355,9 @@ namespace RTE {
 			Clamp(m_AimAngle, m_AimRange, -m_AimRange);
 		}
 
+		// The controller boundary puts back exactly what it captured; the range clamp belongs to the players' and scripts' setter.
+		void RestoreAimAngle(float rawAngle) { m_AimAngle = rawAngle; }
+
 		/// What the owner's AI wrote to the aim or the facing directly this tick; the wire carries it as a
 		/// one-shot intent and every peer, the owner included, applies it at the committed tick.
 		void MarkOffWireAim(long long simTick, float aim) {
