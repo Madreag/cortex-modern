@@ -796,6 +796,13 @@ namespace RTE {
 				self.m_GoldSwitchEnabled, self.m_RequireClearPathToOrbitSwitchEnabled, self.m_BuyMenuEnabled, self.m_LZCursorWidth,
 				self.m_DeliveryDelay, self.m_CursorTimer, self.m_GameTimer, self.m_GameOverTimer,
 				self.m_GameOverPeriod, self.m_WinnerTeam, self.m_NetworkPlayerNames);
+			// The synchronized setup editor's state is shared state: a resync taken while the seats are
+			// still placing has to restore the same placements and the same id base on every peer.
+			archive(self.m_LockstepPlacementUidBase, self.m_LockstepPlacementSeeded);
+			for (auto& placement: self.m_LockstepSeatBrains) {
+				archive(placement.team, placement.player, placement.posX, placement.posY,
+					placement.className, placement.preset, placement.module);
+			}
 		}
 		/// Clears all the member variables of this Activity, effectively
 		/// resetting the members of this abstraction level only.
