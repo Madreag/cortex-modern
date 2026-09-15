@@ -474,6 +474,10 @@ namespace RTE {
 #pragma endregion
 
 #pragma region Brain Handling
+		/// Whether the host's rule keeps this match running once every human brain is gone.
+		/// @return Whether the brainless humans spectate instead of the round ending on them.
+		bool BrainlessHumansSpectate() const;
+
 		/// Shows how many human controlled brains are left in this Activity.
 		/// @return How many human controlled brains are left in this Activity.
 		int HumanBrainCount() const { return GetBrainCount(true); }

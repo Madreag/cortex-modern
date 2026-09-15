@@ -55,6 +55,7 @@ namespace RTE {
 		std::unique_ptr<ControllerLog> s_ControllerReplayLog;
 		std::string s_ControllerReplayError;
 		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
+		ScenarioRunner::LockstepChecksumCounters s_RetiredChecksumCounters;
 		uint64_t s_LockstepAppliedFrame = 0;
 		std::function<void()> s_SessionPump;
 		const NetSeatPresence* s_SeatPresence = nullptr;
@@ -753,6 +754,14 @@ namespace RTE {
 				if (newest > NetLockstepCodec::c_MaxFutureFrameSkew) s_LocalInputHistory.erase(s_LocalInputHistory.begin(), s_LocalInputHistory.lower_bound(newest - NetLockstepCodec::c_MaxFutureFrameSkew));
 			}
 		}
+		// A resync builds a new coordinator; the retiring one's desync-check traffic still counts.
+		if (s_LockstepCoordinator && s_LockstepCoordinator != coordinator) {
+			const NetLockstepStats& retiring = s_LockstepCoordinator->GetStats();
+			s_RetiredChecksumCounters.submissions += retiring.checksumSubmissions;
+			s_RetiredChecksumCounters.sends += retiring.checksumSends;
+			s_RetiredChecksumCounters.compares += retiring.checksumCompares;
+			s_RetiredChecksumCounters.mismatches += retiring.checksumMismatches;
+		}
 		s_LockstepCoordinator = coordinator;
 		if (!coordinator) {
 			s_SeatPresence = nullptr;
@@ -894,6 +903,18 @@ namespace RTE {
 		return s_LockstepAppliedFrame;
 	}
 
+	ScenarioRunner::LockstepChecksumCounters ScenarioRunner::GetLockstepChecksumCounters() {
+		LockstepChecksumCounters totals = s_RetiredChecksumCounters;
+		if (s_LockstepCoordinator) {
+			const NetLockstepStats& live = s_LockstepCoordinator->GetStats();
+			totals.submissions += live.checksumSubmissions;
+			totals.sends += live.checksumSends;
+			totals.compares += live.checksumCompares;
+			totals.mismatches += live.checksumMismatches;
+		}
+		return totals;
+	}
+
 	uint64_t ScenarioRunner::GetLockstepCompletedFrame() {
 		const uint64_t resumeFrame = GetLockstepResumeFrame();
 		return resumeFrame > 0 ? resumeFrame - 1 : 0;
@@ -993,8 +1014,19 @@ namespace RTE {
 	}
 
 	const NetMatchConfig* ScenarioRunner::GetLockstepMatchConfig() {
-		return s_LockstepCoordinator && !s_LockstepCoordinator->GetConfig().matchConfig.players.empty()
-			? &s_LockstepCoordinator->GetConfig().matchConfig : nullptr;
+		if (!s_LockstepCoordinator) {
+			return nullptr;
+		}
+		const NetMatchConfig& matchConfig = s_LockstepCoordinator->GetConfig().matchConfig;
+		if (!matchConfig.players.empty()) {
+			return &matchConfig;
+		}
+		// A running match has adopted a roster. Without one the shared rules it answers would come from
+		// this machine's own settings, so the match stops instead of deciding per peer.
+		if (s_LockstepCoordinator->IsRunning() && !HasControllerReplayError()) {
+			SetControllerReplayError("the running match has no adopted roster at tick " + std::to_string(GetLockstepAppliedFrame()));
+		}
+		return nullptr;
 	}
 
 	bool ScenarioRunner::IsLockstepPaused() {
@@ -1864,15 +1896,18 @@ namespace RTE {
 				const std::string missing = s_LockstepCoordinator->DescribeMissingPeers();
 				if (!stalled) {
 					stalled = true;
-					stalledOnHold = holdPause;
-					if (holdPause) {
-						const std::string who = holdName.empty() ? "a player" : holdName;
-						std::cout << "[net-match] match paused waiting for " << who
-						          << " (" << holdSeconds << "s left, tick " << tick << ")" << std::endl;
-						PushNetUiToast("paused", "Match paused: waiting for " + who + " to return");
-					} else {
+					if (!holdPause) {
 						std::cout << "[net-match] waiting on peer frames (tick " << tick << (missing.empty() ? "" : ", " + missing) << ")" << std::endl;
 					}
+				}
+				// The seat hold engages seconds after the drop the stall began with, so the wait banner
+				// follows the hold instead of only the moment the stall was first noticed.
+				if (holdPause && !stalledOnHold) {
+					stalledOnHold = true;
+					const std::string who = holdName.empty() ? "a player" : holdName;
+					std::cout << "[net-match] match paused waiting for " << who
+					          << " (" << holdSeconds << "s left, tick " << tick << ")" << std::endl;
+					PushNetUiToast("paused", "Match paused: waiting for " + who + " to return (" + std::to_string(holdSeconds) + "s left)");
 				}
 				if (s_LockstepStallOverlayEnabled || s_LockstepStallUiProbeArmed) {
 					PumpLockstepStallUI();

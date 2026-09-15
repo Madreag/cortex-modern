@@ -8,8 +8,112 @@
 #include "Timer.h"
 #include <SDL3/SDL.h>
 #include <iostream>
+#include <utility>
 
 using namespace RTE;
+
+namespace {
+	bool automationDriving = false;
+	std::vector<GUIInputWrapper*> automationInputs;
+	class ScriptedGUIInput final : public GUIInputWrapper {
+		std::array<bool, SDL_SCANCODE_COUNT> m_Keys{};
+		SDL_Joystick* m_Pad = nullptr;
+		SDL_Gamepad* m_PadGamepad = nullptr;
+		std::function<void()> m_Command;
+		GUIInputWrapper* m_Physical;
+	public:
+		ScriptedGUIInput(GUIInputWrapper* physical, int player) : GUIInputWrapper(player, physical->GetKeyJoyMouseCursor()), m_Physical(physical) { automationInputs.push_back(this); }
+		~ScriptedGUIInput() override { ReleaseAutomationInput(); std::erase(automationInputs, this); }
+		void Update() override {
+			SetKeyJoyMouseCursor(m_Physical->GetKeyJoyMouseCursor());
+			int count = 0;
+			const bool* physical = SDL_GetKeyboardState(&count);
+			std::array<bool, SDL_SCANCODE_COUNT> merged{};
+			for (int i = 0; i < count && i < SDL_SCANCODE_COUNT; ++i) merged[i] = physical[i] || m_Keys[i];
+			UpdateWithKeyboard(merged.data());
+			if (m_Keys[SDL_SCANCODE_LSHIFT] || m_Keys[SDL_SCANCODE_RSHIFT]) m_Modifier |= ModShift;
+			if (m_Keys[SDL_SCANCODE_LCTRL] || m_Keys[SDL_SCANCODE_RCTRL]) m_Modifier |= ModCtrl;
+			if (m_Keys[SDL_SCANCODE_LALT] || m_Keys[SDL_SCANCODE_RALT]) m_Modifier |= ModAlt;
+			if (m_Keys[SDL_SCANCODE_LGUI] || m_Keys[SDL_SCANCODE_RGUI]) m_Modifier |= ModCommand;
+			if (auto command = std::exchange(m_Command, {})) command();
+		}
+		bool QueueAutomationCommand(std::function<void()> command) override {
+			if (!automationDriving) return false;
+			m_Command = std::move(command);
+			return true;
+		}
+		bool QueueAutomationInput(const std::string& device, const std::string& name, bool down) override {
+			if (!automationDriving) return false;
+			if (device == "key") {
+				const SDL_Scancode key = SDL_GetScancodeFromName(name == "KP1" ? "Keypad 1" : name.c_str());
+				if (key == SDL_SCANCODE_UNKNOWN) return false;
+				SDL_Event event{};
+				event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+				event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+				event.key.scancode = key;
+				event.key.key = SDL_GetKeyFromScancode(key, SDL_KMOD_NONE, false);
+				event.key.down = down;
+				int count = 0;
+				if ((down || !SDL_GetKeyboardState(&count)[key]) && !SDL_PushEvent(&event)) return false;
+				m_Keys[key] = down;
+				return true;
+			}
+			// SDL parses only the mapping names, so take the face buttons' positional names onto those.
+			const std::string mapped = name == "south" ? "a" : name == "east" ? "b" : name == "west" ? "x" : name == "north" ? "y" : name;
+			const SDL_GamepadButton button = SDL_GetGamepadButtonFromString(mapped.c_str());
+			if (device != "pad" || button == SDL_GAMEPAD_BUTTON_INVALID) return false;
+			if (!m_Pad) {
+				// SDL drops a controller press while no window holds keyboard focus, which a headless run never does.
+				SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+				SDL_VirtualJoystickDesc desc{};
+				SDL_INIT_INTERFACE(&desc);
+				desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+				desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+				desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+				desc.button_mask = (1U << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+				desc.axis_mask = (1U << SDL_GAMEPAD_AXIS_COUNT) - 1;
+				desc.name = "Menu script controller";
+				const auto id = SDL_AttachVirtualJoystick(&desc);
+				if (!id) return false;
+				m_Pad = SDL_OpenJoystick(id);
+				if (!m_Pad) { SDL_DetachVirtualJoystick(id); return false; }
+				// SDL only reports gamepad buttons for an open gamepad, and the engine ignores plain
+				// joystick buttons on a device that has a mapping, so open it before the first press.
+				m_PadGamepad = SDL_OpenGamepad(id);
+			}
+			if (!SDL_SetJoystickVirtualButton(m_Pad, button, down)) return false;
+			SDL_UpdateJoysticks();
+			return true;
+		}
+		void ReleaseAutomationInput() override {
+			m_Command = {};
+			for (int key = 1; key < SDL_SCANCODE_COUNT; ++key) {
+				if (m_Keys[key]) QueueAutomationInput("key", SDL_GetScancodeName(static_cast<SDL_Scancode>(key)), false);
+			}
+			m_Keys.fill(false);
+			if (m_Pad) {
+				const auto id = SDL_GetJoystickID(m_Pad);
+				if (m_PadGamepad) {
+					SDL_CloseGamepad(m_PadGamepad);
+					m_PadGamepad = nullptr;
+				}
+				SDL_CloseJoystick(m_Pad);
+				SDL_DetachVirtualJoystick(id);
+				m_Pad = nullptr;
+				SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "0");
+			}
+		}
+	};
+}
+
+void GUIInputWrapper::SetAutomationDriving(bool enabled) {
+	if (!enabled) for (auto* input : automationInputs) input->ReleaseAutomationInput();
+	automationDriving = enabled;
+}
+
+std::unique_ptr<GUIInputWrapper> GUIInputWrapper::CreateAutomationInput() {
+	return automationDriving ? std::make_unique<ScriptedGUIInput>(this, m_Player) : nullptr;
+}
 
 std::string GUIInputWrapper::SaveCheckpoint() const {
 	CheckpointWriter writer("GUIInputWrapper1");
@@ -43,10 +147,8 @@ GUIInputWrapper::GUIInputWrapper(int whichPlayer, bool keyJoyMouseCursor) :
 	m_KeyHoldDuration.fill(-1);
 }
 
-void GUIInputWrapper::ConvertKeyEvent(SDL_Scancode sdlKey, int guilibKey, float elapsedS) {
-	int nKeys;
-	const bool* sdlKeyState = SDL_GetKeyboardState(&nKeys);
-	if (sdlKeyState[sdlKey]) {
+void GUIInputWrapper::ConvertKeyEvent(bool down, int guilibKey, float elapsedS) {
+	if (down) {
 		if (m_KeyHoldDuration[guilibKey] < 0) {
 			m_KeyboardBuffer[guilibKey] = GUIInput::Pushed;
 			m_KeyHoldDuration[guilibKey] = 0;
@@ -68,10 +170,15 @@ void GUIInputWrapper::ConvertKeyEvent(SDL_Scancode sdlKey, int guilibKey, float 
 }
 
 void GUIInputWrapper::Update() {
+	int count = 0;
+	UpdateWithKeyboard(SDL_GetKeyboardState(&count));
+}
+
+void GUIInputWrapper::UpdateWithKeyboard(const bool* keys) {
 	float keyElapsedTime = static_cast<float>(m_KeyTimer->GetElapsedRealTimeS());
 	m_KeyTimer->Reset();
 
-	UpdateKeyboardInput(keyElapsedTime);
+	UpdateKeyboardInput(keyElapsedTime, keys);
 	UpdateMouseInput();
 
 	// If joysticks and keyboard can control the mouse cursor too.
@@ -97,7 +204,7 @@ void GUIInputWrapper::StopTextInput() {
 	}
 }
 
-void GUIInputWrapper::UpdateKeyboardInput(float keyElapsedTime) {
+void GUIInputWrapper::UpdateKeyboardInput(float keyElapsedTime, const bool* keys) {
 	// Clear the keyboard buffer, we need it to check for changes.
 	memset(m_KeyboardBuffer, 0, sizeof(uint8_t) * GUIInput::Constants::KEYBOARD_BUFFER_SIZE);
 	memset(m_ScanCodeState, 0, sizeof(uint8_t) * GUIInput::Constants::KEYBOARD_BUFFER_SIZE);
@@ -111,22 +218,22 @@ void GUIInputWrapper::UpdateKeyboardInput(float keyElapsedTime) {
 	}
 	m_HasTextInput = g_UInputMan.GetTextInput(m_TextInput);
 
-	ConvertKeyEvent(SDL_SCANCODE_SPACE, ' ', keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_BACKSPACE, GUIInput::Key_Backspace, keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_TAB, GUIInput::Key_Tab, keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_RETURN, GUIInput::Key_Enter, keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_KP_ENTER, GUIInput::Key_Enter, keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_ESCAPE, GUIInput::Key_Escape, keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_LEFT, GUIInput::Key_LeftArrow, keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_RIGHT, GUIInput::Key_RightArrow, keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_UP, GUIInput::Key_UpArrow, keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_DOWN, GUIInput::Key_DownArrow, keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_INSERT, GUIInput::Key_Insert, keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_DELETE, GUIInput::Key_Delete, keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_HOME, GUIInput::Key_Home, keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_END, GUIInput::Key_End, keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_PAGEUP, GUIInput::Key_PageUp, keyElapsedTime);
-	ConvertKeyEvent(SDL_SCANCODE_PAGEDOWN, GUIInput::Key_PageDown, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_SPACE], ' ', keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_BACKSPACE], GUIInput::Key_Backspace, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_TAB], GUIInput::Key_Tab, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_RETURN], GUIInput::Key_Enter, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_KP_ENTER], GUIInput::Key_Enter, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_ESCAPE], GUIInput::Key_Escape, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_LEFT], GUIInput::Key_LeftArrow, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_RIGHT], GUIInput::Key_RightArrow, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_UP], GUIInput::Key_UpArrow, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_DOWN], GUIInput::Key_DownArrow, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_INSERT], GUIInput::Key_Insert, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_DELETE], GUIInput::Key_Delete, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_HOME], GUIInput::Key_Home, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_END], GUIInput::Key_End, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_PAGEUP], GUIInput::Key_PageUp, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_PAGEDOWN], GUIInput::Key_PageDown, keyElapsedTime);
 
 	m_Modifier = GUIInput::ModNone;
 	SDL_Keymod keyShifts = SDL_GetModState();

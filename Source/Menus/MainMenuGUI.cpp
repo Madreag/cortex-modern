@@ -116,6 +116,8 @@ void MainMenuGUI::Clear() {
 }
 
 void MainMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
+	m_AutomationInput = guiInput->CreateAutomationInput();
+	if (m_AutomationInput) guiInput = m_AutomationInput.get();
 	m_MainMenuScreenGUIControlManager = std::make_unique<GUIControlManager>();
 	RTEAssert(m_MainMenuScreenGUIControlManager->Create(guiScreen, guiInput, "Base.rte/GUIs/Skins/Menus", "MainMenuScreenSkin.ini"), "Failed to create GUI Control Manager and load it from Base.rte/GUIs/Skins/Menus/MainMenuScreenSkin.ini");
 	m_MainMenuScreenGUIControlManager->Load("Base.rte/GUIs/MainMenuGUI.ini");
@@ -1411,17 +1413,13 @@ bool MainMenuGUI::AutomationModerate(const std::string& action, int stableSeat) 
 	return m_ModerationUx.Act(row, verb) == NetH4ModerationResult::Ok;
 }
 
-// True only if the control and every ancestor panel are enabled and visible, i.e. a human could actually click it.
+// Follow the panel hierarchy used by drawing and input.
 static bool IsControlClickable(GUIControl* control) {
-	for (GUIControl* node = control; node; node = node->GetParent()) {
-		if (!node->GetEnabled() || !node->GetVisible()) {
-			return false;
-		}
-	}
-	return true;
+	return MenuAutomation::Enabled(control);
 }
 
 bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
+	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return m_SettingsMenu->AutomationPostCommand(controlName);
 	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
 	if (!control) {
 		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
@@ -1441,6 +1439,7 @@ bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
 }
 
 bool MainMenuGUI::AutomationPostCommand(const std::string& controlName) {
+	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return m_SettingsMenu->AutomationPostCommand(controlName);
 	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
 	if (!control) {
 		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
@@ -1461,7 +1460,7 @@ void MainMenuGUI::PostPendingAutomationCommand() {
 		control = m_MainMenuScreenGUIControlManager->GetControl(m_PendingAutomationCommand);
 	}
 	m_PendingAutomationCommand.clear();
-	if (control) {
+	if (control && IsControlClickable(control)) {
 		control->AddEvent(GUIEvent::Command, 0, 0);
 	}
 }
@@ -1492,6 +1491,10 @@ bool MainMenuGUI::AutomationSetCheck(const std::string& controlName, bool checke
 }
 
 bool MainMenuGUI::AutomationLabelText(const std::string& controlName, std::string& text) const {
+	if (auto* manager = AutomationManager()) {
+		if (MenuAutomation::Text(manager->GetControl(controlName), text)) return true;
+		if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return false;
+	}
 	// The chat rows' count moves with the layout budget, so scripts address them by role, not
 	// index: LabelLobbyChatNewest is the last drawn row, LabelLobbyChatAny every drawn row's
 	// text joined - an assert_label substring hit proves the line reached a rendered row.
@@ -1576,17 +1579,24 @@ void MainMenuGUI::AutomationGoToMainScreen() {
 }
 
 bool MainMenuGUI::AutomationControlExists(const std::string& controlName) const {
+	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return m_SettingsMenu->AutomationManager()->GetControl(controlName) != nullptr;
 	return m_SubMenuScreenGUIControlManager->GetControl(controlName) != nullptr ||
 	       m_MainMenuScreenGUIControlManager->GetControl(controlName) != nullptr;
 }
 
 bool MainMenuGUI::AutomationControlEnabled(const std::string& controlName) const {
+	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return MenuAutomation::Enabled(m_SettingsMenu->AutomationManager()->GetControl(controlName));
 	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
 	if (!control) {
 		control = m_MainMenuScreenGUIControlManager->GetControl(controlName);
 	}
 	// "Enabled" for automation means interactable as a human would see it: enabled and visible up the chain.
 	return control && IsControlClickable(control);
+}
+
+GUIControlManager* MainMenuGUI::AutomationManager() const {
+	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return m_SettingsMenu->AutomationManager();
+	return m_ActiveMenuScreen == MenuScreen::SaveOrLoadGameScreen || m_ActiveMenuScreen == MenuScreen::ModManagerScreen ? nullptr : m_ActiveGUIControlManager;
 }
 
 void MainMenuGUI::HandleMetaGameNoticeScreenInputEvents(const GUIControl* guiEventControl) {

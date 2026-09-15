@@ -1,5 +1,6 @@
 #include "ControllerFrame.h"
 
+#include "ACraft.h"
 #include "Actor.h"
 #include "AHuman.h"
 #include "ConsoleMan.h"
@@ -209,6 +210,9 @@ namespace RTE {
 			frame.aimAngle = aimIntent ? actor->GetOffWireAim() : actor->GetAimAngle(false);
 			frame.SetAimIntent(aimIntent);
 			frame.SetFlipIntent(flipIntent);
+			if (const ACraft* craft = dynamic_cast<const ACraft*>(actor); craft && craft->GetOffWireHatchTick() == simTick) {
+				frame.hatchCommand = static_cast<uint8_t>(craft->GetOffWireHatchOpen() ? ControllerFrame::HatchCommand::Open : ControllerFrame::HatchCommand::Close);
+			}
 			const Vector viewPoint = actor->GetViewPoint();
 			frame.viewPointX = viewPoint.m_X;
 			frame.viewPointY = viewPoint.m_Y;
@@ -306,6 +310,18 @@ namespace RTE {
 		if (frame.HasFlipIntent()) {
 			actor.SetHFlipped(frame.IsActorHFlipped());
 		}
+		if (frame.HasHatchIntent()) {
+			ACraft* craft = dynamic_cast<ACraft*>(&actor);
+			if (!craft) {
+				SetError(error, "ControllerFrame hatch intent targets a non-ACraft actor.");
+				return false;
+			}
+			if (frame.hatchCommand == static_cast<uint8_t>(ControllerFrame::HatchCommand::Open)) {
+				craft->OpenHatch();
+			} else {
+				craft->CloseHatch();
+			}
+		}
 		return true;
 	}
 
@@ -336,6 +352,7 @@ namespace RTE {
 		AppendF32LE(out, frame.bgHandPosX);
 		AppendF32LE(out, frame.bgHandPosY);
 		AppendF32LE(out, frame.digitalAimSpeed);
+		AppendU8(out, frame.hatchCommand);
 		return out;
 	}
 
@@ -389,6 +406,13 @@ namespace RTE {
 			if (!std::isfinite(frame.digitalAimSpeed) || frame.digitalAimSpeed < 0.0F) {
 				SetError(error, "ControllerFrame digital aim speed must be finite and non-negative.");
 				return false;
+			}
+			if (frame.HasHatchChannel()) {
+				frame.hatchCommand = ReadU8(p);
+				if (frame.hatchCommand >= static_cast<uint8_t>(ControllerFrame::HatchCommand::Count)) {
+					SetError(error, "ControllerFrame hatch command is out of range.");
+					return false;
+				}
 			}
 		}
 		if (frame.inputMode >= static_cast<uint8_t>(Controller::CIM_INPUTMODECOUNT)) {
@@ -467,6 +491,7 @@ namespace RTE {
 		frame.mouseDeltaY = 9;
 		frame.SetQuickDisabled(true);
 		frame.SetActorHFlipped(true);
+		frame.SetAimIntent(true);
 		frame.aimAngle = 0.125F;
 		frame.viewPointX = 123.5F;
 		frame.viewPointY = -456.25F;
@@ -478,6 +503,7 @@ namespace RTE {
 		frame.bgHandPosY = -40.5F;
 		frame.deviceClass = static_cast<uint8_t>(Controller::WireDeviceClass::Gamepad);
 		frame.digitalAimSpeed = 1.75F;
+		frame.hatchCommand = static_cast<uint8_t>(ControllerFrame::HatchCommand::Open);
 
 		const std::vector<uint8_t> encoded = ControllerFrameCodec::Encode(frame);
 		if (encoded.size() != ControllerFrame::c_EncodedSize) {
@@ -504,8 +530,33 @@ namespace RTE {
 		    decoded.bgHandPosY != frame.bgHandPosY ||
 		    decoded.deviceClass != frame.deviceClass ||
 		    decoded.digitalAimSpeed != frame.digitalAimSpeed ||
+		    decoded.hatchCommand != frame.hatchCommand ||
 		    decoded.version != ControllerFrame::c_Version) {
 			return fail("decoded scalar fields differ");
+		}
+		if (!decoded.HasHatchIntent() || !decoded.HasHatchChannel() || decoded.IsLegacy()) {
+			return fail("the current version did not carry a hatch intent");
+		}
+
+		// A version 6 frame is the first 84 bytes: it keeps the intent semantics and simply has no hatch channel.
+		std::vector<uint8_t> preHatchBytes(encoded.begin(), encoded.begin() + static_cast<std::ptrdiff_t>(ControllerFrame::c_PreHatchEncodedSize));
+		ControllerFrame preHatch;
+		if (ControllerFrameCodec::Decode(preHatchBytes.data(), preHatchBytes.size(), preHatch, nullptr)) {
+			return fail("a version 6 sized frame decoded as the current version");
+		}
+		if (!ControllerFrameCodec::Decode(preHatchBytes.data(), preHatchBytes.size(), preHatch, &error, ControllerFrame::c_PreHatchVersion)) {
+			return fail("version 6 frame decode failed: " + error);
+		}
+		if (preHatch.IsLegacy() || preHatch.HasHatchChannel() || preHatch.HasHatchIntent() ||
+		    preHatch.digitalAimSpeed != frame.digitalAimSpeed || preHatch.deviceClass != frame.deviceClass ||
+		    !preHatch.HasAimIntent()) {
+			return fail("version 6 frame fields differ");
+		}
+		ControllerFrame badHatch = frame;
+		badHatch.hatchCommand = static_cast<uint8_t>(ControllerFrame::HatchCommand::Count);
+		const std::vector<uint8_t> badHatchBytes = ControllerFrameCodec::Encode(badHatch);
+		if (ControllerFrameCodec::Decode(badHatchBytes.data(), badHatchBytes.size(), decoded, nullptr)) {
+			return fail("an out-of-range hatch command was accepted");
 		}
 
 		Controller applied(Controller::CIM_DISABLED, Players::NoPlayer);

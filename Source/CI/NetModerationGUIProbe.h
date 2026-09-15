@@ -7,6 +7,9 @@ namespace RTE::NetModerationGUIProbe {
 	void BeforePoll();
 	/// Checks the frame after the network panel has been drawn.
 	void AfterDraw();
+	/// Checks the frame after the menus have been drawn. The menu loop draws no network UI, so only the
+	/// active menu's own steps are judged here.
+	void AfterMenuDraw();
 	/// Applies the script's sim-rate keys on the tick they name, before that tick reads them.
 	void OnSimTick(uint64_t simUpdateCount);
 }

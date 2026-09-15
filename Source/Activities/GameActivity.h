@@ -559,6 +559,12 @@ namespace RTE {
 
 		/// Protected member variable and method declarations
 	protected:
+		/// Runs a brainless human's spectator view: actor cycling, following and the followed-unit line.
+		/// Presentation only - it writes this peer's view, never simulation state.
+		/// @param player Which player's screen to update.
+		/// @param lookedAround Whether the player moved the observation cursor this frame.
+		void UpdateSpectatorView(int player, bool lookedAround);
+
 		/// Takes the current order out of a player's buy GUI, creates a Delivery
 		/// based off it, and stuffs it into that player's delivery queue.
 		/// @param player Which player to create the delivery for. Cargo AI mode waypoint or TargetMO.
@@ -652,6 +658,8 @@ namespace RTE {
 		Vector m_ObservationTarget[Players::MaxPlayerCount];
 		// The player death sceneman scroll targets, for when a player-controlled actor dies and the view should go to his last position
 		Vector m_DeathViewTarget[Players::MaxPlayerCount];
+		// The actor a spectating player's view follows; local presentation, so it stays out of checkpoints
+		Actor* m_SpectatorTarget[Players::MaxPlayerCount];
 		// Times the delay between regular actor swtich, and going into manual siwtch mode
 		Timer m_ActorSelectTimer[Players::MaxPlayerCount];
 		// The cursor for selecting new Actors

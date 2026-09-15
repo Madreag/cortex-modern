@@ -21,17 +21,20 @@
 #include "LoadingScreen.h"
 #include "System.h"
 #include "NetMatchService.h"
+#include "ScenarioRunner.h"
 
 using namespace RTE;
 
 void MenuMan::Initialize(bool firstTimeInit) {
 	m_ActiveMenu = ActiveMenu::MenusDisabled;
+	m_LocalPauseMenuOpening = false;
 
 	m_GUIScreen = std::make_unique<AllegroScreen>(g_FrameMan.GetBackBuffer32());
 	m_GUIInput = std::make_unique<GUIInputWrapper>(-1, g_UInputMan.GetJoystickCount() > 0);
 
 	if (firstTimeInit) {
 		m_IsInMenuScreen = false;
+		m_LocalPauseMenuOpen = false;
 		g_LoadingScreen.Create(m_GUIScreen.get(), m_GUIInput.get(), g_SettingsMan.GetLoadingScreenProgressReportDisabled());
 	}
 
@@ -125,7 +128,81 @@ void MenuMan::DrawNetworkUI() const { if (m_NetworkPanel) m_NetworkPanel->Draw()
 bool MenuMan::IsNetworkPanelOpen() const { return m_NetworkPanel && m_NetworkPanel->IsOpen(); }
 bool MenuMan::ToggleNetworkPanel() { return m_NetworkPanel && m_NetworkPanel->SetOpen(!m_NetworkPanel->IsOpen()); }
 
+bool MenuMan::ToggleLocalPauseMenu() {
+	if (m_LocalPauseMenuOpen) {
+		CloseLocalPauseMenu();
+		return true;
+	}
+	// Only a running lockstep match has a session to keep running; everything else pauses as it always has.
+	if (!m_PauseMenu || !ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return false;
+	}
+	m_LocalPauseMenuOpen = true;
+	m_LocalPauseMenuOpening = true;
+	m_PauseMenu->SetNetworkMatchMode(true);
+	m_GUIInput->SetKeyJoyMouseCursor(true);
+	g_UInputMan.TrapMousePos(false);
+	return true;
+}
+
+void MenuMan::CloseLocalPauseMenu() {
+	if (!m_LocalPauseMenuOpen) {
+		return;
+	}
+	m_LocalPauseMenuOpen = false;
+	m_LocalPauseMenuOpening = false;
+	m_PauseMenu->SetNetworkMatchMode(false);
+	// The edges the menu consumed are not the seat's to sample on the tick it closes.
+	g_UInputMan.EndSimUpdate();
+}
+
+void MenuMan::RequestLocalPauseMenuBack() {
+	if (m_LocalPauseMenuOpen) {
+		m_PauseMenu->RequestBack();
+	}
+}
+
+void MenuMan::UpdateLocalPauseMenu() {
+	if (!m_LocalPauseMenuOpen) {
+		return;
+	}
+	// The session keeps the menu, not the round: a resync stops the round for a moment with the match alive.
+	const NetMatchServiceState serviceState = g_NetMatchService.GetState();
+	const bool sessionLive = serviceState == NetMatchServiceState::Running || serviceState == NetMatchServiceState::Starting || serviceState == NetMatchServiceState::ReadyToLaunch;
+	if (!sessionLive || !g_ActivityMan.IsInActivity()) {
+		CloseLocalPauseMenu();
+		return;
+	}
+	// A resolution change rebuilds the menu, and the mouse trap is reapplied every frame by the Activity.
+	m_PauseMenu->SetNetworkMatchMode(true);
+	g_UInputMan.TrapMousePos(false);
+	if (m_LocalPauseMenuOpening) {
+		m_LocalPauseMenuOpening = false;
+		return;
+	}
+	switch (m_PauseMenu->Update()) {
+		case PauseMenuGUI::PauseMenuUpdateResult::ActivityResumed:
+			CloseLocalPauseMenu();
+			break;
+		case PauseMenuGUI::PauseMenuUpdateResult::MatchLeft:
+			CloseLocalPauseMenu();
+			// The leave itself is the running-service path the game loop takes when the activity is no longer in play.
+			g_ActivityMan.PauseActivity(true, true);
+			break;
+		default:
+			break;
+	}
+}
+
+void MenuMan::DrawLocalPauseMenu() const {
+	if (m_LocalPauseMenuOpen) {
+		m_PauseMenu->Draw(false);
+	}
+}
+
 void MenuMan::HandleTransitionIntoMenuLoop() {
+	// Whatever sends us to the menus ends the match this menu was local to.
+	CloseLocalPauseMenu();
 	// §11: a match this peer was dropped from sends the player to the main menu, where the rejoin
 	// offer and the retry status are, rather than to the planet screen the preset would pick.
 	if (g_NetMatchService.NeedsRecoveryPump()) {

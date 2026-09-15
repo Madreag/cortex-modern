@@ -19,6 +19,7 @@
 #include <vector>
 
 namespace RTE {
+	class Actor;
 	struct NetResyncPendingCommand;
 
 	/// The live match's lockstep clock: monotonic milliseconds every caller that drives a coordinator
@@ -333,6 +334,7 @@ namespace RTE {
 
 	struct NetLockstepReadyFrame {
 		uint64_t frame = 0;
+		std::vector<uint8_t> departedPeerIds;
 		bool hasLocalInput = false;
 		std::map<uint8_t, size_t> remoteFrameCounts;
 		std::vector<ControllerFrame> localFrames;
@@ -344,6 +346,13 @@ namespace RTE {
 		std::vector<NetValueObservation> localValueObservations;
 		std::vector<NetValueObservation> remoteValueObservations;
 	};
+
+	/// Applies the committed frame's departures before its game commands.
+	void ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors, bool paused);
+
+	/// The applied frame with the frames a synced pause committed discounted: a pause commits frames the
+	/// sim never advances on, and those must not spend a capped match's tick budget.
+	uint64_t LockstepPlayedFrame();
 
 	/// One remote's share of the round, enough to tell a peer that stopped SENDING from one the host
 	/// stopped RELAYING to, and from one whose frames arrived and were refused.
@@ -389,6 +398,10 @@ namespace RTE {
 		uint32_t startAnswersSuppressed = 0; //!< Repeated starts left unanswered: their sender had already played this round.
 		uint32_t startsRelayedOnRepeat = 0; //!< Host: other remotes' starts re-sent to a peer that repeated its own.
 		uint32_t preStartFramesBuffered = 0; //!< Frames/checksums held until their sender's start arrived.
+		uint64_t checksumSubmissions = 0; //!< Local desync-check hashes the round took; a zero means the check never ran.
+		uint64_t checksumSends = 0; //!< Those the transport carried to the peers.
+		uint64_t checksumCompares = 0; //!< Local/remote hash pairs actually compared, per remote.
+		uint64_t checksumMismatches = 0; //!< Compares that named a desync.
 		uint64_t localControllerFramesSent = 0;
 		uint64_t remoteControllerFramesReceived = 0;
 		uint64_t remoteControllerFramesAccepted = 0;
