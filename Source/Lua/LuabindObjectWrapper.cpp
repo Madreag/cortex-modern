@@ -54,10 +54,11 @@ namespace {
 			} else {
 				auto* queue = static_cast<SimThreadDeletionQueue*>(lua_touserdata(luaState, lua_upvalueindex(1)));
 				void (*destructor)(void*) = OwnedObjectDestructor(object->crep());
-				// An object built inside the userdata dies with it, so it cannot outlive this finalizer.
+				// A Lua-side class whose __init never built its base still carries class_rep::allocate's sentinel,
+				// one past the userdata. luabind deletes nothing for it, and neither may we.
 				const char* storage = static_cast<const char*>(lua_touserdata(luaState, -1));
 				const char* held = static_cast<const char*>(object->ptr());
-				const bool separate = held < storage || held >= storage + lua_objlen(luaState, -1);
+				const bool separate = held < storage || held > storage + lua_objlen(luaState, -1);
 				if (queue && destructor && separate) {
 					std::lock_guard<std::mutex> lock(queue->mutex);
 					queue->pending.emplace_back(object->ptr(), destructor);
