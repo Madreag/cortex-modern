@@ -38,7 +38,7 @@ function VesselBannerFacts:UpdateActivity()
         if not local_seat then
             -- The mod drives the absent seat's UI exactly as it drives its own; every call must be a no-op.
             banner:ShowText("VESSEL", GUIBanner.FLYBYLEFTWARD, 1000, Vector(640, 480), 0.5, 1500, 500);
-            banner:HideText();
+            banner:HideText(1500, 100);
             banner.Kerning = 7;
             banner:ClearText();
             menu.ShowOnlyOwnedItems = true;
@@ -60,7 +60,7 @@ function VesselBannerFacts:UpdateActivity()
             editor:SetModuleSpace(0);
             editor:SetNativeTechModule(0);
             editor:SetForeignCostMultiplier(2.0);
-            editor:TestBrainResidence();
+            editor:TestBrainResidence(false);
             editor:Update();
             assert(bannerFacts(banner) == "text= anim=0 kerning=0 visible=0", "absent seat banner kept state: " .. bannerFacts(banner));
             assert(not menu.ShowOnlyOwnedItems and not menu.EnforceMaxMassConstraint, "absent seat menu kept a flag");

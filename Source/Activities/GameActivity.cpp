@@ -3771,7 +3771,7 @@ assert(_ScriptGraphNativeAddress(editor) == _ScriptGraphNativeAddress(activity:G
 assert(_ScriptGraphNativeAddress(banner) == _ScriptGraphNativeAddress(activity:GetBanner(GUIBanner.YELLOW, 0)), "the inert banner changed identity")
 assert(_ScriptGraphNativeAddress(banner) ~= _ScriptGraphNativeAddress(activity:GetBanner(GUIBanner.RED, 0)), "both banner colors share one object")
 banner:ShowText("STUB", GUIBanner.FLYBYLEFTWARD, 1000, Vector(640, 480), 0.5, 1500, 500)
-banner:HideText()
+banner:HideText(1500, 100)
 banner.Kerning = 5
 banner:ClearText()
 assert(banner.BannerText == "" and banner.AnimState == GUIBanner.NOTSTARTED, "the inert banner kept text")
