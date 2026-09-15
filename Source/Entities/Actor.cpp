@@ -1319,7 +1319,9 @@ std::vector<Actor::DeferredWaypoint> Actor::TakePendingDeferredWaypoints() {
 }
 
 void Actor::SetMOMoveTarget(const MovableObject* object) {
-	const int64_t identity = (object && g_MovableMan.ValidMO(object)) ? static_cast<int64_t>(object->GetUniqueID()) : 0;
+	// The order names the target by its identity, whatever list holds it, and every peer resolves that
+	// identity the same way; the single-player write keeps the pointer it was handed.
+	const int64_t identity = object ? static_cast<int64_t>(object->GetUniqueID()) : 0;
 	// Every peer's Update reads the move target, the checkpoint carries its identity and a synced squad
 	// disband picks its members by it, so an AI pass write rides the same order its waypoints do.
 	if (DeferAIPassMutation(this)) {
