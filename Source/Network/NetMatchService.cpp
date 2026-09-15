@@ -2536,9 +2536,10 @@ static std::string ResyncSaveName() {
 		NetMatchRunnerConfig runnerConfig;
 		runnerConfig.host = request.host;
 		runnerConfig.joinAddress = request.host ? "" : request.address;
-		runnerConfig.sessionConfig = BuildSessionConfig(manifest, request);
 		std::string error;
-		bool started = BuildMatchConfig(request, runnerConfig.sessionConfig.sessionId, runnerConfig.matchConfig, &error);
+		// The roster is built first: the session it is hosted on takes its seats from it.
+		bool started = BuildMatchConfig(request, c_UiSessionId, runnerConfig.matchConfig, &error);
+		runnerConfig.sessionConfig = BuildSessionConfig(manifest, request, runnerConfig.matchConfig);
 		runnerConfig.autoInputDelay = request.autoInputDelay;
 		runnerConfig.useLobbyProtocol = true;
 		// Wait patiently for the other player to connect (host listening / client retrying), not the 15s default.
@@ -2894,14 +2895,15 @@ static std::string ResyncSaveName() {
 		return Start(request, error);
 	}
 
-	NetSessionConfig NetMatchService::BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request) const {
+	NetSessionConfig NetMatchService::BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig) const {
 		NetSessionConfig config;
 		config.localIdentity = manifest;
 		config.displayName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
 		config.port = request.port;
 		config.sessionId = c_UiSessionId;
 		config.localNonce = request.host ? c_HostNonce : MakeClientNonce();
-		config.maxPeers = static_cast<uint8_t>(std::max(1, static_cast<int>(request.peerCount) - 1));
+		// Seats come from the adopted roster, never from the request: a round the host plays alone offers none.
+		config.maxPeers = static_cast<uint8_t>(std::max(0, static_cast<int>(matchConfig.peerCount) - 1));
 		config.heartbeatIntervalMs = 50;
 		config.timeoutMs = 5000;
 		config.rejectUserdataModules = false;

@@ -4285,6 +4285,97 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestAiOnlyHostSeatsNoJoiner(std::string* error) {
+		// The seats a host offers come from the roster it adopted, so an AI-only round offers none.
+		NetMatchServiceRequest aiOnly;
+		aiOnly.host = true;
+		aiOnly.dedicated = true;
+		aiOnly.port = 43215;
+		aiOnly.peerCount = 2;
+		aiOnly.humans = 0;
+		aiOnly.cpuSlots = 2;
+		aiOnly.mode = NetMatchMode::CoopPvE;
+		aiOnly.playerName = "Host";
+		NetMatchConfig aiOnlyRoster;
+		if (!NetMatchService::BuildMatchConfig(aiOnly, 0x4149304E53454154ULL, aiOnlyRoster, error)) return false;
+
+		NetIdentityManifest manifest;
+		manifest.gameVersion = "7.0.0-test";
+		manifest.networkProtocolVersion = NetProtocol::c_Version;
+		manifest.controllerFrameVersion = ControllerFrame::c_Version;
+		manifest.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		manifest.buildId = "ai-only-seat-selftest";
+		manifest.platform = "test";
+
+		NetMatchService service;
+		NetSessionConfig hostConfig = service.BuildSessionConfig(manifest, aiOnly, aiOnlyRoster);
+		hostConfig.heartbeatIntervalMs = 25;
+		// NetMatchRunner::Start resolves this from the same adopted roster.
+		hostConfig.readyWithoutPeers = aiOnlyRoster.peerCount == 1;
+		NetSessionConfig joinerConfig = hostConfig;
+		joinerConfig.displayName = "Joiner";
+		joinerConfig.readyWithoutPeers = false;
+		++joinerConfig.localNonce;
+
+		LoopbackTransport hostTransport, joinerTransport;
+		NetSession host, joiner;
+		if (!host.StartHost(hostTransport, hostConfig, error) ||
+		    !joiner.StartClient(joinerTransport, "loopback", joinerConfig, error)) {
+			return false;
+		}
+		for (uint64_t now = 0; now <= 2000 && !joiner.IsRejected() && host.GetReadyPeerCount() == 0; now += 10) {
+			host.Tick(now);
+			joiner.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			joinerTransport.AdvanceTimeMs(10);
+		}
+		if (!joiner.IsRejected() || joiner.GetRejectReason() != NetRejectReason::SessionFull ||
+		    joiner.GetRejectSummary() != "session seats no remote player" || host.GetReadyPeerCount() != 0) {
+			*error = "an AI-only host answered a join with maxPeers=" + std::to_string(hostConfig.maxPeers) +
+			         " seated=" + std::to_string(host.GetReadyPeerCount()) + " joiner=" +
+			         NetSession::StateName(joiner.GetState()) + " \"" + joiner.GetRejectSummary() + "\"";
+			return false;
+		}
+		if (!host.IsReady()) {
+			*error = "the refusal left the AI-only round at " + std::string(NetSession::StateName(host.GetState()));
+			return false;
+		}
+
+		// A roster that does seat a second peer still takes its joiner.
+		NetMatchServiceRequest duel = aiOnly;
+		duel.dedicated = false;
+		duel.port = 43216;
+		duel.humans = 2;
+		duel.cpuSlots = 0;
+		duel.mode = NetMatchMode::PvPSkirmish;
+		NetMatchConfig duelRoster;
+		if (!NetMatchService::BuildMatchConfig(duel, 0x4449454C53454154ULL, duelRoster, error)) return false;
+		NetSessionConfig duelHostConfig = service.BuildSessionConfig(manifest, duel, duelRoster);
+		duelHostConfig.heartbeatIntervalMs = 25;
+		NetSessionConfig duelJoinerConfig = duelHostConfig;
+		duelJoinerConfig.displayName = "Joiner";
+		++duelJoinerConfig.localNonce;
+		LoopbackTransport duelHostTransport, duelJoinerTransport;
+		NetSession duelHost, duelJoiner;
+		if (!duelHost.StartHost(duelHostTransport, duelHostConfig, error) ||
+		    !duelJoiner.StartClient(duelJoinerTransport, "loopback", duelJoinerConfig, error)) {
+			return false;
+		}
+		for (uint64_t now = 0; now <= 2000 && duelHost.GetReadyPeerCount() == 0 && !duelJoiner.IsRejected(); now += 10) {
+			duelHost.Tick(now);
+			duelJoiner.Tick(now);
+			duelHostTransport.AdvanceTimeMs(10);
+			duelJoinerTransport.AdvanceTimeMs(10);
+		}
+		if (duelHost.GetReadyPeerCount() != 1 || duelJoiner.IsRejected()) {
+			*error = "a two-human host offered maxPeers=" + std::to_string(duelHostConfig.maxPeers) + " and seated " +
+			         std::to_string(duelHost.GetReadyPeerCount()) + "; joiner=" + NetSession::StateName(duelJoiner.GetState());
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS ai_only_host_seats_no_joiner" << std::endl;
+		return true;
+	}
+
 	bool TestPendingSessionEventSurvivesTeardown(std::string* error) {
 		const uint16_t port = 43219;
 		LoopbackTransport hostTransport, clientTransport;
@@ -6973,6 +7064,7 @@ namespace RTE {
 		if (!TestLobbyManualReadyCanWait(&error)) return fail(error);
 		if (!TestLobbyReadyDoesNotStartBeforeConfigAck(&error)) return fail(error);
 		if (!TestLobbyStartsWithoutRemoteHumanSeats(&error)) return fail(error);
+		if (!TestAiOnlyHostSeatsNoJoiner(&error)) return fail(error);
 		if (!TestLobbyStateTransfer(&error)) return fail(error);
 		if (!TestLobbyStateChunkBounds(&error)) return fail(error);
 		if (!TestLobbyStateChunkConsistency(&error)) return fail(error);

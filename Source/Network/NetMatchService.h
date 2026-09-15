@@ -340,7 +340,8 @@ namespace RTE {
 		/// Refuses a resync with no live match or a lost session; a lost session fails the service. Caller holds the lock.
 		bool CanResyncLocked(std::string* error);
 		bool PrepareReceivedResync(const std::vector<uint8_t>& bytes, const NetLockstepCoordinator& coordinator, std::string& pendingLoad, NetResyncState& state, std::string* error, size_t* archiveBytes = nullptr);
-		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request) const;
+		/// The session the round is hosted on; the adopted match config carries the seats it offers.
+		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig) const;
 		void SetState(NetMatchServiceState state, std::string status, std::string error = "");
 		/// Match end or the host leaving takes the directory row down now rather than at Destroy.
 		/// Game-thread only, like the client it drives.
@@ -375,6 +376,7 @@ namespace RTE {
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
 		friend bool TestRosterTransitionsRecordHoldThenPresent(std::string* error);
 		friend bool TestRosterBannerNamesThePlayerOnce(std::string* error);
+		friend bool TestAiOnlyHostSeatsNoJoiner(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
