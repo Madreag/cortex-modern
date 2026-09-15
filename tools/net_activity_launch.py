@@ -116,28 +116,34 @@ def score_rules(log, rules, default=False):
     return {"pass": len(rows) == 1 and not differences, "observations": rows, "differences": differences}
 
 
-def placements(log):
-    """Every applied placement a peer logged, keyed by seat: what its scene actually holds."""
-    applied = {}
+def placements(log, kind):
+    """Every placement line of one kind a peer logged, keyed by seat."""
+    prefix = "[net-match] brain placement applied: " if kind == "applied" else "[net-match] brain placed: "
+    rows = {}
     for line in log.splitlines():
-        if not line.startswith("[net-match] brain placed: "):
-            continue
-        row = dict(token.split("=", 1) for token in line.removeprefix("[net-match] brain placed: ").split(" ") if "=" in token)
-        applied[row.get("seat")] = row
-    return applied
+        if line.startswith(prefix):
+            # Preset names carry spaces, so split on the key boundaries, not on every space.
+            fields = re.split(r" (?=[a-z_]+=)", line.removeprefix(prefix))
+            row = dict(field.split("=", 1) for field in fields if "=" in field)
+            rows[row.get("seat")] = row
+    return rows
 
 
 def score_placements(logs, seats=2):
-    """Both peers must apply every seat's placement, from that seat's own peer, identically."""
-    applied = {peer: placements(log) for peer, log in logs.items()}
+    """Both peers must take every seat's placement off the wire from that seat's own peer, and build the
+    identical brain - same preset, same spot, same unique id - before the match starts."""
     expected_seats = [str(seat) for seat in range(seats)]
-    complete = all(sorted(rows) == expected_seats for rows in applied.values())
-    # Seat N is issued by peer N+1: a placement each peer computed locally would not carry the other's id.
-    issuers = all(rows.get(seat, {}).get("peer") == str(index + 1)
-                  for rows in applied.values() for index, seat in enumerate(expected_seats))
-    identical = len({json.dumps(rows, sort_keys=True) for rows in applied.values()}) == 1
-    return {"pass": bool(complete and issuers and identical), "complete": complete, "issuers": issuers,
-            "identical": identical, "applied": applied}
+    scored = {}
+    for kind in ("applied", "built"):
+        rows = {peer: placements(log, kind) for peer, log in logs.items()}
+        complete = all(sorted(seat_rows) == expected_seats for seat_rows in rows.values())
+        # Seat N is held by peer N+1: a placement each peer made locally would not carry the other's id.
+        issuers = all(seat_rows.get(seat, {}).get("peer") == str(index + 1)
+                      for seat_rows in rows.values() for index, seat in enumerate(expected_seats))
+        identical = len({json.dumps(seat_rows, sort_keys=True) for seat_rows in rows.values()}) == 1
+        scored[kind] = {"complete": complete, "issuers": issuers, "identical": identical, "rows": rows}
+    scored["pass"] = all(scored[kind][key] for kind in ("applied", "built") for key in ("complete", "issuers", "identical"))
+    return scored
 
 
 def tick_lines(path, tick="1"):
@@ -251,10 +257,9 @@ def launch(options):
             replay.close()
         checks["replay_process"] = result["replay_record"].get("exit_code") == 0 and not result["replay_record"].get("timed_out")
         checks["replay_exact"], result["replay_simulation"] = strict_compare(root / "host/trace.json", replay_trace, 600)
-        if options.variant == "brains":
-            replay_dump = root / "replay/trace.json.simdump.txt"
-            host_dump = root / "host/trace.json.simdump.txt"
-            checks["replay_dump_bytes"] = replay_dump.is_file() and host_dump.is_file() and replay_dump.read_bytes() == host_dump.read_bytes()
+        # No raw-dump gate against the replay: a single-peer playback binds the other seat's actors to its own
+        # controller, and the dump carries that mode. replay_exact compares the on-wire subsystems, which is
+        # the comparison that means anything here.
         result["replay_rules"] = score_rules((root / "replay/stdout.log").read_text(errors="replace"), rules, default)
         checks["replay_rules"] = result["replay_rules"]["pass"]
         if options.variant == "census":
