@@ -392,6 +392,10 @@ namespace RTE {
 			s_Args.scriptGraphSelfTest = true;
 			return 1;
 		}
+		if (a == "-render-window-scripts-selftest") {
+			s_Args.renderWindowScriptsSelfTest = true;
+			return 1;
+		}
 		if (a == "-net-match-e2e-rematch") {
 			// Arm the return-to-lobby rematch ride-through. Boolean flag.
 			s_Args.selftestRematch = true;
