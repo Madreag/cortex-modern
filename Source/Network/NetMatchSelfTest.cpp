@@ -1771,7 +1771,7 @@ namespace RTE {
 						lockstepConfig.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(lockstepConfig.matchConfig, 2);
 						lockstepConfig.startFrame = clientLobby.GetStartFrame();
 						lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(lockstepConfig.matchConfig.ownershipPolicy);
-						lockstepConfig.scenario = config.scenario;
+						lockstepConfig.scenario = lockstepConfig.matchConfig.activityPreset;
 						coordinatorActive = clientCoordinator.Start(clientTransport, lockstepConfig, &peerError);
 					}
 					if (coordinatorActive) clientCoordinator.Tick(NetLockstepNowMs());
@@ -1990,7 +1990,7 @@ namespace RTE {
 					lockstepConfig.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(lockstepConfig.matchConfig, client.peerId);
 					lockstepConfig.startFrame = client.lobby.GetStartFrame();
 					lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(lockstepConfig.matchConfig.ownershipPolicy);
-					lockstepConfig.scenario = config.scenario;
+					lockstepConfig.scenario = lockstepConfig.matchConfig.activityPreset;
 					lockstepConfig.timeoutMs = 30000;
 					client.coordinatorActive = client.coordinator.Start(client.transport, lockstepConfig, &peerError);
 				}
