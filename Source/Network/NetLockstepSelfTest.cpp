@@ -11945,6 +11945,93 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		// Once the queue drains, the ordered waypoint answers on every peer; an MO order keeps tracking
+		// its live target, which is what single player reads off its own move path.
+		bool TestLastWaypointAnswersUnderLockstep(std::string* error) {
+			EnsureSwitchTestManagers();
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433584102ULL);
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 43026, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 43026, 0, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "team-owner";
+			clientConfig.ownershipPolicy = "team-owner";
+			if (!StartCoordinatorPair(43026, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			// AddActor registers nothing without an activity, and an MO waypoint needs a target in the world.
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamOne, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* follower = new Actor();
+			Actor* target = MakeSwitchTestActor(Activity::TeamOne);
+			if (!target || follower->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			follower->SetTeam(0);
+			follower->SetPos(Vector(1.0F, 2.0F));
+			target->SetPos(Vector(30.0F, 40.0F));
+			AddSwitchTestActor(target);
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+			if (!g_MovableMan.ValidMO(target)) {
+				return finish("the selftest MO waypoint target is not in the world");
+			}
+
+			follower->AddAISceneWaypoint(Vector(10.0F, 20.0F));
+			follower->PopFrontWaypoint(Vector(10.0F, 20.0F));
+			if (follower->GetWaypointsSize() != 0) {
+				return finish("the scene waypoint did not leave the queue");
+			}
+			if (follower->GetLastAIWaypoint() != Vector(10.0F, 20.0F)) {
+				return finish("a drained scene order did not answer its ordered point");
+			}
+
+			follower->AddAIMOWaypoint(target);
+			follower->PopFrontWaypoint(Vector(30.0F, 40.0F));
+			if (follower->GetWaypointsSize() != 0) {
+				return finish("the MO waypoint did not leave the queue");
+			}
+			target->SetPos(Vector(50.0F, 60.0F));
+			if (follower->GetLastAIWaypoint() != Vector(50.0F, 60.0F)) {
+				return finish("a drained MO order did not answer where its target is now");
+			}
+
+			if (g_MovableMan.RemoveActor(target) != target) {
+				return finish("the selftest target did not leave the world");
+			}
+			if (follower->GetLastAIWaypoint() != Vector(30.0F, 40.0F)) {
+				return finish("a gone MO order did not fall back to the point it was ordered to");
+			}
+
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (follower->GetLastAIWaypoint() != follower->GetPos()) {
+				return finish("single player stopped answering from its own move path");
+			}
+			std::cout << "[net-lockstep-selftest] PASS last waypoint answers: scene=ordered mo=live gone=ordered" << std::endl;
+			return finish(nullptr);
+		}
+
 		// A seeded owner whose actor left the world before a resync must not travel in the world structure:
 		// the load resolves every owner entry to a live actor and would reject the whole checkpoint otherwise.
 		bool TestOwnerMapSurvivesActorDeath(std::string* error) {
@@ -13192,6 +13279,7 @@ namespace RTE {
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
 		    !TestAIWaypointReadThroughSamePass(&error) ||
+		    !TestLastWaypointAnswersUnderLockstep(&error) ||
 		    !TestAIWaypointCrossActorWrites(&error) ||
 		    !TestAICraftHatchCrossesTheWire(&error) ||
 		    !TestAIDropAllInventoryIsReported(&error) ||
