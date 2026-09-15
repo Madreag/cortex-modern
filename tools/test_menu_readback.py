@@ -109,13 +109,15 @@ def scripts(case, port, root):
         text += f"wait_file {root / 'done.json'} 90\nexit\n"
         steps = [{"op": "wait", "screen": "Pause" if case == "live" else "MultiplayerScreen"}]
         if case == "live":
-            steps += [{"op": "assert", "equals": {"service": "Running", "paused": True}, "sim_at_least": 100},
+            # A START press opens the match's pause menu without pausing the shared sim (L03): the menu is a local
+            # surface, the synchronized pause is its own row. Both peers keep running while it is open.
+            steps += [{"op": "assert", "equals": {"service": "Running", "paused": False}, "sim_at_least": 100},
                       menu_step("assert_visible ButtonSettings 1"), menu_step("dump_host_options"),
                       menu_step("activate ButtonSettings"), {"op": "wait", "screen": "PauseSettings"},
                       menu_step("assert_visible CollectionBoxGameplaySettings 1"), menu_step("dump_player_options"),
                       menu_step("post_command ButtonBackToMainMenu"), {"op": "wait", "screen": "Pause"},
                       menu_step("assert_visible ButtonSettings 1"), menu_step("dump_host_options"),
-                      {"op": "assert", "equals": {"service": "Running", "paused": True}, "sim_at_least": 100}]
+                      {"op": "assert", "equals": {"service": "Running", "paused": False}, "sim_at_least": 100}]
         elif case == "input-parity":
             steps += [{"op": "wait", "scope": "menu", "control": "TextMultiplayerName", "equals": {"focus": True}}]
             for route in ("key", "pad", "mouse", "post_command"):
