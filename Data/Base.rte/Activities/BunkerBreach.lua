@@ -217,7 +217,8 @@ function BunkerBreach:SetupFogOfWar()
 		for Act in MovableMan.AddedActors do
 			if not IsADoor(Act) then
 				for angle = 0, math.pi * 2, 0.05 do
-					SceneMan:CastSeeRay(Act.Team, Act.EyePos, Vector(150+FrameMan.PlayerScreenWidth * 0.5, 0):RadRotate(angle), Vector(), 25, fogResolution);
+					-- The pinned screen size: the fog this reveals is shared simulation state.
+					SceneMan:CastSeeRay(Act.Team, Act.EyePos, Vector(150+FrameMan.SimScreenWidth * 0.5, 0):RadRotate(angle), Vector(), 25, fogResolution);
 				end
 			end
 		end

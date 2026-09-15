@@ -2,7 +2,8 @@ function Create(self)
 	self.fireVel = 17;
 	self.spread = math.rad(self.ShakeRange);
 
-	self.searchRange = 100 + FrameMan.PlayerScreenWidth * 0.3;
+	-- The pinned screen size: this device runs on every peer and decides who it blinds.
+	self.searchRange = 100 + FrameMan.SimScreenWidth * 0.3;
 	self.searchTimer = Timer();
 	self.searchTimer:SetSimTimeLimitMS(250);
 	self.lockThreshold = 2;

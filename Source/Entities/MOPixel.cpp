@@ -4,7 +4,6 @@
 #include "Atom.h"
 #include "ConsoleMan.h"
 #include "PostProcessMan.h"
-#include "FrameMan.h"
 
 using namespace RTE;
 

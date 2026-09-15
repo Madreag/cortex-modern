@@ -118,6 +118,14 @@ namespace RTE {
 		/// @return The height of the player screens.
 		int GetPlayerScreenHeight() const { return GetPlayerFrameBufferHeight(-1); }
 
+		/// Gets the screen width simulation code reads. It is the default window, so every peer and every replay agrees on it whatever this machine's window is.
+		/// @return The pinned screen width for simulation.
+		int GetSimScreenWidth() const { return c_DefaultResX; }
+
+		/// Gets the screen height simulation code reads. It is the default window, so every peer and every replay agrees on it whatever this machine's window is.
+		/// @return The pinned screen height for simulation.
+		int GetSimScreenHeight() const { return c_DefaultResY; }
+
 		/// Gets the resolution multiplier.
 		float GetResolutionMultiplier() const;
 
