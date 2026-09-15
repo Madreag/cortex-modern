@@ -18,6 +18,7 @@
 #include "AudioMan.h"
 #include "Controller.h"
 #include "GUISound.h"
+#include "LuaMan.h"
 #include "MovableMan.h"
 #include "SoundContainer.h"
 #include "NetActorOwnership.h"
@@ -9867,6 +9868,9 @@ namespace RTE {
 				install_allegro(SYSTEM_NONE, &errno, std::atexit); // SceneMan::Clear creates a bitmap.
 				SceneMan::Construct();
 			}
+			if (!LuaMan::IsConstructed()) {
+				LuaMan::Construct(); // A destroyed MovableObject drops itself from the script update lists.
+			}
 		}
 
 		std::string ControlTuple(Actor& actor, uint8_t owner) {
@@ -10145,9 +10149,9 @@ namespace RTE {
 					claimed = candidate;
 				} else if (candidate && !peerView) {
 					peerView = candidate;
+				} else if (candidate) {
+					delete candidate;
 				}
-				// A surplus candidate is left where it is: this process has no LuaMan, so destroying a
-				// registered MovableObject faults in ForgetDestroyedObject.
 			}
 			if (!claimed) {
 				return finish("no actor UID with owner peer 1");
