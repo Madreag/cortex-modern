@@ -5382,7 +5382,13 @@ bool MovableMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
 			// Validate the whole alias table before changing any manager or native field.
 			for (const auto& [identity, links]: references) {
 				auto* object = FindObjectByUniqueID(identity);
-				if (!object || !object->RebindCheckpointBorrowedReferences(links, true)) throw std::runtime_error("unresolved native references for owner " + std::to_string(identity));
+				// Every refusal names itself: which owner, and whether it is the owner, the arity or a target that is missing.
+				if (!object) throw std::runtime_error("unresolved native references for owner " + std::to_string(identity) + ": the owner is not in the restored world");
+				if (!object->RebindCheckpointBorrowedReferences(links, true)) {
+					std::string reason = object->GetClassName() + " " + object->GetPresetName() + " carries " + std::to_string(object->GetCheckpointBorrowedReferences().size()) + " references, the checkpoint names " + std::to_string(links.size());
+					for (long target: links) if (target && !FindObjectByUniqueID(target)) reason += "; target " + std::to_string(target) + " is not in the restored world";
+					throw std::runtime_error("unresolved native references for owner " + std::to_string(identity) + ": " + reason);
+				}
 			}
 		});
 		VisitCheckpoint(reader, *this);
