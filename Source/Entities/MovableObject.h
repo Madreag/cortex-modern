@@ -176,6 +176,13 @@ namespace RTE {
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		int RunScriptedFunctionInAppropriateScripts(const std::string& functionName, bool runOnDisabledScripts = false, bool stopOnError = false, const std::vector<const Entity*>& functionEntityArguments = std::vector<const Entity*>(), const std::vector<std::string_view>& functionLiteralArguments = std::vector<std::string_view>(), const std::vector<LuabindObjectWrapper*>& functionObjectArguments = std::vector<LuabindObjectWrapper*>());
 
+		/// Sends a message to this object's scripts. Inside a lockstep AI pass the call is queued and crosses
+		/// the wire, so every peer's receiver hears it at the committed tick; everywhere else it runs now.
+		/// @param context Which kind of context the message carries (NetGameAIScriptMessage::Context); past the
+		/// last kind is a context the wire cannot name, which keeps the call local.
+		/// @param directContext The context object as the caller holds it, for the call that is not deferred.
+		void SendScriptedMessage(const std::string& message, uint8_t context, double number, int64_t contextUID, const std::string& text, LuabindObjectWrapper* directContext);
+
 		/// Delivers a message an AI pass sent, as the wire carried it, to this object's scripts. Defined
 		/// beside the send it mirrors, where luabind can rebuild the context the pass passed.
 		/// @param context Which kind of context the message carries (NetGameAIScriptMessage::Context).
