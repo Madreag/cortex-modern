@@ -731,7 +731,8 @@ void ACraft::DropAllInventory() {
 				g_MovableMan.AddActor(pPassenger);
 
 				// If this craft is being directly controlled by a player, and has landed, switch control to the first guy out
-				if (pPassenger->GetTeam() == m_Team && m_Controller.IsSeatedByPlayer() && g_ActivityMan.GetActivity()->GetControlledActor(m_Controller.GetSeatPlayer()) == this && m_LandingCraft) {
+				// The switch is this machine's own: SwitchToActor takes a seat this peer plays, and nothing else.
+				if (pPassenger->GetTeam() == m_Team && m_Controller.IsSeatedByPlayer() && g_ActivityMan.GetActivity()->GetLocallyControlledActor(m_Controller.GetSeatPlayer()) == this && m_LandingCraft) {
 					g_ActivityMan.GetActivity()->SwitchToActor(pPassenger, m_Controller.GetSeatPlayer(), m_Team);
 					// To avoid jump in the view, Update the passenger so its viewpoint is next to it and not at 0,0
 					pPassenger->Update();
