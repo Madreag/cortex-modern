@@ -2569,6 +2569,34 @@ void MovableMan::ReportSpeculationViolation(const char* what, const MovableObjec
 #endif
 }
 
+MovableMan::ControllerBoundaryBaseline MovableMan::CaptureControllerBoundary(Actor* actor) {
+	const AHuman* human = dynamic_cast<const AHuman*>(actor);
+	return {actor, actor->GetAimAngle(false), actor->IsHFlipped(),
+	        human && human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0,
+	        human && human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0};
+}
+
+void MovableMan::RestoreControllerBoundary(const ControllerBoundaryBaseline& before, long long simTick) {
+	Actor* actor = before.actor;
+	if (const float aim = actor->GetAimAngle(false); aim != before.aim) {
+		actor->MarkOffWireAim(simTick, aim);
+		actor->SetAimAngle(before.aim);
+		++m_ControllerBoundaryStats.aimIntents;
+	}
+	if (const bool flipped = actor->IsHFlipped(); flipped != before.flipped) {
+		actor->MarkOffWireFlip(simTick, flipped);
+		actor->SetHFlipped(before.flipped);
+		++m_ControllerBoundaryStats.flipIntents;
+	}
+	if (AHuman* human = dynamic_cast<AHuman*>(actor)) {
+		const int64_t fg = human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0;
+		const int64_t bg = human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0;
+		if (fg != before.fg || bg != before.bg) {
+			ReportControllerBoundaryViolation("the equipment", actor);
+		}
+	}
+}
+
 void MovableMan::ReportControllerBoundaryViolation(const char* what, const Actor* actor) {
 	++m_ControllerBoundaryStats.directWrites;
 	const std::string subject = actor ? actor->GetPresetName() + " uid=" + std::to_string(actor->GetUniqueID()) : std::string("an actor");
@@ -4734,21 +4762,11 @@ void MovableMan::UpdateControllers() {
 		// Under lockstep the AI pass may not change the canonical actor: its aim and facing writes are
 		// taken as one-shot intents and undone here, its equip calls become commands, and every peer
 		// (this one included) applies them at the committed tick.
-		struct DirectState {
-			Actor* actor;
-			float aim;
-			bool flipped;
-			int64_t fg;
-			int64_t bg;
-		};
-		std::vector<DirectState> directBefore;
+		std::vector<ControllerBoundaryBaseline> directBefore;
 		if (lockstepActive) {
 			for (Actor* actor: m_Actors) {
 				if (isLocalControllerActor(actor)) {
-					const AHuman* human = dynamic_cast<const AHuman*>(actor);
-					directBefore.push_back({actor, actor->GetAimAngle(false), actor->IsHFlipped(),
-					                        human && human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0,
-					                        human && human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0});
+					directBefore.push_back(CaptureControllerBoundary(actor));
 				}
 			}
 		}
@@ -4887,25 +4905,8 @@ void MovableMan::UpdateControllers() {
 			drainDeferredSoundOps();
 		}
 
-		for (const DirectState& before: directBefore) {
-			Actor* actor = before.actor;
-			if (const float aim = actor->GetAimAngle(false); aim != before.aim) {
-				actor->MarkOffWireAim(static_cast<long long>(simTick), aim);
-				actor->SetAimAngle(before.aim);
-				++m_ControllerBoundaryStats.aimIntents;
-			}
-			if (const bool flipped = actor->IsHFlipped(); flipped != before.flipped) {
-				actor->MarkOffWireFlip(static_cast<long long>(simTick), flipped);
-				actor->SetHFlipped(before.flipped);
-				++m_ControllerBoundaryStats.flipIntents;
-			}
-			if (AHuman* human = dynamic_cast<AHuman*>(actor)) {
-				const int64_t fg = human->GetEquippedItem() ? static_cast<int64_t>(human->GetEquippedItem()->GetUniqueID()) : 0;
-				const int64_t bg = human->GetEquippedBGItem() ? static_cast<int64_t>(human->GetEquippedBGItem()->GetUniqueID()) : 0;
-				if (fg != before.fg || bg != before.bg) {
-					ReportControllerBoundaryViolation("the equipment", actor);
-				}
-			}
+		for (const ControllerBoundaryBaseline& before: directBefore) {
+			RestoreControllerBoundary(before, static_cast<long long>(simTick));
 		}
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsAI);

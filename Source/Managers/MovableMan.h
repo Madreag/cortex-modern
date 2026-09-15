@@ -330,6 +330,18 @@ namespace RTE {
 			uint64_t directWrites = 0;
 		};
 		const ControllerBoundaryStats& GetControllerBoundaryStats() const { return m_ControllerBoundaryStats; }
+		/// The canonical actor state the owner's AI pass may not change directly.
+		struct ControllerBoundaryBaseline {
+			Actor* actor = nullptr;
+			float aim = 0.0F;
+			bool flipped = false;
+			int64_t fg = 0;
+			int64_t bg = 0;
+		};
+		/// Reads the boundary state before the owner's AI pass runs.
+		static ControllerBoundaryBaseline CaptureControllerBoundary(Actor* actor);
+		/// Turns what the pass changed into one-shot intents and puts the canonical actor back.
+		void RestoreControllerBoundary(const ControllerBoundaryBaseline& before, long long simTick);
 		void ReportControllerBoundaryViolation(const char* what, const Actor* actor);
 		/// Counts and reports a write to the world attempted from speculative execution; ordinary gameplay never gets here.
 		void ReportSpeculationViolation(const char* what, const MovableObject* mo);
