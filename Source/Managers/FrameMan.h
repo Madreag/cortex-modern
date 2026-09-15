@@ -143,6 +143,11 @@ namespace RTE {
 		/// @param whichPlayer Player to get screen width for, only used by multiplayer parts.
 		/// @return The height of the specified player screen.
 		int GetPlayerFrameBufferHeight(int whichPlayer) const;
+
+		/// Gets the window offset a split screen's framebuffer is parked at; (0,0) for an unsplit screen.
+		/// @param playerScreen The player screen to get the offset for.
+		/// @param screenOffset Vector to fill with the screen offset.
+		void GetScreenOffsetForSplitScreen(int playerScreen, Vector& screenOffset) const { UpdateScreenOffsetForSplitScreen(playerScreen, screenOffset); }
 #pragma endregion
 
 #pragma region Text Handling

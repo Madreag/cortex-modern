@@ -495,6 +495,18 @@ void Activity::MapLocalPlayers(const NetMatchConfig& config, uint8_t localPeer) 
 		}
 		++player;
 	}
+	// -net-match-e2e-shared-seat: this peer also presents the roster's next human seat as its own,
+	// so one window runs two split screens for the overlay layout arms. Presentation only - the
+	// seat's lockstep authority stays with its own peer (actor policy and wire input follow the
+	// roster's peer ids), so the two peers still simulate identical commands.
+	if (ScenarioRunner::GetArgs().selftestSharedSeat) {
+		for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount && input < Players::MaxPlayerCount; ++seat) {
+			if (m_LocalInputPlayers[seat] != Players::NoPlayer || !IsSeatActive(seat) || !IsHumanSeat(seat)) continue;
+			m_LocalInputPlayers[seat] = input++;
+			m_PlayerScreen[seat] = screen++;
+			break;
+		}
+	}
 	// A seat this machine does not present has no view of its own, so a restore never leaves it the donor's.
 	for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
 		if (m_LocalInputPlayers[seat] == Players::NoPlayer) m_ViewState[seat] = ViewState::Observe;
