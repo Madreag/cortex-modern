@@ -595,6 +595,7 @@ namespace RTE {
 		NetLobbySnapshot snapshot;
 		snapshot.lobbyPhase = StateName(m_State);
 		snapshot.activityPreset = rosterConfig.activityPreset;
+		snapshot.activityModule = rosterConfig.activityModule;
 		snapshot.sceneName = rosterConfig.sceneName;
 		snapshot.modeName = NetMatchConfigUtil::ModeName(rosterConfig.mode);
 		snapshot.localReady = m_Lobby.IsLocalReady();

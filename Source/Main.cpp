@@ -1720,6 +1720,7 @@ void ProcessMenuScript() {
 	} else if (cmd == "dump_lobby") {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::cout << "[menu-script] dump_lobby state=" << snapshot.serviceState << " members=" << snapshot.members.size()
+				  << " activity=\"" << snapshot.activityPreset << "\" module=\"" << snapshot.activityModule << "\""
 				  << " error=\"" << snapshot.errorText << "\" status=\"" << snapshot.statusText << "\""
 				  << " input_delay=\"" << snapshot.inputDelayText << "\""
 				  << " port_map=\"" << snapshot.portMap << "\"";
