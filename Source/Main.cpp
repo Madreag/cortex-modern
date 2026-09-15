@@ -3524,7 +3524,8 @@ static void NoteE2eSwitchOwnerLog(uint64_t tick) {
 			}
 		}
 	}
-	if (s_netMatchE2eSwitchUid == 0 && s_netMatchE2eSwitchControlTick > 0) {
+	// A peer present from the start waits for the transfer; a late joiner is already past this tick.
+	if (s_netMatchE2eSwitchUid == 0 && s_netMatchE2eSwitchControlTick > 0 && g_TimerMan.GetSimUpdateCount() >= s_netMatchE2eSwitchControlTick) {
 		if (Activity* activity = g_ActivityMan.GetActivity()) {
 			const int player = activity->PlayerOfScreen(0);
 			if (Actor* target = FindE2eSwitchControlTarget(activity, player)) {
