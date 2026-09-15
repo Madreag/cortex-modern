@@ -1297,15 +1297,28 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 	if (!std::isfinite(placement.posX) || !std::isfinite(placement.posY)) {
 		return false;
 	}
+	// A refusal is silent on the wire, so the player who tried reads the reason on their own screen.
+	const auto refuse = [&](const std::string& reason) {
+		g_ConsoleMan.PrintString("ERROR: " + reason);
+		std::cout << "[net-match] brain placement refused: seat=" << player << " peer=" << static_cast<int>(senderPeerId)
+		          << " reason=" << reason << std::endl;
+		if (IsLocalHumanSeat(player)) {
+			g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
+			g_FrameMan.SetScreenText(reason, ScreenOfPlayer(player), 250, 3500);
+			m_MessageTimer[player].Reset();
+		}
+		if (senderPeerId == ScenarioRunner::GetLockstepLocalPeerId()) {
+			ScenarioRunner::PushNetUiToast("brain_refused", reason);
+		}
+		return false;
+	};
 	// Only the peer holding the seat may place its brain; every peer resolves that the same way.
 	const uint8_t seatPeer = LockstepSeatPeerId(player);
 	if (senderPeerId != (seatPeer != 0 ? seatPeer : ScenarioRunner::GetLockstepHostPeerId())) {
-		g_ConsoleMan.PrintString("ERROR: Rejected a brain placement for seat " + std::to_string(player) + " from a peer that does not hold it");
-		return false;
+		return refuse("Rejected a brain placement for seat " + std::to_string(player) + " from a peer that does not hold it");
 	}
 	if (!g_PresetMan.GetEntityPreset(placement.className, placement.preset, placement.module)) {
-		g_ConsoleMan.PrintString("ERROR: Brain placement rejected - unknown preset \"" + placement.preset + "\"");
-		return false;
+		return refuse("Brain placement rejected - unknown preset \"" + placement.preset + "\"");
 	}
 	// Recorded, not built: the brains are all made at the start, off a counter every peer shares, so a
 	// local editor's own preview objects cannot shift the unique ids the sim ends up with.
