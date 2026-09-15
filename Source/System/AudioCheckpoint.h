@@ -275,6 +275,9 @@ struct Sample {
 	}
 	static Sample Capture(const std::string& path, FMOD::Sound* sound) {
 		Sample sample; sample.path = path;
+		if (!sound) return sample;
+		FMOD_OPENSTATE open = FMOD_OPENSTATE_ERROR;
+		if (sound->getOpenState(&open, nullptr, nullptr, nullptr) != FMOD_OK || (open != FMOD_OPENSTATE_READY && open != FMOD_OPENSTATE_PLAYING)) return sample;
 		Require(sound->getMode(&sample.mode)); Require(sound->getLoopPoints(&sample.loopStart, FMOD_TIMEUNIT_PCM, &sample.loopEnd, FMOD_TIMEUNIT_PCM)); Require(sound->getLoopCount(&sample.loops));
 		Require(sound->getDefaults(&sample.frequency, &sample.priority)); Require(sound->get3DMinMaxDistance(&sample.minimumDistance, &sample.maximumDistance)); Require(sound->get3DConeSettings(&sample.cone[0], &sample.cone[1], &sample.cone[2]));
 		return sample;
