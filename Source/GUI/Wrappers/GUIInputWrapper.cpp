@@ -62,6 +62,8 @@ namespace {
 			const SDL_GamepadButton button = SDL_GetGamepadButtonFromString(mapped.c_str());
 			if (device != "pad" || button == SDL_GAMEPAD_BUTTON_INVALID) return false;
 			if (!m_Pad) {
+				// SDL drops a controller press while no window holds keyboard focus, which a headless run never does.
+				SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 				SDL_VirtualJoystickDesc desc{};
 				SDL_INIT_INTERFACE(&desc);
 				desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
@@ -90,6 +92,7 @@ namespace {
 				SDL_CloseJoystick(m_Pad);
 				SDL_DetachVirtualJoystick(id);
 				m_Pad = nullptr;
+				SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "0");
 			}
 		}
 	};
