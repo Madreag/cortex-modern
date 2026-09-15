@@ -2370,10 +2370,12 @@ bool AudioMan::RunCheckpointSelfTest() {
 			if (loadingOwner->IsBeingPlayed()) loadingOwner->Stop();
 			if (loading) loading->release();
 			if (archived && !LoadCheckpoint(beforeLoading)) throw std::runtime_error("loading-sample row did not restore the prior audio checkpoint");
+			AudioCheckpoint::Require(GetVoiceChannel(identity, &originalChannel));
 		} catch (const std::exception& error) {
 			std::cout << "[audio-checkpoint-selftest] FAIL loading_sample_is_archived " << error.what() << std::endl;
 			ok = false;
 		}
+		AudioCheckpoint::Require(GetVoiceChannel(identity, &originalChannel));
 		AudioCheckpoint::Require(originalChannel->setPosition(123, FMOD_TIMEUNIT_PCM));
 		const std::string native = source->SaveCheckpoint();
 		const std::string playback = GetSoundContainerPlaybackCheckpoint(source.get());
