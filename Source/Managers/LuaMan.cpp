@@ -6839,12 +6839,12 @@ const std::unordered_map<std::string, PerformanceMan::ScriptTiming> LuaMan::GetS
 }
 
 void LuaMan::Destroy() {
+	WaitForAsyncGarbageCollection();
 	// The wrappers outlive every exit path, so the barrier's row is emitted here or not at all.
 	m_MasterScriptState.ReportPreviewBarrierStats();
 	for (LuaStateWrapper& state: m_ScriptStates) {
 		state.ReportPreviewBarrierStats();
 	}
-	WaitForAsyncGarbageCollection();
 	for (int i = 0; i < c_MaxOpenFiles; ++i) {
 		FileClose(i);
 	}
