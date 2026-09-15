@@ -287,7 +287,7 @@ void MovableMan::RecordA7UnitOwnership(uint64_t round, uint64_t frame) const {
 	if (Activity* activity = g_ActivityMan.GetActivity()) {
 		const auto uid = [](const Actor* actor) { return actor && g_MovableMan.IsActor(actor) ? static_cast<int64_t>(actor->GetUniqueID()) : int64_t{0}; };
 		const int player = activity->PlayerOfScreen(0);
-		Actor* controlled = activity->GetControlledActor(player);
+		Actor* controlled = activity->GetLocallyControlledActor(player);
 		const int screen = activity->ScreenOfPlayer(player);
 		json view = {{"round_id", round}, {"frame", frame}, {"peer_id", ScenarioRunner::GetLockstepLocalPeerId()},
 			{"player_index", player}, {"input_player", activity->LocalInputOfPlayer(player)},
@@ -371,6 +371,10 @@ static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& acto
 
 		if (!MovableMan::ApplyLockstepFrameToActor(*actorIt->second, frame, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), &error)) {
 			return false;
+		}
+		// Every peer applies this committed frame, so the seat it names is where the shared control binding comes from.
+		if (Activity* activity = g_ActivityMan.GetActivity()) {
+			activity->NoteLockstepControlBinding(frame.actorUniqueID, actorIt->second->GetController()->GetPlayer());
 		}
 		applied.insert(frame.actorUniqueID);
 	}
@@ -956,7 +960,8 @@ void MovableMan::ReconcileLockstepControlBindings() {
 	}
 	const uint8_t localPeerId = ScenarioRunner::GetLockstepLocalPeerId();
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-		const Actor* controlled = activity->GetControlledActor(player);
+		// Only a seat this machine presents holds a binding to release; the shared one belongs to its owner.
+		const Actor* controlled = activity->GetLocallyControlledActor(player);
 		if (!controlled || !g_MovableMan.IsActor(const_cast<Actor*>(controlled))) {
 			continue;
 		}

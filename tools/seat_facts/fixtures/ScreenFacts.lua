@@ -51,7 +51,9 @@ function ScreenFacts:StartActivity(startNewGame)
     for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
         if self:PlayerHuman(player) and self:ScreenOfPlayer(player) == -1 then
             remoteCount = remoteCount + 1;
+            -- Identity travels as the shared UniqueID; luabind defines no equality operator for an Actor.
             local brain = self:GetPlayerBrain(player);
+            local brainID = brain and brain.UniqueID;
             self:SetObservationTarget(Vector(12, 34), player);
             self:SetDeathViewTarget(Vector(12, 34), player);
             self:SetLandingZone(Vector(12, 34), player);
@@ -63,11 +65,16 @@ function ScreenFacts:StartActivity(startNewGame)
             assert(self:GetViewState(player) == Activity.OBSERVE, "remote view");
             assert(zero(self:GetLandingZone(player)), "remote landing zone");
             assert(self:GetBrainLZWidth(player) == 0, "remote landing width");
-            assert(self:GetBuyGUI(player) == nil and self:GetEditorGUI(player) == nil, "remote GUI");
-            assert(self:GetBanner(0, player) == nil, "remote banner");
+            local menu = self:GetBuyGUI(player);
+            local editor = self:GetEditorGUI(player);
+            local banner = self:GetBanner(0, player);
+            assert(menu ~= nil and editor ~= nil and banner ~= nil, "remote GUI answered nil");
+            banner:ShowText("REMOTE", GUIBanner.FLYBYLEFTWARD, 1000, Vector(640, 480), 0.5, 1500, 500);
+            assert(banner.BannerText == "" and not banner:IsVisible(), "remote banner kept text");
+            assert(menu:GetTotalOrderCost() == 0 and editor:GetCurrentObject() == nil, "remote menu holds an order");
             assert(not self:IsBuyGUIVisible(player), "remote buy visibility");
             assert(not self:CreateDelivery(player), "remote delivery input");
-            assert(self:GetPlayerBrain(player) == brain and brain ~= nil, "shared brain changed");
+            assert(brain ~= nil and self:GetPlayerBrain(player) ~= nil and self:GetPlayerBrain(player).UniqueID == brainID, "shared brain changed");
             sound:Play(player);
             sound:Play(Vector(0, 0), player);
             sound:Stop(player);

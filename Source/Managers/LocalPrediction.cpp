@@ -111,7 +111,8 @@ namespace RTE {
 			if (!activity->PlayerActive(player) || !activity->IsLocalHumanSeat(player)) {
 				continue;
 			}
-			Actor* actor = activity->GetControlledActor(player);
+			// The preview draws what this machine drives, so it follows a local switch the wire has not carried yet.
+			Actor* actor = activity->GetLocallyControlledActor(player);
 			if (!actor || !g_MovableMan.ValidMO(actor) || !g_MovableMan.IsActor(actor)) {
 				continue;
 			}
@@ -127,7 +128,7 @@ namespace RTE {
 		if (targets.empty()) {
 			if (TraceEnabled()) {
 				for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-					const Actor* actor = activity->GetControlledActor(player);
+					const Actor* actor = activity->GetLocallyControlledActor(player);
 					std::cout << "[localpred] no target: player " << player << " active=" << activity->PlayerActive(player) << " human=" << activity->IsLocalHumanSeat(player)
 					          << " actor=" << (actor ? static_cast<long long>(actor->GetUniqueID()) : 0) << " valid=" << (actor ? g_MovableMan.ValidMO(actor) : false)
 					          << " isactor=" << (actor ? g_MovableMan.IsActor(actor) : false)

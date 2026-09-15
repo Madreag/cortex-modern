@@ -163,6 +163,7 @@ void SceneEditorGUI::Destroy() {
 
 void SceneEditorGUI::SetController(Controller* pController) {
 	m_pController = pController;
+	if (IsInert()) return;
 	m_PieMenu->SetMenuController(pController);
 	m_pPicker->SetController(pController);
 }
@@ -195,10 +196,16 @@ void SceneEditorGUI::SetFeatureSet(SceneEditorGUI::FeatureSets newFeatureSet) {
 }
 
 void SceneEditorGUI::SetPosOnScreen(int newPosX, int newPosY) {
+	if (IsInert()) return;
 	m_pPicker->SetPosOnScreen(newPosX, newPosY);
 }
 
 bool SceneEditorGUI::SetCurrentObject(SceneObject* pNewObject) {
+	// Ownership arrives with the object, so an inert editor takes it and drops it instead of holding it.
+	if (IsInert()) {
+		delete pNewObject;
+		return false;
+	}
 	if (m_pCurrentObject == pNewObject)
 		return true;
 
@@ -223,14 +230,17 @@ bool SceneEditorGUI::SetCurrentObject(SceneObject* pNewObject) {
 }
 
 PieSliceType SceneEditorGUI::GetActivatedPieSlice() const {
+	if (IsInert()) return PieSliceType::NoType;
 	return m_PieMenu->GetPieCommand();
 }
 
 void SceneEditorGUI::SetModuleSpace(int moduleSpaceID) {
+	if (IsInert()) return;
 	m_pPicker->SetModuleSpace(moduleSpaceID);
 }
 
 void SceneEditorGUI::SetNativeTechModule(int whichModule) {
+	if (IsInert()) return;
 	if (whichModule >= 0 && whichModule < g_PresetMan.GetTotalModuleCount()) {
 		m_NativeTechModule = whichModule;
 		m_pPicker->SetNativeTechModule(m_NativeTechModule);
@@ -238,11 +248,13 @@ void SceneEditorGUI::SetNativeTechModule(int whichModule) {
 }
 
 void SceneEditorGUI::SetForeignCostMultiplier(float newMultiplier) {
+	if (IsInert()) return;
 	m_ForeignCostMult = newMultiplier;
 	m_pPicker->SetForeignCostMultiplier(m_ForeignCostMult);
 }
 
 bool SceneEditorGUI::TestBrainResidence(bool noBrainIsOK) {
+	if (IsInert()) return false;
 	// Do we have a resident at all?
 	SceneObject* pBrain = g_SceneMan.GetScene()->GetResidentBrain(m_pController->GetPlayer());
 
@@ -296,6 +308,7 @@ bool SceneEditorGUI::TestBrainResidence(bool noBrainIsOK) {
 }
 
 void SceneEditorGUI::Update() {
+	if (IsInert()) return;
 	// Update the user controller
 	//    m_pController->Update();
 
@@ -1202,6 +1215,7 @@ void SceneEditorGUI::Update() {
 }
 
 void SceneEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
+	if (IsInert()) return;
 	ZoneScoped;
 	TracyGpuZone("SceneEditor Draw");
 	// Done, so don't draw the UI
@@ -1365,6 +1379,7 @@ void SceneEditorGUI::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 }
 
 void SceneEditorGUI::UpdateBrainSkyPathAndCost(Vector brainPos) {
+	if (IsInert()) return;
 	if (!m_RequireClearPathToOrbit) {
 		m_PathRequest.reset();
 		return;
@@ -1461,6 +1476,7 @@ void SceneEditorGUI::UpdateBrainSkyPathAndCost(Vector brainPos) {
 }
 
 bool SceneEditorGUI::UpdateBrainPath() {
+	if (IsInert()) return false;
 	if (m_pCurrentObject && m_pCurrentObject->IsInGroup("Brains")) {
 		UpdateBrainSkyPathAndCost(m_CursorPos);
 	} else if (SceneObject* residentBrain = g_SceneMan.GetScene()->GetResidentBrain(m_pController->GetPlayer())) {

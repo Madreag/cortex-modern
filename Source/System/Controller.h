@@ -271,7 +271,9 @@ namespace RTE {
 
 		/// Whether the actor-switch debounce has run out for this seat.
 		bool ReleaseDelayPassed();
-		bool IsSeatedByPlayer(int player = Players::NoPlayer) const { return m_SeatMode == InputMode::CIM_PLAYER && m_SeatPlayer >= Players::PlayerOne && (player < Players::PlayerOne || m_SeatPlayer == player); }
+		/// Whether a human at THIS machine plays the seat: a seat another peer plays has no input slot here,
+		/// so nothing may sample local devices for it.
+		bool IsSeatedByPlayer(int player = Players::NoPlayer) const;
 
 		/// Gets the analog movement input data.
 		/// @return A vector with the analog movement data, both axes ranging form -1.0 to 1.0.

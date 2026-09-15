@@ -2286,7 +2286,7 @@ static void RunOverlayLinkArm(char mode, int& cases, int& failures) {
 	std::vector<std::pair<Arm*, HeldDevice*>> support;
 	const Actor* original = nullptr;
 	for (int player = Players::PlayerOne; activity && player < Players::MaxPlayerCount; ++player) {
-		if (Actor* actor = activity->GetControlledActor(player)) {
+		if (Actor* actor = activity->GetLocallyControlledActor(player)) {
 			if (!original && activity->IsLocalHumanSeat(player)) {
 				original = actor;
 			}
@@ -2427,7 +2427,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 	PreviewScriptSelfTest::SetStrideCounter(true);
 	if (Activity* activity = g_ActivityMan.GetActivity()) {
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
-			if (Actor* actor = activity->GetControlledActor(player)) {
+			if (Actor* actor = activity->GetLocallyControlledActor(player)) {
 				PreviewScriptSelfTest::InstallStrideCounter(actor);
 			}
 		}
@@ -2684,7 +2684,7 @@ static void PreviewEventLedgerFrameOnTick() {
 	}
 	if (g_TimerMan.GetSimUpdateCount() == s_eventLedgerPressTick && s_eventLedgerLuaEmitterUID == 0) {
 		if (Activity* activity = g_ActivityMan.GetActivity()) {
-			if (Actor* actor = activity->GetControlledActor(activity->PlayerOfScreen(0))) {
+			if (Actor* actor = activity->GetLocallyControlledActor(activity->PlayerOfScreen(0))) {
 				if (const AHuman* human = dynamic_cast<const AHuman*>(actor)) {
 					if (const HeldDevice* held = human->GetEquippedItem()) {
 						s_eventLedgerLuaPreset = held->GetPresetName();

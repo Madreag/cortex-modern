@@ -496,6 +496,12 @@ namespace RTE {
 		/// @param player Which team to set the brain actor for.
 		void SetPlayerBrain(Actor* newBrain, int player = 0);
 
+		/// Gives a seat the brain the engine placed for it and seeds the seat's shared control binding at once;
+		/// a script's SetPlayerBrain only sets this machine's record, which the per-tick brain record seeds from.
+		/// @param newBrain The brain the placement found.
+		/// @param player Which seat it belongs to.
+		void AssignSeatBrain(Actor* newBrain, int player);
+
 		/// Records assigned human brains and fills empty lockstep seats in deterministic order.
 		void UpdatePlayerBrainRecord();
 
@@ -599,10 +605,19 @@ namespace RTE {
 #pragma endregion
 
 #pragma region Actor Handling
-		/// Gets the currently controlled actor of a specific player.
+		/// Gets the actor a player's seat plays, as every peer of the match agrees on it.
 		/// @param player Which player to get the controlled actor of.
 		/// @return A pointer to the controlled Actor. Ownership is NOT transferred! 0 If no actor is currently controlled by this player.
-		Actor* GetControlledActor(int player = 0) { return (player >= Players::PlayerOne && player < Players::MaxPlayerCount) ? m_ControlledActor[player] : nullptr; }
+		Actor* GetControlledActor(int player = 0);
+
+		/// The seat's actor as THIS machine drives it right now: it carries a local switch before the wire does,
+		/// and it is null for a seat another peer plays. Presentation, prediction and local input only.
+		Actor* GetLocallyControlledActor(int player) const { return (player >= Players::PlayerOne && player < Players::MaxPlayerCount) ? m_ControlledActor[player] : nullptr; }
+
+		/// Records which seat the wire says an actor is played by; every peer applies the same frames.
+		/// @param uid The actor's unique id.
+		/// @param player The seat the frame named, or NoPlayer.
+		void NoteLockstepControlBinding(int64_t uid, int player);
 
 		/// Points the per-player controlled-actor and brain slots at a render substitute (and back); presentation only.
 		void SubstituteActorForRender(Actor* original, Actor* substitute) {
@@ -724,6 +739,7 @@ namespace RTE {
 		bool m_IsActive[Players::MaxPlayerCount]; //!< Whether a specific player is at all active and playing this Activity.
 		bool m_IsHuman[Players::MaxPlayerCount]; //!< Whether a human plays each shared seat.
 		bool m_SharedPlayerSeats; //!< Whether the player slots come from the synced match roster.
+		bool m_SharedSeatsEngaged; //!< Whether a live match mapped those slots, so the map outlives its coordinator.
 		std::array<int, Players::MaxPlayerCount> m_LocalInputPlayers; //!< Physical input slots, or NoPlayer for remote seats.
 
 		int m_PlayerScreen[Players::MaxPlayerCount]; //!< The screen index of each player - only applicable to human players. -1 if AI or other.
@@ -750,6 +766,7 @@ namespace RTE {
 		bool m_BrainEvacuated[Players::MaxPlayerCount]; //!< Whether a player has evacuated his Brain into orbit.
 
 		Actor* m_ControlledActor[Players::MaxPlayerCount]; //!< Currently controlled actor, not owned.
+		std::array<int64_t, Players::MaxPlayerCount> m_LockstepControlUID{}; //!< Which actor the wire says each seat plays; the same on every peer.
 		Controller m_PlayerController[Players::MaxPlayerCount]; //!< The Controllers of all the players for the GUIs.
 
 		Timer m_MessageTimer[Players::MaxPlayerCount]; //!< Message timer for each player.
