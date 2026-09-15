@@ -1286,6 +1286,18 @@ void GameActivity::DriveScriptedSetupEditor(int player) {
 	}
 }
 
+void GameActivity::RefuseBrainPlacement(int player, const std::string& reason, bool banner) {
+	g_ConsoleMan.PrintString("ERROR: " + reason);
+	if (IsLocalHumanSeat(player)) {
+		g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
+		g_FrameMan.SetScreenText(reason, ScreenOfPlayer(player), 250, 3500);
+		m_MessageTimer[player].Reset();
+	}
+	if (banner) {
+		ScenarioRunner::PushNetUiToast("brain_refused", reason);
+	}
+}
+
 bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, uint8_t senderPeerId) {
 	Scene* scene = g_SceneMan.GetScene();
 	const int player = placement.player;
@@ -1300,17 +1312,9 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 	}
 	// A refusal is silent on the wire, so the player who tried reads the reason on their own screen.
 	const auto refuse = [&](const std::string& reason) {
-		g_ConsoleMan.PrintString("ERROR: " + reason);
 		std::cout << "[net-match] brain placement refused: seat=" << player << " peer=" << static_cast<int>(senderPeerId)
 		          << " reason=" << reason << std::endl;
-		if (IsLocalHumanSeat(player)) {
-			g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
-			g_FrameMan.SetScreenText(reason, ScreenOfPlayer(player), 250, 3500);
-			m_MessageTimer[player].Reset();
-		}
-		if (senderPeerId == ScenarioRunner::GetLockstepLocalPeerId()) {
-			ScenarioRunner::PushNetUiToast("brain_refused", reason);
-		}
+		RefuseBrainPlacement(player, reason, senderPeerId == ScenarioRunner::GetLockstepLocalPeerId());
 		return false;
 	};
 	// Only the peer holding the seat may place its brain; every peer resolves that the same way.
@@ -1456,7 +1460,16 @@ void GameActivity::UpdateEditing() {
 		// A scripted gesture stands in for this seat's own mouse; only the UI probe queues one.
 		DriveScriptedSetupEditor(player);
 
+		// The editor answers a DONE it refuses by taking the seat back to placing a brain, which says nothing
+		// about the match; the seat hears the same refusal a wire-refused placement gives it.
+		const bool askedDone = m_pEditorGUI[player]->GetEditorGUIMode() == SceneEditorGUI::DONEEDITING;
+
 		m_pEditorGUI[player]->Update();
+
+		if (lockstep && askedDone && !m_ReadyToStart[player] && !m_LockstepPlacementSubmitted[player] &&
+		    m_pEditorGUI[player]->GetEditorGUIMode() != SceneEditorGUI::DONEEDITING) {
+			RefuseBrainPlacement(player, "Place your brain in a valid spot first", true);
+		}
 
 		// Set the team associations with each screen displayed
 		g_CameraMan.SetScreenTeam(m_Team[player], ScreenOfPlayer(player));

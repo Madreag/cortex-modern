@@ -770,6 +770,9 @@ namespace RTE {
 		bool CommitLockstepBrainPlacement(int player, const std::string& className, const std::string& preset, const std::string& module, const Vector& spot, const char* via);
 		/// The ground under a scene x, where a brain settles under the same physics on every peer.
 		Vector GroundSpot(float sceneX) const;
+		/// Puts a refused placement where the player who tried can see it: their own screen for a few seconds,
+		/// the console, and a banner when this peer is the one that was refused.
+		void RefuseBrainPlacement(int player, const std::string& reason, bool banner);
 		/// Runs the seat's queued scripted editor gesture, if it has one, the way that seat's own input would.
 		void DriveScriptedSetupEditor(int player);
 		/// Builds every seat's committed brain, in seat order, from a unique-id counter pinned to the same
