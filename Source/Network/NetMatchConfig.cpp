@@ -1,6 +1,7 @@
 #include "NetMatchConfig.h"
 
 #include "NetIdentity.h"
+#include "SettingsMan.h"
 
 #include "nlohmann/json.hpp"
 
@@ -10,6 +11,18 @@ namespace RTE {
 
 	namespace {
 		using json = nlohmann::json;
+
+		// The saved preference and the wire policy are separate enumerations whose values differ by
+		// one, so they are mapped, never cast.
+		NetMatchDelayPolicy DelayPolicyFromSetting(SettingsMan::NetworkHostDelayPolicy saved) {
+			switch (saved) {
+				case SettingsMan::NetworkHostDelayPolicy::Fixed:
+					return NetMatchDelayPolicy::Fixed;
+				case SettingsMan::NetworkHostDelayPolicy::Auto:
+					return NetMatchDelayPolicy::Auto;
+			}
+			return NetMatchDelayPolicy::Auto;
+		}
 
 		bool HasControlChars(const std::string& value) {
 			return std::any_of(value.begin(), value.end(), [](unsigned char c) {
@@ -110,6 +123,12 @@ namespace RTE {
 			NetMatchPlayerSlot{2, 1, false, "Client"},
 		};
 		return config;
+	}
+
+	void NetMatchConfigUtil::ApplySavedHostOptions(NetMatchConfig& config) {
+		config.delayPolicy = DelayPolicyFromSetting(g_SettingsMan.GetNetworkHostDelayPolicy());
+		config.idleWaitMinutes = static_cast<uint8_t>(std::clamp(g_SettingsMan.GetNetworkHostIdleWaitMinutes(), 0, 60));
+		config.automaticRepair = g_SettingsMan.GetNetworkHostAutoRepair();
 	}
 
 	bool NetMatchConfigUtil::DeriveRematchConfig(const NetMatchConfig& previous, const std::vector<uint8_t>& survivingPeerIds, NetMatchConfig& outConfig, std::map<uint8_t, uint8_t>* outSeatMap, std::string* error) {

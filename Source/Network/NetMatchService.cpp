@@ -2911,6 +2911,8 @@ static std::string ResyncSaveName() {
 			const uint32_t seconds = std::min(GetAutosaveSeconds(), c_MaxAutosaveIntervalSeconds);
 			config.autosaveEnabled = seconds > 0;
 			config.autosaveIntervalSeconds = seconds;
+			// The rest of the host's saved session options ride the same config to every peer.
+			NetMatchConfigUtil::ApplySavedHostOptions(config);
 		}
 		// The host authors the roster; clients adopt it via the lobby config sync. PvP seats one team
 		// per peer; co-op PvE seats every human on team 0; PvPvE keeps per-peer teams. A dedicated host
