@@ -375,8 +375,8 @@ def main():
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("LEAD_FAMILY.lock exists; no engine launch")
-    if not (48270 <= options.port <= 48279 or 48380 <= options.port <= 48389):
-        parser.error("this detector owns ports 48270-48279 and 48380-48389")
+    if not any(low <= options.port <= low + 9 for low in (48270, 48380, 48550)):
+        parser.error("this detector owns ports 48270-48279, 48380-48389 and 48550-48559")
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)
     options.revision = subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip()
