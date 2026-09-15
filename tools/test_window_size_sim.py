@@ -33,11 +33,13 @@ def parse_size(text: str):
     return int(width), int(height)
 
 
-def peer_args(who: str, port: int, root: Path, ticks: int, seed: int):
+def peer_args(who: str, port: int, root: Path, ticks: int, seed: int, record_replay: bool = False):
     args = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "2",
             "-net-match-ticks", str(ticks), "-max-ticks", str(ticks), "-net-match-input-delay", "3",
             "-net-autosave-seconds", "0", "-seed", str(seed), "-num-lua-states", "4", "-tick-hashes",
             "-out", str(root / who / "trace.json"), "-net-match-report", str(root / who / "report.json")]
+    if record_replay and who == "host":
+        args += ["-net-replay-out", str(root / who / "match.ccreplay")]
     return args + (["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"])
 
 
@@ -78,13 +80,27 @@ def first_object_divergence(host_dump: Path, client_dump: Path):
     return {"available": True, "tick": None, "identical": True}
 
 
-def run_pair(repo: Path, root: Path, port: int, ticks: int, seed: int, sizes, timeout: float):
+def run_replay(repo: Path, root: Path, ticks: int, seed: int, size, timeout: float):
+    """Replay the host's recording in a window of a different size; the sim must be identical."""
+    args = ["-net-replay", str(root / "host" / "match.ccreplay"), "-tick-hashes", "-max-ticks", str(ticks),
+            "-seed", str(seed), "-num-lua-states", "4", "-out", str(root / "replay" / "trace.json")]
+    run = make_run(repo, args, root / "replay", timeout, env={"CCCP_HEADLESS": "1", "CC_SIM_DUMP": f"1:{ticks}"})
+    set_visual_resolution(run, *size)
+    try:
+        return run.start().finish()
+    except Exception as error:
+        return {"error": repr(error)}
+    finally:
+        run.close()
+
+
+def run_pair(repo: Path, root: Path, port: int, ticks: int, seed: int, sizes, timeout: float, record_replay=False):
     root.mkdir(parents=True, exist_ok=False)
     runs, records = {}, {}
     try:
         for who in PEERS:
             env = {"CCCP_HEADLESS": "1", "CC_SIM_DUMP": f"1:{ticks}"}
-            runs[who] = make_run(repo, peer_args(who, port, root, ticks, seed), root / who, timeout, env=env)
+            runs[who] = make_run(repo, peer_args(who, port, root, ticks, seed, record_replay), root / who, timeout, env=env)
             set_visual_resolution(runs[who], *sizes[who])
 
         def drive(who):
@@ -115,10 +131,12 @@ def main() -> int:
     parser.add_argument("--host-size", default="960x540")
     parser.add_argument("--client-size", default="640x360")
     parser.add_argument("--timeout", type=float, default=900)
+    parser.add_argument("--replay-size", help="also replay the host recording in a window of this size")
     options = parser.parse_args()
 
     sizes = {"host": parse_size(options.host_size), "client": parse_size(options.client_size)}
-    records = run_pair(options.repo, options.out, options.port, options.ticks, options.seed, sizes, options.timeout)
+    records = run_pair(options.repo, options.out, options.port, options.ticks, options.seed, sizes,
+                       options.timeout, record_replay=bool(options.replay_size))
     result = {"sizes": {who: list(size) for who, size in sizes.items()}, "ticks": options.ticks,
               "seed": options.seed, "exe_sha256": sha256_file(options.repo / "Cortex Command.exe"),
               "records": records}
@@ -132,6 +150,16 @@ def main() -> int:
     result["simulation"] = comparison
     result["objects"] = first_object_divergence(options.out / "host" / "trace.json.simdump.txt",
                                                 options.out / "client" / "trace.json.simdump.txt")
+    if options.replay_size:
+        record = run_replay(options.repo, options.out, options.ticks, options.seed,
+                            parse_size(options.replay_size), options.timeout)
+        replay_trace = options.out / "replay" / "trace.json"
+        replay_passed, replay_comparison = (strict_compare(traces["host"], replay_trace, options.ticks)
+                                            if replay_trace.exists() else (False, {"reasons": ["no replay trace"]}))
+        result["replay"] = {"size": options.replay_size, "record": record, "simulation": replay_comparison,
+                            "process": bool(record.get("exit_code") == 0 and not record.get("timed_out"))}
+        result["replay"]["passed"] = bool(replay_passed and result["replay"]["process"])
+        passed = passed and result["replay"]["passed"]
     result["passed"] = bool(passed and all(result["processes"].values()))
     (options.out / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     if result["passed"]:
