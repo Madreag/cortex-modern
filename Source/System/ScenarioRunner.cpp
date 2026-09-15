@@ -772,7 +772,7 @@ namespace RTE {
 		s_LockstepCoordinator = coordinator;
 		if (!coordinator) {
 			s_SeatPresence = nullptr;
-			s_E2eFirstTransferUid = 0;
+			s_E2eFirstTransferUid = 0; // A resync does not undo the first transfer; the latch clears with the coordinator.
 		}
 		if (coordinator && (!preserveCommands || s_CommandSessionId != coordinator->GetConfig().sessionId || s_CommandEpoch != coordinator->GetConfig().seatPresenceEpoch)) {
 			s_PendingLocalGameCommands.clear();

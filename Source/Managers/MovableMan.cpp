@@ -921,6 +921,7 @@ void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, co
 		const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
 		if (actor->IsPlayerControlled() && std::find(readyFrame.departedPeerIds.begin(), readyFrame.departedPeerIds.end(), claimant) != readyFrame.departedPeerIds.end()) {
 			MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
+			ScenarioRunner::NoteE2eOwnerTransfer(uid);
 		}
 		if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame)) {
 			const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
