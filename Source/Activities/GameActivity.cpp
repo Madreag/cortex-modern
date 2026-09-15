@@ -3777,12 +3777,12 @@ banner:ClearText()
 assert(banner.BannerText == "" and banner.AnimState == GUIBanner.NOTSTARTED, "the inert banner kept text")
 assert(not banner:IsVisible() and banner.Kerning == 0, "the inert banner became visible")
 menu.ShowOnlyOwnedItems = true
-menu.EnforceMaxMassConstraint = true
+menu.EnforceMaxMassConstraint = false
 menu:SetOwnedItemsAmount("Stub Item", 3)
 menu:ClearCartList()
 menu:LoadDefaultLoadoutToCart()
 menu:ForceRefresh()
-assert(not menu.ShowOnlyOwnedItems and not menu.EnforceMaxMassConstraint, "the inert menu kept a flag")
+assert(not menu.ShowOnlyOwnedItems and menu.EnforceMaxMassConstraint, "the inert menu took a flag")
 assert(menu:GetOwnedItemsAmount("Stub Item") == 0, "the inert menu kept an owned item")
 assert(menu:GetTotalOrderCost() == 0 and menu:GetTotalCartCost() == 0, "the inert menu has a cost")
 assert(menu:GetTotalOrderMass() == 0 and menu:GetTotalOrderPassengers() == 0, "the inert menu has an order")
