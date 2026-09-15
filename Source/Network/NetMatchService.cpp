@@ -2917,9 +2917,9 @@ static std::string ResyncSaveName() {
 		const uint32_t cpuCount = request.cpuSlots.value_or(mode == NetMatchMode::PvPSkirmish ? 0 : 1);
 		if (humanCount > capacity) return refuse("human seats exceed peer capacity");
 		if (humanCount == 0 && !request.dedicated) return refuse("zero human seats require a dedicated host");
-		if (mode == NetMatchMode::PvPvE && humanCount == Teams::MaxTeamCount) return refuse("four-human PvPvE exceeds team capacity");
+		if (mode == NetMatchMode::PvPvE && humanCount == Activity::Teams::MaxTeamCount) return refuse("four-human PvPvE exceeds team capacity");
 		const uint32_t firstCPUTeam = mode == NetMatchMode::CoopPvE ? 1 : humanCount;
-		if (cpuCount > Teams::MaxTeamCount || firstCPUTeam + cpuCount > Teams::MaxTeamCount) return refuse("CPU seats exceed team capacity");
+		if (cpuCount > Activity::Teams::MaxTeamCount || firstCPUTeam + cpuCount > Activity::Teams::MaxTeamCount) return refuse("CPU seats exceed team capacity");
 		// Co-op seats every human on one team, so a full lobby can ask for more slots than the wire carries.
 		if (humanCount + cpuCount > NetMatchConfigUtil::c_MaxPlayers) return refuse("roster exceeds the player slot capacity");
 		NetMatchConfig config = NetMatchConfigUtil::MakeDefault(sessionId);
