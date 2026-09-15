@@ -158,7 +158,9 @@ REFUSED_PRESET = "No Such Brain"
 # A DONE with no brain placed is refused by the editor itself (SceneEditorGUI::DONEEDITING ->
 # TestBrainResidence): the seat goes back to installing or picking a brain, stays unready and commits
 # nothing. Which of the two stock prompts is on screen depends on the frame the probe reads.
-PLACE_REFUSED = ("Pick what you want to place next", "Click to INSTALL your governor brain")
+# The net layer's own refusal leads now; the stock editor's prompts follow it on later frames.
+PLACE_REFUSED = ("Place your brain in a valid spot first", "Pick what you want to place next",
+                 "Click to INSTALL your governor brain")
 READY_TEXT = "READY to start"
 WAIT_BANNER = "to place their brains"
 
@@ -424,9 +426,10 @@ def launch(options):
                 result["wire_refusals"] = refused
                 checks["wire_refusal_on_both_peers"] = all(len(rows) == 1 and rows[0][0] == "0" and REFUSED_PRESET in rows[0][2]
                                                            for rows in refused.values())
+                # Only the peer that sent it gets the banner; the other peers refuse it in silence.
                 checks["wire_refusal_banner_on_the_sender"] = \
-                    any(toast.get("kind") == "brain_refused" for toast in result["toasts"]["host"]) and \
-                    not any(toast.get("kind") == "brain_refused" for toast in result["toasts"]["client"])
+                    any(toast.get("kind") == "brain_refused" and REFUSED_PRESET in toast.get("text", "") for toast in result["toasts"]["host"]) and \
+                    not any(REFUSED_PRESET in toast.get("text", "") for toast in result["toasts"]["client"])
         if not places_brains:
             # An activity that puts its own residents on the site never meets the synchronized editor, and
             # no placement crosses the wire for it.
