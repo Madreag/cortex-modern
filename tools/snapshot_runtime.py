@@ -493,21 +493,39 @@ _LOCAL_FIELDS["Controller3"] = _LOCAL_FIELDS["Controller2"] | set(
     "committed_analog_cursor committed_mouse_movement producing_local_input".split())
 
 
-def project(value, shared=False, snapshot_name=None, path=(), masked=None, local_roles=None, cross_process=False):
-    """Return a structural value, projecting only the named local fields and timer anchors."""
+def project(value, shared=False, snapshot_name=None, path=(), masked=None, local_roles=None, cross_process=False,
+            local_seat=None, asymmetric_seats=()):
+    """Return a structural value, projecting only the named local fields and timer anchors.
+
+    local_seat is this archive's own seat when the two peers share one seat table; None keeps the
+    legacy model where each peer runs as PlayerOne and slot 0 holds its own bindings. asymmetric_seats
+    names the seats only one of the two archives owns, whose per-seat local view is not comparable.
+    """
     if masked is None:
         masked = []
     if isinstance(value, list):
-        return [project(item, shared, snapshot_name, (*path, index), masked, local_roles, cross_process) for index, item in enumerate(value)]
+        return [project(item, shared, snapshot_name, (*path, index), masked, local_roles, cross_process, local_seat, asymmetric_seats)
+                for index, item in enumerate(value)]
     if not isinstance(value, dict):
         return value
-    result = {key: project(item, shared, snapshot_name, (*path, key), masked, local_roles, cross_process) for key, item in value.items()}
+    result = {key: project(item, shared, snapshot_name, (*path, key), masked, local_roles, cross_process, local_seat, asymmetric_seats)
+              for key, item in value.items()}
     version = value.get("version")
 
     def mask(key):
         if key in result:
             result[key] = "LOCAL"
             masked.append((*path, key))
+
+    def mask_seat(key, seat, *rest):
+        owner, location = result[key][seat], (*path, key, seat)
+        for step in rest[:-1]:
+            owner, location = owner[step], (*location, step)
+        if rest:
+            owner[rest[-1]], location = "LOCAL", (*location, rest[-1])
+        else:
+            result[key][seat] = "LOCAL"
+        masked.append(location)
 
     # Timer::m_StartRealTime is a wall-clock reading (TimerMan.h), so two processes never agree on it.
     if (shared or cross_process) and set(value) == {"sim_start", "sim_limit", "real_start", "real_limit"}:
@@ -531,17 +549,35 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
             for key in ("release_timer", "joy_accel_timer", "key_accel_timer"):
                 result[key]["sim_start"] = "LOCAL"
                 masked.append((*path, key, "sim_start"))
-            if len(path) >= 2 and path[-2:] == ("player_controller", 0):
-                mask("team")
+            # MOVE_IDLE and the rest of the state vector come from this machine's hardware (Controller.cpp:541-562).
+            if len(path) >= 2 and path[-2] == "player_controller" and path[-1] in asymmetric_seats:
+                mask("states")
         if version in ("Activity1", "Activity2", "Activity3"):
-            for key in ("player_team", "team_funds_share", "funds_contribution", "human", "actor_links"):
-                result[key][0] = "LOCAL"
-                masked.append((*path, key, 0))
+            if local_seat is None:
+                for key in ("player_team", "team_funds_share", "funds_contribution", "human", "actor_links"):
+                    result[key][0] = "LOCAL"
+                    masked.append((*path, key, 0))
+            for seat in sorted(asymmetric_seats):
+                # Activity::CaptureNetLocalPlayerState (Activity.cpp:1319-1342) names the per-seat local view;
+                # the controlled actor and its cursor are nulled for a non-local seat (Activity.cpp:1365).
+                mask_seat("actor_links", seat, 1)
+                mask_seat("actor_links", seat, 2)
+                mask_seat("player_screen", seat)
+                for key in ("death_timer", "message_timer"):
+                    mask_seat(key, seat, "sim_start")
         if version == "GameActivity1":
-            for key in ("observation_target", "death_view_target", "actor_cursor", "landing_zone"):
-                result[key][0] = "LOCAL"
-                masked.append((*path, key, 0))
-        if version in ("InventoryMenuGUI1", "InventoryMenuGUI2") and path[-3:] == ("player_ui", 0, "inventory"):
+            if local_seat is None:
+                for key in ("observation_target", "death_view_target", "actor_cursor", "landing_zone"):
+                    result[key][0] = "LOCAL"
+                    masked.append((*path, key, 0))
+            for seat in sorted(asymmetric_seats):
+                # GameActivity::CaptureNetLocalPlayerState (GameActivity.cpp:2863-2876); the GUIs themselves are
+                # built only for a local human seat (GameActivity.cpp:826-827, 1181-1182) and the select timer is
+                # wall-clock (GameActivity.cpp:1288 IsPastRealMS).
+                for key in ("observation_target", "death_view_target", "actor_cursor", "landing_zone", "player_ui"):
+                    mask_seat(key, seat)
+                mask_seat("actor_select_timer", seat, "sim_start")
+        if version in ("InventoryMenuGUI1", "InventoryMenuGUI2") and path[-3:] == ("player_ui", 0 if local_seat is None else local_seat, "inventory"):
             mask("center")
             if local_roles:
                 def remap(item, location):
