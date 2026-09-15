@@ -16,22 +16,51 @@ from test_telemetry_bundle import set_visual_resolution
 
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled",
-         "scope-off", "network", "lobby-name", "net-options", "oracles")
+         "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
+         "lobby-name", "net-options", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
-# Every control the network page owns, measured where it is drawn. The fixed-delay row belongs to
+# The network page's own selector names its sub-pages; a script reaches one as "Network:<page>"
+# once the network page is up - the same reach a player's tab clicks take.
+NETWORK_PAGES = ("Player", "Chat", "Recovery", "Files", "Internet")
+NETWORK_TABS = tuple("TabNetPage" + page for page in NETWORK_PAGES)
+NETWORK_BOXES = tuple("CollectionBoxNetPage" + page for page in NETWORK_PAGES)
+NETWORK_PAGE_BOX = NETWORK_BOXES[0]
+# Every control the player page owns, measured where it is drawn. The fixed-delay row belongs to
 # the fixed policy, so it is drawn only there - the cue the video page's resolution rows already use.
 NETWORK_ROWS = ("LabelNetworkDisplayName", "TextNetworkDisplayName", "LabelNetworkDelayPolicy",
                 "RadioNetworkDelayAuto", "RadioNetworkDelayFixed", "LabelNetworkIdleWait",
-                "TextNetworkIdleWait", "LabelNetworkIdleWaitHint", "CheckboxNetworkAutoRepair")
+                "TextNetworkIdleWait", "LabelNetworkIdleWaitHint", "CheckboxNetworkAutoRepair",
+                "CheckboxNetworkToasts", "CheckboxNetworkPrediction",
+                "LabelMatchStatusWidget", "ComboMatchStatusWidget")
 NETWORK_FIXED_ROWS = ("LabelNetworkFixedDelay", "TextNetworkFixedDelay", "LabelNetworkFixedDelayHint")
 MAX_INPUT_DELAY_FRAMES = 60  # NetMatchConfigUtil::c_MaxInputDelayFrames, which the hint states.
 # The saved preferences a case starts from, and what the page must have written when it ends.
 NETWORK_SEED = {"NetworkDisplayName": "ScoutLead", "NetworkHostDelayPolicy": "Auto",
-                "NetworkHostIdleWaitMinutes": "10", "NetworkHostAutoRepair": "1", "NetworkInputDelayFrames": "0"}
+                "NetworkHostIdleWaitMinutes": "10", "NetworkHostAutoRepair": "1", "NetworkInputDelayFrames": "0",
+                "NetworkToastsEnabled": "0", "LocalPrediction": "0", "NetworkMatchStatusMode": "Auto"}
 NETWORK_SAVED = {"NetworkDisplayName": "WingCmd", "NetworkHostDelayPolicy": "Fixed",
-                 "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0", "NetworkInputDelayFrames": "7"}
+                 "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0", "NetworkInputDelayFrames": "7",
+                 "NetworkToastsEnabled": "1", "LocalPrediction": "1"}
+# The Misc page's own rows; the match-status combo moved to the player page, so a dump of this box
+# must not name it - the absence is asserted against the whole capture, not a missing-control assert.
+MISC_ROWS = ("CheckboxSkipIntro", "CheckboxShowToolTips", "CheckboxShowLoadingScreenProgressReport",
+             "CheckboxShowAdvancedPerfStats", "CheckboxMeasureLoadingTime", "CheckboxUseMonospaceConsoleFont",
+             "CheckboxDisableFactionBuyMenuThemes", "CheckboxDisableFactionBuyMenuThemeCursors",
+             "LabelSceneBackgroundAutoScale", "LabelSceneBackgroundAutoScaleSetting", "SliderSceneBackgroundAutoScale")
+MISC_GONE = ("LabelMatchStatusWidget", "ComboMatchStatusWidget")
+CHAT_SEED = {"NetworkChatVisible": "1", "NetworkChatSound": "0", "NetworkChatNotify": "1",
+             "NetworkChatDefaultScope": "Team", "NetworkChatTextSize": "Large"}
+CHAT_SAVED = {"NetworkChatVisible": "0", "NetworkChatNotify": "0"}
+RECOVERY_SEED = {"NetworkAutoReconnect": "1", "NetworkOfferStoredRejoin": "1"}
+RECOVERY_SAVED = {"NetworkAutoReconnect": "0", "NetworkOfferStoredRejoin": "0"}
+FILES_SEED = {"AutosaveSeconds": "45", "NetworkRecordReplays": "0"}
+FILES_SAVED = {"NetworkDiagnosticsDirectory": "D:/diag-lane", "NetworkRecordReplays": "1"}
+INTERNET_SEED = {"SessionDirectoryUrl": "https://dir.example.test/serve",
+                 "SessionDirectoryCertSha256": "a" * 64}
+INTERNET_SAVED = {"SessionDirectoryUrl": "https://newdir.example.test/serve",
+                  "SessionDirectoryCertSha256": "a" * 64}
 # The host's saved session options steer the match; the client's own copy differs and must not.
 HOST_OPTIONS = {"NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0"}
 CLIENT_OPTIONS = {"NetworkHostDelayPolicy": "Auto", "NetworkHostIdleWaitMinutes": "5", "NetworkHostAutoRepair": "1"}
@@ -89,6 +118,14 @@ def seeds(case):
         return {"host": NETWORK_SEED}
     if case == "net-options":
         return {"host": HOST_OPTIONS, "client": CLIENT_OPTIONS}
+    if case == "net-chat":
+        return {"host": CHAT_SEED}
+    if case == "net-recovery":
+        return {"host": RECOVERY_SEED}
+    if case == "net-files":
+        return {"host": FILES_SEED}
+    if case == "net-internet":
+        return {"host": INTERNET_SEED}
     return {}
 
 
@@ -96,6 +133,13 @@ def host_lobby(port):
     return (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
             f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
             "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n")
+
+
+def net_page(page):
+    """The reach a script has into the network page's own selector: the tab name it would click."""
+    return (f"select_settings_page Network\nwait 3\nassert_settings_page Network\n"
+            f"select_settings_page Network:{page}\nwait 3\nassert_settings_page Network:{page}\n"
+            f"assert_visible CollectionBoxNetPage{page} 1\n")
 
 
 def menu_step(command):
@@ -180,26 +224,37 @@ def scripts(case, port, root):
             text += checks(f"Tab{page}Settings", "CollectionBoxSettingsBase") + "dump_player_options\n"
         text += "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n"
     elif case == "network":
-        # The saved preferences reach the page, an edit on the page reaches the settings, and the
-        # lobby's own name box shows what the page saved.
-        text = OPTIONS + "select_settings_page Network\nwait 3\nassert_settings_page Network\n"
+        # The saved preferences reach the player page, an edit on the page reaches the settings, and the
+        # lobby's own name box shows what the page saved. A page switch is a page leave: the typed
+        # name commits when the selector moves to chat and back.
+        text = OPTIONS + "select_settings_page Network\nwait 3\nassert_settings_page Network\nassert_settings_page Network:Player\n"
         text += "assert_visible CollectionBoxNetworkSettings 1\n"
         text += checks("TabNetworkSettings", "CollectionBoxSettingsBase")
+        for tab in NETWORK_TABS:
+            text += checks(tab, "CollectionBoxNetworkSettings")
+        for index, box in enumerate(NETWORK_BOXES):
+            text += f"assert_visible {box} {1 if index == 0 else 0}\n"
         for control in NETWORK_ROWS:
-            text += checks(control, "CollectionBoxNetworkSettings")
+            text += checks(control, NETWORK_PAGE_BOX)
         text += ("assert_label TextNetworkDisplayName " + NETWORK_SEED["NetworkDisplayName"] + "\n"
-                 "assert_label TextNetworkIdleWait " + NETWORK_SEED["NetworkHostIdleWaitMinutes"] + "\n")
+                 "assert_label TextNetworkIdleWait " + NETWORK_SEED["NetworkHostIdleWaitMinutes"] + "\n"
+                 "assert_label ComboMatchStatusWidget " + NETWORK_SEED["NetworkMatchStatusMode"] + "\n")
         # The saved policy is automatic here, so the fixed-delay row is not on the page at all.
         for control in NETWORK_FIXED_ROWS:
             text += f"assert_visible {control} 0\n"
-        text += "dump_player_options\npost_command RadioNetworkDelayFixed\nwait 3\n"
+        text += "dump_player_options\n"
+        text += "set_text TextNetworkDisplayName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
+        text += "select_settings_page Network:Chat\nwait 3\nassert_settings_page Network:Chat\n"
+        text += "assert_visible CollectionBoxNetPagePlayer 0\nselect_settings_page Network:Player\nwait 3\n"
+        text += "assert_label TextNetworkDisplayName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
+        text += "post_command RadioNetworkDelayFixed\nwait 3\n"
         for control in NETWORK_FIXED_ROWS:
-            text += checks(control, "CollectionBoxNetworkSettings")
+            text += checks(control, NETWORK_PAGE_BOX)
         text += (f"assert_label LabelNetworkFixedDelayHint frames, 0-{MAX_INPUT_DELAY_FRAMES}\n"
-                 "set_text TextNetworkDisplayName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
                  "set_text TextNetworkFixedDelay " + NETWORK_SAVED["NetworkInputDelayFrames"] + "\n"
                  "set_text TextNetworkIdleWait " + NETWORK_SAVED["NetworkHostIdleWaitMinutes"] + "\n"
-                 "post_command CheckboxNetworkAutoRepair\nwait 3\ndump_player_options\n"
+                 "post_command CheckboxNetworkAutoRepair\npost_command CheckboxNetworkToasts\n"
+                 "post_command CheckboxNetworkPrediction\nwait 3\ndump_player_options\n"
                  "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\n")
         text += LANDING + "assert_label TextMultiplayerName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
         text += checks("LabelMultiplayerNamePrompt", "MultiplayerLandingPanel")
@@ -211,6 +266,76 @@ def scripts(case, port, root):
                  + checks("LabelHostInputDelayPolicy", "MultiplayerHostPanel") +
                  "dump_host_options\n"
                  "post_command ButtonHostBack\nwait 4\nassert_substate Landing\ndump_host_options\nexit\n")
+    elif case == "net-chat":
+        # Every chat row is read where it is drawn; the muted-players button stays disabled with its
+        # reason until a muted-players store exists.
+        text = OPTIONS + net_page("Chat")
+        for control in ("CheckboxNetworkChatVisible", "CheckboxNetworkChatSound", "LabelNetworkChatScope",
+                        "ComboNetworkChatScope", "CheckboxNetworkChatNotify", "LabelNetworkChatTextSize",
+                        "ComboNetworkChatTextSize", "ButtonNetMutedPlayers", "LabelNetMutedReason"):
+            text += checks(control, "CollectionBoxNetPageChat")
+        text += ("assert_enabled ButtonNetMutedPlayers 0\n"
+                 "assert_label LabelNetMutedReason managed in the match\n"
+                 "assert_label ComboNetworkChatScope " + CHAT_SEED["NetworkChatDefaultScope"] + "\n"
+                 "assert_label ComboNetworkChatTextSize " + CHAT_SEED["NetworkChatTextSize"] + "\n"
+                 "dump_player_options\n"
+                 "post_command CheckboxNetworkChatVisible\npost_command CheckboxNetworkChatNotify\nwait 3\n"
+                 "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n")
+    elif case == "net-recovery":
+        # No recovery record survives a fresh run: the landing visit runs the ticket scan, the rejoin
+        # row says what it found and both actions stay off.
+        text = LANDING + "post_command ButtonBackToMain\nwait 5\n" + OPTIONS + net_page("Recovery")
+        for control in ("CheckboxNetworkAutoReconnect", "CheckboxNetworkOfferRejoin", "LabelNetLastHostTitle",
+                        "LabelNetLastHost", "LabelNetRecoveryTitle", "LabelNetRecoveryRecord",
+                        "LabelNetRecoveryStatus", "ButtonNetRejoin", "ButtonNetCancelRecovery"):
+            text += checks(control, "CollectionBoxNetPageRecovery")
+        text += ("assert_enabled ButtonNetRejoin 0\nassert_enabled ButtonNetCancelRecovery 0\n"
+                 "assert_label LabelNetRecoveryRecord No recovery record\n"
+                 "dump_player_options\n"
+                 "post_command CheckboxNetworkAutoReconnect\npost_command CheckboxNetworkOfferRejoin\nwait 3\n"
+                 "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n")
+    elif case == "net-files":
+        # The autosave rows mirror the stored host option; the diagnostics box commits a folder and
+        # the replay pref toggles. The folder buttons are layout-checked, not clicked - they own real
+        # OS side effects (a shell window, a clipboard write) a readback run must not take.
+        text = OPTIONS + net_page("Files")
+        for control in ("LabelNetAutosaveTitle", "LabelNetAutosave", "LabelNetAutosaveIntTitle",
+                        "LabelNetAutosaveInterval", "ButtonNetOpenAutosaves", "LabelNetAutosaveInfo",
+                        "LabelNetDiagDirTitle", "TextNetworkDiagDir", "ButtonNetCopyDiagPath",
+                        "ButtonNetSaveDiagnostics", "CheckboxNetworkRecordReplays"):
+            text += checks(control, "CollectionBoxNetPageFiles")
+        text += ("assert_label LabelNetAutosave Enabled\n"
+                 "assert_label LabelNetAutosaveInterval 45 s\n"
+                 "assert_enabled ButtonNetOpenAutosaves 1\nassert_enabled ButtonNetSaveDiagnostics 1\n"
+                 "set_text TextNetworkDiagDir " + FILES_SAVED["NetworkDiagnosticsDirectory"] + "\n"
+                 "post_command CheckboxNetworkRecordReplays\nwait 3\ndump_player_options\n"
+                 "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n")
+    elif case == "net-internet":
+        # A refused pin or URL keeps the stored value and says why on the page; a valid pair saves.
+        text = OPTIONS + net_page("Internet")
+        for control in ("LabelNetDirUrl", "TextNetworkDirUrl", "LabelNetDirPin", "TextNetworkDirPin",
+                        "LabelNetDirStatusTitle", "LabelNetDirStatus", "ButtonNetReplays",
+                        "ButtonNetConnDetails", "ButtonNetNatRelay", "LabelNetInternetReason"):
+            text += checks(control, "CollectionBoxNetPageInternet")
+        text += ("assert_enabled ButtonNetReplays 0\nassert_enabled ButtonNetConnDetails 0\n"
+                 "assert_enabled ButtonNetNatRelay 0\nassert_label LabelNetDirStatus Configured\n"
+                 "set_text TextNetworkDirPin nothex\n"
+                 "assert_label LabelNetInternetError 64 hexadecimal\n"
+                 "assert_label TextNetworkDirPin aaaa\n"
+                 "set_text TextNetworkDirUrl ftp://bogus\n"
+                 "assert_label LabelNetInternetError http://\n"
+                 "assert_label TextNetworkDirUrl " + INTERNET_SEED["SessionDirectoryUrl"] + "\n"
+                 "set_text TextNetworkDirUrl " + INTERNET_SAVED["SessionDirectoryUrl"] + "\n"
+                 "assert_label TextNetworkDirUrl " + INTERNET_SAVED["SessionDirectoryUrl"] + "\n"
+                 "dump_player_options\n"
+                 "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n")
+    elif case == "misc-page":
+        # The Misc box keeps its own rows; the match-status rows moved to the network player page.
+        text = OPTIONS + "select_settings_page Misc\nwait 3\nassert_settings_page Misc\n"
+        text += "assert_visible CollectionBoxMiscSettings 1\n"
+        for control in MISC_ROWS:
+            text += checks(control, "CollectionBoxMiscSettings")
+        text += "dump_player_options\npost_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n"
     elif case == "lobby-name":
         # The name box starts from the saved name, and the name it is hosted with is saved again.
         text = LANDING + "assert_label TextMultiplayerName " + NETWORK_SEED["NetworkDisplayName"] + "\n"
@@ -471,7 +596,8 @@ def run_case(options, case, root, failing=None):
             assert reports["host"]["service"]["status"] == "The other player left the match", reports["host"]["service"]["status"]
             assert reports["client"]["service"]["status"] == "Match left", reports["client"]["service"]["status"]
         if case == "pages":
-            assert [capture["settings_page"] for capture in images] == list(PAGES), [c["settings_page"] for c in images]
+            # The network page reports its selector's page ("Network:Player"); the top name is the prefix.
+            assert [capture["settings_page"].split(":")[0] for capture in images] == list(PAGES), [c["settings_page"] for c in images]
             captioned = [control for capture in images for control in capture["controls"] if control["text"]]
             assert captioned and all("text_fits" in control for control in captioned), "a caption carries no fit measurement"
             # The rows the options program adds land on these pages; the arm measures them the run they appear.
@@ -490,7 +616,7 @@ def run_case(options, case, root, failing=None):
                 assert available[0] <= rect[2] - COMBO_BUTTON, (name, rect, available)
         if case == "network":
             # The page shows the saved name, the page's own edits are saved, and the lobby box starts from them.
-            page = [capture for capture in images if capture["settings_page"] == "Network"]
+            page = [capture for capture in images if capture["settings_page"] == "Network:Player"]
             assert len(page) == 2, [capture["settings_page"] for capture in images]
             rows = {control["name"]: control for control in page[0]["controls"]}
             assert set(NETWORK_ROWS) <= rows.keys(), sorted(rows)
@@ -499,6 +625,10 @@ def run_case(options, case, root, failing=None):
             after = {control["name"]: control for control in page[1]["controls"]}
             assert set(NETWORK_ROWS) | set(NETWORK_FIXED_ROWS) <= after.keys(), sorted(after)
             assert all(after[name]["text_fits"] for name in NETWORK_FIXED_ROWS if after[name]["text"]), after
+            # The selector row sits on the network box; only the player page's box is drawn.
+            tabs = {control["name"]: control for control in page[0]["controls"] if control["name"] in NETWORK_TABS}
+            assert len(tabs) == len(NETWORK_TABS) and all(tab["text_fits"] for tab in tabs.values()), tabs
+            assert not any(box in rows or box in after for box in NETWORK_BOXES[1:]), sorted(rows)
             result["page_text"] = {name: [rows[name]["text"], after[name]["text"]] for name in NETWORK_ROWS}
             assert result["page_text"]["TextNetworkDisplayName"] == [NETWORK_SEED["NetworkDisplayName"], NETWORK_SAVED["NetworkDisplayName"]], result["page_text"]
             result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(NETWORK_SAVED))
@@ -506,11 +636,13 @@ def run_case(options, case, root, failing=None):
             # The page sits on the Misc page's grid: a 20px row pitch, and under the automatic policy
             # the hidden fixed row leaves no gap behind it.
             pitch = ("LabelNetworkDisplayName", "LabelNetworkDelayPolicy", "LabelNetworkFixedDelay",
-                     "LabelNetworkIdleWait", "CheckboxNetworkAutoRepair")
+                     "LabelNetworkIdleWait", "CheckboxNetworkAutoRepair", "CheckboxNetworkToasts",
+                     "LabelMatchStatusWidget")
             deltas = [after[b]["rect"][1] - after[a]["rect"][1] for a, b in zip(pitch, pitch[1:])]
-            assert deltas == [20, 20, 20, 20], deltas
-            closed = [rows[b]["rect"][1] - rows[a]["rect"][1] for a, b in zip(pitch[:2] + pitch[3:], (pitch[:2] + pitch[3:])[1:])]
-            assert closed == [20, 20, 20], closed
+            assert deltas == [20] * 6, deltas
+            without_fixed = pitch[:2] + pitch[3:]
+            closed = [rows[b]["rect"][1] - rows[a]["rect"][1] for a, b in zip(without_fixed, without_fixed[1:])]
+            assert closed == [20] * 5, closed
             # The landing's name row shares the Host/Join block's centre line; doubled centres avoid halves.
             landing = {c["name"]: c for c in images[-1]["controls"]}
             prompt, box = landing["LabelMultiplayerNamePrompt"]["rect"], landing["TextMultiplayerName"]["rect"]
@@ -520,6 +652,67 @@ def run_case(options, case, root, failing=None):
             # The host screen's own readback: the label sits beside the delay box and names the saved policy.
             policy = next((c for c in images[-2]["controls"] if c["name"] == "LabelHostInputDelayPolicy"), None)
             assert policy and policy["text"] == "(fixed)", policy
+        if case in ("net-chat", "net-recovery", "net-files", "net-internet", "misc-page"):
+            # One capture per page case: the sub-page's own rows, all fitted, and nothing the case
+            # names as disabled enabled in the draw.
+            sub_page = {"net-chat": "Network:Chat", "net-recovery": "Network:Recovery",
+                        "net-files": "Network:Files", "net-internet": "Network:Internet",
+                        "misc-page": "Misc"}[case]
+            assert [capture["settings_page"] for capture in images] == [sub_page], [c["settings_page"] for c in images]
+            rows = {control["name"]: control for control in images[0]["controls"]}
+            expected = {"net-chat": ("CheckboxNetworkChatVisible", "CheckboxNetworkChatSound", "ComboNetworkChatScope",
+                                     "CheckboxNetworkChatNotify", "ComboNetworkChatTextSize",
+                                     "ButtonNetMutedPlayers", "LabelNetMutedReason"),
+                        "net-recovery": ("CheckboxNetworkAutoReconnect", "CheckboxNetworkOfferRejoin",
+                                         "LabelNetLastHost", "LabelNetRecoveryRecord", "LabelNetRecoveryStatus",
+                                         "ButtonNetRejoin", "ButtonNetCancelRecovery"),
+                        "net-files": ("LabelNetAutosave", "LabelNetAutosaveInterval", "ButtonNetOpenAutosaves",
+                                      "LabelNetAutosaveInfo", "TextNetworkDiagDir", "ButtonNetCopyDiagPath",
+                                      "ButtonNetSaveDiagnostics", "CheckboxNetworkRecordReplays"),
+                        "net-internet": ("TextNetworkDirUrl", "TextNetworkDirPin", "LabelNetDirStatus",
+                                         "ButtonNetReplays", "ButtonNetConnDetails", "ButtonNetNatRelay",
+                                         "LabelNetInternetReason"),
+                        "misc-page": MISC_ROWS}[case]
+            assert set(expected) <= rows.keys(), (case, sorted(rows))
+            captioned = [control for control in images[0]["controls"] if control["text"]]
+            assert captioned and all("text_fits" in control for control in captioned), "a caption carries no fit measurement"
+            result["unfit"] = [control["name"] for control in captioned if control["text_fits"] is False]
+            assert not result["unfit"], result["unfit"]
+            disabled = {"net-chat": ("ButtonNetMutedPlayers",),
+                        "net-recovery": ("ButtonNetRejoin", "ButtonNetCancelRecovery"),
+                        "net-internet": ("ButtonNetReplays", "ButtonNetConnDetails", "ButtonNetNatRelay")}.get(case, ())
+            for name in disabled:
+                assert rows[name]["enabled"] is False, (name, rows[name])
+            result["page_text"] = {name: rows[name]["text"] for name in expected if rows[name]["text"]}
+            if case == "net-chat":
+                assert rows["LabelNetMutedReason"]["text"] == "Muted players are managed in the match.", rows["LabelNetMutedReason"]
+                assert rows["ComboNetworkChatScope"]["text"] == CHAT_SEED["NetworkChatDefaultScope"]
+                assert rows["ComboNetworkChatTextSize"]["text"] == CHAT_SEED["NetworkChatTextSize"]
+                result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(CHAT_SAVED))
+                assert result["saved"] == CHAT_SAVED, result["saved"]
+            if case == "net-recovery":
+                assert rows["LabelNetRecoveryRecord"]["text"] == "No recovery record", rows["LabelNetRecoveryRecord"]
+                result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(RECOVERY_SAVED))
+                assert result["saved"] == RECOVERY_SAVED, result["saved"]
+            if case == "net-files":
+                assert rows["LabelNetAutosave"]["text"] == "Enabled", rows["LabelNetAutosave"]
+                assert rows["LabelNetAutosaveInterval"]["text"] == "45 s", rows["LabelNetAutosaveInterval"]
+                assert rows["TextNetworkDiagDir"]["text"] == FILES_SAVED["NetworkDiagnosticsDirectory"], rows["TextNetworkDiagDir"]
+                result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(FILES_SAVED))
+                assert result["saved"] == FILES_SAVED, result["saved"]
+            if case == "net-internet":
+                # The refused pin/URL kept the stored values and the last good commit cleared the reason.
+                assert rows["TextNetworkDirUrl"]["text"] == INTERNET_SAVED["SessionDirectoryUrl"], rows["TextNetworkDirUrl"]
+                assert rows["TextNetworkDirPin"]["text"] == INTERNET_SEED["SessionDirectoryCertSha256"], rows["TextNetworkDirPin"]
+                assert rows["LabelNetInternetError"]["text"] == "", rows["LabelNetInternetError"]
+                result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(INTERNET_SAVED))
+                assert result["saved"] == INTERNET_SAVED, result["saved"]
+            if case == "misc-page":
+                # The match-status rows are gone from the box itself, not just hidden: a dump names
+                # every control the skin carries, and neither name may appear.
+                assert not set(MISC_GONE) & rows.keys(), sorted(rows)
+                grid = [rows["CheckboxSkipIntro"]["rect"][1], rows["LabelSceneBackgroundAutoScale"]["rect"][1]]
+                assert grid[1] - grid[0] == 4 * 20, grid
         if case == "lobby-name":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == NETWORK_SEED["NetworkDisplayName"]
             result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", {"NetworkDisplayName"})
@@ -567,13 +760,13 @@ def main():
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--case", choices=(*CASES, "all"), required=True)
-    parser.add_argument("--size", choices=("640x360", "960x540"), required=True)
+    parser.add_argument("--size", choices=("640x360", "960x540", "1280x720", "1920x1080"), required=True)
     parser.add_argument("--port", type=int, required=True)
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("LEAD_FAMILY.lock exists; no engine launch")
-    if not any(low <= options.port <= low + 9 for low in (48270, 48380, 48530, 48540, 48550)):
-        parser.error("this detector owns ports 48270-48279, 48380-48389, 48530-48539, 48540-48549 and 48550-48559")
+    if not any(low <= options.port <= low + 9 for low in (48270, 48380, 48530, 48540, 48550, 48840)):
+        parser.error("this detector owns ports 48270-48279, 48380-48389, 48530-48539, 48540-48549, 48550-48559 and 48840-48849")
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)
     options.revision = subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip()

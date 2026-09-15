@@ -256,10 +256,20 @@ namespace RTE::MenuAutomation {
 	}
 	// Both settings skins name a page's tab and box after the page, so scripts address pages by name.
 	constexpr std::array<std::string_view, 6> c_SettingsPages{"Video", "Audio", "Input", "Gameplay", "Misc", "Network"};
+	// The network page's own selector names its sub-pages the same way; a script addresses
+	// one as "Network:<page>" once the network page is up.
+	constexpr std::array<std::string_view, 5> c_NetworkPages{"Player", "Chat", "Recovery", "Files", "Internet"};
 
 	std::string SettingsPage(GUIControlManager* manager) {
 		for (const std::string_view page: c_SettingsPages) {
-			if (manager && Visible(manager->GetControl("CollectionBox" + std::string(page) + "Settings"))) return std::string(page);
+			if (manager && Visible(manager->GetControl("CollectionBox" + std::string(page) + "Settings"))) {
+				if (page == "Network") {
+					for (const std::string_view sub: c_NetworkPages) {
+						if (Visible(manager->GetControl("CollectionBoxNetPage" + std::string(sub)))) return "Network:" + std::string(sub);
+					}
+				}
+				return std::string(page);
+			}
 		}
 		return "";
 	}
@@ -269,6 +279,12 @@ namespace RTE::MenuAutomation {
 	static std::string s_PendingPage;
 
 	GUITab* PageTab(GUIControlManager* manager, const std::string& page) {
+		const size_t colon = page.find(':');
+		if (colon != std::string::npos) {
+			const std::string sub = page.substr(colon + 1);
+			const bool known = page.substr(0, colon) == "Network" && std::find(c_NetworkPages.begin(), c_NetworkPages.end(), sub) != c_NetworkPages.end();
+			return known && manager ? dynamic_cast<GUITab*>(manager->GetControl("TabNetPage" + sub)) : nullptr;
+		}
 		const bool known = std::find(c_SettingsPages.begin(), c_SettingsPages.end(), page) != c_SettingsPages.end();
 		return known && manager ? dynamic_cast<GUITab*>(manager->GetControl("Tab" + page + "Settings")) : nullptr;
 	}
@@ -396,9 +412,13 @@ namespace RTE::MenuAutomation {
 				return true;
 			}
 			if (command == "select_settings_page" || command == "assert_settings_page") {
-				observation = name + " active=" + SettingsPage(manager);
+				const std::string active = SettingsPage(manager);
+				observation = name + " active=" + active;
 				if (!argument.empty()) return false;
-				if (command == "assert_settings_page") return SettingsPage(manager) == name;
+				// "Network" asserts wherever its selector sits; "Network:Chat" asserts one page.
+				if (command == "assert_settings_page") {
+					return active == name || (active.size() > name.size() && active.compare(0, name.size(), name) == 0 && active[name.size()] == ':');
+				}
 				return QueuePage(manager, name);
 			}
 			if (command == "dump_host_options" || command == "dump_player_options") {
