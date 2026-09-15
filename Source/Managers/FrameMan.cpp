@@ -42,8 +42,6 @@
 #include <iostream>
 #include <cstring>
 #include <map>
-#include <string_view>
-#include <vector>
 
 using namespace RTE;
 
@@ -324,60 +322,18 @@ int FrameMan::CalculateTextHeight(const std::string& text, int maxWidth, bool is
 
 std::string FrameMan::SplitStringToFitWidth(const std::string& stringToSplit, int widthLimit, bool useSmallFont) {
 	GUIFont* fontToUse = GetFont(useSmallFont, false);
-	auto SplitSingleLineAsNeeded = [&widthLimit, &fontToUse](std::string& lineToSplitAsNeeded) {
-		// Wrap on word boundaries so a row never ends mid-word; a word wider than the limit still
-		// hard-breaks at the character that crosses it.
-		std::string wrapped;
-		std::string_view remaining = lineToSplitAsNeeded;
-		while (!remaining.empty()) {
-			size_t fitChars = 0;
-			size_t lastSpace = std::string_view::npos;
-			std::string probe;
-			for (const char c: remaining) {
-				probe += c;
-				if (fontToUse->CalculateWidth(probe) > widthLimit) {
-					// A space that crosses the limit is still the wrap point, not a hard-break.
-					if (c == ' ' && fitChars > 0) {
-						lastSpace = fitChars;
-					}
+	auto SplitSingleLineAsNeeded = [this, &widthLimit, &fontToUse](std::string& lineToSplitAsNeeded) {
+		int numberOfScreenWidthsForText = static_cast<int>(std::ceil(static_cast<float>(fontToUse->CalculateWidth(lineToSplitAsNeeded)) / static_cast<float>(widthLimit)));
+		if (numberOfScreenWidthsForText > 1) {
+			int splitInterval = static_cast<int>(std::ceil(static_cast<float>(lineToSplitAsNeeded.size()) / static_cast<float>(numberOfScreenWidthsForText)));
+			for (int i = 1; i <= numberOfScreenWidthsForText; i++) {
+				size_t newLineCharacterPosition = std::min(static_cast<size_t>(i * splitInterval + (i - 1)), lineToSplitAsNeeded.size());
+				if (newLineCharacterPosition == lineToSplitAsNeeded.size()) {
 					break;
 				}
-				if (c == ' ') lastSpace = fitChars;
-				++fitChars;
-			}
-			if (fitChars == remaining.size()) {
-				wrapped += remaining;
-				break;
-			}
-			if (lastSpace == 0) {
-				// A leading space would open an empty row, so it wraps away silently.
-				remaining.remove_prefix(1);
-				continue;
-			}
-			if (lastSpace != std::string_view::npos) {
-				size_t end = lastSpace;
-				while (end > 0 && remaining[end - 1] == ' ') {
-					--end;
-				}
-				if (end == 0) {
-					remaining.remove_prefix(lastSpace);
-					continue;
-				}
-				wrapped += remaining.substr(0, end);
-				wrapped += '\n';
-				size_t skip = end;
-				while (skip < remaining.size() && remaining[skip] == ' ') {
-					++skip;
-				}
-				remaining.remove_prefix(skip);
-			} else {
-				if (fitChars == 0) ++fitChars;
-				wrapped += remaining.substr(0, fitChars);
-				wrapped += '\n';
-				remaining.remove_prefix(fitChars);
+				lineToSplitAsNeeded.insert(newLineCharacterPosition, "\n");
 			}
 		}
-		lineToSplitAsNeeded = wrapped;
 	};
 
 	std::string splitString;
