@@ -112,6 +112,14 @@ local function armHotTrace(label)
   assert(hotTrace and util.traceinfo(hotTrace), 'no live compiled trace for the guarded store loop at '..label..': '..tostring(traceReason))
   _PreviewBarrierHotTrace = label..':'..tostring(hotTrace)..(kept and ':kept' or ':recorded')
 end
+-- The first live trace of any origin is what the arm used to accept; it is reported to show it is not this loop's.
+local firstAnyTrace = 0
+if jitEnabled then
+  for i = 1, 65535 do
+    if util.traceinfo(i) and util.traceir(i, 1) then firstAnyTrace = i; break end
+  end
+end
+_PreviewBarrierFirstTrace = firstAnyTrace
 armHotTrace('setup')
 local exits = 0
 local function onexit() exits = exits + 1 end
@@ -286,17 +294,19 @@ end
 				}
 				lua_getglobal(observed, "_PreviewBarrierHotTrace");
 				const char* hotTrace = lua_isstring(observed, -1) ? lua_tostring(observed, -1) : "none";
+				lua_getglobal(observed, "_PreviewBarrierFirstTrace");
+				const int firstTrace = lua_isnumber(observed, -1) ? static_cast<int>(lua_tointeger(observed, -1)) : -1;
 				// Both are documented limits, so the observed values are printed and a contract change shows up here.
 				std::cout << "[preview-barrier] state=" << index << " round=" << round
 				          << " upvalue_slot_after_end=" << (lua_isnumber(observed, slotTop + 1) ? static_cast<int>(lua_tointeger(observed, slotTop + 1)) : -1)
 				          << " registry_table_after_end=" << registryValue
-				          << " hot_trace=" << hotTrace << std::endl;
+				          << " hot_trace=" << hotTrace << " first_live_trace=" << firstTrace << std::endl;
 				lua_settop(observed, slotTop);
 				check("preview_barrier_registry_table", index, round, registryValue == 2 ? 0 : -1);
 			}
 		}
 		for (LuaStateWrapper* state: states) {
-			state->RunScriptString("_ScriptFieldsStash = _ScriptFieldsStash or {}; debug.sethook(); if _PreviewBarrierProbe and _PreviewBarrierProbe.cleanup then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; _PreviewBarrierUpvalueSlot = nil; _PreviewBarrierHotTrace = nil; rawset(_G, '_ScriptFieldsStash\\0probe', nil); _ScriptFieldsStash['preview:-7654321'] = nil; _ScriptFieldsStash['preview:gc'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
+			state->RunScriptString("_ScriptFieldsStash = _ScriptFieldsStash or {}; debug.sethook(); if _PreviewBarrierProbe and _PreviewBarrierProbe.cleanup then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; _PreviewBarrierUpvalueSlot = nil; _PreviewBarrierHotTrace = nil; _PreviewBarrierFirstTrace = nil; rawset(_G, '_ScriptFieldsStash\\0probe', nil); _ScriptFieldsStash['preview:-7654321'] = nil; _ScriptFieldsStash['preview:gc'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
 			lua_State* done = state->GetLuaState();
 			lua_pushnil(done);
 			lua_setfield(done, LUA_REGISTRYINDEX, "_PreviewBarrierRegistry");
