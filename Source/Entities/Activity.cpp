@@ -81,6 +81,7 @@ void Activity::Clear() {
 		m_HadBrain[player] = false;
 		m_BrainEvacuated[player] = false;
 		m_ControlledActor[player] = 0;
+		m_RenderSubstituteActor[player] = nullptr;
 		m_PlayerController[player].Reset();
 		m_MessageTimer[player].Reset();
 	}
@@ -142,6 +143,7 @@ int Activity::Create(const Activity& reference) {
 		m_BrainEvacuated[player] = reference.m_BrainEvacuated[player];
 		m_ViewState[player] = reference.m_ViewState[player];
 		m_ControlledActor[player] = reference.m_ControlledActor[player];
+		m_RenderSubstituteActor[player] = nullptr;
 		m_PlayerController[player] = reference.m_PlayerController[player];
 	}
 
@@ -1045,6 +1047,10 @@ int Activity::GetLockstepHumanSlotIndex(int team) const {
 Actor* Activity::GetControlledActor(int player) {
 	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
 		return nullptr;
+	}
+	// A preview render answers the clone the way the swapped slots do; the sim never runs inside the render window.
+	if (m_RenderSubstituteActor[player]) {
+		return m_RenderSubstituteActor[player];
 	}
 	if (m_SharedPlayerSeats) {
 		return ResolveNetActor(m_LockstepControlUID[player]);
