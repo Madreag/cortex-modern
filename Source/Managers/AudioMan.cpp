@@ -2427,6 +2427,30 @@ bool AudioMan::RunCheckpointSelfTest() {
 			ok = false;
 		}
 		try {
+			// ActivityMan::SaveGame pins the cursor back over the capture's own allocations and writes the
+			// runtime archive after that, so a container that took an identity in between still owns a voice.
+			const uint64_t liveCursor = GetCheckpointSoundContainerCursor();
+			std::unique_ptr<SoundContainer> late(static_cast<SoundContainer*>(preset->Clone()));
+			late->SetPaused(true); late->SetImmobile(true); late->SetLoopSetting(-1);
+			if (!late->Play()) throw std::runtime_error("the late sound did not play");
+			const int lateVoice = *late->GetPlayingChannels()->begin();
+			const uint64_t lateOwner = late->GetCheckpointIdentity();
+			SetCheckpointSoundContainerCursor(liveCursor);
+			const std::string archive = SaveCheckpoint();
+			std::string refusal;
+			const bool accepted = LoadCheckpoint(archive, true, nullptr, &refusal);
+			late->Stop();
+			late.reset();
+			SetCheckpointSoundContainerCursor(liveCursor);
+			if (!accepted) throw std::runtime_error("the archive the save wrote was refused: " + refusal);
+			if (lateOwner <= liveCursor) throw std::runtime_error("the late owner did not take an identity past the pinned cursor");
+			if (ArchivedVoiceOwner(archive, lateVoice) != lateOwner) throw std::runtime_error("the archive dropped the late voice's owner");
+			std::cout << "[audio-checkpoint-selftest] PASS cursor_covers_every_owner_the_archive_names" << std::endl;
+		} catch (const std::exception& error) {
+			std::cout << "[audio-checkpoint-selftest] FAIL cursor_covers_every_owner_the_archive_names " << error.what() << std::endl;
+			ok = false;
+		}
+		try {
 			const auto* actorPreset = dynamic_cast<const Actor*>(g_PresetMan.GetEntityPreset("AHuman", "Green Dummy", "Base.rte"));
 			const auto* woundPreset = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset("AEmitter", "Leaking Machinery", "Base.rte"));
 			if (!actorPreset || !woundPreset) throw std::runtime_error("missing wound restore selftest presets");
