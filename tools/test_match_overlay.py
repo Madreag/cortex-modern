@@ -4,14 +4,16 @@ Two menu-launched peers run at each viewport under each NetworkMatchStatusMode.
 Quiet and paused capture-on/off pairs compare complete traces. Host presses P to
 pause; Guest presses P to resume. The network UI probe reads the drawn labels and
 their rectangles. Additional arms force the widget's other triggers: the F6 seats
-panel, a wall-clock stall on the guest, and a guest drop that parks the host in
-the reconnect hold; that drop owes the player two toasts under every mode, the
+panel, a wall-clock stall on the guest, a guest drop that parks the host in
+the reconnect hold, and the same drop from a peer whose name is the longest the
+wire carries; that drop owes the player two toasts under every mode, the
 notice and the wait banner with the reclaim window. Off never paints the widget
 (event toasts still appear), Auto
 paints it on triggers and three seconds past recovery, Always paints it
 throughout. When it is up it must sit in the measured free zone: below 480 rows a
 single-line strip between the funds block and the controller icon, at or above it
-the top-right box.
+the top-right box. Every probe screenshot is read back like a tick capture: the
+widget's frame whole, its text inside it, clear of the HUD and of the seats panel.
 """
 
 import argparse
@@ -34,8 +36,14 @@ CAPTURE_TICKS = (60, 270, 500, 680, 880)
 BOX_WIDTH, BOX_HEIGHT, BOX_TOP, BOX_MARGIN = 252, 76, 32, 8
 STRIP_TOP, STRIP_LEFT, STRIP_RIGHT_MARGIN = 2, 152, 40
 COMPACT_MAX_HEIGHT = 480
+# The widest the widget itself can be: the compact band is 448 px, the box 252. The seats panel's
+# frame is wider than this at every supported size, so it is never mistaken for the widget.
+WIDGET_MAX_WIDTH = 460
+# The longest display name the wire carries (NetProtocol.h c_MaxDisplayNameBytes = 64).
+LONG_GUEST_NAME = "Guest-" + "0123456789" * 5 + "-LONGEND"
 STATUS = "LabelNetMatchStatus"
 STATUS_BOX = "BoxNetMatchStatus"
+PANEL = "NetworkSeats"
 TOAST = "LabelNetMatchToastNewest"
 # The toast stack draws oldest first, so the two rows read as the order they were pushed in.
 TOAST_FIRST, TOAST_SECOND = "LabelNetMatchToast0", "LabelNetMatchToast1"
@@ -58,7 +66,8 @@ MODE_INI = {"off": "Off", "auto": "Auto", "always": "Always"}
 # Arms beyond the original four drive the remaining visibility states. "event" is
 # the scripted pause/resume; "f6" opens the seats panel; "stall" makes the guest
 # sleep 8 s at tick 300 so the host waits on frames; "leave" kills the guest once
-# the host is past 290 so the host holds its dropped seat.
+# the host is past 290 so the host holds its dropped seat; "long_name" runs that
+# drop with a guest named the longest name the wire carries.
 ARMS = {
     "on": {"captures": True},
     "off": {},
@@ -67,6 +76,7 @@ ARMS = {
     "f6": {"f6": True},
     "stall": {"stall": True},
     "hold": {"leave": True},
+    "holdlong": {"leave": True, "long_name": True},
 }
 
 # The HUD furniture the widget must never touch, measured on the retained
@@ -120,6 +130,48 @@ def find_widget_paint(image, size):
             if bottom - y + 1 >= 8:
                 return (x0, y, x - x0, bottom - y + 1)
     return None
+
+
+def widget_frame(image, size):
+    """The widget's complete frame, or None with the reason it is not whole. Its border colour (59,65,83)
+    draws the top edge, both side columns and the bottom edge; a top edge wider than the widget can be is
+    the seats panel's, and a frame something paints over loses its sides, so neither reads as the widget."""
+    width, height = size
+    pixels = image.load()
+    limit = min(BOX_TOP + BOX_HEIGHT + 22, height)
+    for y in range(limit):
+        x = 0
+        while x < width:
+            if pixels[x, y] != WIDGET_BORDER:
+                x += 1
+                continue
+            x0 = x
+            while x < width and pixels[x, y] == WIDGET_BORDER:
+                x += 1
+            span = x - x0
+            if span < 60 or span > WIDGET_MAX_WIDTH:
+                continue
+            for bottom in range(y + 8, limit):
+                if all(pixels[px, bottom] == WIDGET_BORDER for px in range(x0, x0 + span)):
+                    broken = [py for py in range(y + 1, bottom)
+                              if pixels[x0, py] != WIDGET_BORDER or pixels[x0 + span - 1, py] != WIDGET_BORDER]
+                    if broken:
+                        return {"rect": None, "reason": f"frame at x{x0} y{y} w{span}: side rows painted over {broken}"}
+                    return {"rect": (x0, y, span, bottom - y + 1), "reason": "whole"}
+            return {"rect": None, "reason": f"frame at x{x0} y{y} w{span}: no bottom edge above row {limit}"}
+    return {"rect": None, "reason": "no widget-sized top edge"}
+
+
+def in_free_zone(box, size):
+    """The measured free zone: below 480 rows the single-line strip between the funds block and the
+    controller icon, at or above it the top-right box at its design position."""
+    width, height = size
+    if box is None:
+        return False
+    if height < COMPACT_MAX_HEIGHT:
+        return box[1] <= STRIP_TOP + 1 and box[3] <= 20 and box[0] >= STRIP_LEFT \
+            and box[0] + box[2] <= width - STRIP_RIGHT_MARGIN
+    return tuple(box) == (width - BOX_WIDTH - BOX_MARGIN, BOX_TOP, BOX_WIDTH, BOX_HEIGHT)
 
 
 def interior_ink(image, rect):
@@ -181,8 +233,8 @@ def set_settings(runtime, values):
     path.write_text(settings, encoding="utf-8")
 
 
-def menu_script(who, port):
-    text = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {who}\n"
+def menu_script(who, port, name=None):
+    text = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name or who}\n"
     if who == "Host":
         text += ("activate ButtonMultiplayerHostGame\nwait 10\n"
                  f"settext TextHostPort {port}\nsettext TextHostPlayers 2\nsettext TextHostInputDelay 3\n"
@@ -211,12 +263,21 @@ def text_assert(control, text):
 def probe_script(who, size, arm, mode):
     width, height = size
     compact = height < COMPACT_MAX_HEIGHT
+    guest = LONG_GUEST_NAME if arm.get("long_name") else "Guest"
     hidden = {"op": "assert_control", "control": STATUS_BOX, "equals": {"visible": False}, "fits": True}
     shown = {"op": "assert_control", "control": STATUS_BOX, "equals": {"visible": True}, "fits": True}
-    def widget(trigger):
+    def wanted(trigger):
         # The widget at a probe point: Always paints it, Off never does, Auto only
         # while a trigger or its three-second recovery linger is up.
-        return shown if mode == "always" or (mode == "auto" and trigger) else hidden
+        return mode == "always" or (mode == "auto" and trigger)
+    def widget(trigger):
+        return shown if wanted(trigger) else hidden
+    def shot(name, visible=None):
+        # The capture oracle reads its expectation back out of the script; the engine ignores the key.
+        step = {"op": "screenshot", "name": name}
+        if visible is not None:
+            step["widget"] = visible
+        return step
     status_reads = [label_assert(STATUS, "NET [F6]" if compact else "NET STATUS"),
                     label_assert(STATUS, "D 3" if compact else "D 3 ticks / 50.0 ms"),
                     label_assert(STATUS, "RTT "),
@@ -236,7 +297,7 @@ def probe_script(who, size, arm, mode):
         ]
         if mode != "off":
             steps += [label_assert(STATUS, "PAUSED")]
-        steps += [{"op": "screenshot", "name": f"widget-paused-{who.lower()}"}]
+        steps += [shot(f"widget-paused-{who.lower()}", wanted(True))]
         steps += [
             {"op": "wait", "sim_at_least": 430},
             {"op": "assert_control", "control": TOAST, "equals": {"visible": False, "text": ""}},
@@ -257,7 +318,9 @@ def probe_script(who, size, arm, mode):
                 {"op": "wait", "panel_open": True},
                 widget(True),
                 {"op": "assert_control", "control": "NetworkSeatsTitle", "equals": {"visible": True}},
-                {"op": "screenshot", "name": "widget-f6-panel-host"},
+                # The panel's own rectangle is what the capture is measured against.
+                {"op": "assert_control", "control": PANEL, "equals": {"visible": True}, "fits": True},
+                shot("widget-f6-panel-host", wanted(True)),
                 {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                 {"op": "wait", "panel_open": False},
             ]
@@ -267,13 +330,13 @@ def probe_script(who, size, arm, mode):
             # wait cannot mark the stall: Always already has the widget up, so it would never wait.
             steps += [{"op": "wait", "sim_at_least": 290}, {"op": "wait", "elapsed_ms": 2000}]
             if mode == "off":
-                steps += [hidden, {"op": "screenshot", "name": "widget-stall-off-host"}]
+                steps += [hidden, shot("widget-stall-off-host", False)]
             else:
                 # The stall UI pump keeps drawing and polling while the guest sleeps.
                 steps += [
                     shown,
                     label_assert(STATUS, "WAITING FOR FRAMES"),
-                    {"op": "screenshot", "name": "widget-stalled-host"},
+                    shot("widget-stalled-host", True),
                 ]
     if arm.get("leave"):
         if who == "Host":
@@ -284,16 +347,18 @@ def probe_script(who, size, arm, mode):
             # banner rides the next stall pump, so the two rows are up together.
             steps += [
                 {"op": "wait", "control": TOAST, "equals": {"visible": True}},
-                label_assert(TOAST_FIRST, "Guest dropped"),
+                label_assert(TOAST_FIRST, f"{guest} dropped"),
                 {"op": "wait", "renders": 2},
-                text_assert(TOAST_SECOND, "Match paused: waiting for Guest to return ("),
+                # Whatever the name's length, the banner owes the player the peer and the reclaim window.
+                text_assert(TOAST_SECOND, f"Match paused: waiting for {guest} to return ("),
                 text_assert(TOAST_SECOND, "s left)"),
-                label_assert(TOAST_SECOND, "Match paused: waiting for Guest to return"),
-                {"op": "screenshot", "name": f"toast-hold-banner-{mode}-host"},
+                label_assert(TOAST_SECOND, f"Match paused: waiting for {guest} to return"),
+                # The hold engages seconds after the drop, so the widget's own state is read later.
+                shot(f"toast-hold-banner-{mode}-host", False if mode == "off" else None),
             ]
             if mode == "off":
                 # The banners carry the whole recovery story in Off; the widget stays away.
-                steps += [hidden, {"op": "screenshot", "name": "widget-hold-off-host"}]
+                steps += [hidden, shot("widget-hold-off-host", False)]
             else:
                 steps += [
                     {"op": "wait", "control": STATUS, "equals": {"visible": True}},
@@ -301,7 +366,7 @@ def probe_script(who, size, arm, mode):
                     {"op": "wait", "elapsed_ms": 6000},
                     shown,
                     label_assert(STATUS, "WAITING FOR" if compact else "Waiting for"),
-                    {"op": "screenshot", "name": "widget-hold-host"},
+                    shot("widget-hold-host", True),
                 ]
         else:
             # The guest is killed mid-match, so its own probe has to be done before the drop.
@@ -327,7 +392,8 @@ def run_pair(repo, root, port, size, arm, mode, timeout, expected_pin):
             inputs = root / f"{who}_inputs"
             inputs.mkdir()
             menu = inputs / "menu.txt"
-            menu.write_text(menu_script(who, port), encoding="utf-8")
+            name = LONG_GUEST_NAME if arm.get("long_name") and who == "Guest" else who
+            menu.write_text(menu_script(who, port, name), encoding="utf-8")
             probe = inputs / "probe.json"
             probe.write_text(json.dumps(probe_script(who, size, arm, mode), indent=2), encoding="utf-8")
             flags = ["-menu-script", menu, "-num-lua-states", 4, "-tick-hashes", "-max-ticks", TICKS,
@@ -419,13 +485,9 @@ def image_oracle(path, size, arm, mode, name, tick):
         result["occluding"] = occluding_rects(box, size) if box else ["widget_missing"]
         if height < COMPACT_MAX_HEIGHT:
             result["expected_zone"] = [STRIP_LEFT, 0, width - STRIP_LEFT - STRIP_RIGHT_MARGIN, 20]
-            result["pass"] = box is not None and not result["occluding"] and box[1] <= STRIP_TOP + 1 and box[3] <= 20 \
-                and box[0] >= STRIP_LEFT and box[0] + box[2] <= width - STRIP_RIGHT_MARGIN
         else:
-            x, y = width - BOX_WIDTH - BOX_MARGIN, BOX_TOP
-            expected = (x, y, BOX_WIDTH, BOX_HEIGHT)
-            result["expected_rect"] = list(expected)
-            result["pass"] = box == expected and not result["occluding"]
+            result["expected_rect"] = [width - BOX_WIDTH - BOX_MARGIN, BOX_TOP, BOX_WIDTH, BOX_HEIGHT]
+        result["pass"] = in_free_zone(box, size) and not result["occluding"]
         result["interior_ink"] = interior_ink(image, box) if box else 0
         result["pass"] = result["pass"] and result["interior_ink"] > 0
         result["checks"] = {"paint_found": box is not None, "occluding": result["occluding"],
@@ -447,9 +509,44 @@ def image_oracle(path, size, arm, mode, name, tick):
     return result
 
 
+def probe_shot_oracle(path, size, expected_visible, panel_rect):
+    """A probe screenshot judged on its pixels, not on a control's visible flag: the widget's frame whole,
+    its text drawn inside it, in the free zone, clear of the HUD and - where the screen has the rows for
+    both - of the seats panel. A visible flag on a widget the panel paints over is what this catches."""
+    from PIL import Image
+
+    with Image.open(path) as source:
+        image = source.convert("RGB")
+    if image.size != tuple(size):
+        return {"pass": False, "path": str(path), "actual_size": list(image.size), "expected_size": list(size)}
+    found = widget_frame(image, size)
+    box = found["rect"]
+    result = {"path": str(path), "sha256": sha256(path), "size": list(image.size),
+              "expected_visible": expected_visible, "widget_paint": list(box) if box else None,
+              "frame": found["reason"], "panel_rect": list(panel_rect) if panel_rect else None, "pass": True}
+    if expected_visible is None:
+        result["checks"] = {}
+        return result
+    if not expected_visible:
+        result["pass"] = box is None
+        result["checks"] = {"paint_absent": box is None}
+        return result
+    result["occluding"] = occluding_rects(box, size) if box else ["widget_missing"]
+    result["interior_ink"] = interior_ink(image, box) if box else 0
+    # A short screen has no rows for both, so the strip draws over the panel; a tall one must clear it.
+    panel_clear = box is None or panel_rect is None or size[1] < COMPACT_MAX_HEIGHT \
+        or not rects_intersect(box, panel_rect)
+    result["checks"] = {"paint_found": box is not None, "occluding": result["occluding"],
+                        "text_in_widget": result["interior_ink"] > 0,
+                        "in_free_zone": in_free_zone(box, size), "panel_clear": panel_clear}
+    result["pass"] = box is not None and not result["occluding"] and result["interior_ink"] > 0 \
+        and in_free_zone(box, size) and panel_clear
+    return result
+
+
 def inspect_pair(root, records, size, arm, mode, name):
-    checks, details = {}, {"records": records, "captures": {}, "probes": {}, "events": {}, "occlusion": {},
-                         "mode": mode, "arm": name}
+    checks, details = {}, {"records": records, "captures": {}, "shots": {}, "probes": {}, "events": {},
+                         "occlusion": {}, "mode": mode, "arm": name}
     leaving = bool(arm.get("leave"))
     for who in ("Host", "Guest"):
         record = records.get(who, {})
@@ -495,9 +592,10 @@ def inspect_pair(root, records, size, arm, mode, name):
             checks[f"{who}_live_rtt"] = bool(status_texts) and all(
                 re.search(r"(?:^|\n| )RTT (?:\d+|--) ms", text) if re.search(r"waiting for", text, re.I)
                 else re.search(r"(?:^|\n| )RTT \d+ ms", text) for text in status_texts)
-            checks[f"{who}_pace_field"] = all(re.search(r"PACE \d+(?:\.\d+)? tps", text) for text in status_texts)
+            checks[f"{who}_pace_field"] = bool(status_texts) and all(re.search(r"PACE \d+(?:\.\d+)? tps", text) for text in status_texts)
             running = [text for text in status_texts if not re.search(r"waiting for", text, re.I)]
-            checks[f"{who}_measured_pace"] = all(re.search(r"PACE (?:[1-9]\d*(?:\.\d+)?|0\.[1-9]\d*) tps", text) for text in running)
+            # An arm that read no status text at all passed both pace checks vacuously, so the guard stays.
+            checks[f"{who}_measured_pace"] = bool(status_texts) and all(re.search(r"PACE (?:[1-9]\d*(?:\.\d+)?|0\.[1-9]\d*) tps", text) for text in running)
         capture_lines = [(int(match[1]), match[2], match[3] == "1") for line in log.splitlines()
                          if (match := CAPTURE.match(line))]
         shots = sorted((root / who / "runtime" / "ScreenShots").glob("net_match_tick_*.png"))
@@ -510,6 +608,18 @@ def inspect_pair(root, records, size, arm, mode, name):
             image_result = image_oracle(matching[0], size, arm, mode, name, tick) if len(matching) == 1 else {"pass": False, "reason": "missing or duplicate capture", "tick": tick}
             details["captures"][who]["images"].append(image_result)
             checks[f"{who}_pixels_{tick}"] = image_result["pass"]
+        # Every probe screenshot is judged on its pixels too, against the seats panel when one is open.
+        panel_rects = [tuple(obs["control"]["rect"]) for step, obs in observations
+                       if step.get("control") == PANEL and obs.get("control", {}).get("visible")]
+        details["shots"][who] = []
+        for step, obs in observations:
+            if step.get("op") != "screenshot":
+                continue
+            path = Path(obs["screenshot"]) if "screenshot" in obs else None
+            shot_result = probe_shot_oracle(path, size, step.get("widget"), panel_rects[-1] if panel_rects else None) \
+                if path and path.exists() else {"pass": False, "reason": "missing probe capture", "name": step["name"]}
+            details["shots"][who].append(shot_result)
+            checks[f"{who}_shot_{step['name']}"] = shot_result["pass"]
         if arm.get("event"):
             pauses = [int(match[1]) for line in log.splitlines() if (match := PAUSE_EVENT.match(line))]
             resumes = [int(match[1]) for line in log.splitlines() if (match := RESUME_EVENT.match(line))]
@@ -566,6 +676,10 @@ def inspect_pair(root, records, size, arm, mode, name):
                     and all("dropped" in obs["control"].get("text", "") for obs in row_reads[TOAST_FIRST]) \
                     and all(HOLD_BANNER.search(obs["control"].get("text", "")) for obs in row_reads[TOAST_SECOND])
                 checks["Host_hold_banner_line"] = len(banner_lines) == 1
+                if arm.get("long_name"):
+                    # The engine carried the whole 64-byte name, so what the rows show is a layout choice.
+                    checks["Host_long_name_delivered"] = any(HOLD_BANNER_LINE.match(entry["text"])[1] == LONG_GUEST_NAME
+                                                             for entry in banner_lines)
                 checks["Host_hold_recovery_or_end"] = bool(resumed_toast_reads) or "lockstep wait: PeerLeft" in log
                 if mode == "off":
                     checks["Host_hold_widget_absent"] = not hold_reads and not widget_rects
