@@ -65,6 +65,9 @@ SP_INDEX = (
 )
 # The spectator's own input: cycle forward twice and back once, well after the brain is gone.
 CYCLE_INPUT = "# spectator cycling for the brainless seat\n420 421 NEXT\n460 461 NEXT\n500 501 PREV\n"
+# Calibrated: the AI's first wave lands around sim second 4, so the brain dies with both CPU sides
+# already fighting, and the cycling presses land at ticks 422/462/502 - after the death at tick ~301.
+KILL_MS = 5000
 
 
 def sha256(path: Path) -> str:
@@ -92,12 +95,17 @@ def probe_rows(text: str) -> list[dict]:
     return rows
 
 
-def stage_user_module(runtime: Path, settings_value=None) -> Path:
-    """The staged UserScenes module: the three-team preset, its activity script and the probe."""
+def stage_user_module(runtime: Path, settings_value=None, arm_trace: bool = False) -> Path:
+    """The staged UserScenes module: the three-team preset, its activity script and the arm options."""
     module = Path(runtime) / "Userdata/UserScenes.rte"
     module.mkdir(parents=True, exist_ok=True)
     (module / "Index.ini").write_text(SP_INDEX, encoding="utf-8")
     (module / "SpectateSkirmish.lua").write_bytes(FIXTURE.read_bytes())
+    # armTrace only in single player: on a match peer, opening a metrics run would disarm the
+    # per-tick recording the match harness already armed (BeginRun re-reads the scenario runner).
+    (module / "SpectateOptions.lua").write_text(
+        "return { armTrace = " + ("true" if arm_trace else "false") +
+        ", killAtMs = " + str(KILL_MS) + " }\n", encoding="utf-8")
     if settings_value is not None:
         set_setting(Path(runtime) / "Userdata/Settings.ini", settings_value)
     return module
@@ -168,7 +176,7 @@ def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float) -> 
 
     def prepare(*positional, **keywords):
         run = original_run(*positional, **keywords)
-        stage_user_module(Path(run.cwd), local_setting)
+        stage_user_module(Path(run.cwd), local_setting, arm_trace=False)
         return run
 
     harness.run_isolated = prepare
@@ -185,11 +193,15 @@ def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float) -> 
               bool(seat_rows) and all(all(view == VIEW_OBSERVE for view in row["views"][:2]) for row in seat_rows),
               f"views after the deaths={[row['views'] for row in seat_rows][:4]}",
               [out / "e2e/brainless_spectate" / peer / "stdout.log"])
-        # The host's flag is the match rule on BOTH machines, against both local settings.
+        # The host's flag is the match rule on BOTH machines, against both local settings. Only the
+        # rows of a RUNNING match say that: once the round is over the lockstep sync is gone and the
+        # query answers this machine's own setting again, which is the designed behaviour.
+        running_rows = [row for row in rows[peer] if row["state"] != ACTIVITY_OVER]
         check(checks, f"{peer}_follows_host_rule",
-              bool(rows[peer]) and all(row["rule"] == expected_rule for row in rows[peer]),
-              f"local setting={'1' if local_setting else '0'} rule rows="
-              f"{sorted({row['rule'] for row in rows[peer]})}",
+              bool(running_rows) and all(row["rule"] == expected_rule for row in running_rows),
+              f"local setting={'1' if local_setting else '0'} rule rows in the running match="
+              f"{sorted({row['rule'] for row in running_rows})} after the end="
+              f"{sorted({row['rule'] for row in rows[peer] if row['state'] == ACTIVITY_OVER})}",
               [out / "e2e/brainless_spectate" / peer / "stdout.log"])
     # Today's BuildMatchConfig seats exactly one CPU slot, so after both human brains die exactly one
     # side stands and the round ends under either rule: the two-AI-sides "runs on" row needs L11's N
@@ -214,7 +226,7 @@ def sp_arm(out: Path, setting_on: bool, cycle_input: bool, ticks: int, timeout: 
 
     out.mkdir(parents=True, exist_ok=False)
     runtime = prepare_runtime(REPO, out)
-    stage_user_module(runtime, setting_on)
+    stage_user_module(runtime, setting_on, arm_trace=True)
 
     # Run past the end so BOTH arms report the same number of rows: the round that ends prints its
     # Over rows instead of simply stopping, which is what tells the two arms apart.
@@ -267,6 +279,7 @@ def sp_arm(out: Path, setting_on: bool, cycle_input: bool, ticks: int, timeout: 
 
 
 def main() -> int:
+    global KILL_MS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("arm", choices=("net_rule_on", "net_rule_off", "sp_keep_playing",
                                         "sp_end_match", "sp_view_is_local"))
@@ -274,9 +287,12 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=PORT_RANGE.start)
     parser.add_argument("--ticks", type=int, default=900)
     parser.add_argument("--timeout", type=float, default=420)
+    parser.add_argument("--kill-ms", type=int, default=KILL_MS,
+                        help="sim time of the brain kill; 0 is the control arm where nobody dies")
     args = parser.parse_args()
     if args.port not in PORT_RANGE:
         parser.error(f"port is outside {PORT_RANGE.start}..{PORT_RANGE.stop - 1}")
+    KILL_MS = args.kill_ms
     refuse_on_locks()
     out = (args.out or SCRATCH / (args.arm + "-" + time.strftime("%Y%m%d-%H%M%S"))).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -285,7 +301,8 @@ def main() -> int:
 
     manifest = {"stamp": stamp(), "arm": args.arm, "port": args.port, "ticks": args.ticks,
                 "repo": str(REPO), "exe_sha256": sha256(REPO / "Cortex Command.exe"),
-                "driver_sha256": sha256(__file__), "fixture_sha256": sha256(FIXTURE)}
+                "driver_sha256": sha256(__file__), "fixture_sha256": sha256(FIXTURE),
+                "kill_ms": KILL_MS}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     if args.arm.startswith("net_"):
