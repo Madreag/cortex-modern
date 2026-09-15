@@ -1249,6 +1249,9 @@ static void build_subroutines(BuildCtx *ctx)
   |.ffunc_2 setmetatable
   |  // Fast path: no mt for table yet and not clearing the mt.
   |  checktp TMP1, CARG1, -LJ_TTAB, ->fff_fallback
+  |  lw TMP0, TAB:TMP1->preview
+  |  bltz TMP0, ->fff_fallback
+  |.  nop
   |  gettp TMP3, CARG2
   |   ld TAB:TMP0, TAB:TMP1->metatable
   |   lbu TMP2, TAB:TMP1->marked
@@ -4564,6 +4567,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   ld TMP2, 0(CARG3)
     |  daddu RA, BASE, RA
     |  checktab RB, ->vmeta_tsetv
+    |  lw TMP0, TAB:RB->preview
+    |  bltz TMP0, ->vmeta_tsetv
+    |.  nop
     |  checkint TMP2, >5
     |.  sextw RC, TMP2
     |  lw TMP0, TAB:RB->asize
@@ -4619,6 +4625,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   cleartp STR:RC
     |  checktab TAB:RB, ->vmeta_tsets1
     |->BC_TSETS_Z:
+    |  lw TMP0, TAB:RB->preview
+    |  bltz TMP0, ->vmeta_tsets
+    |.  nop
     |  // TAB:RB = GCtab *, STR:RC = GCstr *, RA = BASE+src*8
     |  lw TMP0, TAB:RB->hmask
     |   lw TMP1, STR:RC->sid
@@ -4709,6 +4718,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   daddu RA, BASE, RA
     |  srl TMP0, RC, 3
     |  checktab RB, ->vmeta_tsetb
+    |  lw TMP1, TAB:RB->preview
+    |  bltz TMP1, ->vmeta_tsetb
+    |.  nop
     |  lw TMP1, TAB:RB->asize
     |   ld TMP2, TAB:RB->array
     |  sltu AT, TMP0, TMP1
@@ -4756,6 +4768,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  bnez AT, >7
     |.  daddu RA, BASE, RA
     |2:
+    |  lw TMP2, TAB:CARG2->preview
+    |  bltz TMP2, ->vmeta_tsetr
+    |.  nop
     |  sltu AT, CARG3, TMP0
     |   sll TMP2, CARG3, 3
     |  beqz AT, ->vmeta_tsetr		// In array part?
@@ -4781,6 +4796,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |    beqz TMP0, >4			// Nothing to copy?
     |.    srl CARG3, TMP0, 3
     |  cleartp CARG2
+    |  lw TMP2, TAB:CARG2->preview
+    |  bltz TMP2, >8
+    |.  nop
     |  addu CARG3, CARG3, TMP3
     |  lw TMP2, TAB:CARG2->asize
     |   sll TMP1, TMP3, 3
@@ -4814,6 +4832,17 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  move RD, BASE
     |  b <1
     |.  ld BASE, L->base	// Reload BASE for lack of a saved register.
+    |
+    |8:
+    |  load_got lj_preview_write
+    |  sd BASE, L->base
+    |  sd PC, SAVE_PC
+    |  move BASE, RD
+    |  call_intern lj_preview_write
+    |.  move CARG1, L
+    |  move RD, BASE
+    |  b <1
+    |.  ld BASE, L->base
     |
     |7:  // Possible table write barrier for any value. Skip valiswhite check.
     |  barrierback TAB:CARG2, TMP3, TMP0, <4

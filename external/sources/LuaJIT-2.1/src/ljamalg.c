@@ -27,6 +27,7 @@
 #include "lj_buf.c"
 #include "lj_str.c"
 #include "lj_tab.c"
+#include "lj_preview.c"
 #include "lj_func.c"
 #include "lj_udata.c"
 #include "lj_meta.c"

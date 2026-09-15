@@ -87,6 +87,7 @@ static GCtab *newtab(lua_State *L, uint32_t asize, uint32_t hbits)
     lj_assertL((sizeof(GCtab) & 7) == 0, "bad GCtab size");
     t = (GCtab *)lj_mem_newgco(L, sizetabcolo(asize));
     t->gct = ~LJ_TTAB;
+    t->preview = 0;
     t->nomm = (uint8_t)~0;
     t->colo = (int8_t)asize;
     setmref(t->array, (TValue *)((char *)t + sizeof(GCtab)));
@@ -102,6 +103,7 @@ static GCtab *newtab(lua_State *L, uint32_t asize, uint32_t hbits)
     Node *nilnode;
     t = lj_mem_newobj(L, GCtab);
     t->gct = ~LJ_TTAB;
+    t->preview = 0;
     t->nomm = (uint8_t)~0;
     t->colo = 0;
     setmref(t->array, NULL);
@@ -202,8 +204,9 @@ GCtab * LJ_FASTCALL lj_tab_dup(lua_State *L, const GCtab *kt)
 }
 
 /* Clear a table. */
-void LJ_FASTCALL lj_tab_clear(GCtab *t)
+void LJ_FASTCALL lj_tab_clear(lua_State *L, GCtab *t)
 {
+  if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
   clearapart(t);
   if (t->hmask > 0) {
     Node *node = noderef(t->node);
@@ -215,6 +218,7 @@ void LJ_FASTCALL lj_tab_clear(GCtab *t)
 /* Free a table. */
 void LJ_FASTCALL lj_tab_free(global_State *g, GCtab *t)
 {
+  if (t->preview) lj_preview_forget(g, t);
   if (t->hmask > 0)
     lj_mem_freevec(g, noderef(t->node), t->hmask+1, Node);
   if (t->asize > 0 && LJ_MAX_COLOSIZE != 0 && t->colo <= 0)
@@ -233,6 +237,7 @@ void lj_tab_resize(lua_State *L, GCtab *t, uint32_t asize, uint32_t hbits)
   Node *oldnode = noderef(t->node);
   uint32_t oldasize = t->asize;
   uint32_t oldhmask = t->hmask;
+  if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
   if (asize > oldasize) {  /* Array part grows? */
     TValue *array;
     uint32_t i;
@@ -436,6 +441,7 @@ cTValue *lj_tab_get(lua_State *L, GCtab *t, cTValue *key)
 TValue *lj_tab_newkey(lua_State *L, GCtab *t, cTValue *key)
 {
   Node *n = hashkey(t, key);
+  if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
   if (!tvisnil(&n->val) || t->hmask == 0) {
     Node *nodebase = noderef(t->node);
     Node *collide, *freenode = getfreetop(t, nodebase);
@@ -512,6 +518,8 @@ TValue *lj_tab_setinth(lua_State *L, GCtab *t, int32_t key)
 {
   TValue k;
   Node *n;
+  if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+  if (inarray(t, key)) return arrayslot(t, key);
   k.n = (lua_Number)key;
   n = hashnum(t, &k);
   do {
@@ -525,6 +533,7 @@ TValue *lj_tab_setstr(lua_State *L, GCtab *t, const GCstr *key)
 {
   TValue k;
   Node *n = hashstr(t, key);
+  if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
   do {
     if (tvisstr(&n->key) && strV(&n->key) == key)
       return &n->val;
@@ -536,6 +545,7 @@ TValue *lj_tab_setstr(lua_State *L, GCtab *t, const GCstr *key)
 TValue *lj_tab_set(lua_State *L, GCtab *t, cTValue *key)
 {
   Node *n;
+  if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
   t->nomm = 0;  /* Invalidate negative metamethod cache. */
   if (tvisstr(key)) {
     return lj_tab_setstr(L, t, strV(key));

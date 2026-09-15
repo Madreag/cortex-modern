@@ -24,6 +24,16 @@
 #include "SoundSimulation.h"
 #include "TimerMan.h"
 
+#include "lua.hpp"
+
+extern "C" {
+#include "lj_obj.h"
+#include "lj_jit.h"
+#include "lj_dispatch.h"
+#include "lj_trace.h"
+#include "lj_bc.h"
+}
+
 #include <iostream>
 #include <functional>
 #include <memory>
@@ -31,6 +41,451 @@
 #include <unordered_set>
 
 namespace RTE {
+
+	bool PreviewScriptSelfTest::CheckGlobalWriteBarrier() {
+		static const std::string setup = R"lua(
+local p = {data = {1, 2, 3, x = 4}, list = {4, 1, 3, 2}, capi = {x = 11, [1] = 12}, cmeta = {}}
+_PreviewBarrierProbe = p
+local priorUtil = package.loaded['jit.util']
+local priorClear = package.loaded['table.clear']
+-- Opening table.clear writes the key into the live table library, which no baseline holds.
+local priorLibClear = rawget(table, 'clear')
+local util = jit and require('jit.util')
+local clear = require('table.clear')
+p.cleanup = function() package.loaded['jit.util'] = priorUtil; package.loaded['table.clear'] = priorClear; rawset(table, 'clear', priorLibClear) end
+p.clearData = {1, 2, key = 3}
+p.namedRoot = {value = 1}
+rawset(_G, '_ScriptFieldsStash\0probe', p.namedRoot)
+p.modeNames = setmetatable({keep = {value = 1}}, {['__mode\0extra'] = 'v'})
+local hidden = {deep = {value = 31}}
+local sink = {}
+local mt = {__index = {fallback = 17}, __newindex = function(t, k, v)
+  if k == 'trap' then sink[k] = v else rawset(t, k, v) end
+end}
+setmetatable(p.data, mt)
+p.key = {}; p.data[p.key] = 'key'; p.data[false] = 'false'; p.data[1.5] = 'fraction'; p.data[0] = 'zero'
+p.alias = p.data; p.cycle = p; p.sink = sink; p.mt = mt
+p.colocated = {10, 20, 30}; p.separate = {}
+for i = 1, 96 do p.separate[i] = i end
+p.hot = {x = 7, raw = 8, [1] = 9}
+p.big = {}
+for i = 1, 8192 do p.big[i] = i end
+p.hookData = {count = 0}
+p.weak = setmetatable({}, {__mode = 'v'})
+p.weak[1] = {value = 1}
+local function sequence(t)
+  local result, k, v = {}, nil, nil
+  repeat
+    k, v = next(t, k)
+    if k ~= nil then result[#result+1] = tostring(k)..'='..tostring(v) end
+  until k == nil
+  return table.concat(result, '|')
+end
+local order, length = sequence(p.data), #p.data
+local originalCMeta = {kind = 'original'}
+setmetatable(p.cmeta, originalCMeta)
+local function hot(t, n)
+  for i = 1, n do
+    t.x = i; t[i % 16 + 1] = i; rawset(t, 'raw', i)
+  end
+end
+local jitEnabled = jit and jit.status() or false
+local traceStarts, hotTrace, traceReason, traceSeen = {}, nil, 'no trace event', {}
+local function traceEvent(what, tr, func, pos, errmsg)
+  traceSeen[what] = (traceSeen[what] or 0) + 1
+  if what == 'flush' then
+    traceStarts, hotTrace, traceReason = {}, nil, 'trace cache flushed'
+  elseif what == 'start' then
+    -- A flushed trace number is handed out again, so the recorded one only counts while it keeps its number.
+    if tr == hotTrace then hotTrace, traceReason = nil, 'trace number reused' end
+    traceStarts[tr] = func
+  elseif what == 'stop' then
+    if traceStarts[tr] == hot or func == hot then hotTrace, traceReason = tr, 'recorded' end
+    traceStarts[tr] = nil
+  elseif what == 'abort' then
+    if traceStarts[tr] == hot or func == hot then traceReason = 'aborted at pc '..tostring(pos)..': '..tostring(errmsg) end
+    traceStarts[tr] = nil
+  end
+end
+local function seenCounts()
+  return tostring(traceSeen.start or 0)..'/'..tostring(traceSeen.stop or 0)..'/'..tostring(traceSeen.abort or 0)..'/'..tostring(traceSeen.flush or 0)
+end
+local function liveTraces()
+  local live = 0
+  for i = 1, 1024 do if util.traceinfo(i) then live = live + 1 end end
+  return live
+end
+local function recordHot()
+  traceStarts, hotTrace, traceReason, traceSeen = {}, nil, 'no trace event', {}
+  jit.attach(traceEvent, 'trace')
+  local scratch = {}
+  hot(scratch, 512); hot(scratch, 512)
+  jit.attach(traceEvent)
+end
+-- A live compiled trace for the guarded loop is a precondition of the JIT arm, so say why it is missing.
+local armNote = ''
+local function publishHotTrace(note)
+  armNote = (armNote ~= '' and (armNote..'|') or '')..note
+  _PreviewBarrierHotTrace = armNote
+end
+p.hotNote = function() return armNote end
+local function armHotTrace(label)
+  if not jitEnabled then
+    if label == 'setup' then armNote = '' end
+    publishHotTrace(label..':jit-off')
+    return
+  end
+  local how = 'kept'
+  if hotTrace == nil or util.traceinfo(hotTrace) == nil then
+    recordHot()
+    how = 'recorded'
+    if hotTrace == nil then
+      -- A full trace cache and an already patched loop are both ignored in silence, so clear them and record again.
+      local first = seenCounts()..'@'..liveTraces()
+      jit.flush()
+      recordHot()
+      how = 'flushed('..first..')'
+      if hotTrace == nil then
+        -- A recorder left mid-trace stops hot counting for the whole state, and only a mode change aborts it.
+        local second = seenCounts()..'@'..liveTraces()
+        jit.off(); jit.on(); jit.flush()
+        recordHot()
+        how = 'restarted('..first..','..second..')'
+      end
+    end
+  end
+  if label == 'setup' then armNote = '' end
+  publishHotTrace(label..':'..tostring(hotTrace or 0)..':'..how)
+  assert(hotTrace and util.traceinfo(hotTrace), 'no live compiled trace for the guarded store loop at '..label..': '..tostring(traceReason)..' events(start/stop/abort/flush)='..seenCounts()..' live_traces='..liveTraces()..' status='..tostring(jit.status()))
+end
+-- The first live trace of any origin is what the arm used to accept; it is reported to show it is not this loop's.
+local firstAnyTrace = 0
+if jitEnabled then
+  for i = 1, 65535 do
+    if util.traceinfo(i) and util.traceir(i, 1) then firstAnyTrace = i; break end
+  end
+end
+_PreviewBarrierFirstTrace = firstAnyTrace
+armHotTrace('setup')
+local exits = 0
+local function onexit() exits = exits + 1 end
+local slot = 1
+p.prepare = function()
+  p.co = coroutine.create(function()
+    local value = {deep = {value = 41}}
+    coroutine.yield()
+    value.deep.value = 91
+    coroutine.yield()
+    return value.deep.value
+  end)
+  assert(coroutine.resume(p.co))
+  p.weak[1] = {value = 1}
+  armHotTrace('prepare')
+end
+p.mutate = function()
+  assert(rawequal(p.data, p.alias) and p.cycle == p)
+  assert(getmetatable(p.data) == mt and p.data.fallback == 17)
+  assert(#p.data == length and sequence(p.data) == order)
+  assert(rawget(p.data, 'x') == 4 and rawget(p.data, 'fallback') == nil)
+  p.data.x = 5; p.data.x = 6; p.data.x = nil; p.data.x = 7
+  p.data.trap = 51
+  assert(rawget(p.data, 'trap') == nil and sink.trap == 51)
+  rawset(p.data, 'raw', 61); rawset(p.data, p.key, nil)
+  p.data[-0.0] = 'changed'; p.data[false] = nil; p.data[1.5] = 'changed'
+  table.insert(p.list, 2, 8); assert(table.remove(p.list, 1) == 4)
+  table.sort(p.list); assert(#p.list == 4 and p.list[1] == 1 and p.list[4] == 8)
+  table.move(p.list, 1, 3, 2); assert(table.concat(p.list, ',') == '1,1,2,3')
+  clear(p.clearData); assert(next(p.clearData) == nil and #p.clearData == 0)
+  p.namedRoot.value = 2; p.modeNames.keep = {value = 2}
+  for i = 1, 1024 do p.data['new'..i] = i; p.colocated[i] = i; p.separate[i+96] = i end
+  setmetatable(p.data, {__index = {fallback = 29}})
+  assert(p.data.fallback == 29 and getmetatable(p.data) ~= mt)
+  hidden.deep.value = 81
+  armHotTrace('window')
+  local windowLive = not jitEnabled or (hotTrace and util.traceinfo(hotTrace))
+  local exitsBefore = exits
+  if windowLive and jitEnabled then jit.attach(onexit, 'texit') end
+  hot(p.hot, 512)
+  if windowLive and jitEnabled then jit.attach(onexit) end
+  assert(p.hot.x == 512 and rawget(p.hot, 'raw') == 512)
+  slot = 2
+  assert((jit and jit.status() or false) == jitEnabled)
+  assert(coroutine.resume(p.co))
+  assert(not windowLive or not jitEnabled or exits > exitsBefore, 'no compiled trace ran for the guarded stores')
+  rawset(p.weak, 2, {})
+  if p.weak[1] then p.weak[1].value = 2 end
+  local hook = function() p.hookData.count = p.hookData.count + 1 end
+  debug.sethook(hook, '', 1)
+  assert(debug.gethook() == hook)
+  debug.sethook()
+  assert(p.hookData.count > 0)
+  p.added = {nested = {value = 71}}
+end
+p.collected = function()
+  collectgarbage('restart'); collectgarbage('collect'); collectgarbage('collect')
+  assert(p.weak[1] == nil and p.weak[2] == nil, 'weak references stayed live')
+end
+p.accounting = function()
+  -- Only the beforeimage of p.big is allocated between the two readings.
+  local before = collectgarbage('count')
+  p.big[1] = -1
+  local inside = collectgarbage('count')
+  _ScriptFieldsStash['preview:gc'] = inside
+  assert(inside - before >= 48, 'beforeimage bytes unaccounted: '..tostring(inside-before))
+end
+p.released = function()
+  assert(p.big[1] == 1, 'the captured array did not come back')
+  collectgarbage('collect')
+  local inside, after = _ScriptFieldsStash['preview:gc'], collectgarbage('count')
+  _ScriptFieldsStash['preview:gc'] = nil
+  assert(inside and inside - after >= 48, 'beforeimage bytes not released: '..tostring(inside)..' -> '..tostring(after))
+end
+p.upvalueSlotReport = function()
+  -- Documented limit: the barrier captures tables, so an upvalue slot keeps what the preview wrote.
+  _PreviewBarrierUpvalueSlot = slot
+  assert(slot == 2, 'upvalue slot write was undone: '..tostring(slot))
+  slot = 1
+end
+p.check = function()
+  assert(p.data == p.alias and p.cycle == p)
+  assert(sequence(p.data) == order and #p.data == length, 'table layout changed')
+  assert(p.data.x == 4 and p.data[0] == 'zero' and p.data[false] == 'false' and p.data[1.5] == 'fraction')
+  assert(p.data[p.key] == 'key' and rawget(p.data, 'raw') == nil and rawget(p.data, 'new1') == nil)
+  assert(getmetatable(p.data) == mt and p.data.fallback == 17 and sink.trap == nil)
+  assert(table.concat(p.list, ',') == '4,1,3,2' and table.concat(p.colocated, ',') == '10,20,30')
+  assert(p.clearData[1] == 1 and p.clearData[2] == 2 and p.clearData.key == 3, 'table.clear leaked')
+  assert(p.namedRoot.value == 1 and p.modeNames.keep.value == 1, 'embedded zero in a key changed semantics')
+  assert(#p.separate == 96 and p.separate[96] == 96 and p.separate[97] == nil)
+  assert(hidden.deep.value == 31 and p.added == nil and p.hookData.count == 0)
+  assert(p.hot.x == 7 and p.hot.raw == 8 and p.hot[1] == 9 and p.hot[2] == nil, 'compiled store leaked')
+  assert(p.capi.x == 11 and p.capi[1] == 12 and p.capi.added == nil, 'native API store leaked')
+  assert(getmetatable(p.cmeta) == originalCMeta, 'native metatable store leaked')
+  assert(p.weak[1] == nil and p.weak[2] == nil, 'collected weak reference resurrected')
+  local ok, value = coroutine.resume(p.co)
+  assert(ok and value == 41, 'coroutine table store leaked')
+  assert((jit and jit.status() or false) == jitEnabled)
+end
+)lua";
+		std::vector<LuaStateWrapper*> states{&g_LuaMan.GetMasterScriptState()};
+		for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) states.push_back(&state);
+		bool passed = true;
+		const auto check = [&](const char* name, int state, int round, int status) {
+			std::cout << "[script-graph-selftest] " << (status >= 0 ? "PASS " : "FAIL ") << name
+			          << " state=" << state << " round=" << round;
+			if (status < 0) std::cout << " " << states[state]->GetLastError();
+			std::cout << std::endl;
+			passed = status >= 0 && passed;
+		};
+		for (int index = 0; index < static_cast<int>(states.size()); ++index) {
+			states[index]->RunScriptString("collectgarbage('stop')", false);
+			check("preview_barrier_fixture", index, 0, states[index]->RunScriptString(setup, false));
+		}
+		std::vector<char> windowOk(states.size(), 0);
+		for (int round = 0; round < 2 && passed; ++round) {
+			for (int index = 0; index < static_cast<int>(states.size()); ++index) {
+				// The stash is a lazily created per-state global; a threaded state has none until something stashes.
+				check("preview_barrier_prepared", index, round, states[index]->RunScriptString("_ScriptFieldsStash = _ScriptFieldsStash or {}; collectgarbage('stop'); _PreviewBarrierProbe.prepare(); _ScriptFieldsStash['preview:-7654321'] = {}", false));
+				// Only the registry holds this one, so nothing the walk reaches from the globals refers to it.
+				lua_State* armed = states[index]->GetLuaState();
+				lua_newtable(armed);
+				lua_pushinteger(armed, 1);
+				lua_setfield(armed, -2, "value");
+				lua_setfield(armed, LUA_REGISTRYINDEX, "_PreviewBarrierRegistry");
+			}
+			if (!passed) break;
+			LuaMan::CapturePreviewSelfCopies({}, false);
+			for (LuaStateWrapper* state: states) state->CapturePreviewGlobalFence();
+			LuaMan::BeginPreviewScripts({}, false);
+			for (int index = 0; index < static_cast<int>(states.size()); ++index) {
+				LuaStateWrapper* state = states[index];
+				const int mutateStatus = state->RunScriptString("_PreviewBarrierProbe.mutate()", false);
+				windowOk[static_cast<size_t>(index)] = mutateStatus >= 0;
+				check("preview_barrier_vm_semantics", index, round, mutateStatus);
+				lua_State* L = state->GetLuaState();
+				const int top = lua_gettop(L);
+				lua_getglobal(L, "_PreviewBarrierProbe");
+				lua_getfield(L, -1, "capi");
+				lua_pushinteger(L, 92);
+				lua_rawseti(L, -2, 1);
+				lua_pushinteger(L, 93);
+				lua_setfield(L, -2, "x");
+				lua_pushliteral(L, "added");
+				lua_pushinteger(L, 94);
+				lua_rawset(L, -3);
+				lua_pop(L, 1);
+				lua_getfield(L, -1, "cmeta");
+				lua_newtable(L);
+				lua_setmetatable(L, -2);
+				lua_getfield(L, LUA_REGISTRYINDEX, "_PreviewBarrierRegistry");
+				lua_pushinteger(L, 2);
+				lua_setfield(L, -2, "value");
+				lua_settop(L, top);
+				check("preview_barrier_double_arm_refused", index, round, luaJIT_preview_begin(L, nullptr, 0) ? -1 : 0);
+				check("preview_barrier_native_semantics", index, round, state->RunScriptString("assert(_PreviewBarrierProbe.capi[1] == 92 and _PreviewBarrierProbe.capi.x == 93 and _PreviewBarrierProbe.capi.added == 94)", false));
+				check("preview_barrier_fault_injection", index, round, luaJIT_preview_faultcheck(L) ? 0 : -1);
+				check("preview_barrier_gc_accounting", index, round, state->RunScriptString("_PreviewBarrierProbe.accounting()", false));
+				check("preview_barrier_weak_semantics", index, round, state->RunScriptString("_PreviewBarrierProbe.collected()", false));
+				const int error = state->RunScriptString("_ScriptFieldsStash['preview:-7654321'] = nil; _PreviewBarrierProbe.data.x = 97; error('preview barrier error arm')", false);
+				check("preview_barrier_error_caught", index, round, error < 0 ? 0 : -1);
+			}
+			LuaMan::EndPreviewScripts();
+			for (int index = 0; index < static_cast<int>(states.size()); ++index) {
+				// Rollback and the upvalue slot only exist after mutate finishes the window stores.
+				if (windowOk[static_cast<size_t>(index)]) {
+					check("preview_barrier_exact_rollback", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.check(); assert(_ScriptFieldsStash['preview:-7654321'] == nil)", false));
+					check("preview_barrier_upvalue_slot_limit", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.upvalueSlotReport()", false));
+				}
+				check("preview_barrier_gc_released", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.released()", false));
+				// Preview rollback drops the global; the note upvalue is the live one.
+				states[index]->RunScriptString("if _PreviewBarrierProbe and _PreviewBarrierProbe.hotNote then _PreviewBarrierHotTrace = _PreviewBarrierProbe.hotNote() end", false);
+				lua_State* observed = states[index]->GetLuaState();
+				const int slotTop = lua_gettop(observed);
+				lua_getglobal(observed, "_PreviewBarrierUpvalueSlot");
+				lua_getfield(observed, LUA_REGISTRYINDEX, "_PreviewBarrierRegistry");
+				int registryValue = -1;
+				if (lua_istable(observed, -1)) {
+					lua_getfield(observed, -1, "value");
+					registryValue = lua_isnumber(observed, -1) ? static_cast<int>(lua_tointeger(observed, -1)) : -1;
+				}
+				lua_getglobal(observed, "_PreviewBarrierHotTrace");
+				const char* hotTrace = lua_isstring(observed, -1) ? lua_tostring(observed, -1) : "none";
+				lua_getglobal(observed, "_PreviewBarrierFirstTrace");
+				const int firstTrace = lua_isnumber(observed, -1) ? static_cast<int>(lua_tointeger(observed, -1)) : -1;
+				// Both are documented limits, so the observed values are printed and a contract change shows up here.
+				std::cout << "[preview-barrier] state=" << index << " round=" << round
+				          << " upvalue_slot_after_end=" << (lua_isnumber(observed, slotTop + 1) ? static_cast<int>(lua_tointeger(observed, slotTop + 1)) : -1)
+				          << " registry_table_after_end=" << registryValue
+				          << " hot_trace=" << hotTrace << " first_live_trace=" << firstTrace << std::endl;
+				lua_settop(observed, slotTop);
+				check("preview_barrier_registry_table", index, round, registryValue == 2 ? 0 : -1);
+			}
+		}
+		for (LuaStateWrapper* state: states) {
+			state->RunScriptString("_ScriptFieldsStash = _ScriptFieldsStash or {}; debug.sethook(); if _PreviewBarrierProbe and _PreviewBarrierProbe.cleanup then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; _PreviewBarrierUpvalueSlot = nil; _PreviewBarrierHotTrace = nil; _PreviewBarrierFirstTrace = nil; rawset(_G, '_ScriptFieldsStash\\0probe', nil); _ScriptFieldsStash['preview:-7654321'] = nil; _ScriptFieldsStash['preview:gc'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
+			lua_State* done = state->GetLuaState();
+			lua_pushnil(done);
+			lua_setfield(done, LUA_REGISTRYINDEX, "_PreviewBarrierRegistry");
+		}
+		return passed;
+	}
+
+	bool PreviewScriptSelfTest::CheckHotcountAfterAbort() {
+		std::vector<LuaStateWrapper*> states{&g_LuaMan.GetMasterScriptState()};
+		for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) states.push_back(&state);
+		bool passed = true;
+		static const char* probe = R"lua(
+local seen = 0
+local function ev(what)
+  if what == 'start' or what == 'stop' then seen = seen + 1 end
+end
+if not (jit and jit.status()) then
+  _HotcountAbortSeen = 1
+  return
+end
+jit.flush()
+jit.attach(ev, 'trace')
+local t = {}
+for i = 1, 4096 do t[i % 16 + 1] = i end
+jit.attach(ev)
+_HotcountAbortSeen = seen
+assert(seen > 0, 'no trace event after forced abort path seen='..tostring(seen)..' status='..tostring(jit.status()))
+)lua";
+		for (int index = 0; index < static_cast<int>(states.size()); ++index) {
+			lua_State* L = states[index]->GetLuaState();
+#if LJ_HASJIT
+			{
+				jit_State* J = L2J(L);
+				global_State* g = G(L);
+				J->cur.traceno = 0;
+				J->parent = 0;
+				J->exitno = 0;
+				J->curfinal = NULL;
+				setgcrefnull(J->cur.startpt);
+				setmrefu(J->cur.startpc, 0);
+				J->cur.startins = BC_RET;
+				J->state = LJ_TRACE_RECORD;
+				lj_dispatch_update(g);
+				lj_trace_abort_leftover(L);
+				std::cout << "[script-graph-selftest] hotcount_abort_state state=" << index
+				          << " jstate=" << static_cast<unsigned>(J->state)
+				          << " mode=" << static_cast<unsigned>(g->dispatchmode)
+				          << " flags=" << J->flags << std::endl;
+			}
+#endif
+			const int status = states[index]->RunScriptString(probe, false);
+			lua_getglobal(L, "_HotcountAbortSeen");
+			const int seen = lua_isnumber(L, -1) ? static_cast<int>(lua_tointeger(L, -1)) : -1;
+			lua_pop(L, 1);
+			states[index]->RunScriptString("_HotcountAbortSeen = nil", false);
+			std::cout << "[script-graph-selftest] " << (status >= 0 ? "PASS " : "FAIL ")
+			          << "hotcount_survives_forced_abort state=" << index << " seen=" << seen;
+			if (status < 0) std::cout << " " << states[index]->GetLastError();
+			std::cout << std::endl;
+			passed = status >= 0 && passed;
+		}
+		return passed;
+	}
+
+	bool PreviewScriptSelfTest::CheckAbortPenalizes() {
+		std::vector<LuaStateWrapper*> states{&g_LuaMan.GetMasterScriptState()};
+		for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) states.push_back(&state);
+		bool passed = true;
+		static const char* probe = R"lua(
+if not (jit and jit.status()) then
+  return
+end
+local starts, stops, aborts, lastTr, lastWhy = 0, 0, 0, 0, ''
+local function ev(what, tr, func, pc, err)
+  if what == 'start' then starts = starts + 1; lastTr = tr
+  elseif what == 'stop' then stops = stops + 1
+  elseif what == 'abort' then aborts = aborts + 1; lastTr = tr; lastWhy = tostring(err)
+  end
+end
+local after = 0
+local function ev2(what)
+  if what == 'start' then after = after + 1 end
+end
+local function boom()
+  local z = nil
+  z = z + 1
+  error('f91-abort')
+end
+local function body()
+  local t = {}
+  for i = 1, 128 do
+    t.x = i
+    t[i % 16 + 1] = i
+    rawset(t, 'raw', i)
+    if i == 57 then boom() end
+  end
+end
+local ok, err = pcall(function()
+  jit.flush()
+  jit.attach(ev, 'trace')
+  for _ = 1, 40 do pcall(body) end
+  jit.attach(ev)
+  jit.attach(ev2, 'trace')
+  pcall(body)
+  pcall(body)
+  jit.attach(ev2)
+  assert(aborts > 0 and lastWhy ~= '', 'no TRACE abort event aborts='..tostring(aborts)..' why='..tostring(lastWhy)..' starts='..tostring(starts)..' stops='..tostring(stops))
+  assert(after == 0, 'bytecode still starting after repeats after='..tostring(after)..' starts='..tostring(starts))
+end)
+pcall(function() jit.attach(ev) end)
+pcall(function() jit.attach(ev2) end)
+pcall(jit.flush)
+if not ok then error(err) end
+)lua";
+		for (int index = 0; index < static_cast<int>(states.size()); ++index) {
+			const int status = states[index]->RunScriptString(probe, false);
+			std::cout << "[script-graph-selftest] " << (status >= 0 ? "PASS " : "FAIL ")
+			          << "abort_penalizes_and_frees_the_trace state=" << index;
+			if (status < 0) std::cout << " " << states[index]->GetLastError();
+			std::cout << std::endl;
+			passed = status >= 0 && passed;
+		}
+		return passed;
+	}
 
 	bool PreviewScriptSelfTest::RunRetirementArm(char mode) {
 		const std::string label = std::string("overlay-links ") + mode;

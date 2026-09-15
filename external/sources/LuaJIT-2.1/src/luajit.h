@@ -64,6 +64,16 @@ enum {
 /* Control the JIT engine. */
 LUA_API int luaJIT_setmode(lua_State *L, int idx, int mode);
 
+/* Native preview boundary; no Lua library entry points. */
+LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t nskip);
+LUA_API size_t luaJIT_preview_end(lua_State *L);
+typedef struct luaJIT_PreviewStats {
+  size_t windows, tables, saves, bytes;
+  double capture_ms, write_ms, restore_ms, max_ms;
+} luaJIT_PreviewStats;
+LUA_API int luaJIT_preview_stats(lua_State *L, luaJIT_PreviewStats *stats);
+LUA_API int luaJIT_preview_faultcheck(lua_State *L);
+
 /* Low-overhead profiling API. */
 typedef void (*luaJIT_profile_callback)(void *data, lua_State *L,
 					int samples, int vmstate);

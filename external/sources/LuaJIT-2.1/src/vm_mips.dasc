@@ -1200,6 +1200,9 @@ static void build_subroutines(BuildCtx *ctx)
   |  li AT, LJ_TTAB
   |  bne SFARG1HI, AT, ->fff_fallback
   |.  addiu SFARG2HI, SFARG2HI, -LJ_TTAB
+  |  lw TMP0, TAB:SFARG1LO->preview
+  |  bltz TMP0, ->fff_fallback
+  |.  nop
   |  lw TAB:TMP1, TAB:SFARG1LO->metatable
   |   lbu TMP3, TAB:SFARG1LO->marked
   |  or AT, SFARG2HI, TAB:TMP1
@@ -4354,6 +4357,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  li AT, LJ_TTAB
     |  bne TMP1, AT, ->vmeta_tsetv
     |.  addu RA, BASE, RA
+    |  lw TMP0, TAB:RB->preview
+    |  bltz TMP0, ->vmeta_tsetv
+    |.  nop
     |  bne TMP2, TISNUM, >5
     |.  lw RC, LO(CARG3)
     |  lw TMP0, TAB:RB->asize
@@ -4411,6 +4417,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  bne TMP0, AT, ->vmeta_tsets1
     |.  addu RA, BASE, RA
     |->BC_TSETS_Z:
+    |  lw TMP0, TAB:RB->preview
+    |  bltz TMP0, ->vmeta_tsets
+    |.  nop
     |  // TAB:RB = GCtab *, STR:RC = GCstr *, RA = BASE+src*8
     |  lw TMP0, TAB:RB->hmask
     |  lw TMP1, STR:RC->sid
@@ -4511,6 +4520,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   addu RA, BASE, RA
     |  bne CARG1, AT, ->vmeta_tsetb
     |.  srl TMP0, RC, 3
+    |  lw TMP1, TAB:RB->preview
+    |  bltz TMP1, ->vmeta_tsetb
+    |.  nop
     |  lw TMP1, TAB:RB->asize
     |   lw TMP2, TAB:RB->array
     |  sltu AT, TMP0, TMP1
@@ -4559,6 +4571,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  bnez AT, >7
     |.  addu RA, BASE, RA
     |2:
+    |  lw TMP2, TAB:CARG2->preview
+    |  bltz TMP2, ->vmeta_tsetr
+    |.  nop
     |  sltu AT, CARG3, TMP0
     |   sll TMP2, CARG3, 3
     |  beqz AT, ->vmeta_tsetr		// In array part?
@@ -4581,6 +4596,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |1:
     |   addu TMP3, KBASE, RD
     |  lw TAB:CARG2, -8+LO(RA)		// Guaranteed to be a table.
+    |  lw TMP2, TAB:CARG2->preview
+    |  bltz TMP2, >8
+    |.  nop
     |    addiu TMP0, MULTRES, -8
     |   lw TMP3, LO(TMP3)		// Integer constant is in lo-word.
     |    beqz TMP0, >4			// Nothing to copy?
@@ -4620,6 +4638,17 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  move RD, BASE
     |  b <1
     |.  lw BASE, L->base	// Reload BASE for lack of a saved register.
+    |
+    |8:
+    |  load_got lj_preview_write
+    |  sw BASE, L->base
+    |  sw PC, SAVE_PC
+    |  move BASE, RD
+    |  call_intern lj_preview_write
+    |.  move CARG1, L
+    |  move RD, BASE
+    |  b <1
+    |.  lw BASE, L->base
     |
     |7:  // Possible table write barrier for any value. Skip valiswhite check.
     |  barrierback TAB:CARG2, TMP3, TMP0, <4

@@ -498,10 +498,16 @@ typedef struct Node {
 
 LJ_STATIC_ASSERT(offsetof(Node, val) == 0);
 
+#define LJ_PREVIEW_PENDING 0x80000000u
+#define LJ_PREVIEW_INDEX 0x7fffffffu
+
 typedef struct GCtab {
   GCHeader;
   uint8_t nomm;		/* Negative cache for fast metamethods. */
   int8_t colo;		/* Array colocation. */
+#if LJ_GC64
+  uint32_t preview;
+#endif
   MRef array;		/* Array part. */
   GCRef gclist;
   GCRef metatable;	/* Must be at same offset in GCudata. */
@@ -510,8 +516,20 @@ typedef struct GCtab {
   uint32_t hmask;	/* Hash part mask (size of hash part - 1). */
 #if LJ_GC64
   MRef freetop;		/* Top of free elements. */
+#else
+  uint32_t preview;
+  uint32_t preview_pad;
 #endif
 } GCtab;
+
+/* The VM and the DynASM backends read t->preview at these fixed places. */
+#if LJ_GC64
+LJ_STATIC_ASSERT(sizeof(GCtab) == 64);
+LJ_STATIC_ASSERT(offsetof(GCtab, preview) == 12);
+#else
+LJ_STATIC_ASSERT(sizeof(GCtab) == 40);
+LJ_STATIC_ASSERT(offsetof(GCtab, preview) == 32);
+#endif
 
 #define sizetabcolo(n)	((n)*sizeof(TValue) + sizeof(GCtab))
 #define tabref(r)	((GCtab *)gcref((r)))
@@ -664,6 +682,7 @@ typedef struct global_State {
   MRef ctype_state;	/* Pointer to C type state. */
   PRNGState prng;	/* Global PRNG state. */
   GCRef gcroot[GCROOT_MAX];  /* GC roots. */
+  struct LJPreview *preview;
 } global_State;
 
 #define mainthread(g)	(&gcref(g->mainthref)->th)

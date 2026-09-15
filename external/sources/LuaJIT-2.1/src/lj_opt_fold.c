@@ -2239,6 +2239,13 @@ LJFOLDF(fwd_href_tdup)
 ** FLOADs. And NEWREF itself is treated like a store (see below).
 ** LREF is constant (per trace) since coroutine switches are not inlined.
 */
+LJFOLD(FLOAD TNEW IRFL_TAB_PREVIEW)
+LJFOLD(FLOAD TDUP IRFL_TAB_PREVIEW)
+LJFOLDF(fload_tab_preview_new)
+{
+  return INTFOLD(0);
+}
+
 LJFOLD(FLOAD TNEW IRFL_TAB_ASIZE)
 LJFOLDF(fload_tab_tnew_asize)
 {

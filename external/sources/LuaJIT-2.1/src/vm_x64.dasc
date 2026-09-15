@@ -1277,6 +1277,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  mov TAB:RB, [BASE]
   |  mov TAB:TMPR, TAB:RB
   |  checktab TAB:RB, ->fff_fallback
+  |  test dword TAB:RB->preview, LJ_PREVIEW_PENDING; jnz ->fff_fallback
   |  // Fast path: no mt for table yet and not clearing the mt.
   |  cmp aword TAB:RB->metatable, 0; jne ->fff_fallback
   |  mov TAB:RA, [BASE+8]
@@ -3879,6 +3880,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  mov TAB:RB, [BASE+RB*8]
     |  mov RC, [BASE+RC*8]
     |  checktab TAB:RB, ->vmeta_tsetv
+    |  test dword TAB:RB->preview, LJ_PREVIEW_PENDING; jnz ->vmeta_tsetv
     |
     |  // Integer key?
     |.if DUALNUM
@@ -3930,6 +3932,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  mov STR:RC, [KBASE+RC*8]
     |  checktab TAB:RB, ->vmeta_tsets
     |->BC_TSETS_Z:	// RB = GCtab *, RC = GCstr *
+    |  test dword TAB:RB->preview, LJ_PREVIEW_PENDING; jnz ->vmeta_tsets
     |  mov TMPRd, TAB:RB->hmask
     |  and TMPRd, STR:RC->sid
     |  imul TMPRd, #NODE
@@ -3993,6 +3996,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  ins_ABC	// RA = src, RB = table, RC = byte literal
     |  mov TAB:RB, [BASE+RB*8]
     |  checktab TAB:RB, ->vmeta_tsetb
+    |  test dword TAB:RB->preview, LJ_PREVIEW_PENDING; jnz ->vmeta_tsetb
     |  cmp RCd, TAB:RB->asize
     |  jae ->vmeta_tsetb
     |  shl RCd, 3
@@ -4028,6 +4032,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |.else
     |  cvttsd2si RCd, qword [BASE+RC*8]
     |.endif
+    |  test dword TAB:RB->preview, LJ_PREVIEW_PENDING; jnz ->vmeta_tsetr
     |  test byte TAB:RB->marked, LJ_GC_BLACK	// isblack(table)
     |  jnz >7
     |2:
@@ -4053,6 +4058,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lea RA, [BASE+RA*8]
     |  mov TAB:RB, [RA-8]		// Guaranteed to be a table.
     |  cleartp TAB:RB
+    |  test dword TAB:RB->preview, LJ_PREVIEW_PENDING; jnz >8
     |  test byte TAB:RB->marked, LJ_GC_BLACK	// isblack(table)
     |  jnz >7
     |2:
@@ -4087,6 +4093,18 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  movzx RAd, PC_RA			// Restore RA.
     |  movzx RDd, PC_RD			// Restore RD.
     |  jmp <1				// Retry.
+    |
+    |8:
+    |  mov L:CARG1, SAVE_L
+    |  mov L:CARG1->base, BASE
+    |  mov CARG2, TAB:RB
+    |  mov SAVE_PC, PC
+    |  call extern lj_preview_write
+    |  mov L:RB, SAVE_L
+    |  mov BASE, L:RB->base
+    |  movzx RAd, PC_RA
+    |  movzx RDd, PC_RD
+    |  jmp <1
     |
     |7:  // Possible table write barrier for any value. Skip valiswhite check.
     |  barrierback TAB:RB, RD
