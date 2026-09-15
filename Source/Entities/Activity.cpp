@@ -1262,6 +1262,9 @@ void Activity::UpdatePlayerBrainRecord() {
 		if (m_Brain[player]) {
 			if (!m_Brain[player]->IsDead()) m_HadBrain[player] = true;
 			g_MovableMan.NotePlayerBrain(m_Brain[player]->GetUniqueID(), true);
+			// Whatever placed the brain - the scene, the engine or the activity's script on every peer - the
+			// seat's shared answer starts there, and only until a committed frame names the actor it plays.
+			if (m_LockstepControlUID[player] == 0) NoteLockstepControlBinding(NetActorUID(m_Brain[player]), player);
 			continue;
 		}
 		if (m_BrainEvacuated[player]) continue;
