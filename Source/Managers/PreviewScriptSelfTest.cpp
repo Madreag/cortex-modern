@@ -110,6 +110,7 @@ local function recordHot()
   jit.attach(traceEvent)
 end
 -- A live compiled trace for the guarded loop is a precondition of the JIT arm, so say why it is missing.
+local armNote = ''
 local function armHotTrace(label)
   if not jitEnabled then _PreviewBarrierHotTrace = label..':jit-off'; return end
   local how = 'kept'
@@ -125,7 +126,9 @@ local function armHotTrace(label)
     end
   end
   assert(hotTrace and util.traceinfo(hotTrace), 'no live compiled trace for the guarded store loop at '..label..': '..tostring(traceReason)..' events(start/stop/abort/flush)='..seenCounts())
-  _PreviewBarrierHotTrace = label..':'..tostring(hotTrace)..':'..how
+  local note = label..':'..tostring(hotTrace)..':'..how
+  if label == 'setup' then armNote = note end
+  _PreviewBarrierHotTrace = armNote..'|'..note
 end
 -- The first live trace of any origin is what the arm used to accept; it is reported to show it is not this loop's.
 local firstAnyTrace = 0
