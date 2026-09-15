@@ -221,9 +221,22 @@ function Destroy(self)
 	AutomoverData[self.Team].teleporterNodesCount = 0;
 end
 
+automoverUtilityFunctions.sortedAffectedActorIDs = function(self)
+	-- The order two stuck actors draw their nudges must not follow the table's hash.
+	local ids = {};
+	for actorUniqueID, _ in pairs(self.affectedActors) do
+		ids[#ids + 1] = actorUniqueID;
+	end
+	table.sort(ids);
+	return ids;
+end
+
 automoverActorFunctions.actorMovementUpdate = function(self)
 	tracy.ZoneBegin();
-	for actorUniqueID, actorData in pairs(self.affectedActors) do
+	local ids = self:sortedAffectedActorIDs();
+	for _, actorUniqueID in ipairs(ids) do
+		local actorData = self.affectedActors[actorUniqueID];
+		if actorData then
 		local actor = actorData.actor;
 		if not MovableMan:ValidMO(actor) or actor.Health <= 0 or not self.combinedAutomoverArea:IsInside(actor.Pos) then
 			self:removeActorFromAutomoverTable(actor, actorUniqueID);
@@ -302,6 +315,7 @@ automoverActorFunctions.actorMovementUpdate = function(self)
 					end
 				end
 			end
+		end
 		end
 	end
 	tracy.ZoneEnd();
