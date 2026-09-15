@@ -504,11 +504,12 @@ _LOCAL_FIELDS = {
     "Controller1": set("input_mode seat_mode player seat_player team next_ignore prev_ignore weapon_next_ignore weapon_prev_ignore pickup_ignore drop_ignore reload_ignore primary_hotkey_ignore".split()),
     "Controller2": set("input_mode seat_mode player seat_player team next_ignore prev_ignore weapon_next_ignore weapon_prev_ignore pickup_ignore drop_ignore reload_ignore primary_hotkey_ignore".split()),
     "Screen1": {name for name, _ in SCHEMAS["Screen1"]},
-    # FlashScreen sets the colour, the timer and the flag together (FrameMan.h:219-222) and only Draw
-    # reads and clears them (FrameMan.cpp:1094-1139); the index is a screen, not a player.
-    "FrameMan1": {"flash_color", "flashed_last_frame", "flash_timer"},
-    "FrameMan2": {"flash_color", "flashed_last_frame", "flash_timer"},
-    "FrameMan3": {"flash_color", "flashed_last_frame", "flash_timer"},
+    # A resync applies the host's FrameMan checkpoint and then puts this machine's own FrameManLocal1 state
+    # back over it (NetMatchService.cpp:824, 831); that record is FrameMan1's whole field list
+    # (FrameMan.cpp:1356-1361 over FrameMan.h:342-344), so only FrameMan3's fonts and palette come from the host.
+    "FrameMan1": {name for name, _ in SCHEMAS["FrameMan1"]},
+    "FrameMan2": {name for name, _ in SCHEMAS["FrameMan1"]},
+    "FrameMan3": {name for name, _ in SCHEMAS["FrameMan1"]},
     # The live Allegro colour table and blend alpha are whatever the last blit selected.
     "FramePalette1": {"selected_key", "alpha"},
     # The FMOD listener is the local camera, and a voice's PCM cursor rides the local device clock.
@@ -575,6 +576,10 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
             mask(key)
         if version in ("RuntimeGlobals1", "RuntimeGlobals2", "RuntimeGlobals3", "RuntimeGlobals4", "RuntimeGlobals5", "RuntimeGlobals6", "RuntimeGlobals7", "RuntimeGlobals8", "RuntimeGlobals9"):
             mask("render_rng")
+            # A resync keeps this machine's own device and shared GUI input whole and drops the host's
+            # (NetMatchService.cpp:822-823 captures them, 831 puts them back after RestoreRuntimeGlobals).
+            mask("input")
+            mask("gui_input")
         # A voice's mixer gain and 3D blend are attenuated against that peer's own listener; the four
         # group buses carry settings, so only a control reached through audio.voices is local.
         if version == "AudioControl1" and len(path) >= 3 and path[-3] == "voices" and path[-1] == "control":
@@ -672,9 +677,12 @@ def _emit(kind):
     return b"0 "  # sequence: a zero count
 
 
-def _payload(version):
+def _payload(version, **records):
+    """A minimal payload; a named object field carries the given record instead of an empty string."""
     tag = version.encode()
-    return str(len(tag)).encode() + b" " + tag + b" " + b"".join(_emit(kind) for _name, kind in SCHEMAS[version])
+    body = b"".join(str(len(records[name])).encode() + b" " + records[name] + b" " if name in records else _emit(kind)
+                    for name, kind in SCHEMAS[version])
+    return str(len(tag)).encode() + b" " + tag + b" " + body
 
 
 _CHECKPOINT_ARCHIVE = re.compile(r"Checkpoint(?:Writer|Reader)\s*\w*\s*\(")
@@ -758,6 +766,26 @@ def selftest():
 
     unclassified = b"9 NoSchema1 0 "
     check("unclassified_tag_stays_raw", decode(unclassified) == unclassified)
+
+    # The resync keeps this machine's input, shared GUI input and FrameManLocal1 state; everything else
+    # in the block, the host's own FrameMan fonts and palette included, is restored from its snapshot.
+    globals_state = decode(_payload("RuntimeGlobals9", sim_rng=b"MT1 7", timer=_payload("TimerMan1"),
+        movable=_payload("MovableMan2"), frame=_payload("FrameMan3"), gui_input=_payload("GUISharedInput2"),
+        input=_payload("UInputMan1")))
+    held = []
+    globals_projected = project(globals_state, shared=True, masked=held, cross_process=True)
+    local_paths = {".".join(map(str, path)) for path in held}
+    check("runtime_globals_local_fields_masked",
+          globals_projected["input"] == "LOCAL" and globals_projected["gui_input"] == "LOCAL" and
+          {"input", "gui_input", "render_rng"} <= local_paths and
+          all(globals_projected["frame"][name] == "LOCAL" for name, _ in SCHEMAS["FrameMan1"]))
+    check("runtime_globals_shared_fields_kept",
+          globals_projected["sim_rng"] == b"MT1 7" and "sim_rng" not in local_paths and
+          globals_projected["frame"]["fonts"] == globals_state["frame"]["fonts"] and
+          globals_projected["frame"]["palette"] == globals_state["frame"]["palette"] and
+          globals_projected["timer"]["sim_update_count"] != "LOCAL" and
+          globals_projected["movable"]["sim_update_frame"] != "LOCAL" and
+          all(globals_projected[name] != "LOCAL" for name in ("audio", "camera", "scene", "movable", "timer")))
     return all(checks)
 
 
