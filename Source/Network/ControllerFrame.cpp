@@ -1,6 +1,7 @@
 #include "ControllerFrame.h"
 
 #include "ACraft.h"
+#include "ActivityMan.h"
 #include "Actor.h"
 #include "AHuman.h"
 #include "ConsoleMan.h"
@@ -13,6 +14,7 @@
 #include "ScenarioRunner.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
+#include "UInputMan.h"
 
 #include <algorithm>
 #include <cmath>
@@ -803,6 +805,14 @@ namespace RTE {
 				}
 			}
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
+		}
+
+		// The scripted input a fixture drives a Controller with: EndFrame and the element reads need both
+		// managers, and this selftest runs before manager init.
+		if (!UInputMan::IsConstructed()) { UInputMan::Construct(); }
+		if (!ActivityMan::IsConstructed()) { ActivityMan::Construct(); }
+		if (!g_UInputMan.RunScriptedInputEdgeSelfTest()) {
+			return fail("a scripted input element did not edge once per press");
 		}
 
 		std::cout << "[controller-frame-selftest] PASS" << std::endl;
