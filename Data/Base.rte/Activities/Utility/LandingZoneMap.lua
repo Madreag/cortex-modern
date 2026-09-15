@@ -322,7 +322,8 @@ function LandingZoneMap.UpdateEnemies(self)
 						end
 					end
 
-					local viewRange = FrameMan.PlayerScreenWidth * 0.5 + Act.AimDistance + 100; -- DropShip radius is ~100
+					-- The pinned screen size: the landing zones this scores are picked on every machine.
+					local viewRange = FrameMan.SimScreenWidth * 0.5 + Act.AimDistance + 100; -- DropShip radius is ~100
 					if Act.EquippedItem then
 						viewRange = viewRange + Act.EquippedItem.SharpLength; -- add the SharpLength of any weapon
 					end

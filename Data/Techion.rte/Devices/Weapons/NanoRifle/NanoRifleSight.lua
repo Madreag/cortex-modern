@@ -1,7 +1,8 @@
 function Create(self)
 	self.laserTimer = Timer();
 	self.laserCheckDelay = 30;
-	self.laserLength = self.SharpLength + FrameMan.PlayerScreenWidth * 0.3;
+	-- The pinned screen size: this device runs on every peer and traces with this length.
+	self.laserLength = self.SharpLength + FrameMan.SimScreenWidth * 0.3;
 	self.laserSpaceCheck = 8; --For optimization purposes. Smaller value means a more accurate but slower check.
 
 	self.laserDensity = math.ceil(self.laserLength/self.laserSpaceCheck);

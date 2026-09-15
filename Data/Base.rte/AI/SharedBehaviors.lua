@@ -54,7 +54,7 @@ function SharedBehaviors.ProcessAlarmEvent(AI, Owner)
 				end
 			-- sometimes try to shoot back at enemies outside our view range (0.5 is the range of the brain alarm)
 			elseif canSupress and Event.Range > 0.5 and PosRand() > (0.3/AI.aimSkill) and
-				AlarmVec.Largest < FrameMan.PlayerScreenWidth * 1.8 and
+				AlarmVec.Largest < FrameMan.SimScreenWidth * 1.8 and
 				(not AI.LastAlarmVec or SceneMan:ShortestDistance(AI.LastAlarmVec, AlarmVec, false).Largest > 30)
 			then
 				-- only do this if we are facing the shortest distance to the alarm event
@@ -1036,7 +1036,8 @@ end
 
 function SharedBehaviors.CalculateThreatLevel(MO, Owner)
 	-- prioritize closer targets
-	local priority = -SceneMan:ShortestDistance(Owner.Pos, MO.Pos, false).Largest / FrameMan.PlayerScreenWidth;
+	-- The pinned screen size: every machine's AI must reach the same decision, replays included.
+	local priority = -SceneMan:ShortestDistance(Owner.Pos, MO.Pos, false).Largest / FrameMan.SimScreenWidth;
 
 	-- prioritize the weaker humans over crabs
 	if MO.ClassName == "AHuman" then
