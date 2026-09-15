@@ -131,7 +131,7 @@ Run-Driver 'test_menu_lifecycle' @()
 Run-Driver 'test_lobby_input_delay' @('--port', '48276')
 Run-Driver 'test_lobby_chat' @('--port', '48273')
 Run-Driver 'test_post_match_lobby' @('--port', '48277')
-Run-Driver 'test_telemetry_bundle' @('--arm', 'menu', '--port', '48279')
+Run-Driver 'test_telemetry_bundle' @('--arm', 'menu', '--port', '48219')
 $captures = @()
 foreach ($size in @('640x360', '960x540')) {
     $captures += Get-Content -LiteralPath "$Out/green-$size/captures.json" -Raw | ConvertFrom-Json
