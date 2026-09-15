@@ -358,6 +358,10 @@ class IsolatedRun:
         self.env["CCCP_HEADLESS"] = "1"
         env_set = dict(extra)
         env_set["CCCP_HEADLESS"] = "1"
+        # A FATAL writes the minidump at this cwd-relative path, beside AbortCode.txt.
+        if "CC_TEST_CRASH_DUMP" not in extra:
+            self.env.setdefault("CC_TEST_CRASH_DUMP", "1")
+            env_set["CC_TEST_CRASH_DUMP"] = self.env["CC_TEST_CRASH_DUMP"]
         self.record = {
             "runner": "win32_test_runner.py",
             "runner_pid": os.getpid(),
