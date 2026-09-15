@@ -32,17 +32,15 @@ class Cursor:
         return list(map(int, self.take(self.number() * width)))
 
 
-def world(path):
-    with zipfile.ZipFile(path) as archive:
-        names = [name for name in archive.namelist() if name.lower().endswith("save.ini")]
-        if len(names) != 1:
-            raise ValueError("expected exactly one Save.ini")
-        ini = archive.read(names[0]).decode("utf-8")
-    block = "\n".join(split_top_level(ini).get("WorldStructure", []))
-    raw = decode_base64(block.split("=", 1)[1].strip())
-    cursor = Cursor(raw.decode("utf-8"))
-    length, tag = cursor.number(), cursor.take()[0]
-    if len(tag) != length or tag not in ("WorldStructure1", "WorldStructure2", "WorldStructure3"):
+# The owner map's width is not implied by the tag: a record written before the WorldStructure2 rename
+# carries the width-2 map under the WorldStructure1 tag, and a record written before the map carries none.
+OWNER_WIDTHS = {"WorldStructure1": (0, 2), "WorldStructure2": (2, 3), "WorldStructure3": (3,)}
+
+
+def read_layout(text, tag, owners):
+    cursor = Cursor(text)
+    length, name = cursor.number(), cursor.take()[0]
+    if len(name) != length or name != tag:
         raise ValueError("world layout is unsupported")
     for _ in range(10):
         cursor.sequence()
@@ -51,15 +49,41 @@ def world(path):
     cursor.sequence(2)
     cursor.sequence()
     cursor.sequence(2)
-    if tag != "WorldStructure1":
-        cursor.sequence(3)
+    if owners:
+        cursor.sequence(owners)
     cursor.take(4)
     for _ in range(3):
         cursor.sequence()
     brains = cursor.sequence() if tag == "WorldStructure3" else None
     if cursor.offset != len(cursor.tokens):
         raise ValueError("world block has unconsumed fields")
-    return raw, {"tag": tag, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw), "brains": brains, "alarm_bits": alarms}
+    return {"tag": tag, "owner_width": owners, "brains": brains, "alarm_bits": alarms}
+
+
+def world(path):
+    with zipfile.ZipFile(path) as archive:
+        names = [name for name in archive.namelist() if name.lower().endswith("save.ini")]
+        if len(names) != 1:
+            raise ValueError("expected exactly one Save.ini")
+        ini = archive.read(names[0]).decode("utf-8")
+    block = "\n".join(split_top_level(ini).get("WorldStructure", []))
+    raw = decode_base64(block.split("=", 1)[1].strip())
+    text = raw.decode("utf-8")
+    tag = (text.split(maxsplit=2) + ["", ""])[1]
+    if tag not in OWNER_WIDTHS:
+        raise ValueError("world layout is unsupported")
+    readings = []
+    for owners in OWNER_WIDTHS[tag]:
+        try:
+            readings.append(read_layout(text, tag, owners))
+        except ValueError:
+            continue
+    # Exactly one owner-map width may consume the record; anything else is reported, never guessed.
+    if len(readings) != 1:
+        raise ValueError(f"world layout is ambiguous or unreadable ({len(readings)} readings for {tag})")
+    record = readings[0]
+    record.update(sha256=hashlib.sha256(raw).hexdigest(), bytes=len(raw))
+    return raw, record
 
 
 def compare(left, right, damage=False):
@@ -83,7 +107,12 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--damage", action="store_true")
     args = parser.parse_args()
-    result = compare(args.host, args.client, args.damage)
+    try:
+        result = compare(args.host, args.client, args.damage)
+    except ValueError as error:
+        # An unreadable record is a failed check with its reason, not an aborted run.
+        result = {"pass": False, "checks": {"world_records_readable": False}, "error": str(error),
+                  "host": str(args.host), "client": str(args.client)}
     args.out.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))
     return 0 if result["pass"] else 1
