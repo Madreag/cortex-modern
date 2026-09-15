@@ -686,6 +686,8 @@ local function visitUserdata(value, ctx)
 		return userdataNode(value, ctx, "p" .. stringToken(native[2]) .. stringToken(native[3]) .. stringToken(native[4]))
 	elseif kind == "named" then
 		return userdataNode(value, ctx, pathToken(ctx.paths[value]))
+	elseif kind == "lua-class" then
+		return userdataNode(value, ctx, "C" .. stringToken(native[2]) .. stringToken(native[3] or ""))
 	elseif kind == "copy" then
 		local ini, message = _ScriptGraphNativeSave(value)
 		if not ini then
@@ -934,7 +936,7 @@ local function serializeGraph(roots)
 	for _, link in ipairs(_ScriptGraphGibReferences(ctx.ownedPointers)) do
 		gibReferences[#gibReferences + 1] = "n" .. link.owner .. ";n" .. link.index .. ";" .. visit(link.target, ctx)
 	end
-	local out = { "SG3;", "r", #rootIds, ";", table.concat(rootIds), "G", #globals, ";", table.concat(globals), "L", #loaded, ";", table.concat(loaded), "E", #enginePatches, ";", table.concat(enginePatches), "R", rng, "X", #gibReferences, ";", table.concat(gibReferences), "N", ctx.count, ";" }
+	local out = { "SG4;", "r", #rootIds, ";", table.concat(rootIds), "G", #globals, ";", table.concat(globals), "L", #loaded, ";", table.concat(loaded), "E", #enginePatches, ";", table.concat(enginePatches), "R", rng, "X", #gibReferences, ";", table.concat(gibReferences), "N", ctx.count, ";" }
 	for id = 1, ctx.count do out[#out + 1] = ctx.nodes[id] end
 	lastObjects = setmetatable({}, { __mode = "v" })
 	for value, id in pairs(ctx.ids) do keyLabels[value], lastObjects[id] = id, value end
@@ -1059,6 +1061,7 @@ local function newReader(text)
 		elseif c == "j" then return { t = "soundset", owner = self:readToken(), index = self:index(-1) }
 		elseif c == "l" then return { t = "limb", owner = self:readToken(), index = self:index(0) }
 		elseif c == "k" then return { t = "limb-vector", owner = self:readToken(), index = self:index(-1), constant = self:typed("bool").v }
+		elseif c == "C" then return { t = "lua-class", name = self:readString(), base = self:readString() }
 		end
 		self:bad("unknown token '" .. c .. "'")
 	end
@@ -1068,7 +1071,7 @@ end
 local function parse(text)
 	local reader = newReader(text)
 	local version = reader:readUntil(";")
-	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" then reader:bad("bad header") end
+	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" then reader:bad("bad header") end
 	local graph = { roots = {}, globals = {}, loaded = {}, nodes = {}, enginePatches = {}, gibReferences = {}, nativeReferences = {} }
 	local function namedList(tag, into, nameKey)
 		reader:expect(tag)
@@ -1089,7 +1092,7 @@ local function parse(text)
 			graph.enginePatches[#graph.enginePatches + 1] = { target = reader:typed("path"), changes = reader:readToken(), meta = reader:readToken() }
 		end
 	end
-	if version == "SG3" then
+	if version == "SG3" or version == "SG4" then
 		reader:expect("R")
 		graph.rng = reader:readToken()
 		if graph.rng.t ~= "nil" and graph.rng.t ~= "str" then reader:bad("invalid random state") end
@@ -1476,6 +1479,14 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 			local vector = limb and _ScriptGraphLimbVector(limb, token.index, token.constant)
 			if not vector then note("a LimbPath vector is missing") end
 			return vector
+		elseif t == "lua-class" then
+			local found = rawget(_G, token.name)
+			local native = found and { _ScriptGraphNative(found) } or {}
+			if native[1] ~= "lua-class" or native[2] ~= token.name then
+				fail("the Lua class " .. tostring(token.name) .. " is missing")
+				return nil
+			end
+			return found
 		end
 		fail("unknown token type " .. tostring(t))
 		return nil
@@ -1713,7 +1724,7 @@ end
 function Graph.roots(text)
 	local reader = newReader(text)
 	local version = reader:readUntil(";")
-	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" then error("script graph: bad header") end
+	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" then error("script graph: bad header") end
 	reader.pos = reader.pos + 1
 	local uids = {}
 	for _ = 1, tonumber(reader:readUntil(";")) do
@@ -2350,6 +2361,22 @@ do
 	check("negative_coroutine_frame_size", badFrame == nil and type(frameError) == "string")
 	local _, p1 = _ScriptGraph.serialize({ ["1"] = { bad = newproxy(true) } })
 	check("negative_unsupported_userdata_fails", #p1 > 0, table.concat(p1, " | "))
+	class 'F90ClassCarry' (Box)
+	function F90ClassCarry:__init() super() end
+	local classText, classProblems = _ScriptGraph.serialize({ ["1"] = { klass = F90ClassCarry } })
+	check("lua_class_global_capture", #classProblems == 0, table.concat(classProblems, " | "))
+	local classNative = { _ScriptGraphNative(F90ClassCarry) }
+	check("lua_class_native_kind", classNative[1] == "lua-class" and classNative[2] == "F90ClassCarry" and classNative[3] == "Box")
+	F90ClassCarry = nil
+	local _, missingClass = _ScriptGraph.deserialize(classText)
+	check("lua_class_missing_refused", #missingClass > 0 and string.find(table.concat(missingClass, " | "), "F90ClassCarry", 1, true), table.concat(missingClass, " | "))
+	class 'F90ClassCarry' (Box)
+	function F90ClassCarry:__init() super() end
+	local classRoots, classRestore = _ScriptGraph.deserialize(classText)
+	local rebound = classRoots and classRoots["1"] and classRoots["1"].klass
+	local reboundNative = rebound and { _ScriptGraphNative(rebound) } or {}
+	check("lua_class_restore_rebinds", #classRestore == 0 and reboundNative[1] == "lua-class" and reboundNative[2] == "F90ClassCarry" and reboundNative[3] == "Box" and rawequal(rebound, F90ClassCarry), table.concat(classRestore, " | "))
+	F90ClassCarry = nil
 	local constructed, message = pcall(function() return MOPixel() end)
 	check("negative_unregistered_constructor_fails", not constructed and string.find(tostring(message), "has no Lua constructor", 1, true) ~= nil)
 	local file = io.tmpfile()
@@ -3518,6 +3545,23 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 static thread_local std::unordered_set<const MovableObject*>* s_CarriedScriptOwnedObjects = nullptr;
 
 static int ScriptGraphNative(lua_State* L) {
+	// A Lua class is re-created from the mod script; the graph names it and its C++ base.
+	if (luabind::detail::is_class_rep(L, 1)) {
+		const auto* crep = static_cast<const luabind::detail::class_rep*>(lua_touserdata(L, 1));
+		if (crep && crep->get_class_type() == luabind::detail::class_rep::lua_class) {
+			lua_pushliteral(L, "lua-class");
+			lua_pushstring(L, crep->name());
+			const char* base = "";
+			if (!crep->bases().empty() && crep->bases()[0].base) {
+				base = crep->bases()[0].base->name();
+			}
+			lua_pushstring(L, base);
+			return 3;
+		}
+		lua_pushnil(L);
+		lua_pushstring(L, crep ? crep->name() : "userdata");
+		return 2;
+	}
 	luabind::detail::object_rep* rep = luabind::detail::is_class_object(L, 1);
 	if (!rep || !rep->crep()) {
 		lua_pushnil(L);
@@ -5230,7 +5274,7 @@ static bool RunGarbageCollectionThreadSelfTest() {
 		return std::pair<uint64_t, uint64_t>(off, sim);
 	};
 	// Over a C++ base luabind leaves the instance in the global super closure whether __init finished or not, so clearing
-	// super is what drops it; the class goes too, since a script graph capture refuses a Lua class userdata left in a global.
+	// super is what drops it; the class goes too so GC can collect the instance.
 	const auto [unbuiltOff, unbuiltSim] = collectOne("class 'F82UnbuiltBase' (Box); function F82UnbuiltBase:__init() error('base never built') end; pcall(function() local held = F82UnbuiltBase() end); super = nil; F82UnbuiltBase = nil");
 	const auto [builtOff, builtSim] = collectOne("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end; do local held = F82BuiltBase() end; super = nil; F82BuiltBase = nil");
 	const bool sentinelHeld = unbuiltSim == 0 && unbuiltOff >= 1 && builtSim >= 1;
