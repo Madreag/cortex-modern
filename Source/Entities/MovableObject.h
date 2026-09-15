@@ -176,6 +176,10 @@ namespace RTE {
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		int RunScriptedFunctionInAppropriateScripts(const std::string& functionName, bool runOnDisabledScripts = false, bool stopOnError = false, const std::vector<const Entity*>& functionEntityArguments = std::vector<const Entity*>(), const std::vector<std::string_view>& functionLiteralArguments = std::vector<std::string_view>(), const std::vector<LuabindObjectWrapper*>& functionObjectArguments = std::vector<LuabindObjectWrapper*>());
 
+		/// Gibs this on a script's word. Inside a lockstep AI pass the gib crosses the wire and every peer,
+		/// the producer included, gibs at the committed tick; everywhere else it happens now.
+		void GibThisFromScript();
+
 		/// Sends a message to this object's scripts. Inside a lockstep AI pass the call is queued and crosses
 		/// the wire, so every peer's receiver hears it at the committed tick; everywhere else it runs now.
 		/// @param context Which kind of context the message carries (NetGameAIScriptMessage::Context); past the

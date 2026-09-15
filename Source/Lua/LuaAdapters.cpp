@@ -458,7 +458,7 @@ void MovableObject::DeliverSyncedScriptMessage(uint8_t context, double number, i
 }
 
 void LuaAdaptersMOSRotating::GibThis(MOSRotating* luaSelfObject) {
-	luaSelfObject->GibThis();
+	luaSelfObject->GibThisFromScript();
 }
 
 std::vector<AEmitter*>* LuaAdaptersMOSRotating::GetWounds1(const MOSRotating* luaSelfObject) {
