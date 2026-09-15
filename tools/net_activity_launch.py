@@ -12,7 +12,11 @@ import struct
 import subprocess
 
 from compare_sim_traces import strict_compare
+import net_lobby_wire
 from run_sim_test import make_run
+
+# Magic, envelope version, header size, message type, payload length.
+ENVELOPE = "<IHHHHI"
 
 
 def sha(path):
@@ -67,8 +71,11 @@ def rules_for(variant):
     return rules
 
 
-def encode_config(rules, dedicated=False, default=False):
-    """Encode the existing L12 MatchConfig packet consumed by NetLobbyProtocol."""
+def encode_config(rules, wire, dedicated=False, default=False):
+    """Encode the existing L12 MatchConfig packet consumed by NetLobbyProtocol, at that tree's own versions."""
+    if struct.calcsize(ENVELOPE) != wire.header_bytes.value:
+        raise RuntimeError(f"envelope layout is {struct.calcsize(ENVELOPE)} bytes, {wire.header_bytes.site} says "
+                           f"{wire.header_bytes.value}")
     def string(value):
         encoded = value.encode("utf-8")
         return struct.pack("<H", len(encoded)) + encoded
@@ -77,7 +84,7 @@ def encode_config(rules, dedicated=False, default=False):
               for peer in range(2 if dedicated else 1, 3)]
     if not default:
         roster.append((0, 1, True, "CPU"))
-    payload = struct.pack("<HQBBHBBH", 4, 1, 1, 2, 3, mode, 2, int(dedicated))
+    payload = struct.pack("<HQBBHBBH", wire.config_version.value, 1, 1, 2, 3, mode, 2, int(dedicated))
     for value in (rules["activity_type"], rules["activity_preset"], rules["scene_name"], "PvP" if default else "CoopPvE"):
         payload += string(value)
     payload += struct.pack("<B", len(roster))
@@ -91,7 +98,23 @@ def encode_config(rules, dedicated=False, default=False):
     for team in rules["teams"]:
         payload += string(team["technology_intent"]) + string(team["technology_module"]) + struct.pack("<B", team["ai_skill"])
     payload += struct.pack("<BIBBB", 0, 0, 10, 1, 1)
-    return struct.pack("<IHHHHI", 0x344C4343, 4, 16, 3, 0, len(payload)) + payload
+    return struct.pack(ENVELOPE, wire.magic.value, wire.version.value, wire.header_bytes.value,
+                       wire.match_config_type.value, 0, len(payload)) + payload
+
+
+def config_refusal(logs, wire, exe_hash):
+    """What a peer said when it refused the launch config, beside the versions this run wrote and from where."""
+    for peer, log in logs.items():
+        reasons = re.findall(r"\[net-match-service-e2e\] setup failed: launch config: (.+)", log)
+        if reasons:
+            return (f"{peer} refused the launch config: {reasons[0]}; this run wrote {wire.describe()} "
+                    f"from the tree under test, against exe {exe_hash[:16]}")
+    return None
+
+
+def report_checks(checks, note=None):
+    for name, passed in checks.items():
+        print(f"{'PASS' if passed else 'FAIL'} {name}" + ("" if passed or not note else f" ({note})"))
 
 
 def observations(log):
@@ -146,6 +169,10 @@ def score_placements(logs, seats=2):
         scored[kind] = {"complete": complete, "issuers": issuers, "identical": identical, "rows": rows}
     scored["pass"] = all(scored[kind][key] for kind in ("applied", "built") for key in ("complete", "issuers", "identical"))
     return scored
+
+
+# The harness blocks this driver owns; 48540-48559 belong to the menu readback detector.
+PORT_BLOCKS = ((48320, 48539), (48630, 48639))
 
 
 # Each peer holds one seat and places a different brain at a different spot, so a placement that failed to
@@ -303,8 +330,8 @@ def census_compare(offline_dump, match_dump):
 def launch(options):
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         raise RuntimeError("family lock exists; launch is deferred")
-    if not 48320 <= options.port <= 48539:
-        raise ValueError("port must be in 48320..48539")
+    if not any(low <= options.port <= high for low, high in PORT_BLOCKS):
+        raise ValueError("port must be in " + " or ".join(f"{low}..{high}" for low, high in PORT_BLOCKS))
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = options.repo.resolve(), options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -313,9 +340,10 @@ def launch(options):
     default = options.variant in ("default", "census", "resync-duel")
     refusal = options.variant.startswith("missing-")
     config = root / "launch-config.bin"
-    config.write_bytes(encode_config(rules, options.dedicated, default))
+    wire = net_lobby_wire.read(repo)
+    config.write_bytes(encode_config(rules, wire, options.dedicated, default))
     exe_hash = sha(repo / "Cortex Command.exe")
-    manifest = dict(stamp=stamp(), repo=str(repo), exe_sha256=exe_hash, rules=rules, variant=options.variant,
+    manifest = dict(stamp=stamp(), repo=str(repo), exe_sha256=exe_hash, rules=rules, variant=options.variant, wire=wire.as_json(),
                     dedicated=options.dedicated, port=options.port, detector_sha256=sha(__file__), config_sha256=sha(config),
                     codec_driver_sha256=sha(Path(__file__).with_name("test_net_activity_options.py")),
                     compare_sha256=sha(Path(__file__).with_name("compare_sim_traces.py")))
@@ -380,7 +408,9 @@ def launch(options):
         for run in runs.values():
             run.close()
     logs = {peer: (root / peer / "stdout.log").read_text(errors="replace") for peer in runs}
-    checks, result = {}, {"records": records}
+    checks, result = {}, {"records": records, "wire": wire.as_json()}
+    # A config the engine turned down leaves the other peer with a bare timeout, so the refusal leads every failure.
+    result["config_refusal"] = None if refusal else config_refusal(logs, wire, exe_hash)
     for peer, log in logs.items():
         for number, line in enumerate(log.splitlines(), 1):
             if line.startswith("[e2e] rules ") or "setup failed:" in line:
@@ -406,8 +436,7 @@ def launch(options):
             result["probes"] = {peer: probe_result(root, peer) for peer in runs}
             result.update(checks=checks, passed=all(checks.values()), exe_sha256=exe_hash)
             (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-            for name, passed in checks.items():
-                print(f"{'PASS' if passed else 'FAIL'} {name}")
+            report_checks(checks, result["config_refusal"])
             return 0 if result["passed"] else 1
         if hold_desync:
             # The whole arm: a divergence injected at tick 50, while the world is held in the setup editor,
@@ -423,8 +452,7 @@ def launch(options):
             result["probes"] = {peer: probe_result(root, peer) for peer in runs}
             result.update(checks=checks, passed=all(checks.values()), exe_sha256=exe_hash)
             (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-            for name, passed in checks.items():
-                print(f"{'PASS' if passed else 'FAIL'} {name}")
+            report_checks(checks, result["config_refusal"])
             return 0 if result["passed"] else 1
         result["rules"] = {peer: score_rules(log, rules, default) for peer, log in logs.items()}
         for peer in runs:
@@ -533,6 +561,5 @@ def launch(options):
                 checks[peer + "_default_dump_bytes"] = left.is_file() and right.is_file() and left.read_bytes() == right.read_bytes()
     result.update(checks=checks, passed=all(checks.values()), exe_sha256=exe_hash)
     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-    for name, passed in checks.items():
-        print(f"{'PASS' if passed else 'FAIL'} {name}")
+    report_checks(checks, result["config_refusal"])
     return 0 if result["passed"] else 1
