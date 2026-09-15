@@ -301,7 +301,9 @@ def inspect(arm, root, outcome, strict_compare):
     elif arm in ("desync", "desync_clean"):
         # The runtime desync check end to end: both peers hash on the interval, put it on the wire and
         # act on the mismatch. The counters are what makes a dead exchange countable instead of silent.
-        expected = arm_ticks(arm) // DESYNC_INTERVAL
+        # A stopped round samples only until its stop, so only the clean arm carries the cadence floor.
+        # The input-delay ramp-in can swallow the first sample; every later one must be there.
+        expected = 1 if arm == "desync" else arm_ticks(arm) // DESYNC_INTERVAL - 1
         stops = {}
         mismatches = 0
         for who in outcome["peers"]:
@@ -310,10 +312,9 @@ def inspect(arm, root, outcome, strict_compare):
             details.setdefault("desync_check", {})[who] = counters
             details.setdefault("runtime_error", {})[who] = report.get("runtime_error")
             mismatches += counters.get("mismatches", 0)
-            # The input-delay ramp-in can swallow the first sample; every later one must be there.
-            checks[f"{who}_submitted"] = counters.get("submissions", 0) >= expected - 1
-            checks[f"{who}_sent"] = counters.get("sends", 0) >= expected - 1
-            checks[f"{who}_compared"] = counters.get("compares", 0) >= expected - 1
+            checks[f"{who}_submitted"] = counters.get("submissions", 0) >= expected
+            checks[f"{who}_sent"] = counters.get("sends", 0) >= expected
+            checks[f"{who}_compared"] = counters.get("compares", 0) >= expected
             stop = DESYNC_STOP.search(report.get("runtime_error") or "")
             stops[who] = int(stop[1]) if stop else None
             if arm == "desync":
