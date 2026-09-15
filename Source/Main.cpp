@@ -370,6 +370,10 @@ static std::string s_netReplayInPath;
 static std::string s_netReplayVerifyPath;
 static uint64_t s_netReplayDumpFrom = 1;
 static uint64_t s_netReplayDumpTo = 0;
+
+// The harness's own match runs: the scripted e2e match and the playback of one it recorded. Both start
+// their activity from a match config, so PresetMan asks before loading the bundled Tests.rte module.
+bool HarnessMatchRunActive() { return s_netMatchServiceE2E || !s_netReplayInPath.empty(); }
 static long long s_lpInvarianceTick = 0;
 static std::vector<int> s_lpInvarianceDepths;
 static std::vector<int> s_lpInvarianceRepeats;
