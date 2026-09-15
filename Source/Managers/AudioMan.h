@@ -39,6 +39,8 @@ namespace RTE {
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings = nullptr, std::string* refusal = nullptr);
 		std::string GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const;
 		bool RunCheckpointSelfTest();
+		/// Test accessor: deferred voices and pending sample archives still held.
+		std::pair<int, int> PendingAudioCount() const;
 		void SetCheckpointTraceEnabled(bool enabled);
 		void TraceCheckpointBoundary(const char* stage) const;
 		bool PerturbCheckpointCursorForSelfTest();
