@@ -455,15 +455,21 @@ end
 local ok, err = pcall(function()
   jit.flush()
   jit.attach(ev, 'trace')
-  for _ = 1, 40 do pcall(body) end
-  local info = lastTr > 0 and util.traceinfo(lastTr) or nil
+  local abortTr, infoAfterAbort = 0, false
+  for _ = 1, 40 do
+    pcall(body)
+    if abortTr == 0 and aborts > 0 then
+      abortTr = lastTr
+      infoAfterAbort = abortTr > 0 and util.traceinfo(abortTr) or nil
+    end
+  end
   jit.attach(ev)
   jit.attach(ev2, 'trace')
   pcall(body)
   pcall(body)
   jit.attach(ev2)
   assert(aborts > 0 and lastWhy ~= '', 'no TRACE abort event aborts='..tostring(aborts)..' why='..tostring(lastWhy)..' starts='..tostring(starts)..' stops='..tostring(stops))
-  assert(info == nil, 'trace slot still live tr='..tostring(lastTr))
+  assert(infoAfterAbort == nil, 'trace slot still live tr='..tostring(abortTr))
   assert(after == 0, 'bytecode still starting after repeats after='..tostring(after)..' starts='..tostring(starts))
 end)
 pcall(function() jit.attach(ev) end)
