@@ -16,7 +16,7 @@ from test_telemetry_bundle import set_visual_resolution
 
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled",
-         "scope-off", "network", "lobby-name", "net-options", "oracles")
+         "scope-off", "network", "lobby-name", "net-options", "net-activity", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
@@ -194,6 +194,22 @@ def scripts(case, port, root):
                  f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                  "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
                  "dump_host_options\nexit\n")
+    elif case == "net-activity":
+        # A menu-driven pair in the lobby itself: the host's picker cycles off the default activity
+        # and every lobby surface on both peers must name the same preset and its module.
+        host = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
+                "assert_label ButtonHostActivity P4 Alpha Duel (Base.rte)\n"
+                "assert_label LabelHostInfo Grasslands - PvP\ndump_host_options\n"
+                "activate ButtonHostActivity\nwait 3\ndump_host_options\n"
+                f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+                "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
+                "wait_connected 2\nwait 12\ndump_lobby\ndump_host_options\nwait 600\nexit\n")
+        client = (LANDING + "settext TextMultiplayerName Joiner\n"
+                  "activate ButtonMultiplayerJoinGame\nwait 10\n"
+                  "settext TextJoinAddress 127.0.0.1\n"
+                  f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n"
+                  "wait_connected 2\nwait 12\nassert_substate Lobby\ndump_lobby\ndump_host_options\nexit\n")
+        return {"host": host, "client": client}, {}
     elif case == "net-options":
         # Two real peers: the host's saved session options ride the lobby config onto both rosters.
         return ({who: f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n" for who in ("host", "client")},
@@ -329,7 +345,9 @@ def run_case(options, case, root, failing=None):
         texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
     inputs = root / "input.txt"
     inputs.write_text(INPUT_SCRIPT, encoding="utf-8")
-    paired = case in ("pause", "live", "net-options")
+    paired = case in ("pause", "live", "net-options", "net-activity")
+    # A menu-driven pair joins through the real UI, so it carries no service-e2e flags.
+    menu_driven = case == "net-activity"
     seeded = {} if failing else seeds(case)
     runs, records, argv, images = {}, {}, {}, []
     result = {"pass": False, "case": case, "scripts": {}, "records": records, "probes": {}, "seeds": seeded}
@@ -339,7 +357,7 @@ def run_case(options, case, root, failing=None):
             script.write_text(texts[who], encoding="utf-8")
             result["scripts"][str(script)] = sha(script)
             args = ["-menu-script", str(script)]
-            if paired:
+            if paired and not menu_driven:
                 args += ["-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
                          "-net-match-ticks", "400", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
                          "-input-script", str(inputs), "-net-match-report", str(root / f"{who}-match.json")]
@@ -365,8 +383,11 @@ def run_case(options, case, root, failing=None):
                 records[who] = {"error": repr(error)}
 
         threads = [threading.Thread(target=drive, args=(who,)) for who in runs]
-        for thread in threads:
+        for index, thread in enumerate(threads):
             thread.start()
+            if menu_driven and index == 0:
+                # The joining peer's menu must find the host's lobby already listening.
+                threading.Event().wait(2.0)
         for thread in threads:
             thread.join()
         logs = {who: "\n".join((run.out / leaf).read_text(encoding="utf-8", errors="replace")
@@ -474,6 +495,33 @@ def run_case(options, case, root, failing=None):
                 rules = report["service"]["runner"]["match_config"]["rules"]
                 result["match_rules"][who] = {name: rules[name] for name in MATCH_RULES}
                 assert result["match_rules"][who] == MATCH_RULES, (who, result["match_rules"][who])
+        if case == "net-activity":
+            # The picker's cycled selection is what the lobby carries, and both peers read the same
+            # preset and module off the wire - the client's label is the proof a bare name never was.
+            dumped = {}
+            for who, log in logs.items():
+                rows = re.findall(r'dump_lobby state=\S+ members=\d+ activity="([^"]*)" module="([^"]*)"', log)
+                assert rows, (who, log[-2000:])
+                dumped[who] = rows[-1]
+            assert dumped["host"] == dumped["client"], dumped
+            preset, module = dumped["host"]
+            assert module, dumped
+            result["lobby_activity"] = {"preset": preset, "module": module, "dumps": dumped}
+            picker = [next(c["text"] for c in image["controls"] if c["name"] == "ButtonHostActivity")
+                      for image in images if image["peer"] == "host"
+                      and any(c["name"] == "ButtonHostActivity" for c in image["controls"])]
+            assert len(picker) == 2 and picker[0] == "P4 Alpha Duel (Base.rte)" and picker[1] != picker[0], picker
+            assert picker[1] == f"{preset} ({module})", (picker, dumped)
+            result["picker_cycle"] = picker
+            expected = f"{preset} ({module}) - Grasslands - PvP"
+            for who in ("host", "client"):
+                matches = [image for image in images if image["peer"] == who
+                           and any(c["name"] == "LabelLobbyMatch" for c in image["controls"])]
+                assert len(matches) == 1, (who, [image["json"] for image in matches])
+                shot = matches[0]
+                assert [shot["activity_preset"], shot["activity_module"]] == [preset, module], shot["json"]
+                label = next(c["text"] for c in shot["controls"] if c["name"] == "LabelLobbyMatch")
+                assert label == expected, (who, label)
         if case == "input":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == "ab"
         if case == "input-parity":
