@@ -70,7 +70,7 @@ int ObjectPickerGUI::Create(Controller* controller, int whichModuleSpace, const 
 		m_GUIScreen = std::make_unique<AllegroScreen>(g_FrameMan.GetBackBuffer8());
 	}
 	if (!m_GUIInput) {
-		m_GUIInput = std::make_unique<GUIInputWrapper>(controller->GetPlayer());
+		m_GUIInput = std::make_unique<GUIInputWrapper>(controller->GetInputPlayer());
 	}
 	if (!m_GUIControlManager) {
 		m_GUIControlManager = std::make_unique<GUIControlManager>();
@@ -130,9 +130,9 @@ int ObjectPickerGUI::Create(Controller* controller, int whichModuleSpace, const 
 void ObjectPickerGUI::SetEnabled(bool enable) {
 	if (enable && m_PickerState != PickerState::Enabled && m_PickerState != PickerState::Enabling) {
 		m_PickerState = PickerState::Enabling;
-		g_UInputMan.TrapMousePos(false, m_Controller->GetPlayer());
+		g_UInputMan.TrapMousePos(false, m_Controller->GetInputPlayer());
 		Vector playerFramebufferCenter = Vector(static_cast<float>(g_FrameMan.GetPlayerFrameBufferWidth(m_Controller->GetPlayer())), static_cast<float>(g_FrameMan.GetPlayerFrameBufferHeight(m_Controller->GetPlayer()))) / 2;
-		g_UInputMan.SetMousePos(playerFramebufferCenter, m_Controller->GetPlayer());
+		g_UInputMan.SetMousePos(playerFramebufferCenter, m_Controller->GetInputPlayer());
 
 		SetListFocus(m_ObjectsList->GetItemList()->empty() ? PickerFocus::GroupList : PickerFocus::ObjectList);
 
@@ -142,7 +142,7 @@ void ObjectPickerGUI::SetEnabled(bool enable) {
 		g_GUISound.EnterMenuSound()->Play(m_Controller->GetPlayer());
 	} else if (!enable && m_PickerState != PickerState::Disabled && m_PickerState != PickerState::Disabling) {
 		m_PickerState = PickerState::Disabling;
-		g_UInputMan.TrapMousePos(true, m_Controller->GetPlayer());
+		g_UInputMan.TrapMousePos(true, m_Controller->GetInputPlayer());
 		g_GUISound.ExitMenuSound()->Play(m_Controller->GetPlayer());
 	}
 }

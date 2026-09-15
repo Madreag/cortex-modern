@@ -11,6 +11,7 @@
 #include "ConsoleMan.h"
 #include "ScenarioRunner.h"
 #include "FaultInjection.h"
+#include "ActivityMan.h"
 
 #include <algorithm>
 #include <cmath>
@@ -401,7 +402,20 @@ void SoundContainer::SetPaused(bool paused) {
 	g_AudioMan.SetPausedSoundContainerPlayingChannels(this, paused);
 }
 
+bool SoundContainer::IsValidPlayerTarget(int player) {
+	return player >= Players::NoPlayer && player < Players::MaxPlayerCount;
+}
+
+bool SoundContainer::CanPresentToPlayer(int player) const {
+	if (!IsValidPlayerTarget(player)) return false;
+	const Activity* activity = ActivityMan::IsConstructed() ? g_ActivityMan.GetActivity() : nullptr;
+	// -1 is the documented all-listeners target. Seat targeting only filters physical UI audio;
+	// a gameplay sound routed to the UI bus still advances its shared logical voices on every peer.
+	return player == Players::NoPlayer || GetBusRouting() != BusRouting::UI || !activity || activity->LocalInputOfPlayer(player) != Players::NoPlayer;
+}
+
 bool SoundContainer::Play(int player) {
+	if (!IsValidPlayerTarget(player) || (!UsesLogicalPlayback() && !CanPresentToPlayer(player))) return false;
 	if (HasAnySounds()) {
 		std::unique_lock<std::recursive_mutex> pending(m_PendingMutex, std::defer_lock);
 		if (Deferring()) pending.lock();
@@ -428,6 +442,7 @@ bool SoundContainer::Play(int player) {
 }
 
 bool SoundContainer::Stop(int player) {
+	if (!IsValidPlayerTarget(player) || (!UsesLogicalPlayback() && !CanPresentToPlayer(player))) return false;
 	if (!HasAnySounds()) return false;
 	if (Deferring()) {
 		std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
@@ -456,6 +471,7 @@ bool SoundContainer::IsBeingPlayed() const {
 }
 
 bool SoundContainer::Restart(int player) {
+	if (!IsValidPlayerTarget(player) || (!UsesLogicalPlayback() && !CanPresentToPlayer(player))) return false;
 	if (!HasAnySounds()) return false;
 	if (Deferring()) {
 		std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);

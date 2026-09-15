@@ -42,6 +42,7 @@ LuaBindingRegisterFunctionDefinitionForType(ActivityLuaBindings, Activity) {
 	    .def("IsOtherPlayerBrain", &Activity::IsOtherPlayerBrain)
 	    .def("HumanBrainCount", &Activity::HumanBrainCount)
 	    .def("AIBrainCount", &Activity::AIBrainCount)
+	    .def("BrainlessHumansSpectate", &Activity::BrainlessHumansSpectate)
 	    .def("GetControlledActor", &Activity::GetControlledActor)
 	    .def("GetPlayerController", &Activity::GetPlayerController, luabind::return_internal_reference(_1))
 	    .def("SetTeamFunds", &Activity::SetTeamFunds)

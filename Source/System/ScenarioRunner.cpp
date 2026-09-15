@@ -1013,6 +1013,22 @@ namespace RTE {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().localPeerId : 0;
 	}
 
+	const NetMatchConfig* ScenarioRunner::GetLockstepMatchConfig() {
+		if (!s_LockstepCoordinator) {
+			return nullptr;
+		}
+		const NetMatchConfig& matchConfig = s_LockstepCoordinator->GetConfig().matchConfig;
+		if (!matchConfig.players.empty()) {
+			return &matchConfig;
+		}
+		// A running match has adopted a roster. Without one the shared rules it answers would come from
+		// this machine's own settings, so the match stops instead of deciding per peer.
+		if (s_LockstepCoordinator->IsRunning() && !HasControllerReplayError()) {
+			SetControllerReplayError("the running match has no adopted roster at tick " + std::to_string(GetLockstepAppliedFrame()));
+		}
+		return nullptr;
+	}
+
 	bool ScenarioRunner::IsLockstepPaused() {
 		return s_LockstepPaused;
 	}

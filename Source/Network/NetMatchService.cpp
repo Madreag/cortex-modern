@@ -2904,6 +2904,8 @@ static std::string ResyncSaveName() {
 		config.modePreset = NetMatchConfigUtil::ModeName(mode);
 		config.ownershipPolicy = request.ownershipPolicy;
 		config.inputDelayFrames = request.inputDelayFrames;
+		// The host's Gameplay setting seats the rule unless the lobby or a request flag picked one.
+		config.brainlessHumansSpectate = request.brainlessHumansSpectate.value_or(g_SettingsMan.GetBrainlessHumansSpectate());
 		config.peerCount = peerCount;
 		config.dedicated = request.dedicated;
 		// The host publishes the checkpoint cadence the whole match follows; a client's own setting never steers one.

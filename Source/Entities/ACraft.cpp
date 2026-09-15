@@ -198,6 +198,8 @@ void ACraft::Clear() {
 	m_HatchDelay = 0;
 	m_NetworkDelivery = false;
 	m_NetworkDeliveryTimer.Reset();
+	m_OffWireHatchTick = -1;
+	m_OffWireHatchOpen = false;
 	m_HatchOpenSound = nullptr;
 	m_HatchCloseSound = nullptr;
 	m_CollectedInventory.clear();
@@ -595,6 +597,12 @@ bool ACraft::HandlePieCommand(PieSliceType pieSliceIndex) {
 	return false;
 }
 
+// True inside the owner's lockstep AI pass, where a hatch write is only a proposal: the producing
+// boundary undoes it and the committed intent makes the whole call on every peer at the same tick.
+static bool InOffWireHatchPass() {
+	return ScenarioRunner::IsLockstepControllerSyncActive() && MovableObject::InLocalAIValueDomain();
+}
+
 void ACraft::OpenHatch() {
 	// A network delivery unloads on a deterministic schedule, not via off-wire AI hatch control.
 	if (m_NetworkDelivery) {
@@ -603,6 +611,10 @@ void ACraft::OpenHatch() {
 	if (m_HatchState == CLOSED || m_HatchState == CLOSING) {
 		m_HatchState = OPENING;
 		m_HatchTimer.Reset();
+		// Only the state the boundary can undo is written here; the sound rides the committed intent.
+		if (InOffWireHatchPass()) {
+			return;
+		}
 
 		// PSCHHT
 		if (m_HatchOpenSound) {
@@ -626,6 +638,10 @@ void ACraft::CloseHatch() {
 	if (m_HatchState == OPEN || m_HatchState == OPENING) {
 		m_HatchState = CLOSING;
 		m_HatchTimer.Reset();
+		// Only the state the boundary can undo is written here; the hold move and the sound ride the intent.
+		if (InOffWireHatchPass()) {
+			return;
+		}
 
 		// When closing, move all newly added inventory to the regular inventory list so it'll be ejected next time doors open
 		for (std::deque<MovableObject*>::const_iterator niItr = m_CollectedInventory.begin(); niItr != m_CollectedInventory.end(); ++niItr) {
@@ -1066,6 +1082,7 @@ std::string ACraft::SaveACraftRuntime() const {
 	archive(m_HatchState, m_HatchTimer, m_HatchDelay, m_ExitInterval, m_ExitTimer, m_ReadExitIncomingCursor, m_ExitLinePhase);
 	archive(m_HasDelivered, m_LandingCraft, m_FlippedTimer, m_CrashTimer, m_CanEnterOrbit, m_MaxPassengers, m_ScuttleIfFlippedTime);
 	archive(m_ScuttleOnDeath, m_DeliveryState, m_AltitudeMoveState, m_AltitudeControl, m_DeliveryDelayMultiplier, m_NetworkDelivery, m_NetworkDeliveryTimer);
+	archive(m_OffWireHatchTick, m_OffWireHatchOpen);
 	return archive.Text();
 }
 
@@ -1075,6 +1092,7 @@ bool ACraft::LoadACraftRuntime(std::string_view text, bool validateOnly) {
 		archive(m_HatchState, m_HatchTimer, m_HatchDelay, m_ExitInterval, m_ExitTimer, m_ReadExitIncomingCursor, m_ExitLinePhase);
 		archive(m_HasDelivered, m_LandingCraft, m_FlippedTimer, m_CrashTimer, m_CanEnterOrbit, m_MaxPassengers, m_ScuttleIfFlippedTime);
 		archive(m_ScuttleOnDeath, m_DeliveryState, m_AltitudeMoveState, m_AltitudeControl, m_DeliveryDelayMultiplier, m_NetworkDelivery, m_NetworkDeliveryTimer);
+		archive(m_OffWireHatchTick, m_OffWireHatchOpen);
 		archive.Finish();
 		return true;
 	} catch (const std::exception&) { return false; }

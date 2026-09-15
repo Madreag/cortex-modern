@@ -16,6 +16,7 @@
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
 #include "ActivityMan.h"
+#include "MetricsCollector.h"
 #include "ScenarioRunner.h"
 
 #include "nlohmann/json.hpp"
@@ -158,6 +159,7 @@ namespace RTE {
 			};
 			NetMatchConfig historical = MakeConfig();
 			historical.version = 2;
+			historical.brainlessHumansSpectate = false;
 			std::vector<uint8_t> historicalWire;
 			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{historical}}, historicalWire)) return false;
 			historicalWire[4] = 3;
@@ -445,6 +447,7 @@ namespace RTE {
 				{"deploy", [](auto& c) { c.deployUnits = false; }}, {"autosave", [](auto& c) { c.autosaveEnabled = false; }},
 				{"interval", [](auto& c) { ++c.autosaveIntervalSeconds; }}, {"idle_wait", [](auto& c) { ++c.idleWaitMinutes; }},
 				{"repair", [](auto& c) { c.automaticRepair = true; }}, {"policy", [](auto& c) { c.delayPolicy = NetMatchDelayPolicy::Auto; }},
+				{"brainless_spectate", [](auto& c) { c.brainlessHumansSpectate = false; }},
 				{"floor", [](auto& c) { ++c.inputDelayFrames; }}, {"sender_1", [](auto& c) { ++c.peerInputDelayFrames[0]; }},
 				{"sender_2", [](auto& c) { ++c.peerInputDelayFrames[1]; }},
 			};
@@ -519,6 +522,7 @@ namespace RTE {
 			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{config}}, bytes)) return false;
 			NetMatchConfig prefix = MakeConfig();
 			prefix.version = 2;
+			prefix.brainlessHumansSpectate = false;
 			prefix.inputDelayFrames = config.inputDelayFrames;
 			prefix.peerInputDelayFrames = config.peerInputDelayFrames;
 			std::vector<uint8_t> prefixBytes;
@@ -544,7 +548,8 @@ namespace RTE {
 				for (size_t i = 0; i < 4; ++i) truncated[12 + i] = static_cast<uint8_t>((length - NetLobbyProtocol::c_HeaderBytes) >> (8 * i));
 				if (NetLobbyProtocol::Decode(truncated).ok) { *error = "truncated rules decoded"; return false; }
 			}
-			for (const size_t offset : {bytes.size() - 8, bytes.size() - 2, bytes.size() - 1}) {
+			// The spectate rule rides between deploy_units and the team rules, so its byte is offset from difficulty.
+			for (const size_t offset : {difficultyOffset + 8, bytes.size() - 8, bytes.size() - 2, bytes.size() - 1}) {
 				auto invalidWire = bytes;
 				invalidWire[offset] = 3;
 				if (NetLobbyProtocol::Decode(invalidWire).ok) { *error = "invalid rules bool/policy decoded"; return false; }
@@ -555,6 +560,8 @@ namespace RTE {
 			for (size_t i = 0; i < legacyHex.size(); i += 2) legacy.push_back(static_cast<uint8_t>(std::stoul(legacyHex.substr(i, 2), nullptr, 16)));
 			NetMatchConfig expected = MakeConfig();
 			expected.version = 2;
+			// A legacy config carries the pre-rules end rule: the last human brain ends the round.
+			expected.brainlessHumansSpectate = false;
 			expected.sessionId = 1;
 			for (const uint8_t version : {2, 1}) {
 				legacy[16] = version;
@@ -574,6 +581,83 @@ namespace RTE {
 			}
 			std::cout << "[net-match-selftest] legacy_config_hash=" << NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(expected)) << std::endl;
 			std::cout << "[net-match-selftest] PASS rules_legacy_defaults" << std::endl;
+			// The match config of a recording written before the spectate byte reached the wire.
+			const std::string recordedHex = "43434c340400100003000000d50000000300345032454741545301020300020200000a00474153637269707465640d00503420416c706861204475656c0a0047726173736c616e64730800636f6f702d70766503010000000400486f7374020000000600436c69656e7400010100030043505500010000000000000001000000000000000800426173652e7274650800426173652e727465508813000001010105002d416c6c2d0000320d00436f616c6974696f6e2e7274650d00436f616c6974696f6e2e7274654605002d416c6c2d00003205002d416c6c2d00003200000000000a0101";
+			std::vector<uint8_t> recorded;
+			for (size_t i = 0; i < recordedHex.size(); i += 2) recorded.push_back(static_cast<uint8_t>(std::stoul(recordedHex.substr(i, 2), nullptr, 16)));
+			const auto liveDecode = NetLobbyProtocol::Decode(recorded);
+			if (liveDecode.ok || liveDecode.error.code != NetLobbyErrorCode::UnsupportedVersion) {
+				*error = "network decode accepted a pre-spectate match config";
+				return false;
+			}
+			const auto recordedDecode = NetLobbyProtocol::Decode(recorded, NetLobbyDecodeOptions{true});
+			const auto* recordedConfig = recordedDecode.ok ? std::get_if<NetLobbyMatchConfig>(&recordedDecode.message.payload) : nullptr;
+			if (!recordedConfig || recordedConfig->config.version != 3 || recordedConfig->config.brainlessHumansSpectate) {
+				*error = "a pre-spectate recording did not open with the pre-spectate end rule: " + recordedDecode.error.message;
+				return false;
+			}
+			// The hash the build that wrote the recording reported for this very config.
+			if (NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(recordedConfig->config)) != "ea11e9d32b43d4c9f71d41d56ffdb6b3642605761bfe3f7696e674bfa565ed7c") {
+				*error = "a pre-spectate config no longer hashes as the build that recorded it did";
+				return false;
+			}
+			std::vector<uint8_t> reEncoded;
+			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{recordedConfig->config}}, reEncoded) || reEncoded != recorded) {
+				*error = "re-encoding a pre-spectate config did not reproduce its recorded bytes";
+				return false;
+			}
+			NetMatchConfig carriesTheRule = recordedConfig->config;
+			carriesTheRule.brainlessHumansSpectate = true;
+			if (NetMatchConfigUtil::ValidateLocalAlpha(carriesTheRule)) {
+				*error = "a pre-spectate config was allowed to carry the spectate rule";
+				return false;
+			}
+			std::cout << "[net-match-selftest] recorded_v3_config_hash=" << NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(recordedConfig->config)) << std::endl;
+			std::cout << "[net-match-selftest] PASS rules_recorded_v3" << std::endl;
+			return true;
+		}
+
+		// A running match answers a shared rule from the roster it adopted, never from local state.
+		bool TestRosterlessMatchRefusesSharedRules(std::string* error) {
+			if (!MetricsCollector::IsConstructed()) {
+				MetricsCollector::Construct(); // SetControllerReplayError records into it.
+			}
+			LoopbackTransport idle;
+			NetLockstepConfig lockstep;
+			lockstep.localPeerId = 1;
+			lockstep.remotePeerId = 2;
+			lockstep.peerCount = 2;
+			lockstep.matchConfig = MakeConfig();
+			NetLockstepCoordinator seated;
+			NetLockstepCoordinator rosterless;
+			NetLockstepConfig empty = lockstep;
+			empty.matchConfig.players.clear();
+			if (!seated.StartReplay(idle, lockstep, error) || !rosterless.StartReplay(idle, empty, error)) {
+				return false;
+			}
+			struct Detach {
+				~Detach() {
+					ScenarioRunner::SetLockstepCoordinator(nullptr);
+					ScenarioRunner::ClearControllerReplayError();
+				}
+			} detach;
+			ScenarioRunner::ClearControllerReplayError();
+			ScenarioRunner::SetLockstepCoordinator(&seated);
+			const NetMatchConfig* adopted = ScenarioRunner::GetLockstepMatchConfig();
+			if (!adopted || adopted->players != lockstep.matchConfig.players || ScenarioRunner::HasControllerReplayError()) {
+				*error = "a seated match did not answer from its adopted roster";
+				return false;
+			}
+			ScenarioRunner::SetLockstepCoordinator(&rosterless);
+			if (ScenarioRunner::GetLockstepMatchConfig() != nullptr) {
+				*error = "a rosterless match handed out a config";
+				return false;
+			}
+			if (ScenarioRunner::GetControllerReplayError().find("adopted roster") == std::string::npos) {
+				*error = "a running match with no adopted roster let a shared rule fall back to this machine";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS lockstep_rosterless_match_refused" << std::endl;
 			return true;
 		}
 
@@ -6752,6 +6836,7 @@ namespace RTE {
 		if (!TestOwnershipPolicies(&error)) return fail(error);
 		if (!TestLockstepCoordinatorUsesMatchOwnership(&error)) return fail(error);
 		if (!TestLobbyCodecRoundTrips(&error)) return fail(error);
+		if (!TestRosterlessMatchRefusesSharedRules(&error)) return fail(error);
 		if (!TestMalformedLobbyPayloads(&error)) return fail(error);
 		if (!TestLobbyCodecDedicatedFlag(&error)) return fail(error);
 		if (!TestLobbyStateMachineHappyPath(&error)) return fail(error);

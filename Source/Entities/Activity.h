@@ -15,6 +15,7 @@ namespace RTE {
 
 	class Scene;
 	class ACraft;
+	struct NetMatchConfig;
 
 	/// Base class for all Activities, including game modes and editors.
 	class Activity : public Entity {
@@ -254,7 +255,31 @@ namespace RTE {
 		/// Indicates whether a specific player is active in the current game.
 		/// @param player Which player index to check.
 		/// @return Whether the player is active in the current Activity.
-		bool PlayerActive(int player) const { return m_IsActive[player]; }
+		bool PlayerActive(int player) const { return IsSeatActive(player); }
+
+		/// Whether the match's player seat is active.
+		bool IsSeatActive(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_IsActive[player]; }
+
+		/// Whether a human plays the match's player seat.
+		bool IsHumanSeat(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_IsHuman[player]; }
+
+		/// Whether this machine supplies input and a screen for the human seat.
+		bool IsLocalHumanSeat(int player) const { return IsHumanSeat(player) && LocalInputOfPlayer(player) != Players::NoPlayer; }
+
+		/// The physical input slot for a match seat, or NoPlayer for a remote seat.
+		int LocalInputOfPlayer(int player) const;
+
+		/// The number of active human seats with a screen on this machine.
+		uint8_t GetLocalHumanCount() const;
+
+		/// Installs the synced human roster in the activity's player slots.
+		bool ConfigureLockstepPlayers();
+
+		/// Rebuilds local input and screen bindings from the current coordinator without changing shared seat facts.
+		void RefreshLockstepLocalPlayers();
+
+		/// Checks roster order, local input mapping and unchanged offline seats.
+		static bool RunSharedSeatSelfTest();
 
 		/// Turns off a player if they were active. Should only be done if brain etc are already taken care of and disposed of properly.
 		/// Will also deactivate the team this player is on, if there's no other active players still on it.
@@ -283,15 +308,15 @@ namespace RTE {
 		/// @return The total number of players in the current Activity.
 		uint8_t GetHumanCount() const;
 
-		/// Indicates whether a specific player is human in the current game, ie not an AI player and has a screen etc.
+		/// Indicates whether a specific player is human in the current game.
 		/// @param player Which player index to check.
 		/// @return Whether the player is active as a Human in the current Activity.
-		bool PlayerHuman(int player) const { return m_IsHuman[player]; }
+		bool PlayerHuman(int player) const { return IsHumanSeat(player); }
 
 		/// Gets the current team a specific player belongs to.
 		/// @param player The player to get the team info on.
 		/// @return The team number of the specified player.
-		int GetTeamOfPlayer(int player) const { return m_Team[player]; }
+		int GetTeamOfPlayer(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount ? m_Team[player] : Teams::NoTeam; }
 
 		/// Sets the current team a specific player belongs to.
 		/// @param player The player to set the team for.
@@ -311,17 +336,17 @@ namespace RTE {
 		/// Gets the current viewing state for a specific player. See the ViewState enumeration for values.
 		/// @param whichPlayer Which player to get the view state for.
 		/// @return The current viewing state of the player.
-		ViewState GetViewState(int whichPlayer = 0) const { return m_ViewState[whichPlayer]; }
+		ViewState GetViewState(int whichPlayer = 0) const { return LocalInputOfPlayer(whichPlayer) != Players::NoPlayer ? m_ViewState[whichPlayer] : ViewState::Observe; }
 
 		/// Sets the current viewing state for a specific player. See the ViewState enumeration for values.
 		/// @param whichViewState The state to set to.
 		/// @param whichPlayer Which player to set the view state for.
-		void SetViewState(ViewState whichViewState, int whichPlayer = 0) { m_ViewState[whichPlayer] = whichViewState; }
+		void SetViewState(ViewState whichViewState, int whichPlayer = 0) { if (LocalInputOfPlayer(whichPlayer) != Players::NoPlayer) m_ViewState[whichPlayer] = whichViewState; }
 
 		/// Resets the message timer for one player.
 		/// @param player The player to reset the message timer for.
 		void ResetMessageTimer(int player = 0) {
-			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount) {
+			if (LocalInputOfPlayer(player) != Players::NoPlayer) {
 				m_MessageTimer[player].Reset();
 			}
 		}
@@ -449,6 +474,10 @@ namespace RTE {
 #pragma endregion
 
 #pragma region Brain Handling
+		/// Whether the host's rule keeps this match running once every human brain is gone.
+		/// @return Whether the brainless humans spectate instead of the round ending on them.
+		bool BrainlessHumansSpectate() const;
+
 		/// Shows how many human controlled brains are left in this Activity.
 		/// @return How many human controlled brains are left in this Activity.
 		int HumanBrainCount() const { return GetBrainCount(true); }
@@ -466,6 +495,21 @@ namespace RTE {
 		/// @param newBrain A pointer to the new brain Actor. Ownership is NOT transferred!
 		/// @param player Which team to set the brain actor for.
 		void SetPlayerBrain(Actor* newBrain, int player = 0);
+
+		/// Records assigned human brains and fills empty lockstep seats in deterministic order.
+		void UpdatePlayerBrainRecord();
+
+		/// Records the brains the human seats hold, for a save that was written before the record existed.
+		void RecordSeatedPlayerBrains();
+
+		/// Drives one human and one AI seat through brain assignment and checks that only the human seat's
+		/// brain reaches the shared record. The seats and the record are put back as they were.
+		/// @param humanBrain An actor to assign to the human seat.
+		/// @param aiBrain An actor to assign to the AI seat.
+		/// @param legacyReseeded Filled with whether a payload from before the record re-seeds it from the seats.
+		/// @param lastDitchRecorded Filled with whether the last-ditch brain placement reaches the record.
+		/// @return Whether the record held exactly the human seat's brain, and dropped it when the seat lost it.
+		bool RunPlayerBrainRecordSelfTest(Actor* humanBrain, Actor* aiBrain, bool* legacyReseeded = nullptr, bool* lastDitchRecorded = nullptr);
 
 		/// Shows whether a specific player ever had a Brain yet.
 		/// @param player Which player to check whether they ever had a Brain.
@@ -507,6 +551,9 @@ namespace RTE {
 		/// @param actor Which Actor to check for player braininess.
 		/// @return Which player has this assigned as a Brain, if any.
 		int IsBrainOfWhichPlayer(Actor* actor) const;
+
+		/// The local human seat whose screen displays this brain, or NoPlayer.
+		int IsBrainOfWhichLocalPlayer(Actor* actor) const;
 
 		/// Shows whether the passed in actor is the Brain of any other player.
 		/// @param actor Which Actor to check for other player braininess.
@@ -675,7 +722,9 @@ namespace RTE {
 
 		int m_PlayerCount; //!< The number of total players in the current Activity, AI and Human.
 		bool m_IsActive[Players::MaxPlayerCount]; //!< Whether a specific player is at all active and playing this Activity.
-		bool m_IsHuman[Players::MaxPlayerCount]; //!< Whether a specific player is Human or not, and needs a screen etc.
+		bool m_IsHuman[Players::MaxPlayerCount]; //!< Whether a human plays each shared seat.
+		bool m_SharedPlayerSeats; //!< Whether the player slots come from the synced match roster.
+		std::array<int, Players::MaxPlayerCount> m_LocalInputPlayers; //!< Physical input slots, or NoPlayer for remote seats.
 
 		int m_PlayerScreen[Players::MaxPlayerCount]; //!< The screen index of each player - only applicable to human players. -1 if AI or other.
 		ViewState m_ViewState[Players::MaxPlayerCount]; //!< What to be viewing for each player.
@@ -697,6 +746,7 @@ namespace RTE {
 
 		Actor* m_Brain[Players::MaxPlayerCount]; //!< The Brain of each player. Not owned!
 		bool m_HadBrain[Players::MaxPlayerCount]; //!< Whether each player has yet had a Brain. If not, then their Activity doesn't end if no brain is found.
+		bool m_BrainRecordReconciled; //!< Whether filling an empty seat has been reported.
 		bool m_BrainEvacuated[Players::MaxPlayerCount]; //!< Whether a player has evacuated his Brain into orbit.
 
 		Actor* m_ControlledActor[Players::MaxPlayerCount]; //!< Currently controlled actor, not owned.
@@ -710,6 +760,8 @@ namespace RTE {
 		GenericSavedData m_SavedValues;
 
 	private:
+		void ConfigureHumanRoster(const NetMatchConfig& config, uint8_t localPeer);
+		void MapLocalPlayers(const NetMatchConfig& config, uint8_t localPeer);
 
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_ActivityState, self.m_Paused, self.m_AllowsUserSaving, self.m_IsTestActivity,

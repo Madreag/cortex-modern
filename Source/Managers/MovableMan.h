@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <mutex>
 #include <map>
+#include <set>
 #include <future>
 #include <ostream>
 #include <unordered_set>
@@ -57,7 +58,7 @@ namespace RTE {
 			m_Team = Activity::NoTeam;
 			m_Range = 1.0F;
 		}
-		// TODO: Stop relying on screen width for this shit!
+		// The range is scaled by the default player screen width, not the local one: this is shared sim state.
 		AlarmEvent(const Vector& pos, int team = Activity::NoTeam, float range = 1.0F);
 
 		// Absolute position in the scene where this occurred
@@ -132,6 +133,10 @@ namespace RTE {
 		/// of anything moving, without resetting all of this' settings.
 		void PurgeAllMOs();
 		bool RunPurgeSelfTest();
+
+		/// Checks that a world payload from before the brain record re-seeds it from the seats instead of
+		/// installing an empty one. Leaves the live record as it found it.
+		bool RunLegacyBrainRecordSelfTest(const Actor* seatBrain);
 
 		/// Checks that the contiguous actor index never outlives its actors: takes the passed-in craft
 		/// through a tick's add, index and removal, the three added-actor delete paths, then the archive
@@ -325,6 +330,20 @@ namespace RTE {
 			uint64_t directWrites = 0;
 		};
 		const ControllerBoundaryStats& GetControllerBoundaryStats() const { return m_ControllerBoundaryStats; }
+		/// The canonical actor state the owner's AI pass may not change directly.
+		struct ControllerBoundaryBaseline {
+			Actor* actor = nullptr;
+			float aim = 0.0F;
+			bool flipped = false;
+			int64_t fg = 0;
+			int64_t bg = 0;
+			unsigned int hatch = 0;
+			int64_t hatchTimerStart = 0;
+		};
+		/// Reads the boundary state before the owner's AI pass runs.
+		static ControllerBoundaryBaseline CaptureControllerBoundary(Actor* actor);
+		/// Turns what the pass changed into one-shot intents and puts the canonical actor back.
+		void RestoreControllerBoundary(const ControllerBoundaryBaseline& before, long long simTick);
 		void ReportControllerBoundaryViolation(const char* what, const Actor* actor);
 		/// Counts and reports a write to the world attempted from speculative execution; ordinary gameplay never gets here.
 		void ReportSpeculationViolation(const char* what, const MovableObject* mo);
@@ -470,6 +489,22 @@ namespace RTE {
 		/// 0 if there are no brains not on that team. OWNERSHIP IS NOT TRANSFERRED!
 		Actor* GetFirstOtherBrainActor(int notOfTeam) const { return GetClosestOtherBrainActor(notOfTeam, Vector()); }
 
+		/// Whether this actor is a brain a human player depends on. Recorded identically on every peer,
+		/// unlike the per-seat brain slots, so shared decisions can be made from it.
+		/// @param actor The actor to ask about.
+		/// @return Whether the actor is recorded as a human player's brain.
+		bool IsPlayerBrain(const Actor* actor) const;
+
+		/// Records or drops an actor as a human player's brain.
+		/// @param uniqueID The unique ID of the actor.
+		/// @param isBrain Whether it is a human player's brain now.
+		void NotePlayerBrain(long uniqueID, bool isBrain);
+
+		/// Whether a live actor of this team is recorded as a human player's brain.
+		/// @param team The team to look for.
+		/// @return Whether the record holds a brain of that team.
+		bool HasPlayerBrainOfTeam(int team);
+
 		/// Get a pointer to the first brain actor of a specific team which hasn't
 		/// been assigned to a player yet.
 		/// @param team Which team to try to get the brain for. 0 means first team, 1 means 2nd. (default: 0)
@@ -477,6 +512,9 @@ namespace RTE {
 		/// in the list that hasn't been assigned to a player. 0 if there are no
 		/// unassigned brains of that team.
 		Actor* GetUnassignedBrain(int team = 0) const;
+
+		/// The unassigned live brain with the lowest unique ID, including pending actors.
+		Actor* GetUnassignedBrainByID(int team) const;
 
 		/// Gets the number of actors currently held.
 		/// @return The number of actors.
@@ -894,6 +932,8 @@ namespace RTE {
 		// Actors that joined mid-tick during a lockstep match (join tick, unique id), quarantined off
 		// their per-machine controllers until the next tick's controller update hands them to the wire.
 		std::vector<std::pair<uint64_t, long int>> m_LockstepJoinQuarantine;
+		// The unique ids of the brains human players depend on, every seat's, on every peer.
+		std::set<long> m_PlayerBrainIDs;
 		WorldSetAside* m_WorldSetAside = nullptr; //!< The record holding the world aside, if any; the hold is its to reinstate or discard.
 		/// Withdraws the copies a held world would swap back, so no later destruction writes into them.
 		void ForgetHeldWorld(WorldSetAside& in);

@@ -406,6 +406,7 @@ namespace RTE {
 		/// @param player The player to start playback of this SoundContainer's sounds for.
 		/// @return Whether this SoundContainer successfully started playing on any channels.
 		bool Play(const Vector& position, int player) {
+			if (!IsValidPlayerTarget(player) || (!UsesLogicalPlayback() && !CanPresentToPlayer(player))) return false;
 			SetPosition(position);
 			return Play(player);
 		}
@@ -457,6 +458,8 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		static bool IsValidPlayerTarget(int player);
+		bool CanPresentToPlayer(int player) const;
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
 		static const std::unordered_map<std::string, SoundOverlapMode> c_SoundOverlapModeMap; //!< A map of strings to SoundOverlapModes to support string parsing for the SoundOverlapMode enum. Populated in the implementing cpp file.
 		static const std::unordered_map<std::string, BusRouting> c_BusRoutingMap; //!< A map of strings to BusRoutings to support string parsing for the BusRouting enum. Populated in the implementing cpp file.

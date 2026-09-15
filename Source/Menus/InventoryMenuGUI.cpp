@@ -214,7 +214,7 @@ int InventoryMenuGUI::SetupFullOrTransferMode() {
 		m_GUIScreen = std::make_unique<AllegroScreen>(g_FrameMan.GetBackBuffer8());
 	}
 	if (!m_GUIInput) {
-		m_GUIInput = std::make_unique<GUIInputWrapper>(m_MenuController->GetPlayer());
+		m_GUIInput = std::make_unique<GUIInputWrapper>(m_MenuController->GetInputPlayer());
 	}
 	RTEAssert(m_GUIControlManager->Create(m_GUIScreen.get(), m_GUIInput.get(), "Base.rte/GUIs/Skins", "InventoryMenuSkin.ini"), "Failed to create InventoryMenuGUI GUIControlManager and load it from Base.rte/GUIs/Skins/Menus/InventoryMenuSkin.ini");
 

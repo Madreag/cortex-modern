@@ -66,7 +66,8 @@ namespace RTE {
 			        {"activity_module", config.activityModule}, {"scene_module", config.sceneModule},
 			        {"difficulty", config.difficulty}, {"starting_gold", config.startingGold},
 			        {"fog_of_war", config.fogOfWar}, {"require_clear_path_to_orbit", config.requireClearPathToOrbit},
-			        {"deploy_units", config.deployUnits}, {"teams", std::move(teams)},
+			        {"deploy_units", config.deployUnits}, {"brainless_humans_spectate", config.brainlessHumansSpectate},
+			        {"teams", std::move(teams)},
 			        {"autosave_enabled", config.autosaveEnabled}, {"autosave_interval_seconds", config.autosaveIntervalSeconds},
 			        {"idle_wait_minutes", config.idleWaitMinutes}, {"automatic_repair", config.automaticRepair},
 			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)}};
@@ -78,11 +79,19 @@ namespace RTE {
 				{"activity_module", config.activityModule}, {"scene_module", config.sceneModule},
 				{"difficulty", std::to_string(config.difficulty)}, {"starting_gold", std::to_string(config.startingGold)},
 				{"fog_of_war", BoolText(config.fogOfWar)}, {"require_clear_path_to_orbit", BoolText(config.requireClearPathToOrbit)},
-				{"deploy_units", BoolText(config.deployUnits)}, {"autosave_enabled", BoolText(config.autosaveEnabled)},
+				{"deploy_units", BoolText(config.deployUnits)},
+			};
+			// The spectate rule reached the wire in v4, so an older config hashes without its field.
+			if (config.version >= 4) {
+				fields.emplace_back("brainless_humans_spectate", BoolText(config.brainlessHumansSpectate));
+			}
+			const std::vector<std::pair<std::string, std::string>> tail = {
+				{"autosave_enabled", BoolText(config.autosaveEnabled)},
 				{"autosave_interval_seconds", std::to_string(config.autosaveIntervalSeconds)},
 				{"idle_wait_minutes", std::to_string(config.idleWaitMinutes)}, {"automatic_repair", BoolText(config.automaticRepair)},
 				{"delay_policy", std::to_string(static_cast<uint8_t>(config.delayPolicy))},
 			};
+			fields.insert(fields.end(), tail.begin(), tail.end());
 			for (size_t i = 0; i < config.teamRules.size(); ++i) {
 				const std::string prefix = "team." + std::to_string(i) + ".";
 				fields.emplace_back(prefix + "technology_intent", config.teamRules[i].technologyIntent);
@@ -165,12 +174,20 @@ namespace RTE {
 	}
 
 	bool NetMatchConfigUtil::ValidateLocalAlpha(const NetMatchConfig& config, std::string* error) {
-		if (config.version != 2 && config.version != c_Version) {
+		if (config.version != 2 && config.version != 3 && config.version != c_Version) {
 			if (error) *error = "match config version is unsupported";
 			return false;
 		}
 		auto refuse = [&](const char* reason) { if (error) *error = reason; return false; };
-		if (config.version == 2 && RuleFields(config) != RuleFields(NetMatchConfig{})) return refuse("legacy config cannot carry extended rules");
+		if (config.version == 2) {
+			// A v2 config predates the rules block, so it carries the pre-rules end rule too.
+			NetMatchConfig legacyDefaults;
+			legacyDefaults.version = config.version;
+			legacyDefaults.brainlessHumansSpectate = false;
+			if (RuleFields(config) != RuleFields(legacyDefaults)) return refuse("legacy config cannot carry extended rules");
+		}
+		// Every pre-v4 config predates the spectate byte, so it cannot carry anything but the pre-spectate rule.
+		if (config.version < 4 && config.brainlessHumansSpectate) return refuse("pre-spectate config cannot carry the spectate rule");
 		if (config.roundId == 0 || config.configRevision == 0) return refuse("round_id and config_revision must be nonzero");
 		if (config.difficulty > 100) return refuse("difficulty is out of range");
 		if (config.startingGold > c_MaxFiniteStartingGold && config.startingGold != c_InfiniteGold) return refuse("starting_gold is out of range");
@@ -312,7 +329,8 @@ namespace RTE {
 			const auto rules = RuleFields(config);
 			fields.insert(fields.end(), rules.begin(), rules.end());
 		}
-		return NetIdentity::HashCanonicalText(config.version >= 3 ? "NetMatchConfig/v3" : "NetMatchConfig/v2", fields);
+		const char* domain = config.version >= 4 ? "NetMatchConfig/v4" : (config.version >= 3 ? "NetMatchConfig/v3" : "NetMatchConfig/v2");
+		return NetIdentity::HashCanonicalText(domain, fields);
 	}
 
 	std::string NetMatchConfigUtil::BuildReportJson(const NetMatchConfig& config) {
