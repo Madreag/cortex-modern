@@ -4,6 +4,9 @@
 #include "NetMatchService.h"
 #include "NetReconnectUx.h"
 #include "NetLockstep.h"
+#include "TelemetryBundle.h"
+#include "System.h"
+#include "GUIUtil.h"
 
 #include "GUI.h"
 #include "GUIButton.h"
@@ -15,8 +18,10 @@
 #include "GUITab.h"
 #include "GUITextBox.h"
 
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <charconv>
+#include <filesystem>
 #include <string>
 
 using namespace RTE;
@@ -32,6 +37,51 @@ namespace {
 	bool ParseWholeNumber(const std::string& text, int& value) {
 		const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
 		return result.ec == std::errc() && result.ptr == text.data() + text.size();
+	}
+
+	// TelemetryBundle writes under the working directory today; the persisted
+	// diagnostics directory is not yet consumed by the bundle.
+	std::string EffectiveTelemetryDirectory() {
+		return System::GetWorkingDirectory() + "Telemetry";
+	}
+
+	std::string AutosavesDirectory() {
+		return System::GetWorkingDirectory() + "Autosaves";
+	}
+
+	// Creates the directory when absent so the opened folder always exists, then
+	// hands a file URI to the OS browser.
+	bool OpenFolder(const std::string& directory) {
+		std::error_code error;
+		std::filesystem::create_directories(directory, error);
+		if (error) {
+			return false;
+		}
+		std::string uri = "file:///";
+		for (char character: std::filesystem::path(directory).generic_string()) {
+			uri += character == ' ' ? "%20" : std::string(1, character);
+		}
+		return SDL_OpenURL(uri.c_str());
+	}
+
+	std::string LatestFileName(const std::string& directory, const std::string& extension) {
+		std::error_code error;
+		std::string latest;
+		std::filesystem::file_time_type latestTime{};
+		for (const auto& entry: std::filesystem::directory_iterator(directory, error)) {
+			if (!entry.is_regular_file() || entry.path().extension() != extension) {
+				continue;
+			}
+			const auto written = entry.last_write_time(error);
+			if (error) {
+				continue;
+			}
+			if (latest.empty() || written > latestTime) {
+				latestTime = written;
+				latest = entry.path().filename().string();
+			}
+		}
+		return latest;
 	}
 } // namespace
 
@@ -93,6 +143,14 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_RejoinButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonNetRejoin"));
 	m_CancelRecoveryButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonNetCancelRecovery"));
 
+	m_AutosaveLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetAutosave"));
+	m_AutosaveIntervalLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetAutosaveInterval"));
+	m_AutosaveInfoLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetAutosaveInfo"));
+	m_DiagDirTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkDiagDir"));
+	m_SaveDiagButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonNetSaveDiagnostics"));
+	m_RecordReplaysCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkRecordReplays"));
+	m_FilesMessage = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetFilesMessage"));
+
 	const auto rowTop = [](GUIControl* control) {
 		int x = 0, y = 0, width = 0, height = 0;
 		control->GetControlRect(&x, &y, &width, &height);
@@ -133,6 +191,8 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_ChatTextSizeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkChatTextSize()));
 	m_AutoReconnectCheckbox->SetCheck(g_SettingsMan.GetNetworkAutoReconnect());
 	m_OfferRejoinCheckbox->SetCheck(g_SettingsMan.GetNetworkOfferStoredRejoin());
+	m_DiagDirTextbox->SetText(g_SettingsMan.GetNetworkDiagnosticsDirectory());
+	m_RecordReplaysCheckbox->SetCheck(g_SettingsMan.GetNetworkRecordReplays());
 	UpdateDelayPolicyRow();
 	UpdateStatusLines();
 }
@@ -145,8 +205,14 @@ void SettingsNetworkGUI::ApplyTextboxes() {
 	if (int frames = 0; ParseWholeNumber(m_FixedDelayTextbox->GetText(), frames)) {
 		g_SettingsMan.SetNetworkInputDelayFrames(std::clamp(frames, 0, static_cast<int>(NetMatchConfigUtil::c_MaxInputDelayFrames)));
 	}
+	const std::string diagDir = m_DiagDirTextbox->GetText();
+	g_SettingsMan.SetNetworkDiagnosticsDirectory(diagDir);
+	const bool diagDirRefused = g_SettingsMan.GetNetworkDiagnosticsDirectory() != diagDir;
 	// A refused value never stays on screen: the settings are what the page states.
 	ShowSavedValues();
+	if (diagDirRefused) {
+		m_FilesMessage->SetText("Diagnostics folder refused: no control characters allowed.");
+	}
 	m_NetworkSettingsBox->SetFocus();
 }
 
@@ -197,10 +263,27 @@ void SettingsNetworkGUI::UpdateStatusLines() {
 	m_RecoveryStatusLabel->SetText(status.empty() ? "-" : status);
 	m_RejoinButton->SetEnabled(reconnect.GetOffer() == NetReconnectOffer::Available || reconnect.CanRetryManually());
 	m_CancelRecoveryButton->SetEnabled(reconnect.CanCancel());
+
+	const uint32_t autosaveSeconds = g_SettingsMan.GetAutosaveSeconds();
+	m_AutosaveLabel->SetText(autosaveSeconds > 0 ? "Enabled" : "Disabled");
+	m_AutosaveIntervalLabel->SetText(autosaveSeconds > 0 ? std::to_string(autosaveSeconds) + " s" : "-");
+	const std::string latestSave = LatestFileName(AutosavesDirectory(), ".ccsave");
+	m_AutosaveInfoLabel->SetText("Latest: " + (latestSave.empty() ? std::string("-") : latestSave));
+
+	m_SaveDiagButton->SetEnabled(!TelemetryBundle::IsBusy());
+	if (TelemetryBundle::IsBusy()) {
+		m_FilesMessage->SetText("Saving diagnostics...");
+	} else {
+		const std::string latest = LatestFileName(EffectiveTelemetryDirectory(), ".zip");
+		m_FilesMessage->SetText(latest.empty() ? "No diagnostics saved yet." : "Latest: " + latest);
+	}
 }
 
 void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 	if (guiEvent.GetType() == GUIEvent::Command) {
+		// Action feedback goes on the page's message line AFTER the status refresh,
+		// which owns the line's resting text.
+		std::string message;
 		if (guiEvent.GetControl() == m_RejoinButton) {
 			NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
 			reconnect.RequestManualRetry(NetLockstepNowMs());
@@ -216,10 +299,27 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 			NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
 			reconnect.Cancel(NetLockstepNowMs());
 			reconnect.DismissOffer();
+		} else if (guiEvent.GetControl() == m_SaveDiagButton) {
+			if (!TelemetryBundle::RequestCapture()) {
+				message = "Diagnostics are already being saved.";
+			}
+		} else if (guiEvent.GetControl()->GetName() == "ButtonNetOpenAutosaves") {
+			if (!OpenFolder(AutosavesDirectory())) {
+				message = "Could not open the autosaves folder.";
+			}
+		} else if (guiEvent.GetControl()->GetName() == "ButtonNetCopyDiagPath") {
+			if (!GUIUtil::SetClipboardText(EffectiveTelemetryDirectory())) {
+				message = "Could not copy the folder path.";
+			} else {
+				message = "Copied " + EffectiveTelemetryDirectory();
+			}
 		} else {
 			return;
 		}
 		UpdateStatusLines();
+		if (!message.empty()) {
+			m_FilesMessage->SetText(message);
+		}
 		return;
 	}
 	if (guiEvent.GetType() != GUIEvent::Notification) {
@@ -259,7 +359,9 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		g_SettingsMan.SetNetworkAutoReconnect(m_AutoReconnectCheckbox->GetCheck());
 	} else if (guiEvent.GetControl() == m_OfferRejoinCheckbox) {
 		g_SettingsMan.SetNetworkOfferStoredRejoin(m_OfferRejoinCheckbox->GetCheck());
-	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_FixedDelayTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
+	} else if (guiEvent.GetControl() == m_RecordReplaysCheckbox) {
+		g_SettingsMan.SetNetworkRecordReplays(m_RecordReplaysCheckbox->GetCheck());
+	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_FixedDelayTextbox || guiEvent.GetControl() == m_DiagDirTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
 		ApplyTextboxes();
 		// Clicking off a focused text box must commit it too, otherwise it keeps the keyboard.
 	} else if (guiEvent.GetMsg() == GUICollectionBox::Clicked &&
