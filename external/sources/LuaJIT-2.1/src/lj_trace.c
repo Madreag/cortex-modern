@@ -677,6 +677,18 @@ static LJ_AINLINE void trace_pendpatch(jit_State *J, int force)
   }
 }
 
+/* A leftover abort must return to idle or hot counting stays off. */
+void lj_trace_abort(global_State *g)
+{
+  jit_State *J = G2J(g);
+  J->state = (TraceState)((uint32_t)J->state & ~(uint32_t)LJ_TRACE_ACTIVE);
+  if (J->state != LJ_TRACE_IDLE) {
+    trace_pendpatch(J, 1);
+    J->state = LJ_TRACE_IDLE;
+    lj_dispatch_update(g);
+  }
+}
+
 /* State machine for the trace compiler. Protected callback. */
 static TValue *trace_state(lua_State *L, lua_CFunction dummy, void *ud)
 {
