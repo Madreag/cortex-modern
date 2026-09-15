@@ -10737,7 +10737,7 @@ namespace RTE {
 				}
 				for (const auto& [frame, ready]: committed[view]) {
 					if (frame > leaveFrame + 1) break;
-					ApplyLockstepLeaveHandoffs(ready, actors);
+					ApplyLockstepLeaveHandoffs(ready, actors, false);
 					if (frame == leaveFrame - 1) {
 						passed &= actors[0]->IsPlayerControlled() && actors[1]->IsPlayerControlled() && ready.departedPeerIds.empty();
 					}
