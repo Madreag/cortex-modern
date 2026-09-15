@@ -388,7 +388,7 @@ class RuntimeProjectionTests(unittest.TestCase):
         timer = lambda seat: dict(sim_start=seat, sim_limit=20, real_start=seat + 1, real_limit=30)
         controller = lambda seat: dict(version="Controller1", states=[seat, 1, 0], team=seat,
             **{key: timer(seat) for key in ("release_timer", "joy_accel_timer", "key_accel_timer")})
-        return dict(version="Activity1", player_screen=[0, 1, 2, 3], team_funds=[20, 20, 20, 20],
+        return dict(version="Activity1", player_screen=[0, 1, 2, 3], view_state=[0, 1, 2, 3], team_funds=[20, 20, 20, 20],
             **{key: [1, 2, 3, 4] for key in ("player_team", "team_funds_share", "funds_contribution", "human")},
             actor_links=[[seat, seat + 10, seat + 20] for seat in range(4)],
             player_controller=[controller(seat) for seat in range(4)],
@@ -403,11 +403,12 @@ class RuntimeProjectionTests(unittest.TestCase):
             for index in (1, 2):
                 self.assert_field(value, ("actor_links", seat, index), True, **shared)
             self.assert_field(value, ("player_screen", seat), True, **shared)
+            self.assert_field(value, ("view_state", seat), True, **shared)
             for key in ("death_timer", "message_timer"):
                 self.assert_field(value, (key, seat, "sim_start"), True, **shared)
                 self.assert_field(value, (key, seat, "sim_limit"), False, **shared)
             self.assert_field(value, ("player_controller", seat, "states", 0), True, **shared)
-        for field in (("player_team", 2), ("player_screen", 2), ("actor_links", 2, 1), ("team_funds", 0),
+        for field in (("player_team", 2), ("player_screen", 2), ("view_state", 2), ("actor_links", 2, 1), ("team_funds", 0),
                 ("death_timer", 2, "sim_start"), ("player_controller", 2, "states", 0)):
             self.assert_field(value, field, False, **shared)
         mirrored = runtime.project(value, True, local_seat=1, asymmetric_seats=frozenset({0, 1}))
