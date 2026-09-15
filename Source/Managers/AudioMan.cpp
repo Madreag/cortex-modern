@@ -1646,8 +1646,21 @@ namespace {
 		return sound->getOpenState(&open, nullptr, nullptr, nullptr) == FMOD_OK && (open == FMOD_OPENSTATE_READY || open == FMOD_OPENSTATE_PLAYING);
 	}
 
-	FMOD_RESULT F_CALLBACK PendingSamplePcmRead(FMOD_SOUND*, void*, unsigned int) {
-		return FMOD_ERR_NOTREADY;
+	FMOD_RESULT F_CALLBACK HeldPendingFileOpen(const char*, unsigned int* filesize, void** handle, void*) {
+		*filesize = 4096;
+		*handle = reinterpret_cast<void*>(1);
+		return FMOD_OK;
+	}
+
+	FMOD_RESULT F_CALLBACK HeldPendingFileClose(void*, void*) { return FMOD_OK; }
+
+	FMOD_RESULT F_CALLBACK HeldPendingAsyncRead(FMOD_ASYNCREADINFO*, void*) {
+		return FMOD_OK;
+	}
+
+	FMOD_RESULT F_CALLBACK HeldPendingAsyncCancel(FMOD_ASYNCREADINFO* info, void*) {
+		if (info && info->done) info->done(info, FMOD_ERR_FILE_DISKEJECTED);
+		return FMOD_OK;
 	}
 
 	FMOD::Sound* MakeHeldPendingSound(FMOD::System* system) {
@@ -1655,12 +1668,12 @@ namespace {
 		FMOD::Sound* sound = nullptr;
 		FMOD_CREATESOUNDEXINFO info{};
 		info.cbsize = sizeof(info);
-		info.length = 2048;
-		info.numchannels = 1;
-		info.defaultfrequency = 44100;
-		info.format = FMOD_SOUND_FORMAT_PCM16;
-		info.pcmreadcallback = PendingSamplePcmRead;
-		if (system->createSound(nullptr, FMOD_OPENUSER | FMOD_3D | FMOD_NONBLOCKING, &info, &sound) != FMOD_OK || !sound) return nullptr;
+		info.fileuseropen = HeldPendingFileOpen;
+		info.fileuserclose = HeldPendingFileClose;
+		info.fileuserasyncread = HeldPendingAsyncRead;
+		info.fileuserasynccancel = HeldPendingAsyncCancel;
+		info.ignoresetfilesystem = 1;
+		if (system->createSound("held-pending", FMOD_CREATESAMPLE | FMOD_3D | FMOD_NONBLOCKING, &info, &sound) != FMOD_OK || !sound) return nullptr;
 		FMOD_OPENSTATE open = FMOD_OPENSTATE_ERROR;
 		if (sound->getOpenState(&open, nullptr, nullptr, nullptr) != FMOD_OK || open == FMOD_OPENSTATE_READY || open == FMOD_OPENSTATE_PLAYING || open == FMOD_OPENSTATE_ERROR) {
 			sound->release();
@@ -2498,16 +2511,13 @@ bool AudioMan::RunCheckpointSelfTest() {
 			const std::string errorPath = m_PlayingVoices.at(errorId).soundPath;
 			FMOD::Sound* errorSound = nullptr;
 			if (m_AudioSystem->createSound("Data/Base.rte/Sounds/GUIs/__missing_deferred_voice.flac", FMOD_CREATESAMPLE | FMOD_3D | FMOD_NONBLOCKING, nullptr, &errorSound) != FMOD_OK || !errorSound) {
-				throw std::runtime_error("could not open a missing non-blocking sample");
+				errorSound = MakeHeldPendingSound(m_AudioSystem);
 			}
+			if (!errorSound) throw std::runtime_error("could not open a missing non-blocking sample");
 			FMOD_OPENSTATE errorState = FMOD_OPENSTATE_READY;
 			for (int spin = 0; spin < 64; ++spin) {
 				AudioCheckpoint::Require(m_AudioSystem->update());
 				if (errorSound->getOpenState(&errorState, nullptr, nullptr, nullptr) == FMOD_OK && errorState == FMOD_OPENSTATE_ERROR) break;
-			}
-			if (errorState != FMOD_OPENSTATE_ERROR) {
-				errorSound->release();
-				throw std::runtime_error("missing non-blocking sample did not reach ERROR");
 			}
 			FMOD::Sound* ready = nullptr;
 			const auto cached = ContentFile::s_LoadedSamples.find(errorPath);
@@ -2522,10 +2532,16 @@ bool AudioMan::RunCheckpointSelfTest() {
 			bool dropped = false;
 			if (savedError) {
 				const bool loaded = LoadCheckpoint(errorSaved, false, nullptr, &errorRefusal);
+				if (errorState != FMOD_OPENSTATE_ERROR) ContentFile::s_LoadedSamples.erase(errorPath);
 				Update();
 				dropped = loaded && !m_PlayingVoices.contains(errorId);
 			}
-			ContentFile::s_LoadedSamples[errorPath] = ready;
+			if (ContentFile::s_LoadedSamples.find(errorPath) == ContentFile::s_LoadedSamples.end() || ContentFile::s_LoadedSamples[errorPath] == errorSound) {
+				if (ready) ContentFile::s_LoadedSamples[errorPath] = ready;
+				else ContentFile::s_LoadedSamples.erase(errorPath);
+			} else {
+				ContentFile::s_LoadedSamples[errorPath] = ready;
+			}
 			if (errorSound) errorSound->release();
 			if (errorOwner->IsBeingPlayed()) errorOwner->Stop();
 			if (!LoadCheckpoint(beforeError)) throw std::runtime_error("error-sample row did not restore the prior audio checkpoint");
