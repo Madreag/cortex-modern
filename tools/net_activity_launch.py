@@ -40,12 +40,14 @@ def rules_for(variant):
         # The site this activity ships with. Its seats still meet the setup editor, so the arm drives it.
         rules["activity_preset"] = "Skirmish Defense"
         rules["scene_name"] = "Ketanot Hills"
-    elif variant in ("brains", "brains-auto", "hold-desync", "hold-resync", "resync-skirmish"):
+    elif variant in ("brains", "brains-auto", "hold-desync", "hold-resync", "resync-skirmish", "brains-longname", "wire-refusal"):
         # Skirmish Defense on a site with no brain on it: every human seat has to place its own brain in
         # the setup editor, which is the start a lockstep match has to synchronize.
         rules["activity_preset"] = "Skirmish Defense"
         rules["scene_name"] = "Grasslands"
-    elif variant == "census":
+    if variant == "brains-longname":
+        rules["client_name"] = LONG_SEAT_NAME
+    if variant == "census":
         # The offline leg is the stock command line launch, and -scenario resolves "Determinism <name>"
         # presets only, so the census runs the one activity both paths can launch. What that offline launch
         # produces: the preset declares no DefaultGoldMediumDifficulty, so ActivityMan::StartActivity falls
@@ -71,7 +73,7 @@ def encode_config(rules, dedicated=False, default=False):
         encoded = value.encode("utf-8")
         return struct.pack("<H", len(encoded)) + encoded
     mode = 1 if default else 2
-    roster = [(peer, peer - 1 if default else 0, False, "Host" if peer == 1 else "Client")
+    roster = [(peer, peer - 1 if default else 0, False, "Host" if peer == 1 else rules.get("client_name", "Client"))
               for peer in range(2 if dedicated else 1, 3)]
     if not default:
         roster.append((0, 1, True, "CPU"))
@@ -150,6 +152,9 @@ def score_placements(logs, seats=2):
 # cross the wire leaves the peers holding different residents.
 EDITOR_SEATS = {"host": dict(player=0, x_fraction=0.30, cls="Actor", preset="Brain Case"),
                 "client": dict(player=1, x_fraction=0.70, cls="AHuman", preset="Brain Robot")}
+# Exactly 64 characters, the longest lobby name a seat can carry, so the strip's ellipsis is exercised.
+LONG_SEAT_NAME = "Client" + "GunnhildrTheVeryPatientBrainPlacerOfKetanotHills" + "X" * 10
+REFUSED_PRESET = "No Such Brain"
 # A DONE with no brain placed is refused by the editor itself (SceneEditorGUI::DONEEDITING ->
 # TestBrainResidence): the seat goes back to installing or picking a brain, stays unready and commits
 # nothing. Which of the two stock prompts is on screen depends on the frame the probe reads.
@@ -158,19 +163,32 @@ READY_TEXT = "READY to start"
 WAIT_BANNER = "to place their brains"
 
 
-def editor_script(peer, capture, place_after, finish_at_ready=False):
+def shots(peer, name):
+    """The overlay layer (the strip and toasts) and the composited frame (world, editor and overlay)."""
+    return [{"op": "screenshot", "name": f"{peer}_{name}"},
+            {"op": "screenshot", "name": f"{peer}_{name}_world", "composited": True}]
+
+
+def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusal=False):
     """The UI probe script that drives this peer's own seat through the setup editor, the way a player does."""
     seat = EDITOR_SEATS[peer]
     player = seat["player"]
     steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "editing": True}]
     if capture:
-        steps.append({"op": "screenshot", "name": f"{peer}_editor_open"})
+        steps += shots(peer, "editor_open")
+    if wire_refusal and peer == "host":
+        # A placement every peer has to refuse: the preset is not installed anywhere.
+        steps += [{"op": "place_brain_command", "player": player, "preset": REFUSED_PRESET, "class": "Actor", "module": "Base.rte"},
+                  {"op": "wait", "renders": 30},
+                  {"op": "assert_editor", "player": player, "equals": {"ready": False, "submitted": False}}]
+        if capture:
+            steps += shots(peer, "wire_refusal")
     # DONE before a brain is placed: refused, so the seat stays unready, commits nothing and is sent back
     # to place a brain.
     steps += [{"op": "editor_done", "player": player},
               {"op": "assert_editor", "player": player, "equals": {"ready": False, "submitted": False, "resident": False}}]
     if capture:
-        steps.append({"op": "screenshot", "name": f"{peer}_refusal"})
+        steps += shots(peer, "refusal")
     if place_after:
         steps.append({"op": "wait", "sim_at_least": place_after})
     steps += [{"op": "editor_place_brain", "player": player, "x_fraction": seat["x_fraction"],
@@ -180,8 +198,8 @@ def editor_script(peer, capture, place_after, finish_at_ready=False):
               {"op": "editor_done", "player": player},
               {"op": "wait", "seat_ready": player},
               {"op": "assert_editor", "player": player, "equals": {"ready": True, "submitted": True}}]
-    if capture:
-        steps.append({"op": "screenshot", "name": f"{peer}_ready"})
+    if capture and peer != "host":
+        steps += shots(peer, "ready")
     if peer == "host":
         # The host places first, so while the client is still placing its screen must carry the stock READY
         # line and its own strip must name who the held world is waiting for.
@@ -190,12 +208,12 @@ def editor_script(peer, capture, place_after, finish_at_ready=False):
                   {"op": "assert_control", "control": "LabelNetMatchStatus", "text_contains": WAIT_BANNER,
                    "equals": {"visible": True}, "fits": True}]
         if capture:
-            steps.append({"op": "screenshot", "name": f"{peer}_waiting_banner"})
+            steps += shots(peer, "waiting_banner")
     if not finish_at_ready:
         # The arm that plays on: the match leaves the editor and runs.
         steps += [{"op": "wait", "editing": False}, {"op": "wait", "sim_at_least": 200}]
         if capture:
-            steps.append({"op": "screenshot", "name": f"{peer}_match_started"})
+            steps += shots(peer, "match_started")
     steps.append({"op": "finish"})
     return {"schema": 1, "timeout_ms": 180000, "steps": steps}
 
@@ -274,7 +292,8 @@ def launch(options):
         if actual != exe_hash:
             raise RuntimeError("executable changed during launch case")
     # The setup editor is driven through the UI probe's own seam, so the arm commits the way a player does.
-    editor_driven = options.variant in ("brains", "stock", "hold-desync", "hold-resync", "resync-skirmish")
+    editor_driven = options.variant in ("brains", "stock", "hold-desync", "hold-resync", "resync-skirmish",
+                                       "brains-longname", "wire-refusal")
     places_brains = editor_driven or options.variant == "brains-auto"
     # resync-duel is the control: the same perturbation and heal on an activity that never opens the editor.
     hold_resync = options.variant in ("hold-resync", "resync-duel", "resync-skirmish")
@@ -303,7 +322,8 @@ def launch(options):
                 script = root / (peer + "-ui") / "ui-script.json"
                 script.parent.mkdir(parents=True, exist_ok=False)
                 delay = 0 if options.variant == "resync-skirmish" else ((90 if hold_desync else 45) if peer == "client" else 0)
-                script.write_text(json.dumps(editor_script(peer, captures, delay, hold_desync and not hold_resync), indent=2), encoding="utf-8")
+                script.write_text(json.dumps(editor_script(peer, captures, delay, hold_desync and not hold_resync,
+                                                           options.variant == "wire-refusal"), indent=2), encoding="utf-8")
                 env["CC_TEST_NET_UI_SCRIPT"] = str(script)
             if hold_desync and peer == "host":
                 # One genuine divergence inside the hold: the held ticks' own hashes have to catch it.
@@ -396,7 +416,17 @@ def launch(options):
             waits = [step for step in result["probes"]["host"].get("steps", []) if step.get("op") == "assert_control"]
             checks["waiting_banner_shown"] = any(WAIT_BANNER in json.dumps(step) for step in waits)
             if captures:
-                result["captures"] = sorted(str(path) for peer in runs for path in (root / (peer + "-ui")).glob("*.png"))
+                result["captures"] = sorted([str(path) for peer in runs for path in (root / (peer + "-ui")).glob("*.png")] +
+                                            [str(path) for peer in runs for path in (root / peer / "runtime" / "ScreenShots").glob("*.png")])
+            if options.variant == "wire-refusal":
+                # Every peer refuses the same command, and only the peer that sent it gets the banner.
+                refused = {peer: re.findall(r"brain placement refused: seat=(\d+) peer=(\d+) reason=(.+)", log) for peer, log in logs.items()}
+                result["wire_refusals"] = refused
+                checks["wire_refusal_on_both_peers"] = all(len(rows) == 1 and rows[0][0] == "0" and REFUSED_PRESET in rows[0][2]
+                                                           for rows in refused.values())
+                checks["wire_refusal_banner_on_the_sender"] = \
+                    any(toast.get("kind") == "brain_refused" for toast in result["toasts"]["host"]) and \
+                    not any(toast.get("kind") == "brain_refused" for toast in result["toasts"]["client"])
         if not places_brains:
             # An activity that puts its own residents on the site never meets the synchronized editor, and
             # no placement crosses the wire for it.
