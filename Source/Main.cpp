@@ -902,6 +902,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-net-match-e2e-brain-placement") {
 			// Stand in for each local player's DONE in the setup editor: place this peer's own seats' brains.
 			s_netMatchE2EBrainPlacement = true;
+			++i;
 			continue;
 		}
 
@@ -3582,15 +3583,26 @@ void RunGameLoop() {
 				}
 			}
 
-			const bool lockstepPausedTick = ScenarioRunner::IsLockstepPaused();
+			const bool lockstepPaused = ScenarioRunner::IsLockstepPaused();
+			// The synchronized setup editor holds the world still while the seats place their brains, so a
+			// per-machine editor never edits a sim that is advancing and every peer holds the same ticks.
+			// The editor itself still runs, and the placements ride the held tick's own frame exchange.
+			const Activity* setupActivity = ScenarioRunner::IsLockstepControllerSyncActive() ? g_ActivityMan.GetActivity() : nullptr;
+			const bool lockstepSetupHold = !lockstepPaused && setupActivity && setupActivity->GetActivityState() == Activity::Editing;
+			const bool lockstepPausedTick = lockstepPaused || lockstepSetupHold;
 			if (lockstepPausedTick) {
 				// The sim holds still: read the sim-rate resume key, exchange an empty frame so
 				// commands and stops still flow, and step the shared resume countdown.
-				if (!s_netMatchServiceE2E && g_UInputMan.KeyPressedSim(SDLK_P)) {
+				if (!s_netMatchServiceE2E && lockstepPaused && g_UInputMan.KeyPressedSim(SDLK_P)) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{g_NetMatchService.GetLocalTeam(), false}});
 				}
+				if (lockstepSetupHold) {
+					g_ActivityMan.Update();
+				}
 				g_MovableMan.RunLockstepPausedTick();
-				ScenarioRunner::AdvanceLockstepPausedTick();
+				if (lockstepPaused) {
+					ScenarioRunner::AdvanceLockstepPausedTick();
+				}
 			}
 			if (!lockstepPausedTick) {
 				g_LuaMan.Update();
