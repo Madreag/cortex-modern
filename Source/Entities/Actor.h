@@ -628,7 +628,7 @@ namespace RTE {
 		/// Gets a pointer to the MovableObject move target of this Actor. A running AI pass sees the target
 		/// its own order is carrying, the sim the committed one.
 		/// @return A pointer to the MovableObject move target of this Actor.
-		const MovableObject* GetMOMoveTarget() const { return g_CurrentAIActor ? GetMOMoveTargetSeenByAIPass() : m_pMOMoveTarget; }
+		const MovableObject* GetMOMoveTarget() const { return g_CurrentAIActor ? GetMOMoveTargetSeenByAIPass() : m_pMOMoveTarget.get(); }
 		/// Sets this' MovableObject move target. A write from inside a lockstep AI pass becomes a synced order.
 		void SetMOMoveTarget(const MovableObject* object);
 		static bool RunBorrowedReferenceSelfTest();
