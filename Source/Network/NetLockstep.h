@@ -394,6 +394,10 @@ namespace RTE {
 		uint32_t startAnswersSuppressed = 0; //!< Repeated starts left unanswered: their sender had already played this round.
 		uint32_t startsRelayedOnRepeat = 0; //!< Host: other remotes' starts re-sent to a peer that repeated its own.
 		uint32_t preStartFramesBuffered = 0; //!< Frames/checksums held until their sender's start arrived.
+		uint64_t checksumSubmissions = 0; //!< Local desync-check hashes the round took; a zero means the check never ran.
+		uint64_t checksumSends = 0; //!< Those the transport carried to the peers.
+		uint64_t checksumCompares = 0; //!< Local/remote hash pairs actually compared, per remote.
+		uint64_t checksumMismatches = 0; //!< Compares that named a desync.
 		uint64_t localControllerFramesSent = 0;
 		uint64_t remoteControllerFramesReceived = 0;
 		uint64_t remoteControllerFramesAccepted = 0;

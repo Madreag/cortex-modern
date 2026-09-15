@@ -2874,6 +2874,7 @@ namespace RTE {
 			return true;
 		}
 		m_LocalChecksums[frame] = hash;
+		++m_Stats.checksumSubmissions;
 		NetLockstepChecksum packet;
 		packet.senderPeerId = m_Config.localPeerId;
 		packet.frame = frame;
@@ -2886,6 +2887,7 @@ namespace RTE {
 		if (!SendPacket({packet}, m_Config.frameLane, error)) {
 			return false;
 		}
+		++m_Stats.checksumSends;
 		CompareChecksums(frame);
 		return true;
 	}
@@ -3283,7 +3285,12 @@ namespace RTE {
 		// A desync on ANY peer aborts, naming it; only verify (and prune) once every REQUIRED remote
 		// agrees. A cleanly-left peer's last hashes still compare, but nobody waits on it.
 		for (const auto& [peerId, hash]: remoteIt->second) {
+			++m_Stats.checksumCompares;
 			if (localIt->second != hash) {
+				++m_Stats.checksumMismatches;
+				std::cout << "[lockstep] desync at frame " << frame << " against " << DescribePeer(peerId)
+				          << " (submitted " << m_Stats.checksumSubmissions << ", sent " << m_Stats.checksumSends
+				          << ", compared " << m_Stats.checksumCompares << ")" << std::endl;
 				ScheduleRecoveryStop(NetLockstepStopReason::Desync, frame, "sim state diverged at tick " + std::to_string(frame) + " (" + DescribePeer(peerId) + ")");
 				return;
 			}
