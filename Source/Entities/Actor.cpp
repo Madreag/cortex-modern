@@ -167,6 +167,9 @@ void Actor::Clear() {
 	m_Waypoints.clear();
 	m_PendingDeferredWaypoints.clear();
 	m_InflightWaypoints.clear();
+	m_PendingDeferredAIModes.clear();
+	m_InflightAIMode = AIMODE_NONE;
+	m_InflightAIModeUntil = -1;
 	m_WaypointCursor = 0;
 	m_DrawWaypoints = false;
 	m_MoveTarget.Reset();
@@ -1063,6 +1066,12 @@ bool Actor::DisbandSquad() {
 	return hadSquad;
 }
 
+void Actor::SetAIMode(AIMode newMode) {
+	m_AIMode = newMode;
+	// The landing write is the wire's answer to anything this actor still has in flight.
+	m_InflightAIModeUntil = -1;
+}
+
 void Actor::RequestAIMode(AIMode newMode) {
 	if (m_AIMode == newMode) {
 		return;
@@ -1318,6 +1327,44 @@ void Actor::SendDeferredWaypoints() {
 		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIOrder{targetUID, m_Team, op, waypoint.x, waypoint.y, waypoint.targetUID, writerUID}});
 		target->m_InflightWaypoints.push_back(waypoint);
 	}
+}
+
+std::vector<Actor::DeferredAIMode> Actor::TakePendingDeferredAIModes() {
+	std::vector<DeferredAIMode> taken;
+	taken.swap(m_PendingDeferredAIModes);
+	return taken;
+}
+
+void Actor::SendDeferredAIModes() {
+	for (const DeferredAIMode& request: TakePendingDeferredAIModes()) {
+		const int64_t targetUID = request.actorUID ? request.actorUID : static_cast<int64_t>(GetUniqueID());
+		Actor* target = (targetUID == static_cast<int64_t>(GetUniqueID())) ? this : dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(targetUID)));
+		if (!target) {
+			continue;
+		}
+		if (!ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled())) {
+			continue;
+		}
+		target->RequestAIMode(static_cast<AIMode>(request.mode));
+	}
+}
+
+int Actor::GetAIModeSeenByAIPass() const {
+	// The running pass reads back the mode it just wrote, and the one its request is carrying, so a
+	// script that sets the mode and reads it keeps its own state machine; the sim keeps the committed mode.
+	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return m_AIMode;
+	}
+	const int64_t uid = static_cast<int64_t>(GetUniqueID());
+	for (auto itr = g_CurrentAIActor->m_PendingDeferredAIModes.rbegin(); itr != g_CurrentAIActor->m_PendingDeferredAIModes.rend(); ++itr) {
+		if (itr->actorUID == uid) {
+			return itr->mode;
+		}
+	}
+	if (m_InflightAIModeUntil >= static_cast<int64_t>(g_TimerMan.GetSimUpdateCount())) {
+		return m_InflightAIMode;
+	}
+	return m_AIMode;
 }
 
 void Actor::PopFrontWaypoint(const Vector& expected) {

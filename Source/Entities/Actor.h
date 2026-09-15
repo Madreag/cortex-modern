@@ -444,17 +444,17 @@ namespace RTE {
 		/// @return Whether any unit was following.
 		bool DisbandSquad();
 
-		/// Gets this' AI mode.
+		/// Gets this' AI mode. A running AI pass sees the mode it asked for, the sim the committed one.
 		/// @return The current AI mode.
-		int GetAIMode() const { return m_AIMode; }
+		int GetAIMode() const { return g_CurrentAIActor ? GetAIModeSeenByAIPass() : m_AIMode; }
 
 		/// Gets the icon bitmap associated with this' current AI mode and team.
 		/// @return The current AI mode icon of this. Ownership is NOT transferred!
 		BITMAP* GetAIModeIcon();
 
-		/// Sets this' AI mode.
+		/// Sets this' AI mode. A write from inside a lockstep AI pass becomes a synced mode request.
 		/// @param newMode The new AI mode. (default: AIMODE_SENTRY)
-		void SetAIMode(AIMode newMode = AIMODE_SENTRY) { m_AIMode = newMode; }
+		void SetAIMode(AIMode newMode = AIMODE_SENTRY);
 
 		/// Sets this' AI mode through the lockstep wire when a net match is running, directly otherwise.
 		/// @param newMode The new AI mode.
@@ -505,6 +505,18 @@ namespace RTE {
 		void ExecuteDeferredWaypoint(const DeferredWaypoint& waypoint);
 		/// Sends this tick's queued waypoint calls over the wire, or performs them when no match is running.
 		void SendDeferredWaypoints();
+
+		/// An AI mode this actor's AI pass wrote this tick; under lockstep it crosses the wire as the
+		/// same request a pie order sends, so every peer takes the mode at the committed tick.
+		struct DeferredAIMode {
+			int64_t actorUID = 0;
+			uint8_t mode = 0;
+		};
+		/// Hands out the AI mode writes the AI pass queued this tick, in call order; mods don't call this.
+		std::vector<DeferredAIMode> TakePendingDeferredAIModes();
+		/// Sends this tick's queued AI mode writes as synced requests; the writes of an actor this
+		/// machine does not own are dropped.
+		void SendDeferredAIModes();
 
 		/// Gets the last or furthest set AI waypoint of this. If none, this' pos
 		/// is returned.
@@ -1179,6 +1191,12 @@ namespace RTE {
 		std::vector<DeferredWaypoint> m_PendingDeferredWaypoints;
 		// Sent calls still in flight; the running actor's reads keep seeing them until the apply lands.
 		std::vector<DeferredWaypoint> m_InflightWaypoints;
+		// AI mode writes the AI pass queued; the owner sends them so every peer takes the mode at one tick.
+		std::vector<DeferredAIMode> m_PendingDeferredAIModes;
+		// The mode a sent request is carrying and the last tick the AI pass may read it back, so the AI
+		// keeps a coherent view while the request flies. Per machine: never archived, never checksummed.
+		AIMode m_InflightAIMode;
+		int64_t m_InflightAIModeUntil;
 		// Under lockstep the owner's AI loads waypoints ahead of the drops it sent over the wire; this many front entries are already loaded.
 		int m_WaypointCursor;
 		// Whether to draw the waypoints or not in the HUD
@@ -1214,6 +1232,7 @@ namespace RTE {
 		bool LogicalWaypointClearSeen() const;
 		void ConsumeInflightWaypoint(DeferredWaypoint::Op op, float x, float y, int64_t targetUID);
 		void QueueDeferredOnRunning(const DeferredWaypoint& waypoint);
+		int GetAIModeSeenByAIPass() const;
 
 		std::string m_PersistedActorRuntime;
 		std::array<std::string, 2> m_PersistedActorIconReferences;
