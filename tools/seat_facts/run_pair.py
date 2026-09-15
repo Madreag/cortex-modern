@@ -17,9 +17,11 @@ FIXTURE = Path(__file__).parent / "fixtures/SeatFacts.lua"
 ROW = re.compile(r"\[seat-facts\] player=(\d+) active=(\d+) human=(\d+) team=(-?\d+) brain=(\d+) mark=(\d+) screen=(-?\d+)")
 CONTROL_ROW = re.compile(r"\[control-facts\] tick=(\d+) player=(\d+) uid=(\d+) screen=(-?\d+)")
 VESSEL_ROW = re.compile(r"\[vessel-facts\] tick=(\d+) player=(\d+) uid=(\d+) screen=(-?\d+) (.*)$", re.M)
+SWITCH_ROW = re.compile(r"\[switch-window\] tick=(\d+) player=(\d+) uid=(\d+) screen=(-?\d+)")
 # arm -> (Lua class, activity preset name); every scripted arm also carries the seat-facts fixture.
 SCRIPTED = {"lua": ("SeatFacts", "Seat Facts"), "screens": ("ScreenFacts", "Screen Facts"), "control": ("ControlFacts", "Control Facts"),
-            "vessel": ("VesselBannerFacts", "Vessel Banner Facts")}
+            "vessel": ("VesselBannerFacts", "Vessel Banner Facts"),
+            "switch": ("SwitchWindowFacts", "Switch Window Facts")}
 
 
 def sha(path):
@@ -48,7 +50,7 @@ def score_seats(logs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("arm", choices=("snapshot", "damage", "reseat", "lua", "screens", "control", "vessel"))
+    parser.add_argument("arm", choices=("snapshot", "damage", "reseat", "lua", "screens", "control", "vessel", "switch"))
     parser.add_argument("out", type=Path)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--harness", type=Path, default=Path("D:/Projects/stage2_p4/recovery_e2e.py"))
@@ -82,6 +84,10 @@ def main():
     elif args.arm in SCRIPTED:
         for peer in ("host", "client"):
             lane[peer] += ["-net-match-service-preset", SCRIPTED[args.arm][1]]
+        if args.arm == "switch":
+            # Each peer switches its own seat at tick 220, hands it back ten ticks later, and loses its brain at 299.
+            for peer in ("host", "client"):
+                lane[peer] += ["-net-match-e2e-switch-control", "220", "-net-match-e2e-brain-damage", "299"]
     manifest = {"stamp": stamp(), "arm": args.arm, "port": args.port,
                 "exe": str(harness.EXE), "exe_sha256": sha(harness.EXE),
                 "driver_sha256": sha(__file__), "fixture_sha256": sha(FIXTURE),
@@ -150,6 +156,13 @@ def main():
             # Every peer must name the same controlled actor for every seat; the screen column stays local.
             seats = {peer: [row[:3] for row in peer_rows] for peer, peer_rows in rows.items()}
             result["control_facts"] = {"rows": rows, "pass": len(seats["host"]) == 4 and seats["host"] == seats["client"]}
+        if args.arm == "switch":
+            rows = {peer: SWITCH_ROW.findall(log) for peer, log in logs.items()}
+            answers = {peer: {(row[0], row[1]): row[2] for row in peer_rows} for peer, peer_rows in rows.items()}
+            keys = sorted(set(answers["host"]) & set(answers["client"]), key=lambda key: (int(key[0]), int(key[1])))
+            differ = [{"tick": key[0], "player": key[1], "host": answers["host"][key], "client": answers["client"][key]}
+                      for key in keys if answers["host"][key] != answers["client"][key]]
+            result["switch_window"] = {"compared": len(keys), "differ": differ, "pass": bool(keys) and not differ}
         if args.arm == "vessel":
             rows = {peer: VESSEL_ROW.findall(log) for peer, log in logs.items()}
             # The unchanged mod fixture must reach every seat on both peers with the same answers; only the screen is local.
