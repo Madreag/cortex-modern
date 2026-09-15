@@ -5363,7 +5363,26 @@ std::string MovableMan::SaveCheckpoint() const {
 	std::map<long, std::vector<long>> references;
 	// A row exists to rebind borrowed pointers, so an object that borrows nothing needs none.
 	// Writing one anyway makes the restore demand back an owner the checkpoint never carried.
+	// Only the shared world this checkpoint writes comes back under its own identities, so only its
+	// objects may be named. A peer's own setup editor holds objects nothing shared owns, and a row for
+	// one of those can only refuse the archive on the peer that never had it.
+	std::unordered_set<const Entity*> visited;
+	std::unordered_set<const MovableObject*> carried;
+	const auto collect = [&visited, &carried](const auto& roots) {
+		for (const Entity* root: roots) CollectOwnedMovableObjects(root, visited, carried);
+	};
+	collect(m_Actors); collect(m_Items); collect(m_Particles);
+	collect(m_AddedActors); collect(m_AddedItems); collect(m_AddedParticles);
+	CollectOwnedMovableObjects(g_SceneMan.GetScene(), visited, carried);
+	const auto shared = [&visited, &carried](const Activity* activity) {
+		if (const auto* game = dynamic_cast<const GameActivity*>(activity)) {
+			game->VisitCheckpointSharedObjects([&visited, &carried](const Entity* child) { CollectOwnedMovableObjects(child, visited, carried); });
+		}
+	};
+	shared(g_ActivityMan.GetActivity());
+	shared(g_ActivityMan.GetCheckpointStartActivity());
 	for (const auto& [identity, object]: m_KnownObjects) {
+		if (!carried.contains(object)) continue;
 		std::vector<long> links = object->GetCheckpointBorrowedReferences();
 		if (std::none_of(links.begin(), links.end(), [](long target) { return target != 0; })) continue;
 		references.emplace(identity, std::move(links));
@@ -5382,7 +5401,13 @@ bool MovableMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
 			// Validate the whole alias table before changing any manager or native field.
 			for (const auto& [identity, links]: references) {
 				auto* object = FindObjectByUniqueID(identity);
-				if (!object || !object->RebindCheckpointBorrowedReferences(links, true)) throw std::runtime_error("unresolved native references for owner " + std::to_string(identity));
+				// Every refusal names itself: which owner, and whether it is the owner, the arity or a target that is missing.
+				if (!object) throw std::runtime_error("unresolved native references for owner " + std::to_string(identity) + ": the owner is not in the restored world");
+				if (!object->RebindCheckpointBorrowedReferences(links, true)) {
+					std::string reason = object->GetClassName() + " " + object->GetPresetName() + " carries " + std::to_string(object->GetCheckpointBorrowedReferences().size()) + " references, the checkpoint names " + std::to_string(links.size());
+					for (long target: links) if (target && !FindObjectByUniqueID(target)) reason += "; target " + std::to_string(target) + " is not in the restored world";
+					throw std::runtime_error("unresolved native references for owner " + std::to_string(identity) + ": " + reason);
+				}
 			}
 		});
 		VisitCheckpoint(reader, *this);

@@ -3430,6 +3430,40 @@ void GameActivity::VisitCheckpointOwnedObjects(const std::function<void(const En
     }
 }
 
+// A delivery queue is sim state, so every peer's activity owns the same crafts and cargo; a seat's
+// setup editor holds objects only its own peer ever had, and those stay out.
+void GameActivity::VisitCheckpointSharedObjects(const std::function<void(const Entity*)>& visit) const {
+    for (const auto& queue: m_Deliveries) for (const Delivery& delivery: queue) visit(delivery.pCraft);
+}
+
+bool GameActivity::RunDeliveryReferenceSelfTest() {
+    MovableMan::ConstructionRegistryScope registryScope;
+    try {
+        std::unique_ptr<Activity> fixture(new GameActivity());
+        auto* activity = static_cast<GameActivity*>(fixture.get());
+        auto anchor = std::make_unique<Actor>();
+        if (anchor->MovableObject::Create(1) < 0) throw std::runtime_error("the delivery anchor could not be created");
+        auto* craft = new ACDropShip();
+        if (craft->MovableObject::Create(1) < 0) { delete craft; throw std::runtime_error("the delivery craft could not be created"); }
+        craft->SetWhichMOToNotHit(anchor.get());
+        activity->m_Deliveries[Teams::TeamOne].push_back(Delivery{craft, Players::PlayerOne, Vector(), 0.0F, 0, Timer()});
+        g_ActivityMan.SwapCheckpointStartActivity(fixture);
+        const std::string archive = g_MovableMan.SaveCheckpoint();
+        g_ActivityMan.SwapCheckpointStartActivity(fixture);
+        craft->SetWhichMOToNotHit(nullptr);
+        const bool applied = g_MovableMan.LoadCheckpoint(archive);
+        const bool rebound = craft->GetWhichMOToNotHit() == anchor.get();
+        fixture.reset();
+        if (!applied) throw std::runtime_error("the archive holding a delivery craft was refused");
+        if (!rebound) throw std::runtime_error("a delivery craft's borrowed reference did not survive the checkpoint");
+        std::cout << "[native-reference-selftest] a delivery craft's borrowed reference survives the checkpoint PASS" << std::endl;
+        return true;
+    } catch (const std::exception& error) {
+        std::cout << "[native-reference-selftest] " << error.what() << std::endl;
+        return false;
+    }
+}
+
 bool GameActivity::PrepareCheckpointUI() {
     if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
     const std::string values = SaveValueCheckpoint();
