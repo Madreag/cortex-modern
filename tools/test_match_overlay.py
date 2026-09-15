@@ -571,6 +571,7 @@ def main():
     # A second lane runs the same matrix from its own scratch root and port range.
     parser.add_argument("--scratch", type=Path, default=SCRATCH)
     parser.add_argument("--port-base", type=int, default=PORT_BASE)
+    parser.add_argument("--sizes", default="640x360,960x540", help="viewports to run, in order")
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("verification family owns the machine; no driver may start")
@@ -587,6 +588,7 @@ def main():
     ports = (options.port_base + index % PORT_COUNT for index in itertools.count())
     result = {"pass": False, "checks": {}, "pairs": {}, "capture_switch": {},
               "ticks_per_run": TICKS, "ports": list(range(options.port_base, options.port_base + PORT_COUNT)),
+              "sizes": options.sizes,
               "driver_sha256": sha256(__file__),
               "peer_comparator_sha256": sha256(repo / "tools" / "compare_sim_traces.py"),
               "peer_hash_scope": "unchanged strict_compare: controller excluded; every other subsystem at every tick",
@@ -595,7 +597,8 @@ def main():
         result["pin_before"] = pin(repo)
         if result["pin_before"]["exe_sha256"].lower() != options.exe_sha256.lower():
             raise RuntimeError("the requested executable hash does not match")
-        for index, size in enumerate(((640, 360), (960, 540))):
+        sizes = [tuple(int(part) for part in entry.split("x")) for entry in options.sizes.split(",")]
+        for size in sizes:
             tag = f"{size[0]}x{size[1]}"
             for mode in MODES:
                 for arm_name in ARMS:
