@@ -302,13 +302,21 @@ def run_case(options, case, root, failing=None):
                     "peer": who, "case": case, "logical_size": options.size})
         if not failing:
             assert images, "no paired dumps/PNGs"
+            # A peer scripted to dump must have written one: the global count passed on its peer's captures.
+            scripted = {who: texts[who] + json.dumps(probes.get(who, {})) for who in runs}
+            silent = [who for who, script in scripted.items()
+                      if "dump_" in script and not any(image["peer"] == who for image in images)]
+            assert not silent, f"no readback capture from {silent}"
         for who in probes:
             observation = json.loads((probe_root(root, who) / "net-ui-result.json").read_text(encoding="utf-8"))
             result["probes"][who] = observation
             assert observation["pass"] and observation["complete"], (who, observation)
         if case in ("disabled", "scope-off"):
             first, last = images[0], images[-1]
-            assert [c["name"] for c in first["controls"] if c["focus"]] == [c["name"] for c in last["controls"] if c["focus"]]
+            focused = [[c["name"] for c in capture["controls"] if c["focus"]] for capture in (first, last)]
+            # Two captures with nothing focused compared nothing; the case exists to prove focus held.
+            assert focused[0], f"no focused control in {first['json']}"
+            assert focused[0] == focused[1], focused
             assert first["screen"] == last["screen"] == "MultiplayerScreen"
             assert first["service"] == last["service"], (first["service"], last["service"])
         if case == "pause":
