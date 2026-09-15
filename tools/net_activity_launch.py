@@ -396,7 +396,9 @@ def launch(options):
                 # The client holds the world in the editor long enough for the hold itself to be under test.
                 script = root / (peer + "-ui") / "ui-script.json"
                 script.parent.mkdir(parents=True, exist_ok=False)
-                delay = 0 if options.variant == "resync-skirmish" else ((90 if hold_desync else 45) if peer == "client" else 0)
+                # resync-skirmish seats both place past the injected desync (tick 50, resync ~tick 60):
+                # the resync has to land while the seats are still placing, so the hold outlasts it.
+                delay = 90 if options.variant == "resync-skirmish" else ((90 if hold_desync else 45) if peer == "client" else 0)
                 script.write_text(json.dumps(editor_script(peer, captures, delay, hold_desync and not hold_resync,
                                                            options.variant == "wire-refusal", resolution,
                                                            host_signal=root / "host-ui" / (WAITING_SEEN_SIGNAL + ".json")),
