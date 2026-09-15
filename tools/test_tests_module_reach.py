@@ -48,6 +48,8 @@ def main() -> int:
     cases = {
         "player_menu": ([], False),
         "player_net_host": (["-net-host", "-net-port", str(options.port)], False),
+        "player_net_join": (["-net-join", "127.0.0.1", "-net-port", str(options.port)], False),
+        "player_net_match": (["-net-match", "-net-host", "-net-port", str(options.port)], False),
         "harness_match_e2e": (["-net-match-service-e2e"], True),
     }
     if options.replay:
