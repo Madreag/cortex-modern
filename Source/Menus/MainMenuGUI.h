@@ -224,6 +224,12 @@ namespace RTE {
 		GUITextBox* m_MultiplayerHostInputDelayTextBox;
 		GUICheckbox* m_MultiplayerHostPortMapCheckbox;
 		GUIButton* m_MultiplayerHostModeButton;
+		GUIButton* m_MultiplayerHostActivityButton;
+		GUILabel* m_MultiplayerHostInfoLabel;
+		// (preset, defining module) for each scripted activity a lockstep match can run; the module is
+		// carried so a same-named preset in another module cannot swap in silently.
+		std::vector<std::pair<std::string, std::string>> m_MultiplayerHostActivities;
+		size_t m_MultiplayerHostActivityIndex = 0;
 		NetMatchMode m_MultiplayerHostMode;
 		GUITextBox* m_MultiplayerJoinAddressTextBox;
 		GUITextBox* m_MultiplayerJoinPortTextBox;
@@ -391,6 +397,10 @@ namespace RTE {
 		/// Real-time clock for the reconnect schedule; the menu runs outside the sim.
 		static uint64_t MenuClockMs();
 
+		/// Rebuilds the host activity picker's choices from the loaded presets, keeping the current pick.
+		void RefreshMultiplayerHostActivities();
+		/// Writes the picked activity's preset and module onto the setup screen's own display.
+		void ApplyMultiplayerHostActivity();
 		/// Starts hosting or joining a multiplayer match from the setup screen fields.
 		void StartMultiplayer(bool host);
 		/// §9b: answers a live match's refusal by asking the host for a seat instead of a new one.
