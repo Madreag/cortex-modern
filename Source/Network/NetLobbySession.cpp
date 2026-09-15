@@ -389,7 +389,9 @@ namespace RTE {
 				{"unbound_disconnects", m_Stats.unboundDisconnects},
 			}},
 		};
-		return report.dump();
+		// A remote abort reason is free-form text the codec never held to UTF-8, so a stray byte is
+		// replaced rather than thrown.
+		return report.dump(-1, ' ', false, json::error_handler_t::replace);
 	}
 
 	void NetLobbySession::SetLocalReady(bool ready) {

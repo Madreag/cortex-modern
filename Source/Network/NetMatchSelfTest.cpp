@@ -1066,6 +1066,83 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestLiveReportDumpsSurviveBadBytes(std::string* error) {
+			// Independent checks accumulate so one throwing dump cannot hide another.
+			std::vector<std::string> failures;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetPeerId hostRemotePeer = c_InvalidNetPeerId;
+			NetPeerId clientRemotePeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(48481, hostTransport, clientTransport, hostRemotePeer, clientRemotePeer, error)) {
+				return false;
+			}
+			NetLobbySession hostLobby;
+			NetLobbySession clientLobby;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remotePeerId = 2;
+			hostConfig.remoteTransportPeerId = hostRemotePeer;
+			hostConfig.matchConfig = MakeConfig();
+			hostConfig.startFrame = 77;
+			hostConfig.displayName = "Host";
+			hostConfig.platform = "windows";
+			hostConfig.autoReady = false;
+			hostConfig.autoStart = false;
+			NetLobbySessionConfig clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			clientConfig.displayName = "Client";
+			if (!hostLobby.Start(hostTransport, hostConfig, error) || !clientLobby.Start(clientTransport, clientConfig, error)) {
+				return false;
+			}
+			for (uint64_t now = 0; now <= 200; now += 10) {
+				hostLobby.Tick(now);
+				clientLobby.Tick(now);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+			}
+			// An abort reason is remote free-form diagnostics, never validated as UTF-8, and
+			// NetLobbySession.cpp:807 stores it verbatim as the failure reason.
+			std::vector<uint8_t> abortBytes;
+			NetLobbyError abortError;
+			if (!NetLobbyProtocol::Encode({NetLobbyAbort{1, std::string("host left\xC3")}}, abortBytes, &abortError)) {
+				*error = "could not encode a lobby abort with a bad reason byte: " + abortError.message;
+				return false;
+			}
+			if (!hostTransport.Send(hostRemotePeer, NetTransportLane::ControlReliable, abortBytes, error)) {
+				return false;
+			}
+			for (uint64_t now = 210; now <= 400 && !clientLobby.IsRejected() && !clientLobby.IsFailed(); now += 10) {
+				clientTransport.AdvanceTimeMs(10);
+				clientLobby.Tick(now);
+			}
+			if (clientLobby.GetFailureReason().find('\xC3') == std::string::npos) {
+				*error = "the lobby abort reason did not reach the client's failure reason";
+				return false;
+			}
+			try {
+				const std::string report = clientLobby.BuildReportJson();
+				if (nlohmann::json::parse(report, nullptr, false).is_discarded()) {
+					failures.emplace_back("the lobby report of a smuggled abort reason did not parse back");
+				} else if (report.find("\xEF\xBF\xBD") == std::string::npos) {
+					failures.emplace_back("the lobby report dropped the bad abort bytes instead of replacing them");
+				}
+			} catch (const std::exception& thrown) {
+				failures.emplace_back(std::string("the lobby report dump threw on a smuggled abort reason: ") + thrown.what());
+			}
+			if (failures.empty()) {
+				return true;
+			}
+			*error = failures.front();
+			for (size_t index = 1; index < failures.size(); ++index) {
+				*error += " | " + failures[index];
+			}
+			return false;
+		}
+
 		bool TestLobbyManualReadyStart(std::string* error) {
 			LoopbackTransport hostTransport;
 			LoopbackTransport clientTransport;
@@ -7149,6 +7226,7 @@ namespace RTE {
 		if (!TestMalformedLobbyPayloads(&error)) return fail(error);
 		if (!TestLobbyCodecDedicatedFlag(&error)) return fail(error);
 		if (!TestLobbyStateMachineHappyPath(&error)) return fail(error);
+		if (!TestLiveReportDumpsSurviveBadBytes(&error)) return fail(error);
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);
 		if (!TestLobbyManualReadyCanWait(&error)) return fail(error);
 		if (!TestLobbyReadyDoesNotStartBeforeConfigAck(&error)) return fail(error);
