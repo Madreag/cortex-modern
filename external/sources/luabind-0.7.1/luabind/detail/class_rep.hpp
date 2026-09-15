@@ -29,6 +29,7 @@
 
 #include <utility>
 #include <list>
+#include <string>
 
 #include <luabind/config.hpp>
 #include <luabind/detail/object_rep.hpp>
@@ -169,7 +170,7 @@ namespace luabind { namespace detail
 		LUABIND_TYPE_INFO const_holder_type() const throw() { return m_const_holder_type; }
 		bool has_holder() const throw() { return m_construct_holder != 0; }
 
-		const char* name() const throw() { return m_name; }
+		const char* name() const throw() { return m_name_storage.c_str(); }
 
 		// the lua reference to this class_rep
 		// TODO: remove
@@ -334,8 +335,8 @@ namespace luabind { namespace detail
 		// type casts to the base classes
 		std::vector<base_info> m_bases;
 
-		// the class' name (as given when registered to lua with class_)
-		const char* m_name;
+		// Owned copy: a Lua class name is a Lua string that GC can free.
+		std::string m_name_storage;
 
 		// contains signatures and construction functions
 		// for all constructors

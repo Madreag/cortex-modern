@@ -31,7 +31,7 @@ def table(index, pairs, meta="z;"):
 
 def graph(nodes=(), roots=(), globals=()):
     named = lambda entries: str(len(entries)) + ";" + "".join(string(key) + value for key, value in entries)
-    return ("SG3;r" + named(roots) + "G" + named(globals) + "L0;E0;Rz;X0;N" + str(len(nodes)) + ";" + "".join(nodes)).encode()
+    return ("SG4;r" + named(roots) + "G" + named(globals) + "L0;E0;Rz;X0;N" + str(len(nodes)) + ";" + "".join(nodes)).encode()
 
 
 def graph_line(data, index=0):
@@ -304,7 +304,7 @@ class GraphIdentityTests(unittest.TestCase):
         primitive = b"19 GraphicalPrimitive1 16 " + b"0 " * 13 + b"1 \xff 0 0 0 0 0 0 "
         checkpoint = b"15 PrimitiveValue1 0 0 1 " + sized(primitive)
         def make(payload):
-            return b"SG3;r0;G1;s6:native#1;L0;E0;Rz;X0;N1;U1;o" + b"".join(token(value) for value in
+            return b"SG4;r0;G1;s6:native#1;L0;E0;Rz;X0;N1;U1;o" + b"".join(token(value) for value in
                 (b"TextPrimitive", b"", b"", payload)) + b"Iz;"
         first = make(checkpoint)
         self.assertEqual(self.compare(first, first)["matched_nodes"], 1)

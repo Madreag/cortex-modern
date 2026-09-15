@@ -23,6 +23,7 @@
 #include <luabind/lua_include.hpp>
 
 #include <luabind/luabind.hpp>
+#include <string>
 
 namespace luabind { namespace detail
 {
@@ -122,13 +123,13 @@ namespace luabind { namespace detail
 
 	#endif
 
-		const char* name = lua_tostring(L, 1);
+		std::string name(lua_tostring(L, 1), lua_strlen(L, 1));
 
 		void* c = lua_newuserdata(L, sizeof(class_rep));
-		new(c) class_rep(L, name);
+		new(c) class_rep(L, name.c_str());
 
 		// make the class globally available
-		lua_pushstring(L, name);
+		lua_pushstring(L, name.c_str());
 		lua_pushvalue(L, -2);
 		lua_settable(L, LUA_GLOBALSINDEX);
 
