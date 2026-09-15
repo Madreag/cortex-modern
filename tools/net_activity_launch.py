@@ -37,11 +37,10 @@ def rules_for(variant):
     elif variant == "site":
         rules["scene_name"] = "Fredeleig Plains"
     elif variant == "stock":
-        # This activity expects a brain on the site; an empty one sends it into the setup editor, which
-        # lockstep refuses, so the stock arm plays it on the site it ships with.
+        # The site this activity ships with. Its seats still meet the setup editor, so the arm drives it.
         rules["activity_preset"] = "Skirmish Defense"
         rules["scene_name"] = "Ketanot Hills"
-    elif variant == "brains":
+    elif variant in ("brains", "brains-auto", "hold-desync"):
         # Skirmish Defense on a site with no brain on it: every human seat has to place its own brain in
         # the setup editor, which is the start a lockstep match has to synchronize.
         rules["activity_preset"] = "Skirmish Defense"
@@ -146,6 +145,86 @@ def score_placements(logs, seats=2):
     return scored
 
 
+# Each peer holds one seat and places a different brain at a different spot, so a placement that failed to
+# cross the wire leaves the peers holding different residents.
+EDITOR_SEATS = {"host": dict(player=0, x_fraction=0.30, cls="Actor", preset="Brain Case"),
+                "client": dict(player=1, x_fraction=0.70, cls="AHuman", preset="Brain Robot")}
+# A DONE with no brain placed is refused by the editor itself (SceneEditorGUI::DONEEDITING ->
+# TestBrainResidence): the seat goes back to installing or picking a brain, stays unready and commits
+# nothing. Which of the two stock prompts is on screen depends on the frame the probe reads.
+PLACE_REFUSED = ("Pick what you want to place next", "Click to INSTALL your governor brain")
+READY_TEXT = "READY to start"
+WAIT_BANNER = "to place their brains"
+
+
+def editor_script(peer, capture, place_after, finish_at_ready=False):
+    """The UI probe script that drives this peer's own seat through the setup editor, the way a player does."""
+    seat = EDITOR_SEATS[peer]
+    player = seat["player"]
+    steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "editing": True}]
+    if capture:
+        steps.append({"op": "screenshot", "name": f"{peer}_editor_open"})
+    # DONE before a brain is placed: refused, so the seat stays unready, commits nothing and is sent back
+    # to place a brain.
+    steps += [{"op": "editor_done", "player": player},
+              {"op": "assert_editor", "player": player, "equals": {"ready": False, "submitted": False, "resident": False}}]
+    if capture:
+        steps.append({"op": "screenshot", "name": f"{peer}_refusal"})
+    if place_after:
+        steps.append({"op": "wait", "sim_at_least": place_after})
+    steps += [{"op": "editor_place_brain", "player": player, "x_fraction": seat["x_fraction"],
+               "class": seat["cls"], "preset": seat["preset"], "module": "Base.rte"},
+              # Placing alone commits nothing: the wire only carries the seat's DONE.
+              {"op": "assert_editor", "player": player, "equals": {"resident": True, "ready": False, "submitted": False}},
+              {"op": "editor_done", "player": player},
+              {"op": "wait", "seat_ready": player},
+              {"op": "assert_editor", "player": player, "equals": {"ready": True, "submitted": True}}]
+    if capture:
+        steps.append({"op": "screenshot", "name": f"{peer}_ready"})
+    if peer == "host":
+        # The host places first, so while the client is still placing its screen must carry the stock READY
+        # line and its own strip must name who the held world is waiting for.
+        steps += [{"op": "assert", "equals": {"editing": True}},
+                  {"op": "wait", "player": player, "seat_text_contains": READY_TEXT},
+                  {"op": "assert_control", "control": "LabelNetMatchStatus", "text_contains": WAIT_BANNER,
+                   "equals": {"visible": True}, "fits": True}]
+        if capture:
+            steps.append({"op": "screenshot", "name": f"{peer}_waiting_banner"})
+    if not finish_at_ready:
+        # The arm that plays on: the match leaves the editor and runs.
+        steps += [{"op": "wait", "editing": False}, {"op": "wait", "sim_at_least": 200}]
+        if capture:
+            steps.append({"op": "screenshot", "name": f"{peer}_match_started"})
+    steps.append({"op": "finish"})
+    return {"schema": 1, "timeout_ms": 180000, "steps": steps}
+
+
+def set_resolution(runtime, width, height):
+    path = Path(runtime) / "Userdata" / "Settings.ini"
+    settings = path.read_text(encoding="utf-8")
+    for name, value in (("ResolutionX", width), ("ResolutionY", height)):
+        settings, count = re.subn(rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*", lambda match: match[1] + str(value), settings)
+        if count != 1:
+            raise RuntimeError(f"expected one private {name} setting, found {count}")
+    path.write_text(settings, encoding="utf-8")
+
+
+def probe_result(root, peer):
+    path = root / (peer + "-ui") / "net-ui-result.json"
+    return json.loads(path.read_text(errors="replace")) if path.is_file() else {}
+
+
+def committed(log):
+    """Every commit line a peer logged, keyed by seat, with the path that read the spot."""
+    rows = {}
+    for line in log.splitlines():
+        if line.startswith("[net-match] brain placement committed: "):
+            fields = re.split(r" (?=[a-z_]+=)", line.removeprefix("[net-match] brain placement committed: "))
+            row = dict(field.split("=", 1) for field in fields if "=" in field)
+            rows[row.get("seat")] = row
+    return rows
+
+
 def tick_lines(path, tick="1"):
     """Every per-MO CC_SIM_DUMP line of one tick: the census of what the launch actually placed."""
     if not Path(path).is_file():
@@ -193,11 +272,20 @@ def launch(options):
             stream.write(json.dumps(dict(stamp=stamp(), event=event, exe_sha256=actual)) + "\n")
         if actual != exe_hash:
             raise RuntimeError("executable changed during launch case")
+    # The setup editor is driven through the UI probe's own seam, so the arm commits the way a player does.
+    editor_driven = options.variant in ("brains", "stock", "hold-desync")
+    places_brains = editor_driven or options.variant == "brains-auto"
+    hold_desync = options.variant == "hold-desync"
+    resolution = getattr(options, "resolution", None)
+    captures = bool(getattr(options, "captures", False))
     common = ["-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
               "-net-match-mode", "pvp" if default else "coop-pve", "-net-match-ticks", "600", "-max-ticks", "600",
-              "-net-match-input-delay", "3", "-seed", "42", "-num-lua-states", "4", "-tick-hashes"]
-    if options.variant == "brains":
-        # Every peer stands in for its own players' DONE in the synchronized setup editor.
+              "-net-match-input-delay", "3", "-seed", "42", "-num-lua-states", "4"]
+    if not hold_desync:
+        # The live desync exchange only samples when the run is not recording the offline trace.
+        common.append("-tick-hashes")
+    if options.variant == "brains-auto":
+        # The seatless path: every peer stands in for its own players' DONE at the deterministic spot.
         common.append("-net-match-e2e-brain-placement")
     runs, records = {}, {}
     try:
@@ -205,8 +293,20 @@ def launch(options):
             flags = ["-net-dedicated" if options.dedicated else "-net-host", "-net-match-service-config", str(config)] if peer == "host" else ["-net-join", "127.0.0.1"]
             trace, report = root / peer / "trace.json", root / peer / "report.json"
             flags += ["-out", str(trace), "-net-match-report", str(report), "-net-replay-out", str(root / peer / "match.ccreplay")]
-            runs[peer] = make_run(repo, [*common, *flags], root / peer, options.timeout,
-                                  env={"CCCP_HEADLESS": "1", "CC_SIM_DUMP": "1:600"}, expected=[report])
+            env = {"CCCP_HEADLESS": "1", "CC_SIM_DUMP": "1:600"}
+            if editor_driven:
+                # The client holds the world in the editor long enough for the hold itself to be under test.
+                script = root / (peer + "-ui") / "ui-script.json"
+                script.parent.mkdir(parents=True, exist_ok=False)
+                delay = (90 if hold_desync else 45) if peer == "client" else 0
+                script.write_text(json.dumps(editor_script(peer, captures, delay, hold_desync), indent=2), encoding="utf-8")
+                env["CC_TEST_NET_UI_SCRIPT"] = str(script)
+            if hold_desync and peer == "host":
+                # One genuine divergence inside the hold: the held ticks' own hashes have to catch it.
+                flags.append("-determinism-selftest-perturb")
+            runs[peer] = make_run(repo, [*common, *flags], root / peer, options.timeout, env=env, expected=[report])
+            if resolution:
+                set_resolution(runs[peer].cwd, *resolution)
         ledger("before_pair")
         for run in runs.values():
             run.start()
@@ -230,15 +330,54 @@ def launch(options):
         checks["bounded_refusal"] = all(record.get("exit_code") == 1 and not record.get("timed_out") for record in records.values())
         result["refusals"] = reasons
     else:
+        if hold_desync:
+            # The whole arm: a divergence injected at tick 50, while the world is held in the setup editor,
+            # must be named by the live checksum exchange before the hold ends at tick 90.
+            reported = {peer: re.findall(r"sim state diverged at tick (\d+)", log) for peer, log in logs.items()}
+            ticks = sorted(int(tick) for found in reported.values() for tick in found)
+            result["hold_desync"] = {"reported": reported, "first_tick": ticks[0] if ticks else None,
+                                     "perturbed_tick": 50, "client_places_after": 90}
+            checks["desync_named_within_30_ticks"] = bool(ticks) and 50 < ticks[0] <= 80
+            # No brain was ever built, so the world was still held in the setup editor when it was named.
+            checks["named_before_the_match_started"] = all("[net-match] brain placed:" not in log for log in logs.values())
+            # Evidence only: the peers are stopped by the desync itself, so a probe script cannot finish.
+            result["probes"] = {peer: probe_result(root, peer) for peer in runs}
+            result.update(checks=checks, passed=all(checks.values()), exe_sha256=exe_hash)
+            (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+            for name, passed in checks.items():
+                print(f"{'PASS' if passed else 'FAIL'} {name}")
+            return 0 if result["passed"] else 1
         result["rules"] = {peer: score_rules(log, rules, default) for peer, log in logs.items()}
         for peer in runs:
             checks[peer + "_process"] = records[peer].get("exit_code") == 0 and not records[peer].get("timed_out") and records[peer].get("evidence_complete", False)
             checks[peer + "_rules"] = result["rules"][peer]["pass"]
-        if options.variant == "brains":
+        if editor_driven:
+            # Every commit came off the seat's own editor, not the deterministic-spot helper.
+            result["commits"] = {peer: committed(log) for peer, log in logs.items()}
+            checks["brains_via_editor"] = all(rows and all(row.get("via") == "editor" for row in rows.values())
+                                              for rows in result["commits"].values())
+            result["probes"] = {peer: probe_result(root, peer) for peer in runs}
+            checks["ui_probe_pass"] = all(result["probes"][peer].get("pass") and result["probes"][peer].get("complete") for peer in runs)
+            # The refusal the production path shows a player who presses DONE with no brain placed: the seat
+            # stays unready and uncommitted, and the stock editor asks for the brain again.
+            result["refusals"] = {peer: next((step["observed"]["editor_seats"] for step in result["probes"][peer].get("steps", [])
+                                              if step.get("op") == "assert_editor"), []) for peer in runs}
+            checks["refusal_keeps_seat_unready"] = all(
+                rows and all(not row["ready"] and not row["submitted"] and not row["resident"] and
+                             any(text in row["screen_text"] for text in PLACE_REFUSED) for row in rows)
+                for rows in result["refusals"].values())
+            reports = {peer: json.loads((root / peer / "report.json").read_text(errors="replace")) for peer in runs}
+            result["toasts"] = {peer: reports[peer].get("ui", {}).get("toasts", []) for peer in runs}
+            checks["placement_toasts"] = all(sum(1 for toast in result["toasts"][peer] if toast.get("kind") == "brain_placed") == 2 for peer in runs)
+            waits = [step for step in result["probes"]["host"].get("steps", []) if step.get("op") == "assert_control"]
+            checks["waiting_banner_shown"] = any(WAIT_BANNER in json.dumps(step) for step in waits)
+            if captures:
+                result["captures"] = sorted(str(path) for peer in runs for path in (root / (peer + "-ui")).glob("*.png"))
+        if places_brains:
             result["placements"] = score_placements(logs)
             checks["brains_placed_on_both_peers"] = result["placements"]["pass"]
-            # The setup editor's held ticks carry no actors, so compare the raw per-MO dumps of every tick
-            # byte for byte as well: that covers the placement window the subsystem hashes cannot.
+            # The raw per-MO dump of every tick, held ones included, compared byte for byte beside the
+            # subsystem hashes: it carries the fields the hashes leave out.
             host_dump, client_dump = root / "host/trace.json.simdump.txt", root / "client/trace.json.simdump.txt"
             checks["host_client_dump_bytes"] = host_dump.is_file() and client_dump.is_file() and host_dump.read_bytes() == client_dump.read_bytes()
             # The match must actually leave the setup editor and play, or the traces agree on nothing happening.
