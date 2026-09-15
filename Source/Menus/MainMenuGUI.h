@@ -382,6 +382,9 @@ namespace RTE {
 		/// §11: shows the recovery banner and the rejoin/cancel controls the reconnect state machine says apply.
 		void RefreshReconnectControls();
 
+		/// The delay box and its policy label re-read the saved policy: fixed pre-fills the saved frames, automatic greys the box out.
+		void RefreshHostInputDelayControls();
+
 		/// Resizes a multiplayer sub-panel's width: the diagnostic label keeps its 12px side margins and every other child keeps its center offset.
 		void FitMultiplayerPanelWidth(GUICollectionBox* panel, GUILabel* diagnosticLabel, int width, const std::vector<GUILabel*>& fillLabels = {});
 		/// Resizes the MultiplayerScreen and keeps it centered, moving up from its baseline Y only when the height no longer fits the viewport.
