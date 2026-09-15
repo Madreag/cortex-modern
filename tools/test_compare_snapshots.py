@@ -66,7 +66,7 @@ class SnapshotComparisonTests(unittest.TestCase):
         self.assertEqual(checker.runtime_projection(first, "", False)[0], first)
         self.assertNotEqual(checker.runtime_projection(first, "", False), checker.runtime_projection(second, "", False))
 
-    def compare(self, first, second, full=False, entries=None):
+    def compare(self, first, second, full=False, entries=None, seats=None, extra=()):
         with tempfile.TemporaryDirectory() as directory:
             paths = [Path(directory) / name for name in ("a.ccsave", "b.ccsave")]
             for path, text in zip(paths, (first, second)):
@@ -74,7 +74,10 @@ class SnapshotComparisonTests(unittest.TestCase):
                     archive.writestr("Save.ini", text)
                     for name, data in (entries or {}).items():
                         archive.writestr(name, data)
-            with patch.object(sys, "argv", [str(CHECKER), *map(str, paths), *( ["--full"] if full else [])]), contextlib.redirect_stdout(io.StringIO()):
+            options = ["--full"] if full else []
+            if seats is not None:
+                options += [f"--local-seat-{side}={seat}" for side, seat in zip("ab", seats)]
+            with patch.object(sys, "argv", [str(CHECKER), *map(str, paths), *options, *extra]), contextlib.redirect_stdout(io.StringIO()):
                 return checker.main()
 
     def test_matching(self):
@@ -106,6 +109,32 @@ class SnapshotComparisonTests(unittest.TestCase):
     def test_local_activity_binding_must_be_present_on_both_peers(self):
         first = BASE.replace("ActivityState = 3", "ActivityState = 3\n\tTeamOfPlayer1 = 0")
         self.assertEqual(self.compare(first, BASE), 1)
+
+    def test_shared_seats_compare_the_player_one_slot_properties(self):
+        first = BASE.replace("ActivityState = 3", "ActivityState = 3\n\tTeamOfPlayer1 = 0")
+        second = first.replace("TeamOfPlayer1 = 0", "TeamOfPlayer1 = 1")
+        self.assertEqual(self.compare(first, second), 0)
+        for seats in ((0, 1), (1, 0), (0, 0)):
+            with self.subTest(seats=seats):
+                self.assertEqual(self.compare(first, second, seats=seats), 1)
+        self.assertEqual(self.compare(first, first, seats=(0, 1)), 0)
+
+    def test_local_seats_are_validated_and_named_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / "host_report.json"
+            report.write_text('{"service": {"local_peer_id": 2, "reconnect": {"seat_snapshot": {"seats": ['
+                '{"peer_id": 1, "stable_seat": 0}, {"peer_id": 2, "stable_seat": 1}]}}}}')
+            self.assertEqual(checker.report_local_seat(report), 1)
+            self.assertEqual(self.compare(BASE, BASE, extra=[f"--peer-report-a={report}", "--local-seat-b=0"]), 0)
+            self.assertEqual(self.compare(BASE, BASE, extra=[f"--peer-report-a={report}", "--local-seat-a=0", "--local-seat-b=1"]), 1)
+            for text in ('{"service": {}}', '{"service": {"local_peer_id": 3, "reconnect": {"seat_snapshot": {"seats": ['
+                    '{"peer_id": 1, "stable_seat": 0}]}}}}'):
+                report.write_text(text)
+                self.assertEqual(self.compare(BASE, BASE, extra=[f"--peer-report-a={report}", "--local-seat-b=0"]), 1)
+        for seats in ((0, None), (None, 1), (0, 4), (-1, 0)):
+            with self.subTest(seats=seats):
+                options = [f"--local-seat-{side}={seat}" for side, seat in zip("ab", seats) if seat is not None]
+                self.assertEqual(self.compare(BASE, BASE, extra=options), 1)
 
     def test_configured_start_activity_is_compared_with_local_slot_scope(self):
         first = BASE + "HasCheckpointStartActivity = 1\nCheckpointStartActivity = GameActivity\n\tTeamOfPlayer1 = 0\n\tStartingGold = 100\n"
@@ -338,6 +367,70 @@ class RuntimeProjectionTests(unittest.TestCase):
             self.assert_field(value, (key, 0), True)
             self.assert_field(value, (key, 1), False)
         self.assert_field(value, ("team_funds", 0), False)
+
+    def shared_seat_activity(self):
+        timer = lambda seat: dict(sim_start=seat, sim_limit=20, real_start=seat + 1, real_limit=30)
+        controller = lambda seat: dict(version="Controller1", states=[seat, 1, 0], team=seat,
+            **{key: timer(seat) for key in ("release_timer", "joy_accel_timer", "key_accel_timer")})
+        return dict(version="Activity1", player_screen=[0, 1, 2, 3], team_funds=[20, 20, 20, 20],
+            **{key: [1, 2, 3, 4] for key in ("player_team", "team_funds_share", "funds_contribution", "human")},
+            actor_links=[[seat, seat + 10, seat + 20] for seat in range(4)],
+            player_controller=[controller(seat) for seat in range(4)],
+            **{key: [timer(seat) for seat in range(4)] for key in ("death_timer", "message_timer")})
+
+    def test_shared_seats_compare_every_slot_and_project_only_the_two_seat_views(self):
+        value, shared = self.shared_seat_activity(), dict(local_seat=0, asymmetric_seats=frozenset({0, 1}))
+        for seat in (0, 1):
+            for key in ("player_team", "team_funds_share", "funds_contribution", "human"):
+                self.assert_field(value, (key, seat), False, **shared)
+            self.assert_field(value, ("actor_links", seat, 0), False, **shared)
+            for index in (1, 2):
+                self.assert_field(value, ("actor_links", seat, index), True, **shared)
+            self.assert_field(value, ("player_screen", seat), True, **shared)
+            for key in ("death_timer", "message_timer"):
+                self.assert_field(value, (key, seat, "sim_start"), True, **shared)
+                self.assert_field(value, (key, seat, "sim_limit"), False, **shared)
+            self.assert_field(value, ("player_controller", seat, "states", 0), True, **shared)
+        for field in (("player_team", 2), ("player_screen", 2), ("actor_links", 2, 1), ("team_funds", 0),
+                ("death_timer", 2, "sim_start"), ("player_controller", 2, "states", 0)):
+            self.assert_field(value, field, False, **shared)
+        mirrored = runtime.project(value, True, local_seat=1, asymmetric_seats=frozenset({0, 1}))
+        self.assertEqual(runtime.project(value, True, **shared), mirrored)
+        self.assertNotEqual(runtime.project(value, True, local_seat=0, asymmetric_seats=frozenset({0})), mirrored)
+
+    def test_shared_seats_project_the_game_activity_view_of_both_seats(self):
+        timer = lambda seat: dict(sim_start=seat, sim_limit=20, real_start=seat + 1, real_limit=30)
+        value = dict(version="GameActivity1", cpu_team=1, team_is_cpu=[0, 1, 0, 1], brain_lz_width=[5, 6, 7, 8],
+            **{key: [[seat, seat + 1] for seat in range(4)] for key in
+               ("observation_target", "death_view_target", "actor_cursor", "landing_zone")},
+            actor_select_timer=[timer(seat) for seat in range(4)],
+            player_ui=[dict(buy=seat, editor=seat, inventory=seat) for seat in range(4)])
+        shared = dict(local_seat=1, asymmetric_seats=frozenset({0, 1}))
+        for seat in (0, 1):
+            for key in ("observation_target", "death_view_target", "actor_cursor", "landing_zone"):
+                self.assert_field(value, (key, seat, 0), True, **shared)
+            self.assert_field(value, ("actor_select_timer", seat, "sim_start"), True, **shared)
+            self.assert_field(value, ("actor_select_timer", seat, "sim_limit"), False, **shared)
+            self.assert_field(value, ("player_ui", seat, "buy"), True, **shared)
+        for field in (("observation_target", 2, 0), ("landing_zone", 2, 0), ("actor_cursor", 2, 1), ("player_ui", 2, "buy"),
+                ("actor_select_timer", 2, "sim_start"), ("brain_lz_width", 0), ("cpu_team",), ("team_is_cpu", 0)):
+            self.assert_field(value, field, False, **shared)
+
+    def test_inventory_roles_and_scratch_follow_the_local_seat(self):
+        scene = "Scene = Scene\n"
+        for actor, item in ((10, 11), (20, 21)):
+            scene += f"\tPlaceSceneObject = AHuman\n\t\tUniqueID = {actor}\n\t\tHeldDevice = HDFirearm\n\t\t\tUniqueID = {item}\n"
+        host = dict(version="Activity1", actor_links=[[10, 10, 0], [20, 0, 0], [0, 0, 0], [0, 0, 0]])
+        client = dict(version="Activity1", actor_links=[[10, 0, 0], [20, 20, 0], [0, 0, 0], [0, 0, 0]])
+        self.assertEqual(checker.inventory_reference_roles(scene, client), {})
+        roles = [checker.inventory_reference_roles(scene, state, seat) for state, seat in ((host, 0), (client, 1))]
+        self.assertEqual([sorted(item) for item in roles], [[10, 11], [20, 21]])
+        entity = lambda uid: dict(version="GUIEntity1", value=dict(uid=uid, **{"class": b"HDFirearm", "preset": b"same", "module": b"Base.rte"}))
+        inventory = lambda uid: dict(version="InventoryMenuGUI2", center=[uid, uid], actor=entity(uid), equipment=[entity(uid + 1)])
+        projected = [runtime.project(inventory(uid), True, path=("player_ui", seat, "inventory"), local_roles=role, local_seat=seat)
+                     for uid, seat, role in ((10, 0, roles[0]), (20, 1, roles[1]))]
+        self.assertEqual(*projected)
+        self.assertNotEqual(projected[1], runtime.project(inventory(20), True, path=("player_ui", 1, "inventory"), local_roles=roles[1]))
 
     def test_local_inventory_references_follow_world_ownership_and_preserve_aliases(self):
         scene = "Scene = Scene\n"
