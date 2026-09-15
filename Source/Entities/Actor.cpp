@@ -2460,7 +2460,8 @@ void RTE::Actor::CastSeeRays() {
 	if (m_Status != Actor::INACTIVE) {
 		const int lookIterations = 6; // How many see rays to cast per frame
 		for (int i = 0; i < lookIterations; ++i) {
-			Look(45 * m_Perceptiveness, g_FrameMan.GetPlayerScreenWidth() * 0.51 * m_Perceptiveness);
+			// Every peer reveals its own unseen map, so scale sight by the default screen, not this window.
+			Look(45 * m_Perceptiveness, c_DefaultResX * 0.51 * m_Perceptiveness);
 		}
 	}
 }

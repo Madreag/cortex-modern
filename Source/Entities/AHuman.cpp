@@ -2117,7 +2117,7 @@ bool AHuman::LookForGold(float FOVSpread, float range, Vector& foundLocation) co
 MovableObject* AHuman::LookForMOs(float FOVSpread, unsigned char ignoreMaterial, bool ignoreAllTerrain) {
 	MovableObject* pSeenMO = 0;
 	Vector aimPos = m_Pos;
-	float aimDistance = m_AimDistance + g_FrameMan.GetPlayerScreenWidth() * 0.51; // Set the length of the look vector
+	float aimDistance = m_AimDistance + c_DefaultResX * 0.51; // Set the length of the look vector; the window is per-machine
 
 	// If aiming down the barrel, look through that
 	if (m_Controller.IsState(AIM_SHARP) && m_pFGArm && m_pFGArm->IsAttached() && m_pFGArm->GetHeldDevice()) {
