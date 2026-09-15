@@ -1333,7 +1333,8 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 	          << " peer=" << static_cast<int>(senderPeerId) << " preset=" << placement.module << "/" << placement.preset
 	          << " pos=" << placement.posX << "," << placement.posY << std::endl;
 	// Presentation only: every peer names the seat that just placed, and the waiting strip counts down.
-	ScenarioRunner::PushNetUiToast("brain_placed", LockstepSeatName(player) + " placed their brain");
+	ScenarioRunner::PushNetUiToast("brain_placed", IsLocalHumanSeat(player) ? std::string("You placed your brain")
+	                                                                            : LockstepSeatName(player) + " placed their brain");
 	return true;
 }
 
