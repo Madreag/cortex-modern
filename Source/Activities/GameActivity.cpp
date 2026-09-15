@@ -3704,6 +3704,22 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			}
 			check(("net_local_menu_survives_empty_restore" + (detail.empty() ? std::string{} : " " + detail)).c_str(), detail.empty());
 		}
+		{
+			// A seat this machine does not present has no menu, editor or banner, and a script asking for one gets nil.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			const int result = lua.RunScriptString(R"lua(
+local activity = ToGameActivity(ActivityMan:GetActivity())
+assert(activity:GetBuyGUI(0) == nil, "buy menu of a seat with no local menu")
+assert(activity:GetEditorGUI(0) == nil, "editor of a seat with no local menu")
+assert(activity:GetBanner(GUIBanner.YELLOW, 0) == nil, "banner of a seat with no local menu")
+assert(activity:GetBuyGUI(Activity.MAXPLAYERCOUNT) == nil, "buy menu of an absent seat")
+assert(activity:GetEditorGUI(Activity.MAXPLAYERCOUNT) == nil, "editor of an absent seat")
+assert(activity:GetBanner(GUIBanner.YELLOW, Activity.MAXPLAYERCOUNT) == nil, "banner of an absent seat")
+)lua");
+			std::cout << "[net-local-ui-selftest] absent_local_ui result=" << result << " error=" << (result == 0 ? std::string{} : lua.GetLastError()) << std::endl;
+			check("absent_local_ui_returns_nil", result == 0);
+		}
 	} catch (const std::exception& exception) { check(exception.what(), false); }
 	for (long uid: scriptIdentities) lua.RunScriptString("if _ScriptedObjects then _ScriptedObjects[\"" + std::to_string(uid) + "\"] = nil end");
 	lua.RunScriptString(clear);
