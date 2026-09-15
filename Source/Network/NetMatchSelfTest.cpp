@@ -756,11 +756,14 @@ namespace RTE {
 			    !RoundTrip(NetLobbyStart{config.sessionId, 120, 0, configHash}, error) ||
 			    !RoundTrip(NetLobbyAbort{1, "user cancelled"}, error) ||
 			    !RoundTrip(NetLobbySeatAssign{2}, error) ||
-			    !RoundTrip(NetLobbySeatAssign{static_cast<uint8_t>(NetLobbyProtocol::c_MaxPlayers)}, error)) {
+			    !RoundTrip(NetLobbySeatAssign{static_cast<uint8_t>(NetLobbyProtocol::c_MaxPeers)}, error)) {
 				return false;
 			}
-			// A seat assignment names a real seat; zero and out-of-range must not decode.
-			for (const uint8_t assigned: {uint8_t{0}, static_cast<uint8_t>(NetLobbyProtocol::c_MaxPlayers + 1)}) {
+			// A seat assignment names a lockstep peer, so the peer cap bounds it, not the wider slot cap.
+			static_assert(NetLobbyProtocol::c_MaxPeers == NetMatchConfigUtil::c_MaxPeerCount);
+			for (const uint8_t assigned: {uint8_t{0}, static_cast<uint8_t>(NetLobbyProtocol::c_MaxPeers + 1),
+			                              static_cast<uint8_t>(NetLobbyProtocol::c_MaxPlayers),
+			                              static_cast<uint8_t>(NetLobbyProtocol::c_MaxPlayers + 1)}) {
 				NetLobbyMessage message;
 				message.payload = NetLobbySeatAssign{2};
 				std::vector<uint8_t> bytes;
@@ -773,6 +776,10 @@ namespace RTE {
 				const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(bytes);
 				if (decoded.ok || decoded.error.code != NetLobbyErrorCode::InvalidValue) {
 					*error = "seat assignment peer id " + std::to_string(assigned) + " was not rejected";
+					return false;
+				}
+				if (decoded.error.message.find("peer id") == std::string::npos) {
+					*error = "the refusal of seat assignment peer id " + std::to_string(assigned) + " did not name the field: " + decoded.error.message;
 					return false;
 				}
 			}

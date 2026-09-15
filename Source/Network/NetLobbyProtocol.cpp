@@ -593,7 +593,7 @@ namespace RTE {
 						SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 3, "reserved field must be zero");
 						return false;
 					}
-					if (payload.assignedPeerId == 0 || payload.assignedPeerId > NetLobbyProtocol::c_MaxPlayers) {
+					if (payload.assignedPeerId == 0 || payload.assignedPeerId > NetLobbyProtocol::c_MaxPeers) {
 						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset() - 4, "seat assignment peer id is invalid");
 						return false;
 					}
