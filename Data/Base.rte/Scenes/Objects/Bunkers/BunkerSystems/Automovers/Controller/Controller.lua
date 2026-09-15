@@ -221,9 +221,23 @@ function Destroy(self)
 	AutomoverData[self.Team].teleporterNodesCount = 0;
 end
 
+local sortedAffectedActorIDsScratch = {};
+local sortedNodeKeysScratch = {};
+
 automoverUtilityFunctions.sortedAffectedActorIDs = function(self)
 	-- The order two stuck actors draw their nudges must not follow the table's hash.
-	local ids = {};
+	local ids = sortedAffectedActorIDsScratch;
+	for i = #ids, 1, -1 do
+		ids[i] = nil;
+	end
+	local first = next(self.affectedActors);
+	if first == nil then
+		return ids;
+	end
+	if next(self.affectedActors, first) == nil then
+		ids[1] = first;
+		return ids;
+	end
 	for actorUniqueID, _ in pairs(self.affectedActors) do
 		ids[#ids + 1] = actorUniqueID;
 	end
@@ -233,11 +247,30 @@ end
 
 automoverUtilityFunctions.sortedNodeKeys = function(self, tbl)
 	-- Node-object pairs follow addresses; UniqueID order does not.
-	local keys = {};
+	local keys = sortedNodeKeysScratch;
+	for i = #keys, 1, -1 do
+		keys[i] = nil;
+	end
+	local first = next(tbl);
+	if first == nil then
+		return keys;
+	end
+	if next(tbl, first) == nil then
+		keys[1] = first;
+		return keys;
+	end
 	for node, _ in pairs(tbl) do
 		keys[#keys + 1] = node;
 	end
 	table.sort(keys, function(a, b) return a.UniqueID < b.UniqueID; end);
+	-- Copy when a coroutine may yield while still iterating the list.
+	if coroutine.running() then
+		local copy = {};
+		for i = 1, #keys do
+			copy[i] = keys[i];
+		end
+		return copy;
+	end
 	return keys;
 end
 
