@@ -134,7 +134,7 @@ LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t n
 #if LJ_HASJIT
   /* The recorded preview guard is hoisted out of loops, so a window must not open inside a trace. */
   if (G2J(g)->state != LJ_TRACE_IDLE)
-    lj_trace_abort(g);
+    lj_trace_abort_leftover(L);
   if (G2J(g)->state != LJ_TRACE_IDLE) return 0;
 #endif
   if (!p) {

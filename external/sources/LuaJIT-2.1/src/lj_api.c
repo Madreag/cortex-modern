@@ -1118,7 +1118,7 @@ LUA_API void lua_call(lua_State *L, int nargs, int nresults)
   lj_vm_call(L, api_call_base(L, nargs), nresults+1);
 #if LJ_HASJIT
   if (G2J(G(L))->state != LJ_TRACE_IDLE)
-    lj_trace_abort(G(L));
+    lj_trace_abort_leftover(L);
 #endif
 }
 
@@ -1129,9 +1129,8 @@ LUA_API int lua_pcall(lua_State *L, int nargs, int nresults, int errfunc)
   ptrdiff_t ef;
   int status;
 #if LJ_HASJIT
-  /* Leftover 1-6 is below ACTIVE and keeps record dispatch without a recorder. */
   if (G2J(g)->state < LJ_TRACE_ACTIVE)
-    lj_trace_abort(g);
+    lj_trace_abort_leftover(L);
 #endif
   oldh = hook_save(g);
   lj_checkapi(L->status == LUA_OK || L->status == LUA_ERRERR,
@@ -1147,7 +1146,7 @@ LUA_API int lua_pcall(lua_State *L, int nargs, int nresults, int errfunc)
   if (status) hook_restore(g, oldh);
 #if LJ_HASJIT
   if (G2J(g)->state != LJ_TRACE_IDLE)
-    lj_trace_abort(g);
+    lj_trace_abort_leftover(L);
 #endif
   return status;
 }
@@ -1206,7 +1205,7 @@ LUA_API int lua_yield(lua_State *L, int nresults)
   global_State *g = G(L);
   if (cframe_canyield(cf)) {
 #if LJ_HASJIT
-    lj_trace_abort(g);
+    lj_trace_abort_leftover(L);
 #endif
     cf = cframe_raw(cf);
     if (!hook_active(g)) {  /* Regular yield: move results down if needed. */
@@ -1252,7 +1251,7 @@ LUA_API int lua_resume(lua_State *L, int nargs)
       0, 0);
 #if LJ_HASJIT
     if (G2J(G(L))->state != LJ_TRACE_IDLE)
-      lj_trace_abort(G(L));
+      lj_trace_abort_leftover(L);
 #endif
     return status;
   }
