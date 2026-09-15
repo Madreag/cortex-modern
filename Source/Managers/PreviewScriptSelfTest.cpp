@@ -82,8 +82,9 @@ local function hot(t, n)
   end
 end
 local jitEnabled = jit and jit.status() or false
-local traceStarts, hotTrace, traceReason = {}, nil, 'no trace event'
+local traceStarts, hotTrace, traceReason, traceSeen = {}, nil, 'no trace event', {}
 local function traceEvent(what, tr, func, pos, errmsg)
+  traceSeen[what] = (traceSeen[what] or 0) + 1
   if what == 'flush' then
     traceStarts, hotTrace, traceReason = {}, nil, 'trace cache flushed'
   elseif what == 'start' then
@@ -98,19 +99,33 @@ local function traceEvent(what, tr, func, pos, errmsg)
     traceStarts[tr] = nil
   end
 end
+local function seenCounts()
+  return tostring(traceSeen.start or 0)..'/'..tostring(traceSeen.stop or 0)..'/'..tostring(traceSeen.abort or 0)..'/'..tostring(traceSeen.flush or 0)
+end
+local function recordHot()
+  traceStarts, hotTrace, traceReason, traceSeen = {}, nil, 'no trace event', {}
+  jit.attach(traceEvent, 'trace')
+  local scratch = {}
+  hot(scratch, 512); hot(scratch, 512)
+  jit.attach(traceEvent)
+end
 -- A live compiled trace for the guarded loop is a precondition of the JIT arm, so say why it is missing.
 local function armHotTrace(label)
   if not jitEnabled then _PreviewBarrierHotTrace = label..':jit-off'; return end
-  local kept = hotTrace ~= nil and util.traceinfo(hotTrace) ~= nil
-  if not kept then
-    hotTrace, traceReason = nil, 'no trace event'
-    jit.attach(traceEvent, 'trace')
-    local scratch = {}
-    hot(scratch, 512); hot(scratch, 512)
-    jit.attach(traceEvent)
+  local how = 'kept'
+  if hotTrace == nil or util.traceinfo(hotTrace) == nil then
+    recordHot()
+    how = 'recorded'
+    if hotTrace == nil then
+      -- A full trace cache and an already patched loop are both ignored in silence, so clear them and record again.
+      local first = seenCounts()
+      jit.flush()
+      recordHot()
+      how = 'reflushed('..first..')'
+    end
   end
-  assert(hotTrace and util.traceinfo(hotTrace), 'no live compiled trace for the guarded store loop at '..label..': '..tostring(traceReason))
-  _PreviewBarrierHotTrace = label..':'..tostring(hotTrace)..(kept and ':kept' or ':recorded')
+  assert(hotTrace and util.traceinfo(hotTrace), 'no live compiled trace for the guarded store loop at '..label..': '..tostring(traceReason)..' events(start/stop/abort/flush)='..seenCounts())
+  _PreviewBarrierHotTrace = label..':'..tostring(hotTrace)..':'..how
 end
 -- The first live trace of any origin is what the arm used to accept; it is reported to show it is not this loop's.
 local firstAnyTrace = 0
