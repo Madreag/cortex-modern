@@ -22,6 +22,7 @@ PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc")
 # A combo box draws its selected item left of the drop-down button, so its text budget is narrower than its rect.
 COMBO_BUTTON = 17
 FIT_LINE = re.compile(r"assert_text_fits (\w+).*?rect=\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\].*?available=\[(-?\d+),(-?\d+)\]")
+WATCHED = ("ComboBrainlessHumansSpectate", "ComboMatchStatusWidget")
 ORDER = ("TextMultiplayerName", "ButtonMultiplayerHostGame", "ButtonMultiplayerJoinGame",
          "ButtonBackToMain", "ButtonSaveDiagnostics")
 RESET_INPUT = ("wait 40\nactivate ButtonMainToOptions\nwait 5\nassert_visible TabInputSettings 1\n"
@@ -270,6 +271,10 @@ def run_case(options, case, root, failing=None):
             assert [capture["settings_page"] for capture in images] == list(PAGES), [c["settings_page"] for c in images]
             captioned = [control for capture in images for control in capture["controls"] if control["text"]]
             assert captioned and all("text_fits" in control for control in captioned), "a caption carries no fit measurement"
+            # The rows the options program adds land on these pages; the arm measures them the run they appear.
+            result["watched"] = [[capture["settings_page"], control["name"], control["text_fits"], control["text_measure"]]
+                                 for capture in images for control in capture["controls"] if control["name"] in WATCHED]
+            assert all(row[2] for row in result["watched"]), result["watched"]
             # Recorded, not asserted: the stock skin's own content box is what overflows, and it is not this detector's to change.
             result["text_overflow"] = [[capture["settings_page"], control["name"], control["text_measure"]]
                                        for capture in images for control in capture["controls"]
