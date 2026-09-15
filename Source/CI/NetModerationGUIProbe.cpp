@@ -204,6 +204,13 @@ namespace {
 		return Phase::Poll;
 	}
 
+	/// A step the menus can serve on their own. The overlay and the seats panel exist only from the first
+	/// in-match draw, so their steps wait for it; `finish` ends a script that never leaves the menus.
+	bool MenuScopeStep(const Json& step) {
+		const std::string op = step.value("op", "");
+		return op == "menu" || op == "finish" || step.value("scope", "") == "menu";
+	}
+
 	bool Step(const Json& step, Json& observed) {
 		const std::string op = step.at("op");
 		if (op == "wait") {
@@ -337,7 +344,7 @@ namespace {
 		return true;
 	}
 
-	void Process(Phase phase) {
+	void Process(Phase phase, bool menuScopeOnly = false) {
 		try {
 			if (!probe.loaded) {
 				if (phase == Phase::Sim) return;
@@ -349,6 +356,7 @@ namespace {
 			Require(probe.index < probe.script["steps"].size(), "script did not finish explicitly");
 			const auto& step = probe.script["steps"][probe.index];
 			if (StepPhase(step) != phase) return;
+			if (menuScopeOnly && !MenuScopeStep(step)) return;
 			Json observed = Observe();
 			try {
 				if (!Step(step, observed)) return;
@@ -378,6 +386,7 @@ namespace {
 
 void BeforePoll() { Process(Phase::Poll); }
 void AfterDraw() { Process(Phase::Draw); }
+void AfterMenuDraw() { Process(Phase::Draw, true); }
 
 void OnSimTick(uint64_t simUpdateCount) {
 	if (!probe.enabled || probe.done) return;
