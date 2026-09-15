@@ -5,7 +5,9 @@ Quiet and paused capture-on/off pairs compare complete traces. Host presses P to
 pause; Guest presses P to resume. The network UI probe reads the drawn labels and
 their rectangles. Additional arms force the widget's other triggers: the F6 seats
 panel, a wall-clock stall on the guest, and a guest drop that parks the host in
-the reconnect hold. Off never paints the widget (event toasts still appear), Auto
+the reconnect hold; that drop owes the player two toasts under every mode, the
+notice and the wait banner with the reclaim window. Off never paints the widget
+(event toasts still appear), Auto
 paints it on triggers and three seconds past recovery, Always paints it
 throughout. When it is up it must sit in the measured free zone: below 480 rows a
 single-line strip between the funds block and the controller icon, at or above it
@@ -35,8 +37,12 @@ COMPACT_MAX_HEIGHT = 480
 STATUS = "LabelNetMatchStatus"
 STATUS_BOX = "BoxNetMatchStatus"
 TOAST = "LabelNetMatchToastNewest"
+# The toast stack draws oldest first, so the two rows read as the order they were pushed in.
+TOAST_FIRST, TOAST_SECOND = "LabelNetMatchToast0", "LabelNetMatchToast1"
 PAUSED = "Match paused by Host"
 RESUMED = "Match resumed by Guest"
+HOLD_BANNER = re.compile(r"Match paused: waiting for (\S+) to return \((\d+)s left\)")
+HOLD_BANNER_LINE = re.compile(r"^\[net-match\] match paused waiting for (\S+) \((\d+)s left, tick (\d+)\)$")
 WIDGET_FILL = (20, 22, 27)
 WIDGET_BORDER = (59, 65, 83)
 WIDGET_ACCENTS = ((108, 118, 168), (170, 120, 0))
@@ -196,6 +202,12 @@ def label_assert(control, text=None, visible=True):
     return step
 
 
+def text_assert(control, text):
+    """The text alone. A banner that was never pushed leaves its row empty, and the probe reads
+    equals before text_contains, so this is what names the missing content in the failure."""
+    return {"op": "assert_control", "control": control, "equals": {}, "text_contains": text}
+
+
 def probe_script(who, size, arm, mode):
     width, height = size
     compact = height < COMPACT_MAX_HEIGHT
@@ -267,11 +279,21 @@ def probe_script(who, size, arm, mode):
         if who == "Host":
             # The driver drops the guest on this signal, so the host is always past 290 when its link dies.
             steps += [{"op": "wait", "sim_at_least": 290}, {"op": "signal", "name": DROP_SIGNAL}]
+            # The drop notice and the wait banner are toasts, so every mode owes the player both: who
+            # left, and how long the match waits for them. The hold engages with the drop, and the
+            # banner rides the next stall pump, so the two rows are up together.
+            steps += [
+                {"op": "wait", "control": TOAST, "equals": {"visible": True}},
+                label_assert(TOAST_FIRST, "Guest dropped"),
+                {"op": "wait", "renders": 2},
+                text_assert(TOAST_SECOND, "Match paused: waiting for Guest to return ("),
+                text_assert(TOAST_SECOND, "s left)"),
+                label_assert(TOAST_SECOND, "Match paused: waiting for Guest to return"),
+                {"op": "screenshot", "name": f"toast-hold-banner-{mode}-host"},
+            ]
             if mode == "off":
-                # The drop toast is the required banner in Off; the widget stays away.
-                steps += [{"op": "wait", "control": TOAST, "equals": {"visible": True}},
-                          label_assert(TOAST, "dropped"), hidden,
-                          {"op": "screenshot", "name": "widget-hold-off-host"}]
+                # The banners carry the whole recovery story in Off; the widget stays away.
+                steps += [hidden, {"op": "screenshot", "name": "widget-hold-off-host"}]
             else:
                 steps += [
                     {"op": "wait", "control": STATUS, "equals": {"visible": True}},
@@ -519,14 +541,29 @@ def inspect_pair(root, records, size, arm, mode, name):
             hold_reads = [obs for step, obs in observations
                           if step.get("control") == STATUS and obs.get("control", {}).get("visible")
                           and ("WAITING FOR" in obs["control"].get("text", "") or "Waiting for" in obs["control"].get("text", ""))]
-            hold_toast_reads = [obs for step, obs in observations
-                                if step.get("control") == TOAST and "dropped" in obs.get("control", {}).get("text", "")]
+            toast_reads = [obs for step, obs in observations
+                           if step.get("control") in (TOAST, TOAST_FIRST, TOAST_SECOND) and "control" in obs]
+            hold_toast_reads = [obs for obs in toast_reads if "dropped" in obs["control"].get("text", "")]
+            banner_reads = [obs for obs in toast_reads
+                            if obs["control"].get("visible") and HOLD_BANNER.search(obs["control"].get("text", ""))]
+            resumed_toast_reads = [obs for obs in toast_reads if obs["control"].get("text", "").startswith("Match resumed")]
+            banner_lines = [{"line": index, "text": line} for index, line in enumerate(log.splitlines(), 1)
+                            if HOLD_BANNER_LINE.match(line)]
             details["events"].setdefault(who, {})["hold_reads"] = hold_reads
             details["events"][who]["hold_toast_reads"] = hold_toast_reads
+            details["events"][who]["hold_banner_reads"] = banner_reads
+            details["events"][who]["hold_banner_lines"] = banner_lines
             if who == "Host":
+                # Whatever the widget mode: the drop notice, then the wait banner naming the player and
+                # the reclaim window, then the round's own ending once nobody reclaims the seat.
+                checks["Host_hold_toast_seen"] = bool(hold_toast_reads)
+                checks["Host_hold_banner_seen"] = bool(banner_reads)
+                checks["Host_hold_banner_after_drop"] = bool(hold_toast_reads) and bool(banner_reads) and \
+                    hold_toast_reads[0]["at_ms"] <= banner_reads[0]["at_ms"]
+                checks["Host_hold_banner_line"] = len(banner_lines) == 1
+                checks["Host_hold_recovery_or_end"] = bool(resumed_toast_reads) or "lockstep wait: PeerLeft" in log
                 if mode == "off":
                     checks["Host_hold_widget_absent"] = not hold_reads and not widget_rects
-                    checks["Host_hold_toast_seen"] = bool(hold_toast_reads)
                 else:
                     checks["Host_hold_widget_seen"] = bool(hold_reads)
         if arm.get("f6") and who == "Host":
@@ -571,6 +608,9 @@ def main():
     parser.add_argument("--scratch", type=Path, default=SCRATCH)
     parser.add_argument("--port-base", type=int, default=PORT_BASE)
     parser.add_argument("--sizes", default="640x360,960x540", help="viewports to run, in order")
+    # A selection runs one arm against one build; the full matrix is still the default.
+    parser.add_argument("--modes", default=",".join(MODES), help="status modes to run, in order")
+    parser.add_argument("--arms", default=",".join(ARMS), help="arms to run, in order")
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("verification family owns the machine; no driver may start")
@@ -597,10 +637,21 @@ def main():
         if result["pin_before"]["exe_sha256"].lower() != options.exe_sha256.lower():
             raise RuntimeError("the requested executable hash does not match")
         sizes = [tuple(int(part) for part in entry.split("x")) for entry in options.sizes.split(",")]
+        modes = [entry for entry in options.modes.split(",") if entry]
+        arm_names = [entry for entry in options.arms.split(",") if entry]
+        unknown = [name for name in modes if name not in MODES] + [name for name in arm_names if name not in ARMS]
+        if unknown:
+            raise RuntimeError(f"unknown mode or arm: {unknown}")
+        # The capture switch compares two arms of the same pair, so it only runs when both are selected.
+        switches = [(prefix, paused) for prefix, paused in (("", False), ("pause_", True))
+                    if "auto" in modes and f"{prefix}on" in arm_names and f"{prefix}off" in arm_names]
+        expected_checks = len(sizes) * (len(modes) * len(arm_names) + 2 * len(switches))
+        result["selection"] = {"sizes": options.sizes, "modes": modes, "arms": arm_names,
+                               "expected_checks": expected_checks}
         for size in sizes:
             tag = f"{size[0]}x{size[1]}"
-            for mode in MODES:
-                for arm_name in ARMS:
+            for mode in modes:
+                for arm_name in arm_names:
                     name = f"{tag}_{mode}_{arm_name}"
                     pair_root = root / name
                     records = run_pair(repo, pair_root, next(ports), size, ARMS[arm_name], mode, options.timeout, result["pin_before"])
@@ -610,12 +661,12 @@ def main():
                     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
                     if not pair["pass"]:
                         raise RuntimeError(f"{name}: " + ", ".join(key for key, passed in pair["checks"].items() if not passed))
-            for prefix, paused in (("", False), ("pause_", True)):
+            for prefix, paused in switches:
                 for who in ("Host", "Guest"):
                     comparison = compare_capture_switch(root / f"{tag}_auto_{prefix}on", root / f"{tag}_auto_{prefix}off", who, paused)
                     result["capture_switch"][f"{tag}_{prefix}{who}_capture_switch"] = comparison
                     result["checks"][f"{tag}_{prefix}{who}_capture_switch"] = comparison["pass"]
-        result["pass"] = all(result["checks"].values()) and len(result["checks"]) >= 16
+        result["pass"] = all(result["checks"].values()) and len(result["checks"]) == expected_checks
     except Exception as error:
         result["error"] = str(error)
     finally:
