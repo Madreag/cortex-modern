@@ -63,6 +63,41 @@ namespace RTE {
 			});
 		}
 
+		// Sequence-length tracking: a lead announces 1-3 continuation bytes, each 10xxxxxx; overlongs,
+		// surrogates and truncated sequences are refused.
+		bool IsValidUtf8(const std::string& value) {
+			for (size_t index = 0; index < value.size();) {
+				const unsigned char lead = static_cast<unsigned char>(value[index]);
+				size_t need = 0;
+				if (lead < 0x80U) {
+					need = 0;
+				} else if (lead < 0xC2U) {
+					return false;
+				} else if (lead < 0xE0U) {
+					need = 1;
+				} else if (lead < 0xF0U) {
+					need = 2;
+				} else if (lead < 0xF5U) {
+					need = 3;
+				} else {
+					return false;
+				}
+				if (index + 1 + need > value.size()) return false;
+				for (size_t trail = 1; trail <= need; ++trail) {
+					if ((static_cast<unsigned char>(value[index + trail]) & 0xC0U) != 0x80U) return false;
+				}
+				if (need >= 1) {
+					const unsigned char next = static_cast<unsigned char>(value[index + 1]);
+					if (lead == 0xE0U && next < 0xA0U) return false;
+					if (lead == 0xEDU && next >= 0xA0U) return false;
+					if (lead == 0xF0U && next < 0x90U) return false;
+					if (lead == 0xF4U && next >= 0x90U) return false;
+				}
+				index += 1 + need;
+			}
+			return true;
+		}
+
 		bool AppendString(std::vector<uint8_t>& out, const std::string& value, size_t maxBytes, const char* fieldName, NetLobbyError* error) {
 			if (value.size() > maxBytes || value.size() > std::numeric_limits<uint16_t>::max()) {
 				SetError(error, NetLobbyErrorCode::StringTooLong, out.size(), std::string(fieldName) + " exceeds max encoded length");
@@ -77,6 +112,16 @@ namespace RTE {
 			return true;
 		}
 
+		// A display name is the one field a player types freely, so it is also held to valid UTF-8: a
+		// stray byte rides the roster into every diagnostic dump.
+		bool AppendName(std::vector<uint8_t>& out, const std::string& value, const char* fieldName, NetLobbyError* error) {
+			if (!IsValidUtf8(value)) {
+				SetError(error, NetLobbyErrorCode::InvalidString, out.size(), std::string(fieldName) + " is not valid UTF-8");
+				return false;
+			}
+			return AppendString(out, value, NetLobbyProtocol::c_MaxDisplayNameBytes, fieldName, error);
+		}
+
 		void AppendHash(std::vector<uint8_t>& out, const NetHash32& hash) {
 			out.insert(out.end(), hash.begin(), hash.end());
 		}
@@ -86,7 +131,7 @@ namespace RTE {
 			AppendU8(out, player.team);
 			AppendBool(out, player.cpu);
 			AppendU8(out, 0);
-			return AppendString(out, player.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "player.display_name", error);
+			return AppendName(out, player.displayName, "player.display_name", error);
 		}
 
 		class ByteReader {
@@ -175,6 +220,19 @@ namespace RTE {
 				return true;
 			}
 
+			// A remote display name reaches the roster and every diagnostic dump, so it is held to valid UTF-8.
+			bool ReadName(std::string& out, const char* fieldName, NetLobbyError* error) {
+				const size_t lengthOffset = m_Offset;
+				if (!ReadString(out, NetLobbyProtocol::c_MaxDisplayNameBytes, fieldName, error)) {
+					return false;
+				}
+				if (!IsValidUtf8(out)) {
+					SetError(error, NetLobbyErrorCode::InvalidString, lengthOffset, std::string(fieldName) + " is not valid UTF-8");
+					return false;
+				}
+				return true;
+			}
+
 		private:
 			bool CanRead(size_t bytes) const {
 				return bytes <= m_Size && m_Offset <= m_Size - bytes;
@@ -227,7 +285,7 @@ namespace RTE {
 			       ReadOrTruncated(reader.ReadBool(out.cpu), reader, error, "player.cpu") &&
 			       ReadOrTruncated(reader.ReadU8(reserved), reader, error, "player.reserved") &&
 			       (reserved == 0 || (SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 1, "player reserved field must be zero"), false)) &&
-			       reader.ReadString(out.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "player.display_name", error);
+			       reader.ReadName(out.displayName, "player.display_name", error);
 		}
 
 		bool EncodeConfig(const NetMatchConfig& config, std::vector<uint8_t>& out, NetLobbyError* error) {
@@ -376,7 +434,7 @@ namespace RTE {
 			AppendU16LE(out, payload.maxProtocolVersion);
 			AppendU8(out, payload.peerId);
 			AppendU8(out, 0);
-			if (!AppendString(out, payload.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "display_name", error) ||
+			if (!AppendName(out, payload.displayName, "display_name", error) ||
 			    !AppendString(out, payload.desiredRole, NetLobbyProtocol::c_MaxShortTextBytes, "desired_role", error)) {
 				return false;
 			}
@@ -389,7 +447,7 @@ namespace RTE {
 			AppendU16LE(out, 0);
 			AppendU32LE(out, payload.pingMs);
 			AppendU32LE(out, payload.jitterMs);
-			if (!AppendString(out, payload.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "display_name", error) ||
+			if (!AppendName(out, payload.displayName, "display_name", error) ||
 			    !AppendString(out, payload.platform, NetLobbyProtocol::c_MaxShortTextBytes, "platform", error)) return false;
 			AppendBool(out, payload.connected);
 			return true;
@@ -479,7 +537,7 @@ namespace RTE {
 						SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 1, "reserved field must be zero");
 						return false;
 					}
-					if (!reader.ReadString(payload.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "display_name", error) ||
+					if (!reader.ReadName(payload.displayName, "display_name", error) ||
 					    !reader.ReadString(payload.desiredRole, NetLobbyProtocol::c_MaxShortTextBytes, "desired_role", error)) return false;
 					out = std::move(payload);
 					return true;
@@ -496,7 +554,7 @@ namespace RTE {
 						SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 10, "reserved field must be zero");
 						return false;
 					}
-					if (!reader.ReadString(payload.displayName, NetLobbyProtocol::c_MaxDisplayNameBytes, "display_name", error) ||
+					if (!reader.ReadName(payload.displayName, "display_name", error) ||
 					    !reader.ReadString(payload.platform, NetLobbyProtocol::c_MaxShortTextBytes, "platform", error) ||
 					    !ReadOrTruncated(reader.ReadBool(payload.connected), reader, error, "connected")) return false;
 					out = std::move(payload);

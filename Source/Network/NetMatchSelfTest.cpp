@@ -258,6 +258,87 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestDisplayNameUtf8(std::string* error) {
+			// Independent checks accumulate so the entry refusal and the report dump cannot hide each other.
+			std::vector<std::string> failures;
+			const std::array<std::pair<const char*, std::string>, 4> badNames{{
+			    {"truncated two-byte lead", std::string("caf\xC3")},
+			    {"lone continuation byte", std::string("\x80" "abc")},
+			    {"byte that is never a lead", std::string("na\xFF\xFE")},
+			    {"encoded surrogate", std::string("na\xED\xA0\x80")},
+			}};
+			for (const auto& badName: badNames) {
+				NetMatchConfig config = MakeConfig();
+				config.players[0].displayName = badName.second;
+				std::string reason;
+				if (NetMatchConfigUtil::ValidateLocalAlpha(config, &reason)) {
+					failures.emplace_back(std::string("match config validation accepted a display name with a ") + badName.first);
+				} else if (reason != "player display_name is not valid UTF-8") {
+					failures.emplace_back(std::string("a display name with a ") + badName.first + " was refused as: " + reason);
+				}
+				std::vector<uint8_t> bytes;
+				NetLobbyError encodeError;
+				if (NetLobbyProtocol::Encode({NetLobbyHello{1, 1, 2, badName.second, "client"}}, bytes, &encodeError)) {
+					failures.emplace_back(std::string("the lobby hello encoded a display name with a ") + badName.first);
+				} else if (encodeError.message != "display_name is not valid UTF-8") {
+					failures.emplace_back(std::string("the lobby hello refused a ") + badName.first + " as: " + encodeError.message);
+				}
+			}
+			// The joiner writes its own bytes, so the refusal has to hold on the reading side too.
+			std::vector<uint8_t> helloBytes;
+			NetLobbyError helloError;
+			if (!NetLobbyProtocol::Encode({NetLobbyHello{1, 1, 2, "Player", "client"}}, helloBytes, &helloError)) {
+				*error = "could not encode a plain lobby hello: " + helloError.message;
+				return false;
+			}
+			const size_t nameOffset = NetLobbyProtocol::c_HeaderBytes + 8;
+			if (helloBytes.size() <= nameOffset || helloBytes[nameOffset] != 'P') {
+				*error = "the lobby hello display name is not where this arm patches it";
+				return false;
+			}
+			helloBytes[nameOffset] = 0xC3;
+			const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(helloBytes);
+			if (decoded.ok) {
+				failures.emplace_back("the lobby hello decoded a display name with a truncated two-byte lead");
+			} else if (decoded.error.message != "display_name is not valid UTF-8") {
+				failures.emplace_back("the decoded bad display name was refused as: " + decoded.error.message);
+			}
+			// The roster merge copies a session-handshake name into the config without revalidating it,
+			// so the report dump has to survive a byte the lobby boundary never saw.
+			NetMatchConfig smuggled = MakeConfig();
+			smuggled.players[0].displayName = std::string("Bad\xC3" "Name");
+			try {
+				const std::string dumped = NetMatchConfigUtil::BuildReportJson(smuggled);
+				if (nlohmann::json::parse(dumped, nullptr, false).is_discarded()) {
+					failures.emplace_back("the match config report of a smuggled name did not parse back");
+				}
+			} catch (const std::exception& thrown) {
+				failures.emplace_back(std::string("the match config report dump threw on a smuggled name: ") + thrown.what());
+			}
+			// Multi-byte names players actually type stay acceptable.
+			NetMatchConfig good = MakeConfig();
+			good.players[0].displayName = std::string("caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC");
+			std::string goodReason;
+			if (!NetMatchConfigUtil::ValidateLocalAlpha(good, &goodReason)) {
+				failures.emplace_back("validation refused a valid multi-byte UTF-8 display name: " + goodReason);
+			}
+			std::vector<uint8_t> goodBytes;
+			NetLobbyError goodError;
+			if (!NetLobbyProtocol::Encode({NetLobbyHello{1, 1, 2, good.players[0].displayName, "client"}}, goodBytes, &goodError)) {
+				failures.emplace_back("the lobby hello refused a valid multi-byte UTF-8 display name: " + goodError.message);
+			} else if (!NetLobbyProtocol::Decode(goodBytes).ok) {
+				failures.emplace_back("the lobby hello did not decode a valid multi-byte UTF-8 display name");
+			}
+			if (failures.empty()) {
+				return true;
+			}
+			*error = failures.front();
+			for (size_t index = 1; index < failures.size(); ++index) {
+				*error += " | " + failures[index];
+			}
+			return false;
+		}
+
 		bool TestMatchConfigDedicated(std::string* error) {
 			NetMatchConfig dedicated = MakeConfig();
 			dedicated.peerCount = 3;
@@ -7056,6 +7137,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
+		if (!TestDisplayNameUtf8(&error)) return fail(error);
 		if (!TestMatchConfigDedicated(&error)) return fail(error);
 		if (!TestCPURosterRequests(&error)) return fail(error);
 		if (!TestCPURosterValidation(&error)) return fail(error);
