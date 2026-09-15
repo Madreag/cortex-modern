@@ -749,6 +749,8 @@ namespace RTE {
 	private:
 		/// The peer that drives a seat in the agreed roster, or 0 when no peer holds it.
 		static uint8_t LockstepSeatPeerId(int player);
+		/// The seat holder's display name from the agreed roster, for the match's own banners.
+		static std::string LockstepSeatName(int player);
 		/// Makes every brain already standing in the scene its seat's resident, identically on every peer, so
 		/// a local editor's residence test can never take an actor out of one peer's sim alone.
 		void SeedLockstepResidentBrains();

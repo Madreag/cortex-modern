@@ -1,5 +1,7 @@
 #include "NetModerationGUI.h"
 
+#include "ActivityMan.h"
+#include "GameActivity.h"
 #include "NetMatchService.h"
 #include "ScenarioRunner.h"
 #include "WindowMan.h"
@@ -260,12 +262,9 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	const int width = std::min(252, backbuffer->w - 16);
 	const int x = backbuffer->w - width - 8;
 	constexpr int y = 32;
-	constexpr int height = 76;
-	m_NetStatusBox->Move(x, y);
-	if (m_NetStatusBox->GetWidth() != width) m_NetStatusBox->Resize(width, height);
 	m_NetStatusBox->SetVisible(true);
 	m_NetStatus->SetFont(font);
-	m_NetStatus->Resize(width - 12, height - 12);
+	m_NetStatus->Resize(width - 12, backbuffer->h);
 	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
 		m_MatchDelayFrames = ScenarioRunner::GetLockstepLocalInputDelay();
 		m_BaseDelayFrames = ScenarioRunner::GetLockstepInputDelayFrames();
@@ -300,8 +299,17 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	std::string holdName;
 	uint32_t holdSeconds = 0;
 	bool waiting = false;
+	std::string placementNames;
+	int placed = 0, seats = 0;
+	const auto* setupActivity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
 	if (g_NetMatchService.IsMatchResyncing()) {
 		text += "\nRESYNCING MATCH";
+		waiting = true;
+	} else if (setupActivity && setupActivity->DescribeLockstepPlacementWait(placementNames, placed, seats)) {
+		// The world is held while every seat places its brain, so say who is still being waited on.
+		const int room = width - 12 - font->CalculateWidth("Waiting for  to place their brains");
+		text += placementNames.empty() ? "\nAll brains placed" : "\nWaiting for " + FitLine(font, placementNames, room) + " to place their brains";
+		text += "\n" + std::to_string(placed) + " of " + std::to_string(seats) + " placed";
 		waiting = true;
 	} else if (ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds)) {
 		const int room = width - 12 - font->CalculateWidth("Waiting for  to reconnect");
@@ -317,6 +325,11 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		text += "\nLIVE";
 	}
 	m_NetStatus->SetText(text);
+	// The strip grows for a state that needs more rows than the four metrics ones.
+	const int height = std::max(76, m_NetStatus->GetTextHeight() + 12);
+	m_NetStatusBox->Move(x, y);
+	if (m_NetStatusBox->GetWidth() != width || m_NetStatusBox->GetHeight() != height) m_NetStatusBox->Resize(width, height);
+	m_NetStatus->Resize(width - 12, height - 12);
 	AllegroBitmap bitmap(backbuffer);
 	rectfill(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(20, 22, 27, 255));
 	rect(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(59, 65, 83, 255));
