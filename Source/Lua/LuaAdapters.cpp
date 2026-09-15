@@ -387,7 +387,35 @@ void LuaAdaptersMovableObject::SendMessage1(MovableObject* luaSelfObject, const 
 
 void LuaAdaptersMovableObject::SendMessage2(MovableObject* luaSelfObject, const std::string& message, luabind::object context) {
 	LuabindObjectWrapper wrapper(&context, "", false);
-	luaSelfObject->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {message}, {&wrapper});
+	uint8_t contextKind = NetGameAIScriptMessage::None;
+	double number = 0.0;
+	int64_t contextUID = 0;
+	std::string text;
+	switch (context.is_valid() ? luabind::type(context) : LUA_TNIL) {
+		case LUA_TNIL:
+			break;
+		case LUA_TBOOLEAN:
+			contextKind = NetGameAIScriptMessage::Boolean;
+			number = luabind::object_cast<bool>(context) ? 1.0 : 0.0;
+			break;
+		case LUA_TNUMBER:
+			contextKind = NetGameAIScriptMessage::Number;
+			number = luabind::object_cast<double>(context);
+			break;
+		case LUA_TSTRING:
+			contextKind = NetGameAIScriptMessage::Text;
+			text = luabind::object_cast<std::string>(context);
+			break;
+		default:
+			// A live object is named by its identity on every peer; a table or a function is not.
+			contextKind = NetGameAIScriptMessage::ContextCount;
+			if (boost::optional<MovableObject*> carried = luabind::object_cast_nothrow<MovableObject*>(context); carried && *carried && g_MovableMan.ValidMO(*carried)) {
+				contextKind = NetGameAIScriptMessage::Object;
+				contextUID = static_cast<int64_t>((*carried)->GetUniqueID());
+			}
+			break;
+	}
+	luaSelfObject->SendScriptedMessage(message, contextKind, number, contextUID, text, &wrapper);
 }
 
 // Every peer delivers the AI pass's message here, at the committed tick, so a receiver script that runs

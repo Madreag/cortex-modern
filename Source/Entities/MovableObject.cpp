@@ -31,6 +31,7 @@
 #include "System.h"
 #include "PostProcessMan.h"
 
+#include "NetGameCommand.h"
 #include "Base64/base64.h"
 #include "tracy/Tracy.hpp"
 
@@ -1513,6 +1514,14 @@ int MovableObject::UpdateScripts() {
 	}
 
 	return status;
+}
+
+void MovableObject::SendScriptedMessage(const std::string& message, uint8_t context, double number, int64_t contextUID, const std::string& text, LuabindObjectWrapper* directContext) {
+	if (directContext) {
+		RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {message}, {directContext});
+	} else {
+		RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {message});
+	}
 }
 
 bool MovableObject::InLocalAIValueDomain() {
