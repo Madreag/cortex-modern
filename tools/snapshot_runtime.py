@@ -168,10 +168,12 @@ SCHEMAS["GameActivity1"] = [
     "fog_switch_enabled deploy_switch_enabled gold_switch_enabled clear_orbit_switch_enabled buy_enabled"),
     ("lz_cursor_width", array(4)), ("delivery_delay", "n"), *fields("cursor_timer game_timer game_over_timer", TIMER),
     *fields("game_over_period winner_team"), ("network_names", array(4, "s")),
-    # The synchronized setup editor's shared state: the id base, the seed pass and each seat's committed brain.
+    ("player_ui", array(4, structure(*fields("buy editor inventory banner_red banner_yellow", "o"))))]
+# v3 adds the synchronized setup editor's shared state: the id base, the seed pass and each seat's committed brain.
+SCHEMAS["GameActivity3"] = [*SCHEMAS["GameActivity1"][:-1],
     *fields("lockstep_placement_uid_base lockstep_placement_seeded"),
     ("lockstep_seat_brains", array(4, structure(*fields("team player pos_x pos_y"), *fields("class preset module", "s")))),
-    ("player_ui", array(4, structure(*fields("buy editor inventory banner_red banner_yellow", "o"))))]
+    SCHEMAS["GameActivity1"][-1]]
 SCHEMAS["GameActivity2"] = [("values", "o"), ("players", array(4, structure(("marked_actor", "n"),
     ("purchases", sequence(array(3, "s"))), ("strategic_menu", "s")))),
     ("deliveries", array(4, sequence(structure(*fields("ordered_by_player"), ("landing_zone", VECTOR),
@@ -602,7 +604,7 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
                 mask_seat("player_screen", seat)
                 for key in ("death_timer", "message_timer"):
                     mask_seat(key, seat, "sim_start")
-        if version == "GameActivity1":
+        if version in ("GameActivity1", "GameActivity3"):
             if local_seat is None:
                 for key in ("observation_target", "death_view_target", "actor_cursor", "landing_zone"):
                     result[key][0] = "LOCAL"
@@ -740,6 +742,16 @@ def selftest():
         check("unschemad_version_refused", False)
     except ValueError as error:
         check("unschemad_version_refused", "Controller4" in str(error))
+    # A record that grew keeps the older reader honest: the tag is the gate, and the payload does not fit.
+    grown = _payload("GameActivity3")
+    try:
+        decode(grown.replace(b"13 GameActivity3", b"13 GameActivity1", 1))
+        check("game_activity3_refused_as_game_activity1", False)
+    except ValueError as error:
+        check("game_activity3_refused_as_game_activity1", "trailing" in str(error) or "invalid runtime checkpoint" in str(error))
+    check("game_activity3_decodes", decode(grown)["version"] == "GameActivity3" and
+          "lockstep_seat_brains" in decode(grown) and len(decode(grown)["lockstep_seat_brains"]) == 4)
+
     unclassified = b"9 NoSchema1 0 "
     check("unclassified_tag_stays_raw", decode(unclassified) == unclassified)
     return all(checks)
