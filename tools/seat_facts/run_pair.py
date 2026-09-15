@@ -66,7 +66,9 @@ def main():
     spec = importlib.util.spec_from_file_location("seat_pair_harness", args.harness)
     harness = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(harness)
-    harness.REPO, harness.EXE = REPO, (args.exe.resolve() if args.exe else REPO / "Cortex Command.exe")
+    # A retained executable runs from its own directory, which carries the DLLs and a Data junction.
+    exe = args.exe.resolve() if args.exe else REPO / "Cortex Command.exe"
+    harness.REPO, harness.EXE = exe.parent, exe
     harness.ROOT, harness.OUT = args.out, args.out / "e2e"
     lane = copy.deepcopy(harness.LANES["snapshot_p5"])
     lane["port"] = args.port

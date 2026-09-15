@@ -10144,13 +10144,16 @@ namespace RTE {
 			if (!match || !match->ConfigureLockstepPlayers()) {
 				return finish("the match roster did not reach the activity");
 			}
+			// Every check below is independent, so one run names every defect instead of the first.
+			std::string failures;
+			const auto note = [&](const std::string& detail) { failures += (failures.empty() ? "" : "; ") + detail; };
 			GameActivity ownSeats;
 			ownSeats.RefreshLockstepLocalPlayers();
 			for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
 				if (ownSeats.LocalInputOfPlayer(seat) != seat) {
-					return finish(("a live match remapped an activity that takes its seats from itself: seat " + std::to_string(seat) +
-					               " input=" + std::to_string(ownSeats.LocalInputOfPlayer(seat)))
-					                  .c_str());
+					note("a live match remapped an activity that takes its seats from itself: seat " + std::to_string(seat) +
+					     " input=" + std::to_string(ownSeats.LocalInputOfPlayer(seat)));
+					break;
 				}
 			}
 			const auto seatUI = [&](const char* when) {
@@ -10166,31 +10169,31 @@ namespace RTE {
 				return detail.empty() ? detail : detail + " " + when;
 			};
 			if (const std::string detail = seatUI("during the match"); !detail.empty()) {
-				return finish(detail.c_str());
+				note(detail);
 			}
 			if (match->LocalInputOfPlayer(Players::PlayerOne) != Players::NoPlayer) {
-				return finish("the roster did not leave seat 0 to the host");
+				note("the roster did not leave seat 0 to the host");
 			}
 			// The clean match end: NetMatchService::FinishMatch drops the coordinator, ActivityMan keeps updating.
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			if (match->LocalInputOfPlayer(Players::PlayerOne) != Players::NoPlayer || match->IsLocalHumanSeat(Players::PlayerOne)) {
-				return finish(("the match end handed a seat another peer played to this machine: input=" + std::to_string(match->LocalInputOfPlayer(Players::PlayerOne)) +
-				               " local_human=" + std::to_string(match->IsLocalHumanSeat(Players::PlayerOne) ? 1 : 0) +
-				               " - GameActivity::Update's per-seat loop then runs for a seat whose menus were never built")
-				                  .c_str());
+				note("the match end handed a seat another peer played to this machine: input=" + std::to_string(match->LocalInputOfPlayer(Players::PlayerOne)) +
+				     " local_human=" + std::to_string(match->IsLocalHumanSeat(Players::PlayerOne) ? 1 : 0) +
+				     " - GameActivity::Update's per-seat loop then runs for a seat whose menus were never built");
 			}
 			if (const std::string detail = seatUI("after the match end"); !detail.empty()) {
-				return finish(detail.c_str());
+				note(detail);
 			}
 			if (match->LocalInputOfPlayer(Players::PlayerTwo) != Players::PlayerOne) {
-				return finish("this peer's own seat lost its input slot at the match end");
+				note("this peer's own seat lost its input slot at the match end");
 			}
 			for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
 				if (ownSeats.LocalInputOfPlayer(seat) != seat) {
-					return finish(("an activity that takes its seats from itself lost one at the match end: seat " + std::to_string(seat)).c_str());
+					note("an activity that takes its seats from itself lost one at the match end: seat " + std::to_string(seat));
+					break;
 				}
 			}
-			return finish(nullptr);
+			return finish(failures.empty() ? nullptr : failures.c_str());
 		}
 
 		bool TestSimultaneousClaimTieBreak(std::string* error) {
