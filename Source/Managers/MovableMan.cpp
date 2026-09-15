@@ -660,6 +660,9 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 					case NetGameAIOrder::SetMOMoveTarget:
 						actor->SetMOMoveTarget(order->targetUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order->targetUID)) : nullptr);
 						break;
+					case NetGameAIOrder::SetAlarmPoint:
+						actor->AlarmPoint(Vector(order->x, order->y));
+						break;
 					default:
 						break;
 				}
@@ -791,7 +794,8 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				std::cout << "[net-match] AI gib command target not found: UID " << gib->objectUID << std::endl;
 				continue;
 			}
-			gibbed->GibThis();
+			MovableObject* ignored = gib->ignoreUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(gib->ignoreUID)) : nullptr;
+			gibbed->GibThis(Vector(gib->impulseX, gib->impulseY), ignored);
 		} else if (const NetGameSoundOp* sound = std::get_if<NetGameSoundOp>(&command.payload)) {
 			// The AI's sound call runs here on every peer; only the peer driving the actor may issue it.
 			Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(sound->actorUID)));

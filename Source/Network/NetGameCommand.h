@@ -221,6 +221,7 @@ namespace RTE {
 			DisbandSquad = 4,
 			PopWaypoint = 5,
 			SetMOMoveTarget = 6,
+			SetAlarmPoint = 7,
 		};
 
 		int64_t actorUID = 0;
@@ -277,7 +278,10 @@ namespace RTE {
 	struct NetGameAIGib {
 		int64_t writerUID = 0; //!< The AI actor whose pass made the call; the authority for it.
 		int64_t objectUID = 0; //!< What to gib.
+		int64_t ignoreUID = 0; //!< What the gibs may not hit; 0 is nothing.
 		int32_t team = 0;
+		float impulseX = 0.0F;
+		float impulseY = 0.0F;
 
 		bool operator==(const NetGameAIGib&) const = default;
 	};
