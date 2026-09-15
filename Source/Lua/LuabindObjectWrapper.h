@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -41,6 +42,21 @@ namespace RTE {
 
 		/// Destructor method used to clean up a LuabindObjectWrapper object before deletion from system memory.
 		~LuabindObjectWrapper();
+#pragma endregion
+
+#pragma region Sim Thread Deletion
+		/// Marks the calling thread as the one every Lua-owned engine object's destructor may run on.
+		static void SetSimThread();
+
+		/// Points a Lua state's instance metatables at the collector that hands Lua-owned engine objects to the sim thread.
+		/// @param luaState The state to install into, after luabind::open.
+		static void InstallSimThreadDeletion(lua_State* luaState);
+
+		/// The number of Lua-owned engine objects destructed on the sim thread.
+		static uint64_t SimThreadDeletionCount();
+
+		/// The number of Lua-owned engine objects whose destructor ran somewhere other than the sim thread.
+		static uint64_t OffSimThreadDeletionCount();
 #pragma endregion
 
 		/// Attempts to copy a luabind object into another state.
