@@ -468,6 +468,8 @@ void Activity::ConfigureHumanRoster(const NetMatchConfig& config, uint8_t localP
 }
 
 void Activity::RefreshLockstepLocalPlayers() {
+	// An activity whose seats are its own keeps them; only a shared roster is remapped from the live match.
+	if (!m_SharedPlayerSeats) return;
 	if (const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig()) {
 		MapLocalPlayers(*config, ScenarioRunner::GetLockstepLocalPeerId());
 	}
