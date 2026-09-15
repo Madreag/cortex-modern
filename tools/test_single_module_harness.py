@@ -57,17 +57,28 @@ def run_case(repo: Path, out: Path, timeout: float, extra_args: list[str]) -> di
         "userdata_index": str(index_path),
         "userdata_index_exists": index_path.is_file(),
         "tests_rte_load_lines": tests_load_count(runtime / "LogLoading.txt"),
+        "log_text": combined,
     }
 
 
 def score_detect(case: dict) -> dict:
-    ok = (not case["error_line_present"]) and case["userdata_index_exists"]
+    from run_selftests import score_selftest
+    process = score_selftest(case.get("log_text") or "", case.get("exit_code"), case.get("timed_out") is True)
+    ok = (
+        (not case["error_line_present"])
+        and case["userdata_index_exists"]
+        and process["exit_code"] == 0
+        and process["timed_out"] is False
+        and not process["fatal"]
+    )
     if case["error_line_present"] and not case["userdata_index_exists"]:
         reason = "ERROR line present and UserSavedGames Index.ini absent"
     elif case["error_line_present"]:
         reason = "ERROR line present"
     elif not case["userdata_index_exists"]:
         reason = "UserSavedGames Index.ini absent"
+    elif process["exit_code"] != 0 or process["timed_out"] or process["fatal"]:
+        reason = process["reason"]
     else:
         reason = ""
     return {
@@ -76,7 +87,7 @@ def score_detect(case: dict) -> dict:
         "timed_out": case.get("timed_out"),
         "pass_lines": 1 if ok else 0,
         "fail_lines": [] if ok else [reason],
-        "fatal": [],
+        "fatal": process["fatal"],
         "reason": reason,
     }
 
