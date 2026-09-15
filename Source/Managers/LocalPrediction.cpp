@@ -38,6 +38,7 @@ namespace RTE {
 	std::vector<MovableObject*> LocalPrediction::s_TakenResidents;
 	LocalPrediction::Outcome LocalPrediction::s_LastOutcome;
 	bool LocalPrediction::s_Rendering = false;
+	bool LocalPrediction::s_RenderScriptsWereFrozen = false;
 	int LocalPrediction::s_Override = -1;
 	int LocalPrediction::s_DepthOverride = 0;
 	long long LocalPrediction::s_PreviewedTick = -1;
@@ -341,6 +342,8 @@ namespace RTE {
 		if (s_Rendering || s_Previews.empty()) {
 			return;
 		}
+		s_RenderScriptsWereFrozen = LuaMan::AreScriptsFrozen();
+		LuaMan::SetScriptsFrozen(true);
 		Trace("render begin");
 		g_MovableMan.WaitForActorsSeeTask();
 		g_MovableMan.CompleteQueuedMOIDDrawings();
@@ -385,6 +388,7 @@ namespace RTE {
 				g_MovableMan.HideForRender(resident, false);
 			}
 			s_Rendering = false;
+			LuaMan::SetScriptsFrozen(s_RenderScriptsWereFrozen);
 		}
 	}
 

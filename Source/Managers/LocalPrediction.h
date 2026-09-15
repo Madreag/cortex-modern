@@ -70,6 +70,7 @@ namespace RTE {
 		static std::vector<MovableObject*> s_TakenResidents;
 		static Outcome s_LastOutcome;
 		static bool s_Rendering;
+		static bool s_RenderScriptsWereFrozen;
 		static int s_Override;
 		static int s_DepthOverride;
 		static long long s_PreviewedTick;
