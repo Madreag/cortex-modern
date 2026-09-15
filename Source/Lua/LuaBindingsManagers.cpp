@@ -88,6 +88,9 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, FrameMan) {
 
 	    .property("PlayerScreenWidth", &FrameMan::GetPlayerScreenWidth)
 	    .property("PlayerScreenHeight", &FrameMan::GetPlayerScreenHeight)
+	    // Simulation reads these instead: this machine's window must not steer shared state.
+	    .property("SimScreenWidth", &FrameMan::GetSimScreenWidth)
+	    .property("SimScreenHeight", &FrameMan::GetSimScreenHeight)
 	    .property("ScreenCount", &FrameMan::GetScreenCount)
 	    .property("ResolutionMultiplier", &FrameMan::GetResolutionMultiplier)
 
