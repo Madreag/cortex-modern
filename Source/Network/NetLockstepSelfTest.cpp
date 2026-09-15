@@ -17,12 +17,16 @@
 #include "AudioMan.h"
 #include "CameraMan.h"
 #include "Controller.h"
+#include "FrameMan.h"
 #include "GUISound.h"
 #include "MovableMan.h"
 #include "SoundContainer.h"
 #include "NetActorOwnership.h"
 #include "MovableObject.h"
+#include "PresetMan.h"
+#include "Scene.h"
 #include "SceneMan.h"
+#include "SLTerrain.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
 #include "WindowMan.h"
@@ -9788,6 +9792,23 @@ namespace RTE {
 			}
 		}
 
+		// A terrain with bounds but no GL texture, which SceneLayer::Create would need a window for.
+		struct CameraBoundsTerrain : SLTerrain {
+			CameraBoundsTerrain(int width, int height) {
+				m_MainBitmap = create_bitmap_ex(8, width, height);
+				m_MainBitmapOwned = true;
+				m_WrapX = false;
+				m_WrapY = false;
+			}
+		};
+
+		// The current Scene CameraMan reads when bindings scroll an active human seat's screen.
+		Scene* MakeCameraBoundsScene() {
+			Scene* scene = new Scene();
+			scene->Create(new CameraBoundsTerrain(640, 480));
+			return scene;
+		}
+
 		std::string ControlTuple(Actor& actor, uint8_t owner) {
 			const Controller* controller = actor.GetController();
 			return "{input_mode=" + std::to_string(static_cast<int>(controller->GetInputMode())) +
@@ -10580,6 +10601,8 @@ namespace RTE {
 		bool TestDepartedActorsGoToAI(NetActorOwnershipPolicy policy, bool dropped, bool teammate, std::string* error) {
 			EnsureSwitchTestManagers();
 			if (!CameraMan::IsConstructed()) CameraMan::Construct();
+			if (!PresetMan::IsConstructed()) PresetMan::Construct(); // FrameMan's palette file resolves a module path.
+			if (!FrameMan::IsConstructed()) FrameMan::Construct(); // CameraMan bounds a screen's scroll against its frame buffer.
 			const std::string name = std::string("leave_ai_takeover policy=") +
 				(policy == NetActorOwnershipPolicy::TeamOwner ? "team" : "host_cpu") + (dropped ? " departure=drop" : " departure=leave") +
 				(teammate ? " teammate=1" : " teammate=0");
@@ -10587,11 +10610,13 @@ namespace RTE {
 			const uint16_t delay = 2;
 			LoopbackTransport hostT, leaverT, survivorT;
 			NetLockstepCoordinator host, leaver, survivor;
+			SceneMan::SceneSetAside fixtureScene; // Owns the arm's Scene once it is out of SceneMan again.
 			const auto finish = [&](const std::string& message) {
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
 				NetActorOwnership::ClearSeededOwners();
 				std::unique_ptr<Activity> empty;
 				g_ActivityMan.SwapCheckpointActivity(empty);
+				g_SceneMan.ReinstateScene(fixtureScene); // Takes the arm's Scene back out of SceneMan.
 				std::cout << "[net-lockstep-selftest] " << (message.empty() ? "PASS " : "FAIL ") << name;
 				if (!message.empty()) std::cout << ": " << message;
 				std::cout << std::endl;
@@ -10677,6 +10702,8 @@ namespace RTE {
 				bindings.players[player].controlledUID = actors[player]->GetUniqueID();
 			}
 			ScenarioRunner::SetLockstepCoordinator(&leaver);
+			fixtureScene.scene = MakeCameraBoundsScene();
+			g_SceneMan.ReinstateScene(fixtureScene); // Swaps the arm's Scene in; finish() swaps it back out.
 			if (!g_ActivityMan.GetActivity()->ApplyNetPlayerBindings(bindings)) return finish("initial bindings refused");
 			g_ActivityMan.GetActivity()->CaptureNetPlayerBindings(bindings);
 			bool passed = true;
