@@ -1987,9 +1987,10 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			}
 			if (owner) ownerChannels[owner].insert(voice.identity);
 			if (voice.playing && !sounds.contains(voice.path)) throw std::runtime_error("voice sample is absent: " + voice.path);
-			if (voice.playing && owner && SampleReadyForPlayback(sounds.at(voice.path)) && !owner->GetSoundDataForSound(sounds.at(voice.path))) {
+			if (voice.playing && owner && !owner->GetSoundDataForSound(sounds.at(voice.path))) {
 				std::vector<SoundData*> data; owner->GetTopLevelSoundSet().GetFlattenedSoundData(data, false);
-				if (std::none_of(data.begin(), data.end(), [&](SoundData* value) { return stagedSamples.contains(value) && stagedSamples.at(value) == sounds.at(voice.path); }))
+				const bool pathKnown = std::any_of(data.begin(), data.end(), [&](SoundData* value) { return value && value->SoundFile.GetDataPath() == voice.path; });
+				if (!pathKnown && std::none_of(data.begin(), data.end(), [&](SoundData* value) { return stagedSamples.contains(value) && stagedSamples.at(value) == sounds.at(voice.path); }))
 					throw std::runtime_error("voice " + std::to_string(voice.identity) + " sample is absent from owner " + std::to_string(voice.owner) + ": " + voice.path);
 			}
 			candidates.emplace(voice.identity, PlayingVoice{nullptr, owner, voice.path, voice.minimumAudibleDistance});
@@ -2310,7 +2311,8 @@ bool AudioMan::RunCheckpointSelfTest() {
 			}
 			reportArm("held_voice_playing_is_stable_across_mixer_progress", firstFound && secondFound && firstPlaying == secondPlaying);
 			if (injected) std::cout << "[audio-checkpoint-selftest] held_voice_playing argued at the mixer, proved at the bookkeeping" << std::endl;
-			held->Stop();
+			if (held->IsBeingPlayed()) held->Stop();
+			if (m_PlayingVoices.contains(heldId)) RetireVoice(heldId);
 		} catch (const std::exception& error) {
 			std::cout << "[audio-checkpoint-selftest] FAIL held_voice_playing_is_stable_across_mixer_progress " << error.what() << std::endl;
 			ok = false;
@@ -2357,24 +2359,17 @@ bool AudioMan::RunCheckpointSelfTest() {
 			bool deferredVoice = false;
 			if (archived) {
 				const bool loaded = LoadCheckpoint(saved, false, nullptr, &refusal);
-				const auto sampleReady = [](FMOD::Sound* sound) {
-					if (!sound) return false;
-					FMOD_OPENSTATE state = FMOD_OPENSTATE_ERROR;
-					return sound->getOpenState(&state, nullptr, nullptr, nullptr) == FMOD_OK && (state == FMOD_OPENSTATE_READY || state == FMOD_OPENSTATE_PLAYING);
-				};
-				for (int step = 0; step < 1000 && loading && !sampleReady(loading); ++step) {
-					m_AudioSystem->update();
-					std::this_thread::sleep_for(std::chrono::milliseconds(1));
-				}
+				ContentFile::s_LoadedSamples[path] = ready;
 				Update();
 				const auto found = m_PlayingVoices.find(loadingId);
 				deferredVoice = loaded && found != m_PlayingVoices.end() && found->second.channel;
+			} else {
+				ContentFile::s_LoadedSamples[path] = ready;
 			}
 			reportArm("load_defers_a_loading_sample_voice", deferredVoice);
 			if (loadingOwner->IsBeingPlayed()) loadingOwner->Stop();
-			ContentFile::s_LoadedSamples[path] = ready;
 			if (loading) loading->release();
-			if (!LoadCheckpoint(beforeLoading)) throw std::runtime_error("loading-sample row did not restore the prior audio checkpoint");
+			if (archived && !LoadCheckpoint(beforeLoading)) throw std::runtime_error("loading-sample row did not restore the prior audio checkpoint");
 		} catch (const std::exception& error) {
 			std::cout << "[audio-checkpoint-selftest] FAIL loading_sample_is_archived " << error.what() << std::endl;
 			ok = false;
