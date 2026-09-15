@@ -430,7 +430,7 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 21;
+		static constexpr uint16_t c_Version = 22;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
@@ -443,10 +443,13 @@ namespace RTE {
 		// Version 19 carries host hold resolutions (Reclaimed / Substituted / Expired) on the stop wire.
 		// Version 20 carries local-AI number and string value observations next to the sound readings.
 		// Version 21 appends writerUID on AIOrder; v<=20 still decodes with writerUID 0.
+		// Version 22 carries the AI pass's script messages and gibs as commands, and the AIOrder op that
+		// sets a move target; a peer below it never sent them, so it refuses them instead of guessing.
 		static constexpr uint16_t c_HoldResolutionVersion = 19;
 		static constexpr uint16_t c_PlayerBindingsVersion = 18;
 		static constexpr uint16_t c_ValueObservationVersion = 20;
 		static constexpr uint16_t c_AIOrderWriterVersion = 21;
+		static constexpr uint16_t c_AIPassEventVersion = 22;
 		static constexpr uint16_t c_SeatSnapshotVersion = 17;
 		static constexpr uint16_t c_MinVersion = 8;
 		static constexpr uint16_t c_RoundVersion = 11;

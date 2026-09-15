@@ -5,8 +5,10 @@
 #include "LuaMan.h"
 
 #include "lj_obj.h"
+#include "NetGameCommand.h"
 
 #include <atomic>
+#include <memory>
 
 using namespace RTE;
 
@@ -386,6 +388,45 @@ void LuaAdaptersMovableObject::SendMessage1(MovableObject* luaSelfObject, const 
 void LuaAdaptersMovableObject::SendMessage2(MovableObject* luaSelfObject, const std::string& message, luabind::object context) {
 	LuabindObjectWrapper wrapper(&context, "", false);
 	luaSelfObject->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {message}, {&wrapper});
+}
+
+// Every peer delivers the AI pass's message here, at the committed tick, so a receiver script that runs
+// everywhere decides alike. The context is rebuilt through the same cast map an entity argument takes.
+void MovableObject::DeliverSyncedScriptMessage(uint8_t context, double number, int64_t contextUID, const std::string& message, const std::string& text) {
+	LuaStateWrapper* stateWrapper = GetLuaState();
+	lua_State* luaState = stateWrapper ? stateWrapper->GetLuaState() : nullptr;
+	if (!luaState || context == NetGameAIScriptMessage::None) {
+		RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {message});
+		return;
+	}
+	luabind::object contextObject;
+	std::unique_ptr<LuabindObjectWrapper> carriedObject;
+	switch (context) {
+		case NetGameAIScriptMessage::Boolean:
+			contextObject = luabind::object(luaState, number != 0.0);
+			break;
+		case NetGameAIScriptMessage::Number:
+			contextObject = luabind::object(luaState, number);
+			break;
+		case NetGameAIScriptMessage::Text:
+			contextObject = luabind::object(luaState, text);
+			break;
+		case NetGameAIScriptMessage::Object: {
+			// An object that died before the committed tick died on every peer, so every peer passes nil.
+			Entity* carried = contextUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(contextUID)) : nullptr;
+			if (carried) {
+				const auto cast = LuaAdaptersEntityCast::s_EntityToLuabindObjectCastFunctions.find(carried->GetClassName());
+				if (cast != LuaAdaptersEntityCast::s_EntityToLuabindObjectCastFunctions.end()) {
+					carriedObject.reset(cast->second(carried, luaState));
+				}
+			}
+			break;
+		}
+		default:
+			break;
+	}
+	LuabindObjectWrapper wrapper(&contextObject, "", false);
+	RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {message}, {carriedObject ? carriedObject.get() : &wrapper});
 }
 
 void LuaAdaptersMOSRotating::GibThis(MOSRotating* luaSelfObject) {

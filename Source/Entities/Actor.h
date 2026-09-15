@@ -492,6 +492,7 @@ namespace RTE {
 				Scene = 0,
 				MOTarget = 1,
 				Clear = 2,
+				MOTargetSet = 3, //!< Sets the move target itself; targetUID 0 clears it.
 			};
 			Op op = Scene;
 			float x = 0.0F;
@@ -517,6 +518,33 @@ namespace RTE {
 		/// Sends this tick's queued AI mode writes as synced requests; the writes of an actor this
 		/// machine does not own are dropped.
 		void SendDeferredAIModes();
+
+		/// A message this actor's AI pass sent this tick. The receiving script runs on every peer, so under
+		/// lockstep the call crosses the wire and every peer delivers it at the committed tick.
+		struct DeferredScriptMessage {
+			int64_t objectUID = 0;
+			uint8_t context = 0;
+			double number = 0.0;
+			int64_t contextUID = 0;
+			std::string message;
+			std::string text;
+		};
+		/// Queues a message an AI pass sent, so its owner's drain crosses it to every peer.
+		/// @return Whether the call was queued; outside a deferring pass it is made directly as before.
+		static bool QueueAIPassScriptMessage(const MovableObject* receiver, uint8_t context, double number, int64_t contextUID, const std::string& message, const std::string& text);
+		/// Queues a gib an AI pass asked for, so every peer gibs at the committed tick.
+		/// @return Whether the call was queued; outside a deferring pass the gib happens directly as before.
+		static bool QueueAIPassGib(const MovableObject* target);
+		/// Whether a write to this object made right here belongs to a lockstep AI pass and must be deferred.
+		static bool DeferringAIPassWrite(const MovableObject* target);
+		/// Hands out the messages the AI pass queued this tick, in call order; mods don't call this.
+		std::vector<DeferredScriptMessage> TakePendingDeferredScriptMessages();
+		/// Sends this tick's queued messages as synced commands; an actor this machine does not own is dropped.
+		void SendDeferredScriptMessages();
+		/// Hands out the gibs the AI pass queued this tick, in call order; mods don't call this.
+		std::vector<int64_t> TakePendingDeferredGibs();
+		/// Sends this tick's queued gibs as synced commands; an actor this machine does not own is dropped.
+		void SendDeferredGibs();
 
 		/// Gets the last or furthest set AI waypoint of this. If none, this' pos
 		/// is returned.
@@ -597,10 +625,12 @@ namespace RTE {
 			return false;
 		}
 
-		/// Gets a pointer to the MovableObject move target of this Actor.
+		/// Gets a pointer to the MovableObject move target of this Actor. A running AI pass sees the target
+		/// its own order is carrying, the sim the committed one.
 		/// @return A pointer to the MovableObject move target of this Actor.
-		const MovableObject* GetMOMoveTarget() const { return m_pMOMoveTarget; }
-		void SetMOMoveTarget(const MovableObject* object) { m_pMOMoveTarget = object; m_FaithfulMOMoveTargetUID = 0; }
+		const MovableObject* GetMOMoveTarget() const { return g_CurrentAIActor ? GetMOMoveTargetSeenByAIPass() : m_pMOMoveTarget; }
+		/// Sets this' MovableObject move target. A write from inside a lockstep AI pass becomes a synced order.
+		void SetMOMoveTarget(const MovableObject* object);
 		static bool RunBorrowedReferenceSelfTest();
 		std::vector<long> GetCheckpointBorrowedReferences() const override;
 		bool RebindCheckpointBorrowedReferences(const std::vector<long>& identities, bool validateOnly = false) override;
@@ -1193,6 +1223,10 @@ namespace RTE {
 		std::vector<DeferredWaypoint> m_InflightWaypoints;
 		// AI mode writes the AI pass queued; the owner sends them so every peer takes the mode at one tick.
 		std::vector<DeferredAIMode> m_PendingDeferredAIModes;
+		// Messages the AI pass sent; the owner sends them so every peer's receiver script hears them at one tick.
+		std::vector<DeferredScriptMessage> m_PendingDeferredScriptMessages;
+		// Gibs the AI pass asked for; the owner sends them so every peer gibs at one tick.
+		std::vector<int64_t> m_PendingDeferredGibs;
 		// The mode a sent request is carrying and the last tick the AI pass may read it back, so the AI
 		// keeps a coherent view while the request flies. Per machine: never archived, never checksummed.
 		AIMode m_InflightAIMode;
@@ -1234,6 +1268,7 @@ namespace RTE {
 		void QueueDeferredOnRunning(const DeferredWaypoint& waypoint);
 		void QueueAIModeOnRunning(AIMode newMode);
 		int GetAIModeSeenByAIPass() const;
+		const MovableObject* GetMOMoveTargetSeenByAIPass() const;
 		AIMode PendingAIMode() const;
 
 		std::string m_PersistedActorRuntime;
