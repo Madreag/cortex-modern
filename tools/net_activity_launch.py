@@ -75,7 +75,7 @@ def encode_config(rules, dedicated=False, default=False):
               for peer in range(2 if dedicated else 1, 3)]
     if not default:
         roster.append((0, 1, True, "CPU"))
-    payload = struct.pack("<HQBBHBBH", 3, 1, 1, 2, 3, mode, 2, int(dedicated))
+    payload = struct.pack("<HQBBHBBH", 4, 1, 1, 2, 3, mode, 2, int(dedicated))
     for value in (rules["activity_type"], rules["activity_preset"], rules["scene_name"], "PvP" if default else "CoopPvE"):
         payload += string(value)
     payload += struct.pack("<B", len(roster))
@@ -83,8 +83,9 @@ def encode_config(rules, dedicated=False, default=False):
         payload += struct.pack("<BBBB", peer, team, int(cpu), 0) + string(name)
     payload += struct.pack("<BQQ", 0, 1, 1)
     payload += string(rules["activity_module"]) + string(rules["scene_module"])
-    payload += struct.pack("<BIBBB", rules["difficulty"], rules["starting_gold"], rules["fog_of_war"],
-                           rules["require_clear_path_to_orbit"], rules["deploy_units"])
+    payload += struct.pack("<BIBBBB", rules["difficulty"], rules["starting_gold"], rules["fog_of_war"],
+                           rules["require_clear_path_to_orbit"], rules["deploy_units"],
+                           int(rules.get("brainless_humans_spectate", True)))
     for team in rules["teams"]:
         payload += string(team["technology_intent"]) + string(team["technology_module"]) + struct.pack("<B", team["ai_skill"])
     payload += struct.pack("<BIBBB", 0, 0, 10, 1, 1)
