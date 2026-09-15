@@ -37,7 +37,6 @@ namespace RTE {
 		GUICollectionBox* m_MiscSettingsBox;
 		GUICheckbox* m_SkipIntroCheckbox;
 		GUICheckbox* m_ShowToolTipsCheckbox;
-		GUIComboBox* m_MatchStatusWidgetCombo;
 		GUICheckbox* m_ShowLoadingScreenProgressReportCheckbox;
 		GUICheckbox* m_ShowAdvancedPerfStatsCheckbox;
 		GUICheckbox* m_MeasureLoadTimeCheckbox;
@@ -50,9 +49,6 @@ namespace RTE {
 #pragma region Misc Settings Handling
 		/// Updates the Scene background auto-scale label according to the setting.
 		void UpdateSceneBackgroundAutoScaleLabel();
-		/// The match-status widget combo's whole wiring: populate, select the persisted mode, apply the selection.
-		void CreateMatchStatusWidgetCombo();
-		void OnMatchStatusWidgetEvent(GUIEvent& guiEvent);
 #pragma endregion
 
 		// Disallow the use of some implicit methods.
