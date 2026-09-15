@@ -57,8 +57,8 @@ def main():
     parser.add_argument("--harness", type=Path, default=Path("D:/Projects/stage2_p4/recovery_e2e.py"))
     parser.add_argument("--exe", type=Path, help="run the arm on a retained executable instead of the tree's own")
     args = parser.parse_args()
-    if not (43570 <= args.port <= 43590 or 48470 <= args.port <= 48479):
-        parser.error("port is outside 43570..43590 and 48470..48479")
+    if not (43570 <= args.port <= 43590 or 48470 <= args.port <= 48479 or 48620 <= args.port <= 48629):
+        parser.error("port is outside 43570..43590, 48470..48479 and 48620..48629")
     args.out = args.out.resolve()
     if args.out.exists():
         parser.error("evidence directory already exists")
