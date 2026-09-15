@@ -550,7 +550,7 @@ def inventory_reference_roles(text, state):
     """
     while isinstance(state, dict) and state.get("version") in ("GameActivity1", "GameActivity2"):
         state = state["base" if state["version"] == "GameActivity1" else "values"]
-    if not isinstance(state, dict) or state.get("version") not in ("Activity1", "Activity2", "Activity3"):
+    if not isinstance(state, dict) or state.get("version") not in ("Activity1", "Activity2", "Activity3", "Activity4"):
         return {}
     links = state.get("actor_links")
     if not isinstance(links, list) or len(links) != 4 or any(

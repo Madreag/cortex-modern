@@ -146,6 +146,7 @@ SCHEMAS["Activity1"] = [
     ("saved_numbers", NUMBER_MAP), ("actor_links", array(4, array(3)))]
 SCHEMAS["Activity2"] = [*SCHEMAS["Activity1"], ("team_icons", array(4, "o"))]
 SCHEMAS["Activity3"] = [*SCHEMAS["Activity1"], ("team_icons", "o")]
+SCHEMAS["Activity4"] = [*SCHEMAS["Activity1"], ("lockstep_control_uid", array(4)), ("team_icons", "o")]
 SCHEMAS["Icon1"] = [("base", "o"), ("bitmap_file", "o"), ("frame_count", "n"),
                     ("images", sequence("o")), ("indexed_frames", sequence("n")), ("true_color_frames", sequence("n"))]
 SCHEMAS["IconSet1"] = [("images", sequence("o")), ("icons", sequence("o"))]
@@ -405,7 +406,7 @@ def decode(data):
             owner = song["fallback"] if section == -1 else song["sections"][section]
             if not 0 <= index < len(owner["transitions" if bucket else "sounds"]):
                 raise ValueError("invalid music next-sound reference")
-    if version == "Activity3" and (not isinstance(result["team_icons"], dict) or result["team_icons"].get("version") != "IconSet1" or len(result["team_icons"]["icons"]) != 4):
+    if version in ("Activity3", "Activity4") and (not isinstance(result["team_icons"], dict) or result["team_icons"].get("version") != "IconSet1" or len(result["team_icons"]["icons"]) != 4):
         raise ValueError("invalid activity icon set")
     if version in ("PrimitiveMan1", "PrimitiveValue1", "MOSpriteRuntime2", "Icon1", "IconSet1"):
         cache_owners = set()
@@ -506,7 +507,7 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
                 masked.append((*path, key, "sim_start"))
             if len(path) >= 2 and path[-2:] == ("player_controller", 0):
                 mask("team")
-        if version in ("Activity1", "Activity2", "Activity3"):
+        if version in ("Activity1", "Activity2", "Activity3", "Activity4"):
             for key in ("player_team", "team_funds_share", "funds_contribution", "human", "actor_links"):
                 result[key][0] = "LOCAL"
                 masked.append((*path, key, 0))
