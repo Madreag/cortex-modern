@@ -3486,6 +3486,9 @@ namespace RTE {
 		}
 		outFrame = std::move(m_ReadyFrames.front());
 		m_ReadyFrames.pop_front();
+		for (const auto& [peerId, leaveFrame]: m_PeerLeaveFrames) {
+			if (leaveFrame <= outFrame.frame) outFrame.departedPeerIds.push_back(peerId);
+		}
 		return true;
 	}
 
@@ -3520,10 +3523,8 @@ namespace RTE {
 		// lockstep gate synchronizes leave knowledge, so every peer re-resolves identically.
 		if (m_PeerLeaveFrames.find(ownerPeerId) != m_PeerLeaveFrames.end()) {
 			const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
-			// H4 §4: a seat inside its reclaim window has not lost its player. With no surviving
-			// teammate the relay host plays its units until the holder returns, instead of standing
-			// them down to be shot where they stand - the round is held open only while it is alone.
-			ownerPeerId = survivor != 0 ? survivor : (IsHoldingSeatForReclaim() ? m_Config.matchConfig.hostPeerId : survivor);
+			// The host produces AI controllers for a departed team while the round continues.
+			ownerPeerId = survivor != 0 ? survivor : (IsRunning() || IsHoldingSeatForReclaim() ? m_Config.matchConfig.hostPeerId : survivor);
 		}
 		return ownerPeerId;
 	}
@@ -3550,9 +3551,7 @@ namespace RTE {
 		if (!IsPeerGoneAtFrame(NetActorOwnership::ResolveOwnerPeer(m_Config.matchConfig, {actorUniqueID, team, cpuControlled}), frame)) {
 			return false;
 		}
-		// The team's units fall to the next surviving human peer; only an ownerless team stands down,
-		// and a seat still inside its reclaim window is not ownerless (the relay host plays it).
-		return FirstAliveHumanPeerForTeam(team, frame) == 0 && !IsHoldingSeatForReclaim();
+		return FirstAliveHumanPeerForTeam(team, frame) == 0 && !IsRunning() && !IsHoldingSeatForReclaim();
 	}
 
 	bool NetLockstepCoordinator::IsPeerGoneAtFrame(uint8_t peerId, uint64_t frame) const {

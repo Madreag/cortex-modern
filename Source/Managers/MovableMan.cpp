@@ -814,11 +814,36 @@ void MovableMan::ApplyLockstepControlHandoffToActor(Actor& actor, bool seated) {
 	const Controller::InputMode handedMode = seated ? Controller::CIM_PLAYER : Controller::CIM_AI;
 	const Controller::InputMode previousMode = controller.GetInputMode();
 	const int previousPlayer = controller.GetPlayer();
+	if (!seated) controller.ResetLocalInputState();
 	if (previousMode == handedMode) {
 		return;
 	}
 	controller.ApplyWireMode(handedMode, controller.GetPlayerRaw());
 	actor.OnControllerInputModeChanged(previousMode, previousPlayer);
+}
+
+void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors) {
+	ScenarioRunner::SetLockstepAppliedFrame(readyFrame.frame);
+	ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(readyFrame.frame);
+	for (Actor* actor: actors) {
+		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+		const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
+		if (actor->IsPlayerControlled() && std::find(readyFrame.departedPeerIds.begin(), readyFrame.departedPeerIds.end(), claimant) != readyFrame.departedPeerIds.end()) {
+			MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
+		}
+		if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame)) {
+			const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
+			if (seeded != 0 && ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), true) == seeded) {
+				MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
+				std::cout << "[net-match] claim of actor " << uid << " returned to peer " << static_cast<int>(seeded)
+				          << " after seat " << static_cast<int>(claimant) << " expired" << std::endl;
+				continue;
+			}
+		}
+		if (ScenarioRunner::IsLockstepActorOwnerGone(uid, actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame)) {
+			actor->GetController()->SetDisabled(true);
+		}
+	}
 }
 
 std::vector<long int> MovableMan::BeginLockstepProducingPass(const std::deque<Actor*>& actors, const std::function<bool(const Actor*)>& isLocal) {
@@ -897,6 +922,7 @@ bool MovableMan::RunLockstepPausedTick() {
 		ScenarioRunner::SetControllerReplayError("tick " + std::to_string(simTick) + " paused wait: " + error);
 		return false;
 	}
+	ApplyLockstepLeaveHandoffs(readyFrame, m_Actors);
 	// Only the game commands apply on a paused tick; the sim itself holds still.
 	g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 	CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
@@ -4906,27 +4932,7 @@ void MovableMan::UpdateControllers() {
 			return;
 		}
 		NeutralizeUnframedLockstepActors(m_Actors, applied);
-		// A leaver's actors dropped off the wire: their control handoffs revert to the policy owner
-		// (a surviving teammate's AI picks them up), and actors with no surviving owner stand down —
-		// on every survivor at the same tick.
-		ScenarioRunner::SetLockstepAppliedFrame(readyFrame.frame);
-		ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(readyFrame.frame);
-		for (Actor* actor: m_Actors) {
-			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
-			const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
-			if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame)) {
-				const uint8_t seeded = NetActorOwnership::GetSeededOwner(uid);
-				if (seeded != 0 && ScenarioRunner::GetLockstepActorOwner(uid, actor->GetTeam(), true) == seeded) {
-					ApplyLockstepControlHandoffToActor(*actor, false);
-					std::cout << "[net-match] claim of actor " << uid << " returned to peer " << static_cast<int>(seeded)
-					          << " after seat " << static_cast<int>(claimant) << " expired" << std::endl;
-					continue;
-				}
-			}
-			if (ScenarioRunner::IsLockstepActorOwnerGone(uid, actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame)) {
-				actor->GetController()->SetDisabled(true);
-			}
-		}
+		ApplyLockstepLeaveHandoffs(readyFrame, m_Actors);
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 		CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
