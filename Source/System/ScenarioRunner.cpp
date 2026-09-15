@@ -112,6 +112,7 @@ namespace RTE {
 		}
 		std::map<int64_t, uint8_t> s_LockstepControlOverrides; //!< Synced per-actor control handoffs (co-op shared teams).
 		std::map<int64_t, uint8_t> s_LockstepDroppedControlOverrides;
+		int64_t s_E2eFirstTransferUid = 0; //!< First owner transfer after the match is running.
 		bool s_LockstepStallOverlayEnabled = false;
 		bool s_LockstepStallUiProbeArmed = false; //!< A net-UI probe script drives the seats panel outside the interactive game.
 		bool s_LockstepPaused = false;
@@ -765,6 +766,7 @@ namespace RTE {
 		s_LockstepCoordinator = coordinator;
 		if (!coordinator) {
 			s_SeatPresence = nullptr;
+			s_E2eFirstTransferUid = 0;
 		}
 		if (coordinator && (!preserveCommands || s_CommandSessionId != coordinator->GetConfig().sessionId || s_CommandEpoch != coordinator->GetConfig().seatPresenceEpoch)) {
 			s_PendingLocalGameCommands.clear();
@@ -891,8 +893,33 @@ namespace RTE {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->ResolveTeamCommandAuthority(team) : 0;
 	}
 
+	void ScenarioRunner::NoteE2eOwnerTransfer(int64_t actorUniqueID) {
+		if (s_E2eFirstTransferUid != 0 || actorUniqueID <= 0 || !IsLockstepControllerSyncActive()) {
+			return;
+		}
+		const Activity* activity = g_ActivityMan.GetActivity();
+		if (!activity || activity->GetActivityState() != Activity::Running) {
+			return;
+		}
+		s_E2eFirstTransferUid = actorUniqueID;
+	}
+
+	int64_t ScenarioRunner::GetE2eOwnerTransferUid() {
+		return s_E2eFirstTransferUid;
+	}
+
 	void ScenarioRunner::SetLockstepControlOverride(int64_t actorUniqueID, uint8_t ownerPeerId) {
+		uint8_t previous = 0;
+		if (const auto found = s_LockstepControlOverrides.find(actorUniqueID); found != s_LockstepControlOverrides.end()) {
+			previous = found->second;
+		} else {
+			previous = NetActorOwnership::GetSeededOwner(actorUniqueID);
+		}
 		s_LockstepControlOverrides[actorUniqueID] = ownerPeerId;
+		// Skip the first claim onto an unseeded uid.
+		if (previous != 0 && ownerPeerId != previous) {
+			NoteE2eOwnerTransfer(actorUniqueID);
+		}
 	}
 
 	uint64_t ScenarioRunner::GetLockstepRoundId() {
@@ -931,6 +958,7 @@ namespace RTE {
 		for (auto it = s_LockstepControlOverrides.begin(); it != s_LockstepControlOverrides.end();) {
 			if (s_LockstepCoordinator->IsPeerGoneAtFrame(it->second, frame)) {
 				// Admission can observe the drop after this frame has released its control handoffs.
+				NoteE2eOwnerTransfer(it->first);
 				s_LockstepDroppedControlOverrides.insert_or_assign(it->first, it->second);
 				it = s_LockstepControlOverrides.erase(it);
 			} else {
