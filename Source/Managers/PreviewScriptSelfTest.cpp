@@ -439,6 +439,8 @@ local function ev2(what)
   if what == 'start' then after = after + 1 end
 end
 local function boom()
+  local z = nil
+  z = z + 1
   error('f91-abort')
 end
 local function body()
