@@ -335,7 +335,13 @@ std::string FrameMan::SplitStringToFitWidth(const std::string& stringToSplit, in
 			std::string probe;
 			for (const char c: remaining) {
 				probe += c;
-				if (fontToUse->CalculateWidth(probe) > widthLimit) break;
+				if (fontToUse->CalculateWidth(probe) > widthLimit) {
+					// A space that crosses the limit is still the wrap point, not a hard-break.
+					if (c == ' ' && fitChars > 0) {
+						lastSpace = fitChars;
+					}
+					break;
+				}
 				if (c == ' ') lastSpace = fitChars;
 				++fitChars;
 			}
@@ -349,9 +355,21 @@ std::string FrameMan::SplitStringToFitWidth(const std::string& stringToSplit, in
 				continue;
 			}
 			if (lastSpace != std::string_view::npos) {
-				wrapped += remaining.substr(0, lastSpace);
+				size_t end = lastSpace;
+				while (end > 0 && remaining[end - 1] == ' ') {
+					--end;
+				}
+				if (end == 0) {
+					remaining.remove_prefix(lastSpace);
+					continue;
+				}
+				wrapped += remaining.substr(0, end);
 				wrapped += '\n';
-				remaining.remove_prefix(lastSpace + 1);
+				size_t skip = end;
+				while (skip < remaining.size() && remaining[skip] == ' ') {
+					++skip;
+				}
+				remaining.remove_prefix(skip);
 			} else {
 				if (fitChars == 0) ++fitChars;
 				wrapped += remaining.substr(0, fitChars);
