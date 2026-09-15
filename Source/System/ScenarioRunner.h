@@ -70,6 +70,7 @@ namespace RTE {
 			uint64_t    selftestPauseTick = 250; // -net-match-e2e-pause-tick <N>: the tick the synced pause command is issued at (default 250 = today's arming tick); the unpause command still rides N+180.
 			uint64_t    selftestEndRoundTick = 0; // -net-match-e2e-end-round-tick <N>: at sim tick N every armed peer ends the round via the natural end path (team 0 wins); 0 = never (today's behaviour).
 			bool        selftestSnapshot = false; // -net-match-e2e-snapshot: save the full game at tick 300 (both peers save the same synced frame).
+			bool        selftestSharedSeat = false; // -net-match-e2e-shared-seat: this peer also presents the roster's next human seat locally, so one window runs two split screens. Presentation only; lockstep authority still follows the roster's peer ids.
 			uint64_t    contractAuditContinueThrough = 0; // Diagnostic-only: keep running after the audit operation to this complete tick.
 			long long   contractAuditSeedMarker = 0; // Diagnostic fixture value placed in all Lua roots before a seed is saved.
 			bool        contractAuditContinuationPerturb = false; // Positive control: one extra simulation RNG draw after the observed operation.
