@@ -1067,19 +1067,34 @@ bool Actor::DisbandSquad() {
 }
 
 void Actor::SetAIMode(AIMode newMode) {
+	// The AI pass runs on the machine that owns the actor, so a mode written there would land on that
+	// peer alone while the hash and the checkpoint carry it; queue it for the synced request instead.
+	if (DeferAIPassMutation(this)) {
+		g_CurrentAIActor->m_PendingDeferredAIModes.push_back({static_cast<int64_t>(GetUniqueID()), static_cast<uint8_t>(newMode)});
+		return;
+	}
 	m_AIMode = newMode;
 	// The landing write is the wire's answer to anything this actor still has in flight.
 	m_InflightAIModeUntil = -1;
 }
 
+Actor::AIMode Actor::PendingAIMode() const {
+	return m_InflightAIModeUntil >= static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()) ? m_InflightAIMode : m_AIMode;
+}
+
 void Actor::RequestAIMode(AIMode newMode) {
-	if (m_AIMode == newMode) {
+	// A request still on the wire is the mode this actor is heading to; it is not asked for twice.
+	if (PendingAIMode() == newMode) {
 		return;
 	}
 	// The AI decides per-machine, but the mode is sim state the craft death gates read, so under
 	// lockstep the write crosses the wire and lands on both peers at the same frame.
 	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
 		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSetActorAIMode{static_cast<int64_t>(GetUniqueID()), GetTeam(), static_cast<uint8_t>(newMode)}});
+		// The AI keeps reading the mode it asked for until the request lands, so its state machine holds;
+		// the hint dies with the input-delay window, so a request the wire never carried cannot pin it.
+		m_InflightAIMode = newMode;
+		m_InflightAIModeUntil = static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()) + ScenarioRunner::GetLockstepLocalInputDelay() + 1;
 	} else {
 		SetAIMode(newMode);
 	}
@@ -1095,8 +1110,8 @@ void Actor::BeginGoToOrder() {
 	}
 }
 
-// Queue on the running AI actor so one thread owns the pending list; actorUID names the written queue.
-static bool DeferWaypointMutation(const Actor* actor) {
+// Queue on the running AI actor so one thread owns the pending list; actorUID names the written actor.
+static bool DeferAIPassMutation(const Actor* actor) {
 	if (!g_CurrentAIActor || !ScenarioRunner::IsLockstepControllerSyncActive()) {
 		return false;
 	}
@@ -1117,7 +1132,7 @@ void Actor::QueueDeferredOnRunning(const DeferredWaypoint& waypoint) {
 }
 
 void Actor::AddAISceneWaypoint(const Vector& waypoint) {
-	if (DeferWaypointMutation(this)) {
+	if (DeferAIPassMutation(this)) {
 		QueueDeferredOnRunning({Actor::DeferredWaypoint::Scene, waypoint.m_X, waypoint.m_Y, 0});
 		return;
 	}
@@ -1126,7 +1141,7 @@ void Actor::AddAISceneWaypoint(const Vector& waypoint) {
 }
 
 void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
-	if (DeferWaypointMutation(this)) {
+	if (DeferAIPassMutation(this)) {
 		if (!g_MovableMan.ValidMO(pMOWaypoint)) {
 			return;
 		}
@@ -1145,7 +1160,7 @@ void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
 }
 
 void Actor::ClearAIWaypoints() {
-	if (DeferWaypointMutation(this)) {
+	if (DeferAIPassMutation(this)) {
 		QueueDeferredOnRunning({DeferredWaypoint::Clear, 0.0F, 0.0F, 0});
 		return;
 	}
@@ -1361,10 +1376,7 @@ int Actor::GetAIModeSeenByAIPass() const {
 			return itr->mode;
 		}
 	}
-	if (m_InflightAIModeUntil >= static_cast<int64_t>(g_TimerMan.GetSimUpdateCount())) {
-		return m_InflightAIMode;
-	}
-	return m_AIMode;
+	return PendingAIMode();
 }
 
 void Actor::PopFrontWaypoint(const Vector& expected) {

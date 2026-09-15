@@ -4819,6 +4819,17 @@ void MovableMan::UpdateControllers() {
 				}
 			}
 		};
+		auto drainDeferredAIModes = [&]() {
+			// The AI modes the AI pass wrote, in MOID order: the owner sends them as synced requests so
+			// every peer takes the mode at the same tick. A non-owner's queued writes are dropped.
+			for (Actor* actor: m_Actors) {
+				if (isLocalControllerActor(actor)) {
+					actor->SendDeferredAIModes();
+				} else {
+					actor->TakePendingDeferredAIModes();
+				}
+			}
+		};
 		auto drainDeferredSoundOps = [&]() {
 			// The sound calls the AI queued, in checkpoint-identity order: performed now, or sent as
 			// commands under lockstep. A container the AI only read hands out nothing.
@@ -4889,6 +4900,7 @@ void MovableMan::UpdateControllers() {
 
 		drainDeferredEquips();
 		drainDeferredWaypoints();
+		drainDeferredAIModes();
 		drainDeferredSoundOps();
 
 		// The serial UpdateAI pass mutates directly outside lockstep; under it the calls defer like the threaded ones.
@@ -4905,12 +4917,14 @@ void MovableMan::UpdateControllers() {
 			drainDeferredEquips();
 		}
 		drainDeferredWaypoints();
+		drainDeferredAIModes();
 		drainDeferredSoundOps();
 		// A fixture's scripted writes come last, so they are the pass's final word on the actor.
 		if (AIWriteScript::IsActive()) {
 			AIWriteScript::RunTick(simTick, m_Actors, isLocalControllerActor);
 			drainDeferredEquips();
 			drainDeferredWaypoints();
+			drainDeferredAIModes();
 			drainDeferredSoundOps();
 		}
 

@@ -1233,6 +1233,7 @@ namespace RTE {
 		void ConsumeInflightWaypoint(DeferredWaypoint::Op op, float x, float y, int64_t targetUID);
 		void QueueDeferredOnRunning(const DeferredWaypoint& waypoint);
 		int GetAIModeSeenByAIPass() const;
+		AIMode PendingAIMode() const;
 
 		std::string m_PersistedActorRuntime;
 		std::array<std::string, 2> m_PersistedActorIconReferences;
