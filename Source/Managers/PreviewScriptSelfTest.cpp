@@ -397,7 +397,7 @@ assert(seen > 0, 'no trace event after forced abort path seen='..tostring(seen).
 				global_State* g = G(L);
 				J->state = LJ_TRACE_RECORD;
 				lj_dispatch_update(g);
-				lj_trace_abort(g);
+				lj_trace_abort_leftover(L);
 				std::cout << "[script-graph-selftest] hotcount_abort_state state=" << index
 				          << " jstate=" << static_cast<unsigned>(J->state)
 				          << " mode=" << static_cast<unsigned>(g->dispatchmode)
