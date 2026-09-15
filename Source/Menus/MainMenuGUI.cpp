@@ -871,9 +871,9 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		m_MultiplayerHostInputDelayTextBox->SetText(std::to_string(inputDelay));
 		g_SettingsMan.SetNetworkInputDelayFrames(inputDelay);
 		request.inputDelayFrames = static_cast<uint16_t>(inputDelay);
-		// The typed delay is the floor; the host raises it to cover the measured ping so high-RTT
-		// matches run stall-free out of the box.
-		request.autoInputDelay = true;
+		// The saved policy decides it: automatic keeps the typed delay as the floor and raises it to
+		// cover the measured ping, fixed hosts on the typed value alone.
+		request.autoInputDelay = g_SettingsMan.GetNetworkHostDelayPolicy() == SettingsMan::NetworkHostDelayPolicy::Auto;
 	}
 
 	std::string error;
