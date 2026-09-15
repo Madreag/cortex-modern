@@ -388,7 +388,9 @@ namespace RTE {
 				}
 				std::vector<uint8_t> oversizeBytes;
 				NetLobbyError oversizeError;
-				if (NetLobbyProtocol::Encode({NetLobbyMatchConfig{oversize}}, oversizeBytes, &oversizeError) || oversizeError.message != "too many player slots") {
+				// The encoder validates first, so an oversize roster is refused there, by the validator's reason.
+				if (NetLobbyProtocol::Encode({NetLobbyMatchConfig{oversize}}, oversizeBytes, &oversizeError) ||
+				    oversizeError.code != NetLobbyErrorCode::InvalidValue || oversizeError.message != "player slot count is out of range") {
 					*error = "the lobby codec accepted a roster past the slot capacity: " + oversizeError.message;
 					return false;
 				}
