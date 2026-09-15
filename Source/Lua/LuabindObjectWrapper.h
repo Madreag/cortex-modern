@@ -50,7 +50,11 @@ namespace RTE {
 
 		/// Points a Lua state's instance metatables at the collector that hands Lua-owned engine objects to the sim thread.
 		/// @param luaState The state to install into, after luabind::open.
-		static void InstallSimThreadDeletion(lua_State* luaState);
+		/// @param stateIndex The state's LuaMan index, which fixes its place in the drain order.
+		static void InstallSimThreadDeletion(lua_State* luaState, int stateIndex);
+
+		/// Deletes what the collecting threads handed over, state by state in index order and in finalizer order within a state.
+		static void ApplyQueuedEntityDeletions();
 
 		/// The number of Lua-owned engine objects destructed on the sim thread.
 		static uint64_t SimThreadDeletionCount();
