@@ -134,9 +134,9 @@ void GUIButton::BuildBitmap() {
 		m_DrawBitmap = 0;
 	}
 
-	// Create a new bitmap. Same width, but triple the height to allow for Up, Down
-	// and Over states
-	m_DrawBitmap = m_Skin->CreateBitmap(m_Width, m_Height * 3);
+	// Up/Over/Down, plus Disabled when the skin names Button_Disabled.
+	const bool hasDisabled = m_Skin->HasStandardRect("Button_Disabled");
+	m_DrawBitmap = m_Skin->CreateBitmap(m_Width, m_Height * (hasDisabled ? 4 : 3));
 
 	// Pre-cache the font
 	std::string Filename;
@@ -160,6 +160,9 @@ void GUIButton::BuildBitmap() {
 	SetRect(m_BorderSizes.get(), buttonBorders.left, buttonBorders.top, buttonBorders.right, buttonBorders.bottom);
 	m_Skin->BuildStandardRect(m_DrawBitmap, "Button_Over", 0, m_Height, m_Width, m_Height);
 	m_Skin->BuildStandardRect(m_DrawBitmap, "Button_Down", 0, m_Height * 2, m_Width, m_Height);
+	if (hasDisabled) {
+		m_Skin->BuildStandardRect(m_DrawBitmap, "Button_Disabled", 0, m_Height * 3, m_Width, m_Height);
+	}
 
 	// TODO this should be 1 pixel ideally, to give space between content and the border. However, the green skin, which this is primarly used for, has padding built-in and doesn't work properly without it.
 	const int buttonContentPadding = 0;
@@ -199,12 +202,18 @@ void GUIButton::BuildBitmap() {
 			m_Icon->DrawTrans(m_DrawBitmap, iconXPos, iconYPos, nullptr);
 			m_Icon->DrawTrans(m_DrawBitmap, iconXPos, m_Height + iconYPos, nullptr);
 			m_Icon->DrawTrans(m_DrawBitmap, iconXPos + 1, (m_Height * 2) + iconYPos + 1, nullptr);
+			if (hasDisabled) {
+				m_Icon->DrawTrans(m_DrawBitmap, iconXPos, (m_Height * 3) + iconYPos, nullptr);
+			}
 		} else {
 			int scaledWidth = static_cast<int>(static_cast<float>(m_Icon->GetWidth()) * iconStretchRatio);
 			int scaledHeight = static_cast<int>(static_cast<float>(m_Icon->GetHeight()) * iconStretchRatio);
 			m_Icon->DrawTransScaled(m_DrawBitmap, iconXPos, iconYPos, scaledWidth, scaledHeight);
 			m_Icon->DrawTransScaled(m_DrawBitmap, iconXPos, m_Height + iconYPos, scaledWidth, scaledHeight);
 			m_Icon->DrawTransScaled(m_DrawBitmap, iconXPos + 1, (m_Height * 2) + iconYPos + 1, scaledWidth, scaledHeight);
+			if (hasDisabled) {
+				m_Icon->DrawTransScaled(m_DrawBitmap, iconXPos, (m_Height * 3) + iconYPos, scaledWidth, scaledHeight);
+			}
 		}
 	}
 
@@ -221,16 +230,32 @@ void GUIButton::BuildBitmap() {
 		m_Text->Draw(m_DrawBitmap, false);
 		m_Text->SetPositionAbs(textXPos + 1, (m_Height * 2) + textYPos + 1);
 		m_Text->Draw(m_DrawBitmap, false);
+		if (hasDisabled) {
+			unsigned long disabledColor = m_FontColor;
+			if (!m_Skin->GetValue("Button_Disabled", "FontColor", &disabledColor) || disabledColor == m_FontColor) {
+				disabledColor = m_Skin->DimColor(m_FontColor ? m_FontColor : m_Font->GetMainColor(), m_DrawBitmap->GetColorDepth());
+			} else {
+				disabledColor = m_Skin->ConvertColor(disabledColor, m_DrawBitmap->GetColorDepth());
+			}
+			m_Font->CacheColor(disabledColor);
+			m_Font->SetColor(disabledColor);
+			m_Text->SetPositionAbs(textXPos, (m_Height * 3) + textYPos);
+			m_Text->Draw(m_DrawBitmap, false);
+		}
 	}
 }
 
 void GUIButton::Draw(GUIScreen* Screen) {
 	GUIRect Rect;
 	int y = 0;
-	if (m_Pushed) {
-		y = m_Height * 2;
-	} else if (m_Over || m_GotFocus) {
-		y = m_Height;
+	if (m_Enabled) {
+		if (m_Pushed) {
+			y = m_Height * 2;
+		} else if (m_Over || m_GotFocus) {
+			y = m_Height;
+		}
+	} else if (m_DrawBitmap && m_DrawBitmap->GetHeight() >= m_Height * 4) {
+		y = m_Height * 3;
 	}
 	SetRect(&Rect, 0, y, m_Width, y + m_Height);
 
@@ -239,6 +264,9 @@ void GUIButton::Draw(GUIScreen* Screen) {
 	}
 
 	m_DrawBitmap->DrawTrans(Screen->GetBitmap(), m_X, m_Y, &Rect);
+	if (!m_Enabled && y == 0 && m_Skin) {
+		m_Skin->DimRect(Screen->GetBitmap(), m_X, m_Y, m_Width, m_Height);
+	}
 
 	GUIPanel::Draw(Screen);
 }
