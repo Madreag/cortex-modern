@@ -10002,6 +10002,93 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		// A seat map moves when the roster does; the actor's seat stays where it was set, so a seat this
+		// peer no longer plays can still read as player-seated here. Nothing may sample this machine's
+		// devices for it: ACrab's mouse-aim clamp hands the seat's input slot to UInputMan::AnalogAimValues,
+		// whose m_ControlScheme.at() throws out of the sim tick on NoPlayer.
+		bool TestRemoteSeatNeverSamplesLocalInput(std::string* error) {
+			const char* name = "remote_seat_never_samples_local_input";
+			EnsureSwitchTestManagers();
+			const uint16_t port = 48470;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5245414D53454154ULL);
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::HostCpuRemoteHuman;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, port, 2, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, port, 2, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "host-cpu-remote-human";
+			clientConfig.ownershipPolicy = "host-cpu-remote-human";
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return finish(error && !error->empty() ? error->c_str() : "coordinator pair failed");
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 4000)) {
+				return finish(error && !error->empty() ? error->c_str() : "pair did not reach Running");
+			}
+			// This machine is peer 2: the roster gives it seat 1 and leaves seat 0 to the host.
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			std::unique_ptr<Activity> activity(new Activity());
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Activity* match = g_ActivityMan.GetActivity();
+			if (!match || !match->ConfigureLockstepPlayers()) {
+				return finish("the match roster did not reach the activity");
+			}
+			if (match->LocalInputOfPlayer(Players::PlayerOne) != Players::NoPlayer || match->LocalInputOfPlayer(Players::PlayerTwo) != Players::PlayerOne) {
+				return finish(("the roster mapped the wrong seats: seat0_input=" + std::to_string(match->LocalInputOfPlayer(Players::PlayerOne)) +
+				               " seat1_input=" + std::to_string(match->LocalInputOfPlayer(Players::PlayerTwo)))
+				                  .c_str());
+			}
+			Actor* remoteSeatActor = MakeSwitchTestActor(Activity::TeamOne);
+			Actor* localSeatActor = MakeSwitchTestActor(Activity::TeamTwo);
+			if (!remoteSeatActor || !localSeatActor) {
+				return finish("selftest actors could not be created");
+			}
+			AddSwitchTestActor(remoteSeatActor);
+			AddSwitchTestActor(localSeatActor);
+			remoteSeatActor->SetControllerMode(Controller::CIM_PLAYER, Players::PlayerOne);
+			localSeatActor->SetControllerMode(Controller::CIM_PLAYER, Players::PlayerTwo);
+			const Controller& remote = *remoteSeatActor->GetController();
+			const Controller& local = *localSeatActor->GetController();
+			const auto seatTuple = [](const Controller& controller) {
+				return "{seat_player=" + std::to_string(controller.GetSeatPlayerRaw()) +
+				       " seated_by_player=" + std::to_string(controller.IsSeatedByPlayer() ? 1 : 0) +
+				       " input_player=" + std::to_string(controller.GetInputPlayer()) + "}";
+			};
+			if (remote.IsSeatedByPlayer() || remote.GetInputPlayer() >= Players::PlayerOne) {
+				return finish(("a seat this peer does not play still reads as locally seated: seat 0 " + seatTuple(remote) +
+				               " - the aim path passes input_player to UInputMan::AnalogAimValues, whose m_ControlScheme.at() throws on it")
+				                  .c_str());
+			}
+			if (!local.IsSeatedByPlayer() || local.GetInputPlayer() != Players::PlayerOne) {
+				return finish(("this peer's own seat stopped sampling local input: seat 1 " + seatTuple(local)).c_str());
+			}
+			// Offline and single-player are untouched: with no coordinator every seat is this machine's own.
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (!remote.IsSeatedByPlayer() || remote.GetInputPlayer() != Players::PlayerOne) {
+				return finish(("an offline seat lost its local input: seat 0 " + seatTuple(remote)).c_str());
+			}
+			return finish(nullptr);
+		}
+
 		bool TestSimultaneousClaimTieBreak(std::string* error) {
 			const char* name = "simultaneous_claim_tie_break";
 			EnsureSwitchTestManagers();
@@ -10976,7 +11063,9 @@ namespace RTE {
 		const bool claimedExpiry = TestClaimedActorReturnsToCpuAfterTheClaimantExpires(&claimedExpiryError);
 		std::string teamChangeError;
 		const bool teamChangeOwner = TestSeededOwnerFollowsATeamChange(&teamChangeError);
-		if (!switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner) {
+		std::string remoteSeatInputError;
+		const bool remoteSeatInput = TestRemoteSeatNeverSamplesLocalInput(&remoteSeatInputError);
+		if (!switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner || !remoteSeatInput) {
 			return 1;
 		}
 		std::cout << "[net-lockstep-selftest] PASS" << std::endl;
