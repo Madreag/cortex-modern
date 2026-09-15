@@ -100,11 +100,13 @@ void GameActivity::Clear() {
 		m_BannerRepeats[player] = 0;
 		m_ReadyToStart[player] = false;
 		m_LockstepPlacementSubmitted[player] = false;
+		m_LockstepSeatBrains[player] = NetGamePlaceBrain{};
 		m_PurchaseOverride[player].clear();
 		m_BrainLZWidth[player] = BRAINLZWIDTHDEFAULT;
 		m_NetworkPlayerNames[player] = "";
 	}
 	m_LockstepPlacementSeeded = false;
+	m_LockstepPlacementUidBase = 0;
 
 	m_StartingGold = 0;
 	m_FogOfWarEnabled = false;
@@ -1106,19 +1108,31 @@ void GameActivity::SeedLockstepResidentBrains() {
 }
 
 bool GameActivity::PlaceAndSubmitLockstepBrain(int player, const std::string& className, const std::string& preset, const std::string& module) {
-	Scene* scene = g_SceneMan.GetScene();
-	if (!scene || !IsLockstepPlacement() || !MayCommitBrainPlacement(player)) {
+	if (!IsLockstepPlacement() || !MayCommitBrainPlacement(player) || m_LockstepPlacementSubmitted[player] || m_ReadyToStart[player]) {
 		return false;
 	}
-	const Entity* brainPreset = g_PresetMan.GetEntityPreset(className, preset, module);
-	SceneObject* brain = brainPreset ? dynamic_cast<SceneObject*>(brainPreset->Clone()) : nullptr;
-	if (!brain) {
+	if (!g_PresetMan.GetEntityPreset(className, preset, module)) {
 		return false;
 	}
-	brain->SetTeam(m_Team[player]);
-	brain->SetPos(DeterministicBrainSpot(player));
-	scene->SetResidentBrain(player, brain);
-	return SubmitLockstepBrainPlacement(player);
+	const Vector spot = DeterministicBrainSpot(player);
+	return CommitLockstepBrainPlacement(player, className, preset, module, spot);
+}
+
+bool GameActivity::CommitLockstepBrainPlacement(int player, const std::string& className, const std::string& preset, const std::string& module, const Vector& spot) {
+	NetGamePlaceBrain placement;
+	placement.team = m_Team[player];
+	placement.player = player;
+	placement.posX = spot.m_X;
+	placement.posY = spot.m_Y;
+	placement.className = className;
+	placement.preset = preset;
+	placement.module = module;
+	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, placement});
+	m_LockstepPlacementSubmitted[player] = true;
+	std::cout << "[net-match] brain placement committed: seat=" << player << " team=" << placement.team
+	          << " preset=" << placement.module << "/" << placement.preset
+	          << " pos=" << placement.posX << "," << placement.posY << std::endl;
+	return true;
 }
 
 bool GameActivity::SubmitLockstepBrainPlacement(int player) {
@@ -1139,20 +1153,8 @@ bool GameActivity::SubmitLockstepBrainPlacement(int player) {
 	if (!resident || resident->GetPresetName().empty()) {
 		return false;
 	}
-	NetGamePlaceBrain placement;
-	placement.team = m_Team[player];
-	placement.player = player;
-	placement.posX = resident->GetPos().m_X;
-	placement.posY = resident->GetPos().m_Y;
-	placement.className = resident->GetClassName();
-	placement.preset = resident->GetPresetName();
-	placement.module = g_PresetMan.GetDataModuleName(resident->GetModuleID());
-	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, placement});
-	m_LockstepPlacementSubmitted[player] = true;
-	std::cout << "[net-match] brain placement committed: seat=" << player << " team=" << placement.team
-	          << " preset=" << placement.module << "/" << placement.preset
-	          << " pos=" << placement.posX << "," << placement.posY << std::endl;
-	return true;
+	return CommitLockstepBrainPlacement(player, resident->GetClassName(), resident->GetPresetName(),
+	                                    g_PresetMan.GetDataModuleName(resident->GetModuleID()), resident->GetPos());
 }
 
 bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, uint8_t senderPeerId) {
@@ -1173,23 +1175,64 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 		g_ConsoleMan.PrintString("ERROR: Rejected a brain placement for seat " + std::to_string(player) + " from a peer that does not hold it");
 		return false;
 	}
-	const Entity* brainPreset = g_PresetMan.GetEntityPreset(placement.className, placement.preset, placement.module);
-	Entity* clone = brainPreset ? brainPreset->Clone() : nullptr;
-	SceneObject* brain = dynamic_cast<SceneObject*>(clone);
-	if (!brain) {
-		delete clone;
+	if (!g_PresetMan.GetEntityPreset(placement.className, placement.preset, placement.module)) {
 		g_ConsoleMan.PrintString("ERROR: Brain placement rejected - unknown preset \"" + placement.preset + "\"");
 		return false;
 	}
-	brain->SetTeam(m_Team[player]);
-	brain->SetPos(Vector(placement.posX, placement.posY));
-	// Ownership passes. The issuing peer's own preview is replaced here too, so every peer holds the
-	// identical brain before any of them puts it in the sim.
-	scene->SetResidentBrain(player, brain);
+	// Recorded, not built: the brains are all made at the start, off a counter every peer shares, so a
+	// local editor's own preview objects cannot shift the unique ids the sim ends up with.
+	m_LockstepSeatBrains[player] = placement;
 	m_ReadyToStart[player] = true;
-	std::cout << "[net-match] brain placed: seat=" << player << " team=" << m_Team[player]
+	std::cout << "[net-match] brain placement applied: seat=" << player << " team=" << m_Team[player]
 	          << " peer=" << static_cast<int>(senderPeerId) << " preset=" << placement.module << "/" << placement.preset
 	          << " pos=" << placement.posX << "," << placement.posY << std::endl;
+	return true;
+}
+
+bool GameActivity::BuildLockstepSeatBrains() {
+	Scene* scene = g_SceneMan.GetScene();
+	if (!scene) {
+		return false;
+	}
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if ((IsSeatActive(player) && IsHumanSeat(player)) && m_LockstepSeatBrains[player].player != player) {
+			return false;
+		}
+	}
+	// Drop every local preview first, then put the counter back in step: a peer whose own editor spent more
+	// ids than the reserve would build different ones, so say so instead of starting a match that will part.
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (IsSeatActive(player) && IsHumanSeat(player)) {
+			scene->SetResidentBrain(player, nullptr);
+		}
+	}
+	if (MovableObject::GetUniqueIDCounter() > m_LockstepPlacementUidBase + c_SetupEditorUidReserve) {
+		const std::string line = "ERROR: the setup editor spent more than " + std::to_string(c_SetupEditorUidReserve) + " unique ids";
+		g_ConsoleMan.PrintString(line);
+		std::cout << "[net-match] " << line << std::endl;
+		return false;
+	}
+	MovableObject::PinUniqueIDCounter(m_LockstepPlacementUidBase + c_SetupEditorUidReserve);
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (!(IsSeatActive(player) && IsHumanSeat(player))) {
+			continue;
+		}
+		const NetGamePlaceBrain& placement = m_LockstepSeatBrains[player];
+		const Entity* brainPreset = g_PresetMan.GetEntityPreset(placement.className, placement.preset, placement.module);
+		Entity* clone = brainPreset ? brainPreset->Clone() : nullptr;
+		SceneObject* brain = dynamic_cast<SceneObject*>(clone);
+		if (!brain) {
+			delete clone;
+			return false;
+		}
+		brain->SetTeam(m_Team[player]);
+		brain->SetPos(Vector(placement.posX, placement.posY));
+		scene->SetResidentBrain(player, brain);
+		std::cout << "[net-match] brain placed: seat=" << player << " team=" << m_Team[player]
+		          << " peer=" << static_cast<int>(LockstepSeatPeerId(player)) << " preset=" << placement.module << "/" << placement.preset
+		          << " pos=" << placement.posX << "," << placement.posY
+		          << " uid=" << (dynamic_cast<const MovableObject*>(brain) ? dynamic_cast<const MovableObject*>(brain)->GetUniqueID() : 0) << std::endl;
+	}
 	return true;
 }
 
@@ -1203,6 +1246,8 @@ void GameActivity::UpdateEditing() {
 	const bool lockstep = IsLockstepPlacement();
 	if (lockstep && !m_LockstepPlacementSeeded) {
 		m_LockstepPlacementSeeded = true;
+		// Read before any local editor runs, so every peer starts its reserve from the same id.
+		m_LockstepPlacementUidBase = MovableObject::GetUniqueIDCounter();
 		SeedLockstepResidentBrains();
 		// A seat no peer drives gets its brain from the host, at the spot every peer derives.
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
@@ -1308,6 +1353,11 @@ void GameActivity::UpdateEditing() {
 				g_FrameMan.SetScreenText("PLACE YOUR BRAIN IN A VALID SPOT FIRST!", ScreenOfPlayer(player), 333, 3500);
 				m_MessageTimer[player].Reset();
 			}
+		}
+
+		// Every seat's committed brain is built here, identically on every peer, and only then placed.
+		if (allReady && lockstep && !BuildLockstepSeatBrains()) {
+			allReady = false;
 		}
 
 		// Still good to go??

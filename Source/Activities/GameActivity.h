@@ -91,7 +91,8 @@ namespace RTE {
 		/// seat no peer drives and by the end-to-end arm that stands in for a player's placement.
 		Vector DeterministicBrainSpot(int player) const;
 
-		/// Puts the seat's brain where the local editor would and commits it, the way a player's DONE does.
+		/// Commits a named brain at the seat's deterministic spot, for a seat no player is driving and for
+		/// the end-to-end arm that stands in for a player's DONE.
 		/// @return Whether the placement was committed.
 		bool PlaceAndSubmitLockstepBrain(int player, const std::string& className, const std::string& preset, const std::string& module);
 		void ClearCheckpointActorIDs() override;
@@ -731,7 +732,17 @@ namespace RTE {
 		static bool IsLockstepPlacement();
 		/// Whether this peer is the one that commits a seat's brain placement.
 		bool MayCommitBrainPlacement(int player) const;
+		/// Puts one seat's committed placement on the wire.
+		bool CommitLockstepBrainPlacement(int player, const std::string& className, const std::string& preset, const std::string& module, const Vector& spot);
+		/// Builds every seat's committed brain, in seat order, from a unique-id counter pinned to the same
+		/// value on every peer. A local editor's own preview objects take ids off that counter on one peer
+		/// alone, so the shared brains are made only after it is put back in step.
+		/// @return Whether every seat's brain was built.
+		bool BuildLockstepSeatBrains();
+		static constexpr long c_SetupEditorUidReserve = 65536; //!< Ids a peer's own setup editor may spend before the shared ones resume.
 		std::array<bool, Players::MaxPlayerCount> m_LockstepPlacementSubmitted{}; //!< Per-seat, local only: this peer has committed that seat's placement.
+		std::array<NetGamePlaceBrain, Players::MaxPlayerCount> m_LockstepSeatBrains{}; //!< Per-seat committed placement; player < 0 means none yet.
+		long m_LockstepPlacementUidBase = 0; //!< The unique-id counter as the editing phase opened, identical on every peer.
 		bool m_LockstepPlacementSeeded = false; //!< The one-time seed pass has run for this editing phase.
 
 		bool LoadNetLocalGameState(std::string_view text);
