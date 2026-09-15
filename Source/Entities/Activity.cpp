@@ -1027,13 +1027,14 @@ int Activity::GetLockstepHumanSlotIndex(int team) const {
 	return ScenarioRunner::GetLockstepHumanSlotIndex(team);
 }
 
-// A seat another peer plays has no slot on this machine; every peer answers the seat's synced control
-// binding instead, so a script asking who plays a seat gets the same actor everywhere.
+// Every seat of a shared roster answers the control binding the committed frame carries, the owner's own
+// seat included: a seat's owner switches a tick before the wire does, and a script that gates a sim write on
+// the answer would run on one peer only for that window. What this machine drives is GetLocallyControlledActor.
 Actor* Activity::GetControlledActor(int player) {
 	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
 		return nullptr;
 	}
-	if (m_SharedPlayerSeats && LocalInputOfPlayer(player) == Players::NoPlayer) {
+	if (m_SharedPlayerSeats) {
 		return ResolveNetActor(m_LockstepControlUID[player]);
 	}
 	return m_ControlledActor[player];
