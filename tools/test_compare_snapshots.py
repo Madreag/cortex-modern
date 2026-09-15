@@ -119,6 +119,22 @@ class SnapshotComparisonTests(unittest.TestCase):
                 self.assertEqual(self.compare(first, second, seats=seats), 1)
         self.assertEqual(self.compare(first, first, seats=(0, 1)), 0)
 
+    def test_cross_process_reaches_the_anchors_no_owner_decodes(self):
+        payload = runtime._payload("ArmRuntime1")
+        encoded = lambda data: base64.urlsafe_b64encode(data).decode().replace("=", ".")
+        limb = lambda anchor, length: "LP2 " + " ".join([str(length)] + ["1"] * 36 + [anchor, "1", "1", anchor] + ["1"] * 4 + ["0"])
+        # The owner is not an Arm, so only the cross-process pass reaches the payload's anchor.
+        scene = lambda anchor, length, arm: BASE.replace("\tPresetName = Shared\n", "\tPresetName = Shared\n"
+            f"\tPlaceSceneObject = MOSRotating\n\t\tLimbPathState = {limb(anchor, length)}\n"
+            f"\t\tSpecialBehaviour_ArmRuntime = {encoded(arm)}\n")
+        anchor_only = payload.replace(b"ArmRuntime1 " + b"0 " * 14, b"ArmRuntime1 " + b"0 " * 13 + b"5 ")
+        sim_start = payload.replace(b"ArmRuntime1 " + b"0 " * 12, b"ArmRuntime1 " + b"0 " * 11 + b"5 ")
+        for text, cross, expected in ((scene("9", 3, payload), False, 1), (scene("9", 3, payload), True, 0),
+                (scene("2", 3, anchor_only), False, 1), (scene("2", 3, anchor_only), True, 0),
+                (scene("2", 4, payload), True, 1), (scene("2", 3, sim_start), True, 1)):
+            with self.subTest(cross=cross, text=text[-60:]):
+                self.assertEqual(self.compare(scene("2", 3, payload), text, extra=["--cross-process"] if cross else []), expected)
+
     def test_local_seats_are_validated_and_named_once(self):
         with tempfile.TemporaryDirectory() as directory:
             report = Path(directory) / "host_report.json"
@@ -455,6 +471,29 @@ class RuntimeProjectionTests(unittest.TestCase):
             runtime.project(b, True, path=("player_ui", 1, "inventory"), local_roles=roles_b))
         with self.assertRaises(ValueError):
             checker.inventory_reference_roles(scene, state(999))
+
+    def test_arm_runtime_projects_only_its_hand_delay_anchor(self):
+        payload = runtime._payload("ArmRuntime1").replace(b"ArmRuntime1 " + b"0 " * 11, b"ArmRuntime1 " + b"7 " * 11)
+        value = runtime.decode(payload)
+        self.assertEqual(value["hand_targets"], [])
+        self.assert_field(value, ("hand_movement_delay_timer", "real_start"), True)
+        for field in (("hand_movement_delay_timer", "sim_start"), ("hand_movement_delay_timer", "sim_limit"),
+                ("max_length",), ("move_speed",), ("hand_idle_offset", 0), ("hand_idle_rotation",),
+                ("hand_current_offset", 1), ("hand_position", 0), ("hand_reached_target",), ("grip_strength",), ("throw_strength",)):
+            with self.subTest(field=field):
+                self.assert_field(value, field, False)
+
+    def test_new_native_runtime_schemas_decode_and_stay_strict(self):
+        for version in ("AttachableRuntime1", "ArmRuntime1", "HandTarget1", "LegRuntime1", "MagazineRuntime1", "AEJetpackRuntime1",
+                "PEmitterRuntime1", "ACraftRuntime1", "ACRocketRuntime1", "ACDropShipRuntime1", "ADoorRuntime1"):
+            value = runtime.decode(runtime._payload(version))
+            with self.subTest(version=version):
+                self.assertEqual(value["version"], version)
+                for name, kind in runtime.SCHEMAS[version]:
+                    if kind == "n":
+                        self.assert_field(value, (name,), False)
+                with self.assertRaises(ValueError):
+                    runtime.decode(runtime._payload(version) + b"1 ")
 
     def test_bitmap_parser_rejects_malformed_data_before_scratch_projection(self):
         good = b"10 GUIBitmap1 1 8 2 1 -1 0 2 0 1 2 a\x00 "

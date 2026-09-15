@@ -275,6 +275,38 @@ SCHEMAS["AEmitterRuntime1"] = [*fields("enabled was_emitting emit_count count_li
     *fields("flash_scale average_burst_impulse average_impulse loudness flash_burst_only sustain_sound sound_follows_emitter")]
 SCHEMAS["Emission1"] = [("entity", "o"), *fields("ppm burst_size accumulator spread min_velocity max_velocity life_variation pushes_emitter inherits_velocity inherits_angular_velocity"),
     *fields("start_timer stop_timer", TIMER), ("offset", VECTOR), ("particle_count", "n")]
+SCHEMAS["PEmitterRuntime1"] = [*fields("enabled was_emitting emit_count count_limit negative_throttle positive_throttle throttle ignore_self burst_scale "
+    "burst_triggered burst_spacing"), ("burst_timer", TIMER), ("play_burst_sound", "n"), ("emit_angle", "o"), ("emission_offset", VECTOR),
+    ("last_emit_timer", TIMER), *fields("flash_scale average_burst_impulse average_impulse loudness flash_burst_only sustain_sound sound_follows_emitter")]
+SCHEMAS["AttachableRuntime1"] = [("parent_offset", VECTOR),
+    *fields("draw_after_parent drawn_normally_by_parent delete_when_removed_from_parent gib_when_removed_from_parent "
+            "apply_transferred_forces_at_offset gib_with_parent_chance parent_gib_blast_strength_multiplier is_wound joint_strength joint_stiffness"),
+    *fields("joint_offset joint_position", VECTOR), ("damage_count", "n"),
+    *fields("inherits_flipped inherits_rot_angle inherited_rot_angle_offset mounted_rot_angle_offset inherits_frame inherits_velocity_when_detached "
+            "inherits_angular_velocity_when_detached atom_subgroup_id collides_with_terrain_while_attached ignores_particles_while_attached"),
+    *fields("previous_parent_offset previous_joint_offset", VECTOR), *fields("previous_rot_angle_offset pre_update_has_run_this_frame")]
+SCHEMAS["ArmRuntime1"] = [*fields("max_length move_speed"), ("hand_idle_offset", VECTOR), ("hand_idle_rotation", "n"),
+    *fields("hand_current_offset hand_previous_position hand_position", VECTOR), ("hand_movement_delay_timer", TIMER),
+    *fields("hand_reached_target grip_strength throw_strength"), ("hand_targets", sequence("o"))]
+SCHEMAS["HandTarget1"] = [("description", "s"), ("offset", VECTOR), *fields("delay flipped")]
+SCHEMAS["LegRuntime1"] = [*fields("contracted_offset extended_offset", VECTOR), *fields("min_extension max_extension normalized_extension"),
+    *fields("target_position idle_offset ankle_offset", VECTOR), *fields("will_idle move_speed")]
+SCHEMAS["MagazineRuntime1"] = fields("round_count full_capacity round_to_travel_ratio discardable ai_aim_velocity ai_aim_max_distance ai_aim_penetration ai_blast_radius")
+SCHEMAS["AEJetpackRuntime1"] = fields("jetpack_type jet_time_total jet_time_left jet_thrust_bonus_multiplier jet_replenish_rate minimum_fuel_ratio "
+    "jet_angle_range can_adjust_angle_while_firing adjusts_throttle_for_weight")
+SCHEMAS["ACraftRuntime1"] = [("hatch_state", "n"), ("hatch_timer", TIMER), *fields("hatch_delay exit_interval"), ("exit_timer", TIMER),
+    *fields("exit_incoming_cursor exit_line_phase has_delivered landing_craft"), *fields("flipped_timer crash_timer", TIMER),
+    *fields("can_enter_orbit max_passengers scuttle_if_flipped_time scuttle_on_death delivery_state altitude_move_state altitude_control "
+            "delivery_delay_multiplier network_delivery"), ("network_delivery_timer", TIMER)]
+SCHEMAS["ACRocketRuntime1"] = [("gear_state", "n"), ("paths", array(2, array(4, "o"))), ("max_gimbal_angle", "n"), ("foot_groups", array(2, "s"))]
+SCHEMAS["ACDropShipRuntime1"] = [("hatch_swing_range", "o"),
+    *fields("hatch_openness lateral_control lateral_control_speed auto_stabilize max_engine_angle hover_height_modifier")]
+SCHEMAS["ADoorRuntime1"] = [("initial_sprite_anim_duration", "n"), ("sensor_timer", TIMER),
+    *fields("sensor_interval door_state door_state_on_stop closed_by_default"), *fields("open_offset closed_offset", VECTOR),
+    *fields("open_angle closed_angle"), ("door_move_timer", TIMER),
+    *fields("door_move_time resume_after_stop changed_direction_after_stop door_move_stop_time"), ("reset_to_default_state_timer", TIMER),
+    *fields("reset_to_default_state_delay draw_material_layer_when_open draw_material_layer_when_closed door_material_id door_material_drawn "
+            "door_material_temp_erased"), ("door_material_redraw_timer", TIMER), ("last_door_material_position", VECTOR)]
 SCHEMAS["SLBackground1"] = [("bitmap_file", "s"), *fields("frame_count frame animation_mode animation_duration animation_reversing"),
     ("animation_timer", TIMER), *fields("manual_animation scroll_x scroll_y"), ("scroll_step", VECTOR), ("scroll_interval", "n"),
     ("scroll_timer", TIMER), ("auto_offset", VECTOR), *fields("fill_left fill_right fill_up fill_down ignore_autoscale clear_color bitmap_updated masked wrap_x wrap_y"),

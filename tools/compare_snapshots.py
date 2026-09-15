@@ -290,8 +290,10 @@ def native_projection(text):
             if fields[:1] == ["LP2"]:
                 if len(fields) < 47 or not fields[46].isdigit() or len(fields) != 47 + 2 * int(fields[46]):
                     raise ValueError("malformed LP2 limb checkpoint")
-                for field in fields[1:]:
-                    float(field)
+                # A cross-process projection has already replaced the two anchors this pass masks.
+                for index, field in enumerate(fields[1:], 1):
+                    if index not in (38, 41):
+                        float(field)
                 fields[38] = fields[41] = "LOCAL_REAL_CLOCK"
                 replacement, reason = " ".join(fields), "limb real-clock anchors"
         elif owner[1] in ("AEmitter", "AEJetpack") and name in ("SpecialBehaviour_AvgImpulse", "SpecialBehaviour_AvgBurstImpulse"):
@@ -534,11 +536,15 @@ def decode_base64(value):
 
 _SPRITE_CLASSES = _ACTOR_CLASSES | {"MOSprite", "MOSRotating", "MOSParticle", "Attachable", "AEmitter", "AEJetpack",
     "Arm", "Leg", "Turret", "HeldDevice", "HDFirearm", "ThrownDevice", "TDExplosive", "Magazine"}
+_ATTACHABLE_CLASSES = {"Attachable", "AEmitter", "AEJetpack", "Arm", "Leg", "Turret", "HeldDevice", "HDFirearm", "ThrownDevice", "TDExplosive", "Magazine"}
 _NATIVE_RUNTIME_OWNERS = {
     "MovableObject": _SPRITE_CLASSES | {"MovableObject", "MOPixel"},
     "Actor": _ACTOR_CLASSES, "AHuman": {"AHuman"}, "MOSprite": _SPRITE_CLASSES,
     "MOSRotating": _SPRITE_CLASSES - {"MOSprite", "MOSParticle"}, "HeldDevice": {"HeldDevice", "HDFirearm", "ThrownDevice", "TDExplosive"},
     "HDFirearm": {"HDFirearm"}, "AEmitter": {"AEmitter", "AEJetpack"}, "PieMenu": {"PieMenu"},
+    "Attachable": _ATTACHABLE_CLASSES, "Arm": {"Arm"}, "Leg": {"Leg"}, "Magazine": {"Magazine"}, "AEJetpack": {"AEJetpack"},
+    "PEmitter": {"PEmitter"}, "ACrab": {"ACrab"}, "ACraft": {"ACraft", "ACDropShip", "ACRocket"}, "ACRocket": {"ACRocket"},
+    "ACDropShip": {"ACDropShip"}, "ADoor": {"ADoor"},
 }
 
 
@@ -725,6 +731,7 @@ def compare_main() -> int:
     parser.add_argument("snapshot_b")
     parser.add_argument("--full", action="store_true", help="require the complete per-peer checkpoint, including local AI and presentation")
     parser.add_argument("--report", type=Path, help="write machine-readable comparison evidence")
+    parser.add_argument("--cross-process", action="store_true", help="the archives come from two processes, so reach every payload's wall-clock anchors")
     for side in ("a", "b"):
         parser.add_argument(f"--local-seat-{side}", type=int, help=f"the seat snapshot {side}'s peer plays under a shared seat table")
         parser.add_argument(f"--peer-report-{side}", type=Path, help=f"read that seat from snapshot {side}'s peer run report")
@@ -766,7 +773,7 @@ def compare_main() -> int:
         failures = []
         details = {"mode": "full" if args.full else "shared", "graphs": {}, "projection": {},
             "seat_model": "shared" if seats[0] is not None else "per-peer-player-one",
-            "local_seats": seats, "asymmetric_seats": sorted(asymmetric)}
+            "local_seats": seats, "asymmetric_seats": sorted(asymmetric), "cross_process": args.cross_process}
         activity_diff_lines = 0
         for name in names_a:
             data_a = za.read(name)
@@ -774,8 +781,8 @@ def compare_main() -> int:
             if name == "Save.ini":
                 text_a = normalize_snapshot_name(data_a.decode("utf-8"), base_a)
                 text_b = normalize_snapshot_name(data_b.decode("utf-8"), base_b)
-                text_a, runtime_a = runtime_projection(text_a, base_a, not args.full, local_seat=seats[0], asymmetric_seats=asymmetric)
-                text_b, runtime_b = runtime_projection(text_b, base_b, not args.full, local_seat=seats[1], asymmetric_seats=asymmetric)
+                text_a, runtime_a = runtime_projection(text_a, base_a, not args.full, args.cross_process, seats[0], asymmetric)
+                text_b, runtime_b = runtime_projection(text_b, base_b, not args.full, args.cross_process, seats[1], asymmetric)
                 details["runtime_projection"] = {"a": runtime_a, "b": runtime_b}
                 blocks_a = split_top_level(text_a)
                 blocks_b = split_top_level(text_b)
@@ -811,7 +818,8 @@ def compare_main() -> int:
                             failures.append("Lua VM indexes differ")
                         for index in sorted(graphs_a.keys() & graphs_b.keys()):
                             try:
-                                details["graphs"][str(index)] = compare_graphs(graphs_a[index], graphs_b[index], None if args.full else actor_uids)
+                                details["graphs"][str(index)] = compare_graphs(graphs_a[index], graphs_b[index],
+                                    None if args.full else actor_uids, args.cross_process)
                             except GraphMismatch as error:
                                 failures.append(f"Lua VM {index}: {error}")
                         continue
