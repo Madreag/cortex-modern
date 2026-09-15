@@ -24,6 +24,53 @@ function DecisionDay:GetAreaNameForBunker(bunkerNameOrId)
 	end
 end
 
+function DecisionDay:SortedBunkerIds()
+	-- bunkerIds is name-keyed, not a dense array; numeric id order is stable.
+	local ids = {};
+	for _, bunkerId in pairs(self.bunkerIds) do
+		ids[#ids + 1] = bunkerId;
+	end
+	table.sort(ids);
+	return ids;
+end
+
+function DecisionDay:SortedBunkerRegionNames()
+	-- Region names as pairs keys follow insertion history; sorted names do not.
+	local names = {};
+	for bunkerRegionName, _ in pairs(self.bunkerRegions) do
+		names[#names + 1] = bunkerRegionName;
+	end
+	table.sort(names);
+	return names;
+end
+
+function DecisionDay:SortedActorKeys(actors)
+	-- Actor-keyed tables follow addresses; UniqueID order does not.
+	local keys = {};
+	for key, _ in pairs(actors) do
+		if key ~= "count" then
+			keys[#keys + 1] = key;
+		end
+	end
+	table.sort(keys, function(a, b) return actors[a].UniqueID < actors[b].UniqueID; end);
+	return keys;
+end
+
+function DecisionDay:SortedPositionKeys(tbl)
+	-- Vector keys follow addresses; (X, Y) order does not.
+	local keys = {};
+	for pos, _ in pairs(tbl) do
+		keys[#keys + 1] = pos;
+	end
+	table.sort(keys, function(a, b)
+		if a.X ~= b.X then
+			return a.X < b.X;
+		end
+		return a.Y < b.Y;
+	end);
+	return keys;
+end
+
 function DecisionDay:SetupInternalReinforcementsData()
 	self.internalReinforcementsDoorParticle = CreateMOSRotating("Background Door", "Base.rte");
 
@@ -31,7 +78,7 @@ function DecisionDay:SetupInternalReinforcementsData()
 	self.internalReinforcementsData = {};
 	self.internalReinforcementsData.doorsAndActorsToSpawn = {};
 
-	for _, bunkerId in pairs(self.bunkerIds) do
+	for _, bunkerId in ipairs(self:SortedBunkerIds()) do
 		self.internalReinforcementsData[bunkerId] = {};
 		self.internalReinforcementsData[bunkerId].enabled = false;
 
@@ -40,7 +87,8 @@ function DecisionDay:SetupInternalReinforcementsData()
 	end
 
 	-- Note: Bunker region internal reinforcement areas are also counted based on the bunker they're in.
-	for bunkerRegionName, bunkerRegionData in pairs(self.bunkerRegions) do
+	for _, bunkerRegionName in ipairs(self:SortedBunkerRegionNames()) do
+		local bunkerRegionData = self.bunkerRegions[bunkerRegionName];
 		if bunkerRegionData.internalReinforcementsArea then
 			for box in bunkerRegionData.internalReinforcementsArea.Boxes do
 				local shouldAddBox = true;
@@ -57,7 +105,7 @@ function DecisionDay:SetupInternalReinforcementsData()
 		end
 	end
 
-	for _, bunkerId in pairs(self.bunkerIds) do
+	for _, bunkerId in ipairs(self:SortedBunkerIds()) do
 		for internalReinforcementsBox in self.internalReinforcementsData[bunkerId].area.Boxes do
 			local backgroundDoor = CreateTerrainObject("Module Back Middle E", "Base.rte");
 			backgroundDoor.Pos = SceneMan:SnapPosition(internalReinforcementsBox.Corner, true);
@@ -99,7 +147,7 @@ function DecisionDay:StartActivity(isNewGame)
 
 	self.bunkerAreas = {};
 	self.popoutTurretsData = {};
-	for _, bunkerId in pairs(self.bunkerIds) do
+	for _, bunkerId in ipairs(self:SortedBunkerIds()) do
 		local bunkerAreaName = self:GetAreaNameForBunker(bunkerId);
 		self.bunkerAreas[bunkerId] = {};
 		self.bunkerAreas[bunkerId].totalArea = scene:GetArea(bunkerAreaName);
@@ -265,7 +313,7 @@ function DecisionDay:StartActivity(isNewGame)
 	self.aiData.actors.externalPopoutTurrets = createNewActorDataTable();
 
 	self.aiData.enemiesInsideBunkers = {};
-	for _, bunkerId in pairs(self.bunkerIds) do
+	for _, bunkerId in ipairs(self:SortedBunkerIds()) do
 		self.aiData.enemiesInsideBunkers[bunkerId] = {};
 	end
 
@@ -336,7 +384,8 @@ function DecisionDay:StartActivity(isNewGame)
 		"humansAreControllingAlliedActors",
 		"frontBunkerAlliedDefendersSpawned", "middleBunkerAlliedDefendersSpawned",
 	}
-	for bunkerRegionName, bunkerRegionData in pairs(self.bunkerRegions) do
+	for _, bunkerRegionName in ipairs(self:SortedBunkerRegionNames()) do
+		local bunkerRegionData = self.bunkerRegions[bunkerRegionName];
 		local bunkerRegionKeyPrefix = "bunkerRegions." .. bunkerRegionName .. ".";
 		self.keysToSaveAndLoadValuesOf[#self.keysToSaveAndLoadValuesOf + 1] = bunkerRegionKeyPrefix .. "enabled";
 		self.keysToSaveAndLoadValuesOf[#self.keysToSaveAndLoadValuesOf + 1] = bunkerRegionKeyPrefix .. "ownerTeam";
@@ -345,7 +394,7 @@ function DecisionDay:StartActivity(isNewGame)
 		self.keysToSaveAndLoadValuesOf[#self.keysToSaveAndLoadValuesOf + 1] = bunkerRegionKeyPrefix .. "aiRegionDefenseTimer";
 		self.keysToSaveAndLoadValuesOf[#self.keysToSaveAndLoadValuesOf + 1] = bunkerRegionKeyPrefix .. "aiRegionAttackTimer";
 	end
-	for _, bunkerId in pairs(self.bunkerIds) do
+	for _, bunkerId in ipairs(self:SortedBunkerIds()) do
 		self.keysToSaveAndLoadValuesOf[#self.keysToSaveAndLoadValuesOf + 1] = "internalReinforcementsData." .. tostring(bunkerId) .. ".enabled";
 
 		local popoutTurretDataPrefix = "popoutTurretsData." .. tostring(bunkerId) .. ".";
@@ -632,7 +681,8 @@ function DecisionDay:SpawnAreaDefinedAIDefenders()
 		MovableMan:AddActor(actor);
 	end
 
-	for bunkerRegionName, bunkerRegionData in pairs(self.bunkerRegions) do
+	for _, bunkerRegionName in ipairs(self:SortedBunkerRegionNames()) do
+		local bunkerRegionData = self.bunkerRegions[bunkerRegionName];
 		if bunkerRegionName:find(self:GetAreaNameForBunker(bunkerId)) then
 			areaCenterPointX = bunkerRegionData.totalArea.Center.X;
 			for box in bunkerRegionData.defenderArea.Boxes do
@@ -827,7 +877,8 @@ end
 function DecisionDay:DoSpeedrunMode()
 	self.Difficulty = Activity.MAXDIFFICULTY;
 	self.difficultyRatio = 2;
-	for _, bunkerRegionData in pairs(self.bunkerRegions) do
+	for _, bunkerRegionName in ipairs(self:SortedBunkerRegionNames()) do
+		local bunkerRegionData = self.bunkerRegions[bunkerRegionName];
 		bunkerRegionData.captureLimit = 600 * self.difficultyRatio;
 		bunkerRegionData.aiRegionDefenseTimer:SetSimTimeLimitMS(60000 / self.difficultyRatio);
 		bunkerRegionData.aiRegionDefenseTimer.ElapsedSimTimeMS = 60000 / self.difficultyRatio;
@@ -1288,7 +1339,8 @@ function DecisionDay:UpdateObjectiveArrowsAndRegionVisuals()
 			self:AddObjectivePoint("Find and enter the abandoned tunnel", self.bunkerAreas[self.bunkerIds.middleBunker].totalArea.Center + Vector(84, 185), self.humanTeam, GameActivity.ARROWDOWN);
 		end
 
-		for bunkerRegionName, bunkerRegionData in pairs(self.bunkerRegions) do
+		for _, bunkerRegionName in ipairs(self:SortedBunkerRegionNames()) do
+			local bunkerRegionData = self.bunkerRegions[bunkerRegionName];
 			if bunkerRegionData.enabled then
 				if bunkerRegionData.ownerTeam ~= self.humanTeam then
 					local objectiveString = bunkerRegionData.hasBeenCapturedAtLeastOnceByHumanTeam and "Recapture " or "Capture ";
@@ -1381,7 +1433,8 @@ function DecisionDay:UpdateLZAreas()
 end
 
 function DecisionDay:UpdateRegionCapturing()
-	for bunkerRegionName, bunkerRegionData in pairs(self.bunkerRegions) do
+	for _, bunkerRegionName in ipairs(self:SortedBunkerRegionNames()) do
+		local bunkerRegionData = self.bunkerRegions[bunkerRegionName];
 		if bunkerRegionData.enabled then
 			local captureBox = bunkerRegionData.captureArea.FirstBox;
 			if captureBox then
@@ -1490,7 +1543,8 @@ function DecisionDay:UpdateRegionCapturing()
 end
 
 function DecisionDay:UpdateRegionScreens()
-	for bunkerRegionName, bunkerRegionData in pairs(self.bunkerRegions) do
+	for _, bunkerRegionName in ipairs(self:SortedBunkerRegionNames()) do
+		local bunkerRegionData = self.bunkerRegions[bunkerRegionName];
 		if bunkerRegionData.enabled then
 			local currentFauxdanDisplayFrameString;
 			local currentLoginScreenFrameString;
@@ -1552,7 +1606,8 @@ end
 function DecisionDay:UpdateVaultTickIncome()
 	if self.vaultIncomeTimer:IsPastSimTimeLimit() then
 		self:ChangeTeamFunds(self.vaultTickIncome, self.aiTeam); -- Note: AI always gets one free vault worth of income, to keep their external spawns coming.
-		for bunkerRegionName, bunkerRegionData in pairs(self.bunkerRegions) do
+		for _, bunkerRegionName in ipairs(self:SortedBunkerRegionNames()) do
+			local bunkerRegionData = self.bunkerRegions[bunkerRegionName];
 			if bunkerRegionName:find("Vault") and bunkerRegionData.enabled then
 				local vaultTickIncome = self.vaultTickIncome * bunkerRegionData.incomeMultiplier;
 				if bunkerRegionData.ownerTeam == self.humanTeam then
@@ -1593,7 +1648,7 @@ function DecisionDay:UpdateAndCleanupDataTables(teamToCleanup)
 	if teamToCleanup ~= self.humanTeam then
 		cleanupDataTables(self.aiData.actors);
 
-		for _, bunkerId in pairs(self.bunkerIds) do
+		for _, bunkerId in ipairs(self:SortedBunkerIds()) do
 			self.aiData.enemiesInsideBunkers[bunkerId] = {};
 			if self.internalReinforcementsData[bunkerId].enabled and bunkerOperationsOwnedByAITeam(self, bunkerId) then
 				for bunkerBox in self.bunkerAreas[bunkerId].totalArea.Boxes do
@@ -1629,7 +1684,7 @@ function DecisionDay:UpdateAIInternalReinforcements(forceInstantSpawning)
 		self.aiData.numberOfInternalReinforcementsCreated = 0;
 
 		if self.aiData.actors.internalReinforcements.count < self.aiData.internalReinforcementLimit then
-			for _, bunkerId in pairs(self.bunkerIds) do
+			for _, bunkerId in ipairs(self:SortedBunkerIds()) do
 				if self.internalReinforcementsData[bunkerId].enabled then
 					local maxNumberOfInternalReinforcementsToCreate = math.ceil(self.difficultyRatio * 2 * bunkerId * RangeRand(0.5, 1.5));
 					local maxFundsForInternalReinforcements = math.ceil(self.difficultyRatio * 350 * bunkerId * RangeRand(0.75, 1.25));
@@ -1664,7 +1719,8 @@ function DecisionDay:UpdateAIDecisions()
 	local aiOwnedBunkerRegions = {};
 	local humanOwnedBunkerRegions = {};
 
-	for bunkerRegionName, bunkerRegionData in pairs(self.bunkerRegions) do
+	for _, bunkerRegionName in ipairs(self:SortedBunkerRegionNames()) do
+		local bunkerRegionData = self.bunkerRegions[bunkerRegionName];
 		if bunkerRegionData.enabled then
 			if bunkerRegionData.ownerTeam == self.aiTeam then
 				aiOwnedBunkerRegions[#aiOwnedBunkerRegions + 1] = bunkerRegionData;
@@ -1716,8 +1772,9 @@ function DecisionDay:UpdateAIDecisions()
 
 		self:UpdateAndCleanupDataTables(self.aiTeam);
 
-		for key, actor in pairs(self.aiData.actors.attackers) do
-			if key ~= "count" and actor.HasEverBeenAddedToMovableMan then
+		for _, key in ipairs(self:SortedActorKeys(self.aiData.actors.attackers)) do
+			local actor = self.aiData.actors.attackers[key];
+			if actor.HasEverBeenAddedToMovableMan then
 				local shouldChangeTarget = false;
 				if actor.AIMode == Actor.AIMODE_BRAINHUNT then
 					shouldChangeTarget = true;
@@ -1811,12 +1868,11 @@ function DecisionDay:UpdateAlliedAttackersWaypoint(optionalSpecificActorToUpdate
 		optionalSpecificActorToUpdate.AIMode = Actor.AIMODE_GOTO;
 	else
 		self:UpdateAndCleanupDataTables(self.humanTeam);
-		for key, actor in pairs(self.alliedData.actors.attackers) do
-			if key ~= "count" then
-				actor:ClearAIWaypoints();
-				actor:AddAISceneWaypoint(targetPosition + Vector(math.random(-25, 25), 0));
-				actor.AIMode = Actor.AIMODE_GOTO;
-			end
+		for _, key in ipairs(self:SortedActorKeys(self.alliedData.actors.attackers)) do
+			local actor = self.alliedData.actors.attackers[key];
+			actor:ClearAIWaypoints();
+			actor:AddAISceneWaypoint(targetPosition + Vector(math.random(-25, 25), 0));
+			actor.AIMode = Actor.AIMODE_GOTO;
 		end
 	end
 end
@@ -1856,13 +1912,12 @@ function DecisionDay:DoHumanBrainPieSliceHandling()
 			end
 		end
 		self:UpdateAndCleanupDataTables(self.humanTeam);
-		for key, actor in pairs(self.alliedData.actors.attackers) do
-			if key ~= "count" then
-				actor.PlayerControllable = self.humansAreControllingAlliedActors;
-				actor.HUDVisible = self.humansAreControllingAlliedActors;
-				if not self.humansAreControllingAlliedActors then
-					self:UpdateAlliedAttackersWaypoint(actor);
-				end
+		for _, key in ipairs(self:SortedActorKeys(self.alliedData.actors.attackers)) do
+			local actor = self.alliedData.actors.attackers[key];
+			actor.PlayerControllable = self.humansAreControllingAlliedActors;
+			actor.HUDVisible = self.humansAreControllingAlliedActors;
+			if not self.humansAreControllingAlliedActors then
+				self:UpdateAlliedAttackersWaypoint(actor);
 			end
 		end
 	end
@@ -2372,7 +2427,8 @@ function DecisionDay:CreateInternalReinforcements(loadout, internalReinforcement
 	crabToHumanSpawnRatio = 0;
 
 	local numberOfReinforcementsCreated = 0;
-	for internalReinforcementPosition, enemyTargetsForPosition in pairs(internalReinforcementPositionsToEnemyTargets) do
+	for _, internalReinforcementPosition in ipairs(self:SortedPositionKeys(internalReinforcementPositionsToEnemyTargets)) do
+		local enemyTargetsForPosition = internalReinforcementPositionsToEnemyTargets[internalReinforcementPosition];
 		if numberOfReinforcementsCreated < maxNumberOfInternalReinforcementsToCreate and maxFundsForInternalReinforcements > 0 then
 			local doorParticle = self.internalReinforcementsDoorParticle:Clone();
 			doorParticle.Pos = internalReinforcementPosition;
