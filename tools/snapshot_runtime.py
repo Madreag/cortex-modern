@@ -757,7 +757,11 @@ def selftest():
         check("game_activity3_refused_as_game_activity1", "trailing" in str(error) or "invalid runtime checkpoint" in str(error))
     check("game_activity3_decodes", decode(grown)["version"] == "GameActivity3" and
           "lockstep_seat_brains" in decode(grown) and len(decode(grown)["lockstep_seat_brains"]) == 4)
-    # A record that shrank keeps the older reader honest too: the tag is the gate, and the payload runs out.
+    # HeldDeviceRuntime1 texts stay readable; HeldDevice.cpp:577 keys its legacy branch on this exact header.
+    v1 = _payload("HeldDeviceRuntime1")
+    check("held_device_runtime1_still_decodes", v1.startswith(b"18 HeldDeviceRuntime1 ") and
+          decode(v1)["version"] == "HeldDeviceRuntime1" and "seen_by_player" in decode(v1))
+    # A v2 record mislabelled as v1 is still refused: the tag is the gate, and the payload runs out.
     shrunk = _payload("HeldDeviceRuntime2")
     try:
         decode(shrunk.replace(b"18 HeldDeviceRuntime2", b"18 HeldDeviceRuntime1", 1))

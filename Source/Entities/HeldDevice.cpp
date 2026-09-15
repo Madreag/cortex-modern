@@ -574,10 +574,17 @@ std::string HeldDevice::SaveHeldDeviceRuntime() const {
 
 bool HeldDevice::LoadHeldDeviceRuntime(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader archive(text, "HeldDeviceRuntime2", validateOnly);
+		const bool legacy = text.starts_with("18 HeldDeviceRuntime1 ");
+		CheckpointReader archive(text, legacy ? "HeldDeviceRuntime1" : "HeldDeviceRuntime2", validateOnly);
 		archive(m_HeldDeviceType, m_Activated, m_HotkeyActivated, m_ActivationTimer, m_HotkeyActivationTimer, m_OneHanded, m_DualWieldable);
 		archive(m_StanceOffset, m_SharpStanceOffset, m_SupportOffset, m_UseSupportOffsetWhileReloading, m_SharpAim, m_MaxSharpLength, m_Supportable);
-		archive(m_Supported, m_SupportAvailable, m_IsUnPickupable, m_GripStrengthMultiplier, m_BlinkTimer, m_Loudness);
+		archive(m_Supported, m_SupportAvailable, m_IsUnPickupable);
+		if (legacy) {
+			// HeldDeviceRuntime1 carried the seen-by-player flags here; the next draw decides them, so read past.
+			std::array<bool, Players::MaxPlayerCount> seenByPlayer{};
+			archive.Value(seenByPlayer);
+		}
+		archive(m_GripStrengthMultiplier, m_BlinkTimer, m_Loudness);
 		archive(m_IsExplosiveWeapon, m_GetsHitByMOsWhenHeld, m_VisualRecoilMultiplier);
 		archive.Finish();
 		return true;
