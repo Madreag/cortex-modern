@@ -205,6 +205,8 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	                         rowTop(m_ToastsCheckbox), rowTop(m_PredictionCheckbox), rowTop(m_GUIControlManager->GetControl("LabelMatchStatusWidget")), rowTop(m_StatusModeCombo)};
 
 	ShowSavedValues();
+	// The skin draws only the player page's box first; checking its tab keeps the selector in step.
+	SetActivePage(Page::Player);
 }
 
 void SettingsNetworkGUI::SetEnabled(bool enable) {
