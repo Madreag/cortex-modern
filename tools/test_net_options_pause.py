@@ -5,6 +5,10 @@ network UI probe. The lifecycle case asserts that escape opens the pause menu on
 the match keeps running (no activity pause, no leave), that settings and resume round-trip, that
 the synchronized pause and the explicit leave still produce their existing lines, and that a
 single-player pause is unchanged.
+
+The desync arms drive no menu: they are the end-to-end gate for the runtime desync check itself.
+`desync` perturbs the client's sim once and requires both peers to stop with the named reason
+within one sample interval; `desync_clean` requires the same wire to run silently and be counted.
 """
 
 import argparse
@@ -17,11 +21,18 @@ import threading
 from pathlib import Path
 
 SCRATCH = Path("D:/mx/opus-l03-pause-session-20260914")
-PORTS = range(48350, 48370)
+PORT_BASE = 48350
+PORT_SPAN = 20
 # The match must outlast the probe script on a loaded machine: a step costs a rendered frame, which a
 # contended peer produces far more slowly than the fixed timestep produces ticks.
 TICKS = 1800
+# The desync arms drive no menu, so they need only enough ticks to clear a few sample intervals.
+ARM_TICKS = {"desync": 300, "desync_clean": 300}
+# The runtime desync check's sample interval, Main.cpp c_DesyncCheckIntervalTicks.
+DESYNC_INTERVAL = 30
+PERTURB_TICK = 50
 SIZES = ((640, 360), (960, 540))
+FIRST_SIZE_ONLY = ("peers4", "resync", "pad", "desync", "desync_clean")
 MATCH_ROWS = ("ButtonLeaveMatch", "ButtonPauseMatch", "ButtonSettings", "ButtonSaveDiagnostics", "ButtonResume")
 SINGLE_PLAYER_ROWS = ("ButtonBackToMain", "ButtonSaveOrLoadGame", "ButtonModManager")
 LEFT_LOCAL = "NETWORK: Match left"
@@ -29,6 +40,7 @@ LEFT_REMOTE = re.compile(r"^\[net-match\] .* left the match at frame (\d+) ")
 PAUSED = re.compile(r"^\[net-match\] match paused at tick (\d+) sim ms \d+$")
 RESUMED = re.compile(r"^\[net-match\] match resumed at tick (\d+) sim ms \d+$")
 ACTIVITY_PAUSED = re.compile(r'^SYSTEM: Activity "[^"]*" was paused$')
+DESYNC_STOP = re.compile(r"Desync:sim state diverged at tick (\d+)")
 
 
 def sha(path):
@@ -161,20 +173,29 @@ def peer_names(arm):
     return ("host", "client")
 
 
+def arm_ticks(arm):
+    return ARM_TICKS.get(arm, TICKS)
+
+
 def peer_args(arm, who, port, root, peers):
     args = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", str(peers),
-            "-net-match-ticks", str(TICKS), "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
+            "-net-match-ticks", str(arm_ticks(arm)), "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
             "-tick-hashes", "-out", str(root / f"{who}_trace.json"),
             "-net-match-report", str(root / f"{who}_report.json")]
     args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
     if arm == "resync":
         # The detector's own perturbation on one peer is what makes a real resync happen mid-match.
         args += ["-net-match-e2e-resync"] + (["-determinism-selftest-perturb"] if who == "client" else [])
+    if arm == "desync":
+        # No heal here: the divergence must surface as a named stop on both peers, not be repaired.
+        args += ["-determinism-selftest-perturb"] if who == "client" else []
     return args
 
 
 def probe_owners(arm):
     """Which peers drive the menu. The menu arm opens on every peer; the others open on one."""
+    if arm in ("desync", "desync_clean"):
+        return ()
     if arm in ("menu", "peers4"):
         return peer_names(arm)
     if arm == "leave":
@@ -248,6 +269,11 @@ def probe_result(root, who):
     return json.loads(result.read_text(encoding="utf-8")) if result.exists() else {}
 
 
+def peer_report(root, who):
+    report = root / f"{who}_report.json"
+    return json.loads(report.read_text(encoding="utf-8")) if report.exists() else {}
+
+
 def executed_commands(probe):
     """The script commands the probe actually ran, in order."""
     script = probe.get("script", {}).get("steps", [])
@@ -264,7 +290,7 @@ def inspect(arm, root, outcome, strict_compare):
         checks[f"{who}_no_fatal"] = "FATAL" not in logs[who]
         details["lines"][who] = [line for line in logs[who].splitlines()
                                  if LEFT_LOCAL in line or LEFT_REMOTE.match(line) or PAUSED.match(line)
-                                 or RESUMED.match(line) or ACTIVITY_PAUSED.match(line)]
+                                 or RESUMED.match(line) or ACTIVITY_PAUSED.match(line) or DESYNC_STOP.search(line)]
     if arm == "sp":
         # The menu script quits from the pause menu before the scenario's tick budget, so the run ends on
         # the scenario's own unfinished verdict; a crash or a hang would not land there.
@@ -272,6 +298,42 @@ def inspect(arm, root, outcome, strict_compare):
                                                      and outcome["records"]["sp"].get("timed_out") is False)
         checks["sp_activity_paused"] = any(ACTIVITY_PAUSED.match(line) for line in logs["sp"].splitlines())
         checks["sp_no_menu_failure"] = "[menu-script] FAILED" not in logs["sp"]
+    elif arm in ("desync", "desync_clean"):
+        # The runtime desync check end to end: both peers hash on the interval, put it on the wire and
+        # act on the mismatch. The counters are what makes a dead exchange countable instead of silent.
+        # A stopped round samples only until its stop, so only the clean arm carries the cadence floor.
+        # The input-delay ramp-in can swallow the first sample; every later one must be there.
+        expected = 1 if arm == "desync" else arm_ticks(arm) // DESYNC_INTERVAL - 1
+        stops = {}
+        mismatches = 0
+        for who in outcome["peers"]:
+            report = peer_report(root, who)
+            counters = report.get("desync_check") or {}
+            details.setdefault("desync_check", {})[who] = counters
+            details.setdefault("runtime_error", {})[who] = report.get("runtime_error")
+            mismatches += counters.get("mismatches", 0)
+            checks[f"{who}_submitted"] = counters.get("submissions", 0) >= expected
+            checks[f"{who}_sent"] = counters.get("sends", 0) >= expected
+            checks[f"{who}_compared"] = counters.get("compares", 0) >= expected
+            stop = DESYNC_STOP.search(report.get("runtime_error") or "")
+            stops[who] = int(stop[1]) if stop else None
+            if arm == "desync":
+                checks[f"{who}_stopped_on_desync"] = stop is not None
+                checks[f"{who}_stop_line_logged"] = DESYNC_STOP.search(logs[who]) is not None
+                checks[f"{who}_exit"] = outcome["records"][who].get("exit_code") == 1
+                # Caught within one sample interval of the perturbed tick, and never before it.
+                checks[f"{who}_caught_within_interval"] = bool(
+                    stop and PERTURB_TICK < stops[who] <= PERTURB_TICK + DESYNC_INTERVAL)
+                checks[f"{who}_trace_written"] = (root / f"{who}_trace.json").exists()
+            else:
+                checks[f"{who}_no_desync"] = stop is None and DESYNC_STOP.search(logs[who]) is None
+                checks[f"{who}_exit"] = outcome["records"][who].get("exit_code") == 0
+                checks[f"{who}_no_mismatch"] = counters.get("mismatches", 0) == 0
+        details["desync_stop_ticks"] = stops
+        if arm == "desync":
+            # Whoever compares first counts the mismatch; the other may take its stop off the wire.
+            checks["mismatch_counted"] = mismatches >= 1
+            checks["peers_named_one_tick"] = len(set(stops.values())) == 1 and None not in stops.values()
     else:
         for who in outcome["peers"]:
             if arm != "leave":
@@ -317,13 +379,19 @@ def main():
     parser.add_argument("--case", choices=("lifecycle",), required=True)
     parser.add_argument("--exe-sha256", required=True)
     parser.add_argument("--timeout", type=int, default=600)
-    parser.add_argument("--arms", nargs="*", default=["menu", "pause", "leave", "sp", "peers4", "resync", "pad"])
+    parser.add_argument("--arms", nargs="*",
+                        default=["menu", "pause", "leave", "sp", "peers4", "resync", "pad", "desync", "desync_clean"])
+    # A later lane runs the same arms from its own scratch root and its own ports.
+    parser.add_argument("--scratch-root", type=Path, default=SCRATCH)
+    parser.add_argument("--port-base", type=int, default=PORT_BASE)
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("verification family owns the machine; no driver may start")
     repo, root = options.repo.resolve(), options.out.resolve()
-    if not root.is_relative_to(SCRATCH.resolve()) or root == SCRATCH.resolve():
-        parser.error(f"--out must name a fresh run beneath {SCRATCH}")
+    scratch = options.scratch_root.resolve()
+    ports = range(options.port_base, options.port_base + PORT_SPAN)
+    if not root.is_relative_to(scratch) or root == scratch:
+        parser.error(f"--out must name a fresh run beneath {scratch}")
     sys.path.insert(0, str(repo / "tools"))
     from compare_sim_traces import strict_compare
     from run_sim_test import make_run
@@ -332,7 +400,7 @@ def main():
     root.mkdir(parents=True, exist_ok=False)
     exe_sha = sha(repo / "Cortex Command.exe")
     result = {"pass": False, "case": options.case, "checks": {}, "arms": {}, "ticks_per_run": TICKS,
-              "ports": list(PORTS), "driver_sha256": sha(__file__), "exe_sha256": exe_sha,
+              "arm_ticks": ARM_TICKS, "ports": list(ports), "driver_sha256": sha(__file__), "exe_sha256": exe_sha,
               "peer_hash_scope": "unchanged strict_compare: controller excluded; every other subsystem at every tick"}
     try:
         if exe_sha.lower() != options.exe_sha256.lower():
@@ -340,10 +408,10 @@ def main():
         index = 0
         for size in SIZES:
             for arm in options.arms:
-                if arm in ("peers4", "resync", "pad") and size != SIZES[0]:
+                if arm in FIRST_SIZE_ONLY and size != SIZES[0]:
                     continue
                 name = f"{arm}_{size[0]}x{size[1]}"
-                port = PORTS[index % len(PORTS)]
+                port = ports[index % len(ports)]
                 index += 1
                 arm_root = root / name
                 if arm == "sp":
