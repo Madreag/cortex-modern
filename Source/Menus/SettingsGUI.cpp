@@ -269,7 +269,7 @@ namespace RTE::MenuAutomation {
 		}
 		std::string section = dynamic_cast<GUIButton*>(control) ? "Button_Up" : dynamic_cast<GUITab*>(control) ? "Tab" :
 			dynamic_cast<GUICheckbox*>(control) ? "Checkbox" : dynamic_cast<GUIRadioButton*>(control) ? "RadioButton" :
-			dynamic_cast<GUITextBox*>(control) ? "TextBox" : "Label";
+			dynamic_cast<GUITextBox*>(control) || dynamic_cast<GUIComboBox*>(control) ? "TextBox" : "Label";
 		std::string fontName;
 		auto* skin = manager->GetSkin();
 		if (!skin->GetValue(section, "Font", &fontName)) return false;
@@ -294,6 +294,8 @@ namespace RTE::MenuAutomation {
 			int margin = 3, top = 0;
 			skin->GetValue(section, "WidthMargin", &margin); skin->GetValue(section, "HeightMargin", &top);
 			width -= 2 * margin; height -= top;
+			// A combo box shows its selected item in a text panel the 17 pixel drop-down button covers.
+			if (dynamic_cast<GUIComboBox*>(control)) width -= 17;
 		}
 		const int textWidth = font->CalculateWidth(text), textHeight = font->CalculateHeight(text);
 		observation += " measured=" + Json({textWidth, textHeight}).dump() + " available=" + Json({width, height}).dump();
