@@ -2148,6 +2148,8 @@ namespace RTE {
 			Actor* ownerView = new Actor();
 			MOSRotating* ownerVictim = new MOSRotating();
 			MOSRotating* peerVictim = new MOSRotating();
+			MOSRotating* impulseVictim = new MOSRotating();
+			Actor* ignored = new Actor();
 			const auto finish = [&](const char* message) {
 				g_CurrentAIActor = nullptr;
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
@@ -2155,10 +2157,13 @@ namespace RTE {
 				g_MovableMan.UnregisterObject(ownerView);
 				g_MovableMan.UnregisterObject(ownerVictim);
 				g_MovableMan.UnregisterObject(peerVictim);
+				g_MovableMan.UnregisterObject(impulseVictim);
+				g_MovableMan.UnregisterObject(ignored);
 				if (message) *error = message;
 				return message == nullptr;
 			};
-			if (ownerView->MovableObject::Create(1) < 0 || ownerVictim->MovableObject::Create(1) < 0 || peerVictim->MovableObject::Create(1) < 0) {
+			if (ownerView->MovableObject::Create(1) < 0 || ownerVictim->MovableObject::Create(1) < 0 || peerVictim->MovableObject::Create(1) < 0 ||
+			    impulseVictim->MovableObject::Create(1) < 0 || ignored->MovableObject::Create(1) < 0) {
 				return finish("selftest objects could not be created");
 			}
 			ownerView->SetTeam(0);
@@ -2218,8 +2223,47 @@ namespace RTE {
 			if (!directGibbed || directQueued) {
 				return finish("a gib outside the AI pass did not happen where it was asked for");
 			}
+
+			// LuaBindingsEntities.cpp binds `GibThis(impulse, ignored)` too: that form is the same call and
+			// must leave the same command, carrying what the script asked for.
+			const Vector impulse(7.5F, -2.25F);
+			g_CurrentAIActor = ownerView;
+			impulseVictim->GibThisFromScript(impulse, ignored);
+			g_CurrentAIActor = nullptr;
+			if (impulseVictim->IsSetToDelete()) {
+				return finish("the AI pass gibbed the producer's object at once through the impulse form");
+			}
+			ownerView->SendDeferredGibs();
+			const std::vector<NetGameCommand> impulseSent = ScenarioRunner::DrainLocalGameCommands();
+			const NetGameAIGib expected{ownerUID, static_cast<int64_t>(impulseVictim->GetUniqueID()), static_cast<int64_t>(ignored->GetUniqueID()), 0, impulse.m_X, impulse.m_Y};
+			const NetGameAIGib* carried = impulseSent.size() == 1 ? std::get_if<NetGameAIGib>(&impulseSent[0].payload) : nullptr;
+			if (!carried || !(*carried == expected)) {
+				return finish("the sent gib does not carry the impulse and the object its gibs may not hit");
+			}
+			// The wire keeps the whole call.
+			NetLockstepFrame frame;
+			frame.senderPeerId = 1;
+			frame.targetFrame = 11;
+			frame.commands.push_back(NetGameCommand{1, expected, 5});
+			const NetLockstepPacket packet{frame};
+			std::vector<uint8_t> bytes;
+			if (!NetLockstepCodec::Encode(packet, bytes)) {
+				return finish("the gib command did not encode");
+			}
+			const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes);
+			const NetLockstepFrame* decodedFrame = decoded.ok ? std::get_if<NetLockstepFrame>(&decoded.packet.payload) : nullptr;
+			if (!decodedFrame || decodedFrame->commands.size() != 1 || !(decodedFrame->commands[0].payload == frame.commands[0].payload)) {
+				return finish("the gib command did not survive the wire");
+			}
+			// Every peer gibs with the call the command carried.
+			impulseVictim->GibThis(Vector(carried->impulseX, carried->impulseY), ignored);
+			if (!impulseVictim->IsSetToDelete()) {
+				return finish("the committed gib did not gib the object it named");
+			}
 			std::cout << "[net-lockstep-selftest] PASS ai gib crosses the wire: sent=" << sent.size()
-			          << " owner=" << ownerVictim->IsSetToDelete() << " peer=" << peerVictim->IsSetToDelete() << std::endl;
+			          << " owner=" << ownerVictim->IsSetToDelete() << " peer=" << peerVictim->IsSetToDelete()
+			          << " impulse=" << carried->impulseX << "," << carried->impulseY << " ignore=" << (carried->ignoreUID != 0)
+			          << " bytes=" << bytes.size() << std::endl;
 			return finish(nullptr);
 		}
 
@@ -2327,6 +2371,80 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		// SharedBehaviors.lua:50 raises the alarm point inside the AI pass. m_LastAlarmPos and
+		// m_PointingTarget are archived with the actor, so a write the producer alone makes diverges every
+		// peer's checkpoint: it has to cross the wire like the waypoint orders it sits beside.
+		bool TestAIAlarmPointCrossesTheWire(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			if (!StartOwnedPair(48335, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x573231414c524dULL, hostTransport, clientTransport, host, client, error)) {
+				return false;
+			}
+			Actor* ownerView = new Actor();
+			Actor* peerView = new Actor();
+			// The alarm write only lands 50 ms after the last one, so the arm moves the sim clock the way a
+			// rollback does and puts it back when it is done.
+			const long long simUpdatesBefore = g_TimerMan.GetSimUpdateCount();
+			const long long simTicksBefore = g_TimerMan.GetSimTimeTicks();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				g_TimerMan.RewindSimTo(simUpdatesBefore, simTicksBefore);
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				g_MovableMan.UnregisterObject(ownerView);
+				g_MovableMan.UnregisterObject(peerView);
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (ownerView->MovableObject::Create(1) < 0 || peerView->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			ownerView->SetTeam(0);
+			peerView->SetTeam(0);
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+			g_TimerMan.RewindSimTo(simUpdatesBefore + 60, simTicksBefore + 1000000);
+
+			// The owner's AI pass: SharedBehaviors' `Owner:SetAlarmPoint(pos)` lands exactly here.
+			const Vector alarm(123.0F, -45.0F);
+			g_CurrentAIActor = ownerView;
+			ownerView->AlarmPoint(alarm);
+			const Vector seenByThePass = ownerView->GetAlarmPoint();
+			g_CurrentAIActor = nullptr;
+			if (ownerView->GetLastAlarmPosRaw() == alarm) {
+				return finish("the AI pass wrote the producer's alarm point instead of leaving an order");
+			}
+			ownerView->SendDeferredWaypoints();
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			const int64_t ownerUID = static_cast<int64_t>(ownerView->GetUniqueID());
+			const NetGameAIOrder* order = sent.size() == 1 ? std::get_if<NetGameAIOrder>(&sent[0].payload) : nullptr;
+			if (!order || !(*order == NetGameAIOrder{ownerUID, 0, NetGameAIOrder::SetAlarmPoint, alarm.m_X, alarm.m_Y, 0, 0})) {
+				return finish("the AI pass kept its alarm point off the wire");
+			}
+			if (seenByThePass != alarm) {
+				return finish("the AI pass did not read back the alarm point it just raised");
+			}
+			// Every peer, the producer included, raises it at the committed tick.
+			for (Actor* view: {ownerView, peerView}) {
+				view->AlarmPoint(Vector(order->x, order->y));
+			}
+			if (ownerView->GetLastAlarmPosRaw() != alarm || peerView->GetLastAlarmPosRaw() != alarm) {
+				return finish("the two peers hold different alarm points after the committed tick");
+			}
+			// An alarm order is not a waypoint: the pass's queue must not grow by it.
+			if (ownerView->GetWaypointsSize() != 0) {
+				return finish("an alarm order showed up in the waypoint queue");
+			}
+			std::cout << "[net-lockstep-selftest] PASS ai alarm point crosses the wire: op=" << static_cast<int>(order->op)
+			          << " owner=" << ownerView->GetLastAlarmPosRaw().m_X << " peer=" << peerView->GetLastAlarmPosRaw().m_X << std::endl;
+			return finish(nullptr);
+		}
+
 		// One build has to show every one of these reds at once, so they report per arm instead of
 		// short-circuiting the suite at the first one.
 		bool RunAIOffWireArms(std::string* error) {
@@ -2335,6 +2453,7 @@ namespace RTE {
 			for (const Arm& arm: {Arm{"ai script message", &TestAIScriptMessageCrossesTheWire},
 			                      Arm{"ai move target", &TestAIMoveTargetCrossesTheWire},
 			                      Arm{"ai gib", &TestAIGibCrossesTheWire},
+			                      Arm{"ai alarm point", &TestAIAlarmPointCrossesTheWire},
 			                      Arm{"ai rocket hatch", &TestAIRocketHatchCrossesTheWire}}) {
 				std::string armError;
 				if (!arm.second(&armError)) {
