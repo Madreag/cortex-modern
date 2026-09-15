@@ -16,6 +16,7 @@
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
 #include "ActivityMan.h"
+#include "MetricsCollector.h"
 #include "ScenarioRunner.h"
 
 #include "nlohmann/json.hpp"
@@ -616,6 +617,49 @@ namespace RTE {
 			return true;
 		}
 
+		// A running match answers a shared rule from the roster it adopted, never from local state.
+		bool TestRosterlessMatchRefusesSharedRules(std::string* error) {
+			if (!MetricsCollector::IsConstructed()) {
+				MetricsCollector::Construct(); // SetControllerReplayError records into it.
+			}
+			LoopbackTransport idle;
+			NetLockstepConfig lockstep;
+			lockstep.localPeerId = 1;
+			lockstep.remotePeerId = 2;
+			lockstep.peerCount = 2;
+			lockstep.matchConfig = MakeConfig();
+			NetLockstepCoordinator seated;
+			NetLockstepCoordinator rosterless;
+			NetLockstepConfig empty = lockstep;
+			empty.matchConfig.players.clear();
+			if (!seated.StartReplay(idle, lockstep, error) || !rosterless.StartReplay(idle, empty, error)) {
+				return false;
+			}
+			struct Detach {
+				~Detach() {
+					ScenarioRunner::SetLockstepCoordinator(nullptr);
+					ScenarioRunner::ClearControllerReplayError();
+				}
+			} detach;
+			ScenarioRunner::ClearControllerReplayError();
+			ScenarioRunner::SetLockstepCoordinator(&seated);
+			const NetMatchConfig* adopted = ScenarioRunner::GetLockstepMatchConfig();
+			if (!adopted || adopted->players != lockstep.matchConfig.players || ScenarioRunner::HasControllerReplayError()) {
+				*error = "a seated match did not answer from its adopted roster";
+				return false;
+			}
+			ScenarioRunner::SetLockstepCoordinator(&rosterless);
+			if (ScenarioRunner::GetLockstepMatchConfig() != nullptr) {
+				*error = "a rosterless match handed out a config";
+				return false;
+			}
+			if (ScenarioRunner::GetControllerReplayError().find("adopted roster") == std::string::npos) {
+				*error = "a running match with no adopted roster let a shared rule fall back to this machine";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS lockstep_rosterless_match_refused" << std::endl;
+			return true;
+		}
 
 		bool TestLobbyCodecRoundTrips(std::string* error) {
 			if (!TestMatchRulesCodec(error)) return false;
@@ -6792,6 +6836,7 @@ namespace RTE {
 		if (!TestOwnershipPolicies(&error)) return fail(error);
 		if (!TestLockstepCoordinatorUsesMatchOwnership(&error)) return fail(error);
 		if (!TestLobbyCodecRoundTrips(&error)) return fail(error);
+		if (!TestRosterlessMatchRefusesSharedRules(&error)) return fail(error);
 		if (!TestMalformedLobbyPayloads(&error)) return fail(error);
 		if (!TestLobbyCodecDedicatedFlag(&error)) return fail(error);
 		if (!TestLobbyStateMachineHappyPath(&error)) return fail(error);
