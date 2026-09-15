@@ -381,11 +381,20 @@ namespace {
 				    "the seat's screen does not carry the expected message");
 			}
 		} else if (op == "screenshot") {
-			auto path = Leaf(step.at("name").get<std::string>());
-			path += ".png";
-			Require(!std::filesystem::exists(path), "screenshot already exists");
-			Require(g_FrameMan.SaveBitmapToPNG(g_FrameMan.GetBackBuffer32(), path.string().c_str()) == 0, "screenshot save failed");
-			observed["screenshot"] = path.string();
+			const std::string name = step.at("name").get<std::string>();
+			if (step.value("composited", false)) {
+				// The frame as it reaches the screen - world, editor and overlay - read back from the screen
+				// buffer into the run's ScreenShots directory, where the harness collects it.
+				(void)Leaf(name); // Validates the name's charset; the file lands under the run's ScreenShots.
+				Require(g_FrameMan.SaveScreenToPNG(name.c_str()) == 0, "composited screenshot save failed");
+				observed["screenshot"] = name;
+			} else {
+				auto path = Leaf(name);
+				path += ".png";
+				Require(!std::filesystem::exists(path), "screenshot already exists");
+				Require(g_FrameMan.SaveBitmapToPNG(g_FrameMan.GetBackBuffer32(), path.string().c_str()) == 0, "screenshot save failed");
+				observed["screenshot"] = path.string();
+			}
 		} else if (op == "signal") {
 			auto path = Leaf(step.at("name").get<std::string>());
 			path += ".json";
