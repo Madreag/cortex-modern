@@ -607,7 +607,10 @@ def inspect_pair(root, records, size, arm, mode, name):
             if metrics_dropped:
                 # What the fallback keeps is still asserted: the name (whole or its
                 # ellipsis) and the line's own count; the metrics are asserted gone.
-                checks[f"{who}_fallback_name_kept"] = bool(named_waits) and all(
+                # The hold banner is the host's - the dropped peer's lines carry no
+                # wait, so the non-empty requirement is the host's alone.
+                must_hold = who == "Host"
+                checks[f"{who}_fallback_name_kept"] = (not must_hold or bool(named_waits)) and all(
                     LONG_GUEST_NAME in text or "..." in text for text in named_waits)
                 checks[f"{who}_fallback_count_kept"] = all(
                     re.search(r"\(\d+ s\)|\d+ of \d+", text) for text in named_waits)
