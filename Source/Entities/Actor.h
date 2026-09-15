@@ -834,6 +834,24 @@ namespace RTE {
 		/// @return Whether we're waiting on a new pending movepath.
 		bool IsWaitingOnNewMovePath() const { return m_PathRequest != nullptr || m_UpdateMovePath; }
 
+		/// Returns whether this is still waiting to start the move it was ordered to make. The move path is
+		/// this machine's own pathfinder answer, so under lockstep the ordered waypoints answer instead.
+		/// @return Whether an ordered move has not been started yet.
+		bool IsWaitingOnOrderedMove() const;
+
+		/// Returns whether this has anywhere it was ordered to go, the move path under lockstep aside.
+		/// @return Whether this is under an order to move.
+		bool HasOrderedMove() const;
+
+		/// Gets the next point of the ordered move, the move path's next node outside lockstep.
+		/// @return The next point of the ordered move, or this' position when there is no order.
+		Vector GetOrderedMoveStep() const;
+
+		/// Gets the end of the ordered move the waypoint queue does not already name, the move path's end
+		/// outside lockstep.
+		/// @return The end of the ordered move, or this' position when the queue already names the route.
+		Vector GetOrderedMoveEnd() const;
+
 		/// Estimates what material strength this actor can penetrate.
 		/// @return The actor's dig strength.
 		virtual float EstimateDigStrength() const;
@@ -1283,6 +1301,8 @@ namespace RTE {
 		bool SeeingLogicalWaypoints() const;
 		void BuildLogicalWaypoints(std::vector<std::pair<Vector, const MovableObject*>>& items) const;
 		bool LogicalWaypointClearSeen() const;
+		bool OrderedWaypointsPending() const;
+		bool FirstOrderedWaypoint(Vector& point) const;
 		void ConsumeInflightWaypoint(DeferredWaypoint::Op op, float x, float y, int64_t targetUID);
 		void QueueDeferredOnRunning(const DeferredWaypoint& waypoint);
 		void QueueAIModeOnRunning(AIMode newMode);

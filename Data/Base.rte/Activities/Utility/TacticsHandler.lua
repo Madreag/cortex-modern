@@ -673,7 +673,8 @@ function TacticsHandler:UpdateSquads(team)
 							elseif task.Type == "PatrolArea" then
 								local dist = SceneMan:ShortestDistance(actor.Pos, actor:GetLastAIWaypoint(), SceneMan.SceneWrapsX);
 								--print("squad: " .. i .. "patrol dist: " .. dist.Magnitude)
-								if actor.AIMode == Actor.AIMODE_SENTRY or (not actor.IsWaitingOnNewMovePath and dist:MagnitudeIsLessThan(40)) then
+								-- The wait comes from the order, not the move path: the path is each machine's own and this sets AI modes.
+								if actor.AIMode == Actor.AIMODE_SENTRY or (not actor.IsWaitingOnOrderedMove and dist:MagnitudeIsLessThan(40)) then
 									actor.AIMode = Actor.AIMODE_SENTRY;
 									if lastActor and wholePatrolSquadIdle == true then
 										-- if we're the last one and the whole squad is ready to go
