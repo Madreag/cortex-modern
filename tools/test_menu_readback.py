@@ -20,11 +20,13 @@ CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", 
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
-# Every control the network page owns, measured where it is drawn.
+# Every control the network page owns, measured where it is drawn. The fixed-delay row belongs to
+# the fixed policy, so it is drawn only there - the cue the video page's resolution rows already use.
 NETWORK_ROWS = ("LabelNetworkDisplayName", "TextNetworkDisplayName", "LabelNetworkDelayPolicy",
-                "RadioNetworkDelayAuto", "RadioNetworkDelayFixed", "LabelNetworkFixedDelay",
-                "TextNetworkFixedDelay", "LabelNetworkIdleWait", "TextNetworkIdleWait",
-                "LabelNetworkIdleWaitHint", "CheckboxNetworkAutoRepair")
+                "RadioNetworkDelayAuto", "RadioNetworkDelayFixed", "LabelNetworkIdleWait",
+                "TextNetworkIdleWait", "LabelNetworkIdleWaitHint", "CheckboxNetworkAutoRepair")
+NETWORK_FIXED_ROWS = ("LabelNetworkFixedDelay", "TextNetworkFixedDelay", "LabelNetworkFixedDelayHint")
+MAX_INPUT_DELAY_FRAMES = 60  # NetMatchConfigUtil::c_MaxInputDelayFrames, which the hint states.
 # The saved preferences a case starts from, and what the page must have written when it ends.
 NETWORK_SEED = {"NetworkDisplayName": "ScoutLead", "NetworkHostDelayPolicy": "Auto",
                 "NetworkHostIdleWaitMinutes": "10", "NetworkHostAutoRepair": "1", "NetworkInputDelayFrames": "0"}
@@ -169,9 +171,14 @@ def scripts(case, port, root):
         for control in NETWORK_ROWS:
             text += checks(control, "CollectionBoxNetworkSettings")
         text += ("assert_label TextNetworkDisplayName " + NETWORK_SEED["NetworkDisplayName"] + "\n"
-                 "assert_label TextNetworkIdleWait " + NETWORK_SEED["NetworkHostIdleWaitMinutes"] + "\n"
-                 "assert_enabled TextNetworkFixedDelay 0\ndump_player_options\n"
-                 "post_command RadioNetworkDelayFixed\nwait 3\nassert_enabled TextNetworkFixedDelay 1\n"
+                 "assert_label TextNetworkIdleWait " + NETWORK_SEED["NetworkHostIdleWaitMinutes"] + "\n")
+        # The saved policy is automatic here, so the fixed-delay row is not on the page at all.
+        for control in NETWORK_FIXED_ROWS:
+            text += f"assert_visible {control} 0\n"
+        text += "dump_player_options\npost_command RadioNetworkDelayFixed\nwait 3\n"
+        for control in NETWORK_FIXED_ROWS:
+            text += checks(control, "CollectionBoxNetworkSettings")
+        text += (f"assert_label LabelNetworkFixedDelayHint frames, 0-{MAX_INPUT_DELAY_FRAMES}\n"
                  "set_text TextNetworkDisplayName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
                  "set_text TextNetworkFixedDelay " + NETWORK_SAVED["NetworkInputDelayFrames"] + "\n"
                  "set_text TextNetworkIdleWait " + NETWORK_SAVED["NetworkHostIdleWaitMinutes"] + "\n"
@@ -426,8 +433,11 @@ def run_case(options, case, root, failing=None):
             assert len(page) == 2, [capture["settings_page"] for capture in images]
             rows = {control["name"]: control for control in page[0]["controls"]}
             assert set(NETWORK_ROWS) <= rows.keys(), sorted(rows)
+            assert not set(NETWORK_FIXED_ROWS) & rows.keys(), sorted(rows)
             assert all(rows[name]["text_fits"] for name in NETWORK_ROWS if rows[name]["text"]), rows
             after = {control["name"]: control for control in page[1]["controls"]}
+            assert set(NETWORK_ROWS) | set(NETWORK_FIXED_ROWS) <= after.keys(), sorted(after)
+            assert all(after[name]["text_fits"] for name in NETWORK_FIXED_ROWS if after[name]["text"]), after
             result["page_text"] = {name: [rows[name]["text"], after[name]["text"]] for name in NETWORK_ROWS}
             assert result["page_text"]["TextNetworkDisplayName"] == [NETWORK_SEED["NetworkDisplayName"], NETWORK_SAVED["NetworkDisplayName"]], result["page_text"]
             result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(NETWORK_SAVED))
@@ -437,6 +447,9 @@ def run_case(options, case, root, failing=None):
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == NETWORK_SEED["NetworkDisplayName"]
             result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", {"NetworkDisplayName"})
             assert result["saved"] == {"NetworkDisplayName": "Recon7"}, result["saved"]
+            # The seeded policy is automatic, so the lobby row must not call the delay fixed.
+            result["lobby_row"] = next(c["text"] for c in images[-1]["controls"] if c["name"] == "LabelLobbyPlayer0")
+            assert "(auto" in result["lobby_row"] and "(fixed)" not in result["lobby_row"], result["lobby_row"]
         if case == "net-options":
             # Both peers' rosters carry the host's saved options; the client's own copy differs and loses.
             result["match_rules"] = {}
