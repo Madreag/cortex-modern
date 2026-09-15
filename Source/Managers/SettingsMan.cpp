@@ -9,6 +9,7 @@
 #include "PerformanceMan.h"
 #include "UInputMan.h"
 #include "NetMatchService.h"
+#include "NetMatchConfig.h"
 #include "System.h"
 
 #include <charconv>
@@ -766,6 +767,20 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 		writer.NewPropertyWithValue("NetworkHostVisibility", "listed");
 	});
 	check("case-insensitive", settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Always && settings.GetNetworkChatDefaultScope() == NetworkChatDefaultScope::Team && settings.GetNetworkChatTextSize() == NetworkChatTextSize::Large && settings.GetNetworkHostDelayPolicy() == NetworkHostDelayPolicy::Fixed && settings.GetNetworkHostVisibility() == NetworkHostVisibility::Listed);
+
+	// The saved host options only reach a match through the mapping, so the mapping is checked here.
+	settings.Clear();
+	settings.SetNetworkHostDelayPolicy(NetworkHostDelayPolicy::Fixed);
+	settings.SetNetworkHostIdleWaitMinutes(25);
+	settings.SetNetworkHostAutoRepair(false);
+	NetMatchConfig hosted = NetMatchConfigUtil::MakeDefault(1);
+	NetMatchConfigUtil::ApplySavedHostOptions(hosted);
+	check("host options mapped", hosted.delayPolicy == NetMatchDelayPolicy::Fixed && hosted.idleWaitMinutes == 25 && !hosted.automaticRepair);
+	settings.SetNetworkHostDelayPolicy(NetworkHostDelayPolicy::Auto);
+	settings.SetNetworkHostAutoRepair(true);
+	NetMatchConfigUtil::ApplySavedHostOptions(hosted);
+	check("host options mapped back", hosted.delayPolicy == NetMatchDelayPolicy::Auto && hosted.automaticRepair);
+
 	if (failures != 0) {
 		return 1;
 	}
