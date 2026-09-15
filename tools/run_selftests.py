@@ -124,9 +124,9 @@ def main():
     for name in SELFTESTS:
         case = out / f"{name}-selftest"
         if name == "single-module-harness":
-            from test_single_module_harness import DEFAULT_REPLAY, run_case, score_detect  # noqa: PLC0415
+            from test_single_module_harness import run_case, score_detect  # noqa: PLC0415
 
-            case_data = run_case(options.repo, case, options.timeout, DEFAULT_REPLAY, ["-module", "Tests.rte"])
+            case_data = run_case(options.repo, case, options.timeout, ["-module", "Tests.rte"])
             scored = score_detect(case_data)
             scored["binary"] = case_data.get("exe_sha256")
         else:

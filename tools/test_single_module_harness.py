@@ -19,7 +19,6 @@ from run_sim_test import make_run  # noqa: E402
 ERROR_LINE = 'ERROR: Failed to load DataModule "Tests.rte"! Only official modules were loaded!'
 MISSING_ERROR_PREFIX = "ERROR: Failed to load DataModule"
 USERDATA_INDEX = Path("Userdata") / "UserSavedGames.rte" / "Index.ini"
-DEFAULT_REPLAY = Path(r"D:\Projects\stage2_p4\fixtures\ak47_fire.ccreplay")
 LOAD_MARK = "Tests.rte"
 
 
@@ -32,9 +31,9 @@ def tests_load_count(log_loading: Path) -> int:
     return sum(1 for line in text.splitlines() if LOAD_MARK in line and "loading" in line.lower())
 
 
-def run_case(repo: Path, out: Path, timeout: float, replay: Path, extra_args: list[str]) -> dict:
+def run_case(repo: Path, out: Path, timeout: float, extra_args: list[str]) -> dict:
     os.environ["CCCP_HEADLESS"] = "1"
-    args = ["-net-replay", str(replay), "-tick-hashes", "-max-ticks", "60", *extra_args]
+    args = ["-scenario", "SimBaseline", "-seed", "42", "-max-ticks", "60", *extra_args]
     run = make_run(repo, args, out, timeout, env={"CCCP_HEADLESS": "1"})
     try:
         record = run.start().finish()
@@ -87,7 +86,6 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=180)
-    parser.add_argument("--replay", type=Path, default=DEFAULT_REPLAY)
     parser.add_argument(
         "--arm",
         choices=("detect", "no_module", "missing"),
@@ -99,9 +97,6 @@ def main() -> int:
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = options.repo.resolve(), options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    replay = options.replay.resolve()
-    if not replay.is_file():
-        raise SystemExit(f"replay missing: {replay}")
 
     extra = []
     if options.arm == "detect":
@@ -109,7 +104,7 @@ def main() -> int:
     elif options.arm == "missing":
         extra = ["-module", options.missing_module]
 
-    case = run_case(repo, root / options.arm, options.timeout, replay, extra)
+    case = run_case(repo, root / options.arm, options.timeout, extra)
     if options.arm == "detect":
         scored = score_detect(case)
         token = "[single-module-harness] PASS" if scored["pass"] else "[single-module-harness] FAIL"
@@ -132,7 +127,7 @@ def main() -> int:
         scored = {"pass": bool(refused), "reason": "" if refused else "missing-module refusal line absent"}
         token = f"[single-module-harness] {'PASS' if refused else 'FAIL'} missing {options.missing_module}"
 
-    result = {"arm": options.arm, "case": case, "scored": scored, "replay": str(replay)}
+    result = {"arm": options.arm, "case": case, "scored": scored}
     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(token, flush=True)
     print(json.dumps({"arm": options.arm, "pass": scored.get("pass"), "reason": scored.get("reason"),
