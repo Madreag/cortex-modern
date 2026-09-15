@@ -7,6 +7,7 @@
 #include "GUICheckbox.h"
 #include "GUILabel.h"
 #include "GUIRadioButton.h"
+#include "GUITab.h"
 #include "GUITextBox.h"
 
 #include <algorithm>
@@ -18,6 +19,9 @@ namespace {
 	// The page's row pitch, by which the rows under the fixed-delay row close up when it is away.
 	constexpr int c_FixedDelayRowHeight = 20;
 
+	// The selector row and the page boxes share their names with the page they switch in.
+	constexpr std::array<const char*, 5> c_PageNames{"Player", "Chat", "Recovery", "Files", "Internet"};
+
 	// The boxes take typed digits only, so anything else came from a skin edit and is discarded.
 	bool ParseWholeNumber(const std::string& text, int& value) {
 		const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
@@ -28,6 +32,12 @@ namespace {
 SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) :
     m_GUIControlManager(parentControlManager) {
 	m_NetworkSettingsBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxNetworkSettings"));
+
+	for (int index = 0; index < static_cast<int>(Page::Count); ++index) {
+		const std::string page = c_PageNames[index];
+		m_PageTabs[index] = dynamic_cast<GUITab*>(m_GUIControlManager->GetControl("TabNetPage" + page));
+		m_PageBoxes[index] = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxNetPage" + page));
+	}
 
 	m_DisplayNameTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkDisplayName"));
 	// The lobby's own name box takes 24 characters; both boxes write the same setting.
@@ -50,6 +60,8 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_IdleWaitTextbox->SetMaxTextLength(2);
 
 	m_AutoRepairCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkAutoRepair"));
+	m_ToastsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkToasts"));
+	m_PredictionCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkPrediction"));
 
 	const auto rowTop = [](GUIControl* control) {
 		int x = 0, y = 0, width = 0, height = 0;
@@ -81,7 +93,10 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_FixedDelayTextbox->SetText(std::to_string(std::clamp(g_SettingsMan.GetNetworkInputDelayFrames(), 0, static_cast<int>(NetMatchConfigUtil::c_MaxInputDelayFrames))));
 	m_IdleWaitTextbox->SetText(std::to_string(g_SettingsMan.GetNetworkHostIdleWaitMinutes()));
 	m_AutoRepairCheckbox->SetCheck(g_SettingsMan.GetNetworkHostAutoRepair());
+	m_ToastsCheckbox->SetCheck(g_SettingsMan.GetNetworkToastsEnabled());
+	m_PredictionCheckbox->SetCheck(g_SettingsMan.LocalPredictionEnabled());
 	UpdateDelayPolicyRow();
+	UpdateStatusLines();
 }
 
 void SettingsNetworkGUI::ApplyTextboxes() {
@@ -114,9 +129,33 @@ void SettingsNetworkGUI::UpdateDelayPolicyRow() {
 	}
 }
 
+void SettingsNetworkGUI::SetActivePage(Page page) {
+	// A page switch is a page leave for the page going away: its typed boxes commit first.
+	if (page != m_ActivePage) {
+		ApplyTextboxes();
+	}
+	m_ActivePage = page;
+	for (int index = 0; index < static_cast<int>(Page::Count); ++index) {
+		m_PageBoxes[index]->SetVisible(index == static_cast<int>(page));
+		m_PageTabs[index]->SetCheck(index == static_cast<int>(page));
+	}
+	UpdateStatusLines();
+}
+
+void SettingsNetworkGUI::UpdateStatusLines() {
+}
+
 void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 	if (guiEvent.GetType() != GUIEvent::Notification) {
 		return;
+	}
+	if (guiEvent.GetMsg() == GUITab::UnPushed) {
+		for (int index = 0; index < static_cast<int>(Page::Count); ++index) {
+			if (guiEvent.GetControl() == m_PageTabs[index]) {
+				SetActivePage(static_cast<Page>(index));
+				return;
+			}
+		}
 	}
 	if (guiEvent.GetControl() == m_DelayPolicyAutoRadio || guiEvent.GetControl() == m_DelayPolicyFixedRadio) {
 		g_SettingsMan.SetNetworkHostDelayPolicy(m_DelayPolicyFixedRadio->GetCheck() ? SettingsMan::NetworkHostDelayPolicy::Fixed : SettingsMan::NetworkHostDelayPolicy::Auto);
@@ -124,10 +163,19 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		ApplyTextboxes();
 	} else if (guiEvent.GetControl() == m_AutoRepairCheckbox) {
 		g_SettingsMan.SetNetworkHostAutoRepair(m_AutoRepairCheckbox->GetCheck());
+	} else if (guiEvent.GetControl() == m_ToastsCheckbox) {
+		g_SettingsMan.SetNetworkToastsEnabled(m_ToastsCheckbox->GetCheck());
+	} else if (guiEvent.GetControl() == m_PredictionCheckbox) {
+		g_SettingsMan.SetLocalPredictionEnabled(m_PredictionCheckbox->GetCheck());
 	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_FixedDelayTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
 		ApplyTextboxes();
 		// Clicking off a focused text box must commit it too, otherwise it keeps the keyboard.
-	} else if (guiEvent.GetControl() == m_NetworkSettingsBox && guiEvent.GetMsg() == GUICollectionBox::Clicked && !m_NetworkSettingsBox->HasFocus()) {
-		ApplyTextboxes();
+	} else if (guiEvent.GetMsg() == GUICollectionBox::Clicked &&
+	           (guiEvent.GetControl() == m_NetworkSettingsBox ||
+	            std::find(m_PageBoxes.begin(), m_PageBoxes.end(), guiEvent.GetControl()) != m_PageBoxes.end())) {
+		auto* box = dynamic_cast<GUICollectionBox*>(guiEvent.GetControl());
+		if (!box->HasFocus()) {
+			ApplyTextboxes();
+		}
 	}
 }
