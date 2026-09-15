@@ -145,6 +145,7 @@ void SettingsGUI::SetActiveSettingsMenuScreen(SettingsMenuScreen activeMenu, boo
 
 bool SettingsGUI::HandleInputEvents() {
 	m_GUIControlManager->Update();
+	MenuAutomation::ApplyQueuedPage(m_GUIControlManager.get());
 
 	GUIEvent guiEvent;
 	while (m_GUIControlManager->GetEvent(&guiEvent)) {
@@ -243,6 +244,33 @@ namespace RTE::MenuAutomation {
 			if (manager && Visible(manager->GetControl("CollectionBox" + std::string(page) + "Settings"))) return std::string(page);
 		}
 		return "";
+	}
+
+	// A manager's Update clears its event queue, so a page request waits for the settings menu's own pass.
+	static GUIControlManager* s_PageManager = nullptr;
+	static std::string s_PendingPage;
+
+	GUITab* PageTab(GUIControlManager* manager, const std::string& page) {
+		const bool known = std::find(c_SettingsPages.begin(), c_SettingsPages.end(), page) != c_SettingsPages.end();
+		return known && manager ? dynamic_cast<GUITab*>(manager->GetControl("Tab" + page + "Settings")) : nullptr;
+	}
+
+	bool QueuePage(GUIControlManager* manager, const std::string& page) {
+		if (!Enabled(PageTab(manager, page))) return false;
+		s_PageManager = manager;
+		s_PendingPage = page;
+		return true;
+	}
+
+	void ApplyQueuedPage(GUIControlManager* manager) {
+		if (!manager || manager != s_PageManager) return;
+		GUITab* tab = PageTab(manager, s_PendingPage);
+		s_PageManager = nullptr;
+		s_PendingPage.clear();
+		if (!Enabled(tab)) return;
+		// The settings menu switches pages on the notification a tab click raises, so raise that.
+		tab->SetCheck(true);
+		tab->AddEvent(GUIEvent::Notification, GUITab::UnPushed, 0);
 	}
 	bool Text(GUIControl* control, std::string& text) {
 		if (auto* value = dynamic_cast<GUILabel*>(control)) text = value->GetText();
@@ -350,14 +378,9 @@ namespace RTE::MenuAutomation {
 			}
 			if (command == "select_settings_page" || command == "assert_settings_page") {
 				observation = name + " active=" + SettingsPage(manager);
-				if (!argument.empty() || std::find(c_SettingsPages.begin(), c_SettingsPages.end(), name) == c_SettingsPages.end()) return false;
+				if (!argument.empty()) return false;
 				if (command == "assert_settings_page") return SettingsPage(manager) == name;
-				auto* tab = dynamic_cast<GUITab*>(manager->GetControl("Tab" + name + "Settings"));
-				if (!Enabled(tab)) return false;
-				// The settings menu switches pages on the tab notification a click raises, so raise that.
-				tab->SetCheck(true);
-				tab->AddEvent(GUIEvent::Notification, GUITab::UnPushed, 0);
-				return true;
+				return QueuePage(manager, name);
 			}
 			if (command == "dump_host_options" || command == "dump_player_options") {
 				if (!name.empty()) return false;
