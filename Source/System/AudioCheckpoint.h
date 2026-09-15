@@ -267,10 +267,23 @@ struct Sample {
 	float frequency = 0, minimumDistance = 0, maximumDistance = 0;
 	int priority = 0, loops = 0;
 	std::array<float, 3> cone{};
+	bool captured = false;
 	template <class Archive> void Fields(Archive& archive) { archive(path, mode, loopStart, loopEnd, frequency, minimumDistance, maximumDistance, priority, loops, cone); }
-	std::string SaveCheckpoint() const { CheckpointWriter archive("AudioSample1"); const_cast<Sample*>(this)->Fields(archive); return archive.Text(); }
+	static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("12 AudioSample2 ") ? "AudioSample2" : "AudioSample1"; }
+	std::string SaveCheckpoint() const { CheckpointWriter archive("AudioSample2"); const_cast<Sample*>(this)->Fields(archive); archive(captured); return archive.Text(); }
 	bool LoadCheckpoint(std::string_view text, bool validateOnly = false) {
-		try { Sample value; CheckpointReader archive(text, "AudioSample1"); value.Fields(archive); archive.Finish(); if (value.path.empty() || value.loopStart > value.loopEnd || value.priority < 0 || value.priority > 256 || value.loops < -1 || !Finite(value.frequency) || !Finite(value.minimumDistance) || !Finite(value.maximumDistance) || !AllFinite(value.cone)) return false; if (!validateOnly) *this = std::move(value); return true; }
+		try {
+			Sample value;
+			const std::string_view version = CheckpointVersion(text);
+			CheckpointReader archive(text, version);
+			value.Fields(archive);
+			if (version == "AudioSample2") archive(value.captured);
+			else value.captured = true;
+			archive.Finish();
+			if (value.path.empty() || value.loopStart > value.loopEnd || value.priority < 0 || value.priority > 256 || value.loops < -1 || !Finite(value.frequency) || !Finite(value.minimumDistance) || !Finite(value.maximumDistance) || !AllFinite(value.cone)) return false;
+			if (!validateOnly) *this = std::move(value);
+			return true;
+		}
 		catch (const std::exception&) { return false; }
 	}
 	static Sample Capture(const std::string& path, FMOD::Sound* sound) {
@@ -280,9 +293,11 @@ struct Sample {
 		if (sound->getOpenState(&open, nullptr, nullptr, nullptr) != FMOD_OK || (open != FMOD_OPENSTATE_READY && open != FMOD_OPENSTATE_PLAYING)) return sample;
 		Require(sound->getMode(&sample.mode)); Require(sound->getLoopPoints(&sample.loopStart, FMOD_TIMEUNIT_PCM, &sample.loopEnd, FMOD_TIMEUNIT_PCM)); Require(sound->getLoopCount(&sample.loops));
 		Require(sound->getDefaults(&sample.frequency, &sample.priority)); Require(sound->get3DMinMaxDistance(&sample.minimumDistance, &sample.maximumDistance)); Require(sound->get3DConeSettings(&sample.cone[0], &sample.cone[1], &sample.cone[2]));
+		sample.captured = true;
 		return sample;
 	}
 	void Apply(FMOD::Sound* sound) const {
+		if (!captured) return;
 		Require(sound->setMode(mode)); Require(sound->setLoopPoints(loopStart, FMOD_TIMEUNIT_PCM, loopEnd, FMOD_TIMEUNIT_PCM)); Require(sound->setLoopCount(loops));
 		Require(sound->setDefaults(frequency, priority)); Require(sound->set3DMinMaxDistance(minimumDistance, maximumDistance)); Require(sound->set3DConeSettings(cone[0], cone[1], cone[2]));
 	}

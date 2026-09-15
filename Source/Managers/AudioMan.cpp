@@ -2383,36 +2383,51 @@ bool AudioMan::RunCheckpointSelfTest() {
 			const unsigned int archivedLoopEnd = sampleLength - 2;
 			const FMOD_MODE archivedMode = originalMode | FMOD_LOOP_NORMAL;
 			const std::string beforeLoading = SaveCheckpoint();
-			AudioCheckpoint::Require(ready->setMode(archivedMode));
-			AudioCheckpoint::Require(ready->setLoopPoints(archivedLoopStart, FMOD_TIMEUNIT_PCM, archivedLoopEnd, FMOD_TIMEUNIT_PCM));
-			const std::string withLoops = SaveCheckpoint();
-			if (SampleReadyForPlayback(loading)) {
-				FMOD::Sound* again = MakeHeldPendingSound(m_AudioSystem);
-				if (!again) throw std::runtime_error("could not hold a non-ready private sound through load");
-				loading->release();
-				loading = again;
-			}
-			ContentFile::s_LoadedSamples[path] = loading;
+			const auto holdPending = [&]() {
+				if (SampleReadyForPlayback(loading)) {
+					FMOD::Sound* again = MakeHeldPendingSound(m_AudioSystem);
+					if (!again) throw std::runtime_error("could not hold a non-ready private sound through load");
+					loading->release();
+					loading = again;
+				}
+				ContentFile::s_LoadedSamples[path] = loading;
+			};
+			holdPending();
 			std::string saved;
 			std::string refusal;
 			bool archived = false;
+			bool uncaptured = false;
 			try {
 				saved = SaveCheckpoint();
 				AudioRuntime state;
 				state.Load(saved, &refusal);
-				for (const auto& sample: state.samples) if (sample.path == path) archived = true;
+				for (const auto& sample: state.samples) if (sample.path == path) { archived = true; uncaptured = !sample.captured; }
 			} catch (...) {
 				ContentFile::s_LoadedSamples[path] = ready;
-				ready->setMode(originalMode);
-				ready->setLoopPoints(originalLoopStart, FMOD_TIMEUNIT_PCM, originalLoopEnd, FMOD_TIMEUNIT_PCM);
-				ready->setLoopCount(originalLoops);
 				if (loading) loading->release();
 				throw;
 			}
-			reportArm("loading_sample_is_archived", archived);
+			bool settingsSurvived = false;
+			if (archived) {
+				const bool loadedUncaptured = LoadCheckpoint(saved, false, nullptr, &refusal);
+				ContentFile::s_LoadedSamples[path] = ready;
+				Update();
+				unsigned int loopStart = 0, loopEnd = 0;
+				FMOD_MODE mode = 0;
+				AudioCheckpoint::Require(ready->getLoopPoints(&loopStart, FMOD_TIMEUNIT_PCM, &loopEnd, FMOD_TIMEUNIT_PCM));
+				AudioCheckpoint::Require(ready->getMode(&mode));
+				settingsSurvived = loadedUncaptured && loopStart == originalLoopStart && loopEnd == originalLoopEnd && mode == originalMode;
+			} else {
+				ContentFile::s_LoadedSamples[path] = ready;
+			}
+			reportArm("loading_sample_is_archived", archived && uncaptured && settingsSurvived);
 			if (!archived) std::cout << "[audio-checkpoint-selftest] loading_sample refusal " << refusal << std::endl;
 			bool deferredVoice = false;
 			if (archived) {
+				AudioCheckpoint::Require(ready->setMode(archivedMode));
+				AudioCheckpoint::Require(ready->setLoopPoints(archivedLoopStart, FMOD_TIMEUNIT_PCM, archivedLoopEnd, FMOD_TIMEUNIT_PCM));
+				const std::string withLoops = SaveCheckpoint();
+				holdPending();
 				const bool loaded = LoadCheckpoint(withLoops, false, nullptr, &refusal);
 				ContentFile::s_LoadedSamples[path] = ready;
 				Update();
@@ -2422,8 +2437,6 @@ bool AudioMan::RunCheckpointSelfTest() {
 				AudioCheckpoint::Require(ready->getMode(&mode));
 				const auto found = m_PlayingVoices.find(loadingId);
 				deferredVoice = loaded && found != m_PlayingVoices.end() && found->second.channel && loopStart == archivedLoopStart && loopEnd == archivedLoopEnd && (mode & FMOD_LOOP_NORMAL);
-			} else {
-				ContentFile::s_LoadedSamples[path] = ready;
 			}
 			ready->setMode(originalMode);
 			ready->setLoopPoints(originalLoopStart, FMOD_TIMEUNIT_PCM, originalLoopEnd, FMOD_TIMEUNIT_PCM);
