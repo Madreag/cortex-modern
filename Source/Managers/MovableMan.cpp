@@ -2801,7 +2801,7 @@ void MovableMan::RestoreControllerBoundary(const ControllerBoundaryBaseline& bef
 	Actor* actor = before.actor;
 	if (const float aim = actor->GetAimAngle(false); aim != before.aim) {
 		actor->MarkOffWireAim(simTick, aim);
-		actor->SetAimAngle(before.aim);
+		actor->RestoreAimAngle(before.aim);
 		++m_ControllerBoundaryStats.aimIntents;
 	}
 	if (const bool flipped = actor->IsHFlipped(); flipped != before.flipped) {
