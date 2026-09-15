@@ -107,6 +107,7 @@ void GUITextPanel::Draw(GUIScreen* Screen) {
 	Screen->GetBitmap()->SetClipRect(GetRect());
 
 	std::string Text = m_Text.substr(m_StartIndex);
+	const bool canEdit = m_Enabled && (!m_Parent || m_Parent->IsEnabled());
 
 	// Draw the text
 	m_Font->SetColor(m_FontColor);
@@ -117,7 +118,7 @@ void GUITextPanel::Draw(GUIScreen* Screen) {
 	m_Font->DrawAligned(Screen->GetBitmap(), m_X + m_Width - wSpacer, m_Y + hSpacer, m_RightText, GUIFont::Right, GUIFont::Top, m_Width, m_FontShadow);
 
 	// Draw the selected text
-	if (m_GotSelection && m_GotFocus && !m_Text.empty()) {
+	if (canEdit && m_GotSelection && m_GotFocus && !m_Text.empty()) {
 		// Draw selection mark
 		Screen->GetBitmap()->DrawRectangle(m_X + wSpacer + m_SelectionX, m_Y + hSpacer + 2, m_SelectionWidth, FontHeight - 3, m_SelectedColorIndex, true);
 		// Draw text with selection regions in different color
@@ -135,7 +136,7 @@ void GUITextPanel::Draw(GUIScreen* Screen) {
 	// If we have focus, draw the blinking cursor
 	const int blinkInterval = 250;
 	bool shouldBlink = static_cast<int>(m_BlinkTimer.GetElapsedRealTimeMS()) % (blinkInterval * 2) > blinkInterval;
-	if (m_GotFocus && shouldBlink) {
+	if (m_GotFocus && shouldBlink && canEdit) {
 		Screen->GetBitmap()->DrawRectangle(m_X + m_CursorX + 2, m_Y + hSpacer + m_CursorY + 2, 1, FontHeight - 3, m_CursorColor, true);
 	}
 
