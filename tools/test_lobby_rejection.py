@@ -41,7 +41,7 @@ def main():
     try:
         host = start("Host", True,
             f"wait_error {reason}\nassert_substate Lobby\nassert_enabled ButtonMultiplayerStart 0\nassert_error {reason}\ndump_lobby\nscreenshot rejected-join\n"
-            "wait_connected 2\nwait_remote_ready\nwait_all_ready\ndump_lobby\nactivate ButtonMultiplayerStart\nwait 99999\n", trace=True)
+            "wait_connected 2\nwait_remote_ready\nwait_all_ready\nassert_enabled ButtonMultiplayerStart 1\ndump_lobby\nactivate ButtonMultiplayerStart\nwait 99999\n", trace=True)
         wait_for_log(host, "activate ButtonMultiplayerCreate ok=1")
         # selected_module is hashed; -module Dummy.rte leaves the official set unchanged
         wrong = start("Rejected", False,
@@ -67,6 +67,7 @@ def main():
         host_log = (root / "Host/stdout.log").read_text(errors="replace")
         wrong_log = (root / "Rejected/stdout.log").read_text(errors="replace")
         checks["host_stayed_in_lobby"] = "assert_substate expected=Lobby actual=Lobby PASS" in host_log and "assert_enabled ButtonMultiplayerStart expected=0 actual=0 PASS" in host_log
+        checks["host_start_after_replacement"] = "assert_enabled ButtonMultiplayerStart expected=1 actual=1 PASS" in host_log
         checks["host_reason_visible"] = f'assert_error "{reason}"' in host_log and 'A player could not join:' in host_log
         checks["client_reason_visible"] = f'assert_error "{reason}"' in wrong_log and 'assert_substate expected=Landing actual=Landing PASS' in wrong_log
         checks["rejected_peer_never_launched"] = 'dump_lobby state=Failed' in wrong_log and '[menu-mp]' not in wrong_log
