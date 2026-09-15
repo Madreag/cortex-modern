@@ -1486,6 +1486,12 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 				fail("the Lua class " .. tostring(token.name) .. " is missing")
 				return nil
 			end
+			local liveBase = native[3] or ""
+			local recordedBase = token.base or ""
+			if liveBase ~= recordedBase then
+				fail("the Lua class " .. token.name .. " has base " .. liveBase .. ", the archive named " .. recordedBase)
+				return nil
+			end
 			return found
 		end
 		fail("unknown token type " .. tostring(t))
@@ -2376,6 +2382,27 @@ do
 	local rebound = classRoots and classRoots["1"] and classRoots["1"].klass
 	local reboundNative = rebound and { _ScriptGraphNative(rebound) } or {}
 	check("lua_class_restore_rebinds", #classRestore == 0 and reboundNative[1] == "lua-class" and reboundNative[2] == "F90ClassCarry" and reboundNative[3] == "Box" and rawequal(rebound, F90ClassCarry), table.concat(classRestore, " | "))
+	F90ClassCarry = nil
+	local mismatchBase = "Vector"
+	local definedOverOther = pcall(function()
+		class 'F90ClassCarry' (Vector)
+		function F90ClassCarry:__init() super() end
+	end)
+	if not definedOverOther then
+		mismatchBase = "MOSprite"
+		class 'F90ClassCarry' (MOSprite)
+		function F90ClassCarry:__init() super() end
+	end
+	local _, mismatchClass = _ScriptGraph.deserialize(classText)
+	local mismatchText = table.concat(mismatchClass, " | ")
+	check("lua_class_base_mismatch_refused", string.find(mismatchText, "the Lua class F90ClassCarry has base " .. mismatchBase .. ", the archive named Box", 1, true) ~= nil, mismatchText)
+	F90ClassCarry = nil
+	class 'F90ClassCarry' (Box)
+	function F90ClassCarry:__init() super() end
+	local reboundRoots, reboundAgain = _ScriptGraph.deserialize(classText)
+	local reboundKlass = reboundRoots and reboundRoots["1"] and reboundRoots["1"].klass
+	local reboundAgainNative = reboundKlass and { _ScriptGraphNative(reboundKlass) } or {}
+	check("lua_class_restore_rebinds", #reboundAgain == 0 and reboundAgainNative[1] == "lua-class" and reboundAgainNative[2] == "F90ClassCarry" and reboundAgainNative[3] == "Box" and rawequal(reboundKlass, F90ClassCarry), table.concat(reboundAgain, " | "))
 	F90ClassCarry = nil
 	local constructed, message = pcall(function() return MOPixel() end)
 	check("negative_unregistered_constructor_fails", not constructed and string.find(tostring(message), "has no Lua constructor", 1, true) ~= nil)
