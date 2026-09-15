@@ -4809,12 +4809,13 @@ namespace RTE {
 		// stand down, and whether they are ours to produce frames for. If a client could be in the round
 		// while the host holds, the two would resolve differently and the sims would part.
 		//
-		// They cannot, and this measures why rather than asserting it: the predicate also requires every
-		// remote to have left (NetLockstep.cpp:3013-3016, `m_PeerLeaveFrames.size() >= m_RemotePeerIds.size()`),
-		// so the hold and a peer that can disagree with it are mutually exclusive. Arm 1 keeps a survivor
-		// in the round and compares both peers' answers at every frame of a full hold window; arm 2 takes
-		// the survivor away, shows the answers really do part once the hold engages, and shows there is no
-		// longer anybody in the round to see it. Without arm 2 the first would prove nothing.
+		// They cannot, and this measures why rather than asserting it: while the round runs every peer
+		// resolves a departed team to the same relay host, and the hold's own predicate requires every
+		// remote to have left (`m_PeerLeaveFrames.size() >= m_RemotePeerIds.size()`), so the hold and a
+		// peer that can disagree with it are mutually exclusive. Arm 1 keeps a survivor in the round and
+		// compares both peers' answers at every frame of a full hold window; arm 2 takes the survivor
+		// away and shows the answers still agree once the hold engages, with nobody left in the round to
+		// commit a frame either way. Without arm 2 the first would prove nothing.
 		bool TestHeldSeatOwnershipAgreesAcrossPeers(std::string* error) {
 			const uint16_t port = 43044;
 			const uint64_t sessionId = 0x7000000000000044ULL;
@@ -4953,8 +4954,7 @@ namespace RTE {
 				return false;
 			}
 
-			// Arm 2: the survivor goes too. Now the hold engages, the answers really do part - and there
-			// is nobody left in the round to hold the other one.
+			// Arm 2: the survivor goes too. Now the hold engages, and there is nobody left in the round.
 			const uint64_t stayerFramesBeforeTheHold = clientB.GetStats().framesAccepted;
 			bT.Stop();
 			if (!drive(2000, [&] { return host.GetPeerLeaveFrames().count(3) != 0 && host.IsHoldingSeatForReclaim(); })) {
@@ -4966,26 +4966,25 @@ namespace RTE {
 				*error = "a held seat's units did not fall to the relay host";
 				return false;
 			}
-			// The disagreement is real, and it is exactly the one the brief names: the host plays the
-			// leaver's units, the client resolves them to nobody and disables their controllers.
-			if (clientB.ResolveActorOwner(leaverActor, 1, false) != 0 || !clientB.IsActorOwnerGone(leaverActor, 1, false, heldAt)) {
-				*error = "the disagreement this case exists to detect did not appear even with the hold engaged: stayer owner=" +
+			// The peer the host can no longer hear answers the same relay host, so no tick anywhere could
+			// apply two different owners to the leaver's units.
+			if (clientB.ResolveActorOwner(leaverActor, 1, false) != 1 || clientB.IsActorOwnerGone(leaverActor, 1, false, heldAt)) {
+				*error = "the starved peer did not name the relay host with the hold engaged: stayer owner=" +
 				         std::to_string(clientB.ResolveActorOwner(leaverActor, 1, false)) + " gone=" +
 				         std::to_string(clientB.IsActorOwnerGone(leaverActor, 1, false, heldAt));
 				return false;
 			}
-			// And why that costs nothing: the predicate needs every remote gone, so the peer that would
-			// have disagreed has left the round and produces no further frame.
+			// And the peer that could have differed has left the round and produces no further frame.
 			if (!host.IsPeerGoneAtFrame(2, heldAt) || !host.IsPeerGoneAtFrame(3, heldAt)) {
 				*error = "the round held a seat while a remote was still present";
 				return false;
 			}
 			// And what "left the round" has to mean for a sim: it commits no further frame, so there is no
-			// tick at which the two answers could be applied to anything. Measured, not asserted from the
+			// tick at which its answer could be applied to anything. Measured, not asserted from the
 			// state name - the round object stays Running until its own timeout, it is simply starved.
 			drive(2000, [] { return false; });
 			if (clientB.GetStats().framesAccepted != stayerFramesBeforeTheHold) {
-				*error = "the peer whose answer differs committed " +
+				*error = "the starved peer committed " +
 				         std::to_string(clientB.GetStats().framesAccepted - stayerFramesBeforeTheHold) +
 				         " more frames while the host held the seat";
 				return false;
