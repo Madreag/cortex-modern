@@ -887,7 +887,7 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, MOSRotating) {
 	    .def("IsRecoiled", &MOSRotating::IsRecoiled)
 	    .def("EnableDeepCheck", &MOSRotating::EnableDeepCheck)
 	    .def("ForceDeepCheck", &MOSRotating::ForceDeepCheck)
-	    .def("GibThis", &MOSRotating::GibThis)
+	    .def("GibThis", &LuaAdaptersMOSRotating::GibThisWithImpulse)
 	    .def("MoveOutOfTerrain", &MOSRotating::MoveOutOfTerrain)
 	    .def("FlashWhite", &MOSRotating::FlashWhite)
 	    .def("GetGibWoundLimit", (int(MOSRotating::*)() const) & MOSRotating::GetGibWoundLimit)

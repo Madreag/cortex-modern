@@ -264,6 +264,9 @@ namespace RTE {
 		static bool IsLockstepTeamCommandSender(int team, uint8_t senderPeerId);
 		/// Team authority, or the sender owns the target, or writerUID names a same-team actor the sender owns.
 		static bool IsLockstepAIOrderAuthorized(uint8_t senderPeerId, const NetGameAIOrder& order);
+		/// Whether a peer may make an AI pass's write: it commands the team, drives the written actor, or
+		/// drives the actor whose pass wrote it. The same rule for every call an AI pass defers.
+		static bool IsLockstepAIWriteAuthorized(uint8_t senderPeerId, int32_t team, int64_t actorUID, int64_t writerUID);
 		/// The local peer's index among the team's human slots in the synced roster, or -1 outside a
 		/// lockstep match / off the team. Per-peer view data — for per-peer picks only, never sim decisions.
 		static int GetLockstepHumanSlotIndex(int team);

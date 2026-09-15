@@ -31,6 +31,8 @@
 #include "System.h"
 #include "PostProcessMan.h"
 
+#include "NetGameCommand.h"
+#include "NetLockstep.h"
 #include "Base64/base64.h"
 #include "tracy/Tracy.hpp"
 
@@ -1513,6 +1515,54 @@ int MovableObject::UpdateScripts() {
 	}
 
 	return status;
+}
+
+void MovableObject::GibThisFromScript() {
+	GibThisFromScript(Vector(), nullptr);
+}
+
+void MovableObject::GibThisFromScript(const Vector& impactImpulse, MovableObject* movableObjectToIgnore) {
+	// Only a rotating object has gibs; every scripted gib goes through MOSRotating.
+	MOSRotating* rotating = dynamic_cast<MOSRotating*>(this);
+	if (!rotating) {
+		return;
+	}
+	// A gib spawns particles and takes the object out of the world, none of which the producing boundary
+	// can undo, so the AI pass's gib crosses the wire, with the call it was made with, and every peer
+	// gibs at the committed tick.
+	if (Actor::QueueAIPassGib(this, impactImpulse, movableObjectToIgnore)) {
+		return;
+	}
+	if (Actor::DeferringAIPassWrite(nullptr)) {
+		// The pass gibbed something the world does not hold, so no peer can be told which object it was.
+		g_MovableMan.ReportControllerBoundaryViolation("an unnameable gib", dynamic_cast<const Actor*>(this));
+	}
+	rotating->GibThis(impactImpulse, movableObjectToIgnore);
+}
+
+void MovableObject::SendScriptedMessage(const std::string& message, uint8_t context, double number, int64_t contextUID, const std::string& text, LuabindObjectWrapper* directContext) {
+	// The pass runs on the machine that owns the actor while the receiver's script runs on every peer, so
+	// the message crosses the wire and every peer delivers it at the committed tick.
+	// The wire cannot carry every string Lua can make one: an empty name the decoder refuses, a name or
+	// a text over the field's length, a control character. Asked with the codec's own rule so the two
+	// cannot drift, and a call it refuses is made here instead of silently killing the whole frame.
+	const bool wireCanCarry = context < NetGameAIScriptMessage::ContextCount && !message.empty() &&
+	                          NetLockstepCodec::IsWireString(message, NetLockstepCodec::c_MaxValueKeyBytes) &&
+	                          NetLockstepCodec::IsWireString(text, NetLockstepCodec::c_MaxValueStringBytes);
+	if (wireCanCarry && Actor::QueueAIPassScriptMessage(this, context, number, contextUID, message, text)) {
+		return;
+	}
+	if (Actor::DeferringAIPassWrite(nullptr)) {
+		// A context, a name or a receiver no peer can name the same way cannot ride the wire: a table
+		// context, a control character, an object the world does not hold. The call stays where it was
+		// made, and says so.
+		g_MovableMan.ReportControllerBoundaryViolation("a script message the wire cannot carry", dynamic_cast<const Actor*>(this));
+	}
+	if (directContext) {
+		RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {message}, {directContext});
+	} else {
+		RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {message});
+	}
 }
 
 bool MovableObject::InLocalAIValueDomain() {
