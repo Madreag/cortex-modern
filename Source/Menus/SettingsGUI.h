@@ -23,6 +23,8 @@ namespace RTE {
 		bool Visible(GUIControl* control);
 		bool Enabled(GUIControl* control);
 		bool Text(GUIControl* control, std::string& text);
+		/// Name of the settings page the manager currently shows, empty when it shows no settings page.
+		std::string SettingsPage(GUIControlManager* manager);
 		bool Handles(const std::string& command);
 		bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation);
 		void Click(GUIControlManager* manager, const std::string& control);
