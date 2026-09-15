@@ -1516,6 +1516,13 @@ int MovableObject::UpdateScripts() {
 	return status;
 }
 
+void MovableObject::GibThisFromScript() {
+	// Only a rotating object has gibs; every scripted gib goes through MOSRotating.
+	if (MOSRotating* rotating = dynamic_cast<MOSRotating*>(this)) {
+		rotating->GibThis();
+	}
+}
+
 void MovableObject::SendScriptedMessage(const std::string& message, uint8_t context, double number, int64_t contextUID, const std::string& text, LuabindObjectWrapper* directContext) {
 	if (directContext) {
 		RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {message}, {directContext});
