@@ -134,17 +134,11 @@ namespace {
 		return Rect(0, 0, occlusion, height, true);
 	}
 
-	/// The band FrameMan reserves for the seat's own message: from the top row, centred on what the panel
-	/// leaves. Measured with the blink decoration whether or not this frame draws it, so the rect is stable.
+	/// The band the seat's own message occupies, read from the manager that lays it out. Measured in its
+	/// blinking form whether or not this frame draws it, so the rect does not pulse.
 	Json ScreenTextRect(int screen) {
-		const std::string text = g_FrameMan.GetScreenText(screen);
-		if (text.empty()) return Rect(0, 0, 0, 0, false);
-		const int screenWidth = g_FrameMan.GetPlayerScreenWidth();
-		const std::string drawn = g_FrameMan.SplitStringToFitWidth(">>> " + text + " <<<", screenWidth, false);
-		GUIFont* font = g_FrameMan.GetLargeFont();
-		const int width = font->CalculateWidth(drawn);
-		const int centre = (screenWidth + g_CameraMan.GetScreenOcclusion(screen).GetRoundIntX()) / 2;
-		return Rect(centre - width / 2, 12, width, font->CalculateHeight(drawn), true);
+		const FrameMan::ScreenTextLayout layout = g_FrameMan.GetScreenTextLayout(screen, true);
+		return Rect(layout.x, layout.y, layout.width, layout.height, !layout.text.empty());
 	}
 
 	Json OverlayRect(const NetModerationGUI::OverlayRect& rect) {
@@ -442,6 +436,11 @@ namespace {
 			Require(observed["net_ui"]["status"].at("visible") == true, "the network status widget is not on screen");
 			if (step.value("picker_open", false)) Require(seat->at("picker").at("visible") == true, "the editor's object picker is not open");
 			if (step.value("screen_text", false)) Require(seat->at("screen_text_rect").at("visible") == true, "the seat's screen carries no editor message");
+			const Json& band = seat->at("screen_text_rect");
+			if (band.at("visible").get<bool>()) {
+				Require(band["x"].get<int>() >= 0 && band["x"].get<int>() + band["w"].get<int>() <= g_FrameMan.GetPlayerScreenWidth(),
+				    "the seat's message is drawn off its own screen");
+			}
 			for (const std::string& element: {"status", "toasts"}) {
 				for (const std::string& area: {"picker", "screen_text_rect"}) {
 					Require(!Overlaps(observed["net_ui"].at(element), seat->at(area)),
