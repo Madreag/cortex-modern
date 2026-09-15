@@ -1918,7 +1918,7 @@ std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const So
 				}
 				ownerIdentity = 0;
 			}
-			state.voices.push_back(AudioCheckpoint::Voice::Capture(identity, ownerIdentity, voice.soundPath, voice.minimumAudibleDistance, voice.channel, bus));
+			state.voices.push_back(AudioCheckpoint::Voice::Capture(identity, ownerIdentity, voice.soundPath, voice.minimumAudibleDistance, voice.channel, bus, voice.awaitingSample));
 		}
 		TraceCheckpointBoundary("save-captured");
 	}
@@ -2226,7 +2226,7 @@ std::string AudioMan::GetSoundContainerPlaybackCheckpoint(const SoundContainer* 
 	for (const auto& [identity, voice]: m_PlayingVoices) {
 		if (voice.owner != container) continue;
 		int bus = container ? container->GetBusRouting() : 0;
-		voices.push_back(AudioCheckpoint::Voice::Capture(identity, container ? container->GetCheckpointIdentity() : 0, voice.soundPath, voice.minimumAudibleDistance, voice.channel, bus).SaveCheckpoint());
+		voices.push_back(AudioCheckpoint::Voice::Capture(identity, container ? container->GetCheckpointIdentity() : 0, voice.soundPath, voice.minimumAudibleDistance, voice.channel, bus, voice.awaitingSample).SaveCheckpoint());
 	}
 	CheckpointWriter writer("SoundPlayback1"); writer(voices); return writer.Text();
 }
