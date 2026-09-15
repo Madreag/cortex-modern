@@ -4,7 +4,6 @@
 
 #include "ActivityMan.h"
 #include "CameraMan.h"
-#include "FrameMan.h"
 #include "PresetMan.h"
 #include "PostProcessMan.h"
 
