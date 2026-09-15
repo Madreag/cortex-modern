@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 
 using namespace RTE;
 
@@ -101,6 +102,28 @@ namespace {
 			}
 		}
 		return toast.text + (sender ? " by " + g_NetMatchService.GetPeerDisplayName(sender) : std::string());
+	}
+
+	// The player_* toasts read "<name> <verb>"; on a short line the name elides, never the verb.
+	std::string FitToastText(GUIFont* font, const ScenarioRunner::NetUiToastRecord& toast, int width) {
+		const char* verb = nullptr;
+		if (toast.kind == "player_joined") {
+			verb = " joined";
+		} else if (toast.kind == "player_dropped") {
+			verb = " dropped";
+		} else if (toast.kind == "player_left") {
+			verb = " left";
+		} else if (toast.kind == "player_rejoined") {
+			verb = " rejoined";
+		} else if (toast.kind == "player_substituted") {
+			verb = " joined as substitute";
+		}
+		std::string text = ToastText(toast);
+		const size_t verbLen = verb ? std::strlen(verb) : 0;
+		if (verbLen && text.size() > verbLen && text.compare(text.size() - verbLen, verbLen, verb) == 0) {
+			return FitLine(font, text.substr(0, text.size() - verbLen), width - font->CalculateWidth(verb)) + verb;
+		}
+		return FitLine(font, std::move(text), width);
 	}
 
 	std::string WrapText(GUIFont* font, const std::string& text, int width) {
@@ -517,7 +540,7 @@ void NetModerationGUI::DrawMatchToasts() {
 		GUILabel* label = m_Toasts[row];
 		const bool shown = row < visible.size();
 		label->SetVisible(shown);
-		label->SetText(shown ? FitLine(font, ToastText(visible[row]), width - 16) : std::string());
+		label->SetText(shown ? FitToastText(font, visible[row], width - 16) : std::string());
 		if (!shown) continue;
 		const int y = top + static_cast<int>(row) * rowHeight;
 		label->SetFont(font);
