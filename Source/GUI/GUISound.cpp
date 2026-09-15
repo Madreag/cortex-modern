@@ -263,8 +263,7 @@ struct GUISoundCheckpoint {
             }
             if (manager.SaveCheckpoint() == text) return g_MusicMan.LoadCheckpointWithAudio(music, audio);
             candidate = Build(record);
-            registry = audioManager.m_CheckpointSoundContainers;
-            live = audioManager.m_LiveCheckpointSoundContainers;
+            audioManager.CaptureCheckpointSoundRegistry(registry, live);
             const auto members = Members(manager);
             const std::set<const SoundContainer*> owners(members.begin(), members.end());
             for (auto entry = registry.begin(); entry != registry.end();) {
@@ -276,16 +275,14 @@ struct GUISoundCheckpoint {
                 registry[identity].push_back(members[i]); live[members[i]] = identity;
             }
             Swap(*candidate, manager);
-            audioManager.m_CheckpointSoundContainers.swap(registry);
-            audioManager.m_LiveCheckpointSoundContainers.swap(live);
+            audioManager.SwapCheckpointSoundRegistry(registry, live);
             swapped = true;
             if (!g_MusicMan.LoadCheckpointWithAudio(music, audio, &candidate->bindings)) throw std::runtime_error("GUI audio restoration failed");
             return true;
         } catch (const std::exception& error) {
             if (swapped) {
                 Swap(*candidate, manager);
-                audioManager.m_CheckpointSoundContainers.swap(registry);
-                audioManager.m_LiveCheckpointSoundContainers.swap(live);
+                audioManager.SwapCheckpointSoundRegistry(registry, live);
                 audioManager.SetCheckpointSoundContainerCursor(originalCursor);
             }
             std::cout << "[gui-sound-checkpoint] " << error.what() << std::endl;
