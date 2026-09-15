@@ -179,7 +179,7 @@ namespace RTE {
 		/// Gets the an in-game GUI Object for a specific player.
 		/// @param which Which player to get the GUI for. (default: 0)
 		/// @return A pointer to a BuyMenuGUI. Ownership is NOT transferred!
-		BuyMenuGUI* GetBuyGUI(unsigned int which = 0) const { return which < Players::MaxPlayerCount && LocalInputOfPlayer(which) != Players::NoPlayer ? m_pBuyGUI[which] : nullptr; }
+		BuyMenuGUI* GetBuyGUI(unsigned int which = 0) const;
 
 		/// Checks if the in-game GUI Object is visible for a specific player.
 		/// @param which Which player to check the GUI for. -1 will check all players.
@@ -189,7 +189,7 @@ namespace RTE {
 		/// Gets the an in-game editor GUI Object for a specific player.
 		/// @param which Which player to get the GUI for. (default: 0)
 		/// @return A pointer to a SceneEditorGUI. Ownership is NOT transferred!
-		SceneEditorGUI* GetEditorGUI(unsigned int which = 0) const { return which < Players::MaxPlayerCount && LocalInputOfPlayer(which) != Players::NoPlayer ? m_pEditorGUI[which] : nullptr; }
+		SceneEditorGUI* GetEditorGUI(unsigned int which = 0) const;
 		static bool RunNetLocalUIRestoreSelfTest();
 		static bool RunNetInventoryRelaunchProbe(std::string_view phase);
 
@@ -236,7 +236,7 @@ namespace RTE {
 		/// @param whichColor Which color banner to get - see the GameActivity::BannerColor enum. (default: YELLOW)
 		/// @param player Which player's banner to get. (default: Players::PlayerOne)
 		/// @return A pointer to the GUIBanner object that we can
-		GUIBanner* GetBanner(int whichColor = YELLOW, int player = Players::PlayerOne) { return LocalInputOfPlayer(player) != Players::NoPlayer ? (whichColor == YELLOW ? m_pBannerYellow[player] : m_pBannerRed[player]) : nullptr; }
+		GUIBanner* GetBanner(int whichColor = YELLOW, int player = Players::PlayerOne) const;
 
 		/// Sets the Area within which a team can land things.
 		/// @param team The number of the team we're setting for.
@@ -251,8 +251,7 @@ namespace RTE {
 		/// @param team The number of the team we're setting for.
 		/// @return The Area we're using to limit their landings within. OWNERSHIP IS NOT TRANSFERRED!
 		const Scene::Area& GetLZArea(int team) const {
-			static const Scene::Area empty;
-			return team >= Teams::TeamOne && team < Teams::MaxTeamCount ? m_LandingZoneArea[team] : empty;
+			return team >= Teams::TeamOne && team < Teams::MaxTeamCount ? m_LandingZoneArea[team] : s_NoLandingZone;
 		}
 
 		/// Sets the width of the landing zone box that follows around a player's
@@ -640,6 +639,11 @@ namespace RTE {
 		// The in-game important message banners for each player
 		GUIBanner* m_pBannerRed[Players::MaxPlayerCount];
 		GUIBanner* m_pBannerYellow[Players::MaxPlayerCount];
+		// What a script gets for a seat this machine does not present: an inert object of the same type instead of a
+		// nil it would have to check. They are never created, so every call is a no-op and every getter answers neutral.
+		mutable std::unique_ptr<BuyMenuGUI> m_SeatStubBuyGUI[Players::MaxPlayerCount];
+		mutable std::unique_ptr<SceneEditorGUI> m_SeatStubEditorGUI[Players::MaxPlayerCount];
+		mutable std::unique_ptr<GUIBanner> m_SeatStubBanner[2][Players::MaxPlayerCount];
 		// How many times a banner has been repeated.. so we dont' annoy by repeating forever
 		int m_BannerRepeats[Players::MaxPlayerCount];
 		// Whether each player has marked himself as ready to start. Can still edit while this is set, but when all are set, the game starts
@@ -652,6 +656,8 @@ namespace RTE {
 		std::deque<Delivery> m_Deliveries[Teams::MaxTeamCount];
 		// The box within where landing zones can be put
 		Scene::Area m_LandingZoneArea[Teams::MaxTeamCount];
+		// What a team outside the roster lands within: nowhere
+		inline static const Scene::Area s_NoLandingZone;
 		// How wide around the brain the automatic LZ is following
 		int m_BrainLZWidth[Players::MaxPlayerCount];
 		// The objective points for each team

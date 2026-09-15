@@ -16,9 +16,17 @@ sys.path.insert(0, str(HERE))
 from check_reconnect import absent, journal, local_view, pair, require
 from phase_b import EXE, REPO, ROOT, footprint, instrument_runner, sha, stamp
 
-A7 = Path("D:/Projects/reviews/takeover-20260909/a7-repaired-driver")
+A7_DEFAULT = Path("D:/Projects/reviews/takeover-20260909/a7-repaired-driver")
+A7 = Path(os.environ.get("A7_DRIVER_DIR") or A7_DEFAULT)
 FG6D = Path("D:/Projects/reviews/takeover-20260909/grok-workers/fg6d-battery")
 SUBSTITUTION = ("substitute_commit", "substitute_returner_wins", "substitute_host_cancel", "substitute_bounds")
+
+
+def driver_dir(path=None):
+    # A runner on another host stages the retained driver beside itself.
+    global A7
+    A7 = Path(path or os.environ.get("A7_DRIVER_DIR") or A7_DEFAULT)
+    return A7
 
 
 def load(name, path):
@@ -45,17 +53,7 @@ def allocated(root):
     return root
 
 
-def a7_run(manifest):
-    support = load("a7_support", A7 / "a7_support.py")
-    support.REPO = REPO
-    driver = load("seat_a7_driver", A7 / "a7_driver.py")
-    driver.REPO = REPO
-    driver.now = stamp
-    driver.ARMS = copy.deepcopy(driver.ARMS)
-    for index, spec in enumerate(driver.ARMS.values()):
-        spec["port"] = 43575 + index
-        spec["capabilities"].add("shared_seat_view_v1")
-    root = support.validate_output(ROOT / "a7")
+def install_local_control_oracle(driver, log):
     original = driver.validate_local_control
 
     def validate(observed, expected):
@@ -75,10 +73,35 @@ def a7_run(manifest):
             row["explicit_seat_and_input"] = {"pass": False, "error": str(error)}
             raise
         finally:
-            with (root / "local-control-oracle-runs.jsonl").open("a", encoding="utf-8") as stream:
+            with Path(log).open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(row) + "\n")
 
     driver.validate_local_control = validate
+    return original
+
+
+def seat_driver(log, directory=None, module=None):
+    """The retained A7 driver with the canonical seat oracle installed, for a runner on any host."""
+    directory = Path(directory or A7)
+    if module is None:
+        load("a7_support", directory / "a7_support.py")
+        module = load("seat_a7_driver", directory / "a7_driver.py")
+    install_local_control_oracle(module, log)
+    return module
+
+
+def a7_run(manifest):
+    support = load("a7_support", A7 / "a7_support.py")
+    support.REPO = REPO
+    driver = load("seat_a7_driver", A7 / "a7_driver.py")
+    driver.REPO = REPO
+    driver.now = stamp
+    driver.ARMS = copy.deepcopy(driver.ARMS)
+    for index, spec in enumerate(driver.ARMS.values()):
+        spec["port"] = 43575 + index
+        spec["capabilities"].add("shared_seat_view_v1")
+    root = support.validate_output(ROOT / "a7")
+    seat_driver(root / "local-control-oracle-runs.jsonl", module=driver)
     pin_factory = lambda source, path: support.Pin(source, path, repo=REPO)
     with support.clean_environment() as removed:
         result = driver.run_suite(root, 40, manifest, tuple(driver.ARMS), pin_factory=pin_factory)
@@ -172,14 +195,16 @@ def h4_run(manifest, runner):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-manifest", type=Path, default=ROOT / "reconnect-build.json")
+    parser.add_argument("--a7-driver-dir", type=Path, default=None)
     args = parser.parse_args()
+    driver_dir(args.a7_driver_dir)
     os.environ["CCCP_HEADLESS"] = "1"
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     build = json.loads(args.build_manifest.read_text(encoding="utf-8"))
     require(sha(EXE) == build["exe_sha256"], "executable differs from the compiled input manifest")
     runner = instrument_runner(build["exe_sha256"])
     results = {"stamp": stamp(), "build_manifest": str(args.build_manifest), "build_sha256": sha(args.build_manifest),
-               "driver_sha256": sha(__file__), "check_sha256": sha(HERE / "check_reconnect.py"),
+               "driver_sha256": sha(__file__), "check_sha256": sha(HERE / "check_reconnect.py"), "a7_driver_dir": str(A7),
                "retained_drivers": {str(path): sha(path) for path in (A7 / "a7_driver.py", A7 / "a7_support.py",
                    FG6D / "h4gates/common.py", FG6D / "h4gates/rejoin_after_resync.py", REPO / "tools/h4_substitution_gates.py",
                    REPO / "tools/h4_gate_evidence.py")}}

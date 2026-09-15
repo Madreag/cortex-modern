@@ -380,6 +380,35 @@ void GameActivity::ConfigureLockstepCPUTeams(const std::array<bool, Teams::MaxTe
 	}
 }
 
+// A seat this machine does not present has no menu, editor or banner of its own, and a script that asks for one
+// gets an inert object of the same type: it is never created, so its every method is a no-op and its every getter
+// answers neutral. Offline every seat is this machine's own and the live objects are handed out as before.
+namespace {
+template <class T> T* SeatStub(std::unique_ptr<T>& stub) {
+	if (!stub) stub = std::make_unique<T>();
+	return stub.get();
+}
+} // namespace
+
+BuyMenuGUI* GameActivity::GetBuyGUI(unsigned int which) const {
+	if (which >= Players::MaxPlayerCount) return nullptr;
+	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
+	return presented && m_pBuyGUI[which] ? m_pBuyGUI[which] : SeatStub(m_SeatStubBuyGUI[which]);
+}
+
+SceneEditorGUI* GameActivity::GetEditorGUI(unsigned int which) const {
+	if (which >= Players::MaxPlayerCount) return nullptr;
+	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
+	return presented && m_pEditorGUI[which] ? m_pEditorGUI[which] : SeatStub(m_SeatStubEditorGUI[which]);
+}
+
+GUIBanner* GameActivity::GetBanner(int whichColor, int player) const {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return nullptr;
+	GUIBanner* const live = whichColor == YELLOW ? m_pBannerYellow[player] : m_pBannerRed[player];
+	const bool presented = LocalInputOfPlayer(player) != Players::NoPlayer;
+	return presented && live ? live : SeatStub(m_SeatStubBanner[whichColor == YELLOW ? YELLOW : RED][player]);
+}
+
 bool GameActivity::IsBuyGUIVisible(int which) const {
 	if (which == -1) {
 		const int playerLimit = m_SharedPlayerSeats ? Players::MaxPlayerCount : GetPlayerCount();
@@ -1043,13 +1072,13 @@ void GameActivity::UpdateEditing() {
 		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
 
-		m_pEditorGUI[player]->Update();
+		GetEditorGUI(player)->Update();
 
 		// Set the team associations with each screen displayed
 		g_CameraMan.SetScreenTeam(m_Team[player], ScreenOfPlayer(player));
 
 		// Check if the player says he's done editing, and if so, make sure he really is good to go
-		if (m_pEditorGUI[player]->GetEditorGUIMode() == SceneEditorGUI::DONEEDITING) {
+		if (GetEditorGUI(player)->GetEditorGUIMode() == SceneEditorGUI::DONEEDITING) {
 			// See if a brain has been placed yet by this player - IN A VALID LOCATION
 			if (!m_pEditorGUI[player]->TestBrainResidence()) {
 				// Hm not ready yet without resident brain in the right spot, so let user know
@@ -1332,7 +1361,7 @@ void GameActivity::Update() {
 			if (m_PlayerController[player].IsState(ACTOR_BRAIN) && m_ViewState[player] != ViewState::ActorSelect) {
 				SwitchToActor(m_Brain[player], player, team);
 				m_ViewState[player] = ViewState::Normal;
-			} else if (m_PlayerController[player].IsState(ACTOR_NEXT) && m_ViewState[player] != ViewState::ActorSelect && !m_pBuyGUI[player]->IsVisible() && !m_LuaLockActor[player]) {
+			} else if (m_PlayerController[player].IsState(ACTOR_NEXT) && m_ViewState[player] != ViewState::ActorSelect && !IsBuyGUIVisible(player) && !m_LuaLockActor[player]) {
 				// Switch to next actor if the player wants to. Don't do it while the buy menu is open
 				// The synchronized actor controller closes shared pie state.
 				if (localPieAnimations && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
@@ -1344,7 +1373,7 @@ void GameActivity::Update() {
 				g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
 			}
 			// Switch to prev actor if the player wants to. Don't do it while the buy menu is open
-			else if (m_PlayerController[player].IsState(ACTOR_PREV) && m_ViewState[player] != ViewState::ActorSelect && !m_pBuyGUI[player]->IsVisible()) {
+			else if (m_PlayerController[player].IsState(ACTOR_PREV) && m_ViewState[player] != ViewState::ActorSelect && !IsBuyGUIVisible(player)) {
 				if (localPieAnimations && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
 					m_ControlledActor[player]->GetPieMenu()->SetEnabled(false);
 				}
@@ -1352,7 +1381,7 @@ void GameActivity::Update() {
 				SwitchToPrevActor(player, team);
 				m_ViewState[player] = ViewState::Normal;
 				g_FrameMan.ClearScreenText(ScreenOfPlayer(player));
-			} else if (m_ViewState[player] != ViewState::ActorSelect && !m_pBuyGUI[player]->IsVisible() && !m_LuaLockActor[player] && (m_PlayerController[player].IsState(ACTOR_NEXT_PREP) || m_PlayerController[player].IsState(ACTOR_PREV_PREP))) {
+			} else if (m_ViewState[player] != ViewState::ActorSelect && !IsBuyGUIVisible(player) && !m_LuaLockActor[player] && (m_PlayerController[player].IsState(ACTOR_NEXT_PREP) || m_PlayerController[player].IsState(ACTOR_PREV_PREP))) {
 				// Go into manual actor select mode if either actor switch buttons are held for a duration
 				// Sim time, so a held switch trips on the same tick for every peer and a stalled frame can't trip it
 				if (m_ActorSelectTimer[player].IsPastSimMS(250)) {
@@ -1879,7 +1908,7 @@ void GameActivity::Update() {
 
 		if (m_ControlledActor[player] && m_ControlledActor[player]->GetController()->GetSeatPlayerRaw() == player) {
 			// Don't disable when pie menu is active; it is done inside the Controller Update
-			if (m_pBuyGUI[player]->IsVisible() || m_ViewState[player] == ViewState::ActorSelect || m_ViewState[player] == ViewState::LandingZoneSelect || m_ViewState[player] == ViewState::Observe) {
+			if (IsBuyGUIVisible(player) || m_ViewState[player] == ViewState::ActorSelect || m_ViewState[player] == ViewState::LandingZoneSelect || m_ViewState[player] == ViewState::Observe) {
 				m_ControlledActor[player]->GetController()->SetInputMode(Controller::CIM_AI);
 			} else if (m_InventoryMenuGUI[player]->IsEnabledAndNotCarousel()) {
 				m_ControlledActor[player]->GetController()->SetInputMode(Controller::CIM_DISABLED);
@@ -2874,7 +2903,7 @@ void GameActivity::ClearCheckpointActorIDs() {
 }
 
 bool GameActivity::PlaceUnassignedBrain(int player) {
-	SetPlayerBrain(g_MovableMan.GetUnassignedBrain(m_Team[player]), player);
+	AssignSeatBrain(g_MovableMan.GetUnassignedBrain(m_Team[player]), player);
 	return m_Brain[player] != nullptr;
 }
 
@@ -2958,19 +2987,20 @@ bool GameActivity::CaptureNetLocalPlayerState(NetLocalPlayerState& out) const {
 
 namespace {
 template <class T> bool RestoreNetLocalMenu(T*& target, const std::string& saved, Controller* controller) {
-	if (saved.empty() && !target) return true;
-	const std::string state = saved.empty() ? T{}.SaveCheckpoint() : saved;
-	if (target && target->IsCheckpointInitialized()) return target->LoadCheckpoint(state);
+	// A seat that was not local on the snapshotting peer carries no local UI, so the live menu stays as it is.
+	if (saved.empty()) return true;
+	if (target && target->IsCheckpointInitialized()) return target->LoadCheckpoint(saved);
 	std::unique_ptr<T> candidate;
 	if (!target) { candidate = std::make_unique<T>(); target = candidate.get(); }
-	const bool restored = target->LoadCheckpoint(state) &&
-		(!target->IsCheckpointInitialized() || target->Create(controller) >= 0) && target->LoadCheckpoint(state);
+	const bool restored = target->LoadCheckpoint(saved) &&
+		(!target->IsCheckpointInitialized() || target->Create(controller) >= 0) && target->LoadCheckpoint(saved);
 	if (candidate) { if (restored) candidate.release(); else target = nullptr; }
 	return restored;
 }
 
 bool RestoreNetLocalBanner(GUIBanner*& target, const std::string& saved, const char* font, const char* blur) {
-	if (saved.empty() && !target) return true;
+	// A seat that was not local on the snapshotting peer carries no banner, so the live one stays as it is.
+	if (saved.empty()) return true;
 	const std::string state = saved.empty() ? GUIBanner{}.SaveCheckpoint() : saved;
 	if (target && target->GetFontHeight() > 0) return target->LoadCheckpoint(state);
 	std::unique_ptr<GUIBanner> candidate;
@@ -3741,6 +3771,103 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			}
 			fixture->ClearCheckpointActorIDs();
 			if (!restore.relaunching) g_ActivityMan.EndLockstepRelaunch();
+		}
+		{
+			// A peer that did not own a seat carries no local UI for it, so a returner's saved slot arrives empty.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			fixture->m_PlayerController[0].Create(Controller::CIM_PLAYER, 0);
+			Controller* controller = &fixture->m_PlayerController[0];
+			fixture->m_pBuyGUI[0] = new BuyMenuGUI();
+			GUICheckpoint::NetLocalRestoreScope localUI;
+			if (fixture->m_pBuyGUI[0]->Create(controller) < 0) throw std::runtime_error("buy menu fixture creation failed");
+			BuyMenuGUI* const menu = fixture->m_pBuyGUI[0];
+			const std::string live = menu->SaveCheckpoint();
+			std::string detail;
+			const auto step = [&](const char* name, bool applied) {
+				if (!detail.empty()) return false;
+				const bool same = fixture->m_pBuyGUI[0] == menu, initialized = menu->IsCheckpointInitialized(), controls = menu->HasLiveCachedControls();
+				std::cout << "[net-local-menu] step=" << name << " applied=" << applied << " same_menu=" << same << " initialized=" << initialized << " controls_live=" << controls << std::endl;
+				if (applied && same && initialized && controls) return true;
+				detail = std::string(name) + " applied=" + std::to_string(applied) + " same_menu=" + std::to_string(same) +
+				         " initialized=" + std::to_string(initialized) + " controls_live=" + std::to_string(controls);
+				return false;
+			};
+			// Each step creates over or restores into the live menu the returner's seat already owns.
+			if (step("created", true) && step("second_create", menu->Create(controller) >= 0) &&
+			    step("empty_restore", RestoreNetLocalMenu(fixture->m_pBuyGUI[0], std::string{}, controller)) &&
+			    step("saved_restore", RestoreNetLocalMenu(fixture->m_pBuyGUI[0], live, controller))) {
+				BuyMenuGUI peer;
+				if (peer.Create(controller) < 0) throw std::runtime_error("buy menu peer fixture creation failed");
+				GUICheckpoint::NetLocalCaptureScope localValues;
+				step("create_net_local_ui", RestoreNetLocalMenu(fixture->m_pBuyGUI[0], peer.SaveCheckpoint(), controller));
+			}
+			check(("net_local_menu_survives_empty_restore" + (detail.empty() ? std::string{} : " " + detail)).c_str(), detail.empty());
+		}
+		{
+			// The returner's banner is the same live one after a slot that arrives empty, exactly like its menu.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			const char* font = "Base.rte/GUIs/Fonts/BannerFontYellowReg.png";
+			const char* blur = "Base.rte/GUIs/Fonts/BannerFontYellowBlur.png";
+			fixture->m_pBannerYellow[0] = new GUIBanner();
+			GUIBanner* const banner = fixture->m_pBannerYellow[0];
+			GUICheckpoint::NetLocalRestoreScope localUI;
+			const bool created = banner->Create(font, blur, 8);
+			banner->SetKerning(3);
+			banner->ShowText("RETURNER", GUIBanner::BLINKING, -1, Vector(640, 480), 0.5F);
+			const std::string live = banner->SaveCheckpoint();
+			const bool applied = RestoreNetLocalBanner(fixture->m_pBannerYellow[0], std::string{}, font, blur);
+			const bool same = fixture->m_pBannerYellow[0] == banner;
+			const bool kept = banner->GetFontHeight() > 0 && banner->GetBannerText() == "RETURNER" && banner->SaveCheckpoint() == live;
+			std::cout << "[net-local-banner] created=" << created << " applied=" << applied << " same_banner=" << same
+			          << " font=" << banner->GetFontHeight() << " kerning=" << banner->GetKerning() << " text=" << banner->GetBannerText() << std::endl;
+			check("net_local_banner_survives_empty_restore", created && applied && same && kept);
+		}
+		{
+			// A seat with no local menu, editor or banner answers with an inert object of the same type: a script
+			// that drives it the way it drives its own seat's changes nothing and reads neutral values back.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			const int result = lua.RunScriptString(R"lua(
+local activity = ToGameActivity(ActivityMan:GetActivity())
+local menu = activity:GetBuyGUI(0)
+local editor = activity:GetEditorGUI(0)
+local banner = activity:GetBanner(GUIBanner.YELLOW, 0)
+assert(menu ~= nil and editor ~= nil and banner ~= nil, "a seat with no local UI answered with nil")
+assert(_ScriptGraphNativeAddress(menu) == _ScriptGraphNativeAddress(activity:GetBuyGUI(0)), "the inert menu changed identity")
+assert(_ScriptGraphNativeAddress(editor) == _ScriptGraphNativeAddress(activity:GetEditorGUI(0)), "the inert editor changed identity")
+assert(_ScriptGraphNativeAddress(banner) == _ScriptGraphNativeAddress(activity:GetBanner(GUIBanner.YELLOW, 0)), "the inert banner changed identity")
+assert(_ScriptGraphNativeAddress(banner) ~= _ScriptGraphNativeAddress(activity:GetBanner(GUIBanner.RED, 0)), "both banner colors share one object")
+banner:ShowText("STUB", GUIBanner.FLYBYLEFTWARD, 1000, Vector(640, 480), 0.5, 1500, 500)
+banner:HideText(1500, 100)
+banner.Kerning = 5
+banner:ClearText()
+assert(banner.BannerText == "" and banner.AnimState == GUIBanner.NOTSTARTED, "the inert banner kept text")
+assert(not banner:IsVisible() and banner.Kerning == 0, "the inert banner became visible")
+menu.ShowOnlyOwnedItems = true
+menu.EnforceMaxMassConstraint = false
+menu:SetOwnedItemsAmount("Stub Item", 3)
+menu:ClearCartList()
+menu:LoadDefaultLoadoutToCart()
+menu:ForceRefresh()
+assert(not menu.ShowOnlyOwnedItems and menu.EnforceMaxMassConstraint, "the inert menu took a flag")
+assert(menu:GetOwnedItemsAmount("Stub Item") == 0, "the inert menu kept an owned item")
+assert(menu:GetTotalOrderCost() == 0 and menu:GetTotalCartCost() == 0, "the inert menu has a cost")
+assert(menu:GetTotalOrderMass() == 0 and menu:GetTotalOrderPassengers() == 0, "the inert menu has an order")
+editor.EditorMode = SceneEditorGUI.PLACINGOBJECT
+editor:SetCursorPos(Vector(9, 9))
+editor:Update()
+assert(editor.EditorMode == SceneEditorGUI.INACTIVE, "the inert editor changed mode")
+assert(editor:GetCurrentObject() == nil, "the inert editor holds an object")
+assert(activity:GetBuyGUI(Activity.MAXPLAYERCOUNT) == nil, "buy menu of an absent seat")
+assert(activity:GetEditorGUI(Activity.MAXPLAYERCOUNT) == nil, "editor of an absent seat")
+assert(activity:GetBanner(GUIBanner.YELLOW, Activity.MAXPLAYERCOUNT) == nil, "banner of an absent seat")
+)lua");
+			std::cout << "[net-local-ui-selftest] absent_local_ui result=" << result << " error=" << (result == 0 ? std::string{} : lua.GetLastError()) << std::endl;
+			check("absent_local_ui_returns_inert_stub", result == 0);
 		}
 	} catch (const std::exception& exception) { check(exception.what(), false); }
 	for (long uid: scriptIdentities) lua.RunScriptString("if _ScriptedObjects then _ScriptedObjects[\"" + std::to_string(uid) + "\"] = nil end");

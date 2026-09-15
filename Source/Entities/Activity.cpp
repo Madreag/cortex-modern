@@ -49,6 +49,7 @@ void Activity::Clear() {
 	m_PendingRuntimeCheckpoint.clear();
 	m_BrainRecordReconciled = false;
 	m_SharedPlayerSeats = false;
+	m_SharedSeatsEngaged = false;
 	m_CheckpointActorIDs = {};
 	m_HasCheckpointActorIDs = false;
 	m_ActivityState = ActivityState::NotStarted;
@@ -127,6 +128,7 @@ int Activity::Create(const Activity& reference) {
 	m_TeamCount = reference.m_TeamCount;
 	m_SharedPlayerSeats = reference.m_SharedPlayerSeats;
 	m_LocalInputPlayers = reference.m_LocalInputPlayers;
+	m_LockstepControlUID = reference.m_LockstepControlUID;
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		m_Team[player] = reference.m_Team[player];
@@ -376,7 +378,7 @@ int Activity::Start() {
 		// TODO currently this sets brains to players arbitrarily. We should save information on which brain is for which player in the scene so we can set them properly!
 		if (m_IsActive[player]) {
 			if (Actor* brain = g_MovableMan.GetUnassignedBrain(GetTeamOfPlayer(player))) {
-				SetPlayerBrain(brain, player);
+				AssignSeatBrain(brain, player);
 			}
 		}
 	}
@@ -469,6 +471,8 @@ void Activity::ConfigureHumanRoster(const NetMatchConfig& config, uint8_t localP
 }
 
 void Activity::RefreshLockstepLocalPlayers() {
+	// An activity whose seats are its own keeps them; only a shared roster is remapped from the live match.
+	if (!m_SharedPlayerSeats) return;
 	if (const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig()) {
 		MapLocalPlayers(*config, ScenarioRunner::GetLockstepLocalPeerId());
 	}
@@ -476,6 +480,7 @@ void Activity::RefreshLockstepLocalPlayers() {
 
 void Activity::MapLocalPlayers(const NetMatchConfig& config, uint8_t localPeer) {
 	m_SharedPlayerSeats = true;
+	m_SharedSeatsEngaged = true;
 	m_LocalInputPlayers.fill(Players::NoPlayer);
 	std::fill(std::begin(m_PlayerScreen), std::end(m_PlayerScreen), Players::NoPlayer);
 	int player = Players::PlayerOne;
@@ -490,11 +495,17 @@ void Activity::MapLocalPlayers(const NetMatchConfig& config, uint8_t localPeer) 
 		}
 		++player;
 	}
+	// A seat this machine does not present has no view of its own, so a restore never leaves it the donor's.
+	for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
+		if (m_LocalInputPlayers[seat] == Players::NoPlayer) m_ViewState[seat] = ViewState::Observe;
+	}
 }
 
 int Activity::LocalInputOfPlayer(int player) const {
 	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return Players::NoPlayer;
-	return m_SharedPlayerSeats && ScenarioRunner::HasLockstepCoordinator() ? m_LocalInputPlayers[player] : player;
+	// The roster's seat map outlives the match's coordinator: a seat another peer played stays theirs while the
+	// activity keeps updating after the match ends.
+	return m_SharedPlayerSeats && (m_SharedSeatsEngaged || ScenarioRunner::HasLockstepCoordinator()) ? m_LocalInputPlayers[player] : player;
 }
 
 uint8_t Activity::GetLocalHumanCount() const {
@@ -529,9 +540,13 @@ bool Activity::RunSharedSeatSelfTest() {
 	const bool passed = roster && local && offlineSame;
 	GameActivity copied;
 	copied.Create(host);
+	// The donor peer's own seat arrives with its own view; this peer does not present that seat and must not inherit it.
+	copied.m_ViewState[0] = ViewState::ActorSelect;
+	copied.m_ViewState[1] = ViewState::Normal;
 	copied.MapLocalPlayers(config, 2);
 	const bool rebound = copied.m_LocalInputPlayers[1] == 0 && copied.ScreenOfPlayer(1) == 0 && copied.ScreenOfPlayer(0) == -1 &&
 		copied.GetHumanCount() == host.GetHumanCount() && copied.GetTeamOfPlayer(1) == host.GetTeamOfPlayer(1);
+	const bool ownView = copied.m_ViewState[0] == ViewState::Observe && copied.m_ViewState[1] == ViewState::Normal;
 	const bool cpuRoster = host.TeamIsCPU(2) && client.TeamIsCPU(2) && dedicated.TeamIsCPU(2) &&
 		host.GetCPUTeam() == 2 && client.GetCPUTeam() == 2 && !host.TeamIsCPU(1) && !client.TeamIsCPU(1);
 	NetMatchConfig multiCPU;
@@ -548,8 +563,10 @@ bool Activity::RunSharedSeatSelfTest() {
 	for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) cpuReset = cpuReset && !multipleHost.TeamIsCPU(team);
 	std::cout << "[shared-seat-selftest] " << (passed ? "PASS" : "FAIL") << " roster=" << roster << " local=" << local << " offline=" << offlineSame << std::endl;
 	std::cout << "[shared-seat-selftest] " << (rebound ? "PASS" : "FAIL") << " copied_peer_map=" << rebound << std::endl;
+	std::cout << "[shared-seat-selftest] " << (ownView ? "PASS" : "FAIL") << " restored_seat_view_is_its_own remote=" << static_cast<int>(copied.m_ViewState[0])
+	          << " local=" << static_cast<int>(copied.m_ViewState[1]) << std::endl;
 	std::cout << "[shared-seat-selftest] " << (cpuRoster && cpuOrder && cpuReset ? "PASS" : "FAIL") << " cpu_roster=" << cpuRoster << " cpu_order=" << cpuOrder << " cpu_reset=" << cpuReset << std::endl;
-	return passed && rebound && cpuRoster && cpuOrder && cpuReset;
+	return passed && rebound && ownView && cpuRoster && cpuOrder && cpuReset;
 }
 
 bool Activity::DeactivatePlayer(int playerToDeactivate) {
@@ -616,10 +633,12 @@ int Activity::AddPlayer(int playerToAdd, bool isHuman, int team, float funds, co
 
 void Activity::ClearPlayers(bool resetFunds) {
 	m_SharedPlayerSeats = false;
+	m_SharedSeatsEngaged = false;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		m_IsActive[player] = false;
 		m_IsHuman[player] = false;
 		m_LocalInputPlayers[player] = player;
+		m_LockstepControlUID[player] = 0;
 
 		if (resetFunds) {
 			m_FundsContribution[player] = 0;
@@ -755,14 +774,13 @@ float Activity::GetPlayerFundsShare(int player) const {
 
 void Activity::SetPlayerBrain(Actor* newBrain, int player) {
 	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return;
-	if ((player >= Players::PlayerOne && player < Players::MaxPlayerCount) && newBrain) {
+	if (newBrain) {
 		if (newBrain->GetTeam() != m_Team[player]) {
 			newBrain->SetTeam(m_Team[player]);
 		}
 		m_HadBrain[player] = true;
 	}
-	const bool seated = player >= Players::PlayerOne && player < Players::MaxPlayerCount;
-	if (seated && IsHumanSeat(player)) {
+	if (IsHumanSeat(player)) {
 		if (m_Brain[player] && m_Brain[player] != newBrain && !IsOtherPlayerBrain(m_Brain[player], player)) {
 			g_MovableMan.NotePlayerBrain(m_Brain[player]->GetUniqueID(), false);
 		}
@@ -771,6 +789,15 @@ void Activity::SetPlayerBrain(Actor* newBrain, int player) {
 		}
 	}
 	m_Brain[player] = newBrain;
+}
+
+void Activity::AssignSeatBrain(Actor* newBrain, int player) {
+	SetPlayerBrain(newBrain, player);
+	// A match hands every seat its brain before the wire has committed a frame for it, and every peer places the
+	// same one for the same seat, so that is what a script asking who plays the seat gets until a frame names another.
+	if (m_SharedPlayerSeats && newBrain && player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_LockstepControlUID[player] == 0) {
+		NoteLockstepControlBinding(NetActorUID(newBrain), player);
+	}
 }
 
 bool Activity::RunPlayerBrainRecordSelfTest(Actor* humanBrain, Actor* aiBrain, bool* legacyReseeded, bool* lastDitchRecorded) {
@@ -1012,6 +1039,33 @@ int Activity::GetLockstepHumanSlotIndex(int team) const {
 	return ScenarioRunner::GetLockstepHumanSlotIndex(team);
 }
 
+// Every seat of a shared roster answers the control binding the committed frame carries, the owner's own
+// seat included: a seat's owner switches a tick before the wire does, and a script that gates a sim write on
+// the answer would run on one peer only for that window. What this machine drives is GetLocallyControlledActor.
+Actor* Activity::GetControlledActor(int player) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return nullptr;
+	}
+	if (m_SharedPlayerSeats) {
+		return ResolveNetActor(m_LockstepControlUID[player]);
+	}
+	return m_ControlledActor[player];
+}
+
+// The committed frame carries the seat its actor is played by, so the binding an actor leaves is dropped.
+void Activity::NoteLockstepControlBinding(int64_t uid, int player) {
+	if (uid <= 0) {
+		return;
+	}
+	for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
+		if (seat == player) {
+			m_LockstepControlUID[seat] = uid;
+		} else if (m_LockstepControlUID[seat] == uid) {
+			m_LockstepControlUID[seat] = 0;
+		}
+	}
+}
+
 bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || !IsLocalHumanSeat(player)) {
 		return false;
@@ -1219,12 +1273,15 @@ void Activity::UpdatePlayerBrainRecord() {
 		if (m_Brain[player]) {
 			if (!m_Brain[player]->IsDead()) m_HadBrain[player] = true;
 			g_MovableMan.NotePlayerBrain(m_Brain[player]->GetUniqueID(), true);
+			// Whatever placed the brain - the scene, the engine or the activity's script on every peer - the
+			// seat's shared answer starts there, and only until a committed frame names the actor it plays.
+			if (m_LockstepControlUID[player] == 0) NoteLockstepControlBinding(NetActorUID(m_Brain[player]), player);
 			continue;
 		}
 		if (m_BrainEvacuated[player]) continue;
 		Actor* brain = g_MovableMan.GetUnassignedBrainByID(m_Team[player]);
 		if (!brain) continue;
-		SetPlayerBrain(brain, player);
+		AssignSeatBrain(brain, player);
 		if (!m_BrainRecordReconciled) {
 			m_BrainRecordReconciled = true;
 			std::cout << "[brain-record] fallback seat=" << player << " team=" << m_Team[player] << " uid=" << brain->GetUniqueID() << std::endl;
@@ -1541,20 +1598,24 @@ void Activity::RefreshCheckpointActorIDs() {
 }
 
 std::string Activity::SaveCheckpoint() const {
-	CheckpointWriter writer("Activity3");
+	CheckpointWriter writer("Activity4");
 	VisitCheckpoint(writer, *this);
 	std::array<std::array<long, 3>, Players::MaxPlayerCount> links{};
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) links[player] = m_HasCheckpointActorIDs ? m_CheckpointActorIDs[player] : SlotActorIDs(player);
-	writer(links, Icon::SaveCheckpointSet(m_TeamIcons));
+	writer(links, m_LockstepControlUID, Icon::SaveCheckpointSet(m_TeamIcons));
 	return writer.Text();
 }
 
 bool Activity::LoadCheckpoint(std::string_view text, bool validateOnly) {
 	try {
 		const bool legacy = text.starts_with("9 Activity1 ");
-		CheckpointReader reader(text, legacy ? "Activity1" : "Activity3", validateOnly);
+		// A seat's control binding travels with the checkpoint, so a peer that heals from another's snapshot
+		// answers the actor the others answer; one written before it keeps this machine's binding as it stands.
+		const bool carriesBinding = text.starts_with("9 Activity4 ");
+		CheckpointReader reader(text, legacy ? "Activity1" : (carriesBinding ? "Activity4" : "Activity3"), validateOnly);
 		VisitCheckpoint(reader, *this);
 		reader(m_CheckpointActorIDs);
+		if (carriesBinding) reader(m_LockstepControlUID);
 		if (!legacy) {
 			std::string icons;
 			reader.Value(icons);
@@ -1644,6 +1705,7 @@ void Activity::ForgetDestroyedActor(const Actor* actor) {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (m_Brain[player] == actor) m_Brain[player] = nullptr;
 		if (m_ControlledActor[player] == actor) m_ControlledActor[player] = nullptr;
+		if (m_LockstepControlUID[player] == static_cast<int64_t>(actor->GetUniqueID())) m_LockstepControlUID[player] = 0;
 		if (m_PlayerController[player].GetControlledActor() == actor) m_PlayerController[player].SetControlledActor(nullptr);
 	}
 }

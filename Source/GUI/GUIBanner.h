@@ -96,6 +96,10 @@ namespace RTE {
 		/// Destroys the font data
 		void Destroy();
 
+		/// Whether this banner has no font, which is what a seat this machine does not present is answered with:
+		/// every call on it is a no-op and every getter answers neutral.
+		bool IsInert() const { return m_FontHeight <= 0; }
+
 		/// Gets the currently displayed text string.
 		/// @return The currently displayed text string.
 		const std::string& GetBannerText() const { return m_BannerText; }
@@ -128,7 +132,9 @@ namespace RTE {
 		/// Set the character kerning (spacing), in pixels. 1 = one empty pixel
 		/// between chars, 0 = chars are touching.
 		/// @param newKerning The new kerning value. (default: 1)
-		void SetKerning(int newKerning = 1) { m_Kerning = newKerning; }
+		void SetKerning(int newKerning = 1) {
+			if (!IsInert()) m_Kerning = newKerning;
+		}
 
 		/// Tells how much space, in pixels, currently exists between two flying
 		/// characters.
@@ -158,6 +164,7 @@ namespace RTE {
 		/// @param flySpeed The speed at which the characters will fly, in pixels per second. (default: 1500)
 		/// @param flySpacing The spacing between the flying characters, in pixels. (default: 100)
 		void HideText(int flySpeed = 1500, int flySpacing = 100) {
+			if (IsInert()) return;
 			if (m_AnimState <= SHOW) {
 				m_AnimState = HIDING;
 			}
@@ -167,6 +174,7 @@ namespace RTE {
 
 		/// Abruptly clears any text without animating it away. Resets this thing.
 		void ClearText() {
+			if (IsInert()) return;
 			m_BannerText.clear();
 			m_BannerChars.clear();
 			m_AnimState = NOTSTARTED;
