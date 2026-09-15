@@ -149,10 +149,14 @@ namespace RTE {
 		NetLobbyError error;
 	};
 
+	struct NetLobbyDecodeOptions {
+		bool allowRecordedConfigVersions = false;
+	};
+
 	class NetLobbyProtocol {
 	public:
 		static constexpr uint32_t c_Magic = 0x344C4343U;
-		static constexpr uint16_t c_Version = 3;
+		static constexpr uint16_t c_Version = 4;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxShortTextBytes = 128;
@@ -172,8 +176,8 @@ namespace RTE {
 		static const char* ErrorCodeName(NetLobbyErrorCode code);
 
 		static bool Encode(const NetLobbyMessage& message, std::vector<uint8_t>& outBytes, NetLobbyError* error = nullptr);
-		static NetLobbyDecodeResult Decode(const uint8_t* data, size_t size);
-		static NetLobbyDecodeResult Decode(const std::vector<uint8_t>& bytes);
+		static NetLobbyDecodeResult Decode(const uint8_t* data, size_t size, NetLobbyDecodeOptions options = {});
+		static NetLobbyDecodeResult Decode(const std::vector<uint8_t>& bytes, NetLobbyDecodeOptions options = {});
 	};
 
 } // namespace RTE

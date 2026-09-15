@@ -1,0 +1,46 @@
+"""Require the original-activity codec checks from the runner's match selftest."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+from run_selftests import score_selftest
+from run_sim_test import make_run
+
+
+ROWS = ("rules_roundtrip", "rules_hash_sensitivity", "rules_legacy_defaults", "rules_invalid_refused")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--case", choices=["codec"], required=True)
+    parser.add_argument("--timeout", type=float, default=300)
+    options = parser.parse_args()
+    root = options.out.resolve()
+    root.mkdir(parents=True, exist_ok=False)
+    run = make_run(options.repo, ["-net-match-selftest"], root / "net-match-selftest", options.timeout)
+    try:
+        record = run.start().finish()
+    finally:
+        run.close()
+    stdout = (root / "net-match-selftest" / "stdout.log").read_text(errors="replace")
+    result = score_selftest(stdout, record.get("exit_code"), record.get("timed_out"), "net-match-selftest")
+    result["suite_pass"] = result["pass"]
+    result["checks"] = {row: f"[net-match-selftest] PASS {row}" in stdout.splitlines() for row in ROWS}
+    result["exe_sha256"] = record.get("exe_sha256")
+    result["detector_sha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    result["pass"] = result["pass"] and all(result["checks"].values())
+    for row, ok in result["checks"].items():
+        print(f"{'PASS' if ok else 'FAIL'} {row}: " + ("present" if ok else f"missing [net-match-selftest] PASS {row}"))
+    (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    print(json.dumps(result, indent=2))
+    return 0 if result["pass"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

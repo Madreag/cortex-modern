@@ -358,6 +358,12 @@ namespace RTE {
 				*error = "deterministic_config_hash stopped reacting to ai_update_interval";
 				return false;
 			}
+			for (auto member : {&NetIdentityDeterministicConfig::matchConfigVersion, &NetIdentityDeterministicConfig::lobbyProtocolVersion}) {
+				NetIdentityManifest incompatible = manifestFour;
+				++(incompatible.deterministicConfig.*member);
+				incompatible.deterministicConfigHash = NetIdentity::HashDeterministicConfig(incompatible.deterministicConfig);
+				if (!ExpectMismatchKey(manifestFour, incompatible, "deterministic_config_hash", error)) return false;
+			}
 			NetIdentityManifest otherRules = manifestFour;
 			otherRules.sessionRulesHash = MakeHash(203);
 			if (NetIdentity::HashSessionIdentity(otherRules) == identityFour) {
