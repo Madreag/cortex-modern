@@ -87,9 +87,8 @@ int ObjectPickerGUI::Create(Controller* controller, int whichModuleSpace, const 
 
 	dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("base"))->SetSize(g_WindowMan.GetResX(), g_WindowMan.GetResY());
 
-	if (!m_ParentBox) {
-		m_ParentBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("PickerGUIBox"));
-	}
+	// The load above deleted every control the manager owned, so each cached pointer is re-fetched.
+	m_ParentBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("PickerGUIBox"));
 	m_ParentBox->SetPositionAbs(g_FrameMan.GetPlayerFrameBufferWidth(m_Controller->GetPlayer()), 0);
 	m_ParentBox->SetEnabled(false);
 	m_ParentBox->SetVisible(false);
@@ -111,15 +110,13 @@ int ObjectPickerGUI::Create(Controller* controller, int whichModuleSpace, const 
 		m_ObjectsList->SetSize(m_ObjectsList->GetWidth(), m_ObjectsList->GetHeight() + stretchAmount);
 	}
 
-	if (!m_PopupBox) {
-		m_PopupBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("BuyGUIPopup"));
-		m_PopupText = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("PopupText"));
-		m_PopupText->SetFont(m_GUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+	m_PopupBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("BuyGUIPopup"));
+	m_PopupText = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("PopupText"));
+	m_PopupText->SetFont(m_GUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 
-		// Never enable the popup box because it steals focus and causes other windows to think the cursor left them
-		m_PopupBox->SetEnabled(false);
-		m_PopupBox->SetVisible(false);
-	}
+	// Never enable the popup box because it steals focus and causes other windows to think the cursor left them
+	m_PopupBox->SetEnabled(false);
+	m_PopupBox->SetVisible(false);
 
 	SetModuleSpace(whichModuleSpace);
 	ShowOnlyType(onlyOfType);
