@@ -70,6 +70,15 @@ namespace RTE {
 		/// will be used as target.
 		unsigned long ConvertColor(unsigned long color, int targetDepth = 0);
 
+		/// True when the section names a Filename, so BuildStandardRect can load it.
+		bool HasStandardRect(const std::string& Section);
+
+		/// The same 55% scale the font fallback cells already use.
+		unsigned long DimColor(unsigned long color, int targetDepth);
+
+		/// Darkens dest[x,y,w,h] inside the current clip when a skin has no disabled bitmap.
+		void DimRect(GUIBitmap* dest, int x, int y, int width, int height);
+
 	private:
 		std::string m_Directory;
 		GUIScreen* m_Screen;

@@ -2,6 +2,9 @@
 #include "GUIReader.h"
 #include "PresetMan.h"
 
+#include "allegro.h"
+
+#include <algorithm>
 #include <cassert>
 
 using namespace RTE;
@@ -371,4 +374,42 @@ void GUISkin::BuildStandardRect(GUIBitmap* Dest, const std::string& Section, int
 
 unsigned long GUISkin::ConvertColor(unsigned long color, int targetDepth) {
 	return m_Screen->ConvertColor(color, targetDepth);
+}
+
+bool GUISkin::HasStandardRect(const std::string& Section) {
+	std::string filename;
+	return GetValue(Section, "Filename", &filename) && !filename.empty();
+}
+
+unsigned long GUISkin::DimColor(unsigned long color, int targetDepth) {
+	if (targetDepth == 8) {
+		RGB rgb;
+		get_color(static_cast<int>(color) & 255, &rgb);
+		return makecol8((rgb.r * 55) / 100, (rgb.g * 55) / 100, (rgb.b * 55) / 100);
+	}
+	if (targetDepth == 32) {
+		return makeacol32(getr32(color) * 55 / 100, getg32(color) * 55 / 100, getb32(color) * 55 / 100, geta32(color));
+	}
+	return makecol(getr(color) * 55 / 100, getg(color) * 55 / 100, getb(color) * 55 / 100);
+}
+
+void GUISkin::DimRect(GUIBitmap* dest, int x, int y, int width, int height) {
+	if (!dest || width <= 0 || height <= 0) {
+		return;
+	}
+	GUIRect clip;
+	dest->GetClipRect(&clip);
+	const int x0 = std::max(x, static_cast<int>(clip.left));
+	const int y0 = std::max(y, static_cast<int>(clip.top));
+	const int x1 = std::min(x + width - 1, static_cast<int>(clip.right));
+	const int y1 = std::min(y + height - 1, static_cast<int>(clip.bottom));
+	if (x1 < x0 || y1 < y0) {
+		return;
+	}
+	const int depth = dest->GetColorDepth();
+	for (int j = y0; j <= y1; j++) {
+		for (int i = x0; i <= x1; i++) {
+			dest->SetPixel(i, j, DimColor(dest->GetPixel(i, j), depth));
+		}
+	}
 }

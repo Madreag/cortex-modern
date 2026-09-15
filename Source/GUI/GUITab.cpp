@@ -148,12 +148,14 @@ void GUITab::Draw(GUIScreen* Screen) {
 		//}
 	}
 
-	// If highlighted, draw that
-	if (m_Mouseover || m_GotFocus) {
+	if (m_Enabled && (m_Mouseover || m_GotFocus)) {
 		m_Image->DrawTrans(Screen->GetBitmap(), m_X, YPos, &m_ImageRects[1]);
 	} else if (!m_Enabled) {
-		// Should show as grayed out and disabled when it is, regardless of checked or not
-		m_Image->DrawTrans(Screen->GetBitmap(), m_X, YPos, &m_ImageRects[3]);
+		const int disabledW = m_ImageRects[3].right - m_ImageRects[3].left;
+		const int disabledH = m_ImageRects[3].bottom - m_ImageRects[3].top;
+		if (disabledW > 1 && disabledH > 1) {
+			m_Image->DrawTrans(Screen->GetBitmap(), m_X, YPos, &m_ImageRects[3]);
+		}
 	}
 
 	// Draw the text
@@ -164,10 +166,22 @@ void GUITab::Draw(GUIScreen* Screen) {
 	Text = space.append(m_Text);
 
 	if (m_Font) {
-		m_Font->SetColor(m_FontColor);
+		unsigned long color = m_FontColor;
+		if (!m_Enabled && m_Skin) {
+			color = m_Skin->DimColor(m_FontColor ? m_FontColor : m_Font->GetMainColor(), Screen->GetBitmap()->GetColorDepth());
+			m_Font->CacheColor(color);
+		}
+		m_Font->SetColor(color);
 		m_Font->SetKerning(m_FontKerning);
 		// TODO: DONT HARDCODE TEXT OFFSET
 		m_Font->Draw(Screen->GetBitmap(), m_X + 4, m_Y + (m_Height / 2) - (m_Font->GetFontHeight() / 2) - 1, Text, m_FontShadow);
+	}
+	if (!m_Enabled && m_Skin) {
+		const int disabledW = m_ImageRects[3].right - m_ImageRects[3].left;
+		const int disabledH = m_ImageRects[3].bottom - m_ImageRects[3].top;
+		if (disabledW <= 1 || disabledH <= 1) {
+			m_Skin->DimRect(Screen->GetBitmap(), m_X, m_Y, m_Width, m_Height);
+		}
 	}
 	Screen->GetBitmap()->SetClipRect(0);
 

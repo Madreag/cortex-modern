@@ -139,7 +139,7 @@ void GUICheckbox::Draw(GUIScreen* Screen) {
 	int YPos = m_Height / 2 - (m_ImageRects[0].bottom - m_ImageRects[0].top) / 2 + m_Y;
 
 	// Draw the base
-	if (m_Mouseover) {
+	if (m_Enabled && m_Mouseover) {
 		m_Image->Draw(Screen->GetBitmap(), m_X, YPos, &m_ImageRects[1]);
 	} else {
 		m_Image->Draw(Screen->GetBitmap(), m_X, YPos, &m_ImageRects[0]);
@@ -166,6 +166,9 @@ void GUICheckbox::Draw(GUIScreen* Screen) {
 		m_Font->SetColor(m_FontColor);
 		m_Font->SetKerning(m_FontKerning);
 		m_Font->Draw(Screen->GetBitmap(), m_X + (m_ImageRects[0].right - m_ImageRects[0].left) + 2, m_Y + (m_Height / 2) - (m_Font->GetFontHeight() / 2) - 1, Text, m_FontShadow);
+	}
+	if (!m_Enabled && m_Skin) {
+		m_Skin->DimRect(Screen->GetBitmap(), m_X, m_Y, m_Width, m_Height);
 	}
 	Screen->GetBitmap()->SetClipRect(nullptr);
 
