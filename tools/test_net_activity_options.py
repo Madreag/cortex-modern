@@ -18,9 +18,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--case", choices=["codec"], required=True)
+    parser.add_argument("--case", choices=["codec", "launch"], required=True)
     parser.add_argument("--timeout", type=float, default=300)
+    parser.add_argument("--port", type=int, default=48320)
+    parser.add_argument("--variant", default="rules", choices=["rules", "default", "infinite", "site", "stock", "brains", "brains-auto", "hold-desync", "hold-resync", "resync-duel", "resync-skirmish", "brains-longname", "wire-refusal", "census", "missing-activity", "missing-scene", "missing-module", "missing-tech"])
+    parser.add_argument("--dedicated", action="store_true")
+    parser.add_argument("--captures", action="store_true", help="save the setup editor's UI captures for the visual review")
+    parser.add_argument("--resolution", help="private window size for the captures, as WIDTHxHEIGHT")
+    parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--offline-repo", type=Path, help="repo whose exe runs the census case's offline -scenario arm")
     options = parser.parse_args()
+    if options.resolution:
+        options.resolution = tuple(int(part) for part in options.resolution.lower().split("x"))
+    if options.case == "launch":
+        from net_activity_launch import launch
+        return launch(options)
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     run = make_run(options.repo, ["-net-match-selftest"], root / "net-match-selftest", options.timeout)

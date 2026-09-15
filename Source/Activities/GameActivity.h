@@ -75,6 +75,55 @@ namespace RTE {
 		/// @param player The player to give a brain to.
 		/// @return Whether the player has a brain now.
 		bool PlaceUnassignedBrain(int player);
+
+		/// Installs a seat's committed brain from the wire. Every peer builds the identical resident from
+		/// the named preset at the named spot, so the brains that enter the sim match, and the seat counts
+		/// as ready to start on every peer at the same frame.
+		/// @return False, with nothing changed, when the placement names a seat, team, sender or preset this peer refuses.
+		bool ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, uint8_t senderPeerId);
+
+		/// Commits one of this peer's own seats' brain placements to the wire. Where the brain goes is the
+		/// player's own decision, read off their local editor; the command carries it to every peer.
+		/// @return Whether the seat had a brain in a spot this machine accepts.
+		bool SubmitLockstepBrainPlacement(int player);
+
+		/// A brain spot every peer derives identically: the seat's landing zone at ground level. Used by a
+		/// seat no peer drives and by the end-to-end arm that stands in for a player's placement.
+		Vector DeterministicBrainSpot(int player) const;
+
+		/// Commits a named brain at the seat's deterministic spot, for a seat no player is driving and for
+		/// the end-to-end arm that stands in for a player's DONE.
+		/// @return Whether the placement was committed.
+		bool PlaceAndSubmitLockstepBrain(int player, const std::string& className, const std::string& preset, const std::string& module);
+
+		/// Test-only seam: queues one scripted setup-editor gesture for a seat. "place_brain" holds the named
+		/// brain over the ground at a fraction of the scene's width and presses; "done" presses DONE. The
+		/// gesture runs through the seat's own SceneEditorGUI, so the commit takes the path a player's does.
+		/// @return Whether the gesture was queued.
+		static bool QueueSetupEditorGesture(int player, const std::string& kind, float sceneXFraction, const std::string& className, const std::string& preset, const std::string& module);
+
+		/// 0 = nothing queued for the seat, 1 = a gesture is still running, 2 = the seat could not carry it out.
+		static int SetupEditorGestureStatus(int player);
+
+		/// Whether a seat has flagged itself ready to start.
+		bool IsReadyToStart(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_ReadyToStart[player]; }
+
+		/// Whether this peer has already committed the seat's placement; the commit is in flight until it returns.
+		bool HasSubmittedLockstepPlacement(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_LockstepPlacementSubmitted[player]; }
+
+		/// The seat's setup-editor mode, or -1 when the seat has no editor.
+		int SetupEditorMode(int player) const;
+
+		/// Presentation only: who the synchronized setup editor is still waiting on, and how many seats have
+		/// placed. Read by the match status strip; never read by the simulation.
+		/// @return Whether the match is holding in the synchronized setup editor.
+		bool DescribeLockstepPlacementWait(std::string& names, int& placed, int& total) const;
+
+		/// Test-only seam: puts a placement command on the wire exactly as issued, so a command every peer
+		/// has to refuse - an unknown preset, a seat this peer does not hold - can be exercised end to end.
+		/// @return Whether the command was enqueued.
+		static bool EnqueueRawBrainPlacement(int player, int team, float posX, float posY, const std::string& className, const std::string& preset, const std::string& module);
+
 		void ClearCheckpointActorIDs() override;
 		bool PrepareCheckpointUI() override;
 		SerializableOverrideMethods;
@@ -717,6 +766,37 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		/// The peer that drives a seat in the agreed roster, or 0 when no peer holds it.
+		static uint8_t LockstepSeatPeerId(int player);
+		/// The seat holder's display name from the agreed roster, for the match's own banners.
+		static std::string LockstepSeatName(int player);
+		/// Makes every brain already standing in the scene its seat's resident, identically on every peer, so
+		/// a local editor's residence test can never take an actor out of one peer's sim alone.
+		void SeedLockstepResidentBrains();
+		/// True while the match's setup editor is the synchronized one: placements cross the wire.
+		static bool IsLockstepPlacement();
+		/// Whether this peer is the one that commits a seat's brain placement.
+		bool MayCommitBrainPlacement(int player) const;
+		/// Puts one seat's committed placement on the wire. `via` names the path that read the spot.
+		bool CommitLockstepBrainPlacement(int player, const std::string& className, const std::string& preset, const std::string& module, const Vector& spot, const char* via);
+		/// The ground under a scene x, where a brain settles under the same physics on every peer.
+		Vector GroundSpot(float sceneX) const;
+		/// Puts a refused placement where the player who tried can see it: their own screen for a few seconds,
+		/// the console, and a banner when this peer is the one that was refused.
+		void RefuseBrainPlacement(int player, const std::string& reason, bool banner);
+		/// Runs the seat's queued scripted editor gesture, if it has one, the way that seat's own input would.
+		void DriveScriptedSetupEditor(int player);
+		/// Builds every seat's committed brain, in seat order, from a unique-id counter pinned to the same
+		/// value on every peer. A local editor's own preview objects take ids off that counter on one peer
+		/// alone, so the shared brains are made only after it is put back in step.
+		/// @return Whether every seat's brain was built.
+		bool BuildLockstepSeatBrains();
+		static constexpr long c_SetupEditorUidReserve = 65536; //!< Ids a peer's own setup editor may spend before the shared ones resume.
+		std::array<bool, Players::MaxPlayerCount> m_LockstepPlacementSubmitted{}; //!< Per-seat, local only: this peer has committed that seat's placement.
+		std::array<NetGamePlaceBrain, Players::MaxPlayerCount> m_LockstepSeatBrains{}; //!< Per-seat committed placement; player < 0 means none yet.
+		long m_LockstepPlacementUidBase = 0; //!< The unique-id counter as the editing phase opened, identical on every peer.
+		bool m_LockstepPlacementSeeded = false; //!< The one-time seed pass has run for this editing phase.
+
 		bool LoadNetLocalGameState(std::string_view text);
 		bool CreateNetLocalUI();
 		/// Points a relaunch's pending marked-actor links at the marks as they stand, so its deferred rebinds keep them.
@@ -738,6 +818,13 @@ namespace RTE {
 				self.m_GoldSwitchEnabled, self.m_RequireClearPathToOrbitSwitchEnabled, self.m_BuyMenuEnabled, self.m_LZCursorWidth,
 				self.m_DeliveryDelay, self.m_CursorTimer, self.m_GameTimer, self.m_GameOverTimer,
 				self.m_GameOverPeriod, self.m_WinnerTeam, self.m_NetworkPlayerNames);
+			// The synchronized setup editor's state is shared state: a resync taken while the seats are
+			// still placing has to restore the same placements and the same id base on every peer.
+			archive(self.m_LockstepPlacementUidBase, self.m_LockstepPlacementSeeded);
+			for (auto& placement: self.m_LockstepSeatBrains) {
+				archive(placement.team, placement.player, placement.posX, placement.posY,
+					placement.className, placement.preset, placement.module);
+			}
 		}
 		/// Clears all the member variables of this Activity, effectively
 		/// resetting the members of this abstraction level only.

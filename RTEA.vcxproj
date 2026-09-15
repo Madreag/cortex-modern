@@ -1098,6 +1098,7 @@
     <ClInclude Include="Source\Activities\GAScripted.h" />
     <ClInclude Include="Source\Activities\GATutorial.h" />
     <ClInclude Include="Source\Activities\GibEditor.h" />
+    <ClInclude Include="Source\Activities\NetActivitySetup.h" />
     <ClInclude Include="Source\Activities\SceneEditor.h" />
     <ClInclude Include="Source\Menus\AreaEditorGUI.h" />
     <ClInclude Include="Source\Menus\AreaPickerGUI.h" />
@@ -1722,6 +1723,7 @@
     <ClCompile Include="Source\Activities\GAScripted.cpp" />
     <ClCompile Include="Source\Activities\GATutorial.cpp" />
     <ClCompile Include="Source\Activities\GibEditor.cpp" />
+    <ClCompile Include="Source\Activities\NetActivitySetup.cpp" />
     <ClCompile Include="Source\Activities\SceneEditor.cpp" />
     <ClCompile Include="Source\Menus\AreaEditorGUI.cpp" />
     <ClCompile Include="Source\Menus\AreaPickerGUI.cpp" />

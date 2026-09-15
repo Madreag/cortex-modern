@@ -1,14 +1,19 @@
 #include "NetModerationGUIProbe.h"
 
 #include "ActivityMan.h"
+#include "CameraMan.h"
 #include "FrameMan.h"
+#include "GameActivity.h"
 #include "GUI.h"
 #include "GUIButton.h"
+#include "GUIFont.h"
 #include "GUILabel.h"
 #include "GUIInputWrapper.h"
 #include "MainMenuGUI.h"
 #include "PauseMenuGUI.h"
 #include "MenuMan.h"
+#include "Scene.h"
+#include "SceneMan.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchService.h"
 #include "NetModerationGUI.h"
@@ -39,7 +44,7 @@ namespace {
 	};
 	struct Probe {
 		bool loaded = false, enabled = false, done = false, resultStarted = false;
-		size_t index = 0;
+		size_t index = 0, gestureIndex = SIZE_MAX;
 		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0;
 		Clock::time_point started;
 		std::filesystem::path directory;
@@ -116,6 +121,37 @@ namespace {
 		return probe.directory / name;
 	}
 
+	Json Rect(int x, int y, int width, int height, bool visible) {
+		return {{"x", x}, {"y", y}, {"w", width}, {"h", height}, {"visible", visible && width > 0 && height > 0}};
+	}
+
+	bool Overlaps(const Json& left, const Json& right) {
+		return left.at("visible").get<bool>() && right.at("visible").get<bool>() &&
+		    left["x"].get<int>() < right["x"].get<int>() + right["w"].get<int>() &&
+		    right["x"].get<int>() < left["x"].get<int>() + left["w"].get<int>() &&
+		    left["y"].get<int>() < right["y"].get<int>() + right["h"].get<int>() &&
+		    right["y"].get<int>() < left["y"].get<int>() + left["h"].get<int>();
+	}
+
+	/// The slide-in panel's visible column, which every editor reports as the seat's screen occlusion.
+	Json PickerRect(int screen) {
+		const int occlusion = g_CameraMan.GetScreenOcclusion(screen).GetRoundIntX();
+		const int height = g_FrameMan.GetPlayerScreenHeight();
+		if (occlusion < 0) return Rect(g_FrameMan.GetPlayerScreenWidth() + occlusion, 0, -occlusion, height, true);
+		return Rect(0, 0, occlusion, height, true);
+	}
+
+	/// The band the seat's own message occupies, read from the manager that lays it out. Measured in its
+	/// blinking form whether or not this frame draws it, so the rect does not pulse.
+	Json ScreenTextRect(int screen) {
+		const FrameMan::ScreenTextLayout layout = g_FrameMan.GetScreenTextLayout(screen, true);
+		return Rect(layout.x, layout.y, layout.width, layout.height, !layout.text.empty());
+	}
+
+	Json OverlayRect(const NetModerationGUI::OverlayRect& rect) {
+		return Rect(rect.x, rect.y, rect.width, rect.height, rect.visible);
+	}
+
 	Json Observe() {
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 		Json observed = {{"at_ms", NowMs()}, {"render", probe.renders}, {"sim_frame", g_TimerMan.GetSimUpdateCount()},
@@ -128,6 +164,25 @@ namespace {
 			    {"applicants", seat.applicants.size()}, {"actions_available", seat.actionsAvailable},
 			    {"holder_generation", seat.holderGeneration}, {"seat_generation", seat.seatGeneration}});
 		}
+		// The setup editor a lockstep match holds in, so a script can drive and read this peer's own seats.
+		auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+		observed["editing"] = game && game->GetActivityState() == Activity::Editing;
+		observed["editor_seats"] = Json::array();
+		const Scene* scene = game ? g_SceneMan.GetScene() : nullptr;
+		for (int player = 0; game && player < Players::MaxPlayerCount; ++player) {
+			if (!(game->IsSeatActive(player) && game->IsLocalHumanSeat(player))) continue;
+			observed["editor_seats"].push_back({{"player", player}, {"ready", game->IsReadyToStart(player)},
+			    {"resident", scene && scene->GetResidentBrain(player) != nullptr},
+			    {"submitted", game->HasSubmittedLockstepPlacement(player)}, {"mode", game->SetupEditorMode(player)},
+			    {"gesture", GameActivity::SetupEditorGestureStatus(player)},
+			    {"screen_text", g_FrameMan.GetScreenText(game->ScreenOfPlayer(player))},
+			    {"picker", PickerRect(game->ScreenOfPlayer(player))},
+			    {"screen_text_rect", ScreenTextRect(game->ScreenOfPlayer(player))}});
+		}
+		// What the network overlay drew this frame, so a script can require it to stay off the editor's own UI.
+		const NetModerationGUI* panel = g_MenuMan.GetNetworkPanel();
+		observed["net_ui"] = {{"status", panel ? OverlayRect(panel->GetStatusRect()) : Rect(0, 0, 0, 0, false)},
+		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)}};
 		return observed;
 	}
 
@@ -206,7 +261,8 @@ namespace {
 			const std::string command = step.at("command");
 			return command.starts_with("assert_") || command.starts_with("dump_") ? Phase::Draw : Phase::Poll;
 		}
-		if (op == "assert" || op == "assert_control" || op == "screenshot" || op == "finish") return Phase::Draw;
+		if (op == "assert" || op == "assert_control" || op == "assert_editor" || op == "assert_net_ui_clear" ||
+		    op == "screenshot" || op == "finish") return Phase::Draw;
 		if ((op == "key_down" || op == "key_up") && SimRateKey(step.value("key", ""))) return Phase::Sim;
 		return Phase::Poll;
 	}
@@ -222,8 +278,28 @@ namespace {
 		const std::string op = step.at("op");
 		if (op == "wait") {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("renders") ||
-			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen"), "wait has no predicate");
+			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
+			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
+			    step.contains("picker_open"), "wait has no predicate");
 			if (step.contains("screen") && observed["screen"] != step["screen"]) return false;
+			if (step.contains("picker_open")) {
+				const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+				    [&](const Json& row) { return row.at("player") == step.value("player", 0); });
+				if (seat == observed["editor_seats"].end() || seat->at("picker").at("visible") != step["picker_open"]) return false;
+			}
+			if (step.contains("seat_text_contains")) {
+				// A seat's screen carries both its editor's line and its activity's, so wait for the one asked for.
+				const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+				    [&](const Json& row) { return row.at("player") == step.value("player", 0); });
+				if (seat == observed["editor_seats"].end() ||
+				    seat->at("screen_text").get<std::string>().find(step["seat_text_contains"].get<std::string>()) == std::string::npos) return false;
+			}
+			if (step.contains("editing") && observed["editing"] != step["editing"]) return false;
+			if (step.contains("seat_ready")) {
+				const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+				    [&](const Json& row) { return row.at("player") == step["seat_ready"]; });
+				if (seat == observed["editor_seats"].end() || seat->at("ready") != true) return false;
+			}
 			if (step.contains("service") && observed["service"] != step["service"]) return false;
 			if (step.contains("sim_at_least") && observed["sim_frame"].get<long long>() < step["sim_at_least"].get<long long>()) return false;
 			if (step.contains("renders") && probe.renders - probe.stepRender < step["renders"].get<uint64_t>()) return false;
@@ -323,12 +399,76 @@ namespace {
 				    rect[1].get<int>() + rect[3].get<int>() <= g_WindowMan.GetResY(), "control exceeds viewport");
 				if (value.contains("text_height")) Require(value["text_height"].get<int>() <= rect[3].get<int>(), "label text exceeds its height");
 			}
+		} else if (op == "place_brain_command") {
+			// A placement exactly as issued, for the commands every peer has to refuse.
+			Require(GameActivity::EnqueueRawBrainPlacement(step.value("player", 0), step.value("team", 0),
+			            step.value("x", 0.0F), step.value("y", 0.0F), step.value("class", std::string("Actor")),
+			            step.value("preset", std::string("Brain Case")), step.value("module", std::string("Base.rte"))),
+			    "the match cannot take a placement command");
+		} else if (op == "editor_place_brain" || op == "editor_done") {
+			// The seat's own editor does the work: the gesture is queued once and the step waits it out.
+			const int player = step.value("player", 0);
+			if (probe.gestureIndex != probe.index) {
+				Require(observed["editing"] == true, "the activity is not in the setup editor");
+				Require(GameActivity::QueueSetupEditorGesture(player, op == "editor_done" ? "done" : "place_brain",
+				            step.value("x_fraction", 0.5F), step.value("class", std::string("Actor")),
+				            step.value("preset", std::string("Brain Case")), step.value("module", std::string("Base.rte"))),
+				    "the seat cannot take an editor gesture");
+				probe.gestureIndex = probe.index;
+			}
+			const int status = GameActivity::SetupEditorGestureStatus(player);
+			Require(status != 2, "the seat could not carry out its editor gesture");
+			if (status == 1) return false;
+		} else if (op == "assert_editor") {
+			const int player = step.value("player", 0);
+			const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+			    [player](const Json& row) { return row.at("player") == player; });
+			Require(seat != observed["editor_seats"].end(), "seat " + std::to_string(player) + " is not a local editor seat");
+			if (step.contains("equals")) {
+				for (auto it = step["equals"].begin(); it != step["equals"].end(); ++it) {
+					Require(seat->at(it.key()) == it.value(), "editor seat assertion differs: " + it.key());
+				}
+			}
+			if (step.contains("screen_text_contains")) {
+				Require(seat->at("screen_text").get<std::string>().find(step["screen_text_contains"].get<std::string>()) != std::string::npos,
+				    "the seat's screen does not carry the expected message");
+			}
+		} else if (op == "assert_net_ui_clear") {
+			// The network overlay owes the stock setup editor its own surfaces: the picker and the seat's message band.
+			const int player = step.value("player", 0);
+			const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+			    [player](const Json& row) { return row.at("player") == player; });
+			Require(seat != observed["editor_seats"].end(), "seat " + std::to_string(player) + " is not a local editor seat");
+			Require(observed["editing"] == true, "the activity is not in the setup editor");
+			Require(observed["net_ui"]["status"].at("visible") == true, "the network status widget is not on screen");
+			if (step.value("picker_open", false)) Require(seat->at("picker").at("visible") == true, "the editor's object picker is not open");
+			if (step.value("screen_text", false)) Require(seat->at("screen_text_rect").at("visible") == true, "the seat's screen carries no editor message");
+			const Json& band = seat->at("screen_text_rect");
+			if (band.at("visible").get<bool>()) {
+				Require(band["x"].get<int>() >= 0 && band["x"].get<int>() + band["w"].get<int>() <= g_FrameMan.GetPlayerScreenWidth(),
+				    "the seat's message is drawn off its own screen");
+			}
+			for (const std::string& element: {"status", "toasts"}) {
+				for (const std::string& area: {"picker", "screen_text_rect"}) {
+					Require(!Overlaps(observed["net_ui"].at(element), seat->at(area)),
+					    "the network " + element + " overlaps the editor's " + area);
+				}
+			}
 		} else if (op == "screenshot") {
-			auto path = Leaf(step.at("name").get<std::string>());
-			path += ".png";
-			Require(!std::filesystem::exists(path), "screenshot already exists");
-			Require(g_FrameMan.SaveBitmapToPNG(g_FrameMan.GetBackBuffer32(), path.string().c_str()) == 0, "screenshot save failed");
-			observed["screenshot"] = path.string();
+			const std::string name = step.at("name").get<std::string>();
+			if (step.value("composited", false)) {
+				// The frame as it reaches the screen - world, editor and overlay - read back from the screen
+				// buffer into the run's ScreenShots directory, where the harness collects it.
+				(void)Leaf(name); // Validates the name's charset; the file lands under the run's ScreenShots.
+				Require(g_FrameMan.SaveScreenToPNG(name.c_str()) == 0, "composited screenshot save failed");
+				observed["screenshot"] = name;
+			} else {
+				auto path = Leaf(name);
+				path += ".png";
+				Require(!std::filesystem::exists(path), "screenshot already exists");
+				Require(g_FrameMan.SaveBitmapToPNG(g_FrameMan.GetBackBuffer32(), path.string().c_str()) == 0, "screenshot save failed");
+				observed["screenshot"] = path.string();
+			}
 		} else if (op == "signal") {
 			auto path = Leaf(step.at("name").get<std::string>());
 			path += ".json";

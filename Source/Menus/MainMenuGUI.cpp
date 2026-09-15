@@ -7,6 +7,7 @@
 #include "SettingsMan.h"
 #include "TimerMan.h"
 #include "ConsoleMan.h"
+#include "NetActivitySetup.h"
 #include "NetMatchService.h"
 #include "NetIdentity.h"
 #include "NetConnectionQuality.h"
@@ -1775,30 +1776,26 @@ void MainMenuGUI::MaybeLaunchMultiplayerActivity() {
 		g_GUISound.ExitMenuSound()->Play();
 		return;
 	}
-	const Entity* presetEntity = g_PresetMan.GetEntityPreset("GAScripted", activityPreset);
-	const Activity* presetActivity = dynamic_cast<const Activity*>(presetEntity);
-	if (!presetActivity) {
-		m_MultiplayerErrorLabel->SetText("Could not find multiplayer activity preset.");
+	// The agreed config the roster carries is the launch descriptor here, on every remote peer and on a
+	// dedicated host, so all of them build the identical activity from the identical rules.
+	const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+	if (!config) {
+		m_MultiplayerErrorLabel->SetText("The launching match carries no agreed setup.");
 		g_NetMatchService.Destroy();
 		return;
 	}
-	if (!presetActivity->GetSceneName().empty()) {
-		g_SceneMan.SetSceneToLoad(presetActivity->GetSceneName(), true, false);
-	}
-	Activity* activity = dynamic_cast<Activity*>(presetActivity->Clone());
-	if (!activity) {
-		m_MultiplayerErrorLabel->SetText("Could not create multiplayer activity.");
+	if (!activityPreset.empty() && activityPreset != config->activityPreset) {
+		m_MultiplayerErrorLabel->SetText("The launch activity differs from the agreed setup.");
 		g_NetMatchService.Destroy();
 		return;
 	}
 	const int localTeam = g_NetMatchService.GetLocalTeam();
-	if (localTeam >= Activity::TeamOne && localTeam < Activity::MaxTeamCount) {
-		activity->ClearPlayers(false);
-		activity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
-		activity->ForceSetTeamAsActive(Activity::TeamOne);
-		activity->ForceSetTeamAsActive(Activity::TeamTwo);
-		activity->SetTeamFunds(0, Activity::TeamOne);
-		activity->SetTeamFunds(0, Activity::TeamTwo);
+	std::string setupError;
+	Activity* activity = NetActivitySetup::CreateConfiguredActivity(*config, localTeam, &setupError);
+	if (!activity) {
+		m_MultiplayerErrorLabel->SetText(setupError);
+		g_NetMatchService.Destroy();
+		return;
 	}
 	ScenarioRunner::ApplyDeterministicConfig();
 	g_ActivityMan.SetStartActivity(activity);

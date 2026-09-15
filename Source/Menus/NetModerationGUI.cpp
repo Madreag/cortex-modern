@@ -1,5 +1,8 @@
 #include "NetModerationGUI.h"
 
+#include "ActivityMan.h"
+#include "CameraMan.h"
+#include "GameActivity.h"
 #include "NetMatchService.h"
 #include "ScenarioRunner.h"
 #include "SettingsMan.h"
@@ -38,6 +41,37 @@ namespace {
 		const int band = (screenHeight < c_CompactMaxHeight ? c_StripBandBottom : c_StatusBoxTop + c_StatusBoxHeight) + c_PanelGap;
 		const int lowest = std::max(0, screenHeight - c_PanelHeight - c_PanelGap);
 		return std::clamp((screenHeight - c_PanelHeight) / 2, std::min(band, lowest), lowest);
+	}
+
+	/// What the overlay may use while the synchronized setup editor holds the world. The editor owns the top
+	/// band (team icon, funds, the seat's own message) and the column its picker slides into, which every
+	/// editor reports as the seat's screen occlusion; the picker is 360 px of a window never under 640.
+	struct EditorArea {
+		bool editing = false;
+		int left = 0, right = 0;
+	};
+
+	/// The column the stock picker settles into (Base.rte/GUIs/ObjectPickerGUI.ini [PickerGUIBox] Width),
+	/// reserved whole from the first frame of its slide so the overlay holds one place while it animates.
+	constexpr int c_EditorPanelWidth = 360;
+
+	EditorArea FreeArea(int screenWidth) {
+		EditorArea area;
+		area.right = screenWidth;
+		const auto* game = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+		if (!game || game->GetActivityState() != Activity::ActivityState::Editing) return area;
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			if (!(game->IsSeatActive(player) && game->IsLocalHumanSeat(player))) continue;
+			area.editing = true;
+			const int occlusion = g_CameraMan.GetScreenOcclusion(game->ScreenOfPlayer(player)).GetRoundIntX();
+			if (occlusion < 0) {
+				area.right = std::max(0, screenWidth - std::max(c_EditorPanelWidth, -occlusion));
+			} else if (occlusion > 0) {
+				area.left = std::min(screenWidth, std::max(c_EditorPanelWidth, occlusion));
+			}
+			break;
+		}
+		return area;
 	}
 
 	std::string DisplayName(std::string text) {
@@ -277,6 +311,13 @@ bool NetModerationGUI::MatchStatusWanted() const {
 	}
 	// The countdown is still a pause state, so it must not blink the widget off.
 	bool active = m_Open || g_NetMatchService.IsMatchResyncing() || ScenarioRunner::IsLockstepPaused() || ScenarioRunner::GetLockstepResumeCountdown() > 0;
+	if (!active) {
+		// The seats placing their brains hold the world too, and the player is waiting on exactly that.
+		std::string placementNames;
+		int placed = 0, seats = 0;
+		const auto* setupActivity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+		active = setupActivity && setupActivity->DescribeLockstepPlacementWait(placementNames, placed, seats);
+	}
 	if (!active && ScenarioRunner::IsLockstepControllerSyncActive()) {
 		if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame()) {
 			active = true;
@@ -323,41 +364,63 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	std::string holdName;
 	uint32_t holdSeconds = 0;
 	const bool resyncing = g_NetMatchService.IsMatchResyncing();
-	const bool holdPause = !resyncing && ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds);
-	const bool missingFrames = !resyncing && !holdPause &&
+	// The seats that still owe the synchronized setup editor a brain: the world is held while they place.
+	std::string placementNames;
+	int placed = 0, seats = 0;
+	const auto* setupActivity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+	const bool placing = !resyncing && setupActivity && setupActivity->DescribeLockstepPlacementWait(placementNames, placed, seats);
+	const bool holdPause = !resyncing && !placing && ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds);
+	const bool missingFrames = !resyncing && !placing && !holdPause &&
 	    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame();
-	const bool paused = !resyncing && !holdPause && !missingFrames && ScenarioRunner::IsLockstepPaused();
+	const bool paused = !resyncing && !placing && !holdPause && !missingFrames && ScenarioRunner::IsLockstepPaused();
 	const int countdown = paused ? ScenarioRunner::GetLockstepResumeCountdown() : 0;
-	const bool waiting = resyncing || holdPause || missingFrames;
+	const bool waiting = resyncing || placing || holdPause || missingFrames;
+	const EditorArea editor = FreeArea(backbuffer->w);
 	if (backbuffer->h < c_CompactMaxHeight) {
-		// The short-screen layout is one line in the gap between the funds block and the controller icon.
-		const int freeLeft = 152;
-		const int freeRight = backbuffer->w - 40;
+		// The short-screen layout is one line in the gap between the funds block and the controller icon;
+		// while the editor holds the world it takes the bottom of what the picker leaves instead.
+		const int freeLeft = editor.editing ? editor.left + 4 : 152;
+		const int freeRight = editor.editing ? editor.right - 4 : backbuffer->w - 40;
 		const int maxTextWidth = freeRight - freeLeft - 14;
 		const std::string pingText = ping ? std::to_string(*ping) : "--";
 		char tail[96];
 		std::snprintf(tail, sizeof(tail), " / D %u / RTT %s ms / PACE %.1f tps", static_cast<unsigned>(m_MatchDelayFrames), pingText.c_str(), s_paceTps);
-		m_StripText = "NET [F6] / ";
-		if (resyncing) {
-			m_StripText += "RESYNCING MATCH";
-		} else if (holdPause) {
-			const int room = maxTextWidth - font->CalculateWidth(m_StripText + "WAITING FOR  " + tail) - font->CalculateWidth(" (999 s)");
-			m_StripText += "WAITING FOR " + FitLine(font, holdName.empty() ? "a player" : holdName, room) + " (" + std::to_string(holdSeconds) + " s)";
-		} else if (missingFrames) {
-			m_StripText += "WAITING FOR FRAMES";
-		} else if (paused) {
-			m_StripText += countdown > 0 ? "RESUMING IN " + std::to_string((countdown + 59) / 60) + " S" : "PAUSED / P RESUMES";
-		} else {
-			m_StripText += "LIVE";
-		}
-		m_StripText += tail;
+		auto compose = [&](const std::string& metrics, bool shortenNames) {
+			std::string line = "NET [F6] / ";
+			if (resyncing) {
+				line += "RESYNCING MATCH";
+			} else if (placing) {
+				const std::string count = " / " + std::to_string(placed) + " of " + std::to_string(seats);
+				const int room = maxTextWidth - font->CalculateWidth(line + "WAITING FOR  TO PLACE" + count + metrics);
+				const std::string names = shortenNames ? FitLine(font, placementNames, room) : DisplayName(placementNames);
+				line += placementNames.empty() ? "ALL BRAINS PLACED" : "WAITING FOR " + names + " TO PLACE";
+				line += count;
+			} else if (holdPause) {
+				const std::string who = holdName.empty() ? "a player" : holdName;
+				const int room = maxTextWidth - font->CalculateWidth(line + "WAITING FOR  " + metrics) - font->CalculateWidth(" (999 s)");
+				line += "WAITING FOR " + (shortenNames ? FitLine(font, who, room) : DisplayName(who)) + " (" + std::to_string(holdSeconds) + " s)";
+			} else if (missingFrames) {
+				line += "WAITING FOR FRAMES";
+			} else if (paused) {
+				line += countdown > 0 ? "RESUMING IN " + std::to_string((countdown + 59) / 60) + " S" : "PAUSED / P RESUMES";
+			} else {
+				line += "LIVE";
+			}
+			return line + metrics;
+		};
+		// An open picker leaves a short screen 280 px, so the line gives way in this order: the whole line,
+		// then the metrics tail, then the names. The count ends the line, so it outlives all of them.
+		m_StripText = compose(tail, false);
 		if (font->CalculateWidth(m_StripText) > maxTextWidth) {
-			m_StripText = FitLine(font, m_StripText, maxTextWidth);
+			m_StripText = compose("", false);
+		}
+		if (font->CalculateWidth(m_StripText) > maxTextWidth) {
+			m_StripText = compose("", true);
 		}
 		const int height = font->GetFontHeight() + 7;
 		const int width = std::min(freeRight - freeLeft, font->CalculateWidth(m_StripText) + 14);
 		const int x = freeLeft + (freeRight - freeLeft - width) / 2;
-		constexpr int y = 2;
+		const int y = editor.editing ? backbuffer->h - height - 2 : 2;
 		m_NetStatusBox->Move(x, y);
 		if (m_NetStatusBox->GetWidth() != width || m_NetStatusBox->GetHeight() != height) m_NetStatusBox->Resize(width, height);
 		m_NetStatusBox->SetVisible(true);
@@ -366,6 +429,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		m_NetStatus->Move(x + 7, y + 4);
 		m_NetStatus->Resize(width - 14, height - 6);
 		m_NetStatus->SetText(m_StripText);
+		m_StatusRect = {x, y, width, height, true};
 		AllegroBitmap bitmap(backbuffer);
 		rectfill(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(20, 22, 27, 255));
 		rect(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(59, 65, 83, 255));
@@ -373,16 +437,12 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		m_NetStatus->Draw(&bitmap, false);
 		return;
 	}
-	const int width = std::min(c_StatusBoxWidth, backbuffer->w - 2 * c_StatusBoxMargin);
-	const int x = backbuffer->w - width - c_StatusBoxMargin;
-	constexpr int y = c_StatusBoxTop;
-	constexpr int height = c_StatusBoxHeight;
-	m_NetStatusBox->Move(x, y);
-	if (m_NetStatusBox->GetWidth() != width) m_NetStatusBox->Resize(width, height);
+	const int available = editor.right - editor.left;
+	const int width = std::min(c_StatusBoxWidth, available - 2 * c_StatusBoxMargin);
 	m_NetStatusBox->SetVisible(true);
 	m_NetStatus->SetFont(font);
-	m_NetStatus->Move(x + 6, y + 6);
-	m_NetStatus->Resize(width - 12, height - 12);
+	// Measured at the final width, so the height below is the height these rows really need.
+	m_NetStatus->Resize(width - 12, backbuffer->h);
 	std::string text = std::string("NET STATUS  /  SEATS [F6]\n") + metrics;
 	if (m_MatchDelayFrames != m_BaseDelayFrames) {
 		text += " (base " + std::to_string(m_BaseDelayFrames) + ")";
@@ -392,6 +452,10 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	text += metrics;
 	if (resyncing) {
 		text += "\nRESYNCING MATCH";
+	} else if (placing) {
+		const int room = width - 12 - font->CalculateWidth("Waiting for  to place their brains");
+		text += placementNames.empty() ? "\nAll brains placed" : "\nWaiting for " + FitLine(font, placementNames, room) + " to place their brains";
+		text += "\n" + std::to_string(placed) + " of " + std::to_string(seats) + " placed";
 	} else if (holdPause) {
 		const int room = width - 12 - font->CalculateWidth("Waiting for  to reconnect");
 		text += "\nWaiting for " + FitLine(font, holdName.empty() ? "a player" : holdName, room) + " to reconnect\n" + std::to_string(holdSeconds) + " s left";
@@ -403,6 +467,16 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		text += "\nLIVE";
 	}
 	m_NetStatus->SetText(text);
+	// The box grows for a state that needs more rows than the metric ones; those keep the stock height.
+	const int height = std::max(c_StatusBoxHeight, m_NetStatus->GetTextHeight() + 12);
+	// The editor's own top band and picker column are its own, so the box takes the bottom of the rest.
+	const int x = editor.editing ? editor.left + (available - width) / 2 : backbuffer->w - width - c_StatusBoxMargin;
+	const int y = editor.editing ? backbuffer->h - height - c_StatusBoxMargin : c_StatusBoxTop;
+	m_NetStatusBox->Move(x, y);
+	if (m_NetStatusBox->GetWidth() != width || m_NetStatusBox->GetHeight() != height) m_NetStatusBox->Resize(width, height);
+	m_NetStatus->Move(x + 6, y + 6);
+	m_NetStatus->Resize(width - 12, height - 12);
+	m_StatusRect = {x, y, width, height, true};
 	AllegroBitmap bitmap(backbuffer);
 	rectfill(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(20, 22, 27, 255));
 	rect(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(59, 65, 83, 255));
@@ -411,6 +485,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 }
 
 void NetModerationGUI::DrawMatchToasts() {
+	m_ToastRect = {};
 	if (!ScenarioRunner::IsLockstepControllerSyncActive() && !g_NetMatchService.IsMatchResyncing()) {
 		for (GUILabel* label: m_Toasts) {
 			if (label) {
@@ -427,9 +502,16 @@ void NetModerationGUI::DrawMatchToasts() {
 	BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
 	const int rowHeight = std::max(12, font->GetFontHeight()) + 8;
-	const int width = std::min(520, backbuffer->w - 32);
-	const int x = (backbuffer->w - width) / 2;
-	const int top = backbuffer->h - 8 - static_cast<int>(visible.size()) * rowHeight;
+	const EditorArea editor = FreeArea(backbuffer->w);
+	const int available = editor.right - editor.left;
+	const int width = std::min(520, available - 32);
+	const int x = editor.left + (available - width) / 2;
+	// The status widget takes the bottom while the editor holds the world, so the rows stack above it.
+	const int bottom = editor.editing && m_StatusRect.visible ? m_StatusRect.y - 4 : backbuffer->h - 8;
+	const int top = bottom - static_cast<int>(visible.size()) * rowHeight;
+	if (!visible.empty()) {
+		m_ToastRect = {x, top, width, static_cast<int>(visible.size()) * rowHeight - 2, true};
+	}
 	AllegroBitmap bitmap(backbuffer);
 	for (size_t row = 0; row < m_Toasts.size(); ++row) {
 		GUILabel* label = m_Toasts[row];
@@ -449,6 +531,7 @@ void NetModerationGUI::DrawMatchToasts() {
 
 void NetModerationGUI::Draw() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+	m_StatusRect = {};
 	if (m_NetStatusBox) {
 		m_NetStatusBox->SetVisible(false);
 		m_NetStatus->SetVisible(false);
