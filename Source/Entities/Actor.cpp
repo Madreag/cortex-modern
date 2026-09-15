@@ -168,6 +168,7 @@ void Actor::Clear() {
 	m_PendingDeferredWaypoints.clear();
 	m_InflightWaypoints.clear();
 	m_PendingDeferredAIModes.clear();
+	m_PendingDeferredAIValues.clear();
 	m_InflightAIMode = AIMODE_NONE;
 	m_InflightAIModeUntil = -1;
 	m_LastOrderedWaypoint.Reset();
@@ -1625,6 +1626,42 @@ void Actor::SendDeferredGibs() {
 	}
 }
 
+std::vector<Actor::DeferredAIValue> Actor::TakePendingDeferredAIValues() {
+	std::vector<DeferredAIValue> taken;
+	taken.swap(m_PendingDeferredAIValues);
+	return taken;
+}
+
+bool Actor::QueueAIPassValue(const MovableObject* target, uint8_t op, const std::string& key, double number, const std::string& text, int64_t valueUID) {
+	if (!DeferringAIPassWrite(target)) {
+		return false;
+	}
+	g_CurrentAIActor->m_PendingDeferredAIValues.push_back({static_cast<int64_t>(target->GetUniqueID()), op, number, valueUID, key, text});
+	return true;
+}
+
+void Actor::SendDeferredAIValues() {
+	const std::vector<DeferredAIValue> queued = TakePendingDeferredAIValues();
+	if (!ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled())) {
+		return;
+	}
+	for (const DeferredAIValue& value: queued) {
+		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIValue{static_cast<int64_t>(GetUniqueID()), value.objectUID, value.op, value.key, value.number, value.text, value.valueUID}});
+	}
+}
+
+const Actor::DeferredAIValue* Actor::PendingAIValueSeenByAIPass(int64_t objectUID, const std::string& key, uint8_t setOp, uint8_t removeOp) {
+	if (!g_CurrentAIActor || !ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return nullptr;
+	}
+	for (auto itr = g_CurrentAIActor->m_PendingDeferredAIValues.rbegin(); itr != g_CurrentAIActor->m_PendingDeferredAIValues.rend(); ++itr) {
+		if (itr->objectUID == objectUID && itr->key == key && (itr->op == setOp || itr->op == removeOp)) {
+			return &*itr;
+		}
+	}
+	return nullptr;
+}
+
 int Actor::GetAIModeSeenByAIPass() const {
 	// The running pass reads back the mode it just wrote, and the one its request is carrying, so a
 	// script that sets the mode and reads it keeps its own state machine; the sim keeps the committed mode.
@@ -2849,7 +2886,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 }
 
 std::string Actor::SaveActorRuntime() const {
-	CheckpointWriter archive("ActorRuntime3");
+	CheckpointWriter archive("ActorRuntime4");
 	archive(m_PlayerControllable, m_Status, m_Health, m_MaxHealth, m_PrevHealth, m_LastSecondTimer, m_LastSecondPos);
 	archive(m_RecentMovement, m_TravelImpulseDamage, m_StableRecoverTimer, m_StableVel, m_StableRecoverDelay, m_HeartBeat, m_NewControlTmr);
 	archive(m_DeathTmr, m_GoldCarried, m_GoldPicked, m_CanRun, m_CrouchWalkSpeedMultiplier, m_AimState, m_AimRange);
@@ -2861,6 +2898,13 @@ std::string Actor::SaveActorRuntime() const {
 	archive(m_LastOrderedWaypoint, m_HasOrderedWaypoint, m_LastOrderedWaypointUID);
 	archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
 	archive(m_PersistedActorIconReferences[0].empty() ? CaptureActorIconReference(m_pTeamIcon) : m_PersistedActorIconReferences[0], m_PersistedActorIconReferences[1].empty() ? CaptureActorIconReference(m_pControllerIcon) : m_PersistedActorIconReferences[1]);
+	std::vector<std::string> values;
+	for (const DeferredAIValue& value: m_PendingDeferredAIValues) {
+		CheckpointWriter stored("DeferredAIValue1");
+		stored(value.objectUID, value.op, value.number, value.valueUID, value.key, value.text);
+		values.push_back(stored.Text());
+	}
+	archive(values);
 	return archive.Text();
 }
 
@@ -2870,7 +2914,8 @@ bool Actor::LoadActorRuntime(std::string_view text, bool validateOnly) {
 		// and one written before the ordered MO identity reads as an order that named a scene point.
 		const bool version1 = text.starts_with("13 ActorRuntime1 ");
 		const bool version2 = text.starts_with("13 ActorRuntime2 ");
-		CheckpointReader archive(text, version1 ? "ActorRuntime1" : version2 ? "ActorRuntime2" : "ActorRuntime3", validateOnly);
+		const bool version4 = text.starts_with("13 ActorRuntime4 ");
+		CheckpointReader archive(text, version1 ? "ActorRuntime1" : version2 ? "ActorRuntime2" : version4 ? "ActorRuntime4" : "ActorRuntime3", validateOnly);
 		archive(m_PlayerControllable, m_Status, m_Health, m_MaxHealth, m_PrevHealth, m_LastSecondTimer, m_LastSecondPos);
 		archive(m_RecentMovement, m_TravelImpulseDamage, m_StableRecoverTimer, m_StableVel, m_StableRecoverDelay, m_HeartBeat, m_NewControlTmr);
 		archive(m_DeathTmr, m_GoldCarried, m_GoldPicked, m_CanRun, m_CrouchWalkSpeedMultiplier, m_AimState, m_AimRange);
@@ -2894,6 +2939,23 @@ bool Actor::LoadActorRuntime(std::string_view text, bool validateOnly) {
 		archive.Value(icons);
 		for (const std::string& icon: icons) { ActorIconReference reference; if (!reference.Load(icon)) return false; }
 		archive.OnCommit([this, icons = std::move(icons)] { m_PersistedActorIconReferences = icons; });
+		if (version4) {
+			std::vector<std::string> savedValues;
+			archive.Value(savedValues);
+			std::vector<DeferredAIValue> values(savedValues.size());
+			for (size_t index = 0; index < values.size(); ++index) {
+				DeferredAIValue& value = values[index];
+				CheckpointReader stored(savedValues[index], "DeferredAIValue1");
+				stored(value.objectUID, value.op, value.number, value.valueUID, value.key, value.text);
+				stored.Finish();
+				if (value.op >= NetGameAIValue::OpCount || value.key.empty()) {
+					return false;
+				}
+			}
+			archive.OnCommit([this, values = std::move(values)]() mutable { m_PendingDeferredAIValues = std::move(values); });
+		} else {
+			archive.OnCommit([this] { m_PendingDeferredAIValues.clear(); });
+		}
 		archive.Finish();
 		return true;
 	} catch (const std::exception&) { return false; }

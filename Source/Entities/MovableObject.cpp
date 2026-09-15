@@ -1680,6 +1680,9 @@ void MovableObject::CommitPendingValueOps() {
 }
 
 const std::string& MovableObject::GetStringValue(const std::string& key) const {
+	if (const Actor::DeferredAIValue* pending = Actor::PendingAIValueSeenByAIPass(static_cast<int64_t>(GetUniqueID()), key, NetGameAIValue::SetString, NetGameAIValue::RemoveString)) {
+		return pending->op == NetGameAIValue::RemoveString ? ms_EmptyString : pending->text;
+	}
 	if (InLocalAIValueDomain()) {
 		if (const ValueOverlayEntry* entry = FindValueOverlay(ValueMapKind::String, key)) {
 			return entry->op == ValueMapOp::Remove ? ms_EmptyString : entry->text;
@@ -1702,6 +1705,9 @@ std::string MovableObject::GetEncodedStringValue(const std::string& key) const {
 }
 
 double MovableObject::GetNumberValue(const std::string& key) const {
+	if (const Actor::DeferredAIValue* pending = Actor::PendingAIValueSeenByAIPass(static_cast<int64_t>(GetUniqueID()), key, NetGameAIValue::SetNumber, NetGameAIValue::RemoveNumber)) {
+		return pending->op == NetGameAIValue::RemoveNumber ? 0.0 : pending->number;
+	}
 	if (InLocalAIValueDomain()) {
 		if (const ValueOverlayEntry* entry = FindValueOverlay(ValueMapKind::Number, key)) {
 			return entry->op == ValueMapOp::Remove ? 0.0 : entry->number;
@@ -1716,6 +1722,13 @@ double MovableObject::GetNumberValue(const std::string& key) const {
 }
 
 Entity* MovableObject::GetObjectValue(const std::string& key) const {
+	if (const Actor::DeferredAIValue* pending = Actor::PendingAIValueSeenByAIPass(static_cast<int64_t>(GetUniqueID()), key, NetGameAIValue::SetObject, NetGameAIValue::RemoveObject)) {
+		if (pending->op == NetGameAIValue::RemoveObject || pending->valueUID == 0) {
+			return nullptr;
+		}
+		MovableObject* found = g_MovableMan.FindObjectByUniqueID(static_cast<long int>(pending->valueUID));
+		return g_MovableMan.ValidMO(found) ? found : nullptr;
+	}
 	auto itr = m_ObjectValueMap.find(key);
 	if (itr == m_ObjectValueMap.end()) {
 		return nullptr;
@@ -1724,7 +1737,24 @@ Entity* MovableObject::GetObjectValue(const std::string& key) const {
 	return itr->second;
 }
 
+static bool DeferLockstepAIValue(const MovableObject* target, uint8_t op, const std::string& key, double number, const std::string& text, int64_t valueUID) {
+	if (!Actor::DeferringAIPassWrite(target)) {
+		return false;
+	}
+	const bool wireCanCarry = op < NetGameAIValue::OpCount && !key.empty() &&
+	                          NetLockstepCodec::IsWireString(key, NetLockstepCodec::c_MaxValueKeyBytes) &&
+	                          NetLockstepCodec::IsWireString(text, NetLockstepCodec::c_MaxValueStringBytes);
+	if (wireCanCarry && Actor::QueueAIPassValue(target, op, key, number, text, valueUID)) {
+		return true;
+	}
+	g_MovableMan.ReportControllerBoundaryViolation("a custom value the wire cannot carry", dynamic_cast<const Actor*>(target));
+	return false;
+}
+
 void MovableObject::SetStringValue(const std::string& key, const std::string& value) {
+	if (DeferLockstepAIValue(this, NetGameAIValue::SetString, key, 0.0, value, 0)) {
+		return;
+	}
 	if (InLocalAIValueDomain()) {
 		RecordLocalValueWrite(ValueMapKind::String, ValueMapOp::Set, key, 0, value);
 		return;
@@ -1737,6 +1767,9 @@ void MovableObject::SetEncodedStringValue(const std::string& key, const std::str
 }
 
 void MovableObject::SetNumberValue(const std::string& key, double value) {
+	if (DeferLockstepAIValue(this, NetGameAIValue::SetNumber, key, value, {}, 0)) {
+		return;
+	}
 	if (InLocalAIValueDomain()) {
 		RecordLocalValueWrite(ValueMapKind::Number, ValueMapOp::Set, key, value, {});
 		return;
@@ -1745,10 +1778,18 @@ void MovableObject::SetNumberValue(const std::string& key, double value) {
 }
 
 void MovableObject::SetObjectValue(const std::string& key, Entity* value) {
+	const MovableObject* asMO = dynamic_cast<const MovableObject*>(value);
+	const int64_t valueUID = asMO ? static_cast<int64_t>(asMO->GetUniqueID()) : 0;
+	if (DeferLockstepAIValue(this, NetGameAIValue::SetObject, key, 0.0, {}, valueUID)) {
+		return;
+	}
 	m_ObjectValueMap[key] = value;
 }
 
 void MovableObject::RemoveStringValue(const std::string& key) {
+	if (DeferLockstepAIValue(this, NetGameAIValue::RemoveString, key, 0.0, {}, 0)) {
+		return;
+	}
 	if (InLocalAIValueDomain()) {
 		RecordLocalValueWrite(ValueMapKind::String, ValueMapOp::Remove, key, 0, {});
 		return;
@@ -1757,6 +1798,9 @@ void MovableObject::RemoveStringValue(const std::string& key) {
 }
 
 void MovableObject::RemoveNumberValue(const std::string& key) {
+	if (DeferLockstepAIValue(this, NetGameAIValue::RemoveNumber, key, 0.0, {}, 0)) {
+		return;
+	}
 	if (InLocalAIValueDomain()) {
 		RecordLocalValueWrite(ValueMapKind::Number, ValueMapOp::Remove, key, 0, {});
 		return;
@@ -1765,10 +1809,16 @@ void MovableObject::RemoveNumberValue(const std::string& key) {
 }
 
 void MovableObject::RemoveObjectValue(const std::string& key) {
+	if (DeferLockstepAIValue(this, NetGameAIValue::RemoveObject, key, 0.0, {}, 0)) {
+		return;
+	}
 	m_ObjectValueMap.erase(key);
 }
 
 bool MovableObject::StringValueExists(const std::string& key) const {
+	if (const Actor::DeferredAIValue* pending = Actor::PendingAIValueSeenByAIPass(static_cast<int64_t>(GetUniqueID()), key, NetGameAIValue::SetString, NetGameAIValue::RemoveString)) {
+		return pending->op != NetGameAIValue::RemoveString;
+	}
 	if (InLocalAIValueDomain()) {
 		if (const ValueOverlayEntry* entry = FindValueOverlay(ValueMapKind::String, key)) {
 			return entry->op != ValueMapOp::Remove;
@@ -1778,6 +1828,9 @@ bool MovableObject::StringValueExists(const std::string& key) const {
 }
 
 bool MovableObject::NumberValueExists(const std::string& key) const {
+	if (const Actor::DeferredAIValue* pending = Actor::PendingAIValueSeenByAIPass(static_cast<int64_t>(GetUniqueID()), key, NetGameAIValue::SetNumber, NetGameAIValue::RemoveNumber)) {
+		return pending->op != NetGameAIValue::RemoveNumber;
+	}
 	if (InLocalAIValueDomain()) {
 		if (const ValueOverlayEntry* entry = FindValueOverlay(ValueMapKind::Number, key)) {
 			return entry->op != ValueMapOp::Remove;
@@ -1787,7 +1840,43 @@ bool MovableObject::NumberValueExists(const std::string& key) const {
 }
 
 bool MovableObject::ObjectValueExists(const std::string& key) const {
+	if (const Actor::DeferredAIValue* pending = Actor::PendingAIValueSeenByAIPass(static_cast<int64_t>(GetUniqueID()), key, NetGameAIValue::SetObject, NetGameAIValue::RemoveObject)) {
+		return pending->op != NetGameAIValue::RemoveObject;
+	}
 	return m_ObjectValueMap.find(key) != m_ObjectValueMap.end();
+}
+
+void MovableObject::ApplyAIValueOrder(uint8_t op, const std::string& key, double number, const std::string& text, int64_t valueUID) {
+	switch (op) {
+		case NetGameAIValue::SetNumber:
+			m_NumberValueMap[key] = number;
+			return;
+		case NetGameAIValue::SetString:
+			m_StringValueMap[key] = text;
+			return;
+		case NetGameAIValue::SetObject: {
+			MovableObject* found = valueUID ? g_MovableMan.FindObjectByUniqueID(static_cast<long int>(valueUID)) : nullptr;
+			if (!g_MovableMan.ValidMO(found)) {
+				g_ConsoleMan.PrintString("[net-value] dead object for key " + key);
+				std::cout << "[net-value] dead object for key " << key << std::endl;
+				m_ObjectValueMap.erase(key);
+				return;
+			}
+			m_ObjectValueMap[key] = found;
+			return;
+		}
+		case NetGameAIValue::RemoveNumber:
+			m_NumberValueMap.erase(key);
+			return;
+		case NetGameAIValue::RemoveString:
+			m_StringValueMap.erase(key);
+			return;
+		case NetGameAIValue::RemoveObject:
+			m_ObjectValueMap.erase(key);
+			return;
+		default:
+			return;
+	}
 }
 
 int MovableObject::WhilePieMenuOpenListener(const PieMenu* pieMenu) {

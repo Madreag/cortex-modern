@@ -555,6 +555,28 @@ namespace RTE {
 		/// Sends this tick's queued gibs as synced commands; an actor this machine does not own is dropped.
 		void SendDeferredGibs();
 
+		/// A custom-value write this actor's AI pass made this tick. Shared scripts read the committed
+		/// map, so under lockstep the write crosses the wire and every peer applies it at the committed tick.
+		struct DeferredAIValue {
+		friend struct ContractAudit;
+
+			int64_t objectUID = 0;
+			uint8_t op = 0;
+			double number = 0.0;
+			int64_t valueUID = 0;
+			std::string key;
+			std::string text;
+		};
+		/// Queues a custom-value write an AI pass made, so its owner's drain crosses it to every peer.
+		/// @return Whether the call was queued; outside a deferring pass it is made directly as before.
+		static bool QueueAIPassValue(const MovableObject* target, uint8_t op, const std::string& key, double number, const std::string& text, int64_t valueUID);
+		/// Hands out the custom-value writes the AI pass queued this tick, in call order; mods don't call this.
+		std::vector<DeferredAIValue> TakePendingDeferredAIValues();
+		/// Sends this tick's queued custom-value writes as synced commands; an actor this machine does not own is dropped.
+		void SendDeferredAIValues();
+		/// The latest pending write this pass made to objectUID/key, if it wrote that map.
+		static const DeferredAIValue* PendingAIValueSeenByAIPass(int64_t objectUID, const std::string& key, uint8_t setOp, uint8_t removeOp);
+
 		/// Gets the last or furthest set AI waypoint of this. If none, this' pos
 		/// is returned.
 		/// @return The furthest set AI waypoint of this.
@@ -1258,6 +1280,8 @@ namespace RTE {
 		std::vector<DeferredScriptMessage> m_PendingDeferredScriptMessages;
 		// Gibs the AI pass asked for; the owner sends them so every peer gibs at one tick.
 		std::vector<DeferredGib> m_PendingDeferredGibs;
+		// Custom-value writes the AI pass made; the owner sends them so every peer's map matches at one tick.
+		std::vector<DeferredAIValue> m_PendingDeferredAIValues;
 		// The mode a sent request is carrying and the last tick the AI pass may read it back, so the AI
 		// keeps a coherent view while the request flies. Per machine: never archived, never checksummed.
 		AIMode m_InflightAIMode;

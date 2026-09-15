@@ -1033,6 +1033,9 @@ namespace RTE {
 		/// @param key The key to remove.
 		void RemoveObjectValue(const std::string& key);
 
+		/// Applies one committed AI custom-value order to this object.
+		void ApplyAIValueOrder(uint8_t op, const std::string& key, double number, const std::string& text, int64_t valueUID);
+
 		/// Checks whether the string value associated with the specified key exists.
 		/// @param key The key to check.
 		/// @return Whether or not there is an associated value for this key.
