@@ -271,6 +271,13 @@ int Controller::GetInputPlayer() const {
 	return inputPlayer < 0 && m_SeatMode != InputMode::CIM_PLAYER ? m_SeatPlayer : inputPlayer;
 }
 
+// A seat left over from before the match mapped it, or one this peer stopped playing, still carries
+// CIM_PLAYER here; without the input slot nothing on this machine may sample devices for it.
+bool Controller::IsSeatedByPlayer(int player) const {
+	return m_SeatMode == InputMode::CIM_PLAYER && m_SeatPlayer >= Players::PlayerOne &&
+	       (player < Players::PlayerOne || m_SeatPlayer == player) && GetInputPlayer() >= Players::PlayerOne;
+}
+
 // Every registered actor of a lockstep match takes its sim-facing mode from the committed frames,
 // so a local seat change lands at the same tick on every peer.
 bool Controller::IsWireOwned() const {
