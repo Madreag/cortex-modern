@@ -1912,6 +1912,21 @@ namespace RTE {
 				return finish("the AI pass re-sent a mode request that is already in flight");
 			}
 
+			// Owner:RequestAIMode inside the pass rides the same queue: the pass runs on a pool thread and
+			// the local command queue is the sim thread's, so nothing may reach it from in there.
+			g_CurrentAIActor = ownerView;
+			squadMate->RequestAIMode(Actor::AIMODE_PATROL);
+			g_CurrentAIActor = nullptr;
+			if (!ScenarioRunner::DrainLocalGameCommands().empty()) {
+				return finish("a mode request made inside the AI pass reached the wire queue off the sim thread");
+			}
+			ownerView->SendDeferredAIModes();
+			const std::vector<NetGameCommand> requested = ScenarioRunner::DrainLocalGameCommands();
+			const NetGameSetActorAIMode* patrol = requested.size() == 1 ? std::get_if<NetGameSetActorAIMode>(&requested[0].payload) : nullptr;
+			if (!patrol || !(*patrol == NetGameSetActorAIMode{mateUID, 0, static_cast<uint8_t>(Actor::AIMODE_PATROL)})) {
+				return finish("the drain did not send the request the AI pass made");
+			}
+
 			// Every peer, the producer included, takes the mode at the committed tick.
 			for (Actor* view: {ownerView, peerView}) {
 				view->SetAIMode(static_cast<Actor::AIMode>(expected[0].aiMode));
