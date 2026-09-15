@@ -501,6 +501,21 @@ class RuntimeProjectionTests(unittest.TestCase):
                 with self.subTest(version=version, key=key):
                     self.assert_field(value, (key,), False)
 
+    def test_screen_flash_is_local_with_its_timer_but_the_rest_of_the_frame_is_not(self):
+        timer = dict(sim_start=1, sim_limit=2, real_start=3, real_limit=4)
+        for version in ("FrameMan1", "FrameMan2", "FrameMan3"):
+            value = dict(version=version, flash_color=[-1, -1, -1, -1], flashed_last_frame=[0] * 4,
+                flash_timer=[dict(timer) for _ in range(4)], hud_disabled=[0] * 4, screen_text=[b"go"] * 4,
+                text_duration=[5] * 4, horizontal_split=1)
+            with self.subTest(version=version):
+                for screen in range(4):
+                    self.assert_field(value, ("flash_color", screen), True, 13)
+                    self.assert_field(value, ("flashed_last_frame", screen), True)
+                    self.assert_field(value, ("hud_disabled", screen), False)
+                self.assert_field(value, ("screen_text", 0), False, b"stop")
+                self.assert_field(value, ("text_duration", 0), False)
+                self.assert_field(value, ("horizontal_split",), False)
+
     def test_text_input_parser_validates_new_fields(self):
         base = b"15 GUISharedInput2 " + b"0 " * 45
         good = base + b"1 2 3 40 50 6 "
