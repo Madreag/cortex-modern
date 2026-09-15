@@ -501,6 +501,7 @@ namespace RTE {
 			float minimumAudibleDistance = 0;
 			SoundExecutionDomain domain = SoundExecutionDomain::Presentation;
 			bool predicted = false; //!< Started by a preview and not yet adopted, so it belongs to no checkpoint.
+			bool awaitingSample = false; //!< Held until the referenced sample reports ready.
 		};
 		std::map<int, PlayingVoice> m_PlayingVoices;
 		std::unordered_map<int, int> m_BackendVoiceIdentities;
@@ -547,6 +548,7 @@ namespace RTE {
 		FMOD_RESULT GetVoiceChannel(int voiceIdentity, FMOD::Channel** channel) const;
 		bool OwnsVoice(int voiceIdentity, const SoundContainer* owner) const;
 		void RetireVoice(int identity);
+		void StartAwaitingSampleVoices();
 		bool MakeVoiceSlotAvailable();
 
 #pragma region Sound Container Actions and Modifications
