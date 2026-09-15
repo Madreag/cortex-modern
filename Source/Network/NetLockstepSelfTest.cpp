@@ -1710,6 +1710,105 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		// The stock AI scripts write Owner.AIMode inside their own pass (NativeHumanAI.lua:455-464 and the
+		// crab and turret alike), and that mode feeds the controller checksum: the write must leave a
+		// request every peer takes at the committed tick, not a mode the producer alone holds.
+		bool TestAIModeCrossesTheWire(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			if (!StartOwnedPair(48331, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x573231414d4f4445ULL, hostTransport, clientTransport, host, client, error)) {
+				return false;
+			}
+			Actor* ownerView = new Actor();
+			Actor* peerView = new Actor();
+			Actor* squadMate = new Actor();
+			const auto finish = [&](const char* message) {
+				g_CurrentAIActor = nullptr;
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				ScenarioRunner::DrainLocalGameCommands();
+				// These three are not on a scene, so they leave the object registry with the arm.
+				g_MovableMan.UnregisterObject(ownerView);
+				g_MovableMan.UnregisterObject(peerView);
+				g_MovableMan.UnregisterObject(squadMate);
+				if (message) *error = message;
+				return message == nullptr;
+			};
+			if (ownerView->MovableObject::Create(1) < 0 || peerView->MovableObject::Create(1) < 0 || squadMate->MovableObject::Create(1) < 0) {
+				return finish("selftest actors could not be created");
+			}
+			for (Actor* view: {ownerView, peerView, squadMate}) {
+				view->SetTeam(0);
+				view->SetAIMode(Actor::AIMODE_SQUAD);
+			}
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+				return finish("coordinator is not running");
+			}
+
+			// The owner's AI pass: the squad branch's `Owner.AIMode = Actor.AIMODE_SENTRY` lands exactly here,
+			// and a leader script writing its follower's mode lands on the second line.
+			g_CurrentAIActor = ownerView;
+			ownerView->SetAIMode(Actor::AIMODE_SENTRY);
+			squadMate->SetAIMode(Actor::AIMODE_GOTO);
+			const int seenByThePass = ownerView->GetAIMode();
+			const int mateSeenByThePass = squadMate->GetAIMode();
+			g_CurrentAIActor = nullptr;
+			if (ownerView->GetAIMode() != Actor::AIMODE_SQUAD || squadMate->GetAIMode() != Actor::AIMODE_SQUAD) {
+				return finish("the AI pass set the producer's AI mode instead of leaving a request");
+			}
+			if (seenByThePass != Actor::AIMODE_SENTRY || mateSeenByThePass != Actor::AIMODE_GOTO) {
+				return finish("the AI pass did not read back the mode it just wrote");
+			}
+
+			ownerView->SendDeferredAIModes();
+			const std::vector<NetGameCommand> sent = ScenarioRunner::DrainLocalGameCommands();
+			const int64_t ownerUID = static_cast<int64_t>(ownerView->GetUniqueID());
+			const int64_t mateUID = static_cast<int64_t>(squadMate->GetUniqueID());
+			const std::vector<NetGameSetActorAIMode> expected = {
+			    {ownerUID, 0, static_cast<uint8_t>(Actor::AIMODE_SENTRY)},
+			    {mateUID, 0, static_cast<uint8_t>(Actor::AIMODE_GOTO)},
+			};
+			if (sent.size() != expected.size()) {
+				return finish("the AI pass did not send one mode request per write");
+			}
+			for (size_t index = 0; index < sent.size(); ++index) {
+				const NetGameSetActorAIMode* request = std::get_if<NetGameSetActorAIMode>(&sent[index].payload);
+				if (!request || !(*request == expected[index])) {
+					return finish("a sent mode request does not name the actor and mode the AI wrote");
+				}
+			}
+			if (ownerView->GetAIMode() != Actor::AIMODE_SQUAD || squadMate->GetAIMode() != Actor::AIMODE_SQUAD) {
+				return finish("the canonical mode changed when the request was sent");
+			}
+
+			// The next pass reads the mode its request is carrying, so it does not ask for it twice.
+			g_CurrentAIActor = ownerView;
+			const int seenWhileInFlight = ownerView->GetAIMode();
+			ownerView->SetAIMode(Actor::AIMODE_SENTRY);
+			g_CurrentAIActor = nullptr;
+			ownerView->SendDeferredAIModes();
+			if (seenWhileInFlight != Actor::AIMODE_SENTRY) {
+				return finish("the AI pass does not see the mode its own request is carrying");
+			}
+			if (!ScenarioRunner::DrainLocalGameCommands().empty()) {
+				return finish("the AI pass re-sent a mode request that is already in flight");
+			}
+
+			// Every peer, the producer included, takes the mode at the committed tick.
+			for (Actor* view: {ownerView, peerView}) {
+				view->SetAIMode(static_cast<Actor::AIMode>(expected[0].aiMode));
+			}
+			if (ownerView->GetAIMode() != Actor::AIMODE_SENTRY || peerView->GetAIMode() != Actor::AIMODE_SENTRY) {
+				return finish("the two peers hold different AI modes after the committed tick");
+			}
+			std::cout << "[net-lockstep-selftest] PASS ai mode crosses the wire: sent=" << sent.size()
+			          << " owner=" << ownerView->GetAIMode() << " peer=" << peerView->GetAIMode() << std::endl;
+			return finish(nullptr);
+		}
+
 		// Owner = host, team authority = the client: the host's pop of a CPU actor on that team must apply.
 		bool TestHostRunCpuActorOnAHumanTeamPopsItsWaypoint(std::string* error) {
 			LoopbackTransport hostTransport;
@@ -10941,6 +11040,7 @@ namespace RTE {
 		    !TestAIWaypointReadThroughSamePass(&error) ||
 		    !TestAIWaypointCrossActorWrites(&error) ||
 		    !TestAICraftHatchCrossesTheWire(&error) ||
+		    !TestAIModeCrossesTheWire(&error) ||
 		    !TestHostRunCpuActorOnAHumanTeamPopsItsWaypoint(&error) ||
 		    !TestAnOwnedWriterMayWriteAnotherOwnersActor(&error) ||
 		    !TestAStrangerMayNotWriteAQueue(&error) ||
