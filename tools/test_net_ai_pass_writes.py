@@ -29,6 +29,7 @@ FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
 BATTERY_LOCK = Path("D:/mx/LEAD_BATTERY.lock")
 EXCLUSIVE_LOCK = Path("D:/mx/LEAD_EXCLUSIVE.lock")
 PORT_RANGE = range(48400, 48420)
+LANE_PORT_RANGE = range(48670, 48680)  # A second lane range, so this arm can run beside another one.
 PRESET = "Determinism AI Pass Writes"
 PROBE = re.compile(r"\[f72b-probe\] simms=(\d+) heard=(-?\d+) vel=([^ ]+) health=([^ ]+) victim=(\d) particles=(\d+)")
 
@@ -91,8 +92,9 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=420)
     parser.add_argument("--exe-repo", type=Path, default=REPO)
     args = parser.parse_args()
-    if args.port not in PORT_RANGE:
-        parser.error(f"port is outside {PORT_RANGE.start}..{PORT_RANGE.stop - 1}")
+    if args.port not in PORT_RANGE and args.port not in LANE_PORT_RANGE:
+        parser.error(f"port is outside {PORT_RANGE.start}..{PORT_RANGE.stop - 1} and "
+                     f"{LANE_PORT_RANGE.start}..{LANE_PORT_RANGE.stop - 1}")
     refuse_on_locks()
 
     out = args.out.resolve()
@@ -109,7 +111,9 @@ def main() -> int:
     harness.REPO, harness.EXE = exe_repo, exe
     harness.ROOT, harness.OUT = out, out / "e2e"
 
-    common = ["-net-match-service-preset", PRESET, "-net-match-mode", "pvpve"]
+    # The activity is staged into the run's own UserScenes module, so the match names it.
+    common = ["-net-match-service-preset", PRESET, "-net-match-service-module", "UserScenes.rte",
+              "-net-match-mode", "pvpve"]
     lane = {"port": args.port, "delay": 0, "ticks": args.ticks, "timeout": args.timeout,
             "mode": "normal",
             "what": "an AI pass sends a message whose receiver writes sim state, and gibs a free object",

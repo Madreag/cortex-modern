@@ -170,6 +170,8 @@ def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float, sim
     }
     common = [
         "-net-match-service-preset", PRESET,
+        # The activity is staged into the run's own UserScenes module, so the match names it.
+        "-net-match-service-module", "UserScenes.rte",
         "-net-match-mode", "pvpve",
         "-net-match-brainless-spectate", "1" if rule_on else "0",
         "-net-autosave-seconds", "0",

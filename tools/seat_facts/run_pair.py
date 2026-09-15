@@ -84,7 +84,8 @@ def main():
         lane["client"] += ["-net-match-e2e-brain-spawn-command"]
     elif args.arm in SCRIPTED:
         for peer in ("host", "client"):
-            lane[peer] += ["-net-match-service-preset", SCRIPTED[args.arm][1]]
+            # The arm's activity is staged into the run's own UserScenes module, so the match names it.
+            lane[peer] += ["-net-match-service-preset", SCRIPTED[args.arm][1], "-net-match-service-module", "UserScenes.rte"]
         if args.arm == "switch":
             # Each peer switches its own seat at tick 220, hands it back ten ticks later, and loses its brain at 299.
             for peer in ("host", "client"):
