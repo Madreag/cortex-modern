@@ -26,6 +26,7 @@ namespace RTE {
 		m_Strings.clear();
 		m_FinalTotalHashHex.clear();
 		m_TickHashes.clear();
+		m_HostRun = false;
 		m_RecordTickHashes = false;
 		m_SimConfig.clear();
 	}
@@ -49,9 +50,16 @@ namespace RTE {
 		m_Strings.clear();
 		m_FinalTotalHashHex.clear();
 		m_TickHashes.clear();
+		m_HostRun = false;
 		m_RecordTickHashes = armTickHashes;
 		m_StartWall = std::chrono::steady_clock::now();
 		m_SimConfig = ScenarioRunner::GatherSimConfig();
+	}
+
+	void MetricsCollector::BeginHostRun(const std::string& scenario, uint64_t seed) {
+		BeginRun(scenario, seed);
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_HostRun = true;
 	}
 
 	void MetricsCollector::EndRun() {
