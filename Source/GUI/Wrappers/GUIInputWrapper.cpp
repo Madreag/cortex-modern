@@ -18,6 +18,7 @@ namespace {
 	class ScriptedGUIInput final : public GUIInputWrapper {
 		std::array<bool, SDL_SCANCODE_COUNT> m_Keys{};
 		SDL_Joystick* m_Pad = nullptr;
+		SDL_Gamepad* m_PadGamepad = nullptr;
 		std::function<void()> m_Command;
 		GUIInputWrapper* m_Physical;
 	public:
@@ -76,6 +77,9 @@ namespace {
 				if (!id) return false;
 				m_Pad = SDL_OpenJoystick(id);
 				if (!m_Pad) { SDL_DetachVirtualJoystick(id); return false; }
+				// SDL only reports gamepad buttons for an open gamepad, and the engine ignores plain
+				// joystick buttons on a device that has a mapping, so open it before the first press.
+				m_PadGamepad = SDL_OpenGamepad(id);
 			}
 			if (!SDL_SetJoystickVirtualButton(m_Pad, button, down)) return false;
 			SDL_UpdateJoysticks();
@@ -89,6 +93,10 @@ namespace {
 			m_Keys.fill(false);
 			if (m_Pad) {
 				const auto id = SDL_GetJoystickID(m_Pad);
+				if (m_PadGamepad) {
+					SDL_CloseGamepad(m_PadGamepad);
+					m_PadGamepad = nullptr;
+				}
 				SDL_CloseJoystick(m_Pad);
 				SDL_DetachVirtualJoystick(id);
 				m_Pad = nullptr;
