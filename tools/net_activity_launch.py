@@ -267,6 +267,10 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
                    "text_contains": "..."},
                   {"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
                    "text_contains": "to place their brains"}]
+    if long_names and peer == "host":
+        # The join banner keeps its verb: the name that fills the line is what gives way.
+        steps += [{"op": "assert_control", "control": "LabelNetMatchToastNewest", "equals": {"visible": True},
+                   "fits": True, "text_contains": " joined"}]
     if capture:
         steps += shots(peer, "editor_open")
     if wire_refusal:
@@ -299,6 +303,10 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
               {"op": "assert_editor", "player": player, "equals": {"resident": True, "ready": False, "submitted": False}},
               {"op": "editor_done", "player": player},
               {"op": "wait", "seat_ready": player}]
+    if compact(resolution) and peer != "host":
+        # The compact strip's delay field has to spell its unit: a bare "D 3" reads as "0 3".
+        steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True},
+                   "fits": True, "text_contains": "delay 3"}]
     # The frame the seat's own ready lands on is the one that still says all brains are placed: the editor
     # leaves a tick or two later, so the shot goes before the assertion that reads the same state.
     if capture and peer != "host":

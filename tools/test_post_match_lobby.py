@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_sim_test import make_run  # noqa: E402
+from run_sim_test import make_run, seed_settings  # noqa: E402
 
 SCREEN = re.compile(r"^\[menu-script\] assert_screen expected=(\S+) actual=(\S+) (PASS|FAIL)$", re.M)
 SUBSTATE = re.compile(r"^\[menu-script\] assert_substate expected=(\S+) actual=(\S+) (PASS|FAIL)$", re.M)
@@ -50,7 +50,7 @@ def head(name: str, host: bool, port: int) -> str:
     script = f"wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nsettext TextMultiplayerName {name}\n"
     if host:
         return script + (f"activate ButtonMultiplayerHostGame\nwait 10\nsettext TextHostPort {port}\n"
-                         "settext TextHostPlayers 2\nsettext TextHostInputDelay 3\n"
+                         "settext TextHostPlayers 2\n"
                          "activate ButtonMultiplayerCreate\nwait_connected 2\nwait_remote_ready\n"
                          "wait_all_ready\nactivate ButtonMultiplayerStart\n")
     return script + (f"activate ButtonMultiplayerJoinGame\nwait 10\nsettext TextJoinAddress 127.0.0.1\n"
@@ -133,6 +133,8 @@ def run_arm(repo: Path, root: Path, port: int, ticks: int, timeout: int, settle_
                                     "-net-match-report", root / f"{who}_report.json"],
                              root / who, timeout)
         set_resolution(runs[who].cwd, 640, 360)
+        # The delay box is read-only under the auto policy; the floor the host sends is a setting.
+        seed_settings(runs[who], {"NetworkInputDelayFrames": 3})
 
     def drive(who: str) -> None:
         try:

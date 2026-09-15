@@ -264,11 +264,13 @@ def scripts(case, port, root):
         text += checks("LabelMultiplayerNamePrompt", "MultiplayerLandingPanel")
         text += checks("TextMultiplayerName", "MultiplayerLandingPanel")
         text += "dump_host_options\n"
-        # The host screen names the saved policy beside its delay box; the page flipped it to Fixed.
+        # The host screen names the saved policy beside its delay box; the page flipped it to Fixed
+        # with 7 frames, so the box pre-fills the override it would send.
         text += ("activate ButtonMultiplayerHostGame\nwait 5\nassert_substate HostSetup\n"
-                 "assert_visible LabelHostInputDelayPolicy 1\nassert_label LabelHostInputDelayPolicy (fixed)\n"
+                 "assert_visible LabelHostInputDelayPolicy 1\ndump_host_options\n"
+                 "assert_label LabelHostInputDelayPolicy (fixed, 7)\n"
+                 "assert_label TextHostInputDelay 7\nassert_enabled TextHostInputDelay 1\n"
                  + checks("LabelHostInputDelayPolicy", "MultiplayerHostPanel") +
-                 "dump_host_options\n"
                  "post_command ButtonHostBack\nwait 4\nassert_substate Landing\ndump_host_options\nexit\n")
     elif case == "net-chat":
         # Every chat row is read where it is drawn; the muted-players button stays disabled with its
@@ -350,6 +352,9 @@ def scripts(case, port, root):
         text += ("dump_host_options\nsettext TextMultiplayerName Recon7\n"
                  "activate ButtonMultiplayerHostGame\nwait 5\n"
                  "assert_visible LabelHostInputDelayPolicy 1\nassert_label LabelHostInputDelayPolicy (auto)\n"
+                 "dump_host_options\n"
+                 # The seeded policy is automatic: the box reads the policy, not a stale frame count.
+                 "assert_label TextHostInputDelay auto\nassert_enabled TextHostInputDelay 0\n"
                  f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                  "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
                  "dump_host_options\nexit\n")
@@ -395,7 +400,13 @@ def scripts(case, port, root):
         # The host starts the match, so its lobby hides the ready button the joining peers get.
         text = host_lobby(port) + "assert_visible ButtonMultiplayerReady 0\n"
         text += checks("ButtonMultiplayerLeave", "MultiplayerLobbyPanel")
-        text += "assert_enabled ButtonMultiplayerStart 0\ndump_host_options\nexit\n"
+        # The Seats row is the host's own disabled control: it must read disabled and sit in the
+        # panel. The dump lands before the header and readiness asserts so the capture exists either way.
+        text += checks("ButtonMultiplayerModerate", "MultiplayerLobbyPanel")
+        text += "assert_enabled ButtonMultiplayerModerate 0\n"
+        text += "dump_host_options\n"
+        text += checks("LabelLobbyPlayersHeader", "MultiplayerLobbyPanel")
+        text += "assert_enabled ButtonMultiplayerStart 0\nexit\n"
     elif case == "input":
         text = (RESET_INPUT + "activate ButtonMainToMultiplayer\nwait 5\n"
                 "assert_visible TextMultiplayerName 1\nfocus_next\nassert_focus TextMultiplayerName\n"
@@ -682,9 +693,13 @@ def run_case(options, case, root, failing=None):
             host_button, join_button = landing["ButtonMultiplayerHostGame"]["rect"], landing["ButtonMultiplayerJoinGame"]["rect"]
             assert prompt[0] + box[0] + box[2] == host_button[0] + join_button[0] + join_button[2], (prompt, box, host_button, join_button)
             assert next(c["text"] for c in images[-1]["controls"] if c["name"] == "TextMultiplayerName") == NETWORK_SAVED["NetworkDisplayName"]
-            # The host screen's own readback: the label sits beside the delay box and names the saved policy.
-            policy = next((c for c in images[-2]["controls"] if c["name"] == "LabelHostInputDelayPolicy"), None)
-            assert policy and policy["text"] == "(fixed)", policy
+            # The host screen's own readback: the label sits beside the delay box and names the saved
+            # policy with the frames it would send - the box pre-fills that same count.
+            host_rows = {c["name"]: c for c in images[-2]["controls"]}
+            policy = host_rows.get("LabelHostInputDelayPolicy")
+            assert policy and policy["text"] == "(fixed, " + NETWORK_SAVED["NetworkInputDelayFrames"] + ")", policy
+            assert host_rows["TextHostInputDelay"]["text"] == NETWORK_SAVED["NetworkInputDelayFrames"], host_rows["TextHostInputDelay"]
+            assert host_rows["TextHostInputDelay"]["enabled"] is True, host_rows["TextHostInputDelay"]
         if case in ("net-chat", "net-recovery", "net-files", "net-internet", "misc-page"):
             # One capture per page case: the sub-page's own rows, all fitted, and nothing the case
             # names as disabled enabled in the draw.
@@ -746,6 +761,20 @@ def run_case(options, case, root, failing=None):
                 assert not set(MISC_GONE) & rows.keys(), sorted(rows)
                 grid = [rows["CheckboxSkipIntro"]["rect"][1], rows["LabelSceneBackgroundAutoScale"]["rect"][1]]
                 assert grid[1] - grid[0] == 4 * 20, grid
+        if case == "landing":
+            # A first visit owes the player no reconnect verdict: the record probe's negative stays silent.
+            status = next(c for c in images[0]["controls"] if c["name"] == "LabelMultiplayerLandingStatus")
+            assert status["text"] == "", status
+        if case in ("lobby", "lobby-name"):
+            # The Leave/Seats block is centred on the lobby panel the way Start Match is; doubled
+            # centres avoid halves. The Players header starts on its rows' left edge and holds its line.
+            drawn = {c["name"]: c for c in images[-1]["controls"]}
+            leave, seats, panel = (drawn[name] for name in
+                                   ("ButtonMultiplayerLeave", "ButtonMultiplayerModerate", "MultiplayerLobbyPanel"))
+            assert leave["rect"][0] + seats["rect"][0] + seats["rect"][2] == panel["rect"][0] * 2 + panel["rect"][2], \
+                (leave["rect"], seats["rect"], panel["rect"])
+            header, row = drawn["LabelLobbyPlayersHeader"], drawn["LabelLobbyPlayer0"]
+            assert header["rect"][0] == row["rect"][0] and header["text_fits"], (header, row)
         if case == "lobby-name":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == NETWORK_SEED["NetworkDisplayName"]
             result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", {"NetworkDisplayName"})
@@ -753,6 +782,13 @@ def run_case(options, case, root, failing=None):
             # The seeded policy is automatic, so the lobby row must not call the delay fixed.
             result["lobby_row"] = next(c["text"] for c in images[-1]["controls"] if c["name"] == "LabelLobbyPlayer0")
             assert "(auto" in result["lobby_row"] and "(fixed)" not in result["lobby_row"], result["lobby_row"]
+            # The host screen under the seeded policy: the box says auto, and is not an editable count.
+            host_setup = {c["name"]: c for c in images[-2]["controls"]}
+            assert host_setup["TextHostInputDelay"]["text"] == "auto", host_setup["TextHostInputDelay"]
+            assert host_setup["TextHostInputDelay"]["enabled"] is False, host_setup["TextHostInputDelay"]
+            assert host_setup["LabelHostInputDelayPolicy"]["text"] == "(auto)", host_setup["LabelHostInputDelayPolicy"]
+            # The disabled Seats control sits in the lobby capture for the visual review.
+            assert drawn["ButtonMultiplayerModerate"]["enabled"] is False, drawn["ButtonMultiplayerModerate"]
         if case == "net-options":
             # Both peers' rosters carry the host's saved options; the client's own copy differs and loses.
             result["match_rules"] = {}
@@ -826,8 +862,8 @@ def main():
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("LEAD_FAMILY.lock exists; no engine launch")
-    if not any(low <= options.port <= low + 9 for low in (48270, 48380, 48530, 48540, 48550, 48840, 49180, 49190)):
-        parser.error("this detector owns ports 48270-48279, 48380-48389, 48530-48539, 48540-48549, 48550-48559, 48840-48849 and 49180-49199")
+    if not any(low <= options.port <= low + 9 for low in (48270, 48380, 48390, 48530, 48540, 48550, 48840, 49180, 49190)):
+        parser.error("this detector owns ports 48270-48279, 48380-48389, 48390-48399, 48530-48539, 48540-48549, 48550-48559, 48840-48849 and 49180-49199")
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)
     options.revision = subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip()
