@@ -57,7 +57,9 @@ namespace {
 				m_Keys[key] = down;
 				return true;
 			}
-			const SDL_GamepadButton button = SDL_GetGamepadButtonFromString(name.c_str());
+			// SDL parses only the mapping names, so take the face buttons' positional names onto those.
+			const std::string mapped = name == "south" ? "a" : name == "east" ? "b" : name == "west" ? "x" : name == "north" ? "y" : name;
+			const SDL_GamepadButton button = SDL_GetGamepadButtonFromString(mapped.c_str());
 			if (device != "pad" || button == SDL_GAMEPAD_BUTTON_INVALID) return false;
 			if (!m_Pad) {
 				SDL_VirtualJoystickDesc desc{};
