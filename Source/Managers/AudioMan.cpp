@@ -1833,7 +1833,6 @@ std::string AudioMan::SaveCheckpoint() const {
 std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const SoundContainer*)>& contained) const {
 	AudioRuntime state;
 	state.enabled = m_AudioEnabled; state.nextVoice = m_NextVoiceIdentity;
-	state.nextSoundContainer = GetCheckpointSoundContainerCursor();
 	state.deferredSoundOpTick = m_DeferredSoundOpTick; state.deferredSoundOpOrdinal = m_DeferredSoundOpOrdinal;
 	state.muteMaster = m_MuteMaster; state.muteMusic = m_MuteMusic; state.muteSounds = m_MuteSounds; state.muteOnFocusLoss = m_MuteAudioOnFocusLoss;
 	state.masterVolume = m_MasterVolume; state.musicVolume = m_MusicVolume; state.soundsVolume = m_SoundsVolume; state.globalPitch = m_GlobalPitch;
@@ -1882,6 +1881,9 @@ std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const So
 		}
 		TraceCheckpointBoundary("save-captured");
 	}
+	// One snapshot of both: the cursor is read after the voices and never below an owner this archive names.
+	state.nextSoundContainer = GetCheckpointSoundContainerCursor();
+	for (const AudioCheckpoint::Voice& voice: state.voices) state.nextSoundContainer = std::max(state.nextSoundContainer, voice.owner);
 	return state.Save();
 }
 
