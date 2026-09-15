@@ -15,6 +15,9 @@ import sys
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE = Path(__file__).parent / "fixtures/SeatFacts.lua"
 ROW = re.compile(r"\[seat-facts\] player=(\d+) active=(\d+) human=(\d+) team=(-?\d+) brain=(\d+) mark=(\d+) screen=(-?\d+)")
+CONTROL_ROW = re.compile(r"\[control-facts\] tick=(\d+) player=(\d+) uid=(\d+) screen=(-?\d+)")
+# arm -> (Lua class, activity preset name); every scripted arm also carries the seat-facts fixture.
+SCRIPTED = {"lua": ("SeatFacts", "Seat Facts"), "screens": ("ScreenFacts", "Screen Facts"), "control": ("ControlFacts", "Control Facts")}
 
 
 def sha(path):
@@ -43,13 +46,13 @@ def score_seats(logs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("arm", choices=("snapshot", "damage", "reseat", "lua", "screens"))
+    parser.add_argument("arm", choices=("snapshot", "damage", "reseat", "lua", "screens", "control"))
     parser.add_argument("out", type=Path)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--harness", type=Path, default=Path("D:/Projects/stage2_p4/recovery_e2e.py"))
     args = parser.parse_args()
-    if not 43570 <= args.port <= 43590:
-        parser.error("port is outside 43570..43590")
+    if not (43570 <= args.port <= 43590 or 48470 <= args.port <= 48479):
+        parser.error("port is outside 43570..43590 and 48470..48479")
     args.out = args.out.resolve()
     if args.out.exists():
         parser.error("evidence directory already exists")
@@ -71,30 +74,30 @@ def main():
         for peer in ("host", "client"):
             lane[peer] += ["-net-match-e2e-brain-reseat", "100"]
         lane["client"] += ["-net-match-e2e-brain-spawn-command"]
-    elif args.arm in ("lua", "screens"):
+    elif args.arm in SCRIPTED:
         for peer in ("host", "client"):
-            lane[peer] += ["-net-match-service-preset", "Screen Facts" if args.arm == "screens" else "Seat Facts"]
+            lane[peer] += ["-net-match-service-preset", SCRIPTED[args.arm][1]]
     manifest = {"stamp": stamp(), "arm": args.arm, "port": args.port,
                 "exe": str(harness.EXE), "exe_sha256": sha(harness.EXE),
                 "driver_sha256": sha(__file__), "fixture_sha256": sha(FIXTURE),
                 "harness_sha256": sha(args.harness), "lane": lane}
-    if args.arm == "screens":
-        manifest["screen_fixture_sha256"] = sha(FIXTURE.with_name("ScreenFacts.lua"))
+    if args.arm in SCRIPTED and args.arm != "lua":
+        manifest["script_fixture_sha256"] = sha(FIXTURE.with_name(SCRIPTED[args.arm][0] + ".lua"))
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     original_run = harness.run_isolated
 
     def prepare(*positional, **keywords):
         run = original_run(*positional, **keywords)
-        if args.arm in ("lua", "screens"):
+        if args.arm in SCRIPTED:
             module = Path(run.cwd) / "Userdata/UserScenes.rte"
             module.mkdir(exist_ok=True)
             (module / "SeatFacts.lua").write_bytes(FIXTURE.read_bytes())
-            class_name = "ScreenFacts" if args.arm == "screens" else "SeatFacts"
-            if args.arm == "screens":
-                (module / "ScreenFacts.lua").write_bytes(FIXTURE.with_name("ScreenFacts.lua").read_bytes())
+            class_name = SCRIPTED[args.arm][0]
+            if args.arm != "lua":
+                (module / (class_name + ".lua")).write_bytes(FIXTURE.with_name(class_name + ".lua").read_bytes())
             (module / "Index.ini").write_text(
                 "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n"
-                "\tAddActivity = GAScripted\n\t\tPresetName = " + ("Screen Facts" if args.arm == "screens" else "Seat Facts") + "\n"
+                "\tAddActivity = GAScripted\n\t\tPresetName = " + SCRIPTED[args.arm][1] + "\n"
                 f"\t\tSceneName = Grasslands\n\t\tScriptPath = UserScenes.rte/{class_name}.lua\n"
                 f"\t\tLuaClassName = {class_name}\n\t\tMinTeamsRequired = 2\n"
                 "\t\tDefaultRequireClearPathToOrbit = 0\n\t\tDefaultFogOfWar = 0\n"
@@ -124,7 +127,7 @@ def main():
 
     harness.run_isolated = prepare
     result = harness.lane("snapshot_p5", lane)
-    if args.arm in ("lua", "screens"):
+    if args.arm in SCRIPTED:
         logs = {}
         for peer in ("host", "client"):
             run_dir = args.out / "e2e/snapshot_p5" / peer
@@ -137,9 +140,15 @@ def main():
         result["seat_facts"] = seat_result
         if args.arm == "screens":
             result["screen_facts"] = {peer: log.count("[screen-facts] pass remote=1") == 1 for peer, log in logs.items()}
+        if args.arm == "control":
+            rows = {peer: CONTROL_ROW.findall(log) for peer, log in logs.items()}
+            # Every peer must name the same controlled actor for every seat; the screen column stays local.
+            seats = {peer: [row[:3] for row in peer_rows] for peer, peer_rows in rows.items()}
+            result["control_facts"] = {"rows": rows, "pass": len(seats["host"]) == 4 and seats["host"] == seats["client"]}
     (args.out / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))
-    return 0 if result.get("pass") is True and result.get("seat_facts", {"pass": True})["pass"] and all(result.get("screen_facts", {}).values()) else 1
+    return 0 if (result.get("pass") is True and result.get("seat_facts", {"pass": True})["pass"] and
+                 all(result.get("screen_facts", {}).values()) and result.get("control_facts", {"pass": True})["pass"]) else 1
 
 
 if __name__ == "__main__":
