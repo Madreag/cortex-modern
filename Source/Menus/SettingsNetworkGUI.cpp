@@ -69,6 +69,16 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_StatusModeCombo->AddItem("Auto");
 	m_StatusModeCombo->AddItem("Always");
 
+	m_ChatVisibleCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkChatVisible"));
+	m_ChatSoundCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkChatSound"));
+	m_ChatNotifyCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkChatNotify"));
+	m_ChatScopeCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboNetworkChatScope"));
+	m_ChatScopeCombo->AddItem("All");
+	m_ChatScopeCombo->AddItem("Team");
+	m_ChatTextSizeCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboNetworkChatTextSize"));
+	m_ChatTextSizeCombo->AddItem("Small");
+	m_ChatTextSizeCombo->AddItem("Large");
+
 	const auto rowTop = [](GUIControl* control) {
 		int x = 0, y = 0, width = 0, height = 0;
 		control->GetControlRect(&x, &y, &width, &height);
@@ -102,6 +112,11 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_ToastsCheckbox->SetCheck(g_SettingsMan.GetNetworkToastsEnabled());
 	m_PredictionCheckbox->SetCheck(g_SettingsMan.LocalPredictionEnabled());
 	m_StatusModeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkMatchStatusMode()));
+	m_ChatVisibleCheckbox->SetCheck(g_SettingsMan.GetNetworkChatVisible());
+	m_ChatSoundCheckbox->SetCheck(g_SettingsMan.GetNetworkChatSound());
+	m_ChatNotifyCheckbox->SetCheck(g_SettingsMan.GetNetworkChatNotify());
+	m_ChatScopeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkChatDefaultScope()));
+	m_ChatTextSizeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkChatTextSize()));
 	UpdateDelayPolicyRow();
 	UpdateStatusLines();
 }
@@ -176,6 +191,16 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		g_SettingsMan.SetLocalPredictionEnabled(m_PredictionCheckbox->GetCheck());
 	} else if (guiEvent.GetControl() == m_StatusModeCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
 		g_SettingsMan.SetNetworkMatchStatusMode(static_cast<SettingsMan::NetworkMatchStatusMode>(m_StatusModeCombo->GetSelectedIndex()));
+	} else if (guiEvent.GetControl() == m_ChatVisibleCheckbox) {
+		g_SettingsMan.SetNetworkChatVisible(m_ChatVisibleCheckbox->GetCheck());
+	} else if (guiEvent.GetControl() == m_ChatSoundCheckbox) {
+		g_SettingsMan.SetNetworkChatSound(m_ChatSoundCheckbox->GetCheck());
+	} else if (guiEvent.GetControl() == m_ChatNotifyCheckbox) {
+		g_SettingsMan.SetNetworkChatNotify(m_ChatNotifyCheckbox->GetCheck());
+	} else if (guiEvent.GetControl() == m_ChatScopeCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
+		g_SettingsMan.SetNetworkChatDefaultScope(static_cast<SettingsMan::NetworkChatDefaultScope>(m_ChatScopeCombo->GetSelectedIndex()));
+	} else if (guiEvent.GetControl() == m_ChatTextSizeCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
+		g_SettingsMan.SetNetworkChatTextSize(static_cast<SettingsMan::NetworkChatTextSize>(m_ChatTextSizeCombo->GetSelectedIndex()));
 	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_FixedDelayTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
 		ApplyTextboxes();
 		// Clicking off a focused text box must commit it too, otherwise it keeps the keyboard.
