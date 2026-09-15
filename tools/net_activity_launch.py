@@ -40,7 +40,7 @@ def rules_for(variant):
         # The site this activity ships with. Its seats still meet the setup editor, so the arm drives it.
         rules["activity_preset"] = "Skirmish Defense"
         rules["scene_name"] = "Ketanot Hills"
-    elif variant in ("brains", "brains-auto", "hold-desync"):
+    elif variant in ("brains", "brains-auto", "hold-desync", "hold-resync", "resync-skirmish"):
         # Skirmish Defense on a site with no brain on it: every human seat has to place its own brain in
         # the setup editor, which is the start a lockstep match has to synchronize.
         rules["activity_preset"] = "Skirmish Defense"
@@ -256,7 +256,7 @@ def launch(options):
     root.mkdir(parents=True, exist_ok=False)
     rules = rules_for(options.variant)
     # The census launches the activity preset's own two seats, which is the roster the default config carries.
-    default = options.variant in ("default", "census")
+    default = options.variant in ("default", "census", "resync-duel")
     refusal = options.variant.startswith("missing-")
     config = root / "launch-config.bin"
     config.write_bytes(encode_config(rules, options.dedicated, default))
@@ -273,9 +273,12 @@ def launch(options):
         if actual != exe_hash:
             raise RuntimeError("executable changed during launch case")
     # The setup editor is driven through the UI probe's own seam, so the arm commits the way a player does.
-    editor_driven = options.variant in ("brains", "stock", "hold-desync")
+    editor_driven = options.variant in ("brains", "stock", "hold-desync", "hold-resync", "resync-skirmish")
     places_brains = editor_driven or options.variant == "brains-auto"
-    hold_desync = options.variant == "hold-desync"
+    # resync-duel is the control: the same perturbation and heal on an activity that never opens the editor.
+    hold_resync = options.variant in ("hold-resync", "resync-duel", "resync-skirmish")
+    # Both arms perturb one peer inside the hold; the resync one heals from the host snapshot and plays on.
+    hold_desync = options.variant == "hold-desync" or hold_resync
     resolution = getattr(options, "resolution", None)
     captures = bool(getattr(options, "captures", False))
     common = ["-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
@@ -298,12 +301,15 @@ def launch(options):
                 # The client holds the world in the editor long enough for the hold itself to be under test.
                 script = root / (peer + "-ui") / "ui-script.json"
                 script.parent.mkdir(parents=True, exist_ok=False)
-                delay = (90 if hold_desync else 45) if peer == "client" else 0
-                script.write_text(json.dumps(editor_script(peer, captures, delay, hold_desync), indent=2), encoding="utf-8")
+                delay = 0 if options.variant == "resync-skirmish" else ((90 if hold_desync else 45) if peer == "client" else 0)
+                script.write_text(json.dumps(editor_script(peer, captures, delay, hold_desync and not hold_resync), indent=2), encoding="utf-8")
                 env["CC_TEST_NET_UI_SCRIPT"] = str(script)
             if hold_desync and peer == "host":
                 # One genuine divergence inside the hold: the held ticks' own hashes have to catch it.
                 flags.append("-determinism-selftest-perturb")
+            if hold_resync:
+                # Heal from the host's snapshot instead of stopping, so the editor itself is resynced mid-placement.
+                flags.append("-net-match-e2e-resync")
             runs[peer] = make_run(repo, [*common, *flags], root / peer, options.timeout, env=env, expected=[report])
             if resolution:
                 set_resolution(runs[peer].cwd, *resolution)
@@ -330,6 +336,23 @@ def launch(options):
         checks["bounded_refusal"] = all(record.get("exit_code") == 1 and not record.get("timed_out") for record in records.values())
         result["refusals"] = reasons
     else:
+        if hold_resync:
+            # A resync taken while the seats are still placing: every peer comes back with the same
+            # placements and the same id base, so the brains they build carry identical unique ids.
+            result["resync"] = {peer: re.findall(r"\[net-match\] resync: (.+)", log) for peer, log in logs.items()}
+            checks["resync_ran_in_the_editor"] = all(any("reloading from the host snapshot" in line for line in lines)
+                                                     for lines in result["resync"].values()) and \
+                all("[net-match] brain placed:" not in log.split("resync: ")[0] for log in logs.values())
+            if editor_driven:
+                result["placements"] = score_placements(logs)
+                checks["identical_brains_after_resync"] = result["placements"]["pass"]
+            checks["both_peers_played_on"] = all(record.get("exit_code") == 0 and not record.get("timed_out") for record in records.values())
+            result["probes"] = {peer: probe_result(root, peer) for peer in runs}
+            result.update(checks=checks, passed=all(checks.values()), exe_sha256=exe_hash)
+            (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+            for name, passed in checks.items():
+                print(f"{'PASS' if passed else 'FAIL'} {name}")
+            return 0 if result["passed"] else 1
         if hold_desync:
             # The whole arm: a divergence injected at tick 50, while the world is held in the setup editor,
             # must be named by the live checksum exchange before the hold ends at tick 90.
