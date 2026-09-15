@@ -95,6 +95,30 @@ namespace RTE {
 		/// the end-to-end arm that stands in for a player's DONE.
 		/// @return Whether the placement was committed.
 		bool PlaceAndSubmitLockstepBrain(int player, const std::string& className, const std::string& preset, const std::string& module);
+
+		/// Test-only seam: queues one scripted setup-editor gesture for a seat. "place_brain" holds the named
+		/// brain over the ground at a fraction of the scene's width and presses; "done" presses DONE. The
+		/// gesture runs through the seat's own SceneEditorGUI, so the commit takes the path a player's does.
+		/// @return Whether the gesture was queued.
+		static bool QueueSetupEditorGesture(int player, const std::string& kind, float sceneXFraction, const std::string& className, const std::string& preset, const std::string& module);
+
+		/// 0 = nothing queued for the seat, 1 = a gesture is still running, 2 = the seat could not carry it out.
+		static int SetupEditorGestureStatus(int player);
+
+		/// Whether a seat has flagged itself ready to start.
+		bool IsReadyToStart(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_ReadyToStart[player]; }
+
+		/// Whether this peer has already committed the seat's placement; the commit is in flight until it returns.
+		bool HasSubmittedLockstepPlacement(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_LockstepPlacementSubmitted[player]; }
+
+		/// The seat's setup-editor mode, or -1 when the seat has no editor.
+		int SetupEditorMode(int player) const;
+
+		/// Presentation only: who the synchronized setup editor is still waiting on, and how many seats have
+		/// placed. Read by the match status strip; never read by the simulation.
+		/// @return Whether the match is holding in the synchronized setup editor.
+		bool DescribeLockstepPlacementWait(std::string& names, int& placed, int& total) const;
+
 		void ClearCheckpointActorIDs() override;
 		bool PrepareCheckpointUI() override;
 		SerializableOverrideMethods;
@@ -732,8 +756,12 @@ namespace RTE {
 		static bool IsLockstepPlacement();
 		/// Whether this peer is the one that commits a seat's brain placement.
 		bool MayCommitBrainPlacement(int player) const;
-		/// Puts one seat's committed placement on the wire.
-		bool CommitLockstepBrainPlacement(int player, const std::string& className, const std::string& preset, const std::string& module, const Vector& spot);
+		/// Puts one seat's committed placement on the wire. `via` names the path that read the spot.
+		bool CommitLockstepBrainPlacement(int player, const std::string& className, const std::string& preset, const std::string& module, const Vector& spot, const char* via);
+		/// The ground under a scene x, where a brain settles under the same physics on every peer.
+		Vector GroundSpot(float sceneX) const;
+		/// Runs the seat's queued scripted editor gesture, if it has one, the way that seat's own input would.
+		void DriveScriptedSetupEditor(int player);
 		/// Builds every seat's committed brain, in seat order, from a unique-id counter pinned to the same
 		/// value on every peer. A local editor's own preview objects take ids off that counter on one peer
 		/// alone, so the shared brains are made only after it is put back in step.
