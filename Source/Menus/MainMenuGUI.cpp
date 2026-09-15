@@ -75,6 +75,7 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerHostPortTextBox = nullptr;
 	m_MultiplayerHostPlayersTextBox = nullptr;
 	m_MultiplayerHostInputDelayTextBox = nullptr;
+	m_MultiplayerHostInputDelayPolicyLabel = nullptr;
 	m_MultiplayerHostPortMapCheckbox = nullptr;
 	m_MultiplayerHostModeButton = nullptr;
 	m_MultiplayerHostMode = NetMatchMode::PvPSkirmish;
@@ -218,6 +219,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostPort"));
 	m_MultiplayerHostPlayersTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostPlayers"));
 	m_MultiplayerHostInputDelayTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostInputDelay"));
+	m_MultiplayerHostInputDelayPolicyLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInputDelayPolicy"));
 	m_MultiplayerHostPortMapCheckbox = dynamic_cast<GUICheckbox*>(m_SubMenuScreenGUIControlManager->GetControl("CheckHostPortMap"));
 	m_MultiplayerHostModeButton = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostMode"));
 	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinAddress"));
@@ -291,6 +293,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostInputDelayTextBox->SetNumericOnly(true);
 	m_MultiplayerHostInputDelayTextBox->SetMaxNumericValue(NetMatchConfigUtil::c_MaxInputDelayFrames);
 	m_MultiplayerHostInputDelayTextBox->SetMaxTextLength(2);
+	m_MultiplayerHostInputDelayPolicyLabel->SetText(g_SettingsMan.GetNetworkHostDelayPolicy() == SettingsMan::NetworkHostDelayPolicy::Auto ? "(auto)" : "(fixed)");
 	m_MultiplayerHostPortMapCheckbox->SetCheck(g_SettingsMan.GetNetworkPortMapEnable() ? GUICheckbox::Checked : GUICheckbox::Unchecked);
 	m_MultiplayerJoinPortTextBox->SetText("41010");
 	m_MultiplayerJoinPortTextBox->SetNumericOnly(true);
@@ -720,6 +723,8 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		if (TelemetryBundle::RequestCapture()) g_ConsoleMan.PrintString("SYSTEM: Saving diagnostics...");
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerHostGameButton]) {
 		m_MultiplayerLandingStatusLabel->SetText("");
+		// The saved policy is re-read here, the way the port-map box is, so a settings change is not stale.
+		m_MultiplayerHostInputDelayPolicyLabel->SetText(g_SettingsMan.GetNetworkHostDelayPolicy() == SettingsMan::NetworkHostDelayPolicy::Auto ? "(auto)" : "(fixed)");
 		m_MultiplayerHostPortMapCheckbox->SetCheck(g_SettingsMan.GetNetworkPortMapEnable() ? GUICheckbox::Checked : GUICheckbox::Unchecked);
 		m_MultiplayerSubScreen = MultiplayerSubScreen::HostSetup;
 		g_GUISound.ButtonPressSound()->Play();
