@@ -5235,6 +5235,15 @@ static bool RunGarbageCollectionThreadSelfTest() {
 	const auto [builtOff, builtSim] = collectOne("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end; do local held = F82BuiltBase() end; super = nil; F82BuiltBase = nil");
 	const bool sentinelHeld = unbuiltSim == 0 && unbuiltOff >= 1 && builtSim >= 1;
 
+	// Drop the class global and collect; ClassDerivesFrom still reads the instance's class_rep name.
+	states[0].RunScriptString("class 'F90NameUAF' (Box); function F90NameUAF:__init() super() end; _F90NameHeld = F90NameUAF(); F90NameUAF = nil; collectgarbage(); collectgarbage()");
+	g_LuaMan.StartAsyncGarbageCollection();
+	g_LuaMan.WaitForAsyncGarbageCollection();
+	std::string nameGraph;
+	std::vector<std::string> nameProblems;
+	states[0].SerializeScriptGraph(nameGraph, nameProblems);
+	states[0].RunScriptString("_F90NameHeld = nil");
+
 	// What the same GC-heavy tick costs, averaged over rounds that drop the same batch again.
 	constexpr int c_TimedRounds = 5;
 	long long passMicroseconds = 0;
@@ -5294,7 +5303,16 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	LoadScriptGraphHelper();
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	checkpointValues = Activity::RunNetLocalPlayerStateSelfTest() && checkpointValues;
+	// A Lua class left in a global is what a mod checkpoint has to carry.
+	RunScriptString("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end");
 	checkpointValues = GameActivity::RunNetLocalUIRestoreSelfTest() && checkpointValues;
+	lua_getglobal(m_State, "F82BuiltBase");
+	const auto* reboundClass = luabind::detail::is_class_rep(m_State, -1) ? static_cast<const luabind::detail::class_rep*>(lua_touserdata(m_State, -1)) : nullptr;
+	const bool reboundNamed = reboundClass && std::strcmp(reboundClass->name(), "F82BuiltBase") == 0 && !reboundClass->bases().empty() && reboundClass->bases()[0].base && std::strcmp(reboundClass->bases()[0].base->name(), "Box") == 0;
+	lua_pop(m_State, 1);
+	std::cout << "[script-graph-selftest] " << (reboundNamed ? "PASS" : "FAIL") << " lua_class_global_rebinds_by_name_and_base" << std::endl;
+	RunScriptString("F82BuiltBase = nil");
+	checkpointValues = reboundNamed && checkpointValues;
 	{
 		// A bound Entity class with no cast function loses every borrowed owner-ref of that class.
 		std::set<std::string> uncovered;
