@@ -1175,6 +1175,27 @@ namespace {
 		int attempts = 0; //!< Ground spots tried; the editor itself refuses one with no path to the sky.
 		int updates = 0;  //!< Editor updates spent, so a gesture the editor never takes cannot hang the seat.
 	};
+	// A per-machine setup editor is local presentation while the lockstep world is held: every peer edits a
+	// different brain over a different spot, so its previews, clones and residence tests must draw from the
+	// render stream. The shared one has to read the same on every peer when the match starts.
+	struct ScopedEditorRNG {
+		RandomGenerator* m_Prev;
+		bool m_Active;
+		explicit ScopedEditorRNG(bool active) :
+		    m_Prev(t_simRNGOverride), m_Active(active) {
+			if (active) {
+				t_simRNGOverride = &g_RenderRNG;
+			}
+		}
+		~ScopedEditorRNG() {
+			if (m_Active) {
+				t_simRNGOverride = m_Prev;
+			}
+		}
+		ScopedEditorRNG(const ScopedEditorRNG&) = delete;
+		ScopedEditorRNG& operator=(const ScopedEditorRNG&) = delete;
+	};
+
 	std::array<std::deque<ScriptedEditorGesture>, Players::MaxPlayerCount> s_ScriptedEditorGestures;
 	std::array<bool, Players::MaxPlayerCount> s_ScriptedEditorFailed{};
 	constexpr int c_ScriptedEditorAttempts = 8;
@@ -1374,6 +1395,9 @@ void GameActivity::UpdateEditing() {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
+
+		// Everything this seat's own editor does is local to this machine while the world is held.
+		const ScopedEditorRNG editorRNG(lockstep);
 
 		// A scripted gesture stands in for this seat's own mouse; only the UI probe queues one.
 		DriveScriptedSetupEditor(player);
