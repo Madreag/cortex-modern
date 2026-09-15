@@ -232,7 +232,7 @@ SCHEMAS["LimbPath1"] = [("entity", "o"), ("start", VECTOR), *fields("start_segme
     "travel_speed segment_threshold base_speed_multiplier current_speed_multiplier"), *fields("base_scale current_scale", VECTOR), ("push_force", "n"),
     *fields("joint_position joint_velocity", VECTOR), ("rotation", "o"), *fields("rotation_offset position_offset", VECTOR), ("time_left", "n"),
     *fields("path_timer segment_timer", TIMER), *fields("total_length regular_length segment_done ended flipped"), ("segments", sequence(VECTOR)), ("cursor", "n")]
-SCHEMAS["ActorRuntime1"] = [*fields("player_controllable status health max_health previous_health"), ("last_second_timer", TIMER),
+_ACTOR_RUNTIME_HEAD = [*fields("player_controllable status health max_health previous_health"), ("last_second_timer", TIMER),
     *fields("last_second_position recent_movement", VECTOR), ("travel_impulse_damage", "n"), ("stable_recover_timer", TIMER),
     ("stable_velocity", VECTOR), ("stable_recover_delay", "n"), *fields("heartbeat new_control_timer death_timer", TIMER),
     *fields("gold_carried gold_picked can_run crouch_walk_multiplier aim_state aim_range aim_angle aim_distance"),
@@ -241,9 +241,12 @@ SCHEMAS["ActorRuntime1"] = [*fields("player_controllable status health max_healt
     *fields("sight_distance perceptiveness pain_threshold reveal_unseen character_height"), *fields("holster_offset reload_offset view_point", VECTOR),
     *fields("max_inventory_mass off_wire_aim_tick off_wire_aim off_wire_flip_tick off_wire_flip"), ("hotkey_activated", array(2)),
     *fields("hud_stack deployment_id passenger_slots ai_dig_strength base_mass ai_mode waypoint_cursor draw_waypoints"),
-    *fields("move_target previous_path_target", VECTOR), ("last_ordered_waypoint", VECTOR), ("has_ordered_waypoint", "n"),
-    ("move_vector", VECTOR), *fields("update_path move_proximity movement_state organic mechanical limb_forces_disabled"),
+    *fields("move_target previous_path_target", VECTOR)]
+_ACTOR_RUNTIME_TAIL = [("move_vector", VECTOR), *fields("update_path move_proximity movement_state organic mechanical limb_forces_disabled"),
     *fields("team_icon controller_icon", "s")]
+SCHEMAS["ActorRuntime1"] = [*_ACTOR_RUNTIME_HEAD, *_ACTOR_RUNTIME_TAIL]
+# v2 keeps the waypoint this actor was ordered to, which v1 texts do not carry.
+SCHEMAS["ActorRuntime2"] = [*_ACTOR_RUNTIME_HEAD, ("last_ordered_waypoint", VECTOR), ("has_ordered_waypoint", "n"), *_ACTOR_RUNTIME_TAIL]
 SCHEMAS["AHumanRuntime1"] = [*fields("look_aim_ratio activate_background trigger_pulled reload_offhand"), ("icon_blink_timer", TIMER),
     *fields("arms_state prone_state"), ("prone_timer", TIMER), *fields("max_crouch_shift crouch_amount crouch_override"),
     ("paths", array(2, array(11, "o"))), ("rotation_targets", array(11)), ("aiming", "n"), ("arm_climbing", array(2)),
@@ -518,6 +521,7 @@ _LOCAL_FIELDS = {
     "AudioRuntime3": {"player_positions", "listeners"},
     "AudioVoice1": {"position"},
     "ActorRuntime1": {"hud_stack"},
+    "ActorRuntime2": {"hud_stack"},
     "AEmitterRuntime1": {"average_burst_impulse", "average_impulse"},
     "HDFirearmRuntime1": {"ai_fire_velocity", "ai_bullet_lifetime", "ai_bullet_acceleration"},
 }
@@ -753,6 +757,16 @@ def selftest():
         check("game_activity3_refused_as_game_activity1", "trailing" in str(error) or "invalid runtime checkpoint" in str(error))
     check("game_activity3_decodes", decode(grown)["version"] == "GameActivity3" and
           "lockstep_seat_brains" in decode(grown) and len(decode(grown)["lockstep_seat_brains"]) == 4)
+
+    ordered = decode(_payload("ActorRuntime2"))
+    check("actor_runtime2_decodes", ordered["version"] == "ActorRuntime2" and
+          "last_ordered_waypoint" in ordered and "has_ordered_waypoint" in ordered)
+    check("actor_runtime1_still_decodes", "last_ordered_waypoint" not in decode(_payload("ActorRuntime1")))
+    try:
+        decode(_payload("ActorRuntime2").replace(b"13 ActorRuntime2", b"13 ActorRuntime1", 1))
+        check("actor_runtime2_refused_as_actor_runtime1", False)
+    except ValueError as error:
+        check("actor_runtime2_refused_as_actor_runtime1", "trailing" in str(error) or "invalid runtime checkpoint" in str(error))
 
     unclassified = b"9 NoSchema1 0 "
     check("unclassified_tag_stays_raw", decode(unclassified) == unclassified)

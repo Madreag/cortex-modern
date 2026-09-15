@@ -2768,7 +2768,7 @@ void Actor::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whichScr
 }
 
 std::string Actor::SaveActorRuntime() const {
-	CheckpointWriter archive("ActorRuntime1");
+	CheckpointWriter archive("ActorRuntime2");
 	archive(m_PlayerControllable, m_Status, m_Health, m_MaxHealth, m_PrevHealth, m_LastSecondTimer, m_LastSecondPos);
 	archive(m_RecentMovement, m_TravelImpulseDamage, m_StableRecoverTimer, m_StableVel, m_StableRecoverDelay, m_HeartBeat, m_NewControlTmr);
 	archive(m_DeathTmr, m_GoldCarried, m_GoldPicked, m_CanRun, m_CrouchWalkSpeedMultiplier, m_AimState, m_AimRange);
@@ -2785,7 +2785,9 @@ std::string Actor::SaveActorRuntime() const {
 
 bool Actor::LoadActorRuntime(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader archive(text, "ActorRuntime1", validateOnly);
+		// A text written before the ordered waypoint was kept reads as an actor that was never given one.
+		const bool legacy = text.starts_with("13 ActorRuntime1 ");
+		CheckpointReader archive(text, legacy ? "ActorRuntime1" : "ActorRuntime2", validateOnly);
 		archive(m_PlayerControllable, m_Status, m_Health, m_MaxHealth, m_PrevHealth, m_LastSecondTimer, m_LastSecondPos);
 		archive(m_RecentMovement, m_TravelImpulseDamage, m_StableRecoverTimer, m_StableVel, m_StableRecoverDelay, m_HeartBeat, m_NewControlTmr);
 		archive(m_DeathTmr, m_GoldCarried, m_GoldPicked, m_CanRun, m_CrouchWalkSpeedMultiplier, m_AimState, m_AimRange);
@@ -2794,7 +2796,11 @@ bool Actor::LoadActorRuntime(std::string_view text, bool validateOnly) {
 		archive(m_CanRevealUnseen, m_CharHeight, m_HolsterOffset, m_ReloadOffset, m_ViewPoint, m_MaxInventoryMass, m_OffWireAimTick);
 		archive(m_OffWireAim, m_OffWireFlipTick, m_OffWireFlip, m_HotkeyActivated, m_HUDStack, m_DeploymentID, m_PassengerSlots);
 		archive(m_AIBaseDigStrength, m_BaseMass, m_AIMode, m_WaypointCursor, m_DrawWaypoints, m_MoveTarget, m_PrevPathTarget);
-		archive(m_LastOrderedWaypoint, m_HasOrderedWaypoint);
+		if (legacy) {
+			archive.OnCommit([this] { m_LastOrderedWaypoint.Reset(); m_HasOrderedWaypoint = false; });
+		} else {
+			archive(m_LastOrderedWaypoint, m_HasOrderedWaypoint);
+		}
 		archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
 		std::array<std::string, 2> icons;
 		archive.Value(icons);
