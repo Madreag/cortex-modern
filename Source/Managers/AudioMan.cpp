@@ -1631,6 +1631,33 @@ namespace {
 		FMOD_OPENSTATE open = FMOD_OPENSTATE_ERROR;
 		return sound->getOpenState(&open, nullptr, nullptr, nullptr) == FMOD_OK && (open == FMOD_OPENSTATE_READY || open == FMOD_OPENSTATE_PLAYING);
 	}
+
+	FMOD_RESULT F_CALLBACK PendingSamplePcmRead(FMOD_SOUND*, void*, unsigned int) {
+		return FMOD_ERR_NOTREADY;
+	}
+
+	FMOD::Sound* MakeHeldPendingSound(FMOD::System* system) {
+		if (!system) return nullptr;
+		FMOD::Sound* sound = nullptr;
+		if (system->createSound("Data/Base.rte/Sounds/GUIs/__pending_audio_checkpoint.flac", FMOD_CREATESAMPLE | FMOD_3D | FMOD_NONBLOCKING, nullptr, &sound) == FMOD_OK && sound) {
+			if (!SampleReadyForPlayback(sound)) return sound;
+			sound->release();
+			sound = nullptr;
+		}
+		FMOD_CREATESOUNDEXINFO info{};
+		info.cbsize = sizeof(info);
+		info.length = 2048;
+		info.numchannels = 1;
+		info.defaultfrequency = 44100;
+		info.format = FMOD_SOUND_FORMAT_PCM16;
+		info.pcmreadcallback = PendingSamplePcmRead;
+		if (system->createSound(nullptr, FMOD_OPENUSER | FMOD_3D | FMOD_NONBLOCKING, &info, &sound) != FMOD_OK || !sound) return nullptr;
+		if (SampleReadyForPlayback(sound)) {
+			sound->release();
+			return nullptr;
+		}
+		return sound;
+	}
 }
 
 void AudioMan::RetireVoice(int identity) {
@@ -2338,18 +2365,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 			if (!loadingOwner->Play()) throw std::runtime_error("loading-sample voice did not play");
 			const int loadingId = *loadingOwner->GetPlayingChannels()->begin();
 			const std::string path = m_PlayingVoices.at(loadingId).soundPath;
-			const auto makePending = [this](const char* file) -> FMOD::Sound* {
-				FMOD::Sound* sound = nullptr;
-				if (m_AudioSystem->createSound(file, FMOD_CREATESAMPLE | FMOD_3D | FMOD_NONBLOCKING, nullptr, &sound) != FMOD_OK || !sound) return nullptr;
-				FMOD_OPENSTATE state = FMOD_OPENSTATE_ERROR;
-				if (sound->getOpenState(&state, nullptr, nullptr, nullptr) != FMOD_OK || state == FMOD_OPENSTATE_READY || state == FMOD_OPENSTATE_PLAYING) {
-					sound->release();
-					return nullptr;
-				}
-				return sound;
-			};
-			FMOD::Sound* loading = makePending(path.c_str());
-			if (!loading) loading = makePending("Data/Base.rte/Sounds/GUIs/__pending_audio_checkpoint.flac");
+			FMOD::Sound* loading = MakeHeldPendingSound(m_AudioSystem);
 			if (!loading) throw std::runtime_error("could not hold a non-ready private sound");
 			FMOD::Sound* ready = nullptr;
 			const auto cached = ContentFile::s_LoadedSamples.find(path);
@@ -2370,6 +2386,12 @@ bool AudioMan::RunCheckpointSelfTest() {
 			AudioCheckpoint::Require(ready->setMode(archivedMode));
 			AudioCheckpoint::Require(ready->setLoopPoints(archivedLoopStart, FMOD_TIMEUNIT_PCM, archivedLoopEnd, FMOD_TIMEUNIT_PCM));
 			const std::string withLoops = SaveCheckpoint();
+			if (SampleReadyForPlayback(loading)) {
+				FMOD::Sound* again = MakeHeldPendingSound(m_AudioSystem);
+				if (!again) throw std::runtime_error("could not hold a non-ready private sound through load");
+				loading->release();
+				loading = again;
+			}
 			ContentFile::s_LoadedSamples[path] = loading;
 			std::string saved;
 			std::string refusal;
