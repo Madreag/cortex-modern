@@ -822,7 +822,22 @@ void MovableMan::ApplyLockstepControlHandoffToActor(Actor& actor, bool seated) {
 	actor.OnControllerInputModeChanged(previousMode, previousPlayer);
 }
 
-void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors) {
+// Frames a synced pause committed: the sim does not advance on them, so they are not frames the match played.
+static uint64_t s_LockstepPausedFrames = 0;
+
+uint64_t RTE::LockstepPlayedFrame() {
+	const uint64_t applied = ScenarioRunner::GetLockstepAppliedFrame();
+	return applied > s_LockstepPausedFrames ? applied - s_LockstepPausedFrames : 0;
+}
+
+void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors, bool paused) {
+	// A round that restarts its frame numbering restarts the count with it.
+	if (readyFrame.frame <= ScenarioRunner::GetLockstepAppliedFrame()) {
+		s_LockstepPausedFrames = 0;
+	}
+	if (paused) {
+		++s_LockstepPausedFrames;
+	}
 	ScenarioRunner::SetLockstepAppliedFrame(readyFrame.frame);
 	ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(readyFrame.frame);
 	for (Actor* actor: actors) {
@@ -922,7 +937,7 @@ bool MovableMan::RunLockstepPausedTick() {
 		ScenarioRunner::SetControllerReplayError("tick " + std::to_string(simTick) + " paused wait: " + error);
 		return false;
 	}
-	ApplyLockstepLeaveHandoffs(readyFrame, m_Actors);
+	ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, true);
 	// Only the game commands apply on a paused tick; the sim itself holds still.
 	g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 	CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
@@ -4932,7 +4947,7 @@ void MovableMan::UpdateControllers() {
 			return;
 		}
 		NeutralizeUnframedLockstepActors(m_Actors, applied);
-		ApplyLockstepLeaveHandoffs(readyFrame, m_Actors);
+		ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, false);
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
 		CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);

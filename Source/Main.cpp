@@ -4173,10 +4173,10 @@ void RunGameLoop() {
 			if (!ScenarioRunner::IsActive() && !s_netMatchServiceE2E && !s_recordTickHashes && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 				static uint64_t s_matchOverTick = UINT64_MAX;
 				const Activity* matchActivity = g_ActivityMan.GetActivity();
-				// -net-match-ticks ends a menu-launched match at an applied frame every peer reaches,
+				// -net-match-ticks ends a menu-launched match at a played frame every peer reaches,
 				// so an unattended run finishes one the same way a win condition does.
 				const bool cappedEnd = s_netLockstepTicks > 0 && ScenarioRunner::HasLockstepCoordinator() &&
-				                       ScenarioRunner::GetLockstepAppliedFrame() >= s_netLockstepTicks;
+				                       LockstepPlayedFrame() >= s_netLockstepTicks;
 				if ((matchActivity && matchActivity->IsOver()) || cappedEnd) {
 					const uint64_t nowTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 					if (s_matchOverTick == UINT64_MAX) {

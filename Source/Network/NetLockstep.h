@@ -348,7 +348,11 @@ namespace RTE {
 	};
 
 	/// Applies the committed frame's departures before its game commands.
-	void ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors);
+	void ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors, bool paused);
+
+	/// The applied frame with the frames a synced pause committed discounted: a pause commits frames the
+	/// sim never advances on, and those must not spend a capped match's tick budget.
+	uint64_t LockstepPlayedFrame();
 
 	/// One remote's share of the round, enough to tell a peer that stopped SENDING from one the host
 	/// stopped RELAYING to, and from one whose frames arrived and were refused.

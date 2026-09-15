@@ -4750,6 +4750,13 @@ namespace RTE {
 		}
 		ForgetCongestion(peerId);
 		m_LastLeaveMessage = message;
+		// The relay host is the star's hub: with it gone no survivor can reach another, and its own team
+		// would keep resolving to a peer that produces nothing for it. The round ends for every survivor.
+		if (peerId == m_Config.matchConfig.hostPeerId && peerId != m_Config.localPeerId) {
+			m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":the host left the match: " + message;
+			m_State = NetLockstepState::Stopped;
+			return;
+		}
 		// A dropped seat pauses commits until the host resolves it; an announced leave still ends a last-player match at once.
 		if (LeftPeersNotRefilling() >= m_RemotePeerIds.size() && (announced || !AnyLeftSeatHeld()) && !ReclaimResyncPending()) {
 			// Nobody left to play with.
