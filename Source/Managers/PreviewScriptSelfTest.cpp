@@ -380,6 +380,7 @@ if not (jit and jit.status()) then
   _HotcountAbortSeen = 1
   return
 end
+jit.flush()
 jit.attach(ev, 'trace')
 local t = {}
 for i = 1, 1024 do t[i % 16 + 1] = i end
