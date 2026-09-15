@@ -181,6 +181,8 @@ EDITOR_SEATS = {"host": dict(player=0, x_fraction=0.30, cls="Actor", preset="Bra
                 "client": dict(player=1, x_fraction=0.70, cls="AHuman", preset="Brain Robot")}
 # Exactly 64 characters, the longest lobby name a seat can carry, so the strip's ellipsis is exercised.
 LONG_SEAT_NAME = "Client" + "GunnhildrTheVeryPatientBrainPlacerOfKetanotHills" + "X" * 10
+# The host's own non-default name: short, so its share of the line always survives the elision.
+LONG_HOST_NAME = "Hostable"
 REFUSED_PRESET = "No Such Brain"
 # A DONE with no brain placed is refused by the editor itself (SceneEditorGUI::DONEEDITING ->
 # TestBrainResidence): the seat goes back to installing or picking a brain, stays unready and commits
@@ -211,7 +213,8 @@ def shots(peer, name):
             {"op": "screenshot", "name": f"{peer}_{name}_world", "composited": True}]
 
 
-def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusal=False, resolution=None):
+def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusal=False, resolution=None,
+                  long_names=False):
     """The UI probe script that drives this peer's own seat through the setup editor, the way a player does."""
     seat = EDITOR_SEATS[peer]
     player = seat["player"]
@@ -221,12 +224,32 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
              {"op": "wait", "player": player, "picker_open": True}, {"op": "wait", "renders": 12},
              {"op": "assert_net_ui_clear", "player": player, "picker_open": True, "screen_text": True}]
     if compact(resolution):
-        # An open picker leaves the strip under half a short screen: the metrics tail is what gives way,
-        # the seat names stay whole while it can, and the count outlives every fallback.
+        if long_names:
+            # A 64-char seat name cannot survive the strip whole: FitLine ellides it, and the count
+            # outlives every fallback the line gives way through.
+            steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
+                       "text_contains": "WAITING FOR "},
+                      {"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
+                       "text_contains": "..."},
+                      {"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
+                       "text_contains": " TO PLACE"},
+                      {"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
+                       "text_contains": "0 of 2"}]
+        else:
+            # An open picker leaves the strip under half a short screen: the metrics tail is what gives way,
+            # the seat names stay whole while it can, and the count outlives every fallback.
+            steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
+                       "text_contains": "WAITING FOR " + PLACEMENT_NAMES + " TO PLACE"},
+                      {"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
+                       "text_contains": "0 of 2"}]
+    elif long_names:
+        # The tall box spells the wait out; the host's short name leads and the long one ellides.
         steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
-                   "text_contains": "WAITING FOR " + PLACEMENT_NAMES + " TO PLACE"},
+                   "text_contains": LONG_HOST_NAME + ", "},
                   {"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
-                   "text_contains": "0 of 2"}]
+                   "text_contains": "..."},
+                  {"op": "assert_control", "control": "LabelNetMatchStatus", "equals": {"visible": True}, "fits": True,
+                   "text_contains": "to place their brains"}]
     if capture:
         steps += shots(peer, "editor_open")
     if wire_refusal:
@@ -269,6 +292,10 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
                   {"op": "wait", "player": player, "seat_text_contains": READY_TEXT},
                   {"op": "assert_control", "control": "LabelNetMatchStatus", "text_contains": wait_banner(resolution),
                    "equals": {"visible": True}, "fits": True}]
+        if long_names:
+            # One seat left, and the name alone still does not fit the line the box or strip gives it.
+            steps += [{"op": "assert_control", "control": "LabelNetMatchStatus", "text_contains": "...",
+                       "equals": {"visible": True}, "fits": True}]
         if capture:
             steps += shots(peer, "waiting_banner")
     if not finish_at_ready:
@@ -377,6 +404,9 @@ def launch(options):
     try:
         for peer in ("host", "client"):
             flags = ["-net-dedicated" if options.dedicated else "-net-host", "-net-match-service-config", str(config)] if peer == "host" else ["-net-join", "127.0.0.1"]
+            if options.variant == "brains-longname":
+                # Each peer announces its own seat name; the flagless service default stays Host/Client.
+                flags += ["-net-player-name", LONG_HOST_NAME if peer == "host" else LONG_SEAT_NAME]
             trace, report = root / peer / "trace.json", root / peer / "report.json"
             flags += ["-out", str(trace), "-net-match-report", str(report), "-net-replay-out", str(root / peer / "match.ccreplay")]
             env = {"CCCP_HEADLESS": "1", "CC_SIM_DUMP": "1:600"}
@@ -386,7 +416,8 @@ def launch(options):
                 script.parent.mkdir(parents=True, exist_ok=False)
                 delay = 0 if options.variant == "resync-skirmish" else ((90 if hold_desync else 45) if peer == "client" else 0)
                 script.write_text(json.dumps(editor_script(peer, captures, delay, hold_desync and not hold_resync,
-                                                           options.variant == "wire-refusal", resolution), indent=2), encoding="utf-8")
+                                                           options.variant == "wire-refusal", resolution,
+                                                           options.variant == "brains-longname"), indent=2), encoding="utf-8")
                 env["CC_TEST_NET_UI_SCRIPT"] = str(script)
             if hold_desync and peer == "host":
                 # One genuine divergence inside the hold: the held ticks' own hashes have to catch it.
