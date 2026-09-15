@@ -1,10 +1,12 @@
 #include "NetModerationGUIProbe.h"
 
 #include "ActivityMan.h"
+#include "CameraMan.h"
 #include "FrameMan.h"
 #include "GameActivity.h"
 #include "GUI.h"
 #include "GUIButton.h"
+#include "GUIFont.h"
 #include "GUILabel.h"
 #include "GUIInputWrapper.h"
 #include "MainMenuGUI.h"
@@ -112,6 +114,43 @@ namespace {
 		return probe.directory / name;
 	}
 
+	Json Rect(int x, int y, int width, int height, bool visible) {
+		return {{"x", x}, {"y", y}, {"w", width}, {"h", height}, {"visible", visible && width > 0 && height > 0}};
+	}
+
+	bool Overlaps(const Json& left, const Json& right) {
+		return left.at("visible").get<bool>() && right.at("visible").get<bool>() &&
+		    left["x"].get<int>() < right["x"].get<int>() + right["w"].get<int>() &&
+		    right["x"].get<int>() < left["x"].get<int>() + left["w"].get<int>() &&
+		    left["y"].get<int>() < right["y"].get<int>() + right["h"].get<int>() &&
+		    right["y"].get<int>() < left["y"].get<int>() + left["h"].get<int>();
+	}
+
+	/// The slide-in panel's visible column, which every editor reports as the seat's screen occlusion.
+	Json PickerRect(int screen) {
+		const int occlusion = g_CameraMan.GetScreenOcclusion(screen).GetRoundIntX();
+		const int height = g_FrameMan.GetPlayerScreenHeight();
+		if (occlusion < 0) return Rect(g_FrameMan.GetPlayerScreenWidth() + occlusion, 0, -occlusion, height, true);
+		return Rect(0, 0, occlusion, height, true);
+	}
+
+	/// The band FrameMan reserves for the seat's own message: from the top row, centred on what the panel
+	/// leaves. Measured with the blink decoration whether or not this frame draws it, so the rect is stable.
+	Json ScreenTextRect(int screen) {
+		const std::string text = g_FrameMan.GetScreenText(screen);
+		if (text.empty()) return Rect(0, 0, 0, 0, false);
+		const int screenWidth = g_FrameMan.GetPlayerScreenWidth();
+		const std::string drawn = g_FrameMan.SplitStringToFitWidth(">>> " + text + " <<<", screenWidth, false);
+		GUIFont* font = g_FrameMan.GetLargeFont();
+		const int width = font->CalculateWidth(drawn);
+		const int centre = (screenWidth + g_CameraMan.GetScreenOcclusion(screen).GetRoundIntX()) / 2;
+		return Rect(centre - width / 2, 12, width, font->CalculateHeight(drawn), true);
+	}
+
+	Json OverlayRect(const NetModerationGUI::OverlayRect& rect) {
+		return Rect(rect.x, rect.y, rect.width, rect.height, rect.visible);
+	}
+
 	Json Observe() {
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 		Json observed = {{"at_ms", NowMs()}, {"render", probe.renders}, {"sim_frame", g_TimerMan.GetSimUpdateCount()},
@@ -135,8 +174,14 @@ namespace {
 			    {"resident", scene && scene->GetResidentBrain(player) != nullptr},
 			    {"submitted", game->HasSubmittedLockstepPlacement(player)}, {"mode", game->SetupEditorMode(player)},
 			    {"gesture", GameActivity::SetupEditorGestureStatus(player)},
-			    {"screen_text", g_FrameMan.GetScreenText(game->ScreenOfPlayer(player))}});
+			    {"screen_text", g_FrameMan.GetScreenText(game->ScreenOfPlayer(player))},
+			    {"picker", PickerRect(game->ScreenOfPlayer(player))},
+			    {"screen_text_rect", ScreenTextRect(game->ScreenOfPlayer(player))}});
 		}
+		// What the network overlay drew this frame, so a script can require it to stay off the editor's own UI.
+		const NetModerationGUI* panel = g_MenuMan.GetNetworkPanel();
+		observed["net_ui"] = {{"status", panel ? OverlayRect(panel->GetStatusRect()) : Rect(0, 0, 0, 0, false)},
+		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)}};
 		return observed;
 	}
 
@@ -215,7 +260,8 @@ namespace {
 			const std::string command = step.at("command");
 			return command.starts_with("assert_") || command.starts_with("dump_") ? Phase::Draw : Phase::Poll;
 		}
-		if (op == "assert" || op == "assert_control" || op == "assert_editor" || op == "screenshot" || op == "finish") return Phase::Draw;
+		if (op == "assert" || op == "assert_control" || op == "assert_editor" || op == "assert_net_ui_clear" ||
+		    op == "screenshot" || op == "finish") return Phase::Draw;
 		if ((op == "key_down" || op == "key_up") && SimRateKey(step.value("key", ""))) return Phase::Sim;
 		return Phase::Poll;
 	}
@@ -232,8 +278,14 @@ namespace {
 		if (op == "wait") {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("renders") ||
 			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
-			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains"), "wait has no predicate");
+			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
+			    step.contains("picker_open"), "wait has no predicate");
 			if (step.contains("screen") && observed["screen"] != step["screen"]) return false;
+			if (step.contains("picker_open")) {
+				const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+				    [&](const Json& row) { return row.at("player") == step.value("player", 0); });
+				if (seat == observed["editor_seats"].end() || seat->at("picker").at("visible") != step["picker_open"]) return false;
+			}
 			if (step.contains("seat_text_contains")) {
 				// A seat's screen carries both its editor's line and its activity's, so wait for the one asked for.
 				const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
@@ -379,6 +431,22 @@ namespace {
 			if (step.contains("screen_text_contains")) {
 				Require(seat->at("screen_text").get<std::string>().find(step["screen_text_contains"].get<std::string>()) != std::string::npos,
 				    "the seat's screen does not carry the expected message");
+			}
+		} else if (op == "assert_net_ui_clear") {
+			// The network overlay owes the stock setup editor its own surfaces: the picker and the seat's message band.
+			const int player = step.value("player", 0);
+			const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+			    [player](const Json& row) { return row.at("player") == player; });
+			Require(seat != observed["editor_seats"].end(), "seat " + std::to_string(player) + " is not a local editor seat");
+			Require(observed["editing"] == true, "the activity is not in the setup editor");
+			Require(observed["net_ui"]["status"].at("visible") == true, "the network status widget is not on screen");
+			if (step.value("picker_open", false)) Require(seat->at("picker").at("visible") == true, "the editor's object picker is not open");
+			if (step.value("screen_text", false)) Require(seat->at("screen_text_rect").at("visible") == true, "the seat's screen carries no editor message");
+			for (const std::string& element: {"status", "toasts"}) {
+				for (const std::string& area: {"picker", "screen_text_rect"}) {
+					Require(!Overlaps(observed["net_ui"].at(element), seat->at(area)),
+					    "the network " + element + " overlaps the editor's " + area);
+				}
 			}
 		} else if (op == "screenshot") {
 			const std::string name = step.at("name").get<std::string>();

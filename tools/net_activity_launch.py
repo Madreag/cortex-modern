@@ -182,21 +182,27 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
     """The UI probe script that drives this peer's own seat through the setup editor, the way a player does."""
     seat = EDITOR_SEATS[peer]
     player = seat["player"]
-    steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "editing": True}]
+    # The stock picker slides in with the editor, and the seat's own message band rides the top rows: the
+    # network overlay has to be clear of both. The renders wait is past the picker's slide at any speed.
+    steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "editing": True},
+             {"op": "wait", "player": player, "picker_open": True}, {"op": "wait", "renders": 12},
+             {"op": "assert_net_ui_clear", "player": player, "picker_open": True, "screen_text": True}]
     if capture:
         steps += shots(peer, "editor_open")
-    if wire_refusal and peer == "host":
-        # A placement every peer has to refuse: the preset is not installed anywhere.
-        steps += [{"op": "place_brain_command", "player": player, "preset": REFUSED_PRESET, "class": "Actor", "module": "Base.rte"},
-                  {"op": "wait", "renders": 30},
-                  {"op": "assert_editor", "player": player, "equals": {"ready": False, "submitted": False}}]
-        if capture:
-            steps += shots(peer, "wire_refusal")
+    if wire_refusal:
+        if peer == "host":
+            # A placement every peer has to refuse: the preset is not installed anywhere.
+            steps += [{"op": "place_brain_command", "player": player, "preset": REFUSED_PRESET, "class": "Actor", "module": "Base.rte"},
+                      {"op": "wait", "renders": 30},
+                      {"op": "assert_editor", "player": player, "equals": {"ready": False, "submitted": False}}]
+        # Both peers shoot the same held tick, inside the sender's 3.5 s banner: the banner is the sender's alone.
+        steps += [{"op": "wait", "sim_at_least": 30}] + shots(peer, "wire_refusal")
     # DONE before a brain is placed: refused, so the seat stays unready, commits nothing and is sent back
     # to place a brain.
     steps += [{"op": "editor_done", "player": player},
               {"op": "assert_editor", "player": player, "name": "done_refusal",
-               "equals": {"ready": False, "submitted": False, "resident": False}}]
+               "equals": {"ready": False, "submitted": False, "resident": False}},
+              {"op": "assert_net_ui_clear", "player": player, "screen_text": True}]
     if capture:
         steps += shots(peer, "refusal")
     if place_after:
@@ -430,7 +436,7 @@ def launch(options):
             checks["placement_toasts"] = all(sum(1 for toast in result["toasts"][peer] if toast.get("kind") == "brain_placed") == 2 for peer in runs)
             waits = [step for step in result["probes"]["host"].get("steps", []) if step.get("op") == "assert_control"]
             checks["waiting_banner_shown"] = any(wait_banner(resolution) in json.dumps(step["observed"].get("control", {})) for step in waits)
-            if captures:
+            if captures or options.variant == "wire-refusal":
                 result["captures"] = sorted([str(path) for peer in runs for path in (root / (peer + "-ui")).glob("*.png")] +
                                             [str(path) for peer in runs for path in (root / peer / "runtime" / "ScreenShots").glob("*.png")])
             if options.variant == "wire-refusal":

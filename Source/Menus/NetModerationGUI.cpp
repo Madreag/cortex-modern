@@ -385,6 +385,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		m_NetStatus->Move(x + 7, y + 4);
 		m_NetStatus->Resize(width - 14, height - 6);
 		m_NetStatus->SetText(m_StripText);
+		m_StatusRect = {x, y, width, height, true};
 		AllegroBitmap bitmap(backbuffer);
 		rectfill(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(20, 22, 27, 255));
 		rect(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(59, 65, 83, 255));
@@ -429,6 +430,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	if (m_NetStatusBox->GetWidth() != width || m_NetStatusBox->GetHeight() != height) m_NetStatusBox->Resize(width, height);
 	m_NetStatus->Move(x + 6, y + 6);
 	m_NetStatus->Resize(width - 12, height - 12);
+	m_StatusRect = {x, y, width, height, true};
 	AllegroBitmap bitmap(backbuffer);
 	rectfill(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(20, 22, 27, 255));
 	rect(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(59, 65, 83, 255));
@@ -437,6 +439,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 }
 
 void NetModerationGUI::DrawMatchToasts() {
+	m_ToastRect = {};
 	if (!ScenarioRunner::IsLockstepControllerSyncActive() && !g_NetMatchService.IsMatchResyncing()) {
 		for (GUILabel* label: m_Toasts) {
 			if (label) {
@@ -456,6 +459,9 @@ void NetModerationGUI::DrawMatchToasts() {
 	const int width = std::min(520, backbuffer->w - 32);
 	const int x = (backbuffer->w - width) / 2;
 	const int top = backbuffer->h - 8 - static_cast<int>(visible.size()) * rowHeight;
+	if (!visible.empty()) {
+		m_ToastRect = {x, top, width, static_cast<int>(visible.size()) * rowHeight - 2, true};
+	}
 	AllegroBitmap bitmap(backbuffer);
 	for (size_t row = 0; row < m_Toasts.size(); ++row) {
 		GUILabel* label = m_Toasts[row];
@@ -475,6 +481,7 @@ void NetModerationGUI::DrawMatchToasts() {
 
 void NetModerationGUI::Draw() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+	m_StatusRect = {};
 	if (m_NetStatusBox) {
 		m_NetStatusBox->SetVisible(false);
 		m_NetStatus->SetVisible(false);
