@@ -603,6 +603,9 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
                 mask_seat("actor_links", seat, 1)
                 mask_seat("actor_links", seat, 2)
                 mask_seat("player_screen", seat)
+                # A seat's view state is its own peer's: SetViewState refuses a seat without local input
+                # (Activity.h:344) and it rides that peer's local player reference (NetGameCommand.h:289-294).
+                mask_seat("view_state", seat)
                 for key in ("death_timer", "message_timer"):
                     mask_seat(key, seat, "sim_start")
         if version in ("GameActivity1", "GameActivity3"):
