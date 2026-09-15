@@ -941,25 +941,29 @@ namespace RTE {
 		return NetActorOwnership::IsTeamCommandAuthority(s_LockstepCoordinator->GetConfig().matchConfig, static_cast<uint8_t>(team), senderPeerId);
 	}
 
-	bool ScenarioRunner::IsLockstepAIOrderAuthorized(uint8_t senderPeerId, const NetGameAIOrder& order) {
-		if (IsLockstepTeamCommandSender(order.team, senderPeerId)) {
+	bool ScenarioRunner::IsLockstepAIWriteAuthorized(uint8_t senderPeerId, int32_t team, int64_t actorUID, int64_t writerUID) {
+		if (IsLockstepTeamCommandSender(team, senderPeerId)) {
 			return true;
 		}
 		auto cpuControlledOf = [](int64_t uid) {
 			const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(uid)));
 			return !actor || !actor->IsPlayerControlled();
 		};
-		if (GetLockstepActorOwner(order.actorUID, order.team, cpuControlledOf(order.actorUID)) == senderPeerId) {
+		if (GetLockstepActorOwner(actorUID, team, cpuControlledOf(actorUID)) == senderPeerId) {
 			return true;
 		}
-		if (order.writerUID != 0) {
-			const Actor* writer = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order.writerUID)));
-			const int writerTeam = writer ? writer->GetTeam() : order.team;
-			if (writerTeam == order.team && GetLockstepActorOwner(order.writerUID, writerTeam, cpuControlledOf(order.writerUID)) == senderPeerId) {
+		if (writerUID != 0) {
+			const Actor* writer = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(writerUID)));
+			const int writerTeam = writer ? writer->GetTeam() : team;
+			if (writerTeam == team && GetLockstepActorOwner(writerUID, writerTeam, cpuControlledOf(writerUID)) == senderPeerId) {
 				return true;
 			}
 		}
 		return false;
+	}
+
+	bool ScenarioRunner::IsLockstepAIOrderAuthorized(uint8_t senderPeerId, const NetGameAIOrder& order) {
+		return IsLockstepAIWriteAuthorized(senderPeerId, order.team, order.actorUID, order.writerUID);
 	}
 
 	int ScenarioRunner::GetLockstepHumanSlotIndex(int team) {
@@ -1301,6 +1305,15 @@ namespace RTE {
 			const uint8_t sender = command.senderPeerId != 0 ? command.senderPeerId : GetLockstepLocalPeerId();
 			if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
 				if (!IsLockstepAIOrderAuthorized(sender, *order)) {
+					return;
+				}
+			} else if (const NetGameAIScriptMessage* message = std::get_if<NetGameAIScriptMessage>(&command.payload)) {
+				// The writer is the authority for a message its pass sent, exactly as for an AI order.
+				if (!IsLockstepAIWriteAuthorized(sender, message->team, message->writerUID, message->writerUID)) {
+					return;
+				}
+			} else if (const NetGameAIGib* gib = std::get_if<NetGameAIGib>(&command.payload)) {
+				if (!IsLockstepAIWriteAuthorized(sender, gib->team, gib->writerUID, gib->writerUID)) {
 					return;
 				}
 			} else if (!IsLockstepTeamCommandSender(NetGameCommandTeam(command.payload), sender)) {
