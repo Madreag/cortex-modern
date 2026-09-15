@@ -396,6 +396,10 @@ namespace RTE {
 			s_Args.renderWindowScriptsSelfTest = true;
 			return 1;
 		}
+		if (a == "-text-wrap-selftest") {
+			s_Args.textWrapSelfTest = true;
+			return 1;
+		}
 		if (a == "-net-match-e2e-rematch") {
 			// Arm the return-to-lobby rematch ride-through. Boolean flag.
 			s_Args.selftestRematch = true;
