@@ -15,8 +15,14 @@ from run_sim_test import make_run
 from test_telemetry_bundle import set_visual_resolution
 
 
-CASES = ("landing", "settings", "lobby", "pause", "live", "input", "input-parity", "disabled", "scope-off", "oracles")
+CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled", "scope-off", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
+OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
+PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc")
+# A combo box draws its selected item left of the drop-down button, so its text budget is narrower than its rect.
+COMBO_BUTTON = 17
+FIT_LINE = re.compile(r"assert_text_fits (\w+).*?rect=\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\].*?available=\[(-?\d+),(-?\d+)\]")
+WATCHED = ("ComboBrainlessHumansSpectate", "ComboMatchStatusWidget")
 ORDER = ("TextMultiplayerName", "ButtonMultiplayerHostGame", "ButtonMultiplayerJoinGame",
          "ButtonBackToMain", "ButtonSaveDiagnostics")
 RESET_INPUT = ("wait 40\nactivate ButtonMainToOptions\nwait 5\nassert_visible TabInputSettings 1\n"
@@ -59,6 +65,18 @@ def scripts(case, port, root):
             text += f"activate Tab{tab}Settings\nwait 3\nassert_visible CollectionBox{tab}Settings 1\n"
             text += checks(f"Tab{tab}Settings", "CollectionBoxSettingsBase") + "dump_player_options\n"
         text += "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n"
+    elif case == "pages":
+        # Every settings page reached by its own name, so a review sees the rows the options program adds.
+        text = OPTIONS
+        for page in PAGES:
+            text += f"select_settings_page {page}\nwait 3\nassert_settings_page {page}\n"
+            text += f"assert_visible CollectionBox{page}Settings 1\n"
+            text += checks(f"Tab{page}Settings", "CollectionBoxSettingsBase") + "dump_player_options\n"
+        text += "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n"
+    elif case == "combo-fit":
+        # Reached by the tab control so the measurement runs on a build that has no page op yet.
+        text = (OPTIONS + "activate TabVideoSettings\nwait 3\nassert_visible ComboPresetResolution 1\n"
+                "assert_text_fits ComboPresetResolution\ndump_player_options\nexit\n")
     elif case == "lobby":
         # The host starts the match, so its lobby hides the ready button the joining peers get.
         text = host_lobby(port) + "assert_visible ButtonMultiplayerReady 0\n"
@@ -68,6 +86,8 @@ def scripts(case, port, root):
         text = "wait 12\nassert_screen Pause\n" + checks("ButtonSettings", "PauseScreen")
         text += "dump_host_options\nactivate ButtonSettings\nwait 4\nassert_screen PauseSettings\n"
         text += checks("TabGameplaySettings", "CollectionBoxSettingsBase") + "dump_player_options\n"
+        # The pause twin of the page op: the same reach on the settings menu the pause screen owns.
+        text += "select_settings_page Misc\nwait 3\nassert_settings_page Misc\ndump_player_options\n"
         text += "post_command ButtonBackToMainMenu\nwait 4\nassert_screen Pause\ndump_host_options\nexit\n"
     elif case == "input":
         text = (RESET_INPUT + "activate ButtonMainToMultiplayer\nwait 5\n"
@@ -175,8 +195,8 @@ def run_case(options, case, root, failing=None):
     root.mkdir(parents=True, exist_ok=False)
     text, probe = scripts(case, options.port, root)
     if failing:
-        setup, assertion = failing
-        text = LANDING + setup + assertion + "\nexit\n"
+        prelude, setup, assertion = failing
+        text = prelude + setup + assertion + "\nexit\n"
     script = root / "menu.txt"
     script.write_text(text, encoding="utf-8")
     inputs = root / "input.txt"
@@ -247,6 +267,24 @@ def run_case(options, case, root, failing=None):
                 assert [c["name"] for c in first["controls"] if c["focus"]] == [c["name"] for c in last["controls"] if c["focus"]]
                 assert first["screen"] == last["screen"] == "MultiplayerScreen"
                 assert first["service"] == last["service"], (first["service"], last["service"])
+        if case == "pages":
+            assert [capture["settings_page"] for capture in images] == list(PAGES), [c["settings_page"] for c in images]
+            captioned = [control for capture in images for control in capture["controls"] if control["text"]]
+            assert captioned and all("text_fits" in control for control in captioned), "a caption carries no fit measurement"
+            # The rows the options program adds land on these pages; the arm measures them the run they appear.
+            result["watched"] = [[capture["settings_page"], control["name"], control["text_fits"], control["text_measure"]]
+                                 for capture in images for control in capture["controls"] if control["name"] in WATCHED]
+            assert all(row[2] for row in result["watched"]), result["watched"]
+            # Recorded, not asserted: the stock skin's own content box is what overflows, and it is not this detector's to change.
+            result["text_overflow"] = [[capture["settings_page"], control["name"], control["text_measure"]]
+                                       for capture in images for control in capture["controls"]
+                                       if control.get("text_fits") is False]
+        if case == "combo-fit":
+            result["combo_fit"] = [[match[0], [int(v) for v in match[1:5]], [int(v) for v in match[5:7]]]
+                                   for log in logs.values() for match in FIT_LINE.findall(log)]
+            assert result["combo_fit"], "no assert_text_fits observation in the log"
+            for name, rect, available in result["combo_fit"]:
+                assert available[0] <= rect[2] - COMBO_BUTTON, (name, rect, available)
         if case == "input":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == "ab"
         if case == "input-parity":
@@ -275,8 +313,8 @@ def main():
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("LEAD_FAMILY.lock exists; no engine launch")
-    if not 48270 <= options.port <= 48279:
-        parser.error("this lane owns ports 48270-48279")
+    if not (48270 <= options.port <= 48279 or 48380 <= options.port <= 48389):
+        parser.error("this detector owns ports 48270-48279 and 48380-48389")
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)
     options.revision = subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip()
@@ -284,10 +322,12 @@ def main():
     rows = []
     for case in CASES if options.case == "all" else (options.case,):
         if case == "oracles":
-            for name, command in {"visible": ("", "assert_visible ButtonMultiplayerHostGame 0"),
-                                  "focus": ("", "assert_focus ButtonMultiplayerJoinGame"),
-                                  "rect": ("", "assert_rect_inside ButtonMultiplayerHostGame ButtonMultiplayerJoinGame"),
-                                  "text": ("settext TextMultiplayerName " + "W" * 200 + "\n", "assert_text_fits TextMultiplayerName")}.items():
+            for name, command in {"visible": (LANDING, "", "assert_visible ButtonMultiplayerHostGame 0"),
+                                  "focus": (LANDING, "", "assert_focus ButtonMultiplayerJoinGame"),
+                                  "rect": (LANDING, "", "assert_rect_inside ButtonMultiplayerHostGame ButtonMultiplayerJoinGame"),
+                                  "text": (LANDING, "settext TextMultiplayerName " + "W" * 200 + "\n", "assert_text_fits TextMultiplayerName"),
+                                  "page": (OPTIONS, "select_settings_page Misc\nwait 3\n", "assert_settings_page Gameplay"),
+                                  "page-name": (OPTIONS, "", "select_settings_page Nowhere")}.items():
                 rows.append(run_case(options, "landing", options.out / f"oracle-{name}" / options.size, command))
         else:
             rows.append(run_case(options, case, options.out / case / options.size))
