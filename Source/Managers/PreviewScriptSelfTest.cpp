@@ -427,35 +427,42 @@ local util = jit and require('jit.util')
 if not (jit and jit.status() and util) then
   return
 end
+jit.opt.start('hotloop=2')
 local starts, aborts, lastTr, lastWhy = 0, 0, 0, ''
 local function ev(what, tr, func, pc, err)
   if what == 'start' then starts = starts + 1; lastTr = tr
   elseif what == 'abort' then aborts = aborts + 1; lastTr = tr; lastWhy = tostring(err)
   end
 end
-jit.flush()
-jit.attach(ev, 'trace')
-local function body(n, failAt)
-  local t = {}
-  for i = 1, n do
-    t[i % 16 + 1] = i
-    if failAt and i >= failAt then error('f91-abort') end
-  end
-end
-for _ = 1, 40 do pcall(body, 256, 80) end
-local info = lastTr > 0 and util.traceinfo(lastTr) or nil
 local after = 0
 local function ev2(what)
   if what == 'start' then after = after + 1 end
 end
-jit.attach(ev)
-jit.attach(ev2, 'trace')
-pcall(body, 256, 80)
-pcall(body, 256, 80)
-jit.attach(ev2)
-assert(aborts > 0 and lastWhy ~= '', 'no TRACE abort event aborts='..tostring(aborts)..' why='..tostring(lastWhy))
-assert(info == nil, 'trace slot still live tr='..tostring(lastTr))
-assert(after == 0, 'loop still starting after repeats after='..tostring(after)..' starts='..tostring(starts))
+local function body()
+  local x = 1
+  x = x + 2
+  x = x + 3
+  error('f91-abort')
+end
+local ok, err = pcall(function()
+  jit.flush()
+  jit.attach(ev, 'trace')
+  for _ = 1, 64 do pcall(body) end
+  local info = lastTr > 0 and util.traceinfo(lastTr) or nil
+  jit.attach(ev)
+  jit.attach(ev2, 'trace')
+  pcall(body)
+  pcall(body)
+  jit.attach(ev2)
+  assert(aborts > 0 and lastWhy ~= '', 'no TRACE abort event aborts='..tostring(aborts)..' why='..tostring(lastWhy)..' starts='..tostring(starts))
+  assert(info == nil, 'trace slot still live tr='..tostring(lastTr))
+  assert(after == 0, 'bytecode still starting after repeats after='..tostring(after)..' starts='..tostring(starts))
+end)
+pcall(function() jit.attach(ev) end)
+pcall(function() jit.attach(ev2) end)
+pcall(function() jit.opt.start('hotloop=56') end)
+pcall(jit.flush)
+if not ok then error(err) end
 )lua";
 		for (int index = 0; index < static_cast<int>(states.size()); ++index) {
 			const int status = states[index]->RunScriptString(probe, false);
