@@ -33,12 +33,19 @@ INDEX = (
 PROBE = re.compile(r"\[lzprobe\] simms=(\d+) drop=(\w+) x=(-?[\d.]+)")
 
 
-def stage_user_module(runtime: Path) -> None:
-    """The arm's preset and its activity script, staged beside the private runtime."""
-    module = Path(runtime) / "Userdata/UserScenes.rte"
+def write_module(module: Path, arm_trace: bool) -> Path:
+    """The arm's preset, its activity script and its options, as a Userdata module directory."""
     module.mkdir(parents=True, exist_ok=True)
     (module / "Index.ini").write_text(INDEX, encoding="utf-8")
     (module / "StockSkirmish.lua").write_bytes(FIXTURE.read_bytes())
+    (module / "StockSkirmishOptions.lua").write_text(
+        "return { armTrace = " + ("true" if arm_trace else "false") + " }\n", encoding="utf-8")
+    return module
+
+
+def stage_user_module(runtime: Path) -> None:
+    """The arm's module, staged beside the private runtime of a single-process run."""
+    write_module(Path(runtime) / "Userdata/UserScenes.rte", True)
 
 
 def log_text(out: Path) -> str:
@@ -73,7 +80,9 @@ def run_one(repo: Path, out: Path, size, ticks: int, seed: int, timeout: float, 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=REPO)
-    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--out", type=Path)
+    parser.add_argument("--emit-module", type=Path,
+                        help="write the arm's Userdata module here for a two-peer run and exit")
     parser.add_argument("--ticks", type=int, default=2700)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--a-size", default="960x540")
@@ -81,6 +90,12 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=1800)
     parser.add_argument("--sim-dump", action="store_true", help="keep per-object CC_SIM_DUMP rows for attribution")
     options = parser.parse_args()
+    if options.emit_module:
+        # A match peer takes the same preset and script with the trace arming off.
+        print(write_module(options.emit_module, False))
+        return 0
+    if not options.out:
+        parser.error("--out is required unless --emit-module is set")
 
     options.out.mkdir(parents=True, exist_ok=False)
     sizes = {"a": parse_size(options.a_size), "b": parse_size(options.b_size)}

@@ -9,6 +9,14 @@ local stockUpdate = StockSkirmish.UpdateActivity;
 
 local BRAIN_X = 880;
 
+-- The driver stages the arm's options beside this file. A match peer must not open a metrics run of
+-- its own: BeginRun re-reads the arming state and would switch off the recording the match armed.
+local options = {};
+local loadedOk, loaded = pcall(dofile, "UserScenes.rte/StockSkirmishOptions.lua");
+if loadedOk and type(loaded) == "table" then
+	options = loaded;
+end
+
 local function HumanTeam(activity, team)
 	for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
 		if activity:PlayerActive(player) and activity:PlayerHuman(player) and activity:GetTeamOfPlayer(player) == team then
@@ -62,8 +70,10 @@ function StockSkirmish:StartActivity(isNewGame)
 	self.probeTimer = Timer();
 	-- RecordTickHash is a no-op until a metrics run is open, and the trace is this arm's oracle.
 	-- The arm asserts nothing itself, so the run carries no verdict of its own: the comparer is it.
-	MetricsCollector:BeginRun("Stock Skirmish", 0);
-	MetricsCollector:SetResult(true);
+	if options.armTrace ~= false then
+		MetricsCollector:BeginRun("Stock Skirmish", 0);
+		MetricsCollector:SetResult(true);
+	end
 	stockStart(self, isNewGame);
 end
 
