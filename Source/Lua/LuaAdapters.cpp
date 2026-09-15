@@ -3,6 +3,7 @@
 #include "LuaAdapterDefinitions.h"
 #include "LuabindObjectWrapper.h"
 #include "LuaMan.h"
+#include "ScenarioRunner.h"
 
 #include "lj_obj.h"
 #include "NetGameCommand.h"
@@ -308,6 +309,14 @@ void LuaAdaptersScene::CalculatePathAsync(Scene* luaSelfObject, const luabind::o
 	const int thisCallbackId = LuaMan::AllocatePathCallback(context, luaState);
 	if (luabind::type(callback) == LUA_TFUNCTION && callback.is_valid()) {
 		luabind::call_function<void>(luaState, "_AddAsyncPathCallback", thisCallbackId, callback);
+	}
+
+	if (ScenarioRunner::IsLockstepControllerSyncActive() && g_CurrentAIActor == nullptr) {
+		const int64_t sharedId = LuaMan::RegisterSharedPathRequest(context, luaState, thisCallbackId, luaSelfObject, start, end, jumpHeight, digStrength, team);
+		if (ScenarioRunner::GetLockstepLocalPeerId() == ScenarioRunner::GetLockstepHostPeerId()) {
+			LuaMan::StartSharedPathComputation(context, sharedId);
+		}
+		return;
 	}
 
 	LuaMan::StartPathCallback(context, luaState, thisCallbackId, luaSelfObject, start, end, jumpHeight, digStrength, team);

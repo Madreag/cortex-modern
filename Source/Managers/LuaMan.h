@@ -8,6 +8,7 @@
 #include "BS_thread_pool.hpp"
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -24,6 +25,7 @@ namespace RTE {
 	class Scene;
 	struct PathRequest;
 	struct LuaPathCallbackContext;
+	struct NetGameScriptPath;
 
 	/// A single lua state. Multiple of these can exist at once for multithreaded scripting.
 	class LuaStateWrapper {
@@ -510,6 +512,18 @@ namespace RTE {
 
 		/// Queues an immutable path result for delivery on the main thread.
 		static void CompletePathCallback(const std::shared_ptr<LuaPathCallbackContext>& context, lua_State* state, int id, const PathRequest& result);
+
+		/// Allocates a shared-script path id that every peer assigns in the same order.
+		static int64_t RegisterSharedPathRequest(const std::shared_ptr<LuaPathCallbackContext>& context, lua_State* state, int localId, Scene* scene, const Vector& start, const Vector& end, float jumpHeight, float digStrength, int team);
+
+		/// Starts the host's local computation for a shared path request.
+		static void StartSharedPathComputation(const std::shared_ptr<LuaPathCallbackContext>& context, int64_t sharedId);
+
+		/// Enqueues finished host path answers as lockstep commands.
+		void FlushSharedPathCommands();
+
+		/// Completes the Lua callback from a committed shared path answer.
+		void ApplySharedPathResult(const NetGameScriptPath& payload);
 
 		/// Starts a fresh callback queue, optionally releasing old Lua closures.
 		void ResetPathCallbacks(bool clearLua = false);
