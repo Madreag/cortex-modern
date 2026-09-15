@@ -552,7 +552,9 @@ def inspect_pair(root, records, size, arm, mode, name):
         record = records.get(who, {})
         log = read_log(root / who)
         if leaving and who == "Guest":
-            checks[f"{who}_exit"] = record.get("exit_code") not in (0, None) or record.get("injected_termination") is not None
+            # Only the driver's own kill proves the scripted drop; a self-crash exits nonzero too.
+            checks[f"{who}_exit"] = (record.get("injected_termination") is not None
+                                     and record.get("exit_code") not in (0, None))
         elif leaving:
             # The dropped peer never comes back, so the host ends on the lost link instead of its tick budget.
             checks[f"{who}_exit"] = not record.get("timed_out", True) and "lockstep wait: PeerLeft" in log
@@ -595,7 +597,10 @@ def inspect_pair(root, records, size, arm, mode, name):
             checks[f"{who}_pace_field"] = bool(status_texts) and all(re.search(r"PACE \d+(?:\.\d+)? tps", text) for text in status_texts)
             running = [text for text in status_texts if not re.search(r"waiting for", text, re.I)]
             # An arm that read no status text at all passed both pace checks vacuously, so the guard stays.
-            checks[f"{who}_measured_pace"] = bool(status_texts) and all(re.search(r"PACE (?:[1-9]\d*(?:\.\d+)?|0\.[1-9]\d*) tps", text) for text in running)
+            # A stalled or held Host has no peer left to pace against, so only it may read waiting-for alone.
+            held = who == "Host" and bool(arm.get("stall") or arm.get("leave"))
+            checks[f"{who}_measured_pace"] = bool(status_texts) and (bool(running) or held) and all(
+                re.search(r"PACE (?:[1-9]\d*(?:\.\d+)?|0\.[1-9]\d*) tps", text) for text in running)
         capture_lines = [(int(match[1]), match[2], match[3] == "1") for line in log.splitlines()
                          if (match := CAPTURE.match(line))]
         shots = sorted((root / who / "runtime" / "ScreenShots").glob("net_match_tick_*.png"))
