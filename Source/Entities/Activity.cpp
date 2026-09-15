@@ -1580,20 +1580,24 @@ void Activity::RefreshCheckpointActorIDs() {
 }
 
 std::string Activity::SaveCheckpoint() const {
-	CheckpointWriter writer("Activity3");
+	CheckpointWriter writer("Activity4");
 	VisitCheckpoint(writer, *this);
 	std::array<std::array<long, 3>, Players::MaxPlayerCount> links{};
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) links[player] = m_HasCheckpointActorIDs ? m_CheckpointActorIDs[player] : SlotActorIDs(player);
-	writer(links, Icon::SaveCheckpointSet(m_TeamIcons));
+	writer(links, m_LockstepControlUID, Icon::SaveCheckpointSet(m_TeamIcons));
 	return writer.Text();
 }
 
 bool Activity::LoadCheckpoint(std::string_view text, bool validateOnly) {
 	try {
 		const bool legacy = text.starts_with("9 Activity1 ");
-		CheckpointReader reader(text, legacy ? "Activity1" : "Activity3", validateOnly);
+		// A seat's control binding travels with the checkpoint, so a peer that heals from another's snapshot
+		// answers the actor the others answer; one written before it keeps this machine's binding as it stands.
+		const bool carriesBinding = text.starts_with("9 Activity4 ");
+		CheckpointReader reader(text, legacy ? "Activity1" : (carriesBinding ? "Activity4" : "Activity3"), validateOnly);
 		VisitCheckpoint(reader, *this);
 		reader(m_CheckpointActorIDs);
+		if (carriesBinding) reader(m_LockstepControlUID);
 		if (!legacy) {
 			std::string icons;
 			reader.Value(icons);

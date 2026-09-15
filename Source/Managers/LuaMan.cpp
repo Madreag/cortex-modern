@@ -5508,7 +5508,9 @@ _PrimitiveQueueCapture = nil
 				const std::string iconSet = Icon::SaveCheckpointSet({target.GetTeamIcon(0), Activity::Teams::MaxTeamCount});
 				const std::string suffix = std::to_string(iconSet.size()) + " " + iconSet + " ";
 				std::string old = activityCheckpoint.substr(0, activityCheckpoint.size() - suffix.size());
-				old.replace(0, std::string("9 Activity3 ").size(), "9 Activity1 ");
+				// Activity1 ended at the actor links; drop the per-seat control binding the newer tags carry.
+				for (int seat = 0; seat < Players::MaxPlayerCount; ++seat) old.resize(old.find_last_of(' ', old.size() - 2) + 1);
+				old.replace(0, std::string("9 Activity4 ").size(), "9 Activity1 ");
 				target.SetDifficulty(33);
 				const std::string before = target.SaveCheckpoint();
 				legacy = target.Activity::LoadCheckpoint(old, true) && target.SaveCheckpoint() == before &&

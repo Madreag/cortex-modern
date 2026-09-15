@@ -9,7 +9,7 @@ else:
     import compare_snapshots as checker
 
 runtime = checker.snapshot_runtime
-VERSIONS = ("Activity1", "Activity2", "Activity3")
+VERSIONS = ("Activity1", "Activity2", "Activity3", "Activity4")
 LOCAL_INVENTORY = ("values", "player_ui", 0, "inventory")
 
 
@@ -26,7 +26,9 @@ def activity_record(version, brain=100, controlled=10):
     if version == "Activity2":
         icon = sized(b"Icon1") + sized(b"") * 2 + b"0 " * 4
         body += sized(icon) * 4
-    elif version == "Activity3":
+    elif version in ("Activity3", "Activity4"):
+        if version == "Activity4":
+            body += b"0 " * 4
         icon = sized(b"IconValues1") + sized(b"") * 2 + b"0 " * 3
         body += sized(sized(b"IconSet1") + b"0 4 " + sized(icon) * 4)
     return sized(version.encode()) + body
@@ -118,7 +120,7 @@ class SnapshotInventoryRoleTests(unittest.TestCase):
                     self.roles(version, 999)
 
     def test_unsupported_versions_are_not_projected(self):
-        for version in ("Activity", "Activity0", "Activity4", "Activity31", "Unknown1"):
+        for version in ("Activity", "Activity0", "Activity5", "Activity31", "Unknown1"):
             state = dict(version=version, actor_links=[[100, 10, 900], [0, 0, 0], [0, 0, 0], [0, 0, 0]])
             with self.subTest(version=version):
                 self.assertEqual(checker.inventory_reference_roles(world(), state), {})
