@@ -1563,7 +1563,9 @@ static std::string ResyncSaveName() {
 			std::string recordError;
 			(void)ScenarioRunner::BeginLockstepReplayRecord(m_Runner->GetMatchConfig(), &recordError);
 		}
-		outActivityPreset = m_ActivityPreset;
+		// The launch names the adopted activity: a joining peer's own request carries only its local default.
+		const std::string& adopted = m_Runner ? m_Runner->GetMatchConfig().activityPreset : m_ActivityPreset;
+		outActivityPreset = adopted.empty() ? m_ActivityPreset : adopted;
 		m_MatchWasRunning = true;
 		if (!m_PendingResyncState.has_value()) {
 			ResetRosterTransitionHistory();
