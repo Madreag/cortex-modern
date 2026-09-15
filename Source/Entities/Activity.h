@@ -619,7 +619,7 @@ namespace RTE {
 		/// @param player The seat the frame named, or NoPlayer.
 		void NoteLockstepControlBinding(int64_t uid, int player);
 
-		/// Points the per-player controlled-actor and brain slots at a render substitute (and back); presentation only.
+		/// Points the per-player controlled-actor, brain, and binding-answer slots at a render substitute (and back); presentation only.
 		void SubstituteActorForRender(Actor* original, Actor* substitute) {
 			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 				if (m_ControlledActor[player] == original) {
@@ -627,6 +627,11 @@ namespace RTE {
 				}
 				if (m_Brain[player] == original) {
 					m_Brain[player] = substitute;
+				}
+				if (m_RenderSubstituteActor[player] == original) {
+					m_RenderSubstituteActor[player] = nullptr;
+				} else if (ResolveNetActor(m_LockstepControlUID[player]) == original) {
+					m_RenderSubstituteActor[player] = substitute;
 				}
 			}
 		}
@@ -766,6 +771,7 @@ namespace RTE {
 		bool m_BrainEvacuated[Players::MaxPlayerCount]; //!< Whether a player has evacuated his Brain into orbit.
 
 		Actor* m_ControlledActor[Players::MaxPlayerCount]; //!< Currently controlled actor, not owned.
+		Actor* m_RenderSubstituteActor[Players::MaxPlayerCount]{}; //!< Preview clone answered by GetControlledActor during a render window only; not owned.
 		std::array<int64_t, Players::MaxPlayerCount> m_LockstepControlUID{}; //!< Which actor the wire says each seat plays; the same on every peer.
 		Controller m_PlayerController[Players::MaxPlayerCount]; //!< The Controllers of all the players for the GUIs.
 
