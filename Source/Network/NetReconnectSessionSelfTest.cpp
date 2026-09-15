@@ -1678,8 +1678,8 @@ namespace RTE {
 		};
 
 		// The ledger records who HELD a seat's units at the drop. The round renames a leaver's units the
-		// moment it adjudicates the leave - to a surviving teammate, or to the relay host while the seat
-		// is held - so a census taken after that names anyone but the leaver, and a ledger filtered on the
+		// moment it adjudicates the leave - to a surviving teammate, or to the relay host while the round
+		// runs - so a census taken after that names anyone but the leaver, and a ledger filtered on the
 		// leaver's id comes back empty. An empty record makes IssueReseat return before it issues, which
 		// is a returner reseated onto nothing.
 		int TestLedgerRecordsWhatTheLeaverHeld() {
@@ -1701,8 +1701,8 @@ namespace RTE {
 			    // Co-op shape: peers 2 and 3 share team 1, so the leave hands peer 2's units to peer 3 and
 			    // they must hand back per the ledger.
 			    {"survivor", 42180, {{1, 0, false, "Host"}, {2, 1, false, "A"}, {3, 1, false, "B"}}, 3, 103, {101, 102}},
-			    // The 1v1 shape the H4 gates run: nobody is left on team 1, so A6's fallback answers.
-			    {"no-survivor", 42184, {{1, 0, false, "Host"}, {2, 1, false, "A"}, {3, 2, false, "B"}}, 0, 0, {101, 102, 103}},
+			    // The 1v1 shape the H4 gates run: nobody is left on team 1, so the relay host plays its units.
+			    {"no-survivor", 42184, {{1, 0, false, "Host"}, {2, 1, false, "A"}, {3, 2, false, "B"}}, 1, 0, {101, 102, 103}},
 			};
 
 			for (const Arm& arm: arms) {
@@ -1724,6 +1724,13 @@ namespace RTE {
 				// The rename is the whole point: without it the census would still name the leaver.
 				if (round.host.ResolveActorOwner(101, 1, false) != arm.renamedOwner) {
 					return fail("the leave did not rename the dropped peer's units");
+				}
+				if (round.host.ResolveActorOwner(101, 1, false) == 2) {
+					return fail("the leave left the departed peer owning its own units");
+				}
+				// And the units it renamed are played, not stood down: the round is still running.
+				if (round.host.IsActorOwnerGone(101, 1, false, round.host.GetPeerLeaveFrames().at(2))) {
+					return fail("the departed peer's units stood down while the round ran");
 				}
 
 				uint64_t unixNow = 1'700'000'000'000ULL;
