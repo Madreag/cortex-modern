@@ -4882,6 +4882,8 @@ void LuaStateWrapper::Initialize() {
 	LoadScriptGraphHelper();
 	CaptureScriptGraphBaseline();
 
+	LuabindObjectWrapper::InstallSimThreadDeletion(m_State);
+
 	if (g_SettingsMan.EnableLuaDebugging()) {
 		luaL_dostring(m_State, "require(\"mobdebug\").coro(); require(\"mobdebug\").start();");
 	}
@@ -4962,6 +4964,8 @@ bool LuaMan::IsDeterministicCollection() {
 }
 
 void LuaMan::Initialize() {
+	// Every Lua-owned engine object's destructor belongs to this thread; the pool threads only collect.
+	LuabindObjectWrapper::SetSimThread();
 	m_MasterScriptState.Initialize();
 
 	int luaStateCount = std::thread::hardware_concurrency();
@@ -5117,6 +5121,52 @@ static bool RunTickEndCollectionSelfTest() {
 	return fullPass && incrementalPass;
 }
 
+static bool RunGarbageCollectionThreadSelfTest() {
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.size() < 2) {
+		std::cout << "[script-graph-selftest] FAIL lua_owned_entities_are_destructed_on_the_sim_thread states=" << states.size() << " two are needed to collect in parallel" << std::endl;
+		return false;
+	}
+	const long counter = MovableObject::GetUniqueIDCounter();
+	const bool previousMode = LuaMan::IsDeterministicCollection();
+	LuaMan::SetDeterministicCollection(true);
+	g_LuaMan.CollectGarbageForCheckpoint();
+
+	// Two states drop entities whose destructors reach MovableMan and AudioMan, so one parallel pass finalizes both at once.
+	constexpr int c_DropsPerState = 64;
+	std::array<long, 2> uids = {0, 0};
+	for (int index = 0; index < 2; ++index) {
+		LuaStateWrapper& state = states[index];
+		state.RunScriptString("_GCThreadDrop = {}; for i = 1, " + std::to_string(c_DropsPerState) + " do _GCThreadDrop[#_GCThreadDrop + 1] = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\"); _GCThreadDrop[#_GCThreadDrop + 1] = CreateSoundContainer(\"Funds Changed\", \"Base.rte\"); end; _GCThreadUID = _GCThreadDrop[1].UniqueID");
+		{
+			std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
+			lua_getglobal(state.GetLuaState(), "_GCThreadUID");
+			uids[index] = static_cast<long>(lua_tonumber(state.GetLuaState(), -1));
+			lua_pop(state.GetLuaState(), 1);
+		}
+	}
+	const uint64_t offSimThreadBefore = LuabindObjectWrapper::OffSimThreadDeletionCount();
+	const uint64_t simThreadBefore = LuabindObjectWrapper::SimThreadDeletionCount();
+	for (int index = 0; index < 2; ++index) {
+		states[index].RunScriptString("_GCThreadDrop = nil; _GCThreadUID = nil");
+	}
+	g_LuaMan.StartAsyncGarbageCollection();
+	g_LuaMan.WaitForAsyncGarbageCollection();
+
+	const uint64_t offSimThread = LuabindObjectWrapper::OffSimThreadDeletionCount() - offSimThreadBefore;
+	const uint64_t simThread = LuabindObjectWrapper::SimThreadDeletionCount() - simThreadBefore;
+	const bool bothGone = uids[0] > 0 && uids[1] > 0 && !g_MovableMan.FindObjectByUniqueID(uids[0]) && !g_MovableMan.FindObjectByUniqueID(uids[1]);
+	LuaMan::SetDeterministicCollection(previousMode);
+	g_LuaMan.CollectGarbageForCheckpoint();
+	MovableObject::PinUniqueIDCounter(counter);
+
+	const bool collected = offSimThread + simThread >= static_cast<uint64_t>(2 * c_DropsPerState) && bothGone;
+	const bool onSimThread = offSimThread == 0;
+	std::cout << "[script-graph-selftest] " << (collected ? "PASS" : "FAIL") << " two_states_drop_lua_owned_entities_in_one_parallel_pass states=" << states.size() << " destructed=" << (offSimThread + simThread) << " dropped_uids_gone=" << (bothGone ? "yes" : "no") << std::endl;
+	std::cout << "[script-graph-selftest] " << (onSimThread ? "PASS" : "FAIL") << " lua_owned_entities_are_destructed_on_the_sim_thread off_sim_thread=" << offSimThread << " sim_thread=" << simThread << std::endl;
+	return collected && onSimThread;
+}
+
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
 	const int id = AllocatePathCallback(m_PathCallbacks, state);
@@ -5134,6 +5184,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	std::cout << "[script-graph-selftest] " << (purgePreserved ? "PASS" : "FAIL") << " native_path_callback_survives_purge" << std::endl;
 	const bool threadedWrites = RunThreadedScriptWriteHashSelfTest();
 	const bool tickEndCollection = RunTickEndCollectionSelfTest();
+	const bool collectionThread = RunGarbageCollectionThreadSelfTest();
 	LuaStatesArray setAside;
 	setAside.swap(m_ScriptStates);
 	LuaStateWrapper* emptyPick = GetAndLockFreeScriptState();
@@ -5141,7 +5192,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	emptyPick->GetMutex().unlock();
 	m_ScriptStates.swap(setAside);
 	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && tickEndCollection && emptySetPicksMaster;
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && tickEndCollection && collectionThread && emptySetPicksMaster;
 }
 
 bool LuaStateWrapper::RunScriptGraphSelfTest() {

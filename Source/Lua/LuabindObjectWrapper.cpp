@@ -2,12 +2,58 @@
 
 #include "LuabindObjectWrapper.h"
 #include "luabind/object.hpp"
+#include "luabind/detail/class_registry.hpp"
+#include "luabind/detail/object_rep.hpp"
+#include "luabind/detail/ref.hpp"
 
 #include "LuaBindingRegisterDefinitions.h"
 
 #include "SoundSet.h"
 
+#include <atomic>
+
 using namespace RTE;
+
+namespace {
+	// True only on the thread that owns LuaMan; a Lua-owned engine object may only be destructed there.
+	thread_local bool s_OnSimThread = false;
+
+	std::atomic<uint64_t> s_SimThreadDeletions{0};
+	std::atomic<uint64_t> s_OffSimThreadDeletions{0};
+
+	// __gc for every luabind instance metatable: records which thread a Lua-owned engine object's destructor runs on.
+	int SimThreadGarbageCollector(lua_State* luaState) {
+		luabind::detail::object_rep* object = static_cast<luabind::detail::object_rep*>(lua_touserdata(luaState, -1));
+		if (object && (object->flags() & luabind::detail::object_rep::owner)) {
+			++(s_OnSimThread ? s_SimThreadDeletions : s_OffSimThreadDeletions);
+		}
+		return luabind::detail::object_rep::garbage_collector(luaState);
+	}
+} // namespace
+
+void LuabindObjectWrapper::SetSimThread() {
+	s_OnSimThread = true;
+}
+
+void LuabindObjectWrapper::InstallSimThreadDeletion(lua_State* luaState) {
+	luabind::detail::class_registry* registry = luabind::detail::class_registry::get_registry(luaState);
+	const int instanceMetatables[] = {registry->cpp_instance(), registry->lua_instance()};
+	for (int metatable: instanceMetatables) {
+		luabind::detail::getref(luaState, metatable);
+		lua_pushstring(luaState, "__gc");
+		lua_pushcclosure(luaState, &SimThreadGarbageCollector, 0);
+		lua_rawset(luaState, -3);
+		lua_pop(luaState, 1);
+	}
+}
+
+uint64_t LuabindObjectWrapper::SimThreadDeletionCount() {
+	return s_SimThreadDeletions.load();
+}
+
+uint64_t LuabindObjectWrapper::OffSimThreadDeletionCount() {
+	return s_OffSimThreadDeletions.load();
+}
 
 // With multithreaded Lua, objects can be destructed from multiple threads at once
 // This is okay, but LuaBind wants to do some management on the lua state when one of it's objects is deleted
