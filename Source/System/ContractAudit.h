@@ -536,6 +536,7 @@ Field(path + ".Actor.m_PendingDeferredWaypoints", object.m_PendingDeferredWaypoi
 Field(path + ".Actor.m_InflightWaypoints", object.m_InflightWaypoints);
 Field(path + ".Actor.m_LastOrderedWaypoint", object.m_LastOrderedWaypoint);
 Field(path + ".Actor.m_HasOrderedWaypoint", object.m_HasOrderedWaypoint);
+Field(path + ".Actor.m_LastOrderedWaypointUID", object.m_LastOrderedWaypointUID);
 Field(path + ".Actor.m_WaypointCursor", object.m_WaypointCursor);
 Field(path + ".Actor.m_DrawWaypoints", object.m_DrawWaypoints);
 Field(path + ".Actor.m_MoveTarget", object.m_MoveTarget);

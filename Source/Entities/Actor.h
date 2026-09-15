@@ -1248,6 +1248,8 @@ namespace RTE {
 		// local pathfinder's own answer, so only the ordered point is a destination every peer agrees on.
 		Vector m_LastOrderedWaypoint;
 		bool m_HasOrderedWaypoint;
+		// The MO that order named, if it named one: a follower answers where its target is now.
+		int64_t m_LastOrderedWaypointUID;
 		// Under lockstep the owner's AI loads waypoints ahead of the drops it sent over the wire; this many front entries are already loaded.
 		int m_WaypointCursor;
 		// Whether to draw the waypoints or not in the HUD
