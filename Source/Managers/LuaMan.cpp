@@ -2463,6 +2463,32 @@ do
 	for i = 1, #expected do same = LuaMan:SelectRand(0, 1000000) == expected[i] and same end
 	check("native_vm_rng_rewound", same)
 end
+
+-- A required module an activity also holds by name: the graph names the module's members through
+-- package.loaded, so the restore has to put the module table back there before it places them.
+do
+	local Class = {}
+	Class.__index = Class
+	function Class:count() return #self.LZs end
+	local Module = setmetatable({ LZs = {}, Lookup = {} }, Class)
+	local member = Module.LZs
+	Module.read = function() return member end
+	package.loaded["_SelfTestLZModule"] = Module
+	_SelfTestModuleHolder = { LZmap = Module }
+	local capture, problems = _ScriptGraph.serialize({ ["module"] = { held = Module } })
+	check("module_capture", #problems == 0, table.concat(problems, " | "))
+	-- What the relaunch leaves behind: the module is gone from package.loaded and from its holder.
+	package.loaded["_SelfTestLZModule"] = nil
+	_SelfTestModuleHolder.LZmap = nil
+	local restored, errors = _ScriptGraph.deserialize(capture)
+	check("module_members_placed", #errors == 0, table.concat(errors, " | "))
+	local result = restored["module"] and restored["module"].held
+	check("module_anchored_in_package_loaded", result ~= nil and rawequal(package.loaded["_SelfTestLZModule"], result) and rawequal(_SelfTestModuleHolder.LZmap, result))
+	check("module_member_upvalue_alias", result ~= nil and rawequal(result.read(), result.LZs))
+	check("module_metatable_kept", result ~= nil and getmetatable(result) ~= nil and result:count() == 0)
+	package.loaded["_SelfTestLZModule"] = nil
+	_SelfTestModuleHolder = nil
+end
 _SelfTestShared, _SelfTestMod, _SelfTestKlass = nil, nil, nil
 _G["selftest.lua"] = nil
 return table.concat(results, "\n")
