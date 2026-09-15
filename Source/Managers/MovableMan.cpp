@@ -5374,6 +5374,13 @@ std::string MovableMan::SaveCheckpoint() const {
 	collect(m_Actors); collect(m_Items); collect(m_Particles);
 	collect(m_AddedActors); collect(m_AddedItems); collect(m_AddedParticles);
 	CollectOwnedMovableObjects(g_SceneMan.GetScene(), visited, carried);
+	const auto shared = [&visited, &carried](const Activity* activity) {
+		if (const auto* game = dynamic_cast<const GameActivity*>(activity)) {
+			game->VisitCheckpointSharedObjects([&visited, &carried](const Entity* child) { CollectOwnedMovableObjects(child, visited, carried); });
+		}
+	};
+	shared(g_ActivityMan.GetActivity());
+	shared(g_ActivityMan.GetCheckpointStartActivity());
 	for (const auto& [identity, object]: m_KnownObjects) {
 		if (!carried.contains(object)) continue;
 		std::vector<long> links = object->GetCheckpointBorrowedReferences();
