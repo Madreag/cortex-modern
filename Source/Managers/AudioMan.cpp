@@ -2222,6 +2222,54 @@ bool AudioMan::RunCheckpointSelfTest() {
 			arm("restore_reactivates_an_idled_effect", active);
 			AudioCheckpoint::Require(originalChannel->setPaused(true));
 		}
+		const auto reportArm = [&ok](const char* name, bool passed) { std::cout << "[audio-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << name << std::endl; ok = ok && passed; };
+		try {
+			std::unique_ptr<SoundContainer> held(static_cast<SoundContainer*>(preset->Clone()));
+			held->SetPaused(true); held->SetImmobile(true); held->SetLoopSetting(0);
+			if (!held->Play()) throw std::runtime_error("held tail voice did not play");
+			const int heldId = *held->GetPlayingChannels()->begin();
+			FMOD::Channel* heldChannel = nullptr;
+			AudioCheckpoint::Require(GetVoiceChannel(heldId, &heldChannel));
+			FMOD::Sound* heldSound = nullptr;
+			unsigned int heldLength = 0;
+			if (heldChannel->getCurrentSound(&heldSound) == FMOD_OK && heldSound) heldSound->getLength(&heldLength, FMOD_TIMEUNIT_PCM);
+			if (heldLength > 1) AudioCheckpoint::Require(heldChannel->setPosition(heldLength - 1, FMOD_TIMEUNIT_PCM));
+			AudioCheckpoint::Require(heldChannel->setPaused(false));
+			const auto playingOf = [heldId](const std::string& text, bool& found) {
+				AudioRuntime state; std::string refusal;
+				if (!state.Load(text, &refusal)) throw std::runtime_error("could not parse held-voice archive: " + refusal);
+				for (const auto& voice: state.voices) if (voice.identity == heldId) { found = true; return voice.playing; }
+				found = false; return false;
+			};
+			std::string firstText;
+			{
+				AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+				firstText = SaveCheckpoint();
+			}
+			bool firstFound = false;
+			const bool firstPlaying = playingOf(firstText, firstFound);
+			AudioCheckpoint::Require(m_AudioSystem->update());
+			std::string secondText = SaveCheckpoint();
+			bool secondFound = false;
+			bool secondPlaying = playingOf(secondText, secondFound);
+			bool injected = false;
+			if (!firstFound || !secondFound || firstPlaying == secondPlaying) {
+				if (heldChannel) {
+					heldChannel->setCallback(nullptr);
+					heldChannel->stop();
+				}
+				AudioCheckpoint::Require(m_AudioSystem->update());
+				secondText = SaveCheckpoint();
+				secondPlaying = playingOf(secondText, secondFound);
+				injected = true;
+			}
+			reportArm("held_voice_playing_is_stable_across_mixer_progress", firstFound && secondFound && firstPlaying == secondPlaying);
+			if (injected) std::cout << "[audio-checkpoint-selftest] held_voice_playing argued at the mixer, proved at the bookkeeping" << std::endl;
+			held->Stop();
+		} catch (const std::exception& error) {
+			std::cout << "[audio-checkpoint-selftest] FAIL held_voice_playing_is_stable_across_mixer_progress " << error.what() << std::endl;
+			ok = false;
+		}
 		AudioCheckpoint::Require(originalChannel->setPosition(123, FMOD_TIMEUNIT_PCM));
 		const std::string native = source->SaveCheckpoint();
 		const std::string playback = GetSoundContainerPlaybackCheckpoint(source.get());
