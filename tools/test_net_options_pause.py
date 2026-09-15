@@ -341,6 +341,10 @@ def inspect(arm, root, outcome, strict_compare):
                 checks[f"{who}_activity_never_paused"] = not any(ACTIVITY_PAUSED.match(line) for line in logs[who].splitlines())
                 checks[f"{who}_exit"] = outcome["records"][who].get("exit_code") == 0
                 checks[f"{who}_stayed"] = LEFT_LOCAL not in logs[who] and not any(LEFT_REMOTE.match(line) for line in logs[who].splitlines())
+            if arm == "resync":
+                # The perturbation must actually be caught and healed: a run that finishes with no resync passed
+                # this arm while the runtime desync check was dead (F77), so the heal is required, not assumed.
+                checks[f"{who}_resynced"] = (peer_report(root, who).get("resyncs") or 0) >= 1
         if arm == "pause":
             pauses = {who: [int(match[1]) for line in logs[who].splitlines() if (match := PAUSED.match(line))] for who in outcome["peers"]}
             resumes = {who: [int(match[1]) for line in logs[who].splitlines() if (match := RESUMED.match(line))] for who in outcome["peers"]}
