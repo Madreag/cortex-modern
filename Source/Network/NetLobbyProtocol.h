@@ -167,6 +167,8 @@ namespace RTE {
 		static constexpr uint32_t c_MaxStateChunkCount = (c_MaxTotalStateBytes - 1U) / c_MaxStateChunkBytes + 1U;
 		static_assert(c_MaxStateChunkCount <= 65535U);
 		static constexpr size_t c_MaxPlayers = NetMatchConfigUtil::c_MaxPlayers;
+		// A seat assignment names a lockstep peer, and the peerless CPU teams take slots past the last peer.
+		static constexpr size_t c_MaxPeers = NetMatchConfigUtil::c_MaxPeerCount;
 
 		static constexpr uint16_t GetStateChunkCount(size_t totalBytes) {
 			return totalBytes == 0 || totalBytes > c_MaxTotalStateBytes ? 0 : static_cast<uint16_t>((totalBytes - 1) / c_MaxStateChunkBytes + 1);
