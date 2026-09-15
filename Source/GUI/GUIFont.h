@@ -90,6 +90,9 @@ namespace RTE {
 		/// Gets the name of the font
 		std::string GetName() const;
 
+		/// The atlas ink ConvertColor already mapped for this font.
+		unsigned long GetMainColor() const { return m_MainColor; }
+
 		/// Destroys the font data
 		void Destroy();
 
