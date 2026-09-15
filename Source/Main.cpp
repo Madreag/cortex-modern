@@ -232,6 +232,7 @@ static bool s_netMatch = false;
 static bool s_netMatchServiceE2E = false;
 static bool s_netDedicated = false;
 static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
+static std::string s_netMatchServiceE2EModule;
 static std::string s_netMatchServiceConfigPath;
 
 // The W97 router port-mapping feature: opt-in by setting or flag, probed headless.
@@ -868,6 +869,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-service-preset") {
 			s_netMatchServiceE2EPreset = argValue[++i];
+			continue;
+		}
+		// The module the preset belongs to; without it the service resolves the preset's own module.
+		if (!lastArg && currentArg == "-net-match-service-module") {
+			s_netMatchServiceE2EModule = argValue[++i];
 			continue;
 		}
 		if (!lastArg && currentArg == "-net-match-service-config") {
@@ -5271,6 +5277,7 @@ int RunNetMatchServiceE2E() {
 		request.port = s_netPort;
 		request.playerName = e2eHost ? "Host" : "Client";
 		request.activityPreset = s_netMatchServiceE2EPreset;
+		request.activityModule = s_netMatchServiceE2EModule;
 		if (e2eHost && !s_netMatchServiceConfigPath.empty()) {
 			std::ifstream input(s_netMatchServiceConfigPath, std::ios::binary);
 			std::vector<uint8_t> bytes(NetLobbyProtocol::c_HeaderBytes + NetLobbyProtocol::c_MaxPayloadBytes + 1);

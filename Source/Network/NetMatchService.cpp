@@ -2939,6 +2939,10 @@ static std::string ResyncSaveName() {
 		if (humanCount + cpuCount > NetMatchConfigUtil::c_MaxPlayers) return refuse("roster exceeds the player slot capacity");
 		NetMatchConfig config = NetMatchConfigUtil::MakeDefault(sessionId);
 		config.activityPreset = request.activityPreset.empty() ? "P4 Alpha Duel" : request.activityPreset;
+		// A named module rides the request; an unnamed one keeps the default the launch config carries.
+		if (!request.activityModule.empty()) {
+			config.activityModule = request.activityModule;
+		}
 		config.sceneName = "Grasslands";
 		if (request.standardRules) {
 			static_cast<NetMatchStandardRules&>(config) = *request.standardRules;
@@ -2983,6 +2987,12 @@ static std::string ResyncSaveName() {
 		}
 		if (!NetMatchConfigUtil::ValidateLocalAlpha(config, error)) return false;
 		outConfig = std::move(config);
+		return true;
+	}
+
+	bool NetMatchService::ResolveActivityModule(const std::string& preset, const std::vector<std::string>& definingModules, std::string& outModule, std::string* error) {
+		// A module-less preset takes the config's default module.
+		outModule.clear();
 		return true;
 	}
 

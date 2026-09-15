@@ -400,6 +400,59 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestActivityModuleResolution(std::string* error) {
+			// A named module rides the request into the roster the peers agree on.
+			NetMatchServiceRequest request;
+			request.host = true;
+			request.activityPreset = "Control Facts";
+			request.activityModule = "UserScenes.rte";
+			NetMatchConfig config;
+			if (!NetMatchService::BuildMatchConfig(request, 123, config, error)) return false;
+			if (config.activityModule != "UserScenes.rte" || config.activityPreset != "Control Facts") {
+				*error = "the named module did not reach the roster: " + config.activityModule + "/" + config.activityPreset;
+				return false;
+			}
+			// Each resolution case reports its own verdict, so one red case cannot hide another.
+			std::vector<std::string> failures;
+			// A module-less preset belongs to the one module that defines it.
+			std::string resolved;
+			std::string reason;
+			if (!NetMatchService::ResolveActivityModule("Control Facts", {"UserScenes.rte"}, resolved, &reason) || resolved != "UserScenes.rte") {
+				failures.push_back("a preset defined by UserScenes.rte alone resolved to \"" + resolved + "\" (" + reason + ")");
+			}
+			// Two definitions are ambiguous: the refusal names every candidate instead of picking one.
+			resolved.clear();
+			reason.clear();
+			if (NetMatchService::ResolveActivityModule("Control Facts", {"UserScenes.rte", "Coalition.rte"}, resolved, &reason) ||
+			    reason.find("UserScenes.rte") == std::string::npos || reason.find("Coalition.rte") == std::string::npos) {
+				failures.push_back("an ambiguous preset resolved to \"" + resolved + "\" instead of refusing both candidates (" + reason + ")");
+			}
+			// No definition leaves the module unset, so the launch refuses by the name the config carries.
+			resolved = "UserScenes.rte";
+			if (!NetMatchService::ResolveActivityModule("Control Facts", {}, resolved, &reason) || !resolved.empty()) {
+				failures.push_back("an undefined preset resolved to \"" + resolved + "\"");
+			}
+			if (!failures.empty()) {
+				*error = "activity module resolution: " + failures[0];
+				for (size_t next = 1; next < failures.size(); ++next) {
+					*error += " | " + failures[next];
+				}
+				return false;
+			}
+			// A launch config names its own module, and that one wins over the request's.
+			NetMatchStandardRules wire;
+			wire.activityModule = "Tests.rte";
+			wire.activityPreset = "Determinism SimBaseline";
+			request.standardRules = wire;
+			if (!NetMatchService::BuildMatchConfig(request, 123, config, error)) return false;
+			if (config.activityModule != "Tests.rte" || config.activityPreset != "Determinism SimBaseline") {
+				*error = "the launch config's activity lost to the request's: " + config.activityModule + "/" + config.activityPreset;
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS activity_module_resolution" << std::endl;
+			return true;
+		}
+
 		bool TestCPURosterRequests(std::string* error) {
 			for (bool host : {false, true}) {
 				for (bool dedicated : {false, true}) {
@@ -7329,6 +7382,7 @@ namespace RTE {
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
 		if (!TestDisplayNameUtf8(&error)) return fail(error);
 		if (!TestMatchConfigDedicated(&error)) return fail(error);
+		if (!TestActivityModuleResolution(&error)) return fail(error);
 		if (!TestCPURosterRequests(&error)) return fail(error);
 		if (!TestCPURosterValidation(&error)) return fail(error);
 		if (!TestCPURosterHash(&error)) return fail(error);
