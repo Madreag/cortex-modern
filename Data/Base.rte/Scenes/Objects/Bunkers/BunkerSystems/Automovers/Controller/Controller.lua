@@ -975,8 +975,10 @@ automoverActorFunctions.convertActorWaypointsToWaypointData = function(self, act
 	actorData.waypointData = {};
 	local waypointData = actorData.waypointData;
 
-	if actor.MOMoveTarget then
-		waypointData.movableObjectTarget = actor.MOMoveTarget;
+	-- The loaded MO target is each machine's own; the ordered one is what every peer follows.
+	local orderedTarget = actor.OrderedMOMoveTarget;
+	if orderedTarget then
+		waypointData.movableObjectTarget = orderedTarget;
 	else
 		waypointData.sceneTargets = {}
 		-- The ordered end, not the move path's: the path is each machine's own and these targets are given back as waypoints.

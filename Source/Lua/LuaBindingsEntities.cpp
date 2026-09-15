@@ -212,6 +212,7 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, Actor) {
 	    .property("HasOrderedMove", &Actor::HasOrderedMove)
 	    .property("OrderedMoveStep", &Actor::GetOrderedMoveStep)
 	    .property("OrderedMoveEnd", &Actor::GetOrderedMoveEnd)
+	    .property("OrderedMOMoveTarget", &Actor::GetOrderedMOMoveTarget)
 	    .property("AimDistance", &Actor::GetAimDistance, &Actor::SetAimDistance)
 	    .property("SightDistance", &Actor::GetSightDistance, &Actor::SetSightDistance)
 	    .property("PieMenu", &Actor::GetPieMenu, &LuaAdaptersPropertyOwnershipSafetyFaker::ActorSetPieMenu)
