@@ -19,6 +19,11 @@ namespace RTE {
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) override;
 		/// Enables scoped input only for an active automation driver.
 		static void SetAutomationDriving(bool enabled);
+		/// Takes a share of the process-global joystick background-events hint, which SDL needs before it
+		/// will deliver a virtual pad's presses to a window that has no keyboard focus.
+		static void AcquireJoystickBackgroundEvents();
+		/// Gives back a share of the hint; only the last holder turns it off.
+		static void ReleaseJoystickBackgroundEvents();
 		/// Creates a scripted wrapper; ordinary menus keep their existing input object.
 		std::unique_ptr<GUIInputWrapper> CreateAutomationInput();
 		bool GetKeyJoyMouseCursor() const { return m_KeyJoyMouseCursor; }
