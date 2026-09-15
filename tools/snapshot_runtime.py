@@ -270,6 +270,8 @@ SCHEMAS["HeldDeviceRuntime1"] = [*fields("type activated"), ("hotkey_activated",
     ("hotkey_timer", array(2, TIMER)), *fields("one_handed dual_wieldable"), *fields("stance sharp_stance support_offset", VECTOR),
     *fields("support_while_reload sharp_aim max_sharp_length supportable supported support_available unpickable"), ("seen_by_player", array(4)),
     ("grip_multiplier", "n"), ("blink_timer", TIMER), *fields("loudness explosive held_collisions visual_recoil")]
+# seen_by_player is per viewing player on one machine and only DrawHUD writes it, so it left the layout.
+SCHEMAS["HeldDeviceRuntime2"] = [entry for entry in SCHEMAS["HeldDeviceRuntime1"] if entry[0] != "seen_by_player"]
 SCHEMAS["HDFirearmRuntime1"] = [*fields("reload_end_offset reload_sound_played rate_of_fire activation_delay deactivation_delay reloading done_reloading "
     "base_reload_time full_auto ignore_self reloadable one_handed_reload_time dual_reloadable reload_angle one_handed_reload_angle"),
     *fields("last_fire_timer reload_timer", TIMER), *fields("muzzle_offset eject_offset magazine_offset", VECTOR),
@@ -755,6 +757,16 @@ def selftest():
         check("game_activity3_refused_as_game_activity1", "trailing" in str(error) or "invalid runtime checkpoint" in str(error))
     check("game_activity3_decodes", decode(grown)["version"] == "GameActivity3" and
           "lockstep_seat_brains" in decode(grown) and len(decode(grown)["lockstep_seat_brains"]) == 4)
+    # A record that shrank keeps the older reader honest too: the tag is the gate, and the payload runs out.
+    shrunk = _payload("HeldDeviceRuntime2")
+    try:
+        decode(shrunk.replace(b"18 HeldDeviceRuntime2", b"18 HeldDeviceRuntime1", 1))
+        check("held_device2_refused_as_held_device1", False)
+    except ValueError as error:
+        check("held_device2_refused_as_held_device1", "truncated" in str(error) or "trailing" in str(error) or
+              "invalid runtime checkpoint" in str(error))
+    check("held_device2_decodes", decode(shrunk)["version"] == "HeldDeviceRuntime2" and
+          "seen_by_player" not in decode(shrunk) and "blink_timer" in decode(shrunk))
 
     unclassified = b"9 NoSchema1 0 "
     check("unclassified_tag_stays_raw", decode(unclassified) == unclassified)
