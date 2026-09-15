@@ -140,6 +140,9 @@ namespace RTE {
 		/// Runs the script graph's contract tests in this state and prints their lines; true when all pass.
 		bool RunScriptGraphSelfTest();
 
+		/// A Lua-held object keeps a world borrowed reference, and an off-world owner is refused.
+		bool RunLuaHeldReferenceSelfTest();
+
 		/// Every script-owned MovableObject still live in this state's heap.
 		void VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit);
 
