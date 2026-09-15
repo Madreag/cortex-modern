@@ -1643,17 +1643,22 @@ namespace RTE {
 			}
 			ACDropShip* ownerView = new ACDropShip();
 			ACDropShip* peerView = new ACDropShip();
+			Actor* ownerCargo = new Actor();
+			Actor* peerCargo = new Actor();
 			const auto finish = [&](const char* message) {
 				g_CurrentAIActor = nullptr;
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
 				ScenarioRunner::DrainLocalGameCommands();
-				// These two are not on a scene, so they leave the object registry with the arm.
+				// These are not on a scene, so they leave the object registry with the arm.
 				g_MovableMan.UnregisterObject(ownerView);
 				g_MovableMan.UnregisterObject(peerView);
+				g_MovableMan.UnregisterObject(ownerCargo);
+				g_MovableMan.UnregisterObject(peerCargo);
 				if (message) *error = message;
 				return message == nullptr;
 			};
-			if (ownerView->MovableObject::Create(1.0F) < 0 || peerView->MovableObject::Create(1.0F) < 0) {
+			if (ownerView->MovableObject::Create(1.0F) < 0 || peerView->MovableObject::Create(1.0F) < 0 ||
+			    ownerCargo->MovableObject::Create(1) < 0 || peerCargo->MovableObject::Create(1) < 0) {
 				return finish("selftest craft could not be created");
 			}
 			ownerView->SetTeam(0);
@@ -1675,10 +1680,22 @@ namespace RTE {
 
 			const long long simTick = static_cast<long long>(g_TimerMan.GetSimUpdateCount());
 			const MovableMan::ControllerBoundaryBaseline before = MovableMan::CaptureControllerBoundary(ownerView);
-			// The owner's AI pass: NativeDropShipAI's Owner:OpenHatch() lands exactly here.
-			g_CurrentAIActor = ownerView;
-			ownerView->OpenHatch();
-			g_CurrentAIActor = nullptr;
+			// The owner's AI pass, its sound scope included: NativeDropShipAI's Owner:OpenHatch() lands
+			// exactly here, and only inside this scope does the call leave the sound to the intent.
+			bool inTheAIPass = false;
+			{
+				SoundSimulationScope aiPass(static_cast<uint64_t>(ownerView->GetUniqueID()), 1, SoundExecutionDomain::LocalSimulation);
+				g_CurrentAIActor = ownerView;
+				inTheAIPass = MovableObject::InLocalAIValueDomain();
+				ownerView->OpenHatch();
+				g_CurrentAIActor = nullptr;
+			}
+			if (!inTheAIPass) {
+				return finish("the arm did not run the hatch call inside the AI pass scope");
+			}
+			if (!g_AudioMan.TakePendingSoundOpContainers().empty()) {
+				return finish("the AI pass's hatch call proposed a sound instead of leaving it to the intent");
+			}
 			g_MovableMan.RestoreControllerBoundary(before, simTick);
 			if (ownerView->GetHatchState() != static_cast<unsigned int>(ACraft::CLOSED)) {
 				return finish("the AI pass opened the producer's hatch instead of leaving an intent");
@@ -1705,8 +1722,52 @@ namespace RTE {
 			if (!ControllerFrameCodec::ApplyActorStateIntents(quiet, *peerView, &quietError) || peerView->GetHatchState() != static_cast<unsigned int>(ACraft::OPENING)) {
 				return finish("a frame with no hatch intent changed the hatch");
 			}
+
+			// Closing moves what the hatch collected into the regular inventory and plays a sound. Inside
+			// the AI pass both ride the intent, so the producer keeps the cargo until every peer closes.
+			ownerView->AddInventoryItem(ownerCargo);
+			peerView->AddInventoryItem(peerCargo);
+			if (ownerView->GetCollectedInventory().size() != 1 || peerView->GetCollectedInventory().size() != 1) {
+				return finish("the open craft did not collect the selftest cargo");
+			}
+			const MovableMan::ControllerBoundaryBaseline beforeClose = MovableMan::CaptureControllerBoundary(ownerView);
+			{
+				SoundSimulationScope aiPass(static_cast<uint64_t>(ownerView->GetUniqueID()), 1, SoundExecutionDomain::LocalSimulation);
+				g_CurrentAIActor = ownerView;
+				ownerView->CloseHatch();
+				g_CurrentAIActor = nullptr;
+			}
+			if (ownerView->GetCollectedInventory().size() != 1 || ownerView->GetInventorySize() != 0) {
+				return finish("the AI pass moved the producer's collected inventory instead of leaving an intent");
+			}
+			if (!g_AudioMan.TakePendingSoundOpContainers().empty()) {
+				return finish("the AI pass's close call proposed a sound instead of leaving it to the intent");
+			}
+			g_MovableMan.RestoreControllerBoundary(beforeClose, simTick);
+			if (ownerView->GetHatchState() != static_cast<unsigned int>(ACraft::OPENING)) {
+				return finish("the boundary did not undo the AI pass's close");
+			}
+			const ControllerFrame closeFrame = ControllerFrameCodec::Snapshot(static_cast<int64_t>(ownerView->GetUniqueID()), *ownerView->GetController(), ownerView);
+			if (closeFrame.hatchCommand != static_cast<uint8_t>(ControllerFrame::HatchCommand::Close)) {
+				return finish("the produced frame carries no hatch-close intent");
+			}
+			for (Actor* view: {static_cast<Actor*>(ownerView), static_cast<Actor*>(peerView)}) {
+				std::string closeError;
+				if (!ControllerFrameCodec::ApplyActorStateIntents(closeFrame, *view, &closeError)) {
+					return finish("the hatch close intent did not apply");
+				}
+			}
+			if (ownerView->GetHatchState() != static_cast<unsigned int>(ACraft::CLOSING) || peerView->GetHatchState() != static_cast<unsigned int>(ACraft::CLOSING)) {
+				return finish("the two peers hold different hatch states after the committed close");
+			}
+			if (!ownerView->GetCollectedInventory().empty() || !peerView->GetCollectedInventory().empty() ||
+			    ownerView->GetInventorySize() != 1 || peerView->GetInventorySize() != 1) {
+				return finish("the committed close did not move the collected inventory on every peer");
+			}
 			std::cout << "[net-lockstep-selftest] PASS ai craft hatch crosses the wire: cmd=" << static_cast<int>(frame.hatchCommand)
-			          << " owner=" << ownerView->GetHatchState() << " peer=" << peerView->GetHatchState() << std::endl;
+			          << " close=" << static_cast<int>(closeFrame.hatchCommand) << " owner=" << ownerView->GetHatchState()
+			          << " peer=" << peerView->GetHatchState() << " owner_inv=" << ownerView->GetInventorySize()
+			          << " peer_inv=" << peerView->GetInventorySize() << std::endl;
 			return finish(nullptr);
 		}
 
