@@ -496,6 +496,7 @@ namespace RTE::MenuAutomation {
 					if (auto* label = dynamic_cast<GUILabel*>(item)) {
 						row["overflow_scroll"] = label->GetHorizontalOverflowScroll();
 						row["word_width"] = label->GetMaxWordWidth();
+						row["row_width"] = row["rect"][2];
 					}
 					// The combo's open list is a panel, not a control, so its state rides its owner's row.
 					if (auto* combo = dynamic_cast<GUIComboBox*>(item)) {
