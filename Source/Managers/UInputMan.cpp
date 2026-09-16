@@ -30,6 +30,8 @@ using namespace RTE;
 
 std::vector<Gamepad> UInputMan::s_PrevJoystickStates(Players::MaxPlayerCount);
 std::vector<Gamepad> UInputMan::s_ChangedJoystickStates(Players::MaxPlayerCount);
+std::vector<Gamepad> UInputMan::s_ScriptedPadStates;
+std::vector<Gamepad> UInputMan::s_ChangedScriptedPadStates;
 
 UInputMan::UInputMan() {
 	Clear();
@@ -87,6 +89,9 @@ int UInputMan::Initialize() {
 	SDL_JoystickID* joysticks = SDL_GetGamepads(&joystickCount);
 
 	for (size_t index = 0; index < std::min(joystickCount, static_cast<int>(Players::MaxPlayerCount)); ++index) {
+		if (IsScriptedPad(joysticks[index])) {
+			continue;
+		}
 		if (SDL_IsGamepad(joysticks[index])) {
 			SDL_Gamepad* controller = SDL_OpenGamepad(joysticks[index]);
 			if (!controller) {
@@ -280,8 +285,64 @@ bool UInputMan::AnyPress() const {
 	return pressed;
 }
 
+void UInputMan::RegisterScriptedPad(SDL_JoystickID joystickID) {
+	if (IsScriptedPad(joystickID)) {
+		return;
+	}
+	// A script attaches its pad as a virtual gamepad, so it carries the whole gamepad button and axis set.
+	const int index = static_cast<int>(s_ScriptedPadStates.size());
+	s_ScriptedPadStates.emplace_back(index, joystickID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
+	s_ChangedScriptedPadStates.emplace_back(index, joystickID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
+}
+
+void UInputMan::ForgetScriptedPad(SDL_JoystickID joystickID) {
+	const auto pad = std::find(s_ScriptedPadStates.begin(), s_ScriptedPadStates.end(), joystickID);
+	if (pad == s_ScriptedPadStates.end()) {
+		return;
+	}
+	s_ChangedScriptedPadStates.erase(s_ChangedScriptedPadStates.begin() + (pad - s_ScriptedPadStates.begin()));
+	s_ScriptedPadStates.erase(pad);
+}
+
+bool UInputMan::IsScriptedPad(SDL_JoystickID joystickID) {
+	return std::find(s_ScriptedPadStates.begin(), s_ScriptedPadStates.end(), joystickID) != s_ScriptedPadStates.end();
+}
+
+bool UInputMan::ScriptedPadButtonPressed(int whichButton) {
+	for (size_t pad = 0; pad < s_ScriptedPadStates.size(); ++pad) {
+		if (whichButton >= 0 && whichButton < static_cast<int>(s_ScriptedPadStates[pad].m_Buttons.size()) &&
+		    s_ScriptedPadStates[pad].m_Buttons[whichButton] && s_ChangedScriptedPadStates[pad].m_Buttons[whichButton]) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UInputMan::RecordScriptedPadButton(const SDL_Event& inputEvent) {
+	const bool joystickEvent = (inputEvent.type == SDL_EVENT_JOYSTICK_BUTTON_DOWN || inputEvent.type == SDL_EVENT_JOYSTICK_BUTTON_UP);
+	const SDL_JoystickID which = joystickEvent ? inputEvent.jbutton.which : inputEvent.gbutton.which;
+	const auto pad = std::find(s_ScriptedPadStates.begin(), s_ScriptedPadStates.end(), which);
+	if (pad == s_ScriptedPadStates.end()) {
+		return false;
+	}
+	const int button = joystickEvent ? inputEvent.jbutton.button : inputEvent.gbutton.button;
+	const bool down = joystickEvent ? inputEvent.jbutton.down : inputEvent.gbutton.down;
+	// An open pad reports the same press as a joystick and as a gamepad event, so only a transition writes the edge.
+	if (button >= 0 && button < static_cast<int>(pad->m_Buttons.size()) && down != pad->m_Buttons[button]) {
+		const size_t index = pad - s_ScriptedPadStates.begin();
+		s_ChangedScriptedPadStates[index].m_Buttons[button] = true;
+		(down ? pad->m_ButtonsPressedSinceSim : pad->m_ButtonsReleasedSinceSim)[button] = true;
+		pad->m_Buttons[button] = down;
+	}
+	return true;
+}
+
 bool UInputMan::AnyStartPress(bool includeSpacebar) {
 	if (KeyPressed(SDLK_ESCAPE) || (includeSpacebar && KeyPressed(SDLK_SPACE))) {
+		return true;
+	}
+	// A scripted pad belongs to no seat, so the menu reads its start at the device.
+	if (ScriptedPadButtonPressed(SDL_GAMEPAD_BUTTON_START)) {
 		return true;
 	}
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
@@ -293,6 +354,9 @@ bool UInputMan::AnyStartPress(bool includeSpacebar) {
 }
 
 bool UInputMan::AnyBackPress() {
+	if (ScriptedPadButtonPressed(SDL_GAMEPAD_BUTTON_BACK)) {
+		return true;
+	}
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (ElementPressed(player, InputElements::INPUT_BACK)) {
 			return true;
@@ -648,6 +712,15 @@ float UInputMan::AnalogAxisValue(int whichJoy, int whichAxis) const {
 }
 
 bool UInputMan::AnyJoyInput(bool checkForPresses) const {
+	// A scripted pad has no seat slot, so its buttons answer here at the device.
+	for (size_t pad = 0; pad < s_ScriptedPadStates.size(); ++pad) {
+		for (size_t button = 0; button < s_ScriptedPadStates[pad].m_Buttons.size(); ++button) {
+			if (s_ScriptedPadStates[pad].m_Buttons[button] && (!checkForPresses || s_ChangedScriptedPadStates[pad].m_Buttons[button])) {
+				return true;
+			}
+		}
+	}
+
 	int gamepadIndex = 0;
 	for (const Gamepad& gamepad: s_PrevJoystickStates) {
 		for (int button = 0; button < gamepad.m_Buttons.size(); ++button) {
@@ -1106,6 +1179,9 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 		case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
 		case SDL_EVENT_GAMEPAD_BUTTON_UP: {
 			bool joystickEvent = (inputEvent.type == SDL_EVENT_JOYSTICK_BUTTON_DOWN || inputEvent.type == SDL_EVENT_JOYSTICK_BUTTON_UP);
+			if (RecordScriptedPadButton(inputEvent)) {
+				break;
+			}
 			if (std::vector<Gamepad>::iterator device = std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), joystickEvent ? inputEvent.jbutton.which : inputEvent.gbutton.which); device != s_PrevJoystickStates.end()) {
 				int button = -1;
 				int down = false;
@@ -1197,6 +1273,12 @@ void UInputMan::EndFrame() {
 		std::fill(gamepad.m_DigitalAxis.begin(), gamepad.m_DigitalAxis.end(), 0);
 	}
 
+	for (Gamepad& pad: s_ChangedScriptedPadStates) {
+		std::fill(pad.m_Buttons.begin(), pad.m_Buttons.end(), false);
+		std::fill(pad.m_Axis.begin(), pad.m_Axis.end(), 0);
+		std::fill(pad.m_DigitalAxis.begin(), pad.m_DigitalAxis.end(), 0);
+	}
+
 	m_TextInput.clear();
 	for (auto& [mouseID, mouse] : m_MouseStates) {
 		mouse.wheelChange = 0;
@@ -1225,6 +1307,10 @@ void UInputMan::EndSimUpdate() {
 	for (Gamepad& gamepad: s_PrevJoystickStates) {
 		std::fill(gamepad.m_ButtonsPressedSinceSim.begin(), gamepad.m_ButtonsPressedSinceSim.end(), false);
 		std::fill(gamepad.m_ButtonsReleasedSinceSim.begin(), gamepad.m_ButtonsReleasedSinceSim.end(), false);
+	}
+	for (Gamepad& pad: s_ScriptedPadStates) {
+		std::fill(pad.m_ButtonsPressedSinceSim.begin(), pad.m_ButtonsPressedSinceSim.end(), false);
+		std::fill(pad.m_ButtonsReleasedSinceSim.begin(), pad.m_ButtonsReleasedSinceSim.end(), false);
 	}
 }
 
@@ -1470,6 +1556,11 @@ void UInputMan::UpdateJoystickDigitalAxis() {
 void UInputMan::HandleGamepadHotPlug(SDL_JoystickID joystickID) {
 	SDL_Joystick* controller = nullptr;
 	int controllerIndex = 0;
+
+	// A scripted pad takes no seat slot: a seat's control scheme must never read a script's device.
+	if (IsScriptedPad(joystickID)) {
+		return;
+	}
 
 	for (controllerIndex = 0; controllerIndex < s_PrevJoystickStates.size(); ++controllerIndex) {
 		if (s_PrevJoystickStates[controllerIndex].m_JoystickID == joystickID) {
@@ -1719,5 +1810,65 @@ bool UInputMan::RunScriptedInputEdgeSelfTest() {
 	std::error_code removeError;
 	std::filesystem::remove(path, removeError);
 	std::cout << "[input-edge-selftest] " << (passed ? "PASS " : "FAIL ") << "complete" << std::endl;
+	return passed;
+}
+
+bool UInputMan::RunScriptedPadSeatSelfTest() {
+	bool passed = true;
+	const auto check = [&passed](const char* name, bool valid) {
+		passed = valid && passed;
+		std::cout << "[input-pad-seat-selftest] " << (valid ? "PASS " : "FAIL ") << name << std::endl;
+	};
+
+	constexpr int seat = Players::PlayerFour;
+	constexpr SDL_JoystickID scriptedPadID = 9001;
+	constexpr SDL_JoystickID seatPadID = 9002;
+	const InputDevice seatDevice = m_ControlScheme.at(seat).GetDevice();
+	const InputMapping seatStart = m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_START);
+	m_ControlScheme.at(seat).SetDevice(InputDevice::DEVICE_GAMEPAD_2);
+	m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_START).SetJoyButton(SDL_GAMEPAD_BUTTON_START);
+	const int seatSlot = GetJoystickIndex(InputDevice::DEVICE_GAMEPAD_2);
+
+	// Past every range of the scripted input the edge selftest loaded, so no element of any seat is held here.
+	g_TimerMan.RewindSimTo(100, 0);
+	EndFrame();
+	check("no_start_press_before_the_pad", !AnyStartPress(false));
+
+	RegisterScriptedPad(scriptedPadID);
+	HandleGamepadHotPlug(scriptedPadID);
+	check("no_seat_slot_binds_a_scripted_pad", std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), scriptedPadID) == s_PrevJoystickStates.end());
+
+	SDL_Event padEvent{};
+	padEvent.type = SDL_EVENT_JOYSTICK_BUTTON_DOWN;
+	padEvent.jbutton.which = scriptedPadID;
+	padEvent.jbutton.button = static_cast<Uint8>(SDL_GAMEPAD_BUTTON_START);
+	padEvent.jbutton.down = true;
+	HandleInputEvent(padEvent);
+
+	check("a_scripted_pad_start_moves_no_seat", !ElementPressed(seat, InputElements::INPUT_START) && !ElementHeld(seat, InputElements::INPUT_START));
+	check("the_menu_reads_a_scripted_pad_start", AnyStartPress(false));
+
+	// The seat's own read is the oracle: the same press in its slot must reach the seat, or the row above proves nothing.
+	const Gamepad seatPadBefore = s_PrevJoystickStates[seatSlot];
+	const Gamepad seatChangedBefore = s_ChangedJoystickStates[seatSlot];
+	s_PrevJoystickStates[seatSlot] = Gamepad(seatSlot, seatPadID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
+	s_ChangedJoystickStates[seatSlot] = Gamepad(seatSlot, seatPadID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
+	s_PrevJoystickStates[seatSlot].m_Buttons[SDL_GAMEPAD_BUTTON_START] = true;
+	s_ChangedJoystickStates[seatSlot].m_Buttons[SDL_GAMEPAD_BUTTON_START] = true;
+	check("a_seat_pad_start_moves_the_seat", ElementPressed(seat, InputElements::INPUT_START));
+	s_PrevJoystickStates[seatSlot] = seatPadBefore;
+	s_ChangedJoystickStates[seatSlot] = seatChangedBefore;
+
+	padEvent.type = SDL_EVENT_JOYSTICK_BUTTON_UP;
+	padEvent.jbutton.down = false;
+	HandleInputEvent(padEvent);
+	check("a_scripted_pad_release_ends_the_menu_read", !AnyStartPress(false) && !ElementHeld(seat, InputElements::INPUT_START));
+
+	ForgetScriptedPad(scriptedPadID);
+	check("forgetting_a_scripted_pad_drops_its_state", !IsScriptedPad(scriptedPadID) && s_ScriptedPadStates.empty() && s_ChangedScriptedPadStates.empty());
+
+	m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_START) = seatStart;
+	m_ControlScheme.at(seat).SetDevice(seatDevice);
+	std::cout << "[input-pad-seat-selftest] " << (passed ? "PASS " : "FAIL ") << "complete" << std::endl;
 	return passed;
 }
