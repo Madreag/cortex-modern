@@ -564,15 +564,15 @@ bool PieMenu::RunCheckpointSelfTest() {
 		PieMenu dottedLoad;
 		const bool loadedDotted = dottedLoad.Create() >= 0 && dottedLoad.LoadRuntimeCheckpoint(dotted);
 		check("runtime1_dotted_timers_exact", loadedDotted
-			&& dottedLoad.m_EnableDisableAnimationTimer.GetStartSimTimeTicks() == 90001234
+			&& dottedLoad.m_EnableDisableAnimationTimer.GetStartSimTimeMS() == 90001234
 			&& dottedLoad.m_HoverTimer.GetSimTimeLimitTicks() == 90004321,
-			loadedDotted ? std::to_string(dottedLoad.m_EnableDisableAnimationTimer.GetStartSimTimeTicks()) : "load-failed",
+			loadedDotted ? std::to_string(dottedLoad.m_EnableDisableAnimationTimer.GetStartSimTimeMS()) : "load-failed",
 			"90001234");
 		dotted = runtime1;
 		check("runtime1_fractional_token", splice("90001234", "90001234.5"), "90001234.5", "90001234.5");
 		PieMenu refused;
 		check("runtime1_non_integer_timer_refused", refused.Create() >= 0 && !refused.LoadRuntimeCheckpoint(dotted),
-			refused.LoadRuntimeCheckpoint(dotted) ? std::to_string(refused.m_EnableDisableAnimationTimer.GetStartSimTimeTicks()) : "refused",
+			refused.LoadRuntimeCheckpoint(dotted) ? std::to_string(refused.m_EnableDisableAnimationTimer.GetStartSimTimeMS()) : "refused",
 			"refused");
 	}
 	const std::string legacyPack = std::string("0|0|12.0|34.0|56|") + HexFloatString(0.0F) + "|0|-1|-1|-1|-1";
