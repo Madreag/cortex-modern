@@ -377,12 +377,52 @@ namespace RTE::MenuAutomation {
 	bool Handles(const std::string& command) {
 		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_text_fits" ||
 			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
-			command == "set_text" ||
+			command == "set_text" || command == "combo_drop" || command == "combo_select" ||
 			command == "select_settings_page" || command == "assert_settings_page";
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
 		try {
 			if (!manager) { observation = "no active control manager"; return false; }
+			if (command == "combo_drop" || command == "combo_select") {
+				std::string comboName;
+				args >> std::quoted(comboName);
+				std::string item;
+				std::getline(args >> std::ws, item);
+				auto* combo = dynamic_cast<GUIComboBox*>(manager->GetControl(comboName));
+				if (!combo || !Enabled(combo)) { observation = comboName + " missing or disabled"; return false; }
+				observation = comboName + (item.empty() ? "" : " " + item);
+				if (command == "combo_drop") {
+					// The same state the text-panel click produces: the list shows, takes focus and
+					// the mouse, sits topmost, and the control notifies Dropped.
+					auto* input = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
+					return input && input->QueueAutomationCommand([combo] {
+						GUIListPanel* list = combo->GetListPanel();
+						list->_SetVisible(true);
+						list->SetFocus();
+						list->CaptureMouse();
+						list->EndUpdate();
+						list->ChangeZPosition(GUIPanel::TopMost);
+						combo->AddEvent(GUIEvent::Notification, GUIComboBox::Dropped, 0);
+					});
+				}
+				if (item.empty()) { observation += " no item"; return false; }
+				int index = -1;
+				for (int i = 0; i < combo->GetCount(); ++i) {
+					if (const GUIListPanel::Item* entry = combo->GetItem(i); entry && entry->m_Name == item) { index = i; break; }
+				}
+				if (index < 0) { observation += " no such item"; return false; }
+				auto* input = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
+				GUIManager* gui = manager->GetManager();
+				return input && input->QueueAutomationCommand([combo, index, gui] {
+					GUIListPanel* list = combo->GetListPanel();
+					// A scripted pick takes the row-click's close path so listeners see the same event.
+					list->_SetVisible(false);
+					list->ReleaseMouse();
+					gui->SetFocus(nullptr);
+					combo->SetSelectedIndex(index);
+					combo->AddEvent(GUIEvent::Notification, GUIComboBox::Closed, 0);
+				});
+			}
 			std::string name, argument, extra;
 			args >> std::quoted(name) >> argument >> extra;
 			if (!extra.empty()) { observation = "unexpected arguments"; return false; }
