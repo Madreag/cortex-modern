@@ -162,6 +162,7 @@ namespace RTE {
 		std::optional<NetMatchDelayPolicy> delayPolicy;
 		std::optional<uint8_t> idleWaitMinutes;
 		std::optional<bool> automaticRepair;
+		std::optional<uint16_t> pathHorizonTicks;
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
 		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
 		std::string sessionId; // Client only: join the directory session with this id instead of an address.

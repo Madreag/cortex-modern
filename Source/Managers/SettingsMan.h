@@ -268,6 +268,9 @@ namespace RTE {
 		/// Idle-lobby wait in minutes. 0 means Never; default 10. Out of 0-60 is ignored.
 		int GetNetworkHostIdleWaitMinutes() const { return m_NetworkHostIdleWaitMinutes; }
 		void SetNetworkHostIdleWaitMinutes(int minutes);
+		/// Shared path-grid horizon in ticks. Default 30. Out of 0-120 is ignored.
+		int GetNetworkPathHorizonTicks() const { return m_NetworkPathHorizonTicks; }
+		void SetNetworkPathHorizonTicks(int ticks);
 		/// New-session host visibility. Default LAN.
 		NetworkHostVisibility GetNetworkHostVisibility() const { return m_NetworkHostVisibility; }
 		void SetNetworkHostVisibility(NetworkHostVisibility visibility) { m_NetworkHostVisibility = visibility; }
@@ -612,6 +615,7 @@ namespace RTE {
 		NetworkHostVisibility m_NetworkHostVisibility;
 		bool m_NetworkToastsEnabled, m_NetworkChatVisible, m_NetworkChatNotify, m_NetworkChatSound, m_NetworkAutoReconnect, m_NetworkOfferStoredRejoin, m_NetworkRecordReplays, m_NetworkHostAutoRepair;
 		int m_NetworkHostIdleWaitMinutes;
+		int m_NetworkPathHorizonTicks;
 		int m_NumberOfLuaStatesOverride; //!< Overrides how many threaded Lua states we'll use. -1 for no override, which defaults to the maximum number of concurrent hardware threads.
 		bool m_ForceImmediatePathingRequestCompletion; //!< Whether pathing requests will be forced to immediately complete for the next frame, or if they can take multiple frames to calculate.
 

@@ -95,6 +95,7 @@ namespace RTE {
 			        {"teams", std::move(teams)},
 			        {"autosave_enabled", config.autosaveEnabled}, {"autosave_interval_seconds", config.autosaveIntervalSeconds},
 			        {"idle_wait_minutes", config.idleWaitMinutes}, {"automatic_repair", config.automaticRepair},
+			        {"path_horizon_ticks", config.pathHorizonTicks},
 			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)}};
 		}
 
@@ -117,6 +118,9 @@ namespace RTE {
 				{"delay_policy", std::to_string(static_cast<uint8_t>(config.delayPolicy))},
 			};
 			fields.insert(fields.end(), tail.begin(), tail.end());
+			if (config.version >= 5) {
+				fields.emplace_back("path_horizon_ticks", std::to_string(config.pathHorizonTicks));
+			}
 			for (size_t i = 0; i < config.teamRules.size(); ++i) {
 				const std::string prefix = "team." + std::to_string(i) + ".";
 				fields.emplace_back(prefix + "technology_intent", config.teamRules[i].technologyIntent);
@@ -139,6 +143,7 @@ namespace RTE {
 	NetMatchConfig NetMatchConfigUtil::MakeDefault(uint64_t sessionId) {
 		NetMatchConfig config;
 		config.sessionId = sessionId;
+		config.pathHorizonTicks = c_DefaultPathHorizonTicks;
 		config.players = {
 			NetMatchPlayerSlot{1, 0, false, "Host"},
 			NetMatchPlayerSlot{2, 1, false, "Client"},
@@ -150,6 +155,7 @@ namespace RTE {
 		config.delayPolicy = DelayPolicyFromSetting(g_SettingsMan.GetNetworkHostDelayPolicy());
 		config.idleWaitMinutes = static_cast<uint8_t>(std::clamp(g_SettingsMan.GetNetworkHostIdleWaitMinutes(), 0, 60));
 		config.automaticRepair = g_SettingsMan.GetNetworkHostAutoRepair();
+		config.pathHorizonTicks = static_cast<uint16_t>(g_SettingsMan.GetNetworkPathHorizonTicks());
 	}
 
 	bool NetMatchConfigUtil::DeriveRematchConfig(const NetMatchConfig& previous, const std::vector<uint8_t>& survivingPeerIds, NetMatchConfig& outConfig, std::map<uint8_t, uint8_t>* outSeatMap, std::string* error) {
@@ -205,7 +211,7 @@ namespace RTE {
 	}
 
 	bool NetMatchConfigUtil::ValidateLocalAlpha(const NetMatchConfig& config, std::string* error) {
-		if (config.version != 2 && config.version != 3 && config.version != c_Version) {
+		if (config.version != 2 && config.version != 3 && config.version != 4 && config.version != c_Version) {
 			if (error) *error = "match config version is unsupported";
 			return false;
 		}
@@ -219,6 +225,8 @@ namespace RTE {
 		}
 		// Every pre-v4 config predates the spectate byte, so it cannot carry anything but the pre-spectate rule.
 		if (config.version < 4 && config.brainlessHumansSpectate) return refuse("pre-spectate config cannot carry the spectate rule");
+		if (config.version < 5 && config.pathHorizonTicks != 0) return refuse("pre-horizon config cannot carry a path horizon");
+		if (config.pathHorizonTicks > c_MaxPathHorizonTicks) return refuse("path_horizon_ticks is out of range");
 		if (config.roundId == 0 || config.configRevision == 0) return refuse("round_id and config_revision must be nonzero");
 		if (config.difficulty > 100) return refuse("difficulty is out of range");
 		if (config.startingGold > c_MaxFiniteStartingGold && config.startingGold != c_InfiniteGold) return refuse("starting_gold is out of range");
@@ -372,7 +380,7 @@ namespace RTE {
 			const auto rules = RuleFields(config);
 			fields.insert(fields.end(), rules.begin(), rules.end());
 		}
-		const char* domain = config.version >= 4 ? "NetMatchConfig/v4" : (config.version >= 3 ? "NetMatchConfig/v3" : "NetMatchConfig/v2");
+		const char* domain = config.version >= 5 ? "NetMatchConfig/v5" : (config.version >= 4 ? "NetMatchConfig/v4" : (config.version >= 3 ? "NetMatchConfig/v3" : "NetMatchConfig/v2"));
 		return NetIdentity::HashCanonicalText(domain, fields);
 	}
 
