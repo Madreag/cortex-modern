@@ -106,6 +106,9 @@
     <ClInclude Include="Source\System\Writer.h">
       <Filter>System</Filter>
     </ClInclude>
+    <ClInclude Include="Source\System\CheckpointImage.h">
+      <Filter>System</Filter>
+    </ClInclude>
     <ClInclude Include="Source\System\MicroPather\micropather.h">
       <Filter>System\MicroPather</Filter>
     </ClInclude>
@@ -1007,6 +1010,9 @@
       <Filter>System</Filter>
     </ClCompile>
     <ClCompile Include="Source\System\Writer.cpp">
+      <Filter>System</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\System\CheckpointImage.cpp">
       <Filter>System</Filter>
     </ClCompile>
     <ClCompile Include="Source\System\MicroPather\micropather.cpp">

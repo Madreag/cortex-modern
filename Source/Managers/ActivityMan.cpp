@@ -30,6 +30,7 @@
 #include "GlobalScript.h"
 #include "ACraft.h"
 #include "SLTerrain.h"
+#include "SceneMan.h"
 
 #include "EditorActivity.h"
 #include "SceneEditor.h"
@@ -41,6 +42,8 @@
 #include "MusicMan.h"
 #include "TimerMan.h"
 #include "MovableMan.h"
+#include "CheckpointImage.h"
+#include "SceneLayer.h"
 
 #ifdef SYSTEM_MINIZIP
 #include <minizip/zip.h>
@@ -55,23 +58,34 @@
 #include "SDL3/SDL_surface.h"
 #include <SDL3_image/SDL_image.h>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <charconv>
 #include <condition_variable>
+#include <deque>
 #include <map>
 #include <cstdlib>
 #include <execution>
+#include <format>
+#include <future>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 
 #ifdef _WIN32
 #include <Windows.h>
 #endif
 
 using namespace RTE;
+
+#define HACK_MZ_COMPRESS_METHOD_STORE 0
+#define HACK_MZ_COMPRESS_LEVEL_FAST 2
+#define HACK_MZ_COMPRESS_METHOD_DEFLATE 8
 
 namespace {
 	class AutosaveArchiveWriter {
@@ -118,6 +132,128 @@ namespace {
 	AutosaveArchiveWriter& AutosaveWriter() {
 		static AutosaveArchiveWriter writer;
 		return writer;
+	}
+
+	using CheckpointPalette = std::array<unsigned char, 256 * 3>;
+	CheckpointPalette CaptureCheckpointPalette() {
+		CheckpointPalette palette;
+		const PALETTE& colors = g_FrameMan.GetDefaultPalette();
+		for (size_t i = 0; i < 256; ++i) { palette[i * 3] = colors[i].r; palette[i * 3 + 1] = colors[i].g; palette[i * 3 + 2] = colors[i].b; }
+		return palette;
+	}
+	struct AutosaveImage {
+		std::shared_ptr<const BitmapSnapshot> snapshot;
+		CheckpointPalette palette;
+		std::once_flag ready;
+		std::vector<unsigned char> png;
+		AutosaveImage(std::shared_ptr<const BitmapSnapshot> snapshot, const CheckpointPalette& palette) : snapshot(std::move(snapshot)), palette(palette) {}
+		const std::vector<unsigned char>& Bytes() {
+			std::call_once(ready, [this] {
+				auto bitmap = snapshot->CopyBitmap();
+				std::vector<unsigned char> bytes;
+				if (!ContentFile::EncodeIndexedPNG(bitmap.get(), bytes, palette)) throw std::runtime_error("could not encode owned autosave bitmap");
+				png = std::move(bytes);
+			});
+			return png;
+		}
+	};
+	std::vector<std::shared_ptr<AutosaveImage>> ReuseAutosaveImages(const std::string& matchId,
+	    const std::vector<std::pair<std::string, std::shared_ptr<const BitmapSnapshot>>>& layers, const CheckpointPalette& palette) {
+		thread_local std::string previousMatch;
+		thread_local std::map<std::string, std::shared_ptr<AutosaveImage>> images;
+		if (previousMatch != matchId) { images.clear(); previousMatch = matchId; }
+		std::vector<std::shared_ptr<AutosaveImage>> result;
+		for (const auto& [name, snapshot]: layers) {
+			auto& previous = images[name];
+			if (!previous || previous->palette != palette || !previous->snapshot->SamePixels(*snapshot)) previous = std::make_shared<AutosaveImage>(snapshot, palette);
+			result.push_back(previous);
+		}
+		std::erase_if(images, [&](const auto& entry) { return std::none_of(layers.begin(), layers.end(), [&](const auto& layer) { return layer.first == entry.first; }); });
+		return result;
+	}
+
+	void WriteCheckpointArchive(const std::string& fileName, const std::filesystem::path& savePath, int zipLevel,
+	                            const std::string& matchId, std::string_view mainText, std::string_view indexText,
+	                            const std::vector<std::string>& layerNames,
+	                            const std::function<bool(size_t, std::vector<unsigned char>&)>& encode) {
+		const bool automatic = !matchId.empty();
+		if (automatic) std::filesystem::create_directories(savePath.parent_path());
+		struct PendingArchive {
+			std::filesystem::path path;
+			zipFile file = nullptr;
+			~PendingArchive() {
+				if (file) zipClose(file, nullptr);
+				std::error_code ignored;
+				std::filesystem::remove(path, ignored);
+			}
+		} archive{savePath.string() + ".tmp." + std::to_string(System::GetProcessID())};
+		archive.file = zipOpen(archive.path.string().c_str(), APPEND_STATUS_CREATE);
+		if (!archive.file) throw std::runtime_error("could not create temporary archive");
+		const auto writeEntry = [&](const std::string& name, const void* data, size_t size, int method) {
+			zip_fileinfo info{};
+			const auto openEntry =
+#ifdef SYSTEM_MINIZIP
+			    zipOpenNewFileInZip64;
+#else
+			    zipOpenNewFileInZip_64;
+#endif
+			const int level = method == HACK_MZ_COMPRESS_METHOD_DEFLATE ? zipLevel : HACK_MZ_COMPRESS_LEVEL_FAST;
+			if (openEntry(archive.file, name.c_str(), &info, nullptr, 0, nullptr, 0, nullptr, method,
+			                        level, size >= 0xFFFFFFFFULL) != ZIP_OK) {
+				throw std::runtime_error("could not open " + name + " in archive");
+			}
+			const char* bytes = static_cast<const char*>(data);
+			while (size > 0) {
+				const auto count = static_cast<unsigned int>(std::min<size_t>(size, std::numeric_limits<unsigned int>::max()));
+				if (zipWriteInFileInZip(archive.file, bytes, count) != ZIP_OK) throw std::runtime_error("could not write " + name);
+				bytes += count;
+				size -= count;
+			}
+			if (zipCloseFileInZip(archive.file) != ZIP_OK) throw std::runtime_error("could not finish " + name);
+		};
+		writeEntry("Index.ini", indexText.data(), indexText.size(), HACK_MZ_COMPRESS_METHOD_STORE);
+		writeEntry("Save.ini", mainText.data(), mainText.size(), HACK_MZ_COMPRESS_METHOD_DEFLATE);
+		std::vector<std::vector<unsigned char>> pngData(layerNames.size());
+		std::for_each(std::execution::par, pngData.begin(), pngData.end(), [&](auto& png) {
+			const size_t index = &png - pngData.data();
+			try {
+				encode(index, pngData[index]);
+			} catch (const std::exception&) {
+				pngData[index].clear();
+			}
+		});
+		for (size_t i = 0; i < pngData.size(); ++i) {
+			const auto& png = pngData[i];
+			const std::string name = "Save " + layerNames[i] + ".png";
+			if (png.empty()) throw std::runtime_error("could not encode " + name);
+			writeEntry(name, png.data(), png.size(), HACK_MZ_COMPRESS_METHOD_STORE);
+		}
+		const int closed = zipClose(archive.file, fileName.c_str());
+		archive.file = nullptr;
+		if (closed != ZIP_OK) throw std::runtime_error("could not finish archive");
+#ifdef _WIN32
+		if (automatic) {
+			if (!MoveFileExW(archive.path.c_str(), savePath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) throw std::runtime_error("could not publish autosave: " + std::to_string(GetLastError()));
+		} else
+#endif
+		{
+			std::filesystem::rename(archive.path, savePath);
+		}
+		if (automatic) {
+			std::vector<std::pair<uint64_t, std::filesystem::path>> saves;
+			const std::string prefix = matchId + "-";
+			for (const auto& entry: std::filesystem::directory_iterator(savePath.parent_path())) {
+				if (entry.is_symlink() || !entry.is_regular_file()) continue;
+				const std::string name = entry.path().filename().string();
+				if (!name.starts_with(prefix) || !name.ends_with(".ccsave")) continue;
+				const std::string_view number(name.data() + prefix.size(), name.size() - prefix.size() - 7);
+				uint64_t savedTick = 0;
+				const auto parsed = std::from_chars(number.data(), number.data() + number.size(), savedTick);
+				if (parsed.ec == std::errc{} && parsed.ptr == number.data() + number.size()) saves.emplace_back(savedTick, entry.path());
+			}
+			std::sort(saves.begin(), saves.end());
+			for (size_t index = 3; index < saves.size(); ++index) std::filesystem::remove(saves[index - 3].second);
+		}
 	}
 }
 
@@ -181,11 +317,6 @@ bool ActivityMan::WaitForSaveGameTask() const {
 	}
 }
 
-// For some reason these aren't defined on Linux/MacOS... so
-#define HACK_MZ_COMPRESS_METHOD_STORE 0
-#define HACK_MZ_COMPRESS_LEVEL_FAST 2
-#define HACK_MZ_COMPRESS_METHOD_DEFLATE 8
-
 bool ActivityMan::SaveCurrentGame(const std::string& fileName, SaveCompression compression) {
 	WaitForSaveGameTask();
 	const std::string path = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName + ".ccsave";
@@ -201,20 +332,150 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 	const std::string path = System::GetWorkingDirectory() + "Autosaves/" + fileName + ".ccsave";
 	std::shared_future<bool> task;
 	size_t bytes = 0;
-	const auto captureStart = std::chrono::steady_clock::now();
 	try {
-		if (!QueueSaveSnapshot(fileName, path, SaveCompression::Fast, task, matchId, tick, &bytes)) {
+		if (!QueueIncrementalAutosave(fileName, path, matchId, tick, task, bytes)) {
 			std::cout << "[autosave] failed tick=" << tick << " reason=capture refused" << std::endl;
 			return false;
 		}
 		m_AutosaveTasks.push_back(std::move(task));
-		const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count();
-		std::cout << std::format("[autosave] tick={} capture_ms={:.3f} bytes={}\n", tick, captureMs, bytes) << std::flush;
 		return true;
 	} catch (const std::exception& error) {
 		std::cout << "[autosave] failed tick=" << tick << " reason=" << error.what() << std::endl;
 		return false;
 	}
+}
+
+bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
+                                          std::shared_future<bool>& task, size_t& bytes) {
+	Scene* scene = g_SceneMan.GetScene();
+	GAScripted* activity = dynamic_cast<GAScripted*>(GetActivity());
+	if (!scene || !activity || activity->GetActivityState() == Activity::Over) return false;
+	const auto freezeStart = std::chrono::steady_clock::now();
+	g_MovableMan.CompleteQueuedMOIDDrawings();
+	g_MovableMan.WaitForActorsSeeTask();
+	struct CaptureAllocationState {
+		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
+		long uid = MovableObject::GetUniqueIDCounter();
+		int cursor = g_LuaMan.GetScriptStateCursor();
+		CheckpointSoundRegistry sounds = g_AudioMan.CaptureCheckpointSoundRegistry();
+		uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+		std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
+		void RestoreCounters() const { g_SimRNG = sim; g_RenderRNG = render; MovableObject::PinUniqueIDCounter(uid); g_LuaMan.SetScriptStateCursor(cursor); }
+		~CaptureAllocationState() {
+			RestoreCounters();
+			g_AudioMan.RestoreCheckpointSoundRegistry(std::move(sounds));
+			g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
+			g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
+		}
+	} allocation;
+	AudioMan::SoundCheckpointSaveScope carriedSounds;
+	const uint64_t liveSoundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+	auto& cow = CheckpointCow::Get();
+	cow.BeginImage();
+	CheckpointWriter::CacheScope cache(&cow.Cache());
+	auto image = std::make_shared<CheckpointImage>();
+	image->tick = tick;
+	const auto layer = [&](const std::string& name, SceneLayer* value) {
+		if (value) image->layers.emplace_back(name, value->CaptureBitmapSnapshot(&image->retiredLayers));
+	};
+	layer("Mat", scene->GetTerrain());
+	layer("FG", scene->GetTerrain()->GetFGSceneLayer());
+	layer("BG", scene->GetTerrain()->GetBGSceneLayer());
+	for (int team = 0; team < Activity::MaxTeamCount; ++team) layer("UST" + std::to_string(team), scene->GetUnseenLayer(team));
+	const auto activityText = Writer::Capture([&](Writer& writer) {
+		writer.NewPropertyWithValue("Activity", activity);
+		writer.NewPropertyWithValue("HasCheckpointStartActivity", m_StartActivity != nullptr);
+		if (m_StartActivity) writer.NewPropertyWithValue("CheckpointStartActivity", m_StartActivity.get());
+	});
+	std::vector<CheckpointText> graphs;
+	std::vector<std::string> problems;
+	const uint64_t luaWrites = LuaCheckpointWriteGeneration();
+	image->luaReused = cow.LuaUnchanged(luaWrites);
+	if (image->luaReused) graphs = cow.LastLua();
+	else if (!g_MovableMan.CaptureScriptGraphs(graphs, problems)) {
+		std::string message = "script graph capture refused";
+		for (const auto& problem: problems) message += ": " + problem;
+		throw std::runtime_error(message);
+	} else cow.RememberLua(graphs, luaWrites);
+	const auto sceneText = scene->CaptureSavedScene(fileName);
+	g_AudioMan.SetCheckpointSoundContainerCursor(liveSoundCursor);
+	allocation.RestoreCounters();
+	const auto structure = CheckpointWriter::Native([] { return g_MovableMan.SaveWorldStructure(); });
+	const auto sceneRuntime = CheckpointWriter::Native([scene] { return scene->SaveRuntimeCheckpoint(); });
+	const auto globals = CheckpointWriter::Native([&] { return CaptureRuntimeGlobals(carriedSounds.Carried(), false); });
+	image->main = Writer::Capture([&](Writer& writer) {
+		writer.Append(activityText);
+		writer.NewPropertyWithValue("RuntimeGlobals", globals.Base64());
+		writer.NewPropertyWithValue("WorldStructure", structure.Base64());
+		writer.NewPropertyWithValue("SceneRuntime", sceneRuntime.Base64());
+		writer.NewPropertyWithValue("OriginalScenePresetName", scene->GetPresetName());
+		writer.NewPropertyWithValue("SimUpdateCount", g_TimerMan.GetSimUpdateCount());
+		writer.NewPropertyWithValue("SimTimeTicks", g_TimerMan.GetSimTimeTicks());
+		writer.NewPropertyWithValue("UniqueIDCounter", MovableObject::GetUniqueIDCounter());
+		writer.NewPropertyWithValue("LuaStateCursor", g_LuaMan.GetScriptStateCursor());
+		for (const auto& [savedTick, uid]: g_MovableMan.GetLockstepJoinQuarantine()) {
+			writer.NewProperty("LockstepJoinQuarantine");
+			writer << savedTick << "|" << uid;
+		}
+		for (size_t i = 0; i < graphs.size(); ++i) {
+			writer.NewProperty("LuaStateGraph");
+			writer << i << "|";
+			writer << graphs[i].Base64();
+		}
+		writer.NewPropertyWithValue("PlaceObjectsIfSceneIsRestarted", g_SceneMan.GetPlaceObjectsOnLoad());
+		writer.NewPropertyWithValue("PlaceUnitsIfSceneIsRestarted", g_SceneMan.GetPlaceUnitsOnLoad());
+		writer.Append(sceneText);
+	});
+	image->index = Writer::Capture([&](Writer& writer) {
+		writer.NewPropertyWithValue("ActivityName", activity->GetPresetName());
+		writer.NewPropertyWithValue("OriginalScenePresetName", scene->GetPresetName());
+	});
+	image->retired = cow.Cache().RetireUnused();
+	image->imageBytes = image->main.OwnedBytes() + image->index.OwnedBytes();
+	size_t dirtyBytes = 0;
+	std::vector<std::string> layerNames;
+	for (const auto& [name, layerSnapshot]: image->layers) {
+		if (!layerSnapshot) throw std::runtime_error("missing captured bitmap " + name);
+		image->imageBytes += layerSnapshot->LogicalBytes();
+		dirtyBytes += layerSnapshot->copiedBytes;
+		layerNames.push_back(name);
+	}
+	image->dirtyBytes = dirtyBytes;
+	image->dirtyRatio = image->imageBytes ? static_cast<double>(dirtyBytes + (image->luaReused ? 0 : image->main.OwnedBytes())) / static_cast<double>(image->imageBytes) : 0;
+	image->freezeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - freezeStart).count();
+	bytes = image->imageBytes;
+	cow.FinishImage(image);
+	const CheckpointPalette palette = CaptureCheckpointPalette();
+	const auto simThread = std::this_thread::get_id();
+	task = AutosaveWriter().Submit([image, layerNames, palette, fileName, path, matchId, tick, simThread]() mutable {
+		try {
+			if (std::this_thread::get_id() == simThread) throw std::logic_error("autosave serializer missing a worker thread");
+			const auto start = std::chrono::steady_clock::now();
+			image->retired.clear();
+			image->retiredLayers.clear();
+			const std::string& mainText = image->main.Text();
+			const std::string& indexText = image->index.Text();
+			image->workerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+			CheckpointCow::Get().RecordWorker(image->workerUs);
+			CheckpointCow::Get().PublishLog(tick);
+			if (const char* metrics = std::getenv("CCCP_CHECKPOINT_METRICS")) {
+				CheckpointCow::Get().WriteMetricsJson(*metrics ? metrics : (System::GetWorkingDirectory() + "Autosaves/checkpoint-metrics.json"));
+			} else {
+				CheckpointCow::Get().WriteMetricsJson(System::GetWorkingDirectory() + "Autosaves/checkpoint-metrics.json");
+			}
+			const auto images = ReuseAutosaveImages(matchId, image->layers, palette);
+			WriteCheckpointArchive(fileName, path, ActivityMan::c_SaveZipLevelFast, matchId, mainText, indexText, layerNames,
+			    [&](size_t i, std::vector<unsigned char>& png) {
+				    png = images[i]->Bytes();
+				    return true;
+			    });
+			return true;
+		} catch (const std::exception& error) {
+			std::cout << "[autosave] failed tick=" + std::to_string(tick) + " reason=" + error.what() + "\n" << std::flush;
+			return false;
+		}
+	});
+	return true;
 }
 
 void ActivityMan::WaitForAutosaveTasks() const {
