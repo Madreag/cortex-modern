@@ -1860,6 +1860,24 @@ static Actor* NextSpectatorActor(const Actor* current, bool forward) {
 	return forward ? (after ? after : first) : (before ? before : last);
 }
 
+bool GameActivity::ApplyObserveLookAround(int player) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount || m_ViewState[player] != ViewState::Observe) {
+		return false;
+	}
+	const bool freezeHeld = m_ActivityState == ActivityState::Over && !m_GameOverTimer.IsPastSimMS(1000);
+	m_ObserveFreezeHeld[player] = freezeHeld;
+	if (freezeHeld) {
+		return false;
+	}
+	const bool lookedAround = m_PlayerController[player].RelativeCursorMovement(m_ObservationTarget[player], 1.2f);
+	UpdateSpectatorView(player, lookedAround);
+	if (lookedAround && m_ActivityState == ActivityState::Over) {
+		std::cout << "[game-over-freeze] lift tick=" << g_TimerMan.GetSimUpdateCount()
+			<< " elapsed=" << m_GameOverTimer.GetElapsedSimTimeMS() << " player=" << player << std::endl;
+	}
+	return lookedAround;
+}
+
 void GameActivity::UpdateSpectatorView(int player, bool lookedAround) {
 	// Only a brainless human under the host's rule spectates; every other observer keeps the old view.
 	if (!BrainlessHumansSpectate() || !m_HadBrain[player] || (m_Brain[player] && !m_Brain[player]->IsDead())) {
@@ -2042,14 +2060,7 @@ void GameActivity::Update() {
 		// Update sceneman scroll targets
 
 		if (m_ViewState[player] == ViewState::Observe) {
-			// If we're observing game over state, freeze the view for a bit so the player's input doesn't ruin the focus
-			const bool freezeHeld = m_ActivityState == ActivityState::Over && !m_GameOverTimer.IsPastSimMS(1000);
-			m_ObserveFreezeHeld[player] = freezeHeld;
-			if (!freezeHeld) {
-				// Get cursor input
-				const bool lookedAround = m_PlayerController[player].RelativeCursorMovement(m_ObservationTarget[player], 1.2f);
-				UpdateSpectatorView(player, lookedAround);
-			}
+			ApplyObserveLookAround(player);
 			// Set the view to the observation position
 			g_SceneMan.ForceBounds(m_ObservationTarget[player]);
 			g_CameraMan.SetScrollTarget(m_ObservationTarget[player], 0.1, ScreenOfPlayer(player));
@@ -4792,19 +4803,19 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			controller->SetDisabled(true);
 			controller->SetState(ControlState::HOLD_RIGHT, true);
 			const Vector origin = fixture->m_ObservationTarget[0];
-			if (fixture->m_GameOverTimer.IsPastSimMS(1000)) {
-				controller->RelativeCursorMovement(fixture->m_ObservationTarget[0], 1.2F);
-			}
+			fixture->ApplyObserveLookAround(0);
 			check("observe_target_held_until_sim", fixture->m_ObservationTarget[0] == origin,
 				std::to_string(fixture->m_ObservationTarget[0].m_X), "100");
 			fixture->m_ObserveFreezeHeld[0] = true;
 			fixture->Clear();
 			check("observe_freeze_flag_clears", !fixture->m_ObserveFreezeHeld[0], fixture->m_ObserveFreezeHeld[0] ? "1" : "0", "0");
 			fixture->m_ObservationTarget[0] = Vector(100, 100);
+			fixture->m_ViewState[0] = ViewState::Observe;
+			fixture->SetActivityState(ActivityState::Over);
+			fixture->m_GameOverTimer.Reset();
 			fixture->m_GameOverTimer.SetElapsedSimTimeMS(1500);
-			if (fixture->m_GameOverTimer.IsPastSimMS(1000)) {
-				controller->RelativeCursorMovement(fixture->m_ObservationTarget[0], 1.2F);
-			}
+			controller->SetState(ControlState::HOLD_RIGHT, true);
+			fixture->ApplyObserveLookAround(0);
 			check("observe_target_moves_after_sim", fixture->m_ObservationTarget[0] != origin,
 				std::to_string(fixture->m_ObservationTarget[0].m_X), "moved");
 		}

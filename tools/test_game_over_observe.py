@@ -1,8 +1,7 @@
-"""Game-over observe freeze: look-around is held until the same sim tick on both peers.
+"""Game-over observe freeze: look-around lifts at the same sim tick on both peers.
 
-The fixture ends the round, injects HOLD_RIGHT, and prints the observation target.
-On the base (wall-clock freeze) the first move's elapsed sim time differs.
-This arm is written, not run.
+The fixture ends the round. InputScript drives the observe view after OVER. The C++
+gate prints the lift tick at the existing freeze site. Written, not run.
 """
 from __future__ import annotations
 
@@ -16,8 +15,9 @@ import sys
 
 REPO = Path(__file__).resolve().parents[1]
 FIXTURE = REPO / "tools/fixtures/game_over_observe.lua"
+INPUTS = REPO / "tools/fixtures/game_over_observe.txt"
 PRESET = "Determinism Game Over Observe"
-TARGET = re.compile(r"\[game-over-freeze\] target=([-\d.]+),([-\d.]+) elapsed=([-\d.]+) player=(\d+)")
+LIFT = re.compile(r"\[game-over-freeze\] lift tick=(\d+) elapsed=([-\d.]+) player=(\d+)")
 INDEX = (
     "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n"
     "\tAddActivity = GAScripted\n\t\tPresetName = " + PRESET + "\n"
@@ -42,28 +42,11 @@ def peer_log(run_dir: Path) -> str:
     return text
 
 
-def parse_targets(text: str) -> list[tuple[float, float, float]]:
-    rows = []
-    for match in TARGET.finditer(text):
-        rows.append((float(match.group(1)), float(match.group(2)), float(match.group(3))))
-    return rows
-
-
-def first_move_elapsed(rows: list[tuple[float, float, float]]) -> float | None:
-    if not rows:
+def first_lift(text: str) -> tuple[int, float] | None:
+    match = LIFT.search(text)
+    if not match:
         return None
-    origin = (rows[0][0], rows[0][1])
-    for x, y, elapsed in rows:
-        if (x, y) != origin:
-            return elapsed
-    return None
-
-
-def held_until_sim(rows: list[tuple[float, float, float]]) -> bool:
-    if not rows:
-        return False
-    origin = (rows[0][0], rows[0][1])
-    return all((x, y) == origin for x, y, elapsed in rows if elapsed < 1000.0)
+    return int(match.group(1)), float(match.group(2))
 
 
 def stage_module(runtime: Path) -> None:
@@ -75,18 +58,15 @@ def stage_module(runtime: Path) -> None:
 
 def inspect(root: Path, peers: tuple[str, ...]) -> dict:
     checks = {}
-    details = {"first_move": {}, "held": {}}
-    moves = []
+    details = {"lift": {}}
+    ticks = []
     for who in peers:
-        rows = parse_targets(peer_log(root / who))
-        move = first_move_elapsed(rows)
-        held = held_until_sim(rows)
-        details["first_move"][who] = move
-        details["held"][who] = held
-        checks[f"{who}_held"] = held
-        checks[f"{who}_moved"] = move is not None
-        moves.append(move)
-    checks["same_tick"] = len(set(moves)) == 1 and None not in moves
+        lift = first_lift(peer_log(root / who))
+        details["lift"][who] = None if lift is None else {"tick": lift[0], "elapsed": lift[1]}
+        checks[f"{who}_lifted"] = lift is not None
+        checks[f"{who}_held"] = bool(lift and lift[1] >= 1000.0)
+        ticks.append(None if lift is None else lift[0])
+    checks["same_tick"] = len(set(ticks)) == 1 and None not in ticks
     return {"pass": all(checks.values()), "checks": checks, "details": details}
 
 
@@ -113,6 +93,7 @@ def main():
                      "-net-match-ticks", str(options.ticks), "-net-match-input-delay", "3",
                      "-net-match-service-preset", PRESET, "-net-match-service-module", "UserScenes.rte",
                      "-net-autosave-seconds", "0",
+                     "-input-script", str(INPUTS),
                      "-net-match-report", str(root / f"{who}_report.json")]
             flags += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
             env = {"CCCP_HEADLESS": "1"}
@@ -126,6 +107,7 @@ def main():
         result = inspect(root, peers)
         result["driver_sha256"] = sha(Path(__file__))
         result["fixture_sha256"] = sha(FIXTURE)
+        result["input_sha256"] = sha(INPUTS)
         (root / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         print("PASS" if result["pass"] else "FAIL", "game_over_observe", result["details"])
         return 0 if result["pass"] else 1

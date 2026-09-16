@@ -806,6 +806,8 @@ namespace RTE {
 		void DriveScriptedSetupEditor(int player);
 		/// Runs a queued actor-select onto a craft passenger for a presented seat after the match starts.
 		void DriveScriptedActorSelect(int player);
+		/// Observe look-around after OVER: freeze until GameOverTimer is past 1000 sim ms, then apply cursor input.
+		bool ApplyObserveLookAround(int player);
 		/// Draw-only ActorSelect/Go-To pie highlight for a local seat.
 		void ApplyCursorHighlightDraw(int player);
 		/// Clears the draw-only highlight when the cursor leaves an actor or those views.
