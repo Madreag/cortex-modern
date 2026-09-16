@@ -94,6 +94,13 @@ PAUSE_PAGE_FIRST_VALUE = {
     "Gameplay": "CheckboxBlipOnRevealUnseen",
     "Misc": "CheckboxShowToolTips",
 }
+# Completion-pass size rows. This lane writes them; it does not run them.
+SIZE_GATES = (
+    ("net-chat", "960x540"),
+    ("net-chat", "1280x720"),
+)
+
+
 def page_value_columns(captures, first_value):
     rows = []
     for capture in captures:
@@ -861,6 +868,9 @@ def run_case(options, case, root, failing=None):
                         "net-files": "Network:Files", "net-internet": "Network:Internet",
                         "misc-page": "Misc"}[case]
             assert [capture["settings_page"] for capture in images] == [sub_page], [c["settings_page"] for c in images]
+            if case == "net-chat":
+                result["size_gates"] = [list(row) for row in SIZE_GATES]
+                result["net_chat_size"] = options.size
             rows = {control["name"]: control for control in images[0]["controls"]}
             expected = {"net-chat": ("CheckboxNetworkChatVisible", "CheckboxNetworkChatSound", "ComboNetworkChatScope",
                                      "CheckboxNetworkChatNotify", "ComboNetworkChatTextSize",
