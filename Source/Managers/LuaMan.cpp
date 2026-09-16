@@ -6528,8 +6528,7 @@ _PrimitiveQueueCapture = nil
 	checkpointValues = previewLeavesGlobalsAsFound && checkpointValues;
 	std::cout << "[script-graph-selftest] " << (previewDeepGlobalWritesUndone ? "PASS" : "FAIL") << " preview_deep_global_writes_undone" << std::endl;
 	checkpointValues = previewDeepGlobalWritesUndone && checkpointValues;
-	// A mod's own state sits at any depth under a global, so the barrier owes the same undo at depth 1, 3 and 8:
-	// values written come back, keys removed return, chains the window built go.
+	// Deep global writes must undo at every depth the walk reached.
 	bool previewDepthWritesUndone = false;
 	bool previewWindowModCompat = false;
 	std::string previewDepthError;
@@ -6622,7 +6621,7 @@ end
 			LuaMan::PreviewHookScope hookScope(true);
 			modCompatInside = runKeep(observableSemantics, previewModcompatError);
 			depthWrite = runKeep("_PreviewDepth.d1.v = 2; _PreviewDepth.d3.a.b.v = 2; _PreviewDepth.d3.a.b.gone = nil; _PreviewDepth.d8.a.b.c.d.e.f.g.v = 2; _PreviewDepth.d8.a.b.c.d.e.f.g.gone = nil; _PreviewDepth.born = { x = { y = { z = 2 } } }", previewDepthError);
-			// Insert and sort reach the array part through lj_tab_setint's macro, not the interpreter stores.
+			// Array slack writes must undo the same as interpreter stores.
 			slackWrite = runKeep("table.insert(_PreviewSlack, 6); table.insert(_PreviewSlack, 1, 0); table.sort(_PreviewSlack, function(a, b) return a > b end)", previewDepthError);
 			depthLanded = runKeep("assert(_PreviewDepth.d1.v == 2, 'depth 1 write did not land'); assert(_PreviewDepth.d3.a.b.v == 2 and _PreviewDepth.d3.a.b.gone == nil, 'depth 3 write did not land'); assert(_PreviewDepth.d8.a.b.c.d.e.f.g.v == 2 and _PreviewDepth.d8.a.b.c.d.e.f.g.gone == nil, 'depth 8 write did not land'); assert(_PreviewDepth.born ~= nil and _PreviewDepth.born.x.y.z == 2, 'window-born deep chain did not land')", previewDepthError);
 			slackLanded = runKeep("assert(#_PreviewSlack == 7, 'slack insert did not land'); for i = 1, 7 do assert(_PreviewSlack[i] == 7 - i, 'slack insert or sort did not land') end", previewDepthError);
