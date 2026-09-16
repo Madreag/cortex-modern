@@ -1229,6 +1229,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	std::array<std::string, 4> lobbyRowName;
 	std::array<std::string, 4> lobbyRowTailFull;
 	std::array<std::string, 4> lobbyRowTailMarked;
+	std::array<std::string, 4> lobbyRowTailBare;
 	for (size_t i = 0; i < m_MultiplayerLobbyPlayerLabels.size(); ++i) {
 		GUILabel* label = m_MultiplayerLobbyPlayerLabels[i];
 		if (i >= snapshot.members.size()) {
@@ -1239,12 +1240,12 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		const NetLobbyMember& member = snapshot.members[i];
 		// The seat line is the verbose form of the seat mark; the row keeps whichever fits.
 		const std::string seatMark = std::string(NetReconnectUx::RosterMark(member.dropped, member.reclaiming));
-		const auto buildTail = [&member, &snapshot](const std::string& seat) {
+		const auto buildTail = [&member, &snapshot](const std::string& seat, bool withDelay = true) {
 			std::string tail = member.isLocal ? " (you)" : "";
 			tail += " - Team " + std::to_string(member.team + 1);
 			tail += member.peerId == 1 ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
 			tail += seat;
-			if (member.isLocal && !snapshot.inputDelayText.empty()) {
+			if (withDelay && member.isLocal && !snapshot.inputDelayText.empty()) {
 				tail += " - " + snapshot.inputDelayText;
 			}
 			if (!member.isLocal && member.connected) {
@@ -1259,6 +1260,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		lobbyRowName[i] = member.displayName;
 		lobbyRowTailFull[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine);
 		lobbyRowTailMarked[i] = buildTail(seatMark);
+		// The delay's own tail is the rung after the seat's: a row still too long sheds it next.
+		lobbyRowTailBare[i] = buildTail(seatMark, false);
 		label->SetVisible(true);
 	}
 	static std::string s_shareAddress;
@@ -1328,7 +1331,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		if (!label || lobbyRowTailFull[i].empty()) {
 			continue;
 		}
-		const auto fitRow = [this, rowBoxWidth](const std::string& name, const std::string& tailFull, const std::string& tailMarked) {
+		const auto fitRow = [this, rowBoxWidth](const std::string& name, const std::string& tailFull, const std::string& tailMarked, const std::string& tailBare) {
 			const auto elide = [this, rowBoxWidth](const std::string& name, const std::string& tail) {
 				if (!m_MultiplayerLobbyPlayerRowFont || m_MultiplayerLobbyPlayerRowFont->CalculateWidth(name + tail, m_MultiplayerLobbyPlayerRowFallbackFont) <= rowBoxWidth) {
 					return name + tail;
@@ -1340,12 +1343,19 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 				return trimmed + "..." + tail;
 			};
 			std::string row = elide(name, tailFull);
-			if (m_MultiplayerLobbyPlayerRowFont && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(row, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
+			const auto tooLong = [this, rowBoxWidth](const std::string& text) {
+				return m_MultiplayerLobbyPlayerRowFont && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(text, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth;
+			};
+			if (tooLong(row)) {
 				row = elide(name, tailMarked);
+			}
+			// A tail still too long sheds the delay's rung before the row wraps.
+			if (tooLong(row)) {
+				row = elide(name, tailBare);
 			}
 			return row;
 		};
-		label->SetText(fitRow(lobbyRowName[i], lobbyRowTailFull[i], lobbyRowTailMarked[i]));
+		label->SetText(fitRow(lobbyRowName[i], lobbyRowTailFull[i], lobbyRowTailMarked[i], lobbyRowTailBare[i]));
 		label->EnsureDrawableTextFont("FontSmall.png");
 	}
 	// The port-map row sits under the wrapped status, so the error starts below both.
