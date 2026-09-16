@@ -436,6 +436,11 @@ namespace RTE::MenuAutomation {
 					std::string text;
 					Json row = {{"name", item->GetName()}, {"rect", Rectangle(panel)}, {"parent", parent ? parent->GetName() : ""},
 						{"parent_rect", Rectangle(panel->GetParentPanel())}, {"text", Text(item, text) ? text : ""}, {"enabled", Enabled(item)}, {"visible", true}, {"focus", panel->HasFocus()}};
+					// The combo's open list is a panel, not a control, so its state rides its owner's row.
+					if (auto* combo = dynamic_cast<GUIComboBox*>(item)) {
+						row["dropped"] = combo->IsDropped();
+						row["item_count"] = combo->GetCount();
+					}
 					// Measure every drawn caption here so a layout review reads the whole page, not the named controls.
 					std::string measured;
 					if (!text.empty()) { row["text_fits"] = TextFits(manager, item, measured); row["text_measure"] = measured; }
