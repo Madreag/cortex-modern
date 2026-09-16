@@ -1,5 +1,5 @@
--- Ends the round on sim time and sits in Observe. Look-around is the observe view's own input
--- (InputScript MOUSE= / L_RIGHT) after OVER; the freeze-lift tick is printed at the C++ gate.
+-- Ends the round on sim time and prints OVER.
+-- The detector is the native ApplyObserveLookAround row.
 GameOverObserve = {};
 
 local BRAIN_X = 880;
