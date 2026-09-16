@@ -88,8 +88,8 @@ namespace RTE {
 			if (!gameActivity->ConfigureLockstepPlayers() && localTeam != Activity::Teams::NoTeam) {
 				gameActivity->AddPlayer(Players::PlayerOne, true, localTeam, 0);
 			}
-			// Activate every team in the synced roster so all peers run the identical team set, and seat each
-			// on the agreed gold. The activity's own script still has the last word through GetStartingGold.
+			// Activate every team in the synced roster so all peers run the identical team set, and seed each
+			// with the agreed starting gold — that seed is the intended lobby behaviour.
 			for (int team = Activity::Teams::TeamOne; team < Activity::Teams::MaxTeamCount; ++team) {
 				if (team == localTeam || ScenarioRunner::IsLockstepActiveTeam(team)) {
 					gameActivity->ForceSetTeamAsActive(team);
