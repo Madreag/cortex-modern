@@ -832,6 +832,8 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 			} else {
 				m_MultiplayerJoinAddressTextBox->SetText(row.address);
 				m_MultiplayerJoinPortTextBox->SetText(std::to_string(row.port));
+				m_JoinTargetPersistentWorld = row.persistentWorld || row.activity == "Persistent World";
+				m_JoinTargetActivity = row.activity;
 				if (m_MultiplayerLanGamesLabel) {
 					m_MultiplayerLanGamesLabel->SetText(m_LanGamesLabelText);
 				}
@@ -942,6 +944,12 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		g_SettingsMan.UpdateSettingsFile();
 	}
 	request.activityPreset = "P4 Alpha Duel";
+	if (!host && (m_JoinTargetPersistentWorld || m_JoinTargetActivity == "Persistent World")) {
+		request.persistentWorld = true;
+		if (!m_JoinTargetActivity.empty()) {
+			request.activityPreset = m_JoinTargetActivity;
+		}
+	}
 	if (host && m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size()) {
 		// The host's picker names both fields, so the lobby never resolves a bare preset name.
 		request.activityPreset = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].first;
@@ -1833,8 +1841,13 @@ void MainMenuGUI::RefreshGamesList() {
 		NetIdentityBuildOptions identityOptions;
 		identityOptions.buildId = "stage2-p2d-local";
 		identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+		NetIdentity::StampOptionsForTarget(identityOptions, false);
 		std::string identityError;
 		const bool identityBuilt = NetIdentity::BuildCurrentManifest(manifest, &identityError, identityOptions);
+		NetIdentityManifest worldManifest;
+		NetIdentityBuildOptions worldOptions = identityOptions;
+		NetIdentity::StampOptionsForTarget(worldOptions, true);
+		const bool worldBuilt = NetIdentity::BuildCurrentManifest(worldManifest, &identityError, worldOptions);
 		g_TimerMan.SetDeltaTimeSecs(menuDeltaTime);
 		if (identityBuilt) {
 			NetDirectoryLocalIdentity local;
@@ -1845,8 +1858,18 @@ void MainMenuGUI::RefreshGamesList() {
 			local.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
 			m_DirectoryIdentity = local;
 		}
+		if (worldBuilt) {
+			NetDirectoryLocalIdentity worldLocal;
+			worldLocal.networkProtocolVersion = worldManifest.networkProtocolVersion;
+			worldLocal.lockstepCodecVersion = worldManifest.deterministicConfig.lockstepCodecVersion;
+			worldLocal.controllerFrameVersion = worldManifest.controllerFrameVersion;
+			worldLocal.sessionIdentityHash = NetIdentity::HashHex(worldManifest.sessionIdentityHash);
+			worldLocal.moduleManifestHash = NetIdentity::HashHex(worldManifest.moduleManifestHash);
+			m_DirectoryWorldIdentity = worldLocal;
+		}
 	}
-	std::vector<NetDirectoryClient::GameRow> rows = NetDirectoryClient::MergeGameLists(hosts, m_DirectoryBrowser.Rows(), m_DirectoryIdentity.value_or(NetDirectoryLocalIdentity{}));
+	const NetDirectoryLocalIdentity* worldIdent = m_DirectoryWorldIdentity ? &*m_DirectoryWorldIdentity : nullptr;
+	std::vector<NetDirectoryClient::GameRow> rows = NetDirectoryClient::MergeGameLists(hosts, m_DirectoryBrowser.Rows(), m_DirectoryIdentity.value_or(NetDirectoryLocalIdentity{}), worldIdent);
 	if (!m_DirectoryIdentity) {
 		// Without the local identity no NET row can be proven compatible.
 		for (NetDirectoryClient::GameRow& row: rows) {

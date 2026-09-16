@@ -553,7 +553,8 @@ namespace RTE {
 
 	std::vector<NetDirectoryClient::GameRow> NetDirectoryClient::MergeGameLists(const std::vector<NetLanHostInfo>& lan,
 	                                                                          const std::vector<NetDirectorySessionRow>& directory,
-	                                                                          const NetDirectoryLocalIdentity& local) {
+	                                                                          const NetDirectoryLocalIdentity& local,
+	                                                                          const NetDirectoryLocalIdentity* worldLocal) {
 		std::vector<GameRow> rows;
 		rows.reserve(lan.size() + directory.size());
 		for (const NetLanHostInfo& host : lan) {
@@ -576,7 +577,8 @@ namespace RTE {
 				lanIdentity.sessionIdentityHash = host.compatibility.sessionIdentityHash;
 				lanIdentity.moduleManifestHash = host.compatibility.moduleManifestHash;
 				std::string why;
-				if (NetDirectoryCodec::IsJoinable(lanIdentity, local, &why)) {
+				const bool lanWorld = worldLocal != nullptr && host.compatibility.lockstepCodecVersion == worldLocal->lockstepCodecVersion;
+				if (NetDirectoryCodec::IsJoinable(lanIdentity, lanWorld ? *worldLocal : local, &why)) {
 					row.joinable = true;
 				} else {
 					row.reason = MapMismatchReason(why);
@@ -596,8 +598,10 @@ namespace RTE {
 			}
 			row.port = static_cast<uint16_t>(session.listenPort);
 			row.sessionId = session.sessionId;
+			row.persistentWorld = session.persistentWorld;
 			std::string why;
-			if (!NetDirectoryCodec::IsJoinable(session, local, &why)) {
+			const NetDirectoryLocalIdentity& ident = (session.persistentWorld && worldLocal != nullptr) ? *worldLocal : local;
+			if (!NetDirectoryCodec::IsJoinable(session, ident, &why)) {
 				row.reason = MapMismatchReason(why);
 			} else if (session.seatsFree == 0 && !session.persistentWorld) {
 				row.reason = "full";

@@ -64,6 +64,7 @@ namespace RTE {
 			bool joinable = false;
 			std::string reason;    //!< Empty when joinable, else the refusal label.
 			std::string sessionId; //!< NET rows only.
+			bool persistentWorld = false;
 		};
 
 		NetDirectoryClient();
@@ -108,7 +109,8 @@ namespace RTE {
 
 		static std::vector<GameRow> MergeGameLists(const std::vector<NetLanHostInfo>& lan,
 		                                         const std::vector<NetDirectorySessionRow>& directory,
-		                                         const NetDirectoryLocalIdentity& local);
+		                                         const NetDirectoryLocalIdentity& local,
+		                                         const NetDirectoryLocalIdentity* worldLocal = nullptr);
 
 		/// The service.directory report section: {state, session_id, registers, heartbeats, deletes,
 		/// last_status, last_error, desired_listed, confirmed_listed, supports_unlisted}; without a held

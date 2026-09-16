@@ -1,5 +1,7 @@
 #pragma once
 
+#include "NetLockstep.h"
+#include "NetMatchConfig.h"
 #include "NetProtocol.h"
 
 #include <cstdint>
@@ -101,12 +103,15 @@ namespace RTE {
 		std::string buildId = "unknown";
 		std::string sessionRulesTag = "p2-session-rules-unset";
 		bool includeUserdataModules = false;
-		uint16_t matchConfigVersion = 4;   // Ordinary live config. A world stamps 5.
-		uint16_t lockstepCodecVersion = 22; // Ordinary live frames. A world stamps 23.
+		uint16_t matchConfigVersion = NetMatchConfigUtil::c_Version;
+		uint16_t lockstepCodecVersion = NetLockstepCodec::c_Version;
 	};
 
 	class NetIdentity {
 	public:
+		/// Ordinary target keeps c_Version / lockstep c_Version. A world target stamps
+		/// c_PersistentWorldVersion / c_WorldTransitionVersion.
+		static void StampOptionsForTarget(NetIdentityBuildOptions& options, bool world);
 		static bool BuildCurrentManifest(NetIdentityManifest& outManifest, std::string* error = nullptr, NetIdentityBuildOptions options = {});
 		static bool WriteManifestJson(const NetIdentityManifest& manifest, const std::string& path, std::string* error = nullptr);
 		static bool DumpCurrentManifestJson(const std::string& path, std::string* error = nullptr, NetIdentityManifest* outManifest = nullptr);

@@ -121,6 +121,7 @@ namespace RTE {
 		std::string joinMode;  //!< "ip" | "ice" | "either", as the row carries it.
 		std::string address;   //!< Set when the row also advertises a direct address.
 		uint16_t port = 0;
+		bool persistentWorld = false;
 	};
 
 	/// The GNS identity a host binds for a directory session; the dispatcher's rule, readable in a
@@ -132,7 +133,7 @@ namespace RTE {
 
 	/// Resolves a session id against a directory listing. Empty and a filled target when the row can
 	/// be joined, else the join list's own refusal label for it.
-	std::string NetIceResolveSessionRow(const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, const std::string& sessionId, NetIceJoinTarget* out);
+	std::string NetIceResolveSessionRow(const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, const std::string& sessionId, NetIceJoinTarget* out, const NetDirectoryLocalIdentity* worldLocal = nullptr);
 
 	enum class NetMatchServiceState {
 		Idle,
