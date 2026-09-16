@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -41,6 +42,29 @@ class OracleVacuity(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 with self.assertRaisesRegex(RuntimeError, "missing pair snapshot for world compare"):
                     pair_arms(Path(tmp))
+
+    def test_failed_world_compare_stops_the_arm(self):
+        """Base tree invoked check_world without require_zero and discarded a failed compare."""
+        from phase_b import invoke as real_invoke
+
+        def run_pair_ok(script, argv, out, require_zero=False):
+            if Path(script).name == "run_pair.py":
+                Path(out).write_text("ok\n", encoding="utf-8")
+                return {"command": [], "exit": 0, "log": str(out)}
+            return real_invoke(script, argv, out, require_zero=require_zero)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pair = root / "reseat" / "e2e" / "snapshot_p5"
+            for number, peer in enumerate(("host", "client"), 1):
+                dest = pair / peer / "runtime" / "Userdata" / "UserSavedGames.rte"
+                dest.mkdir(parents=True)
+                save = dest / f"p5snap_p{number}.ccsave"
+                with zipfile.ZipFile(save, "w") as archive:
+                    archive.writestr("Index.ini", "x")
+            with patch("phase_b.invoke", side_effect=run_pair_ok):
+                with self.assertRaisesRegex(RuntimeError, r"check_world\.py exited 1; comparison did not complete"):
+                    pair_arms(root)
 
     def test_none_brains_cannot_pass_brain_records_equal(self):
         with patch("check_world.world", side_effect=[
