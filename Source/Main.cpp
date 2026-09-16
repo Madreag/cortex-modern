@@ -944,7 +944,6 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (currentArg == "-net-persistent-world") {
 			s_netPersistentWorld = true;
-			++i;
 			continue;
 		}
 
@@ -3643,6 +3642,11 @@ void RunGameLoop() {
 			g_TimerMan.SetFreeRunSim(freeRunLockstep);
 		}
 
+		// A world joiner applies the committed tail faster than real time, still bounded per frame.
+		if (ScenarioRunner::WorldCatchUpActive()) {
+			g_TimerMan.GrantSimUpdates(ScenarioRunner::c_WorldCatchUpTicksPerRealFrame);
+		}
+
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
 		while (g_TimerMan.TimeForSimUpdate()) {
 			ZoneScopedN("Simulation Update");
@@ -5854,6 +5858,7 @@ int RunNetDirectoryList() {
 	NetIdentityBuildOptions identityOptions;
 	identityOptions.buildId = "stage2-p2d-local";
 	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+	NetIdentity::StampOptionsForTarget(identityOptions, false);
 	if (!NetIdentity::BuildCurrentManifest(manifest, &reason, identityOptions)) {
 		std::cerr << "[net-directory-list] identity manifest failed: " << reason << std::endl;
 		return 1;
@@ -5864,6 +5869,17 @@ int RunNetDirectoryList() {
 	local.controllerFrameVersion = manifest.controllerFrameVersion;
 	local.sessionIdentityHash = NetIdentity::HashHex(manifest.sessionIdentityHash);
 	local.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
+	NetIdentityManifest worldManifest;
+	NetIdentityBuildOptions worldOptions = identityOptions;
+	NetIdentity::StampOptionsForTarget(worldOptions, true);
+	NetDirectoryLocalIdentity worldLocal;
+	if (NetIdentity::BuildCurrentManifest(worldManifest, &reason, worldOptions)) {
+		worldLocal.networkProtocolVersion = worldManifest.networkProtocolVersion;
+		worldLocal.lockstepCodecVersion = worldManifest.deterministicConfig.lockstepCodecVersion;
+		worldLocal.controllerFrameVersion = worldManifest.controllerFrameVersion;
+		worldLocal.sessionIdentityHash = NetIdentity::HashHex(worldManifest.sessionIdentityHash);
+		worldLocal.moduleManifestHash = NetIdentity::HashHex(worldManifest.moduleManifestHash);
+	}
 
 	const std::string& baseUrl = g_SettingsMan.GetSessionDirectoryUrl();
 	NetDirectoryClient directory;
@@ -5893,7 +5909,7 @@ int RunNetDirectoryList() {
 		return 1;
 	}
 
-	const std::vector<NetDirectoryClient::GameRow> rows = NetDirectoryClient::MergeGameLists(lan, directory.Rows(), local);
+	const std::vector<NetDirectoryClient::GameRow> rows = NetDirectoryClient::MergeGameLists(lan, directory.Rows(), local, worldLocal.lockstepCodecVersion != 0 ? &worldLocal : nullptr);
 	for (const NetDirectoryClient::GameRow& row : rows) {
 		std::cout << "[net-directory-list] source=" << row.source << " name=\"" << row.name << "\" activity=\"" << row.activity << "\" mode=\"" << row.mode
 		          << "\" players=" << row.players << " address=" << row.address << ":" << row.port
@@ -6145,7 +6161,6 @@ int main(int argc, char** argv) {
 		if (!s_netMatchServicePresetExplicit) {
 			s_netMatchServiceE2EPreset = "Persistent World";
 		}
-		s_netPersistentWorld = true;
 	}
 	if (s_netMatchServiceE2EPreset == "Persistent World") {
 		s_netPersistentWorld = true;
