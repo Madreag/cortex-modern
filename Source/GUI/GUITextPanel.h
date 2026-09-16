@@ -122,6 +122,7 @@ namespace RTE {
 		void SetMaxTextLength(int maxLength) { m_MaxTextLength = maxLength; }
 
 	private:
+		GUISkin* m_TextSkin = nullptr;
 		unsigned long m_FontSelectColor;
 
 		std::string m_Text;

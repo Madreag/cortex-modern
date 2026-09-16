@@ -100,13 +100,21 @@ namespace RTE {
 		bool PlaceAndSubmitLockstepBrain(int player, const std::string& className, const std::string& preset, const std::string& module);
 
 		/// Test-only seam: queues one scripted setup-editor gesture for a seat. "place_brain" holds the named
-		/// brain over the ground at a fraction of the scene's width and presses; "done" presses DONE. The
-		/// gesture runs through the seat's own SceneEditorGUI, so the commit takes the path a player's does.
+		/// brain over the ground at a fraction of the scene's width and presses; "done" presses DONE;
+		/// "place_object" places a non-brain through the same editor; "actor_select" switches onto a craft
+		/// passenger after the match starts. The gesture runs through the seat's own paths.
 		/// @return Whether the gesture was queued.
 		static bool QueueSetupEditorGesture(int player, const std::string& kind, float sceneXFraction, const std::string& className, const std::string& preset, const std::string& module);
 
 		/// 0 = nothing queued for the seat, 1 = a gesture is still running, 2 = the seat could not carry it out.
 		static int SetupEditorGestureStatus(int player);
+
+		/// Whether this peer may write sim state for the seat (roster owner). True when lockstep is off.
+		bool MayWriteLockstepSeat(int player) const;
+
+		/// The in-game editor refused a write on this seat because the peer does not own it.
+		static void NoteEditorWriteRefused(int player);
+		static bool EditorWriteWasRefused(int player);
 
 		/// Whether a seat has flagged itself ready to start.
 		bool IsReadyToStart(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_ReadyToStart[player]; }
@@ -789,6 +797,8 @@ namespace RTE {
 		void RefuseBrainPlacement(int player, const std::string& reason, bool banner);
 		/// Runs the seat's queued scripted editor gesture, if it has one, the way that seat's own input would.
 		void DriveScriptedSetupEditor(int player);
+		/// Runs a queued actor-select onto a craft passenger for a presented seat after the match starts.
+		void DriveScriptedActorSelect(int player);
 		/// Builds every seat's committed brain, in seat order, from a unique-id counter pinned to the same
 		/// value on every peer. A local editor's own preview objects take ids off that counter on one peer
 		/// alone, so the shared brains are made only after it is put back in step.

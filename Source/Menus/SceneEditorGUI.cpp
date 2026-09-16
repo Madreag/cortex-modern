@@ -907,8 +907,13 @@ void SceneEditorGUI::Update() {
 				}
 				// If in-game editing, then place into the sim
 				else {
-					// Check if team can afford the placed object and if so, deduct the cost
-					if (g_ActivityMan.GetActivity()->GetTeamFunds(m_pController->GetTeam()) < m_pCurrentObject->GetTotalValue(m_NativeTechModule, m_ForeignCostMult)) {
+					auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+					if (game && !game->MayWriteLockstepSeat(m_pController->GetPlayer())) {
+						g_FrameMan.ClearScreenText(g_ActivityMan.GetActivity()->ScreenOfPlayer(m_pController->GetPlayer()));
+						g_FrameMan.SetScreenText("You can't place that from this seat!", g_ActivityMan.GetActivity()->ScreenOfPlayer(m_pController->GetPlayer()), 333, 1500);
+						g_GUISound.UserErrorSound()->Play(m_pController->GetPlayer());
+						game->NoteEditorWriteRefused(m_pController->GetPlayer());
+					} else if (g_ActivityMan.GetActivity()->GetTeamFunds(m_pController->GetTeam()) < m_pCurrentObject->GetTotalValue(m_NativeTechModule, m_ForeignCostMult)) {
 						g_FrameMan.ClearScreenText(g_ActivityMan.GetActivity()->ScreenOfPlayer(m_pController->GetPlayer()));
 						g_FrameMan.SetScreenText("You can't afford to place that!", g_ActivityMan.GetActivity()->ScreenOfPlayer(m_pController->GetPlayer()), 333, 1500);
 						g_GUISound.UserErrorSound()->Play(m_pController->GetPlayer());
