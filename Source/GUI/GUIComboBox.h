@@ -67,6 +67,12 @@ namespace RTE {
 		/// @param Source Signal source, Signal code, Signal data.
 		void ReceiveSignal(GUIPanel* Source, int Code, int Data) override;
 
+		/// Enter drops a closed list; Escape is ignored here so the list's own cancel path owns it.
+		void OnKeyDown(int KeyCode, int Modifier) override;
+
+		/// Up/Down on a closed focused list steps the selection and commits it.
+		void OnKeyPress(int KeyCode, int Modifier) override;
+
 		/// Locks the control from updating every time a new item is added.
 		void BeginUpdate();
 
@@ -173,6 +179,11 @@ namespace RTE {
 		bool IsDropped() { return m_ListPanel->_GetVisible(); }
 
 	private:
+		/// Opens the list the same way a button or text-panel click does.
+		void DropList();
+		/// Closes the dropped list: commit keeps the highlight, cancel restores the saved row.
+		void CloseDropped(bool commit);
+
 		GUIBitmap* m_DrawBitmap;
 		int m_OldSelection;
 		bool m_CreatedList;
