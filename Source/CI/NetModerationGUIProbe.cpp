@@ -415,10 +415,16 @@ namespace {
 		} else if (op == "assert_control") {
 			observed["control"] = ReadControl(Control(step));
 			const auto& value = observed["control"];
-			for (auto it = step.at("equals").begin(); it != step["equals"].end(); ++it) {
-				Require(value.at(it.key()) == it.value(), "control assertion differs: " + it.key());
+			if (step.contains("equals")) {
+				for (auto it = step.at("equals").begin(); it != step["equals"].end(); ++it) {
+					Require(value.at(it.key()) == it.value(), "control assertion differs: " + it.key());
+				}
 			}
-			if (step.contains("text_contains")) Require(value.at("text").get<std::string>().find(step["text_contains"].get<std::string>()) != std::string::npos, "control text is missing expected content");
+			if (step.contains("text_contains")) {
+				const std::string text = value.at("text").get<std::string>();
+				const std::string needle = step["text_contains"].get<std::string>();
+				Require(text.find(needle) != std::string::npos, "control text '" + text + "' does not contain '" + needle + "'");
+			}
 			if (step.value("fits", false)) {
 				const auto& rect = value["rect"];
 				Require(rect[0].get<int>() >= 0 && rect[1].get<int>() >= 0 && rect[0].get<int>() + rect[2].get<int>() <= g_WindowMan.GetResX() &&
