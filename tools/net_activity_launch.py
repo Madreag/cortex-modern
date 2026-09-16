@@ -40,10 +40,16 @@ def rules_for(variant):
         rules["starting_gold"] = 1000000000
     elif variant == "site":
         rules["scene_name"] = "Fredeleig Plains"
-    elif variant in ("stock", "stock-scene"):
-        # stock-scene is the stock arm with a named non-Grasslands site on the request, not the default.
+    elif variant == "stock":
         rules["activity_preset"] = "Skirmish Defense"
         rules["scene_name"] = "Ketanot Hills"
+    elif variant == "stock-scene":
+        # No standardRules: the request names the site, so a missing scene write stays Grasslands.
+        rules["activity_preset"] = "Skirmish Defense"
+        rules["scene_name"] = "Ketanot Hills"
+        rules.update(difficulty=50, starting_gold=0, fog_of_war=False, require_clear_path_to_orbit=False,
+                     deploy_units=False)
+        rules["teams"][1] = dict(technology_intent="-All-", technology_module="", ai_skill=50)
     elif variant in ("brains", "brains-auto", "hold-desync", "hold-resync", "resync-skirmish", "brains-longname",
                      "brains-shared", "wire-refusal"):
         # Skirmish Defense on a site with no brain on it: every human seat has to place its own brain in
@@ -565,9 +571,22 @@ def launch(options):
         # The seatless path: every peer stands in for its own players' DONE at the deterministic spot.
         common.append("-net-match-e2e-brain-placement")
     runs, records = {}, {}
+    host_flags = []
     try:
         for peer in ("host", "client"):
-            flags = ["-net-dedicated" if options.dedicated else "-net-host", "-net-match-service-config", str(config)] if peer == "host" else ["-net-join", "127.0.0.1"]
+            if peer == "host":
+                flags = ["-net-dedicated"] if options.dedicated else ["-net-host"]
+                if options.variant == "stock-scene":
+                    flags += ["-net-match-service-preset", rules["activity_preset"],
+                              "-net-match-service-module", rules["activity_module"],
+                              "-net-match-service-scene", rules["scene_name"],
+                              "-net-match-service-scene-module", rules["scene_module"]]
+                else:
+                    flags += ["-net-match-service-config", str(config)]
+            else:
+                flags = ["-net-join", "127.0.0.1"]
+            if peer == "host":
+                host_flags = list(flags)
             if options.variant == "brains-longname":
                 # Each peer announces its own seat name; the flagless service default stays Host/Client.
                 flags += ["-net-player-name", LONG_HOST_NAME if peer == "host" else LONG_SEAT_NAME]
@@ -612,6 +631,13 @@ def launch(options):
             run.close()
     logs = {peer: (root / peer / "stdout.log").read_text(errors="replace") for peer in runs}
     checks, result = {}, {"records": records, "wire": wire.as_json()}
+    if options.variant == "stock-scene":
+        result["stock_scene_request"] = {"standard_rules": False, "flags": host_flags,
+                                         "scene_name": rules["scene_name"], "scene_module": rules["scene_module"],
+                                         "activity_preset": rules["activity_preset"]}
+        checks["stock_scene_request_has_no_standard_rules"] = "-net-match-service-config" not in host_flags
+        checks["stock_scene_request_names_scene"] = ("-net-match-service-scene" in host_flags
+                                                    and rules["scene_name"] in host_flags)
     # A config the engine turned down leaves the other peer with a bare timeout, so the refusal leads every failure.
     result["config_refusal"] = None if refusal else config_refusal(logs, wire, exe_hash)
     for peer, log in logs.items():
