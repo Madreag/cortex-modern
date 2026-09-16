@@ -578,8 +578,11 @@ namespace RTE {
 		return !m_Records.empty() && frame >= m_Records.front().frame && frame <= m_Records.back().frame;
 	}
 
-	size_t NetWorldFrameLog::CopyFrom(uint64_t from, size_t maxRecords, uint64_t maxBytes, std::vector<std::vector<uint8_t>>& out) const {
+	size_t NetWorldFrameLog::CopyFrom(uint64_t from, size_t maxRecords, uint64_t maxBytes, std::vector<std::vector<uint8_t>>& out, uint64_t* lastCopied) const {
 		out.clear();
+		if (lastCopied) {
+			*lastCopied = 0;
+		}
 		uint64_t bytes = 0;
 		for (const Record& record: m_Records) {
 			if (record.frame < from) {
@@ -590,6 +593,9 @@ namespace RTE {
 			}
 			bytes += record.bytes.size();
 			out.push_back(record.bytes);
+			if (lastCopied) {
+				*lastCopied = record.frame;
+			}
 		}
 		return out.size();
 	}
@@ -1003,10 +1009,24 @@ namespace RTE {
 		return true;
 	}
 
+	void NetWorldJoinHost::NoteCatchUpClock(NetPeerId connection, uint64_t nowMs) {
+		if (NetWorldJoinSession* session = Find(connection)) {
+			session->lastCatchUpReportMs = nowMs;
+		}
+	}
+
 	const NetWorldJoinSession* NetWorldJoinHost::DueActivation(uint64_t nowFrame) const {
 		const auto found = std::find_if(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& session) {
 			return session.phase == NetWorldJoinPhase::CatchingUp && session.activationTick != 0 &&
-			       nowFrame + 1 >= session.activationTick && session.acknowledgedThrough + 1 >= session.activationTick;
+			       nowFrame + 1 == session.activationTick && session.acknowledgedThrough + 1 >= session.activationTick;
+		});
+		return found == m_Sessions.end() ? nullptr : &*found;
+	}
+
+	const NetWorldJoinSession* NetWorldJoinHost::LateActivation(uint64_t nowFrame) const {
+		const auto found = std::find_if(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& session) {
+			return session.phase == NetWorldJoinPhase::CatchingUp && session.activationTick != 0 &&
+			       nowFrame + 1 > session.activationTick && session.acknowledgedThrough + 1 >= session.activationTick;
 		});
 		return found == m_Sessions.end() ? nullptr : &*found;
 	}
