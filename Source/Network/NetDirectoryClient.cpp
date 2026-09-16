@@ -163,6 +163,14 @@ namespace RTE {
 		m_Listed = true;
 	}
 
+	void NetDirectoryClient::NoteListenAddrs(std::vector<std::string> addrs) {
+		if (addrs == m_Row.listenAddrs) {
+			return;
+		}
+		m_Row.listenAddrs = std::move(addrs);
+		m_ListenAddrsDirty = true;
+	}
+
 	void NetDirectoryClient::Retract() { m_Listed = false; }
 
 	void NetDirectoryClient::PollList(uint64_t nowMs) {
@@ -515,6 +523,10 @@ namespace RTE {
 			m_InFlightListed = m_DesiredListed;
 		} else {
 			m_InFlightListed.reset();
+		}
+		if (m_ListenAddrsDirty) {
+			heartbeat.listenAddrs = m_Row.listenAddrs;
+			m_ListenAddrsDirty = false;
 		}
 		Request request;
 		request.method = "POST";

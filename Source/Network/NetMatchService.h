@@ -334,6 +334,7 @@ namespace RTE {
 		bool SendChat(uint8_t scope, const std::string& text);
 		/// Drains the session's chat queue for the UI. Newest 64 are kept on the session side.
 		std::vector<NetChatEntry> TakeChatEntries();
+		std::vector<NetChatEntry> ChatHistory() const;
 		/// "Input delay: N (auto, Rms ping)" / "(fixed)", from the announced match config. "" pre-lobby.
 		std::string GetInputDelayText() const;
 		/// The live host RTT on a client, or the largest connected peer RTT on the host.

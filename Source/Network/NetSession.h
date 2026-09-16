@@ -96,6 +96,7 @@ namespace RTE {
 		std::string senderName; //!< Filled when this session knows the name; the UI resolves the rest.
 		uint8_t scope = c_NetChatScopeAll;
 		std::string text;
+		uint64_t receivedAtMs = 0; //!< Presentation clock; never on the wire.
 	};
 
 	// A connected peer as seen by the match runner: its transport id and session-assigned id.
@@ -158,6 +159,7 @@ namespace RTE {
 		/// Drains the bounded presentation queue (newest 64 kept). Safe from the UI thread while the
 		/// runner worker owns the transport pump.
 		std::vector<NetChatEntry> TakeChatEntries();
+		std::vector<NetChatEntry> ChatHistory() const;
 		/// Session-assigned id -> team, pushed by the match service when it knows the roster. The
 		/// host relays a team-scoped line only to the sender's own team.
 		void SetChatTeams(std::map<uint8_t, int> teamsByPeerId);
@@ -345,6 +347,7 @@ namespace RTE {
 		mutable std::mutex m_ChatMutex;
 		std::deque<NetChatOutbound> m_ChatOutbox;
 		std::deque<NetChatEntry> m_ChatLog;
+		std::deque<NetChatEntry> m_ChatHistory;
 		std::map<uint8_t, int> m_ChatTeams;
 		// windowStartMs -> count pairs, keyed by the author's session id (local sends use a key no
 		// peer id can hold; malformed packets fall back to a per-transport key).

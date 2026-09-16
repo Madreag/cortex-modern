@@ -18,6 +18,7 @@ namespace RTE {
 		NetAuthBytes32 credential{};
 		uint64_t hostSessionId = 0;
 		std::string hostAddress;
+		std::string directorySessionId;
 		uint64_t issuedAtUnixMs = 0;
 		NetHash32 matchConfigHash{};
 
@@ -37,7 +38,9 @@ namespace RTE {
 	/// Deleted only on a LeaveAck, at a confirmed hosted-session end, or past the outer age bound.
 	class NetReconnectTicketStore {
 	public:
-		static constexpr uint16_t c_RecordVersion = 1;
+		static constexpr uint16_t c_RecordVersion = 2;
+		static constexpr uint16_t c_LegacyRecordVersion = 1;
+		static constexpr size_t c_MaxDirectorySessionIdBytes = NetProtocol::c_MaxShortTextBytes;
 		// Long enough to outlast any single session, short enough that a next-day launch is not
 		// offered a dead match. The record is worthless once the host's epoch is gone.
 		static constexpr uint64_t c_MaxRecordAgeMs = 24ULL * 60ULL * 60ULL * 1000ULL;
