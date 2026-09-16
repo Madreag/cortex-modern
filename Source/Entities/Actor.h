@@ -308,6 +308,7 @@ namespace RTE {
 		/// Sets this Actor's status.
 		/// @param newStatus A Status enumeration.
 		void SetStatus(Actor::Status newStatus) {
+			if (m_Status != newStatus) TouchCheckpoint();
 			m_Status = newStatus;
 			if (newStatus == Actor::Status::UNSTABLE) {
 				m_StableRecoverTimer.Reset();
@@ -412,11 +413,11 @@ namespace RTE {
 		/// Adds health points to this Actor's current health value.
 		/// @param setHealth A float specifying the value to add.
 		/// @return The resulting total health of this Actor.
-		const float AddHealth(const float addedHealth) { return m_Health += addedHealth; }
+		const float AddHealth(const float addedHealth) { if (addedHealth != 0) TouchCheckpoint(); return m_Health += addedHealth; }
 
 		/// Sets this Actor's current health value.
 		/// @param setHealth A float specifying the value to set to.
-		void SetHealth(const float setHealth) { m_Health = setHealth; }
+		void SetHealth(const float setHealth) { if (m_Health != setHealth) TouchCheckpoint(); m_Health = setHealth; }
 
 		/// Checks if this Actor is in a specific status.
 		/// @param which Which status to check for.

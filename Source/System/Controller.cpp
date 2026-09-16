@@ -22,6 +22,13 @@ bool Controller::ReleaseDelayPassed() {
 	return m_ReleaseTimer.IsPastSimMS(m_ReleaseDelay);
 }
 
+void Controller::SetState(ControlState controlState, bool setting) {
+	RTEAssert(controlState >= 0 && controlState < ControlState::CONTROLSTATECOUNT, "Control state out of whack");
+	if (m_ControlStates[controlState] == setting) return;
+	m_ControlStates[controlState] = setting;
+	if (m_ControlledActor) m_ControlledActor->TouchCheckpoint();
+}
+
 void Controller::Clear() {
 	m_ControlStates.fill(false);
 	m_AnalogMove.Reset();

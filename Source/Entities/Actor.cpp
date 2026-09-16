@@ -2038,6 +2038,7 @@ bool Actor::ParticlePenetration(HitData& hd) {
 		if (SceneMan::IsTrackedUID(GetUniqueID())) {
 			SceneMan::TraceTerrainEvent("hdmh", std::bit_cast<int32_t>(m_Health), std::bit_cast<int32_t>(damageToAdd), static_cast<int>(hitor->GetUniqueID()), penetrated ? 1 : 0, static_cast<int>(GetUniqueID()));
 		}
+		TouchCheckpoint();
 		m_Health = std::min(m_Health - (damageToAdd * m_DamageMultiplier), m_MaxHealth);
 	}
 	if ((penetrated || damageToAdd != 0) && m_Perceptiveness > 0 && m_Health > 0) {
@@ -2433,6 +2434,7 @@ void Actor::Update() {
 		if (traced && damage != 0.0F) {
 			SceneMan::TraceTerrainEvent("hdma", std::bit_cast<int32_t>(m_Health), std::bit_cast<int32_t>(damage), static_cast<int>(attachable->GetUniqueID()), 0, static_cast<int>(GetUniqueID()));
 		}
+		if (damage != 0.0F) TouchCheckpoint();
 		m_Health -= damage;
 	}
 	m_Health = std::min(m_Health, m_MaxHealth);
