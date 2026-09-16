@@ -868,8 +868,9 @@ def inspect_pair(root, records, size, arm, mode, name):
             seen = [text for i, text in enumerate(texts) if i == 0 or text != texts[i - 1]]
             details["f6_toast_seen"] = seen
             if size[1] < COMPACT_MAX_HEIGHT:
-                checks["Host_f6_toast_order"] = (PAUSED in seen and RESUME_REQUESTED in seen
-                                                and seen.index(PAUSED) < seen.index(RESUME_REQUESTED))
+                resume_seen = [text for text in seen if text.startswith(RESUME_REQUESTED)]
+                checks["Host_f6_toast_order"] = (PAUSED in seen and resume_seen
+                                                and seen.index(PAUSED) < seen.index(resume_seen[0]))
                 # The reserved band shows one toast row: a single-row rect, on screen, above the panel.
                 checks["Host_f6_toast_single_row"] = bool(clear_reads) and all(
                     read["toasts"]["y"] >= 0 and read["toasts"]["h"] <= 22
