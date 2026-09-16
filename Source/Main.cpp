@@ -5990,6 +5990,12 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-world-join-selftest") {
 			return NetWorldJoinSelfTest::Run();
 		}
+		if (argv[i] != nullptr) {
+			const std::string flag = argv[i];
+			if (flag.rfind("-net-world-", 0) == 0 && flag.size() > 12 && flag.find("-selftest") != std::string::npos) {
+				return NetWorldJoinSelfTest::RunCase(flag.c_str());
+			}
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-p2p-selftest") {
 			return GnsP2PSelfTest::Run(std::vector<std::string>(argv + i + 1, argv + argc));
 		}
