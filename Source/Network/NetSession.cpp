@@ -225,6 +225,9 @@ namespace RTE {
 		if (m_HasLocalParticipantId) {
 			m_LocalParticipantId = localStore->PublicId();
 		}
+		if (m_ReconnectHost != nullptr) {
+			m_ReconnectHost->SetParticipantProofRequired(true);
+		}
 	}
 
 	bool NetSession::GetPeerParticipantId(NetPeerId peerId, NetParticipantId& out) const {

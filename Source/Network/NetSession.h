@@ -146,7 +146,12 @@ namespace RTE {
 
 		/// Attaches the H4 admission plane. Without one the session behaves exactly as it did before
 		/// reconnect existed: an admission message is an unexpected handshake message.
-		void SetReconnectHost(NetReconnectHost* host) { m_ReconnectHost = host; }
+		void SetReconnectHost(NetReconnectHost* host) {
+			m_ReconnectHost = host;
+			if (host != nullptr && m_ParticipantProofRequired) {
+				host->SetParticipantProofRequired(true);
+			}
+		}
 		void SetReconnectClient(NetReconnectClient* client) { m_ReconnectClient = client; }
 		/// When set, a human seat waits on a connection proof. Host may pass null; the client must sign.
 		void EnableParticipantProof(NetParticipantIdentityStore* localStore);
