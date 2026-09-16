@@ -24,6 +24,7 @@ LANE = Path('D:/mx/astra-f44-write-barrier-20260914')
 ROOT = LANE / 'phase-b'
 BASE = '6e8a59e117'
 RED = '0aad92fe55e7622f8d5dc64625fea893df443edd'
+FIXTURE_PIN = '030db17ae0085f4bc9f458935f6d975634fa5abd'
 REFERENCE = Path('D:/mx/opus-f44-20260914/binaries/final-bdf7e0bb.exe')
 REFERENCE_SHA = 'bdf7e0bbe9d95170b1464938224a12efccc65e513f60147794e17301339c6653'
 LOCKS = [Path('D:/mx') / name for name in ('LEAD_FAMILY.lock', 'LEAD_EXCLUSIVE.lock', 'LEAD_BATTERY.lock')]
@@ -460,12 +461,12 @@ def phase_b(authorized):
         raise RuntimeError('retained reference hash differs')
     if git('diff', BASE, '--', *LEGACY_FIXTURES).strip():
         raise RuntimeError('legacy fixtures differ from the wave base')
-    if git('diff', RED, '--', 'Source/Managers/PreviewScriptSelfTest.cpp', 'Source/Managers/PreviewScriptSelfTest.h').strip():
-        raise RuntimeError('RED and GREEN regression fixtures differ')
+    if git('diff', FIXTURE_PIN, '--', 'Source/Managers/PreviewScriptSelfTest.cpp', 'Source/Managers/PreviewScriptSelfTest.h').strip():
+        raise RuntimeError('preview regression fixtures differ from the pinned fixture commit')
     branch = git('branch', '--show-current').decode().strip()
     tip = git('rev-parse', 'HEAD').decode().strip()
     write(ROOT / 'fixtures.json', fixture_hashes())
-    write(ROOT / 'authorization.json', dict(date=stamp(), message='FAMILY ENDED — BUILD', branch=branch, tip=tip, red=RED, environment=ENVIRONMENT))
+    write(ROOT / 'authorization.json', dict(date=stamp(), message='FAMILY ENDED — BUILD', branch=branch, tip=tip, red=RED, fixture_pin=FIXTURE_PIN, environment=ENVIRONMENT))
     green_binary = None
     try:
         red_binary = build('red', RED)
