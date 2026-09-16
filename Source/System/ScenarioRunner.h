@@ -342,8 +342,6 @@ namespace RTE {
 		};
 		/// Presentation peek of in-flight local buy orders: pending, outbox, and recovered commands.
 		static void PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out);
-		/// Puts a buy in the local outbox and marks its sequence consumed so Peek must drop it.
-		static void StageConsumedQueuedPurchase(const NetGameCommand& command, uint64_t targetFrame);
 
 		/// Enqueue an owner-issued game command to ride the next local lockstep frame; the coordinator stamps
 		/// the sender and both peers apply it at the synced frame.

@@ -1405,18 +1405,6 @@ namespace RTE {
 		}
 	}
 
-	void ScenarioRunner::StageConsumedQueuedPurchase(const NetGameCommand& command, uint64_t targetFrame) {
-		NetGameCommand stamped = command;
-		if (stamped.senderPeerId == 0) {
-			stamped.senderPeerId = GetLockstepLocalPeerId();
-		}
-		if (stamped.sequence == 0) {
-			stamped.sequence = s_NextLocalCommandSequence++;
-		}
-		s_LocalCommandOutbox[stamped.sequence] = {targetFrame, stamped};
-		s_AppliedCommandSequences[stamped.senderPeerId] = stamped.sequence;
-	}
-
 	void ScenarioRunner::EnqueueLocalGameCommand(const NetGameCommand& command) {
 		if (g_MovableMan.IsRestoringSnapshot()) {
 			return;
