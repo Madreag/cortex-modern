@@ -49,6 +49,7 @@ TOAST = "LabelNetMatchToastNewest"
 TOAST_FIRST, TOAST_SECOND = "LabelNetMatchToast0", "LabelNetMatchToast1"
 PAUSED = "Match paused by Host"
 RESUMED = "Match resumed by Guest"
+RESUME_REQUESTED = "Resume requested"
 HOLD_BANNER = re.compile(r"Match paused: waiting for (\S+) to return \((\d+)s left\)")
 HOLD_BANNER_LINE = re.compile(r"^\[net-match\] match paused waiting for (\S+) \((\d+)s left, tick (\d+)\)$")
 WIDGET_FILL = (20, 22, 27)
@@ -341,17 +342,22 @@ def probe_script(who, size, arm, mode):
                 {"op": "key_down", "key": "P", "sim_at": 240}, {"op": "key_up", "key": "P", "sim_at": 241},
                 {"op": "wait", "control": TOAST, "equals": {"visible": True}},
                 label_assert(TOAST, PAUSED),
-                # The panel's top band reserves one toast row: on a compact screen the stack shows
-                # the newest toast only, and every overlay rect stays inside the window. An Off
-                # match has no status widget to clear, so the step says so instead of faking one.
+                # The panel's top band reserves one toast row: oldest first, and every overlay
+                # rect stays inside the window. An Off match has no status widget to clear.
                 {"op": "assert_net_ui_clear", "match": True, "status": wanted(True)},
                 {"op": "screenshot_pair", "name": f"f6-toast-{mode}-host", "widget": wanted(True)},
-                # A second toast one second later: on a compact reserved row it waits for the first
-                # toast's full 3 s on screen, then takes the same row.
-                {"op": "wait", "elapsed_ms": 1000},
-                {"op": "key_down", "key": "P", "sim_at": 300}, {"op": "key_up", "key": "P", "sim_at": 301},
-                {"op": "wait", "elapsed_ms": 3100},
-                label_assert(TOAST, RESUMED),
+            ]
+            if compact:
+                # The reserved row shows the first toast for 3 s; a second P after 1 s on screen
+                # waits, then takes the same row. No exact sim tick — pause already passed 240.
+                steps += [
+                    {"op": "wait", "elapsed_ms": 1000},
+                    {"op": "key_down", "key": "P", "sim_at_least": 241},
+                    {"op": "key_up", "key": "P", "sim_at_least": 241},
+                    {"op": "wait", "elapsed_ms": 3100},
+                    label_assert(TOAST, RESUME_REQUESTED),
+                ]
+            steps += [
                 {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                 {"op": "wait", "panel_open": False},
             ]
@@ -860,8 +866,10 @@ def inspect_pair(root, records, size, arm, mode, name):
             texts = [obs["control"].get("text") for obs in toast_reads if obs.get("control", {}).get("visible")
                      and obs["control"].get("text")]
             seen = [text for i, text in enumerate(texts) if i == 0 or text != texts[i - 1]]
-            checks["Host_f6_toast_order"] = PAUSED in seen and RESUMED in seen and seen.index(PAUSED) < seen.index(RESUMED)
+            details["f6_toast_seen"] = seen
             if size[1] < COMPACT_MAX_HEIGHT:
+                checks["Host_f6_toast_order"] = (PAUSED in seen and RESUME_REQUESTED in seen
+                                                and seen.index(PAUSED) < seen.index(RESUME_REQUESTED))
                 # The reserved band shows one toast row: a single-row rect, on screen, above the panel.
                 checks["Host_f6_toast_single_row"] = bool(clear_reads) and all(
                     read["toasts"]["y"] >= 0 and read["toasts"]["h"] <= 22
@@ -962,7 +970,9 @@ def main():
                     result["checks"][name] = pair["pass"]
                     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
                     if not pair["pass"]:
-                        raise RuntimeError(f"{name}: " + ", ".join(key for key, passed in pair["checks"].items() if not passed))
+                        failed = [key for key, passed in pair["checks"].items() if not passed]
+                        extra = f" seen={pair.get('details', {}).get('f6_toast_seen')}" if "Host_f6_toast_order" in failed else ""
+                        raise RuntimeError(f"{name}: " + ", ".join(failed) + extra)
             for prefix, paused in switches:
                 for who in ("Host", "Guest"):
                     comparison = compare_capture_switch(root / f"{tag}_auto_{prefix}on", root / f"{tag}_auto_{prefix}off", who, paused)

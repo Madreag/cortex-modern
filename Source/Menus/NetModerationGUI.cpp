@@ -749,8 +749,8 @@ void NetModerationGUI::DrawMatchToasts() {
 	toastArea.FreeSpan(top, bottom, backbuffer->w, freeLeft, freeRight);
 	const int countNeed = font->CalculateWidth(std::string("0 of 0")) + 14;
 	if (freeRight - freeLeft < countNeed) {
-		// No column-free span wide enough: the newest toast takes the top band, the rest wait.
-		firstRow = visible.empty() ? 0 : visible.size() - 1;
+		// No column-free span wide enough: the oldest toast takes the top band, the rest wait.
+		firstRow = 0;
 		rowCount = visible.empty() ? 0 : 1;
 		top = 2;
 		bottom = 2 + static_cast<int>(rowCount) * rowHeight;
