@@ -245,6 +245,8 @@ namespace RTE {
 		uint64_t roundId = 0;
 		std::vector<NetSoundObservation> observations;
 		std::vector<NetValueObservation> valueObservations;
+		/// Older ticks riding this packet, oldest first. Empty on the classic reserved=0 path.
+		std::vector<NetLockstepFrame> priorWindow;
 
 		bool operator==(const NetLockstepFrame& rhs) const;
 	};
@@ -330,6 +332,8 @@ namespace RTE {
 		uint64_t roundId = 0; //!< Host: a fresh nonzero tag per round. Client: 0, adopted from the host's start.
 		std::array<uint8_t, 16> seatPresenceEpoch{}; //!< The epoch already established by admission; zero disables roster packets.
 		bool resumeFromSnapshot = false;
+		/// How many ticks a negotiated window packet repeats. 1 keeps the classic one-tick send; 0 uses 4.
+		uint8_t frameRedundancyTicks = 4;
 	};
 
 	struct NetLockstepReadyFrame {
@@ -361,6 +365,7 @@ namespace RTE {
 		uint64_t controllerFramesReceived = 0;
 		uint32_t framesContributed = 0; //!< This peer's frames that reached a committed tick.
 		uint32_t duplicateFrames = 0;
+		uint32_t windowCopiesSkipped = 0; //!< Older window ticks already committed; not a loss.
 		uint32_t outOfOrderFrames = 0;
 		uint32_t futureFrameDrops = 0;
 		uint32_t staleRoundPackets = 0;
@@ -407,6 +412,7 @@ namespace RTE {
 		uint64_t remoteControllerFramesAccepted = 0;
 		uint32_t framesAccepted = 0;
 		uint32_t duplicateFrames = 0;
+		uint32_t windowCopiesSkipped = 0;
 		uint32_t outOfOrderFrames = 0;
 		uint32_t futureFrameDrops = 0; //!< Frames beyond the skew window, dropped so the maps stay bounded.
 		uint32_t missingFrameStalls = 0;
@@ -444,6 +450,9 @@ namespace RTE {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
 		static constexpr uint16_t c_Version = 22;
+		/// Advertised in Ack.receivedMask; a wave-tip peer decodes the Ack and ignores it.
+		static constexpr uint32_t c_FrameWindowCapabilityMask = 0x80000000U;
+		static constexpr uint8_t c_MaxWindowTicks = 8;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
@@ -672,6 +681,12 @@ namespace RTE {
 		void FlushRecoveryInputs(uint64_t nowMs = UINT64_MAX);
 		void RememberLocalInput(const NetLockstepFrame& frame);
 		bool FindLocalInput(uint64_t targetFrame, NetLockstepFrame& out) const;
+		void AdvertiseFrameWindow();
+		void HandleAck(const NetLockstepAck& ack, NetPeerId fromTransport);
+		bool FrameWindowAgreed() const;
+		uint8_t ConfiguredWindowTicks() const;
+		void AttachFrameWindow(NetLockstepFrame& packet) const;
+		void AcceptRemoteTick(const NetLockstepFrame& frame, uint64_t nowMs, bool windowCopy);
 		uint8_t LockstepPeerOfTransport(NetPeerId transportPeerId) const;
 		bool SendStart(std::string* error, uint8_t onlyPeerId = 0);
 		/// Sends a peer that repeated its start what it needs to form the round.
@@ -827,6 +842,7 @@ namespace RTE {
 		std::map<uint8_t, RecoveryIncoming> m_RecoveryIncoming;
 		std::map<uint8_t, uint64_t> m_RecoveryBlockedSinceMs;
 		std::map<uint64_t, NetLockstepFrame> m_LocalInputHistory;
+		std::set<uint8_t> m_RemoteFrameWindow; //!< Remotes whose Ack advertised the frame-window capability.
 		std::vector<std::vector<uint8_t>> m_ResyncPrimeInputs;
 		std::set<std::pair<uint64_t, uint8_t>> m_InstalledResyncTargets;
 		NetSoundObservationTables m_ObservationDecodeTables; //!< One slot table per sender this peer decodes, for this round only.

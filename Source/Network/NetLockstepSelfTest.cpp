@@ -3305,6 +3305,153 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestFrameWindowKeepsClassicReservedZero(std::string* error) {
+			NetLockstepFrame frame;
+			frame.senderPeerId = 1;
+			frame.targetFrame = 7;
+			frame.roundId = 99;
+			frame.frames = {MakeFrame(100, 1)};
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({frame}, bytes, error)) {
+				return false;
+			}
+			if (bytes.size() <= NetLockstepCodec::c_HeaderBytes + 1 || bytes[NetLockstepCodec::c_HeaderBytes + 1] != 0) {
+				*error = "classic frame reserved byte is not zero";
+				return false;
+			}
+			const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes);
+			if (!decoded.ok || !std::holds_alternative<NetLockstepFrame>(decoded.packet.payload)) {
+				*error = "classic frame did not decode";
+				return false;
+			}
+			const auto& got = std::get<NetLockstepFrame>(decoded.packet.payload);
+			if (got != frame || !got.priorWindow.empty()) {
+				*error = "classic frame round trip changed the payload";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestFrameWindowCodecRoundTrip(std::string* error) {
+			NetLockstepFrame older;
+			older.senderPeerId = 1;
+			older.targetFrame = 3;
+			older.roundId = 11;
+			older.frames = {MakeFrame(100, 1)};
+			NetLockstepFrame newest = older;
+			newest.targetFrame = 4;
+			newest.frames[0].analogMoveX = 2000;
+			newest.frames[0].stateMask = 2;
+			newest.priorWindow = {older};
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({newest}, bytes, error)) {
+				return false;
+			}
+			if (bytes.size() <= NetLockstepCodec::c_HeaderBytes + 1 || bytes[NetLockstepCodec::c_HeaderBytes + 1] != 2) {
+				*error = "window packet reserved byte is not the tick count";
+				return false;
+			}
+			bytes[NetLockstepCodec::c_HeaderBytes + 1] = 9;
+			if (NetLockstepCodec::Decode(bytes).ok) {
+				*error = "reserved tick count 9 was accepted";
+				return false;
+			}
+			bytes[NetLockstepCodec::c_HeaderBytes + 1] = 2;
+			const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes);
+			if (!decoded.ok || !std::holds_alternative<NetLockstepFrame>(decoded.packet.payload)) {
+				*error = "window packet did not decode: " + decoded.error.message;
+				return false;
+			}
+			const auto& got = std::get<NetLockstepFrame>(decoded.packet.payload);
+			if (got.targetFrame != 4 || got.frames[0].analogMoveX != 2000 || got.priorWindow.size() != 1 ||
+			    got.priorWindow[0].targetFrame != 3 || got.priorWindow[0].frames[0].analogMoveX != 123) {
+				*error = "window packet did not restore both ticks";
+				return false;
+			}
+			ControllerFrame changed = MakeFrame(100, 1);
+			changed.analogMoveX = 2000;
+			if (ControllerFrameCodec::ChangeMask(MakeFrame(100, 1), changed) == 0) {
+				*error = "ChangeMask ignored a moved analog";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestFrameWindowStaysClassicWithoutCapability(std::string* error) {
+			const uint16_t port = 43081;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000081ULL, 0, NetTransportLane::InputUnreliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000081ULL, 0, NetTransportLane::InputUnreliable);
+			hostConfig.frameRedundancyTicks = 1;
+			clientConfig.frameRedundancyTicks = 4;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) || !client.QueueLocalInput(0, {MakeFrame(200, 2)}, {}, error)) {
+				return false;
+			}
+			std::vector<uint64_t> hostReady;
+			std::vector<uint64_t> clientReady;
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					DrainReady(host, hostReady);
+					DrainReady(client, clientReady);
+					return hostReady.size() == 1 && clientReady.size() == 1;
+				}, error)) {
+				return false;
+			}
+			return true;
+		}
+
+		bool TestFrameWindowSurvivesUnreliableLoss(std::string* error) {
+			const uint16_t port = 43082;
+			LoopbackTransportConfig faults;
+			faults.unreliableDropEveryN = 2;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			hostTransport.SetFaultConfig(faults);
+			clientTransport.SetFaultConfig(faults);
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000082ULL, 0, NetTransportLane::InputUnreliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000082ULL, 0, NetTransportLane::InputUnreliable);
+			hostConfig.frameRedundancyTicks = 4;
+			clientConfig.frameRedundancyTicks = 4;
+			hostConfig.timeoutMs = 400;
+			clientConfig.timeoutMs = 400;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			for (uint64_t produced = 0; produced < 6; ++produced) {
+				if (!host.QueueLocalInput(produced, {MakeFrame(100 + static_cast<int64_t>(produced), produced + 1)}, {}, error) ||
+				    !client.QueueLocalInput(produced, {MakeFrame(200 + static_cast<int64_t>(produced), produced + 11)}, {}, error)) {
+					return false;
+				}
+			}
+			std::vector<uint64_t> hostReady;
+			std::vector<uint64_t> clientReady;
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					DrainReady(host, hostReady);
+					DrainReady(client, clientReady);
+					return hostReady.size() == 6 && clientReady.size() == 6;
+				}, error, 1500)) {
+				return false;
+			}
+			if (host.GetStats().windowCopiesSkipped == 0 && client.GetStats().windowCopiesSkipped == 0) {
+				*error = "the window copies were never applied after a drop";
+				return false;
+			}
+			return true;
+		}
+
 
 		// P4C: three peers over a host-star loopback (clients connect only to the host, which relays).
 		// Proves N-peer frame collection (advance only when all remotes are in), the peerId-ordered
@@ -13317,6 +13464,10 @@ namespace RTE {
 		    !TestCoordinatorIgnoresSessionPacketsAtHandoff(&error) ||
 		    !TestCoordinatorUnreliableOutOfOrderDuplicate(&error) ||
 		    !TestCoordinatorMissingFrameTimeout(&error) ||
+		    !TestFrameWindowKeepsClassicReservedZero(&error) ||
+		    !TestFrameWindowCodecRoundTrip(&error) ||
+		    !TestFrameWindowStaysClassicWithoutCapability(&error) ||
+		    !TestFrameWindowSurvivesUnreliableLoss(&error) ||
 		    !TestActivityGateAgreesAcrossPeers(&error) ||
 		    !TestB2SeatSnapshotCodec(&error) ||
 		    !TestRecoveryWireRefusals(&error) ||
