@@ -1,7 +1,8 @@
-"""Game-over observe freeze: look-around lifts at the same sim tick on both peers.
+"""Game-over observe freeze fixture: both peers reach OVER.
 
-The fixture ends the round. InputScript drives the observe view after OVER. The C++
-gate prints the lift tick at the existing freeze site. Written, not run.
+The detector is the native ApplyObserveLookAround row (observe_target_held_until_sim
+/ observe_target_moves_after_sim). This driver only stages the fixture and scores
+the OVER token the fixture already prints on both trees. Written, not run.
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ REPO = Path(__file__).resolve().parents[1]
 FIXTURE = REPO / "tools/fixtures/game_over_observe.lua"
 INPUTS = REPO / "tools/fixtures/game_over_observe.txt"
 PRESET = "Determinism Game Over Observe"
-LIFT = re.compile(r"\[game-over-freeze\] lift tick=(\d+) elapsed=([-\d.]+) player=(\d+)")
+OVER = re.compile(r"\[game-over-freeze\] over tick=(\d+)")
 INDEX = (
     "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n"
     "\tAddActivity = GAScripted\n\t\tPresetName = " + PRESET + "\n"
@@ -42,13 +43,6 @@ def peer_log(run_dir: Path) -> str:
     return text
 
 
-def first_lift(text: str) -> tuple[int, float] | None:
-    match = LIFT.search(text)
-    if not match:
-        return None
-    return int(match.group(1)), float(match.group(2))
-
-
 def stage_module(runtime: Path) -> None:
     module = Path(runtime) / "Userdata/UserScenes.rte"
     module.mkdir(parents=True, exist_ok=True)
@@ -58,15 +52,11 @@ def stage_module(runtime: Path) -> None:
 
 def inspect(root: Path, peers: tuple[str, ...]) -> dict:
     checks = {}
-    details = {"lift": {}}
-    ticks = []
+    details = {"over": {}, "detector": "native ApplyObserveLookAround observe_target_moves_after_sim"}
     for who in peers:
-        lift = first_lift(peer_log(root / who))
-        details["lift"][who] = None if lift is None else {"tick": lift[0], "elapsed": lift[1]}
-        checks[f"{who}_lifted"] = lift is not None
-        checks[f"{who}_held"] = bool(lift and lift[1] >= 1000.0)
-        ticks.append(None if lift is None else lift[0])
-    checks["same_tick"] = len(set(ticks)) == 1 and None not in ticks
+        match = OVER.search(peer_log(root / who))
+        details["over"][who] = None if match is None else int(match.group(1))
+        checks[f"{who}_over"] = match is not None
     return {"pass": all(checks.values()), "checks": checks, "details": details}
 
 
