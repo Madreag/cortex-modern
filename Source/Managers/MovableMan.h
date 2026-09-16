@@ -294,6 +294,12 @@ namespace RTE {
 		void DropAllPreviewGhosts();
 		size_t GetPreviewGhostCount() const { return m_PreviewGhosts.size(); }
 		uint64_t GetPreviewGhostPeak() const { return m_PreviewGhostPeak; }
+		/// One committed-tick of ghost motion: gravity, air drag, wrap, terrain as a stop-and-hold.
+		void TravelPreviewGhosts();
+		double GetLastGhostTravelUs() const { return m_LastGhostTravelUs; }
+		bool GetPreviewGhostKinematics(Vector& pos, Vector& vel) const;
+		/// True when every ghost is unregistered: no MOID, not in the world lists the dump walks.
+		bool PreviewGhostsAreUnregistered() const;
 		/// Draws the substitute in the original's slot until swapped back.
 		bool SwapActorForRender(Actor* original, Actor* substitute);
 		void AddRenderSubstitute(const MovableObject* mo);
@@ -982,6 +988,7 @@ namespace RTE {
 		};
 		std::vector<PreviewGhost> m_PreviewGhosts;
 		uint64_t m_PreviewGhostPeak = 0;
+		double m_LastGhostTravelUs = 0;
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		bool m_PurgingAllMOs = false;
 		std::vector<MovableObject*> m_PendingLinkResolves; //!< Restored adds whose saved links resolve once the whole world is in.
