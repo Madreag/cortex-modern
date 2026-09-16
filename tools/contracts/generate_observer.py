@@ -13,6 +13,7 @@ DEFAULT_INVENTORY = Path("D:/Projects/reviews/recovery-2026-09-07/contract-audit
 from observer_definitions import (
     ENTITY_VALUE,
     EXTRA_FIELDS,
+    EXTRA_FIELDS_AFTER,
     EXTRA_INCLUDES_AFTER,
     EXTRA_STD_INCLUDES_AFTER,
     EXTRA_VISITS_AFTER,
@@ -122,6 +123,7 @@ def generate(options):
                 omitted.append(field)
                 continue
             header.append(f'Field(path + ".{short}.{member}", object.{member});')
+            header.extend(EXTRA_FIELDS_AFTER.get(short, {}).get(member, []))
         header.extend(EXTRA_FIELDS.get(short, []))
         header.append('}')
         extra_visit = EXTRA_VISITS_AFTER.get(short)

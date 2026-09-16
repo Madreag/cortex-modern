@@ -22,13 +22,6 @@ EXTRA_FIELDS = {
         'Field(path + ".ACraft.m_OffWireHatchTick", object.m_OffWireHatchTick);',
         'Field(path + ".ACraft.m_OffWireHatchOpen", object.m_OffWireHatchOpen);',
     ],
-    "Actor": [
-        'Field(path + ".Actor.m_PendingDeferredWaypoints", object.m_PendingDeferredWaypoints);',
-        'Field(path + ".Actor.m_InflightWaypoints", object.m_InflightWaypoints);',
-        'Field(path + ".Actor.m_LastOrderedWaypoint", object.m_LastOrderedWaypoint);',
-        'Field(path + ".Actor.m_HasOrderedWaypoint", object.m_HasOrderedWaypoint);',
-        'Field(path + ".Actor.m_LastOrderedWaypointUID", object.m_LastOrderedWaypointUID);',
-    ],
     "Controller": [
         'Field(path + ".Controller.m_LocalProduction.controlStates", object.m_LocalProduction.controlStates);',
         'Field(path + ".Controller.m_LocalProduction.analogMove", object.m_LocalProduction.analogMove);',
@@ -51,6 +44,18 @@ EXTRA_FIELDS = {
         'Field(path + ".GameActivity.m_LockstepPlacementUidBase", object.m_LockstepPlacementUidBase);',
         'Field(path + ".GameActivity.m_LockstepPlacementSeeded", object.m_LockstepPlacementSeeded);',
     ],
+}
+
+EXTRA_FIELDS_AFTER = {
+    "Actor": {
+        "m_Waypoints": [
+            'Field(path + ".Actor.m_PendingDeferredWaypoints", object.m_PendingDeferredWaypoints);',
+            'Field(path + ".Actor.m_InflightWaypoints", object.m_InflightWaypoints);',
+            'Field(path + ".Actor.m_LastOrderedWaypoint", object.m_LastOrderedWaypoint);',
+            'Field(path + ".Actor.m_HasOrderedWaypoint", object.m_HasOrderedWaypoint);',
+            'Field(path + ".Actor.m_LastOrderedWaypointUID", object.m_LastOrderedWaypointUID);',
+        ],
+    },
 }
 
 EXTRA_VISITS_AFTER = {
@@ -98,7 +103,150 @@ for (size_t index = 0; index < object.m_NodeGrid.size(); ++index) {
 ''',
 }
 
-POST_INVENTORY_VISITS = ''
+POST_INVENTORY_VISITS = r'''
+void Visit(const InputMapping& object, const std::string& path) {
+Field(path + ".description", object.m_PresetDescription);
+Field(path + ".key", object.m_KeyMap);
+Field(path + ".mouse_button", object.m_MouseButtonMap);
+Field(path + ".direction_mapped", object.m_DirectionMapped);
+Field(path + ".joystick_button", object.m_JoyButtonMap);
+Field(path + ".axis", object.m_AxisMap);
+Field(path + ".direction", object.m_DirectionMap);
+}
+void Visit(const InputScheme& object, const std::string& path) {
+Field(path + ".device", object.m_ActiveDevice);
+Field(path + ".device_id", std::bit_cast<std::array<uint32_t, 2>>(object.m_DeviceID));
+Field(path + ".preset", object.m_SchemePreset);
+Field(path + ".deadzone_type", object.m_JoystickDeadzoneType);
+Field(path + ".deadzone", object.m_JoystickDeadzone);
+Field(path + ".digital_aim_speed", object.m_DigitalAimSpeed);
+Field(path + ".mappings", object.m_InputMappings);
+}
+void Visit(const UInputMan::Keyboard& object, const std::string& path) {
+Field(path + ".id", object.id);
+Field(path + ".held", object.keyStates);
+Field(path + ".changed", object.changedKeyStates);
+Field(path + ".pressed_since_sim", object.pressedSinceSim);
+Field(path + ".released_since_sim", object.releasedSinceSim);
+}
+void Visit(const UInputMan::Mouse& object, const std::string& path) {
+Field(path + ".id", object.id);
+Field(path + ".held", object.state);
+Field(path + ".changed", object.change);
+Field(path + ".pressed_since_sim", object.pressedSinceSim);
+Field(path + ".released_since_sim", object.releasedSinceSim);
+Field(path + ".position", object.position);
+Field(path + ".relative_motion", object.relativeMotion);
+Field(path + ".analog_aim", object.analogAim);
+Field(path + ".wheel_change", object.wheelChange);
+Field(path + ".relative_mode", object.relativeMode);
+}
+void Visit(const Gamepad& object, const std::string& path) {
+Field(path + ".device_index", object.m_DeviceIndex);
+Field(path + ".joystick_id", object.m_JoystickID);
+Field(path + ".axis", object.m_Axis);
+Field(path + ".digital_axis", object.m_DigitalAxis);
+Field(path + ".buttons", object.m_Buttons);
+Field(path + ".pressed_since_sim", object.m_ButtonsPressedSinceSim);
+Field(path + ".released_since_sim", object.m_ButtonsReleasedSinceSim);
+}
+void Visit(const UInputMan& object, const std::string& path) {
+Field(path + ".keyboards", object.m_KeyboardStates);
+Field(path + ".mice", object.m_MouseStates);
+Field(path + ".joysticks", object.s_PrevJoystickStates);
+Field(path + ".changed_joysticks", object.s_ChangedJoystickStates);
+Field(path + ".skip_special", object.m_SkipHandlingSpecialInput);
+Field(path + ".joystick_count", object.m_NumJoysticks);
+Field(path + ".text", object.m_TextInput);
+Field(path + ".override", object.m_OverrideInput);
+Field(path + ".schemes", object.m_ControlScheme);
+Field(path + ".device_icons", object.m_DeviceIcons);
+Field(path + ".mouse_sensitivity", object.m_MouseSensitivity);
+Field(path + ".trap_mouse", object.m_TrapMousePos);
+Field(path + ".trap_radius", object.m_MouseTrapRadius);
+Field(path + ".bounds_x", object.m_PlayerScreenMouseBounds.x);
+Field(path + ".bounds_y", object.m_PlayerScreenMouseBounds.y);
+Field(path + ".bounds_width", object.m_PlayerScreenMouseBounds.w);
+Field(path + ".bounds_height", object.m_PlayerScreenMouseBounds.h);
+Field(path + ".last_cursor_device", object.m_LastDeviceWhichControlledGUICursor);
+Field(path + ".force_disable_multi", object.m_ForceDisableMultiMouseKeyboard);
+Field(path + ".enable_multi", object.m_EnableMultiMouseKeyboard);
+Field(path + ".player_devices_known", object.m_PlayerMouseKeyboardKnown);
+Field(path + ".disable_keyboard", object.m_DisableKeyboard);
+Field(path + ".disable_mouse_motion", object.m_DisableMouseMoving);
+Field(path + ".prepare_mouse_motion", object.m_PrepareToEnableMouseMoving);
+Field(path + ".unused_event_queue_size", object.m_EventQueue.size());
+}
+
+static uint64_t HashBytes(const void* storage, size_t size) {
+    uint64_t hash = 1469598103934665603ULL;
+    const auto* bytes = static_cast<const unsigned char*>(storage);
+    for (size_t index = 0; index < size; ++index) hash = (hash ^ bytes[index]) * 1099511628211ULL;
+    return hash;
+}
+void Visit(const BITMAP& bitmap, const std::string& path) {
+    Field(path + ".width", bitmap.w); Field(path + ".height", bitmap.h);
+    const int depth = bitmap_color_depth(const_cast<BITMAP*>(&bitmap));
+    Field(path + ".depth", depth);
+    Field(path + ".clip", bitmap.clip); Field(path + ".clip_left", bitmap.cl); Field(path + ".clip_top", bitmap.ct);
+    Field(path + ".clip_right", bitmap.cr); Field(path + ".clip_bottom", bitmap.cb);
+    uint64_t hash = 1469598103934665603ULL;
+    const size_t bytesPerRow = static_cast<size_t>(bitmap.w) * ((depth + 7) / 8);
+    for (int y = 0; y < bitmap.h; ++y) {
+        for (size_t x = 0; x < bytesPerRow; ++x) hash = (hash ^ bitmap.line[y][x]) * 1099511628211ULL;
+    }
+    Field(path + ".pixels", hash);
+}
+void Visit(const PostEffect& effect, const std::string& path) {
+    Field(path + ".bitmap", effect.m_Bitmap); Field(path + ".bitmap_hash", effect.m_BitmapHash);
+    Field(path + ".angle", effect.m_Angle); Field(path + ".strength", effect.m_Strength);
+    Field(path + ".position", effect.m_Pos); Field(path + ".attached_moid", effect.m_AttachedToMOID);
+}
+void Visit(const IntRect& rect, const std::string& path) {
+    Field(path + ".left", rect.m_Left); Field(path + ".right", rect.m_Right);
+    Field(path + ".top", rect.m_Top); Field(path + ".bottom", rect.m_Bottom);
+}
+void Visit(const PostProcessMan& object, const std::string& path) {
+    Field(path + ".screen_effects", object.m_PostScreenEffects); Field(path + ".scene_effects", object.m_PostSceneEffects);
+    Field(path + ".screen_glow_boxes", object.m_PostScreenGlowBoxes); Field(path + ".glow_areas", object.m_GlowAreas);
+    Field(path + ".player_effects", object.m_ScreenRelativeEffects);
+    Field(path + ".yellow", object.m_YellowGlow); Field(path + ".red", object.m_RedGlow); Field(path + ".blue", object.m_BlueGlow);
+    Field(path + ".yellow_hash", object.m_YellowGlowHash); Field(path + ".red_hash", object.m_RedGlowHash); Field(path + ".blue_hash", object.m_BlueGlowHash);
+    Field(path + ".temporary_bitmaps", object.m_TempEffectBitmaps);
+    Field(path + ".registration_suppressed", object.s_RegistrationSuppressed);
+}
+void Visit(const FrameMan& object, const std::string& path) {
+    Field(path + ".horizontal_split", object.m_HSplit); Field(path + ".vertical_split", object.m_VSplit);
+    Field(path + ".two_player_vertical", object.m_TwoPlayerVSplit); Field(path + ".palette_file", object.m_PaletteFile);
+    Field(path + ".palette", HashBytes(object.m_Palette, sizeof(object.m_Palette)));
+    Field(path + ".default_palette", HashBytes(object.m_DefaultPalette, sizeof(object.m_DefaultPalette)));
+    PALETTE current; get_palette(current); Field(path + ".current_palette", HashBytes(current, sizeof(current)));
+    Field(path + ".rgb_table", HashBytes(&object.m_RGBTable, sizeof(object.m_RGBTable)));
+    Field(path + ".black", object.m_BlackColor); Field(path + ".almost_black", object.m_AlmostBlackColor);
+    std::string active = color_map ? "external" : "null";
+    for (size_t mode = 0; mode < object.m_ColorTables.size(); ++mode) {
+        const auto& entries = object.m_ColorTables[mode];
+        Field(path + ".table_count[" + std::to_string(mode) + "]", entries.size());
+        for (const auto& [key, value]: entries) {
+            const std::string name = path + ".table[" + std::to_string(mode) + ":" + Value(key, path + ".table_key") + "]";
+            Field(name + ".pixels", HashBytes(&value.first, sizeof(value.first))); Field(name + ".last_use", value.second);
+            if (color_map == &value.first) active = name;
+        }
+    }
+    Field(path + ".active_table", active);
+    if (color_map) Field(path + ".active_table_pixels", HashBytes(color_map, sizeof(*color_map)));
+    Field(path + ".table_prune_timer", object.m_ColorTablePruneTimer); Field(path + ".alpha", object.m_CurrentAlpha);
+    Field(path + ".screen_text", object.m_ScreenText); Field(path + ".text_centered", object.m_TextCentered);
+    Field(path + ".text_duration", object.m_TextDuration); Field(path + ".text_timer", object.m_TextDurationTimer);
+    Field(path + ".text_blink", object.m_TextBlinking); Field(path + ".text_blink_timer", object.m_TextBlinkTimer);
+    Field(path + ".hud_disabled", object.m_HUDDisabled); Field(path + ".flash_color", object.m_FlashScreenColor);
+    Field(path + ".flashed_last_frame", object.m_FlashedLastFrame); Field(path + ".flash_timer", object.m_FlashTimer);
+    Field(path + ".player_width", object.m_PlayerScreenWidth); Field(path + ".player_height", object.m_PlayerScreenHeight);
+    Field(path + ".small_fonts", object.m_SmallFonts); Field(path + ".large_fonts", object.m_LargeFonts);
+    Field(path + ".backbuffer8", object.m_BackBuffer8); Field(path + ".backbuffer32", object.m_BackBuffer32);
+    Field(path + ".overlay32", object.m_OverlayBitmap32); Field(path + ".player_screen8", object.m_PlayerScreen8);
+}
+'''
 
 VALUE_AND_FIELD = r'''
 template <class T> std::string Value(const T& value, const std::string& path) {
