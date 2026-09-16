@@ -2215,11 +2215,7 @@ void MainMenuGUI::MaybeLaunchMultiplayerActivity() {
 		g_NetMatchService.Destroy();
 		return;
 	}
-	if (!activityPreset.empty() && activityPreset != config->activityPreset) {
-		m_MultiplayerErrorLabel->SetText("The launch activity differs from the agreed setup.");
-		g_NetMatchService.Destroy();
-		return;
-	}
+	(void)activityPreset; // ConsumeReadyToLaunch already adopted this preset into the roster.
 	const int localTeam = g_NetMatchService.GetLocalTeam();
 	std::string setupError;
 	Activity* activity = NetActivitySetup::CreateConfiguredActivity(*config, localTeam, &setupError);
