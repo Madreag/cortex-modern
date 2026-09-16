@@ -40,7 +40,6 @@ namespace RTE {
 		const OverlayRect& GetStatusRect() const { return m_StatusRect; }
 		const OverlayRect& GetToastRect() const { return m_ToastRect; }
 
-	private:
 		struct Controls {
 			GUILabel* name = nullptr;
 			GUILabel* detail = nullptr;
@@ -60,6 +59,9 @@ namespace RTE {
 		bool MatchStatusWanted() const;
 		/// Draws the status widget: the box on tall screens, a single-line strip in the top HUD gap on short ones.
 		void DrawMatchStatus(const NetLobbySnapshot& snapshot);
+		/// Places the seats panel for the current screen height; a compact screen's top band keeps
+		/// one toast row between the strip and the panel, which the roster's slack absorbs.
+		void LayoutPanel();
 		AllegroScreen* m_Screen = nullptr;
 		std::unique_ptr<GUIInputWrapper> m_Input;
 		std::unique_ptr<GUIControlManager> m_Controls;
