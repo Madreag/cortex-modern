@@ -929,7 +929,9 @@ if ($SnapshotTest) {
         Fail-Run "snapshot" "SNAPSHOT TEST FAILED: a .ccsave is missing ($snapA / $snapB). Evidence: $OutDir"
     }
     Copy-Item $snapA, $snapB $OutDir
-    & python "D:\Projects\stage2_p4\compare_p5_snapshots.py" $snapA $snapB 2>&1 |
+    $env:CCCP_TOOLS_DIR = Join-Path $repo "tools"
+    $snapshotCompare = Join-Path $repo "tools\compare_snapshots.py"
+    & python $snapshotCompare $snapA $snapB --peer-report-a $hostReport --peer-report-b $clientReport --cross-process 2>&1 |
         Tee-Object -FilePath "$OutDir\snapshot_compare.txt" | Out-Host
     if ($LASTEXITCODE -ne 0) {
         Fail-Run "snapshot" "SNAPSHOT TEST FAILED: the two peers' snapshots differ in the sim payload. Evidence: $OutDir"
