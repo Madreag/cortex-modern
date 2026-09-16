@@ -355,7 +355,7 @@ def mark_points(kind, width, band, thick):
         gap = 2 if width >= 4 else 1
         return [(0, top), (min(width - 1, gap + 1), top)]
     if kind == "ring":
-        # Closed 2x2 loop in the accent band, not the circumflex chevron.
+        # Closed 2x2 loop in the accent band.
         left = max(0, mid - 1)
         right = min(width - 1, left + 1)
         if right == left and left + 1 < width:
