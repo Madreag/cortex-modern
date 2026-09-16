@@ -31,6 +31,9 @@
 #include "BunkerAssembly.h"
 #include "SLBackground.h"
 #include "EditorActivity.h"
+#include "ScenarioRunner.h"
+#include "NetMatchConfig.h"
+#include "Controller.h"
 
 #include "AEmitter.h"
 #include "AEJetpack.h"
@@ -526,6 +529,7 @@ void Scene::Clear() {
 	}
 	m_PathfindingUpdated = false;
 	m_PartialPathUpdateTimer.Reset();
+	m_HorizonTerrainBoxes.clear();
 
 	for (int set = PLACEONLOAD; set < PLACEDSETSCOUNT; ++set)
 		m_PlacedObjects[set].clear();
@@ -2945,16 +2949,83 @@ void Scene::UpdatePathFinding() {
 	m_PathfindingUpdated = true;
 }
 
+namespace {
+	uint16_t SharedPathHorizonTicks() {
+		const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+		return config ? config->pathHorizonTicks : 0;
+	}
+
+	bool SharedQueryUsesCommittedHorizon() {
+		return ScenarioRunner::IsLockstepControllerSyncActive() && !g_CurrentAIActor && SharedPathHorizonTicks() > 0;
+	}
+}
+
+void Scene::NoteHorizonTerrainBox(const Box& newArea) {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive() || SharedPathHorizonTicks() == 0) {
+		return;
+	}
+	m_HorizonTerrainBoxes.push_back({newArea, ScenarioRunner::GetLockstepAppliedFrame()});
+}
+
+void Scene::FlushHorizonTerrainBoxes() {
+	if (m_HorizonTerrainBoxes.empty()) {
+		return;
+	}
+	const uint16_t horizonTicks = SharedPathHorizonTicks();
+	if (horizonTicks == 0) {
+		m_HorizonTerrainBoxes.clear();
+		return;
+	}
+	std::map<uint64_t, std::vector<Box>> boxesByTick;
+	std::vector<uint64_t> ticks;
+	for (const HorizonTerrainBox& item: m_HorizonTerrainBoxes) {
+		if (boxesByTick[item.originTick].empty()) {
+			ticks.push_back(item.originTick);
+		}
+		boxesByTick[item.originTick].push_back(item.box);
+	}
+	m_HorizonTerrainBoxes.clear();
+	for (uint64_t originTick: ticks) {
+		for (std::unique_ptr<PathFinder>& pathFinder: m_pPathFinders) {
+			if (pathFinder) {
+				pathFinder->QueueHorizonUpdate(originTick, horizonTicks, boxesByTick[originTick]);
+			}
+		}
+	}
+}
+
+void Scene::CommitSharedHorizon() {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive() || SharedPathHorizonTicks() == 0) {
+		return;
+	}
+	const uint64_t nowTick = ScenarioRunner::GetLockstepAppliedFrame();
+	for (std::unique_ptr<PathFinder>& pathFinder: m_pPathFinders) {
+		if (pathFinder) {
+			pathFinder->CommitHorizonThrough(nowTick);
+		}
+	}
+}
+
 float Scene::CalculatePath(const Vector& start, const Vector& end, std::list<Vector>& pathResult, float jumpHeight, float digStrength, Activity::Teams team) {
+	const bool committedHorizon = SharedQueryUsesCommittedHorizon();
+	if (committedHorizon) {
+		FlushHorizonTerrainBoxes();
+		CommitSharedHorizon();
+	}
 	float totalCostResult = -1;
-	int result = GetPathFinder(team).CalculatePath(start, end, pathResult, totalCostResult, jumpHeight, digStrength);
+	int result = GetPathFinder(team).CalculatePath(start, end, pathResult, totalCostResult, jumpHeight, digStrength, committedHorizon);
 
 	// It's ok if start and end nodes happen to be the same, the exact pixel locations are added at the front and end of the result regardless
 	return (result == micropather::MicroPather::SOLVED || result == micropather::MicroPather::START_END_SAME) ? totalCostResult : -1;
 }
 
 std::shared_ptr<volatile PathRequest> Scene::CalculatePathAsync(const Vector& start, const Vector& end, float jumpHeight, float digStrength, Activity::Teams team, PathCompleteCallback callback) {
-	return GetPathFinder(team).CalculatePathAsync(start, end, jumpHeight, digStrength, callback);
+	const bool committedHorizon = SharedQueryUsesCommittedHorizon();
+	if (committedHorizon) {
+		FlushHorizonTerrainBoxes();
+		CommitSharedHorizon();
+	}
+	return GetPathFinder(team).CalculatePathAsync(start, end, jumpHeight, digStrength, callback, committedHorizon);
 }
 
 int Scene::GetScenePathSize() const {
@@ -2971,6 +3042,9 @@ bool Scene::PositionsAreTheSamePathNode(const Vector& pos1, const Vector& pos2) 
 
 void Scene::Update() {
 	ZoneScoped;
+
+	FlushHorizonTerrainBoxes();
+	CommitSharedHorizon();
 
 	m_PathfindingUpdated = false;
 

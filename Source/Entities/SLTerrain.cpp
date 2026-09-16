@@ -8,6 +8,8 @@
 #include "Atom.h"
 #include "DataModule.h"
 #include "PresetMan.h"
+#include "Scene.h"
+#include "SceneMan.h"
 
 #include <array>
 #include <execution>
@@ -37,6 +39,13 @@ void SLTerrain::Clear() {
 	m_TerrainObjects.clear();
 	m_UpdatedMaterialAreas.clear();
 	m_OrbitDirection = Directions::Up;
+}
+
+void SLTerrain::AddUpdatedMaterialArea(const Box& newArea) {
+	m_UpdatedMaterialAreas.emplace_back(newArea);
+	if (Scene* scene = g_SceneMan.GetScene(); scene && scene->GetTerrain() == this) {
+		scene->NoteHorizonTerrainBox(newArea);
+	}
 }
 
 int SLTerrain::Create() {
