@@ -167,6 +167,33 @@ namespace RTE {
 		std::string sessionId; // Client only: join the directory session with this id instead of an address.
 	};
 
+	inline NetMatchServiceRequest TicketRejoinRequestFromRecord(const NetH4TicketRecord& record, const std::string& playerName) {
+		NetMatchServiceRequest request;
+		request.host = false;
+		request.address = record.hostAddress;
+		request.sessionId = record.directorySessionId;
+		request.playerName = playerName.empty() ? "Client" : playerName;
+		request.resyncOnDesync = true;
+		return request;
+	}
+
+	inline std::string ResolveTicketJoinAddress(const NetH4TicketRecord& record, const std::string& requestSessionId, const std::string& requestAddress, const std::string& directoryResolvedAddress, bool iceDial) {
+		const std::string sessionId = !record.directorySessionId.empty() ? record.directorySessionId : requestSessionId;
+		if (!directoryResolvedAddress.empty()) {
+			return directoryResolvedAddress;
+		}
+		if (!sessionId.empty() && iceDial) {
+			return "session:" + sessionId;
+		}
+		if (!record.hostAddress.empty()) {
+			return record.hostAddress;
+		}
+		if (!sessionId.empty()) {
+			return "session:" + sessionId;
+		}
+		return requestAddress;
+	}
+
 	/// A presentation-only record of the finished round; never restored into the simulation.
 	struct NetMatchSummary {
 		struct Peer {

@@ -2717,15 +2717,35 @@ static std::string ResyncSaveName() {
 			runnerConfig.resolveJoinAddress = [this, sessionId, address]() {
 				NetH4TicketRecord record;
 				m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
-				if (m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded) {
-					if (!record.directorySessionId.empty()) {
-						return record.hostAddress.empty() ? address : record.hostAddress;
-					}
-					if (!record.hostAddress.empty()) {
-						return record.hostAddress;
+				const bool loaded = m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded;
+				if (!loaded) {
+					record = {};
+				}
+				std::string resolved;
+				const std::string id = !record.directorySessionId.empty() ? record.directorySessionId : sessionId;
+				if (!id.empty()) {
+					const std::string baseUrl = g_SettingsMan.GetSessionDirectoryUrl();
+					if (!baseUrl.empty()) {
+						NetDirectoryClient browse;
+						browse.Configure(baseUrl, g_SettingsMan.GetOrCreateSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
+						const uint64_t deadline = SteadyNowMs() + 250;
+						while (SteadyNowMs() < deadline && !m_CancelRequested.load()) {
+							browse.PollList(SteadyNowMs());
+							browse.Update(SteadyNowMs());
+							if (browse.ListReplies() > 0) {
+								NetIceJoinTarget target;
+								NetDirectoryLocalIdentity local;
+								if (NetIceResolveSessionRow(browse.Rows(), local, id, &target).empty() && !target.address.empty()) {
+									resolved = target.address;
+								}
+								break;
+							}
+							std::this_thread::sleep_for(std::chrono::milliseconds(20));
+						}
+						browse.StopBrowsing();
 					}
 				}
-				return sessionId.empty() ? address : address;
+				return ResolveTicketJoinAddress(record, sessionId, address, resolved, m_IceEnabled);
 			};
 		}
 		std::string error;
@@ -3083,13 +3103,7 @@ static std::string ResyncSaveName() {
 			if (error) *error = m_ReconnectUx.GetOfferText().empty() ? "no reconnect ticket to rejoin with" : m_ReconnectUx.GetOfferText();
 			return false;
 		}
-		NetMatchServiceRequest request;
-		request.host = false;
-		request.address = record.hostAddress;
-		request.sessionId = record.directorySessionId;
-		request.playerName = m_LocalName.empty() ? "Client" : m_LocalName;
-		request.resyncOnDesync = true;
-		return Start(request, error);
+		return Start(TicketRejoinRequestFromRecord(record, m_LocalName.empty() ? "Client" : m_LocalName), error);
 	}
 
 	NetSessionConfig NetMatchService::BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig) const {

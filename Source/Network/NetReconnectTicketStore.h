@@ -11,7 +11,7 @@ namespace RTE {
 	/// The recovery record a client keeps so it can prove it held its seat. Everything a Reclaim and
 	/// its proof need, plus enough context to tell one hosted session's record from another's.
 	struct NetH4TicketRecord {
-		uint16_t recordVersion = 1;
+		uint16_t recordVersion = 2;
 		NetAuthBytes16 epoch{};
 		uint16_t stableSeat = 0;
 		uint32_t holderGeneration = 0;
