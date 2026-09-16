@@ -7,8 +7,11 @@
 
 #include "BS_thread_pool.hpp"
 
+#include <deque>
 #include <functional>
+#include <string>
 #include <unordered_set>
+#include <vector>
 
 #define g_ActivityMan ActivityMan::Instance()
 
@@ -130,6 +133,25 @@ namespace RTE {
 		/// @return Whether the game was successfully saved.
 		bool ForceAbortSave();
 
+		enum class SaveKind {
+			Manual,
+			Autosave,
+			Resync,
+		};
+
+		/// One refused save, copied into the diagnostics bundle.
+		struct SaveRefusalRecord {
+			std::string kind;
+			std::string objectClass;
+			std::string presetName;
+			std::string scriptFile;
+			std::string functionName;
+			std::string lastSegment;
+			std::string path;
+			std::string playerLine;
+			std::string problem;
+		};
+
 		enum class SaveCompression {
 			Fast,
 			Small,
@@ -182,6 +204,12 @@ namespace RTE {
 
 		/// Checks native global callbacks and their checkpoint continuations.
 		bool RunGlobalCallbacksSelfTest();
+
+		/// Plants a dead script upvalue, requests a save capture, and checks the player line.
+		bool RunSaveRefusalDiagnosisSelfTest();
+
+		/// The last refusals a diagnostics bundle copies into DesyncHeal.json.
+		const std::deque<SaveRefusalRecord>& GetSaveRefusalRecords() const { return m_SaveRefusalRecords; }
 
 		/// Deletes a saved game file this process wrote for itself.
 		void RemoveSavedGame(const std::string& fileName) const;
@@ -293,6 +321,12 @@ namespace RTE {
 		bool QueueSaveSnapshot(const std::string& fileName, const std::string& path, SaveCompression compression,
 		                       std::shared_future<bool>& task, const std::string& matchId = "", uint64_t tick = 0, size_t* capturedBytes = nullptr);
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage) const;
+		/// Serializes script graphs the way a save does and reports each refusal.
+		bool CaptureScriptGraphsOrReportRefusal(SaveKind kind, std::vector<std::string>& graphs);
+		/// Prints the existing console line and tells the player once.
+		void ReportScriptGraphSaveRefusal(SaveKind kind, const std::vector<std::string>& problems);
+		/// Match toast in lockstep, screen text otherwise.
+		void ShowSaveRefusalToPlayer(const SaveRefusalRecord& record, bool lockstep);
 
 		std::string m_DefaultActivityType; //!< The type name of the default Activity to be loaded if nothing else is available.
 		std::string m_DefaultActivityName; //!< The preset name of the default Activity to be loaded if nothing else is available.
@@ -328,6 +362,9 @@ namespace RTE {
 
 		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.
 		std::vector<std::shared_future<bool>> m_AutosaveTasks; //!< Captured checkpoints awaiting disk IO.
+		std::deque<SaveRefusalRecord> m_SaveRefusalRecords;
+		std::unordered_set<std::string> m_ReportedAutosaveKeys;
+		static constexpr size_t c_SaveRefusalRecordLimit = 16;
 		long long m_LastSaveMainMs = 0;
 		long long m_LastSaveZipMs = 0;
 
