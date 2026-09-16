@@ -160,6 +160,7 @@ namespace RTE {
 			NetMatchConfig historical = MakeConfig();
 			historical.version = 2;
 			historical.brainlessHumansSpectate = false;
+			historical.pathHorizonTicks = 0;
 			std::vector<uint8_t> historicalWire;
 			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{historical}}, historicalWire)) return false;
 			historicalWire[4] = 3;
@@ -747,6 +748,7 @@ namespace RTE {
 				{"deploy", [](auto& c) { c.deployUnits = false; }}, {"autosave", [](auto& c) { c.autosaveEnabled = false; }},
 				{"interval", [](auto& c) { ++c.autosaveIntervalSeconds; }}, {"idle_wait", [](auto& c) { ++c.idleWaitMinutes; }},
 				{"repair", [](auto& c) { c.automaticRepair = true; }}, {"policy", [](auto& c) { c.delayPolicy = NetMatchDelayPolicy::Auto; }},
+				{"path_horizon", [](auto& c) { ++c.pathHorizonTicks; }},
 				{"brainless_spectate", [](auto& c) { c.brainlessHumansSpectate = false; }},
 				{"floor", [](auto& c) { ++c.inputDelayFrames; }}, {"sender_1", [](auto& c) { ++c.peerInputDelayFrames[0]; }},
 				{"sender_2", [](auto& c) { ++c.peerInputDelayFrames[1]; }},
@@ -802,6 +804,7 @@ namespace RTE {
 				{"technology intent", [](auto& c) { c.teamRules[0].technologyIntent = "Dummy.rte"; }},
 				{"AI low", [](auto& c) { c.teamRules[0].aiSkill = 0; }}, {"AI high", [](auto& c) { c.teamRules[0].aiSkill = 101; }},
 				{"autosave interval", [](auto& c) { c.autosaveIntervalSeconds = 0; }}, {"idle wait", [](auto& c) { c.idleWaitMinutes = 61; }},
+				{"path horizon", [](auto& c) { c.pathHorizonTicks = 121; }},
 				{"policy", [](auto& c) { c.delayPolicy = static_cast<NetMatchDelayPolicy>(3); }},
 				{"mode", [](auto& c) { c.mode = static_cast<NetMatchMode>(4); }},
 				{"delay count", [](auto& c) { c.peerInputDelayFrames.pop_back(); }},
@@ -823,12 +826,14 @@ namespace RTE {
 			NetMatchConfig prefix = MakeConfig();
 			prefix.version = 2;
 			prefix.brainlessHumansSpectate = false;
+			prefix.pathHorizonTicks = 0;
 			prefix.inputDelayFrames = config.inputDelayFrames;
 			prefix.peerInputDelayFrames = config.peerInputDelayFrames;
 			std::vector<uint8_t> prefixBytes;
 			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{prefix}}, prefixBytes)) return false;
 			const size_t difficultyOffset = prefixBytes.size() + 20 + config.activityModule.size() + config.sceneModule.size();
-			for (const auto& [offset, value] : std::vector<std::pair<size_t, uint8_t>>{{difficultyOffset, 101}, {bytes.size() - 9, 0}, {bytes.size() - 3, 61}}) {
+			const size_t horizonTail = config.version >= 5 ? 2 : 0;
+			for (const auto& [offset, value] : std::vector<std::pair<size_t, uint8_t>>{{difficultyOffset, 101}, {bytes.size() - 9 - horizonTail, 0}, {bytes.size() - 3 - horizonTail, 61}}) {
 				auto invalidWire = bytes;
 				invalidWire.at(offset) = value;
 				const auto decoded = NetLobbyProtocol::Decode(invalidWire);
@@ -849,7 +854,7 @@ namespace RTE {
 				if (NetLobbyProtocol::Decode(truncated).ok) { *error = "truncated rules decoded"; return false; }
 			}
 			// The spectate rule rides between deploy_units and the team rules, so its byte is offset from difficulty.
-			for (const size_t offset : {difficultyOffset + 8, bytes.size() - 8, bytes.size() - 2, bytes.size() - 1}) {
+			for (const size_t offset : {difficultyOffset + 8, bytes.size() - 8 - horizonTail, bytes.size() - 2 - horizonTail, bytes.size() - 1 - horizonTail}) {
 				auto invalidWire = bytes;
 				invalidWire[offset] = 3;
 				if (NetLobbyProtocol::Decode(invalidWire).ok) { *error = "invalid rules bool/policy decoded"; return false; }
@@ -862,6 +867,7 @@ namespace RTE {
 			expected.version = 2;
 			// A legacy config carries the pre-rules end rule: the last human brain ends the round.
 			expected.brainlessHumansSpectate = false;
+			expected.pathHorizonTicks = 0;
 			expected.sessionId = 1;
 			for (const uint8_t version : {2, 1}) {
 				legacy[16] = version;
@@ -905,9 +911,24 @@ namespace RTE {
 			// The CPU team key reached the hash in v4, so the same roster re-versioned hashes by team.
 			NetMatchConfig atCurrentVersion = recordedConfig->config;
 			atCurrentVersion.version = NetMatchConfigUtil::c_Version;
+			atCurrentVersion.pathHorizonTicks = NetMatchConfigUtil::c_DefaultPathHorizonTicks;
 			const std::string currentHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(atCurrentVersion));
-			if (currentHash != "87e848dea8853ff7762ffbabf6aa0c71d09e13f979382b970b69ef305fa0f5ae") {
+			if (currentHash == recordedHash) {
+				*error = "promoting a recording to the current match-config version did not change its hash";
+				return false;
+			}
+			NetMatchConfig swappedCpu = atCurrentVersion;
+			for (NetMatchPlayerSlot& slot : swappedCpu.players) {
+				if (slot.cpu) slot.team = static_cast<uint8_t>((slot.team + 1) % 4);
+			}
+			if (NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(swappedCpu)) == currentHash) {
 				*error = "a current-version roster no longer hashes by CPU team: " + currentHash;
+				return false;
+			}
+			NetMatchConfig horizonMoved = atCurrentVersion;
+			++horizonMoved.pathHorizonTicks;
+			if (NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(horizonMoved)) == currentHash) {
+				*error = "current-version hash omitted path_horizon_ticks";
 				return false;
 			}
 			// The envelope stamps this build's protocol version, and a recorded envelope is older by
