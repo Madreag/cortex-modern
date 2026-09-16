@@ -597,6 +597,7 @@ namespace RTE {
 		snapshot.activityPreset = rosterConfig.activityPreset;
 		snapshot.activityModule = rosterConfig.activityModule;
 		snapshot.sceneName = rosterConfig.sceneName;
+		snapshot.sceneModule = rosterConfig.sceneModule;
 		snapshot.modeName = NetMatchConfigUtil::ModeName(rosterConfig.mode);
 		snapshot.modeLabel = NetMatchConfigUtil::ModeLabel(rosterConfig.mode);
 		snapshot.localReady = m_Lobby.IsLocalReady();

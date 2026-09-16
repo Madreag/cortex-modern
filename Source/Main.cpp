@@ -1763,6 +1763,7 @@ void ProcessMenuScript() {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::cout << "[menu-script] dump_lobby state=" << snapshot.serviceState << " members=" << snapshot.members.size()
 				  << " activity=\"" << snapshot.activityPreset << "\" module=\"" << snapshot.activityModule << "\""
+				  << " scene=\"" << snapshot.sceneName << "\" scene_module=\"" << snapshot.sceneModule << "\""
 				  << " error=\"" << snapshot.errorText << "\" status=\"" << snapshot.statusText << "\""
 				  << " input_delay=\"" << snapshot.inputDelayText << "\""
 				  << " port_map=\"" << snapshot.portMap << "\"";
@@ -5455,6 +5456,9 @@ int RunNetMatchServiceE2E() {
 			} else {
 				request.standardRules = payload->config;
 				request.activityPreset = payload->config.activityPreset;
+				request.activityModule = payload->config.activityModule;
+				request.sceneName = payload->config.sceneName;
+				request.sceneModule = payload->config.sceneModule;
 			}
 		}
 		// The e2e honours -net-match-ownership-policy; team-owner is the default so the flagless path is unchanged.
