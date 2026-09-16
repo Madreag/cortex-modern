@@ -176,16 +176,13 @@ namespace RTE {
 	}
 
 	bool NetHostBanStore::Load(std::string* error) {
-		std::vector<NetHostBanRecord> session;
-		for (const NetHostBanRecord& record : m_Records) {
-			if (record.scope == NetHostBanScope::Session) {
-				session.push_back(record);
-			}
-		}
-		m_Records.swap(session);
 		const std::filesystem::path path(m_Path);
 		std::error_code code;
 		if (!std::filesystem::exists(path, code)) {
+			m_Records.erase(std::remove_if(m_Records.begin(), m_Records.end(), [](const NetHostBanRecord& record) {
+				return record.scope == NetHostBanScope::UntilRemoved;
+			}), m_Records.end());
+			m_PersistentReady = true;
 			return true;
 		}
 		std::vector<uint8_t> bytes(static_cast<size_t>(std::filesystem::file_size(path, code)));
@@ -197,6 +194,7 @@ namespace RTE {
 		if (file == nullptr) {
 #endif
 			if (error) *error = "could not read the host ban store";
+			m_PersistentReady = false;
 			return false;
 		}
 		const bool read = bytes.empty() || std::fread(bytes.data(), 1, bytes.size(), file) == bytes.size();
@@ -204,9 +202,18 @@ namespace RTE {
 		std::vector<NetHostBanRecord> persistent;
 		if (!read || !DeserializePersistent(bytes, persistent)) {
 			if (error) *error = "the host ban store is corrupt";
+			m_PersistentReady = false;
 			return false;
 		}
-		m_Records.insert(m_Records.end(), persistent.begin(), persistent.end());
+		std::vector<NetHostBanRecord> kept;
+		for (const NetHostBanRecord& record : m_Records) {
+			if (record.scope == NetHostBanScope::Session) {
+				kept.push_back(record);
+			}
+		}
+		kept.insert(kept.end(), persistent.begin(), persistent.end());
+		m_Records.swap(kept);
+		m_PersistentReady = true;
 		return true;
 	}
 
@@ -242,6 +249,10 @@ namespace RTE {
 	}
 
 	bool NetHostBanStore::Ban(const NetAuthBytes32& identity, NetHostBanScope scope, const std::string& alias, const std::string& reason, uint64_t sessionId, uint64_t nowUnixMs, std::string* error) {
+		if (scope == NetHostBanScope::UntilRemoved && !m_PersistentReady) {
+			if (error) *error = "the host ban store is not loaded";
+			return false;
+		}
 		if (!BoundedText(alias) || !BoundedText(reason)) {
 			if (error) *error = "ban alias or reason is too long";
 			return false;

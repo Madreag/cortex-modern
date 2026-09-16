@@ -1907,6 +1907,7 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_Session && m_Coordinator && m_State == NetMatchServiceState::Running) {
 				m_Session->SetLockstepFrame(m_Coordinator->GetStats().nextFrame);
+				m_ReconnectClient.SetRound(static_cast<uint32_t>(m_Coordinator->GetRoundId()));
 				// The coordinator owns the transport queue mid-match, so this pump is the only
 				// driver that ever drains the session's chat outbox here.
 				m_Session->PumpChatOutbox();
@@ -1931,6 +1932,7 @@ static std::string ResyncSaveName() {
 		const SimCensusScope censusScope;
 		// Chat entries stamp the frame they arrived on, on every peer, not only the host's plane.
 		m_Session->SetLockstepFrame(m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0);
+		m_ReconnectClient.SetRound(m_Coordinator ? static_cast<uint32_t>(m_Coordinator->GetRoundId()) : 0);
 		if (hostAdmission) {
 			// Phase A: a ticketless join into a running match is refused; a returning holder proves.
 			m_ReconnectHost.SetLiveMatch(true);
@@ -2937,7 +2939,7 @@ static std::string ResyncSaveName() {
 		const uint64_t sessionId = m_Session->GetSessionId();
 		const uint32_t round = m_Coordinator ? static_cast<uint32_t>(m_Coordinator->GetRoundId()) : 0;
 		const uint64_t boundary = m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0;
-		m_LastKickBanResult = m_ReconnectHost.RemoveParticipant(selection, action, nowMs, sessionId, round, boundary, m_LastRemovalIssue);
+		m_LastKickBanResult = m_ReconnectHost.RemoveParticipant(selection, action, nowMs, UnixNowMs(nullptr), sessionId, round, boundary, m_LastRemovalIssue);
 		if (m_LastKickBanResult != NetKickBanResult::Ok) {
 			return m_LastKickBanResult;
 		}
@@ -3086,7 +3088,9 @@ static std::string ResyncSaveName() {
 			session.SetReconnectHost(&m_ReconnectHost);
 			session.EnableParticipantProof(nullptr);
 			m_BanStore.SetPath(NetHostBanStore::DefaultPath());
-			(void)m_BanStore.Load(nullptr);
+			if (!m_BanStore.Load(nullptr)) {
+				// Last-good persistents stay; Until Removed admission stays closed until a later load.
+			}
 			m_ReconnectHost.SetBanStore(&m_BanStore);
 			session.SetHostBanStore(&m_BanStore);
 			m_AdmissionAttached = true;
