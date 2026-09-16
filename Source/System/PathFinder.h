@@ -34,6 +34,21 @@ namespace RTE {
 
 	using PathCompleteCallback = std::function<void(std::shared_ptr<volatile PathRequest>)>;
 
+	/// Material pixels captured at a terrain box's origin tick for an off-thread horizon raycast.
+	struct HorizonTerrainPatch {
+		int originX = 0;
+		int originY = 0;
+		int width = 0;
+		int height = 0;
+		int sceneWidth = 0;
+		int sceneHeight = 0;
+		bool wrapsX = false;
+		bool wrapsY = false;
+		std::vector<unsigned char> pixels;
+
+		unsigned char Sample(int x, int y) const;
+	};
+
 	/// Contains everything related to a PathNode on the path grid used by PathFinder.
 	struct PathNode {
 
@@ -122,10 +137,20 @@ namespace RTE {
 		std::shared_ptr<volatile PathRequest> CalculatePathAsync(Vector start, Vector end, float jumpHeight, float digStrength, PathCompleteCallback callback = nullptr, bool committedHorizon = false);
 
 		/// Queues a committed-horizon recompute for terrain that landed at originTick.
-		void QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, const std::vector<Box>& boxes);
+		void QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, const std::vector<Box>& boxes, const std::vector<HorizonTerrainPatch>& patches = {});
+
+		/// Copies live cells into the overlay at Note time, before any live rewrite of the box.
+		void PinHorizonFromLive(const Box& box);
+
+		/// Snapshots terrain material pixels for the worker raycast.
+		void CaptureHorizonPatch(const Box& box, HorizonTerrainPatch& patch) const;
 
 		/// Applies every horizon job whose commit tick is due, waiting if a worker is late.
 		void CommitHorizonThrough(uint64_t nowTick);
+
+		static constexpr int64_t c_HorizonWaitCapUs = 250000;
+		void BeginCommittedHorizonRead() { ++m_CommittedHorizonReaders; }
+		void EndCommittedHorizonRead() { --m_CommittedHorizonReaders; }
 
 		void SetHorizonWorkerDelayMs(int milliseconds) { m_HorizonWorkerDelayMs = milliseconds; }
 		int64_t LastHorizonWaitUs() const { return m_LastHorizonWaitUs; }
@@ -138,6 +163,9 @@ namespace RTE {
 
 		void TestInstallGrid(int width, int height, int nodeDimension, const Material* fill);
 		void TestSetNodeMaterials(int nodeId, const std::array<const Material*, 8>& materials);
+		void TestHoldPathingRequest() { ++m_CurrentPathingRequests; }
+		void TestReleasePathingRequest() { --m_CurrentPathingRequests; }
+		void TestApplyLiveUpdate(int nodeId, const std::array<const Material*, 8>& materials);
 		void QueueHorizonDelta(uint64_t originTick, uint16_t horizonTicks, int nodeId, const std::array<const Material*, 8>& materials, bool navigable = true);
 		int TestNodeIdAt(int x, int y) const { return ConvertCoordsToNodeId(x, y); }
 
@@ -226,6 +254,7 @@ namespace RTE {
 		struct HorizonNode {
 			std::array<const Material*, 8> committedMaterials{};
 			bool committedNavigable = true;
+			uint64_t generation = 0;
 		};
 		struct HorizonJob {
 			uint64_t originTick = 0;
@@ -233,22 +262,30 @@ namespace RTE {
 			std::vector<int> nodeIds;
 			std::vector<std::array<const Material*, 8>> materials;
 			std::vector<char> navigable;
+			std::vector<HorizonTerrainPatch> patches;
 			std::atomic<bool> ready{false};
 		};
 		mutable std::unordered_map<int, HorizonNode> m_HorizonNodes;
 		std::deque<std::shared_ptr<HorizonJob>> m_HorizonJobs;
 		mutable std::mutex m_HorizonMutex;
+		std::atomic<int> m_CommittedHorizonReaders{0};
+		std::atomic<uint64_t> m_HorizonGeneration{1};
+		bool m_SelfTestGrid = false;
 		int m_HorizonWorkerDelayMs = 0;
 		int64_t m_LastHorizonWaitUs = 0;
+		int64_t m_LastHorizonExpired = 0;
 
 		struct NodeCostView {
 			std::array<const Material*, 8> materials{};
 			bool navigable = true;
 		};
 		NodeCostView ViewNode(const PathNode* node) const;
-		void ComputeHorizonMaterials(const std::vector<int>& nodeIds, std::vector<std::array<const Material*, 8>>& materials, std::vector<char>& navigable) const;
+		const Material* StrongestMaterialAlongPatch(const Vector& start, const Vector& end, const std::vector<HorizonTerrainPatch>& patches) const;
+		void ComputeHorizonMaterialsFromPatch(const std::vector<int>& nodeIds, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials, std::vector<char>& navigable) const;
 		void LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job);
 		void ApplyHorizonJob(const HorizonJob& job);
+		void ClearHorizonState();
+		void DrainCommittedHorizonReaders();
 
 		/// Gets the pather for this thread. Lazily-initialized for each new thread that needs a pather.
 		/// @return The pather for this thread.

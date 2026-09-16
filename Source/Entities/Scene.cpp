@@ -18,6 +18,7 @@
 #include "Base64/base64.h"
 #include "SLTerrain.h"
 #include "PathFinder.h"
+#include "Material.h"
 #include "MovableObject.h"
 #include "MOPixel.h"
 #include "MOSParticle.h"
@@ -195,6 +196,7 @@ bool Scene::LoadRuntimeCheckpoint(std::string_view text, bool validateOnly, bool
 		BITMAP* bitmap = preview.Create();
 		destroy_bitmap(m_pPreviewBitmap); m_pPreviewBitmap = bitmap;
 		if (!terrain.Capture() || !terrain.LoadMetadata(metadata) || !terrain.Restore()) return false;
+		m_HorizonTerrainBoxes.clear();
 		return true;
 	} catch (const std::exception&) { return false; }
 }
@@ -506,6 +508,13 @@ Vector Scene::Area::GetRandomPoint() const {
 	// Randomly choose a box, and a point within it
 	std::shared_lock<std::shared_mutex> guard(g_sceneAreaMutex);
 	return m_BoxList[RandomNum<int>(0, m_BoxList.size() - 1)]->GetRandomPoint();
+}
+
+void Scene::TestInstallHorizonPathFinders(int width, int height, int nodeDimension, const Material* fill) {
+	for (std::unique_ptr<PathFinder>& pathFinder: m_pPathFinders) {
+		pathFinder = std::make_unique<PathFinder>();
+		pathFinder->TestInstallGrid(width, height, nodeDimension, fill);
+	}
 }
 
 void Scene::Clear() {
@@ -2964,7 +2973,24 @@ void Scene::NoteHorizonTerrainBox(const Box& newArea) {
 	if (!ScenarioRunner::IsLockstepControllerSyncActive() || SharedPathHorizonTicks() == 0) {
 		return;
 	}
-	m_HorizonTerrainBoxes.push_back({newArea, ScenarioRunner::GetLockstepAppliedFrame()});
+	const uint64_t originTick = ScenarioRunner::GetLockstepAppliedFrame();
+	for (int index = 0; index < static_cast<int>(m_pPathFinders.size()); ++index) {
+		PathFinder* pathFinder = m_pPathFinders[index].get();
+		if (!pathFinder) {
+			continue;
+		}
+		pathFinder->PinHorizonFromLive(newArea);
+		HorizonTerrainPatch patch;
+		const int team = index - 1;
+		if (team >= Activity::Teams::TeamOne) {
+			g_MovableMan.OverrideMaterialDoors(true, team);
+		}
+		pathFinder->CaptureHorizonPatch(newArea, patch);
+		if (team >= Activity::Teams::TeamOne) {
+			g_MovableMan.OverrideMaterialDoors(false, team);
+		}
+		m_HorizonTerrainBoxes.push_back({newArea, originTick, index, std::move(patch)});
+	}
 }
 
 void Scene::FlushHorizonTerrainBoxes() {
@@ -2976,21 +3002,30 @@ void Scene::FlushHorizonTerrainBoxes() {
 		m_HorizonTerrainBoxes.clear();
 		return;
 	}
-	std::map<uint64_t, std::vector<Box>> boxesByTick;
-	std::vector<uint64_t> ticks;
-	for (const HorizonTerrainBox& item: m_HorizonTerrainBoxes) {
-		if (boxesByTick[item.originTick].empty()) {
-			ticks.push_back(item.originTick);
+	struct GroupKey {
+		uint64_t originTick = 0;
+		int finderIndex = 0;
+		bool operator<(const GroupKey& other) const {
+			return originTick != other.originTick ? originTick < other.originTick : finderIndex < other.finderIndex;
 		}
-		boxesByTick[item.originTick].push_back(item.box);
+	};
+	std::map<GroupKey, std::vector<Box>> boxesByKey;
+	std::map<GroupKey, std::vector<HorizonTerrainPatch>> patchesByKey;
+	std::vector<GroupKey> keys;
+	for (HorizonTerrainBox& item: m_HorizonTerrainBoxes) {
+		const GroupKey key{item.originTick, item.finderIndex};
+		if (boxesByKey[key].empty()) {
+			keys.push_back(key);
+		}
+		boxesByKey[key].push_back(item.box);
+		patchesByKey[key].push_back(std::move(item.patch));
 	}
 	m_HorizonTerrainBoxes.clear();
-	for (uint64_t originTick: ticks) {
-		for (std::unique_ptr<PathFinder>& pathFinder: m_pPathFinders) {
-			if (pathFinder) {
-				pathFinder->QueueHorizonUpdate(originTick, horizonTicks, boxesByTick[originTick]);
-			}
+	for (const GroupKey& key: keys) {
+		if (key.finderIndex < 0 || static_cast<size_t>(key.finderIndex) >= m_pPathFinders.size() || !m_pPathFinders[key.finderIndex]) {
+			continue;
 		}
+		m_pPathFinders[key.finderIndex]->QueueHorizonUpdate(key.originTick, horizonTicks, boxesByKey[key], patchesByKey[key]);
 	}
 }
 

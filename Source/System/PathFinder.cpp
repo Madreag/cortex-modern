@@ -3,12 +3,17 @@
 #include "Material.h"
 #include "Scene.h"
 #include "SceneMan.h"
+#include "SLTerrain.h"
 #include "ThreadMan.h"
 #include "CheckpointArchive.h"
 #include "FaultInjection.h"
 #include "System.h"
 #include "Controller.h"
 #include "Actor.h"
+#include "LoopbackTransport.h"
+#include "NetLockstep.h"
+#include "NetMatchConfig.h"
+#include "ScenarioRunner.h"
 
 #include "tracy/Tracy.hpp"
 
@@ -101,19 +106,44 @@ namespace {
 	}
 
 	struct HorizonReadScope {
-		explicit HorizonReadScope(bool enable) :
+		HorizonReadScope(PathFinder* finder, bool enable) :
+		    m_Finder(finder),
 		    m_Enable(enable) {
-			if (m_Enable) {
+			if (m_Enable && m_Finder) {
 				s_ReadCommittedHorizon = true;
+				m_Finder->BeginCommittedHorizonRead();
 			}
 		}
 		~HorizonReadScope() {
-			if (m_Enable) {
+			if (m_Enable && m_Finder) {
+				m_Finder->EndCommittedHorizonRead();
 				s_ReadCommittedHorizon = false;
 			}
 		}
+		PathFinder* m_Finder = nullptr;
 		bool m_Enable = false;
 	};
+}
+
+unsigned char RTE::HorizonTerrainPatch::Sample(int x, int y) const {
+	if (wrapsX && sceneWidth > 0) {
+		x %= sceneWidth;
+		if (x < 0) {
+			x += sceneWidth;
+		}
+	}
+	if (wrapsY && sceneHeight > 0) {
+		y %= sceneHeight;
+		if (y < 0) {
+			y += sceneHeight;
+		}
+	}
+	const int localX = x - originX;
+	const int localY = y - originY;
+	if (width <= 0 || height <= 0 || localX < 0 || localY < 0 || localX >= width || localY >= height) {
+		return 0;
+	}
+	return pixels[static_cast<size_t>(localY) * static_cast<size_t>(width) + static_cast<size_t>(localX)];
 }
 
 RTE::PathNode::PathNode(const Vector& pos) :
@@ -166,7 +196,7 @@ bool PathFinder::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		}
 		reader.Finish();
 		if (validateOnly) return true;
-		WaitForPathingRequests();
+		ClearHorizonState();
 		// PathNode contains references to its own array elements: construct in place,
 		// then swap storage, so neither vector growth nor a value copy can dangle them.
 		std::vector<PathNode> replacement;
@@ -189,7 +219,7 @@ bool PathFinder::LoadCheckpoint(std::string_view text, bool validateOnly) {
 	} catch (const std::exception&) { return false; }
 }
 
-void PathFinder::Clear() {
+void PathFinder::ClearHorizonState() {
 	WaitForPathingRequests();
 	{
 		std::lock_guard lock(m_HorizonMutex);
@@ -201,14 +231,21 @@ void PathFinder::Clear() {
 		m_HorizonJobs.clear();
 		m_HorizonNodes.clear();
 	}
+	m_HorizonGeneration.fetch_add(1);
 	m_LastHorizonWaitUs = 0;
+	m_LastHorizonExpired = 0;
 	m_HorizonWorkerDelayMs = 0;
+}
+
+void PathFinder::Clear() {
+	ClearHorizonState();
 	m_NodeGrid.clear();
 	m_Pather = nullptr;
 	m_GridWidth = m_GridHeight = 0;
 	m_WrapsX = m_WrapsY = false;
 	m_NodeDimension = SCENEGRIDSIZE;
 	m_Offset = Vector();
+	m_SelfTestGrid = false;
 }
 
 int PathFinder::Create(int nodeDimension) {
@@ -299,7 +336,7 @@ MicroPather* PathFinder::GetPather() {
 int PathFinder::CalculatePath(Vector start, Vector end, std::list<Vector>& pathResult, float& totalCostResult, float jumpHeight, float digStrength, bool committedHorizon) {
 	++m_CurrentPathingRequests;
 	PathingRequestScope scope{m_CurrentPathingRequests};
-	HorizonReadScope horizon(committedHorizon);
+	HorizonReadScope horizon(this, committedHorizon);
 	return CalculatePathImpl(start, end, pathResult, totalCostResult, jumpHeight, digStrength);
 }
 
@@ -307,7 +344,7 @@ int PathFinder::CalculatePathImpl(Vector start, Vector end, std::list<Vector>& p
 	ZoneScoped;
 
 	// Make sure start and end are within scene bounds.
-	if (g_SceneMan.GetScene()) {
+	if (!m_SelfTestGrid) {
 		g_SceneMan.ForceBounds(start);
 		g_SceneMan.ForceBounds(end);
 	}
@@ -391,7 +428,7 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 		g_ThreadMan.GetBackgroundThreadPool().push_task(
 		    [this, start, end, jumpHeight, digStrength, callback, committedHorizon](std::shared_ptr<volatile PathRequest> volRequest) {
 			    PathingRequestScope scope{m_CurrentPathingRequests};
-			    HorizonReadScope horizon(committedHorizon);
+			    HorizonReadScope horizon(this, committedHorizon);
 			    // Cast away the volatile-ness - only matters outside (and complicates the API otherwise)
 			    PathRequest& request = const_cast<PathRequest&>(*volRequest);
 
@@ -427,16 +464,7 @@ void PathFinder::RecalculateAllCosts() {
 	// Deadlock until all path requests are complete
 	while (m_CurrentPathingRequests.load() != 0) {};
 
-	{
-		std::lock_guard lock(m_HorizonMutex);
-		for (const auto& job: m_HorizonJobs) {
-			while (!job->ready.load()) {
-				std::this_thread::yield();
-			}
-		}
-		m_HorizonJobs.clear();
-		m_HorizonNodes.clear();
-	}
+	ClearHorizonState();
 
 	// I hate this copy, but fuck it.
 	std::vector<int> pathNodesIdsVec;
@@ -494,7 +522,7 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 	const float costRadiationMultiplier = 0.2F;
 	float radiatedCost = 0.0F; // GetNodeAverageTransitionCost(*node) * costRadiationMultiplier;
 
-	bool isInNoGrav = g_SceneMan.GetScene() && g_SceneMan.IsPointInNoGravArea(node->Pos);
+	bool isInNoGrav = !m_SelfTestGrid && g_SceneMan.IsPointInNoGravArea(node->Pos);
 	bool allowDiagonal = !isInNoGrav; // We don't allow diagonals in nograv to improve automover behaviour
 
 	auto neighborOpen = [this](PathNode* neighbor) {
@@ -862,7 +890,64 @@ PathFinder::NodeCostView PathFinder::ViewNode(const PathNode* node) const {
 	return view;
 }
 
-void PathFinder::ComputeHorizonMaterials(const std::vector<int>& nodeIds, std::vector<std::array<const Material*, 8>>& materials, std::vector<char>& navigable) const {
+const Material* PathFinder::StrongestMaterialAlongPatch(const Vector& start, const Vector& end, const std::vector<HorizonTerrainPatch>& patches) const {
+	const Material* strongest = g_SceneMan.GetMaterialFromID(MaterialColorKeys::g_MaterialAir);
+	if (!strongest) {
+		return strongest;
+	}
+	auto sample = [&](int x, int y) -> unsigned char {
+		for (const HorizonTerrainPatch& patch: patches) {
+			int sx = x;
+			int sy = y;
+			if (patch.wrapsX && patch.sceneWidth > 0) {
+				sx %= patch.sceneWidth;
+				if (sx < 0) {
+					sx += patch.sceneWidth;
+				}
+			}
+			if (patch.wrapsY && patch.sceneHeight > 0) {
+				sy %= patch.sceneHeight;
+				if (sy < 0) {
+					sy += patch.sceneHeight;
+				}
+			}
+			const int localX = sx - patch.originX;
+			const int localY = sy - patch.originY;
+			if (patch.width > 0 && patch.height > 0 && localX >= 0 && localY >= 0 && localX < patch.width && localY < patch.height) {
+				return patch.pixels[static_cast<size_t>(localY) * static_cast<size_t>(patch.width) + static_cast<size_t>(localX)];
+			}
+		}
+		return MaterialColorKeys::g_MaterialAir;
+	};
+
+	int intPos[2] = {static_cast<int>(std::floor(start.m_X)), static_cast<int>(std::floor(start.m_Y))};
+	int delta[2] = {static_cast<int>(std::floor(end.m_X)) - intPos[0], static_cast<int>(std::floor(end.m_Y)) - intPos[1]};
+	int increment[2] = {delta[0] < 0 ? -1 : 1, delta[1] < 0 ? -1 : 1};
+	delta[0] = std::abs(delta[0]);
+	delta[1] = std::abs(delta[1]);
+	int delta2[2] = {delta[0] << 1, delta[1] << 1};
+	const int dom = delta[0] > delta[1] ? 0 : 1;
+	const int sub = 1 - dom;
+	int error = delta2[sub] - delta[dom];
+	for (int step = 0; step < delta[dom]; ++step) {
+		intPos[dom] += increment[dom];
+		if (error >= 0) {
+			intPos[sub] += increment[sub];
+			error -= delta2[dom];
+		}
+		error += delta2[sub];
+		const unsigned char materialID = sample(intPos[0], intPos[1]);
+		if (materialID != MaterialColorKeys::g_MaterialAir) {
+			const Material* found = g_SceneMan.GetMaterialFromID(materialID);
+			if (found && found->GetIntegrity() > strongest->GetIntegrity()) {
+				strongest = found;
+			}
+		}
+	}
+	return strongest;
+}
+
+void PathFinder::ComputeHorizonMaterialsFromPatch(const std::vector<int>& nodeIds, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials, std::vector<char>& navigable) const {
 	materials.assign(nodeIds.size(), {});
 	navigable.assign(nodeIds.size(), 1);
 	std::unordered_map<int, std::array<const Material*, 8>> computed;
@@ -878,19 +963,19 @@ void PathFinder::ComputeHorizonMaterials(const std::vector<int>& nodeIds, std::v
 		std::array<const Material*, 8> next = node.AdjacentNodeBlockingMaterials;
 		if (node.Right) {
 			Vector offset(0.0F, 3.0F);
-			next[2] = getStrongerMaterial(StrongestMaterialAlongLine(node.Pos - offset, node.Right->Pos - offset), StrongestMaterialAlongLine(node.Pos + offset, node.Right->Pos + offset));
+			next[2] = getStrongerMaterial(StrongestMaterialAlongPatch(node.Pos - offset, node.Right->Pos - offset, patches), StrongestMaterialAlongPatch(node.Pos + offset, node.Right->Pos + offset, patches));
 		}
 		if (node.Down) {
 			Vector offset(3.0F, 0.0F);
-			next[4] = getStrongerMaterial(StrongestMaterialAlongLine(node.Pos - offset, node.Down->Pos - offset), StrongestMaterialAlongLine(node.Pos + offset, node.Down->Pos + offset));
+			next[4] = getStrongerMaterial(StrongestMaterialAlongPatch(node.Pos - offset, node.Down->Pos - offset, patches), StrongestMaterialAlongPatch(node.Pos + offset, node.Down->Pos + offset, patches));
 		}
 		if (node.UpRight) {
 			Vector offset(2.0F, 2.0F);
-			next[1] = getStrongerMaterial(StrongestMaterialAlongLine(node.Pos - offset, node.UpRight->Pos - offset), StrongestMaterialAlongLine(node.Pos + offset, node.UpRight->Pos + offset));
+			next[1] = getStrongerMaterial(StrongestMaterialAlongPatch(node.Pos - offset, node.UpRight->Pos - offset, patches), StrongestMaterialAlongPatch(node.Pos + offset, node.UpRight->Pos + offset, patches));
 		}
 		if (node.RightDown) {
 			Vector offset(2.0F, -2.0F);
-			next[3] = getStrongerMaterial(StrongestMaterialAlongLine(node.Pos - offset, node.RightDown->Pos - offset), StrongestMaterialAlongLine(node.Pos + offset, node.RightDown->Pos + offset));
+			next[3] = getStrongerMaterial(StrongestMaterialAlongPatch(node.Pos - offset, node.RightDown->Pos - offset, patches), StrongestMaterialAlongPatch(node.Pos + offset, node.RightDown->Pos + offset, patches));
 		}
 		computed[nodeId] = next;
 	}
@@ -929,7 +1014,11 @@ void PathFinder::ComputeHorizonMaterials(const std::vector<int>& nodeIds, std::v
 void PathFinder::LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job) {
 	const int delayMs = m_HorizonWorkerDelayMs;
 	const bool late = FaultInjected("horizon_worker_late");
-	auto finish = [job, delayMs, late]() {
+	const bool compute = job->materials.empty();
+	auto finish = [this, job, delayMs, late, compute]() {
+		if (compute) {
+			ComputeHorizonMaterialsFromPatch(job->nodeIds, job->patches, job->materials, job->navigable);
+		}
 		if (delayMs > 0) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
 		}
@@ -938,7 +1027,7 @@ void PathFinder::LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job) {
 		}
 		job->ready.store(true);
 	};
-	if (delayMs <= 0 && !late) {
+	if (!compute && delayMs <= 0 && !late) {
 		finish();
 		return;
 	}
@@ -964,10 +1053,59 @@ void PathFinder::ApplyHorizonJob(const HorizonJob& job) {
 		HorizonNode& overlay = m_HorizonNodes[nodeId];
 		overlay.committedMaterials = job.materials[index];
 		overlay.committedNavigable = job.navigable[index] != 0;
+		overlay.generation = m_HorizonGeneration.load();
 	}
 }
 
-void PathFinder::QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, const std::vector<Box>& boxes) {
+void PathFinder::PinHorizonFromLive(const Box& box) {
+	if (m_NodeGrid.empty()) {
+		return;
+	}
+	std::lock_guard lock(m_HorizonMutex);
+	for (int nodeId: GetNodeIdsInBox(box)) {
+		if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size() || m_HorizonNodes.count(nodeId) != 0) {
+			continue;
+		}
+		HorizonNode& overlay = m_HorizonNodes[nodeId];
+		overlay.committedMaterials = m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials;
+		overlay.committedNavigable = m_NodeGrid[nodeId].m_Navigable;
+		overlay.generation = m_HorizonGeneration.load();
+	}
+}
+
+void PathFinder::CaptureHorizonPatch(const Box& box, HorizonTerrainPatch& patch) const {
+	patch = {};
+	Scene* scene = g_SceneMan.GetScene();
+	if (!scene || !scene->GetTerrain() || !scene->GetTerrain()->GetMaterialBitmap()) {
+		return;
+	}
+	Box area = box;
+	area.Unflip();
+	constexpr int pad = 4;
+	const int x0 = static_cast<int>(std::floor(area.m_Corner.m_X)) - pad;
+	const int y0 = static_cast<int>(std::floor(area.m_Corner.m_Y)) - pad;
+	const int x1 = static_cast<int>(std::ceil(area.m_Corner.m_X + area.m_Width)) + pad;
+	const int y1 = static_cast<int>(std::ceil(area.m_Corner.m_Y + area.m_Height)) + pad;
+	patch.originX = x0;
+	patch.originY = y0;
+	patch.width = std::max(0, x1 - x0);
+	patch.height = std::max(0, y1 - y0);
+	patch.sceneWidth = g_SceneMan.GetSceneWidth();
+	patch.sceneHeight = g_SceneMan.GetSceneHeight();
+	patch.wrapsX = g_SceneMan.SceneWrapsX();
+	patch.wrapsY = g_SceneMan.SceneWrapsY();
+	if (patch.width <= 0 || patch.height <= 0) {
+		return;
+	}
+	patch.pixels.resize(static_cast<size_t>(patch.width) * static_cast<size_t>(patch.height), MaterialColorKeys::g_MaterialAir);
+	for (int y = 0; y < patch.height; ++y) {
+		for (int x = 0; x < patch.width; ++x) {
+			patch.pixels[static_cast<size_t>(y) * static_cast<size_t>(patch.width) + static_cast<size_t>(x)] = g_SceneMan.GetTerrMatter(patch.originX + x, patch.originY + y);
+		}
+	}
+}
+
+void PathFinder::QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, const std::vector<Box>& boxes, const std::vector<HorizonTerrainPatch>& patches) {
 	if (boxes.empty() || horizonTicks == 0 || m_NodeGrid.empty()) {
 		return;
 	}
@@ -985,18 +1123,10 @@ void PathFinder::QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, 
 	job->commitTick = originTick + horizonTicks;
 	job->nodeIds.assign(nodeIds.begin(), nodeIds.end());
 	std::sort(job->nodeIds.begin(), job->nodeIds.end());
-	ComputeHorizonMaterials(job->nodeIds, job->materials, job->navigable);
+	job->patches = patches;
 	job->ready.store(false);
 	{
 		std::lock_guard lock(m_HorizonMutex);
-		for (int nodeId: job->nodeIds) {
-			if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size() || m_HorizonNodes.count(nodeId) != 0) {
-				continue;
-			}
-			HorizonNode& overlay = m_HorizonNodes[nodeId];
-			overlay.committedMaterials = m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials;
-			overlay.committedNavigable = m_NodeGrid[nodeId].m_Navigable;
-		}
 		m_HorizonJobs.push_back(job);
 	}
 	LaunchHorizonWorker(job);
@@ -1025,7 +1155,19 @@ void PathFinder::QueueHorizonDelta(uint64_t originTick, uint16_t horizonTicks, i
 	LaunchHorizonWorker(job);
 }
 
+void PathFinder::DrainCommittedHorizonReaders() {
+	const auto started = std::chrono::steady_clock::now();
+	while (m_CommittedHorizonReaders.load() != 0) {
+		const int64_t elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+		if (elapsed >= c_HorizonWaitCapUs) {
+			break;
+		}
+		std::this_thread::yield();
+	}
+}
+
 void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
+	DrainCommittedHorizonReaders();
 	std::vector<std::shared_ptr<HorizonJob>> due;
 	{
 		std::lock_guard lock(m_HorizonMutex);
@@ -1042,11 +1184,27 @@ void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
 		return lhs->commitTick < rhs->commitTick;
 	});
 	for (const auto& job: due) {
-		const auto started = std::chrono::steady_clock::now();
-		while (!job->ready.load()) {
-			std::this_thread::yield();
+		int64_t waitUs = 0;
+		if (!job->ready.load()) {
+			const auto started = std::chrono::steady_clock::now();
+			while (!job->ready.load()) {
+				waitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+				if (waitUs >= c_HorizonWaitCapUs) {
+					break;
+				}
+				std::this_thread::yield();
+			}
+			if (!job->ready.load()) {
+				m_LastHorizonWaitUs = waitUs;
+				m_LastHorizonExpired += 1;
+				RecordHorizonWait(waitUs);
+				std::cout << "[horizon-path] wait_us=" << waitUs << " tick=" << nowTick << " origin=" << job->originTick
+				          << " expired=1 count=" << HorizonWaitCount() << " p99_us=" << HorizonWaitP99Us() << std::endl;
+				std::lock_guard lock(m_HorizonMutex);
+				m_HorizonJobs.erase(std::remove(m_HorizonJobs.begin(), m_HorizonJobs.end(), job), m_HorizonJobs.end());
+				continue;
+			}
 		}
-		const int64_t waitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		m_LastHorizonWaitUs = waitUs;
 		RecordHorizonWait(waitUs);
 		std::cout << "[horizon-path] wait_us=" << waitUs << " tick=" << nowTick << " origin=" << job->originTick
@@ -1054,6 +1212,7 @@ void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
 		{
 			std::lock_guard lock(m_HorizonMutex);
 			ApplyHorizonJob(*job);
+			m_HorizonGeneration.fetch_add(1);
 			m_HorizonJobs.erase(std::remove(m_HorizonJobs.begin(), m_HorizonJobs.end(), job), m_HorizonJobs.end());
 		}
 	}
@@ -1110,6 +1269,7 @@ void PathFinder::TestInstallGrid(int width, int height, int nodeDimension, const
 		m_HorizonJobs.clear();
 		m_HorizonNodes.clear();
 	}
+	m_SelfTestGrid = true;
 	m_NodeDimension = static_cast<unsigned int>(nodeDimension);
 	m_GridWidth = width;
 	m_GridHeight = height;
@@ -1148,6 +1308,13 @@ void PathFinder::TestSetNodeMaterials(int nodeId, const std::array<const Materia
 	m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials = materials;
 }
 
+void PathFinder::TestApplyLiveUpdate(int nodeId, const std::array<const Material*, 8>& materials) {
+	if (m_CurrentPathingRequests.load() != 0) {
+		return;
+	}
+	TestSetNodeMaterials(nodeId, materials);
+}
+
 int PathFinder::RunHorizonGridSelfTest() {
 	constexpr const char* Tag = "[horizon-path-grid-selftest]";
 	struct TestMaterial : Material {
@@ -1160,9 +1327,7 @@ int PathFinder::RunHorizonGridSelfTest() {
 	TestMaterial rock;
 	air.Arm(0, 0.0F);
 	rock.Arm(5, 200.0F);
-	std::array<const Material*, 8> airMats{};
 	std::array<const Material*, 8> blocked{};
-	airMats.fill(&air);
 	blocked.fill(&rock);
 
 	auto pathCost = [](PathFinder& finder, bool committed) {
@@ -1170,6 +1335,18 @@ int PathFinder::RunHorizonGridSelfTest() {
 		float cost = -1.0F;
 		finder.CalculatePath(Vector(10, 50), Vector(150, 50), path, cost, FLT_MAX, 1.0F, committed);
 		return std::pair<int, float>{static_cast<int>(path.size()), cost};
+	};
+	auto sceneCost = [](Scene& scene) {
+		std::list<Vector> path;
+		return scene.CalculatePath(Vector(10, 50), Vector(150, 50), path, FLT_MAX, 1.0F, Activity::Teams::NoTeam);
+	};
+	auto fail = [&](const char* text) {
+		std::cout << Tag << " FAIL " << text << std::endl;
+		g_CurrentAIActor = nullptr;
+		TestArmFaultInject("");
+		g_SceneMan.TestBindCurrentScene(nullptr);
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		return 1;
 	};
 
 	ResetHorizonWaitStats();
@@ -1179,28 +1356,30 @@ int PathFinder::RunHorizonGridSelfTest() {
 	peerB.TestInstallGrid(8, 4, 20, &air);
 	const int wall = peerA.TestNodeIdAt(3, 2);
 	if (wall < 0) {
-		std::cout << Tag << " FAIL grid setup" << std::endl;
-		return 1;
+		return fail("grid setup did not produce a wall node");
 	}
 
-	// (i) two peers, delayed worker on B: shared committed answers match. The RED names the per-machine live grid.
-	peerB.SetHorizonWorkerDelayMs(20);
+	// (i) two peers, FaultInjected late worker, commit at T+H. Live split is the in-flight skip.
+	TestArmFaultInject("horizon_worker_late");
+	peerB.TestHoldPathingRequest();
 	peerA.QueueHorizonDelta(10, 4, wall, blocked);
 	peerB.QueueHorizonDelta(10, 4, wall, blocked);
-	peerA.TestSetNodeMaterials(wall, blocked);
-	peerA.CommitHorizonThrough(13);
-	peerB.CommitHorizonThrough(13);
+	peerA.TestApplyLiveUpdate(wall, blocked);
+	peerB.TestApplyLiveUpdate(wall, blocked);
+	peerA.CommitHorizonThrough(14);
+	peerB.CommitHorizonThrough(14);
 	const auto sharedA = pathCost(peerA, true);
 	const auto sharedB = pathCost(peerB, true);
 	const auto liveA = pathCost(peerA, false);
 	const auto liveB = pathCost(peerB, false);
+	peerB.TestReleasePathingRequest();
+	TestArmFaultInject("");
 	if (sharedA != sharedB) {
 		std::cout << Tag << " FAIL shared CalculatePath returned the per-machine answer a=" << sharedA.second << " b=" << sharedB.second << std::endl;
 		return 1;
 	}
 	if (liveA == liveB) {
-		std::cout << Tag << " FAIL two-peer live grids did not diverge under injected worker delay" << std::endl;
-		return 1;
+		return fail("two-peer live grids did not diverge under per-machine update timing (peer B held an in-flight pathing request)");
 	}
 	std::cout << Tag << " PASS two-peer-determinism" << std::endl;
 
@@ -1221,47 +1400,84 @@ int PathFinder::RunHorizonGridSelfTest() {
 	const auto earlyA = pathCost(horizonA, true);
 	const auto earlyB = pathCost(horizonB, true);
 	if (earlyA != beforeA || earlyB != beforeB) {
-		std::cout << Tag << " FAIL horizon change visible at T+H-1" << std::endl;
-		return 1;
+		return fail("horizon change visible at T+H-1");
 	}
 	horizonA.CommitHorizonThrough(24);
 	horizonB.CommitHorizonThrough(24);
 	const auto lateA = pathCost(horizonA, true);
 	const auto lateB = pathCost(horizonB, true);
 	if (lateA == beforeA || lateB == beforeB || lateA != lateB) {
-		std::cout << Tag << " FAIL horizon change not visible at T+H on both peers" << std::endl;
-		return 1;
+		return fail("horizon change not visible at T+H on both peers");
 	}
 	std::cout << Tag << " PASS horizon-visibility" << std::endl;
 
-	// (iii) an AI-pass query reads the live grid.
-	g_CurrentAIActor = reinterpret_cast<Actor*>(alignof(Actor));
-	const auto aiLive = pathCost(horizonA, false);
+	// (iii) + production path: SLTerrain stamp, Scene::CalculatePath, AI vs shared at T+1.
+	LoopbackTransport idle;
+	NetLockstepConfig lockstep;
+	lockstep.localPeerId = 1;
+	lockstep.remotePeerId = 2;
+	lockstep.peerCount = 2;
+	lockstep.matchConfig = NetMatchConfigUtil::MakeDefault(0x5048413453455353ULL);
+	lockstep.matchConfig.pathHorizonTicks = 4;
+	NetLockstepCoordinator seated;
+	std::string lockstepError;
+	if (!seated.StartReplay(idle, lockstep, &lockstepError)) {
+		return fail("lockstep replay did not start");
+	}
+	ScenarioRunner::SetLockstepCoordinator(&seated);
+	ScenarioRunner::SetLockstepAppliedFrame(10);
+	Scene scene;
+	SLTerrain terrain;
+	scene.TestSetTerrain(&terrain);
+	scene.TestInstallHorizonPathFinders(8, 4, 20, &air);
+	g_SceneMan.TestBindCurrentScene(&scene);
+	if (g_SceneMan.GetScene() != &scene || scene.GetTerrain() != &terrain) {
+		return fail("SceneMan test bind did not install the fixture scene and terrain");
+	}
+	const int sceneWall = scene.GetPathFinder(Activity::Teams::NoTeam).TestNodeIdAt(3, 2);
+	if (sceneWall < 0) {
+		return fail("scene fixture grid did not produce a wall node");
+	}
+	terrain.AddUpdatedMaterialArea(Box(Vector(50.0F, 30.0F), 40.0F, 40.0F));
+	const float beforeShared = sceneCost(scene);
+	scene.GetPathFinder(Activity::Teams::NoTeam).TestApplyLiveUpdate(sceneWall, blocked);
+	ScenarioRunner::SetLockstepAppliedFrame(11);
+	const float sharedAtT1 = sceneCost(scene);
+	Actor aiActor;
+	g_CurrentAIActor = &aiActor;
+	const float aiAtT1 = sceneCost(scene);
 	g_CurrentAIActor = nullptr;
-	if (aiLive == beforeA) {
-		std::cout << Tag << " FAIL AI-pass query did not see the live grid" << std::endl;
-		return 1;
+	g_SceneMan.TestBindCurrentScene(nullptr);
+	ScenarioRunner::SetLockstepCoordinator(nullptr);
+	if (sharedAtT1 != beforeShared) {
+		return fail("shared Scene::CalculatePath at T+1 did not stay on the origin-tick overlay");
+	}
+	if (aiAtT1 == beforeShared) {
+		return fail("Scene::CalculatePath with a live Actor as g_CurrentAIActor did not see the live grid at T+1");
 	}
 	std::cout << Tag << " PASS ai-live-grid" << std::endl;
+	std::cout << Tag << " PASS scene-production-path" << std::endl;
 
-	// (iv) wait_us is zero when the worker is on time, and bounded when late.
+	// (iv) wait_us is zero when ready before wait, and the late fault is 50 ms plus slack.
 	ResetHorizonWaitStats();
 	PathFinder onTime;
 	onTime.TestInstallGrid(8, 4, 20, &air);
-	onTime.SetHorizonWorkerDelayMs(0);
 	onTime.QueueHorizonDelta(1, 1, wall, blocked);
 	onTime.CommitHorizonThrough(2);
 	if (onTime.LastHorizonWaitUs() != 0) {
 		std::cout << Tag << " FAIL horizon_wait_us was " << onTime.LastHorizonWaitUs() << " when the worker was on time" << std::endl;
 		return 1;
 	}
+	TestArmFaultInject("horizon_worker_late");
 	PathFinder late;
 	late.TestInstallGrid(8, 4, 20, &air);
-	late.SetHorizonWorkerDelayMs(15);
 	late.QueueHorizonDelta(1, 1, wall, blocked);
 	late.CommitHorizonThrough(2);
-	if (late.LastHorizonWaitUs() <= 0 || late.LastHorizonWaitUs() > 200000) {
-		std::cout << Tag << " FAIL late worker wait " << late.LastHorizonWaitUs() << " was not a bounded stall" << std::endl;
+	TestArmFaultInject("");
+	constexpr int64_t lateSleepUs = 50000;
+	constexpr int64_t lateSlackUs = 25000;
+	if (late.LastHorizonWaitUs() < lateSleepUs || late.LastHorizonWaitUs() > lateSleepUs + lateSlackUs) {
+		std::cout << Tag << " FAIL late worker wait " << late.LastHorizonWaitUs() << " was not the injected 50 ms plus slack" << std::endl;
 		return 1;
 	}
 	std::cout << Tag << " PASS stall-instrumentation" << std::endl;
