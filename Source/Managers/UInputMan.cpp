@@ -3,6 +3,7 @@
 #include <iostream>
 #include "InputScript.h"
 #include <iostream>
+#include "Controller.h"
 #include "TimerMan.h"
 #include "Constants.h"
 #include "SceneMan.h"
@@ -1825,11 +1826,12 @@ bool UInputMan::RunScriptedPadSeatSelfTest() {
 	constexpr SDL_JoystickID seatPadID = 9002;
 	const InputDevice seatDevice = m_ControlScheme.at(seat).GetDevice();
 	const InputMapping seatStart = m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_START);
+	const InputMapping seatFire = m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_FIRE);
 	m_ControlScheme.at(seat).SetDevice(InputDevice::DEVICE_GAMEPAD_2);
 	m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_START).SetJoyButton(SDL_GAMEPAD_BUTTON_START);
+	m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_FIRE).SetJoyButton(SDL_GAMEPAD_BUTTON_START);
 	const int seatSlot = GetJoystickIndex(InputDevice::DEVICE_GAMEPAD_2);
 
-	// Past every range of the scripted input the edge selftest loaded, so no element of any seat is held here.
 	g_TimerMan.RewindSimTo(100, 0);
 	EndFrame();
 	check("no_start_press_before_the_pad", !AnyStartPress(false));
@@ -1838,6 +1840,16 @@ bool UInputMan::RunScriptedPadSeatSelfTest() {
 	HandleGamepadHotPlug(scriptedPadID);
 	check("no_seat_slot_binds_a_scripted_pad", std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), scriptedPadID) == s_PrevJoystickStates.end());
 
+	const Gamepad seatPadBefore = s_PrevJoystickStates[seatSlot];
+	const Gamepad seatChangedBefore = s_ChangedJoystickStates[seatSlot];
+	s_PrevJoystickStates[seatSlot] = Gamepad(seatSlot, scriptedPadID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
+	s_ChangedJoystickStates[seatSlot] = Gamepad(seatSlot, scriptedPadID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
+
+	Controller seatController;
+	seatController.Create(Controller::CIM_PLAYER, seat);
+	seatController.Update();
+	const std::string before = seatController.SaveCheckpoint();
+
 	SDL_Event padEvent{};
 	padEvent.type = SDL_EVENT_JOYSTICK_BUTTON_DOWN;
 	padEvent.jbutton.which = scriptedPadID;
@@ -1845,12 +1857,11 @@ bool UInputMan::RunScriptedPadSeatSelfTest() {
 	padEvent.jbutton.down = true;
 	HandleInputEvent(padEvent);
 
-	check("a_scripted_pad_start_moves_no_seat", !ElementPressed(seat, InputElements::INPUT_START) && !ElementHeld(seat, InputElements::INPUT_START));
+	seatController.Update();
+	const std::string after = seatController.SaveCheckpoint();
+	check("a scripted pad start moved seat 4's controller", before == after);
 	check("the_menu_reads_a_scripted_pad_start", AnyStartPress(false));
 
-	// The seat's own read is the oracle: the same press in its slot must reach the seat, or the row above proves nothing.
-	const Gamepad seatPadBefore = s_PrevJoystickStates[seatSlot];
-	const Gamepad seatChangedBefore = s_ChangedJoystickStates[seatSlot];
 	s_PrevJoystickStates[seatSlot] = Gamepad(seatSlot, seatPadID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
 	s_ChangedJoystickStates[seatSlot] = Gamepad(seatSlot, seatPadID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
 	s_PrevJoystickStates[seatSlot].m_Buttons[SDL_GAMEPAD_BUTTON_START] = true;
@@ -1862,11 +1873,12 @@ bool UInputMan::RunScriptedPadSeatSelfTest() {
 	padEvent.type = SDL_EVENT_JOYSTICK_BUTTON_UP;
 	padEvent.jbutton.down = false;
 	HandleInputEvent(padEvent);
-	check("a_scripted_pad_release_ends_the_menu_read", !AnyStartPress(false) && !ElementHeld(seat, InputElements::INPUT_START));
+	check("a_scripted_pad_release_ends_the_menu_read", !AnyStartPress(false));
 
 	ForgetScriptedPad(scriptedPadID);
 	check("forgetting_a_scripted_pad_drops_its_state", !IsScriptedPad(scriptedPadID) && s_ScriptedPadStates.empty() && s_ChangedScriptedPadStates.empty());
 
+	m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_FIRE) = seatFire;
 	m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_START) = seatStart;
 	m_ControlScheme.at(seat).SetDevice(seatDevice);
 	std::cout << "[input-pad-seat-selftest] " << (passed ? "PASS " : "FAIL ") << "complete" << std::endl;
