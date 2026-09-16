@@ -16,6 +16,8 @@
 
 namespace RTE {
 
+	class NetHostBanStore;
+
 	enum class NetSessionRole : uint8_t {
 		None = 0,
 		Host = 1,
@@ -148,6 +150,7 @@ namespace RTE {
 		void SetReconnectClient(NetReconnectClient* client) { m_ReconnectClient = client; }
 		/// When set, a human seat waits on a connection proof. Host may pass null; the client must sign.
 		void EnableParticipantProof(NetParticipantIdentityStore* localStore);
+		void SetHostBanStore(NetHostBanStore* store) { m_HostBanStore = store; }
 		NetReconnectHost* GetReconnectHost() const { return m_ReconnectHost; }
 		NetReconnectClient* GetReconnectClient() const { return m_ReconnectClient; }
 		bool ParticipantProofRequired() const { return m_ParticipantProofRequired; }
@@ -348,6 +351,7 @@ namespace RTE {
 		NetReconnectClient* m_ReconnectClient = nullptr;
 		bool m_ParticipantProofRequired = false;
 		NetParticipantIdentityStore* m_ParticipantStore = nullptr;
+		NetHostBanStore* m_HostBanStore = nullptr;
 		NetParticipantId m_LocalParticipantId{};
 		bool m_HasLocalParticipantId = false;
 		std::vector<std::pair<NetParticipantId, NetAuthBytes16>> m_SpentIdentityChallenges;

@@ -496,6 +496,9 @@
     <ClInclude Include="Source\Network\NetAuthCrypto.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetHostBanStore.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetParticipantCrypto.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -905,6 +908,9 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetAuthCrypto.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetHostBanStore.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetParticipantCrypto.cpp">

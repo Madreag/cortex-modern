@@ -1,6 +1,7 @@
 #include "NetSession.h"
 #include "NetA7Journal.h"
 #include "NetAuthCrypto.h"
+#include "NetHostBanStore.h"
 
 #include "NetLobbyProtocol.h"
 #include "NetLockstep.h"
@@ -733,6 +734,13 @@ namespace RTE {
 			if (verdict != NetParticipantProofVerdict::Accept) {
 				RejectPeer(*peer, NetRejectReason::IdentityUnproven, "participant_identity", "connection proof", NetParticipantProofVerdictName(verdict), "connection proof was refused");
 				return;
+			}
+			if (m_HostBanStore != nullptr && m_HostBanStore->IsBanned(proof->publicId, m_SessionId)) {
+				RejectPeer(*peer, NetRejectReason::ParticipantBanned, "participant_identity", "admitted", "banned", "this identity is not admitted");
+				return;
+			}
+			if (m_ReconnectHost != nullptr) {
+				m_ReconnectHost->BindParticipantId(peerId, proof->publicId);
 			}
 			m_SpentIdentityChallenges.push_back({proof->publicId, proof->challenge});
 			if (m_SpentIdentityChallenges.size() > 32) {

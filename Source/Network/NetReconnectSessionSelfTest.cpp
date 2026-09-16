@@ -3,6 +3,7 @@
 #include "ControllerFrame.h"
 #include "LoopbackTransport.h"
 #include "NetAuthCrypto.h"
+#include "NetHostBanStore.h"
 #include "NetLobbySession.h"
 #include "NetLockstep.h"
 #include "NetMatchConfig.h"
@@ -6208,6 +6209,151 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestBanScopes() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const auto lane = std::filesystem::temp_directory_path() / "cccp-ban-scopes";
+			std::error_code code;
+			std::filesystem::remove_all(lane, code);
+			std::filesystem::create_directories(lane, code);
+			NetHostBanStore store;
+			store.SetPath((lane / "NetworkBans").string());
+			const uint64_t sid = 0x4831ULL;
+			const NetAuthBytes32 alice = Ramp<32>(0xA1);
+			const NetAuthBytes32 bob = Ramp<32>(0xB2);
+			if (!store.Ban(alice, NetHostBanScope::Session, "alice", "session", sid, 1000) || !store.IsBanned(alice, sid) || store.IsBanned(alice, sid + 1)) {
+				return Fail("a session ban leaked across hosted sessions");
+			}
+			store.EndSession(sid);
+			if (store.IsBanned(alice, sid)) {
+				return Fail("a session ban survived EndSession");
+			}
+			if (!store.Ban(alice, NetHostBanScope::UntilRemoved, "alice", "persistent", sid, 2000)) {
+				return Fail("Until Removed did not persist");
+			}
+			store.EndSession(sid);
+			if (!store.IsBanned(alice, sid) || !store.IsBanned(alice, 99)) {
+				return Fail("a persistent ban ended with the session");
+			}
+			NetHostBanStore reloaded;
+			reloaded.SetPath(store.GetPath());
+			if (!reloaded.Load(&error) || !reloaded.IsBanned(alice, 1)) {
+				return Fail("a persistent ban did not survive reload: " + error);
+			}
+			store.ForcePersistFailureForTest(true);
+			if (store.Ban(bob, NetHostBanScope::UntilRemoved, "bob", "fail", sid, 3000) || store.IsBanned(bob, sid)) {
+				return Fail("persistence failure still claimed Until Removed");
+			}
+			store.ForcePersistFailureForTest(false);
+			std::cout << "[net-reconnect-session-selftest] PASS scopes: session ban ends with the session; persistent ban survives" << std::endl;
+
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire, sid);
+			wire.host.SetBanStore(&store);
+			wire.host.BindParticipantId(301, alice);
+			NetH4NewJoin join;
+			join.txId = Ramp<16>(0x31);
+			join.identity = MakeIdentity();
+			join.displayName = "alice";
+			if (!wire.SendRaw(301, join, &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			const NetJoinRejected* joinRefuse = LastOf<NetJoinRejected>(wire.Delivered(301));
+			if (joinRefuse == nullptr || joinRefuse->rejectReason != NetRejectReason::ParticipantBanned) {
+				return Fail("a banned identity took a new seat");
+			}
+			wire.host.BindParticipantId(302, alice);
+			if (!wire.SendRaw(302, MakeApplicant(0, 0x32, "alice"), &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			const NetJoinRejected* applyRefuse = LastOf<NetJoinRejected>(wire.Delivered(302));
+			if (applyRefuse == nullptr || applyRefuse->rejectReason != NetRejectReason::ParticipantBanned) {
+				return Fail("a banned identity applied for a seat");
+			}
+			Endpoint holder;
+			holder.connection = 311;
+			ConfigureEndpoint(holder, "ban-holder", &unixNow);
+			wire.Add(&holder);
+			NetH4TicketRecord held;
+			if (SeatAndDrop(wire, holder, held, unixNow, &error) != 0) {
+				return Fail("could not open a reclaim hold: " + error);
+			}
+			wire.host.BindParticipantId(312, alice);
+			NetH4Reclaim reclaim;
+			reclaim.txId = Ramp<16>(0x33);
+			reclaim.epoch = held.epoch;
+			reclaim.stableSeat = held.stableSeat;
+			reclaim.holderGeneration = held.holderGeneration;
+			reclaim.identity = MakeIdentity();
+			reclaim.displayName = "alice";
+			if (!wire.SendRaw(312, reclaim, &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			const NetJoinRejected* reclaimRefuse = LastOf<NetJoinRejected>(wire.Delivered(312));
+			if (reclaimRefuse == nullptr || reclaimRefuse->rejectReason != NetRejectReason::ParticipantBanned) {
+				return Fail("a banned identity reclaimed a seat");
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS scopes: banned identity refused on join, apply and reclaim" << std::endl;
+
+			Wire live;
+			ConfigureWire(live, sid);
+			NetHostBanStore liveStore;
+			liveStore.SetPath((lane / "live-bans").string());
+			live.host.SetBanStore(&liveStore);
+			Endpoint target;
+			target.connection = 321;
+			ConfigureEndpoint(target, "ban-target", &unixNow);
+			live.Add(&target);
+			if (!target.client.BeginNewJoin(live.nowMs, &error) || !live.Pump(&error)) {
+				return Fail("target did not join: " + error);
+			}
+			NetH4TicketRecord targetRecord;
+			if (target.store.Load(unixNow, targetRecord, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail(error);
+			}
+			const NetAuthBytes32 targetId = Ramp<32>(0xC3);
+			live.host.BindParticipantId(target.connection, targetId);
+			live.host.SetLiveMatch(true);
+			NetModerationSelection selected{};
+			for (const auto& seat : live.host.GetModerationView()) {
+				if (seat.stableSeat == targetRecord.stableSeat) {
+					selected = NetSelectModerationSeat(seat);
+				}
+			}
+			liveStore.ForcePersistFailureForTest(true);
+			NetParticipantRemovalIssue issued;
+			if (live.host.RemoveParticipant(selected, NetParticipantRemovalAction::BanUntilRemoved, live.nowMs, sid, 1, 90, issued) != NetKickBanResult::PersistenceFailed ||
+			    live.host.IsSeatClosed(targetRecord.stableSeat) || liveStore.IsBanned(targetId, sid)) {
+				return Fail("Until Removed persist failure still evicted the holder");
+			}
+			liveStore.ForcePersistFailureForTest(false);
+			if (live.host.RemoveParticipant(selected, NetParticipantRemovalAction::BanSession, live.nowMs, sid, 1, 90, issued) != NetKickBanResult::Ok ||
+			    !liveStore.IsBanned(targetId, sid) || !live.host.IsSeatClosed(targetRecord.stableSeat)) {
+				return Fail("a session ban did not evict the holder");
+			}
+			if (!liveStore.Unban(targetId) || liveStore.IsBanned(targetId, sid) || !live.host.IsSeatClosed(targetRecord.stableSeat)) {
+				return Fail("unban restored a seat or left the identity banned");
+			}
+			live.host.EndHostedSession();
+			if (liveStore.IsBanned(targetId, sid)) {
+				return Fail("a session ban survived the hosted session");
+			}
+			if (std::string(NetHostBanScopeName(NetHostBanScope::Session)) != "Session") {
+				return Fail("the L20 ban-scope adapter lost its name");
+			}
+			std::filesystem::remove_all(lane, code);
+			std::cout << "[net-reconnect-session-selftest] PASS scopes: persistence failure refuses Until Removed; unban grants no seat" << std::endl;
+			return 0;
+		}
+
 	int NetReconnectSessionSelfTest::Run() {
 		if (const int result = TestStoreFailsClosed(); result != 0) {
 			return result;
@@ -6369,6 +6515,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestKickTerminal(); result != 0) {
+			return result;
+		}
+		if (const int result = TestBanScopes(); result != 0) {
 			return result;
 		}
 		if (const int result = TestRefusedReclaimReportsNewJoin(); result != 0) {

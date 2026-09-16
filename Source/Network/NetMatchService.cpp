@@ -2970,6 +2970,26 @@ static std::string ResyncSaveName() {
 		return m_LastRemovalIssue;
 	}
 
+	NetKickBanResult NetMatchService::UnbanParticipant(const NetAuthBytes32& identity) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_IsHost) {
+			m_LastKickBanResult = NetKickBanResult::NotHosting;
+			return m_LastKickBanResult;
+		}
+		std::string error;
+		if (!m_BanStore.Unban(identity, &error)) {
+			m_LastKickBanResult = NetKickBanResult::PersistenceFailed;
+			return m_LastKickBanResult;
+		}
+		m_LastKickBanResult = NetKickBanResult::Ok;
+		return m_LastKickBanResult;
+	}
+
+	std::vector<NetHostBanRecord> NetMatchService::GetBanRecords() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_BanStore.List();
+	}
+
 	void NetMatchService::RecordModerationAction(uint16_t stableSeat, NetModerationAction action) {
 		const std::string who = m_LocalName.empty() ? "Host" : m_LocalName;
 		const std::string seat = " for seat " + std::to_string(stableSeat);
@@ -3065,6 +3085,10 @@ static std::string ResyncSaveName() {
 			m_ReconnectHost.SetDropOwnershipSource(&NetMatchService::CollectDropOwnership, this);
 			session.SetReconnectHost(&m_ReconnectHost);
 			session.EnableParticipantProof(nullptr);
+			m_BanStore.SetPath(NetHostBanStore::DefaultPath());
+			(void)m_BanStore.Load(nullptr);
+			m_ReconnectHost.SetBanStore(&m_BanStore);
+			session.SetHostBanStore(&m_BanStore);
 			m_AdmissionAttached = true;
 			return;
 		}
