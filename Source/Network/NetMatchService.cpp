@@ -2822,7 +2822,8 @@ static std::string ResyncSaveName() {
 				m_Coordinator = std::move(coordinator);
 				m_Runner = std::move(runner);
 				m_State = NetMatchServiceState::Failed;
-				m_StatusText = "Network setup failed";
+				m_StatusText = (m_Session && m_Session->HasReject() && m_Session->GetRejectSummary() == "Match roster refused")
+					? "Match roster refused" : "Network setup failed";
 				m_ErrorText = error;
 				// §9b: a live match is the one refusal a joiner can answer, by applying for a seat.
 				m_JoinRefusedByLiveMatch = !request.host && m_Session && m_Session->HasReject() &&
