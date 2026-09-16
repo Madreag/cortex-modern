@@ -364,7 +364,12 @@ namespace RTE {
 
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
 		void DriveWorldJoins(uint64_t nowMs);
+		void DriveWorldJoinClient(uint64_t nowMs);
 		void PublishWorldJoinImage(uint64_t tick);
+		bool StartJoinerImageTransfer(const NetWorldJoinSession& session, std::string* error);
+		void PumpWorldJoinLobby(uint64_t nowMs);
+		void SendWorldJoinTail(const NetWorldJoinSession& session);
+		bool PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, std::string& pendingLoad, std::string* error);
 		void WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
 		void WorkerResyncMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
 		/// The live wire, by the same rule. Caller holds the lock.
@@ -620,6 +625,15 @@ namespace RTE {
 		bool m_HostLobbyBeaconed = false;
 		NetWorldIdentity m_WorldIdentity;
 		NetWorldJoinHost m_WorldJoin;
+		struct WorldCatchUp {
+			bool active = false;
+			uint64_t snapshotTick = 0;
+			uint64_t appliedThrough = 0;
+			uint64_t activationTick = 0;
+			std::string digest;
+			std::vector<NetLockstepFrame> tail;
+		};
+		WorldCatchUp m_WorldCatchUp;
 	};
 
 } // namespace RTE

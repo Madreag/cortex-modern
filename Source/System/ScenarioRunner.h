@@ -192,6 +192,12 @@ namespace RTE {
 		/// the persistent preset behaves the same way with no network under it.
 		/// @return Whether the transition was queued or applied.
 		static bool SubmitWorldTransition(const NetGameWorldTransition& transition);
+		/// Installs the committed tail a world joiner applies faster than the paced lockstep wait.
+		static bool InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error = nullptr);
+		static bool WorldCatchUpActive();
+		static uint64_t WorldCatchUpAppliedThrough();
+		/// Builds the next ready frame from the tail. One committed frame per sim tick, no wait.
+		static bool TakeWorldCatchUpReadyFrame(uint64_t simTick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
 
 		/// Whether a team has a human player in the synced match config. Local player bindings are
 		/// per-peer in a lockstep match, so sim decisions must resolve team humanity from here.

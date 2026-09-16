@@ -34,6 +34,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <iostream>
 #include <optional>
 #include <random>
@@ -806,6 +807,21 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::StageResyncedMatchLaunch(std::string* error) {
+		if (m_WorldCatchUp.active) {
+			const std::string pendingLoad = TakePendingResyncLoad();
+			if (pendingLoad.empty()) {
+				if (error) *error = "no world join snapshot to load";
+				return false;
+			}
+			if (!g_ActivityMan.LoadGameToRestart(pendingLoad)) {
+				if (error) *error = "world join snapshot load failed: " + pendingLoad;
+				return false;
+			}
+			if (!ScenarioRunner::InstallWorldCatchUp(m_WorldCatchUp.snapshotTick, m_WorldCatchUp.tail, error)) {
+				return false;
+			}
+			return true;
+		}
 		const std::string pendingLoad = TakePendingResyncLoad();
 		if (pendingLoad.empty() || !m_PendingResyncState) {
 			if (error) *error = "no resync snapshot to load";
@@ -1424,6 +1440,9 @@ static std::string ResyncSaveName() {
 			m_DirectoryToken = m_Directory.GetToken();
 			m_DirectoryRegistered = m_Directory.GetState() == NetDirectoryClient::State::Registered;
 		}
+		if (m_WorldCatchUp.active) {
+			PumpSessionEvents();
+		}
 		DriveReconnectUx(nowMs);
 		// Last: the expiry destroys the service, so nothing in this pump may run after it.
 		UpdateCompletedLobbyExpiry(nowMs);
@@ -1633,14 +1652,18 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
 		if (m_WorldJoin.IsConfigured() && m_Coordinator) {
-			std::vector<ControllerFrame> frames;
-			if (m_Coordinator->PeekLocalFrames(tick, frames)) {
-				NetLockstepFrame frame;
-				frame.senderPeerId = m_Coordinator->GetConfig().localPeerId;
-				frame.targetFrame = tick;
-				frame.roundId = m_Coordinator->GetRoundId();
-				frame.frames = std::move(frames);
+			NetLockstepFrame frame;
+			if (m_Coordinator->PeekLocalInput(tick, frame)) {
 				(void)m_WorldJoin.Tail().Append(frame, nullptr);
+			} else {
+				std::vector<ControllerFrame> frames;
+				if (m_Coordinator->PeekLocalFrames(tick, frames)) {
+					frame.senderPeerId = m_Coordinator->GetConfig().localPeerId;
+					frame.targetFrame = tick;
+					frame.roundId = m_Coordinator->GetRoundId();
+					frame.frames = std::move(frames);
+					(void)m_WorldJoin.Tail().Append(frame, nullptr);
+				}
 			}
 		}
 		// Every peer keeps the schedule the host announced in the agreed config, not its own setting.
@@ -1668,6 +1691,14 @@ static std::string ResyncSaveName() {
 		if (g_ActivityMan.LastAutosaveTick() != tick || g_ActivityMan.LastAutosaveBytes() == 0) {
 			return;
 		}
+		std::ifstream in(g_ActivityMan.LastAutosavePath(), std::ios::binary);
+		std::vector<uint8_t> archive;
+		if (in) {
+			archive.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+		}
+		if (archive.size() != g_ActivityMan.LastAutosaveBytes()) {
+			return;
+		}
 		NetWorldCheckpointImage image;
 		image.worldId = m_WorldIdentity.worldId;
 		image.boot = m_WorldIdentity.boot;
@@ -1677,16 +1708,129 @@ static std::string ResyncSaveName() {
 		image.membershipRevision = m_WorldJoin.Membership().Revision();
 		image.matchConfigHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(m_MatchConfig));
 		image.path = g_ActivityMan.LastAutosavePath();
-		image.bytes = g_ActivityMan.LastAutosaveBytes();
+		image.bytes = archive.size();
 		image.captureMs = g_ActivityMan.LastAutosaveCaptureMs();
-		image.digest = std::format("{:x}-{}", tick, image.bytes);
+		image.digest = DigestWorldJoinBytes(archive);
 		m_WorldJoin.PublishImage(image);
-		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
-			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && session.snapshotTick == tick) {
-				(void)m_WorldJoin.NoteTransferComplete(session.connection, image.bytes, nullptr);
+		std::cout << "[net-world] offer " << EncodeWorldJoinOffer(image) << std::endl;
+	}
+
+	void NetMatchService::PumpWorldJoinLobby(uint64_t nowMs) {
+		if (!m_Runner) {
+			return;
+		}
+		NetLobbySession& lobby = m_Runner->GetLobbySession();
+		std::vector<NetTransportEvent> events;
+		events.swap(m_PendingLobbyEvents);
+		m_PendingLobbyBytes = 0;
+		m_PendingLobbyOverflow = false;
+		for (const NetTransportEvent& event: events) {
+			lobby.HandleTransportEvent(event, nowMs);
+		}
+		lobby.PumpOutgoingChunks();
+		while (true) {
+			const NetLobbySession::WorldJoinReport report = lobby.TakeWorldJoinReport();
+			if (!report.pending) {
+				break;
+			}
+			NetPeerId connection = c_InvalidNetPeerId;
+			for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
+				if (session.assignedPeerId == report.fromPeer) {
+					connection = session.connection;
+					break;
+				}
+			}
+			if (connection == c_InvalidNetPeerId) {
+				for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
+					if (peer.transportPeerId == static_cast<NetPeerId>(report.fromPeer)) {
+						connection = peer.transportPeerId;
+						break;
+					}
+				}
+			}
+			if (connection == c_InvalidNetPeerId) {
+				continue;
+			}
+			if (report.kind == c_NetWorldReportProgress) {
+				const uint16_t received = static_cast<uint16_t>(report.value & 0xFFFFU);
+				const uint16_t total = static_cast<uint16_t>(report.value >> 32);
+				(void)m_WorldJoin.NoteTransferProgress(connection, received, total);
+				if (total != 0 && received >= total && m_WorldJoin.Image().IsValid()) {
+					(void)m_WorldJoin.NoteTransferComplete(connection, m_WorldJoin.Image().bytes, nullptr);
+				}
+			} else if (report.kind == c_NetWorldReportCatchUp) {
+				const uint64_t nowFrame = m_Coordinator->GetStats().nextFrame;
+				uint64_t activation = 0;
+				(void)m_WorldJoin.NoteCatchUpProgress(connection, report.value, 1, 1, nowFrame, &activation, nullptr);
+				if (activation != 0) {
+					if (const NetWorldJoinSession* session = m_WorldJoin.FindSession(connection); session && session->assignedPeerId != 0) {
+						(void)lobby.SendPayloadTo(session->assignedPeerId, MakeWorldJoinReport(c_NetWorldReportActivate, activation), nullptr);
+					}
+				}
 			}
 		}
-		std::cout << "[net-world] offer " << EncodeWorldJoinOffer(image) << std::endl;
+	}
+
+	bool NetMatchService::StartJoinerImageTransfer(const NetWorldJoinSession& session, std::string* error) {
+		if (!m_Runner || !m_WorldJoin.Image().IsValid() || session.assignedPeerId == 0) {
+			if (error) *error = "the joiner has no image or slot yet";
+			return false;
+		}
+		std::ifstream in(m_WorldJoin.Image().path, std::ios::binary);
+		std::vector<uint8_t> archive;
+		if (in) {
+			archive.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+		}
+		if (archive.empty() || DigestWorldJoinBytes(archive) != m_WorldJoin.Image().digest) {
+			if (error) *error = "the published archive is missing or its digest does not match";
+			return false;
+		}
+		std::vector<std::vector<uint8_t>> tail;
+		(void)m_WorldJoin.Tail().CopyFrom(m_WorldJoin.Image().tick + 1, 512, 1024ULL * 1024ULL, tail);
+		std::vector<uint8_t> blob;
+		if (!EncodeWorldJoinImageBlob(m_WorldJoin.Image(), archive, tail, blob, error)) {
+			return false;
+		}
+		NetLobbySession& lobby = m_Runner->GetLobbySession();
+		std::string bindError;
+		if (!lobby.BindLateRemote(session.assignedPeerId, session.connection, &bindError)) {
+			if (error) *error = bindError;
+			return false;
+		}
+		lobby.SendMatchConfigTo(session.assignedPeerId);
+		lobby.BeginStateTransferTo(session.assignedPeerId, std::move(blob));
+		return m_WorldJoin.NoteTransferStarted(session.connection, lobby.GetOutgoingStateId(), lobby.GetOutgoingChunkCount(), m_WorldJoin.Tail().LastFrame());
+	}
+
+	void NetMatchService::SendWorldJoinTail(const NetWorldJoinSession& session) {
+		if (!m_Runner || session.assignedPeerId == 0 || session.phase != NetWorldJoinPhase::CatchingUp) {
+			return;
+		}
+		std::vector<std::vector<uint8_t>> tail;
+		if (m_WorldJoin.Tail().CopyFrom(session.deliveredThrough + 1, 32, 40ULL * 1024ULL, tail) == 0) {
+			return;
+		}
+		std::vector<uint8_t> packed;
+		for (const std::vector<uint8_t>& frame: tail) {
+			const uint32_t size = static_cast<uint32_t>(frame.size());
+			packed.push_back(static_cast<uint8_t>(size));
+			packed.push_back(static_cast<uint8_t>(size >> 8));
+			packed.push_back(static_cast<uint8_t>(size >> 16));
+			packed.push_back(static_cast<uint8_t>(size >> 24));
+			packed.insert(packed.end(), frame.begin(), frame.end());
+		}
+		if (packed.empty() || packed.size() > NetLobbyProtocol::c_MaxStateChunkBytes) {
+			return;
+		}
+		NetLobbyStateChunk chunk;
+		chunk.transferId = c_NetWorldTailTransferId;
+		chunk.totalBytes = static_cast<uint32_t>(packed.size());
+		chunk.chunkIndex = 0;
+		chunk.chunkCount = 1;
+		chunk.bytes = std::move(packed);
+		if (m_Runner->GetLobbySession().SendPayloadTo(session.assignedPeerId, chunk, nullptr)) {
+			(void)m_WorldJoin.NoteDeliveredThrough(session.connection, m_WorldJoin.Tail().LastFrame());
+		}
 	}
 
 	void NetMatchService::DriveWorldJoins(uint64_t nowMs) {
@@ -1694,6 +1838,7 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		m_WorldJoin.ExpireStaleJoins(nowMs);
+		PumpWorldJoinLobby(nowMs);
 		for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
 			if (m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
 				continue;
@@ -1701,22 +1846,58 @@ static std::string ResyncSaveName() {
 			if (m_WorldJoin.FindSession(peer.transportPeerId) != nullptr) {
 				continue;
 			}
-			if (!m_WorldJoin.BeginJoin(peer.transportPeerId, 0, peer.displayName, nowMs, nullptr)) {
+			uint16_t stableSeat = 0;
+			for (const NetH4SeatStatus& status: m_ReconnectHost.GetSeatStatuses()) {
+				if (status.stableSeat != 0 && status.lockstepPeerId == static_cast<uint8_t>(peer.assignedPeerId + 1)) {
+					stableSeat = status.stableSeat;
+					break;
+				}
+			}
+			if (!m_WorldJoin.BeginJoin(peer.transportPeerId, stableSeat, peer.displayName, nowMs, nullptr)) {
 				continue;
 			}
 			const uint64_t tick = m_Coordinator->GetStats().nextFrame > 0 ? m_Coordinator->GetStats().nextFrame - 1 : 0;
-			if (tick != 0) {
-				if (m_WorldJoin.Image().tick != tick) {
-					g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick);
-					PublishWorldJoinImage(tick);
-				} else {
-					(void)m_WorldJoin.NoteTransferComplete(peer.transportPeerId, m_WorldJoin.Image().bytes, nullptr);
+			if (tick != 0 && m_WorldJoin.Image().tick != tick) {
+				g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick);
+				PublishWorldJoinImage(tick);
+			}
+			if (const NetWorldJoinSession* session = m_WorldJoin.FindSession(peer.transportPeerId)) {
+				if (m_Runner) {
+					(void)m_Runner->GetLobbySession().BindLateRemote(session->assignedPeerId != 0 ? session->assignedPeerId : 2, peer.transportPeerId, nullptr);
+					if (session->assignedPeerId != 0) {
+						m_Runner->GetLobbySession().SendMatchConfigTo(session->assignedPeerId);
+					}
 				}
 			}
-			const uint64_t nowFrame = m_Coordinator->GetStats().nextFrame;
-			uint64_t activation = 0;
-			(void)m_WorldJoin.NoteCatchUpProgress(peer.transportPeerId, nowFrame, 0, 1, nowFrame, &activation, nullptr);
 			std::cout << "[net-world] join connection=" << peer.transportPeerId << " name=" << peer.displayName << std::endl;
+		}
+		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
+			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted && m_WorldJoin.Image().IsValid() && session.assignedPeerId != 0) {
+				std::string transferError;
+				if (!StartJoinerImageTransfer(session, &transferError)) {
+					std::cout << "[net-world] transfer wait connection=" << session.connection << " " << transferError << std::endl;
+				}
+			}
+			if (session.phase == NetWorldJoinPhase::CatchingUp) {
+				SendWorldJoinTail(session);
+			}
+		}
+		if (m_Runner) {
+			m_Runner->GetLobbySession().PumpOutgoingChunks();
+		}
+		const uint64_t nowFrame = m_Coordinator->GetStats().nextFrame;
+		while (const NetWorldJoinSession* slow = m_WorldJoin.SlowActivation(nowFrame)) {
+			uint64_t later = 0;
+			if (slow->activationReannounces < c_NetWorldActivationReannounceLimit &&
+			    m_WorldJoin.ReannounceActivation(slow->connection, nowFrame, &later, nullptr)) {
+				if (m_Runner && slow->assignedPeerId != 0) {
+					(void)m_Runner->GetLobbySession().SendPayloadTo(slow->assignedPeerId, MakeWorldJoinReport(c_NetWorldReportActivate, later), nullptr);
+				}
+				std::cout << "[net-world] reannounce peer=" << static_cast<int>(slow->assignedPeerId) << " e=" << later << std::endl;
+				continue;
+			}
+			m_WorldJoin.CancelJoin(slow->connection, "the joiner missed the announced activation");
+			std::cout << "[net-world] cancel slow join connection=" << slow->connection << std::endl;
 		}
 		for (const NetH4SeatStatus& status: m_ReconnectHost.GetSeatStatuses()) {
 			if (status.lockstepPeerId == 0 || status.committed || status.dropped || status.reclaiming) {
@@ -1756,20 +1937,100 @@ static std::string ResyncSaveName() {
 		}
 		if (const NetWorldJoinSession* due = m_WorldJoin.DueActivation(m_Coordinator->GetStats().nextFrame)) {
 			std::string admitError;
-			if (!due->spectator && !m_Coordinator->AdmitWorldMember(due->assignedPeerId, due->connection, due->activationTick, &admitError)) {
+			const uint64_t firstRequired = std::max(due->activationTick, m_Coordinator->GetStats().nextFrame + 1);
+			if (!due->spectator && !m_Coordinator->AdmitWorldMember(due->assignedPeerId, due->connection, firstRequired, &admitError)) {
 				m_WorldJoin.CancelJoin(due->connection, admitError);
 				return;
 			}
-			NetGameWorldTransition transition;
-			transition.kind = NetGameWorldTransition::Activate;
-			transition.team = due->team;
-			transition.peerId = due->assignedPeerId;
-			transition.holderGeneration = due->holderGeneration;
-			transition.activationFrame = due->activationTick;
-			transition.membershipRevision = m_WorldJoin.Membership().Revision();
+			NetGameWorldTransition transition = BuildWorldActivateTransition(*due, m_Runner ? m_Runner->GetMatchConfig() : m_MatchConfig, m_WorldJoin.Membership().Revision());
 			(void)ScenarioRunner::SubmitWorldTransition(transition);
 			(void)m_WorldJoin.CompleteActivation(due->connection, due->activationTick, nullptr);
 			std::cout << "[net-world] activate peer=" << static_cast<int>(due->assignedPeerId) << " at=" << due->activationTick << std::endl;
+		}
+	}
+
+	bool NetMatchService::PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, std::string& pendingLoad, std::string* error) {
+		NetWorldCheckpointImage image;
+		std::vector<uint8_t> archive;
+		std::vector<std::vector<uint8_t>> tailBytes;
+		if (!DecodeWorldJoinImageBlob(bytes, image, archive, tailBytes, error)) {
+			return false;
+		}
+		const auto name = std::string("world_join_recv");
+		const auto path = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + name + ".ccsave";
+		std::error_code directoryCode;
+		std::filesystem::create_directories(std::filesystem::path(path).parent_path(), directoryCode);
+		std::ofstream out(path, std::ios::binary | std::ios::trunc);
+		out.write(reinterpret_cast<const char*>(archive.data()), static_cast<std::streamsize>(archive.size()));
+		out.close();
+		if (!out.good()) {
+			if (error) *error = "could not write the received world join archive";
+			return false;
+		}
+		m_WorldCatchUp = {};
+		m_WorldCatchUp.active = true;
+		m_WorldCatchUp.snapshotTick = image.tick;
+		m_WorldCatchUp.appliedThrough = image.tick;
+		m_WorldCatchUp.digest = image.digest;
+		for (const std::vector<uint8_t>& encoded: tailBytes) {
+			NetLockstepFrame frame;
+			NetLockstepError decodeError;
+			if (!NetLockstepCodec::DecodeRecoveryInput(encoded, frame, &decodeError)) {
+				if (error) *error = "world join tail did not decode: " + decodeError.message;
+				return false;
+			}
+			m_WorldCatchUp.tail.push_back(std::move(frame));
+		}
+		pendingLoad = name;
+		return true;
+	}
+
+	void NetMatchService::DriveWorldJoinClient(uint64_t nowMs) {
+		if (m_IsHost || !m_WorldCatchUp.active || !m_Runner) {
+			return;
+		}
+		NetLobbySession& lobby = m_Runner->GetLobbySession();
+		INetTransport* wire = ActiveWireLocked();
+		if (wire) {
+			for (const NetTransportEvent& event: wire->PollEvents()) {
+				if (event.type == NetTransportEventType::PacketReceived && NetLobbyProtocol::Decode(event.bytes).ok) {
+					lobby.HandleTransportEvent(event, nowMs);
+				} else if (m_Session) {
+					m_Session->InjectEvent(event, nowMs);
+				}
+			}
+		}
+		std::vector<uint8_t> packed = lobby.TakePendingTailBytes();
+		size_t offset = 0;
+		while (offset + 4 <= packed.size()) {
+			const uint32_t size = static_cast<uint32_t>(packed[offset]) | (static_cast<uint32_t>(packed[offset + 1]) << 8) |
+			                      (static_cast<uint32_t>(packed[offset + 2]) << 16) | (static_cast<uint32_t>(packed[offset + 3]) << 24);
+			offset += 4;
+			if (offset + size > packed.size()) {
+				break;
+			}
+			NetLockstepFrame frame;
+			if (NetLockstepCodec::DecodeRecoveryInput(std::vector<uint8_t>(packed.begin() + static_cast<std::ptrdiff_t>(offset),
+			                                                              packed.begin() + static_cast<std::ptrdiff_t>(offset + size)),
+			                                          frame, nullptr)) {
+				m_WorldCatchUp.tail.push_back(std::move(frame));
+			}
+			offset += size;
+		}
+		const NetLobbySession::WorldJoinReport report = lobby.TakeWorldJoinReport();
+		if (report.pending && report.kind == c_NetWorldReportActivate) {
+			m_WorldCatchUp.activationTick = report.value;
+		}
+		m_WorldCatchUp.appliedThrough = std::max(m_WorldCatchUp.appliedThrough, ScenarioRunner::WorldCatchUpAppliedThrough());
+		if (m_WorldCatchUp.appliedThrough > m_WorldCatchUp.snapshotTick) {
+			(void)lobby.SendPayload(MakeWorldJoinReport(c_NetWorldReportCatchUp, m_WorldCatchUp.appliedThrough), nullptr);
+		}
+		if (m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.appliedThrough + 1 >= m_WorldCatchUp.activationTick && m_Coordinator &&
+		    !m_Coordinator->IsRunning() && m_Session && wire) {
+			std::string startError;
+			if (!m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, &startError)) {
+				std::cout << "[net-world] joiner lockstep start: " << startError << std::endl;
+			}
 		}
 	}
 
@@ -1938,7 +2199,7 @@ static std::string ResyncSaveName() {
 		}
 		const bool hostAdmission = m_AdmissionAttached && m_IsHost;
 		const bool holdPause = m_Coordinator && m_Coordinator->AnyDroppedSeatHeld();
-		const bool worldJoin = m_Coordinator && m_Coordinator->IsPersistentWorldRound();
+		const bool worldJoin = (m_Coordinator && m_Coordinator->IsPersistentWorldRound()) || m_WorldCatchUp.active;
 		if (m_PendingSessionEvents.empty() && !hostAdmission && !holdPause && !worldJoin) {
 			return;
 		}
@@ -2009,6 +2270,7 @@ static std::string ResyncSaveName() {
 		if (m_IsHost && m_Coordinator && m_Coordinator->IsRunning() && m_Coordinator->IsPersistentWorldRound()) {
 			DriveWorldJoins(nowMs);
 		}
+		DriveWorldJoinClient(nowMs);
 		if (events.empty()) {
 			return;
 		}
@@ -2804,9 +3066,13 @@ static std::string ResyncSaveName() {
 		if (started) {
 			std::vector<uint8_t> receivedState = runner->TakeReceivedState();
 			if (!receivedState.empty()) {
-				NetResyncState state;
-				started = PrepareReceivedResync(receivedState, *coordinator, pendingLoad, state, &error);
-				if (started) pendingState = std::move(state);
+				if (IsWorldJoinImageBlob(receivedState)) {
+					started = PrepareReceivedWorldJoin(receivedState, pendingLoad, &error);
+				} else {
+					NetResyncState state;
+					started = PrepareReceivedResync(receivedState, *coordinator, pendingLoad, state, &error);
+					if (started) pendingState = std::move(state);
+				}
 			}
 		}
 		{

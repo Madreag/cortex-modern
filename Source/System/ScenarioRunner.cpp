@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <deque>
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
@@ -73,6 +74,9 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> s_AppliedCommandSequences;
 		std::map<uint8_t, NetResyncPlayerBindings> s_PeerPlayerBindings;
 		std::vector<NetValueObservation> s_DroppedValueObservations;
+		bool s_WorldCatchUpActive = false;
+		uint64_t s_WorldCatchUpAppliedThrough = 0;
+		std::deque<NetLockstepFrame> s_WorldCatchUpTail;
 
 		NetValueObservation ToValueObservation(const MovableObject::PendingValueOp& op) {
 			NetValueObservation observation;
@@ -929,6 +933,51 @@ namespace RTE {
 		command.senderPeerId = GetLockstepHostPeerId();
 		command.payload = transition;
 		EnqueueLocalGameCommand(command);
+		return true;
+	}
+
+	bool ScenarioRunner::InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error) {
+		if (snapshotTick == 0) {
+			if (error) *error = "world catch-up has no snapshot tick";
+			return false;
+		}
+		s_WorldCatchUpTail.clear();
+		for (NetLockstepFrame& frame: tail) {
+			s_WorldCatchUpTail.push_back(std::move(frame));
+		}
+		s_WorldCatchUpAppliedThrough = snapshotTick;
+		s_WorldCatchUpActive = true;
+		return true;
+	}
+
+	bool ScenarioRunner::WorldCatchUpActive() {
+		return s_WorldCatchUpActive;
+	}
+
+	uint64_t ScenarioRunner::WorldCatchUpAppliedThrough() {
+		return s_WorldCatchUpAppliedThrough;
+	}
+
+	bool ScenarioRunner::TakeWorldCatchUpReadyFrame(uint64_t simTick, NetLockstepReadyFrame& outFrame, std::string* error) {
+		if (!s_WorldCatchUpActive) {
+			return false;
+		}
+		if (s_WorldCatchUpTail.empty()) {
+			if (error) *error = "world catch-up has no committed frame for tick " + std::to_string(simTick);
+			return false;
+		}
+		NetLockstepFrame frame = std::move(s_WorldCatchUpTail.front());
+		s_WorldCatchUpTail.pop_front();
+		outFrame = {};
+		outFrame.frame = frame.targetFrame != 0 ? frame.targetFrame : simTick;
+		outFrame.remoteFrames = std::move(frame.frames);
+		outFrame.remoteCommands = std::move(frame.commands);
+		outFrame.remoteObservations = std::move(frame.observations);
+		outFrame.remoteValueObservations = std::move(frame.valueObservations);
+		s_WorldCatchUpAppliedThrough = outFrame.frame;
+		if (s_SessionPump) {
+			s_SessionPump();
+		}
 		return true;
 	}
 
