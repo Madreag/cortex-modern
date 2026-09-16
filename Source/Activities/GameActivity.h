@@ -801,6 +801,9 @@ namespace RTE {
 		void DriveScriptedActorSelect(int player);
 		/// Draw-only ActorSelect/Go-To pie highlight for a local seat.
 		void ApplyCursorHighlightDraw(int player);
+		/// Clears the draw-only highlight when the cursor leaves an actor or those views.
+		void ClearCursorHighlightDraw(int player);
+		Actor* m_pLastHighlightDrawActor[Players::MaxPlayerCount]; //!< Draw-only last ring target; never dumped.
 		/// Builds every seat's committed brain, in seat order, from a unique-id counter pinned to the same
 		/// value on every peer. A local editor's own preview objects take ids off that counter on one peer
 		/// alone, so the shared brains are made only after it is put back in step.
