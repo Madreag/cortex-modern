@@ -160,6 +160,8 @@ namespace RTE {
 		static long long GetLockstepWaitUs();
 		/// Zeroes the lockstep wait accumulator, for per-round pace windows.
 		static void ResetLockstepWaitUs();
+		/// Zeroes the retired desync-check counters, for a rematch's own report.
+		static void ResetRetiredChecksumCounters();
 		static bool IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
 		/// Whether the peer produces the actor's frames (control handoffs included); every peer answers identically.
 		static bool IsLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint8_t peerId);

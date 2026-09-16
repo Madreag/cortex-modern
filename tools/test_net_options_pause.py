@@ -9,6 +9,8 @@ single-player pause is unchanged.
 The desync arms drive no menu: they are the end-to-end gate for the runtime desync check itself.
 `desync` perturbs the client's sim once and requires both peers to stop with the named reason
 within one sample interval; `desync_clean` requires the same wire to run silently and be counted.
+`rematch` ends the first round and relaunches: the report's desync_check counts only that second
+round, not the sum of both.
 """
 
 import argparse
@@ -27,12 +29,12 @@ PORT_SPAN = 20
 # contended peer produces far more slowly than the fixed timestep produces ticks.
 TICKS = 1800
 # The desync arms drive no menu, so they need only enough ticks to clear a few sample intervals.
-ARM_TICKS = {"desync": 300, "desync_clean": 300}
+ARM_TICKS = {"desync": 300, "desync_clean": 300, "rematch": 300}
 # The runtime desync check's sample interval, Main.cpp c_DesyncCheckIntervalTicks.
 DESYNC_INTERVAL = 30
 PERTURB_TICK = 50
 SIZES = ((640, 360), (960, 540))
-FIRST_SIZE_ONLY = ("peers4", "resync", "pad", "pad_hint", "desync", "desync_clean")
+FIRST_SIZE_ONLY = ("peers4", "resync", "pad", "pad_hint", "desync", "desync_clean", "rematch")
 MATCH_ROWS = ("ButtonLeaveMatch", "ButtonPauseMatch", "ButtonSettings", "ButtonSaveDiagnostics", "ButtonResume")
 SINGLE_PLAYER_ROWS = ("ButtonBackToMain", "ButtonSaveOrLoadGame", "ButtonModManager")
 LEFT_LOCAL = "NETWORK: Match left"
@@ -219,12 +221,15 @@ def peer_args(arm, who, port, root, peers):
     if arm == "desync":
         # No heal here: the divergence must surface as a named stop on both peers, not be repaired.
         args += ["-determinism-selftest-perturb"] if who == "client" else []
+    if arm == "rematch":
+        # End match 1 so the rematch ride-through starts; the report must count only round 2.
+        args += ["-net-match-e2e-rematch", "-net-match-e2e-end-round-tick", "120"]
     return args
 
 
 def probe_owners(arm):
     """Which peers drive the menu. The menu arm opens on every peer; the others open on one."""
-    if arm in ("desync", "desync_clean"):
+    if arm in ("desync", "desync_clean", "rematch"):
         return ()
     if arm in ("menu", "peers4"):
         return peer_names(arm)
@@ -332,11 +337,12 @@ def inspect(arm, root, outcome, strict_compare):
                                                      and outcome["records"]["sp"].get("timed_out") is False)
         checks["sp_activity_paused"] = any(ACTIVITY_PAUSED.match(line) for line in logs["sp"].splitlines())
         checks["sp_no_menu_failure"] = "[menu-script] FAILED" not in logs["sp"]
-    elif arm in ("desync", "desync_clean"):
+    elif arm in ("desync", "desync_clean", "rematch"):
         # The runtime desync check end to end: both peers hash on the interval, put it on the wire and
         # act on the mismatch. The counters are what makes a dead exchange countable instead of silent.
         # A stopped round samples only until its stop, so only the clean arm carries the cadence floor.
         # The input-delay ramp-in can swallow the first sample; every later one must be there.
+        # A rematch's report is the second round alone; summing both matches fails own_round_only.
         expected = 1 if arm == "desync" else arm_ticks(arm) // DESYNC_INTERVAL - 1
         stops = {}
         mismatches = 0
@@ -346,6 +352,9 @@ def inspect(arm, root, outcome, strict_compare):
             details.setdefault("desync_check", {})[who] = counters
             details.setdefault("runtime_error", {})[who] = report.get("runtime_error")
             mismatches += counters.get("mismatches", 0)
+            round_ticks = report.get("running_ticks") or arm_ticks(arm)
+            if arm == "rematch":
+                expected = max(0, int(round_ticks) // DESYNC_INTERVAL - 1)
             checks[f"{who}_submitted"] = counters.get("submissions", 0) >= expected
             checks[f"{who}_sent"] = counters.get("sends", 0) >= expected
             checks[f"{who}_compared"] = counters.get("compares", 0) >= expected
@@ -363,6 +372,10 @@ def inspect(arm, root, outcome, strict_compare):
                 checks[f"{who}_no_desync"] = stop is None and DESYNC_STOP.search(logs[who]) is None
                 checks[f"{who}_exit"] = outcome["records"][who].get("exit_code") == 0
                 checks[f"{who}_no_mismatch"] = counters.get("mismatches", 0) == 0
+            if arm == "rematch":
+                checks[f"{who}_rematched"] = (report.get("rematches") or 0) >= 1
+                checks[f"{who}_own_round_only"] = counters.get("compares", 0) < (expected * 2 if expected else 1)
+                details.setdefault("compare_margin", {})[who] = counters.get("compare_margin")
         details["desync_stop_ticks"] = stops
         if arm == "desync":
             # Whoever compares first counts the mismatch; the other may take its stop off the wire.
@@ -427,7 +440,7 @@ def main():
     parser.add_argument("--exe-sha256", required=True)
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--arms", nargs="*",
-                        default=["menu", "pause", "leave", "sp", "peers4", "resync", "pad", "pad_hint", "desync", "desync_clean"])
+                        default=["menu", "pause", "leave", "sp", "peers4", "resync", "pad", "pad_hint", "desync", "desync_clean", "rematch"])
     # A later lane runs the same arms from its own scratch root and its own ports.
     parser.add_argument("--scratch-root", type=Path, default=SCRATCH)
     parser.add_argument("--port-base", type=int, default=PORT_BASE)
