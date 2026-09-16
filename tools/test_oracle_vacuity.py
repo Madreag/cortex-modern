@@ -21,7 +21,7 @@ from compare_offline import compare as compare_offline
 from compare_offline import main as offline_main
 from net_activity_launch import compare_census_lines
 from phase_b import pair_arms
-from test_net_brainless_spectate import check
+from test_net_brainless_spectate import net_arm, sp_arm
 
 
 class OracleVacuity(unittest.TestCase):
@@ -61,23 +61,49 @@ class OracleVacuity(unittest.TestCase):
             self.assertEqual(offline_main([str(tmp)]), 1)
 
     def test_brainless_kill_count_quotes_the_production_detail(self):
-        checks = []
-        kills = []
-        human_seats = 2
-        check(checks, "host_brains_destroyed", len(kills) == human_seats,
-              f"brain-kill lines={len(kills)} human seats={human_seats}", [])
-        self.assertEqual(checks[0]["status"], "fail")
-        self.assertEqual(checks[0]["detail"], "brain-kill lines=0 human seats=2")
+        class DummyHarness:
+            def lane(self, name, lane):
+                return {"lane": name}
+
+        with patch("test_net_brainless_spectate.load_harness", return_value=DummyHarness()):
+            with tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp)
+                for peer in ("host", "client"):
+                    (out / "e2e" / "brainless_spectate" / peer).mkdir(parents=True)
+                result = net_arm(out, 48400, True, 1, 1, dedicated=False)
+        host = next(row for row in result["spectate_checks"] if row["name"] == "host_brains_destroyed")
+        self.assertEqual(host["status"], "fail")
+        self.assertEqual(host["detail"], "brain-kill lines=0 human seats=2")
 
     def test_brainless_process_completed_quotes_exit_and_timeout(self):
-        checks = []
-        record = {"exit_code": 1, "timed_out": True}
-        exit_ok = record.get("exit_code") == 0 and not record.get("timed_out")
-        check(checks, "process_completed", exit_ok,
-              f"exit_code={record.get('exit_code')} timed_out={record.get('timed_out')}", [])
-        self.assertEqual(checks[0]["status"], "fail")
-        self.assertEqual(checks[0]["name"], "process_completed")
-        self.assertEqual(checks[0]["detail"], "exit_code=1 timed_out=True")
+        import run_sim_test
+        import win32_test_runner
+
+        class DummyRun:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def start(self):
+                return self
+
+            def finish(self):
+                return {"exit_code": 1, "timed_out": True}
+
+            def close(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "sp"
+            runtime = Path(tmp) / "runtime"
+            runtime.mkdir()
+            with patch.object(run_sim_test, "prepare_runtime", return_value=runtime), \
+                    patch.object(win32_test_runner, "IsolatedRun", DummyRun), \
+                    patch("test_net_brainless_spectate.stage_user_module"), \
+                    patch("test_net_brainless_spectate.sha256", return_value="x"):
+                result = sp_arm(out, True, False, 1, 1)
+        completed = next(row for row in result["checks"] if row["name"] == "process_completed")
+        self.assertEqual(completed["status"], "fail")
+        self.assertEqual(completed["detail"], "exit_code=1 timed_out=True")
 
 
 if __name__ == "__main__":
