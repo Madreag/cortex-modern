@@ -251,9 +251,11 @@ namespace {
 			const std::string op = step.value("op", "");
 			if (op != "key_down" && op != "key_up") continue;
 			if (SimRateKey(step.value("key", ""))) {
-				Require(step.contains("sim_at") && step["sim_at"].is_number_unsigned(), "sim-rate probe key needs an integer sim_at");
+				const bool exact = step.contains("sim_at") && step["sim_at"].is_number_unsigned();
+				const bool least = step.contains("sim_at_least") && step["sim_at_least"].is_number_unsigned();
+				Require(exact ^ least, "sim-rate probe key needs sim_at or sim_at_least");
 			} else {
-				Require(!step.contains("sim_at"), "sim_at is only for sim-rate probe keys");
+				Require(!step.contains("sim_at") && !step.contains("sim_at_least"), "sim_at and sim_at_least are only for sim-rate probe keys");
 			}
 		}
 		probe.result["script"] = probe.script;
@@ -353,6 +355,11 @@ namespace {
 			const std::string key = step.at("key");
 			Require(key == "F6" || key == "Escape" || key == "P", "unsupported probe key");
 			if (SimRateKey(key)) {
+				if (step.contains("sim_at_least")) {
+					if (probe.simTick < step["sim_at_least"].get<uint64_t>()) return false;
+					g_UInputMan.SetProbeKeySim(SDLK_P, op == "key_down");
+					return true;
+				}
 				Require(step.contains("sim_at") && step["sim_at"].is_number_unsigned(), "sim-rate probe key needs an integer sim_at");
 				const uint64_t simAt = step["sim_at"].get<uint64_t>();
 				if (probe.simTick < simAt) return false;
