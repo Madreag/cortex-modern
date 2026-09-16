@@ -679,7 +679,7 @@ class RuntimeProjectionTests(unittest.TestCase):
             with self.subTest(key=key):
                 self.assert_field(voice, (key,), False)
         voice2 = dict(version="AudioVoice2", owner=1, path=1, position=1, loops=1)
-        self.assert_field(voice2, ("position",), True)
+        self.assert_field(voice2, ("position",), False)
         for key in ("owner", "path", "loops"):
             with self.subTest(key=key):
                 self.assert_field(voice2, (key,), False)
