@@ -6530,6 +6530,8 @@ _PrimitiveQueueCapture = nil
 	bool previewWindowModCompat = false;
 	{
 		RunScriptString("_PreviewDepth = { d1 = { v = 1 }, d3 = { a = { b = { v = 1, gone = 1 } } }, d8 = { a = { b = { c = { d = { e = { f = { g = { v = 1, gone = 1 } } } } } } } }");
+		// Seven forces an array part of eight over a border of five, so the C library writes land in slack slots.
+		RunScriptString("_PreviewSlack = {}; for i = 1, 5 do _PreviewSlack[i] = i end; _PreviewSlack[7] = 7; _PreviewSlack[7] = nil");
 		// What a script may observe cannot change with a window open, so the same probe runs inside and out.
 		static const std::string observableSemantics = R"lua(
 local seq = {}
@@ -6556,12 +6558,14 @@ assert(_PreviewDepth.d8.a.b.c.d.e.f.g.v == 1, 'GC under a window')
 			LuaMan::PreviewHookScope hookScope(true);
 			modCompatInside = RunScriptString(observableSemantics);
 			RunScriptString("_PreviewDepth.d1.v = 2; _PreviewDepth.d3.a.b.v = 2; _PreviewDepth.d3.a.b.gone = nil; _PreviewDepth.d8.a.b.c.d.e.f.g.v = 2; _PreviewDepth.d8.a.b.c.d.e.f.g.gone = nil; _PreviewDepth.born = { x = { y = { z = 2 } } }");
+			// Insert and sort reach the array part through lj_tab_setint's macro, not the interpreter stores.
+			RunScriptString("table.insert(_PreviewSlack, 6); table.insert(_PreviewSlack, 1, 0); table.sort(_PreviewSlack, function(a, b) return a > b end)");
 		}
 		if (modCompatInside < 0) {
 			std::cout << "[preview-modcompat] inside window: " << GetLastError() << std::endl;
 		}
 		LuaMan::EndPreviewScripts();
-		const int depthCheck = RunScriptString("assert(_PreviewDepth.d1.v == 1, 'depth 1 write leaked'); assert(_PreviewDepth.d3.a.b.v == 1 and _PreviewDepth.d3.a.b.gone == 1, 'depth 3 write or removal leaked'); assert(_PreviewDepth.d8.a.b.c.d.e.f.g.v == 1 and _PreviewDepth.d8.a.b.c.d.e.f.g.gone == 1, 'depth 8 write or removal leaked'); assert(_PreviewDepth.born == nil, 'window-born deep chain leaked')");
+		const int depthCheck = RunScriptString("assert(_PreviewDepth.d1.v == 1, 'depth 1 write leaked'); assert(_PreviewDepth.d3.a.b.v == 1 and _PreviewDepth.d3.a.b.gone == 1, 'depth 3 write or removal leaked'); assert(_PreviewDepth.d8.a.b.c.d.e.f.g.v == 1 and _PreviewDepth.d8.a.b.c.d.e.f.g.gone == 1, 'depth 8 write or removal leaked'); assert(_PreviewDepth.born == nil, 'window-born deep chain leaked'); assert(#_PreviewSlack == 5 and _PreviewSlack[6] == nil, 'table.insert leaked'); for i = 1, 5 do assert(_PreviewSlack[i] == i, 'table.sort leaked') end");
 		if (depthCheck < 0) {
 			std::cout << "[preview-depth] after window: " << GetLastError() << std::endl;
 		}
@@ -6571,7 +6575,7 @@ assert(_PreviewDepth.d8.a.b.c.d.e.f.g.v == 1, 'GC under a window')
 		}
 		previewDepthWritesUndone = depthCheck >= 0;
 		previewWindowModCompat = modCompatInside >= 0 && modCompatAfter >= 0;
-		RunScriptString("_PreviewDepth = nil");
+		RunScriptString("_PreviewDepth = nil; _PreviewSlack = nil");
 	}
 	std::cout << "[script-graph-selftest] " << (previewDepthWritesUndone ? "PASS" : "FAIL") << " preview_depth_writes_undone" << std::endl;
 	checkpointValues = previewDepthWritesUndone && checkpointValues;
