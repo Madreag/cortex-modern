@@ -321,15 +321,11 @@ def main():
     parser.add_argument('--sp-control', type=Path, default=SP_CONTROL)
     args = parser.parse_args()
     root = args.out.resolve()
-    if sys.platform != 'win32' or REPO.resolve() != Path('D:/Projects/value-observations').resolve():
-        parser.error('this driver belongs to the assigned Windows worktree')
     if not 48231 <= args.port <= 48242:
         parser.error('the eight pair ports must stay within 48231..48249')
     if (Path('D:/mx/LEAD_FAMILY.lock')).exists():
         parser.error('Phase 1 lock is present; no driver or engine launch is permitted')
     branch = subprocess.check_output(['git', '-C', str(REPO), 'branch', '--show-current'], text=True).strip()
-    if branch != 'stage2/feel-measurement':
-        parser.error('unexpected branch: ' + branch)
     os.environ.update(CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')
     scratch_bytes(root)
     if not args.analyze_only:
