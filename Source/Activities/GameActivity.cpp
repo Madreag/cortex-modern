@@ -1810,8 +1810,11 @@ void GameActivity::UpdateSpectatorView(int player, bool lookedAround) {
 	}
 
 	const int screen = ScreenOfPlayer(player);
-	if (!g_MovableMan.IsActor(m_SpectatorTarget[player])) {
+	if (m_SpectatorTarget[player] && !g_MovableMan.IsActor(m_SpectatorTarget[player])) {
+		// The follow name dies with the unit.
 		m_SpectatorTarget[player] = nullptr;
+		g_FrameMan.ClearScreenText(screen);
+		std::cout << "[spectate-follow] cleared player=" << player << std::endl;
 	}
 	// Looking around by hand drops the followed unit.
 	if (lookedAround && m_SpectatorTarget[player]) {
@@ -2477,6 +2480,13 @@ void GameActivity::Update() {
 			if (g_UInputMan.AnyStartPress()) {
 				g_ActivityMan.EndActivity();
 				g_ActivityMan.SetInActivity(false);
+			}
+		}
+		if (m_ActivityState == ActivityState::Over && ScenarioRunner::IsLockstepControllerSyncActive() && m_GameOverTimer.IsPastRealMS(6000)) {
+			static bool loggedLossAfter6s = false;
+			if (!loggedLossAfter6s) {
+				loggedLossAfter6s = true;
+				std::cout << "[p4-duel] game-over-loss-still=" << g_FrameMan.GetScreenText(ScreenOfPlayer(player)) << std::endl;
 			}
 		}
 
