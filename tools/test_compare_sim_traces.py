@@ -5,9 +5,9 @@ import tempfile
 import unittest
 
 if __package__:
-    from .compare_sim_traces import CORE, strict_compare
+    from .compare_sim_traces import CORE, PAUSED_CORE, strict_compare
 else:
-    from compare_sim_traces import CORE, strict_compare
+    from compare_sim_traces import CORE, PAUSED_CORE, strict_compare
 
 
 class TraceContracts(unittest.TestCase):
@@ -76,6 +76,9 @@ class TraceContracts(unittest.TestCase):
         paused["subsystems"] = {k: paused["subsystems"][k] for k in ("tick", "terrain")}
         self.assertFalse(self.compare(trace)[0])
         paused["paused"] = True
+        # Two-key held ticks are the stale approved-tree schema; the wave requires PAUSED_CORE.
+        self.assertFalse(self.compare(trace)[0])
+        paused["subsystems"] = {k: "b" * 64 for k in PAUSED_CORE}
         passed, result = self.compare(trace)
         self.assertTrue(passed)
         self.assertEqual(result["paused_ticks"], 1)
