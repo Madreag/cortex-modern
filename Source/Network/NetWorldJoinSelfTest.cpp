@@ -3,6 +3,8 @@
 #include "ControllerFrame.h"
 #include "LoopbackTransport.h"
 #include "NetAuthCrypto.h"
+#include "NetDirectoryCodec.h"
+#include "NetIdentity.h"
 #include "NetLockstep.h"
 #include "NetMatchConfig.h"
 #include "NetReconnectAdmission.h"
@@ -10,8 +12,12 @@
 #include "NetSeatAuth.h"
 #include "NetLobbySession.h"
 #include "NetWorldJoin.h"
+#include "System/ScenarioRunner.h"
+
+#include "nlohmann/json.hpp"
 
 #include <array>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -21,9 +27,16 @@
 namespace RTE {
 
 	namespace {
+		const char* s_FailTag = "net-world-join-selftest";
+
 		int Fail(const std::string& message) {
-			std::cerr << "[net-world-join-selftest] FAIL: " << message << std::endl;
+			std::cerr << "[" << s_FailTag << "] FAIL: " << message << std::endl;
 			return 1;
+		}
+
+		int Pass() {
+			std::cout << "[" << s_FailTag << "] PASS" << std::endl;
+			return 0;
 		}
 
 		const char* c_WorldId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
@@ -236,11 +249,11 @@ namespace RTE {
 			if (!host.NoteCatchUpProgress(7, activation - 1, 1, 1, activation, nullptr, &error)) {
 				return Fail("catch-up refused appliedThrough E-1: " + error);
 			}
-			if (host.DueActivation(activation - 1) != nullptr) {
-				return Fail("activation was due before the announced tick");
+			if (host.DueActivation(activation - 2) != nullptr) {
+				return Fail("activation was due before E-1");
 			}
-			if (host.DueActivation(activation) == nullptr || !host.CompleteActivation(7, activation, &error)) {
-				return Fail("activation at E was refused: " + error);
+			if (host.DueActivation(activation - 1) == nullptr || !host.CompleteActivation(7, activation - 1, &error)) {
+				return Fail("a due activation at E-1 was not ready: " + error);
 			}
 			if (host.FindSession(7)->phase != NetWorldJoinPhase::Active) {
 				return Fail("activated joiner was not Active");
@@ -253,7 +266,7 @@ namespace RTE {
 			if (host.Membership().HeldSlots() != 0 || host.Membership().Slots().front().generation == heldGeneration) {
 				return Fail("clean leave did not advance the slot generation");
 			}
-			if (!host.BeginJoin(8, 3, "bob", 2000, &error) || host.FindSession(8) == nullptr || host.FindSession(8)->assignedPeerId != 2) {
+			if (!host.BeginJoin(8, 2, "alice", 2000, &error) || host.FindSession(8) == nullptr || host.FindSession(8)->assignedPeerId != 2) {
 				return Fail("rejoin after a clean leave did not land in the running world");
 			}
 
@@ -262,6 +275,9 @@ namespace RTE {
 			}
 			if (host.ExpireStaleJoins(3000 + c_NetWorldJoinDeadlineMs + 1) == 0) {
 				return Fail("a stalled bootstrap did not expire");
+			}
+			if (host.FindSession(9) == nullptr) {
+				return Fail("a spectator was expired by the join deadline");
 			}
 			const std::string report = host.BuildReportJson();
 			if (report.find("\"capture_p99_ms\"") == std::string::npos || report.find("\"catch_up_ratio\"") == std::string::npos) {
@@ -283,18 +299,18 @@ namespace RTE {
 			config.peerCount = 2;
 			config.timeoutMs = 1000000;
 			if (ordinary.Start(transport, config, &error)) {
-				return Fail("lockstep peer identity is invalid");
+				return Fail(std::string("a two-peer empty remote was accepted: ") + error);
 			}
 			if (error != "lockstep peer identity is invalid") {
-				return Fail("lockstep peer identity is invalid");
+				return Fail(std::string("a two-peer empty remote was accepted: ") + error);
 			}
 			config.remotePeerId = 2;
 			error.clear();
 			if (ordinary.Start(transport, config, &error)) {
-				return Fail("lockstep peer identity is invalid");
+				return Fail(std::string("a two-peer empty remote was accepted: ") + error);
 			}
 			if (error != "lockstep peer identity is invalid") {
-				return Fail("lockstep peer identity is invalid");
+				return Fail(std::string("a two-peer empty remote was accepted: ") + error);
 			}
 			return 0;
 		}
@@ -330,10 +346,10 @@ namespace RTE {
 			ordinaryConfig.remotePeerId = 2;
 			error.clear();
 			if (ordinary.Start(hostTransport, ordinaryConfig, &error)) {
-				return Fail("lockstep has no remote transport targets");
+				return Fail(std::string("a two-peer empty remote was accepted: ") + error);
 			}
-			if (error != "lockstep peer identity is invalid" && error != "lockstep has no remote transport targets") {
-				return Fail("lockstep has no remote transport targets");
+			if (error != "lockstep peer identity is invalid") {
+				return Fail(std::string("a two-peer empty remote was accepted: ") + error);
 			}
 
 			const uint64_t firstRequired = world.GetStats().nextFrame + c_NetWorldActivationLeadFrames;
@@ -423,7 +439,7 @@ namespace RTE {
 					}
 					if (const auto* rejected = std::get_if<NetJoinRejected>(&outbound.payload)) {
 						if (rejected->humanMessage == "the match is already in progress") {
-							return Fail("a fresh join into a running world was refused as a live match");
+							return Fail("the match is already in progress");
 						}
 					}
 				}
@@ -664,7 +680,375 @@ namespace RTE {
 			return 0;
 		}
 
+	int TestH4CleanLeaveKeepsWorldSeatOpen() {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		const std::vector<NetH4Seat> seats = {{0, 0, 0, false, 1, true}, {1, 1, 1, false, 2, false}};
+		auto commitJoin = [&](NetReconnectHost& host, NetPeerId connection, const char* name, NetH4TicketOffer& offer) -> bool {
+			NetH4NewJoin join;
+			join.identity = identity;
+			join.displayName = name;
+			join.txId.fill(static_cast<uint8_t>(connection));
+			host.HandleMessage(connection, join, 0);
+			bool found = false;
+			for (const NetH4Outbound& outbound: host.TakeOutbound()) {
+				if (const auto* ticket = std::get_if<NetH4TicketOffer>(&outbound.payload)) {
+					offer = *ticket;
+					found = true;
+				}
+			}
+			if (!found) {
+				return false;
+			}
+			host.HandleMessage(connection, NetH4TicketStoredAck{c_NetH4Version, offer.txId, offer.stableSeat, offer.holderGeneration, true}, 5);
+			host.TakeOutbound();
+			return true;
+		};
+		{
+			NetSeatAuthRegistry registry;
+			if (!registry.BeginHostedSession()) {
+				return Fail("world H4 leave registry did not arm");
+			}
+			NetReconnectHost host;
+			host.Configure(&registry, 0x5743ULL, identity);
+			host.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
+			host.SetLiveMatch(true);
+			host.SetPersistentWorld(true);
+			NetH4TicketOffer offer;
+			if (!commitJoin(host, 12, "alice", offer)) {
+				return Fail("world H4 join did not offer a ticket");
+			}
+			NetH4LeaveRequest leave;
+			leave.txId.fill(21);
+			leave.epoch = offer.epoch;
+			leave.stableSeat = offer.stableSeat;
+			leave.holderGeneration = offer.holderGeneration;
+			host.HandleMessage(12, leave, 10);
+			bool closed = true;
+			for (const NetH4SeatStatus& status: host.GetSeatStatuses()) {
+				if (status.stableSeat == offer.stableSeat) {
+					closed = status.closed;
+				}
+			}
+			if (closed) {
+				return Fail("H4 clean leave closed a persistent-world seat");
+			}
+		}
+		{
+			NetSeatAuthRegistry registry;
+			if (!registry.BeginHostedSession()) {
+				return Fail("ordinary H4 leave registry did not arm");
+			}
+			NetReconnectHost host;
+			host.Configure(&registry, 0x5744ULL, identity);
+			host.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
+			host.SetPersistentWorld(false);
+			NetH4TicketOffer offer;
+			if (!commitJoin(host, 13, "alice", offer)) {
+				return Fail("ordinary H4 join did not offer a ticket");
+			}
+			host.SetLiveMatch(true);
+			NetH4LeaveRequest leave;
+			leave.txId.fill(22);
+			leave.epoch = offer.epoch;
+			leave.stableSeat = offer.stableSeat;
+			leave.holderGeneration = offer.holderGeneration;
+			host.HandleMessage(13, leave, 10);
+			bool closed = false;
+			for (const NetH4SeatStatus& status: host.GetSeatStatuses()) {
+				if (status.stableSeat == offer.stableSeat) {
+					closed = status.closed;
+				}
+			}
+			if (!closed) {
+				return Fail("H4 clean leave left an ordinary match seat open");
+			}
+		}
+		return 0;
+	}
+
+	int TestDirectoryRowResumeAndWorldBootBounds() {
+		std::string reason;
+		nlohmann::json body = {
+			{"name", "World"},
+			{"activity", "Persistent World"},
+			{"scene", "Grasslands"},
+			{"mode", "pvp-skirmish"},
+			{"peer_count", 2},
+			{"seats_free", 1},
+			{"game_version", "7.0.0"},
+			{"build_id", "stage2-world"},
+			{"network_protocol_version", 1},
+			{"lockstep_codec_version", 22},
+			{"controller_frame_version", 7},
+			{"match_config_hash", std::string(64, 'a')},
+			{"session_identity_hash", std::string(64, 'b')},
+			{"module_manifest_hash", std::string(64, 'c')},
+			{"listen_port", 42124},
+			{"listen_addrs", nlohmann::json::array({"127.0.0.1"})},
+			{"join_mode", "ip"},
+			{"persistent_world", true},
+			{"world_id", c_WorldId},
+			{"world_boot", 0},
+			{"resume_session_id", c_WorldId},
+		};
+		NetDirectoryRegisterRequest decoded;
+		if (NetDirectoryCodec::DecodeRegisterRequest(body.dump(), decoded, reason)) {
+			return Fail("world_boot 0 was accepted on the C++ register decoder");
+		}
+		body["world_boot"] = 1;
+		if (!NetDirectoryCodec::DecodeRegisterRequest(body.dump(), decoded, reason) || decoded.worldBoot != 1 ||
+		    decoded.resumeSessionId != c_WorldId) {
+			return Fail("world_boot 1 / resume_session_id did not decode: " + reason);
+		}
+		body["world_boot"] = 1000000000;
+		if (!NetDirectoryCodec::DecodeRegisterRequest(body.dump(), decoded, reason) || decoded.worldBoot != 1000000000) {
+			return Fail("world_boot 10^9 did not decode: " + reason);
+		}
+		body["world_boot"] = 1000000001;
+		if (NetDirectoryCodec::DecodeRegisterRequest(body.dump(), decoded, reason)) {
+			return Fail("world_boot above 10^9 was accepted");
+		}
+		return 0;
+	}
+
+	int TestWorldTransitionCodecAndOrdinaryIdentity() {
+		std::string error;
+		NetWorldJoinHost host;
+		if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) {
+			return Fail("codec host did not open a join: " + error);
+		}
+		const NetGameWorldTransition transition = BuildWorldActivateTransition(*host.FindSession(7), MakeWorldConfig(), host.Membership().Revision());
+		NetLockstepPacket worldPacket;
+		NetLockstepFrame worldFrame;
+		worldFrame.senderPeerId = 1;
+		worldFrame.targetFrame = 40;
+		worldFrame.roundId = 1;
+		NetGameCommand command;
+		command.senderPeerId = 1;
+		command.payload = transition;
+		worldFrame.commands.push_back(command);
+		worldPacket.payload = worldFrame;
+		std::vector<uint8_t> worldBytes;
+		NetLockstepError encodeError;
+		if (!NetLockstepCodec::Encode(worldPacket, worldBytes, &encodeError) || worldBytes.size() < 6) {
+			return Fail("WorldTransition frame did not encode: " + encodeError.message);
+		}
+		const uint16_t worldVersion = static_cast<uint16_t>(worldBytes[4] | (worldBytes[5] << 8));
+		if (worldVersion != NetLockstepCodec::c_WorldTransitionVersion) {
+			return Fail("WorldTransition frame did not stamp lockstep version 23");
+		}
+		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(worldBytes);
+		if (!decoded.ok) {
+			return Fail("WorldTransition frame did not decode: " + decoded.error.message);
+		}
+		const auto* decodedFrame = std::get_if<NetLockstepFrame>(&decoded.packet.payload);
+		if (decodedFrame == nullptr || decodedFrame->commands.size() != 1) {
+			return Fail("WorldTransition decode lost the command");
+		}
+		const auto* roundTrip = std::get_if<NetGameWorldTransition>(&decodedFrame->commands[0].payload);
+		if (roundTrip == nullptr || *roundTrip != transition || roundTrip->schema != c_NetWorldJoinSchema) {
+			return Fail("WorldTransition codec did not round-trip");
+		}
+		NetLockstepPacket ordinaryPacket;
+		NetLockstepFrame ordinaryFrame;
+		ordinaryFrame.senderPeerId = 1;
+		ordinaryFrame.targetFrame = 1;
+		ordinaryFrame.roundId = 1;
+		ordinaryPacket.payload = ordinaryFrame;
+		std::vector<uint8_t> ordinaryBytes;
+		if (!NetLockstepCodec::Encode(ordinaryPacket, ordinaryBytes, &encodeError) || ordinaryBytes.size() < 6) {
+			return Fail("ordinary frame did not encode: " + encodeError.message);
+		}
+		const uint16_t ordinaryVersion = static_cast<uint16_t>(ordinaryBytes[4] | (ordinaryBytes[5] << 8));
+		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 22) {
+			return Fail("ordinary lockstep frame did not stamp version 22");
+		}
+		NetIdentityManifest manifest;
+		NetIdentityBuildOptions options;
+		if (!NetIdentity::BuildCurrentManifest(manifest, &error, options)) {
+			return Fail("ordinary identity manifest did not build: " + error);
+		}
+		if (manifest.deterministicConfig.lockstepCodecVersion != 22 || manifest.deterministicConfig.matchConfigVersion != 4) {
+			return Fail("ordinary identity did not stamp lockstep 22 and match config 4");
+		}
+		options.lockstepCodecVersion = NetLockstepCodec::c_WorldTransitionVersion;
+		options.matchConfigVersion = NetMatchConfigUtil::c_PersistentWorldVersion;
+		if (!NetIdentity::BuildCurrentManifest(manifest, &error, options) ||
+		    manifest.deterministicConfig.lockstepCodecVersion != 23 || manifest.deterministicConfig.matchConfigVersion != 5) {
+			return Fail("world identity did not stamp the live world versions");
+		}
+		return 0;
+	}
+
+	int TestDueActivationAdmits() {
+		LoopbackTransport transport;
+		std::string error;
+		if (!transport.StartHost(47114, &error)) {
+			return Fail("loopback host: " + error);
+		}
+		NetLockstepCoordinator world;
+		NetLockstepConfig worldConfig;
+		worldConfig.sessionId = 3;
+		worldConfig.localPeerId = 1;
+		worldConfig.peerCount = 2;
+		worldConfig.timeoutMs = 1000000;
+		worldConfig.relayToOtherPeers = true;
+		worldConfig.matchConfig = MakeWorldConfig();
+		if (!world.Start(transport, worldConfig, &error)) {
+			return Fail("admit world start: " + error);
+		}
+		NetWorldJoinHost host;
+		if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) {
+			return Fail("admit join did not open: " + error);
+		}
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId;
+		image.boot = 1;
+		image.round = 1;
+		image.tick = 1;
+		image.bytes = 4;
+		image.digest = "d";
+		image.path = "Worlds/image.bin";
+		host.PublishImage(image);
+		if (!host.NoteTransferComplete(7, 4, &error)) {
+			return Fail(error);
+		}
+		const uint64_t nowFrame = world.GetStats().nextFrame;
+		uint64_t activation = 0;
+		if (!host.NoteCatchUpProgress(7, nowFrame, 1, 1, nowFrame, &activation, &error) || activation != nowFrame + c_NetWorldActivationLeadFrames) {
+			return Fail("admit catch-up did not announce E ahead of nextFrame: " + error);
+		}
+		if (!host.NoteCatchUpProgress(7, activation - 1, 1, 1, nowFrame, nullptr, &error)) {
+			return Fail("admit catch-up refused appliedThrough E-1: " + error);
+		}
+		if (host.DueActivation(activation - 1) == nullptr) {
+			return Fail("a due activation at E-1 was not ready");
+		}
+		if (activation <= nowFrame) {
+			return Fail("announced E was not ahead of nextFrame");
+		}
+		if (!world.AdmitWorldMember(2, 1, activation, &error)) {
+			return Fail("a due activation cancelled instead of admitting: " + error);
+		}
+		return 0;
+	}
+
+	int TestStaleWorldTransitionRefused() {
+		NetGameWorldTransition live;
+		live.schema = c_NetWorldJoinSchema;
+		live.kind = NetGameWorldTransition::Activate;
+		live.peerId = 7;
+		live.holderGeneration = 4;
+		live.membershipRevision = 9;
+		live.team = 0;
+		if (!ScenarioRunner::AcceptWorldTransition(live, nullptr)) {
+			return Fail("a current world transition was refused");
+		}
+		NetGameWorldTransition staleGeneration = live;
+		staleGeneration.holderGeneration = 3;
+		if (ScenarioRunner::AcceptWorldTransition(staleGeneration, nullptr)) {
+			return Fail("a stale holder generation was applied");
+		}
+		NetGameWorldTransition staleRevision = live;
+		staleRevision.holderGeneration = 4;
+		staleRevision.membershipRevision = 8;
+		if (ScenarioRunner::AcceptWorldTransition(staleRevision, nullptr)) {
+			return Fail("a stale membership revision was applied");
+		}
+		return 0;
+	}
+
+	int TestReadyFramePackIncludesRemotes() {
+		NetLockstepReadyFrame ready;
+		ready.frame = 11;
+		ControllerFrame local;
+		local.actorUniqueID = 1;
+		ControllerFrame remote;
+		remote.actorUniqueID = 2;
+		ready.localFrames.push_back(local);
+		ready.remoteFrames.push_back(remote);
+		NetGameCommand command;
+		command.senderPeerId = 2;
+		ready.remoteCommands.push_back(command);
+		const NetLockstepFrame packed = PackWorldJoinReadyFrame(ready);
+		if (packed.targetFrame != 11 || packed.frames.size() != 2 || packed.commands.size() != 1) {
+			return Fail("committed ready-frame pack dropped a remote Controller or command");
+		}
+		return 0;
+	}
+
+	int RunNamed(const char* name) {
+		if (std::strcmp(name, "identity") == 0 || std::strcmp(name, "-net-world-identity-selftest") == 0) {
+			s_FailTag = "net-world-identity-selftest";
+			return TestIdentitySurvivesRestart();
+		}
+		if (std::strcmp(name, "live") == 0 || std::strcmp(name, "-net-world-live-selftest") == 0) {
+			s_FailTag = "net-world-live-selftest";
+			return TestLiveJoinAdmission();
+		}
+		if (std::strcmp(name, "leave") == 0 || std::strcmp(name, "-net-world-leave-selftest") == 0) {
+			s_FailTag = "net-world-leave-selftest";
+			return TestWorldStartsEmptyAndSurvivesLastLeave();
+		}
+		if (std::strcmp(name, "rejoin") == 0 || std::strcmp(name, "-net-world-rejoin-selftest") == 0) {
+			s_FailTag = "net-world-rejoin-selftest";
+			return TestJoinPlaneAndLeave();
+		}
+		if (std::strcmp(name, "transfer") == 0 || std::strcmp(name, "-net-world-transfer-selftest") == 0) {
+			s_FailTag = "net-world-transfer-selftest";
+			return TestJoinerTransferPump();
+		}
+		if (std::strcmp(name, "digest") == 0 || std::strcmp(name, "-net-world-digest-selftest") == 0) {
+			s_FailTag = "net-world-digest-selftest";
+			return TestImageBlobRoundTrip();
+		}
+		if (std::strcmp(name, "catchup") == 0 || std::strcmp(name, "-net-world-catchup-selftest") == 0) {
+			s_FailTag = "net-world-catchup-selftest";
+			return TestCatchUpAppliedThroughAndBinding();
+		}
+		if (std::strcmp(name, "binding") == 0 || std::strcmp(name, "-net-world-binding-selftest") == 0) {
+			s_FailTag = "net-world-binding-selftest";
+			return TestCatchUpAppliedThroughAndBinding();
+		}
+		if (std::strcmp(name, "h4-leave") == 0 || std::strcmp(name, "-net-world-h4-leave-selftest") == 0) {
+			s_FailTag = "net-world-h4-leave-selftest";
+			return TestH4CleanLeaveKeepsWorldSeatOpen();
+		}
+		if (std::strcmp(name, "directory") == 0 || std::strcmp(name, "-net-world-directory-selftest") == 0) {
+			s_FailTag = "net-world-directory-selftest";
+			return TestDirectoryRowResumeAndWorldBootBounds();
+		}
+		if (std::strcmp(name, "codec") == 0 || std::strcmp(name, "-net-world-codec-selftest") == 0) {
+			s_FailTag = "net-world-codec-selftest";
+			return TestWorldTransitionCodecAndOrdinaryIdentity();
+		}
+		if (std::strcmp(name, "ordinary-identity") == 0 || std::strcmp(name, "-net-world-ordinary-identity-selftest") == 0) {
+			s_FailTag = "net-world-ordinary-identity-selftest";
+			return TestWorldTransitionCodecAndOrdinaryIdentity();
+		}
+		if (std::strcmp(name, "admit") == 0 || std::strcmp(name, "-net-world-admit-selftest") == 0) {
+			s_FailTag = "net-world-admit-selftest";
+			return TestDueActivationAdmits();
+		}
+		if (std::strcmp(name, "ordinary-start") == 0 || std::strcmp(name, "-net-world-ordinary-start-selftest") == 0) {
+			s_FailTag = "net-world-ordinary-start-selftest";
+			return TestOrdinaryStartStillRefusesEmptyRemotes();
+		}
+		if (std::strcmp(name, "stale") == 0 || std::strcmp(name, "-net-world-stale-selftest") == 0) {
+			s_FailTag = "net-world-stale-selftest";
+			return TestStaleWorldTransitionRefused();
+		}
+		if (std::strcmp(name, "ready-frame") == 0 || std::strcmp(name, "-net-world-ready-frame-selftest") == 0) {
+			s_FailTag = "net-world-ready-frame-selftest";
+			return TestReadyFramePackIncludesRemotes();
+		}
+		return Fail(std::string("unknown world-join case ") + name);
+	}
+
 	int NetWorldJoinSelfTest::Run() {
+		s_FailTag = "net-world-join-selftest";
 		if (const int result = TestIdentitySurvivesRestart(); result != 0) {
 			return result;
 		}
@@ -695,8 +1079,35 @@ namespace RTE {
 		if (const int result = TestLiveJoinAdmission(); result != 0) {
 			return result;
 		}
-		std::cout << "[net-world-join-selftest] PASS" << std::endl;
-		return 0;
+		if (const int result = TestH4CleanLeaveKeepsWorldSeatOpen(); result != 0) {
+			return result;
+		}
+		if (const int result = TestDirectoryRowResumeAndWorldBootBounds(); result != 0) {
+			return result;
+		}
+		if (const int result = TestWorldTransitionCodecAndOrdinaryIdentity(); result != 0) {
+			return result;
+		}
+		if (const int result = TestDueActivationAdmits(); result != 0) {
+			return result;
+		}
+		if (const int result = TestStaleWorldTransitionRefused(); result != 0) {
+			return result;
+		}
+		if (const int result = TestReadyFramePackIncludesRemotes(); result != 0) {
+			return result;
+		}
+		return Pass();
+	}
+
+	int NetWorldJoinSelfTest::RunCase(const char* name) {
+		if (name == nullptr || name[0] == '\0') {
+			return Run();
+		}
+		if (const int result = RunNamed(name); result != 0) {
+			return result;
+		}
+		return Pass();
 	}
 
 } // namespace RTE
