@@ -583,6 +583,36 @@ def assert_tabblue_selected_fill(repo):
     return fill
 
 
+def cell_ink_signature(cell, red, bg):
+    return tuple((x, y) for y, row in enumerate(cell.rows)
+                 for x, pixel in enumerate(row) if pixel != red and pixel != bg)
+
+
+def assert_fontsmall_latin1_ink(repo):
+    """Menus FontSmall 0xC0 and 0xD7 have ink; À/É/Ñ have distinct signatures.
+
+    The base atlas paints those letters as one placeholder blob, so the
+    signature set has size 1 and this fails. The extended atlas passes.
+    """
+    import sys
+    fonts = str(Path(__file__).resolve().parent / "fonts")
+    if fonts not in sys.path:
+        sys.path.insert(0, fonts)
+    from extend_font import ink_count, parse_font
+
+    path = Path(repo) / "Data/Base.rte/GUIs/Skins/Menus/FontSmall.png"
+    font = parse_font(path)
+    red, bg = font["red"], font["bg"]
+    for code in (0xC0, 0xD7):
+        assert ink_count(font["cells"][code], red, bg) > 0, (hex(code), "no ink")
+    sigs = [cell_ink_signature(font["cells"][code], red, bg) for code in (0xC0, 0xC9, 0xD1)]
+    assert all(sigs) and len(set(sigs)) == 3, ("À/É/Ñ signatures collide", [len(s) for s in sigs])
+    return {
+        "ink_0xC0": ink_count(font["cells"][0xC0], red, bg),
+        "ink_0xD7": ink_count(font["cells"][0xD7], red, bg),
+    }
+
+
 def frame_luma(png, rect, border=2):
     """Mean luma of a control's 2-px frame, the compare_luma.py shape from the disabled-state lane."""
     with Image.open(png) as source:
@@ -780,6 +810,7 @@ def run_case(options, case, root, failing=None):
                                        for capture in images for control in capture["controls"]
                                        if control.get("text_fits") is False]
             assert not result["text_overflow"], result["text_overflow"]
+            result["fontsmall_latin1"] = assert_fontsmall_latin1_ink(options.repo)
             fill = assert_tabblue_selected_fill(options.repo)
             result["tab_luma"] = {
                 "selected_fill": fill,
