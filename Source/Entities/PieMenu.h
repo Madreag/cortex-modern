@@ -214,6 +214,8 @@ namespace RTE {
 		bool HasHighlightDraw() const { return m_HighlightDrawActive; }
 		int GetHighlightDrawRadius() const { return m_HighlightDrawRadius; }
 		bool FrozenBitmapHasDrawnPixel() const;
+		/// Fills the ring and draws it at the owner's committed CPU pos. Does not write dump fields.
+		void DrawHighlight(BITMAP* targetBitmap, const Vector& targetPos = Vector());
 #pragma endregion
 
 #pragma region PieSlice Handling
@@ -451,6 +453,7 @@ namespace RTE {
 		/// @param targetPos The absolute position of the target bitmap's upper left corner in the scene.
 		/// @param drawPos Out parameter, a Vector to be filled in with the position at which the PieMenu should be drawn.
 		void CalculateDrawPosition(const BITMAP* targetBitmap, const Vector& targetPos, Vector& drawPos) const;
+		void CalculateDrawPosition(const BITMAP* targetBitmap, const Vector& targetPos, const Vector& center, Vector& drawPos) const;
 
 		/// Handles drawing icons for PieSlices' visual representation in the PieMenu.
 		/// @param targetBitmap A pointer to the BITMAP to draw on. Generally a screen BITMAP.
