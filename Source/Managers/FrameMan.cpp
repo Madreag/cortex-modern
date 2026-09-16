@@ -14,6 +14,16 @@
 #include "ThreadMan.h"
 #include "UInputMan.h"
 #include "GLResourceMan.h"
+#include "Actor.h"
+#include "AHuman.h"
+#include "Controller.h"
+#include "HDFirearm.h"
+#include "InputScript.h"
+#include "LocalPrediction.h"
+#include "MovableMan.h"
+#include "NetMatchService.h"
+#include "PreviewEventLedger.h"
+#include "ScenarioRunner.h"
 
 #include "SLTerrain.h"
 #include "SLBackground.h"
@@ -38,14 +48,270 @@
 #include <SDL3_image/SDL_image.h>
 
 #include <array>
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <cstring>
 #include <map>
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
 #include <string_view>
+#include <thread>
 #include <vector>
+#include "nlohmann/json.hpp"
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 using namespace RTE;
+
+namespace {
+	using FeelJson = nlohmann::json;
+	struct FeelState {
+		std::ofstream out;
+		std::string directory;
+		std::vector<FeelJson> pending;
+		std::map<std::pair<int64_t, int>, uint64_t> sampled;
+		FeelJson frame;
+		uint64_t frameNumber = 0;
+		uint64_t nextCaptureTick = 60;
+		size_t eventIndex = 0;
+		double capHz = 0;
+		double nextDrawMS = 0;
+		double drawBeginMS = 0;
+		double presentBeginMS = 0;
+		double iterationBeginMS = 0;
+		double lastPresentMS = 0;
+		double iterationCPUMS = 0;
+		bool iterationActive = false;
+	};
+	FeelState s_Feel;
+
+	double FeelNowMS() {
+		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+	}
+
+	double FeelProcessCPUMS() {
+#ifdef _WIN32
+		FILETIME created{}, exited{}, kernel{}, user{};
+		if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+			const uint64_t kernelTime = (static_cast<uint64_t>(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime;
+			const uint64_t userTime = (static_cast<uint64_t>(user.dwHighDateTime) << 32) | user.dwLowDateTime;
+			return static_cast<double>(kernelTime + userTime) / 10000.0;
+		}
+#endif
+		return -1.0;
+	}
+
+	FeelJson FeelActor(const Actor* actor) {
+		const Vector rendered = actor->GetRenderPos();
+		FeelJson value = {{"uid", actor->GetUniqueID()}, {"team", actor->GetTeam()},
+		    {"x", actor->GetPos().m_X}, {"y", actor->GetPos().m_Y},
+		    {"render_x", rendered.m_X}, {"render_y", rendered.m_Y},
+		    {"prev_x", actor->GetPrevPos().m_X}, {"prev_y", actor->GetPrevPos().m_Y},
+		    {"vx", actor->GetVel().m_X}, {"vy", actor->GetVel().m_Y},
+		    {"aim", actor->GetAimAngle()}, {"health", actor->GetHealth()}, {"fired", false}};
+		if (const Controller* controller = const_cast<Actor*>(actor)->GetController()) {
+			const Vector aim = controller->GetAnalogAim();
+			value["input"] = {{"move_left", controller->IsState(ControlState::MOVE_LEFT)}, {"move_right", controller->IsState(ControlState::MOVE_RIGHT)},
+			    {"fire", controller->IsState(ControlState::WEAPON_FIRE)}, {"aim_x", aim.m_X}, {"aim_y", aim.m_Y}};
+		}
+		if (const auto* human = dynamic_cast<const AHuman*>(actor)) {
+			if (const auto* gun = dynamic_cast<const HDFirearm*>(human->GetEquippedItem())) {
+				value["gun_uid"] = gun->GetUniqueID();
+				value["gun"] = gun->GetPresetName();
+				value["rounds"] = gun->GetRoundInMagCount();
+				value["fired"] = gun->FiredFrame();
+			}
+		}
+		return value;
+	}
+
+	FeelJson FeelLocalActors() {
+		FeelJson actors = FeelJson::array();
+		if (Activity* activity = g_ActivityMan.GetActivity()) {
+			for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+				if (!activity->PlayerActive(player) || !activity->PlayerHuman(player)) continue;
+				const Actor* actor = activity->GetControlledActor(player);
+				if (!actor || !g_MovableMan.ValidMO(actor) || !g_MovableMan.IsActor(actor)) continue;
+				FeelJson value = FeelActor(actor);
+				value["player"] = player;
+				actors.push_back(std::move(value));
+			}
+		}
+		return actors;
+	}
+
+	void FeelWrite(const FeelJson& value) {
+		s_Feel.out << value.dump() << '\n';
+	}
+
+	void FeelEvents(double lowerMS, double upperMS) {
+		const auto& starts = PreviewEventLedger::GetEventStarts();
+		while (s_Feel.eventIndex < starts.size()) {
+			const auto& event = starts[s_Feel.eventIndex];
+			FeelWrite({{"type", "event"}, {"index", s_Feel.eventIndex++}, {"wall_lower_ms", lowerMS}, {"wall_upper_ms", upperMS},
+			    {"committed_tick", event.committedTick}, {"event_tick", event.eventTick}, {"emitter", event.emitterUID},
+			    {"kind", event.kind}, {"seq", event.seq}, {"predicted", event.predicted}});
+		}
+	}
+}
+
+bool FrameMan::SetFeelRenderSettings(const std::string& path) {
+	const char* headless = std::getenv("CCCP_HEADLESS");
+	if (!headless || std::string(headless) != "1") return false;
+	std::ifstream in(path);
+	std::string key, equals, extra;
+	double hz = -1;
+	if (!(in >> key >> equals >> hz) || key != "RenderCapHz" || equals != "=" || (hz != 0 && hz != 60) || (in >> extra)) return false;
+	s_Feel.capHz = hz;
+	return true;
+}
+
+bool FrameMan::SetFeelRecordDirectory(const std::string& path) {
+	const char* headless = std::getenv("CCCP_HEADLESS");
+	if (!headless || std::string(headless) != "1" || !std::filesystem::is_directory(path) || s_Feel.out.is_open()) return false;
+	const auto raw = std::filesystem::path(path) / "raw.jsonl";
+	if (std::filesystem::exists(raw)) return false;
+	s_Feel.out.open(raw, std::ios::out);
+	if (!s_Feel.out) return false;
+	s_Feel.directory = path;
+	FeelWrite({{"type", "schema"}, {"version", 1}, {"clock", "steady_clock milliseconds"}, {"cpu_clock", "GetProcessTimes kernel+user milliseconds"},
+	    {"presentation_boundary", "UploadFrame return (upload, swap, and frame housekeeping)"}, {"pixels_per_meter", c_PPM},
+	    {"event_clock", "observation interval, not a mixer callback timestamp"}, {"event_start_capacity", 64}});
+	return true;
+}
+
+bool FrameMan::FeelRecordingEnabled() { return s_Feel.out.is_open(); }
+double FrameMan::FeelClockMS() { return FeelRecordingEnabled() ? FeelNowMS() : 0.0; }
+
+void FrameMan::FeelInputSample(const Actor* actor, int player) {
+	if (!FeelRecordingEnabled() || !actor || !InputScript::DrivesPlayer(player) || g_MovableMan.IsSpeculative()) return;
+	const double wallMS = FeelNowMS();
+	const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	const auto key = std::make_pair(static_cast<int64_t>(actor->GetUniqueID()), player);
+	if (const auto found = s_Feel.sampled.find(key); found != s_Feel.sampled.end() && found->second == tick) return;
+	s_Feel.sampled[key] = tick;
+	const uint64_t previous = tick > 0 ? tick - 1 : 0;
+	FeelJson changes = FeelJson::array();
+	for (int element = 0; element < InputElements::INPUT_COUNT; ++element) {
+		const bool held = InputScript::HeldAt(player, element, tick);
+		if (held != InputScript::HeldAt(player, element, previous)) changes.push_back({{"action", InputScript::ElementName(element)}, {"held", held}});
+	}
+	Vector aim, oldAim;
+	const bool hasAim = InputScript::AimAt(player, tick, aim);
+	const bool hadAim = InputScript::AimAt(player, previous, oldAim);
+	if (hasAim != hadAim || (hasAim && (aim.m_X != oldAim.m_X || aim.m_Y != oldAim.m_Y))) {
+		changes.push_back({{"action", "AIM_VECTOR"}, {"held", hasAim}, {"x", aim.m_X}, {"y", aim.m_Y}});
+	}
+	if (!changes.empty()) s_Feel.pending.push_back({{"type", "input"}, {"tick", tick}, {"wall_ms", wallMS},
+	    {"last_presented_frame", s_Feel.frameNumber}, {"player", player}, {"actor", FeelActor(actor)},
+	    {"delay", ScenarioRunner::GetLockstepLocalInputDelay()}, {"changes", std::move(changes)}});
+}
+
+void FrameMan::FeelPreviewStep(const Actor* actor, uint64_t committedTick, uint64_t predictedTick, double beginMS) {
+	if (!FeelRecordingEnabled() || !actor) return;
+	const double endMS = FeelNowMS();
+	FeelWrite({{"type", "preview"}, {"committed_tick", committedTick}, {"target_tick", predictedTick},
+	    {"wall_lower_ms", beginMS}, {"wall_upper_ms", endMS}, {"actor", FeelActor(actor)}});
+	FeelEvents(beginMS, endMS);
+}
+
+void FrameMan::FeelBeginIteration() {
+	if (!FeelRecordingEnabled()) return;
+	s_Feel.iterationActive = g_ActivityMan.ActivityRunning();
+	s_Feel.iterationBeginMS = FeelNowMS();
+	s_Feel.iterationCPUMS = FeelProcessCPUMS();
+}
+
+void FrameMan::FeelBeforePreview() {
+	if (!FeelRecordingEnabled()) return;
+	for (const auto& edge: s_Feel.pending) FeelWrite(edge);
+	s_Feel.pending.clear();
+	const double now = FeelNowMS();
+	FeelEvents(s_Feel.iterationBeginMS, now);
+	FeelWrite({{"type", "committed"}, {"tick", g_TimerMan.GetSimUpdateCount()}, {"wall_ms", now}, {"actors", FeelLocalActors()},
+	    {"scene_width", g_SceneMan.GetSceneWidth()}, {"scene_height", g_SceneMan.GetSceneHeight()},
+	    {"wraps_x", g_SceneMan.SceneWrapsX()}, {"wraps_y", g_SceneMan.SceneWrapsY()}});
+}
+
+void FrameMan::FeelBeginDraw() {
+	if (s_Feel.capHz > 0) {
+		const double now = FeelNowMS();
+		if (s_Feel.nextDrawMS > now) std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(s_Feel.nextDrawMS - now));
+		s_Feel.nextDrawMS = std::max(FeelNowMS(), s_Feel.nextDrawMS) + 1000.0 / s_Feel.capHz;
+	}
+	if (!FeelRecordingEnabled()) return;
+	s_Feel.drawBeginMS = FeelNowMS();
+	s_Feel.frame = {{"type", "frame"}, {"frame", s_Feel.frameNumber + 1}, {"tick", g_TimerMan.GetSimUpdateCount()},
+	    {"draw_begin_ms", s_Feel.drawBeginMS}, {"cap_hz", s_Feel.capHz}, {"active", s_Feel.iterationActive},
+	    {"alpha", g_TimerMan.GetSimUpdateProportion()}, {"actors", FeelLocalActors()}};
+	const int delay = LocalPrediction::GetDepthOverride() > 0 ? LocalPrediction::GetDepthOverride() : ScenarioRunner::GetLockstepLocalInputDelay();
+	s_Feel.frame["preview_depth"] = LocalPrediction::IsRendering() ? std::min(delay, std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks())) : 0;
+	s_Feel.frame["scene_width"] = g_SceneMan.GetSceneWidth();
+	s_Feel.frame["scene_height"] = g_SceneMan.GetSceneHeight();
+	s_Feel.frame["wraps_x"] = g_SceneMan.SceneWrapsX();
+	s_Feel.frame["wraps_y"] = g_SceneMan.SceneWrapsY();
+}
+
+void FrameMan::FeelBeforePresent() {
+	if (!FeelRecordingEnabled()) return;
+	s_Feel.presentBeginMS = FeelNowMS();
+}
+
+void FrameMan::FeelAfterPresent() {
+	if (!FeelRecordingEnabled()) return;
+	const double now = FeelNowMS();
+	++s_Feel.frameNumber;
+	s_Feel.frame["present_begin_ms"] = s_Feel.presentBeginMS;
+	s_Feel.frame["present_end_ms"] = now;
+	s_Feel.frame["draw_ms"] = s_Feel.presentBeginMS - s_Feel.drawBeginMS;
+	s_Feel.frame["present_ms"] = now - s_Feel.presentBeginMS;
+	s_Feel.frame["interval_ms"] = now - (s_Feel.lastPresentMS > 0 ? s_Feel.lastPresentMS : s_Feel.iterationBeginMS);
+	s_Feel.frame["cpu_ms"] = FeelProcessCPUMS();
+	s_Feel.frame["local_prediction"] = {{"previews", LocalPrediction::GetPreviewCount()}, {"ms_total", LocalPrediction::GetPreviewMs()},
+	    {"violations", LocalPrediction::GetViolations()}, {"events_started", PreviewEventLedger::GetEventStartCount()},
+	    {"events_retained", PreviewEventLedger::GetEventStarts().size()}, {"played", PreviewEventLedger::GetCounters().playedAtPreview},
+	    {"adopted", PreviewEventLedger::GetCounters().adoptedAtCommit}, {"expired", PreviewEventLedger::GetCounters().expired}};
+	s_Feel.frame["delay"] = ScenarioRunner::GetLockstepLocalInputDelay();
+	s_Feel.frame["input_delay_text"] = g_NetMatchService.GetInputDelayText();
+	s_Feel.frame["peer"] = ScenarioRunner::GetLockstepLocalPeerId();
+	const auto lobby = g_NetMatchService.GetLobbySnapshot();
+	s_Feel.frame["rtt"] = FeelJson::array();
+	for (const auto& member: lobby.members) s_Feel.frame["rtt"].push_back({{"peer", member.peerId}, {"local", member.isLocal}, {"ping_ms", member.pingMs}});
+	FeelWrite(s_Feel.frame);
+	s_Feel.lastPresentMS = now;
+	const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	if (s_Feel.iterationActive && tick >= s_Feel.nextCaptureTick) {
+		const auto name = std::filesystem::path(s_Feel.directory) / ("frame-" + std::to_string(s_Feel.nextCaptureTick) + ".png");
+		SaveScreenToBitmap();
+		const bool saved = m_ScreenDumpBuffer && IMG_SavePNG(m_ScreenDumpBuffer.get(), name.string().c_str());
+		FeelWrite({{"type", "capture"}, {"requested_tick", s_Feel.nextCaptureTick}, {"tick", tick}, {"frame", s_Feel.frameNumber},
+		    {"path", name.generic_string()}, {"saved", saved}, {"capture_ms", FeelNowMS() - now}});
+		s_Feel.nextCaptureTick += 60;
+	}
+}
+
+void FrameMan::FeelEndIteration(uint64_t ticks, long long simUS, long long updateUS, long long drawUS) {
+	if (!FeelRecordingEnabled()) return;
+	FeelWrite({{"type", "iteration"}, {"tick", g_TimerMan.GetSimUpdateCount()}, {"active", s_Feel.iterationActive && g_ActivityMan.ActivityRunning()},
+	    {"begin_ms", s_Feel.iterationBeginMS}, {"end_ms", FeelNowMS()}, {"cpu_begin_ms", s_Feel.iterationCPUMS}, {"cpu_end_ms", FeelProcessCPUMS()},
+	    {"pace_sim_ticks", ticks}, {"pace_sim_us", simUS}, {"pace_update_us", updateUS}, {"pace_draw_us", drawUS}});
+	s_Feel.out.flush();
+}
+
+void FrameMan::FeelFinish() {
+	if (!FeelRecordingEnabled()) return;
+	for (const auto& edge: s_Feel.pending) FeelWrite(edge);
+	s_Feel.pending.clear();
+	FeelWrite({{"type", "end"}, {"wall_ms", FeelNowMS()}, {"cpu_ms", FeelProcessCPUMS()}, {"frames", s_Feel.frameNumber}});
+	s_Feel.out.close();
+}
 
 void BitmapDeleter::operator()(BITMAP* bitmap) const { destroy_bitmap(bitmap); }
 void SurfaceDeleter::operator()(SDL_Surface* surface) const { SDL_DestroySurface(surface); }

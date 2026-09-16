@@ -11,6 +11,7 @@
 #include "Controller.h"
 #include "ControllerFrame.h"
 #include "FaultInjection.h"
+#include "FrameMan.h"
 #include "HDFirearm.h"
 #include "LuaMan.h"
 #include "MOSRotating.h"
@@ -219,6 +220,7 @@ namespace RTE {
 			g_MovableMan.TravelSpeculativeSpawns();
 			for (Preview& preview: targets) {
 				Actor* clone = preview.clone;
+				const double feelStepBeginMS = FrameMan::FeelClockMS();
 				// The same stages in the same order as the world update: travel, pre-controller, wire, update, post.
 				MovableMan::TravelStage(clone, true);
 				Trace("traveled");
@@ -248,6 +250,7 @@ namespace RTE {
 					std::cout << std::endl;
 				}
 				MovableMan::PostUpdateStage(clone);
+				FrameMan::FeelPreviewStep(clone, static_cast<uint64_t>(simCount), tick, feelStepBeginMS);
 			}
 			g_MovableMan.HarvestSpeculativeSpawns();
 		}
