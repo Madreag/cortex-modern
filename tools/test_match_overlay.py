@@ -339,8 +339,9 @@ def probe_script(who, size, arm, mode):
                 {"op": "wait", "control": TOAST, "equals": {"visible": True}},
                 label_assert(TOAST, PAUSED),
                 # The panel's top band reserves one toast row: on a compact screen the stack shows
-                # the newest toast only, and every overlay rect stays inside the window.
-                {"op": "assert_net_ui_clear", "match": True},
+                # the newest toast only, and every overlay rect stays inside the window. An Off
+                # match has no status widget to clear, so the step says so instead of faking one.
+                {"op": "assert_net_ui_clear", "match": True, "status": wanted(True)},
                 {"op": "screenshot_pair", "name": f"f6-toast-{mode}-host", "widget": wanted(True)},
                 {"op": "key_down", "key": "P", "sim_at": 480}, {"op": "key_up", "key": "P", "sim_at": 481},
                 {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
