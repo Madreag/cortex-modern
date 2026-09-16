@@ -4682,7 +4682,12 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			fixture->m_IsActive[0] = fixture->m_IsHuman[0] = true;
 			fixture->m_Team[0] = 0;
 			fixture->m_PlayerScreen[0] = 0;
+			fixture->ForceSetTeamAsActive(0);
 			fixture->m_Brain[0] = actor;
+			actor->SetToGetHitByMOs(true);
+			g_SceneMan.EnsureMOIDGrid();
+			g_MovableMan.AbsorbAddedMOs();
+			g_MovableMan.UpdateDrawMOIDs();
 			actor->SetHealth(actor->GetHealth() - 40.0F);
 			const Vector head = actor->GetAboveHeadPos();
 			const auto runAtCamera = [&](const Vector& offset) {
@@ -4712,7 +4717,8 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			check("shared_intensity_uses_damage_box", hostIntensity != "-0.5" && clientIntensity != "-0.5",
 				hostIntensity + "/" + clientIntensity, "not -0.5");
 			check("shared_intensity_peers_match", hostIntensity == clientIntensity, clientIntensity, hostIntensity);
-			check("shared_intensity_is_saved", hostIntensity.find("Camera") == std::string::npos);
+			check("shared_intensity_is_saved", hostIntensity.find("Camera") == std::string::npos,
+				hostIntensity, "saved intensity");
 			check("shared_objective_uses_above_head", !fixture->m_Objectives.empty() && fixture->m_Objectives.front().m_ScenePos == head,
 				fixture->m_Objectives.empty() ? "none" : std::to_string(fixture->m_Objectives.front().m_ScenePos.m_X),
 				std::to_string(head.m_X));

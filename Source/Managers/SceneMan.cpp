@@ -592,6 +592,13 @@ void SceneMan::ClearAllMOIDDrawings() {
 	m_MOIDsGrid.Reset();
 }
 
+void SceneMan::EnsureMOIDGrid(int width, int height, int cellSize) {
+	if (GetSceneWidth() > 0 && GetSceneHeight() > 0) {
+		return;
+	}
+	m_MOIDsGrid = SpatialPartitionGrid(width, height, cellSize);
+}
+
 void SceneMan::FeedTerrainToSimChecksum() {
 	// Heavy (full-bitmap) — only run it during a determinism trace, not normal play.
 	if (!g_SimChecksum.IsActive() || !m_pCurrentScene) {
