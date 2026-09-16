@@ -47,9 +47,9 @@ CASES = (
     },
     {
         "name": "ordinary-live-join-names-failure",
-        "argv": ["-net-world-live-selftest"],
+        "argv": ["-net-world-ordinary-live-selftest"],
         "red": RED_ORDINARY_JOIN_ACCEPTED,
-        "pass_token": "[net-world-live-selftest] PASS",
+        "pass_token": "[net-world-ordinary-live-selftest] PASS",
     },
     {
         "name": "clean-leave-world-keeps-ticking",
