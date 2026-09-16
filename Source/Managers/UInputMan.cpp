@@ -1816,6 +1816,7 @@ bool UInputMan::RunScriptedInputEdgeSelfTest() {
 }
 
 bool UInputMan::RunScriptedPadSeatSelfTest() {
+	// Tip-only guard: Controller::Update needs a constructed MenuMan. The named RED is the match pad arm.
 	bool passed = true;
 	const auto check = [&passed](const char* name, bool valid) {
 		passed = valid && passed;
