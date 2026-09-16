@@ -497,12 +497,10 @@ void AudioMan::RegisterSoundEvent(int player, NetworkSoundState state, const Sou
 				if (!OwnsVoice(playingChannel, soundContainer)) continue;
 				FMOD::Channel* soundChannel;
 				result = GetVoiceChannel(playingChannel, &soundChannel);
+				if (result != FMOD_OK || !soundChannel) continue;
 				FMOD::Sound* sound;
-				result = (result == FMOD_OK) ? soundChannel->getCurrentSound(&sound) : result;
-
-				if (result != FMOD_OK) {
-					continue;
-				}
+				result = soundChannel->getCurrentSound(&sound);
+				if (result != FMOD_OK) continue;
 				NetworkSoundData soundData{};
 				soundData.State = state;
 				soundData.SoundFileHash = soundContainer->GetSoundDataForSound(sound)->SoundFile.GetHash();
@@ -769,7 +767,8 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsPosition(const SoundContainer*
 	for (int channelIndex: *playingChannels) {
 		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		result = GetVoiceChannel(channelIndex, &soundChannel);
-		result = (result == FMOD_OK) ? soundChannel->getCurrentSound(&sound) : result;
+		if (result != FMOD_OK || !soundChannel) { result = FMOD_OK; continue; }
+		result = soundChannel->getCurrentSound(&sound);
 		const SoundData* soundData = soundContainer->GetSoundDataForSound(sound);
 
 		FMOD_VECTOR soundPosition = GetAsFMODVector(soundContainer->GetPosition() + ((soundData == nullptr) ? Vector() : soundData->Offset));
@@ -824,7 +823,8 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsVolume(const SoundContainer* s
 	for (int channelIndex: *playingChannels) {
 		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		result = GetVoiceChannel(channelIndex, &soundChannel);
-		result = result == FMOD_OK ? soundChannel->getVolume(&soundChannelCurrentVolume) : result;
+		if (result != FMOD_OK || !soundChannel) { result = FMOD_OK; continue; }
+		result = soundChannel->getVolume(&soundChannelCurrentVolume);
 
 		if (newVolume == 0.0F) {
 			result = result == FMOD_OK ? soundChannel->setMute(true) : result;
@@ -859,7 +859,8 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsPitch(const SoundContainer* so
 			found->second.lifetime.pitch = soundContainer->GetPitch();
 		}
 		result = GetVoiceChannel(channelIndex, &soundChannel);
-		result = result == FMOD_OK ? soundChannel->setPitch(soundContainer->GetPitch()) : result;
+		if (result != FMOD_OK || !soundChannel) { result = FMOD_OK; continue; }
+		result = soundChannel->setPitch(soundContainer->GetPitch());
 		if (result != FMOD_OK) {
 			g_ConsoleMan.PrintString("ERROR: Could not update sound pitch for the sound being played on channel " + std::to_string(channelIndex) + " for SoundContainer " + soundContainer->GetPresetName() + ": " + std::string(FMOD_ErrorString(result)));
 		}
@@ -882,7 +883,8 @@ bool AudioMan::ChangeSoundContainerPlayingChannelsCustomPanValue(const SoundCont
 	for (int channelIndex: *playingChannels) {
 		if (!VoiceMatchesContext(channelIndex, soundContainer)) continue;
 		result = GetVoiceChannel(channelIndex, &soundChannel);
-		result = result == FMOD_OK ? soundChannel->setPan(soundContainer->GetCustomPanValue()) : result;
+		if (result != FMOD_OK || !soundChannel) { result = FMOD_OK; continue; }
+		result = soundChannel->setPan(soundContainer->GetCustomPanValue());
 		if (result != FMOD_OK) {
 			g_ConsoleMan.PrintString("ERROR: Could not update sound custom pan value for the sound being played on channel " + std::to_string(channelIndex) + " for SoundContainer " + soundContainer->GetPresetName() + ": " + std::string(FMOD_ErrorString(result)));
 		}
@@ -912,11 +914,14 @@ bool AudioMan::StopSoundContainerPlayingChannels(SoundContainer* soundContainer,
 		++channelIterator; // NOTE - stopping the sound will remove the channel, screwing things up if we don't move to the next iterator preemptively
 		if (!VoiceMatchesContext(identity, soundContainer)) continue;
 		result = GetVoiceChannel(identity, &soundChannel);
-		if (result == FMOD_OK && soundChannel) {
-			soundChannel->setCallback(nullptr);
-			soundChannel->setUserData(nullptr);
-			result = soundChannel->stop();
+		if (result != FMOD_OK || !soundChannel) {
+			result = FMOD_OK;
+			RetireVoice(identity);
+			continue;
 		}
+		soundChannel->setCallback(nullptr);
+		soundChannel->setUserData(nullptr);
+		result = soundChannel->stop();
 		if (result != FMOD_OK) {
 			g_ConsoleMan.PrintString("Error: Failed to stop playing channel in SoundContainer " + soundContainer->GetPresetName() + ": " + std::string(FMOD_ErrorString(result)));
 		}
@@ -953,7 +958,7 @@ void AudioMan::FadeOutSoundContainerPlayingChannels(SoundContainer* soundContain
 	m_AudioSystem->getSoftwareFormat(&sampleRate, nullptr, nullptr);
 	int fadeOutTimeAsSamples = fadeOutTime * sampleRate / 1000;
 
-	FMOD_RESULT result;
+	FMOD_RESULT result = FMOD_OK;
 	FMOD::Channel* soundChannel;
 	unsigned long long parentClock;
 	float currentVolume;
@@ -962,7 +967,8 @@ void AudioMan::FadeOutSoundContainerPlayingChannels(SoundContainer* soundContain
 	for (int channel: channels) {
 		if (!VoiceMatchesContext(channel, soundContainer)) continue;
 		result = GetVoiceChannel(channel, &soundChannel);
-		result = (result == FMOD_OK) ? soundChannel->getDSPClock(nullptr, &parentClock) : result;
+		if (result != FMOD_OK || !soundChannel) { result = FMOD_OK; continue; }
+		result = soundChannel->getDSPClock(nullptr, &parentClock);
 		result = (result == FMOD_OK) ? soundChannel->getVolume(&currentVolume) : result;
 		result = (result == FMOD_OK) ? soundChannel->addFadePoint(parentClock, currentVolume) : result;
 		result = (result == FMOD_OK) ? soundChannel->addFadePoint(parentClock + fadeOutTimeAsSamples, 0) : result;
@@ -985,7 +991,8 @@ void AudioMan::SetPausedSoundContainerPlayingChannels(SoundContainer* soundConta
 			found->second.lifetime.paused = paused;
 		}
 		result = GetVoiceChannel(channelIndex, &soundChannel);
-		result = (result == FMOD_OK) ? soundChannel->setPaused(paused) : result;
+		if (result != FMOD_OK || !soundChannel) { result = FMOD_OK; continue; }
+		result = soundChannel->setPaused(paused);
 		if (result != FMOD_OK) {
 			g_ConsoleMan.PrintString("ERROR: Could not set pausedness for SoundContainer " + soundContainer->GetPresetName() + ": " + std::string(FMOD_ErrorString(result)));
 		}
@@ -1552,6 +1559,7 @@ int AudioMan::FindVoiceIdentity(const FMOD::Channel* channel) const {
 FMOD_RESULT AudioMan::GetVoiceChannel(int voiceIdentity, FMOD::Channel** channel) const {
 	const auto found = m_PlayingVoices.find(voiceIdentity);
 	FMOD::Channel* live = found == m_PlayingVoices.end() ? nullptr : found->second.Channel();
+	// A mixer-ended voice stays mapped with a null channel.
 	if (!live) { *channel = nullptr; return FMOD_ERR_INVALID_HANDLE; }
 	*channel = live;
 	return FMOD_OK;
