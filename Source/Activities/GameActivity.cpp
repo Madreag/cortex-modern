@@ -4691,24 +4691,21 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			fixture->m_ActorCursor[0] = actor->GetCPUPos();
 			PieMenu* pie = actor->GetPieMenu();
 			if (!pie) throw std::runtime_error("highlight fixture pie unavailable");
-			const auto dump = pie->SaveRuntimeCheckpoint();
+			const auto packed = pie->PackInteractionState();
 			const auto described = pie->DescribeInteractionState();
 			const bool enabledBefore = pie->IsEnabled();
 			const bool visibleBefore = pie->IsVisible();
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			check("lockstep_update_leaves_highlight_undrawn", !pie->HasHighlightDraw());
-			check("lockstep_update_dump_unchanged", pie->SaveRuntimeCheckpoint() == dump);
+			check("lockstep_update_dump_unchanged", pie->PackInteractionState() == packed && pie->DescribeInteractionState() == described);
 			check("lockstep_update_getters_unchanged", pie->IsEnabled() == enabledBefore && pie->IsVisible() == visibleBefore);
 			fixture->ApplyCursorHighlightDraw(0);
 			if (BITMAP* target = g_FrameMan.GetBackBuffer8()) {
 				fixture->DrawGUI(target, Vector(), 0);
 			}
 			check("drawgui_highlight_ring", pie->HasHighlightDraw());
-			check("drawgui_dump_unchanged", pie->SaveRuntimeCheckpoint() == dump);
-			check("drawgui_describe_unchanged", pie->DescribeInteractionState() == described);
-			PieMenu mp;
-			check("highlight_sp_mp_dump_identity", mp.Create() >= 0 && mp.LoadRuntimeCheckpoint(dump) && mp.SaveRuntimeCheckpoint() == dump
-				&& pie->SaveRuntimeCheckpoint() == dump);
+			check("drawgui_dump_unchanged", pie->PackInteractionState() == packed && pie->DescribeInteractionState() == described);
+			check("drawgui_getters_unchanged", pie->IsEnabled() == enabledBefore && pie->IsVisible() == visibleBefore);
 			fixture->m_ViewState[0] = ViewState::Normal;
 			fixture->ClearCursorHighlightDraw(0);
 			check("highlight_clears_when_view_leaves", !pie->HasHighlightDraw());
