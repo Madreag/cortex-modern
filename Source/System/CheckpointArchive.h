@@ -7,7 +7,6 @@
 #include <array>
 #include <bit>
 #include <charconv>
-#include <cmath>
 #include <cstring>
 #include <deque>
 #include <functional>
@@ -153,7 +152,7 @@ namespace RTE {
 		void Value(Box& value) { Value(value.m_Corner); Value(value.m_Width); Value(value.m_Height); }
 		void Value(Timer& value) {
 			int64_t start, limit, realStart, realLimit;
-			ReadExactTicks(start); ReadExactTicks(limit); ReadExactTicks(realStart); ReadExactTicks(realLimit);
+			Value(start); Value(limit); Value(realStart); Value(realLimit);
 			value.SetStartSimTimeTicks(start); value.SetSimTimeLimitTicks(limit);
 			value.SetStartRealTimeTicks(realStart); value.SetRealTimeLimitTicks(realLimit);
 		}
@@ -192,26 +191,6 @@ namespace RTE {
 		std::string_view m_Text;
 		bool m_ValidateOnly;
 		std::vector<std::function<void()>> m_Apply;
-		void ReadExactTicks(int64_t& ticks) {
-			const size_t end = m_Text.find(' ');
-			if (end == std::string_view::npos) throw std::runtime_error("truncated runtime checkpoint timer");
-			const char* first = m_Text.data();
-			const char* last = first + end;
-			int64_t integer = 0;
-			const auto asInt = std::from_chars(first, last, integer);
-			if (asInt.ec == std::errc() && asInt.ptr == last) {
-				ticks = integer;
-				m_Text.remove_prefix(end + 1);
-				return;
-			}
-			double number = 0;
-			const auto asDouble = std::from_chars(first, last, number);
-			if (asDouble.ec != std::errc() || asDouble.ptr != last || std::trunc(number) != number) {
-				throw std::runtime_error("runtime checkpoint timer is not an exact integer");
-			}
-			ticks = static_cast<int64_t>(number);
-			m_Text.remove_prefix(end + 1);
-		}
 		size_t Count() {
 			size_t size = 0;
 			Value(size);
