@@ -17,7 +17,12 @@ EXTRA_STD_INCLUDES_AFTER = {
 
 OMIT_MEMBERS = {('RTE::GameActivity', 'm_RollbackDeliveries')}
 
-EXTRA_FIELDS = {}
+EXTRA_FIELDS = {
+    "ACraft": [
+        'Field(path + ".ACraft.m_OffWireHatchTick", object.m_OffWireHatchTick);',
+        'Field(path + ".ACraft.m_OffWireHatchOpen", object.m_OffWireHatchOpen);',
+    ],
+}
 
 EXTRA_VISITS_AFTER = {}
 
