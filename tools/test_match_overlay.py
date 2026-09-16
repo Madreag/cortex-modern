@@ -279,7 +279,7 @@ def probe_script(who, size, arm, mode):
             step["widget"] = visible
         return step
     status_reads = [label_assert(STATUS, "NET [F6]" if compact else "NET STATUS"),
-                    label_assert(STATUS, "D 3" if compact else "D 3 ticks / 50.0 ms"),
+                    label_assert(STATUS, "delay 3" if compact else "D 3 ticks / 50.0 ms"),
                     label_assert(STATUS, "RTT "),
                     label_assert(STATUS, "PACE ")]
     steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "sim_at_least": 60}]
