@@ -294,6 +294,8 @@ void AudioMan::Destroy() {
 }
 
 void AudioMan::Update() {
+	std::vector<std::shared_ptr<PlayingVoice::ChannelUserData>> releasing;
+	releasing.swap(m_RetiredHandles);
 	DrainEndedVoices();
 	RetireFinishedPlayingVoices();
 	StartAwaitingSampleVoices();
@@ -792,7 +794,8 @@ float AudioMan::GetSoundContainerAudibleVolume(const SoundContainer* soundContai
 	for (int channel: channels) {
 		if (!VoiceMatchesContext(channel, soundContainer)) continue;
 		result = GetVoiceChannel(channel, &soundChannel);
-		result = (result == FMOD_OK) ? soundChannel->getAudibility(&audibleVolume) : result;
+		if (result != FMOD_OK || !soundChannel) continue;
+		result = soundChannel->getAudibility(&audibleVolume);
 
 		if (result != FMOD_OK) {
 			g_ConsoleMan.PrintString("ERROR: Could not get sound audible volume in SoundContainer " + soundContainer->GetPresetName() + ": " + std::string(FMOD_ErrorString(result)));
@@ -927,7 +930,7 @@ void AudioMan::DisownSoundContainerPlayingChannels(const SoundContainer* soundCo
 	for (auto& [identity, voice]: m_PlayingVoices) {
 		if (voice.owner != soundContainer) continue;
 		voice.owner = nullptr;
-		if (FMOD::Channel* channel = voice.Channel()) channel->setUserData(nullptr);
+		if (voice.handle) voice.handle->owner = nullptr;
 	}
 }
 
@@ -1529,7 +1532,7 @@ void AudioMan::RetirePredictedVoice(int identity) {
 	if (still == m_PlayingVoices.end()) return;
 	// Still a prediction while it finishes: unowned and on this machine only, so no checkpoint captures it.
 	still->second.owner = nullptr;
-	if (FMOD::Channel* leftover = still->second.Channel()) leftover->setUserData(nullptr);
+	if (still->second.handle) still->second.handle->owner = nullptr;
 }
 
 bool AudioMan::IsPredictedVoice(int identity) const {
@@ -1761,7 +1764,7 @@ void AudioMan::EraseBackendIdentity(int identity) {
 
 FMOD_RESULT AudioMan::BindPlayingVoiceUserData(FMOD::Channel* channel, PlayingVoice& voice, int identity) {
 	voice.BindUserData(identity);
-	return channel ? channel->setUserData(&voice.userData) : FMOD_OK;
+	return channel ? channel->setUserData(voice.handle.get()) : FMOD_OK;
 }
 
 void AudioMan::RetireVoice(int identity) {
@@ -1769,6 +1772,7 @@ void AudioMan::RetireVoice(int identity) {
 	if (found == m_PlayingVoices.end()) return;
 	if (found->second.owner) found->second.owner->RemovePlayingChannel(identity);
 	EraseBackendIdentity(identity);
+	if (found->second.handle) m_RetiredHandles.push_back(std::move(found->second.handle));
 	m_PlayingVoices.erase(found);
 	m_SoundChannelMinimumAudibleDistances.erase(identity);
 	s_AwaitingSampleVoices.erase(identity);
@@ -1782,16 +1786,16 @@ void AudioMan::ReleaseVoiceChannel(int identity) {
 }
 
 void AudioMan::ReleaseEndedChannel(FMOD::Channel* channel) {
-	// The mixer thread holds only this channel's user-data handle; it never walks the voice map.
+	// The mixer thread holds only this channel's heap handle; it never walks the voice map.
 	if (!channel) return;
 	void* raw = nullptr;
 	if (channel->getUserData(&raw) != FMOD_OK || !raw) return;
 	auto* handle = static_cast<PlayingVoice::ChannelUserData*>(raw);
-	if (!handle->channel) return;
+	const int identity = handle->identity;
 	FMOD::Channel* expected = channel;
-	if (!handle->channel->compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel, std::memory_order_acquire)) return;
+	if (!handle->channel.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel, std::memory_order_acquire)) return;
 	std::lock_guard<std::mutex> lock(m_EndedVoicesMutex);
-	m_EndedVoices.push_back(handle->identity);
+	m_EndedVoices.push_back(identity);
 }
 
 void AudioMan::DrainEndedVoices() {
