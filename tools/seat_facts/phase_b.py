@@ -268,7 +268,7 @@ def pair_arms(root, reference=False):
                  for number, peer in enumerate(("host", "client"), 1)]
         if not all(path.is_file() for path in saves):
             raise RuntimeError("missing pair snapshot for world compare: " + arm)
-        invoke(HERE / "check_world.py", [*saves, "--out", root / arm / "world-result.json", *(["--damage"] if arm == "damage" else [])], root / (arm + "_world.log"))
+        invoke(HERE / "check_world.py", [*saves, "--out", root / arm / "world-result.json", *(["--damage"] if arm == "damage" else [])], root / (arm + "_world.log"), require_zero=True)
 
 
 def cpu_arms(root):
