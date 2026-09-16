@@ -293,6 +293,10 @@ namespace RTE {
 		/// The seat-presence plane — where dropped seats get their reclaim-hold marks.
 		const NetSeatPresence& GetSeatPresence() const { return m_SeatPresence; }
 		NetH4ModerationResult ApplyModeration(const NetModerationSelection& selection, NetModerationAction action);
+		/// Host: close this holder without a reclaim hold. L20 calls this after the confirmation.
+		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action);
+		NetKickBanResult GetLastKickBanResult() const;
+		NetParticipantRemovalIssue GetLastRemovalIssue() const;
 
 		/// Re-enters the match this process was dropped from, using the stored recovery record.
 		bool BeginTicketRejoin(std::string* error = nullptr);
@@ -549,6 +553,8 @@ namespace RTE {
 		uint32_t m_RosterTransitionsDropped = 0;
 		std::map<uint8_t, std::pair<std::string, std::string>> m_LastRosterPair;
 		std::vector<NetH4ModerationSeat> m_ModerationSeats; //!< Immutable UI copy while a setup/resync worker owns the plane.
+		NetKickBanResult m_LastKickBanResult = NetKickBanResult::NotHosting;
+		NetParticipantRemovalIssue m_LastRemovalIssue;
 		bool m_AdmissionAttached = false;
 		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.

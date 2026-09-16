@@ -128,6 +128,8 @@ namespace RTE {
 		void NotePeerTraffic(NetPeerId peerId, uint64_t nowMs);
 		/// Refuses one Ready client without ending the host's session.
 		void DisconnectReadyPeer(NetPeerId peerId, NetRejectReason reason, const std::string& message);
+		/// Host: one control payload to every active far peer. Kick/Ban notices ride this.
+		void BroadcastControl(const NetPayload& payload);
 		/// Feeds one transport event when another phase owns the queue (a reconnect handshake the
 		/// lockstep coordinator hands over mid-match).
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs);

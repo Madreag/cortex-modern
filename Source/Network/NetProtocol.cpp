@@ -1147,6 +1147,7 @@ namespace RTE {
 			case NetMessageType::ApplicantAck:
 			case NetMessageType::SubstitutionOffer:
 			case NetMessageType::SubstitutionAck:
+			case NetMessageType::ParticipantRemoval:
 				return true;
 			default:
 				return false;

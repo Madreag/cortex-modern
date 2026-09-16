@@ -214,6 +214,17 @@ namespace RTE {
 		RefreshHostState();
 	}
 
+	void NetSession::BroadcastControl(const NetPayload& payload) {
+		if (m_Role != NetSessionRole::Host) {
+			return;
+		}
+		for (const PeerState& peer : m_Peers) {
+			if (IsActive(peer.state)) {
+				Send(peer.transportPeerId, payload);
+			}
+		}
+	}
+
 	void NetSession::InjectEvent(const NetTransportEvent& event, uint64_t nowMs) {
 		m_NowMs = std::max(m_NowMs, nowMs);
 		if (!m_Transport || m_State == NetSessionState::Stopped || m_State == NetSessionState::Closed ||
@@ -1121,6 +1132,10 @@ namespace RTE {
 			if (m_ReconnectClient && disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::SessionEnded)) {
 				// The one signal, other than a LeaveAck, that lets the recovery record be deleted.
 				m_ReconnectClient->NotifyConfirmedSessionEnd();
+			}
+			if (m_ReconnectClient && (disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantRemoved) ||
+			                          disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantBanned))) {
+				m_ReconnectClient->NotifyParticipantRemoved(static_cast<NetRejectReason>(disconnect->disconnectReason));
 			}
 			if (m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
 				if (!m_HasReject && !disconnect->message.empty()) {

@@ -636,6 +636,8 @@ namespace RTE {
 		NetLockstepHoldResolution HeldSeatResolution(uint8_t peerId) const;
 		/// Host: end one held seat and tell every peer at the held frame.
 		void ResolveHeldSeat(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs);
+		/// Host: remove one remote as a clean leave. A held seat expires; a live seat never opens a hold.
+		void EvictRemovedPeer(uint8_t peerId, const std::string& message, uint64_t nowMs);
 		uint64_t HoldPauseRemainingMs(uint64_t nowMs) const;
 		std::string DescribeHeldPause(uint32_t& secondsLeft, uint64_t nowMs) const;
 		/// Publishes one complete current view. Refused sends retry the latest view without growing a queue.
