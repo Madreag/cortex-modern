@@ -3,8 +3,10 @@
 The atlas is 16 glyphs per row from U+0020, a red separator at (0, 0) and
 on each glyph's scanline, colour-key at top-right. Width is the run to the
 next red minus one. This tool keeps 0x20-0x7F cells byte-identical and
-fills 0x80-0xFF. Cells whose ink uses colours the ASCII glyphs do not
-(FontLarge HUD icons) stay as they are.
+fills 0x80-0xFF, except the engine HUD-icon indexes listed below. Those
+cells stay as they are; the generator refuses to emit if any of them
+would change. Names use FontSmall through GlyphFontFor (GUIFont.cpp:143),
+so FontLarge HUD cells are not the letter atlas.
 """
 
 from __future__ import annotations
@@ -28,8 +30,50 @@ ASCII_END = 128
 ROW_COUNT = 16
 FIRST = 32
 
-# Printable cp1252 in 0x80-0x9F; the four unused slots stay empty.
+# Printable cp1252 in 0x80-0x9F; the unused slots stay empty.
 CP1252_UNUSED = frozenset({0x81, 0x8D, 0x8F, 0x90, 0x9D})
+
+# Signed-char HUD indexes the engine draws (unsigned = signed + 256).
+# FontSmall: GetSmallFont() on Skins/FontSmall.png, and the matching cells
+# on Menus/FontSmall.png (the two files ship the same icons).
+#   0xCF  AHuman.cpp:3672  -49 pickup prefix
+#   0xD5  DataModule.cpp:57,122  -43 via LoadingScreen.cpp:139
+#   0xD6  Reader.cpp:550  -42 via LoadingScreen.cpp:139
+FONT_SMALL_HUD = frozenset({0xCF, 0xD5, 0xD6})
+# FontLarge: GetLargeFont() and TitleScreen's Menus/FontLarge.png.
+#   0xC2  GameActivity.cpp:2824  -62 team-one (commented draw; cell is the icon)
+#   0xC5  GameActivity.cpp:2824  -59 team-two
+#   0xC6  Actor.cpp:2707 / GameActivity.cpp:2820 / Metagame / Scenario  -58 gold
+#   0xC7  Actor.cpp:2707 / GameActivity.cpp:2820  -57 gold-picked
+#   0xC8  AHuman.cpp:3551 / ACrab.cpp:1662  -56 ammo
+#   0xCF  AHuman.cpp:3563  -49 hand trio
+#   0xD0  MetagameGUI.cpp:536  -48 brain
+#   0xD1  MetagameGUI.cpp:4576  -47
+#   0xD2  MetagameGUI.cpp:4576  -46
+#   0xD6  HeldDevice.cpp:546  -42 pickup arrow
+#   0xD7  HeldDevice.cpp:549  -41
+#   0xD8  HeldDevice.cpp:552  -40
+#   0xD9  Actor.cpp:2695 / MetagameGUI.cpp:5508  -39 death
+#   0xDB  AHuman.cpp:3563  -37 hand
+#   0xDC  MetagameGUI.cpp:5170  -36
+#   0xDD  TitleScreen.cpp:562  -35 copyright on Menus/FontLarge
+#   0xE1..0xE7  AHuman.cpp:3633 / ACrab.cpp:1676  jet -31..-25
+#   0xEA  MetagameGUI.cpp:458  -22 menu
+FONT_LARGE_HUD = frozenset({
+    0xC2, 0xC5, 0xC6, 0xC7, 0xC8, 0xCF,
+    0xD0, 0xD1, 0xD2, 0xD6, 0xD7, 0xD8, 0xD9,
+    0xDB, 0xDC, 0xDD,
+    0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xEA,
+})
+
+
+def hud_keep_set(path):
+    name = Path(path).name
+    if name == "FontSmall.png":
+        return FONT_SMALL_HUD
+    if name == "FontLarge.png":
+        return FONT_LARGE_HUD
+    return frozenset()
 
 # Accented letters: compose from the font's own base + a diacritic.
 ACCENTED = {
@@ -225,12 +269,8 @@ def style_of(font):
     }
 
 
-def is_hud(cell, font, style):
-    # FontLarge stores HUD icons in high cells; FontSmall's leftovers are placeholders.
-    if "FontLarge" not in font["path"].name:
-        return False
-    extra = ink_colors(cell, font["red"], font["bg"]) - style["ascii_colors"]
-    return bool(extra)
+def is_hud(code, font):
+    return code in hud_keep_set(font["path"])
 
 
 def empty_cell(font, width):
@@ -311,7 +351,12 @@ def mark_points(kind, width, band, thick):
         gap = 2 if width >= 4 else 1
         return [(0, top), (min(width - 1, gap + 1), top)]
     if kind == "ring":
-        return [(mid, top), (max(0, mid - 1), top + 1), (min(width - 1, mid + 1), top + 1)]
+        # Closed 2x2 loop in the accent band, not the circumflex chevron.
+        left = max(0, mid - 1)
+        right = min(width - 1, left + 1)
+        if right == left and left + 1 < width:
+            right = left + 1
+        return [(left, top), (right, top), (left, top + 1), (right, top + 1)]
     if kind == "macron":
         return [(x, top) for x in range(min(width, 3 if width < 5 else width - 1))]
     if kind == "cedilla":
@@ -362,6 +407,25 @@ def add_bar(cell, style, font, y):
     for x in range(cell.width):
         put_hi(cell, x, y, style, font)
     return cell
+
+
+def compose_circled(font, letter):
+    """O's ring around a C or R, so ©/® are not a bare letter."""
+    ring = copy_cell(font, "O")
+    mark = copy_cell(font, letter)
+    width = max(ring.width, mark.width)
+    out = empty_cell(font, width)
+    blit(out, ring, max(0, (width - ring.width) // 2), 0, font)
+    mx = max(1, (width - max(1, mark.width - 2)) // 2)
+    for y in range(1, len(mark.rows) - 1):
+        for x in range(1, mark.width - 1):
+            pixel = mark.rows[y][x]
+            if pixel == font["bg"] or pixel == font["red"]:
+                continue
+            tx = mx + (x - 1)
+            if 0 <= tx < out.width:
+                out.rows[y][tx] = pixel
+    return out
 
 
 def special(font, style, code):
@@ -463,9 +527,9 @@ def special(font, style, code):
         put_hi(cell, 0, style["base"], style, font)
         return cell
     if code == 0xA9:
-        return copy_cell(font, "C")
+        return compose_circled(font, "C")
     if code == 0xAE:
-        return copy_cell(font, "R")
+        return compose_circled(font, "R")
     if code == 0x99:
         return hcombine(font, "T", "M", 2)
     if code == 0xAA:
@@ -583,7 +647,7 @@ def plan_high(font, style):
             uncovered.append(code)
             continue
         cell = font["cells"][code]
-        if is_hud(cell, font, style):
+        if is_hud(code, font):
             planned[code] = cell.copy()
             bases[code] = "HUD"
             kept.append(code)
@@ -661,15 +725,14 @@ def cell_pixels(cell):
     return tuple(tuple(row) for row in cell.rows)
 
 
-def refuse_if_ascii_changed(font, rebuilt):
-    for code in range(FIRST, ASCII_END):
-        if code not in font["cells"] or code not in rebuilt:
-            raise RuntimeError(f"ASCII cell U+{code:02X} missing after emit")
-        if cell_pixels(font["cells"][code]) != cell_pixels(rebuilt[code]):
-            raise RuntimeError(f"refusing emit: ASCII cell U+{code:02X} changed")
-    font_h = font["font_h"]
-    src = font["rgba"]
-    return font_h
+def refuse_if_hud_changed(original_cells, rebuilt_cells, keep, path):
+    for code in sorted(keep):
+        if code not in original_cells:
+            raise RuntimeError(f"{path}: HUD cell U+{code:02X} missing in source")
+        if code not in rebuilt_cells:
+            raise RuntimeError(f"{path}: HUD cell U+{code:02X} missing after emit")
+        if cell_pixels(original_cells[code]) != cell_pixels(rebuilt_cells[code]):
+            raise RuntimeError(f"refusing emit: HUD cell U+{code:02X} would change")
 
 
 def quantize_like(original, rgba):
@@ -723,17 +786,19 @@ def extend_one(path):
     font = parse_font(path)
     style = style_of(font)
     planned, bases, kept, uncovered = plan_high(font, style)
+    keep = hud_keep_set(path)
+    refuse_if_hud_changed(font["cells"], planned, keep, path)
     canvas, cells = emit_atlas(font, planned)
-    refuse_if_ascii_changed(font, cells)
     written = quantize_like(font["original"], canvas)
     save_png(written, path)
-    parse_rebuilt(path, font["cells"], font["rgba"], font["font_h"])
+    again = parse_rebuilt(path, font["cells"], font["rgba"], font["font_h"])
+    refuse_if_hud_changed(font["cells"], again["cells"], keep, path)
     return {
         "path": path,
         "kept_hud": kept,
         "uncovered": uncovered,
         "bases": bases,
-        "font": parse_font(path),
+        "font": again,
         "style": style,
         "planned": {code: cells[code] for code in planned},
     }
@@ -751,7 +816,7 @@ def draw_contact(results, dest):
         if code in CP1252_UNUSED:
             continue
         new = font["cells"][code]
-        if is_hud(new, font, style):
+        if is_hud(code, font):
             continue
         if ink_count(new, red, bg) == 0 and code != 0xA0:
             continue
