@@ -783,8 +783,13 @@ namespace RTE {
 	}
 
 	bool NetReconnectHost::RefuseIfBanned(NetPeerId connection) {
+		if (m_BanStore == nullptr) {
+			return false;
+		}
 		NetAuthBytes32 id{};
-		if (m_BanStore == nullptr || !LookupParticipantId(connection, id) || !m_BanStore->IsBanned(id, m_HostSessionId)) {
+		const bool unknownPersistent = !m_BanStore->PersistentReady();
+		const bool knownBan = LookupParticipantId(connection, id) && m_BanStore->IsBanned(id, m_HostSessionId);
+		if (!unknownPersistent && !knownBan) {
 			return false;
 		}
 		Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "this identity is not admitted", "participant_identity", "", ""});
@@ -809,7 +814,7 @@ namespace RTE {
 		}), m_PendingReclaims.end());
 	}
 
-	NetKickBanResult NetReconnectHost::RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action, uint64_t nowMs, uint64_t sessionId, uint32_t round, uint64_t boundaryFrame, NetParticipantRemovalIssue& issued) {
+	NetKickBanResult NetReconnectHost::RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action, uint64_t nowMs, uint64_t unixNowMs, uint64_t sessionId, uint32_t round, uint64_t boundaryFrame, NetParticipantRemovalIssue& issued) {
 		issued = {};
 		m_NowMs = std::max(m_NowMs, nowMs);
 		SeatState* seat = FindSeat(selection.stableSeat);
@@ -845,11 +850,6 @@ namespace RTE {
 			if (m_BanStore == nullptr) {
 				return NetKickBanResult::ActionUnavailable;
 			}
-			const NetHostBanScope scope = action == NetParticipantRemovalAction::BanUntilRemoved ? NetHostBanScope::UntilRemoved : NetHostBanScope::Session;
-			std::string persistError;
-			if (!m_BanStore->Ban(issued.participantId, scope, "", "host ban", m_HostSessionId, nowMs, &persistError)) {
-				return NetKickBanResult::PersistenceFailed;
-			}
 		}
 		issued.notice.sessionId = sessionId;
 		issued.notice.round = round;
@@ -862,6 +862,13 @@ namespace RTE {
 		issued.notice.action = action;
 		if (!NetH4DrawTxId(issued.notice.txId)) {
 			return NetKickBanResult::ActionUnavailable;
+		}
+		if (action != NetParticipantRemovalAction::Kick) {
+			const NetHostBanScope scope = action == NetParticipantRemovalAction::BanUntilRemoved ? NetHostBanScope::UntilRemoved : NetHostBanScope::Session;
+			std::string persistError;
+			if (!m_BanStore->Ban(issued.participantId, scope, "", "host ban", m_HostSessionId, unixNowMs, &persistError)) {
+				return NetKickBanResult::PersistenceFailed;
+			}
 		}
 		if (issued.connection != c_InvalidNetPeerId) {
 			m_Admission.DropConnection(issued.connection);
@@ -2064,14 +2071,14 @@ namespace RTE {
 			NetParticipantRemovalBinding current;
 			if (m_HasRecord) {
 				current.sessionId = m_Record.hostSessionId;
-				current.round = notice->round;
+				current.round = m_Round;
 				current.epoch = m_Record.epoch;
 				current.stableSeat = m_Record.stableSeat;
 				current.holderGeneration = m_Record.holderGeneration;
 				current.incarnation = m_Incarnation;
 			} else {
 				current.sessionId = notice->sessionId;
-				current.round = notice->round;
+				current.round = m_Round;
 				current.epoch = notice->epoch;
 				current.stableSeat = notice->stableSeat;
 				current.holderGeneration = notice->holderGeneration;

@@ -122,7 +122,7 @@ namespace RTE {
 
 	const char* NetKickBanResultName(NetKickBanResult result);
 
-	/// What L20 reads after RemoveParticipant: the notice to show and the targeted transport.
+	/// The notice and targeted transport the host confirmation dialog reads after RemoveParticipant.
 	struct NetParticipantRemovalIssue {
 		NetParticipantRemoval notice;
 		NetPeerId connection = c_InvalidNetPeerId;
@@ -386,7 +386,7 @@ namespace RTE {
 		void SetBanStore(NetHostBanStore* store) { m_BanStore = store; }
 		void BindParticipantId(NetPeerId connection, const NetAuthBytes32& id);
 		/// Host: close this holder without a reclaim hold. Reuses the clean-leave seat close.
-		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action, uint64_t nowMs, uint64_t sessionId, uint32_t round, uint64_t boundaryFrame, NetParticipantRemovalIssue& issued);
+		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action, uint64_t nowMs, uint64_t unixNowMs, uint64_t sessionId, uint32_t round, uint64_t boundaryFrame, NetParticipantRemovalIssue& issued);
 		bool HasSubstitution(uint16_t stableSeat) const;
 		size_t GetApplicantCount() const { return m_Applicants.size(); }
 
@@ -628,6 +628,8 @@ namespace RTE {
 
 		void Configure(NetReconnectTicketStore* store, NetH4Identity identity, std::string displayName);
 		void SetUnixClock(uint64_t (*clock)(void*), void* context);
+		void SetRound(uint32_t round) { m_Round = round; }
+		uint32_t GetRound() const { return m_Round; }
 		/// Names the host this client is joining, so a stored record can be told from another host's and
 		/// the record it writes says where it came from.
 		void SetHostContext(std::string hostAddress, const NetHash32& matchConfigHash);
@@ -729,6 +731,7 @@ namespace RTE {
 		NetH4TicketRecord m_Record;
 		bool m_HasRecord = false;
 		uint32_t m_Incarnation = 0;
+		uint32_t m_Round = 0;
 		uint8_t m_AssignedPeerId = 0;
 		bool m_WantsLinkClosed = false;
 		bool m_Removed = false;
