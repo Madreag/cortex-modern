@@ -5023,8 +5023,10 @@ void LuaStateWrapper::ReportPreviewBarrierStats() {
 	row.precision(9);
 	row << "[preview-write-barrier] windows=" << stats.windows << " tables=" << stats.tables
 	    << " saves=" << stats.saves << " bytes=" << stats.bytes << " capture_ms=" << stats.capture_ms
-	    << " write_ms=" << stats.write_ms << " restore_ms=" << stats.restore_ms << " max_ms=" << stats.max_ms
-	    << " p99_ms=" << stats.p99_ms;
+	    << " write_ms=" << stats.write_ms << " restore_ms=" << stats.restore_ms << " max_ms=" << stats.max_ms;
+	if (std::isfinite(stats.p99_ms)) {
+		row << " p99_ms=" << stats.p99_ms;
+	}
 	std::cout << row.str() << std::endl;
 }
 

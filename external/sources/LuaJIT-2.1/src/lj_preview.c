@@ -2,6 +2,15 @@
 #define LUA_CORE
 
 #include <stdlib.h>
+#include <math.h>
+#ifndef NAN
+static double preview_nan(void)
+{
+  volatile double z = 0.0;
+  return z / z;
+}
+#define NAN preview_nan()
+#endif
 #include "lj_obj.h"
 #include "lj_gc.h"
 #include "lj_err.h"
@@ -139,9 +148,9 @@ static double preview_p99(LJPreview *p)
   double *sorted;
   double result;
   size_t at;
-  if (!p->nsamples) return 0.0;
+  if (!p->nsamples) return NAN;
   sorted = (double *)g->allocf(g->allocd, NULL, 0, p->nsamples*sizeof(double));
-  if (!sorted) return 0.0;
+  if (!sorted) return NAN;
   memcpy(sorted, p->samples, p->nsamples*sizeof(double));
   qsort(sorted, p->nsamples, sizeof(double), preview_by_ms);
   at = (p->nsamples*99 + 99)/100 - 1;  /* ceil(0.99*n)-1: the 99th percentile rank. */

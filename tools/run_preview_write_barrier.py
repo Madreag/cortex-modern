@@ -340,6 +340,8 @@ def assess_cost(red, green, scene, red_census, census):
     saves = sum(entry.get('saves', 0.0) for entry in native)
     tables = sum(entry.get('tables', 0.0) for entry in native)
     restore_us = restore['green']*1000.0/windows if windows else None
+    if windows > 0 and (saves == 0 or tables == 0 or restore_us is None):
+        ok = False
     return dict(scene=scene, red_ms=red['preview_ms'], green_ms=green['preview_ms'], delta_ms=delta,
                 native_max_ms_sum=maximum, native_p99_ms_sum=p99, actors=census, red_actors=red_census,
                 red_restore_ms=restore['red'], green_restore_ms=restore['green'],
