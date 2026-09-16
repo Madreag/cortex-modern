@@ -745,6 +745,12 @@ def inspect_pair(root, records, size, arm, mode, name):
             checks["Host_f6_toast_live"] = bool(toast_reads)
             checks["Host_f6_toast_clear_read"] = bool(clear_reads) and all(
                 read["toasts"]["visible"] and read["seats_panel"]["visible"] for read in clear_reads)
+            if size[1] < COMPACT_MAX_HEIGHT:
+                # The reserved band shows one toast row: a single-row rect, on screen, above the panel.
+                checks["Host_f6_toast_single_row"] = bool(clear_reads) and all(
+                    read["toasts"]["y"] >= 0 and read["toasts"]["h"] <= 22
+                    and read["toasts"]["y"] + read["toasts"]["h"] <= read["seats_panel"]["y"]
+                    for read in clear_reads)
     if not leaving:
         ok, compared = strict_compare(root / "Host_trace.json", root / "Guest_trace.json", expected_ticks=TICKS)
         checks["complete_peer_hashes"] = ok
