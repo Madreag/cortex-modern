@@ -1,6 +1,7 @@
 #pragma once
 
 #include "NetIdentity.h"
+#include "NetParticipantCrypto.h"
 #include "NetProtocol.h"
 #include "NetReconnectSession.h"
 #include "NetTransport.h"
@@ -145,8 +146,14 @@ namespace RTE {
 		/// reconnect existed: an admission message is an unexpected handshake message.
 		void SetReconnectHost(NetReconnectHost* host) { m_ReconnectHost = host; }
 		void SetReconnectClient(NetReconnectClient* client) { m_ReconnectClient = client; }
+		/// When set, a human seat waits on a connection proof. Host may pass null; the client must sign.
+		void EnableParticipantProof(NetParticipantIdentityStore* localStore);
 		NetReconnectHost* GetReconnectHost() const { return m_ReconnectHost; }
 		NetReconnectClient* GetReconnectClient() const { return m_ReconnectClient; }
+		bool ParticipantProofRequired() const { return m_ParticipantProofRequired; }
+		bool GetPeerParticipantId(NetPeerId peerId, NetParticipantId& out) const;
+		const NetParticipantId& GetLocalParticipantId() const { return m_LocalParticipantId; }
+		bool HasLocalParticipantId() const { return m_HasLocalParticipantId; }
 		/// The frame a seat drop is recorded against; the match runner keeps it current.
 		void SetLockstepFrame(uint64_t frame) { m_LockstepFrame = frame; }
 
@@ -224,6 +231,10 @@ namespace RTE {
 			bool resumedWithoutTraffic = false; //!< Its window was restarted by a resumption and it has not spoken since; the next one does not restart it again.
 			uint64_t lastHeartbeatMs = 0;
 			NetHash32 identityHash{};
+			NetParticipantId participantId{};
+			bool hasParticipantId = false;
+			NetParticipantChallenge identityChallenge;
+			bool identityChallengeLive = false;
 			// Parked on a module-manifest refusal that has already been decided, waiting only for the
 			// digests that let it name the modules. Bounded by ExpireSilentHandshakes.
 			bool awaitingModuleDigests = false;
@@ -335,6 +346,11 @@ namespace RTE {
 		NetSessionStats m_Stats;
 		NetReconnectHost* m_ReconnectHost = nullptr;
 		NetReconnectClient* m_ReconnectClient = nullptr;
+		bool m_ParticipantProofRequired = false;
+		NetParticipantIdentityStore* m_ParticipantStore = nullptr;
+		NetParticipantId m_LocalParticipantId{};
+		bool m_HasLocalParticipantId = false;
+		std::vector<std::pair<NetParticipantId, NetAuthBytes16>> m_SpentIdentityChallenges;
 		uint64_t m_LockstepFrame = 0;
 		std::vector<PeerState> m_Peers;
 

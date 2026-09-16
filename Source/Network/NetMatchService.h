@@ -5,6 +5,7 @@
 #include "NetLobbySnapshot.h"
 #include "NetMatchRunner.h"
 #include "NetMuxTransport.h"
+#include "NetParticipantCrypto.h"
 #include "NetReconnectSession.h"
 #include "NetReconnectTicketStore.h"
 #include "NetReconnectUx.h"
@@ -540,6 +541,7 @@ namespace RTE {
 		NetReconnectHost m_ReconnectHost;
 		NetReconnectClient m_ReconnectClient;
 		NetReconnectTicketStore m_TicketStore;
+		NetParticipantIdentityStore m_ParticipantStore;
 		NetReconnectUx m_ReconnectUx;
 		NetSeatPresence m_SeatPresence;
 		struct RosterTransition {
