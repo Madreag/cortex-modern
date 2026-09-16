@@ -16,6 +16,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "seat_facts"))
 
+import compare_offline as offline_mod
 from check_world import compare as compare_world
 from compare_offline import compare as compare_offline
 from compare_offline import main as offline_main
@@ -53,12 +54,15 @@ class OracleVacuity(unittest.TestCase):
 
     def test_missing_offline_traces_name_the_missing_files(self):
         with tempfile.TemporaryDirectory() as tmp:
-            result = compare_offline(Path(tmp))
-            self.assertTrue(result["rows"])
-            for row in result["rows"]:
-                self.assertFalse(row["present"])
-                self.assertEqual(row["reason"], "missing traces for offline compare")
-            self.assertEqual(offline_main([str(tmp)]), 1)
+            absent = Path(tmp) / "no-retained"
+            with patch.object(offline_mod, "RETAINED_PIE", absent / "pie"), \
+                    patch.object(offline_mod, "RETAINED_AK47", absent / "ak47"):
+                result = compare_offline(Path(tmp))
+                self.assertTrue(result["rows"])
+                for row in result["rows"]:
+                    self.assertFalse(row["present"])
+                    self.assertEqual(row["reason"], "missing traces for offline compare")
+                self.assertEqual(offline_main([str(tmp)]), 1)
 
     def test_brainless_kill_count_quotes_the_production_detail(self):
         class DummyHarness:

@@ -6,6 +6,9 @@ import copy
 import json
 from pathlib import Path
 
+RETAINED_PIE = Path("D:/mx/opus-f40-20260914/sp/control-2/trace.json.simdump.txt")
+RETAINED_AK47 = Path("D:/mx/opus-f40-20260914/ak47/control/trace.json")
+
 
 def trace_without_wall_seconds(path):
     data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
@@ -34,8 +37,8 @@ def compare(root):
             row["red_equal_reference"] = trace_without_wall_seconds(traces["red"]) == reference
             row["green_equal_reference"] = trace_without_wall_seconds(traces["green"]) == reference
         rows.append(row)
-    retained_pie = Path("D:/mx/opus-f40-20260914/sp/control-2/trace.json.simdump.txt")
-    retained_ak47 = Path("D:/mx/opus-f40-20260914/ak47/control/trace.json")
+    retained_pie = RETAINED_PIE
+    retained_ak47 = RETAINED_AK47
     sp = {stage: root / stage / "sp_identity/trace.json.simdump.txt" for stage in ("reference", "red", "green")}
     sp_present = retained_pie.is_file() and all(path.is_file() for path in sp.values())
     retained = {"pie_control": str(retained_pie), "ak47_control": str(retained_ak47), "pie_inputs_present": sp_present}
