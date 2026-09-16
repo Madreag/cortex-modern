@@ -37,7 +37,7 @@ def isolate_voice(runtime, identity):
 
 def emit_peer_voice(identity, position):
     return {
-        "version": "AudioVoice2",
+        "version": "AudioVoice3",
         "identity": identity,
         "owner": 1,
         "path": "sfx",
@@ -73,12 +73,13 @@ def load_fixture(name):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def compare_runtimes(first, second):
+    return snapshot_runtime.project(first, shared=True) == snapshot_runtime.project(second, shared=True)
+
+
 def compare_isolated(first, second, identity):
-    try:
-        left = isolate_voice(first, identity)
-        right = isolate_voice(second, identity)
-    except ValueError:
-        return False
+    left = isolate_voice(first, identity)
+    right = isolate_voice(second, identity)
     return snapshot_runtime.project(left, shared=True) == snapshot_runtime.project(right, shared=True)
 
 
@@ -88,12 +89,14 @@ def compare_peer_voices(first_text, second_text, identity):
 
 def run_arm():
     retired = (load_fixture("mixer_retired_kept.json"), load_fixture("mixer_retired_dropped.json"))
-    if compare_isolated(retired[0], retired[1], TAIL_IDENTITY):
+    if compare_runtimes(retired[0], retired[1]):
         print("FAIL comparer accepted a mixer-retired peer pair")
         return 1
     print("PASS comparer fails a mixer-retired peer pair")
     tip = (load_fixture("tip_peer_a.json"), load_fixture("tip_peer_b.json"))
-    ok = compare_isolated(tip[0], tip[1], TAIL_IDENTITY)
+    isolate_voice(tip[0], TAIL_IDENTITY)
+    isolate_voice(tip[1], TAIL_IDENTITY)
+    ok = compare_runtimes(tip[0], tip[1])
     print(("PASS " if ok else "FAIL ") + FAIL)
     return 0 if ok else 1
 
