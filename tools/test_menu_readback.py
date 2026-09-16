@@ -534,46 +534,53 @@ def pixel_luma(rgb):
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
 
-def mean_box_luma(image, box):
-    crop = image.crop(box)
-    total = 0.0
-    count = 0
-    pixels = crop.load()
-    for y in range(crop.size[1]):
-        for x in range(crop.size[0]):
-            total += pixel_luma(pixels[x, y])
-            count += 1
-    return total / count if count else 0.0
+# TabBlue.png on 6447c4c2e3: Base and MouseOver RGB slice identity. Selected
+# fill was panel grey (59, 65, 83), luma 65.024; the floor sits above that.
+TABBLUE_SIZE = (63, 59)
+TABBLUE_BASE_SHA256 = "4f8ea8767d5c1762dcc9e2adea0f0cffeeee72ca770211ed855095ab2be14a4b"
+TABBLUE_MOUSEOVER_SHA256 = "d832a67b1bebd77870ba53071ec36af04c4a2261b387950d1265630d4571752a"
+PANEL_GREY_FILL_LUMA = 65.024
+SELECTED_FILL_LUMA_FLOOR = 80.0
+TABBLUE_CHROME = (24, 28, 55)
+TABBLUE_COLOR_KEY = (0, 0, 0)
 
 
-def main_menu_highlight_luma_ratio(repo):
-    """Button_Over filler vs Button_Up filler on SkinBlue.png, the original highlight pair."""
-    with Image.open(Path(repo) / "Data/Base.rte/GUIs/Skins/Menus/SkinBlue.png") as source:
+def tabblue_slice_sha256(image, box):
+    return hashlib.sha256(image.crop(box).convert("RGB").tobytes()).hexdigest()
+
+
+def settings_tab_selected_fill_luma(repo):
+    """Mean luma of the Selected slice interior fill, not chrome or the key."""
+    path = Path(repo) / "Data/Base.rte/GUIs/Skins/Menus/TabBlue.png"
+    with Image.open(path) as source:
+        assert source.size == TABBLUE_SIZE, source.size
         image = source.convert("RGB")
-    over = mean_box_luma(image, (12, 48, 20, 56))
-    up = mean_box_luma(image, (0, 48, 8, 56))
-    return over / up if up else 0.0, over, up
+    pixels = []
+    for y in range(42, 57):
+        for x in range(2, 61):
+            rgb = image.getpixel((x, y))[:3]
+            if rgb in (TABBLUE_CHROME, TABBLUE_COLOR_KEY):
+                continue
+            pixels.append(rgb)
+    return (sum(pixel_luma(rgb) for rgb in pixels) / len(pixels)) if pixels else 0.0
 
 
-def rect_luma(png, rect):
-    """Mean luma of a control's full rectangle."""
-    with Image.open(png) as source:
+def assert_tabblue_selected_fill(repo):
+    """Base TabBlue fails (fill luma 65.024); the lightened Selected fill passes."""
+    path = Path(repo) / "Data/Base.rte/GUIs/Skins/Menus/TabBlue.png"
+    with Image.open(path) as source:
+        assert source.size == TABBLUE_SIZE, source.size
         image = source.convert("RGB")
-    x, y, w, h = rect
-    return mean_box_luma(image, (x, y, x + w, y + h))
-
-
-def settings_tab_luma_ratio(capture):
-    page = capture["settings_page"].split(":")[0]
-    selected_name = f"Tab{page}Settings"
-    tabs = [control for control in capture["controls"]
-            if control["name"].startswith("Tab") and control["name"].endswith("Settings")
-            and "NetPage" not in control["name"]]
-    selected = next(control for control in tabs if control["name"] == selected_name)
-    others = [control for control in tabs if control["name"] != selected_name]
-    selected_luma = rect_luma(capture["png"], selected["rect"])
-    other_luma = sum(rect_luma(capture["png"], control["rect"]) for control in others) / len(others)
-    return (selected_luma / other_luma if other_luma else 0.0), selected_luma, other_luma
+    base = tabblue_slice_sha256(image, (0, 0, 63, 19))
+    mouseover = tabblue_slice_sha256(image, (0, 20, 63, 39))
+    assert base == TABBLUE_BASE_SHA256, (base, TABBLUE_BASE_SHA256)
+    assert mouseover == TABBLUE_MOUSEOVER_SHA256, (mouseover, TABBLUE_MOUSEOVER_SHA256)
+    skin = (Path(repo) / "Data/Base.rte/GUIs/Skins/Menus/MainMenuSubMenuSkin.ini").read_text(encoding="utf-8")
+    assert "ColorKeyIndex = 0" in skin.split("[Tab]", 1)[1].split("[", 1)[0]
+    fill = settings_tab_selected_fill_luma(repo)
+    assert fill > PANEL_GREY_FILL_LUMA and fill >= SELECTED_FILL_LUMA_FLOOR, (
+        fill, PANEL_GREY_FILL_LUMA, SELECTED_FILL_LUMA_FLOOR)
+    return fill
 
 
 def frame_luma(png, rect, border=2):
@@ -773,13 +780,12 @@ def run_case(options, case, root, failing=None):
                                        for capture in images for control in capture["controls"]
                                        if control.get("text_fits") is False]
             assert not result["text_overflow"], result["text_overflow"]
-            needed, over_luma, up_luma = main_menu_highlight_luma_ratio(options.repo)
-            tab_pairs = []
-            for capture in images:
-                ratio, selected_luma, other_luma = settings_tab_luma_ratio(capture)
-                tab_pairs.append([capture["settings_page"], ratio, selected_luma, other_luma])
-                assert ratio >= needed, (capture["settings_page"], ratio, needed, selected_luma, other_luma)
-            result["tab_luma"] = {"needed": needed, "over": over_luma, "up": up_luma, "pairs": tab_pairs}
+            fill = assert_tabblue_selected_fill(options.repo)
+            result["tab_luma"] = {
+                "selected_fill": fill,
+                "panel_grey": PANEL_GREY_FILL_LUMA,
+                "floor": SELECTED_FILL_LUMA_FLOOR,
+            }
             gameplay = next((capture for capture in images if capture["settings_page"] == "Gameplay"), None)
             assert gameplay, [capture["settings_page"] for capture in images]
             rows = {control["name"]: control for control in gameplay["controls"]}
