@@ -13,8 +13,13 @@
 #include "GUIRadioButton.h"
 #include "GUIComboBox.h"
 #include "FrameMan.h"
+#include "GAScripted.h"
+#include "GameActivity.h"
 #include "NetMatchService.h"
 #include "NetLobbySnapshot.h"
+#include "PresetMan.h"
+#include "Scene.h"
+#include "SettingsMan.h"
 #include "UInputMan.h"
 #include "TimerMan.h"
 #include <SDL3/SDL.h>
@@ -22,6 +27,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <list>
 #include <sstream>
 
 using namespace RTE;
@@ -496,20 +502,53 @@ namespace RTE::MenuAutomation {
 						{"activity_type", activity.activityType}, {"scenes", scenes}});
 				}
 				Json loaded = Json::array();
-				for (const NetHostActivityChoice& activity : NetMatchService::ListLoadedGameActivities()) {
-					Json scenes = Json::array();
-					for (const NetHostSceneChoice& scene : activity.scenes) {
-						scenes.push_back({{"name", scene.name}, {"module", scene.module}});
+				std::list<Entity*> activityPresets;
+				g_PresetMan.GetAllOfType(activityPresets, "Activity");
+				for (Entity* entity : activityPresets) {
+					auto* activity = dynamic_cast<GameActivity*>(entity);
+					if (!activity || activity->IsTestActivity()) {
+						continue;
 					}
-					loaded.push_back({{"preset", activity.preset}, {"module", activity.module},
-						{"activity_type", activity.activityType},
-						{"compatible_scene_count", activity.scenes.size()}, {"scenes", scenes}});
+					Json required = Json::array();
+					if (auto* scripted = dynamic_cast<GAScripted*>(activity)) {
+						for (const std::string& area : scripted->GetRequiredAreas()) {
+							required.push_back(area);
+						}
+					}
+					loaded.push_back({{"preset", activity->GetPresetName()},
+						{"module", g_PresetMan.GetDataModuleName(activity->GetModuleID())},
+						{"activity_type", activity->GetClassName()},
+						{"min_teams", activity->GetMinTeamsRequired()},
+						{"required_areas", required}});
+				}
+				Json loadedScenes = Json::array();
+				std::list<Entity*> scenePresets;
+				g_PresetMan.GetAllOfType(scenePresets, "Scene");
+				for (Entity* entity : scenePresets) {
+					auto* scene = dynamic_cast<Scene*>(entity);
+					if (!scene) {
+						continue;
+					}
+					Json areas = Json::array();
+					for (const Scene::Area* area : scene->GetAreas()) {
+						if (area) {
+							areas.push_back(area->GetName());
+						}
+					}
+					loadedScenes.push_back({{"name", scene->GetPresetName()},
+						{"module", g_PresetMan.GetDataModuleName(scene->GetModuleID())},
+						{"areas", areas},
+						{"location_zero", scene->GetLocation().IsZero()},
+						{"metagame_internal", scene->IsMetagameInternal()},
+						{"saved_game_internal", scene->IsSavedGameInternal()},
+						{"metascene_parent", scene->GetMetasceneParent()}});
 				}
 				Json result = {{"schema", 1}, {"screen", screen}, {"settings_page", SettingsPage(manager)}, {"viewport", Rectangle(nullptr)}, {"service", lobby.serviceState},
 					{"phase", "after_draw"}, {"sim_frame", g_TimerMan.GetSimUpdateCount()}, {"host", lobby.isHost}, {"peer_id", lobby.localPeerId},
 					{"activity_preset", lobby.activityPreset}, {"activity_module", lobby.activityModule},
 					{"scene_name", lobby.sceneName}, {"scene_module", lobby.sceneModule},
-					{"activity_table", table}, {"game_activities", loaded}, {"controls", Json::array()}};
+					{"activity_table", table}, {"game_activities", loaded}, {"loaded_scenes", loadedScenes},
+					{"show_metascenes", g_SettingsMan.ShowMetascenes()}, {"controls", Json::array()}};
 				for (auto* item : *manager->GetControlList()) {
 					if (!Visible(item)) continue;
 					auto* panel = item->GetPanel();

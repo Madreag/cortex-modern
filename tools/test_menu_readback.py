@@ -218,15 +218,46 @@ def combo_name(text):
     return text.rsplit(" - ", 1)[0] if " - " in (text or "") else (text or "")
 
 
+def host_scenes(dump):
+    show = dump.get("show_metascenes")
+    scenes = []
+    for scene in dump.get("loaded_scenes") or []:
+        if scene.get("location_zero") or scene.get("metagame_internal") or scene.get("saved_game_internal"):
+            continue
+        if scene.get("metascene_parent") and not show:
+            continue
+        scenes.append(scene)
+    return scenes
+
+
+def scene_is_compatible(activity, scene, teams=-1):
+    if not scene:
+        return False
+    if teams > int(activity.get("min_teams") or 0):
+        return False
+    if (activity.get("activity_type") or "") == "GATutorial":
+        return scene.get("name") == "Tutorial Bunker"
+    areas = set(scene.get("areas") or [])
+    return all(area in areas for area in (activity.get("required_areas") or []))
+
+
 def allowed_host_activities(dump):
-    # Missing game_activities is an empty census: a base-tip combo fails as an extra row.
+    # Missing census keys stay empty so a base-tip combo fails as an extra row.
+    scenes = host_scenes(dump)
     return [row for row in (dump.get("game_activities") or [])
-            if int(row.get("compatible_scene_count") or 0) >= 1]
+            if any(scene_is_compatible(row, scene) for scene in scenes)]
+
+
+def combo_item_names(picker):
+    if "items" not in picker:
+        name = picker.get("text") or "unknown"
+        return [name] * max(1, int(picker.get("item_count") or 1))
+    return list(picker.get("items") or [])
 
 
 def assert_combo_matches_loaded_activities(picker, dump):
     allowed = [host_activity_label(row) for row in allowed_host_activities(dump)]
-    items = list(picker.get("items") or [])
+    items = combo_item_names(picker)
     extras = [item for item in items if item not in allowed]
     missing = [label for label in allowed if label not in items]
     if extras:
@@ -427,11 +458,13 @@ def scripts(case, port, root):
         # Keyboard commits both combos; Create uses those picks, not a later mouse Select.
         host = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
                 "assert_visible LabelHostActivity 1\nassert_label LabelHostActivity Activity\n"
+                "assert_label ComboHostActivity P4 Alpha Duel - Base.rte\n"
+                "assert_text_fits ComboHostActivity\n"
+                "dump_host_options\n"
                 "assert_visible LabelHostScene 1\nassert_label LabelHostScene Scene\n"
                 "assert_visible ComboHostScene 1\n"
-                "assert_label ComboHostActivity P4 Alpha Duel - Base.rte\n"
-                "assert_text_fits ComboHostActivity\nassert_text_fits ComboHostScene\n"
-                "assert_label LabelHostInfo Grasslands - PvP\ndump_host_options\n"
+                "assert_text_fits ComboHostScene\n"
+                "assert_label LabelHostInfo Grasslands - PvP\n"
                 "combo_drop ComboHostActivity\nwait 3\ndump_host_options\n"
                 "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
                 "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
@@ -690,13 +723,25 @@ def run_case(options, case, root, failing=None):
                 assert f"[menu-script] FAILED: {assertion.split()[0]}" in logs[who], logs[who][-3000:]
                 assert "unknown command" not in logs[who], logs[who][-3000:]
             else:
-                assert record.get("exit_code") == 0, record
-                assert "[menu-script] FAILED:" not in logs[who], logs[who][-3000:]
                 images += captures(run.cwd, {"source_revision": options.revision,
                     "executable": str(options.repo / "Cortex Command.exe"), "exe_sha256": options.exe_sha,
                     "os": os.name, "configuration": "Final", "argv": record.get("argv", argv[who]),
                     "peer": who, "case": case, "logical_size": options.size})
+                if case == "net-activity" and who == "host":
+                    host_setup = [image for image in images if image["peer"] == "host"
+                                  and any(c["name"] == "ComboHostActivity" for c in image["controls"])]
+                    if host_setup:
+                        picker = next(c for c in host_setup[0]["controls"] if c["name"] == "ComboHostActivity")
+                        assert_combo_matches_loaded_activities(picker, host_setup[0])
+                assert record.get("exit_code") == 0, record
+                assert "[menu-script] FAILED:" not in logs[who], logs[who][-3000:]
         if not failing:
+            if case == "net-activity":
+                host_setup = [image for image in images if image["peer"] == "host"
+                              and any(c["name"] == "ComboHostActivity" for c in image["controls"])]
+                assert host_setup, "ComboHostActivity missing from host dumps"
+                picker = next(c for c in host_setup[0]["controls"] if c["name"] == "ComboHostActivity")
+                assert_combo_matches_loaded_activities(picker, host_setup[0])
             assert images, "no paired dumps/PNGs"
             # A peer scripted to dump must have written one: the global count passed on its peer's captures.
             scripted = {who: texts[who] + json.dumps(probes.get(who, {})) for who in runs}
