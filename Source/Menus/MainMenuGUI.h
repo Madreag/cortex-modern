@@ -94,6 +94,9 @@ namespace RTE {
 		/// Sets a text box's text by control name.
 		bool AutomationSetText(const std::string& controlName, const std::string& text);
 
+		/// Pins the lobby share-address host the status row draws.
+		void AutomationSetShareAddress(const std::string& address);
+
 		/// Sets a checkbox's state by control name, then runs the same change path a click would.
 		bool AutomationSetCheck(const std::string& controlName, bool checked);
 

@@ -57,6 +57,9 @@ static std::string SavedMultiplayerName() {
 
 bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string* error);
 
+static std::string s_ShareAddress;
+static bool s_ShareResolved = false;
+
 static std::optional<size_t> ReplayRowIndex(const std::string& name) {
 	const std::string prefix = "LabelReplayRow";
 	if (!name.starts_with(prefix)) return std::nullopt;
@@ -1470,8 +1473,6 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		lobbyRowTailBare[i] = buildTail(seatMark, false);
 		label->SetVisible(true);
 	}
-	static std::string s_shareAddress;
-	static bool s_shareResolved = false;
 	const int contentWidth = 300;
 	const int rowBoxWidth = contentWidth - 24;
 	bool addressOnOwnRow = false;
@@ -1485,19 +1486,23 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			}
 		}
 		if (connectedCount < 2) {
-			if (!s_shareResolved) {
-				s_shareAddress = NetLanDiscovery::GetPrimaryLocalAddress();
-				s_shareResolved = true;
+			if (!s_ShareResolved) {
+				s_ShareAddress = NetLanDiscovery::GetPrimaryLocalAddress();
+				s_ShareResolved = true;
 			}
-			if (s_shareAddress.empty()) {
+			if (s_ShareAddress.empty()) {
 				m_MultiplayerStatusLabel->SetText("Waiting for a player to join...");
 			} else {
-				const std::string address = s_shareAddress + ":" + m_MultiplayerHostPortTextBox->GetText();
+				const std::string address = s_ShareAddress + ":" + m_MultiplayerHostPortTextBox->GetText();
 				std::string prose = "Waiting for a player to join... share";
-				m_MultiplayerStatusLabel->EnsureDrawableTextFont("FontSmall.png");
+				// The status label's skin font is FontLarge; draw and measure the share row in FontSmall.
+				if (m_MultiplayerLobbyPlayerRowFallbackFont) {
+					m_MultiplayerStatusLabel->EnsureDrawableTextFont("FontSmall.png");
+					m_MultiplayerStatusLabel->SetFont(m_MultiplayerLobbyPlayerRowFallbackFont);
+				}
 				if (GUIFont* font = m_MultiplayerLobbyPlayerRowFallbackFont) {
-					if (font->CalculateWidth(prose, m_MultiplayerLobbyPlayerRowFont) > rowBoxWidth) {
-						while (!prose.empty() && font->CalculateWidth(prose + "...", m_MultiplayerLobbyPlayerRowFont) > rowBoxWidth) {
+					if (font->CalculateWidth(prose) > rowBoxWidth) {
+						while (!prose.empty() && font->CalculateWidth(prose + "...") > rowBoxWidth) {
 							prose.pop_back();
 						}
 						prose += "...";
@@ -1505,13 +1510,12 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 				}
 				m_MultiplayerStatusLabel->SetText(prose + "\n" + address);
 				addressOnOwnRow = true;
-				m_MultiplayerStatusLabel->EnsureDrawableTextFont("FontSmall.png");
 				const bool addressScrolls = m_MultiplayerStatusLabel->GetMaxWordWidth() > rowBoxWidth;
 				m_MultiplayerStatusLabel->SetHorizontalOverflowScroll(addressScrolls);
 				m_MultiplayerStatusLabel->ActivateDeactivateOverflowScroll(addressScrolls);
 			}
 		} else {
-			s_shareResolved = false;
+			s_ShareResolved = false;
 			if (connectedCount < snapshot.members.size()) {
 				m_MultiplayerStatusLabel->SetText("Waiting for players to join... (" + std::to_string(connectedCount) + "/" + std::to_string(snapshot.members.size()) + ")");
 			} else {
@@ -1519,7 +1523,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			}
 		}
 	} else {
-		s_shareResolved = false;
+		s_ShareResolved = false;
 		m_MultiplayerStatusLabel->SetText(snapshot.statusText);
 	}
 	if (!addressOnOwnRow) {
@@ -1529,6 +1533,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	// The lobby panel is one width on every peer: a longer row or status elides inside its box
 	// rather than widening the panel, so host and client land on the same rectangle.
 	if (!addressOnOwnRow && m_MultiplayerLobbyPlayerRowFont) {
+		m_MultiplayerStatusLabel->SetFont(m_MultiplayerLobbyPlayerRowFont);
 		std::string statusText = m_MultiplayerStatusLabel->GetText();
 		while (!statusText.empty() &&
 		       m_MultiplayerLobbyPlayerRowFont->CalculateWidth(statusText + "...", m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
@@ -1538,8 +1543,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			m_MultiplayerStatusLabel->SetText(statusText + "...");
 		}
 	}
-	// A share address takes its own 16 px row so the host:port is never elided.
-	const int statusHeight = addressOnOwnRow ? 32 : std::max(16, m_MultiplayerStatusLabel->GetTextHeight() + 4);
+	const int statusHeight = std::max(16, m_MultiplayerStatusLabel->GetTextHeight() + 4);
 	if (m_MultiplayerStatusLabel->GetHeight() != statusHeight) {
 		m_MultiplayerStatusLabel->Resize(m_MultiplayerStatusLabel->GetWidth(), statusHeight);
 	}
@@ -2002,6 +2006,11 @@ bool MainMenuGUI::AutomationSetText(const std::string& controlName, const std::s
 		return true;
 	}
 	return false;
+}
+
+void MainMenuGUI::AutomationSetShareAddress(const std::string& address) {
+	s_ShareAddress = address;
+	s_ShareResolved = true;
 }
 
 bool MainMenuGUI::AutomationSetCheck(const std::string& controlName, bool checked) {
