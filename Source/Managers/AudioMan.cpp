@@ -2626,23 +2626,23 @@ bool AudioMan::RunCheckpointSelfTest() {
 			const int tailId = *tail->GetPlayingChannels()->begin();
 			FMOD::Channel* tailChannel = nullptr;
 			AudioCheckpoint::Require(GetVoiceChannel(tailId, &tailChannel));
-			const auto idsOf = [](const std::string& text) {
+			const auto voiceOf = [](const std::string& text, int identity) {
 				AudioRuntime state; std::string refusal;
 				if (!state.Load(text, &refusal)) throw std::runtime_error("could not parse tail archive: " + refusal);
-				std::set<int> ids;
-				for (const auto& voice: state.voices) ids.insert(voice.identity);
-				return ids;
+				for (const auto& voice: state.voices) {
+					if (voice.identity == identity) return voice.SaveCheckpoint();
+				}
+				throw std::runtime_error("tail voice is absent from the archive");
 			};
 			std::string firstText;
 			{
 				AudioCheckpoint::MixerLock mixer(m_AudioSystem);
 				firstText = SaveCheckpoint();
 			}
-			const std::set<int> firstIds = idsOf(firstText);
 			if (tailChannel) tailChannel->stop();
 			AudioCheckpoint::Require(m_AudioSystem->update());
-			const std::set<int> secondIds = idsOf(SaveCheckpoint());
-			const bool same = firstIds == secondIds && firstIds.contains(tailId);
+			const std::string secondText = SaveCheckpoint();
+			const bool same = voiceOf(firstText, tailId) == voiceOf(secondText, tailId);
 			reportArm("audio_runtime_voices_match_at_sound_tail", same);
 			if (!same) std::cout << "[audio-checkpoint-selftest] FAIL AudioRuntime voices lists differ at a sound's tail" << std::endl;
 			if (tail->IsBeingPlayed()) tail->Stop();
