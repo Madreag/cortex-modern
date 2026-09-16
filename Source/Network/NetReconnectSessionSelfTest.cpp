@@ -17,6 +17,8 @@
 #include "NetParticipantCrypto.h"
 #include "NetSeatAuth.h"
 #include "NetSession.h"
+#include "Activity.h"
+#include "ActivityMan.h"
 #include "System/ScenarioRunner.h"
 #include "System/System.h"
 
@@ -25,6 +27,7 @@
 #include <cstring>
 #include <functional>
 #include <filesystem>
+#include <map>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -1633,6 +1636,109 @@ namespace RTE {
 			}
 			return census;
 		}
+
+		std::vector<int64_t> CollectOwnedActorUIDs(const NetLockstepCoordinator& coordinator, uint8_t ownerPeer, const std::vector<CensusActor>& world) {
+			std::vector<int64_t> uids;
+			for (const CensusActor& actor : world) {
+				if (coordinator.ResolveActorOwner(actor.uid, actor.team, actor.cpu) == ownerPeer) {
+					uids.push_back(actor.uid);
+				}
+			}
+			std::sort(uids.begin(), uids.end());
+			return uids;
+		}
+
+		struct KickCensusRound {
+			LoopbackTransport hostT, aT, bT;
+			NetLockstepCoordinator host, clientA, clientB;
+			uint64_t now = 0;
+
+			bool RunUntilOneFrame(uint16_t port, const std::vector<NetMatchPlayerSlot>& players, std::string* error) {
+				if (!hostT.StartHost(port, error) || !aT.Connect("loopback", port, error) || !bT.Connect("loopback", port, error)) {
+					return false;
+				}
+				auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+					NetLockstepConfig c;
+					c.sessionId = 0x70000000000000A1ULL + port;
+					c.timeoutMs = 5000;
+					c.localPeerId = local;
+					c.peerCount = 3;
+					c.remoteTransportPeerIds = std::move(transports);
+					c.relayToOtherPeers = relay;
+					c.scenario = "ReconnectSessionSelfTest";
+					c.matchConfig.hostPeerId = 1;
+					c.matchConfig.peerCount = 3;
+					c.matchConfig.players = players;
+					return c;
+				};
+				if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) ||
+				    !clientA.Start(aT, cfg(2, {{1, 1}}, false), error) ||
+				    !clientB.Start(bT, cfg(3, {{1, 1}}, false), error)) {
+					return false;
+				}
+				auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+					for (const uint64_t until = now + forMs; now <= until; now += 5) {
+						host.Tick(now);
+						clientA.Tick(now);
+						clientB.Tick(now);
+						if (done()) {
+							return true;
+						}
+						hostT.AdvanceTimeMs(5);
+						aT.AdvanceTimeMs(5);
+						bT.AdvanceTimeMs(5);
+					}
+					return false;
+				};
+				if (!drive(4000, [&] { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning(); })) {
+					*error = "the kick census round did not reach Running";
+					return false;
+				}
+				ControllerFrame frame;
+				frame.stateMask = 1;
+				for (uint64_t f = 0; f < 2; ++f) {
+					frame.actorUniqueID = 100;
+					if (!host.QueueLocalInput(f, {frame}, {}, error)) {
+						return false;
+					}
+					frame.actorUniqueID = 200;
+					if (!clientA.QueueLocalInput(f, {frame}, {}, error)) {
+						return false;
+					}
+					frame.actorUniqueID = 300;
+					if (!clientB.QueueLocalInput(f, {frame}, {}, error)) {
+						return false;
+					}
+				}
+				NetLockstepReadyFrame ready;
+				size_t committed = 0;
+				if (!drive(4000, [&] {
+						while (host.PopReadyFrame(ready)) {
+							++committed;
+						}
+						return committed >= 2;
+					})) {
+					*error = "the kick census round never committed a frame";
+					return false;
+				}
+				return true;
+			}
+
+			bool Drive(uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now);
+					clientA.Tick(now);
+					clientB.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					aT.AdvanceTimeMs(5);
+					bT.AdvanceTimeMs(5);
+				}
+				return false;
+			}
+		};
 
 		// A three-peer round over loopback, driven far enough that the host adjudicates peer 2's drop -
 		// which is the state the ledger's census is taken in.
@@ -6291,32 +6397,51 @@ namespace RTE {
 				return Fail(error);
 			}
 			live.host.SetLiveMatch(true);
-			DroppedRound censusRound;
+			KickCensusRound censusRound;
 			if (!censusRound.RunUntilOneFrame(42190, {{1, 0, false, "Host"}, {2, 1, false, "Keeper"}, {3, 2, false, "Target"}}, &error)) {
 				return Fail("the kick census round did not commit a frame: " + error);
 			}
 			ScenarioRunner::SetLockstepCoordinator(&censusRound.host);
-			g_ProductionCensusActors = {{101, 1, false}, {102, 1, false}, {201, 2, false}};
-			live.host.SetDropOwnershipSource(&ProductionCensusSource, nullptr);
-			const auto beforeCensus = ProductionCensusSource(nullptr);
-			const auto beforeKeeper = NetReconnectLedger::CollectOwnedActorUIDs(beforeCensus, 2);
-			const uint32_t beforeFunds = censusRound.host.GetConfig().matchConfig.startingGold;
+			const std::vector<CensusActor> world = {{101, 1, false}, {102, 1, false}, {201, 2, false}};
+			std::unique_ptr<Activity> matchFunds = std::make_unique<Activity>();
+			matchFunds->SetTeamFunds(2400.f, 1);
+			g_ActivityMan.SwapCheckpointActivity(matchFunds);
+			const auto leaveCensus = [&]() {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+			};
+			const uint64_t committed = censusRound.host.GetStats().nextFrame;
 			ControllerFrame keeperFrame;
 			keeperFrame.stateMask = 1;
 			keeperFrame.actorUniqueID = 101;
-			const std::vector<NetGameCommand> keeperCommands{{2, NetGameSetTeamFunds{1, static_cast<int32_t>(beforeFunds)}}};
-			const uint64_t keeperCommandFrame = censusRound.host.GetStats().nextFrame;
-			if (!censusRound.host.QueueLocalInput(keeperCommandFrame, {keeperFrame}, keeperCommands, &error)) {
-				ScenarioRunner::SetLockstepCoordinator(nullptr);
-				g_ProductionCensusActors.clear();
-				return Fail("could not queue the keeper's in-flight commands: " + error);
+			ControllerFrame kickedFrame;
+			kickedFrame.stateMask = 1;
+			kickedFrame.actorUniqueID = 201;
+			const std::vector<NetGameCommand> keeperCommands{{2, NetGameSetTeamFunds{1, 2400}}};
+			const std::vector<NetGameCommand> kickedCommands{{3, NetGameSetTeamFunds{2, 100}}};
+			if (!censusRound.clientA.QueueLocalInput(committed, {keeperFrame}, keeperCommands, &error) ||
+			    !censusRound.clientB.QueueLocalInput(committed, {kickedFrame}, kickedCommands, &error)) {
+				leaveCensus();
+				return Fail("could not queue in-flight commands: " + error);
 			}
-			std::vector<ControllerFrame> beforeFrames;
-			if (!censusRound.host.PeekLocalFrames(keeperCommandFrame, beforeFrames)) {
-				ScenarioRunner::SetLockstepCoordinator(nullptr);
-				g_ProductionCensusActors.clear();
-				return Fail("the keeper's in-flight commands were not queued");
+			std::vector<NetGameCommand> beforeKeeperCommands;
+			std::vector<NetGameCommand> beforeKickedCommands;
+			if (!censusRound.Drive(2000, [&] {
+					return censusRound.host.PeekQueuedCommands(committed, 2, beforeKeeperCommands) &&
+					       censusRound.host.PeekQueuedCommands(committed, 3, beforeKickedCommands);
+				})) {
+				leaveCensus();
+				return Fail("the committed-frame command queue never held both seats");
 			}
+			const std::vector<int64_t> beforeKeeperUIDs = CollectOwnedActorUIDs(censusRound.host, 2, world);
+			const std::vector<int64_t> beforeKickedUIDs = CollectOwnedActorUIDs(censusRound.host, 3, world);
+			Activity* running = g_ActivityMan.GetActivity();
+			if (running == nullptr) {
+				leaveCensus();
+				return Fail("the running activity was not installed");
+			}
+			const float beforeFunds = running->GetTeamFunds(1);
 			const auto views = live.host.GetModerationView();
 			NetModerationSelection selected{};
 			for (const auto& seat : views) {
@@ -6326,56 +6451,51 @@ namespace RTE {
 			}
 			NetParticipantRemovalIssue issued;
 			const uint32_t droppedAtKick = live.host.GetStats().seatsDropped;
-			if (live.host.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, live.nowMs, unixNow, 0x4831ULL, 1, 90, issued) != NetKickBanResult::Ok) {
-				ScenarioRunner::SetLockstepCoordinator(nullptr);
-				g_ProductionCensusActors.clear();
+			if (live.host.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, live.nowMs, unixNow, 0x4831ULL, 1, committed, issued) != NetKickBanResult::Ok) {
+				leaveCensus();
 				return Fail("the host could not remove the targeted seat");
 			}
+			censusRound.host.EvictRemovedPeer(issued.lockstepPeerId, "removed from the session", live.nowMs);
 			if (!live.host.IsSeatClosed(targetRecord.stableSeat) || live.host.IsSeatHeldForReclaim(issued.lockstepPeerId) ||
 			    live.host.GetStats().seatsRemoved != 1 || live.host.GetStats().seatsDropped != droppedAtKick) {
-				ScenarioRunner::SetLockstepCoordinator(nullptr);
-				g_ProductionCensusActors.clear();
+				leaveCensus();
 				return Fail("the kick left a reclaim hold or counted as a drop");
 			}
 			if (live.host.NotifyDisconnect(target.connection, 200) != NetH4DisconnectOutcome::Removed) {
-				ScenarioRunner::SetLockstepCoordinator(nullptr);
-				g_ProductionCensusActors.clear();
+				leaveCensus();
 				return Fail("the post-kick disconnect opened a hold");
 			}
 			NetPeerId keeperConnection = c_InvalidNetPeerId;
 			uint32_t keeperGeneration = 0;
 			uint32_t keeperIncarnation = 0;
 			if (!live.host.GetSeatHolder(0, keeperConnection, keeperGeneration, keeperIncarnation) || keeperConnection != keeper.connection) {
-				ScenarioRunner::SetLockstepCoordinator(nullptr);
-				g_ProductionCensusActors.clear();
+				leaveCensus();
 				return Fail("the kick touched the other holder");
 			}
-			std::vector<ControllerFrame> afterFrames;
-			if (!censusRound.host.PeekLocalFrames(keeperCommandFrame, afterFrames) || afterFrames.size() != beforeFrames.size() ||
-			    afterFrames.empty() || afterFrames.front().actorUniqueID != beforeFrames.front().actorUniqueID ||
-			    afterFrames.front().stateMask != beforeFrames.front().stateMask) {
-				ScenarioRunner::SetLockstepCoordinator(nullptr);
-				g_ProductionCensusActors.clear();
-				return Fail("the kick changed the keeper's in-flight commands");
+			const std::vector<int64_t> afterKeeperUIDs = CollectOwnedActorUIDs(censusRound.host, 2, world);
+			const std::vector<int64_t> afterKickedUIDs = CollectOwnedActorUIDs(censusRound.host, 3, world);
+			running = g_ActivityMan.GetActivity();
+			if (running == nullptr) {
+				leaveCensus();
+				return Fail("the running activity left the ActivityMan");
 			}
-			censusRound.host.EvictRemovedPeer(issued.lockstepPeerId, "removed from the session", live.nowMs);
-			const auto afterCensus = ProductionCensusSource(nullptr);
-			const auto afterKeeper = NetReconnectLedger::CollectOwnedActorUIDs(afterCensus, 2);
-			const uint32_t afterFunds = censusRound.host.GetConfig().matchConfig.startingGold;
-			// Kick is an announced leave: no surviving human on the kicked seat's team, so the host
-			// produces those units (the AI takeover) while the round continues. The keeper is unchanged.
-			if (afterKeeper != beforeKeeper || afterFunds != beforeFunds ||
+			const float afterFunds = running->GetTeamFunds(1);
+			std::vector<NetGameCommand> afterKeeperCommands;
+			std::vector<NetGameCommand> afterKickedCommands;
+			const bool keeperCommandsHeld = censusRound.host.PeekQueuedCommands(committed, 2, afterKeeperCommands);
+			const bool kickedCommandsHeld = censusRound.host.PeekQueuedCommands(committed, 3, afterKickedCommands);
+			const uint8_t kickedOwner = censusRound.host.ResolveActorOwner(201, 2, false);
+			if (afterKeeperUIDs != beforeKeeperUIDs || afterFunds != beforeFunds ||
+			    !keeperCommandsHeld || afterKeeperCommands != beforeKeeperCommands ||
+			    afterKickedUIDs == beforeKickedUIDs || kickedCommandsHeld || !afterKickedCommands.empty() ||
 			    censusRound.host.ResolveActorOwner(101, 1, false) != 2 ||
 			    censusRound.host.ResolveActorOwner(102, 1, false) != 2 ||
-			    censusRound.host.ResolveActorOwner(201, 2, false) == issued.lockstepPeerId ||
-			    censusRound.host.ResolveActorOwner(201, 2, false) != 1 ||
+			    kickedOwner == issued.lockstepPeerId || kickedOwner != 1 ||
 			    !live.host.TakePendingReseats().empty()) {
-				ScenarioRunner::SetLockstepCoordinator(nullptr);
-				g_ProductionCensusActors.clear();
-				return Fail("the kick changed the keeper's actor census, funds or in-flight commands");
+				leaveCensus();
+				return Fail("the kick changed the keeper's actor census, funds or queued commands");
 			}
-			ScenarioRunner::SetLockstepCoordinator(nullptr);
-			g_ProductionCensusActors.clear();
+			leaveCensus();
 			if (issued.notice.action != NetParticipantRemovalAction::Kick || issued.notice.stableSeat != targetRecord.stableSeat) {
 				return Fail("the issued notice did not name the kicked seat");
 			}
@@ -6554,6 +6674,15 @@ namespace RTE {
 			if (store.Load(&error) || store.PersistentReady() || !store.IsBanned(alice, 1)) {
 				return Fail("a ban store path that cannot be sized fail-opened or dropped last-good rows");
 			}
+			const auto fileParent = lane / "not-a-directory";
+			{
+				std::ofstream touch(fileParent);
+				touch << "x";
+			}
+			store.SetPath((fileParent / "NetworkBans").string());
+			if (store.Load(&error) || store.PersistentReady() || !store.IsBanned(alice, 1)) {
+				return Fail("an exists() error on the ban store path fail-opened or dropped last-good rows");
+			}
 			error.clear();
 			std::cout << "[net-reconnect-session-selftest] PASS scopes: session ban ends with the session; persistent ban survives" << std::endl;
 
@@ -6573,6 +6702,20 @@ namespace RTE {
 			if (openRefuse != nullptr && openRefuse->rejectReason == NetRejectReason::ParticipantBanned) {
 				return Fail("an unbanned identity was refused while the store was not ready");
 			}
+			wire.host.SetParticipantProofRequired(true);
+			NetH4NewJoin unboundJoin;
+			unboundJoin.txId = Ramp<16>(0x40);
+			unboundJoin.identity = MakeIdentity();
+			unboundJoin.displayName = "unbound";
+			if (!wire.SendRaw(305, unboundJoin, &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			const NetJoinRejected* unproven = LastOf<NetJoinRejected>(wire.Delivered(305));
+			if (unproven == nullptr || unproven->rejectReason != NetRejectReason::IdentityUnproven) {
+				return Fail("an unbound NewJoin was admitted while proof is required");
+			}
+			wire.host.SetParticipantProofRequired(false);
 			wire.host.BindParticipantId(301, alice);
 			NetH4NewJoin join;
 			join.txId = Ramp<16>(0x31);
