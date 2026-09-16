@@ -311,7 +311,7 @@ def gates(root, control, timeout):
     return result
 
 
-def main():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--port', type=int, default=48231)
@@ -319,7 +319,11 @@ def main():
     parser.add_argument('--analyze-only', action='store_true')
     parser.add_argument('--skip-gates', action='store_true', help='retain gates as unverified')
     parser.add_argument('--sp-control', type=Path, default=SP_CONTROL)
-    args = parser.parse_args()
+    return parser, parser.parse_args(argv)
+
+
+def main(argv=None):
+    parser, args = parse_args(argv)
     root = args.out.resolve()
     if not 48231 <= args.port <= 48242:
         parser.error('the eight pair ports must stay within 48231..48249')
