@@ -293,7 +293,7 @@ namespace RTE {
 		bool QueueSaveSnapshot(const std::string& fileName, const std::string& path, SaveCompression compression,
 		                       std::shared_future<bool>& task, const std::string& matchId = "", uint64_t tick = 0, size_t* capturedBytes = nullptr);
 		bool QueueIncrementalAutosave(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
-		                              std::shared_future<bool>& task, size_t& bytes);
+		                              std::shared_future<bool>& task, size_t& bytes, SaveCompression compression = SaveCompression::Fast);
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage) const;
 
 		std::string m_DefaultActivityType; //!< The type name of the default Activity to be loaded if nothing else is available.
