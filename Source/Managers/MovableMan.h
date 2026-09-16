@@ -28,6 +28,7 @@
 #include <ostream>
 #include <unordered_set>
 #include <unordered_map>
+#include <vector>
 
 #define g_MovableMan MovableMan::Instance()
 
@@ -294,10 +295,16 @@ namespace RTE {
 		void DropAllPreviewGhosts();
 		size_t GetPreviewGhostCount() const { return m_PreviewGhosts.size(); }
 		uint64_t GetPreviewGhostPeak() const { return m_PreviewGhostPeak; }
-		/// One committed-tick of ghost motion: gravity, air drag, wrap, terrain as a stop-and-hold.
+		/// One committed-tick of leftover ghost motion; ghosts already at the preview horizon hold still.
 		void TravelPreviewGhosts();
 		double GetLastGhostTravelUs() const { return m_LastGhostTravelUs; }
-		bool GetPreviewGhostKinematics(Vector& pos, Vector& vel) const;
+		struct PreviewGhostState {
+			PreviewEventLedger::Key key;
+			Vector pos;
+			Vector vel;
+		};
+		std::vector<PreviewGhostState> GetPreviewGhostStates() const;
+		bool GetPreviewGhostKinematics(const PreviewEventLedger::Key& key, Vector& pos, Vector& vel) const;
 		/// True when every ghost is unregistered: no MOID, not in the world lists the dump walks.
 		bool PreviewGhostsAreUnregistered() const;
 		/// Draws the substitute in the original's slot until swapped back.
@@ -985,6 +992,7 @@ namespace RTE {
 		struct PreviewGhost {
 			MovableObject* object = nullptr;
 			PreviewEventLedger::Key key;
+			bool atHorizon = true;
 		};
 		std::vector<PreviewGhost> m_PreviewGhosts;
 		uint64_t m_PreviewGhostPeak = 0;
