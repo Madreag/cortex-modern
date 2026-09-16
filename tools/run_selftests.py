@@ -31,6 +31,7 @@ SELFTESTS = [
     "single-module-harness",
     "render-window-scripts",
     "text-wrap",
+    "save-refusal-diagnosis",
 ]
 FATAL = re.compile(
     r"^.*(?:\bFAIL\b|RTE Assert|RTE Abort|stack traceback|Stack trace \(most recent call last\)).*$",
@@ -38,6 +39,14 @@ FATAL = re.compile(
 )
 SUITE_PASS = re.compile(r"^\[(?P<tag>[^\]]+)\] PASS\s*$", re.M)
 SUITE_FAIL = re.compile(r"^\[(?P<tag>[^\]]+)\] FAIL", re.M)
+
+
+def engine_executable(repo: Path) -> Path:
+    if sys.platform == "win32":
+        return Path(repo) / "Cortex Command.exe"
+    from posix_test_runner import resolve_binary  # noqa: PLC0415
+
+    return resolve_binary(repo)
 
 
 def score_selftest(stdout: str, exit_code, timed_out=False, name=None) -> dict:
@@ -119,7 +128,7 @@ def main():
 
     out = options.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    exe = options.repo / "Cortex Command.exe"
+    exe = engine_executable(options.repo)
     with exe.open("rb") as stream:
         exe_hash = hashlib.file_digest(stream, "sha256").hexdigest()
     results = {}

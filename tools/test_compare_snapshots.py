@@ -536,6 +536,7 @@ class RuntimeProjectionTests(unittest.TestCase):
                 ("AudioRuntime1", ("voices", "events", "master_volume", "next_sound_container")),
                 ("AudioVoice1", ("owner", "path", "loops")),
                 ("AudioVoice2", ("owner", "path", "loops")),
+                ("AudioVoice3", ("owner", "path", "loops")),
                 ("AudioSample1", ("path", "mode", "loops")),
                 ("AudioSample2", ("path", "mode", "loops", "captured")),
                 ("SoundContainer1", ("identity", "playing_channels", "paused", "pitch"))):
@@ -683,6 +684,11 @@ class RuntimeProjectionTests(unittest.TestCase):
         for key in ("owner", "path", "loops"):
             with self.subTest(key=key):
                 self.assert_field(voice2, (key,), False)
+        voice3 = dict(version="AudioVoice3", owner=1, path=1, position=1, loops=1)
+        self.assert_field(voice3, ("position",), False)
+        for key in ("owner", "path", "loops"):
+            with self.subTest(key=key):
+                self.assert_field(voice3, (key,), False)
         sample2 = dict(version="AudioSample2", path=1, mode=1, loops=1, captured=1)
         for key in ("path", "mode", "loops", "captured"):
             with self.subTest(key=key):

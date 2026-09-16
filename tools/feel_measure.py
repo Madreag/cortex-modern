@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -19,7 +20,7 @@ from run_sim_test import make_run
 from compare_sim_traces import strict_compare
 
 REPO = Path(__file__).resolve().parents[1]
-SCRATCH = Path('D:/mx/astra-feel-measure-20260913')
+MST = timezone(timedelta(hours=-7))
 HELPERS = REPO / 'tools/feel'
 SP_CONTROL = Path('D:/mx/opus-f24-20260913/sp-control')
 SP_COMPARATOR = Path('D:/Projects/reviews/takeover-20260909/grok-workers/opus-f24-first-update-20260913/scripts/compare_sp.py')
@@ -27,8 +28,7 @@ BYTE_LIMIT = 5_000_000_000
 
 
 def stamp():
-    environment = dict(os.environ, TZ='America/Phoenix')
-    return subprocess.check_output(['date', '+%Y-%m-%d %H:%M MST'], env=environment, text=True).strip()
+    return datetime.now(MST).strftime('%Y-%m-%d %H:%M MST')
 
 
 def scratch_bytes(root):
@@ -155,7 +155,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
         write_json(out / 'run-result.json', records)
     if any(record.get('exe_sha256') != exe_hash for record in records.values()):
         raise RuntimeError('the executable changed during the matrix')
-    manifest.update(finished=stamp(), scratch_bytes=scratch_bytes(SCRATCH),
+    manifest.update(finished=stamp(), scratch_bytes=scratch_bytes(out),
                     launches_complete=all(row.get('exit_code') == 0 and row.get('evidence_complete') and not row.get('timed_out') for row in records.values()))
     write_json(out / 'manifest.json', manifest)
     print(f'{manifest["finished"]} {name}: launches_complete={manifest["launches_complete"]}', flush=True)
@@ -311,29 +311,27 @@ def gates(root, control, timeout):
     return result
 
 
-def main():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--out', type=Path, default=SCRATCH)
+    parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--port', type=int, default=48231)
     parser.add_argument('--timeout', type=float, default=600)
     parser.add_argument('--analyze-only', action='store_true')
     parser.add_argument('--skip-gates', action='store_true', help='retain gates as unverified')
     parser.add_argument('--sp-control', type=Path, default=SP_CONTROL)
-    args = parser.parse_args()
+    return parser, parser.parse_args(argv)
+
+
+def main(argv=None):
+    parser, args = parse_args(argv)
     root = args.out.resolve()
-    if sys.platform != 'win32' or REPO.resolve() != Path('D:/Projects/value-observations').resolve():
-        parser.error('this driver belongs to the assigned Windows worktree')
-    if not root.is_relative_to(SCRATCH.resolve()):
-        parser.error('output must stay under the assigned scratch root')
     if not 48231 <= args.port <= 48242:
         parser.error('the eight pair ports must stay within 48231..48249')
     if (Path('D:/mx/LEAD_FAMILY.lock')).exists():
         parser.error('Phase 1 lock is present; no driver or engine launch is permitted')
     branch = subprocess.check_output(['git', '-C', str(REPO), 'branch', '--show-current'], text=True).strip()
-    if branch != 'stage2/feel-measurement':
-        parser.error('unexpected branch: ' + branch)
     os.environ.update(CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')
-    scratch_bytes(SCRATCH)
+    scratch_bytes(root)
     if not args.analyze_only:
         root.mkdir(parents=True, exist_ok=True)
         if (root / 'matrix-plan.json').exists():
@@ -362,7 +360,7 @@ def main():
     complete = all(row['measurement_complete'] and row['off_wire_pass'] for row in results)
     gate_pass = bool(gate_result and all(gate_result[key] for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass')))
     completion = dict(finished=stamp(), measurement_complete=complete, gates_pass=gate_pass,
-                      scratch_bytes=scratch_bytes(SCRATCH), gates_unverified=args.skip_gates)
+                      scratch_bytes=scratch_bytes(root), gates_unverified=args.skip_gates)
     write_json(root / 'completion.json', completion)
     with (root / 'summary.md').open('a', encoding='utf-8') as stream:
         stream.write(f'\nGates passed: {gate_pass}. See gates/gates.json and completion.json.\n')

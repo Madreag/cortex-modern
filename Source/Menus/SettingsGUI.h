@@ -1,5 +1,6 @@
 #pragma once
 
+#include "MenuAutomation.h"
 #include "SettingsVideoGUI.h"
 #include "SettingsAudioGUI.h"
 #include "SettingsInputGUI.h"
@@ -10,6 +11,7 @@
 #include <array>
 #include <memory>
 #include <iosfwd>
+#include <string>
 
 namespace RTE {
 
@@ -19,21 +21,6 @@ namespace RTE {
 	class GUIButton;
 	class GUITab;
 	class GUIControl;
-
-	namespace MenuAutomation {
-		bool Visible(GUIControl* control);
-		bool Enabled(GUIControl* control);
-		bool Text(GUIControl* control, std::string& text);
-		/// Name of the settings page the manager currently shows, empty when it shows no settings page.
-		std::string SettingsPage(GUIControlManager* manager);
-		/// Asks the settings menu owning the manager to show a page on its next event pass.
-		bool QueuePage(GUIControlManager* manager, const std::string& page);
-		/// Raises the queued page's tab notification, which the settings menu answers in the same pass.
-		void ApplyQueuedPage(GUIControlManager* manager);
-		bool Handles(const std::string& command);
-		bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation);
-		void Click(GUIControlManager* manager, const std::string& control);
-	}
 
 	/// Handling for the settings menu screen composition and sub-menu interaction.
 	class SettingsGUI {
@@ -45,6 +32,7 @@ namespace RTE {
 		/// @param guiInput Pointer to a GUIInput interface that will be used by this SettingsGUI's GUIControlManager. Ownership is NOT transferred!
 		/// @param createForPauseMenu Whether this SettingsGUI is part of PauseMenuGUI and should have a slightly different layout.
 		SettingsGUI(AllegroScreen* guiScreen, GUIInputWrapper* guiInput, bool createForPauseMenu = false);
+		~SettingsGUI();
 #pragma endregion
 
 #pragma region Getters
@@ -69,6 +57,9 @@ namespace RTE {
 		/// Routes automation to the controls owned by the active settings page.
 		GUIControlManager* AutomationManager() const { return m_GUIControlManager.get(); }
 		bool AutomationPostCommand(const std::string& name);
+		void QueuePendingPage(const std::string& page) { m_PendingPage = page; }
+		void ClearPendingPage() { m_PendingPage.clear(); }
+		const std::string& PendingPage() const { return m_PendingPage; }
 #pragma endregion
 
 	private:
@@ -98,6 +89,7 @@ namespace RTE {
 		GUICollectionBox* m_SettingsTabberBox;
 		GUIButton* m_BackToMainButton;
 		std::array<GUITab*, SettingsMenuScreen::SettingsMenuCount> m_SettingsMenuTabs;
+		std::string m_PendingPage;
 
 #pragma region Settings Menu Handling
 		/// Disables the settings menu tabber and back buttons. This is used when a settings sub-menu dialog box is active.

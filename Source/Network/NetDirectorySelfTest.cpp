@@ -2,6 +2,10 @@
 #include "NetDirectoryCodec.h"
 #include "NetDirectorySignalChannel.h"
 #include "NetHttpClient.h"
+#ifdef CCCP_WITH_GNS
+#include "GnsSignaling.h"
+#include "GnsTransport.h"
+#endif
 
 #include "allegro.h"
 
@@ -2425,6 +2429,47 @@ namespace RTE {
 				return true;
 			}
 
+			bool TestReportDumpSurvivesNonUtf8LastError(std::string* error) {
+				ScriptedChannel s(false);
+				s.replies->push_back({0, "", std::string(1, static_cast<char>(0xFF))});
+				s.channel.SetPolling(true);
+				s.channel.Update(0);
+				s.channel.Update(0);
+				try {
+					const json report = json::parse(s.channel.BuildReportJson());
+					if (!report.contains("last_error") || report["last_error"].get<std::string>().empty()) {
+						*error = "non-UTF-8 last_error dump dropped the field: " + report.dump();
+						return false;
+					}
+				} catch (const std::exception& parseError) {
+					*error = std::string("BuildReportJson threw on a non-UTF-8 last_error: ") + parseError.what();
+					return false;
+				}
+				return true;
+			}
+
+#ifdef CCCP_WITH_GNS
+			bool TestDispatcherReportDumpSurvivesNonUtf8(std::string* error) {
+				GnsTransport transport;
+				GnsDirectorySignalDispatcher dispatcher;
+				GnsDirectorySignalDispatcher::Config cfg;
+				cfg.role = GnsDirectorySignalDispatcher::Role::Host;
+				cfg.sessionId = std::string("ab") + static_cast<char>(0xFF) + "cd";
+				(void)dispatcher.Start(transport, cfg);
+				try {
+					const json report = json::parse(dispatcher.BuildReportJson());
+					if (!report.contains("local_identity") || report["local_identity"].get<std::string>().empty()) {
+						*error = "dispatcher dump dropped local_identity on a non-UTF-8 session id: " + report.dump();
+						return false;
+					}
+				} catch (const std::exception& parseError) {
+					*error = std::string("dispatcher BuildReportJson threw on a non-UTF-8 session id: ") + parseError.what();
+					return false;
+				}
+				return true;
+			}
+#endif
+
 			bool TestSignalTransportBackoff(std::string* error) {
 				ScriptedChannel s(false);
 				const std::string me = s.channel.GetLocalPeer();
@@ -2679,6 +2724,10 @@ namespace RTE {
 			if (!TestSignal403Fails(&error)) return fail(error);
 			if (!TestSignalQueueFullRetries(&error)) return fail(error);
 			if (!TestSignal429RetryAfter(&error)) return fail(error);
+			if (!TestReportDumpSurvivesNonUtf8LastError(&error)) return fail(error);
+#ifdef CCCP_WITH_GNS
+			if (!TestDispatcherReportDumpSurvivesNonUtf8(&error)) return fail(error);
+#endif
 			if (!TestSignalTransportBackoff(&error)) return fail(error);
 			if (!TestSignalPayloadCap(&error)) return fail(error);
 			if (!TestSignalPostBeforePoll(&error)) return fail(error);

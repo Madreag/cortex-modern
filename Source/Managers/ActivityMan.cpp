@@ -30,6 +30,12 @@
 #include "GlobalScript.h"
 #include "ACraft.h"
 #include "SLTerrain.h"
+#include "Scene.h"
+#include "SceneMan.h"
+#include "LoopbackTransport.h"
+#include "NetLockstep.h"
+#include "NetMatchService.h"
+#include "nlohmann/json.hpp"
 
 #include "EditorActivity.h"
 #include "SceneEditor.h"
@@ -41,6 +47,7 @@
 #include "MusicMan.h"
 #include "TimerMan.h"
 #include "MovableMan.h"
+#include "MovableObject.h"
 
 #ifdef SYSTEM_MINIZIP
 #include <minizip/zip.h>
@@ -55,6 +62,8 @@
 #include "SDL3/SDL_surface.h"
 #include <SDL3_image/SDL_image.h>
 
+#include "lua.hpp"
+
 #include <array>
 #include <chrono>
 #include <charconv>
@@ -66,6 +75,7 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -74,6 +84,82 @@
 using namespace RTE;
 
 namespace {
+	const char* SaveKindName(ActivityMan::SaveKind kind) {
+		switch (kind) {
+			case ActivityMan::SaveKind::Autosave:
+				return "autosave";
+			case ActivityMan::SaveKind::Resync:
+				return "resync";
+			default:
+				return "manual";
+		}
+	}
+
+	std::string ScriptFileBasename(const std::string& key) {
+		std::string name = key;
+		if (const size_t slash = name.find_last_of("/\\"); slash != std::string::npos) name = name.substr(slash + 1);
+		return name;
+	}
+
+	std::vector<std::string> BracketSegments(const std::string& path) {
+		std::vector<std::string> segments;
+		for (size_t i = 0; i < path.size(); ++i) {
+			if (path[i] != '[') continue;
+			const size_t close = path.find(']', i + 1);
+			if (close == std::string::npos) break;
+			segments.push_back(path.substr(i + 1, close - i - 1));
+			i = close;
+		}
+		return segments;
+	}
+
+	ActivityMan::SaveRefusalRecord ParseSaveRefusal(ActivityMan::SaveKind kind, const std::string& problem) {
+		ActivityMan::SaveRefusalRecord record;
+		record.kind = SaveKindName(kind);
+		record.problem = problem;
+
+		constexpr std::string_view deadPrefix = "a reference to a ";
+		constexpr std::string_view deadAt = " that no longer exists at ";
+		std::string message = problem;
+		if (problem.starts_with(deadPrefix)) {
+			if (const size_t at = problem.find(deadAt); at != std::string::npos) {
+				record.objectClass = problem.substr(deadPrefix.size(), at - deadPrefix.size());
+				record.path = problem.substr(at + deadAt.size());
+				message = problem.substr(0, at);
+			}
+		}
+		if (record.path.empty()) {
+			if (const size_t at = problem.rfind(" at "); at != std::string::npos) {
+				message = problem.substr(0, at);
+				record.path = problem.substr(at + 4);
+			}
+		}
+
+		const std::vector<std::string> segments = BracketSegments(record.path);
+		if ((record.path.starts_with("global[") || record.path.starts_with("package.loaded[")) && !segments.empty()) {
+			record.scriptFile = ScriptFileBasename(segments.front());
+			if (segments.size() > 1) record.functionName = segments[1];
+		} else if (record.path.starts_with("object[") && !segments.empty()) {
+			record.scriptFile = "object[" + segments.front() + "]";
+			if (segments.size() > 1) record.functionName = segments[1];
+		}
+		if (!segments.empty()) record.lastSegment = segments.back();
+
+		record.playerLine = "Save skipped:";
+		if (!record.scriptFile.empty()) record.playerLine += " " + record.scriptFile;
+		else if (!record.path.empty()) record.playerLine += " " + record.path;
+		if (!record.functionName.empty()) record.playerLine += " " + record.functionName;
+		if (!record.objectClass.empty()) {
+			record.playerLine += " keeps a dead " + record.objectClass;
+			if (!record.presetName.empty()) record.playerLine += " \"" + record.presetName + "\"";
+			if (!record.lastSegment.empty()) record.playerLine += " (" + record.lastSegment + ")";
+		} else if (!message.empty()) {
+			record.playerLine += " " + message;
+			if (!record.lastSegment.empty()) record.playerLine += " (" + record.lastSegment + ")";
+		}
+		return record;
+	}
+
 	class AutosaveArchiveWriter {
 	public:
 		AutosaveArchiveWriter() : m_Worker([this] {
@@ -147,6 +233,8 @@ void ActivityMan::Clear() {
 	m_StartActivityResumed = false;
 	m_SaveGameTask = std::shared_future<bool>();
 	m_AutosaveTasks.clear();
+	m_SaveRefusalRecords.clear();
+	m_ReportedAutosaveKeys.clear();
 	m_InActivity = false;
 	m_ActivityNeedsRestart = false;
 	m_ActivityNeedsResume = false;
@@ -275,6 +363,9 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 	if (automatic) allocationState.emplace();
 	AudioMan::SoundCheckpointSaveScope carriedSounds;
 	if (!automatic) g_LuaMan.CollectGarbageForCheckpoint();
+	std::vector<std::string> graphs;
+	const SaveKind kind = automatic ? SaveKind::Autosave : (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual);
+	if (!CaptureScriptGraphsOrReportRefusal(kind, graphs)) return false;
 	const uint64_t liveSoundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 	const std::string worldStructure = g_MovableMan.SaveWorldStructure();
 	const std::string sceneRuntime = scene->SaveRuntimeCheckpoint();
@@ -354,15 +445,6 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 		std::stringstream* graphText = graphStream.get();
 		Writer graphWriter(std::move(graphStream));
 		Writer::SnapshotScope graphSnapshot(graphWriter);
-		std::vector<std::string> graphs;
-		std::vector<std::string> luaProblems;
-		if (!g_MovableMan.SerializeScriptGraphs(graphs, luaProblems)) {
-			for (const std::string& problem: luaProblems) {
-				g_ConsoleMan.PrintString("ERROR: the save cannot carry a script value: " + problem);
-				std::cout << "[scriptgraph] save refused: " << problem << std::endl;
-			}
-			return false;
-		}
 		for (size_t index = 0; index < graphs.size(); ++index) {
 			graphWriter.NewPropertyWithValue("LuaStateGraph", std::to_string(index) + "|" + base64_encode(graphs[index], true));
 		}
@@ -536,6 +618,49 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 	task = automatic ? AutosaveWriter().Submit(std::move(writeArchive)) : g_ThreadMan.GetBackgroundThreadPool().submit(std::move(writeArchive)).share();
 
 	return true;
+}
+
+bool ActivityMan::CaptureScriptGraphsOrReportRefusal(SaveKind kind, std::vector<std::string>& graphs) {
+	std::vector<std::string> luaProblems;
+	if (!g_MovableMan.SerializeScriptGraphs(graphs, luaProblems)) {
+		ReportScriptGraphSaveRefusal(kind, luaProblems);
+		return false;
+	}
+	m_ReportedAutosaveKeys.clear();
+	return true;
+}
+
+void ActivityMan::ReportScriptGraphSaveRefusal(SaveKind kind, const std::vector<std::string>& problems) {
+	const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
+	std::vector<SaveRefusalRecord> fresh;
+	for (const std::string& problem: problems) {
+		g_ConsoleMan.PrintString("ERROR: the save cannot carry a script value: " + problem);
+		std::cout << "[scriptgraph] save refused: " << problem << std::endl;
+		SaveRefusalRecord record = ParseSaveRefusal(kind, problem);
+		if (m_SaveRefusalRecords.size() >= c_SaveRefusalRecordLimit) m_SaveRefusalRecords.pop_front();
+		m_SaveRefusalRecords.push_back(record);
+		const std::string key = record.scriptFile + "\n" + record.path;
+		if (kind == SaveKind::Autosave && !m_ReportedAutosaveKeys.insert(key).second) continue;
+		fresh.push_back(std::move(record));
+	}
+	if (fresh.empty()) return;
+	const SaveRefusalRecord* shown = nullptr;
+	for (const SaveRefusalRecord& record: fresh) {
+		if (!record.objectClass.empty()) {
+			shown = &record;
+			break;
+		}
+	}
+	ShowSaveRefusalToPlayer(shown ? *shown : fresh.front(), lockstep);
+}
+
+void ActivityMan::ShowSaveRefusalToPlayer(const SaveRefusalRecord& record, bool lockstep) {
+	if (lockstep) {
+		ScenarioRunner::PushNetUiToast("save_refused", record.playerLine);
+		return;
+	}
+	g_FrameMan.ClearScreenText(0);
+	g_FrameMan.SetScreenText(record.playerLine, 0, 0, 6000, false);
 }
 
 bool ActivityMan::ReadSavedGame(const std::string& fileName, PendingCheckpoint& out) {
@@ -833,6 +958,148 @@ bool ActivityMan::RunGlobalCallbacksSelfTest() {
 	std::cout << "[global-callback-selftest] " << (passed ? "PASS" : "FAIL") << " guards=" << guards << " initial=" << initial
 	          << " memory=" << memory << " file=" << file << " index=" << index << " error=" << error << std::endl;
 	return passed;
+}
+
+bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
+	constexpr const char* Tag = "[save-refusal-diagnosis-selftest]";
+	int failures = 0;
+	const auto check = [&](bool ok, const char* name, const std::string& detail) {
+		std::cout << Tag << (ok ? " PASS " : " FAIL ") << name << ": " << detail << std::endl;
+		if (!ok) ++failures;
+	};
+
+	const std::string r11 = "a reference to a ACDropShip that no longer exists at global[Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua][Update].upvalue[fn].upvalue[transactionOwner]";
+	const SaveRefusalRecord example = ParseSaveRefusal(SaveKind::Autosave, r11);
+	check(example.objectClass == "ACDropShip" && example.scriptFile == "mod_failure_continuation.lua" &&
+	          example.functionName == "Update" && example.lastSegment == "transactionOwner",
+	      "parse_r11", example.playerLine);
+	check(example.playerLine == "Save skipped: mod_failure_continuation.lua Update keeps a dead ACDropShip (transactionOwner)",
+	      "player_line", example.playerLine);
+
+	const SaveRefusalRecord objectPath = ParseSaveRefusal(SaveKind::Manual,
+	    "a reference to a AHuman that no longer exists at object[44][Update].upvalue[held]");
+	check(objectPath.scriptFile == "object[44]" && objectPath.functionName == "Update" &&
+	          objectPath.playerLine == "Save skipped: object[44] Update keeps a dead AHuman (held)",
+	      "parse_object", objectPath.playerLine);
+	const SaveRefusalRecord packagePath = ParseSaveRefusal(SaveKind::Manual,
+	    "a reference to a ACDropShip that no longer exists at package.loaded[Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua][Create].upvalue[ship]");
+	check(packagePath.scriptFile == "mod_failure_continuation.lua" && packagePath.functionName == "Create",
+	      "parse_package", packagePath.playerLine);
+
+	m_SaveRefusalRecords.clear();
+	m_ReportedAutosaveKeys.clear();
+	g_FrameMan.ClearScreenText(0);
+
+	auto priorActivity = std::move(m_Activity);
+	m_Activity.reset(new GAScripted());
+	m_Activity->SetActivityState(Activity::Running);
+	SceneMan::SceneSetAside originalScene;
+	g_SceneMan.SetAsideScene(originalScene);
+	SceneMan::SceneSetAside dummyScene;
+	dummyScene.scene = new Scene();
+	g_SceneMan.ReinstateScene(dummyScene);
+
+	LuaStateWrapper& state = g_LuaMan.GetMasterScriptState();
+	const char* plant =
+	    "local transactionOwner = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\");"
+	    "MovableMan:AddParticle(transactionOwner);"
+	    "local fn = function() return transactionOwner end;"
+	    "local function Update() return fn() end;"
+	    "_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"] = { Update = Update };"
+	    "_SaveRefusalUID = transactionOwner.UniqueID;";
+	const bool planted = state.RunScriptString(plant) == 0;
+	lua_State* lua = state.GetLuaState();
+	lua_getglobal(lua, "_SaveRefusalUID");
+	MovableObject* held = planted ? g_MovableMan.FindObjectByUniqueID(static_cast<long>(lua_tonumber(lua, -1))) : nullptr;
+	lua_pop(lua, 1);
+	if (held) g_MovableMan.UnregisterObject(held);
+
+	const size_t toastsBefore = ScenarioRunner::GetNetUiToastLog().size();
+	const bool refused = planted && held && !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 1);
+	const std::string screen = g_FrameMan.GetScreenText(0);
+	const std::string console = g_ConsoleMan.CopyLogTail(16 * 1024);
+	const bool hasLive = !m_SaveRefusalRecords.empty();
+	const SaveRefusalRecord live = hasLive ? m_SaveRefusalRecords.back() : SaveRefusalRecord{};
+	const bool consoleKept = console.find("ERROR: the save cannot carry a script value:") != std::string::npos;
+	check(refused && hasLive && live.objectClass == "MOPixel" && live.problem.find("that no longer exists") != std::string::npos,
+	      "plant_invalid", hasLive ? live.problem : "no refusal");
+	check(refused && hasLive && !live.playerLine.empty() && screen == live.playerLine, "autosave_ui", screen);
+	std::string consoleDetail;
+	if (!consoleKept) {
+		consoleDetail = console;
+		for (char& ch: consoleDetail) {
+			if (ch == '\n' || ch == '\r') ch = ' ';
+		}
+	}
+	check(consoleKept, "console_text", consoleDetail);
+
+	nlohmann::json heal;
+	try {
+		heal = nlohmann::json::parse(g_NetMatchService.ExportDiagnosticDesyncHeal());
+	} catch (const std::exception& error) {
+		heal = nlohmann::json{{"error", error.what()}};
+	}
+	bool bundleOk = false;
+	std::string bundleDetail = heal.dump();
+	if (heal.contains("save_refusals") && heal["save_refusals"].is_array()) {
+		for (const auto& row: heal["save_refusals"]) {
+			if (row.value("kind", "") == "autosave" && row.value("script", "") == "mod_failure_continuation.lua" &&
+			    row.value("function", "") == "Update" && row.value("class", "") == "MOPixel" &&
+			    row.value("path", "").find("transactionOwner") != std::string::npos &&
+			    row.value("problem", "").find("that no longer exists") != std::string::npos &&
+			    row.value("player_line", "") == live.playerLine) {
+				bundleOk = true;
+				bundleDetail = row.dump();
+				break;
+			}
+		}
+	}
+	check(bundleOk, "bundle_json", bundleDetail);
+
+	g_FrameMan.ClearScreenText(0);
+	const bool refusedAgain = !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 2);
+	check(refusedAgain && g_FrameMan.GetScreenText(0).empty() && ScenarioRunner::GetNetUiToastLog().size() == toastsBefore,
+	      "autosave_dedup", g_FrameMan.GetScreenText(0));
+
+	if (held) g_MovableMan.RegisterObject(held);
+	std::vector<std::string> clearedGraphs;
+	const bool cleared = held && CaptureScriptGraphsOrReportRefusal(SaveKind::Autosave, clearedGraphs);
+	if (held) g_MovableMan.UnregisterObject(held);
+	g_FrameMan.ClearScreenText(0);
+	const bool refusedAfterClear = !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 3);
+	check(cleared && refusedAfterClear && g_FrameMan.GetScreenText(0) == live.playerLine,
+	      "autosave_returns", g_FrameMan.GetScreenText(0));
+
+	g_FrameMan.ClearScreenText(0);
+	const bool refusedManual = !SaveCurrentGame("save_refusal");
+	check(refusedManual && hasLive && !live.playerLine.empty() && g_FrameMan.GetScreenText(0) == live.playerLine,
+	      "manual_repeat", g_FrameMan.GetScreenText(0));
+
+	LoopbackTransport transport;
+	NetLockstepCoordinator coordinator;
+	NetLockstepConfig config;
+	config.localPeerId = 1;
+	config.peerCount = 1;
+	std::string lockstepError;
+	const bool lockstepReady = coordinator.StartReplay(transport, config, &lockstepError);
+	ScenarioRunner::SetLockstepCoordinator(lockstepReady ? &coordinator : nullptr);
+	g_FrameMan.ClearScreenText(0);
+	const size_t toastsAtLockstep = ScenarioRunner::GetNetUiToastLog().size();
+	if (hasLive) ReportScriptGraphSaveRefusal(SaveKind::Manual, {live.problem});
+	const auto& toasts = ScenarioRunner::GetNetUiToastLog();
+	const bool toasted = lockstepReady && toasts.size() > toastsAtLockstep && toasts.back().kind == "save_refused" &&
+	                     toasts.back().text == live.playerLine && g_FrameMan.GetScreenText(0).empty();
+	check(toasted, "lockstep_toast", toasts.empty() ? lockstepError : toasts.back().text);
+	ScenarioRunner::SetLockstepCoordinator(nullptr);
+
+	state.RunScriptString("_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"] = nil; _SaveRefusalUID = nil;");
+	g_LuaMan.CollectGarbageForCheckpoint();
+	g_SceneMan.SetAsideScene(dummyScene);
+	g_SceneMan.ReinstateScene(originalScene);
+	m_Activity = std::move(priorActivity);
+
+	std::cout << Tag << (failures == 0 ? " PASS" : " FAIL") << std::endl;
+	return failures == 0;
 }
 
 bool ActivityMan::RunLoadSelfTest(const std::string& fileName, bool expectLoaded) {

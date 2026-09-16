@@ -148,7 +148,8 @@ void GUITab::Draw(GUIScreen* Screen) {
 		//}
 	}
 
-	if (m_Enabled && (m_Mouseover || m_GotFocus)) {
+	// Hover chrome stays off a selected tab so the selected slice stays visible.
+	if (m_Enabled && (m_Mouseover || m_GotFocus) && !m_Selected) {
 		m_Image->DrawTrans(Screen->GetBitmap(), m_X, YPos, &m_ImageRects[1]);
 	} else if (!m_Enabled) {
 		const int disabledW = m_ImageRects[3].right - m_ImageRects[3].left;

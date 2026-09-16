@@ -264,6 +264,8 @@ def pause_probe(who, root):
                   menu_step(f"assert_settings_page {page}"),
                   menu_step(f"assert_visible CollectionBox{page}Settings 1"),
                   menu_step("dump_player_options")]
+        if page == "Gameplay":
+            steps += row_checks("TabGameplaySettings", "CollectionBoxSettingsBase")
     steps += [
         menu_step("post_command ButtonBackToMainMenu"), {"op": "wait", "screen": "Pause"},
         *pause_rows(), menu_step("dump_host_options"), running]
@@ -616,6 +618,90 @@ def scripts(case, port, root):
     return texts, {"host": probe} if probe else {}
 
 
+def pixel_luma(rgb):
+    r, g, b = rgb[:3]
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+# TabBlue.png on 6447c4c2e3: Base and MouseOver RGB slice identity. Selected
+# fill was panel grey (59, 65, 83), luma 65.024; the floor sits above that.
+TABBLUE_SIZE = (63, 59)
+TABBLUE_BASE_SHA256 = "4f8ea8767d5c1762dcc9e2adea0f0cffeeee72ca770211ed855095ab2be14a4b"
+TABBLUE_MOUSEOVER_SHA256 = "d832a67b1bebd77870ba53071ec36af04c4a2261b387950d1265630d4571752a"
+PANEL_GREY_FILL_LUMA = 65.024
+SELECTED_FILL_LUMA_FLOOR = 80.0
+TABBLUE_CHROME = (24, 28, 55)
+TABBLUE_COLOR_KEY = (0, 0, 0)
+
+
+def tabblue_slice_sha256(image, box):
+    return hashlib.sha256(image.crop(box).convert("RGB").tobytes()).hexdigest()
+
+
+def settings_tab_selected_fill_luma(repo):
+    """Mean luma of the Selected slice interior fill, not chrome or the key."""
+    path = Path(repo) / "Data/Base.rte/GUIs/Skins/Menus/TabBlue.png"
+    with Image.open(path) as source:
+        assert source.size == TABBLUE_SIZE, source.size
+        image = source.convert("RGB")
+    pixels = []
+    for y in range(42, 57):
+        for x in range(2, 61):
+            rgb = image.getpixel((x, y))[:3]
+            if rgb in (TABBLUE_CHROME, TABBLUE_COLOR_KEY):
+                continue
+            pixels.append(rgb)
+    return (sum(pixel_luma(rgb) for rgb in pixels) / len(pixels)) if pixels else 0.0
+
+
+def assert_tabblue_selected_fill(repo):
+    """Base TabBlue fails (fill luma 65.024); the lightened Selected fill passes."""
+    path = Path(repo) / "Data/Base.rte/GUIs/Skins/Menus/TabBlue.png"
+    with Image.open(path) as source:
+        assert source.size == TABBLUE_SIZE, source.size
+        image = source.convert("RGB")
+    base = tabblue_slice_sha256(image, (0, 0, 63, 19))
+    mouseover = tabblue_slice_sha256(image, (0, 20, 63, 39))
+    assert base == TABBLUE_BASE_SHA256, (base, TABBLUE_BASE_SHA256)
+    assert mouseover == TABBLUE_MOUSEOVER_SHA256, (mouseover, TABBLUE_MOUSEOVER_SHA256)
+    skin = (Path(repo) / "Data/Base.rte/GUIs/Skins/Menus/MainMenuSubMenuSkin.ini").read_text(encoding="utf-8")
+    assert "ColorKeyIndex = 0" in skin.split("[Tab]", 1)[1].split("[", 1)[0]
+    fill = settings_tab_selected_fill_luma(repo)
+    assert fill > PANEL_GREY_FILL_LUMA and fill >= SELECTED_FILL_LUMA_FLOOR, (
+        fill, PANEL_GREY_FILL_LUMA, SELECTED_FILL_LUMA_FLOOR)
+    return fill
+
+
+def cell_ink_signature(cell, red, bg):
+    return tuple((x, y) for y, row in enumerate(cell.rows)
+                 for x, pixel in enumerate(row) if pixel != red and pixel != bg)
+
+
+def assert_fontsmall_latin1_ink(repo):
+    """Menus FontSmall 0xC0 and 0xD7 have ink; À/É/Ñ have distinct signatures.
+
+    The base atlas paints those letters as one placeholder blob, so the
+    signature set has size 1 and this fails. The extended atlas passes.
+    """
+    import sys
+    fonts = str(Path(__file__).resolve().parent / "fonts")
+    if fonts not in sys.path:
+        sys.path.insert(0, fonts)
+    from extend_font import ink_count, parse_font
+
+    path = Path(repo) / "Data/Base.rte/GUIs/Skins/Menus/FontSmall.png"
+    font = parse_font(path)
+    red, bg = font["red"], font["bg"]
+    for code in (0xC0, 0xD7):
+        assert ink_count(font["cells"][code], red, bg) > 0, (hex(code), "no ink")
+    sigs = [cell_ink_signature(font["cells"][code], red, bg) for code in (0xC0, 0xC9, 0xD1)]
+    assert all(sigs) and len(set(sigs)) == 3, ("À/É/Ñ signatures collide", [len(s) for s in sigs])
+    return {
+        "ink_0xC0": ink_count(font["cells"][0xC0], red, bg),
+        "ink_0xD7": ink_count(font["cells"][0xD7], red, bg),
+    }
+
+
 def frame_luma(png, rect, border=2):
     """Mean luma of a control's 2-px frame, the compare_luma.py shape from the disabled-state lane."""
     with Image.open(png) as source:
@@ -793,6 +879,8 @@ def run_case(options, case, root, failing=None):
                     drawn = {control["name"] for control in capture["controls"]}
                     assert set(MATCH_ROWS) <= drawn, (who, sorted(drawn))
                     assert not set(SINGLE_PLAYER_ROWS) & drawn, (who, sorted(drawn))
+                    resume = next(control for control in capture["controls"] if control["name"] == "ButtonResume")
+                    assert "back to game" in resume["text"].lower(), resume["text"]
             confirm = [capture for capture in images if capture["screen"] == "PauseLeaveConfirm"]
             assert len(confirm) == 1 and confirm[0]["peer"] == "client", confirm
             drawn = {control["name"] for control in confirm[0]["controls"]}
@@ -818,6 +906,13 @@ def run_case(options, case, root, failing=None):
             assert not result["text_overflow"], result["text_overflow"]
             result["video_input_fit"] = video_input_fit_rows(images, set(VIDEO_INPUT_FIT))
             result["page_value_columns"] = page_value_columns(images, PAGE_FIRST_VALUE)
+            result["fontsmall_latin1"] = assert_fontsmall_latin1_ink(options.repo)
+            fill = assert_tabblue_selected_fill(options.repo)
+            result["tab_luma"] = {
+                "selected_fill": fill,
+                "panel_grey": PANEL_GREY_FILL_LUMA,
+                "floor": SELECTED_FILL_LUMA_FLOOR,
+            }
             gameplay = next((capture for capture in images if capture["settings_page"] == "Gameplay"), None)
             assert gameplay, [capture["settings_page"] for capture in images]
             rows = {control["name"]: control for control in gameplay["controls"]}
