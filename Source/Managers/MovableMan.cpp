@@ -588,12 +588,14 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				// every peer, so reject here deterministically rather than let the team go negative.
 				if (delivery->cost > fundsBefore) {
 					delete craft;
+					activity->ClearPreviewedPurchase(order.orderedByPlayer, order.team, order.totalCost);
 					g_ConsoleMan.PrintString("NETWORK: buy order rejected - insufficient team funds");
 					std::cout << "[net-match] buy order rejected: team " << delivery->team << " cost " << delivery->cost << " > funds " << fundsBefore << std::endl;
 					continue;
 				}
 				if (!gameActivity->QueuePurchaseDelivery(craft, order)) {
 					delete craft;
+					gameActivity->ClearPreviewedPurchase(order.orderedByPlayer, order.team, order.totalCost);
 					g_ConsoleMan.PrintString("NETWORK: buy order did not queue: team " + std::to_string(delivery->team));
 					std::cout << "[net-match] buy order did not queue: team " << delivery->team << std::endl;
 					continue;
@@ -1885,7 +1887,11 @@ bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in) {
 	for (Actor* actor: m_AddedActors) actor->ResolveFaithfulLinks();
 	for (MovableObject* item: m_AddedItems) item->ResolveFaithfulLinks();
 	for (MovableObject* particle: m_AddedParticles) particle->ResolveFaithfulLinks();
-	if (Activity* activity = g_ActivityMan.GetActivity(); activity && !activity->ResolveCheckpointReferences()) return false;
+	if (Activity* activity = g_ActivityMan.GetActivity()) {
+		if (!activity->ResolveCheckpointReferences()) return false;
+		activity->ClearAllPresentationViews();
+		activity->FillPresentationFromPreview(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+	}
 	if (!g_PrimitiveMan.ResolveCheckpointReferences()) return false;
 	ResolvePendingSnapshotLinks();
 	RedrawRestoredMOIDs();
@@ -2446,7 +2452,7 @@ void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger
 	}
 	UnregisterObject(mo);
 	mo->SetAsNoID();
-	m_PreviewGhosts.push_back({mo, key});
+	m_PreviewGhosts.push_back({mo, key, true});
 	if (m_PreviewGhosts.size() > m_PreviewGhostPeak) {
 		m_PreviewGhostPeak = m_PreviewGhosts.size();
 	}
@@ -2469,9 +2475,20 @@ void MovableMan::DropAllPreviewGhosts() {
 	m_PreviewGhosts.clear();
 }
 
-bool MovableMan::GetPreviewGhostKinematics(Vector& pos, Vector& vel) const {
+std::vector<MovableMan::PreviewGhostState> MovableMan::GetPreviewGhostStates() const {
+	std::vector<PreviewGhostState> out;
+	out.reserve(m_PreviewGhosts.size());
 	for (const PreviewGhost& ghost: m_PreviewGhosts) {
 		if (ghost.object) {
+			out.push_back({ghost.key, ghost.object->GetPos(), ghost.object->GetVel()});
+		}
+	}
+	return out;
+}
+
+bool MovableMan::GetPreviewGhostKinematics(const PreviewEventLedger::Key& key, Vector& pos, Vector& vel) const {
+	for (const PreviewGhost& ghost: m_PreviewGhosts) {
+		if (ghost.object && ghost.key.kind == key.kind && ghost.key.emitterUID == key.emitterUID && ghost.key.tick == key.tick && ghost.key.seq == key.seq) {
 			pos = ghost.object->GetPos();
 			vel = ghost.object->GetVel();
 			return true;
@@ -2499,10 +2516,10 @@ void MovableMan::TravelPreviewGhosts() {
 	const Vector gravity = g_SceneMan.GetGlobalAcc();
 	for (PreviewGhost& ghost: m_PreviewGhosts) {
 		MovableObject* mo = ghost.object;
-		if (!mo || mo->IsSetToDelete() || mo->GetPinStrength() > 0) {
+		if (!mo || mo->IsSetToDelete() || mo->GetPinStrength() > 0 || ghost.atHorizon) {
 			continue;
 		}
-		// Same gravity and air drag ApplyForces gives the particle; a ghost carries no forces.
+		// Close a leftover sub-tick, then hold the preview horizon.
 		Vector vel = mo->GetVel() + gravity * mo->GetGlobalAccScalar() * dt;
 		if (mo->GetAirResistance() > 0 && vel.GetLargest() >= mo->GetAirThreshold()) {
 			vel *= 1.0F - (mo->GetAirResistance() * dt);
@@ -2513,10 +2530,12 @@ void MovableMan::TravelPreviewGhosts() {
 		const int pixelY = static_cast<int>(std::floor(pos.m_Y));
 		if (g_SceneMan.IsWithinBounds(pixelX, pixelY, 0) && g_SceneMan.GetTerrMatter(pixelX, pixelY) != g_MaterialAir) {
 			mo->SetVel(Vector(0, 0));
+			ghost.atHorizon = true;
 			continue;
 		}
 		mo->SetVel(vel);
 		mo->SetPos(pos);
+		ghost.atHorizon = true;
 	}
 	m_LastGhostTravelUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count();
 }
