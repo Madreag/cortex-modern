@@ -451,6 +451,12 @@ def seated_actors(lines):
 
 def compare_census_lines(left, right):
     """The contract's compare: the launch census line by line, each line's seat-binding columns aside."""
+    if not left:
+        return {"pass": False, "reason": "offline census tick-1 lines missing", "offline_lines": 0,
+                "match_lines": len(right), "seat_binding_differences": [], "first_difference": None}
+    if not right:
+        return {"pass": False, "reason": "match census tick-1 lines missing", "offline_lines": len(left),
+                "match_lines": 0, "seat_binding_differences": [], "first_difference": None}
     normalized = [[normalize_seat_binding(line) for line in lines] for lines in (left, right)]
     lines = [[line for line, _ in side] for side in normalized]
     first = next((index for index, (a, b) in enumerate(zip(*lines)) if a != b), None)
@@ -583,7 +589,14 @@ def launch(options):
                 script.parent.mkdir(parents=True, exist_ok=False)
                 # resync-skirmish seats both place past the injected desync (tick 50, resync ~tick 60):
                 # the resync has to land while the seats are still placing, so the hold outlasts it.
-                delay = 90 if options.variant == "resync-skirmish" else ((90 if hold_desync else 45) if peer == "client" else 0)
+                # wire-refusal places at the rendezvous: the 120-tick editor cap is a harness
+                # safety net over the shared place phase, not an extra client hold.
+                if options.variant == "wire-refusal":
+                    delay = 0
+                elif options.variant == "resync-skirmish":
+                    delay = 90
+                else:
+                    delay = (90 if hold_desync else 45) if peer == "client" else 0
                 script.write_text(json.dumps(editor_script(peer, captures, delay, hold_desync and not hold_resync,
                                                            options.variant == "wire-refusal", resolution,
                                                            host_signal=root / "host-ui" / (WAITING_SEEN_SIGNAL + ".json"),
