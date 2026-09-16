@@ -57,6 +57,25 @@
 
 #define BRAINLZWIDTHDEFAULT 640
 
+std::string GameActivity::s_LastFundsReadout[Players::MaxPlayerCount];
+
+const std::string& GameActivity::GetLastFundsReadout(int player) {
+	static const std::string empty;
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return empty;
+	}
+	return s_LastFundsReadout[player];
+}
+
+void GameActivity::RecordFundsReadout(int player) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return;
+	}
+	char str[64];
+	std::snprintf(str, sizeof(str), "%c Funds: %s oz", -58, DescribeFundsReadout(m_Team[player], player).c_str());
+	s_LastFundsReadout[player] = str;
+}
+
 using namespace RTE;
 
 // A player's AI order for one of their units crosses the wire under lockstep, so every peer applies it at the committed tick.
@@ -689,8 +708,6 @@ bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor*
 		buyOrder.orderedByPlayer = static_cast<int8_t>(player);
 		buyOrder.multiOrderYOffset = multiOrderYOffset;
 		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, buyOrder});
-		const uint64_t commitTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + ScenarioRunner::GetLockstepLocalInputDelay();
-		NotePreviewedPurchase(player, team, totalCost, commitTick);
 		std::cout << "[net-match] buy order issued: team " << team << " cost " << totalCost << " items " << buyOrder.cargo.size() << std::endl;
 
 		// The confirm ding plays when the order applies through QueuePurchaseDelivery.
@@ -2457,7 +2474,6 @@ void GameActivity::Update() {
 
 		// Start LZ picking mode if a purchase was made
 		if (m_pBuyGUI[player]->PurchaseMade()) {
-			ConfirmPreviewedPurchase(player, team, m_pBuyGUI[player]->GetTotalOrderCost());
 			// Store the delivery's own width; the window clamp belongs to the draw, since this is checkpointed state.
 			m_LZCursorWidth[player] = m_pBuyGUI[player]->GetDeliveryWidth();
 			m_pBuyGUI[player]->SetEnabled(false);
@@ -2823,6 +2839,7 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 		draw_sprite(pTargetBitmap, pIcon->GetBitmaps8()[0], MAX(2, g_CameraMan.GetScreenOcclusion(which).m_X + 2), 2);
 	// Gold
 	std::snprintf(str, sizeof(str), "%c Funds: %s oz", TeamFundsChanged(which) ? -57 : -58, DescribeFundsReadout(m_Team[PoS], PoS).c_str());
+	s_LastFundsReadout[PoS] = str;
 	g_FrameMan.GetLargeFont()->DrawAligned(&pBitmapInt, MAX(16, g_CameraMan.GetScreenOcclusion(which).m_X + 16), yTextPos, str, GUIFont::Left);
 	/* Not applicable anymore to the 4-team games
 	    // Body losses

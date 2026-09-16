@@ -462,7 +462,6 @@ namespace RTE {
 		/// The gold number DrawGUI prints: floor of the local presentation tally.
 		std::string DescribeFundsReadout(int whichTeam, int player) const;
 		void NotePreviewedPurchase(int player, int team, float cost, uint64_t commitTick, uint64_t sequence = 0);
-		void ConfirmPreviewedPurchase(int player, int team, float cost);
 		void AdoptPreviewedPurchase(int player, int team, float cost);
 		void ClearPreviewedPurchase(int player, int team, float cost);
 		void ClearPresentationView(int player);

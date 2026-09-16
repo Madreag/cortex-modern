@@ -456,6 +456,9 @@ namespace RTE {
 		/// @param targetPos The absolute position of the target bitmap's upper left corner in the scene. (default: Vector())
 		/// @param which Which screen's GUI to draw onto the bitmap. (default: 0)
 		void DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos = Vector(), int which = 0) override;
+		/// The gold string DrawGUI last printed for this seat; the funds-preview driver reads it.
+		static const std::string& GetLastFundsReadout(int player);
+		static void RecordFundsReadout(int player);
 
 		/// Draws this ActivityMan's current graphical representation to a
 		/// BITMAP of choice. This includes all game-related graphics.
@@ -777,6 +780,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		static std::string s_LastFundsReadout[Players::MaxPlayerCount];
 		/// The peer that drives a seat in the agreed roster, or 0 when no peer holds it.
 		static uint8_t LockstepSeatPeerId(int player);
 		/// The seat holder's display name from the agreed roster, for the match's own banners.
