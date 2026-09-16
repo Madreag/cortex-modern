@@ -1,4 +1,5 @@
--- Ends the round on sim time, sits in Observe, and reports the tick the cursor freeze lifts.
+-- Ends the round on sim time and sits in Observe. Look-around is the observe view's own input
+-- (InputScript MOUSE= / L_RIGHT) after OVER; the freeze-lift tick is printed at the C++ gate.
 GameOverObserve = {};
 
 local BRAIN_X = 880;
@@ -24,7 +25,6 @@ function GameOverObserve:StartActivity(isNewGame)
 	end
 	self.clock = Timer();
 	self.ended = false;
-	self.liftedTick = nil;
 	self.ticks = 0;
 end
 
@@ -34,7 +34,6 @@ function GameOverObserve:UpdateActivity()
 	end
 	self.ticks = (self.ticks or 0) + 1;
 	if not self.ended and self.clock:IsPastSimMS(500) then
-		-- Stay in Update so the freeze can be observed; EndActivity would stop this script.
 		self.WinnerTeam = Activity.TEAM_1;
 		self.ActivityState = Activity.OVER;
 		self.GameOverTimer:Reset();
@@ -45,19 +44,6 @@ function GameOverObserve:UpdateActivity()
 		end
 		self.ended = true;
 		print("[game-over-freeze] over tick=" .. self.ticks);
-	end
-	if self.ended then
-		for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
-			if self:PlayerActive(player) and self:PlayerHuman(player) then
-				local controller = self:GetPlayerController(player);
-				if controller then
-					controller.Disabled = true;
-					controller:SetState(Controller.HOLD_RIGHT, true);
-				end
-				local target = self:GetObservationTarget(player);
-				print("[game-over-freeze] target=" .. target.X .. "," .. target.Y .. " elapsed=" .. self.GameOverTimer.ElapsedSimTimeMS .. " player=" .. player);
-			end
-		end
 	end
 end
 
