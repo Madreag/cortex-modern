@@ -1,8 +1,8 @@
-"""Detecting driver for persistent-world slice 1. Written, not run (no-tests rule).
+"""Detecting driver for the persistent world. Written, not run (no-tests rule).
 
-Each named RED has its own engine flag so a startup that dies first cannot stand
-in for the others. The completion pass launches these cases and scores the exact
-FAIL lines.
+Each named RED has its own engine flag or Python helper so a startup that dies
+first cannot stand in for the others. The completion pass launches these cases
+and scores the exact FAIL lines.
 
 Control-tree reversal (disclosed): the pinned control at bb7704b411 has none of
 these -net-world-*-selftest flags. A control-tree launch of them never prints a
@@ -14,6 +14,8 @@ new PASS token. What that tree still reaches on its existing flags:
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -30,15 +32,23 @@ RED_BINDING_MISSING = "activate-binding-missing"
 RED_REJOIN = "rejoin after a clean leave did not land in the running world"
 RED_H4_LEAVE_CLOSED_WORLD = "H4 clean leave closed a persistent-world seat"
 RED_DIRECTORY_BOOT = "world_boot 0 was accepted on the C++ register decoder"
+RED_DIRECTORY_RESUME = "directory resume did not keep the world id"
 RED_CODEC = "WorldTransition codec did not round-trip"
 RED_ORDINARY_IDENTITY = "ordinary identity did not stamp lockstep 22 and match config 4"
 RED_ADMIT = "a due activation cancelled instead of admitting"
+RED_ORDINARY_JOIN_ACCEPTED = "an ordinary NewJoin was accepted"
 
 CASES = (
     {
         "name": "fresh-join-running-world",
         "argv": ["-net-world-live-selftest"],
         "red": RED_FRESH_JOIN_LIVE_MATCH,
+        "pass_token": "[net-world-live-selftest] PASS",
+    },
+    {
+        "name": "ordinary-live-join-names-failure",
+        "argv": ["-net-world-live-selftest"],
+        "red": RED_ORDINARY_JOIN_ACCEPTED,
         "pass_token": "[net-world-live-selftest] PASS",
     },
     {
@@ -54,10 +64,12 @@ CASES = (
         "pass_token": "[net-world-rejoin-selftest] PASS",
     },
     {
-        "name": "world-identity-survives-restart",
-        "argv": ["-net-world-identity-selftest"],
+        "name": "world-identity-survives-host-restart",
+        "kind": "host_restart",
+        "argv": ["-net-world-identity-print-selftest"],
         "red": RED_WORLD_ID_DID_NOT_SURVIVE,
-        "pass_token": "[net-world-identity-selftest] PASS",
+        "pass_token": "[net-world-identity-print-selftest] PASS",
+        "restarts": 2,
     },
     {
         "name": "joiner-transfer-round-trip",
@@ -102,6 +114,13 @@ CASES = (
         "pass_token": "[net-world-directory-selftest] PASS",
     },
     {
+        "name": "directory-resume-same-world-id",
+        "kind": "python",
+        "fn": "directory_resume_same_world_id",
+        "red": RED_DIRECTORY_RESUME,
+        "pass_token": "[directory-resume] PASS",
+    },
+    {
         "name": "world-transition-codec",
         "argv": ["-net-world-codec-selftest"],
         "red": RED_CODEC,
@@ -132,15 +151,8 @@ def score_stdout(stdout: str, case: dict) -> dict:
     return {"pass": True, "reason": ""}
 
 
-def directory_resume_same_world_id() -> None:
-    """Directory detecting helper: the same world id resumes the existing row."""
-    tools = Path(__file__).resolve().parent
-    sys.path.insert(0, str(tools / "session_directory"))
-    import session_directory
-
-    world_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-    directory = session_directory.SessionDirectory(expiry_s=60, heartbeat_s=15)
-    row = {
+def _world_row(world_id: str, boot: int) -> dict:
+    return {
         "name": "World",
         "activity": "Persistent World",
         "scene": "Grasslands",
@@ -150,7 +162,7 @@ def directory_resume_same_world_id() -> None:
         "game_version": "7.0.0",
         "build_id": "stage2-world",
         "network_protocol_version": 1,
-        "lockstep_codec_version": 22,
+        "lockstep_codec_version": 23,
         "controller_frame_version": 7,
         "match_config_hash": "a" * 64,
         "session_identity_hash": "b" * 64,
@@ -160,13 +172,52 @@ def directory_resume_same_world_id() -> None:
         "join_mode": "ip",
         "persistent_world": True,
         "world_id": world_id,
-        "world_boot": 1,
+        "world_boot": boot,
         "resume_session_id": world_id,
     }
-    first = directory.register(row, "127.0.0.1", 0.0)
-    row["world_boot"] = 2
-    second = directory.register(row, "127.0.0.1", 1.0)
+
+
+def directory_resume_same_world_id() -> None:
+    """Directory detecting helper: the same world id resumes the existing row."""
+    tools = Path(__file__).resolve().parent
+    sys.path.insert(0, str(tools / "session_directory"))
+    import session_directory
+
+    world_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    directory = session_directory.SessionDirectory(expiry_s=60, heartbeat_s=15)
+    first = directory.register(_world_row(world_id, 1), "127.0.0.1", 0.0)
+    second = directory.register(_world_row(world_id, 2), "127.0.0.1", 1.0)
     if first["session_id"] != world_id or second["session_id"] != world_id:
         raise AssertionError("directory resume did not keep the world id")
     if first["token"] == second["token"]:
         raise AssertionError("directory resume did not issue a new token")
+
+
+def _printed_world_id(text: str) -> str:
+    for line in (text or "").splitlines():
+        if "world-id=" in line:
+            return line.split("world-id=", 1)[1].strip()
+    return ""
+
+
+def host_restart_same_world_id(engine: Path, userdata: Path) -> None:
+    """Two process launches; the world id on disk must match after the restart."""
+    argv = [str(engine), "-net-world-identity-print-selftest"]
+    first = subprocess.run(argv, cwd=str(userdata), capture_output=True, text=True, check=False)
+    second = subprocess.run(argv, cwd=str(userdata), capture_output=True, text=True, check=False)
+    left = _printed_world_id((first.stdout or "") + (first.stderr or ""))
+    right = _printed_world_id((second.stdout or "") + (second.stderr or ""))
+    if not left or left != right:
+        raise AssertionError("world-id-did-not-survive-restart")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "directory-resume":
+        directory_resume_same_world_id()
+        print("[directory-resume] PASS")
+    elif len(sys.argv) > 1 and sys.argv[1] == "host-restart":
+        host_restart_same_world_id(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()))
+        print("[net-world-identity-print-selftest] PASS")
+    else:
+        directory_resume_same_world_id()
+        print("[directory-resume] PASS")
