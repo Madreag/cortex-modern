@@ -214,6 +214,10 @@ def host_activity_label(row):
     return row["preset"] + (f" - {module}" if module else "")
 
 
+def combo_name(text):
+    return text.rsplit(" - ", 1)[0] if " - " in (text or "") else (text or "")
+
+
 def allowed_host_activities(dump):
     # Missing game_activities is an empty census: a base-tip combo fails as an extra row.
     return [row for row in (dump.get("game_activities") or [])
@@ -420,8 +424,7 @@ def scripts(case, port, root):
     elif case == "net-activity":
         # A vanished pick needs a module unload the menu harness cannot drive; the native
         # host_request_fallback row covers the empty-list Base.rte request fields instead.
-        # Two host passes on the same pair: the mouse path picks Brain vs Brain (no Grasslands),
-        # then the keyboard path drops, steps and commits both new combos the way a pad would.
+        # Keyboard commits both combos; Create uses those picks, not a later mouse Select.
         host = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
                 "assert_visible LabelHostActivity 1\nassert_label LabelHostActivity Activity\n"
                 "assert_visible LabelHostScene 1\nassert_label LabelHostScene Scene\n"
@@ -430,18 +433,13 @@ def scripts(case, port, root):
                 "assert_text_fits ComboHostActivity\nassert_text_fits ComboHostScene\n"
                 "assert_label LabelHostInfo Grasslands - PvP\ndump_host_options\n"
                 "combo_drop ComboHostActivity\nwait 3\ndump_host_options\n"
-                "combo_select ComboHostActivity Brain vs Brain - Base.rte\nwait 3\n"
+                "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
+                "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
                 "assert_label ComboHostActivity Brain vs Brain - Base.rte\ndump_host_options\n"
                 "focus ComboHostScene\n"
                 "key_down Return\nwait 2\nkey_up Return\nwait 3\ndump_host_options\n"
                 "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
                 "key_down Return\nwait 2\nkey_up Return\nwait 3\ndump_host_options\n"
-                "focus ComboHostActivity\n"
-                "key_down Return\nwait 2\nkey_up Return\nwait 3\ndump_host_options\n"
-                "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
-                "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
-                "combo_select ComboHostActivity Brain vs Brain - Base.rte\nwait 3\n"
-                "assert_label ComboHostActivity Brain vs Brain - Base.rte\ndump_host_options\n"
                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
                 "wait_connected 2\nwait 12\n"
@@ -1051,24 +1049,32 @@ def run_case(options, case, root, failing=None):
             assert table and all(row["scenes"] for row in table), table
             brain = next(row for row in table if row["preset"] == "Brain vs Brain" and row["module"] == "Base.rte")
             assert all(entry["name"] != "Grasslands" for entry in brain["scenes"]), brain
-            brain_scene = None
+            bvb_closed = []
             for image in host_setup:
                 controls = {c["name"]: c for c in image["controls"]}
-                if (controls.get("ComboHostActivity", {}).get("text") == "Brain vs Brain - Base.rte"
-                        and controls.get("ComboHostScene") and not controls["ComboHostScene"]["dropped"]):
-                    brain_scene = controls["ComboHostScene"]
-                    break
-            assert brain_scene, "no closed Brain vs Brain scene dump"
+                activity = controls.get("ComboHostActivity") or {}
+                scene_row = controls.get("ComboHostScene")
+                if (activity.get("text") == "Brain vs Brain - Base.rte" and activity.get("dropped") is False
+                        and scene_row and not scene_row["dropped"]):
+                    bvb_closed.append(scene_row)
+            assert bvb_closed, "no closed Brain vs Brain scene dump"
+            brain_scene = bvb_closed[0]
             listed = [entry["name"] + (f" - {entry['module']}" if sum(1 for other in brain["scenes"] if other["name"] == entry["name"]) > 1
                                        else "") for entry in brain["scenes"]]
             assert brain_scene["items"] == listed, (brain_scene["items"], listed)
             assert "Grasslands" not in brain_scene["items"], brain_scene
             assert any(row["dropped"] is True for row in scenes), scenes
-            assert any(row["dropped"] is True for row in picker[2:]), picker
+            assert any(row["dropped"] is True for row in picker), picker
+            assert len(bvb_closed) >= 2, bvb_closed
+            assert bvb_closed[-1]["text"] and bvb_closed[-1]["text"] != bvb_closed[0]["text"], bvb_closed
+            assert "Grasslands" not in bvb_closed[-1]["text"], bvb_closed[-1]
+            assert all(row["text"] == "Brain vs Brain - Base.rte" or row["dropped"] for row in picker[2:]), picker
             result["picker_cycle"] = picker
             result["scene_cycle"] = scenes
-            picked_scene = next(c["text"] for c in host_setup[-1]["controls"] if c["name"] == "ComboHostScene")
+            picked_scene = bvb_closed[-1]["text"]
             result["picked_scene"] = picked_scene
+            key_scene = combo_name(picked_scene)
+            assert scene == key_scene, (scene, key_scene, dumped)
             panels = {}
             for who in ("host", "client"):
                 matches = [image for image in images if image["peer"] == who
@@ -1076,16 +1082,17 @@ def run_case(options, case, root, failing=None):
                 assert len(matches) == 1, (who, [image["json"] for image in matches])
                 shot = matches[0]
                 assert [shot["activity_preset"], shot["activity_module"]] == [preset, module], shot["json"]
-                assert shot.get("scene_name") == scene, shot
+                assert shot.get("scene_name") == key_scene, (who, shot.get("scene_name"), key_scene)
                 controls = {c["name"]: c for c in shot["controls"]}
                 assert controls["LabelLobbyMatch"]["text"] == f"{preset} - {module}", (who, controls["LabelLobbyMatch"])
-                assert controls["LabelLobbyMatchMode"]["text"].startswith(scene + " - "), (who, controls["LabelLobbyMatchMode"], scene)
+                assert controls["LabelLobbyMatchMode"]["text"].startswith(key_scene + " - "), (who, controls["LabelLobbyMatchMode"], key_scene)
                 assert "Grasslands" not in controls["LabelLobbyMatchMode"]["text"], (who, controls["LabelLobbyMatchMode"])
                 for name in ("LabelLobbyMatch", "LabelLobbyMatchMode", "LabelLobbyPlayersHeader"):
                     assert controls[name]["text_fits"] is True, (who, name, controls[name])
                 panels[who] = controls["MultiplayerLobbyPanel"]["rect"]
             assert panels["host"] == panels["client"], panels
             result["lobby_panel_rects"] = panels
+            result["key_committed"] = {"preset": preset, "scene": key_scene, "combo": picked_scene}
         if case == "input":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == "ab"
         if case == "input-parity":
