@@ -1319,9 +1319,11 @@ namespace RTE {
 					break;
 				}
 			}
-			if (client.GetState() != NetSessionState::Failed ||
+			if (client.GetState() != NetSessionState::Failed || client.GetMismatchKey() != "display_name" ||
+			    client.GetRejectSummary() != "Match roster refused" ||
 			    client.BuildRejectText().find("display_name exceeds max encoded length") == std::string::npos) {
-				*error = "overlong ClientHello did not fail visibly: state=" + std::string(NetSession::StateName(client.GetState())) +
+				*error = "overlong ClientHello did not take the roster-refusal encode path: state=" +
+				         std::string(NetSession::StateName(client.GetState())) + " key=" + client.GetMismatchKey() +
 				         " reject=" + client.BuildRejectText();
 				return false;
 			}
