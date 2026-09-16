@@ -380,16 +380,24 @@ void GUIListPanel::BuildDrawBitmap() {
 				m_DrawBitmap->DrawRectangle(1, itemY, itemWidth - 2, m_Font->GetFontHeight(), m_SelectedColorIndex, (m_GotFocus || m_HighlightAsIfAlwaysFocused)); // Filled if we have focus
 			}
 
+			const int nameRoom = itemWidth - 8 - (m_VertScroll->_GetVisible() ? m_VertScroll->GetWidth() : 0);
+			std::string name = I->m_Name;
+			if (m_Font->CalculateWidth(name) > nameRoom) {
+				while (!name.empty() && m_Font->CalculateWidth(name + "...") > nameRoom) {
+					name.pop_back();
+				}
+				name += "...";
+			}
 			if (I->m_Selected && (m_GotFocus || m_HighlightAsIfAlwaysFocused)) {
 				m_Font->SetColor(m_FontSelectColor);
 				m_Font->DrawAligned(m_DrawBitmap, itemX - 3 + itemWidth - (m_VertScroll->_GetVisible() ? m_VertScroll->GetWidth() : 0), itemY, I->m_RightText, GUIFont::Right);
-				m_Font->Draw(m_DrawBitmap, 4 - itemX, itemY, I->m_Name);
+				m_Font->Draw(m_DrawBitmap, 4 - itemX, itemY, name);
 			} else {
 				// Unselected
 				m_Font->SetColor(m_FontColor);
 				m_Font->SetKerning(m_FontKerning);
 				m_Font->DrawAligned(m_DrawBitmap, itemX - 3 + itemWidth - (m_VertScroll->_GetVisible() ? m_VertScroll->GetWidth() : 0), itemY, I->m_RightText, GUIFont::Right, GUIFont::Top, itemWidth, m_FontShadow);
-				m_Font->Draw(m_DrawBitmap, 4 - itemX, itemY, I->m_Name, m_FontShadow);
+				m_Font->Draw(m_DrawBitmap, 4 - itemX, itemY, name, m_FontShadow);
 			}
 
 			y += GetItemHeight(I);
