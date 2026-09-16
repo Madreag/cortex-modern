@@ -4943,6 +4943,8 @@ namespace RTE {
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
+		admission.SetRound(0);
+		client.SetReconnectClient(&admission);
 		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
 		NetLockstepCoordinator& coordinator = *service.m_Coordinator;
 		coordinator.m_RelayHost = true;
@@ -4980,6 +4982,11 @@ namespace RTE {
 			client.Tick(now);
 			hostTransport.AdvanceTimeMs(10);
 			clientTransport.AdvanceTimeMs(10);
+		}
+		if (!admission.WasRemoved() || admission.GetLastRejectReason() != NetRejectReason::ParticipantRemoved) {
+			*error = "the client did not receive the ParticipantRemoval notice";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
 		}
 		if (service.m_Session->GetReadyPeerCount() != 0 || client.GetState() != NetSessionState::Closed) {
 			*error = "DisconnectReadyPeer left the kicked peer ready";

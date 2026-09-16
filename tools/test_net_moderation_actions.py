@@ -18,6 +18,7 @@ CODEC_ROWS = (
 KICK_ROWS = (
     "kick: socket-only drop still opens a reclaim hold",
     "kick: targeted peer removed with no reclaim hold",
+    "kick: service RemoveParticipant broadcasts, evicts and disconnects",
 )
 
 
@@ -37,7 +38,7 @@ def main() -> int:
         (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         print(json.dumps(result, indent=2))
         return 1
-    flags = ["-net-protocol-selftest"] if options.case == "removal-codec" else ["-net-reconnect-session-selftest"]
+    flags = ["-net-protocol-selftest"] if options.case == "removal-codec" else ["-net-reconnect-session-selftest", "-net-match-selftest"]
     extra = ["-net-reconnect-session-selftest"] if options.case == "removal-codec" else []
     rows = CODEC_ROWS if options.case == "removal-codec" else KICK_ROWS
     stdout = ""
