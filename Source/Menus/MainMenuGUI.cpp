@@ -1028,16 +1028,16 @@ void MainMenuGUI::FitHostActivityCombo() {
 			}
 		}
 	}
-	constexpr int arrow = 17;
-	const int needed = longest > 0 ? longest + arrow : m_MultiplayerHostActivityCombo->GetWidth();
-	const int edge = std::max(80, m_MultiplayerHostPanel->GetWidth() - valueX);
-	if (needed > edge) {
-		const int grown = std::min(std::max(m_RootBoxMaxWidth - 12, edge), valueX + needed);
-		if (grown > m_MultiplayerHostPanel->GetWidth()) {
-			m_MultiplayerHostPanel->Resize(grown, m_MultiplayerHostPanel->GetHeight());
-		}
-	}
-	const int maxWidth = std::max(80, m_MultiplayerHostPanel->GetWidth() - valueX);
+	constexpr int namePad = 8;
+	constexpr int scrollThickness = 17;
+	constexpr int panelPad = 12;
+	const int rowHeight = font ? font->GetFontHeight() : 0;
+	const int stackHeight = std::max(list ? list->GetStackHeight() : 0,
+	                                 rowHeight * m_MultiplayerHostActivityCombo->GetCount());
+	const int scroll = (rowHeight > 0 && stackHeight > m_MultiplayerHostActivityCombo->GetDropHeight())
+	                       ? scrollThickness : 0;
+	const int needed = longest > 0 ? longest + namePad + scroll : m_MultiplayerHostActivityCombo->GetWidth();
+	const int maxWidth = std::max(80, m_MultiplayerHostPanel->GetWidth() - valueX - panelPad);
 	const int width = std::clamp(std::max(needed, 80), 80, maxWidth);
 	m_MultiplayerHostActivityCombo->SetPositionRel(valueX, m_MultiplayerHostActivityCombo->GetRelYPos());
 	if (m_MultiplayerHostActivityCombo->GetWidth() != width) {
@@ -1383,7 +1383,6 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		int contentHeight = 250;
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup && m_MultiplayerHostPanel) {
 			contentHeight = m_MultiplayerHostPanel->GetHeight();
-			contentWidth = std::max(contentWidth, m_MultiplayerHostPanel->GetWidth());
 		}
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
 			// FontLarge's atlas has a few width-only blank cells (e.g. 0xDF); FontSmall's ink draws those bytes.
