@@ -887,7 +887,13 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		// The seat name this peer announces; without it the e2e path still defaults to Host/Client.
 		if (!lastArg && currentArg == "-net-player-name") {
-			s_netPlayerName = argValue[++i];
+			const std::string name = argValue[++i];
+			// Past the hello's byte cap the encode would refuse it mid-start, so the flag is refused here.
+			if (name.size() > NetLobbyProtocol::c_MaxDisplayNameBytes) {
+				std::cerr << "-net-player-name over the 64-byte cap; the peer announces its default seat name" << std::endl;
+			} else {
+				s_netPlayerName = name;
+			}
 			continue;
 		}
 
