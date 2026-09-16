@@ -132,6 +132,7 @@ def expected_observation(rules, default=False):
     for index, team in enumerate(rules["teams"]):
         expected[f"team{index}.tech"] = team["technology_module"] or "-All-"
         expected[f"team{index}.ai"] = str(team["ai_skill"])
+        expected[f"team{index}.funds"] = str(rules["starting_gold"])
     return expected
 
 
