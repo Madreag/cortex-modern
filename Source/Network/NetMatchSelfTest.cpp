@@ -1623,22 +1623,6 @@ namespace RTE {
 			return true;
 		}
 
-		bool TestServiceReportCarriesActivityPreset(std::string* error) {
-			NetMatchService service;
-			nlohmann::json report;
-			try {
-				report = nlohmann::json::parse(service.BuildReportJson());
-			} catch (const nlohmann::json::exception& parseError) {
-				*error = std::string("idle report was not JSON: ") + parseError.what();
-				return false;
-			}
-			if (!report.contains("activity_preset")) {
-				*error = "service report has no activity_preset field";
-				return false;
-			}
-			return true;
-		}
-
 		bool TestResyncReportAbsentWhenIdle(std::string* error) {
 			NetMatchService service;
 			nlohmann::json report;
@@ -4077,6 +4061,38 @@ namespace RTE {
 			}
 			return true;
 		}
+	}
+
+	bool TestServiceReportCarriesActivityPreset(std::string* error) {
+		NetMatchService service;
+		service.m_Runner = std::make_unique<NetMatchRunner>();
+		NetMatchRunnerConfig cfg;
+		cfg.host = true;
+		cfg.joinAddress = "127.0.0.1";
+		cfg.matchConfig = NetMatchConfigUtil::MakeDefault(0x4143545052455345ULL);
+		cfg.matchConfig.activityPreset = "Adopted Roster Preset";
+		LoopbackTransport transport;
+		NetSession session;
+		NetLockstepCoordinator coordinator;
+		std::string startError;
+		(void)service.m_Runner->Start(transport, session, coordinator, cfg, &startError);
+		if (service.m_Runner->GetMatchConfig().activityPreset != "Adopted Roster Preset") {
+			*error = "the runner did not adopt the roster preset";
+			return false;
+		}
+		nlohmann::json report;
+		try {
+			report = nlohmann::json::parse(service.BuildReportJson());
+		} catch (const nlohmann::json::exception& parseError) {
+			*error = std::string("adopted-roster report was not JSON: ") + parseError.what();
+			return false;
+		}
+		const std::string preset = report.value("activity_preset", std::string());
+		if (preset != "Adopted Roster Preset") {
+			*error = "service report activity_preset is \"" + preset + "\" not the adopted roster's";
+			return false;
+		}
+		return true;
 	}
 
 	bool TestHoldResolutionPumpDoesNotRelock(std::string* error) {
