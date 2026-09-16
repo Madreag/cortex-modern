@@ -5,8 +5,11 @@
 #include "NetAuthCrypto.h"
 #include "NetLobbySession.h"
 #include "NetLockstep.h"
+#include "NetDirectoryClient.h"
+#include "NetDirectoryCodec.h"
 #include "NetMatchConfig.h"
 #include "NetMatchRunner.h"
+#include "NetMatchService.h"
 #include "NetReconnectLedger.h"
 #include "NetReconnectSession.h"
 #include "NetReconnectTicketStore.h"
@@ -17,9 +20,12 @@
 #include "System/ScenarioRunner.h"
 #include "System/System.h"
 
+#include "nlohmann/json.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -4893,6 +4899,89 @@ namespace RTE {
 			}
 			return 0;
 		}
+
+		int TestReResolvePaths() {
+			NetH4TicketRecord record;
+			if (record.recordVersion != NetReconnectTicketStore::c_RecordVersion) {
+				return Fail("a default ticket record still writes a v1 body");
+			}
+			record.directorySessionId = "sess-re-resolve-1";
+			record.hostAddress = "10.0.0.8:41010";
+			const NetMatchServiceRequest rejoin = TicketRejoinRequestFromRecord(record, "Client");
+			if (rejoin.sessionId != "sess-re-resolve-1" || rejoin.address != "10.0.0.8:41010" || rejoin.host) {
+				return Fail("BeginTicketRejoin.sessionId did not take the stored directory session id");
+			}
+			if (ResolveTicketJoinAddress(record, "ignored", "127.0.0.1", "9.9.9.9:1", false) != "9.9.9.9:1") {
+				return Fail("SessionFull resolveJoinAddress ignored a remapped directory address");
+			}
+			if (ResolveTicketJoinAddress(record, "ignored", "127.0.0.1", "", true) != "session:sess-re-resolve-1") {
+				return Fail("SessionFull resolveJoinAddress ignored the stored directory session id");
+			}
+
+			class ScriptedTransport final : public NetDirectoryClient::Transport {
+			public:
+				ScriptedTransport(std::shared_ptr<std::deque<NetDirectoryClient::Reply>> replies, std::shared_ptr<std::vector<NetDirectoryClient::Request>> sent) :
+					m_Replies(std::move(replies)), m_Sent(std::move(sent)) {}
+				void Start(const NetDirectoryClient::Request& request) override { m_Sent->push_back(request); }
+				bool Finished() override { return true; }
+				NetDirectoryClient::Reply Take() override {
+					NetDirectoryClient::Reply reply = m_Replies->empty() ? NetDirectoryClient::Reply{500, "", ""} : m_Replies->front();
+					if (!m_Replies->empty()) {
+						m_Replies->pop_front();
+					}
+					return reply;
+				}
+				void Abort() override {}
+			private:
+				std::shared_ptr<std::deque<NetDirectoryClient::Reply>> m_Replies;
+				std::shared_ptr<std::vector<NetDirectoryClient::Request>> m_Sent;
+			};
+
+			auto replies = std::make_shared<std::deque<NetDirectoryClient::Reply>>();
+			auto sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
+			replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1","supports_unlisted":true})", ""});
+			replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
+			replies->push_back({200, R"({"expires_in_s":15,"heartbeat_s":5})", ""});
+			NetDirectoryClient client;
+			client.SetTransportFactory([replies, sent] { return std::make_unique<ScriptedTransport>(replies, sent); });
+			client.Configure("https://dir.test", "key0123456789abcd", "");
+			NetDirectoryRegisterRequest row;
+			row.name = "Erol";
+			row.activity = "P4 Alpha Duel";
+			row.scene = "Grasslands";
+			row.mode = "pvp-skirmish";
+			row.peerCount = 2;
+			row.seatsFree = 1;
+			row.gameVersion = "7.0.0";
+			row.buildId = "stage2-p2d-local";
+			row.listenPort = 41010;
+			row.joinMode = "ip";
+			client.Advertise(row, false);
+			client.Update(0);
+			client.Update(0);
+			if (client.GetState() != NetDirectoryClient::State::Registered) {
+				return Fail("the directory client did not register for the listen-addr dirty check");
+			}
+			client.NoteListenAddrs({"203.0.113.4:41010"});
+			client.Update(5000);
+			if (sent->size() < 2) {
+				return Fail("NoteListenAddrs did not issue a heartbeat");
+			}
+			const auto firstHeart = nlohmann::json::parse(sent->at(1).body);
+			if (!firstHeart.contains("listen_addrs") || firstHeart["listen_addrs"].empty() ||
+			    firstHeart["listen_addrs"][0].get<std::string>() != "203.0.113.4:41010") {
+				return Fail("NoteListenAddrs dirty did not publish the remapped listen addrs");
+			}
+			client.Update(10000);
+			if (sent->size() < 3) {
+				return Fail("the second heartbeat was not issued");
+			}
+			const auto secondHeart = nlohmann::json::parse(sent->at(2).body);
+			if (secondHeart.contains("listen_addrs")) {
+				return Fail("a clean heartbeat still carried listen_addrs");
+			}
+			return 0;
+		}
 	} // namespace
 
 		// A lobby member whose process is gone sends nothing and closes nothing: the host reaps it on
@@ -6005,6 +6094,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestTicketStore(); result != 0) {
+			return result;
+		}
+		if (const int result = TestReResolvePaths(); result != 0) {
 			return result;
 		}
 		if (const int result = TestTicketArtifactCanary(); result != 0) {
