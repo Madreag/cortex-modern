@@ -46,14 +46,7 @@ function GameOverObserve:UpdateActivity()
 		self.ended = true;
 		print("[game-over-freeze] over tick=" .. self.ticks);
 	end
-	if self.ActivityState == Activity.OVER then
-		local lifted = self.GameOverTimer:IsPastSimMS(1000);
-		print("[game-over-freeze] tick=" .. self.ticks .. " lifted=" .. (lifted and 1 or 0));
-		if lifted and not self.liftedTick then
-			self.liftedTick = self.ticks;
-			print("[game-over-freeze] lift-tick=" .. self.ticks);
-		end
-	end
+	-- The engine prints [game-over-freeze] lift-tick at the C++ observe gate.
 end
 
 function GameOverObserve:EndActivity()
