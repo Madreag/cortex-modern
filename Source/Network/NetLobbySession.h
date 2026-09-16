@@ -98,6 +98,29 @@ namespace RTE {
 		/// lobby starts: chunks pace out through Tick and the Start rides the same ordered lane, so a
 		/// started client always holds the complete state.
 		void BeginStateTransfer(std::vector<uint8_t> fileBytes);
+		/// The same StateChunk pump, aimed at one late remote after the lobby has Started.
+		void BeginStateTransferTo(uint8_t peerId, std::vector<uint8_t> fileBytes);
+		/// Binds a session-Ready joiner so the host can send it config and StateChunks.
+		bool BindLateRemote(uint8_t peerId, NetPeerId transport, std::string* error = nullptr);
+		void SendMatchConfigTo(uint8_t peerId);
+		/// Sends queued chunks after Started; Tick itself stops once the lobby is terminal.
+		void PumpOutgoingChunks();
+		void HandleTransportEvent(const NetTransportEvent& event, uint64_t nowMs);
+		bool SendPayloadTo(uint8_t peerId, const NetLobbyPayload& payload, std::string* error = nullptr);
+		bool SendPayload(const NetLobbyPayload& payload, std::string* error = nullptr);
+		const std::vector<uint8_t>& PeekReceivedState() const { return m_ReceivedState; }
+		uint64_t GetOutgoingStateId() const { return m_OutgoingStateId; }
+		uint16_t GetOutgoingChunkCount() const { return m_OutgoingChunkCount; }
+		uint16_t GetOutgoingChunkIndex(uint8_t peerId) const { return OutgoingChunkIndex(peerId); }
+		struct WorldJoinReport {
+			uint8_t kind = 0;
+			uint64_t value = 0;
+			uint8_t fromPeer = 0;
+			bool pending = false;
+		};
+		WorldJoinReport TakeWorldJoinReport();
+		std::vector<uint8_t> TakePendingTailBytes();
+		void SetStartFrame(uint64_t startFrame) { m_StartFrame = startFrame; }
 		bool HasCompleteStateTransfer() const { return m_IncomingStateComplete; }
 		/// Gets whether any remote still lacks a chunk of the queued state file.
 		bool HasPendingStateChunks() const;
@@ -173,6 +196,7 @@ namespace RTE {
 		bool m_SeatAssigned = false;       //!< Client: the host has named the id it bound to this connection.
 		std::vector<uint8_t> m_StateBytesToSend;
 		uint64_t m_OutgoingStateId = 0;
+		uint8_t m_StateTransferOnlyPeer = 0; //!< 0 = every remote (resync); else the one world joiner.
 		std::map<uint8_t, uint16_t> m_OutgoingChunkIndexByPeer; //!< Next chunk each remote still needs.
 		uint16_t m_OutgoingChunkCount = 0;
 		uint32_t m_ChunkSendStall = 0; //!< Consecutive ticks the transport refused a chunk (backpressure).
@@ -185,6 +209,8 @@ namespace RTE {
 		uint16_t m_IncomingNextChunkIndex = 0;
 		bool m_IncomingStateComplete = false;
 		std::vector<uint8_t> m_ReceivedState;
+		WorldJoinReport m_WorldJoinReport;
+		std::vector<uint8_t> m_PendingTailBytes;
 		NetLobbyStats m_Stats;
 	};
 
