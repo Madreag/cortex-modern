@@ -9,6 +9,7 @@
 #include "ScenarioRunner.h"
 #include "CheckpointArchive.h"
 #include "ActivityMan.h"
+#include "FrameMan.h"
 
 #include <array>
 
@@ -441,6 +442,7 @@ void Controller::GetInputFromPlayer() {
 		return;
 	}
 
+	FrameMan::FeelInputSample(m_ControlledActor, m_SeatPlayer);
 	UpdatePlayerInput(lastControlStates);
 }
 

@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -33,6 +34,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <streambuf>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -235,6 +237,70 @@ namespace RTE {
 			return {{"os", os}, {"cpu", cpu}, {"gpu", gpu.empty() ? "unavailable" : gpu}, {"memory_mb", SDL_GetSystemRAM()}};
 		}
 
+		bool SecretSettingsKey(std::string_view name) {
+			if (name == "SessionDirectoryInstallKey" || name == "NetworkTurnPass" || name == "NetworkTurnUser" ||
+			    name == "SessionDirectoryCertSha256") {
+				return true;
+			}
+			static constexpr std::string_view needles[] = {"Pass", "Password", "Secret", "Token", "PrivateKey", "Credential", "Ticket"};
+			for (std::string_view needle: needles) {
+				if (name.find(needle) != std::string_view::npos) return true;
+			}
+			return false;
+		}
+
+		std::string RedactSettingsValue(std::string_view name, std::string_view value) {
+			if (name != "SessionDirectoryCertSha256") return "<redacted>";
+			std::string hex;
+			for (unsigned char ch: value) {
+				if (std::isxdigit(ch)) {
+					hex.push_back(static_cast<char>(ch));
+					if (hex.size() == 8) break;
+				}
+			}
+			hex += "\xE2\x80\xA6";
+			return hex;
+		}
+
+		// Archive member only; the user's Settings.ini is not written.
+		std::string FilterSettingsMember(const std::string& bytes, std::vector<std::string>& redacted) {
+			std::string out;
+			out.reserve(bytes.size());
+			size_t offset = 0;
+			while (offset < bytes.size()) {
+				const size_t nl = bytes.find('\n', offset);
+				const size_t next = (nl == std::string::npos) ? bytes.size() : nl + 1;
+				const size_t ending = (nl != std::string::npos && nl > offset && bytes[nl - 1] == '\r') ? 2 : (nl != std::string::npos ? 1 : 0);
+				const size_t lineLen = next - offset - ending;
+				const std::string_view line(bytes.data() + offset, lineLen);
+				size_t indent = 0;
+				while (indent < line.size() && (line[indent] == ' ' || line[indent] == '\t')) ++indent;
+				const std::string_view body = line.substr(indent);
+				const size_t eq = (body.empty() || body[0] == '/' || body[0] == ';' || body[0] == '#') ? std::string_view::npos : body.find('=');
+				if (eq == std::string_view::npos) {
+					out.append(bytes, offset, next - offset);
+					offset = next;
+					continue;
+				}
+				size_t keyEnd = eq;
+				while (keyEnd > 0 && (body[keyEnd - 1] == ' ' || body[keyEnd - 1] == '\t')) --keyEnd;
+				const std::string key(body.substr(0, keyEnd));
+				if (!SecretSettingsKey(key)) {
+					out.append(bytes, offset, next - offset);
+					offset = next;
+					continue;
+				}
+				size_t valueStart = eq + 1;
+				while (valueStart < body.size() && (body[valueStart] == ' ' || body[valueStart] == '\t')) ++valueStart;
+				out.append(bytes, offset, indent + valueStart);
+				out += RedactSettingsValue(key, body.substr(valueStart));
+				out.append(bytes, offset + lineLen, ending);
+				if (std::find(redacted.begin(), redacted.end(), key) == redacted.end()) redacted.push_back(key);
+				offset = next;
+			}
+			return out;
+		}
+
 		std::string Stamp() {
 			const std::time_t now = std::time(nullptr) - 7 * 60 * 60;
 			std::tm local{};
@@ -289,17 +355,18 @@ namespace RTE {
 			const json replayStatus{{"included", replayIncluded}, {"truncated", job.snapshot.replayTruncated}, {"reason", job.snapshot.replayReason}};
 			add("Replay.status.json", replayStatus.dump(2));
 			if (!job.snapshot.replay.empty()) add("Replay.ccrp", std::move(job.snapshot.replay));
+			std::vector<std::string> redacted;
 			std::ifstream settings(s_State.runtime / "Userdata" / "Settings.ini", std::ios::binary);
 			if (settings) {
 				std::string bytes(TelemetryBundle::c_MemberLimit + 1, '\0');
 				settings.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 				bytes.resize(static_cast<size_t>(settings.gcount()));
-				add("Settings.ini", std::move(bytes));
+				add("Settings.ini", FilterSettingsMember(bytes, redacted));
 			} else omissions.push_back({{"name", "Settings.ini"}, {"reason", "file unavailable"}});
 			add("SystemInfo.json", SystemInfo(job.gpu).dump(2));
 			add("Executable.json", json{{"sha256", FileDigest(s_State.executable)}, {"version", c_VersionString}}.dump(2));
 			json manifest{{"schema", 1}, {"members", json::array()}, {"omitted", omissions}, {"replay", replayStatus},
-			              {"identity_build_ms", job.snapshot.identityBuildMs}};
+			              {"identity_build_ms", job.snapshot.identityBuildMs}, {"redacted", redacted}};
 			for (const auto& [name, data]: members) {
 				json entry{{"name", name}, {"size", data.size()}, {"sha256", Digest(data)}};
 				if (name == "Replay.ccrp") entry["truncated"] = job.snapshot.replayTruncated;
