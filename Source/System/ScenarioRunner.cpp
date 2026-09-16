@@ -400,6 +400,10 @@ namespace RTE {
 			s_Args.textWrapSelfTest = true;
 			return 1;
 		}
+		if (a == "-save-refusal-diagnosis-selftest") {
+			s_Args.saveRefusalDiagnosisSelfTest = true;
+			return 1;
+		}
 		if (a == "-net-match-e2e-rematch") {
 			// Arm the return-to-lobby rematch ride-through. Boolean flag.
 			s_Args.selftestRematch = true;
