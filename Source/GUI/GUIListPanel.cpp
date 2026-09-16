@@ -380,14 +380,7 @@ void GUIListPanel::BuildDrawBitmap() {
 				m_DrawBitmap->DrawRectangle(1, itemY, itemWidth - 2, m_Font->GetFontHeight(), m_SelectedColorIndex, (m_GotFocus || m_HighlightAsIfAlwaysFocused)); // Filled if we have focus
 			}
 
-			const int nameRoom = RegularItemNameRoom(I->m_OffsetX);
-			std::string name = I->m_Name;
-			if (m_Font->CalculateWidth(name) > nameRoom) {
-				while (!name.empty() && m_Font->CalculateWidth(name + "...") > nameRoom) {
-					name.pop_back();
-				}
-				name += "...";
-			}
+			const std::string name = RegularFittedName(I->m_Name, I->m_OffsetX);
 			if (I->m_Selected && (m_GotFocus || m_HighlightAsIfAlwaysFocused)) {
 				m_Font->SetColor(m_FontSelectColor);
 				m_Font->DrawAligned(m_DrawBitmap, itemX - 3 + itemWidth - (m_VertScroll->_GetVisible() ? m_VertScroll->GetWidth() : 0), itemY, I->m_RightText, GUIFont::Right);
@@ -1047,10 +1040,24 @@ GUIListPanel::Item* GUIListPanel::GetItem(int X, int Y) {
 }
 
 int GUIListPanel::RegularItemNameRoom(int itemOffsetX) const {
-	const int x = m_HorzScroll ? m_HorzScroll->GetValue() : 0;
-	const int itemWidth = m_Width - (x - itemOffsetX);
+	const int itemWidth = m_Width + itemOffsetX;
 	const int scroll = (m_VertScroll && m_VertScroll->_GetVisible()) ? m_VertScroll->GetWidth() : 0;
 	return itemWidth - 8 - scroll;
+}
+
+std::string GUIListPanel::RegularFittedName(const std::string& name, int itemOffsetX) const {
+	if (!m_Font || (m_HorzScroll && m_HorzScroll->_GetVisible())) {
+		return name;
+	}
+	const int nameRoom = RegularItemNameRoom(itemOffsetX);
+	if (m_Font->CalculateWidth(name) <= nameRoom) {
+		return name;
+	}
+	std::string fitted = name;
+	while (!fitted.empty() && m_Font->CalculateWidth(fitted + "...") > nameRoom) {
+		fitted.pop_back();
+	}
+	return fitted + "...";
 }
 
 int GUIListPanel::GetItemHeight(Item* pItem) {
