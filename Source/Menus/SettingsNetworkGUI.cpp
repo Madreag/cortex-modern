@@ -191,6 +191,9 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_FilesMessage = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetFilesMessage"));
 
 	m_DirUrlTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkDirUrl"));
+	m_DirUrlHintLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetDirUrlHint"));
+	// The ini reader cuts values at "//", so the hint's https:// has to come from here.
+	m_DirUrlHintLabel->SetText("host[:port][/path] - https:// is implied");
 	m_DirPinTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkDirPin"));
 	m_DirStatusLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetDirStatus"));
 	m_InternetError = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetInternetError"));
@@ -379,6 +382,16 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		} else if (guiEvent.GetControl()->GetName() == "ButtonNetOpenAutosaves") {
 			if (!OpenFolder(AutosavesDirectory())) {
 				message = "Could not open the autosaves folder.";
+			}
+		} else if (guiEvent.GetControl()->GetName() == "ButtonNetCopyAutosavesPath") {
+			if (!GUIUtil::SetClipboardText(AutosavesDirectory())) {
+				message = "Could not copy the folder path.";
+			} else {
+				message = "Copied " + AutosavesDirectory();
+			}
+		} else if (guiEvent.GetControl()->GetName() == "ButtonNetOpenDiagnostics") {
+			if (!OpenFolder(EffectiveTelemetryDirectory())) {
+				message = "Could not open the diagnostics folder.";
 			}
 		} else if (guiEvent.GetControl()->GetName() == "ButtonNetCopyDiagPath") {
 			if (!GUIUtil::SetClipboardText(EffectiveTelemetryDirectory())) {
