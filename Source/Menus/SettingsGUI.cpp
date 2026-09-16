@@ -375,12 +375,34 @@ namespace RTE::MenuAutomation {
 	bool Handles(const std::string& command) {
 		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_text_fits" ||
 			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
+			command == "key_down" || command == "key_up" || command == "focus" ||
 			command == "set_text" || command == "combo_drop" || command == "combo_select" ||
 			command == "select_settings_page" || command == "assert_settings_page";
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
 		try {
 			if (!manager) { observation = "no active control manager"; return false; }
+			if (command == "key_down" || command == "key_up") {
+				std::string key;
+				args >> std::quoted(key);
+				auto* input = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
+				observation = key;
+				return input && !key.empty() && input->QueueAutomationInput("key", key, command == "key_down");
+			}
+			if (command == "focus") {
+				std::string target;
+				args >> std::quoted(target);
+				auto* control = manager->GetControl(target);
+				if (!control || !Enabled(control) || !control->GetPanel()) {
+					observation = target + " missing or disabled";
+					return false;
+				}
+				manager->GetManager()->SetFocus(control->GetPanel());
+				const auto r = Rectangle(control->GetPanel());
+				g_UInputMan.SetAbsoluteMousePosition(Vector(r[0] + r[2] / 2, r[1] + r[3] / 2) * g_WindowMan.GetResMultiplier());
+				observation = target;
+				return true;
+			}
 			if (command == "combo_drop" || command == "combo_select") {
 				std::string comboName;
 				args >> std::quoted(comboName);
@@ -464,9 +486,19 @@ namespace RTE::MenuAutomation {
 				static unsigned int capture = 0;
 				const auto path = std::filesystem::path("ScreenShots") / (command + "_" + std::to_string(capture++));
 				const auto lobby = g_NetMatchService.GetLobbySnapshot();
+				Json table = Json::array();
+				for (const NetHostActivityChoice& activity : NetMatchService::ListHostActivities()) {
+					Json scenes = Json::array();
+					for (const NetHostSceneChoice& scene : activity.scenes) {
+						scenes.push_back({{"name", scene.name}, {"module", scene.module}});
+					}
+					table.push_back({{"preset", activity.preset}, {"module", activity.module}, {"scenes", scenes}});
+				}
 				Json result = {{"schema", 1}, {"screen", screen}, {"settings_page", SettingsPage(manager)}, {"viewport", Rectangle(nullptr)}, {"service", lobby.serviceState},
 					{"phase", "after_draw"}, {"sim_frame", g_TimerMan.GetSimUpdateCount()}, {"host", lobby.isHost}, {"peer_id", lobby.localPeerId},
-					{"activity_preset", lobby.activityPreset}, {"activity_module", lobby.activityModule}, {"controls", Json::array()}};
+					{"activity_preset", lobby.activityPreset}, {"activity_module", lobby.activityModule},
+					{"scene_name", lobby.sceneName}, {"scene_module", lobby.sceneModule},
+					{"activity_table", table}, {"controls", Json::array()}};
 				for (auto* item : *manager->GetControlList()) {
 					if (!Visible(item)) continue;
 					auto* panel = item->GetPanel();
@@ -478,6 +510,12 @@ namespace RTE::MenuAutomation {
 					if (auto* combo = dynamic_cast<GUIComboBox*>(item)) {
 						row["dropped"] = combo->IsDropped();
 						row["item_count"] = combo->GetCount();
+						Json items = Json::array();
+						for (int i = 0; i < combo->GetCount(); ++i) {
+							if (const GUIListPanel::Item* entry = combo->GetItem(i)) items.push_back(entry->m_Name);
+						}
+						row["items"] = items;
+						row["selected_index"] = combo->GetSelectedIndex();
 					}
 					// Measure every drawn caption here so a layout review reads the whole page, not the named controls.
 					std::string measured;
