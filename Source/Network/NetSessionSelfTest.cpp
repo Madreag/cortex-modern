@@ -1293,6 +1293,41 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestOverlongClientHelloFailsVisibly(std::string* error) {
+			const uint16_t port = 42291;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			if (!hostTransport.StartHost(port, error) || !clientTransport.Connect("loopback", port, error)) {
+				return false;
+			}
+			NetSession host;
+			NetSession client;
+			if (!host.StartHost(hostTransport, MakeConfig(port, 1901, "Host"), error)) {
+				return false;
+			}
+			std::string startError;
+			if (!client.StartClient(clientTransport, "loopback", MakeConfig(port, 1902, std::string(NetProtocol::c_MaxDisplayNameBytes + 1, 'x')), &startError)) {
+				*error = "overlong ClientHello refused at StartClient: " + startError;
+				return false;
+			}
+			for (uint64_t now = 0; now <= 500; now += 10) {
+				host.Tick(now);
+				client.Tick(now);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+				if (client.GetState() == NetSessionState::Failed) {
+					break;
+				}
+			}
+			if (client.GetState() != NetSessionState::Failed ||
+			    client.BuildRejectText().find("display_name exceeds max encoded length") == std::string::npos) {
+				*error = "overlong ClientHello did not fail visibly: state=" + std::string(NetSession::StateName(client.GetState())) +
+				         " reject=" + client.BuildRejectText();
+				return false;
+			}
+			return true;
+		}
+
 		bool TestLatencyAndCleanDisconnect(std::string* error) {
 			const uint16_t port = 42206;
 			LoopbackTransport hostTransport;
@@ -1354,6 +1389,7 @@ namespace RTE {
 		if (!TestModuleDigestJoinerSideMirror(&error)) return fail(error);
 		if (!TestModuleDigestSilentPeerExpires(&error)) return fail(error);
 		if (!TestOldWirePeerGetsItsRejection(&error)) return fail(error);
+		if (!TestOverlongClientHelloFailsVisibly(&error)) return fail(error);
 		if (!TestLobbyMembership(&error)) return fail(error);
 
 		std::cout << "[net-session-selftest] PASS" << std::endl;

@@ -454,7 +454,11 @@ namespace RTE {
 					// Test-only: P14's bound is "no decodable ClientHello within the budget", so the arm
 					// that proves it over a socket needs a connection that talks and never says hello.
 					if (!FaultInjected("client_never_says_hello")) {
-						Send(event.peerId, BuildClientHello());
+						std::string sendError;
+						if (!Send(event.peerId, BuildClientHello(), &sendError)) {
+							SetFailed(NetRejectReason::InternalError, "display_name", std::to_string(NetProtocol::c_MaxDisplayNameBytes), m_Config.displayName, sendError);
+							break;
+						}
 					}
 					m_State = NetSessionState::HelloSent;
 					m_StateStartedMs = m_NowMs;
