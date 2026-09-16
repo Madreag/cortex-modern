@@ -135,6 +135,17 @@ def expected_observation(rules, default=False):
     return expected
 
 
+LOSS_TEXT = "Your brain has been destroyed!"
+
+
+def score_p4_loss_text(log):
+    """The game-over screen still shows the loss line after 6 s (duration -1, not the 5 s transient)."""
+    ended = 'Activity "P4 Alpha Duel" was ended' in log or "[p4-duel] loss-duration=-1" in log
+    pinned = "[p4-duel] loss-duration=-1" in log
+    still = f"[p4-duel] game-over-loss-still={LOSS_TEXT}" in log
+    return {"ended": ended, "pinned": pinned, "still": still, "pass": (not ended) or (pinned and still)}
+
+
 def score_rules(log, rules, default=False):
     rows, expected = observations(log), expected_observation(rules, default)
     actual = rows[0] if len(rows) == 1 else {}
@@ -650,6 +661,9 @@ def launch(options):
         for peer in runs:
             checks[peer + "_process"] = records[peer].get("exit_code") == 0 and not records[peer].get("timed_out") and records[peer].get("evidence_complete", False)
             checks[peer + "_rules"] = result["rules"][peer]["pass"]
+        if options.variant in ("default", "resync-duel"):
+            result["loss_text"] = {peer: score_p4_loss_text(log) for peer, log in logs.items()}
+            checks["loss_text_after_6s"] = all(row["pass"] for row in result["loss_text"].values())
         if editor_driven:
             # Every commit came off the seat's own editor, not the deterministic-spot helper.
             result["commits"] = {peer: committed(log) for peer, log in logs.items()}
