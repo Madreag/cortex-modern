@@ -504,6 +504,8 @@ namespace RTE {
 			SoundExecutionDomain domain = SoundExecutionDomain::Presentation;
 			bool predicted = false; //!< Started by a preview and not yet adopted, so it belongs to no checkpoint.
 			bool awaitingSample = false; //!< Held until the referenced sample reports ready.
+			bool hasLifetime = false; //!< Presence and playing follow this, not the mixer thread.
+			LogicalSoundVoice lifetime;
 		};
 		std::map<int, PlayingVoice> m_PlayingVoices;
 		std::unordered_map<int, int> m_BackendVoiceIdentities;
@@ -550,6 +552,11 @@ namespace RTE {
 		FMOD_RESULT GetVoiceChannel(int voiceIdentity, FMOD::Channel** channel) const;
 		bool OwnsVoice(int voiceIdentity, const SoundContainer* owner) const;
 		void RetireVoice(int identity);
+		void ReleaseVoiceChannel(int identity);
+		void BindVoiceLifetime(PlayingVoice& voice, unsigned sampleFrames, float sampleRate, unsigned loopStart, unsigned loopEnd, float pitch, int loops, double position, bool paused);
+		void FoldVoiceLifetime(PlayingVoice& voice);
+		bool VoiceSimLive(const PlayingVoice& voice) const;
+		void RetireFinishedPlayingVoices();
 		void StartAwaitingSampleVoices();
 		bool MakeVoiceSlotAvailable();
 
@@ -604,7 +611,7 @@ namespace RTE {
 		/// Pauses or unpauses a SoundContainer.
 		/// @param soundContainer A pointer to a SoundContainer object. Ownership is NOT transferred!
 		/// @param paused Whether to pause or unpause.
-		void SetPausedSoundContainerPlayingChannels(SoundContainer* soundContainer, bool paused) const;
+		void SetPausedSoundContainerPlayingChannels(SoundContainer* soundContainer, bool paused);
 #pragma endregion
 
 #pragma region 3D Effect Handling
