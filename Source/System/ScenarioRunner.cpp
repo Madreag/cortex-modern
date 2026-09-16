@@ -1039,9 +1039,6 @@ namespace RTE {
 		if (s_WorldCatchUpActivationTick != 0 && simTick + 1 >= s_WorldCatchUpActivationTick) {
 			s_WorldCatchUpActive = false;
 		}
-		if (s_SessionPump) {
-			s_SessionPump();
-		}
 		return true;
 	}
 

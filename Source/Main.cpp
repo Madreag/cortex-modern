@@ -3642,13 +3642,27 @@ void RunGameLoop() {
 			g_TimerMan.SetFreeRunSim(freeRunLockstep);
 		}
 
-		// A world joiner applies the committed tail faster than real time, still bounded per frame.
+		// A world joiner applies the committed tail faster than real time. 16 is a ceiling, and a
+		// tick is granted only when the tail still holds that next frame.
+		int worldCatchUpBudget = 0;
 		if (ScenarioRunner::WorldCatchUpActive()) {
-			g_TimerMan.GrantSimUpdates(ScenarioRunner::c_WorldCatchUpTicksPerRealFrame);
+			worldCatchUpBudget = ScenarioRunner::c_WorldCatchUpTicksPerRealFrame;
 		}
 
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
-		while (g_TimerMan.TimeForSimUpdate()) {
+		while (true) {
+			const uint64_t nextSimTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1;
+			if (ScenarioRunner::WorldCatchUpActive()) {
+				if (worldCatchUpBudget <= 0 || !ScenarioRunner::WorldCatchUpHasFrame(nextSimTick)) {
+					break;
+				}
+				if (!g_TimerMan.TimeForSimUpdate()) {
+					g_TimerMan.GrantSimUpdates(1);
+				}
+				--worldCatchUpBudget;
+			} else if (!g_TimerMan.TimeForSimUpdate()) {
+				break;
+			}
 			ZoneScopedN("Simulation Update");
 
 			// The probe's sim-rate keys land before the update that reads them; SDL events only arrive per frame.
