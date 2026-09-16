@@ -778,7 +778,7 @@ void MovableObject::ReadCustomValueProperty(Reader& reader) {
 
 std::string MovableObject::SaveMovableObjectRuntime() const {
 	CheckpointWriter archive("MovableObjectRuntime1");
-	archive(Entity::SaveCheckpoint(), m_Pos, m_OzValue, m_Buyable, m_BuyableMode, m_Team, m_PlacedByPlayer);
+	archive(static_cast<const Entity&>(*this), m_Pos, m_OzValue, m_Buyable, m_BuyableMode, m_Team, m_PlacedByPlayer);
 	archive(m_MOType, m_Mass, m_Vel, m_PrevPos, m_PrevVel, m_DistanceTravelled, m_Scale, m_GlobalAccScalar,
 		m_AirResistance, m_AirThreshold, m_PinStrength, m_RestThreshold, m_Forces, m_ImpulseForces,
 		m_AgeTimer, m_RestTimer, m_Lifetime, m_Sharpness, m_CheckTerrIntersection, m_HitsMOs, m_MOIgnoreTimer,
@@ -831,7 +831,7 @@ bool MovableObject::LoadMovableObjectRuntime(std::string_view text, bool validat
 }
 
 void MovableObject::SaveSnapshotConfiguration(Writer& writer) const {
-	writer.NewPropertyWithValue("SpecialBehaviour_MovableObjectRuntime", base64_encode(m_PersistedMovableObjectRuntime.empty() ? SaveMovableObjectRuntime() : m_PersistedMovableObjectRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_MovableObjectRuntime", CheckpointWriter::Native([&] { return m_PersistedMovableObjectRuntime.empty() ? SaveMovableObjectRuntime() : m_PersistedMovableObjectRuntime; }).Base64(true));
 	writer.NewPropertyWithValue("Mass", m_Mass);
 	writer.NewPropertyWithValue("Scale", m_Scale);
 	writer.NewPropertyWithValue("RestThreshold", m_RestThreshold);
