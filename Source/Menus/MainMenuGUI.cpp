@@ -834,6 +834,11 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 				m_MultiplayerJoinPortTextBox->SetText(std::to_string(row.port));
 				m_JoinTargetPersistentWorld = row.persistentWorld || row.activity == "Persistent World";
 				m_JoinTargetActivity = row.activity;
+				if (m_JoinTargetPersistentWorld) {
+					m_LastWorldJoinAddress = row.address;
+					m_LastWorldJoinPort = row.port;
+					g_NetMatchService.NoteJoinTargetPersistentWorld(true);
+				}
 				if (m_MultiplayerLanGamesLabel) {
 					m_MultiplayerLanGamesLabel->SetText(m_LanGamesLabelText);
 				}
@@ -944,10 +949,44 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		g_SettingsMan.UpdateSettingsFile();
 	}
 	request.activityPreset = "P4 Alpha Duel";
-	if (!host && (m_JoinTargetPersistentWorld || m_JoinTargetActivity == "Persistent World")) {
-		request.persistentWorld = true;
-		if (!m_JoinTargetActivity.empty()) {
-			request.activityPreset = m_JoinTargetActivity;
+	if (!host) {
+		bool targetWorld = m_JoinTargetPersistentWorld || m_JoinTargetActivity == "Persistent World";
+		if (!targetWorld && m_MultiplayerLanGamesList) {
+			const int selected = m_MultiplayerLanGamesList->GetSelectedIndex();
+			if (selected >= 0 && static_cast<size_t>(selected) < m_GameRows.size()) {
+				const NetDirectoryClient::GameRow& row = m_GameRows[static_cast<size_t>(selected)];
+				targetWorld = row.persistentWorld || row.activity == "Persistent World";
+				if (targetWorld && !row.activity.empty()) {
+					m_JoinTargetActivity = row.activity;
+				}
+			}
+		}
+		if (!targetWorld) {
+			for (const NetDirectoryClient::GameRow& row: m_GameRows) {
+				if (row.address == request.address && row.port == request.port &&
+				    (row.persistentWorld || row.activity == "Persistent World")) {
+					targetWorld = true;
+					if (!row.activity.empty()) {
+						m_JoinTargetActivity = row.activity;
+					}
+					break;
+				}
+			}
+		}
+		if (!targetWorld && m_LastWorldJoinPort != 0 && request.address == m_LastWorldJoinAddress && request.port == m_LastWorldJoinPort) {
+			targetWorld = true;
+		}
+		if (targetWorld) {
+			request.persistentWorld = true;
+			m_JoinTargetPersistentWorld = true;
+			m_LastWorldJoinAddress = request.address;
+			m_LastWorldJoinPort = request.port;
+			g_NetMatchService.NoteJoinTargetPersistentWorld(true);
+			if (!m_JoinTargetActivity.empty()) {
+				request.activityPreset = m_JoinTargetActivity;
+			} else {
+				request.activityPreset = "Persistent World";
+			}
 		}
 	}
 	if (host && m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size()) {

@@ -4,6 +4,7 @@
 #include "NetLobbyProtocol.h"
 #include "NetProtocol.h"
 #include "NetResyncState.h"
+#include "NetWorldJoin.h"
 
 #include <algorithm>
 #include <charconv>
@@ -1890,7 +1891,7 @@ namespace RTE {
 						    !reader.ReadString(transition.module, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_module", error)) {
 							return false;
 						}
-						if (transition.schema != 1) {
+						if (transition.schema != c_NetWorldJoinSchema) {
 							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "world_transition_schema is not a known schema");
 							return false;
 						}
