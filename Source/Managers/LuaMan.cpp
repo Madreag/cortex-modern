@@ -49,14 +49,28 @@
 
 #include "luabind/detail/object_rep.hpp"
 
+extern "C" {
+#include "lj_bcdump.h"
+#include "lj_ctype.h"
+#include "lj_dispatch.h"
+#include "lj_gc.h"
+#include "lj_state.h"
+}
+
+// lj_dispatch.h drags in windows.h, whose A/W macros rewrite our own GetClassName and LoadBitmap.
+#undef GetClassName
+#undef LoadBitmap
+
 #include <atomic>
 #include <cmath>
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <exception>
 #include <functional>
 #include <future>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -303,8 +317,592 @@ namespace {
 		}
 	}
 
+	struct ScriptGraphPrototypeValue {
+		enum class Kind { Scalar, String, Table } kind = Kind::Scalar;
+		uint64_t bits = 0;
+		std::string text;
+	};
+
+	struct ScriptGraphPrototypeTable {
+		std::vector<ScriptGraphPrototypeValue> array;
+		std::vector<std::pair<ScriptGraphPrototypeValue, ScriptGraphPrototypeValue>> hash;
+	};
+
+	struct ScriptGraphPrototype {
+		struct Constant {
+			enum class Kind { String, Prototype, Table, CData } kind = Kind::String;
+			std::string text;
+			std::shared_ptr<const ScriptGraphPrototype> prototype;
+			ScriptGraphPrototypeTable table;
+			uint16_t ctype = 0;
+			std::vector<uint64_t> cdata;
+		};
+		uint8_t flags = 0, parameters = 0, frameSize = 0;
+		BCLine firstLine = 0, lineCount = 0;
+		std::string chunkName, debug;
+		std::vector<BCIns> bytecode;
+		std::vector<uint16_t> upvalues;
+		std::vector<uint64_t> numbers;
+		std::vector<Constant> constants;
+	};
+
+	class ScriptGraphPrototypeCapture {
+	public:
+		std::shared_ptr<const ScriptGraphPrototype> Capture(lua_State* state, const GCproto* source) {
+			if (m_Active.contains(source)) throw std::runtime_error("cyclic script prototype");
+			if (const auto found = m_Prototypes.find(source); found != m_Prototypes.end()) return found->second;
+			if (source->sizebc == 0) throw std::runtime_error("script prototype has no function header");
+			m_Active.insert(source);
+			auto snapshot = std::make_shared<ScriptGraphPrototype>();
+			snapshot->flags = source->flags & (PROTO_CHILD | PROTO_VARARG | PROTO_FFI);
+			snapshot->parameters = source->numparams;
+			snapshot->frameSize = source->framesize;
+			snapshot->firstLine = source->firstline;
+			snapshot->lineCount = source->numline;
+			const GCstr* name = proto_chunkname(source);
+			snapshot->chunkName.assign(strdata(name), name->len);
+			snapshot->bytecode.assign(proto_bc(source), proto_bc(source) + source->sizebc);
+#if LJ_HASJIT
+			if ((source->flags & PROTO_ILOOP) || source->trace) {
+				for (size_t index = 1; index < snapshot->bytecode.size(); ++index) {
+					BCIns& instruction = snapshot->bytecode[index];
+					const BCOp op = bc_op(instruction);
+					if (op == BC_IFORL || op == BC_IITERL || op == BC_ILOOP || op == BC_JFORI) {
+						setbc_op(&instruction, static_cast<BCOp>(op - BC_IFORL + BC_FORL));
+					} else if (op == BC_JFORL || op == BC_JITERL || op == BC_JLOOP) {
+						instruction = traceref(L2J(state), bc_d(instruction))->startins;
+					}
+				}
+			}
+#endif
+			if (source->sizeuv) snapshot->upvalues.assign(proto_uv(source), proto_uv(source) + source->sizeuv);
+			snapshot->numbers.reserve(source->sizekn);
+			for (MSize index = 0; index < source->sizekn; ++index) snapshot->numbers.push_back(proto_knumtv(source, index)->u64);
+			if (const void* debug = proto_lineinfo(source)) {
+				const ptrdiff_t offset = static_cast<const char*>(debug) - reinterpret_cast<const char*>(source);
+				if (offset < 0 || static_cast<size_t>(offset) > source->sizept) throw std::runtime_error("script prototype debug data is out of bounds");
+				snapshot->debug.assign(static_cast<const char*>(debug), source->sizept - static_cast<size_t>(offset));
+			}
+			snapshot->constants.reserve(source->sizekgc);
+			const GCRef* constants = mref(source->k, GCRef) - static_cast<ptrdiff_t>(source->sizekgc);
+			for (MSize index = 0; index < source->sizekgc; ++index) {
+				const GCobj* value = gcref(constants[index]);
+				auto& constant = snapshot->constants.emplace_back();
+				if (value->gch.gct == static_cast<uint8_t>(~LJ_TSTR)) {
+					const GCstr* text = gco2str(value);
+					constant.text.assign(strdata(text), text->len);
+				} else if (value->gch.gct == static_cast<uint8_t>(~LJ_TPROTO)) {
+					constant.kind = ScriptGraphPrototype::Constant::Kind::Prototype;
+					constant.prototype = Capture(state, gco2pt(value));
+				} else if (value->gch.gct == static_cast<uint8_t>(~LJ_TTAB)) {
+					constant.kind = ScriptGraphPrototype::Constant::Kind::Table;
+					constant.table = CaptureTable(gco2tab(value));
+#if LJ_HASFFI
+				} else if (value->gch.gct == static_cast<uint8_t>(~LJ_TCDATA)) {
+					const GCcdata* data = gco2cd(value);
+					if (data->ctypeid != CTID_INT64 && data->ctypeid != CTID_UINT64 && data->ctypeid != CTID_COMPLEX_DOUBLE) throw std::runtime_error("unsupported script prototype cdata constant");
+					constant.kind = ScriptGraphPrototype::Constant::Kind::CData;
+					constant.ctype = data->ctypeid;
+					constant.cdata.resize(data->ctypeid == CTID_COMPLEX_DOUBLE ? 2 : 1);
+					std::memcpy(constant.cdata.data(), cdataptr(data), constant.cdata.size() * sizeof(uint64_t));
+#endif
+				} else throw std::runtime_error("unsupported script prototype constant");
+			}
+			m_Active.erase(source);
+			m_Prototypes.emplace(source, snapshot);
+			return snapshot;
+		}
+
+	private:
+		std::unordered_map<const GCproto*, std::shared_ptr<const ScriptGraphPrototype>> m_Prototypes;
+		std::unordered_set<const GCproto*> m_Active;
+
+		static ScriptGraphPrototypeValue CaptureValue(const TValue& value) {
+			ScriptGraphPrototypeValue copy;
+			if (tvisstr(&value)) {
+				copy.kind = ScriptGraphPrototypeValue::Kind::String;
+				copy.text.assign(strVdata(&value), strV(&value)->len);
+			} else if (tvistab(&value)) {
+				copy.kind = ScriptGraphPrototypeValue::Kind::Table;
+			} else if (tvisnumber(&value) || tvispri(&value)) copy.bits = value.u64;
+			else throw std::runtime_error("unsupported script prototype table value");
+			return copy;
+		}
+
+		static ScriptGraphPrototypeTable CaptureTable(const GCtab* source) {
+			ScriptGraphPrototypeTable copy;
+			const TValue* array = tvref(source->array);
+			size_t count = source->asize;
+			while (count && tvisnil(array + count - 1)) --count;
+			copy.array.reserve(count);
+			for (size_t index = 0; index < count; ++index) copy.array.push_back(CaptureValue(array[index]));
+			std::vector<const Node*> entries;
+			if (source->hmask) {
+				const Node* nodes = noderef(source->node);
+				for (MSize index = 0; index <= source->hmask; ++index) if (!tvisnil(&nodes[index].val)) entries.push_back(nodes + index);
+			}
+			std::sort(entries.begin(), entries.end(), [](const Node* left, const Node* right) {
+				const uint32_t leftType = itype(&left->key), rightType = itype(&right->key);
+				if (leftType != rightType) return leftType < rightType;
+				if (leftType != LJ_TSTR) return left->key.u64 < right->key.u64;
+				const GCstr* a = strV(&left->key);
+				const GCstr* b = strV(&right->key);
+				const int order = std::memcmp(strdata(a), strdata(b), std::min(a->len, b->len));
+				return order ? order < 0 : a->len < b->len;
+			});
+			copy.hash.reserve(entries.size());
+			for (const Node* entry: entries) copy.hash.emplace_back(CaptureValue(entry->key), CaptureValue(entry->val));
+			return copy;
+		}
+	};
+
+	class ScriptGraphPrototypeDump {
+	public:
+		explicit ScriptGraphPrototypeDump(lua_State* state) : m_State(state) {}
+
+		GCproto* Restore(const ScriptGraphPrototype& source) {
+			if (const auto found = m_Prototypes.find(&source); found != m_Prototypes.end()) return found->second;
+			const size_t constantEnd = Align(sizeof(GCproto) + source.bytecode.size() * sizeof(BCIns) + source.constants.size() * sizeof(GCRef), sizeof(TValue));
+			const size_t upvalueStart = constantEnd + source.numbers.size() * sizeof(TValue);
+			const size_t debugStart = Align(upvalueStart + source.upvalues.size() * sizeof(uint16_t), sizeof(uint32_t));
+			const size_t size = debugStart + source.debug.size();
+			if (size > std::numeric_limits<MSize>::max()) throw std::runtime_error("script prototype is too large");
+			auto* storage = static_cast<char*>(Allocate(size));
+			auto* prototype = reinterpret_cast<GCproto*>(storage);
+			Initialize(prototype, LJ_TPROTO);
+			prototype->flags = source.flags;
+			prototype->numparams = source.parameters;
+			prototype->framesize = source.frameSize;
+			prototype->firstline = source.firstLine;
+			prototype->numline = source.lineCount;
+			prototype->sizebc = static_cast<MSize>(source.bytecode.size());
+			prototype->sizekgc = static_cast<MSize>(source.constants.size());
+			prototype->sizekn = static_cast<MSize>(source.numbers.size());
+			prototype->sizeuv = static_cast<uint8_t>(source.upvalues.size());
+			prototype->sizept = static_cast<MSize>(size);
+			setmref(prototype->k, storage + constantEnd);
+			setmref(prototype->uv, storage + upvalueStart);
+			setgcref(prototype->chunkname, obj2gco(RestoreString(source.chunkName)));
+			std::memcpy(proto_bc(prototype), source.bytecode.data(), source.bytecode.size() * sizeof(BCIns));
+			if (!source.upvalues.empty()) std::memcpy(proto_uv(prototype), source.upvalues.data(), source.upvalues.size() * sizeof(uint16_t));
+			if (!source.debug.empty()) {
+				setmref(prototype->lineinfo, storage + debugStart);
+				std::memcpy(storage + debugStart, source.debug.data(), source.debug.size());
+			}
+			TValue* numbers = mref(prototype->k, TValue);
+			for (size_t index = 0; index < source.numbers.size(); ++index) { std::construct_at(numbers + index); numbers[index].u64 = source.numbers[index]; }
+			m_Prototypes.emplace(&source, prototype);
+			GCRef* constants = mref(prototype->k, GCRef) - static_cast<ptrdiff_t>(source.constants.size());
+			for (size_t index = 0; index < source.constants.size(); ++index) {
+				std::construct_at(constants + index);
+				const auto& constant = source.constants[index];
+				GCobj* value = nullptr;
+				switch (constant.kind) {
+					case ScriptGraphPrototype::Constant::Kind::String: value = obj2gco(RestoreString(constant.text)); break;
+					case ScriptGraphPrototype::Constant::Kind::Prototype: value = obj2gco(Restore(*constant.prototype)); break;
+					case ScriptGraphPrototype::Constant::Kind::Table: value = obj2gco(RestoreTable(constant.table)); break;
+					case ScriptGraphPrototype::Constant::Kind::CData: {
+						auto* data = static_cast<GCcdata*>(Allocate(sizeof(GCcdata) + constant.cdata.size() * sizeof(uint64_t)));
+						Initialize(data, LJ_TCDATA);
+						data->ctypeid = constant.ctype;
+						std::memcpy(cdataptr(data), constant.cdata.data(), constant.cdata.size() * sizeof(uint64_t));
+						value = obj2gco(data);
+						break;
+					}
+				}
+				setgcref(constants[index], value);
+			}
+			return prototype;
+		}
+
+	private:
+		lua_State* m_State;
+		std::unordered_map<const ScriptGraphPrototype*, GCproto*> m_Prototypes;
+
+		static size_t Align(size_t value, size_t alignment) { return (value + alignment - 1) & ~(alignment - 1); }
+
+		void* Allocate(size_t size) {
+			if (!lua_checkstack(m_State, 1)) throw std::runtime_error("script prototype dump exceeds the private Lua stack");
+			// The private VM owns these buffers without tracing their embedded graphs.
+			void* storage = lua_newuserdata(m_State, size);
+			std::memset(storage, 0, size);
+			return storage;
+		}
+
+		template <class T> void Initialize(T* value, uint32_t type) {
+			std::construct_at(value);
+			value->gct = static_cast<uint8_t>(~type);
+			value->marked = G(m_State)->gc.currentwhite;
+		}
+
+		GCstr* RestoreString(const std::string& source) {
+			auto* value = static_cast<GCstr*>(Allocate(sizeof(GCstr) + source.size() + 4));
+			Initialize(value, LJ_TSTR);
+			value->len = static_cast<MSize>(source.size());
+			std::memcpy(strdatawr(value), source.data(), source.size());
+			return value;
+		}
+
+		void RestoreValue(TValue* target, const ScriptGraphPrototypeValue& source, GCtab* tableMarker) {
+			switch (source.kind) {
+				case ScriptGraphPrototypeValue::Kind::Scalar: target->u64 = source.bits; break;
+				case ScriptGraphPrototypeValue::Kind::String: setstrV(m_State, target, RestoreString(source.text)); break;
+				case ScriptGraphPrototypeValue::Kind::Table: settabV(m_State, target, tableMarker); break;
+			}
+		}
+
+		GCtab* RestoreTable(const ScriptGraphPrototypeTable& source) {
+			auto* table = static_cast<GCtab*>(Allocate(sizeof(GCtab)));
+			Initialize(table, LJ_TTAB);
+			const size_t tableKeys = std::count_if(source.hash.begin(), source.hash.end(), [](const auto& entry) { return entry.first.kind == ScriptGraphPrototypeValue::Kind::Table; });
+			// Private table markers preserve the source's sorted key order.
+			auto* markers = static_cast<GCtab*>(Allocate((tableKeys + 1) * sizeof(GCtab)));
+			for (size_t index = 0; index <= tableKeys; ++index) Initialize(markers + index, LJ_TTAB);
+			if (!source.array.empty()) {
+				auto* array = static_cast<TValue*>(Allocate(source.array.size() * sizeof(TValue)));
+				std::uninitialized_value_construct_n(array, source.array.size());
+				setmref(table->array, array);
+				table->asize = static_cast<MSize>(source.array.size());
+				for (size_t index = 0; index < source.array.size(); ++index) RestoreValue(array + index, source.array[index], markers);
+			}
+			if (!source.hash.empty()) {
+				size_t count = 2;
+				while (count < source.hash.size()) count *= 2;
+				auto* nodes = static_cast<Node*>(Allocate(count * sizeof(Node)));
+				std::uninitialized_value_construct_n(nodes, count);
+				setmref(table->node, nodes);
+				table->hmask = static_cast<MSize>(count - 1);
+				for (size_t index = 0; index < count; ++index) { setnilV(&nodes[index].val); setnilV(&nodes[index].key); }
+				size_t marker = 0;
+				for (size_t index = 0; index < source.hash.size(); ++index) {
+					const auto& [key, value] = source.hash[index];
+					if (key.kind == ScriptGraphPrototypeValue::Kind::Table) ++marker;
+					RestoreValue(&nodes[index].key, key, markers + marker);
+					RestoreValue(&nodes[index].val, value, markers);
+				}
+			}
+			return table;
+		}
+	};
+
+	static std::string SerializeScriptGraphPrototype(const ScriptGraphPrototype& prototype) {
+		std::unique_ptr<lua_State, decltype(&lua_close)> state(luaL_newstate(), lua_close);
+		if (!state) throw std::runtime_error("could not allocate a private Lua state for script bytecode");
+		lua_gc(state.get(), LUA_GCSTOP, 0);
+		ScriptGraphPrototypeDump dump(state.get());
+		struct Work {
+			ScriptGraphPrototypeDump& dump;
+			const ScriptGraphPrototype& prototype;
+			std::string text;
+			std::exception_ptr failure;
+		} work{dump, prototype, {}, {}};
+		lua_pushlightuserdata(state.get(), &work);
+		lua_pushcclosure(state.get(), [](lua_State* worker) -> int {
+			auto& work = *static_cast<Work*>(lua_touserdata(worker, lua_upvalueindex(1)));
+			try {
+				GCproto* prototype = work.dump.Restore(work.prototype);
+				const int result = lj_bcwrite(worker, prototype, [](lua_State*, const void* bytes, size_t size, void* context) -> int {
+					auto& work = *static_cast<Work*>(context);
+					try { work.text.append(static_cast<const char*>(bytes), size); return 0; }
+					catch (...) { work.failure = std::current_exception(); return 1; }
+				}, &work, BCDUMP_F_DETERMINISTIC);
+				if (result && !work.failure) throw std::runtime_error("could not dump captured script bytecode");
+			} catch (...) { work.failure = std::current_exception(); }
+			return 0;
+		}, 1);
+		if (lua_pcall(state.get(), 0, 0, 0) != 0) {
+			const char* message = lua_tostring(state.get(), -1);
+			throw std::runtime_error(message ? message : "private script bytecode dump failed");
+		}
+		if (work.failure) std::rethrow_exception(work.failure);
+		return std::move(work.text);
+	}
+
+	static std::function<std::string()> CaptureScriptGraphPrototype(lua_State* state, int index) {
+		if (!lua_isfunction(state, index)) throw std::runtime_error("script bytecode requires a function");
+		const auto* function = static_cast<const GCfunc*>(lua_topointer(state, index));
+		if (!isluafunc(function)) throw std::runtime_error("a native function has no script bytecode");
+		const auto snapshot = ScriptGraphPrototypeCapture().Capture(state, funcproto(function));
+		return [snapshot] { return SerializeScriptGraphPrototype(*snapshot); };
+	}
+
+	struct ScriptGraphCaptureScope;
+	static thread_local ScriptGraphCaptureScope* s_ScriptGraphCapture = nullptr;
+	static char s_ScriptGraphTextMetatable;
+
+	struct ScriptGraphCaptureScope {
+		ScriptGraphCaptureScope* previous = s_ScriptGraphCapture;
+		ScriptGraphPrototypeCapture prototypes;
+		std::unordered_map<const GCproto*, CheckpointText> bytecode;
+		explicit ScriptGraphCaptureScope(bool enabled) { s_ScriptGraphCapture = enabled ? this : nullptr; }
+		~ScriptGraphCaptureScope() { s_ScriptGraphCapture = previous; }
+	};
+
+	static std::string ScriptGraphPrototypeIdentity(const ScriptGraphPrototype& prototype) {
+		std::string identity = "LuaPrototype1";
+		const auto scalar = [&identity](const auto& value) { identity.append(reinterpret_cast<const char*>(&value), sizeof(value)); };
+		const auto bytes = [&identity, &scalar](const std::string& value) { scalar(static_cast<uint64_t>(value.size())); identity.append(value); };
+		const auto value = [&scalar, &bytes](const ScriptGraphPrototypeValue& field) { scalar(field.kind); scalar(field.bits); bytes(field.text); };
+		scalar(prototype.flags); scalar(prototype.parameters); scalar(prototype.frameSize);
+		scalar(prototype.firstLine); scalar(prototype.lineCount); bytes(prototype.chunkName); bytes(prototype.debug);
+		scalar(static_cast<uint64_t>(prototype.bytecode.size()));
+		for (BCIns instruction: prototype.bytecode) scalar(instruction);
+		scalar(static_cast<uint64_t>(prototype.upvalues.size()));
+		for (uint16_t upvalue: prototype.upvalues) scalar(upvalue);
+		scalar(static_cast<uint64_t>(prototype.numbers.size()));
+		for (uint64_t number: prototype.numbers) scalar(number);
+		scalar(static_cast<uint64_t>(prototype.constants.size()));
+		for (const auto& constant: prototype.constants) {
+			scalar(constant.kind); bytes(constant.text); scalar(constant.ctype);
+			if (constant.prototype) bytes(ScriptGraphPrototypeIdentity(*constant.prototype));
+			scalar(static_cast<uint64_t>(constant.cdata.size()));
+			for (uint64_t number: constant.cdata) scalar(number);
+			scalar(static_cast<uint64_t>(constant.table.array.size()));
+			for (const auto& field: constant.table.array) value(field);
+			scalar(static_cast<uint64_t>(constant.table.hash.size()));
+			for (const auto& [key, field]: constant.table.hash) { value(key); value(field); }
+		}
+		return identity;
+	}
+
+	class ScriptGraphNumberFormatter {
+	public:
+		ScriptGraphNumberFormatter() : m_State(luaL_newstate(), lua_close) {
+			if (!m_State) throw std::runtime_error("could not allocate a private Lua number formatter");
+			luaL_openlibs(m_State.get());
+			constexpr const char* formatter = R"lua(
+return function(value, canonical)
+	if not canonical then return tostring(value) end
+	if value ~= value then return "nan" end
+	if value == math.huge then return "inf" end
+	if value == -math.huge then return "-inf" end
+	if value == 0 then return 1 / value < 0 and "-0" or "0" end
+	if value == math.floor(value) and math.abs(value) < 2^53 then return string.format("%d", value) end
+	return string.format("%.17g", value)
+end
+)lua";
+			if (luaL_loadstring(m_State.get(), formatter) || lua_pcall(m_State.get(), 0, 1, 0)) throw std::runtime_error("could not initialize a private Lua number formatter");
+		}
+
+		std::string Format(double value, bool canonical) {
+			lua_State* state = m_State.get();
+			lua_pushvalue(state, 1);
+			lua_pushnumber(state, value);
+			lua_pushboolean(state, canonical);
+			if (lua_pcall(state, 2, 1, 0)) {
+				const std::string message = lua_tostring(state, -1) ? lua_tostring(state, -1) : "private Lua number formatting failed";
+				lua_settop(state, 1);
+				throw std::runtime_error(message);
+			}
+			size_t length;
+			const char* text = lua_tolstring(state, -1, &length);
+			std::string result(text, length);
+			lua_settop(state, 1);
+			return result;
+		}
+
+	private:
+		std::unique_ptr<lua_State, decltype(&lua_close)> m_State;
+	};
+
+	static CheckpointText ScriptGraphNumber(double number, bool canonical) {
+		std::string identity = canonical ? "LuaCanonicalNumber1" : "LuaCoercedNumber1";
+		identity.append(reinterpret_cast<const char*>(&number), sizeof(number));
+		return CheckpointText::Deferred([number, canonical] {
+			static thread_local ScriptGraphNumberFormatter formatter;
+			return formatter.Format(number, canonical);
+		}, sizeof(number), std::move(identity));
+	}
+
+	static CheckpointText* ScriptGraphCapturedText(lua_State* state, int index) {
+		if (!lua_isuserdata(state, index) || !lua_getmetatable(state, index)) return nullptr;
+		lua_pushlightuserdata(state, &s_ScriptGraphTextMetatable);
+		lua_rawget(state, LUA_REGISTRYINDEX);
+		const bool matches = lua_rawequal(state, -1, -2) != 0;
+		lua_pop(state, 2);
+		return matches ? static_cast<CheckpointText*>(lua_touserdata(state, index)) : nullptr;
+	}
+
+	static int PushScriptGraphCapturedText(lua_State* state, CheckpointText text) {
+		new (lua_newuserdata(state, sizeof(CheckpointText))) CheckpointText(std::move(text));
+		lua_pushlightuserdata(state, &s_ScriptGraphTextMetatable);
+		lua_rawget(state, LUA_REGISTRYINDEX);
+		lua_setmetatable(state, -2);
+		return 1;
+	}
+
+	static CheckpointText ScriptGraphTextValue(lua_State* state, int index) {
+		if (CheckpointText* text = ScriptGraphCapturedText(state, index)) return *text;
+		if (lua_type(state, index) == LUA_TSTRING) {
+			size_t size;
+			const char* value = lua_tolstring(state, index, &size);
+			return CheckpointText(std::string(value, size));
+		}
+		if (lua_type(state, index) == LUA_TNUMBER) return ScriptGraphNumber(lua_tonumber(state, index), false);
+		throw std::runtime_error("a script graph output fragment is not text");
+	}
+
+	template <int (*Call)(lua_State*)> static int ScriptGraphCaptureCall(lua_State* state) {
+		try { return Call(state); }
+		catch (const std::exception& error) { lua_pushstring(state, error.what()); }
+		return lua_error(state);
+	}
+
+	static int ScriptGraphCaptureConcat(lua_State* state) {
+		CheckpointBuffer buffer;
+		for (int index = 1; index <= lua_gettop(state); ++index) buffer.Child(ScriptGraphTextValue(state, index));
+		return PushScriptGraphCapturedText(state, buffer.Finish());
+	}
+
+	static int ScriptGraphCaptureJoin(lua_State* state) {
+		luaL_checktype(state, 1, LUA_TTABLE);
+		CheckpointBuffer buffer;
+		const int count = static_cast<int>(lua_objlen(state, 1));
+		for (int index = 1; index <= count; ++index) {
+			lua_rawgeti(state, 1, index);
+			buffer.Child(ScriptGraphTextValue(state, -1));
+			lua_pop(state, 1);
+		}
+		return PushScriptGraphCapturedText(state, buffer.Finish());
+	}
+
+	static int ScriptGraphCaptureNumber(lua_State* state) {
+		return PushScriptGraphCapturedText(state, ScriptGraphNumber(luaL_checknumber(state, 1), lua_toboolean(state, 2) != 0));
+	}
+
+	static int ScriptGraphCaptureString(lua_State* state) {
+		CheckpointBuffer buffer;
+		if (lua_type(state, 1) == LUA_TSTRING) {
+			size_t size;
+			const char* value = lua_tolstring(state, 1, &size);
+			buffer.Raw("s"); buffer.Unsigned(size); buffer.Raw(":"); buffer.Raw(std::string_view(value, size));
+		} else buffer.GraphString(ScriptGraphTextValue(state, 1));
+		return PushScriptGraphCapturedText(state, buffer.Finish());
+	}
+
+	static int ScriptGraphCaptureBytecode(lua_State* state) {
+		if (!s_ScriptGraphCapture || !lua_isfunction(state, 1)) throw std::runtime_error("script bytecode capture requires a graph capture");
+		const auto* function = static_cast<const GCfunc*>(lua_topointer(state, 1));
+		if (!isluafunc(function)) throw std::runtime_error("a native function has no script bytecode");
+		const GCproto* prototype = funcproto(function);
+		auto& captured = s_ScriptGraphCapture->bytecode;
+		if (const auto found = captured.find(prototype); found != captured.end()) return PushScriptGraphCapturedText(state, found->second);
+		const auto copy = s_ScriptGraphCapture->prototypes.Capture(state, prototype);
+		std::string identity = ScriptGraphPrototypeIdentity(*copy);
+		const size_t bytes = identity.size();
+		const CheckpointText text = CheckpointText::Deferred([copy] { return SerializeScriptGraphPrototype(*copy); }, bytes, std::move(identity));
+		captured.emplace(prototype, text);
+		return PushScriptGraphCapturedText(state, text);
+	}
+
+	static int ScriptGraphDecimalOrder(size_t left, size_t right) {
+		if (left == right) return 0;
+		size_t a = 1, b = 1;
+		while (left / a >= 10) a *= 10;
+		while (right / b >= 10) b *= 10;
+		while (a && b) {
+			const size_t first = (left / a) % 10, second = (right / b) % 10;
+			if (first != second) return first < second ? -1 : 1;
+			a /= 10; b /= 10;
+		}
+		return a ? -1 : 1;
+	}
+
+	static int ScriptGraphCapturePathLess(lua_State* state) {
+		luaL_checktype(state, 1, LUA_TTABLE); luaL_checktype(state, 2, LUA_TTABLE);
+		const size_t count = lua_objlen(state, 1), otherCount = lua_objlen(state, 2);
+		int order = ScriptGraphDecimalOrder(count, otherCount);
+		for (size_t index = 1; !order && index <= count; ++index) {
+			lua_rawgeti(state, 1, static_cast<int>(index)); lua_rawgeti(state, 2, static_cast<int>(index));
+			size_t firstSize, secondSize;
+			const char* first = luaL_checklstring(state, -2, &firstSize);
+			const char* second = luaL_checklstring(state, -1, &secondSize);
+			order = ScriptGraphDecimalOrder(firstSize, secondSize);
+			if (!order) order = std::memcmp(first, second, firstSize);
+			lua_pop(state, 2);
+		}
+		lua_pushboolean(state, order < 0);
+		return 1;
+	}
+
+	static void PushScriptGraphCaptureHelpers(lua_State* state) {
+		lua_newtable(state);
+		lua_pushcfunction(state, [](lua_State* value) -> int { static_cast<CheckpointText*>(lua_touserdata(value, 1))->~CheckpointText(); return 0; });
+		lua_setfield(state, -2, "__gc");
+		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCaptureConcat>);
+		lua_setfield(state, -2, "__concat");
+		lua_pushlightuserdata(state, &s_ScriptGraphTextMetatable);
+		lua_pushvalue(state, -2);
+		lua_rawset(state, LUA_REGISTRYINDEX);
+		lua_pop(state, 1);
+		lua_newtable(state);
+		lua_pushcfunction(state, [](lua_State* value) -> int { lua_pushboolean(value, s_ScriptGraphCapture != nullptr); return 1; });
+		lua_setfield(state, -2, "active");
+		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCaptureNumber>); lua_setfield(state, -2, "number");
+		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCaptureString>); lua_setfield(state, -2, "string");
+		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCaptureJoin>); lua_setfield(state, -2, "join");
+		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCaptureBytecode>); lua_setfield(state, -2, "bytecode");
+		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCapturePathLess>); lua_setfield(state, -2, "pathLess");
+	}
+
+	static bool ScriptGraphCapturedBytecodeSelfTest(lua_State* state) {
+		const int top = lua_gettop(state);
+		std::vector<std::function<std::string()>> captured;
+		std::vector<std::string> expected;
+		std::vector<std::string> scripts = {
+			"return function() end",
+			"local function f(n) local total=0; for i=1,n do total=total+i*0.25 end; return { [false]='f', [true]='t', key='a\\0b', -0.0, 1/0, 0/0 }, total, function(x) return x+n end end; for i=1,160 do f(160) end; return f"
+		};
+#if LJ_HASFFI
+		scripts.emplace_back("return function() return 0x0123456789abcdefLL, 0xfedcba9876543210ULL, 2i end");
+#endif
+		const auto dump = [state](int function) {
+			lua_getglobal(state, "string"); lua_getfield(state, -1, "dump"); lua_remove(state, -2);
+			lua_pushvalue(state, function); lua_pushliteral(state, "d");
+			if (lua_pcall(state, 2, 1, 0)) throw std::runtime_error(lua_tostring(state, -1));
+			size_t size;
+			const char* text = lua_tolstring(state, -1, &size);
+			std::string bytes(text, size);
+			lua_pop(state, 1);
+			return bytes;
+		};
+		bool changed = false, passed = true;
+		try {
+			for (const std::string& script: scripts) {
+				if (luaL_loadstring(state, script.c_str()) || lua_pcall(state, 0, 1, 0)) throw std::runtime_error(lua_tostring(state, -1));
+				const int function = lua_gettop(state);
+				expected.push_back(dump(function));
+				captured.push_back(CaptureScriptGraphPrototype(state, function));
+				const auto* prototype = funcproto(static_cast<const GCfunc*>(lua_topointer(state, function)));
+				for (MSize index = 0; index < prototype->sizekgc; ++index) {
+					GCobj* value = proto_kgc(prototype, -static_cast<ptrdiff_t>(index) - 1);
+					if (value->gch.gct != static_cast<uint8_t>(~LJ_TTAB)) continue;
+					lua_checkstack(state, 3);
+					settabV(state, state->top, gco2tab(value)); incr_top(state);
+					lua_pushliteral(state, "captured_template_mutation"); lua_pushinteger(state, 971); lua_rawset(state, -3); lua_pop(state, 1);
+					changed = dump(function) != expected.back() || changed;
+				}
+				lua_settop(state, top);
+			}
+			lua_gc(state, LUA_GCCOLLECT, 0);
+			auto worker = std::async(std::launch::async, [captured = std::move(captured)] {
+				std::vector<std::string> output;
+				for (const auto& produce: captured) output.push_back(produce());
+				return output;
+			});
+			passed = changed && worker.get() == expected;
+		} catch (const std::exception& error) {
+			std::cout << "[script-graph-selftest] captured bytecode: " << error.what() << std::endl;
+			passed = false;
+		}
+		lua_settop(state, top);
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " captured_bytecode_survives_mutation_and_collection" << std::endl;
+		return passed;
+	}
+
 	// Tables copy by structure (cycles kept), entities by unique id (looked up in the live world at restore), the rest by value or reference.
 	constexpr const char* c_ScriptGraphHelper = R"lua(
+local captureNative, capturing = ..., false
 -- The script state of one Lua VM as one graph: every scripted object's instance table and every
 -- script-made global, with identity kept for shared tables, closures rebuilt from their bytecode
 -- with their captured variables and the cells they share, resident functions and engine objects
@@ -434,6 +1032,7 @@ local nativePrototypes = {}
 for name, create in pairs(nativeClosures) do nativePrototypes[name] = create() end
 
 local function numberText(value)
+	if capturing then return captureNative.number(value, true) end
 	if value ~= value then return "nan" end
 	if value == math.huge then return "inf" end
 	if value == -math.huge then return "-inf" end
@@ -443,7 +1042,16 @@ local function numberText(value)
 end
 
 local function stringToken(s)
+	if capturing then return captureNative.string(s) end
 	return "s" .. #s .. ":" .. s
+end
+
+local function outputNumber(value)
+	return capturing and captureNative.number(value, false) or value
+end
+
+local function concatenate(values)
+	return capturing and captureNative.join(values) or table.concat(values)
 end
 
 local function carriesKey(saved, key)
@@ -548,7 +1156,7 @@ end
 local function pathToken(segments)
 	local parts = { "g", #segments, ";" }
 	for _, segment in ipairs(segments) do parts[#parts + 1] = stringToken(segment) end
-	return table.concat(parts)
+	return concatenate(parts)
 end
 
 local function keyOrder(key, ctx)
@@ -559,7 +1167,7 @@ local function keyOrder(key, ctx)
 	else
 		local id = ctx.ids[key]
 		if id then return 3, id end
-		if ctx.paths[key] then return 4, pathToken(ctx.paths[key]) end
+		if ctx.paths[key] then return 4, ctx.paths[key] end
 		if keyLabels[key] then return 5, keyLabels[key] end
 		return 6, _ScriptGraphObjectAddress(key)
 	end
@@ -572,6 +1180,10 @@ local function sortedKeys(t, ctx)
 		local ra, va = keyOrder(a, ctx)
 		local rb, vb = keyOrder(b, ctx)
 		if ra ~= rb then return ra < rb end
+		if ra == 4 then
+			if capturing then return captureNative.pathLess(va, vb) end
+			return pathToken(va) < pathToken(vb)
+		end
 		return va < vb
 	end)
 	return keys
@@ -601,13 +1213,13 @@ local function userdataNode(value, ctx, payload)
 	local id = newId(ctx)
 	ctx.ids[value] = id
 	local instance = _ScriptGraphInstance(value)
-	ctx.nodes[id] = "U" .. id .. ";" .. payload .. "I" .. visit(instance, ctx)
-	return "#" .. id .. ";"
+	ctx.nodes[id] = "U" .. outputNumber(id) .. ";" .. payload .. "I" .. visit(instance, ctx)
+	return "#" .. outputNumber(id) .. ";"
 end
 
 local function visitUserdata(value, ctx)
 	local id = ctx.ids[value]
-	if id then return "#" .. id .. ";" end
+	if id then return "#" .. outputNumber(id) .. ";" end
 	local native = _ScriptGraphNative and { _ScriptGraphNative(value, ctx.paths[value] ~= nil) } or {}
 	local kind = native[1]
 	if kind == "copy" and native[6] then ctx.ownedPointers[native[6]] = value end
@@ -617,15 +1229,15 @@ local function visitUserdata(value, ctx)
 	if kind == "vector" then
 		return userdataNode(value, ctx, "v" .. numberText(value.X) .. "," .. numberText(value.Y) .. ";")
 	elseif kind == "alarm" then
-		return userdataNode(value, ctx, "c" .. "n" .. numberText(value.ScenePos.X) .. ";n" .. numberText(value.ScenePos.Y) .. ";n" .. value.Team .. ";n" .. numberText(value.Range) .. ";")
+		return userdataNode(value, ctx, "c" .. "n" .. numberText(value.ScenePos.X) .. ";n" .. numberText(value.ScenePos.Y) .. ";n" .. outputNumber(value.Team) .. ";n" .. numberText(value.Range) .. ";")
 	elseif kind == "module-ref" then
 		return userdataNode(value, ctx, "d" .. stringToken(native[2]))
 	elseif kind == "material-ref" then
-		return userdataNode(value, ctx, "M" .. native[2] .. ";")
+		return userdataNode(value, ctx, "M" .. outputNumber(native[2]) .. ";")
 	elseif kind == "path-request" then
 		local fields = {}
 		for _, number in ipairs(native[2]) do fields[#fields + 1] = "n" .. numberText(number) .. ";" end
-		return userdataNode(value, ctx, "P" .. #fields .. ";" .. table.concat(fields))
+		return userdataNode(value, ctx, "P" .. outputNumber(#fields) .. ";" .. concatenate(fields))
 	elseif kind == "timer" then
 		return userdataNode(value, ctx, "m" .. numberText(value.StartSimTimeTicks) .. "," .. numberText(value.SimTimeLimitTicks) .. "," .. numberText(value.StartRealTimeTicks) .. "," .. numberText(value.RealTimeLimitTicks) .. ";")
 	elseif kind == "vector-ref" then
@@ -639,41 +1251,41 @@ local function visitUserdata(value, ctx)
 		if kind == "controller-value" then payload = "Q" .. stringToken(native[2]) .. visit(native[3], ctx)
 		else
 			local typedOnly = native[6] and native[7] == ""
-			payload = (typedOnly and "Z" or native[6] and "Y" or "x") .. visit(native[2], ctx) .. stringToken(native[3]) .. "n" .. native[4] .. ";" .. (native[5] and "t;" or "f;")
+			payload = (typedOnly and "Z" or native[6] and "Y" or "x") .. visit(native[2], ctx) .. stringToken(native[3]) .. "n" .. outputNumber(native[4]) .. ";" .. (native[5] and "t;" or "f;")
 			if native[6] then
 				payload = payload .. stringToken(native[6])
 				if not typedOnly then payload = payload .. stringToken(native[7]) end
 			end
 		end
-		ctx.nodes[id] = "U" .. id .. ";" .. payload .. "I" .. visit(_ScriptGraphInstance(value), ctx)
-		return "#" .. id .. ";"
+		ctx.nodes[id] = "U" .. outputNumber(id) .. ";" .. payload .. "I" .. visit(_ScriptGraphInstance(value), ctx)
+		return "#" .. outputNumber(id) .. ";"
 	elseif kind == "gib-ref" then
 		local owner, index = _ScriptGraphGibOwner(value)
 		if not owner then problem(ctx, "a Gib whose owner is missing") return "z;" end
 		local id = newId(ctx)
 		ctx.ids[value] = id
-		ctx.nodes[id] = "U" .. id .. ";i" .. visit(owner, ctx) .. "n" .. index .. ";I" .. visit(_ScriptGraphInstance(value), ctx)
-		return "#" .. id .. ";"
+		ctx.nodes[id] = "U" .. outputNumber(id) .. ";i" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx)
+		return "#" .. outputNumber(id) .. ";"
 	elseif kind == "soundset-ref" then
 		local owner, index = _ScriptGraphSoundSetOwner(value)
 		if not owner then problem(ctx, "a SoundSet whose owner is missing") return "z;" end
 		local id = newId(ctx)
 		ctx.ids[value] = id
-		ctx.nodes[id] = "U" .. id .. ";j" .. visit(owner, ctx) .. "n" .. index .. ";I" .. visit(_ScriptGraphInstance(value), ctx)
-		return "#" .. id .. ";"
+		ctx.nodes[id] = "U" .. outputNumber(id) .. ";j" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx)
+		return "#" .. outputNumber(id) .. ";"
 	elseif kind == "limb-ref" then
 		local owner, index = _ScriptGraphLimbOwner(value)
 		if not owner then problem(ctx, "a LimbPath whose owning actor is missing") return "z;" end
 		local id = newId(ctx)
 		ctx.ids[value] = id
-		ctx.nodes[id] = "U" .. id .. ";l" .. visit(owner, ctx) .. "n" .. index .. ";I" .. visit(_ScriptGraphInstance(value), ctx)
-		return "#" .. id .. ";"
+		ctx.nodes[id] = "U" .. outputNumber(id) .. ";l" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx)
+		return "#" .. outputNumber(id) .. ";"
 	elseif kind == "entity" then
 		return userdataNode(value, ctx, "e" .. numberText(native[2]) .. ":" .. stringToken(native[3]))
 	elseif kind == "activity" then
 		return userdataNode(value, ctx, "A;")
 	elseif kind == "global-script" then
-		return userdataNode(value, ctx, "G" .. native[2] .. ";")
+		return userdataNode(value, ctx, "G" .. outputNumber(native[2]) .. ";")
 	elseif kind == "scene" then
 		return userdataNode(value, ctx, "S;")
 	elseif kind == "area-ref" then
@@ -683,7 +1295,7 @@ local function visitUserdata(value, ctx)
 		ctx.ids[value] = id
 		local instance = visit(_ScriptGraphInstance(value), ctx)
 		ctx.boxRefs[#ctx.boxRefs + 1] = { value = value, id = id, address = native[2], constant = native[3], instance = instance }
-		return "#" .. id .. ";"
+		return "#" .. outputNumber(id) .. ";"
 	elseif kind == "preset" then
 		return userdataNode(value, ctx, "p" .. stringToken(native[2]) .. stringToken(native[3]) .. stringToken(native[4]))
 	elseif kind == "named" then
@@ -710,15 +1322,15 @@ local function visitUserdata(value, ctx)
 		if propertyOwner then
 			local id = newId(ctx)
 			ctx.ids[value] = id
-			ctx.nodes[id] = "U" .. id .. ";h" .. visit(propertyOwner, ctx) .. stringToken(property) .. (isConst and "t;" or "f;") .. "I" .. visit(_ScriptGraphInstance(value), ctx)
-			return "#" .. id .. ";"
+			ctx.nodes[id] = "U" .. outputNumber(id) .. ";h" .. visit(propertyOwner, ctx) .. stringToken(property) .. (isConst and "t;" or "f;") .. "I" .. visit(_ScriptGraphInstance(value), ctx)
+			return "#" .. outputNumber(id) .. ";"
 		end
 		local owner, index, constant = _ScriptGraphLimbVectorOwner(value)
 		if owner then
 			local id = newId(ctx)
 			ctx.ids[value] = id
-			ctx.nodes[id] = "U" .. id .. ";k" .. visit(owner, ctx) .. "n" .. index .. ";" .. (constant and "t;" or "f;") .. "I" .. visit(_ScriptGraphInstance(value), ctx)
-			return "#" .. id .. ";"
+			ctx.nodes[id] = "U" .. outputNumber(id) .. ";k" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";" .. (constant and "t;" or "f;") .. "I" .. visit(_ScriptGraphInstance(value), ctx)
+			return "#" .. outputNumber(id) .. ";"
 		end
 		problem(ctx, "a " .. kind .. " into an engine object that no known property exposes")
 		return "z;"
@@ -733,7 +1345,7 @@ end
 	    R"lua(
 local function visitFunction(value, ctx)
 	local id = ctx.ids[value]
-	if id then return "#" .. id .. ";" end
+	if id then return "#" .. outputNumber(id) .. ";" end
 	local path = ctx.paths[value]
 	local info = debug.getinfo(value, "Su")
 	if info.what == "C" then
@@ -741,17 +1353,17 @@ local function visitFunction(value, ctx)
 		if range then
 			id = newId(ctx)
 			ctx.ids[value] = id
-			local fields = { "J" .. id .. ";" .. (range.owned and "o" or "r"), visit(range.owner, ctx), "n" .. range.first .. ";" }
+			local fields = { "J" .. outputNumber(id) .. ";" .. (range.owned and "o" or "r"), visit(range.owner, ctx), "n" .. outputNumber(range.first) .. ";" }
 			if range.owned then
-				fields[#fields + 1] = "u" .. range.count .. ";"
+				fields[#fields + 1] = "u" .. outputNumber(range.count) .. ";"
 				for index = 1, range.count do fields[#fields + 1] = visit(range.values[index], ctx) end
 			else
-				fields[#fields + 1] = "n" .. range.last .. ";" .. visit(range.creator, ctx)
-				fields[#fields + 1] = "u" .. #(range.args or {}) .. ";"
+				fields[#fields + 1] = "n" .. outputNumber(range.last) .. ";" .. visit(range.creator, ctx)
+				fields[#fields + 1] = "u" .. outputNumber(#(range.args or {})) .. ";"
 				for _, argument in ipairs(range.args or {}) do fields[#fields + 1] = visit(argument, ctx) end
 			end
-			ctx.nodes[id] = table.concat(fields)
-			return "#" .. id .. ";"
+			ctx.nodes[id] = concatenate(fields)
+			return "#" .. outputNumber(id) .. ";"
 		end
 		for name, prototype in pairs(nativePrototypes) do
 			if _ScriptGraphSameNativeFunction(value, prototype) then
@@ -763,15 +1375,15 @@ local function visitFunction(value, ctx)
 					if name == "gmatch" and i == 3 then upvalue = _ScriptGraphGmatchPosition(value) end
 					upvalues[#upvalues + 1] = visitAt(upvalue, ctx, (ctx.location or "function") .. ".native_upvalue[" .. i .. "]")
 				end
-				ctx.nodes[id] = "B" .. id .. ";" .. stringToken(name) .. "u" .. #upvalues .. ";" .. table.concat(upvalues)
-				return "#" .. id .. ";"
+				ctx.nodes[id] = "B" .. outputNumber(id) .. ";" .. stringToken(name) .. "u" .. outputNumber(#upvalues) .. ";" .. concatenate(upvalues)
+				return "#" .. outputNumber(id) .. ";"
 			end
 		end
 		if path then return pathToken(path) end
 		problem(ctx, "a native function with no global name")
 		return "z;"
 	end
-	local ok, code = pcall(string.dump, value, "d")
+	local ok, code = pcall(function() return capturing and captureNative.bytecode(value) or string.dump(value, "d") end)
 	if not ok then
 		problem(ctx, "a function could not be dumped: " .. tostring(code))
 		return "z;"
@@ -796,21 +1408,21 @@ local function visitFunction(value, ctx)
 			ctx.cells[cellKey] = cellId
 			local open = ctx.openUpvalues[cellKey]
 			if open then
-				ctx.nodes[cellId] = "C" .. cellId .. ";O" .. visit(open.thread, ctx) .. "n" .. open.slot .. ";"
+				ctx.nodes[cellId] = "C" .. outputNumber(cellId) .. ";O" .. visit(open.thread, ctx) .. "n" .. outputNumber(open.slot) .. ";"
 			else
-				ctx.nodes[cellId] = "C" .. cellId .. ";" .. visitAt(upvalue, ctx, (ctx.location or "function") .. ".upvalue[" .. name .. "]")
+				ctx.nodes[cellId] = "C" .. outputNumber(cellId) .. ";" .. visitAt(upvalue, ctx, (ctx.location or "function") .. ".upvalue[" .. name .. "]")
 			end
 		end
-		cells[#cells + 1] = "c" .. cellId .. ";"
+		cells[#cells + 1] = "c" .. outputNumber(cellId) .. ";"
 	end
-	parts[#parts + 1] = "u" .. #cells .. ";" .. table.concat(cells)
-	ctx.nodes[id] = "F" .. id .. ";" .. table.concat(parts)
-	return "#" .. id .. ";"
+	parts[#parts + 1] = "u" .. outputNumber(#cells) .. ";" .. concatenate(cells)
+	ctx.nodes[id] = "F" .. outputNumber(id) .. ";" .. concatenate(parts)
+	return "#" .. outputNumber(id) .. ";"
 end
 
 local function visitTable(value, ctx)
 	local id = ctx.ids[value]
-	if id then return "#" .. id .. ";" end
+	if id then return "#" .. outputNumber(id) .. ";" end
 	local path = ctx.paths[value]
 	if path and ctx.engine[value] then return pathToken(path) end
 	id = newId(ctx)
@@ -825,14 +1437,14 @@ local function visitTable(value, ctx)
 		local label = (type(key) == "string" or type(key) == "number" or type(key) == "boolean") and tostring(key) or type(key)
 		body[#body + 1] = visitAt(rawget(value, key), ctx, (ctx.location or "table") .. "[" .. label .. "]")
 	end
-	parts[#parts + 1] = "k" .. #keys .. ";" .. table.concat(body)
-	ctx.nodes[id] = "T" .. id .. ";" .. table.concat(parts)
-	return "#" .. id .. ";"
+	parts[#parts + 1] = "k" .. outputNumber(#keys) .. ";" .. concatenate(body)
+	ctx.nodes[id] = "T" .. outputNumber(id) .. ";" .. concatenate(parts)
+	return "#" .. outputNumber(id) .. ";"
 end
 
 local function visitThread(value, ctx)
 	local id = ctx.ids[value]
-	if id then return "#" .. id .. ";" end
+	if id then return "#" .. outputNumber(id) .. ";" end
 	local desc, message = nil, "no coroutine codec"
 	if _ScriptGraphThreadCapture then desc, message = _ScriptGraphThreadCapture(value) end
 	if not desc then
@@ -845,13 +1457,13 @@ local function visitThread(value, ctx)
 	local entries = {}
 	for i = desc.first, desc.top - 1 do
 		local link, cont = desc.links[i], desc.conts[i]
-		if link and link.pcslot then entries[#entries + 1] = "P" .. link.pcslot .. ":" .. link.pos .. ";"
-		elseif link then entries[#entries + 1] = "L" .. link.ftsz .. ";"
+		if link and link.pcslot then entries[#entries + 1] = "P" .. outputNumber(link.pcslot) .. ":" .. outputNumber(link.pos) .. ";"
+		elseif link then entries[#entries + 1] = "L" .. outputNumber(link.ftsz) .. ";"
 		elseif cont then entries[#entries + 1] = "K" .. stringToken(cont)
 		else entries[#entries + 1] = "V" .. visitAt(desc.slots[i], ctx, (ctx.location or "coroutine") .. ".slot[" .. i .. "]") end
 	end
-	ctx.nodes[id] = "H" .. id .. ";" .. letter .. ";" .. desc.first .. ";" .. desc.base .. ";" .. desc.top .. ";" .. table.concat(entries)
-	return "#" .. id .. ";"
+	ctx.nodes[id] = "H" .. outputNumber(id) .. ";" .. letter .. ";" .. outputNumber(desc.first) .. ";" .. outputNumber(desc.base) .. ";" .. outputNumber(desc.top) .. ";" .. concatenate(entries)
+	return "#" .. outputNumber(id) .. ";"
 end
 
 visit = function(value, ctx)
@@ -927,27 +1539,30 @@ local function serializeGraph(roots)
 			if owner then link = { owner = owner, index = index } end
 		end
 		if link then
-			ctx.nodes[ref.id] = "U" .. ref.id .. ";b" .. visit(link.owner, ctx) .. "n" .. link.index .. ";" .. (ref.constant and "t;" or "f;") .. "I" .. ref.instance
+			ctx.nodes[ref.id] = "U" .. outputNumber(ref.id) .. ";b" .. visit(link.owner, ctx) .. "n" .. outputNumber(link.index) .. ";" .. (ref.constant and "t;" or "f;") .. "I" .. ref.instance
 		else
 			problem(ctx, "a Box reference whose owning Area is missing")
-			ctx.nodes[ref.id] = "U" .. ref.id .. ";z;I" .. ref.instance
+			ctx.nodes[ref.id] = "U" .. outputNumber(ref.id) .. ";z;I" .. ref.instance
 		end
 	end
 	local rng = _ScriptGraphRandomState and stringToken(_ScriptGraphRandomState()) or "z;"
 	local gibReferences = {}
 	for _, link in ipairs(_ScriptGraphGibReferences(ctx.ownedPointers)) do
-		gibReferences[#gibReferences + 1] = "n" .. link.owner .. ";n" .. link.index .. ";" .. visit(link.target, ctx)
+		gibReferences[#gibReferences + 1] = "n" .. outputNumber(link.owner) .. ";n" .. outputNumber(link.index) .. ";" .. visit(link.target, ctx)
 	end
-	local out = { "SG4;", "r", #rootIds, ";", table.concat(rootIds), "G", #globals, ";", table.concat(globals), "L", #loaded, ";", table.concat(loaded), "E", #enginePatches, ";", table.concat(enginePatches), "R", rng, "X", #gibReferences, ";", table.concat(gibReferences), "N", ctx.count, ";" }
+	local out = { "SG4;", "r", #rootIds, ";", concatenate(rootIds), "G", #globals, ";", concatenate(globals), "L", #loaded, ";", concatenate(loaded), "E", #enginePatches, ";", concatenate(enginePatches), "R", rng, "X", #gibReferences, ";", concatenate(gibReferences), "N", ctx.count, ";" }
 	for id = 1, ctx.count do out[#out + 1] = ctx.nodes[id] end
 	lastObjects = setmetatable({}, { __mode = "v" })
 	for value, id in pairs(ctx.ids) do keyLabels[value], lastObjects[id] = id, value end
 	if _ScriptGraphEndCapture then _ScriptGraphEndCapture() end
-	return table.concat(out), ctx.problems
+	return concatenate(out), ctx.problems
 end
 
 function Graph.serialize(roots)
+	local previous = capturing
+	capturing = captureNative.active()
 	local ok, text, problems = xpcall(function() return serializeGraph(roots) end, debug.traceback)
+	capturing = previous
 	if not ok then
 		if _ScriptGraphEndCapture then _ScriptGraphEndCapture() end
 		return "", { text }
@@ -3353,6 +3968,7 @@ static int ScriptGraphControllerState(lua_State* L) {
 		Controller validation;
 		lua_pushboolean(L, (controller ? controller : &validation)->LoadCheckpoint(std::string_view(text, length)));
 	} else if (controller) {
+		if (s_ScriptGraphCapture) return PushScriptGraphCapturedText(L, CheckpointWriter::CaptureNative([controller] { return controller->SaveCheckpoint(); }));
 		const std::string text = controller->SaveCheckpoint();
 		lua_pushlstring(L, text.data(), text.size());
 	} else lua_pushnil(L);
@@ -3495,13 +4111,23 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 		lua_pushstring(L, property);
 		lua_pushinteger(L, index);
 		lua_pushboolean(L, (rep->flags() & luabind::detail::object_rep::constant) != 0);
-		std::string checkpoint;
 		const std::string type = rep->crep()->name();
-		if (type == "Controller") checkpoint = static_cast<const Controller*>(rep->ptr())->SaveCheckpoint();
-		else if (type == "BuyMenuGUI") checkpoint = static_cast<const BuyMenuGUI*>(rep->ptr())->SaveCheckpoint();
-		else if (type == "SceneEditorGUI") checkpoint = static_cast<const SceneEditorGUI*>(rep->ptr())->SaveCheckpoint();
-		else if (type == "GUIBanner") checkpoint = static_cast<const GUIBanner*>(rep->ptr())->SaveCheckpoint();
-		else if (type == "SLBackground") checkpoint = static_cast<const SLBackground*>(rep->ptr())->SaveCheckpoint();
+		const bool hasCheckpoint = type == "Controller" || type == "BuyMenuGUI" || type == "SceneEditorGUI" || type == "GUIBanner" || type == "SLBackground";
+		const auto save = [&]() -> std::string {
+			if (type == "Controller") return static_cast<const Controller*>(rep->ptr())->SaveCheckpoint();
+			if (type == "BuyMenuGUI") return static_cast<const BuyMenuGUI*>(rep->ptr())->SaveCheckpoint();
+			if (type == "SceneEditorGUI") return static_cast<const SceneEditorGUI*>(rep->ptr())->SaveCheckpoint();
+			if (type == "GUIBanner") return static_cast<const GUIBanner*>(rep->ptr())->SaveCheckpoint();
+			if (type == "SLBackground") return static_cast<const SLBackground*>(rep->ptr())->SaveCheckpoint();
+			return {};
+		};
+		if (s_ScriptGraphCapture && hasCheckpoint) {
+			const CheckpointText checkpoint = CheckpointWriter::CaptureNative(save);
+			lua_pushlstring(L, type.data(), type.size());
+			PushScriptGraphCapturedText(L, checkpoint);
+			return 7;
+		}
+		const std::string checkpoint = save();
 		if (checkpoint.empty() && !ClassDerivesFrom(rep->crep(), "Entity")) return 5;
 		lua_pushlstring(L, type.data(), type.size());
 		lua_pushlstring(L, checkpoint.data(), checkpoint.size());
@@ -3622,9 +4248,12 @@ static int ScriptGraphNative(lua_State* L) {
 	}
 	if (className == "Controller" && owned) {
 		const auto* controller = static_cast<const Controller*>(rep->ptr());
-		const std::string state = controller->SaveCheckpoint();
 		lua_pushliteral(L, "controller-value");
-		lua_pushlstring(L, state.data(), state.size());
+		if (s_ScriptGraphCapture) PushScriptGraphCapturedText(L, CheckpointWriter::CaptureNative([controller] { return controller->SaveCheckpoint(); }));
+		else {
+			const std::string state = controller->SaveCheckpoint();
+			lua_pushlstring(L, state.data(), state.size());
+		}
 		luabind::object(L, controller->GetControlledActor()).push(L);
 		return 3;
 	}
@@ -3796,6 +4425,7 @@ static int ScriptGraphNativeSave(lua_State* L) {
 	const auto* native = luabind::detail::is_class_object(L, 1);
 	if (native && native->crep() && ClassDerivesFrom(native->crep(), "GraphicalPrimitive")) {
 		try {
+			if (s_ScriptGraphCapture) return PushScriptGraphCapturedText(L, CheckpointWriter::CaptureNative([native] { return static_cast<const GraphicalPrimitive*>(native->ptr())->SaveCheckpoint(); }));
 			const std::string text = static_cast<const GraphicalPrimitive*>(native->ptr())->SaveCheckpoint();
 			lua_pushlstring(L, text.data(), text.size()); return 1;
 		} catch (const std::exception& error) { lua_pushnil(L); lua_pushstring(L, error.what()); return 2; }
@@ -3805,6 +4435,20 @@ static int ScriptGraphNativeSave(lua_State* L) {
 		lua_pushnil(L);
 		lua_pushstring(L, "not a supported serializable object");
 		return 2;
+	}
+	if (s_ScriptGraphCapture) {
+		try {
+			return PushScriptGraphCapturedText(L, Writer::Capture([object](Writer& writer) {
+				Writer::SnapshotScope snapshotScope(writer);
+				writer.NewProperty("ScriptEntity");
+				if (const MovableObject* mo = dynamic_cast<const MovableObject*>(object)) Scene::SaveSceneObject(writer, mo, false, true);
+				else {
+					if (const Scene::Area* area = dynamic_cast<const Scene::Area*>(object)) area->SaveSnapshot(writer);
+					else object->Save(writer);
+					writer.ObjectEnd();
+				}
+			}));
+		} catch (const std::exception& error) { lua_pushnil(L); lua_pushstring(L, error.what()); return 2; }
 	}
 	auto stream = std::make_unique<std::stringstream>();
 	std::stringstream* raw = stream.get();
@@ -4174,6 +4818,7 @@ static int ScriptGraphRandomState(lua_State* L) {
 			lua_pushboolean(L, state->RestoreRandomGeneratorCheckpoint(std::string_view(text, length)));
 		}
 	} else {
+		if (s_ScriptGraphCapture) return PushScriptGraphCapturedText(L, state->CaptureRandomGeneratorCheckpoint());
 		const std::string text = state->GetRandomGeneratorCheckpoint();
 		lua_pushlstring(L, text.data(), text.size());
 	}
@@ -4193,7 +4838,7 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_setglobal(m_State, "_ScriptGraphSetInstance");
 		lua_pushcfunction(m_State, ScriptGraphMembers);
 		lua_setglobal(m_State, "_ScriptGraphMembers");
-		lua_pushcfunction(m_State, ScriptGraphNative);
+		lua_pushcfunction(m_State, ScriptGraphCaptureCall<ScriptGraphNative>);
 		lua_setglobal(m_State, "_ScriptGraphNative");
 		lua_pushcfunction(m_State, ScriptGraphOwnerState);
 		lua_setglobal(m_State, "_ScriptGraphOwnerState");
@@ -4201,7 +4846,7 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_setglobal(m_State, "_ScriptGraphEntityCast");
 		lua_pushcfunction(m_State, ScriptGraphOwnerReference);
 		lua_setglobal(m_State, "_ScriptGraphOwnerReference");
-		lua_pushcfunction(m_State, ScriptGraphControllerState);
+		lua_pushcfunction(m_State, ScriptGraphCaptureCall<ScriptGraphControllerState>);
 		lua_setglobal(m_State, "_ScriptGraphControllerState");
 		lua_pushcfunction(m_State, ScriptGraphControllerActor);
 		lua_setglobal(m_State, "_ScriptGraphControllerActor");
@@ -4265,7 +4910,7 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_pushcclosure(m_State, ScriptGraphAdoptRoot, 1);
 		lua_setglobal(m_State, "_ScriptGraphAdoptRoot");
 		lua_pushlightuserdata(m_State, this);
-		lua_pushcclosure(m_State, ScriptGraphRandomState, 1);
+		lua_pushcclosure(m_State, ScriptGraphCaptureCall<ScriptGraphRandomState>, 1);
 		lua_setglobal(m_State, "_ScriptGraphRandomState");
 		lua_pushcfunction(m_State, ScriptGraphBeginCapture);
 		lua_setglobal(m_State, "_ScriptGraphBeginCapture");
@@ -4279,7 +4924,18 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 			});
 			lua_setglobal(m_State, "_ScriptGraphInventoryProbe");
 		}
-		RunScriptString(c_ScriptGraphHelper);
+		const int top = lua_gettop(m_State);
+		if (luaL_loadstring(m_State, c_ScriptGraphHelper)) {
+			const std::string message = lua_tostring(m_State, -1);
+			lua_settop(m_State, top);
+			throw std::runtime_error(message);
+		}
+		PushScriptGraphCaptureHelpers(m_State);
+		if (lua_pcall(m_State, 1, 0, 0)) {
+			const std::string message = lua_tostring(m_State, -1);
+			lua_settop(m_State, top);
+			throw std::runtime_error(message);
+		}
 		m_ScriptGraphHelperLoaded = true;
 	}
 }
@@ -4290,12 +4946,33 @@ void LuaStateWrapper::CaptureScriptGraphBaseline() {
 }
 
 bool LuaStateWrapper::SerializeScriptGraph(std::string& text, std::vector<std::string>& problems) {
+	return CollectScriptGraph(&text, nullptr, problems);
+}
+
+bool LuaStateWrapper::CaptureScriptGraph(CheckpointText& text, std::vector<std::string>& problems) {
+	return CollectScriptGraph(nullptr, &text, problems);
+}
+
+CheckpointText LuaStateWrapper::CaptureRandomGeneratorCheckpoint() const {
+	const RandomGenerator random = m_RandomGenerator;
+	auto engine = random.GetEngineState();
+	std::string identity = "LuaRandomGenerator1";
+	const auto scalar = [&identity](const auto& value) { identity.append(reinterpret_cast<const char*>(&value), sizeof(value)); };
+	scalar(random.GetSeed()); scalar(random.GetDrawCount());
+	for (size_t index = 0; index < std::mt19937::state_size; ++index) scalar(static_cast<uint32_t>(engine()));
+	return CheckpointText::Deferred([random] { return random.SerializeCheckpoint(); }, sizeof(random), std::move(identity));
+}
+
+bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText* captured, std::vector<std::string>& problems) {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	ScriptGraphCaptureScope captureScope(captured != nullptr);
 	ScriptCallbackRootScope callbackRoot{m_State};
 	LoadScriptGraphHelper();
 	CaptureScriptCallbacks();
 	const int top = lua_gettop(m_State);
-	text.clear();
+	const size_t before = problems.size();
+	if (serialized) serialized->clear();
+	if (captured) *captured = CheckpointText();
 	lua_newtable(m_State);
 	std::unordered_set<MovableObject*> objects = m_RegisteredMOs;
 	objects.insert(m_AddedRegisteredMOs.begin(), m_AddedRegisteredMOs.end());
@@ -4324,10 +5001,14 @@ bool LuaStateWrapper::SerializeScriptGraph(std::string& text, std::vector<std::s
 		lua_settop(m_State, top);
 		return false;
 	}
-	size_t length = 0;
-	const char* data = lua_tolstring(m_State, -2, &length);
-	text = data ? std::string(data, length) : std::string();
-	const size_t before = problems.size();
+	if (captured) {
+		if (CheckpointText* text = ScriptGraphCapturedText(m_State, -2)) *captured = *text;
+		else problems.emplace_back("script graph capture returned no owned text");
+	} else {
+		size_t length = 0;
+		const char* data = lua_tolstring(m_State, -2, &length);
+		*serialized = data ? std::string(data, length) : std::string();
+	}
 	CollectStrings(m_State, -1, problems);
 	// The restore detaches every script-owned tree so this graph's copies can adopt their saved
 	// identities. One the roots never reached comes back as nothing, so a checkpoint that still
@@ -5662,6 +6343,8 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	checkpointValues = g_PostProcessMan.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_FrameMan.RunPaletteCheckpointSelfTest() && checkpointValues;
 	checkpointValues = BitmapCheckpoint::RunSelfTest() && checkpointValues;
+	checkpointValues = BitmapSnapshot::RunSelfTest() && checkpointValues;
+	checkpointValues = RunOwnedCheckpointSelfTest() && checkpointValues;
 	checkpointValues = PieMenu::RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunBorrowedReferenceSelfTest() && checkpointValues;
 	checkpointValues = GameActivity::RunDeliveryReferenceSelfTest() && checkpointValues;
@@ -6696,6 +7379,42 @@ _PrimitiveQueueCapture = nil
 	checkpointValues = PreviewScriptSelfTest::CheckGlobalWriteBarrier() && checkpointValues;
 	checkpointValues = PreviewScriptSelfTest::CheckHotcountAfterAbort() && checkpointValues;
 	checkpointValues = PreviewScriptSelfTest::CheckAbortPenalizes() && checkpointValues;
+	checkpointValues = ScriptGraphCapturedBytecodeSelfTest(m_State) && checkpointValues;
+	bool ownedGraph = false;
+	{
+		lua_getglobal(m_State, "_AutosaveCaptureProbe");
+		const int previous = lua_gettop(m_State);
+		const bool created = RunScriptString(R"lua(
+local shared = { tick = 37, binary = 'a\0b\255' }
+local thread = coroutine.create(function()
+	local cell = 41
+	coroutine.yield(function(value) if value then cell = value end; return cell end)
+	return cell
+end)
+local ok, open = coroutine.resume(thread)
+assert(ok)
+_AutosaveCaptureProbe = { first = shared, second = shared, thread = thread, open = open,
+	read = function() return shared.tick end, vector = Vector(3, 7), timer = Timer(),
+	controller = Controller(), soundSet = SoundSet(),
+	numbers = { 0, -0, 1/0, -1/0, 0/0, 2^53-1, 2^53, 0.1, 1e-40, 1e40 } }
+_AutosaveCaptureProbe.controller:SetState(Controller.WEAPON_FIRE, true)
+_AutosaveCaptureProbe.soundSet.SoundSelectionCycleMode = SoundSet.FORWARDS
+shared.parent = _AutosaveCaptureProbe
+)lua") == 0;
+		std::string reference;
+		CheckpointText captured;
+		std::vector<std::string> problems;
+		const bool copied = created && SerializeScriptGraph(reference, problems) && CaptureScriptGraph(captured, problems);
+		const bool mutated = RunScriptString("if _AutosaveCaptureProbe then _AutosaveCaptureProbe.first.tick = 91; _AutosaveCaptureProbe.vector.X = 17; _AutosaveCaptureProbe.open(99); _AutosaveCaptureProbe.controller:SetState(Controller.WEAPON_FIRE, false); _AutosaveCaptureProbe.soundSet.SoundSelectionCycleMode = SoundSet.ALL; _AutosaveCaptureProbe = nil end") == 0;
+		lua_gc(m_State, LUA_GCCOLLECT, 0);
+		try {
+			ownedGraph = copied && mutated && std::async(std::launch::async, [captured] { return captured.Text(); }).get() == reference;
+		} catch (const std::exception& error) { problems.push_back(error.what()); }
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] owned capture: " << problem << std::endl;
+		lua_pushvalue(m_State, previous); lua_setglobal(m_State, "_AutosaveCaptureProbe"); lua_pop(m_State, 1);
+	}
+	std::cout << "[script-graph-selftest] " << (ownedGraph ? "PASS" : "FAIL") << " captured_graph_survives_mutation_and_collection" << std::endl;
+	checkpointValues = ownedGraph && checkpointValues;
 	const bool pass = checkpointValues && settledSoundOwner && scopeForgetsDestroyed && nativeLifetime && registryLifetime && randomRoundtrip && soundSetCopies && textRoundtrip && !report.empty() && report.find("FAIL") == std::string::npos;
 	std::cout << "[script-graph-selftest] " << (pass ? "PASS" : "FAIL") << std::endl;
 	return pass;
