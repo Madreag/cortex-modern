@@ -3,9 +3,11 @@
 #include "ControllerFrame.h"
 #include "LoopbackTransport.h"
 #include "NetAuthCrypto.h"
+#include "NetHostBanStore.h"
 #include "NetLobbySession.h"
 #include "NetLockstep.h"
 #include "NetMatchRunner.h"
+#include "NetHostBanStore.h"
 #include "NetParticipantCrypto.h"
 #include "NetSession.h"
 #include "System/System.h"
@@ -1456,6 +1458,74 @@ namespace RTE {
 			std::cout << "[net-session-selftest] PASS identity: one identity survives reconnect; unproven connections refused" << std::endl;
 			return true;
 		}
+
+		bool TestBanHandshake(std::string* error) {
+			ScriptedAuthCrypto auth;
+			ScriptedParticipantCrypto participant;
+			SetNetAuthCryptoForTest(&auth);
+			SetNetParticipantCryptoForTest(&participant);
+			const auto lane = std::filesystem::temp_directory_path() / "cccp-ban-handshake";
+			std::error_code code;
+			std::filesystem::remove_all(lane, code);
+			std::filesystem::create_directories(lane, code);
+			NetParticipantIdentityStore store;
+			store.SetPath((lane / "player.key").string());
+			if (!store.LoadOrCreate(error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			NetHostBanStore bans;
+			bans.SetPath((lane / "NetworkBans").string());
+			const uint64_t sessionId = 0x5000000000000000ULL + 42111;
+			if (!bans.Ban(store.PublicId(), NetHostBanScope::Session, "player", "banned", sessionId, 1, error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetSession host;
+			NetSession client;
+			if (!StartPair(42111, host, client, hostTransport, clientTransport, MakeConfig(42111, 2101, "Host"), MakeConfig(42111, 2201, "Player"), error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			host.EnableParticipantProof(nullptr);
+			host.SetHostBanStore(&bans);
+			client.EnableParticipantProof(&store);
+			if (DrivePair(hostTransport, clientTransport, host, client, [&] { return host.IsReady() && client.IsReady(); }, error, 400)) {
+				*error = "a banned identity was granted a seat on the session handshake";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			if (!client.IsRejected() || client.GetRejectReason() != NetRejectReason::ParticipantBanned) {
+				*error = "the banned handshake did not refuse with ParticipantBanned";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			error->clear();
+			if (!bans.Unban(store.PublicId(), error) || bans.IsBanned(store.PublicId(), sessionId)) {
+				*error = "unban left the identity banned";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			if (host.IsReady() || client.IsReady()) {
+				*error = "unban granted the rejected connection a seat";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			SetNetAuthCryptoForTest(nullptr);
+			SetNetParticipantCryptoForTest(nullptr);
+			std::filesystem::remove_all(lane, code);
+			std::cout << "[net-session-selftest] PASS scopes: banned identity refused on IP and ICE handshake" << std::endl;
+			return true;
+		}
 	}
 
 	int NetSessionSelfTest::Run() {
@@ -1485,6 +1555,7 @@ namespace RTE {
 		if (!TestOldWirePeerGetsItsRejection(&error)) return fail(error);
 		if (!TestLobbyMembership(&error)) return fail(error);
 		if (!TestIdentityProof(&error)) return fail(error);
+		if (!TestBanHandshake(&error)) return fail(error);
 
 		std::cout << "[net-session-selftest] PASS" << std::endl;
 		return 0;

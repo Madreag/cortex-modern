@@ -17,6 +17,9 @@ IDENTITY_ROWS = (
 )
 SCOPE_ROWS = (
     "scopes: session ban ends with the session; persistent ban survives",
+    "scopes: banned identity refused on join, apply and reclaim",
+    "scopes: persistence failure refuses Until Removed; unban grants no seat",
+    "scopes: banned identity refused on IP and ICE handshake",
 )
 
 
@@ -29,7 +32,7 @@ def main() -> int:
     options = parser.parse_args()
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    flags = ["-net-protocol-selftest", "-net-session-selftest"] if options.case == "identity" else ["-net-session-selftest"]
+    flags = ["-net-protocol-selftest", "-net-session-selftest"] if options.case == "identity" else ["-net-session-selftest", "-net-reconnect-session-selftest"]
     name = "net-protocol-selftest" if options.case == "identity" else "net-session-selftest"
     rows = IDENTITY_ROWS if options.case == "identity" else SCOPE_ROWS
     stdout = ""

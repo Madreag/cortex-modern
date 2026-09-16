@@ -4,6 +4,7 @@
 #include "System/FaultInjection.h"
 
 #include "NetAuthCrypto.h"
+#include "NetHostBanStore.h"
 #include "NetReconnectTranscript.h"
 #include "NetSeatAuth.h"
 
@@ -362,6 +363,9 @@ namespace RTE {
 		if (!ValidateIdentity(connection, message.identity)) {
 			return;
 		}
+		if (RefuseIfBanned(connection)) {
+			return;
+		}
 		const NetH4TxKey key = MakeKey(NetMessageType::NewJoin, 0, 0, message.identity);
 		if (const NetPayload* cached = FindCached(message.txId, key, nowMs)) {
 			Send(connection, *cached);
@@ -491,6 +495,9 @@ namespace RTE {
 
 	void NetReconnectHost::HandleReclaim(NetPeerId connection, const NetH4Reclaim& message, uint64_t nowMs) {
 		if (!ValidateIdentity(connection, message.identity)) {
+			return;
+		}
+		if (RefuseIfBanned(connection)) {
 			return;
 		}
 		const NetH4TxKey key = MakeKey(NetMessageType::Reclaim, message.stableSeat, message.holderGeneration, message.identity);
@@ -689,6 +696,7 @@ namespace RTE {
 		seat.activeConnection = connection;
 		seat.dropped = false;
 		seat.holdExpired = false;
+		CaptureParticipant(seat, connection);
 		BumpSeatGeneration(seat);
 		// Returner wins: whoever commits first takes the seat, and a substitution that was still
 		// waiting for its ack is invalidated and removed here, not left to be discovered later.
@@ -748,6 +756,42 @@ namespace RTE {
 		}), m_Fences.end());
 	}
 
+	void NetReconnectHost::BindParticipantId(NetPeerId connection, const NetAuthBytes32& id) {
+		for (auto& entry : m_ConnectionIds) {
+			if (entry.first == connection) {
+				entry.second = id;
+				return;
+			}
+		}
+		m_ConnectionIds.push_back({connection, id});
+	}
+
+	bool NetReconnectHost::LookupParticipantId(NetPeerId connection, NetAuthBytes32& out) const {
+		for (const auto& entry : m_ConnectionIds) {
+			if (entry.first == connection) {
+				out = entry.second;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void NetReconnectHost::CaptureParticipant(SeatState& seat, NetPeerId connection) {
+		if (LookupParticipantId(connection, seat.participantId)) {
+			seat.hasParticipantId = true;
+		}
+	}
+
+	bool NetReconnectHost::RefuseIfBanned(NetPeerId connection) {
+		NetAuthBytes32 id{};
+		if (m_BanStore == nullptr || !LookupParticipantId(connection, id) || !m_BanStore->IsBanned(id, m_HostSessionId)) {
+			return false;
+		}
+		Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "this identity is not admitted", "participant_identity", "", ""});
+		++m_Stats.identityRejections;
+		return true;
+	}
+
 	void NetReconnectHost::CancelHolderTransactions(uint16_t stableSeat, uint64_t nowMs) {
 		ReleaseProvisional(stableSeat);
 		for (size_t index = 0; index < m_Substitutions.size();) {
@@ -788,6 +832,25 @@ namespace RTE {
 		issued.connection = seat->activeConnection;
 		issued.lockstepPeerId = seat->seat.lockstepPeerId;
 		issued.identity = seat->identity;
+		if (seat->hasParticipantId) {
+			issued.participantId = seat->participantId;
+			issued.hasParticipantId = true;
+		} else {
+			issued.hasParticipantId = LookupParticipantId(seat->activeConnection, issued.participantId);
+		}
+		if (action != NetParticipantRemovalAction::Kick) {
+			if (!issued.hasParticipantId) {
+				return NetKickBanResult::UnknownIdentity;
+			}
+			if (m_BanStore == nullptr) {
+				return NetKickBanResult::ActionUnavailable;
+			}
+			const NetHostBanScope scope = action == NetParticipantRemovalAction::BanUntilRemoved ? NetHostBanScope::UntilRemoved : NetHostBanScope::Session;
+			std::string persistError;
+			if (!m_BanStore->Ban(issued.participantId, scope, "", "host ban", m_HostSessionId, nowMs, &persistError)) {
+				return NetKickBanResult::PersistenceFailed;
+			}
+		}
 		issued.notice.sessionId = sessionId;
 		issued.notice.round = round;
 		issued.notice.epoch = m_ConfiguredEpoch;
@@ -830,6 +893,8 @@ namespace RTE {
 		seat.dropped = false;
 		seat.holdExpired = false;
 		seat.identity = {};
+		seat.participantId = {};
+		seat.hasParticipantId = false;
 		seat.retiredGeneration = 0;
 		seat.retiredUntilMs = 0;
 		BumpSeatGeneration(seat);
@@ -1033,6 +1098,9 @@ namespace RTE {
 		// P5: identity first, before the seat is looked at, so a mismatch never says whether the seat
 		// exists. An applicant is re-validated exactly like a NewJoin and a Reclaim.
 		if (!ValidateIdentity(connection, message.identity)) {
+			return;
+		}
+		if (RefuseIfBanned(connection)) {
 			return;
 		}
 		const NetH4TxKey key = MakeKey(NetMessageType::Applicant, message.stableSeat, 0, message.identity);
@@ -1424,6 +1492,10 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::EndHostedSession() {
+		if (m_BanStore != nullptr) {
+			m_BanStore->EndSession(m_HostSessionId);
+		}
+		m_ConnectionIds.clear();
 		if (m_Registry != nullptr) {
 			m_Registry->EndSession();
 		}
@@ -1457,6 +1529,8 @@ namespace RTE {
 			seat.retiredGeneration = 0;
 			seat.retiredUntilMs = 0;
 			seat.substituteName.clear();
+			seat.participantId = {};
+			seat.hasParticipantId = false;
 			BumpSeatGeneration(seat);
 		}
 	}

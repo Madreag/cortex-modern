@@ -10,6 +10,7 @@ sources += files(
 'NetAdmissionSelfTest.cpp',
 'NetAuthCrypto.cpp',
 'NetAuthSelfTest.cpp',
+'NetHostBanStore.cpp',
 'NetParticipantCrypto.cpp',
 'NetDirectoryClient.cpp',
 'NetDirectoryCodec.cpp',

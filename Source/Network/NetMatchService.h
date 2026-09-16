@@ -5,6 +5,7 @@
 #include "NetLobbySnapshot.h"
 #include "NetMatchRunner.h"
 #include "NetMuxTransport.h"
+#include "NetHostBanStore.h"
 #include "NetParticipantCrypto.h"
 #include "NetReconnectSession.h"
 #include "NetReconnectTicketStore.h"
@@ -298,6 +299,8 @@ namespace RTE {
 		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action);
 		NetKickBanResult GetLastKickBanResult() const;
 		NetParticipantRemovalIssue GetLastRemovalIssue() const;
+		NetKickBanResult UnbanParticipant(const NetAuthBytes32& identity);
+		std::vector<NetHostBanRecord> GetBanRecords() const;
 
 		/// Re-enters the match this process was dropped from, using the stored recovery record.
 		bool BeginTicketRejoin(std::string* error = nullptr);
@@ -542,6 +545,7 @@ namespace RTE {
 		NetReconnectClient m_ReconnectClient;
 		NetReconnectTicketStore m_TicketStore;
 		NetParticipantIdentityStore m_ParticipantStore;
+		NetHostBanStore m_BanStore;
 		NetReconnectUx m_ReconnectUx;
 		NetSeatPresence m_SeatPresence;
 		struct RosterTransition {

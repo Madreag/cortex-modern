@@ -11,10 +11,12 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace RTE {
 
+	class NetHostBanStore;
 	class NetSeatAuthRegistry;
 
 	/// One admission reply the session owes a connection.
@@ -126,6 +128,8 @@ namespace RTE {
 		NetPeerId connection = c_InvalidNetPeerId;
 		uint8_t lockstepPeerId = 0;
 		NetH4Identity identity;
+		NetAuthBytes32 participantId{};
+		bool hasParticipantId = false;
 	};
 
 	/// A seat that just became this connection's. The session turns it into a ready peer so the
@@ -379,6 +383,8 @@ namespace RTE {
 		/// Withdraws an approval that has not committed. The provisional record is invalidated and
 		/// removed; the seat was never given away, so there is nothing to take back.
 		NetH4ModerationResult CancelSubstitution(uint16_t stableSeat, uint64_t nowMs);
+		void SetBanStore(NetHostBanStore* store) { m_BanStore = store; }
+		void BindParticipantId(NetPeerId connection, const NetAuthBytes32& id);
 		/// Host: close this holder without a reclaim hold. Reuses the clean-leave seat close.
 		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action, uint64_t nowMs, uint64_t sessionId, uint32_t round, uint64_t boundaryFrame, NetParticipantRemovalIssue& issued);
 		bool HasSubstitution(uint16_t stableSeat) const;
@@ -413,6 +419,8 @@ namespace RTE {
 			uint32_t retiredGeneration = 0; //!< A generation a substitute superseded, kept only to answer it.
 			uint64_t retiredUntilMs = 0;
 			std::string substituteName;
+			NetAuthBytes32 participantId{};
+			bool hasParticipantId = false;
 		};
 
 		/// A pending applicant. It carries an identity because §4 re-validates one on every admission
@@ -509,6 +517,9 @@ namespace RTE {
 		void ReleaseSeat(SeatState& seat);
 		void CloseSeatWithoutHold(SeatState& seat);
 		void CancelHolderTransactions(uint16_t stableSeat, uint64_t nowMs);
+		bool RefuseIfBanned(NetPeerId connection);
+		bool LookupParticipantId(NetPeerId connection, NetAuthBytes32& out) const;
+		void CaptureParticipant(SeatState& seat, NetPeerId connection);
 		void IssueReseat(const SeatState& seat);
 		void QueueHoldResolution(uint8_t lockstepPeerId, NetHoldResolution resolution);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
@@ -566,6 +577,8 @@ namespace RTE {
 		NetAuthBytes16 m_LastRemovalTx{};
 		bool m_HasRemovalTx = false;
 		NetPeerId m_LastRemovedConnection = c_InvalidNetPeerId;
+		NetHostBanStore* m_BanStore = nullptr;
+		std::vector<std::pair<NetPeerId, NetAuthBytes32>> m_ConnectionIds;
 	};
 
 	enum class NetH4ClientState : uint8_t {
