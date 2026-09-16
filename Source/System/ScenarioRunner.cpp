@@ -1456,6 +1456,7 @@ namespace RTE {
 		captured.savedTick = savedTick;
 		captured.controlOwners = s_LockstepControlOverrides;
 		captured.droppedControlOwners = s_LockstepDroppedControlOverrides;
+		captured.e2eFirstTransferUid = s_E2eFirstTransferUid;
 		captured.playerBindings = s_PeerPlayerBindings;
 		captured.appliedCommands = s_AppliedCommandSequences;
 		if (const Activity* activity = g_ActivityMan.GetActivity()) {
@@ -1646,6 +1647,10 @@ namespace RTE {
 		if (!s_LockstepCoordinator->InstallResyncInputs(authoritative, error)) return false;
 		s_LockstepControlOverrides = std::move(owners);
 		s_LockstepDroppedControlOverrides = std::move(dropped);
+		// A resync does not undo the first transfer; a new process restores it from the snapshot.
+		if (s_E2eFirstTransferUid == 0 && state.e2eFirstTransferUid > 0) {
+			s_E2eFirstTransferUid = state.e2eFirstTransferUid;
+		}
 		s_PeerPlayerBindings = state.playerBindings;
 		s_AppliedCommandSequences = state.appliedCommands;
 		s_LocalCommandOutbox = std::move(outbox);

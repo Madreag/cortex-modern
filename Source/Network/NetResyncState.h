@@ -27,6 +27,7 @@ namespace RTE {
 		std::vector<NetResyncPendingCommand> pendingPlayerBindings;
 		std::vector<NetLockstepFrame> pendingInputs;
 		std::vector<NetGameCommand> admittedReseats;
+		int64_t e2eFirstTransferUid = 0; //!< First owner transfer; a late joiner is a new process.
 		bool operator==(const NetResyncState&) const = default;
 	};
 

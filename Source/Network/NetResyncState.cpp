@@ -205,6 +205,7 @@ namespace RTE {
 				PutCommand(result, state.sourceRound, state.savedTick, command);
 				checkAuxiliary();
 			}
+			Put(result, static_cast<uint64_t>(state.e2eFirstTransferUid), 8);
 			checkAuxiliary();
 			Require(archive.size() <= c_MaxTotalBytes - result.size(), "archive overflows the envelope");
 			const auto metadataSize = static_cast<uint32_t>(result.size());
@@ -297,6 +298,9 @@ namespace RTE {
 				result.admittedReseats.push_back(std::move(pending.command));
 			}
 			checkAuxiliary();
+			if (reader.end - reader.cursor >= 8) {
+				result.e2eFirstTransferUid = static_cast<int64_t>(reader.Get(8));
+			}
 			Require(reader.cursor == reader.end, "metadata has trailing bytes");
 			std::vector<uint8_t> decodedArchive(bytes.begin() + static_cast<std::ptrdiff_t>(metadataSize), bytes.end());
 			state = std::move(result); archive = std::move(decodedArchive);
