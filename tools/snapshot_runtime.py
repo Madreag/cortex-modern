@@ -522,12 +522,11 @@ _LOCAL_FIELDS = {
     "FrameMan3": {name for name, _ in SCHEMAS["FrameMan1"]},
     # The live Allegro colour table and blend alpha are whatever the last blit selected.
     "FramePalette1": {"selected_key", "alpha"},
-    # The FMOD listener is the local camera, and a voice's PCM cursor rides the local device clock.
+    # The FMOD listener is the local camera. AudioVoice2.position is the sim-time cursor.
     "AudioRuntime1": {"player_positions", "listeners"},
     "AudioRuntime2": {"player_positions", "listeners"},
     "AudioRuntime3": {"player_positions", "listeners"},
     "AudioVoice1": {"position"},
-    "AudioVoice2": {"position"},
     "ActorRuntime1": {"hud_stack"},
     "ActorRuntime2": {"hud_stack"},
     "ActorRuntime3": {"hud_stack"},
