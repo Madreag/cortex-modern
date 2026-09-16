@@ -354,16 +354,26 @@ def scripts(case, port, root):
                  "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
                  "dump_host_options\nexit\n")
     elif case == "net-activity":
-        # A menu-driven pair in the lobby itself: the host's picker cycles off the default activity
+        # A menu-driven pair in the lobby itself: the host's combo picks off the default activity
         # and every lobby surface on both peers must name the same preset and its module.
         host = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
-                "assert_label ButtonHostActivity P4 Alpha Duel (Base.rte)\n"
+                "assert_visible LabelHostActivity 1\nassert_label LabelHostActivity Activity\n"
+                "assert_label ComboHostActivity P4 Alpha Duel - Base.rte\n"
+                "assert_text_fits ComboHostActivity\n"
                 "assert_label LabelHostInfo Grasslands - PvP\ndump_host_options\n"
-                "activate ButtonHostActivity\nwait 3\n"
-                "assert_label ButtonHostActivity Brain vs Brain (Base.rte)\ndump_host_options\n"
+                # combo_drop is the same panel-level click a user makes; the dumped capture shows the
+                # list open. combo_select picks the row by its text the way a click on it would.
+                "combo_drop ComboHostActivity\nwait 3\ndump_host_options\n"
+                "combo_select ComboHostActivity Brain vs Brain - Base.rte\nwait 3\n"
+                "assert_label ComboHostActivity Brain vs Brain - Base.rte\ndump_host_options\n"
                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
-                "wait_connected 2\nwait 12\ndump_lobby\ndump_host_options\nwait 600\nexit\n")
+                "wait_connected 2\nwait 12\n"
+                "assert_label LabelLobbyMatch Brain vs Brain - Base.rte\n"
+                "assert_label LabelLobbyMatchMode Grasslands - PvP\n"
+                "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
+                "assert_text_fits LabelLobbyPlayersHeader\n"
+                "dump_lobby\ndump_host_options\nwait 600\nexit\n")
         client = (LANDING + "settext TextMultiplayerName Joiner\n"
                   "activate ButtonMultiplayerJoinGame\nwait 10\n"
                   "settext TextJoinAddress 127.0.0.1\n"
@@ -371,7 +381,12 @@ def scripts(case, port, root):
                   # The joiner's own placeholder config already lists two seats, so the link wait
                   # alone cannot prove the host's config landed - the activity name can.
                   "wait_connected 2\nwait_activity Brain vs Brain\nwait 12\n"
-                  "assert_substate Lobby\ndump_lobby\ndump_host_options\nexit\n")
+                  "assert_substate Lobby\n"
+                  "assert_label LabelLobbyMatch Brain vs Brain - Base.rte\n"
+                  "assert_label LabelLobbyMatchMode Grasslands - PvP\n"
+                  "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
+                  "assert_text_fits LabelLobbyPlayersHeader\n"
+                  "dump_lobby\ndump_host_options\nexit\n")
         return {"host": host, "client": client}, {}
     elif case == "net-options":
         # Two real peers: the host's saved session options ride the lobby config onto both rosters. A
@@ -771,7 +786,7 @@ def run_case(options, case, root, failing=None):
             assert reports["host"]["service"]["status"] == "Match left", reports["host"]["service"]["status"]
             assert reports["client"]["service"]["status"] == "The other player left the match", reports["client"]["service"]["status"]
         if case == "net-activity":
-            # The picker's cycled selection is what the lobby carries, and both peers read the same
+            # The combo's picked row is what the lobby carries, and both peers read the same
             # preset and module off the wire - the client's label is the proof a bare name never was.
             dumped = {}
             for who, log in logs.items():
@@ -782,22 +797,33 @@ def run_case(options, case, root, failing=None):
             preset, module = dumped["host"]
             assert module, dumped
             result["lobby_activity"] = {"preset": preset, "module": module, "dumps": dumped}
-            picker = [next(c["text"] for c in image["controls"] if c["name"] == "ButtonHostActivity")
+            # Three host captures carry the combo: closed on the default, dropped open, then picked.
+            picker = [next(c for c in image["controls"] if c["name"] == "ComboHostActivity")
                       for image in images if image["peer"] == "host"
-                      and any(c["name"] == "ButtonHostActivity" for c in image["controls"])]
-            assert len(picker) == 2 and picker[0] == "P4 Alpha Duel (Base.rte)" and picker[1] != picker[0], picker
-            assert picker[1] == f"{preset} ({module})", (picker, dumped)
+                      and any(c["name"] == "ComboHostActivity" for c in image["controls"])]
+            assert len(picker) == 3, picker
+            assert picker[0]["text"] == "P4 Alpha Duel - Base.rte" and picker[0]["dropped"] is False, picker[0]
+            assert picker[1]["text"] == picker[0]["text"] and picker[1]["dropped"] is True, picker[1]
+            assert picker[2]["text"] == f"{preset} - {module}" and picker[2]["dropped"] is False, picker[2]
+            assert picker[0]["item_count"] > 1, picker[0]
             result["picker_cycle"] = picker
-            # The lobby label carries the wire mode token, not the host screen's friendly name.
-            expected = f"{preset} ({module}) - Grasslands - pvp-skirmish"
+            # The two header rows carry the friendly mode label, and both peers' panels are the
+            # same rectangle for the same lobby state - no peer's own status text widens its panel.
+            panels = {}
             for who in ("host", "client"):
                 matches = [image for image in images if image["peer"] == who
-                           and any(c["name"] == "LabelLobbyMatch" for c in image["controls"])]
+                           and any(c["name"] == "LabelLobbyMatchMode" for c in image["controls"])]
                 assert len(matches) == 1, (who, [image["json"] for image in matches])
                 shot = matches[0]
                 assert [shot["activity_preset"], shot["activity_module"]] == [preset, module], shot["json"]
-                label = next(c["text"] for c in shot["controls"] if c["name"] == "LabelLobbyMatch")
-                assert label == expected, (who, label)
+                controls = {c["name"]: c for c in shot["controls"]}
+                assert controls["LabelLobbyMatch"]["text"] == f"{preset} - {module}", (who, controls["LabelLobbyMatch"])
+                assert controls["LabelLobbyMatchMode"]["text"] == "Grasslands - PvP", (who, controls["LabelLobbyMatchMode"])
+                for name in ("LabelLobbyMatch", "LabelLobbyMatchMode", "LabelLobbyPlayersHeader"):
+                    assert controls[name]["text_fits"] is True, (who, name, controls[name])
+                panels[who] = controls["MultiplayerLobbyPanel"]["rect"]
+            assert panels["host"] == panels["client"], panels
+            result["lobby_panel_rects"] = panels
         if case == "input":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == "ab"
         if case == "input-parity":
