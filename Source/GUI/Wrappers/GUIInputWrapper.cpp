@@ -41,8 +41,11 @@ namespace {
 			GUIInputWrapper::ReleaseJoystickBackgroundEvents();
 			return false;
 		}
+		// Claimed before the added event arrives, so no seat's control scheme ever binds this pad.
+		UInputMan::RegisterScriptedPad(id);
 		scriptedPad = SDL_OpenJoystick(id);
 		if (!scriptedPad) {
+			UInputMan::ForgetScriptedPad(id);
 			SDL_DetachVirtualJoystick(id);
 			GUIInputWrapper::ReleaseJoystickBackgroundEvents();
 			return false;
@@ -161,6 +164,7 @@ void GUIInputWrapper::ReleaseScriptedPad() {
 	}
 	SDL_CloseJoystick(scriptedPad);
 	SDL_DetachVirtualJoystick(id);
+	UInputMan::ForgetScriptedPad(id);
 	scriptedPad = nullptr;
 	GUIInputWrapper::ReleaseJoystickBackgroundEvents();
 }

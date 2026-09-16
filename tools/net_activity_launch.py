@@ -439,6 +439,10 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
         if shared_seat:
             # A presented seat's ActorSelect onto a craft passenger is presentation only.
             steps += [{"op": "actor_select", "player": 1 - player}, {"op": "wait", "renders": 4}]
+        # Sample the bound seat's START while the scripted pad holds it, then release.
+        steps += [{"op": "pad_down", "button": "start"}, {"op": "wait", "renders": 2},
+                  {"op": "assert", "name": "pad_held", "equals": {"editing": False}},
+                  {"op": "pad_up", "button": "start"}]
     steps.append({"op": "finish"})
     return {"schema": 1, "timeout_ms": 180000, "steps": steps}
 
@@ -768,6 +772,27 @@ def launch(options):
                                               for rows in result["commits"].values())
             result["probes"] = {peer: probe_result(root, peer) for peer in runs}
             checks["ui_probe_pass"] = all(result["probes"][peer].get("pass") and result["probes"][peer].get("complete") for peer in runs)
+            def pad_held(probe):
+                named = [index for index, step in enumerate(probe.get("script", {}).get("steps", []))
+                         if step.get("name") == "pad_held"]
+                return next((step.get("observed", {}) for step in probe.get("steps", [])
+                             if step.get("index") in named), {})
+            def pad_bound_row(observed):
+                seat = observed.get("bound_seat") or 0
+                rows = observed.get("controllers") or []
+                if seat:
+                    return next((row for row in rows if row.get("seat") == seat), None), seat
+                started = next((row for row in rows if row.get("start")), None)
+                return started, (started.get("seat") if started else 0)
+            if not (hold_desync and not hold_resync):
+                result["pad_held"] = {peer: pad_held(result["probes"][peer]) for peer in runs}
+                leaks = []
+                for observed in result["pad_held"].values():
+                    row, seat = pad_bound_row(observed)
+                    if row and (row.get("start") or row.get("moved")):
+                        leaks.append(seat)
+                named = leaks[0] if leaks else "N"
+                checks[f"a scripted pad start moved seat {named}'s controller"] = not leaks
             # The refusal the production path shows a player who presses DONE with no brain placed: the seat
             # stays unready and uncommitted, and the stock editor asks for the brain again.
             # The DONE-refusal assertion names itself, so the arm reads that step and no other. A peer

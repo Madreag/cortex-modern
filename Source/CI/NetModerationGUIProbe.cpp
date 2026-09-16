@@ -2,6 +2,7 @@
 
 #include "ActivityMan.h"
 #include "CameraMan.h"
+#include "Controller.h"
 #include "FrameMan.h"
 #include "GameActivity.h"
 #include "GUI.h"
@@ -195,6 +196,28 @@ namespace {
 		}
 		observed["net_ui"] = {{"status", panel ? OverlayRect(panel->GetStatusRect()) : Rect(0, 0, 0, 0, false)},
 		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)}, {"seats_panel", seats}};
+		observed["controllers"] = Json::array();
+		const int probePad = probe.pad ? static_cast<int>(SDL_GetJoystickID(probe.pad)) : 0;
+		observed["probe_pad"] = probePad;
+		int boundSeat = 0;
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			const InputDevice device = g_UInputMan.GetControlScheme(player)->GetDevice();
+			const int joystickId = static_cast<int>(g_UInputMan.GetGamepadID(device));
+			Controller controller;
+			controller.Create(Controller::CIM_PLAYER, player);
+			controller.Update();
+			bool any = false;
+			for (int state = 0; state < CONTROLSTATECOUNT; ++state) {
+				if (controller.IsState(static_cast<ControlState>(state))) { any = true; break; }
+			}
+			const bool startHeld = g_UInputMan.ElementHeld(player, InputElements::INPUT_START);
+			const int moved = (any || startHeld) ? 1 : 0;
+			if (probePad && joystickId == probePad) boundSeat = player + 1;
+			observed["controllers"].push_back({{"player", player}, {"seat", player + 1}, {"device", static_cast<int>(device)},
+			    {"joystick_id", joystickId}, {"moved", moved}, {"start", startHeld},
+			    {"primary", controller.IsState(PRIMARY_ACTION)}});
+		}
+		observed["bound_seat"] = boundSeat;
 		return observed;
 	}
 
@@ -406,6 +429,21 @@ namespace {
 				Require(observed.at(it.key()) == it.value(), "assertion differs: " + it.key());
 			}
 			if (step.contains("sim_at_least")) Require(observed["sim_frame"].get<long long>() >= step["sim_at_least"].get<long long>(), "simulation did not advance");
+			if (step.contains("name")) {
+				const std::string name = step.at("name").get<std::string>();
+				if (name == "pad_held") {
+					const int seat = observed.value("bound_seat", 0);
+					int start = 0, moved = 0;
+					for (const auto& row: observed["controllers"]) {
+						if (seat && row.at("seat") == seat) {
+							start = row.at("start").get<bool>() ? 1 : 0;
+							moved = row.at("moved").get<int>();
+						}
+					}
+					std::cout << "[pad] seat=" << seat << " moved=" << moved << " start=" << start
+					          << " sim=" << observed.at("sim_frame").get<long long>() << std::endl;
+				}
+			}
 		} else if (op == "assert_control") {
 			observed["control"] = ReadControl(Control(step));
 			const auto& value = observed["control"];
