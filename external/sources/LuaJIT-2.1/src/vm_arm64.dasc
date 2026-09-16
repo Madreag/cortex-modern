@@ -3310,6 +3310,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   str TMP0, NODE:CARG3->val
     |    tbnz TMP2w, #2, >7		// isblack(table)
     |3:
+    |  mov CARG1, TAB:CARG2
+    |  bl extern lj_checkpoint_mark
     |  ins_next
     |
     |4:  // Check for __newindex if previous value is nil.
@@ -3371,6 +3373,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   str TMP0, [CARG3]
     |    tbnz TMP2w, #2, >7		// isblack(table)
     |2:
+    |  mov CARG1, TAB:CARG2
+    |  bl extern lj_checkpoint_mark
     |   ins_next
     |
     |5:  // Check for __newindex if previous value is nil.
@@ -3404,6 +3408,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |->BC_TSETR_Z:
     |   ldr TMP0, [BASE, RA, lsl #3]
     |   str TMP0, [CARG1]
+    |  mov CARG1, TAB:CARG2
+    |  bl extern lj_checkpoint_mark
     |   ins_next
     |
     |7:  // Possible table write barrier for the value. Skip valiswhite check.
@@ -3438,6 +3444,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  blo <3
     |    tbnz TMP2w, #2, >7		// isblack(table)
     |4:
+    |  mov CARG1, TAB:CARG2
+    |  bl extern lj_checkpoint_mark
     |  ins_next
     |
     |5:  // Need to resize array part.

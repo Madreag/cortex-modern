@@ -17,6 +17,8 @@ static LJ_AINLINE void checkpoint_mark(GCtab *t)
   if (checkpoint_tab_write) checkpoint_tab_write(t);
 }
 
+LJ_FUNCA void lj_checkpoint_mark(GCtab *t);
+
 /* Hash constants. Tuned using a brute force search. */
 #define HASH_BIAS	(-0x04c11db7)
 #define HASH_ROT1	14
