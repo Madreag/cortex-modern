@@ -38,7 +38,7 @@ def main(argv=None):
         if proc.returncode not in (0, 1):
             print("wrapper non-oracle exit", proc.returncode, "for", arm, "; continuing", flush=True)
     (options.out / "group-result.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
-    return 0
+    return 0 if all(row["exit"] == 0 for row in results) else 1
 
 
 if __name__ == "__main__":
