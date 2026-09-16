@@ -170,6 +170,7 @@ namespace RTE {
 		/// Gets the currently loaded scene, if any.
 		/// @return The scene, ownership IS NOT TRANSFERRED!
 		Scene* GetScene() const { return m_pCurrentScene; }
+		void TestBindCurrentScene(Scene* scene) { m_pCurrentScene = scene; }
 		struct SceneSetAside {
 			Scene* scene = nullptr;
 			SceneLayerTracked* color = nullptr;

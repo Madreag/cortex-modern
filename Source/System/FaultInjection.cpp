@@ -5,27 +5,39 @@
 
 namespace RTE {
 
-	bool FaultInjected(const char* name) {
-		static const std::string armed = [] {
-			const char* env = std::getenv("CC_FAULT_INJECT");
-			return std::string(env ? env : "");
-		}();
-		if (armed.empty()) {
+	namespace {
+		std::string g_TestArmedFaults;
+
+		bool FaultListHas(const std::string& armed, const char* name) {
+			if (!name || armed.empty()) {
+				return false;
+			}
+			size_t start = 0;
+			while (start <= armed.size()) {
+				const size_t comma = armed.find(',', start);
+				const std::string item = armed.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+				if (item == name) {
+					return true;
+				}
+				if (comma == std::string::npos) {
+					break;
+				}
+				start = comma + 1;
+			}
 			return false;
 		}
-		size_t start = 0;
-		while (start <= armed.size()) {
-			const size_t comma = armed.find(',', start);
-			const std::string item = armed.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
-			if (item == name) {
-				return true;
-			}
-			if (comma == std::string::npos) {
-				break;
-			}
-			start = comma + 1;
+	}
+
+	void TestArmFaultInject(const char* names) {
+		g_TestArmedFaults = names ? names : "";
+	}
+
+	bool FaultInjected(const char* name) {
+		if (FaultListHas(g_TestArmedFaults, name)) {
+			return true;
 		}
-		return false;
+		const char* env = std::getenv("CC_FAULT_INJECT");
+		return FaultListHas(env ? env : "", name);
 	}
 
 } // namespace RTE
