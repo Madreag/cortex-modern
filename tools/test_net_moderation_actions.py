@@ -34,7 +34,7 @@ def main() -> int:
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     if options.case == "menus":
-        result = {"pass": False, "reason": "L20 owns the Kick/Ban menus"}
+        result = {"pass": False, "reason": "the multiplayer lobby owns the Kick/Ban menus"}
         (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         print(json.dumps(result, indent=2))
         return 1
