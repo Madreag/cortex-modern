@@ -51,6 +51,25 @@ class CostChecks(unittest.TestCase):
         self.green['native'][0]['tables'] = 0
         self.assertFalse(self.score())
 
+    def test_missing_or_nonfinite_restore_ms_is_rejected(self):
+        good = copy.deepcopy(self.green)
+        del self.green['native'][0]['restore_ms']
+        cost = driver.assess_cost(self.red, self.green, '240', 240, 240)
+        self.assertGreater(cost['green_windows'], 0)
+        self.assertIsNone(cost['restore_us_per_window'])
+        self.assertFalse(cost['pass_check'])
+        self.green = copy.deepcopy(good)
+        self.green['native'][0]['restore_ms'] = float('nan')
+        self.assertFalse(self.score())
+
+    def test_omitted_or_nan_p99_ms_is_rejected(self):
+        good = copy.deepcopy(self.green)
+        del self.green['native'][0]['p99_ms']
+        self.assertFalse(self.score())
+        self.green = copy.deepcopy(good)
+        self.green['native'][0]['p99_ms'] = float('nan')
+        self.assertFalse(self.score())
+
     def test_states_are_summed(self):
         self.green['native'] *= 3
         self.assertFalse(self.score())
