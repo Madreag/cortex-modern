@@ -4723,6 +4723,20 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
 			g_ActivityMan.SwapCheckpointActivity(next);
 			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			struct HighlightSceneRestore {
+				MovableMan::WorldSetAside world;
+				SceneMan::SceneSetAside scene;
+				HighlightSceneRestore() {
+					if (!g_MovableMan.SetAsideWorld(world, false)) throw std::runtime_error("highlight scene world hold failed");
+					g_SceneMan.SetAsideScene(scene);
+				}
+				~HighlightSceneRestore() {
+					g_MovableMan.PurgeAllMOs();
+					g_SceneMan.ReinstateScene(scene);
+					g_MovableMan.ReinstateWorld(world);
+				}
+			} sceneRestore;
+			if (g_SceneMan.LoadScene("Null Scene", false, false) < 0) throw std::runtime_error("highlight fixture scene failed");
 			const auto* robot = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
 			if (!robot) throw std::runtime_error("highlight fixture preset unavailable");
 			Actor* actor = static_cast<Actor*>(robot->Clone());
@@ -4730,6 +4744,7 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			actor->SetPos(Vector(320, 240));
 			actor->SetPinStrength(1000.0F);
 			g_MovableMan.AddActor(actor);
+			fixture->SetActivityState(ActivityState::Running);
 			fixture->m_IsActive[0] = fixture->m_IsHuman[0] = true;
 			fixture->m_Team[0] = 0;
 			fixture->m_PlayerScreen[0] = 0;
@@ -4752,11 +4767,8 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 				check("lockstep_live_coordinator", false, liveError, "running");
 			} else {
 				ScenarioRunner::SetLockstepCoordinator(&live);
-				if (g_SceneMan.GetScene()) {
-					fixture->Update();
-				} else {
-					pie->Update();
-				}
+				g_MovableMan.AbsorbAddedMOs();
+				fixture->Update();
 				check("lockstep_update_leaves_highlight_undrawn", !pie->HasHighlightDraw(), pie->HasHighlightDraw() ? "1" : "0", "0");
 				check("lockstep_update_dump_unchanged", pie->PackInteractionState() == packed && pie->DescribeInteractionState() == described,
 					pie->PackInteractionState(), packed);
