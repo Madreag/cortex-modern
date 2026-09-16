@@ -271,6 +271,8 @@ namespace RTE {
 		const NetSeatPresence& GetSeatPresence() const { return m_SeatPresence; }
 		NetH4ModerationResult ApplyModeration(const NetModerationSelection& selection, NetModerationAction action);
 
+		/// Remembers whether the last join target was a persistent world, so a ticket rejoin hellos 5/23.
+		void NoteJoinTargetPersistentWorld(bool world) { m_LastJoinTargetPersistentWorld = world; }
 		/// Re-enters the match this process was dropped from, using the stored recovery record.
 		bool BeginTicketRejoin(std::string* error = nullptr);
 		/// §11: reads the recovery record so the landing screen can offer a rejoin after a relaunch, or
@@ -626,6 +628,7 @@ namespace RTE {
 		bool m_HostLobbyBeaconed = false;
 		NetWorldIdentity m_WorldIdentity;
 		NetWorldJoinHost m_WorldJoin;
+		bool m_LastJoinTargetPersistentWorld = false;
 		struct WorldCatchUp {
 			bool active = false;
 			uint64_t snapshotTick = 0;
