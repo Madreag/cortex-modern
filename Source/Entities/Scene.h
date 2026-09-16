@@ -24,6 +24,7 @@ namespace RTE {
 	class SLBackground;
 	class SLTerrain;
 	class SceneLayer;
+	class Material;
 	class BunkerAssembly;
 	class SceneObject;
 	class Deployment;
@@ -721,6 +722,8 @@ namespace RTE {
 
 		/// Records a terrain material change for the committed-horizon path grid.
 		void NoteHorizonTerrainBox(const Box& newArea);
+		void TestSetTerrain(SLTerrain* terrain) { m_pTerrain = terrain; }
+		void TestInstallHorizonPathFinders(int width, int height, int nodeDimension, const Material* fill);
 
 		/// Queues every noted terrain box onto the pathfinders.
 		void FlushHorizonTerrainBoxes();
@@ -812,6 +815,8 @@ namespace RTE {
 		struct HorizonTerrainBox {
 			Box box;
 			uint64_t originTick = 0;
+			int finderIndex = 0;
+			HorizonTerrainPatch patch;
 		};
 		std::vector<HorizonTerrainBox> m_HorizonTerrainBoxes;
 
