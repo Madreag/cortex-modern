@@ -206,6 +206,7 @@ namespace RTE {
 		/// Encodes an 8-bit bitmap without changing its palette indices.
 		/// @return Whether the complete PNG was written to the output buffer.
 		static bool EncodeIndexedPNG(BITMAP* bitmap, std::vector<unsigned char>& output);
+		static bool EncodeIndexedPNG(BITMAP* bitmap, std::vector<unsigned char>& output, const std::array<unsigned char, 256 * 3>& palette);
 
 	private:
 		/// Enumeration for loading BITMAPs by bit depth. NOTE: This can't be lower down because s_LoadedBitmaps relies on this definition.

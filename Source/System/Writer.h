@@ -5,8 +5,75 @@
 #include <string>
 #include <memory>
 #include <ostream>
+#include <functional>
+#include <cstdint>
+#include <string_view>
+#include <vector>
+#include <stdexcept>
+#include <unordered_map>
+
+struct BITMAP;
 
 namespace RTE {
+	struct BitmapSnapshot;
+	bool RunOwnedCheckpointSelfTest();
+
+	/// Owned checkpoint values whose text is produced by the archive worker.
+	class CheckpointText {
+	public:
+		CheckpointText();
+		explicit CheckpointText(std::string text);
+		const std::string& Text() const;
+		size_t OwnedBytes() const;
+		bool SameValues(const CheckpointText& other) const;
+		CheckpointText ReuseChildren(const CheckpointText& previous) const;
+		CheckpointText Base64(bool url = true) const;
+		static CheckpointText Deferred(std::function<std::string()> produce, size_t ownedBytes = 0, std::string identity = {});
+	private:
+		struct Data;
+		std::shared_ptr<Data> m_Data;
+		explicit CheckpointText(std::shared_ptr<Data> data) : m_Data(std::move(data)) {}
+		friend class CheckpointBuffer;
+	};
+
+	/// Copies scalar values and owned children without formatting them.
+	class CheckpointBuffer {
+	public:
+		void Raw(std::string_view text);
+		void Integer(int64_t value, bool space = false);
+		void Unsigned(uint64_t value, bool space = false);
+		void Real(float value);
+		void Real(double value);
+		void String(std::string_view value);
+		void Child(const CheckpointText& value, bool sized = false);
+		void Base64(const CheckpointText& value, bool url);
+		void GraphString(const CheckpointText& value);
+		void NewLine(int indent, int count);
+		void Property(std::string_view name, int indent);
+		CheckpointText Finish();
+	private:
+		std::string m_Values;
+		std::vector<CheckpointText> m_Children;
+		template<class T> void Copy(const T& value) {
+			m_Values.append(reinterpret_cast<const char*>(&value), sizeof(value));
+		}
+	};
+
+	/// Retains unchanged owned values and retires replaced buffers on the worker.
+	class CheckpointCache {
+	public:
+		void Begin() { ++m_Generation; }
+		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value);
+		CheckpointText CapturePixels(const BITMAP* bitmap);
+		std::vector<CheckpointText> RetireUnused();
+	private:
+		struct Entry { CheckpointText text; uint64_t generation = 0; };
+		std::unordered_map<const void*, std::unordered_map<unsigned, Entry>> m_Entries;
+		std::vector<CheckpointText> m_Retired;
+		uint64_t m_Generation = 0;
+		struct Pixels { std::shared_ptr<const BitmapSnapshot> snapshot; CheckpointText text; uint64_t generation = 0; };
+		std::unordered_map<const BITMAP*, Pixels> m_Pixels;
+	};
 
 	/// Writes RTE objects to std::ostreams.
 	class Writer {
@@ -66,10 +133,46 @@ namespace RTE {
 		};
 		bool IsSnapshot() const { return m_Snapshot; }
 
+		/// Records a property writer into an independently owned checkpoint buffer.
+		static CheckpointText Capture(const std::function<void(Writer&)>& visit, int indent = 0);
+		bool IsCapturing() const { return m_Capture != nullptr; }
+		void Append(const CheckpointText& text);
+		struct SaveOverrides {
+			struct Identity { std::string name; int module = -1; bool original = false; };
+			std::unordered_map<const void*, Identity> identities;
+			std::unordered_map<const void*, std::string> contentPaths;
+			const void* scene = nullptr;
+		};
+		void SetSaveOverrides(const SaveOverrides* overrides) { m_SaveOverrides = overrides; }
+		const SaveOverrides* GetSaveOverrides() const { return m_SaveOverrides; }
+		class SaveOverridesScope {
+			Writer& m_Writer;
+			const SaveOverrides* m_Previous;
+		public:
+			SaveOverridesScope(Writer& writer, const SaveOverrides& overrides) : m_Writer(writer), m_Previous(writer.m_SaveOverrides) { writer.m_SaveOverrides = &overrides; }
+			~SaveOverridesScope() { m_Writer.m_SaveOverrides = m_Previous; }
+			SaveOverridesScope(const SaveOverridesScope&) = delete;
+			SaveOverridesScope& operator=(const SaveOverridesScope&) = delete;
+		};
+		const SaveOverrides::Identity* IdentityOverride(const void* object) const {
+			if (!m_SaveOverrides) return nullptr;
+			auto found = m_SaveOverrides->identities.find(object);
+			return found == m_SaveOverrides->identities.end() ? nullptr : &found->second;
+		}
+		const std::string* ContentOverride(const void* object) const {
+			if (!m_SaveOverrides) return nullptr;
+			auto found = m_SaveOverrides->contentPaths.find(object);
+			return found == m_SaveOverrides->contentPaths.end() ? nullptr : &found->second;
+		}
+		bool IsSavedScene(const void* scene) const { return m_SaveOverrides && m_SaveOverrides->scene == scene; }
+		int GetIndent() const { return m_IndentCount; }
+		const void* GetCaptureObject() const { return m_CaptureObject; }
+		void SetCaptureObject(const void* object) { m_CaptureObject = object; }
+
 		/// Used to specify the start of an object to be written.
 		/// @param className The class name of the object about to be written.
 		void ObjectStart(const std::string& className) {
-			*m_Stream << className;
+			if (m_Capture) m_Capture->Raw(className); else *m_Stream << className;
 			++m_IndentCount;
 		}
 
@@ -91,7 +194,7 @@ namespace RTE {
 		/// @param toIndent Whether to indent the new line or not.
 		void NewLineString(const std::string& textString, bool toIndent = true) const {
 			NewLine(toIndent);
-			*m_Stream << textString;
+			if (m_Capture) m_Capture->Raw(textString); else *m_Stream << textString;
 		}
 
 		/// Creates a new line and fills it with slashes to create a divider line for INI.
@@ -99,12 +202,13 @@ namespace RTE {
 		/// @param dividerLength The length of the divider (number of slashes).
 		void NewDivider(bool toIndent = true, int dividerLength = 72) const {
 			NewLine(toIndent);
-			*m_Stream << std::string(dividerLength, '/');
+			if (m_Capture) m_Capture->Raw(std::string(dividerLength, '/')); else *m_Stream << std::string(dividerLength, '/');
 		}
 
 		/// Creates a new line and writes the name of the property in preparation to writing it's value.
 		/// @param propName The name of the property to be written.
 		void NewProperty(const std::string& propName) const {
+			if (m_Capture) { m_Capture->Property(propName, m_IndentCount); return; }
 			NewLine();
 			*m_Stream << propName + " = ";
 		}
@@ -118,19 +222,23 @@ namespace RTE {
 		}
 
 		/// Marks that there is a null reference to an object here.
-		void NoObject() const { *m_Stream << "None"; }
+		void NoObject() const { if (m_Capture) m_Capture->Raw("None"); else *m_Stream << "None"; }
 #pragma endregion
 
 #pragma region Writer Status
 		/// Shows whether the writer is ready to start accepting data streamed to it.
 		/// @return Whether the writer is ready to start accepting data streamed to it or not.
-		bool WriterOK() const { return m_Stream.get() && m_Stream->good(); }
+		bool WriterOK() const { return m_Capture || (m_Stream.get() && m_Stream->good()); }
 
 		/// Returns the underlying stream.
-		std::ostream* GetStream() { return m_Stream.get(); }
+		std::ostream* GetStream() {
+			if (m_Capture) throw std::logic_error("checkpoint capture requires owned writer values");
+			return m_Stream.get();
+		}
 
 		/// Flushes and closes the output stream of this Writer. This happens automatically at destruction but needs to be called manually if a written file must be read from in the same scope.
 		void EndWrite() {
+			if (m_Capture) return;
 			m_Stream->flush();
 			m_Stream.reset();
 		}
@@ -141,67 +249,68 @@ namespace RTE {
 		/// @param var A reference to the variable that will be written to the ostream.
 		/// @return A Writer reference for further use in an expression.
 		Writer& operator<<(const bool& var) {
-			*m_Stream << var;
+			if (m_Capture) m_Capture->Unsigned(var); else *m_Stream << var;
 			return *this;
 		}
 		Writer& operator<<(const char& var) {
-			*m_Stream << var;
+			if (m_Capture) m_Capture->Raw(std::string_view(&var, 1)); else *m_Stream << var;
 			return *this;
 		}
 		Writer& operator<<(const unsigned char& var) {
 			int temp = var;
-			*m_Stream << temp;
+			if (m_Capture) m_Capture->Integer(temp); else *m_Stream << temp;
 			return *this;
 		}
 		Writer& operator<<(const short& var) {
-			*m_Stream << var;
+			if (m_Capture) m_Capture->Integer(var); else *m_Stream << var;
 			return *this;
 		}
 		Writer& operator<<(const unsigned short& var) {
-			*m_Stream << var;
+			if (m_Capture) m_Capture->Unsigned(var); else *m_Stream << var;
 			return *this;
 		}
 		Writer& operator<<(const int& var) {
-			*m_Stream << var;
+			if (m_Capture) m_Capture->Integer(var); else *m_Stream << var;
 			return *this;
 		}
 		Writer& operator<<(const unsigned int& var) {
-			*m_Stream << var;
+			if (m_Capture) m_Capture->Unsigned(var); else *m_Stream << var;
 			return *this;
 		}
 		Writer& operator<<(const long& var) {
-			*m_Stream << var;
+			if (m_Capture) m_Capture->Integer(var); else *m_Stream << var;
 			return *this;
 		}
 		Writer& operator<<(const long long& var) {
-			*m_Stream << var;
+			if (m_Capture) m_Capture->Integer(var); else *m_Stream << var;
 			return *this;
 		}
 		Writer& operator<<(const unsigned long& var) {
-			*m_Stream << var;
+			if (m_Capture) m_Capture->Unsigned(var); else *m_Stream << var;
 			return *this;
 		}
 		Writer& operator<<(const unsigned long long& var) {
-			*m_Stream << var;
+			if (m_Capture) m_Capture->Unsigned(var); else *m_Stream << var;
 			return *this;
 		}
 		// Floats save in shortest round-trip form; a reloaded world must be bit-equal to the saved one.
 		Writer& operator<<(const float& var) {
-			WriteShortestRoundTrip(var);
+			if (m_Capture) m_Capture->Real(var); else WriteShortestRoundTrip(var);
 			return *this;
 		}
 		Writer& operator<<(const double& var) {
-			WriteShortestRoundTrip(var);
+			if (m_Capture) m_Capture->Real(var); else WriteShortestRoundTrip(var);
 			return *this;
 		}
 		Writer& operator<<(const char* var) {
-			*m_Stream << var;
+			if (m_Capture) m_Capture->Raw(var); else *m_Stream << var;
 			return *this;
 		}
 		Writer& operator<<(const std::string& var) {
-			*m_Stream << var;
+			if (m_Capture) m_Capture->Raw(var); else *m_Stream << var;
 			return *this;
 		}
+		Writer& operator<<(const CheckpointText& text) { Append(text); return *this; }
 #pragma endregion
 
 	protected:
@@ -211,6 +320,9 @@ namespace RTE {
 		std::string m_FileName; //!< Only the name of the currently read file, excluding the path.
 		int m_IndentCount; //!< Indentation counter.
 		bool m_Snapshot = false;
+		CheckpointBuffer* m_Capture = nullptr;
+		const SaveOverrides* m_SaveOverrides = nullptr;
+		const void* m_CaptureObject = nullptr;
 
 	private:
 		/// Writes a float in shortest round-trip form, locale-independent and allocation-free.

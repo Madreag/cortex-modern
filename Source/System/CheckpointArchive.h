@@ -3,6 +3,7 @@
 #include "Timer.h"
 #include "Vector.h"
 #include "Box.h"
+#include "Writer.h"
 
 #include <array>
 #include <bit>
@@ -22,6 +23,7 @@
 #include <utility>
 #include <unordered_map>
 #include <vector>
+#include <optional>
 
 namespace RTE {
 
@@ -29,12 +31,47 @@ namespace RTE {
 	// Native pointers are deliberately excluded: their owners encode stable graph links.
 	class CheckpointWriter {
 	public:
-		explicit CheckpointWriter(std::string_view version) { Value(std::string(version)); }
-		const std::string& Text() const { return m_Text; }
+		explicit CheckpointWriter(std::string_view version) : m_Recording(IsCapturing()) { Value(std::string(version)); }
+		const std::string& Text() const {
+			if (!m_Recording) return m_Text;
+			if (s_Capture->output) throw std::logic_error("nested checkpoint capture requires Native");
+			s_Capture->output = m_Capture.Finish();
+			return m_Text;
+		}
+		static bool IsCapturing() { return s_Capture != nullptr; }
+		class CacheScope {
+		public:
+			explicit CacheScope(CheckpointCache* cache) : m_Previous(s_Cache) { s_Cache = cache; }
+			~CacheScope() { s_Cache = m_Previous; }
+		private:
+			CheckpointCache* m_Previous;
+		};
+		static CheckpointCache* CurrentCache() { return s_Cache; }
+		/// Captures an existing checkpoint visitor into owned values.
+		static CheckpointText CaptureNative(const std::function<std::string()>& visit) {
+			CaptureScope scope;
+			std::string existing = visit();
+			if (scope.output && !existing.empty()) throw std::logic_error("checkpoint capture result has uncaptured text");
+			return scope.output ? std::move(*scope.output) : CheckpointText(std::move(existing));
+		}
+		static CheckpointText Native(const std::function<std::string()>& visit) {
+			return IsCapturing() ? CaptureNative(visit) : CheckpointText(visit());
+		}
+		static CheckpointText CaptureValues(const std::function<CheckpointText()>& visit) {
+			CaptureScope scope;
+			CheckpointText result = visit();
+			if (scope.output) throw std::logic_error("checkpoint capture result was not consumed");
+			return result;
+		}
 		template <class... Values> void operator()(const Values&... values) { (Value(values), ...); }
 
 		template <class T> requires std::is_integral_v<T>
 		void Value(T value) {
+			if (m_Recording) {
+				if constexpr (std::is_signed_v<T>) m_Capture.Integer(static_cast<int64_t>(value), true);
+				else m_Capture.Unsigned(static_cast<uint64_t>(value), true);
+				return;
+			}
 			char buffer[32];
 			const auto result = [&] {
 				if constexpr (std::is_signed_v<T>) return std::to_chars(buffer, buffer + sizeof(buffer), static_cast<int64_t>(value));
@@ -55,7 +92,13 @@ namespace RTE {
 		void Value(T value) { Value(static_cast<std::underlying_type_t<T>>(value)); }
 		void Value(float value) { Value(std::bit_cast<uint32_t>(value)); }
 		void Value(double value) { Value(std::bit_cast<uint64_t>(value)); }
-		void Value(const std::string& value) { Value(value.size()); m_Text += value; m_Text.push_back(' '); }
+		void Value(const std::string& value) {
+			if (m_Recording) { m_Capture.String(value); return; }
+			Value(value.size()); m_Text += value; m_Text.push_back(' ');
+		}
+		void Value(const CheckpointText& value) {
+			if (m_Recording) m_Capture.Child(value, true); else Value(value.Text());
+		}
 		void Value(const Vector& value) { (*this)(value.m_X, value.m_Y); }
 		void Value(const Box& value) { (*this)(value.m_Corner, value.m_Width, value.m_Height); }
 		void Value(const Timer& value) { (*this)(value.GetStartSimTimeMS(), value.GetSimTimeLimitTicks(), value.GetStartRealTimeMS(), value.GetRealTimeLimitTicks()); }
@@ -71,9 +114,23 @@ namespace RTE {
 		template <class K, class V> void Value(const std::map<K, V>& values) { Value(values.size()); for (const auto& [key, value]: values) (*this)(key, value); }
 		template <class K, class V> void Value(const std::unordered_map<K, V>& values) { Value(std::map<K, V>(values.begin(), values.end())); }
 		template <class T> requires requires(const T& value) { value.SaveCheckpoint(); }
-		void Value(const T& value) { Value(value.SaveCheckpoint()); }
+		void Value(const T& value) {
+			CheckpointText captured = Native([&value] { return value.SaveCheckpoint(); });
+			if (m_Recording && s_Cache) captured = s_Cache->Remember(&value, 0, std::move(captured));
+			Value(captured);
+		}
 
 	private:
+		struct CaptureScope {
+			CaptureScope* previous = s_Capture;
+			std::optional<CheckpointText> output;
+			CaptureScope() { s_Capture = this; }
+			~CaptureScope() { s_Capture = previous; }
+		};
+		inline static thread_local CaptureScope* s_Capture = nullptr;
+		inline static thread_local CheckpointCache* s_Cache = nullptr;
+		bool m_Recording = false;
+		mutable CheckpointBuffer m_Capture;
 		std::string m_Text;
 	};
 
