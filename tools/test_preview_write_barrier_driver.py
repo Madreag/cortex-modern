@@ -36,6 +36,13 @@ class CostChecks(unittest.TestCase):
         self.assertEqual(cost['restore_us_per_window'], 1000.0/16)
         self.assertEqual(cost['native_p99_ms_sum'], 0.1)
 
+    def test_zero_journal_is_rejected(self):
+        self.green['native'][0]['saves'] = 0
+        self.assertFalse(self.score())
+        self.green['native'][0]['saves'] = 8
+        self.green['native'][0]['tables'] = 0
+        self.assertFalse(self.score())
+
     def test_states_are_summed(self):
         self.green['native'] *= 3
         self.assertFalse(self.score())
