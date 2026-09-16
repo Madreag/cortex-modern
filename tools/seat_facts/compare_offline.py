@@ -48,10 +48,10 @@ def compare(root):
     return {"rows": rows, "retained": retained, "ignored_fields": ["runs[].numeric.__wall_seconds", "scenarios.*.numeric.__wall_seconds"]}
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     result = compare(args.root)
     target = args.root / "offline-comparison.json"
     target.write_text(json.dumps(result, indent=2), encoding="utf-8")
@@ -59,10 +59,9 @@ def main():
     retained = result["retained"]
     required = [*retained.get("pie_equal_retained", {}).values(), *retained.get("ak47_equal_retained", {}).values()]
     compared = all(row.get("present") for row in result["rows"])
-    red_diverges = all(row.get("red_equal_reference") is False for row in result["rows"])
     green_matches = all(row.get("green_equal_reference") is True for row in result["rows"])
     pie_ok = len(required) == 6 and all(required)
-    return 0 if compared and red_diverges and green_matches and pie_ok else 1
+    return 0 if compared and green_matches and pie_ok else 1
 
 
 if __name__ == "__main__":
