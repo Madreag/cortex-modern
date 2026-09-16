@@ -101,7 +101,7 @@ int AEJetpack::ReadProperty(const std::string_view& propName, Reader& reader) {
 void AEJetpack::SaveSnapshotConfiguration(Writer& writer) const {
 	AEmitter::SaveSnapshotConfiguration(writer);
 	writer.NewPropertyWithValue("AdjustsThrottleForWeight", m_AdjustsThrottleForWeight);
-	writer.NewPropertyWithValue("SpecialBehaviour_AEJetpackRuntime", base64_encode(m_PersistedAEJetpackRuntime.empty() ? SaveAEJetpackRuntime() : m_PersistedAEJetpackRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_AEJetpackRuntime", CheckpointWriter::Native([&] { return m_PersistedAEJetpackRuntime.empty() ? SaveAEJetpackRuntime() : m_PersistedAEJetpackRuntime; }).Base64(true));
 }
 
 int AEJetpack::Save(Writer& writer) const {

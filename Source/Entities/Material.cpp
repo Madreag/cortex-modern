@@ -128,7 +128,7 @@ int Material::Save(Writer& writer) const {
 		writer.NewPropertyWithValue("FGTextureFile", m_FGTextureFile);
 		writer.NewPropertyWithValue("BGTextureFile", m_BGTextureFile);
 	}
-	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialCheckpoint", base64_encode(SaveCheckpoint(), true));
+	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialCheckpoint", CheckpointWriter::Native([&] { return SaveCheckpoint(); }).Base64(true));
 	return 0;
 }
 
@@ -160,7 +160,7 @@ void Material::SwapCheckpoint(Material& other) noexcept {
 
 std::string Material::SaveCheckpoint() const {
     CheckpointWriter archive("Material1");
-    archive(Entity::SaveCheckpoint());
+    archive(static_cast<const Entity&>(*this));
     VisitCheckpoint(archive, *this);
     const auto textureKey = [](const BITMAP* bitmap) {
         if (!bitmap) return std::string{};

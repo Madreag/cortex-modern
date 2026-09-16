@@ -139,14 +139,14 @@ int SLTerrain::Save(Writer& writer) const {
 	SceneLayer::Save(writer);
 
 	// Only write the background texture info if the background itself is not saved out as a file already, since saved, pre-rendered bitmaps don't need texturing.
-	if (m_BGColorLayer->IsLoadedFromDisk()) {
+	if (writer.ContentOverride(&m_BGColorLayer->GetContentFile()) || m_BGColorLayer->IsLoadedFromDisk()) {
 		writer.NewPropertyWithValue("BGColorLayer", m_BGColorLayer.get());
 	} else {
 		writer.NewPropertyWithValue("BackgroundTexture", m_DefaultBGTextureFile);
 	}
 
 	// Only write the procedural parameters if the foreground itself is not saved out as a file already, since saved, pre-rendered bitmaps don't need procedural generation.
-	if (m_FGColorLayer->IsLoadedFromDisk()) {
+	if (writer.ContentOverride(&m_FGColorLayer->GetContentFile()) || m_FGColorLayer->IsLoadedFromDisk()) {
 		writer.NewPropertyWithValue("FGColorLayer", m_FGColorLayer.get());
 	} else {
 		for (const TerrainFrosting* terrainFrosting: m_TerrainFrostings) {

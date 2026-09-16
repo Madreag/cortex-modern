@@ -73,6 +73,8 @@ namespace RTE {
 		float GetAvgImpulse() const { return m_AvgImpulse; }
 		std::vector<double> GetEmissionAccumulators() const;
 		std::vector<std::string> GetEmissionTimers() const;
+		/// Copies emission timer values for formatting on the save worker.
+		std::vector<CheckpointText> CaptureEmissionTimers() const;
 		std::vector<std::pair<double, double>> GetEmissionTimerElapsed() const;
 
 		void AdoptPersistedUniqueID() override;

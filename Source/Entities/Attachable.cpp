@@ -247,7 +247,7 @@ void Attachable::SaveSnapshotConfiguration(Writer& writer) const {
 	};
 	saveWound("SpecialBehaviour_OwnedBreakWound", "SpecialBehaviour_BreakWoundUID", m_OwnedBreakWound, m_BreakWound);
 	saveWound("SpecialBehaviour_OwnedParentBreakWound", "SpecialBehaviour_ParentBreakWoundUID", m_OwnedParentBreakWound, m_ParentBreakWound);
-	writer.NewPropertyWithValue("SpecialBehaviour_AttachableRuntime", base64_encode(m_PersistedAttachableRuntime.empty() ? SaveAttachableRuntime() : m_PersistedAttachableRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_AttachableRuntime", CheckpointWriter::Native([&] { return m_PersistedAttachableRuntime.empty() ? SaveAttachableRuntime() : m_PersistedAttachableRuntime; }).Base64(true));
 }
 
 void Attachable::SetOwnedBreakWound(AEmitter* wound) {

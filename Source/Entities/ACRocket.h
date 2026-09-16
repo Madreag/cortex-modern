@@ -166,12 +166,16 @@ namespace RTE {
 
 		/// Packed raw limb positions of the two foot groups, for full-game saves.
 		std::string GetLimbGroupPositions() const;
+		CheckpointText CaptureLimbGroupPositions() const;
 
 		/// Packed moment-of-inertia pairs of the two foot groups, for full-game saves.
 		std::string GetLimbGroupInertia() const;
+		CheckpointText CaptureLimbGroupInertia() const;
 
 		/// Packed traversal state of every gear path, side-major, for full-game saves.
 		std::vector<std::string> GetLimbPathStates(bool forHashing = false) const;
+		/// Copies limb traversal values for formatting on the save worker.
+		std::vector<CheckpointText> CaptureLimbPathStates(bool forHashing = false) const;
 
 		void AdoptPersistedUniqueID() override;
 		void DiscardPersistedSnapshotState() override;

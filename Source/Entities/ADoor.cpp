@@ -202,7 +202,7 @@ void ADoor::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("DoorMoveSound", m_DoorMoveSound.get());
 	writer.NewPropertyWithValue("DoorDirectionChangeSound", m_DoorDirectionChangeSound.get());
 	writer.NewPropertyWithValue("DoorMoveEndSound", m_DoorMoveEndSound.get());
-	writer.NewPropertyWithValue("SpecialBehaviour_ADoorRuntime", base64_encode(m_PersistedADoorRuntime.empty() ? SaveADoorRuntime() : m_PersistedADoorRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ADoorRuntime", CheckpointWriter::Native([&] { return m_PersistedADoorRuntime.empty() ? SaveADoorRuntime() : m_PersistedADoorRuntime; }).Base64(true));
 }
 
 int ADoor::Save(Writer& writer) const {
