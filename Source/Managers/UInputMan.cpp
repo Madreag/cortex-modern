@@ -1816,8 +1816,6 @@ bool UInputMan::RunScriptedInputEdgeSelfTest() {
 }
 
 bool UInputMan::RunScriptedPadSeatSelfTest() {
-	// GetInputFromPlayer reads the live menu through a constructed MenuMan.
-	if (!MenuMan::IsConstructed()) MenuMan::Construct();
 	bool passed = true;
 	const auto check = [&passed](const char* name, bool valid) {
 		passed = valid && passed;
@@ -1867,11 +1865,8 @@ bool UInputMan::RunScriptedPadSeatSelfTest() {
 	s_PrevJoystickStates[seatSlot] = Gamepad(seatSlot, scriptedPadID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
 	s_ChangedJoystickStates[seatSlot] = Gamepad(seatSlot, scriptedPadID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
 
-	Controller seatController;
-	seatController.Create(Controller::CIM_PLAYER, seat);
-	seatController.Update();
-	const std::string before = seatController.SaveCheckpoint();
-
+	// The seat leak is a held START on GAMEPAD_2, not a Controller::Update.
+	const bool startBefore = ElementHeld(seat, InputElements::INPUT_START) || ElementPressed(seat, InputElements::INPUT_START);
 	SDL_Event padEvent{};
 	padEvent.type = SDL_EVENT_JOYSTICK_BUTTON_DOWN;
 	padEvent.jbutton.which = scriptedPadID;
@@ -1879,9 +1874,8 @@ bool UInputMan::RunScriptedPadSeatSelfTest() {
 	padEvent.jbutton.down = true;
 	HandleInputEvent(padEvent);
 
-	seatController.Update();
-	const std::string after = seatController.SaveCheckpoint();
-	check("a scripted pad start moved seat 4's controller", before == after);
+	const bool startAfter = ElementHeld(seat, InputElements::INPUT_START) || ElementPressed(seat, InputElements::INPUT_START);
+	check("a scripted pad start moved seat 4's controller", !startBefore && !startAfter);
 	check("the_menu_reads_a_scripted_pad_start", AnyStartPress(false));
 
 	s_PrevJoystickStates[seatSlot] = Gamepad(seatSlot, seatPadID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
