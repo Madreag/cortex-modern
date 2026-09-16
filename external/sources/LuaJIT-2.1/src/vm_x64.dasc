@@ -3951,6 +3951,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |3:  // Set node value.
     |  mov ITYPE, [BASE+RA*8]
     |  mov [TMPR], ITYPE
+    |  mov CARG1, TAB:RB
+    |  call extern lj_checkpoint_mark
     |  ins_next
     |
     |4:  // Check for __newindex if previous value is nil.
@@ -4009,6 +4011,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |2:	 // Set array slot.
     |  mov ITYPE, [BASE+RA*8]
     |  mov [RC], ITYPE
+    |  mov CARG1, TAB:RB
+    |  call extern lj_checkpoint_mark
     |  ins_next
     |
     |3:  // Check for __newindex if previous value is nil.
@@ -4044,6 +4048,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |->BC_TSETR_Z:
     |  mov ITYPE, [BASE+RA*8]
     |  mov [RC], ITYPE
+    |  mov CARG1, TAB:RB
+    |  call extern lj_checkpoint_mark
     |  ins_next
     |
     |7:  // Possible table write barrier for the value. Skip valiswhite check.
@@ -4079,6 +4085,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  sub RDd, 1
     |  jnz <3
     |4:
+    |  mov CARG1, TAB:RB
+    |  call extern lj_checkpoint_mark
     |  ins_next
     |
     |5:  // Need to resize array part.

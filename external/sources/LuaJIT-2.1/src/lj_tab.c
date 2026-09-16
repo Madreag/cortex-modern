@@ -22,6 +22,11 @@ LUA_API void luaJIT_set_tab_write_callback(luaJIT_tab_write_cb cb)
   checkpoint_tab_write = cb;
 }
 
+LJ_FUNCA void lj_checkpoint_mark(GCtab *t)
+{
+  checkpoint_mark(t);
+}
+
 /* -- Object hashing ------------------------------------------------------ */
 
 /* Hash an arbitrary key and return its anchor position in the hash table. */

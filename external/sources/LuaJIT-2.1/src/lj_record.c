@@ -1531,6 +1531,7 @@ void lj_record_preview(jit_State *J, TRef tab, GCtab *t)
 {
   TRef pending;
   if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(J->L, t);
+  checkpoint_mark(t);
   pending = emitir(IRT(IR_FLOAD, IRT_INT), tab, IRFL_TAB_PREVIEW);
   emitir(IRTGI(IR_GE), pending, lj_ir_kint(J, 0));
 }
