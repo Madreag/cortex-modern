@@ -1,4 +1,4 @@
--- Drives GameIntensityCalculator and the stock AddObjectivePoint(AboveHeadPos) shape.
+-- Drives GameIntensityCalculator and DummyAssault's AddObjectivePoint line.
 IntensityObjectives = {};
 
 local BRAIN_X = 880;
@@ -53,9 +53,11 @@ function IntensityObjectives:UpdateActivity()
 		if self:PlayerActive(player) and self:PlayerHuman(player) then
 			local actor = self:GetPlayerBrain(player) or self:GetControlledActor(player);
 			if actor then
-				self:AddObjectivePoint("Protect!", actor.AboveHeadPos, self:GetTeamOfPlayer(player), GameActivity.ARROWDOWN);
-				headX = actor.AboveHeadPos.X;
-				headY = actor.AboveHeadPos.Y;
+				-- DummyAssault.lua:181
+				self.CPUBrain = actor;
+				self:AddObjectivePoint("Destroy!", self.CPUBrain.AboveHeadPos+Vector(0,-16), Activity.TEAM_1, GameActivity.ARROWDOWN);
+				headX = self.CPUBrain.AboveHeadPos.X + 0;
+				headY = self.CPUBrain.AboveHeadPos.Y - 16;
 			end
 		end
 	end

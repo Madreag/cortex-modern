@@ -52,6 +52,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <iostream>
 #include <list>
 #include <sstream>
@@ -4684,7 +4685,20 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			g_MovableMan.AbsorbAddedMOs();
 			g_MovableMan.UpdateDrawMOIDs();
 			actor->SetHealth(actor->GetHealth() - 40.0F);
-			const Vector head = actor->GetAboveHeadPos();
+			const Vector head = actor->GetAboveHeadPos() + Vector(0, -16);
+			std::string stockObjective;
+			{
+				std::ifstream stock("Data/Missions.rte/Activities/DummyAssault.lua");
+				for (std::string line; std::getline(stock, line);) {
+					if (line.find("AddObjectivePoint") != std::string::npos && line.find("CPUBrain") != std::string::npos) {
+						stockObjective = line;
+						break;
+					}
+				}
+			}
+			check("stock_dummyassault_objective_uses_above_head",
+				!stockObjective.empty() && stockObjective.find("AboveHeadPos") != std::string::npos && stockObjective.find("AboveHUDPos") == std::string::npos,
+				stockObjective, "AboveHeadPos");
 			const auto runAtCamera = [&](const Vector& offset) {
 				g_CameraMan.SetOffset(offset, 0);
 				return lua.RunScriptString(R"lua(
@@ -4696,7 +4710,7 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 					activity:ClearObjectivePoints()
 					local brain = activity:GetPlayerBrain(Activity.PLAYER_1)
 					if brain then
-						activity:AddObjectivePoint("Protect!", brain.AboveHeadPos, 0, GameActivity.ARROWDOWN)
+						activity:AddObjectivePoint("Destroy!", brain.AboveHeadPos+Vector(0,-16), Activity.TEAM_1, GameActivity.ARROWDOWN)
 					end
 				)lua");
 			};
