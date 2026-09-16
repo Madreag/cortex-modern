@@ -1,19 +1,15 @@
-"""Compare argv-identical dumps for optimistic preview ghosts and funds.
+"""Compare argv-identical dumps for optimistic preview ghosts.
 
-Same argv on the tip and on the base tree:
+Same argv on the tip and on the base tree (both binaries already emit the -out
+tick-hash file; the base has no event_ledger_ghost_travel probe):
 
   -net-replay <fixtures>/pickup_fire.ccreplay
   -input-script <fixtures>/pickup_fire.txt
   -max-ticks 221 -num-lua-states 4 -tick-hashes
   -local-prediction-depth 7 -local-prediction-event-ledger 153
+  -out <path>
 
-The funds arm adds:
-
-  -local-prediction-funds-preview 153
-
-The tip writes <out>.event_ledger_ghost_travel.simstate.txt after the ghost
-moves (DumpSimStateToString + DescribeCanonicalExtras). This driver compares
-those files, produced by the same argv, byte-for-byte.
+This driver compares those -out files, produced by the same argv, byte-for-byte.
 """
 
 import argparse
