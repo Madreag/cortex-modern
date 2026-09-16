@@ -420,6 +420,15 @@ namespace RTE {
 		return "unknown";
 	}
 
+	const char* NetMatchConfigUtil::ModeLabel(NetMatchMode mode) {
+		switch (mode) {
+			case NetMatchMode::PvPSkirmish: return "PvP";
+			case NetMatchMode::CoopPvE: return "Co-op PvE";
+			case NetMatchMode::PvPvE: return "PvPvE";
+		}
+		return "Unknown";
+	}
+
 	bool NetMatchConfigUtil::ParseMode(const std::string& text, NetMatchMode& outMode) {
 		if (text == "pvp" || text == "pvp-skirmish") {
 			outMode = NetMatchMode::PvPSkirmish;

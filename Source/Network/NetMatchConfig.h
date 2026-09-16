@@ -105,6 +105,8 @@ namespace RTE {
 		static uint16_t PeerInputDelay(const NetMatchConfig& config, uint8_t peerId);
 
 		static const char* ModeName(NetMatchMode mode);
+		/// The mode's menu-facing word, for rows that show a user label instead of the wire token.
+		static const char* ModeLabel(NetMatchMode mode);
 		static bool ParseMode(const std::string& text, NetMatchMode& outMode);
 		static const char* OwnershipPolicyName(NetActorOwnershipPolicy policy);
 		static bool ParseOwnershipPolicy(const std::string& text, NetActorOwnershipPolicy& outPolicy);
