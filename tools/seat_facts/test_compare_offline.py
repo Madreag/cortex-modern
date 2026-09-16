@@ -8,7 +8,9 @@ must not be required to diverge.
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
+import compare_offline
 from compare_offline import compare, main
 
 
@@ -16,12 +18,15 @@ class CompareOfflineMissingTraces(unittest.TestCase):
     def test_missing_traces_fail_with_named_reason(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            result = compare(root)
-            self.assertTrue(result["rows"])
-            for row in result["rows"]:
-                self.assertFalse(row["present"])
-                self.assertEqual(row["reason"], "missing traces for offline compare")
-            code = main([str(root)])
+            absent = Path(tmp) / "no-retained"
+            with patch.object(compare_offline, "RETAINED_PIE", absent / "pie"), \
+                    patch.object(compare_offline, "RETAINED_AK47", absent / "ak47"):
+                result = compare(root)
+                self.assertTrue(result["rows"])
+                for row in result["rows"]:
+                    self.assertFalse(row["present"])
+                    self.assertEqual(row["reason"], "missing traces for offline compare")
+                code = main([str(root)])
             self.assertEqual(code, 1)
 
 
