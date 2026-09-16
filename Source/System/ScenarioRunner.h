@@ -196,10 +196,18 @@ namespace RTE {
 		static bool AcceptWorldTransition(const NetGameWorldTransition& transition, std::string* error = nullptr);
 		/// Installs the committed tail a world joiner applies faster than the paced lockstep wait.
 		static bool InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error = nullptr);
+		/// Later catch-up bytes land here after the image is already installed.
+		static void AppendWorldCatchUp(std::vector<NetLockstepFrame> frames);
+		static void SetWorldCatchUpActivation(uint64_t activationTick);
 		static bool WorldCatchUpActive();
 		static uint64_t WorldCatchUpAppliedThrough();
-		/// Builds the next ready frame from the tail. One committed frame per sim tick, no wait.
+		static uint64_t WorldCatchUpActivationTick();
+		/// Whether the tail still holds a committed frame for this tick.
+		static bool WorldCatchUpHasFrame(uint64_t simTick);
+		/// Builds the ready frame whose targetFrame equals simTick.
 		static bool TakeWorldCatchUpReadyFrame(uint64_t simTick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
+		/// Ticks of tail a joiner applies in one real frame (faster than real time, still bounded).
+		static constexpr int c_WorldCatchUpTicksPerRealFrame = 16;
 
 		/// Whether a team has a human player in the synced match config. Local player bindings are
 		/// per-peer in a lockstep match, so sim decisions must resolve team humanity from here.
