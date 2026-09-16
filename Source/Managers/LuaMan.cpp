@@ -6524,6 +6524,59 @@ _PrimitiveQueueCapture = nil
 	checkpointValues = previewLeavesGlobalsAsFound && checkpointValues;
 	std::cout << "[script-graph-selftest] " << (previewDeepGlobalWritesUndone ? "PASS" : "FAIL") << " preview_deep_global_writes_undone" << std::endl;
 	checkpointValues = previewDeepGlobalWritesUndone && checkpointValues;
+	// A mod's own state sits at any depth under a global, so the barrier owes the same undo at depth 1, 3 and 8:
+	// values written come back, keys removed return, chains the window built go.
+	bool previewDepthWritesUndone = false;
+	bool previewWindowModCompat = false;
+	{
+		RunScriptString("_PreviewDepth = { d1 = { v = 1 }, d3 = { a = { b = { v = 1, gone = 1 } } }, d8 = { a = { b = { c = { d = { e = { f = { g = { v = 1, gone = 1 } } } } } } } }");
+		// What a script may observe cannot change with a window open, so the same probe runs inside and out.
+		static const std::string observableSemantics = R"lua(
+local seq = {}
+for k, v in pairs(_PreviewDepth) do seq[#seq+1] = tostring(k) end
+table.sort(seq)
+assert(table.concat(seq, ',') == 'd1,d3,d8', 'pairs under a window')
+assert(#_PreviewDepth.d1 == 0 and #{1, 2, 3} == 3, 'length operator under a window')
+local proxy = setmetatable({}, {__index = {via = 1}})
+assert(proxy.via == 1 and rawget(proxy, 'via') == nil, 'rawget under a window')
+assert(rawset(proxy, 'via', 2) == proxy and proxy.via == 2 and rawget(proxy, 'via') == 2, 'rawset under a window')
+assert(getmetatable(proxy) ~= nil and getmetatable(_PreviewDepth) == nil, 'getmetatable under a window')
+local only = next(_PreviewDepth.d1)
+assert(only == 'v' and next(_PreviewDepth.d1, only) == nil, 'next under a window')
+assert(rawequal(_PreviewDepth.d1, _PreviewDepth.d1) and not rawequal(_PreviewDepth.d1, _PreviewDepth.d3), 'rawequal under a window')
+assert(rawlen({1, 2}) == 2, 'rawlen under a window')
+local a, b = tostring(_PreviewDepth.d1), tostring(_PreviewDepth.d1)
+assert(a == b and type(_PreviewDepth.d3.a) == 'table', 'identity under a window')
+collectgarbage('collect')
+assert(_PreviewDepth.d8.a.b.c.d.e.f.g.v == 1, 'GC under a window')
+)lua";
+		LuaMan::CapturePreviewSelfCopies({}, false);
+		int modCompatInside = -1;
+		{
+			LuaMan::PreviewHookScope hookScope(true);
+			modCompatInside = RunScriptString(observableSemantics);
+			RunScriptString("_PreviewDepth.d1.v = 2; _PreviewDepth.d3.a.b.v = 2; _PreviewDepth.d3.a.b.gone = nil; _PreviewDepth.d8.a.b.c.d.e.f.g.v = 2; _PreviewDepth.d8.a.b.c.d.e.f.g.gone = nil; _PreviewDepth.born = { x = { y = { z = 2 } } }");
+		}
+		if (modCompatInside < 0) {
+			std::cout << "[preview-modcompat] inside window: " << GetLastError() << std::endl;
+		}
+		LuaMan::EndPreviewScripts();
+		const int depthCheck = RunScriptString("assert(_PreviewDepth.d1.v == 1, 'depth 1 write leaked'); assert(_PreviewDepth.d3.a.b.v == 1 and _PreviewDepth.d3.a.b.gone == 1, 'depth 3 write or removal leaked'); assert(_PreviewDepth.d8.a.b.c.d.e.f.g.v == 1 and _PreviewDepth.d8.a.b.c.d.e.f.g.gone == 1, 'depth 8 write or removal leaked'); assert(_PreviewDepth.born == nil, 'window-born deep chain leaked')");
+		if (depthCheck < 0) {
+			std::cout << "[preview-depth] after window: " << GetLastError() << std::endl;
+		}
+		const int modCompatAfter = RunScriptString(observableSemantics);
+		if (modCompatAfter < 0) {
+			std::cout << "[preview-modcompat] after window: " << GetLastError() << std::endl;
+		}
+		previewDepthWritesUndone = depthCheck >= 0;
+		previewWindowModCompat = modCompatInside >= 0 && modCompatAfter >= 0;
+		RunScriptString("_PreviewDepth = nil");
+	}
+	std::cout << "[script-graph-selftest] " << (previewDepthWritesUndone ? "PASS" : "FAIL") << " preview_depth_writes_undone" << std::endl;
+	checkpointValues = previewDepthWritesUndone && checkpointValues;
+	std::cout << "[script-graph-selftest] " << (previewWindowModCompat ? "PASS" : "FAIL") << " preview_window_modcompat" << std::endl;
+	checkpointValues = previewWindowModCompat && checkpointValues;
 	// A preview hook may load a script the supported way. The state that load takes, the chunk it compiles and the
 	// cursor that handed the state out are the predicting peer's alone, so the boundary must leave all three as found.
 	bool previewLateScriptLoadLeavesStatesAsFound = false;
