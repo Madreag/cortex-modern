@@ -39,6 +39,7 @@ class CostChecks(unittest.TestCase):
     def test_fail_line_with_trailing_error_is_scored(self):
         text = '[script-graph-selftest] FAIL preview_depth_writes_undone depth 1 write leaked\n'
         failures = driver.FAIL.findall(text)
+        self.assertEqual(failures, ['preview_depth_writes_undone'])
         self.assertTrue(driver.graph_failed(failures, 'preview_depth_writes_undone'))
         self.assertTrue(driver.graph_failed(['preview_depth_writes_undone depth 1 write leaked'],
                                             'preview_depth_writes_undone'))
