@@ -172,6 +172,8 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_ChatTextSizeCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboNetworkChatTextSize"));
 	m_ChatTextSizeCombo->AddItem("Small");
 	m_ChatTextSizeCombo->AddItem("Large");
+	m_ChatKeyTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkChatKey"));
+	m_ChatKeyTextbox->SetMaxTextLength(5);
 
 	m_AutoReconnectCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkAutoReconnect"));
 	m_OfferRejoinCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkOfferRejoin"));
@@ -239,6 +241,7 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_ChatNotifyCheckbox->SetCheck(g_SettingsMan.GetNetworkChatNotify());
 	m_ChatScopeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkChatDefaultScope()));
 	m_ChatTextSizeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkChatTextSize()));
+	m_ChatKeyTextbox->SetText(g_SettingsMan.GetNetworkChatKey());
 	m_AutoReconnectCheckbox->SetCheck(g_SettingsMan.GetNetworkAutoReconnect());
 	m_OfferRejoinCheckbox->SetCheck(g_SettingsMan.GetNetworkOfferStoredRejoin());
 	m_DiagDirTextbox->SetText(g_SettingsMan.GetNetworkDiagnosticsDirectory());
@@ -251,6 +254,8 @@ void SettingsNetworkGUI::ShowSavedValues() {
 
 void SettingsNetworkGUI::ApplyTextboxes() {
 	g_SettingsMan.SetNetworkDisplayName(m_DisplayNameTextbox->GetText());
+	g_SettingsMan.SetNetworkChatKey(m_ChatKeyTextbox->GetText());
+	m_ChatKeyTextbox->SetText(g_SettingsMan.GetNetworkChatKey());
 	if (int minutes = 0; ParseWholeNumber(m_IdleWaitTextbox->GetText(), minutes)) {
 		g_SettingsMan.SetNetworkHostIdleWaitMinutes(minutes);
 	}
@@ -447,7 +452,7 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		g_SettingsMan.SetNetworkOfferStoredRejoin(m_OfferRejoinCheckbox->GetCheck());
 	} else if (guiEvent.GetControl() == m_RecordReplaysCheckbox) {
 		g_SettingsMan.SetNetworkRecordReplays(m_RecordReplaysCheckbox->GetCheck());
-	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_FixedDelayTextbox || guiEvent.GetControl() == m_DiagDirTextbox || guiEvent.GetControl() == m_DirUrlTextbox || guiEvent.GetControl() == m_DirPinTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
+	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_FixedDelayTextbox || guiEvent.GetControl() == m_DiagDirTextbox || guiEvent.GetControl() == m_DirUrlTextbox || guiEvent.GetControl() == m_DirPinTextbox || guiEvent.GetControl() == m_ChatKeyTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
 		ApplyTextboxes();
 		// Clicking off a focused text box must commit it too, otherwise it keeps the keyboard.
 	} else if (guiEvent.GetMsg() == GUICollectionBox::Clicked &&

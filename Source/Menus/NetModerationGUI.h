@@ -3,6 +3,7 @@
 #include "NetReconnectUx.h"
 
 #include <array>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <string>
@@ -16,6 +17,7 @@ namespace RTE {
 	class GUIButton;
 	class GUILabel;
 	class GUIFont;
+	class GUITextBox;
 	struct NetLobbySnapshot;
 
 	/// A live-match roster and host panel; opening it leaves the simulation running.
@@ -39,6 +41,8 @@ namespace RTE {
 		};
 		const OverlayRect& GetStatusRect() const { return m_StatusRect; }
 		const OverlayRect& GetToastRect() const { return m_ToastRect; }
+		const OverlayRect& GetChatRect() const { return m_ChatRect; }
+		bool IsChatEntryOpen() const { return m_ChatEntryOpen; }
 
 		struct Controls {
 			GUILabel* name = nullptr;
@@ -59,6 +63,8 @@ namespace RTE {
 		bool MatchStatusWanted() const;
 		/// Draws the status widget: the box on tall screens, a single-line strip in the top HUD gap on short ones.
 		void DrawMatchStatus(const NetLobbySnapshot& snapshot);
+		void DrawMatchChat(const NetLobbySnapshot& snapshot);
+		void UpdateMatchChat(const NetLobbySnapshot& snapshot);
 		/// Places the seats panel for the current screen height; a compact screen's top band keeps
 		/// one toast row between the strip and the panel, which the roster's slack absorbs.
 		void LayoutPanel();
@@ -71,6 +77,22 @@ namespace RTE {
 		std::array<GUILabel*, 3> m_Toasts{};
 		OverlayRect m_StatusRect;
 		OverlayRect m_ToastRect;
+		OverlayRect m_ChatRect;
+		std::array<GUILabel*, 8> m_MatchChat{};
+		GUITextBox* m_MatchChatInput = nullptr;
+		struct MatchChatLine {
+			uint64_t receivedTick = 0;
+			uint8_t senderPeerId = 0;
+			uint8_t team = 0;
+			uint8_t scope = 0;
+			std::string name;
+			std::string text;
+			long long seenUs = 0;
+		};
+		std::deque<MatchChatLine> m_MatchChatLines;
+		bool m_ChatEntryOpen = false;
+		bool m_ChatKeysHeld = false;
+		bool m_ChatDisabledKeys = false;
 		std::string m_StripText;
 		mutable long long m_AutoShowUntilUs = 0;
 		uint16_t m_MatchDelayFrames = 0;

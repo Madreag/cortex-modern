@@ -51,7 +51,7 @@ MISC_ROWS = ("CheckboxSkipIntro", "CheckboxShowToolTips", "CheckboxShowLoadingSc
              "LabelSceneBackgroundAutoScale", "LabelSceneBackgroundAutoScaleSetting", "SliderSceneBackgroundAutoScale")
 MISC_GONE = ("LabelMatchStatusWidget", "ComboMatchStatusWidget")
 CHAT_SEED = {"NetworkChatVisible": "1", "NetworkChatSound": "0", "NetworkChatNotify": "1",
-             "NetworkChatDefaultScope": "Team", "NetworkChatTextSize": "Large"}
+             "NetworkChatDefaultScope": "Team", "NetworkChatTextSize": "Large", "NetworkChatKey": "T"}
 CHAT_SAVED = {"NetworkChatVisible": "0", "NetworkChatNotify": "0"}
 RECOVERY_SEED = {"NetworkAutoReconnect": "1", "NetworkOfferStoredRejoin": "1"}
 RECOVERY_SAVED = {"NetworkAutoReconnect": "0", "NetworkOfferStoredRejoin": "0"}
@@ -294,7 +294,8 @@ def scripts(case, port, root):
         text = OPTIONS + net_page("Chat")
         for control in ("CheckboxNetworkChatVisible", "CheckboxNetworkChatSound", "LabelNetworkChatScope",
                         "ComboNetworkChatScope", "CheckboxNetworkChatNotify", "LabelNetworkChatTextSize",
-                        "ComboNetworkChatTextSize", "ButtonNetMutedPlayers", "LabelNetMutedReason"):
+                        "ComboNetworkChatTextSize", "LabelNetworkChatKey", "TextNetworkChatKey",
+                        "ButtonNetMutedPlayers", "LabelNetMutedReason"):
             text += checks(control, "CollectionBoxNetPageChat")
         text += ("assert_enabled ButtonNetMutedPlayers 0\n"
                  "assert_label LabelNetMutedReason managed in the match\n"
@@ -802,6 +803,7 @@ def run_case(options, case, root, failing=None):
             rows = {control["name"]: control for control in images[0]["controls"]}
             expected = {"net-chat": ("CheckboxNetworkChatVisible", "CheckboxNetworkChatSound", "ComboNetworkChatScope",
                                      "CheckboxNetworkChatNotify", "ComboNetworkChatTextSize",
+                                     "LabelNetworkChatKey", "TextNetworkChatKey",
                                      "ButtonNetMutedPlayers", "LabelNetMutedReason"),
                         "net-recovery": ("CheckboxNetworkAutoReconnect", "CheckboxNetworkOfferRejoin",
                                          "LabelNetLastHost", "LabelNetRecoveryRecord",
@@ -824,7 +826,7 @@ def run_case(options, case, root, failing=None):
                 column = rows[f"CollectionBoxNetPage{sub_page.split(':')[1]}"]["rect"][0] + NETWORK_VALUE_COLUMN
                 on_column = {
                     "net-chat": ("CheckboxNetworkChatSound", "ComboNetworkChatScope",
-                                 "ComboNetworkChatTextSize", "LabelNetMutedReason"),
+                                 "ComboNetworkChatTextSize", "TextNetworkChatKey", "LabelNetMutedReason"),
                     "net-recovery": ("CheckboxNetworkOfferRejoin", "LabelNetLastHost",
                                      "LabelNetRecoveryRecord", "LabelNetRecoveryStatus",
                                      "ButtonNetRejoin"),
@@ -838,7 +840,7 @@ def run_case(options, case, root, failing=None):
                 grid_rows = {
                     "net-chat": ("CheckboxNetworkChatVisible", "LabelNetworkChatScope",
                                  "CheckboxNetworkChatNotify", "LabelNetworkChatTextSize",
-                                 "ButtonNetMutedPlayers"),
+                                 "LabelNetworkChatKey", "ButtonNetMutedPlayers"),
                     "net-recovery": ("CheckboxNetworkAutoReconnect", "LabelNetLastHostTitle",
                                      "LabelNetRecoveryTitle", "LabelNetRecoveryStatusTitle",
                                      "LabelNetRecoveryError", "ButtonNetRejoin"),
@@ -853,7 +855,7 @@ def run_case(options, case, root, failing=None):
                 # The internet pin box's own row sits between its label and the status row; the chat
                 # page's muted stub waits one row under its rows.
                 expected_pitch = [20, 20, 40, 20, 20, 20] if case == "net-internet" else \
-                    [20] * 3 + [40] if case == "net-chat" else [20] * (len(grid_rows) - 1)
+                    [20] * 4 + [40] if case == "net-chat" else [20] * (len(grid_rows) - 1)
                 assert deltas == expected_pitch, (case, deltas)
                 if case == "net-files":
                     # The folders' action pairs stack in the same two columns, one row pair apart.
