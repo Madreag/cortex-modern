@@ -354,6 +354,11 @@ def prepare_runtime(
     (runtime / "Data").symlink_to(data_path, target_is_directory=True)
     settings = apply_settings_overrides(load_settings_template(repo_path), SETTINGS_OVERRIDES)
     (runtime / "Userdata" / "Settings.ini").write_text(settings, encoding="utf-8")
+    fixture = repo_path / "tools/fixtures/preview_window_modcompat.lua"
+    if fixture.is_file():
+        dest = runtime / "tools/fixtures"
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / fixture.name).write_bytes(fixture.read_bytes())
     exe = resolve_binary(repo_path, binary)
     manifest = {
         "executable": str(exe),
