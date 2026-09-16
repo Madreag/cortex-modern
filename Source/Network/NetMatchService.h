@@ -167,6 +167,34 @@ namespace RTE {
 		std::string sessionId; // Client only: join the directory session with this id instead of an address.
 	};
 
+	/// A presentation-only record of the finished round; never restored into the simulation.
+	struct NetMatchSummary {
+		struct Peer {
+			uint8_t peerId = 0;
+			std::string name;
+			int team = -1;
+			uint16_t seat = 0;
+			uint16_t inputDelayFrames = 0;
+		};
+		std::string result;
+		int winnerTeam = -1;
+		uint64_t runningTicks = 0;
+		std::vector<Peer> peers;
+		uint32_t resyncs = 0;
+		uint32_t drops = 0;
+		uint32_t reclaims = 0;
+		uint32_t substitutions = 0;
+		std::string paceJson = "{}";
+		std::string identityLine;
+		/// Formats the recorded duration at 60 ticks per second.
+		std::string DurationText() const;
+		/// Formats the single lobby line and the complete dialog body.
+		std::string LineText() const;
+		std::string DetailsText() const;
+		/// Formats the identity, reading and caching the executable hash on first use.
+		std::string IdentityText() const;
+	};
+
 	class NetMatchService : public Singleton<NetMatchService> {
 	public:
 		// Defined in the .cpp: the dispatcher member is only a declaration in this header.
@@ -299,6 +327,8 @@ namespace RTE {
 		};
 		PortMapStatus GetPortMapStatus() const;
 		NetLobbySnapshot GetLobbySnapshot() const;
+		/// Returns a copy that survives returning to the lobby and expires at the next match start.
+		std::optional<NetMatchSummary> GetLastMatchSummary() const;
 		/// Local chat send, presentation only. Reaches the session whether the lobby is still running
 		/// on the worker or the match has handed it back; false when no session link exists.
 		bool SendChat(uint8_t scope, const std::string& text);
@@ -459,6 +489,10 @@ namespace RTE {
 		void CaptureA7SeatView();
 		void CacheDiagnosticIdentity(const NetIdentityManifest& manifest);
 		bool WaitForA7ConnectGate(std::string* error);
+		/// Captures the round before its coordinator or activity is torn down. Caller holds the lock.
+		void CaptureMatchSummaryLocked(const std::string& result);
+		/// Counts public seat transitions independently of the bounded diagnostic history.
+		void UpdateSummarySeatsLocked();
 
 
 		mutable std::mutex m_Mutex;
@@ -493,6 +527,9 @@ namespace RTE {
 		std::atomic<uint64_t> m_ResyncBoundaryTick{UINT64_MAX};
 		std::string m_LocalName;
 		NetLobbySnapshot m_LobbySnapshot;
+		std::optional<NetMatchSummary> m_LastMatchSummary;
+		NetMatchSummary m_CurrentMatchSummary;
+		std::map<uint8_t, NetSeatPresenceEntry> m_SummarySeats;
 		NetSeatAuthRegistry m_SeatAuth; //!< Hosted-session reconnect-auth material (off-sim epoch + seat credentials); survives resync/rejoin/rematch.
 		// The admission plane lives on the service, not on a session or a match round, so a seat and its
 		// ledger survive resync, rejoin and rematch exactly as the registry does (§3).

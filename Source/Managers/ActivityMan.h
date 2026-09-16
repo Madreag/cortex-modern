@@ -253,6 +253,8 @@ namespace RTE {
 
 		/// Forces the current game's end.
 		void EndActivity() const;
+		/// Discards an ended replay so the menu return has no scenario or resumable activity.
+		void ClearEndedReplayActivity();
 
 		/// Open while an activity's own script decides the outcome, so an end IT declares can be told
 		/// apart from a teardown the engine or the player asked for.
