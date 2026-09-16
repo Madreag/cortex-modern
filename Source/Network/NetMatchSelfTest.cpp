@@ -832,7 +832,7 @@ namespace RTE {
 			std::vector<uint8_t> prefixBytes;
 			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{prefix}}, prefixBytes)) return false;
 			const size_t difficultyOffset = prefixBytes.size() + 20 + config.activityModule.size() + config.sceneModule.size();
-			const size_t horizonTail = config.version >= 5 ? 2 : 0;
+			const size_t horizonTail = config.pathHorizonTicks != 0 ? 2 : 0;
 			for (const auto& [offset, value] : std::vector<std::pair<size_t, uint8_t>>{{difficultyOffset, 101}, {bytes.size() - 9 - horizonTail, 0}, {bytes.size() - 3 - horizonTail, 61}}) {
 				auto invalidWire = bytes;
 				invalidWire.at(offset) = value;
@@ -911,10 +911,10 @@ namespace RTE {
 			// The CPU team key reached the hash in v4, so the same roster re-versioned hashes by team.
 			NetMatchConfig atCurrentVersion = recordedConfig->config;
 			atCurrentVersion.version = NetMatchConfigUtil::c_Version;
-			atCurrentVersion.pathHorizonTicks = NetMatchConfigUtil::c_DefaultPathHorizonTicks;
+			atCurrentVersion.pathHorizonTicks = 0;
 			const std::string currentHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(atCurrentVersion));
-			if (currentHash == recordedHash) {
-				*error = "promoting a recording to the current match-config version did not change its hash";
+			if (currentHash != "87e848dea8853ff7762ffbabf6aa0c71d09e13f979382b970b69ef305fa0f5ae") {
+				*error = "a current-version roster no longer hashes by CPU team: " + currentHash;
 				return false;
 			}
 			NetMatchConfig swappedCpu = atCurrentVersion;
@@ -925,10 +925,11 @@ namespace RTE {
 				*error = "a current-version roster no longer hashes by CPU team: " + currentHash;
 				return false;
 			}
-			NetMatchConfig horizonMoved = atCurrentVersion;
-			++horizonMoved.pathHorizonTicks;
-			if (NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(horizonMoved)) == currentHash) {
-				*error = "current-version hash omitted path_horizon_ticks";
+			NetMatchConfig withHorizon = atCurrentVersion;
+			withHorizon.pathHorizonTicks = NetMatchConfigUtil::c_DefaultPathHorizonTicks;
+			const std::string horizonHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(withHorizon));
+			if (horizonHash != "ec4103aa07c0661a0a5951518b5572bcd7d509d1a44b8f7d71d7489849fd100f") {
+				*error = "a reserved-bit path horizon no longer hashes as pinned: " + horizonHash;
 				return false;
 			}
 			// The envelope stamps this build's protocol version, and a recorded envelope is older by
@@ -963,6 +964,7 @@ namespace RTE {
 			}
 			std::cout << "[net-match-selftest] recorded_v3_config_hash=" << recordedHash << std::endl;
 			std::cout << "[net-match-selftest] recorded_v4_config_hash=" << currentHash << std::endl;
+			std::cout << "[net-match-selftest] recorded_horizon_config_hash=" << horizonHash << std::endl;
 			std::cout << "[net-match-selftest] PASS rules_recorded_v3" << std::endl;
 			return true;
 		}
@@ -1148,10 +1150,10 @@ namespace RTE {
 				*error = "a reserved word of 0 did not decode to dedicated=false";
 				return false;
 			}
-			bytes[reservedOffset] = 2;
+			bytes[reservedOffset] = 4;
 			const NetLobbyDecodeResult refused = NetLobbyProtocol::Decode(bytes);
 			if (refused.ok || refused.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
-				*error = "a reserved word of 2 was not refused";
+				*error = "a reserved word of 4 was not refused";
 				return false;
 			}
 			return true;

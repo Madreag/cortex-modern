@@ -118,7 +118,7 @@ namespace RTE {
 				{"delay_policy", std::to_string(static_cast<uint8_t>(config.delayPolicy))},
 			};
 			fields.insert(fields.end(), tail.begin(), tail.end());
-			if (config.version >= 5) {
+			if (config.pathHorizonTicks != 0) {
 				fields.emplace_back("path_horizon_ticks", std::to_string(config.pathHorizonTicks));
 			}
 			for (size_t i = 0; i < config.teamRules.size(); ++i) {
@@ -143,7 +143,6 @@ namespace RTE {
 	NetMatchConfig NetMatchConfigUtil::MakeDefault(uint64_t sessionId) {
 		NetMatchConfig config;
 		config.sessionId = sessionId;
-		config.pathHorizonTicks = c_DefaultPathHorizonTicks;
 		config.players = {
 			NetMatchPlayerSlot{1, 0, false, "Host"},
 			NetMatchPlayerSlot{2, 1, false, "Client"},
@@ -225,7 +224,7 @@ namespace RTE {
 		}
 		// Every pre-v4 config predates the spectate byte, so it cannot carry anything but the pre-spectate rule.
 		if (config.version < 4 && config.brainlessHumansSpectate) return refuse("pre-spectate config cannot carry the spectate rule");
-		if (config.version < 5 && config.pathHorizonTicks != 0) return refuse("pre-horizon config cannot carry a path horizon");
+		if (config.version < 3 && config.pathHorizonTicks != 0) return refuse("legacy config cannot carry a path horizon");
 		if (config.pathHorizonTicks > c_MaxPathHorizonTicks) return refuse("path_horizon_ticks is out of range");
 		if (config.roundId == 0 || config.configRevision == 0) return refuse("round_id and config_revision must be nonzero");
 		if (config.difficulty > 100) return refuse("difficulty is out of range");
@@ -380,7 +379,7 @@ namespace RTE {
 			const auto rules = RuleFields(config);
 			fields.insert(fields.end(), rules.begin(), rules.end());
 		}
-		const char* domain = config.version >= 5 ? "NetMatchConfig/v5" : (config.version >= 4 ? "NetMatchConfig/v4" : (config.version >= 3 ? "NetMatchConfig/v3" : "NetMatchConfig/v2"));
+		const char* domain = config.version >= 4 ? "NetMatchConfig/v4" : (config.version >= 3 ? "NetMatchConfig/v3" : "NetMatchConfig/v2");
 		return NetIdentity::HashCanonicalText(domain, fields);
 	}
 

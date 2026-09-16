@@ -85,7 +85,11 @@ def encode_config(rules, wire, dedicated=False, default=False):
               for peer in range(2 if dedicated else 1, 3)]
     if not default:
         roster.append((0, 1, True, "CPU"))
-    payload = struct.pack("<HQBBHBBH", wire.config_version.value, 1, 1, 2, 3, mode, 2, int(dedicated))
+    horizon = int(rules.get("path_horizon_ticks") or 0)
+    reserved = int(dedicated)
+    if horizon:
+        reserved |= 2
+    payload = struct.pack("<HQBBHBBH", wire.config_version.value, 1, 1, 2, 3, mode, 2, reserved)
     for value in (rules["activity_type"], rules["activity_preset"], rules["scene_name"], "PvP" if default else "CoopPvE"):
         payload += string(value)
     payload += struct.pack("<B", len(roster))
@@ -99,6 +103,8 @@ def encode_config(rules, wire, dedicated=False, default=False):
     for team in rules["teams"]:
         payload += string(team["technology_intent"]) + string(team["technology_module"]) + struct.pack("<B", team["ai_skill"])
     payload += struct.pack("<BIBBB", 0, 0, 10, 1, 1)
+    if horizon:
+        payload += struct.pack("<H", horizon)
     return struct.pack(ENVELOPE, wire.magic.value, wire.version.value, wire.header_bytes.value,
                        wire.match_config_type.value, 0, len(payload)) + payload
 
