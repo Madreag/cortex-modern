@@ -824,6 +824,9 @@ namespace RTE {
 		if (!g_UInputMan.RunScriptedInputEdgeSelfTest()) {
 			return fail("a scripted input element did not edge once per press");
 		}
+		if (!g_UInputMan.RunScriptedPadSeatSelfTest()) {
+			return fail("a scripted pad reached a seat's controller");
+		}
 
 		std::cout << "[controller-frame-selftest] PASS" << std::endl;
 		return 0;

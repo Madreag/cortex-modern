@@ -117,6 +117,7 @@ SCHEMAS["AudioControl1"] = [*fields("paused muted ramp volume pitch low_pass"), 
     *fields("direct_occlusion reverb_occlusion spread level doppler custom_distance_filter custom_level center_frequency"), ("effects", sequence("o"))]
 SCHEMAS["AudioVoice1"] = [*fields("identity owner"), ("path", "s"), *fields("playing bus priority loops position loop_start loop_end frequency minimum_audible_distance"), ("control", "o")]
 SCHEMAS["AudioVoice2"] = SCHEMAS["AudioVoice1"]
+SCHEMAS["AudioVoice3"] = SCHEMAS["AudioVoice2"]
 SCHEMAS["AudioSample1"] = [("path", "s"), *fields("mode loop_start loop_end frequency minimum_distance maximum_distance priority loops"), ("cone", array(3))]
 SCHEMAS["AudioSample2"] = [*SCHEMAS["AudioSample1"], *fields("captured")]
 SCHEMAS["AudioEvent1"] = [*fields("state sound_file_hash channel immobile attenuation_start custom_pan panning_multiplier loops priority affected_by_global_pitch"),
@@ -522,7 +523,7 @@ _LOCAL_FIELDS = {
     "FrameMan3": {name for name, _ in SCHEMAS["FrameMan1"]},
     # The live Allegro colour table and blend alpha are whatever the last blit selected.
     "FramePalette1": {"selected_key", "alpha"},
-    # The FMOD listener is the local camera, and a voice's PCM cursor rides the local device clock.
+    # The FMOD listener is the local camera. AudioVoice2.position is the mixer PCM cursor.
     "AudioRuntime1": {"player_positions", "listeners"},
     "AudioRuntime2": {"player_positions", "listeners"},
     "AudioRuntime3": {"player_positions", "listeners"},
