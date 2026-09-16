@@ -145,10 +145,11 @@ namespace RTE {
 
 	int Entity::Save(Writer& writer) const {
 		Serializable::Save(writer);
+		const auto* identity = writer.IdentityOverride(this);
 
 		// Is an original preset definition
-		if (m_IsOriginalPreset) {
-			writer.NewPropertyWithValue("PresetName", m_PresetName);
+		if (identity ? identity->original : m_IsOriginalPreset) {
+			writer.NewPropertyWithValue("PresetName", identity ? identity->name : m_PresetName);
 
 			if (!m_PresetDescription.empty()) {
 				writer.NewPropertyWithValue("Description", m_PresetDescription);
@@ -170,7 +171,7 @@ namespace RTE {
 
 	int Entity::SavePresetCopy(Writer& writer) const {
 		// Can only save out copies with this
-		if (m_IsOriginalPreset) {
+		if (m_IsOriginalPreset && !writer.IdentityOverride(this)) {
 			RTEAbort("Tried to save out a pure Preset Copy Reference from an original Preset!");
 			return -1;
 		}
@@ -191,9 +192,11 @@ namespace RTE {
 	}
 
 	void Entity::SaveSnapshotIdentity(Writer& writer) const {
-		writer.NewPropertyWithValue("SpecialBehaviour_PresetName", m_PresetName.empty() ? "~" : base64_encode(m_PresetName, true));
-		writer.NewPropertyWithValue("SpecialBehaviour_Description", m_PresetDescription.empty() ? "~" : base64_encode(m_PresetDescription, true));
-		writer.NewPropertyWithValue("SpecialBehaviour_ModuleID", m_DefinedInModule);
+		const auto* identity = writer.IdentityOverride(this);
+		const auto& name = identity ? identity->name : m_PresetName;
+		writer.NewPropertyWithValue("SpecialBehaviour_PresetName", name.empty() ? CheckpointText("~") : CheckpointText(name).Base64());
+		writer.NewPropertyWithValue("SpecialBehaviour_Description", m_PresetDescription.empty() ? CheckpointText("~") : CheckpointText(m_PresetDescription).Base64());
+		writer.NewPropertyWithValue("SpecialBehaviour_ModuleID", identity ? identity->module : m_DefinedInModule);
 		writer.NewPropertyWithValue("SpecialBehaviour_ClearGroups", true);
 		std::vector<std::string> groups(m_Groups.begin(), m_Groups.end());
 		std::sort(groups.begin(), groups.end());
