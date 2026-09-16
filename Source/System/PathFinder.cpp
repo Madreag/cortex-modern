@@ -5,12 +5,23 @@
 #include "SceneMan.h"
 #include "ThreadMan.h"
 #include "CheckpointArchive.h"
+#include "FaultInjection.h"
+#include "System.h"
+#include "Controller.h"
+#include "Actor.h"
 
 #include "tracy/Tracy.hpp"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
+#include <cmath>
 #include <execution>
+#include <fstream>
+#include <iostream>
+#include <string>
 #include <thread>
+#include <unordered_set>
 
 using namespace RTE;
 
@@ -47,6 +58,63 @@ thread_local int s_JumpHeightDiagonal = 0;
 // Needs to be thread-local because of how it's passed around, unfortunately it doesn't seem we can give userdata for a path agent in MicroPather.
 // TODO: Enhance MicroPather to add that capability (or write our own pather)!
 thread_local float s_DigStrength = 0.0F;
+
+thread_local bool s_ReadCommittedHorizon = false;
+
+namespace {
+	constexpr size_t c_HorizonWaitRing = 256;
+
+	struct HorizonWaitStats {
+		std::mutex mutex;
+		uint64_t count = 0;
+		int64_t lastUs = 0;
+		std::array<int64_t, c_HorizonWaitRing> ring{};
+		size_t ringCount = 0;
+		size_t ringNext = 0;
+	};
+
+	HorizonWaitStats& HorizonStats() {
+		static HorizonWaitStats stats;
+		return stats;
+	}
+
+	void RecordHorizonWait(int64_t waitUs) {
+		auto& stats = HorizonStats();
+		std::lock_guard lock(stats.mutex);
+		stats.count += 1;
+		stats.lastUs = waitUs;
+		stats.ring[stats.ringNext] = waitUs;
+		stats.ringNext = (stats.ringNext + 1) % c_HorizonWaitRing;
+		if (stats.ringCount < c_HorizonWaitRing) {
+			stats.ringCount += 1;
+		}
+	}
+
+	int64_t HorizonP99Locked(const HorizonWaitStats& stats) {
+		if (stats.ringCount == 0) {
+			return 0;
+		}
+		std::vector<int64_t> sample(stats.ring.begin(), stats.ring.begin() + static_cast<std::ptrdiff_t>(stats.ringCount));
+		std::sort(sample.begin(), sample.end());
+		const size_t index = static_cast<size_t>(std::ceil(0.99 * static_cast<double>(sample.size()))) - 1;
+		return sample[std::min(index, sample.size() - 1)];
+	}
+
+	struct HorizonReadScope {
+		explicit HorizonReadScope(bool enable) :
+		    m_Enable(enable) {
+			if (m_Enable) {
+				s_ReadCommittedHorizon = true;
+			}
+		}
+		~HorizonReadScope() {
+			if (m_Enable) {
+				s_ReadCommittedHorizon = false;
+			}
+		}
+		bool m_Enable = false;
+	};
+}
 
 RTE::PathNode::PathNode(const Vector& pos) :
     Pos(pos), m_Navigable(true) {
@@ -123,6 +191,18 @@ bool PathFinder::LoadCheckpoint(std::string_view text, bool validateOnly) {
 
 void PathFinder::Clear() {
 	WaitForPathingRequests();
+	{
+		std::lock_guard lock(m_HorizonMutex);
+		for (const auto& job: m_HorizonJobs) {
+			while (!job->ready.load()) {
+				std::this_thread::yield();
+			}
+		}
+		m_HorizonJobs.clear();
+		m_HorizonNodes.clear();
+	}
+	m_LastHorizonWaitUs = 0;
+	m_HorizonWorkerDelayMs = 0;
 	m_NodeGrid.clear();
 	m_Pather = nullptr;
 	m_GridWidth = m_GridHeight = 0;
@@ -216,9 +296,10 @@ MicroPather* PathFinder::GetPather() {
 	return s_Pather.m_Instance;
 }
 
-int PathFinder::CalculatePath(Vector start, Vector end, std::list<Vector>& pathResult, float& totalCostResult, float jumpHeight, float digStrength) {
+int PathFinder::CalculatePath(Vector start, Vector end, std::list<Vector>& pathResult, float& totalCostResult, float jumpHeight, float digStrength, bool committedHorizon) {
 	++m_CurrentPathingRequests;
 	PathingRequestScope scope{m_CurrentPathingRequests};
+	HorizonReadScope horizon(committedHorizon);
 	return CalculatePathImpl(start, end, pathResult, totalCostResult, jumpHeight, digStrength);
 }
 
@@ -226,8 +307,10 @@ int PathFinder::CalculatePathImpl(Vector start, Vector end, std::list<Vector>& p
 	ZoneScoped;
 
 	// Make sure start and end are within scene bounds.
-	g_SceneMan.ForceBounds(start);
-	g_SceneMan.ForceBounds(end);
+	if (g_SceneMan.GetScene()) {
+		g_SceneMan.ForceBounds(start);
+		g_SceneMan.ForceBounds(end);
+	}
 
 	// Convert from absolute scene pixel coordinates to path node indices.
 	int startNodeX = std::floor(start.m_X / static_cast<float>(m_NodeDimension));
@@ -264,7 +347,7 @@ int PathFinder::CalculatePathImpl(Vector start, Vector end, std::list<Vector>& p
 
 	// If end node is invalid, there's no path
 	PathNode* endNode = GetPathNodeAtGridCoords(endNodeX, endNodeY);
-	if (endNode && endNode->m_Navigable) {
+	if (endNode && ViewNode(endNode).navigable) {
 		result = GetPather()->Solve(static_cast<void*>(GetPathNodeAtGridCoords(startNodeX, startNodeY)), static_cast<void*>(endNode), &statePath, &totalCostResult);
 	}
 
@@ -297,7 +380,7 @@ int PathFinder::CalculatePathImpl(Vector start, Vector end, std::list<Vector>& p
 	return result;
 }
 
-std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector start, Vector end, float jumpHeight, float digStrength, PathCompleteCallback callback) {
+std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector start, Vector end, float jumpHeight, float digStrength, PathCompleteCallback callback, bool committedHorizon) {
 	std::shared_ptr<volatile PathRequest> pathRequest = std::make_shared<PathRequest>();
 
 	const_cast<Vector&>(pathRequest->startPos) = start;
@@ -306,8 +389,9 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 	++m_CurrentPathingRequests;
 	try {
 		g_ThreadMan.GetBackgroundThreadPool().push_task(
-		    [this, start, end, jumpHeight, digStrength, callback](std::shared_ptr<volatile PathRequest> volRequest) {
+		    [this, start, end, jumpHeight, digStrength, callback, committedHorizon](std::shared_ptr<volatile PathRequest> volRequest) {
 			    PathingRequestScope scope{m_CurrentPathingRequests};
+			    HorizonReadScope horizon(committedHorizon);
 			    // Cast away the volatile-ness - only matters outside (and complicates the API otherwise)
 			    PathRequest& request = const_cast<PathRequest&>(*volRequest);
 
@@ -342,6 +426,17 @@ void PathFinder::RecalculateAllCosts() {
 
 	// Deadlock until all path requests are complete
 	while (m_CurrentPathingRequests.load() != 0) {};
+
+	{
+		std::lock_guard lock(m_HorizonMutex);
+		for (const auto& job: m_HorizonJobs) {
+			while (!job->ready.load()) {
+				std::this_thread::yield();
+			}
+		}
+		m_HorizonJobs.clear();
+		m_HorizonNodes.clear();
+	}
 
 	// I hate this copy, but fuck it.
 	std::vector<int> pathNodesIdsVec;
@@ -391,6 +486,7 @@ float PathFinder::LeastCostEstimate(void* startState, void* endState) {
 
 void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* adjacentList) {
 	const PathNode* node = static_cast<PathNode*>(state);
+	const NodeCostView view = ViewNode(node);
 	micropather::StateCost adjCost;
 
 	// We do a little trick here, where we radiate out a little percentage of our average cost in all directions.
@@ -398,23 +494,27 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 	const float costRadiationMultiplier = 0.2F;
 	float radiatedCost = 0.0F; // GetNodeAverageTransitionCost(*node) * costRadiationMultiplier;
 
-	bool isInNoGrav = g_SceneMan.IsPointInNoGravArea(node->Pos);
+	bool isInNoGrav = g_SceneMan.GetScene() && g_SceneMan.IsPointInNoGravArea(node->Pos);
 	bool allowDiagonal = !isInNoGrav; // We don't allow diagonals in nograv to improve automover behaviour
 
-	if (node->Down && node->Down->m_Navigable) {
-		adjCost.cost = 1.0F + GetMaterialTransitionCost(*node->DownMaterial) + radiatedCost;
+	auto neighborOpen = [this](PathNode* neighbor) {
+		return neighbor && ViewNode(neighbor).navigable;
+	};
+
+	if (neighborOpen(node->Down)) {
+		adjCost.cost = 1.0F + GetMaterialTransitionCost(*view.materials[4]) + radiatedCost;
 		adjCost.state = static_cast<void*>(node->Down);
 		adjacentList->push_back(adjCost);
 	}
 
-	if (node->RightDown && node->RightDown->m_Navigable && allowDiagonal) {
-		adjCost.cost = 1.4F + (GetMaterialTransitionCost(*node->RightDownMaterial) * 1.4F) + radiatedCost;
+	if (neighborOpen(node->RightDown) && allowDiagonal) {
+		adjCost.cost = 1.4F + (GetMaterialTransitionCost(*view.materials[3]) * 1.4F) + radiatedCost;
 		adjCost.state = static_cast<void*>(node->RightDown);
 		adjacentList->push_back(adjCost);
 	}
 
-	if (node->DownLeft && node->DownLeft->m_Navigable && allowDiagonal) {
-		adjCost.cost = 1.4F + (GetMaterialTransitionCost(*node->DownLeftMaterial) * 1.4F) + radiatedCost;
+	if (neighborOpen(node->DownLeft) && allowDiagonal) {
+		adjCost.cost = 1.4F + (GetMaterialTransitionCost(*view.materials[5]) * 1.4F) + radiatedCost;
 		adjCost.state = static_cast<void*>(node->DownLeft);
 		adjacentList->push_back(adjCost);
 	}
@@ -424,14 +524,14 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 		const float extraUpCost = 3.0F;
 
 		// We can only go straight left or right if we're on solid ground, otherwise we need to go downwards
-		if (node->Left && node->Left->m_Navigable) {
-			adjCost.cost = 1.0F + GetMaterialTransitionCost(*node->LeftMaterial) + radiatedCost;
+		if (neighborOpen(node->Left)) {
+			adjCost.cost = 1.0F + GetMaterialTransitionCost(*view.materials[6]) + radiatedCost;
 			adjCost.state = static_cast<void*>(node->Left);
 			adjacentList->push_back(adjCost);
 		}
 
-		if (node->Right && node->Right->m_Navigable) {
-			adjCost.cost = 1.0F + GetMaterialTransitionCost(*node->RightMaterial) + radiatedCost;
+		if (neighborOpen(node->Right)) {
+			adjCost.cost = 1.0F + GetMaterialTransitionCost(*view.materials[2]) + radiatedCost;
 			adjCost.state = static_cast<void*>(node->Right);
 			adjacentList->push_back(adjCost);
 		}
@@ -442,7 +542,8 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 			const PathNode* currentNode = node;
 			float totalMaterialCost = 0.0F;
 			for (int i = 0; i < s_JumpHeightVertical; ++i) {
-				if (currentNode->Up == nullptr || !currentNode->Up->m_Navigable || currentNode->UpMaterial->GetIntegrity() > c_PathFindingDefaultDigStrength) {
+				const NodeCostView currentView = ViewNode(currentNode);
+				if (currentNode->Up == nullptr || !ViewNode(currentNode->Up).navigable || currentView.materials[0]->GetIntegrity() > c_PathFindingDefaultDigStrength) {
 					// solid ceiling, stop
 					break;
 				}
@@ -450,7 +551,7 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 				float f = i + 2; // Exponential cost increase for jumping higher
 				float extraJumpCost = f * f * 0.5F; // Exponential cost increase for jumping higher
 
-				totalMaterialCost += 1.0F + extraUpCost + extraJumpCost + (GetMaterialTransitionCost(*currentNode->UpMaterial) * 3.0F) + radiatedCost;
+				totalMaterialCost += 1.0F + extraUpCost + extraJumpCost + (GetMaterialTransitionCost(*currentView.materials[0]) * 3.0F) + radiatedCost;
 
 				adjCost.cost = totalMaterialCost;
 				adjCost.state = static_cast<void*>(currentNode->Up);
@@ -458,8 +559,8 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 
 				currentNode = currentNode->Up;
 			}
-		} else if (node->Up && node->Up->m_Navigable) {
-			adjCost.cost = 1.0F + (extraUpCost) + (GetMaterialTransitionCost(*node->UpRightMaterial) * 3.0F) + radiatedCost; // Three times more expensive when digging.
+		} else if (neighborOpen(node->Up)) {
+			adjCost.cost = 1.0F + (extraUpCost) + (GetMaterialTransitionCost(*view.materials[1]) * 3.0F) + radiatedCost; // Three times more expensive when digging.
 			adjCost.state = static_cast<void*>(node->Up);
 			adjacentList->push_back(adjCost);
 		}
@@ -467,9 +568,10 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 		// Jumping diagonally
 		if (s_JumpHeight < FLT_MAX && node->UpRight && !isInNoGrav) {
 			const PathNode* currentNode = node->UpRight;
-			float totalMaterialCost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*node->UpRightMaterial) * 1.4F * 3.0F) + radiatedCost;
+			float totalMaterialCost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*view.materials[1]) * 1.4F * 3.0F) + radiatedCost;
 			for (int i = 0; i < s_JumpHeightDiagonal; ++i) {
-				if (currentNode->UpRight == nullptr || !currentNode->UpRight->m_Navigable || currentNode->UpRightMaterial->GetIntegrity() > c_PathFindingDefaultDigStrength) {
+				const NodeCostView currentView = ViewNode(currentNode);
+				if (currentNode->UpRight == nullptr || !ViewNode(currentNode->UpRight).navigable || currentView.materials[1]->GetIntegrity() > c_PathFindingDefaultDigStrength) {
 					// solid ceiling, stop
 					break;
 				}
@@ -477,7 +579,7 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 				float f = i + 2; // Exponential cost increase for jumping higher
 				float extraJumpCost = f * f * 0.5F; // Exponential cost increase for jumping higher
 
-				totalMaterialCost += 1.4F + (extraUpCost * 1.4F) + (extraJumpCost * 1.4f) + (GetMaterialTransitionCost(*currentNode->UpRightMaterial) * 1.4F * 3.0F) + radiatedCost;
+				totalMaterialCost += 1.4F + (extraUpCost * 1.4F) + (extraJumpCost * 1.4f) + (GetMaterialTransitionCost(*currentView.materials[1]) * 1.4F * 3.0F) + radiatedCost;
 
 				adjCost.cost = totalMaterialCost;
 				adjCost.state = static_cast<void*>(currentNode->UpRight);
@@ -489,9 +591,10 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 
 		if (s_JumpHeight < FLT_MAX && node->LeftUp && !isInNoGrav) {
 			const PathNode* currentNode = node->LeftUp;
-			float totalMaterialCost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*node->LeftUpMaterial) * 1.4F * 3.0F) + radiatedCost;
+			float totalMaterialCost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*view.materials[7]) * 1.4F * 3.0F) + radiatedCost;
 			for (int i = 0; i < s_JumpHeightDiagonal; ++i) {
-				if (currentNode->LeftUp == nullptr || !currentNode->LeftUp->m_Navigable || currentNode->LeftUpMaterial->GetIntegrity() > c_PathFindingDefaultDigStrength) {
+				const NodeCostView currentView = ViewNode(currentNode);
+				if (currentNode->LeftUp == nullptr || !ViewNode(currentNode->LeftUp).navigable || currentView.materials[7]->GetIntegrity() > c_PathFindingDefaultDigStrength) {
 					// solid ceiling, stop
 					break;
 				}
@@ -499,7 +602,7 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 				float f = i + 2; // Exponential cost increase for jumping higher
 				float extraJumpCost = f * f * 0.5F; // Exponential cost increase for jumping higher
 
-				totalMaterialCost += 1.4F + (extraUpCost * 1.4F) + (extraJumpCost * 1.4f) + (GetMaterialTransitionCost(*currentNode->LeftUpMaterial) * 1.4F * 3.0F) + radiatedCost;
+				totalMaterialCost += 1.4F + (extraUpCost * 1.4F) + (extraJumpCost * 1.4f) + (GetMaterialTransitionCost(*currentView.materials[7]) * 1.4F * 3.0F) + radiatedCost;
 
 				adjCost.cost = totalMaterialCost;
 				adjCost.state = static_cast<void*>(currentNode->LeftUp);
@@ -510,14 +613,14 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 		}
 
 		// Add cost for digging at 45 degrees and for digging upwards.
-		if (node->UpRight && node->UpRight->m_Navigable && allowDiagonal) {
-			adjCost.cost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*node->UpRightMaterial) * 1.4F * 3.0F) + radiatedCost; // Three times more expensive when digging.
+		if (neighborOpen(node->UpRight) && allowDiagonal) {
+			adjCost.cost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*view.materials[1]) * 1.4F * 3.0F) + radiatedCost; // Three times more expensive when digging.
 			adjCost.state = static_cast<void*>(node->UpRight);
 			adjacentList->push_back(adjCost);
 		}
 
-		if (node->LeftUp && node->LeftUp->m_Navigable && allowDiagonal) {
-			adjCost.cost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*node->LeftUpMaterial) * 1.4F * 3.0F) + radiatedCost; // Three times more expensive when digging.
+		if (neighborOpen(node->LeftUp) && allowDiagonal) {
+			adjCost.cost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*view.materials[7]) * 1.4F * 3.0F) + radiatedCost; // Three times more expensive when digging.
 			adjCost.state = static_cast<void*>(node->LeftUp);
 			adjacentList->push_back(adjCost);
 		}
@@ -533,7 +636,8 @@ bool PathFinder::PositionsAreTheSamePathNode(const Vector& pos1, const Vector& p
 }
 
 bool PathFinder::NodeIsOnSolidGround(const PathNode& node) const {
-	return s_JumpHeight == FLT_MAX || (node.Down && node.DownMaterial->GetIntegrity() > c_PathFindingDefaultDigStrength);
+	const NodeCostView view = ViewNode(&node);
+	return s_JumpHeight == FLT_MAX || (node.Down && view.materials[4]->GetIntegrity() > c_PathFindingDefaultDigStrength);
 }
 
 float PathFinder::GetMaterialTransitionCost(const Material& material) const {
@@ -733,6 +837,436 @@ int PathFinder::ConvertCoordsToNodeId(int x, int y) const {
 	}
 
 	return (y * m_GridWidth) + x;
+}
+
+PathFinder::NodeCostView PathFinder::ViewNode(const PathNode* node) const {
+	NodeCostView view;
+	if (!node) {
+		return view;
+	}
+	view.materials = node->AdjacentNodeBlockingMaterials;
+	view.navigable = node->m_Navigable;
+	if (!s_ReadCommittedHorizon || m_NodeGrid.empty()) {
+		return view;
+	}
+	const int nodeId = static_cast<int>(node - m_NodeGrid.data());
+	if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size()) {
+		return view;
+	}
+	std::lock_guard lock(m_HorizonMutex);
+	const auto found = m_HorizonNodes.find(nodeId);
+	if (found != m_HorizonNodes.end()) {
+		view.materials = found->second.committedMaterials;
+		view.navigable = found->second.committedNavigable;
+	}
+	return view;
+}
+
+void PathFinder::ComputeHorizonMaterials(const std::vector<int>& nodeIds, std::vector<std::array<const Material*, 8>>& materials, std::vector<char>& navigable) const {
+	materials.assign(nodeIds.size(), {});
+	navigable.assign(nodeIds.size(), 1);
+	std::unordered_map<int, std::array<const Material*, 8>> computed;
+	computed.reserve(nodeIds.size());
+	auto getStrongerMaterial = [](const Material* first, const Material* second) {
+		return first->GetIntegrity() > second->GetIntegrity() ? first : second;
+	};
+	for (int nodeId: nodeIds) {
+		if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size()) {
+			continue;
+		}
+		const PathNode& node = m_NodeGrid[nodeId];
+		std::array<const Material*, 8> next = node.AdjacentNodeBlockingMaterials;
+		if (node.Right) {
+			Vector offset(0.0F, 3.0F);
+			next[2] = getStrongerMaterial(StrongestMaterialAlongLine(node.Pos - offset, node.Right->Pos - offset), StrongestMaterialAlongLine(node.Pos + offset, node.Right->Pos + offset));
+		}
+		if (node.Down) {
+			Vector offset(3.0F, 0.0F);
+			next[4] = getStrongerMaterial(StrongestMaterialAlongLine(node.Pos - offset, node.Down->Pos - offset), StrongestMaterialAlongLine(node.Pos + offset, node.Down->Pos + offset));
+		}
+		if (node.UpRight) {
+			Vector offset(2.0F, 2.0F);
+			next[1] = getStrongerMaterial(StrongestMaterialAlongLine(node.Pos - offset, node.UpRight->Pos - offset), StrongestMaterialAlongLine(node.Pos + offset, node.UpRight->Pos + offset));
+		}
+		if (node.RightDown) {
+			Vector offset(2.0F, -2.0F);
+			next[3] = getStrongerMaterial(StrongestMaterialAlongLine(node.Pos - offset, node.RightDown->Pos - offset), StrongestMaterialAlongLine(node.Pos + offset, node.RightDown->Pos + offset));
+		}
+		computed[nodeId] = next;
+	}
+	for (int nodeId: nodeIds) {
+		auto found = computed.find(nodeId);
+		if (found == computed.end()) {
+			continue;
+		}
+		const PathNode& node = m_NodeGrid[nodeId];
+		auto take = [&](PathNode* neighbor, int towardNeighbor, int towardHere) {
+			if (!neighbor) {
+				return;
+			}
+			const int neighborId = static_cast<int>(neighbor - m_NodeGrid.data());
+			auto neighborFound = computed.find(neighborId);
+			if (neighborFound != computed.end()) {
+				neighborFound->second[towardHere] = found->second[towardNeighbor];
+			}
+		};
+		take(node.Right, 2, 6);
+		take(node.Down, 4, 0);
+		take(node.UpRight, 1, 5);
+		take(node.RightDown, 3, 7);
+	}
+	for (size_t index = 0; index < nodeIds.size(); ++index) {
+		const int nodeId = nodeIds[index];
+		if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size()) {
+			continue;
+		}
+		const auto found = computed.find(nodeId);
+		materials[index] = found != computed.end() ? found->second : m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials;
+		navigable[index] = m_NodeGrid[nodeId].m_Navigable ? 1 : 0;
+	}
+}
+
+void PathFinder::LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job) {
+	const int delayMs = m_HorizonWorkerDelayMs;
+	const bool late = FaultInjected("horizon_worker_late");
+	auto finish = [job, delayMs, late]() {
+		if (delayMs > 0) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+		}
+		if (late) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		}
+		job->ready.store(true);
+	};
+	if (delayMs <= 0 && !late) {
+		finish();
+		return;
+	}
+	if (ThreadMan::IsConstructed()) {
+		g_ThreadMan.GetBackgroundThreadPool().push_task(finish);
+		return;
+	}
+	std::thread(finish).detach();
+}
+
+void PathFinder::ApplyHorizonJob(const HorizonJob& job) {
+	for (size_t index = 0; index < job.nodeIds.size(); ++index) {
+		const int nodeId = job.nodeIds[index];
+		if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size()) {
+			continue;
+		}
+		const PathNode& live = m_NodeGrid[nodeId];
+		const bool liveMatches = live.AdjacentNodeBlockingMaterials == job.materials[index] && (live.m_Navigable ? 1 : 0) == job.navigable[index];
+		if (liveMatches) {
+			m_HorizonNodes.erase(nodeId);
+			continue;
+		}
+		HorizonNode& overlay = m_HorizonNodes[nodeId];
+		overlay.committedMaterials = job.materials[index];
+		overlay.committedNavigable = job.navigable[index] != 0;
+	}
+}
+
+void PathFinder::QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, const std::vector<Box>& boxes) {
+	if (boxes.empty() || horizonTicks == 0 || m_NodeGrid.empty()) {
+		return;
+	}
+	std::unordered_set<int> nodeIds;
+	for (const Box& box: boxes) {
+		for (int nodeId: GetNodeIdsInBox(box)) {
+			nodeIds.insert(nodeId);
+		}
+	}
+	if (nodeIds.empty()) {
+		return;
+	}
+	auto job = std::make_shared<HorizonJob>();
+	job->originTick = originTick;
+	job->commitTick = originTick + horizonTicks;
+	job->nodeIds.assign(nodeIds.begin(), nodeIds.end());
+	std::sort(job->nodeIds.begin(), job->nodeIds.end());
+	ComputeHorizonMaterials(job->nodeIds, job->materials, job->navigable);
+	job->ready.store(false);
+	{
+		std::lock_guard lock(m_HorizonMutex);
+		for (int nodeId: job->nodeIds) {
+			if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size() || m_HorizonNodes.count(nodeId) != 0) {
+				continue;
+			}
+			HorizonNode& overlay = m_HorizonNodes[nodeId];
+			overlay.committedMaterials = m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials;
+			overlay.committedNavigable = m_NodeGrid[nodeId].m_Navigable;
+		}
+		m_HorizonJobs.push_back(job);
+	}
+	LaunchHorizonWorker(job);
+}
+
+void PathFinder::QueueHorizonDelta(uint64_t originTick, uint16_t horizonTicks, int nodeId, const std::array<const Material*, 8>& materials, bool navigable) {
+	if (horizonTicks == 0 || nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size()) {
+		return;
+	}
+	auto job = std::make_shared<HorizonJob>();
+	job->originTick = originTick;
+	job->commitTick = originTick + horizonTicks;
+	job->nodeIds = {nodeId};
+	job->materials = {materials};
+	job->navigable = {static_cast<char>(navigable ? 1 : 0)};
+	job->ready.store(false);
+	{
+		std::lock_guard lock(m_HorizonMutex);
+		if (m_HorizonNodes.count(nodeId) == 0) {
+			HorizonNode& overlay = m_HorizonNodes[nodeId];
+			overlay.committedMaterials = m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials;
+			overlay.committedNavigable = m_NodeGrid[nodeId].m_Navigable;
+		}
+		m_HorizonJobs.push_back(job);
+	}
+	LaunchHorizonWorker(job);
+}
+
+void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
+	std::vector<std::shared_ptr<HorizonJob>> due;
+	{
+		std::lock_guard lock(m_HorizonMutex);
+		for (const auto& job: m_HorizonJobs) {
+			if (job->commitTick <= nowTick) {
+				due.push_back(job);
+			}
+		}
+	}
+	std::sort(due.begin(), due.end(), [](const auto& lhs, const auto& rhs) {
+		if (lhs->originTick != rhs->originTick) {
+			return lhs->originTick < rhs->originTick;
+		}
+		return lhs->commitTick < rhs->commitTick;
+	});
+	for (const auto& job: due) {
+		const auto started = std::chrono::steady_clock::now();
+		while (!job->ready.load()) {
+			std::this_thread::yield();
+		}
+		const int64_t waitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+		m_LastHorizonWaitUs = waitUs;
+		RecordHorizonWait(waitUs);
+		std::cout << "[horizon-path] wait_us=" << waitUs << " tick=" << nowTick << " origin=" << job->originTick
+		          << " count=" << HorizonWaitCount() << " p99_us=" << HorizonWaitP99Us() << std::endl;
+		{
+			std::lock_guard lock(m_HorizonMutex);
+			ApplyHorizonJob(*job);
+			m_HorizonJobs.erase(std::remove(m_HorizonJobs.begin(), m_HorizonJobs.end(), job), m_HorizonJobs.end());
+		}
+	}
+	if (!due.empty()) {
+		WriteHorizonWaitReport();
+	}
+}
+
+int64_t PathFinder::HorizonWaitCount() {
+	auto& stats = HorizonStats();
+	std::lock_guard lock(stats.mutex);
+	return static_cast<int64_t>(stats.count);
+}
+
+int64_t PathFinder::HorizonWaitP99Us() {
+	auto& stats = HorizonStats();
+	std::lock_guard lock(stats.mutex);
+	return HorizonP99Locked(stats);
+}
+
+void PathFinder::ResetHorizonWaitStats() {
+	auto& stats = HorizonStats();
+	std::lock_guard lock(stats.mutex);
+	stats.count = 0;
+	stats.lastUs = 0;
+	stats.ringCount = 0;
+	stats.ringNext = 0;
+	stats.ring.fill(0);
+}
+
+void PathFinder::WriteHorizonWaitReport() {
+	auto& stats = HorizonStats();
+	int64_t count = 0;
+	int64_t p99 = 0;
+	int64_t last = 0;
+	{
+		std::lock_guard lock(stats.mutex);
+		count = static_cast<int64_t>(stats.count);
+		p99 = HorizonP99Locked(stats);
+		last = stats.lastUs;
+	}
+	const std::string path = System::GetWorkingDirectory() + "Userdata/horizon_path_grid.json";
+	std::ofstream out(path, std::ios::trunc);
+	if (!out) {
+		return;
+	}
+	out << "{\"count\":" << count << ",\"p99_us\":" << p99 << ",\"last_wait_us\":" << last << "}\n";
+}
+
+void PathFinder::TestInstallGrid(int width, int height, int nodeDimension, const Material* fill) {
+	WaitForPathingRequests();
+	{
+		std::lock_guard lock(m_HorizonMutex);
+		m_HorizonJobs.clear();
+		m_HorizonNodes.clear();
+	}
+	m_NodeDimension = static_cast<unsigned int>(nodeDimension);
+	m_GridWidth = width;
+	m_GridHeight = height;
+	m_WrapsX = m_WrapsY = false;
+	m_Offset = Vector(static_cast<float>(nodeDimension) * 0.5F, 0.0F);
+	m_NodeGrid.clear();
+	m_NodeGrid.reserve(static_cast<size_t>(width) * static_cast<size_t>(height));
+	for (int y = 0; y < height; ++y) {
+		for (int x = 0; x < width; ++x) {
+			m_NodeGrid.emplace_back(Vector(static_cast<float>(x * nodeDimension + nodeDimension / 2), static_cast<float>(y * nodeDimension + nodeDimension / 2)));
+		}
+	}
+	for (int y = 0; y < height; ++y) {
+		for (int x = 0; x < width; ++x) {
+			PathNode& node = *GetPathNodeAtGridCoords(x, y);
+			node.Up = GetPathNodeAtGridCoords(x, y - 1);
+			node.Right = GetPathNodeAtGridCoords(x + 1, y);
+			node.Down = GetPathNodeAtGridCoords(x, y + 1);
+			node.Left = GetPathNodeAtGridCoords(x - 1, y);
+			node.UpRight = GetPathNodeAtGridCoords(x + 1, y - 1);
+			node.RightDown = GetPathNodeAtGridCoords(x + 1, y + 1);
+			node.DownLeft = GetPathNodeAtGridCoords(x - 1, y + 1);
+			node.LeftUp = GetPathNodeAtGridCoords(x - 1, y - 1);
+			for (int dir = 0; dir < PathNode::c_MaxAdjacentNodeCount; ++dir) {
+				node.AdjacentNodeBlockingMaterials[dir] = fill;
+			}
+			node.m_Navigable = true;
+		}
+	}
+}
+
+void PathFinder::TestSetNodeMaterials(int nodeId, const std::array<const Material*, 8>& materials) {
+	if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size()) {
+		return;
+	}
+	m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials = materials;
+}
+
+int PathFinder::RunHorizonGridSelfTest() {
+	constexpr const char* Tag = "[horizon-path-grid-selftest]";
+	struct TestMaterial : Material {
+		void Arm(unsigned char index, float integrity) {
+			m_Index = index;
+			m_Integrity = integrity;
+		}
+	};
+	TestMaterial air;
+	TestMaterial rock;
+	air.Arm(0, 0.0F);
+	rock.Arm(5, 200.0F);
+	std::array<const Material*, 8> airMats{};
+	std::array<const Material*, 8> blocked{};
+	airMats.fill(&air);
+	blocked.fill(&rock);
+
+	auto pathCost = [](PathFinder& finder, bool committed) {
+		std::list<Vector> path;
+		float cost = -1.0F;
+		finder.CalculatePath(Vector(10, 50), Vector(150, 50), path, cost, FLT_MAX, 1.0F, committed);
+		return std::pair<int, float>{static_cast<int>(path.size()), cost};
+	};
+
+	ResetHorizonWaitStats();
+	PathFinder peerA;
+	PathFinder peerB;
+	peerA.TestInstallGrid(8, 4, 20, &air);
+	peerB.TestInstallGrid(8, 4, 20, &air);
+	const int wall = peerA.TestNodeIdAt(3, 2);
+	if (wall < 0) {
+		std::cout << Tag << " FAIL grid setup" << std::endl;
+		return 1;
+	}
+
+	// (i) two peers, delayed worker on B: shared committed answers match. The RED names the per-machine live grid.
+	peerB.SetHorizonWorkerDelayMs(20);
+	peerA.QueueHorizonDelta(10, 4, wall, blocked);
+	peerB.QueueHorizonDelta(10, 4, wall, blocked);
+	peerA.TestSetNodeMaterials(wall, blocked);
+	peerA.CommitHorizonThrough(13);
+	peerB.CommitHorizonThrough(13);
+	const auto sharedA = pathCost(peerA, true);
+	const auto sharedB = pathCost(peerB, true);
+	const auto liveA = pathCost(peerA, false);
+	const auto liveB = pathCost(peerB, false);
+	if (sharedA != sharedB) {
+		std::cout << Tag << " FAIL shared CalculatePath returned the per-machine answer a=" << sharedA.second << " b=" << sharedB.second << std::endl;
+		return 1;
+	}
+	if (liveA == liveB) {
+		std::cout << Tag << " FAIL two-peer live grids did not diverge under injected worker delay" << std::endl;
+		return 1;
+	}
+	std::cout << Tag << " PASS two-peer-determinism" << std::endl;
+
+	// (ii) a change at T is visible at T+H and not at T+H-1 on both peers.
+	ResetHorizonWaitStats();
+	PathFinder horizonA;
+	PathFinder horizonB;
+	horizonA.TestInstallGrid(8, 4, 20, &air);
+	horizonB.TestInstallGrid(8, 4, 20, &air);
+	const auto beforeA = pathCost(horizonA, true);
+	const auto beforeB = pathCost(horizonB, true);
+	horizonA.QueueHorizonDelta(20, 4, wall, blocked);
+	horizonB.QueueHorizonDelta(20, 4, wall, blocked);
+	horizonA.TestSetNodeMaterials(wall, blocked);
+	horizonB.TestSetNodeMaterials(wall, blocked);
+	horizonA.CommitHorizonThrough(23);
+	horizonB.CommitHorizonThrough(23);
+	const auto earlyA = pathCost(horizonA, true);
+	const auto earlyB = pathCost(horizonB, true);
+	if (earlyA != beforeA || earlyB != beforeB) {
+		std::cout << Tag << " FAIL horizon change visible at T+H-1" << std::endl;
+		return 1;
+	}
+	horizonA.CommitHorizonThrough(24);
+	horizonB.CommitHorizonThrough(24);
+	const auto lateA = pathCost(horizonA, true);
+	const auto lateB = pathCost(horizonB, true);
+	if (lateA == beforeA || lateB == beforeB || lateA != lateB) {
+		std::cout << Tag << " FAIL horizon change not visible at T+H on both peers" << std::endl;
+		return 1;
+	}
+	std::cout << Tag << " PASS horizon-visibility" << std::endl;
+
+	// (iii) an AI-pass query reads the live grid.
+	g_CurrentAIActor = reinterpret_cast<Actor*>(alignof(Actor));
+	const auto aiLive = pathCost(horizonA, false);
+	g_CurrentAIActor = nullptr;
+	if (aiLive == beforeA) {
+		std::cout << Tag << " FAIL AI-pass query did not see the live grid" << std::endl;
+		return 1;
+	}
+	std::cout << Tag << " PASS ai-live-grid" << std::endl;
+
+	// (iv) wait_us is zero when the worker is on time, and bounded when late.
+	ResetHorizonWaitStats();
+	PathFinder onTime;
+	onTime.TestInstallGrid(8, 4, 20, &air);
+	onTime.SetHorizonWorkerDelayMs(0);
+	onTime.QueueHorizonDelta(1, 1, wall, blocked);
+	onTime.CommitHorizonThrough(2);
+	if (onTime.LastHorizonWaitUs() != 0) {
+		std::cout << Tag << " FAIL horizon_wait_us was " << onTime.LastHorizonWaitUs() << " when the worker was on time" << std::endl;
+		return 1;
+	}
+	PathFinder late;
+	late.TestInstallGrid(8, 4, 20, &air);
+	late.SetHorizonWorkerDelayMs(15);
+	late.QueueHorizonDelta(1, 1, wall, blocked);
+	late.CommitHorizonThrough(2);
+	if (late.LastHorizonWaitUs() <= 0 || late.LastHorizonWaitUs() > 200000) {
+		std::cout << Tag << " FAIL late worker wait " << late.LastHorizonWaitUs() << " was not a bounded stall" << std::endl;
+		return 1;
+	}
+	std::cout << Tag << " PASS stall-instrumentation" << std::endl;
+	std::cout << Tag << " PASS" << std::endl;
+	return 0;
 }
 
 void PathFinder::DebugRender(BITMAP* targetBitmap, const Vector& targetPos) const {

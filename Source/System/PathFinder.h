@@ -5,9 +5,13 @@
 
 #include <array>
 #include <atomic>
+#include <cstdint>
+#include <deque>
 #include <list>
 #include <memory>
 #include <functional>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 using namespace micropather;
@@ -105,7 +109,7 @@ namespace RTE {
 		/// @param jumpHeight How high, in metres, the search can jump vertically.
 		/// @param digStrength What material strength the search is capable of digging through.
 		/// @return Success or failure, expressed as SOLVED, NO_SOLUTION, or START_END_SAME.
-		int CalculatePath(Vector start, Vector end, std::list<Vector>& pathResult, float& totalCostResult, float jumpHeight, float digStrength);
+		int CalculatePath(Vector start, Vector end, std::list<Vector>& pathResult, float& totalCostResult, float jumpHeight, float digStrength, bool committedHorizon = false);
 
 		/// Calculates and returns the least difficult path between two points on the current scene.
 		/// This is asynchronous and thus will not block the current thread.
@@ -115,7 +119,27 @@ namespace RTE {
 		/// @param digStrength What material strength the search is capable of digging through.
 		/// @param callback The callback function to be run when the path calculation is completed.
 		/// @return A shared pointer to the volatile PathRequest to be used to track whether the asynchronous path calculation has been completed, and check its results.
-		std::shared_ptr<volatile PathRequest> CalculatePathAsync(Vector start, Vector end, float jumpHeight, float digStrength, PathCompleteCallback callback = nullptr);
+		std::shared_ptr<volatile PathRequest> CalculatePathAsync(Vector start, Vector end, float jumpHeight, float digStrength, PathCompleteCallback callback = nullptr, bool committedHorizon = false);
+
+		/// Queues a committed-horizon recompute for terrain that landed at originTick.
+		void QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, const std::vector<Box>& boxes);
+
+		/// Applies every horizon job whose commit tick is due, waiting if a worker is late.
+		void CommitHorizonThrough(uint64_t nowTick);
+
+		void SetHorizonWorkerDelayMs(int milliseconds) { m_HorizonWorkerDelayMs = milliseconds; }
+		int64_t LastHorizonWaitUs() const { return m_LastHorizonWaitUs; }
+
+		static int64_t HorizonWaitCount();
+		static int64_t HorizonWaitP99Us();
+		static void ResetHorizonWaitStats();
+		static void WriteHorizonWaitReport();
+		static int RunHorizonGridSelfTest();
+
+		void TestInstallGrid(int width, int height, int nodeDimension, const Material* fill);
+		void TestSetNodeMaterials(int nodeId, const std::array<const Material*, 8>& materials);
+		void QueueHorizonDelta(uint64_t originTick, uint16_t horizonTicks, int nodeId, const std::array<const Material*, 8>& materials, bool navigable = true);
+		int TestNodeIdAt(int x, int y) const { return ConvertCoordsToNodeId(x, y); }
 
 		// <summary>
 		/// Returns how many pathfinding requests are currently active.
@@ -198,6 +222,33 @@ namespace RTE {
 		bool m_WrapsX; //!< Whether the pathing grid wraps on the X axis.
 		bool m_WrapsY; //!< Whether the pathing grid wraps on the Y axis.
 		std::atomic<int> m_CurrentPathingRequests{0}; //!< The number of queued or running path requests.
+
+		struct HorizonNode {
+			std::array<const Material*, 8> committedMaterials{};
+			bool committedNavigable = true;
+		};
+		struct HorizonJob {
+			uint64_t originTick = 0;
+			uint64_t commitTick = 0;
+			std::vector<int> nodeIds;
+			std::vector<std::array<const Material*, 8>> materials;
+			std::vector<char> navigable;
+			std::atomic<bool> ready{false};
+		};
+		mutable std::unordered_map<int, HorizonNode> m_HorizonNodes;
+		std::deque<std::shared_ptr<HorizonJob>> m_HorizonJobs;
+		mutable std::mutex m_HorizonMutex;
+		int m_HorizonWorkerDelayMs = 0;
+		int64_t m_LastHorizonWaitUs = 0;
+
+		struct NodeCostView {
+			std::array<const Material*, 8> materials{};
+			bool navigable = true;
+		};
+		NodeCostView ViewNode(const PathNode* node) const;
+		void ComputeHorizonMaterials(const std::vector<int>& nodeIds, std::vector<std::array<const Material*, 8>>& materials, std::vector<char>& navigable) const;
+		void LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job);
+		void ApplyHorizonJob(const HorizonJob& job);
 
 		/// Gets the pather for this thread. Lazily-initialized for each new thread that needs a pather.
 		/// @return The pather for this thread.
