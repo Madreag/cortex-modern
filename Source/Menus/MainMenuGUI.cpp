@@ -862,6 +862,13 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	// Hosting or joining under a name saves it, but saving is best effort: the wire carries more
 	// bytes than the box takes typed, so a name the settings will not hold still goes out as typed.
 	const std::string typedName = m_MultiplayerNameTextBox->GetText();
+	// The box's typed cap is shorter than the wire's, but a pasted or scripted name skips it and a
+	// name past the hello's byte cap only fails inside the encode; refuse it here in the player's words.
+	if (typedName.size() > NetProtocol::c_MaxDisplayNameBytes) {
+		m_MultiplayerLandingStatusLabel->SetText("Display names are limited to 64 bytes.");
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+		return;
+	}
 	request.playerName = typedName.empty() ? (host ? "Host" : "Client") : typedName;
 	if (!typedName.empty() && typedName != g_SettingsMan.GetNetworkDisplayName()) {
 		g_SettingsMan.SetNetworkDisplayName(typedName);
