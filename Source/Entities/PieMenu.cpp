@@ -223,45 +223,9 @@ namespace {
 		out.write(buffer, written.ptr - buffer);
 	}
 
-	std::string NormalizeRuntime1ExactIntegerDoubles(std::string_view text) {
-		std::string out;
-		out.reserve(text.size());
-		size_t index = 0;
-		while (index < text.size()) {
-			if (text[index] == ' ') {
-				out.push_back(' ');
-				++index;
-				continue;
-			}
-			const size_t end = text.find(' ', index);
-			const size_t stop = end == std::string_view::npos ? text.size() : end;
-			const std::string_view token = text.substr(index, stop - index);
-			double value = 0;
-			if (token.find('.') != std::string_view::npos
-				&& ParseNumberExact(token.data(), token.data() + token.size(), value).ec == std::errc()
-				&& std::trunc(value) == value) {
-				char buffer[32];
-				const auto written = std::to_chars(buffer, buffer + sizeof(buffer), static_cast<int64_t>(value));
-				out.append(buffer, written.ptr);
-			} else {
-				out.append(token);
-			}
-			index = stop;
-		}
-		return out;
-	}
-
 	bool ReadPackedTicks(const std::string& field, int64_t& ticks) {
 		const std::from_chars_result parsed = std::from_chars(field.data(), field.data() + field.size(), ticks);
-		if (parsed.ec == std::errc() && parsed.ptr == field.data() + field.size()) {
-			return true;
-		}
-		double value = 0;
-		if (ParseNumberExact(field.data(), field.data() + field.size(), value).ec == std::errc() && std::trunc(value) == value) {
-			ticks = static_cast<int64_t>(value);
-			return true;
-		}
-		return false;
+		return parsed.ec == std::errc() && parsed.ptr == field.data() + field.size();
 	}
 }
 
@@ -458,10 +422,11 @@ std::string PieMenu::SaveRuntimeCheckpoint() const {
 
 bool PieMenu::LoadRuntimeCheckpoint(std::string_view text, bool validateOnly) {
 	try {
-		const std::string normalized = NormalizeRuntime1ExactIntegerDoubles(text);
-		CheckpointReader reader(normalized, "PieMenuRuntime1", validateOnly);
-		reader(static_cast<Entity&>(*this), m_DirectionIfSubPieMenu, m_MenuMode, m_CenterPos, m_Rotation,
-			m_EnabledState, m_EnableDisableAnimationTimer, m_HoverTimer, m_SubPieMenuHoverOpenTimer);
+		CheckpointReader reader(text, "PieMenuRuntime1", validateOnly);
+		reader(static_cast<Entity&>(*this), m_DirectionIfSubPieMenu, m_MenuMode, m_CenterPos, m_Rotation, m_EnabledState);
+		reader.StageRuntime1Timer(m_EnableDisableAnimationTimer);
+		reader.StageRuntime1Timer(m_HoverTimer);
+		reader.StageRuntime1Timer(m_SubPieMenuHoverOpenTimer);
 		reader(m_IconSeparatorMode, m_FullInnerRadius, m_BackgroundThickness, m_BackgroundSeparatorSize,
 			m_DrawBackgroundTransparent, m_BackgroundColor, m_BackgroundBorderColor, m_SelectedItemBackgroundColor);
 		for (auto& quadrant: m_PieQuadrants) reader(quadrant.m_Enabled, quadrant.m_Direction);
@@ -608,14 +573,9 @@ bool PieMenu::RunCheckpointSelfTest() {
 			"refused");
 	}
 	const std::string legacyPack = std::string("0|0|12.0|34.0|56|") + HexFloatString(0.0F) + "|0|-1|-1|-1|-1";
+	const auto beforeDottedPack = menu.PackInteractionState();
 	menu.UnpackInteractionState(legacyPack);
-	check("legacy_double_pie_timers", menu.m_EnableDisableAnimationTimer.GetStartSimTimeMS() == 12
-		&& menu.m_HoverTimer.GetStartSimTimeMS() == 34
-		&& menu.m_SubPieMenuHoverOpenTimer.GetStartSimTimeMS() == 56,
-		std::to_string(menu.m_EnableDisableAnimationTimer.GetStartSimTimeMS()) + "/" +
-			std::to_string(menu.m_HoverTimer.GetStartSimTimeMS()) + "/" +
-			std::to_string(menu.m_SubPieMenuHoverOpenTimer.GetStartSimTimeMS()),
-		"12/34/56");
+	check("legacy_double_pie_timers_refused", menu.PackInteractionState() == beforeDottedPack, menu.PackInteractionState(), beforeDottedPack);
 	const std::string fractionalPack = std::string("0|0|12.7|34.0|56|") + HexFloatString(0.0F) + "|0|-1|-1|-1|-1";
 	const auto beforeFractional = menu.PackInteractionState();
 	menu.UnpackInteractionState(fractionalPack);
