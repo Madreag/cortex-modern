@@ -1006,10 +1006,10 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	    "local fn = function() return transactionOwner end;"
 	    "local function Update() return fn() end;"
 	    "_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"] = { Update = Update };"
-	    "_F38SaveRefusalUID = transactionOwner.UniqueID;";
+	    "_SaveRefusalUID = transactionOwner.UniqueID;";
 	const bool planted = state.RunScriptString(plant) == 0;
 	lua_State* lua = state.GetLuaState();
-	lua_getglobal(lua, "_F38SaveRefusalUID");
+	lua_getglobal(lua, "_SaveRefusalUID");
 	MovableObject* held = planted ? g_MovableMan.FindObjectByUniqueID(static_cast<long>(lua_tonumber(lua, -1))) : nullptr;
 	lua_pop(lua, 1);
 	if (held) g_MovableMan.UnregisterObject(held);
@@ -1040,7 +1040,7 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 			    row.value("function", "") == "Update" && row.value("class", "") == "MOPixel" &&
 			    row.value("path", "").find("transactionOwner") != std::string::npos &&
 			    row.value("problem", "").find("that no longer exists") != std::string::npos &&
-			    row.value("line", "") == live.playerLine) {
+			    row.value("player_line", "") == live.playerLine) {
 				bundleOk = true;
 				bundleDetail = row.dump();
 				break;
@@ -1084,7 +1084,7 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	check(toasted, "lockstep_toast", toasts.empty() ? lockstepError : toasts.back().text);
 	ScenarioRunner::SetLockstepCoordinator(nullptr);
 
-	state.RunScriptString("_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"] = nil; _F38SaveRefusalUID = nil;");
+	state.RunScriptString("_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"] = nil; _SaveRefusalUID = nil;");
 	g_LuaMan.CollectGarbageForCheckpoint();
 	g_SceneMan.SetAsideScene(dummyScene);
 	g_SceneMan.ReinstateScene(originalScene);

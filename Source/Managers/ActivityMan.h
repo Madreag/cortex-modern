@@ -323,7 +323,7 @@ namespace RTE {
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage) const;
 		/// Serializes script graphs the way a save does and reports each refusal.
 		bool CaptureScriptGraphsOrReportRefusal(SaveKind kind, std::vector<std::string>& graphs);
-		/// Prints the existing console line and tells the player once.
+		/// Prints each refused script value to the console and tells the player once.
 		void ReportScriptGraphSaveRefusal(SaveKind kind, const std::vector<std::string>& problems);
 		/// Match toast in lockstep, screen text otherwise.
 		void ShowSaveRefusalToPlayer(const SaveRefusalRecord& record, bool lockstep);
