@@ -459,7 +459,11 @@ namespace {
 				Require(seat != observed["editor_seats"].end(), "seat " + std::to_string(player) + " is not a local editor seat");
 				Require(observed["editing"] == true, "the activity is not in the setup editor");
 			}
-			Require(observed["net_ui"]["status"].at("visible") == true, "the network status widget is not on screen");
+			// The status widget is the overlay's own surface wherever its mode lets it draw; an Off
+			// match honestly has none, so a step may say so rather than fake one.
+			if (step.value("status", true)) {
+				Require(observed["net_ui"]["status"].at("visible") == true, "the network status widget is not on screen");
+			}
 			const BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
 			// No overlay rectangle ever leaves the window.
 			for (const std::string& element: {"status", "toasts", "seats_panel"}) {

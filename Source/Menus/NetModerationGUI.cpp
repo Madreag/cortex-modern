@@ -232,33 +232,38 @@ bool NetModerationGUI::SetOpen(bool open) {
 }
 
 void NetModerationGUI::LayoutPanel() {
-	// A compact screen keeps one toast row between the strip band and the panel's top: the panel
-	// drops by that row and loses it off its height, so its bottom edge - and the roster - stay put.
+	// A compact screen keeps the strip band and one toast row above the panel's top: the panel sits
+	// under them and loses the rows off its height, so its bottom edge - and the roster - stay put.
 	const int screenHeight = g_WindowMan.GetResY();
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
 	const int rowHeight = std::max(12, font ? font->GetFontHeight() : 12) + 8;
-	const int lift = screenHeight < c_CompactMaxHeight ? rowHeight : 0;
 	const int width = std::min(c_PanelWidth, g_WindowMan.GetResX() - 12);
-	const int top = PanelTop(screenHeight) + lift;
-	const int height = c_PanelHeight - lift;
+	const int top = screenHeight < c_CompactMaxHeight ? c_StripBandBottom + rowHeight + c_PanelGap : PanelTop(screenHeight);
+	const int height = std::min(c_PanelHeight, screenHeight - c_PanelGap - top);
+	const int lost = c_PanelHeight - height;
 	int x, y, w, h;
 	m_Panel->GetControlRect(&x, &y, &w, &h);
 	if (x != (g_WindowMan.GetResX() - width) / 2 || y != top || w != width || h != height) {
 		m_Panel->Move((g_WindowMan.GetResX() - width) / 2, top);
 		m_Panel->Resize(width, height);
 	}
-	// The roster yields the reserved row and scrolls for what no longer fits; the status and close
-	// rows move up inside the shrunken panel instead of clipping at its bottom edge.
-	if (m_Roster->GetHeight() != 240 - lift) {
-		m_Roster->Resize(m_Roster->GetWidth(), 240 - lift);
+	// The roster yields the reserved rows and scrolls for what no longer fits; the status row gives up
+	// its second line first, then moves up with the close row instead of clipping at the panel's bottom.
+	if (m_Roster->GetHeight() != 240 - lost) {
+		m_Roster->Resize(m_Roster->GetWidth(), 240 - lost);
 	}
-	m_Roster->SetVerticalOverflowScroll(lift != 0);
-	m_Roster->ActivateDeactivateOverflowScroll(lift != 0);
-	if (m_Status->GetHeight() != 30 - lift) {
-		m_Status->Resize(m_Status->GetWidth(), 30 - lift);
+	m_Roster->SetVerticalOverflowScroll(lost != 0);
+	m_Roster->ActivateDeactivateOverflowScroll(lost != 0);
+	const int statusY = 282 - std::max(0, lost - 20);
+	if (m_Status->GetRelYPos() != statusY) {
+		m_Status->SetPositionRel(10, statusY);
 	}
-	if (m_Close->GetRelYPos() != 318 - lift) {
-		m_Close->SetPositionRel(width - 224, 318 - lift);
+	const int statusHeight = 30 - std::min(lost, 20);
+	if (m_Status->GetHeight() != statusHeight) {
+		m_Status->Resize(m_Status->GetWidth(), statusHeight);
+	}
+	if (m_Close->GetRelYPos() != 318 - lost) {
+		m_Close->SetPositionRel(width - 224, 318 - lost);
 	}
 }
 
@@ -273,6 +278,10 @@ void NetModerationGUI::Refresh() {
 	m_Title->SetText(NetModerationPanelTitle(snapshot.serviceState == "Running", holdPause, DisplayName(holdName), holdSeconds));
 	m_Summary->SetText(snapshot.isHost ? m_Model.GetSummaryText() : "Only the host can approve a substitute.");
 	m_Status->SetText(WrapText(m_LabelFont, m_Model.GetStatusText(), m_Status->GetWidth()));
+	// A compact panel that lost its rows to the toast reservation has no room for the status line
+	// under a full seat list; the seat rows already carry the same state.
+	const int statusY = 282 - std::max(0, (c_PanelHeight - m_Panel->GetHeight()) - 20);
+	m_Status->SetVisible(40 + static_cast<int>(std::min<size_t>(m_Model.RowCount(), m_Seats.size())) * 80 <= statusY);
 	m_Roster->SetVisible(!snapshot.isHost);
 	if (!snapshot.isHost) {
 		std::string roster;
@@ -617,6 +626,16 @@ void NetModerationGUI::DrawMatchToasts() {
 	const int top = bottom - static_cast<int>(rowCount) * rowHeight;
 	int freeLeft = 0, freeRight = backbuffer->w;
 	editor.FreeSpan(top, bottom, backbuffer->w, freeLeft, freeRight);
+	// The status widget's rows are its own too: a stack crossing them yields the span it sits in,
+	// the way the editor's picker columns already carve it.
+	if (m_StatusRect.visible && top < m_StatusRect.y + m_StatusRect.height && bottom > m_StatusRect.y) {
+		const int mid = (freeLeft + freeRight) / 2;
+		if (m_StatusRect.x + m_StatusRect.width / 2 >= mid) {
+			freeRight = std::min(freeRight, m_StatusRect.x);
+		} else {
+			freeLeft = std::max(freeLeft, m_StatusRect.x + m_StatusRect.width);
+		}
+	}
 	const int available = freeRight - freeLeft;
 	const int width = std::max(0, std::min(520, available - 32));
 	const int x = freeLeft + std::max(0, (available - width) / 2);
