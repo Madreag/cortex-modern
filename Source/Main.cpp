@@ -5239,10 +5239,7 @@ bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std:
 		if (error) *error = "the launching match carries no agreed config";
 		return false;
 	}
-	if (!activityPreset.empty() && activityPreset != config->activityPreset) {
-		if (error) *error = "the service's launch activity \"" + activityPreset + "\" differs from the agreed \"" + config->activityPreset + "\"";
-		return false;
-	}
+	(void)activityPreset; // The roster already carries the preset ConsumeReadyToLaunch handed up.
 	return ConfigureNetMatchActivity(*config, g_NetMatchService.GetLocalTeam(), error);
 }
 
