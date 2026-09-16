@@ -14,6 +14,7 @@
 #include "NetActorOwnership.h"
 #include "NetMatchReplay.h"
 #include "NetReconnectUx.h"
+#include "NetWorldJoin.h"
 #include "RTETools.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
@@ -76,6 +77,7 @@ namespace RTE {
 		std::vector<NetValueObservation> s_DroppedValueObservations;
 		bool s_WorldCatchUpActive = false;
 		uint64_t s_WorldCatchUpAppliedThrough = 0;
+		uint64_t s_WorldCatchUpActivationTick = 0;
 		std::deque<NetLockstepFrame> s_WorldCatchUpTail;
 		std::map<uint8_t, uint32_t> s_WorldHolderGeneration;
 		uint64_t s_WorldMembershipRevision = 0;
@@ -928,6 +930,9 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::SubmitWorldTransition(const NetGameWorldTransition& transition) {
+		if (s_LockstepCoordinator && !IsPersistentWorld()) {
+			return false;
+		}
 		if (!IsWorldAuthor()) {
 			return false;
 		}
@@ -939,8 +944,8 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::AcceptWorldTransition(const NetGameWorldTransition& transition, std::string* error) {
-		if (transition.schema != 0 && transition.schema != 1) {
-			if (error) *error = "world transition schema is stale";
+		if (transition.schema != c_NetWorldJoinSchema) {
+			if (error) *error = "world transition schema is not the live world schema";
 			return false;
 		}
 		if (transition.membershipRevision != 0 && transition.membershipRevision < s_WorldMembershipRevision) {
@@ -973,8 +978,19 @@ namespace RTE {
 			s_WorldCatchUpTail.push_back(std::move(frame));
 		}
 		s_WorldCatchUpAppliedThrough = snapshotTick;
+		s_WorldCatchUpActivationTick = 0;
 		s_WorldCatchUpActive = true;
 		return true;
+	}
+
+	void ScenarioRunner::AppendWorldCatchUp(std::vector<NetLockstepFrame> frames) {
+		for (NetLockstepFrame& frame: frames) {
+			s_WorldCatchUpTail.push_back(std::move(frame));
+		}
+	}
+
+	void ScenarioRunner::SetWorldCatchUpActivation(uint64_t activationTick) {
+		s_WorldCatchUpActivationTick = activationTick;
 	}
 
 	bool ScenarioRunner::WorldCatchUpActive() {
@@ -985,23 +1001,44 @@ namespace RTE {
 		return s_WorldCatchUpAppliedThrough;
 	}
 
+	uint64_t ScenarioRunner::WorldCatchUpActivationTick() {
+		return s_WorldCatchUpActivationTick;
+	}
+
+	bool ScenarioRunner::WorldCatchUpHasFrame(uint64_t simTick) {
+		for (const NetLockstepFrame& frame: s_WorldCatchUpTail) {
+			if (frame.targetFrame == simTick) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	bool ScenarioRunner::TakeWorldCatchUpReadyFrame(uint64_t simTick, NetLockstepReadyFrame& outFrame, std::string* error) {
 		if (!s_WorldCatchUpActive) {
 			return false;
 		}
-		if (s_WorldCatchUpTail.empty()) {
-			if (error) *error = "world catch-up has no committed frame for tick " + std::to_string(simTick);
+		auto found = std::find_if(s_WorldCatchUpTail.begin(), s_WorldCatchUpTail.end(), [simTick](const NetLockstepFrame& frame) {
+			return frame.targetFrame == simTick;
+		});
+		if (found == s_WorldCatchUpTail.end()) {
+			if (error && s_WorldCatchUpTail.empty()) {
+				*error = "world catch-up has no committed frame for tick " + std::to_string(simTick);
+			}
 			return false;
 		}
-		NetLockstepFrame frame = std::move(s_WorldCatchUpTail.front());
-		s_WorldCatchUpTail.pop_front();
+		NetLockstepFrame frame = std::move(*found);
+		s_WorldCatchUpTail.erase(found);
 		outFrame = {};
-		outFrame.frame = frame.targetFrame != 0 ? frame.targetFrame : simTick;
+		outFrame.frame = simTick;
 		outFrame.remoteFrames = std::move(frame.frames);
 		outFrame.remoteCommands = std::move(frame.commands);
 		outFrame.remoteObservations = std::move(frame.observations);
 		outFrame.remoteValueObservations = std::move(frame.valueObservations);
-		s_WorldCatchUpAppliedThrough = outFrame.frame;
+		s_WorldCatchUpAppliedThrough = simTick;
+		if (s_WorldCatchUpActivationTick != 0 && simTick + 1 >= s_WorldCatchUpActivationTick) {
+			s_WorldCatchUpActive = false;
+		}
 		if (s_SessionPump) {
 			s_SessionPump();
 		}

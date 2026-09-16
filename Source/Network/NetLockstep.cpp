@@ -2268,7 +2268,8 @@ namespace RTE {
 			return false;
 		}
 		NetLockstepPayload payload;
-		if (!DecodeFrame(reader, payload, error, controllerVersion, c_Version, nullptr, true) || !reader.AtEnd()) return false;
+		// Recovery frames may carry WorldTransition; decode them at the world-plane version.
+		if (!DecodeFrame(reader, payload, error, controllerVersion, c_WorldTransitionVersion, nullptr, true) || !reader.AtEnd()) return false;
 		NetLockstepFrame frame = std::get<NetLockstepFrame>(std::move(payload));
 		std::vector<uint8_t> canonical;
 		if (!EncodeRecoveryInput(frame, canonical, error)) return false;
@@ -4932,6 +4933,9 @@ namespace RTE {
 				m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":" + m_LastLeaveMessage;
 				m_State = NetLockstepState::Stopped;
 			}
+			return;
+		}
+		if (IsPersistentWorldRound()) {
 			return;
 		}
 		std::cout << "[net-match] rejoin: " << DescribePeer(peerId) << " reconnected - resyncing the match" << std::endl;
