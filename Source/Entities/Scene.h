@@ -721,6 +721,14 @@ namespace RTE {
 		std::shared_ptr<volatile PathRequest> CalculatePathAsync(const Vector& start, const Vector& end, float jumpHeight = FLT_MAX, float digStrength = c_PathFindingDefaultDigStrength, Activity::Teams team = Activity::Teams::NoTeam, PathCompleteCallback callback = nullptr);
 
 		/// Records a terrain material change for the committed-horizon path grid.
+		struct HorizonTerrainBox {
+			Box box;
+			uint64_t originTick = 0;
+			int finderIndex = 0;
+			HorizonTerrainPatch patch;
+			std::vector<HorizonNodeSnapshot> nodes;
+		};
+
 		void NoteHorizonTerrainBox(const Box& newArea);
 		void RestoreHorizonAfterPreview();
 		size_t TestHorizonBoxCount() const { return m_HorizonTerrainBoxes.size(); }
@@ -814,13 +822,6 @@ namespace RTE {
 		bool m_PathfindingUpdated;
 		// Timer for when to do an update of the pathfinding data
 		Timer m_PartialPathUpdateTimer;
-		struct HorizonTerrainBox {
-			Box box;
-			uint64_t originTick = 0;
-			int finderIndex = 0;
-			HorizonTerrainPatch patch;
-			std::vector<HorizonNodeSnapshot> nodes;
-		};
 		std::vector<HorizonTerrainBox> m_HorizonTerrainBoxes;
 
 		// SceneObject:s to be placed in the scene, divided up by different sets - OWNED HERE
