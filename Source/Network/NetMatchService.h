@@ -10,6 +10,7 @@
 #include "NetReconnectUx.h"
 #include "NetSeatAuth.h"
 #include "NetResyncState.h"
+#include "NetWorldJoin.h"
 #include "Singleton.h"
 
 #include <atomic>
@@ -164,6 +165,9 @@ namespace RTE {
 		std::optional<bool> automaticRepair;
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
 		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
+		bool persistentWorld = false; // Host only: an indefinitely running world, never a last-brain or rematch.
+		std::string worldId; // Set after the host advances its durable identity; empty off a world.
+		uint64_t worldBoot = 0;
 		std::string sessionId; // Client only: join the directory session with this id instead of an address.
 	};
 
@@ -359,6 +363,8 @@ namespace RTE {
 		};
 
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
+		void DriveWorldJoins(uint64_t nowMs);
+		void PublishWorldJoinImage(uint64_t tick);
 		void WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
 		void WorkerResyncMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
 		/// The live wire, by the same rule. Caller holds the lock.
@@ -612,6 +618,8 @@ namespace RTE {
 		uint64_t m_ResyncHealStartMs = 0;
 		bool m_ResyncHealOpen = false;
 		bool m_HostLobbyBeaconed = false;
+		NetWorldIdentity m_WorldIdentity;
+		NetWorldJoinHost m_WorldJoin;
 	};
 
 } // namespace RTE

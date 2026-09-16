@@ -209,6 +209,10 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 		}
 		m_AutosaveTasks.push_back(std::move(task));
 		const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count();
+		m_LastAutosavePath = path;
+		m_LastAutosaveTick = tick;
+		m_LastAutosaveBytes = bytes;
+		m_LastAutosaveCaptureMs = captureMs;
 		std::cout << std::format("[autosave] tick={} capture_ms={:.3f} bytes={}\n", tick, captureMs, bytes) << std::flush;
 		return true;
 	} catch (const std::exception& error) {

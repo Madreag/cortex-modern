@@ -63,7 +63,7 @@ namespace RTE {
 
 		NetSessionConfig sessionConfig = config.sessionConfig;
 		// A one-peer roster has no remote to wait for: the host is the whole round.
-		sessionConfig.readyWithoutPeers = config.host && m_MatchConfig.peerCount == 1;
+		sessionConfig.readyWithoutPeers = config.host && (m_MatchConfig.peerCount == 1 || m_MatchConfig.persistentWorld);
 		const bool sessionStarted = config.host
 			? session.StartHost(transport, std::move(sessionConfig), error)
 			: session.StartClient(transport, config.joinAddress, std::move(sessionConfig), error);
@@ -72,7 +72,7 @@ namespace RTE {
 			return false;
 		}
 		// The host waits for every client (peerCount-1); a client waits for the host alone.
-		const uint32_t expectedReadyPeers = config.host ? static_cast<uint32_t>(m_MatchConfig.peerCount - 1) : 1U;
+		const uint32_t expectedReadyPeers = sessionConfig.readyWithoutPeers ? 0U : (config.host ? static_cast<uint32_t>(m_MatchConfig.peerCount - 1) : 1U);
 		if (!WaitForSessionReady(transport, session, expectedReadyPeers, config.sessionWaitMs, error)) {
 			return false;
 		}
