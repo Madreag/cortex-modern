@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import os
 import sys
 import tempfile
 import unittest
@@ -126,9 +127,14 @@ class FeelMeasureOutStamp(unittest.TestCase):
 class PosixSelftestBinary(unittest.TestCase):
     def test_windows_and_posix_engine_names(self):
         """Base tree always hashed Cortex Command.exe, which is not the Mac binary name."""
-        self.assertEqual(engine_executable(Path("/repo")), Path("/repo") / "Cortex Command.exe")
-        with patch("run_selftests.sys.platform", "darwin"):
-            self.assertEqual(engine_executable(Path("/repo")), Path("/repo") / "build-gns" / "CortexCommand")
+        repo = Path("/repo")
+        env = {key: value for key, value in os.environ.items() if key != "CCCP_TEST_BINARY"}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("run_selftests.sys.platform", "win32"):
+                self.assertEqual(engine_executable(repo).resolve(), (repo / "Cortex Command.exe").resolve())
+            with patch("run_selftests.sys.platform", "darwin"):
+                self.assertEqual(engine_executable(repo).resolve(),
+                                 (repo.resolve() / "build-gns" / "CortexCommand"))
 
 
 class SequentialA7Arms(unittest.TestCase):
