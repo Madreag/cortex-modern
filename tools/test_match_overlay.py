@@ -346,7 +346,12 @@ def probe_script(who, size, arm, mode):
                 # match has no status widget to clear, so the step says so instead of faking one.
                 {"op": "assert_net_ui_clear", "match": True, "status": wanted(True)},
                 {"op": "screenshot_pair", "name": f"f6-toast-{mode}-host", "widget": wanted(True)},
-                {"op": "key_down", "key": "P", "sim_at": 480}, {"op": "key_up", "key": "P", "sim_at": 481},
+                # A second toast one second later: on a compact reserved row it waits for the first
+                # toast's full 3 s on screen, then takes the same row.
+                {"op": "wait", "elapsed_ms": 1000},
+                {"op": "key_down", "key": "P", "sim_at": 300}, {"op": "key_up", "key": "P", "sim_at": 301},
+                {"op": "wait", "elapsed_ms": 3100},
+                label_assert(TOAST, RESUMED),
                 {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                 {"op": "wait", "panel_open": False},
             ]
@@ -852,6 +857,10 @@ def inspect_pair(root, records, size, arm, mode, name):
             checks["Host_f6_toast_live"] = bool(toast_reads)
             checks["Host_f6_toast_clear_read"] = bool(clear_reads) and all(
                 read["toasts"]["visible"] and read["seats_panel"]["visible"] for read in clear_reads)
+            texts = [obs["control"].get("text") for obs in toast_reads if obs.get("control", {}).get("visible")
+                     and obs["control"].get("text")]
+            seen = [text for i, text in enumerate(texts) if i == 0 or text != texts[i - 1]]
+            checks["Host_f6_toast_order"] = PAUSED in seen and RESUMED in seen and seen.index(PAUSED) < seen.index(RESUMED)
             if size[1] < COMPACT_MAX_HEIGHT:
                 # The reserved band shows one toast row: a single-row rect, on screen, above the panel.
                 checks["Host_f6_toast_single_row"] = bool(clear_reads) and all(
