@@ -192,6 +192,8 @@ namespace RTE {
 		/// the persistent preset behaves the same way with no network under it.
 		/// @return Whether the transition was queued or applied.
 		static bool SubmitWorldTransition(const NetGameWorldTransition& transition);
+		/// Refuses a WorldTransition whose generation or membership revision is already stale.
+		static bool AcceptWorldTransition(const NetGameWorldTransition& transition, std::string* error = nullptr);
 		/// Installs the committed tail a world joiner applies faster than the paced lockstep wait.
 		static bool InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error = nullptr);
 		static bool WorldCatchUpActive();

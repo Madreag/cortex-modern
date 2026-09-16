@@ -338,6 +338,8 @@ namespace RTE {
 
 		/// Which peer id, if any, currently holds the seat on which transport.
 		bool GetSeatHolder(uint16_t stableSeat, NetPeerId& connection, uint32_t& holderGeneration, uint32_t& incarnation) const;
+		/// The committed H4 seat on this connection; 0 until admission has one.
+		uint16_t StableSeatOfConnection(NetPeerId connection) const;
 		bool IsSeatClosed(uint16_t stableSeat) const;
 		/// Every seat's admission status, in stable-seat order.
 		std::vector<NetH4SeatStatus> GetSeatStatuses() const;

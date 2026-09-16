@@ -722,6 +722,11 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			    !std::isfinite(transition->posX) || !std::isfinite(transition->posY)) {
 				continue;
 			}
+			std::string transitionError;
+			if (!ScenarioRunner::AcceptWorldTransition(*transition, &transitionError)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a stale WorldTransition: " + transitionError);
+				continue;
+			}
 			Actor* seated = nullptr;
 			if (transition->kind == NetGameWorldTransition::Activate) {
 				seated = g_MovableMan.GetFirstBrainActor(transition->team);
