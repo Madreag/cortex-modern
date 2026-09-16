@@ -99,6 +99,7 @@
 #include "NetReconnectSessionSelfTest.h"
 #include "NetSession.h"
 #include "NetSessionSelfTest.h"
+#include "NetWorldJoinSelfTest.h"
 #include "SimChecksum.h"
 #include "NetA7Journal.h"
 #include "ScenarioRunner.h"
@@ -135,7 +136,14 @@
 #include <chrono>
 #include <charconv>
 #include <cstdlib>
+#include <csignal>
 #include <cstring>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include <fstream>
 #include <filesystem>
 #include <format>
@@ -231,6 +239,10 @@ static bool s_netLockstep = false;
 static bool s_netMatch = false;
 static bool s_netMatchServiceE2E = false;
 static bool s_netDedicated = false;
+static bool s_netWorldDaemon = false;
+static bool s_netPersistentWorld = false;
+static bool s_netMatchServicePresetExplicit = false;
+static bool s_netMatchTicksExplicit = false;
 static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
 static std::string s_netMatchServiceE2EModule;
 static std::string s_netMatchServiceConfigPath;
@@ -874,6 +886,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-match-service-preset") {
 			s_netMatchServiceE2EPreset = argValue[++i];
+			s_netMatchServicePresetExplicit = true;
 			continue;
 		}
 		// The module the preset belongs to; without it the service resolves the preset's own module.
@@ -919,11 +932,19 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-lockstep-ticks") {
 			s_netLockstepTicks = static_cast<uint64_t>(std::strtoull(argValue[++i], nullptr, 10));
+			s_netMatchTicksExplicit = true;
 			continue;
 		}
 
 		if (!lastArg && currentArg == "-net-match-ticks") {
 			s_netLockstepTicks = static_cast<uint64_t>(std::strtoull(argValue[++i], nullptr, 10));
+			s_netMatchTicksExplicit = true;
+			continue;
+		}
+
+		if (currentArg == "-net-persistent-world") {
+			s_netPersistentWorld = true;
+			++i;
 			continue;
 		}
 
@@ -4537,8 +4558,9 @@ void RunGameLoop() {
 					// In-match census; the report runs after EndActivity, which releases actors.
 					s_netMatchE2EActorCensus = g_MovableMan.GetActorCount();
 					s_netMatchE2EActorCensusPeak = std::max(s_netMatchE2EActorCensusPeak, s_netMatchE2EActorCensus);
+					const bool unlimitedWorld = (s_netWorldDaemon || s_netPersistentWorld) && !s_netMatchTicksExplicit;
 					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
-					if (s_netMatchE2ETicks.Total() > tickCap) {
+					if (!unlimitedWorld && s_netMatchE2ETicks.Total() > tickCap) {
 						// A capped stop is per-peer wall clock: a peer settled behind a lagged link still
 						// owes itself our in-flight tail, so hand over the forwards we hold and hold the
 						// socket open before quitting drops it.
@@ -5317,6 +5339,17 @@ static void NetChatScriptOnSimTick(uint64_t simTick) {
 	}
 }
 
+#ifdef _WIN32
+static BOOL WINAPI WorldDaemonCtrlHandler(DWORD) {
+	System::SetQuit(true);
+	return TRUE;
+}
+#else
+static void WorldDaemonSignal(int) {
+	System::SetQuit(true);
+}
+#endif
+
 int RunNetMatchServiceE2E() {
 	std::string setupError;
 	if (!NetA7Journal::StartE2E(&setupError, [] { PollSDLEvents(); return System::IsSetToQuit(); })) s_netMatchServiceE2EExitCode = 1;
@@ -5329,6 +5362,15 @@ int RunNetMatchServiceE2E() {
 	}
 	if (setupError.empty() && !s_netChatScriptPath.empty() && !LoadNetChatScript(s_netChatScriptPath, &setupError)) {
 		s_netMatchServiceE2EExitCode = 1;
+	}
+
+	if (s_netWorldDaemon || s_netPersistentWorld) {
+#ifdef _WIN32
+		SetConsoleCtrlHandler(WorldDaemonCtrlHandler, TRUE);
+#else
+		std::signal(SIGINT, WorldDaemonSignal);
+		std::signal(SIGTERM, WorldDaemonSignal);
+#endif
 	}
 
 	if (setupError.empty()) {
@@ -5370,6 +5412,10 @@ int RunNetMatchServiceE2E() {
 		}
 		request.resyncOnDesync = s_netMatchResyncOnDesync;
 		request.autoInputDelay = s_netMatchAutoDelay;
+		if (s_netPersistentWorld && e2eHost) {
+			request.persistentWorld = true;
+			request.dedicated = true;
+		}
 		if (!setupError.empty() || !g_NetMatchService.Start(request, &setupError)) {
 			s_netMatchServiceE2EExitCode = 1;
 		}
@@ -5941,6 +5987,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-directory-selftest") {
 			return NetDirectorySelfTest::Run();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-world-join-selftest") {
+			return NetWorldJoinSelfTest::Run();
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-p2p-selftest") {
 			return GnsP2PSelfTest::Run(std::vector<std::string>(argv + i + 1, argv + argc));
 		}
@@ -6084,6 +6133,17 @@ int main(int argc, char** argv) {
 	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');
 
 	const bool mainArgsValid = HandleMainArgs(argc, argv);
+	if (s_netDedicated && !s_netMatchServiceE2E) {
+		s_netWorldDaemon = true;
+		s_netMatchServiceE2E = true;
+		if (!s_netMatchServicePresetExplicit) {
+			s_netMatchServiceE2EPreset = "Persistent World";
+		}
+		s_netPersistentWorld = true;
+	}
+	if (s_netMatchServiceE2EPreset == "Persistent World") {
+		s_netPersistentWorld = true;
+	}
 	const auto* gpu = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
 	TelemetryBundle::SetGpuDescription(gpu ? gpu : "unavailable");
 	if (!mainArgsValid) return ShutDown(EXIT_FAILURE);

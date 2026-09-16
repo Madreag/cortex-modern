@@ -149,6 +149,11 @@ namespace RTE {
 		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick);
 		/// Drains checkpoint writes at shutdown, after simulation has ended.
 		void WaitForAutosaveTasks() const;
+		/// The last automatic capture this process published; empty when none has.
+		const std::string& LastAutosavePath() const { return m_LastAutosavePath; }
+		uint64_t LastAutosaveTick() const { return m_LastAutosaveTick; }
+		size_t LastAutosaveBytes() const { return m_LastAutosaveBytes; }
+		double LastAutosaveCaptureMs() const { return m_LastAutosaveCaptureMs; }
 		long long LastSaveMainMs() const { return m_LastSaveMainMs; }
 		long long LastSaveZipMs() const { return m_LastSaveZipMs; }
 		std::string CaptureRuntimeGlobals() const;
@@ -326,6 +331,10 @@ namespace RTE {
 
 		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.
 		std::vector<std::shared_future<bool>> m_AutosaveTasks; //!< Captured checkpoints awaiting disk IO.
+		std::string m_LastAutosavePath;
+		uint64_t m_LastAutosaveTick = 0;
+		size_t m_LastAutosaveBytes = 0;
+		double m_LastAutosaveCaptureMs = 0.0;
 		long long m_LastSaveMainMs = 0;
 		long long m_LastSaveZipMs = 0;
 
