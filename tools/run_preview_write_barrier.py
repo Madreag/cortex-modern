@@ -323,22 +323,28 @@ def count_actors(data):
 def assess_cost(red, green, scene, red_census, census):
     native = green.get('native', [])
     valid = bool(native) and all(all(key in row and math.isfinite(row[key]) and row[key] >= 0
-                                   for key in ('capture_ms', 'write_ms', 'restore_ms', 'max_ms'))
+                                   for key in ('capture_ms', 'write_ms', 'restore_ms', 'max_ms', 'p99_ms'))
                                  and row.get('windows', 0) > 0 and row['capture_ms'] > 0 and row['restore_ms'] > 0 for row in native)
     maximum = sum(row['max_ms'] for row in native) if valid else None
+    p99 = sum(row['p99_ms'] for row in native) if valid else None
     delta = green['preview_ms'] - red['preview_ms'] if all(r.get('preview_ms') is not None for r in (red, green)) else None
     ok = all(r['transport_ok'] and not r['interference'] and r['previews'] > 0 and
              r['preview_ms'] is not None and math.isfinite(r['preview_ms']) for r in (red, green))
     ok = ok and green['exit_code'] == 0 and maximum is not None and maximum < LIMIT_MS
+    ok = ok and p99 is not None and p99 < LIMIT_MS
     ok = ok and delta is not None and delta < LIMIT_MS
     ok = ok and (census == red_census == 240 if scene == '240' else red['exit_code'] == 0)
     restore = {label: sum(entry.get('restore_ms', 0.0) for entry in row.get('native', []))
                for label, row in (('red', red), ('green', green))}
     windows = sum(entry.get('windows', 0.0) for entry in native)
+    saves = sum(entry.get('saves', 0.0) for entry in native)
+    tables = sum(entry.get('tables', 0.0) for entry in native)
+    restore_us = restore['green']*1000.0/windows if windows else None
     return dict(scene=scene, red_ms=red['preview_ms'], green_ms=green['preview_ms'], delta_ms=delta,
-                native_max_ms_sum=maximum, actors=census, red_actors=red_census,
+                native_max_ms_sum=maximum, native_p99_ms_sum=p99, actors=census, red_actors=red_census,
                 red_restore_ms=restore['red'], green_restore_ms=restore['green'],
-                green_windows=windows, pass_check=ok)
+                green_windows=windows, journal_entries=saves, tables_touched=tables,
+                restore_us_per_window=restore_us, pass_check=ok)
 
 
 def assess_selftests(summary, identity):
