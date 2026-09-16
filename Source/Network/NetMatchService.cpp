@@ -3115,6 +3115,7 @@ static std::string ResyncSaveName() {
 			config.delayPolicy = request.delayPolicy.value_or(config.delayPolicy);
 			config.idleWaitMinutes = request.idleWaitMinutes.value_or(config.idleWaitMinutes);
 			config.automaticRepair = request.automaticRepair.value_or(config.automaticRepair);
+			config.pathHorizonTicks = request.pathHorizonTicks.value_or(config.pathHorizonTicks);
 		}
 		// CPU teams follow human teams and consume no peer identity.
 		config.players.clear();
@@ -3182,6 +3183,7 @@ static std::string ResyncSaveName() {
 		if (!request.delayPolicy) request.delayPolicy = saved.delayPolicy;
 		if (!request.idleWaitMinutes) request.idleWaitMinutes = saved.idleWaitMinutes;
 		if (!request.automaticRepair) request.automaticRepair = saved.automaticRepair;
+		if (!request.pathHorizonTicks) request.pathHorizonTicks = saved.pathHorizonTicks;
 	}
 
 	void NetMatchService::SetState(NetMatchServiceState state, std::string status, std::string error) {

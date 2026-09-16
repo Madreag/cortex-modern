@@ -309,6 +309,9 @@ namespace RTE {
 				AppendU8(out, config.idleWaitMinutes);
 				AppendBool(out, config.automaticRepair);
 				AppendU8(out, static_cast<uint8_t>(config.delayPolicy));
+				if (config.version >= 5) {
+					AppendU16LE(out, config.pathHorizonTicks);
+				}
 			}
 			return true;
 		}
@@ -392,6 +395,8 @@ namespace RTE {
 				if (!ReadOrTruncated(reader.ReadBool(out.autosaveEnabled) && reader.ReadU32LE(out.autosaveIntervalSeconds) &&
 				                     reader.ReadU8(out.idleWaitMinutes) && reader.ReadBool(out.automaticRepair) && reader.ReadU8(policy), reader, error, "host match options")) return false;
 				out.delayPolicy = static_cast<NetMatchDelayPolicy>(policy);
+				out.pathHorizonTicks = 0;
+				if (out.version >= 5 && !ReadOrTruncated(reader.ReadU16LE(out.pathHorizonTicks), reader, error, "path horizon")) return false;
 			}
 			std::string validateError;
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(out, &validateError)) {
