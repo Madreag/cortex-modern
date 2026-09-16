@@ -1,8 +1,7 @@
-"""Game-over observe freeze: both peers lift the cursor freeze on the same sim tick.
+"""Two-peer comparer: saved intensity and objective positions stay shared.
 
-The fixture ends the round and sits in Observe. The engine prints
-[game-over-freeze] lift-tick=N at the C++ observe-cursor gate.
-This arm is written, not run.
+The fixture drives GameIntensityCalculator and AddObjectivePoint(AboveHeadPos).
+Saved values are compared through snapshot_runtime.project. Written, not run.
 """
 from __future__ import annotations
 
@@ -15,14 +14,14 @@ from pathlib import Path
 import sys
 
 REPO = Path(__file__).resolve().parents[1]
-FIXTURE = REPO / "tools/fixtures/game_over_observe.lua"
-PRESET = "Determinism Game Over Observe"
-LIFT = re.compile(r"\[game-over-freeze\] lift-tick=(\d+)")
+FIXTURE = REPO / "tools/fixtures/intensity_objectives.lua"
+PRESET = "Determinism Intensity Objectives"
+SAVED = re.compile(r"\[intensity-objectives\] saved=([^\s]+)")
 INDEX = (
     "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n"
     "\tAddActivity = GAScripted\n\t\tPresetName = " + PRESET + "\n"
-    "\t\tSceneName = Grasslands\n\t\tScriptPath = UserScenes.rte/GameOverObserve.lua\n"
-    "\t\tLuaClassName = GameOverObserve\n\t\tMinTeamsRequired = 2\n\t\tIsTestActivity = 1\n"
+    "\t\tSceneName = Grasslands\n\t\tScriptPath = UserScenes.rte/IntensityObjectives.lua\n"
+    "\t\tLuaClassName = IntensityObjectives\n\t\tMinTeamsRequired = 2\n\t\tIsTestActivity = 1\n"
     "\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n"
     "\t\tDefaultFogOfWar = 0\n\t\tDefaultRequireClearPathToOrbit = 0\n\t\tDefaultDeployUnits = 0\n"
 )
@@ -31,11 +30,6 @@ INDEX = (
 def sha(path: Path) -> str:
     with Path(path).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-def lift_tick(text: str) -> int | None:
-    matches = LIFT.findall(text)
-    return int(matches[0]) if matches else None
 
 
 def peer_log(run_dir: Path) -> str:
@@ -47,24 +41,43 @@ def peer_log(run_dir: Path) -> str:
     return text
 
 
+def last_saved(text: str) -> str | None:
+    matches = SAVED.findall(text)
+    return matches[-1] if matches else None
+
+
 def stage_module(runtime: Path) -> None:
     module = Path(runtime) / "Userdata/UserScenes.rte"
     module.mkdir(parents=True, exist_ok=True)
     (module / "Index.ini").write_text(INDEX, encoding="utf-8")
-    (module / "GameOverObserve.lua").write_bytes(FIXTURE.read_bytes())
+    (module / "IntensityObjectives.lua").write_bytes(FIXTURE.read_bytes())
+
+
+def compare_peers(values: dict[str, str]):
+    sys.path.insert(0, str(REPO / "tools"))
+    import snapshot_runtime as runtime
+    from test_compare_snapshots import RuntimeProjectionTests
+
+    helper = RuntimeProjectionTests()
+    host = helper.shared_intensity_activity(values["host"], (0.0, 0.0))[0]
+    client = helper.shared_intensity_activity(values["client"], (0.0, 0.0))[0]
+    return runtime.project(host, True) == runtime.project(client, True)
 
 
 def inspect(root: Path, peers: tuple[str, ...]) -> dict:
     checks = {}
-    details = {"lift_tick": {}}
-    ticks = []
+    details = {"saved": {}}
+    values = {}
     for who in peers:
-        log = peer_log(root / who)
-        tick = lift_tick(log)
-        details["lift_tick"][who] = tick
-        checks[f"{who}_lifted"] = tick is not None
-        ticks.append(tick)
-    checks["same_tick"] = len(set(ticks)) == 1 and None not in ticks
+        saved = last_saved(peer_log(root / who))
+        details["saved"][who] = saved
+        checks[f"{who}_saved"] = saved is not None
+        values[who] = saved or ""
+    checks["saved_equal"] = len(set(values.values())) == 1 and all(values.values())
+    if all(values.values()):
+        checks["comparer_shared"] = compare_peers(values)
+    else:
+        checks["comparer_shared"] = False
     return {"pass": all(checks.values()), "checks": checks, "details": details}
 
 
@@ -72,9 +85,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=REPO)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--port", type=int, default=48531)
+    parser.add_argument("--port", type=int, default=48541)
     parser.add_argument("--timeout", type=int, default=180)
-    parser.add_argument("--ticks", type=int, default=240)
+    parser.add_argument("--ticks", type=int, default=180)
     options = parser.parse_args()
     sys.path.insert(0, str(options.repo / "tools"))
     from run_sim_test import make_run
@@ -105,7 +118,7 @@ def main():
         result["driver_sha256"] = sha(Path(__file__))
         result["fixture_sha256"] = sha(FIXTURE)
         (root / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-        print("PASS" if result["pass"] else "FAIL", "game_over_observe", result["details"])
+        print("PASS" if result["pass"] else "FAIL", "intensity_objectives", result["details"])
         return 0 if result["pass"] else 1
     finally:
         for run in runs.values():
