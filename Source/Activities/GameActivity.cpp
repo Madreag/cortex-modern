@@ -69,15 +69,6 @@ const std::string& GameActivity::GetLastFundsReadout(int player) {
 	return s_LastFundsReadout[player];
 }
 
-void GameActivity::RecordFundsReadout(int player) {
-	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
-		return;
-	}
-	char str[64];
-	std::snprintf(str, sizeof(str), "%c Funds: %s oz", -58, DescribeFundsReadout(m_Team[player], player).c_str());
-	s_LastFundsReadout[player] = str;
-}
-
 // A player's AI order for one of their units crosses the wire under lockstep, so every peer applies it at the committed tick.
 static void IssueAIOrder(const Actor* actor, NetGameAIOrder::Op op, const Vector& point, const MovableObject* target) {
 	NetGameAIOrder order;

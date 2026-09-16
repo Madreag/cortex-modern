@@ -783,3 +783,117 @@ def launch(options):
     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     report_checks(checks, result["config_refusal"])
     return 0 if result["passed"] else 1
+
+
+# Host CreateDelivery at tick 80 (-net-match-e2e-buy-command). D=7 is the lockstep input delay.
+FUNDS_PRESS = 80
+FUNDS_DELAY = 7
+FUNDS_FAIL_P1 = "the local readout did not show the previewed buy at P+1"
+
+
+def _funds_oz(readout):
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)", readout or "")
+    return float(match.group(1)) if match else None
+
+
+def _funds_line(log, tick):
+    for line in log.splitlines():
+        if line.startswith(f"[preview-funds-driver] tick={tick} readout="):
+            return line.split("readout=", 1)[1]
+    return ""
+
+
+def funds_preview(options):
+    """Two-process D=7 funds arm: host buy at P, host P+1 previewed, client P+1 committed, both equal at P+D."""
+    if Path("D:/mx/LEAD_FAMILY.lock").exists():
+        raise RuntimeError("family lock exists; launch is deferred")
+    if not any(low <= options.port <= high for low, high in PORT_BLOCKS):
+        raise ValueError("port must be in " + " or ".join(f"{low}..{high}" for low, high in PORT_BLOCKS))
+    os.environ["CCCP_HEADLESS"] = "1"
+    repo, root = options.repo.resolve(), options.out.resolve()
+    root.mkdir(parents=True, exist_ok=False)
+    rules = rules_for("default")
+    config = root / "launch-config.bin"
+    wire = net_lobby_wire.read(repo)
+    config.write_bytes(encode_config(rules, wire, False, True))
+    exe_hash = sha(repo / "Cortex Command.exe")
+    common = [
+        "-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
+        "-net-match-mode", "pvp", "-net-match-ticks", "120", "-max-ticks", "120",
+        "-net-match-input-delay", str(FUNDS_DELAY), "-seed", "42", "-num-lua-states", "4",
+        "-tick-hashes", "-local-prediction-depth", "7",
+        "-local-prediction-funds-preview", str(FUNDS_PRESS),
+    ]
+    argv_host = [*common, "-net-host", "-net-match-service-config", str(config), "-net-match-e2e-buy-command"]
+    argv_client = [*common, "-net-join", "127.0.0.1"]
+    (root / "argv.json").write_text(json.dumps({"host": argv_host, "client": argv_client, "press": FUNDS_PRESS, "delay": FUNDS_DELAY}, indent=2), encoding="utf-8")
+    runs, records = {}, {}
+    try:
+        for peer, flags in (("host", argv_host), ("client", argv_client)):
+            trace, report = root / peer / "trace.json", root / peer / "report.json"
+            runs[peer] = make_run(repo, [*flags, "-out", str(trace), "-net-match-report", str(report)],
+                                  root / peer, options.timeout, env={"CCCP_HEADLESS": "1"}, expected=[report])
+        for run in runs.values():
+            run.start()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            pending = {peer: pool.submit(run.finish) for peer, run in runs.items()}
+            records = {peer: future.result() for peer, future in pending.items()}
+    finally:
+        for run in runs.values():
+            run.close()
+    logs = {peer: (root / peer / "stdout.log").read_text(errors="replace") for peer in runs}
+    host_p1 = _funds_line(logs["host"], FUNDS_PRESS + 1)
+    client_p1 = _funds_line(logs["client"], FUNDS_PRESS + 1)
+    host_pd = _funds_line(logs["host"], FUNDS_PRESS + FUNDS_DELAY)
+    client_pd = _funds_line(logs["client"], FUNDS_PRESS + FUNDS_DELAY)
+    host_p1_oz, client_p1_oz = _funds_oz(host_p1), _funds_oz(client_p1)
+    host_pd_oz, client_pd_oz = _funds_oz(host_pd), _funds_oz(client_pd)
+    checks = {
+        "host_p1_readout_present": bool(host_p1) and host_p1 != "EMPTY",
+        "client_p1_readout_present": bool(client_p1) and client_p1 != "EMPTY",
+        "host_p1_previewed": bool(host_p1_oz is not None and client_p1_oz is not None and host_p1_oz < client_p1_oz),
+        "client_p1_committed": bool(client_p1_oz is not None and host_p1_oz is not None and client_p1_oz > host_p1_oz),
+        "both_equal_at_commit": bool(host_pd and client_pd and host_pd == client_pd and host_pd_oz is not None and host_p1_oz is not None and host_pd_oz == host_p1_oz),
+    }
+    if not checks["host_p1_readout_present"]:
+        print("FAIL host readout empty at P+1")
+    if not checks["host_p1_previewed"]:
+        print("FAIL " + FUNDS_FAIL_P1)
+    dump_pairs = []
+    for suffix in ("funds_p1", "funds_pd"):
+        left = root / "host" / f"trace.json.{suffix}.simstate.txt"
+        right = root / "client" / f"trace.json.{suffix}.simstate.txt"
+        same = left.is_file() and right.is_file() and left.read_bytes() == right.read_bytes()
+        checks[f"{suffix}_dumps_byte_identical"] = same
+        dump_pairs.append({"suffix": suffix, "host": str(left), "client": str(right), "identical": same})
+    result = {"records": records, "readouts": {"host_p1": host_p1, "client_p1": client_p1, "host_pd": host_pd, "client_pd": client_pd},
+              "dumps": dump_pairs, "argv": {"host": argv_host, "client": argv_client},
+              "checks": checks, "passed": all(checks.values()), "exe_sha256": exe_hash}
+    (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    report_checks(checks)
+    return 0 if result["passed"] else 1
+
+
+def main(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--case", choices=["launch", "funds_preview"], default="launch")
+    parser.add_argument("--timeout", type=float, default=300)
+    parser.add_argument("--port", type=int, default=48320)
+    parser.add_argument("--variant", default="default")
+    parser.add_argument("--dedicated", action="store_true")
+    parser.add_argument("--captures", action="store_true")
+    parser.add_argument("--resolution")
+    parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--offline-repo", type=Path)
+    options = parser.parse_args(argv)
+    if options.case == "funds_preview":
+        return funds_preview(options)
+    return launch(options)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

@@ -458,7 +458,6 @@ namespace RTE {
 		void DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos = Vector(), int which = 0) override;
 		/// The gold string DrawGUI last printed for this seat; the funds-preview driver reads it.
 		static const std::string& GetLastFundsReadout(int player);
-		void RecordFundsReadout(int player);
 
 		/// Draws this ActivityMan's current graphical representation to a
 		/// BITMAP of choice. This includes all game-related graphics.
