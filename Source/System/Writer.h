@@ -62,15 +62,24 @@ namespace RTE {
 	/// Retains unchanged owned values and retires replaced buffers on the worker.
 	class CheckpointCache {
 	public:
-		void Begin() { ++m_Generation; }
+		void Begin() { ++m_Generation; m_Touched = 0; m_Reused = 0; }
 		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value);
+		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value, uint64_t stamp);
+		const CheckpointText* Peek(const void* owner, unsigned channel) const;
+		uint64_t Stamp(const void* owner, unsigned channel) const;
+		bool Touch(const void* owner, unsigned channel);
 		CheckpointText CapturePixels(const BITMAP* bitmap);
 		std::vector<CheckpointText> RetireUnused();
+		uint64_t Generation() const { return m_Generation; }
+		size_t Touched() const { return m_Touched; }
+		size_t Reused() const { return m_Reused; }
 	private:
-		struct Entry { CheckpointText text; uint64_t generation = 0; };
+		struct Entry { CheckpointText text; uint64_t generation = 0; uint64_t stamp = 0; };
 		std::unordered_map<const void*, std::unordered_map<unsigned, Entry>> m_Entries;
 		std::vector<CheckpointText> m_Retired;
 		uint64_t m_Generation = 0;
+		size_t m_Touched = 0;
+		size_t m_Reused = 0;
 		struct Pixels { std::shared_ptr<const BitmapSnapshot> snapshot; CheckpointText text; uint64_t generation = 0; };
 		std::unordered_map<const BITMAP*, Pixels> m_Pixels;
 	};
