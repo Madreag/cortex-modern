@@ -180,6 +180,19 @@ namespace RTE {
 		/// The synced match roster, or null when no roster is attached.
 		static const NetMatchConfig* GetLockstepMatchConfig();
 
+		/// Whether the round is a persistent world: it keeps ticking with no human seated, and its
+		/// membership, respawns and bindings are the host's ordered transitions.
+		static bool IsPersistentWorld();
+		/// Whether this peer authors the world's transitions - the host of a synced round, or the sole
+		/// machine when there is no round at all. Never true on a client.
+		static bool IsWorldAuthor();
+		/// The world's durable id, or "" outside a persistent world.
+		static std::string GetWorldId();
+		/// Submits one host-authored world transition. Off a synced round it applies here and now, so
+		/// the persistent preset behaves the same way with no network under it.
+		/// @return Whether the transition was queued or applied.
+		static bool SubmitWorldTransition(const NetGameWorldTransition& transition);
+
 		/// Whether a team has a human player in the synced match config. Local player bindings are
 		/// per-peer in a lockstep match, so sim decisions must resolve team humanity from here.
 		static bool IsLockstepHumanTeam(int team);

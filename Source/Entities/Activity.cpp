@@ -1053,6 +1053,30 @@ int Activity::GetLockstepHumanSlotIndex(int team) const {
 	return ScenarioRunner::GetLockstepHumanSlotIndex(team);
 }
 
+bool Activity::IsPersistentWorld() const {
+	return ScenarioRunner::IsPersistentWorld();
+}
+
+bool Activity::IsWorldAuthor() const {
+	return ScenarioRunner::IsWorldAuthor();
+}
+
+bool Activity::SubmitWorldRespawn(int team, const std::string& className, const std::string& preset, const std::string& module, const Vector& position, int aiMode) {
+	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || className.empty() || preset.empty()) {
+		return false;
+	}
+	NetGameWorldTransition transition;
+	transition.kind = NetGameWorldTransition::Respawn;
+	transition.team = team;
+	transition.posX = position.GetX();
+	transition.posY = position.GetY();
+	transition.aiMode = aiMode;
+	transition.className = className;
+	transition.preset = preset;
+	transition.module = module;
+	return ScenarioRunner::SubmitWorldTransition(transition);
+}
+
 // Every seat of a shared roster answers the control binding the committed frame carries, the owner's own
 // seat included: a seat's owner switches a tick before the wire does, and a script that gates a sim write on
 // the answer would run on one peer only for that window. What this machine drives is GetLocallyControlledActor.

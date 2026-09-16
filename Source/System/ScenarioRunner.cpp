@@ -903,6 +903,35 @@ namespace RTE {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().matchConfig.hostPeerId : 0;
 	}
 
+	bool ScenarioRunner::IsPersistentWorld() {
+		const NetMatchConfig* config = GetLockstepMatchConfig();
+		return config != nullptr && config->persistentWorld;
+	}
+
+	bool ScenarioRunner::IsWorldAuthor() {
+		if (!s_LockstepCoordinator) {
+			return true;
+		}
+		const NetLockstepConfig& config = s_LockstepCoordinator->GetConfig();
+		return config.localPeerId != 0 && config.localPeerId == config.matchConfig.hostPeerId;
+	}
+
+	std::string ScenarioRunner::GetWorldId() {
+		const NetMatchConfig* config = GetLockstepMatchConfig();
+		return config != nullptr ? config->worldId : std::string();
+	}
+
+	bool ScenarioRunner::SubmitWorldTransition(const NetGameWorldTransition& transition) {
+		if (!IsWorldAuthor()) {
+			return false;
+		}
+		NetGameCommand command;
+		command.senderPeerId = GetLockstepHostPeerId();
+		command.payload = transition;
+		EnqueueLocalGameCommand(command);
+		return true;
+	}
+
 	uint8_t ScenarioRunner::ResolveTeamCommandAuthority(int team) {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->ResolveTeamCommandAuthority(team) : 0;
 	}
@@ -1375,7 +1404,8 @@ namespace RTE {
 			g_MovableMan.ReportSpeculationViolation("queueing a wire command for", nullptr);
 			return;
 		}
-		if (NetGameCommandTypeOf(command.payload) != NetGameCommandType::Reseat) {
+		const NetGameCommandType enqueuedType = NetGameCommandTypeOf(command.payload);
+		if (enqueuedType != NetGameCommandType::Reseat && enqueuedType != NetGameCommandType::WorldTransition) {
 			const uint8_t sender = command.senderPeerId != 0 ? command.senderPeerId : GetLockstepLocalPeerId();
 			if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
 				if (!IsLockstepAIOrderAuthorized(sender, *order)) {
