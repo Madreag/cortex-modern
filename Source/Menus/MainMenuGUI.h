@@ -241,8 +241,11 @@ namespace RTE {
 		NetLanDiscovery m_LanBrowser; //!< Collects LAN host beacons while the join screen is up.
 		NetDirectoryClient m_DirectoryBrowser; //!< A browse-only instance: GETs the session list on its poll interval.
 		std::vector<NetDirectoryClient::GameRow> m_GameRows; //!< The merged LAN+NET rows, aligned with the list.
-		std::optional<NetDirectoryLocalIdentity> m_DirectoryIdentity; //!< The local identity NET rows are judged against, built once.
+		std::optional<NetDirectoryLocalIdentity> m_DirectoryIdentity; //!< Ordinary 4/22 identity NET rows are judged against.
+		std::optional<NetDirectoryLocalIdentity> m_DirectoryWorldIdentity; //!< World 5/23 identity for persistent_world rows.
 		bool m_DirectoryIdentityTried = false;
+		bool m_JoinTargetPersistentWorld = false;
+		std::string m_JoinTargetActivity;
 		uint64_t m_LanBrowserNowMs;
 		GUICollectionBox* m_MultiplayerLandingPanel;
 		GUICollectionBox* m_MultiplayerHostPanel;

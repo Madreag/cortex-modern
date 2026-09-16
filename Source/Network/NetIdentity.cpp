@@ -398,6 +398,16 @@ namespace RTE {
 		return HashIdentity(manifest);
 	}
 
+	void NetIdentity::StampOptionsForTarget(NetIdentityBuildOptions& options, bool world) {
+		if (world) {
+			options.matchConfigVersion = NetMatchConfigUtil::c_PersistentWorldVersion;
+			options.lockstepCodecVersion = NetLockstepCodec::c_WorldTransitionVersion;
+		} else {
+			options.matchConfigVersion = NetMatchConfigUtil::c_Version;
+			options.lockstepCodecVersion = NetLockstepCodec::c_Version;
+		}
+	}
+
 	bool NetIdentity::BuildCurrentManifest(NetIdentityManifest& outManifest, std::string* error, NetIdentityBuildOptions options) {
 		const auto started = std::chrono::steady_clock::now();
 
