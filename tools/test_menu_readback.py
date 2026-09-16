@@ -373,6 +373,8 @@ def scripts(case, port, root):
                 "assert_label LabelLobbyMatchMode Grasslands - PvP\n"
                 "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                 "assert_text_fits LabelLobbyPlayersHeader\n"
+                # A seat row elides inside the fixed panel rather than wrap or widen it (UX-42).
+                "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
                 "dump_lobby\ndump_host_options\nwait 600\nexit\n")
         client = (LANDING + "settext TextMultiplayerName Joiner\n"
                   "activate ButtonMultiplayerJoinGame\nwait 10\n"
@@ -386,6 +388,7 @@ def scripts(case, port, root):
                   "assert_label LabelLobbyMatchMode Grasslands - PvP\n"
                   "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                   "assert_text_fits LabelLobbyPlayersHeader\n"
+                  "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
                   "dump_lobby\ndump_host_options\nexit\n")
         return {"host": host, "client": client}, {}
     elif case == "net-options":
