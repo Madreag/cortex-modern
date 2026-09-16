@@ -49,6 +49,97 @@
 
 using namespace RTE;
 
+// Windows-1252 for one Unicode codepoint; 0xA0-0xFF match Latin-1.
+static bool Cp1252FromCodepoint(int codepoint, char& out) {
+	if (codepoint < 0) {
+		return false;
+	}
+	if (codepoint < 0x80 || (codepoint >= 0xA0 && codepoint <= 0xFF)) {
+		out = static_cast<char>(codepoint);
+		return true;
+	}
+	switch (codepoint) {
+		case 0x20AC: out = static_cast<char>(0x80); return true;
+		case 0x201A: out = static_cast<char>(0x82); return true;
+		case 0x0192: out = static_cast<char>(0x83); return true;
+		case 0x201E: out = static_cast<char>(0x84); return true;
+		case 0x2026: out = static_cast<char>(0x85); return true;
+		case 0x2020: out = static_cast<char>(0x86); return true;
+		case 0x2021: out = static_cast<char>(0x87); return true;
+		case 0x02C6: out = static_cast<char>(0x88); return true;
+		case 0x2030: out = static_cast<char>(0x89); return true;
+		case 0x0160: out = static_cast<char>(0x8A); return true;
+		case 0x2039: out = static_cast<char>(0x8B); return true;
+		case 0x0152: out = static_cast<char>(0x8C); return true;
+		case 0x017D: out = static_cast<char>(0x8E); return true;
+		case 0x2018: out = static_cast<char>(0x91); return true;
+		case 0x2019: out = static_cast<char>(0x92); return true;
+		case 0x201C: out = static_cast<char>(0x93); return true;
+		case 0x201D: out = static_cast<char>(0x94); return true;
+		case 0x2022: out = static_cast<char>(0x95); return true;
+		case 0x2013: out = static_cast<char>(0x96); return true;
+		case 0x2014: out = static_cast<char>(0x97); return true;
+		case 0x02DC: out = static_cast<char>(0x98); return true;
+		case 0x2122: out = static_cast<char>(0x99); return true;
+		case 0x0161: out = static_cast<char>(0x9A); return true;
+		case 0x203A: out = static_cast<char>(0x9B); return true;
+		case 0x0153: out = static_cast<char>(0x9C); return true;
+		case 0x017E: out = static_cast<char>(0x9E); return true;
+		case 0x0178: out = static_cast<char>(0x9F); return true;
+		default: return false;
+	}
+}
+
+static int NextUtf8Codepoint(const std::string& text, size_t& index) {
+	const unsigned char lead = static_cast<unsigned char>(text[index]);
+	if (lead < 0x80) {
+		++index;
+		return lead;
+	}
+	size_t need = 0;
+	int codepoint = 0;
+	if ((lead & 0xE0) == 0xC0) {
+		need = 1;
+		codepoint = lead & 0x1F;
+	} else if ((lead & 0xF0) == 0xE0) {
+		need = 2;
+		codepoint = lead & 0x0F;
+	} else if ((lead & 0xF8) == 0xF0) {
+		need = 3;
+		codepoint = lead & 0x07;
+	} else {
+		++index;
+		return -1;
+	}
+	if (index + 1 + need > text.size()) {
+		++index;
+		return -1;
+	}
+	for (size_t trail = 1; trail <= need; ++trail) {
+		const unsigned char byte = static_cast<unsigned char>(text[index + trail]);
+		if ((byte & 0xC0) != 0x80) {
+			++index;
+			return -1;
+		}
+		codepoint = (codepoint << 6) | (byte & 0x3F);
+	}
+	index += 1 + need;
+	return codepoint;
+}
+
+static std::string Utf8ToCp1252(const std::string& utf8) {
+	std::string out;
+	out.reserve(utf8.size());
+	for (size_t index = 0; index < utf8.size();) {
+		char mapped = '?';
+		if (!Cp1252FromCodepoint(NextUtf8Codepoint(utf8, index), mapped)) {
+			mapped = '?';
+		}
+		out.push_back(mapped);
+	}
+	return out;
+}
+
 // The lobby and the network settings page show one saved name; "Player" is only the empty fallback.
 static std::string SavedMultiplayerName() {
 	return g_SettingsMan.GetNetworkDisplayName().empty() ? "Player" : g_SettingsMan.GetNetworkDisplayName();
@@ -392,13 +483,11 @@ void MainMenuGUI::CreateCreditsScreen() {
 
 	m_CreditsTextLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("CreditsLabel"));
 
-	// Ä is 0xC4 and Ö is 0xD6 in the atlas; © uses the title copyright cell.
-	for (char& stringChar: s_CreditsText) {
-		if (stringChar == -42) {
-			stringChar = static_cast<unsigned char>(214);
-		} else if (stringChar == -87) {
-			stringChar = static_cast<unsigned char>(221);
-		}
+	// Credits.h is UTF-8; transcode to cp1252 so the menu Latin-1 atlas draws the letters.
+	static bool s_CreditsAreCp1252 = false;
+	if (!s_CreditsAreCp1252) {
+		s_CreditsText = Utf8ToCp1252(s_CreditsText);
+		s_CreditsAreCp1252 = true;
 	}
 	m_CreditsTextLabel->SetText(s_CreditsText);
 	m_CreditsTextLabel->ResizeHeightToFit();
