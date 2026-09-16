@@ -14,6 +14,7 @@
 #include "PresetMan.h"
 #include "SceneMan.h"
 #include "ScenarioRunner.h"
+#include "LoopbackTransport.h"
 #include "NetMatchConfig.h"
 #include "DataModule.h"
 #include "PostProcessMan.h"
@@ -1398,6 +1399,7 @@ void GameActivity::ClearCursorHighlightDraw(int player) {
 
 void GameActivity::ApplyCursorHighlightDraw(int player) {
 	if (!IsSeatActive(player) || !IsLocalHumanSeat(player)) {
+		ClearCursorHighlightDraw(player);
 		return;
 	}
 	Actor* highlighted = nullptr;
@@ -3931,9 +3933,13 @@ bool GameActivity::RunNetLocalUIRestoreSelfTest() {
 	bool passed = true;
 	const char* reclaimDiagnostic = std::getenv("CC_TEST_NET_RECLAIM_DIAG");
 	if (reclaimDiagnostic && std::strcmp(reclaimDiagnostic, "1") == 0) std::cout << "[net-reclaim] diagnostic_enabled=1 assertions=unchanged collection=unchanged" << std::endl;
-	const auto check = [&](const char* name, bool value) {
+	const auto check = [&](const char* name, bool value, const std::string& got = {}, const std::string& expected = {}) {
 		passed = passed && value;
-		std::cout << "[net-local-ui-selftest] " << (value ? "PASS" : "FAIL") << " " << name << std::endl;
+		std::cout << "[net-local-ui-selftest] " << (value ? "PASS" : "FAIL") << " " << name;
+		if (!value && (!got.empty() || !expected.empty())) {
+			std::cout << " got=" << got << " expected=" << expected;
+		}
+		std::cout << std::endl;
 	};
 	auto& lua = g_LuaMan.GetMasterScriptState();
 	const auto graphRoundTrip = [&](const char* name, const std::string& script) {
@@ -4673,7 +4679,7 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			check("shared_objective_uses_above_head", !fixture->m_Objectives.empty() && fixture->m_Objectives.front().m_ScenePos == head);
 		}
 		{
-			// Update under lockstep leaves the dump; DrawGUI arms the ring; SP and MP dumps match the base.
+			// Update under a live coordinator leaves the dump; DrawGUI arms a drawn ring; SP and MP dumps match.
 			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
 			g_ActivityMan.SwapCheckpointActivity(next);
 			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
@@ -4695,20 +4701,53 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			const auto described = pie->DescribeInteractionState();
 			const bool enabledBefore = pie->IsEnabled();
 			const bool visibleBefore = pie->IsVisible();
-			ScenarioRunner::SetLockstepCoordinator(nullptr);
-			check("lockstep_update_leaves_highlight_undrawn", !pie->HasHighlightDraw());
-			check("lockstep_update_dump_unchanged", pie->PackInteractionState() == packed && pie->DescribeInteractionState() == described);
-			check("lockstep_update_getters_unchanged", pie->IsEnabled() == enabledBefore && pie->IsVisible() == visibleBefore);
-			fixture->ApplyCursorHighlightDraw(0);
-			if (BITMAP* target = g_FrameMan.GetBackBuffer8()) {
-				fixture->DrawGUI(target, Vector(), 0);
+			LoopbackTransport transport;
+			NetLockstepConfig liveConfig;
+			liveConfig.sessionId = 1;
+			liveConfig.localPeerId = 1;
+			liveConfig.peerCount = 1;
+			NetLockstepCoordinator live;
+			std::string liveError;
+			if (!live.StartReplay(transport, liveConfig, &liveError) || !live.IsRunning()) {
+				check("lockstep_live_coordinator", false, liveError, "running");
+			} else {
+				ScenarioRunner::SetLockstepCoordinator(&live);
+				if (g_SceneMan.GetScene()) {
+					fixture->Update();
+				} else {
+					pie->Update();
+				}
+				check("lockstep_update_leaves_highlight_undrawn", !pie->HasHighlightDraw(), pie->HasHighlightDraw() ? "1" : "0", "0");
+				check("lockstep_update_dump_unchanged", pie->PackInteractionState() == packed && pie->DescribeInteractionState() == described,
+					pie->PackInteractionState(), packed);
+				check("lockstep_update_getters_unchanged", pie->IsEnabled() == enabledBefore && pie->IsVisible() == visibleBefore,
+					std::string(pie->IsEnabled() ? "1" : "0") + "/" + (pie->IsVisible() ? "1" : "0"),
+					std::string(enabledBefore ? "1" : "0") + "/" + (visibleBefore ? "1" : "0"));
+				fixture->ApplyCursorHighlightDraw(0);
+				if (BITMAP* target = g_FrameMan.GetBackBuffer8()) {
+					fixture->DrawGUI(target, Vector(), 0);
+				}
+				pie->RenderUpdate();
+				check("drawgui_highlight_ring", pie->HasHighlightDraw() && pie->FrozenBitmapHasDrawnPixel(),
+					pie->HasHighlightDraw() ? (pie->FrozenBitmapHasDrawnPixel() ? "ring" : "flag") : "0", "ring");
+				check("drawgui_dump_unchanged", pie->PackInteractionState() == packed && pie->DescribeInteractionState() == described,
+					pie->PackInteractionState(), packed);
+				check("drawgui_getters_unchanged", pie->IsEnabled() == enabledBefore && pie->IsVisible() == visibleBefore,
+					std::string(pie->IsEnabled() ? "1" : "0") + "/" + (pie->IsVisible() ? "1" : "0"),
+					std::string(enabledBefore ? "1" : "0") + "/" + (visibleBefore ? "1" : "0"));
+				const auto dumpAfterDraw = pie->PackInteractionState();
+				PieMenu mpDump;
+				if (mpDump.Create() >= 0) {
+					mpDump.UnpackInteractionState(packed);
+					mpDump.SetHighlightDrawRadius(pie->GetHighlightDrawRadius());
+					check("highlight_sp_mp_dump_identity", mpDump.PackInteractionState() == dumpAfterDraw && dumpAfterDraw == packed,
+						mpDump.PackInteractionState(), packed);
+				}
+				fixture->m_ViewState[0] = ViewState::Normal;
+				fixture->ClearCursorHighlightDraw(0);
+				check("highlight_clears_when_view_leaves", !pie->HasHighlightDraw(), pie->HasHighlightDraw() ? "1" : "0", "0");
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
 			}
-			check("drawgui_highlight_ring", pie->HasHighlightDraw());
-			check("drawgui_dump_unchanged", pie->PackInteractionState() == packed && pie->DescribeInteractionState() == described);
-			check("drawgui_getters_unchanged", pie->IsEnabled() == enabledBefore && pie->IsVisible() == visibleBefore);
-			fixture->m_ViewState[0] = ViewState::Normal;
-			fixture->ClearCursorHighlightDraw(0);
-			check("highlight_clears_when_view_leaves", !pie->HasHighlightDraw());
 		}
 		{
 			// The returner's banner is the same live one after a slot that arrives empty, exactly like its menu.

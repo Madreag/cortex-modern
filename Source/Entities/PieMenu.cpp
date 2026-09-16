@@ -1,6 +1,7 @@
 #include "PieMenu.h"
 
 #include "System/ScenarioRunner.h"
+#include "LoopbackTransport.h"
 #include "FloatText.h"
 #include "FrameMan.h"
 #include "UInputMan.h"
@@ -21,6 +22,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -483,27 +485,58 @@ bool PieMenu::RunCheckpointSelfTest() {
 	const auto described = menu.DescribeInteractionState();
 	const bool enabledBefore = menu.IsEnabled();
 	const bool visibleBefore = menu.IsVisible();
-	menu.ClearHighlightDraw();
-	ScenarioRunner::SetLockstepCoordinator(nullptr);
-	check("lockstep_update_leaves_highlight_undrawn", !menu.HasHighlightDraw(), menu.HasHighlightDraw() ? "1" : "0", "0");
-	menu.SetHighlightDrawRadius(30);
-	check("highlight_draw_radius", menu.HasHighlightDraw() && menu.GetHighlightDrawRadius() == 30,
-		std::to_string(menu.GetHighlightDrawRadius()), "30");
-	check("highlight_dump_unchanged", menu.SaveRuntimeCheckpoint() == saved, menu.SaveRuntimeCheckpoint(), saved);
-	check("highlight_describe_unchanged", menu.DescribeInteractionState() == described, menu.DescribeInteractionState(), described);
-	check("highlight_getters_unchanged", menu.IsEnabled() == enabledBefore && menu.IsVisible() == visibleBefore,
-		std::string(menu.IsEnabled() ? "1" : "0") + "/" + (menu.IsVisible() ? "1" : "0"),
-		std::string(enabledBefore ? "1" : "0") + "/" + (visibleBefore ? "1" : "0"));
-	const auto dumpAfterDraw = menu.SaveRuntimeCheckpoint();
-	PieMenu mpDump;
-	if (mpDump.Create() >= 0) {
-		mpDump.LoadRuntimeCheckpoint(saved);
-		mpDump.SetHighlightDrawRadius(30);
-		check("highlight_sp_mp_dump_identity", mpDump.SaveRuntimeCheckpoint() == dumpAfterDraw && dumpAfterDraw == saved,
-			mpDump.SaveRuntimeCheckpoint(), saved);
+	LoopbackTransport transport;
+	NetLockstepConfig liveConfig;
+	liveConfig.sessionId = 1;
+	liveConfig.localPeerId = 1;
+	liveConfig.peerCount = 1;
+	NetLockstepCoordinator live;
+	std::string liveError;
+	Controller updateController;
+	if (!live.StartReplay(transport, liveConfig, &liveError) || !live.IsRunning()) {
+		check("lockstep_live_coordinator", false, liveError, "running");
+	} else {
+		PieMenu updateMenu;
+		if (updateMenu.Create() >= 0 && updateMenu.LoadRuntimeCheckpoint(saved)) {
+			updateMenu.SetMenuController(&updateController);
+			updateMenu.m_MenuMode = MenuMode::Normal;
+			updateMenu.m_EnabledState = EnabledState::Disabled;
+			const auto updateDump = updateMenu.SaveRuntimeCheckpoint();
+			const bool updateEnabled = updateMenu.IsEnabled();
+			const bool updateVisible = updateMenu.IsVisible();
+			ScenarioRunner::SetLockstepCoordinator(&live);
+			updateMenu.Update();
+			check("lockstep_update_leaves_highlight_undrawn", !updateMenu.HasHighlightDraw(), updateMenu.HasHighlightDraw() ? "1" : "0", "0");
+			check("lockstep_update_dump_unchanged", updateMenu.SaveRuntimeCheckpoint() == updateDump, updateMenu.SaveRuntimeCheckpoint(), updateDump);
+			check("lockstep_update_getters_unchanged", updateMenu.IsEnabled() == updateEnabled && updateMenu.IsVisible() == updateVisible,
+				std::string(updateMenu.IsEnabled() ? "1" : "0") + "/" + (updateMenu.IsVisible() ? "1" : "0"),
+				std::string(updateEnabled ? "1" : "0") + "/" + (updateVisible ? "1" : "0"));
+		}
+		menu.SetHighlightDrawRadius(30);
+		menu.RenderUpdate();
+		check("highlight_draw_radius", menu.HasHighlightDraw() && menu.GetHighlightDrawRadius() == 30,
+			std::to_string(menu.GetHighlightDrawRadius()), "30");
+		check("highlight_ring_pixel", menu.FrozenBitmapHasDrawnPixel(), menu.FrozenBitmapHasDrawnPixel() ? "1" : "0", "1");
+		check("highlight_dump_unchanged", menu.SaveRuntimeCheckpoint() == saved, menu.SaveRuntimeCheckpoint(), saved);
+		check("highlight_describe_unchanged", menu.DescribeInteractionState() == described, menu.DescribeInteractionState(), described);
+		check("highlight_getters_unchanged", menu.IsEnabled() == enabledBefore && menu.IsVisible() == visibleBefore,
+			std::string(menu.IsEnabled() ? "1" : "0") + "/" + (menu.IsVisible() ? "1" : "0"),
+			std::string(enabledBefore ? "1" : "0") + "/" + (visibleBefore ? "1" : "0"));
+		const auto dumpAfterDraw = menu.SaveRuntimeCheckpoint();
+		PieMenu mpDump;
+		if (mpDump.Create() >= 0) {
+			mpDump.LoadRuntimeCheckpoint(saved);
+			mpDump.SetHighlightDrawRadius(30);
+			mpDump.RenderUpdate();
+			check("highlight_sp_mp_dump_identity", mpDump.SaveRuntimeCheckpoint() == dumpAfterDraw && dumpAfterDraw == saved,
+				mpDump.SaveRuntimeCheckpoint(), saved);
+		}
+		menu.ClearHighlightDraw();
+		menu.RenderUpdate();
+		check("clear_highlight_redraws_freeze", menu.FrozenBitmapHasDrawnPixel(), menu.FrozenBitmapHasDrawnPixel() ? "1" : "0", "1");
+		check("highlight_clears", !menu.HasHighlightDraw(), menu.HasHighlightDraw() ? "1" : "0", "0");
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
 	}
-	menu.ClearHighlightDraw();
-	check("highlight_clears", !menu.HasHighlightDraw(), menu.HasHighlightDraw() ? "1" : "0", "0");
 	const auto packedTimers = menu.PackInteractionState();
 	menu.UnpackInteractionState(packedTimers);
 	check("pie_timer_pack_roundtrip", menu.PackInteractionState() == packedTimers, menu.PackInteractionState(), packedTimers);
@@ -1025,6 +1058,24 @@ void PieMenu::ClearHighlightDraw() {
 	m_HighlightDrawActive = false;
 	m_HighlightWobble = false;
 	m_HighlightDrawRadius = 0;
+	if (m_FrozenForView) {
+		m_FrozenBitmapNeedsRedraw = true;
+	}
+}
+
+bool PieMenu::FrozenBitmapHasDrawnPixel() const {
+	if (!m_FrozenBitmap) {
+		return false;
+	}
+	for (int y = 0; y < m_FrozenBitmap->h; ++y) {
+		for (int x = 0; x < m_FrozenBitmap->w; ++x) {
+			const int pixel = getpixel(m_FrozenBitmap, x, y);
+			if (pixel != ColorKeys::g_MaskColor && pixel != -1) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 int PieMenu::CurrentHighlightRadius() const {

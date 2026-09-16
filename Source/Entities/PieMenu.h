@@ -213,6 +213,7 @@ namespace RTE {
 		void ClearHighlightDraw();
 		bool HasHighlightDraw() const { return m_HighlightDrawActive; }
 		int GetHighlightDrawRadius() const { return m_HighlightDrawRadius; }
+		bool FrozenBitmapHasDrawnPixel() const;
 #pragma endregion
 
 #pragma region PieSlice Handling
