@@ -348,12 +348,21 @@ def assess_cost(red, green, scene, red_census, census):
     ok = ok and p99 is not None and p99 < LIMIT_MS
     ok = ok and delta is not None and delta < LIMIT_MS
     ok = ok and (census == red_census == 240 if scene == '240' else red['exit_code'] == 0)
-    restore = {label: sum(entry.get('restore_ms', 0.0) for entry in row.get('native', []))
-               for label, row in (('red', red), ('green', green))}
+    def restore_total(row):
+        total = 0.0
+        entries = row.get('native') or []
+        if not entries:
+            return None
+        for entry in entries:
+            if 'restore_ms' not in entry or not math.isfinite(entry['restore_ms']):
+                return None
+            total += entry['restore_ms']
+        return total
+    restore = {label: restore_total(row) for label, row in (('red', red), ('green', green))}
     windows = sum(entry.get('windows', 0.0) for entry in native)
     saves = sum(entry.get('saves', 0.0) for entry in native)
     tables = sum(entry.get('tables', 0.0) for entry in native)
-    restore_us = restore['green']*1000.0/windows if windows else None
+    restore_us = restore['green']*1000.0/windows if windows and restore['green'] is not None else None
     if windows > 0 and (saves == 0 or tables == 0 or restore_us is None):
         ok = False
     return dict(scene=scene, red_ms=red['preview_ms'], green_ms=green['preview_ms'], delta_ms=delta,
