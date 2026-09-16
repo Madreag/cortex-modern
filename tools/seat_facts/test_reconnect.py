@@ -27,9 +27,9 @@ class ReconnectOracle(unittest.TestCase):
         """Base tree raised 'controller_input must be physical zero' when the column was omitted."""
         row = view(1)
         del row["controller_input"]
-        self.assertNotIn("controller_input", row, "omitted controller_input is the shared fact")
+        self.assertNotIn("controller_input", row)
         local_view(row, 1, [0, 1])
-        self.assertEqual(physical_input(row), 0, "omitted controller_input is the shared fact")
+        self.assertEqual(physical_input(row), 0)
         missing = view(1)
         del missing["input_player"]
         with self.assertRaisesRegex(ValueError, "input_player must be physical zero"):
@@ -44,7 +44,7 @@ class ReconnectOracle(unittest.TestCase):
         row = view(1)
         row["controller_input"] = None
         local_view(row, 1, [0, 1])
-        self.assertEqual(physical_input(row), 0, "omitted controller_input is the shared fact")
+        self.assertEqual(physical_input(row), 0)
 
     def test_encoder_empty_actor_record_is_not_a_local_control_green(self):
         """Encoder writes null controller_input only with controlled_uid 0 and null seat fields."""
@@ -185,7 +185,7 @@ class DriverDirectory(unittest.TestCase):
         row = coop_row(1)
         del row["controller_input"]
         driver.validate_local_control(row, row)
-        self.assertEqual(physical_input(row), 0, "omitted controller_input is the shared fact")
+        self.assertEqual(physical_input(row), 0)
 
 
 if __name__ == "__main__":
