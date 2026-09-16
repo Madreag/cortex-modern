@@ -19,7 +19,8 @@ SCOPE_ROWS = (
     "scopes: session ban ends with the session; persistent ban survives",
     "scopes: banned identity refused on join, apply and reclaim",
     "scopes: persistence failure refuses Until Removed; unban grants no seat",
-    "scopes: banned identity refused on IP and ICE handshake",
+    "scopes: banned identity refused on the session handshake",
+    "scopes: removed identity refused on a fresh join and application",
 )
 
 
@@ -33,10 +34,10 @@ def main() -> int:
     root = options.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     flags = ["-net-protocol-selftest", "-net-session-selftest"] if options.case == "identity" else ["-net-session-selftest", "-net-reconnect-session-selftest"]
-    name = "net-protocol-selftest" if options.case == "identity" else "net-session-selftest"
     rows = IDENTITY_ROWS if options.case == "identity" else SCOPE_ROWS
     stdout = ""
     last_record = {}
+    suite_ok = True
     for flag in flags:
         run_name = flag.lstrip("-")
         run = make_run(options.repo, [flag], root / run_name, options.timeout)
@@ -44,13 +45,17 @@ def main() -> int:
             last_record = run.start().finish()
         finally:
             run.close()
-        stdout += (root / run_name / "stdout.log").read_text(errors="replace")
-    result = score_selftest(stdout, last_record.get("exit_code"), last_record.get("timed_out"), name)
-    result["suite_pass"] = result["pass"]
+        piece_out = (root / run_name / "stdout.log").read_text(errors="replace")
+        stdout += piece_out
+        piece = score_selftest(piece_out, last_record.get("exit_code"), last_record.get("timed_out"), run_name)
+        if not piece["pass"]:
+            suite_ok = False
+    result = {"pass": suite_ok, "reason": "" if suite_ok else "a tagged make_run failed"}
+    result["suite_pass"] = suite_ok
     result["checks"] = {row: f"PASS {row}" in stdout for row in rows}
     result["exe_sha256"] = last_record.get("exe_sha256")
     result["detector_sha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-    result["pass"] = result["pass"] and all(result["checks"].values())
+    result["pass"] = suite_ok and all(result["checks"].values())
     for row, ok in result["checks"].items():
         print(f"{'PASS' if ok else 'FAIL'} {row}: " + ("present" if ok else "missing"))
     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
