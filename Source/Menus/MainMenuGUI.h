@@ -69,6 +69,8 @@ namespace RTE {
 
 		/// Draws the MainMenuGUI to the screen.
 		void Draw();
+		/// Reopens the browser after playback releases its activity and input stream.
+		void ReturnToReplayBrowser(const std::string& status);
 
 		/// §11: reads the recovery record on the way into the main menu and, when one applies, opens the
 		/// multiplayer screen's landing panel on the offer instead of leaving the player to find it.
@@ -164,6 +166,14 @@ namespace RTE {
 			MultiplayerModerateButton,
 			MultiplayerModerationBackButton,
 			SaveDiagnosticsButton,
+			LastMatchDetailsButton,
+			LastMatchCloseButton,
+			MultiplayerReplaysButton,
+			ReplayPlayButton,
+			ReplayDeleteButton,
+			ReplayBackButton,
+			ReplayDeleteConfirmButton,
+			ReplayDeleteCancelButton,
 			PlayTutorialButton,
 			MetaGameContinueButton,
 			QuitConfirmButton,
@@ -182,7 +192,8 @@ namespace RTE {
 			HostSetup,
 			JoinSetup,
 			Lobby,
-			Moderation
+			Moderation,
+			ReplayBrowser
 		};
 
 		int m_RootBoxMaxWidth; //!< The maximum width the root CollectionBox that holds all this menu's GUI elements. This is to constrain this menu to the primary window's display (left-most) while in multi-display fullscreen, otherwise positioning can get stupid.
@@ -219,6 +230,22 @@ namespace RTE {
 		GUILabel* m_MultiplayerLandingStatusLabel;
 		GUILabel* m_MultiplayerLobbyMatchLabel;
 		GUILabel* m_MultiplayerLobbyMatchModeLabel = nullptr; //!< The header's second row: scene and friendly mode.
+		GUILabel* m_LastMatchSummaryLabel;
+		GUILabel* m_LastMatchDetailsLabel;
+		GUICollectionBox* m_LastMatchDialog;
+		GUICollectionBox* m_ReplayBrowserPanel;
+		GUICollectionBox* m_ReplayDeleteDialog;
+		GUIListBox* m_ReplayList;
+		GUILabel* m_ReplaySelectedLabel;
+		GUILabel* m_ReplayStatusLabel;
+		GUILabel* m_ReplayDeleteLabel;
+		struct ReplayRow {
+			std::string path;
+			std::string text;
+			std::string error;
+		};
+		std::vector<ReplayRow> m_ReplayRows;
+		std::string m_ReplayDeletePath;
 		GUITextBox* m_MultiplayerNameTextBox;
 		GUITextBox* m_MultiplayerHostPortTextBox;
 		GUITextBox* m_MultiplayerHostPlayersTextBox;
@@ -381,6 +408,16 @@ namespace RTE {
 
 		/// Refreshes the multiplayer sub-panels, labels, and button states from the lobby snapshot.
 		void RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot);
+		/// Opens the finished round's summary using the menu's modal overlay.
+		void ShowLastMatchDetails();
+		/// Restricts input to a multiplayer dialog until it closes.
+		void OpenMultiplayerDialog(GUICollectionBox* dialog, const GUICollectionBox* owner);
+		void CloseMultiplayerDialog();
+		/// Enumerates replay headers and preserves the selected filename across refreshes.
+		void RefreshReplayList();
+		void RefreshReplayBrowserControls();
+		void PlaySelectedReplay();
+		void ConfirmReplayDelete();
 		/// Rebuilds §9b's moderation panel from the host's live seat view.
 		void RefreshModerationControls(const NetLobbySnapshot& snapshot);
 		/// The one path a moderation action takes, whether a player clicked it or a gate drove it.

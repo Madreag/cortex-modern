@@ -4,6 +4,7 @@
 #include "ActivityMan.h"
 #include "Constants.h"
 #include "GameActivity.h"
+#include "GameVersion.h"
 #include "FrameMan.h"
 #include "GUIInput.h"
 #include "GnsTransport.h"
@@ -35,13 +36,103 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iomanip>
+#include <iterator>
 #include <optional>
 #include <random>
 #include <string>
+#include <sstream>
 #include <thread>
 #include <utility>
 
+std::string BuildLoopPaceJson();
+
 namespace RTE {
+
+	std::string NetMatchSummary::DurationText() const {
+		const uint64_t seconds = runningTicks / 60;
+		std::ostringstream text;
+		text << std::setfill('0') << std::setw(2) << seconds / 60 << ':' << std::setw(2) << seconds % 60;
+		return text.str();
+	}
+
+	std::string NetMatchSummary::LineText() const {
+		std::string text = "Last match: " + (winnerTeam < 0 ? std::string("draw") : "Team " + std::to_string(winnerTeam + 1) + " wins");
+		text += " | " + DurationText() + " | ";
+		for (size_t i = 0; i < peers.size(); ++i) text += (i ? ", " : "") + peers[i].name;
+		std::replace_if(text.begin(), text.end(), [](unsigned char c) { return c < 32 || c == 127; }, ' ');
+		return text;
+	}
+
+	std::string NetMatchSummary::IdentityText() const {
+		if (identityLine.empty()) return {};
+		static const std::string exeHash = [] {
+			std::ifstream file(System::GetThisExePathAndName(), std::ios::binary | std::ios::ate);
+			const auto size = file.tellg();
+			if (!file || size <= 0) return std::string("unavailable");
+			std::vector<uint8_t> bytes(static_cast<size_t>(size));
+			file.seekg(0, std::ios::beg);
+			if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) return std::string("unavailable");
+			const std::string hash = NetA7Journal::Sha256(bytes.data(), bytes.size());
+			return hash.empty() ? std::string("unavailable") : hash;
+		}();
+		return identityLine + "\nSHA256: " + exeHash + "\nCodec: Controller " + std::to_string(ControllerFrame::c_Version) + " | Lockstep " + std::to_string(NetLockstepCodec::c_Version);
+	}
+
+	std::string NetMatchSummary::DetailsText() const {
+		std::ostringstream text;
+		text << "Result: " << result << "\nWinner: " << (winnerTeam < 0 ? "draw" : "Team " + std::to_string(winnerTeam + 1));
+		text << "\nDuration: " << DurationText() << " (" << runningTicks << " ticks at 60 tps)\n\nPeers";
+		for (const Peer& peer : peers) {
+			text << '\n' << peer.name << " | team " << peer.team + 1 << " | seat " << peer.seat << " | delay " << peer.inputDelayFrames;
+		}
+		text << "\n\nResyncs: " << resyncs << " | Drops: " << drops << " | Reclaims: " << reclaims << " | Substitutions: " << substitutions;
+		const auto pace = nlohmann::json::parse(paceJson, nullptr, false);
+		if (pace.is_object()) {
+			text << std::fixed << std::setprecision(1) << "\nFinal pace: " << pace.value("wall_tps", 0.0) << " tps, "
+			     << pace.value("sim_ms_per_tick", 0.0) << " ms/tick";
+		}
+		text << "\n\n" << IdentityText();
+		return text.str();
+	}
+
+	std::optional<NetMatchSummary> NetMatchService::GetLastMatchSummary() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_LastMatchSummary;
+	}
+
+	void NetMatchService::UpdateSummarySeatsLocked() {
+		for (const auto& [peerId, seat] : m_SeatPresence.GetSeats()) {
+			auto& previous = m_SummarySeats[peerId];
+			const auto away = [](NetSeatPresenceState state) {
+				return state == NetSeatPresenceState::Disconnected || state == NetSeatPresenceState::Reconnecting || state == NetSeatPresenceState::Left;
+			};
+			if (away(seat.state) && !away(previous.state)) ++m_CurrentMatchSummary.drops;
+			if (previous.peerId && seat.holderGeneration > previous.holderGeneration) {
+				++m_CurrentMatchSummary.substitutions;
+			} else if (previous.peerId && !away(seat.state) && (away(previous.state) || seat.incarnation > previous.incarnation)) {
+				++m_CurrentMatchSummary.reclaims;
+			}
+			for (auto& peer : m_CurrentMatchSummary.peers) {
+				if (peer.peerId != peerId) continue;
+				peer.seat = seat.stableSeat;
+				if (!seat.holderName.empty()) peer.name = seat.holderName;
+			}
+			previous = seat;
+		}
+	}
+
+	void NetMatchService::CaptureMatchSummaryLocked(const std::string& result) {
+		// The first terminal result owns this round; Main's Complete paths quit after capturing it.
+		if (m_State != NetMatchServiceState::Running || m_LastMatchSummary || m_CurrentMatchSummary.identityLine.empty()) return;
+		UpdateSummarySeatsLocked();
+		m_CurrentMatchSummary.result = result.empty() ? "Match complete" : result;
+		const auto* activity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+		m_CurrentMatchSummary.winnerTeam = activity ? activity->GetWinnerTeam() : Activity::NoTeam;
+		m_CurrentMatchSummary.runningTicks = ScenarioRunner::GetLockstepAppliedFrame();
+		m_CurrentMatchSummary.paceJson = ::BuildLoopPaceJson();
+		m_LastMatchSummary = m_CurrentMatchSummary;
+	}
 
 	std::string NetIceHostIdentity(const std::string& sessionId) {
 		// Kept in step with GnsDirectorySignalDispatcher::HostIdentity; the selftest asserts they agree.
@@ -354,6 +445,8 @@ static std::string ResyncSaveName() {
 			m_DirectoryRegistered = false;
 			m_WorkerDone = false;
 			m_IsHost = request.host;
+			m_CurrentMatchSummary = {};
+			m_SummarySeats.clear();
 			m_LocalPeerId = request.host ? 1 : 2;
 			m_LocalTeam = request.dedicated ? Activity::NoTeam : (request.host ? 0 : 1);
 			m_Dedicated = request.dedicated;
@@ -889,6 +982,7 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::RecordRosterTransitions(uint64_t observedAtMs) {
+		UpdateSummarySeatsLocked();
 		const uint64_t appliedFrame = ScenarioRunner::GetLockstepAppliedFrame();
 		for (const NetLobbyMember& member: m_LobbySnapshot.members) {
 			const std::string state = NetSeatPresence::StateName(m_SeatPresence.StateOf(member.peerId));
@@ -1086,6 +1180,10 @@ static std::string ResyncSaveName() {
 		if (m_Worker.joinable()) {
 			m_Worker.join();
 		}
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			CaptureMatchSummaryLocked(error);
+		}
 		RetractDirectoryListing();
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
@@ -1181,6 +1279,12 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::Complete(const std::string& reason) {
+		std::string displayReason = reason;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			CaptureMatchSummaryLocked(reason);
+			if (m_LastMatchSummary) displayReason = m_LastMatchSummary->result;
+		}
 		// The recording gets its end marker at the match's end, not at process exit.
 		ScenarioRunner::CloseLockstepReplayRecord();
 		if (ShouldKeepIceDirectoryLease()) {
@@ -1194,15 +1298,18 @@ static std::string ResyncSaveName() {
 			m_Coordinator->Complete(reason);
 		}
 		if (m_State == NetMatchServiceState::Running) {
-			m_StatusText = reason.empty() ? "Match complete" : reason;
+			m_StatusText = displayReason.empty() ? "Match complete" : displayReason;
 			m_ErrorText.clear();
 		}
 	}
 
 	// Terminal clean end; the session objects stay alive for the next Start or quit.
 	void NetMatchService::FinishMatch(const std::string& result) {
+		std::string displayResult = result;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			CaptureMatchSummaryLocked(result);
+			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
 			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
 			DrainPendingSessionEventsLocked(false);
 		}
@@ -1221,14 +1328,17 @@ static std::string ResyncSaveName() {
 			m_State = NetMatchServiceState::Completed;
 			// The rematch lobby this end opens starts waiting for the other peers here.
 			m_CompletedLobbySinceMs = SteadyNowMs();
-			m_StatusText = result.empty() ? "Match complete" : result;
+			m_StatusText = displayResult.empty() ? "Match complete" : displayResult;
 			m_ErrorText.clear();
 		}
 	}
 
 	void NetMatchService::LeaveMatch(const std::string& result) {
+		std::string displayResult = result;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			CaptureMatchSummaryLocked(result);
+			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
 			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
 			m_LeftMatch = true;
 			DrainPendingSessionEventsLocked(false);
@@ -1249,7 +1359,7 @@ static std::string ResyncSaveName() {
 			}
 			if (m_State == NetMatchServiceState::Running) {
 				m_State = NetMatchServiceState::Completed;
-				m_StatusText = result.empty() ? "Left the match" : result;
+				m_StatusText = displayResult.empty() ? "Left the match" : displayResult;
 				m_ErrorText.clear();
 			}
 		}
@@ -1596,6 +1706,23 @@ static std::string ResyncSaveName() {
 			m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
+		}
+		if (!m_PendingResyncState.has_value() || m_CurrentMatchSummary.peers.empty()) {
+			m_LastMatchSummary.reset();
+			m_CurrentMatchSummary = {};
+			m_SummarySeats = m_SeatPresence.GetSeats();
+			const auto& config = m_Coordinator->GetConfig().matchConfig;
+			for (const auto& slot : config.players) {
+				if (slot.cpu) continue;
+				std::string name = slot.displayName;
+				for (const auto& member : m_LobbySnapshot.members) {
+					if (member.peerId == slot.peerId) name = member.displayName;
+				}
+				m_CurrentMatchSummary.peers.push_back({slot.peerId, name, slot.team, static_cast<uint16_t>(slot.peerId - 1), NetMatchConfigUtil::PeerInputDelay(config, slot.peerId)});
+			}
+			m_CurrentMatchSummary.identityLine = "Exe: " + std::filesystem::path(System::GetThisExePathAndName()).filename().string() + " v" + c_GameVersion.str();
+		} else {
+			++m_CurrentMatchSummary.resyncs;
 		}
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
@@ -2336,6 +2463,18 @@ static std::string ResyncSaveName() {
 				 {{"admission", AdmissionJsonFromHost(m_ReconnectHost)},
 				  {"stats", {{"fenced_disconnects", stats.fencedDisconnects}, {"fenced_packets", stats.fencedPackets}}}}},
 			};
+		}
+		if (m_LastMatchSummary) {
+			const auto& summary = *m_LastMatchSummary;
+			json peers = json::array();
+			for (const auto& peer : summary.peers) {
+				peers.push_back({{"name", peer.name}, {"team", peer.team}, {"seat", peer.seat}, {"peer_id", peer.peerId}, {"input_delay", peer.inputDelayFrames}});
+			}
+			report["last_match"] = {{"result", summary.result}, {"winner_team", summary.winnerTeam}, {"running_ticks", summary.runningTicks},
+			    {"duration", summary.DurationText()}, {"peers", peers}, {"resyncs", summary.resyncs}, {"drops", summary.drops},
+			    {"reclaims", summary.reclaims}, {"substitutions", summary.substitutions}, {"pace", json::parse(summary.paceJson)}, {"identity", summary.IdentityText()}};
+		} else {
+			report["last_match"] = nullptr;
 		}
 		// A remote display name rides the roster and is only checked for control characters, so a
 		// strict dump would throw on its first invalid byte.

@@ -394,6 +394,12 @@ static std::unordered_set<uint64_t> s_eventLedgerGlowUIDs;
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
+static bool s_netReplayFromMenu = false;
+static bool s_netReplayReturnPending = false;
+static std::string s_netReplayReturnStatus;
+static float s_netReplayPreviousDeltaTime = 0.0F;
+static bool s_netReplayPreviousFreeRun = false;
+static void CloseNetReplayPlayback();
 bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error);
 bool StageResyncedMatchActivity(std::string* error);
 
@@ -1097,6 +1103,20 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-fake-lag") {
 			GnsTransport::SetSimulatedLagMs(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
+			continue;
+		}
+		if (!lastArg && currentArg == "-feel-render-settings") {
+			if (!FrameMan::SetFeelRenderSettings(argValue[++i])) {
+				std::cerr << "[feel] invalid render settings: expected RenderCapHz = 0 or 60" << std::endl;
+				return false;
+			}
+			continue;
+		}
+		if (!lastArg && currentArg == "-feel-measure") {
+			if (!FrameMan::SetFeelRecordDirectory(argValue[++i])) {
+				std::cerr << "[feel] recording requires CCCP_HEADLESS=1 and a fresh existing output directory" << std::endl;
+				return false;
+			}
 			continue;
 		}
 
@@ -1818,6 +1838,11 @@ void RunMenuLoop() {
 			g_UInputMan.EndFrame();
 			break;
 		}
+		if (s_netReplayReturnPending && g_MenuMan.IsMainMenuInteractive()) {
+			// Apply the playback destination after the menu-entry offers, before drawing.
+			s_netReplayReturnPending = false;
+			g_MenuMan.GetMainMenu()->ReturnToReplayBrowser(s_netReplayReturnStatus);
+		}
 
 		g_ConsoleMan.Update();
 
@@ -1851,6 +1876,14 @@ static std::string BuildNetMatchResultText() {
 		return "Match over";
 	}
 	return winnerTeam == g_NetMatchService.GetLocalTeam() ? "Victory!" : "Defeat";
+}
+
+static std::string NetMatchEndReason(const Activity* activity) {
+	const std::string stopReason = ScenarioRunner::GetLockstepStopReason();
+	if (stopReason.starts_with("Complete:") && stopReason.size() > 9) {
+		return stopReason.substr(9);
+	}
+	return (activity && activity->IsOver()) ? BuildNetMatchResultText() : "The other player left the match";
 }
 
 /// <summary>
@@ -2200,13 +2233,16 @@ static void DrawFrameWithPreviews() {
 	LocalPredictionHudSelfTest::SampleBeforeRender();
 	LocalPrediction::BeginRender();
 	LocalPredictionHudSelfTest::SampleDuringRender();
+	FrameMan::FeelBeginDraw();
 	g_FrameMan.Draw();
 	LocalPredictionHudSelfTest::SampleAfterDraw();
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts();
 	g_WindowMan.DrawPostProcessBuffer();
 	g_MenuMan.DrawLocalPauseMenu();
+	FrameMan::FeelBeforePresent();
 	g_WindowMan.UploadFrame();
+	g_FrameMan.FeelAfterPresent();
 	if (NetMatchScreenshotDue()) {
 		const uint64_t tick = ScenarioRunner::GetLockstepCompletedFrame();
 		const std::string name = "net_match_tick_" + std::to_string(tick) + "_round_" + std::to_string(ScenarioRunner::GetLockstepRoundId());
@@ -3281,7 +3317,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 	if (ScenarioRunner::IsActive()) {
 		std::cerr << "[scenario] controller replay failed: " << error << std::endl;
 		System::SetQuit(true);
-	} else if (!s_netReplayInPath.empty()) {
+	} else if (ScenarioRunner::IsLockstepReplayPlayback()) {
 		// Playback ends when the recording's marker does; every other stop is a distinct, named failure.
 		s_netReplayTicks = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 		using Outcome = ScenarioRunner::LockstepReplayOutcome;
@@ -3296,7 +3332,20 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		}
 		g_ActivityMan.EndActivity();
 		ScenarioRunner::ClearControllerReplayError();
-		System::SetQuit(true);
+		if (s_netReplayFromMenu) {
+			std::cout << "[net-replay] playback " << (outcome == Outcome::Completed ? "finished" : "FAILED")
+			          << ", ticks=" << s_netReplayTicks << " outcome=" << ScenarioRunner::ReplayOutcomeName(outcome)
+			          << " frames=" << ScenarioRunner::GetLockstepReplayFramesConsumed()
+			          << " end_marker=" << (ScenarioRunner::LockstepReplaySawEndMarker() ? 1 : 0) << std::endl;
+			s_netReplayReturnStatus = outcome == Outcome::Completed ? "Playback finished: " + std::to_string(ScenarioRunner::GetLockstepReplayFramesConsumed()) + " ticks"
+			                                                      : "Playback failed: " + error;
+			CloseNetReplayPlayback();
+			g_ActivityMan.SetInActivity(false);
+			s_netReplayReturnPending = true;
+			returnToMenuAfterNetworkEnd = true;
+		} else {
+			System::SetQuit(true);
+		}
 	} else {
 		const uint64_t e2eTickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
 		const uint64_t matchTick = ParseLockstepStopTick(error, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
@@ -3319,8 +3368,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		} else if (error.find("PeerLeft:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 			// The last peer announced its leave, so the match is over rather than broken: it ends the
 			// way a finished one does, which keeps the seats and the admission counters in the report.
-			const Activity* leftActivity = g_ActivityMan.GetActivity();
-			const std::string result = (leftActivity && leftActivity->IsOver()) ? BuildNetMatchResultText() : "The other player left the match";
+			const std::string result = NetMatchEndReason(g_ActivityMan.GetActivity());
 			g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
 			g_NetMatchService.FinishMatch(result);
 			g_ActivityMan.EndActivity();
@@ -3332,10 +3380,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				returnToMenuAfterNetworkEnd = true;
 			}
 		} else if (!s_netMatchServiceE2E && error.find("Complete:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
-			// The peer finished cleanly a beat ahead of us; mirror the clean end, not an error.
-			// If our activity is not over, they left mid-match rather than finishing it.
-			const Activity* skewActivity = g_ActivityMan.GetActivity();
-			const std::string result = (skewActivity && skewActivity->IsOver()) ? BuildNetMatchResultText() : "The other player left the match";
+			// The peer's clean stop ends this match before the local activity catches up.
+			const std::string result = NetMatchEndReason(g_ActivityMan.GetActivity());
 			g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
 			g_NetMatchService.FinishMatch(result);
 			g_ActivityMan.EndActivity();
@@ -3464,13 +3510,21 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 /// @return Whether the game loop may still be entered.
 static bool HandleFailedActivityLaunch() {
 	const std::string reason = "could not launch the activity";
-	std::cerr << "[net-match] " << reason << std::endl;
+	const bool menuReplayFailed = s_netReplayFromMenu;
+	std::cerr << (menuReplayFailed ? "[net-replay] " : "[net-match] ") << reason << std::endl;
 	g_ConsoleMan.PrintString("ERROR: " + reason);
-	if (g_NetMatchService.GetState() != NetMatchServiceState::Idle) {
+	if (!menuReplayFailed && g_NetMatchService.GetState() != NetMatchServiceState::Idle) {
 		g_NetMatchService.ReportRuntimeError(reason);
 	}
 	g_ActivityMan.EndActivity();
 	g_ActivityMan.SetInActivity(false);
+	if (menuReplayFailed) {
+		ScenarioRunner::SetLockstepReplayOutcome(ScenarioRunner::LockstepReplayOutcome::SimFailure);
+		CloseNetReplayPlayback();
+		g_ActivityMan.ClearEndedReplayActivity();
+		s_netReplayReturnStatus = "Playback failed: " + reason;
+		s_netReplayReturnPending = true;
+	}
 	if (s_netMatchServiceE2E) {
 		if (s_netMatchServiceE2EExitCode == 0) {
 			s_netMatchServiceE2EError = reason;
@@ -3583,6 +3637,7 @@ void RunGameLoop() {
 
 	while (!System::IsSetToQuit()) {
 		bool returnToMenuAfterNetworkEnd = false;
+		FrameMan::FeelBeginIteration();
 		updateStartTime = g_TimerMan.GetAbsoluteTime();
 
 		PollSDLEvents();
@@ -4655,9 +4710,23 @@ void RunGameLoop() {
 
 		if (returnToMenuAfterNetworkEnd && !System::IsSetToQuit()) {
 			g_TimerMan.PauseSim(true);
+			if (s_netReplayReturnPending) {
+				g_ActivityMan.ClearEndedReplayActivity();
+			}
 			if (!g_ActivityMan.ActivitySetToRestart()) {
 				g_MenuMan.HandleTransitionIntoMenuLoop();
 				RunMenuLoop();
+			}
+			if (!System::IsSetToQuit()) {
+				g_TimerMan.PauseSim(false);
+				s_pacePrevActive = false;
+				if (g_ActivityMan.ActivitySetToRestart()) {
+					s_netReplayReturnPending = false;
+					s_netReplayReturnStatus.clear();
+					g_LoadingScreen.DrawLoadingSplash();
+					g_WindowMan.UploadFrame();
+					if (!g_ActivityMan.RestartActivity() && !HandleFailedActivityLaunch()) return;
+				}
 			}
 			continue;
 		}
@@ -4669,6 +4738,7 @@ void RunGameLoop() {
 		// Frame rendering must not advance the sim RNG stream or feed the MOID grid — its cadence is
 		// host frame-rate dependent, so redirect cosmetic draws to the render RNG and suspend
 		// MOID-grid registration for the frame.
+		FrameMan::FeelBeforePreview();
 		LocalPrediction::RunPreview();
 
 		{
@@ -4697,7 +4767,9 @@ void RunGameLoop() {
 			s_paceUpdateUs += updateTotalTime;
 			s_paceDrawUs += drawTotalTime;
 		}
+		FrameMan::FeelEndIteration(s_paceSimTicks, s_paceSimUs, s_paceUpdateUs, s_paceDrawUs);
 	}
+	FrameMan::FeelFinish();
 }
 
 /// <summary>
@@ -5177,14 +5249,24 @@ bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std:
 // Drives a recorded match through the standard lockstep apply path: a no-remote coordinator over
 // a dead-end transport, fed tick records by the replay reader. The deterministic sim reproduces
 // the match, so a -tick-hashes trace must equal the recording peer's.
-int RunNetReplayPlayback() {
+bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string* error) {
 	std::string setupError;
-	if (!ScenarioRunner::SetLockstepReplaySource(s_netReplayInPath, &setupError)) {
-		std::cerr << "[net-replay] " << setupError << std::endl;
-		return 1;
+	if (ScenarioRunner::HasLockstepCoordinator()) {
+		if (error) *error = "Leave the current match before playing a replay.";
+		return false;
 	}
+	if (!ScenarioRunner::SetLockstepReplaySource(path, &setupError)) {
+		if (error) *error = setupError;
+		return false;
+	}
+	s_netReplayExitCode = 0;
+	s_netReplayTicks = 0;
+	s_netReplayFromMenu = fromMenu;
+	s_netReplayPreviousDeltaTime = g_TimerMan.GetDeltaTimeSecs();
+	s_netReplayPreviousFreeRun = g_TimerMan.IsFreeRunSim();
+	ScenarioRunner::ClearControllerReplayError();
 	const NetMatchConfig& replayConfig = ScenarioRunner::GetLockstepReplayConfig();
-	std::cout << "[net-replay] playing back " << s_netReplayInPath << ": " << replayConfig.activityPreset
+	std::cout << "[net-replay] playing back " << path << ": " << replayConfig.activityPreset
 	          << ", " << static_cast<int>(replayConfig.peerCount) << " peers" << std::endl;
 
 	static NullNetTransport s_nullTransport;
@@ -5199,8 +5281,9 @@ int RunNetReplayPlayback() {
 	lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(replayConfig.ownershipPolicy);
 	lockstepConfig.matchConfig = replayConfig;
 	if (!s_replayCoordinator.StartReplay(s_nullTransport, lockstepConfig, &setupError)) {
-		std::cerr << "[net-replay] " << setupError << std::endl;
-		return 1;
+		if (error) *error = setupError;
+		CloseNetReplayPlayback();
+		return false;
 	}
 	ScenarioRunner::SetLockstepCoordinator(&s_replayCoordinator);
 
@@ -5213,8 +5296,26 @@ int RunNetReplayPlayback() {
 		}
 	}
 	if (!ConfigureNetMatchActivity(replayConfig, localTeam, &setupError)) {
-		std::cerr << "[net-replay] setup failed: " << setupError << std::endl;
-		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		if (error) *error = (fromMenu ? "" : "setup failed: ") + setupError;
+		CloseNetReplayPlayback();
+		return false;
+	}
+	return true;
+}
+
+static void CloseNetReplayPlayback() {
+	ScenarioRunner::SetLockstepCoordinator(nullptr);
+	ScenarioRunner::CloseLockstepReplayPlayback();
+	ScenarioRunner::ClearControllerReplayError();
+	g_TimerMan.SetDeltaTimeSecs(s_netReplayPreviousDeltaTime);
+	g_TimerMan.SetFreeRunSim(s_netReplayPreviousFreeRun);
+	s_netReplayFromMenu = false;
+}
+
+int RunNetReplayPlayback() {
+	std::string setupError;
+	if (!StartNetReplayPlayback(s_netReplayInPath, false, &setupError)) {
+		std::cerr << "[net-replay] " << setupError << std::endl;
 		return 1;
 	}
 
@@ -5259,7 +5360,7 @@ int RunNetReplayPlayback() {
 	if (const std::string stats = LocalPrediction::DescribeStats(); !stats.empty()) {
 		std::cout << "[localpred] " << stats << std::endl;
 	}
-	ScenarioRunner::SetLockstepCoordinator(nullptr);
+	CloseNetReplayPlayback();
 	return s_netReplayExitCode;
 }
 
