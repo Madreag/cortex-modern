@@ -32,6 +32,7 @@
 #include "GUITextBox.h"
 #include "GUICheckbox.h"
 #include "GUIComboBox.h"
+#include "GUIListPanel.h"
 
 #include "Resources/Credits.h"
 
@@ -107,7 +108,7 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerHostInputDelayTextBox = nullptr;
 	m_MultiplayerHostInputDelayPolicyLabel = nullptr;
 	m_MultiplayerHostPortMapCheckbox = nullptr;
-	m_MultiplayerHostModeButton = nullptr;
+	m_MultiplayerHostModeCombo = nullptr;
 	m_MultiplayerHostActivityCombo = nullptr;
 	m_MultiplayerHostInfoLabel = nullptr;
 	m_MultiplayerHostActivities.clear();
@@ -254,9 +255,16 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostInputDelayTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostInputDelay"));
 	m_MultiplayerHostInputDelayPolicyLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInputDelayPolicy"));
 	m_MultiplayerHostPortMapCheckbox = dynamic_cast<GUICheckbox*>(m_SubMenuScreenGUIControlManager->GetControl("CheckHostPortMap"));
-	m_MultiplayerHostModeButton = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostMode"));
+	m_MultiplayerHostModeCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostMode"));
 	m_MultiplayerHostActivityCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostActivity"));
 	m_MultiplayerHostInfoLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInfo"));
+	if (m_MultiplayerHostModeCombo) {
+		m_MultiplayerHostModeCombo->ClearList();
+		m_MultiplayerHostModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::PvPSkirmish));
+		m_MultiplayerHostModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::CoopPvE));
+		m_MultiplayerHostModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::PvPvE));
+		m_MultiplayerHostModeCombo->SetSelectedIndex(0);
+	}
 	ApplyMultiplayerHostActivity();
 	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinAddress"));
 	m_MultiplayerJoinPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinPort"));
@@ -739,7 +747,8 @@ bool MainMenuGUI::HandleInputEvents() {
 			g_GUISound.SelectionChangeSound()->Play();
 		} else if (guiEvent.GetType() == GUIEvent::Notification && (guiEvent.GetControl() == m_MultiplayerLanGamesList || guiEvent.GetControl() == m_ReplayList)) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
-		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUIComboBox::Closed && guiEvent.GetControl() == m_MultiplayerHostActivityCombo) {
+		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUIComboBox::Closed &&
+		           (guiEvent.GetControl() == m_MultiplayerHostActivityCombo || guiEvent.GetControl() == m_MultiplayerHostModeCombo)) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUICheckbox::Changed && guiEvent.GetControl() == m_MultiplayerHostPortMapCheckbox) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
@@ -864,13 +873,14 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		g_SettingsMan.SetNetworkPortMapEnable(m_MultiplayerHostPortMapCheckbox->GetCheck() == GUICheckbox::Checked);
 		g_SettingsMan.UpdateSettingsFile();
 		g_GUISound.ItemChangeSound()->Play();
-	} else if (guiEventControl == m_MultiplayerHostModeButton) {
-		// Cycle PvP -> Co-op PvE -> PvPvE. PvE modes add a CPU team the host's AI drives.
-		m_MultiplayerHostMode = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? NetMatchMode::CoopPvE : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? NetMatchMode::PvPvE : NetMatchMode::PvPSkirmish);
-		const char* modeText = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? "Mode: PvP" : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? "Mode: Co-op PvE" : "Mode: PvPvE");
-		m_MultiplayerHostModeButton->SetText(modeText);
+	} else if (guiEventControl == m_MultiplayerHostModeCombo) {
+		const int selected = m_MultiplayerHostModeCombo ? m_MultiplayerHostModeCombo->GetSelectedIndex() : -1;
+		static const NetMatchMode modes[] = {NetMatchMode::PvPSkirmish, NetMatchMode::CoopPvE, NetMatchMode::PvPvE};
+		if (selected >= 0 && selected < 3) {
+			m_MultiplayerHostMode = modes[selected];
+		}
 		ApplyMultiplayerHostActivity();
-		g_GUISound.ButtonPressSound()->Play();
+		g_GUISound.ItemChangeSound()->Play();
 	} else if (guiEventControl == m_MultiplayerHostActivityCombo) {
 		// A closed pick-list carries its selection; the index is the request fields' source.
 		const int selected = m_MultiplayerHostActivityCombo ? m_MultiplayerHostActivityCombo->GetSelectedIndex() : -1;
@@ -989,7 +999,37 @@ void MainMenuGUI::RefreshMultiplayerHostActivities() {
 			m_MultiplayerHostActivityCombo->AddItem(preset + (module.empty() ? "" : " - " + module));
 		}
 	}
+	FitHostActivityCombo();
 	ApplyMultiplayerHostActivity();
+}
+
+void MainMenuGUI::FitHostActivityCombo() {
+	if (!m_MultiplayerHostActivityCombo || !m_MultiplayerHostPortTextBox || !m_MultiplayerHostPanel) {
+		return;
+	}
+	const int valueX = m_MultiplayerHostPortTextBox->GetRelXPos();
+	GUIFont* font = m_MultiplayerLobbyPlayerRowFallbackFont;
+	int longest = 0;
+	if (font) {
+		for (int i = 0; i < m_MultiplayerHostActivityCombo->GetCount(); ++i) {
+			if (const GUIListPanel::Item* item = m_MultiplayerHostActivityCombo->GetItem(i)) {
+				longest = std::max(longest, font->CalculateWidth(item->m_Name));
+			}
+		}
+	}
+	constexpr int arrow = 17;
+	const int maxWidth = std::max(80, m_MultiplayerHostPanel->GetWidth() - 12 - valueX);
+	const int width = std::clamp(longest + arrow, 80, maxWidth);
+	m_MultiplayerHostActivityCombo->SetPositionRel(valueX, m_MultiplayerHostActivityCombo->GetRelYPos());
+	if (m_MultiplayerHostActivityCombo->GetWidth() != width) {
+		m_MultiplayerHostActivityCombo->Resize(width, m_MultiplayerHostActivityCombo->GetHeight());
+	}
+	if (m_MultiplayerHostModeCombo) {
+		m_MultiplayerHostModeCombo->SetPositionRel(valueX, m_MultiplayerHostModeCombo->GetRelYPos());
+		if (m_MultiplayerHostModeCombo->GetWidth() != width) {
+			m_MultiplayerHostModeCombo->Resize(width, m_MultiplayerHostModeCombo->GetHeight());
+		}
+	}
 }
 
 void MainMenuGUI::ApplyMultiplayerHostActivity() {
@@ -1004,6 +1044,10 @@ void MainMenuGUI::ApplyMultiplayerHostActivity() {
 			// No preset enumerated yet: the closed combo still names what the request would send.
 			m_MultiplayerHostActivityCombo->SetText(preset + (module.empty() ? "" : " - " + module));
 		}
+	}
+	if (m_MultiplayerHostModeCombo) {
+		const int modeIndex = m_MultiplayerHostMode == NetMatchMode::CoopPvE ? 1 : (m_MultiplayerHostMode == NetMatchMode::PvPvE ? 2 : 0);
+		m_MultiplayerHostModeCombo->SetSelectedIndex(modeIndex);
 	}
 	if (m_MultiplayerHostInfoLabel) {
 		m_MultiplayerHostInfoLabel->SetText(std::string("Grasslands - ") + NetMatchConfigUtil::ModeLabel(m_MultiplayerHostMode));
@@ -1318,6 +1362,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		}
 		int contentWidth = 300;
 		int contentHeight = 250;
+		if (m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup && m_MultiplayerHostPanel) {
+			contentHeight = m_MultiplayerHostPanel->GetHeight();
+		}
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
 			// FontLarge's atlas has a few width-only blank cells (e.g. 0xDF); FontSmall's ink draws those bytes.
 			m_MultiplayerLandingStatusLabel->EnsureDrawableTextFont("FontSmall.png");
@@ -1406,6 +1453,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	}
 	static std::string s_shareAddress;
 	static bool s_shareResolved = false;
+	const int contentWidth = 300;
+	const int rowBoxWidth = contentWidth - 24;
+	bool addressOnOwnRow = false;
 	// The host's join and ready-up hints belong to the lobby it opened itself; a lobby that follows
 	// a played match already carries its own line - the result and the rematch offer - like the client's.
 	if (snapshot.isHost && snapshot.inLobby && !snapshot.remoteReady && !snapshot.playedAMatch) {
@@ -1420,9 +1470,23 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 				s_shareAddress = NetLanDiscovery::GetPrimaryLocalAddress();
 				s_shareResolved = true;
 			}
-			m_MultiplayerStatusLabel->SetText(s_shareAddress.empty()
-			                                      ? "Waiting for a player to join..."
-			                                      : "Waiting for a player to join... share " + s_shareAddress + ":" + m_MultiplayerHostPortTextBox->GetText());
+			if (s_shareAddress.empty()) {
+				m_MultiplayerStatusLabel->SetText("Waiting for a player to join...");
+			} else {
+				const std::string address = s_shareAddress + ":" + m_MultiplayerHostPortTextBox->GetText();
+				std::string prose = "Waiting for a player to join... share";
+				m_MultiplayerStatusLabel->EnsureDrawableTextFont("FontSmall.png");
+				if (GUIFont* font = m_MultiplayerLobbyPlayerRowFallbackFont) {
+					if (font->CalculateWidth(prose, m_MultiplayerLobbyPlayerRowFont) > rowBoxWidth) {
+						while (!prose.empty() && font->CalculateWidth(prose + "...", m_MultiplayerLobbyPlayerRowFont) > rowBoxWidth) {
+							prose.pop_back();
+						}
+						prose += "...";
+					}
+				}
+				m_MultiplayerStatusLabel->SetText(prose + "\n" + address);
+				addressOnOwnRow = true;
+			}
 		} else {
 			s_shareResolved = false;
 			if (connectedCount < snapshot.members.size()) {
@@ -1437,9 +1501,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	}
 	// The lobby panel is one width on every peer: a longer row or status elides inside its box
 	// rather than widening the panel, so host and client land on the same rectangle.
-	const int contentWidth = 300;
-	const int rowBoxWidth = contentWidth - 24;
-	if (m_MultiplayerLobbyPlayerRowFont) {
+	if (!addressOnOwnRow && m_MultiplayerLobbyPlayerRowFont) {
 		std::string statusText = m_MultiplayerStatusLabel->GetText();
 		while (!statusText.empty() &&
 		       m_MultiplayerLobbyPlayerRowFont->CalculateWidth(statusText + "...", m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
@@ -1449,8 +1511,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			m_MultiplayerStatusLabel->SetText(statusText + "...");
 		}
 	}
-	// The status line can wrap; reserve its real height and let everything below slide with it.
-	const int statusHeight = std::max(16, m_MultiplayerStatusLabel->GetTextHeight() + 4);
+	// A share address takes its own 16 px row so the host:port is never elided.
+	const int statusHeight = addressOnOwnRow ? 32 : std::max(16, m_MultiplayerStatusLabel->GetTextHeight() + 4);
 	if (m_MultiplayerStatusLabel->GetHeight() != statusHeight) {
 		m_MultiplayerStatusLabel->Resize(m_MultiplayerStatusLabel->GetWidth(), statusHeight);
 	}
@@ -1595,11 +1657,18 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	FitMultiplayerScreen(contentWidth, screenHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55, 208 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55, 208 + extraHeight);
-	// The Leave/Seats pair centres on the panel the way Start does; the gap between them holds parity.
-	const int leaveWidth = m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->GetWidth();
-	const int seatsWidth = m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->GetWidth();
-	const int pairLeft = (contentWidth - leaveWidth - 2 - seatsWidth) / 2;
-	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(pairLeft, 236 + extraHeight);
+	// Leave 100 + Seats 82 + 8 matches Start Match's 190: Leave keeps the wider half as the exit.
+	GUIButton* leave = m_MainMenuButtons[MenuButton::MultiplayerLeaveButton];
+	GUIButton* seats = m_MainMenuButtons[MenuButton::MultiplayerModerateButton];
+	constexpr int pairGap = 8;
+	if (leave->GetWidth() != 100) {
+		leave->Resize(100, leave->GetHeight());
+	}
+	if (seats->GetWidth() != 82) {
+		seats->Resize(82, seats->GetHeight());
+	}
+	const int pairLeft = (contentWidth - leave->GetWidth() - pairGap - seats->GetWidth()) / 2;
+	leave->SetPositionRel(pairLeft, 236 + extraHeight);
 	LayoutMultiplayerFooter(contentWidth, contentHeight);
 
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
@@ -1609,7 +1678,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
 	// §9b: moderation is a match feature - a lobby seat whose holder leaves goes straight back in the pool.
-	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(contentWidth - pairLeft - seatsWidth, 236 + extraHeight);
+	seats->SetPositionRel(pairLeft + leave->GetWidth() + pairGap, 236 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetVisible(snapshot.isHost);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetEnabled(snapshot.isHost && snapshot.running);
 }
