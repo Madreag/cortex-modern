@@ -141,6 +141,22 @@ namespace RTE {
 		return nullptr;
 	}
 
+	NetReconnectHost::SeatState* NetReconnectHost::FindFreeWorldSeat() {
+		for (SeatState& state : m_Seats) {
+			// The host's own seat is never offered; a dropped holder's seat is still theirs to reclaim.
+			if (state.seat.cpu || state.seat.local || state.committed || state.closed || state.dropped) {
+				continue;
+			}
+			const bool provisional = std::any_of(m_Provisionals.begin(), m_Provisionals.end(), [&state](const Provisional& pending) {
+				return pending.stableSeat == state.seat.stableSeat;
+			});
+			if (!provisional) {
+				return &state;
+			}
+		}
+		return nullptr;
+	}
+
 	NetReconnectHost::Provisional* NetReconnectHost::FindProvisionalByTxId(const NetAuthBytes16& txId) {
 		const auto found = std::find_if(m_Provisionals.begin(), m_Provisionals.end(), [&txId](const Provisional& pending) {
 			return pending.txId == txId;
@@ -330,7 +346,7 @@ namespace RTE {
 			Send(connection, NetJoinRejected{NetRejectReason::HostNotAccepting, "reconnect auth is unavailable", "reconnect_auth", "", ""});
 			return;
 		}
-		if (m_LiveMatch) {
+		if (m_LiveMatch && !m_PersistentWorld) {
 			// Phase A: a claimant without a ticket cannot prove anything, so a live match refuses it.
 			// The refusal names the reason so the joiner can offer to apply for a seat instead; it
 			// rides the same release delay every denial does, and a NewJoin only ever reaches this
@@ -345,7 +361,8 @@ namespace RTE {
 			Send(connection, NetJoinRejected{NetRejectReason::SessionFull, "session is full", "provisional_seats", std::to_string(c_MaxProvisionalSeats), std::to_string(m_Provisionals.size())});
 			return;
 		}
-		SeatState* seat = FindFreeNeverHeldSeat();
+		// A world's slot comes back when its holder leaves cleanly; a match seat is spent once held.
+		SeatState* seat = m_PersistentWorld ? FindFreeWorldSeat() : FindFreeNeverHeldSeat();
 		if (seat == nullptr) {
 			++m_Stats.provisionalSeatsRefused;
 			Send(connection, NetJoinRejected{NetRejectReason::SessionFull, "session is full", "seats", "", ""});
@@ -610,7 +627,9 @@ namespace RTE {
 			if (m_Registry != nullptr) {
 				m_Registry->RevokeSeat(message.stableSeat);
 			}
-			seat->closed = true;
+			// A world's slot reopens for the next player; a match seat closes with the round. Either
+			// way the leaver's credential is revoked and the generation moves, so it cannot come back.
+			seat->closed = !m_PersistentWorld;
 			seat->committed = false;
 			seat->activeConnection = c_InvalidNetPeerId;
 			seat->dropped = false;

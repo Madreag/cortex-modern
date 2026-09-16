@@ -271,6 +271,10 @@ namespace RTE {
 		/// Live match: a ticketless join is denied outright in Phase A; in a lobby it may fill a
 		/// never-held seat.
 		void SetLiveMatch(bool live) { m_LiveMatch = live; if (live) m_MatchEnded = false; }
+		/// A persistent world admits a fresh, ticketless joiner into a LIVE round: its seats are the
+		/// world's gameplay slots, freed by a clean leave under the next generation, never "used up".
+		void SetPersistentWorld(bool persistent) { m_PersistentWorld = persistent; }
+		bool IsPersistentWorld() const { return m_PersistentWorld; }
 		/// Retains credentials between rounds without carrying world ownership into the lobby.
 		void SetMatchEnded();
 		bool IsLiveMatch() const { return m_LiveMatch; }
@@ -448,6 +452,9 @@ namespace RTE {
 		SeatState* FindSeat(uint16_t stableSeat);
 		const SeatState* FindSeat(uint16_t stableSeat) const;
 		SeatState* FindFreeNeverHeldSeat();
+		/// A world's free gameplay slot: not the host's, not committed, not closed and not already being
+		/// offered. Unlike a match seat it may have been held before - a clean leave gives it back.
+		SeatState* FindFreeWorldSeat();
 		Provisional* FindProvisionalByTxId(const NetAuthBytes16& txId);
 		bool BindIncarnation(SeatState& seat, NetPeerId connection);
 		void ReleaseProvisional(uint16_t stableSeat);
@@ -491,6 +498,7 @@ namespace RTE {
 		NetMatchMode m_Mode = NetMatchMode::PvPSkirmish;
 		uint64_t m_NowMs = 0; //!< The plane's own clock, so a drop can be stamped without one being passed in.
 		bool m_LiveMatch = false;
+		bool m_PersistentWorld = false;
 		bool m_MatchEnded = false;
 		std::vector<NetH4LedgerActor> (*m_DropOwnershipSource)(void*) = nullptr;
 		void* m_DropOwnershipContext = nullptr;
