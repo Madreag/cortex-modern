@@ -2398,7 +2398,7 @@ void BuyMenuGUI::AddPresetsToItemList() {
 }
 
 void BuyMenuGUI::UpdateTotalCostLabel(int whichTeam) {
-	std::string display = "Cost: " + RoundFloatToPrecision(GetTotalOrderCost(), 0, 2) + "/" + RoundFloatToPrecision(g_ActivityMan.GetActivity()->GetTeamFunds(whichTeam), 0);
+	std::string display = "Cost: " + RoundFloatToPrecision(GetTotalOrderCost(), 0, 2) + "/" + RoundFloatToPrecision(g_ActivityMan.GetActivity()->GetTeamFundsForPresentation(whichTeam, m_pController->GetPlayer()), 0);
 	m_pCostLabel->SetText(display);
 }
 
@@ -2436,6 +2436,32 @@ void BuyMenuGUI::UpdateTotalPassengersLabel(const ACraft* pCraft, GUILabel* pLab
 	}
 
 	pLabel->SetText(display);
+}
+
+bool BuyMenuGUI::WouldPurchaseConfirm(float& costOut) {
+	if (IsInert() || m_MenuEnabled != ENABLED || !m_pSelectedCraft || !m_pBuyButton) {
+		return false;
+	}
+	int mouseX = 0;
+	int mouseY = 0;
+	m_pGUIInput->GetMousePosition(&mouseX, &mouseY);
+	if (!m_pBuyButton->PointInside(mouseX, mouseY)) {
+		return false;
+	}
+	const float cost = GetTotalOrderCost();
+	if (cost > g_ActivityMan.GetActivity()->GetTeamFunds(m_pController->GetTeam())) {
+		return false;
+	}
+	if (const ACraft* pCraft = dynamic_cast<const ACraft*>(m_pSelectedCraft)) {
+		if (m_EnforceMaxMassConstraint && pCraft->GetMaxInventoryMass() >= 0 && GetTotalOrderMass() > pCraft->GetMaxInventoryMass()) {
+			return false;
+		}
+		if (m_EnforceMaxPassengersConstraint && pCraft->GetMaxPassengers() >= 0 && GetTotalOrderPassengers() > pCraft->GetMaxPassengers()) {
+			return false;
+		}
+	}
+	costOut = cost;
+	return true;
 }
 
 void BuyMenuGUI::TryPurchase() {

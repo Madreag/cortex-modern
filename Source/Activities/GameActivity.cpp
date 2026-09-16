@@ -689,6 +689,8 @@ bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor*
 		buyOrder.orderedByPlayer = static_cast<int8_t>(player);
 		buyOrder.multiOrderYOffset = multiOrderYOffset;
 		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, buyOrder});
+		const uint64_t commitTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + ScenarioRunner::GetLockstepLocalInputDelay();
+		NotePreviewedPurchase(player, team, totalCost, commitTick);
 		std::cout << "[net-match] buy order issued: team " << team << " cost " << totalCost << " items " << buyOrder.cargo.size() << std::endl;
 
 		// The confirm ding plays when the order applies through QueuePurchaseDelivery.
@@ -791,8 +793,8 @@ bool GameActivity::QueuePurchaseDelivery(ACraft* pDeliveryCraft, const PurchaseO
 	// Add the new Delivery to the queue
 	m_Deliveries[order.team].push_back(newDelivery);
 
-	// Deduct cost from team's funds
 	m_TeamFunds[order.team] -= order.totalCost;
+	AdoptPreviewedPurchase(order.team, order.totalCost);
 
 	// Go 'ding!', but only if player is human, or it may be confusing
 	if (order.orderedByPlayer >= Players::PlayerOne && order.orderedByPlayer < Players::MaxPlayerCount && IsLocalHumanSeat(order.orderedByPlayer))
@@ -2271,6 +2273,7 @@ void GameActivity::Update() {
 
 			// Player canceled the order while selecting LZ - can't be done in pregame
 			if (m_PlayerController[player].IsState(PRESS_SECONDARY) && m_ActivityState != ActivityState::PreGame) {
+				ClearPresentationView(player);
 				// Switch back to normal view
 				m_ViewState[player] = ViewState::Normal;
 				// Play err sound to indicate cancellation
@@ -2310,6 +2313,7 @@ void GameActivity::Update() {
 					m_LandingZone[player].m_Y = g_SceneMan.FindAltitude(m_LandingZone[player], g_SceneMan.GetSceneHeight(), 10, true) + lzOffsetY;
 
 					if (m_pBuyGUI[player]->GetTotalOrderCost() > GetTeamFunds(team)) {
+						ClearPresentationView(player);
 						g_GUISound.UserErrorSound()->Play(player);
 						m_FundsChanged[team] = true;
 						if (!g_MovableMan.GetNextTeamActor(team)) {
@@ -2453,6 +2457,7 @@ void GameActivity::Update() {
 
 		// Start LZ picking mode if a purchase was made
 		if (m_pBuyGUI[player]->PurchaseMade()) {
+			ConfirmPreviewedPurchase(player, team, m_pBuyGUI[player]->GetTotalOrderCost());
 			// Store the delivery's own width; the window clamp belongs to the draw, since this is checkpointed state.
 			m_LZCursorWidth[player] = m_pBuyGUI[player]->GetDeliveryWidth();
 			m_pBuyGUI[player]->SetEnabled(false);
@@ -2817,7 +2822,7 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 	if (pIcon)
 		draw_sprite(pTargetBitmap, pIcon->GetBitmaps8()[0], MAX(2, g_CameraMan.GetScreenOcclusion(which).m_X + 2), 2);
 	// Gold
-	std::snprintf(str, sizeof(str), "%c Funds: %.10g oz", TeamFundsChanged(which) ? -57 : -58, std::floor(GetTeamFunds(m_Team[PoS])));
+	std::snprintf(str, sizeof(str), "%c Funds: %.10g oz", TeamFundsChanged(which) ? -57 : -58, std::floor(GetTeamFundsForPresentation(m_Team[PoS], PoS)));
 	g_FrameMan.GetLargeFont()->DrawAligned(&pBitmapInt, MAX(16, g_CameraMan.GetScreenOcclusion(which).m_X + 16), yTextPos, str, GUIFont::Left);
 	/* Not applicable anymore to the 4-team games
 	    // Body losses

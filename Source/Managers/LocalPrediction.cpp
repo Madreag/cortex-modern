@@ -307,6 +307,7 @@ namespace RTE {
 		}
 		terrain.Restore();
 		activity->RestoreRollbackState(activityState);
+		activity->FillPresentationFromPreview(static_cast<uint64_t>(simCount) + static_cast<uint64_t>(depth));
 		g_SimRNG.SetEngineState(rngState);
 		g_SimRNG.SetDrawCount(rngDraws);
 		g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);

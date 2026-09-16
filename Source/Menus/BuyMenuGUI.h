@@ -133,6 +133,9 @@ namespace RTE {
 		/// @return Wheter the BUY button was pressed or not during the last update.
 		bool PurchaseMade() const { return m_PurchaseMade; }
 
+		/// True when a confirm press now would pass TryPurchase. Reads only.
+		bool WouldPurchaseConfirm(float& costOut);
+
 		/// Gets the width of the current delivery craft.
 		/// @return The width of the delivery craft, in pixels.
 		int GetDeliveryWidth() const { return m_DeliveryWidth; }
