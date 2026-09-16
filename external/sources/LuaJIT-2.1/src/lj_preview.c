@@ -109,6 +109,47 @@ static int preview_value(LJPreview *p, cTValue *v)
   return !tvisgcv(v) || preview_object(p, gcV(v));
 }
 
+static void preview_sample(LJPreview *p, double ms)
+{
+  global_State *g;
+  if (p->nsamples == p->samplescap) {
+    size_t cap;
+    double *samples;
+    if (p->samplescap >= 65536) return;  /* p99 covers the first 64K windows of a timed state. */
+    cap = p->samplescap ? p->samplescap*2 : 1024;
+    if (cap > 65536) cap = 65536;
+    g = p->g;
+    samples = (double *)g->allocf(g->allocd, p->samples, p->samplescap*sizeof(double), cap*sizeof(double));
+    if (!samples) return;
+    p->samples = samples;
+    p->samplescap = cap;
+  }
+  p->samples[p->nsamples++] = ms;
+}
+
+static int preview_by_ms(const void *a, const void *b)
+{
+  double x = *(const double *)a, y = *(const double *)b;
+  return (x > y) - (x < y);
+}
+
+static double preview_p99(LJPreview *p)
+{
+  global_State *g = p->g;
+  double *sorted;
+  double result;
+  size_t at;
+  if (!p->nsamples) return 0.0;
+  sorted = (double *)g->allocf(g->allocd, NULL, 0, p->nsamples*sizeof(double));
+  if (!sorted) return 0.0;
+  memcpy(sorted, p->samples, p->nsamples*sizeof(double));
+  qsort(sorted, p->nsamples, sizeof(double), preview_by_ms);
+  at = (p->nsamples*99 + 99)/100 - 1;  /* ceil(0.99*n)-1: the 99th percentile rank. */
+  result = sorted[at];
+  g->allocf(g->allocd, sorted, p->nsamples*sizeof(double), 0);
+  return result;
+}
+
 static void preview_disarm(LJPreview *p)
 {
   size_t i;
@@ -372,6 +413,7 @@ LUA_API size_t luaJIT_preview_end(lua_State *L)
     p->stats.restore_ms += elapsed;
     if (p->window_ms > p->stats.max_ms) p->stats.max_ms = p->window_ms;
     p->stats.windows++;
+    preview_sample(p, p->window_ms);
   }
   return changes;
 }
@@ -381,6 +423,7 @@ LUA_API int luaJIT_preview_stats(lua_State *L, luaJIT_PreviewStats *stats)
   LJPreview *p = G(L)->preview;
   if (!p || !p->timed || !p->stats.windows) return 0;
   *stats = p->stats;
+  stats->p99_ms = preview_p99(p);
   return 1;
 }
 
@@ -419,6 +462,7 @@ void lj_preview_free(global_State *g)
   if (p->tables) g->allocf(g->allocd, p->tables, p->tablescap*sizeof(LJPreviewTable), 0);
   if (p->objects) g->allocf(g->allocd, p->objects, p->objectscap*sizeof(GCobj *), 0);
   if (p->seen) g->allocf(g->allocd, p->seen, p->seencap*sizeof(GCobj *), 0);
+  if (p->samples) g->allocf(g->allocd, p->samples, p->samplescap*sizeof(double), 0);
   g->allocf(g->allocd, p, sizeof(LJPreview), 0);
   g->preview = NULL;
 }
