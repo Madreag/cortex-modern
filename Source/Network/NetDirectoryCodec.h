@@ -18,6 +18,8 @@ namespace RTE {
 		inline constexpr size_t c_MaxBodyBytes = 128 * 1024;  // MAX_BODY
 		inline constexpr size_t c_MaxPayloadB64Chars = 87384; // 64 KiB decoded payload, base64 on the wire
 		inline constexpr int64_t c_MaxIntField = 1000000000;  // server bound on count/version fields
+		inline constexpr int64_t c_MinWorldBoot = 1;
+		inline constexpr int64_t c_MaxWorldBoot = 1000000000;
 		inline constexpr int64_t c_MinListenPort = 1;
 		inline constexpr int64_t c_MaxListenPort = 65535;
 	}

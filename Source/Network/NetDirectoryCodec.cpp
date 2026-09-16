@@ -223,7 +223,7 @@ namespace RTE {
 			if (obj.contains("world_id") && !ReadStr(obj, "world_id", out.worldId, reason)) {
 				return false;
 			}
-			if (obj.contains("world_boot") && !ReadInt(obj, "world_boot", 0, NetDirectoryLimits::c_MaxIntField, out.worldBoot, reason)) {
+			if (obj.contains("world_boot") && !ReadInt(obj, "world_boot", NetDirectoryLimits::c_MinWorldBoot, NetDirectoryLimits::c_MaxWorldBoot, out.worldBoot, reason)) {
 				return false;
 			}
 			if (obj.contains("resume_session_id") && !ReadStr(obj, "resume_session_id", out.resumeSessionId, reason)) {
