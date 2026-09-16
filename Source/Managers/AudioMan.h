@@ -11,6 +11,7 @@
 #include "AudioCheckpoint.h"
 
 #include "fmod/fmod.hpp"
+#include <atomic>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -498,23 +499,66 @@ namespace RTE {
 
 		// Voice identities belong to the engine. Backend channel numbers never enter a checkpoint.
 		struct PlayingVoice {
-			FMOD::Channel* channel = nullptr;
+			std::atomic<FMOD::Channel*> channel{nullptr};
 			SoundContainer* owner = nullptr;
 			std::string soundPath;
 			float minimumAudibleDistance = 0;
 			SoundExecutionDomain domain = SoundExecutionDomain::Presentation;
 			bool predicted = false; //!< Started by a preview and not yet adopted, so it belongs to no checkpoint.
 			bool awaitingSample = false; //!< Held until the referenced sample reports ready.
-			bool hasLifetime = false; //!< Presence and playing follow this, not the mixer thread.
+			bool hasLifetime = false; //!< Whether sim-time progress is bound.
 			LogicalSoundVoice lifetime;
 			long long playTicks = 0;
 			int priority = 0;
 			AudioCheckpoint::Control control;
 			bool hasArchive = false;
+
+			PlayingVoice() = default;
+			PlayingVoice(FMOD::Channel* ch, SoundContainer* o, std::string path, float minDist, SoundExecutionDomain d = SoundExecutionDomain::Presentation, bool pred = false)
+				: owner(o), soundPath(std::move(path)), minimumAudibleDistance(minDist), domain(d), predicted(pred) {
+				channel.store(ch, std::memory_order_relaxed);
+			}
+			PlayingVoice(const PlayingVoice& other) { *this = other; }
+			PlayingVoice(PlayingVoice&& other) noexcept { *this = other; }
+			PlayingVoice& operator=(const PlayingVoice& other) {
+				if (this == &other) return *this;
+				channel.store(other.channel.load(std::memory_order_relaxed), std::memory_order_relaxed);
+				owner = other.owner;
+				soundPath = other.soundPath;
+				minimumAudibleDistance = other.minimumAudibleDistance;
+				domain = other.domain;
+				predicted = other.predicted;
+				awaitingSample = other.awaitingSample;
+				hasLifetime = other.hasLifetime;
+				lifetime = other.lifetime;
+				playTicks = other.playTicks;
+				priority = other.priority;
+				control = other.control;
+				hasArchive = other.hasArchive;
+				return *this;
+			}
+			PlayingVoice& operator=(PlayingVoice&& other) noexcept {
+				if (this == &other) return *this;
+				channel.store(other.channel.exchange(nullptr, std::memory_order_relaxed), std::memory_order_relaxed);
+				owner = other.owner;
+				soundPath = std::move(other.soundPath);
+				minimumAudibleDistance = other.minimumAudibleDistance;
+				domain = other.domain;
+				predicted = other.predicted;
+				awaitingSample = other.awaitingSample;
+				hasLifetime = other.hasLifetime;
+				lifetime = other.lifetime;
+				playTicks = other.playTicks;
+				priority = other.priority;
+				control = std::move(other.control);
+				hasArchive = other.hasArchive;
+				return *this;
+			}
+			FMOD::Channel* Channel() const { return channel.load(std::memory_order_acquire); }
+			void SetChannel(FMOD::Channel* value) { channel.store(value, std::memory_order_release); }
 		};
 		std::map<int, PlayingVoice> m_PlayingVoices;
 		std::unordered_map<int, int> m_BackendVoiceIdentities;
-		mutable std::recursive_mutex m_VoiceChannelMutex;
 		int m_NextVoiceIdentity = 0;
 		// A Lua GC finalizer frees sound containers on whichever pool thread collects its state, and several states collect at once, so the registry group down to m_NextSoundContainerIdentity is locked.
 		mutable std::recursive_mutex m_CheckpointRegistryMutex;
@@ -561,6 +605,7 @@ namespace RTE {
 		void ReleaseVoiceChannel(int identity);
 		void ReleaseEndedChannel(FMOD::Channel* channel);
 		void StoreVoiceArchive(PlayingVoice& voice);
+		void RefreshStoredVoiceControl(PlayingVoice& voice);
 		void BindVoiceLifetime(PlayingVoice& voice, unsigned sampleFrames, float sampleRate, unsigned loopStart, unsigned loopEnd, float pitch, int loops, double position, bool paused);
 		void FoldVoiceLifetime(PlayingVoice& voice);
 		bool VoiceSimLive(const PlayingVoice& voice) const;
