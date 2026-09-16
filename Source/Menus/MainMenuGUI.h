@@ -185,7 +185,6 @@ namespace RTE {
 		};
 
 		int m_RootBoxMaxWidth; //!< The maximum width the root CollectionBox that holds all this menu's GUI elements. This is to constrain this menu to the primary window's display (left-most) while in multi-display fullscreen, otherwise positioning can get stupid.
-		int m_MultiplayerScreenBaselineY; //!< The MultiplayerScreen's ordinary Y, so grown layouts return to it without drift.
 
 		std::unique_ptr<GUIControlManager> m_MainMenuScreenGUIControlManager; //!< The GUIControlManager which owns all the GUIControls of the MainMenuGUI main screen. Alternative to changing skins at runtime which is expensive, since the main screen now has a unique skin.
 		std::unique_ptr<GUIControlManager> m_SubMenuScreenGUIControlManager; //!< The GUIControlManager which owns all the GUIControls of the MainMenuGUI sub-menus.
@@ -393,7 +392,7 @@ namespace RTE {
 
 		/// Resizes a multiplayer sub-panel's width: the diagnostic label keeps its 12px side margins and every other child keeps its center offset.
 		void FitMultiplayerPanelWidth(GUICollectionBox* panel, GUILabel* diagnosticLabel, int width, const std::vector<GUILabel*>& fillLabels = {});
-		/// Resizes the MultiplayerScreen and keeps it centered, moving up from its baseline Y only when the height no longer fits the viewport.
+		/// Resizes the MultiplayerScreen and keeps it centred, clamping to the top edge when the height no longer fits the viewport.
 		void FitMultiplayerScreen(int width, int height);
 		/// Keeps the back and diagnostics actions together below every multiplayer panel.
 		void LayoutMultiplayerFooter(int width, int y);
