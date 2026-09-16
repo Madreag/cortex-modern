@@ -21,7 +21,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "a7"))
 sys.path.insert(0, str(HERE / "contracts"))
 
-from generate_observer import hand_fields, main as generate_main, parse_args
+from generate_observer import DEFAULT_INVENTORY, hand_fields, main as generate_main, parse_args
 from run_a7_group import main as a7_main
 from run_selftests import engine_executable
 from test_match_overlay import probe_script
@@ -70,15 +70,40 @@ class GenerateObserverRepo(unittest.TestCase):
 
     def test_refuses_to_drop_hand_fields(self):
         """ENGINE 94 is a separate lane; dropped Field/Visit lines must abort the write."""
+        import hashlib
+        import json
+
         existing = 'void Visit(const Actor::DeferredWaypoint& object, const std::string& path) {\nField(path + ".ACraft.m_OffWireHatchTick", object.m_OffWireHatchTick);\n'
         generated = 'void Visit(const Actor& object, const std::string& path) {\n'
         self.assertTrue(hand_fields(existing) - hand_fields(generated))
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            code = generate_main(["--repo", str(REPO), "--header-only"])
-        self.assertEqual(code, 1)
-        self.assertIn("refusing overwrite: generated header drops hand fields", buf.getvalue())
-        self.assertIn("m_OffWireHatchTick", (REPO / "Source" / "System" / "ContractAudit.h").read_text(encoding="utf-8"))
+        inventory = json.loads(Path(DEFAULT_INVENTORY).read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Path(tmp)
+            for data in inventory["classes"].values():
+                src = REPO / data["path"]
+                if not src.is_file():
+                    continue
+                dest = tree / data["path"]
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(src.read_bytes())
+            dest_header = tree / "Source" / "System" / "ContractAudit.h"
+            dest_header.parent.mkdir(parents=True, exist_ok=True)
+            dest_header.write_text(existing, encoding="utf-8")
+            inventory["header_hashes"] = {
+                rel: hashlib.sha256((tree / rel).read_bytes()).hexdigest()
+                for rel in inventory.get("header_hashes", {})
+                if (tree / rel).is_file()
+            }
+            inv_path = tree / "native-fields.json"
+            inv_path.write_text(json.dumps(inventory), encoding="utf-8")
+            before = {path: path.read_bytes() for path in tree.rglob("*") if path.is_file()}
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = generate_main(["--repo", str(tree), "--inventory", str(inv_path)])
+            self.assertEqual(code, 1)
+            self.assertIn("refusing overwrite: generated header drops hand fields", buf.getvalue())
+            after = {path: path.read_bytes() for path in tree.rglob("*") if path.is_file()}
+            self.assertEqual(before, after)
 
 
 class PeerReportFlags(unittest.TestCase):
