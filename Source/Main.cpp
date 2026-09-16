@@ -6317,6 +6317,9 @@ int main(int argc, char** argv) {
 		pass = RunHarnessCaptureSelfTest() && pass;
 		return ShutDown(pass ? 0 : 1);
 	}
+	if (ScenarioRunner::GetArgs().saveRefusalDiagnosisSelfTest) {
+		return ShutDown(g_ActivityMan.RunSaveRefusalDiagnosisSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE);
+	}
 	if (!s_netReplayInPath.empty()) {
 		const int exitCode = RunNetReplayPlayback();
 		return ShutDown(exitCode);

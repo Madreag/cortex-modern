@@ -31,6 +31,7 @@ SELFTESTS = [
     "single-module-harness",
     "render-window-scripts",
     "text-wrap",
+    "save-refusal-diagnosis",
 ]
 FATAL = re.compile(
     r"^.*(?:\bFAIL\b|RTE Assert|RTE Abort|stack traceback|Stack trace \(most recent call last\)).*$",
