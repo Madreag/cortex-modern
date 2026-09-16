@@ -735,7 +735,7 @@ namespace RTE {
 				RejectPeer(*peer, NetRejectReason::IdentityUnproven, "participant_identity", "connection proof", NetParticipantProofVerdictName(verdict), "connection proof was refused");
 				return;
 			}
-			if (m_HostBanStore != nullptr && (!m_HostBanStore->PersistentReady() || m_HostBanStore->IsBanned(proof->publicId, m_SessionId))) {
+			if (m_HostBanStore != nullptr && m_HostBanStore->IsBanned(proof->publicId, m_SessionId)) {
 				RejectPeer(*peer, NetRejectReason::ParticipantBanned, "participant_identity", "admitted", "banned", "this identity is not admitted");
 				return;
 			}
