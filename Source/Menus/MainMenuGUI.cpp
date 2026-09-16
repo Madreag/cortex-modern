@@ -392,15 +392,12 @@ void MainMenuGUI::CreateCreditsScreen() {
 
 	m_CreditsTextLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("CreditsLabel"));
 
-	// TODO: Get Unicode going!
-	// Hack here to change the special characters over 128 in the ANSI ASCII table to match our font files
+	// Ä is 0xC4 and Ö is 0xD6 in the atlas; © uses the title copyright cell.
 	for (char& stringChar: s_CreditsText) {
-		if (stringChar == -60) {
-			stringChar = static_cast<unsigned char>(142); //'Ä'
-		} else if (stringChar == -42) {
-			stringChar = static_cast<unsigned char>(153); //'Ö'
+		if (stringChar == -42) {
+			stringChar = static_cast<unsigned char>(214);
 		} else if (stringChar == -87) {
-			stringChar = static_cast<unsigned char>(221); //'©'
+			stringChar = static_cast<unsigned char>(221);
 		}
 	}
 	m_CreditsTextLabel->SetText(s_CreditsText);
