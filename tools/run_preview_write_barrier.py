@@ -36,7 +36,7 @@ ENVIRONMENT = {'CCCP_HEADLESS': '1', 'CC_PREVIEW_GLOBALS_FENCE': '1',
                'CC_PREVIEW_FENCE_DEPTH': '1', 'CC_PREVIEW_FENCE_NAMES': '0', 'CC_PREVIEW_BARRIER_STATS': '1'}
 STATS = re.compile(r'\[localpred\] previews=(\d+) actor_ticks=\d+ ms_total=([\d.]+) avg_ms=([\d.]+)')
 NATIVE = re.compile(r'\[preview-write-barrier\] (.*)')
-FAIL = re.compile(r'^\[script-graph-selftest\] FAIL(?: (.*))?$', re.M)
+FAIL = re.compile(r'^\[script-graph-selftest\] FAIL(?: (\S+))?', re.M)
 OBSERVE = re.compile(r'^\[(?:pie-observe|pie-write-observe|pie-write|preview-module-fixture|preview-compat|preview-modcompat-fixture)[^\]]*\].*$', re.M)
 DRIVER_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
@@ -326,6 +326,10 @@ def count_actors(data):
     return len(re.findall(rb'^\d+ actor uid=\d+ ', data, re.M))
 
 
+def graph_failed(failures, name):
+    return any(item == name or (item or '').startswith(name + ' ') for item in failures)
+
+
 def assess_cost(red, green, scene, red_census, census):
     native = green.get('native', [])
     valid = bool(native) and all(all(key in row and math.isfinite(row[key]) and row[key] >= 0
@@ -379,15 +383,15 @@ def score():
     red, green = read_row('red/graph'), read_row('green/graph')
     reference = read_row('reference/graph')
     checks['reference_graph'] = (reference['transport_ok'] and reference['exit_code'] == 1 and
-                                 'preview_deep_global_writes_undone' in reference['graph_failures'] and
+                                 graph_failed(reference['graph_failures'], 'preview_deep_global_writes_undone') and
                                  set(reference['graph_failures']) <= {'', 'preview_deep_global_writes_undone'})
-    checks['fresh_red'] = red['transport_ok'] and red['exit_code'] == 1 and 'preview_deep_global_writes_undone' in red['graph_failures']
+    checks['fresh_red'] = red['transport_ok'] and red['exit_code'] == 1 and graph_failed(red['graph_failures'], 'preview_deep_global_writes_undone')
     checks['green_graph'] = green['transport_ok'] and green['exit_code'] == 0 and not green['graph_failures']
     checks['green_depth_writes_undone'] = any('PASS preview_depth_writes_undone' in line for line in green['verdicts'])
     checks['green_window_modcompat'] = any('PASS preview_window_modcompat' in line for line in green['verdicts'])
     fence_off = read_row('green/graph-fence-off')
     checks['fresh_depth_red'] = (fence_off['transport_ok'] and fence_off['exit_code'] == 1 and
-                                 'preview_depth_writes_undone' in fence_off['graph_failures'])
+                                 graph_failed(fence_off['graph_failures'], 'preview_depth_writes_undone'))
     checks['barrier_rounds'] = sum('PASS preview_barrier_exact_rollback ' in line for line in green['verdicts']) == 10
     suites = json.loads((ROOT / 'green/selftests/result.json').read_text())
     checks['selftests_13'] = assess_selftests(suites, identities['green'])

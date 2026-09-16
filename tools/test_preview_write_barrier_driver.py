@@ -36,6 +36,14 @@ class CostChecks(unittest.TestCase):
         self.assertEqual(cost['restore_us_per_window'], 1000.0/16)
         self.assertEqual(cost['native_p99_ms_sum'], 0.1)
 
+    def test_fail_line_with_trailing_error_is_scored(self):
+        text = '[script-graph-selftest] FAIL preview_depth_writes_undone depth 1 write leaked\n'
+        failures = driver.FAIL.findall(text)
+        self.assertTrue(driver.graph_failed(failures, 'preview_depth_writes_undone'))
+        self.assertTrue(driver.graph_failed(['preview_depth_writes_undone depth 1 write leaked'],
+                                            'preview_depth_writes_undone'))
+        self.assertFalse(driver.graph_failed(failures, 'preview_window_modcompat'))
+
     def test_zero_journal_is_rejected(self):
         self.green['native'][0]['saves'] = 0
         self.assertFalse(self.score())
