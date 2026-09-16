@@ -43,22 +43,24 @@ def generate(options):
         data = inventory['classes'][name]
         by_header[data['path']].append(data['body_start'] + 1)
     manifest = {}
+    planned = []
     for relative, offsets in by_header.items():
         path = repo / relative
         original_path = root / 'observer-originals' / relative
-        original_path.parent.mkdir(parents=True, exist_ok=True)
         if original_path.exists():
             original = original_path.read_bytes()
+            save_original = None
         else:
             original = path.read_bytes()
             if not header_only:
                 assert hashlib.sha256(original).hexdigest() == inventory['header_hashes'][relative], relative
-                original_path.write_bytes(original)
+                save_original = original
+            else:
+                save_original = None
         modified = original
         for offset in sorted(offsets, reverse=True):
             modified = modified[:offset] + b'\n\t\tfriend struct ContractAudit;\n' + modified[offset:]
-        if not header_only:
-            path.write_bytes(modified)
+        planned.append((path, original_path, modified, save_original))
         manifest[relative] = {'original_sha256': hashlib.sha256(original).hexdigest(),
                               'instrumented_sha256': hashlib.sha256(modified).hexdigest(),
                               'header_written': not header_only}
@@ -271,6 +273,12 @@ def generate(options):
                 fromfile=str(dest), tofile='generated')))
             print('refusing overwrite: generated header drops hand fields')
             return 1
+    if not header_only:
+        for path, original_path, modified, save_original in planned:
+            if save_original is not None:
+                original_path.parent.mkdir(parents=True, exist_ok=True)
+                original_path.write_bytes(save_original)
+            path.write_bytes(modified)
     dest.write_text(generated)
     if not header_only:
         (root / 'observer-manifest.json').write_text(json.dumps({'status': 'read-only field access instrumentation; opaque fields explicitly reported', 'classes': sorted(selected), 'headers': manifest, 'omitted_method_macros': omitted, 'field_count': sum(map(len, fields.values())), 'observer_sha256': hashlib.sha256(dest.read_bytes()).hexdigest()}, indent=2))
