@@ -8,6 +8,7 @@
 #include "NetReconnectAdmission.h"
 #include "NetReconnectSession.h"
 #include "NetSeatAuth.h"
+#include "NetLobbySession.h"
 #include "NetWorldJoin.h"
 
 #include <array>
@@ -229,6 +230,12 @@ namespace RTE {
 			if (!host.NoteCatchUpProgress(7, 40, 20, 50, 80, &activation, &error) || activation != 80 + c_NetWorldActivationLeadFrames) {
 				return Fail("catch-up did not announce activation at E: " + error);
 			}
+			if (host.DueActivation(activation) != nullptr) {
+				return Fail("activation was due before the joiner applied through E-1");
+			}
+			if (!host.NoteCatchUpProgress(7, activation - 1, 1, 1, activation, nullptr, &error)) {
+				return Fail("catch-up refused appliedThrough E-1: " + error);
+			}
 			if (host.DueActivation(activation - 1) != nullptr) {
 				return Fail("activation was due before the announced tick");
 			}
@@ -428,11 +435,252 @@ namespace RTE {
 		}
 	}
 
+		int TestImageBlobRoundTrip() {
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId;
+			image.boot = 1;
+			image.round = 1;
+			image.tick = 40;
+			image.bytes = 4;
+			image.path = "Worlds/image.bin";
+			const std::vector<uint8_t> archive = {0xCA, 0xFE, 0xBA, 0xBE};
+			image.digest = DigestWorldJoinBytes(archive);
+			image.bytes = archive.size();
+			NetWorldFrameLog log;
+			std::string error;
+			if (!log.Append(MakeCommittedFrame(41), &error) || !log.Append(MakeCommittedFrame(42), &error)) {
+				return Fail("blob tail refused an in-order frame: " + error);
+			}
+			std::vector<std::vector<uint8_t>> tail;
+			(void)log.CopyFrom(41, 8, 1024, tail);
+			std::vector<uint8_t> blob;
+			if (!EncodeWorldJoinImageBlob(image, archive, tail, blob, &error) || !IsWorldJoinImageBlob(blob)) {
+				return Fail("world join image did not encode: " + error);
+			}
+			NetWorldCheckpointImage decoded;
+			std::vector<uint8_t> outArchive;
+			std::vector<std::vector<uint8_t>> outTail;
+			if (!DecodeWorldJoinImageBlob(blob, decoded, outArchive, outTail, &error)) {
+				return Fail("world-join-transfer-digest-mismatch: " + error);
+			}
+			if (outArchive != archive || decoded.digest != image.digest || outTail != tail) {
+				return Fail("world-join-transfer-bytes-in-not-equal-bytes-out");
+			}
+			std::vector<uint8_t> damaged = archive;
+			damaged[0] ^= 1;
+			std::vector<uint8_t> bad;
+			NetWorldCheckpointImage badImage = image;
+			badImage.digest = DigestWorldJoinBytes(archive);
+			if (!EncodeWorldJoinImageBlob(badImage, damaged, tail, bad, &error)) {
+				return Fail("damaged archive did not encode");
+			}
+			NetWorldCheckpointImage ignored;
+			std::vector<uint8_t> ignoredArchive;
+			std::vector<std::vector<uint8_t>> ignoredTail;
+			if (DecodeWorldJoinImageBlob(bad, ignored, ignoredArchive, ignoredTail, &error)) {
+				return Fail("world-join-transfer-digest-mismatch");
+			}
+			return 0;
+		}
+
+		int TestJoinerTransferPump() {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			std::string error;
+			if (!hostTransport.StartHost(47113, &error) || !clientTransport.Connect("loopback", 47113, &error)) {
+				return Fail("loopback pair: " + error);
+			}
+			NetPeerId hostRemote = c_InvalidNetPeerId;
+			NetPeerId clientRemote = c_InvalidNetPeerId;
+			for (const NetTransportEvent& event: hostTransport.PollEvents()) {
+				if (event.type == NetTransportEventType::PeerConnected) {
+					hostRemote = event.peerId;
+				}
+			}
+			for (const NetTransportEvent& event: clientTransport.PollEvents()) {
+				if (event.type == NetTransportEventType::PeerConnected) {
+					clientRemote = event.peerId;
+				}
+			}
+			if (hostRemote == c_InvalidNetPeerId || clientRemote == c_InvalidNetPeerId) {
+				return Fail("loopback peer connection events were not observed");
+			}
+			const std::vector<uint8_t> archive(80, 0x5A);
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId;
+			image.boot = 1;
+			image.round = 1;
+			image.tick = 12;
+			image.bytes = archive.size();
+			image.digest = DigestWorldJoinBytes(archive);
+			image.path = "Worlds/pump.bin";
+			std::vector<uint8_t> blob;
+			if (!EncodeWorldJoinImageBlob(image, archive, {}, blob, &error)) {
+				return Fail("pump blob did not encode: " + error);
+			}
+			NetLobbySession host;
+			NetLobbySession client;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remotePeerId = 2;
+			hostConfig.remoteTransportPeerId = hostRemote;
+			hostConfig.matchConfig = MakeWorldConfig();
+			hostConfig.autoStart = false;
+			NetLobbySessionConfig clientConfig;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemote;
+			clientConfig.matchConfig = MakeWorldConfig();
+			if (!host.Start(hostTransport, hostConfig, &error) || !client.Start(clientTransport, clientConfig, &error)) {
+				return Fail("lobby start: " + error);
+			}
+			for (int i = 0; i < 8; ++i) {
+				host.Tick(static_cast<uint64_t>(i) * 10);
+				client.Tick(static_cast<uint64_t>(i) * 10);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+			}
+			if (!host.BindLateRemote(2, 1, &error)) {
+				return Fail("bind late remote: " + error);
+			}
+			host.BeginStateTransferTo(2, blob);
+			for (int i = 0; i < 40 && !client.HasCompleteStateTransfer(); ++i) {
+				host.PumpOutgoingChunks();
+				host.Tick(static_cast<uint64_t>(100 + i) * 10);
+				client.Tick(static_cast<uint64_t>(100 + i) * 10);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+			}
+			if (!client.HasCompleteStateTransfer()) {
+				return Fail("world-join-transfer-did-not-complete");
+			}
+			const std::vector<uint8_t> received = client.TakeReceivedState();
+			if (received != blob) {
+				return Fail("world-join-transfer-bytes-in-not-equal-bytes-out");
+			}
+			NetWorldCheckpointImage decoded;
+			std::vector<uint8_t> outArchive;
+			std::vector<std::vector<uint8_t>> outTail;
+			if (!DecodeWorldJoinImageBlob(received, decoded, outArchive, outTail, &error) || outArchive != archive ||
+			    decoded.digest != image.digest) {
+				return Fail("world-join-transfer-digest-mismatch: " + error);
+			}
+			return 0;
+		}
+
+		int TestCatchUpAppliedThroughAndBinding() {
+			std::string error;
+			NetWorldJoinHost host;
+			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) {
+				return Fail("catch-up host did not open a join: " + error);
+			}
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId;
+			image.boot = 1;
+			image.round = 1;
+			image.tick = 40;
+			image.bytes = 8;
+			image.digest = "d";
+			image.path = "Worlds/image.bin";
+			host.PublishImage(image);
+			if (!host.NoteTransferComplete(7, 8, &error)) {
+				return Fail("catch-up transfer complete refused: " + error);
+			}
+			const uint64_t nowFrame = 80;
+			uint64_t activation = 0;
+			if (!host.NoteCatchUpProgress(7, nowFrame, nowFrame, 1, nowFrame, &activation, &error)) {
+				return Fail("catch-up with nowFrame as appliedThrough was the old lie; it must still accept a number: " + error);
+			}
+			if (host.FindSession(7)->acknowledgedThrough != nowFrame) {
+				return Fail("appliedThrough-was-nowFrame");
+			}
+			if (!host.NoteCatchUpProgress(7, 40, 1, 1, nowFrame, nullptr, &error)) {
+				// going backwards must fail
+			} else {
+				return Fail("a catch-up acknowledgement cannot go backwards");
+			}
+			if (!host.NoteCatchUpProgress(7, activation - 1, 1, 1, activation, nullptr, &error)) {
+				return Fail("catch-up refused appliedThrough == E-1: " + error);
+			}
+			if (host.FindSession(7)->acknowledgedThrough != activation - 1) {
+				return Fail("appliedThrough-did-not-reach-E-minus-1");
+			}
+			if (host.DueActivation(activation) == nullptr) {
+				return Fail("activation at E with appliedThrough == E-1 was not due");
+			}
+			const NetGameWorldTransition transition = BuildWorldActivateTransition(*host.FindSession(7), MakeWorldConfig(), host.Membership().Revision());
+			if (transition.className.empty() || transition.preset != "Brain Robot" || !transition.bindBrain ||
+			    transition.player < 0 || transition.peerId != 2) {
+				return Fail("activate-binding-missing");
+			}
+			NetLobbyStateChunk report = MakeWorldJoinReport(c_NetWorldReportCatchUp, activation - 1);
+			uint8_t kind = 0;
+			uint64_t value = 0;
+			if (!ParseWorldJoinReport(report, kind, value) || kind != c_NetWorldReportCatchUp || value != activation - 1) {
+				return Fail("catch-up report did not round-trip");
+			}
+			return 0;
+		}
+
+		int TestSlowJoinerReannounceThenFree() {
+			std::string error;
+			NetWorldJoinHost host;
+			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) {
+				return Fail("slow join did not open: " + error);
+			}
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId;
+			image.boot = 1;
+			image.round = 1;
+			image.tick = 10;
+			image.bytes = 4;
+			image.digest = "d";
+			image.path = "Worlds/image.bin";
+			host.PublishImage(image);
+			if (!host.NoteTransferComplete(7, 4, &error)) {
+				return Fail(error);
+			}
+			uint64_t firstE = 0;
+			if (!host.NoteCatchUpProgress(7, 10, 1, 1, 20, &firstE, &error) || firstE == 0) {
+				return Fail("slow join did not announce E: " + error);
+			}
+			if (host.SlowActivation(firstE) != nullptr || host.SlowActivation(firstE + 1) == nullptr) {
+				return Fail("slow joiner was not detected after E");
+			}
+			uint64_t later = 0;
+			if (!host.ReannounceActivation(7, firstE + 1, &later, &error) || later <= firstE) {
+				return Fail("slow joiner did not get one later E: " + error);
+			}
+			if (host.ReannounceActivation(7, later + 1, nullptr, &error)) {
+				return Fail("slow joiner was re-announced more than once");
+			}
+			const uint32_t generation = host.Membership().Slots().front().generation;
+			host.CancelJoin(7, "the joiner missed the announced activation");
+			if (host.FindSession(7) != nullptr || host.Membership().Slots().front().generation == generation ||
+			    host.Membership().HeldSlots() != 0) {
+				return Fail("slow-joiner-did-not-free-slot");
+			}
+			return 0;
+		}
+
 	int NetWorldJoinSelfTest::Run() {
 		if (const int result = TestIdentitySurvivesRestart(); result != 0) {
 			return result;
 		}
 		if (const int result = TestFrameLogAndOffer(); result != 0) {
+			return result;
+		}
+		if (const int result = TestImageBlobRoundTrip(); result != 0) {
+			return result;
+		}
+		if (const int result = TestJoinerTransferPump(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCatchUpAppliedThroughAndBinding(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSlowJoinerReannounceThenFree(); result != 0) {
 			return result;
 		}
 		if (const int result = TestJoinPlaneAndLeave(); result != 0) {
