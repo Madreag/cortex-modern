@@ -8,21 +8,54 @@
 #include "Timer.h"
 #include <SDL3/SDL.h>
 #include <iostream>
+#include <string>
 #include <utility>
+#include <vector>
 
 using namespace RTE;
 
 namespace {
 	bool automationDriving = false;
-	// Both the menu script and the net UI probe attach a pad, and the hint they need is process-global.
+	// The menu script and the net UI probe share one virtual pad; the hint they need is process-global.
 	int joystickBackgroundEventHolders = 0;
+	int scriptedPadHolders = 0;
+	std::string savedJoystickHint;
+	bool savedJoystickHintPresent = false;
+	SDL_Joystick* scriptedPad = nullptr;
+	SDL_Gamepad* scriptedPadGamepad = nullptr;
 	std::vector<GUIInputWrapper*> automationInputs;
+
+	bool EnsureScriptedPad() {
+		if (scriptedPad) return true;
+		GUIInputWrapper::AcquireJoystickBackgroundEvents();
+		SDL_VirtualJoystickDesc desc{};
+		SDL_INIT_INTERFACE(&desc);
+		desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+		desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+		desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+		desc.button_mask = (1U << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+		desc.axis_mask = (1U << SDL_GAMEPAD_AXIS_COUNT) - 1;
+		desc.name = "Menu script controller";
+		const auto id = SDL_AttachVirtualJoystick(&desc);
+		if (!id) {
+			GUIInputWrapper::ReleaseJoystickBackgroundEvents();
+			return false;
+		}
+		scriptedPad = SDL_OpenJoystick(id);
+		if (!scriptedPad) {
+			SDL_DetachVirtualJoystick(id);
+			GUIInputWrapper::ReleaseJoystickBackgroundEvents();
+			return false;
+		}
+		scriptedPadGamepad = SDL_OpenGamepad(id);
+		return true;
+	}
+
 	class ScriptedGUIInput final : public GUIInputWrapper {
 		std::array<bool, SDL_SCANCODE_COUNT> m_Keys{};
-		SDL_Joystick* m_Pad = nullptr;
-		SDL_Gamepad* m_PadGamepad = nullptr;
 		std::function<void()> m_Command;
 		GUIInputWrapper* m_Physical;
+		bool m_HoldsPad = false;
 	public:
 		ScriptedGUIInput(GUIInputWrapper* physical, int player) : GUIInputWrapper(player, physical->GetKeyJoyMouseCursor()), m_Physical(physical) { automationInputs.push_back(this); }
 		~ScriptedGUIInput() override { ReleaseAutomationInput(); std::erase(automationInputs, this); }
@@ -60,32 +93,12 @@ namespace {
 				m_Keys[key] = down;
 				return true;
 			}
-			// SDL parses only the mapping names, so take the face buttons' positional names onto those.
-			const std::string mapped = name == "south" ? "a" : name == "east" ? "b" : name == "west" ? "x" : name == "north" ? "y" : name;
-			const SDL_GamepadButton button = SDL_GetGamepadButtonFromString(mapped.c_str());
-			if (device != "pad" || button == SDL_GAMEPAD_BUTTON_INVALID) return false;
-			if (!m_Pad) {
-				// SDL drops a controller press while no window holds keyboard focus, which a headless run never does.
-				GUIInputWrapper::AcquireJoystickBackgroundEvents();
-				SDL_VirtualJoystickDesc desc{};
-				SDL_INIT_INTERFACE(&desc);
-				desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
-				desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
-				desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
-				desc.button_mask = (1U << SDL_GAMEPAD_BUTTON_COUNT) - 1;
-				desc.axis_mask = (1U << SDL_GAMEPAD_AXIS_COUNT) - 1;
-				desc.name = "Menu script controller";
-				const auto id = SDL_AttachVirtualJoystick(&desc);
-				if (!id) { GUIInputWrapper::ReleaseJoystickBackgroundEvents(); return false; }
-				m_Pad = SDL_OpenJoystick(id);
-				if (!m_Pad) { SDL_DetachVirtualJoystick(id); GUIInputWrapper::ReleaseJoystickBackgroundEvents(); return false; }
-				// SDL only reports gamepad buttons for an open gamepad, and the engine ignores plain
-				// joystick buttons on a device that has a mapping, so open it before the first press.
-				m_PadGamepad = SDL_OpenGamepad(id);
+			if (device != "pad") return false;
+			if (!m_HoldsPad) {
+				if (!GUIInputWrapper::AcquireScriptedPad()) return false;
+				m_HoldsPad = true;
 			}
-			if (!SDL_SetJoystickVirtualButton(m_Pad, button, down)) return false;
-			SDL_UpdateJoysticks();
-			return true;
+			return GUIInputWrapper::QueueScriptedPad(name, down);
 		}
 		void ReleaseAutomationInput() override {
 			m_Command = {};
@@ -93,16 +106,9 @@ namespace {
 				if (m_Keys[key]) QueueAutomationInput("key", SDL_GetScancodeName(static_cast<SDL_Scancode>(key)), false);
 			}
 			m_Keys.fill(false);
-			if (m_Pad) {
-				const auto id = SDL_GetJoystickID(m_Pad);
-				if (m_PadGamepad) {
-					SDL_CloseGamepad(m_PadGamepad);
-					m_PadGamepad = nullptr;
-				}
-				SDL_CloseJoystick(m_Pad);
-				SDL_DetachVirtualJoystick(id);
-				m_Pad = nullptr;
-				GUIInputWrapper::ReleaseJoystickBackgroundEvents();
+			if (m_HoldsPad) {
+				GUIInputWrapper::ReleaseScriptedPad();
+				m_HoldsPad = false;
 			}
 		}
 	};
@@ -114,11 +120,53 @@ void GUIInputWrapper::SetAutomationDriving(bool enabled) {
 }
 
 void GUIInputWrapper::AcquireJoystickBackgroundEvents() {
-	if (joystickBackgroundEventHolders++ == 0) SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+	if (joystickBackgroundEventHolders++ == 0) {
+		const char* previous = SDL_GetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS);
+		savedJoystickHintPresent = previous != nullptr;
+		savedJoystickHint = previous ? previous : "";
+		SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+	}
 }
 
 void GUIInputWrapper::ReleaseJoystickBackgroundEvents() {
-	if (joystickBackgroundEventHolders > 0 && --joystickBackgroundEventHolders == 0) SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "0");
+	if (joystickBackgroundEventHolders > 0 && --joystickBackgroundEventHolders == 0) {
+		if (savedJoystickHintPresent) SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, savedJoystickHint.c_str());
+		else SDL_ResetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS);
+	}
+}
+
+bool GUIInputWrapper::AcquireScriptedPad() {
+	if (!EnsureScriptedPad()) return false;
+	++scriptedPadHolders;
+	return true;
+}
+
+bool GUIInputWrapper::QueueScriptedPad(const std::string& name, bool down) {
+	const std::string mapped = name == "south" ? "a" : name == "east" ? "b" : name == "west" ? "x" : name == "north" ? "y" : name;
+	const SDL_GamepadButton button = SDL_GetGamepadButtonFromString(mapped.c_str());
+	if (button == SDL_GAMEPAD_BUTTON_INVALID) return false;
+	if (!EnsureScriptedPad()) return false;
+	if (!SDL_SetJoystickVirtualButton(scriptedPad, button, down)) return false;
+	SDL_UpdateJoysticks();
+	return true;
+}
+
+void GUIInputWrapper::ReleaseScriptedPad() {
+	if (scriptedPadHolders > 0) --scriptedPadHolders;
+	if (scriptedPadHolders > 0 || !scriptedPad) return;
+	const auto id = SDL_GetJoystickID(scriptedPad);
+	if (scriptedPadGamepad) {
+		SDL_CloseGamepad(scriptedPadGamepad);
+		scriptedPadGamepad = nullptr;
+	}
+	SDL_CloseJoystick(scriptedPad);
+	SDL_DetachVirtualJoystick(id);
+	scriptedPad = nullptr;
+	GUIInputWrapper::ReleaseJoystickBackgroundEvents();
+}
+
+uint32_t GUIInputWrapper::ScriptedPadId() {
+	return scriptedPad ? static_cast<uint32_t>(SDL_GetJoystickID(scriptedPad)) : 0;
 }
 
 std::unique_ptr<GUIInputWrapper> GUIInputWrapper::CreateAutomationInput() {
