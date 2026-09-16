@@ -295,6 +295,8 @@ namespace RTE {
 		/// Drops the ghost that matches this ledger key; the canonical particle takes the pixel.
 		void DropPreviewGhost(const PreviewEventLedger::Key& key);
 		void DropAllPreviewGhosts();
+		/// Installs a preview ghost for a ledger projectile so ExpireForTick can drop it.
+		void InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key);
 		size_t GetPreviewGhostCount() const { return m_PreviewGhosts.size(); }
 		uint64_t GetPreviewGhostPeak() const { return m_PreviewGhostPeak; }
 		/// One committed-tick of leftover ghost motion; ghosts already at the preview horizon hold still.
@@ -994,7 +996,6 @@ namespace RTE {
 		void DestroySpeculativeSpawn(MovableObject* mo);
 		void DisposeSpeculativeSpawns();
 		void TakePreviewSpawn(MovableObject* particle);
-		void InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key);
 		struct PreviewGhost {
 			MovableObject* object = nullptr;
 			PreviewEventLedger::Key key;
