@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <random>
@@ -108,6 +109,7 @@ namespace RTE {
 		image.path = parsed.value("path", std::string());
 		image.bytes = parsed.value("bytes", uint64_t{0});
 		image.captureMs = parsed.value("capture_ms", 0.0);
+		(void)parsed.value("activation_lead", c_NetWorldActivationLeadFrames);
 		if (!image.IsValid()) {
 			if (error) *error = "world join offer is incomplete";
 			return false;
@@ -207,6 +209,241 @@ namespace RTE {
 		}
 		out = identity;
 		return true;
+	}
+
+#pragma endregion
+
+#pragma region Joiner image blob
+
+	namespace {
+		void AppendU8(std::vector<uint8_t>& out, uint8_t value) { out.push_back(value); }
+		void AppendU16LE(std::vector<uint8_t>& out, uint16_t value) {
+			out.push_back(static_cast<uint8_t>(value));
+			out.push_back(static_cast<uint8_t>(value >> 8));
+		}
+		void AppendU32LE(std::vector<uint8_t>& out, uint32_t value) {
+			out.push_back(static_cast<uint8_t>(value));
+			out.push_back(static_cast<uint8_t>(value >> 8));
+			out.push_back(static_cast<uint8_t>(value >> 16));
+			out.push_back(static_cast<uint8_t>(value >> 24));
+		}
+		void AppendU64LE(std::vector<uint8_t>& out, uint64_t value) {
+			AppendU32LE(out, static_cast<uint32_t>(value));
+			AppendU32LE(out, static_cast<uint32_t>(value >> 32));
+		}
+
+		bool ReadExact(const uint8_t*& cursor, const uint8_t* end, void* dest, size_t size) {
+			if (cursor + size > end) {
+				return false;
+			}
+			std::memcpy(dest, cursor, size);
+			cursor += size;
+			return true;
+		}
+
+		uint16_t ReadU16LE(const uint8_t*& cursor, const uint8_t* end, bool& ok) {
+			uint16_t value = 0;
+			ok = ok && ReadExact(cursor, end, &value, sizeof(value));
+			return value;
+		}
+
+		uint32_t ReadU32LE(const uint8_t*& cursor, const uint8_t* end, bool& ok) {
+			uint32_t value = 0;
+			ok = ok && ReadExact(cursor, end, &value, sizeof(value));
+			return value;
+		}
+
+		uint64_t ReadU64LE(const uint8_t*& cursor, const uint8_t* end, bool& ok) {
+			const uint32_t low = ReadU32LE(cursor, end, ok);
+			const uint32_t high = ReadU32LE(cursor, end, ok);
+			return (static_cast<uint64_t>(high) << 32) | low;
+		}
+	}
+
+	std::string DigestWorldJoinBytes(const uint8_t* bytes, size_t size) {
+		uint64_t hash = 1469598103934665603ULL;
+		for (size_t i = 0; i < size; ++i) {
+			hash ^= bytes[i];
+			hash *= 1099511628211ULL;
+		}
+		static const char hex[] = "0123456789abcdef";
+		std::string out(16, '0');
+		for (int i = 7; i >= 0; --i) {
+			const unsigned byte = static_cast<unsigned>((hash >> (static_cast<unsigned>(i) * 8U)) & 0xFFU);
+			out[static_cast<size_t>((7 - i) * 2)] = hex[(byte >> 4) & 0x0FU];
+			out[static_cast<size_t>((7 - i) * 2 + 1)] = hex[byte & 0x0FU];
+		}
+		return out;
+	}
+
+	bool IsWorldJoinImageBlob(const std::vector<uint8_t>& bytes) {
+		if (bytes.size() < 5) {
+			return false;
+		}
+		const uint32_t magic = static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8) |
+		                       (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
+		return magic == c_NetWorldImageMagic && bytes[4] == c_NetWorldImageVersion;
+	}
+
+	bool EncodeWorldJoinImageBlob(const NetWorldCheckpointImage& image, const std::vector<uint8_t>& archive,
+	                              const std::vector<std::vector<uint8_t>>& tail, std::vector<uint8_t>& out, std::string* error) {
+		if (!image.IsValid()) {
+			if (error) *error = "world join image is incomplete";
+			return false;
+		}
+		const std::string offer = EncodeWorldJoinOffer(image);
+		if (offer.size() > 0xFFFFFFFFULL || archive.size() > 0xFFFFFFFFULL || tail.size() > 0xFFFFFFFFULL) {
+			if (error) *error = "world join image exceeds the envelope";
+			return false;
+		}
+		out.clear();
+		AppendU32LE(out, c_NetWorldImageMagic);
+		AppendU8(out, c_NetWorldImageVersion);
+		AppendU32LE(out, static_cast<uint32_t>(offer.size()));
+		out.insert(out.end(), offer.begin(), offer.end());
+		AppendU16LE(out, static_cast<uint16_t>(image.digest.size()));
+		out.insert(out.end(), image.digest.begin(), image.digest.end());
+		AppendU64LE(out, archive.size());
+		out.insert(out.end(), archive.begin(), archive.end());
+		AppendU32LE(out, static_cast<uint32_t>(tail.size()));
+		for (const std::vector<uint8_t>& frame: tail) {
+			if (frame.size() > 0xFFFFFFFFULL) {
+				if (error) *error = "a committed tail frame exceeds the envelope";
+				return false;
+			}
+			AppendU32LE(out, static_cast<uint32_t>(frame.size()));
+			out.insert(out.end(), frame.begin(), frame.end());
+		}
+		return true;
+	}
+
+	bool DecodeWorldJoinImageBlob(const std::vector<uint8_t>& bytes, NetWorldCheckpointImage& image, std::vector<uint8_t>& archive,
+	                              std::vector<std::vector<uint8_t>>& tail, std::string* error) {
+		if (!IsWorldJoinImageBlob(bytes)) {
+			if (error) *error = "bytes are not a world join image";
+			return false;
+		}
+		const uint8_t* cursor = bytes.data() + 5;
+		const uint8_t* end = bytes.data() + bytes.size();
+		bool ok = true;
+		const uint32_t offerLen = ReadU32LE(cursor, end, ok);
+		if (!ok || cursor + offerLen > end) {
+			if (error) *error = "world join image offer is truncated";
+			return false;
+		}
+		const std::string offer(reinterpret_cast<const char*>(cursor), offerLen);
+		cursor += offerLen;
+		NetWorldCheckpointImage decoded;
+		if (!DecodeWorldJoinOffer(offer, decoded, error)) {
+			return false;
+		}
+		const uint16_t digestLen = ReadU16LE(cursor, end, ok);
+		if (!ok || cursor + digestLen > end) {
+			if (error) *error = "world join image digest is truncated";
+			return false;
+		}
+		decoded.digest.assign(reinterpret_cast<const char*>(cursor), digestLen);
+		cursor += digestLen;
+		const uint64_t archiveLen = ReadU64LE(cursor, end, ok);
+		if (!ok || archiveLen > static_cast<uint64_t>(end - cursor)) {
+			if (error) *error = "world join image archive is truncated";
+			return false;
+		}
+		archive.assign(cursor, cursor + static_cast<size_t>(archiveLen));
+		cursor += static_cast<size_t>(archiveLen);
+		const uint32_t tailCount = ReadU32LE(cursor, end, ok);
+		if (!ok) {
+			if (error) *error = "world join image tail is truncated";
+			return false;
+		}
+		tail.clear();
+		tail.reserve(tailCount);
+		for (uint32_t i = 0; i < tailCount; ++i) {
+			const uint32_t frameLen = ReadU32LE(cursor, end, ok);
+			if (!ok || cursor + frameLen > end) {
+				if (error) *error = "world join image tail frame is truncated";
+				return false;
+			}
+			tail.emplace_back(cursor, cursor + frameLen);
+			cursor += frameLen;
+		}
+		if (cursor != end) {
+			if (error) *error = "world join image has trailing bytes";
+			return false;
+		}
+		if (DigestWorldJoinBytes(archive) != decoded.digest) {
+			if (error) *error = "world join image digest does not match the archive";
+			return false;
+		}
+		image = std::move(decoded);
+		return true;
+	}
+
+	NetLobbyStateChunk MakeWorldJoinReport(uint8_t kind, uint64_t value) {
+		NetLobbyStateChunk chunk;
+		chunk.transferId = c_NetWorldReportTransferId;
+		chunk.totalBytes = 9;
+		chunk.chunkIndex = 0;
+		chunk.chunkCount = 1;
+		chunk.bytes.resize(9);
+		chunk.bytes[0] = kind;
+		for (int i = 0; i < 8; ++i) {
+			chunk.bytes[static_cast<size_t>(i + 1)] = static_cast<uint8_t>(value >> (8 * i));
+		}
+		return chunk;
+	}
+
+	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value) {
+		if (chunk.transferId != c_NetWorldReportTransferId || chunk.bytes.size() != 9 || chunk.totalBytes != 9 ||
+		    chunk.chunkCount != 1 || chunk.chunkIndex != 0) {
+			return false;
+		}
+		kind = chunk.bytes[0];
+		if (kind != c_NetWorldReportProgress && kind != c_NetWorldReportCatchUp && kind != c_NetWorldReportActivate) {
+			return false;
+		}
+		value = 0;
+		for (int i = 0; i < 8; ++i) {
+			value |= static_cast<uint64_t>(chunk.bytes[static_cast<size_t>(i + 1)]) << (8 * i);
+		}
+		return true;
+	}
+
+	NetGameWorldTransition BuildWorldActivateTransition(const NetWorldJoinSession& session, const NetMatchConfig& config, uint64_t membershipRevision) {
+		NetGameWorldTransition transition;
+		transition.kind = NetGameWorldTransition::Activate;
+		transition.peerId = session.assignedPeerId;
+		transition.holderGeneration = session.holderGeneration;
+		transition.membershipRevision = membershipRevision;
+		transition.activationFrame = session.activationTick;
+		transition.team = session.team;
+		int human = 0;
+		transition.player = 0;
+		for (const NetMatchPlayerSlot& slot: config.players) {
+			if (slot.cpu) {
+				continue;
+			}
+			if (slot.peerId == session.assignedPeerId) {
+				transition.player = human;
+				break;
+			}
+			++human;
+		}
+		transition.bindBrain = !session.spectator && session.assignedPeerId != 0;
+		if (!session.spectator) {
+			transition.className = "AHuman";
+			transition.preset = "Brain Robot";
+			transition.module = "Base.rte";
+			transition.aiMode = 0;
+			switch (session.team) {
+				case 1: transition.posX = 1120.0F; break;
+				case 2: transition.posX = 640.0F; break;
+				case 3: transition.posX = 1360.0F; break;
+				default: transition.posX = 880.0F; break;
+			}
+			transition.posY = 0.0F;
+		}
+		return transition;
 	}
 
 #pragma endregion
@@ -565,10 +802,18 @@ namespace RTE {
 				m_Sessions.push_back(std::move(session));
 				return true;
 			}
-			if (!m_Membership.Hold(slot->peerId, stableSeat, holderName, error)) {
+			const uint8_t peerId = slot->peerId;
+			const int8_t team = slot->team;
+			const uint32_t generation = slot->generation;
+			if (!m_Membership.Hold(peerId, stableSeat, holderName, error)) {
 				return false;
 			}
-			slot = m_Membership.SlotOfSeat(stableSeat);
+			session.assignedPeerId = peerId;
+			session.team = team;
+			session.holderGeneration = generation;
+			session.phase = NetWorldJoinPhase::SnapshotTransfer;
+			m_Sessions.push_back(std::move(session));
+			return true;
 		}
 		session.assignedPeerId = slot->peerId;
 		session.team = slot->team;
@@ -588,6 +833,39 @@ namespace RTE {
 				session.acknowledgedThrough = image.tick;
 			}
 		}
+	}
+
+	bool NetWorldJoinHost::NoteTransferProgress(NetPeerId connection, uint16_t ackedChunks, uint16_t totalChunks) {
+		NetWorldJoinSession* session = Find(connection);
+		if (session == nullptr) {
+			return false;
+		}
+		session->ackedChunks = ackedChunks;
+		session->totalChunks = totalChunks;
+		return true;
+	}
+
+	bool NetWorldJoinHost::NoteTransferStarted(NetPeerId connection, uint64_t transferId, uint16_t totalChunks, uint64_t deliveredThrough) {
+		NetWorldJoinSession* session = Find(connection);
+		if (session == nullptr) {
+			return false;
+		}
+		session->transferStarted = true;
+		session->transferId = transferId;
+		session->totalChunks = totalChunks;
+		session->deliveredThrough = deliveredThrough;
+		return true;
+	}
+
+	bool NetWorldJoinHost::NoteDeliveredThrough(NetPeerId connection, uint64_t frame) {
+		NetWorldJoinSession* session = Find(connection);
+		if (session == nullptr) {
+			return false;
+		}
+		if (frame > session->deliveredThrough) {
+			session->deliveredThrough = frame;
+		}
+		return true;
 	}
 
 	bool NetWorldJoinHost::NoteTransferComplete(NetPeerId connection, uint64_t bytes, std::string* error) {
@@ -640,9 +918,39 @@ namespace RTE {
 
 	const NetWorldJoinSession* NetWorldJoinHost::DueActivation(uint64_t nowFrame) const {
 		const auto found = std::find_if(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& session) {
-			return session.phase == NetWorldJoinPhase::CatchingUp && session.activationTick != 0 && session.activationTick <= nowFrame;
+			return session.phase == NetWorldJoinPhase::CatchingUp && session.activationTick != 0 && session.activationTick <= nowFrame &&
+			       session.acknowledgedThrough + 1 >= session.activationTick;
 		});
 		return found == m_Sessions.end() ? nullptr : &*found;
+	}
+
+	const NetWorldJoinSession* NetWorldJoinHost::SlowActivation(uint64_t nowFrame) const {
+		const auto found = std::find_if(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& session) {
+			return session.phase == NetWorldJoinPhase::CatchingUp && session.activationTick != 0 && nowFrame > session.activationTick &&
+			       session.acknowledgedThrough + 1 < session.activationTick;
+		});
+		return found == m_Sessions.end() ? nullptr : &*found;
+	}
+
+	bool NetWorldJoinHost::ReannounceActivation(NetPeerId connection, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error) {
+		if (outActivationTick) *outActivationTick = 0;
+		NetWorldJoinSession* session = Find(connection);
+		if (session == nullptr) {
+			if (error) *error = "no world bootstrap for that connection";
+			return false;
+		}
+		if (session->phase != NetWorldJoinPhase::CatchingUp || session->activationTick == 0) {
+			if (error) *error = "that bootstrap has no activation to move";
+			return false;
+		}
+		if (session->activationReannounces >= c_NetWorldActivationReannounceLimit) {
+			if (error) *error = "the joiner already missed a re-announced activation";
+			return false;
+		}
+		session->activationTick = nowFrame + c_NetWorldActivationLeadFrames;
+		++session->activationReannounces;
+		if (outActivationTick) *outActivationTick = session->activationTick;
+		return true;
 	}
 
 	bool NetWorldJoinHost::CompleteActivation(NetPeerId connection, uint64_t atFrame, std::string* error) {

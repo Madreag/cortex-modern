@@ -85,7 +85,10 @@ namespace RTE {
 		void SetRematchRoster(std::vector<uint8_t> survivingPeerIds) { m_RematchRoster = std::move(survivingPeerIds); }
 
 		NetMatchRuntimeState GetState() const { return m_State; }
+		NetLobbySession& GetLobbySession() { return m_Lobby; }
 		const NetLobbySession& GetLobbySession() const { return m_Lobby; }
+		bool TookWorldJoinImage() const { return m_WorldJoinImage; }
+		bool StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, std::string* error = nullptr);
 		const NetMatchConfig& GetMatchConfig() const { return m_MatchConfig; }
 		const NetHash32& GetMatchConfigHash() const { return m_MatchConfigHash; }
 		bool UsesLobbyProtocol() const { return m_UseLobbyProtocol; }
@@ -130,6 +133,7 @@ namespace RTE {
 		std::string m_SetupError;
 		std::vector<uint8_t> m_StateToStream; //!< Host: a match-state file the next lobby round streams out.
 		std::vector<uint8_t> m_ReceivedStateBytes; //!< The state file the last lobby round received.
+		bool m_WorldJoinImage = false;
 	};
 
 } // namespace RTE

@@ -1,6 +1,7 @@
 #include "NetMatchRunner.h"
 
 #include "NetIdentity.h"
+#include "NetWorldJoin.h"
 
 #include "nlohmann/json.hpp"
 
@@ -47,6 +48,8 @@ namespace RTE {
 		m_MatchConfig = config.matchConfig;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
 		m_SetupError.clear();
+		m_WorldJoinImage = false;
+		m_ReceivedStateBytes.clear();
 		m_State = NetMatchRuntimeState::SessionStarting;
 
 		if (config.host == !config.joinAddress.empty()) {
@@ -108,6 +111,11 @@ namespace RTE {
 			if (config.postLobbySettleMs > 0) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(config.postLobbySettleMs));
 			}
+		}
+
+		if (m_WorldJoinImage) {
+			m_State = NetMatchRuntimeState::Running;
+			return true;
 		}
 
 		m_State = NetMatchRuntimeState::LockstepStarting;
@@ -496,6 +504,13 @@ namespace RTE {
 			if (m_Config.publishLobby) {
 				m_Config.publishLobby(BuildLobbySnapshot(transport, session));
 			}
+			if (m_Lobby.HasCompleteStateTransfer() && IsWorldJoinImageBlob(m_Lobby.PeekReceivedState())) {
+				m_MatchConfig = m_Lobby.GetMatchConfig();
+				m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
+				m_ReceivedStateBytes = m_Lobby.TakeReceivedState();
+				m_WorldJoinImage = true;
+				return true;
+			}
 			if (m_Lobby.IsStarted()) {
 				m_MatchConfig = m_Lobby.GetMatchConfig();
 				m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
@@ -639,6 +654,17 @@ namespace RTE {
 			snapshot.members.push_back(member);
 		}
 		return snapshot;
+	}
+
+	bool NetMatchRunner::StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, std::string* error) {
+		m_Lobby.SetStartFrame(startFrame);
+		m_Config.startFrame = startFrame;
+		m_State = NetMatchRuntimeState::LockstepStarting;
+		if (!StartLockstep(transport, session, coordinator, m_Config, error) || !WaitForLockstepRunning(coordinator, m_Config.lockstepWaitMs, error)) {
+			return false;
+		}
+		m_State = NetMatchRuntimeState::Running;
+		return true;
 	}
 
 	void NetMatchRunner::SetFailed(const std::string& error) {

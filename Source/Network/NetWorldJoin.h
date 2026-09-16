@@ -1,5 +1,6 @@
 #pragma once
 
+#include "NetLobbyProtocol.h"
 #include "NetLockstep.h"
 #include "NetMatchConfig.h"
 
@@ -23,8 +24,7 @@ namespace RTE {
 		bool operator==(const NetWorldIdentity&) const = default;
 	};
 
-	/// The world identity record on disk. Slice 3's NetWorldStore takes this over together with the
-	/// checkpoint generations and the auth journal; slice 1 needs only the two durable numbers.
+	/// The world identity record on disk. The two durable numbers a boot must advance before it listens.
 	class NetWorldIdentityFile {
 	public:
 		/// Reads the record, or writes a fresh one with a new UUID. Advances and flushes the boot
@@ -99,6 +99,11 @@ namespace RTE {
 		uint64_t acknowledgedThrough = 0; //!< The last tail frame it says it applied.
 		uint64_t openedAtMs = 0;
 		uint64_t transferBytes = 0;
+		uint64_t transferId = 0;          //!< The StateChunk transfer the joiner is receiving.
+		uint16_t ackedChunks = 0;
+		uint16_t totalChunks = 0;
+		uint32_t activationReannounces = 0; //!< At most one later E; then the slot is freed.
+		bool transferStarted = false;
 		uint64_t catchUpTicks = 0;        //!< Ticks it reported replaying, for the catch-up rate.
 		uint64_t catchUpMs = 0;
 		std::string refusal;              //!< Why the bootstrap failed; empty while it is alive.
@@ -226,6 +231,37 @@ namespace RTE {
 	/// A bootstrap that has not converged by here is cancelled and rebased onto a newer image, so an
 	/// endless transfer cannot pin the world's memory.
 	inline constexpr uint64_t c_NetWorldJoinDeadlineMs = 180000;
+	/// One later E if the joiner is still behind when the first E arrives; a second miss frees the slot.
+	inline constexpr uint32_t c_NetWorldActivationReannounceLimit = 1;
+	/// WJIM: the joiner-only checkpoint envelope streamed through the lobby StateChunk pump.
+	inline constexpr uint32_t c_NetWorldImageMagic = 0x4D494A57U;
+	inline constexpr uint8_t c_NetWorldImageVersion = 1;
+	/// A valid 9-byte StateChunk the joiner and host exchange for progress, catch-up and E.
+	inline constexpr uint64_t c_NetWorldReportTransferId = 0x574A5250ULL;
+	inline constexpr uint64_t c_NetWorldTailTransferId = 0x5441494CULL;
+	inline constexpr uint8_t c_NetWorldReportProgress = 1;
+	inline constexpr uint8_t c_NetWorldReportCatchUp = 2;
+	inline constexpr uint8_t c_NetWorldReportActivate = 3;
+
+	/// Content digest of the published archive (FNV-1a 64, lowercase hex).
+	std::string DigestWorldJoinBytes(const uint8_t* bytes, size_t size);
+	inline std::string DigestWorldJoinBytes(const std::vector<uint8_t>& bytes) {
+		return DigestWorldJoinBytes(bytes.data(), bytes.size());
+	}
+
+	/// The joiner-only envelope: offer JSON, archive bytes, recovery-encoded tail [B+1, ...].
+	bool IsWorldJoinImageBlob(const std::vector<uint8_t>& bytes);
+	bool EncodeWorldJoinImageBlob(const NetWorldCheckpointImage& image, const std::vector<uint8_t>& archive,
+	                              const std::vector<std::vector<uint8_t>>& tail, std::vector<uint8_t>& out, std::string* error = nullptr);
+	bool DecodeWorldJoinImageBlob(const std::vector<uint8_t>& bytes, NetWorldCheckpointImage& image, std::vector<uint8_t>& archive,
+	                              std::vector<std::vector<uint8_t>>& tail, std::string* error = nullptr);
+
+	/// A valid one-chunk StateChunk carrying a typed 8-byte value. Empty payloads stay illegal.
+	NetLobbyStateChunk MakeWorldJoinReport(uint8_t kind, uint64_t value);
+	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value);
+
+	/// Host-authored Activate binding: seat, team, brain preset and spawn (Persistent World respawn API).
+	NetGameWorldTransition BuildWorldActivateTransition(const NetWorldJoinSession& session, const NetMatchConfig& config, uint64_t membershipRevision);
 
 	/// The host's join plane: the slot table, the image in flight, the tail, the per-connection
 	/// bootstraps and the measurements. It authors transitions; it never polls a transport.
@@ -244,12 +280,19 @@ namespace RTE {
 		const NetWorldCheckpointImage& Image() const { return m_Image; }
 		/// Records that the joiner has the whole image and has begun replaying the tail.
 		bool NoteTransferComplete(NetPeerId connection, uint64_t bytes, std::string* error = nullptr);
+		bool NoteTransferProgress(NetPeerId connection, uint16_t ackedChunks, uint16_t totalChunks);
+		bool NoteDeliveredThrough(NetPeerId connection, uint64_t frame);
+		bool NoteTransferStarted(NetPeerId connection, uint64_t transferId, uint16_t totalChunks, uint64_t deliveredThrough);
 		/// Records the tail the joiner has applied and, once it has caught the world, schedules E.
 		/// @param nowFrame The world's committed frame.
 		/// @param outActivationTick The announced activation tick when this call scheduled one.
 		bool NoteCatchUpProgress(NetPeerId connection, uint64_t appliedThrough, uint64_t ticksReplayed, uint64_t elapsedMs, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr);
-		/// The bootstrap whose activation tick has arrived, if any; the caller authors its transition.
+		/// The bootstrap whose activation tick has arrived and whose joiner has applied through E-1.
 		const NetWorldJoinSession* DueActivation(uint64_t nowFrame) const;
+		/// A catching-up joiner that missed E and still sits behind it.
+		const NetWorldJoinSession* SlowActivation(uint64_t nowFrame) const;
+		/// Announces a later E once. A second miss is a CancelJoin.
+		bool ReannounceActivation(NetPeerId connection, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr);
 		/// Marks the bootstrap active once its transition has been committed.
 		bool CompleteActivation(NetPeerId connection, uint64_t atFrame, std::string* error = nullptr);
 		/// Ends a bootstrap without a seat drop: a failed or slow fresh join is not a departure.
