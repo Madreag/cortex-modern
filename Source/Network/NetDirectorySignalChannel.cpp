@@ -455,7 +455,7 @@ namespace RTE {
 			{"last_status", m_LastStatus},
 			{"last_error", m_LastError},
 		};
-		return report.dump();
+		return report.dump(-1, ' ', false, json::error_handler_t::replace);
 	}
 
 } // namespace RTE

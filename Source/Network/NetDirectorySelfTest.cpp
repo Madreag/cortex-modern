@@ -2425,6 +2425,25 @@ namespace RTE {
 				return true;
 			}
 
+			bool TestReportDumpSurvivesNonUtf8LastError(std::string* error) {
+				ScriptedChannel s(false);
+				s.replies->push_back({0, "", std::string(1, static_cast<char>(0xFF))});
+				s.channel.SetPolling(true);
+				s.channel.Update(0);
+				s.channel.Update(0);
+				try {
+					const json report = json::parse(s.channel.BuildReportJson());
+					if (!report.contains("last_error") || report["last_error"].get<std::string>().empty()) {
+						*error = "non-UTF-8 last_error dump dropped the field: " + report.dump();
+						return false;
+					}
+				} catch (const std::exception& parseError) {
+					*error = std::string("BuildReportJson threw on a non-UTF-8 last_error: ") + parseError.what();
+					return false;
+				}
+				return true;
+			}
+
 			bool TestSignalTransportBackoff(std::string* error) {
 				ScriptedChannel s(false);
 				const std::string me = s.channel.GetLocalPeer();
@@ -2679,6 +2698,7 @@ namespace RTE {
 			if (!TestSignal403Fails(&error)) return fail(error);
 			if (!TestSignalQueueFullRetries(&error)) return fail(error);
 			if (!TestSignal429RetryAfter(&error)) return fail(error);
+			if (!TestReportDumpSurvivesNonUtf8LastError(&error)) return fail(error);
 			if (!TestSignalTransportBackoff(&error)) return fail(error);
 			if (!TestSignalPayloadCap(&error)) return fail(error);
 			if (!TestSignalPostBeforePoll(&error)) return fail(error);
