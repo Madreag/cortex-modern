@@ -2469,6 +2469,58 @@ void MovableMan::DropAllPreviewGhosts() {
 	m_PreviewGhosts.clear();
 }
 
+bool MovableMan::GetPreviewGhostKinematics(Vector& pos, Vector& vel) const {
+	for (const PreviewGhost& ghost: m_PreviewGhosts) {
+		if (ghost.object) {
+			pos = ghost.object->GetPos();
+			vel = ghost.object->GetVel();
+			return true;
+		}
+	}
+	return false;
+}
+
+bool MovableMan::PreviewGhostsAreUnregistered() const {
+	for (const PreviewGhost& ghost: m_PreviewGhosts) {
+		const MovableObject* mo = ghost.object;
+		if (!mo) {
+			continue;
+		}
+		if (mo->GetID() != g_NoMOID || ValidMO(mo)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+void MovableMan::TravelPreviewGhosts() {
+	const auto begin = std::chrono::steady_clock::now();
+	const float dt = g_TimerMan.GetDeltaTimeSecs();
+	const Vector gravity = g_SceneMan.GetGlobalAcc();
+	for (PreviewGhost& ghost: m_PreviewGhosts) {
+		MovableObject* mo = ghost.object;
+		if (!mo || mo->IsSetToDelete() || mo->GetPinStrength() > 0) {
+			continue;
+		}
+		// Same gravity and air drag ApplyForces gives the particle; a ghost carries no forces.
+		Vector vel = mo->GetVel() + gravity * mo->GetGlobalAccScalar() * dt;
+		if (mo->GetAirResistance() > 0 && vel.GetLargest() >= mo->GetAirThreshold()) {
+			vel *= 1.0F - (mo->GetAirResistance() * dt);
+		}
+		Vector pos = mo->GetPos() + vel * dt;
+		g_SceneMan.WrapPosition(pos);
+		const int pixelX = static_cast<int>(std::floor(pos.m_X));
+		const int pixelY = static_cast<int>(std::floor(pos.m_Y));
+		if (g_SceneMan.IsWithinBounds(pixelX, pixelY, 0) && g_SceneMan.GetTerrMatter(pixelX, pixelY) != g_MaterialAir) {
+			mo->SetVel(Vector(0, 0));
+			continue;
+		}
+		mo->SetVel(vel);
+		mo->SetPos(pos);
+	}
+	m_LastGhostTravelUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count();
+}
+
 static bool IsNamedSpeculativeSpawn(const MovableObject* mo) {
 	return mo && mo->GetPresetName() != "None" && !mo->GetPresetName().empty();
 }
