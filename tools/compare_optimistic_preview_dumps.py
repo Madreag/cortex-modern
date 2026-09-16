@@ -1,15 +1,19 @@
 """Compare argv-identical dumps for optimistic preview ghosts and funds.
 
-Same event-d7 argv on the tip and on the base tree (W104b red/green pair):
+Same argv on the tip and on the base tree:
 
   -net-replay <fixtures>/pickup_fire.ccreplay
   -input-script <fixtures>/pickup_fire.txt
   -max-ticks 221 -num-lua-states 4 -tick-hashes
   -local-prediction-depth 7 -local-prediction-event-ledger 153
 
-The tip also writes <out>.event_ledger_ghost_travel.simstate.txt while a ghost
-is installed (DumpSimStateToString + DescribeCanonicalExtras). This driver
-asserts those texts are byte-identical to the same argv on the other build.
+The funds arm adds:
+
+  -local-prediction-funds-preview 153
+
+The tip writes <out>.event_ledger_ghost_travel.simstate.txt after the ghost
+moves (DumpSimStateToString + DescribeCanonicalExtras). This driver compares
+those files, produced by the same argv, byte-for-byte.
 """
 
 import argparse

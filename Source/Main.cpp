@@ -108,6 +108,7 @@
 #include "FaultInjection.h"
 #include "LocalPrediction.h"
 #include "LocalPredictionHudSelfTest.h"
+#include "LocalPredictionFundsSelfTest.h"
 #include "OwnedMovableObjects.h"
 #include "PreviewEventLedger.h"
 #include "PreviewScriptSelfTest.h"
@@ -397,11 +398,15 @@ struct GhostSample {
 	bool any = false;
 	Vector pos;
 	Vector vel;
+	float globalAccScalar = 1.0F;
+	float airResistance = 0;
+	float airThreshold = 0;
 };
 static std::vector<GhostSample> s_eventLedgerGhostSamples; //!< Per-committed-tick ghost kinematics keyed to the ledger event.
 static bool s_eventLedgerGhostRegistered = false;
 static bool s_eventLedgerGhostDumpTaken = false;
 static bool s_eventLedgerGhostDumpIdentical = false;
+static bool s_eventLedgerGhostMoved = false;
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
@@ -1262,6 +1267,15 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				return false;
 			}
 			LocalPredictionHudSelfTest::g_PressTick = std::strtoll(text.c_str(), nullptr, 10);
+			continue;
+		}
+		if (!lastArg && currentArg == "-local-prediction-funds-preview") {
+			const std::string text = argValue[++i];
+			if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
+				std::cerr << "[preview-funds-driver] bad press tick '" << text << "': expected a whole number" << std::endl;
+				return false;
+			}
+			LocalPredictionFundsSelfTest::g_PressTick = std::strtoll(text.c_str(), nullptr, 10);
 			continue;
 		}
 		if (!lastArg && currentArg == "-local-prediction-invariance") {
@@ -2803,7 +2817,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 // -local-prediction-event-ledger drives one preview and one frame per sim tick, the cadence a played
 // match has; a replay run pumps its ticks without frames, so nothing would preview at all.
 static void PreviewEventLedgerFrameOnTick() {
-	if (s_eventLedgerPressTick <= 0 && LocalPredictionHudSelfTest::g_PressTick <= 0) {
+	if (s_eventLedgerPressTick <= 0 && LocalPredictionHudSelfTest::g_PressTick <= 0 && LocalPredictionFundsSelfTest::g_PressTick <= 0) {
 		return;
 	}
 	if (g_TimerMan.GetSimUpdateCount() == s_eventLedgerPressTick && s_eventLedgerLuaEmitterUID == 0) {
@@ -2828,7 +2842,39 @@ static void PreviewEventLedgerFrameOnTick() {
 			}
 		}
 	}
+	std::string dumpBeforeInstall;
+	std::vector<std::string> dumpProblemsBefore;
+	const bool snapshotInstall = s_eventLedgerPressTick > 0 && !s_eventLedgerGhostDumpTaken;
+	if (snapshotInstall) {
+		dumpBeforeInstall = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblemsBefore);
+	}
 	LocalPrediction::RunPreview();
+	if (snapshotInstall && g_MovableMan.GetPreviewGhostCount() > 0) {
+		const std::vector<MovableMan::PreviewGhostState> installed = g_MovableMan.GetPreviewGhostStates();
+		const Vector posBefore = installed.front().pos;
+		const uint64_t installTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		for (const MovableMan::PreviewGhostState& ghost: installed) {
+			GhostSample sample;
+			sample.tick = installTick;
+			sample.key = ghost.key;
+			sample.any = true;
+			sample.pos = ghost.pos;
+			sample.vel = ghost.vel;
+			sample.globalAccScalar = ghost.globalAccScalar;
+			sample.airResistance = ghost.airResistance;
+			sample.airThreshold = ghost.airThreshold;
+			s_eventLedgerGhostSamples.push_back(sample);
+		}
+		g_MovableMan.TravelPreviewGhosts();
+		const std::vector<MovableMan::PreviewGhostState> travelled = g_MovableMan.GetPreviewGhostStates();
+		s_eventLedgerGhostMoved = !travelled.empty() && (travelled.front().pos - posBefore).GetMagnitude() > 0.01;
+		std::vector<std::string> dumpProblemsAfter;
+		const std::string dumpAfterTravel = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblemsAfter);
+		WriteProbeText("event_ledger_ghost_travel", dumpAfterTravel);
+		s_eventLedgerGhostDumpIdentical = dumpProblemsBefore.empty() && dumpProblemsAfter.empty() && dumpBeforeInstall == dumpAfterTravel;
+		s_eventLedgerGhostDumpTaken = true;
+	}
+	LocalPredictionFundsSelfTest::Sample(false);
 	if (s_eventLedgerPressTick > 0) {
 		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 		const std::vector<MovableMan::PreviewGhostState> ghosts = g_MovableMan.GetPreviewGhostStates();
@@ -2844,6 +2890,9 @@ static void PreviewEventLedgerFrameOnTick() {
 				sample.any = true;
 				sample.pos = ghost.pos;
 				sample.vel = ghost.vel;
+				sample.globalAccScalar = ghost.globalAccScalar;
+				sample.airResistance = ghost.airResistance;
+				sample.airThreshold = ghost.airThreshold;
 				s_eventLedgerGhostSamples.push_back(sample);
 			}
 		}
@@ -2855,6 +2904,7 @@ static void PreviewEventLedgerFrameOnTick() {
 		s_eventLedgerFlashTick = g_TimerMan.GetSimUpdateCount();
 	}
 	DrawFrameWithPreviews();
+	LocalPredictionFundsSelfTest::Sample(true);
 }
 
 // -local-prediction-event-ledger: the shot a previewed actor fires must be audible on the preview that
@@ -2980,17 +3030,26 @@ static void CheckPreviewEventLedgerSelfTest() {
 	const float sampleDt = g_TimerMan.GetDeltaTimeSecs();
 	const Vector gravity = g_SceneMan.GetGlobalAcc();
 	const double motionSlack = gravity.GetMagnitude() * static_cast<double>(sampleDt) * static_cast<double>(sampleDt);
-	const auto predictHoldOrForces = [&](const GhostSample& from) {
-		Vector vel = from.vel + gravity * sampleDt;
-		Vector pos = from.pos + vel * sampleDt;
+	const auto stepForces = [&](GhostSample state) {
+		Vector vel = state.vel + gravity * state.globalAccScalar * sampleDt;
+		if (state.airResistance > 0 && vel.GetLargest() >= state.airThreshold) {
+			vel *= 1.0F - (state.airResistance * sampleDt);
+		}
+		Vector pos = state.pos + vel * sampleDt;
 		g_SceneMan.WrapPosition(pos);
 		const int pixelX = static_cast<int>(std::floor(pos.m_X));
 		const int pixelY = static_cast<int>(std::floor(pos.m_Y));
 		if (g_SceneMan.IsWithinBounds(pixelX, pixelY, 0) && g_SceneMan.GetTerrMatter(pixelX, pixelY) != g_MaterialAir) {
-			return from.pos;
+			state.vel = Vector(0, 0);
+			return state;
 		}
-		return pos;
+		state.vel = vel;
+		state.pos = pos;
+		return state;
 	};
+	bool haveExpected = false;
+	GhostSample expected;
+	bool leftoverClosed = false;
 	for (const GhostSample& sample: s_eventLedgerGhostSamples) {
 		if (!isTracked(sample)) {
 			if (!sample.any) {
@@ -3001,6 +3060,8 @@ static void CheckPreviewEventLedgerSelfTest() {
 		if (!sawGhost) {
 			sawGhost = true;
 			firstGhostTick = sample.tick;
+			expected = sample;
+			haveExpected = true;
 		}
 		lastGhostTick = sample.tick;
 		lastGhostPos = sample.pos;
@@ -3008,15 +3069,19 @@ static void CheckPreviewEventLedgerSelfTest() {
 		if (adoptionTick != 0 && sample.tick >= adoptionTick) {
 			ghostAtOrAfterAdoption = true;
 		}
-		if (prevValid && sample.tick == prev.tick + 1) {
+		if (haveExpected && sample.tick != expected.tick) {
+			if (!leftoverClosed) {
+				expected = stepForces(expected);
+				leftoverClosed = true;
+			}
+			expected.tick = sample.tick;
+			worstMotionError = std::max(worstMotionError, static_cast<double>((sample.pos - expected.pos).GetMagnitude()));
+		}
+		if (prevValid && (sample.tick == prev.tick + 1 || sample.tick == prev.tick)) {
 			const double step = (sample.pos - prev.pos).GetMagnitude();
-			const double holdError = step;
-			const double leftoverError = (sample.pos - predictHoldOrForces(prev)).GetMagnitude();
-			worstMotionError = std::max(worstMotionError, holdError);
 			if (step > 0.01) {
 				++traveledTicks;
-				worstMotionError = std::max(worstMotionError, leftoverError);
-			} else {
+			} else if (sample.tick == prev.tick + 1) {
 				++heldTicks;
 				if (sample.vel.GetMagnitude() <= 0.01) {
 					stopAndHold = stopAndHold || traveledTicks >= 1;
@@ -3031,19 +3096,21 @@ static void CheckPreviewEventLedgerSelfTest() {
 	const int lastPixelX = static_cast<int>(std::floor(lastGhostPos.m_X));
 	const int lastPixelY = static_cast<int>(std::floor(lastGhostPos.m_Y));
 	const bool terrainHold = sawGhost && g_SceneMan.IsWithinBounds(lastPixelX, lastPixelY, 0) && g_SceneMan.GetTerrMatter(lastPixelX, lastPixelY) != g_MaterialAir;
-	const bool travelOk = sawGhost && (stopAndHold || heldTicks >= 1 || (traveledTicks >= 3 && frozenTicks == 0) || (terrainHold && traveledTicks >= 1));
+	const bool travelOk = sawGhost && traveledTicks >= 1;
 	check("the_ghost_appears_on_the_preview_tick", sawGhost && firstGhostTick <= press + 1,
 	      sawGhost ? "first ghost at committed tick " + std::to_string(firstGhostTick) + ", expected <= " + std::to_string(press + 1) : "no ghost sampled in the run");
 	check("the_ghost_travels_every_committed_tick", travelOk,
 	      std::to_string(traveledTicks) + " traveled ticks, " + std::to_string(heldTicks) + " held ticks, " + std::to_string(frozenTicks) + " frozen ticks, stop-and-hold=" + std::to_string(stopAndHold ? 1 : 0) + " terrain=" + std::to_string(terrainHold ? 1 : 0) + " last vel " + std::to_string(lastGhostVel.GetMagnitude()));
 	check("the_ghost_matches_the_canonical_motion", sawGhost && worstMotionError <= motionSlack,
-	      "worst hold/leftover error " + std::to_string(worstMotionError) + " px, slack " + std::to_string(motionSlack));
+	      "worst |sample - ApplyForces+wrap+hold copy| " + std::to_string(worstMotionError) + " px, slack " + std::to_string(motionSlack));
 	check("the_ghost_is_gone_the_tick_the_canonical_adopts", adoptionTick != 0 && sawGhost && !ghostAtOrAfterAdoption && lastGhostTick < adoptionTick,
 	      "last ghost at committed tick " + std::to_string(lastGhostTick) + ", adoption at " + std::to_string(adoptionTick) + (ghostAtOrAfterAdoption ? " (a ghost outlived its adoption)" : ""));
 	check("the_ghost_stays_off_the_moid_grid", !s_eventLedgerGhostRegistered,
 	      s_eventLedgerGhostRegistered ? "a ghost had a MOID or stayed in the world lists the dump walks" : "ghosts stayed unregistered");
-	check("ghost_travel_leaves_dumps_byte_identical", s_eventLedgerGhostDumpTaken && s_eventLedgerGhostDumpIdentical,
-	      s_eventLedgerGhostDumpTaken ? (s_eventLedgerGhostDumpIdentical ? "dump+extras unchanged while ghosts were installed" : "dump or extras changed while ghosts were travelling") : "no dump snapshot while a ghost was installed");
+	check("ghost_travel_leaves_dumps_byte_identical", s_eventLedgerGhostDumpTaken && s_eventLedgerGhostMoved && s_eventLedgerGhostDumpIdentical,
+	      !s_eventLedgerGhostDumpTaken ? "no dump snapshot around an installing travel" : (!s_eventLedgerGhostMoved ? "TravelPreviewGhosts did not move the installed ghost" : (s_eventLedgerGhostDumpIdentical ? "dump+extras unchanged after the ghost moved" : "dump or extras changed after the ghost moved")));
+	check("expired_ghost_vanishes", g_MovableMan.GetPreviewGhostCount() == 0,
+	      std::to_string(g_MovableMan.GetPreviewGhostCount()) + " ghosts still installed at check");
 	// A guard, not a detector: the muzzle flash sprite is already drawn on the preview that fires.
 	check("the_flash_sprite_stays_on_the_preview_tick", s_eventLedgerFlashTick > 0 && static_cast<uint64_t>(s_eventLedgerFlashTick) <= press + 1,
 	      "the previewed firearm's flash frame is first set at committed tick " + std::to_string(s_eventLedgerFlashTick) + ", expected <= " + std::to_string(press + 1));
@@ -3072,6 +3139,15 @@ static void CheckRequiredProbesCompleted() {
 			s_netReplayExitCode = 5;
 			LocalPredictionHudSelfTest::g_Checked = true;
 		} else if (!LocalPredictionHudSelfTest::Check()) {
+			s_netReplayExitCode = 5;
+		}
+	}
+	if (LocalPredictionFundsSelfTest::g_PressTick > 0) {
+		if (!LocalPredictionFundsSelfTest::g_SampledPlusOne && !LocalPredictionFundsSelfTest::g_Checked) {
+			std::cout << "[preview-funds-driver] FAIL: funds sample at tick " << LocalPredictionFundsSelfTest::g_PressTick << " never executed (the run stopped at tick " << stoppedAt << ")" << std::endl;
+			s_netReplayExitCode = 5;
+			LocalPredictionFundsSelfTest::g_Checked = true;
+		} else if (!LocalPredictionFundsSelfTest::Check()) {
 			s_netReplayExitCode = 5;
 		}
 	}
@@ -3824,17 +3900,7 @@ void RunGameLoop() {
 			if (Activity* activity = g_ActivityMan.GetActivity()) {
 				activity->ExpirePresentationViews(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 			}
-			if (s_eventLedgerPressTick > 0 && g_MovableMan.GetPreviewGhostCount() > 0 && !s_eventLedgerGhostDumpTaken) {
-				std::vector<std::string> dumpProblems;
-				const std::string dumpBefore = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblems);
-				g_MovableMan.TravelPreviewGhosts();
-				const std::string dumpAfter = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblems);
-				WriteProbeText("event_ledger_ghost_travel", dumpBefore);
-				s_eventLedgerGhostDumpIdentical = dumpProblems.empty() && dumpBefore == dumpAfter;
-				s_eventLedgerGhostDumpTaken = true;
-			} else {
-				g_MovableMan.TravelPreviewGhosts();
-			}
+			g_MovableMan.TravelPreviewGhosts();
 
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
