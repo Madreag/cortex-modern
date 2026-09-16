@@ -1,50 +1,84 @@
-"""Synthetic RED records for the six vacuous oracle sites. Written, not run.
+"""Invoke each tightened oracle with empty or skipped input.
 
-Each tightening fails an empty or skipped input with a message that names the
-missing fact, and records that a comparison happened. The completion pass
-feeds these shapes; this file is the method, not a launch.
+Base tree compared empty census lines as [] == [], skipped missing pair
+saves, treated None brains as equal, skipped missing offline traces, accepted
+len(kills) >= human_seats, and ignored a timed-out spectate process.
 """
 from __future__ import annotations
 
-# net_activity_launch.census_compare / compare_census_lines
-# BEFORE: tick_lines missing or [] compared as [] == [] and passed.
-# AFTER: empty left fails "offline census tick-1 lines missing"; empty right
-# fails "match census tick-1 lines missing". A real compare then runs.
-CENSUS_EMPTY_OFFLINE = {"pass": False, "reason": "offline census tick-1 lines missing"}
-CENSUS_EMPTY_MATCH = {"pass": False, "reason": "match census tick-1 lines missing"}
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
 
-# seat_facts.phase_b.pair_arms / gates
-# BEFORE: missing p5snap saves skipped check_world; invoke() exits discarded;
-# main returned 0 after a failed gate.
-# AFTER: missing saves raise "missing pair snapshot for world compare";
-# gates and run_pair require_zero=True so a comparison must complete.
-PHASE_B_MISSING_SAVES = "missing pair snapshot for world compare"
-PHASE_B_INVOKE_FAILED = "exited"
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE / "seat_facts"))
 
-# seat_facts.check_world.compare
-# BEFORE: brains is None on a pre-WorldStructure3 tag, so None == None passed.
-# AFTER: brain_records_present is False and brain_records_equal cannot pass.
-CHECK_WORLD_NO_BRAINS = {"brain_records_present": False, "brain_records_equal": False}
+from check_world import compare as compare_world
+from compare_offline import compare as compare_offline
+from compare_offline import main as offline_main
+from net_activity_launch import compare_census_lines
+from phase_b import pair_arms
+from test_net_brainless_spectate import check
 
-# seat_facts.compare_offline
-# BEFORE: missing traces skipped the compare; red_equal_reference was unused
-# in the exit; an all-green-missing row still returned 0 when pie lists were empty.
-# AFTER: missing traces set reason "missing traces for offline compare";
-# exit requires present and red_equal_reference is False and green is True.
-COMPARE_OFFLINE_MISSING = {"present": False, "reason": "missing traces for offline compare"}
 
-# test_net_brainless_spectate
-# BEFORE: len(kills) >= human_seats (a 3-kill log passed a 2-seat roster);
-# sp_arm pass ignored exit_code/timed_out.
-# AFTER: len(kills) == human_seats; process_completed requires exit 0 and no timeout.
-BRAINLESS_KILL_COUNT = "brain-kill lines must equal the human seat count"
-BRAINLESS_PROCESS = "process_completed"
+class OracleVacuity(unittest.TestCase):
+    def test_empty_offline_census_names_the_missing_lines(self):
+        result = compare_census_lines([], ["actor uid=1"])
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["reason"], "offline census tick-1 lines missing")
 
-SITES = (
-    ("net_activity_launch.py:compare_census_lines", CENSUS_EMPTY_OFFLINE),
-    ("seat_facts/phase_b.py:pair_arms", PHASE_B_MISSING_SAVES),
-    ("seat_facts/check_world.py:compare", CHECK_WORLD_NO_BRAINS),
-    ("seat_facts/compare_offline.py:main", COMPARE_OFFLINE_MISSING),
-    ("test_net_brainless_spectate.py:net_arm", BRAINLESS_KILL_COUNT),
-    ("test_net_brainless_spectate.py:sp_arm", BRAINLESS_PROCESS),
-)
+    def test_empty_match_census_names_the_missing_lines(self):
+        result = compare_census_lines(["actor uid=1"], [])
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["reason"], "match census tick-1 lines missing")
+
+    def test_missing_pair_saves_name_the_missing_snapshot(self):
+        with patch("phase_b.invoke", return_value=0):
+            with tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaisesRegex(RuntimeError, "missing pair snapshot for world compare"):
+                    pair_arms(Path(tmp))
+
+    def test_none_brains_cannot_pass_brain_records_equal(self):
+        with patch("check_world.world", side_effect=[
+            (b"a", {"brains": None, "alarm_bits": []}),
+            (b"a", {"brains": None, "alarm_bits": []}),
+        ]):
+            result = compare_world(Path("host"), Path("client"))
+        self.assertFalse(result["checks"]["brain_records_present"])
+        self.assertFalse(result["checks"]["brain_records_equal"])
+        self.assertFalse(result["pass"])
+
+    def test_missing_offline_traces_name_the_missing_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = compare_offline(Path(tmp))
+            self.assertTrue(result["rows"])
+            for row in result["rows"]:
+                self.assertFalse(row["present"])
+                self.assertEqual(row["reason"], "missing traces for offline compare")
+            self.assertEqual(offline_main([str(tmp)]), 1)
+
+    def test_brainless_kill_count_quotes_the_production_detail(self):
+        checks = []
+        kills = []
+        human_seats = 2
+        check(checks, "host_brains_destroyed", len(kills) == human_seats,
+              f"brain-kill lines={len(kills)} human seats={human_seats}", [])
+        self.assertEqual(checks[0]["status"], "fail")
+        self.assertEqual(checks[0]["detail"], "brain-kill lines=0 human seats=2")
+
+    def test_brainless_process_completed_quotes_exit_and_timeout(self):
+        checks = []
+        record = {"exit_code": 1, "timed_out": True}
+        exit_ok = record.get("exit_code") == 0 and not record.get("timed_out")
+        check(checks, "process_completed", exit_ok,
+              f"exit_code={record.get('exit_code')} timed_out={record.get('timed_out')}", [])
+        self.assertEqual(checks[0]["status"], "fail")
+        self.assertEqual(checks[0]["name"], "process_completed")
+        self.assertEqual(checks[0]["detail"], "exit_code=1 timed_out=True")
+
+
+if __name__ == "__main__":
+    unittest.main()
