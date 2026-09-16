@@ -22,6 +22,7 @@ namespace RTE {
 	class GUIControlManager;
 	class GUICollectionBox;
 	class GUIButton;
+	class GUIComboBox;
 	class GUILabel;
 	class GUIControl;
 	class GUIFont;
@@ -217,6 +218,7 @@ namespace RTE {
 		GUILabel* m_MultiplayerErrorLabel;
 		GUILabel* m_MultiplayerLandingStatusLabel;
 		GUILabel* m_MultiplayerLobbyMatchLabel;
+		GUILabel* m_MultiplayerLobbyMatchModeLabel = nullptr; //!< The header's second row: scene and friendly mode.
 		GUITextBox* m_MultiplayerNameTextBox;
 		GUITextBox* m_MultiplayerHostPortTextBox;
 		GUITextBox* m_MultiplayerHostPlayersTextBox;
@@ -224,7 +226,7 @@ namespace RTE {
 		GUILabel* m_MultiplayerHostInputDelayPolicyLabel; //!< Names the saved delay policy beside the box, the same parenthetical the lobby row carries.
 		GUICheckbox* m_MultiplayerHostPortMapCheckbox;
 		GUIButton* m_MultiplayerHostModeButton;
-		GUIButton* m_MultiplayerHostActivityButton;
+		GUIComboBox* m_MultiplayerHostActivityCombo = nullptr; //!< The host's pick-list of lockstep-runnable activities.
 		GUILabel* m_MultiplayerHostInfoLabel;
 		// (preset, defining module) for each scripted activity a lockstep match can run; the module is
 		// carried so a same-named preset in another module cannot swap in silently.

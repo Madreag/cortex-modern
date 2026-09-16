@@ -74,6 +74,8 @@ ARMS = {
     "pause_on": {"captures": True, "event": True},
     "pause_off": {"event": True},
     "f6": {"f6": True},
+    # The F6 panel plus pause_on's own toast injection: a live toast while the seats panel is open.
+    "f6_toast": {"f6_toast": True},
     "stall": {"stall": True},
     "hold": {"leave": True},
     "holdlong": {"leave": True, "long_name": True},
@@ -321,6 +323,27 @@ def probe_script(who, size, arm, mode):
                 # The panel's own rectangle is what the capture is measured against.
                 {"op": "assert_control", "control": PANEL, "equals": {"visible": True}, "fits": True},
                 shot("widget-f6-panel-host", wanted(True)),
+                {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+                {"op": "wait", "panel_open": False},
+            ]
+    if arm.get("f6_toast"):
+        if who == "Host":
+            steps += [
+                {"op": "wait", "sim_at_least": 200},
+                {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+                {"op": "wait", "panel_open": True},
+                widget(True),
+                {"op": "assert_control", "control": "NetworkSeatsTitle", "equals": {"visible": True}},
+                # pause_on's injection: the same P press lands a live toast while the panel is open.
+                {"op": "key_down", "key": "P", "sim_at": 240}, {"op": "key_up", "key": "P", "sim_at": 241},
+                {"op": "wait", "control": TOAST, "equals": {"visible": True}},
+                label_assert(TOAST, PAUSED),
+                # The panel's top band reserves one toast row: on a compact screen the stack shows
+                # the newest toast only, and every overlay rect stays inside the window. An Off
+                # match has no status widget to clear, so the step says so instead of faking one.
+                {"op": "assert_net_ui_clear", "match": True, "status": wanted(True)},
+                {"op": "screenshot_pair", "name": f"f6-toast-{mode}-host", "widget": wanted(True)},
+                {"op": "key_down", "key": "P", "sim_at": 480}, {"op": "key_up", "key": "P", "sim_at": 481},
                 {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                 {"op": "wait", "panel_open": False},
             ]
@@ -639,11 +662,13 @@ def inspect_pair(root, records, size, arm, mode, name):
                        if step.get("control") == PANEL and obs.get("control", {}).get("visible")]
         details["shots"][who] = []
         for step, obs in observations:
-            if step.get("op") != "screenshot":
+            if step.get("op") not in ("screenshot", "screenshot_pair"):
                 continue
             path = Path(obs["screenshot"]) if "screenshot" in obs else None
             shot_result = probe_shot_oracle(path, size, step.get("widget"), panel_rects[-1] if panel_rects else None) \
                 if path and path.exists() else {"pass": False, "reason": "missing probe capture", "name": step["name"]}
+            if step.get("op") == "screenshot_pair":
+                shot_result["composited"] = obs.get("screenshot_composited")
             details["shots"][who].append(shot_result)
             checks[f"{who}_shot_{step['name']}"] = shot_result["pass"]
         if arm.get("event"):
@@ -711,9 +736,24 @@ def inspect_pair(root, records, size, arm, mode, name):
                     checks["Host_hold_widget_absent"] = not hold_reads and not widget_rects
                 else:
                     checks["Host_hold_widget_seen"] = bool(hold_reads)
-        if arm.get("f6") and who == "Host":
+        if (arm.get("f6") or arm.get("f6_toast")) and who == "Host":
             panel_reads = [obs.get("panel_open") for step, obs in observations if "panel_open" in obs]
             checks["Host_f6_panel_seen"] = any(panel_reads)
+        if arm.get("f6_toast") and who == "Host":
+            # The arm owes a live toast with the panel open: the observation that names both rects.
+            toast_reads = [obs for step, obs in observations
+                           if step.get("control") == TOAST and obs.get("control", {}).get("visible")]
+            clear_reads = [obs["net_ui"] for step, obs in observations
+                           if step.get("op") == "assert_net_ui_clear" and "net_ui" in obs]
+            checks["Host_f6_toast_live"] = bool(toast_reads)
+            checks["Host_f6_toast_clear_read"] = bool(clear_reads) and all(
+                read["toasts"]["visible"] and read["seats_panel"]["visible"] for read in clear_reads)
+            if size[1] < COMPACT_MAX_HEIGHT:
+                # The reserved band shows one toast row: a single-row rect, on screen, above the panel.
+                checks["Host_f6_toast_single_row"] = bool(clear_reads) and all(
+                    read["toasts"]["y"] >= 0 and read["toasts"]["h"] <= 22
+                    and read["toasts"]["y"] + read["toasts"]["h"] <= read["seats_panel"]["y"]
+                    for read in clear_reads)
     if not leaving:
         ok, compared = strict_compare(root / "Host_trace.json", root / "Guest_trace.json", expected_ticks=TICKS)
         checks["complete_peer_hashes"] = ok

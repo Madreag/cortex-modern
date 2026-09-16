@@ -449,13 +449,41 @@ namespace {
 				    "the seat's screen does not carry the expected message");
 			}
 		} else if (op == "assert_net_ui_clear") {
-			// The network overlay owes the stock setup editor its own surfaces: the picker and the seat's message band.
+			// The network overlay owes the stock setup editor its own surfaces: the picker and the seat's
+			// message band. In a running match ("match") the open seats panel is the surface it owes instead.
 			const int player = step.value("player", 0);
+			const bool match = step.value("match", false);
 			const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
 			    [player](const Json& row) { return row.at("player") == player; });
-			Require(seat != observed["editor_seats"].end(), "seat " + std::to_string(player) + " is not a local editor seat");
-			Require(observed["editing"] == true, "the activity is not in the setup editor");
-			Require(observed["net_ui"]["status"].at("visible") == true, "the network status widget is not on screen");
+			if (!match) {
+				Require(seat != observed["editor_seats"].end(), "seat " + std::to_string(player) + " is not a local editor seat");
+				Require(observed["editing"] == true, "the activity is not in the setup editor");
+			}
+			// The status widget is the overlay's own surface wherever its mode lets it draw; an Off
+			// match honestly has none, so a step may say so rather than fake one.
+			if (step.value("status", true)) {
+				Require(observed["net_ui"]["status"].at("visible") == true, "the network status widget is not on screen");
+			}
+			const BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
+			// No overlay rectangle ever leaves the window.
+			for (const std::string& element: {"status", "toasts", "seats_panel"}) {
+				const Json& r = observed["net_ui"].at(element);
+				if (!r.at("visible").get<bool>()) continue;
+				Require(r["x"].get<int>() >= 0 && r["y"].get<int>() >= 0 &&
+				    r["x"].get<int>() + r["w"].get<int>() <= backbuffer->w &&
+				    r["y"].get<int>() + r["h"].get<int>() <= backbuffer->h,
+				    "the network " + element + " leaves the window");
+			}
+			const Json& seatsPanel = observed["net_ui"].at("seats_panel");
+			if (match) {
+				Require(seatsPanel.at("visible") == true, "the seats panel is not open");
+				Require(observed["net_ui"]["toasts"].at("visible") == true, "no toast is live for the reserved row");
+				for (const std::string& element: {"status", "toasts"}) {
+					Require(!Overlaps(observed["net_ui"].at(element), seatsPanel),
+					    "the network " + element + " overlaps the seats panel");
+				}
+				return true; // a match-mode step ends here; the editor checks are the non-match path's
+			}
 			if (step.value("picker_open", false)) Require(seat->at("picker").at("visible") == true, "the editor's object picker is not open");
 			if (step.value("screen_text", false)) Require(seat->at("screen_text_rect").at("visible") == true, "the seat's screen carries no editor message");
 			const Json& band = seat->at("screen_text_rect");
@@ -469,7 +497,6 @@ namespace {
 				    band["y"].get<int>() + band["h"].get<int>() <= offset.GetRoundIntY() + g_FrameMan.GetPlayerScreenHeight(),
 				    "the seat's message is drawn off its own screen");
 			}
-			const Json& seatsPanel = observed["net_ui"].at("seats_panel");
 			for (const std::string& element: {"status", "toasts"}) {
 				// An open seats panel owns its rows too - the overlay lifts above it rather than draw over it.
 				Require(!Overlaps(observed["net_ui"].at(element), seatsPanel),
