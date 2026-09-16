@@ -36,8 +36,10 @@ namespace RTE {
 	struct PrimitiveQueuesSetAside;
 
 	struct ControllerFrame;
+	struct NetGameDeliverCargo;
 	struct LuaPathCallbackContext;
 	class MovableObject;
+	class ACraft;
 	class Actor;
 	class LuaStateWrapper;
 	class HeldDevice;
@@ -309,6 +311,8 @@ namespace RTE {
 		std::vector<PreviewGhostState> GetPreviewGhostStates() const;
 		/// True when every ghost is unregistered: no MOID, not in the world lists the dump walks.
 		bool PreviewGhostsAreUnregistered() const;
+		/// Applies one queued buy the way the lockstep command path does; reject and queue-fail clear the view.
+		static bool ApplyQueuedPurchaseDelivery(Activity& activity, const NetGameDeliverCargo& delivery, uint8_t senderPeerId, ACraft* craft = nullptr);
 		/// Draws the substitute in the original's slot until swapped back.
 		bool SwapActorForRender(Actor* original, Actor* substitute);
 		void AddRenderSubstitute(const MovableObject* mo);

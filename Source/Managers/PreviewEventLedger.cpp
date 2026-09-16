@@ -2,6 +2,7 @@
 
 #include "AudioMan.h"
 #include "MovableMan.h"
+#include "MOPixel.h"
 #include "TimerMan.h"
 
 #include <algorithm>
@@ -295,8 +296,13 @@ namespace RTE {
 		check("consecutive_previews_predict_it_once", skipped && GetLiveEntryCount() == 1 && GetCounters().playedAtPreview == 2);
 		ExpireForTick(105);
 		const bool held = GetLiveEntryCount() == 1 && GetCounters().expired == 0;
+		if (MovableMan::IsConstructed()) {
+			g_MovableMan.InstallPreviewGhost(new MOPixel(), projectile);
+		}
 		ExpireForTick(106);
 		check("an_unclaimed_projectile_expires", held && GetLiveEntryCount() == 0 && GetCounters().expired == 1);
+		check("expired_ghost_vanishes", !MovableMan::IsConstructed() || g_MovableMan.GetPreviewGhostCount() == 0,
+		      std::to_string(MovableMan::IsConstructed() ? g_MovableMan.GetPreviewGhostCount() : 0) + " ghosts after ExpireForTick");
 		check("counters_balance", GetCounters().playedAtPreview == GetCounters().adoptedAtCommit + GetCounters().expired + GetLiveEntryCount());
 
 		ResetForSelfTest();
