@@ -523,13 +523,16 @@ bool PieMenu::RunCheckpointSelfTest() {
 			std::string(menu.IsEnabled() ? "1" : "0") + "/" + (menu.IsVisible() ? "1" : "0"),
 			std::string(enabledBefore ? "1" : "0") + "/" + (visibleBefore ? "1" : "0"));
 		const auto dumpAfterDraw = menu.SaveRuntimeCheckpoint();
+		std::cout << "[highlight-dump] role=sp " << dumpAfterDraw << std::endl;
 		PieMenu mpDump;
 		if (mpDump.Create() >= 0) {
 			mpDump.LoadRuntimeCheckpoint(saved);
 			mpDump.SetHighlightDrawRadius(30);
 			mpDump.RenderUpdate();
-			check("highlight_sp_mp_dump_identity", mpDump.SaveRuntimeCheckpoint() == dumpAfterDraw && dumpAfterDraw == saved,
-				mpDump.SaveRuntimeCheckpoint(), saved);
+			const auto mpSaved = mpDump.SaveRuntimeCheckpoint();
+			std::cout << "[highlight-dump] role=mp " << mpSaved << std::endl;
+			check("highlight_sp_mp_dump_identity", mpSaved == dumpAfterDraw && dumpAfterDraw == saved,
+				mpSaved, saved);
 		}
 		menu.ClearHighlightDraw();
 		menu.RenderUpdate();
