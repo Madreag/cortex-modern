@@ -129,10 +129,10 @@ namespace {
 	EditorArea FreeArea(int screenWidth) {
 		EditorArea area;
 		const auto* game = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
-		if (!game || game->GetActivityState() != Activity::ActivityState::Editing) return area;
+		if (!game) return area;
+		area.editing = game->GetActivityState() == Activity::ActivityState::Editing;
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 			if (!(game->IsSeatActive(player) && game->IsLocalHumanSeat(player))) continue;
-			area.editing = true;
 			const int screen = game->ScreenOfPlayer(player);
 			const FrameMan::ScreenTextLayout text = g_FrameMan.GetScreenTextLayout(screen, true);
 			if (text.height > 0) {
@@ -912,7 +912,7 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	int maxRows = std::min(static_cast<int>(m_MatchChat.size()), std::max(0, (available - inputH) / lineH));
 	if (rows > maxRows) rows = maxRows;
 	// A 640x360 match still owes the player one yielded row before the band clips off.
-	if (rows == 0 && showHistory && !m_MatchChatLines.empty() && maxRows == 0 && available >= lineH) {
+	if (rows == 0 && showHistory && !m_MatchChatLines.empty() && maxRows == 0 && available >= lineH + inputH) {
 		rows = 1;
 	}
 	const int height = rows * lineH + inputH;
