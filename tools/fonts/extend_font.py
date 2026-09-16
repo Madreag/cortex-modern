@@ -44,7 +44,7 @@ CP1252_UNUSED = frozenset({0x81, 0x8D, 0x8F, 0x90, 0x9D})
 #   0xD6  Reader.cpp:550  -42 via LoadingScreen.cpp:139
 FONT_SMALL_HUD = frozenset({0xCF, 0xD5, 0xD6})
 WAVE_TIP = "6447c4c2e3"
-# FontLarge: GetLargeFont() and TitleScreen's Menus/FontLarge.png.
+# FontLarge HUD lives only on Skins/FontLarge.png (GetLargeFont(), FrameMan.cpp:1281).
 #   0xC2  GameActivity.cpp:2824  -62 team-one (commented draw; cell is the icon)
 #   0xC5  GameActivity.cpp:2824  -59 team-two
 #   0xC6  Actor.cpp:2707 / GameActivity.cpp:2820 / Metagame / Scenario  -58 gold
@@ -69,14 +69,31 @@ FONT_LARGE_HUD = frozenset({
     0xDB, 0xDC, 0xDD,
     0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xEA,
 })
+# Menus/FontLarge.png is Latin-1 except the HUD cells those menus actually draw.
+#   0xC6  MetagameGUI.cpp:4576 / ScenarioActivityConfigGUI.cpp:330  -58 gold
+#   0xD0  MetagameGUI.cpp:536  -48 brain
+#   0xD1  MetagameGUI.cpp:4576  -47
+#   0xD2  MetagameGUI.cpp:4576  -46
+#   0xD9  MetagameGUI.cpp:5508  -39
+#   0xDC  MetagameGUI.cpp:5170  -36
+#   0xDD  TitleScreen.cpp:562  -35 copyright
+#   0xE6  MetagameGUI.cpp:4969  -26
+#   0xE7  MetagameGUI.cpp:5530  -25
+#   0xEA  MetagameGUI.cpp:458  -22 menu
+# 0xD6 stays Ö (credits). HeldDevice.cpp:546 draws Skins/FontLarge.
+MENUS_FONT_LARGE_HUD = frozenset({
+    0xC6, 0xD0, 0xD1, 0xD2, 0xD9, 0xDC, 0xDD, 0xE6, 0xE7, 0xEA,
+})
 
 
 def hud_keep_set(path):
     path = Path(path)
     if path.name == "FontSmall.png" and "Menus" not in path.parts:
         return FONT_SMALL_HUD
-    if path.name == "FontLarge.png":
+    if path.name == "FontLarge.png" and "Menus" not in path.parts:
         return FONT_LARGE_HUD
+    if path.name == "FontLarge.png" and "Menus" in path.parts:
+        return MENUS_FONT_LARGE_HUD
     return frozenset()
 
 # Accented letters: compose from the font's own base + a diacritic.
@@ -840,30 +857,35 @@ def draw_contact(results, dest):
             base = empty_cell(font, 4)
         else:
             base = empty_cell(font, new.width)
-        pairs.append((code, base, new))
+        pairs.append((code, base, new, red, bg))
+    large = next(item for item in results if item["path"].as_posix().endswith("Menus/FontLarge.png"))
+    large_font = large["font"]
+    lred, lbg = large_font["red"], large_font["bg"]
+    for code, base_ch in ((0xC4, "A"), (0xD6, "O"), (0xA9, "C")):
+        pairs.append((code, copy_cell(large_font, base_ch), large_font["cells"][code], lred, lbg))
     cols = 16
     pad = 2
-    cell_w = max(8, max(max(a.width, b.width) for _, a, b in pairs) + 1)
+    cell_w = max(8, max(max(a.width, b.width) for _, a, b, _, _ in pairs) + 1)
     pair_w = cell_w * 2 + pad + 4
-    pair_h = font_h + 8
+    pair_h = max(font_h, large_font["font_h"]) + 8
     rows = (len(pairs) + cols - 1) // cols
     sheet = Image.new("RGBA", (cols * pair_w + 4, rows * pair_h + 4), (12, 20, 39, 255))
     pix = sheet.load()
 
-    def stamp(cell, x0, y0):
+    def stamp(cell, x0, y0, cred, cbg):
         for y, row in enumerate(cell.rows):
             for x, pixel in enumerate(row):
-                if pixel != bg and pixel != red:
+                if pixel != cbg and pixel != cred:
                     px, py = x0 + x, y0 + y
                     if 0 <= px < sheet.size[0] and 0 <= py < sheet.size[1]:
                         pix[px, py] = pixel
 
-    for i, (code, base, new) in enumerate(pairs):
+    for i, (code, base, new, cred, cbg) in enumerate(pairs):
         col, row = i % cols, i // cols
         x0 = 2 + col * pair_w
         y0 = 2 + row * pair_h
-        stamp(base, x0, y0)
-        stamp(new, x0 + cell_w + pad, y0)
+        stamp(base, x0, y0, cred, cbg)
+        stamp(new, x0 + cell_w + pad, y0, cred, cbg)
     save_png(sheet, dest)
     return dest, len(pairs)
 
