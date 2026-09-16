@@ -54,6 +54,9 @@ namespace {
 		/// its own offset, so every local seat contributes the column its picker reports, translated here.
 		struct Column { int x = 0, y = 0, w = 0, h = 0; };
 		std::vector<Column> columns;
+		/// The seat's own message band in the same window space: the overlay keeps above or below it,
+		/// never across it.
+		std::vector<Column> textBands;
 
 		/// The window-space span the band [top, bottom) keeps once every picker column crossing it is out.
 		void FreeSpan(int bandTop, int bandBottom, int screenWidth, int& left, int& right) const {
@@ -79,6 +82,10 @@ namespace {
 			if (!(game->IsSeatActive(player) && game->IsLocalHumanSeat(player))) continue;
 			area.editing = true;
 			const int screen = game->ScreenOfPlayer(player);
+			const FrameMan::ScreenTextLayout text = g_FrameMan.GetScreenTextLayout(screen, true);
+			if (text.height > 0) {
+				area.textBands.push_back({text.x, text.y, text.width, text.height});
+			}
 			const int occlusion = g_CameraMan.GetScreenOcclusion(screen).GetRoundIntX();
 			if (occlusion == 0) continue;
 			// The picker measured itself against the seat's own framebuffer, which a split screen parks
@@ -254,8 +261,60 @@ bool NetModerationGUI::SetOpen(bool open) {
 	return true;
 }
 
+void NetModerationGUI::LayoutPanel() {
+	// A compact screen keeps the strip band and one toast row above the panel's top: the panel sits
+	// under them and loses the rows off its height, so its bottom edge - and the roster - stay put.
+	const int screenHeight = g_WindowMan.GetResY();
+	GUIFont* font = g_FrameMan.GetSmallFont(true);
+	const int rowHeight = std::max(12, font ? font->GetFontHeight() : 12) + 8;
+	const int width = std::min(c_PanelWidth, g_WindowMan.GetResX() - 12);
+	int top = PanelTop(screenHeight);
+	if (screenHeight < c_CompactMaxHeight) {
+		int reserved = c_StripBandBottom + rowHeight + c_PanelGap;
+		// While the editor holds the world its seat message bands own their top rows too: a band
+		// crossing the reservation pushes the toast row - and the panel - under it.
+		for (bool moved = true; moved;) {
+			moved = false;
+			for (const auto& band: FreeArea(g_WindowMan.GetResX()).textBands) {
+				if (band.y < reserved && band.y + band.h + rowHeight + 2 * c_PanelGap > reserved) {
+					reserved = band.y + band.h + rowHeight + 2 * c_PanelGap;
+					moved = true;
+				}
+			}
+		}
+		top = std::max(top, reserved);
+	}
+	const int height = std::min(c_PanelHeight, screenHeight - c_PanelGap - top);
+	const int lost = c_PanelHeight - height;
+	int x, y, w, h;
+	m_Panel->GetControlRect(&x, &y, &w, &h);
+	if (x != (g_WindowMan.GetResX() - width) / 2 || y != top || w != width || h != height) {
+		m_Panel->Move((g_WindowMan.GetResX() - width) / 2, top);
+		m_Panel->Resize(width, height);
+	}
+	// The roster yields the reserved rows and scrolls for what no longer fits; the status row gives up
+	// its second line first, then moves up with the close row instead of clipping at the panel's bottom.
+	if (m_Roster->GetHeight() != 240 - lost) {
+		m_Roster->Resize(m_Roster->GetWidth(), 240 - lost);
+	}
+	m_Roster->SetVerticalOverflowScroll(lost != 0);
+	m_Roster->ActivateDeactivateOverflowScroll(lost != 0);
+	const int statusY = 282 - std::max(0, lost - 20);
+	if (m_Status->GetRelYPos() != statusY) {
+		m_Status->SetPositionRel(10, statusY);
+	}
+	const int statusHeight = 30 - std::min(lost, 20);
+	if (m_Status->GetHeight() != statusHeight) {
+		m_Status->Resize(m_Status->GetWidth(), statusHeight);
+	}
+	if (m_Close->GetRelYPos() != 318 - lost) {
+		m_Close->SetPositionRel(width - 224, 318 - lost);
+	}
+}
+
 void NetModerationGUI::Refresh() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+	LayoutPanel();
 	m_Model.Refresh(g_NetMatchService.GetModerationSeats());
 	// The hold is the round's, read from the same place the stall overlay reads it.
 	std::string holdName;
@@ -264,6 +323,10 @@ void NetModerationGUI::Refresh() {
 	m_Title->SetText(NetModerationPanelTitle(snapshot.serviceState == "Running", holdPause, DisplayName(holdName), holdSeconds));
 	m_Summary->SetText(snapshot.isHost ? m_Model.GetSummaryText() : "Only the host can approve a substitute.");
 	m_Status->SetText(WrapText(m_LabelFont, m_Model.GetStatusText(), m_Status->GetWidth()));
+	// A compact panel that lost its rows to the toast reservation has no room for the status line
+	// under a full seat list; the seat rows already carry the same state.
+	const int statusY = 282 - std::max(0, (c_PanelHeight - m_Panel->GetHeight()) - 20);
+	m_Status->SetVisible(40 + static_cast<int>(std::min<size_t>(m_Model.RowCount(), m_Seats.size())) * 80 <= statusY);
 	m_Roster->SetVisible(!snapshot.isHost);
 	if (!snapshot.isHost) {
 		std::string roster;
@@ -428,14 +491,23 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		int y = editor.editing ? backbuffer->h - height - 2 : 2;
 		if (m_Open) {
 			// An open seats panel reaches the top of a compact screen, so a strip crossing its rows lifts
-			// above it - shrinking to a bare line of them when that is all the room there is.
+			// above it - shrinking to a bare line of them when that is all the room there is. The toast
+			// row the panel's band reserves sits under the strip, so a live toast lowers the ceiling to it,
+			// and the editor's own seat message bands lower it further still.
 			int panelX, panelTop, panelWidth, panelHeight;
 			m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
-			if (y < panelTop + panelHeight && y + height > panelTop) {
-				y = panelTop - height;
+			const int rowHeight = std::max(12, font->GetFontHeight()) + 8;
+			int ceiling = ScenarioRunner::GetVisibleNetUiToasts().empty() ? panelTop : panelTop - 4 - rowHeight;
+			if (editor.editing) {
+				for (const auto& band: editor.textBands) {
+					if (band.y < ceiling) ceiling = band.y;
+				}
+			}
+			if (y < panelTop + panelHeight && y + height > ceiling) {
+				y = ceiling - height;
 				if (y < 0) {
 					y = 0;
-					height = std::min(height, panelTop);
+					height = std::min(height, ceiling);
 				}
 			}
 		}
@@ -589,27 +661,44 @@ void NetModerationGUI::DrawMatchToasts() {
 	const EditorArea editor = FreeArea(backbuffer->w);
 	// The status widget takes the bottom while the editor holds the world, so the rows stack above it.
 	int bottom = editor.editing && m_StatusRect.visible ? m_StatusRect.y - 4 : backbuffer->h - 8;
+	// A compact screen with the seats panel open reserves one toast row under the strip band: the
+	// newest toast takes it and the rest of the stack waits for the room to come back.
+	const bool reserved = m_Open && backbuffer->h < c_CompactMaxHeight;
 	if (m_Open) {
 		// The seats panel owns its rows too: a stack that would cross them piles up above it instead.
+		// On a compact screen the reservation is the only band the stack gets: the editing anchor
+		// points at a strip the open panel already lifted off the bottom, so the reservation wins.
 		int panelX, panelTop, panelWidth, panelHeight;
 		m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
-		bottom = std::min(bottom, panelTop - 4);
+		bottom = reserved ? panelTop - 4 : std::min(bottom, panelTop - 4);
 	}
-	const int top = bottom - static_cast<int>(visible.size()) * rowHeight;
+	const size_t firstRow = reserved && !visible.empty() ? visible.size() - 1 : 0;
+	const size_t rowCount = visible.size() - firstRow;
+	const int top = bottom - static_cast<int>(rowCount) * rowHeight;
 	int freeLeft = 0, freeRight = backbuffer->w;
 	editor.FreeSpan(top, bottom, backbuffer->w, freeLeft, freeRight);
+	// The status widget's rows are its own too: a stack crossing them yields the span it sits in,
+	// the way the editor's picker columns already carve it.
+	if (m_StatusRect.visible && top < m_StatusRect.y + m_StatusRect.height && bottom > m_StatusRect.y) {
+		const int mid = (freeLeft + freeRight) / 2;
+		if (m_StatusRect.x + m_StatusRect.width / 2 >= mid) {
+			freeRight = std::min(freeRight, m_StatusRect.x);
+		} else {
+			freeLeft = std::max(freeLeft, m_StatusRect.x + m_StatusRect.width);
+		}
+	}
 	const int available = freeRight - freeLeft;
 	const int width = std::max(0, std::min(520, available - 32));
 	const int x = freeLeft + std::max(0, (available - width) / 2);
-	if (!visible.empty()) {
-		m_ToastRect = {x, top, width, static_cast<int>(visible.size()) * rowHeight - 2, true};
+	if (rowCount) {
+		m_ToastRect = {x, top, width, static_cast<int>(rowCount) * rowHeight - 2, true};
 	}
 	AllegroBitmap bitmap(backbuffer);
 	for (size_t row = 0; row < m_Toasts.size(); ++row) {
 		GUILabel* label = m_Toasts[row];
-		const bool shown = row < visible.size();
+		const bool shown = row < rowCount;
 		label->SetVisible(shown);
-		label->SetText(shown ? FitToastText(font, visible[row], width - 16) : std::string());
+		label->SetText(shown ? FitToastText(font, visible[firstRow + row], width - 16) : std::string());
 		if (!shown) continue;
 		const int y = top + static_cast<int>(row) * rowHeight;
 		label->SetFont(font);

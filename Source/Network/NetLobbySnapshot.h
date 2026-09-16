@@ -39,6 +39,7 @@ namespace RTE {
 		std::string activityModule; //!< The module the host's picker named, so a same-named preset cannot swap in.
 		std::string sceneName;
 		std::string modeName;
+		std::string modeLabel; //!< The friendly form of modeName, for labels that read a word, not a token.
 		std::string inputDelayText; //!< The announced input delay, host-authored; "" before the lobby has one.
 		std::string portMap;        //!< The host's router-mapping status line; "" when the toggle is off or not hosting.
 		uint32_t portMapSerial = 0; //!< Bumped whenever portMap changes so the panel skips redundant rewrites.
