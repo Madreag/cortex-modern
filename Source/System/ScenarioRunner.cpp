@@ -1367,6 +1367,33 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? s_LockstepCoordinator->GetConfig().inputDelayFrames : 0;
 	}
 
+	void ScenarioRunner::PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out) {
+		out.clear();
+		const auto take = [&out](const NetGameCommand& command, uint64_t targetFrame) {
+			const NetGameDeliverCargo* delivery = std::get_if<NetGameDeliverCargo>(&command.payload);
+			if (!delivery || !delivery->queuedPurchase) {
+				return;
+			}
+			PendingQueuedPurchase row;
+			row.player = delivery->orderedByPlayer;
+			row.team = delivery->team;
+			row.cost = delivery->cost;
+			row.targetFrame = targetFrame;
+			out.push_back(row);
+		};
+		for (const NetGameCommand& command: s_PendingLocalGameCommands) {
+			take(command, 0);
+		}
+		for (const auto& entry: s_LocalCommandOutbox) {
+			take(entry.second.command, entry.second.frame);
+		}
+		for (const auto& [frame, commands]: s_RequeuedCommands) {
+			for (const NetGameCommand& command: commands) {
+				take(command, frame);
+			}
+		}
+	}
+
 	void ScenarioRunner::EnqueueLocalGameCommand(const NetGameCommand& command) {
 		if (g_MovableMan.IsRestoringSnapshot()) {
 			return;
