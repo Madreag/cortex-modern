@@ -623,6 +623,7 @@ namespace RTE {
 		bool AdoptPredictedVoice(int identity, SoundContainer* owner, float pitch, const SoundData* soundData);
 		int FindVoiceIdentity(const FMOD::Channel* channel) const;
 		FMOD_RESULT GetVoiceChannel(int voiceIdentity, FMOD::Channel** channel) const;
+		static FMOD_RESULT StopDetached(FMOD::Channel* channel);
 		bool OwnsVoice(int voiceIdentity, const SoundContainer* owner) const;
 		void RetireVoice(int identity);
 		void ReleaseVoiceChannel(int identity);

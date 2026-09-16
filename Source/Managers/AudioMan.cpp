@@ -702,7 +702,7 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 		}
 
 		if (result != FMOD_OK) {
-			channel->setCallback(nullptr); channel->setUserData(nullptr); channel->stop(); RetireVoice(channelIndex);
+			StopDetached(channel); RetireVoice(channelIndex);
 			g_ConsoleMan.PrintString("ERROR: Could not play sounds from SoundContainer " + soundContainer->GetPresetName() + ": " + std::string(FMOD_ErrorString(result)));
 			if (logical) { result = FMOD_OK; continue; }
 			return false;
@@ -714,7 +714,7 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 		if (!soundContainer->IsPaused()) {
 			result = channel->setPaused(false);
 			if (result != FMOD_OK) {
-				channel->setCallback(nullptr); channel->setUserData(nullptr); channel->stop(); RetireVoice(channelIndex);
+				StopDetached(channel); RetireVoice(channelIndex);
 				g_ConsoleMan.PrintString("ERROR: Failed to start playing sounds from SoundContainer " + soundContainer->GetPresetName() + " after setting it up: " + std::string(FMOD_ErrorString(result)));
 				if (logical) { result = FMOD_OK; continue; }
 				return false;
@@ -919,9 +919,7 @@ bool AudioMan::StopSoundContainerPlayingChannels(SoundContainer* soundContainer,
 			RetireVoice(identity);
 			continue;
 		}
-		soundChannel->setCallback(nullptr);
-		soundChannel->setUserData(nullptr);
-		result = soundChannel->stop();
+		result = StopDetached(soundChannel);
 		if (result != FMOD_OK) {
 			g_ConsoleMan.PrintString("Error: Failed to stop playing channel in SoundContainer " + soundContainer->GetPresetName() + ": " + std::string(FMOD_ErrorString(result)));
 		}
@@ -1530,7 +1528,7 @@ void AudioMan::RetirePredictedVoice(int identity) {
 	FMOD::Channel* channel = found->second.Channel();
 	// A loop no canonical emission will ever own cannot run on; a one-shot is already audible, so it finishes.
 	if (owner && owner->GetLoopSetting() != 0) {
-		if (channel) channel->stop();
+		if (channel) StopDetached(channel);
 		RetireVoice(identity);
 		return;
 	}
@@ -1563,6 +1561,14 @@ FMOD_RESULT AudioMan::GetVoiceChannel(int voiceIdentity, FMOD::Channel** channel
 	if (!live) { *channel = nullptr; return FMOD_ERR_INVALID_HANDLE; }
 	*channel = live;
 	return FMOD_OK;
+}
+
+FMOD_RESULT AudioMan::StopDetached(FMOD::Channel* channel) {
+	if (!channel) return FMOD_OK;
+	// A late END must not see this handle after the next Update frees it.
+	channel->setCallback(nullptr);
+	channel->setUserData(nullptr);
+	return channel->stop();
 }
 
 bool AudioMan::OwnsVoice(int voiceIdentity, const SoundContainer* owner) const {
@@ -1887,11 +1893,7 @@ void AudioMan::RetireFinishedPlayingVoices() {
 	for (int identity: completed) {
 		const auto found = m_PlayingVoices.find(identity);
 		if (found == m_PlayingVoices.end()) continue;
-		if (FMOD::Channel* live = found->second.Channel()) {
-			live->setCallback(nullptr);
-			live->setUserData(nullptr);
-			live->stop();
-		}
+		if (FMOD::Channel* live = found->second.Channel()) StopDetached(live);
 		RetireVoice(identity);
 	}
 }
@@ -1978,7 +1980,7 @@ bool AudioMan::MakeVoiceSlotAvailable() {
 		if (priority > worstPriority || (priority == worstPriority && audibility < quietest)) { victim = identity; worstPriority = priority; quietest = audibility; }
 	}
 	if (!victim) return false;
-	if (FMOD::Channel* channel = m_PlayingVoices.at(victim).Channel()) channel->stop();
+	if (FMOD::Channel* channel = m_PlayingVoices.at(victim).Channel()) StopDetached(channel);
 	RetireVoice(victim);
 	return true;
 }
@@ -2328,7 +2330,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		struct CandidateCleanup {
 			std::map<int, FMOD::Channel*>& channels;
 			bool committed = false;
-			~CandidateCleanup() { if (!committed) for (const auto& [identity, channel]: channels) { channel->setCallback(nullptr); channel->setUserData(nullptr); channel->stop(); } }
+			~CandidateCleanup() { if (!committed) for (const auto& [identity, channel]: channels) AudioMan::StopDetached(channel); }
 		} cleanup{backendCandidates};
 		const std::array<FMOD::ChannelGroup*, 3> buses = {m_SFXChannelGroup, m_UIChannelGroup, m_MusicChannelGroup};
 		for (const auto& voice: state.voices) {
@@ -2391,7 +2393,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		// Nothing that can reject the checkpoint remains after this ownership transfer.
 		for (const auto& [data, sound]: stagedSamples) data->SoundObject = sound;
 		for (auto& [identity, voice]: m_PlayingVoices) {
-			if (FMOD::Channel* live = voice.Channel()) { live->setCallback(nullptr); live->setUserData(nullptr); live->stop(); }
+			if (FMOD::Channel* live = voice.Channel()) StopDetached(live);
 		}
 		m_PlayingVoices = std::move(candidates);
 		m_BackendVoiceIdentities.swap(backendIdentities);
@@ -2641,10 +2643,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 			bool secondPlaying = playingOf(secondText, secondFound);
 			bool injected = false;
 			if (!firstFound || !secondFound || firstPlaying == secondPlaying) {
-				if (heldChannel) {
-					heldChannel->setCallback(nullptr);
-					heldChannel->stop();
-				}
+				if (heldChannel) StopDetached(heldChannel);
 				AudioCheckpoint::Require(m_AudioSystem->update());
 				secondText = SaveCheckpoint();
 				secondPlaying = playingOf(secondText, secondFound);
@@ -2678,7 +2677,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 				AudioCheckpoint::MixerLock mixer(m_AudioSystem);
 				firstText = SaveCheckpoint();
 			}
-			if (tailChannel) tailChannel->stop();
+			if (tailChannel) StopDetached(tailChannel);
 			AudioCheckpoint::Require(m_AudioSystem->update());
 			const std::string secondText = SaveCheckpoint();
 			const bool same = voiceOf(firstText, tailId) == voiceOf(secondText, tailId);
@@ -3788,7 +3787,7 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 		check("an_unclaimed_prediction_is_retired", strayVoice > 0 && PreviewEventLedger::GetLiveEntryCount() == 0 && mispredicted.GetPlayingChannels()->empty(), std::to_string(stray.size()));
 		check("a_retired_prediction_is_in_no_checkpoint", strayVoice > 0 && IsPredictedVoice(strayVoice) && !savedVoices().contains(strayVoice));
 		FMOD::Channel* strayChannel = nullptr;
-		if (strayVoice > 0 && GetVoiceChannel(strayVoice, &strayChannel) == FMOD_OK && strayChannel) strayChannel->stop();
+		if (strayVoice > 0 && GetVoiceChannel(strayVoice, &strayChannel) == FMOD_OK && strayChannel) StopDetached(strayChannel);
 		if (strayVoice > 0) RetireVoice(strayVoice);
 		PreviewEventLedger::Clear();
 	}
