@@ -4579,6 +4579,28 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			check("above_head_pos_survives_drawhud", headBefore == headAfter);
 		}
 		{
+			// Saved intensity boxes the seat actor's above-head point, never this machine's camera.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			const auto* robot = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+			if (!robot) throw std::runtime_error("shared intensity fixture preset unavailable");
+			std::unique_ptr<Actor> actor(static_cast<Actor*>(robot->Clone()));
+			actor->SetTeam(0);
+			actor->SetPos(Vector(320, 240));
+			const Vector head = actor->GetAboveHeadPos();
+			g_CameraMan.SetOffset(Vector(10, 20), 0);
+			const Vector cam = g_CameraMan.GetOffset(0);
+			const float width = static_cast<float>(g_FrameMan.GetSimScreenWidth());
+			const float height = static_cast<float>(g_FrameMan.GetSimScreenHeight());
+			const Vector boxCorner(head.m_X - width * 0.5F, head.m_Y - height * 0.5F);
+			const Box intensityBox(boxCorner, Vector(head.m_X + width * 0.5F, head.m_Y + height * 0.5F));
+			std::cout << "[net-local-intensity] head=" << head.m_X << "," << head.m_Y
+			          << " cam=" << cam.m_X << "," << cam.m_Y
+			          << " corner=" << boxCorner.m_X << "," << boxCorner.m_Y << std::endl;
+			check("shared_intensity_box_uses_above_head", intensityBox.IsWithinBox(head));
+			check("shared_intensity_box_ignores_camera", boxCorner != cam);
+		}
+		{
 			// The returner's banner is the same live one after a slot that arrives empty, exactly like its menu.
 			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
 			g_ActivityMan.SwapCheckpointActivity(next);

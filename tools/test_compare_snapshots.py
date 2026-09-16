@@ -756,6 +756,13 @@ class RuntimeProjectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assert_field(audio, path, False)
 
+    def test_saved_intensity_and_objectives_are_shared(self):
+        # GameIntensityCalculatorMainTable rides Activity saved_strings; objectives are GameActivity state.
+        activity = dict(version="Activity1", saved_strings={"GameIntensityCalculatorMainTable": 1}, saved_numbers=1)
+        self.assert_field(activity, ("saved_strings",), False)
+        game = dict(version="GameActivity1", objectives=1, observation_target=1)
+        self.assert_field(game, ("objectives",), False)
+
     def test_sprite_pool_frames_and_pie_bitmaps_remain_strict(self):
         for version, keys in (("MOSpriteRuntime2", ("sprite_file", "icon_file", "images", "frames", "icon_index", "frame")),
                 ("MOSRotatingRuntime2", ("flip_bitmap", "silhouette_bitmap", "travel_impulse")),
