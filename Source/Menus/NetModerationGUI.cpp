@@ -53,6 +53,9 @@ namespace {
 		/// its own offset, so every local seat contributes the column its picker reports, translated here.
 		struct Column { int x = 0, y = 0, w = 0, h = 0; };
 		std::vector<Column> columns;
+		/// The seat's own message band in the same window space: the overlay keeps above or below it,
+		/// never across it.
+		std::vector<Column> textBands;
 
 		/// The window-space span the band [top, bottom) keeps once every picker column crossing it is out.
 		void FreeSpan(int bandTop, int bandBottom, int screenWidth, int& left, int& right) const {
@@ -78,6 +81,10 @@ namespace {
 			if (!(game->IsSeatActive(player) && game->IsLocalHumanSeat(player))) continue;
 			area.editing = true;
 			const int screen = game->ScreenOfPlayer(player);
+			const FrameMan::ScreenTextLayout text = g_FrameMan.GetScreenTextLayout(screen, true);
+			if (text.height > 0) {
+				area.textBands.push_back({text.x, text.y, text.width, text.height});
+			}
 			const int occlusion = g_CameraMan.GetScreenOcclusion(screen).GetRoundIntX();
 			if (occlusion == 0) continue;
 			// The picker measured itself against the seat's own framebuffer, which a split screen parks
@@ -238,7 +245,22 @@ void NetModerationGUI::LayoutPanel() {
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
 	const int rowHeight = std::max(12, font ? font->GetFontHeight() : 12) + 8;
 	const int width = std::min(c_PanelWidth, g_WindowMan.GetResX() - 12);
-	const int top = screenHeight < c_CompactMaxHeight ? c_StripBandBottom + rowHeight + c_PanelGap : PanelTop(screenHeight);
+	int top = PanelTop(screenHeight);
+	if (screenHeight < c_CompactMaxHeight) {
+		int reserved = c_StripBandBottom + rowHeight + c_PanelGap;
+		// While the editor holds the world its seat message bands own their top rows too: a band
+		// crossing the reservation pushes the toast row - and the panel - under it.
+		for (bool moved = true; moved;) {
+			moved = false;
+			for (const auto& band: FreeArea(g_WindowMan.GetResX()).textBands) {
+				if (band.y < reserved && band.y + band.h + rowHeight + 2 * c_PanelGap > reserved) {
+					reserved = band.y + band.h + rowHeight + 2 * c_PanelGap;
+					moved = true;
+				}
+			}
+		}
+		top = std::max(top, reserved);
+	}
 	const int height = std::min(c_PanelHeight, screenHeight - c_PanelGap - top);
 	const int lost = c_PanelHeight - height;
 	int x, y, w, h;
@@ -447,11 +469,17 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		if (m_Open) {
 			// An open seats panel reaches the top of a compact screen, so a strip crossing its rows lifts
 			// above it - shrinking to a bare line of them when that is all the room there is. The toast
-			// row the panel's band reserves sits under the strip, so a live toast lowers the ceiling to it.
+			// row the panel's band reserves sits under the strip, so a live toast lowers the ceiling to it,
+			// and the editor's own seat message bands lower it further still.
 			int panelX, panelTop, panelWidth, panelHeight;
 			m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
 			const int rowHeight = std::max(12, font->GetFontHeight()) + 8;
-			const int ceiling = ScenarioRunner::GetVisibleNetUiToasts().empty() ? panelTop : panelTop - 4 - rowHeight;
+			int ceiling = ScenarioRunner::GetVisibleNetUiToasts().empty() ? panelTop : panelTop - 4 - rowHeight;
+			if (editor.editing) {
+				for (const auto& band: editor.textBands) {
+					if (band.y < ceiling) ceiling = band.y;
+				}
+			}
 			if (y < panelTop + panelHeight && y + height > ceiling) {
 				y = ceiling - height;
 				if (y < 0) {
@@ -617,9 +645,11 @@ void NetModerationGUI::DrawMatchToasts() {
 	const bool reserved = m_Open && backbuffer->h < c_CompactMaxHeight;
 	if (m_Open) {
 		// The seats panel owns its rows too: a stack that would cross them piles up above it instead.
+		// On a compact screen the reservation is the only band the stack gets: the editing anchor
+		// points at a strip the open panel already lifted off the bottom, so the reservation wins.
 		int panelX, panelTop, panelWidth, panelHeight;
 		m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
-		bottom = std::min(bottom, panelTop - 4);
+		bottom = reserved ? panelTop - 4 : std::min(bottom, panelTop - 4);
 	}
 	const size_t firstRow = reserved && !visible.empty() ? visible.size() - 1 : 0;
 	const size_t rowCount = visible.size() - firstRow;
