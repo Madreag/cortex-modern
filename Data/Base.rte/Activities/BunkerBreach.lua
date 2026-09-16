@@ -370,7 +370,7 @@ function BunkerBreach:UpdatePlayerObjectiveArrowsAndScreenText()
 			for _, friendlyUnitTable in ipairs({self.AI.friendlyUnitsInsideBunker, self.AI.friendlyUnitsOutsideBunker}) do
 				for _, friendlyUnit in pairs(friendlyUnitTable) do
 					if MovableMan:IsActor(friendlyUnit) then
-						self:AddObjectivePoint("Destroy!", friendlyUnit.AboveHUDPos, self.defenderTeam, GameActivity.ARROWDOWN);
+						self:AddObjectivePoint("Destroy!", friendlyUnit.AboveHeadPos, self.defenderTeam, GameActivity.ARROWDOWN);
 					end
 					objectiveArrowsShown = objectiveArrowsShown + 1;
 					if objectiveArrowsShown >= 10 then

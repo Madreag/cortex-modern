@@ -4599,6 +4599,9 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			          << " corner=" << boxCorner.m_X << "," << boxCorner.m_Y << std::endl;
 			check("shared_intensity_box_uses_above_head", intensityBox.IsWithinBox(head));
 			check("shared_intensity_box_ignores_camera", boxCorner != cam);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			fixture->AddObjectivePoint("Protect!", head, 0, GameActivity::ARROWDOWN);
+			check("shared_objective_uses_above_head", !fixture->m_Objectives.empty() && fixture->m_Objectives.front().m_ScenePos == head);
 		}
 		{
 			// The returner's banner is the same live one after a slot that arrives empty, exactly like its menu.
