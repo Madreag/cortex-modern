@@ -443,7 +443,7 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 23;
+		static constexpr uint16_t c_Version = 22;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
@@ -458,7 +458,7 @@ namespace RTE {
 		// Version 21 appends writerUID on AIOrder; v<=20 still decodes with writerUID 0.
 		// Version 22 carries the AI pass's script messages and gibs as commands, and the AIOrder op that
 		// sets a move target; a peer below it never sent them, so it refuses them instead of guessing.
-		// Version 23 carries a persistent world's membership/spawn/binding transition.
+		// A persistent world's membership/spawn/binding transition is encoded only at this version.
 		static constexpr uint16_t c_WorldTransitionVersion = 23;
 		static constexpr uint16_t c_HoldResolutionVersion = 19;
 		static constexpr uint16_t c_PlayerBindingsVersion = 18;
@@ -588,6 +588,8 @@ namespace RTE {
 		/// The local frames already queued for a future frame; the local-actor preview runs them early.
 		bool PeekLocalFrames(uint64_t frame, std::vector<ControllerFrame>& outFrames) const;
 		bool PeekLocalInput(uint64_t frame, NetLockstepFrame& outFrame) const { return FindLocalInput(frame, outFrame); }
+		/// The committed ready-frame for that tick, if it is still held or was just advanced.
+		bool PeekReadyFrame(uint64_t frame, NetLockstepReadyFrame& outFrame) const;
 
 		NetLockstepState GetState() const { return m_State; }
 		bool IsRunning() const { return m_State == NetLockstepState::Running; }
@@ -861,6 +863,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_AuthoritativeCommandAcks;
 		std::map<uint64_t, std::map<uint8_t, std::array<uint8_t, 32>>> m_RemoteChecksums; //!< frame -> (peerId -> hash)
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;
+		std::map<uint64_t, NetLockstepReadyFrame> m_ReadyHistory;
 
 		bool AllRemoteStartsReceived() const { return m_RemoteStartsReceived.size() == m_RemotePeerIds.size(); }
 		bool IsKnownRemotePeer(uint8_t peerId) const;

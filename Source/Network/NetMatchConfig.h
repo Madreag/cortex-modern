@@ -66,9 +66,7 @@ namespace RTE {
 		uint64_t configRevision = 1;
 		uint8_t hostPeerId = 1;
 		bool dedicated = false; // The host keeps lockstep peer hostPeerId but seats no human slot there.
-		// A world that outlives its players: no last-brain or timer end, seats freed and refilled while
-		// it ticks. A v4 config cannot carry it, so an older peer refuses the round instead of joining
-		// one whose end rules it does not share.
+		// A world that outlives its players: no last-brain or timer end, seats freed and refilled while it ticks.
 		bool persistentWorld = false;
 		std::string worldId;       // The world's durable UUID; its directory registration id too. Empty off a persistent world.
 		uint64_t worldBoot = 0;    // The host boot incarnation this round belongs to; advanced before the host listens.
@@ -89,7 +87,7 @@ namespace RTE {
 
 	class NetMatchConfigUtil {
 	public:
-		static constexpr uint16_t c_Version = 5; // v5 added the persistent world; v4 added the spectate rule; v3 and v2 envelopes stay readable.
+		static constexpr uint16_t c_Version = 4; // Ordinary live layout. A persistent world speaks c_PersistentWorldVersion.
 		// The oldest layout a LIVE peer may speak. An ordinary match still speaks v4 byte for byte, so
 		// only a persistent world's config moves to v5 and only its hash takes the v5 domain.
 		static constexpr uint16_t c_LiveMinVersion = 4;

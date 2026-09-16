@@ -323,7 +323,7 @@ namespace RTE {
 			if (!ReadOrTruncated(reader.ReadU16LE(out.version), reader, error, "config.version")) return false;
 			// A live peer speaks one of the current layouts - an ordinary match still speaks v4, only a
 			// persistent world moves to v5; anything older is read back out of a recording.
-			if (out.version == 0 || out.version > NetMatchConfigUtil::c_Version || (out.version < NetMatchConfigUtil::c_LiveMinVersion && !allowRecordedVersions)) {
+			if (out.version == 0 || out.version > NetMatchConfigUtil::c_PersistentWorldVersion || (out.version < NetMatchConfigUtil::c_LiveMinVersion && !allowRecordedVersions)) {
 				SetError(error, NetLobbyErrorCode::UnsupportedVersion, reader.Offset() - 2, "unsupported match config version " + std::to_string(out.version));
 				return false;
 			}

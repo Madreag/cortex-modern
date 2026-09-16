@@ -859,6 +859,7 @@ namespace RTE {
 					}
 					case NetGameCommandType::WorldTransition: {
 						const NetGameWorldTransition& transition = std::get<NetGameWorldTransition>(command.payload);
+						AppendU16LE(out, transition.schema);
 						AppendU8(out, transition.kind);
 						AppendU8(out, transition.peerId);
 						AppendU32LE(out, transition.holderGeneration);
@@ -1872,7 +1873,8 @@ namespace RTE {
 						uint32_t yBits = 0;
 						uint32_t aiMode = 0;
 						uint8_t bindBrain = 0;
-						if (!ReadOrTruncated(reader.ReadU8(transition.kind), reader, error, "world_transition_kind") ||
+						if (!ReadOrTruncated(reader.ReadU16LE(transition.schema), reader, error, "world_transition_schema") ||
+						    !ReadOrTruncated(reader.ReadU8(transition.kind), reader, error, "world_transition_kind") ||
 						    !ReadOrTruncated(reader.ReadU8(transition.peerId), reader, error, "world_transition_peer_id") ||
 						    !ReadOrTruncated(reader.ReadU32LE(transition.holderGeneration), reader, error, "world_transition_generation") ||
 						    !ReadOrTruncated(reader.ReadU64LE(transition.membershipRevision), reader, error, "world_transition_revision") ||
@@ -1886,6 +1888,10 @@ namespace RTE {
 						    !reader.ReadString(transition.className, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_class_name", error) ||
 						    !reader.ReadString(transition.preset, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_preset", error) ||
 						    !reader.ReadString(transition.module, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_module", error)) {
+							return false;
+						}
+						if (transition.schema != 1) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "world_transition_schema is not a known schema");
 							return false;
 						}
 						if (transition.kind > NetGameWorldTransition::Release) {
@@ -2210,10 +2216,20 @@ namespace RTE {
 			return false;
 		}
 
+		uint16_t encodeVersion = c_Version;
+		if (const auto* frame = std::get_if<NetLockstepFrame>(&packet.payload)) {
+			for (const NetGameCommand& command: frame->commands) {
+				if (std::holds_alternative<NetGameWorldTransition>(command.payload)) {
+					encodeVersion = c_WorldTransitionVersion;
+					break;
+				}
+			}
+		}
+
 		outBytes.clear();
 		outBytes.reserve(c_HeaderBytes + payloadBytes.size());
 		AppendU32LE(outBytes, c_Magic);
-		AppendU16LE(outBytes, c_Version);
+		AppendU16LE(outBytes, encodeVersion);
 		AppendU16LE(outBytes, c_HeaderBytes);
 		AppendU16LE(outBytes, static_cast<uint16_t>(PacketTypeOf(packet.payload)));
 		AppendU16LE(outBytes, 0);
@@ -2292,7 +2308,7 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLockstepErrorCode::BadMagic, 0, "packet magic mismatch");
 		}
-		if (version < c_MinVersion || version > c_Version) {
+		if (version < c_MinVersion || version > c_WorldTransitionVersion) {
 			return Fail(NetLockstepErrorCode::UnsupportedVersion, 4, "unsupported lockstep packet version");
 		}
 		if (headerBytes != c_HeaderBytes) {
@@ -2401,7 +2417,7 @@ namespace RTE {
 			default:
 				return false;
 		}
-		return magic == c_Magic && version >= c_MinVersion && version <= c_Version && headerBytes == c_HeaderBytes &&
+		return magic == c_Magic && version >= c_MinVersion && version <= c_WorldTransitionVersion && headerBytes == c_HeaderBytes &&
 		       flags == 0 && bytes.size() == static_cast<size_t>(c_HeaderBytes) + payloadLength;
 	}
 
@@ -2645,6 +2661,7 @@ namespace RTE {
 		m_ObservationDecodeTables.Reset();
 		m_ObservationEncodeTables.Reset();
 		m_ReadyFrames.clear();
+		m_ReadyHistory.clear();
 		m_PreStartFrames.clear();
 		m_PreStartChecksums.clear();
 		m_LastStartSentMs = UINT64_MAX;
@@ -2899,6 +2916,7 @@ namespace RTE {
 		m_LocalChecksums.clear();
 		m_RemoteChecksums.clear();
 		m_ReadyFrames.clear();
+		m_ReadyHistory.clear();
 		m_Stats.nextFrame = firstFrame;
 		m_Stats.effectiveStartFrame = firstFrame;
 		m_Stats.timeoutReason.clear();
@@ -3715,6 +3733,21 @@ namespace RTE {
 			return false;
 		}
 		outFrames = found->second;
+		return true;
+	}
+
+	bool NetLockstepCoordinator::PeekReadyFrame(uint64_t frame, NetLockstepReadyFrame& outFrame) const {
+		for (const NetLockstepReadyFrame& ready: m_ReadyFrames) {
+			if (ready.frame == frame) {
+				outFrame = ready;
+				return true;
+			}
+		}
+		const auto found = m_ReadyHistory.find(frame);
+		if (found == m_ReadyHistory.end()) {
+			return false;
+		}
+		outFrame = found->second;
 		return true;
 	}
 
@@ -5181,6 +5214,10 @@ namespace RTE {
 			}
 			if (remoteIt != m_RemoteFrames.end()) {
 				m_RemoteFrames.erase(remoteIt);
+			}
+			m_ReadyHistory[ready.frame] = ready;
+			while (m_ReadyHistory.size() > 180) {
+				m_ReadyHistory.erase(m_ReadyHistory.begin());
 			}
 			m_ReadyFrames.push_back(std::move(ready));
 			++m_Stats.framesAccepted;

@@ -101,6 +101,8 @@ namespace RTE {
 		std::string buildId = "unknown";
 		std::string sessionRulesTag = "p2-session-rules-unset";
 		bool includeUserdataModules = false;
+		uint16_t matchConfigVersion = 4;   // Ordinary live config. A world stamps 5.
+		uint16_t lockstepCodecVersion = 22; // Ordinary live frames. A world stamps 23.
 	};
 
 	class NetIdentity {

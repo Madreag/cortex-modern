@@ -315,10 +315,7 @@ namespace RTE {
 		bool operator==(const NetGamePlaceBrain&) const = default;
 	};
 
-	// A persistent world's one ordered membership/spawn/binding step. System-authored: only the world's
-	// host issues it, for a team it need not own, so every peer seats the same member, spawns the same
-	// resident and binds the same control at the one announced tick. A respawn rides the same command so
-	// nothing about a world's population is decided twice.
+	// Host-authored membership, spawn and binding for one announced tick.
 	struct NetGameWorldTransition {
 		enum Kind : uint8_t {
 			Respawn = 0,  //!< Replace a team's lost resident; seats nobody.
@@ -326,6 +323,7 @@ namespace RTE {
 			Release = 2,  //!< Free a cleanly left member's slot under its next generation.
 		};
 
+		uint16_t schema = 1;           //!< World-plane schema; ordinary lockstep never carries this command.
 		uint8_t kind = Respawn;
 		uint8_t peerId = 0;            //!< The member this transition seats or frees; 0 on a respawn.
 		uint32_t holderGeneration = 0; //!< The slot generation this member holds; a stale one is refused.
