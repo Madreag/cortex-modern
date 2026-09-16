@@ -394,6 +394,9 @@ namespace RTE {
 				std::chrono::steady_clock::now() - startTime).count());
 			const uint64_t nowMs = m_Config.nowMs ? m_Config.nowMs() : waitMs;
 			session.Tick(nowMs);
+			if (m_Config.pumpHost) {
+				m_Config.pumpHost();
+			}
 			if (m_Config.publishLobby) {
 				m_Config.publishLobby(BuildLobbySnapshot(transport, session));
 			}
@@ -493,6 +496,9 @@ namespace RTE {
 			}
 			// The lobby round owns the transport queue, so the plane only gets its time from here.
 			session.TickAdmissionPlane(clocks.planeMs);
+			if (m_Config.pumpHost) {
+				m_Config.pumpHost();
+			}
 			if (m_Config.publishLobby) {
 				m_Config.publishLobby(BuildLobbySnapshot(transport, session));
 			}

@@ -447,6 +447,7 @@ namespace RTE {
 		friend bool TestAiOnlyHostSeatsNoJoiner(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestServiceKick(std::string* error);
+		friend bool TestStartingKickMarshals(std::string* error);
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
@@ -562,6 +563,13 @@ namespace RTE {
 		std::vector<NetH4ModerationSeat> m_ModerationSeats; //!< Immutable UI copy while a setup/resync worker owns the plane.
 		NetKickBanResult m_LastKickBanResult = NetKickBanResult::NotHosting;
 		NetParticipantRemovalIssue m_LastRemovalIssue;
+		struct PendingRemoval {
+			NetModerationSelection selection;
+			NetParticipantRemovalAction action = NetParticipantRemovalAction::Kick;
+		};
+		std::optional<PendingRemoval> m_PendingRemoval;
+		NetKickBanResult ApplyRemovalLocked(const NetModerationSelection& selection, NetParticipantRemovalAction action);
+		void DrainPendingRemoval();
 		bool m_AdmissionAttached = false;
 		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.

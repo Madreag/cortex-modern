@@ -2757,6 +2757,7 @@ static std::string ResyncSaveName() {
 			m_AdmissionClock.Start(SteadyNowMs());
 		}
 		runnerConfig.nowMs = [this] { return AdmissionNowMs(); };
+		runnerConfig.pumpHost = [this] { DrainPendingRemoval(); };
 
 		// A refused roster leaves matchConfig unauthored; nothing is armed on it.
 		if (started) AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest);
@@ -2924,17 +2925,7 @@ static std::string ResyncSaveName() {
 		return result;
 	}
 
-	NetKickBanResult NetMatchService::RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action) {
-		std::lock_guard<std::mutex> lock(m_Mutex);
-		m_LastRemovalIssue = {};
-		if (!m_AdmissionAttached || !m_IsHost) {
-			m_LastKickBanResult = NetKickBanResult::NotHosting;
-			return m_LastKickBanResult;
-		}
-		if (!m_Session || (m_State != NetMatchServiceState::Running && m_State != NetMatchServiceState::Starting)) {
-			m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
-			return m_LastKickBanResult;
-		}
+	NetKickBanResult NetMatchService::ApplyRemovalLocked(const NetModerationSelection& selection, NetParticipantRemovalAction action) {
 		const uint64_t nowMs = AdmissionNowMs();
 		const uint64_t sessionId = m_Session->GetSessionId();
 		const uint32_t round = m_Coordinator ? static_cast<uint32_t>(m_Coordinator->GetRoundId()) : 0;
@@ -2960,6 +2951,35 @@ static std::string ResyncSaveName() {
 		const std::string who = m_LocalName.empty() ? "Host" : m_LocalName;
 		ScenarioRunner::PushNetUiToast("moderation", who + std::string(action == NetParticipantRemovalAction::Kick ? " removed " : " banned ") + "seat " + std::to_string(selection.stableSeat));
 		return m_LastKickBanResult;
+	}
+
+	void NetMatchService::DrainPendingRemoval() {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_PendingRemoval || m_State != NetMatchServiceState::Starting || !m_Session) {
+			return;
+		}
+		const PendingRemoval pending = *m_PendingRemoval;
+		m_PendingRemoval.reset();
+		ApplyRemovalLocked(pending.selection, pending.action);
+	}
+
+	NetKickBanResult NetMatchService::RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_LastRemovalIssue = {};
+		if (!m_AdmissionAttached || !m_IsHost) {
+			m_LastKickBanResult = NetKickBanResult::NotHosting;
+			return m_LastKickBanResult;
+		}
+		if (!m_Session || (m_State != NetMatchServiceState::Running && m_State != NetMatchServiceState::Starting)) {
+			m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
+			return m_LastKickBanResult;
+		}
+		if (m_State == NetMatchServiceState::Starting) {
+			m_PendingRemoval = PendingRemoval{selection, action};
+			m_LastKickBanResult = NetKickBanResult::Ok;
+			return m_LastKickBanResult;
+		}
+		return ApplyRemovalLocked(selection, action);
 	}
 
 	NetKickBanResult NetMatchService::GetLastKickBanResult() const {
