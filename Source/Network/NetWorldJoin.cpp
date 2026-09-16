@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -73,6 +74,7 @@ namespace RTE {
 
 	std::string EncodeWorldJoinOffer(const NetWorldCheckpointImage& image) {
 		json offer = {
+			{"schema", c_NetWorldJoinSchema},
 			{"world_id", image.worldId},
 			{"boot", image.boot},
 			{"round", image.round},
@@ -94,6 +96,10 @@ namespace RTE {
 		json parsed = json::parse(text, nullptr, false);
 		if (parsed.is_discarded() || !parsed.is_object()) {
 			if (error) *error = "world join offer is not an object";
+			return false;
+		}
+		if (parsed.value("schema", uint16_t{0}) != c_NetWorldJoinSchema) {
+			if (error) *error = "world join offer has no recognised schema";
 			return false;
 		}
 		NetWorldCheckpointImage image;
@@ -261,19 +267,104 @@ namespace RTE {
 	}
 
 	std::string DigestWorldJoinBytes(const uint8_t* bytes, size_t size) {
-		uint64_t hash = 1469598103934665603ULL;
-		for (size_t i = 0; i < size; ++i) {
-			hash ^= bytes[i];
-			hash *= 1099511628211ULL;
+		if (bytes == nullptr && size > 0) {
+			return {};
 		}
-		static const char hex[] = "0123456789abcdef";
-		std::string out(16, '0');
-		for (int i = 7; i >= 0; --i) {
-			const unsigned byte = static_cast<unsigned>((hash >> (static_cast<unsigned>(i) * 8U)) & 0xFFU);
-			out[static_cast<size_t>((7 - i) * 2)] = hex[(byte >> 4) & 0x0FU];
-			out[static_cast<size_t>((7 - i) * 2 + 1)] = hex[byte & 0x0FU];
+		class Sha256 {
+		public:
+			void Add(const uint8_t* data, size_t count) {
+				m_Bytes += count;
+				while (count) {
+					const size_t n = std::min(count, m_Block.size() - m_Used);
+					std::copy_n(data, n, m_Block.data() + m_Used);
+					m_Used += n;
+					data += n;
+					count -= n;
+					if (m_Used == m_Block.size()) {
+						Compress();
+						m_Used = 0;
+					}
+				}
+			}
+			std::string Finish() {
+				const uint64_t bits = m_Bytes * 8;
+				m_Block[m_Used++] = 0x80;
+				if (m_Used > 56) {
+					std::fill(m_Block.begin() + m_Used, m_Block.end(), 0);
+					Compress();
+					m_Used = 0;
+				}
+				std::fill(m_Block.begin() + m_Used, m_Block.begin() + 56, 0);
+				for (size_t i = 0; i < 8; ++i) {
+					m_Block[63 - i] = static_cast<uint8_t>(bits >> (i * 8));
+				}
+				Compress();
+				std::string out;
+				for (uint32_t word: m_State) {
+					for (int shift = 28; shift >= 0; shift -= 4) {
+						out.push_back("0123456789abcdef"[(word >> shift) & 15]);
+					}
+				}
+				return out;
+			}
+
+		private:
+			std::array<uint32_t, 8> m_State{0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+			std::array<uint8_t, 64> m_Block{};
+			size_t m_Used = 0;
+			uint64_t m_Bytes = 0;
+			void Compress() {
+				static constexpr std::array<uint32_t, 64> k{
+					0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+					0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+					0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+					0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+					0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+					0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+					0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+					0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
+				std::array<uint32_t, 64> w{};
+				for (size_t i = 0; i < 16; ++i) {
+					for (size_t b = 0; b < 4; ++b) {
+						w[i] = (w[i] << 8) | m_Block[i * 4 + b];
+					}
+				}
+				for (size_t i = 16; i < w.size(); ++i) {
+					const uint32_t a = w[i - 15], b = w[i - 2];
+					w[i] = w[i - 16] + (std::rotr(a, 7) ^ std::rotr(a, 18) ^ (a >> 3)) +
+					       w[i - 7] + (std::rotr(b, 17) ^ std::rotr(b, 19) ^ (b >> 10));
+				}
+				auto [a, b, c, d, e, f, g, h] = m_State;
+				for (size_t i = 0; i < w.size(); ++i) {
+					const uint32_t t1 = h + (std::rotr(e, 6) ^ std::rotr(e, 11) ^ std::rotr(e, 25)) + ((e & f) ^ (~e & g)) + k[i] + w[i];
+					const uint32_t t2 = (std::rotr(a, 2) ^ std::rotr(a, 13) ^ std::rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+					h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+				}
+				const std::array<uint32_t, 8> work{a, b, c, d, e, f, g, h};
+				for (size_t i = 0; i < work.size(); ++i) {
+					m_State[i] += work[i];
+				}
+			}
+		};
+		Sha256 hash;
+		if (size > 0) {
+			hash.Add(bytes, size);
 		}
-		return out;
+		return hash.Finish();
+	}
+
+	NetLockstepFrame PackWorldJoinReadyFrame(const NetLockstepReadyFrame& ready) {
+		NetLockstepFrame frame;
+		frame.targetFrame = ready.frame;
+		frame.frames = ready.localFrames;
+		frame.frames.insert(frame.frames.end(), ready.remoteFrames.begin(), ready.remoteFrames.end());
+		frame.commands = ready.localCommands;
+		frame.commands.insert(frame.commands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
+		frame.observations = ready.localObservations;
+		frame.observations.insert(frame.observations.end(), ready.remoteObservations.begin(), ready.remoteObservations.end());
+		frame.valueObservations = ready.localValueObservations;
+		frame.valueObservations.insert(frame.valueObservations.end(), ready.remoteValueObservations.begin(), ready.remoteValueObservations.end());
+		return frame;
 	}
 
 	bool IsWorldJoinImageBlob(const std::vector<uint8_t>& bytes) {
@@ -411,6 +502,7 @@ namespace RTE {
 
 	NetGameWorldTransition BuildWorldActivateTransition(const NetWorldJoinSession& session, const NetMatchConfig& config, uint64_t membershipRevision) {
 		NetGameWorldTransition transition;
+		transition.schema = c_NetWorldJoinSchema;
 		transition.kind = NetGameWorldTransition::Activate;
 		transition.peerId = session.assignedPeerId;
 		transition.holderGeneration = session.holderGeneration;
@@ -712,7 +804,6 @@ namespace RTE {
 			return false;
 		}
 		slot->held = false;
-		slot->stableSeat = 0;
 		slot->holderName.clear();
 		// The next holder of this slot is a new one: an old ticket cannot pass for this generation.
 		++slot->generation;
@@ -735,7 +826,7 @@ namespace RTE {
 			                 {"generation", slot.generation}, {"stable_seat", slot.stableSeat},
 			                 {"held", slot.held}, {"holder", slot.holderName}});
 		}
-		json report = {{"revision", m_Revision}, {"slots", std::move(slots)}, {"free", FreeSlots()}};
+		json report = {{"schema", c_NetWorldJoinSchema}, {"revision", m_Revision}, {"slots", std::move(slots)}, {"free", FreeSlots()}};
 		return report.dump(-1, ' ', false, json::error_handler_t::replace);
 	}
 
@@ -793,31 +884,27 @@ namespace RTE {
 		session.phase = NetWorldJoinPhase::Authenticating;
 		// A credentialed holder of an existing seat outranks a fresh allocation for the same slot.
 		const NetWorldSlot* slot = m_Membership.SlotOfSeat(stableSeat);
+		if (slot != nullptr && slot->held) {
+			slot = nullptr;
+		}
 		if (slot == nullptr) {
 			slot = m_Membership.FirstFreeSlot();
-			if (slot == nullptr) {
-				// A full world admits an authority-free spectator instead of refusing the connection.
-				session.spectator = true;
-				session.phase = NetWorldJoinPhase::SnapshotTransfer;
-				m_Sessions.push_back(std::move(session));
-				return true;
-			}
-			const uint8_t peerId = slot->peerId;
-			const int8_t team = slot->team;
-			const uint32_t generation = slot->generation;
-			if (!m_Membership.Hold(peerId, stableSeat, holderName, error)) {
-				return false;
-			}
-			session.assignedPeerId = peerId;
-			session.team = team;
-			session.holderGeneration = generation;
+		}
+		if (slot == nullptr) {
+			session.spectator = true;
 			session.phase = NetWorldJoinPhase::SnapshotTransfer;
 			m_Sessions.push_back(std::move(session));
 			return true;
 		}
-		session.assignedPeerId = slot->peerId;
-		session.team = slot->team;
-		session.holderGeneration = slot->generation;
+		const uint8_t peerId = slot->peerId;
+		const int8_t team = slot->team;
+		const uint32_t generation = slot->generation;
+		if (!m_Membership.Hold(peerId, stableSeat, holderName, error)) {
+			return false;
+		}
+		session.assignedPeerId = peerId;
+		session.team = team;
+		session.holderGeneration = generation;
 		session.phase = NetWorldJoinPhase::SnapshotTransfer;
 		m_Sessions.push_back(std::move(session));
 		return true;
@@ -903,7 +990,7 @@ namespace RTE {
 		session->catchUpTicks += ticksReplayed;
 		session->catchUpMs += elapsedMs;
 		m_Metrics.NoteCatchUp(ticksReplayed, elapsedMs);
-		if (session->activationTick != 0 || session->spectator) {
+		if (session->activationTick != 0) {
 			return true;
 		}
 		// The world keeps producing while the joiner replays, so activation waits until the joiner is
@@ -918,10 +1005,27 @@ namespace RTE {
 
 	const NetWorldJoinSession* NetWorldJoinHost::DueActivation(uint64_t nowFrame) const {
 		const auto found = std::find_if(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& session) {
-			return session.phase == NetWorldJoinPhase::CatchingUp && session.activationTick != 0 && session.activationTick <= nowFrame &&
-			       session.acknowledgedThrough + 1 >= session.activationTick;
+			return session.phase == NetWorldJoinPhase::CatchingUp && session.activationTick != 0 &&
+			       nowFrame + 1 >= session.activationTick && session.acknowledgedThrough + 1 >= session.activationTick;
 		});
 		return found == m_Sessions.end() ? nullptr : &*found;
+	}
+
+	bool NetWorldJoinHost::ScheduleSpectatorActivation(NetPeerId connection, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error) {
+		if (outActivationTick) *outActivationTick = 0;
+		NetWorldJoinSession* session = Find(connection);
+		if (session == nullptr || !session->spectator) {
+			if (error) *error = "that connection is not a spectator bootstrap";
+			return false;
+		}
+		if (session->activationTick != 0) {
+			if (outActivationTick) *outActivationTick = session->activationTick;
+			return true;
+		}
+		session->phase = NetWorldJoinPhase::CatchingUp;
+		session->activationTick = nowFrame + c_NetWorldActivationLeadFrames;
+		if (outActivationTick) *outActivationTick = session->activationTick;
+		return true;
 	}
 
 	const NetWorldJoinSession* NetWorldJoinHost::SlowActivation(uint64_t nowFrame) const {
@@ -959,11 +1063,11 @@ namespace RTE {
 			if (error) *error = "no world bootstrap for that connection";
 			return false;
 		}
-		if (session->activationTick == 0 || atFrame < session->activationTick) {
+		if (session->activationTick == 0 || atFrame + 1 < session->activationTick) {
 			if (error) *error = "that bootstrap has no activation due at frame " + std::to_string(atFrame);
 			return false;
 		}
-		session->phase = NetWorldJoinPhase::Active;
+		session->phase = session->spectator ? NetWorldJoinPhase::Spectating : NetWorldJoinPhase::Active;
 		++m_ActivationsCommitted;
 		return true;
 	}
@@ -987,7 +1091,8 @@ namespace RTE {
 	size_t NetWorldJoinHost::ExpireStaleJoins(uint64_t nowMs) {
 		std::vector<NetPeerId> stale;
 		for (const NetWorldJoinSession& session: m_Sessions) {
-			if (session.phase == NetWorldJoinPhase::Active || session.openedAtMs == 0) {
+			if (session.phase == NetWorldJoinPhase::Active || session.phase == NetWorldJoinPhase::Spectating ||
+			    session.spectator || session.openedAtMs == 0) {
 				continue;
 			}
 			if (nowMs > session.openedAtMs && nowMs - session.openedAtMs > c_NetWorldJoinDeadlineMs) {

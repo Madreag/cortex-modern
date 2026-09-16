@@ -335,6 +335,13 @@ static std::string ResyncSaveName() {
 		NetIdentityBuildOptions identityOptions;
 		identityOptions.buildId = "stage2-p2d-local";
 		identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+		if (matchConfig.persistentWorld) {
+			identityOptions.matchConfigVersion = NetMatchConfigUtil::c_PersistentWorldVersion;
+			identityOptions.lockstepCodecVersion = NetLockstepCodec::c_WorldTransitionVersion;
+		} else {
+			identityOptions.matchConfigVersion = NetMatchConfigUtil::c_Version;
+			identityOptions.lockstepCodecVersion = NetLockstepCodec::c_Version;
+		}
 		std::string buildError;
 		if (!NetIdentity::BuildCurrentManifest(manifest, &buildError, identityOptions)) {
 			if (error) *error = buildError;
@@ -1652,16 +1659,12 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
 		if (m_WorldJoin.IsConfigured() && m_Coordinator) {
-			NetLockstepFrame frame;
-			if (m_Coordinator->PeekLocalInput(tick, frame)) {
-				(void)m_WorldJoin.Tail().Append(frame, nullptr);
+			NetLockstepReadyFrame ready;
+			if (m_Coordinator->PeekReadyFrame(tick, ready)) {
+				(void)m_WorldJoin.Tail().Append(PackWorldJoinReadyFrame(ready), nullptr);
 			} else {
-				std::vector<ControllerFrame> frames;
-				if (m_Coordinator->PeekLocalFrames(tick, frames)) {
-					frame.senderPeerId = m_Coordinator->GetConfig().localPeerId;
-					frame.targetFrame = tick;
-					frame.roundId = m_Coordinator->GetRoundId();
-					frame.frames = std::move(frames);
+				NetLockstepFrame frame;
+				if (m_Coordinator->PeekLocalInput(tick, frame)) {
 					(void)m_WorldJoin.Tail().Append(frame, nullptr);
 				}
 			}
@@ -1846,12 +1849,9 @@ static std::string ResyncSaveName() {
 			if (m_WorldJoin.FindSession(peer.transportPeerId) != nullptr) {
 				continue;
 			}
-			uint16_t stableSeat = 0;
-			for (const NetH4SeatStatus& status: m_ReconnectHost.GetSeatStatuses()) {
-				if (status.stableSeat != 0 && status.lockstepPeerId == static_cast<uint8_t>(peer.assignedPeerId + 1)) {
-					stableSeat = status.stableSeat;
-					break;
-				}
+			const uint16_t stableSeat = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
+			if (stableSeat == 0) {
+				continue;
 			}
 			if (!m_WorldJoin.BeginJoin(peer.transportPeerId, stableSeat, peer.displayName, nowMs, nullptr)) {
 				continue;
@@ -1886,6 +1886,11 @@ static std::string ResyncSaveName() {
 			m_Runner->GetLobbySession().PumpOutgoingChunks();
 		}
 		const uint64_t nowFrame = m_Coordinator->GetStats().nextFrame;
+		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
+			if (session.spectator && session.activationTick == 0) {
+				(void)m_WorldJoin.ScheduleSpectatorActivation(session.connection, nowFrame, nullptr, nullptr);
+			}
+		}
 		while (const NetWorldJoinSession* slow = m_WorldJoin.SlowActivation(nowFrame)) {
 			uint64_t later = 0;
 			if (slow->activationReannounces < c_NetWorldActivationReannounceLimit &&
@@ -1937,8 +1942,7 @@ static std::string ResyncSaveName() {
 		}
 		if (const NetWorldJoinSession* due = m_WorldJoin.DueActivation(m_Coordinator->GetStats().nextFrame)) {
 			std::string admitError;
-			const uint64_t firstRequired = std::max(due->activationTick, m_Coordinator->GetStats().nextFrame + 1);
-			if (!due->spectator && !m_Coordinator->AdmitWorldMember(due->assignedPeerId, due->connection, firstRequired, &admitError)) {
+			if (!due->spectator && !m_Coordinator->AdmitWorldMember(due->assignedPeerId, due->connection, due->activationTick, &admitError)) {
 				m_WorldJoin.CancelJoin(due->connection, admitError);
 				return;
 			}
@@ -2470,6 +2474,13 @@ static std::string ResyncSaveName() {
 		NetIdentityBuildOptions options;
 		options.buildId = "stage2-p2d-local";
 		options.sessionRulesTag = "stage2-p2-session-rules";
+		if (m_MatchConfig.persistentWorld) {
+			options.matchConfigVersion = NetMatchConfigUtil::c_PersistentWorldVersion;
+			options.lockstepCodecVersion = NetLockstepCodec::c_WorldTransitionVersion;
+		} else {
+			options.matchConfigVersion = NetMatchConfigUtil::c_Version;
+			options.lockstepCodecVersion = NetLockstepCodec::c_Version;
+		}
 		const auto started = std::chrono::steady_clock::now();
 		const bool built = NetIdentity::BuildCurrentManifest(manifest, error, options);
 		if (buildMs) *buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();

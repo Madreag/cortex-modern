@@ -77,6 +77,8 @@ namespace RTE {
 		bool s_WorldCatchUpActive = false;
 		uint64_t s_WorldCatchUpAppliedThrough = 0;
 		std::deque<NetLockstepFrame> s_WorldCatchUpTail;
+		std::map<uint8_t, uint32_t> s_WorldHolderGeneration;
+		uint64_t s_WorldMembershipRevision = 0;
 
 		NetValueObservation ToValueObservation(const MovableObject::PendingValueOp& op) {
 			NetValueObservation observation;
@@ -933,6 +935,31 @@ namespace RTE {
 		command.senderPeerId = GetLockstepHostPeerId();
 		command.payload = transition;
 		EnqueueLocalGameCommand(command);
+		return true;
+	}
+
+	bool ScenarioRunner::AcceptWorldTransition(const NetGameWorldTransition& transition, std::string* error) {
+		if (transition.schema != 0 && transition.schema != 1) {
+			if (error) *error = "world transition schema is stale";
+			return false;
+		}
+		if (transition.membershipRevision != 0 && transition.membershipRevision < s_WorldMembershipRevision) {
+			if (error) *error = "world transition membership revision is stale";
+			return false;
+		}
+		if (transition.peerId != 0 && transition.holderGeneration != 0) {
+			const auto found = s_WorldHolderGeneration.find(transition.peerId);
+			if (found != s_WorldHolderGeneration.end() && transition.holderGeneration < found->second) {
+				if (error) *error = "world transition holder generation is stale";
+				return false;
+			}
+		}
+		if (transition.membershipRevision != 0) {
+			s_WorldMembershipRevision = transition.membershipRevision;
+		}
+		if (transition.peerId != 0 && transition.holderGeneration != 0) {
+			s_WorldHolderGeneration[transition.peerId] = transition.holderGeneration;
+		}
 		return true;
 	}
 

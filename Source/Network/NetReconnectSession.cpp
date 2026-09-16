@@ -1436,6 +1436,23 @@ namespace RTE {
 		return true;
 	}
 
+	uint16_t NetReconnectHost::StableSeatOfConnection(NetPeerId connection) const {
+		if (connection == c_InvalidNetPeerId) {
+			return 0;
+		}
+		for (const SeatState& seat: m_Seats) {
+			if (seat.activeConnection == connection && seat.seat.stableSeat != 0) {
+				return seat.seat.stableSeat;
+			}
+		}
+		for (const Provisional& pending: m_Provisionals) {
+			if (pending.connection == connection && pending.stableSeat != 0) {
+				return pending.stableSeat;
+			}
+		}
+		return 0;
+	}
+
 	bool NetReconnectHost::IsSeatClosed(uint16_t stableSeat) const {
 		const SeatState* seat = FindSeat(stableSeat);
 		return seat != nullptr && seat->closed;

@@ -147,8 +147,7 @@ namespace RTE {
 		uint64_t m_Evicted = 0;
 	};
 
-	/// §6's baselines, recorded as the world runs and reported at its end. Nothing here steers a
-	/// decision: a missed bound is reported, never rounded away.
+	/// Baselines recorded as the world runs and reported at its end. A missed bound is reported, never rounded away.
 	class NetWorldMetrics {
 	public:
 		static constexpr size_t c_MaxSamples = 4096;
@@ -233,6 +232,8 @@ namespace RTE {
 	inline constexpr uint64_t c_NetWorldJoinDeadlineMs = 180000;
 	/// One later E if the joiner is still behind when the first E arrives; a second miss frees the slot.
 	inline constexpr uint32_t c_NetWorldActivationReannounceLimit = 1;
+	/// World-join plane schema on the offer, the transition and the membership report.
+	inline constexpr uint16_t c_NetWorldJoinSchema = 1;
 	/// WJIM: the joiner-only checkpoint envelope streamed through the lobby StateChunk pump.
 	inline constexpr uint32_t c_NetWorldImageMagic = 0x4D494A57U;
 	inline constexpr uint8_t c_NetWorldImageVersion = 1;
@@ -243,8 +244,10 @@ namespace RTE {
 	inline constexpr uint8_t c_NetWorldReportCatchUp = 2;
 	inline constexpr uint8_t c_NetWorldReportActivate = 3;
 
-	/// Content digest of the published archive (FNV-1a 64, lowercase hex).
+	/// SHA-256 of the published archive bytes, lowercase hex.
 	std::string DigestWorldJoinBytes(const uint8_t* bytes, size_t size);
+	/// Packs every required Controller, command, binding and observation from one committed tick.
+	NetLockstepFrame PackWorldJoinReadyFrame(const NetLockstepReadyFrame& ready);
 	inline std::string DigestWorldJoinBytes(const std::vector<uint8_t>& bytes) {
 		return DigestWorldJoinBytes(bytes.data(), bytes.size());
 	}
@@ -291,6 +294,8 @@ namespace RTE {
 		const NetWorldJoinSession* DueActivation(uint64_t nowFrame) const;
 		/// A catching-up joiner that missed E and still sits behind it.
 		const NetWorldJoinSession* SlowActivation(uint64_t nowFrame) const;
+		/// Announces E for an overflow spectator (no Controller, no Admit).
+		bool ScheduleSpectatorActivation(NetPeerId connection, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr);
 		/// Announces a later E once. A second miss is a CancelJoin.
 		bool ReannounceActivation(NetPeerId connection, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr);
 		/// Marks the bootstrap active once its transition has been committed.
