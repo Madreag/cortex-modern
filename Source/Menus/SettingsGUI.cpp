@@ -1,5 +1,7 @@
 #include "SettingsGUI.h"
 #include "WindowMan.h"
+#include "MenuMan.h"
+#include "MainMenuGUI.h"
 
 #include "GUI.h"
 #include "AllegroScreen.h"
@@ -331,12 +333,13 @@ namespace RTE::MenuAutomation {
 	}
 	bool TextFits(GUIControlManager* manager, GUIControl* control, std::string& observation) {
 		std::string text;
-		if (!Visible(control) || !Text(control, text)) return false;
+		const bool measureHiddenPreset = control && control->GetName() == "ComboPresetResolution";
+		if ((!Visible(control) && !measureHiddenPreset) || !Text(control, text)) return false;
 		const auto rect = Rectangle(control->GetPanel());
 		observation += " text=" + Json(text).dump() + " rect=" + Json(rect).dump();
 		if (auto* label = dynamic_cast<GUILabel*>(control)) {
 			observation += " height=" + std::to_string(label->GetTextHeight()) + " word_width=" + std::to_string(label->GetMaxWordWidth());
-			if (label->GetHorizontalOverflowScroll()) {
+			if (label->GetHorizontalOverflowScroll() && control->GetName() == "LabelMultiplayerStatus") {
 				return label->GetTextHeight() <= rect[3];
 			}
 			return label->GetTextHeight() <= rect[3] && label->GetMaxWordWidth() <= rect[2];
@@ -380,7 +383,7 @@ namespace RTE::MenuAutomation {
 	bool Handles(const std::string& command) {
 		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_text_fits" ||
 			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
-			command == "set_text" || command == "combo_drop" || command == "combo_select" ||
+			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" ||
 			command == "select_settings_page" || command == "assert_settings_page";
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
@@ -430,6 +433,16 @@ namespace RTE::MenuAutomation {
 			args >> std::quoted(name) >> argument >> extra;
 			if (!extra.empty()) { observation = "unexpected arguments"; return false; }
 			auto* control = manager->GetControl(name);
+			if (command == "set_share_address") {
+				if (name.empty() || !argument.empty()) { observation = "need one address"; return false; }
+				if (auto* menu = g_MenuMan.GetMainMenu()) {
+					menu->AutomationSetShareAddress(name);
+					observation = name;
+					return true;
+				}
+				observation = "no main menu";
+				return false;
+			}
 			if (command == "key" || command == "pad") {
 				auto* input = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
 				observation = name + " " + argument;
@@ -473,12 +486,17 @@ namespace RTE::MenuAutomation {
 					{"phase", "after_draw"}, {"sim_frame", g_TimerMan.GetSimUpdateCount()}, {"host", lobby.isHost}, {"peer_id", lobby.localPeerId},
 					{"activity_preset", lobby.activityPreset}, {"activity_module", lobby.activityModule}, {"controls", Json::array()}};
 				for (auto* item : *manager->GetControlList()) {
-					if (!Visible(item)) continue;
+					const bool dumpHiddenPreset = item->GetName() == "ComboPresetResolution";
+					if (!Visible(item) && !dumpHiddenPreset) continue;
 					auto* panel = item->GetPanel();
 					auto* parent = dynamic_cast<GUIControl*>(panel->GetParentPanel());
 					std::string text;
 					Json row = {{"name", item->GetName()}, {"rect", Rectangle(panel)}, {"parent", parent ? parent->GetName() : ""},
-						{"parent_rect", Rectangle(panel->GetParentPanel())}, {"text", Text(item, text) ? text : ""}, {"enabled", Enabled(item)}, {"visible", true}, {"focus", panel->HasFocus()}};
+						{"parent_rect", Rectangle(panel->GetParentPanel())}, {"text", Text(item, text) ? text : ""}, {"enabled", Enabled(item) || dumpHiddenPreset}, {"visible", Visible(item)}, {"focus", panel->HasFocus()}};
+					if (auto* label = dynamic_cast<GUILabel*>(item)) {
+						row["overflow_scroll"] = label->GetHorizontalOverflowScroll();
+						row["word_width"] = label->GetMaxWordWidth();
+					}
 					// The combo's open list is a panel, not a control, so its state rides its owner's row.
 					if (auto* combo = dynamic_cast<GUIComboBox*>(item)) {
 						row["dropped"] = combo->IsDropped();
@@ -486,14 +504,32 @@ namespace RTE::MenuAutomation {
 						Json items = Json::array();
 						GUIListPanel* list = combo->GetListPanel();
 						GUIFont* listFont = list ? list->GetFont() : nullptr;
+						int longest = 0;
 						for (int i = 0; i < combo->GetCount(); ++i) {
 							const GUIListPanel::Item* entry = combo->GetItem(i);
 							if (!entry) continue;
 							const int nameRoom = std::max(1, list ? list->RegularItemNameRoom(entry->m_OffsetX) : combo->GetWidth() - 8);
-							const bool fits = listFont && listFont->CalculateWidth(entry->m_Name) <= nameRoom;
-							items.push_back({{"text", entry->m_Name}, {"display", entry->m_Name}, {"text_fits", fits}, {"name_room", nameRoom}});
+							const std::string display = list ? list->RegularFittedName(entry->m_Name, entry->m_OffsetX) : entry->m_Name;
+							const int rawWidth = listFont ? listFont->CalculateWidth(entry->m_Name) : 0;
+							const int drawnWidth = listFont ? listFont->CalculateWidth(display) : 0;
+							longest = std::max(longest, rawWidth);
+							items.push_back({{"text", entry->m_Name}, {"display", display}, {"text_fits", drawnWidth <= nameRoom},
+								{"name_room", nameRoom}, {"drawn_width", drawnWidth}, {"raw_width", rawWidth}});
 						}
 						row["items"] = items;
+						constexpr int namePad = 8;
+						constexpr int scrollThickness = 17;
+						constexpr int panelPad = 12;
+						const int stackHeight = list ? list->GetStackHeight() : 0;
+						const int scroll = stackHeight > combo->GetDropHeight() ? scrollThickness : 0;
+						const int needed = longest > 0 ? longest + namePad + scroll : combo->GetWidth();
+						GUIPanel* parentPanel = panel->GetParentPanel();
+						const int valueX = parentPanel ? combo->GetRelXPos() : 0;
+						const int clamp = std::max(80, (parentPanel ? parentPanel->GetWidth() : combo->GetWidth()) - valueX - panelPad);
+						row["fit_longest"] = longest;
+						row["fit_needed"] = needed;
+						row["fit_clamp"] = clamp;
+						row["fit_width"] = combo->GetWidth();
 					}
 					// Measure every drawn caption here so a layout review reads the whole page, not the named controls.
 					std::string measured;
