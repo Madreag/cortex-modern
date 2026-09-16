@@ -2922,8 +2922,7 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 	}
 	if (m_pLastHighlightDrawActor[PoS] && g_MovableMan.ValidMO(m_pLastHighlightDrawActor[PoS])) {
 		if (PieMenu* highlightedPie = m_pLastHighlightDrawActor[PoS]->GetPieMenu(); highlightedPie && highlightedPie->HasHighlightDraw()) {
-			highlightedPie->RenderUpdate();
-			highlightedPie->Draw(pTargetBitmap, targetPos);
+			highlightedPie->DrawHighlight(pTargetBitmap, targetPos);
 		}
 	}
 

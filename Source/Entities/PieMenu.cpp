@@ -507,10 +507,21 @@ bool PieMenu::RunCheckpointSelfTest() {
 				std::string(updateEnabled ? "1" : "0") + "/" + (updateVisible ? "1" : "0"));
 		}
 		menu.SetHighlightDrawRadius(30);
-		menu.RenderUpdate();
+		const Vector centerBefore = menu.m_CenterPos;
+		const float visualBefore = menu.m_CursorVisualAngle;
+		BITMAP* highlightTarget = create_bitmap_ex(8, 64, 64);
+		if (highlightTarget) {
+			clear_to_color(highlightTarget, 0);
+			menu.DrawHighlight(highlightTarget, Vector());
+			destroy_bitmap(highlightTarget);
+		}
 		check("highlight_draw_radius", menu.HasHighlightDraw() && menu.GetHighlightDrawRadius() == 30,
 			std::to_string(menu.GetHighlightDrawRadius()), "30");
 		check("highlight_ring_pixel", menu.FrozenBitmapHasDrawnPixel(), menu.FrozenBitmapHasDrawnPixel() ? "1" : "0", "1");
+		check("highlight_draw_leaves_center", menu.m_CenterPos == centerBefore,
+			std::to_string(menu.m_CenterPos.m_X), std::to_string(centerBefore.m_X));
+		check("highlight_draw_leaves_visual_angle", menu.m_CursorVisualAngle == visualBefore,
+			std::to_string(menu.m_CursorVisualAngle), std::to_string(visualBefore));
 		check("highlight_dump_unchanged", menu.SaveRuntimeCheckpoint() == saved, menu.SaveRuntimeCheckpoint(), saved);
 		check("highlight_describe_unchanged", menu.DescribeInteractionState() == described, menu.DescribeInteractionState(), described);
 		check("highlight_getters_unchanged", menu.IsEnabled() == enabledBefore && menu.IsVisible() == visibleBefore,
@@ -521,13 +532,24 @@ bool PieMenu::RunCheckpointSelfTest() {
 		if (mpDump.Create() >= 0) {
 			mpDump.LoadRuntimeCheckpoint(saved);
 			mpDump.SetHighlightDrawRadius(30);
-			mpDump.RenderUpdate();
+			BITMAP* mpTarget = create_bitmap_ex(8, 64, 64);
+			if (mpTarget) {
+				clear_to_color(mpTarget, 0);
+				mpDump.DrawHighlight(mpTarget, Vector());
+				destroy_bitmap(mpTarget);
+			}
 			const auto mpSaved = mpDump.SaveRuntimeCheckpoint();
 			check("highlight_sp_mp_dump_identity", mpSaved == dumpAfterDraw && dumpAfterDraw == saved,
 				mpSaved, saved);
 		}
 		menu.ClearHighlightDraw();
-		menu.RenderUpdate();
+		menu.FreezeAtRadius(15);
+		BITMAP* freezeTarget = create_bitmap_ex(8, 64, 64);
+		if (freezeTarget) {
+			clear_to_color(freezeTarget, 0);
+			menu.DrawHighlight(freezeTarget, Vector());
+			destroy_bitmap(freezeTarget);
+		}
 		check("clear_highlight_redraws_freeze", menu.FrozenBitmapHasDrawnPixel(), menu.FrozenBitmapHasDrawnPixel() ? "1" : "0", "1");
 		check("highlight_clears", !menu.HasHighlightDraw(), menu.HasHighlightDraw() ? "1" : "0", "0");
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
@@ -1131,6 +1153,31 @@ void PieMenu::FillHighlightBitmap() {
 	m_FrozenBitmapNeedsRedraw = false;
 }
 
+void PieMenu::DrawHighlight(BITMAP* targetBitmap, const Vector& targetPos) {
+	FillHighlightBitmap();
+	if (!targetBitmap || !m_FrozenBitmap) {
+		return;
+	}
+	Vector center = m_CenterPos;
+	if (m_Owner) {
+		center = m_Owner->GetCPUPos();
+	} else if (m_AffectedObject && g_MovableMan.ValidMO(m_AffectedObject)) {
+		center = dynamic_cast<Actor*>(m_AffectedObject) ? static_cast<Actor*>(m_AffectedObject)->GetCPUPos() : m_AffectedObject->GetPos();
+	}
+	Vector drawPos;
+	CalculateDrawPosition(targetBitmap, targetPos, center, drawPos);
+	rlZDepth(c_GuiDepth);
+	if (m_DrawBackgroundTransparent) {
+		g_FrameMan.SetTransTableFromPreset(TransparencyPreset::MoreTrans);
+		g_GLResourceMan.UpdateDynamicBitmap(m_FrozenBitmap, true);
+		DrawTexture(g_GLResourceMan.GetStaticTextureFromBitmap(m_FrozenBitmap), drawPos.GetFloorIntX() - m_FrozenBitmap->w / 2, drawPos.GetFloorIntY() - m_FrozenBitmap->h / 2, {255, 255, 255, g_FrameMan.GetCurrentAlpha()});
+	} else {
+		g_GLResourceMan.UpdateDynamicBitmap(m_FrozenBitmap, true);
+		DrawTexture(g_GLResourceMan.GetStaticTextureFromBitmap(m_FrozenBitmap), drawPos.GetFloorIntX() - m_FrozenBitmap->w / 2, drawPos.GetFloorIntY() - m_FrozenBitmap->h / 2, {255, 255, 255, 255});
+	}
+	rlZDepth(c_DefaultDrawDepth);
+}
+
 void PieMenu::RenderUpdate() {
 	if (m_Owner) {
 		SetPos(m_Owner->GetRenderCPUPos());
@@ -1458,7 +1505,11 @@ void PieMenu::UpdatePredrawnMenuBackgroundBitmap() {
 }
 
 void PieMenu::CalculateDrawPosition(const BITMAP* targetBitmap, const Vector& targetPos, Vector& drawPos) const {
-	drawPos = m_CenterPos - targetPos;
+	CalculateDrawPosition(targetBitmap, targetPos, m_CenterPos, drawPos);
+}
+
+void PieMenu::CalculateDrawPosition(const BITMAP* targetBitmap, const Vector& targetPos, const Vector& center, Vector& drawPos) const {
+	drawPos = center - targetPos;
 	if (!targetPos.IsZero()) {
 		const Box* nearestBox = nullptr;
 
@@ -1471,13 +1522,13 @@ void PieMenu::CalculateDrawPosition(const BITMAP* targetBitmap, const Vector& ta
 		//  Note - offscreen piemenu is used for signaling selectable actors so it's currently desirable. Strategic mode won't want that clutter, so this can probably change then.
 		g_SceneMan.WrapBox(screenBox, wrappedBoxes);
 		for (const Box& wrappedBox: wrappedBoxes) {
-			if (wrappedBox.IsWithinBox(m_CenterPos)) {
+			if (wrappedBox.IsWithinBox(center)) {
 				nearestBox = &wrappedBox;
 				withinAnyBox = true;
 				break;
 			}
 
-			distance = g_SceneMan.ShortestDistance(wrappedBox.GetCenter(), m_CenterPos).GetLargest();
+			distance = g_SceneMan.ShortestDistance(wrappedBox.GetCenter(), center).GetLargest();
 			if (distance < shortestDist) {
 				shortestDist = distance;
 				nearestBox = &wrappedBox;
@@ -1486,7 +1537,7 @@ void PieMenu::CalculateDrawPosition(const BITMAP* targetBitmap, const Vector& ta
 		drawPos += screenBox.GetCorner() - nearestBox->GetCorner();
 
 		if (!withinAnyBox) {
-			drawPos = nearestBox->GetCenter() + g_SceneMan.ShortestDistance(nearestBox->GetCenter(), m_CenterPos) - targetPos;
+			drawPos = nearestBox->GetCenter() + g_SceneMan.ShortestDistance(nearestBox->GetCenter(), center) - targetPos;
 		}
 	}
 
