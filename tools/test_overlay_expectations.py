@@ -25,7 +25,7 @@ class OverlayExpectations(unittest.TestCase):
     def test_toast_hold_banner_steps_carry_widget_and_banners(self):
         """Base tree used shot(..., None) on auto/always toast-hold-banner steps."""
         for mode in ("auto", "always"):
-            steps = probe_script("Host", (1920, 1080), {"leave": True}, mode)
+            steps = probe_script("Host", (1920, 1080), {"leave": True}, mode)["steps"]
             shots = [step for step in steps
                      if step.get("op") == "screenshot" and "toast-hold-banner" in step.get("name", "")]
             self.assertTrue(shots, f"toast-hold-banner shot missing for mode={mode}")
