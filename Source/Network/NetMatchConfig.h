@@ -60,7 +60,7 @@ namespace RTE {
 
 	// Inherited rules retain the existing activity/mode member names without duplicate values.
 	struct NetMatchConfig : NetMatchStandardRules {
-		uint16_t version = 5;
+		uint16_t version = 4;
 		uint64_t sessionId = 0;
 		uint64_t roundId = 1;
 		uint64_t configRevision = 1;
@@ -84,7 +84,10 @@ namespace RTE {
 
 	class NetMatchConfigUtil {
 	public:
-		static constexpr uint16_t c_Version = 5; // v5 added the path horizon; v4, v3 and v2 envelopes stay readable.
+		static constexpr uint16_t c_Version = 4;
+		static constexpr uint16_t c_ReservedDedicatedBit = 1;
+		static constexpr uint16_t c_ReservedPathHorizonBit = 2;
+		static constexpr uint16_t c_ReservedKnownMask = 3;
 		static constexpr uint16_t c_DefaultPathHorizonTicks = 30;
 		static constexpr uint16_t c_MaxPathHorizonTicks = 120;
 		static constexpr uint32_t c_MaxFiniteStartingGold = 29999;

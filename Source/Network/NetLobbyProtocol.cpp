@@ -266,8 +266,12 @@ namespace RTE {
 			AppendU16LE(out, config.inputDelayFrames);
 			AppendU8(out, static_cast<uint8_t>(config.mode));
 			AppendU8(out, static_cast<uint8_t>(config.ownershipPolicy));
-			// Reserved bit 0 carries the dedicated flag; old builds refuse the nonzero word.
-			AppendU16LE(out, config.dedicated ? 1 : 0);
+			// Reserved bit 0 is dedicated; bit 1 means the path-horizon U16 follows the host-options tail.
+			uint16_t reserved = config.dedicated ? NetMatchConfigUtil::c_ReservedDedicatedBit : 0;
+			if (config.version >= 3 && config.pathHorizonTicks != 0) {
+				reserved |= NetMatchConfigUtil::c_ReservedPathHorizonBit;
+			}
+			AppendU16LE(out, reserved);
 			if (!AppendString(out, config.activityType, NetLobbyProtocol::c_MaxShortTextBytes, "activity_type", error) ||
 			    !AppendString(out, config.activityPreset, NetLobbyProtocol::c_MaxShortTextBytes, "activity_preset", error) ||
 			    !AppendString(out, config.sceneName, NetLobbyProtocol::c_MaxShortTextBytes, "scene_name", error) ||
@@ -309,7 +313,7 @@ namespace RTE {
 				AppendU8(out, config.idleWaitMinutes);
 				AppendBool(out, config.automaticRepair);
 				AppendU8(out, static_cast<uint8_t>(config.delayPolicy));
-				if (config.version >= 5) {
+				if (config.pathHorizonTicks != 0) {
 					AppendU16LE(out, config.pathHorizonTicks);
 				}
 			}
@@ -334,8 +338,8 @@ namespace RTE {
 			    !ReadOrTruncated(reader.ReadU16LE(reserved), reader, error, "config.reserved")) {
 				return false;
 			}
-			out.dedicated = (reserved & 1) != 0;
-			if (reserved & ~static_cast<uint16_t>(1)) {
+			out.dedicated = (reserved & NetMatchConfigUtil::c_ReservedDedicatedBit) != 0;
+			if (reserved & ~NetMatchConfigUtil::c_ReservedKnownMask) {
 				SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 2, "config reserved field must be zero");
 				return false;
 			}
@@ -396,7 +400,13 @@ namespace RTE {
 				                     reader.ReadU8(out.idleWaitMinutes) && reader.ReadBool(out.automaticRepair) && reader.ReadU8(policy), reader, error, "host match options")) return false;
 				out.delayPolicy = static_cast<NetMatchDelayPolicy>(policy);
 				out.pathHorizonTicks = 0;
-				if (out.version >= 5 && !ReadOrTruncated(reader.ReadU16LE(out.pathHorizonTicks), reader, error, "path horizon")) return false;
+				if ((reserved & NetMatchConfigUtil::c_ReservedPathHorizonBit) != 0) {
+					if (!ReadOrTruncated(reader.ReadU16LE(out.pathHorizonTicks), reader, error, "path horizon")) return false;
+					if (out.pathHorizonTicks == 0) {
+						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset() - 2, "path horizon present bit requires a nonzero horizon");
+						return false;
+					}
+				}
 			}
 			std::string validateError;
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(out, &validateError)) {
