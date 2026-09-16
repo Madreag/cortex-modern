@@ -477,9 +477,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		// them - the last resort drops everything but it rather than clip it off the end.
 		m_StripText = compose(tail, false);
 		if (font->CalculateWidth(m_StripText) > maxTextWidth) {
-			// Outside the editor the span is wide and a long line is a long-name problem, so the names
-			// shorten first; the editor's narrow span gives up the metrics tail before touching them.
-			m_StripText = editor.editing ? compose("", false) : compose(tail, true);
+			m_StripText = compose("", false);
 		}
 		if (font->CalculateWidth(m_StripText) > maxTextWidth) {
 			m_StripText = compose("", true);
