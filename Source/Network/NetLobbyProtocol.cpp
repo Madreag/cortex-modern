@@ -496,6 +496,14 @@ namespace RTE {
 			return true;
 		}
 
+		bool RefuseOversizePeerId(uint8_t peerId, size_t offset, NetLobbyError* error) {
+			if (peerId > NetLobbyProtocol::c_MaxPeers) {
+				SetError(error, NetLobbyErrorCode::InvalidValue, offset, "peer id is invalid");
+				return false;
+			}
+			return true;
+		}
+
 		bool DecodePayload(NetLobbyMessageType type, ByteReader& reader, NetLobbyPayload& out, NetLobbyError* error, bool allowRecordedVersions) {
 			switch (type) {
 				case NetLobbyMessageType::Hello: {
@@ -504,6 +512,7 @@ namespace RTE {
 					if (!ReadOrTruncated(reader.ReadU16LE(payload.minProtocolVersion), reader, error, "min_protocol_version") ||
 					    !ReadOrTruncated(reader.ReadU16LE(payload.maxProtocolVersion), reader, error, "max_protocol_version") ||
 					    !ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadU8(reserved), reader, error, "reserved")) return false;
 					if (reserved != 0) {
 						SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 1, "reserved field must be zero");
@@ -518,6 +527,7 @@ namespace RTE {
 					NetLobbyPeerState payload;
 					uint16_t reserved = 0;
 					if (!ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadBool(payload.ready), reader, error, "ready") ||
 					    !ReadOrTruncated(reader.ReadU16LE(reserved), reader, error, "reserved") ||
 					    !ReadOrTruncated(reader.ReadU32LE(payload.pingMs), reader, error, "ping_ms") ||
@@ -542,6 +552,7 @@ namespace RTE {
 					NetLobbyConfigAck payload;
 					uint16_t reserved = 0;
 					if (!ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadBool(payload.accepted), reader, error, "accepted") ||
 					    !ReadOrTruncated(reader.ReadU16LE(reserved), reader, error, "reserved") ||
 					    !ReadOrTruncated(reader.ReadHash(payload.matchConfigHash), reader, error, "match_config_hash")) return false;
@@ -557,6 +568,7 @@ namespace RTE {
 					NetLobbyReady payload;
 					uint16_t reserved = 0;
 					if (!ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadBool(payload.ready), reader, error, "ready") ||
 					    !ReadOrTruncated(reader.ReadU16LE(reserved), reader, error, "reserved")) return false;
 					if (reserved != 0) {
@@ -586,6 +598,7 @@ namespace RTE {
 					uint8_t reserved8 = 0;
 					uint16_t reserved16 = 0;
 					if (!ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadU8(reserved8), reader, error, "reserved") ||
 					    !ReadOrTruncated(reader.ReadU16LE(reserved16), reader, error, "reserved")) return false;
 					if (reserved8 != 0 || reserved16 != 0) {
