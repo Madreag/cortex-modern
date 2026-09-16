@@ -93,6 +93,7 @@ void GameActivity::Clear() {
 		m_ActorSelectTimer[player].Reset();
 		m_ActorCursor[player].Reset();
 		m_pLastMarkedActor[player] = 0;
+		m_pLastHighlightDrawActor[player] = nullptr;
 		m_LandingZone[player].Reset();
 		m_AIReturnCraft[player] = true;
 		m_NextMultiOrderYOffset[player] = 0.0F;
@@ -1385,6 +1386,16 @@ void GameActivity::DriveScriptedSetupEditor(int player) {
 	}
 }
 
+void GameActivity::ClearCursorHighlightDraw(int player) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return;
+	}
+	if (m_pLastHighlightDrawActor[player] && g_MovableMan.ValidMO(m_pLastHighlightDrawActor[player]) && m_pLastHighlightDrawActor[player]->GetPieMenu()) {
+		m_pLastHighlightDrawActor[player]->GetPieMenu()->ClearHighlightDraw();
+	}
+	m_pLastHighlightDrawActor[player] = nullptr;
+}
+
 void GameActivity::ApplyCursorHighlightDraw(int player) {
 	if (!IsSeatActive(player) || !IsLocalHumanSeat(player)) {
 		return;
@@ -1410,11 +1421,11 @@ void GameActivity::ApplyCursorHighlightDraw(int player) {
 			radius = 15;
 		}
 	}
-	if (m_pLastMarkedActor[player] && !g_MovableMan.ValidMO(m_pLastMarkedActor[player])) {
-		m_pLastMarkedActor[player] = nullptr;
+	if (m_pLastHighlightDrawActor[player] && !g_MovableMan.ValidMO(m_pLastHighlightDrawActor[player])) {
+		m_pLastHighlightDrawActor[player] = nullptr;
 	}
-	if (m_pLastMarkedActor[player] && m_pLastMarkedActor[player] != highlighted && m_pLastMarkedActor[player]->GetPieMenu()) {
-		m_pLastMarkedActor[player]->GetPieMenu()->ClearHighlightDraw();
+	if (m_pLastHighlightDrawActor[player] && m_pLastHighlightDrawActor[player] != highlighted && m_pLastHighlightDrawActor[player]->GetPieMenu()) {
+		m_pLastHighlightDrawActor[player]->GetPieMenu()->ClearHighlightDraw();
 	}
 	if (highlighted && highlighted->GetPieMenu()) {
 		if (wobble) {
@@ -1422,6 +1433,9 @@ void GameActivity::ApplyCursorHighlightDraw(int player) {
 		} else if (radius > 0) {
 			highlighted->GetPieMenu()->SetHighlightDrawRadius(radius);
 		}
+		m_pLastHighlightDrawActor[player] = highlighted;
+	} else {
+		ClearCursorHighlightDraw(player);
 	}
 }
 
@@ -2026,7 +2040,13 @@ void GameActivity::Update() {
 
 		if (m_ViewState[player] == ViewState::Observe) {
 			// If we're observing game over state, freeze the view for a bit so the player's input doesn't ruin the focus
-			if (!(m_ActivityState == ActivityState::Over && !m_GameOverTimer.IsPastSimMS(1000))) {
+			const bool freezeHeld = m_ActivityState == ActivityState::Over && !m_GameOverTimer.IsPastSimMS(1000);
+			static bool s_ObserveFreezeHeld[Players::MaxPlayerCount] = {};
+			if (s_ObserveFreezeHeld[player] && !freezeHeld) {
+				std::cout << "[game-over-freeze] lift-tick=" << g_TimerMan.GetSimUpdateCount() << " player=" << player << std::endl;
+			}
+			s_ObserveFreezeHeld[player] = freezeHeld;
+			if (!freezeHeld) {
 				// Get cursor input
 				const bool lookedAround = m_PlayerController[player].RelativeCursorMovement(m_ObservationTarget[player], 1.2f);
 				UpdateSpectatorView(player, lookedAround);
@@ -2879,6 +2899,8 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 
 	if (m_ViewState[PoS] == ViewState::ActorSelect || m_ViewState[PoS] == ViewState::AIGoToPoint) {
 		ApplyCursorHighlightDraw(PoS);
+	} else {
+		ClearCursorHighlightDraw(PoS);
 	}
 
 	// Draw actor picking crosshairs if applicable
@@ -3551,6 +3573,7 @@ void GameActivity::ForgetDestroyedActor(const Actor* actor) {
 	Activity::ForgetDestroyedActor(actor);
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (m_pLastMarkedActor[player] == actor) m_pLastMarkedActor[player] = nullptr;
+		if (m_pLastHighlightDrawActor[player] == actor) m_pLastHighlightDrawActor[player] = nullptr;
 	}
 }
 
@@ -4613,29 +4636,82 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			check("above_head_pos_survives_drawhud", headBefore == headAfter);
 		}
 		{
-			// Saved intensity boxes the seat actor's above-head point, never this machine's camera.
+			// Drive GameIntensityCalculator and the stock AddObjectivePoint(AboveHeadPos) shape.
 			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
 			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
 			const auto* robot = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
 			if (!robot) throw std::runtime_error("shared intensity fixture preset unavailable");
-			std::unique_ptr<Actor> actor(static_cast<Actor*>(robot->Clone()));
+			Actor* actor = static_cast<Actor*>(robot->Clone());
 			actor->SetTeam(0);
 			actor->SetPos(Vector(320, 240));
-			const Vector head = actor->GetAboveHeadPos();
+			actor->SetPinStrength(1000.0F);
+			g_MovableMan.AddActor(actor);
+			fixture->m_IsActive[0] = fixture->m_IsHuman[0] = true;
+			fixture->m_Team[0] = 0;
+			fixture->m_PlayerScreen[0] = 0;
+			fixture->m_Brain[0] = actor;
 			g_CameraMan.SetOffset(Vector(10, 20), 0);
-			const Vector cam = g_CameraMan.GetOffset(0);
-			const float width = static_cast<float>(g_FrameMan.GetSimScreenWidth());
-			const float height = static_cast<float>(g_FrameMan.GetSimScreenHeight());
-			const Vector boxCorner(head.m_X - width * 0.5F, head.m_Y - height * 0.5F);
-			const Box intensityBox(boxCorner, Vector(head.m_X + width * 0.5F, head.m_Y + height * 0.5F));
-			std::cout << "[net-local-intensity] head=" << head.m_X << "," << head.m_Y
-			          << " cam=" << cam.m_X << "," << cam.m_Y
-			          << " corner=" << boxCorner.m_X << "," << boxCorner.m_Y << std::endl;
-			check("shared_intensity_box_uses_above_head", intensityBox.IsWithinBox(head));
-			check("shared_intensity_box_ignores_camera", boxCorner != cam);
-			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
-			fixture->AddObjectivePoint("Protect!", head, 0, GameActivity::ARROWDOWN);
+			const Vector head = actor->GetAboveHeadPos();
+			const int ran = lua.RunScriptString(R"lua(
+				local calc = require("Activities/Utility/GameIntensityCalculator")
+				local activity = ToGameActivity(ActivityMan:GetActivity())
+				calc:Initialize(activity, true, 0.2, 0.01)
+				calc:UpdateGameIntensityCalculator()
+				activity:SaveString("GameIntensityCalculatorMainTable", tostring(calc.saveTable.CurrentIntensity))
+				local brain = activity:GetPlayerBrain(Activity.PLAYER_1)
+				if brain then
+					activity:AddObjectivePoint("Protect!", brain.AboveHeadPos, 0, GameActivity.ARROWDOWN)
+				end
+			)lua");
+			const std::string savedIntensity = fixture->LoadString("GameIntensityCalculatorMainTable");
+			std::cout << "[net-local-intensity] ran=" << ran << " saved=" << savedIntensity
+			          << " cam=" << g_CameraMan.GetOffset(0).m_X << "," << g_CameraMan.GetOffset(0).m_Y
+			          << " head=" << head.m_X << "," << head.m_Y << std::endl;
+			check("shared_intensity_calculator_ran", ran == 0 && !savedIntensity.empty());
+			check("shared_intensity_is_saved", savedIntensity.find("Camera") == std::string::npos);
 			check("shared_objective_uses_above_head", !fixture->m_Objectives.empty() && fixture->m_Objectives.front().m_ScenePos == head);
+		}
+		{
+			// Update under lockstep leaves the dump; DrawGUI arms the ring; SP and MP dumps match the base.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			const auto* robot = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+			if (!robot) throw std::runtime_error("highlight fixture preset unavailable");
+			Actor* actor = static_cast<Actor*>(robot->Clone());
+			actor->SetTeam(0);
+			actor->SetPos(Vector(320, 240));
+			actor->SetPinStrength(1000.0F);
+			g_MovableMan.AddActor(actor);
+			fixture->m_IsActive[0] = fixture->m_IsHuman[0] = true;
+			fixture->m_Team[0] = 0;
+			fixture->m_PlayerScreen[0] = 0;
+			fixture->m_ViewState[0] = ViewState::ActorSelect;
+			fixture->m_ActorCursor[0] = actor->GetCPUPos();
+			PieMenu* pie = actor->GetPieMenu();
+			if (!pie) throw std::runtime_error("highlight fixture pie unavailable");
+			const auto dump = pie->SaveRuntimeCheckpoint();
+			const auto described = pie->DescribeInteractionState();
+			const bool enabledBefore = pie->IsEnabled();
+			const bool visibleBefore = pie->IsVisible();
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			check("lockstep_update_leaves_highlight_undrawn", !pie->HasHighlightDraw());
+			check("lockstep_update_dump_unchanged", pie->SaveRuntimeCheckpoint() == dump);
+			check("lockstep_update_getters_unchanged", pie->IsEnabled() == enabledBefore && pie->IsVisible() == visibleBefore);
+			fixture->ApplyCursorHighlightDraw(0);
+			if (BITMAP* target = g_FrameMan.GetBackBuffer8()) {
+				fixture->DrawGUI(target, Vector(), 0);
+			}
+			check("drawgui_highlight_ring", pie->HasHighlightDraw());
+			check("drawgui_dump_unchanged", pie->SaveRuntimeCheckpoint() == dump);
+			check("drawgui_describe_unchanged", pie->DescribeInteractionState() == described);
+			PieMenu mp;
+			check("highlight_sp_mp_dump_identity", mp.Create() >= 0 && mp.LoadRuntimeCheckpoint(dump) && mp.SaveRuntimeCheckpoint() == dump
+				&& pie->SaveRuntimeCheckpoint() == dump);
+			fixture->m_ViewState[0] = ViewState::Normal;
+			fixture->ClearCursorHighlightDraw(0);
+			check("highlight_clears_when_view_leaves", !pie->HasHighlightDraw());
 		}
 		{
 			// The returner's banner is the same live one after a slot that arrives empty, exactly like its menu.
