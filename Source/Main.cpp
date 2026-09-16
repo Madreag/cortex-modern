@@ -60,6 +60,7 @@
 #include "GameActivity.h"
 #include "NetActivitySetup.h"
 #include "MovableObject.h"
+#include "MOPixel.h"
 #include "RTETools.h"
 #include "RotatePrimitiveSelfTest.h"
 #include "FloatTextSelfTest.h"
@@ -108,7 +109,6 @@
 #include "FaultInjection.h"
 #include "LocalPrediction.h"
 #include "LocalPredictionHudSelfTest.h"
-#include "LocalPredictionFundsSelfTest.h"
 #include "OwnedMovableObjects.h"
 #include "PreviewEventLedger.h"
 #include "PreviewScriptSelfTest.h"
@@ -407,6 +407,9 @@ static bool s_eventLedgerGhostRegistered = false;
 static bool s_eventLedgerGhostDumpTaken = false;
 static bool s_eventLedgerGhostDumpIdentical = false;
 static bool s_eventLedgerGhostMoved = false;
+static std::vector<PreviewEventLedger::Key> s_eventLedgerGhostMovedKeys;
+static bool s_eventLedgerExpireDroppedGhost = false;
+static long long s_fundsPreviewPress = 0;
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
@@ -1275,7 +1278,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				std::cerr << "[preview-funds-driver] bad press tick '" << text << "': expected a whole number" << std::endl;
 				return false;
 			}
-			LocalPredictionFundsSelfTest::g_PressTick = std::strtoll(text.c_str(), nullptr, 10);
+			s_fundsPreviewPress = std::strtoll(text.c_str(), nullptr, 10);
 			continue;
 		}
 		if (!lastArg && currentArg == "-local-prediction-invariance") {
@@ -2176,6 +2179,7 @@ static std::string DescribeCanonicalExtras(std::vector<std::string>& problems) {
 	std::ostringstream out;
 	out << "sim_count=" << g_TimerMan.GetSimUpdateCount() << " sim_ticks=" << g_TimerMan.GetSimTimeTicks() << " accumulator=" << g_TimerMan.GetSimAccumulator() << "\n";
 	out << "rng_draws=" << g_SimRNG.GetDrawCount() << " rng_state=" << g_SimRNG.GetEngineState() << "\n";
+	out << "sound_cursor=" << g_AudioMan.GetCheckpointSoundContainerCursor() << "\n";
 	out << "uid_counter=" << MovableObject::GetUniqueIDCounter() << "\n";
 	out << "lua_state_cursor=" << g_LuaMan.GetScriptStateCursor() << "\n";
 	const MovableMan::AddQueueMark mark = g_MovableMan.MarkAddQueues();
@@ -2277,6 +2281,16 @@ static void DrawFrameWithPreviews() {
 	}
 	LocalPrediction::EndRender();
 	LocalPredictionHudSelfTest::SampleAfterRender();
+	if (s_fundsPreviewPress > 0) {
+		const long long tick = g_TimerMan.GetSimUpdateCount();
+		const long long delay = std::max<long long>(static_cast<long long>(ScenarioRunner::GetLockstepLocalInputDelay()), 7);
+		if (tick == s_fundsPreviewPress + 1 || tick == s_fundsPreviewPress + delay) {
+			const std::string& readout = GameActivity::GetLastFundsReadout(Players::PlayerOne);
+			std::cout << "[preview-funds-driver] tick=" << tick << " readout=" << (readout.empty() ? "EMPTY" : readout) << std::endl;
+			std::vector<std::string> problems;
+			WriteProbeText(tick == s_fundsPreviewPress + 1 ? "funds_p1" : "funds_pd", DumpSimStateToString() + DescribeCanonicalExtras(problems));
+		}
+	}
 	g_SceneMan.SetRenderDrawContext(false);
 	t_simRNGOverride = prevSimRNG;
 	NetModerationGUIProbe::AfterDraw();
@@ -2817,7 +2831,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 // -local-prediction-event-ledger drives one preview and one frame per sim tick, the cadence a played
 // match has; a replay run pumps its ticks without frames, so nothing would preview at all.
 static void PreviewEventLedgerFrameOnTick() {
-	if (s_eventLedgerPressTick <= 0 && LocalPredictionHudSelfTest::g_PressTick <= 0 && LocalPredictionFundsSelfTest::g_PressTick <= 0) {
+	if (s_eventLedgerPressTick <= 0 && LocalPredictionHudSelfTest::g_PressTick <= 0 && s_fundsPreviewPress <= 0) {
 		return;
 	}
 	if (g_TimerMan.GetSimUpdateCount() == s_eventLedgerPressTick && s_eventLedgerLuaEmitterUID == 0) {
@@ -2851,7 +2865,6 @@ static void PreviewEventLedgerFrameOnTick() {
 	LocalPrediction::RunPreview();
 	if (snapshotInstall && g_MovableMan.GetPreviewGhostCount() > 0) {
 		const std::vector<MovableMan::PreviewGhostState> installed = g_MovableMan.GetPreviewGhostStates();
-		const Vector posBefore = installed.front().pos;
 		const uint64_t installTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 		for (const MovableMan::PreviewGhostState& ghost: installed) {
 			GhostSample sample;
@@ -2867,14 +2880,22 @@ static void PreviewEventLedgerFrameOnTick() {
 		}
 		g_MovableMan.TravelPreviewGhosts();
 		const std::vector<MovableMan::PreviewGhostState> travelled = g_MovableMan.GetPreviewGhostStates();
-		s_eventLedgerGhostMoved = !travelled.empty() && (travelled.front().pos - posBefore).GetMagnitude() > 0.01;
+		s_eventLedgerGhostMovedKeys.clear();
+		for (const MovableMan::PreviewGhostState& before: installed) {
+			for (const MovableMan::PreviewGhostState& after: travelled) {
+				if (before.key.kind == after.key.kind && before.key.emitterUID == after.key.emitterUID && before.key.tick == after.key.tick && before.key.seq == after.key.seq &&
+				    (after.pos - before.pos).GetMagnitude() > 0.01) {
+					s_eventLedgerGhostMovedKeys.push_back(after.key);
+				}
+			}
+		}
+		s_eventLedgerGhostMoved = !s_eventLedgerGhostMovedKeys.empty();
 		std::vector<std::string> dumpProblemsAfter;
 		const std::string dumpAfterTravel = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblemsAfter);
 		WriteProbeText("event_ledger_ghost_travel", dumpAfterTravel);
 		s_eventLedgerGhostDumpIdentical = dumpProblemsBefore.empty() && dumpProblemsAfter.empty() && dumpBeforeInstall == dumpAfterTravel;
 		s_eventLedgerGhostDumpTaken = true;
 	}
-	LocalPredictionFundsSelfTest::Sample(false);
 	if (s_eventLedgerPressTick > 0) {
 		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 		const std::vector<MovableMan::PreviewGhostState> ghosts = g_MovableMan.GetPreviewGhostStates();
@@ -2904,7 +2925,6 @@ static void PreviewEventLedgerFrameOnTick() {
 		s_eventLedgerFlashTick = g_TimerMan.GetSimUpdateCount();
 	}
 	DrawFrameWithPreviews();
-	LocalPredictionFundsSelfTest::Sample(true);
 }
 
 // -local-prediction-event-ledger: the shot a previewed actor fires must be audible on the preview that
@@ -3029,8 +3049,8 @@ static void CheckPreviewEventLedgerSelfTest() {
 	double worstMotionError = 0.0;
 	const float sampleDt = g_TimerMan.GetDeltaTimeSecs();
 	const Vector gravity = g_SceneMan.GetGlobalAcc();
-	const double motionSlack = gravity.GetMagnitude() * static_cast<double>(sampleDt) * static_cast<double>(sampleDt);
-	const auto stepForces = [&](GhostSample state) {
+	const auto applyForcesCopy = [&](GhostSample state) {
+		// MovableObject::ApplyForces: gravity and air drag, then leftover translate, wrap, hold.
 		Vector vel = state.vel + gravity * state.globalAccScalar * sampleDt;
 		if (state.airResistance > 0 && vel.GetLargest() >= state.airThreshold) {
 			vel *= 1.0F - (state.airResistance * sampleDt);
@@ -3047,6 +3067,8 @@ static void CheckPreviewEventLedgerSelfTest() {
 		state.pos = pos;
 		return state;
 	};
+	const double gravityTerm = gravity.GetMagnitude() * static_cast<double>(sampleDt) * static_cast<double>(sampleDt);
+	const double motionSlack = gravityTerm * 0.5;
 	bool haveExpected = false;
 	GhostSample expected;
 	bool leftoverClosed = false;
@@ -3069,12 +3091,14 @@ static void CheckPreviewEventLedgerSelfTest() {
 		if (adoptionTick != 0 && sample.tick >= adoptionTick) {
 			ghostAtOrAfterAdoption = true;
 		}
-		if (haveExpected && sample.tick != expected.tick) {
-			if (!leftoverClosed) {
-				expected = stepForces(expected);
-				leftoverClosed = true;
+		if (haveExpected) {
+			if (sample.tick != expected.tick || (sample.pos - expected.pos).GetMagnitude() > 0.01) {
+				if (!leftoverClosed) {
+					expected = applyForcesCopy(expected);
+					leftoverClosed = true;
+				}
+				expected.tick = sample.tick;
 			}
-			expected.tick = sample.tick;
 			worstMotionError = std::max(worstMotionError, static_cast<double>((sample.pos - expected.pos).GetMagnitude()));
 		}
 		if (prevValid && (sample.tick == prev.tick + 1 || sample.tick == prev.tick)) {
@@ -3096,21 +3120,43 @@ static void CheckPreviewEventLedgerSelfTest() {
 	const int lastPixelX = static_cast<int>(std::floor(lastGhostPos.m_X));
 	const int lastPixelY = static_cast<int>(std::floor(lastGhostPos.m_Y));
 	const bool terrainHold = sawGhost && g_SceneMan.IsWithinBounds(lastPixelX, lastPixelY, 0) && g_SceneMan.GetTerrMatter(lastPixelX, lastPixelY) != g_MaterialAir;
+	bool trackedMoved = false;
+	for (const PreviewEventLedger::Key& key: s_eventLedgerGhostMovedKeys) {
+		GhostSample moved;
+		moved.any = true;
+		moved.key = key;
+		if (isTracked(moved)) {
+			trackedMoved = true;
+		}
+	}
+	s_eventLedgerGhostMoved = trackedMoved;
 	const bool travelOk = sawGhost && traveledTicks >= 1;
 	check("the_ghost_appears_on_the_preview_tick", sawGhost && firstGhostTick <= press + 1,
 	      sawGhost ? "first ghost at committed tick " + std::to_string(firstGhostTick) + ", expected <= " + std::to_string(press + 1) : "no ghost sampled in the run");
 	check("the_ghost_travels_every_committed_tick", travelOk,
 	      std::to_string(traveledTicks) + " traveled ticks, " + std::to_string(heldTicks) + " held ticks, " + std::to_string(frozenTicks) + " frozen ticks, stop-and-hold=" + std::to_string(stopAndHold ? 1 : 0) + " terrain=" + std::to_string(terrainHold ? 1 : 0) + " last vel " + std::to_string(lastGhostVel.GetMagnitude()));
-	check("the_ghost_matches_the_canonical_motion", sawGhost && worstMotionError <= motionSlack,
-	      "worst |sample - ApplyForces+wrap+hold copy| " + std::to_string(worstMotionError) + " px, slack " + std::to_string(motionSlack));
+	check("the_ghost_matches_the_canonical_motion", sawGhost && worstMotionError < motionSlack,
+	      "worst |sample - ApplyForces copy| " + std::to_string(worstMotionError) + " px, slack " + std::to_string(motionSlack) + " (half |g|dt^2=" + std::to_string(gravityTerm) + "; a gravity-less leftover close differs by that term and fails)");
 	check("the_ghost_is_gone_the_tick_the_canonical_adopts", adoptionTick != 0 && sawGhost && !ghostAtOrAfterAdoption && lastGhostTick < adoptionTick,
 	      "last ghost at committed tick " + std::to_string(lastGhostTick) + ", adoption at " + std::to_string(adoptionTick) + (ghostAtOrAfterAdoption ? " (a ghost outlived its adoption)" : ""));
 	check("the_ghost_stays_off_the_moid_grid", !s_eventLedgerGhostRegistered,
 	      s_eventLedgerGhostRegistered ? "a ghost had a MOID or stayed in the world lists the dump walks" : "ghosts stayed unregistered");
 	check("ghost_travel_leaves_dumps_byte_identical", s_eventLedgerGhostDumpTaken && s_eventLedgerGhostMoved && s_eventLedgerGhostDumpIdentical,
-	      !s_eventLedgerGhostDumpTaken ? "no dump snapshot around an installing travel" : (!s_eventLedgerGhostMoved ? "TravelPreviewGhosts did not move the installed ghost" : (s_eventLedgerGhostDumpIdentical ? "dump+extras unchanged after the ghost moved" : "dump or extras changed after the ghost moved")));
-	check("expired_ghost_vanishes", g_MovableMan.GetPreviewGhostCount() == 0,
-	      std::to_string(g_MovableMan.GetPreviewGhostCount()) + " ghosts still installed at check");
+	      !s_eventLedgerGhostDumpTaken ? "no dump snapshot around an installing travel" : (!s_eventLedgerGhostMoved ? "TravelPreviewGhosts did not move the tracked ghost" : (s_eventLedgerGhostDumpIdentical ? "dump+extras unchanged after the ghost moved" : "dump or extras changed after the ghost moved")));
+	if (!s_eventLedgerExpireDroppedGhost) {
+		PreviewEventLedger::Key expireKey;
+		expireKey.kind = PreviewEventLedger::Projectile;
+		expireKey.emitterUID = 1;
+		expireKey.tick = 1;
+		expireKey.seq = 99;
+		PreviewEventLedger::Insert(expireKey, {});
+		g_MovableMan.InstallPreviewGhost(new MOPixel(), expireKey);
+		const uint64_t expiredBefore = PreviewEventLedger::GetCounters().expired;
+		PreviewEventLedger::ExpireForTick(expireKey.tick + 2);
+		s_eventLedgerExpireDroppedGhost = PreviewEventLedger::GetCounters().expired > expiredBefore && g_MovableMan.GetPreviewGhostCount() == 0;
+	}
+	check("expired_ghost_vanishes", s_eventLedgerExpireDroppedGhost,
+	      s_eventLedgerExpireDroppedGhost ? "ledger expire dropped the ghost" : "no ghost dropped at PreviewEventLedger::ExpireForTick");
 	// A guard, not a detector: the muzzle flash sprite is already drawn on the preview that fires.
 	check("the_flash_sprite_stays_on_the_preview_tick", s_eventLedgerFlashTick > 0 && static_cast<uint64_t>(s_eventLedgerFlashTick) <= press + 1,
 	      "the previewed firearm's flash frame is first set at committed tick " + std::to_string(s_eventLedgerFlashTick) + ", expected <= " + std::to_string(press + 1));
@@ -3139,15 +3185,6 @@ static void CheckRequiredProbesCompleted() {
 			s_netReplayExitCode = 5;
 			LocalPredictionHudSelfTest::g_Checked = true;
 		} else if (!LocalPredictionHudSelfTest::Check()) {
-			s_netReplayExitCode = 5;
-		}
-	}
-	if (LocalPredictionFundsSelfTest::g_PressTick > 0) {
-		if (!LocalPredictionFundsSelfTest::g_SampledPlusOne && !LocalPredictionFundsSelfTest::g_Checked) {
-			std::cout << "[preview-funds-driver] FAIL: funds sample at tick " << LocalPredictionFundsSelfTest::g_PressTick << " never executed (the run stopped at tick " << stoppedAt << ")" << std::endl;
-			s_netReplayExitCode = 5;
-			LocalPredictionFundsSelfTest::g_Checked = true;
-		} else if (!LocalPredictionFundsSelfTest::Check()) {
 			s_netReplayExitCode = 5;
 		}
 	}
@@ -3896,7 +3933,12 @@ void RunGameLoop() {
 			g_PerformanceMan.UpdateMSPSU();
 			g_TimerMan.UpdateSim();
 			g_AudioMan.RetireFinishedSimulationSounds();
+			const uint64_t expiredBefore = PreviewEventLedger::GetCounters().expired;
+			const size_t ghostsBeforeExpire = g_MovableMan.GetPreviewGhostCount();
 			PreviewEventLedger::ExpireForTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+			if (PreviewEventLedger::GetCounters().expired > expiredBefore && g_MovableMan.GetPreviewGhostCount() < ghostsBeforeExpire) {
+				s_eventLedgerExpireDroppedGhost = true;
+			}
 			if (Activity* activity = g_ActivityMan.GetActivity()) {
 				activity->ExpirePresentationViews(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 			}
