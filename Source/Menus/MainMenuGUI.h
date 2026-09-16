@@ -246,6 +246,8 @@ namespace RTE {
 		bool m_DirectoryIdentityTried = false;
 		bool m_JoinTargetPersistentWorld = false;
 		std::string m_JoinTargetActivity;
+		std::string m_LastWorldJoinAddress;
+		uint16_t m_LastWorldJoinPort = 0;
 		uint64_t m_LanBrowserNowMs;
 		GUICollectionBox* m_MultiplayerLandingPanel;
 		GUICollectionBox* m_MultiplayerHostPanel;
