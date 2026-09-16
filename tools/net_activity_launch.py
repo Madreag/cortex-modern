@@ -123,16 +123,40 @@ def observations(log):
             for line in log.splitlines() if line.startswith("[e2e] rules ")]
 
 
-def expected_observation(rules, default=False):
+ACTIVITY_DEFAULT_FUNDS = 2000
+
+
+def iostream_float_token(value):
+    """The token Main.cpp's [e2e] rules line writes for a float (defaultfloat, precision 6)."""
+    return format(float(value), ".6g")
+
+
+def roster_seeded_teams(default=False, dedicated=False):
+    """Teams encode_config seats. NetActivitySetup seeds only those teams with the agreed gold."""
+    teams = {peer - 1 if default else 0 for peer in range(2 if dedicated else 1, 3)}
+    if not default:
+        teams.add(1)
+    return teams
+
+
+def expected_observation(rules, default=False, dedicated=False):
+    """Expected [e2e] rules tokens.
+
+    gold is the integer GetStartingGold print. teamN.funds is GetTeamFunds in the same
+    iostream defaultfloat form the [e2e] rules line writes: only roster-seeded teams
+    carry the agreed starting gold; unseeded teams keep the cloned activity default 2000.
+    """
     expected = dict(tick="1", difficulty=str(rules["difficulty"]), gold=str(rules["starting_gold"]),
                     fog=str(int(rules["fog_of_war"])), orbit=str(int(rules["require_clear_path_to_orbit"])),
                     deploy=str(int(rules["deploy_units"])), cpu_team="-1" if default else "1",
                     activity=rules["activity_module"] + "/" + rules["activity_preset"],
                     scene=rules["scene_module"] + "/" + rules["scene_name"])
+    seeded = roster_seeded_teams(default, dedicated)
     for index, team in enumerate(rules["teams"]):
         expected[f"team{index}.tech"] = team["technology_module"] or "-All-"
         expected[f"team{index}.ai"] = str(team["ai_skill"])
-        expected[f"team{index}.funds"] = str(rules["starting_gold"])
+        funds = rules["starting_gold"] if index in seeded else ACTIVITY_DEFAULT_FUNDS
+        expected[f"team{index}.funds"] = iostream_float_token(funds)
     return expected
 
 
@@ -147,8 +171,8 @@ def score_p4_loss_text(log):
     return {"ended": ended, "pinned": pinned, "still": still, "pass": (not ended) or (pinned and still)}
 
 
-def score_rules(log, rules, default=False):
-    rows, expected = observations(log), expected_observation(rules, default)
+def score_rules(log, rules, default=False, dedicated=False):
+    rows, expected = observations(log), expected_observation(rules, default, dedicated)
     actual = rows[0] if len(rows) == 1 else {}
     differences = {key: {"expected": value, "actual": actual.get(key)} for key, value in expected.items() if actual.get(key) != value}
     return {"pass": len(rows) == 1 and not differences, "observations": rows, "differences": differences}
@@ -658,7 +682,7 @@ def launch(options):
             (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
             report_checks(checks, result["config_refusal"])
             return 0 if result["passed"] else 1
-        result["rules"] = {peer: score_rules(log, rules, default) for peer, log in logs.items()}
+        result["rules"] = {peer: score_rules(log, rules, default, options.dedicated) for peer, log in logs.items()}
         for peer in runs:
             checks[peer + "_process"] = records[peer].get("exit_code") == 0 and not records[peer].get("timed_out") and records[peer].get("evidence_complete", False)
             checks[peer + "_rules"] = result["rules"][peer]["pass"]
@@ -753,7 +777,8 @@ def launch(options):
         # No raw-dump gate against the replay: a single-peer playback binds the other seat's actors to its own
         # controller, and the dump carries that mode. replay_exact compares the on-wire subsystems, which is
         # the comparison that means anything here.
-        result["replay_rules"] = score_rules((root / "replay/stdout.log").read_text(errors="replace"), rules, default)
+        result["replay_rules"] = score_rules((root / "replay/stdout.log").read_text(errors="replace"), rules, default,
+                                            options.dedicated)
         checks["replay_rules"] = result["replay_rules"]["pass"]
         if options.variant == "census":
             # The offline arm: the same preset launched through the stock command line scenario path, whose
