@@ -18,6 +18,7 @@ sources += files(
 'SceneEditorGUI.cpp',
 'SettingsAudioGUI.cpp',
 'SettingsGameplayGUI.cpp',
+'MenuAutomation.cpp',
 'SettingsGUI.cpp',
 'SettingsInputGUI.cpp',
 'SettingsInputMappingGUI.cpp',

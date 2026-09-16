@@ -878,6 +878,7 @@
     <ClInclude Include="Source\Menus\ScenarioActivityConfigGUI.h" />
     <ClInclude Include="Source\Menus\SettingsAudioGUI.h" />
     <ClInclude Include="Source\Menus\SettingsGameplayGUI.h" />
+    <ClInclude Include="Source\Menus\MenuAutomation.h" />
     <ClInclude Include="Source\Menus\SettingsGUI.h" />
     <ClInclude Include="Source\Menus\SettingsInputGUI.h" />
     <ClInclude Include="Source\Menus\SettingsInputMappingGUI.h" />
@@ -1208,6 +1209,7 @@
     <ClCompile Include="Source\Menus\ScenarioActivityConfigGUI.cpp" />
     <ClCompile Include="Source\Menus\SettingsAudioGUI.cpp" />
     <ClCompile Include="Source\Menus\SettingsGameplayGUI.cpp" />
+    <ClCompile Include="Source\Menus\MenuAutomation.cpp" />
     <ClCompile Include="Source\Menus\SettingsGUI.cpp" />
     <ClCompile Include="Source\Menus\SettingsInputGUI.cpp" />
     <ClCompile Include="Source\Menus\SettingsInputMappingGUI.cpp" />
