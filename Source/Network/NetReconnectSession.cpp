@@ -783,11 +783,14 @@ namespace RTE {
 	}
 
 	bool NetReconnectHost::RefuseIfBanned(NetPeerId connection) {
-		if (m_BanStore == nullptr) {
-			return false;
-		}
 		NetAuthBytes32 id{};
-		if (!LookupParticipantId(connection, id) || !m_BanStore->IsBanned(id, m_HostSessionId)) {
+		const bool bound = LookupParticipantId(connection, id);
+		if (m_ProofRequired && !bound) {
+			Send(connection, NetJoinRejected{NetRejectReason::IdentityUnproven, "this connection is not bound", "participant_identity", "", ""});
+			++m_Stats.identityRejections;
+			return true;
+		}
+		if (m_BanStore == nullptr || !bound || !m_BanStore->IsBanned(id, m_HostSessionId)) {
 			return false;
 		}
 		Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "this identity is not admitted", "participant_identity", "", ""});

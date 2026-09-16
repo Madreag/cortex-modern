@@ -384,6 +384,7 @@ namespace RTE {
 		/// removed; the seat was never given away, so there is nothing to take back.
 		NetH4ModerationResult CancelSubstitution(uint16_t stableSeat, uint64_t nowMs);
 		void SetBanStore(NetHostBanStore* store) { m_BanStore = store; }
+		void SetParticipantProofRequired(bool required) { m_ProofRequired = required; }
 		void BindParticipantId(NetPeerId connection, const NetAuthBytes32& id);
 		/// Host: close this holder without a reclaim hold. Reuses the clean-leave seat close.
 		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action, uint64_t nowMs, uint64_t unixNowMs, uint64_t sessionId, uint32_t round, uint64_t boundaryFrame, NetParticipantRemovalIssue& issued);
@@ -578,6 +579,7 @@ namespace RTE {
 		bool m_HasRemovalTx = false;
 		NetPeerId m_LastRemovedConnection = c_InvalidNetPeerId;
 		NetHostBanStore* m_BanStore = nullptr;
+		bool m_ProofRequired = false;
 		std::vector<std::pair<NetPeerId, NetAuthBytes32>> m_ConnectionIds;
 	};
 
@@ -664,6 +666,7 @@ namespace RTE {
 		/// Host-authored removal of this client: the ticket dies and retry stops.
 		void NotifyParticipantRemoved(NetRejectReason reason);
 		bool WasRemoved() const { return m_Removed; }
+		NetAuthBytes16 LastRemovalTx() const { return m_LastRemovalTx; }
 		/// The link died without an answer. The record is exactly what this case exists for: it stays.
 		void NotifyAmbiguousLoss();
 
