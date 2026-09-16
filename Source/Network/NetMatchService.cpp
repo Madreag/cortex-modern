@@ -4,6 +4,7 @@
 #include "ActivityMan.h"
 #include "Constants.h"
 #include "GameActivity.h"
+#include "Scene.h"
 #include "GameVersion.h"
 #include "FrameMan.h"
 #include "GUIInput.h"
@@ -38,6 +39,7 @@
 #include <iostream>
 #include <iomanip>
 #include <iterator>
+#include <list>
 #include <optional>
 #include <random>
 #include <string>
@@ -397,6 +399,12 @@ static std::string ResyncSaveName() {
 			SetState(NetMatchServiceState::Failed, "Match activity refused", moduleError);
 			return false;
 		}
+		std::string sceneError;
+		if (!request.standardRules && !SeatHostScene(request, &sceneError)) {
+			if (error) *error = sceneError;
+			SetState(NetMatchServiceState::Failed, "Match scene refused", sceneError);
+			return false;
+		}
 		NetMatchConfig matchConfig;
 		std::string configError;
 		if (!BuildMatchConfig(request, c_UiSessionId, matchConfig, &configError)) {
@@ -425,6 +433,8 @@ static std::string ResyncSaveName() {
 
 		m_ActivityPreset = request.activityPreset;
 		m_ActivityModule = request.activityModule;
+		m_SceneName = request.sceneName;
+		m_SceneModule = request.sceneModule;
 		SetState(NetMatchServiceState::Starting, request.host ? "Hosting direct-IP match" : "Joining direct-IP match");
 		// The directory row advertises the same identity fields the probe registers; only the counts
 		// move afterwards. Only a host ever lists itself.
@@ -2065,6 +2075,12 @@ static std::string ResyncSaveName() {
 		if (snapshot.activityModule.empty()) {
 			snapshot.activityModule = m_ActivityModule;
 		}
+		if (snapshot.sceneName.empty()) {
+			snapshot.sceneName = m_SceneName;
+		}
+		if (snapshot.sceneModule.empty()) {
+			snapshot.sceneModule = m_SceneModule;
+		}
 		if (snapshot.members.empty() && snapshot.active) {
 			NetLobbyMember local;
 			local.peerId = m_LocalPeerId;
@@ -3094,9 +3110,14 @@ static std::string ResyncSaveName() {
 		if (!request.activityModule.empty()) {
 			config.activityModule = request.activityModule;
 		}
-		config.sceneName = "Grasslands";
 		if (request.standardRules) {
 			static_cast<NetMatchStandardRules&>(config) = *request.standardRules;
+		}
+		if (!request.sceneName.empty()) {
+			config.sceneName = request.sceneName;
+			if (!request.sceneModule.empty()) {
+				config.sceneModule = request.sceneModule;
+			}
 		}
 		config.mode = mode;
 		config.modePreset = NetMatchConfigUtil::ModeName(mode);
@@ -3154,6 +3175,114 @@ static std::string ResyncSaveName() {
 		// No definition leaves the module unset, so the launch refuses by the name the config carries.
 		outModule = definingModules.empty() ? "" : definingModules.front();
 		return true;
+	}
+
+	namespace {
+		std::vector<Scene*> CollectHostScenes() {
+			std::list<Entity*> presets;
+			g_PresetMan.GetAllOfType(presets, "Scene");
+			std::vector<Scene*> scenes;
+			for (Entity* entity: presets) {
+				Scene* scene = dynamic_cast<Scene*>(entity);
+				if (scene && !scene->GetLocation().IsZero() && !scene->IsMetagameInternal() && !scene->IsSavedGameInternal() &&
+				    (scene->GetMetasceneParent().empty() || g_SettingsMan.ShowMetascenes())) {
+					scenes.push_back(scene);
+				}
+			}
+			return scenes;
+		}
+
+		GameActivity* FindHostActivity(const std::string& preset, const std::string& module) {
+			std::list<Entity*> presets;
+			g_PresetMan.GetAllOfType(presets, "Activity");
+			for (Entity* entity: presets) {
+				auto* activity = dynamic_cast<GameActivity*>(entity);
+				if (!activity || activity->GetPresetName() != preset) {
+					continue;
+				}
+				const std::string defined = g_PresetMan.GetDataModuleName(activity->GetModuleID());
+				if (module.empty() || defined == module) {
+					return activity;
+				}
+			}
+			return nullptr;
+		}
+
+		std::vector<NetHostSceneChoice> ScenesForActivity(GameActivity* activity, const std::vector<Scene*>& scenes) {
+			std::vector<NetHostSceneChoice> out;
+			if (!activity) {
+				return out;
+			}
+			for (Scene* scene: scenes) {
+				if (activity->SceneIsCompatible(scene)) {
+					out.push_back({scene->GetPresetName(), g_PresetMan.GetDataModuleName(scene->GetModuleID())});
+				}
+			}
+			return out;
+		}
+	}
+
+	std::vector<NetHostActivityChoice> NetMatchService::ListHostActivities() {
+		const std::vector<Scene*> scenes = CollectHostScenes();
+		std::list<Entity*> presets;
+		g_PresetMan.GetAllOfType(presets, "Activity");
+		std::vector<NetHostActivityChoice> out;
+		for (Entity* entity: presets) {
+			auto* activity = dynamic_cast<GameActivity*>(entity);
+			if (!activity || activity->IsTestActivity()) {
+				continue;
+			}
+			NetHostActivityChoice row;
+			row.preset = activity->GetPresetName();
+			row.module = g_PresetMan.GetDataModuleName(activity->GetModuleID());
+			row.scenes = ScenesForActivity(activity, scenes);
+			if (!row.scenes.empty()) {
+				out.push_back(std::move(row));
+			}
+		}
+		return out;
+	}
+
+	std::vector<NetHostSceneChoice> NetMatchService::ListHostScenes(const std::string& preset, const std::string& module) {
+		return ScenesForActivity(FindHostActivity(preset, module), CollectHostScenes());
+	}
+
+	bool NetMatchService::ResolveHostScene(const std::string& preset, const std::string& module, std::string& sceneName, std::string& sceneModule) {
+		const std::vector<NetHostSceneChoice> scenes = ListHostScenes(preset, module);
+		if (scenes.empty()) {
+			return false;
+		}
+		for (const NetHostSceneChoice& scene: scenes) {
+			if (scene.name == "Grasslands") {
+				sceneName = scene.name;
+				sceneModule = scene.module;
+				return true;
+			}
+		}
+		sceneName = scenes.front().name;
+		sceneModule = scenes.front().module;
+		return true;
+	}
+
+	bool NetMatchService::SeatHostScene(NetMatchServiceRequest& request, std::string* error) {
+		if (!request.sceneName.empty()) {
+			return true;
+		}
+		const std::string preset = request.activityPreset.empty() ? "P4 Alpha Duel" : request.activityPreset;
+		if (!ResolveHostScene(preset, request.activityModule, request.sceneName, request.sceneModule)) {
+			if (error) *error = "match activity " + preset + " has no compatible scene";
+			return false;
+		}
+		return true;
+	}
+
+	void NetMatchService::ApplyHostActivityFallback(NetMatchServiceRequest& request) {
+		if (request.activityPreset.empty()) {
+			request.activityPreset = "P4 Alpha Duel";
+		}
+		if (request.activityModule.empty()) {
+			request.activityModule = "Base.rte";
+		}
 	}
 
 	bool NetMatchService::SeatActivityModule(NetMatchServiceRequest& request, std::string* error) {

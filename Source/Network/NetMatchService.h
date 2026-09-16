@@ -142,6 +142,19 @@ namespace RTE {
 		Failed,
 	};
 
+	/// One compatible scene for the host's activity picker, in scene-manager order.
+	struct NetHostSceneChoice {
+		std::string name;
+		std::string module;
+	};
+
+	/// A GameActivity the host picker may list: not a test, and at least one compatible loaded scene.
+	struct NetHostActivityChoice {
+		std::string preset;
+		std::string module;
+		std::vector<NetHostSceneChoice> scenes;
+	};
+
 	struct NetMatchServiceRequest {
 		bool host = false;
 		std::string address = "127.0.0.1";
@@ -149,6 +162,8 @@ namespace RTE {
 		std::string playerName = "Player";
 		std::string activityPreset = "Skirmish Defense";
 		std::string activityModule; // The module that defines the preset; empty resolves to the module defining it.
+		std::string sceneName; // Empty resolves to the first compatible scene (Grasslands when the activity allows it).
+		std::string sceneModule;
 		std::optional<NetMatchStandardRules> standardRules;
 		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		uint16_t inputDelayFrames = 0; // Lockstep input-delay buffer; the host picks it, the client agrees at the start handshake.
@@ -345,13 +360,24 @@ namespace RTE {
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
 		std::string BuildReportJson() const;
-		/// Builds the match roster from the request alone; it reads no manager, so a self-test can build one.
+		/// Builds the match roster from the request. An empty scene keeps MakeDefault unless the caller
+		/// already resolved one; a named scene overwrites the default after any launch-config rules.
 		static bool BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId, NetMatchConfig& outConfig, std::string* error = nullptr);
 		/// The module a module-less activity preset belongs to, from the modules that define it. Reads no
 		/// manager: the caller lists the candidates.
 		static bool ResolveActivityModule(const std::string& preset, const std::vector<std::string>& definingModules, std::string& outModule, std::string* error = nullptr);
 		/// Fills an unset request module with the loaded module that defines the preset.
 		static bool SeatActivityModule(NetMatchServiceRequest& request, std::string* error = nullptr);
+		/// The scenario-menu walk: every non-test GameActivity with at least one compatible loaded scene.
+		static std::vector<NetHostActivityChoice> ListHostActivities();
+		/// Compatible scenes for one activity, in the same scene order the scenario menu uses.
+		static std::vector<NetHostSceneChoice> ListHostScenes(const std::string& preset, const std::string& module);
+		/// First compatible scene, Grasslands when the activity allows it.
+		static bool ResolveHostScene(const std::string& preset, const std::string& module, std::string& sceneName, std::string& sceneModule);
+		/// Fills an empty host scene from the loaded modules the way SeatActivityModule fills a module.
+		static bool SeatHostScene(NetMatchServiceRequest& request, std::string* error = nullptr);
+		/// Empty picker: the request still names P4 Alpha Duel and Base.rte.
+		static void ApplyHostActivityFallback(NetMatchServiceRequest& request);
 		/// Fills the request's unset options from the saved settings, where a real host starts a match.
 		static void SeatSavedOptions(NetMatchServiceRequest& request);
 		/// Builds diagnostic identity on request; match startup supplies the cached join inputs.
@@ -509,6 +535,8 @@ namespace RTE {
 		std::string m_ErrorText;
 		std::string m_ActivityPreset;
 		std::string m_ActivityModule;
+		std::string m_SceneName;
+		std::string m_SceneModule;
 		std::thread m_Worker;
 		bool m_WorkerDone = false;
 		bool m_IsHost = false;
