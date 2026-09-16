@@ -130,14 +130,18 @@ namespace {
 		}
 
 		const std::vector<std::string> segments = BracketSegments(record.path);
-		if (record.path.starts_with("global[") && !segments.empty()) {
+		if ((record.path.starts_with("global[") || record.path.starts_with("package.loaded[")) && !segments.empty()) {
 			record.scriptFile = ScriptFileBasename(segments.front());
+			if (segments.size() > 1) record.functionName = segments[1];
+		} else if (record.path.starts_with("object[") && !segments.empty()) {
+			record.scriptFile = "object[" + segments.front() + "]";
 			if (segments.size() > 1) record.functionName = segments[1];
 		}
 		if (!segments.empty()) record.lastSegment = segments.back();
 
 		record.playerLine = "Save skipped:";
 		if (!record.scriptFile.empty()) record.playerLine += " " + record.scriptFile;
+		else if (!record.path.empty()) record.playerLine += " " + record.path;
 		if (!record.functionName.empty()) record.playerLine += " " + record.functionName;
 		if (!record.objectClass.empty()) {
 			record.playerLine += " keeps a dead " + record.objectClass;
@@ -649,6 +653,7 @@ void ActivityMan::ShowSaveRefusalToPlayer(const SaveRefusalRecord& record, bool 
 		ScenarioRunner::PushNetUiToast("save_refused", record.playerLine);
 		return;
 	}
+	g_FrameMan.ClearScreenText(0);
 	g_FrameMan.SetScreenText(record.playerLine, 0, 0, 6000, false);
 }
 
@@ -965,6 +970,16 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	check(example.playerLine == "Save skipped: mod_failure_continuation.lua Update keeps a dead ACDropShip (transactionOwner)",
 	      "player_line", example.playerLine);
 
+	const SaveRefusalRecord objectPath = ParseSaveRefusal(SaveKind::Manual,
+	    "a reference to a AHuman that no longer exists at object[44][Update].upvalue[held]");
+	check(objectPath.scriptFile == "object[44]" && objectPath.functionName == "Update" &&
+	          objectPath.playerLine == "Save skipped: object[44] Update keeps a dead AHuman (held)",
+	      "parse_object", objectPath.playerLine);
+	const SaveRefusalRecord packagePath = ParseSaveRefusal(SaveKind::Manual,
+	    "a reference to a ACDropShip that no longer exists at package.loaded[Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua][Create].upvalue[ship]");
+	check(packagePath.scriptFile == "mod_failure_continuation.lua" && packagePath.functionName == "Create",
+	      "parse_package", packagePath.playerLine);
+
 	m_SaveRefusalRecords.clear();
 	m_ReportedAutosaveKeys.clear();
 	g_FrameMan.ClearScreenText(0);
@@ -993,11 +1008,12 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	const bool refused = planted && held && !CaptureScriptGraphsOrReportRefusal(SaveKind::Autosave, graphs);
 	const std::string screen = g_FrameMan.GetScreenText(0);
 	const std::string console = g_ConsoleMan.CopyLogTail(16 * 1024);
-	const bool hasFile = screen.find("mod_failure_continuation.lua") != std::string::npos;
-	const bool hasFunction = screen.find("Update") != std::string::npos;
-	const bool hasClass = screen.find("MOPixel") != std::string::npos;
+	const bool hasLive = !m_SaveRefusalRecords.empty();
+	const SaveRefusalRecord live = hasLive ? m_SaveRefusalRecords.back() : SaveRefusalRecord{};
 	const bool consoleKept = console.find("ERROR: the save cannot carry a script value:") != std::string::npos;
-	check(refused && hasFile && hasFunction && hasClass, "autosave_ui", screen);
+	check(refused && hasLive && live.objectClass == "MOPixel" && live.problem.find("that no longer exists") != std::string::npos,
+	      "plant_invalid", hasLive ? live.problem : "no refusal");
+	check(refused && screen == live.playerLine, "autosave_ui", screen);
 	check(consoleKept, "console_text", "drivers still see the original ERROR line");
 	check(!m_SaveRefusalRecords.empty() && m_SaveRefusalRecords.back().path.find("transactionOwner") != std::string::npos,
 	      "bundle_record", m_SaveRefusalRecords.empty() ? "empty" : m_SaveRefusalRecords.back().path);
@@ -1010,8 +1026,7 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 
 	graphs.clear();
 	const bool refusedManual = !CaptureScriptGraphsOrReportRefusal(SaveKind::Manual, graphs);
-	check(refusedManual && g_FrameMan.GetScreenText(0).find("mod_failure_continuation.lua") != std::string::npos,
-	      "manual_repeat", g_FrameMan.GetScreenText(0));
+	check(refusedManual && g_FrameMan.GetScreenText(0) == live.playerLine, "manual_repeat", g_FrameMan.GetScreenText(0));
 
 	ShowSaveRefusalToPlayer(example, true);
 	const auto& toasts = ScenarioRunner::GetNetUiToastLog();
