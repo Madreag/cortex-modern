@@ -26,6 +26,7 @@ SELFTESTS = [
     "net-reconnect-session",
     "camera-null-scene",
     "rotate-primitive",
+    "cow-checkpoint",
     "float-text",
     "settings-preferences",
     "single-module-harness",
