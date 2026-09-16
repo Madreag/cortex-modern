@@ -57,6 +57,8 @@
 
 #define BRAINLZWIDTHDEFAULT 640
 
+using namespace RTE;
+
 std::string GameActivity::s_LastFundsReadout[Players::MaxPlayerCount];
 
 const std::string& GameActivity::GetLastFundsReadout(int player) {
@@ -75,8 +77,6 @@ void GameActivity::RecordFundsReadout(int player) {
 	std::snprintf(str, sizeof(str), "%c Funds: %s oz", -58, DescribeFundsReadout(m_Team[player], player).c_str());
 	s_LastFundsReadout[player] = str;
 }
-
-using namespace RTE;
 
 // A player's AI order for one of their units crosses the wire under lockstep, so every peer applies it at the committed tick.
 static void IssueAIOrder(const Actor* actor, NetGameAIOrder::Op op, const Vector& point, const MovableObject* target) {
