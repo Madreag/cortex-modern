@@ -6631,7 +6631,7 @@ end
 		const int modCompatAfter = runKeep(observableSemantics, previewModcompatError);
 		previewDepthWritesUndone = depthSetup == 0 && slackSetup == 0 && depthWrite == 0 && slackWrite == 0 && depthLanded == 0 && slackLanded == 0 && depthCheck == 0;
 		previewWindowModCompat = depthSetup == 0 && slackSetup == 0 && modCompatSnap == 0 && modCompatInside == 0 && modCompatAfter == 0;
-		RunScriptString("_PreviewDepth = nil; _PreviewSlack = nil; _PreviewModCompatSnap = nil", false);
+		RunScriptString("_PreviewDepth = nil; _PreviewSlack = nil; _PreviewModCompatSnap = nil; Create = nil", false);
 	}
 	std::cout << "[script-graph-selftest] " << (previewDepthWritesUndone ? "PASS" : "FAIL") << " preview_depth_writes_undone";
 	if (!previewDepthWritesUndone) {
