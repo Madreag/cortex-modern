@@ -78,14 +78,43 @@ PAGE_FIRST_VALUE = {
 }
 FILES_BUTTONS = ("ButtonNetOpenAutosaves", "ButtonNetCopyAutosavesPath", "ButtonNetOpenDiagnostics",
                  "ButtonNetCopyDiagPath", "ButtonNetSaveDiagnostics")
-# Video/Input 20-px rows: the controls the 18-px rects used to clip.
+# Controls this landing grew from 18 px (plus ComboPresetResolution, which also moved to column 190).
 VIDEO_INPUT_FIT = (
-    "ButtonQuickWindowed", "ButtonQuickBorderless", "ComboPresetResolution", "ButtonApplyPresetResolution",
-    "ButtonP1PrevDevice", "ButtonP1NextDevice", "ButtonP1Config", "ButtonP1Clear",
-    "ButtonP2PrevDevice", "ButtonP2NextDevice", "ButtonP2Config", "ButtonP2Clear",
-    "ButtonP3PrevDevice", "ButtonP3NextDevice", "ButtonP3Config", "ButtonP3Clear",
-    "ButtonP4PrevDevice", "ButtonP4NextDevice", "ButtonP4Config", "ButtonP4Clear",
+    "ComboPresetResolution",
+    "LabelP1DeviceType", "LabelP1SelectedDevice",
+    "LabelP2DeviceType", "LabelP2SelectedDevice",
+    "LabelP3DeviceType", "LabelP3SelectedDevice",
+    "LabelP4DeviceType", "LabelP4SelectedDevice",
 )
+PAUSE_PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc")
+PAUSE_PAGE_FIRST_VALUE = {
+    "Video": "CollectionSplitscreenRadioButtons",
+    "Audio": "SliderMasterVolume",
+    "Input": "LabelP1SelectedDevice",
+    "Gameplay": "CheckboxBlipOnRevealUnseen",
+    "Misc": "CheckboxShowToolTips",
+}
+def page_value_columns(captures, first_value):
+    rows = []
+    for capture in captures:
+        page = capture["settings_page"].split(":")[0]
+        if page not in first_value:
+            continue
+        box = next(c for c in capture["controls"] if c["name"] == f"CollectionBox{page}Settings")
+        value = next(c for c in capture["controls"] if c["name"] == first_value[page])
+        rel_x = value["rect"][0] - box["rect"][0]
+        rows.append([page, value["name"], rel_x])
+        assert rel_x == SETTINGS_VALUE_COLUMN, (page, value["name"], rel_x, SETTINGS_VALUE_COLUMN)
+    return rows
+
+
+def video_input_fit_rows(captures, required):
+    rows = [[capture["settings_page"], control["name"], control["rect"][3], control.get("text_fits"), control.get("text")]
+            for capture in captures for control in capture["controls"] if control["name"] in VIDEO_INPUT_FIT]
+    names = {row[1] for row in rows}
+    assert required <= names, (required - names, rows)
+    assert rows and all(row[2] == 20 and row[3] for row in rows), rows
+    return rows
 NETWORK_ACTION_COLUMN = 330
 INTERNET_HINT = "host[:port][/path] - https:// is implied"
 INTERNET_REASON = "Replays and connection details come with a later update."
@@ -199,12 +228,13 @@ def pause_probe(who, root):
         {"op": "wait", "sim_at_least": 150},
         {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
         {"op": "wait", "screen": "Pause"}, running, *pause_rows(), menu_step("dump_host_options"),
-        menu_step("activate ButtonSettings"), {"op": "wait", "screen": "PauseSettings"},
-        menu_step("assert_visible CollectionBoxGameplaySettings 1"),
-        *row_checks("TabGameplaySettings", "CollectionBoxSettingsBase"), menu_step("dump_player_options"),
-        # The pause twin of the page op: the same reach on the settings menu the pause screen owns.
-        menu_step("select_settings_page Misc"), {"op": "wait", "renders": 3},
-        menu_step("assert_settings_page Misc"), menu_step("dump_player_options"),
+        menu_step("activate ButtonSettings"), {"op": "wait", "screen": "PauseSettings"}]
+    for page in PAUSE_PAGES:
+        steps += [menu_step(f"select_settings_page {page}"), {"op": "wait", "renders": 3},
+                  menu_step(f"assert_settings_page {page}"),
+                  menu_step(f"assert_visible CollectionBox{page}Settings 1"),
+                  menu_step("dump_player_options")]
+    steps += [
         menu_step("post_command ButtonBackToMainMenu"), {"op": "wait", "screen": "Pause"},
         *pause_rows(), menu_step("dump_host_options"), running]
     if who == "client":
@@ -715,12 +745,16 @@ def run_case(options, case, root, failing=None):
         if case == "pause":
             # Both peers read the same menu: the match rows, no single-player row, and the two settings
             # pages. The client goes on to drive the leave-confirm surface its match rows open.
-            expected_screens = {"host": ["Pause", "PauseSettings", "PauseSettings", "Pause"],
-                                "client": ["Pause", "PauseSettings", "PauseSettings", "Pause", "PauseLeaveConfirm"]}
+            expected_screens = {"host": ["Pause"] + ["PauseSettings"] * len(PAUSE_PAGES) + ["Pause"],
+                                "client": ["Pause"] + ["PauseSettings"] * len(PAUSE_PAGES) + ["Pause", "PauseLeaveConfirm"]}
             for who in ("host", "client"):
                 peer = [capture for capture in images if capture["peer"] == who]
                 assert [capture["screen"] for capture in peer] == expected_screens[who], (who, peer)
-                assert [capture["settings_page"] for capture in peer[1:3]] == ["Gameplay", "Misc"], (who, peer)
+                pause_settings = [capture for capture in peer if capture["screen"] == "PauseSettings"]
+                assert [capture["settings_page"].split(":")[0] for capture in pause_settings] == list(PAUSE_PAGES), (who, pause_settings)
+                result.setdefault("pause_page_value_columns", {})[who] = page_value_columns(pause_settings, PAUSE_PAGE_FIRST_VALUE)
+                result.setdefault("pause_video_input_fit", {})[who] = video_input_fit_rows(
+                    pause_settings, {name for name in VIDEO_INPUT_FIT if name.startswith("LabelP")})
                 pauses = [capture for capture in peer if capture["screen"] == "Pause"]
                 for capture in (pauses[0], pauses[-1]):
                     drawn = {control["name"] for control in capture["controls"]}
@@ -749,18 +783,8 @@ def run_case(options, case, root, failing=None):
                                        for capture in images for control in capture["controls"]
                                        if control.get("text_fits") is False]
             assert not result["text_overflow"], result["text_overflow"]
-            result["video_input_fit"] = [[capture["settings_page"], control["name"], control["text_fits"], control["text"]]
-                                         for capture in images for control in capture["controls"]
-                                         if control["name"] in VIDEO_INPUT_FIT]
-            assert result["video_input_fit"] and all(row[2] for row in result["video_input_fit"]), result["video_input_fit"]
-            result["page_value_columns"] = []
-            for capture in images:
-                page = capture["settings_page"].split(":")[0]
-                box = next(c for c in capture["controls"] if c["name"] == f"CollectionBox{page}Settings")
-                value = next(c for c in capture["controls"] if c["name"] == PAGE_FIRST_VALUE[page])
-                rel_x = value["rect"][0] - box["rect"][0]
-                result["page_value_columns"].append([page, value["name"], rel_x])
-                assert rel_x == SETTINGS_VALUE_COLUMN, (page, value["name"], rel_x, SETTINGS_VALUE_COLUMN)
+            result["video_input_fit"] = video_input_fit_rows(images, set(VIDEO_INPUT_FIT))
+            result["page_value_columns"] = page_value_columns(images, PAGE_FIRST_VALUE)
             gameplay = next((capture for capture in images if capture["settings_page"] == "Gameplay"), None)
             assert gameplay, [capture["settings_page"] for capture in images]
             rows = {control["name"]: control for control in gameplay["controls"]}
