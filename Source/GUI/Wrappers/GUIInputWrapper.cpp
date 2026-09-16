@@ -18,6 +18,7 @@ namespace {
 	bool automationDriving = false;
 	// The menu script and the net UI probe share one virtual pad; the hint they need is process-global.
 	int joystickBackgroundEventHolders = 0;
+	int scriptedPadHolders = 0;
 	std::string savedJoystickHint;
 	bool savedJoystickHintPresent = false;
 	SDL_Joystick* scriptedPad = nullptr;
@@ -54,6 +55,7 @@ namespace {
 		std::array<bool, SDL_SCANCODE_COUNT> m_Keys{};
 		std::function<void()> m_Command;
 		GUIInputWrapper* m_Physical;
+		bool m_HoldsPad = false;
 	public:
 		ScriptedGUIInput(GUIInputWrapper* physical, int player) : GUIInputWrapper(player, physical->GetKeyJoyMouseCursor()), m_Physical(physical) { automationInputs.push_back(this); }
 		~ScriptedGUIInput() override { ReleaseAutomationInput(); std::erase(automationInputs, this); }
@@ -92,6 +94,10 @@ namespace {
 				return true;
 			}
 			if (device != "pad") return false;
+			if (!m_HoldsPad) {
+				if (!GUIInputWrapper::AcquireScriptedPad()) return false;
+				m_HoldsPad = true;
+			}
 			return GUIInputWrapper::QueueScriptedPad(name, down);
 		}
 		void ReleaseAutomationInput() override {
@@ -100,7 +106,10 @@ namespace {
 				if (m_Keys[key]) QueueAutomationInput("key", SDL_GetScancodeName(static_cast<SDL_Scancode>(key)), false);
 			}
 			m_Keys.fill(false);
-			GUIInputWrapper::ReleaseScriptedPad();
+			if (m_HoldsPad) {
+				GUIInputWrapper::ReleaseScriptedPad();
+				m_HoldsPad = false;
+			}
 		}
 	};
 }
@@ -126,6 +135,12 @@ void GUIInputWrapper::ReleaseJoystickBackgroundEvents() {
 	}
 }
 
+bool GUIInputWrapper::AcquireScriptedPad() {
+	if (!EnsureScriptedPad()) return false;
+	++scriptedPadHolders;
+	return true;
+}
+
 bool GUIInputWrapper::QueueScriptedPad(const std::string& name, bool down) {
 	const std::string mapped = name == "south" ? "a" : name == "east" ? "b" : name == "west" ? "x" : name == "north" ? "y" : name;
 	const SDL_GamepadButton button = SDL_GetGamepadButtonFromString(mapped.c_str());
@@ -137,7 +152,8 @@ bool GUIInputWrapper::QueueScriptedPad(const std::string& name, bool down) {
 }
 
 void GUIInputWrapper::ReleaseScriptedPad() {
-	if (!scriptedPad) return;
+	if (scriptedPadHolders > 0) --scriptedPadHolders;
+	if (scriptedPadHolders > 0 || !scriptedPad) return;
 	const auto id = SDL_GetJoystickID(scriptedPad);
 	if (scriptedPadGamepad) {
 		SDL_CloseGamepad(scriptedPadGamepad);

@@ -51,6 +51,7 @@ namespace {
 		Json script, result;
 		std::string hintAtLoad;
 		bool hintAtLoadPresent = false;
+		bool holdsPad = false;
 	};
 	Probe probe;
 
@@ -70,18 +71,37 @@ namespace {
 		if (!condition) throw std::runtime_error(reason);
 	}
 
-	int ScriptedPadCount() {
+	void ScriptedPadCensus(int& scripted, bool& wrapper, bool& leftoverProbe) {
+		scripted = 0;
+		wrapper = false;
+		leftoverProbe = false;
 		int count = 0;
 		SDL_JoystickID* ids = SDL_GetJoysticks(&count);
-		int scripted = 0;
 		for (int i = 0; i < count; ++i) {
 			const char* name = SDL_GetJoystickNameForID(ids[i]);
-			if (name && (std::string(name) == "Menu script controller" || std::string(name) == "Net UI probe controller")) {
+			if (!name) continue;
+			if (std::string(name) == "Menu script controller") {
 				++scripted;
+				wrapper = true;
+			} else if (std::string(name) == "Net UI probe controller") {
+				++scripted;
+				leftoverProbe = true;
 			}
 		}
 		SDL_free(ids);
+	}
+
+	int ScriptedPadCount() {
+		int scripted = 0;
+		bool wrapper = false, leftoverProbe = false;
+		ScriptedPadCensus(scripted, wrapper, leftoverProbe);
 		return scripted;
+	}
+
+	void ReleaseProbePad() {
+		if (!probe.holdsPad) return;
+		GUIInputWrapper::ReleaseScriptedPad();
+		probe.holdsPad = false;
 	}
 
 	uint64_t NowMs() {
@@ -326,9 +346,17 @@ namespace {
 			Push(event);
 		} else if (op == "pad_down" || op == "pad_up") {
 			const std::string name = step.at("button");
+			if (!probe.holdsPad) {
+				Require(GUIInputWrapper::AcquireScriptedPad(), "probe could not acquire the shared scripted pad");
+				probe.holdsPad = true;
+			}
 			Require(GUIInputWrapper::QueueScriptedPad(name, op == "pad_down"), "probe pad " + name);
 			observed["pad"] = GUIInputWrapper::ScriptedPadId();
-			Require(ScriptedPadCount() == 1, "probe pad must be the one shared scripted device");
+			int pads = 0;
+			bool wrapper = false, leftoverProbe = false;
+			ScriptedPadCensus(pads, wrapper, leftoverProbe);
+			Require(pads == 1, "scripted pads attached: " + std::to_string(pads));
+			if (wrapper && leftoverProbe) Require(false, "wrapper and leftover probe pads both attached");
 		} else if (op == "input_scope") {
 			GUIInputWrapper::SetAutomationDriving(step.at("enabled").get<bool>());
 		} else if (op == "menu") {
@@ -546,7 +574,7 @@ namespace {
 			if (!std::filesystem::is_regular_file(step.at("path").get<std::string>())) return false;
 		} else if (op == "finish") {
 			GUIInputWrapper::SetAutomationDriving(false);
-			GUIInputWrapper::ReleaseScriptedPad();
+			ReleaseProbePad();
 			Require(ScriptedPadCount() == 0, "a scripted pad remained after finish");
 			const char* hint = SDL_GetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS);
 			const std::string now = hint ? hint : "";
@@ -590,7 +618,7 @@ namespace {
 			if (probe.done) std::cout << "[net-ui-probe] PASS: completed " << probe.index << " steps" << std::endl;
 		} catch (const std::exception& error) {
 			GUIInputWrapper::SetAutomationDriving(false);
-			GUIInputWrapper::ReleaseScriptedPad();
+			ReleaseProbePad();
 			probe.done = true;
 			probe.result["pass"] = false;
 			probe.result["error"] = error.what();
