@@ -98,7 +98,13 @@ SIZE_GATES = (
     ("net-chat", "960x540"),
     ("net-chat", "1280x720"),
 )
-WIDE_SHARE_HOST = "2001:0db8:85a3:0000:0000:8a2e:0370:7334"
+# CalculateWidth adds each printable glyph's m_Width (GUIFont.cpp:333). FontSmall's
+# thinnest printable cell is 2 px, so 139 characters exceed the 276 px status row.
+FONT_SMALL_MIN_GLYPH = 2
+SHARE_STATUS_ROW = 276
+WIDE_SHARE_HOST = "2001:" + "0" * 140
+assert len(WIDE_SHARE_HOST) * FONT_SMALL_MIN_GLYPH > SHARE_STATUS_ROW, (
+    len(WIDE_SHARE_HOST), FONT_SMALL_MIN_GLYPH, SHARE_STATUS_ROW)
 
 
 def page_value_columns(captures, first_value):
@@ -133,9 +139,10 @@ def share_status_row(capture, port, host=None):
     assert address.endswith(f":{port}"), status
     if host is not None:
         assert address.startswith(host + ":") or address == f"{host}:{port}", status
-    row = status["rect"][2]
+    row = status["row_width"]
     word = status["word_width"]
     scroll = status["overflow_scroll"]
+    assert row == status["rect"][2], status
     assert scroll == (word > row), status
     return status
 NETWORK_ACTION_COLUMN = 330
@@ -888,7 +895,6 @@ def run_case(options, case, root, failing=None):
                         "misc-page": "Misc"}[case]
             assert [capture["settings_page"] for capture in images] == [sub_page], [c["settings_page"] for c in images]
             if case == "net-chat":
-                assert (case, options.size) in SIZE_GATES, (options.size, SIZE_GATES)
                 result["size_gates"] = [list(row) for row in SIZE_GATES]
                 result["net_chat_size"] = options.size
             rows = {control["name"]: control for control in images[0]["controls"]}
@@ -1058,7 +1064,7 @@ def run_case(options, case, root, failing=None):
             assert drawn["ButtonMultiplayerModerate"]["enabled"] is False, drawn["ButtonMultiplayerModerate"]
             ipv4_status = share_status_row(images[-2], options.port)
             ipv6_status = share_status_row(images[-1], options.port, WIDE_SHARE_HOST)
-            assert ipv6_status["overflow_scroll"] is True and ipv6_status["word_width"] > ipv6_status["rect"][2], ipv6_status
+            assert ipv6_status["word_width"] > ipv6_status["row_width"], ipv6_status
             result["share_status"] = {"ipv4": ipv4_status, "ipv6": ipv6_status}
             # The multiplayer screen's panel centres vertically too; an odd height shifts one pixel,
             # and a panel taller than the viewport clamps to its top edge instead of centring.
@@ -1163,6 +1169,8 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--case", choices=(*CASES, "all"), required=True)
     parser.add_argument("--size", choices=("640x360", "960x540", "1280x720", "1920x1080"), required=True)
+    parser.add_argument("--all-sizes", action="store_true",
+                        help="also run every SIZE_GATES row; net-chat always does this")
     parser.add_argument("--port", type=int, required=True)
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
@@ -1173,9 +1181,18 @@ def main():
     options.out.mkdir(parents=True, exist_ok=False)
     options.revision = subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip()
     options.exe_sha = sha(options.repo / "Cortex Command.exe")
+    requested = options.size
+
+    def sizes_for(case):
+        sizes = [requested]
+        if options.all_sizes or case == "net-chat":
+            sizes.extend(size for name, size in SIZE_GATES if name == case and size not in sizes)
+        return sizes
+
     rows = []
     for case in CASES if options.case == "all" else (options.case,):
         if case == "oracles":
+            options.size = requested
             for name, command in {"visible": (LANDING, "", "assert_visible ButtonMultiplayerHostGame 0"),
                                   "focus": (LANDING, "", "assert_focus ButtonMultiplayerJoinGame"),
                                   "rect": (LANDING, "", "assert_rect_inside ButtonMultiplayerHostGame ButtonMultiplayerJoinGame"),
@@ -1183,8 +1200,10 @@ def main():
                                   "page": (OPTIONS, "select_settings_page Misc\nwait 3\n", "assert_settings_page Gameplay"),
                                   "page-name": (OPTIONS, "", "select_settings_page Nowhere")}.items():
                 rows.append(run_case(options, "landing", options.out / f"oracle-{name}" / options.size, command))
-        else:
-            rows.append(run_case(options, case, options.out / case / options.size))
+            continue
+        for size in sizes_for(case):
+            options.size = size
+            rows.append(run_case(options, case, options.out / case / size))
     result = {"pass": all(row["pass"] for row in rows), "driver_sha256": sha(__file__),
               "source_revision": options.revision, "exe_sha256": options.exe_sha, "port": options.port, "cases": rows}
     (options.out / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
