@@ -14,6 +14,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string_view>
 #include <unordered_set>
@@ -502,9 +503,9 @@ namespace RTE {
 			struct ChannelUserData {
 				SoundContainer* owner = nullptr;
 				int identity = 0;
-				std::atomic<FMOD::Channel*>* channel = nullptr;
-			} userData;
-			std::atomic<FMOD::Channel*> channel{nullptr};
+				std::atomic<FMOD::Channel*> channel{nullptr};
+			};
+			std::shared_ptr<ChannelUserData> handle;
 			SoundContainer* owner = nullptr;
 			std::string soundPath;
 			float minimumAudibleDistance = 0;
@@ -518,23 +519,29 @@ namespace RTE {
 			AudioCheckpoint::Control control;
 			bool hasArchive = false;
 
-			void BindUserData(int identity) {
-				userData.owner = owner;
-				userData.identity = identity;
-				userData.channel = &channel;
+			void EnsureHandle() {
+				if (!handle) handle = std::make_shared<ChannelUserData>();
 			}
-			PlayingVoice() { userData.channel = &channel; }
+			void BindUserData(int identity) {
+				EnsureHandle();
+				handle->owner = owner;
+				handle->identity = identity;
+			}
+			PlayingVoice() { EnsureHandle(); }
 			PlayingVoice(FMOD::Channel* ch, SoundContainer* o, std::string path, float minDist, SoundExecutionDomain d = SoundExecutionDomain::Presentation, bool pred = false)
 				: owner(o), soundPath(std::move(path)), minimumAudibleDistance(minDist), domain(d), predicted(pred) {
-				channel.store(ch, std::memory_order_relaxed);
-				userData.owner = o;
-				userData.channel = &channel;
+				EnsureHandle();
+				handle->owner = o;
+				handle->channel.store(ch, std::memory_order_relaxed);
 			}
 			PlayingVoice(const PlayingVoice& other) { *this = other; }
 			PlayingVoice(PlayingVoice&& other) noexcept { *this = other; }
 			PlayingVoice& operator=(const PlayingVoice& other) {
 				if (this == &other) return *this;
-				channel.store(other.channel.load(std::memory_order_relaxed), std::memory_order_relaxed);
+				EnsureHandle();
+				handle->owner = other.owner;
+				handle->identity = other.handle ? other.handle->identity : 0;
+				handle->channel.store(other.Channel(), std::memory_order_relaxed);
 				owner = other.owner;
 				soundPath = other.soundPath;
 				minimumAudibleDistance = other.minimumAudibleDistance;
@@ -547,14 +554,12 @@ namespace RTE {
 				priority = other.priority;
 				control = other.control;
 				hasArchive = other.hasArchive;
-				userData.owner = owner;
-				userData.identity = other.userData.identity;
-				userData.channel = &channel;
 				return *this;
 			}
 			PlayingVoice& operator=(PlayingVoice&& other) noexcept {
 				if (this == &other) return *this;
-				channel.store(other.channel.exchange(nullptr, std::memory_order_relaxed), std::memory_order_relaxed);
+				handle = std::move(other.handle);
+				EnsureHandle();
 				owner = other.owner;
 				soundPath = std::move(other.soundPath);
 				minimumAudibleDistance = other.minimumAudibleDistance;
@@ -567,18 +572,16 @@ namespace RTE {
 				priority = other.priority;
 				control = std::move(other.control);
 				hasArchive = other.hasArchive;
-				userData.owner = owner;
-				userData.identity = other.userData.identity;
-				userData.channel = &channel;
 				return *this;
 			}
-			FMOD::Channel* Channel() const { return channel.load(std::memory_order_acquire); }
-			void SetChannel(FMOD::Channel* value) { channel.store(value, std::memory_order_release); }
+			FMOD::Channel* Channel() const { return handle ? handle->channel.load(std::memory_order_acquire) : nullptr; }
+			void SetChannel(FMOD::Channel* value) { EnsureHandle(); handle->channel.store(value, std::memory_order_release); }
 		};
 		std::map<int, PlayingVoice> m_PlayingVoices;
 		std::unordered_map<int, int> m_BackendVoiceIdentities;
 		std::mutex m_EndedVoicesMutex;
 		std::vector<int> m_EndedVoices;
+		std::vector<std::shared_ptr<PlayingVoice::ChannelUserData>> m_RetiredHandles;
 		int m_NextVoiceIdentity = 0;
 		// A Lua GC finalizer frees sound containers on whichever pool thread collects its state, and several states collect at once, so the registry group down to m_NextSoundContainerIdentity is locked.
 		mutable std::recursive_mutex m_CheckpointRegistryMutex;
