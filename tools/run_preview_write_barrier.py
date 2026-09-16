@@ -213,6 +213,10 @@ def run_case(name, flags, files=None, activity=None, quiet=False, extra_env=None
     if extra_env:
         env.update(extra_env)
     run = make_run(REPO, args, out, timeout=900, env=env)
+    fixture = REPO / 'tools/fixtures/preview_window_modcompat.lua'
+    dest = Path(run.cwd) / 'tools/fixtures' / fixture.name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(fixture.read_bytes())
     if files:
         install(run, files, activity)
     interference = []
