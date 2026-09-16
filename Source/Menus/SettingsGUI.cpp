@@ -334,8 +334,11 @@ namespace RTE::MenuAutomation {
 		if (!Visible(control) || !Text(control, text)) return false;
 		const auto rect = Rectangle(control->GetPanel());
 		observation += " text=" + Json(text).dump() + " rect=" + Json(rect).dump();
-		if (auto* label = dynamic_cast<GUILabel*>(control); label && !label->GetHorizontalOverflowScroll()) {
+		if (auto* label = dynamic_cast<GUILabel*>(control)) {
 			observation += " height=" + std::to_string(label->GetTextHeight()) + " word_width=" + std::to_string(label->GetMaxWordWidth());
+			if (label->GetHorizontalOverflowScroll()) {
+				return label->GetTextHeight() <= rect[3];
+			}
 			return label->GetTextHeight() <= rect[3] && label->GetMaxWordWidth() <= rect[2];
 		}
 		std::string section = dynamic_cast<GUIButton*>(control) ? "Button_Up" : dynamic_cast<GUITab*>(control) ? "Tab" :
