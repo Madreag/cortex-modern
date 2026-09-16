@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 """Compare one AudioRuntime voice on two peer archives at the same sim tick.
 
-The comparer of record is snapshot_runtime.project(..., shared=True). The row
-isolates one identity so an unrelated mixer drop cannot fail it. With no files,
-the arm emits two peer archives at one tick and compares them.
+The comparer of record is snapshot_runtime.project(..., shared=True). With no
+files, the arm feeds a mixer-retirement pair (one peer still holds the tail
+voice, the other dropped it) and the matching tip pair.
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -18,6 +19,7 @@ else:
 FAIL = "AudioRuntime voices lists differ at a sound's tail"
 TAIL_IDENTITY = 7
 TAIL_POSITION = 12
+FIXTURE_DIR = Path(__file__).resolve().parent / "audio_tail_fixtures"
 
 
 def decode_archive(data):
@@ -38,7 +40,7 @@ def emit_peer_voice(identity, position):
         "version": "AudioVoice2",
         "identity": identity,
         "owner": 1,
-        "path": b"sfx",
+        "path": "sfx",
         "playing": 1,
         "bus": 0,
         "priority": 64,
@@ -52,8 +54,23 @@ def emit_peer_voice(identity, position):
     }
 
 
-def emit_peer_runtime(identity, position):
-    return {"version": "AudioRuntime3", "voices": [emit_peer_voice(identity, position)]}
+def emit_peer_runtime(identity, position, voices=None):
+    if voices is None:
+        voices = [emit_peer_voice(identity, position)]
+    return {"version": "AudioRuntime3", "voices": voices}
+
+
+def emit_mixer_retired_pair():
+    return emit_peer_runtime(TAIL_IDENTITY, TAIL_POSITION), emit_peer_runtime(TAIL_IDENTITY, TAIL_POSITION, voices=[])
+
+
+def emit_tip_pair():
+    return emit_peer_runtime(TAIL_IDENTITY, TAIL_POSITION), emit_peer_runtime(TAIL_IDENTITY, TAIL_POSITION)
+
+
+def load_fixture(name):
+    path = FIXTURE_DIR / name
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def compare_isolated(first, second, identity):
@@ -70,9 +87,13 @@ def compare_peer_voices(first_text, second_text, identity):
 
 
 def run_arm():
-    first = emit_peer_runtime(TAIL_IDENTITY, TAIL_POSITION)
-    second = emit_peer_runtime(TAIL_IDENTITY, TAIL_POSITION)
-    ok = compare_isolated(first, second, TAIL_IDENTITY)
+    retired = (load_fixture("mixer_retired_kept.json"), load_fixture("mixer_retired_dropped.json"))
+    if compare_isolated(retired[0], retired[1], TAIL_IDENTITY):
+        print("FAIL comparer accepted a mixer-retired peer pair")
+        return 1
+    print("PASS comparer fails a mixer-retired peer pair")
+    tip = (load_fixture("tip_peer_a.json"), load_fixture("tip_peer_b.json"))
+    ok = compare_isolated(tip[0], tip[1], TAIL_IDENTITY)
     print(("PASS " if ok else "FAIL ") + FAIL)
     return 0 if ok else 1
 
