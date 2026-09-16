@@ -95,6 +95,7 @@ namespace RTE {
 
 		// Internet page.
 		GUITextBox* m_DirUrlTextbox;
+		GUILabel* m_DirUrlHintLabel;
 		GUITextBox* m_DirPinTextbox;
 		GUILabel* m_DirStatusLabel;
 		GUILabel* m_InternetError;
