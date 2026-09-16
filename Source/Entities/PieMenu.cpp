@@ -229,7 +229,7 @@ namespace {
 			return true;
 		}
 		double value = 0;
-		if (ParseNumberExact(field.data(), field.data() + field.size(), value).ec == std::errc()) {
+		if (ParseNumberExact(field.data(), field.data() + field.size(), value).ec == std::errc() && std::trunc(value) == value) {
 			ticks = static_cast<int64_t>(value);
 			return true;
 		}
@@ -544,7 +544,38 @@ bool PieMenu::RunCheckpointSelfTest() {
 	check("pie_timer_resave_identity", menu.LoadRuntimeCheckpoint(savedTimers) && menu.SaveRuntimeCheckpoint() == savedTimers,
 		menu.SaveRuntimeCheckpoint(), savedTimers);
 	check("pie_runtime1_tag", savedTimers.starts_with("15 PieMenuRuntime1 "), savedTimers.substr(0, 19), "15 PieMenuRuntime1 ");
-	const std::string legacyPack = std::string("0|0|12.0|34.5|56|") + HexFloatString(0.0F) + "|0|-1|-1|-1|-1";
+	PieMenu dottedSource;
+	if (dottedSource.Create() >= 0) {
+		dottedSource.m_EnableDisableAnimationTimer.SetStartSimTimeTicks(90001234);
+		dottedSource.m_HoverTimer.SetSimTimeLimitTicks(90004321);
+		const auto runtime1 = dottedSource.SaveRuntimeCheckpoint();
+		check("runtime1_blob_tag", runtime1.starts_with("15 PieMenuRuntime1 "), runtime1.substr(0, 19), "15 PieMenuRuntime1 ");
+		std::string dotted = runtime1;
+		const auto splice = [&](const std::string& exact, const std::string& replacement) {
+			const std::string token = " " + exact + " ";
+			const size_t pos = dotted.find(token);
+			if (pos == std::string::npos) {
+				return false;
+			}
+			dotted.replace(pos, token.size(), " " + replacement + " ");
+			return true;
+		};
+		check("runtime1_dotted_tokens", splice("90001234", "90001234.0") && splice("90004321", "90004321.0"), dotted.substr(0, 19), "15 PieMenuRuntime1 ");
+		PieMenu dottedLoad;
+		const bool loadedDotted = dottedLoad.Create() >= 0 && dottedLoad.LoadRuntimeCheckpoint(dotted);
+		check("runtime1_dotted_timers_exact", loadedDotted
+			&& dottedLoad.m_EnableDisableAnimationTimer.GetStartSimTimeTicks() == 90001234
+			&& dottedLoad.m_HoverTimer.GetSimTimeLimitTicks() == 90004321,
+			loadedDotted ? std::to_string(dottedLoad.m_EnableDisableAnimationTimer.GetStartSimTimeTicks()) : "load-failed",
+			"90001234");
+		dotted = runtime1;
+		check("runtime1_fractional_token", splice("90001234", "90001234.5"), "90001234.5", "90001234.5");
+		PieMenu refused;
+		check("runtime1_non_integer_timer_refused", refused.Create() >= 0 && !refused.LoadRuntimeCheckpoint(dotted),
+			refused.LoadRuntimeCheckpoint(dotted) ? std::to_string(refused.m_EnableDisableAnimationTimer.GetStartSimTimeTicks()) : "refused",
+			"refused");
+	}
+	const std::string legacyPack = std::string("0|0|12.0|34.0|56|") + HexFloatString(0.0F) + "|0|-1|-1|-1|-1";
 	menu.UnpackInteractionState(legacyPack);
 	check("legacy_double_pie_timers", menu.m_EnableDisableAnimationTimer.GetStartSimTimeMS() == 12
 		&& menu.m_HoverTimer.GetStartSimTimeMS() == 34
@@ -553,6 +584,10 @@ bool PieMenu::RunCheckpointSelfTest() {
 			std::to_string(menu.m_HoverTimer.GetStartSimTimeMS()) + "/" +
 			std::to_string(menu.m_SubPieMenuHoverOpenTimer.GetStartSimTimeMS()),
 		"12/34/56");
+	const std::string fractionalPack = std::string("0|0|12.7|34.0|56|") + HexFloatString(0.0F) + "|0|-1|-1|-1|-1";
+	const auto beforeFractional = menu.PackInteractionState();
+	menu.UnpackInteractionState(fractionalPack);
+	check("legacy_fractional_pie_timer_refused", menu.PackInteractionState() == beforeFractional, menu.PackInteractionState(), beforeFractional);
 	menu.UnpackInteractionState(packedTimers);
 	check("legacy_unpack_restores_before_clone", menu.SaveRuntimeCheckpoint() == savedTimers, menu.SaveRuntimeCheckpoint(), savedTimers);
 	PieMenu copy;
