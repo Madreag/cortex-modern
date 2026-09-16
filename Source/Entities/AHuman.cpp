@@ -401,6 +401,57 @@ std::string AHuman::GetWalkState() const {
 	return std::string(buffer, cursor);
 }
 
+std::vector<CheckpointText> AHuman::CaptureLimbPathStates(bool forHashing) const {
+	std::vector<CheckpointText> states;
+	if (!m_PersistedLimbPathStates.empty()) {
+		states.reserve(m_PersistedLimbPathStates.size());
+		for (const auto& state: m_PersistedLimbPathStates) states.emplace_back(state);
+		return states;
+	}
+	states.reserve(2 * MOVEMENTSTATECOUNT);
+	for (int layer = 0; layer < 2; ++layer) {
+		for (int movementState = 0; movementState < MOVEMENTSTATECOUNT; ++movementState) {
+			states.push_back(m_Paths[layer][movementState].CaptureTraversalState(forHashing));
+		}
+	}
+	return states;
+}
+
+CheckpointText AHuman::CaptureLimbGroupPositions() const {
+	if (!m_PersistedLimbGroupPositions.empty()) return CheckpointText(m_PersistedLimbGroupPositions);
+	CheckpointBuffer packed;
+	bool first = true;
+	for (const AtomGroup* group: {m_pFGHandGroup, m_pBGHandGroup, m_pFGFootGroup, m_pBGFootGroup}) {
+		const Vector limbPos = group ? group->GetRawLimbPos() : Vector();
+		if (!first) packed.Raw(" ");
+		packed.Real(limbPos.m_X); packed.Raw(" "); packed.Real(limbPos.m_Y);
+		first = false;
+	}
+	return packed.Finish();
+}
+
+CheckpointText AHuman::CaptureLimbGroupInertia() const {
+	if (!m_PersistedLimbGroupInertia.empty()) return CheckpointText(m_PersistedLimbGroupInertia);
+	CheckpointBuffer packed;
+	bool first = true;
+	for (const AtomGroup* group: {m_pFGHandGroup, m_pBGHandGroup, m_pFGFootGroup, m_pBGFootGroup}) {
+		if (!first) packed.Raw(" ");
+		packed.Real(group ? group->GetStoredMomentOfInertia() : 0.0F); packed.Raw(" ");
+		packed.Real(group ? group->GetStoredOwnerMass() : 0.0F);
+		first = false;
+	}
+	return packed.Finish();
+}
+
+CheckpointText AHuman::CaptureWalkState() const {
+	if (!m_PersistedWalkState.empty()) return CheckpointText(m_PersistedWalkState);
+	CheckpointBuffer packed;
+	packed.Real(m_WalkAngle[FGROUND].GetRadAngle()); packed.Raw(" ");
+	packed.Real(m_WalkAngle[BGROUND].GetRadAngle()); packed.Raw(" ");
+	packed.Real(m_WalkPathOffset.m_X); packed.Raw(" "); packed.Real(m_WalkPathOffset.m_Y);
+	return packed.Finish();
+}
+
 static void ApplyPackedLimbInertia(const std::string& packed, std::initializer_list<AtomGroup*> groups) {
 	if (packed.empty()) {
 		return;
@@ -660,7 +711,7 @@ void AHuman::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("CrouchRotAngleTarget", m_RotAngleTargets[CROUCH]);
 	writer.NewPropertyWithValue("JumpRotAngleTarget", m_RotAngleTargets[JUMP]);
 	writer.NewPropertyWithValue("SpecialBehaviour_StrideSound", m_StrideSound);
-	writer.NewPropertyWithValue("SpecialBehaviour_AHumanRuntime", base64_encode(m_PersistedAHumanRuntime.empty() ? SaveAHumanRuntime() : m_PersistedAHumanRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_AHumanRuntime", CheckpointWriter::Native([&] { return m_PersistedAHumanRuntime.empty() ? SaveAHumanRuntime() : m_PersistedAHumanRuntime; }).Base64(true));
 }
 
 int AHuman::Save(Writer& writer) const {
@@ -3781,12 +3832,16 @@ std::string AHuman::SaveAHumanRuntime() const {
 	archive(m_ProneTimer, m_MaxWalkPathCrouchShift, m_CrouchAmount, m_CrouchAmountOverride, m_Paths, m_RotAngleTargets, m_Aiming);
 	archive(m_ArmClimbing, m_StrideFrame, m_StrideStart, m_StrideTimer, m_ThrowTmr, m_ThrowPrepTime, m_SharpAimRevertTimer);
 	archive(m_FGArmFlailScalar, m_BGArmFlailScalar, m_EquipHUDTimer, m_WalkAngle, m_WalkPathOffset, m_ArmSwingRate, m_DeviceArmSwayRate);
-	archive(CaptureOwnedCheckpoint(m_pFGHandGroup), CaptureOwnedCheckpoint(m_pBGHandGroup), CaptureOwnedCheckpoint(m_pFGFootGroup), CaptureOwnedCheckpoint(m_BackupFGFootGroup), CaptureOwnedCheckpoint(m_pBGFootGroup), CaptureOwnedCheckpoint(m_BackupBGFootGroup));
-	std::vector<std::string> equips;
+	archive(CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pFGHandGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pBGHandGroup); }),
+	    CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pFGFootGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_BackupFGFootGroup); }),
+	    CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pBGFootGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_BackupBGFootGroup); }));
+	std::vector<CheckpointText> equips;
 	for (const DeferredEquip& equip: m_PendingDeferredEquips) {
-		CheckpointWriter value("DeferredEquip1");
-		value(equip.op, equip.depositToFront, equip.group, equip.excludeGroup, equip.moduleName, equip.presetName);
-		equips.push_back(value.Text());
+		equips.push_back(CheckpointWriter::Native([&] {
+			CheckpointWriter value("DeferredEquip1");
+			value(equip.op, equip.depositToFront, equip.group, equip.excludeGroup, equip.moduleName, equip.presetName);
+			return value.Text();
+		}));
 	}
 	archive(equips);
 	return archive.Text();

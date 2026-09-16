@@ -1,4 +1,5 @@
 #include "PieMenu.h"
+#include "CheckpointArchive.h"
 
 #include "System/ScenarioRunner.h"
 #include "FloatText.h"
@@ -362,7 +363,7 @@ int PieMenu::Save(Writer& writer) const {
 			writer.NewPropertyWithValue("AddPieSlice", pieSlice);
 		}
 	}
-	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_PieMenuRuntime", base64_encode(SaveRuntimeCheckpoint(), true));
+	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_PieMenuRuntime", CheckpointWriter::Native([&] { return SaveRuntimeCheckpoint(); }).Base64(true));
 
 	return 0;
 }

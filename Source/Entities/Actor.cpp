@@ -704,7 +704,7 @@ void Actor::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SpecialBehaviour_PainSound", m_PainSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_DeathSound", m_DeathSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_DeviceSwitchSound", m_DeviceSwitchSound);
-	writer.NewPropertyWithValue("SpecialBehaviour_ActorRuntime", base64_encode(m_PersistedActorRuntime.empty() ? SaveActorRuntime() : m_PersistedActorRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ActorRuntime", CheckpointWriter::Native([&] { return m_PersistedActorRuntime.empty() ? SaveActorRuntime() : m_PersistedActorRuntime; }).Base64(true));
 }
 
 int Actor::Save(Writer& writer) const {
@@ -2883,7 +2883,8 @@ std::string Actor::SaveActorRuntime() const {
 	archive(m_AIBaseDigStrength, m_BaseMass, m_AIMode, m_WaypointCursor, m_DrawWaypoints, m_MoveTarget, m_PrevPathTarget);
 	archive(m_LastOrderedWaypoint, m_HasOrderedWaypoint, m_LastOrderedWaypointUID);
 	archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
-	archive(m_PersistedActorIconReferences[0].empty() ? CaptureActorIconReference(m_pTeamIcon) : m_PersistedActorIconReferences[0], m_PersistedActorIconReferences[1].empty() ? CaptureActorIconReference(m_pControllerIcon) : m_PersistedActorIconReferences[1]);
+	archive(CheckpointWriter::Native([&] { return m_PersistedActorIconReferences[0].empty() ? CaptureActorIconReference(m_pTeamIcon) : m_PersistedActorIconReferences[0]; }),
+	    CheckpointWriter::Native([&] { return m_PersistedActorIconReferences[1].empty() ? CaptureActorIconReference(m_pControllerIcon) : m_PersistedActorIconReferences[1]; }));
 	return archive.Text();
 }
 
