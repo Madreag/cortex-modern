@@ -50,6 +50,7 @@ namespace RTE {
 		m_PresetDescription.clear();
 		m_Groups.clear();
 		m_RandomWeight = 100;
+		m_CheckpointWriteGeneration = 0;
 	}
 
 	int Entity::Create() {
@@ -67,6 +68,7 @@ namespace RTE {
 			m_Groups.emplace(group);
 		}
 		m_RandomWeight = reference.m_RandomWeight;
+		m_CheckpointWriteGeneration = 0;
 		return 0;
 	}
 

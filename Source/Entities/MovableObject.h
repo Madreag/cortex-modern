@@ -444,6 +444,7 @@ namespace RTE {
 		/// Travel-driven motion bypasses this by writing m_Pos directly so PreTravel can still snapshot a meaningful prev.
 		/// @param newPos A Vector describing the new absolute position in pixels.
 		void SetPos(const Vector& newPos) override {
+			TouchCheckpoint();
 			m_Pos = newPos;
 			m_PrevPos = newPos;
 		}

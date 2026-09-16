@@ -1729,6 +1729,7 @@ void MovableObject::SetStringValue(const std::string& key, const std::string& va
 		RecordLocalValueWrite(ValueMapKind::String, ValueMapOp::Set, key, 0, value);
 		return;
 	}
+	TouchCheckpoint();
 	m_StringValueMap[key] = value;
 }
 
@@ -1741,10 +1742,12 @@ void MovableObject::SetNumberValue(const std::string& key, double value) {
 		RecordLocalValueWrite(ValueMapKind::Number, ValueMapOp::Set, key, value, {});
 		return;
 	}
+	TouchCheckpoint();
 	m_NumberValueMap[key] = value;
 }
 
 void MovableObject::SetObjectValue(const std::string& key, Entity* value) {
+	TouchCheckpoint();
 	m_ObjectValueMap[key] = value;
 }
 
@@ -1753,6 +1756,7 @@ void MovableObject::RemoveStringValue(const std::string& key) {
 		RecordLocalValueWrite(ValueMapKind::String, ValueMapOp::Remove, key, 0, {});
 		return;
 	}
+	TouchCheckpoint();
 	m_StringValueMap.erase(key);
 }
 
@@ -1761,10 +1765,12 @@ void MovableObject::RemoveNumberValue(const std::string& key) {
 		RecordLocalValueWrite(ValueMapKind::Number, ValueMapOp::Remove, key, 0, {});
 		return;
 	}
+	TouchCheckpoint();
 	m_NumberValueMap.erase(key);
 }
 
 void MovableObject::RemoveObjectValue(const std::string& key) {
+	TouchCheckpoint();
 	m_ObjectValueMap.erase(key);
 }
 

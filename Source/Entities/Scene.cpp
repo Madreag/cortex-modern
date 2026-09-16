@@ -44,8 +44,12 @@
 #include "Magazine.h"
 #include "ThrownDevice.h"
 
+#include "MOSRotating.h"
+#include "Attachable.h"
 #include "tracy/Tracy.hpp"
 
+#include <bit>
+#include <functional>
 #include <shared_mutex>
 #include <thread>
 
@@ -1258,6 +1262,47 @@ int Scene::ReadProperty(const std::string_view& propName, Reader& reader) {
 	EndPropertyList;
 }
 
+namespace {
+	uint64_t MixCheckpointStamp(uint64_t hash, uint64_t value) {
+		return hash ^ (value + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2));
+	}
+
+	uint64_t SceneObjectFingerprint(const SceneObject* object) {
+		uint64_t hash = 14695981039346656037ull;
+		hash = MixCheckpointStamp(hash, object->CheckpointWriteGeneration());
+		const Vector pos = object->GetPos();
+		hash = MixCheckpointStamp(hash, std::bit_cast<uint32_t>(pos.m_X));
+		hash = MixCheckpointStamp(hash, std::bit_cast<uint32_t>(pos.m_Y));
+		if (const auto* movable = dynamic_cast<const MovableObject*>(object)) {
+			hash = MixCheckpointStamp(hash, static_cast<uint64_t>(movable->GetUniqueID()));
+			const Vector vel = movable->GetVel();
+			hash = MixCheckpointStamp(hash, std::bit_cast<uint32_t>(vel.m_X));
+			hash = MixCheckpointStamp(hash, std::bit_cast<uint32_t>(vel.m_Y));
+			hash = MixCheckpointStamp(hash, movable->GetNumberValueMap().size());
+			for (const auto& [key, value]: movable->GetNumberValueMap()) {
+				hash = MixCheckpointStamp(hash, std::hash<std::string>{}(key));
+				hash = MixCheckpointStamp(hash, std::bit_cast<uint64_t>(value));
+			}
+			hash = MixCheckpointStamp(hash, movable->GetStringValueMap().size());
+			for (const auto& [key, value]: movable->GetStringValueMap()) {
+				hash = MixCheckpointStamp(hash, std::hash<std::string>{}(key));
+				hash = MixCheckpointStamp(hash, std::hash<std::string>{}(value));
+			}
+		}
+		if (const auto* rotating = dynamic_cast<const MOSRotating*>(object)) {
+			hash = MixCheckpointStamp(hash, rotating->GetAttachables().size());
+			for (const Attachable* attachable: rotating->GetAttachables()) hash = MixCheckpointStamp(hash, static_cast<uint64_t>(attachable->GetUniqueID()));
+			hash = MixCheckpointStamp(hash, rotating->GetWoundList().size());
+			for (const AEmitter* wound: rotating->GetWoundList()) hash = MixCheckpointStamp(hash, static_cast<uint64_t>(wound->GetUniqueID()));
+		}
+		if (const auto* actor = dynamic_cast<const Actor*>(object)) {
+			hash = MixCheckpointStamp(hash, static_cast<uint64_t>(actor->GetInventorySize()));
+			for (const MovableObject* item: *actor->GetInventory()) hash = MixCheckpointStamp(hash, static_cast<uint64_t>(item->GetUniqueID()));
+		}
+		return hash;
+	}
+}
+
 CheckpointText Scene::CaptureSavedScene(const std::string& fileName) const {
 	return Writer::Capture([&](Writer& writer) { SaveSavedScene(writer, fileName); });
 }
@@ -1418,12 +1463,21 @@ int Scene::Save(Writer& writer) const {
 
 void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave, bool isChildAttachable, bool saveFullData) {
 	if (writer.IsCapturing() && writer.GetCaptureObject() != sceneObjectToSave) {
+		const unsigned channel = 32 + 8 * writer.GetIndent() + 2 * saveFullData + isChildAttachable;
+		const uint64_t stamp = SceneObjectFingerprint(sceneObjectToSave);
+		if (auto* cache = CheckpointWriter::CurrentCache()) {
+			if (const CheckpointText* previous = cache->Peek(sceneObjectToSave, channel); previous && cache->Stamp(sceneObjectToSave, channel) == stamp) {
+				cache->Touch(sceneObjectToSave, channel);
+				writer.Append(*previous);
+				return;
+			}
+		}
 		CheckpointText text = Writer::Capture([&](Writer& owned) {
 			owned.SetSaveOverrides(writer.GetSaveOverrides());
 			owned.SetCaptureObject(sceneObjectToSave);
 			SaveSceneObject(owned, sceneObjectToSave, isChildAttachable, saveFullData);
 		}, writer.GetIndent());
-		if (auto* cache = CheckpointWriter::CurrentCache()) text = cache->Remember(sceneObjectToSave, 32 + 8 * writer.GetIndent() + 2 * saveFullData + isChildAttachable, std::move(text));
+		if (auto* cache = CheckpointWriter::CurrentCache()) text = cache->Remember(sceneObjectToSave, channel, std::move(text), stamp);
 		writer.Append(text);
 		return;
 	}
