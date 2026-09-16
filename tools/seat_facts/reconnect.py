@@ -13,7 +13,7 @@ import uuid
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from check_reconnect import absent, journal, local_view, pair, require
+from check_reconnect import absent, journal, local_view, pair, physical_input, require
 from phase_b import EXE, REPO, ROOT, footprint, instrument_runner, sha, stamp
 
 A7_DEFAULT = Path("D:/Projects/reviews/takeover-20260909/a7-repaired-driver")
@@ -66,8 +66,8 @@ def install_local_control_oracle(driver, log):
             local_view(observed, player, [0, 0])
             local_view(expected, player, [0, 0])
             require(observed["seat_player"] == expected["seat_player"], "canonical seat changed on return")
-            original({**observed, "seat_player": observed["controller_input"]},
-                     {**expected, "seat_player": expected["controller_input"]})
+            original({**observed, "seat_player": physical_input(observed)},
+                     {**expected, "seat_player": physical_input(expected)})
             row["explicit_seat_and_input"] = {"pass": True}
         except Exception as error:
             row["explicit_seat_and_input"] = {"pass": False, "error": str(error)}

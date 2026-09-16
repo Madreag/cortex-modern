@@ -209,7 +209,7 @@ def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float, sim
     human_seats = 1 if dedicated else 2
     for peer, text in logs.items():
         kills = KILL.findall(text)
-        check(checks, f"{peer}_brains_destroyed", len(kills) >= human_seats,
+        check(checks, f"{peer}_brains_destroyed", len(kills) == human_seats,
               f"brain-kill lines={len(kills)} human seats={human_seats}",
               [out / "e2e/brainless_spectate" / peer / "stdout.log"])
         seat_rows = [row for row in rows[peer] if row["simms"] > 6000]
@@ -319,6 +319,9 @@ def sp_arm(out: Path, setting_on: bool, cycle_input: bool, ticks: int, timeout: 
         check(checks, "follow_label_empty_after_death",
               "[spectate-follow] kill " in text and "[spectate-follow] cleared player=" in text,
               "follow kill and clear lines", [out / "stdout.log"])
+    exit_ok = record.get("exit_code") == 0 and not record.get("timed_out")
+    check(checks, "process_completed", exit_ok,
+          f"exit_code={record.get('exit_code')} timed_out={record.get('timed_out')}", [out / "stdout.log"])
     return {"exe": str(exe), "exe_sha256": sha256(exe), "argv": argv, "out": str(out),
             "exit_code": record.get("exit_code"), "timed_out": record.get("timed_out"),
             "trace": str(out / "trace.json"), "probe_rows": rows,
