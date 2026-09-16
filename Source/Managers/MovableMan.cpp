@@ -2452,7 +2452,7 @@ void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger
 	}
 	UnregisterObject(mo);
 	mo->SetAsNoID();
-	m_PreviewGhosts.push_back({mo, key, true});
+	m_PreviewGhosts.push_back({mo, key, false});
 	if (m_PreviewGhosts.size() > m_PreviewGhostPeak) {
 		m_PreviewGhostPeak = m_PreviewGhosts.size();
 	}
@@ -2480,21 +2480,10 @@ std::vector<MovableMan::PreviewGhostState> MovableMan::GetPreviewGhostStates() c
 	out.reserve(m_PreviewGhosts.size());
 	for (const PreviewGhost& ghost: m_PreviewGhosts) {
 		if (ghost.object) {
-			out.push_back({ghost.key, ghost.object->GetPos(), ghost.object->GetVel()});
+			out.push_back({ghost.key, ghost.object->GetPos(), ghost.object->GetVel(), ghost.object->GetGlobalAccScalar(), ghost.object->GetAirResistance(), ghost.object->GetAirThreshold()});
 		}
 	}
 	return out;
-}
-
-bool MovableMan::GetPreviewGhostKinematics(const PreviewEventLedger::Key& key, Vector& pos, Vector& vel) const {
-	for (const PreviewGhost& ghost: m_PreviewGhosts) {
-		if (ghost.object && ghost.key.kind == key.kind && ghost.key.emitterUID == key.emitterUID && ghost.key.tick == key.tick && ghost.key.seq == key.seq) {
-			pos = ghost.object->GetPos();
-			vel = ghost.object->GetVel();
-			return true;
-		}
-	}
-	return false;
 }
 
 bool MovableMan::PreviewGhostsAreUnregistered() const {

@@ -302,9 +302,11 @@ namespace RTE {
 			PreviewEventLedger::Key key;
 			Vector pos;
 			Vector vel;
+			float globalAccScalar = 1.0F;
+			float airResistance = 0;
+			float airThreshold = 0;
 		};
 		std::vector<PreviewGhostState> GetPreviewGhostStates() const;
-		bool GetPreviewGhostKinematics(const PreviewEventLedger::Key& key, Vector& pos, Vector& vel) const;
 		/// True when every ghost is unregistered: no MOID, not in the world lists the dump walks.
 		bool PreviewGhostsAreUnregistered() const;
 		/// Draws the substitute in the original's slot until swapped back.
