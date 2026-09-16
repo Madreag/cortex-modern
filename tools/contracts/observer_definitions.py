@@ -45,6 +45,12 @@ EXTRA_FIELDS = {
         'Field(path + ".Controller.m_CommittedInput.mouseMovement", object.m_CommittedInput.mouseMovement);',
         'Field(path + ".Controller.m_ProducingLocalInput", object.m_ProducingLocalInput);',
     ],
+    "GameActivity": [
+        'Field(path + ".GameActivity.m_LockstepPlacementSubmitted", object.m_LockstepPlacementSubmitted);',
+        'Field(path + ".GameActivity.m_LockstepSeatBrains", object.m_LockstepSeatBrains);',
+        'Field(path + ".GameActivity.m_LockstepPlacementUidBase", object.m_LockstepPlacementUidBase);',
+        'Field(path + ".GameActivity.m_LockstepPlacementSeeded", object.m_LockstepPlacementSeeded);',
+    ],
 }
 
 EXTRA_VISITS_AFTER = {
@@ -55,6 +61,17 @@ Field(path + ".Actor::DeferredWaypoint.x", object.x);
 Field(path + ".Actor::DeferredWaypoint.y", object.y);
 Field(path + ".Actor::DeferredWaypoint.targetUID", object.targetUID);
 Field(path + ".Actor::DeferredWaypoint.actorUID", object.actorUID);
+}
+''',
+    "GameActivity": r'''
+void Visit(const NetGamePlaceBrain& object, const std::string& path) {
+Field(path + ".NetGamePlaceBrain.team", object.team);
+Field(path + ".NetGamePlaceBrain.player", object.player);
+Field(path + ".NetGamePlaceBrain.posX", object.posX);
+Field(path + ".NetGamePlaceBrain.posY", object.posY);
+Field(path + ".NetGamePlaceBrain.className", object.className);
+Field(path + ".NetGamePlaceBrain.preset", object.preset);
+Field(path + ".NetGamePlaceBrain.module", object.module);
 }
 ''',
 }
