@@ -13,6 +13,14 @@
 #include "lj_gc.h"
 #include "lj_err.h"
 #include "lj_tab.h"
+#include "luajit.h"
+
+luaJIT_tab_write_cb checkpoint_tab_write;
+
+LUA_API void luaJIT_set_tab_write_callback(luaJIT_tab_write_cb cb)
+{
+  checkpoint_tab_write = cb;
+}
 
 /* -- Object hashing ------------------------------------------------------ */
 
@@ -207,6 +215,7 @@ GCtab * LJ_FASTCALL lj_tab_dup(lua_State *L, const GCtab *kt)
 void LJ_FASTCALL lj_tab_clear(lua_State *L, GCtab *t)
 {
   if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+  checkpoint_mark(t);
   clearapart(t);
   if (t->hmask > 0) {
     Node *node = noderef(t->node);
@@ -238,6 +247,7 @@ void lj_tab_resize(lua_State *L, GCtab *t, uint32_t asize, uint32_t hbits)
   uint32_t oldasize = t->asize;
   uint32_t oldhmask = t->hmask;
   if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+  checkpoint_mark(t);
   if (asize > oldasize) {  /* Array part grows? */
     TValue *array;
     uint32_t i;
@@ -442,6 +452,7 @@ TValue *lj_tab_newkey(lua_State *L, GCtab *t, cTValue *key)
 {
   Node *n = hashkey(t, key);
   if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+  checkpoint_mark(t);
   if (!tvisnil(&n->val) || t->hmask == 0) {
     Node *nodebase = noderef(t->node);
     Node *collide, *freenode = getfreetop(t, nodebase);
@@ -519,6 +530,7 @@ TValue *lj_tab_setinth(lua_State *L, GCtab *t, int32_t key)
   TValue k;
   Node *n;
   if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+  checkpoint_mark(t);
   if (inarray(t, key)) return arrayslot(t, key);
   k.n = (lua_Number)key;
   n = hashnum(t, &k);
@@ -534,6 +546,7 @@ TValue *lj_tab_setstr(lua_State *L, GCtab *t, const GCstr *key)
   TValue k;
   Node *n = hashstr(t, key);
   if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+  checkpoint_mark(t);
   do {
     if (tvisstr(&n->key) && strV(&n->key) == key)
       return &n->val;
@@ -546,6 +559,7 @@ TValue *lj_tab_set(lua_State *L, GCtab *t, cTValue *key)
 {
   Node *n;
   if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+  checkpoint_mark(t);
   t->nomm = 0;  /* Invalidate negative metamethod cache. */
   if (tvisstr(key)) {
     return lj_tab_setstr(L, t, strV(key));
