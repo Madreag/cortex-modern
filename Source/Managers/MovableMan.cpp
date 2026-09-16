@@ -44,6 +44,7 @@
 #include "ScenarioRunner.h"
 #include "NetActorOwnership.h"
 #include "NetLockstep.h"
+#include "NetGameCommand.h"
 #include "AIWriteScript.h"
 #include "LuaMan.h"
 #include "ThreadMan.h"
@@ -549,58 +550,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				continue;
 			}
 			if (delivery->queuedPurchase) {
-				// A committed buy order rides the single-player purchase core, so both peers queue the
-				// identical arrival and deduct the identical cost at the same synced frame.
-				std::list<const SceneObject*> purchases;
-				for (const NetGameCargoItem& item: delivery->cargo) {
-					const SceneObject* purchase = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset(item.className, item.preset, item.module));
-					if (!purchase) {
-						g_ConsoleMan.PrintString("NETWORK: buy order item skipped - unknown preset \"" + item.preset + "\"");
-						std::cout << "[net-match] buy order item skipped: unknown preset " << item.preset << std::endl;
-						continue;
-					}
-					purchases.push_back(purchase);
-				}
-				GameActivity::PurchaseOrder order;
-				order.purchases = std::move(purchases);
-				order.team = delivery->team;
-				order.passengerAIMode = delivery->passengerAIMode;
-				order.waypoint = Vector(delivery->waypointX, delivery->waypointY);
-				if (delivery->targetUID != 0) {
-					order.pTargetMO = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(delivery->targetUID)));
-					if (!order.pTargetMO) {
-						g_ConsoleMan.PrintString("NETWORK: buy order target not found: UID " + std::to_string(delivery->targetUID));
-						std::cout << "[net-match] buy order target not found: UID " << delivery->targetUID << std::endl;
-					}
-				}
-				order.totalCost = delivery->cost;
-				// The ordering player index only means something on the peer that issued the order; display-only.
-				order.orderedByPlayer = command.senderPeerId == ScenarioRunner::GetLockstepLocalPeerId() ? delivery->orderedByPlayer : Players::NoPlayer;
-				order.aiReturnCraft = delivery->returnCraft;
-				Vector landingZone(delivery->posX, delivery->posY);
-				g_SceneMan.ForceBounds(landingZone);
-				order.landingZone = landingZone;
-				order.multiOrderYOffset = delivery->multiOrderYOffset;
-				craft->SetNetworkDelivery(true);
-				const float fundsBefore = activity->GetTeamFunds(delivery->team);
-				// Co-op teammates each vet cost against their own view of the funds at issue time; two
-				// same-frame orders can both pass a stale check. The apply frame sees identical funds on
-				// every peer, so reject here deterministically rather than let the team go negative.
-				if (delivery->cost > fundsBefore) {
-					delete craft;
-					activity->ClearPreviewedPurchase(order.orderedByPlayer, order.team, order.totalCost);
-					g_ConsoleMan.PrintString("NETWORK: buy order rejected - insufficient team funds");
-					std::cout << "[net-match] buy order rejected: team " << delivery->team << " cost " << delivery->cost << " > funds " << fundsBefore << std::endl;
-					continue;
-				}
-				if (!gameActivity->QueuePurchaseDelivery(craft, order)) {
-					delete craft;
-					gameActivity->ClearPreviewedPurchase(order.orderedByPlayer, order.team, order.totalCost);
-					g_ConsoleMan.PrintString("NETWORK: buy order did not queue: team " + std::to_string(delivery->team));
-					std::cout << "[net-match] buy order did not queue: team " << delivery->team << std::endl;
-					continue;
-				}
-				std::cout << "[net-match] buy order queued: team " << delivery->team << " cost " << delivery->cost << " funds " << fundsBefore << " -> " << activity->GetTeamFunds(delivery->team) << " items " << delivery->cargo.size() << std::endl;
+				MovableMan::ApplyQueuedPurchaseDelivery(*activity, *delivery, command.senderPeerId, craft);
 			} else {
 				// Load the manifest in order so both peers clone the same presets and assign matching unique ids.
 				int loaded = 0;
@@ -2484,6 +2434,76 @@ std::vector<MovableMan::PreviewGhostState> MovableMan::GetPreviewGhostStates() c
 		}
 	}
 	return out;
+}
+
+bool MovableMan::ApplyQueuedPurchaseDelivery(Activity& activity, const NetGameDeliverCargo& delivery, uint8_t senderPeerId, ACraft* craft) {
+	GameActivity* gameActivity = dynamic_cast<GameActivity*>(&activity);
+	if (!gameActivity || !std::isfinite(delivery.cost) || delivery.cost < 0.0F || !std::isfinite(delivery.waypointX) || !std::isfinite(delivery.waypointY)) {
+		delete craft;
+		g_ConsoleMan.PrintString("ERROR: Buy order rejected - bad order fields");
+		std::cout << "[net-match] buy order rejected: bad order fields" << std::endl;
+		return false;
+	}
+	if (!craft) {
+		const Entity* craftPreset = g_PresetMan.GetEntityPreset(delivery.craftClassName, delivery.craftPreset, delivery.craftModule);
+		if (!craftPreset) {
+			g_ConsoleMan.PrintString("ERROR: Delivery rejected - unknown craft preset \"" + delivery.craftPreset + "\"");
+			return false;
+		}
+		Entity* craftClone = craftPreset->Clone();
+		craft = dynamic_cast<ACraft*>(craftClone);
+		if (!craft) {
+			delete craftClone;
+			return false;
+		}
+	}
+	std::list<const SceneObject*> purchases;
+	for (const NetGameCargoItem& item: delivery.cargo) {
+		const SceneObject* purchase = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset(item.className, item.preset, item.module));
+		if (!purchase) {
+			g_ConsoleMan.PrintString("NETWORK: buy order item skipped - unknown preset \"" + item.preset + "\"");
+			std::cout << "[net-match] buy order item skipped: unknown preset " << item.preset << std::endl;
+			continue;
+		}
+		purchases.push_back(purchase);
+	}
+	GameActivity::PurchaseOrder order;
+	order.purchases = std::move(purchases);
+	order.team = delivery.team;
+	order.passengerAIMode = delivery.passengerAIMode;
+	order.waypoint = Vector(delivery.waypointX, delivery.waypointY);
+	if (delivery.targetUID != 0) {
+		order.pTargetMO = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(delivery.targetUID)));
+		if (!order.pTargetMO) {
+			g_ConsoleMan.PrintString("NETWORK: buy order target not found: UID " + std::to_string(delivery.targetUID));
+			std::cout << "[net-match] buy order target not found: UID " << delivery.targetUID << std::endl;
+		}
+	}
+	order.totalCost = delivery.cost;
+	order.orderedByPlayer = senderPeerId == ScenarioRunner::GetLockstepLocalPeerId() ? delivery.orderedByPlayer : Players::NoPlayer;
+	order.aiReturnCraft = delivery.returnCraft;
+	Vector landingZone(delivery.posX, delivery.posY);
+	g_SceneMan.ForceBounds(landingZone);
+	order.landingZone = landingZone;
+	order.multiOrderYOffset = delivery.multiOrderYOffset;
+	craft->SetNetworkDelivery(true);
+	const float fundsBefore = activity.GetTeamFunds(delivery.team);
+	if (delivery.cost > fundsBefore) {
+		delete craft;
+		activity.ClearPreviewedPurchase(order.orderedByPlayer, order.team, order.totalCost);
+		g_ConsoleMan.PrintString("NETWORK: buy order rejected - insufficient team funds");
+		std::cout << "[net-match] buy order rejected: team " << delivery.team << " cost " << delivery.cost << " > funds " << fundsBefore << std::endl;
+		return false;
+	}
+	if (!gameActivity->QueuePurchaseDelivery(craft, order)) {
+		delete craft;
+		gameActivity->ClearPreviewedPurchase(order.orderedByPlayer, order.team, order.totalCost);
+		g_ConsoleMan.PrintString("NETWORK: buy order did not queue: team " + std::to_string(delivery.team));
+		std::cout << "[net-match] buy order did not queue: team " << delivery.team << std::endl;
+		return false;
+	}
+	std::cout << "[net-match] buy order queued: team " << delivery.team << " cost " << delivery.cost << " funds " << fundsBefore << " -> " << activity.GetTeamFunds(delivery.team) << " items " << delivery.cargo.size() << std::endl;
+	return true;
 }
 
 bool MovableMan::PreviewGhostsAreUnregistered() const {
