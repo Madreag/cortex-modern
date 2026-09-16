@@ -40,11 +40,21 @@ class ReconnectOracle(unittest.TestCase):
             local_view(missing, 1, [0, 1])
 
     def test_null_controller_input_is_the_shared_fact(self):
-        """Encoder writes JSON null when there is no controlled actor."""
+        """JSON null is the same empty physical-input record as an omitted key."""
         row = view(1)
         row["controller_input"] = None
         local_view(row, 1, [0, 1])
         self.assertEqual(physical_input(row), 0, "omitted controller_input is the shared fact")
+
+    def test_encoder_empty_actor_record_is_not_a_local_control_green(self):
+        """Encoder writes null controller_input only with controlled_uid 0 and null seat fields."""
+        row = view(1)
+        row["controller_input"] = None
+        row["controlled_uid"] = 0
+        row["seat_mode"] = None
+        row["seat_player"] = None
+        with self.assertRaisesRegex(ValueError, "missing controlled actor"):
+            local_view(row, 1, [0, 1])
 
     def test_dead_brain_uid_zero_is_the_shared_fact(self):
         """Base tree raised 'human seat has no brain' for dead-brain 0."""
