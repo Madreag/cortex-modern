@@ -5976,6 +5976,47 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestRemovalAcceptModel() {
+			NetParticipantRemoval notice;
+			notice.sessionId = 11;
+			notice.round = 2;
+			notice.txId = Ramp<16>(1);
+			notice.epoch = Ramp<16>(2);
+			notice.stableSeat = 1;
+			notice.holderGeneration = 3;
+			notice.incarnation = 4;
+			notice.boundaryFrame = 90;
+			notice.reason = NetParticipantRemovalReason::HostKick;
+			notice.action = NetParticipantRemovalAction::Kick;
+			const NetParticipantRemovalBinding current{11, 2, notice.epoch, 1, 3, 4};
+			if (NetAcceptParticipantRemoval(notice, true, current, false) != NetParticipantRemovalVerdict::Accept ||
+			    !NetParticipantRemovalIsTerminal(NetParticipantRemovalVerdict::Accept)) {
+				return Fail("the host removal was not terminal");
+			}
+			if (NetAcceptParticipantRemoval(notice, false, current, false) != NetParticipantRemovalVerdict::RejectForgedClient ||
+			    NetParticipantRemovalIsTerminal(NetParticipantRemovalVerdict::RejectForgedClient)) {
+				return Fail("a forged client removal removed a holder");
+			}
+			NetParticipantRemoval remapped = notice;
+			remapped.stableSeat = 2;
+			if (NetAcceptParticipantRemoval(remapped, true, current, false) != NetParticipantRemovalVerdict::RejectRemappedSeat) {
+				return Fail("a remapped seat removed a holder");
+			}
+			NetParticipantRemoval wrongEpoch = notice;
+			wrongEpoch.epoch = Ramp<16>(9);
+			if (NetAcceptParticipantRemoval(wrongEpoch, true, current, false) != NetParticipantRemovalVerdict::RejectWrongEpoch) {
+				return Fail("a wrong-epoch notice removed a holder");
+			}
+			if (NetAcceptParticipantRemoval(notice, true, current, true) != NetParticipantRemovalVerdict::RejectDuplicate) {
+				return Fail("a duplicate notice removed a holder");
+			}
+			if (static_cast<uint8_t>(NetH4DisconnectOutcome::Removed) == static_cast<uint8_t>(NetH4DisconnectOutcome::SeatDropped)) {
+				return Fail("removed was numbered as a recoverable drop");
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS removal-codec: forged/remapped/wrong-epoch/duplicate refused; accept is terminal" << std::endl;
+			return 0;
+		}
+
 	int NetReconnectSessionSelfTest::Run() {
 		if (const int result = TestStoreFailsClosed(); result != 0) {
 			return result;
@@ -6131,6 +6172,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestGateSubstituteDisappearsBeforeAck(); result != 0) {
+			return result;
+		}
+		if (const int result = TestRemovalAcceptModel(); result != 0) {
 			return result;
 		}
 		if (const int result = TestRefusedReclaimReportsNewJoin(); result != 0) {

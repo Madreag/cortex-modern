@@ -153,7 +153,7 @@ namespace RTE {
 			if (!RoundTrip({12, 0, emptyDiagnostics}, error)) {
 				return false;
 			}
-			for (uint16_t raw = 1; raw <= static_cast<uint16_t>(NetRejectReason::SeatReassigned); ++raw) {
+			for (uint16_t raw = 1; raw <= static_cast<uint16_t>(NetRejectReason::ParticipantBanned); ++raw) {
 				const NetRejectReason reason = static_cast<NetRejectReason>(raw);
 				if (std::string(NetProtocol::RejectReasonName(reason)) == "Unknown") {
 					*error = "reject reason " + std::to_string(raw) + " has no name";
@@ -165,7 +165,7 @@ namespace RTE {
 				}
 			}
 			std::vector<uint8_t> beyond;
-			if (!EncodeMessage({14, 0, NetJoinRejected{static_cast<NetRejectReason>(static_cast<uint16_t>(NetRejectReason::SeatReassigned) + 1U), "refused", "key", "", ""}}, beyond, error)) {
+			if (!EncodeMessage({14, 0, NetJoinRejected{static_cast<NetRejectReason>(static_cast<uint16_t>(NetRejectReason::ParticipantBanned) + 1U), "refused", "key", "", ""}}, beyond, error)) {
 				return false;
 			}
 			if (!ExpectDecodeError(beyond, NetProtocolErrorCode::InvalidValue, error)) {
@@ -930,12 +930,86 @@ namespace RTE {
 			}
 			if (!NetProtocol::IsMessageTypeInVersion(NetMessageType::JoinRejected, 1) ||
 			    NetProtocol::IsMessageTypeInVersion(NetMessageType::ModuleDigests, 1) ||
-			    !NetProtocol::IsMessageTypeInVersion(NetMessageType::ModuleDigests, NetProtocol::c_Version)) {
+			    !NetProtocol::IsMessageTypeInVersion(NetMessageType::ModuleDigests, 2) ||
+			    !NetProtocol::IsMessageTypeInVersion(NetMessageType::Chat, 2) ||
+			    NetProtocol::IsMessageTypeInVersion(NetMessageType::ParticipantRemoval, 1) ||
+			    NetProtocol::IsMessageTypeInVersion(NetMessageType::ParticipantRemoval, 2) ||
+			    !NetProtocol::IsMessageTypeInVersion(NetMessageType::ModuleDigests, NetProtocol::c_Version) ||
+			    !NetProtocol::IsMessageTypeInVersion(NetMessageType::ParticipantRemoval, NetProtocol::c_Version)) {
 				*error = "the per-version message type table is wrong";
 				return false;
 			}
+			if (!NetProtocol::CanEncodeAtVersion(2)) {
+				*error = "the build cannot stamp a rejection at v2";
+				return false;
+			}
 			std::cout << "[net-protocol-selftest] PASS old wire: v" << NetProtocol::c_Version
-			          << " build stamps a JoinRejected at v1, refuses v2-only types there" << std::endl;
+			          << " build stamps a JoinRejected at v1, refuses newer types there" << std::endl;
+			return true;
+		}
+
+		NetParticipantRemoval MakeRemoval() {
+			NetParticipantRemoval removal;
+			removal.sessionId = 0xAABBCCDDEEFF0011ULL;
+			removal.round = 3;
+			removal.txId = MakeBytes<16>(0x10);
+			removal.epoch = MakeBytes<16>(0x20);
+			removal.stableSeat = 1;
+			removal.holderGeneration = 2;
+			removal.incarnation = 4;
+			removal.boundaryFrame = 1200;
+			removal.reason = NetParticipantRemovalReason::HostKick;
+			removal.action = NetParticipantRemovalAction::Kick;
+			return removal;
+		}
+
+		bool TestRemovalCodec(std::string* error) {
+			const NetParticipantRemoval removal = MakeRemoval();
+			if (!RoundTrip({70, 0, removal}, error)) {
+				return false;
+			}
+			NetParticipantRemoval banned = removal;
+			banned.reason = NetParticipantRemovalReason::HostBan;
+			banned.action = NetParticipantRemovalAction::BanUntilRemoved;
+			if (!RoundTrip({71, 0, banned}, error)) {
+				return false;
+			}
+			NetParticipantRemoval badVersion = removal;
+			badVersion.version = 0;
+			std::vector<uint8_t> refused;
+			NetProtocolError encodeError;
+			if (NetProtocol::Encode({72, 0, badVersion}, refused, &encodeError) || encodeError.code != NetProtocolErrorCode::InvalidValue) {
+				*error = "a zero removal version was encoded";
+				return false;
+			}
+			NetParticipantRemoval noHolder = removal;
+			noHolder.holderGeneration = 0;
+			if (NetProtocol::Encode({73, 0, noHolder}, refused, &encodeError) || encodeError.code != NetProtocolErrorCode::InvalidValue) {
+				*error = "holder generation 0 was encoded";
+				return false;
+			}
+			if (NetProtocol::EncodeAtVersion({74, 0, removal}, 1, refused, &encodeError) ||
+			    encodeError.code != NetProtocolErrorCode::UnsupportedVersion) {
+				*error = "a removal was stamped at v1";
+				return false;
+			}
+			if (NetProtocol::EncodeAtVersion({75, 0, removal}, 2, refused, &encodeError) ||
+			    encodeError.code != NetProtocolErrorCode::UnsupportedVersion) {
+				*error = "a removal was stamped at v2";
+				return false;
+			}
+			std::vector<uint8_t> bytes;
+			if (!EncodeMessage({76, 0, removal}, bytes, error)) {
+				return false;
+			}
+			const NetDecodeResult decoded = NetProtocol::Decode(bytes);
+			const auto* payload = decoded.ok ? std::get_if<NetParticipantRemoval>(&decoded.message.payload) : nullptr;
+			if (!payload || payload->reason != NetParticipantRemovalReason::HostKick || payload->action != NetParticipantRemovalAction::Kick ||
+			    payload->boundaryFrame != 1200 || payload->stableSeat != 1) {
+				*error = "the host removal did not decode identically";
+				return false;
+			}
+			std::cout << "[net-protocol-selftest] PASS removal-codec: host removal roundtrips; forged old-wire stamps refused" << std::endl;
 			return true;
 		}
 
@@ -1176,6 +1250,9 @@ namespace RTE {
 			return fail(error);
 		}
 		if (!TestOldWireEncoding(&error)) {
+			return fail(error);
+		}
+		if (!TestRemovalCodec(&error)) {
 			return fail(error);
 		}
 		if (!TestLoopback(&error)) {
