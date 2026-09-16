@@ -106,6 +106,7 @@ namespace RTE {
 		bool transferStarted = false;
 		uint64_t catchUpTicks = 0;        //!< Ticks it reported replaying, for the catch-up rate.
 		uint64_t catchUpMs = 0;
+		uint64_t lastCatchUpReportMs = 0; //!< Host clock of the last catch-up report, for elapsed.
 		std::string refusal;              //!< Why the bootstrap failed; empty while it is alive.
 	};
 
@@ -127,7 +128,8 @@ namespace RTE {
 		uint64_t Bytes() const { return m_Bytes; }
 		uint64_t Evicted() const { return m_Evicted; }
 		/// Copies records from `from` onward, bounded by both counts, for one bulk pump.
-		size_t CopyFrom(uint64_t from, size_t maxRecords, uint64_t maxBytes, std::vector<std::vector<uint8_t>>& out) const;
+		/// lastCopied is the last record.frame that entered out, or 0 if none did.
+		size_t CopyFrom(uint64_t from, size_t maxRecords, uint64_t maxBytes, std::vector<std::vector<uint8_t>>& out, uint64_t* lastCopied = nullptr) const;
 		/// Forgets everything at or before the frame every live bootstrap has applied.
 		void DropThrough(uint64_t frame);
 		void Clear();
@@ -234,6 +236,12 @@ namespace RTE {
 	inline constexpr uint32_t c_NetWorldActivationReannounceLimit = 1;
 	/// World-join plane schema on the offer, the transition and the membership report.
 	inline constexpr uint16_t c_NetWorldJoinSchema = 1;
+	/// Lobby peer id for an overflow spectator: not a lockstep member seat.
+	inline constexpr uint8_t c_WorldSpectatorLobbyPeer = 32;
+
+	inline uint8_t WorldJoinLobbyPeer(const NetWorldJoinSession& session) {
+		return session.assignedPeerId != 0 ? session.assignedPeerId : c_WorldSpectatorLobbyPeer;
+	}
 	/// WJIM: the joiner-only checkpoint envelope streamed through the lobby StateChunk pump.
 	inline constexpr uint32_t c_NetWorldImageMagic = 0x4D494A57U;
 	inline constexpr uint8_t c_NetWorldImageVersion = 1;
@@ -290,8 +298,11 @@ namespace RTE {
 		/// @param nowFrame The world's committed frame.
 		/// @param outActivationTick The announced activation tick when this call scheduled one.
 		bool NoteCatchUpProgress(NetPeerId connection, uint64_t appliedThrough, uint64_t ticksReplayed, uint64_t elapsedMs, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr);
+		void NoteCatchUpClock(NetPeerId connection, uint64_t nowMs);
 		/// The bootstrap whose activation tick has arrived and whose joiner has applied through E-1.
 		const NetWorldJoinSession* DueActivation(uint64_t nowFrame) const;
+		/// Applied through E-1 after the E-1 pump, so Admit uses max(E, nextFrame + 1).
+		const NetWorldJoinSession* LateActivation(uint64_t nowFrame) const;
 		/// A catching-up joiner that missed E and still sits behind it.
 		const NetWorldJoinSession* SlowActivation(uint64_t nowFrame) const;
 		/// Announces E for an overflow spectator (no Controller, no Admit).
