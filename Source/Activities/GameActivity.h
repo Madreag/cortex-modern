@@ -799,6 +799,8 @@ namespace RTE {
 		void DriveScriptedSetupEditor(int player);
 		/// Runs a queued actor-select onto a craft passenger for a presented seat after the match starts.
 		void DriveScriptedActorSelect(int player);
+		/// Draw-only ActorSelect/Go-To pie highlight for a local seat.
+		void ApplyCursorHighlightDraw(int player);
 		/// Builds every seat's committed brain, in seat order, from a unique-id counter pinned to the same
 		/// value on every peer. A local editor's own preview objects take ids off that counter on one peer
 		/// alone, so the shared brains are made only after it is put back in step.

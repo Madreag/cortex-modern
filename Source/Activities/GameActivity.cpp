@@ -1385,6 +1385,46 @@ void GameActivity::DriveScriptedSetupEditor(int player) {
 	}
 }
 
+void GameActivity::ApplyCursorHighlightDraw(int player) {
+	if (!IsSeatActive(player) || !IsLocalHumanSeat(player)) {
+		return;
+	}
+	Actor* highlighted = nullptr;
+	int radius = 0;
+	bool wobble = false;
+	if (m_ViewState[player] == ViewState::ActorSelect) {
+		Vector markedDistance;
+		highlighted = g_MovableMan.GetClosestTeamActor(m_Team[player], player, m_ActorCursor[player], g_SceneMan.GetSceneWidth(), markedDistance, true);
+		if (highlighted) {
+			const int quarterFrameBuffer = g_FrameMan.GetPlayerFrameBufferWidth(player) / 4;
+			if (markedDistance.MagnitudeIsGreaterThan(static_cast<float>(quarterFrameBuffer))) {
+				wobble = true;
+			} else {
+				radius = 30;
+			}
+		}
+	} else if (m_ViewState[player] == ViewState::AIGoToPoint) {
+		Vector distance;
+		highlighted = g_MovableMan.GetClosestActor(m_ActorCursor[player], 40, distance, m_ControlledActor[player]);
+		if (highlighted) {
+			radius = 15;
+		}
+	}
+	if (m_pLastMarkedActor[player] && !g_MovableMan.ValidMO(m_pLastMarkedActor[player])) {
+		m_pLastMarkedActor[player] = nullptr;
+	}
+	if (m_pLastMarkedActor[player] && m_pLastMarkedActor[player] != highlighted && m_pLastMarkedActor[player]->GetPieMenu()) {
+		m_pLastMarkedActor[player]->GetPieMenu()->ClearHighlightDraw();
+	}
+	if (highlighted && highlighted->GetPieMenu()) {
+		if (wobble) {
+			highlighted->GetPieMenu()->SetHighlightWobble();
+		} else if (radius > 0) {
+			highlighted->GetPieMenu()->SetHighlightDrawRadius(radius);
+		}
+	}
+}
+
 void GameActivity::DriveScriptedActorSelect(int player) {
 	if (s_ScriptedEditorGestures[player].empty() || s_ScriptedEditorGestures[player].front().kind != "actor_select") {
 		return;
@@ -2049,13 +2089,6 @@ void GameActivity::Update() {
 				if (localPieAnimations && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
 					m_ControlledActor[player]->GetPieMenu()->DoDisableAnimation();
 				}
-			} else if (localPieAnimations && pMarkedActor && pMarkedActor->GetPieMenu()) {
-				int quarterFrameBuffer = g_FrameMan.GetPlayerFrameBufferWidth(player) / 4;
-				if (markedDistance.MagnitudeIsGreaterThan(static_cast<float>(quarterFrameBuffer))) {
-					pMarkedActor->GetPieMenu()->Wobble();
-				} else {
-					pMarkedActor->GetPieMenu()->FreezeAtRadius(30);
-				}
 			}
 
 			// Set the view to the cursor pos
@@ -2087,11 +2120,8 @@ void GameActivity::Update() {
 			Actor* pTargetActor = 0;
 			Vector distance;
 			if (pTargetActor = g_MovableMan.GetClosestActor(m_ActorCursor[player], 40, distance, m_ControlledActor[player]); pTargetActor && pTargetActor->GetPieMenu()) {
-				if (localPieAnimations) {
-					if (m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
-						m_pLastMarkedActor[player]->GetPieMenu()->SetAnimationModeToNormal();
-					}
-					pTargetActor->GetPieMenu()->FreezeAtRadius(15);
+				if (localPieAnimations && m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
+					m_pLastMarkedActor[player]->GetPieMenu()->SetAnimationModeToNormal();
 				}
 				m_pLastMarkedActor[player] = pTargetActor;
 			} else if (localPieAnimations && m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
@@ -2845,6 +2875,10 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 		if (m_pBuyGUI[PoS] && m_pBuyGUI[PoS]->IsVisible()) {
 			m_pBuyGUI[PoS]->Draw(pTargetBitmap);
 		}
+	}
+
+	if (m_ViewState[PoS] == ViewState::ActorSelect || m_ViewState[PoS] == ViewState::AIGoToPoint) {
+		ApplyCursorHighlightDraw(PoS);
 	}
 
 	// Draw actor picking crosshairs if applicable
