@@ -1,6 +1,7 @@
 #include "NetWorldJoin.h"
 
 #include "NetIdentity.h"
+#include "ScenarioRunner.h"
 #include "System.h"
 
 #include "nlohmann/json.hpp"
@@ -470,6 +471,10 @@ namespace RTE {
 		return true;
 	}
 
+	NetLobbyStateChunk MakeJoinerCatchUpReport() {
+		return MakeWorldJoinReport(c_NetWorldReportCatchUp, ScenarioRunner::WorldCatchUpAppliedThrough());
+	}
+
 	NetLobbyStateChunk MakeWorldJoinReport(uint8_t kind, uint64_t value) {
 		NetLobbyStateChunk chunk;
 		chunk.transferId = c_NetWorldReportTransferId;
@@ -646,6 +651,7 @@ namespace RTE {
 	}
 
 	void NetWorldMetrics::NotePurity(uint64_t tick, uint64_t withCapture, uint64_t withoutCapture) {
+		// Unhooked: the capture path does not invent a with/without pair.
 		++m_PurityProbes;
 		if (withCapture != withoutCapture) {
 			++m_PurityMismatches;
@@ -860,6 +866,22 @@ namespace RTE {
 		return true;
 	}
 
+	uint8_t NetWorldJoinHost::AllocateSpectatorLobbyPeer() const {
+		bool used[c_WorldSpectatorLobbyCap] = {};
+		for (const NetWorldJoinSession& session: m_Sessions) {
+			if (session.spectatorLobbyPeer >= c_WorldSpectatorLobbyPeerFirst &&
+			    session.spectatorLobbyPeer <= c_WorldSpectatorLobbyPeerLast) {
+				used[session.spectatorLobbyPeer - c_WorldSpectatorLobbyPeerFirst] = true;
+			}
+		}
+		for (size_t i = 0; i < c_WorldSpectatorLobbyCap; ++i) {
+			if (!used[i]) {
+				return static_cast<uint8_t>(c_WorldSpectatorLobbyPeerFirst + i);
+			}
+		}
+		return 0;
+	}
+
 	NetWorldJoinSession* NetWorldJoinHost::Find(NetPeerId connection) {
 		const auto found = std::find_if(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& session) { return session.connection == connection; });
 		return found == m_Sessions.end() ? nullptr : &*found;
@@ -898,6 +920,7 @@ namespace RTE {
 		}
 		if (slot == nullptr) {
 			session.spectator = true;
+			session.spectatorLobbyPeer = AllocateSpectatorLobbyPeer();
 			session.phase = NetWorldJoinPhase::SnapshotTransfer;
 			m_Sessions.push_back(std::move(session));
 			return true;
@@ -946,7 +969,7 @@ namespace RTE {
 		session->transferStarted = true;
 		session->transferId = transferId;
 		session->totalChunks = totalChunks;
-		session->deliveredThrough = deliveredThrough;
+		session->deliveredThrough = std::max(session->deliveredThrough, deliveredThrough);
 		return true;
 	}
 

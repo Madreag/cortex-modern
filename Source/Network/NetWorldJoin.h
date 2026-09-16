@@ -107,6 +107,7 @@ namespace RTE {
 		uint64_t catchUpTicks = 0;        //!< Ticks it reported replaying, for the catch-up rate.
 		uint64_t catchUpMs = 0;
 		uint64_t lastCatchUpReportMs = 0; //!< Host clock of the last catch-up report, for elapsed.
+		uint8_t spectatorLobbyPeer = 0;   //!< Non-member lobby id in [32, 47]; 0 if none remains.
 		std::string refusal;              //!< Why the bootstrap failed; empty while it is alive.
 	};
 
@@ -159,8 +160,8 @@ namespace RTE {
 		void NoteCapture(double stallMs, uint64_t bytes);
 		void NoteCatchUp(uint64_t ticks, uint64_t elapsedMs);
 		void NoteTransfer(uint64_t bytes);
-		/// A purity probe: the world hash at the capture tick, compared with the same tick's hash on a
-		/// run that captured nothing. Equal hashes are the only evidence the capture changed nothing.
+		/// Unhooked: no production caller supplies a with/without-capture pair. The completion pass
+		/// reads this only after that pair is wired; do not invent one on the capture path.
 		void NotePurity(uint64_t tick, uint64_t withCapture, uint64_t withoutCapture);
 
 		double CapturePercentileMs(double percentile) const;
@@ -236,12 +237,21 @@ namespace RTE {
 	inline constexpr uint32_t c_NetWorldActivationReannounceLimit = 1;
 	/// World-join plane schema on the offer, the transition and the membership report.
 	inline constexpr uint16_t c_NetWorldJoinSchema = 1;
-	/// Lobby peer id for an overflow spectator: not a lockstep member seat.
-	inline constexpr uint8_t c_WorldSpectatorLobbyPeer = 32;
+	/// Overflow spectators bind lobby ids in [first, last], one per connection, above member seats.
+	inline constexpr uint8_t c_WorldSpectatorLobbyPeerFirst = 32;
+	inline constexpr uint8_t c_WorldSpectatorLobbyPeerLast = 47;
+	inline constexpr uint8_t c_WorldSpectatorLobbyPeer = c_WorldSpectatorLobbyPeerFirst;
+	inline constexpr size_t c_WorldSpectatorLobbyCap = static_cast<size_t>(c_WorldSpectatorLobbyPeerLast - c_WorldSpectatorLobbyPeerFirst + 1);
 
 	inline uint8_t WorldJoinLobbyPeer(const NetWorldJoinSession& session) {
-		return session.assignedPeerId != 0 ? session.assignedPeerId : c_WorldSpectatorLobbyPeer;
+		if (session.assignedPeerId != 0) {
+			return session.assignedPeerId;
+		}
+		return session.spectatorLobbyPeer;
 	}
+
+	/// The catch-up report DriveWorldJoinClient sends: Take's appliedThrough, never the host nowFrame.
+	NetLobbyStateChunk MakeJoinerCatchUpReport();
 	/// WJIM: the joiner-only checkpoint envelope streamed through the lobby StateChunk pump.
 	inline constexpr uint32_t c_NetWorldImageMagic = 0x4D494A57U;
 	inline constexpr uint8_t c_NetWorldImageVersion = 1;
@@ -334,6 +344,7 @@ namespace RTE {
 
 	private:
 		NetWorldJoinSession* Find(NetPeerId connection);
+		uint8_t AllocateSpectatorLobbyPeer() const;
 		std::string m_IdentityPath;
 
 		NetWorldIdentity m_Identity;
