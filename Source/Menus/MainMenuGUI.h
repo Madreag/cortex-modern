@@ -256,7 +256,7 @@ namespace RTE {
 		GUIComboBox* m_MultiplayerHostActivityCombo = nullptr; //!< The host's pick-list of lockstep-runnable activities.
 		GUIComboBox* m_MultiplayerHostSceneCombo = nullptr; //!< Compatible scenes for the picked activity.
 		GUILabel* m_MultiplayerHostInfoLabel;
-		// (preset, defining module) for each scripted activity a lockstep match can run; the module is
+		// (preset, defining module) for each GameActivity a lockstep match can run; the module is
 		// carried so a same-named preset in another module cannot swap in silently.
 		std::vector<std::pair<std::string, std::string>> m_MultiplayerHostActivities;
 		size_t m_MultiplayerHostActivityIndex = 0;
