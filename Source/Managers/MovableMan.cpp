@@ -723,7 +723,10 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				continue;
 			}
 			Actor* seated = nullptr;
-			if (!transition->className.empty()) {
+			if (transition->kind == NetGameWorldTransition::Activate) {
+				seated = g_MovableMan.GetFirstBrainActor(transition->team);
+			}
+			if (!seated && !transition->className.empty()) {
 				if (const Entity* preset = g_PresetMan.GetEntityPreset(transition->className, transition->preset, transition->module)) {
 					Entity* clone = preset->Clone();
 					if (Actor* actor = dynamic_cast<Actor*>(clone)) {
@@ -5134,6 +5137,27 @@ void MovableMan::UpdateControllers() {
 	if (!lockstepActive) {
 		CommitOfflineValueWrites();
 		ApplyOfflineGameCommands(simTick);
+	}
+
+	if (ScenarioRunner::WorldCatchUpActive()) {
+		std::string error;
+		NetLockstepReadyFrame readyFrame;
+		if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, readyFrame, &error)) {
+			return;
+		}
+		std::unordered_set<int64_t> applied;
+		if (!ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.localFrames, true, applied, error) ||
+		    !ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.remoteFrames, false, applied, error)) {
+			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " world catch-up apply: " + error);
+			return;
+		}
+		NeutralizeUnframedLockstepActors(m_Actors, applied);
+		ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, false);
+		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
+		CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
+		ApplyLockstepGameCommands(readyFrame);
+		ReconcileLockstepControlBindings();
+		return;
 	}
 
 	if (lockstepActive) {

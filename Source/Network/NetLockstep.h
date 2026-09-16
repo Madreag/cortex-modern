@@ -587,6 +587,7 @@ namespace RTE {
 		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
 		/// The local frames already queued for a future frame; the local-actor preview runs them early.
 		bool PeekLocalFrames(uint64_t frame, std::vector<ControllerFrame>& outFrames) const;
+		bool PeekLocalInput(uint64_t frame, NetLockstepFrame& outFrame) const { return FindLocalInput(frame, outFrame); }
 
 		NetLockstepState GetState() const { return m_State; }
 		bool IsRunning() const { return m_State == NetLockstepState::Running; }
