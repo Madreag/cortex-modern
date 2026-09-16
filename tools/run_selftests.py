@@ -40,6 +40,14 @@ SUITE_PASS = re.compile(r"^\[(?P<tag>[^\]]+)\] PASS\s*$", re.M)
 SUITE_FAIL = re.compile(r"^\[(?P<tag>[^\]]+)\] FAIL", re.M)
 
 
+def engine_executable(repo: Path) -> Path:
+    if sys.platform == "win32":
+        return Path(repo) / "Cortex Command.exe"
+    from posix_test_runner import resolve_binary  # noqa: PLC0415
+
+    return resolve_binary(repo)
+
+
 def score_selftest(stdout: str, exit_code, timed_out=False, name=None) -> dict:
     """PASS only with exit 0, no timeout, no FATAL, at least one [tag] PASS, no [tag] FAIL, last suite token PASS."""
     fatal = FATAL.findall(stdout or "")
@@ -119,7 +127,7 @@ def main():
 
     out = options.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    exe = options.repo / "Cortex Command.exe"
+    exe = engine_executable(options.repo)
     with exe.open("rb") as stream:
         exe_hash = hashlib.file_digest(stream, "sha256").hexdigest()
     results = {}
