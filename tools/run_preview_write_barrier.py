@@ -36,7 +36,7 @@ ENVIRONMENT = {'CCCP_HEADLESS': '1', 'CC_PREVIEW_GLOBALS_FENCE': '1',
 STATS = re.compile(r'\[localpred\] previews=(\d+) actor_ticks=\d+ ms_total=([\d.]+) avg_ms=([\d.]+)')
 NATIVE = re.compile(r'\[preview-write-barrier\] (.*)')
 FAIL = re.compile(r'^\[script-graph-selftest\] FAIL(?: (.*))?$', re.M)
-OBSERVE = re.compile(r'^\[(?:pie-observe|pie-write-observe|pie-write|preview-module-fixture|preview-compat)[^\]]*\].*$', re.M)
+OBSERVE = re.compile(r'^\[(?:pie-observe|pie-write-observe|pie-write|preview-module-fixture|preview-compat|preview-modcompat-fixture)[^\]]*\].*$', re.M)
 DRIVER_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
@@ -119,7 +119,7 @@ def gate():
 def fixture_hashes():
     files = [path for folder in LEGACY_FIXTURES for path in sorted((REPO / folder).rglob('*')) if path.is_file()]
     files += [FIXTURES / (name + suffix) for name in ('pickup_fire', 'ak47_fire') for suffix in ('.txt', '.ccreplay')]
-    files += [REPO / 'tools/fixtures' / name for name in ('preview_write_barrier.lua', 'preview_barrier_240.lua', 'preview_barrier_240.txt')]
+    files += [REPO / 'tools/fixtures' / name for name in ('preview_write_barrier.lua', 'preview_barrier_240.lua', 'preview_barrier_240.txt', 'preview_window_modcompat.lua')]
     return {str(path).replace('\\', '/'): sha(path) for path in files}
 
 
@@ -202,13 +202,15 @@ def install(run, files, activity=None):
     (folder / 'Index.ini').write_text(index, encoding='utf-8')
 
 
-def run_case(name, flags, files=None, activity=None, quiet=False):
+def run_case(name, flags, files=None, activity=None, quiet=False, extra_env=None):
     gate()
     from run_sim_test import make_run
     out = ROOT / name
     identity = sha(REPO / 'Cortex Command.exe')
     args = [*map(str, flags), '-out', str(out / 'trace.json')]
     env = dict(ENVIRONMENT)
+    if extra_env:
+        env.update(extra_env)
     run = make_run(REPO, args, out, timeout=900, env=env)
     if files:
         install(run, files, activity)
@@ -281,6 +283,9 @@ def compatibility(label):
                  '-max-ticks', 600, '-num-lua-states', 4, '-tick-hashes'])
     run_case(f'{label}/module', [*replay_flags(), '-test-script', 'UserScenes.rte/PreviewModuleCompat.lua'],
              {'PreviewModuleCompat.lua': REPO / 'Data/Tests.rte/PreviewModuleCompat.lua'})
+    run_case(f'{label}/modcompat', ['-scenario', 'LuaBaseline', '-seed', 42, '-max-ticks', 8,
+             '-num-lua-states', 4, '-test-script', 'UserScenes.rte/preview_window_modcompat.lua'],
+             {'preview_window_modcompat.lua': REPO / 'tools/fixtures/preview_window_modcompat.lua'})
     pie = import_driver('tools/pie_lockstep/run_arm.py')
     pie.LANE_PORTS = ((PORT_LO, PORT_HI),)
     for case in ('next', 'prev', 'goto', 'actor_cancel', 'delivery_cancel'):
@@ -377,6 +382,11 @@ def score():
                                  set(reference['graph_failures']) <= {'', 'preview_deep_global_writes_undone'})
     checks['fresh_red'] = red['transport_ok'] and red['exit_code'] == 1 and 'preview_deep_global_writes_undone' in red['graph_failures']
     checks['green_graph'] = green['transport_ok'] and green['exit_code'] == 0 and not green['graph_failures']
+    checks['green_depth_writes_undone'] = any('PASS preview_depth_writes_undone' in line for line in green['verdicts'])
+    checks['green_window_modcompat'] = any('PASS preview_window_modcompat' in line for line in green['verdicts'])
+    fence_off = read_row('green/graph-fence-off')
+    checks['fresh_depth_red'] = (fence_off['transport_ok'] and fence_off['exit_code'] == 1 and
+                                 'preview_depth_writes_undone' in fence_off['graph_failures'])
     checks['barrier_rounds'] = sum('PASS preview_barrier_exact_rollback ' in line for line in green['verdicts']) == 10
     suites = json.loads((ROOT / 'green/selftests/result.json').read_text())
     checks['selftests_13'] = assess_selftests(suites, identities['green'])
@@ -400,6 +410,10 @@ def score():
         checks['fixture_' + scenario] = runs_ok and rows[0]['passed'] and rows[0] == rows[1] == rows[2]
     rows = [read_row(label + '/module') for label in ('reference', 'red', 'green')]
     checks['fixture_module'] = all(r['transport_ok'] and r['exit_code'] == 0 for r in rows) and bool(rows[0]['observations']) and rows[0]['observations'] == rows[1]['observations'] == rows[2]['observations']
+    modcompat = [read_row(label + '/modcompat') for label in ('reference', 'red', 'green')]
+    checks['fixture_modcompat'] = (all(r['transport_ok'] and r['exit_code'] == 0 for r in modcompat) and
+                                   bool(modcompat[0]['observations']) and
+                                   modcompat[0]['observations'] == modcompat[1]['observations'] == modcompat[2]['observations'])
     held = [[line for line in read_row(label + '/letters')['verdicts'] if 'fixture_reference_semantics:' in line]
             for label in ('reference', 'red', 'green')]
     checks['fixture_held_references'] = bool(held[0]) and held[0] == held[1] == held[2] and all('[lpinv] PASS ' in line for line in held[0])
@@ -462,6 +476,8 @@ def phase_b(authorized):
             select_binary(label, binary)
             if label == 'green':
                 run_case('green/graph', ['-script-graph-selftest', '-num-lua-states', 4])
+                run_case('green/graph-fence-off', ['-script-graph-selftest', '-num-lua-states', 4],
+                         extra_env={'CC_PREVIEW_GLOBALS_FENCE': '0'})
                 gate()
                 command = [sys.executable, str(REPO / 'tools/run_selftests.py'), '--repo', str(REPO),
                            '--out', str(ROOT / 'green/selftests'), '--timeout', '300']

@@ -55,7 +55,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <future>
 #include <map>
 #include <memory>
@@ -6544,24 +6546,72 @@ _PrimitiveQueueCapture = nil
 		// Seven forces an array part of eight over a border of five, so the C library writes land in slack slots.
 		const int slackSetup = runKeep("_PreviewSlack = {}; for i = 1, 5 do _PreviewSlack[i] = i end; _PreviewSlack[7] = 7; _PreviewSlack[7] = nil", previewDepthError);
 		// What a script may observe cannot change with a window open, so the same probe runs inside and out.
-		static const std::string observableSemantics = R"lua(
-local seq = {}
-for k, v in pairs(_PreviewDepth) do seq[#seq+1] = tostring(k) end
-table.sort(seq)
-assert(table.concat(seq, ',') == 'd1,d3,d8', 'pairs content changed under a window')
-assert(#_PreviewDepth.d1 == 0 and #{1, 2, 3} == 3, 'length operator changed under a window')
-local proxy = setmetatable({}, {__index = {via = 1}})
-assert(proxy.via == 1 and rawget(proxy, 'via') == nil, 'rawget bypass changed under a window')
-assert(rawset(proxy, 'via', 2) == proxy and proxy.via == 2 and rawget(proxy, 'via') == 2, 'rawset return or slot changed under a window')
-assert(getmetatable(proxy) ~= nil and getmetatable(_PreviewDepth) == nil, 'getmetatable identity changed under a window')
-local only = next(_PreviewDepth.d1)
-assert(only == 'v' and next(_PreviewDepth.d1, only) == nil, 'next traversal changed under a window')
-assert(rawequal(_PreviewDepth.d1, _PreviewDepth.d1) and not rawequal(_PreviewDepth.d1, _PreviewDepth.d3), 'rawequal identity changed under a window')
-local a, b = tostring(_PreviewDepth.d1), tostring(_PreviewDepth.d1)
-assert(a == b and type(_PreviewDepth.d3.a) == 'table', 'identity or type changed under a window')
-collectgarbage('collect')
-assert(_PreviewDepth.d8.a.b.c.d.e.f.g.v == 1, 'GC collected a window-armed table')
-)lua";
+		const std::string observableSemantics = [] {
+			const std::string relative = "tools/fixtures/preview_window_modcompat.lua";
+			const std::string paths[] = {System::GetWorkingDirectory() + relative, relative, "../" + relative};
+			for (const std::string& path: paths) {
+				std::ifstream in(path, std::ios::binary);
+				if (!in) {
+					continue;
+				}
+				std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+				if (!text.empty()) {
+					return text;
+				}
+			}
+			return std::string(R"lua(
+-- Same body the script-graph selftest runs on window-armed _PreviewDepth / _PreviewSlack.
+local function keys(t)
+	local seq = {}
+	for k in pairs(t) do
+		seq[#seq + 1] = tostring(k)
+	end
+	table.sort(seq)
+	return table.concat(seq, ',')
+end
+
+local function ensure()
+	if type(_PreviewDepth) ~= 'table' then
+		_PreviewDepth = { d1 = { v = 1 }, d3 = { a = { b = { v = 1, gone = 1 } } }, d8 = { a = { b = { c = { d = { e = { f = { g = { v = 1, gone = 1 } } } } } } } } }
+	end
+	if type(_PreviewSlack) ~= 'table' then
+		_PreviewSlack = {}
+		for i = 1, 5 do
+			_PreviewSlack[i] = i
+		end
+		_PreviewSlack[7] = 7
+		_PreviewSlack[7] = nil
+	end
+end
+
+local function probe()
+	ensure()
+	if _PreviewModCompatSnap == nil then
+		_PreviewModCompatSnap = {
+			depth_keys = keys(_PreviewDepth),
+			slack_len = #_PreviewSlack,
+			depth_meta = getmetatable(_PreviewDepth),
+			slack_meta = getmetatable(_PreviewSlack),
+		}
+	end
+	local snap = _PreviewModCompatSnap
+	assert(keys(_PreviewDepth) == snap.depth_keys, 'pairs content changed under a window')
+	assert(#_PreviewSlack == snap.slack_len, 'length operator changed under a window')
+	assert(getmetatable(_PreviewDepth) == snap.depth_meta, 'getmetatable identity changed under a window')
+	assert(getmetatable(_PreviewSlack) == snap.slack_meta, 'getmetatable identity changed under a window')
+	local prior = rawget(_PreviewSlack, 1)
+	assert(rawset(_PreviewSlack, 1, prior) == _PreviewSlack and rawget(_PreviewSlack, 1) == prior, 'rawset return or slot changed under a window')
+	print('[preview-modcompat-fixture] PASS pairs length rawset getmetatable')
+end
+
+probe()
+
+function Create(self)
+	probe()
+end
+)lua");
+		}();
+		const int modCompatSnap = runKeep(observableSemantics, previewModcompatError);
 		LuaMan::CapturePreviewSelfCopies({}, false);
 		int modCompatInside = -1;
 		int depthWrite = -1;
@@ -6581,8 +6631,8 @@ assert(_PreviewDepth.d8.a.b.c.d.e.f.g.v == 1, 'GC collected a window-armed table
 		const int depthCheck = runKeep("assert(_PreviewDepth.d1.v == 1, 'depth 1 write leaked'); assert(_PreviewDepth.d3.a.b.v == 1 and _PreviewDepth.d3.a.b.gone == 1, 'depth 3 write or removal leaked'); assert(_PreviewDepth.d8.a.b.c.d.e.f.g.v == 1 and _PreviewDepth.d8.a.b.c.d.e.f.g.gone == 1, 'depth 8 write or removal leaked'); assert(_PreviewDepth.born == nil, 'window-born deep chain leaked'); assert(#_PreviewSlack == 5 and _PreviewSlack[6] == nil, 'table.insert leaked'); for i = 1, 5 do assert(_PreviewSlack[i] == i, 'table.sort leaked') end", previewDepthError);
 		const int modCompatAfter = runKeep(observableSemantics, previewModcompatError);
 		previewDepthWritesUndone = depthSetup == 0 && slackSetup == 0 && depthWrite == 0 && slackWrite == 0 && depthLanded == 0 && slackLanded == 0 && depthCheck == 0;
-		previewWindowModCompat = depthSetup == 0 && slackSetup == 0 && modCompatInside == 0 && modCompatAfter == 0;
-		RunScriptString("_PreviewDepth = nil; _PreviewSlack = nil", false);
+		previewWindowModCompat = depthSetup == 0 && slackSetup == 0 && modCompatSnap == 0 && modCompatInside == 0 && modCompatAfter == 0;
+		RunScriptString("_PreviewDepth = nil; _PreviewSlack = nil; _PreviewModCompatSnap = nil", false);
 	}
 	std::cout << "[script-graph-selftest] " << (previewDepthWritesUndone ? "PASS" : "FAIL") << " preview_depth_writes_undone";
 	if (!previewDepthWritesUndone) {
