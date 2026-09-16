@@ -441,7 +441,7 @@ namespace RTE {
 
 		/// Rebuilds the host activity picker's choices from the loaded presets, keeping the current pick.
 		void RefreshMultiplayerHostActivities();
-		/// Sizes the activity combo to its longest row plus the arrow, clipped to the panel's right pad.
+		/// Sizes the activity combo to its longest row plus the list pad and scrollbar, clipped to the panel's right pad.
 		void FitHostActivityCombo();
 		/// Writes the picked activity's preset and module onto the setup screen's own display.
 		void ApplyMultiplayerHostActivity();
