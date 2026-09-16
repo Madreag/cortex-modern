@@ -2678,6 +2678,18 @@ void GameActivity::RenderUpdate() {
 	Activity::RenderUpdate();
 }
 
+void GameActivity::PrepareDrawGUI(int whichScreen) {
+	const int player = PlayerOfScreen(whichScreen);
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return;
+	}
+	if (m_ViewState[player] == ViewState::ActorSelect || m_ViewState[player] == ViewState::AIGoToPoint) {
+		ApplyCursorHighlightDraw(player);
+	} else {
+		ClearCursorHighlightDraw(player);
+	}
+}
+
 void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int which) {
 	if (which < 0 || which >= c_MaxScreenCount)
 		return;
@@ -2900,6 +2912,12 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 		ApplyCursorHighlightDraw(PoS);
 	} else {
 		ClearCursorHighlightDraw(PoS);
+	}
+	if (m_pLastHighlightDrawActor[PoS] && g_MovableMan.ValidMO(m_pLastHighlightDrawActor[PoS])) {
+		if (PieMenu* highlightedPie = m_pLastHighlightDrawActor[PoS]->GetPieMenu(); highlightedPie && highlightedPie->HasHighlightDraw()) {
+			highlightedPie->RenderUpdate();
+			highlightedPie->Draw(pTargetBitmap, targetPos);
+		}
 	}
 
 	// Draw actor picking crosshairs if applicable

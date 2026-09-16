@@ -460,6 +460,7 @@ namespace RTE {
 		/// @param pTargetBitmap A pointer to a screen-sized BITMAP to draw on.
 		/// @param targetPos The absolute position of the target bitmap's upper left corner in the scene. (default: Vector())
 		/// @param which Which screen's GUI to draw onto the bitmap. (default: 0)
+		void PrepareDrawGUI(int whichScreen = 0) override;
 		void DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos = Vector(), int which = 0) override;
 
 		/// Draws this ActivityMan's current graphical representation to a
