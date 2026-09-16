@@ -181,6 +181,9 @@ namespace RTE {
 		/// @return A copy of the passed in string, split into multiple lines as needed.
 		std::string SplitStringToFitWidth(const std::string& stringToSplit, int widthLimit, bool useSmallFont);
 
+		/// Word-aware wrap cases for -text-wrap-selftest.
+		bool RunTextWrapSelfTest();
+
 		/// Gets the message to be displayed on top of each player's screen.
 		/// @param whichScreen Which player screen to get message from.
 		/// @return Current message shown to player.

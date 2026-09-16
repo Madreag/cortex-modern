@@ -59,6 +59,8 @@ namespace RTE {
 			bool        selftestStall = false; // -net-match-e2e-stall: this peer stops producing frames for 8s at tick 300 (stall-grace test).
 			bool        selftestJoinRejection = false; // -net-match-e2e-join-rejection: stop the harness after recording a refused join.
 			bool        scriptGraphSelfTest = false; // -script-graph-selftest: run the script graph's contract tests in the master state and exit.
+			bool        renderWindowScriptsSelfTest = false; // -render-window-scripts-selftest: freeze contract of the render window.
+			bool        textWrapSelfTest = false; // -text-wrap-selftest: word-aware wrap cases.
 			bool        freeRunSim = false; // -free-run-sim: a lockstep match runs its ticks as fast as the frames arrive, one per loop iteration, drawing nothing.
 			bool        selftestRematch = false; // -net-match-e2e-rematch: when match 1 ends, return to the lobby and run a second match.
 			bool        selftestLeave = false; // -net-match-e2e-leave: this peer quits to the menu at tick 300 like a pause-menu leave.

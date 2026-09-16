@@ -48,6 +48,33 @@ class TestSymbolizeAbort(unittest.TestCase):
             for name, info in chosen:
                 self.assertIn(info["name"], proc.stdout)
 
+    def test_fatal_exe_offset_names_main(self):
+        self.assertTrue(EXE.is_file(), f"missing tip exe {EXE}")
+        self.assertTrue(TOOL.is_file(), f"missing {TOOL}")
+        import symbolize_abort
+
+        info = symbolize_abort.lookup_name(str(EXE), "main")
+        self.assertIsNotNone(info, "SymFromName found no main")
+        abort_text = (
+            f"FATAL: unhandled exception 0xC0000005 at 0x7FF700001234 "
+            f"(exe+0x{info['offset']:X})\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            abort = Path(tmp) / "AbortCode.txt"
+            abort.write_text(abort_text, encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(TOOL), "--exe", str(EXE), "--abort", str(abort)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            fatal_rows = [line for line in proc.stdout.splitlines() if line.startswith("FATAL")]
+            self.assertTrue(
+                any("main" in row for row in fatal_rows),
+                proc.stdout + proc.stderr,
+            )
+
 
 if __name__ == "__main__":
     os.environ.setdefault("CCCP_HEADLESS", "1")
