@@ -424,8 +424,8 @@ namespace RTE {
 		manifest.deterministicConfig.numLuaStatesOverride = g_SettingsMan.GetNumberOfLuaStatesOverride();
 		manifest.deterministicConfig.selectedModule = g_PresetMan.GetSingleModuleToLoad();
 		manifest.deterministicConfig.scenarioTestModuleLoaded = g_PresetMan.GetModuleID("Tests.rte") >= 0;
-		manifest.deterministicConfig.lockstepCodecVersion = NetLockstepCodec::c_Version;
-		manifest.deterministicConfig.matchConfigVersion = NetMatchConfigUtil::c_Version;
+		manifest.deterministicConfig.lockstepCodecVersion = options.lockstepCodecVersion;
+		manifest.deterministicConfig.matchConfigVersion = options.matchConfigVersion;
 		manifest.deterministicConfig.lobbyProtocolVersion = NetLobbyProtocol::c_Version;
 		manifest.deterministicConfig.enabledGlobalScripts = g_SettingsMan.GetEnabledGlobalScriptsCSV();
 
