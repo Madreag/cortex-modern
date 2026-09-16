@@ -3113,6 +3113,10 @@ static std::string ResyncSaveName() {
 		if (request.standardRules) {
 			static_cast<NetMatchStandardRules&>(config) = *request.standardRules;
 		}
+		// A named class seats CreateConfiguredActivity; empty keeps MakeDefault's GAScripted.
+		if (!request.activityType.empty()) {
+			config.activityType = request.activityType;
+		}
 		if (!request.sceneName.empty()) {
 			config.sceneName = request.sceneName;
 			if (!request.sceneModule.empty()) {
@@ -3222,7 +3226,7 @@ static std::string ResyncSaveName() {
 		}
 	}
 
-	std::vector<NetHostActivityChoice> NetMatchService::ListHostActivities() {
+	std::vector<NetHostActivityChoice> NetMatchService::ListLoadedGameActivities() {
 		const std::vector<Scene*> scenes = CollectHostScenes();
 		std::list<Entity*> presets;
 		g_PresetMan.GetAllOfType(presets, "Activity");
@@ -3235,7 +3239,16 @@ static std::string ResyncSaveName() {
 			NetHostActivityChoice row;
 			row.preset = activity->GetPresetName();
 			row.module = g_PresetMan.GetDataModuleName(activity->GetModuleID());
+			row.activityType = activity->GetClassName();
 			row.scenes = ScenesForActivity(activity, scenes);
+			out.push_back(std::move(row));
+		}
+		return out;
+	}
+
+	std::vector<NetHostActivityChoice> NetMatchService::ListHostActivities() {
+		std::vector<NetHostActivityChoice> out;
+		for (NetHostActivityChoice& row: ListLoadedGameActivities()) {
 			if (!row.scenes.empty()) {
 				out.push_back(std::move(row));
 			}

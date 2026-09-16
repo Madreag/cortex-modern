@@ -1121,6 +1121,12 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		// The host's picker names both fields, so the lobby never resolves a bare preset name.
 		request.activityPreset = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].first;
 		request.activityModule = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].second;
+		for (const NetHostActivityChoice& row: g_NetMatchService.ListHostActivities()) {
+			if (row.preset == request.activityPreset && row.module == request.activityModule) {
+				request.activityType = row.activityType;
+				break;
+			}
+		}
 	}
 	if (host && m_MultiplayerHostSceneIndex < m_MultiplayerHostScenes.size()) {
 		request.sceneName = m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex].first;

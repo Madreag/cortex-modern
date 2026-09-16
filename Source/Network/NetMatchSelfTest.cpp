@@ -481,6 +481,36 @@ namespace RTE {
 				*error = "request scene lost to the default: " + config.sceneName + "/" + config.sceneModule;
 				return false;
 			}
+			NetMatchServiceRequest typed;
+			typed.activityType = "GATutorial";
+			typed.activityPreset = "Tutorial Mission";
+			typed.activityModule = "Base.rte";
+			if (!NetMatchService::BuildMatchConfig(typed, 123, config, error)) return false;
+			if (config.activityType != "GATutorial") {
+				*error = "request activity class lost: " + config.activityType;
+				return false;
+			}
+			NetMatchServiceRequest unsetClass;
+			unsetClass.activityPreset = "P4 Alpha Duel";
+			if (!NetMatchService::BuildMatchConfig(unsetClass, 123, config, error)) return false;
+			if (config.activityType != "GAScripted") {
+				*error = "empty request class did not keep GAScripted: " + config.activityType;
+				return false;
+			}
+			bool sawTutorial = false;
+			for (const NetHostActivityChoice& row : NetMatchService::ListHostActivities()) {
+				if (row.preset == "Tutorial Mission" && row.module == "Base.rte") {
+					sawTutorial = true;
+					if (row.activityType != "GATutorial") {
+						*error = "Tutorial Mission class is " + row.activityType;
+						return false;
+					}
+				}
+			}
+			if (!sawTutorial) {
+				*error = "Tutorial Mission missing from host activities";
+				return false;
+			}
 			std::cout << "[net-match-selftest] PASS host_request_fallback" << std::endl;
 			return true;
 		}

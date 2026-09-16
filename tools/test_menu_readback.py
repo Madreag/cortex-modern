@@ -209,6 +209,30 @@ def pause_probe(who, root):
     return {"schema": 1, "timeout_ms": 90000, "steps": steps}
 
 
+def host_activity_label(row):
+    module = row.get("module") or ""
+    return row["preset"] + (f" - {module}" if module else "")
+
+
+def allowed_host_activities(dump):
+    # Missing game_activities is an empty census: a base-tip combo fails as an extra row.
+    return [row for row in (dump.get("game_activities") or [])
+            if int(row.get("compatible_scene_count") or 0) >= 1]
+
+
+def assert_combo_matches_loaded_activities(picker, dump):
+    allowed = [host_activity_label(row) for row in allowed_host_activities(dump)]
+    items = list(picker.get("items") or [])
+    extras = [item for item in items if item not in allowed]
+    missing = [label for label in allowed if label not in items]
+    if extras:
+        raise AssertionError("extra combo row: " + extras[0])
+    if missing:
+        raise AssertionError("missing combo row: " + missing[0])
+    if picker.get("item_count") != len(allowed):
+        raise AssertionError(("item_count", picker.get("item_count"), len(allowed)))
+
+
 def scripts(case, port, root):
     if case == "pause":
         # Each peer's match pause menu is its own local surface, so each peer drives its own probe.
@@ -1016,11 +1040,15 @@ def run_case(options, case, root, failing=None):
             assert picker[1]["text"] == picker[0]["text"] and picker[1]["dropped"] is True, picker[1]
             assert any(row["text"] == "Brain vs Brain - Base.rte" and row["dropped"] is False for row in picker), picker
             assert picker[0]["item_count"] > 1, picker[0]
-            # The dump's control table is the same walk the picker uses; every listed activity has a scene.
+            assert picker[0]["item_count"] == len(picker[0].get("items", [])), picker[0]
+            # SceneIsCompatible lives on the unfiltered census; the combo is scored against that filter.
+            assert_combo_matches_loaded_activities(picker[0], host_setup[0])
+            tutorial = next((row for row in (host_setup[0].get("game_activities") or [])
+                             if row.get("preset") == "Tutorial Mission"), None)
+            if tutorial:
+                assert tutorial.get("activity_type") == "GATutorial", tutorial
             table = host_setup[0]["activity_table"]
             assert table and all(row["scenes"] for row in table), table
-            assert picker[0]["item_count"] == len(table), (picker[0]["item_count"], len(table))
-            assert picker[0]["item_count"] == len(picker[0].get("items", [])), picker[0]
             brain = next(row for row in table if row["preset"] == "Brain vs Brain" and row["module"] == "Base.rte")
             assert all(entry["name"] != "Grasslands" for entry in brain["scenes"]), brain
             brain_scene = None

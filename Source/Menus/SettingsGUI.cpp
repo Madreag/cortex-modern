@@ -492,13 +492,24 @@ namespace RTE::MenuAutomation {
 					for (const NetHostSceneChoice& scene : activity.scenes) {
 						scenes.push_back({{"name", scene.name}, {"module", scene.module}});
 					}
-					table.push_back({{"preset", activity.preset}, {"module", activity.module}, {"scenes", scenes}});
+					table.push_back({{"preset", activity.preset}, {"module", activity.module},
+						{"activity_type", activity.activityType}, {"scenes", scenes}});
+				}
+				Json loaded = Json::array();
+				for (const NetHostActivityChoice& activity : NetMatchService::ListLoadedGameActivities()) {
+					Json scenes = Json::array();
+					for (const NetHostSceneChoice& scene : activity.scenes) {
+						scenes.push_back({{"name", scene.name}, {"module", scene.module}});
+					}
+					loaded.push_back({{"preset", activity.preset}, {"module", activity.module},
+						{"activity_type", activity.activityType},
+						{"compatible_scene_count", activity.scenes.size()}, {"scenes", scenes}});
 				}
 				Json result = {{"schema", 1}, {"screen", screen}, {"settings_page", SettingsPage(manager)}, {"viewport", Rectangle(nullptr)}, {"service", lobby.serviceState},
 					{"phase", "after_draw"}, {"sim_frame", g_TimerMan.GetSimUpdateCount()}, {"host", lobby.isHost}, {"peer_id", lobby.localPeerId},
 					{"activity_preset", lobby.activityPreset}, {"activity_module", lobby.activityModule},
 					{"scene_name", lobby.sceneName}, {"scene_module", lobby.sceneModule},
-					{"activity_table", table}, {"controls", Json::array()}};
+					{"activity_table", table}, {"game_activities", loaded}, {"controls", Json::array()}};
 				for (auto* item : *manager->GetControlList()) {
 					if (!Visible(item)) continue;
 					auto* panel = item->GetPanel();

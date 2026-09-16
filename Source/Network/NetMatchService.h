@@ -152,6 +152,7 @@ namespace RTE {
 	struct NetHostActivityChoice {
 		std::string preset;
 		std::string module;
+		std::string activityType;
 		std::vector<NetHostSceneChoice> scenes;
 	};
 
@@ -162,6 +163,7 @@ namespace RTE {
 		std::string playerName = "Player";
 		std::string activityPreset = "Skirmish Defense";
 		std::string activityModule; // The module that defines the preset; empty resolves to the module defining it.
+		std::string activityType; // Empty keeps MakeDefault's GAScripted.
 		std::string sceneName; // Empty resolves to the first compatible scene (Grasslands when the activity allows it).
 		std::string sceneModule;
 		std::optional<NetMatchStandardRules> standardRules;
@@ -368,6 +370,8 @@ namespace RTE {
 		static bool ResolveActivityModule(const std::string& preset, const std::vector<std::string>& definingModules, std::string& outModule, std::string* error = nullptr);
 		/// Fills an unset request module with the loaded module that defines the preset.
 		static bool SeatActivityModule(NetMatchServiceRequest& request, std::string* error = nullptr);
+		/// Every loaded non-test GameActivity, including those with no compatible scene.
+		static std::vector<NetHostActivityChoice> ListLoadedGameActivities();
 		/// The scenario-menu walk: every non-test GameActivity with at least one compatible loaded scene.
 		static std::vector<NetHostActivityChoice> ListHostActivities();
 		/// Compatible scenes for one activity, in the same scene order the scenario menu uses.
