@@ -19,6 +19,7 @@
 #include "TimerMan.h"
 #include <SDL3/SDL.h>
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -478,6 +479,33 @@ namespace RTE::MenuAutomation {
 					if (auto* combo = dynamic_cast<GUIComboBox*>(item)) {
 						row["dropped"] = combo->IsDropped();
 						row["item_count"] = combo->GetCount();
+						Json items = Json::array();
+						GUIListPanel* list = combo->GetListPanel();
+						std::string fontName;
+						GUIFont* listFont = nullptr;
+						if (auto* skin = manager->GetSkin()) {
+							if (skin->GetValue("ListBox", "Font", &fontName) || skin->GetValue("TextBox", "Font", &fontName)) {
+								listFont = skin->GetFont(fontName);
+							}
+						}
+						const int listWidth = list ? list->GetWidth() : combo->GetWidth();
+						const int nameRoom = std::max(1, listWidth - 8 - 17);
+						for (int i = 0; i < combo->GetCount(); ++i) {
+							const GUIListPanel::Item* entry = combo->GetItem(i);
+							if (!entry) continue;
+							std::string display = entry->m_Name;
+							bool fits = true;
+							if (listFont) {
+								fits = listFont->CalculateWidth(display) <= nameRoom;
+								if (!fits) {
+									while (!display.empty() && listFont->CalculateWidth(display + "...") > nameRoom) display.pop_back();
+									display += "...";
+									fits = listFont->CalculateWidth(display) <= nameRoom;
+								}
+							}
+							items.push_back({{"text", entry->m_Name}, {"display", display}, {"text_fits", fits}});
+						}
+						row["items"] = items;
 					}
 					// Measure every drawn caption here so a layout review reads the whole page, not the named controls.
 					std::string measured;
