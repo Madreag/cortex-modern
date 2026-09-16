@@ -76,7 +76,7 @@ class TraceContracts(unittest.TestCase):
         paused["subsystems"] = {k: paused["subsystems"][k] for k in ("tick", "terrain")}
         self.assertFalse(self.compare(trace)[0])
         paused["paused"] = True
-        # Two-key held ticks are the stale approved-tree schema; the wave requires PAUSED_CORE.
+        # Held ticks must carry PAUSED_CORE, not only tick and terrain.
         self.assertFalse(self.compare(trace)[0])
         paused["subsystems"] = {k: "b" * 64 for k in PAUSED_CORE}
         passed, result = self.compare(trace)
