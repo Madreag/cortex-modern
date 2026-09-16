@@ -349,7 +349,7 @@ def probe_script(who, size, arm, mode):
             ]
             if compact:
                 # The reserved row shows the first toast for 3 s; a second P after 1 s on screen
-                # waits, then takes the same row. No exact sim tick — pause already passed 240.
+                # waits, then takes the same row. sim_at_least lets the second edge fire after pause.
                 steps += [
                     {"op": "wait", "elapsed_ms": 1000},
                     {"op": "key_down", "key": "P", "sim_at_least": 241},

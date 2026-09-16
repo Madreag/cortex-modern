@@ -234,7 +234,7 @@ namespace {
 				const bool least = step.contains("sim_at_least") && step["sim_at_least"].is_number_unsigned();
 				Require(exact ^ least, "sim-rate probe key needs sim_at or sim_at_least");
 			} else {
-				Require(!step.contains("sim_at") && !step.contains("sim_at_least"), "sim_at is only for sim-rate probe keys");
+				Require(!step.contains("sim_at") && !step.contains("sim_at_least"), "sim_at and sim_at_least are only for sim-rate probe keys");
 			}
 		}
 		probe.result["script"] = probe.script;
