@@ -1048,7 +1048,10 @@ def run_case(options, case, root, failing=None):
                       and any(c["name"] == "ComboHostActivity" for c in image["controls"])]
             assert picker and picker[0]["text"] == "P4 Alpha Duel - Base.rte" and picker[0]["dropped"] is False, picker
             dropped = next(row for row in picker if row["dropped"])
-            assert dropped["items"] and all(item["text_fits"] for item in dropped["items"]), dropped
+            items = dropped.get("items")
+            assert isinstance(items, list) and items, dropped
+            overflows = [item["text"] for item in items if not item.get("text_fits")]
+            assert not overflows, overflows
             assert any(row["text"] == f"{preset} - {module}" and not row["dropped"] for row in picker), picker
             assert picker[0]["item_count"] > 1, picker[0]
             modes = [next(c for c in image["controls"] if c["name"] == "ComboHostMode")
