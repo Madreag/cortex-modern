@@ -374,7 +374,9 @@ def inspect(arm, root, outcome, strict_compare):
                 checks[f"{who}_no_mismatch"] = counters.get("mismatches", 0) == 0
             if arm == "rematch":
                 checks[f"{who}_rematched"] = (report.get("rematches") or 0) >= 1
-                checks[f"{who}_own_round_only"] = counters.get("compares", 0) < (expected * 2 if expected else 1)
+                compares = counters.get("compares", 0)
+                slack = 1
+                checks[f"{who}_own_round_only"] = compares <= expected + slack
                 details.setdefault("compare_margin", {})[who] = counters.get("compare_margin")
         details["desync_stop_ticks"] = stops
         if arm == "desync":
