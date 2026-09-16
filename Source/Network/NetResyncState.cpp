@@ -298,9 +298,7 @@ namespace RTE {
 				result.admittedReseats.push_back(std::move(pending.command));
 			}
 			checkAuxiliary();
-			if (reader.end - reader.cursor >= 8) {
-				result.e2eFirstTransferUid = static_cast<int64_t>(reader.Get(8));
-			}
+			result.e2eFirstTransferUid = static_cast<int64_t>(reader.Get(8));
 			Require(reader.cursor == reader.end, "metadata has trailing bytes");
 			std::vector<uint8_t> decodedArchive(bytes.begin() + static_cast<std::ptrdiff_t>(metadataSize), bytes.end());
 			state = std::move(result); archive = std::move(decodedArchive);
