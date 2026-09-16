@@ -366,6 +366,8 @@ namespace RTE {
 		uint32_t framesContributed = 0; //!< This peer's frames that reached a committed tick.
 		uint32_t duplicateFrames = 0;
 		uint32_t windowCopiesSkipped = 0; //!< Older window ticks already committed; not a loss.
+		uint32_t windowCopiesApplied = 0; //!< Older window ticks that filled a hole.
+		uint8_t lastFrameReserved = 0; //!< Reserved byte last encoded toward this peer.
 		uint32_t outOfOrderFrames = 0;
 		uint32_t futureFrameDrops = 0;
 		uint32_t staleRoundPackets = 0;
@@ -413,6 +415,7 @@ namespace RTE {
 		uint32_t framesAccepted = 0;
 		uint32_t duplicateFrames = 0;
 		uint32_t windowCopiesSkipped = 0;
+		uint32_t windowCopiesApplied = 0;
 		uint32_t outOfOrderFrames = 0;
 		uint32_t futureFrameDrops = 0; //!< Frames beyond the skew window, dropped so the maps stay bounded.
 		uint32_t missingFrameStalls = 0;
@@ -450,7 +453,7 @@ namespace RTE {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
 		static constexpr uint16_t c_Version = 22;
-		/// Advertised in Ack.receivedMask; a wave-tip peer decodes the Ack and ignores it.
+		/// Advertised in Ack.receivedMask; the older peer decodes the Ack and ignores receivedMask.
 		static constexpr uint32_t c_FrameWindowCapabilityMask = 0x80000000U;
 		static constexpr uint8_t c_MaxWindowTicks = 8;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
@@ -600,6 +603,8 @@ namespace RTE {
 		bool IsFailed() const { return m_State == NetLockstepState::Failed; }
 		bool IsStopped() const { return m_State == NetLockstepState::Stopped; }
 		const NetLockstepStats& GetStats() const { return m_Stats; }
+		/// True only when every remote advertised the frame-window bit and this peer repeats ticks.
+		bool FrameWindowAgreed() const;
 		/// The readings this peer held and then had to drop. Their sampler must forget it ever sent them,
 		/// or it will not offer them again until the sound's audibility moves.
 		std::vector<NetSoundObservation> TakeDroppedObservations();
@@ -683,7 +688,8 @@ namespace RTE {
 		bool FindLocalInput(uint64_t targetFrame, NetLockstepFrame& out) const;
 		void AdvertiseFrameWindow();
 		void HandleAck(const NetLockstepAck& ack, NetPeerId fromTransport);
-		bool FrameWindowAgreed() const;
+		bool FrameWindowAllRemotesAdvertised() const;
+		bool FrameWindowAgreedFor(uint8_t peerId) const;
 		uint8_t ConfiguredWindowTicks() const;
 		void AttachFrameWindow(NetLockstepFrame& packet) const;
 		void AcceptRemoteTick(const NetLockstepFrame& frame, uint64_t nowMs, bool windowCopy);
