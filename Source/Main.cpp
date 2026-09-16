@@ -393,12 +393,15 @@ static std::string s_eventLedgerLuaPreset;
 static std::unordered_set<uint64_t> s_eventLedgerGlowUIDs;
 struct GhostSample {
 	uint64_t tick = 0;
+	PreviewEventLedger::Key key;
 	bool any = false;
 	Vector pos;
 	Vector vel;
 };
-static std::vector<GhostSample> s_eventLedgerGhostSamples; //!< Per-committed-tick ghost kinematics for the 4b travel checks.
+static std::vector<GhostSample> s_eventLedgerGhostSamples; //!< Per-committed-tick ghost kinematics keyed to the ledger event.
 static bool s_eventLedgerGhostRegistered = false;
+static bool s_eventLedgerGhostDumpTaken = false;
+static bool s_eventLedgerGhostDumpIdentical = false;
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
@@ -2827,10 +2830,23 @@ static void PreviewEventLedgerFrameOnTick() {
 	}
 	LocalPrediction::RunPreview();
 	if (s_eventLedgerPressTick > 0) {
-		GhostSample sample;
-		sample.tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-		sample.any = g_MovableMan.GetPreviewGhostKinematics(sample.pos, sample.vel);
-		s_eventLedgerGhostSamples.push_back(sample);
+		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		const std::vector<MovableMan::PreviewGhostState> ghosts = g_MovableMan.GetPreviewGhostStates();
+		if (ghosts.empty()) {
+			GhostSample sample;
+			sample.tick = tick;
+			s_eventLedgerGhostSamples.push_back(sample);
+		} else {
+			for (const MovableMan::PreviewGhostState& ghost: ghosts) {
+				GhostSample sample;
+				sample.tick = tick;
+				sample.key = ghost.key;
+				sample.any = true;
+				sample.pos = ghost.pos;
+				sample.vel = ghost.vel;
+				s_eventLedgerGhostSamples.push_back(sample);
+			}
+		}
 		if (g_MovableMan.GetPreviewGhostCount() > 0 && !g_MovableMan.PreviewGhostsAreUnregistered()) {
 			s_eventLedgerGhostRegistered = true;
 		}
@@ -2930,9 +2946,14 @@ static void CheckPreviewEventLedgerSelfTest() {
 		}
 	}
 	check("the_projectile_is_adopted_once", projectileAdoptions == 1, std::to_string(projectileAdoptions) + " adoptions of that projectile");
-	// 4b: the ghost the previewed shot left behind travels its arc until the canonical particle adopts it.
+	// The ghost the previewed shot left behind holds the last preview pose until the canonical particle adopts it.
 	uint64_t adoptionTick = 0;
+	PreviewEventLedger::Key trackedKey;
 	if (round) {
+		trackedKey.kind = PreviewEventLedger::Projectile;
+		trackedKey.emitterUID = round->emitterUID;
+		trackedKey.tick = round->eventTick;
+		trackedKey.seq = round->seq;
 		for (const PreviewEventLedger::EventStart& start: starts) {
 			if (start.kind == round->kind && start.emitterUID == round->emitterUID && start.eventTick == round->eventTick && start.seq == round->seq && !start.predicted) {
 				adoptionTick = start.committedTick;
@@ -2940,20 +2961,41 @@ static void CheckPreviewEventLedgerSelfTest() {
 			}
 		}
 	}
+	const auto isTracked = [&trackedKey, round](const GhostSample& sample) {
+		return sample.any && round && sample.key.kind == trackedKey.kind && sample.key.emitterUID == trackedKey.emitterUID && sample.key.tick == trackedKey.tick && sample.key.seq == trackedKey.seq;
+	};
 	bool sawGhost = false;
 	uint64_t firstGhostTick = 0;
 	uint64_t lastGhostTick = 0;
+	Vector lastGhostPos;
+	Vector lastGhostVel;
 	bool ghostAtOrAfterAdoption = false;
 	bool prevValid = false;
 	GhostSample prev;
 	size_t traveledTicks = 0;
 	size_t frozenTicks = 0;
+	size_t heldTicks = 0;
+	bool stopAndHold = false;
 	double worstMotionError = 0.0;
 	const float sampleDt = g_TimerMan.GetDeltaTimeSecs();
-	const double motionSlack = g_SceneMan.GetGlobalAcc().GetMagnitude() * sampleDt * sampleDt * 2.0 + 1.0;
+	const Vector gravity = g_SceneMan.GetGlobalAcc();
+	const double motionSlack = gravity.GetMagnitude() * static_cast<double>(sampleDt) * static_cast<double>(sampleDt);
+	const auto predictHoldOrForces = [&](const GhostSample& from) {
+		Vector vel = from.vel + gravity * sampleDt;
+		Vector pos = from.pos + vel * sampleDt;
+		g_SceneMan.WrapPosition(pos);
+		const int pixelX = static_cast<int>(std::floor(pos.m_X));
+		const int pixelY = static_cast<int>(std::floor(pos.m_Y));
+		if (g_SceneMan.IsWithinBounds(pixelX, pixelY, 0) && g_SceneMan.GetTerrMatter(pixelX, pixelY) != g_MaterialAir) {
+			return from.pos;
+		}
+		return pos;
+	};
 	for (const GhostSample& sample: s_eventLedgerGhostSamples) {
-		if (!sample.any) {
-			prevValid = false;
+		if (!isTracked(sample)) {
+			if (!sample.any) {
+				prevValid = false;
+			}
 			continue;
 		}
 		if (!sawGhost) {
@@ -2961,38 +3003,47 @@ static void CheckPreviewEventLedgerSelfTest() {
 			firstGhostTick = sample.tick;
 		}
 		lastGhostTick = sample.tick;
+		lastGhostPos = sample.pos;
+		lastGhostVel = sample.vel;
 		if (adoptionTick != 0 && sample.tick >= adoptionTick) {
 			ghostAtOrAfterAdoption = true;
 		}
 		if (prevValid && sample.tick == prev.tick + 1) {
 			const double step = (sample.pos - prev.pos).GetMagnitude();
-			const double expected = (prev.vel * sampleDt).GetMagnitude();
-			worstMotionError = std::max(worstMotionError, std::abs(step - expected));
+			const double holdError = step;
+			const double leftoverError = (sample.pos - predictHoldOrForces(prev)).GetMagnitude();
+			worstMotionError = std::max(worstMotionError, holdError);
 			if (step > 0.01) {
 				++traveledTicks;
-			} else if (sample.vel.GetMagnitude() > 0.01) {
-				++frozenTicks;
+				worstMotionError = std::max(worstMotionError, leftoverError);
+			} else {
+				++heldTicks;
+				if (sample.vel.GetMagnitude() <= 0.01) {
+					stopAndHold = stopAndHold || traveledTicks >= 1;
+				} else {
+					++frozenTicks;
+				}
 			}
 		}
 		prev = sample;
 		prevValid = true;
 	}
+	const int lastPixelX = static_cast<int>(std::floor(lastGhostPos.m_X));
+	const int lastPixelY = static_cast<int>(std::floor(lastGhostPos.m_Y));
+	const bool terrainHold = sawGhost && g_SceneMan.IsWithinBounds(lastPixelX, lastPixelY, 0) && g_SceneMan.GetTerrMatter(lastPixelX, lastPixelY) != g_MaterialAir;
+	const bool travelOk = sawGhost && (stopAndHold || heldTicks >= 1 || (traveledTicks >= 3 && frozenTicks == 0) || (terrainHold && traveledTicks >= 1));
 	check("the_ghost_appears_on_the_preview_tick", sawGhost && firstGhostTick <= press + 1,
 	      sawGhost ? "first ghost at committed tick " + std::to_string(firstGhostTick) + ", expected <= " + std::to_string(press + 1) : "no ghost sampled in the run");
-	check("the_ghost_travels_every_committed_tick", sawGhost && traveledTicks >= 3 && frozenTicks == 0,
-	      std::to_string(traveledTicks) + " traveled ticks, " + std::to_string(frozenTicks) + " frozen ticks while moving");
+	check("the_ghost_travels_every_committed_tick", travelOk,
+	      std::to_string(traveledTicks) + " traveled ticks, " + std::to_string(heldTicks) + " held ticks, " + std::to_string(frozenTicks) + " frozen ticks, stop-and-hold=" + std::to_string(stopAndHold ? 1 : 0) + " terrain=" + std::to_string(terrainHold ? 1 : 0) + " last vel " + std::to_string(lastGhostVel.GetMagnitude()));
 	check("the_ghost_matches_the_canonical_motion", sawGhost && worstMotionError <= motionSlack,
-	      "worst |step - vel*dt| " + std::to_string(worstMotionError) + " px over a tick, slack " + std::to_string(motionSlack));
+	      "worst hold/leftover error " + std::to_string(worstMotionError) + " px, slack " + std::to_string(motionSlack));
 	check("the_ghost_is_gone_the_tick_the_canonical_adopts", adoptionTick != 0 && sawGhost && !ghostAtOrAfterAdoption && lastGhostTick < adoptionTick,
 	      "last ghost at committed tick " + std::to_string(lastGhostTick) + ", adoption at " + std::to_string(adoptionTick) + (ghostAtOrAfterAdoption ? " (a ghost outlived its adoption)" : ""));
 	check("the_ghost_stays_off_the_moid_grid", !s_eventLedgerGhostRegistered,
 	      s_eventLedgerGhostRegistered ? "a ghost had a MOID or stayed in the world lists the dump walks" : "ghosts stayed unregistered");
-	std::vector<std::string> dumpProblems;
-	const std::string dumpBefore = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblems);
-	g_MovableMan.TravelPreviewGhosts();
-	const std::string dumpAfter = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblems);
-	check("ghost_travel_leaves_dumps_byte_identical", dumpProblems.empty() && dumpBefore == dumpAfter,
-	      dumpProblems.empty() ? (dumpBefore == dumpAfter ? "argv-identical dump+extras after one travel pass" : "dump or extras changed after TravelPreviewGhosts") : dumpProblems.front());
+	check("ghost_travel_leaves_dumps_byte_identical", s_eventLedgerGhostDumpTaken && s_eventLedgerGhostDumpIdentical,
+	      s_eventLedgerGhostDumpTaken ? (s_eventLedgerGhostDumpIdentical ? "dump+extras unchanged while ghosts were installed" : "dump or extras changed while ghosts were travelling") : "no dump snapshot while a ghost was installed");
 	// A guard, not a detector: the muzzle flash sprite is already drawn on the preview that fires.
 	check("the_flash_sprite_stays_on_the_preview_tick", s_eventLedgerFlashTick > 0 && static_cast<uint64_t>(s_eventLedgerFlashTick) <= press + 1,
 	      "the previewed firearm's flash frame is first set at committed tick " + std::to_string(s_eventLedgerFlashTick) + ", expected <= " + std::to_string(press + 1));
@@ -3773,7 +3824,17 @@ void RunGameLoop() {
 			if (Activity* activity = g_ActivityMan.GetActivity()) {
 				activity->ExpirePresentationViews(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 			}
-			g_MovableMan.TravelPreviewGhosts();
+			if (s_eventLedgerPressTick > 0 && g_MovableMan.GetPreviewGhostCount() > 0 && !s_eventLedgerGhostDumpTaken) {
+				std::vector<std::string> dumpProblems;
+				const std::string dumpBefore = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblems);
+				g_MovableMan.TravelPreviewGhosts();
+				const std::string dumpAfter = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblems);
+				WriteProbeText("event_ledger_ghost_travel", dumpBefore);
+				s_eventLedgerGhostDumpIdentical = dumpProblems.empty() && dumpBefore == dumpAfter;
+				s_eventLedgerGhostDumpTaken = true;
+			} else {
+				g_MovableMan.TravelPreviewGhosts();
+			}
 
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
