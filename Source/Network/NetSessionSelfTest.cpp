@@ -18,6 +18,8 @@
 #include <array>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <functional>
 #include <iostream>
 #include <string>
@@ -1435,6 +1437,55 @@ namespace RTE {
 				SetNetParticipantCryptoForTest(nullptr);
 				return false;
 			}
+			std::ifstream keyFile(store.GetPath(), std::ios::binary);
+			const std::string keyBytes((std::istreambuf_iterator<char>(keyFile)), std::istreambuf_iterator<char>());
+			if (keyBytes.size() < 74) {
+				*error = "the identity file was too short to scan";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			const std::string privRaw = keyBytes.substr(42, 32);
+			std::string privHex;
+			static const char* digits = "0123456789abcdef";
+			for (unsigned char byte : privRaw) {
+				privHex.push_back(digits[byte >> 4]);
+				privHex.push_back(digits[byte & 0x0F]);
+			}
+			const std::string hostReport = host.BuildReportJson();
+			const std::string clientReport = client.BuildReportJson();
+			if (hostReport.find(privHex) != std::string::npos || clientReport.find(privHex) != std::string::npos ||
+			    hostReport.find(privRaw) != std::string::npos || clientReport.find(privRaw) != std::string::npos) {
+				*error = "the private key appeared in the session report";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			host.Close("reconnect");
+			client.Close("reconnect");
+			LoopbackTransport host2Transport;
+			LoopbackTransport client2Transport;
+			NetSession host2;
+			NetSession client2;
+			if (!StartPair(42103, host2, client2, host2Transport, client2Transport, MakeConfig(42103, 2501, "Host"), MakeConfig(42103, 2601, "Player"), error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			host2.EnableParticipantProof(nullptr);
+			client2.EnableParticipantProof(&store);
+			if (!DrivePair(host2Transport, client2Transport, host2, client2, [&] { return host2.IsReady() && client2.IsReady(); }, error, 2000)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			NetParticipantId rebound{};
+			if (!host2.GetPeerParticipantId(host2.GetReadyPeers().front().transportPeerId, rebound) || !(rebound == firstId)) {
+				*error = "the stored identity did not survive a second join";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
 			LoopbackTransport bareHostTransport;
 			LoopbackTransport bareClientTransport;
 			NetSession bareHost;
@@ -1451,7 +1502,52 @@ namespace RTE {
 				SetNetParticipantCryptoForTest(nullptr);
 				return false;
 			}
+			if (!bareClient.IsRejected() || bareClient.GetRejectReason() != NetRejectReason::IdentityUnproven) {
+				*error = "an unproven connection did not refuse with IdentityUnproven";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
 			error->clear();
+			NetParticipantIdentityStore missing;
+			missing.SetPath((lane / "never.key").string());
+			LoopbackTransport missingHostTransport;
+			LoopbackTransport missingClientTransport;
+			NetSession missingHost;
+			NetSession missingClient;
+			if (!StartPair(42104, missingHost, missingClient, missingHostTransport, missingClientTransport, MakeConfig(42104, 2701, "Host"), MakeConfig(42104, 2801, "Player"), error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			missingHost.EnableParticipantProof(nullptr);
+			missingClient.EnableParticipantProof(&missing);
+			if (DrivePair(missingHostTransport, missingClientTransport, missingHost, missingClient, [&] { return missingHost.IsReady() && missingClient.IsReady(); }, error, 400)) {
+				*error = "a missing-key client reached Ready";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			if (!missingClient.IsRejected() || missingClient.GetRejectReason() != NetRejectReason::IdentityUnproven) {
+				*error = "a missing-key client did not refuse with IdentityUnproven";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			error->clear();
+			{
+				std::ofstream corrupt(store.GetPath(), std::ios::binary | std::ios::trunc);
+				corrupt << "xxxx";
+			}
+			NetParticipantIdentityStore broken;
+			broken.SetPath(store.GetPath());
+			std::string loadError;
+			if (broken.LoadOrCreate(&loadError) || broken.HasKey()) {
+				*error = "a corrupt identity store still opened";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
 			SetNetAuthCryptoForTest(nullptr);
 			SetNetParticipantCryptoForTest(nullptr);
 			std::filesystem::remove_all(lane, code);
@@ -1477,6 +1573,11 @@ namespace RTE {
 			}
 			NetHostBanStore bans;
 			bans.SetPath((lane / "NetworkBans").string());
+			if (!bans.Load(error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
 			const uint64_t sessionId = 0x5000000000000000ULL + 42111;
 			if (!bans.Ban(store.PublicId(), NetHostBanScope::Session, "player", "banned", sessionId, 1, error)) {
 				SetNetAuthCryptoForTest(nullptr);
@@ -1523,7 +1624,7 @@ namespace RTE {
 			SetNetAuthCryptoForTest(nullptr);
 			SetNetParticipantCryptoForTest(nullptr);
 			std::filesystem::remove_all(lane, code);
-			std::cout << "[net-session-selftest] PASS scopes: banned identity refused on IP and ICE handshake" << std::endl;
+			std::cout << "[net-session-selftest] PASS scopes: banned identity refused on the session handshake" << std::endl;
 			return true;
 		}
 	}

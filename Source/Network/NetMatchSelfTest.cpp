@@ -11,6 +11,7 @@
 #include "NetLobbySession.h"
 #include "NetLobbyProtocol.h"
 #include "LoopbackTransport.h"
+#include "NetAuthCrypto.h"
 #include "NetLockstep.h"
 #include "NetMatchReplay.h"
 #include "NetMatchRunner.h"
@@ -4806,6 +4807,191 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestServiceKick(std::string* error) {
+		class ScriptedAuthCrypto : public NetAuthCrypto {
+		public:
+			bool IsRealCrypto() const override { return false; }
+			bool RandomBytes(uint8_t* buffer, size_t count) override {
+				if (buffer == nullptr) {
+					return false;
+				}
+				for (size_t i = 0; i < count; ++i) {
+					m_Counter = static_cast<uint8_t>(m_Counter * 37U + 149U);
+					buffer[i] = m_Counter;
+				}
+				return true;
+			}
+			bool HmacSha256(const uint8_t* key, size_t keyCount, const uint8_t* message, size_t messageCount, uint8_t (&mac)[32]) override {
+				if (key == nullptr || keyCount == 0) {
+					return false;
+				}
+				uint64_t fold = 1469598103934665603ull;
+				const auto mix = [&fold](uint8_t byte) { fold = (fold ^ byte) * 1099511628211ull; };
+				for (size_t i = 0; i < keyCount; ++i) {
+					mix(key[i]);
+				}
+				mix(static_cast<uint8_t>(messageCount));
+				for (size_t i = 0; i < messageCount; ++i) {
+					mix(message[i]);
+				}
+				for (size_t i = 0; i < sizeof(mac); ++i) {
+					mix(static_cast<uint8_t>(i));
+					mac[i] = static_cast<uint8_t>(fold >> 32);
+				}
+				return true;
+			}
+		private:
+			uint8_t m_Counter = 1;
+		};
+
+		ScriptedAuthCrypto crypto;
+		SetNetAuthCryptoForTest(&crypto);
+		const uint16_t port = 43239;
+		LoopbackTransport hostTransport, clientTransport;
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_State = NetMatchServiceState::Running;
+		service.m_AdmissionAttached = true;
+		service.m_Runner = std::make_unique<NetMatchRunner>();
+		service.m_Session = std::make_unique<NetSession>();
+		NetSession client;
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 1;
+		hostConfig.heartbeatIntervalMs = 25;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "service-kick-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientConfig = hostConfig;
+		clientConfig.displayName = "Client";
+		++clientConfig.localNonce;
+		if (!service.m_Session->StartHost(hostTransport, hostConfig, error) ||
+		    !client.StartClient(clientTransport, "loopback", clientConfig, error)) {
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		for (uint64_t now = 0; now <= 2000 && service.m_Session->GetReadyPeerCount() != 1; now += 10) {
+			service.m_Session->Tick(now);
+			client.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+		}
+		if (service.m_Session->GetReadyPeerCount() != 1) {
+			*error = "the service kick fixture never seated the client";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		const NetPeerId transport = service.m_Session->GetReadyPeers().front().transportPeerId;
+		if (!service.m_SeatAuth.BeginHostedSession()) {
+			*error = "the service kick fixture could not arm reconnect auth";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		NetH4Identity h4;
+		h4.controllerFrameVersion = ControllerFrame::c_Version;
+		h4.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		h4.gameVersion = "7.0.0-test";
+		h4.buildId = "service-kick-selftest";
+		for (size_t i = 0; i < h4.deterministicConfigHash.size(); ++i) {
+			h4.deterministicConfigHash[i] = static_cast<uint8_t>(1 + i);
+			h4.moduleManifestHash[i] = static_cast<uint8_t>(33 + i);
+			h4.sessionRulesHash[i] = static_cast<uint8_t>(65 + i);
+			h4.sessionIdentityHash[i] = static_cast<uint8_t>(97 + i);
+		}
+		service.m_ReconnectHost.Configure(&service.m_SeatAuth, service.m_Session->GetSessionId(), h4);
+		service.m_ReconnectHost.SetSeatTable({{0, 1, 1, false, 2, false}, {1, 2, 2, false, 3, false}, {2, 0, 3, true, 0, false}}, NetMatchMode::PvPSkirmish);
+		const auto lane = std::filesystem::temp_directory_path() / "cccp-service-kick";
+		std::error_code code;
+		std::filesystem::remove_all(lane, code);
+		std::filesystem::create_directories(lane, code);
+		NetReconnectTicketStore store;
+		store.SetPath((lane / "kick.ticket").string());
+		NetReconnectClient admission;
+		admission.Configure(&store, h4, "Client");
+		uint64_t unixNow = 1'700'000'000'000ULL;
+		admission.SetUnixClock([](void* context) { return *static_cast<uint64_t*>(context); }, &unixNow);
+		if (!admission.BeginNewJoin(0, error)) {
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		for (uint32_t round = 0; round < 16; ++round) {
+			service.m_ReconnectHost.Tick(0);
+			admission.Tick(0);
+			bool moved = false;
+			for (NetH4Outbound& outbound : service.m_ReconnectHost.TakeOutbound()) {
+				moved = true;
+				if (outbound.connection == transport) {
+					admission.HandleMessage(outbound.payload, 0);
+				}
+			}
+			service.m_ReconnectHost.TakeCommits();
+			for (NetH4Outbound& outbound : admission.TakeOutbound()) {
+				moved = true;
+				service.m_ReconnectHost.HandleMessage(transport, outbound.payload, 0);
+			}
+			if (!moved) {
+				break;
+			}
+		}
+		if (admission.GetState() != NetH4ClientState::Joined) {
+			*error = "the service kick fixture did not commit the H4 seat";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+		NetLockstepCoordinator& coordinator = *service.m_Coordinator;
+		coordinator.m_RelayHost = true;
+		coordinator.m_State = NetLockstepState::Running;
+		coordinator.m_Config.localPeerId = 1;
+		coordinator.m_Config.peerCount = 2;
+		coordinator.m_Config.matchConfig.hostPeerId = 1;
+		coordinator.m_RemotePeerIds = {2};
+		coordinator.m_RemoteTransports[2] = transport;
+		coordinator.m_Stats.nextFrame = 90;
+		NetModerationSelection selected{};
+		for (const auto& seat : service.m_ReconnectHost.GetModerationView()) {
+			if (seat.stableSeat == 0) {
+				selected = NetSelectModerationSeat(seat);
+			}
+		}
+		if (service.RemoveParticipant(selected, NetParticipantRemovalAction::Kick) != NetKickBanResult::Ok) {
+			*error = "service RemoveParticipant did not remove the seated holder";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		const NetParticipantRemovalIssue issued = service.GetLastRemovalIssue();
+		if (issued.notice.action != NetParticipantRemovalAction::Kick || issued.lockstepPeerId != 2 || issued.connection != transport) {
+			*error = "the service removal issue did not name the seated holder";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		if (coordinator.GetPeerLeaveFrames().count(2) == 0) {
+			*error = "EvictRemovedPeer did not record an announced leave";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		for (uint64_t now = 0; now <= 200; now += 10) {
+			service.m_Session->Tick(now);
+			client.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+		}
+		if (service.m_Session->GetReadyPeerCount() != 0 || client.GetState() != NetSessionState::Closed) {
+			*error = "DisconnectReadyPeer left the kicked peer ready";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		SetNetAuthCryptoForTest(nullptr);
+		std::filesystem::remove_all(lane, code);
+		std::cout << "[net-match-selftest] PASS kick: service RemoveParticipant broadcasts, evicts and disconnects" << std::endl;
+		return true;
+	}
+
 	bool TestFinishMatchDrainsFencedDisconnect(std::string* error) {
 		const uint16_t port = 43229;
 		LoopbackTransport hostTransport, clientTransport;
@@ -7496,6 +7682,7 @@ namespace RTE {
 		if (!chatRaceError.empty()) return fail(chatRaceError);
 		if (!chatCarryError.empty()) return fail(chatCarryError);
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
+		if (!TestServiceKick(&error)) return fail(error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
 		std::string stopCancelError, endedAdmissionError, twoIceRoundsError;
 		if (!TestServiceIceRematchPlaysTwoRounds(&twoIceRoundsError)) std::cerr << "[net-match-selftest] FAIL: " << twoIceRoundsError << std::endl;
