@@ -212,7 +212,12 @@ std::array<std::string, 3> Atom::CaptureCheckpointMaterialReferences() const {
 std::string Atom::SaveCheckpoint() const {
     CheckpointWriter writer("Atom2");
     VisitCheckpoint(writer, *this);
-    writer(CaptureCheckpointMaterialReferences(), CaptureCheckpointLinkIDs(), m_IgnoreMOIDsByGroup != nullptr);
+    std::array<CheckpointText, 3> materials;
+    const Material* sources[] = {m_Material, m_LastHit.HitMaterial[0], m_LastHit.HitMaterial[1]};
+    for (size_t index = 0; index < materials.size(); ++index) {
+        materials[index] = CheckpointWriter::Native([&] { return m_HasCheckpointMaterials ? m_CheckpointMaterialReferences[index] : g_SceneMan.SaveMaterialReference(sources[index]); });
+    }
+    writer(materials, CaptureCheckpointLinkIDs(), m_IgnoreMOIDsByGroup != nullptr);
     return writer.Text();
 }
 
@@ -298,7 +303,7 @@ int Atom::Save(Writer& writer) const {
 
 	writer.NewPropertyWithValue("Offset", m_Offset);
 	writer.NewPropertyWithValue("OriginalOffset", m_OriginalOffset);
-    if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialReference", base64_encode(CaptureCheckpointMaterialReferences()[0], true));
+    if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_MaterialReference", CheckpointWriter::Native([&] { return m_HasCheckpointMaterials ? m_CheckpointMaterialReferences[0] : g_SceneMan.SaveMaterialReference(m_Material); }).Base64(true));
     else writer.NewPropertyWithValue("Material", m_Material);
 	writer.NewPropertyWithValue("TrailColor", m_TrailColor);
 	writer.NewPropertyWithValue("TrailLength", m_TrailLength);
