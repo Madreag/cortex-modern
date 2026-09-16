@@ -1099,6 +1099,20 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			GnsTransport::SetSimulatedLagMs(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
 			continue;
 		}
+		if (!lastArg && currentArg == "-feel-render-settings") {
+			if (!FrameMan::SetFeelRenderSettings(argValue[++i])) {
+				std::cerr << "[feel] invalid render settings: expected RenderCapHz = 0 or 60" << std::endl;
+				return false;
+			}
+			continue;
+		}
+		if (!lastArg && currentArg == "-feel-measure") {
+			if (!FrameMan::SetFeelRecordDirectory(argValue[++i])) {
+				std::cerr << "[feel] recording requires CCCP_HEADLESS=1 and a fresh existing output directory" << std::endl;
+				return false;
+			}
+			continue;
+		}
 
 		if (!lastArg && currentArg == "-net-local-prediction") {
 			LocalPrediction::SetCommandLineOverride(std::string(argValue[++i]) == "off" ? 0 : 1);
@@ -2200,13 +2214,16 @@ static void DrawFrameWithPreviews() {
 	LocalPredictionHudSelfTest::SampleBeforeRender();
 	LocalPrediction::BeginRender();
 	LocalPredictionHudSelfTest::SampleDuringRender();
+	FrameMan::FeelBeginDraw();
 	g_FrameMan.Draw();
 	LocalPredictionHudSelfTest::SampleAfterDraw();
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts();
 	g_WindowMan.DrawPostProcessBuffer();
 	g_MenuMan.DrawLocalPauseMenu();
+	FrameMan::FeelBeforePresent();
 	g_WindowMan.UploadFrame();
+	g_FrameMan.FeelAfterPresent();
 	if (NetMatchScreenshotDue()) {
 		const uint64_t tick = ScenarioRunner::GetLockstepCompletedFrame();
 		const std::string name = "net_match_tick_" + std::to_string(tick) + "_round_" + std::to_string(ScenarioRunner::GetLockstepRoundId());
@@ -3583,6 +3600,7 @@ void RunGameLoop() {
 
 	while (!System::IsSetToQuit()) {
 		bool returnToMenuAfterNetworkEnd = false;
+		FrameMan::FeelBeginIteration();
 		updateStartTime = g_TimerMan.GetAbsoluteTime();
 
 		PollSDLEvents();
@@ -4669,6 +4687,7 @@ void RunGameLoop() {
 		// Frame rendering must not advance the sim RNG stream or feed the MOID grid — its cadence is
 		// host frame-rate dependent, so redirect cosmetic draws to the render RNG and suspend
 		// MOID-grid registration for the frame.
+		FrameMan::FeelBeforePreview();
 		LocalPrediction::RunPreview();
 
 		{
@@ -4697,7 +4716,9 @@ void RunGameLoop() {
 			s_paceUpdateUs += updateTotalTime;
 			s_paceDrawUs += drawTotalTime;
 		}
+		FrameMan::FeelEndIteration(s_paceSimTicks, s_paceSimUs, s_paceUpdateUs, s_paceDrawUs);
 	}
+	FrameMan::FeelFinish();
 }
 
 /// <summary>

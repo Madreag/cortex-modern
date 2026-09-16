@@ -6,6 +6,7 @@
 #include "Hash.h"
 
 #include <array>
+#include <cstdint>
 #include <unordered_map>
 #include "glad/gl.h"
 
@@ -18,6 +19,7 @@ namespace RTE {
 	class GUIFont;
 	class Shader;
 	class RenderTarget;
+	class Actor;
 	struct BitmapDeleter {
 		void operator()(BITMAP* bitmap) const;
 	};
@@ -58,6 +60,20 @@ namespace RTE {
 
 		/// Draws the current frame to the screen.
 		void Draw();
+
+		static bool SetFeelRenderSettings(const std::string& path);
+		static bool SetFeelRecordDirectory(const std::string& path);
+		static bool FeelRecordingEnabled();
+		static double FeelClockMS();
+		static void FeelInputSample(const Actor* actor, int player);
+		static void FeelPreviewStep(const Actor* actor, uint64_t committedTick, uint64_t predictedTick, double beginMS);
+		static void FeelBeginIteration();
+		static void FeelBeforePreview();
+		static void FeelBeginDraw();
+		static void FeelBeforePresent();
+		void FeelAfterPresent();
+		static void FeelEndIteration(uint64_t ticks, long long simUS, long long updateUS, long long drawUS);
+		static void FeelFinish();
 #pragma endregion
 
 #pragma region Getters
