@@ -8,6 +8,7 @@
 #include "SoundContainerRegistry.h"
 #include "SoundSimulation.h"
 #include "LogicalSound.h"
+#include "AudioCheckpoint.h"
 
 #include "fmod/fmod.hpp"
 #include <functional>
@@ -506,9 +507,14 @@ namespace RTE {
 			bool awaitingSample = false; //!< Held until the referenced sample reports ready.
 			bool hasLifetime = false; //!< Presence and playing follow this, not the mixer thread.
 			LogicalSoundVoice lifetime;
+			long long playTicks = 0;
+			int priority = 0;
+			AudioCheckpoint::Control control;
+			bool hasArchive = false;
 		};
 		std::map<int, PlayingVoice> m_PlayingVoices;
 		std::unordered_map<int, int> m_BackendVoiceIdentities;
+		mutable std::recursive_mutex m_VoiceChannelMutex;
 		int m_NextVoiceIdentity = 0;
 		// A Lua GC finalizer frees sound containers on whichever pool thread collects its state, and several states collect at once, so the registry group down to m_NextSoundContainerIdentity is locked.
 		mutable std::recursive_mutex m_CheckpointRegistryMutex;
@@ -553,6 +559,8 @@ namespace RTE {
 		bool OwnsVoice(int voiceIdentity, const SoundContainer* owner) const;
 		void RetireVoice(int identity);
 		void ReleaseVoiceChannel(int identity);
+		void ReleaseEndedChannel(FMOD::Channel* channel);
+		void StoreVoiceArchive(PlayingVoice& voice);
 		void BindVoiceLifetime(PlayingVoice& voice, unsigned sampleFrames, float sampleRate, unsigned loopStart, unsigned loopEnd, float pitch, int loops, double position, bool paused);
 		void FoldVoiceLifetime(PlayingVoice& voice);
 		bool VoiceSimLive(const PlayingVoice& voice) const;

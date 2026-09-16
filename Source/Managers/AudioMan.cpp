@@ -726,6 +726,7 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 				found->second.lifetime.bus = soundContainer->GetBusRouting();
 				BindVoiceLifetime(found->second, frames, rate, loopStart, loopEnd, selectedPitch, soundContainer->GetLoopSetting(), 0, soundContainer->IsPaused());
 			}
+			StoreVoiceArchive(found->second);
 		}
 
 	}
@@ -1132,8 +1133,7 @@ FMOD_RESULT AudioMan::UpdatePositionalEffectsForSoundChannel(FMOD::Channel* soun
 FMOD_RESULT F_CALLBACK AudioMan::SoundChannelEndedCallback(FMOD_CHANNELCONTROL* channelControl, FMOD_CHANNELCONTROL_TYPE channelControlType, FMOD_CHANNELCONTROL_CALLBACK_TYPE callbackType, void*, void*) {
 	if (channelControlType == FMOD_CHANNELCONTROL_CHANNEL && callbackType == FMOD_CHANNELCONTROL_CALLBACK_END) {
 		FMOD::Channel* channel = reinterpret_cast<FMOD::Channel*>(channelControl);
-		const int identity = g_AudioMan.FindVoiceIdentity(channel);
-		if (identity > 0) g_AudioMan.ReleaseVoiceChannel(identity);
+		g_AudioMan.ReleaseEndedChannel(channel);
 		channel->setUserData(nullptr);
 		channel->setCallback(nullptr);
 	}
@@ -1450,6 +1450,7 @@ SoundContainer* AudioMan::ResolveCheckpointVoiceOwner(uint64_t identity) const {
 }
 
 int AudioMan::RegisterPlayingVoice(FMOD::Channel* channel, SoundContainer* owner, const std::string& path, float minimumAudibleDistance, bool predicted) {
+	std::lock_guard<std::recursive_mutex> lock(m_VoiceChannelMutex);
 	do {
 		if (m_NextVoiceIdentity == std::numeric_limits<int>::max()) m_NextVoiceIdentity = 0;
 		++m_NextVoiceIdentity;
@@ -1459,7 +1460,8 @@ int AudioMan::RegisterPlayingVoice(FMOD::Channel* channel, SoundContainer* owner
 	m_BackendVoiceIdentities[backend] = m_NextVoiceIdentity;
 	// A prediction is presentation until its canonical emission adopts it, so no reading and no observation can carry it.
 	const SoundExecutionDomain domain = predicted ? SoundExecutionDomain::Presentation : SoundSimulationScope::Domain();
-	m_PlayingVoices.emplace(m_NextVoiceIdentity, PlayingVoice{channel, owner, path, minimumAudibleDistance, domain, predicted});
+	const auto inserted = m_PlayingVoices.emplace(m_NextVoiceIdentity, PlayingVoice{channel, owner, path, minimumAudibleDistance, domain, predicted});
+	inserted.first->second.playTicks = g_TimerMan.GetSimTimeTicks();
 	return m_NextVoiceIdentity;
 }
 
@@ -1498,6 +1500,7 @@ bool AudioMan::AdoptPredictedVoice(int identity, SoundContainer* owner, float pi
 			BindVoiceLifetime(voice, frames, rate, loopStart, loopEnd, pitch, owner->GetLoopSetting(), 0, owner->IsPaused());
 		}
 	}
+	if (result == FMOD_OK) StoreVoiceArchive(voice);
 	if (result != FMOD_OK) g_ConsoleMan.PrintString("ERROR: Could not adopt a predicted sound for SoundContainer " + owner->GetPresetName() + ": " + std::string(FMOD_ErrorString(result)));
 	return result == FMOD_OK;
 }
@@ -1527,6 +1530,7 @@ bool AudioMan::IsPredictedVoice(int identity) const {
 }
 
 int AudioMan::FindVoiceIdentity(const FMOD::Channel* channel) const {
+	std::lock_guard<std::recursive_mutex> lock(m_VoiceChannelMutex);
 	int backend;
 	if (!channel || const_cast<FMOD::Channel*>(channel)->getIndex(&backend) != FMOD_OK) return 0;
 	const auto found = m_BackendVoiceIdentities.find(backend);
@@ -1536,6 +1540,7 @@ int AudioMan::FindVoiceIdentity(const FMOD::Channel* channel) const {
 }
 
 FMOD_RESULT AudioMan::GetVoiceChannel(int voiceIdentity, FMOD::Channel** channel) const {
+	std::lock_guard<std::recursive_mutex> lock(m_VoiceChannelMutex);
 	const auto found = m_PlayingVoices.find(voiceIdentity);
 	if (found == m_PlayingVoices.end() || !found->second.channel) { *channel = nullptr; return FMOD_ERR_INVALID_HANDLE; }
 	*channel = found->second.channel;
@@ -1743,6 +1748,7 @@ std::pair<int, int> AudioMan::PendingAudioCount() const {
 }
 
 void AudioMan::RetireVoice(int identity) {
+	std::lock_guard<std::recursive_mutex> lock(m_VoiceChannelMutex);
 	const auto found = m_PlayingVoices.find(identity);
 	if (found == m_PlayingVoices.end()) return;
 	if (found->second.owner) found->second.owner->RemovePlayingChannel(identity);
@@ -1757,6 +1763,7 @@ void AudioMan::RetireVoice(int identity) {
 }
 
 void AudioMan::ReleaseVoiceChannel(int identity) {
+	std::lock_guard<std::recursive_mutex> lock(m_VoiceChannelMutex);
 	const auto found = m_PlayingVoices.find(identity);
 	if (found == m_PlayingVoices.end()) return;
 	int backend;
@@ -1767,12 +1774,34 @@ void AudioMan::ReleaseVoiceChannel(int identity) {
 	found->second.channel = nullptr;
 }
 
+void AudioMan::ReleaseEndedChannel(FMOD::Channel* channel) {
+	std::lock_guard<std::recursive_mutex> lock(m_VoiceChannelMutex);
+	const int identity = FindVoiceIdentity(channel);
+	if (identity > 0) ReleaseVoiceChannel(identity);
+}
+
+void AudioMan::StoreVoiceArchive(PlayingVoice& voice) {
+	FMOD::Channel* channel = voice.channel;
+	if (!channel) return;
+	try {
+		int priority = 0;
+		if (channel->getPriority(&priority) == FMOD_OK) voice.priority = priority;
+		FMOD_MODE mode = 0;
+		const bool spatial = channel->getMode(&mode) == FMOD_OK && (mode & FMOD_3D) != 0;
+		voice.control = AudioCheckpoint::Control::Capture(channel, spatial);
+		voice.hasArchive = true;
+	} catch (const std::exception&) {
+		voice.hasArchive = false;
+	}
+}
+
 void AudioMan::BindVoiceLifetime(PlayingVoice& voice, unsigned sampleFrames, float sampleRate, unsigned loopStart, unsigned loopEnd, float pitch, int loops, double position, bool paused) {
 	if (!sampleFrames || !std::isfinite(sampleRate) || !(sampleRate > 0) || !std::isfinite(pitch) || !(pitch > 0) || loops < -1) return;
 	if (loopEnd >= sampleFrames) loopEnd = sampleFrames - 1;
 	if (loopStart > loopEnd) loopStart = 0;
 	if (!std::isfinite(position) || position < 0) position = 0;
 	if (position >= static_cast<double>(sampleFrames)) position = static_cast<double>(sampleFrames) - 1.0;
+	if (voice.playTicks == 0) voice.playTicks = g_TimerMan.GetSimTimeTicks();
 	voice.hasLifetime = true;
 	voice.lifetime.sampleFrames = sampleFrames;
 	voice.lifetime.sampleRate = sampleRate;
@@ -1780,7 +1809,7 @@ void AudioMan::BindVoiceLifetime(PlayingVoice& voice, unsigned sampleFrames, flo
 	voice.lifetime.loopEnd = loopEnd;
 	voice.lifetime.pitch = pitch;
 	voice.lifetime.loops = loops;
-	voice.lifetime.anchorTicks = g_TimerMan.GetSimTimeTicks();
+	voice.lifetime.anchorTicks = voice.playTicks;
 	voice.lifetime.anchorPosition = position;
 	voice.lifetime.paused = paused;
 }
@@ -1788,25 +1817,26 @@ void AudioMan::BindVoiceLifetime(PlayingVoice& voice, unsigned sampleFrames, flo
 void AudioMan::FoldVoiceLifetime(PlayingVoice& voice) {
 	if (!voice.hasLifetime) return;
 	voice.lifetime.Fold(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
+	if (voice.hasArchive) {
+		voice.control.pitch = voice.lifetime.pitch;
+		voice.control.paused = voice.lifetime.paused;
+	}
 }
 
 bool AudioMan::VoiceSimLive(const PlayingVoice& voice) const {
 	if (voice.awaitingSample) return true;
-	if (!voice.hasLifetime) return voice.channel != nullptr;
+	if (!voice.hasLifetime) return false;
 	return !voice.lifetime.At(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond()).finished;
 }
 
 void AudioMan::RetireFinishedPlayingVoices() {
+	std::lock_guard<std::recursive_mutex> lock(m_VoiceChannelMutex);
 	const long long now = g_TimerMan.GetSimTimeTicks();
 	const long long ticksPerSecond = g_TimerMan.GetTicksPerSecond();
 	std::vector<int> completed;
 	for (const auto& [identity, voice]: m_PlayingVoices) {
 		if (voice.awaitingSample) continue;
-		if (voice.hasLifetime) {
-			if (voice.lifetime.At(now, ticksPerSecond).finished) completed.push_back(identity);
-		} else if (!voice.channel) {
-			completed.push_back(identity);
-		}
+		if (!voice.hasLifetime || voice.lifetime.At(now, ticksPerSecond).finished) completed.push_back(identity);
 	}
 	for (int identity: completed) {
 		const auto found = m_PlayingVoices.find(identity);
@@ -1860,21 +1890,27 @@ void AudioMan::StartAwaitingSampleVoices() {
 		FMOD::Channel* channel = nullptr;
 		if (m_AudioSystem->playSound(sound, buses[description.bus], true, &channel) != FMOD_OK || !channel) continue;
 		description.Apply(m_AudioSystem, channel);
-		found->second.channel = channel;
-		found->second.awaitingSample = false;
-		int backend;
-		if (channel->getIndex(&backend) == FMOD_OK) m_BackendVoiceIdentities.emplace(backend, identity);
+		{
+			std::lock_guard<std::recursive_mutex> lock(m_VoiceChannelMutex);
+			found->second.channel = channel;
+			found->second.awaitingSample = false;
+			int backend;
+			if (channel->getIndex(&backend) == FMOD_OK) m_BackendVoiceIdentities.emplace(backend, identity);
+		}
 		AudioCheckpoint::Require(channel->setUserData(found->second.owner));
 		AudioCheckpoint::Require(channel->setCallback(SoundChannelEndedCallback));
 		AudioCheckpoint::Require(channel->setPaused(description.control.paused));
 		AudioCheckpoint::Effect::ApplyActivation(channel, description.control.effects);
-		unsigned frames = 0;
-		float rate = 0;
-		if (sound->getLength(&frames, FMOD_TIMEUNIT_PCM) == FMOD_OK && frames > 0 &&
-		    sound->getDefaults(&rate, nullptr) == FMOD_OK && rate > 0) {
-			found->second.lifetime.bus = description.bus;
-			BindVoiceLifetime(found->second, frames, rate, description.loopStart, description.loopEnd, description.control.pitch > 0 ? description.control.pitch : 1.0F, description.loops, description.position, description.control.paused);
+		if (!found->second.hasLifetime) {
+			unsigned frames = 0;
+			float rate = 0;
+			if (sound->getLength(&frames, FMOD_TIMEUNIT_PCM) == FMOD_OK && frames > 0 &&
+			    sound->getDefaults(&rate, nullptr) == FMOD_OK && rate > 0) {
+				found->second.lifetime.bus = description.bus;
+				BindVoiceLifetime(found->second, frames, rate, description.loopStart, description.loopEnd, description.control.pitch > 0 ? description.control.pitch : 1.0F, description.loops, description.position, description.control.paused);
+			}
 		}
+		StoreVoiceArchive(found->second);
 		started.push_back(identity);
 	}
 	for (int identity: dropped) RetireVoice(identity);
@@ -2114,6 +2150,7 @@ std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const So
 			state.samples.push_back(AudioCheckpoint::Sample::Capture(path, sound));
 		}
 		std::set<std::string> disownedPresets;
+		std::lock_guard<std::recursive_mutex> voices(m_VoiceChannelMutex);
 		for (const auto& [identity, voice]: m_PlayingVoices) {
 			if (voice.predicted || !VoiceSimLive(voice)) continue;
 			int bus = voice.hasLifetime ? voice.lifetime.bus : 0;
@@ -2128,6 +2165,10 @@ std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const So
 			}
 			AudioCheckpoint::Voice captured = AudioCheckpoint::Voice::Capture(identity, ownerIdentity, voice.soundPath, voice.minimumAudibleDistance, voice.channel, bus, voice.awaitingSample);
 			captured.playing = true;
+			if (voice.hasArchive) {
+				captured.priority = voice.priority;
+				captured.control = voice.control;
+			}
 			if (voice.hasLifetime) {
 				const LogicalSoundVoice::Progress progress = voice.lifetime.At(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
 				captured.loops = progress.loops;
@@ -2215,6 +2256,10 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			}
 			candidates.emplace(voice.identity, PlayingVoice{nullptr, owner, voice.path, voice.minimumAudibleDistance});
 			PlayingVoice& candidate = candidates.at(voice.identity);
+			candidate.playTicks = g_TimerMan.GetSimTimeTicks();
+			candidate.priority = voice.priority;
+			candidate.control = voice.control;
+			candidate.hasArchive = true;
 			unsigned frames = 0;
 			float rate = 0;
 			FMOD::Sound* sound = sounds.contains(voice.path) ? sounds.at(voice.path) : nullptr;
@@ -2306,13 +2351,17 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		}
 		// Nothing that can reject the checkpoint remains after this ownership transfer.
 		for (const auto& [data, sound]: stagedSamples) data->SoundObject = sound;
-		for (auto& [identity, voice]: m_PlayingVoices) {
-			if (voice.channel) { voice.channel->setCallback(nullptr); voice.channel->setUserData(nullptr); voice.channel->stop(); }
+		{
+			std::lock_guard<std::recursive_mutex> lock(m_VoiceChannelMutex);
+			for (auto& [identity, voice]: m_PlayingVoices) {
+				if (voice.channel) { voice.channel->setCallback(nullptr); voice.channel->setUserData(nullptr); voice.channel->stop(); }
+			}
+			m_PlayingVoices = std::move(candidates);
+			m_BackendVoiceIdentities.swap(backendIdentities);
 		}
 		// The saved voice graph owns both directions of this relation. Current
 		// containers may have stopped or played additional sounds during staging.
 		for (auto& [owner, channels]: ownerChannels) owner->m_PlayingChannels.swap(channels);
-		m_PlayingVoices = std::move(candidates);
 		s_AwaitingSampleVoices = std::move(awaitingVoices);
 		s_PendingSamples = std::move(pendingSamples);
 		for (const auto& [path, sample]: newSamples) {
@@ -2320,7 +2369,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			if (old != ContentFile::s_LoadedSamples.end() && !old->second) ContentFile::s_LoadedSamples.erase(old);
 		}
 		ContentFile::s_LoadedSamples.merge(newSamples);
-		m_BackendVoiceIdentities.swap(backendIdentities); m_SoundChannelMinimumAudibleDistances.swap(minimumDistances);
+		m_SoundChannelMinimumAudibleDistances.swap(minimumDistances);
 		m_NextVoiceIdentity = state.nextVoice;
 		SetCheckpointSoundContainerCursor(state.nextSoundContainer);
 		m_DeferredSoundOpTick = state.deferredSoundOpTick;
@@ -2461,11 +2510,16 @@ bool AudioMan::RunCheckpointPlaybackContinuationSelfTest() const {
 std::string AudioMan::GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const {
 	std::vector<std::string> voices;
 	AudioCheckpoint::MixerLock mixer(m_AudioEnabled ? m_AudioSystem : nullptr);
+	std::lock_guard<std::recursive_mutex> table(m_VoiceChannelMutex);
 	for (const auto& [identity, voice]: m_PlayingVoices) {
 		if (voice.owner != container || !VoiceSimLive(voice)) continue;
 		int bus = container ? container->GetBusRouting() : 0;
 		AudioCheckpoint::Voice captured = AudioCheckpoint::Voice::Capture(identity, container ? container->GetCheckpointIdentity() : 0, voice.soundPath, voice.minimumAudibleDistance, voice.channel, bus, voice.awaitingSample);
 		captured.playing = true;
+		if (voice.hasArchive) {
+			captured.priority = voice.priority;
+			captured.control = voice.control;
+		}
 		if (voice.hasLifetime) {
 			const LogicalSoundVoice::Progress progress = voice.lifetime.At(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
 			captured.loops = progress.loops;
