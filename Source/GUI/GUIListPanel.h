@@ -189,6 +189,9 @@ namespace RTE {
 		/// Regular-draw name room: item width minus padding and a visible vertical scrollbar.
 		int RegularItemNameRoom(int itemOffsetX = 0) const;
 
+		/// The regular-path name as drawn: ellipsized only when horizontal scroll is off.
+		std::string RegularFittedName(const std::string& name, int itemOffsetX = 0) const;
+
 		/// The list's skin font. Ownership is NOT transferred.
 		GUIFont* GetFont() const { return m_Font; }
 
