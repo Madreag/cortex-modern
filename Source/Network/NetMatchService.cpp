@@ -3064,10 +3064,13 @@ static std::string ResyncSaveName() {
 			m_ReconnectHost.SetLiveMatch(false);
 			m_ReconnectHost.SetDropOwnershipSource(&NetMatchService::CollectDropOwnership, this);
 			session.SetReconnectHost(&m_ReconnectHost);
+			session.EnableParticipantProof(nullptr);
 			m_AdmissionAttached = true;
 			return;
 		}
 		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+		m_ParticipantStore.SetPath(NetParticipantIdentityStore::DefaultPath());
+		(void)m_ParticipantStore.LoadOrCreate(nullptr);
 		m_ReconnectClient.Configure(&m_TicketStore, identity, request.playerName.empty() ? "Client" : request.playerName);
 		m_ReconnectClient.SetUnixClock(&UnixNowMs, nullptr);
 		// The record names the host it belongs to; the config hash is context, not a gate - a client
@@ -3076,6 +3079,7 @@ static std::string ResyncSaveName() {
 		m_ReconnectClient.SetApplyForSeat(s_ApplyForSeat || s_ApplyOnce, s_ApplyOnce ? c_NetH4AnySubstitutableSeat : s_ApplySeat);
 		s_ApplyOnce = false;
 		session.SetReconnectClient(&m_ReconnectClient);
+		session.EnableParticipantProof(&m_ParticipantStore);
 		m_AdmissionAttached = true;
 	}
 

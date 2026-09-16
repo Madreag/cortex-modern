@@ -28,6 +28,9 @@ namespace RTE {
 	/// Version of the host-authored participant-removal payload.
 	constexpr uint16_t c_NetParticipantRemovalVersion = 1;
 
+	/// Version of the participant-identity challenge and proof payloads.
+	constexpr uint16_t c_NetParticipantIdentityVersion = 1;
+
 	/// The sender had more modules than the request or the size cap allowed, and sent the first of them.
 	constexpr uint8_t c_NetModuleDigestsTruncated = 0x01;
 
@@ -62,6 +65,8 @@ namespace RTE {
 		ModuleDigests = 25,
 		Chat = 26,
 		ParticipantRemoval = 27,
+		ParticipantChallenge = 28,
+		ParticipantProof = 29,
 	};
 
 	enum class NetRejectReason : uint16_t {
@@ -90,6 +95,8 @@ namespace RTE {
 		ParticipantRemoved = 18,
 		// Host-authored ban: this identity is refused for the named scope. Not SessionEnded.
 		ParticipantBanned = 19,
+		// Connection proof missing, forged, replayed or bound to another host.
+		IdentityUnproven = 20,
 	};
 
 	enum class NetParticipantRemovalReason : uint8_t {
@@ -450,6 +457,27 @@ namespace RTE {
 		bool operator==(const NetParticipantRemoval&) const = default;
 	};
 
+	/// Host: prove this connection against this host and session before a human seat is granted.
+	struct NetParticipantChallenge {
+		uint16_t version = c_NetParticipantIdentityVersion;
+		NetAuthBytes32 hostBinding{};
+		uint64_t sessionId = 0;
+		NetAuthBytes16 connectionBinding{};
+		NetAuthBytes16 challenge{};
+
+		bool operator==(const NetParticipantChallenge&) const = default;
+	};
+
+	struct NetParticipantProof {
+		uint16_t version = c_NetParticipantIdentityVersion;
+		NetAuthBytes32 publicId{};
+		NetAuthBytes16 connectionBinding{};
+		NetAuthBytes16 challenge{};
+		std::array<uint8_t, 64> signature{};
+
+		bool operator==(const NetParticipantProof&) const = default;
+	};
+
 	/// Presentation only: chat never becomes a sim command and never enters a tick hash.
 	struct NetChat {
 		uint16_t chatVersion = c_NetChatVersion;
@@ -488,7 +516,9 @@ namespace RTE {
 		NetModuleDigestRequest,
 		NetModuleDigests,
 		NetChat,
-		NetParticipantRemoval>;
+		NetParticipantRemoval,
+		NetParticipantChallenge,
+		NetParticipantProof>;
 
 	struct NetMessage {
 		uint32_t sequence = 0;

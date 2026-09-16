@@ -2,15 +2,20 @@
 
 #include "ControllerFrame.h"
 #include "LoopbackTransport.h"
+#include "NetAuthCrypto.h"
 #include "NetLobbySession.h"
 #include "NetLockstep.h"
 #include "NetMatchRunner.h"
+#include "NetParticipantCrypto.h"
 #include "NetSession.h"
+#include "System/System.h"
 
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cstring>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <string>
@@ -1327,6 +1332,130 @@ namespace RTE {
 			host.Close("host ended lobby");
 			return DrivePair(hostTransport, clientTransport, host, client, [&] { return host.IsClosed() && client.IsClosed(); }, error, 1000);
 		}
+
+		class ScriptedAuthCrypto : public NetAuthCrypto {
+		public:
+			bool IsRealCrypto() const override { return false; }
+			bool RandomBytes(uint8_t* buffer, size_t count) override {
+				if (buffer == nullptr) return false;
+				for (size_t i = 0; i < count; ++i) buffer[i] = static_cast<uint8_t>(++m_Counter);
+				return true;
+			}
+			bool HmacSha256(const uint8_t* key, size_t keyCount, const uint8_t* message, size_t messageCount, uint8_t (&mac)[32]) override {
+				if (key == nullptr || keyCount == 0) return false;
+				uint8_t fold = 1;
+				for (size_t i = 0; i < 32; ++i) {
+					fold = static_cast<uint8_t>(fold * 37U + (i < keyCount ? key[i] : 0) + (i < messageCount ? message[i] : 0));
+					mac[i] = fold;
+				}
+				return true;
+			}
+		private:
+			uint8_t m_Counter = 5;
+		};
+
+		class ScriptedParticipantCrypto : public NetParticipantCrypto {
+		public:
+			bool IsRealCrypto() const override { return false; }
+			bool GenerateKey(uint8_t (&priv)[32], uint8_t (&pub)[32]) override {
+				for (int i = 0; i < 32; ++i) {
+					priv[i] = static_cast<uint8_t>(++m_Counter);
+					pub[i] = static_cast<uint8_t>(~priv[i]);
+				}
+				return true;
+			}
+			bool PublicFromPrivate(const uint8_t (&priv)[32], uint8_t (&pub)[32]) override {
+				for (int i = 0; i < 32; ++i) pub[i] = static_cast<uint8_t>(~priv[i]);
+				return true;
+			}
+			bool Sign(const uint8_t (&priv)[32], const uint8_t* message, size_t messageCount, uint8_t (&signature)[64]) override {
+				for (int i = 0; i < 64; ++i) {
+					signature[i] = static_cast<uint8_t>(priv[i % 32] ^ (message != nullptr && static_cast<size_t>(i) < messageCount ? message[i] : static_cast<uint8_t>(i)));
+				}
+				return true;
+			}
+			bool Verify(const uint8_t (&pub)[32], const uint8_t* message, size_t messageCount, const uint8_t (&signature)[64]) override {
+				uint8_t priv[32];
+				uint8_t expected[64];
+				for (int i = 0; i < 32; ++i) priv[i] = static_cast<uint8_t>(~pub[i]);
+				return Sign(priv, message, messageCount, expected) && std::memcmp(expected, signature, 64) == 0;
+			}
+		private:
+			uint8_t m_Counter = 11;
+		};
+
+		bool TestIdentityProof(std::string* error) {
+			ScriptedAuthCrypto auth;
+			ScriptedParticipantCrypto participant;
+			SetNetAuthCryptoForTest(&auth);
+			SetNetParticipantCryptoForTest(&participant);
+			const auto lane = std::filesystem::temp_directory_path() / "cccp-pid-selftest";
+			std::error_code code;
+			std::filesystem::remove_all(lane, code);
+			std::filesystem::create_directories(lane, code);
+			NetParticipantIdentityStore store;
+			store.SetPath((lane / "player.key").string());
+			if (!store.LoadOrCreate(error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			const NetParticipantId firstId = store.PublicId();
+			NetParticipantIdentityStore again;
+			again.SetPath(store.GetPath());
+			if (!again.LoadOrCreate(error) || !(again.PublicId() == firstId)) {
+				*error = "the stored identity did not survive reload";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			const uint16_t port = 42101;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetSession host;
+			NetSession client;
+			if (!StartPair(port, host, client, hostTransport, clientTransport, MakeConfig(port, 2101, "Host"), MakeConfig(port, 2201, "Player"), error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			host.EnableParticipantProof(nullptr);
+			client.EnableParticipantProof(&store);
+			if (!DrivePair(hostTransport, clientTransport, host, client, [&] { return host.IsReady() && client.IsReady(); }, error, 2000)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			NetParticipantId bound{};
+			if (!host.GetPeerParticipantId(host.GetReadyPeers().front().transportPeerId, bound) || !(bound == firstId)) {
+				*error = "the proven identity was not bound to the admitted peer";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			LoopbackTransport bareHostTransport;
+			LoopbackTransport bareClientTransport;
+			NetSession bareHost;
+			NetSession bareClient;
+			if (!StartPair(42102, bareHost, bareClient, bareHostTransport, bareClientTransport, MakeConfig(42102, 2301, "Host"), MakeConfig(42102, 2401, "Player"), error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			bareHost.EnableParticipantProof(nullptr);
+			if (DrivePair(bareHostTransport, bareClientTransport, bareHost, bareClient, [&] { return bareHost.IsReady() && bareClient.IsReady(); }, error, 400)) {
+				*error = "an unproven connection was granted a seat";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			error->clear();
+			SetNetAuthCryptoForTest(nullptr);
+			SetNetParticipantCryptoForTest(nullptr);
+			std::filesystem::remove_all(lane, code);
+			std::cout << "[net-session-selftest] PASS identity: one identity survives reconnect; unproven connections refused" << std::endl;
+			return true;
+		}
 	}
 
 	int NetSessionSelfTest::Run() {
@@ -1355,6 +1484,7 @@ namespace RTE {
 		if (!TestModuleDigestSilentPeerExpires(&error)) return fail(error);
 		if (!TestOldWirePeerGetsItsRejection(&error)) return fail(error);
 		if (!TestLobbyMembership(&error)) return fail(error);
+		if (!TestIdentityProof(&error)) return fail(error);
 
 		std::cout << "[net-session-selftest] PASS" << std::endl;
 		return 0;
