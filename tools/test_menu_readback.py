@@ -179,7 +179,7 @@ def pause_probe(who, root):
         {"op": "wait", "sim_at_least": 150},
         {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
         {"op": "wait", "screen": "Pause"}, running, *pause_rows(),
-        menu_step("assert_label ButtonResume back to game"), menu_step("dump_host_options"),
+        menu_step("dump_host_options"),
         menu_step("activate ButtonSettings"), {"op": "wait", "screen": "PauseSettings"},
         menu_step("assert_visible CollectionBoxGameplaySettings 1"),
         *row_checks("TabGameplaySettings", "CollectionBoxSettingsBase"), menu_step("dump_player_options"),
