@@ -1,5 +1,6 @@
 #include "LuaMan.h"
 
+#include "NetGameCommand.h"
 #include "LuabindObjectWrapper.h"
 #include "LuaBindingRegisterDefinitions.h"
 #include "ThreadMan.h"
@@ -90,13 +91,52 @@ struct RTE::LuaPathCallbackContext {
 		uint64_t order;
 		std::shared_ptr<const PathRequest> result;
 	};
+	struct SharedPathKey {
+		Vector start;
+		Vector end;
+		float jumpHeight = 0.0F;
+		float digStrength = 0.0F;
+		int team = 0;
+
+		bool operator<(const SharedPathKey& other) const {
+			if (start.m_X != other.start.m_X) {
+				return start.m_X < other.start.m_X;
+			}
+			if (start.m_Y != other.start.m_Y) {
+				return start.m_Y < other.start.m_Y;
+			}
+			if (end.m_X != other.end.m_X) {
+				return end.m_X < other.end.m_X;
+			}
+			if (end.m_Y != other.end.m_Y) {
+				return end.m_Y < other.end.m_Y;
+			}
+			if (jumpHeight != other.jumpHeight) {
+				return jumpHeight < other.jumpHeight;
+			}
+			if (digStrength != other.digStrength) {
+				return digStrength < other.digStrength;
+			}
+			return team < other.team;
+		}
+	};
+	struct SharedPathAnswer {
+		uint8_t status = 0;
+		float pathLength = 0.0F;
+		float totalCost = 0.0F;
+		std::vector<Vector> path;
+	};
 	std::mutex mutex;
 	std::unordered_map<lua_State*, int> nextId;
+	int64_t sharedNextId = 0;
 	uint64_t nextOrder = 0;
 	bool orderPending = false;
 	std::vector<Callback> callbacks;
 	std::vector<Callback> incoming;
 	std::vector<Request> pending;
+	std::map<SharedPathKey, SharedPathAnswer> sharedAnswers;
+	std::map<SharedPathKey, int64_t> sharedInFlight;
+	std::map<int64_t, SharedPathKey> sharedIdToKey;
 };
 
 const std::unordered_set<std::string> LuaMan::c_FileAccessModes = {"r", "r+", "w", "w+", "a", "a+", "rt", "wt"};
@@ -6794,6 +6834,134 @@ void LuaMan::CompletePathCallback(const std::shared_ptr<LuaPathCallbackContext>&
 	copy->complete = true;
 	std::scoped_lock lock(context->mutex);
 	context->incoming.push_back({state, id, 0, std::move(copy)});
+}
+
+namespace {
+	bool s_SharedPathLockstepForTest = false;
+
+	LuaPathCallbackContext::SharedPathKey MakeSharedPathKey(const Vector& start, const Vector& end, float jumpHeight, float digStrength, int team) {
+		return {start, end, jumpHeight, digStrength, team};
+	}
+
+	int FillSharedPath(std::list<Vector>& pathOut, const LuaPathCallbackContext::SharedPathAnswer& answer) {
+		pathOut.assign(answer.path.begin(), answer.path.end());
+		if (pathOut.empty()) {
+			return -1;
+		}
+		return static_cast<int>(pathOut.size());
+	}
+
+	void EnqueueHostSharedPath(int64_t requestId, Scene* scene, const LuaPathCallbackContext::SharedPathKey& key) {
+		NetGameScriptPath payload;
+		payload.requestId = requestId;
+		payload.startPos = key.start;
+		payload.targetPos = key.end;
+		if (scene) {
+			std::list<Vector> computed;
+			const float cost = scene->CalculatePath(key.start, key.end, computed, key.jumpHeight, key.digStrength, static_cast<Activity::Teams>(key.team));
+			payload.totalCost = cost;
+			payload.path.assign(computed.begin(), computed.end());
+			payload.pathLength = static_cast<float>(payload.path.size());
+			payload.status = (cost < 0.0F) ? static_cast<uint8_t>(MicroPather::NO_SOLUTION) : static_cast<uint8_t>(MicroPather::SOLVED);
+		} else {
+			payload.status = static_cast<uint8_t>(MicroPather::NO_SOLUTION);
+		}
+		if (payload.path.size() > NetGameScriptPath::c_MaxScriptPathNodes) {
+			payload.path.resize(NetGameScriptPath::c_MaxScriptPathNodes);
+			payload.status = static_cast<uint8_t>(MicroPather::NO_SOLUTION);
+			payload.pathLength = static_cast<float>(payload.path.size());
+		}
+		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{ScenarioRunner::GetLockstepHostPeerId(), std::move(payload)});
+	}
+}
+
+int LuaMan::AnswerSharedSyncPath(Scene* scene, std::list<Vector>& pathOut, const Vector& start, const Vector& end, float jumpHeight, float digStrength, int team) {
+	if (!m_PathCallbacks) {
+		ResetPathCallbacks();
+	}
+	const auto key = MakeSharedPathKey(start, end, jumpHeight, digStrength, team);
+	int64_t newId = -1;
+	{
+		std::scoped_lock lock(m_PathCallbacks->mutex);
+		if (const auto found = m_PathCallbacks->sharedAnswers.find(key); found != m_PathCallbacks->sharedAnswers.end()) {
+			return FillSharedPath(pathOut, found->second);
+		}
+		if (m_PathCallbacks->sharedInFlight.find(key) == m_PathCallbacks->sharedInFlight.end()) {
+			newId = m_PathCallbacks->sharedNextId++;
+			m_PathCallbacks->sharedInFlight[key] = newId;
+			m_PathCallbacks->sharedIdToKey[newId] = key;
+		}
+	}
+	if (newId >= 0 && !s_SharedPathLockstepForTest && ScenarioRunner::IsLockstepControllerSyncActive() &&
+	    ScenarioRunner::GetLockstepLocalPeerId() == ScenarioRunner::GetLockstepHostPeerId()) {
+		EnqueueHostSharedPath(newId, scene, key);
+	}
+	pathOut.clear();
+	return -1;
+}
+
+void LuaMan::ApplySharedPathResult(const NetGameScriptPath& payload) {
+	if (!m_PathCallbacks) {
+		ResetPathCallbacks();
+	}
+	LuaPathCallbackContext::SharedPathAnswer answer;
+	answer.status = payload.status;
+	answer.pathLength = payload.pathLength;
+	answer.totalCost = payload.totalCost;
+	answer.path = payload.path;
+	std::scoped_lock lock(m_PathCallbacks->mutex);
+	const auto found = m_PathCallbacks->sharedIdToKey.find(payload.requestId);
+	if (found == m_PathCallbacks->sharedIdToKey.end()) {
+		std::cout << "[net-path] refused: unknown shared request " << payload.requestId << std::endl;
+		return;
+	}
+	const LuaPathCallbackContext::SharedPathKey key = found->second;
+	m_PathCallbacks->sharedAnswers[key] = std::move(answer);
+	m_PathCallbacks->sharedInFlight.erase(key);
+	m_PathCallbacks->sharedIdToKey.erase(found);
+}
+
+bool LuaMan::RunSharedSyncPathSelfTest() {
+	bool passed = true;
+	const auto check = [&passed](const char* name, bool valid) {
+		passed = valid && passed;
+		std::cout << "[shared-sync-path-selftest] " << (valid ? "PASS " : "FAIL ") << name << std::endl;
+	};
+
+	s_SharedPathLockstepForTest = true;
+	ResetPathCallbacks();
+
+	const Vector start(8.0F, 16.0F);
+	const Vector end(24.0F, 32.0F);
+	std::list<Vector> path;
+	const int pending = AnswerSharedSyncPath(nullptr, path, start, end, 0.0F, 1.0F, Activity::Teams::NoTeam);
+	check("shared CalculatePath pending did not match the async empty path", pending == -1 && path.empty());
+
+	NetGameScriptPath committed;
+	committed.requestId = 0;
+	committed.status = 0;
+	committed.pathLength = 2.0F;
+	committed.totalCost = 4.25F;
+	committed.startPos = start;
+	committed.targetPos = end;
+	committed.path = {Vector(10.0F, 20.0F), Vector(30.0F, 40.0F)};
+	ApplySharedPathResult(committed);
+
+	std::list<Vector> peerA;
+	std::list<Vector> peerB;
+	const int a = AnswerSharedSyncPath(nullptr, peerA, start, end, 0.0F, 1.0F, Activity::Teams::NoTeam);
+	const int b = AnswerSharedSyncPath(nullptr, peerB, start, end, 0.0F, 1.0F, Activity::Teams::NoTeam);
+	const bool same = a == 2 && b == 2 && peerA == peerB && peerA.size() == 2 && peerA.front() == committed.path.front() && peerA.back() == committed.path.back();
+	check("shared CalculatePath answered from this machine's path grid", same);
+	if (a != b || peerA != peerB) {
+		std::cout << "[shared-sync-path-selftest] FAIL shared CalculatePath peers disagreed after the committed answer" << std::endl;
+		passed = false;
+	}
+
+	ResetPathCallbacks();
+	s_SharedPathLockstepForTest = false;
+	std::cout << "[shared-sync-path-selftest] " << (passed ? "PASS " : "FAIL ") << "complete" << std::endl;
+	return passed;
 }
 
 void LuaMan::ResetPathCallbacks(bool clearLua) {

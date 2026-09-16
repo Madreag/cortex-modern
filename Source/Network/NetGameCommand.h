@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Vector.h"
+
 #include <cstdint>
 #include <map>
 #include <array>
@@ -28,6 +30,7 @@ namespace RTE {
 		AIScriptMessage = 14,
 		AIGib = 15,
 		PlaceBrain = 16, //!< 14 and 15 carry the AI intent commands.
+		ScriptPath = 17, //!< A shared script's path answer.
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -314,6 +317,21 @@ namespace RTE {
 		bool operator==(const NetGamePlaceBrain&) const = default;
 	};
 
+	// A shared script's path answer. The host computes it; every peer reads this command at the committed tick.
+	struct NetGameScriptPath {
+		static constexpr size_t c_MaxScriptPathNodes = 4096;
+
+		int64_t requestId = 0;
+		uint8_t status = 0;
+		float pathLength = 0.0F;
+		float totalCost = 0.0F;
+		Vector startPos;
+		Vector targetPos;
+		std::vector<Vector> path;
+
+		bool operator==(const NetGameScriptPath&) const = default;
+	};
+
 	/// Complete local slots; an empty slot clears the previous binding without changing the world.
 	struct NetGamePlayerBindings {
 		std::array<NetPlayerBinding, 4> players{};
@@ -321,7 +339,7 @@ namespace RTE {
 		bool operator==(const NetGamePlayerBindings&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain>;
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain, NetGameScriptPath>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;

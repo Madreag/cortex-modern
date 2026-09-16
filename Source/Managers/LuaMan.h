@@ -4,11 +4,13 @@
 #include "Entity.h"
 #include "RTETools.h"
 #include "PerformanceMan.h"
+#include "Vector.h"
 
 #include "BS_thread_pool.hpp"
 
 #include <array>
 #include <functional>
+#include <list>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -25,6 +27,7 @@ namespace RTE {
 	class Scene;
 	struct PathRequest;
 	struct LuaPathCallbackContext;
+	struct NetGameScriptPath;
 
 	/// A single lua state. Multiple of these can exist at once for multithreaded scripting.
 	class LuaStateWrapper {
@@ -523,6 +526,15 @@ namespace RTE {
 
 		/// Queues an immutable path result for delivery on the main thread.
 		static void CompletePathCallback(const std::shared_ptr<LuaPathCallbackContext>& context, lua_State* state, int id, const PathRequest& result);
+
+		/// Answers a shared-script sync path from the committed host cache, or the pending empty path.
+		int AnswerSharedSyncPath(Scene* scene, std::list<Vector>& pathOut, const Vector& start, const Vector& end, float jumpHeight, float digStrength, int team);
+
+		/// Stores a committed shared path answer so every peer reads the same path.
+		void ApplySharedPathResult(const NetGameScriptPath& payload);
+
+		/// Selftest: two peers with different local grids still read the same committed path.
+		bool RunSharedSyncPathSelfTest();
 
 		/// Starts a fresh callback queue, optionally releasing old Lua closures.
 		void ResetPathCallbacks(bool clearLua = false);

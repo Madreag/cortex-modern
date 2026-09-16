@@ -4,6 +4,7 @@
 #include "NetLobbyProtocol.h"
 #include "NetProtocol.h"
 #include "NetResyncState.h"
+#include "PathFinder.h"
 
 #include <algorithm>
 #include <charconv>
@@ -854,6 +855,28 @@ namespace RTE {
 						    !AppendString(out, place.preset, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_preset", error) ||
 						    !AppendString(out, place.module, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_module", error)) {
 							return false;
+						}
+						break;
+					}
+					case NetGameCommandType::ScriptPath: {
+						NetGameScriptPath scriptPath = std::get<NetGameScriptPath>(command.payload);
+						if (scriptPath.path.size() > NetGameScriptPath::c_MaxScriptPathNodes) {
+							std::cout << "[net-path] refused: path longer than the wire cap" << std::endl;
+							scriptPath.path.resize(NetGameScriptPath::c_MaxScriptPathNodes);
+							scriptPath.status = static_cast<uint8_t>(MicroPather::NO_SOLUTION);
+						}
+						AppendU64LE(out, static_cast<uint64_t>(scriptPath.requestId));
+						AppendU8(out, scriptPath.status);
+						AppendU32LE(out, FloatToBitsLE(scriptPath.pathLength));
+						AppendU32LE(out, FloatToBitsLE(scriptPath.totalCost));
+						AppendU32LE(out, FloatToBitsLE(scriptPath.startPos.m_X));
+						AppendU32LE(out, FloatToBitsLE(scriptPath.startPos.m_Y));
+						AppendU32LE(out, FloatToBitsLE(scriptPath.targetPos.m_X));
+						AppendU32LE(out, FloatToBitsLE(scriptPath.targetPos.m_Y));
+						AppendU16LE(out, static_cast<uint16_t>(scriptPath.path.size()));
+						for (const Vector& node : scriptPath.path) {
+							AppendU32LE(out, FloatToBitsLE(node.m_X));
+							AppendU32LE(out, FloatToBitsLE(node.m_Y));
 						}
 						break;
 					}
@@ -1838,6 +1861,53 @@ namespace RTE {
 						place.posX = FloatFromBitsLE(xBits);
 						place.posY = FloatFromBitsLE(yBits);
 						command.payload = std::move(place);
+						break;
+					}
+					case NetGameCommandType::ScriptPath: {
+						if (version < NetLockstepCodec::c_ScriptPathVersion) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset() - 2, "game command has invalid type");
+							return false;
+						}
+						NetGameScriptPath scriptPath;
+						uint64_t requestId = 0;
+						uint32_t pathLengthBits = 0;
+						uint32_t totalCostBits = 0;
+						uint32_t startXBits = 0;
+						uint32_t startYBits = 0;
+						uint32_t targetXBits = 0;
+						uint32_t targetYBits = 0;
+						uint16_t nodeCount = 0;
+						if (!ReadOrTruncated(reader.ReadU64LE(requestId), reader, error, "script_path_request_id") ||
+						    !ReadOrTruncated(reader.ReadU8(scriptPath.status), reader, error, "script_path_status") ||
+						    !ReadOrTruncated(reader.ReadU32LE(pathLengthBits), reader, error, "script_path_length") ||
+						    !ReadOrTruncated(reader.ReadU32LE(totalCostBits), reader, error, "script_path_cost") ||
+						    !ReadOrTruncated(reader.ReadU32LE(startXBits), reader, error, "script_path_start_x") ||
+						    !ReadOrTruncated(reader.ReadU32LE(startYBits), reader, error, "script_path_start_y") ||
+						    !ReadOrTruncated(reader.ReadU32LE(targetXBits), reader, error, "script_path_target_x") ||
+						    !ReadOrTruncated(reader.ReadU32LE(targetYBits), reader, error, "script_path_target_y") ||
+						    !ReadOrTruncated(reader.ReadU16LE(nodeCount), reader, error, "script_path_node_count")) {
+							return false;
+						}
+						if (nodeCount > NetGameScriptPath::c_MaxScriptPathNodes) {
+							SetError(error, NetLockstepErrorCode::PayloadTooLarge, reader.Offset(), "script path exceeds the wire cap");
+							return false;
+						}
+						scriptPath.requestId = static_cast<int64_t>(requestId);
+						scriptPath.pathLength = FloatFromBitsLE(pathLengthBits);
+						scriptPath.totalCost = FloatFromBitsLE(totalCostBits);
+						scriptPath.startPos.SetXY(FloatFromBitsLE(startXBits), FloatFromBitsLE(startYBits));
+						scriptPath.targetPos.SetXY(FloatFromBitsLE(targetXBits), FloatFromBitsLE(targetYBits));
+						scriptPath.path.reserve(nodeCount);
+						for (uint16_t n = 0; n < nodeCount; ++n) {
+							uint32_t xBits = 0;
+							uint32_t yBits = 0;
+							if (!ReadOrTruncated(reader.ReadU32LE(xBits), reader, error, "script_path_node_x") ||
+							    !ReadOrTruncated(reader.ReadU32LE(yBits), reader, error, "script_path_node_y")) {
+								return false;
+							}
+							scriptPath.path.emplace_back(FloatFromBitsLE(xBits), FloatFromBitsLE(yBits));
+						}
+						command.payload = std::move(scriptPath);
 						break;
 					}
 					default:

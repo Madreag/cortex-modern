@@ -39,6 +39,8 @@ namespace RTE {
 				return NetGameCommandType::AIGib;
 			} else if constexpr (std::is_same_v<T, NetGamePlaceBrain>) {
 				return NetGameCommandType::PlaceBrain;
+			} else if constexpr (std::is_same_v<T, NetGameScriptPath>) {
+				return NetGameCommandType::ScriptPath;
 			}
 		}, payload);
 	}
@@ -46,6 +48,7 @@ namespace RTE {
 	int32_t NetGameCommandTeam(const NetGameCommandPayload& payload) {
 		return std::visit([](const auto& specific) -> int32_t {
 			if constexpr (std::is_same_v<std::decay_t<decltype(specific)>, NetGamePlayerBindings>) return -1;
+			else if constexpr (std::is_same_v<std::decay_t<decltype(specific)>, NetGameScriptPath>) return -1;
 			else return specific.team;
 		}, payload);
 	}
@@ -84,6 +87,8 @@ namespace RTE {
 				return "AIGib";
 			case NetGameCommandType::PlaceBrain:
 				return "PlaceBrain";
+			case NetGameCommandType::ScriptPath:
+				return "ScriptPath";
 		}
 		return "Unknown";
 	}

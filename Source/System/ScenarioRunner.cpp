@@ -1375,7 +1375,13 @@ namespace RTE {
 			g_MovableMan.ReportSpeculationViolation("queueing a wire command for", nullptr);
 			return;
 		}
-		if (NetGameCommandTypeOf(command.payload) != NetGameCommandType::Reseat) {
+		const NetGameCommandType queuedType = NetGameCommandTypeOf(command.payload);
+		if (queuedType == NetGameCommandType::ScriptPath) {
+			const uint8_t sender = command.senderPeerId != 0 ? command.senderPeerId : GetLockstepLocalPeerId();
+			if (sender != GetLockstepHostPeerId()) {
+				return;
+			}
+		} else if (queuedType != NetGameCommandType::Reseat) {
 			const uint8_t sender = command.senderPeerId != 0 ? command.senderPeerId : GetLockstepLocalPeerId();
 			if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
 				if (!IsLockstepAIOrderAuthorized(sender, *order)) {

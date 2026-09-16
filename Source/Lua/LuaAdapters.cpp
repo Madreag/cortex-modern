@@ -3,6 +3,7 @@
 #include "LuaAdapterDefinitions.h"
 #include "LuabindObjectWrapper.h"
 #include "LuaMan.h"
+#include "ScenarioRunner.h"
 
 #include "lj_obj.h"
 #include "NetGameCommand.h"
@@ -292,6 +293,9 @@ std::vector<Vector>* LuaAdaptersActor::GetSceneWaypoints(Actor* luaSelfObject) {
 int LuaAdaptersScene::CalculatePath(Scene* luaSelfObject, const Vector& start, const Vector& end, float jumpHeight, float digStrength, Activity::Teams team) {
 	std::list<Vector>& threadScenePath = luaSelfObject->GetScenePath();
 	team = std::clamp(team, Activity::Teams::NoTeam, Activity::Teams::TeamFour);
+	if (ScenarioRunner::IsLockstepControllerSyncActive() && g_CurrentAIActor == nullptr && !g_MovableMan.IsSpeculative()) {
+		return g_LuaMan.AnswerSharedSyncPath(luaSelfObject, threadScenePath, start, end, jumpHeight, digStrength, team);
+	}
 	luaSelfObject->CalculatePath(start, end, threadScenePath, jumpHeight, digStrength, team);
 	if (!threadScenePath.empty()) {
 		return static_cast<int>(threadScenePath.size());

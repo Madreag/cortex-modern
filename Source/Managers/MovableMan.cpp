@@ -475,6 +475,11 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				g_ConsoleMan.PrintString("ERROR: Rejected a Reseat command from a peer that is not the host");
 				continue;
 			}
+		} else if (std::holds_alternative<NetGameScriptPath>(command.payload)) {
+			if (command.senderPeerId != ScenarioRunner::GetLockstepHostPeerId()) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a ScriptPath command from a peer that is not the host");
+				continue;
+			}
 		} else if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
 			if (!ScenarioRunner::IsLockstepAIOrderAuthorized(command.senderPeerId, *order)) {
 				const Actor* target = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order->actorUID)));
@@ -828,6 +833,8 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity)) {
 				gameActivity->ApplyNetBrainPlacement(*placeBrain, command.senderPeerId);
 			}
+		} else if (const NetGameScriptPath* scriptPath = std::get_if<NetGameScriptPath>(&command.payload)) {
+			g_LuaMan.ApplySharedPathResult(*scriptPath);
 		}
 	}
 	MovableMan::ReconcileLockstepControlBindings();
