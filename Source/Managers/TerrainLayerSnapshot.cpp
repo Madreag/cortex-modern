@@ -154,6 +154,38 @@ namespace RTE {
 		return writer.Text();
 	}
 
+	CheckpointText TerrainLayerSnapshot::CaptureMetadata() {
+		return CheckpointWriter::CaptureNative([] {
+			Scene* scene = g_SceneMan.GetScene();
+			const SLTerrain* terrain = scene ? scene->GetTerrain() : nullptr;
+			if (!terrain) throw std::runtime_error("no terrain for checkpoint capture");
+			const auto layer = [](const SceneLayer* source) {
+				return CheckpointWriter::Native([source] {
+					if (!source) return Layer{}.SaveCheckpoint();
+					const BITMAP* bitmap = source->m_MainBitmap;
+					CheckpointWriter writer("TerrainLayer1");
+					writer(bitmap ? bitmap->w : 0, bitmap ? bitmap->h : 0, source->m_DrawMasked, source->m_WrapX, source->m_WrapY,
+					       source->m_OriginOffset, source->m_Offset, source->m_ScrollInfo, source->m_ScrollRatio,
+					       source->m_ScaleFactor, source->m_ScaledDimensions, source->m_ZOrder,
+					       CheckpointWriter::Native([source] { return source->Entity::SaveCheckpoint(); }),
+					       CheckpointWriter::Native([source] { return source->m_BitmapFile.SaveCheckpoint(); }));
+					return writer.Text();
+				});
+			};
+			std::array<CheckpointText, 3> layers{layer(terrain), layer(terrain->m_FGColorLayer.get()), layer(terrain->m_BGColorLayer.get())};
+			std::array<CheckpointText, 4> unseen;
+			for (int team = 0; team < Activity::MaxTeamCount; ++team) unseen[team] = layer(scene->m_apUnseenLayer[team]);
+			CheckpointCache temporary;
+			auto* cache = CheckpointWriter::CurrentCache();
+			CheckpointWriter writer("TerrainMetadata1");
+			writer(terrain->m_MainBitmap->w, terrain->m_MainBitmap->h, layers, unseen, terrain->m_UpdatedMaterialAreas,
+			       static_cast<int>(terrain->m_OrbitDirection), static_cast<int>(terrain->m_LayerToDraw),
+			       scene->m_SeenPixels, scene->m_CleanedPixels, scene->m_UnseenPixelSize, scene->m_ScanScheduled,
+			       (cache ? cache : &temporary)->CapturePixels(terrain->m_MaterialCopy));
+			return writer.Text();
+		});
+	}
+
 	bool TerrainLayerSnapshot::LoadMetadata(std::string_view text, bool validateOnly) {
 		try {
 			CheckpointReader reader(text, "TerrainMetadata1", validateOnly);
