@@ -22,9 +22,26 @@ EXTRA_FIELDS = {
         'Field(path + ".ACraft.m_OffWireHatchTick", object.m_OffWireHatchTick);',
         'Field(path + ".ACraft.m_OffWireHatchOpen", object.m_OffWireHatchOpen);',
     ],
+    "Actor": [
+        'Field(path + ".Actor.m_PendingDeferredWaypoints", object.m_PendingDeferredWaypoints);',
+        'Field(path + ".Actor.m_InflightWaypoints", object.m_InflightWaypoints);',
+        'Field(path + ".Actor.m_LastOrderedWaypoint", object.m_LastOrderedWaypoint);',
+        'Field(path + ".Actor.m_HasOrderedWaypoint", object.m_HasOrderedWaypoint);',
+        'Field(path + ".Actor.m_LastOrderedWaypointUID", object.m_LastOrderedWaypointUID);',
+    ],
 }
 
-EXTRA_VISITS_AFTER = {}
+EXTRA_VISITS_AFTER = {
+    "AHuman": r'''
+void Visit(const Actor::DeferredWaypoint& object, const std::string& path) {
+Field(path + ".Actor::DeferredWaypoint.op", object.op);
+Field(path + ".Actor::DeferredWaypoint.x", object.x);
+Field(path + ".Actor::DeferredWaypoint.y", object.y);
+Field(path + ".Actor::DeferredWaypoint.targetUID", object.targetUID);
+Field(path + ".Actor::DeferredWaypoint.actorUID", object.actorUID);
+}
+''',
+}
 
 POST_INVENTORY_VISITS = ''
 
