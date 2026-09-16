@@ -83,6 +83,29 @@ namespace RTE {
 
 		/// Selftest: a scripted element's frame-rate press and release edge once per press, like a device.
 		bool RunScriptedInputEdgeSelfTest();
+
+		/// Selftest: a scripted pad's press reaches the menu at the device and no seat at all.
+		bool RunScriptedPadSeatSelfTest();
+#pragma endregion
+
+#pragma region Scripted Pad Handling
+		/// Registers a pad a script attached, so no seat binds it and only the device-level reads see it.
+		/// @param joystickID The attached pad's joystick ID.
+		static void RegisterScriptedPad(SDL_JoystickID joystickID);
+
+		/// Forgets a scripted pad the script detached.
+		/// @param joystickID The detached pad's joystick ID.
+		static void ForgetScriptedPad(SDL_JoystickID joystickID);
+
+		/// Gets whether a pad was attached by a script.
+		/// @param joystickID The pad's joystick ID.
+		/// @return Whether the pad is a scripted one.
+		static bool IsScriptedPad(SDL_JoystickID joystickID);
+
+		/// Gets whether a scripted pad took a press of this gamepad button this render frame.
+		/// @param whichButton The SDL gamepad button to check.
+		/// @return Whether any scripted pad pressed it.
+		static bool ScriptedPadButtonPressed(int whichButton);
 #pragma endregion
 
 #pragma region Control Scheme and Input Mapping Handling
@@ -548,6 +571,9 @@ namespace RTE {
 		static std::vector<Gamepad> s_PrevJoystickStates; //!< Joystick states as they were the previous update.
 		static std::vector<Gamepad> s_ChangedJoystickStates; //!< Joystick states that have changed.
 
+		static std::vector<Gamepad> s_ScriptedPadStates; //!< Device-level states of the pads a script attached. These take no seat slot.
+		static std::vector<Gamepad> s_ChangedScriptedPadStates; //!< Scripted pad states that have changed.
+
 		std::vector<SDL_Event> m_EventQueue; //!< List of incoming input events.
 
 		uint64_t m_RenderFrameCount{0}; //!< Render frames ended, which is the span a device edge is readable for.
@@ -669,6 +695,11 @@ namespace RTE {
 		/// Connect a joystick or gamepad device and add it to the joystick list if a slot is available (up to max player count).
 		/// @param joystickID The SDL_JoystickID of the added Gamepad, usually from the corresponding device event.
 		void HandleGamepadHotPlug(SDL_JoystickID joystickID);
+
+		/// Takes a button event of a scripted pad into its device-level state.
+		/// @param inputEvent The joystick or gamepad button event.
+		/// @return Whether the event belonged to a scripted pad, which no seat ever reads.
+		static bool RecordScriptedPadButton(const SDL_Event& inputEvent);
 #pragma endregion
 
 		/// Clears all the member variables of this UInputMan, effectively resetting the members of this abstraction level only.

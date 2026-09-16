@@ -5239,10 +5239,7 @@ bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std:
 		if (error) *error = "the launching match carries no agreed config";
 		return false;
 	}
-	if (!activityPreset.empty() && activityPreset != config->activityPreset) {
-		if (error) *error = "the service's launch activity \"" + activityPreset + "\" differs from the agreed \"" + config->activityPreset + "\"";
-		return false;
-	}
+	(void)activityPreset; // The roster already carries the preset ConsumeReadyToLaunch handed up.
 	return ConfigureNetMatchActivity(*config, g_NetMatchService.GetLocalTeam(), error);
 }
 
@@ -6316,6 +6313,9 @@ int main(int argc, char** argv) {
 		bool pass = g_LuaMan.RunScriptGraphSelfTest();
 		pass = RunHarnessCaptureSelfTest() && pass;
 		return ShutDown(pass ? 0 : 1);
+	}
+	if (ScenarioRunner::GetArgs().saveRefusalDiagnosisSelfTest) {
+		return ShutDown(g_ActivityMan.RunSaveRefusalDiagnosisSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE);
 	}
 	if (!s_netReplayInPath.empty()) {
 		const int exitCode = RunNetReplayPlayback();

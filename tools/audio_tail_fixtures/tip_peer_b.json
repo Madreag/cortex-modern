@@ -1,0 +1,21 @@
+{
+  "version": "AudioRuntime3",
+  "voices": [
+    {
+      "version": "AudioVoice3",
+      "identity": 7,
+      "owner": 1,
+      "path": "sfx",
+      "playing": 1,
+      "bus": 0,
+      "priority": 64,
+      "loops": 0,
+      "position": 12,
+      "loop_start": 0,
+      "loop_end": 1,
+      "frequency": 44100,
+      "minimum_audible_distance": 0,
+      "control": {"version": "AudioControl1", "paused": 0, "volume": 1, "pitch": 1}
+    }
+  ]
+}

@@ -10,6 +10,7 @@
 #include "NetIdentity.h"
 #include "NetLobbySession.h"
 #include "NetLobbyProtocol.h"
+#include "NetProtocol.h"
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
 #include "NetMatchReplay.h"
@@ -1051,6 +1052,36 @@ namespace RTE {
 				*error = "abort payload did not preserve peer id";
 				return false;
 			}
+			const auto refuseLobbyPeer = [&](NetLobbyPayload payload, size_t peerOffset, const char* what) {
+				NetLobbyMessage bound;
+				bound.payload = std::move(payload);
+				std::vector<uint8_t> poke;
+				NetLobbyError pokeError;
+				if (!NetLobbyProtocol::Encode(bound, poke, &pokeError)) {
+					*error = std::string("could not encode ") + what + " for the peer-id bound";
+					return false;
+				}
+				for (const uint8_t assigned: {static_cast<uint8_t>(NetLobbyProtocol::c_MaxPeers + 1), uint8_t{255}}) {
+					poke.at(NetLobbyProtocol::c_HeaderBytes + peerOffset) = assigned;
+					const NetLobbyDecodeResult decodedBound = NetLobbyProtocol::Decode(poke);
+					if (decodedBound.ok || decodedBound.error.code != NetLobbyErrorCode::InvalidValue) {
+						*error = std::string(what) + " peer id " + std::to_string(assigned) + " was not rejected";
+						return false;
+					}
+					if (decodedBound.error.message.find("peer id") == std::string::npos) {
+						*error = std::string(what) + " refusal did not name the field: " + decodedBound.error.message;
+						return false;
+					}
+				}
+				return true;
+			};
+			if (!refuseLobbyPeer(NetLobbyHello{1, 1, 1, "Host", "host"}, 4, "hello") ||
+			    !refuseLobbyPeer(NetLobbyPeerState{2, true, 12, 2, "Client", "windows"}, 0, "peer state") ||
+			    !refuseLobbyPeer(NetLobbyConfigAck{2, true, configHash, ""}, 0, "config ack") ||
+			    !refuseLobbyPeer(NetLobbyReady{2, true}, 0, "ready") ||
+			    !refuseLobbyPeer(NetLobbyAbort{1, "user cancelled"}, 0, "abort")) {
+				return false;
+			}
 			return true;
 		}
 
@@ -1565,6 +1596,28 @@ namespace RTE {
 			}
 			if (elapsedMs < 400 || elapsedMs > 4000) {
 				*error = "the join wait did not release on the trigger: " + std::to_string(elapsedMs) + "ms";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestOverlongJoinNameSurfaces(std::string* error) {
+			NetMatchService service;
+			NetMatchServiceRequest request;
+			request.host = false;
+			request.address = "127.0.0.1";
+			request.port = 41291;
+			request.playerName.assign(NetProtocol::c_MaxDisplayNameBytes + 1, 'x');
+			std::string startError;
+			if (service.Start(request, &startError)) {
+				*error = "a 65-byte join name started";
+				return false;
+			}
+			if (service.GetState() != NetMatchServiceState::Failed || service.GetStatusText() != "Match roster refused" ||
+			    startError.find("display_name exceeds max encoded length") == std::string::npos ||
+			    service.GetErrorText().find("display_name exceeds max encoded length") == std::string::npos) {
+				*error = "overlong join name did not take the roster-refusal path: status=" + service.GetStatusText() +
+				         " error=" + service.GetErrorText() + " start=" + startError;
 				return false;
 			}
 			return true;
@@ -2472,7 +2525,6 @@ namespace RTE {
 			config.missingFrameGraceMs = 30000;
 			config.postSessionSettleMs = config.postLobbySettleMs = 0;
 			config.startFrame = 1;
-			config.scenario = "rematch-roster-selftest";
 			config.nowMs = nowMs;
 			config.sessionConfig.port = 43140;
 			config.sessionConfig.maxPeers = 3;
@@ -2820,7 +2872,6 @@ namespace RTE {
 				config.missingFrameGraceMs = 30000;
 				config.postSessionSettleMs = config.postLobbySettleMs = 0;
 				config.startFrame = 1;
-				config.scenario = "rematch-roster-selftest";
 				config.nowMs = [&fixture] { return fixture.clock.NowMs(); };
 				NetSessionConfig& session = config.sessionConfig;
 				session.port = port;
@@ -4010,6 +4061,38 @@ namespace RTE {
 			}
 			return true;
 		}
+	}
+
+	bool TestServiceReportCarriesActivityPreset(std::string* error) {
+		NetMatchService service;
+		service.m_Runner = std::make_unique<NetMatchRunner>();
+		NetMatchRunnerConfig cfg;
+		cfg.host = true;
+		cfg.joinAddress = "127.0.0.1";
+		cfg.matchConfig = NetMatchConfigUtil::MakeDefault(0x4143545052455345ULL);
+		cfg.matchConfig.activityPreset = "Adopted Roster Preset";
+		LoopbackTransport transport;
+		NetSession session;
+		NetLockstepCoordinator coordinator;
+		std::string startError;
+		(void)service.m_Runner->Start(transport, session, coordinator, cfg, &startError);
+		if (service.m_Runner->GetMatchConfig().activityPreset != "Adopted Roster Preset") {
+			*error = "the runner did not adopt the roster preset";
+			return false;
+		}
+		nlohmann::json report;
+		try {
+			report = nlohmann::json::parse(service.BuildReportJson());
+		} catch (const nlohmann::json::exception& parseError) {
+			*error = std::string("adopted-roster report was not JSON: ") + parseError.what();
+			return false;
+		}
+		const std::string preset = report.value("activity_preset", std::string());
+		if (preset != "Adopted Roster Preset") {
+			*error = "service report activity_preset is \"" + preset + "\" not the adopted roster's";
+			return false;
+		}
+		return true;
 	}
 
 	bool TestHoldResolutionPumpDoesNotRelock(std::string* error) {
@@ -7437,6 +7520,8 @@ namespace RTE {
 		if (!TestServiceRuntimeErrorSurface(&error)) return fail(error);
 		if (!TestJoinWaitTrigger(&error)) return fail(error);
 		if (!TestSaveCompressionChoice(&error)) return fail(error);
+		if (!TestOverlongJoinNameSurfaces(&error)) return fail(error);
+		if (!TestServiceReportCarriesActivityPreset(&error)) return fail(error);
 		if (!TestResyncReportAbsentWhenIdle(&error)) return fail(error);
 		std::string failedReportError;
 		std::string rejoinOverError;

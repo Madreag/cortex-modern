@@ -400,6 +400,10 @@ namespace RTE {
 			s_Args.textWrapSelfTest = true;
 			return 1;
 		}
+		if (a == "-save-refusal-diagnosis-selftest") {
+			s_Args.saveRefusalDiagnosisSelfTest = true;
+			return 1;
+		}
 		if (a == "-net-match-e2e-rematch") {
 			// Arm the return-to-lobby rematch ride-through. Boolean flag.
 			s_Args.selftestRematch = true;
@@ -830,6 +834,7 @@ namespace RTE {
 		}
 		if (coordinator) { s_CommandSessionId = coordinator->GetConfig().sessionId; s_CommandEpoch = coordinator->GetConfig().seatPresenceEpoch; }
 		s_LockstepAppliedFrame = 0;
+		ResetLockstepPausedFrames();
 		s_LockstepControlOverrides.clear();
 		s_LockstepDroppedControlOverrides.clear();
 		// A coordinator handoff ends any synced pause; the next match must not inherit a frozen clock.
