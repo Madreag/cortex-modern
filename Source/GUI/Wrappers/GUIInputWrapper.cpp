@@ -77,8 +77,10 @@ namespace {
 				desc.name = "Menu script controller";
 				const auto id = SDL_AttachVirtualJoystick(&desc);
 				if (!id) { GUIInputWrapper::ReleaseJoystickBackgroundEvents(); return false; }
+				// Claimed before the added event arrives, so no seat's control scheme ever binds this pad.
+				UInputMan::RegisterScriptedPad(id);
 				m_Pad = SDL_OpenJoystick(id);
-				if (!m_Pad) { SDL_DetachVirtualJoystick(id); GUIInputWrapper::ReleaseJoystickBackgroundEvents(); return false; }
+				if (!m_Pad) { UInputMan::ForgetScriptedPad(id); SDL_DetachVirtualJoystick(id); GUIInputWrapper::ReleaseJoystickBackgroundEvents(); return false; }
 				// SDL only reports gamepad buttons for an open gamepad, and the engine ignores plain
 				// joystick buttons on a device that has a mapping, so open it before the first press.
 				m_PadGamepad = SDL_OpenGamepad(id);
@@ -101,6 +103,7 @@ namespace {
 				}
 				SDL_CloseJoystick(m_Pad);
 				SDL_DetachVirtualJoystick(id);
+				UInputMan::ForgetScriptedPad(id);
 				m_Pad = nullptr;
 				GUIInputWrapper::ReleaseJoystickBackgroundEvents();
 			}

@@ -89,9 +89,12 @@ namespace {
 				GUIInputWrapper::ReleaseJoystickBackgroundEvents();
 				Require(false, "SDL_AttachVirtualJoystick: " + reason);
 			}
+			// Claimed before the added event arrives, so no seat's control scheme ever binds this pad.
+			UInputMan::RegisterScriptedPad(attached);
 			probe.pad = SDL_OpenJoystick(attached);
 			if (!probe.pad) {
 				const std::string reason = SDL_GetError();
+				UInputMan::ForgetScriptedPad(attached);
 				SDL_DetachVirtualJoystick(attached);
 				GUIInputWrapper::ReleaseJoystickBackgroundEvents();
 				Require(false, "SDL_OpenJoystick: " + reason);
@@ -105,6 +108,7 @@ namespace {
 			const SDL_JoystickID attached = SDL_GetJoystickID(probe.pad);
 			SDL_CloseJoystick(probe.pad);
 			SDL_DetachVirtualJoystick(attached);
+			UInputMan::ForgetScriptedPad(attached);
 			probe.pad = nullptr;
 			GUIInputWrapper::ReleaseJoystickBackgroundEvents();
 		}
