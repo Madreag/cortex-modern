@@ -242,7 +242,6 @@ struct Voice {
 	}
 	static Voice Capture(int identity, uint64_t owner, const std::string& path, float minimumAudibleDistance, FMOD::Channel* channel, int bus, bool awaitingSample) {
 		Voice voice; voice.identity = identity; voice.owner = owner; voice.path = path; voice.minimumAudibleDistance = minimumAudibleDistance; voice.bus = bus;
-		// The archive site overwrites playing from the sim-time lifetime.
 		voice.playing = channel != nullptr || awaitingSample;
 		if (!channel || channel->getPosition(&voice.position, FMOD_TIMEUNIT_PCM) != FMOD_OK) return voice;
 		Require(channel->getFrequency(&voice.frequency)); Require(channel->getPriority(&voice.priority));
