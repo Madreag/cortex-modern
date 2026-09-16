@@ -74,6 +74,9 @@ typedef struct luaJIT_PreviewStats {
 LUA_API int luaJIT_preview_stats(lua_State *L, luaJIT_PreviewStats *stats);
 LUA_API int luaJIT_preview_faultcheck(lua_State *L);
 
+typedef void (*luaJIT_tab_write_cb)(void *tab);
+LUA_API void luaJIT_set_tab_write_callback(luaJIT_tab_write_cb cb);
+
 /* Low-overhead profiling API. */
 typedef void (*luaJIT_profile_callback)(void *data, lua_State *L,
 					int samples, int vmstate);
