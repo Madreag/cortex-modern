@@ -78,7 +78,7 @@ PAGE_FIRST_VALUE = {
 }
 FILES_BUTTONS = ("ButtonNetOpenAutosaves", "ButtonNetCopyAutosavesPath", "ButtonNetOpenDiagnostics",
                  "ButtonNetCopyDiagPath", "ButtonNetSaveDiagnostics")
-# Controls this landing grew from 18 px (plus ComboPresetResolution, which also moved to column 190).
+# Video and Input rows that must stand 20 px tall.
 VIDEO_INPUT_FIT = (
     "ComboPresetResolution",
     "LabelP1DeviceType", "LabelP1SelectedDevice",
@@ -88,17 +88,17 @@ VIDEO_INPUT_FIT = (
 )
 PAUSE_PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc")
 PAUSE_PAGE_FIRST_VALUE = {
-    "Video": "CollectionSplitscreenRadioButtons",
+    "Video": "ComboPresetResolution",
     "Audio": "SliderMasterVolume",
     "Input": "LabelP1SelectedDevice",
     "Gameplay": "CheckboxBlipOnRevealUnseen",
     "Misc": "CheckboxShowToolTips",
 }
-# Completion-pass size rows. This lane writes them; it does not run them.
 SIZE_GATES = (
     ("net-chat", "960x540"),
     ("net-chat", "1280x720"),
 )
+WIDE_SHARE_HOST = "2001:0db8:85a3:0000:0000:8a2e:0370:7334"
 
 
 def page_value_columns(captures, first_value):
@@ -122,6 +122,22 @@ def video_input_fit_rows(captures, required):
     assert required <= names, (required - names, rows)
     assert rows and all(row[2] == 20 and row[3] for row in rows), rows
     return rows
+
+
+def share_status_row(capture, port, host=None):
+    status = next(c for c in capture["controls"] if c["name"] == "LabelMultiplayerStatus")
+    text = status["text"]
+    assert f":{port}" in text, status
+    assert "\n" in text, status
+    address = text.split("\n", 1)[1]
+    assert address.endswith(f":{port}"), status
+    if host is not None:
+        assert address.startswith(host + ":") or address == f"{host}:{port}", status
+    row = status["rect"][2]
+    word = status["word_width"]
+    scroll = status["overflow_scroll"]
+    assert scroll == (word > row), status
+    return status
 NETWORK_ACTION_COLUMN = 330
 INTERNET_HINT = "host[:port][/path] - https:// is implied"
 INTERNET_REASON = "Replays and connection details come with a later update."
@@ -442,6 +458,8 @@ def scripts(case, port, root):
                  "assert_label TextHostInputDelay auto\nassert_enabled TextHostInputDelay 0\n"
                  f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                  "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
+                 "dump_host_options\n"
+                 f"set_share_address {WIDE_SHARE_HOST}\nwait 5\n"
                  "dump_host_options\nexit\n")
     elif case == "net-activity":
         # A menu-driven pair in the lobby itself: the host's combo picks off the default activity
@@ -633,10 +651,11 @@ def captures(runtime, metadata):
             names = {control["name"]: control for control in value["controls"]}
             assert len(names) == len(value["controls"]), f"duplicate control: {path}"
             for control in value["controls"]:
-                assert control["visible"] is True, (path, control)
+                hidden_preset = control["name"] == "ComboPresetResolution" and control.get("visible") is False
+                assert control["visible"] is True or hidden_preset, (path, control)
                 assert inside(control["rect"], value["viewport"]), (path, control)
                 assert inside(control["rect"], control["parent_rect"]), (path, control)
-                if control["parent"]:
+                if control["parent"] and not hidden_preset:
                     assert control["parent"] in names, (path, control)
                     assert names[control["parent"]]["rect"] == control["parent_rect"], (path, control)
                 x, y, w, h = control["rect"]
@@ -761,7 +780,7 @@ def run_case(options, case, root, failing=None):
                 assert [capture["settings_page"].split(":")[0] for capture in pause_settings] == list(PAUSE_PAGES), (who, pause_settings)
                 result.setdefault("pause_page_value_columns", {})[who] = page_value_columns(pause_settings, PAUSE_PAGE_FIRST_VALUE)
                 result.setdefault("pause_video_input_fit", {})[who] = video_input_fit_rows(
-                    pause_settings, {name for name in VIDEO_INPUT_FIT if name.startswith("LabelP")})
+                    pause_settings, set(VIDEO_INPUT_FIT))
                 pauses = [capture for capture in peer if capture["screen"] == "Pause"]
                 for capture in (pauses[0], pauses[-1]):
                     drawn = {control["name"] for control in capture["controls"]}
@@ -869,6 +888,7 @@ def run_case(options, case, root, failing=None):
                         "misc-page": "Misc"}[case]
             assert [capture["settings_page"] for capture in images] == [sub_page], [c["settings_page"] for c in images]
             if case == "net-chat":
+                assert (case, options.size) in SIZE_GATES, (options.size, SIZE_GATES)
                 result["size_gates"] = [list(row) for row in SIZE_GATES]
                 result["net_chat_size"] = options.size
             rows = {control["name"]: control for control in images[0]["controls"]}
@@ -1019,15 +1039,15 @@ def run_case(options, case, root, failing=None):
             result["lobby_row"] = next(c["text"] for c in images[-1]["controls"] if c["name"] == "LabelLobbyPlayer0")
             assert "(auto" in result["lobby_row"] and "(fixed)" not in result["lobby_row"], result["lobby_row"]
             # The host screen under the seeded policy: the box says auto, and is not an editable count.
-            host_setup = {c["name"]: c for c in images[-2]["controls"]}
+            host_setup = {c["name"]: c for c in images[-3]["controls"]}
             assert host_setup["TextHostInputDelay"]["text"] == "auto", host_setup["TextHostInputDelay"]
             assert host_setup["TextHostInputDelay"]["enabled"] is False, host_setup["TextHostInputDelay"]
             assert host_setup["LabelHostInputDelayPolicy"]["text"] == "(auto)", host_setup["LabelHostInputDelayPolicy"]
             assert host_setup["ComboHostActivity"]["rect"][0] == host_setup["TextHostPort"]["rect"][0], (
                 host_setup["ComboHostActivity"]["rect"], host_setup["TextHostPort"]["rect"])
             # The disabled delay box's frame is DimRect at 55% of an enabled TextBox frame.
-            delay_luma = frame_luma(images[-2]["png"], host_setup["TextHostInputDelay"]["rect"])
-            port_luma = frame_luma(images[-2]["png"], host_setup["TextHostPort"]["rect"])
+            delay_luma = frame_luma(images[-3]["png"], host_setup["TextHostInputDelay"]["rect"])
+            port_luma = frame_luma(images[-3]["png"], host_setup["TextHostPort"]["rect"])
             result["delay_frame_luma"] = delay_luma
             result["port_frame_luma"] = port_luma
             assert port_luma > 0, (delay_luma, port_luma)
@@ -1036,8 +1056,10 @@ def run_case(options, case, root, failing=None):
             assert 0.45 <= ratio <= 0.65, (delay_luma, port_luma, ratio)
             # The disabled Seats control sits in the lobby capture for the visual review.
             assert drawn["ButtonMultiplayerModerate"]["enabled"] is False, drawn["ButtonMultiplayerModerate"]
-            status = drawn["LabelMultiplayerStatus"]
-            assert f":{options.port}" in status["text"] and status["text_fits"] is True, status
+            ipv4_status = share_status_row(images[-2], options.port)
+            ipv6_status = share_status_row(images[-1], options.port, WIDE_SHARE_HOST)
+            assert ipv6_status["overflow_scroll"] is True and ipv6_status["word_width"] > ipv6_status["rect"][2], ipv6_status
+            result["share_status"] = {"ipv4": ipv4_status, "ipv6": ipv6_status}
             # The multiplayer screen's panel centres vertically too; an odd height shifts one pixel,
             # and a panel taller than the viewport clamps to its top edge instead of centring.
             screen_rect = drawn["MultiplayerScreen"]["rect"]
@@ -1084,8 +1106,14 @@ def run_case(options, case, root, failing=None):
             dropped = next(row for row in picker if row["dropped"])
             items = dropped.get("items")
             assert isinstance(items, list) and items, dropped
-            overflows = [item["text"] for item in items if not item.get("text_fits")]
-            assert not overflows, overflows
+            for item in items:
+                room = item["name_room"]
+                display = item["display"]
+                assert item["drawn_width"] <= room, item
+                if item.get("raw_width", 0) > room:
+                    assert display.endswith("...") and item["text"].startswith(display[:-3]), item
+            assert dropped["fit_width"] == min(dropped["fit_needed"], dropped["fit_clamp"]), dropped
+            assert dropped["rect"][2] == dropped["fit_width"], dropped
             assert any(row["text"] == f"{preset} - {module}" and not row["dropped"] for row in picker), picker
             assert picker[0]["item_count"] > 1, picker[0]
             modes = [next(c for c in image["controls"] if c["name"] == "ComboHostMode")
