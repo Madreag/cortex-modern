@@ -89,6 +89,7 @@ void GameActivity::Clear() {
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		m_ObservationTarget[player].Reset();
+		m_ObserveFreezeHeld[player] = false;
 		m_DeathViewTarget[player].Reset();
 		m_SpectatorTarget[player] = nullptr;
 		m_ActorSelectTimer[player].Reset();
@@ -2043,11 +2044,7 @@ void GameActivity::Update() {
 		if (m_ViewState[player] == ViewState::Observe) {
 			// If we're observing game over state, freeze the view for a bit so the player's input doesn't ruin the focus
 			const bool freezeHeld = m_ActivityState == ActivityState::Over && !m_GameOverTimer.IsPastSimMS(1000);
-			static bool s_ObserveFreezeHeld[Players::MaxPlayerCount] = {};
-			if (s_ObserveFreezeHeld[player] && !freezeHeld) {
-				std::cout << "[game-over-freeze] lift-tick=" << g_TimerMan.GetSimUpdateCount() << " player=" << player << std::endl;
-			}
-			s_ObserveFreezeHeld[player] = freezeHeld;
+			m_ObserveFreezeHeld[player] = freezeHeld;
 			if (!freezeHeld) {
 				// Get cursor input
 				const bool lookedAround = m_PlayerController[player].RelativeCursorMovement(m_ObservationTarget[player], 1.2f);
@@ -4761,6 +4758,37 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 				check("highlight_clears_when_view_leaves", !pie->HasHighlightDraw(), pie->HasHighlightDraw() ? "1" : "0", "0");
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
 			}
+		}
+		{
+			// Look-around is ignored until GameOverTimer passes 1000 sim ms.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			fixture->m_IsActive[0] = fixture->m_IsHuman[0] = true;
+			fixture->m_Team[0] = 0;
+			fixture->SetActivityState(ActivityState::Over);
+			fixture->m_ViewState[0] = ViewState::Observe;
+			fixture->m_GameOverTimer.Reset();
+			fixture->m_ObservationTarget[0] = Vector(100, 100);
+			Controller* controller = fixture->GetPlayerController(0);
+			controller->SetDisabled(true);
+			controller->SetState(ControlState::HOLD_RIGHT, true);
+			const Vector origin = fixture->m_ObservationTarget[0];
+			if (fixture->m_GameOverTimer.IsPastSimMS(1000)) {
+				controller->RelativeCursorMovement(fixture->m_ObservationTarget[0], 1.2F);
+			}
+			check("observe_target_held_until_sim", fixture->m_ObservationTarget[0] == origin,
+				std::to_string(fixture->m_ObservationTarget[0].m_X), "100");
+			fixture->m_ObserveFreezeHeld[0] = true;
+			fixture->Clear();
+			check("observe_freeze_flag_clears", !fixture->m_ObserveFreezeHeld[0], fixture->m_ObserveFreezeHeld[0] ? "1" : "0", "0");
+			fixture->m_ObservationTarget[0] = Vector(100, 100);
+			fixture->m_GameOverTimer.SetElapsedSimTimeMS(1500);
+			if (fixture->m_GameOverTimer.IsPastSimMS(1000)) {
+				controller->RelativeCursorMovement(fixture->m_ObservationTarget[0], 1.2F);
+			}
+			check("observe_target_moves_after_sim", fixture->m_ObservationTarget[0] != origin,
+				std::to_string(fixture->m_ObservationTarget[0].m_X), "moved");
 		}
 		{
 			// The returner's banner is the same live one after a slot that arrives empty, exactly like its menu.

@@ -46,7 +46,19 @@ function GameOverObserve:UpdateActivity()
 		self.ended = true;
 		print("[game-over-freeze] over tick=" .. self.ticks);
 	end
-	-- The engine prints [game-over-freeze] lift-tick at the C++ observe gate.
+	if self.ended then
+		for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
+			if self:PlayerActive(player) and self:PlayerHuman(player) then
+				local controller = self:GetPlayerController(player);
+				if controller then
+					controller.Disabled = true;
+					controller:SetState(Controller.HOLD_RIGHT, true);
+				end
+				local target = self:GetObservationTarget(player);
+				print("[game-over-freeze] target=" .. target.X .. "," .. target.Y .. " elapsed=" .. self.GameOverTimer.ElapsedSimTimeMS .. " player=" .. player);
+			end
+		end
+	end
 end
 
 function GameOverObserve:EndActivity()
