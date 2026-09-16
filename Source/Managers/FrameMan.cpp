@@ -38,6 +38,7 @@
 #include <SDL3_image/SDL_image.h>
 
 #include <array>
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <cstring>
@@ -332,16 +333,17 @@ std::string FrameMan::SplitStringToFitWidth(const std::string& stringToSplit, in
 		while (!remaining.empty()) {
 			size_t fitChars = 0;
 			size_t lastSpace = std::string_view::npos;
-			std::string probe;
+			int width = 0;
 			for (const char c: remaining) {
-				probe += c;
-				if (fontToUse->CalculateWidth(probe) > widthLimit) {
+				const int glyph = fontToUse->CalculateWidth(c);
+				if (width + glyph > widthLimit) {
 					// A space that crosses the limit is still the wrap point, not a hard-break.
 					if (c == ' ' && fitChars > 0) {
 						lastSpace = fitChars;
 					}
 					break;
 				}
+				width += glyph;
 				if (c == ' ') lastSpace = fitChars;
 				++fitChars;
 			}
@@ -479,6 +481,21 @@ bool FrameMan::RunTextWrapSelfTest() {
 	const int limitG = limitA;
 	const std::string gotG = SplitStringToFitWidth(mixed, limitG, true);
 	check(width_ok(gotA, limitA) && width_ok(gotB, limitB) && width_ok(gotD, limitD) && width_ok(gotE, limitE) && width_ok(gotF, limitF) && width_ok(gotG, limitG), "width_limit_all", "got='" + gotG + "'");
+
+	// 4 KB spaced line at a narrow limit. The tip's growing-probe wrap is O(n^2); a conservative
+	// stand-in for that cost is 80000 us, and the budget is one tenth of it. No tip measurement
+	// was taken under the no-tests rule.
+	std::string longLine;
+	longLine.reserve(4096);
+	for (int i = 0; i < 4096; ++i) {
+		longLine += (i % 8 == 7) ? ' ' : 'a';
+	}
+	const int narrow = font->CalculateWidth("aaa") + 1;
+	const auto t0 = std::chrono::steady_clock::now();
+	const std::string gotT = SplitStringToFitWidth(longLine, narrow, true);
+	const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+	check(us < 8000, "timing_4kb_narrow", "us=" + std::to_string(us) + " budget=8000 (1/10 of 80000 us tip stand-in)");
+	check(width_ok(gotT, narrow), "timing_4kb_width", "wrapped");
 
 	std::cout << Tag << (failures == 0 ? " PASS" : " FAIL") << std::endl;
 	return failures == 0;
