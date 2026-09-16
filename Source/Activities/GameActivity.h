@@ -201,11 +201,6 @@ namespace RTE {
 				m_ObservationTarget[player] = newTarget;
 		}
 
-		/// The observation scroll target for a seat.
-		const Vector& GetObservationTarget(int player = 0) const {
-			return (player >= Players::PlayerOne && player < Players::MaxPlayerCount) ? m_ObservationTarget[player] : m_ObservationTarget[Players::PlayerOne];
-		}
-
 		/// Sets the player death sceneman scroll targets, for when a player-
 		/// controlled actor dies and the view should go to his last position
 		/// @param newTarget The new absolute position to set as death view.

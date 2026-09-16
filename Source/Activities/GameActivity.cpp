@@ -1871,10 +1871,6 @@ bool GameActivity::ApplyObserveLookAround(int player) {
 	}
 	const bool lookedAround = m_PlayerController[player].RelativeCursorMovement(m_ObservationTarget[player], 1.2f);
 	UpdateSpectatorView(player, lookedAround);
-	if (lookedAround && m_ActivityState == ActivityState::Over) {
-		std::cout << "[game-over-freeze] lift tick=" << g_TimerMan.GetSimUpdateCount()
-			<< " elapsed=" << m_GameOverTimer.GetElapsedSimTimeMS() << " player=" << player << std::endl;
-	}
 	return lookedAround;
 }
 
