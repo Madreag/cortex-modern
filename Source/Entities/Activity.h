@@ -457,12 +457,16 @@ namespace RTE {
 		/// @return Whether funds amount changed for this team since last time this was called.
 		bool TeamFundsChanged(int whichTeam = 0);
 
-		/// Local-seat funds readout: committed value plus an outstanding previewed order. Other reads stay committed.
+		/// Local-seat funds readout: committed value plus outstanding previewed orders. Other reads stay committed.
 		float GetTeamFundsForPresentation(int whichTeam, int player) const;
-		void NotePreviewedPurchase(int player, int team, float cost, uint64_t commitTick);
+		/// The gold number DrawGUI prints: floor of the local presentation tally.
+		std::string DescribeFundsReadout(int whichTeam, int player) const;
+		void NotePreviewedPurchase(int player, int team, float cost, uint64_t commitTick, uint64_t sequence = 0);
 		void ConfirmPreviewedPurchase(int player, int team, float cost);
-		void AdoptPreviewedPurchase(int team, float cost);
+		void AdoptPreviewedPurchase(int player, int team, float cost);
+		void ClearPreviewedPurchase(int player, int team, float cost);
 		void ClearPresentationView(int player);
+		void ClearAllPresentationViews();
 		void ExpirePresentationViews(uint64_t committedTick);
 		/// Fills the local seat's presentation view from in-flight buy orders; the preview calls this after restore.
 		void FillPresentationFromPreview(uint64_t horizonTick);
@@ -784,13 +788,16 @@ namespace RTE {
 		Actor* m_ControlledActor[Players::MaxPlayerCount]; //!< Currently controlled actor, not owned.
 		Actor* m_RenderSubstituteActor[Players::MaxPlayerCount]{}; //!< Preview clone answered by GetControlledActor during a render window only; not owned.
 		/// Local-seat presentation of activity UI the preview fills and the commit clears. Never checkpointed.
-		struct PresentationView {
-			bool fundsArmed = false;
-			int fundsTeam = Teams::NoTeam;
-			float fundsDelta = 0;
+		struct PresentationOrder {
+			float cost = 0;
 			uint64_t commitTick = 0;
+			uint64_t sequence = 0;
 			bool confirmed = false;
 			uint64_t confirmedTick = 0;
+		};
+		struct PresentationView {
+			int fundsTeam = Teams::NoTeam;
+			std::vector<PresentationOrder> orders;
 		};
 		PresentationView m_PresentationView[Players::MaxPlayerCount]{};
 		std::array<int64_t, Players::MaxPlayerCount> m_LockstepControlUID{}; //!< Which actor the wire says each seat plays; the same on every peer.

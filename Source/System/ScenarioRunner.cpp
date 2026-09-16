@@ -1369,16 +1369,27 @@ namespace RTE {
 
 	void ScenarioRunner::PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out) {
 		out.clear();
-		const auto take = [&out](const NetGameCommand& command, uint64_t targetFrame) {
+		const uint64_t now = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		const auto take = [&out, now](const NetGameCommand& command, uint64_t targetFrame) {
 			const NetGameDeliverCargo* delivery = std::get_if<NetGameDeliverCargo>(&command.payload);
 			if (!delivery || !delivery->queuedPurchase) {
 				return;
+			}
+			if (targetFrame != 0 && targetFrame <= now) {
+				return;
+			}
+			if (command.sequence != 0) {
+				const auto applied = s_AppliedCommandSequences.find(command.senderPeerId);
+				if (applied != s_AppliedCommandSequences.end() && command.sequence <= applied->second) {
+					return;
+				}
 			}
 			PendingQueuedPurchase row;
 			row.player = delivery->orderedByPlayer;
 			row.team = delivery->team;
 			row.cost = delivery->cost;
 			row.targetFrame = targetFrame;
+			row.sequence = command.sequence;
 			out.push_back(row);
 		};
 		for (const NetGameCommand& command: s_PendingLocalGameCommands) {

@@ -338,6 +338,7 @@ namespace RTE {
 			int team = 0;
 			float cost = 0;
 			uint64_t targetFrame = 0;
+			uint64_t sequence = 0;
 		};
 		/// Presentation peek of in-flight local buy orders: pending, outbox, and recovered commands.
 		static void PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out);
