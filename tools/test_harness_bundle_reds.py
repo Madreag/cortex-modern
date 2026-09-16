@@ -96,6 +96,27 @@ class PeerReportFlags(unittest.TestCase):
             self.assertIn("--cross-process", text)
         self.assertIn('peer checkpoint compare failed: {first_fail}', autosave)
 
+    def test_missing_comparer_records_a_failed_snapshot_check(self):
+        """Base tree skipped snapshots_sim_identical when the comparer path was absent."""
+        sys.path.insert(0, str(HERE / "heal_driver"))
+        import recovery_e2e
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            copied = [out / "p5snap_p1.ccsave", out / "p5snap_p2.ccsave"]
+            for path in copied:
+                path.write_bytes(b"x")
+            checks = []
+
+            def check(name, ok, detail, evidence):
+                checks.append({"name": name, "status": "pass" if ok else "fail",
+                               "detail": detail, "evidence": evidence})
+
+            with patch.object(recovery_e2e, "SNAPSHOT_COMPARE", out / "missing_compare.py"):
+                recovery_e2e.record_snapshot_compare(out, copied, out / "a.json", out / "b.json", check)
+        row = next(item for item in checks if item["name"] == "snapshots_sim_identical")
+        self.assertEqual(row["status"], "fail")
+        self.assertIn("comparer missing:", row["detail"])
+
 
 class OverlayToastHoldBanner(unittest.TestCase):
     def test_toast_hold_banner_carries_widget_and_banners(self):
