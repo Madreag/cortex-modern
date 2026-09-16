@@ -6,6 +6,7 @@
 #include "NetHostBanStore.h"
 #include "NetLobbySession.h"
 #include "NetLockstep.h"
+#include "NetActorOwnership.h"
 #include "NetMatchConfig.h"
 #include "NetMatchRunner.h"
 #include "NetReconnectLedger.h"
@@ -6108,27 +6109,28 @@ namespace RTE {
 			}
 			g_ProductionCensusActors = {{101, 1, false}, {102, 1, false}, {201, 2, false}};
 			live.host.SetDropOwnershipSource(&ProductionCensusSource, nullptr);
-			NetLockstepCoordinator censusRound;
-			censusRound.m_Config.localPeerId = 1;
-			censusRound.m_Config.peerCount = 3;
-			censusRound.m_Config.matchConfig.hostPeerId = 1;
-			censusRound.m_Config.matchConfig.peerCount = 3;
-			censusRound.m_Config.matchConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
-			censusRound.m_Config.matchConfig.startingGold = 2400;
-			censusRound.m_Config.matchConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Keeper"}, {3, 2, false, "Target"}};
-			ScenarioRunner::SetLockstepCoordinator(&censusRound);
-			const uint32_t keeperFunds = censusRound.GetConfig().matchConfig.startingGold;
+			NetMatchConfig censusConfig;
+			censusConfig.hostPeerId = 1;
+			censusConfig.peerCount = 3;
+			censusConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			censusConfig.startingGold = 2400;
+			censusConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Keeper"}, {3, 2, false, "Target"}};
+			const uint32_t keeperFunds = censusConfig.startingGold;
 			const std::vector<NetGameCommand> inFlight{{2, NetGameSetTeamFunds{1, static_cast<int32_t>(keeperFunds)}}};
 			const auto census = ProductionCensusSource(nullptr);
-			const auto keeperActors = NetReconnectLedger::CollectOwnedActorUIDs(census, 2);
-			if (keeperActors != std::vector<int64_t>{101, 102} || ProductionCensusOwner({101, 1, false}) != 2 ||
-			    ProductionCensusOwner({102, 1, false}) != 2 || censusRound.GetConfig().matchConfig.startingGold != keeperFunds ||
-			    inFlight.size() != 1 || !live.host.TakePendingReseats().empty()) {
-				ScenarioRunner::SetLockstepCoordinator(nullptr);
+			std::vector<int64_t> keeperActors;
+			for (const NetH4LedgerActor& actor : census) {
+				if (actor.team == 1) {
+					keeperActors.push_back(actor.actorUID);
+				}
+			}
+			if (keeperActors != std::vector<int64_t>{101, 102} ||
+			    NetActorOwnership::ResolveOwnerPeer(censusConfig, {101, 1, false}) != 2 ||
+			    NetActorOwnership::ResolveOwnerPeer(censusConfig, {102, 1, false}) != 2 ||
+			    censusConfig.startingGold != keeperFunds || inFlight.size() != 1 || !live.host.TakePendingReseats().empty()) {
 				g_ProductionCensusActors.clear();
 				return Fail("the kick changed the keeper's actor census, funds or in-flight commands");
 			}
-			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			g_ProductionCensusActors.clear();
 			if (issued.notice.action != NetParticipantRemovalAction::Kick || issued.notice.stableSeat != targetRecord.stableSeat) {
 				return Fail("the issued notice did not name the kicked seat");
