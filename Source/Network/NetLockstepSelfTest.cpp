@@ -12470,6 +12470,39 @@ namespace RTE {
 			return passed;
 		}
 
+		bool TestPausedFramesResetOnResyncRelaunch(std::string* error) {
+			const char* name = "paused_frames_reset_on_resync_relaunch";
+			const uint64_t cap = 20;
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			const std::deque<Actor*> none;
+			for (uint64_t frame = 1; frame <= 10; ++frame) {
+				NetLockstepReadyFrame ready;
+				ready.frame = frame;
+				ApplyLockstepLeaveHandoffs(ready, none, frame >= 8);
+			}
+			if (LockstepPlayedFrame() != 7) {
+				if (error) *error = "pre-resync played frame is " + std::to_string(LockstepPlayedFrame()) + " not 7";
+				return false;
+			}
+			// The coordinator handoff a resync runs: applied goes to 0, the next frame is dropFrame-1.
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			for (uint64_t frame = 9; frame <= cap; ++frame) {
+				NetLockstepReadyFrame ready;
+				ready.frame = frame;
+				ApplyLockstepLeaveHandoffs(ready, none, false);
+			}
+			const uint64_t played = LockstepPlayedFrame();
+			const bool ok = played == cap;
+			std::cout << "[net-lockstep-selftest] " << (ok ? "PASS " : "FAIL ") << name
+			          << " cap=" << cap << " played=" << played << std::endl;
+			if (!ok && error) {
+				*error = "resync left LockstepPlayedFrame at " + std::to_string(played) +
+				         " short of the -net-match-ticks cap " + std::to_string(cap);
+			}
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			return ok;
+		}
+
 		// followups-1 (second read HIGH-3): NetLockstep.cpp ResolveActorOwner hands a team with no surviving
 		// human to matchConfig.hostPeerId without asking whether the host itself departed, and IsActorOwnerGone
 		// no longer stands those units down while the round runs. A survivor told the host has left would
@@ -13264,6 +13297,7 @@ namespace RTE {
 		std::string followupError;
 		bool followupsPassed = true;
 		followupsPassed &= TestPausedFramesDoNotSpendTheTickBudget(&followupError);
+		followupsPassed &= TestPausedFramesResetOnResyncRelaunch(&followupError);
 		followupsPassed &= TestDepartedHostEndsTheRound(&followupError);
 		followupsPassed &= TestReseatWithoutAReadoptionKeepsItsSeat(&followupError);
 		followupsPassed &= TestMidLeaveSaveAgreesAcrossPeers(&followupError);

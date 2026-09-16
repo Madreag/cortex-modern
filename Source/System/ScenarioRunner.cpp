@@ -798,6 +798,7 @@ namespace RTE {
 		}
 		if (coordinator) { s_CommandSessionId = coordinator->GetConfig().sessionId; s_CommandEpoch = coordinator->GetConfig().seatPresenceEpoch; }
 		s_LockstepAppliedFrame = 0;
+		ResetLockstepPausedFrames();
 		s_LockstepControlOverrides.clear();
 		s_LockstepDroppedControlOverrides.clear();
 		// A coordinator handoff ends any synced pause; the next match must not inherit a frozen clock.
