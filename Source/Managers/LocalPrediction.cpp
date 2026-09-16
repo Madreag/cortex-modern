@@ -38,6 +38,7 @@ namespace RTE {
 	std::vector<MovableObject*> LocalPrediction::s_TakenResidents;
 	LocalPrediction::Outcome LocalPrediction::s_LastOutcome;
 	bool LocalPrediction::s_Rendering = false;
+	bool LocalPrediction::s_RenderScriptsWereFrozen = false;
 	int LocalPrediction::s_Override = -1;
 	int LocalPrediction::s_DepthOverride = 0;
 	long long LocalPrediction::s_PreviewedTick = -1;
@@ -341,6 +342,8 @@ namespace RTE {
 		if (s_Rendering || s_Previews.empty()) {
 			return;
 		}
+		s_RenderScriptsWereFrozen = LuaMan::AreScriptsFrozen();
+		LuaMan::SetScriptsFrozen(true);
 		Trace("render begin");
 		g_MovableMan.WaitForActorsSeeTask();
 		g_MovableMan.CompleteQueuedMOIDDrawings();
@@ -385,7 +388,42 @@ namespace RTE {
 				g_MovableMan.HideForRender(resident, false);
 			}
 			s_Rendering = false;
+			LuaMan::SetScriptsFrozen(s_RenderScriptsWereFrozen);
 		}
+	}
+
+	bool LocalPrediction::RunRenderWindowScriptsSelfTest() {
+		constexpr const char* Tag = "[render-window-scripts-selftest]";
+		int failures = 0;
+		const auto check = [&](bool ok, const char* name, const std::string& detail) {
+			std::cout << Tag << (ok ? " PASS " : " FAIL ") << name;
+			if (!detail.empty()) {
+				std::cout << ": " << detail;
+			}
+			std::cout << std::endl;
+			if (!ok) {
+				++failures;
+			}
+		};
+		s_Previews.push_back(Preview{});
+		const bool before = LuaMan::AreScriptsFrozen();
+		BeginRender();
+		const bool inside = LuaMan::AreScriptsFrozen();
+		EndRender();
+		const bool after = LuaMan::AreScriptsFrozen();
+		check(inside, "frozen_inside_render", inside ? "" : "inside read is false");
+		check(after == before, "restored_after_render", after == before ? "" : "pre-render state was not restored");
+		LuaMan::SetScriptsFrozen(true);
+		const bool nestBefore = LuaMan::AreScriptsFrozen();
+		BeginRender();
+		const bool nestInside = LuaMan::AreScriptsFrozen();
+		EndRender();
+		const bool nestAfter = LuaMan::AreScriptsFrozen();
+		check(nestBefore && nestInside && nestAfter, "nesting_preview_freeze", nestInside ? "" : "inside read is false");
+		LuaMan::SetScriptsFrozen(false);
+		Clear();
+		std::cout << Tag << (failures == 0 ? " PASS" : " FAIL") << std::endl;
+		return failures == 0;
 	}
 
 	void LocalPrediction::Clear() {

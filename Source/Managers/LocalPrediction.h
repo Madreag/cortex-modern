@@ -28,6 +28,9 @@ namespace RTE {
 		static void EndRender();
 		static bool IsRendering() { return s_Rendering; }
 
+		/// Frozen-script contract of the render window, for -render-window-scripts-selftest.
+		static bool RunRenderWindowScriptsSelfTest();
+
 		/// Drops the previews outright (a match teardown).
 		static void Clear();
 		/// One line of counters for the match report; empty when nothing was previewed.
@@ -67,6 +70,7 @@ namespace RTE {
 		static std::vector<MovableObject*> s_TakenResidents;
 		static Outcome s_LastOutcome;
 		static bool s_Rendering;
+		static bool s_RenderScriptsWereFrozen;
 		static int s_Override;
 		static int s_DepthOverride;
 		static long long s_PreviewedTick;

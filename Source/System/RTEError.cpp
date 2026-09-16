@@ -171,7 +171,17 @@ static LONG WINAPI RTEWindowsExceptionHandler([[maybe_unused]] EXCEPTION_POINTER
 	static std::atomic_flag s_minimalRecordWritten = ATOMIC_FLAG_INIT;
 	if (!s_minimalRecordWritten.test_and_set()) {
 		char minimalRecord[128];
-		const int recordLength = std::snprintf(minimalRecord, sizeof(minimalRecord), "FATAL: unhandled exception 0x%08lX at 0x%zX\n", static_cast<unsigned long>(exceptionCode), exceptionAddress);
+		const size_t imageBase = reinterpret_cast<size_t>(GetModuleHandleW(nullptr));
+		size_t imageSize = 0;
+		if (imageBase != 0) {
+			const IMAGE_NT_HEADERS* ntHeaders = reinterpret_cast<const IMAGE_NT_HEADERS*>(imageBase + reinterpret_cast<const IMAGE_DOS_HEADER*>(imageBase)->e_lfanew);
+			imageSize = ntHeaders->OptionalHeader.SizeOfImage;
+		}
+		// A fault outside the executable keeps the raw VA only.
+		const bool inImage = imageBase != 0 && exceptionAddress >= imageBase && exceptionAddress < imageBase + imageSize;
+		const int recordLength = inImage
+			? std::snprintf(minimalRecord, sizeof(minimalRecord), "FATAL: unhandled exception 0x%08lX at 0x%zX (exe+0x%zX)\n", static_cast<unsigned long>(exceptionCode), exceptionAddress, exceptionAddress - imageBase)
+			: std::snprintf(minimalRecord, sizeof(minimalRecord), "FATAL: unhandled exception 0x%08lX at 0x%zX\n", static_cast<unsigned long>(exceptionCode), exceptionAddress);
 		if (recordLength > 0) {
 			std::fwrite(minimalRecord, 1, static_cast<size_t>(recordLength), stderr);
 			std::fflush(stderr);
@@ -182,11 +192,16 @@ static LONG WINAPI RTEWindowsExceptionHandler([[maybe_unused]] EXCEPTION_POINTER
 		}
 		wchar_t dumpPath[MAX_PATH];
 		const DWORD dumpPathLength = GetEnvironmentVariableW(L"CC_TEST_CRASH_DUMP", dumpPath, MAX_PATH);
+		wchar_t fullDumpFlag[16];
+		const DWORD fullDumpLength = GetEnvironmentVariableW(L"CC_TEST_CRASH_DUMP_FULL", fullDumpFlag, 16);
 		if (dumpPathLength > 0 && dumpPathLength < MAX_PATH) {
 			HANDLE dumpFile = CreateFileW(dumpPath, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
 			if (dumpFile != INVALID_HANDLE_VALUE) {
 				MINIDUMP_EXCEPTION_INFORMATION exceptionInfo{GetCurrentThreadId(), exceptPtr, FALSE};
-				MiniDumpWriteDump(processHandle, GetCurrentProcessId(), dumpFile, MiniDumpWithFullMemory, &exceptionInfo, nullptr, nullptr);
+				const MINIDUMP_TYPE dumpType = fullDumpLength > 0
+					? MiniDumpWithFullMemory
+					: static_cast<MINIDUMP_TYPE>(MiniDumpNormal | MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo | MiniDumpWithDataSegs);
+				MiniDumpWriteDump(processHandle, GetCurrentProcessId(), dumpFile, dumpType, &exceptionInfo, nullptr, nullptr);
 				CloseHandle(dumpFile);
 			}
 		}

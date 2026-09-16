@@ -1062,6 +1062,7 @@ Actor* Activity::GetControlledActor(int player) {
 	}
 	// A preview render answers the clone the way the swapped slots do; the sim never runs inside the render window.
 	if (m_RenderSubstituteActor[player]) {
+		RTEAssert(LuaMan::AreScriptsFrozen(), "GetControlledActor answers a render substitute only while scripts are frozen");
 		return m_RenderSubstituteActor[player];
 	}
 	if (m_SharedPlayerSeats) {
