@@ -66,6 +66,18 @@ INTERNET_SAVED = {"SessionDirectoryUrl": "newdir.example.test/serve",
 # One value column across the five network pages: every page's value/second-column control starts at
 # this offset from its page box, and every row rides the Misc page's 20px pitch.
 NETWORK_VALUE_COLUMN = 190
+# The same page-relative column on every settings page (Video through Network).
+SETTINGS_VALUE_COLUMN = 190
+PAGE_FIRST_VALUE = {
+    "Video": "ComboPresetResolution",
+    "Audio": "SliderMasterVolume",
+    "Input": "LabelP1SelectedDevice",
+    "Gameplay": "CheckboxBlipOnRevealUnseen",
+    "Misc": "CheckboxShowToolTips",
+    "Network": "TextNetworkDisplayName",
+}
+FILES_BUTTONS = ("ButtonNetOpenAutosaves", "ButtonNetCopyAutosavesPath", "ButtonNetOpenDiagnostics",
+                 "ButtonNetCopyDiagPath", "ButtonNetSaveDiagnostics")
 NETWORK_ACTION_COLUMN = 330
 INTERNET_HINT = "host[:port][/path] - https:// is implied"
 INTERNET_REASON = "Replays and connection details come with a later update."
@@ -216,7 +228,8 @@ def scripts(case, port, root):
                 {who: pause_probe(who, root) for who in ("host", "client")})
     probe = None
     if case == "landing":
-        text = LANDING + checks("ButtonMultiplayerHostGame", "MultiplayerLandingPanel")
+        text = LANDING + "assert_label LabelMultiplayerNamePrompt Multiplayer name:\n"
+        text += checks("ButtonMultiplayerHostGame", "MultiplayerLandingPanel")
         text += "assert_visible ButtonMultiplayerCreate 0\n"
         for name in (*ORDER, ORDER[0]):
             text += f"focus_next\nassert_focus {name}\n"
@@ -392,17 +405,22 @@ def scripts(case, port, root):
                 "assert_visible LabelHostActivity 1\nassert_label LabelHostActivity Activity\n"
                 "assert_label ComboHostActivity P4 Alpha Duel - Base.rte\n"
                 "assert_text_fits ComboHostActivity\n"
+                "assert_visible ComboHostMode 1\nassert_label ComboHostMode PvP\n"
                 "assert_label LabelHostInfo Grasslands - PvP\ndump_host_options\n"
                 # combo_drop is the same panel-level click a user makes; the dumped capture shows the
                 # list open. combo_select picks the row by its text the way a click on it would.
                 "combo_drop ComboHostActivity\nwait 3\ndump_host_options\n"
                 "combo_select ComboHostActivity Brain vs Brain - Base.rte\nwait 3\n"
                 "assert_label ComboHostActivity Brain vs Brain - Base.rte\ndump_host_options\n"
+                "combo_drop ComboHostMode\nwait 3\ndump_host_options\n"
+                "combo_select ComboHostMode Co-op PvE\nwait 3\n"
+                "assert_label ComboHostMode Co-op PvE\n"
+                "assert_label LabelHostInfo Grasslands - Co-op PvE\ndump_host_options\n"
                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
                 "wait_connected 2\nwait 12\n"
                 "assert_label LabelLobbyMatch Brain vs Brain - Base.rte\n"
-                "assert_label LabelLobbyMatchMode Grasslands - PvP\n"
+                "assert_label LabelLobbyMatchMode Grasslands - Co-op PvE\n"
                 "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                 "assert_text_fits LabelLobbyPlayersHeader\n"
                 # A seat row elides inside the fixed panel rather than wrap or widen it (UX-42).
@@ -417,7 +435,7 @@ def scripts(case, port, root):
                   "wait_connected 2\nwait_activity Brain vs Brain\nwait 12\n"
                   "assert_substate Lobby\n"
                   "assert_label LabelLobbyMatch Brain vs Brain - Base.rte\n"
-                  "assert_label LabelLobbyMatchMode Grasslands - PvP\n"
+                  "assert_label LabelLobbyMatchMode Grasslands - Co-op PvE\n"
                   "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                   "assert_text_fits LabelLobbyPlayersHeader\n"
                   "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
@@ -723,6 +741,14 @@ def run_case(options, case, root, failing=None):
                                        for capture in images for control in capture["controls"]
                                        if control.get("text_fits") is False]
             assert not result["text_overflow"], result["text_overflow"]
+            result["page_value_columns"] = []
+            for capture in images:
+                page = capture["settings_page"].split(":")[0]
+                box = next(c for c in capture["controls"] if c["name"] == f"CollectionBox{page}Settings")
+                value = next(c for c in capture["controls"] if c["name"] == PAGE_FIRST_VALUE[page])
+                rel_x = value["rect"][0] - box["rect"][0]
+                result["page_value_columns"].append([page, value["name"], rel_x])
+                assert rel_x == SETTINGS_VALUE_COLUMN, (page, value["name"], rel_x, SETTINGS_VALUE_COLUMN)
             gameplay = next((capture for capture in images if capture["settings_page"] == "Gameplay"), None)
             assert gameplay, [capture["settings_page"] for capture in images]
             rows = {control["name"]: control for control in gameplay["controls"]}
@@ -865,6 +891,9 @@ def run_case(options, case, root, failing=None):
                     assert opens[1][1] - opens[0][1] == copies[1][1] - copies[0][1] == 40, (opens, copies)
                     for name in ("LabelNetAutosaveHost", "LabelNetAutosaveIntervalHost"):
                         assert rows[name]["text"] == "Set by the host", rows[name]
+                        assert rows[name]["enabled"] is False, rows[name]
+                    widths = {rows[name]["rect"][2] for name in FILES_BUTTONS}
+                    assert len(widths) == 1, {name: rows[name]["rect"][2] for name in FILES_BUTTONS}
             captioned = [control for control in images[0]["controls"] if control["text"]]
             assert captioned and all("text_fits" in control for control in captioned), "a caption carries no fit measurement"
             result["unfit"] = [control["name"] for control in captioned if control["text_fits"] is False]
@@ -908,6 +937,8 @@ def run_case(options, case, root, failing=None):
             # A first visit owes the player no reconnect verdict: the record probe's negative stays silent.
             status = next(c for c in images[0]["controls"] if c["name"] == "LabelMultiplayerLandingStatus")
             assert status["text"] == "", status
+            prompt = next(c for c in images[0]["controls"] if c["name"] == "LabelMultiplayerNamePrompt")
+            assert prompt["text"] == "Multiplayer name:", prompt
             # The over-cap name was refused twice: once on the command line, once at the host's create.
             assert "-net-player-name over the 64-byte cap" in logs["host"], logs["host"][-2000:]
             refused = {c["name"]: c for c in images[-1]["controls"]}
@@ -923,6 +954,17 @@ def run_case(options, case, root, failing=None):
                 (leave["rect"], seats["rect"], panel["rect"])
             header, row = drawn["LabelLobbyPlayersHeader"], drawn["LabelLobbyPlayer0"]
             assert header["rect"][0] == row["rect"][0] and header["text_fits"], (header, row)
+            start = drawn["ButtonMultiplayerStart"]
+            pair_span = seats["rect"][0] + seats["rect"][2] - leave["rect"][0]
+            pair_gap = seats["rect"][0] - leave["rect"][0] - leave["rect"][2]
+            back = next((c for c in drawn.values() if c["name"] == "ButtonBackToMain"), None)
+            save = next((c for c in drawn.values() if c["name"] == "ButtonSaveDiagnostics"), None)
+            assert pair_span == start["rect"][2], (pair_span, start["rect"], leave["rect"], seats["rect"])
+            if back and save:
+                footer_gap = save["rect"][0] - back["rect"][0] - back["rect"][2]
+                assert pair_gap == footer_gap, (pair_gap, footer_gap)
+            else:
+                assert pair_gap == 8, pair_gap
         if case == "lobby-name":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == NETWORK_SEED["NetworkDisplayName"]
             result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", {"NetworkDisplayName"})
@@ -935,6 +977,8 @@ def run_case(options, case, root, failing=None):
             assert host_setup["TextHostInputDelay"]["text"] == "auto", host_setup["TextHostInputDelay"]
             assert host_setup["TextHostInputDelay"]["enabled"] is False, host_setup["TextHostInputDelay"]
             assert host_setup["LabelHostInputDelayPolicy"]["text"] == "(auto)", host_setup["LabelHostInputDelayPolicy"]
+            assert host_setup["ComboHostActivity"]["rect"][0] == host_setup["TextHostPort"]["rect"][0], (
+                host_setup["ComboHostActivity"]["rect"], host_setup["TextHostPort"]["rect"])
             # The disabled delay box's frame is DimRect at 55% of an enabled TextBox frame.
             delay_luma = frame_luma(images[-2]["png"], host_setup["TextHostInputDelay"]["rect"])
             port_luma = frame_luma(images[-2]["png"], host_setup["TextHostPort"]["rect"])
@@ -946,6 +990,8 @@ def run_case(options, case, root, failing=None):
             assert 0.45 <= ratio <= 0.65, (delay_luma, port_luma, ratio)
             # The disabled Seats control sits in the lobby capture for the visual review.
             assert drawn["ButtonMultiplayerModerate"]["enabled"] is False, drawn["ButtonMultiplayerModerate"]
+            status = drawn["LabelMultiplayerStatus"]
+            assert f":{options.port}" in status["text"] and status["text_fits"] is True, status
             # The multiplayer screen's panel centres vertically too; an odd height shifts one pixel,
             # and a panel taller than the viewport clamps to its top edge instead of centring.
             screen_rect = drawn["MultiplayerScreen"]["rect"]
@@ -984,16 +1030,21 @@ def run_case(options, case, root, failing=None):
             preset, module = dumped["host"]
             assert module, dumped
             result["lobby_activity"] = {"preset": preset, "module": module, "dumps": dumped}
-            # Three host captures carry the combo: closed on the default, dropped open, then picked.
+            # Host-setup dumps carry the activity combo: closed on the default, dropped open, then picked.
             picker = [next(c for c in image["controls"] if c["name"] == "ComboHostActivity")
                       for image in images if image["peer"] == "host"
                       and any(c["name"] == "ComboHostActivity" for c in image["controls"])]
-            assert len(picker) == 3, picker
-            assert picker[0]["text"] == "P4 Alpha Duel - Base.rte" and picker[0]["dropped"] is False, picker[0]
-            assert picker[1]["text"] == picker[0]["text"] and picker[1]["dropped"] is True, picker[1]
-            assert picker[2]["text"] == f"{preset} - {module}" and picker[2]["dropped"] is False, picker[2]
+            assert picker and picker[0]["text"] == "P4 Alpha Duel - Base.rte" and picker[0]["dropped"] is False, picker
+            dropped = next(row for row in picker if row["dropped"])
+            assert dropped["items"] and all(item["text_fits"] for item in dropped["items"]), dropped
+            assert any(row["text"] == f"{preset} - {module}" and not row["dropped"] for row in picker), picker
             assert picker[0]["item_count"] > 1, picker[0]
+            modes = [next(c for c in image["controls"] if c["name"] == "ComboHostMode")
+                     for image in images if image["peer"] == "host"
+                     and any(c["name"] == "ComboHostMode" for c in image["controls"])]
+            assert any(row["text"] == "Co-op PvE" for row in modes), modes
             result["picker_cycle"] = picker
+            result["mode_cycle"] = modes
             # The two header rows carry the friendly mode label, and both peers' panels are the
             # same rectangle for the same lobby state - no peer's own status text widens its panel.
             panels = {}
@@ -1005,7 +1056,7 @@ def run_case(options, case, root, failing=None):
                 assert [shot["activity_preset"], shot["activity_module"]] == [preset, module], shot["json"]
                 controls = {c["name"]: c for c in shot["controls"]}
                 assert controls["LabelLobbyMatch"]["text"] == f"{preset} - {module}", (who, controls["LabelLobbyMatch"])
-                assert controls["LabelLobbyMatchMode"]["text"] == "Grasslands - PvP", (who, controls["LabelLobbyMatchMode"])
+                assert controls["LabelLobbyMatchMode"]["text"] == "Grasslands - Co-op PvE", (who, controls["LabelLobbyMatchMode"])
                 for name in ("LabelLobbyMatch", "LabelLobbyMatchMode", "LabelLobbyPlayersHeader"):
                     assert controls[name]["text_fits"] is True, (who, name, controls[name])
                 panels[who] = controls["MultiplayerLobbyPanel"]["rect"]
