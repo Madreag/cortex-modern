@@ -15,6 +15,7 @@
 #include "PresetMan.h"
 #include "PerformanceMan.h"
 #include "MenuMan.h"
+#include "GUIInputWrapper.h"
 #include "Icon.h"
 #include "GameActivity.h"
 #include "System.h"
@@ -89,7 +90,7 @@ int UInputMan::Initialize() {
 	int joystickCount = 0;
 	SDL_JoystickID* joysticks = SDL_GetGamepads(&joystickCount);
 
-	for (size_t index = 0; index < std::min(joystickCount, static_cast<int>(Players::MaxPlayerCount)); ++index) {
+	for (size_t index = 0; index < static_cast<size_t>(joystickCount) && controllerIndex < Players::MaxPlayerCount; ++index) {
 		if (IsScriptedPad(joysticks[index])) {
 			continue;
 		}
@@ -1838,7 +1839,26 @@ bool UInputMan::RunScriptedPadSeatSelfTest() {
 
 	RegisterScriptedPad(scriptedPadID);
 	HandleGamepadHotPlug(scriptedPadID);
-	check("no_seat_slot_binds_a_scripted_pad", std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), scriptedPadID) == s_PrevJoystickStates.end());
+
+	GUIInputWrapper::AcquireJoystickBackgroundEvents();
+	SDL_VirtualJoystickDesc desc{};
+	SDL_INIT_INTERFACE(&desc);
+	desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+	desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+	desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+	desc.button_mask = (1U << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+	desc.axis_mask = (1U << SDL_GAMEPAD_AXIS_COUNT) - 1;
+	desc.name = "Scripted pad seat selftest";
+	const SDL_JoystickID bindableID = SDL_AttachVirtualJoystick(&desc);
+	SDL_Joystick* bindable = nullptr;
+	if (bindableID) {
+		RegisterScriptedPad(bindableID);
+		HandleGamepadHotPlug(bindableID);
+		check("no_seat_slot_binds_a_scripted_pad", IsScriptedPad(bindableID) && std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), bindableID) == s_PrevJoystickStates.end());
+		bindable = SDL_OpenJoystick(bindableID);
+	} else {
+		check("no_seat_slot_binds_a_scripted_pad", false);
+	}
 
 	const Gamepad seatPadBefore = s_PrevJoystickStates[seatSlot];
 	const Gamepad seatChangedBefore = s_ChangedJoystickStates[seatSlot];
@@ -1875,6 +1895,12 @@ bool UInputMan::RunScriptedPadSeatSelfTest() {
 	HandleInputEvent(padEvent);
 	check("a_scripted_pad_release_ends_the_menu_read", !AnyStartPress(false));
 
+	if (bindable) SDL_CloseJoystick(bindable);
+	if (bindableID) {
+		ForgetScriptedPad(bindableID);
+		SDL_DetachVirtualJoystick(bindableID);
+	}
+	GUIInputWrapper::ReleaseJoystickBackgroundEvents();
 	ForgetScriptedPad(scriptedPadID);
 	check("forgetting_a_scripted_pad_drops_its_state", !IsScriptedPad(scriptedPadID) && s_ScriptedPadStates.empty() && s_ChangedScriptedPadStates.empty());
 
