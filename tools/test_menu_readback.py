@@ -241,7 +241,15 @@ def scripts(case, port, root):
         for page in PAGES:
             text += f"select_settings_page {page}\nwait 3\nassert_settings_page {page}\n"
             text += f"assert_visible CollectionBox{page}Settings 1\n"
-            text += checks(f"Tab{page}Settings", "CollectionBoxSettingsBase") + "dump_player_options\n"
+            text += checks(f"Tab{page}Settings", "CollectionBoxSettingsBase")
+            if page == "Gameplay":
+                # Enter drops, Down moves, Enter commits: the same pad/keyboard path the host combos use.
+                text += ("focus ComboBrainlessHumansSpectate\n"
+                         "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
+                         "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
+                         "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
+                         "assert_label ComboBrainlessHumansSpectate End the match\n")
+            text += "dump_player_options\n"
         text += "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n"
     elif case == "network":
         # The saved preferences reach the player page, an edit on the page reaches the settings, and the
@@ -386,38 +394,45 @@ def scripts(case, port, root):
                  "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
                  "dump_host_options\nexit\n")
     elif case == "net-activity":
-        # A menu-driven pair in the lobby itself: the host's combo picks off the default activity
-        # and every lobby surface on both peers must name the same preset and its module.
+        # A vanished pick needs a module unload the menu harness cannot drive; the native
+        # host_request_fallback row covers the empty-list Base.rte request fields instead.
+        # Two host passes on the same pair: the mouse path picks Brain vs Brain (no Grasslands),
+        # then the keyboard path drops, steps and commits both new combos the way a pad would.
         host = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
                 "assert_visible LabelHostActivity 1\nassert_label LabelHostActivity Activity\n"
+                "assert_visible LabelHostScene 1\nassert_label LabelHostScene Scene\n"
+                "assert_visible ComboHostScene 1\n"
                 "assert_label ComboHostActivity P4 Alpha Duel - Base.rte\n"
-                "assert_text_fits ComboHostActivity\n"
+                "assert_text_fits ComboHostActivity\nassert_text_fits ComboHostScene\n"
                 "assert_label LabelHostInfo Grasslands - PvP\ndump_host_options\n"
-                # combo_drop is the same panel-level click a user makes; the dumped capture shows the
-                # list open. combo_select picks the row by its text the way a click on it would.
                 "combo_drop ComboHostActivity\nwait 3\ndump_host_options\n"
+                "combo_select ComboHostActivity Brain vs Brain - Base.rte\nwait 3\n"
+                "assert_label ComboHostActivity Brain vs Brain - Base.rte\ndump_host_options\n"
+                "focus ComboHostScene\n"
+                "key_down Return\nwait 2\nkey_up Return\nwait 3\ndump_host_options\n"
+                "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
+                "key_down Return\nwait 2\nkey_up Return\nwait 3\ndump_host_options\n"
+                "focus ComboHostActivity\n"
+                "key_down Return\nwait 2\nkey_up Return\nwait 3\ndump_host_options\n"
+                "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
+                "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
                 "combo_select ComboHostActivity Brain vs Brain - Base.rte\nwait 3\n"
                 "assert_label ComboHostActivity Brain vs Brain - Base.rte\ndump_host_options\n"
                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
                 "wait_connected 2\nwait 12\n"
                 "assert_label LabelLobbyMatch Brain vs Brain - Base.rte\n"
-                "assert_label LabelLobbyMatchMode Grasslands - PvP\n"
                 "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                 "assert_text_fits LabelLobbyPlayersHeader\n"
-                # A seat row elides inside the fixed panel rather than wrap or widen it (UX-42).
                 "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
                 "dump_lobby\ndump_host_options\nwait 600\nexit\n")
         client = (LANDING + "settext TextMultiplayerName Joiner\n"
                   "activate ButtonMultiplayerJoinGame\nwait 10\n"
                   "settext TextJoinAddress 127.0.0.1\n"
                   f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n"
-                  # The joiner's own placeholder config already lists two seats, so the link wait
-                  # alone cannot prove the host's config landed - the activity name can.
                   "wait_connected 2\nwait_activity Brain vs Brain\nwait 12\n"
                   "assert_substate Lobby\n"
                   "assert_label LabelLobbyMatch Brain vs Brain - Base.rte\n"
-                  "assert_label LabelLobbyMatchMode Grasslands - PvP\n"
                   "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                   "assert_text_fits LabelLobbyPlayersHeader\n"
                   "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
@@ -728,6 +743,7 @@ def run_case(options, case, root, failing=None):
             rows = {control["name"]: control for control in gameplay["controls"]}
             label, combo = rows["LabelBrainlessHumansSpectate"], rows["ComboBrainlessHumansSpectate"]
             smart, unheld = rows["CheckboxSmartBuyMenuNavigation"], rows["LabelMaxUnheldItems"]
+            assert combo["text"] == "End the match", combo
             assert combo["rect"][1] == label["rect"][1], (combo["rect"], label["rect"])
             assert label["rect"][1] - smart["rect"][1] == 20, (smart["rect"], label["rect"])
             assert unheld["rect"][1] - label["rect"][1] == 20, (label["rect"], unheld["rect"])
@@ -974,28 +990,57 @@ def run_case(options, case, root, failing=None):
             assert reports["client"]["service"]["status"] == "The other player left the match", reports["client"]["service"]["status"]
         if case == "net-activity":
             # The combo's picked row is what the lobby carries, and both peers read the same
-            # preset and module off the wire - the client's label is the proof a bare name never was.
+            # preset, module and scene off the wire - the client's label is the proof a bare name never was.
             dumped = {}
             for who, log in logs.items():
-                rows = re.findall(r'dump_lobby state=\S+ members=\d+ activity="([^"]*)" module="([^"]*)"', log)
+                rows = re.findall(
+                    r'dump_lobby state=\S+ members=\d+ activity="([^"]*)" module="([^"]*)"'
+                    r'(?: scene="([^"]*)" scene_module="([^"]*)")?',
+                    log)
                 assert rows, (who, log[-2000:])
                 dumped[who] = rows[-1]
             assert dumped["host"] == dumped["client"], dumped
-            preset, module = dumped["host"]
+            preset, module, scene, scene_module = dumped["host"]
             assert module, dumped
-            result["lobby_activity"] = {"preset": preset, "module": module, "dumps": dumped}
-            # Three host captures carry the combo: closed on the default, dropped open, then picked.
-            picker = [next(c for c in image["controls"] if c["name"] == "ComboHostActivity")
-                      for image in images if image["peer"] == "host"
-                      and any(c["name"] == "ComboHostActivity" for c in image["controls"])]
-            assert len(picker) == 3, picker
+            assert scene and scene != "Grasslands", dumped
+            result["lobby_activity"] = {"preset": preset, "module": module, "scene": scene,
+                                        "scene_module": scene_module, "dumps": dumped}
+            host_setup = [image for image in images if image["peer"] == "host"
+                          and any(c["name"] == "ComboHostActivity" for c in image["controls"])]
+            assert host_setup, "ComboHostActivity missing from host dumps"
+            picker = [next(c for c in image["controls"] if c["name"] == "ComboHostActivity") for image in host_setup]
+            scenes = [next(c for c in image["controls"] if c["name"] == "ComboHostScene")
+                      for image in host_setup if any(c["name"] == "ComboHostScene" for c in image["controls"])]
+            assert scenes, "ComboHostScene missing from host dumps"
             assert picker[0]["text"] == "P4 Alpha Duel - Base.rte" and picker[0]["dropped"] is False, picker[0]
             assert picker[1]["text"] == picker[0]["text"] and picker[1]["dropped"] is True, picker[1]
-            assert picker[2]["text"] == f"{preset} - {module}" and picker[2]["dropped"] is False, picker[2]
+            assert any(row["text"] == "Brain vs Brain - Base.rte" and row["dropped"] is False for row in picker), picker
             assert picker[0]["item_count"] > 1, picker[0]
+            # The dump's control table is the same walk the picker uses; every listed activity has a scene.
+            table = host_setup[0]["activity_table"]
+            assert table and all(row["scenes"] for row in table), table
+            assert picker[0]["item_count"] == len(table), (picker[0]["item_count"], len(table))
+            assert picker[0]["item_count"] == len(picker[0].get("items", [])), picker[0]
+            brain = next(row for row in table if row["preset"] == "Brain vs Brain" and row["module"] == "Base.rte")
+            assert all(entry["name"] != "Grasslands" for entry in brain["scenes"]), brain
+            brain_scene = None
+            for image in host_setup:
+                controls = {c["name"]: c for c in image["controls"]}
+                if (controls.get("ComboHostActivity", {}).get("text") == "Brain vs Brain - Base.rte"
+                        and controls.get("ComboHostScene") and not controls["ComboHostScene"]["dropped"]):
+                    brain_scene = controls["ComboHostScene"]
+                    break
+            assert brain_scene, "no closed Brain vs Brain scene dump"
+            listed = [entry["name"] + (f" - {entry['module']}" if sum(1 for other in brain["scenes"] if other["name"] == entry["name"]) > 1
+                                       else "") for entry in brain["scenes"]]
+            assert brain_scene["items"] == listed, (brain_scene["items"], listed)
+            assert "Grasslands" not in brain_scene["items"], brain_scene
+            assert any(row["dropped"] is True for row in scenes), scenes
+            assert any(row["dropped"] is True for row in picker[2:]), picker
             result["picker_cycle"] = picker
-            # The two header rows carry the friendly mode label, and both peers' panels are the
-            # same rectangle for the same lobby state - no peer's own status text widens its panel.
+            result["scene_cycle"] = scenes
+            picked_scene = next(c["text"] for c in host_setup[-1]["controls"] if c["name"] == "ComboHostScene")
+            result["picked_scene"] = picked_scene
             panels = {}
             for who in ("host", "client"):
                 matches = [image for image in images if image["peer"] == who
@@ -1003,9 +1048,11 @@ def run_case(options, case, root, failing=None):
                 assert len(matches) == 1, (who, [image["json"] for image in matches])
                 shot = matches[0]
                 assert [shot["activity_preset"], shot["activity_module"]] == [preset, module], shot["json"]
+                assert shot.get("scene_name") == scene, shot
                 controls = {c["name"]: c for c in shot["controls"]}
                 assert controls["LabelLobbyMatch"]["text"] == f"{preset} - {module}", (who, controls["LabelLobbyMatch"])
-                assert controls["LabelLobbyMatchMode"]["text"] == "Grasslands - PvP", (who, controls["LabelLobbyMatchMode"])
+                assert controls["LabelLobbyMatchMode"]["text"].startswith(scene + " - "), (who, controls["LabelLobbyMatchMode"], scene)
+                assert "Grasslands" not in controls["LabelLobbyMatchMode"]["text"], (who, controls["LabelLobbyMatchMode"])
                 for name in ("LabelLobbyMatch", "LabelLobbyMatchMode", "LabelLobbyPlayersHeader"):
                     assert controls[name]["text_fits"] is True, (who, name, controls[name])
                 panels[who] = controls["MultiplayerLobbyPanel"]["rect"]
