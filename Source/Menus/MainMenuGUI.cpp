@@ -111,7 +111,7 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerLobbyChatLabels.fill(nullptr);
 	m_MultiplayerLobbyChatInput = nullptr;
 	m_MultiplayerLobbyChatLines.clear();
-	m_MultiplayerScreenBaselineY = 0;
+
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 	m_ReconnectStatusShown.clear();
 	m_PendingAutomationCommand.clear();
@@ -196,7 +196,6 @@ void MainMenuGUI::CreateMainScreen() {
 void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MainMenuScreens[MenuScreen::MultiplayerScreen] = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerScreen"));
 	m_MainMenuScreens[MenuScreen::MultiplayerScreen]->CenterInParent(true, false);
-	m_MultiplayerScreenBaselineY = m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetRelYPos();
 
 	m_MultiplayerLandingPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerLandingPanel"));
 	m_MultiplayerHostPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerHostPanel"));
@@ -254,7 +253,6 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	// The lobby's chat lives below the Leave/Seats row: eight FontSmall lines and one entry box.
 	// They are created here rather than in the ini so the panel can grow for them without touching
 	// the skin the other sub-screens share.
-	m_MultiplayerScreenBaselineY = m_MainMenuScreens[MenuScreen::MultiplayerScreen]->GetRelYPos();
 	GUIFont* chatFont = m_SubMenuScreenGUIControlManager->GetSkin() ? m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png") : nullptr;
 	for (size_t row = 0; row < m_MultiplayerLobbyChatLabels.size(); ++row) {
 		m_MultiplayerLobbyChatLabels[row] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->AddControl(
@@ -916,6 +914,13 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	// Hosting or joining under a name saves it, but saving is best effort: the wire carries more
 	// bytes than the box takes typed, so a name the settings will not hold still goes out as typed.
 	const std::string typedName = m_MultiplayerNameTextBox->GetText();
+	// The box's typed cap is shorter than the wire's, but a pasted or scripted name skips it and a
+	// name past the hello's byte cap only fails inside the encode; refuse it here in the player's words.
+	if (typedName.size() > NetProtocol::c_MaxDisplayNameBytes) {
+		m_MultiplayerLandingStatusLabel->SetText("Display names are limited to 64 bytes.");
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+		return;
+	}
 	request.playerName = typedName.empty() ? (host ? "Host" : "Client") : typedName;
 	if (!typedName.empty() && typedName != g_SettingsMan.GetNetworkDisplayName()) {
 		g_SettingsMan.SetNetworkDisplayName(typedName);
@@ -1143,10 +1148,8 @@ void MainMenuGUI::FitMultiplayerScreen(int width, int height) {
 		screen->Resize(width, height);
 	}
 	const int screenX = (m_RootBoxMaxWidth - width) / 2;
-	int screenY = m_MultiplayerScreenBaselineY;
-	if (screenY + height > g_WindowMan.GetResY()) {
-		screenY = std::max(0, (g_WindowMan.GetResY() - height) / 2);
-	}
+	// The screen floats centred; a panel taller than the viewport clamps to the top edge instead.
+	const int screenY = std::max(0, (g_WindowMan.GetResY() - height) / 2);
 	if (screen->GetRelXPos() != screenX || screen->GetRelYPos() != screenY) {
 		screen->SetPositionRel(screenX, screenY);
 	}

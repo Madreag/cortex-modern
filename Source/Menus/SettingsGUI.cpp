@@ -37,10 +37,8 @@ SettingsGUI::SettingsGUI(AllegroScreen* guiScreen, GUIInputWrapper* guiInput, bo
 	rootBox->Resize(rootBoxMaxWidth, g_WindowMan.GetResY());
 
 	m_SettingsTabberBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("CollectionBoxSettingsBase"));
-	m_SettingsTabberBox->SetPositionAbs((rootBox->GetWidth() - m_SettingsTabberBox->GetWidth()) / 2, 140);
-	if (rootBox->GetHeight() < 540) {
-		m_SettingsTabberBox->CenterInParent(true, true);
-	}
+	// The dialog floats centred at every resolution; the 140 pin only ever described 640x360's layout.
+	m_SettingsTabberBox->CenterInParent(true, true);
 
 	m_BackToMainButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonBackToMainMenu"));
 	m_BackToMainButton->SetPositionAbs((rootBox->GetWidth() - m_BackToMainButton->GetWidth()) / 2, m_SettingsTabberBox->GetYPos() + m_SettingsTabberBox->GetHeight() + 10);
