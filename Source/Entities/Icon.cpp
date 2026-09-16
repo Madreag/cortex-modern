@@ -81,7 +81,7 @@ void Icon::Destroy(bool notInherited) {
 
 std::string Icon::SaveCheckpoint() const {
 	CheckpointWriter writer("Icon1");
-	writer(Entity::SaveCheckpoint(), m_BitmapFile, m_FrameCount);
+	writer(static_cast<const Entity&>(*this), m_BitmapFile, m_FrameCount);
 	std::vector<BITMAP*> images;
 	std::unordered_map<BITMAP*, size_t> indices;
 	const auto references = [&](const std::vector<BITMAP*>& bitmaps) {
@@ -97,7 +97,7 @@ std::string Icon::SaveCheckpoint() const {
 	const auto indexed = references(m_BitmapsIndexed);
 	const auto trueColor = references(m_BitmapsTrueColor);
 	writer(images.size());
-	for (BITMAP* image: images) writer(GUICheckpoint::SaveSharedBitmap(image));
+	for (BITMAP* image: images) writer(CheckpointWriter::Native([image] { return GUICheckpoint::SaveSharedBitmap(image); }));
 	writer(indexed, trueColor);
 	return writer.Text();
 }
@@ -118,14 +118,14 @@ bool Icon::LoadCheckpoint(std::string_view text, bool validateOnly) {
 }
 
 std::string Icon::SaveCheckpointSet(std::span<const Icon> icons) {
-	std::vector<std::string> values, images;
+	std::vector<CheckpointText> values, images;
 	std::unordered_map<BITMAP*, size_t> indices;
 	const auto references = [&](const std::vector<BITMAP*>& bitmaps) {
 		std::vector<size_t> result;
 		for (BITMAP* bitmap: bitmaps) {
 			if (!bitmap) { result.push_back(0); continue; }
 			auto [found, inserted] = indices.emplace(bitmap, images.size() + 1);
-			if (inserted) images.push_back(GUICheckpoint::SaveSharedBitmap(bitmap));
+			if (inserted) images.push_back(CheckpointWriter::Native([bitmap] { return GUICheckpoint::SaveSharedBitmap(bitmap); }));
 			result.push_back(found->second);
 		}
 		return result;
@@ -133,9 +133,11 @@ std::string Icon::SaveCheckpointSet(std::span<const Icon> icons) {
 	for (const Icon& icon: icons) {
 		const auto indexed = references(icon.m_BitmapsIndexed);
 		const auto trueColor = references(icon.m_BitmapsTrueColor);
-		CheckpointWriter value("IconValues1");
-		value(icon.Entity::SaveCheckpoint(), icon.m_BitmapFile, icon.m_FrameCount, indexed, trueColor);
-		values.push_back(value.Text());
+		values.push_back(CheckpointWriter::Native([&] {
+			CheckpointWriter value("IconValues1");
+			value(static_cast<const Entity&>(icon), icon.m_BitmapFile, icon.m_FrameCount, indexed, trueColor);
+			return value.Text();
+		}));
 	}
 	CheckpointWriter writer("IconSet1");
 	writer(images, values);
