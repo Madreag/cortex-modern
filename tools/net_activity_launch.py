@@ -40,8 +40,8 @@ def rules_for(variant):
         rules["starting_gold"] = 1000000000
     elif variant == "site":
         rules["scene_name"] = "Fredeleig Plains"
-    elif variant == "stock":
-        # The site this activity ships with. Its seats still meet the setup editor, so the arm drives it.
+    elif variant in ("stock", "stock-scene"):
+        # stock-scene is the stock arm with a named non-Grasslands site on the request, not the default.
         rules["activity_preset"] = "Skirmish Defense"
         rules["scene_name"] = "Ketanot Hills"
     elif variant in ("brains", "brains-auto", "hold-desync", "hold-resync", "resync-skirmish", "brains-longname",
@@ -545,7 +545,7 @@ def launch(options):
         if actual != exe_hash:
             raise RuntimeError("executable changed during launch case")
     # The setup editor is driven through the UI probe's own seam, so the arm commits the way a player does.
-    editor_driven = options.variant in ("brains", "stock", "hold-desync", "hold-resync", "resync-skirmish",
+    editor_driven = options.variant in ("brains", "stock", "stock-scene", "hold-desync", "hold-resync", "resync-skirmish",
                                        "brains-longname", "brains-shared", "wire-refusal")
     shared_seat = options.variant == "brains-shared"
     places_brains = editor_driven or options.variant == "brains-auto"
