@@ -197,7 +197,7 @@ namespace {
 		observed["net_ui"] = {{"status", panel ? OverlayRect(panel->GetStatusRect()) : Rect(0, 0, 0, 0, false)},
 		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)}, {"seats_panel", seats}};
 		observed["controllers"] = Json::array();
-		const int probePad = probe.pad ? static_cast<int>(SDL_GetJoystickID(probe.pad)) : 0;
+		const int probePad = probe.holdsPad ? static_cast<int>(GUIInputWrapper::ScriptedPadId()) : 0;
 		observed["probe_pad"] = probePad;
 		int boundSeat = 0;
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
