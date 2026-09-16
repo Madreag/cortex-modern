@@ -23,6 +23,46 @@ OUT = ROOT / 'fresh' / 'e2e'
 SNAPSHOT_COMPARE = REPO / "tools" / "compare_snapshots.py"
 
 
+def record_snapshot_compare(out, copied, host_report, client_report, check):
+    if len(copied) != 2:
+        return
+    if not SNAPSHOT_COMPARE.exists():
+        missing = out / "snapshot_compare.txt"
+        missing.write_text(f"comparer missing: {SNAPSHOT_COMPARE}\n", encoding="utf-8")
+        check(
+            "snapshots_sim_identical",
+            False,
+            f"comparer missing: {SNAPSHOT_COMPARE}",
+            [missing],
+        )
+        return
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SNAPSHOT_COMPARE),
+            str(copied[0]),
+            str(copied[1]),
+            "--peer-report-a",
+            str(host_report),
+            "--peer-report-b",
+            str(client_report),
+            "--cross-process",
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "CCCP_TOOLS_DIR": str(REPO / "tools")},
+    )
+    (out / "snapshot_compare.txt").write_text(
+        proc.stdout + proc.stderr, encoding="utf-8"
+    )
+    check(
+        "snapshots_sim_identical",
+        proc.returncode == 0,
+        (proc.stdout + proc.stderr).strip()[-300:],
+        [out / "snapshot_compare.txt"],
+    )
+
+
 def sha256(path: Path) -> str:
     with path.open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
@@ -590,42 +630,7 @@ def lane(name: str, spec: dict):
                 f"saves={[p.name for p in copied]}",
                 [p for p in copied],
             )
-            if len(copied) == 2:
-                if not SNAPSHOT_COMPARE.exists():
-                    missing = out / "snapshot_compare.txt"
-                    missing.write_text(f"comparer missing: {SNAPSHOT_COMPARE}\n", encoding="utf-8")
-                    check(
-                        "snapshots_sim_identical",
-                        False,
-                        f"comparer missing: {SNAPSHOT_COMPARE}",
-                        [missing],
-                    )
-                else:
-                    proc = subprocess.run(
-                        [
-                            sys.executable,
-                            str(SNAPSHOT_COMPARE),
-                            str(copied[0]),
-                            str(copied[1]),
-                            "--peer-report-a",
-                            str(host_report),
-                            "--peer-report-b",
-                            str(client_report),
-                            "--cross-process",
-                        ],
-                        capture_output=True,
-                        text=True,
-                        env={**os.environ, "CCCP_TOOLS_DIR": str(REPO / "tools")},
-                    )
-                    (out / "snapshot_compare.txt").write_text(
-                        proc.stdout + proc.stderr, encoding="utf-8"
-                    )
-                    check(
-                        "snapshots_sim_identical",
-                        proc.returncode == 0,
-                        (proc.stdout + proc.stderr).strip()[-300:],
-                        [out / "snapshot_compare.txt"],
-                    )
+            record_snapshot_compare(out, copied, host_report, client_report, check)
 
     result = {
         "lane": name,
