@@ -357,6 +357,11 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
         if shared_seat:
             # A presented seat's ActorSelect onto a craft passenger is presentation only.
             steps += [{"op": "actor_select", "player": 1 - player}, {"op": "wait", "renders": 4}]
+        # Scripted pad start inside the running match: seat 4 must not move. On the base tree it does.
+        steps += [{"op": "assert", "name": "pad_before", "equals": {"editing": False}},
+                  {"op": "pad_down", "button": "start"}, {"op": "wait", "renders": 2},
+                  {"op": "pad_up", "button": "start"}, {"op": "wait", "renders": 2},
+                  {"op": "assert", "name": "pad_after", "equals": {"editing": False}}]
     steps.append({"op": "finish"})
     return {"schema": 1, "timeout_ms": 180000, "steps": steps}
 
@@ -671,6 +676,25 @@ def launch(options):
                                               for rows in result["commits"].values())
             result["probes"] = {peer: probe_result(root, peer) for peer in runs}
             checks["ui_probe_pass"] = all(result["probes"][peer].get("pass") and result["probes"][peer].get("complete") for peer in runs)
+            def pad_controller(probe, name, seat=4):
+                named = [index for index, step in enumerate(probe.get("script", {}).get("steps", []))
+                         if step.get("name") == name]
+                rows = next((step.get("observed", {}).get("controllers", []) for step in probe.get("steps", [])
+                             if step.get("index") in named), [])
+                return next((row for row in rows if row.get("seat") == seat), None)
+            # On the base tree a scripted pad start moves seat 4 (moved=1). On this tip it does not.
+            if not (hold_desync and not hold_resync):
+                result["pad_seats"] = {peer: {"before": pad_controller(result["probes"][peer], "pad_before"),
+                                              "after": pad_controller(result["probes"][peer], "pad_after")}
+                                       for peer in runs}
+                checks["scripted_pad_start_leaves_seat_4"] = all(
+                    rows["before"] and rows["after"] and rows["after"].get("moved") == 0
+                    and rows["before"].get("checkpoint") == rows["after"].get("checkpoint")
+                    for rows in result["pad_seats"].values())
+                def pad_log_moved(log):
+                    hits = [int(moved) for seat, moved in re.findall(r"\[pad\] seat=(\d+) moved=([01])", log) if seat == "4"]
+                    return hits[-1] if hits else None
+                checks["scripted_pad_start_log_leaves_seat_4"] = all(pad_log_moved(log) == 0 for log in logs.values())
             # The refusal the production path shows a player who presses DONE with no brain placed: the seat
             # stays unready and uncommitted, and the stock editor asks for the brain again.
             # The DONE-refusal assertion names itself, so the arm reads that step and no other. A peer
