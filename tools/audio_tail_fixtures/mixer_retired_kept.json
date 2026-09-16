@@ -2,7 +2,7 @@
   "version": "AudioRuntime3",
   "voices": [
     {
-      "version": "AudioVoice2",
+      "version": "AudioVoice3",
       "identity": 7,
       "owner": 1,
       "path": "sfx",
