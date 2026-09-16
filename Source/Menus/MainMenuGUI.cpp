@@ -29,6 +29,7 @@
 #include "GUIListBox.h"
 #include "GUITextBox.h"
 #include "GUICheckbox.h"
+#include "GUIComboBox.h"
 
 #include "Resources/Credits.h"
 
@@ -78,7 +79,7 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerHostInputDelayPolicyLabel = nullptr;
 	m_MultiplayerHostPortMapCheckbox = nullptr;
 	m_MultiplayerHostModeButton = nullptr;
-	m_MultiplayerHostActivityButton = nullptr;
+	m_MultiplayerHostActivityCombo = nullptr;
 	m_MultiplayerHostInfoLabel = nullptr;
 	m_MultiplayerHostActivities.clear();
 	m_MultiplayerHostActivityIndex = 0;
@@ -226,7 +227,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostInputDelayPolicyLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInputDelayPolicy"));
 	m_MultiplayerHostPortMapCheckbox = dynamic_cast<GUICheckbox*>(m_SubMenuScreenGUIControlManager->GetControl("CheckHostPortMap"));
 	m_MultiplayerHostModeButton = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostMode"));
-	m_MultiplayerHostActivityButton = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostActivity"));
+	m_MultiplayerHostActivityCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostActivity"));
 	m_MultiplayerHostInfoLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInfo"));
 	ApplyMultiplayerHostActivity();
 	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinAddress"));
@@ -241,6 +242,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerErrorLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerError"));
 	m_MultiplayerLandingStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerLandingStatus"));
 	m_MultiplayerLobbyMatchLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyMatch"));
+	m_MultiplayerLobbyMatchModeLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyMatchMode"));
 	m_MultiplayerLobbyPlayerLabels[0] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer0"));
 	m_MultiplayerLobbyPlayerLabels[1] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer1"));
 	m_MultiplayerLobbyPlayerLabels[2] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer2"));
@@ -670,6 +672,8 @@ bool MainMenuGUI::HandleInputEvents() {
 			g_GUISound.SelectionChangeSound()->Play();
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetControl() == m_MultiplayerLanGamesList) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
+		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUIComboBox::Closed && guiEvent.GetControl() == m_MultiplayerHostActivityCombo) {
+			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUICheckbox::Changed && guiEvent.GetControl() == m_MultiplayerHostPortMapCheckbox) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUITextBox::Enter && guiEvent.GetControl() == m_MultiplayerLobbyChatInput) {
@@ -759,13 +763,14 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		m_MultiplayerHostModeButton->SetText(modeText);
 		ApplyMultiplayerHostActivity();
 		g_GUISound.ButtonPressSound()->Play();
-	} else if (guiEventControl == m_MultiplayerHostActivityButton) {
-		// The button is the picker: each press moves to the next lockstep-runnable activity.
-		if (!m_MultiplayerHostActivities.empty()) {
-			m_MultiplayerHostActivityIndex = (m_MultiplayerHostActivityIndex + 1) % m_MultiplayerHostActivities.size();
+	} else if (guiEventControl == m_MultiplayerHostActivityCombo) {
+		// A closed pick-list carries its selection; the index is the request fields' source.
+		const int selected = m_MultiplayerHostActivityCombo ? m_MultiplayerHostActivityCombo->GetSelectedIndex() : -1;
+		if (selected >= 0 && static_cast<size_t>(selected) < m_MultiplayerHostActivities.size()) {
+			m_MultiplayerHostActivityIndex = static_cast<size_t>(selected);
 		}
 		ApplyMultiplayerHostActivity();
-		g_GUISound.ButtonPressSound()->Play();
+		g_GUISound.ItemChangeSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReadyButton]) {
 		g_NetMatchService.SetReady();
 		g_GUISound.ButtonPressSound()->Play();
@@ -870,6 +875,12 @@ void MainMenuGUI::RefreshMultiplayerHostActivities() {
 			m_MultiplayerHostActivityIndex = i;
 		}
 	}
+	if (m_MultiplayerHostActivityCombo) {
+		m_MultiplayerHostActivityCombo->ClearList();
+		for (const auto& [preset, module] : m_MultiplayerHostActivities) {
+			m_MultiplayerHostActivityCombo->AddItem(preset + (module.empty() ? "" : " - " + module));
+		}
+	}
 	ApplyMultiplayerHostActivity();
 }
 
@@ -878,12 +889,16 @@ void MainMenuGUI::ApplyMultiplayerHostActivity() {
 	                         ? &m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex] : nullptr;
 	const std::string preset = picked ? picked->first : "P4 Alpha Duel";
 	const std::string module = picked ? picked->second : "Base.rte";
-	if (m_MultiplayerHostActivityButton) {
-		m_MultiplayerHostActivityButton->SetText(preset + (module.empty() ? "" : " (" + module + ")"));
+	if (m_MultiplayerHostActivityCombo) {
+		if (picked) {
+			m_MultiplayerHostActivityCombo->SetSelectedIndex(static_cast<int>(m_MultiplayerHostActivityIndex));
+		} else {
+			// No preset enumerated yet: the closed combo still names what the request would send.
+			m_MultiplayerHostActivityCombo->SetText(preset + (module.empty() ? "" : " - " + module));
+		}
 	}
 	if (m_MultiplayerHostInfoLabel) {
-		const char* modeText = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? "PvP" : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? "Co-op PvE" : "PvPvE");
-		m_MultiplayerHostInfoLabel->SetText(std::string("Grasslands - ") + modeText);
+		m_MultiplayerHostInfoLabel->SetText(std::string("Grasslands - ") + NetMatchConfigUtil::ModeLabel(m_MultiplayerHostMode));
 	}
 }
 
@@ -1197,21 +1212,23 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		return;
 	}
 
+	// The match header is two fixed rows: the activity with its defining module, then the scene
+	// and the mode's menu label. A joiner's placeholder shows the same rows with what it has.
 	std::string matchInfo = snapshot.activityPreset;
 	if (!snapshot.activityModule.empty()) {
-		matchInfo += " (" + snapshot.activityModule + ")";
-	}
-	if (!snapshot.sceneName.empty()) {
-		matchInfo += " - " + snapshot.sceneName;
-	}
-	if (!snapshot.modeName.empty()) {
-		matchInfo += " - " + snapshot.modeName;
+		matchInfo += matchInfo.empty() ? snapshot.activityModule : " - " + snapshot.activityModule;
 	}
 	m_MultiplayerLobbyMatchLabel->SetText(matchInfo);
+	std::string matchMode = snapshot.sceneName;
+	if (!snapshot.modeLabel.empty()) {
+		matchMode += matchMode.empty() ? snapshot.modeLabel : " - " + snapshot.modeLabel;
+	}
+	if (m_MultiplayerLobbyMatchModeLabel) {
+		m_MultiplayerLobbyMatchModeLabel->SetText(matchMode);
+	}
 	std::array<std::string, 4> lobbyRowName;
 	std::array<std::string, 4> lobbyRowTailFull;
 	std::array<std::string, 4> lobbyRowTailMarked;
-	int widestRowText = 0;
 	for (size_t i = 0; i < m_MultiplayerLobbyPlayerLabels.size(); ++i) {
 		GUILabel* label = m_MultiplayerLobbyPlayerLabels[i];
 		if (i >= snapshot.members.size()) {
@@ -1242,9 +1259,6 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		lobbyRowName[i] = member.displayName;
 		lobbyRowTailFull[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine);
 		lobbyRowTailMarked[i] = buildTail(seatMark);
-		if (m_MultiplayerLobbyPlayerRowFont) {
-			widestRowText = std::max(widestRowText, m_MultiplayerLobbyPlayerRowFont->CalculateWidth(lobbyRowName[i] + lobbyRowTailFull[i], m_MultiplayerLobbyPlayerRowFallbackFont));
-		}
 		label->SetVisible(true);
 	}
 	static std::string s_shareAddress;
@@ -1278,6 +1292,20 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		s_shareResolved = false;
 		m_MultiplayerStatusLabel->SetText(snapshot.statusText);
 	}
+	// The lobby panel is one width on every peer: a longer row or status elides inside its box
+	// rather than widening the panel, so host and client land on the same rectangle.
+	const int contentWidth = 300;
+	const int rowBoxWidth = contentWidth - 24;
+	if (m_MultiplayerLobbyPlayerRowFont) {
+		std::string statusText = m_MultiplayerStatusLabel->GetText();
+		while (!statusText.empty() &&
+		       m_MultiplayerLobbyPlayerRowFont->CalculateWidth(statusText + "...", m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
+			statusText.pop_back();
+		}
+		if (statusText != m_MultiplayerStatusLabel->GetText()) {
+			m_MultiplayerStatusLabel->SetText(statusText + "...");
+		}
+	}
 	// The status line can wrap; reserve its real height and let everything below slide with it.
 	const int statusHeight = std::max(16, m_MultiplayerStatusLabel->GetTextHeight() + 4);
 	if (m_MultiplayerStatusLabel->GetHeight() != statusHeight) {
@@ -1289,28 +1317,12 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		m_MultiplayerLobbyPortMapLabel->SetText(snapshot.portMap);
 	}
 	m_MultiplayerLobbyPortMapLabel->SetVisible(!snapshot.portMap.empty());
-	m_MultiplayerLobbyPortMapLabel->SetPositionRel(12, 162 + statusExtra);
+	m_MultiplayerLobbyPortMapLabel->SetPositionRel(12, 178 + statusExtra);
 	const int portMapHeight = snapshot.portMap.empty() ? 0 : 14;
 	m_MultiplayerErrorLabel->SetText(GroupDelimiterForDisplay(snapshot.errorText));
 	m_MultiplayerErrorLabel->EnsureDrawableTextFont("FontSmall.png");
-	const int statusTextWidth = m_MultiplayerLobbyPlayerRowFont
-		? m_MultiplayerLobbyPlayerRowFont->CalculateWidth(m_MultiplayerStatusLabel->GetText(), m_MultiplayerLobbyPlayerRowFallbackFont)
-		: 0;
-	const int desiredWidth = std::max(300, std::max({m_MultiplayerErrorLabel->GetMaxWordWidth(), widestRowText, statusTextWidth}) + 24);
-	const int contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
-	std::vector<GUILabel*> fillLabels(m_MultiplayerLobbyPlayerLabels.begin(), m_MultiplayerLobbyPlayerLabels.end());
-	fillLabels.push_back(m_MultiplayerStatusLabel);
-	// Chat labels fill like the player rows when the panel widens (X=12, W=contentWidth-24).
-	for (GUILabel* label : m_MultiplayerLobbyChatLabels) {
-		if (label) {
-			fillLabels.push_back(label);
-		}
-	}
-	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth, fillLabels);
-	if (m_MultiplayerLobbyPlayersHeader) {
-		m_MultiplayerLobbyPlayersHeader->SetPositionRel(contentWidth > 300 ? 24 : 20, m_MultiplayerLobbyPlayersHeader->GetRelYPos());
-	}
-	const int rowBoxWidth = contentWidth - 24;
+	const int desiredWidth = std::max(300, m_MultiplayerErrorLabel->GetMaxWordWidth() + 24);
+	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth, {});
 	for (size_t i = 0; i < lobbyRowName.size(); ++i) {
 		GUILabel* label = m_MultiplayerLobbyPlayerLabels[i];
 		if (!label || lobbyRowTailFull[i].empty()) {
@@ -1337,7 +1349,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		label->EnsureDrawableTextFont("FontSmall.png");
 	}
 	// The port-map row sits under the wrapped status, so the error starts below both.
-	m_MultiplayerErrorLabel->SetPositionRel(12, 162 + statusExtra + portMapHeight);
+	m_MultiplayerErrorLabel->SetPositionRel(12, 178 + statusExtra + portMapHeight);
 	// The screen must stay inside the viewport. Error, status and port-map rows keep every pixel
 	// their room allows (overflow scrolls); the chat block is the one piece that yields - a row at
 	// a time - before any of them do.
@@ -1347,11 +1359,11 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	const int inputBlock = 25;                     // textbox 13 px + a bottom margin matching its sides
 	// The Leave/Seats row ends at rel 240; the first chat row keeps a 4px gap under it and the
 	// error block must not reach into that band.
-	const int c_LobbyChatTop = 245;
+	const int c_LobbyChatTop = 261;
 	// Same accessibility rule as the landing status: wide token scrolls horizontally, tall text
 	// vertically. The chat input row always stays, so the error's room never reaches into it.
 	const int errorRoom = std::min(
-	    std::max(24, g_WindowMan.GetResY() - backReserve - 250 + 24 - fixedExtra),
+	    std::max(24, g_WindowMan.GetResY() - backReserve - 266 + 24 - fixedExtra),
 	    std::max(0, panelCap - (c_LobbyChatTop - 4) - fixedExtra - inputBlock));
 	const bool scrollWide = desiredWidth > contentWidth;
 	m_MultiplayerErrorLabel->SetHorizontalOverflowScroll(scrollWide);
@@ -1396,9 +1408,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	                              ? m_MultiplayerLobbyChatLines.size() - chatRows : 0;
 	const size_t firstLineRow = m_MultiplayerLobbyChatLines.size() - chatOffset < static_cast<size_t>(chatRows)
 	                                ? static_cast<size_t>(chatRows) - (m_MultiplayerLobbyChatLines.size() - chatOffset) : 0;
-	// Chat follows the player rows' convention: X=8 (their ini spot) at the base width, X=12 once
-	// FitMultiplayerPanelWidth's fill rule has moved the rows. Width keeps the margin symmetric.
-	const int chatX = contentWidth > 300 ? 12 : 8;
+	// Chat follows the player rows' convention: X=8, their ini spot, at the fixed panel width.
+	const int chatX = 8;
 	const int chatW = contentWidth - 2 * chatX;
 	for (size_t row = 0; row < m_MultiplayerLobbyChatLabels.size(); ++row) {
 		GUILabel* label = m_MultiplayerLobbyChatLabels[row];
@@ -1425,10 +1436,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	}
 	const int screenHeight = contentHeight + backReserve;
 	FitMultiplayerScreen(contentWidth, screenHeight);
-	const int buttonShift = (contentWidth - 300) / 2;
-	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55 + buttonShift, 192 + extraHeight);
-	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55 + buttonShift, 192 + extraHeight);
-	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(90 + buttonShift, 220 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55, 208 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55, 208 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(90, 236 + extraHeight);
 	LayoutMultiplayerFooter(contentWidth, contentHeight);
 
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
@@ -1438,7 +1448,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
 	// §9b: moderation is a match feature - a lobby seat whose holder leaves goes straight back in the pool.
-	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(212 + buttonShift, 220 + extraHeight);
+	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(212, 236 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetVisible(snapshot.isHost);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetEnabled(snapshot.isHost && snapshot.running);
 }
