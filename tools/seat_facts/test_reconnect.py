@@ -23,6 +23,17 @@ class ReconnectOracle(unittest.TestCase):
     def test_client_uses_physical_zero(self):
         local_view(view(1), 1, [0, 1])
 
+    def test_omitted_controller_input_is_the_shared_fact(self):
+        row = view(1)
+        del row["controller_input"]
+        local_view(row, 1, [0, 1])
+
+    def test_dead_brain_uid_zero_is_the_shared_fact(self):
+        row = view(1)
+        row["brain_uid"] = 0
+        row["seat_facts"][1]["brain_uid"] = 0
+        local_view(row, 1, [0, 1])
+
     def test_rebuilt_identity_input_map_is_red(self):
         row = view(1)
         for name in ("input_player", "player_controller_input", "controller_input"):
