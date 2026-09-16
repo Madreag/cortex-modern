@@ -295,7 +295,7 @@ namespace RTE {
 		/// The seat-presence plane — where dropped seats get their reclaim-hold marks.
 		const NetSeatPresence& GetSeatPresence() const { return m_SeatPresence; }
 		NetH4ModerationResult ApplyModeration(const NetModerationSelection& selection, NetModerationAction action);
-		/// Host: close this holder without a reclaim hold. L20 calls this after the confirmation.
+		/// Host: close this holder without a reclaim hold. The host confirmation dialog calls this.
 		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action);
 		NetKickBanResult GetLastKickBanResult() const;
 		NetParticipantRemovalIssue GetLastRemovalIssue() const;
@@ -446,6 +446,7 @@ namespace RTE {
 		friend bool TestRosterBannerNamesThePlayerOnce(std::string* error);
 		friend bool TestAiOnlyHostSeatsNoJoiner(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
+		friend bool TestServiceKick(std::string* error);
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);

@@ -156,7 +156,7 @@ namespace RTE {
 			if (!RoundTrip({12, 0, emptyDiagnostics}, error)) {
 				return false;
 			}
-			for (uint16_t raw = 1; raw <= static_cast<uint16_t>(NetRejectReason::ParticipantBanned); ++raw) {
+			for (uint16_t raw = 1; raw <= static_cast<uint16_t>(NetRejectReason::IdentityUnproven); ++raw) {
 				const NetRejectReason reason = static_cast<NetRejectReason>(raw);
 				if (std::string(NetProtocol::RejectReasonName(reason)) == "Unknown") {
 					*error = "reject reason " + std::to_string(raw) + " has no name";
@@ -168,7 +168,7 @@ namespace RTE {
 				}
 			}
 			std::vector<uint8_t> beyond;
-			if (!EncodeMessage({14, 0, NetJoinRejected{static_cast<NetRejectReason>(static_cast<uint16_t>(NetRejectReason::ParticipantBanned) + 1U), "refused", "key", "", ""}}, beyond, error)) {
+			if (!EncodeMessage({14, 0, NetJoinRejected{static_cast<NetRejectReason>(static_cast<uint16_t>(NetRejectReason::IdentityUnproven) + 1U), "refused", "key", "", ""}}, beyond, error)) {
 				return false;
 			}
 			if (!ExpectDecodeError(beyond, NetProtocolErrorCode::InvalidValue, error)) {
@@ -873,8 +873,8 @@ namespace RTE {
 		}
 
 		bool TestOldWireEncoding(std::string* error) {
-			// A v1 peer's build has no decoder for the v2 types, so it is told why it was refused in
-			// its own envelope and never handed a payload it would read as garbage.
+			// A v1 peer's build has no decoder for types this version added, so it is told why it was
+			// refused in its own envelope and never handed a payload it would read as garbage.
 			if (!NetProtocol::CanEncodeAtVersion(1) || !NetProtocol::CanEncodeAtVersion(NetProtocol::c_Version)) {
 				*error = "the build cannot stamp a rejection at v1 and at its own version";
 				return false;
@@ -883,7 +883,8 @@ namespace RTE {
 				*error = "a version this build cannot write was accepted";
 				return false;
 			}
-			const NetMessage rejection{7, 0, NetJoinRejected{NetRejectReason::ProtocolMismatch, "protocol version 1 does not match this build's 2", "protocol_version", "2", "1"}};
+			const std::string currentVersion = std::to_string(NetProtocol::c_Version);
+			const NetMessage rejection{7, 0, NetJoinRejected{NetRejectReason::ProtocolMismatch, "protocol version 1 does not match this build's " + currentVersion, "protocol_version", currentVersion, "1"}};
 			std::vector<uint8_t> v1;
 			NetProtocolError encodeError;
 			if (!NetProtocol::EncodeAtVersion(rejection, 1, v1, &encodeError)) {
@@ -902,12 +903,12 @@ namespace RTE {
 			}
 			// The payload schema did not change across the bump, so only the two version bytes differ.
 			if (v1.size() != current.size()) {
-				*error = "the v1 and v2 rejections differ in size";
+				*error = "the v1 and current rejections differ in size";
 				return false;
 			}
 			for (size_t i = 0; i < v1.size(); ++i) {
 				if (i != 4 && i != 5 && v1[i] != current[i]) {
-					*error = "the v1 rejection differs from the v2 one outside the version field, at byte " + std::to_string(i);
+					*error = "the v1 rejection differs from the current one outside the version field, at byte " + std::to_string(i);
 					return false;
 				}
 			}
@@ -921,14 +922,14 @@ namespace RTE {
 			std::vector<uint8_t> refused;
 			if (NetProtocol::EncodeAtVersion({8, 0, request}, 1, refused, &encodeError) ||
 			    encodeError.code != NetProtocolErrorCode::UnsupportedVersion) {
-				*error = "a v2-only message type was stamped at v1";
+				*error = "a current-only message type was stamped at v1";
 				return false;
 			}
 			NetChat chat;
 			chat.text = "hello";
 			if (NetProtocol::EncodeAtVersion({9, 0, chat}, 1, refused, &encodeError) ||
 			    encodeError.code != NetProtocolErrorCode::UnsupportedVersion) {
-				*error = "a v2-only chat message was stamped at v1";
+				*error = "a current-only chat message was stamped at v1";
 				return false;
 			}
 			if (!NetProtocol::IsMessageTypeInVersion(NetMessageType::JoinRejected, 1) ||
