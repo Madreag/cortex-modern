@@ -178,13 +178,15 @@ namespace {
 		const Scene* scene = game ? g_SceneMan.GetScene() : nullptr;
 		for (int player = 0; game && player < Players::MaxPlayerCount; ++player) {
 			if (!(game->IsSeatActive(player) && game->IsLocalHumanSeat(player))) continue;
+			const Json textBand = ScreenTextRect(game->ScreenOfPlayer(player));
 			observed["editor_seats"].push_back({{"player", player}, {"ready", game->IsReadyToStart(player)},
 			    {"resident", scene && scene->GetResidentBrain(player) != nullptr},
 			    {"submitted", game->HasSubmittedLockstepPlacement(player)}, {"mode", game->SetupEditorMode(player)},
 			    {"gesture", GameActivity::SetupEditorGestureStatus(player)},
+			    {"placement_refused", GameActivity::EditorWriteWasRefused(player)},
 			    {"screen_text", g_FrameMan.GetScreenText(game->ScreenOfPlayer(player))},
 			    {"picker", PickerRect(game->ScreenOfPlayer(player))},
-			    {"screen_text_rect", ScreenTextRect(game->ScreenOfPlayer(player))}});
+			    {"screen_text_rect", textBand}, {"text_band", textBand}});
 		}
 		// What the network overlay drew this frame, so a script can require it to stay off the editor's own UI.
 		const NetModerationGUI* panel = g_MenuMan.GetNetworkPanel();
@@ -420,14 +422,21 @@ namespace {
 			            step.value("x", 0.0F), step.value("y", 0.0F), step.value("class", std::string("Actor")),
 			            step.value("preset", std::string("Brain Case")), step.value("module", std::string("Base.rte"))),
 			    "the match cannot take a placement command");
-		} else if (op == "editor_place_brain" || op == "editor_done") {
+		} else if (op == "editor_place_brain" || op == "editor_done" || op == "editor_place" || op == "actor_select") {
 			// The seat's own editor does the work: the gesture is queued once and the step waits it out.
 			const int player = step.value("player", 0);
 			if (probe.gestureIndex != probe.index) {
-				Require(observed["editing"] == true, "the activity is not in the setup editor");
-				Require(GameActivity::QueueSetupEditorGesture(player, op == "editor_done" ? "done" : "place_brain",
-				            step.value("x_fraction", 0.5F), step.value("class", std::string("Actor")),
-				            step.value("preset", std::string("Brain Case")), step.value("module", std::string("Base.rte"))),
+				if (op != "actor_select") {
+					Require(observed["editing"] == true, "the activity is not in the setup editor");
+				}
+				const std::string kind = op == "editor_done" ? "done" : op == "editor_place" ? "place_object" :
+				    op == "actor_select" ? "actor_select" : "place_brain";
+				const bool object = kind == "place_object";
+				Require(GameActivity::QueueSetupEditorGesture(player, kind,
+				            step.value("x_fraction", 0.5F),
+				            step.value("class", object ? std::string("HDFirearm") : std::string("Actor")),
+				            step.value("preset", object ? std::string("Pistol") : std::string("Brain Case")),
+				            step.value("module", std::string("Base.rte"))),
 				    "the seat cannot take an editor gesture");
 				probe.gestureIndex = probe.index;
 			}
@@ -465,10 +474,12 @@ namespace {
 				Require(observed["net_ui"]["status"].at("visible") == true, "the network status widget is not on screen");
 			}
 			const BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
-			// No overlay rectangle ever leaves the window.
+			// No overlay rectangle ever leaves the window, and a visible one keeps a positive area.
 			for (const std::string& element: {"status", "toasts", "seats_panel"}) {
 				const Json& r = observed["net_ui"].at(element);
 				if (!r.at("visible").get<bool>()) continue;
+				Require(r["w"].get<int>() > 0 && r["h"].get<int>() > 0,
+				    "the network " + element + " has no area");
 				Require(r["x"].get<int>() >= 0 && r["y"].get<int>() >= 0 &&
 				    r["x"].get<int>() + r["w"].get<int>() <= backbuffer->w &&
 				    r["y"].get<int>() + r["h"].get<int>() <= backbuffer->h,
@@ -481,6 +492,15 @@ namespace {
 				for (const std::string& element: {"status", "toasts"}) {
 					Require(!Overlaps(observed["net_ui"].at(element), seatsPanel),
 					    "the network " + element + " overlaps the seats panel");
+				}
+				for (const auto& other: observed["editor_seats"]) {
+					if (!other.contains("text_band") || !other.at("text_band").value("visible", false)) continue;
+					const Json& band = other.at("text_band");
+					Require(!Overlaps(seatsPanel, band), "the seats panel overlaps a seat message band");
+					for (const std::string& element: {"status", "toasts"}) {
+						Require(!Overlaps(observed["net_ui"].at(element), band),
+						    "the network " + element + " overlaps a seat message band");
+					}
 				}
 				return true; // a match-mode step ends here; the editor checks are the non-match path's
 			}
@@ -497,13 +517,19 @@ namespace {
 				    band["y"].get<int>() + band["h"].get<int>() <= offset.GetRoundIntY() + g_FrameMan.GetPlayerScreenHeight(),
 				    "the seat's message is drawn off its own screen");
 			}
-			for (const std::string& element: {"status", "toasts"}) {
-				// An open seats panel owns its rows too - the overlay lifts above it rather than draw over it.
-				Require(!Overlaps(observed["net_ui"].at(element), seatsPanel),
-				    "the network " + element + " overlaps the seats panel");
-				for (const std::string& area: {"picker", "screen_text_rect"}) {
-					Require(!Overlaps(observed["net_ui"].at(element), seat->at(area)),
-					    "the network " + element + " overlaps the editor's " + area);
+			for (const std::string& element: {"status", "toasts", "seats_panel"}) {
+				if (element == "seats_panel" && !seatsPanel.at("visible").get<bool>()) continue;
+				if (element != "seats_panel") {
+					// An open seats panel owns its rows too - the overlay lifts above it rather than draw over it.
+					Require(!Overlaps(observed["net_ui"].at(element), seatsPanel),
+					    "the network " + element + " overlaps the seats panel");
+				}
+				for (const auto& other: observed["editor_seats"]) {
+					for (const std::string& area: {"picker", "screen_text_rect", "text_band"}) {
+						if (!other.contains(area)) continue;
+						Require(!Overlaps(observed["net_ui"].at(element), other.at(area)),
+						    "the network " + element + " overlaps the editor's " + area);
+					}
 				}
 			}
 		} else if (op == "screenshot_pair") {
