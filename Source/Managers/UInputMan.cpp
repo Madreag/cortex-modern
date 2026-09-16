@@ -721,8 +721,11 @@ bool UInputMan::GetInputElementState(int whichPlayer, int whichElement, InputSta
 				return false;
 		}
 	}
-	bool elementState = false;
 	InputDevice device = m_ControlScheme.at(whichPlayer).GetDevice();
+	if (m_DisableKeyboard && (device == InputDevice::DEVICE_KEYB_ONLY || device == InputDevice::DEVICE_MOUSE_KEYB)) {
+		return false;
+	}
+	bool elementState = false;
 	const InputMapping* element = &(m_ControlScheme.at(whichPlayer).GetInputMappings()->at(whichElement));
 
 	if ((!elementState && device == InputDevice::DEVICE_KEYB_ONLY) || (device == InputDevice::DEVICE_MOUSE_KEYB && !(whichElement == InputElements::INPUT_AIM_UP || whichElement == InputElements::INPUT_AIM_DOWN))) {
@@ -1722,6 +1725,18 @@ bool UInputMan::RunScriptedInputEdgeSelfTest() {
 	}
 	check("chat_token", InputScript::Load(path.string(), &error) && InputScript::ElementFromName("CHAT") == InputScript::c_ChatAction &&
 	    InputScript::HeldAt(Players::PlayerOne, InputScript::c_ChatAction, 1) && !InputScript::HeldAt(Players::PlayerOne, InputScript::c_ChatAction, 3));
+	{
+		std::ofstream script(path);
+		script << "player=0 1 10 FIRE\nplayer=0 1 10 START\n";
+	}
+	check("script_drives_across_chat_entry", InputScript::Load(path.string(), &error) && InputScript::DrivesPlayer(Players::PlayerOne));
+	DisableKeys(true);
+	g_TimerMan.RewindSimTo(5, 0);
+	check("held_fire_across_open_entry", InputScript::HeldAt(Players::PlayerOne, InputElements::INPUT_FIRE, 5) &&
+	    GetInputElementState(Players::PlayerOne, InputElements::INPUT_FIRE, InputState::Held));
+	check("held_start_across_open_entry", InputScript::HeldAt(Players::PlayerOne, InputElements::INPUT_START, 5) &&
+	    GetInputElementState(Players::PlayerOne, InputElements::INPUT_START, InputState::Held));
+	DisableKeys(false);
 	std::error_code removeError;
 	std::filesystem::remove(path, removeError);
 	std::cout << "[input-edge-selftest] " << (passed ? "PASS " : "FAIL ") << "complete" << std::endl;
