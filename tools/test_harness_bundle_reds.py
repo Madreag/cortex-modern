@@ -119,9 +119,11 @@ class FeelMeasureOutStamp(unittest.TestCase):
         self.assertIn("datetime.now(MST)", text)
         self.assertNotIn("value-observations", text)
         self.assertNotIn("stage2/feel-measurement", text)
-        with patch.object(sys, "argv", ["feel_measure.py"]):
+        buf = io.StringIO()
+        with patch("sys.stderr", buf):
             with self.assertRaises(SystemExit):
-                feel_measure.main()
+                feel_measure.parse_args([])
+        self.assertIn("required: --out", buf.getvalue())
 
 
 class PosixSelftestBinary(unittest.TestCase):
