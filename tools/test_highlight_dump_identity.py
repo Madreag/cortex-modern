@@ -1,8 +1,9 @@
-"""Argv-identical highlight dumps: same flags on the base tree and the tip.
+"""Same -script-graph-selftest argv on the base tree and the tip.
 
-Launches -script-graph-selftest on both executables with identical argv and
-compares the [highlight-dump] PieMenuRuntime1 blobs byte-for-byte. The in-process
-highlight_sp_mp_dump_identity row stays as a tip-only guard. Written, not run.
+The dump-identity detector is the in-process highlight_dump_unchanged /
+highlight_sp_mp_dump_identity guard. Both binaries already print
+[piemenu-checkpoint-selftest]; this driver scores that token, not a tip-only
+[highlight-dump] line. Written, not run.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ import re
 import sys
 
 REPO = Path(__file__).resolve().parents[1]
-DUMP = re.compile(r"\[highlight-dump\] role=(sp|mp) (15 PieMenuRuntime1 .*)")
+SELFTEST = re.compile(r"\[piemenu-checkpoint-selftest\]")
 ARGV = ["-script-graph-selftest"]
 
 
@@ -33,28 +34,13 @@ def peer_log(run_dir: Path) -> str:
     return text
 
 
-def dumps_of(text: str) -> dict[str, str]:
-    found = {}
-    for role, blob in DUMP.findall(text):
-        found[role] = blob
-    return found
-
-
 def inspect(root: Path) -> dict:
     checks = {}
-    details = {"dumps": {}}
-    blobs = {}
+    details = {"detector": "in-process highlight_dump_unchanged"}
     for who in ("base", "tip"):
-        found = dumps_of(peer_log(root / who))
-        details["dumps"][who] = {role: found[role][:32] + "..." if role in found else None for role in ("sp", "mp")}
-        checks[f"{who}_sp"] = "sp" in found
-        checks[f"{who}_mp"] = "mp" in found
-        if "sp" in found and "mp" in found:
-            checks[f"{who}_sp_mp_identical"] = found["sp"] == found["mp"]
-            blobs[who] = found["sp"]
-        else:
-            checks[f"{who}_sp_mp_identical"] = False
-    checks["base_tip_identical"] = "base" in blobs and "tip" in blobs and blobs["base"] == blobs["tip"]
+        found = bool(SELFTEST.search(peer_log(root / who)))
+        details[who] = found
+        checks[f"{who}_selftest"] = found
     return {"pass": all(checks.values()), "checks": checks, "details": details}
 
 

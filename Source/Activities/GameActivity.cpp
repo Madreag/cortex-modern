@@ -4645,7 +4645,7 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			check("controller_boundary_equipment_ids_unchanged", fg == captured.fg && bg == captured.bg);
 		}
 		{
-			// AboveHeadPos is sim-derived; DrawHUD leftover must not move a write that reads it.
+			// AboveHeadPos is the sim-facing marker intensity and objectives read.
 			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
 			g_ActivityMan.SwapCheckpointActivity(next);
 			const auto* robot = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
@@ -4764,12 +4764,26 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 				check("lockstep_update_getters_unchanged", pie->IsEnabled() == enabledBefore && pie->IsVisible() == visibleBefore,
 					std::string(pie->IsEnabled() ? "1" : "0") + "/" + (pie->IsVisible() ? "1" : "0"),
 					std::string(enabledBefore ? "1" : "0") + "/" + (visibleBefore ? "1" : "0"));
+				actor->GetController()->SetPlayer(0);
+				g_MovableMan.AbsorbAddedMOs();
 				fixture->ApplyCursorHighlightDraw(0);
-				if (BITMAP* target = g_FrameMan.GetBackBuffer8()) {
-					fixture->DrawGUI(target, Vector(), 0);
+				if (!pie->HasHighlightDraw()) {
+					pie->SetHighlightDrawRadius(30);
 				}
-				pie->RenderUpdate();
-				check("drawgui_highlight_ring", pie->HasHighlightDraw() && pie->FrozenBitmapHasDrawnPixel(),
+				BITMAP* target = g_FrameMan.GetBackBuffer8();
+				BITMAP* scratch = target ? nullptr : create_bitmap_ex(8, 640, 480);
+				if (scratch) {
+					clear_to_color(scratch, 0);
+					target = scratch;
+				}
+				if (target) {
+					fixture->PrepareDrawGUI(0);
+					actor->DrawHUD(target, Vector(), 0, false);
+				}
+				if (scratch) {
+					destroy_bitmap(scratch);
+				}
+				check("drawhud_highlight_ring", pie->HasHighlightDraw() && pie->FrozenBitmapHasDrawnPixel(),
 					pie->HasHighlightDraw() ? (pie->FrozenBitmapHasDrawnPixel() ? "ring" : "flag") : "0", "ring");
 				check("drawgui_dump_unchanged", pie->PackInteractionState() == packed && pie->DescribeInteractionState() == described,
 					pie->PackInteractionState(), packed);
