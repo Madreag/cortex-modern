@@ -41,6 +41,10 @@ namespace RTE {
 		int64_t listenPort = 0;
 		std::vector<std::string> listenAddrs;
 		std::string joinMode; //!< "ip" | "ice" | "either"
+		bool persistentWorld = false;
+		std::string worldId;
+		int64_t worldBoot = 0;
+		std::string resumeSessionId; //!< When set, the directory reuses this id; a world's UUID.
 
 		bool operator==(const NetDirectoryRegisterRequest&) const = default;
 	};
@@ -115,6 +119,9 @@ namespace RTE {
 		int64_t ageS = 0;
 		std::string observedIp;
 		std::string state; //!< "lobby" | "running"
+		bool persistentWorld = false;
+		std::string worldId;
+		int64_t worldBoot = 0;
 
 		bool operator==(const NetDirectorySessionRow&) const = default;
 	};

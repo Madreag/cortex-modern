@@ -599,7 +599,7 @@ namespace RTE {
 			std::string why;
 			if (!NetDirectoryCodec::IsJoinable(session, local, &why)) {
 				row.reason = MapMismatchReason(why);
-			} else if (session.seatsFree == 0) {
+			} else if (session.seatsFree == 0 && !session.persistentWorld) {
 				row.reason = "full";
 			} else if ((row.address.empty() || row.port == 0) && session.joinMode != "ice" && session.joinMode != "either") {
 				// An ICE row is reached through its session id, so it has no address to be refused for.

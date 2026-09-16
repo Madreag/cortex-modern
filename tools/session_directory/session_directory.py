@@ -341,6 +341,9 @@ class Session:
 
     def as_list_row(self, now: float) -> dict[str, Any]:
         row = {key: self.fields[key] for key in LIST_ROW_FIELDS}
+        for key in ("persistent_world", "world_id", "world_boot"):
+            if key in self.fields:
+                row[key] = self.fields[key]
         row["session_id"] = self.session_id
         row["age_s"] = self.age_s(now)
         row["observed_ip"] = self.observed_ip
@@ -420,7 +423,26 @@ class SessionDirectory:
                 else:
                     fields[name] = require_int(data, name, 0, 10**9)
             fields["listen_addrs"] = require_listen_addrs(data)
-            session_id = str(uuid.uuid4())
+            if "persistent_world" in data:
+                if not isinstance(data["persistent_world"], bool):
+                    raise FieldError("invalid_field", "persistent_world")
+                fields["persistent_world"] = data["persistent_world"]
+            if "world_id" in data:
+                fields["world_id"] = require_str(data, "world_id")
+            if "world_boot" in data:
+                fields["world_boot"] = require_int(data, "world_boot", 1, 10**9)
+            resume = data.get("resume_session_id")
+            if resume is not None:
+                resume = require_str(data, "resume_session_id")
+                try:
+                    uuid.UUID(resume)
+                except ValueError:
+                    raise FieldError("invalid_field", "resume_session_id")
+                if resume in self._sessions:
+                    raise FieldError("conflict", "resume_session_id")
+                session_id = resume
+            else:
+                session_id = str(uuid.uuid4())
             token = secrets.token_urlsafe(24)
             sess = Session(session_id, token, fields, observed_ip, now)
             self._sessions[session_id] = sess
