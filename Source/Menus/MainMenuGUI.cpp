@@ -1008,7 +1008,18 @@ void MainMenuGUI::FitHostActivityCombo() {
 		return;
 	}
 	const int valueX = m_MultiplayerHostPortTextBox->GetRelXPos();
-	GUIFont* font = m_MultiplayerLobbyPlayerRowFallbackFont;
+	GUIListPanel* list = m_MultiplayerHostActivityCombo->GetListPanel();
+	GUIFont* font = list ? list->GetFont() : nullptr;
+	if (!font && m_SubMenuScreenGUIControlManager && m_SubMenuScreenGUIControlManager->GetSkin()) {
+		GUISkin* skin = m_SubMenuScreenGUIControlManager->GetSkin();
+		std::string fontName;
+		if (skin->GetValue("Listbox", "Font", &fontName)) {
+			font = skin->GetFont(fontName);
+		}
+		if (!font) {
+			font = skin->GetFont("FontLarge.png");
+		}
+	}
 	int longest = 0;
 	if (font) {
 		for (int i = 0; i < m_MultiplayerHostActivityCombo->GetCount(); ++i) {
@@ -1018,8 +1029,16 @@ void MainMenuGUI::FitHostActivityCombo() {
 		}
 	}
 	constexpr int arrow = 17;
-	const int maxWidth = std::max(80, m_MultiplayerHostPanel->GetWidth() - 12 - valueX);
-	const int width = std::clamp(longest + arrow, 80, maxWidth);
+	const int needed = longest > 0 ? longest + arrow : m_MultiplayerHostActivityCombo->GetWidth();
+	const int edge = std::max(80, m_MultiplayerHostPanel->GetWidth() - valueX);
+	if (needed > edge) {
+		const int grown = std::min(std::max(m_RootBoxMaxWidth - 12, edge), valueX + needed);
+		if (grown > m_MultiplayerHostPanel->GetWidth()) {
+			m_MultiplayerHostPanel->Resize(grown, m_MultiplayerHostPanel->GetHeight());
+		}
+	}
+	const int maxWidth = std::max(80, m_MultiplayerHostPanel->GetWidth() - valueX);
+	const int width = std::clamp(std::max(needed, 80), 80, maxWidth);
 	m_MultiplayerHostActivityCombo->SetPositionRel(valueX, m_MultiplayerHostActivityCombo->GetRelYPos());
 	if (m_MultiplayerHostActivityCombo->GetWidth() != width) {
 		m_MultiplayerHostActivityCombo->Resize(width, m_MultiplayerHostActivityCombo->GetHeight());
@@ -1364,6 +1383,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		int contentHeight = 250;
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup && m_MultiplayerHostPanel) {
 			contentHeight = m_MultiplayerHostPanel->GetHeight();
+			contentWidth = std::max(contentWidth, m_MultiplayerHostPanel->GetWidth());
 		}
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
 			// FontLarge's atlas has a few width-only blank cells (e.g. 0xDF); FontSmall's ink draws those bytes.

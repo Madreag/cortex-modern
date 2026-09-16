@@ -186,6 +186,12 @@ namespace RTE {
 		/// @param pItem Pointer to the Item to get the height of. Ownership is NOT transferred!
 		int GetItemHeight(Item* pItem);
 
+		/// Regular-draw name room: item width minus padding and a visible vertical scrollbar.
+		int RegularItemNameRoom(int itemOffsetX = 0) const;
+
+		/// The list's skin font. Ownership is NOT transferred.
+		GUIFont* GetFont() const { return m_Font; }
+
 		/// Gets the height, in pixels, of the stack of items up to a specific one.
 		/// E.g. If the specified one is the first (top) in the list, 0 is returned.
 		/// If the second one is specified, the height of the first is returned.

@@ -12,6 +12,7 @@
 #include "GUICheckbox.h"
 #include "GUIRadioButton.h"
 #include "GUIComboBox.h"
+#include "GUIListPanel.h"
 #include "FrameMan.h"
 #include "NetMatchService.h"
 #include "NetLobbySnapshot.h"
@@ -481,29 +482,13 @@ namespace RTE::MenuAutomation {
 						row["item_count"] = combo->GetCount();
 						Json items = Json::array();
 						GUIListPanel* list = combo->GetListPanel();
-						std::string fontName;
-						GUIFont* listFont = nullptr;
-						if (auto* skin = manager->GetSkin()) {
-							if (skin->GetValue("ListBox", "Font", &fontName) || skin->GetValue("TextBox", "Font", &fontName)) {
-								listFont = skin->GetFont(fontName);
-							}
-						}
-						const int listWidth = list ? list->GetWidth() : combo->GetWidth();
-						const int nameRoom = std::max(1, listWidth - 8 - 17);
+						GUIFont* listFont = list ? list->GetFont() : nullptr;
 						for (int i = 0; i < combo->GetCount(); ++i) {
 							const GUIListPanel::Item* entry = combo->GetItem(i);
 							if (!entry) continue;
-							std::string display = entry->m_Name;
-							bool fits = true;
-							if (listFont) {
-								fits = listFont->CalculateWidth(display) <= nameRoom;
-								if (!fits) {
-									while (!display.empty() && listFont->CalculateWidth(display + "...") > nameRoom) display.pop_back();
-									display += "...";
-									fits = listFont->CalculateWidth(display) <= nameRoom;
-								}
-							}
-							items.push_back({{"text", entry->m_Name}, {"display", display}, {"text_fits", fits}});
+							const int nameRoom = std::max(1, list ? list->RegularItemNameRoom(entry->m_OffsetX) : combo->GetWidth() - 8);
+							const bool fits = listFont && listFont->CalculateWidth(entry->m_Name) <= nameRoom;
+							items.push_back({{"text", entry->m_Name}, {"display", entry->m_Name}, {"text_fits", fits}, {"name_room", nameRoom}});
 						}
 						row["items"] = items;
 					}
