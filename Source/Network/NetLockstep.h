@@ -443,7 +443,7 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 22;
+		static constexpr uint16_t c_Version = 23;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
@@ -458,6 +458,8 @@ namespace RTE {
 		// Version 21 appends writerUID on AIOrder; v<=20 still decodes with writerUID 0.
 		// Version 22 carries the AI pass's script messages and gibs as commands, and the AIOrder op that
 		// sets a move target; a peer below it never sent them, so it refuses them instead of guessing.
+		// Version 23 carries a persistent world's membership/spawn/binding transition.
+		static constexpr uint16_t c_WorldTransitionVersion = 23;
 		static constexpr uint16_t c_HoldResolutionVersion = 19;
 		static constexpr uint16_t c_PlayerBindingsVersion = 18;
 		static constexpr uint16_t c_ValueObservationVersion = 20;
@@ -636,6 +638,19 @@ namespace RTE {
 		NetLockstepHoldResolution HeldSeatResolution(uint8_t peerId) const;
 		/// Host: end one held seat and tell every peer at the held frame.
 		void ResolveHeldSeat(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs);
+
+		/// Whether this round is a persistent world: nobody's departure ends it, and its membership is
+		/// admitted one member at a time instead of being derived from the configured peer count.
+		bool IsPersistentWorldRound() const { return m_Config.matchConfig.persistentWorld; }
+		/// Adds an activated world member to the round. Its frames become required at firstRequiredFrame
+		/// and not before, so the announced activation tick is exactly when the world starts waiting on it.
+		/// @param peerId The lockstep id the world's slot table gave the member.
+		/// @param transportPeerId The live connection the member's frames arrive on.
+		/// @param firstRequiredFrame E: the first frame this member must produce.
+		/// @return Whether the member was added.
+		bool AdmitWorldMember(uint8_t peerId, NetPeerId transportPeerId, uint64_t firstRequiredFrame, std::string* error = nullptr);
+		/// Whether the peer is a member the round waits on right now.
+		bool IsWorldMember(uint8_t peerId) const { return IsKnownRemotePeer(peerId); }
 		uint64_t HoldPauseRemainingMs(uint64_t nowMs) const;
 		std::string DescribeHeldPause(uint32_t& secondsLeft, uint64_t nowMs) const;
 		/// Publishes one complete current view. Refused sends retry the latest view without growing a queue.
