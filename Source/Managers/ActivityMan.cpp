@@ -1093,6 +1093,7 @@ void ActivityMan::ResumeActivity() {
 }
 
 bool ActivityMan::RestartActivityCandidate() {
+	ScenarioRunner::ResetRetiredChecksumCounters();
 	m_ActivityNeedsRestart = false;
 	const auto restartStart = std::chrono::steady_clock::now();
 	g_ConsoleMan.PrintString("SYSTEM: Activity was reset!");

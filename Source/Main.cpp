@@ -3667,7 +3667,6 @@ void RunGameLoop() {
 			s_paceUpdateUs = 0;
 			s_paceDrawUs = 0;
 			ScenarioRunner::ResetLockstepWaitUs();
-			ScenarioRunner::ResetRetiredChecksumCounters();
 			g_TimerMan.ResetPaceCounters();
 		}
 		s_pacePrevActive = paceActiveAtIterStart;

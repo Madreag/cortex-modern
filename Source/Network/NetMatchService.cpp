@@ -1314,6 +1314,7 @@ static std::string ResyncSaveName() {
 			DrainPendingSessionEventsLocked(false);
 		}
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		ScenarioRunner::ResetRetiredChecksumCounters();
 		ScenarioRunner::SetSessionPump(nullptr);
 		if (ShouldKeepIceDirectoryLease()) {
 			HideDirectoryListing();
