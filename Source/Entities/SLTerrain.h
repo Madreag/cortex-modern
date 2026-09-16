@@ -176,6 +176,9 @@ namespace RTE {
 		/// @param newArea The Box defining the newly updated material area that can be unwrapped and may be out of bounds of the scene.
 		void AddUpdatedMaterialArea(const Box& newArea);
 
+		/// Installs an owned 8-bit material bitmap for detecting tests. Does not allocate a GL texture.
+		int TestInstallMaterialBitmap(int width, int height, bool wrapX = false, bool wrapY = false);
+
 		/// Removes any color pixel in the color layer of this SLTerrain wherever there is an air material pixel in the material layer.
 		void CleanAir();
 
