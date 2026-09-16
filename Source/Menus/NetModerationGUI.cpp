@@ -231,8 +231,40 @@ bool NetModerationGUI::SetOpen(bool open) {
 	return true;
 }
 
+void NetModerationGUI::LayoutPanel() {
+	// A compact screen keeps one toast row between the strip band and the panel's top: the panel
+	// drops by that row and loses it off its height, so its bottom edge - and the roster - stay put.
+	const int screenHeight = g_WindowMan.GetResY();
+	GUIFont* font = g_FrameMan.GetSmallFont(true);
+	const int rowHeight = std::max(12, font ? font->GetFontHeight() : 12) + 8;
+	const int lift = screenHeight < c_CompactMaxHeight ? rowHeight : 0;
+	const int width = std::min(c_PanelWidth, g_WindowMan.GetResX() - 12);
+	const int top = PanelTop(screenHeight) + lift;
+	const int height = c_PanelHeight - lift;
+	int x, y, w, h;
+	m_Panel->GetControlRect(&x, &y, &w, &h);
+	if (x != (g_WindowMan.GetResX() - width) / 2 || y != top || w != width || h != height) {
+		m_Panel->Move((g_WindowMan.GetResX() - width) / 2, top);
+		m_Panel->Resize(width, height);
+	}
+	// The roster yields the reserved row and scrolls for what no longer fits; the status and close
+	// rows move up inside the shrunken panel instead of clipping at its bottom edge.
+	if (m_Roster->GetHeight() != 240 - lift) {
+		m_Roster->Resize(m_Roster->GetWidth(), 240 - lift);
+	}
+	m_Roster->SetVerticalOverflowScroll(lift != 0);
+	m_Roster->ActivateDeactivateOverflowScroll(lift != 0);
+	if (m_Status->GetHeight() != 30 - lift) {
+		m_Status->Resize(m_Status->GetWidth(), 30 - lift);
+	}
+	if (m_Close->GetRelYPos() != 318 - lift) {
+		m_Close->SetPositionRel(width - 224, 318 - lift);
+	}
+}
+
 void NetModerationGUI::Refresh() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+	LayoutPanel();
 	m_Model.Refresh(g_NetMatchService.GetModerationSeats());
 	// The hold is the round's, read from the same place the stall overlay reads it.
 	std::string holdName;
@@ -405,14 +437,17 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		int y = editor.editing ? backbuffer->h - height - 2 : 2;
 		if (m_Open) {
 			// An open seats panel reaches the top of a compact screen, so a strip crossing its rows lifts
-			// above it - shrinking to a bare line of them when that is all the room there is.
+			// above it - shrinking to a bare line of them when that is all the room there is. The toast
+			// row the panel's band reserves sits under the strip, so a live toast lowers the ceiling to it.
 			int panelX, panelTop, panelWidth, panelHeight;
 			m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
-			if (y < panelTop + panelHeight && y + height > panelTop) {
-				y = panelTop - height;
+			const int rowHeight = std::max(12, font->GetFontHeight()) + 8;
+			const int ceiling = ScenarioRunner::GetVisibleNetUiToasts().empty() ? panelTop : panelTop - 4 - rowHeight;
+			if (y < panelTop + panelHeight && y + height > ceiling) {
+				y = ceiling - height;
 				if (y < 0) {
 					y = 0;
-					height = std::min(height, panelTop);
+					height = std::min(height, ceiling);
 				}
 			}
 		}
@@ -568,27 +603,32 @@ void NetModerationGUI::DrawMatchToasts() {
 	const EditorArea editor = FreeArea(backbuffer->w);
 	// The status widget takes the bottom while the editor holds the world, so the rows stack above it.
 	int bottom = editor.editing && m_StatusRect.visible ? m_StatusRect.y - 4 : backbuffer->h - 8;
+	// A compact screen with the seats panel open reserves one toast row under the strip band: the
+	// newest toast takes it and the rest of the stack waits for the room to come back.
+	const bool reserved = m_Open && backbuffer->h < c_CompactMaxHeight;
 	if (m_Open) {
 		// The seats panel owns its rows too: a stack that would cross them piles up above it instead.
 		int panelX, panelTop, panelWidth, panelHeight;
 		m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
 		bottom = std::min(bottom, panelTop - 4);
 	}
-	const int top = bottom - static_cast<int>(visible.size()) * rowHeight;
+	const size_t firstRow = reserved && !visible.empty() ? visible.size() - 1 : 0;
+	const size_t rowCount = visible.size() - firstRow;
+	const int top = bottom - static_cast<int>(rowCount) * rowHeight;
 	int freeLeft = 0, freeRight = backbuffer->w;
 	editor.FreeSpan(top, bottom, backbuffer->w, freeLeft, freeRight);
 	const int available = freeRight - freeLeft;
 	const int width = std::max(0, std::min(520, available - 32));
 	const int x = freeLeft + std::max(0, (available - width) / 2);
-	if (!visible.empty()) {
-		m_ToastRect = {x, top, width, static_cast<int>(visible.size()) * rowHeight - 2, true};
+	if (rowCount) {
+		m_ToastRect = {x, top, width, static_cast<int>(rowCount) * rowHeight - 2, true};
 	}
 	AllegroBitmap bitmap(backbuffer);
 	for (size_t row = 0; row < m_Toasts.size(); ++row) {
 		GUILabel* label = m_Toasts[row];
-		const bool shown = row < visible.size();
+		const bool shown = row < rowCount;
 		label->SetVisible(shown);
-		label->SetText(shown ? FitLine(font, ToastText(visible[row]), width - 16) : std::string());
+		label->SetText(shown ? FitLine(font, ToastText(visible[firstRow + row]), width - 16) : std::string());
 		if (!shown) continue;
 		const int y = top + static_cast<int>(row) * rowHeight;
 		label->SetFont(font);
