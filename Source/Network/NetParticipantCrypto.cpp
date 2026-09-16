@@ -215,8 +215,19 @@ namespace RTE {
 		m_Public = {};
 		const std::filesystem::path path(m_Path);
 		std::error_code code;
-		if (std::filesystem::exists(path, code)) {
-			std::vector<uint8_t> bytes(static_cast<size_t>(std::filesystem::file_size(path, code)));
+		const bool present = std::filesystem::exists(path, code);
+		if (code) {
+			if (error) *error = "could not stat the participant identity";
+			return false;
+		}
+		if (present) {
+			const uintmax_t size = std::filesystem::file_size(path, code);
+			constexpr uintmax_t kIdentityBytes = 8 + 2 + 32 + 32 + 32;
+			if (code || size != kIdentityBytes) {
+				if (error) *error = code ? "could not size the participant identity" : "the participant identity is corrupt";
+				return false;
+			}
+			std::vector<uint8_t> bytes(static_cast<size_t>(size));
 			FILE* file = nullptr;
 #ifdef _WIN32
 			if (_wfopen_s(&file, path.wstring().c_str(), L"rb") != 0 || file == nullptr) {

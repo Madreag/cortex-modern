@@ -787,9 +787,7 @@ namespace RTE {
 			return false;
 		}
 		NetAuthBytes32 id{};
-		const bool unknownPersistent = !m_BanStore->PersistentReady();
-		const bool knownBan = LookupParticipantId(connection, id) && m_BanStore->IsBanned(id, m_HostSessionId);
-		if (!unknownPersistent && !knownBan) {
+		if (!LookupParticipantId(connection, id) || !m_BanStore->IsBanned(id, m_HostSessionId)) {
 			return false;
 		}
 		Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "this identity is not admitted", "participant_identity", "", ""});

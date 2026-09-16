@@ -3089,7 +3089,7 @@ static std::string ResyncSaveName() {
 			session.EnableParticipantProof(nullptr);
 			m_BanStore.SetPath(NetHostBanStore::DefaultPath());
 			if (!m_BanStore.Load(nullptr)) {
-				// Last-good persistents stay; Until Removed admission stays closed until a later load.
+				// Last-good persistents stay; Until Removed writes stay closed until a later load.
 			}
 			m_ReconnectHost.SetBanStore(&m_BanStore);
 			session.SetHostBanStore(&m_BanStore);

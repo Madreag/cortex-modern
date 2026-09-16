@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 
 #ifdef _WIN32
 #include <io.h>
@@ -73,6 +74,17 @@ namespace RTE {
 
 		bool BoundedText(const std::string& text) {
 			return text.size() <= NetProtocol::c_MaxShortTextBytes;
+		}
+
+		bool PlausibleSealedSize(uintmax_t size) {
+			constexpr uintmax_t header = 8 + 2 + 2;
+			constexpr uintmax_t mac = 32;
+			constexpr uintmax_t maxRecord = 32 + 8 + 2 + NetProtocol::c_MaxShortTextBytes + 2 + NetProtocol::c_MaxShortTextBytes;
+			if (size < header + mac) {
+				return false;
+			}
+			const uintmax_t maxSealed = header + static_cast<uintmax_t>(std::numeric_limits<uint16_t>::max()) * maxRecord + mac;
+			return size <= maxSealed;
 		}
 
 		NetHostBanRecord* FindRecord(std::vector<NetHostBanRecord>& records, const NetAuthBytes32& identity) {
@@ -178,14 +190,26 @@ namespace RTE {
 	bool NetHostBanStore::Load(std::string* error) {
 		const std::filesystem::path path(m_Path);
 		std::error_code code;
-		if (!std::filesystem::exists(path, code)) {
+		const bool present = std::filesystem::exists(path, code);
+		if (code) {
+			if (error) *error = "could not stat the host ban store";
+			m_PersistentReady = false;
+			return false;
+		}
+		if (!present) {
 			m_Records.erase(std::remove_if(m_Records.begin(), m_Records.end(), [](const NetHostBanRecord& record) {
 				return record.scope == NetHostBanScope::UntilRemoved;
 			}), m_Records.end());
 			m_PersistentReady = true;
 			return true;
 		}
-		std::vector<uint8_t> bytes(static_cast<size_t>(std::filesystem::file_size(path, code)));
+		const uintmax_t size = std::filesystem::file_size(path, code);
+		if (code || !PlausibleSealedSize(size)) {
+			if (error) *error = "could not size the host ban store";
+			m_PersistentReady = false;
+			return false;
+		}
+		std::vector<uint8_t> bytes(static_cast<size_t>(size));
 		FILE* file = nullptr;
 #ifdef _WIN32
 		if (_wfopen_s(&file, path.wstring().c_str(), L"rb") != 0 || file == nullptr) {
