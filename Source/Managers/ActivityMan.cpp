@@ -1023,8 +1023,15 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	const bool consoleKept = console.find("ERROR: the save cannot carry a script value:") != std::string::npos;
 	check(refused && hasLive && live.objectClass == "MOPixel" && live.problem.find("that no longer exists") != std::string::npos,
 	      "plant_invalid", hasLive ? live.problem : "no refusal");
-	check(refused && screen == live.playerLine, "autosave_ui", screen);
-	check(consoleKept, "console_text", console);
+	check(refused && hasLive && !live.playerLine.empty() && screen == live.playerLine, "autosave_ui", screen);
+	std::string consoleDetail;
+	if (!consoleKept) {
+		consoleDetail = console;
+		for (char& ch: consoleDetail) {
+			if (ch == '\n' || ch == '\r') ch = ' ';
+		}
+	}
+	check(consoleKept, "console_text", consoleDetail);
 
 	nlohmann::json heal;
 	try {
@@ -1065,7 +1072,8 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 
 	g_FrameMan.ClearScreenText(0);
 	const bool refusedManual = !SaveCurrentGame("save_refusal");
-	check(refusedManual && g_FrameMan.GetScreenText(0) == live.playerLine, "manual_repeat", g_FrameMan.GetScreenText(0));
+	check(refusedManual && hasLive && !live.playerLine.empty() && g_FrameMan.GetScreenText(0) == live.playerLine,
+	      "manual_repeat", g_FrameMan.GetScreenText(0));
 
 	LoopbackTransport transport;
 	NetLockstepCoordinator coordinator;
