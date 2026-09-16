@@ -30,6 +30,12 @@
 #include "GlobalScript.h"
 #include "ACraft.h"
 #include "SLTerrain.h"
+#include "Scene.h"
+#include "SceneMan.h"
+#include "LoopbackTransport.h"
+#include "NetLockstep.h"
+#include "NetMatchService.h"
+#include "nlohmann/json.hpp"
 
 #include "EditorActivity.h"
 #include "SceneEditor.h"
@@ -357,6 +363,9 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 	if (automatic) allocationState.emplace();
 	AudioMan::SoundCheckpointSaveScope carriedSounds;
 	if (!automatic) g_LuaMan.CollectGarbageForCheckpoint();
+	std::vector<std::string> graphs;
+	const SaveKind kind = automatic ? SaveKind::Autosave : (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual);
+	if (!CaptureScriptGraphsOrReportRefusal(kind, graphs)) return false;
 	const uint64_t liveSoundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 	const std::string worldStructure = g_MovableMan.SaveWorldStructure();
 	const std::string sceneRuntime = scene->SaveRuntimeCheckpoint();
@@ -436,9 +445,6 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 		std::stringstream* graphText = graphStream.get();
 		Writer graphWriter(std::move(graphStream));
 		Writer::SnapshotScope graphSnapshot(graphWriter);
-		std::vector<std::string> graphs;
-		const SaveKind kind = automatic ? SaveKind::Autosave : (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual);
-		if (!CaptureScriptGraphsOrReportRefusal(kind, graphs)) return false;
 		for (size_t index = 0; index < graphs.size(); ++index) {
 			graphWriter.NewPropertyWithValue("LuaStateGraph", std::to_string(index) + "|" + base64_encode(graphs[index], true));
 		}
@@ -987,6 +993,11 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	auto priorActivity = std::move(m_Activity);
 	m_Activity.reset(new GAScripted());
 	m_Activity->SetActivityState(Activity::Running);
+	SceneMan::SceneSetAside originalScene;
+	g_SceneMan.SetAsideScene(originalScene);
+	SceneMan::SceneSetAside dummyScene;
+	dummyScene.scene = new Scene();
+	g_SceneMan.ReinstateScene(dummyScene);
 
 	LuaStateWrapper& state = g_LuaMan.GetMasterScriptState();
 	const char* plant =
@@ -1003,9 +1014,8 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	lua_pop(lua, 1);
 	if (held) g_MovableMan.UnregisterObject(held);
 
-	std::vector<std::string> graphs;
 	const size_t toastsBefore = ScenarioRunner::GetNetUiToastLog().size();
-	const bool refused = planted && held && !CaptureScriptGraphsOrReportRefusal(SaveKind::Autosave, graphs);
+	const bool refused = planted && held && !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 1);
 	const std::string screen = g_FrameMan.GetScreenText(0);
 	const std::string console = g_ConsoleMan.CopyLogTail(16 * 1024);
 	const bool hasLive = !m_SaveRefusalRecords.empty();
@@ -1014,28 +1024,70 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	check(refused && hasLive && live.objectClass == "MOPixel" && live.problem.find("that no longer exists") != std::string::npos,
 	      "plant_invalid", hasLive ? live.problem : "no refusal");
 	check(refused && screen == live.playerLine, "autosave_ui", screen);
-	check(consoleKept, "console_text", "drivers still see the original ERROR line");
-	check(!m_SaveRefusalRecords.empty() && m_SaveRefusalRecords.back().path.find("transactionOwner") != std::string::npos,
-	      "bundle_record", m_SaveRefusalRecords.empty() ? "empty" : m_SaveRefusalRecords.back().path);
+	check(consoleKept, "console_text", console);
+
+	nlohmann::json heal;
+	try {
+		heal = nlohmann::json::parse(g_NetMatchService.ExportDiagnosticDesyncHeal());
+	} catch (const std::exception& error) {
+		heal = nlohmann::json{{"error", error.what()}};
+	}
+	bool bundleOk = false;
+	std::string bundleDetail = heal.dump();
+	if (heal.contains("save_refusals") && heal["save_refusals"].is_array()) {
+		for (const auto& row: heal["save_refusals"]) {
+			if (row.value("kind", "") == "autosave" && row.value("script", "") == "mod_failure_continuation.lua" &&
+			    row.value("function", "") == "Update" && row.value("class", "") == "MOPixel" &&
+			    row.value("path", "").find("transactionOwner") != std::string::npos &&
+			    row.value("problem", "").find("that no longer exists") != std::string::npos &&
+			    row.value("line", "") == live.playerLine) {
+				bundleOk = true;
+				bundleDetail = row.dump();
+				break;
+			}
+		}
+	}
+	check(bundleOk, "bundle_json", bundleDetail);
 
 	g_FrameMan.ClearScreenText(0);
-	graphs.clear();
-	const bool refusedAgain = !CaptureScriptGraphsOrReportRefusal(SaveKind::Autosave, graphs);
+	const bool refusedAgain = !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 2);
 	check(refusedAgain && g_FrameMan.GetScreenText(0).empty() && ScenarioRunner::GetNetUiToastLog().size() == toastsBefore,
 	      "autosave_dedup", g_FrameMan.GetScreenText(0));
 
-	graphs.clear();
-	const bool refusedManual = !CaptureScriptGraphsOrReportRefusal(SaveKind::Manual, graphs);
+	if (held) g_MovableMan.RegisterObject(held);
+	std::vector<std::string> clearedGraphs;
+	const bool cleared = held && CaptureScriptGraphsOrReportRefusal(SaveKind::Autosave, clearedGraphs);
+	if (held) g_MovableMan.UnregisterObject(held);
+	g_FrameMan.ClearScreenText(0);
+	const bool refusedAfterClear = !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 3);
+	check(cleared && refusedAfterClear && g_FrameMan.GetScreenText(0) == live.playerLine,
+	      "autosave_returns", g_FrameMan.GetScreenText(0));
+
+	g_FrameMan.ClearScreenText(0);
+	const bool refusedManual = !SaveCurrentGame("save_refusal");
 	check(refusedManual && g_FrameMan.GetScreenText(0) == live.playerLine, "manual_repeat", g_FrameMan.GetScreenText(0));
 
-	ShowSaveRefusalToPlayer(example, true);
+	LoopbackTransport transport;
+	NetLockstepCoordinator coordinator;
+	NetLockstepConfig config;
+	config.localPeerId = 1;
+	config.peerCount = 1;
+	std::string lockstepError;
+	const bool lockstepReady = coordinator.StartReplay(transport, config, &lockstepError);
+	ScenarioRunner::SetLockstepCoordinator(lockstepReady ? &coordinator : nullptr);
+	g_FrameMan.ClearScreenText(0);
+	const size_t toastsAtLockstep = ScenarioRunner::GetNetUiToastLog().size();
+	if (hasLive) ReportScriptGraphSaveRefusal(SaveKind::Manual, {live.problem});
 	const auto& toasts = ScenarioRunner::GetNetUiToastLog();
-	const bool toasted = !toasts.empty() && toasts.back().kind == "save_refused" &&
-	                     toasts.back().text == example.playerLine;
-	check(toasted, "lockstep_toast", toasts.empty() ? "empty" : toasts.back().text);
+	const bool toasted = lockstepReady && toasts.size() > toastsAtLockstep && toasts.back().kind == "save_refused" &&
+	                     toasts.back().text == live.playerLine && g_FrameMan.GetScreenText(0).empty();
+	check(toasted, "lockstep_toast", toasts.empty() ? lockstepError : toasts.back().text);
+	ScenarioRunner::SetLockstepCoordinator(nullptr);
 
 	state.RunScriptString("_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"] = nil; _F38SaveRefusalUID = nil;");
 	g_LuaMan.CollectGarbageForCheckpoint();
+	g_SceneMan.SetAsideScene(dummyScene);
+	g_SceneMan.ReinstateScene(originalScene);
 	m_Activity = std::move(priorActivity);
 
 	std::cout << Tag << (failures == 0 ? " PASS" : " FAIL") << std::endl;
