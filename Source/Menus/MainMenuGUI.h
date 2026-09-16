@@ -252,7 +252,7 @@ namespace RTE {
 		GUITextBox* m_MultiplayerHostInputDelayTextBox;
 		GUILabel* m_MultiplayerHostInputDelayPolicyLabel; //!< Names the saved delay policy beside the box, the same parenthetical the lobby row carries.
 		GUICheckbox* m_MultiplayerHostPortMapCheckbox;
-		GUIComboBox* m_MultiplayerHostModeCombo = nullptr; //!< PvP / Co-op PvE / PvPvE, the same request field the cycle button owned.
+		GUIComboBox* m_MultiplayerHostModeCombo = nullptr; //!< PvP / Co-op PvE / PvPvE for request.mode.
 		GUIComboBox* m_MultiplayerHostActivityCombo = nullptr; //!< The host's pick-list of lockstep-runnable activities.
 		GUILabel* m_MultiplayerHostInfoLabel;
 		// (preset, defining module) for each scripted activity a lockstep match can run; the module is
