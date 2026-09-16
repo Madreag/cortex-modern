@@ -102,6 +102,19 @@ function P4AlphaDuel:UpdateActivity()
 			end
 		end
 	end
+	-- A team is out only once a brain it HAD is gone; the match ends when at most one team stands.
+	local aliveTeams = {};
+	local anyTeamOut = false;
+	for team = Activity.TEAM_1, Activity.MAXTEAMCOUNT - 1 do
+		if self.TeamHadBrain[team] then
+			if (liveBrains[team] or 0) < 1 then
+				anyTeamOut = true;
+			else
+				table.insert(aliveTeams, team);
+			end
+		end
+	end
+	local ending = anyTeamOut and #aliveTeams <= 1;
 	-- The host's rule: with every human brain gone the humans watch the match out instead of ending it.
 	local spectating = self:BrainlessHumansSpectate();
 	for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
@@ -110,7 +123,7 @@ function P4AlphaDuel:UpdateActivity()
 			if self.TeamHadBrain[team] and (liveBrains[team] or 0) < 1 then
 				self:ResetMessageTimer(player);
 				local screen = self:ScreenOfPlayer(player);
-				if spectating then
+				if spectating and not ending then
 					-- The loss shows once, then the spectator line; 300 updates is about five seconds.
 					self.spectatorNotice = self.spectatorNotice or {};
 					local notice = (self.spectatorNotice[player] or 0) + 1;
@@ -128,19 +141,7 @@ function P4AlphaDuel:UpdateActivity()
 			end
 		end
 	end
-	-- A team is out only once a brain it HAD is gone; the match ends when at most one team stands.
-	local aliveTeams = {};
-	local anyTeamOut = false;
-	for team = Activity.TEAM_1, Activity.MAXTEAMCOUNT - 1 do
-		if self.TeamHadBrain[team] then
-			if (liveBrains[team] or 0) < 1 then
-				anyTeamOut = true;
-			else
-				table.insert(aliveTeams, team);
-			end
-		end
-	end
-	if anyTeamOut and #aliveTeams <= 1 then
+	if ending then
 		-- The last brained team wins; a double kill or a sole-brained world ends as a draw.
 		if #aliveTeams == 1 then
 			self.WinnerTeam = aliveTeams[1];
@@ -148,4 +149,8 @@ function P4AlphaDuel:UpdateActivity()
 		end
 		ActivityMan:EndActivity();
 	end
+end
+
+function P4AlphaDuel:EndActivity()
+	print("[p4-duel] loss-duration=-1");
 end
