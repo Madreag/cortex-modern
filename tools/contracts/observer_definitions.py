@@ -74,6 +74,28 @@ Field(path + ".NetGamePlaceBrain.preset", object.preset);
 Field(path + ".NetGamePlaceBrain.module", object.module);
 }
 ''',
+    "Round": r'''
+void Visit(const PathFinder& object, const std::string& path) {
+Field(path + ".node_dimension", object.m_NodeDimension);
+Field(path + ".offset", object.m_Offset);
+Field(path + ".width", object.m_GridWidth);
+Field(path + ".height", object.m_GridHeight);
+Field(path + ".wrap_x", object.m_WrapsX);
+Field(path + ".wrap_y", object.m_WrapsY);
+Field(path + ".requests", object.m_CurrentPathingRequests.load());
+Field(path + ".node_count", object.m_NodeGrid.size());
+for (size_t index = 0; index < object.m_NodeGrid.size(); ++index) {
+    const auto& node = object.m_NodeGrid[index];
+    const std::string base = path + ".node[" + std::to_string(index) + "]";
+    Field(base + ".position", node.Pos);
+    Field(base + ".navigable", node.m_Navigable);
+    for (size_t direction = 0; direction < node.AdjacentNodes.size(); ++direction) {
+        Field(base + ".neighbor[" + std::to_string(direction) + "]", node.AdjacentNodes[direction] ? static_cast<int64_t>(node.AdjacentNodes[direction] - object.m_NodeGrid.data()) : int64_t{-1});
+        Field(base + ".material[" + std::to_string(direction) + "]", node.AdjacentNodeBlockingMaterials[direction] ? static_cast<int>(node.AdjacentNodeBlockingMaterials[direction]->GetIndex()) : -1);
+    }
+}
+}
+''',
 }
 
 POST_INVENTORY_VISITS = ''
