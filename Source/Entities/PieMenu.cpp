@@ -113,6 +113,10 @@ void PieMenu::Clear() {
 	m_FrozenForView = false;
 	m_FreezeRadiusDraw = 0;
 	m_FrozenBitmapNeedsRedraw = false;
+	m_HighlightDrawActive = false;
+	m_HighlightWobble = false;
+	m_HighlightDrawRadius = 0;
+	m_HighlightViewTimer.Reset();
 	m_BGBitmapNeedsRedrawing = true;
 	m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing = true;
 }
@@ -432,6 +436,18 @@ bool PieMenu::RunCheckpointSelfTest() {
 		getpixel(menu.m_BGPieSlicesWithSubPieMenuBitmap, 3, 4) == 23 && menu.m_BGBitmap->cl == 1 && menu.m_BGBitmap->cb == 10 && !menu.m_BGBitmapNeedsRedrawing);
 	menu.FreezeAtRadius(15);
 	check("freeze_is_presentation_only", menu.SaveRuntimeCheckpoint() == saved);
+	const auto described = menu.DescribeInteractionState();
+	const bool enabledBefore = menu.IsEnabled();
+	const bool visibleBefore = menu.IsVisible();
+	menu.ClearHighlightDraw();
+	check("lockstep_update_leaves_highlight_undrawn", !menu.HasHighlightDraw());
+	menu.SetHighlightDrawRadius(30);
+	check("highlight_draw_radius", menu.HasHighlightDraw() && menu.GetHighlightDrawRadius() == 30);
+	check("highlight_dump_unchanged", menu.SaveRuntimeCheckpoint() == saved);
+	check("highlight_describe_unchanged", menu.DescribeInteractionState() == described);
+	check("highlight_getters_unchanged", menu.IsEnabled() == enabledBefore && menu.IsVisible() == visibleBefore);
+	menu.ClearHighlightDraw();
+	check("highlight_clears", !menu.HasHighlightDraw());
 	PieMenu copy;
 	{ MovableObject::FaithfulCloneScope scope(true); check("faithful_clone_preserves_runtime", copy.Create(menu) == 0 && copy.SaveRuntimeCheckpoint() == saved); }
 	check("clone_owns_its_bitmaps", copy.m_BGBitmap != menu.m_BGBitmap && copy.m_BGRotationBitmap != menu.m_BGRotationBitmap && copy.m_BGPieSlicesWithSubPieMenuBitmap != menu.m_BGPieSlicesWithSubPieMenuBitmap);
@@ -910,17 +926,59 @@ void PieMenu::Update() {
 		UpdateEnablingAndDisablingProgress();
 	}
 
-	// The frozen ring draws into its own bitmap so none of it reaches the checkpointed fields or bitmaps.
-	if (m_FrozenForView && m_FrozenBitmapNeedsRedraw && m_FrozenBitmap) {
-		clear_to_color(m_FrozenBitmap, ColorKeys::g_MaskColor);
-		circlefill(m_FrozenBitmap, m_FrozenBitmap->w / 2, m_FrozenBitmap->h / 2, m_FreezeRadiusDraw + m_BackgroundThickness, m_BackgroundColor);
-		circlefill(m_FrozenBitmap, m_FrozenBitmap->w / 2, m_FrozenBitmap->h / 2, m_FreezeRadiusDraw, ColorKeys::g_MaskColor);
-		m_FrozenBitmapNeedsRedraw = false;
-	}
-
 	if (m_BGBitmapNeedsRedrawing && m_EnabledState != EnabledState::Disabled) {
 		UpdatePredrawnMenuBackgroundBitmap();
 	}
+}
+
+void PieMenu::SetHighlightDrawRadius(int radius) {
+	m_HighlightDrawActive = true;
+	m_HighlightWobble = false;
+	m_HighlightDrawRadius = radius;
+	m_FrozenBitmapNeedsRedraw = true;
+}
+
+void PieMenu::SetHighlightWobble() {
+	if (!m_HighlightWobble) {
+		m_HighlightViewTimer.Reset();
+	}
+	m_HighlightDrawActive = true;
+	m_HighlightWobble = true;
+	m_FrozenBitmapNeedsRedraw = true;
+}
+
+void PieMenu::ClearHighlightDraw() {
+	m_HighlightDrawActive = false;
+	m_HighlightWobble = false;
+	m_HighlightDrawRadius = 0;
+}
+
+int PieMenu::CurrentHighlightRadius() const {
+	if (!m_HighlightDrawActive) {
+		return 0;
+	}
+	if (!m_HighlightWobble) {
+		return m_HighlightDrawRadius;
+	}
+	const int span = std::max(1, m_FullInnerRadius / 2);
+	const int elapsed = static_cast<int>(m_HighlightViewTimer.GetElapsedRealTimeMS());
+	const int period = 400;
+	const int phase = elapsed % (period * 2);
+	return phase < period ? (phase * span) / period : ((period * 2 - phase) * span) / period;
+}
+
+void PieMenu::FillHighlightBitmap() {
+	const int radius = m_HighlightDrawActive ? CurrentHighlightRadius() : (m_FrozenForView ? m_FreezeRadiusDraw : 0);
+	if (!m_FrozenBitmap || radius <= 0) {
+		return;
+	}
+	if (!m_HighlightWobble && !m_FrozenBitmapNeedsRedraw) {
+		return;
+	}
+	clear_to_color(m_FrozenBitmap, ColorKeys::g_MaskColor);
+	circlefill(m_FrozenBitmap, m_FrozenBitmap->w / 2, m_FrozenBitmap->h / 2, radius + m_BackgroundThickness, m_BackgroundColor);
+	circlefill(m_FrozenBitmap, m_FrozenBitmap->w / 2, m_FrozenBitmap->h / 2, radius, ColorKeys::g_MaskColor);
+	m_FrozenBitmapNeedsRedraw = false;
 }
 
 void PieMenu::RenderUpdate() {
@@ -930,6 +988,7 @@ void PieMenu::RenderUpdate() {
 		const Actor* affectedObjectAsActor = dynamic_cast<Actor*>(m_AffectedObject);
 		SetPos(affectedObjectAsActor ? affectedObjectAsActor->GetRenderCPUPos() : m_AffectedObject->GetRenderPos());
 	}
+	FillHighlightBitmap();
 
 	// Smooth the visual cursor angle to the latest analog input each render frame; sim-tick m_CursorAngle still drives hover/activation.
 	const Controller* controller = GetController();
@@ -955,7 +1014,7 @@ void PieMenu::Draw(BITMAP* targetBitmap, const Vector& targetPos) const {
 	CalculateDrawPosition(targetBitmap, targetPos, drawPos);
 
 	rlZDepth(c_GuiDepth);
-	if (m_FrozenForView) {
+	if (m_HighlightDrawActive || m_FrozenForView) {
 		if (m_FrozenBitmap) {
 			if (m_DrawBackgroundTransparent) {
 				g_FrameMan.SetTransTableFromPreset(TransparencyPreset::MoreTrans);
@@ -978,7 +1037,7 @@ void PieMenu::Draw(BITMAP* targetBitmap, const Vector& targetPos) const {
 	}
 	rlZDepth(c_DefaultDrawDepth);
 
-	if (!m_FrozenForView && m_EnabledState == EnabledState::Enabled) {
+	if (!m_HighlightDrawActive && !m_FrozenForView && m_EnabledState == EnabledState::Enabled) {
 		DrawPieIcons(targetBitmap, drawPos);
 		if (m_CursorInVisiblePosition) {
 			DrawPieCursorAndPieSliceDescriptions(targetBitmap, drawPos);
