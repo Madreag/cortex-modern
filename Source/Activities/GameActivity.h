@@ -201,6 +201,11 @@ namespace RTE {
 				m_ObservationTarget[player] = newTarget;
 		}
 
+		/// The observation scroll target for a seat.
+		const Vector& GetObservationTarget(int player = 0) const {
+			return (player >= Players::PlayerOne && player < Players::MaxPlayerCount) ? m_ObservationTarget[player] : m_ObservationTarget[Players::PlayerOne];
+		}
+
 		/// Sets the player death sceneman scroll targets, for when a player-
 		/// controlled actor dies and the view should go to his last position
 		/// @param newTarget The new absolute position to set as death view.
@@ -671,6 +676,7 @@ namespace RTE {
 
 		// The observation sceneman scroll targets, for when the game is over or a player is in observation mode
 		Vector m_ObservationTarget[Players::MaxPlayerCount];
+		bool m_ObserveFreezeHeld[Players::MaxPlayerCount]{}; //!< Per-seat game-over observe freeze; zeroed in Clear.
 		// The player death sceneman scroll targets, for when a player-controlled actor dies and the view should go to his last position
 		Vector m_DeathViewTarget[Players::MaxPlayerCount];
 		// The actor a spectating player's view follows; local presentation, so it stays out of checkpoints

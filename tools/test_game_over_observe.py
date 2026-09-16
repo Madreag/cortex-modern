@@ -1,7 +1,7 @@
-"""Game-over observe freeze: both peers lift the cursor freeze on the same sim tick.
+"""Game-over observe freeze: look-around is held until the same sim tick on both peers.
 
-The fixture ends the round and sits in Observe. The engine prints
-[game-over-freeze] lift-tick=N at the C++ observe-cursor gate.
+The fixture ends the round, injects HOLD_RIGHT, and prints the observation target.
+On the base (wall-clock freeze) the first move's elapsed sim time differs.
 This arm is written, not run.
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ import sys
 REPO = Path(__file__).resolve().parents[1]
 FIXTURE = REPO / "tools/fixtures/game_over_observe.lua"
 PRESET = "Determinism Game Over Observe"
-LIFT = re.compile(r"\[game-over-freeze\] lift-tick=(\d+)")
+TARGET = re.compile(r"\[game-over-freeze\] target=([-\d.]+),([-\d.]+) elapsed=([-\d.]+) player=(\d+)")
 INDEX = (
     "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n"
     "\tAddActivity = GAScripted\n\t\tPresetName = " + PRESET + "\n"
@@ -33,11 +33,6 @@ def sha(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def lift_tick(text: str) -> int | None:
-    matches = LIFT.findall(text)
-    return int(matches[0]) if matches else None
-
-
 def peer_log(run_dir: Path) -> str:
     text = ""
     for name in ("stdout.log", "runtime/LogConsole.txt"):
@@ -45,6 +40,30 @@ def peer_log(run_dir: Path) -> str:
         if path.exists():
             text += path.read_text(encoding="utf-8", errors="replace")
     return text
+
+
+def parse_targets(text: str) -> list[tuple[float, float, float]]:
+    rows = []
+    for match in TARGET.finditer(text):
+        rows.append((float(match.group(1)), float(match.group(2)), float(match.group(3))))
+    return rows
+
+
+def first_move_elapsed(rows: list[tuple[float, float, float]]) -> float | None:
+    if not rows:
+        return None
+    origin = (rows[0][0], rows[0][1])
+    for x, y, elapsed in rows:
+        if (x, y) != origin:
+            return elapsed
+    return None
+
+
+def held_until_sim(rows: list[tuple[float, float, float]]) -> bool:
+    if not rows:
+        return False
+    origin = (rows[0][0], rows[0][1])
+    return all((x, y) == origin for x, y, elapsed in rows if elapsed < 1000.0)
 
 
 def stage_module(runtime: Path) -> None:
@@ -56,15 +75,18 @@ def stage_module(runtime: Path) -> None:
 
 def inspect(root: Path, peers: tuple[str, ...]) -> dict:
     checks = {}
-    details = {"lift_tick": {}}
-    ticks = []
+    details = {"first_move": {}, "held": {}}
+    moves = []
     for who in peers:
-        log = peer_log(root / who)
-        tick = lift_tick(log)
-        details["lift_tick"][who] = tick
-        checks[f"{who}_lifted"] = tick is not None
-        ticks.append(tick)
-    checks["same_tick"] = len(set(ticks)) == 1 and None not in ticks
+        rows = parse_targets(peer_log(root / who))
+        move = first_move_elapsed(rows)
+        held = held_until_sim(rows)
+        details["first_move"][who] = move
+        details["held"][who] = held
+        checks[f"{who}_held"] = held
+        checks[f"{who}_moved"] = move is not None
+        moves.append(move)
+    checks["same_tick"] = len(set(moves)) == 1 and None not in moves
     return {"pass": all(checks.values()), "checks": checks, "details": details}
 
 
