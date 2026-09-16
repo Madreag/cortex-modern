@@ -196,7 +196,7 @@ function Fail-Run([string]$Name, [string]$Message) {
     Finish-Run $false
 }
 
-# Do not launch over a foreign engine (W81-4 crab ran at 52 tps because this used to continue).
+# Wait for a foreign engine to exit before this launch starts.
 $script:EngineWait = [ordered]@{ waited = $false; polls = 0; waited_s = 0; pids = @() }
 $waitDeadline = (Get-Date).AddHours(1)
 $waitStart = Get-Date
