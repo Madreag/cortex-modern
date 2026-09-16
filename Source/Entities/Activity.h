@@ -401,6 +401,27 @@ namespace RTE {
 		/// @return The local player's slot index on that team, or -1 outside lockstep / off the team.
 		int GetLockstepHumanSlotIndex(int team) const;
 
+		/// Whether this Activity is running as a persistent world: it keeps ticking with nobody seated
+		/// and never ends on a last brain or a timer.
+		/// @return Whether the round this Activity runs in is a persistent world.
+		bool IsPersistentWorld() const;
+
+		/// Whether this machine authors the world's respawns, memberships and bindings. The host of a
+		/// synced round does; a client never does; with no round at all this machine is the only author.
+		/// @return Whether this machine may submit a world transition.
+		bool IsWorldAuthor() const;
+
+		/// Submits one host-authored respawn for a team: every machine spawns the identical resident at
+		/// the same committed tick, in one order. Refused off the world author.
+		/// @param team The team the resident belongs to.
+		/// @param className The class of the preset to clone.
+		/// @param preset The preset name.
+		/// @param module The module the preset is defined in.
+		/// @param position Where to place it.
+		/// @param aiMode The Actor AI mode to set, or -1 to keep the preset's own.
+		/// @return Whether the respawn was submitted.
+		bool SubmitWorldRespawn(int team, const std::string& className, const std::string& preset, const std::string& module, const Vector& position, int aiMode);
+
 		/// Sets the given team as active, even if it shouldn't be considered as such normally. Useful for Activities that don't want to define/show all used teams.
 		/// @param team The team to force as active.
 		void ForceSetTeamAsActive(int team) {
