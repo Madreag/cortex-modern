@@ -63,6 +63,14 @@ INTERNET_SEED = {"SessionDirectoryUrl": "dir.example.test/serve",
                  "SessionDirectoryCertSha256": "a" * 64}
 INTERNET_SAVED = {"SessionDirectoryUrl": "newdir.example.test/serve",
                   "SessionDirectoryCertSha256": "b" * 64}
+# One value column across the five network pages: every page's value/second-column control starts at
+# this offset from its page box, and every row rides the Misc page's 20px pitch.
+NETWORK_VALUE_COLUMN = 190
+NETWORK_ACTION_COLUMN = 330
+INTERNET_HINT = "host[:port][/path] - https:// is implied"
+INTERNET_REASON = "Replays and connection details come with a later update."
+# The wire's display-name cap; the landing name box and -net-player-name refuse past it.
+DISPLAY_NAME_MAX_BYTES = 64
 # The host's saved session options steer the match; the client's own copy differs and must not.
 HOST_OPTIONS = {"NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0"}
 CLIENT_OPTIONS = {"NetworkHostDelayPolicy": "Auto", "NetworkHostIdleWaitMinutes": "5", "NetworkHostAutoRepair": "1"}
@@ -210,7 +218,15 @@ def scripts(case, port, root):
         text += "assert_visible ButtonMultiplayerCreate 0\n"
         for name in (*ORDER, ORDER[0]):
             text += f"focus_next\nassert_focus {name}\n"
-        text += f"focus_previous\nassert_focus {ORDER[-1]}\ndump_host_options\nexit\n"
+        text += f"focus_previous\nassert_focus {ORDER[-1]}\ndump_host_options\n"
+        # A name past the wire's 64-byte cap would die silently in the hello encode, so the host
+        # button's create refuses it and the landing's status line says why.
+        text += ("settext TextMultiplayerName " + "N" * (DISPLAY_NAME_MAX_BYTES + 1) + "\n"
+                 "activate ButtonMultiplayerHostGame\nwait 5\nassert_substate HostSetup\n"
+                 "activate ButtonMultiplayerCreate\nwait 5\ndump_host_options\n"
+                 "assert_substate Landing\n"
+                 "assert_label LabelMultiplayerLandingStatus limited to 64 bytes\n"
+                 "exit\n")
     elif case == "settings":
         text = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\nassert_visible TabVideoSettings 1\n"
         for tab in PAGES:
@@ -291,10 +307,12 @@ def scripts(case, port, root):
         text = LANDING + "post_command ButtonBackToMain\nwait 5\n" + OPTIONS + net_page("Recovery")
         for control in ("CheckboxNetworkAutoReconnect", "CheckboxNetworkOfferRejoin", "LabelNetLastHostTitle",
                         "LabelNetLastHost", "LabelNetRecoveryTitle", "LabelNetRecoveryRecord",
-                        "LabelNetRecoveryStatus", "ButtonNetRejoin", "ButtonNetCancelRecovery"):
+                        "LabelNetRecoveryStatusTitle", "LabelNetRecoveryStatus",
+                        "ButtonNetRejoin", "ButtonNetCancelRecovery"):
             text += checks(control, "CollectionBoxNetPageRecovery")
         text += ("assert_enabled ButtonNetRejoin 0\nassert_enabled ButtonNetCancelRecovery 0\n"
                  "assert_label LabelNetRecoveryRecord No recovery record\n"
+                 "assert_label LabelNetRecoveryStatusTitle Status:\n"
                  "dump_player_options\n"
                  "post_command CheckboxNetworkAutoReconnect\npost_command CheckboxNetworkOfferRejoin\nwait 3\n"
                  "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n")
@@ -303,26 +321,35 @@ def scripts(case, port, root):
         # the replay pref toggles. The folder buttons are layout-checked, not clicked - they own real
         # OS side effects (a shell window, a clipboard write) a readback run must not take.
         text = OPTIONS + net_page("Files")
-        for control in ("LabelNetAutosaveTitle", "LabelNetAutosave", "LabelNetAutosaveIntTitle",
-                        "LabelNetAutosaveInterval", "ButtonNetOpenAutosaves", "LabelNetAutosaveInfo",
-                        "LabelNetDiagDirTitle", "TextNetworkDiagDir", "ButtonNetCopyDiagPath",
-                        "ButtonNetSaveDiagnostics", "CheckboxNetworkRecordReplays"):
+        for control in ("LabelNetAutosaveTitle", "LabelNetAutosave", "LabelNetAutosaveHost",
+                        "LabelNetAutosaveIntTitle", "LabelNetAutosaveInterval", "LabelNetAutosaveIntervalHost",
+                        "LabelNetAutosaveInfo", "ButtonNetOpenAutosaves", "ButtonNetCopyAutosavesPath",
+                        "LabelNetDiagDirTitle", "TextNetworkDiagDir", "ButtonNetOpenDiagnostics",
+                        "ButtonNetCopyDiagPath", "ButtonNetSaveDiagnostics", "CheckboxNetworkRecordReplays"):
             text += checks(control, "CollectionBoxNetPageFiles")
         text += ("assert_label LabelNetAutosave Enabled\n"
                  "assert_label LabelNetAutosaveInterval 45 s\n"
-                 "assert_enabled ButtonNetOpenAutosaves 1\nassert_enabled ButtonNetSaveDiagnostics 1\n"
+                 "assert_label LabelNetAutosaveHost Set by the host\n"
+                 "assert_label LabelNetAutosaveIntervalHost Set by the host\n"
+                 "assert_enabled ButtonNetOpenAutosaves 1\nassert_enabled ButtonNetCopyAutosavesPath 1\n"
+                 "assert_enabled ButtonNetOpenDiagnostics 1\nassert_enabled ButtonNetCopyDiagPath 1\n"
+                 "assert_enabled ButtonNetSaveDiagnostics 1\n"
                  "set_text TextNetworkDiagDir " + FILES_SAVED["NetworkDiagnosticsDirectory"] + "\n"
                  "post_command CheckboxNetworkRecordReplays\nwait 3\ndump_player_options\n"
                  "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n")
     elif case == "net-internet":
         # A refused pin or URL keeps the stored value and says why on the page; a valid pair saves.
         text = OPTIONS + net_page("Internet")
-        for control in ("LabelNetDirUrl", "TextNetworkDirUrl", "LabelNetDirPin", "TextNetworkDirPin",
-                        "LabelNetDirStatusTitle", "LabelNetDirStatus", "ButtonNetReplays",
-                        "ButtonNetConnDetails", "ButtonNetNatRelay", "LabelNetInternetReason"):
+        for control in ("LabelNetDirUrl", "TextNetworkDirUrl", "LabelNetDirUrlHint", "LabelNetDirPin",
+                        "TextNetworkDirPin", "LabelNetDirStatusTitle", "LabelNetDirStatus",
+                        "ButtonNetReplays", "ButtonNetConnDetails", "ButtonNetNatRelay",
+                        "LabelNetInternetReason"):
             text += checks(control, "CollectionBoxNetPageInternet")
         text += ("assert_enabled ButtonNetReplays 0\nassert_enabled ButtonNetConnDetails 0\n"
                  "assert_enabled ButtonNetNatRelay 0\nassert_label LabelNetDirStatus Configured\n"
+                 "assert_label LabelNetDirUrlHint " + INTERNET_HINT + "\n"
+                 "assert_label ButtonNetNatRelay NAT and Relay\n"
+                 "assert_label LabelNetInternetReason " + INTERNET_REASON + "\n"
                  "set_text TextNetworkDirPin nothex\n"
                  "assert_label LabelNetInternetError 64 hexadecimal\n"
                  "assert_label TextNetworkDirPin aaaa\n"
@@ -512,6 +539,9 @@ def run_case(options, case, root, failing=None):
             script.write_text(texts[who], encoding="utf-8")
             result["scripts"][str(script)] = sha(script)
             args = ["-menu-script", str(script)]
+            if case == "landing":
+                # The flag takes the same over-cap name the box gets below: one console refusal.
+                args += ["-net-player-name", "F" * (DISPLAY_NAME_MAX_BYTES + 1)]
             if paired:
                 args += ["-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
                          "-net-match-ticks", "400", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
@@ -637,6 +667,13 @@ def run_case(options, case, root, failing=None):
             assert len(page) == 2, [capture["settings_page"] for capture in images]
             rows = {control["name"]: control for control in page[0]["controls"]}
             assert set(NETWORK_ROWS) <= rows.keys(), sorted(rows)
+            # The settings dialog's base box centres on the viewport at every size, not only at 640.
+            base = rows["CollectionBoxSettingsBase"]["rect"]
+            res_y = int(options.size.split("x")[1])
+            assert base[1] * 2 + base[3] == res_y, (base, res_y)
+            # The player page shares the other pages' value column.
+            column = rows["CollectionBoxNetPagePlayer"]["rect"][0] + NETWORK_VALUE_COLUMN
+            assert rows["CheckboxNetworkPrediction"]["rect"][0] == column, rows["CheckboxNetworkPrediction"]["rect"]
             assert not set(NETWORK_FIXED_ROWS) & rows.keys(), sorted(rows)
             assert all(rows[name]["text_fits"] for name in NETWORK_ROWS if rows[name]["text"]), rows
             after = {control["name"]: control for control in page[1]["controls"]}
@@ -685,16 +722,67 @@ def run_case(options, case, root, failing=None):
                                      "CheckboxNetworkChatNotify", "ComboNetworkChatTextSize",
                                      "ButtonNetMutedPlayers", "LabelNetMutedReason"),
                         "net-recovery": ("CheckboxNetworkAutoReconnect", "CheckboxNetworkOfferRejoin",
-                                         "LabelNetLastHost", "LabelNetRecoveryRecord", "LabelNetRecoveryStatus",
+                                         "LabelNetLastHost", "LabelNetRecoveryRecord",
+                                         "LabelNetRecoveryStatusTitle", "LabelNetRecoveryStatus",
                                          "ButtonNetRejoin", "ButtonNetCancelRecovery"),
-                        "net-files": ("LabelNetAutosave", "LabelNetAutosaveInterval", "ButtonNetOpenAutosaves",
-                                      "LabelNetAutosaveInfo", "TextNetworkDiagDir", "ButtonNetCopyDiagPath",
-                                      "ButtonNetSaveDiagnostics", "CheckboxNetworkRecordReplays"),
-                        "net-internet": ("TextNetworkDirUrl", "TextNetworkDirPin", "LabelNetDirStatus",
-                                         "ButtonNetReplays", "ButtonNetConnDetails", "ButtonNetNatRelay",
-                                         "LabelNetInternetReason"),
+                        "net-files": ("LabelNetAutosave", "LabelNetAutosaveInterval", "LabelNetAutosaveHost",
+                                      "LabelNetAutosaveIntervalHost", "LabelNetAutosaveInfo",
+                                      "ButtonNetOpenAutosaves", "ButtonNetCopyAutosavesPath",
+                                      "TextNetworkDiagDir", "ButtonNetOpenDiagnostics",
+                                      "ButtonNetCopyDiagPath", "ButtonNetSaveDiagnostics",
+                                      "CheckboxNetworkRecordReplays"),
+                        "net-internet": ("TextNetworkDirUrl", "LabelNetDirUrlHint", "TextNetworkDirPin",
+                                         "LabelNetDirStatus", "ButtonNetReplays", "ButtonNetConnDetails",
+                                         "ButtonNetNatRelay", "LabelNetInternetReason"),
                         "misc-page": MISC_ROWS}[case]
             assert set(expected) <= rows.keys(), (case, sorted(rows))
+            if case != "misc-page":
+                # One value column across the four pages: every value control and every right-hand
+                # control starts on it, and the pages' rows ride the Misc grid's 20px pitch.
+                column = rows[f"CollectionBoxNetPage{sub_page.split(':')[1]}"]["rect"][0] + NETWORK_VALUE_COLUMN
+                on_column = {
+                    "net-chat": ("CheckboxNetworkChatSound", "ComboNetworkChatScope",
+                                 "ComboNetworkChatTextSize", "LabelNetMutedReason"),
+                    "net-recovery": ("CheckboxNetworkOfferRejoin", "LabelNetLastHost",
+                                     "LabelNetRecoveryRecord", "LabelNetRecoveryStatus",
+                                     "ButtonNetRejoin"),
+                    "net-files": ("LabelNetAutosave", "LabelNetAutosaveInterval",
+                                  "ButtonNetOpenAutosaves", "TextNetworkDiagDir",
+                                  "ButtonNetOpenDiagnostics", "ButtonNetSaveDiagnostics"),
+                    "net-internet": ("TextNetworkDirUrl", "LabelNetDirUrlHint", "LabelNetDirStatus",
+                                     "ButtonNetReplays")}[case]
+                for name in on_column:
+                    assert rows[name]["rect"][0] == column, (name, rows[name]["rect"], column)
+                grid_rows = {
+                    "net-chat": ("CheckboxNetworkChatVisible", "LabelNetworkChatScope",
+                                 "CheckboxNetworkChatNotify", "LabelNetworkChatTextSize",
+                                 "ButtonNetMutedPlayers"),
+                    "net-recovery": ("CheckboxNetworkAutoReconnect", "LabelNetLastHostTitle",
+                                     "LabelNetRecoveryTitle", "LabelNetRecoveryStatusTitle",
+                                     "LabelNetRecoveryError", "ButtonNetRejoin"),
+                    "net-files": ("LabelNetAutosaveTitle", "LabelNetAutosaveIntTitle",
+                                  "LabelNetAutosaveInfo", "ButtonNetOpenAutosaves",
+                                  "LabelNetDiagDirTitle", "ButtonNetOpenDiagnostics",
+                                  "CheckboxNetworkRecordReplays", "LabelNetFilesMessage"),
+                    "net-internet": ("LabelNetDirUrl", "LabelNetDirUrlHint", "LabelNetDirPin",
+                                     "LabelNetDirStatusTitle", "ButtonNetReplays",
+                                     "LabelNetInternetReason", "LabelNetInternetError")}[case]
+                deltas = [rows[b]["rect"][1] - rows[a]["rect"][1] for a, b in zip(grid_rows, grid_rows[1:])]
+                # The internet pin box's own row sits between its label and the status row; the chat
+                # page's muted stub waits one row under its rows.
+                expected_pitch = [20, 20, 40, 20, 20, 20] if case == "net-internet" else \
+                    [20] * 3 + [40] if case == "net-chat" else [20] * (len(grid_rows) - 1)
+                assert deltas == expected_pitch, (case, deltas)
+                if case == "net-files":
+                    # The folders' action pairs stack in the same two columns, one row pair apart.
+                    action_column = rows["CollectionBoxNetPageFiles"]["rect"][0] + NETWORK_ACTION_COLUMN
+                    opens = [rows[name]["rect"] for name in ("ButtonNetOpenAutosaves", "ButtonNetOpenDiagnostics")]
+                    copies = [rows[name]["rect"] for name in ("ButtonNetCopyAutosavesPath", "ButtonNetCopyDiagPath")]
+                    assert all(rect[0] == column for rect in opens) and all(rect[0] == action_column for rect in copies), (opens, copies)
+                    assert opens[0][2:] == opens[1][2:] and copies[0][2:] == copies[1][2:], (opens, copies)
+                    assert opens[1][1] - opens[0][1] == copies[1][1] - copies[0][1] == 40, (opens, copies)
+                    for name in ("LabelNetAutosaveHost", "LabelNetAutosaveIntervalHost"):
+                        assert rows[name]["text"] == "Set by the host", rows[name]
             captioned = [control for control in images[0]["controls"] if control["text"]]
             assert captioned and all("text_fits" in control for control in captioned), "a caption carries no fit measurement"
             result["unfit"] = [control["name"] for control in captioned if control["text_fits"] is False]
@@ -738,6 +826,11 @@ def run_case(options, case, root, failing=None):
             # A first visit owes the player no reconnect verdict: the record probe's negative stays silent.
             status = next(c for c in images[0]["controls"] if c["name"] == "LabelMultiplayerLandingStatus")
             assert status["text"] == "", status
+            # The over-cap name was refused twice: once on the command line, once at the host's create.
+            assert "-net-player-name over the 64-byte cap" in logs["host"], logs["host"][-2000:]
+            refused = {c["name"]: c for c in images[-1]["controls"]}
+            assert refused["LabelMultiplayerLandingStatus"]["text"] == "Display names are limited to 64 bytes.", \
+                refused["LabelMultiplayerLandingStatus"]
         if case in ("lobby", "lobby-name"):
             # The Leave/Seats block is centred on the lobby panel the way Start Match is; doubled
             # centres avoid halves. The Players header starts on its rows' left edge and holds its line.
@@ -762,6 +855,15 @@ def run_case(options, case, root, failing=None):
             assert host_setup["LabelHostInputDelayPolicy"]["text"] == "(auto)", host_setup["LabelHostInputDelayPolicy"]
             # The disabled Seats control sits in the lobby capture for the visual review.
             assert drawn["ButtonMultiplayerModerate"]["enabled"] is False, drawn["ButtonMultiplayerModerate"]
+            # The multiplayer screen's panel centres vertically too; an odd height shifts one pixel,
+            # and a panel taller than the viewport clamps to its top edge instead of centring.
+            screen_rect = drawn["MultiplayerScreen"]["rect"]
+            res_y = int(options.size.split("x")[1])
+            top, bottom = screen_rect[1], res_y - screen_rect[1] - screen_rect[3]
+            if screen_rect[3] <= res_y:
+                assert 0 <= bottom - top <= 1, (screen_rect, res_y)
+            else:
+                assert top == 0, (screen_rect, res_y)
         if case == "net-options":
             # Both peers' rosters carry the host's saved options; the client's own copy differs and loses.
             result["match_rules"] = {}
@@ -807,8 +909,8 @@ def main():
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("LEAD_FAMILY.lock exists; no engine launch")
-    if not any(low <= options.port <= low + 9 for low in (48270, 48380, 48390, 48530, 48540, 48550, 48840)):
-        parser.error("this detector owns ports 48270-48279, 48380-48389, 48390-48399, 48530-48539, 48540-48549, 48550-48559 and 48840-48849")
+    if not any(low <= options.port <= low + 9 for low in (48270, 48380, 48390, 48530, 48540, 48550, 48840, 48850)):
+        parser.error("this detector owns ports 48270-48279, 48380-48389, 48390-48399, 48530-48539, 48540-48549, 48550-48559, 48840-48849 and 48850-48859")
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)
     options.revision = subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip()
