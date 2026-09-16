@@ -1531,6 +1531,11 @@ namespace RTE {
 		m_Record.matchConfigHash = m_MatchConfigHash;
 	}
 
+	void NetReconnectClient::SetDirectorySessionId(std::string directorySessionId) {
+		m_DirectorySessionId = std::move(directorySessionId);
+		m_Record.directorySessionId = m_DirectorySessionId;
+	}
+
 	bool NetReconnectClient::IsAdmissionPending() const {
 		// Applied waits for a human, which is why it is bounded by the same P2 window everything else
 		// on this plane is, rather than by the handshake ladder.
@@ -1679,6 +1684,7 @@ namespace RTE {
 			record.credential = offer->credential;
 			record.hostSessionId = offer->hostSessionId;
 			record.hostAddress = m_Record.hostAddress;
+			record.directorySessionId = m_DirectorySessionId.empty() ? m_Record.directorySessionId : m_DirectorySessionId;
 			record.issuedAtUnixMs = UnixNowMs();
 			record.matchConfigHash = m_Record.matchConfigHash;
 			std::string storeError;
@@ -1760,6 +1766,7 @@ namespace RTE {
 			record.credential = offer->credential;
 			record.hostSessionId = offer->hostSessionId;
 			record.hostAddress = m_Record.hostAddress;
+			record.directorySessionId = m_DirectorySessionId.empty() ? m_Record.directorySessionId : m_DirectorySessionId;
 			record.issuedAtUnixMs = UnixNowMs();
 			record.matchConfigHash = m_Record.matchConfigHash;
 			std::string storeError;

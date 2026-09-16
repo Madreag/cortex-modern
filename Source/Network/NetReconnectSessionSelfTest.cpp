@@ -425,6 +425,30 @@ namespace RTE {
 				return Fail("a record past the age bound was still offered");
 			}
 
+			{
+				NetH4TicketRecord v2 = second;
+				v2.recordVersion = NetReconnectTicketStore::c_RecordVersion;
+				v2.directorySessionId = "sess-re-resolve-1";
+				if (!store.Store(v2, &error)) {
+					return Fail("the ticket store refused a v2 record: " + error);
+				}
+				NetH4TicketRecord loadedV2;
+				if (store.Load(v2.issuedAtUnixMs + 1000, loadedV2, &error) != NetH4TicketLoadResult::Loaded || loadedV2.directorySessionId != "sess-re-resolve-1") {
+					return Fail("the v2 directory session id did not load back");
+				}
+				NetH4TicketRecord v1 = second;
+				v1.recordVersion = NetReconnectTicketStore::c_LegacyRecordVersion;
+				v1.directorySessionId.clear();
+				std::vector<uint8_t> v1Bytes;
+				if (!NetReconnectTicketStore::Serialize(v1, v1Bytes) || v1Bytes.size() <= 114) {
+					return Fail("a v1 ticket body did not serialize");
+				}
+				NetH4TicketRecord parsedV1;
+				if (!NetReconnectTicketStore::Deserialize(v1Bytes, parsedV1) || !parsedV1.directorySessionId.empty() || parsedV1.recordVersion != 1) {
+					return Fail("a v1 ticket body did not deserialize");
+				}
+			}
+
 			// A flipped byte fails the integrity mac, so a damaged record is refused, never trusted.
 			{
 				std::vector<uint8_t> bytes;

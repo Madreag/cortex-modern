@@ -1461,12 +1461,21 @@ static std::string ResyncSaveName() {
 		if (s_PortMapRequested) {
 			s_PortMap.Update(nowMs);
 		}
-		if (!s_PortMapApplied && s_PortMapRequested && s_PortMap.Mapped()) {
+		if (s_PortMapRequested && s_PortMap.Mapped()) {
 			// The public endpoint leads; the LAN address stays as the fallback join path.
-			std::lock_guard<std::mutex> lock(m_Mutex);
-			m_DirectoryRow.listenAddrs.insert(m_DirectoryRow.listenAddrs.begin(), s_PortMap.GetResult().externalIp);
-			m_DirectoryRow.joinMode = "either";
-			s_PortMapApplied = true;
+			const std::string external = s_PortMap.GetResult().externalIp;
+			if (!external.empty()) {
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				std::vector<std::string> addrs = m_DirectoryRow.listenAddrs;
+				if (addrs.empty() || addrs.front() != external) {
+					addrs.erase(std::remove(addrs.begin(), addrs.end(), external), addrs.end());
+					addrs.insert(addrs.begin(), external);
+					m_DirectoryRow.listenAddrs = addrs;
+					m_DirectoryRow.joinMode = "either";
+					m_Directory.NoteListenAddrs(addrs);
+				}
+				s_PortMapApplied = true;
+			}
 		}
 		const std::string& directoryUrl = g_SettingsMan.GetSessionDirectoryUrl();
 		// The install key is minted on the first directory use, so only a listing host asks for it.
@@ -2103,6 +2112,11 @@ static std::string ResyncSaveName() {
 		return m_ChatSession ? m_ChatSession->TakeChatEntries() : std::vector<NetChatEntry>{};
 	}
 
+	std::vector<NetChatEntry> NetMatchService::ChatHistory() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_ChatSession ? m_ChatSession->ChatHistory() : std::vector<NetChatEntry>{};
+	}
+
 	std::string NetMatchService::GetInputDelayText() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return m_InputDelayText;
@@ -2697,6 +2711,23 @@ static std::string ResyncSaveName() {
 		NetMatchRunnerConfig runnerConfig;
 		runnerConfig.host = request.host;
 		runnerConfig.joinAddress = request.host ? "" : request.address;
+		if (!request.host) {
+			const std::string sessionId = request.sessionId;
+			const std::string address = request.address;
+			runnerConfig.resolveJoinAddress = [this, sessionId, address]() {
+				NetH4TicketRecord record;
+				m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+				if (m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded) {
+					if (!record.directorySessionId.empty()) {
+						return record.hostAddress.empty() ? address : record.hostAddress;
+					}
+					if (!record.hostAddress.empty()) {
+						return record.hostAddress;
+					}
+				}
+				return sessionId.empty() ? address : address;
+			};
+		}
 		std::string error;
 		// The roster is built first: the session it is hosted on takes its seats from it.
 		bool started = BuildMatchConfig(request, c_UiSessionId, runnerConfig.matchConfig, &error);
@@ -3025,6 +3056,7 @@ static std::string ResyncSaveName() {
 		// The record names the host it belongs to; the config hash is context, not a gate - a client
 		// adopts the host's match config in the lobby round that follows.
 		m_ReconnectClient.SetHostContext(request.address, NetHash32{});
+		m_ReconnectClient.SetDirectorySessionId(request.sessionId);
 		m_ReconnectClient.SetApplyForSeat(s_ApplyForSeat || s_ApplyOnce, s_ApplyOnce ? c_NetH4AnySubstitutableSeat : s_ApplySeat);
 		s_ApplyOnce = false;
 		session.SetReconnectClient(&m_ReconnectClient);
@@ -3054,6 +3086,7 @@ static std::string ResyncSaveName() {
 		NetMatchServiceRequest request;
 		request.host = false;
 		request.address = record.hostAddress;
+		request.sessionId = record.directorySessionId;
 		request.playerName = m_LocalName.empty() ? "Client" : m_LocalName;
 		request.resyncOnDesync = true;
 		return Start(request, error);

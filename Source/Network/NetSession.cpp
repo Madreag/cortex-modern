@@ -83,6 +83,7 @@ namespace RTE {
 			std::lock_guard<std::mutex> chatLock(m_ChatMutex);
 			m_ChatOutbox.clear();
 			m_ChatLog.clear();
+			m_ChatHistory.clear();
 			m_ChatTeams.clear();
 			m_ChatRate.clear();
 		}
@@ -132,6 +133,7 @@ namespace RTE {
 			std::lock_guard<std::mutex> chatLock(m_ChatMutex);
 			m_ChatOutbox.clear();
 			m_ChatLog.clear();
+			m_ChatHistory.clear();
 			m_ChatTeams.clear();
 			m_ChatRate.clear();
 		}
@@ -893,6 +895,11 @@ namespace RTE {
 		return out;
 	}
 
+	std::vector<NetChatEntry> NetSession::ChatHistory() const {
+		std::lock_guard<std::mutex> lock(m_ChatMutex);
+		return {m_ChatHistory.begin(), m_ChatHistory.end()};
+	}
+
 	void NetSession::SetChatTeams(std::map<uint8_t, int> teamsByPeerId) {
 		std::lock_guard<std::mutex> lock(m_ChatMutex);
 		m_ChatTeams = std::move(teamsByPeerId);
@@ -928,6 +935,13 @@ namespace RTE {
 	}
 
 	void NetSession::DeliverChat(NetChatEntry entry) {
+		if (entry.receivedAtMs == 0) {
+			entry.receivedAtMs = m_NowMs;
+		}
+		m_ChatHistory.push_back(entry);
+		while (m_ChatHistory.size() > 32) {
+			m_ChatHistory.pop_front();
+		}
 		m_ChatLog.push_back(std::move(entry));
 		while (m_ChatLog.size() > 64) {
 			m_ChatLog.pop_front();
