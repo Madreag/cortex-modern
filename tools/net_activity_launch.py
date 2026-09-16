@@ -123,6 +123,11 @@ def observations(log):
             for line in log.splitlines() if line.startswith("[e2e] rules ")]
 
 
+def seed_observations(log):
+    return [dict(token.split("=", 1) for token in shlex.split(line.removeprefix("[e2e] seed ")))
+            for line in log.splitlines() if line.startswith("[e2e] seed ")]
+
+
 ACTIVITY_DEFAULT_FUNDS = 2000
 
 
@@ -139,24 +144,69 @@ def roster_seeded_teams(default=False, dedicated=False):
     return teams
 
 
+def expected_seed(rules, default=False, dedicated=False):
+    """Expected [e2e] seed tokens: the NetActivitySetup lobby seed before StartActivity.
+
+    Roster-seeded teams carry the agreed starting gold; unseeded teams keep the cloned
+    activity default 2000. Form is iostream defaultfloat, same as the seed line.
+    """
+    seeded = roster_seeded_teams(default, dedicated)
+    expected = {}
+    for index in range(4):
+        funds = rules["starting_gold"] if index in seeded else ACTIVITY_DEFAULT_FUNDS
+        expected[f"team{index}.funds"] = iostream_float_token(funds)
+    return expected
+
+
+def post_start_funds(rules, default=False, dedicated=False):
+    """GetTeamFunds after StartActivity — the token [e2e] rules prints at sim tick 1."""
+    preset = rules["activity_preset"]
+    gold = rules["starting_gold"]
+    difficulty = rules["difficulty"]
+    seeded = roster_seeded_teams(default, dedicated)
+    funds = {}
+    if preset == "P4 Alpha Duel":
+        # P4AlphaDuel.lua:51-52 zeros TEAM_1/TEAM_2; teams 2-3 stay the cloned 2000.
+        for index in range(4):
+            funds[index] = 0 if index in (0, 1) else ACTIVITY_DEFAULT_FUNDS
+    elif preset == "Skirmish Defense":
+        # SkirmishDefense.lua:106-107 sets every team to GetStartingGold, then :142-146
+        # each CPU team to 100000 when gold>100000 else 80*Difficulty+2000.
+        cpu_teams = set() if default else {1}
+        for index in range(4):
+            funds[index] = (100000 if gold > 100000 else 80 * difficulty + 2000) if index in cpu_teams else gold
+    else:
+        # SimBaseline.lua has no SetTeamFunds; the seed stands (census).
+        for index in range(4):
+            funds[index] = gold if index in seeded else ACTIVITY_DEFAULT_FUNDS
+    return funds
+
+
 def expected_observation(rules, default=False, dedicated=False):
     """Expected [e2e] rules tokens.
 
-    gold is the integer GetStartingGold print. teamN.funds is GetTeamFunds in the same
-    iostream defaultfloat form the [e2e] rules line writes: only roster-seeded teams
-    carry the agreed starting gold; unseeded teams keep the cloned activity default 2000.
+    gold is the integer GetStartingGold print. teamN.funds is GetTeamFunds after
+    StartActivity, in iostream defaultfloat form, per activity script:
+
+    P4 Alpha Duel (default, infinite, site, resync-duel): teams 0-1 are 0
+    (P4AlphaDuel.lua:51-52); teams 2-3 stay 2000.
+    Skirmish Defense (stock, brains*): every team starting_gold, then each CPU
+    team 100000 if gold>100000 else 80*difficulty+2000 (SkirmishDefense.lua:106-107,
+    :142-146).
+    Determinism SimBaseline (census): no SetTeamFunds; the seed stands.
+
+    The lobby seed itself is scored from the [e2e] seed line, not this printer.
     """
     expected = dict(tick="1", difficulty=str(rules["difficulty"]), gold=str(rules["starting_gold"]),
                     fog=str(int(rules["fog_of_war"])), orbit=str(int(rules["require_clear_path_to_orbit"])),
                     deploy=str(int(rules["deploy_units"])), cpu_team="-1" if default else "1",
                     activity=rules["activity_module"] + "/" + rules["activity_preset"],
                     scene=rules["scene_module"] + "/" + rules["scene_name"])
-    seeded = roster_seeded_teams(default, dedicated)
+    funds = post_start_funds(rules, default, dedicated)
     for index, team in enumerate(rules["teams"]):
         expected[f"team{index}.tech"] = team["technology_module"] or "-All-"
         expected[f"team{index}.ai"] = str(team["ai_skill"])
-        funds = rules["starting_gold"] if index in seeded else ACTIVITY_DEFAULT_FUNDS
-        expected[f"team{index}.funds"] = iostream_float_token(funds)
+        expected[f"team{index}.funds"] = iostream_float_token(funds[index])
     return expected
 
 
@@ -173,6 +223,13 @@ def score_p4_loss_text(log):
 
 def score_rules(log, rules, default=False, dedicated=False):
     rows, expected = observations(log), expected_observation(rules, default, dedicated)
+    actual = rows[0] if len(rows) == 1 else {}
+    differences = {key: {"expected": value, "actual": actual.get(key)} for key, value in expected.items() if actual.get(key) != value}
+    return {"pass": len(rows) == 1 and not differences, "observations": rows, "differences": differences}
+
+
+def score_seed(log, rules, default=False, dedicated=False):
+    rows, expected = seed_observations(log), expected_seed(rules, default, dedicated)
     actual = rows[0] if len(rows) == 1 else {}
     differences = {key: {"expected": value, "actual": actual.get(key)} for key, value in expected.items() if actual.get(key) != value}
     return {"pass": len(rows) == 1 and not differences, "observations": rows, "differences": differences}
@@ -641,7 +698,7 @@ def launch(options):
     result["config_refusal"] = None if refusal else config_refusal(logs, wire, exe_hash)
     for peer, log in logs.items():
         for number, line in enumerate(log.splitlines(), 1):
-            if line.startswith("[e2e] rules ") or "setup failed:" in line:
+            if line.startswith("[e2e] rules ") or line.startswith("[e2e] seed ") or "setup failed:" in line:
                 print(f"{root / peer / 'stdout.log'}:{number}: {line}")
     if refusal:
         reasons = {peer: re.findall(r"\[net-match-service-e2e\] setup failed: (.+)", log) for peer, log in logs.items()}
@@ -683,9 +740,11 @@ def launch(options):
             report_checks(checks, result["config_refusal"])
             return 0 if result["passed"] else 1
         result["rules"] = {peer: score_rules(log, rules, default, options.dedicated) for peer, log in logs.items()}
+        result["seed"] = {peer: score_seed(log, rules, default, options.dedicated) for peer, log in logs.items()}
         for peer in runs:
             checks[peer + "_process"] = records[peer].get("exit_code") == 0 and not records[peer].get("timed_out") and records[peer].get("evidence_complete", False)
             checks[peer + "_rules"] = result["rules"][peer]["pass"]
+            checks[peer + "_seed"] = result["seed"][peer]["pass"]
         if options.variant in ("default", "resync-duel"):
             result["loss_text"] = {peer: score_p4_loss_text(log) for peer, log in logs.items()}
             checks["loss_text_after_6s"] = all(row["pass"] for row in result["loss_text"].values())
