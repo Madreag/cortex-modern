@@ -1986,7 +1986,7 @@ void GameActivity::Update() {
 
 		if (m_ViewState[player] == ViewState::Observe) {
 			// If we're observing game over state, freeze the view for a bit so the player's input doesn't ruin the focus
-			if (!(m_ActivityState == ActivityState::Over && !m_GameOverTimer.IsPastRealMS(1000))) {
+			if (!(m_ActivityState == ActivityState::Over && !m_GameOverTimer.IsPastSimMS(1000))) {
 				// Get cursor input
 				const bool lookedAround = m_PlayerController[player].RelativeCursorMovement(m_ObservationTarget[player], 1.2f);
 				UpdateSpectatorView(player, lookedAround);
