@@ -48,6 +48,8 @@ sources += files(
 'NetSeatAuth.cpp',
 'NetSession.cpp',
 'NetSessionSelfTest.cpp',
+'NetWorldJoin.cpp',
+'NetWorldJoinSelfTest.cpp',
 'SimChecksum.cpp',
 )
 
