@@ -2874,6 +2874,7 @@ void SceneMan::Draw(BITMAP* targetBitmap, BITMAP* targetGUIBitmap, const Vector&
 
 			bool shouldDrawHUD = !g_FrameMan.IsHudDisabled(m_LastUpdatedScreen);
 			if (shouldDrawHUD) {
+				g_ActivityMan.GetActivity()->PrepareDrawGUI(m_LastUpdatedScreen);
 				g_MovableMan.DrawHUD(targetGUIBitmap, targetPos, m_LastUpdatedScreen);
 			}
 
