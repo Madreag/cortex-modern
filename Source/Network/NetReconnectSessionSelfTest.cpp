@@ -14,6 +14,7 @@
 #include "NetReconnectTicketStore.h"
 #include "NetReconnectTranscript.h"
 #include "NetReconnectUx.h"
+#include "NetParticipantCrypto.h"
 #include "NetSeatAuth.h"
 #include "NetSession.h"
 #include "System/ScenarioRunner.h"
@@ -22,6 +23,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <functional>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -109,6 +111,45 @@ namespace RTE {
 		struct ScopedTestCrypto {
 			explicit ScopedTestCrypto(NetAuthCrypto* provider) { SetNetAuthCryptoForTest(provider); }
 			~ScopedTestCrypto() { SetNetAuthCryptoForTest(nullptr); }
+		};
+
+		class ScriptedParticipantCrypto : public NetParticipantCrypto {
+		public:
+			bool IsRealCrypto() const override { return false; }
+			bool GenerateKey(uint8_t (&priv)[32], uint8_t (&pub)[32]) override {
+				for (int i = 0; i < 32; ++i) {
+					priv[i] = static_cast<uint8_t>(++m_Counter);
+					pub[i] = static_cast<uint8_t>(~priv[i]);
+				}
+				return true;
+			}
+			bool PublicFromPrivate(const uint8_t (&priv)[32], uint8_t (&pub)[32]) override {
+				for (int i = 0; i < 32; ++i) {
+					pub[i] = static_cast<uint8_t>(~priv[i]);
+				}
+				return true;
+			}
+			bool Sign(const uint8_t (&priv)[32], const uint8_t* message, size_t messageCount, uint8_t (&signature)[64]) override {
+				for (int i = 0; i < 64; ++i) {
+					signature[i] = static_cast<uint8_t>(priv[i % 32] ^ (message != nullptr && static_cast<size_t>(i) < messageCount ? message[i] : static_cast<uint8_t>(i)));
+				}
+				return true;
+			}
+			bool Verify(const uint8_t (&pub)[32], const uint8_t* message, size_t messageCount, const uint8_t (&signature)[64]) override {
+				uint8_t priv[32];
+				uint8_t expected[64];
+				for (int i = 0; i < 32; ++i) {
+					priv[i] = static_cast<uint8_t>(~pub[i]);
+				}
+				return Sign(priv, message, messageCount, expected) && std::memcmp(expected, signature, 64) == 0;
+			}
+		private:
+			uint8_t m_Counter = 11;
+		};
+
+		struct ScopedParticipantCrypto {
+			explicit ScopedParticipantCrypto(NetParticipantCrypto* provider) { SetNetParticipantCryptoForTest(provider); }
+			~ScopedParticipantCrypto() { SetNetParticipantCryptoForTest(nullptr); }
 		};
 
 		NetHash32 MakeHash(uint8_t seed) {
@@ -1600,7 +1641,7 @@ namespace RTE {
 			NetLockstepCoordinator host, clientA, clientB;
 			uint64_t now = 0;
 
-			bool RunUntilPeerTwoIsGone(uint16_t port, const std::vector<NetMatchPlayerSlot>& players, std::string* error) {
+			bool RunUntilOneFrame(uint16_t port, const std::vector<NetMatchPlayerSlot>& players, std::string* error) {
 				if (!hostT.StartHost(port, error) || !aT.Connect("loopback", port, error) || !bT.Connect("loopback", port, error)) {
 					return false;
 				}
@@ -1615,6 +1656,7 @@ namespace RTE {
 					c.scenario = "ReconnectSessionSelfTest";
 					c.matchConfig.hostPeerId = 1;
 					c.matchConfig.peerCount = 3;
+					c.matchConfig.startingGold = 2400;
 					c.matchConfig.players = players;
 					return c;
 				};
@@ -1668,6 +1710,27 @@ namespace RTE {
 					*error = "the ledger round never committed a frame";
 					return false;
 				}
+				return true;
+			}
+
+			bool RunUntilPeerTwoIsGone(uint16_t port, const std::vector<NetMatchPlayerSlot>& players, std::string* error) {
+				if (!RunUntilOneFrame(port, players, error)) {
+					return false;
+				}
+				auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+					for (const uint64_t until = now + forMs; now <= until; now += 5) {
+						host.Tick(now);
+						clientA.Tick(now);
+						clientB.Tick(now);
+						if (done()) {
+							return true;
+						}
+						hostT.AdvanceTimeMs(5);
+						aT.AdvanceTimeMs(5);
+						bT.AdvanceTimeMs(5);
+					}
+					return false;
+				};
 				// Peer 2's socket goes away: the relay host adjudicates it as a leave, and from there on
 				// ResolveActorOwner renames its units.
 				aT.Stop();
@@ -1870,6 +1933,152 @@ namespace RTE {
 			config.heartbeatIntervalMs = 50;
 			config.timeoutMs = 5000;
 			return config;
+		}
+
+		struct ProvenSeat {
+			LoopbackTransport hostT, clientT;
+			NetSession host, client;
+			NetSeatAuthRegistry registry;
+			NetReconnectHost admission;
+			NetReconnectTicketStore ticket;
+			NetReconnectClient reconnect;
+			NetParticipantIdentityStore identity;
+			uint64_t nowMs = 0;
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			uint16_t port = 0;
+		};
+
+		void PumpProven(ProvenSeat& seat, uint64_t forMs) {
+			for (const uint64_t until = seat.nowMs + forMs; seat.nowMs <= until; seat.nowMs += 10) {
+				seat.host.Tick(seat.nowMs);
+				seat.client.Tick(seat.nowMs);
+				seat.hostT.AdvanceTimeMs(10);
+				seat.clientT.AdvanceTimeMs(10);
+			}
+		}
+
+		bool SeatProven(ProvenSeat& seat, uint16_t port, NetHostBanStore* bans, const std::filesystem::path& lane, const char* name, std::string* error) {
+			seat.port = port;
+			seat.identity.SetPath((lane / (std::string(name) + ".key")).string());
+			if (!seat.identity.LoadOrCreate(error)) {
+				return false;
+			}
+			seat.registry.BeginHostedSession();
+			seat.admission.Configure(&seat.registry, 0x5000000000000000ULL + port, MakeIdentity());
+			seat.admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+			seat.admission.SetBanStore(bans);
+			seat.ticket.SetPath((lane / (std::string(name) + ".ticket")).string());
+			seat.reconnect.Configure(&seat.ticket, MakeIdentity(), name);
+			seat.reconnect.SetUnixClock(&FixedUnixClock, &seat.unixNow);
+			seat.host.SetReconnectHost(&seat.admission);
+			seat.host.EnableParticipantProof(nullptr);
+			seat.host.SetHostBanStore(bans);
+			seat.client.SetReconnectClient(&seat.reconnect);
+			seat.client.EnableParticipantProof(&seat.identity);
+			if (!seat.host.StartHost(seat.hostT, MakeSessionConfig(port, 101, "Host"), error) ||
+			    !seat.client.StartClient(seat.clientT, "loopback", MakeSessionConfig(port, 202, name), error)) {
+				return false;
+			}
+			PumpProven(seat, 2000);
+			if (!seat.host.IsReady() || !seat.client.IsReady() || seat.reconnect.GetState() != NetH4ClientState::Joined) {
+				*error = "the proven identity did not take a seat";
+				return false;
+			}
+			NetParticipantId bound{};
+			if (seat.host.GetReadyPeers().empty() || !seat.host.GetPeerParticipantId(seat.host.GetReadyPeers().front().transportPeerId, bound) ||
+			    !(bound == seat.identity.PublicId())) {
+				*error = "the proof path did not bind the seated identity";
+				return false;
+			}
+			return true;
+		}
+
+		bool BanProven(ProvenSeat& seat, NetParticipantRemovalAction action, NetParticipantRemovalIssue& issued, std::string* error) {
+			NetH4TicketRecord record;
+			if (seat.ticket.Load(seat.unixNow, record, error) != NetH4TicketLoadResult::Loaded) {
+				return false;
+			}
+			NetModerationSelection selected{};
+			for (const auto& view : seat.admission.GetModerationView()) {
+				if (view.stableSeat == record.stableSeat) {
+					selected = NetSelectModerationSeat(view);
+				}
+			}
+			const NetKickBanResult result = seat.admission.RemoveParticipant(
+			    selected, action, seat.nowMs, seat.unixNow, 0x5000000000000000ULL + seat.port, 1, 90, issued);
+			if (result != NetKickBanResult::Ok) {
+				*error = std::string("RemoveParticipant returned ") + NetKickBanResultName(result);
+				return false;
+			}
+			return true;
+		}
+
+		bool ExpectBanned(ProvenSeat& seat, uint32_t rejectionsBefore, const char* what, std::string* error) {
+			PumpProven(seat, 400);
+			if (seat.admission.GetStats().identityRejections != rejectionsBefore + 1 ||
+			    !seat.reconnect.HasLastRejectReason() || seat.reconnect.GetLastRejectReason() != NetRejectReason::ParticipantBanned) {
+				*error = std::string(what) + " was not refused with ParticipantBanned";
+				return false;
+			}
+			return true;
+		}
+
+		bool RefuseBannedAdmission(ProvenSeat& seat, std::string* error) {
+			NetH4TicketRecord record;
+			if (seat.ticket.Load(seat.unixNow, record, error) != NetH4TicketLoadResult::Loaded) {
+				return false;
+			}
+			seat.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			const uint32_t joinBefore = seat.admission.GetStats().identityRejections;
+			if (!seat.reconnect.BeginNewJoin(seat.nowMs, error)) {
+				return false;
+			}
+			if (!ExpectBanned(seat, joinBefore, "a removed identity on a fresh join", error)) {
+				return false;
+			}
+			seat.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			const uint32_t applyBefore = seat.admission.GetStats().identityRejections;
+			if (!seat.reconnect.BeginApplication(0, seat.nowMs, error)) {
+				return false;
+			}
+			if (!ExpectBanned(seat, applyBefore, "a removed identity on an application", error)) {
+				return false;
+			}
+			seat.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			const uint32_t reclaimBefore = seat.admission.GetStats().identityRejections;
+			if (!seat.reconnect.BeginReclaim(record, seat.nowMs, error)) {
+				return false;
+			}
+			if (!ExpectBanned(seat, reclaimBefore, "a removed identity on a reclaim", error)) {
+				return false;
+			}
+			return true;
+		}
+
+		bool RefuseBannedHandshake(NetParticipantIdentityStore& identity, NetHostBanStore& bans, uint16_t port, std::string* error) {
+			LoopbackTransport hostT, clientT;
+			NetSession host, client;
+			if (!host.StartHost(hostT, MakeSessionConfig(port, 301, "Host"), error) ||
+			    !client.StartClient(clientT, "loopback", MakeSessionConfig(port, 302, "Player"), error)) {
+				return false;
+			}
+			host.EnableParticipantProof(nullptr);
+			host.SetHostBanStore(&bans);
+			client.EnableParticipantProof(&identity);
+			for (uint64_t now = 0; now <= 400; now += 10) {
+				host.Tick(now);
+				client.Tick(now);
+				hostT.AdvanceTimeMs(10);
+				clientT.AdvanceTimeMs(10);
+				if (client.IsRejected()) {
+					break;
+				}
+			}
+			if (!client.IsRejected() || client.GetRejectReason() != NetRejectReason::ParticipantBanned) {
+				*error = "the same identity store was not refused on a fresh handshake";
+				return false;
+			}
+			return true;
 		}
 
 		// The wiring itself: an admission transaction that rides two real NetSessions, commits the seat
@@ -6082,6 +6291,32 @@ namespace RTE {
 				return Fail(error);
 			}
 			live.host.SetLiveMatch(true);
+			DroppedRound censusRound;
+			if (!censusRound.RunUntilOneFrame(42190, {{1, 0, false, "Host"}, {2, 1, false, "Keeper"}, {3, 2, false, "Target"}}, &error)) {
+				return Fail("the kick census round did not commit a frame: " + error);
+			}
+			ScenarioRunner::SetLockstepCoordinator(&censusRound.host);
+			g_ProductionCensusActors = {{101, 1, false}, {102, 1, false}, {201, 2, false}};
+			live.host.SetDropOwnershipSource(&ProductionCensusSource, nullptr);
+			const auto beforeCensus = ProductionCensusSource(nullptr);
+			const auto beforeKeeper = NetReconnectLedger::CollectOwnedActorUIDs(beforeCensus, 2);
+			const uint32_t beforeFunds = censusRound.host.GetConfig().matchConfig.startingGold;
+			ControllerFrame keeperFrame;
+			keeperFrame.stateMask = 1;
+			keeperFrame.actorUniqueID = 101;
+			const std::vector<NetGameCommand> keeperCommands{{2, NetGameSetTeamFunds{1, static_cast<int32_t>(beforeFunds)}}};
+			const uint64_t keeperCommandFrame = censusRound.host.GetStats().nextFrame;
+			if (!censusRound.host.QueueLocalInput(keeperCommandFrame, {keeperFrame}, keeperCommands, &error)) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				g_ProductionCensusActors.clear();
+				return Fail("could not queue the keeper's in-flight commands: " + error);
+			}
+			std::vector<ControllerFrame> beforeFrames;
+			if (!censusRound.host.PeekLocalFrames(keeperCommandFrame, beforeFrames)) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				g_ProductionCensusActors.clear();
+				return Fail("the keeper's in-flight commands were not queued");
+			}
 			const auto views = live.host.GetModerationView();
 			NetModerationSelection selected{};
 			for (const auto& seat : views) {
@@ -6092,45 +6327,52 @@ namespace RTE {
 			NetParticipantRemovalIssue issued;
 			const uint32_t droppedAtKick = live.host.GetStats().seatsDropped;
 			if (live.host.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, live.nowMs, unixNow, 0x4831ULL, 1, 90, issued) != NetKickBanResult::Ok) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				g_ProductionCensusActors.clear();
 				return Fail("the host could not remove the targeted seat");
 			}
 			if (!live.host.IsSeatClosed(targetRecord.stableSeat) || live.host.IsSeatHeldForReclaim(issued.lockstepPeerId) ||
 			    live.host.GetStats().seatsRemoved != 1 || live.host.GetStats().seatsDropped != droppedAtKick) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				g_ProductionCensusActors.clear();
 				return Fail("the kick left a reclaim hold or counted as a drop");
 			}
 			if (live.host.NotifyDisconnect(target.connection, 200) != NetH4DisconnectOutcome::Removed) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				g_ProductionCensusActors.clear();
 				return Fail("the post-kick disconnect opened a hold");
 			}
 			NetPeerId keeperConnection = c_InvalidNetPeerId;
 			uint32_t keeperGeneration = 0;
 			uint32_t keeperIncarnation = 0;
 			if (!live.host.GetSeatHolder(0, keeperConnection, keeperGeneration, keeperIncarnation) || keeperConnection != keeper.connection) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				g_ProductionCensusActors.clear();
 				return Fail("the kick touched the other holder");
 			}
-			g_ProductionCensusActors = {{101, 1, false}, {102, 1, false}, {201, 2, false}};
-			live.host.SetDropOwnershipSource(&ProductionCensusSource, nullptr);
-			NetMatchConfig censusConfig;
-			censusConfig.hostPeerId = 1;
-			censusConfig.peerCount = 3;
-			censusConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
-			censusConfig.startingGold = 2400;
-			censusConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Keeper"}, {3, 2, false, "Target"}};
-			const uint32_t keeperFunds = censusConfig.startingGold;
-			const std::vector<NetGameCommand> inFlight{{2, NetGameSetTeamFunds{1, static_cast<int32_t>(keeperFunds)}}};
-			const auto census = ProductionCensusSource(nullptr);
-			std::vector<int64_t> keeperActors;
-			for (const NetH4LedgerActor& actor : census) {
-				if (actor.team == 1) {
-					keeperActors.push_back(actor.actorUID);
-				}
+			std::vector<ControllerFrame> afterFrames;
+			if (!censusRound.host.PeekLocalFrames(keeperCommandFrame, afterFrames) || afterFrames != beforeFrames) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				g_ProductionCensusActors.clear();
+				return Fail("the kick changed the keeper's in-flight commands");
 			}
-			if (keeperActors != std::vector<int64_t>{101, 102} ||
-			    NetActorOwnership::ResolveOwnerPeer(censusConfig, {101, 1, false}) != 2 ||
-			    NetActorOwnership::ResolveOwnerPeer(censusConfig, {102, 1, false}) != 2 ||
-			    censusConfig.startingGold != keeperFunds || inFlight.size() != 1 || !live.host.TakePendingReseats().empty()) {
+			censusRound.host.EvictRemovedPeer(issued.lockstepPeerId, "removed from the session", live.nowMs);
+			const auto afterCensus = ProductionCensusSource(nullptr);
+			const auto afterKeeper = NetReconnectLedger::CollectOwnedActorUIDs(afterCensus, 2);
+			const uint32_t afterFunds = censusRound.host.GetConfig().matchConfig.startingGold;
+			// Kick is an announced leave: no surviving human on the kicked seat's team, so the host
+			// produces those units (the AI takeover) while the round continues. The keeper is unchanged.
+			if (afterKeeper != beforeKeeper || afterFunds != beforeFunds ||
+			    censusRound.host.ResolveActorOwner(101, 1, false) != 2 ||
+			    censusRound.host.ResolveActorOwner(102, 1, false) != 2 ||
+			    censusRound.host.ResolveActorOwner(201, 2, false) == issued.lockstepPeerId ||
+			    censusRound.host.ResolveActorOwner(201, 2, false) != 1 ||
+			    !live.host.TakePendingReseats().empty()) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
 				g_ProductionCensusActors.clear();
 				return Fail("the kick changed the keeper's actor census, funds or in-flight commands");
 			}
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			g_ProductionCensusActors.clear();
 			if (issued.notice.action != NetParticipantRemovalAction::Kick || issued.notice.stableSeat != targetRecord.stableSeat) {
 				return Fail("the issued notice did not name the kicked seat");
@@ -6251,7 +6493,9 @@ namespace RTE {
 
 		int TestBanScopes() {
 			ScriptedAuthCrypto crypto;
+			ScriptedParticipantCrypto participant;
 			ScopedTestCrypto scope(&crypto);
+			ScopedParticipantCrypto participantScope(&participant);
 			std::string error;
 			if (!ResetLaneDirectory(&error)) {
 				return Fail(error);
@@ -6302,6 +6546,12 @@ namespace RTE {
 			if (store.Ban(bob, NetHostBanScope::UntilRemoved, "bob", "closed", sid, 2500)) {
 				return Fail("Until Removed admission wrote while the store was not loaded");
 			}
+			const auto dirPath = lane / "NetworkBans-dir";
+			std::filesystem::create_directory(dirPath, code);
+			store.SetPath(dirPath.string());
+			if (store.Load(&error) || store.PersistentReady() || !store.IsBanned(alice, 1)) {
+				return Fail("a ban store path that cannot be sized fail-opened or dropped last-good rows");
+			}
 			error.clear();
 			std::cout << "[net-reconnect-session-selftest] PASS scopes: session ban ends with the session; persistent ban survives" << std::endl;
 
@@ -6309,6 +6559,18 @@ namespace RTE {
 			Wire wire;
 			ConfigureWire(wire, sid);
 			wire.host.SetBanStore(&store);
+			NetH4NewJoin openJoin;
+			openJoin.txId = Ramp<16>(0x30);
+			openJoin.identity = MakeIdentity();
+			openJoin.displayName = "open";
+			if (!wire.SendRaw(304, openJoin, &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			const NetJoinRejected* openRefuse = LastOf<NetJoinRejected>(wire.Delivered(304));
+			if (openRefuse != nullptr && openRefuse->rejectReason == NetRejectReason::ParticipantBanned) {
+				return Fail("an unbanned identity was refused while the store was not ready");
+			}
 			wire.host.BindParticipantId(301, alice);
 			NetH4NewJoin join;
 			join.txId = Ramp<16>(0x31);
@@ -6357,113 +6619,67 @@ namespace RTE {
 			}
 			std::cout << "[net-reconnect-session-selftest] PASS scopes: banned identity refused on join, apply and reclaim" << std::endl;
 
-			Wire live;
-			ConfigureWire(live, sid);
 			NetHostBanStore liveStore;
 			liveStore.SetPath((lane / "live-bans").string());
 			if (!liveStore.Load(&error)) {
 				return Fail("the live ban store did not load: " + error);
 			}
-			live.host.SetBanStore(&liveStore);
-			Endpoint target;
-			target.connection = 321;
-			ConfigureEndpoint(target, "ban-target", &unixNow);
-			live.Add(&target);
-			if (!target.client.BeginNewJoin(live.nowMs, &error) || !live.Pump(&error)) {
+			ProvenSeat live;
+			if (!SeatProven(live, 42211, &liveStore, lane, "ban-target", &error)) {
 				return Fail("target did not join: " + error);
 			}
 			NetH4TicketRecord targetRecord;
-			if (target.store.Load(unixNow, targetRecord, &error) != NetH4TicketLoadResult::Loaded) {
+			if (live.ticket.Load(live.unixNow, targetRecord, &error) != NetH4TicketLoadResult::Loaded) {
 				return Fail(error);
 			}
-			const NetAuthBytes32 targetId = Ramp<32>(0xC3);
-			live.host.BindParticipantId(target.connection, targetId);
-			live.host.SetLiveMatch(true);
+			const NetAuthBytes32 targetId = live.identity.PublicId();
+			live.admission.SetLiveMatch(true);
 			NetModerationSelection selected{};
-			for (const auto& seat : live.host.GetModerationView()) {
+			for (const auto& seat : live.admission.GetModerationView()) {
 				if (seat.stableSeat == targetRecord.stableSeat) {
 					selected = NetSelectModerationSeat(seat);
 				}
 			}
 			liveStore.ForcePersistFailureForTest(true);
 			NetParticipantRemovalIssue issued;
-			if (live.host.RemoveParticipant(selected, NetParticipantRemovalAction::BanUntilRemoved, live.nowMs, unixNow, sid, 1, 90, issued) != NetKickBanResult::PersistenceFailed ||
-			    live.host.IsSeatClosed(targetRecord.stableSeat) || liveStore.IsBanned(targetId, sid)) {
+			if (live.admission.RemoveParticipant(selected, NetParticipantRemovalAction::BanUntilRemoved, live.nowMs, live.unixNow, 0x5000000000000000ULL + live.port, 1, 90, issued) != NetKickBanResult::PersistenceFailed ||
+			    live.admission.IsSeatClosed(targetRecord.stableSeat) || liveStore.IsBanned(targetId, 0x5000000000000000ULL + live.port)) {
 				return Fail("Until Removed persist failure still evicted the holder");
 			}
 			liveStore.ForcePersistFailureForTest(false);
-			if (live.host.RemoveParticipant(selected, NetParticipantRemovalAction::BanSession, live.nowMs, unixNow, sid, 1, 90, issued) != NetKickBanResult::Ok ||
-			    !liveStore.IsBanned(targetId, sid) || !live.host.IsSeatClosed(targetRecord.stableSeat)) {
-				return Fail("a session ban did not evict the holder");
+			if (!BanProven(live, NetParticipantRemovalAction::BanSession, issued, &error) ||
+			    !liveStore.IsBanned(targetId, 0x5000000000000000ULL + live.port) || !live.admission.IsSeatClosed(targetRecord.stableSeat)) {
+				return Fail(error.empty() ? "a session ban did not evict the holder" : error);
 			}
-			live.host.BindParticipantId(331, targetId);
-			NetH4NewJoin bannedJoin;
-			bannedJoin.txId = Ramp<16>(0x35);
-			bannedJoin.identity = MakeIdentity();
-			bannedJoin.displayName = "banned";
-			if (!live.SendRaw(331, bannedJoin, &error)) {
+			if (!RefuseBannedAdmission(live, &error) || !RefuseBannedHandshake(live.identity, liveStore, 42213, &error)) {
 				return Fail(error);
-			}
-			live.DrainHostOutbound();
-			const NetJoinRejected* rejoinRefuse = LastOf<NetJoinRejected>(live.Delivered(331));
-			if (rejoinRefuse == nullptr || rejoinRefuse->rejectReason != NetRejectReason::ParticipantBanned) {
-				return Fail("a removed identity took a new seat");
-			}
-			live.host.BindParticipantId(332, targetId);
-			if (!live.SendRaw(332, MakeApplicant(0, 0x34, "banned"), &error)) {
-				return Fail(error);
-			}
-			live.DrainHostOutbound();
-			const NetJoinRejected* bannedApply = LastOf<NetJoinRejected>(live.Delivered(332));
-			if (bannedApply == nullptr || bannedApply->rejectReason != NetRejectReason::ParticipantBanned) {
-				return Fail("a removed identity applied for a seat");
 			}
 			std::cout << "[net-reconnect-session-selftest] PASS scopes: removed identity refused on a fresh join and application" << std::endl;
-			if (!liveStore.Unban(targetId) || liveStore.IsBanned(targetId, sid) || !live.host.IsSeatClosed(targetRecord.stableSeat)) {
+			if (!liveStore.Unban(targetId) || liveStore.IsBanned(targetId, 0x5000000000000000ULL + live.port) || !live.admission.IsSeatClosed(targetRecord.stableSeat)) {
 				return Fail("unban restored a seat or left the identity banned");
 			}
-			Endpoint persisted;
-			persisted.connection = 341;
-			ConfigureEndpoint(persisted, "ban-until", &unixNow);
-			live.Add(&persisted);
-			live.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
-			if (!persisted.client.BeginNewJoin(live.nowMs, &error) || !live.Pump(&error)) {
+			ProvenSeat persisted;
+			if (!SeatProven(persisted, 42215, &liveStore, lane, "ban-until", &error)) {
 				return Fail("the until-removed target did not join: " + error);
 			}
 			NetH4TicketRecord persistedRecord;
-			if (persisted.store.Load(unixNow, persistedRecord, &error) != NetH4TicketLoadResult::Loaded) {
+			if (persisted.ticket.Load(persisted.unixNow, persistedRecord, &error) != NetH4TicketLoadResult::Loaded) {
 				return Fail(error);
 			}
-			const NetAuthBytes32 persistedId = Ramp<32>(0xD4);
-			live.host.BindParticipantId(persisted.connection, persistedId);
-			NetModerationSelection persistSelected{};
-			for (const auto& seat : live.host.GetModerationView()) {
-				if (seat.stableSeat == persistedRecord.stableSeat) {
-					persistSelected = NetSelectModerationSeat(seat);
-				}
+			const NetAuthBytes32 persistedId = persisted.identity.PublicId();
+			if (!BanProven(persisted, NetParticipantRemovalAction::BanUntilRemoved, issued, &error) ||
+			    !liveStore.IsBanned(persistedId, 0x5000000000000000ULL + persisted.port) || !persisted.admission.IsSeatClosed(persistedRecord.stableSeat)) {
+				return Fail(error.empty() ? "an Until Removed ban did not evict the holder" : error);
 			}
-			if (live.host.RemoveParticipant(persistSelected, NetParticipantRemovalAction::BanUntilRemoved, live.nowMs, unixNow, sid, 1, 90, issued) != NetKickBanResult::Ok ||
-			    !liveStore.IsBanned(persistedId, sid) || !live.host.IsSeatClosed(persistedRecord.stableSeat)) {
-				return Fail("an Until Removed ban did not evict the holder");
-			}
-			live.host.BindParticipantId(342, persistedId);
-			NetH4NewJoin persistJoin;
-			persistJoin.txId = Ramp<16>(0x36);
-			persistJoin.identity = MakeIdentity();
-			persistJoin.displayName = "until";
-			if (!live.SendRaw(342, persistJoin, &error)) {
+			if (!RefuseBannedAdmission(persisted, &error) || !RefuseBannedHandshake(persisted.identity, liveStore, 42217, &error)) {
 				return Fail(error);
 			}
-			live.DrainHostOutbound();
-			const NetJoinRejected* persistRefuse = LastOf<NetJoinRejected>(live.Delivered(342));
-			if (persistRefuse == nullptr || persistRefuse->rejectReason != NetRejectReason::ParticipantBanned) {
-				return Fail("an Until Removed identity took a new seat");
-			}
-			live.host.EndHostedSession();
-			if (liveStore.IsBanned(targetId, sid)) {
+			live.admission.EndHostedSession();
+			persisted.admission.EndHostedSession();
+			if (liveStore.IsBanned(targetId, 0x5000000000000000ULL + live.port)) {
 				return Fail("a session ban survived the hosted session");
 			}
-			if (!liveStore.IsBanned(persistedId, sid)) {
+			if (!liveStore.IsBanned(persistedId, 0x5000000000000000ULL + persisted.port)) {
 				return Fail("an Until Removed ban ended with the hosted session");
 			}
 			if (std::string(NetHostBanScopeName(NetHostBanScope::Session)) != "Session") {

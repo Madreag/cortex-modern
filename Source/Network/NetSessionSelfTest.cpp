@@ -1548,6 +1548,17 @@ namespace RTE {
 				SetNetParticipantCryptoForTest(nullptr);
 				return false;
 			}
+			const auto dirKey = lane / "identity-dir";
+			std::filesystem::create_directory(dirKey, code);
+			NetParticipantIdentityStore unsized;
+			unsized.SetPath(dirKey.string());
+			std::string sizeError;
+			if (unsized.LoadOrCreate(&sizeError) || unsized.HasKey()) {
+				*error = "an identity path that cannot be sized still created a key";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
 			SetNetAuthCryptoForTest(nullptr);
 			SetNetParticipantCryptoForTest(nullptr);
 			std::filesystem::remove_all(lane, code);
