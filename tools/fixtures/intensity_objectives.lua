@@ -29,19 +29,40 @@ function IntensityObjectives:UpdateActivity()
 		self.GameIntensityCalculator = require("Activities/Utility/GameIntensityCalculator");
 		self.GameIntensityCalculator:Initialize(self, false, 0.2, 0.01);
 	end
+	-- Two peers keep different local cameras; the intensity box must still match.
+	if os.getenv("CCCP_INTENSITY_CAMERA") == "client" then
+		CameraMan:SetOffset(Vector(8000, 8000), 0);
+	else
+		CameraMan:SetOffset(Vector(0, 0), 0);
+	end
+	if not self.hurt then
+		for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
+			if self:PlayerActive(player) and self:PlayerHuman(player) then
+				local actor = self:GetPlayerBrain(player) or self:GetControlledActor(player);
+				if actor then
+					actor.Health = actor.Health - 40;
+				end
+			end
+		end
+		self.hurt = true;
+	end
 	self.GameIntensityCalculator:UpdateGameIntensityCalculator();
 	self:ClearObjectivePoints();
+	local headX, headY = 0, 0;
 	for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
 		if self:PlayerActive(player) and self:PlayerHuman(player) then
 			local actor = self:GetPlayerBrain(player) or self:GetControlledActor(player);
 			if actor then
 				self:AddObjectivePoint("Protect!", actor.AboveHeadPos, self:GetTeamOfPlayer(player), GameActivity.ARROWDOWN);
+				headX = actor.AboveHeadPos.X;
+				headY = actor.AboveHeadPos.Y;
 			end
 		end
 	end
 	self:SaveString("GameIntensityCalculatorMainTable", tostring(self.GameIntensityCalculator.saveTable.CurrentIntensity));
 	local intensity = self:LoadString("GameIntensityCalculatorMainTable");
-	print("[intensity-objectives] saved=" .. intensity);
+	local cam = CameraMan:GetOffset(0);
+	print("[intensity-objectives] saved=" .. intensity .. " head=" .. headX .. "," .. headY .. " cam=" .. cam.X .. "," .. cam.Y);
 end
 
 function IntensityObjectives:EndActivity()
