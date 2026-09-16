@@ -1158,6 +1158,8 @@ static std::string ResyncSaveName() {
 			m_ResyncSourceRound = 0;
 			m_LocalName.clear();
 			m_ActivityPreset.clear();
+			m_SceneName.clear();
+			m_SceneModule.clear();
 			m_State = NetMatchServiceState::Idle;
 			m_StatusText = "Idle";
 			m_ErrorText.clear();

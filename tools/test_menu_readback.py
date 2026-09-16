@@ -1017,7 +1017,7 @@ def run_case(options, case, root, failing=None):
             for who, log in logs.items():
                 rows = re.findall(
                     r'dump_lobby state=\S+ members=\d+ activity="([^"]*)" module="([^"]*)"'
-                    r'(?: scene="([^"]*)" scene_module="([^"]*)")?',
+                    r' scene="([^"]*)" scene_module="([^"]*)"',
                     log)
                 assert rows, (who, log[-2000:])
                 dumped[who] = rows[-1]
