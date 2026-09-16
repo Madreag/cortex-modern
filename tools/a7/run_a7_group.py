@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run A7 arms one after another. A parallel group binds the returner's connect-gate under Mac load."""
+"""Run A7 arms one after another so the returner's connect-gate stays free."""
 from __future__ import annotations
 
 import argparse
