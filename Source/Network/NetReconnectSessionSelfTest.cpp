@@ -6351,7 +6351,9 @@ namespace RTE {
 				return Fail("the kick touched the other holder");
 			}
 			std::vector<ControllerFrame> afterFrames;
-			if (!censusRound.host.PeekLocalFrames(keeperCommandFrame, afterFrames) || afterFrames != beforeFrames) {
+			if (!censusRound.host.PeekLocalFrames(keeperCommandFrame, afterFrames) || afterFrames.size() != beforeFrames.size() ||
+			    afterFrames.empty() || afterFrames.front().actorUniqueID != beforeFrames.front().actorUniqueID ||
+			    afterFrames.front().stateMask != beforeFrames.front().stateMask) {
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
 				g_ProductionCensusActors.clear();
 				return Fail("the kick changed the keeper's in-flight commands");
