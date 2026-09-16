@@ -242,8 +242,10 @@ namespace RTE {
 		static void DrawNetUiToasts();
 		/// Every banner queued this run, in order — the report's ui.toasts source.
 		static const std::vector<NetUiToastRecord>& GetNetUiToastLog();
-		/// The newest three unexpired presentation events, in display order.
+		/// Unexpired presentation events, oldest first. A toast with no shown stamp is still waiting.
 		static std::vector<NetUiToastRecord> GetVisibleNetUiToasts();
+		/// Starts the on-screen clock for the drawn slice; hidden toasts keep waiting.
+		static void NoteNetUiToastsDrawn(size_t first, size_t count);
 		/// Names of peers whose next input frame is missing, for the stalled render path.
 		static std::string GetLockstepMissingPeers();
 		/// Counts resync wait-screen draws for the report (also counted headless).

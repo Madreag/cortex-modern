@@ -721,7 +721,7 @@ void NetModerationGUI::DrawMatchToasts() {
 	// The status widget takes the bottom while the editor holds the world, so the rows stack above it.
 	int bottom = editor.editing && m_StatusRect.visible ? m_StatusRect.y - 4 : backbuffer->h - 8;
 	// A compact screen with the seats panel open reserves one toast row under the strip band: the
-	// newest toast takes it and the rest of the stack waits for the room to come back.
+	// oldest waiting toast takes it and the rest of the stack waits for the room to come back.
 	const bool reserved = m_Open && backbuffer->h < c_CompactMaxHeight;
 	if (m_Open) {
 		// The seats panel owns its rows too: a stack that would cross them piles up above it instead.
@@ -731,8 +731,15 @@ void NetModerationGUI::DrawMatchToasts() {
 		m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
 		bottom = reserved ? panelTop - 4 : std::min(bottom, panelTop - 4);
 	}
-	size_t firstRow = reserved && !visible.empty() ? visible.size() - 1 : 0;
-	size_t rowCount = visible.size() - firstRow;
+	size_t firstRow = 0;
+	size_t rowCount = visible.size();
+	if (reserved && !visible.empty()) {
+		firstRow = 0;
+		rowCount = 1;
+	} else if (visible.size() > 3) {
+		firstRow = visible.size() - 3;
+		rowCount = 3;
+	}
 	int top = bottom - static_cast<int>(rowCount) * rowHeight;
 	EditorArea toastArea = editor;
 	if (m_StatusRect.visible) {
@@ -770,6 +777,7 @@ void NetModerationGUI::DrawMatchToasts() {
 		rectfill(backbuffer, x, y, x + width - 1, y + rowHeight - 3, makeacol32(20, 22, 27, 255));
 		label->Draw(&bitmap, false);
 	}
+	ScenarioRunner::NoteNetUiToastsDrawn(firstRow, rowCount);
 	t_simRNGOverride = previousRNG;
 }
 

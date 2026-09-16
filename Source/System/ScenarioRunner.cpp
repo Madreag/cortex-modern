@@ -708,7 +708,6 @@ namespace RTE {
 		}
 		NetUiToast toast;
 		toast.record = {tick, kind, text, senderPeerId};
-		toast.shownAtMs = NetLockstepNowMs();
 		s_NetUiToasts.push_back(toast);
 		s_NetUiToastLog.push_back(toast.record);
 	}
@@ -719,7 +718,7 @@ namespace RTE {
 
 	void ScenarioRunner::DrawNetUiToasts() {
 		const uint64_t nowMs = NetLockstepNowMs();
-		while (!s_NetUiToasts.empty() && nowMs >= s_NetUiToasts.front().shownAtMs + c_NetUiToastMs) {
+		while (!s_NetUiToasts.empty() && s_NetUiToasts.front().shownAtMs != 0 && nowMs >= s_NetUiToasts.front().shownAtMs + c_NetUiToastMs) {
 			s_NetUiToasts.pop_front();
 		}
 		if (auto* panel = g_MenuMan.GetNetworkPanel()) panel->DrawMatchToasts();
@@ -732,13 +731,26 @@ namespace RTE {
 	std::vector<ScenarioRunner::NetUiToastRecord> ScenarioRunner::GetVisibleNetUiToasts() {
 		const uint64_t nowMs = NetLockstepNowMs();
 		std::vector<NetUiToastRecord> visible;
-		for (auto toast = s_NetUiToasts.rbegin(); toast != s_NetUiToasts.rend() && visible.size() < 3; ++toast) {
-			if (nowMs < toast->shownAtMs + c_NetUiToastMs) {
-				visible.push_back(toast->record);
+		for (const auto& toast : s_NetUiToasts) {
+			if (toast.shownAtMs == 0 || nowMs < toast.shownAtMs + c_NetUiToastMs) {
+				visible.push_back(toast.record);
 			}
 		}
-		std::reverse(visible.begin(), visible.end());
 		return visible;
+	}
+
+	void ScenarioRunner::NoteNetUiToastsDrawn(size_t first, size_t count) {
+		const uint64_t nowMs = NetLockstepNowMs();
+		size_t visibleIndex = 0;
+		for (auto& toast : s_NetUiToasts) {
+			if (toast.shownAtMs != 0 && nowMs >= toast.shownAtMs + c_NetUiToastMs) {
+				continue;
+			}
+			if (visibleIndex >= first && visibleIndex < first + count && toast.shownAtMs == 0) {
+				toast.shownAtMs = nowMs;
+			}
+			++visibleIndex;
+		}
 	}
 
 	std::string ScenarioRunner::GetLockstepMissingPeers() {
