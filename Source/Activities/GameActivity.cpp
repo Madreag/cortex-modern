@@ -20,6 +20,7 @@
 #include "Controller.h"
 #include "Scene.h"
 #include "Actor.h"
+#include "ACraft.h"
 #include "AHuman.h"
 #include "ACrab.h"
 #include "ACRocket.h"
@@ -51,6 +52,7 @@
 #include <cstring>
 #include <deque>
 #include <iostream>
+#include <list>
 #include <sstream>
 
 #define BRAINLZWIDTHDEFAULT 640
@@ -1103,6 +1105,13 @@ bool GameActivity::MayCommitBrainPlacement(int player) const {
 	return seatPeer != 0 ? seatPeer == local : local == ScenarioRunner::GetLockstepHostPeerId();
 }
 
+bool GameActivity::MayWriteLockstepSeat(int player) const {
+	if (!ScenarioRunner::IsLockstepControllerSyncActive()) {
+		return true;
+	}
+	return MayCommitBrainPlacement(player);
+}
+
 Vector GameActivity::GroundSpot(float sceneX) const {
 	Vector spot(sceneX, 0.0F);
 	g_SceneMan.ForceBounds(spot);
@@ -1200,6 +1209,7 @@ namespace {
 	// The UI probe's scripted setup-editor gestures, per seat. Test-only: nothing in the game queues one,
 	// so an empty queue leaves DriveScriptedSetupEditor a no-op and the editor entirely in the player's hands.
 	struct ScriptedEditorGesture {
+		std::string kind = "place_brain";
 		bool done = false; //!< A DONE press instead of a placement.
 		float sceneXFraction = 0.5F;
 		std::string className, preset, module;
@@ -1230,15 +1240,21 @@ namespace {
 
 	std::array<std::deque<ScriptedEditorGesture>, Players::MaxPlayerCount> s_ScriptedEditorGestures;
 	std::array<bool, Players::MaxPlayerCount> s_ScriptedEditorFailed{};
+	std::array<bool, Players::MaxPlayerCount> s_EditorWriteRefused{};
 	constexpr int c_ScriptedEditorAttempts = 8;
 	constexpr int c_ScriptedEditorUpdateCap = 400;
 } // namespace
 
 bool GameActivity::QueueSetupEditorGesture(int player, const std::string& kind, float sceneXFraction, const std::string& className, const std::string& preset, const std::string& module) {
-	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount || (kind != "place_brain" && kind != "done")) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount ||
+	    (kind != "place_brain" && kind != "done" && kind != "place_object" && kind != "actor_select")) {
 		return false;
 	}
+	if (kind == "place_object") {
+		s_EditorWriteRefused[player] = false;
+	}
 	ScriptedEditorGesture gesture;
+	gesture.kind = kind;
 	gesture.done = kind == "done";
 	gesture.sceneXFraction = std::clamp(sceneXFraction, 0.0F, 1.0F);
 	gesture.className = className;
@@ -1246,6 +1262,16 @@ bool GameActivity::QueueSetupEditorGesture(int player, const std::string& kind, 
 	gesture.module = module;
 	s_ScriptedEditorGestures[player].push_back(std::move(gesture));
 	return true;
+}
+
+void GameActivity::NoteEditorWriteRefused(int player) {
+	if (player >= Players::PlayerOne && player < Players::MaxPlayerCount) {
+		s_EditorWriteRefused[player] = true;
+	}
+}
+
+bool GameActivity::EditorWriteWasRefused(int player) {
+	return player >= Players::PlayerOne && player < Players::MaxPlayerCount && s_EditorWriteRefused[player];
 }
 
 int GameActivity::SetupEditorMode(int player) const {
@@ -1264,9 +1290,51 @@ void GameActivity::DriveScriptedSetupEditor(int player) {
 		return;
 	}
 	ScriptedEditorGesture& gesture = s_ScriptedEditorGestures[player].front();
+	if (gesture.kind == "actor_select") {
+		return;
+	}
 	if (gesture.done) {
 		m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::DONEEDITING);
 		s_ScriptedEditorGestures[player].pop_front();
+		return;
+	}
+	if (gesture.kind == "place_object") {
+		const auto give_up_object = [&] {
+			s_ScriptedEditorFailed[player] = true;
+			s_ScriptedEditorGestures[player].pop_front();
+		};
+		if (++gesture.updates > c_ScriptedEditorUpdateCap) {
+			give_up_object();
+			return;
+		}
+		const Vector objectSpot = GroundSpot(static_cast<float>(g_SceneMan.GetSceneWidth()) * gesture.sceneXFraction + static_cast<float>(gesture.attempts) * 40.0F);
+		const SceneEditorGUI::EditorGUIMode objectMode = m_pEditorGUI[player]->GetEditorGUIMode();
+		if (gesture.stage == 0) {
+			const Entity* objectPreset = g_PresetMan.GetEntityPreset(gesture.className, gesture.preset, gesture.module);
+			if (!objectPreset || !m_pEditorGUI[player]->SetCurrentObject(dynamic_cast<SceneObject*>(objectPreset->Clone()))) {
+				give_up_object();
+				return;
+			}
+			m_pEditorGUI[player]->SetEditorGUIMode(SceneEditorGUI::ADDINGOBJECT);
+			m_pEditorGUI[player]->SetCursorPos(objectSpot);
+			gesture.stage = 1;
+		} else if (gesture.stage == 1) {
+			const ObjectPickerGUI* picker = m_pEditorGUI[player]->GetCheckpointPicker();
+			if (picker && picker->IsVisible()) {
+				return;
+			}
+			m_pEditorGUI[player]->SetCursorPos(objectSpot);
+			if (objectMode == SceneEditorGUI::ADDINGOBJECT || objectMode == SceneEditorGUI::PLACINGOBJECT) {
+				m_PlayerController[player].SetState(PRESS_PRIMARY, true);
+				gesture.stage = 2;
+			} else {
+				m_PlayerController[player].SetState(PRESS_PRIMARY, true);
+				gesture.stage = 2;
+			}
+		} else {
+			m_PlayerController[player].SetState(RELEASE_PRIMARY, true);
+			s_ScriptedEditorGestures[player].pop_front();
+		}
 		return;
 	}
 	const auto give_up = [&] {
@@ -1315,6 +1383,38 @@ void GameActivity::DriveScriptedSetupEditor(int player) {
 			gesture.stage = 0;
 		}
 	}
+}
+
+void GameActivity::DriveScriptedActorSelect(int player) {
+	if (s_ScriptedEditorGestures[player].empty() || s_ScriptedEditorGestures[player].front().kind != "actor_select") {
+		return;
+	}
+	ACraft* craft = nullptr;
+	Actor* passenger = nullptr;
+	std::list<Actor*>* roster = g_MovableMan.GetTeamRoster(m_Team[player]);
+	if (roster) {
+		for (Actor* actor: *roster) {
+			auto* candidate = dynamic_cast<ACraft*>(actor);
+			if (!candidate || !candidate->GetInventory()) {
+				continue;
+			}
+			for (MovableObject* item: *candidate->GetInventory()) {
+				if (auto* rider = dynamic_cast<Actor*>(item)) {
+					craft = candidate;
+					passenger = rider;
+					break;
+				}
+			}
+			if (craft) {
+				break;
+			}
+		}
+	}
+	if (craft && passenger) {
+		SwitchToActor(craft, player, m_Team[player]);
+		craft->HandoffExitingPassenger(passenger);
+	}
+	s_ScriptedEditorGestures[player].pop_front();
 }
 
 void GameActivity::RefuseBrainPlacement(int player, const std::string& reason, bool banner) {
@@ -1754,6 +1854,8 @@ void GameActivity::Update() {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (!(IsSeatActive(player) && IsLocalHumanSeat(player)))
 			continue;
+
+		DriveScriptedActorSelect(player);
 
 		// The current player's team
 		int team = m_Team[player];
