@@ -174,7 +174,7 @@ namespace RTE {
 
 		/// Adds a notification that an area of the material terrain has been updated.
 		/// @param newArea The Box defining the newly updated material area that can be unwrapped and may be out of bounds of the scene.
-		void AddUpdatedMaterialArea(const Box& newArea) { m_UpdatedMaterialAreas.emplace_back(newArea); }
+		void AddUpdatedMaterialArea(const Box& newArea);
 
 		/// Removes any color pixel in the color layer of this SLTerrain wherever there is an air material pixel in the material layer.
 		void CleanAir();
