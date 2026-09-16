@@ -79,6 +79,9 @@ ARMS = {
     "stall": {"stall": True},
     "hold": {"leave": True},
     "holdlong": {"leave": True, "long_name": True},
+    # Two local seats side by side: the Settings.ini key the two-player split reads is
+    # TwoPlayerSplitscreenVertSplit (SettingsMan.cpp). Seeded through set_settings like the delay floor.
+    "vsplit": {"vsplit": True},
 }
 
 # The HUD furniture the widget must never touch, measured on the retained
@@ -281,7 +284,7 @@ def probe_script(who, size, arm, mode):
             step["widget"] = visible
         return step
     status_reads = [label_assert(STATUS, "NET [F6]" if compact else "NET STATUS"),
-                    label_assert(STATUS, "delay 3" if compact else "D 3 ticks / 50.0 ms"),
+                    label_assert(STATUS, "delay 3" if compact else "delay 3 ticks / 50.0 ms"),
                     label_assert(STATUS, "RTT "),
                     label_assert(STATUS, "PACE ")]
     steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "sim_at_least": 60}]
@@ -404,6 +407,107 @@ def probe_script(who, size, arm, mode):
     steps += [{"op": "assert_control", "control": TOAST, "equals": {"visible": False, "text": ""}},
               {"op": "finish"}]
     return {"schema": 1, "timeout_ms": 180000, "steps": steps}
+
+
+def probe_script_vsplit(who, size, mode):
+    """Two local seats side by side with the editor open: the strip must keep a positive width."""
+    compact = size[1] < COMPACT_MAX_HEIGHT
+    hidden = {"op": "assert_control", "control": STATUS_BOX, "equals": {"visible": False}, "fits": True}
+    shown = {"op": "assert_control", "control": STATUS_BOX, "equals": {"visible": True}, "fits": True}
+    wanted = mode != "off"
+    steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "editing": True},
+             {"op": "wait", "player": 0, "picker_open": True},
+             {"op": "wait", "player": 1, "picker_open": True},
+             {"op": "wait", "renders": 12},
+             shown if wanted else hidden]
+    if wanted:
+        steps += [{"op": "assert_net_ui_clear", "player": 0, "picker_open": True, "screen_text": True, "status": True},
+                  {"op": "assert_net_ui_clear", "player": 1, "picker_open": True, "screen_text": True, "status": True}]
+        if compact:
+            steps.append({"op": "assert_control", "control": STATUS, "equals": {"visible": True}, "fits": True,
+                          "text_contains": "0 of 2"})
+    steps += [{"op": "screenshot_pair", "name": f"vsplit-{who.lower()}"}, {"op": "finish"}]
+    return {"schema": 1, "timeout_ms": 180000, "steps": steps}
+
+
+def run_vsplit_pair(repo, root, port, size, mode, timeout, expected_pin):
+    """E2E shared-seat pair with TwoPlayerSplitscreenVertSplit seeded, editor open on both halves."""
+    require_pin(repo, expected_pin)
+    root.mkdir(parents=True, exist_ok=False)
+    sys.path.insert(0, str(repo / "tools"))
+    import net_lobby_wire
+    from net_activity_launch import encode_config, rules_for
+    wire = net_lobby_wire.read(repo)
+    config = root / "launch-config.bin"
+    config.write_bytes(encode_config(rules_for("brains-shared"), wire, False, False))
+    common = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "2",
+              "-net-match-mode", "coop-pve", "-net-match-ticks", "200", "-max-ticks", "200",
+              "-net-match-input-delay", "3", "-seed", "42", "-num-lua-states", "4", "-tick-hashes"]
+    runs, records = {}, {}
+    try:
+        for who, flags in (("Host", ["-net-host", "-net-match-service-config", str(config)]),
+                           ("Guest", ["-net-join", "127.0.0.1"])):
+            flags = [*flags, "-net-match-e2e-shared-seat"]
+            inputs = root / f"{who}_inputs"
+            inputs.mkdir()
+            probe = inputs / "probe.json"
+            probe.write_text(json.dumps(probe_script_vsplit(who, size, mode), indent=2), encoding="utf-8")
+            trace, report = root / f"{who}_trace.json", root / f"{who}_report.json"
+            flags += ["-out", str(trace), "-net-match-report", str(report)]
+            runs[who] = make_run(repo, [*common, *flags], root / who, timeout,
+                                 env={"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)},
+                                 expected=[report])
+            set_settings(runs[who].cwd, {"ResolutionX": size[0], "ResolutionY": size[1],
+                                         "NetworkMatchStatusMode": MODE_INI[mode],
+                                         "NetworkInputDelayFrames": 3,
+                                         "TwoPlayerSplitscreenVertSplit": 1})
+
+        def drive(who):
+            try:
+                records[who] = runs[who].start().finish()
+            except Exception as error:
+                records[who] = {"error": repr(error)}
+
+        host = threading.Thread(target=drive, args=("Host",), daemon=True)
+        guest = threading.Thread(target=drive, args=("Guest",), daemon=True)
+        host.start()
+        threading.Event().wait(2.0)
+        guest.start()
+        host.join()
+        guest.join()
+    finally:
+        for run in runs.values():
+            run.close()
+    require_pin(repo, expected_pin)
+    return records
+
+
+def inspect_vsplit(root, records, size, mode, name):
+    checks, details = {}, {"records": records, "probes": {}, "mode": mode, "arm": "vsplit"}
+    for who in ("Host", "Guest"):
+        record = records.get(who, {})
+        log = read_log(root / who)
+        checks[f"{who}_exit"] = record.get("exit_code") == 0 and not record.get("timed_out", True)
+        checks[f"{who}_evidence"] = record.get("evidence_complete") is True
+        probe_path = root / f"{who}_inputs" / "net-ui-result.json"
+        probe = read_json(probe_path) if probe_path.exists() else {}
+        details["probes"][who] = {"path": str(probe_path), "error": probe.get("error"),
+                                  "failed_step": probe.get("failed_step")}
+        checks[f"{who}_probe_complete"] = probe.get("pass") is True and probe.get("complete") is True
+        observations = list(probe_observations(probe))
+        widget_rects = [tuple(obs["control"]["rect"]) for step, obs in observations
+                        if step.get("control") == STATUS_BOX and obs.get("control", {}).get("visible")]
+        if mode == "off":
+            checks[f"{who}_widget_never_painted"] = not widget_rects
+        else:
+            checks[f"{who}_strip_visible"] = bool(widget_rects) and all(rect[2] > 0 and rect[3] > 0 for rect in widget_rects)
+            clear_reads = [obs["net_ui"] for step, obs in observations
+                           if step.get("op") == "assert_net_ui_clear" and "net_ui" in obs]
+            checks[f"{who}_overlay_positive"] = bool(clear_reads) and all(
+                (not read[el]["visible"] or (read[el]["w"] > 0 and read[el]["h"] > 0))
+                for read in clear_reads for el in ("status", "toasts", "seats_panel"))
+        details.setdefault("occlusion", {})[who] = {"widget_rects": widget_rects}
+    return {"pass": all(checks.values()), "checks": checks, "details": details}
 
 
 def run_pair(repo, root, port, size, arm, mode, timeout, expected_pin):
@@ -839,8 +943,12 @@ def main():
                 for arm_name in arm_names:
                     name = f"{tag}_{mode}_{arm_name}"
                     pair_root = root / name
-                    records = run_pair(repo, pair_root, next(ports), size, ARMS[arm_name], mode, options.timeout, result["pin_before"])
-                    pair = inspect_pair(pair_root, records, size, ARMS[arm_name], mode, name)
+                    if ARMS[arm_name].get("vsplit"):
+                        records = run_vsplit_pair(repo, pair_root, next(ports), size, mode, options.timeout, result["pin_before"])
+                        pair = inspect_vsplit(pair_root, records, size, mode, name)
+                    else:
+                        records = run_pair(repo, pair_root, next(ports), size, ARMS[arm_name], mode, options.timeout, result["pin_before"])
+                        pair = inspect_pair(pair_root, records, size, ARMS[arm_name], mode, name)
                     result["pairs"][name] = pair
                     result["checks"][name] = pair["pass"]
                     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")

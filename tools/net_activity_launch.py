@@ -232,10 +232,17 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
         other = 1 - player
         steps += [{"op": "wait", "player": other, "picker_open": True}, {"op": "wait", "renders": 4},
                   {"op": "assert_net_ui_clear", "player": other, "picker_open": True, "screen_text": True},
+                  # A presented seat writing a non-brain object is refused on the roster owner.
+                  {"op": "editor_place", "player": other, "x_fraction": 0.50,
+                   "class": "HDFirearm", "preset": "Pistol", "module": "Base.rte", "name": "presented_place"},
+                  {"op": "assert_editor", "player": other, "name": "presented_place_refusal",
+                   "equals": {"placement_refused": True},
+                   "screen_text_contains": "can't place"},
                   # The seats panel while the editor holds the world: the strip lifts off its rows.
                   {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                   {"op": "wait", "panel_open": True}, {"op": "wait", "renders": 4},
                   {"op": "assert_net_ui_clear", "player": player, "picker_open": True, "screen_text": True},
+                  {"op": "assert_net_ui_clear", "player": other, "picker_open": True, "screen_text": True},
                   {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                   {"op": "wait", "panel_open": False}]
     if compact(resolution):
@@ -336,6 +343,9 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
         steps.append({"op": "wait", "sim_at_least": 200})
         if capture:
             steps += shots(peer, "match_started")
+        if shared_seat:
+            # A presented seat's ActorSelect onto a craft passenger is presentation only.
+            steps += [{"op": "actor_select", "player": 1 - player}, {"op": "wait", "renders": 4}]
     steps.append({"op": "finish"})
     return {"schema": 1, "timeout_ms": 180000, "steps": steps}
 
@@ -662,6 +672,18 @@ def launch(options):
                 rows and all(not row["ready"] and not row["submitted"] and not row["resident"] and
                              any(text in row["screen_text"] for text in PLACE_REFUSED) for row in rows)
                 for rows in result["refusals"].values())
+            if shared_seat:
+                def presented_refusal(probe, peer):
+                    named = [index for index, step in enumerate(probe.get("script", {}).get("steps", []))
+                             if step.get("name") == "presented_place_refusal"]
+                    rows = next((step["observed"]["editor_seats"] for step in probe.get("steps", [])
+                                 if step["index"] in named), [])
+                    return [row for row in rows if row.get("player") == 1 - EDITOR_SEATS[peer]["player"]]
+                result["presented_refusals"] = {peer: presented_refusal(result["probes"][peer], peer) for peer in runs}
+                checks["presented_place_refused"] = all(
+                    rows and all(row.get("placement_refused") is True and "can't place" in row.get("screen_text", "")
+                                 for row in rows)
+                    for rows in result["presented_refusals"].values())
             reports = {peer: json.loads((root / peer / "report.json").read_text(errors="replace")) for peer in runs}
             result["toasts"] = {peer: reports[peer].get("ui", {}).get("toasts", []) for peer in runs}
             checks["placement_toasts"] = all(sum(1 for toast in result["toasts"][peer] if toast.get("kind") == "brain_placed") == 2 for peer in runs)

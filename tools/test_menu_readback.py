@@ -528,6 +528,29 @@ def scripts(case, port, root):
     return texts, {"host": probe} if probe else {}
 
 
+def frame_luma(png, rect, border=2):
+    """Mean luma of a control's 2-px frame, the compare_luma.py shape from the disabled-state lane."""
+    with Image.open(png) as source:
+        image = source.convert("RGB")
+    x, y, w, h = rect
+    pixels = []
+    for i in range(max(0, w)):
+        for t in range(border):
+            if 0 <= y + t < image.size[1] and 0 <= x + i < image.size[0]:
+                pixels.append(image.getpixel((x + i, y + t)))
+            if 0 <= y + h - 1 - t < image.size[1] and 0 <= x + i < image.size[0]:
+                pixels.append(image.getpixel((x + i, y + h - 1 - t)))
+    for j in range(border, max(border, h - border)):
+        for t in range(border):
+            if 0 <= y + j < image.size[1] and 0 <= x + t < image.size[0]:
+                pixels.append(image.getpixel((x + t, y + j)))
+            if 0 <= y + j < image.size[1] and 0 <= x + w - 1 - t < image.size[0]:
+                pixels.append(image.getpixel((x + w - 1 - t, y + j)))
+    if not pixels:
+        return 0.0
+    return sum(0.2126 * r + 0.7152 * g + 0.0722 * b for r, g, b in pixels) / len(pixels)
+
+
 def inside(rect, parent):
     x, y, w, h = rect
     px, py, pw, ph = parent
@@ -898,6 +921,15 @@ def run_case(options, case, root, failing=None):
             assert host_setup["TextHostInputDelay"]["text"] == "auto", host_setup["TextHostInputDelay"]
             assert host_setup["TextHostInputDelay"]["enabled"] is False, host_setup["TextHostInputDelay"]
             assert host_setup["LabelHostInputDelayPolicy"]["text"] == "(auto)", host_setup["LabelHostInputDelayPolicy"]
+            # The disabled delay box's frame is DimRect at 55% of an enabled TextBox frame.
+            delay_luma = frame_luma(images[-2]["png"], host_setup["TextHostInputDelay"]["rect"])
+            port_luma = frame_luma(images[-2]["png"], host_setup["TextHostPort"]["rect"])
+            result["delay_frame_luma"] = delay_luma
+            result["port_frame_luma"] = port_luma
+            assert port_luma > 0, (delay_luma, port_luma)
+            ratio = delay_luma / port_luma
+            result["delay_frame_luma_ratio"] = ratio
+            assert 0.45 <= ratio <= 0.65, (delay_luma, port_luma, ratio)
             # The disabled Seats control sits in the lobby capture for the visual review.
             assert drawn["ButtonMultiplayerModerate"]["enabled"] is False, drawn["ButtonMultiplayerModerate"]
             # The multiplayer screen's panel centres vertically too; an odd height shifts one pixel,
