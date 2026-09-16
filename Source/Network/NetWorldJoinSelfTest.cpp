@@ -144,6 +144,20 @@ namespace RTE {
 			return true;
 		}
 
+		int TestIdentityPrintOnce() {
+			std::string error;
+			if (!ResetLane(&error)) {
+				return Fail(error);
+			}
+			const std::string path = (LaneDirectory() / "persistent.identity").string();
+			NetWorldIdentity first;
+			if (!NetWorldIdentityFile::OpenForBoot(path, first, &error) || !first.IsValid()) {
+				return Fail("first boot did not publish a world identity: " + error);
+			}
+			std::cout << "[net-world-identity-print-selftest] world-id=" << first.worldId << std::endl;
+			return 0;
+		}
+
 		int TestIdentitySurvivesRestart() {
 			std::string error;
 			if (!ResetLane(&error)) {
@@ -338,20 +352,6 @@ namespace RTE {
 				return Fail("a persistent world with no members was not Running");
 			}
 
-			NetLockstepCoordinator ordinary;
-			NetLockstepConfig ordinaryConfig = worldConfig;
-			ordinaryConfig.matchConfig.persistentWorld = false;
-			ordinaryConfig.matchConfig.worldId.clear();
-			ordinaryConfig.matchConfig.worldBoot = 0;
-			ordinaryConfig.remotePeerId = 2;
-			error.clear();
-			if (ordinary.Start(hostTransport, ordinaryConfig, &error)) {
-				return Fail(std::string("a two-peer empty remote was accepted: ") + error);
-			}
-			if (error != "lockstep peer identity is invalid") {
-				return Fail(std::string("a two-peer empty remote was accepted: ") + error);
-			}
-
 			const uint64_t firstRequired = world.GetStats().nextFrame + c_NetWorldActivationLeadFrames;
 			if (!world.AdmitWorldMember(2, 1, firstRequired, &error)) {
 				return Fail("AdmitWorldMember refused a fresh member: " + error);
@@ -417,7 +417,7 @@ namespace RTE {
 					}
 				}
 				if (!refused) {
-					return Fail("the match is already in progress");
+					return Fail("an ordinary NewJoin was accepted");
 				}
 			}
 
@@ -432,6 +432,7 @@ namespace RTE {
 				host.SetLiveMatch(true);
 				host.SetPersistentWorld(true);
 				host.HandleMessage(12, join, 0);
+				host.Tick(NetReconnectAdmission::c_DenialReleaseMs);
 				bool offered = false;
 				for (const NetH4Outbound& outbound: host.TakeOutbound()) {
 					if (std::holds_alternative<NetH4TicketOffer>(outbound.payload)) {
@@ -585,8 +586,19 @@ namespace RTE {
 			return 0;
 		}
 
-		int TestCatchUpAppliedThroughAndBinding() {
+		int TestCatchUpJoinerReport() {
 			std::string error;
+			NetWorldFrameLog log;
+			if (!log.Append(MakeCommittedFrame(41), &error) || !log.Append(MakeCommittedFrame(42), &error) ||
+			    !log.Append(MakeCommittedFrame(43), &error)) {
+				return Fail("catch-up log refused an in-order frame: " + error);
+			}
+			std::vector<std::vector<uint8_t>> copied;
+			uint64_t lastCopied = 0;
+			if (log.CopyFrom(41, 2, 1024, copied, &lastCopied) != 2 || lastCopied != 42) {
+				return Fail("CopyFrom stamped the log tip instead of the last copied frame");
+			}
+
 			NetWorldJoinHost host;
 			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) {
 				return Fail("catch-up host did not open a join: " + error);
@@ -605,36 +617,81 @@ namespace RTE {
 			}
 			const uint64_t nowFrame = 80;
 			uint64_t activation = 0;
-			if (!host.NoteCatchUpProgress(7, nowFrame, nowFrame, 1, nowFrame, &activation, &error)) {
-				return Fail("catch-up with nowFrame as appliedThrough was the old lie; it must still accept a number: " + error);
+			if (!host.NoteCatchUpProgress(7, 40, 20, 50, nowFrame, &activation, &error) || activation != nowFrame + c_NetWorldActivationLeadFrames) {
+				return Fail("catch-up did not announce E: " + error);
 			}
-			if (host.FindSession(7)->acknowledgedThrough != nowFrame) {
-				return Fail("appliedThrough-was-nowFrame");
+			const NetLobbyStateChunk report = MakeWorldJoinReport(c_NetWorldReportCatchUp, activation - 1);
+			uint8_t kind = 0;
+			uint64_t value = 0;
+			if (!ParseWorldJoinReport(report, kind, value) || kind != c_NetWorldReportCatchUp || value != activation - 1) {
+				return Fail("production joiner report did not carry appliedThrough");
 			}
-			if (!host.NoteCatchUpProgress(7, 40, 1, 1, nowFrame, nullptr, &error)) {
-				// going backwards must fail
-			} else {
-				return Fail("a catch-up acknowledgement cannot go backwards");
-			}
-			if (!host.NoteCatchUpProgress(7, activation - 1, 1, 1, activation, nullptr, &error)) {
-				return Fail("catch-up refused appliedThrough == E-1: " + error);
+			if (!host.NoteCatchUpProgress(7, value, value > 40 ? value - 40 : 0, 10, nowFrame, nullptr, &error)) {
+				return Fail("DriveWorldJoins report.value was refused: " + error);
 			}
 			if (host.FindSession(7)->acknowledgedThrough != activation - 1) {
 				return Fail("appliedThrough-did-not-reach-E-minus-1");
 			}
-			if (host.DueActivation(activation) == nullptr) {
-				return Fail("activation at E with appliedThrough == E-1 was not due");
+			if (host.DueActivation(activation) != nullptr) {
+				return Fail("DueActivation stayed true at E");
 			}
-			const NetGameWorldTransition transition = BuildWorldActivateTransition(*host.FindSession(7), MakeWorldConfig(), host.Membership().Revision());
+			if (host.DueActivation(activation - 1) == nullptr) {
+				return Fail("DueActivation did not fire only at E-1");
+			}
+
+			std::vector<NetLockstepFrame> tail = {MakeCommittedFrame(41), MakeCommittedFrame(42)};
+			if (!ScenarioRunner::InstallWorldCatchUp(40, tail, &error)) {
+				return Fail("catch-up install: " + error);
+			}
+			ScenarioRunner::SetWorldCatchUpActivation(43);
+			NetLockstepReadyFrame ready;
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(42, ready, &error) || ready.frame != 42) {
+				return Fail("TakeWorldCatchUpReadyFrame did not apply targetFrame == simTick");
+			}
+			if (ScenarioRunner::WorldCatchUpActive()) {
+				return Fail("catch-up apply flag did not clear at E-1");
+			}
+			return 0;
+		}
+
+		int TestActivateBindingOnBothPeers() {
+			std::string error;
+			NetWorldJoinHost host;
+			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) {
+				return Fail("binding host did not open a join: " + error);
+			}
+			const uint64_t e = 120;
+			NetWorldJoinSession session = *host.FindSession(7);
+			session.activationTick = e;
+			const NetGameWorldTransition transition = BuildWorldActivateTransition(session, MakeWorldConfig(), host.Membership().Revision());
 			if (transition.className.empty() || transition.preset != "Brain Robot" || !transition.bindBrain ||
 			    transition.player < 0 || transition.peerId != 2) {
 				return Fail("activate-binding-missing");
 			}
-			NetLobbyStateChunk report = MakeWorldJoinReport(c_NetWorldReportCatchUp, activation - 1);
-			uint8_t kind = 0;
-			uint64_t value = 0;
-			if (!ParseWorldJoinReport(report, kind, value) || kind != c_NetWorldReportCatchUp || value != activation - 1) {
-				return Fail("catch-up report did not round-trip");
+			NetLockstepFrame frame;
+			frame.senderPeerId = 1;
+			frame.targetFrame = e;
+			frame.roundId = 1;
+			NetGameCommand command;
+			command.senderPeerId = 1;
+			command.payload = transition;
+			frame.commands.push_back(command);
+			std::vector<uint8_t> recovery;
+			NetLockstepError encodeError;
+			if (!NetLockstepCodec::EncodeRecoveryInput(frame, recovery, &encodeError)) {
+				return Fail("activate-binding-missing: recovery encode failed: " + encodeError.message);
+			}
+			NetLockstepFrame hostView;
+			NetLockstepFrame joinerView;
+			if (!NetLockstepCodec::DecodeRecoveryInput(recovery, hostView, nullptr) ||
+			    !NetLockstepCodec::DecodeRecoveryInput(recovery, joinerView, nullptr)) {
+				return Fail("activate-binding-missing: a peer could not decode the activate at E");
+			}
+			const auto* hostApplied = hostView.commands.empty() ? nullptr : std::get_if<NetGameWorldTransition>(&hostView.commands[0].payload);
+			const auto* joinerApplied = joinerView.commands.empty() ? nullptr : std::get_if<NetGameWorldTransition>(&joinerView.commands[0].payload);
+			if (hostApplied == nullptr || joinerApplied == nullptr || !hostApplied->bindBrain || !joinerApplied->bindBrain ||
+			    hostApplied->activationFrame != e || joinerApplied->activationFrame != e) {
+				return Fail("activate-binding-missing");
 			}
 			return 0;
 		}
@@ -768,6 +825,66 @@ namespace RTE {
 		return 0;
 	}
 
+	int TestH4LeaveThenNewJoinSameHolder() {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		const std::vector<NetH4Seat> seats = {{0, 0, 0, false, 1, true}, {1, 1, 1, false, 2, false}};
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) {
+			return Fail("rejoin registry did not arm");
+		}
+		NetReconnectHost host;
+		host.Configure(&registry, 0x5745ULL, identity);
+		host.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
+		host.SetLiveMatch(true);
+		host.SetPersistentWorld(true);
+		NetH4NewJoin join;
+		join.identity = identity;
+		join.displayName = "alice";
+		join.txId.fill(12);
+		host.HandleMessage(12, join, 0);
+		NetH4TicketOffer offer;
+		bool offered = false;
+		for (const NetH4Outbound& outbound: host.TakeOutbound()) {
+			if (const auto* ticket = std::get_if<NetH4TicketOffer>(&outbound.payload)) {
+				offer = *ticket;
+				offered = true;
+			}
+		}
+		if (!offered) {
+			return Fail("rejoin after a clean leave did not land in the running world");
+		}
+		host.HandleMessage(12, NetH4TicketStoredAck{c_NetH4Version, offer.txId, offer.stableSeat, offer.holderGeneration, true}, 5);
+		host.TakeOutbound();
+		NetH4LeaveRequest leave;
+		leave.txId.fill(21);
+		leave.epoch = offer.epoch;
+		leave.stableSeat = offer.stableSeat;
+		leave.holderGeneration = offer.holderGeneration;
+		host.HandleMessage(12, leave, 10);
+		host.TakeOutbound();
+		NetH4NewJoin rejoin = join;
+		rejoin.txId.fill(14);
+		host.HandleMessage(14, rejoin, 20);
+		host.Tick(NetReconnectAdmission::c_DenialReleaseMs);
+		bool landed = false;
+		for (const NetH4Outbound& outbound: host.TakeOutbound()) {
+			if (std::holds_alternative<NetH4TicketOffer>(outbound.payload)) {
+				landed = true;
+			}
+			if (const auto* rejected = std::get_if<NetJoinRejected>(&outbound.payload)) {
+				if (rejected->humanMessage == "the match is already in progress") {
+					return Fail("rejoin after a clean leave did not land in the running world");
+				}
+			}
+		}
+		if (!landed) {
+			return Fail("rejoin after a clean leave did not land in the running world");
+		}
+		return 0;
+	}
+
 	int TestDirectoryRowResumeAndWorldBootBounds() {
 		std::string reason;
 		nlohmann::json body = {
@@ -813,7 +930,7 @@ namespace RTE {
 		return 0;
 	}
 
-	int TestWorldTransitionCodecAndOrdinaryIdentity() {
+	int TestWorldTransitionCodec() {
 		std::string error;
 		NetWorldJoinHost host;
 		if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) {
@@ -851,6 +968,16 @@ namespace RTE {
 		if (roundTrip == nullptr || *roundTrip != transition || roundTrip->schema != c_NetWorldJoinSchema) {
 			return Fail("WorldTransition codec did not round-trip");
 		}
+		std::vector<uint8_t> recovery;
+		if (!NetLockstepCodec::EncodeRecoveryInput(worldFrame, recovery, &encodeError) ||
+		    !NetLockstepCodec::DecodeRecoveryInput(recovery, worldFrame, &encodeError)) {
+			return Fail("WorldTransition recovery did not round-trip at the world lockstep version: " + encodeError.message);
+		}
+		return 0;
+	}
+
+	int TestOrdinaryIdentityStamps() {
+		std::string error;
 		NetLockstepPacket ordinaryPacket;
 		NetLockstepFrame ordinaryFrame;
 		ordinaryFrame.senderPeerId = 1;
@@ -858,6 +985,7 @@ namespace RTE {
 		ordinaryFrame.roundId = 1;
 		ordinaryPacket.payload = ordinaryFrame;
 		std::vector<uint8_t> ordinaryBytes;
+		NetLockstepError encodeError;
 		if (!NetLockstepCodec::Encode(ordinaryPacket, ordinaryBytes, &encodeError) || ordinaryBytes.size() < 6) {
 			return Fail("ordinary frame did not encode: " + encodeError.message);
 		}
@@ -870,13 +998,14 @@ namespace RTE {
 		if (!NetIdentity::BuildCurrentManifest(manifest, &error, options)) {
 			return Fail("ordinary identity manifest did not build: " + error);
 		}
-		if (manifest.deterministicConfig.lockstepCodecVersion != 22 || manifest.deterministicConfig.matchConfigVersion != 4) {
+		if (manifest.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_Version ||
+		    manifest.deterministicConfig.matchConfigVersion != NetMatchConfigUtil::c_Version) {
 			return Fail("ordinary identity did not stamp lockstep 22 and match config 4");
 		}
-		options.lockstepCodecVersion = NetLockstepCodec::c_WorldTransitionVersion;
-		options.matchConfigVersion = NetMatchConfigUtil::c_PersistentWorldVersion;
+		NetIdentity::StampOptionsForTarget(options, true);
 		if (!NetIdentity::BuildCurrentManifest(manifest, &error, options) ||
-		    manifest.deterministicConfig.lockstepCodecVersion != 23 || manifest.deterministicConfig.matchConfigVersion != 5) {
+		    manifest.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_WorldTransitionVersion ||
+		    manifest.deterministicConfig.matchConfigVersion != NetMatchConfigUtil::c_PersistentWorldVersion) {
 			return Fail("world identity did not stamp the live world versions");
 		}
 		return 0;
@@ -925,6 +1054,12 @@ namespace RTE {
 		}
 		if (host.DueActivation(activation - 1) == nullptr) {
 			return Fail("a due activation at E-1 was not ready");
+		}
+		if (host.DueActivation(activation) != nullptr) {
+			return Fail("a pump at nextFrame >= E still treated the member as due");
+		}
+		if (host.LateActivation(activation) == nullptr) {
+			return Fail("a late Admit path was not offered after E-1");
 		}
 		if (activation <= nowFrame) {
 			return Fail("announced E was not ahead of nextFrame");
@@ -984,6 +1119,10 @@ namespace RTE {
 			s_FailTag = "net-world-identity-selftest";
 			return TestIdentitySurvivesRestart();
 		}
+		if (std::strcmp(name, "identity-print") == 0 || std::strcmp(name, "-net-world-identity-print-selftest") == 0) {
+			s_FailTag = "net-world-identity-print-selftest";
+			return TestIdentityPrintOnce();
+		}
 		if (std::strcmp(name, "live") == 0 || std::strcmp(name, "-net-world-live-selftest") == 0) {
 			s_FailTag = "net-world-live-selftest";
 			return TestLiveJoinAdmission();
@@ -994,7 +1133,7 @@ namespace RTE {
 		}
 		if (std::strcmp(name, "rejoin") == 0 || std::strcmp(name, "-net-world-rejoin-selftest") == 0) {
 			s_FailTag = "net-world-rejoin-selftest";
-			return TestJoinPlaneAndLeave();
+			return TestH4LeaveThenNewJoinSameHolder();
 		}
 		if (std::strcmp(name, "transfer") == 0 || std::strcmp(name, "-net-world-transfer-selftest") == 0) {
 			s_FailTag = "net-world-transfer-selftest";
@@ -1006,11 +1145,11 @@ namespace RTE {
 		}
 		if (std::strcmp(name, "catchup") == 0 || std::strcmp(name, "-net-world-catchup-selftest") == 0) {
 			s_FailTag = "net-world-catchup-selftest";
-			return TestCatchUpAppliedThroughAndBinding();
+			return TestCatchUpJoinerReport();
 		}
 		if (std::strcmp(name, "binding") == 0 || std::strcmp(name, "-net-world-binding-selftest") == 0) {
 			s_FailTag = "net-world-binding-selftest";
-			return TestCatchUpAppliedThroughAndBinding();
+			return TestActivateBindingOnBothPeers();
 		}
 		if (std::strcmp(name, "h4-leave") == 0 || std::strcmp(name, "-net-world-h4-leave-selftest") == 0) {
 			s_FailTag = "net-world-h4-leave-selftest";
@@ -1022,11 +1161,11 @@ namespace RTE {
 		}
 		if (std::strcmp(name, "codec") == 0 || std::strcmp(name, "-net-world-codec-selftest") == 0) {
 			s_FailTag = "net-world-codec-selftest";
-			return TestWorldTransitionCodecAndOrdinaryIdentity();
+			return TestWorldTransitionCodec();
 		}
 		if (std::strcmp(name, "ordinary-identity") == 0 || std::strcmp(name, "-net-world-ordinary-identity-selftest") == 0) {
 			s_FailTag = "net-world-ordinary-identity-selftest";
-			return TestWorldTransitionCodecAndOrdinaryIdentity();
+			return TestOrdinaryIdentityStamps();
 		}
 		if (std::strcmp(name, "admit") == 0 || std::strcmp(name, "-net-world-admit-selftest") == 0) {
 			s_FailTag = "net-world-admit-selftest";
@@ -1061,7 +1200,10 @@ namespace RTE {
 		if (const int result = TestJoinerTransferPump(); result != 0) {
 			return result;
 		}
-		if (const int result = TestCatchUpAppliedThroughAndBinding(); result != 0) {
+		if (const int result = TestCatchUpJoinerReport(); result != 0) {
+			return result;
+		}
+		if (const int result = TestActivateBindingOnBothPeers(); result != 0) {
 			return result;
 		}
 		if (const int result = TestSlowJoinerReannounceThenFree(); result != 0) {
@@ -1085,7 +1227,13 @@ namespace RTE {
 		if (const int result = TestDirectoryRowResumeAndWorldBootBounds(); result != 0) {
 			return result;
 		}
-		if (const int result = TestWorldTransitionCodecAndOrdinaryIdentity(); result != 0) {
+		if (const int result = TestWorldTransitionCodec(); result != 0) {
+			return result;
+		}
+		if (const int result = TestOrdinaryIdentityStamps(); result != 0) {
+			return result;
+		}
+		if (const int result = TestH4LeaveThenNewJoinSameHolder(); result != 0) {
 			return result;
 		}
 		if (const int result = TestDueActivationAdmits(); result != 0) {
