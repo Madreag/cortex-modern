@@ -178,7 +178,8 @@ def pause_probe(who, root):
     steps = [
         {"op": "wait", "sim_at_least": 150},
         {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
-        {"op": "wait", "screen": "Pause"}, running, *pause_rows(), menu_step("dump_host_options"),
+        {"op": "wait", "screen": "Pause"}, running, *pause_rows(),
+        menu_step("assert_label ButtonResume back to game"), menu_step("dump_host_options"),
         menu_step("activate ButtonSettings"), {"op": "wait", "screen": "PauseSettings"},
         menu_step("assert_visible CollectionBoxGameplaySettings 1"),
         *row_checks("TabGameplaySettings", "CollectionBoxSettingsBase"), menu_step("dump_player_options"),
@@ -747,6 +748,8 @@ def run_case(options, case, root, failing=None):
                     drawn = {control["name"] for control in capture["controls"]}
                     assert set(MATCH_ROWS) <= drawn, (who, sorted(drawn))
                     assert not set(SINGLE_PLAYER_ROWS) & drawn, (who, sorted(drawn))
+                    resume = next(control for control in capture["controls"] if control["name"] == "ButtonResume")
+                    assert "back to game" in resume["text"].lower(), resume["text"]
             confirm = [capture for capture in images if capture["screen"] == "PauseLeaveConfirm"]
             assert len(confirm) == 1 and confirm[0]["peer"] == "client", confirm
             drawn = {control["name"] for control in confirm[0]["controls"]}
