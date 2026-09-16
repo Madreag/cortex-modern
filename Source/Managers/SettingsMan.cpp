@@ -12,6 +12,7 @@
 #include "NetMatchConfig.h"
 #include "System.h"
 
+#include <cctype>
 #include <charconv>
 #include <cstdlib>
 #include <filesystem>
@@ -178,6 +179,7 @@ void SettingsMan::Clear() {
 	m_NetworkMatchStatusMode = NetworkMatchStatusMode::Auto;
 	m_NetworkChatDefaultScope = NetworkChatDefaultScope::All;
 	m_NetworkChatTextSize = NetworkChatTextSize::Small;
+	m_NetworkChatKey = "T";
 	m_NetworkHostDelayPolicy = NetworkHostDelayPolicy::Auto;
 	m_NetworkHostVisibility = NetworkHostVisibility::LAN;
 	m_NetworkToastsEnabled = m_NetworkChatVisible = m_NetworkChatNotify = m_NetworkAutoReconnect = m_NetworkOfferStoredRejoin = m_NetworkRecordReplays = m_NetworkHostAutoRepair = true;
@@ -365,6 +367,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("NetworkChatNotify", { reader >> m_NetworkChatNotify; });
 	MatchProperty("NetworkChatSound", { reader >> m_NetworkChatSound; });
 	MatchProperty("NetworkChatTextSize", { m_NetworkChatTextSize = ParseChatTextSize(reader.ReadPropValue()); });
+	MatchProperty("NetworkChatKey", { SetNetworkChatKey(reader.ReadPropValue()); });
 	MatchProperty("NetworkAutoReconnect", { reader >> m_NetworkAutoReconnect; });
 	MatchProperty("NetworkOfferStoredRejoin", { reader >> m_NetworkOfferStoredRejoin; });
 	MatchProperty("NetworkDiagnosticsDirectory", { SetNetworkDiagnosticsDirectory(reader.ReadPropValue()); });
@@ -633,6 +636,22 @@ void SettingsMan::SetNetworkHostIdleWaitMinutes(int minutes) {
 	if (minutes >= 0 && minutes <= 60) m_NetworkHostIdleWaitMinutes = minutes;
 }
 
+void SettingsMan::SetNetworkChatKey(const std::string& key) {
+	std::string normalized;
+	normalized.reserve(key.size());
+	for (unsigned char c: key) {
+		if (c <= 32) continue;
+		normalized.push_back(static_cast<char>(std::toupper(c)));
+	}
+	if (normalized == "ENTER" || normalized == "RETURN") {
+		m_NetworkChatKey = "ENTER";
+		return;
+	}
+	if (normalized.size() == 1 && normalized[0] >= 'A' && normalized[0] <= 'Z') {
+		m_NetworkChatKey = normalized;
+	}
+}
+
 void SettingsMan::WriteNetworkPreferences(Writer& writer) const {
 	writer.NewPropertyWithValue("NetworkDisplayName", m_NetworkDisplayName);
 	writer.NewPropertyWithValue("NetworkMatchStatusMode", MatchStatusText(m_NetworkMatchStatusMode));
@@ -642,6 +661,7 @@ void SettingsMan::WriteNetworkPreferences(Writer& writer) const {
 	writer.NewPropertyWithValue("NetworkChatNotify", m_NetworkChatNotify);
 	writer.NewPropertyWithValue("NetworkChatSound", m_NetworkChatSound);
 	writer.NewPropertyWithValue("NetworkChatTextSize", ChatSizeText(m_NetworkChatTextSize));
+	writer.NewPropertyWithValue("NetworkChatKey", m_NetworkChatKey);
 	writer.NewPropertyWithValue("NetworkAutoReconnect", m_NetworkAutoReconnect);
 	writer.NewPropertyWithValue("NetworkOfferStoredRejoin", m_NetworkOfferStoredRejoin);
 	writer.NewPropertyWithValue("NetworkDiagnosticsDirectory", m_NetworkDiagnosticsDirectory);
@@ -663,6 +683,7 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	settings.SetNetworkMatchStatusMode(NetworkMatchStatusMode::Always);
 	settings.SetNetworkChatDefaultScope(NetworkChatDefaultScope::Team);
 	settings.SetNetworkChatTextSize(NetworkChatTextSize::Large);
+	settings.SetNetworkChatKey("Y");
 	settings.SetNetworkDiagnosticsDirectory("D:/tmp/telemetry-alt");
 	settings.SetNetworkHostDelayPolicy(NetworkHostDelayPolicy::Fixed);
 	settings.SetNetworkHostVisibility(NetworkHostVisibility::Unlisted);
@@ -712,7 +733,7 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 		}
 		settings.Create(reader);
 	}
-	check("roundtrip", settings.GetNetworkDisplayName() == "AlphaPilot" && settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Always && !settings.GetNetworkToastsEnabled() && !settings.GetNetworkChatVisible() && settings.GetNetworkChatDefaultScope() == NetworkChatDefaultScope::Team && !settings.GetNetworkChatNotify() && settings.GetNetworkChatSound() && settings.GetNetworkChatTextSize() == NetworkChatTextSize::Large && !settings.GetNetworkAutoReconnect() && !settings.GetNetworkOfferStoredRejoin() && settings.GetNetworkDiagnosticsDirectory() == "D:/tmp/telemetry-alt" && !settings.GetNetworkRecordReplays() && settings.GetNetworkHostDelayPolicy() == NetworkHostDelayPolicy::Fixed && !settings.GetNetworkHostAutoRepair() && settings.GetNetworkHostIdleWaitMinutes() == 0 && settings.GetNetworkHostVisibility() == NetworkHostVisibility::Unlisted);
+	check("roundtrip", settings.GetNetworkDisplayName() == "AlphaPilot" && settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Always && !settings.GetNetworkToastsEnabled() && !settings.GetNetworkChatVisible() && settings.GetNetworkChatDefaultScope() == NetworkChatDefaultScope::Team && !settings.GetNetworkChatNotify() && settings.GetNetworkChatSound() && settings.GetNetworkChatTextSize() == NetworkChatTextSize::Large && settings.GetNetworkChatKey() == "Y" && !settings.GetNetworkAutoReconnect() && !settings.GetNetworkOfferStoredRejoin() && settings.GetNetworkDiagnosticsDirectory() == "D:/tmp/telemetry-alt" && !settings.GetNetworkRecordReplays() && settings.GetNetworkHostDelayPolicy() == NetworkHostDelayPolicy::Fixed && !settings.GetNetworkHostAutoRepair() && settings.GetNetworkHostIdleWaitMinutes() == 0 && settings.GetNetworkHostVisibility() == NetworkHostVisibility::Unlisted);
 	if (failures != 0) {
 		return 1;
 	}

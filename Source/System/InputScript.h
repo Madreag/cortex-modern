@@ -11,8 +11,8 @@ namespace RTE {
 	/// gameplay fixtures drive the real controller and wire paths tick by tick.
 	///
 	/// Script lines: `[player=N] <from_tick> <to_tick> ACTION [ACTION...]`, ticks inclusive, where an ACTION is an
-	/// InputElements name without the INPUT_ prefix (L_LEFT, FIRE, WEAPON_PICKUP, ...), `AIM=x,y` for the analog aim
-	/// vector, or `MOUSE=dx,dy` for a per-tick mouse movement. `#` starts a comment.
+	/// InputElements name without the INPUT_ prefix (L_LEFT, FIRE, WEAPON_PICKUP, ...), `CHAT` for the in-match
+	/// chat entry, `AIM=x,y` for the analog aim vector, or `MOUSE=dx,dy` for a per-tick mouse movement. `#` starts a comment.
 	class InputScript {
 	public:
 		static bool Load(const std::string& path, std::string* error = nullptr);
@@ -31,6 +31,8 @@ namespace RTE {
 
 		static int ElementFromName(const std::string& name);
 		static const char* ElementName(int element);
+		/// Opens the in-match chat entry; not an InputElements value and never a Controller bit.
+		static constexpr int c_ChatAction = 1000;
 
 	private:
 		static bool s_Active;

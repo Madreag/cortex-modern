@@ -17,6 +17,7 @@
 #include "NetLobbySnapshot.h"
 #include "NetMatchService.h"
 #include "NetModerationGUI.h"
+#include "NetProtocol.h"
 #include "System.h"
 #include "TimerMan.h"
 #include "UInputMan.h"
@@ -199,7 +200,10 @@ namespace {
 			}
 		}
 		observed["net_ui"] = {{"status", panel ? OverlayRect(panel->GetStatusRect()) : Rect(0, 0, 0, 0, false)},
-		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)}, {"seats_panel", seats}};
+		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)},
+		    {"chat", panel ? OverlayRect(panel->GetChatRect()) : Rect(0, 0, 0, 0, false)},
+		    {"chat_entry_open", panel && panel->IsChatEntryOpen()},
+		    {"seats_panel", seats}};
 		return observed;
 	}
 
@@ -324,8 +328,13 @@ namespace {
 			if (step.contains("panel_open") && observed["panel_open"] != step["panel_open"]) return false;
 			if (step.contains("control")) {
 				observed["control"] = ReadControl(Control(step));
-				for (auto it = step.at("equals").begin(); it != step["equals"].end(); ++it) {
-					if (observed["control"].at(it.key()) != it.value()) return false;
+				if (step.contains("equals")) {
+					for (auto it = step.at("equals").begin(); it != step["equals"].end(); ++it) {
+						if (observed["control"].at(it.key()) != it.value()) return false;
+					}
+				}
+				if (step.contains("text_contains")) {
+					if (observed["control"].at("text").get<std::string>().find(step["text_contains"].get<std::string>()) == std::string::npos) return false;
 				}
 			}
 		} else if (op == "key_down" || op == "key_up") {
@@ -457,6 +466,10 @@ namespace {
 				Require(seat->at("screen_text").get<std::string>().find(step["screen_text_contains"].get<std::string>()) != std::string::npos,
 				    "the seat's screen does not carry the expected message");
 			}
+		} else if (op == "send_chat") {
+			const std::string text = step.at("text").get<std::string>();
+			const uint8_t scope = step.value("scope", std::string("all")) == "team" ? c_NetChatScopeTeam : c_NetChatScopeAll;
+			Require(g_NetMatchService.SendChat(scope, text), "SendChat refused the probe line");
 		} else if (op == "assert_net_ui_clear") {
 			// The network overlay owes the stock setup editor its own surfaces: the picker and the seat's
 			// message band. In a running match ("match") the open seats panel is the surface it owes instead.
@@ -475,7 +488,7 @@ namespace {
 			}
 			const BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
 			// No overlay rectangle ever leaves the window, and a visible one keeps a positive area.
-			for (const std::string& element: {"status", "toasts", "seats_panel"}) {
+			for (const std::string& element: {"status", "toasts", "seats_panel", "chat"}) {
 				const Json& r = observed["net_ui"].at(element);
 				if (!r.at("visible").get<bool>()) continue;
 				Require(r["w"].get<int>() > 0 && r["h"].get<int>() > 0,
@@ -486,10 +499,28 @@ namespace {
 				    "the network " + element + " leaves the window");
 			}
 			const Json& seatsPanel = observed["net_ui"].at("seats_panel");
+			if (step.value("chat_layout", false)) {
+				Require(observed["net_ui"]["chat"].at("visible") == true, "the match chat band is not on screen");
+				const std::string occupiers[] = {"status", "toasts", "seats_panel", "chat"};
+				for (size_t i = 0; i < 4; ++i) {
+					for (size_t j = i + 1; j < 4; ++j) {
+						Require(!Overlaps(observed["net_ui"].at(occupiers[i]), observed["net_ui"].at(occupiers[j])),
+						    "the network " + occupiers[i] + " overlaps " + occupiers[j]);
+					}
+				}
+				for (const auto& other: observed["editor_seats"]) {
+					for (const std::string& area: {"picker", "screen_text_rect", "text_band"}) {
+						if (!other.contains(area)) continue;
+						Require(!Overlaps(observed["net_ui"].at("chat"), other.at(area)),
+						    "the match chat band overlaps the editor's " + area);
+					}
+				}
+				return true;
+			}
 			if (match) {
 				Require(seatsPanel.at("visible") == true, "the seats panel is not open");
 				Require(observed["net_ui"]["toasts"].at("visible") == true, "no toast is live for the reserved row");
-				for (const std::string& element: {"status", "toasts"}) {
+				for (const std::string& element: {"status", "toasts", "chat"}) {
 					Require(!Overlaps(observed["net_ui"].at(element), seatsPanel),
 					    "the network " + element + " overlaps the seats panel");
 				}
@@ -497,7 +528,7 @@ namespace {
 					if (!other.contains("text_band") || !other.at("text_band").value("visible", false)) continue;
 					const Json& band = other.at("text_band");
 					Require(!Overlaps(seatsPanel, band), "the seats panel overlaps a seat message band");
-					for (const std::string& element: {"status", "toasts"}) {
+					for (const std::string& element: {"status", "toasts", "chat"}) {
 						Require(!Overlaps(observed["net_ui"].at(element), band),
 						    "the network " + element + " overlaps a seat message band");
 					}
@@ -517,7 +548,7 @@ namespace {
 				    band["y"].get<int>() + band["h"].get<int>() <= offset.GetRoundIntY() + g_FrameMan.GetPlayerScreenHeight(),
 				    "the seat's message is drawn off its own screen");
 			}
-			for (const std::string& element: {"status", "toasts", "seats_panel"}) {
+			for (const std::string& element: {"status", "toasts", "seats_panel", "chat"}) {
 				if (element == "seats_panel" && !seatsPanel.at("visible").get<bool>()) continue;
 				if (element != "seats_panel") {
 					// An open seats panel owns its rows too - the overlay lifts above it rather than draw over it.

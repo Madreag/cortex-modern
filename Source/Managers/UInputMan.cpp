@@ -1716,6 +1716,12 @@ bool UInputMan::RunScriptedInputEdgeSelfTest() {
 	g_TimerMan.RewindSimTo(20, 0);
 	const bool firstRead = GetInputElementState(Players::PlayerOne, InputElements::INPUT_START, InputState::Pressed);
 	check("press_survives_a_second_read_in_its_frame", firstRead && GetInputElementState(Players::PlayerOne, InputElements::INPUT_START, InputState::Pressed));
+	{
+		std::ofstream script(path);
+		script << "player=0 1 2 CHAT\n";
+	}
+	check("chat_token", InputScript::Load(path.string(), &error) && InputScript::ElementFromName("CHAT") == InputScript::c_ChatAction &&
+	    InputScript::HeldAt(Players::PlayerOne, InputScript::c_ChatAction, 1) && !InputScript::HeldAt(Players::PlayerOne, InputScript::c_ChatAction, 3));
 	std::error_code removeError;
 	std::filesystem::remove(path, removeError);
 	std::cout << "[input-edge-selftest] " << (passed ? "PASS " : "FAIL ") << "complete" << std::endl;
