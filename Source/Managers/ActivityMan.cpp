@@ -969,9 +969,14 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	m_ReportedAutosaveKeys.clear();
 	g_FrameMan.ClearScreenText(0);
 
+	auto priorActivity = std::move(m_Activity);
+	m_Activity.reset(new GAScripted());
+	m_Activity->SetActivityState(Activity::Running);
+
 	LuaStateWrapper& state = g_LuaMan.GetMasterScriptState();
 	const char* plant =
 	    "local transactionOwner = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\");"
+	    "MovableMan:AddParticle(transactionOwner);"
 	    "local fn = function() return transactionOwner end;"
 	    "local function Update() return fn() end;"
 	    "_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"] = { Update = Update };"
@@ -1016,6 +1021,7 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 
 	state.RunScriptString("_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"] = nil; _F38SaveRefusalUID = nil;");
 	g_LuaMan.CollectGarbageForCheckpoint();
+	m_Activity = std::move(priorActivity);
 
 	std::cout << Tag << (failures == 0 ? " PASS" : " FAIL") << std::endl;
 	return failures == 0;
