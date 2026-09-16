@@ -718,8 +718,12 @@ namespace RTE {
 
 	void ScenarioRunner::DrawNetUiToasts() {
 		const uint64_t nowMs = NetLockstepNowMs();
-		while (!s_NetUiToasts.empty() && s_NetUiToasts.front().shownAtMs != 0 && nowMs >= s_NetUiToasts.front().shownAtMs + c_NetUiToastMs) {
-			s_NetUiToasts.pop_front();
+		for (auto it = s_NetUiToasts.begin(); it != s_NetUiToasts.end(); ) {
+			if (it->shownAtMs != 0 && nowMs >= it->shownAtMs + c_NetUiToastMs) {
+				it = s_NetUiToasts.erase(it);
+			} else {
+				++it;
+			}
 		}
 		if (auto* panel = g_MenuMan.GetNetworkPanel()) panel->DrawMatchToasts();
 	}
@@ -750,6 +754,22 @@ namespace RTE {
 				toast.shownAtMs = nowMs;
 			}
 			++visibleIndex;
+		}
+		if (first == 0) {
+			return;
+		}
+		visibleIndex = 0;
+		for (auto it = s_NetUiToasts.begin(); it != s_NetUiToasts.end(); ) {
+			if (it->shownAtMs != 0 && nowMs >= it->shownAtMs + c_NetUiToastMs) {
+				++it;
+				continue;
+			}
+			if (visibleIndex < first) {
+				it = s_NetUiToasts.erase(it);
+				++visibleIndex;
+				continue;
+			}
+			break;
 		}
 	}
 
