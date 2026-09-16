@@ -673,6 +673,8 @@ def probe_shot_oracle(path, size, expected_visible, panel_rect, banners=False):
               "expected_visible": expected_visible, "widget_paint": list(box) if box else None,
               "frame": found["reason"], "panel_rect": list(panel_rect) if panel_rect else None, "pass": True}
     if expected_visible is None:
+        result["pass"] = False
+        result["reason"] = "missing widget expectation"
         result["checks"] = {}
         return result
     if not expected_visible:
