@@ -779,10 +779,10 @@ class RuntimeProjectionTests(unittest.TestCase):
         self.assert_field(game, ("objectives", 0, "scene_pos", 0), False)
 
     def test_peer_intensity_and_objectives_match_through_the_comparer(self):
-        host_activity, _, obj = self.shared_intensity_activity("-0.4", (100.0, 200.0))
-        client_activity, _, _ = self.shared_intensity_activity("-0.4", (100.0, 200.0))
+        host_activity, _, obj = self.shared_intensity_activity("-0.1", (320.0, 200.0))
+        client_activity, _, _ = self.shared_intensity_activity("-0.1", (320.0, 200.0))
         self.assertEqual(runtime.project(host_activity, True), runtime.project(client_activity, True))
-        other_activity, _, _ = self.shared_intensity_activity("-0.1", (100.0, 200.0))
+        other_activity, _, _ = self.shared_intensity_activity("-0.42", (320.0, 200.0))
         self.assertNotEqual(runtime.project(host_activity, True), runtime.project(other_activity, True))
         host_game = self.shared_intensity_game(obj)
         client_game = self.shared_intensity_game(obj)

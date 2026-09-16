@@ -16,7 +16,9 @@ import sys
 REPO = Path(__file__).resolve().parents[1]
 FIXTURE = REPO / "tools/fixtures/intensity_objectives.lua"
 PRESET = "Determinism Intensity Objectives"
-SAVED = re.compile(r"\[intensity-objectives\] saved=([^\s]+)")
+SAVED = re.compile(
+    r"\[intensity-objectives\] saved=([^\s]+) head=([-\d.]+),([-\d.]+) cam=([-\d.]+),([-\d.]+)"
+)
 INDEX = (
     "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n"
     "\tAddActivity = GAScripted\n\t\tPresetName = " + PRESET + "\n"
@@ -41,9 +43,16 @@ def peer_log(run_dir: Path) -> str:
     return text
 
 
-def last_saved(text: str) -> str | None:
+def last_row(text: str):
     matches = SAVED.findall(text)
-    return matches[-1] if matches else None
+    if not matches:
+        return None
+    saved, head_x, head_y, cam_x, cam_y = matches[-1]
+    return {
+        "saved": saved,
+        "head": (float(head_x), float(head_y)),
+        "cam": (float(cam_x), float(cam_y)),
+    }
 
 
 def stage_module(runtime: Path) -> None:
@@ -53,29 +62,36 @@ def stage_module(runtime: Path) -> None:
     (module / "IntensityObjectives.lua").write_bytes(FIXTURE.read_bytes())
 
 
-def compare_peers(values: dict[str, str]):
+def compare_peers(rows: dict[str, dict]):
     sys.path.insert(0, str(REPO / "tools"))
     import snapshot_runtime as runtime
     from test_compare_snapshots import RuntimeProjectionTests
 
     helper = RuntimeProjectionTests()
-    host = helper.shared_intensity_activity(values["host"], (0.0, 0.0))[0]
-    client = helper.shared_intensity_activity(values["client"], (0.0, 0.0))[0]
+    host = helper.shared_intensity_activity(rows["host"]["saved"], rows["host"]["head"])[0]
+    client = helper.shared_intensity_activity(rows["client"]["saved"], rows["client"]["head"])[0]
     return runtime.project(host, True) == runtime.project(client, True)
 
 
 def inspect(root: Path, peers: tuple[str, ...]) -> dict:
     checks = {}
-    details = {"saved": {}}
-    values = {}
+    details = {"saved": {}, "head": {}, "cam": {}}
+    rows = {}
     for who in peers:
-        saved = last_saved(peer_log(root / who))
-        details["saved"][who] = saved
-        checks[f"{who}_saved"] = saved is not None
-        values[who] = saved or ""
-    checks["saved_equal"] = len(set(values.values())) == 1 and all(values.values())
-    if all(values.values()):
-        checks["comparer_shared"] = compare_peers(values)
+        row = last_row(peer_log(root / who))
+        details["saved"][who] = None if row is None else row["saved"]
+        details["head"][who] = None if row is None else row["head"]
+        details["cam"][who] = None if row is None else row["cam"]
+        checks[f"{who}_saved"] = row is not None and row["saved"] not in ("", "-0.5")
+        if row is not None:
+            rows[who] = row
+    host = rows.get("host")
+    client = rows.get("client")
+    checks["cameras_differ"] = bool(host and client and host["cam"] != client["cam"])
+    checks["saved_equal"] = bool(host and client and host["saved"] == client["saved"])
+    checks["heads_equal"] = bool(host and client and host["head"] == client["head"])
+    if host and client:
+        checks["comparer_shared"] = compare_peers({"host": host, "client": client})
     else:
         checks["comparer_shared"] = False
     return {"pass": all(checks.values()), "checks": checks, "details": details}
@@ -106,7 +122,7 @@ def main():
                      "-net-autosave-seconds", "0",
                      "-net-match-report", str(root / f"{who}_report.json")]
             flags += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
-            env = {"CCCP_HEADLESS": "1"}
+            env = {"CCCP_HEADLESS": "1", "CCCP_INTENSITY_CAMERA": who}
             run = make_run(options.repo, flags, root / who, timeout=options.timeout, env=env)
             stage_module(Path(run.cwd))
             runs[who] = run

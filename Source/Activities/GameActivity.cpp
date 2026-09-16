@@ -4657,26 +4657,39 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			fixture->m_Team[0] = 0;
 			fixture->m_PlayerScreen[0] = 0;
 			fixture->m_Brain[0] = actor;
-			g_CameraMan.SetOffset(Vector(10, 20), 0);
+			actor->SetHealth(actor->GetHealth() - 40.0F);
 			const Vector head = actor->GetAboveHeadPos();
-			const int ran = lua.RunScriptString(R"lua(
-				local calc = require("Activities/Utility/GameIntensityCalculator")
-				local activity = ToGameActivity(ActivityMan:GetActivity())
-				calc:Initialize(activity, true, 0.2, 0.01)
-				calc:UpdateGameIntensityCalculator()
-				activity:SaveString("GameIntensityCalculatorMainTable", tostring(calc.saveTable.CurrentIntensity))
-				local brain = activity:GetPlayerBrain(Activity.PLAYER_1)
-				if brain then
-					activity:AddObjectivePoint("Protect!", brain.AboveHeadPos, 0, GameActivity.ARROWDOWN)
-				end
-			)lua");
-			const std::string savedIntensity = fixture->LoadString("GameIntensityCalculatorMainTable");
-			std::cout << "[net-local-intensity] ran=" << ran << " saved=" << savedIntensity
-			          << " cam=" << g_CameraMan.GetOffset(0).m_X << "," << g_CameraMan.GetOffset(0).m_Y
+			const auto runAtCamera = [&](const Vector& offset) {
+				g_CameraMan.SetOffset(offset, 0);
+				return lua.RunScriptString(R"lua(
+					local calc = require("Activities/Utility/GameIntensityCalculator")
+					local activity = ToGameActivity(ActivityMan:GetActivity())
+					calc:Initialize(activity, true, 0.2, 0.01)
+					calc:UpdateGameIntensityCalculator()
+					activity:SaveString("GameIntensityCalculatorMainTable", tostring(calc.saveTable.CurrentIntensity))
+					activity:ClearObjectivePoints()
+					local brain = activity:GetPlayerBrain(Activity.PLAYER_1)
+					if brain then
+						activity:AddObjectivePoint("Protect!", brain.AboveHeadPos, 0, GameActivity.ARROWDOWN)
+					end
+				)lua");
+			};
+			const int ranHost = runAtCamera(Vector(0, 0));
+			const std::string hostIntensity = fixture->LoadString("GameIntensityCalculatorMainTable");
+			const int ranClient = runAtCamera(Vector(8000, 8000));
+			const std::string clientIntensity = fixture->LoadString("GameIntensityCalculatorMainTable");
+			std::cout << "[net-local-intensity] ran=" << ranHost << "/" << ranClient
+			          << " host=" << hostIntensity << " client=" << clientIntensity
 			          << " head=" << head.m_X << "," << head.m_Y << std::endl;
-			check("shared_intensity_calculator_ran", ran == 0 && !savedIntensity.empty());
-			check("shared_intensity_is_saved", savedIntensity.find("Camera") == std::string::npos);
-			check("shared_objective_uses_above_head", !fixture->m_Objectives.empty() && fixture->m_Objectives.front().m_ScenePos == head);
+			check("shared_intensity_calculator_ran", ranHost == 0 && ranClient == 0 && !hostIntensity.empty() && !clientIntensity.empty(),
+				hostIntensity + "/" + clientIntensity, "both");
+			check("shared_intensity_uses_damage_box", hostIntensity != "-0.5" && clientIntensity != "-0.5",
+				hostIntensity + "/" + clientIntensity, "not -0.5");
+			check("shared_intensity_peers_match", hostIntensity == clientIntensity, clientIntensity, hostIntensity);
+			check("shared_intensity_is_saved", hostIntensity.find("Camera") == std::string::npos);
+			check("shared_objective_uses_above_head", !fixture->m_Objectives.empty() && fixture->m_Objectives.front().m_ScenePos == head,
+				fixture->m_Objectives.empty() ? "none" : std::to_string(fixture->m_Objectives.front().m_ScenePos.m_X),
+				std::to_string(head.m_X));
 		}
 		{
 			// Update under a live coordinator leaves the dump; DrawGUI arms a drawn ring; SP and MP dumps match.
