@@ -62,6 +62,18 @@ namespace RTE {
 		std::array<Vector, 8> neighborPos{};
 	};
 
+	/// Overlay cells and in-flight jobs captured with a terrain fence.
+	struct HorizonFenceState {
+		struct Cell {
+			std::array<const Material*, 8> materials{};
+			bool navigable = true;
+			uint64_t generation = 0;
+		};
+		std::unordered_map<int, Cell> overlay;
+		std::deque<std::shared_ptr<void>> jobs;
+		uint64_t generation = 1;
+	};
+
 	/// Contains everything related to a PathNode on the path grid used by PathFinder.
 	struct PathNode {
 
@@ -167,18 +179,25 @@ namespace RTE {
 		/// Drops jobs, pins and overlay cells. Waits for workers up to c_HorizonWaitCapUs.
 		void RestoreHorizonOverlay();
 
+		void CaptureHorizonFence(HorizonFenceState& out) const;
+		void RestoreHorizonFence(const HorizonFenceState& in);
+
 		static constexpr int64_t c_HorizonWaitCapUs = 250000;
 		uint64_t BeginCommittedHorizonRead();
 		void EndCommittedHorizonRead(uint64_t generation);
 
 		void SetHorizonWorkerDelayMs(int milliseconds) { m_HorizonWorkerDelayMs = milliseconds; }
 		void TestSetHorizonWorkerLate(bool late) { m_HorizonWorkerLate = late; }
+		void TestHoldHorizonWorker() { m_HorizonWorkerHold.store(true); }
+		void TestReleaseHorizonWorker() { m_HorizonWorkerHold.store(false); }
 		void TestSetWraps(bool wrapX, bool wrapY);
 		int64_t LastHorizonWaitUs() const { return m_LastHorizonWaitUs; }
+		int64_t LastHorizonReaderWaitUs() const { return m_LastHorizonReaderWaitUs; }
 		uint64_t TestHorizonGeneration() const { return m_HorizonGeneration.load(); }
 		size_t TestHorizonOverlayCount() const;
 		bool TestHorizonWrapRayMatches(const Vector& start, const Vector& end, const HorizonTerrainPatch& patch) const;
 		std::array<const Material*, 8> TestViewMaterials(int nodeId, uint64_t generation) const;
+		void TestComputeHorizon(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials, std::vector<char>& navigable) const;
 
 		static int64_t HorizonWaitCount();
 		static int64_t HorizonWaitP99Us();
@@ -292,6 +311,7 @@ namespace RTE {
 			std::vector<HorizonTerrainPatch> patches;
 			int delayMs = 0;
 			bool late = false;
+			std::atomic<bool> hold{false};
 			std::atomic<bool> ready{false};
 		};
 		mutable std::unordered_map<int, HorizonNode> m_HorizonNodes;
@@ -303,7 +323,9 @@ namespace RTE {
 		bool m_SelfTestGrid = false;
 		int m_HorizonWorkerDelayMs = 0;
 		bool m_HorizonWorkerLate = false;
+		std::atomic<bool> m_HorizonWorkerHold{false};
 		int64_t m_LastHorizonWaitUs = 0;
+		int64_t m_LastHorizonReaderWaitUs = 0;
 		int64_t m_LastHorizonExpired = 0;
 
 		struct NodeCostView {

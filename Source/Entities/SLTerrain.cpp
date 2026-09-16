@@ -73,6 +73,21 @@ int SLTerrain::TestInstallMaterialBitmap(int width, int height, bool wrapX, bool
 	m_WrapX = wrapX;
 	m_WrapY = wrapY;
 	m_ScaledDimensions.SetXY(static_cast<float>(width), static_cast<float>(height));
+	auto adoptLayer = [&](std::unique_ptr<SceneLayer>& layer) {
+		if (!layer) {
+			layer = std::make_unique<SceneLayer>();
+		}
+		BITMAP* color = create_bitmap_ex(8, width, height);
+		if (!color) {
+			return false;
+		}
+		clear_to_color(color, 0);
+		layer->TestAdoptBitmap(color, wrapX, wrapY);
+		return true;
+	};
+	if (!adoptLayer(m_FGColorLayer) || !adoptLayer(m_BGColorLayer)) {
+		return -1;
+	}
 	return 0;
 }
 

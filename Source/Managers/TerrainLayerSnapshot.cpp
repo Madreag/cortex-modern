@@ -54,6 +54,14 @@ namespace RTE {
 			unseenPixelSize[team] = scene->m_UnseenPixelSize[team];
 			scanScheduled[team] = scene->m_ScanScheduled[team];
 		}
+		horizonBoxes = scene->m_HorizonTerrainBoxes;
+		for (size_t index = 0; index < scene->m_pPathFinders.size(); ++index) {
+			horizonFinders[index] = {};
+			if (scene->m_pPathFinders[index]) {
+				scene->m_pPathFinders[index]->CaptureHorizonFence(horizonFinders[index]);
+			}
+		}
+		horizonHeld = true;
 		return true;
 	}
 
@@ -106,7 +114,14 @@ namespace RTE {
 			scene->m_UnseenPixelSize[team] = unseenPixelSize[team];
 			scene->m_ScanScheduled[team] = scanScheduled[team];
 		}
-		scene->RestoreHorizonAfterPreview();
+		if (horizonHeld) {
+			scene->m_HorizonTerrainBoxes = horizonBoxes;
+			for (size_t index = 0; index < scene->m_pPathFinders.size(); ++index) {
+				if (scene->m_pPathFinders[index]) {
+					scene->m_pPathFinders[index]->RestoreHorizonFence(horizonFinders[index]);
+				}
+			}
+		}
 		return true;
 	}
 
@@ -163,6 +178,9 @@ namespace RTE {
 			reader.Value(copy);
 			reader.OnCommit([this, copy = std::move(copy)] { materialCopy.assign(copy.begin(), copy.end()); });
 			reader.Finish();
+			horizonHeld = false;
+			horizonBoxes.clear();
+			horizonFinders = {};
 			return true;
 		} catch (const std::exception&) { return false; }
 	}
