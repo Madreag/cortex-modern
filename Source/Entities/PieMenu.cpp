@@ -19,10 +19,11 @@
 #include "AllegroBitmap.h"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
-#include <array>
 
 using namespace RTE;
 
@@ -212,6 +213,27 @@ int PieMenu::Create(const PieMenu& reference) {
 	return 0;
 }
 
+namespace {
+	void AppendPackedTicks(std::ostringstream& out, int64_t ticks) {
+		char buffer[32];
+		const std::to_chars_result written = std::to_chars(buffer, buffer + sizeof(buffer), ticks);
+		out.write(buffer, written.ptr - buffer);
+	}
+
+	bool ReadPackedTicks(const std::string& field, int64_t& ticks) {
+		const std::from_chars_result parsed = std::from_chars(field.data(), field.data() + field.size(), ticks);
+		if (parsed.ec == std::errc() && parsed.ptr == field.data() + field.size()) {
+			return true;
+		}
+		double value = 0;
+		if (ParseNumberExact(field.data(), field.data() + field.size(), value).ec == std::errc()) {
+			ticks = static_cast<int64_t>(value);
+			return true;
+		}
+		return false;
+	}
+}
+
 std::string PieMenu::PackInteractionState() const {
 	const auto indexOf = [this](const PieSlice* slice) {
 		const auto found = std::find(m_CurrentPieSlices.begin(), m_CurrentPieSlices.end(), slice);
@@ -224,8 +246,13 @@ std::string PieMenu::PackInteractionState() const {
 		}
 	}
 	std::ostringstream out;
-	out << static_cast<int>(m_EnabledState) << "|" << static_cast<int>(m_MenuMode) << "|" << m_EnableDisableAnimationTimer.GetStartSimTimeMS() << "|" << m_HoverTimer.GetStartSimTimeMS() << "|" << m_SubPieMenuHoverOpenTimer.GetStartSimTimeMS()
-	    << "|" << HexFloatString(m_CursorAngle) << "|" << (m_CursorInVisiblePosition ? 1 : 0) << "|" << indexOf(m_HoveredPieSlice) << "|" << indexOf(m_ActivatedPieSlice) << "|" << indexOf(m_AlreadyActivatedPieSlice) << "|" << activeSubMenuSlice;
+	out << static_cast<int>(m_EnabledState) << "|" << static_cast<int>(m_MenuMode) << "|";
+	AppendPackedTicks(out, m_EnableDisableAnimationTimer.GetStartSimTimeMS());
+	out << "|";
+	AppendPackedTicks(out, m_HoverTimer.GetStartSimTimeMS());
+	out << "|";
+	AppendPackedTicks(out, m_SubPieMenuHoverOpenTimer.GetStartSimTimeMS());
+	out << "|" << HexFloatString(m_CursorAngle) << "|" << (m_CursorInVisiblePosition ? 1 : 0) << "|" << indexOf(m_HoveredPieSlice) << "|" << indexOf(m_ActivatedPieSlice) << "|" << indexOf(m_AlreadyActivatedPieSlice) << "|" << activeSubMenuSlice;
 	if (m_ActiveSubPieMenu) {
 		out << "|{" << m_ActiveSubPieMenu->PackInteractionState() << "}";
 	}
@@ -253,9 +280,15 @@ void PieMenu::UnpackInteractionState(const std::string& packed) {
 	};
 	m_EnabledState = static_cast<EnabledState>(std::atoi(fields[0].c_str()));
 	m_MenuMode = static_cast<MenuMode>(std::atoi(fields[1].c_str()));
-	m_EnableDisableAnimationTimer.SetStartSimTimeTicks(std::strtoll(fields[2].c_str(), nullptr, 10));
-	m_HoverTimer.SetStartSimTimeTicks(std::strtoll(fields[3].c_str(), nullptr, 10));
-	m_SubPieMenuHoverOpenTimer.SetStartSimTimeTicks(std::strtoll(fields[4].c_str(), nullptr, 10));
+	int64_t animationTicks = 0;
+	int64_t hoverTicks = 0;
+	int64_t submenuTicks = 0;
+	if (!ReadPackedTicks(fields[2], animationTicks) || !ReadPackedTicks(fields[3], hoverTicks) || !ReadPackedTicks(fields[4], submenuTicks)) {
+		return;
+	}
+	m_EnableDisableAnimationTimer.SetStartSimTimeTicks(animationTicks);
+	m_HoverTimer.SetStartSimTimeTicks(hoverTicks);
+	m_SubPieMenuHoverOpenTimer.SetStartSimTimeTicks(submenuTicks);
 	// strtof read the packed hexfloat through the global locale and gave 0 for a field it could not read.
 	m_CursorAngle = 0.0F;
 	if (ParseHexFloatExact(fields[5].data(), fields[5].data() + fields[5].size(), m_CursorAngle).ec != std::errc()) {
@@ -372,7 +405,7 @@ int PieMenu::Save(Writer& writer) const {
 }
 
 std::string PieMenu::SaveRuntimeCheckpoint() const {
-	CheckpointWriter writer("PieMenuRuntime1");
+	CheckpointWriter writer("PieMenuRuntime2");
 	writer(static_cast<const Entity&>(*this), m_DirectionIfSubPieMenu, m_MenuMode, m_CenterPos, m_Rotation,
 		m_EnabledState, m_EnableDisableAnimationTimer, m_HoverTimer, m_SubPieMenuHoverOpenTimer);
 	writer(m_IconSeparatorMode, m_FullInnerRadius, m_BackgroundThickness, m_BackgroundSeparatorSize,
@@ -388,7 +421,8 @@ std::string PieMenu::SaveRuntimeCheckpoint() const {
 
 bool PieMenu::LoadRuntimeCheckpoint(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader reader(text, "PieMenuRuntime1", validateOnly);
+		const bool legacy = text.starts_with("15 PieMenuRuntime1 ");
+		CheckpointReader reader(text, legacy ? "PieMenuRuntime1" : "PieMenuRuntime2", validateOnly);
 		reader(static_cast<Entity&>(*this), m_DirectionIfSubPieMenu, m_MenuMode, m_CenterPos, m_Rotation,
 			m_EnabledState, m_EnableDisableAnimationTimer, m_HoverTimer, m_SubPieMenuHoverOpenTimer);
 		reader(m_IconSeparatorMode, m_FullInnerRadius, m_BackgroundThickness, m_BackgroundSeparatorSize,
@@ -448,6 +482,15 @@ bool PieMenu::RunCheckpointSelfTest() {
 	check("highlight_getters_unchanged", menu.IsEnabled() == enabledBefore && menu.IsVisible() == visibleBefore);
 	menu.ClearHighlightDraw();
 	check("highlight_clears", !menu.HasHighlightDraw());
+	const auto packedTimers = menu.PackInteractionState();
+	menu.UnpackInteractionState(packedTimers);
+	check("pie_timer_pack_roundtrip", menu.PackInteractionState() == packedTimers);
+	const auto savedTimers = menu.SaveRuntimeCheckpoint();
+	check("pie_timer_resave_identity", menu.LoadRuntimeCheckpoint(savedTimers) && menu.SaveRuntimeCheckpoint() == savedTimers);
+	menu.UnpackInteractionState(std::string("0|0|12.0|34.5|56|") + HexFloatString(0.0F) + "|0|-1|-1|-1|-1");
+	check("legacy_double_pie_timers", menu.m_EnableDisableAnimationTimer.GetStartSimTimeMS() == 12
+		&& menu.m_HoverTimer.GetStartSimTimeMS() == 34
+		&& menu.m_SubPieMenuHoverOpenTimer.GetStartSimTimeMS() == 56);
 	PieMenu copy;
 	{ MovableObject::FaithfulCloneScope scope(true); check("faithful_clone_preserves_runtime", copy.Create(menu) == 0 && copy.SaveRuntimeCheckpoint() == saved); }
 	check("clone_owns_its_bitmaps", copy.m_BGBitmap != menu.m_BGBitmap && copy.m_BGRotationBitmap != menu.m_BGRotationBitmap && copy.m_BGPieSlicesWithSubPieMenuBitmap != menu.m_BGPieSlicesWithSubPieMenuBitmap);

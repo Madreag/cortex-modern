@@ -274,6 +274,7 @@ SCHEMAS["PieMenuRuntime1"] = [("entity", "o"), *fields("direction menu_mode"), (
     *fields("animation_timer hover_timer submenu_timer", TIMER), *fields("icon_mode inner_radius background_thickness separator_size transparent background_color border_color selected_color"),
     ("quadrants", array(4, structure(*fields("enabled direction")))), *fields("current_radius cursor_visible cursor_angle cursor_visual_angle redraw submenu_redraw"),
     *fields("background_bitmap rotation_bitmap slices_bitmap", "o")]
+SCHEMAS["PieMenuRuntime2"] = SCHEMAS["PieMenuRuntime1"]
 SCHEMAS["HeldDeviceRuntime1"] = [*fields("type activated"), ("hotkey_activated", array(2)), ("activation_timer", TIMER),
     ("hotkey_timer", array(2, TIMER)), *fields("one_handed dual_wieldable"), *fields("stance sharp_stance support_offset", VECTOR),
     *fields("support_while_reload sharp_aim max_sharp_length supportable supported support_available unpickable"), ("seen_by_player", array(4)),

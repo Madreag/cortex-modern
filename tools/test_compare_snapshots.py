@@ -767,6 +767,7 @@ class RuntimeProjectionTests(unittest.TestCase):
         for version, keys in (("MOSpriteRuntime2", ("sprite_file", "icon_file", "images", "frames", "icon_index", "frame")),
                 ("MOSRotatingRuntime2", ("flip_bitmap", "silhouette_bitmap", "travel_impulse")),
                 ("PieMenuRuntime1", ("quadrants", "center", "cursor_angle", "background_bitmap", "rotation_bitmap", "slices_bitmap")),
+                ("PieMenuRuntime2", ("quadrants", "center", "cursor_angle", "background_bitmap", "rotation_bitmap", "slices_bitmap")),
                 ("RuntimeGlobals7", ("primitive", "postprocess", "audio"))):
             value = dict(version=version, **dict.fromkeys(keys, 1))
             for key in keys:
