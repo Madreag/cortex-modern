@@ -44,10 +44,13 @@ def compare(root):
     retained = {"pie_control": str(retained_pie), "ak47_control": str(retained_ak47), "pie_inputs_present": sp_present}
     if sp_present:
         retained["pie_equal_retained"] = {stage: path.read_bytes() == retained_pie.read_bytes() for stage, path in sp.items()}
-    if retained_ak47.is_file():
+    ak47_stages = {stage: root / stage / "ak47/trace.json" for stage in ("reference", "red", "green")}
+    if retained_ak47.is_file() and all(path.is_file() for path in ak47_stages.values()):
         reference = trace_without_wall_seconds(retained_ak47)
-        retained["ak47_equal_retained"] = {stage: trace_without_wall_seconds(root / stage / "ak47/trace.json") == reference for stage in sp}
-        retained["ak47_final_hashes"] = {stage: json.loads((root / stage / "ak47/trace.json").read_text(encoding="utf-8-sig"))["runs"][0]["final_total_hash"] for stage in sp}
+        retained["ak47_equal_retained"] = {stage: trace_without_wall_seconds(path) == reference
+                                           for stage, path in ak47_stages.items()}
+        retained["ak47_final_hashes"] = {stage: json.loads(path.read_text(encoding="utf-8-sig"))["runs"][0]["final_total_hash"]
+                                         for stage, path in ak47_stages.items()}
     return {"rows": rows, "retained": retained, "ignored_fields": ["runs[].numeric.__wall_seconds", "scenarios.*.numeric.__wall_seconds"]}
 
 
