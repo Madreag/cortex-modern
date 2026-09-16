@@ -389,6 +389,12 @@ static std::string ResyncSaveName() {
 		// Past the refusals: the settings are read once here, where a real host starts, and ride the
 		// request to both roster builds, so the worker's copy cannot pick up a later menu edit.
 		SeatSavedOptions(request);
+		if (request.playerName.size() > NetProtocol::c_MaxDisplayNameBytes) {
+			const std::string configError = "display_name exceeds max encoded length";
+			if (error) *error = configError;
+			SetState(NetMatchServiceState::Failed, "Match roster refused", configError);
+			return false;
+		}
 		// A launch config names its own module; any other request resolves one here, where the loaded
 		// modules are known and both roster builds see the answer.
 		std::string moduleError;
@@ -2234,7 +2240,7 @@ static std::string ResyncSaveName() {
 			{"state", StateName(m_State)},
 			{"status", m_StatusText},
 			{"error", m_ErrorText.empty() ? m_LobbySnapshot.errorText : m_ErrorText},
-			{"activity_preset", m_ActivityPreset},
+			{"activity_preset", roster.activityPreset},
 			{"is_host", m_IsHost},
 			{"local_peer_id", static_cast<int>(m_LocalPeerId)},
 			{"local_team", m_LocalTeam},
@@ -2708,7 +2714,7 @@ static std::string ResyncSaveName() {
 		runnerConfig.lobbyWaitMs = c_MenuLobbyWaitMs;
 		// First lockstep tick is 1: RestartActivity zeroes the sim count, UpdateSim increments it before MovableMan reads it.
 		runnerConfig.startFrame = 1;
-		runnerConfig.scenario = request.activityPreset;
+		// Lobby runners take the activity from the adopted roster, not this leftover field.
 		runnerConfig.autoReady = request.host;
 		runnerConfig.autoStart = false;
 		runnerConfig.readyRequested = &m_ReadyRequested;
