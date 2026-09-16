@@ -119,7 +119,7 @@ def instrument_runner(expected):
     return run_sim_test
 
 
-def invoke(script, argv, out):
+def invoke(script, argv, out, require_zero=False):
     command = [sys.executable, str(script), *map(str, argv)]
     ledger("driver", command=command, log=str(out))
     previous = sys.argv
@@ -138,7 +138,10 @@ def invoke(script, argv, out):
     finally:
         sys.argv = previous
     print(f"{script.name}: exit={code} log={out}", flush=True)
-    return {"command": command, "exit": code, "log": str(out)}
+    row = {"command": command, "exit": code, "log": str(out)}
+    if require_zero and code not in (0, None):
+        raise RuntimeError(f"{Path(script).name} exited {code}; comparison did not complete: {out}")
+    return row
 
 
 def single(runner, out, flags, env=None, install=None):
@@ -258,12 +261,14 @@ def pair_arms(root, reference=False):
     for offset, arm in enumerate(("reseat", "lua", "damage", "snapshot", "screens")):
         if reference and arm in ("reseat", "damage"):
             continue
-        invoke(HERE / "run_pair.py", [arm, root / arm, "--port", 43570 + offset], root / (arm + ".log"))
+        invoke(HERE / "run_pair.py", [arm, root / arm, "--port", 43570 + offset], root / (arm + ".log"),
+               require_zero=True)
         pair = root / arm / "e2e/snapshot_p5"
         saves = [pair / peer / "runtime/Userdata/UserSavedGames.rte" / f"p5snap_p{number}.ccsave"
                  for number, peer in enumerate(("host", "client"), 1)]
-        if all(path.is_file() for path in saves):
-            invoke(HERE / "check_world.py", [*saves, "--out", root / arm / "world-result.json", *(["--damage"] if arm == "damage" else [])], root / (arm + "_world.log"))
+        if not all(path.is_file() for path in saves):
+            raise RuntimeError("missing pair snapshot for world compare: " + arm)
+        invoke(HERE / "check_world.py", [*saves, "--out", root / arm / "world-result.json", *(["--damage"] if arm == "damage" else [])], root / (arm + "_world.log"))
 
 
 def cpu_arms(root):
@@ -318,21 +323,27 @@ def validate_red(root):
 
 
 def gates(root):
-    invoke(HERE / "reconnect.py", ["--build-manifest", ROOT / "reconnect-build.json"], root / "reconnect.log")
-    invoke(REPO / "tools/run_selftests.py", ["--repo", REPO, "--out", root / "selftests", "--timeout", 300], root / "selftests.log")
+    invoke(HERE / "reconnect.py", ["--build-manifest", ROOT / "reconnect-build.json"], root / "reconnect.log",
+           require_zero=True)
+    invoke(REPO / "tools/run_selftests.py", ["--repo", REPO, "--out", root / "selftests", "--timeout", 300],
+           root / "selftests.log", require_zero=True)
     invoke(REPO / "tools/run_sim_test.py", ["--repo", REPO, "--out", root / "script_graph", "--timeout", 300, "--",
-        "-script-graph-selftest", "-num-lua-states", 4], root / "script_graph.log")
-    invoke(REPO / "tools/test_global_callbacks.py", ["--repo", REPO, "--recording", AK47, "--out", root / "global_callbacks"], root / "global_callbacks.log")
+        "-script-graph-selftest", "-num-lua-states", 4], root / "script_graph.log", require_zero=True)
+    invoke(REPO / "tools/test_global_callbacks.py", ["--repo", REPO, "--recording", AK47, "--out", root / "global_callbacks"],
+           root / "global_callbacks.log", require_zero=True)
     pair = root / "snapshot/e2e/snapshot_p5"
     saves = [pair / peer / "runtime/Userdata/UserSavedGames.rte" / f"p5snap_p{number}.ccsave"
              for number, peer in enumerate(("host", "client"), 1)]
+    if not all(path.is_file() for path in saves):
+        raise RuntimeError("missing snapshot pair for peer_roundtrip compare")
     invoke(REPO / "tools/test_snapshot_roundtrip.py", [*saves, "--repo", REPO, "--recording", AK47,
-        "--shared-pair", "--out", root / "peer_roundtrip"], root / "peer_roundtrip.log")
-    invoke(HERE / "compare_offline.py", [ROOT], root / "offline-comparison.log")
+        "--shared-pair", "--out", root / "peer_roundtrip"], root / "peer_roundtrip.log", require_zero=True)
+    invoke(HERE / "compare_offline.py", [ROOT], root / "offline-comparison.log", require_zero=True)
     for stage in ("reference", "red"):
         for case in PIE_CASES:
             invoke(REPO / "tools/pie_lockstep/compare_sp.py", [case, ROOT / stage / ("pie_" + case + "_sp"), root / ("pie_" + case + "_sp"),
-                "--out", root / (case + "_against_" + stage + ".json")], root / (case + "_against_" + stage + ".log"))
+                "--out", root / (case + "_against_" + stage + ".json")], root / (case + "_against_" + stage + ".log"),
+                   require_zero=True)
 
 
 def main():

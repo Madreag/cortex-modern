@@ -25,7 +25,11 @@ def compare(root):
         traces = {stage: root / stage / name / "trace.json" for stage in ("reference", "red", "green")}
         present = all(path.is_file() for path in traces.values())
         row = {"case": name, "traces": {stage: str(path) for stage, path in traces.items()}, "present": present}
-        if present:
+        if not present:
+            row["reason"] = "missing traces for offline compare"
+            row["red_equal_reference"] = None
+            row["green_equal_reference"] = None
+        else:
             reference = trace_without_wall_seconds(traces["reference"])
             row["red_equal_reference"] = trace_without_wall_seconds(traces["red"]) == reference
             row["green_equal_reference"] = trace_without_wall_seconds(traces["green"]) == reference
@@ -54,7 +58,11 @@ def main():
     print(json.dumps(result, indent=2))
     retained = result["retained"]
     required = [*retained.get("pie_equal_retained", {}).values(), *retained.get("ak47_equal_retained", {}).values()]
-    return 0 if len(required) == 6 and all(required) and all(row.get("green_equal_reference") for row in result["rows"]) else 1
+    compared = all(row.get("present") for row in result["rows"])
+    red_diverges = all(row.get("red_equal_reference") is False for row in result["rows"])
+    green_matches = all(row.get("green_equal_reference") is True for row in result["rows"])
+    pie_ok = len(required) == 6 and all(required)
+    return 0 if compared and red_diverges and green_matches and pie_ok else 1
 
 
 if __name__ == "__main__":
