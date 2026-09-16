@@ -879,10 +879,9 @@ if (-not (Test-Path $hostTrace) -or -not (Test-Path $clientTrace)) {
     Fail-Run "traces_present" "P4A menu-service E2E did not write both determinism traces. Evidence: $OutDir"
 }
 $compareScript = "D:\Projects\stage2_p4\compare_e2e_simgated.py"
-$activeCompare = Join-Path (Split-Path $PSCommandPath) "compare_e2e_simgated_active.py"
-# UI-probe rows skip held ticks; free-run rows keep the strict comparer. Both compares of one row share this path.
+# UI-probe rows hash PAUSED_CORE through this tree's paused-tolerant comparer. Both compares of one row share this path.
 if ($uiProbe) {
-    $rowCompare = $activeCompare
+    $rowCompare = Join-Path $repo "tools\compare_sim_traces.py"
     $rowCompareArgs = @("--min-ticks", "1")
     $minTicks = 1
 } else {
