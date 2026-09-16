@@ -10,6 +10,8 @@
 
 #include <iostream>
 
+bool HarnessMatchRunActive(); // Main.cpp: a -net-match-service-e2e match or the -net-replay playback of one.
+
 namespace RTE {
 
 	namespace {
@@ -98,12 +100,14 @@ namespace RTE {
 					gameActivity->SetTeamFunds(static_cast<float>(gameActivity->GetStartingGold()), team);
 				}
 			}
-			// The lobby seed, before StartActivity overwrites funds.
-			std::cout << "[e2e] seed";
-			for (int team = Activity::Teams::TeamOne; team < Activity::Teams::MaxTeamCount; ++team) {
-				std::cout << " team" << team << ".funds=" << gameActivity->GetTeamFunds(team);
+			if (HarnessMatchRunActive() || ScenarioRunner::IsActive()) {
+				// The lobby seed, before StartActivity overwrites funds.
+				std::cout << "[e2e] seed";
+				for (int team = Activity::Teams::TeamOne; team < Activity::Teams::MaxTeamCount; ++team) {
+					std::cout << " team" << team << ".funds=" << gameActivity->GetTeamFunds(team);
+				}
+				std::cout << std::endl;
 			}
-			std::cout << std::endl;
 		}
 		// Staged the way the Scenario setup stages its selected scene, with the agreed deploy-units choice.
 		if (scene) {

@@ -836,9 +836,11 @@ def launch(options):
         # No raw-dump gate against the replay: a single-peer playback binds the other seat's actors to its own
         # controller, and the dump carries that mode. replay_exact compares the on-wire subsystems, which is
         # the comparison that means anything here.
-        result["replay_rules"] = score_rules((root / "replay/stdout.log").read_text(errors="replace"), rules, default,
-                                            options.dedicated)
+        replay_log = (root / "replay/stdout.log").read_text(errors="replace")
+        result["replay_rules"] = score_rules(replay_log, rules, default, options.dedicated)
+        result["replay_seed"] = score_seed(replay_log, rules, default, options.dedicated)
         checks["replay_rules"] = result["replay_rules"]["pass"]
+        checks["replay_seed"] = result["replay_seed"]["pass"]
         if options.variant == "census":
             # The offline arm: the same preset launched through the stock command line scenario path, whose
             # setup the match must match. A retained reference build is passed as --offline-repo.
