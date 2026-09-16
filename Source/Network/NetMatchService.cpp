@@ -2204,6 +2204,13 @@ static std::string ResyncSaveName() {
 			record["saved_tick"] = m_ResyncSavedTick.load();
 			record["boundary_tick"] = m_ResyncBoundaryTick.load();
 		}
+		json refusals = json::array();
+		for (const ActivityMan::SaveRefusalRecord& row: g_ActivityMan.GetSaveRefusalRecords()) {
+			refusals.push_back({{"kind", row.kind}, {"class", row.objectClass}, {"preset", row.presetName},
+			                    {"script", row.scriptFile}, {"function", row.functionName}, {"segment", row.lastSegment},
+			                    {"path", row.path}, {"line", row.playerLine}, {"problem", row.problem}});
+		}
+		record["save_refusals"] = std::move(refusals);
 		return record.dump(2, ' ', false, json::error_handler_t::replace);
 	}
 
