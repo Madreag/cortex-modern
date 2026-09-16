@@ -1838,6 +1838,10 @@ namespace RTE {
 		s_LockstepWaitUs = 0;
 	}
 
+	void ScenarioRunner::ResetRetiredChecksumCounters() {
+		s_RetiredChecksumCounters = {};
+	}
+
 	bool ScenarioRunner::DrainLockstepRelay(uint32_t budgetMs, uint32_t lingerMs) {
 		const auto start = std::chrono::steady_clock::now();
 		auto elapsed = [&start] {
