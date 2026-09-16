@@ -128,8 +128,11 @@ def compare_peer_checkpoints(repo: Path, left: Path, right: Path, report_a: Path
          "--cross-process"],
         capture_output=True, text=True, env=env,
     )
-    log.write_text((proc.stdout or "") + (proc.stderr or ""), encoding="utf-8")
-    assert proc.returncode == 0, f"peer checkpoint compare failed: {log}"
+    output = (proc.stdout or "") + (proc.stderr or "")
+    log.write_text(output, encoding="utf-8")
+    first_fail = next((line for line in output.splitlines() if "FAIL" in line),
+                      (output.strip().splitlines() or ["no comparer output"])[0])
+    assert proc.returncode == 0, f"peer checkpoint compare failed: {first_fail}"
 
 
 def exact_role_compare(control: Path, saved: Path, ticks: int) -> None:
