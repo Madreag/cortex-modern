@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import unittest
 
-from check_reconnect import absent, local_view, pair
+from check_reconnect import absent, journal, local_view, pair, physical_input
 
 
 def view(player, frame=1):
@@ -24,15 +24,45 @@ class ReconnectOracle(unittest.TestCase):
         local_view(view(1), 1, [0, 1])
 
     def test_omitted_controller_input_is_the_shared_fact(self):
+        """Base tree raised 'controller_input must be physical zero' when the column was omitted."""
         row = view(1)
         del row["controller_input"]
+        self.assertNotIn("controller_input", row, "omitted controller_input is the shared fact")
         local_view(row, 1, [0, 1])
+        self.assertEqual(physical_input(row), 0, "omitted controller_input is the shared fact")
+        missing = view(1)
+        del missing["input_player"]
+        with self.assertRaisesRegex(ValueError, "input_player must be physical zero"):
+            local_view(missing, 1, [0, 1])
+        missing = view(1)
+        del missing["player_controller_input"]
+        with self.assertRaisesRegex(ValueError, "player_controller_input must be physical zero"):
+            local_view(missing, 1, [0, 1])
+
+    def test_null_controller_input_is_the_shared_fact(self):
+        """Encoder writes JSON null when there is no controlled actor."""
+        row = view(1)
+        row["controller_input"] = None
+        local_view(row, 1, [0, 1])
+        self.assertEqual(physical_input(row), 0, "omitted controller_input is the shared fact")
 
     def test_dead_brain_uid_zero_is_the_shared_fact(self):
+        """Base tree raised 'human seat has no brain' for dead-brain 0."""
         row = view(1)
         row["brain_uid"] = 0
         row["seat_facts"][1]["brain_uid"] = 0
+        self.assertEqual(row["brain_uid"], 0, "dead-brain 0 is the shared fact")
+        self.assertEqual(row["seat_facts"][1]["brain_uid"], 0, "dead-brain 0 is the shared fact")
         local_view(row, 1, [0, 1])
+
+    def test_journal_requires_shared_seat_view(self):
+        """va7 local_player_view_v1 journals fail journal() and are not this oracle's GREEN."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "events.jsonl"
+            path.write_text('{"event":"ready","capabilities":["local_player_view_v1"],"seq":0,"journal_dropped":0}\n',
+                            encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "missing seat evidence capability"):
+                journal(path)
 
     def test_rebuilt_identity_input_map_is_red(self):
         row = view(1)
@@ -135,6 +165,17 @@ class DriverDirectory(unittest.TestCase):
         self.assertEqual(len(log.read_text(encoding="utf-8").splitlines()), 1)
         with self.assertRaisesRegex(ValueError, "canonical seat"):
             driver.validate_local_control({**row, "seat_player": 0}, {**row, "seat_player": 0})
+
+    def test_omitted_controller_input_does_not_keyerror_the_wrapper(self):
+        """Base tree indexed observed['controller_input'] after local_view accepted an omit."""
+        for name in ("a7_driver.py", "a7_support.py"):
+            shutil.copy2(self.reconnect.A7_DEFAULT / name, self.staged / name)
+        log = self.staged / "omit-oracle.jsonl"
+        driver = self.reconnect.seat_driver(log, directory=self.staged)
+        row = coop_row(1)
+        del row["controller_input"]
+        driver.validate_local_control(row, row)
+        self.assertEqual(physical_input(row), 0, "omitted controller_input is the shared fact")
 
 
 if __name__ == "__main__":

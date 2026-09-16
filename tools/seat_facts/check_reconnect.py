@@ -10,12 +10,19 @@ def require(value, message):
         raise ValueError(message)
 
 
+def physical_input(row):
+    value = row.get("controller_input")
+    return 0 if value is None else value
+
+
 def local_view(row, player, teams):
     require(type(row.get("player_index")) is int and row["player_index"] == player, "canonical local seat differs")
-    for name in ("input_player", "player_controller_input", "controller_input"):
-        # The journal omits a physical-input column when the seat has no distinct record for it.
-        if name in row:
-            require(type(row[name]) is int and row[name] == 0, name + " must be physical zero")
+    for name in ("input_player", "player_controller_input"):
+        require(type(row.get(name)) is int and row[name] == 0, name + " must be physical zero")
+    # Encoder writes JSON null when there is no controlled actor; an omitted key is the same empty record.
+    if "controller_input" in row and row["controller_input"] is not None:
+        require(type(row["controller_input"]) is int and row["controller_input"] == 0,
+                "controller_input must be physical zero")
     require(type(row.get("screen")) is int and row["screen"] == 0, "screen must be physical zero")
     require(row.get("seat_mode") == 1 and row.get("seat_player") == player, "controlled actor's canonical seat differs")
     require(row.get("player_active") is True and row.get("player_human") is True, "local seat is not an active human")
@@ -28,7 +35,6 @@ def local_view(row, player, teams):
         require(seat.get("active") is human and seat.get("human") is human, "shared human roster differs")
         if human:
             require(seat.get("team") == teams[index], "shared seat team differs")
-            # 0 is a dead-brain seat; the engine reports that shared fact.
             require(type(seat.get("brain_uid")) is int and seat["brain_uid"] >= 0, "human seat brain_uid is not a shared fact")
         else:
             require(seat.get("brain_uid") == 0, "inactive seat has a brain")
