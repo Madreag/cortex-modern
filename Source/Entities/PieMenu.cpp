@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
+#include <string>
 
 using namespace RTE;
 
@@ -278,27 +279,33 @@ void PieMenu::UnpackInteractionState(const std::string& packed) {
 		const int index = std::atoi(field.c_str());
 		return index >= 0 && index < static_cast<int>(m_CurrentPieSlices.size()) ? m_CurrentPieSlices[index] : nullptr;
 	};
-	m_EnabledState = static_cast<EnabledState>(std::atoi(fields[0].c_str()));
-	m_MenuMode = static_cast<MenuMode>(std::atoi(fields[1].c_str()));
 	int64_t animationTicks = 0;
 	int64_t hoverTicks = 0;
 	int64_t submenuTicks = 0;
+	float cursorAngle = 0.0F;
 	if (!ReadPackedTicks(fields[2], animationTicks) || !ReadPackedTicks(fields[3], hoverTicks) || !ReadPackedTicks(fields[4], submenuTicks)) {
 		return;
 	}
+	if (ParseHexFloatExact(fields[5].data(), fields[5].data() + fields[5].size(), cursorAngle).ec != std::errc()) {
+		cursorAngle = 0.0F;
+	}
+	const EnabledState enabledState = static_cast<EnabledState>(std::atoi(fields[0].c_str()));
+	const MenuMode menuMode = static_cast<MenuMode>(std::atoi(fields[1].c_str()));
+	const bool cursorVisible = fields[6] == "1";
+	const PieSlice* hovered = sliceAt(fields[7]);
+	const PieSlice* activated = sliceAt(fields[8]);
+	const PieSlice* alreadyActivated = sliceAt(fields[9]);
+	const PieSlice* subMenuSlice = sliceAt(fields[10]);
+	m_EnabledState = enabledState;
+	m_MenuMode = menuMode;
 	m_EnableDisableAnimationTimer.SetStartSimTimeTicks(animationTicks);
 	m_HoverTimer.SetStartSimTimeTicks(hoverTicks);
 	m_SubPieMenuHoverOpenTimer.SetStartSimTimeTicks(submenuTicks);
-	// strtof read the packed hexfloat through the global locale and gave 0 for a field it could not read.
-	m_CursorAngle = 0.0F;
-	if (ParseHexFloatExact(fields[5].data(), fields[5].data() + fields[5].size(), m_CursorAngle).ec != std::errc()) {
-		m_CursorAngle = 0.0F;
-	}
-	m_CursorInVisiblePosition = fields[6] == "1";
-	m_HoveredPieSlice = sliceAt(fields[7]);
-	m_ActivatedPieSlice = sliceAt(fields[8]);
-	m_AlreadyActivatedPieSlice = sliceAt(fields[9]);
-	const PieSlice* subMenuSlice = sliceAt(fields[10]);
+	m_CursorAngle = cursorAngle;
+	m_CursorInVisiblePosition = cursorVisible;
+	m_HoveredPieSlice = hovered;
+	m_ActivatedPieSlice = activated;
+	m_AlreadyActivatedPieSlice = alreadyActivated;
 	m_ActiveSubPieMenu = subMenuSlice ? subMenuSlice->GetSubPieMenu() : nullptr;
 	if (m_ActiveSubPieMenu && !sub.empty()) {
 		m_ActiveSubPieMenu->UnpackInteractionState(sub);
@@ -405,7 +412,7 @@ int PieMenu::Save(Writer& writer) const {
 }
 
 std::string PieMenu::SaveRuntimeCheckpoint() const {
-	CheckpointWriter writer("PieMenuRuntime2");
+	CheckpointWriter writer("PieMenuRuntime1");
 	writer(static_cast<const Entity&>(*this), m_DirectionIfSubPieMenu, m_MenuMode, m_CenterPos, m_Rotation,
 		m_EnabledState, m_EnableDisableAnimationTimer, m_HoverTimer, m_SubPieMenuHoverOpenTimer);
 	writer(m_IconSeparatorMode, m_FullInnerRadius, m_BackgroundThickness, m_BackgroundSeparatorSize,
@@ -421,8 +428,7 @@ std::string PieMenu::SaveRuntimeCheckpoint() const {
 
 bool PieMenu::LoadRuntimeCheckpoint(std::string_view text, bool validateOnly) {
 	try {
-		const bool legacy = text.starts_with("15 PieMenuRuntime1 ");
-		CheckpointReader reader(text, legacy ? "PieMenuRuntime1" : "PieMenuRuntime2", validateOnly);
+		CheckpointReader reader(text, "PieMenuRuntime1", validateOnly);
 		reader(static_cast<Entity&>(*this), m_DirectionIfSubPieMenu, m_MenuMode, m_CenterPos, m_Rotation,
 			m_EnabledState, m_EnableDisableAnimationTimer, m_HoverTimer, m_SubPieMenuHoverOpenTimer);
 		reader(m_IconSeparatorMode, m_FullInnerRadius, m_BackgroundThickness, m_BackgroundSeparatorSize,
@@ -440,9 +446,13 @@ bool PieMenu::LoadRuntimeCheckpoint(std::string_view text, bool validateOnly) {
 
 bool PieMenu::RunCheckpointSelfTest() {
 	bool passed = true;
-	const auto check = [&](const char* name, bool value) {
+	const auto check = [&](const char* name, bool value, const std::string& got = {}, const std::string& expected = {}) {
 		passed = passed && value;
-		std::cout << "[piemenu-checkpoint-selftest] " << (value ? "PASS " : "FAIL ") << name << std::endl;
+		std::cout << "[piemenu-checkpoint-selftest] " << (value ? "PASS " : "FAIL ") << name;
+		if (!value && (!got.empty() || !expected.empty())) {
+			std::cout << " got=" << got << " expected=" << expected;
+		}
+		std::cout << std::endl;
 	};
 	PieMenu menu;
 	if (menu.Create() < 0) return false;
@@ -469,30 +479,51 @@ bool PieMenu::RunCheckpointSelfTest() {
 	check("independent_pixels_and_clip", getpixel(menu.m_BGBitmap, 3, 4) == 21 && getpixel(menu.m_BGRotationBitmap, 3, 4) == 22 &&
 		getpixel(menu.m_BGPieSlicesWithSubPieMenuBitmap, 3, 4) == 23 && menu.m_BGBitmap->cl == 1 && menu.m_BGBitmap->cb == 10 && !menu.m_BGBitmapNeedsRedrawing);
 	menu.FreezeAtRadius(15);
-	check("freeze_is_presentation_only", menu.SaveRuntimeCheckpoint() == saved);
+	check("freeze_is_presentation_only", menu.SaveRuntimeCheckpoint() == saved, menu.SaveRuntimeCheckpoint(), saved);
 	const auto described = menu.DescribeInteractionState();
 	const bool enabledBefore = menu.IsEnabled();
 	const bool visibleBefore = menu.IsVisible();
 	menu.ClearHighlightDraw();
-	check("lockstep_update_leaves_highlight_undrawn", !menu.HasHighlightDraw());
+	ScenarioRunner::SetLockstepCoordinator(nullptr);
+	check("lockstep_update_leaves_highlight_undrawn", !menu.HasHighlightDraw(), menu.HasHighlightDraw() ? "1" : "0", "0");
 	menu.SetHighlightDrawRadius(30);
-	check("highlight_draw_radius", menu.HasHighlightDraw() && menu.GetHighlightDrawRadius() == 30);
-	check("highlight_dump_unchanged", menu.SaveRuntimeCheckpoint() == saved);
-	check("highlight_describe_unchanged", menu.DescribeInteractionState() == described);
-	check("highlight_getters_unchanged", menu.IsEnabled() == enabledBefore && menu.IsVisible() == visibleBefore);
+	check("highlight_draw_radius", menu.HasHighlightDraw() && menu.GetHighlightDrawRadius() == 30,
+		std::to_string(menu.GetHighlightDrawRadius()), "30");
+	check("highlight_dump_unchanged", menu.SaveRuntimeCheckpoint() == saved, menu.SaveRuntimeCheckpoint(), saved);
+	check("highlight_describe_unchanged", menu.DescribeInteractionState() == described, menu.DescribeInteractionState(), described);
+	check("highlight_getters_unchanged", menu.IsEnabled() == enabledBefore && menu.IsVisible() == visibleBefore,
+		std::string(menu.IsEnabled() ? "1" : "0") + "/" + (menu.IsVisible() ? "1" : "0"),
+		std::string(enabledBefore ? "1" : "0") + "/" + (visibleBefore ? "1" : "0"));
+	const auto dumpAfterDraw = menu.SaveRuntimeCheckpoint();
+	PieMenu mpDump;
+	if (mpDump.Create() >= 0) {
+		mpDump.LoadRuntimeCheckpoint(saved);
+		mpDump.SetHighlightDrawRadius(30);
+		check("highlight_sp_mp_dump_identity", mpDump.SaveRuntimeCheckpoint() == dumpAfterDraw && dumpAfterDraw == saved,
+			mpDump.SaveRuntimeCheckpoint(), saved);
+	}
 	menu.ClearHighlightDraw();
-	check("highlight_clears", !menu.HasHighlightDraw());
+	check("highlight_clears", !menu.HasHighlightDraw(), menu.HasHighlightDraw() ? "1" : "0", "0");
 	const auto packedTimers = menu.PackInteractionState();
 	menu.UnpackInteractionState(packedTimers);
-	check("pie_timer_pack_roundtrip", menu.PackInteractionState() == packedTimers);
+	check("pie_timer_pack_roundtrip", menu.PackInteractionState() == packedTimers, menu.PackInteractionState(), packedTimers);
 	const auto savedTimers = menu.SaveRuntimeCheckpoint();
-	check("pie_timer_resave_identity", menu.LoadRuntimeCheckpoint(savedTimers) && menu.SaveRuntimeCheckpoint() == savedTimers);
-	menu.UnpackInteractionState(std::string("0|0|12.0|34.5|56|") + HexFloatString(0.0F) + "|0|-1|-1|-1|-1");
+	check("pie_timer_resave_identity", menu.LoadRuntimeCheckpoint(savedTimers) && menu.SaveRuntimeCheckpoint() == savedTimers,
+		menu.SaveRuntimeCheckpoint(), savedTimers);
+	check("pie_runtime1_tag", savedTimers.starts_with("15 PieMenuRuntime1 "), savedTimers.substr(0, 19), "15 PieMenuRuntime1 ");
+	const std::string legacyPack = std::string("0|0|12.0|34.5|56|") + HexFloatString(0.0F) + "|0|-1|-1|-1|-1";
+	menu.UnpackInteractionState(legacyPack);
 	check("legacy_double_pie_timers", menu.m_EnableDisableAnimationTimer.GetStartSimTimeMS() == 12
 		&& menu.m_HoverTimer.GetStartSimTimeMS() == 34
-		&& menu.m_SubPieMenuHoverOpenTimer.GetStartSimTimeMS() == 56);
+		&& menu.m_SubPieMenuHoverOpenTimer.GetStartSimTimeMS() == 56,
+		std::to_string(menu.m_EnableDisableAnimationTimer.GetStartSimTimeMS()) + "/" +
+			std::to_string(menu.m_HoverTimer.GetStartSimTimeMS()) + "/" +
+			std::to_string(menu.m_SubPieMenuHoverOpenTimer.GetStartSimTimeMS()),
+		"12/34/56");
+	menu.UnpackInteractionState(packedTimers);
+	check("legacy_unpack_restores_before_clone", menu.SaveRuntimeCheckpoint() == savedTimers, menu.SaveRuntimeCheckpoint(), savedTimers);
 	PieMenu copy;
-	{ MovableObject::FaithfulCloneScope scope(true); check("faithful_clone_preserves_runtime", copy.Create(menu) == 0 && copy.SaveRuntimeCheckpoint() == saved); }
+	{ MovableObject::FaithfulCloneScope scope(true); check("faithful_clone_preserves_runtime", copy.Create(menu) == 0 && copy.SaveRuntimeCheckpoint() == saved, copy.SaveRuntimeCheckpoint(), saved); }
 	check("clone_owns_its_bitmaps", copy.m_BGBitmap != menu.m_BGBitmap && copy.m_BGRotationBitmap != menu.m_BGRotationBitmap && copy.m_BGPieSlicesWithSubPieMenuBitmap != menu.m_BGPieSlicesWithSubPieMenuBitmap);
 	check("hover_open_delay_pin", RunHoverOpenDelayPinSelfTest());
 	return passed;
