@@ -66,6 +66,12 @@ namespace RTE {
 		uint64_t configRevision = 1;
 		uint8_t hostPeerId = 1;
 		bool dedicated = false; // The host keeps lockstep peer hostPeerId but seats no human slot there.
+		// A world that outlives its players: no last-brain or timer end, seats freed and refilled while
+		// it ticks. A v4 config cannot carry it, so an older peer refuses the round instead of joining
+		// one whose end rules it does not share.
+		bool persistentWorld = false;
+		std::string worldId;       // The world's durable UUID; its directory registration id too. Empty off a persistent world.
+		uint64_t worldBoot = 0;    // The host boot incarnation this round belongs to; advanced before the host listens.
 		uint8_t peerCount = 2;
 		uint16_t inputDelayFrames = 0;
 		std::vector<uint16_t> peerInputDelayFrames; // Per-sender delay by peerId-1 (size 0 or peerCount); empty = uniform inputDelayFrames.
@@ -83,7 +89,12 @@ namespace RTE {
 
 	class NetMatchConfigUtil {
 	public:
-		static constexpr uint16_t c_Version = 4; // v4 added the spectate rule; v3 and v2 envelopes stay readable.
+		static constexpr uint16_t c_Version = 5; // v5 added the persistent world; v4 added the spectate rule; v3 and v2 envelopes stay readable.
+		// The oldest layout a LIVE peer may speak. An ordinary match still speaks v4 byte for byte, so
+		// only a persistent world's config moves to v5 and only its hash takes the v5 domain.
+		static constexpr uint16_t c_LiveMinVersion = 4;
+		static constexpr uint16_t c_PersistentWorldVersion = 5;
+		static constexpr size_t c_WorldIdBytes = 36; // A canonical UUID, the directory's registration id.
 		static constexpr uint32_t c_MaxFiniteStartingGold = 29999;
 		static constexpr uint32_t c_InfiniteGold = 1000000000;
 		static constexpr uint8_t c_MinPeerCount = 2;
@@ -99,6 +110,8 @@ namespace RTE {
 		/// @param outSeatMap Optional old lockstep peer id -> new lockstep peer id for every survivor.
 		static bool DeriveRematchConfig(const NetMatchConfig& previous, const std::vector<uint8_t>& survivingPeerIds, NetMatchConfig& outConfig, std::map<uint8_t, uint8_t>* outSeatMap = nullptr, std::string* error = nullptr);
 		static bool ValidateLocalAlpha(const NetMatchConfig& config, std::string* error = nullptr);
+		/// Whether the text is a canonical lowercase 8-4-4-4-12 UUID, the only shape a world id may take.
+		static bool IsWorldId(const std::string& text);
 		static NetHash32 HashConfig(const NetMatchConfig& config);
 		static std::string BuildReportJson(const NetMatchConfig& config);
 		/// The peer's input delay: its per-sender entry, or the uniform value when no set rides the config.

@@ -266,8 +266,8 @@ namespace RTE {
 			AppendU16LE(out, config.inputDelayFrames);
 			AppendU8(out, static_cast<uint8_t>(config.mode));
 			AppendU8(out, static_cast<uint8_t>(config.ownershipPolicy));
-			// Reserved bit 0 carries the dedicated flag; old builds refuse the nonzero word.
-			AppendU16LE(out, config.dedicated ? 1 : 0);
+			// Reserved bit 0 carries the dedicated flag, bit 1 the persistent world; old builds refuse the nonzero word.
+			AppendU16LE(out, static_cast<uint16_t>((config.dedicated ? 1 : 0) | (config.persistentWorld ? 2 : 0)));
 			if (!AppendString(out, config.activityType, NetLobbyProtocol::c_MaxShortTextBytes, "activity_type", error) ||
 			    !AppendString(out, config.activityPreset, NetLobbyProtocol::c_MaxShortTextBytes, "activity_preset", error) ||
 			    !AppendString(out, config.sceneName, NetLobbyProtocol::c_MaxShortTextBytes, "scene_name", error) ||
@@ -309,6 +309,10 @@ namespace RTE {
 				AppendU8(out, config.idleWaitMinutes);
 				AppendBool(out, config.automaticRepair);
 				AppendU8(out, static_cast<uint8_t>(config.delayPolicy));
+				if (config.version >= NetMatchConfigUtil::c_PersistentWorldVersion) {
+					if (!AppendString(out, config.worldId, NetMatchConfigUtil::c_WorldIdBytes, "world_id", error)) return false;
+					AppendU64LE(out, config.worldBoot);
+				}
 			}
 			return true;
 		}
@@ -317,8 +321,9 @@ namespace RTE {
 			uint16_t reserved = 0;
 			uint8_t playerCount = 0;
 			if (!ReadOrTruncated(reader.ReadU16LE(out.version), reader, error, "config.version")) return false;
-			// A live peer speaks the current layout; an older one is only read back out of a recording.
-			if (out.version == 0 || out.version > NetMatchConfigUtil::c_Version || (out.version < NetMatchConfigUtil::c_Version && !allowRecordedVersions)) {
+			// A live peer speaks one of the current layouts - an ordinary match still speaks v4, only a
+			// persistent world moves to v5; anything older is read back out of a recording.
+			if (out.version == 0 || out.version > NetMatchConfigUtil::c_Version || (out.version < NetMatchConfigUtil::c_LiveMinVersion && !allowRecordedVersions)) {
 				SetError(error, NetLobbyErrorCode::UnsupportedVersion, reader.Offset() - 2, "unsupported match config version " + std::to_string(out.version));
 				return false;
 			}
@@ -332,7 +337,11 @@ namespace RTE {
 				return false;
 			}
 			out.dedicated = (reserved & 1) != 0;
-			if (reserved & ~static_cast<uint16_t>(1)) {
+			// Bit 1 is the persistent world and only a v5 config may set it; a v4 reader still refuses
+			// the whole word, so an older peer can never read a world's round as an ordinary match.
+			out.persistentWorld = (reserved & 2) != 0;
+			const uint16_t allowed = out.version >= NetMatchConfigUtil::c_PersistentWorldVersion ? 3 : 1;
+			if (reserved & ~allowed) {
 				SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 2, "config reserved field must be zero");
 				return false;
 			}
@@ -392,6 +401,12 @@ namespace RTE {
 				if (!ReadOrTruncated(reader.ReadBool(out.autosaveEnabled) && reader.ReadU32LE(out.autosaveIntervalSeconds) &&
 				                     reader.ReadU8(out.idleWaitMinutes) && reader.ReadBool(out.automaticRepair) && reader.ReadU8(policy), reader, error, "host match options")) return false;
 				out.delayPolicy = static_cast<NetMatchDelayPolicy>(policy);
+				out.worldId.clear();
+				out.worldBoot = 0;
+				if (out.version >= NetMatchConfigUtil::c_PersistentWorldVersion) {
+					if (!reader.ReadString(out.worldId, NetMatchConfigUtil::c_WorldIdBytes, "world_id", error) ||
+					    !ReadOrTruncated(reader.ReadU64LE(out.worldBoot), reader, error, "world_boot")) return false;
+				}
 			}
 			std::string validateError;
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(out, &validateError)) {
