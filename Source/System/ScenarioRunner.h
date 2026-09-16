@@ -244,7 +244,7 @@ namespace RTE {
 		static const std::vector<NetUiToastRecord>& GetNetUiToastLog();
 		/// Unexpired presentation events, oldest first. A toast with no shown stamp is still waiting.
 		static std::vector<NetUiToastRecord> GetVisibleNetUiToasts();
-		/// Starts the on-screen clock for the drawn slice; hidden toasts keep waiting.
+		/// Stamps the drawn slice; a newest-3 skip drops the older prefix.
 		static void NoteNetUiToastsDrawn(size_t first, size_t count);
 		/// Names of peers whose next input frame is missing, for the stalled render path.
 		static std::string GetLockstepMissingPeers();
