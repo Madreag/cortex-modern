@@ -742,8 +742,11 @@ void Attachable::SetParent(MOSRotating* newParent) {
 
 void Attachable::UpdatePositionAndJointPositionBasedOnOffsets() {
 	if (m_Parent) {
-		m_JointPos = m_Parent->GetPos() + m_Parent->RotateOffset(GetParentOffset());
-		m_Pos = m_JointPos - RotateOffset(m_JointOffset);
+		const Vector joint = m_Parent->GetPos() + m_Parent->RotateOffset(GetParentOffset());
+		const Vector pos = joint - RotateOffset(m_JointOffset);
+		if (pos != m_Pos || joint != m_JointPos) TouchCheckpoint();
+		m_JointPos = joint;
+		m_Pos = pos;
 	} else {
 		m_JointPos = m_Pos + RotateOffset(m_JointOffset);
 	}

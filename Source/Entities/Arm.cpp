@@ -290,7 +290,9 @@ void Arm::Update() {
 	// If there's a HeldDevice that's not a ThrownDevice, we can safely set the Arm rotation based on the hand's current offset, since it's been rotated to match the AHuman's aim angle when it was updated.
 	if (m_HeldDevice && !heldDeviceIsAThrownDevice) {
 		m_Rotation = m_HandCurrentOffset.GetAbsRadAngle() + (m_HFlipped ? c_PI : 0);
-		m_Pos = m_JointPos - RotateOffset(m_JointOffset);
+		const Vector pos = m_JointPos - RotateOffset(m_JointOffset);
+		if (pos != m_Pos) TouchCheckpoint();
+		m_Pos = pos;
 	}
 
 	if (armHasParent) {

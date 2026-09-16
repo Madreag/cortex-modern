@@ -151,7 +151,7 @@ namespace RTE {
 
 		/// Sets the absolute position of this SceneObject in the scene.
 		/// @param newPos A Vector describing the current absolute position in pixels.
-		virtual void SetPos(const Vector& newPos) { TouchCheckpoint(); m_Pos = newPos; }
+		virtual void SetPos(const Vector& newPos) { if (newPos != m_Pos) TouchCheckpoint(); m_Pos = newPos; }
 
 		/// Returns whether this is being drawn flipped horizontally (around the
 		/// vertical axis), or not.

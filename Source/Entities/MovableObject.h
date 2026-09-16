@@ -444,14 +444,14 @@ namespace RTE {
 		/// Travel-driven motion bypasses this by writing m_Pos directly so PreTravel can still snapshot a meaningful prev.
 		/// @param newPos A Vector describing the new absolute position in pixels.
 		void SetPos(const Vector& newPos) override {
-			TouchCheckpoint();
+			if (newPos != m_Pos || newPos != m_PrevPos) TouchCheckpoint();
 			m_Pos = newPos;
 			m_PrevPos = newPos;
 		}
 
 		/// Sets the velocity vector of this MovableObject.
 		/// @param newVel A Vector specifying the new velocity vector.
-		void SetVel(const Vector& newVel) { m_Vel = newVel; }
+		void SetVel(const Vector& newVel) { if (newVel != m_Vel) TouchCheckpoint(); m_Vel = newVel; }
 
 		/// Sets the current absolute angle of rotation of this MovableObject.
 		/// @param newAngle The new absolute angle in radians.
@@ -536,7 +536,11 @@ namespace RTE {
 
 		/// Sets this' age timer to a specific value, in ms.
 		/// @param newAge The new age of this, in MS. (default: 0) { m_AgeTimer.SetElapsedSimTimeMS(newAge)
-		void SetAge(double newAge = 0) { m_AgeTimer.SetElapsedSimTimeMS(newAge); }
+		void SetAge(double newAge = 0) {
+			const int64_t before = m_AgeTimer.GetStartSimTimeMS();
+			m_AgeTimer.SetElapsedSimTimeMS(newAge);
+			if (m_AgeTimer.GetStartSimTimeMS() != before) TouchCheckpoint();
+		}
 
 		/// Sets the MOID of this MovableObject to be g_NoMOID (255) for this frame.
 		virtual void SetAsNoID() { m_MOID = g_NoMOID; }
