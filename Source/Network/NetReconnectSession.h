@@ -107,6 +107,27 @@ namespace RTE {
 	}
 	NetParticipantRemovalVerdict NetAcceptParticipantRemoval(const NetParticipantRemoval& notice, bool fromHost, const NetParticipantRemovalBinding& current, bool alreadyAppliedTx);
 
+	enum class NetKickBanResult : uint8_t {
+		Ok = 0,
+		NotHosting = 1,
+		UnknownSeat = 2,
+		ForbiddenTarget = 3,
+		StaleSelection = 4,
+		ActionUnavailable = 5,
+		PersistenceFailed = 6,
+		UnknownIdentity = 7,
+	};
+
+	const char* NetKickBanResultName(NetKickBanResult result);
+
+	/// What L20 reads after RemoveParticipant: the notice to show and the targeted transport.
+	struct NetParticipantRemovalIssue {
+		NetParticipantRemoval notice;
+		NetPeerId connection = c_InvalidNetPeerId;
+		uint8_t lockstepPeerId = 0;
+		NetH4Identity identity;
+	};
+
 	/// A seat that just became this connection's. The session turns it into a ready peer so the
 	/// returner sits on the seat's own peer id and the superseded link stops being one.
 	struct NetH4Commit {
@@ -250,6 +271,7 @@ namespace RTE {
 		uint32_t incarnationsBound = 0;
 		uint32_t seatsDropped = 0;
 		uint32_t seatsClosedByLeave = 0;
+		uint32_t seatsRemoved = 0; //!< Host-authored removals; never a reclaimable drop.
 		uint32_t seatsReleased = 0; //!< Seats handed back to the pool, whichever way their holder went.
 		uint32_t ledgerDropsRecorded = 0;
 		uint32_t reseatsIssued = 0;
@@ -357,6 +379,8 @@ namespace RTE {
 		/// Withdraws an approval that has not committed. The provisional record is invalidated and
 		/// removed; the seat was never given away, so there is nothing to take back.
 		NetH4ModerationResult CancelSubstitution(uint16_t stableSeat, uint64_t nowMs);
+		/// Host: close this holder without a reclaim hold. Reuses the clean-leave seat close.
+		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action, uint64_t nowMs, uint64_t sessionId, uint32_t round, uint64_t boundaryFrame, NetParticipantRemovalIssue& issued);
 		bool HasSubstitution(uint16_t stableSeat) const;
 		size_t GetApplicantCount() const { return m_Applicants.size(); }
 
@@ -483,6 +507,8 @@ namespace RTE {
 		/// Hands a seat back to the pool. Only in a lobby: nothing has been played, so the player who
 		/// left has nothing to reclaim and the seat must be joinable again.
 		void ReleaseSeat(SeatState& seat);
+		void CloseSeatWithoutHold(SeatState& seat);
+		void CancelHolderTransactions(uint16_t stableSeat, uint64_t nowMs);
 		void IssueReseat(const SeatState& seat);
 		void QueueHoldResolution(uint8_t lockstepPeerId, NetHoldResolution resolution);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
@@ -537,6 +563,9 @@ namespace RTE {
 		std::vector<NetHoldResolutionNotice> m_PendingHoldResolutions;
 		std::vector<NetH4Commit> m_Commits;
 		NetReconnectHostStats m_Stats;
+		NetAuthBytes16 m_LastRemovalTx{};
+		bool m_HasRemovalTx = false;
+		NetPeerId m_LastRemovedConnection = c_InvalidNetPeerId;
 	};
 
 	enum class NetH4ClientState : uint8_t {
@@ -617,6 +646,9 @@ namespace RTE {
 		/// The host said the hosted session ended (P22) - the only event other than a LeaveAck that may
 		/// delete the record.
 		void NotifyConfirmedSessionEnd();
+		/// Host-authored removal of this client: the ticket dies and retry stops.
+		void NotifyParticipantRemoved(NetRejectReason reason);
+		bool WasRemoved() const { return m_Removed; }
 		/// The link died without an answer. The record is exactly what this case exists for: it stays.
 		void NotifyAmbiguousLoss();
 
@@ -686,6 +718,8 @@ namespace RTE {
 		uint32_t m_Incarnation = 0;
 		uint8_t m_AssignedPeerId = 0;
 		bool m_WantsLinkClosed = false;
+		bool m_Removed = false;
+		NetAuthBytes16 m_LastRemovalTx{};
 		std::string m_Error;
 		std::vector<NetH4Outbound> m_Outbound;
 		NetReconnectClientStats m_Stats;

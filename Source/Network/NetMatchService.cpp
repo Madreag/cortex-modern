@@ -2922,6 +2922,54 @@ static std::string ResyncSaveName() {
 		return result;
 	}
 
+	NetKickBanResult NetMatchService::RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_LastRemovalIssue = {};
+		if (!m_AdmissionAttached || !m_IsHost) {
+			m_LastKickBanResult = NetKickBanResult::NotHosting;
+			return m_LastKickBanResult;
+		}
+		if (!m_Session || (m_State != NetMatchServiceState::Running && m_State != NetMatchServiceState::Starting)) {
+			m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
+			return m_LastKickBanResult;
+		}
+		const uint64_t nowMs = AdmissionNowMs();
+		const uint64_t sessionId = m_Session->GetSessionId();
+		const uint32_t round = m_Coordinator ? static_cast<uint32_t>(m_Coordinator->GetRoundId()) : 0;
+		const uint64_t boundary = m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0;
+		m_LastKickBanResult = m_ReconnectHost.RemoveParticipant(selection, action, nowMs, sessionId, round, boundary, m_LastRemovalIssue);
+		if (m_LastKickBanResult != NetKickBanResult::Ok) {
+			return m_LastKickBanResult;
+		}
+		m_Session->BroadcastControl(m_LastRemovalIssue.notice);
+		if (m_Coordinator && m_State == NetMatchServiceState::Running && m_LastRemovalIssue.lockstepPeerId != 0) {
+			const char* why = action == NetParticipantRemovalAction::Kick ? "removed from the session" : "banned from the session";
+			m_Coordinator->EvictRemovedPeer(m_LastRemovalIssue.lockstepPeerId, why, nowMs);
+		}
+		if (m_LastRemovalIssue.connection != c_InvalidNetPeerId) {
+			const NetRejectReason reason = action == NetParticipantRemovalAction::Kick ? NetRejectReason::ParticipantRemoved : NetRejectReason::ParticipantBanned;
+			const char* text = action == NetParticipantRemovalAction::Kick ? "removed from this session" : "banned from this session";
+			m_Session->DisconnectReadyPeer(m_LastRemovalIssue.connection, reason, text);
+		}
+		m_Session->TickAdmissionPlane(nowMs);
+		if (m_State == NetMatchServiceState::Running) {
+			PublishModerationView();
+		}
+		const std::string who = m_LocalName.empty() ? "Host" : m_LocalName;
+		ScenarioRunner::PushNetUiToast("moderation", who + std::string(action == NetParticipantRemovalAction::Kick ? " removed " : " banned ") + "seat " + std::to_string(selection.stableSeat));
+		return m_LastKickBanResult;
+	}
+
+	NetKickBanResult NetMatchService::GetLastKickBanResult() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_LastKickBanResult;
+	}
+
+	NetParticipantRemovalIssue NetMatchService::GetLastRemovalIssue() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_LastRemovalIssue;
+	}
+
 	void NetMatchService::RecordModerationAction(uint16_t stableSeat, NetModerationAction action) {
 		const std::string who = m_LocalName.empty() ? "Host" : m_LocalName;
 		const std::string seat = " for seat " + std::to_string(stableSeat);

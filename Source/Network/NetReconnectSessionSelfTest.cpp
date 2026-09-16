@@ -6017,6 +6017,197 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestKickTerminal() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint alice;
+			alice.connection = 201;
+			ConfigureEndpoint(alice, "kick-alice", &unixNow);
+			wire.Add(&alice);
+			if (!alice.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error) || alice.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("alice did not join: " + error);
+			}
+			Endpoint bob;
+			bob.connection = 202;
+			ConfigureEndpoint(bob, "kick-bob", &unixNow);
+			wire.Add(&bob);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!bob.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error) || bob.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("bob did not join: " + error);
+			}
+			NetH4TicketRecord aliceRecord;
+			if (alice.store.Load(unixNow, aliceRecord, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail(error);
+			}
+			wire.host.SetLiveMatch(true);
+			const uint32_t droppedBefore = wire.host.GetStats().seatsDropped;
+			if (wire.host.NotifyDisconnect(alice.connection, 120) != NetH4DisconnectOutcome::SeatDropped ||
+			    !wire.host.IsSeatHeldForReclaim(2) || wire.host.GetStats().seatsDropped != droppedBefore + 1) {
+				return Fail("a socket-only drop did not open a reclaimable hold");
+			}
+			alice.client.NotifyAmbiguousLoss();
+			if (!alice.store.HasRecord()) {
+				return Fail("a socket-only drop cleared the ticket");
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS kick: socket-only drop still opens a reclaim hold" << std::endl;
+
+			Wire live;
+			ConfigureWire(live);
+			Endpoint keeper;
+			keeper.connection = 211;
+			ConfigureEndpoint(keeper, "kick-keeper", &unixNow);
+			live.Add(&keeper);
+			if (!keeper.client.BeginNewJoin(live.nowMs, &error) || !live.Pump(&error)) {
+				return Fail("keeper did not join: " + error);
+			}
+			Endpoint target;
+			target.connection = 212;
+			ConfigureEndpoint(target, "kick-target", &unixNow);
+			live.Add(&target);
+			live.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!target.client.BeginNewJoin(live.nowMs, &error) || !live.Pump(&error)) {
+				return Fail("target did not join: " + error);
+			}
+			NetH4TicketRecord targetRecord;
+			if (target.store.Load(unixNow, targetRecord, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail(error);
+			}
+			live.host.SetLiveMatch(true);
+			const auto views = live.host.GetModerationView();
+			NetModerationSelection selected{};
+			for (const auto& seat : views) {
+				if (seat.stableSeat == targetRecord.stableSeat) {
+					selected = NetSelectModerationSeat(seat);
+				}
+			}
+			NetParticipantRemovalIssue issued;
+			const uint32_t droppedAtKick = live.host.GetStats().seatsDropped;
+			if (live.host.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, live.nowMs, 0x4831ULL, 1, 90, issued) != NetKickBanResult::Ok) {
+				return Fail("the host could not remove the targeted seat");
+			}
+			if (!live.host.IsSeatClosed(targetRecord.stableSeat) || live.host.IsSeatHeldForReclaim(issued.lockstepPeerId) ||
+			    live.host.GetStats().seatsRemoved != 1 || live.host.GetStats().seatsDropped != droppedAtKick) {
+				return Fail("the kick left a reclaim hold or counted as a drop");
+			}
+			if (live.host.NotifyDisconnect(target.connection, 200) != NetH4DisconnectOutcome::Removed) {
+				return Fail("the post-kick disconnect opened a hold");
+			}
+			NetPeerId keeperConnection = c_InvalidNetPeerId;
+			uint32_t keeperGeneration = 0;
+			uint32_t keeperIncarnation = 0;
+			if (!live.host.GetSeatHolder(0, keeperConnection, keeperGeneration, keeperIncarnation) || keeperConnection != keeper.connection) {
+				return Fail("the kick touched the other holder");
+			}
+			if (issued.notice.action != NetParticipantRemovalAction::Kick || issued.notice.stableSeat != targetRecord.stableSeat) {
+				return Fail("the issued notice did not name the kicked seat");
+			}
+			if (!target.client.HandleMessage(issued.notice, live.nowMs) || !target.client.WasRemoved() || target.store.HasRecord() ||
+			    target.client.GetState() != NetH4ClientState::Left) {
+				return Fail("the targeted client did not treat the notice as terminal");
+			}
+			if (target.client.AbsorbRejection(live.nowMs, NetRejectReason::ParticipantRemoved)) {
+				return Fail("a removed client retried admission");
+			}
+			NetParticipantRemoval remapped = issued.notice;
+			remapped.stableSeat = 9;
+			remapped.txId = Ramp<16>(0x77);
+			if (keeper.client.HandleMessage(remapped, live.nowMs) && keeper.client.WasRemoved()) {
+				return Fail("a remapped notice removed a survivor");
+			}
+			live.ClearDelivered();
+			live.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			NetH4Reclaim stale;
+			stale.txId = Ramp<16>(0x91);
+			stale.epoch = targetRecord.epoch;
+			stale.stableSeat = targetRecord.stableSeat;
+			stale.holderGeneration = targetRecord.holderGeneration;
+			stale.identity = MakeIdentity();
+			stale.displayName = "kicked";
+			if (!live.SendRaw(213, stale, &error)) {
+				return Fail(error);
+			}
+			live.nowMs += NetReconnectAdmission::c_DenialReleaseMs;
+			live.DrainHostOutbound();
+			if (CountOf<NetH4JoinCommitted>(live.Delivered(213)) != 0 || CountOf<NetJoinRejected>(live.Delivered(213)) != 1) {
+				return Fail("the kicked identity reclaimed the closed seat");
+			}
+
+			Wire held;
+			ConfigureWire(held);
+			Endpoint dropped;
+			dropped.connection = 221;
+			ConfigureEndpoint(dropped, "kick-held", &unixNow);
+			held.Add(&dropped);
+			NetH4TicketRecord heldRecord;
+			if (SeatAndDrop(held, dropped, heldRecord, unixNow, &error) != 0) {
+				return Fail("could not seat and drop the held arm: " + error);
+			}
+			if (!held.host.IsSeatHeldForReclaim(2)) {
+				return Fail("the held arm did not open a reclaim hold");
+			}
+			const auto heldView = held.host.GetModerationView();
+			NetParticipantRemovalIssue heldIssue;
+			if (held.host.RemoveParticipant(NetSelectModerationSeat(heldView[0]), NetParticipantRemovalAction::Kick, held.nowMs, 0x4831ULL, 1, 140, heldIssue) != NetKickBanResult::Ok ||
+			    held.host.IsSeatHeldForReclaim(2) || !held.host.IsSeatClosed(heldRecord.stableSeat)) {
+				return Fail("kicking a held seat left a reclaim vacancy");
+			}
+
+			Wire pending;
+			ConfigureWire(pending);
+			Endpoint holder;
+			holder.connection = 231;
+			ConfigureEndpoint(holder, "kick-sub-holder", &unixNow);
+			pending.Add(&holder);
+			NetH4TicketRecord subRecord;
+			if (SeatAndDrop(pending, holder, subRecord, unixNow, &error) != 0) {
+				return Fail("could not seat the substitution arm: " + error);
+			}
+			if (!pending.SendRaw(71, MakeApplicant(0, 0x60, "Carol"), &error)) {
+				return Fail(error);
+			}
+			const auto subView = pending.host.GetModerationView();
+			if (pending.host.ApplyModeration(NetSelectModerationSeat(subView[0], 71), NetModerationAction::Substitute, pending.nowMs) != NetH4ModerationResult::Ok ||
+			    !pending.host.HasSubstitution(0)) {
+				return Fail("the in-flight substitution did not start");
+			}
+			NetParticipantRemovalIssue subIssue;
+			if (pending.host.RemoveParticipant(NetSelectModerationSeat(pending.host.GetModerationView()[0]), NetParticipantRemovalAction::Kick, pending.nowMs, 0x4831ULL, 1, 160, subIssue) != NetKickBanResult::Ok ||
+			    pending.host.HasSubstitution(0)) {
+				return Fail("the kick left a substitution in flight");
+			}
+
+			auto cpuTable = MakeSeatTable();
+			cpuTable[0].local = true;
+			Wire guards;
+			ConfigureWire(guards);
+			guards.host.SetSeatTable(cpuTable, NetMatchMode::PvPSkirmish);
+			NetParticipantRemovalIssue ignored;
+			NetModerationSelection hostSeat = NetSelectModerationSeat(guards.host.GetModerationView()[0]);
+			if (guards.host.RemoveParticipant(hostSeat, NetParticipantRemovalAction::Kick, guards.nowMs, 0x4831ULL, 0, 0, ignored) != NetKickBanResult::ForbiddenTarget) {
+				return Fail("the host seat was removable");
+			}
+			NetModerationSelection cpuSeat = NetSelectModerationSeat(guards.host.GetModerationView()[2]);
+			if (guards.host.RemoveParticipant(cpuSeat, NetParticipantRemovalAction::Kick, guards.nowMs, 0x4831ULL, 0, 0, ignored) != NetKickBanResult::ForbiddenTarget) {
+				return Fail("a CPU seat was removable");
+			}
+			hostSeat.holderGeneration = 99;
+			if (live.host.RemoveParticipant(hostSeat, NetParticipantRemovalAction::Kick, live.nowMs, 0x4831ULL, 1, 90, ignored) != NetKickBanResult::StaleSelection) {
+				return Fail("a stale selection still removed a seat");
+			}
+			if (std::string(NetKickBanResultName(NetKickBanResult::Ok)) != "Ok") {
+				return Fail("the L20 result adapter lost its name");
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS kick: targeted peer removed with no reclaim hold" << std::endl;
+			return 0;
+		}
+
 	int NetReconnectSessionSelfTest::Run() {
 		if (const int result = TestStoreFailsClosed(); result != 0) {
 			return result;
@@ -6175,6 +6366,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestRemovalAcceptModel(); result != 0) {
+			return result;
+		}
+		if (const int result = TestKickTerminal(); result != 0) {
 			return result;
 		}
 		if (const int result = TestRefusedReclaimReportsNewJoin(); result != 0) {

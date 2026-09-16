@@ -16,6 +16,7 @@ CODEC_ROWS = (
     "removal-codec: forged/remapped/wrong-epoch/duplicate refused; accept is terminal",
 )
 KICK_ROWS = (
+    "kick: socket-only drop still opens a reclaim hold",
     "kick: targeted peer removed with no reclaim hold",
 )
 

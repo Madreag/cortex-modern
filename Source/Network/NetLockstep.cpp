@@ -4764,6 +4764,20 @@ namespace RTE {
 		ApplyHoldResolution(peerId, resolution, nowMs, true);
 	}
 
+	void NetLockstepCoordinator::EvictRemovedPeer(uint8_t peerId, const std::string& message, uint64_t nowMs) {
+		if (!m_RelayHost || peerId == 0 || peerId == m_Config.localPeerId) {
+			return;
+		}
+		if (m_DroppedSeats.find(peerId) != m_DroppedSeats.end()) {
+			ApplyHoldResolution(peerId, NetLockstepHoldResolution::Expired, nowMs, true);
+			return;
+		}
+		if (m_PeerLeaveFrames.find(peerId) != m_PeerLeaveFrames.end()) {
+			return;
+		}
+		ApplyPeerLeave(peerId, FirstFrameWithout(peerId), message, nowMs, true, false);
+	}
+
 	void NetLockstepCoordinator::ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay) {
 		if (resolution == NetLockstepHoldResolution::None || m_DroppedSeats.find(peerId) == m_DroppedSeats.end()) {
 			return;
