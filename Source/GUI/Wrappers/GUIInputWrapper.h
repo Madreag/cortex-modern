@@ -24,9 +24,11 @@ namespace RTE {
 		static void AcquireJoystickBackgroundEvents();
 		/// Gives back a share of the hint; only the last holder restores the previous value.
 		static void ReleaseJoystickBackgroundEvents();
+		/// Takes a share of the one shared scripted pad; the last holder detaches it.
+		static bool AcquireScriptedPad();
 		/// Presses or releases a button on the one shared scripted pad.
 		static bool QueueScriptedPad(const std::string& name, bool down);
-		/// Detaches the shared scripted pad if it is still attached.
+		/// Gives back a share of the shared scripted pad; only the last holder detaches it.
 		static void ReleaseScriptedPad();
 		/// SDL joystick id of the shared scripted pad, or 0 when none is attached.
 		static uint32_t ScriptedPadId();
