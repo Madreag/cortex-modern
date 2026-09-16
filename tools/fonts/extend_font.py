@@ -4,15 +4,18 @@ The atlas is 16 glyphs per row from U+0020, a red separator at (0, 0) and
 on each glyph's scanline, colour-key at top-right. Width is the run to the
 next red minus one. This tool keeps 0x20-0x7F cells byte-identical and
 fills 0x80-0xFF, except the engine HUD-icon indexes listed below. Those
-cells stay as they are; the generator refuses to emit if any of them
-would change. Names use FontSmall through GlyphFontFor (GUIFont.cpp:143),
-so FontLarge HUD cells are not the letter atlas.
+cells are restored from the wave tip and pinned; the generator refuses
+to emit if any of them would change. Names use Menus/FontSmall through
+GlyphFontFor (GUIFont.cpp:143), so FontLarge HUD cells are not the
+letter atlas and Skins/FontSmall HUD cells are not name letters.
 """
 
 from __future__ import annotations
 
 import hashlib
+import subprocess
 import sys
+from io import BytesIO
 from pathlib import Path
 
 from PIL import Image
@@ -34,12 +37,13 @@ FIRST = 32
 CP1252_UNUSED = frozenset({0x81, 0x8D, 0x8F, 0x90, 0x9D})
 
 # Signed-char HUD indexes the engine draws (unsigned = signed + 256).
-# FontSmall: GetSmallFont() on Skins/FontSmall.png, and the matching cells
-# on Menus/FontSmall.png (the two files ship the same icons).
+# FontSmall HUD lives only on Skins/FontSmall.png (GetSmallFont(), FrameMan.cpp:1268).
+# Menus/FontSmall.png is the name atlas; 0xCF/0xD5/0xD6 stay Ï/Õ/Ö there.
 #   0xCF  AHuman.cpp:3672  -49 pickup prefix
 #   0xD5  DataModule.cpp:57,122  -43 via LoadingScreen.cpp:139
 #   0xD6  Reader.cpp:550  -42 via LoadingScreen.cpp:139
 FONT_SMALL_HUD = frozenset({0xCF, 0xD5, 0xD6})
+WAVE_TIP = "6447c4c2e3"
 # FontLarge: GetLargeFont() and TitleScreen's Menus/FontLarge.png.
 #   0xC2  GameActivity.cpp:2824  -62 team-one (commented draw; cell is the icon)
 #   0xC5  GameActivity.cpp:2824  -59 team-two
@@ -68,10 +72,10 @@ FONT_LARGE_HUD = frozenset({
 
 
 def hud_keep_set(path):
-    name = Path(path).name
-    if name == "FontSmall.png":
+    path = Path(path)
+    if path.name == "FontSmall.png" and "Menus" not in path.parts:
         return FONT_SMALL_HUD
-    if name == "FontLarge.png":
+    if path.name == "FontLarge.png":
         return FONT_LARGE_HUD
     return frozenset()
 
@@ -165,8 +169,8 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def parse_font(path):
-    original = Image.open(path)
+def parse_font(path, source=None):
+    original = source if source is not None else Image.open(path)
     rgba = original.convert("RGBA")
     width, height = rgba.size
     pix = rgba.load()
@@ -637,7 +641,14 @@ def build_glyph(font, style, code):
     return special(font, style, code), "?"
 
 
-def plan_high(font, style):
+def load_wave_tip_cells(path):
+    """HUD pin cells from the wave tip, not from an already-emitted atlas."""
+    rel = Path(path).resolve().relative_to(ROOT).as_posix()
+    raw = subprocess.check_output(["git", "-C", str(ROOT), "show", f"{WAVE_TIP}:{rel}"])
+    return parse_font(path, Image.open(BytesIO(raw)))["cells"]
+
+
+def plan_high(font, style, pin_cells):
     planned = {}
     bases = {}
     kept = []
@@ -646,9 +657,10 @@ def plan_high(font, style):
         if code not in font["cells"]:
             uncovered.append(code)
             continue
-        cell = font["cells"][code]
         if is_hud(code, font):
-            planned[code] = cell.copy()
+            if code not in pin_cells:
+                raise RuntimeError(f"{font['path']}: HUD cell U+{code:02X} missing at {WAVE_TIP}")
+            planned[code] = pin_cells[code].copy()
             bases[code] = "HUD"
             kept.append(code)
             continue
@@ -785,14 +797,15 @@ def parse_rebuilt(path, expected_ascii, orig_rgba, font_h):
 def extend_one(path):
     font = parse_font(path)
     style = style_of(font)
-    planned, bases, kept, uncovered = plan_high(font, style)
     keep = hud_keep_set(path)
-    refuse_if_hud_changed(font["cells"], planned, keep, path)
+    pin_cells = load_wave_tip_cells(path) if keep else {}
+    planned, bases, kept, uncovered = plan_high(font, style, pin_cells)
+    refuse_if_hud_changed(pin_cells, planned, keep, path)
     canvas, cells = emit_atlas(font, planned)
     written = quantize_like(font["original"], canvas)
     save_png(written, path)
     again = parse_rebuilt(path, font["cells"], font["rgba"], font["font_h"])
-    refuse_if_hud_changed(font["cells"], again["cells"], keep, path)
+    refuse_if_hud_changed(pin_cells, again["cells"], keep, path)
     return {
         "path": path,
         "kept_hud": kept,
