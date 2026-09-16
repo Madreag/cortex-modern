@@ -16,6 +16,21 @@ namespace RTE {
 	struct CheckpointImage {
 		uint64_t tick = 0;
 		uint64_t generation = 0;
+		CheckpointText activity;
+		CheckpointText scene;
+		CheckpointText structure;
+		CheckpointText sceneRuntime;
+		CheckpointText globals;
+		std::vector<CheckpointText> graphs;
+		std::string activityName;
+		std::string originalScenePresetName;
+		int64_t simUpdateCount = 0;
+		int64_t simTimeTicks = 0;
+		long uniqueIDCounter = 0;
+		int luaStateCursor = 0;
+		std::vector<std::pair<uint64_t, long int>> quarantine;
+		bool placeObjects = false;
+		bool placeUnits = false;
 		CheckpointText main;
 		CheckpointText index;
 		std::vector<std::pair<std::string, std::shared_ptr<const BitmapSnapshot>>> layers;
@@ -74,6 +89,9 @@ namespace RTE {
 		size_t m_LastImageBytes = 0;
 		double m_LastDirtyRatio = 0;
 	};
+
+	CheckpointText AssembleCheckpointSave(const CheckpointImage& image);
+	CheckpointText AssembleCheckpointIndex(const CheckpointImage& image);
 
 	void ArmLuaCheckpointBarrier();
 	uint64_t LuaCheckpointWriteGeneration();
