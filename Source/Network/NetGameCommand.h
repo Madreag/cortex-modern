@@ -28,6 +28,7 @@ namespace RTE {
 		AIScriptMessage = 14,
 		AIGib = 15,
 		PlaceBrain = 16, //!< 14 and 15 carry the AI intent commands.
+		WorldTransition = 17,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -314,6 +315,35 @@ namespace RTE {
 		bool operator==(const NetGamePlaceBrain&) const = default;
 	};
 
+	// A persistent world's one ordered membership/spawn/binding step. System-authored: only the world's
+	// host issues it, for a team it need not own, so every peer seats the same member, spawns the same
+	// resident and binds the same control at the one announced tick. A respawn rides the same command so
+	// nothing about a world's population is decided twice.
+	struct NetGameWorldTransition {
+		enum Kind : uint8_t {
+			Respawn = 0,  //!< Replace a team's lost resident; seats nobody.
+			Activate = 1, //!< Seat a caught-up member at its announced tick.
+			Release = 2,  //!< Free a cleanly left member's slot under its next generation.
+		};
+
+		uint8_t kind = Respawn;
+		uint8_t peerId = 0;            //!< The member this transition seats or frees; 0 on a respawn.
+		uint32_t holderGeneration = 0; //!< The slot generation this member holds; a stale one is refused.
+		uint64_t membershipRevision = 0;
+		uint64_t activationFrame = 0;  //!< E: the first frame the member's input is required.
+		int32_t team = 0;
+		int32_t player = -1;           //!< The activity player slot to bind; -1 binds none.
+		float posX = 0.0F;
+		float posY = 0.0F;
+		int32_t aiMode = -1;           //!< -1 keeps the preset's default.
+		bool bindBrain = false;        //!< Make the spawned resident the member's brain.
+		std::string className;         //!< Empty spawns nothing: a pure membership step.
+		std::string preset;
+		std::string module;
+
+		bool operator==(const NetGameWorldTransition&) const = default;
+	};
+
 	/// Complete local slots; an empty slot clears the previous binding without changing the world.
 	struct NetGamePlayerBindings {
 		std::array<NetPlayerBinding, 4> players{};
@@ -321,7 +351,7 @@ namespace RTE {
 		bool operator==(const NetGamePlayerBindings&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain>;
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain, NetGameWorldTransition>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;

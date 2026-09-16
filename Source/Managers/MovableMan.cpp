@@ -475,6 +475,13 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				g_ConsoleMan.PrintString("ERROR: Rejected a Reseat command from a peer that is not the host");
 				continue;
 			}
+		} else if (std::holds_alternative<NetGameWorldTransition>(command.payload)) {
+			// A world's membership, spawns and bindings are the host's alone; a seatless dedicated host
+			// owns no team, so the team gate cannot vet this one either.
+			if (command.senderPeerId != ScenarioRunner::GetLockstepHostPeerId()) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a WorldTransition command from a peer that is not the host");
+				continue;
+			}
 		} else if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
 			if (!ScenarioRunner::IsLockstepAIOrderAuthorized(command.senderPeerId, *order)) {
 				const Actor* target = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order->actorUID)));
@@ -710,6 +717,43 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				++reseated;
 			}
 			std::cout << "[net-match] reseat: team " << reseat->team << " -> peer " << static_cast<int>(reseat->newOwnerPeerId) << " actors " << reseated << "/" << reseat->actorUIDs.size() << std::endl;
+		} else if (const NetGameWorldTransition* transition = std::get_if<NetGameWorldTransition>(&command.payload)) {
+			if (transition->team < Activity::Teams::TeamOne || transition->team >= Activity::Teams::MaxTeamCount ||
+			    !std::isfinite(transition->posX) || !std::isfinite(transition->posY)) {
+				continue;
+			}
+			Actor* seated = nullptr;
+			if (!transition->className.empty()) {
+				if (const Entity* preset = g_PresetMan.GetEntityPreset(transition->className, transition->preset, transition->module)) {
+					Entity* clone = preset->Clone();
+					if (Actor* actor = dynamic_cast<Actor*>(clone)) {
+						actor->SetTeam(transition->team);
+						actor->SetPos(Vector(transition->posX, transition->posY));
+						if (transition->aiMode >= 0 && transition->aiMode < Actor::AIMODE_COUNT) {
+							actor->SetAIMode(static_cast<Actor::AIMode>(transition->aiMode));
+						}
+						// Every peer clones at the same committed tick in this order, so the resident's
+						// unique id is the same number on all of them and the binding below can name it.
+						g_MovableMan.AddActor(actor);
+						seated = actor;
+					} else {
+						delete clone;
+					}
+				} else {
+					g_ConsoleMan.PrintString("ERROR: World transition rejected - unknown preset \"" + transition->preset + "\"");
+					continue;
+				}
+			}
+			if (transition->kind == NetGameWorldTransition::Activate && transition->peerId != 0 && seated) {
+				ScenarioRunner::SetLockstepControlOverride(static_cast<int64_t>(seated->GetUniqueID()), transition->peerId);
+			}
+			if (transition->bindBrain && seated && transition->player >= Players::PlayerOne && transition->player < Players::MaxPlayerCount) {
+				activity->SetPlayerBrain(seated, transition->player);
+			}
+			std::cout << "[net-match] world transition: kind " << static_cast<int>(transition->kind)
+			          << " peer " << static_cast<int>(transition->peerId) << " team " << transition->team
+			          << " revision " << transition->membershipRevision
+			          << " actor " << (seated ? static_cast<int64_t>(seated->GetUniqueID()) : 0) << std::endl;
 		} else if (const NetGameInventoryOp* inventoryOp = std::get_if<NetGameInventoryOp>(&command.payload)) {
 			Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(inventoryOp->actorUID)));
 			AHuman* human = dynamic_cast<AHuman*>(actor);
