@@ -106,6 +106,7 @@ namespace RTE {
 			scene->m_UnseenPixelSize[team] = unseenPixelSize[team];
 			scene->m_ScanScheduled[team] = scanScheduled[team];
 		}
+		scene->RestoreHorizonAfterPreview();
 		return true;
 	}
 

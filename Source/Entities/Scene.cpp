@@ -7,6 +7,7 @@
 #include "LuaMan.h"
 #include "MovableMan.h"
 
+#include <iterator>
 #include <optional>
 #include "TimerMan.h"
 #include "FrameMan.h"
@@ -2970,7 +2971,7 @@ namespace {
 }
 
 void Scene::NoteHorizonTerrainBox(const Box& newArea) {
-	if (!ScenarioRunner::IsLockstepControllerSyncActive() || SharedPathHorizonTicks() == 0) {
+	if (g_MovableMan.IsSpeculative() || !ScenarioRunner::IsLockstepControllerSyncActive() || SharedPathHorizonTicks() == 0) {
 		return;
 	}
 	const uint64_t originTick = ScenarioRunner::GetLockstepAppliedFrame();
@@ -2981,15 +2982,26 @@ void Scene::NoteHorizonTerrainBox(const Box& newArea) {
 		}
 		pathFinder->PinHorizonFromLive(newArea);
 		HorizonTerrainPatch patch;
+		std::vector<HorizonNodeSnapshot> nodes;
 		const int team = index - 1;
 		if (team >= Activity::Teams::TeamOne) {
 			g_MovableMan.OverrideMaterialDoors(true, team);
 		}
 		pathFinder->CaptureHorizonPatch(newArea, patch);
+		pathFinder->CaptureHorizonNodeSnapshots(newArea, nodes);
 		if (team >= Activity::Teams::TeamOne) {
 			g_MovableMan.OverrideMaterialDoors(false, team);
 		}
-		m_HorizonTerrainBoxes.push_back({newArea, originTick, index, std::move(patch)});
+		m_HorizonTerrainBoxes.push_back({newArea, originTick, index, std::move(patch), std::move(nodes)});
+	}
+}
+
+void Scene::RestoreHorizonAfterPreview() {
+	m_HorizonTerrainBoxes.clear();
+	for (std::unique_ptr<PathFinder>& pathFinder: m_pPathFinders) {
+		if (pathFinder) {
+			pathFinder->RestoreHorizonOverlay();
+		}
 	}
 }
 
@@ -3011,6 +3023,7 @@ void Scene::FlushHorizonTerrainBoxes() {
 	};
 	std::map<GroupKey, std::vector<Box>> boxesByKey;
 	std::map<GroupKey, std::vector<HorizonTerrainPatch>> patchesByKey;
+	std::map<GroupKey, std::vector<HorizonNodeSnapshot>> nodesByKey;
 	std::vector<GroupKey> keys;
 	for (HorizonTerrainBox& item: m_HorizonTerrainBoxes) {
 		const GroupKey key{item.originTick, item.finderIndex};
@@ -3019,13 +3032,14 @@ void Scene::FlushHorizonTerrainBoxes() {
 		}
 		boxesByKey[key].push_back(item.box);
 		patchesByKey[key].push_back(std::move(item.patch));
+		nodesByKey[key].insert(nodesByKey[key].end(), std::make_move_iterator(item.nodes.begin()), std::make_move_iterator(item.nodes.end()));
 	}
 	m_HorizonTerrainBoxes.clear();
 	for (const GroupKey& key: keys) {
 		if (key.finderIndex < 0 || static_cast<size_t>(key.finderIndex) >= m_pPathFinders.size() || !m_pPathFinders[key.finderIndex]) {
 			continue;
 		}
-		m_pPathFinders[key.finderIndex]->QueueHorizonUpdate(key.originTick, horizonTicks, boxesByKey[key], patchesByKey[key]);
+		m_pPathFinders[key.finderIndex]->QueueHorizonUpdate(key.originTick, horizonTicks, boxesByKey[key], patchesByKey[key], nodesByKey[key]);
 	}
 }
 

@@ -722,6 +722,8 @@ namespace RTE {
 
 		/// Records a terrain material change for the committed-horizon path grid.
 		void NoteHorizonTerrainBox(const Box& newArea);
+		void RestoreHorizonAfterPreview();
+		size_t TestHorizonBoxCount() const { return m_HorizonTerrainBoxes.size(); }
 		void TestSetTerrain(SLTerrain* terrain) { m_pTerrain = terrain; }
 		void TestInstallHorizonPathFinders(int width, int height, int nodeDimension, const Material* fill);
 
@@ -817,6 +819,7 @@ namespace RTE {
 			uint64_t originTick = 0;
 			int finderIndex = 0;
 			HorizonTerrainPatch patch;
+			std::vector<HorizonNodeSnapshot> nodes;
 		};
 		std::vector<HorizonTerrainBox> m_HorizonTerrainBoxes;
 
