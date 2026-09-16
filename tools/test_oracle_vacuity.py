@@ -37,6 +37,12 @@ class OracleVacuity(unittest.TestCase):
         self.assertFalse(result["pass"])
         self.assertEqual(result["reason"], "match census tick-1 lines missing")
 
+    def test_empty_census_pair_is_not_a_vacuous_pass(self):
+        """Base tree compared [] == [] and passed."""
+        result = compare_census_lines([], [])
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["reason"], "offline census tick-1 lines missing")
+
     def test_missing_pair_saves_name_the_missing_snapshot(self):
         with patch("phase_b.invoke", return_value=0):
             with tempfile.TemporaryDirectory() as tmp:
@@ -90,18 +96,28 @@ class OracleVacuity(unittest.TestCase):
 
     def test_brainless_kill_count_quotes_the_production_detail(self):
         class DummyHarness:
+            def run_isolated(self, *args, **kwargs):
+                return None
+
             def lane(self, name, lane):
                 return {"lane": name}
 
+        extra = (
+            "[spectate-probe] brain-kill simms=5000 team=0 uid=1\n"
+            "[spectate-probe] brain-kill simms=5001 team=1 uid=2\n"
+            "[spectate-probe] brain-kill simms=5002 team=2 uid=3\n"
+        )
         with patch("test_net_brainless_spectate.load_harness", return_value=DummyHarness()):
             with tempfile.TemporaryDirectory() as tmp:
                 out = Path(tmp)
                 for peer in ("host", "client"):
-                    (out / "e2e" / "brainless_spectate" / peer).mkdir(parents=True)
+                    peer_dir = out / "e2e" / "brainless_spectate" / peer
+                    peer_dir.mkdir(parents=True)
+                    (peer_dir / "stdout.log").write_text(extra, encoding="utf-8")
                 result = net_arm(out, 48400, True, 1, 1, dedicated=False)
         host = next(row for row in result["spectate_checks"] if row["name"] == "host_brains_destroyed")
         self.assertEqual(host["status"], "fail")
-        self.assertEqual(host["detail"], "brain-kill lines=0 human seats=2")
+        self.assertEqual(host["detail"], "brain-kill lines=3 human seats=2")
 
     def test_brainless_process_completed_quotes_exit_and_timeout(self):
         import run_sim_test
