@@ -499,6 +499,11 @@ namespace RTE {
 
 		// Voice identities belong to the engine. Backend channel numbers never enter a checkpoint.
 		struct PlayingVoice {
+			struct ChannelUserData {
+				SoundContainer* owner = nullptr;
+				int identity = 0;
+				std::atomic<FMOD::Channel*>* channel = nullptr;
+			} userData;
 			std::atomic<FMOD::Channel*> channel{nullptr};
 			SoundContainer* owner = nullptr;
 			std::string soundPath;
@@ -513,10 +518,17 @@ namespace RTE {
 			AudioCheckpoint::Control control;
 			bool hasArchive = false;
 
-			PlayingVoice() = default;
+			void BindUserData(int identity) {
+				userData.owner = owner;
+				userData.identity = identity;
+				userData.channel = &channel;
+			}
+			PlayingVoice() { userData.channel = &channel; }
 			PlayingVoice(FMOD::Channel* ch, SoundContainer* o, std::string path, float minDist, SoundExecutionDomain d = SoundExecutionDomain::Presentation, bool pred = false)
 				: owner(o), soundPath(std::move(path)), minimumAudibleDistance(minDist), domain(d), predicted(pred) {
 				channel.store(ch, std::memory_order_relaxed);
+				userData.owner = o;
+				userData.channel = &channel;
 			}
 			PlayingVoice(const PlayingVoice& other) { *this = other; }
 			PlayingVoice(PlayingVoice&& other) noexcept { *this = other; }
@@ -535,6 +547,9 @@ namespace RTE {
 				priority = other.priority;
 				control = other.control;
 				hasArchive = other.hasArchive;
+				userData.owner = owner;
+				userData.identity = other.userData.identity;
+				userData.channel = &channel;
 				return *this;
 			}
 			PlayingVoice& operator=(PlayingVoice&& other) noexcept {
@@ -552,6 +567,9 @@ namespace RTE {
 				priority = other.priority;
 				control = std::move(other.control);
 				hasArchive = other.hasArchive;
+				userData.owner = owner;
+				userData.identity = other.userData.identity;
+				userData.channel = &channel;
 				return *this;
 			}
 			FMOD::Channel* Channel() const { return channel.load(std::memory_order_acquire); }
@@ -559,6 +577,8 @@ namespace RTE {
 		};
 		std::map<int, PlayingVoice> m_PlayingVoices;
 		std::unordered_map<int, int> m_BackendVoiceIdentities;
+		std::mutex m_EndedVoicesMutex;
+		std::vector<int> m_EndedVoices;
 		int m_NextVoiceIdentity = 0;
 		// A Lua GC finalizer frees sound containers on whichever pool thread collects its state, and several states collect at once, so the registry group down to m_NextSoundContainerIdentity is locked.
 		mutable std::recursive_mutex m_CheckpointRegistryMutex;
@@ -604,6 +624,9 @@ namespace RTE {
 		void RetireVoice(int identity);
 		void ReleaseVoiceChannel(int identity);
 		void ReleaseEndedChannel(FMOD::Channel* channel);
+		FMOD_RESULT BindPlayingVoiceUserData(FMOD::Channel* channel, PlayingVoice& voice, int identity);
+		void DrainEndedVoices();
+		void EraseBackendIdentity(int identity);
 		void StoreVoiceArchive(PlayingVoice& voice);
 		void RefreshStoredVoiceControl(PlayingVoice& voice);
 		void BindVoiceLifetime(PlayingVoice& voice, unsigned sampleFrames, float sampleRate, unsigned loopStart, unsigned loopEnd, float pitch, int loops, double position, bool paused);
