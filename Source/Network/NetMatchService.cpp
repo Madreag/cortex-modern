@@ -2714,7 +2714,7 @@ static std::string ResyncSaveName() {
 		runnerConfig.lobbyWaitMs = c_MenuLobbyWaitMs;
 		// First lockstep tick is 1: RestartActivity zeroes the sim count, UpdateSim increments it before MovableMan reads it.
 		runnerConfig.startFrame = 1;
-		// Lobby runners take the activity from the adopted roster, not this leftover field.
+		// The lobby lockstep start takes the activity from the adopted roster.
 		runnerConfig.autoReady = request.host;
 		runnerConfig.autoStart = false;
 		runnerConfig.readyRequested = &m_ReadyRequested;
