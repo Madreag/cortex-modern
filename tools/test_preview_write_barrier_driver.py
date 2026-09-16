@@ -11,7 +11,8 @@ class CostChecks(unittest.TestCase):
     def setUp(self):
         self.red = dict(transport_ok=True, interference=[], previews=16, preview_ms=5.0, exit_code=5)
         self.green = dict(transport_ok=True, interference=[], previews=16, preview_ms=5.1, exit_code=0,
-                          native=[dict(windows=16, capture_ms=1, write_ms=1, restore_ms=1, max_ms=0.2)])
+                          native=[dict(windows=16, capture_ms=1, write_ms=1, restore_ms=1, max_ms=0.2, p99_ms=0.1,
+                                       tables=64, saves=8)])
 
     def score(self):
         return driver.assess_cost(self.red, self.green, '240', 240, 240)['pass_check']
@@ -23,6 +24,17 @@ class CostChecks(unittest.TestCase):
     def test_exact_limit_is_not_under_budget(self):
         self.green['native'][0]['max_ms'] = 0.5
         self.assertFalse(self.score())
+
+    def test_p99_over_limit_is_rejected(self):
+        self.green['native'][0]['p99_ms'] = 0.5
+        self.assertFalse(self.score())
+
+    def test_cost_row_carries_journal_and_restore_fields(self):
+        cost = driver.assess_cost(self.red, self.green, '240', 240, 240)
+        self.assertEqual(cost['journal_entries'], 8)
+        self.assertEqual(cost['tables_touched'], 64)
+        self.assertEqual(cost['restore_us_per_window'], 1000.0/16)
+        self.assertEqual(cost['native_p99_ms_sum'], 0.1)
 
     def test_states_are_summed(self):
         self.green['native'] *= 3
