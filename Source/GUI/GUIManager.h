@@ -57,6 +57,12 @@ namespace RTE {
 		/// @param Pan Panel.
 		void SetFocus(GUIPanel* Pan);
 
+		/// The panel that currently has keyboard focus; null when none does.
+		GUIPanel* GetFocusPanel() const { return m_FocusPanel; }
+
+		/// Drops a combo, presses Return, and checks the manager survives with focus cleared.
+		static bool RunComboKeyCommitSelfTest();
+
 	private:
 		std::vector<GUIPanel*> m_PanelList;
 		GUIPanel* m_CapturedPanel;

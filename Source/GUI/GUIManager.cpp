@@ -1,7 +1,10 @@
 #include "GUI.h"
+#include "GUIComboBox.h"
 #include "Timer.h"
 
 #include <cassert>
+#include <cstring>
+#include <iostream>
 
 using namespace RTE;
 
@@ -135,12 +138,13 @@ void GUIManager::Update(bool ignoreKeyboardEvents) {
 				Buttons |= 1 << i;
 		}
 
-		// Mouse Up
+		// Mouse Up. CloseDropped and several click handlers SetFocus(nullptr) here.
 		if (Released != GUIPanel::MOUSE_NONE && CurPanel) {
 			CurPanel->OnMouseUp(MouseX, MouseY, Released, Mod);
 		}
 
-		// Double click (on the mouse up)
+		// Double click (on the mouse up). The up handler may have cleared m_FocusPanel; this still
+		// talks to CurPanel, not the focus member.
 		if (Released != GUIPanel::MOUSE_NONE && m_DoubleClickButtons != GUIPanel::MOUSE_NONE) {
 			if (CurPanel) {
 				CurPanel->OnDoubleClick(MouseX, MouseY, m_DoubleClickButtons, Mod);
@@ -148,7 +152,7 @@ void GUIManager::Update(bool ignoreKeyboardEvents) {
 			m_LastMouseDown[0] = m_LastMouseDown[1] = m_LastMouseDown[2] = -99999.0f;
 		}
 
-		// Mouse Down
+		// Mouse Down. Buttons and lists can take focus, or a click-outside CloseDropped can clear it.
 		if (Pushed != GUIPanel::MOUSE_NONE) {
 			// Double click settings
 			m_DoubleClickButtons = GUIPanel::MOUSE_NONE;
@@ -182,14 +186,14 @@ void GUIManager::Update(bool ignoreKeyboardEvents) {
 			CurPanel->OnMouseMove(MouseX, MouseY, Buttons, Mod);
 		}
 
-		// Mouse Hover
+		// Mouse Hover. The hover panel can change focus; later work re-reads the live members.
 		if (m_HoverTrack && m_HoverTime < CurTime) {
 			// Disable it (panel will have to re-enable it if it wants to continue)
 			m_HoverTrack = false;
 
-			if (m_HoverPanel && m_HoverPanel->PointInside(MouseX, MouseY) /*GetPanelID() == CurPanel->GetPanelID()*/) {
-				// call the OnMouseHover event
-				m_HoverPanel->OnMouseHover(MouseX, MouseY, Buttons, Mod);
+			GUIPanel* hover = m_HoverPanel;
+			if (hover && hover->PointInside(MouseX, MouseY) /*GetPanelID() == CurPanel->GetPanelID()*/) {
+				hover->OnMouseHover(MouseX, MouseY, Buttons, Mod);
 			}
 		}
 
@@ -239,28 +243,38 @@ void GUIManager::Update(bool ignoreKeyboardEvents) {
 		}
 
 		for (i = 1; i < 256; i++) {
+			GUIPanel* focused = m_FocusPanel;
+			if (!focused || !focused->IsEnabled()) {
+				break;
+			}
 			switch (KeyboardBuffer[i]) {
-				// KeyDown & KeyPress
+				// KeyDown & KeyPress. CloseDropped SetFocus(nullptr) from OnKeyDown; skip the rest of this key.
 				case GUIInput::Pushed:
-					m_FocusPanel->OnKeyDown(i, Mod);
-					m_FocusPanel->OnKeyPress(i, Mod);
+					focused->OnKeyDown(i, Mod);
+					if (m_FocusPanel == focused) {
+						focused->OnKeyPress(i, Mod);
+					}
 					break;
 
 					// KeyUp
 				case GUIInput::Released:
-					m_FocusPanel->OnKeyUp(i, Mod);
+					if (m_FocusPanel == focused) {
+						focused->OnKeyUp(i, Mod);
+					}
 					break;
 
 					// KeyPress
 				case GUIInput::Repeat:
-					m_FocusPanel->OnKeyPress(i, Mod);
+					if (m_FocusPanel == focused) {
+						focused->OnKeyPress(i, Mod);
+					}
 					break;
 				default:
 					break;
 			}
 		}
 		std::string_view textInput;
-		if (m_Input->GetTextInput(textInput)) {
+		if (m_FocusPanel && m_FocusPanel->IsEnabled() && m_Input->GetTextInput(textInput)) {
 			m_FocusPanel->OnTextInput(textInput);
 		}
 	}
@@ -366,4 +380,38 @@ void GUIManager::SetFocus(GUIPanel* Pan) {
 	if (m_FocusPanel) {
 		m_FocusPanel->OnGainFocus();
 	}
+}
+
+bool GUIManager::RunComboKeyCommitSelfTest() {
+	class KeyInput : public GUIInput {
+	public:
+		KeyInput() : GUIInput(-1, false) {}
+		void PushEnter() { m_KeyboardBuffer[Key_Enter] = Pushed; }
+	};
+	KeyInput input;
+	GUIManager manager(&input);
+	GUIControlManager controls;
+	GUIComboBox combo(&manager, &controls);
+	combo.Create("ComboHostActivity", 0, 0, 200, 20);
+	combo.AddItem("P4 Alpha Duel - Base.rte");
+	combo.AddItem("Brain vs Brain - Base.rte");
+	manager.AddPanel(combo.GetPanel());
+	GUIListPanel* list = combo.GetListPanel();
+	manager.AddPanel(list);
+	list->SetSignalTarget(&combo);
+	list->_SetVisible(true);
+	list->SetFocus();
+	if (!combo.IsDropped() || manager.GetFocusPanel() != list) {
+		std::cerr << "[combo-key-selftest] FAIL drop did not focus the list" << std::endl;
+		return false;
+	}
+	input.PushEnter();
+	manager.Update();
+	if (combo.IsDropped() || manager.GetFocusPanel()) {
+		std::cerr << "[combo-key-selftest] FAIL after Return dropped=" << combo.IsDropped()
+		          << " focus=" << (manager.GetFocusPanel() ? 1 : 0) << std::endl;
+		return false;
+	}
+	std::cout << "[combo-key-selftest] PASS" << std::endl;
+	return true;
 }

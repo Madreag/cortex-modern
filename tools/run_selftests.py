@@ -27,6 +27,7 @@ SELFTESTS = [
     "camera-null-scene",
     "rotate-primitive",
     "float-text",
+    "combo-key",
     "settings-preferences",
     "single-module-harness",
     "render-window-scripts",
