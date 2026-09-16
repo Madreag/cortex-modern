@@ -65,6 +65,7 @@ void GUITextPanel::Create(int X, int Y, int Width, int Height) {
 }
 
 void GUITextPanel::ChangeSkin(GUISkin* Skin) {
+	m_TextSkin = Skin;
 	// Load the font
 	std::string Filename;
 	Skin->GetValue("TextBox", "Font", &Filename);
@@ -110,7 +111,11 @@ void GUITextPanel::Draw(GUIScreen* Screen) {
 	const bool canEdit = m_Enabled && (!m_Parent || m_Parent->IsEnabled());
 
 	// Draw the text
-	m_Font->SetColor(m_FontColor);
+	unsigned long color = m_FontColor;
+	if (!canEdit && m_TextSkin) {
+		color = m_TextSkin->DimColor(m_FontColor, Screen->GetBitmap()->GetColorDepth());
+	}
+	m_Font->SetColor(color);
 	m_Font->SetKerning(m_FontKerning);
 	m_Font->Draw(Screen->GetBitmap(), m_X + wSpacer, m_Y + hSpacer, Text, m_FontShadow);
 
@@ -155,6 +160,9 @@ void GUITextPanel::OnLoseFocus() {
 }
 
 void GUITextPanel::OnKeyPress(int KeyCode, int Modifier) {
+	if (!m_Enabled || (m_Parent && !m_Parent->IsEnabled())) {
+		return;
+	}
 	// TODO: Figure out what the "performance bitching" is.
 	// Condition here to stop the compiler bitching about performance
 	bool Shift = ((Modifier & MODI_SHIFT) != 0);
@@ -294,6 +302,9 @@ void GUITextPanel::OnKeyPress(int KeyCode, int Modifier) {
 }
 
 void GUITextPanel::OnTextInput(std::string_view inputText) {
+	if (!m_Enabled || (m_Parent && !m_Parent->IsEnabled())) {
+		return;
+	}
 	int minValidKeyCode = 32;
 	int maxValidKeyCode = 126;
 	if (m_NumericOnly) {
@@ -322,6 +333,9 @@ void GUITextPanel::OnTextInput(std::string_view inputText) {
 }
 
 void GUITextPanel::OnMouseDown(int X, int Y, int Buttons, int Modifier) {
+	if (!m_Enabled || (m_Parent && !m_Parent->IsEnabled())) {
+		return;
+	}
 	SendSignal(MouseDown, Buttons);
 
 	if (m_Locked) {
