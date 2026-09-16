@@ -78,6 +78,14 @@ PAGE_FIRST_VALUE = {
 }
 FILES_BUTTONS = ("ButtonNetOpenAutosaves", "ButtonNetCopyAutosavesPath", "ButtonNetOpenDiagnostics",
                  "ButtonNetCopyDiagPath", "ButtonNetSaveDiagnostics")
+# Video/Input 20-px rows: the controls the 18-px rects used to clip.
+VIDEO_INPUT_FIT = (
+    "ButtonQuickWindowed", "ButtonQuickBorderless", "ComboPresetResolution", "ButtonApplyPresetResolution",
+    "ButtonP1PrevDevice", "ButtonP1NextDevice", "ButtonP1Config", "ButtonP1Clear",
+    "ButtonP2PrevDevice", "ButtonP2NextDevice", "ButtonP2Config", "ButtonP2Clear",
+    "ButtonP3PrevDevice", "ButtonP3NextDevice", "ButtonP3Config", "ButtonP3Clear",
+    "ButtonP4PrevDevice", "ButtonP4NextDevice", "ButtonP4Config", "ButtonP4Clear",
+)
 NETWORK_ACTION_COLUMN = 330
 INTERNET_HINT = "host[:port][/path] - https:// is implied"
 INTERNET_REASON = "Replays and connection details come with a later update."
@@ -741,6 +749,10 @@ def run_case(options, case, root, failing=None):
                                        for capture in images for control in capture["controls"]
                                        if control.get("text_fits") is False]
             assert not result["text_overflow"], result["text_overflow"]
+            result["video_input_fit"] = [[capture["settings_page"], control["name"], control["text_fits"], control["text"]]
+                                         for capture in images for control in capture["controls"]
+                                         if control["name"] in VIDEO_INPUT_FIT]
+            assert result["video_input_fit"] and all(row[2] for row in result["video_input_fit"]), result["video_input_fit"]
             result["page_value_columns"] = []
             for capture in images:
                 page = capture["settings_page"].split(":")[0]
