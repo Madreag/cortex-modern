@@ -76,8 +76,36 @@ namespace RTE {
 	enum class NetH4DisconnectOutcome : uint8_t {
 		Unknown = 0,    //!< No seat ever bound this transport.
 		Fenced = 1,     //!< A superseded incarnation timing out; the seat keeps its current holder.
-		SeatDropped = 2 //!< The seat's active incarnation is gone; the seat is now reclaimable.
+		SeatDropped = 2, //!< The seat's active incarnation is gone; the seat is now reclaimable.
+		Removed = 3,    //!< Host-authored removal; terminal, never reclaimable.
 	};
+
+	/// The binding a removal notice must name. Survivors accept only a matching current holder.
+	struct NetParticipantRemovalBinding {
+		uint64_t sessionId = 0;
+		uint32_t round = 0;
+		NetAuthBytes16 epoch{};
+		uint16_t stableSeat = 0;
+		uint32_t holderGeneration = 0;
+		uint32_t incarnation = 0;
+	};
+
+	enum class NetParticipantRemovalVerdict : uint8_t {
+		Accept = 0, //!< Terminal: this holder is gone and cannot reclaim.
+		RejectForgedClient = 1,
+		RejectRemappedSeat = 2,
+		RejectWrongEpoch = 3,
+		RejectDuplicate = 4,
+		RejectStaleBinding = 5,
+		RejectOldVersion = 6,
+	};
+
+	const char* NetParticipantRemovalVerdictName(NetParticipantRemovalVerdict verdict);
+	/// Whether the verdict is a terminal removal. Accept only; every reject leaves the holder.
+	inline bool NetParticipantRemovalIsTerminal(NetParticipantRemovalVerdict verdict) {
+		return verdict == NetParticipantRemovalVerdict::Accept;
+	}
+	NetParticipantRemovalVerdict NetAcceptParticipantRemoval(const NetParticipantRemoval& notice, bool fromHost, const NetParticipantRemovalBinding& current, bool alreadyAppliedTx);
 
 	/// A seat that just became this connection's. The session turns it into a ready peer so the
 	/// returner sits on the seat's own peer id and the superseded link stops being one.

@@ -27,6 +27,42 @@ namespace RTE {
 		}
 	} // namespace
 
+	const char* NetParticipantRemovalVerdictName(NetParticipantRemovalVerdict verdict) {
+		switch (verdict) {
+			case NetParticipantRemovalVerdict::Accept: return "Accept";
+			case NetParticipantRemovalVerdict::RejectForgedClient: return "RejectForgedClient";
+			case NetParticipantRemovalVerdict::RejectRemappedSeat: return "RejectRemappedSeat";
+			case NetParticipantRemovalVerdict::RejectWrongEpoch: return "RejectWrongEpoch";
+			case NetParticipantRemovalVerdict::RejectDuplicate: return "RejectDuplicate";
+			case NetParticipantRemovalVerdict::RejectStaleBinding: return "RejectStaleBinding";
+			case NetParticipantRemovalVerdict::RejectOldVersion: return "RejectOldVersion";
+		}
+		return "Unknown";
+	}
+
+	NetParticipantRemovalVerdict NetAcceptParticipantRemoval(const NetParticipantRemoval& notice, bool fromHost, const NetParticipantRemovalBinding& current, bool alreadyAppliedTx) {
+		if (!fromHost) {
+			return NetParticipantRemovalVerdict::RejectForgedClient;
+		}
+		if (notice.version != c_NetParticipantRemovalVersion) {
+			return NetParticipantRemovalVerdict::RejectOldVersion;
+		}
+		if (!(notice.epoch == current.epoch)) {
+			return NetParticipantRemovalVerdict::RejectWrongEpoch;
+		}
+		if (notice.stableSeat != current.stableSeat) {
+			return NetParticipantRemovalVerdict::RejectRemappedSeat;
+		}
+		if (alreadyAppliedTx) {
+			return NetParticipantRemovalVerdict::RejectDuplicate;
+		}
+		if (notice.sessionId != current.sessionId || notice.round != current.round ||
+		    notice.holderGeneration != current.holderGeneration || notice.incarnation != current.incarnation) {
+			return NetParticipantRemovalVerdict::RejectStaleBinding;
+		}
+		return NetParticipantRemovalVerdict::Accept;
+	}
+
 	std::vector<NetH4Seat> NetH4BuildSeatTable(const NetMatchConfig& config) {
 		std::vector<NetH4Seat> seats;
 		seats.reserve(config.players.size());
@@ -299,11 +335,12 @@ namespace RTE {
 			HandleSubstitutionAck(connection, *ack, nowMs);
 			return true;
 		}
-		// TicketOffer, Challenge, JoinCommitted, LeaveAck, ApplicantAck and SubstitutionOffer are the
-		// host's own replies; a client that sends one is talking out of turn.
+		// TicketOffer, Challenge, JoinCommitted, LeaveAck, ApplicantAck, SubstitutionOffer and
+		// ParticipantRemoval are the host's own replies; a client that sends one is talking out of turn.
 		return std::holds_alternative<NetH4TicketOffer>(payload) || std::holds_alternative<NetH4Challenge>(payload) ||
 		       std::holds_alternative<NetH4JoinCommitted>(payload) || std::holds_alternative<NetH4LeaveAck>(payload) ||
-		       std::holds_alternative<NetH4ApplicantAck>(payload) || std::holds_alternative<NetH4SubstitutionOffer>(payload);
+		       std::holds_alternative<NetH4ApplicantAck>(payload) || std::holds_alternative<NetH4SubstitutionOffer>(payload) ||
+		       std::holds_alternative<NetParticipantRemoval>(payload);
 	}
 
 	void NetReconnectHost::HandleNewJoin(NetPeerId connection, const NetH4NewJoin& message, uint64_t nowMs) {
