@@ -1505,6 +1505,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 				}
 				m_MultiplayerStatusLabel->SetText(prose + "\n" + address);
 				addressOnOwnRow = true;
+				m_MultiplayerStatusLabel->EnsureDrawableTextFont("FontSmall.png");
+				const bool addressScrolls = m_MultiplayerStatusLabel->GetMaxWordWidth() > rowBoxWidth;
+				m_MultiplayerStatusLabel->SetHorizontalOverflowScroll(addressScrolls);
+				m_MultiplayerStatusLabel->ActivateDeactivateOverflowScroll(addressScrolls);
 			}
 		} else {
 			s_shareResolved = false;
@@ -1517,6 +1521,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	} else {
 		s_shareResolved = false;
 		m_MultiplayerStatusLabel->SetText(snapshot.statusText);
+	}
+	if (!addressOnOwnRow) {
+		m_MultiplayerStatusLabel->SetHorizontalOverflowScroll(false);
+		m_MultiplayerStatusLabel->ActivateDeactivateOverflowScroll(false);
 	}
 	// The lobby panel is one width on every peer: a longer row or status elides inside its box
 	// rather than widening the panel, so host and client land on the same rectangle.
