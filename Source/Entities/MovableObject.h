@@ -639,8 +639,7 @@ namespace RTE {
 			bool held = false;
 		};
 
-		/// Keeps this object off the frame while its preview ghost still shows the pose it is travelling to.
-		/// The simulation is untouched: it moves, collides, settles and hashes exactly as it would unheld.
+		/// Keeps this object off the frame, but not out of the simulation, while its ghost still shows the pose it travels to.
 		/// @param key The ledger key of the event this object adopted.
 		/// @param revealTick The tick the ghost's pose was computed for.
 		void HoldForPreviewAdoption(const PreviewEventLedger::Key& key, uint64_t revealTick) {
