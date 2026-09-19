@@ -1051,10 +1051,13 @@ namespace RTE {
 	}
 
 	int ScenarioRunner::GetWorldRespawnDelayFrames() {
-		const NetMatchConfig* config = GetLockstepMatchConfig();
-		// With no round attached the preset runs alone on the world's own default.
-		NetMatchConfig fallback;
-		return static_cast<int>(WorldRespawnDelayFrames(config != nullptr ? *config : fallback));
+		if (const NetMatchConfig* config = GetLockstepMatchConfig(); config != nullptr) {
+			return static_cast<int>(WorldRespawnDelayFrames(*config));
+		}
+		// With no round attached the preset runs alone on the world's own default. Built once: a
+		// script author asks for this every tick.
+		static const NetMatchConfig unconfigured;
+		return static_cast<int>(WorldRespawnDelayFrames(unconfigured));
 	}
 
 	bool ScenarioRunner::SubmitWorldTransition(const NetGameWorldTransition& transition) {
