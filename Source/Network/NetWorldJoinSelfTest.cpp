@@ -4655,6 +4655,10 @@ namespace RTE {
 		fresh.worldFresh = true;
 		fresh.resumeTick = 900;
 		if (!writer.ResolveWorldResume(fresh, error)) return false;
+		if (writer.m_RestartAdmissionGeneration != 3) {
+			*error = "world-fresh-kept-the-previous-admission: the publisher restarted below the stored generation";
+			return false;
+		}
 		if (!fresh.resumeMatchId.empty() || fresh.resumeTick != 0) {
 			*error = "world-fresh-resumed-anyway: the fresh boot resolved resume match \"" + fresh.resumeMatchId + "\" tick " +
 			         std::to_string(fresh.resumeTick) + ", a fresh round takes neither";
