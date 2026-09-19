@@ -1,5 +1,7 @@
 #pragma once
 
+#include "NetLockstep.h"
+#include "NetMatchConfig.h"
 #include "NetProtocol.h"
 
 #include <cstdint>
@@ -101,11 +103,24 @@ namespace RTE {
 		std::string buildId = "unknown";
 		std::string sessionRulesTag = "p2-session-rules-unset";
 		bool includeUserdataModules = false;
+		uint16_t matchConfigVersion = NetMatchConfigUtil::c_Version;
+		uint16_t lockstepCodecVersion = NetLockstepCodec::c_Version;
 	};
 
 	class NetIdentity {
 	public:
+		/// Ordinary target keeps c_Version / lockstep c_Version. A world target stamps
+		/// c_PersistentWorldVersion / c_WorldTransitionVersion.
+		static void StampOptionsForTarget(NetIdentityBuildOptions& options, bool world);
 		static bool BuildCurrentManifest(NetIdentityManifest& outManifest, std::string* error = nullptr, NetIdentityBuildOptions options = {});
+
+		/// Reads everything the manifest needs from the live managers, and nothing from disk. Cheap, and
+		/// the only phase that has to run on the thread that owns those managers.
+		static bool CaptureManifestInputs(NetIdentityManifest& outManifest, std::string* error = nullptr, NetIdentityBuildOptions options = {});
+
+		/// Hashes the captured modules' files and fills the manifest's hashes. Touches no manager, so a
+		/// worker thread can do this work while the game thread keeps its frame budget.
+		static bool CompleteManifestFromInputs(NetIdentityManifest& manifest, std::string* error = nullptr, NetIdentityBuildOptions options = {});
 		static bool WriteManifestJson(const NetIdentityManifest& manifest, const std::string& path, std::string* error = nullptr);
 		static bool DumpCurrentManifestJson(const std::string& path, std::string* error = nullptr, NetIdentityManifest* outManifest = nullptr);
 

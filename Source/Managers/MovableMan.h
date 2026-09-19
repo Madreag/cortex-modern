@@ -17,6 +17,7 @@
 #include "Scene.h"
 #include "SpatialPartitionGrid.h"
 #include "PreviewEventLedger.h"
+#include "MovableObjectReference.h"
 
 #include "BS_thread_pool.hpp"
 
@@ -28,6 +29,7 @@
 #include <ostream>
 #include <unordered_set>
 #include <unordered_map>
+#include <vector>
 
 #define g_MovableMan MovableMan::Instance()
 
@@ -35,8 +37,11 @@ namespace RTE {
 	struct PrimitiveQueuesSetAside;
 
 	struct ControllerFrame;
+	struct NetGameDeliverCargo;
 	struct LuaPathCallbackContext;
 	class MovableObject;
+	class ACraft;
+	class GameActivity;
 	class Actor;
 	class LuaStateWrapper;
 	class HeldDevice;
@@ -294,6 +299,43 @@ namespace RTE {
 		void DropAllPreviewGhosts();
 		size_t GetPreviewGhostCount() const { return m_PreviewGhosts.size(); }
 		uint64_t GetPreviewGhostPeak() const { return m_PreviewGhostPeak; }
+		/// Plants a ghost for a ledger key so a self-test can observe the drop.
+		static void InstallPreviewGhostForSelfTest(MovableObject* mo, const PreviewEventLedger::Key& key, uint64_t poseTick) { Instance().InstallPreviewGhost(mo, key, poseTick); }
+		struct PreviewGhostState {
+			PreviewEventLedger::Key key;
+			Vector pos;
+			Vector vel;
+			float globalAccScalar = 1.0F;
+			float airResistance = 0;
+			float airThreshold = 0;
+			uint64_t poseTick = 0;     //!< The sim tick this pose was computed for.
+			uint64_t adoptionTick = 0; //!< The tick a canonical spawn took this event.
+			bool adopted = false;      //!< A canonical spawn took this event and waits behind the ghost.
+			bool adopteeHeld = false;  //!< That spawn is still off the frame.
+			long adopteeUID = 0;
+			Vector adopteePos;
+			Vector adopteeVel;
+			float adopteeGlobalAccScalar = 1.0F;
+			float adopteeAirResistance = 0;
+			float adopteeAirThreshold = 0;
+		};
+		std::vector<PreviewGhostState> GetPreviewGhostStates() const;
+		/// Reveals every adopted spawn whose own motion has reached the pose its ghost is showing, and drops that ghost.
+		void ResolvePreviewAdoptions(uint64_t committedTick);
+		/// The last seamless swap: how far ahead the ghost was, and how far apart the two poses were when it went.
+		struct PreviewSwap {
+			uint64_t count = 0;
+			uint64_t tick = 0;
+			uint64_t adoptionTick = 0;
+			uint64_t leadTicks = 0;
+			float poseDelta = 0;
+			long adopteeUID = 0;
+		};
+		const PreviewSwap& GetLastPreviewSwap() const { return m_LastPreviewSwap; }
+		/// True when every ghost is unregistered: no MOID, not in the world lists the dump walks.
+		bool PreviewGhostsAreUnregistered() const;
+		/// Applies one queued buy the caller has already vetted and cloned the craft for; every reject clears the view.
+		static bool ApplyQueuedPurchaseDelivery(GameActivity& activity, const NetGameDeliverCargo& delivery, uint8_t senderPeerId, ACraft* craft);
 		/// Draws the substitute in the original's slot until swapped back.
 		bool SwapActorForRender(Actor* original, Actor* substitute);
 		void AddRenderSubstitute(const MovableObject* mo);
@@ -349,6 +391,8 @@ namespace RTE {
 		void ReportSpeculationViolation(const char* what, const MovableObject* mo);
 		/// Keeps a resident out of the draw loops while a preview shows its taken shadow instead.
 		void HideForRender(const MovableObject* mo, bool hidden);
+		/// Whether something else is drawn in this object's place this frame: a preview's shadow or its adopted ghost.
+		bool IsHiddenFromRender(const MovableObject* mo) const;
 		size_t GetRenderHiddenCount() const { return m_RenderHidden.size(); }
 		/// Faithful links resolve inside this object's own part tree before the world registry.
 		void SetFaithfulLinkRoot(MovableObject* root) { m_LinkRoot = root; }
@@ -708,6 +752,17 @@ namespace RTE {
 		/// @param team Which team to do this for, NoTeam means all teams.
 		void OverrideMaterialDoors(bool eraseDoorMaterial, int team = Activity::NoTeam) const;
 
+		/// Places a borrowed Actor in the added-actor queue for a detecting test. Ownership is NOT transferred.
+		void TestAddBorrowedActor(Actor* actor) { m_AddedActors.push_back(actor); }
+		/// Takes a borrowed Actor back out of the added-actor queue.
+		void TestRemoveBorrowedActor(Actor* actor) { m_AddedActors.erase(std::remove(m_AddedActors.begin(), m_AddedActors.end(), actor), m_AddedActors.end()); }
+
+		/// Whether a team's door material is drawn anywhere inside a box, so an override of that team would change the terrain there.
+		/// @param team Which team to look for, NoTeam means all teams.
+		/// @param box The box, in scene coordinates; it is tested across a wrapping seam too.
+		/// @return Whether such a door material footprint touches the box.
+		bool TeamHasDoorMaterialInBox(int team, const Box& box) const;
+
 		/// Registers an AlarmEvent to notify things around that somehting alarming
 		/// like a gunshot or explosion just happened.
 		/// @param newEvent The AlarmEvent to register.
@@ -975,13 +1030,25 @@ namespace RTE {
 		void DestroySpeculativeSpawn(MovableObject* mo);
 		void DisposeSpeculativeSpawns();
 		void TakePreviewSpawn(MovableObject* particle);
-		void InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key);
 		struct PreviewGhost {
 			MovableObject* object = nullptr;
 			PreviewEventLedger::Key key;
+			uint64_t poseTick = 0;          //!< The sim tick the held pose was computed for.
+			uint64_t adoptionTick = 0;      //!< The tick the canonical spawn took this event.
+			bool adopted = false;           //!< A canonical spawn is waiting behind this ghost.
+			MovableObjectReference adoptee; //!< That spawn; the link expires by itself if it dies first.
 		};
+		/// Installs a preview ghost for a ledger projectile at the pose the preview left it, for the tick that pose is of.
+		void InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key, uint64_t poseTick);
+		/// Moves an installed ghost to the pose a later preview's re-run of the same event left its spawn at.
+		void ReposePreviewGhost(const PreviewEventLedger::Key& key, const MovableObject& spawn, uint64_t poseTick);
+		/// Puts the canonical spawn behind the ghost that already shows where it is going, until that pose's tick.
+		void AdoptPreviewGhost(const PreviewEventLedger::Key& key, MovableObject* adoptee, uint64_t committedTick);
+		/// Puts a held adoptee back on the frame, because the ghost standing in for it is going away.
+		void ReleaseAdoptionHold(PreviewGhost& ghost);
 		std::vector<PreviewGhost> m_PreviewGhosts;
 		uint64_t m_PreviewGhostPeak = 0;
+		PreviewSwap m_LastPreviewSwap;
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		bool m_PurgingAllMOs = false;
 		std::vector<MovableObject*> m_PendingLinkResolves; //!< Restored adds whose saved links resolve once the whole world is in.

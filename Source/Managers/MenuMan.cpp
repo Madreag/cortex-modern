@@ -365,6 +365,14 @@ void MenuMan::UpdatePauseMenu() const {
 			}
 			m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::ScrollingFadeIn);
 			break;
+		case PauseMenuGUI::PauseMenuUpdateResult::MatchEnded:
+			// H33: the host's End Match finishes the round the way the match's own end does, so the
+			// completed lobby the game loop forms for it is the rematch lobby every peer lands in.
+			if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+				g_NetMatchService.FinishMatch("Match ended by host");
+			}
+			m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::ScrollingFadeIn);
+			break;
 		default:
 			break;
 	}

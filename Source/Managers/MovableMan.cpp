@@ -44,6 +44,8 @@
 #include "ScenarioRunner.h"
 #include "NetActorOwnership.h"
 #include "NetLockstep.h"
+#include "NetWorldJoin.h"
+#include "NetGameCommand.h"
 #include "AIWriteScript.h"
 #include "LuaMan.h"
 #include "ThreadMan.h"
@@ -443,6 +445,15 @@ static void ApplyDeferredSoundOp(const NetGameSoundOp& command) {
 	container->ApplyPendingSoundOp(op);
 }
 
+// A buy order rejected at apply never commits, so the seat that issued it goes back to its committed funds.
+static void ClearRejectedPurchaseView(Activity& activity, const NetGameDeliverCargo& delivery, uint8_t senderPeerId) {
+	if (!delivery.queuedPurchase) {
+		return;
+	}
+	const int player = senderPeerId == ScenarioRunner::GetLockstepLocalPeerId() ? delivery.orderedByPlayer : Players::NoPlayer;
+	activity.ClearPreviewedPurchase(player, delivery.team, delivery.cost);
+}
+
 static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 	if (readyFrame.localCommands.empty() && readyFrame.remoteCommands.empty()) {
 		return;
@@ -473,6 +484,13 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			// the host itself need not control, so the team gate cannot vet it.
 			if (command.senderPeerId != ScenarioRunner::GetLockstepHostPeerId()) {
 				g_ConsoleMan.PrintString("ERROR: Rejected a Reseat command from a peer that is not the host");
+				continue;
+			}
+		} else if (std::holds_alternative<NetGameWorldTransition>(command.payload)) {
+			// A world's membership, spawns and bindings are the host's alone; a seatless dedicated host
+			// owns no team, so the team gate cannot vet this one either.
+			if (command.senderPeerId != ScenarioRunner::GetLockstepHostPeerId()) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a WorldTransition command from a peer that is not the host");
 				continue;
 			}
 		} else if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
@@ -529,16 +547,19 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		} else if (const NetGameDeliverCargo* delivery = std::get_if<NetGameDeliverCargo>(&command.payload)) {
 			// Reject an out-of-range team or a non-finite spawn before building the craft.
 			if (delivery->team < Activity::TeamOne || delivery->team >= Activity::MaxTeamCount || !std::isfinite(delivery->posX) || !std::isfinite(delivery->posY)) {
+				ClearRejectedPurchaseView(*activity, *delivery, command.senderPeerId);
 				continue;
 			}
 			GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity);
 			if (delivery->queuedPurchase && (!gameActivity || !std::isfinite(delivery->cost) || delivery->cost < 0.0F || !std::isfinite(delivery->waypointX) || !std::isfinite(delivery->waypointY))) {
+				ClearRejectedPurchaseView(*activity, *delivery, command.senderPeerId);
 				g_ConsoleMan.PrintString("ERROR: Buy order rejected - bad order fields");
 				std::cout << "[net-match] buy order rejected: bad order fields" << std::endl;
 				continue;
 			}
 			const Entity* craftPreset = g_PresetMan.GetEntityPreset(delivery->craftClassName, delivery->craftPreset, delivery->craftModule);
 			if (!craftPreset) {
+				ClearRejectedPurchaseView(*activity, *delivery, command.senderPeerId);
 				g_ConsoleMan.PrintString("ERROR: Delivery rejected - unknown craft preset \"" + delivery->craftPreset + "\"");
 				continue;
 			}
@@ -546,59 +567,11 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			ACraft* craft = dynamic_cast<ACraft*>(craftClone);
 			if (!craft) {
 				delete craftClone;
+				ClearRejectedPurchaseView(*activity, *delivery, command.senderPeerId);
 				continue;
 			}
 			if (delivery->queuedPurchase) {
-				// A committed buy order rides the single-player purchase core, so both peers queue the
-				// identical arrival and deduct the identical cost at the same synced frame.
-				std::list<const SceneObject*> purchases;
-				for (const NetGameCargoItem& item: delivery->cargo) {
-					const SceneObject* purchase = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset(item.className, item.preset, item.module));
-					if (!purchase) {
-						g_ConsoleMan.PrintString("NETWORK: buy order item skipped - unknown preset \"" + item.preset + "\"");
-						std::cout << "[net-match] buy order item skipped: unknown preset " << item.preset << std::endl;
-						continue;
-					}
-					purchases.push_back(purchase);
-				}
-				GameActivity::PurchaseOrder order;
-				order.purchases = std::move(purchases);
-				order.team = delivery->team;
-				order.passengerAIMode = delivery->passengerAIMode;
-				order.waypoint = Vector(delivery->waypointX, delivery->waypointY);
-				if (delivery->targetUID != 0) {
-					order.pTargetMO = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(delivery->targetUID)));
-					if (!order.pTargetMO) {
-						g_ConsoleMan.PrintString("NETWORK: buy order target not found: UID " + std::to_string(delivery->targetUID));
-						std::cout << "[net-match] buy order target not found: UID " << delivery->targetUID << std::endl;
-					}
-				}
-				order.totalCost = delivery->cost;
-				// The ordering player index only means something on the peer that issued the order; display-only.
-				order.orderedByPlayer = command.senderPeerId == ScenarioRunner::GetLockstepLocalPeerId() ? delivery->orderedByPlayer : Players::NoPlayer;
-				order.aiReturnCraft = delivery->returnCraft;
-				Vector landingZone(delivery->posX, delivery->posY);
-				g_SceneMan.ForceBounds(landingZone);
-				order.landingZone = landingZone;
-				order.multiOrderYOffset = delivery->multiOrderYOffset;
-				craft->SetNetworkDelivery(true);
-				const float fundsBefore = activity->GetTeamFunds(delivery->team);
-				// Co-op teammates each vet cost against their own view of the funds at issue time; two
-				// same-frame orders can both pass a stale check. The apply frame sees identical funds on
-				// every peer, so reject here deterministically rather than let the team go negative.
-				if (delivery->cost > fundsBefore) {
-					delete craft;
-					g_ConsoleMan.PrintString("NETWORK: buy order rejected - insufficient team funds");
-					std::cout << "[net-match] buy order rejected: team " << delivery->team << " cost " << delivery->cost << " > funds " << fundsBefore << std::endl;
-					continue;
-				}
-				if (!gameActivity->QueuePurchaseDelivery(craft, order)) {
-					delete craft;
-					g_ConsoleMan.PrintString("NETWORK: buy order did not queue: team " + std::to_string(delivery->team));
-					std::cout << "[net-match] buy order did not queue: team " << delivery->team << std::endl;
-					continue;
-				}
-				std::cout << "[net-match] buy order queued: team " << delivery->team << " cost " << delivery->cost << " funds " << fundsBefore << " -> " << activity->GetTeamFunds(delivery->team) << " items " << delivery->cargo.size() << std::endl;
+				MovableMan::ApplyQueuedPurchaseDelivery(*gameActivity, *delivery, command.senderPeerId, craft);
 			} else {
 				// Load the manifest in order so both peers clone the same presets and assign matching unique ids.
 				int loaded = 0;
@@ -710,6 +683,65 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				++reseated;
 			}
 			std::cout << "[net-match] reseat: team " << reseat->team << " -> peer " << static_cast<int>(reseat->newOwnerPeerId) << " actors " << reseated << "/" << reseat->actorUIDs.size() << std::endl;
+		} else if (const NetGameWorldTransition* transition = std::get_if<NetGameWorldTransition>(&command.payload)) {
+			if (transition->team < Activity::Teams::TeamOne || transition->team >= Activity::Teams::MaxTeamCount ||
+			    !std::isfinite(transition->posX) || !std::isfinite(transition->posY)) {
+				continue;
+			}
+			std::string transitionError;
+			if (!ScenarioRunner::AcceptWorldTransition(*transition, &transitionError)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a stale WorldTransition: " + transitionError);
+				continue;
+			}
+			Actor* seated = nullptr;
+			if (transition->kind == NetGameWorldTransition::Activate) {
+				// The candidates come from lockstep state alone - the committed roster's order and the
+				// synced handoff map - so every peer picks the same actor, and never one a member holds.
+				std::vector<NetWorldBrainCandidate> brains;
+				if (transition->team >= Activity::Teams::TeamOne && transition->team < Activity::Teams::MaxTeamCount) {
+					for (const Actor* candidate: *g_MovableMan.GetTeamRoster(transition->team)) {
+						if (candidate == nullptr || !candidate->HasObjectInGroup("Brains")) {
+							continue;
+						}
+						const int64_t uid = static_cast<int64_t>(candidate->GetUniqueID());
+						brains.push_back(NetWorldBrainCandidate{uid, candidate->GetTeam(), ScenarioRunner::GetLockstepControlOverrideOwner(uid)});
+					}
+				}
+				if (const int64_t chosen = ChooseWorldActivateBrain(brains, *transition); chosen != 0) {
+					seated = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(chosen)));
+				}
+			}
+			if (!seated && !transition->className.empty()) {
+				if (const Entity* preset = g_PresetMan.GetEntityPreset(transition->className, transition->preset, transition->module)) {
+					Entity* clone = preset->Clone();
+					if (Actor* actor = dynamic_cast<Actor*>(clone)) {
+						actor->SetTeam(transition->team);
+						actor->SetPos(Vector(transition->posX, transition->posY));
+						if (transition->aiMode >= 0 && transition->aiMode < Actor::AIMODE_COUNT) {
+							actor->SetAIMode(static_cast<Actor::AIMode>(transition->aiMode));
+						}
+						// Every peer clones at the same committed tick in this order, so the resident's
+						// unique id is the same number on all of them and the binding below can name it.
+						g_MovableMan.AddActor(actor);
+						seated = actor;
+					} else {
+						delete clone;
+					}
+				} else {
+					g_ConsoleMan.PrintString("ERROR: World transition rejected - unknown preset \"" + transition->preset + "\"");
+					continue;
+				}
+			}
+			if (transition->kind == NetGameWorldTransition::Activate && transition->peerId != 0 && seated) {
+				ScenarioRunner::SetLockstepControlOverride(static_cast<int64_t>(seated->GetUniqueID()), transition->peerId);
+			}
+			if (WorldTransitionBindsBrain(*transition, seated != nullptr)) {
+				activity->SetPlayerBrain(seated, transition->player);
+			}
+			std::cout << "[net-match] world transition: kind " << static_cast<int>(transition->kind)
+			          << " peer " << static_cast<int>(transition->peerId) << " team " << transition->team
+			          << " revision " << transition->membershipRevision
+			          << " actor " << (seated ? static_cast<int64_t>(seated->GetUniqueID()) : 0) << std::endl;
 		} else if (const NetGameInventoryOp* inventoryOp = std::get_if<NetGameInventoryOp>(&command.payload)) {
 			Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(inventoryOp->actorUID)));
 			AHuman* human = dynamic_cast<AHuman*>(actor);
@@ -1491,6 +1523,7 @@ void MovableMan::Clear() {
 	m_Speculation = Speculation();
 	DropAllPreviewGhosts();
 	m_PreviewGhostPeak = 0;
+	m_LastPreviewSwap = PreviewSwap();
 	m_RenderHidden.clear();
 	m_RenderSubstitutes.clear();
 	m_LinkRoot = nullptr;
@@ -1889,7 +1922,11 @@ bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in) {
 	for (Actor* actor: m_AddedActors) actor->ResolveFaithfulLinks();
 	for (MovableObject* item: m_AddedItems) item->ResolveFaithfulLinks();
 	for (MovableObject* particle: m_AddedParticles) particle->ResolveFaithfulLinks();
-	if (Activity* activity = g_ActivityMan.GetActivity(); activity && !activity->ResolveCheckpointReferences()) return false;
+	if (Activity* activity = g_ActivityMan.GetActivity()) {
+		if (!activity->ResolveCheckpointReferences()) return false;
+		activity->ClearAllPresentationViews();
+		activity->FillPresentationFromPreview(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+	}
 	if (!g_PrimitiveMan.ResolveCheckpointReferences()) return false;
 	ResolvePendingSnapshotLinks();
 	RedrawRestoredMOIDs();
@@ -2436,7 +2473,7 @@ std::string MovableMan::DescribeSpeculativeSpawns() const {
 	return out;
 }
 
-void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key) {
+void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key, uint64_t poseTick) {
 	if (!mo) {
 		return;
 	}
@@ -2450,15 +2487,90 @@ void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger
 	}
 	UnregisterObject(mo);
 	mo->SetAsNoID();
-	m_PreviewGhosts.push_back({mo, key});
+	PreviewGhost ghost;
+	ghost.object = mo;
+	ghost.key = key;
+	ghost.poseTick = poseTick;
+	m_PreviewGhosts.push_back(std::move(ghost));
 	if (m_PreviewGhosts.size() > m_PreviewGhostPeak) {
 		m_PreviewGhostPeak = m_PreviewGhosts.size();
 	}
 }
 
+static bool SameGhostKey(const PreviewEventLedger::Key& a, const PreviewEventLedger::Key& b) {
+	return a.kind == b.kind && a.emitterUID == b.emitterUID && a.presetHash == b.presetHash && a.tick == b.tick && a.seq == b.seq;
+}
+
+void MovableMan::ReposePreviewGhost(const PreviewEventLedger::Key& key, const MovableObject& spawn, uint64_t poseTick) {
+	for (PreviewGhost& ghost: m_PreviewGhosts) {
+		if (ghost.object && SameGhostKey(ghost.key, key)) {
+			ghost.object->SetPos(spawn.GetPos());
+			ghost.object->SetVel(spawn.GetVel());
+			ghost.poseTick = poseTick;
+			// A re-pose after the adoption moves the pose the adoptee is travelling to, so its tag follows.
+			if (MovableObject* adoptee = const_cast<MovableObject*>(ghost.adoptee.get())) {
+				adoptee->HoldForPreviewAdoption(key, poseTick);
+			}
+			return;
+		}
+	}
+}
+
+void MovableMan::AdoptPreviewGhost(const PreviewEventLedger::Key& key, MovableObject* adoptee, uint64_t committedTick) {
+	for (size_t index = 0; index < m_PreviewGhosts.size(); ++index) {
+		PreviewGhost& ghost = m_PreviewGhosts[index];
+		if (!SameGhostKey(ghost.key, key)) {
+			continue;
+		}
+		// Nothing to lead with: the ghost is at or behind the spawn, so the pixel changes hands this tick.
+		if (!adoptee || !ghost.object || ghost.poseTick <= committedTick) {
+			DropPreviewGhost(key);
+			return;
+		}
+		ghost.adopted = true;
+		ghost.adoptionTick = committedTick;
+		ghost.adoptee = adoptee;
+		adoptee->HoldForPreviewAdoption(key, ghost.poseTick);
+		return;
+	}
+}
+
+void MovableMan::ReleaseAdoptionHold(PreviewGhost& ghost) {
+	MovableObject* adoptee = const_cast<MovableObject*>(ghost.adoptee.get());
+	if (!adoptee) {
+		return;
+	}
+	adoptee->ReleasePreviewAdoptionHold();
+	ghost.adoptee = nullptr;
+}
+
+void MovableMan::ResolvePreviewAdoptions(uint64_t committedTick) {
+	for (size_t index = 0; index < m_PreviewGhosts.size();) {
+		PreviewGhost& ghost = m_PreviewGhosts[index];
+		const MovableObject* adoptee = ghost.adoptee.get();
+		if (!ghost.adopted || (adoptee && committedTick < ghost.poseTick)) {
+			++index;
+			continue;
+		}
+		if (adoptee && ghost.object) {
+			m_LastPreviewSwap.tick = committedTick;
+			m_LastPreviewSwap.adoptionTick = ghost.adoptionTick;
+			m_LastPreviewSwap.leadTicks = ghost.poseTick - ghost.adoptionTick;
+			m_LastPreviewSwap.poseDelta = g_SceneMan.ShortestDistance(ghost.object->GetPos(), adoptee->GetPos(), true).GetMagnitude();
+			m_LastPreviewSwap.adopteeUID = adoptee->GetUniqueID();
+			++m_LastPreviewSwap.count;
+			FrameMan::FeelPreviewSwap(ghost.adoptionTick, committedTick, m_LastPreviewSwap.leadTicks, m_LastPreviewSwap.poseDelta);
+		}
+		ReleaseAdoptionHold(ghost);
+		delete ghost.object;
+		m_PreviewGhosts.erase(m_PreviewGhosts.begin() + index);
+	}
+}
+
 void MovableMan::DropPreviewGhost(const PreviewEventLedger::Key& key) {
 	for (auto ghost = m_PreviewGhosts.begin(); ghost != m_PreviewGhosts.end(); ++ghost) {
-		if (ghost->key.kind == key.kind && ghost->key.emitterUID == key.emitterUID && ghost->key.presetHash == key.presetHash && ghost->key.tick == key.tick && ghost->key.seq == key.seq) {
+		if (SameGhostKey(ghost->key, key)) {
+			ReleaseAdoptionHold(*ghost);
 			delete ghost->object;
 			m_PreviewGhosts.erase(ghost);
 			return;
@@ -2468,9 +2580,98 @@ void MovableMan::DropPreviewGhost(const PreviewEventLedger::Key& key) {
 
 void MovableMan::DropAllPreviewGhosts() {
 	for (PreviewGhost& ghost: m_PreviewGhosts) {
+		ReleaseAdoptionHold(ghost);
 		delete ghost.object;
 	}
 	m_PreviewGhosts.clear();
+}
+
+std::vector<MovableMan::PreviewGhostState> MovableMan::GetPreviewGhostStates() const {
+	std::vector<PreviewGhostState> out;
+	out.reserve(m_PreviewGhosts.size());
+	for (const PreviewGhost& ghost: m_PreviewGhosts) {
+		if (!ghost.object) {
+			continue;
+		}
+		PreviewGhostState state{ghost.key, ghost.object->GetPos(), ghost.object->GetVel(), ghost.object->GetGlobalAccScalar(), ghost.object->GetAirResistance(), ghost.object->GetAirThreshold()};
+		state.poseTick = ghost.poseTick;
+		state.adoptionTick = ghost.adoptionTick;
+		state.adopted = ghost.adopted;
+		if (const MovableObject* adoptee = ghost.adoptee.get()) {
+			state.adopteeHeld = adoptee->IsHeldForPreviewAdoption();
+			state.adopteeUID = adoptee->GetUniqueID();
+			state.adopteePos = adoptee->GetPos();
+			state.adopteeVel = adoptee->GetVel();
+			state.adopteeGlobalAccScalar = adoptee->GetGlobalAccScalar();
+			state.adopteeAirResistance = adoptee->GetAirResistance();
+			state.adopteeAirThreshold = adoptee->GetAirThreshold();
+		}
+		out.push_back(state);
+	}
+	return out;
+}
+
+bool MovableMan::ApplyQueuedPurchaseDelivery(GameActivity& activity, const NetGameDeliverCargo& delivery, uint8_t senderPeerId, ACraft* craft) {
+	std::list<const SceneObject*> purchases;
+	for (const NetGameCargoItem& item: delivery.cargo) {
+		const SceneObject* purchase = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset(item.className, item.preset, item.module));
+		if (!purchase) {
+			g_ConsoleMan.PrintString("NETWORK: buy order item skipped - unknown preset \"" + item.preset + "\"");
+			std::cout << "[net-match] buy order item skipped: unknown preset " << item.preset << std::endl;
+			continue;
+		}
+		purchases.push_back(purchase);
+	}
+	GameActivity::PurchaseOrder order;
+	order.purchases = std::move(purchases);
+	order.team = delivery.team;
+	order.passengerAIMode = delivery.passengerAIMode;
+	order.waypoint = Vector(delivery.waypointX, delivery.waypointY);
+	if (delivery.targetUID != 0) {
+		order.pTargetMO = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(delivery.targetUID)));
+		if (!order.pTargetMO) {
+			g_ConsoleMan.PrintString("NETWORK: buy order target not found: UID " + std::to_string(delivery.targetUID));
+			std::cout << "[net-match] buy order target not found: UID " << delivery.targetUID << std::endl;
+		}
+	}
+	order.totalCost = delivery.cost;
+	order.orderedByPlayer = senderPeerId == ScenarioRunner::GetLockstepLocalPeerId() ? delivery.orderedByPlayer : Players::NoPlayer;
+	order.aiReturnCraft = delivery.returnCraft;
+	Vector landingZone(delivery.posX, delivery.posY);
+	g_SceneMan.ForceBounds(landingZone);
+	order.landingZone = landingZone;
+	order.multiOrderYOffset = delivery.multiOrderYOffset;
+	craft->SetNetworkDelivery(true);
+	const float fundsBefore = activity.GetTeamFunds(delivery.team);
+	if (delivery.cost > fundsBefore) {
+		delete craft;
+		activity.ClearPreviewedPurchase(order.orderedByPlayer, order.team, order.totalCost);
+		g_ConsoleMan.PrintString("NETWORK: buy order rejected - insufficient team funds");
+		std::cout << "[net-match] buy order rejected: team " << delivery.team << " cost " << delivery.cost << " > funds " << fundsBefore << std::endl;
+		return false;
+	}
+	if (!activity.QueuePurchaseDelivery(craft, order)) {
+		delete craft;
+		activity.ClearPreviewedPurchase(order.orderedByPlayer, order.team, order.totalCost);
+		g_ConsoleMan.PrintString("NETWORK: buy order did not queue: team " + std::to_string(delivery.team));
+		std::cout << "[net-match] buy order did not queue: team " << delivery.team << std::endl;
+		return false;
+	}
+	std::cout << "[net-match] buy order queued: team " << delivery.team << " cost " << delivery.cost << " funds " << fundsBefore << " -> " << activity.GetTeamFunds(delivery.team) << " items " << delivery.cargo.size() << std::endl;
+	return true;
+}
+
+bool MovableMan::PreviewGhostsAreUnregistered() const {
+	for (const PreviewGhost& ghost: m_PreviewGhosts) {
+		const MovableObject* mo = ghost.object;
+		if (!mo) {
+			continue;
+		}
+		if (mo->GetID() != g_NoMOID || ValidMO(mo)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 static bool IsNamedSpeculativeSpawn(const MovableObject* mo) {
@@ -2494,16 +2695,20 @@ void MovableMan::TakePreviewSpawn(MovableObject* particle) {
 	if (PreviewEventLedger::IsArmed() || !PreviewEventLedger::IsPreviewedEmitter(emitter)) {
 		return;
 	}
+	const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	const uint64_t presetHash = Hash(particle->GetPresetName() + "@" + std::to_string(particle->GetModuleID()));
-	const PreviewEventLedger::Key key = PreviewEventLedger::NextKey(PreviewEventLedger::Projectile, emitter, 0, presetHash, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+	const PreviewEventLedger::Key key = PreviewEventLedger::NextKey(PreviewEventLedger::Projectile, emitter, 0, presetHash, tick);
 	std::vector<int> voices;
 	if (PreviewEventLedger::Consume(key, voices)) {
-		DropPreviewGhost(key);
+		// The ghost already shows where this spawn is going, so it keeps the pixel until the spawn gets there.
+		AdoptPreviewGhost(key, particle, tick);
 		NoteProjectileEvent(key, false);
 	}
 }
 
 void MovableMan::DisposeSpeculativeSpawns() {
+	// Still on the preview's advanced clock: this is the tick every spawn was travelled to.
+	const uint64_t horizonTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	for (Speculation::Spawn& spawn: m_Speculation.spawns) {
 		MovableObject* mo = spawn.object;
 		if (!mo) {
@@ -2516,12 +2721,14 @@ void MovableMan::DisposeSpeculativeSpawns() {
 		const uint64_t presetHash = Hash(mo->GetPresetName() + "@" + std::to_string(mo->GetModuleID()));
 		const PreviewEventLedger::Key key = PreviewEventLedger::NextKey(PreviewEventLedger::Projectile, spawn.emitterUID, 0, presetHash, spawn.tick);
 		if (PreviewEventLedger::AlreadyPlayed(key)) {
+			// A later preview re-runs the same shot: its spawn carries the ghost to the new horizon.
+			ReposePreviewGhost(key, *mo, horizonTick);
 			DestroySpeculativeSpawn(mo);
 			continue;
 		}
 		PreviewEventLedger::Insert(key, {});
 		NoteProjectileEvent(key, true);
-		InstallPreviewGhost(mo, key);
+		InstallPreviewGhost(mo, key, horizonTick);
 	}
 	m_Speculation.spawns.clear();
 	m_Speculation.spawnMeta.clear();
@@ -2839,6 +3046,11 @@ void MovableMan::ReportControllerBoundaryViolation(const char* what, const Actor
 #ifdef DEBUG_BUILD
 	RTEAssert(false, "The AI pass wrote to the canonical actor outside the controller boundary: " + std::string(what) + " " + subject);
 #endif
+}
+
+bool MovableMan::IsHiddenFromRender(const MovableObject* mo) const {
+	// Either a preview draws in its place, or the ghost it adopted still shows the pose it is travelling to.
+	return mo->IsHeldForPreviewAdoption() || (!m_RenderHidden.empty() && m_RenderHidden.count(mo) > 0);
 }
 
 void MovableMan::HideForRender(const MovableObject* mo, bool hidden) {
@@ -3635,6 +3847,9 @@ Actor* MovableMan::RemoveActor(MovableObject* pActorToRem) {
 		}
 		RemoveActorFromTeamRoster(dynamic_cast<Actor*>(pActorToRem));
 		pActorToRem->SetAsAddedToMovableMan(false);
+		if (Actor* actor = dynamic_cast<Actor*>(pActorToRem)) {
+			actor->GetController()->DropLocalProduction();
+		}
 	}
 	return removed;
 }
@@ -4109,6 +4324,40 @@ void MovableMan::OverrideMaterialDoors(bool eraseDoorMaterial, int team) const {
 			}
 		}
 	}
+}
+
+bool MovableMan::TeamHasDoorMaterialInBox(int team, const Box& box) const {
+	const float sceneWidth = static_cast<float>(g_SceneMan.GetSceneWidth());
+	const float sceneHeight = static_cast<float>(g_SceneMan.GetSceneHeight());
+	std::array<Vector, 5> shifts{Vector()};
+	int shiftCount = 1;
+	if (g_SceneMan.SceneWrapsX() && sceneWidth > 0.0F) {
+		shifts[shiftCount++] = Vector(sceneWidth, 0.0F);
+		shifts[shiftCount++] = Vector(-sceneWidth, 0.0F);
+	}
+	if (g_SceneMan.SceneWrapsY() && sceneHeight > 0.0F) {
+		shifts[shiftCount++] = Vector(0.0F, sceneHeight);
+		shifts[shiftCount++] = Vector(0.0F, -sceneHeight);
+	}
+	for (const std::deque<Actor*>* actorDeque: {&m_Actors, &m_AddedActors}) {
+		for (const Actor* actor: *actorDeque) {
+			const ADoor* actorAsDoor = dynamic_cast<const ADoor*>(actor);
+			// An override only moves pixels for a door whose material is currently drawn.
+			if (!actorAsDoor || !actorAsDoor->GetDoorMaterialDrawn() || !actorAsDoor->GetDoor()) {
+				continue;
+			}
+			if (team != Activity::NoTeam && actorAsDoor->GetTeam() != team) {
+				continue;
+			}
+			const Box doorBox = actorAsDoor->GetDoor()->GetBoundingBox();
+			for (int shift = 0; shift < shiftCount; ++shift) {
+				if (doorBox.IntersectsBox(Box(box.GetCorner() + shifts[shift], box.GetWidth(), box.GetHeight()))) {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
 }
 
 void MovableMan::RegisterAlarmEvent(const AlarmEvent& newEvent) {
@@ -4604,6 +4853,7 @@ void MovableMan::Update() {
 
 				// Delete
 				m_ContiguousActorIDs.erase(*aIt);
+				(*aIt)->GetController()->DropLocalProduction();
 				(*aIt)->DestroyScriptState();
 				delete (*aIt);
 				m_ValidActors.erase(*aIt);
@@ -4673,6 +4923,9 @@ void MovableMan::Update() {
 			m_Particles.erase(midIt, m_Particles.end());
 		}
 	}
+
+	// This tick's travel is done, so an adopted spawn that has reached its ghost's pose takes the frame back.
+	ResolvePreviewAdoptions(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
 	if (g_ActivityMan.LockstepRelaunchInProgress()) {
 		if (Activity* activity = g_ActivityMan.GetActivity()) activity->RebindNonOwnedActorSlots();
@@ -4833,7 +5086,7 @@ void MovableMan::UpdateControllers() {
 	const bool lockstepActive = ScenarioRunner::IsLockstepControllerSyncActive();
 	// A stopped coordinator still owns the sim: surface its stop reason so the match-level
 	// handling (resync, clean end, error) runs — never silently degrade to per-machine control.
-	if (!lockstepActive && ScenarioRunner::HasLockstepCoordinator()) {
+	if (ScenarioRunner::LockstepStopHoldsControllers()) {
 		const std::string reason = ScenarioRunner::GetLockstepStopReason();
 		ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep stopped: " + (reason.empty() ? "coordinator not running" : reason));
 		return;
@@ -5091,9 +5344,30 @@ void MovableMan::UpdateControllers() {
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsAI);
 
-	if (!lockstepActive) {
+	if (ScenarioRunner::OfflineCommandsDriveTick()) {
 		CommitOfflineValueWrites();
 		ApplyOfflineGameCommands(simTick);
+	}
+
+	if (ScenarioRunner::WorldCatchUpActive()) {
+		std::string error;
+		NetLockstepReadyFrame readyFrame;
+		if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, readyFrame, &error)) {
+			return;
+		}
+		std::unordered_set<int64_t> applied;
+		if (!ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.localFrames, true, applied, error) ||
+		    !ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.remoteFrames, false, applied, error)) {
+			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " world catch-up apply: " + error);
+			return;
+		}
+		NeutralizeUnframedLockstepActors(m_Actors, applied);
+		ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, false);
+		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
+		CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
+		ApplyLockstepGameCommands(readyFrame);
+		ReconcileLockstepControlBindings();
+		return;
 	}
 
 	if (lockstepActive) {
@@ -5313,7 +5587,7 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 		ZoneScopedN("Particles Draw");
 
 		for (std::deque<MovableObject*>::iterator parIt = m_Particles.begin(); parIt != m_Particles.end(); ++parIt) {
-			if (m_RenderHidden.empty() || m_RenderHidden.count(*parIt) == 0) {
+			if (!IsHiddenFromRender(*parIt)) {
 				(*parIt)->Draw(pTargetBitmap, targetPos);
 			}
 		}
@@ -5328,7 +5602,7 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 		ZoneScopedN("Items Draw");
 
 		for (std::deque<MovableObject*>::reverse_iterator itmIt = m_Items.rbegin(); itmIt != m_Items.rend(); ++itmIt) {
-			if (m_RenderHidden.empty() || m_RenderHidden.count(*itmIt) == 0) {
+			if (!IsHiddenFromRender(*itmIt)) {
 				(*itmIt)->Draw(pTargetBitmap, targetPos);
 			}
 		}
@@ -5338,7 +5612,7 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 		ZoneScopedN("Actors Draw");
 
 		for (std::deque<Actor*>::reverse_iterator aIt = m_Actors.rbegin(); aIt != m_Actors.rend(); ++aIt) {
-			if (m_RenderHidden.empty() || m_RenderHidden.count(*aIt) == 0) {
+			if (!IsHiddenFromRender(*aIt)) {
 				(*aIt)->Draw(pTargetBitmap, targetPos);
 			}
 		}
@@ -5351,13 +5625,13 @@ void MovableMan::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whi
 
 	// Draw HUD elements
 	for (std::deque<MovableObject*>::reverse_iterator itmIt = m_Items.rbegin(); itmIt != m_Items.rend(); ++itmIt) {
-		if (m_RenderHidden.empty() || m_RenderHidden.count(*itmIt) == 0) {
+		if (!IsHiddenFromRender(*itmIt)) {
 			(*itmIt)->DrawHUD(pTargetBitmap, targetPos, which);
 		}
 	}
 
 	for (std::deque<Actor*>::reverse_iterator aIt = m_Actors.rbegin(); aIt != m_Actors.rend(); ++aIt) {
-		if (m_RenderHidden.empty() || m_RenderHidden.count(*aIt) == 0) {
+		if (!IsHiddenFromRender(*aIt)) {
 			(*aIt)->DrawHUD(pTargetBitmap, targetPos, which);
 		}
 	}

@@ -2,15 +2,23 @@
 
 #include "ControllerFrame.h"
 #include "LoopbackTransport.h"
+#include "NetAuthCrypto.h"
+#include "NetHostBanStore.h"
 #include "NetLobbySession.h"
 #include "NetLockstep.h"
 #include "NetMatchRunner.h"
+#include "NetParticipantCrypto.h"
 #include "NetSession.h"
+#include "System/System.h"
 
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <functional>
 #include <iostream>
 #include <string>
@@ -1410,6 +1418,308 @@ namespace RTE {
 			host.Close("host ended lobby");
 			return DrivePair(hostTransport, clientTransport, host, client, [&] { return host.IsClosed() && client.IsClosed(); }, error, 1000);
 		}
+
+		class ScriptedAuthCrypto : public NetAuthCrypto {
+		public:
+			bool IsRealCrypto() const override { return false; }
+			bool RandomBytes(uint8_t* buffer, size_t count) override {
+				if (buffer == nullptr) return false;
+				for (size_t i = 0; i < count; ++i) buffer[i] = static_cast<uint8_t>(++m_Counter);
+				return true;
+			}
+			bool HmacSha256(const uint8_t* key, size_t keyCount, const uint8_t* message, size_t messageCount, uint8_t (&mac)[32]) override {
+				if (key == nullptr || keyCount == 0) return false;
+				uint8_t fold = 1;
+				for (size_t i = 0; i < 32; ++i) {
+					fold = static_cast<uint8_t>(fold * 37U + (i < keyCount ? key[i] : 0) + (i < messageCount ? message[i] : 0));
+					mac[i] = fold;
+				}
+				return true;
+			}
+		private:
+			uint8_t m_Counter = 5;
+		};
+
+		class ScriptedParticipantCrypto : public NetParticipantCrypto {
+		public:
+			bool IsRealCrypto() const override { return false; }
+			bool GenerateKey(uint8_t (&priv)[32], uint8_t (&pub)[32]) override {
+				for (int i = 0; i < 32; ++i) {
+					priv[i] = static_cast<uint8_t>(++m_Counter);
+					pub[i] = static_cast<uint8_t>(~priv[i]);
+				}
+				return true;
+			}
+			bool PublicFromPrivate(const uint8_t (&priv)[32], uint8_t (&pub)[32]) override {
+				for (int i = 0; i < 32; ++i) pub[i] = static_cast<uint8_t>(~priv[i]);
+				return true;
+			}
+			bool Sign(const uint8_t (&priv)[32], const uint8_t* message, size_t messageCount, uint8_t (&signature)[64]) override {
+				for (int i = 0; i < 64; ++i) {
+					signature[i] = static_cast<uint8_t>(priv[i % 32] ^ (message != nullptr && static_cast<size_t>(i) < messageCount ? message[i] : static_cast<uint8_t>(i)));
+				}
+				return true;
+			}
+			bool Verify(const uint8_t (&pub)[32], const uint8_t* message, size_t messageCount, const uint8_t (&signature)[64]) override {
+				uint8_t priv[32];
+				uint8_t expected[64];
+				for (int i = 0; i < 32; ++i) priv[i] = static_cast<uint8_t>(~pub[i]);
+				return Sign(priv, message, messageCount, expected) && std::memcmp(expected, signature, 64) == 0;
+			}
+		private:
+			uint8_t m_Counter = 11;
+		};
+
+		bool TestIdentityProof(std::string* error) {
+			ScriptedAuthCrypto auth;
+			ScriptedParticipantCrypto participant;
+			SetNetAuthCryptoForTest(&auth);
+			SetNetParticipantCryptoForTest(&participant);
+			const auto lane = std::filesystem::temp_directory_path() / "cccp-pid-selftest";
+			std::error_code code;
+			std::filesystem::remove_all(lane, code);
+			std::filesystem::create_directories(lane, code);
+			NetParticipantIdentityStore store;
+			store.SetPath((lane / "player.key").string());
+			if (!store.LoadOrCreate(error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			const NetParticipantId firstId = store.PublicId();
+			NetParticipantIdentityStore again;
+			again.SetPath(store.GetPath());
+			if (!again.LoadOrCreate(error) || !(again.PublicId() == firstId)) {
+				*error = "the stored identity did not survive reload";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			const uint16_t port = 42101;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetSession host;
+			NetSession client;
+			if (!StartPair(port, host, client, hostTransport, clientTransport, MakeConfig(port, 2101, "Host"), MakeConfig(port, 2201, "Player"), error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			host.EnableParticipantProof(nullptr);
+			client.EnableParticipantProof(&store);
+			if (!DrivePair(hostTransport, clientTransport, host, client, [&] { return host.IsReady() && client.IsReady(); }, error, 2000)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			NetParticipantId bound{};
+			if (!host.GetPeerParticipantId(host.GetReadyPeers().front().transportPeerId, bound) || !(bound == firstId)) {
+				*error = "the proven identity was not bound to the admitted peer";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			std::ifstream keyFile(store.GetPath(), std::ios::binary);
+			const std::string keyBytes((std::istreambuf_iterator<char>(keyFile)), std::istreambuf_iterator<char>());
+			if (keyBytes.size() < 74) {
+				*error = "the identity file was too short to scan";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			const std::string privRaw = keyBytes.substr(42, 32);
+			std::string privHex;
+			static const char* digits = "0123456789abcdef";
+			for (unsigned char byte : privRaw) {
+				privHex.push_back(digits[byte >> 4]);
+				privHex.push_back(digits[byte & 0x0F]);
+			}
+			const std::string hostReport = host.BuildReportJson();
+			const std::string clientReport = client.BuildReportJson();
+			if (hostReport.find(privHex) != std::string::npos || clientReport.find(privHex) != std::string::npos ||
+			    hostReport.find(privRaw) != std::string::npos || clientReport.find(privRaw) != std::string::npos) {
+				*error = "the private key appeared in the session report";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			host.Close("reconnect");
+			client.Close("reconnect");
+			LoopbackTransport host2Transport;
+			LoopbackTransport client2Transport;
+			NetSession host2;
+			NetSession client2;
+			if (!StartPair(42103, host2, client2, host2Transport, client2Transport, MakeConfig(42103, 2501, "Host"), MakeConfig(42103, 2601, "Player"), error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			host2.EnableParticipantProof(nullptr);
+			client2.EnableParticipantProof(&store);
+			if (!DrivePair(host2Transport, client2Transport, host2, client2, [&] { return host2.IsReady() && client2.IsReady(); }, error, 2000)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			NetParticipantId rebound{};
+			if (!host2.GetPeerParticipantId(host2.GetReadyPeers().front().transportPeerId, rebound) || !(rebound == firstId)) {
+				*error = "the stored identity did not survive a second join";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			LoopbackTransport bareHostTransport;
+			LoopbackTransport bareClientTransport;
+			NetSession bareHost;
+			NetSession bareClient;
+			if (!StartPair(42102, bareHost, bareClient, bareHostTransport, bareClientTransport, MakeConfig(42102, 2301, "Host"), MakeConfig(42102, 2401, "Player"), error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			bareHost.EnableParticipantProof(nullptr);
+			if (DrivePair(bareHostTransport, bareClientTransport, bareHost, bareClient, [&] { return bareHost.IsReady() && bareClient.IsReady(); }, error, 400)) {
+				*error = "an unproven connection was granted a seat";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			if (!bareClient.IsRejected() || bareClient.GetRejectReason() != NetRejectReason::IdentityUnproven) {
+				*error = "an unproven connection did not refuse with IdentityUnproven";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			error->clear();
+			NetParticipantIdentityStore missing;
+			missing.SetPath((lane / "never.key").string());
+			LoopbackTransport missingHostTransport;
+			LoopbackTransport missingClientTransport;
+			NetSession missingHost;
+			NetSession missingClient;
+			if (!StartPair(42104, missingHost, missingClient, missingHostTransport, missingClientTransport, MakeConfig(42104, 2701, "Host"), MakeConfig(42104, 2801, "Player"), error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			missingHost.EnableParticipantProof(nullptr);
+			missingClient.EnableParticipantProof(&missing);
+			if (DrivePair(missingHostTransport, missingClientTransport, missingHost, missingClient, [&] { return missingHost.IsReady() && missingClient.IsReady(); }, error, 400)) {
+				*error = "a missing-key client reached Ready";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			if (!missingClient.IsRejected() || missingClient.GetRejectReason() != NetRejectReason::IdentityUnproven) {
+				*error = "a missing-key client did not refuse with IdentityUnproven";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			error->clear();
+			{
+				std::ofstream corrupt(store.GetPath(), std::ios::binary | std::ios::trunc);
+				corrupt << "xxxx";
+			}
+			NetParticipantIdentityStore broken;
+			broken.SetPath(store.GetPath());
+			std::string loadError;
+			if (broken.LoadOrCreate(&loadError) || broken.HasKey()) {
+				*error = "a corrupt identity store still opened";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			const auto dirKey = lane / "identity-dir";
+			std::filesystem::create_directory(dirKey, code);
+			NetParticipantIdentityStore unsized;
+			unsized.SetPath(dirKey.string());
+			std::string sizeError;
+			if (unsized.LoadOrCreate(&sizeError) || unsized.HasKey()) {
+				*error = "an identity path that cannot be sized still created a key";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			SetNetAuthCryptoForTest(nullptr);
+			SetNetParticipantCryptoForTest(nullptr);
+			std::filesystem::remove_all(lane, code);
+			std::cout << "[net-session-selftest] PASS identity: one identity survives reconnect; unproven connections refused" << std::endl;
+			return true;
+		}
+
+		bool TestBanHandshake(std::string* error) {
+			ScriptedAuthCrypto auth;
+			ScriptedParticipantCrypto participant;
+			SetNetAuthCryptoForTest(&auth);
+			SetNetParticipantCryptoForTest(&participant);
+			const auto lane = std::filesystem::temp_directory_path() / "cccp-ban-handshake";
+			std::error_code code;
+			std::filesystem::remove_all(lane, code);
+			std::filesystem::create_directories(lane, code);
+			NetParticipantIdentityStore store;
+			store.SetPath((lane / "player.key").string());
+			if (!store.LoadOrCreate(error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			NetHostBanStore bans;
+			bans.SetPath((lane / "NetworkBans").string());
+			if (!bans.Load(error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			const uint64_t sessionId = 0x5000000000000000ULL + 42111;
+			if (!bans.Ban(store.PublicId(), NetHostBanScope::Session, "player", "banned", sessionId, 1, error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetSession host;
+			NetSession client;
+			if (!StartPair(42111, host, client, hostTransport, clientTransport, MakeConfig(42111, 2101, "Host"), MakeConfig(42111, 2201, "Player"), error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			host.EnableParticipantProof(nullptr);
+			host.SetHostBanStore(&bans);
+			client.EnableParticipantProof(&store);
+			if (DrivePair(hostTransport, clientTransport, host, client, [&] { return host.IsReady() && client.IsReady(); }, error, 400)) {
+				*error = "a banned identity was granted a seat on the session handshake";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			if (!client.IsRejected() || client.GetRejectReason() != NetRejectReason::ParticipantBanned) {
+				*error = "the banned handshake did not refuse with ParticipantBanned";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			error->clear();
+			if (!bans.Unban(store.PublicId(), error) || bans.IsBanned(store.PublicId(), sessionId)) {
+				*error = "unban left the identity banned";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			if (host.IsReady() || client.IsReady()) {
+				*error = "unban granted the rejected connection a seat";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			SetNetAuthCryptoForTest(nullptr);
+			SetNetParticipantCryptoForTest(nullptr);
+			std::filesystem::remove_all(lane, code);
+			std::cout << "[net-session-selftest] PASS scopes: banned identity refused on the session handshake" << std::endl;
+			return true;
+		}
 	}
 
 	int NetSessionSelfTest::Run() {
@@ -1440,6 +1750,8 @@ namespace RTE {
 		if (!TestOverlongClientHelloFailsVisibly(&error)) return fail(error);
 		if (!TestClientHelloTransportFailureKeepsOwnError(&error)) return fail(error);
 		if (!TestLobbyMembership(&error)) return fail(error);
+		if (!TestIdentityProof(&error)) return fail(error);
+		if (!TestBanHandshake(&error)) return fail(error);
 
 		std::cout << "[net-session-selftest] PASS" << std::endl;
 		return 0;

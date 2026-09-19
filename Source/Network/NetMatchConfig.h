@@ -72,6 +72,10 @@ namespace RTE {
 		uint64_t configRevision = 1;
 		uint8_t hostPeerId = 1;
 		bool dedicated = false; // The host keeps lockstep peer hostPeerId but seats no human slot there.
+		// A world that outlives its players: no last-brain or timer end, seats freed and refilled while it ticks.
+		bool persistentWorld = false;
+		std::string worldId;       // The world's durable UUID; its directory registration id too. Empty off a persistent world.
+		uint64_t worldBoot = 0;    // The host boot incarnation this round belongs to; advanced before the host listens.
 		uint8_t peerCount = 2;
 		uint16_t inputDelayFrames = 0;
 		std::vector<uint16_t> peerInputDelayFrames; // Per-sender delay by peerId-1 (size 0 or peerCount); empty = uniform inputDelayFrames.
@@ -80,6 +84,10 @@ namespace RTE {
 		uint32_t autosaveIntervalSeconds = 0;
 		uint8_t idleWaitMinutes = 10;
 		bool automaticRepair = true;
+		uint16_t pathHorizonTicks = 0;
+		// Redundant controller-frame window: each frame packet repeats the last N ticks so one lost
+		// datagram costs nothing. 1 sends each tick once.
+		uint8_t frameRedundancyTicks = 4;
 		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		std::string modePreset = "PvP";
 		std::vector<NetMatchPlayerSlot> players;
@@ -91,15 +99,30 @@ namespace RTE {
 
 	class NetMatchConfigUtil {
 	public:
-		static constexpr uint16_t c_Version = 4; // v4 added the spectate rule; v3 and v2 envelopes stay readable.
 		static constexpr uint16_t c_MigrationVersion = 1;
 		static constexpr uint16_t c_MigrationConfigFlag = 16;
 		static constexpr size_t c_MaxMigrationAddresses = 8;
+		static constexpr uint16_t c_Version = 4; // Ordinary live layout. A persistent world speaks c_PersistentWorldVersion.
+		// The oldest layout a LIVE peer may speak. An ordinary match still speaks v4 byte for byte, so
+		// only a persistent world's config moves to v5 and only its hash takes the v5 domain.
+		static constexpr uint16_t c_LiveMinVersion = 4;
+		static constexpr uint16_t c_PersistentWorldVersion = 5;
+		// Reserved values are 1 dedicated, 2 path, 4 world (v5), 8 redundancy and 16 migration.
+		static constexpr uint16_t c_ReservedDedicatedBit = 1;
+		static constexpr uint16_t c_ReservedPathHorizonBit = 2;
+		static constexpr uint16_t c_ReservedFrameRedundancyBit = 8; // A trailing U16 carries the window.
+		static constexpr uint16_t c_ReservedPersistentWorldBit = 4;
+		static constexpr uint16_t c_ReservedKnownMask = c_ReservedDedicatedBit | c_ReservedPathHorizonBit | c_ReservedFrameRedundancyBit | c_MigrationConfigFlag;
+		static constexpr uint16_t c_DefaultPathHorizonTicks = 30;
+		static constexpr uint16_t c_MaxPathHorizonTicks = 120;
+		static constexpr size_t c_WorldIdBytes = 36; // A canonical UUID, the directory's registration id.
 		static constexpr uint32_t c_MaxFiniteStartingGold = 29999;
 		static constexpr uint32_t c_InfiniteGold = 1000000000;
 		static constexpr uint8_t c_MinPeerCount = 2;
 		static constexpr uint8_t c_MaxPeerCount = 4;
 		static constexpr uint16_t c_MaxInputDelayFrames = 60; // Mirrors NetLockstepCodec::c_MaxInputDelayFrames.
+		static constexpr uint8_t c_DefaultFrameRedundancyTicks = 4;
+		static constexpr uint8_t c_MaxFrameRedundancyTicks = 8; // Mirrors NetLockstepCodec::c_MaxWindowTicks.
 		static constexpr size_t c_MaxPlayers = 7; // Four co-op human peers plus the three peerless CPU teams left.
 		static constexpr size_t c_MaxNameBytes = 64;
 		static constexpr size_t c_MaxPresetBytes = 128;
@@ -110,6 +133,8 @@ namespace RTE {
 		/// @param outSeatMap Optional old lockstep peer id -> new lockstep peer id for every survivor.
 		static bool DeriveRematchConfig(const NetMatchConfig& previous, const std::vector<uint8_t>& survivingPeerIds, NetMatchConfig& outConfig, std::map<uint8_t, uint8_t>* outSeatMap = nullptr, std::string* error = nullptr);
 		static bool ValidateLocalAlpha(const NetMatchConfig& config, std::string* error = nullptr);
+		/// Whether the text is a canonical lowercase 8-4-4-4-12 UUID, the only shape a world id may take.
+		static bool IsWorldId(const std::string& text);
 		static NetHash32 HashConfig(const NetMatchConfig& config);
 		static std::string BuildReportJson(const NetMatchConfig& config);
 		/// The peer's input delay: its per-sender entry, or the uniform value when no set rides the config.

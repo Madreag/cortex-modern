@@ -48,6 +48,7 @@ namespace RTE {
 			bool        selftestPerturb = false; // -determinism-selftest-perturb: inject one genuine
 			                                 // non-determinism at a fixed tick (the determinism
 			                                 // check's positive control).
+			uint64_t    selftestPerturbTick = 50; // -determinism-selftest-perturb-tick <N>: the tick the perturbation fires at; default 50 keeps today's arming.
 			bool        selftestFundsCommand = false; // -net-match-e2e-funds-command: host-issued funds command at tick 50.
 			bool        selftestSpawnCommand = false; // -net-match-e2e-spawn-command: host-issued spawn command at tick 50.
 			bool        selftestDeliverCommand = false; // -net-match-e2e-deliver-command: host-issued delivery command at tick 50.
@@ -184,6 +185,51 @@ namespace RTE {
 		/// The synced match roster, or null when no roster is attached.
 		static const NetMatchConfig* GetLockstepMatchConfig();
 
+		/// Whether the round is a persistent world: it keeps ticking with no human seated, and its
+		/// membership, respawns and bindings are the host's ordered transitions.
+		static bool IsPersistentWorld();
+		/// Whether this peer authors the world's transitions - the host of a synced round, or the sole
+		/// machine when there is no round at all. Never true on a client.
+		static bool IsWorldAuthor();
+		/// The world's durable id, or "" outside a persistent world.
+		static std::string GetWorldId();
+		/// Submits one host-authored world transition. Off a synced round it applies here and now, so
+		/// the persistent preset behaves the same way with no network under it.
+		/// @return Whether the transition was queued or applied.
+		static bool SubmitWorldTransition(const NetGameWorldTransition& transition);
+		/// Refuses a WorldTransition whose generation or membership revision is already stale.
+		static bool AcceptWorldTransition(const NetGameWorldTransition& transition, std::string* error = nullptr);
+		/// Installs the committed tail a world joiner applies faster than the paced lockstep wait.
+		static bool InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error = nullptr);
+		/// Later catch-up bytes land here after the image is already installed.
+		static void AppendWorldCatchUp(std::vector<NetLockstepFrame> frames);
+		static void SetWorldCatchUpActivation(uint64_t activationTick);
+		static bool WorldCatchUpActive();
+		/// Whether the tail is exhausted at the announced frame and the sim waits for the coordinator.
+		static bool WorldCatchUpHolding();
+		/// Ends the catch-up window once the joiner's coordinator runs; normal pacing resumes here.
+		static void ReleaseWorldCatchUp();
+		static uint64_t WorldCatchUpAppliedThrough();
+		static uint64_t WorldCatchUpActivationTick();
+		/// Whether the tail still holds a committed frame for this tick.
+		static bool WorldCatchUpHasFrame(uint64_t simTick);
+		/// Builds the ready frame whose targetFrame equals simTick.
+		static bool TakeWorldCatchUpReadyFrame(uint64_t simTick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
+		/// Ticks of tail a joiner applies in one real frame (faster than real time, still bounded).
+		static constexpr int c_WorldCatchUpTicksPerRealFrame = 16;
+		/// Whether the catch-up may take one more sim tick: the ceiling has to be left AND the tail has
+		/// to hold that very frame, so the sim clock never runs past what the world committed.
+		static bool WorldCatchUpMayGrant(uint64_t nextSimTick, int ticksLeftThisFrame);
+		/// Opens one real frame's catch-up budget. Every grant below is counted against it.
+		static void BeginWorldCatchUpFrame();
+		/// Takes one catch-up sim tick out of this real frame's budget.
+		static bool TakeWorldCatchUpGrant(uint64_t nextSimTick);
+		/// Whether a stopped coordinator holds the controller update this tick. A world joiner applying
+		/// its committed tail is driven by that tail, not by the coordinator, so it is not held.
+		static bool LockstepStopHoldsControllers();
+		/// Whether this tick runs the offline command paths: no committed frame drives it from anywhere.
+		static bool OfflineCommandsDriveTick();
+
 		/// Whether a team has a human player in the synced match config. Local player bindings are
 		/// per-peer in a lockstep match, so sim decisions must resolve team humanity from here.
 		static bool IsLockstepHumanTeam(int team);
@@ -263,6 +309,9 @@ namespace RTE {
 		/// Records a synced control handoff: the actor's frames now come from this peer. Co-op players
 		/// share a team, so per-actor control must override the per-team ownership policy.
 		static void SetLockstepControlOverride(int64_t actorUniqueID, uint8_t ownerPeerId);
+		/// The peer a live handoff gave this actor to; 0 when no member holds it. A dropped seat's
+		/// claim is not a holder, so an actor a departed member left behind reads as unowned here.
+		static uint8_t GetLockstepControlOverrideOwner(int64_t actorUniqueID);
 		/// Latches the first lockstep owner transfer after the match is running, for the e2e owner log.
 		static void NoteE2eOwnerTransfer(int64_t actorUniqueID);
 		/// The latched transfer uid, or 0 if none has been observed.
@@ -337,6 +386,18 @@ namespace RTE {
 		static bool PeekLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames);
 		/// The local sender's input delay in ticks; 0 outside a delayed lockstep match.
 		static uint16_t GetLockstepLocalInputDelay();
+
+		/// A queued buy order this peer has issued but the wire has not applied yet.
+		struct PendingQueuedPurchase {
+			int player = -1;
+			int team = 0;
+			float cost = 0;
+			uint64_t targetFrame = 0;
+			uint64_t sequence = 0;
+		};
+		/// Presentation peek of in-flight local buy orders: pending, outbox, and recovered commands. The caller
+		/// passes the canonical committed tick; a preview's advanced clock would hide every order inside its horizon.
+		static void PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out, uint64_t canonicalTick);
 
 		/// Enqueue an owner-issued game command to ride the next local lockstep frame; the coordinator stamps
 		/// the sender and both peers apply it at the synced frame.

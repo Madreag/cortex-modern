@@ -52,6 +52,7 @@ namespace RTE {
 		virtual bool RestoreNetLocalPlayerState(const NetLocalPlayerState& state);
 		virtual bool ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings);
 		static bool RunNetLocalPlayerStateSelfTest();
+		static bool RunPresentationViewSelfTest();
 		SerializableOverrideMethods;
 		ClassInfoGetters;
 
@@ -404,6 +405,27 @@ namespace RTE {
 		/// @return The local player's slot index on that team, or -1 outside lockstep / off the team.
 		int GetLockstepHumanSlotIndex(int team) const;
 
+		/// Whether this Activity is running as a persistent world: it keeps ticking with nobody seated
+		/// and never ends on a last brain or a timer.
+		/// @return Whether the round this Activity runs in is a persistent world.
+		bool IsPersistentWorld() const;
+
+		/// Whether this machine authors the world's respawns, memberships and bindings. The host of a
+		/// synced round does; a client never does; with no round at all this machine is the only author.
+		/// @return Whether this machine may submit a world transition.
+		bool IsWorldAuthor() const;
+
+		/// Submits one host-authored respawn for a team: every machine spawns the identical resident at
+		/// the same committed tick, in one order. Refused off the world author.
+		/// @param team The team the resident belongs to.
+		/// @param className The class of the preset to clone.
+		/// @param preset The preset name.
+		/// @param module The module the preset is defined in.
+		/// @param position Where to place it.
+		/// @param aiMode The Actor AI mode to set, or -1 to keep the preset's own.
+		/// @return Whether the respawn was submitted.
+		bool SubmitWorldRespawn(int team, const std::string& className, const std::string& preset, const std::string& module, const Vector& position, int aiMode);
+
 		/// Sets the given team as active, even if it shouldn't be considered as such normally. Useful for Activities that don't want to define/show all used teams.
 		/// @param team The team to force as active.
 		void ForceSetTeamAsActive(int team) {
@@ -458,6 +480,19 @@ namespace RTE {
 		/// @param whichTeam Which team's funds to check.
 		/// @return Whether funds amount changed for this team since last time this was called.
 		bool TeamFundsChanged(int whichTeam = 0);
+
+		/// Local-seat funds readout: committed value plus outstanding previewed orders. Other reads stay committed.
+		float GetTeamFundsForPresentation(int whichTeam, int player) const;
+		/// The gold number DrawGUI prints: floor of the local presentation tally.
+		std::string DescribeFundsReadout(int whichTeam, int player) const;
+		void NotePreviewedPurchase(int player, int team, float cost, uint64_t commitTick, uint64_t sequence = 0);
+		void AdoptPreviewedPurchase(int player, int team, float cost);
+		void ClearPreviewedPurchase(int player, int team, float cost);
+		void ClearAllPresentationViews();
+		void ExpirePresentationViews(uint64_t committedTick);
+		/// Fills the local seat's presentation view from the buy orders in flight at the canonical tick; the preview
+		/// calls this after restore, so the tick it passes is the committed one, never its own advanced clock.
+		void FillPresentationFromPreview(uint64_t canonicalTick, uint64_t horizonTick);
 
 		/// Gets the amount of funds a specific player originally added to his team's collective stash.
 		/// @param player Which player to check for.
@@ -775,6 +810,17 @@ namespace RTE {
 
 		Actor* m_ControlledActor[Players::MaxPlayerCount]; //!< Currently controlled actor, not owned.
 		Actor* m_RenderSubstituteActor[Players::MaxPlayerCount]{}; //!< Preview clone answered by GetControlledActor during a render window only; not owned.
+		/// Local-seat presentation of activity UI the preview fills and the commit clears. Never checkpointed.
+		struct PresentationOrder {
+			float cost = 0;
+			uint64_t commitTick = 0;
+			uint64_t sequence = 0;
+		};
+		struct PresentationView {
+			int fundsTeam = Teams::NoTeam;
+			std::vector<PresentationOrder> orders;
+		};
+		PresentationView m_PresentationView[Players::MaxPlayerCount]{};
 		std::array<int64_t, Players::MaxPlayerCount> m_LockstepControlUID{}; //!< Which actor the wire says each seat plays; the same on every peer.
 		Controller m_PlayerController[Players::MaxPlayerCount]; //!< The Controllers of all the players for the GUIs.
 

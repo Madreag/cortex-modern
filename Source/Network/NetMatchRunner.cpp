@@ -1,6 +1,7 @@
 #include "NetMatchRunner.h"
 
 #include "NetIdentity.h"
+#include "NetWorldJoin.h"
 
 #include "nlohmann/json.hpp"
 
@@ -47,6 +48,8 @@ namespace RTE {
 		m_MatchConfig = config.matchConfig;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
 		m_SetupError.clear();
+		m_WorldJoinImage = false;
+		m_ReceivedStateBytes.clear();
 		m_State = NetMatchRuntimeState::SessionStarting;
 
 		if (config.host == !config.joinAddress.empty()) {
@@ -63,7 +66,7 @@ namespace RTE {
 
 		NetSessionConfig sessionConfig = config.sessionConfig;
 		// A one-peer roster has no remote to wait for: the host is the whole round.
-		sessionConfig.readyWithoutPeers = config.host && m_MatchConfig.peerCount == 1;
+		sessionConfig.readyWithoutPeers = config.host && (m_MatchConfig.peerCount == 1 || m_MatchConfig.persistentWorld);
 		const bool sessionStarted = config.host
 			? session.StartHost(transport, std::move(sessionConfig), error)
 			: session.StartClient(transport, config.joinAddress, std::move(sessionConfig), error);
@@ -72,7 +75,7 @@ namespace RTE {
 			return false;
 		}
 		// The host waits for every client (peerCount-1); a client waits for the host alone.
-		const uint32_t expectedReadyPeers = config.host ? static_cast<uint32_t>(m_MatchConfig.peerCount - 1) : 1U;
+		const uint32_t expectedReadyPeers = sessionConfig.readyWithoutPeers ? 0U : (config.host ? static_cast<uint32_t>(m_MatchConfig.peerCount - 1) : 1U);
 		if (!WaitForSessionReady(transport, session, expectedReadyPeers, config.sessionWaitMs, error)) {
 			return false;
 		}
@@ -110,12 +113,48 @@ namespace RTE {
 			}
 		}
 
+		if (m_WorldJoinImage) {
+			m_State = NetMatchRuntimeState::Running;
+			return true;
+		}
+
 		m_State = NetMatchRuntimeState::LockstepStarting;
 		if (!StartLockstep(transport, session, coordinator, config, error) || !WaitForLockstepRunning(coordinator, config.lockstepWaitMs, error)) {
 			return false;
 		}
 		m_State = NetMatchRuntimeState::Running;
 		return true;
+	}
+
+	bool NetMatchRunner::AdoptStagedHostOptions() {
+		NetMatchConfig staged;
+		if (!m_Config.host || !m_Config.hostOptions || !m_Config.hostOptions->Take(staged)) {
+			return false;
+		}
+		// The draft names the session and revision it was accepted against; one from another session,
+		// or behind the config the last round played, is a transaction this round already passed.
+		if (staged.sessionId != m_MatchConfig.sessionId || staged.configRevision <= m_MatchConfig.configRevision ||
+		    !NetMatchConfigUtil::ValidateLocalAlpha(staged, nullptr)) {
+			return false;
+		}
+		// Only the rules and policy are certain to survive: the roster below is re-derived from the
+		// peers still here, which is what a rematch is played on.
+		m_MatchConfig = staged;
+		m_Config.matchConfig = staged;
+		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
+		SyncSeatingWaitToConfig();
+		return true;
+	}
+
+	void NetMatchRunner::SyncSeatingWaitToConfig() {
+		// A round the host gave no seating policy keeps budgeting by its message deadline; one that
+		// has a policy follows the published value, so an edited idle wait takes effect at once.
+		if (!m_Config.host || !m_Config.lobbySeatingWaitMs) {
+			return;
+		}
+		m_Config.lobbySeatingWaitMs = m_MatchConfig.idleWaitMinutes > 0
+		                                  ? static_cast<uint32_t>(m_MatchConfig.idleWaitMinutes) * 60000
+		                                  : 0u;
 	}
 
 	bool NetMatchRunner::PrepareRematchRoster(NetSession& session, const std::vector<uint8_t>& survivingPeerIds, std::string* error) {
@@ -329,6 +368,11 @@ namespace RTE {
 		// was taken on. The host's resync is the round that carries the state out.
 		std::vector<uint8_t> rematchRoster;
 		rematchRoster.swap(m_RematchRoster);
+		// The rematch is played on the options the host staged while the last round's lobby was up. A
+		// resync keeps the running world's config instead: its snapshot was taken on that one.
+		if (!m_ResyncRound) {
+			AdoptStagedHostOptions();
+		}
 		if (!m_ResyncRound && (m_Config.host || !rematchRoster.empty()) && !PrepareRematchRoster(session, rematchRoster, error)) {
 			return false;
 		}
@@ -408,6 +452,9 @@ namespace RTE {
 				std::chrono::steady_clock::now() - startTime).count());
 			const uint64_t nowMs = m_Config.nowMs ? m_Config.nowMs() : waitMs;
 			session.Tick(nowMs);
+			if (m_Config.pumpHost) {
+				m_Config.pumpHost(session);
+			}
 			if (m_Config.publishLobby) {
 				m_Config.publishLobby(BuildLobbySnapshot(transport, session));
 			}
@@ -422,7 +469,15 @@ namespace RTE {
 					nextRetryMs = nowMs + 2000;
 					std::string retryError;
 					NetSessionConfig retryConfig = m_Config.sessionConfig;
-					(void)session.StartClient(transport, m_Config.joinAddress, std::move(retryConfig), &retryError);
+					std::string address = m_Config.joinAddress;
+					if (m_Config.resolveJoinAddress) {
+						const std::string resolved = m_Config.resolveJoinAddress();
+						if (!resolved.empty()) {
+							address = resolved;
+							m_Config.joinAddress = resolved;
+						}
+					}
+					(void)session.StartClient(transport, address, std::move(retryConfig), &retryError);
 				}
 				std::this_thread::sleep_for(std::chrono::milliseconds(5));
 				continue;
@@ -470,7 +525,7 @@ namespace RTE {
 		lobbyConfig.autoInputDelay = m_Config.autoInputDelay;
 		// The host may have reseated a client whose own round missed a drop below its id.
 		lobbyConfig.assignSeats = m_RematchRound;
-		lobbyConfig.enableMigration = m_Config.enableMigration && !m_MatchConfig.dedicated;
+		lobbyConfig.enableMigration = m_Config.enableMigration && !m_MatchConfig.dedicated && !m_MatchConfig.persistentWorld;
 		lobbyConfig.migrationListenPort = m_Config.sessionConfig.port;
 		lobbyConfig.migrationListenAddrs = m_Config.migrationListenAddrs;
 		lobbyConfig.sealMigration = m_Config.sealMigration;
@@ -478,7 +533,8 @@ namespace RTE {
 		lobbyConfig.snapshotProviderPeerId = m_SnapshotProviderPeerId;
 		if (!m_ActivePeerIds.empty()) lobbyConfig.activePeerCount = static_cast<uint8_t>(session.GetReadyPeerCount() + 1);
 		// A client's lobby hears nothing until the last peer arrives and the host starts its round —
-		// silence is not death here. Transport disconnects still abort it immediately.
+		// silence is not death here. Transport disconnects still abort it immediately. This is the
+		// technical message-hearing deadline; the host's seating policy is the budget below.
 		lobbyConfig.timeoutMs = static_cast<uint32_t>(maxWaitMs);
 		if (!m_Lobby.Start(transport, lobbyConfig, error)) {
 			SetFailed(error ? *error : "lobby start failed");
@@ -491,7 +547,9 @@ namespace RTE {
 		}
 
 		const auto startTime = std::chrono::steady_clock::now();
+		const uint64_t roundStartSessionMs = m_Config.nowMs ? m_Config.nowMs() : 0;
 		uint64_t transferProgress = m_Lobby.GetStateTransferProgressSerial(), lastTransferProgressMs = 0;
+		NetMatchConfig stagedOptions;
 		while (true) {
 			if (m_Config.cancelRequested && m_Config.cancelRequested->load()) {
 				SetFailed("match setup canceled");
@@ -504,9 +562,31 @@ namespace RTE {
 			if (m_Config.startRequested && m_Config.startRequested->exchange(false)) {
 				m_Lobby.RequestStart();
 			}
+			// An accepted host-options draft becomes this round's next configuration revision here, on
+			// the thread that owns the lobby: every peer re-acknowledges it before the Start gate opens.
+			if (m_Config.host && m_Config.hostOptions && m_Config.hostOptions->Take(stagedOptions)) {
+				std::string republishError;
+				if (m_Lobby.RepublishMatchConfig(stagedOptions, &republishError)) {
+					m_MatchConfig = stagedOptions;
+					m_Config.matchConfig = stagedOptions;
+					m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
+					SyncSeatingWaitToConfig();
+					std::cout << "[net-match] host options: config revision " << m_MatchConfig.configRevision
+					          << " published to every peer" << std::endl;
+				} else {
+					// A refused draft fails the host's transaction, never the round: the lobby keeps
+					// the revision its peers have already acknowledged.
+					std::cout << "[net-match] host options refused: " << republishError << std::endl;
+				}
+			}
 			const auto now = std::chrono::steady_clock::now();
-			const uint64_t roundMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count());
-			const NetMatchRunnerClocks clocks = ResolveRoundClocks(roundMs, static_cast<bool>(m_Config.nowMs), m_Config.nowMs ? m_Config.nowMs() : 0);
+			// The round's elapsed time is the session clock's when the service supplies one, so the
+			// waits here and the admission deadlines measure the same time.
+			const uint64_t sessionMs = m_Config.nowMs ? m_Config.nowMs() : 0;
+			const uint64_t roundMs = m_Config.nowMs
+			                             ? (sessionMs > roundStartSessionMs ? sessionMs - roundStartSessionMs : 0)
+			                             : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count());
+			const NetMatchRunnerClocks clocks = ResolveRoundClocks(roundMs, static_cast<bool>(m_Config.nowMs), sessionMs);
 			m_Lobby.Tick(clocks.lobbyMs);
 			if (const uint64_t progress = m_Lobby.GetStateTransferProgressSerial(); progress != transferProgress) {
 				transferProgress = progress;
@@ -514,8 +594,18 @@ namespace RTE {
 			}
 			// The lobby round owns the transport queue, so the plane only gets its time from here.
 			session.TickAdmissionPlane(clocks.planeMs);
+			if (m_Config.pumpHost) {
+				m_Config.pumpHost(session);
+			}
 			if (m_Config.publishLobby) {
 				m_Config.publishLobby(BuildLobbySnapshot(transport, session));
+			}
+			if (m_Lobby.HasCompleteStateTransfer() && IsWorldJoinImageBlob(m_Lobby.PeekReceivedState())) {
+				m_MatchConfig = m_Lobby.GetMatchConfig();
+				m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
+				m_ReceivedStateBytes = m_Lobby.TakeReceivedState();
+				m_WorldJoinImage = true;
+				return true;
 			}
 			if (m_Lobby.IsStarted()) {
 				m_MatchConfig = m_Lobby.GetMatchConfig();
@@ -531,7 +621,9 @@ namespace RTE {
 				if (error) *error = m_SetupError;
 				return false;
 			}
-			if (clocks.budgetMs >= lastTransferProgressMs && clocks.budgetMs - lastTransferProgressMs > maxWaitMs) {
+			// The seating wait is re-read every tick because a live options edit republishes it.
+			if (clocks.budgetMs >= lastTransferProgressMs &&
+			    SeatingWaitExpired(m_Config.lobbySeatingWaitMs, static_cast<uint32_t>(maxWaitMs), clocks.budgetMs - lastTransferProgressMs)) {
 				m_HostLostDuringSetup = !m_Config.host;
 				SetFailed("timed out waiting for lobby start");
 				if (error) *error = m_SetupError;
@@ -553,6 +645,8 @@ namespace RTE {
 		lockstepConfig.startFrame = m_UseLobbyProtocol ? m_Lobby.GetStartFrame() : config.startFrame;
 		lockstepConfig.localPeerId = LocalLockstepPeerId(session);
 		lockstepConfig.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_MatchConfig, lockstepConfig.localPeerId);
+		// The host's redundancy window rides the agreed config, so every peer repeats the same ticks.
+		lockstepConfig.frameRedundancyTicks = m_MatchConfig.frameRedundancyTicks;
 		if (!m_MatchConfig.peerInputDelayFrames.empty()) {
 			for (uint8_t peerId = 1; peerId <= m_MatchConfig.peerCount; ++peerId) {
 				lockstepConfig.peerInputDelayFrames[peerId] = NetMatchConfigUtil::PeerInputDelay(m_MatchConfig, peerId);
@@ -563,6 +657,9 @@ namespace RTE {
 		lockstepConfig.remoteTransportPeerIds = BuildRemoteTransportMap(session);
 		// Host-star: the host relays each client's frames/checksums to the other clients.
 		lockstepConfig.relayToOtherPeers = config.host;
+		// A world joiner's round opens inside one that has been running: the members it joins owe it
+		// every frame from its own start, so none of them ramps in behind the input delay.
+		lockstepConfig.joinsRunningRound = m_WorldJoinStarting;
 		lockstepConfig.frameLane = NetTransportLane::ControlReliable;
 		// Peers compare the activity in the start handshake, so it comes from the adopted config like every
 		// other agreed field; a joining peer's own request only carries its local default.
@@ -671,6 +768,47 @@ namespace RTE {
 			snapshot.members.push_back(member);
 		}
 		return snapshot;
+	}
+
+	bool NetMatchRunner::StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, std::string* error) {
+		m_Lobby.SetStartFrame(startFrame);
+		m_Config.startFrame = startFrame;
+		m_State = NetMatchRuntimeState::LockstepStarting;
+		// The joiner's sim thread calls this at E-1: the handshake advances a tick per pump from here,
+		// because a wait loop would hold the sim update it runs inside. The deadline counts those
+		// updates; this runs inside the tick, where a wall clock is a per-machine decision.
+		m_WorldJoinStarting = true;
+		m_WorldJoinStartTicks = 0;
+		if (!StartLockstep(transport, session, coordinator, m_Config, error)) {
+			return false;
+		}
+		return PumpWorldJoinLockstepStart(coordinator, error);
+	}
+
+	bool NetMatchRunner::PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, std::string* error) {
+		if (!IsWorldJoinLockstepStarting()) {
+			return m_State == NetMatchRuntimeState::Running;
+		}
+		++m_WorldJoinStartTicks;
+		coordinator.Tick(NetLockstepNowMs());
+		if (coordinator.IsRunning()) {
+			m_State = NetMatchRuntimeState::Running;
+			m_WorldJoinStarting = false;
+			return true;
+		}
+		if (coordinator.IsFailed() || coordinator.IsStopped()) {
+			m_WorldJoinStarting = false;
+			SetFailed(coordinator.GetStats().timeoutReason);
+			if (error) *error = m_SetupError;
+			return false;
+		}
+		if (m_WorldJoinStartTicks > m_Config.worldJoinStartWaitTicks) {
+			m_WorldJoinStarting = false;
+			SetFailed("timed out waiting for lockstep start after " + std::to_string(m_WorldJoinStartTicks) + " updates");
+			if (error) *error = m_SetupError;
+			return false;
+		}
+		return false;
 	}
 
 	void NetMatchRunner::SetFailed(const std::string& error) {

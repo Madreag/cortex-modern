@@ -1,6 +1,7 @@
 #pragma once
 
 #include "NetIdentity.h"
+#include "NetParticipantCrypto.h"
 #include "NetProtocol.h"
 #include "NetReconnectSession.h"
 #include "NetTransport.h"
@@ -14,6 +15,8 @@
 #include <vector>
 
 namespace RTE {
+
+	class NetHostBanStore;
 
 	enum class NetSessionRole : uint8_t {
 		None = 0,
@@ -128,6 +131,8 @@ namespace RTE {
 		void NotePeerTraffic(NetPeerId peerId, uint64_t nowMs);
 		/// Refuses one Ready client without ending the host's session.
 		void DisconnectReadyPeer(NetPeerId peerId, NetRejectReason reason, const std::string& message);
+		/// Host: one control payload to every active far peer. Kick/Ban notices ride this.
+		void BroadcastControl(const NetPayload& payload);
 		/// Feeds one transport event when another phase owns the queue (a reconnect handshake the
 		/// lockstep coordinator hands over mid-match).
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs);
@@ -141,10 +146,22 @@ namespace RTE {
 
 		/// Attaches the H4 admission plane. Without one the session behaves exactly as it did before
 		/// reconnect existed: an admission message is an unexpected handshake message.
-		void SetReconnectHost(NetReconnectHost* host) { m_ReconnectHost = host; }
+		void SetReconnectHost(NetReconnectHost* host) {
+			m_ReconnectHost = host;
+			if (host != nullptr && m_ParticipantProofRequired) {
+				host->SetParticipantProofRequired(true);
+			}
+		}
 		void SetReconnectClient(NetReconnectClient* client) { m_ReconnectClient = client; }
+		/// When set, a human seat waits on a connection proof. Host may pass null; the client must sign.
+		void EnableParticipantProof(NetParticipantIdentityStore* localStore);
+		void SetHostBanStore(NetHostBanStore* store) { m_HostBanStore = store; }
 		NetReconnectHost* GetReconnectHost() const { return m_ReconnectHost; }
 		NetReconnectClient* GetReconnectClient() const { return m_ReconnectClient; }
+		bool ParticipantProofRequired() const { return m_ParticipantProofRequired; }
+		bool GetPeerParticipantId(NetPeerId peerId, NetParticipantId& out) const;
+		const NetParticipantId& GetLocalParticipantId() const { return m_LocalParticipantId; }
+		bool HasLocalParticipantId() const { return m_HasLocalParticipantId; }
 		/// The frame a seat drop is recorded against; the match runner keeps it current.
 		void SetLockstepFrame(uint64_t frame) { m_LockstepFrame = frame; }
 
@@ -158,6 +175,7 @@ namespace RTE {
 		/// Drains the bounded presentation queue (newest 64 kept). Safe from the UI thread while the
 		/// runner worker owns the transport pump.
 		std::vector<NetChatEntry> TakeChatEntries();
+		std::vector<NetChatEntry> ChatHistory() const;
 		/// Session-assigned id -> team, pushed by the match service when it knows the roster. The
 		/// host relays a team-scoped line only to the sender's own team.
 		void SetChatTeams(std::map<uint8_t, int> teamsByPeerId);
@@ -226,6 +244,10 @@ namespace RTE {
 			bool resumedWithoutTraffic = false; //!< Its window was restarted by a resumption and it has not spoken since; the next one does not restart it again.
 			uint64_t lastHeartbeatMs = 0;
 			NetHash32 identityHash{};
+			NetParticipantId participantId{};
+			bool hasParticipantId = false;
+			NetParticipantChallenge identityChallenge;
+			bool identityChallengeLive = false;
 			// Parked on a module-manifest refusal that has already been decided, waiting only for the
 			// digests that let it name the modules. Bounded by ExpireSilentHandshakes.
 			bool awaitingModuleDigests = false;
@@ -337,6 +359,12 @@ namespace RTE {
 		NetSessionStats m_Stats;
 		NetReconnectHost* m_ReconnectHost = nullptr;
 		NetReconnectClient* m_ReconnectClient = nullptr;
+		bool m_ParticipantProofRequired = false;
+		NetParticipantIdentityStore* m_ParticipantStore = nullptr;
+		NetHostBanStore* m_HostBanStore = nullptr;
+		NetParticipantId m_LocalParticipantId{};
+		bool m_HasLocalParticipantId = false;
+		std::vector<std::pair<NetParticipantId, NetAuthBytes16>> m_SpentIdentityChallenges;
 		uint64_t m_LockstepFrame = 0;
 		std::vector<PeerState> m_Peers;
 
@@ -349,6 +377,7 @@ namespace RTE {
 		mutable std::mutex m_ChatMutex;
 		std::deque<NetChatOutbound> m_ChatOutbox;
 		std::deque<NetChatEntry> m_ChatLog;
+		std::deque<NetChatEntry> m_ChatHistory;
 		std::map<uint8_t, int> m_ChatTeams;
 		// windowStartMs -> count pairs, keyed by the author's session id (local sends use a key no
 		// peer id can hold; malformed packets fall back to a per-transport key).

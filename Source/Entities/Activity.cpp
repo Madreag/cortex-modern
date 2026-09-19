@@ -17,6 +17,7 @@
 #include "LuaMan.h"
 #include "ActivityMan.h"
 #include "SettingsMan.h"
+#include "TimerMan.h"
 
 #include "ACraft.h"
 #include "OwnedMovableObjects.h"
@@ -29,9 +30,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <map>
 #include <iostream>
+#include <sstream>
 
 using namespace RTE;
 
@@ -82,6 +85,7 @@ void Activity::Clear() {
 		m_BrainEvacuated[player] = false;
 		m_ControlledActor[player] = 0;
 		m_RenderSubstituteActor[player] = nullptr;
+		m_PresentationView[player] = PresentationView{};
 		m_PlayerController[player].Reset();
 		m_MessageTimer[player].Reset();
 	}
@@ -751,6 +755,117 @@ bool Activity::TeamFundsChanged(int whichTeam) {
 	return false;
 }
 
+namespace {
+	bool SameAppliedCost(float noted, float applied) {
+		const float scale = std::max(1.0F, std::max(std::abs(noted), std::abs(applied)));
+		return std::abs(noted - applied) <= std::numeric_limits<float>::epsilon() * scale;
+	}
+}
+
+float Activity::GetTeamFundsForPresentation(int whichTeam, int player) const {
+	const float committed = GetTeamFunds(whichTeam);
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return committed;
+	}
+	const PresentationView& view = m_PresentationView[player];
+	if (view.orders.empty() || view.fundsTeam != whichTeam) {
+		return committed;
+	}
+	float delta = 0;
+	for (const PresentationOrder& order: view.orders) {
+		delta -= order.cost;
+	}
+	return committed + delta;
+}
+
+std::string Activity::DescribeFundsReadout(int whichTeam, int player) const {
+	char str[64];
+	std::snprintf(str, sizeof(str), "%.10g", std::floor(GetTeamFundsForPresentation(whichTeam, player)));
+	return str;
+}
+
+void Activity::NotePreviewedPurchase(int player, int team, float cost, uint64_t commitTick, uint64_t sequence) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount || team < Teams::TeamOne || team >= Teams::MaxTeamCount || !IsLocalHumanSeat(player) ||
+	    !std::isfinite(cost) || cost < 0.0F) {
+		return;
+	}
+	PresentationView& view = m_PresentationView[player];
+	view.fundsTeam = team;
+	const float applied = std::abs(cost);
+	// Upsert only a matching nonzero sequence; a sequence-0 note is a new row.
+	if (sequence != 0) {
+		for (PresentationOrder& order: view.orders) {
+			if (order.sequence == sequence) {
+				order.cost = applied;
+				if (commitTick != 0) {
+					order.commitTick = commitTick;
+				}
+				return;
+			}
+		}
+	}
+	view.orders.push_back({applied, commitTick, sequence});
+}
+
+void Activity::AdoptPreviewedPurchase(int player, int team, float cost) {
+	ClearPreviewedPurchase(player, team, cost);
+}
+
+void Activity::ClearPreviewedPurchase(int player, int team, float cost) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount || team < Teams::TeamOne || team >= Teams::MaxTeamCount) {
+		return;
+	}
+	PresentationView& view = m_PresentationView[player];
+	if (view.fundsTeam != team) {
+		return;
+	}
+	for (auto order = view.orders.begin(); order != view.orders.end(); ++order) {
+		if (SameAppliedCost(order->cost, std::abs(cost))) {
+			view.orders.erase(order);
+			if (view.orders.empty()) {
+				view = PresentationView{};
+			}
+			return;
+		}
+	}
+}
+
+void Activity::ClearAllPresentationViews() {
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		m_PresentationView[player] = PresentationView{};
+	}
+}
+
+void Activity::ExpirePresentationViews(uint64_t committedTick) {
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		PresentationView& view = m_PresentationView[player];
+		std::erase_if(view.orders, [committedTick](const PresentationOrder& order) {
+			return committedTick > order.commitTick + 1;
+		});
+		if (view.orders.empty()) {
+			view = PresentationView{};
+		}
+	}
+}
+
+void Activity::FillPresentationFromPreview(uint64_t canonicalTick, uint64_t horizonTick) {
+	ClearAllPresentationViews();
+	std::vector<ScenarioRunner::PendingQueuedPurchase> pending;
+	ScenarioRunner::PeekPendingLocalQueuedPurchases(pending, canonicalTick);
+	for (const ScenarioRunner::PendingQueuedPurchase& order: pending) {
+		const uint64_t commitTick = order.targetFrame != 0 ? order.targetFrame : horizonTick;
+		if (order.player >= Players::PlayerOne && order.player < Players::MaxPlayerCount) {
+			NotePreviewedPurchase(order.player, order.team, order.cost, commitTick, order.sequence);
+			continue;
+		}
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			if (IsLocalHumanSeat(player) && m_Team[player] == order.team) {
+				NotePreviewedPurchase(player, order.team, order.cost, commitTick, order.sequence);
+			}
+		}
+	}
+}
+
 bool Activity::UpdatePlayerFundsContribution(int player, float newFunds) {
 	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount || !m_IsActive[player] || !m_TeamActive[m_Team[player]]) {
 		return false;
@@ -1051,6 +1166,30 @@ void Activity::ReassignSquadLeader(const int player, const int team) {
 
 int Activity::GetLockstepHumanSlotIndex(int team) const {
 	return ScenarioRunner::GetLockstepHumanSlotIndex(team);
+}
+
+bool Activity::IsPersistentWorld() const {
+	return ScenarioRunner::IsPersistentWorld();
+}
+
+bool Activity::IsWorldAuthor() const {
+	return ScenarioRunner::IsWorldAuthor();
+}
+
+bool Activity::SubmitWorldRespawn(int team, const std::string& className, const std::string& preset, const std::string& module, const Vector& position, int aiMode) {
+	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || className.empty() || preset.empty()) {
+		return false;
+	}
+	NetGameWorldTransition transition;
+	transition.kind = NetGameWorldTransition::Respawn;
+	transition.team = team;
+	transition.posX = position.GetX();
+	transition.posY = position.GetY();
+	transition.aiMode = aiMode;
+	transition.className = className;
+	transition.preset = preset;
+	transition.module = module;
+	return ScenarioRunner::SubmitWorldTransition(transition);
 }
 
 // Every seat of a shared roster answers the control binding the committed frame carries, the owner's own
@@ -1602,6 +1741,186 @@ bool Activity::RunNetLocalPlayerStateSelfTest() {
 		check("relaunch_links_follow_seatless_bindings", fixture.Activity::ApplyNetPlayerBindings(NetGamePlayerBindings{}) && fixture.Activity::ResolveCheckpointReferences() &&
 			!fixture.m_Brain[0] && !fixture.m_ControlledActor[0] && !fixture.m_PlayerController[0].GetControlledActor());
 	} catch (const std::exception& exception) { check(exception.what(), false); }
+	const bool presentation = RunPresentationViewSelfTest();
+	return passed && presentation;
+}
+
+bool Activity::RunPresentationViewSelfTest() {
+	bool passed = true;
+	const auto check = [&](const char* name, bool ok, const std::string& detail) {
+		std::cout << "[preview-funds-selftest] " << (ok ? "PASS " : "FAIL ") << name << ": " << detail << std::endl;
+		passed = passed && ok;
+	};
+	const auto mismatch = [](const std::string& a, const std::string& b) {
+		size_t i = 0;
+		const size_t n = std::min(a.size(), b.size());
+		while (i < n && a[i] == b[i]) {
+			++i;
+		}
+		if (i == n && a.size() == b.size()) {
+			return std::string("identical");
+		}
+		const size_t from = i > 24 ? i - 24 : 0;
+		auto clip = [&](const std::string& s) { return s.substr(from, std::min<size_t>(48, s.size() - from)); };
+		return "first mismatch at " + std::to_string(i) + " a=[" + clip(a) + "] b=[" + clip(b) + "] lens " + std::to_string(a.size()) + "/" + std::to_string(b.size());
+	};
+	ScenarioRunner::DrainLocalGameCommands();
+	GameActivity fixture;
+	fixture.SetTeamFunds(2000, Teams::TeamOne);
+	fixture.m_IsActive[Players::PlayerTwo] = true;
+	fixture.m_IsHuman[Players::PlayerTwo] = true;
+	fixture.m_Team[Players::PlayerTwo] = Teams::TeamOne;
+	fixture.m_SharedPlayerSeats = true;
+	fixture.m_SharedSeatsEngaged = true;
+	fixture.m_LocalInputPlayers[Players::PlayerOne] = Players::PlayerOne;
+	fixture.m_LocalInputPlayers[Players::PlayerTwo] = Players::NoPlayer;
+	const uint64_t press = 100;
+	const uint64_t delay = 7;
+	const std::string checkpointBefore = fixture.Activity::SaveCheckpoint();
+	Activity::RollbackState rollbackBefore;
+	fixture.CaptureRollbackState(rollbackBefore);
+	std::ostringstream worldBefore;
+	g_MovableMan.DumpSimState(g_TimerMan.GetSimUpdateCount(), worldBefore);
+	NetGameDeliverCargo buy;
+	buy.queuedPurchase = true;
+	buy.cost = 137;
+	buy.team = Teams::TeamOne;
+	buy.orderedByPlayer = static_cast<int8_t>(Players::PlayerOne);
+	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, buy});
+	std::vector<ScenarioRunner::PendingQueuedPurchase> peeked;
+	ScenarioRunner::PeekPendingLocalQueuedPurchases(peeked, press);
+	check("peek_sees_the_unapplied_order", peeked.size() == 1 && peeked[0].cost == 137.0F && peeked[0].player == Players::PlayerOne,
+	      "peeked " + std::to_string(peeked.size()) + (peeked.empty() ? "" : " cost " + std::to_string(peeked[0].cost)));
+	fixture.FillPresentationFromPreview(press, press + delay);
+	std::ostringstream worldAfter;
+	g_MovableMan.DumpSimState(g_TimerMan.GetSimUpdateCount(), worldAfter);
+	// A guard, not a detector: the fill touches the presentation view and the peek, neither of which this dump walks.
+	check("funds_path_dumps_byte_identical", worldBefore.str() == worldAfter.str(), mismatch(worldBefore.str(), worldAfter.str()));
+	check("committed_funds_untouched", fixture.GetTeamFunds(Teams::TeamOne) == 2000.0F,
+	      "committed " + std::to_string(fixture.GetTeamFunds(Teams::TeamOne)));
+	check("local_seat_shows_previewed_deduction", fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1863.0F,
+	      "local presentation " + std::to_string(fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	check("other_peer_stays_committed", fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerTwo) == 2000.0F,
+	      "other presentation " + std::to_string(fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerTwo)));
+	fixture.ExpirePresentationViews(press + 1);
+	check("local_readout_holds_at_committed_press_plus_one", fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1863.0F,
+	      "local presentation at press+1 " + std::to_string(fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	check("other_peer_still_committed_at_press_plus_one", fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerTwo) == 2000.0F,
+	      "other presentation at press+1 " + std::to_string(fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerTwo)));
+	const std::string checkpointAfter = fixture.Activity::SaveCheckpoint();
+	check("checkpoint_ignores_the_presentation_view", checkpointAfter == checkpointBefore, mismatch(checkpointBefore, checkpointAfter));
+	Activity::RollbackState rollbackAfter;
+	fixture.CaptureRollbackState(rollbackAfter);
+	check("rollback_funds_stay_committed", rollbackAfter.teamFunds[Teams::TeamOne] == rollbackBefore.teamFunds[Teams::TeamOne],
+	      "rollback funds " + std::to_string(rollbackAfter.teamFunds[Teams::TeamOne]));
+	fixture.SetTeamFunds(1863, Teams::TeamOne);
+	const std::string deducted = fixture.Activity::SaveCheckpoint();
+	check("load_checkpoint_clears_the_presentation_view", fixture.Activity::LoadCheckpoint(deducted) && fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1863.0F,
+	      "presentation after load " + std::to_string(fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	fixture.FillPresentationFromPreview(press, press + delay);
+	check("fill_rearms_from_live_orders", fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1726.0F,
+	      "rearmed presentation " + std::to_string(fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	fixture.AdoptPreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 137);
+	check("adopt_matches_committed_on_every_seat", fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1863.0F && fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerTwo) == 1863.0F,
+	      "after adopt local " + std::to_string(fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)) + " other " + std::to_string(fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerTwo)));
+	ScenarioRunner::DrainLocalGameCommands();
+	NetGameDeliverCargo firstCost;
+	firstCost.queuedPurchase = true;
+	firstCost.cost = 137;
+	firstCost.team = Teams::TeamOne;
+	firstCost.orderedByPlayer = static_cast<int8_t>(Players::PlayerOne);
+	NetGameDeliverCargo secondCost = firstCost;
+	secondCost.cost = 50;
+	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, firstCost});
+	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, secondCost});
+	GameActivity summed;
+	summed.SetTeamFunds(2000, Teams::TeamOne);
+	summed.FillPresentationFromPreview(press, press + delay);
+	check("unapplied_order_costs_sum", summed.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1813.0F,
+	      "summed presentation " + std::to_string(summed.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	ScenarioRunner::DrainLocalGameCommands();
+	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, firstCost});
+	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, firstCost});
+	GameActivity sameCosts;
+	sameCosts.SetTeamFunds(2000, Teams::TeamOne);
+	sameCosts.FillPresentationFromPreview(press, press + delay);
+	check("same_cost_orders_sum", sameCosts.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1726.0F,
+	      "same-cost presentation " + std::to_string(sameCosts.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	ScenarioRunner::DrainLocalGameCommands();
+	GameActivity consumedFix;
+	consumedFix.SetTeamFunds(2000, Teams::TeamOne);
+	NetGameCommand consumedCmd{1, buy};
+	consumedCmd.sequence = 9;
+	ScenarioRunner::EnqueueLocalGameCommand(consumedCmd);
+	consumedFix.FillPresentationFromPreview(press, press + delay);
+	const float armed = consumedFix.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne);
+	ScenarioRunner::ConsumeLockstepGameCommand(consumedCmd);
+	std::vector<ScenarioRunner::PendingQueuedPurchase> consumed;
+	ScenarioRunner::PeekPendingLocalQueuedPurchases(consumed, press);
+	consumedFix.FillPresentationFromPreview(press, press + delay);
+	check("peek_empty_after_consumed_sequence", consumed.empty() && armed == 1863.0F && consumedFix.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 2000.0F,
+	      "peeked " + std::to_string(consumed.size()) + " armed " + std::to_string(armed) + " after fill " + std::to_string(consumedFix.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	ScenarioRunner::DrainLocalGameCommands();
+	GameActivity expire;
+	expire.SetTeamFunds(2000, Teams::TeamOne);
+	NetGameDeliverCargo expireBuy = buy;
+	expireBuy.cost = 50;
+	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, expireBuy});
+	expire.FillPresentationFromPreview(press, press + delay);
+	const float expireArmed = expire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne);
+	expire.ExpirePresentationViews(press + delay + 2);
+	check("unconfirmed_expires_after_the_commit_window", expireArmed == 1950.0F && expire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 2000.0F,
+	      "armed " + std::to_string(expireArmed) + " expired " + std::to_string(expire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	ScenarioRunner::DrainLocalGameCommands();
+	// The lockstep caller vets the order and clones the craft before the helper runs; these rows enter it the same way.
+	const auto cloneDeliveryCraft = []() -> ACraft* {
+		const Entity* preset = g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte");
+		Entity* clone = preset ? preset->Clone() : nullptr;
+		ACraft* craft = dynamic_cast<ACraft*>(clone);
+		if (!craft) {
+			delete clone;
+		}
+		return craft;
+	};
+	GameActivity reject;
+	reject.SetTeamFunds(10, Teams::TeamOne);
+	reject.NotePreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 50, press + delay);
+	NetGameDeliverCargo rejectedBuy;
+	rejectedBuy.queuedPurchase = true;
+	rejectedBuy.cost = 50;
+	rejectedBuy.team = Teams::TeamOne;
+	rejectedBuy.orderedByPlayer = static_cast<int8_t>(Players::PlayerOne);
+	rejectedBuy.craftClassName = "ACDropShip";
+	rejectedBuy.craftPreset = "Dropship MK1";
+	rejectedBuy.craftModule = "Base.rte";
+	ACraft* rejectCraft = cloneDeliveryCraft();
+	const bool rejected = rejectCraft && !g_MovableMan.ApplyQueuedPurchaseDelivery(reject, rejectedBuy, 0, rejectCraft);
+	check("apply_reject_clears_the_view", rejected && reject.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 10.0F,
+	      rejectCraft ? "rejected " + std::to_string(rejected ? 1 : 0) + " presentation " + std::to_string(reject.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne))
+	                  : "Base.rte ACDropShip \"Dropship MK1\" did not clone, so the apply path was never entered");
+	GameActivity queueFail;
+	queueFail.SetTeamFunds(2000, Teams::TeamOne);
+	queueFail.NotePreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 137, press + delay);
+	NetGameDeliverCargo refusedBuy = rejectedBuy;
+	// A team QueuePurchaseDelivery refuses, at a cost the funds gate lets through: the apply reaches the queue-fail clear.
+	refusedBuy.cost = 0;
+	refusedBuy.team = Teams::MaxTeamCount;
+	ACraft* refusedCraft = cloneDeliveryCraft();
+	const bool queueRefused = refusedCraft && !g_MovableMan.ApplyQueuedPurchaseDelivery(queueFail, refusedBuy, 0, refusedCraft);
+	check("queue_fail_reject_keeps_the_pending_view", queueRefused && queueFail.GetTeamFunds(Teams::TeamOne) == 2000.0F && queueFail.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1863.0F,
+	      refusedCraft ? "refused " + std::to_string(queueRefused ? 1 : 0) + " committed " + std::to_string(queueFail.GetTeamFunds(Teams::TeamOne)) + " presentation " + std::to_string(queueFail.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne))
+	                   : "Base.rte ACDropShip \"Dropship MK1\" did not clone, so the queue-fail path was never entered");
+	ScenarioRunner::DrainLocalGameCommands();
+	GameActivity peekedExpire;
+	peekedExpire.SetTeamFunds(2000, Teams::TeamOne);
+	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, buy});
+	peekedExpire.FillPresentationFromPreview(press, press + delay);
+	const float peekArmed = peekedExpire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne);
+	peekedExpire.ExpirePresentationViews(press + delay + 2);
+	check("confirmed_expires_from_commit_tick", peekArmed == 1863.0F && peekedExpire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 2000.0F,
+	      "peek-armed " + std::to_string(peekArmed) + " after expire " + std::to_string(peekedExpire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	ScenarioRunner::DrainLocalGameCommands();
+	std::cout << "[preview-funds-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;
 }
 
@@ -1644,6 +1963,7 @@ bool Activity::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		reader.OnCommit([this] {
 			m_HasCheckpointActorIDs = true;
 			if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
+			ClearAllPresentationViews();
 		});
 		reader.Finish();
 		return true;

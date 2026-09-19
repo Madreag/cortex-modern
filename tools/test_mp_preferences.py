@@ -20,6 +20,7 @@ KEYS = [
     ("NetworkChatNotify", "0"),
     ("NetworkChatSound", "1"),
     ("NetworkChatTextSize", "Large"),
+    ("NetworkChatKey", "Y"),
     ("NetworkAutoReconnect", "0"),
     ("NetworkOfferStoredRejoin", "0"),
     ("NetworkDiagnosticsDirectory", "D:/tmp/telemetry-alt"),
@@ -27,6 +28,7 @@ KEYS = [
     ("NetworkHostDelayPolicy", "Fixed"),
     ("NetworkHostAutoRepair", "0"),
     ("NetworkHostIdleWaitMinutes", "0"),
+    ("NetworkPathHorizonTicks", "45"),
     ("NetworkHostVisibility", "Unlisted"),
 ]
 

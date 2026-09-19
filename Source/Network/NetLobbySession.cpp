@@ -4,6 +4,7 @@
 #include "NetLockstep.h"
 #include "NetProtocol.h"
 #include "NetSession.h"
+#include "NetWorldJoin.h"
 
 #include "nlohmann/json.hpp"
 
@@ -106,14 +107,20 @@ namespace RTE {
 		m_LastReceiveMs = 0;
 		m_SessionClockBaseMs = config.session ? config.session->GetClockMs() : 0;
 		m_PeerStatePending = true;
+		m_ConfigResendDue = false;
 		m_LocalReady = config.host || config.autoReady;
 		m_ReadySent = false;
 		m_StartRequested = config.autoStart;
 		m_FailureReason.clear();
 		m_RemoteLobbyUp.clear();
+		m_WorldTransferPeers.clear();
 		m_SeatAssigned = false;
 		m_StateBytesToSend.clear();
+		m_QueuedStateTransfers.clear();
 		m_OutgoingStateId = 0;
+		m_StateTransferOnlyPeer = 0;
+		m_WorldJoinReport = {};
+		m_PendingTailBytes.clear();
 		m_OutgoingChunkIndexByPeer.clear();
 		m_OutgoingChunkCount = 0;
 		m_ChunkSendStall = 0;
@@ -208,8 +215,102 @@ namespace RTE {
 			Fail("state transfer exceeds maximum size");
 			return;
 		}
+		m_StateTransferOnlyPeer = 0;
 		m_StateBytesToSend = std::move(fileBytes);
 		RestartStateTransfer();
+	}
+
+	bool NetLobbySession::BeginStateTransferTo(uint8_t peerId, std::vector<uint8_t> fileBytes) {
+		return BeginStateTransferToPeer(peerId, std::move(fileBytes)) == NetLobbyStateTransfer::Started;
+	}
+
+	NetLobbyStateTransfer NetLobbySession::BeginStateTransferToPeer(uint8_t peerId, std::vector<uint8_t> fileBytes) {
+		if (!m_Config.host || fileBytes.empty() || peerId == 0 || !IsKnownRemote(peerId)) {
+			return NetLobbyStateTransfer::Refused;
+		}
+		if (NetLobbyProtocol::GetStateChunkCount(fileBytes.size()) == 0) {
+			Fail("state transfer exceeds maximum size");
+			return NetLobbyStateTransfer::Refused;
+		}
+		// There is one outgoing blob: a second joiner's image would replace the one in flight, so it
+		// waits its turn instead.
+		if (HasPendingStateChunks()) {
+			std::erase_if(m_QueuedStateTransfers, [peerId](const std::pair<uint8_t, std::vector<uint8_t>>& queued) { return queued.first == peerId; });
+			m_QueuedStateTransfers.emplace_back(peerId, std::move(fileBytes));
+			return NetLobbyStateTransfer::Queued;
+		}
+		m_StateTransferOnlyPeer = peerId;
+		m_StateBytesToSend = std::move(fileBytes);
+		RestartStateTransfer();
+		return NetLobbyStateTransfer::Started;
+	}
+
+	bool NetLobbySession::StartNextQueuedStateTransfer() {
+		while (!m_QueuedStateTransfers.empty()) {
+			std::pair<uint8_t, std::vector<uint8_t>> next = std::move(m_QueuedStateTransfers.front());
+			m_QueuedStateTransfers.erase(m_QueuedStateTransfers.begin());
+			if (!IsKnownRemote(next.first) || next.second.empty()) {
+				continue;
+			}
+			m_StateTransferOnlyPeer = next.first;
+			m_StateBytesToSend = std::move(next.second);
+			RestartStateTransfer();
+			return true;
+		}
+		return false;
+	}
+
+	bool NetLobbySession::BindLateRemote(uint8_t peerId, NetPeerId transport, std::string* error) {
+		if (!m_Config.host || peerId == 0 || peerId == m_Config.localPeerId || transport == c_InvalidNetPeerId) {
+			if (error) *error = "late lobby remote is invalid";
+			return false;
+		}
+		if (IsKnownRemote(peerId)) {
+			m_RemoteTransports[peerId] = transport;
+			return true;
+		}
+		m_RemotePeerIds.push_back(peerId);
+		m_RemoteTransports[peerId] = transport;
+		m_ConfigAckedByPeer[peerId] = false;
+		m_RemoteReadyByPeer[peerId] = false;
+		return true;
+	}
+
+	bool NetLobbySession::BindWorldTransferRemote(uint8_t peerId, NetPeerId transport, std::string* error) {
+		if (!BindLateRemote(peerId, transport, error)) {
+			return false;
+		}
+		m_WorldTransferPeers.insert(peerId);
+		return true;
+	}
+
+	void NetLobbySession::SendMatchConfigTo(uint8_t peerId) {
+		if (!m_Config.host || !IsKnownRemote(peerId)) {
+			return;
+		}
+		SendSeatAssign(peerId);
+		std::string error;
+		(void)SendTo(m_RemoteTransports.at(peerId), NetLobbyMatchConfig{m_Config.matchConfig}, &error);
+	}
+
+	void NetLobbySession::PumpOutgoingChunks() {
+		SendQueuedStateChunks();
+	}
+
+	void NetLobbySession::HandleTransportEvent(const NetTransportEvent& event, uint64_t nowMs) {
+		HandleEvent(event, nowMs);
+	}
+
+	bool NetLobbySession::SendPayloadTo(uint8_t peerId, const NetLobbyPayload& payload, std::string* error) {
+		if (!IsKnownRemote(peerId)) {
+			if (error) *error = "lobby has no remote for that peer";
+			return false;
+		}
+		return SendTo(m_RemoteTransports.at(peerId), payload, error);
+	}
+
+	bool NetLobbySession::SendPayload(const NetLobbyPayload& payload, std::string* error) {
+		return Send(payload, error);
 	}
 
 	void NetLobbySession::RestartStateTransfer() {
@@ -231,8 +332,12 @@ namespace RTE {
 	}
 
 	bool NetLobbySession::HasPendingStateChunks() const {
-		return m_OutgoingChunkCount > 0 && std::any_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(),
-		                                              [this](uint8_t peerId) { return OutgoingChunkIndex(peerId) < m_OutgoingChunkCount; });
+		return m_OutgoingChunkCount > 0 && std::any_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [this](uint8_t peerId) {
+			if (m_StateTransferOnlyPeer != 0 && peerId != m_StateTransferOnlyPeer) {
+				return false;
+			}
+			return OutgoingChunkIndex(peerId) < m_OutgoingChunkCount;
+		});
 	}
 
 	std::vector<uint8_t> NetLobbySession::TakeReceivedState() {
@@ -249,7 +354,8 @@ namespace RTE {
 			// them as another phase's packets and nothing ever sends them again.
 			uint16_t index = m_OutgoingChunkCount;
 			for (uint8_t peerId: m_RemotePeerIds) {
-				if (IsRemoteLobbyUp(peerId)) index = std::min(index, OutgoingChunkIndex(peerId));
+				if (m_StateTransferOnlyPeer != 0 && peerId != m_StateTransferOnlyPeer) continue;
+				if (IsRemoteLobbyUp(peerId) || IsWorldTransferPeer(peerId)) index = std::min(index, OutgoingChunkIndex(peerId));
 			}
 			if (index >= m_OutgoingChunkCount) break;
 			NetLobbyStateChunk chunk;
@@ -261,7 +367,8 @@ namespace RTE {
 			const size_t end = std::min(m_StateBytesToSend.size(), begin + NetLobbyProtocol::c_MaxStateChunkBytes);
 			chunk.bytes.assign(m_StateBytesToSend.begin() + begin, m_StateBytesToSend.begin() + end);
 			for (uint8_t peerId: m_RemotePeerIds) {
-				if (!IsRemoteLobbyUp(peerId) || OutgoingChunkIndex(peerId) != index) continue;
+				if (m_StateTransferOnlyPeer != 0 && peerId != m_StateTransferOnlyPeer) continue;
+				if ((!IsRemoteLobbyUp(peerId) && !IsWorldTransferPeer(peerId)) || OutgoingChunkIndex(peerId) != index) continue;
 				std::string error;
 				if (!SendTo(m_RemoteTransports.at(peerId), chunk, &error)) {
 					if (++m_ChunkSendStall > 4000) Fail("state transfer stalled: " + error);
@@ -280,7 +387,19 @@ namespace RTE {
 			if (start != 0) {
 				g_LastStateTransferMs.store(TransferSteadyMs() - start);
 			}
+			// The pump is free, so the next joiner's image can take it; its chunks go out next pump.
+			(void)StartNextQueuedStateTransfer();
 		}
+	}
+
+	NetLobbySession::WorldJoinReport NetLobbySession::TakeWorldJoinReport() {
+		WorldJoinReport report = m_WorldJoinReport;
+		m_WorldJoinReport = {};
+		return report;
+	}
+
+	std::vector<uint8_t> NetLobbySession::TakePendingTailBytes() {
+		return std::move(m_PendingTailBytes);
 	}
 
 	void NetLobbySession::HandleStateChunk(const NetLobbyStateChunk& message) {
@@ -324,6 +443,11 @@ namespace RTE {
 		m_IncomingReceivedBytes = static_cast<uint32_t>(m_ReceivedState.size());
 		++m_IncomingNextChunkIndex;
 		++m_StateTransferProgressSerial;
+		if (m_Config.matchConfig.persistentWorld) {
+			const uint64_t progress = (static_cast<uint64_t>(m_IncomingChunkCount) << 32) | m_IncomingNextChunkIndex;
+			std::string sendError;
+			(void)Send(MakeWorldJoinReport(c_NetWorldReportProgress, progress), &sendError);
+		}
 		if (m_IncomingNextChunkIndex != m_IncomingChunkCount) return;
 		m_IncomingStateComplete = true;
 		if (m_Config.host && m_Config.snapshotProviderPeerId != 0) BeginStateTransfer(m_ReceivedState);
@@ -337,6 +461,11 @@ namespace RTE {
 	bool NetLobbySession::IsRemoteReady(uint8_t peerId) const {
 		const auto it = m_RemoteReadyByPeer.find(peerId);
 		return it != m_RemoteReadyByPeer.end() && it->second;
+	}
+
+	bool NetLobbySession::IsConfigAcked(uint8_t peerId) const {
+		const auto it = m_ConfigAckedByPeer.find(peerId);
+		return it != m_ConfigAckedByPeer.end() && it->second;
 	}
 
 	bool NetLobbySession::HasHeardFrom(uint8_t peerId) const {
@@ -391,6 +520,7 @@ namespace RTE {
 				{"ignored_session_packets", m_Stats.ignoredSessionPackets},
 				{"config_packets_sent", m_Stats.configPacketsSent},
 				{"config_acks_received", m_Stats.configAcksReceived},
+				{"config_republishes", m_Stats.configRepublishes},
 				{"ready_packets_received", m_Stats.readyPacketsReceived},
 				{"start_packets_sent", m_Stats.startPacketsSent},
 				{"start_packets_received", m_Stats.startPacketsReceived},
@@ -421,6 +551,53 @@ namespace RTE {
 			return;
 		}
 		m_StartRequested = true;
+	}
+
+	bool NetLobbySession::RepublishMatchConfig(const NetMatchConfig& config, std::string* error) {
+		auto refuse = [error](const char* reason) {
+			if (error) *error = reason;
+			return false;
+		};
+		if (!m_Config.host) {
+			return refuse("only the host republishes the match config");
+		}
+		if (m_State == NetLobbyState::Idle || IsTerminal(m_State)) {
+			return refuse("the lobby round is no longer open");
+		}
+		// The draft named the revision it was accepted against; anything at or behind the published
+		// one is a transaction the round has already moved past.
+		if (config.configRevision <= m_Config.matchConfig.configRevision) {
+			return refuse("the draft names a stale configuration revision");
+		}
+		if (config.sessionId != m_Config.matchConfig.sessionId || config.hostPeerId != m_Config.matchConfig.hostPeerId ||
+		    config.peerCount != m_Config.matchConfig.peerCount) {
+			return refuse("seat capacity and session identity are fixed for the open lobby");
+		}
+		std::string validateError;
+		if (!NetMatchConfigUtil::ValidateLocalAlpha(config, &validateError)) {
+			if (error) *error = validateError;
+			return false;
+		}
+		m_Config.matchConfig = config;
+		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(config);
+		// Every peer acknowledges this exact revision before it counts again: HandleConfigAck drops an
+		// ack whose hash is the old one, so a delayed ack cannot accept a config its sender never saw.
+		for (auto& [peerId, acked] : m_ConfigAckedByPeer) {
+			acked = false;
+		}
+		for (auto& [peerId, ready] : m_RemoteReadyByPeer) {
+			ready = false;
+		}
+		m_State = NetLobbyState::WaitingForConfigAck;
+		m_ReadySent = false;
+		m_LocalReady = m_Config.host || m_Config.autoReady;
+		// A Start pending on the old revision does not carry over; an auto-starting round re-arms it
+		// exactly as Start() did, so the new config is what the round begins on.
+		m_StartRequested = m_Config.autoStart;
+		m_PeerStatePending = true;
+		m_ConfigResendDue = true;
+		++m_Stats.configRepublishes;
+		return true;
 	}
 
 	const char* NetLobbySession::StateName(NetLobbyState state) {
@@ -455,6 +632,7 @@ namespace RTE {
 		m_RemoteTransports.erase(peer);
 		std::erase(m_RemotePeerIds, peerId);
 		m_RemoteLobbyUp.erase(peerId);
+		m_WorldTransferPeers.erase(peerId);
 		m_OutgoingChunkIndexByPeer.erase(peerId);
 		m_ConfigAckedByPeer.erase(peerId);
 		m_RemoteReadyByPeer.erase(peerId);
@@ -480,6 +658,13 @@ namespace RTE {
 		std::map<uint8_t, NetPeerId> transports;
 		for (const NetSessionPeerInfo& peer: readyPeers) {
 			transports[static_cast<uint8_t>(peer.assignedPeerId + 1)] = peer.transportPeerId;
+		}
+		// A world bootstrap's id comes from the join plane, never from the session roster; without this
+		// the rebuild below would unbind it and the image in flight would stop.
+		for (uint8_t worldPeer: m_WorldTransferPeers) {
+			if (const auto bound = m_RemoteTransports.find(worldPeer); bound != m_RemoteTransports.end()) {
+				transports[worldPeer] = bound->second;
+			}
 		}
 		if (transports == m_RemoteTransports) return;
 		const auto previous = m_RemoteTransports;
@@ -521,7 +706,8 @@ namespace RTE {
 				if (!previous.contains(peerId)) SendSeatAssign(peerId);
 			}
 		}
-		if (addedPeer && !m_StateBytesToSend.empty()) RestartStateTransfer();
+		// A targeted transfer is one joiner's image; another peer arriving must not restart it.
+		if (addedPeer && m_StateTransferOnlyPeer == 0 && !m_StateBytesToSend.empty()) RestartStateTransfer();
 	}
 
 	bool NetLobbySession::SeatsRemoteHuman() const {
@@ -600,7 +786,7 @@ namespace RTE {
 			}
 			return;
 		}
-		if (m_Stats.configPacketsSent > 0 && nowMs < m_LastConfigSentMs + m_Config.resendIntervalMs) {
+		if (!m_ConfigResendDue && m_Stats.configPacketsSent > 0 && nowMs < m_LastConfigSentMs + m_Config.resendIntervalMs) {
 			return;
 		}
 		bool sentAny = false;
@@ -631,6 +817,7 @@ namespace RTE {
 		if (sentAny) {
 			++m_Stats.configPacketsSent;
 			m_LastConfigSentMs = nowMs;
+			m_ConfigResendDue = false;
 		}
 	}
 
@@ -803,7 +990,7 @@ namespace RTE {
 				const bool allowed = std::visit([&](const auto& payload) {
 					using Payload = std::decay_t<decltype(payload)>;
 					if constexpr (std::is_same_v<Payload, NetLobbyMigration>) return event.lane == NetTransportLane::ControlReliable && (m_Config.host ? payload.kind == 1 && payload.peerId == sender->first : (payload.kind == 2 && payload.peerId == m_Config.localPeerId) || (payload.kind == 1 && payload.peerId == sender->first));
-					if constexpr (std::is_same_v<Payload, NetLobbyStateChunk>) return event.lane == NetTransportLane::ControlReliable && (!m_Config.host || (m_Config.snapshotProviderPeerId != 0 && sender->first == m_Config.snapshotProviderPeerId));
+					if constexpr (std::is_same_v<Payload, NetLobbyStateChunk>) return event.lane == NetTransportLane::ControlReliable && (m_Config.matchConfig.persistentWorld || !m_Config.host || (m_Config.snapshotProviderPeerId != 0 && sender->first == m_Config.snapshotProviderPeerId));
 					// Only the hub binds seats; a client offering one is not a peer this round keeps.
 					if constexpr (std::is_same_v<Payload, NetLobbySeatAssign>) return !m_Config.host;
 					if (m_Config.host) {
@@ -831,6 +1018,21 @@ namespace RTE {
 				}
 				++m_Stats.messagesReceived;
 				m_RemoteLobbyUp.insert(sender->first);
+				if (const NetLobbyStateChunk* chunk = std::get_if<NetLobbyStateChunk>(&decoded.message.payload)) {
+					uint8_t kind = 0;
+					uint64_t value = 0;
+					if (ParseWorldJoinReport(*chunk, kind, value)) {
+						m_WorldJoinReport = {kind, value, sender->first, true};
+						break;
+					}
+					if (chunk->transferId == c_NetWorldTailTransferId) {
+						// Only a joiner drains this; on the host it would grow for the world's life.
+						if (!m_Config.host) {
+							m_PendingTailBytes.insert(m_PendingTailBytes.end(), chunk->bytes.begin(), chunk->bytes.end());
+						}
+						break;
+					}
+				}
 				HandleMessage(decoded.message);
 				break;
 			}
@@ -872,7 +1074,7 @@ namespace RTE {
 	}
 
 	bool NetLobbySession::PrepareMigrationRoster() {
-		if (m_Config.matchConfig.dedicated) return false;
+		if (m_Config.matchConfig.dedicated || m_Config.matchConfig.persistentWorld) return false;
 		if (m_Config.activePeerCount != 0 && !m_Config.matchConfig.successorOrder.empty()) return true;
 		for (uint8_t peer = 1; peer <= m_Config.matchConfig.peerCount; ++peer) if (!m_MigrationEndpoints.contains(peer)) return false;
 		NetMatchConfig next = m_Config.matchConfig;

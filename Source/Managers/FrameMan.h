@@ -67,6 +67,8 @@ namespace RTE {
 		static double FeelClockMS();
 		static void FeelInputSample(const Actor* actor, int player);
 		static void FeelPreviewStep(const Actor* actor, uint64_t committedTick, uint64_t predictedTick, double beginMS);
+		/// One record per seamless swap: the ghost went and the spawn it led took the frame.
+		static void FeelPreviewSwap(uint64_t adoptionTick, uint64_t swapTick, uint64_t leadTicks, float poseDelta);
 		static void FeelBeginIteration();
 		static void FeelBeforePreview();
 		static void FeelBeginDraw();
