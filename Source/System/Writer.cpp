@@ -301,11 +301,12 @@ CheckpointText CheckpointCache::Remember(const void* owner, unsigned channel, Ch
 	return Remember(owner, channel, std::move(value), 0);
 }
 
-CheckpointText CheckpointCache::Remember(const void* owner, unsigned channel, CheckpointText value, uint64_t stamp) {
+CheckpointText CheckpointCache::Remember(const void* owner, unsigned channel, CheckpointText value, uint64_t stamp, uint64_t identity) {
 	Entry& entry = m_Entries[owner][channel];
 	++m_Touched;
 	entry.generation = m_Generation;
 	entry.stamp = stamp;
+	entry.identity = identity;
 	if (entry.text.SameValues(value)) { ++m_Reused; m_Retired.push_back(std::move(value)); return entry.text; }
 	m_Retired.push_back(value);
 	value = value.ReuseChildren(entry.text);
@@ -320,6 +321,13 @@ const CheckpointText* CheckpointCache::Peek(const void* owner, unsigned channel)
 	const auto entry = owners->second.find(channel);
 	if (entry == owners->second.end()) return nullptr;
 	return &entry->second.text;
+}
+
+uint64_t CheckpointCache::Identity(const void* owner, unsigned channel) const {
+	const auto owners = m_Entries.find(owner);
+	if (owners == m_Entries.end()) return 0;
+	const auto entry = owners->second.find(channel);
+	return entry == owners->second.end() ? 0 : entry->second.identity;
 }
 
 uint64_t CheckpointCache::Stamp(const void* owner, unsigned channel) const {
