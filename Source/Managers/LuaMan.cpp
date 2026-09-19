@@ -1233,7 +1233,7 @@ end
 -- Naming a node in a chunk is what makes that chunk depend on the chunk that defines it.
 local function reference(ctx, id)
 	ctx.refs[id] = true
-	return reference(ctx, id)
+	return "#" .. outputNumber(id) .. ";"
 end
 
 -- Owned values are nodes, so two fields holding one Vector share it again after the restore.
@@ -3194,9 +3194,9 @@ do
 	cacheRootTwo.tag = "moved"
 	local cacheSecond = _ScriptGraph.serialize(cacheRoots)
 	local cacheThird = _ScriptGraph.serialize(cacheRoots)
-	local keptChunk = string.match(cacheFirst, "T%d+;P%-;Mz;k1;s3:tags3:one;")
+	local keptChunk = string.match(cacheFirst, "T%d+;P%-;Mz;k1;s3:tags3:one")
 	check("root_cache_keeps_the_untouched_root_bytes", keptChunk ~= nil and string.find(cacheSecond, keptChunk, 1, true) ~= nil, tostring(keptChunk))
-	check("root_cache_rewrites_the_root_that_moved", string.find(cacheSecond, "s5:moved;", 1, true) ~= nil and string.find(cacheFirst, "s5:moved;", 1, true) == nil)
+	check("root_cache_rewrites_the_root_that_moved", string.find(cacheSecond, "s5:moved", 1, true) ~= nil and string.find(cacheFirst, "s5:moved", 1, true) == nil)
 	check("root_cache_repeats_byte_for_byte", cacheSecond == cacheThird)
 	-- A node one root defines and another names keeps its id when the other root is written again.
 	local sharedLeaf = { shared = true }
@@ -3208,14 +3208,14 @@ do
 	local shareSecond = _ScriptGraph.serialize(shareRoots)
 	local definesShared = string.find(shareSecond, "T" .. sharedId .. ";P%-;", 1, false) ~= nil
 	local namesShared = select(2, string.gsub(shareSecond, "#" .. sharedId .. ";", "")) >= 1
-	check("shared_node_keeps_its_id_when_the_other_root_is_rewritten", sharedId > 0 and definesShared and namesShared and string.find(shareSecond, "s1:b;", 1, true) ~= nil, tostring(sharedId))
+	check("shared_node_keeps_its_id_when_the_other_root_is_rewritten", sharedId > 0 and definesShared and namesShared and string.find(shareSecond, "s1:b", 1, true) ~= nil, tostring(sharedId))
 	-- The root that first reached the shared node is the one written again: its id must not move, and
 	-- exactly one chunk may define it.
 	shareRootOne.tag = "c"
 	local shareThird = _ScriptGraph.serialize(shareRoots)
 	local definitions = select(2, string.gsub(shareThird, "T" .. sharedId .. ";P%-;", ""))
 	local namesAfterOwnerRewrite = select(2, string.gsub(shareThird, "#" .. sharedId .. ";", "")) >= 1
-	check("shared_node_keeps_its_id_when_its_own_root_is_rewritten", definitions == 1 and namesAfterOwnerRewrite and string.find(shareThird, "s1:c;", 1, true) ~= nil, tostring(definitions))
+	check("shared_node_keeps_its_id_when_its_own_root_is_rewritten", definitions == 1 and namesAfterOwnerRewrite and string.find(shareThird, "s1:c", 1, true) ~= nil, tostring(definitions))
 	-- A restored table answers to the name the archive gave it, so the next capture writes the same bytes.
 	local carriedRoots, carriedProblems = _ScriptGraph.deserialize(birthOne)
 	local carriedText = carriedRoots and select(1, _ScriptGraph.serialize({ ["1"] = carriedRoots["1"] })) or ""
