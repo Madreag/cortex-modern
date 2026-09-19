@@ -50,6 +50,7 @@ void UInputMan::Clear() {
 	m_MouseTrapRadius = 350;
 	m_LastDeviceWhichControlledGUICursor = InputDevice::DEVICE_KEYB_ONLY;
 	m_DisableKeyboard = false;
+	m_SeatInputTypedInto = false;
 	m_DisableMouseMoving = false;
 	m_PrepareToEnableMouseMoving = false;
 
@@ -144,7 +145,7 @@ void UInputMan::LoadDeviceIcons() {
 }
 
 bool UInputMan::SeatInputTypedInto(int whichPlayer) const {
-	if (!m_DisableKeyboard || whichPlayer < Players::PlayerOne || whichPlayer >= Players::MaxPlayerCount) {
+	if (!m_SeatInputTypedInto || whichPlayer < Players::PlayerOne || whichPlayer >= Players::MaxPlayerCount) {
 		return false;
 	}
 	const InputDevice device = m_ControlScheme.at(whichPlayer).GetDevice();

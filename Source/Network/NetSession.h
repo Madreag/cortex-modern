@@ -96,7 +96,6 @@ namespace RTE {
 		std::string senderName; //!< Filled when this session knows the name; the UI resolves the rest.
 		uint8_t scope = c_NetChatScopeAll;
 		std::string text;
-		uint64_t receivedAtMs = 0; //!< Presentation clock; never on the wire.
 	};
 
 	// A connected peer as seen by the match runner: its transport id and session-assigned id.

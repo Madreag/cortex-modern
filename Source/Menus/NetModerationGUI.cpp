@@ -750,6 +750,7 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot) {
 			}
 			if (m_ChatDisabledKeys) {
 				g_UInputMan.DisableKeys(false);
+				g_UInputMan.TypeIntoSeatInput(false);
 				m_ChatDisabledKeys = false;
 			}
 			if (!m_Open) m_Input->SetKeyJoyMouseCursor(false);
@@ -809,6 +810,8 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot) {
 		}
 		if (!m_ChatDisabledKeys) {
 			g_UInputMan.DisableKeys(true);
+			// The entry takes the seats' own gameplay mappings too, which losing the window must not.
+			g_UInputMan.TypeIntoSeatInput(true);
 			m_ChatDisabledKeys = true;
 		}
 		m_Input->SetKeyJoyMouseCursor(true);
@@ -825,6 +828,7 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot) {
 		}
 		if (m_ChatDisabledKeys) {
 			g_UInputMan.DisableKeys(false);
+			g_UInputMan.TypeIntoSeatInput(false);
 			m_ChatDisabledKeys = false;
 		}
 		if (!m_Open) m_Input->SetKeyJoyMouseCursor(false);
@@ -847,6 +851,7 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot) {
 				m_MatchChatInput->SetVisible(false);
 				if (m_ChatDisabledKeys) {
 					g_UInputMan.DisableKeys(false);
+					g_UInputMan.TypeIntoSeatInput(false);
 					m_ChatDisabledKeys = false;
 				}
 				if (!m_Open) m_Input->SetKeyJoyMouseCursor(false);
@@ -907,14 +912,11 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	}
 
 	int rows = showHistory ? static_cast<int>(std::min(m_MatchChat.size(), m_MatchChatLines.size())) : 0;
-	if (m_ChatEntryOpen && rows == 0) rows = 0;
-	int available = std::max(0, bottom - 4);
-	int maxRows = std::min(static_cast<int>(m_MatchChat.size()), std::max(0, (available - inputH) / lineH));
+	const int available = std::max(0, bottom - 4);
+	// The band yields to whatever owns the screen: as many history rows as fit above the entry, and on a
+	// short screen with the panel open that is the entry alone.
+	const int maxRows = std::min(static_cast<int>(m_MatchChat.size()), std::max(0, (available - inputH) / lineH));
 	if (rows > maxRows) rows = maxRows;
-	// A 640x360 match still owes the player one yielded row before the band clips off.
-	if (rows == 0 && showHistory && !m_MatchChatLines.empty() && maxRows == 0 && available >= lineH + inputH) {
-		rows = 1;
-	}
 	const int height = rows * lineH + inputH;
 	// An open entry that the free area cannot hold gives way rather than drawing over an occupier.
 	if (height <= 0 || height > available) {
@@ -930,12 +932,25 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	int top = std::max(0, bottom - height);
 	int freeLeft = 8, freeRight = backbuffer->w - 8;
 	area.FreeSpan(top, bottom, backbuffer->w, freeLeft, freeRight);
-	if (freeRight - freeLeft < 80) {
-		freeLeft = 8;
-		freeRight = backbuffer->w - 8;
-		area.FreeSpan(top, bottom, backbuffer->w, freeLeft, freeRight);
+	constexpr int c_ChatMinWidth = 80;
+	if (freeRight - freeLeft < c_ChatMinWidth) {
+		// Nothing wide enough down here: the band takes the top band the toasts fall back to, or gives way.
+		top = 2;
+		freeLeft = 0;
+		freeRight = backbuffer->w;
+		area.FreeSpan(top, top + height, backbuffer->w, freeLeft, freeRight);
+		if (freeRight - freeLeft < c_ChatMinWidth) {
+			for (GUILabel* label: m_MatchChat) {
+				if (!label) continue;
+				label->SetVisible(false);
+				label->SetText("");
+			}
+			if (m_MatchChatInput) m_MatchChatInput->SetVisible(false);
+			m_ChatRect = {};
+			return;
+		}
 	}
-	const int width = std::max(1, std::min(420, std::max(80, freeRight - freeLeft - 8)));
+	const int width = std::max(1, std::min(420, std::max(c_ChatMinWidth, freeRight - freeLeft - 8)));
 	const int x = std::max(0, std::min(backbuffer->w - width, freeLeft + std::max(0, (freeRight - freeLeft - width) / 2)));
 	m_ChatRect = {x, top, width, height, true};
 
