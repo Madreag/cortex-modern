@@ -119,6 +119,7 @@ namespace RTE {
 	}
 
 	bool NetMatchRunner::PrepareRematchRoster(NetSession& session, const std::vector<uint8_t>& survivingPeerIds, std::string* error) {
+		if (m_ActiveHostPeerId != 0) m_MatchConfig.hostPeerId = m_ActiveHostPeerId;
 		auto refuse = [&](const std::string& reason) {
 			SetFailed(reason);
 			if (error) *error = m_SetupError;
@@ -207,7 +208,17 @@ namespace RTE {
 		}
 		m_MatchConfig = m_RematchConfig;
 		m_Config.matchConfig = m_RematchConfig;
+		m_ActiveHostPeerId = m_RematchConfig.hostPeerId;
+		m_ActivePeerIds.clear();
 		return true;
+	}
+
+	void NetMatchRunner::AdoptHostMigration(const NetHostMigrationResult& result, uint8_t localPeerId) {
+		m_Config.host = result.hostPeerId == localPeerId;
+		m_ActiveHostPeerId = result.hostPeerId; m_ActivePeerIds = result.members;
+		m_Config.startFrame = result.boundary + 1;
+		m_SnapshotProviderPeerId = result.snapshotProviderPeerId;
+		m_State = NetMatchRuntimeState::Running;
 	}
 
 	std::vector<uint8_t> NetMatchRunner::DeriveRematchSurvivors(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaveFrames, const std::set<uint8_t>& refilledPeerIds, const NetLockstepSeatSnapshot* seats) {
@@ -309,8 +320,9 @@ namespace RTE {
 	}
 
 	bool NetMatchRunner::StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error, std::vector<uint8_t> stateToStream, std::vector<NetTransportEvent> pendingLobbyEvents) {
+		m_HostLostDuringSetup = false;
 		m_SetupError.clear();
-		m_ResyncRound = !stateToStream.empty();
+		m_ResyncRound = !stateToStream.empty() || m_SnapshotProviderPeerId != 0;
 		m_RematchRound = false;
 		m_RematchDerivedPeerId = 0;
 		// A rematch re-forms the roster on the peers still here; a resync must keep the one its snapshot
@@ -320,8 +332,9 @@ namespace RTE {
 		if (!m_ResyncRound && (m_Config.host || !rematchRoster.empty()) && !PrepareRematchRoster(session, rematchRoster, error)) {
 			return false;
 		}
-		const uint32_t expectedReadyPeers = m_Config.host ? static_cast<uint32_t>(m_MatchConfig.peerCount - 1) : 1U;
+		const uint32_t expectedReadyPeers = m_Config.host ? static_cast<uint32_t>((m_ActivePeerIds.empty() ? m_MatchConfig.peerCount : m_ActivePeerIds.size()) - 1) : 1U;
 		if (!session.IsReady() || session.GetReadyPeerCount() < expectedReadyPeers) {
+			m_HostLostDuringSetup = !m_Config.host && session.IsClosed() && !session.HasReject();
 			SetFailed(std::string("session is no longer connected") + (session.HasReject() ? ": " + session.BuildRejectText() : ""));
 			if (error) *error = m_SetupError;
 			return false;
@@ -347,6 +360,7 @@ namespace RTE {
 		if (!StartLockstep(transport, session, coordinator, m_Config, error) || !WaitForLockstepRunning(coordinator, m_Config.lockstepWaitMs, error)) {
 			return false;
 		}
+		m_SnapshotProviderPeerId = 0;
 		m_State = NetMatchRuntimeState::Running;
 		return true;
 	}
@@ -456,6 +470,13 @@ namespace RTE {
 		lobbyConfig.autoInputDelay = m_Config.autoInputDelay;
 		// The host may have reseated a client whose own round missed a drop below its id.
 		lobbyConfig.assignSeats = m_RematchRound;
+		lobbyConfig.enableMigration = m_Config.enableMigration && !m_MatchConfig.dedicated;
+		lobbyConfig.migrationListenPort = m_Config.sessionConfig.port;
+		lobbyConfig.migrationListenAddrs = m_Config.migrationListenAddrs;
+		lobbyConfig.sealMigration = m_Config.sealMigration;
+		lobbyConfig.openMigration = m_Config.openMigration;
+		lobbyConfig.snapshotProviderPeerId = m_SnapshotProviderPeerId;
+		if (!m_ActivePeerIds.empty()) lobbyConfig.activePeerCount = static_cast<uint8_t>(session.GetReadyPeerCount() + 1);
 		// A client's lobby hears nothing until the last peer arrives and the host starts its round —
 		// silence is not death here. Transport disconnects still abort it immediately.
 		lobbyConfig.timeoutMs = static_cast<uint32_t>(maxWaitMs);
@@ -464,7 +485,7 @@ namespace RTE {
 			return false;
 		}
 		// A resync round streams the host's match state; the Start queues behind the last chunk.
-		if (m_Config.host && !m_StateToStream.empty()) {
+		if ((m_Config.host || m_SnapshotProviderPeerId == LocalLockstepPeerId(session)) && !m_StateToStream.empty()) {
 			m_Lobby.BeginStateTransfer(std::move(m_StateToStream));
 			m_StateToStream.clear();
 		}
@@ -505,11 +526,13 @@ namespace RTE {
 				return true;
 			}
 			if (m_Lobby.IsFailed() || m_Lobby.IsRejected()) {
+				m_HostLostDuringSetup = m_Lobby.DidLoseHost();
 				SetFailed(m_Lobby.GetFailureReason());
 				if (error) *error = m_SetupError;
 				return false;
 			}
 			if (clocks.budgetMs >= lastTransferProgressMs && clocks.budgetMs - lastTransferProgressMs > maxWaitMs) {
+				m_HostLostDuringSetup = !m_Config.host;
 				SetFailed("timed out waiting for lobby start");
 				if (error) *error = m_SetupError;
 				return false;
@@ -546,11 +569,16 @@ namespace RTE {
 		lockstepConfig.scenario = m_UseLobbyProtocol ? m_MatchConfig.activityPreset : config.scenario;
 		lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(m_MatchConfig.ownershipPolicy);
 		lockstepConfig.matchConfig = m_MatchConfig;
+		lockstepConfig.authorityPeerId = m_ActiveHostPeerId;
+		lockstepConfig.activePeerIds = m_ActivePeerIds;
+		if (m_Config.configureMigration) m_Config.configureMigration(lockstepConfig);
 		// The host tags each round so a late packet from the previous round cannot join this one.
 		if (config.host) {
 			std::random_device entropy;
 			do {
-				lockstepConfig.roundId = (static_cast<uint64_t>(entropy()) << 32) ^ static_cast<uint64_t>(entropy()) ^
+				const uint64_t high = entropy();
+				const uint64_t low = entropy();
+				lockstepConfig.roundId = (high << 32) ^ low ^
 				                         static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
 			} while (lockstepConfig.roundId == 0);
 		}
@@ -574,11 +602,13 @@ namespace RTE {
 			const uint64_t nowMs = NetLockstepNowMs();
 			coordinator.Tick(nowMs);
 			if (coordinator.IsFailed() || coordinator.IsStopped()) {
+				m_HostLostDuringSetup = !m_Config.host && coordinator.GetStats().timeoutReason.starts_with("PeerDisconnected:");
 				SetFailed(coordinator.GetStats().timeoutReason);
 				if (error) *error = m_SetupError;
 				return false;
 			}
 			if (nowMs - startMs > maxWaitMs) {
+				m_HostLostDuringSetup = !m_Config.host;
 				SetFailed("timed out waiting for lockstep start");
 				if (error) *error = m_SetupError;
 				return false;
@@ -593,6 +623,7 @@ namespace RTE {
 		// list grows to the real player count instead of the local placeholder config's.
 		const NetMatchConfig& rosterConfig = m_Lobby.GetState() != NetLobbyState::Idle ? m_Lobby.GetMatchConfig() : m_MatchConfig;
 		NetLobbySnapshot snapshot;
+		snapshot.hostPeerId = m_ActiveHostPeerId != 0 ? m_ActiveHostPeerId : rosterConfig.hostPeerId;
 		snapshot.lobbyPhase = StateName(m_State);
 		snapshot.activityPreset = rosterConfig.activityPreset;
 		snapshot.activityModule = rosterConfig.activityModule;

@@ -64,6 +64,7 @@ namespace RTE {
 		m_Transport = &transport;
 		m_Config = std::move(config);
 		m_Role = NetSessionRole::Host;
+		m_HostAssignedPeerId = c_HostAssignedPeerId;
 		m_State = NetSessionState::Stopped;
 		m_StateStartedMs = m_NowMs;
 		m_SessionId = m_Config.sessionId;
@@ -107,6 +108,7 @@ namespace RTE {
 		m_Transport = &transport;
 		m_Config = std::move(config);
 		m_Role = NetSessionRole::Client;
+		m_HostAssignedPeerId = c_HostAssignedPeerId;
 		m_State = NetSessionState::Connecting;
 		m_StateStartedMs = m_NowMs;
 		m_SessionId = 0;
@@ -301,9 +303,30 @@ namespace RTE {
 				return lhs.assignedPeerId < rhs.assignedPeerId;
 			});
 		} else if (m_State == NetSessionState::Ready && m_RemoteTransportPeerId != c_InvalidNetPeerId) {
-			peers.push_back({m_RemoteTransportPeerId, c_HostAssignedPeerId, "Host", true});
+			peers.push_back({m_RemoteTransportPeerId, m_HostAssignedPeerId, "Host", true});
 		}
 		return peers;
+	}
+
+	bool NetSession::AdoptHostMigration(INetTransport& transport, uint8_t localPeerId, uint8_t hostPeerId, const NetMatchConfig& config, const std::map<uint8_t, NetPeerId>& peers, uint64_t nowMs) {
+		if (localPeerId == 0 || localPeerId > config.peerCount || hostPeerId == 0 || hostPeerId > config.peerCount || (localPeerId != hostPeerId && !peers.contains(hostPeerId))) return false;
+		m_Transport = &transport; m_Config.sessionId = config.sessionId; m_Config.p2pJoin = {};
+		m_SessionId = config.sessionId; m_LocalPeerId = localPeerId - 1; m_HostAssignedPeerId = hostPeerId - 1;
+		m_Role = localPeerId == hostPeerId ? NetSessionRole::Host : NetSessionRole::Client;
+		m_State = NetSessionState::Ready; m_NowMs = nowMs; m_LastReceiveMs = nowMs; m_StateStartedMs = nowMs;
+		m_Config.maxPeers = config.peerCount - 1; m_Config.readyWithoutPeers = peers.empty();
+		m_RemoteTransportPeerId = m_Role == NetSessionRole::Client ? peers.at(hostPeerId) : c_InvalidNetPeerId;
+		m_Peers.clear(); m_HasReject = false; m_RejectSummary.clear();
+		if (m_Role == NetSessionRole::Host) {
+			for (const auto& [peer, connection] : peers) {
+				PeerState state;
+				state.transportPeerId = connection; state.assignedPeerId = peer - 1; state.state = NetSessionState::Ready;
+				state.connectedAtMs = nowMs; state.lastReceiveMs = nowMs;
+				for (const auto& slot : config.players) if (slot.peerId == peer) state.displayName = slot.displayName;
+				m_Peers.push_back(std::move(state));
+			}
+		}
+		return true;
 	}
 
 	bool NetSession::RenumberReadySeats(const std::map<uint8_t, uint8_t>& assignedIdBySeatedId, std::string* error) {
@@ -335,6 +358,7 @@ namespace RTE {
 				peer.assignedPeerId = assignedIdBySeatedId.at(peer.assignedPeerId);
 			}
 		}
+		m_LocalPeerId = c_HostAssignedPeerId; m_HostAssignedPeerId = c_HostAssignedPeerId;
 		return true;
 	}
 
@@ -348,6 +372,7 @@ namespace RTE {
 			return false;
 		}
 		m_LocalPeerId = assignedPeerId;
+		m_HostAssignedPeerId = c_HostAssignedPeerId;
 		return true;
 	}
 
@@ -547,7 +572,7 @@ namespace RTE {
 						authorKey = peer->assignedPeerId;
 					}
 				} else if (peerId == m_RemoteTransportPeerId) {
-					authorKey = c_HostAssignedPeerId;
+					authorKey = m_HostAssignedPeerId;
 				}
 				std::lock_guard<std::mutex> chatLock(m_ChatMutex);
 				if (!AdmitChatRate(authorKey, m_NowMs)) {
@@ -1362,6 +1387,7 @@ namespace RTE {
 
 	uint8_t NetSession::AllocatePeerId() const {
 		for (uint16_t candidate = 1; candidate <= m_Config.maxPeers; ++candidate) {
+			if (candidate == m_LocalPeerId) continue;
 			const bool used = std::any_of(m_Peers.begin(), m_Peers.end(), [candidate](const PeerState& peer) {
 				return IsActive(peer.state) && peer.assignedPeerId == candidate;
 			});
@@ -1598,7 +1624,7 @@ namespace RTE {
 			}
 		} else if (m_RemoteTransportPeerId != c_InvalidNetPeerId) {
 			peers.push_back(json{
-				{"peer_id", c_HostAssignedPeerId},
+				{"peer_id", m_LocalPeerId},
 				{"transport_peer_id", m_RemoteTransportPeerId},
 				{"display_name", "Host"},
 				{"state", StateName(m_State)},

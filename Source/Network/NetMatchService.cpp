@@ -1,5 +1,6 @@
 #include "NetMatchService.h"
 #include "NetA7Journal.h"
+#include "NetAuthCrypto.h"
 
 #include "ActivityMan.h"
 #include "Constants.h"
@@ -459,6 +460,12 @@ static std::string ResyncSaveName() {
 			m_DirectorySessionId.clear();
 			m_DirectoryToken.clear();
 			m_DirectoryRegistered = false;
+			m_MigrationKey = {}; m_MigrationAdmissionState.clear(); m_LastMigrationAdmissionState.clear();
+			m_MigrationAuthority = 0; m_MigrationMembers.clear(); m_MigrationDirectorySession.clear(); m_MigrationDirectoryToken.clear();
+			m_MigrationDirectoryResumePending = false; m_MigrationStatusUntilMs = 0;
+			m_MigrationFallbackReady = false; m_MigrationFallbackCoordinator.reset(); m_MigrationGeneration = 0;
+			m_MigrationRepairPending = false;
+			m_AutosaveMatchId.clear(); m_NextAutosaveSimTime = -1; m_LastAutosaveSimTime = -1;
 			m_WorkerDone = false;
 			m_IsHost = request.host;
 			m_CurrentMatchSummary = {};
@@ -546,6 +553,9 @@ static std::string ResyncSaveName() {
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
 			m_ResyncSourceRound = 0;
+			m_MigrationAuthority = 0; m_MigrationMembers.clear(); m_MigrationGeneration = 0;
+			m_MigrationRepairPending = false;
+			if (m_IsHost) (void)GetNetAuthCrypto().RandomBytes(m_MigrationKey.data(), m_MigrationKey.size());
 			// The round that just ended is the only thing that knows who left it; the next lobby is
 			// formed from the peers it still had. The host derives its own roster from the live session.
 			if (!m_IsHost) {
@@ -568,7 +578,9 @@ static std::string ResyncSaveName() {
 						seats.reset(); // an earlier round's view
 					}
 				}
-				m_Runner->SetRematchRoster(NetMatchRunner::DeriveRematchSurvivors(m_Runner->GetMatchConfig(), leaves, refilled, seats ? &*seats : nullptr));
+				NetMatchConfig played = m_Runner->GetMatchConfig();
+				if (m_Coordinator) played.hostPeerId = m_Coordinator->GetHostPeerId();
+				m_Runner->SetRematchRoster(NetMatchRunner::DeriveRematchSurvivors(played, leaves, refilled, seats ? &*seats : nullptr));
 			}
 			DrainPendingSessionEventsLocked(false);
 			AccumulateLockstepTotalsLocked();
@@ -645,6 +657,7 @@ static std::string ResyncSaveName() {
 
 	NetMatchService::TransportLink NetMatchService::TakeTransportLinkLocked() {
 		TransportLink link;
+		link.migrated = std::move(m_MigratedTransport);
 		link.ip = std::move(m_Transport);
 		link.mux = std::move(m_Mux);
 		link.lobbyEvents = std::move(m_PendingLobbyEvents);
@@ -661,6 +674,7 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::RestoreTransportLinkLocked(TransportLink link) {
+		m_MigratedTransport = std::move(link.migrated);
 		m_Transport = std::move(link.ip);
 		m_Mux = std::move(link.mux);
 #ifdef CCCP_WITH_GNS
@@ -679,6 +693,7 @@ static std::string ResyncSaveName() {
 		// the identical file, so the divergence is healed by construction.
 		std::vector<uint8_t> stateBytes;
 		bool isHost = false;
+		uint8_t snapshotProvider = 0;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			// Refused before anything is staged, so the running round keeps its coordinator and pump.
@@ -686,6 +701,7 @@ static std::string ResyncSaveName() {
 				return false;
 			}
 			isHost = m_IsHost;
+			snapshotProvider = m_Runner ? m_Runner->GetSnapshotProviderPeerId() : 0;
 			m_DiagnosticRuntimeError = ScenarioRunner::GetControllerReplayError();
 			m_ResyncHealStartMs = SteadyNowMs();
 			m_ResyncHealOpen = true;
@@ -694,7 +710,7 @@ static std::string ResyncSaveName() {
 		const bool a7Save = NetA7Journal::Enabled() && isHost && FaultInjected("slow_resync_save");
 		const uint64_t a7SaveBegin = a7Save ? AdmissionNowMs() : 0;
 		if (a7Save) NetA7Journal::Session("save_begin", a7SaveBegin, {{"resync", std::to_string(a7Resync)}}, "NetMatchService::AdmissionNowMs");
-		if (isHost && ClassifyRejoin(g_ActivityMan.GetActivity()) == NetRejoinAnswer::MatchOver) {
+		if (isHost && snapshotProvider == 0 && ClassifyRejoin(g_ActivityMan.GetActivity()) == NetRejoinAnswer::MatchOver) {
 			AnswerMatchOverRejoin("match over");
 			if (error) {
 				*error = "match over";
@@ -704,7 +720,8 @@ static std::string ResyncSaveName() {
 			return false;
 		}
 		uint64_t dropFrame = 0;
-		if (isHost) {
+		if (isHost && snapshotProvider != 0 && m_Coordinator) dropFrame = m_Coordinator->GetMigrationResult().boundary + 2;
+		if (snapshotProvider != 0 ? snapshotProvider == m_LocalPeerId : isHost) {
 			// Snapshot callbacks stay on the game thread while waiting peers keep hearing from us.
 			std::jthread keepalive([this](std::stop_token stop) {
 				while (!stop.stop_requested()) {
@@ -793,7 +810,8 @@ static std::string ResyncSaveName() {
 			if (isHost) {
 				runner->SetStartFrame(ScenarioRunner::ResyncResumeStartFrame(dropFrame));
 			}
-			m_Coordinator.reset();
+			if (!m_Coordinator->GetConfig().matchConfig.successorOrder.empty()) m_MigrationFallbackCoordinator = std::move(m_Coordinator);
+			else m_Coordinator.reset();
 			coordinator = std::make_unique<NetLockstepCoordinator>();
 			m_WorkerDone = false;
 			m_State = NetMatchServiceState::Starting;
@@ -817,6 +835,12 @@ static std::string ResyncSaveName() {
 		m_LastResync.healMs = now >= m_ResyncHealStartMs ? now - m_ResyncHealStartMs : 0;
 		m_ResyncHealOpen = false;
 		m_LastResync.happened = true;
+		m_MigrationFallbackCoordinator.reset();
+		m_MigrationRepairPending = false;
+		if (m_IsHost && m_Coordinator) {
+			const SimCensusScope census;
+			m_ReconnectHost.RecordMigrationDepartures(m_Coordinator->GetConfig().startFrame);
+		}
 	}
 
 	void NetMatchService::WorkerResyncMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes) {
@@ -848,7 +872,11 @@ static std::string ResyncSaveName() {
 			m_Session = std::move(session);
 			m_Coordinator = std::move(coordinator);
 			m_Runner = std::move(runner);
-			if (started && !pendingLoad.empty()) {
+			if (!started && !m_IsHost && m_Runner->DidLoseHostDuringSetup() && m_MigrationFallbackCoordinator && m_MigrationFallbackCoordinator->BeginHostMigrationAfterHeal(NetLockstepNowMs())) {
+				m_Coordinator = std::move(m_MigrationFallbackCoordinator);
+				m_MigrationFallbackReady = true; m_State = NetMatchServiceState::Running;
+				m_StatusText = "Host lost during repair - arranging handover"; m_ErrorText.clear();
+			} else if (started && !pendingLoad.empty()) {
 				m_PendingResyncLoad = pendingLoad;
 				m_PendingResyncState = std::move(resyncState);
 				m_State = NetMatchServiceState::ReadyToLaunch;
@@ -1122,6 +1150,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetSession> session;
 		std::unique_ptr<GnsTransport> transport;
 		std::unique_ptr<NetMuxTransport> mux;
+		std::unique_ptr<INetTransport> migrated;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_Mux) m_Mux->SetPump({});
@@ -1133,6 +1162,9 @@ static std::string ResyncSaveName() {
 			}
 #endif
 			mux = std::move(m_Mux);
+			migrated = std::move(m_MigratedTransport);
+			m_MigrationFallbackCoordinator.reset(); m_MigrationFallbackReady = false; m_MigrationRepairPending = false;
+			m_MigrationKey.fill(0); m_MigrationAdmissionState.clear(); m_LastMigrationAdmissionState.clear();
 			DrainPendingSessionEventsLocked(false);
 			m_IceEnabled = false;
 			m_IceBoundSessionId.clear();
@@ -1185,6 +1217,7 @@ static std::string ResyncSaveName() {
 		runner.reset();
 		coordinator.reset();
 		session.reset();
+		migrated.reset();
 		mux.reset();
 		transport.reset();
 	}
@@ -1210,6 +1243,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetSession> session;
 		std::unique_ptr<GnsTransport> transport;
 		std::unique_ptr<NetMuxTransport> mux;
+		std::unique_ptr<INetTransport> migrated;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_Mux) m_Mux->SetPump({});
@@ -1221,6 +1255,8 @@ static std::string ResyncSaveName() {
 			}
 #endif
 			mux = std::move(m_Mux);
+			migrated = std::move(m_MigratedTransport);
+			m_MigrationFallbackCoordinator.reset(); m_MigrationFallbackReady = false; m_MigrationRepairPending = false;
 			DrainPendingSessionEventsLocked(false);
 			AccumulateLockstepTotalsLocked();
 			if (m_CapturedRunnerReport.empty() && m_Runner && m_Session && m_Coordinator) {
@@ -1250,6 +1286,7 @@ static std::string ResyncSaveName() {
 		runner.reset();
 		coordinator.reset();
 		session.reset();
+		migrated.reset();
 		mux.reset();
 		transport.reset();
 	}
@@ -1354,9 +1391,11 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::LeaveMatch(const std::string& result) {
 		std::string displayResult = result;
+		bool handover = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(result);
+			handover = m_IsHost && m_Coordinator && m_Coordinator->IsRunning() && !m_Coordinator->GetConfig().matchConfig.successorOrder.empty();
 			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
 			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
 			m_LeftMatch = true;
@@ -1364,7 +1403,8 @@ static std::string ResyncSaveName() {
 		}
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
-		RetractDirectoryListing();
+		if (handover) m_Directory.AbandonLease();
+		else RetractDirectoryListing();
 		const std::string reason = result.empty() ? std::string("player left") : result;
 		bool exchangeOwed = false;
 		{
@@ -1399,6 +1439,24 @@ static std::string ResyncSaveName() {
 		}
 		m_LastUpdateMs = nowMs;
 		JoinWorkerIfDone();
+		if (m_MigrationDirectoryResumePending) {
+			m_Directory.Configure(g_SettingsMan.GetSessionDirectoryUrl(), g_SettingsMan.GetOrCreateSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
+			(void)m_Directory.Resume(m_DirectoryRow, m_MigrationDirectorySession, m_MigrationDirectoryToken);
+			m_MigrationDirectoryResumePending = false;
+		}
+		if (m_MigrationFallbackReady) {
+			m_Coordinator->Tick(NetLockstepNowMs());
+			PumpHostMigration();
+			if (m_Coordinator->IsFailed() && m_Session->IsReady()) {
+				m_MigrationFallbackReady = false;
+				ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), true);
+				std::string error;
+				if (!ResyncMatch(&error)) SetState(NetMatchServiceState::Failed, "Host handover repair failed", error);
+			} else if (m_Coordinator->IsStopped()) {
+				m_MigrationFallbackReady = false;
+				SetState(NetMatchServiceState::Failed, "Host handover ended", m_Coordinator->GetStats().timeoutReason);
+			}
+		}
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			PumpCompletedSessionLocked();
@@ -1720,8 +1778,7 @@ static std::string ResyncSaveName() {
 		m_MatchWasRunning = true;
 		if (!m_PendingResyncState.has_value()) {
 			ResetRosterTransitionHistory();
-			m_AutosaveMatchId = m_Runner ? std::format("{:x}-{:x}-{:x}", m_Runner->GetMatchConfig().sessionId, System::GetProcessID(),
-			                                        std::chrono::system_clock::now().time_since_epoch().count()) : "";
+			m_AutosaveMatchId = m_Runner ? std::format("{:016x}-{:016x}", m_Runner->GetMatchConfig().sessionId, m_Coordinator->GetRoundId()) : "";
 			m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
@@ -1745,6 +1802,8 @@ static std::string ResyncSaveName() {
 		}
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
+		m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
+		if (m_IsHost) m_ReconnectHost.SetMigrationHold(false, AdmissionNowMs());
 		const NetLockstepConfig& config = m_Coordinator->GetConfig();
 		std::cout << std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={}\n",
 		                         m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames) << std::flush;
@@ -1838,11 +1897,179 @@ static std::string ResyncSaveName() {
 		}
 		m_Coordinator->SetSessionEventSink([this](const NetTransportEvent& event) {
 			if (event.type == NetTransportEventType::PacketReceived && NetLobbyProtocol::Decode(event.bytes).ok) {
+				const auto message = NetLobbyProtocol::Decode(event.bytes);
+				if (const auto* capsule = std::get_if<NetLobbyMigration>(&message.message.payload)) {
+					if (!m_IsHost && capsule->kind == 2 && m_Coordinator && m_Coordinator->UsesTransportPeer(event.peerId)) m_PendingSessionEvents.push_back(event);
+					return;
+				}
 				QueueLobbyEvent(event);
 			} else {
 				m_PendingSessionEvents.push_back(event);
 			}
 		});
+	}
+
+	bool NetMatchService::SealMigrationCapsule(uint8_t peerId, const NetHash32& configHash, std::vector<uint8_t>& sealed) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return SealMigrationCapsuleLocked(peerId, configHash, sealed);
+	}
+
+	bool NetMatchService::SealMigrationCapsuleLocked(uint8_t peerId, const NetHash32& configHash, std::vector<uint8_t>& sealed) {
+		if (!g_SettingsMan.GetSessionDirectoryUrl().empty() && !m_DirectoryRegistered) return false;
+		NetH4TicketRecord localTicket;
+		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+		(void)m_TicketStore.Load(UnixNowMs(nullptr), localTicket);
+		const auto previousTicket = localTicket;
+		if (!m_ReconnectHost.EnsureLocalTicket(localTicket)) return false;
+		localTicket.recordVersion = NetReconnectTicketStore::c_RecordVersion;
+		localTicket.hostAddress = NetLanDiscovery::GetPrimaryLocalAddress() + ":" + std::to_string(m_BeaconGamePort);
+		localTicket.directorySessionId = m_DirectorySessionId; localTicket.matchConfigHash = configHash;
+		if (localTicket.issuedAtUnixMs == 0) localTicket.issuedAtUnixMs = UnixNowMs(nullptr);
+		if (localTicket != previousTicket && !m_TicketStore.Store(localTicket)) return false;
+		const auto seats = m_ReconnectHost.GetSeatTable();
+		const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& entry) { return entry.lockstepPeerId == peerId; });
+		if (seat == seats.end()) return false;
+		NetDirectoryRegisterRequest row = m_DirectoryRow;
+		row.matchConfigHash = NetIdentity::HashHex(configHash);
+		const uint8_t authority = m_ChatSession ? static_cast<uint8_t>(m_ChatSession->GetLocalPeerId() + 1) : m_LocalPeerId;
+		std::vector<uint8_t> members{authority};
+		if (m_ChatSession) for (const auto& peer : m_ChatSession->GetReadyPeers()) members.push_back(static_cast<uint8_t>(peer.assignedPeerId + 1));
+		std::sort(members.begin(), members.end());
+		const auto admission = m_ReconnectHost.ExportMigrationState();
+		if (admission.empty()) return false;
+		const auto plaintext = nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"key", m_MigrationKey}, {"admission", admission}, {"directory_row", NetDirectoryCodec::EncodeRegisterRequest(row)},
+		    {"directory_session", m_DirectorySessionId}, {"directory_token", m_DirectoryToken}, {"authority", authority}, {"members", members}, {"generation", m_MigrationGeneration}, {"autosave_match_id", m_AutosaveMatchId}});
+		std::vector<uint8_t> context(configHash.begin(), configHash.end()); context.push_back(peerId);
+		return m_SeatAuth.SealForSeat(seat->stableSeat, context, plaintext, sealed);
+	}
+
+	bool NetMatchService::OpenMigrationCapsule(const NetLobbyMigration& capsule) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return OpenMigrationCapsuleLocked(capsule);
+	}
+
+	bool NetMatchService::OpenMigrationCapsuleLocked(const NetLobbyMigration& capsule) {
+		if (!m_ReconnectClient.HasRecord()) return false;
+		if (m_Coordinator && (capsule.peerId != m_LocalPeerId || capsule.configHash != NetMatchConfigUtil::HashConfig(m_Coordinator->GetConfig().matchConfig))) return false;
+		std::vector<uint8_t> context(capsule.configHash.begin(), capsule.configHash.end()); context.push_back(capsule.peerId);
+		std::vector<uint8_t> plaintext;
+		if (!m_ReconnectClient.OpenSuccessorCapsule(context, capsule.sealedState, plaintext)) return false;
+		try {
+			const auto body = nlohmann::json::from_cbor(plaintext);
+			if (body.at("version") != 1) return false;
+			const auto key = body.at("key").get<NetHash32>();
+			if (std::all_of(key.begin(), key.end(), [](uint8_t value) { return value == 0; }) || body.at("generation").get<uint64_t>() < m_MigrationGeneration) return false;
+			const auto admission = body.at("admission").get<std::vector<uint8_t>>();
+			const uint8_t authority = body.at("authority").get<uint8_t>();
+			const auto members = body.at("members").get<std::vector<uint8_t>>();
+			if (authority == 0 || authority > NetMatchConfigUtil::c_MaxPeerCount || members.size() > NetMatchConfigUtil::c_MaxPeerCount || !std::is_sorted(members.begin(), members.end()) ||
+			    std::adjacent_find(members.begin(), members.end()) != members.end() || std::find(members.begin(), members.end(), capsule.peerId) == members.end() || std::find(members.begin(), members.end(), authority) == members.end() || admission.empty() || admission.size() > 32 * 1024) return false;
+			NetDirectoryRegisterRequest row;
+			std::string reason;
+			if (!NetDirectoryCodec::DecodeRegisterRequest(body.at("directory_row").get<std::string>(), row, reason)) return false;
+			const auto directorySession = body.at("directory_session").get<std::string>();
+			const auto directoryToken = body.at("directory_token").get<std::string>();
+			if (directorySession.size() > 128 || directoryToken.size() > 128 || (!directorySession.empty() && (directoryToken.empty() || directoryToken == directorySession))) return false;
+			if (!m_ReconnectClient.MigrateHostContext(m_ReconnectClient.GetRecord().hostAddress, directorySession, capsule.configHash)) return false;
+			m_MigrationKey = key; m_MigrationAdmissionState = admission; m_MigrationAuthority = authority; m_MigrationMembers = members;
+			m_MigrationGeneration = body.at("generation").get<uint64_t>();
+			const auto autosaveId = body.at("autosave_match_id").get<std::string>();
+			if (!autosaveId.empty() && m_AutosaveMatchId.empty()) m_AutosaveMatchId = autosaveId;
+			m_MigrationDirectorySession = directorySession; m_MigrationDirectoryToken = directoryToken; m_DirectoryRow = std::move(row);
+			std::fill(plaintext.begin(), plaintext.end(), 0);
+			return true;
+		} catch (const nlohmann::json::exception&) { std::fill(plaintext.begin(), plaintext.end(), 0); return false; }
+	}
+
+	void NetMatchService::PublishMigrationCapsulesLocked() {
+		if (!m_IsHost || !m_Coordinator || m_Coordinator->GetConfig().matchConfig.successorOrder.empty() || !m_Session) return;
+		const auto state = m_ReconnectHost.ExportMigrationState();
+		if (state == m_LastMigrationAdmissionState && m_MigrationDirectorySession == m_DirectorySessionId && m_MigrationDirectoryToken == m_DirectoryToken) return;
+		const auto hash = NetMatchConfigUtil::HashConfig(m_Coordinator->GetConfig().matchConfig);
+		for (const auto& peer : m_Session->GetReadyPeers()) {
+			NetLobbyMigration capsule; capsule.kind = 2; capsule.peerId = static_cast<uint8_t>(peer.assignedPeerId + 1); capsule.configHash = hash;
+			std::vector<uint8_t> bytes;
+			if (!SealMigrationCapsuleLocked(capsule.peerId, hash, capsule.sealedState) || !NetLobbyProtocol::Encode({capsule}, bytes) || !ActiveWireLocked()->Send(peer.transportPeerId, NetTransportLane::ControlReliable, bytes)) return;
+		}
+		m_LastMigrationAdmissionState = state; m_MigrationDirectorySession = m_DirectorySessionId; m_MigrationDirectoryToken = m_DirectoryToken;
+	}
+
+	void NetMatchService::PumpHostMigration() {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_Coordinator || !m_Session || !m_Runner) return;
+		if (!m_IsHost) for (auto event = m_PendingSessionEvents.begin(); event != m_PendingSessionEvents.end();) {
+			const auto decoded = event->type == NetTransportEventType::PacketReceived ? NetLobbyProtocol::Decode(event->bytes) : NetLobbyDecodeResult{};
+			const auto* capsule = decoded.ok ? std::get_if<NetLobbyMigration>(&decoded.message.payload) : nullptr;
+			if (capsule) { (void)OpenMigrationCapsuleLocked(*capsule); event = m_PendingSessionEvents.erase(event); } else ++event;
+		}
+		if (m_Coordinator->IsMigrating() && m_Coordinator->GetMigrationPhase() != NetHostMigrationPhase::ResyncAdmission) { m_StatusText = "Host lost - arranging handover"; return; }
+		if (!m_Coordinator->TakeMigrationNotice()) {
+			if (m_Coordinator->GetMigrationPhase() == NetHostMigrationPhase::ResyncAdmission) {
+				m_Session->Tick(AdmissionNowMs());
+				if (m_Session->IsReady()) m_Coordinator->FinishMigrationAdmission();
+				else if (m_Session->IsFailed() || m_Session->IsRejected()) m_Coordinator->Complete("handover snapshot admission failed");
+			}
+			if (m_MigrationStatusUntilMs != 0 && SteadyNowMs() >= m_MigrationStatusUntilMs) { m_StatusText = "LIVE"; m_MigrationStatusUntilMs = 0; }
+			return;
+		}
+		const auto& result = m_Coordinator->GetMigrationResult();
+		const auto& config = m_Coordinator->GetConfig().matchConfig;
+		auto wire = m_Coordinator->TakeMigrationTransport();
+		if (!wire) { m_Coordinator->Complete("host handover lost its transport"); return; }
+		m_MigrationAuthority = result.hostPeerId; m_MigrationMembers = result.members;
+		m_MigrationGeneration = result.generation;
+		m_IsHost = result.hostPeerId == m_LocalPeerId;
+		if (ActiveWireLocked()) ActiveWireLocked()->Stop();
+		m_MigratedTransport = std::move(wire);
+		auto liveTransports = result.transports;
+		if (m_IsHost) for (uint8_t peer : result.resyncPeers) liveTransports.erase(peer);
+		if (m_IsHost && !m_ReconnectHost.ImportMigrationState(m_MigrationAdmissionState, m_SeatAuth, config, m_LocalPeerId, liveTransports, AdmissionNowMs())) { m_Coordinator->Complete("host handover admission state is invalid"); return; }
+		m_PendingSessionEvents.clear();
+		if (!m_Session->AdoptHostMigration(*m_MigratedTransport, m_LocalPeerId, result.hostPeerId, config, liveTransports, AdmissionNowMs())) { m_Coordinator->Complete("host handover session roster is invalid"); return; }
+		m_ChatSession = m_Session.get();
+		if (m_IsHost) {
+			m_Session->SetReconnectClient(nullptr); m_Session->SetReconnectHost(&m_ReconnectHost);
+			m_ReconnectHost.SetDropOwnershipSource(&NetMatchService::CollectDropOwnership, this);
+			m_ReconnectHost.SetLiveMatch(true); m_ReconnectHost.SetMigrationHold(result.snapshotProviderPeerId != 0, AdmissionNowMs());
+			const SimCensusScope census;
+			m_ReconnectHost.RecordMigrationDepartures(result.boundary + 1);
+			for (const auto& event : m_Coordinator->TakeMigrationAdmissionEvents()) {
+				const bool survivor = std::any_of(liveTransports.begin(), liveTransports.end(), [&](const auto& peer) { return peer.second == event.peerId; });
+				if (!survivor) m_Session->InjectEvent(event, AdmissionNowMs());
+			}
+		}
+		m_Runner->AdoptHostMigration(result, m_LocalPeerId);
+		m_ResyncOnDesync = true;
+		m_MigrationRepairPending = true;
+		const auto endpoint = std::find_if(config.migrationPeers.begin(), config.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == result.hostPeerId; });
+		if (endpoint != config.migrationPeers.end()) {
+			const std::string address = endpoint->listenAddrs.front() + ":" + std::to_string(endpoint->listenPort);
+			if (!m_IsHost) {
+				(void)m_ReconnectClient.MigrateHostContext(address, m_MigrationDirectorySession, NetMatchConfigUtil::HashConfig(config));
+				if (m_Coordinator->GetMigrationPhase() == NetHostMigrationPhase::ResyncAdmission) {
+					NetSessionConfig sessionConfig = m_Session->GetConfig(); sessionConfig.p2pJoin = {};
+					std::string error;
+					if (!m_Session->StartClient(*m_MigratedTransport, address, sessionConfig, &error)) m_Coordinator->Complete("handover rejoin failed: " + error);
+				}
+			}
+			else {
+				m_DirectoryRow.listenAddrs = endpoint->listenAddrs; m_DirectoryRow.listenPort = endpoint->listenPort; m_DirectoryRow.joinMode = "ip";
+				m_DirectoryRow.resumeSessionId = m_MigrationDirectorySession; m_DirectoryRow.resumeToken = m_MigrationDirectoryToken;
+				m_DirectoryRow.name = m_LocalName; m_DirectoryRow.peerCount = result.members.size();
+				m_DirectoryRetracted = false; m_MigrationDirectoryResumePending = !m_MigrationDirectorySession.empty();
+				m_BeaconGamePort = endpoint->listenPort;
+			}
+		}
+		m_IceEnabled = false; m_IceRoute = "ip";
+		m_StatusText = "Host left - " + m_Coordinator->DescribePeer(result.hostPeerId) + " is now hosting";
+		m_MigrationStatusUntilMs = SteadyNowMs() + 3000;
+		ScenarioRunner::PushNetUiToast("host_handover", m_StatusText);
+		for (auto& member : m_LobbySnapshot.members) member.connected = member.cpu || std::find(result.members.begin(), result.members.end(), member.peerId) != result.members.end();
+	}
+
+	bool NetMatchService::IsHostMigrationRepairPending() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_MigrationRepairPending;
 	}
 
 	void NetMatchService::DrainPendingSessionEventsLocked(bool atTickBoundary) {
@@ -1858,6 +2085,10 @@ static std::string ResyncSaveName() {
 			census.emplace();
 		}
 		for (const NetTransportEvent& event: events) {
+			if (!m_IsHost && event.type == NetTransportEventType::PacketReceived && m_Coordinator && m_Coordinator->UsesTransportPeer(event.peerId)) {
+				const auto decoded = NetLobbyProtocol::Decode(event.bytes);
+				if (decoded.ok) if (const auto* capsule = std::get_if<NetLobbyMigration>(&decoded.message.payload)) { (void)OpenMigrationCapsuleLocked(*capsule); continue; }
+			}
 			m_Session->InjectEvent(event, nowMs);
 			++m_SessionEventsDrained;
 		}
@@ -1912,6 +2143,8 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::PumpSessionEvents() {
+		PumpHostMigration();
+		if (m_Coordinator && m_Coordinator->IsMigrating()) return;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_State == NetMatchServiceState::Completed) {
@@ -1973,8 +2206,13 @@ static std::string ResyncSaveName() {
 			m_Session->TickKeepalive(nowMs);
 		}
 		for (const NetTransportEvent& event: events) {
+			if (!m_IsHost && event.type == NetTransportEventType::PacketReceived && m_Coordinator && m_Coordinator->UsesTransportPeer(event.peerId)) {
+				const auto decoded = NetLobbyProtocol::Decode(event.bytes);
+				if (decoded.ok) if (const auto* capsule = std::get_if<NetLobbyMigration>(&decoded.message.payload)) { (void)OpenMigrationCapsuleLocked(*capsule); continue; }
+			}
 			m_Session->InjectEvent(event, nowMs);
 		}
+		if (hostAdmission) PublishMigrationCapsulesLocked();
 		if (hostAdmission) {
 			// The reseat is a lockstep command, not a local mutation: every peer applies the identical
 			// ownership at the identical tick. QueueLocalInput restamps the sender as this peer, which
@@ -2049,6 +2287,7 @@ static std::string ResyncSaveName() {
 	NetLobbySnapshot NetMatchService::GetLobbySnapshot() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		NetLobbySnapshot snapshot = m_LobbySnapshot;
+		snapshot.hostPeerId = m_Coordinator ? m_Coordinator->GetHostPeerId() : m_MigrationAuthority != 0 ? m_MigrationAuthority : m_Runner ? m_Runner->GetMatchConfig().hostPeerId : 1;
 		snapshot.serviceState = StateName(m_State);
 		snapshot.statusText = m_StatusText;
 		if (!m_ErrorText.empty()) snapshot.errorText = m_ErrorText;
@@ -2703,6 +2942,7 @@ static std::string ResyncSaveName() {
 			// Arm the off-sim reconnect-auth epoch; without real crypto nothing is issued (fail closed).
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_SeatAuth.BeginHostedSession()) {
+				(void)GetNetAuthCrypto().RandomBytes(m_MigrationKey.data(), m_MigrationKey.size());
 				std::cout << "[net-auth] reconnect-auth epoch armed" << std::endl;
 			} else {
 				std::cout << "[net-auth] crypto unavailable - reconnect auth disabled" << std::endl;
@@ -2790,6 +3030,24 @@ static std::string ResyncSaveName() {
 
 		// A refused roster leaves matchConfig unauthored; nothing is armed on it.
 		if (started) AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest);
+		runnerConfig.enableMigration = s_AdmissionEnabled && !request.dedicated && GetNetAuthCrypto().IsRealCrypto();
+		runnerConfig.migrationListenAddrs = {NetLanDiscovery::GetPrimaryLocalAddress()};
+		if (runnerConfig.migrationListenAddrs.front().empty()) runnerConfig.migrationListenAddrs.front() = "127.0.0.1";
+		runnerConfig.sealMigration = [this](uint8_t peer, const NetHash32& hash, std::vector<uint8_t>& sealed) { return SealMigrationCapsule(peer, hash, sealed); };
+		runnerConfig.openMigration = [this](const NetLobbyMigration& capsule) { return OpenMigrationCapsule(capsule); };
+		runnerConfig.configureMigration = [this](NetLockstepConfig& config) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (config.matchConfig.successorOrder.empty()) return;
+			config.migrationKey = m_MigrationKey;
+			config.migrationGeneration = m_MigrationGeneration;
+			config.migrationTransportFactory = [] { return std::make_unique<GnsTransport>(); };
+			if (m_MigrationAuthority != 0) config.authorityPeerId = m_MigrationAuthority;
+			if (!m_MigrationMembers.empty()) config.activePeerIds = m_MigrationMembers;
+			if (m_IsHost && m_ChatSession) {
+				config.activePeerIds = {static_cast<uint8_t>(m_ChatSession->GetLocalPeerId() + 1)};
+				for (const auto& peer : m_ChatSession->GetReadyPeers()) config.activePeerIds.push_back(static_cast<uint8_t>(peer.assignedPeerId + 1));
+			}
+		};
 
 		if (started && iceWanted) {
 			started = SetUpIceTransport(request, manifest, *mux, runnerConfig.sessionConfig, runnerConfig.joinAddress, &error);
@@ -3058,6 +3316,7 @@ static std::string ResyncSaveName() {
 		// The record names the host it belongs to; the config hash is context, not a gate - a client
 		// adopts the host's match config in the lobby round that follows.
 		m_ReconnectClient.SetHostContext(request.address, NetHash32{});
+		m_ReconnectClient.SetDirectorySessionId(request.sessionId);
 		m_ReconnectClient.SetApplyForSeat(s_ApplyForSeat || s_ApplyOnce, s_ApplyOnce ? c_NetH4AnySubstitutableSeat : s_ApplySeat);
 		s_ApplyOnce = false;
 		session.SetReconnectClient(&m_ReconnectClient);
@@ -3087,6 +3346,7 @@ static std::string ResyncSaveName() {
 		NetMatchServiceRequest request;
 		request.host = false;
 		request.address = record.hostAddress;
+		request.sessionId = record.directorySessionId;
 		request.playerName = m_LocalName.empty() ? "Client" : m_LocalName;
 		request.resyncOnDesync = true;
 		return Start(request, error);

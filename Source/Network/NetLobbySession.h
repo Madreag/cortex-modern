@@ -46,6 +46,13 @@ namespace RTE {
 		// A rematch may reseat a client the host knows more drops than; the host names each connection's
 		// lockstep id and the client says nothing until it has adopted the one meant for it.
 		bool assignSeats = false;
+		bool enableMigration = false;
+		uint8_t activePeerCount = 0;
+		uint8_t snapshotProviderPeerId = 0;
+		uint16_t migrationListenPort = 0;
+		std::vector<std::string> migrationListenAddrs;
+		std::function<bool(uint8_t, const NetHash32&, std::vector<uint8_t>&)> sealMigration;
+		std::function<bool(const NetLobbyMigration&)> openMigration;
 	};
 
 	struct NetLobbyStats {
@@ -89,6 +96,7 @@ namespace RTE {
 		const NetHash32& GetMatchConfigHash() const { return m_MatchConfigHash; }
 		uint64_t GetStartFrame() const { return m_StartFrame; }
 		const std::string& GetFailureReason() const { return m_FailureReason; }
+		bool DidLoseHost() const { return m_HostLost; }
 		const NetLobbyStats& GetStats() const { return m_Stats; }
 
 		void SetLocalReady(bool ready);
@@ -113,6 +121,13 @@ namespace RTE {
 		static const char* StateName(NetLobbyState state);
 
 	private:
+		void HandleMigration(const NetLobbyMigration& message);
+		bool PrepareMigrationRoster();
+		std::map<uint8_t, NetMatchMigrationPeer> m_MigrationEndpoints;
+		NetHash32 m_OpenedMigrationHash{};
+		bool m_MigrationRequested = false;
+		bool m_HostLost = false;
+		uint64_t m_LastMigrationRequestMs = UINT64_MAX;
 		bool SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error = nullptr);
 		bool Send(const NetLobbyPayload& payload, std::string* error = nullptr); // Broadcast to every remote transport.
 		void SendConfigIfDue(uint64_t nowMs);
