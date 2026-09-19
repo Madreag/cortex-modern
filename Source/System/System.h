@@ -35,6 +35,11 @@ namespace RTE {
 		/// @return Absolute path to this executable.
 		static const std::string& GetThisExePathAndName() { return s_ThisExePathAndName; }
 
+		/// The SHA-256 of this executable's own bytes. Every diagnostic that names the build shares this
+		/// one read: the file is hashed once, on the first call, and the digest is kept for the process.
+		/// @return Lowercase hex digest, or "unavailable" when the executable could not be read.
+		static const std::string& GetThisExeSha256();
+
 		/// Gets the current working directory.
 		/// @return Absolute path to current working directory.
 		static const std::string& GetWorkingDirectory() { return s_WorkingDirectory; }
