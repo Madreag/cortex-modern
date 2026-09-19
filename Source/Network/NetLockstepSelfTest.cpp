@@ -2032,7 +2032,9 @@ namespace RTE {
 				return finish("a message sent outside the AI pass left a command");
 			}
 
-			// A context no peer can name the same way keeps its call local, and says so at the boundary.
+			// A context no peer can name the same way keeps its call local, and is counted there. It is not
+			// a boundary violation: the reference delivered the same call locally and nothing was written.
+			const uint64_t localBefore = g_MovableMan.GetControllerBoundaryStats().localScriptMessages;
 			const uint64_t reportsBefore = g_MovableMan.GetControllerBoundaryStats().directWrites;
 			g_CurrentAIActor = ownerView;
 			ownerView->SendScriptedMessage("AI_Table", NetGameAIScriptMessage::ContextCount, 0.0, 0, "", nullptr);
@@ -2041,12 +2043,16 @@ namespace RTE {
 			if (!ScenarioRunner::DrainLocalGameCommands().empty()) {
 				return finish("a message the wire cannot carry was sent as a command anyway");
 			}
-			if (g_MovableMan.GetControllerBoundaryStats().directWrites != reportsBefore + 1) {
-				return finish("a message the wire cannot carry was not reported at the boundary");
+			if (g_MovableMan.GetControllerBoundaryStats().localScriptMessages != localBefore + 1) {
+				return finish("a message the wire cannot carry was not counted as a local delivery");
+			}
+			if (g_MovableMan.GetControllerBoundaryStats().directWrites != reportsBefore) {
+				return finish("a table context was reported as a controller boundary violation");
 			}
 
 			// A name or a text the codec refuses would kill the whole frame at encode time, so it never
 			// reaches the queue: the call is made here and reported, like an unnameable context.
+			const uint64_t localBeforeStrings = g_MovableMan.GetControllerBoundaryStats().localScriptMessages;
 			const uint64_t reportsBeforeStrings = g_MovableMan.GetControllerBoundaryStats().directWrites;
 			g_CurrentAIActor = ownerView;
 			ownerView->SendScriptedMessage("", NetGameAIScriptMessage::None, 0.0, 0, "", nullptr);
@@ -2057,8 +2063,11 @@ namespace RTE {
 			if (!ScenarioRunner::DrainLocalGameCommands().empty()) {
 				return finish("a message the codec refuses was queued anyway");
 			}
-			if (g_MovableMan.GetControllerBoundaryStats().directWrites != reportsBeforeStrings + 3) {
-				return finish("a message the codec refuses was not reported at the boundary");
+			if (g_MovableMan.GetControllerBoundaryStats().localScriptMessages != localBeforeStrings + 3) {
+				return finish("a message the codec refuses was not counted as a local delivery");
+			}
+			if (g_MovableMan.GetControllerBoundaryStats().directWrites != reportsBeforeStrings) {
+				return finish("a name the codec refuses was reported as a controller boundary violation");
 			}
 			// A name at the limit is carried, and the encoder agrees with the rule the queue asked.
 			const std::string longestName(NetLockstepCodec::c_MaxValueKeyBytes, 'n');
@@ -2095,7 +2104,9 @@ namespace RTE {
 				return finish("the message command did not survive the wire");
 			}
 			std::cout << "[net-lockstep-selftest] PASS ai script message crosses the wire: sent=" << sent.size()
-			          << " context=" << static_cast<int>(carried->context) << " reported=" << (g_MovableMan.GetControllerBoundaryStats().directWrites - reportsBefore)
+			          << " context=" << static_cast<int>(carried->context)
+			          << " local=" << (g_MovableMan.GetControllerBoundaryStats().localScriptMessages - localBefore)
+			          << " reported=" << (g_MovableMan.GetControllerBoundaryStats().directWrites - reportsBefore)
 			          << " bytes=" << bytes.size() << std::endl;
 			return finish(nullptr);
 		}

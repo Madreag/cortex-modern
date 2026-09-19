@@ -8,6 +8,11 @@
 
 using namespace RTE;
 
+// A third-party GibThis(impulse) means the impulse and nothing to ignore; the two-argument adapter has no defaults.
+static void GibThisWithImpulseOnly(MOSRotating* luaSelfObject, const Vector& impactImpulse) {
+	LuaAdaptersMOSRotating::GibThisWithImpulse(luaSelfObject, impactImpulse, nullptr);
+}
+
 LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, Entity) {
 	return luabind::class_<Entity>("Entity")
 
@@ -893,6 +898,7 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, MOSRotating) {
 	    .def("IsRecoiled", &MOSRotating::IsRecoiled)
 	    .def("EnableDeepCheck", &MOSRotating::EnableDeepCheck)
 	    .def("ForceDeepCheck", &MOSRotating::ForceDeepCheck)
+	    .def("GibThis", &GibThisWithImpulseOnly)
 	    .def("GibThis", &LuaAdaptersMOSRotating::GibThisWithImpulse)
 	    .def("MoveOutOfTerrain", &MOSRotating::MoveOutOfTerrain)
 	    .def("FlashWhite", &MOSRotating::FlashWhite)

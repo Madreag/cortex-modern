@@ -1558,8 +1558,8 @@ void MovableObject::SendScriptedMessage(const std::string& message, uint8_t cont
 	if (Actor::DeferringAIPassWrite(nullptr)) {
 		// A context, a name or a receiver no peer can name the same way cannot ride the wire: a table
 		// context, a control character, an object the world does not hold. The call stays where it was
-		// made, and says so.
-		g_MovableMan.ReportControllerBoundaryViolation("a script message the wire cannot carry", dynamic_cast<const Actor*>(this));
+		// made and delivers there, which is what it always did, so it is counted and not a violation.
+		g_MovableMan.NoteLocalAIPassScriptMessage();
 	}
 	if (directContext) {
 		RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {message}, {directContext});

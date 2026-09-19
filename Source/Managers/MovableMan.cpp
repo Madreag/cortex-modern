@@ -3085,6 +3085,13 @@ void MovableMan::ReportControllerBoundaryViolation(const char* what, const Actor
 #endif
 }
 
+void MovableMan::NoteLocalAIPassScriptMessage() {
+	// No peer can be told which table, function or refused name the call carried, so it stays where it
+	// was made and delivers there, exactly as it did before the wire existed. Counted, never a violation:
+	// the call writes no canonical actor state, and what its OnMessage does write defers like the pass's own.
+	++m_ControllerBoundaryStats.localScriptMessages;
+}
+
 bool MovableMan::IsHiddenFromRender(const MovableObject* mo) const {
 	// Either a preview draws in its place, or the ghost it adopted still shows the pose it is travelling to.
 	return mo->IsHeldForPreviewAdoption() || (!m_RenderHidden.empty() && m_RenderHidden.count(mo) > 0);
