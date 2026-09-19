@@ -4223,7 +4223,13 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::AttachHostPump(NetMatchRunnerConfig& config) {
-		config.pumpHost = [this](NetSession& session) { DrainPendingModeration(session); };
+		config.pumpHost = [this](NetSession& session) {
+			DrainPendingModeration(session);
+			// The panel's rows come from here while the worker owns the plane: after the drain, so a
+			// removed seat has stopped being a row the host can act on by the time the result is read.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			PublishLobbyModerationViewLocked();
+		};
 	}
 
 	void NetMatchService::DrainPendingModeration(NetSession& session) {
@@ -4245,8 +4251,6 @@ static std::string ResyncSaveName() {
 		}
 		// The host is told about the first action that was refused, not the last one that worked.
 		m_LastKickBanResult = issue;
-		// A removed seat must stop being a row the panel can act on before the host reads the result.
-		PublishLobbyModerationViewLocked();
 	}
 
 	NetKickBanResult NetMatchService::RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action) {
