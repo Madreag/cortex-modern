@@ -8,6 +8,10 @@
 
 namespace RTE {
 
+	inline const char* NetHostOptionsApplyText(NetMatchServiceState state) {
+		return state == NetMatchServiceState::Completed ? "Options staged for the next match." : "Apply republishes this lobby.";
+	}
+
 	inline bool NetHostRepairEnabled(const NetMatchService& service) {
 		return service.IsHost() && service.CanResyncMatch();
 	}

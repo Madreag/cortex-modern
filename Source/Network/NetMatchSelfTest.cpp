@@ -3052,11 +3052,13 @@ namespace RTE {
 	struct HostOptionsLobbyRow {
 		NetMatchService service, clientService;
 		LoopbackTransport hostTransport, clientTransport;
-		StateTransferTap tap{hostTransport};
-		NetSession hostSession, clientSession;
+		StateTransferTap& tap = static_cast<StateTransferTap&>(*(service.m_MigratedTransport = std::make_unique<StateTransferTap>(hostTransport)));
+		NetSession& hostSession = *(service.m_Session = std::make_unique<NetSession>());
+		NetSession clientSession;
 		NetLobbySession clientLobby;
-		NetLockstepCoordinator hostCoordinator, clientCoordinator;
-		NetMatchRunner runner;
+		NetLockstepCoordinator& hostCoordinator = *(service.m_Coordinator = std::make_unique<NetLockstepCoordinator>());
+		NetLockstepCoordinator clientCoordinator;
+		NetMatchRunner& runner = *(service.m_Runner = std::make_unique<NetMatchRunner>());
 		NetMatchRunnerConfig config;
 		std::atomic<bool> start{false}, cancel{false};
 		std::function<void()> observe;
@@ -3112,6 +3114,35 @@ namespace RTE {
 
 		uint64_t NowMs() const {
 			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count());
+		}
+		~HostOptionsLobbyRow() {
+			service.Destroy();
+			clientService.Destroy();
+		}
+		bool FinishRound(std::string* error) {
+			service.m_State = NetMatchServiceState::Running;
+			service.m_MatchWasRunning = true;
+			service.m_LocalPeerId = 1;
+			service.m_MatchConfig = runner.GetMatchConfig();
+			service.FinishMatch("host options round complete");
+			PumpClient();
+			if (!clientCoordinator.IsStopped()) {
+				*error = "the service did not finish its peer's options round";
+				return false;
+			}
+			lobbyActive = coordinatorActive = false;
+			clientLobby = NetLobbySession{};
+			start.store(false);
+			return true;
+		}
+		bool ReturnToLobby(std::string* error) {
+			if (!service.ReturnToLobby(error)) return false;
+			service.WaitForPendingWork();
+			if (!failure.empty() || !peerError.empty() || service.GetState() != NetMatchServiceState::ReadyToLaunch) {
+				*error = failure + "; peer=" + peerError + "; rematch=" + service.GetErrorText();
+				return false;
+			}
+			return true;
 		}
 		void Fail(const std::string& reason) {
 			if (failure.empty()) failure = reason;
@@ -3210,6 +3241,41 @@ namespace RTE {
 			    adopted.configRevision != nextRevision || adopted.difficulty != 73 || adopted.idleWaitMinutes != 0 ||
 			    adopted.frameRedundancyTicks != 1 || row.clientLobby.GetMatchConfigHash() != row.runner.GetMatchConfigHash()) {
 				*error = "the service draft did not reach the running peer: revision=" + std::to_string(adopted.configRevision);
+				return false;
+			}
+			if (!row.FinishRound(error)) return false;
+			if (std::string(NetHostOptionsApplyText(row.service.GetState())) != "Options staged for the next match.") {
+				*error = "the completed round names a live Apply";
+				return false;
+			}
+			submitted = sawReset = false;
+			row.observe = [&] {
+				const auto& lobby = row.runner.GetLobbySession();
+				if (!submitted) {
+					if (!lobby.IsConfigAcked(2) || !lobby.IsRemoteReady(2)) return;
+					NetMatchConfig draft = row.service.GetLobbyMatchConfig();
+					nextRevision = draft.configRevision + 1;
+					draft.difficulty = 42;
+					std::string refusal;
+					if (!row.service.GetLobbySnapshot().playedAMatch || row.service.GetState() != NetMatchServiceState::Starting ||
+					    !row.service.SubmitHostOptions(draft.configRevision, draft, &refusal) ||
+					    std::string(NetHostOptionsApplyText(row.service.GetState())) != "Apply republishes this lobby.") {
+						row.Fail("ReturnToLobby Apply has the wrong state or status: " + refusal);
+					}
+					submitted = true;
+					return;
+				}
+				if (!sawReset) {
+					if (lobby.GetMatchConfig().configRevision != nextRevision || lobby.GetMatchConfig().difficulty != 42 || row.Pending()) {
+						row.Fail("ReturnToLobby Apply did not republish its submitted revision");
+					}
+					sawReset = true;
+					row.start.store(true);
+				}
+			};
+			if (!row.ReturnToLobby(error)) return false;
+			if (!submitted || !sawReset || row.clientLobby.GetMatchConfig().difficulty != 42) {
+				*error = "the rematch peer missed the live Apply";
 				return false;
 			}
 			return true;
