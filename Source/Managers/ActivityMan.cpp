@@ -379,6 +379,11 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	auto image = std::make_shared<CheckpointImage>();
 	image->tick = tick;
 	std::vector<std::shared_ptr<const BitmapSnapshot>> retiredLayers;
+	// Each record is timed on its own so the completion pass can see where the freeze goes.
+	const auto since = [](const std::chrono::steady_clock::time_point& from) {
+		return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - from).count();
+	};
+	const auto layersStart = std::chrono::steady_clock::now();
 	const auto layer = [&](const std::string& name, SceneLayer* value) {
 		if (value) image->layers.emplace_back(name, value->CaptureBitmapSnapshot(&retiredLayers));
 	};
@@ -386,33 +391,55 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	layer("FG", scene->GetTerrain()->GetFGSceneLayer());
 	layer("BG", scene->GetTerrain()->GetBGSceneLayer());
 	for (int team = 0; team < Activity::MaxTeamCount; ++team) layer("UST" + std::to_string(team), scene->GetUnseenLayer(team));
+	image->layersUs = since(layersStart);
+	const auto activityStart = std::chrono::steady_clock::now();
 	const auto activityText = Writer::Capture([&](Writer& writer) {
 		writer.NewPropertyWithValue("Activity", activity);
 		writer.NewPropertyWithValue("HasCheckpointStartActivity", m_StartActivity != nullptr);
 		if (m_StartActivity) writer.NewPropertyWithValue("CheckpointStartActivity", m_StartActivity.get());
 	});
 	image->activity = activityText;
+	image->activityUs = since(activityStart);
 	std::vector<std::string> problems;
 	const size_t luaStateCount = 1 + g_LuaMan.GetThreadedScriptStates().size();
-	if (cow.LuaUnchanged(LuaCheckpointWriteGeneration(), luaStateCount)) {
+	auto& graphIndex = CheckpointGraphIndex::Get();
+	const GraphDirt beforeWalk = graphIndex.Sample();
+	// A walk that recorded its tables and saw none of them written can be reused whole.
+	const bool graphClean = beforeWalk.roots > 0 && beforeWalk.dirtyTables == 0 && !beforeWalk.unknownTable;
+	const auto graphStart = std::chrono::steady_clock::now();
+	if (cow.LuaUnchanged(LuaCheckpointWriteGeneration(), luaStateCount) || (graphClean && cow.HasLua(luaStateCount))) {
 		image->luaReused = true;
 		image->graphs = cow.LastLua();
-	} else if (!g_MovableMan.CaptureScriptGraphs(image->graphs, problems)) {
-		std::string message = "script graph capture refused";
-		for (const auto& problem: problems) message += ": " + problem;
-		throw std::runtime_error(message);
 	} else {
+		graphIndex.BeginWalk();
+		const bool captured = g_MovableMan.CaptureScriptGraphs(image->graphs, problems);
+		graphIndex.EndWalk();
+		if (!captured) {
+			std::string message = "script graph capture refused";
+			for (const auto& problem: problems) message += ": " + problem;
+			throw std::runtime_error(message);
+		}
 		image->luaReused = false;
 		cow.RememberLua(image->graphs, LuaCheckpointWriteGeneration());
 	}
+	image->graphUs = since(graphStart);
+	image->graph = graphIndex.Sample();
 	// Compiled table stores only mark while the trap is armed, so every freeze re-arms it.
 	g_LuaMan.ArmCheckpointWriteTrap();
+	const auto sceneStart = std::chrono::steady_clock::now();
 	image->scene = scene->CaptureSavedScene(fileName);
+	image->sceneUs = since(sceneStart);
 	g_AudioMan.SetCheckpointSoundContainerCursor(liveSoundCursor);
 	allocation.RestoreCounters();
+	const auto structureStart = std::chrono::steady_clock::now();
 	image->structure = CheckpointWriter::Native([] { return g_MovableMan.SaveWorldStructure(); });
+	image->structureUs = since(structureStart);
+	const auto sceneRuntimeStart = std::chrono::steady_clock::now();
 	image->sceneRuntime = CheckpointWriter::Native([scene] { return scene->SaveRuntimeCheckpoint(); });
+	image->sceneRuntimeUs = since(sceneRuntimeStart);
+	const auto globalsStart = std::chrono::steady_clock::now();
 	image->globals = CheckpointWriter::Native([&] { return CaptureRuntimeGlobals(carriedSounds.Carried(), false); });
+	image->globalsUs = since(globalsStart);
 	image->activityName = activity->GetPresetName();
 	image->originalScenePresetName = scene->GetPresetName();
 	image->simUpdateCount = g_TimerMan.GetSimUpdateCount();

@@ -8,6 +8,7 @@
 #include "SimChecksum.h"
 #include "RTETools.h"
 #include "LuaThreadCodec.h"
+#include "CheckpointImage.h"
 #include "ScenarioRunner.h"
 #include "ContentFile.h"
 #include "MovableMan.h"
@@ -1427,6 +1428,7 @@ local function visitTable(value, ctx)
 	if path and ctx.engine[value] then return pathToken(path) end
 	id = newId(ctx)
 	ctx.ids[value] = id
+	if _ScriptGraphNoteTable then _ScriptGraphNoteTable(value) end
 	local parts = { path and ("P" .. pathToken(path)) or "P-;" }
 	local meta = getmetatable(value)
 	parts[#parts + 1] = "M" .. (type(meta) == "table" and visit(meta, ctx) or "z;")
@@ -1492,8 +1494,10 @@ local function serializeGraph(roots)
 	for uid in pairs(roots) do uids[#uids + 1] = uid end
 	table.sort(uids, function(a, b) return tonumber(a) < tonumber(b) end)
 	for _, uid in ipairs(uids) do
+		if _ScriptGraphBeginRoot then _ScriptGraphBeginRoot(uid) end
 		rootIds[#rootIds + 1] = stringToken(uid) .. visitAt(roots[uid], ctx, "object[" .. uid .. "]")
 	end
+	if _ScriptGraphBeginRoot then _ScriptGraphBeginRoot("0") end
 	local globals = {}
 	local names = {}
 	local allNames = {}
@@ -3215,6 +3219,20 @@ struct VectorField {
 static std::unordered_map<const void*, VectorField> s_VectorFields;
 static std::unordered_map<const void*, long> s_ControllerOwners;
 
+static int ScriptGraphNoteTable(lua_State* L) {
+	if (lua_istable(L, 1)) {
+		CheckpointGraphIndex::Get().NoteTable(lua_topointer(L, 1));
+		// The next write to this table reports it, once, through the preview trap.
+		luaJIT_arm_tab_write(L, 1);
+	}
+	return 0;
+}
+
+static int ScriptGraphBeginRoot(lua_State* L) {
+	CheckpointGraphIndex::Get().BeginRoot(static_cast<uint64_t>(std::strtoull(luaL_optstring(L, 1, "0"), nullptr, 10)));
+	return 0;
+}
+
 static int ScriptGraphBeginCapture(lua_State* L) {
 	s_VectorFields.clear();
 	s_ControllerOwners.clear();
@@ -4912,6 +4930,10 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_pushlightuserdata(m_State, this);
 		lua_pushcclosure(m_State, ScriptGraphCaptureCall<ScriptGraphRandomState>, 1);
 		lua_setglobal(m_State, "_ScriptGraphRandomState");
+		lua_pushcfunction(m_State, ScriptGraphNoteTable);
+		lua_setglobal(m_State, "_ScriptGraphNoteTable");
+		lua_pushcfunction(m_State, ScriptGraphBeginRoot);
+		lua_setglobal(m_State, "_ScriptGraphBeginRoot");
 		lua_pushcfunction(m_State, ScriptGraphBeginCapture);
 		lua_setglobal(m_State, "_ScriptGraphBeginCapture");
 		lua_pushcfunction(m_State, ScriptGraphEndCapture);

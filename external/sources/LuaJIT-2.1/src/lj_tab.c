@@ -33,6 +33,19 @@ LUA_API void luaJIT_arm_tab_write_trap(lua_State *L)
   if (checkpoint_tab_write) G(L)->checkpoint_armed = 1;
 }
 
+/* Arm one table: its next write reports itself, once, through the preview trap. */
+static LJ_AINLINE void checkpoint_arm_table(GCtab *t)
+{
+  if (checkpoint_tab_write && !(t->preview & LJ_PREVIEW_PENDING)) t->preview = LJ_PREVIEW_PENDING;
+}
+
+LUA_API void luaJIT_arm_tab_write(lua_State *L, int idx)
+{
+  cTValue *o = L->base + (idx - 1);
+  if (idx < 0) o = L->top + idx;
+  if (o < L->top && tvistab(o)) checkpoint_arm_table(tabV(o));
+}
+
 /* -- Object hashing ------------------------------------------------------ */
 
 /* Hash an arbitrary key and return its anchor position in the hash table. */
@@ -107,6 +120,7 @@ static GCtab *newtab(lua_State *L, uint32_t asize, uint32_t hbits)
     t = (GCtab *)lj_mem_newgco(L, sizetabcolo(asize));
     t->gct = ~LJ_TTAB;
     t->preview = 0;
+    checkpoint_arm_table(t);
     t->nomm = (uint8_t)~0;
     t->colo = (int8_t)asize;
     setmref(t->array, (TValue *)((char *)t + sizeof(GCtab)));
@@ -123,6 +137,7 @@ static GCtab *newtab(lua_State *L, uint32_t asize, uint32_t hbits)
     t = lj_mem_newobj(L, GCtab);
     t->gct = ~LJ_TTAB;
     t->preview = 0;
+    checkpoint_arm_table(t);
     t->nomm = (uint8_t)~0;
     t->colo = 0;
     setmref(t->array, NULL);
