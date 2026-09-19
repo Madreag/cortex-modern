@@ -143,6 +143,14 @@ void UInputMan::LoadDeviceIcons() {
 	}
 }
 
+bool UInputMan::SeatInputTypedInto(int whichPlayer) const {
+	if (!m_DisableKeyboard || whichPlayer < Players::PlayerOne || whichPlayer >= Players::MaxPlayerCount) {
+		return false;
+	}
+	const InputDevice device = m_ControlScheme.at(whichPlayer).GetDevice();
+	return device == InputDevice::DEVICE_KEYB_ONLY || device == InputDevice::DEVICE_MOUSE_KEYB;
+}
+
 Vector UInputMan::AnalogMoveValues(int whichPlayer) {
 	if (InputScript::DrivesPlayer(whichPlayer)) {
 		return Vector(0, 0);
@@ -176,6 +184,9 @@ Vector UInputMan::AnalogAimValues(int whichPlayer) {
 	}
 	// See AnalogMoveValues — determinism runs must not read live host input.
 	if (g_MetricsCollector.IsRecordingTickHashes()) {
+		return Vector(0, 0);
+	}
+	if (SeatInputTypedInto(whichPlayer)) {
 		return Vector(0, 0);
 	}
 	InputDevice device = m_ControlScheme.at(whichPlayer).GetDevice();
@@ -400,6 +411,9 @@ Vector UInputMan::GetMouseMovement(int whichPlayer) const {
 		Vector movement;
 		return InputScript::MouseAt(whichPlayer, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), movement) ? movement : Vector(0, 0);
 	}
+	if (SeatInputTypedInto(whichPlayer)) {
+		return Vector(0, 0);
+	}
 	if (whichPlayer == Players::NoPlayer || (m_ControlScheme.at(whichPlayer).GetDevice() == InputDevice::DEVICE_MOUSE_KEYB && !m_EnableMultiMouseKeyboard)) {
 		return m_MouseStates.at(0).relativeMotion;
 	} else if (m_ControlScheme.at(whichPlayer).GetDevice() == InputDevice::DEVICE_MOUSE_KEYB) {
@@ -478,6 +492,9 @@ void UInputMan::ClearMouseButtons() {
 }
 
 int UInputMan::MouseWheelMovedByPlayer(int player) const {
+	if (SeatInputTypedInto(player)) {
+		return 0;
+	}
 	if (player == Players::NoPlayer || player < Players::PlayerOne || player >= Players::MaxPlayerCount || !m_EnableMultiMouseKeyboard) {
 		return m_MouseStates.at(0).wheelChange;
 	}
@@ -721,10 +738,10 @@ bool UInputMan::GetInputElementState(int whichPlayer, int whichElement, InputSta
 				return false;
 		}
 	}
-	InputDevice device = m_ControlScheme.at(whichPlayer).GetDevice();
-	if (m_DisableKeyboard && (device == InputDevice::DEVICE_KEYB_ONLY || device == InputDevice::DEVICE_MOUSE_KEYB)) {
+	if (SeatInputTypedInto(whichPlayer)) {
 		return false;
 	}
+	InputDevice device = m_ControlScheme.at(whichPlayer).GetDevice();
 	bool elementState = false;
 	const InputMapping* element = &(m_ControlScheme.at(whichPlayer).GetInputMappings()->at(whichElement));
 
@@ -852,6 +869,10 @@ bool UInputMan::GetMouseButtonState(int whichPlayer, int whichButton, InputState
 			default:
 				return false;
 		}
+	}
+
+	if (SeatInputTypedInto(whichPlayer)) {
+		return false;
 	}
 
 	InputDevice playerDevice = InputDevice::DEVICE_COUNT;
@@ -1688,9 +1709,13 @@ bool UInputMan::RunCheckpointSelfTest() {
 
 bool UInputMan::RunScriptedInputEdgeSelfTest() {
 	bool passed = true;
-	const auto check = [&passed](const char* name, bool valid) {
+	const auto check = [&passed](const char* name, bool valid, const std::string& observed = "") {
 		passed = valid && passed;
-		std::cout << "[input-edge-selftest] " << (valid ? "PASS " : "FAIL ") << name << std::endl;
+		std::cout << "[input-edge-selftest] " << (valid ? "PASS " : "FAIL ") << name;
+		if (!valid && !observed.empty()) {
+			std::cout << ": " << observed;
+		}
+		std::cout << std::endl;
 	};
 	const std::filesystem::path path = std::filesystem::current_path() / "scripted-edge-selftest.txt";
 	{
@@ -1733,10 +1758,60 @@ bool UInputMan::RunScriptedInputEdgeSelfTest() {
 	DisableKeys(true);
 	g_TimerMan.RewindSimTo(5, 0);
 	check("held_fire_across_open_entry", InputScript::HeldAt(Players::PlayerOne, InputElements::INPUT_FIRE, 5) &&
-	    GetInputElementState(Players::PlayerOne, InputElements::INPUT_FIRE, InputState::Held));
+	        GetInputElementState(Players::PlayerOne, InputElements::INPUT_FIRE, InputState::Held),
+	    "a scripted FIRE was not held while the entry was open");
 	check("held_start_across_open_entry", InputScript::HeldAt(Players::PlayerOne, InputElements::INPUT_START, 5) &&
-	    GetInputElementState(Players::PlayerOne, InputElements::INPUT_START, InputState::Held));
+	        GetInputElementState(Players::PlayerOne, InputElements::INPUT_START, InputState::Held),
+	    "a scripted START was not held while the entry was open");
 	DisableKeys(false);
+	// The human half of the same rule: the seat's own keyboard and mouse are typed into while the entry is
+	// open, so none of its gameplay mappings reads through.
+	{
+		std::ofstream script(path);
+		script << "# the human arm drives no player\n";
+	}
+	check("script_released_for_the_human_arm", InputScript::Load(path.string(), &error) && !InputScript::DrivesPlayer(Players::PlayerOne));
+	InputScheme& scheme = m_ControlScheme.at(Players::PlayerOne);
+	const InputDevice savedDevice = scheme.GetDevice();
+	const DeviceID savedDeviceID = scheme.GetDeviceID();
+	const InputMapping savedMapping = scheme.GetInputMappings()->at(InputElements::INPUT_L_UP);
+	const bool savedMultiDevice = m_EnableMultiMouseKeyboard;
+	m_EnableMultiMouseKeyboard = false;
+	scheme.SetDevice(InputDevice::DEVICE_MOUSE_KEYB);
+	scheme.SetKeyMapping(InputElements::INPUT_L_UP, SDL_SCANCODE_W);
+	Keyboard& keyboard = m_KeyboardStates[0];
+	Mouse& mouse = m_MouseStates[0];
+	const Keyboard savedKeyboard = keyboard;
+	const Mouse savedMouse = mouse;
+	keyboard.keyStates[SDL_SCANCODE_W] = true;
+	mouse.state[MouseButtons::MOUSE_LEFT] = true;
+	mouse.wheelChange = -1.0F;
+	mouse.relativeMotion = Vector(4, 0);
+	mouse.analogAim = Vector(m_MouseTrapRadius, 0);
+	const bool keyDrives = GetInputElementState(Players::PlayerOne, InputElements::INPUT_L_UP, InputState::Held);
+	const bool buttonDrives = MouseButtonHeld(MouseButtons::MOUSE_LEFT, Players::PlayerOne);
+	check("human_mappings_drive_with_the_entry_closed", keyDrives && buttonDrives,
+	    "W read as L_UP " + std::to_string(keyDrives) + " and the left button as fire " + std::to_string(buttonDrives) + " with no entry open");
+	DisableKeys(true);
+	const bool keyWhileTyping = GetInputElementState(Players::PlayerOne, InputElements::INPUT_L_UP, InputState::Held);
+	check("human_key_silent_while_typing", !keyWhileTyping, "W still read as L_UP while the entry was open");
+	const bool buttonWhileTyping = MouseButtonHeld(MouseButtons::MOUSE_LEFT, Players::PlayerOne);
+	check("mouse_button_silent_while_typing", !buttonWhileTyping, "the left mouse button still read as fire while the entry was open");
+	const int wheelWhileTyping = MouseWheelMovedByPlayer(Players::PlayerOne);
+	check("mouse_wheel_silent_while_typing", wheelWhileTyping == 0, "the wheel read " + std::to_string(wheelWhileTyping) + " while the entry was open");
+	const Vector aimWhileTyping = AnalogAimValues(Players::PlayerOne);
+	check("mouse_aim_silent_while_typing", aimWhileTyping.IsZero(),
+	    "the aim read " + std::to_string(aimWhileTyping.GetX()) + "," + std::to_string(aimWhileTyping.GetY()) + " while the entry was open");
+	const Vector movementWhileTyping = GetMouseMovement(Players::PlayerOne);
+	check("mouse_movement_silent_while_typing", movementWhileTyping.IsZero(),
+	    "the mouse moved the aim by " + std::to_string(movementWhileTyping.GetX()) + "," + std::to_string(movementWhileTyping.GetY()) + " while the entry was open");
+	DisableKeys(false);
+	keyboard = savedKeyboard;
+	mouse = savedMouse;
+	scheme.SetDevice(savedDevice);
+	scheme.SetDeviceID(savedDeviceID);
+	scheme.GetInputMappings()->at(InputElements::INPUT_L_UP) = savedMapping;
+	m_EnableMultiMouseKeyboard = savedMultiDevice;
 	std::error_code removeError;
 	std::filesystem::remove(path, removeError);
 	std::cout << "[input-edge-selftest] " << (passed ? "PASS " : "FAIL ") << "complete" << std::endl;
