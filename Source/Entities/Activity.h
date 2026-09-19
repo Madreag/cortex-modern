@@ -791,8 +791,6 @@ namespace RTE {
 			float cost = 0;
 			uint64_t commitTick = 0;
 			uint64_t sequence = 0;
-			bool confirmed = false;
-			uint64_t confirmedTick = 0;
 		};
 		struct PresentationView {
 			int fundsTeam = Teams::NoTeam;
