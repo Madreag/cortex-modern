@@ -606,13 +606,10 @@ def scripts(case, port, root):
                 # picked activity/mode and the L33 row the ledger names.
                 "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
                 "assert_label LabelHostOptionsTitle H O S T   O P T I O N S\n"
-                # H09/H10: the remote human seat's Details carries pressable Kick and Ban; a lobby
-                # press names why it cannot arm yet (the admission view is published mid-match),
-                # instead of queueing a selection the drain would refuse.
-                "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
-                "assert_enabled ButtonHostSeatDlgKick 1\nassert_enabled ButtonHostSeatDlgBan 1\n"
-                "activate ButtonHostSeatDlgKick\nwait 3\n"
-                "assert_label LabelHostSeatDlgActionHint Kick: the seat's admission row is not published in the lobby.\n"
+                # H09/H10: the host's own seat is never kickable, whoever else is in the lobby.
+                "activate ButtonHostSeatDetails0\nwait 3\nassert_visible HostSeatDialog 1\n"
+                "assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
+                "assert_label LabelHostSeatDlgActionHint The host's own seat is never kicked or banned.\n"
                 "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
                 "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
                 "assert_label LabelHostRulesBrainless When every human brain is lost\n"
@@ -628,7 +625,21 @@ def scripts(case, port, root):
                 "assert_label ComboHostRulesBrainless End the match\n"
                 "activate ButtonHostOptApply\nwait 5\ndump_host_options\n"
                 "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
-                "dump_lobby\ndump_host_options\nwait 600\nexit\n")
+                "dump_lobby\ndump_host_options\n"
+                # H09/H10: the lobby publishes the seat's admission row, so the press queues a real
+                # selection and the setup worker's pump applies it - the status line carries the
+                # queued word first and then the drained result. It runs last in the script because
+                # the peer it removes has to finish its own read-only pass first.
+                "wait_ms 16000\n"
+                "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
+                "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
+                "assert_enabled ButtonHostSeatDlgKick 1\nassert_enabled ButtonHostSeatDlgBan 1\n"
+                "activate ButtonHostSeatDlgKick\nwait 10\n"
+                "assert_visible HostSeatDialog 0\n"
+                "assert_label LabelHostOptStatus Kick: Ok\n"
+                "dump_host_options\n"
+                "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
+                "dump_lobby\nwait 600\nexit\n")
         client = (LANDING + "settext TextMultiplayerName Joiner\n"
                   "activate ButtonMultiplayerJoinGame\nwait 10\n"
                   "settext TextJoinAddress 127.0.0.1\n"
@@ -670,7 +681,12 @@ def scripts(case, port, root):
                   "assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
                   "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
                   "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
-                  "dump_lobby\ndump_host_options\nexit\n")
+                  "dump_lobby\ndump_host_options\n"
+                  # The host kicks this peer once its own pass is done: the lobby that vanishes has
+                  # to name the removal instead of reading as a network fault.
+                  "wait_state Failed 60\n"
+                  "assert_status The host removed you from this session\n"
+                  "dump_lobby\nexit\n")
         return {"host": host, "client": client}, {}
     elif case == "net-options":
         # Two real peers: the host's saved session options ride the lobby config onto both rosters. A
