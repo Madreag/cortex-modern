@@ -14,6 +14,7 @@
 #include "NetConnectionQuality.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
+#include "System.h"
 #include "ScenarioRunner.h"
 #include "TelemetryBundle.h"
 
@@ -475,6 +476,9 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MainMenuButtons[MenuButton::HostRepairNowButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostRecRepairNow"));
 	m_MainMenuButtons[MenuButton::HostFilesSaveDiagButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostFilesSaveDiag"));
 	m_MainMenuButtons[MenuButton::HostSessionEndButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostSessEnd"));
+	m_MainMenuButtons[MenuButton::HostSessionBannedButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostSessBanned"));
+	m_MainMenuButtons[MenuButton::HostBannedRemoveButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostBannedRemove"));
+	m_MainMenuButtons[MenuButton::HostBannedCloseButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostBannedClose"));
 	CreateHostOptionsControls();
 }
 
@@ -526,7 +530,7 @@ void MainMenuGUI::CreateQuitScreen() {
 }
 
 void MainMenuGUI::HideAllScreens() {
-	if (m_ActiveDialogBox && (m_ActiveDialogBox == m_LastMatchDialog || m_ActiveDialogBox == m_ReplayDeleteDialog || m_ActiveDialogBox == m_HostSeatDialog)) CloseMultiplayerDialog();
+	if (m_ActiveDialogBox && (m_ActiveDialogBox == m_LastMatchDialog || m_ActiveDialogBox == m_ReplayDeleteDialog || m_ActiveDialogBox == m_HostSeatDialog || m_ActiveDialogBox == m_HostBannedDialog)) CloseMultiplayerDialog();
 	for (GUICollectionBox* menuScreen: m_MainMenuScreens) {
 		if (menuScreen) {
 			menuScreen->SetVisible(false);
@@ -772,6 +776,9 @@ void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
 		// eats it first the way every other screen's dialog does.
 		if (m_ActiveDialogBox == m_HostSeatDialog) {
 			m_HostOptionsSeatRow = -1;
+			m_HostSeatDlgModerationRow = -1;
+			CloseMultiplayerDialog();
+		} else if (m_ActiveDialogBox == m_HostBannedDialog) {
 			CloseMultiplayerDialog();
 		} else {
 			m_MultiplayerSubScreen = m_HostOptionsSetupDraft ? MultiplayerSubScreen::HostSetup : MultiplayerSubScreen::Lobby;
@@ -1107,8 +1114,10 @@ void MainMenuGUI::RefreshMultiplayerHostActivities() {
 	// The host's picker offers the scripted activities a lockstep match can run, each pinned to the
 	// module that defines it so a same-named preset elsewhere cannot swap in silently. The presets do
 	// not exist until the modules load, so the list is built on entry to the host setup screen.
+	// H12's first-run default is Skirmish Defense - the same preset a fresh NetMatchServiceRequest
+	// names - until the host's saved template (or an earlier pick) says otherwise.
 	const std::pair<std::string, std::string> current =
-		m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size() ? m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex] : std::pair<std::string, std::string>{"P4 Alpha Duel", "Base.rte"};
+		m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size() ? m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex] : std::pair<std::string, std::string>{"Skirmish Defense", "Base.rte"};
 	m_MultiplayerHostActivities.clear();
 	std::list<Entity*> presets;
 	if (g_PresetMan.GetAllOfType(presets, "Activity")) {
@@ -1220,9 +1229,10 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostOptionsStatusLabel = dynamic_cast<GUILabel*>(get("LabelHostOptStatus"));
 	m_HostSeatPlayersCombo = dynamic_cast<GUIComboBox*>(get("ComboHostSeatPlayers"));
 	m_HostSeatCapacityHint = dynamic_cast<GUILabel*>(get("LabelHostSeatCapacityHint"));
-	for (int row = 0; row < 5; ++row) {
+	for (int row = 0; row < c_HostSeatRows; ++row) {
 		const std::string n = std::to_string(row);
 		m_HostSeatNameLabels[row] = dynamic_cast<GUILabel*>(get(("LabelHostSeatName" + n).c_str()));
+		m_HostSeatTypeCombos[row] = dynamic_cast<GUIComboBox*>(get(("ComboHostSeatType" + n).c_str()));
 		m_HostSeatTeamCombos[row] = dynamic_cast<GUIComboBox*>(get(("ComboHostSeatTeam" + n).c_str()));
 		m_HostSeatDelayLabels[row] = dynamic_cast<GUILabel*>(get(("LabelHostSeatDelay" + n).c_str()));
 		m_HostSeatStateLabels[row] = dynamic_cast<GUILabel*>(get(("LabelHostSeatState" + n).c_str()));
@@ -1273,12 +1283,26 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostSessHostingLabel = dynamic_cast<GUILabel*>(get("LabelHostSessHosting"));
 	m_HostSessSeatsLabel = dynamic_cast<GUILabel*>(get("LabelHostSessSeats"));
 	m_HostSessIdleCombo = dynamic_cast<GUIComboBox*>(get("ComboHostSessIdle"));
+	m_HostSessIdleStateLabel = dynamic_cast<GUILabel*>(get("LabelHostSessIdleState"));
+	m_HostSessBannedLabel = dynamic_cast<GUILabel*>(get("LabelHostSessBanned"));
 	m_HostSeatDialog = dynamic_cast<GUICollectionBox*>(get("HostSeatDialog"));
 	m_HostSeatDlgName = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgName"));
 	m_HostSeatDlgSeat = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgSeat"));
 	m_HostSeatDlgTeam = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgTeam"));
 	m_HostSeatDlgState = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgState"));
+	m_HostSeatDlgReclaim = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgReclaim"));
+	m_HostSeatDlgApplicants = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgApplicants"));
+	m_HostSeatDlgApplicant = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgApplicant"));
+	m_HostSeatDlgWait = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgWait"));
+	m_HostSeatDlgApprove = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgApprove"));
+	m_HostSeatDlgCancel = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgCancel"));
+	m_HostSeatDlgKick = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgKick"));
+	m_HostSeatDlgBan = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgBan"));
+	m_HostSeatDlgActionHint = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgActionHint"));
 	m_HostSeatDlgStatus = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgStatus"));
+	m_HostBannedDialog = dynamic_cast<GUICollectionBox*>(get("HostBannedDialog"));
+	m_HostBannedListLabel = dynamic_cast<GUILabel*>(get("LabelHostBannedList"));
+	m_HostBannedStatusLabel = dynamic_cast<GUILabel*>(get("LabelHostBannedStatus"));
 
 	if (m_HostSeatPlayersCombo) {
 		m_HostSeatPlayersCombo->ClearList();
@@ -1310,6 +1334,14 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		for (int team = 1; team <= 4; ++team) {
 			combo->AddItem("Team " + std::to_string(team));
 		}
+	}
+	// H03's seat kinds, in the order the status column reads them.
+	for (GUIComboBox* combo : m_HostSeatTypeCombos) {
+		if (!combo) continue;
+		combo->ClearList();
+		combo->AddItem("Open");
+		combo->AddItem("Closed");
+		combo->AddItem("CPU");
 	}
 	if (m_HostRulesTechCombo) {
 		m_HostRulesTechCombo->ClearList();
@@ -1407,8 +1439,12 @@ NetMatchServiceRequest MainMenuGUI::HostRequestDraft() const {
 		request.inputDelayFrames = m_HostSetupOptions->inputDelayFrames;
 		request.autoInputDelay = m_HostSetupOptions->delayPolicy == NetMatchDelayPolicy::Auto;
 		request.peerCount = m_HostSetupOptions->peerCount;
-		uint32_t cpuSeats = 0;
-		for (const NetMatchPlayerSlot& slot : m_HostSetupOptions->players) cpuSeats += slot.cpu ? 1 : 0;
+		// H03's kind edits ride the request: the drafted human/CPU split, not the mode's default.
+		uint32_t humanSeats = 0, cpuSeats = 0;
+		for (const NetMatchPlayerSlot& slot : m_HostSetupOptions->players) {
+			(slot.cpu ? cpuSeats : humanSeats)++;
+		}
+		request.humans = humanSeats;
 		request.cpuSlots = cpuSeats;
 	}
 	NetMatchService::SeatSavedOptions(request);
@@ -1419,6 +1455,8 @@ void MainMenuGUI::OpenHostOptions(bool setupDraft) {
 	m_HostOptionsSetupDraft = setupDraft;
 	m_HostOptionsReadOnly = false;
 	m_HostOptionsSeatRow = -1;
+	m_HostSeatDlgModerationRow = -1;
+	m_HostOptionsAwaitedRevision = 0;
 	if (setupDraft) {
 		// The staged draft applies where one exists; the request the Create button would send builds the rest.
 		NetMatchServiceRequest request = HostRequestDraft();
@@ -1487,8 +1525,17 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 			}
 		}
 		const std::optional<NetMatchConfig> pending = g_NetMatchService.GetPendingHostOptions();
-		if (pending) {
-			m_HostOptionsStatusLabel->SetText("Options staged for the next match.");
+		if (pending || m_HostOptionsAwaitedRevision > adopted.configRevision) {
+			// A rematch lobby's draft is staged for the next match; an open lobby's Apply is a live
+			// republish the peers acknowledge before it counts. "Applied" lands when the adopted
+			// mirror reaches the awaited revision - the runner queue publishes it for every peer.
+			m_HostOptionsStatusLabel->SetText(snapshot.playedAMatch
+			                                      ? "Options staged for the next match."
+			                                      : "Waiting for peers to confirm the new options...");
+		}
+		if (m_HostOptionsAwaitedRevision != 0 && adopted.configRevision >= m_HostOptionsAwaitedRevision) {
+			m_HostOptionsAwaitedRevision = 0;
+			m_HostOptionsStatusLabel->SetText("Applied.");
 		}
 	}
 	// Each page names itself in the title band the way the design's page mocks do; the client's
@@ -1507,27 +1554,43 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	if (m_HostSeatCapacityHint) {
 		m_HostSeatCapacityHint->SetText(m_HostOptionsSetupDraft ? "Peers the lobby will seat" : "Fixed while the lobby is open");
 	}
-	for (int row = 0; row < 5; ++row) {
-		const bool used = row < static_cast<int>(m_HostOptionsDraft.players.size());
-		for (GUIControl* control : {static_cast<GUIControl*>(m_HostSeatNameLabels[row]), static_cast<GUIControl*>(m_HostSeatTeamCombos[row]),
+	// Each rostered slot is a row; while the draft can still take a seat a trailing "Closed"
+	// placeholder row is where the host opens one back up. peerCount itself is transport
+	// capacity, fixed once the lobby is open, so a closed seat keeps its row instead of
+	// shrinking the session.
+	int humans = 0;
+	for (const NetMatchPlayerSlot& slot : m_HostOptionsDraft.players) humans += slot.cpu ? 0 : 1;
+	const int humanCapacity = m_HostOptionsDraft.peerCount - (m_HostOptionsDraft.dedicated ? 1 : 0);
+	const int slots = static_cast<int>(m_HostOptionsDraft.players.size());
+	const bool placeholder = editable && slots < c_HostSeatRows &&
+	                         (humans < humanCapacity || slots < static_cast<int>(NetMatchConfigUtil::c_MaxPlayers));
+	const int seatRows = std::min(slots + (placeholder ? 1 : 0), c_HostSeatRows);
+	for (int row = 0; row < c_HostSeatRows; ++row) {
+		const bool used = row < seatRows;
+		for (GUIControl* control : {static_cast<GUIControl*>(m_HostSeatNameLabels[row]), static_cast<GUIControl*>(m_HostSeatTypeCombos[row]),
+		                            static_cast<GUIControl*>(m_HostSeatTeamCombos[row]),
 		                            static_cast<GUIControl*>(m_HostSeatDelayLabels[row]), static_cast<GUIControl*>(m_HostSeatStateLabels[row]),
 		                            static_cast<GUIControl*>(m_HostSeatDetailsButtons[row])}) {
 			if (control) control->SetVisible(used);
 		}
 		if (!used) continue;
-		const NetMatchPlayerSlot& slot = m_HostOptionsDraft.players[row];
-		m_HostSeatNameLabels[row]->SetText(slot.displayName);
+		const bool isPlaceholder = row >= slots;
+		static const NetMatchPlayerSlot c_EmptySlot;
+		const NetMatchPlayerSlot& slot = isPlaceholder ? c_EmptySlot : m_HostOptionsDraft.players[row];
+		m_HostSeatNameLabels[row]->SetText(isPlaceholder ? "--" : slot.displayName);
 		const NetLobbyMember* member = nullptr;
-		for (const NetLobbyMember& m : snapshot.members) {
-			if (slot.peerId != 0 && m.peerId == slot.peerId) {
-				member = &m;
-				break;
+		if (!isPlaceholder && slot.peerId != 0) {
+			for (const NetLobbyMember& m : snapshot.members) {
+				if (m.peerId == slot.peerId) {
+					member = &m;
+					break;
+				}
 			}
 		}
 		// The delay column reads the agreed per-sender value; automatic reads "Auto" since each
 		// sender's own link decides its figure there.
 		std::string delay = "--";
-		if (!slot.cpu && slot.peerId != 0) {
+		if (!isPlaceholder && !slot.cpu && slot.peerId != 0) {
 			delay = m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Fixed
 			            ? std::to_string(NetMatchConfigUtil::PeerInputDelay(m_HostOptionsDraft, slot.peerId)) + " ticks"
 			            : "Auto";
@@ -1535,8 +1598,12 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		m_HostSeatDelayLabels[row]->SetText(delay);
 		// A departed human's seat shows the leave consequence, not the CPU's: its units are already
 		// AI-driven, while a merely dropped holder is still reclaiming and stays a held seat.
-		std::string state = slot.cpu ? "CPU / Skill " + std::to_string(m_HostOptionsDraft.teamRules[slot.team < 4 ? slot.team : 0].aiSkill) : "Open";
-		if (!slot.cpu) {
+		std::string state = "Open";
+		if (isPlaceholder) {
+			state = "Closed";
+		} else if (slot.cpu) {
+			state = "CPU / Skill " + std::to_string(m_HostOptionsDraft.teamRules[slot.team < 4 ? slot.team : 0].aiSkill);
+		} else {
 			const std::string line = member ? member->statusLine : std::string();
 			if (line.size() >= 5 && line.compare(line.size() - 5, 5, ": left") == 0) {
 				state = "AI in control";
@@ -1552,9 +1619,16 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 			}
 		}
 		m_HostSeatStateLabels[row]->SetText(state);
+		// H03: the kind column — Open / Closed / CPU. A seated human's kind never moves: the seat
+		// belongs to its player, and SubmitHostOptions refuses the drop a stale UI would still try.
+		const int typeIndex = isPlaceholder ? 1 : (slot.cpu ? 2 : 0);
+		HostOptSelectComboIndex(m_HostSeatTypeCombos[row], typeIndex);
+		const bool seatedHuman = !isPlaceholder && !slot.cpu && slot.peerId != 0 &&
+		                         member && (member->connected || member->dropped || member->reclaiming);
+		HostOptSetEditable(m_HostSeatTypeCombos[row], editable && !seatedHuman);
 		HostOptSelectComboIndex(m_HostSeatTeamCombos[row], slot.team);
-		HostOptSetEditable(m_HostSeatTeamCombos[row], editable && !slot.cpu);
-		HostOptSetEditable(m_HostSeatDetailsButtons[row], true);
+		HostOptSetEditable(m_HostSeatTeamCombos[row], editable && !isPlaceholder && !slot.cpu);
+		HostOptSetEditable(m_HostSeatDetailsButtons[row], !isPlaceholder);
 	}
 
 	// Rules page.
@@ -1651,9 +1725,40 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	HostOptSetEditable(m_HostRecRepairCheck, editable);
 	HostOptSetEditable(m_HostRecAutosaveCheck, editable);
 	if (m_HostRecLastSaveLabel) {
-		m_HostRecLastSaveLabel->SetText(m_HostOptionsDraft.autosaveEnabled
-		                                    ? "Checkpoint every " + std::to_string(m_HostOptionsDraft.autosaveIntervalSeconds) + " sim seconds"
-		                                    : "No autosaves while this is off");
+		// H28: the service exposes no last-autosave tick getter, so the observation is the local
+		// filesystem's own newest .ccsave - the same place the [autosave] log line's file lands.
+		// It is this peer's disk only; a client sees its own (usually empty) directory.
+		const uint64_t nowMs = MenuClockMs();
+		if (nowMs - m_HostLastSaveScanMs >= 1000) {
+			m_HostLastSaveScanMs = nowMs;
+			m_HostLastSaveText.clear();
+			std::error_code dirError;
+			const std::string dir = System::GetWorkingDirectory() + "Autosaves";
+			std::string latest;
+			std::filesystem::file_time_type latestTime{};
+			for (const auto& entry : std::filesystem::directory_iterator(dir, dirError)) {
+				if (!entry.is_regular_file() || entry.path().extension() != ".ccsave") continue;
+				const auto written = entry.last_write_time(dirError);
+				if (dirError) continue;
+				if (latest.empty() || written > latestTime) {
+					latestTime = written;
+					latest = entry.path().filename().string();
+				}
+			}
+			if (!latest.empty()) {
+				// The name is <matchId>-<tick>.ccsave; the tick trails the last dash.
+				const size_t dash = latest.rfind('-');
+				const std::string tick = dash == std::string::npos ? "" : latest.substr(dash + 1, latest.size() - dash - 8);
+				m_HostLastSaveText = tick.empty() || tick.find_first_not_of("0123456789") != std::string::npos
+				                         ? "Last checkpoint: " + latest
+				                         : "Last checkpoint: tick " + tick + " (" + latest + ")";
+			}
+		}
+		m_HostRecLastSaveLabel->SetText(m_HostLastSaveText.empty()
+		                                  ? (m_HostOptionsDraft.autosaveEnabled
+		                                         ? "Checkpoint every " + std::to_string(m_HostOptionsDraft.autosaveIntervalSeconds) + " sim seconds - none saved yet"
+		                                         : "No autosaves while this is off")
+		                                  : m_HostLastSaveText);
 	}
 	if (m_HostRecWaitingLabel) {
 		std::string waiting;
@@ -1666,10 +1771,10 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 
 	// Files page: local paths, local retention, and the local status-widget preference.
 	if (m_HostFilesSavePathLabel) {
-		m_HostFilesSavePathLabel->SetText("Autosaves: " + (std::filesystem::path("Userdata") / "NetSaves").generic_string());
+		m_HostFilesSavePathLabel->SetText("Autosaves: " + (std::filesystem::path(System::GetWorkingDirectory()) / "Autosaves").generic_string());
 	}
 	if (m_HostFilesDiagPathLabel) {
-		m_HostFilesDiagPathLabel->SetText("Diagnostics: " + (std::filesystem::path("Userdata") / "NetDiagnostics").generic_string());
+		m_HostFilesDiagPathLabel->SetText("Diagnostics: " + (std::filesystem::path(System::GetWorkingDirectory()) / "Telemetry").generic_string());
 	}
 	HostOptSelectComboIndex(m_HostFilesWidgetCombo, static_cast<int>(g_SettingsMan.GetNetworkMatchStatusMode()));
 	HostOptSetEditable(m_HostFilesWidgetCombo, true); // local preference, editable on every peer
@@ -1693,12 +1798,39 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	}
 	HostOptSelectComboIndex(m_HostSessIdleCombo, idleIndex);
 	HostOptSetEditable(m_HostSessIdleCombo, editable);
+	if (m_HostSessIdleStateLabel) {
+		// H31's countdown and reason: the configured window plus why it is running. The snapshot
+		// carries no published deadline, so the live seconds stay the service's - the label names
+		// the phase the peers are actually in instead of inventing a clock of its own.
+		std::string idle = m_HostOptionsDraft.idleWaitMinutes == 0
+		                       ? "Idle wait: Never - the lobby stays open"
+		                       : "Idle wait: " + std::to_string(m_HostOptionsDraft.idleWaitMinutes) + " min";
+		if (m_HostOptionsSetupDraft) {
+			idle += " (applies once the lobby opens)";
+		} else if (!snapshot.lobbyPhase.empty()) {
+			idle += " - " + snapshot.lobbyPhase;
+			if (!snapshot.statusText.empty()) idle += ": " + snapshot.statusText;
+		}
+		m_HostSessIdleStateLabel->SetText(idle);
+	}
+	// H11: the ban list is the L20 store's; until it lands the row reports an empty list and the
+	// dialog's removal stays off, so the control is honest about the contract it needs.
+	if (m_HostSessBannedLabel) {
+		m_HostSessBannedLabel->SetText("0 banned this session");
+	}
+	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostSessionBannedButton], true);
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostSessionEndButton], editable && !m_HostOptionsSetupDraft);
 
 	// The footer: Apply only when there is a change and the player may make one.
 	bool dirty = false;
 	if (m_HostOptionsSetupDraft) {
 		dirty = !m_HostSetupOptions || static_cast<const NetMatchStandardRules&>(m_HostOptionsDraft) != static_cast<const NetMatchStandardRules&>(*m_HostSetupOptions)
+		        || m_HostOptionsDraft.players != m_HostSetupOptions->players
+		        || m_HostOptionsDraft.mode != m_HostSetupOptions->mode
+		        || m_HostOptionsDraft.activityPreset != m_HostSetupOptions->activityPreset
+		        || m_HostOptionsDraft.activityModule != m_HostSetupOptions->activityModule
+		        || m_HostOptionsDraft.sceneName != m_HostSetupOptions->sceneName
+		        || m_HostOptionsDraft.peerCount != m_HostSetupOptions->peerCount
 		        || m_HostOptionsDraft.delayPolicy != m_HostSetupOptions->delayPolicy
 		        || m_HostOptionsDraft.idleWaitMinutes != m_HostSetupOptions->idleWaitMinutes
 		        || m_HostOptionsDraft.automaticRepair != m_HostSetupOptions->automaticRepair
@@ -1715,11 +1847,15 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	if (m_HostOptionsStatusLabel->GetText().empty() && dirty) {
 		m_HostOptionsStatusLabel->SetText("Unsaved changes");
 	}
+	// An open seat dialog re-reads the moderation view every frame: the reclaim seconds tick and a
+	// new applicant shows without the host reopening it.
+	RefreshHostSeatDialog();
 }
 
 void MainMenuGUI::DraftHostOptionsFromControls() {
-	// Seats: team picks only; peer ids and CPU flags are the session's, never the panel's.
-	for (int row = 0; row < 5 && row < static_cast<int>(m_HostOptionsDraft.players.size()); ++row) {
+	// Seats: team picks only; the kind column commits in ChangeHostSeatType the moment it moves,
+	// so a row past the roster (the closed-seat placeholder) has nothing to read back.
+	for (int row = 0; row < c_HostSeatRows && row < static_cast<int>(m_HostOptionsDraft.players.size()); ++row) {
 		if (m_HostSeatTeamCombos[row] && m_HostSeatTeamCombos[row]->GetSelectedIndex() >= 0) {
 			m_HostOptionsDraft.players[row].team = static_cast<uint8_t>(m_HostSeatTeamCombos[row]->GetSelectedIndex());
 		}
@@ -1815,8 +1951,17 @@ void MainMenuGUI::RederiveHostOptionsRoster() {
 	request.mode = m_HostOptionsDraft.mode;
 	NetMatchStandardRules rules = static_cast<const NetMatchStandardRules&>(m_HostOptionsDraft);
 	request.standardRules = rules;
+	// The kind column's edits ride the rebuild: the humans and CPUs the draft seats now, not the
+	// mode's own default split, so closing or CPU-filling a seat survives a mode pick.
+	uint32_t humanSeats = 0, cpuSeats = 0;
+	for (const NetMatchPlayerSlot& slot : m_HostOptionsDraft.players) {
+		(slot.cpu ? cpuSeats : humanSeats)++;
+	}
+	request.humans = humanSeats;
+	request.cpuSlots = cpuSeats;
 	NetMatchConfig built;
-	if (NetMatchService::BuildMatchConfig(request, m_HostOptionsDraft.sessionId, built, nullptr)) {
+	std::string error;
+	if (NetMatchService::BuildMatchConfig(request, m_HostOptionsDraft.sessionId, built, &error)) {
 		built.configRevision = m_HostOptionsDraft.configRevision;
 		// Teams the panel already picked on the old roster carry over where the seat survives.
 		for (size_t i = 0; i < built.players.size() && i < m_HostOptionsDraft.players.size(); ++i) {
@@ -1825,6 +1970,9 @@ void MainMenuGUI::RederiveHostOptionsRoster() {
 			}
 		}
 		m_HostOptionsDraft.players = std::move(built.players);
+	} else if (m_HostOptionsStatusLabel) {
+		// H13: the refused mode+roster pair says why on the panel, in the validator's own words.
+		m_HostOptionsStatusLabel->SetText(error);
 	}
 }
 
@@ -1846,7 +1994,14 @@ void MainMenuGUI::ApplyHostOptions() {
 			g_GUISound.BackButtonPressSound()->Play();
 			return;
 		}
-		m_HostOptionsStatusLabel->SetText("Options staged for the next match.");
+		// In an open lobby the submission is a live republish: the peers' adopted configs move to
+		// the next revision, and the status row reads their acks until it lands. In the rematch
+		// (closed) lobby the same draft is the staged next-match config instead.
+		m_HostOptionsAwaitedRevision = m_HostOptionsBaseRevision + 1;
+		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
+		m_HostOptionsStatusLabel->SetText(snapshot.playedAMatch
+		                                      ? "Options staged for the next match."
+		                                      : "Waiting for peers to confirm the new options...");
 	}
 	g_GUISound.ButtonPressSound()->Play();
 }
@@ -1867,10 +2022,148 @@ void MainMenuGUI::SaveHostOptionsDefaults() {
 	g_GUISound.ItemChangeSound()->Play();
 }
 
+void MainMenuGUI::ChangeHostSeatType(int row, int typeIndex) {
+	if (m_HostOptionsReadOnly || row < 0 || row >= c_HostSeatRows || typeIndex < 0 || typeIndex > 2) return;
+	DraftHostOptionsFromControls();
+	auto refuse = [this](const std::string& reason) {
+		m_HostOptionsStatusLabel->SetText(reason);
+		g_GUISound.BackButtonPressSound()->Play();
+	};
+	const size_t slots = m_HostOptionsDraft.players.size();
+	const bool isPlaceholder = row >= static_cast<int>(slots);
+	const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
+	auto memberSeated = [&snapshot](uint8_t peerId) {
+		if (peerId == 0) return false;
+		for (const NetLobbyMember& m : snapshot.members) {
+			if (m.peerId == peerId) return true;
+		}
+		return false;
+	};
+	// The smallest peer id the roster leaves unclaimed; 0 when the peer capacity is fully seated.
+	auto freePeerId = [this]() -> uint8_t {
+		for (uint8_t id = 1; id <= m_HostOptionsDraft.peerCount; ++id) {
+			bool used = false;
+			for (const NetMatchPlayerSlot& s : m_HostOptionsDraft.players) {
+				if (!s.cpu && s.peerId == id) {
+					used = true;
+					break;
+				}
+			}
+			if (!used) return id;
+		}
+		return 0;
+	};
+	// A CPU seat wants a team no human seat holds and no other CPU seat claims.
+	auto freeCpuTeam = [this]() -> int {
+		for (int team = 0; team < 4; ++team) {
+			bool humanTeam = false, cpuTeam = false;
+			for (const NetMatchPlayerSlot& s : m_HostOptionsDraft.players) {
+				if (s.team != team) continue;
+				(s.cpu ? cpuTeam : humanTeam) = true;
+			}
+			if (!humanTeam && !cpuTeam) return team;
+		}
+		return -1;
+	};
+	const auto currentType = [this, isPlaceholder](const NetMatchPlayerSlot& slot) {
+		return isPlaceholder ? 1 : (slot.cpu ? 2 : 0);
+	};
+	if (isPlaceholder && typeIndex == 1) return; // Closing a seat that does not exist is a no-op.
+
+	NetMatchConfig candidate = m_HostOptionsDraft;
+	if (isPlaceholder) {
+		// Opening the closed tail: a new seat joins the roster within the capacity the mode allows.
+		if (typeIndex == 0) {
+			const uint8_t peerId = freePeerId();
+			if (peerId == 0) {
+				return refuse("No free peer seat - raise the Players count first");
+			}
+			NetMatchPlayerSlot seat;
+			seat.peerId = peerId;
+			seat.team = 0;
+			seat.cpu = false;
+			seat.displayName = "Client " + std::to_string(peerId);
+			candidate.players.push_back(seat);
+		} else {
+			const int team = freeCpuTeam();
+			if (team < 0) {
+				return refuse("No free team for a CPU seat");
+			}
+			NetMatchPlayerSlot seat;
+			seat.peerId = 0;
+			seat.team = static_cast<uint8_t>(team);
+			seat.cpu = true;
+			seat.displayName = "CPU";
+			candidate.players.push_back(seat);
+		}
+	} else {
+		const NetMatchPlayerSlot slot = candidate.players[row];
+		const int kind = currentType(slot);
+		if (typeIndex == kind) return;
+		if (!slot.cpu && memberSeated(slot.peerId)) {
+			// The rule the submission path enforces, surfaced at the row: a live holder's seat is
+			// never reallocated by an options edit, whatever kind it becomes.
+			return refuse("A seated player is never dropped by an options edit");
+		}
+		if (!slot.cpu && !m_HostOptionsSetupDraft) {
+			// Every human slot in the adopted config is a seat the open lobby reserved for its peer,
+			// claimed or not; SubmitHostOptions refuses its removal, so the row refuses it here with
+			// the same reason rather than letting Apply surprise the host.
+			const NetMatchConfig adopted = g_NetMatchService.GetLobbyMatchConfig();
+			for (const NetMatchPlayerSlot& kept : adopted.players) {
+				if (!kept.cpu && kept.peerId == slot.peerId) {
+					return refuse("An open lobby's human seat stays open for its peer - close it after the match");
+				}
+			}
+		}
+		if (typeIndex == 1) {
+			candidate.players.erase(candidate.players.begin() + row);
+		} else if (typeIndex == 2) {
+			const int team = freeCpuTeam();
+			if (team < 0) {
+				return refuse("No free team for a CPU seat - every team is taken");
+			}
+			candidate.players[row].peerId = 0;
+			candidate.players[row].cpu = true;
+			candidate.players[row].team = static_cast<uint8_t>(team);
+			candidate.players[row].displayName = "CPU";
+		} else {
+			const uint8_t peerId = freePeerId();
+			if (peerId == 0) {
+				return refuse("No free peer seat - raise the Players count first");
+			}
+			candidate.players[row].peerId = peerId;
+			candidate.players[row].cpu = false;
+			candidate.players[row].team = 0;
+			candidate.players[row].displayName = "Client " + std::to_string(peerId);
+		}
+	}
+	std::string error;
+	if (!NetMatchConfigUtil::ValidateLocalAlpha(candidate, &error)) {
+		// H13: the validator's own words explain the refused roster - "cpu slot shares a human
+		// team" tells the host which pick to move, not just that the pick is wrong.
+		return refuse(error);
+	}
+	m_HostOptionsDraft.players = std::move(candidate.players);
+	m_HostOptionsStatusLabel->SetText("Unsaved changes");
+	g_GUISound.ItemChangeSound()->Play();
+}
+
 void MainMenuGUI::ShowHostSeatDetails(int row) {
 	if (row < 0 || row >= static_cast<int>(m_HostOptionsDraft.players.size())) return;
 	m_HostOptionsSeatRow = row;
-	const NetMatchPlayerSlot& slot = m_HostOptionsDraft.players[row];
+	m_HostSeatDlgModerationRow = -1;
+	RefreshHostSeatDialog();
+	OpenMultiplayerDialog(m_HostSeatDialog, m_HostOptionsPanel);
+	m_MainMenuButtons[MenuButton::HostSeatDialogCloseButton]->SetFocus();
+}
+
+void MainMenuGUI::RefreshHostSeatDialog() {
+	if (m_ActiveDialogBox != m_HostSeatDialog || m_HostOptionsSeatRow < 0 ||
+	    m_HostOptionsSeatRow >= static_cast<int>(m_HostOptionsDraft.players.size())) {
+		return;
+	}
+	const NetMatchPlayerSlot& slot = m_HostOptionsDraft.players[m_HostOptionsSeatRow];
 	m_HostSeatDlgName->SetText("Name: " + slot.displayName);
 	m_HostSeatDlgSeat->SetText(slot.peerId == 0 ? "Seat: peerless" : ("Seat: peer " + std::to_string(slot.peerId)));
 	m_HostSeatDlgTeam->SetText("Team: Team " + std::to_string(slot.team + 1));
@@ -1879,8 +2172,65 @@ void MainMenuGUI::ShowHostSeatDetails(int row) {
 	m_HostSeatDlgStatus->SetText("Tech: " + rules.technologyIntent +
 	                             (rules.technologyModule.empty() ? "" : " - " + rules.technologyModule) +
 	                             "  AI skill " + std::to_string(rules.aiSkill));
-	OpenMultiplayerDialog(m_HostSeatDialog, m_HostOptionsPanel);
-	m_MainMenuButtons[MenuButton::HostSeatDialogCloseButton]->SetFocus();
+
+	// H04-H08: the host's moderation view holds the reclaim clock and the applicant list; the
+	// dialog maps its roster row to that view by the lockstep peer id, never the list index.
+	m_ModerationUx.Refresh(g_NetMatchService.GetModerationSeats());
+	m_HostSeatDlgModerationRow = -1;
+	if (slot.peerId != 0) {
+		for (size_t i = 0; i < m_ModerationUx.RowCount(); ++i) {
+			if (m_ModerationUx.GetRow(i).lockstepPeerId == slot.peerId) {
+				m_HostSeatDlgModerationRow = static_cast<int>(i);
+				break;
+			}
+		}
+	}
+	const bool host = !m_HostOptionsReadOnly && !m_HostOptionsSetupDraft && g_NetMatchService.IsHost();
+	const NetModerationUx::Row* mrow = m_HostSeatDlgModerationRow >= 0 ? &m_ModerationUx.GetRow(m_HostSeatDlgModerationRow) : nullptr;
+	if (mrow && (mrow->view.dropped || mrow->view.heldForReclaim || mrow->view.reclaiming)) {
+		// H08's countdown is the snapshot's own figure: frames the round still holds, in seconds.
+		const uint64_t seconds = NetSeatPresence::HoldSeconds(mrow->view.holdFramesRemaining);
+		m_HostSeatDlgReclaim->SetText(mrow->view.holdFramesRemaining > 0
+		                                  ? "Reclaim: seat held " + std::to_string(seconds) + "s for the original holder"
+		                                  : "Reclaim: the hold has run out");
+	} else {
+		m_HostSeatDlgReclaim->SetText(mrow ? "Reclaim: seat in use" : "Reclaim: --");
+	}
+	if (mrow) {
+		m_HostSeatDlgApplicants->SetText("Applicants: " + std::to_string(mrow->applicants));
+		m_HostSeatDlgApplicant->SetText(mrow->applicantText);
+		m_HostSeatDlgApplicant->SetEnabled(host && mrow->applicants > 1);
+		HostOptSetEditable(m_HostSeatDlgWait, host && NetModerationUx::Available(*mrow, NetModerationAction::Wait));
+		HostOptSetEditable(m_HostSeatDlgApprove, host && NetModerationUx::Available(*mrow, NetModerationAction::Substitute));
+		HostOptSetEditable(m_HostSeatDlgCancel, host && NetModerationUx::Available(*mrow, NetModerationAction::Cancel));
+	} else {
+		m_HostSeatDlgApplicants->SetText("Applicants: none");
+		m_HostSeatDlgApplicant->SetText("No applicant");
+		m_HostSeatDlgApplicant->SetEnabled(false);
+		HostOptSetEditable(m_HostSeatDlgWait, false);
+		HostOptSetEditable(m_HostSeatDlgApprove, false);
+		HostOptSetEditable(m_HostSeatDlgCancel, false);
+	}
+	// H09/H10: Kick and Ban are host powers over a peer's seat; the buttons stay pressable so the
+	// click can say why nothing happened when the action cannot run.
+	const bool humanSeat = host && !slot.cpu && slot.peerId != 0;
+	m_HostSeatDlgKick->SetEnabled(humanSeat);
+	m_HostSeatDlgBan->SetEnabled(humanSeat);
+	if (m_HostSeatDlgActionHint->GetText().empty() || !humanSeat) {
+		m_HostSeatDlgActionHint->SetText(humanSeat ? "Seat actions apply to this player."
+		                                         : (slot.cpu ? "CPU seats are the host's to retype, not to moderate."
+		                                            : "Moderation is the host's; clients watch."));
+	}
+}
+
+void MainMenuGUI::ShowHostBannedDialog() {
+	// H11: the list is the session ban store's. This branch has no store yet, so the dialog opens
+	// on its empty state and the remove button stays off rather than pretending to act on one.
+	m_HostBannedListLabel->SetText("(no banned players this session)");
+	m_HostBannedStatusLabel->SetText("The session ban list lands with the moderation store.");
+	m_MainMenuButtons[MenuButton::HostBannedRemoveButton]->SetEnabled(false);
+	OpenMultiplayerDialog(m_HostBannedDialog, m_HostOptionsPanel);
+	m_MainMenuButtons[MenuButton::HostBannedCloseButton]->SetFocus();
 }
 
 void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl) {
@@ -1893,15 +2243,60 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 			return;
 		}
 	}
-	for (int row = 0; row < 5; ++row) {
+	for (int row = 0; row < c_HostSeatRows; ++row) {
 		if (guiEventControl == m_HostSeatDetailsButtons[row]) {
 			ShowHostSeatDetails(row);
+			return;
+		}
+		if (guiEventControl == m_HostSeatTypeCombos[row]) {
+			ChangeHostSeatType(row, m_HostSeatTypeCombos[row]->GetSelectedIndex());
 			return;
 		}
 		if (guiEventControl == m_HostSeatTeamCombos[row] && row < static_cast<int>(m_HostOptionsDraft.players.size())) {
 			m_HostOptionsDraft.players[row].team = static_cast<uint8_t>(m_HostSeatTeamCombos[row]->GetSelectedIndex());
 			return;
 		}
+	}
+	// The seat dialog's moderation row: applicant cycling and the three live actions all go through
+	// the shared model, so a click here is the same selection the seats panel would send.
+	if (guiEventControl == m_HostSeatDlgApplicant) {
+		if (m_HostSeatDlgModerationRow >= 0) {
+			m_ModerationUx.CycleApplicant(m_HostSeatDlgModerationRow);
+		}
+		return;
+	}
+	if (guiEventControl == m_HostSeatDlgWait || guiEventControl == m_HostSeatDlgApprove || guiEventControl == m_HostSeatDlgCancel) {
+		if (m_HostSeatDlgModerationRow >= 0) {
+			const NetModerationAction action = guiEventControl == m_HostSeatDlgWait    ? NetModerationAction::Wait
+			                                   : guiEventControl == m_HostSeatDlgApprove ? NetModerationAction::Substitute
+			                                                                             : NetModerationAction::Cancel;
+			m_ModerationUx.Act(m_HostSeatDlgModerationRow, action);
+			m_HostSeatDlgActionHint->SetText(m_ModerationUx.GetStatusText());
+		}
+		return;
+	}
+	if (guiEventControl == m_HostSeatDlgKick || guiEventControl == m_HostSeatDlgBan) {
+		// L20 contract: NetMatchService::RemoveParticipant / BanSession return Queued while the
+		// lobby is Starting and drain through the host pump; until that store lands the click names
+		// the seam instead of faking the action.
+		m_HostSeatDlgActionHint->SetText(guiEventControl == m_HostSeatDlgKick
+		                                     ? "Kick needs the session store (lands with the moderation seam)."
+		                                     : "Ban needs the session store (lands with the moderation seam).");
+		return;
+	}
+	if (guiEventControl == m_MainMenuButtons[MenuButton::HostSessionBannedButton]) {
+		ShowHostBannedDialog();
+		return;
+	}
+	if (guiEventControl == m_MainMenuButtons[MenuButton::HostBannedCloseButton]) {
+		CloseMultiplayerDialog();
+		return;
+	}
+	if (guiEventControl == m_MainMenuButtons[MenuButton::HostBannedRemoveButton]) {
+		// L20 contract: UnbanParticipant drains through the same host pump; nothing to remove while
+		// the store is absent.
+		m_HostBannedStatusLabel->SetText("Unban lands with the moderation store.");
+		return;
 	}
 	if (guiEventControl == m_MainMenuButtons[MenuButton::HostOptionsBackButton]) {
 		// Back is local navigation only: the session is never touched by leaving the panel.
@@ -1920,6 +2315,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 	}
 	if (guiEventControl == m_MainMenuButtons[MenuButton::HostSeatDialogCloseButton]) {
 		m_HostOptionsSeatRow = -1;
+		m_HostSeatDlgModerationRow = -1;
 		CloseMultiplayerDialog();
 		return;
 	}

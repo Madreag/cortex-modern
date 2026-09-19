@@ -195,6 +195,9 @@ namespace RTE {
 			HostRepairNowButton,
 			HostFilesSaveDiagButton,
 			HostSessionEndButton,
+			HostSessionBannedButton,
+			HostBannedRemoveButton,
+			HostBannedCloseButton,
 			ButtonCount
 		};
 
@@ -319,11 +322,13 @@ namespace RTE {
 		GUILabel* m_HostOptionsStatusLabel = nullptr;
 		GUIComboBox* m_HostSeatPlayersCombo = nullptr;
 		GUILabel* m_HostSeatCapacityHint = nullptr;
-		std::array<GUILabel*, 5> m_HostSeatNameLabels{};
-		std::array<GUIComboBox*, 5> m_HostSeatTeamCombos{};
-		std::array<GUILabel*, 5> m_HostSeatDelayLabels{};
-		std::array<GUILabel*, 5> m_HostSeatStateLabels{};
-		std::array<GUIButton*, 5> m_HostSeatDetailsButtons{};
+		static constexpr int c_HostSeatRows = 7; //!< c_MaxPlayers: four human seats plus three CPUs.
+		std::array<GUILabel*, c_HostSeatRows> m_HostSeatNameLabels{};
+		std::array<GUIComboBox*, c_HostSeatRows> m_HostSeatTypeCombos{}; //!< H03: Open / Closed / CPU per seat.
+		std::array<GUIComboBox*, c_HostSeatRows> m_HostSeatTeamCombos{};
+		std::array<GUILabel*, c_HostSeatRows> m_HostSeatDelayLabels{};
+		std::array<GUILabel*, c_HostSeatRows> m_HostSeatStateLabels{};
+		std::array<GUIButton*, c_HostSeatRows> m_HostSeatDetailsButtons{};
 		GUIComboBox* m_HostRulesActivityCombo = nullptr;
 		GUIComboBox* m_HostRulesSceneCombo = nullptr;
 		GUIComboBox* m_HostRulesModeCombo = nullptr;
@@ -358,18 +363,36 @@ namespace RTE {
 		GUILabel* m_HostSessHostingLabel = nullptr;
 		GUILabel* m_HostSessSeatsLabel = nullptr;
 		GUIComboBox* m_HostSessIdleCombo = nullptr;
+		GUILabel* m_HostSessIdleStateLabel = nullptr; //!< H31: the idle window and why it is running.
+		GUILabel* m_HostSessBannedLabel = nullptr;    //!< H11: the host's ban count beside its button.
 		GUICollectionBox* m_HostSeatDialog = nullptr;
 		GUILabel* m_HostSeatDlgName = nullptr;
 		GUILabel* m_HostSeatDlgSeat = nullptr;
 		GUILabel* m_HostSeatDlgTeam = nullptr;
 		GUILabel* m_HostSeatDlgState = nullptr;
+		GUILabel* m_HostSeatDlgReclaim = nullptr;    //!< H08: hold/reclaim seconds from the seat snapshot.
+		GUILabel* m_HostSeatDlgApplicants = nullptr;
+		GUIButton* m_HostSeatDlgApplicant = nullptr; //!< H04: cycles the seat's bounded applicant list.
+		GUIButton* m_HostSeatDlgWait = nullptr;      //!< H05.
+		GUIButton* m_HostSeatDlgApprove = nullptr;   //!< H06.
+		GUIButton* m_HostSeatDlgCancel = nullptr;    //!< H07.
+		GUIButton* m_HostSeatDlgKick = nullptr;      //!< H09 (L20 contract call site).
+		GUIButton* m_HostSeatDlgBan = nullptr;       //!< H10 (L20 contract call site).
+		GUILabel* m_HostSeatDlgActionHint = nullptr;
 		GUILabel* m_HostSeatDlgStatus = nullptr;
+		GUICollectionBox* m_HostBannedDialog = nullptr; //!< H11's session ban list.
+		GUILabel* m_HostBannedListLabel = nullptr;
+		GUILabel* m_HostBannedStatusLabel = nullptr;
 		NetMatchConfig m_HostOptionsDraft;              //!< The complete config the panel edits.
 		uint64_t m_HostOptionsBaseRevision = 0;         //!< The adopted revision the draft was seeded from.
 		bool m_HostOptionsSetupDraft = false;           //!< True while the draft feeds a new lobby's request.
 		bool m_HostOptionsReadOnly = false;             //!< A client reads the adopted config; it cannot edit it.
 		std::optional<NetMatchConfig> m_HostSetupOptions; //!< The setup draft Apply accepted; the next request carries it.
+		uint64_t m_HostOptionsAwaitedRevision = 0;        //!< The revision a live Apply waits on the adopted config to reach.
+		uint64_t m_HostLastSaveScanMs = 0;                //!< H28's throttle: when the autosave directory was last re-read.
+		std::string m_HostLastSaveText;                   //!< Its latest .ccsave observation, or empty for none.
 		int m_HostOptionsSeatRow = -1;                  //!< The seat row the details dialog describes.
+		int m_HostSeatDlgModerationRow = -1;            //!< The dialog's row in m_ModerationUx, or -1 when the seat has none.
 		std::vector<std::string> m_HostOptionsScenes;   //!< Scene presets the Site combo offers.
 		std::vector<std::string> m_HostOptionsTechModules; //!< Tech combo's resolved module names (-All-/-Random- first).
 		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
@@ -538,6 +561,12 @@ namespace RTE {
 		void SaveHostOptionsDefaults();
 		/// The seat details dialog's contents for one roster row.
 		void ShowHostSeatDetails(int row);
+		/// Re-fills the open seat dialog's live rows: hold seconds, applicants, action availability.
+		void RefreshHostSeatDialog();
+		/// H03: applies one row's Open/Closed/CPU pick to the draft roster, refusing the illegal ones.
+		void ChangeHostSeatType(int row, int typeIndex);
+		/// H11: opens the banned-players list dialog.
+		void ShowHostBannedDialog();
 		/// The panel's own event channel; only reached while the sub-screen is up.
 		void HandleHostOptionsInputEvents(const GUIControl* guiEventControl);
 		/// Sizes the activity combo to its longest row plus the list pad and scrollbar, clipped to the panel's right pad.
