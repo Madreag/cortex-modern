@@ -1,7 +1,10 @@
 #include "ActivityMan.h"
+#include "AutosaveStore.h"
+#include "GameVersion.h"
 #include "GUIInput.h"
 #include "GUISound.h"
 #include "CheckpointArchive.h"
+#include "NetIdentity.h"
 #include "LuaMan.h"
 #include "Base64/base64.h"
 
@@ -281,17 +284,21 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName, SaveCompression c
 }
 
 bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick) {
-	if (matchId.empty() || matchId.find_first_not_of("0123456789abcdef-") != std::string::npos || tick == 0) return false;
+	return SaveAutosaveSnapshot(matchId, tick, AutosaveIdentity{});
+}
+
+bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity) {
+	if (!AutosaveStore::ValidMatchId(matchId) || tick == 0) return false;
 	std::erase_if(m_AutosaveTasks, [](const auto& task) {
 		return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
 	});
 	const std::string fileName = matchId + "-" + std::to_string(tick);
-	const std::string path = System::GetWorkingDirectory() + "Autosaves/" + fileName + ".ccsave";
+	const std::string path = AutosaveStore::ArchivePath(matchId, tick).string();
 	std::shared_future<bool> task;
 	size_t bytes = 0;
 	const auto captureStart = std::chrono::steady_clock::now();
 	try {
-		if (!QueueSaveSnapshot(fileName, path, SaveCompression::Fast, task, matchId, tick, &bytes)) {
+		if (!QueueSaveSnapshot(fileName, path, SaveCompression::Fast, task, matchId, tick, &bytes, &identity)) {
 			std::cout << "[autosave] failed tick=" << tick << " reason=capture refused" << std::endl;
 			return false;
 		}
@@ -310,7 +317,8 @@ void ActivityMan::WaitForAutosaveTasks() const {
 }
 
 bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::string& path, SaveCompression compression,
-                                  std::shared_future<bool>& task, const std::string& matchId, uint64_t tick, size_t* capturedBytes) {
+                                  std::shared_future<bool>& task, const std::string& matchId, uint64_t tick, size_t* capturedBytes,
+                                  const AutosaveIdentity* identity) {
 	const bool automatic = !matchId.empty();
 	std::promise<bool> refused;
 	refused.set_value(false);
@@ -489,7 +497,31 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 	auto sceneLayerInfos = std::make_shared<std::vector<SceneLayerInfo>>(automatic ? std::move(capturedBitmaps) : copyBitmaps.get());
 	const std::filesystem::path savePath = path;
 	const int zipLevel = ZipLevelFor(compression);
-	auto saveWriterData = [fileName, savePath, sceneLayerInfos, indexWriter, writer, zipLevel, automatic, matchId]() {
+	AutosaveDescriptor descriptor;
+	if (automatic) {
+		descriptor.schema = AutosaveStore::c_DescriptorSchema;
+		descriptor.matchId = matchId;
+		descriptor.savedTick = tick;
+		descriptor.simTimeTicks = g_TimerMan.GetSimTimeTicks();
+		descriptor.gameVersion = c_VersionString;
+		descriptor.platform = AutosaveStore::PlatformName();
+		descriptor.activityPreset = activity->GetPresetName();
+		descriptor.scenePreset = scene->GetPresetName();
+		if (identity) {
+			descriptor.sessionId = identity->sessionId;
+			descriptor.roundId = identity->roundId;
+			descriptor.intervalSeconds = identity->intervalSeconds;
+			descriptor.buildId = identity->buildId;
+			descriptor.deterministicConfigHash = identity->deterministicConfigHash;
+			descriptor.moduleManifestHash = identity->moduleManifestHash;
+			descriptor.sessionIdentityHash = identity->sessionIdentityHash;
+		}
+	}
+	const uint64_t pinnedTick = identity ? identity->pinnedTick : AutosaveStore::c_NoPinnedTick;
+	// The world text is hashed on the archive thread, so the capture never pays for the digest.
+	std::string checkpointWorld = automatic ? worldStructure : std::string();
+	auto saveWriterData = [fileName, savePath, sceneLayerInfos, indexWriter, writer, zipLevel, automatic, matchId,
+	                       descriptor, pinnedTick, checkpointWorld = std::move(checkpointWorld)]() {
 		if (automatic) {
 			std::filesystem::create_directories(savePath.parent_path());
 		}
@@ -529,6 +561,12 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 		const std::string_view mainText = static_cast<std::stringstream*>(writer->GetStream())->view();
 		const std::string_view indexText = static_cast<std::stringstream*>(indexWriter->GetStream())->view();
 		writeEntry("Index.ini", indexText.data(), indexText.size(), HACK_MZ_COMPRESS_METHOD_STORE);
+		if (automatic) {
+			AutosaveDescriptor stamped = descriptor;
+			stamped.worldStructureHash = NetIdentity::HashHex(NetIdentity::HashCanonicalText("autosave-world", {{"structure", checkpointWorld}}));
+			const std::string descriptorText = AutosaveStore::WriteDescriptor(stamped);
+			writeEntry(AutosaveStore::c_DescriptorEntry, descriptorText.data(), descriptorText.size(), HACK_MZ_COMPRESS_METHOD_STORE);
+		}
 		writeEntry("Save.ini", mainText.data(), mainText.size(), HACK_MZ_COMPRESS_METHOD_DEFLATE);
 
 		std::vector<std::vector<unsigned char>> pngData(sceneLayerInfos->size());
@@ -559,19 +597,17 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 			std::filesystem::rename(archive.path, savePath);
 		}
 		if (automatic) {
-			std::vector<std::pair<uint64_t, std::filesystem::path>> saves;
-			const std::string prefix = matchId + "-";
-			for (const auto& entry: std::filesystem::directory_iterator(savePath.parent_path())) {
-				if (entry.is_symlink() || !entry.is_regular_file()) continue;
-				const std::string name = entry.path().filename().string();
-				if (!name.starts_with(prefix) || !name.ends_with(".ccsave")) continue;
-				const std::string_view number(name.data() + prefix.size(), name.size() - prefix.size() - 7);
-				uint64_t savedTick = 0;
-				const auto parsed = std::from_chars(number.data(), number.data() + number.size(), savedTick);
-				if (parsed.ec == std::errc{} && parsed.ptr == number.data() + number.size()) saves.emplace_back(savedTick, entry.path());
+			// A checkpoint nobody can restore is not a checkpoint: it is proven readable before it counts.
+			AutosaveDescriptor published;
+			std::string refusal;
+			if (!AutosaveStore::Validate(savePath, published, &refusal)) {
+				std::error_code ignored;
+				std::filesystem::remove(savePath, ignored);
+				throw std::runtime_error("the published checkpoint is not restorable: " + refusal);
 			}
-			std::sort(saves.begin(), saves.end());
-			for (size_t index = 3; index < saves.size(); ++index) std::filesystem::remove(saves[index - 3].second);
+			const size_t removed = AutosaveStore::ApplyRetention(savePath.parent_path(), matchId, pinnedTick);
+			std::cout << std::format("[autosave] retained tick={} keep={} pinned={} removed={}\n",
+			                         published.savedTick, AutosaveStore::c_RetainedAutosaves, pinnedTick, removed) << std::flush;
 		}
 	};
 
@@ -664,11 +700,16 @@ void ActivityMan::ShowSaveRefusalToPlayer(const SaveRefusalRecord& record, bool 
 }
 
 bool ActivityMan::ReadSavedGame(const std::string& fileName, PendingCheckpoint& out) {
+	const std::string filePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName;
+	return ReadSavedGameArchive(filePath + ".ccsave", fileName, out);
+}
+
+bool ActivityMan::ReadSavedGameArchive(const std::string& archivePath, const std::string& fileName, PendingCheckpoint& out) {
 	WaitForSaveGameTask();
 	const std::string modulePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName);
 	const std::string filePath = modulePath + "/" + fileName;
 	try {
-		SaveGameArchive archive(filePath + ".ccsave");
+		SaveGameArchive archive(archivePath);
 		std::string text;
 		archive.ReadEntry("Save.ini", text);
 		if (text.empty() || text.find('\0') != std::string::npos) throw std::runtime_error("empty or invalid Save.ini");
@@ -1153,6 +1194,27 @@ void ActivityMan::RemoveSavedGame(const std::string& fileName) const {
 }
 
 bool ActivityMan::LoadGameToRestart(const std::string& fileName) {
+	const std::string filePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName;
+	return LoadArchiveToRestart(filePath + ".ccsave", fileName);
+}
+
+bool ActivityMan::LoadAutosaveToRestart(const std::string& matchId, uint64_t tick) {
+	WaitForAutosaveTasks();
+	std::string refusal;
+	const std::optional<AutosaveDescriptor> checkpoint = AutosaveStore::Find(matchId, tick, &refusal);
+	if (!checkpoint) {
+		const std::string message = "Could not restore the checkpoint at tick " + std::to_string(tick) + ": " + refusal;
+		g_ConsoleMan.PrintString("ERROR: " + message);
+		std::cout << "[autosave] restore refused match=" << matchId << " tick=" << tick << " reason=" << refusal << std::endl;
+		return false;
+	}
+	if (!LoadArchiveToRestart(checkpoint->path.string(), matchId + "-" + std::to_string(tick))) return false;
+	std::cout << std::format("[autosave] restored match={} tick={} round={} world_hash={}\n",
+	                         checkpoint->matchId, checkpoint->savedTick, checkpoint->roundId, checkpoint->worldStructureHash) << std::flush;
+	return true;
+}
+
+bool ActivityMan::LoadArchiveToRestart(const std::string& archivePath, const std::string& fileName) {
 	AudioMan::RestorePlayPhaseScope playPhase("staging");
 	MovableMan::ConstructionRegistryScope registryScope;
 	MovableObject::ScriptLoadDeferralScope scriptScope;
@@ -1168,7 +1230,7 @@ bool ActivityMan::LoadGameToRestart(const std::string& fileName) {
 	const int luaStateCursor = g_LuaMan.GetScriptStateCursor();
 	const bool wasRestoring = g_MovableMan.IsRestoringSnapshot();
 	g_MovableMan.SetRestoringSnapshot(true);
-	const bool read = ReadSavedGame(fileName, candidate);
+	const bool read = ReadSavedGameArchive(archivePath, fileName, candidate);
 	g_MovableMan.SetRestoringSnapshot(wasRestoring);
 	if (!read) {
 		MovableObject::PinUniqueIDCounter(uidCounter);
