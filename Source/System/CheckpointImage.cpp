@@ -26,6 +26,7 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <iomanip>
 #include <iterator>
 #include <map>
 #include <stdexcept>
@@ -95,6 +96,8 @@ void CheckpointGraphIndex::BeginWalk(bool full) {
 	m_RootsRewritten = 0;
 	m_Root = 0;
 	m_WalkNoteUs = 0;
+	m_WalkStates.clear();
+	m_WalkParts.clear();
 }
 
 void CheckpointGraphIndex::BeginRoot(uint64_t root) {
@@ -177,6 +180,14 @@ void CheckpointGraphIndex::NoteRootReuse(size_t reused, size_t rewritten) {
 	m_FullWalk = m_FullWalk && m_RootsReused == 0;
 }
 
+void CheckpointGraphIndex::NoteWalkPart(const void* state, std::string part, uint64_t root, int64_t elapsedUs, bool reused, std::string unwatched) {
+	std::lock_guard lock(m_Mutex);
+	const auto found = std::find(m_WalkStates.begin(), m_WalkStates.end(), state);
+	const size_t index = found - m_WalkStates.begin();
+	if (found == m_WalkStates.end()) m_WalkStates.push_back(state);
+	m_WalkParts.push_back({index, std::move(part), root, elapsedUs, reused, std::move(unwatched)});
+}
+
 std::unordered_set<uint64_t> CheckpointGraphIndex::DirtyRoots() const {
 	std::lock_guard lock(m_Mutex);
 	return m_DirtyRoots;
@@ -228,6 +239,7 @@ GraphDirt CheckpointGraphIndex::Sample() const {
 	dirt.noteUs = m_NoteUs;
 	dirt.rootsReused = m_RootsReused;
 	dirt.rootsRewritten = m_RootsRewritten;
+	dirt.walkParts = m_WalkParts;
 	return dirt;
 }
 
@@ -342,6 +354,14 @@ void CheckpointCow::PublishLog(uint64_t tick) const {
 	std::cout << std::format("[autosave] tick={} graph_walk_us={} graph_text_us={} roots_reused={} roots_rewritten={} graph_state_serial={} graph_values={} graph_dirty_values={} graph_uncacheable_roots={}\n",
 	                         tick, records[2], graphTextUs, rootsReused, rootsRewritten, graphSerial,
 	                         graph.values, before.dirtyValues, graph.uncacheableRoots) << std::flush;
+	if (!luaReused) {
+		for (const auto& part: graph.walkParts) {
+			std::cout << std::format("[autosave] tick={} graph_vm={} graph_part={} graph_root={} graph_part_us={} graph_chunk_reused={} graph_unwatched=",
+			                         tick, part.state, part.part, part.root, part.elapsedUs, part.reused ? 1 : 0)
+			          << std::quoted(part.unwatched) << '\n';
+		}
+		std::cout << std::flush;
+	}
 }
 
 void CheckpointCow::WriteMetricsJson(const std::string& path) const {

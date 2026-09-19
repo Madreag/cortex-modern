@@ -1463,7 +1463,7 @@ local function visitFunction(value, ctx)
 			if cellId < 1 or cellId > ctx.base then problem(ctx, "an upvalue cell with no birth number") return "z;" end
 			ctx.cells[cellKey] = cellId
 			-- A store into this cell reports nothing, so the chunk that carries it is rewritten every capture.
-			ctx.rootUnwatched = true
+			ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "function") .. ".upvalue[" .. name .. "]")
 			local open = ctx.openUpvalues[cellKey]
 			if open then
 				noteNode(ctx, cellId, "C" .. outputNumber(cellId) .. ";O" .. visit(open.thread, ctx) .. "n" .. outputNumber(open.slot) .. ";")
@@ -1526,7 +1526,7 @@ local function visitThread(value, ctx)
 		else entries[#entries + 1] = "V" .. visitAt(desc.slots[i], ctx, (ctx.location or "coroutine") .. ".slot[" .. i .. "]") end
 	end
 	-- A coroutine's stack slots move with no write barrier behind them, so this chunk is never reused.
-	ctx.rootUnwatched = true
+	ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "coroutine") .. ".stack")
 	noteNode(ctx, id, "H" .. outputNumber(id) .. ";" .. letter .. ";" .. outputNumber(desc.first) .. ";" .. outputNumber(desc.base) .. ";" .. outputNumber(desc.top) .. ";" .. concatenate(entries))
 	return reference(ctx, id)
 end
@@ -1552,12 +1552,19 @@ local graphCache = nil
 -- roots: { [uidString] = instanceTable }. Returns the text and the list of problems (any problem means the capture is unfaithful).
 local serializeGraph
 serializeGraph = function(roots, rebuildEverything)
-	-- The capture opens before it allocates anything of its own, so its scratch never moves the counter.
+	local phaseStart = _ScriptGraphClock()
 	if _ScriptGraphBeginCapture then _ScriptGraphBeginCapture() end
+	local function phase(name, uid, reused, unwatched)
+		local now = _ScriptGraphClock()
+		_ScriptGraphWalkPart(name, uid or "0", now - phaseStart, reused or false, unwatched or "")
+		phaseStart = _ScriptGraphClock()
+	end
 	-- Every table alive now was born at or below this; nodes without a birth number are named above it.
 	local base = _ScriptGraphStateSerial()
 	local baseline = _ScriptGraphBaseline or { globals = {}, loaded = {} }
+	phase("setup")
 	local paths, engine = buildPaths(baseline)
+	phase("paths")
 	local ctx = { ids = {}, cells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
 	local rootIds = {}
 	local uids = {}
@@ -1569,6 +1576,7 @@ serializeGraph = function(roots, rebuildEverything)
 	-- A table no walk recorded is in no chunk, so a write to one stales nothing and does not count here.
 	local cache = (dirt and dirt.walked and graphCache and graphCache.base and graphCache.base <= base) and graphCache or nil
 	local reused, rewritten, uncacheable = 0, 0, 0
+	phase("prepare")
 	for _, uid in ipairs(uids) do
 		local key = tostring(tonumber(uid) or uid)
 		local kept = cache and not (dirt.roots[uid] or dirt.roots[key]) and cache.chunks[uid] or nil
@@ -1583,6 +1591,7 @@ serializeGraph = function(roots, rebuildEverything)
 			ctx.cachedChunks[uid] = kept
 			rootIds[#rootIds + 1] = kept.token
 			reused = reused + 1
+			phase("object", uid, true)
 		else
 			if _ScriptGraphBeginRoot then _ScriptGraphBeginRoot(uid) end
 			local firstNode = #ctx.order + 1
@@ -1609,9 +1618,11 @@ serializeGraph = function(roots, rebuildEverything)
 			rootIds[#rootIds + 1] = token
 			rewritten = rewritten + 1
 			if ctx.rootUnwatched then uncacheable = uncacheable + 1 end
+			phase("object", uid, false, ctx.rootUnwatched)
 		end
 	end
 	if _ScriptGraphBeginRoot then _ScriptGraphBeginRoot("0") end
+	ctx.rootUnwatched = false
 	local tailFirst = #ctx.order + 1
 	local globals = {}
 	local names = {}
@@ -1636,6 +1647,7 @@ serializeGraph = function(roots, rebuildEverything)
 			loaded[#loaded + 1] = stringToken(name) .. visitAt(package.loaded[name], ctx, "package.loaded[" .. name .. "]")
 		end
 	end
+	phase("globals", "0", false, ctx.rootUnwatched)
 	local enginePatches = {}
 	for _, saved in ipairs(baseline.tables or {}) do
 		local keys, changes = {}, {}
@@ -1660,7 +1672,8 @@ serializeGraph = function(roots, rebuildEverything)
 		end
 	end
 )lua"
-    R"lua(	for _, ref in ipairs(ctx.boxRefs) do
+    R"lua(	phase("engine", "0", false, ctx.rootUnwatched)
+	for _, ref in ipairs(ctx.boxRefs) do
 		local link = ctx.areaBoxes[ref.address]
 		if not link then
 			local owner, index = _ScriptGraphSceneBoxOwner(ref.value)
@@ -1673,11 +1686,14 @@ serializeGraph = function(roots, rebuildEverything)
 			noteNode(ctx, ref.id, "U" .. outputNumber(ref.id) .. ";z;I" .. ref.instance)
 		end
 	end
+	phase("boxes")
 	local rng = _ScriptGraphRandomState and stringToken(_ScriptGraphRandomState()) or "z;"
+	phase("rng")
 	local gibReferences = {}
 	for _, link in ipairs(_ScriptGraphGibReferences(ctx.ownedPointers)) do
 		gibReferences[#gibReferences + 1] = "n" .. outputNumber(link.owner) .. ";n" .. outputNumber(link.index) .. ";" .. visit(link.target, ctx)
 	end
+	phase("gibs")
 	-- A node named by a chunk but defined by none means the root that defined it stopped reaching it.
 	-- The capture then runs again with every root rewritten, so the first root in uid order that still
 	-- reaches the node defines it. One repeat is enough: a full walk defines everything it names.
@@ -1706,8 +1722,12 @@ serializeGraph = function(roots, rebuildEverything)
 	if _ScriptGraphNoteRootReuse then _ScriptGraphNoteRootReuse(reused, rewritten) end
 	-- A number is never handed out twice, so a label an earlier capture left names the same object.
 	for value, id in pairs(ctx.ids) do keyLabels[value], lastObjects[id] = id, value end
+	phase("assembly")
+	local result = concatenate(out)
+	phase("concat")
 	if _ScriptGraphEndCapture then _ScriptGraphEndCapture() end
-	return concatenate(out), ctx.problems
+	phase("finish")
+	return result, ctx.problems
 end
 
 function Graph.serialize(roots)
@@ -3634,6 +3654,18 @@ static int ScriptGraphDirtyRoots(lua_State* L) {
 	return 1;
 }
 
+static int ScriptGraphClock(lua_State* L) {
+	lua_pushnumber(L, static_cast<lua_Number>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()));
+	return 1;
+}
+
+static int ScriptGraphWalkPart(lua_State* L) {
+	CheckpointGraphIndex::Get().NoteWalkPart(L, luaL_checkstring(L, 1),
+	    static_cast<uint64_t>(std::strtoull(luaL_optstring(L, 2, "0"), nullptr, 10)),
+	    static_cast<int64_t>(luaL_checknumber(L, 3)), lua_toboolean(L, 4) != 0, luaL_optstring(L, 5, ""));
+	return 0;
+}
+
 static int ScriptGraphNoteRootReuse(lua_State* L) {
 	CheckpointGraphIndex::Get().NoteRootReuse(static_cast<size_t>(luaL_checknumber(L, 1)),
 	                                          static_cast<size_t>(luaL_checknumber(L, 2)));
@@ -5366,6 +5398,10 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_setglobal(m_State, "_ScriptGraphDirtyRoots");
 		lua_pushcfunction(m_State, ScriptGraphNoteRootReuse);
 		lua_setglobal(m_State, "_ScriptGraphNoteRootReuse");
+		lua_pushcfunction(m_State, ScriptGraphClock);
+		lua_setglobal(m_State, "_ScriptGraphClock");
+		lua_pushcfunction(m_State, ScriptGraphWalkPart);
+		lua_setglobal(m_State, "_ScriptGraphWalkPart");
 		lua_pushcfunction(m_State, ScriptGraphValueSerial);
 		lua_setglobal(m_State, "_ScriptGraphValueSerial");
 		lua_pushcfunction(m_State, ScriptGraphSetValueSerial);

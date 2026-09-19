@@ -247,6 +247,27 @@ def score_root_reuse(stdout: str) -> dict:
     return {"pass": not failures, "failures": failures, "rows": rows}
 
 
+def score_walk_attribution(stdout: str) -> dict:
+    """Every walked capture names its root and non-root costs."""
+    parts = re.findall(
+        r"^\[autosave\] tick=(\d+) graph_vm=(\d+) graph_part=(\w+) graph_root=(\d+) "
+        r"graph_part_us=(\d+) graph_chunk_reused=([01]) graph_unwatched=(.*)$", stdout, re.MULTILINE)
+    walked = {int(tick) for tick, elapsed in re.findall(
+        r"\[autosave\] tick=(\d+) graph_walk_us=(\d+)", stdout) if int(elapsed) > 0}
+    failures = []
+    for tick in sorted(walked):
+        rows = [row for row in parts if int(row[0]) == tick]
+        names = {row[2] for row in rows}
+        missing = {"setup", "paths", "globals", "engine", "rng", "assembly", "concat", "finish"} - names
+        if missing:
+            failures.append(f"tick {tick} missing walk parts {sorted(missing)}; actual {sorted(names)}")
+        if "object" not in names:
+            failures.append(f"tick {tick} has no per-object walk attribution")
+    if not walked:
+        failures.append("no walked capture")
+    return {"pass": not failures, "failures": failures, "rows": parts}
+
+
 def score_hash_identity(off_trace: Path, on_trace: Path, ticks: int, on_stdout: str = "") -> dict:
     left = json.loads(off_trace.read_text(encoding="utf-8-sig"))["runs"][0].get("tick_hashes", [])
     right = json.loads(on_trace.read_text(encoding="utf-8-sig"))["runs"][0].get("tick_hashes", [])
@@ -483,6 +504,11 @@ def main() -> int:
     result["root_reuse"] = reuse
     if not reuse["pass"]:
         failures.extend(f"root_reuse: {item}" for item in reuse["failures"])
+
+    attribution = score_walk_attribution(skip["stdout"])
+    result["walk_attribution"] = attribution
+    if not attribution["pass"]:
+        failures.extend(f"walk_attribution: {item}" for item in attribution["failures"])
 
     # Restore and recapture: the save a second process loads must write the same archive back.
     saved = newest_autosave(skip["cwd"])
