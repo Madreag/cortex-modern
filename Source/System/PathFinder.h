@@ -5,6 +5,7 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <list>
@@ -317,6 +318,8 @@ namespace RTE {
 		mutable std::unordered_map<int, HorizonNode> m_HorizonNodes;
 		std::deque<std::shared_ptr<HorizonJob>> m_HorizonJobs;
 		mutable std::mutex m_HorizonMutex;
+		std::condition_variable m_HorizonApplyCv;
+		bool m_HorizonApplyPending = false;
 		std::atomic<int> m_CommittedHorizonReaders{0};
 		std::unordered_map<uint64_t, int> m_HorizonReaderCounts;
 		std::atomic<uint64_t> m_HorizonGeneration{1};
@@ -339,7 +342,7 @@ namespace RTE {
 		void LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job);
 		void ApplyHorizonJob(const HorizonJob& job, uint64_t generation);
 		void ClearHorizonState();
-		void WaitForOlderHorizonReaders(uint64_t applyGeneration);
+		bool HasOlderHorizonReaders(uint64_t applyGeneration) const;
 
 		/// Gets the pather for this thread. Lazily-initialized for each new thread that needs a pather.
 		/// @return The pather for this thread.
