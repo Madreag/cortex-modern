@@ -49,6 +49,8 @@ namespace {
 	constexpr int c_StripBandBottom = 20;
 	/// The seats panel, and the gap it keeps from the screen edges.
 	constexpr int c_PanelWidth = 600, c_PanelHeight = 344, c_PanelGap = 4;
+	/// The rows the panel may give up: one more puts the close row's rel-Y below 0.
+	constexpr int c_PanelMaxLost = 318;
 
 	/// The panel's top row: centred, but under the status widget's band on a screen with the rows for both.
 	int PanelTop(int screenHeight) {
@@ -375,36 +377,41 @@ NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanel(int highestTo
 	return {std::max(0, std::min(chosen->top, bottomLimit - height)), height};
 }
 
-void NetModerationGUI::LayoutPanel() {
+NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int screenHeight, int rowHeight, const std::vector<PanelBand>& textBands) {
+	const int minHeight = c_PanelHeight - c_PanelMaxLost;
+	const int top = PanelTop(screenHeight);
+	const int height = std::max(minHeight, std::min(c_PanelHeight, screenHeight - c_PanelGap - top));
+	if (screenHeight >= c_CompactMaxHeight) {
+		// Only the plain placement can reach past the bottom edge; the solver never returns one that does.
+		return {top + height > screenHeight - c_PanelGap ? std::max(0, screenHeight - c_PanelGap - height) : top, height};
+	}
 	// A compact screen keeps the strip band and one toast row above the panel's top: the panel sits
 	// under them and loses the rows off its height, so its bottom edge - and the roster - stay put.
+	const int highestTop = std::max(top, c_StripBandBottom + rowHeight + c_PanelGap);
+	// While the editor holds the world every seat's message band owns its own rows and the toast
+	// row under them, so the panel takes the highest run of rows no band holds - above a band as
+	// readily as below one, which a lowest-band reservation could not do on a top/bottom split.
+	std::vector<PanelBand> bands;
+	for (const PanelBand& band: textBands) {
+		bands.push_back({band.top, band.bottom + rowHeight + 2 * c_PanelGap});
+	}
+	const int wanted = std::max(minHeight, std::min(c_PanelHeight, screenHeight - c_PanelGap - highestTop));
+	return PlaceSeatsPanel(highestTop, screenHeight - c_PanelGap, wanted, minHeight, bands);
+}
+
+void NetModerationGUI::LayoutPanel() {
 	const int screenHeight = g_WindowMan.GetResY();
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
 	const int rowHeight = std::max(12, font ? font->GetFontHeight() : 12) + 8;
 	const int width = std::min(c_PanelWidth, g_WindowMan.GetResX() - 12);
-	// Keep the close row on the panel: a height that loses more than that row puts its rel-Y below 0.
-	const int maxLost = 318;
-	const int minHeight = c_PanelHeight - maxLost;
-	int top = PanelTop(screenHeight);
-	int height = std::max(minHeight, std::min(c_PanelHeight, screenHeight - c_PanelGap - top));
-	if (screenHeight < c_CompactMaxHeight) {
-		const int highestTop = std::max(top, c_StripBandBottom + rowHeight + c_PanelGap);
-		// While the editor holds the world every seat's message band owns its own rows and the toast
-		// row under them, so the panel takes the highest run of rows no band holds - above a band as
-		// readily as below one, which a lowest-band reservation could not do on a top/bottom split.
-		std::vector<PanelBand> bands;
-		for (const auto& band: FreeArea(g_WindowMan.GetResX()).textBands) {
-			bands.push_back({band.y, band.y + band.h + rowHeight + 2 * c_PanelGap});
-		}
-		const int wanted = std::max(minHeight, std::min(c_PanelHeight, screenHeight - c_PanelGap - highestTop));
-		const PanelPlacement placed = PlaceSeatsPanel(highestTop, screenHeight - c_PanelGap, wanted, minHeight, bands);
-		top = placed.top;
-		height = placed.height;
+	std::vector<PanelBand> textBands;
+	for (const auto& band: FreeArea(g_WindowMan.GetResX()).textBands) {
+		textBands.push_back({band.y, band.y + band.h});
 	}
-	if (top + height > screenHeight - c_PanelGap) {
-		top = std::max(0, screenHeight - c_PanelGap - height);
-	}
-	const int lost = std::min(maxLost, c_PanelHeight - height);
+	const PanelPlacement placed = PlaceSeatsPanelOnScreen(screenHeight, rowHeight, textBands);
+	const int top = placed.top;
+	const int height = placed.height;
+	const int lost = std::min(c_PanelMaxLost, c_PanelHeight - height);
 	int x, y, w, h;
 	m_Panel->GetControlRect(&x, &y, &w, &h);
 	if (x != (g_WindowMan.GetResX() - width) / 2 || y != top || w != width || h != height) {

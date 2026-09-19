@@ -80,6 +80,12 @@ namespace RTE {
 		/// @param minHeight The height below which the panel loses its close row.
 		/// @param bands Every band, in any order; they may overlap.
 		static PanelPlacement PlaceSeatsPanel(int highestTop, int bottomLimit, int wantedHeight, int minHeight, const std::vector<PanelBand>& bands);
+		/// The placement LayoutPanel applies: a compact screen grows every seat message band by the toast
+		/// row under it and solves around them, a tall one keeps the plain centred panel.
+		/// @param screenHeight The window's height in rows.
+		/// @param rowHeight One text row plus its padding, as the panel's font measures it.
+		/// @param textBands Each seat message band as the editor reports it, ungrown, in any order.
+		static PanelPlacement PlaceSeatsPanelOnScreen(int screenHeight, int rowHeight, const std::vector<PanelBand>& textBands);
 
 		struct Controls {
 			GUILabel* name = nullptr;
