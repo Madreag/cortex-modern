@@ -141,6 +141,10 @@ namespace RTE {
 		/// @param newOwner A pointer to the new owner. Ownership is NOT transferred!
 		void SetOwner(MovableObject* newOwner) { m_OwnerMO = newOwner; }
 
+		/// Moves the owner's checkpoint stamp. An Atom is archived as part of its owner and is not an
+		/// Entity itself, so a write here has to reach the stamp the owner's shadow is keyed on.
+		void TouchCheckpoint();
+
 		/// Gets the group ID of this Atom.
 		/// @return The group ID of this Atom.
 		long GetSubID() const { return m_SubgroupID; }
@@ -155,7 +159,7 @@ namespace RTE {
 
 		/// Sets the material of this Atom.
 		/// @param newMat The new material of this Atom.
-		void SetMaterial(const Material* newMat) { m_Material = newMat; }
+		void SetMaterial(const Material* newMat) { if (m_Material != newMat) TouchCheckpoint(); m_Material = newMat; }
 
 		/// Gets the Color of this Atom's trail.
 		/// @return A Color object describing the trail color.
@@ -163,7 +167,7 @@ namespace RTE {
 
 		/// Sets the color value of this Atom's trail.
 		/// @param newTrailColor A Color object specifying the new trail color.
-		void SetTrailColor(Color newTrailColor) { m_TrailColor = newTrailColor; }
+		void SetTrailColor(Color newTrailColor) { TouchCheckpoint(); m_TrailColor = newTrailColor; }
 
 		/// Gets the longest a trail can be drawn, in pixels.
 		/// @return The new max length, in pixels. If 0, no trail is drawn.
@@ -171,7 +175,7 @@ namespace RTE {
 
 		/// Sets the longest a trail can be drawn, in pixels.
 		/// @param trailLength The new max length, in pixels. If 0, no trail is drawn.
-		void SetTrailLength(const int trailLength) { m_TrailLength = trailLength; }
+		void SetTrailLength(const int trailLength) { if (m_TrailLength != trailLength) TouchCheckpoint(); m_TrailLength = trailLength; }
 
 		/// Gets the length variation of this Atom's trail.
 		/// @return The length variation of this Atom's trail.
@@ -179,7 +183,7 @@ namespace RTE {
 
 		/// Sets the length variation scalar of a trail.
 		/// @param trailLengthVariation The new length variation scalar, 0 meaning no variation and 1 meaning full variation.
-		void SetTrailLengthVariation(float trailLengthVariation) { m_TrailLengthVariation = trailLengthVariation; }
+		void SetTrailLengthVariation(float trailLengthVariation) { if (m_TrailLengthVariation != trailLengthVariation) TouchCheckpoint(); m_TrailLengthVariation = trailLengthVariation; }
 
 		/// Gets the offset vector that was first set for this Atom. The GetOffset may have additional offsets baked into it if this is part of an group.
 		/// @return The original offset Vector.
@@ -211,6 +215,7 @@ namespace RTE {
 		/// Folds the current trail points into the last-update set so a sim-bound draw renders the
 		/// full trail instead of the frame-timed partial one.
 		void CommitTrailPointsForSimDraw() {
+			if (!m_TrailPoints.empty()) TouchCheckpoint();
 			m_LastTrailPoints.insert(m_LastTrailPoints.end(), m_TrailPoints.begin(), m_TrailPoints.end());
 			m_TrailPoints.clear();
 		}
