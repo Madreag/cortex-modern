@@ -794,6 +794,8 @@ namespace RTE {
 			m_RestTimer.Reset();
 			m_ToSettle = false;
 			m_VelOscillations = 0;
+			// All three reach the archive, so the shadow of this object is no longer current.
+			TouchCheckpoint();
 		}
 
 		/// Indicates whether this MovableObject has been at rest with no movement for longer than its RestThreshold.

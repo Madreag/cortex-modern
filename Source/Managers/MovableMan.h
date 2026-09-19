@@ -909,6 +909,16 @@ namespace RTE {
 		/// @return Whether the exchange succeeded; a failure sets the controller replay error.
 		bool RunLockstepPausedTick();
 
+		/// Feeds this tick's object census into the sim checksum, at the tick boundary the checkpoint
+		/// archive is written at, so the hash and the archive describe the same instant. Covers the
+		/// added deques, which the archive writes and a held tick never drains.
+		void FeedTickEndChecksum();
+
+		/// The unique ids the last tick-end census fed into the checksum, and the tick it was taken at.
+		/// A checkpoint written at that tick has to carry exactly this set.
+		const std::vector<long>& GetLastChecksumCensus() const { return m_LastChecksumCensus; }
+		uint64_t GetLastChecksumCensusTick() const { return m_LastChecksumCensusTick; }
+
 		uint8_t ValueObservationAuthority(uint64_t objectUID) const;
 		void CommitValueObservations(uint64_t frame, const std::vector<NetValueObservation>& local, const std::vector<NetValueObservation>& remote);
 		void CommitOfflineValueWrites();
@@ -1122,6 +1132,9 @@ namespace RTE {
 
 		unsigned int m_SimUpdateFrameNumber;
 		uint64_t m_ValueObservationsRejected;
+
+		std::vector<long> m_LastChecksumCensus; //!< The unique ids the last tick-end checksum census covered.
+		uint64_t m_LastChecksumCensusTick = 0; //!< The tick that census was taken at.
 
 		// Global map which stores all objects so they could be foud by their unique ID
 		std::map<long int, MovableObject*> m_KnownObjects;

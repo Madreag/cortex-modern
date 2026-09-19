@@ -2140,13 +2140,36 @@ static std::string ResyncSaveName() {
 			std::string recordError;
 			// A round that stands on a checkpoint records a segment from its first frame: an ordinary
 			// file names no world, so playing it back would boot the preset at a mid-world tick.
-			if (m_ResumeSegmentTick != 0 && m_Runner->GetMatchConfig().persistentWorld && m_WorldIdentity.IsValid()) {
+			// The host's own option arms the recorder for a menu-hosted match, through the path
+			// -net-replay-out uses; a flag that already named a file keeps it.
+			if (m_IsHost && !ScenarioRunner::IsLockstepReplayRecordArmed() && g_SettingsMan.GetNetworkRecordReplays()) {
+				std::error_code directoryError;
+				const std::filesystem::path replays = std::filesystem::path("Userdata") / "Replays";
+				std::filesystem::create_directories(replays, directoryError);
+				const std::string name = "match-" + std::to_string(m_Runner->GetMatchConfig().sessionId) + AutosaveStore::c_SegmentExtension;
+				ScenarioRunner::ArmLockstepReplayRecord((replays / name).string());
+			}
+			// A heal stands on the checkpoint the host named for it, so its round chains as well.
+			uint64_t healTick = 0;
+			std::string healDigest;
+			if (m_ResumeSegmentTick == 0 && m_PendingResyncState && m_PendingResyncState->rewindTick != 0) {
+				const std::string healMatchId = m_PendingResyncState->rewindMatchId.empty() ? m_AutosaveMatchId : m_PendingResyncState->rewindMatchId;
+				AutosaveDescriptor healed;
+				if (!healMatchId.empty() &&
+				    AutosaveStore::Validate(AutosaveStore::ArchivePath(AutosaveStore::Directory(), healMatchId, m_PendingResyncState->rewindTick), healed)) {
+					healTick = healed.savedTick;
+					healDigest = healed.worldStructureHash;
+				}
+			}
+			const RoundRecordingPlan plan = PlanRoundRecording(m_Runner->GetMatchConfig().persistentWorld, m_WorldIdentity.IsValid(),
+			                                                   m_ResumeSegmentTick, m_ResumeArchiveDigest, healTick, healDigest);
+			if (plan.segment) {
 				NetWorldSegmentHeader header;
 				header.worldId = m_WorldIdentity.worldId;
-				header.tick = m_ResumeSegmentTick;
+				header.tick = plan.tick;
 				header.round = m_AutosaveIdentity.roundId;
 				header.boot = m_WorldIdentity.boot;
-				header.worldDigest = m_ResumeArchiveDigest;
+				header.worldDigest = plan.digest;
 				const std::string path = AutosaveStore::SegmentPath(AutosaveStore::Directory(), header.worldId, header.tick).string();
 				if (!ScenarioRunner::BeginLockstepWorldSegmentRecord(m_Runner->GetMatchConfig(), header, path, &recordError) && !recordError.empty()) {
 					std::cout << "[net-world] resumed round records nothing: " << recordError << std::endl;
@@ -2326,6 +2349,26 @@ static std::string ResyncSaveName() {
 		header.boot = m_WorldIdentity.boot;
 		const std::string path = AutosaveStore::SegmentPath(AutosaveStore::Directory(), header.worldId, tick).string();
 		ScenarioRunner::ArmLockstepWorldSegment(header, path);
+	}
+
+	NetMatchService::RoundRecordingPlan NetMatchService::PlanRoundRecording(bool persistentWorld, bool worldIdentityValid,
+	                                                                       uint64_t resumeTick, const std::string& resumeDigest,
+	                                                                       uint64_t healTick, const std::string& healDigest) {
+		RoundRecordingPlan plan;
+		if (!persistentWorld || !worldIdentityValid) {
+			return plan;
+		}
+		// A resumed round names its own checkpoint; a healed one rewound to the checkpoint the host
+		// named, and the stretch from there to the next roll has to chain too.
+		const uint64_t tick = resumeTick != 0 ? resumeTick : healTick;
+		const std::string& digest = resumeTick != 0 ? resumeDigest : healDigest;
+		if (tick == 0 || digest.empty()) {
+			return plan;
+		}
+		plan.segment = true;
+		plan.tick = tick;
+		plan.digest = digest;
+		return plan;
 	}
 
 	void NetMatchService::SealWorldReplaySegment() {

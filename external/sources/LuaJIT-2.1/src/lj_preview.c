@@ -568,6 +568,12 @@ LUA_API int luaJIT_preview_registry_rooted(lua_State *L)
   return p && p->active && p->registry ? 1 : 0;
 }
 
+LUA_API int luaJIT_preview_active(lua_State *L)
+{
+  LJPreview *p = G(L)->preview;
+  return p && p->active ? 1 : 0;
+}
+
 LUA_API int luaJIT_preview_stats(lua_State *L, luaJIT_PreviewStats *stats)
 {
   LJPreview *p = G(L)->preview;

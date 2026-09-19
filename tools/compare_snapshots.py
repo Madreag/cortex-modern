@@ -507,7 +507,8 @@ def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep
     b = {key: value for key, value in second.items() if key not in ("nodes", "serial")}
     mapping, _, _ = solve([(a, b, "graph")], [], {}, {}, set())
     report = {"matched_nodes": len(mapping), "local_ai_boundaries": len(cuts[0])}
-    if first.get("version") in ("SG5", "SG6") and first.get("version") == second.get("version"):
+    # SG6 is the only birth-numbered archive the engine writes; SG5 was never released.
+    if first.get("version") == "SG6" and first.get("version") == second.get("version"):
         report["serial"] = {"a": first["serial"], "b": second["serial"]}
         report["lockstep_master"] = lockstep_master
         moved = sorted((left, right) for left, right in mapping.items() if left != right)

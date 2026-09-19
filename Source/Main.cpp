@@ -1110,11 +1110,13 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (currentArg == "-net-persistent-world") {
 			s_netPersistentWorld = true;
+			++i;
 			continue;
 		}
 
 		if (currentArg == "-net-world-fresh") {
 			s_netWorldFresh = true;
+			++i;
 			continue;
 		}
 
@@ -4728,77 +4730,6 @@ void RunGameLoop() {
 				// The isolation and same-tick rows need a live scene, which the standalone flag has not got.
 				RTE::RunCheckpointSceneRows();
 			}
-			if (s_cowCheckpointAutosave && g_ActivityMan.ActivityRunning() && simTick > 0 && (simTick == 1 || simTick % 60 == 0)) {
-				// The capture freezes the sim thread, so its budget is one sim tick.
-				constexpr int64_t captureBudgetUs = 16700;
-				const bool saved = g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", simTick);
-				const int64_t freezeUs = CheckpointCow::Get().LastFreezeUs();
-				const bool under = saved && freezeUs > 0 && freezeUs < captureBudgetUs;
-				{
-					std::ostringstream line;
-					line << "[cow-checkpoint-selftest] " << (under ? "PASS" : "FAIL")
-					     << " freeze_240_actors_under_one_tick freeze_us=" << freezeUs
-					     << " saved=" << saved
-					     << " (limit < 16700 us / one sim tick; RED today is the ~870 ms sim-thread stall of Scene::CaptureSavedScene plus Lua graph capture)";
-					System::PrintDiagnosticLine(line.str());
-				}
-				// A capture must leave an archive behind and a second one must follow it in the same
-				// process. The first capture walks every table once, so it is held to the stall the
-				// design exists to remove; every capture after it owes the one-tick freeze budget.
-				constexpr double firstWalkBudgetMs = 870.0;
-				const double captureMs = g_ActivityMan.LastAutosaveCaptureMs();
-				const bool firstCapture = s_cowCheckpointCaptures == 0;
-				const double budgetMs = firstCapture ? firstWalkBudgetMs : static_cast<double>(captureBudgetUs) / 1000.0;
-				const bool archived = saved && g_ActivityMan.LastAutosaveBytes() > 0 && g_ActivityMan.LastAutosaveTick() == simTick &&
-				                      captureMs > 0.0 && captureMs < budgetMs;
-				// The image and the world structure must name ONE frozen instant: every object the
-				// structure's cohorts carry has to be in the scene the image wrote, and no other.
-				if (archived) {
-					const auto image = CheckpointCow::Get().Last();
-					std::set<long> cohortUIDs, sceneUIDs;
-					std::string membershipDetail;
-					if (image) {
-						// "<len> WorldStructure3 " then the six cohorts, each a count and that many ids.
-						std::istringstream structure(image->structure.Text());
-						std::string headerSize, headerTag;
-						structure >> headerSize >> headerTag;
-						for (int cohort = 0; cohort < 6 && structure; ++cohort) {
-							size_t count = 0;
-							structure >> count;
-							for (size_t index = 0; index < count && structure; ++index) {
-								long uid = 0;
-								structure >> uid;
-								cohortUIDs.insert(uid);
-							}
-						}
-						membershipDetail = headerTag;
-						const std::string& sceneText = image->scene.Text();
-						for (size_t at = sceneText.find("PlaceSceneObject"); at != std::string::npos; at = sceneText.find("PlaceSceneObject", at + 1)) {
-							const size_t next = sceneText.find("PlaceSceneObject", at + 1);
-							const size_t id = sceneText.find("UniqueID = ", at);
-							if (id != std::string::npos && (next == std::string::npos || id < next)) sceneUIDs.insert(std::strtol(sceneText.c_str() + id + 11, nullptr, 10));
-						}
-					}
-					std::set<long> missing, extra;
-					std::set_difference(cohortUIDs.begin(), cohortUIDs.end(), sceneUIDs.begin(), sceneUIDs.end(), std::inserter(missing, missing.end()));
-					std::set_difference(sceneUIDs.begin(), sceneUIDs.end(), cohortUIDs.begin(), cohortUIDs.end(), std::inserter(extra, extra.end()));
-					std::ostringstream line;
-					line << "[cow-checkpoint-selftest] " << (image && !cohortUIDs.empty() && missing.empty() && extra.empty() ? "PASS" : "FAIL")
-					     << " image_membership_matches_the_world_structure tick=" << simTick
-					     << " cohorts=" << cohortUIDs.size() << " scene=" << sceneUIDs.size()
-					     << " cohorts_only=" << (missing.empty() ? 0 : *missing.begin())
-					     << " scene_only=" << (extra.empty() ? 0 : *extra.begin()) << " tag=" << membershipDetail;
-					System::PrintDiagnosticLine(line.str());
-				}
-				if (++s_cowCheckpointCaptures <= 2) {
-					std::ostringstream line;
-					line << "[cow-checkpoint-selftest] " << (archived ? "PASS" : "FAIL")
-					     << (s_cowCheckpointCaptures == 1 ? " autosave_capture_leaves_an_archive" : " autosave_capture_follows_another_in_the_same_process")
-					     << " tick=" << simTick << " saved=" << saved << " bytes=" << g_ActivityMan.LastAutosaveBytes()
-					     << " capture_ms=" << captureMs << " budget_ms=" << budgetMs << " first_walk=" << firstCapture;
-					System::PrintDiagnosticLine(line.str());
-				}
-			}
 			if (simTick == 1 && (s_netMatchServiceE2E || !s_netReplayInPath.empty() || ScenarioRunner::IsActive())) {
 				if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) {
 					{
@@ -5296,6 +5227,9 @@ void RunGameLoop() {
 			// MetricsCollector for the per-tick determinism trace (no-op without an active scenario run).
 			std::optional<SimChecksum::Result> probeTickResult;
 			if (hashThisTick) {
+				// The object census goes in here, not inside MovableMan::Update: the checkpoint
+				// archive below writes the same deques, so both have to read one instant.
+				g_MovableMan.FeedTickEndChecksum();
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
 				if (a7HashTick && ScenarioRunner::GetLockstepAppliedFrame() == simTick) {
@@ -5337,6 +5271,139 @@ void RunGameLoop() {
 			// Sim consumed this tick's accumulated input edges; clear before next tick reads
 			g_UInputMan.EndSimUpdate();
 			if (probeTickResult) RollbackProbeOnHashedTick(simTick, *probeTickResult);
+			// The self-test's capture rides the same tick boundary the live autosave uses, after the
+			// census above: a capture taken at the top of the frame describes a different instant.
+			if (s_cowCheckpointAutosave && g_ActivityMan.ActivityRunning() && simTick > 0 && (simTick == 1 || simTick % 60 == 0)) {
+				// The capture freezes the sim thread, so its budget is one sim tick.
+				constexpr int64_t captureBudgetUs = 16700;
+				const bool saved = g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", simTick);
+				const int64_t freezeUs = CheckpointCow::Get().LastFreezeUs();
+				const bool under = saved && freezeUs > 0 && freezeUs < captureBudgetUs;
+				{
+					std::ostringstream line;
+					line << "[cow-checkpoint-selftest] " << (under ? "PASS" : "FAIL")
+					     << " freeze_240_actors_under_one_tick freeze_us=" << freezeUs
+					     << " saved=" << saved
+					     << " (limit < 16700 us / one sim tick; RED today is the ~870 ms sim-thread stall of Scene::CaptureSavedScene plus Lua graph capture)";
+					System::PrintDiagnosticLine(line.str());
+				}
+				// A capture must leave an archive behind and a second one must follow it in the same
+				// process. The first capture walks every table once, so it is held to the stall the
+				// design exists to remove; every capture after it owes the one-tick freeze budget.
+				constexpr double firstWalkBudgetMs = 870.0;
+				const double captureMs = g_ActivityMan.LastAutosaveCaptureMs();
+				const bool firstCapture = s_cowCheckpointCaptures == 0;
+				const double budgetMs = firstCapture ? firstWalkBudgetMs : static_cast<double>(captureBudgetUs) / 1000.0;
+				const bool archived = saved && g_ActivityMan.LastAutosaveBytes() > 0 && g_ActivityMan.LastAutosaveTick() == simTick &&
+				                      captureMs > 0.0 && captureMs < budgetMs;
+				// The image and the world structure must name ONE frozen instant: every object the
+				// structure's cohorts carry has to be in the scene the image wrote, and no other.
+				if (archived) {
+					const auto image = CheckpointCow::Get().Last();
+					std::set<long> cohortUIDs, sceneUIDs;
+					std::string membershipDetail;
+					if (image) {
+						// "<len> WorldStructure3 " then the six cohorts, each a count and that many ids.
+						std::istringstream structure(image->structure.Text());
+						std::string headerSize, headerTag;
+						structure >> headerSize >> headerTag;
+						for (int cohort = 0; cohort < 6 && structure; ++cohort) {
+							size_t count = 0;
+							structure >> count;
+							for (size_t index = 0; index < count && structure; ++index) {
+								long uid = 0;
+								structure >> uid;
+								cohortUIDs.insert(uid);
+							}
+						}
+						membershipDetail = headerTag;
+						const std::string& sceneText = image->scene.Text();
+						for (size_t at = sceneText.find("PlaceSceneObject"); at != std::string::npos; at = sceneText.find("PlaceSceneObject", at + 1)) {
+							const size_t next = sceneText.find("PlaceSceneObject", at + 1);
+							const size_t id = sceneText.find("UniqueID = ", at);
+							if (id != std::string::npos && (next == std::string::npos || id < next)) sceneUIDs.insert(std::strtol(sceneText.c_str() + id + 11, nullptr, 10));
+						}
+					}
+					std::set<long> missing, extra;
+					std::set_difference(cohortUIDs.begin(), cohortUIDs.end(), sceneUIDs.begin(), sceneUIDs.end(), std::inserter(missing, missing.end()));
+					std::set_difference(sceneUIDs.begin(), sceneUIDs.end(), cohortUIDs.begin(), cohortUIDs.end(), std::inserter(extra, extra.end()));
+					std::ostringstream line;
+					line << "[cow-checkpoint-selftest] " << (image && !cohortUIDs.empty() && missing.empty() && extra.empty() ? "PASS" : "FAIL")
+					     << " image_membership_matches_the_world_structure tick=" << simTick
+					     << " cohorts=" << cohortUIDs.size() << " scene=" << sceneUIDs.size()
+					     << " cohorts_only=" << (missing.empty() ? 0 : *missing.begin())
+					     << " scene_only=" << (extra.empty() ? 0 : *extra.begin()) << " tag=" << membershipDetail;
+					System::PrintDiagnosticLine(line.str());
+				}
+				// The codec's reader has only ever been held to hand-built fixtures. Parse the graphs
+				// this capture actually wrote, in the states that wrote them, so writer and reader
+				// are held to each other on a live match's own data.
+				if (archived) {
+					const auto image = CheckpointCow::Get().Last();
+					size_t parsed = 0;
+					std::string firstProblem;
+					if (image) {
+						std::vector<LuaStateWrapper*> states{&g_LuaMan.GetMasterScriptState()};
+						for (LuaStateWrapper& threaded: g_LuaMan.GetThreadedScriptStates()) states.push_back(&threaded);
+						for (size_t index = 0; index < image->graphs.size() && index < states.size(); ++index) {
+							const std::string text = image->graphs[index].Text();
+							if (text.empty()) continue;
+							std::vector<std::string> problems;
+							if (!states[index]->ValidateScriptGraph(text, problems) && firstProblem.empty()) {
+								firstProblem = problems.empty() ? "refused without a reason" : problems.front();
+							}
+							++parsed;
+						}
+					}
+					std::ostringstream line;
+					line << "[cow-checkpoint-selftest] " << (parsed > 0 && firstProblem.empty() ? "PASS" : "FAIL")
+					     << " captured_graphs_parse_in_their_own_state tick=" << simTick
+					     << " graphs=" << parsed << " problem=" << (firstProblem.empty() ? "none" : firstProblem);
+					System::PrintDiagnosticLine(line.str());
+				}
+				// The archive has to describe the instant the tick's hash was taken at: the same tick,
+				// and exactly the objects the census fed. A capture taken anywhere else in the frame
+				// carries a population no peer's hash ever covered.
+				if (archived) {
+					std::set<long> cohortUIDs;
+					if (const auto image = CheckpointCow::Get().Last()) {
+						std::istringstream structure(image->structure.Text());
+						std::string headerSize, headerTag;
+						structure >> headerSize >> headerTag;
+						for (int cohort = 0; cohort < 6 && structure; ++cohort) {
+							size_t count = 0;
+							structure >> count;
+							for (size_t index = 0; index < count && structure; ++index) {
+								long uid = 0;
+								structure >> uid;
+								cohortUIDs.insert(uid);
+							}
+						}
+					}
+					const std::vector<long>& census = g_MovableMan.GetLastChecksumCensus();
+					const std::set<long> hashed(census.begin(), census.end());
+					std::set<long> unhashed, uncaptured;
+					std::set_difference(cohortUIDs.begin(), cohortUIDs.end(), hashed.begin(), hashed.end(), std::inserter(unhashed, unhashed.end()));
+					std::set_difference(hashed.begin(), hashed.end(), cohortUIDs.begin(), cohortUIDs.end(), std::inserter(uncaptured, uncaptured.end()));
+					const uint64_t censusTick = g_MovableMan.GetLastChecksumCensusTick();
+					const bool sameInstant = !census.empty() && censusTick == simTick && unhashed.empty() && uncaptured.empty();
+					std::ostringstream line;
+					line << "[cow-checkpoint-selftest] " << (sameInstant ? "PASS" : "FAIL")
+					     << " archive_describes_the_hashed_instant tick=" << simTick
+					     << " census_tick=" << censusTick << " census=" << hashed.size() << " cohorts=" << cohortUIDs.size()
+					     << " archived_but_unhashed=" << (unhashed.empty() ? 0 : *unhashed.begin())
+					     << " hashed_but_uncaptured=" << (uncaptured.empty() ? 0 : *uncaptured.begin());
+					System::PrintDiagnosticLine(line.str());
+				}
+				if (++s_cowCheckpointCaptures <= 2) {
+					std::ostringstream line;
+					line << "[cow-checkpoint-selftest] " << (archived ? "PASS" : "FAIL")
+					     << (s_cowCheckpointCaptures == 1 ? " autosave_capture_leaves_an_archive" : " autosave_capture_follows_another_in_the_same_process")
+					     << " tick=" << simTick << " saved=" << saved << " bytes=" << g_ActivityMan.LastAutosaveBytes()
+					     << " capture_ms=" << captureMs << " budget_ms=" << budgetMs << " first_walk=" << firstCapture;
+					System::PrintDiagnosticLine(line.str());
+				}
+			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
 			TelemetryBundle::CaptureAtTickBoundary();
 

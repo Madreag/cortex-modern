@@ -298,6 +298,8 @@ void MOPixel::RestDetection() {
 		m_VelOscillations = 0;
 		m_RestTimer.Reset();
 		m_ToSettle = false;
+		// All three are saved, and a pixel this slow no longer travels, so nothing else stamps it.
+		TouchCheckpoint();
 	}
 }
 

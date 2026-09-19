@@ -82,6 +82,8 @@ LUA_API int luaJIT_preview_measure(lua_State *L, int on);
 LUA_API size_t luaJIT_preview_upvalue_writes(lua_State *L);
 /* Whether the armed window holds the registry as a rollback root. */
 LUA_API int luaJIT_preview_registry_rooted(lua_State *L);
+/* Whether a speculative preview window is open on this state. */
+LUA_API int luaJIT_preview_active(lua_State *L);
 LUA_API int luaJIT_preview_faultcheck(lua_State *L);
 
 typedef void (*luaJIT_tab_write_cb)(void *tab);

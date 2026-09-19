@@ -1320,14 +1320,19 @@ void RTE::TraceImpulseForTrackedMO(long uid, const Vector& impulse, const Vector
 }
 
 void MovableObject::RestDetection() {
+	// The oscillation count and the rest timer are both saved, so a change to either has to move the
+	// checkpoint stamp; a settling object no longer travels, so nothing else would stamp it.
 	// Translational settling detection.
 	if (m_Vel.Dot(m_PrevVel) < 0) {
 		++m_VelOscillations;
-	} else {
+		TouchCheckpoint();
+	} else if (m_VelOscillations != 0) {
 		m_VelOscillations = 0;
+		TouchCheckpoint();
 	}
 	if ((m_Pos - GetPrevPos()).MagnitudeIsGreaterThan(1.0F)) {
 		m_RestTimer.Reset();
+		TouchCheckpoint();
 	}
 }
 
