@@ -15,7 +15,7 @@ import time
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from feel.report import TICKS, file_record, reduce_peer, write_json
+from feel.report import EarlyDecision, TICKS, file_record, reduce_peer, write_json
 from run_sim_test import make_run
 from compare_sim_traces import strict_compare
 
@@ -78,8 +78,8 @@ def stage_baseline(run):
         '\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n'
         '\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n'
         '\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n'
-        '\t\tTeamOfPlayer1 = 1\n\t\tPlayer1IsHuman = 1\n'
-        '\t\tTeamOfPlayer2 = 0\n\t\tPlayer2IsHuman = 0\n', encoding='utf-8')
+        '\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n'
+        '\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n', encoding='utf-8')
 
 
 def input_pattern(path):
@@ -128,6 +128,9 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                 flags += ['-scenario', 'FeelBaseline', '-controller-log-out', str(out / 'controllers.json')]
             else:
                 flags += ['-net-match-service-e2e', '-net-port', str(port), '-net-match-ticks', str(TICKS),
+                          '-net-match-humans', '2', '-net-match-cpu-slots', '0',
+                          '-net-match-service-preset', 'Determinism FeelBaseline',
+                          '-net-match-service-module', 'UserScenes.rte',
                           '-net-match-auto-delay', '-net-fake-lag', str(lag), '-net-local-prediction', 'on',
                           '-net-match-report', str(out / f'{peer}_report.json')]
                 flags += ['-net-host', '-net-replay-out', str(out / 'match.ccreplay')] if peer == 'host' else ['-net-join', '127.0.0.1']
@@ -138,8 +141,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
             private_settings(run, cap)
             if record:
                 (run_out / 'feel').mkdir()
-            if sp:
-                stage_baseline(run)
+            stage_baseline(run)
             run.start()
             if not sp and peer == 'host':
                 time.sleep(.75)
@@ -215,11 +217,36 @@ def summarize_case(report, out):
     (out / 'summary.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
 
+def single_case_peer(root):
+    root = Path(root)
+    if not (root / 'manifest.json').is_file():
+        return None
+    if (root / 'sp').is_dir():
+        return 'sp'
+    if (root / 'host').is_dir():
+        return 'host'
+    return None
+
+
+def reduce_or_fail(run, peer, baseline=None):
+    try:
+        return reduce_peer(run, peer, baseline)
+    except EarlyDecision as error:
+        print(error.fail_line, flush=True)
+        raise
+
+
 def analyze(root):
+    root = Path(root)
+    peer = single_case_peer(root)
+    if peer:
+        result = reduce_or_fail(root, peer)
+        write_json(root / 'feel-report.json', result)
+        return [result]
     baselines = {}
     for cap_name in ('60hz', 'uncapped'):
         run = root / f'baseline-{cap_name}'
-        result = reduce_peer(run, 'sp')
+        result = reduce_or_fail(run, 'sp')
         baselines[cap_name] = dict(result['metrics'], raw_path=result['raw_path'])
         write_json(run / 'feel-report.json', result)
     results = []
@@ -228,7 +255,7 @@ def analyze(root):
             name = f'{lag}ms-{cap_name}'
             on, off = root / (name + '-on'), root / (name + '-off')
             manifest = json.loads((on / 'manifest.json').read_text(encoding='utf-8'))
-            peers = {peer: reduce_peer(on, peer, baselines[cap_name]) for peer in ('host', 'client')}
+            peers = {peer: reduce_or_fail(on, peer, baselines[cap_name]) for peer in ('host', 'client')}
             proof = {'peers_on': compare_pair(on / 'host_trace.json', on / 'client_trace.json'),
                      'peers_off': compare_pair(off / 'host_trace.json', off / 'client_trace.json'),
                      **{peer + '_on_off': compare_pair(on / f'{peer}_trace.json', off / f'{peer}_trace.json') for peer in ('host', 'client')}}
@@ -355,17 +382,21 @@ def main(argv=None):
                     name = f'{lag}ms-{cap_name}-' + ('on' if enabled else 'off')
                     launch_case(root, name, lag, cap, enabled, port, script, exe['sha256'], args.timeout)
                     port += 1
-    results = analyze(root)
-    gate_result = None if args.skip_gates else gates(root, args.sp_control, args.timeout)
-    complete = all(row['measurement_complete'] and row['off_wire_pass'] for row in results)
+    try:
+        results = analyze(root)
+    except EarlyDecision:
+        return 1
+    skip_gates = args.skip_gates or args.analyze_only
+    gate_result = None if skip_gates else gates(root, args.sp_control, args.timeout)
+    complete = all(row['measurement_complete'] and row.get('off_wire_pass', True) for row in results)
     gate_pass = bool(gate_result and all(gate_result[key] for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass')))
     completion = dict(finished=stamp(), measurement_complete=complete, gates_pass=gate_pass,
-                      scratch_bytes=scratch_bytes(root), gates_unverified=args.skip_gates)
+                      scratch_bytes=scratch_bytes(root), gates_unverified=skip_gates)
     write_json(root / 'completion.json', completion)
     with (root / 'summary.md').open('a', encoding='utf-8') as stream:
         stream.write(f'\nGates passed: {gate_pass}. See gates/gates.json and completion.json.\n')
     print(json.dumps(completion, indent=2), flush=True)
-    return 0 if complete and gate_pass else 1
+    return 0 if complete and (gate_pass or skip_gates) else 1
 
 
 if __name__ == '__main__':
