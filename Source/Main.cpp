@@ -7199,14 +7199,23 @@ int RunNetMatchServiceE2E() {
 		}
 	}
 
+	bool setupCancelled = false;
 	std::string activityPreset;
 	if (setupError.empty()) {
 		g_NetMatchService.SetReady();
 		if (e2eHost) {
 			g_NetMatchService.RequestStart();
 		}
+		const bool unlimitedWorld = e2eHost && s_netPersistentWorld && !s_netMatchTicksExplicit;
 		const auto waitStart = std::chrono::steady_clock::now();
-		while (!g_NetMatchService.ConsumeReadyToLaunch(activityPreset)) {
+		while (true) {
+			PollSDLEvents();
+			if (System::IsSetToQuit()) {
+				setupCancelled = true;
+				g_NetMatchService.Destroy();
+				break;
+			}
+			if (g_NetMatchService.ConsumeReadyToLaunch(activityPreset)) break;
 			// The directory row is the game thread's to drive, and a session-id join waits on it.
 			g_NetMatchService.Update();
 			const NetMatchServiceState state = g_NetMatchService.GetState();
@@ -7225,7 +7234,7 @@ int RunNetMatchServiceE2E() {
 			}
 			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
 				std::chrono::steady_clock::now() - waitStart).count());
-			if (nowMs > 60000) {
+			if (!unlimitedWorld && nowMs > 60000) {
 				setupError = "timed out waiting for service launch";
 				s_netMatchServiceE2EExitCode = 1;
 				break;
@@ -7234,7 +7243,7 @@ int RunNetMatchServiceE2E() {
 		}
 	}
 
-	if (setupError.empty()) {
+	if (setupError.empty() && !setupCancelled) {
 		// The report names the adopted activity, which a joining peer's own request does not carry.
 		if (!activityPreset.empty()) {
 			s_netMatchServiceE2EPreset = activityPreset;
@@ -7255,7 +7264,7 @@ int RunNetMatchServiceE2E() {
 		}
 	}
 
-	if (setupError.empty()) {
+	if (setupError.empty() && !setupCancelled) {
 		// A reconnecting peer's first lobby round carried the live match's snapshot; launch from it.
 		if (const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig()) {
 			{
@@ -7276,7 +7285,7 @@ int RunNetMatchServiceE2E() {
 		}
 	}
 
-	if (setupError.empty()) {
+	if (setupError.empty() && !setupCancelled) {
 		// Per-tick trace for the host/client sim-gated compare. Not SetActive() — that also arms the
 		// -scenario stop path + perturb hook; SetRecordTickHashes arms the trace alone.
 		const bool traceRun = s_recordTickHashes && !ScenarioRunner::GetArgs().outPath.empty();
@@ -7310,7 +7319,7 @@ int RunNetMatchServiceE2E() {
 				}
 			}
 		}
-	} else {
+	} else if (!setupCancelled) {
 		{
 			std::ostringstream line;
 			line << "[net-match-service-e2e] setup failed: " << setupError;
