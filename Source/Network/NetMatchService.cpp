@@ -2501,6 +2501,41 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	bool NetMatchService::FindWorldCleanLeave(const std::vector<NetH4SeatStatus>& statuses, const NetWorldJoinHost& world, WorldCleanLeave& outLeave) {
+		outLeave = WorldCleanLeave{};
+		for (const NetH4SeatStatus& status: statuses) {
+			// A dropped or reclaiming seat keeps its slot for its own holder; a committed one has one.
+			if (status.stableSeat == 0 || status.committed || status.dropped || status.reclaiming) {
+				continue;
+			}
+			const NetWorldSlot* slot = nullptr;
+			for (const NetWorldSlot& candidate: world.Membership().Slots()) {
+				// The seat the slot is bound to is the one binding between the two planes.
+				if (candidate.held && candidate.stableSeat == status.stableSeat) {
+					slot = &candidate;
+					break;
+				}
+			}
+			if (slot == nullptr) {
+				continue;
+			}
+			for (const NetWorldJoinSession& session: world.Sessions()) {
+				// The slot's CURRENT holder: a stale generation is somebody the world already let go.
+				if (session.phase != NetWorldJoinPhase::Active || session.stableSeat != status.stableSeat ||
+				    session.assignedPeerId != slot->peerId || session.holderGeneration != slot->generation) {
+					continue;
+				}
+				outLeave.peerId = slot->peerId;
+				outLeave.stableSeat = slot->stableSeat;
+				outLeave.holderGeneration = slot->generation;
+				outLeave.team = slot->team;
+				outLeave.connection = session.connection;
+				return true;
+			}
+		}
+		return false;
+	}
+
 	bool NetMatchService::NoteImageTransferOutcome(NetLobbyStateTransfer outcome, NetLobbySession& lobby, NetWorldJoinHost& host, NetPeerId connection, uint64_t deliveredThrough) {
 		if (outcome == NetLobbyStateTransfer::Refused) {
 			// Never taken and never kept, so the bootstrap stays unstarted and the next pump retries.
@@ -2683,41 +2718,22 @@ static std::string ResyncSaveName() {
 			m_WorldJoin.CancelJoin(cancelled, "the joiner missed the announced activation");
 			std::cout << "[net-world] cancel slow join connection=" << cancelled << std::endl;
 		}
-		for (const NetH4SeatStatus& status: m_ReconnectHost.GetSeatStatuses()) {
-			if (status.lockstepPeerId == 0 || status.committed || status.dropped || status.reclaiming) {
-				continue;
-			}
-			const NetWorldSlot* slot = nullptr;
-			for (const NetWorldSlot& candidate: m_WorldJoin.Membership().Slots()) {
-				if (candidate.peerId == status.lockstepPeerId && candidate.held) {
-					slot = &candidate;
-					break;
-				}
-			}
-			if (slot == nullptr) {
-				continue;
-			}
-			bool active = false;
-			NetPeerId connection = c_InvalidNetPeerId;
-			for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
-				if (session.assignedPeerId == status.lockstepPeerId && session.phase == NetWorldJoinPhase::Active) {
-					active = true;
-					connection = session.connection;
-					break;
-				}
-			}
-			if (!active) {
-				continue;
+		const std::vector<NetH4SeatStatus> seatStatuses = m_ReconnectHost.GetSeatStatuses();
+		// One clean leave per slot at most: each Release frees the slot it names, so the walk ends.
+		for (size_t leaves = m_WorldJoin.Membership().Slots().size(); leaves > 0; --leaves) {
+			WorldCleanLeave leave;
+			if (!FindWorldCleanLeave(seatStatuses, m_WorldJoin, leave)) {
+				break;
 			}
 			NetGameWorldTransition release;
 			release.kind = NetGameWorldTransition::Release;
-			release.peerId = status.lockstepPeerId;
-			release.holderGeneration = slot->generation;
-			release.team = slot->team;
-			(void)m_WorldJoin.Membership().Release(status.lockstepPeerId, nullptr);
+			release.peerId = leave.peerId;
+			release.holderGeneration = leave.holderGeneration;
+			release.team = leave.team;
+			(void)m_WorldJoin.Membership().Release(leave.peerId, nullptr);
 			(void)ScenarioRunner::SubmitWorldTransition(release);
-			m_WorldJoin.CancelJoin(connection, "clean leave");
-			std::cout << "[net-world] release peer=" << static_cast<int>(status.lockstepPeerId) << std::endl;
+			m_WorldJoin.CancelJoin(leave.connection, "clean leave");
+			std::cout << "[net-world] release peer=" << static_cast<int>(leave.peerId) << std::endl;
 			uint64_t promotedAt = 0;
 			NetPeerId promoted = c_InvalidNetPeerId;
 			if (m_WorldJoin.PromoteWaitingSpectator(nowFrame, &promotedAt, &promoted, nullptr) && promotedAt != 0) {
