@@ -42,6 +42,10 @@ namespace RTE {
 	class NetReconnectTicketStore {
 	public:
 		static constexpr uint16_t c_RecordVersion = c_NetH4TicketRecordVersion;
+		static constexpr uint16_t c_RecordVersionV1 = 1;
+		/// The oldest version that can carry this record. A record with no world flag stays v1, so a
+		/// build that predates the flag still loads the ticket instead of refusing it as damaged.
+		static constexpr uint16_t RecordVersionFor(bool persistentWorld) { return persistentWorld ? c_RecordVersion : c_RecordVersionV1; }
 		// Long enough to outlast any single session, short enough that a next-day launch is not
 		// offered a dead match. The record is worthless once the host's epoch is gone.
 		static constexpr uint64_t c_MaxRecordAgeMs = 24ULL * 60ULL * 60ULL * 1000ULL;
