@@ -862,6 +862,7 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot) {
 
 void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	(void)snapshot;
+	m_ChatBand = {};
 	if (!m_OverlayControls) {
 		m_ChatRect = {};
 		return;
@@ -883,7 +884,6 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	    g_FrameMan.GetLargeFont(true) : g_FrameMan.GetSmallFont(true);
 	if (!font) font = g_FrameMan.GetSmallFont(true);
 	const int lineH = std::max(12, font->GetFontHeight()) + 4;
-	const int inputH = m_ChatEntryOpen ? lineH + 6 : 0;
 	EditorArea area = FreeArea(backbuffer->w);
 	if (m_StatusRect.visible) {
 		area.occupiers.push_back({m_StatusRect.x, m_StatusRect.y, m_StatusRect.width, m_StatusRect.height});
@@ -913,8 +913,12 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 
 	int rows = showHistory ? static_cast<int>(std::min(m_MatchChat.size(), m_MatchChatLines.size())) : 0;
 	const int available = std::max(0, bottom - 4);
-	// The band yields to whatever owns the screen: as many history rows as fit above the entry, and on a
-	// short screen with the panel open that is the entry alone.
+	// The entry gives up its two spare pixels before the history gives up a row: a roomy entry takes the whole
+	// carved band at 640x360 with the panel open, where the tight one leaves exactly one row above it.
+	const int roomyInputH = lineH + 6;
+	const int tightInputH = lineH + 4;
+	const int inputH = !m_ChatEntryOpen ? 0 : (available - roomyInputH >= lineH ? roomyInputH : tightInputH);
+	// The band yields to whatever owns the screen: as many history rows as fit above the entry.
 	const int maxRows = std::min(static_cast<int>(m_MatchChat.size()), std::max(0, (available - inputH) / lineH));
 	if (rows > maxRows) rows = maxRows;
 	const int height = rows * lineH + inputH;
@@ -953,6 +957,7 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	const int width = std::max(1, std::min(420, std::max(c_ChatMinWidth, freeRight - freeLeft - 8)));
 	const int x = std::max(0, std::min(backbuffer->w - width, freeLeft + std::max(0, (freeRight - freeLeft - width) / 2)));
 	m_ChatRect = {x, top, width, height, true};
+	m_ChatBand = {lineH, inputH, rows, showHistory};
 
 	const long long nowUs = g_TimerMan.GetAbsoluteTime();
 	const size_t first = m_MatchChatLines.size() > static_cast<size_t>(rows) ? m_MatchChatLines.size() - static_cast<size_t>(rows) : 0;

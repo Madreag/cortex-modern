@@ -199,10 +199,16 @@ namespace {
 				seats = Rect(x, y, w, h, g_MenuMan.IsNetworkPanelOpen());
 			}
 		}
+		// The heights the band laid itself out with, so a failure names them instead of only the rectangle.
+		const NetModerationGUI::ChatBand chatBand = panel ? panel->GetChatBand() : NetModerationGUI::ChatBand{};
 		observed["net_ui"] = {{"status", panel ? OverlayRect(panel->GetStatusRect()) : Rect(0, 0, 0, 0, false)},
 		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)},
 		    {"chat", panel ? OverlayRect(panel->GetChatRect()) : Rect(0, 0, 0, 0, false)},
 		    {"chat_entry_open", panel && panel->IsChatEntryOpen()},
+		    {"chat_rows", chatBand.rows},
+		    {"chat_row_height", chatBand.rowHeight},
+		    {"chat_entry_height", chatBand.entryHeight},
+		    {"chat_history_visible", chatBand.historyVisible},
 		    {"seat_input_typed_into", g_UInputMan.SeatInputTypedInto()},
 		    {"seats_panel", seats}};
 		return observed;
@@ -522,6 +528,20 @@ namespace {
 					Require(observed["net_ui"].at("seat_input_typed_into") == step["entry_open"],
 					    std::string("the seats' input is ") + (observed["net_ui"].at("seat_input_typed_into").get<bool>() ? "consumed" : "free") +
 					        " while the entry is " + (observed["net_ui"].at("chat_entry_open").get<bool>() ? "open" : "closed"));
+					if (step["entry_open"].get<bool>()) {
+						// The entry shrinks before the history yields, so one row rides above it at every supported
+						// size - 640x360 included, where the two pixels it gives up are the whole margin.
+						Require(observed["net_ui"].at("chat_history_visible") == true,
+						    "the chat history is switched off, so the band's rows prove nothing about the entry's size");
+						const int bandHeight = observed["net_ui"]["chat"].at("h").get<int>();
+						const int rowHeight = observed["net_ui"].at("chat_row_height").get<int>();
+						const int entryHeight = observed["net_ui"].at("chat_entry_height").get<int>();
+						const int bandRows = observed["net_ui"].at("chat_rows").get<int>();
+						Require(bandRows >= 1 && bandHeight >= rowHeight + entryHeight,
+						    "the chat band drew " + std::to_string(bandRows) + " history rows above the entry: band h=" +
+						        std::to_string(bandHeight) + ", row h=" + std::to_string(rowHeight) + ", entry h=" +
+						        std::to_string(entryHeight) + " at " + std::to_string(backbuffer->w) + "x" + std::to_string(backbuffer->h));
+					}
 				}
 				// A band measured against nothing proves nothing: the step names the occupiers that had to
 				// be on screen for this reading to count.

@@ -43,6 +43,15 @@ namespace RTE {
 		const OverlayRect& GetToastRect() const { return m_ToastRect; }
 		const OverlayRect& GetChatRect() const { return m_ChatRect; }
 		bool IsChatEntryOpen() const { return m_ChatEntryOpen; }
+
+		/// What the chat band laid out on the last frame, so a check can hold the rows it drew against the heights it used.
+		struct ChatBand {
+			int rowHeight = 0;
+			int entryHeight = 0;
+			int rows = 0;
+			bool historyVisible = false;
+		};
+		const ChatBand& GetChatBand() const { return m_ChatBand; }
 		/// The SDL scancode the entry opens on, as the settings key name resolves it.
 		static int ChatKeyScancode();
 
@@ -80,6 +89,7 @@ namespace RTE {
 		OverlayRect m_StatusRect;
 		OverlayRect m_ToastRect;
 		OverlayRect m_ChatRect;
+		ChatBand m_ChatBand;
 		std::array<GUILabel*, 8> m_MatchChat{};
 		GUITextBox* m_MatchChatInput = nullptr;
 		struct MatchChatLine {
