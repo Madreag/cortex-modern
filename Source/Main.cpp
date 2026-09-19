@@ -6150,10 +6150,10 @@ static void NetChatScriptOnSimTick(uint64_t simTick) {
 		const NetChatScriptLine& line = s_netChatScript[s_netChatScriptNext++];
 		const bool sent = g_NetMatchService.SendChat(line.scope, line.text);
 		{
-			std::ostringstream line;
-			line <<  "[chat-send] tick=" << simTick << " scope=" << (line.scope == c_NetChatScopeTeam ? "team" : "all")
-		          << " ok=" << (sent ? 1 : 0) << " text=" << line.text;
-			System::PrintDiagnosticLine(line.str());
+			std::ostringstream diag;
+			diag << "[chat-send] tick=" << simTick << " scope=" << (line.scope == c_NetChatScopeTeam ? "team" : "all")
+			    << " ok=" << (sent ? 1 : 0) << " text=" << line.text;
+			System::PrintDiagnosticLine(diag.str());
 		}
 	}
 	for (const NetChatEntry& entry : g_NetMatchService.TakeChatEntries()) {
