@@ -1853,7 +1853,7 @@ bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in) {
 	if (Activity* activity = g_ActivityMan.GetActivity()) {
 		if (!activity->ResolveCheckpointReferences()) return false;
 		activity->ClearAllPresentationViews();
-		activity->FillPresentationFromPreview(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+		activity->FillPresentationFromPreview(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 	}
 	if (!g_PrimitiveMan.ResolveCheckpointReferences()) return false;
 	ResolvePendingSnapshotLinks();

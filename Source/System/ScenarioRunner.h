@@ -340,8 +340,9 @@ namespace RTE {
 			uint64_t targetFrame = 0;
 			uint64_t sequence = 0;
 		};
-		/// Presentation peek of in-flight local buy orders: pending, outbox, and recovered commands.
-		static void PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out);
+		/// Presentation peek of in-flight local buy orders: pending, outbox, and recovered commands. The caller
+		/// passes the canonical committed tick; a preview's advanced clock would hide every order inside its horizon.
+		static void PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out, uint64_t canonicalTick);
 
 		/// Enqueue an owner-issued game command to ride the next local lockstep frame; the coordinator stamps
 		/// the sender and both peers apply it at the synced frame.

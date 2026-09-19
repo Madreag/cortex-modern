@@ -2292,13 +2292,18 @@ static void DrawFrameWithPreviews() {
 				return std::string(text);
 			};
 			const std::string& readout = GameActivity::GetLastFundsReadout(seat);
+			std::vector<std::string> problems;
+			const std::string extras = DescribeCanonicalExtras(problems);
+			// The peers compare the world dump; the extras carry this process's own accumulator, so they stay local.
+			const std::string suffix = tick == s_fundsPreviewPress + 1 ? std::string("funds_p1") : std::string("funds_pd");
+			WriteProbeText(suffix, DumpSimStateToString());
+			WriteProbeText(suffix + "_extras", extras);
 			std::cout << "[preview-funds-driver] tick=" << tick << " seat=" << seat << " seat_team=" << (activity ? activity->GetTeamOfPlayer(seat) : static_cast<int>(Activity::NoTeam))
 			          << " buy_team=" << s_fundsPreviewTeam
 			          << " buy_team_oz=" << (activity ? activity->DescribeFundsReadout(s_fundsPreviewTeam, seat) : std::string("EMPTY"))
 			          << " buy_team_committed=" << (activity ? oz(activity->GetTeamFunds(s_fundsPreviewTeam)) : std::string("EMPTY"))
+			          << " peek_tick=" << LocalPrediction::GetLastFillTick() << " problems=" << problems.size()
 			          << " readout=" << (readout.empty() ? "EMPTY" : readout) << std::endl;
-			std::vector<std::string> problems;
-			WriteProbeText(tick == s_fundsPreviewPress + 1 ? "funds_p1" : "funds_pd", DumpSimStateToString() + DescribeCanonicalExtras(problems));
 		}
 	}
 	g_SceneMan.SetRenderDrawContext(false);

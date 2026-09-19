@@ -1367,9 +1367,9 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? s_LockstepCoordinator->GetConfig().inputDelayFrames : 0;
 	}
 
-	void ScenarioRunner::PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out) {
+	void ScenarioRunner::PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out, uint64_t canonicalTick) {
 		out.clear();
-		const uint64_t now = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		const uint64_t now = canonicalTick;
 		const auto take = [&out, now](const NetGameCommand& command, uint64_t targetFrame) {
 			const NetGameDeliverCargo* delivery = std::get_if<NetGameDeliverCargo>(&command.payload);
 			if (!delivery || !delivery->queuedPurchase) {
