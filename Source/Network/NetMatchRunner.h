@@ -88,7 +88,15 @@ namespace RTE {
 		NetLobbySession& GetLobbySession() { return m_Lobby; }
 		const NetLobbySession& GetLobbySession() const { return m_Lobby; }
 		bool TookWorldJoinImage() const { return m_WorldJoinImage; }
+		/// Starts the joiner's lockstep at its activation tick without blocking the sim update it runs
+		/// inside: the handshake finishes over the pumps that follow.
+		/// @return Whether the coordinator is already running.
 		bool StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, std::string* error = nullptr);
+		/// One tick of a starting joiner's handshake. Returns whether the coordinator is running; a
+		/// false with an error set is the start giving up.
+		bool PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, std::string* error = nullptr);
+		/// Whether a joiner's lockstep start is mid-handshake and wants its tick this pump.
+		bool IsWorldJoinLockstepStarting() const { return m_WorldJoinStartMs != 0 && m_State == NetMatchRuntimeState::LockstepStarting; }
 		const NetMatchConfig& GetMatchConfig() const { return m_MatchConfig; }
 		const NetHash32& GetMatchConfigHash() const { return m_MatchConfigHash; }
 		bool UsesLobbyProtocol() const { return m_UseLobbyProtocol; }
@@ -134,6 +142,7 @@ namespace RTE {
 		std::vector<uint8_t> m_StateToStream; //!< Host: a match-state file the next lobby round streams out.
 		std::vector<uint8_t> m_ReceivedStateBytes; //!< The state file the last lobby round received.
 		bool m_WorldJoinImage = false;
+		uint64_t m_WorldJoinStartMs = 0; //!< When the joiner's lockstep start began, for its deadline.
 	};
 
 } // namespace RTE
