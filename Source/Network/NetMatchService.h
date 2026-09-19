@@ -648,6 +648,7 @@ namespace RTE {
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestServiceKick(std::string* error);
 		friend bool TestStartingKickMarshals(std::string* error);
+		friend bool TestLobbyModerationRows(std::string* error);
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
