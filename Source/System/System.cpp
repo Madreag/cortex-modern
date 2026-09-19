@@ -827,3 +827,15 @@ int System::ASCIIFileContainsString(const std::string& filePath, const std::stri
 		return (std::search(rawData.begin(), rawData.end(), findString.begin(), findString.end()) != rawData.end()) ? 0 : 1;
 	}
 }
+
+std::string System::LocalTimeText(std::time_t when, const char* format) {
+	std::tm local{};
+#ifdef _WIN32
+	if (localtime_s(&local, &when) != 0) return "";
+#else
+	if (localtime_r(&when, &local) == nullptr) return "";
+#endif
+	std::array<char, 64> text{};
+	const size_t written = std::strftime(text.data(), text.size(), format, &local);
+	return written == 0 ? "" : std::string(text.data(), written);
+}

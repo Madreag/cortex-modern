@@ -4,6 +4,7 @@
 #include <source_location>
 #include <filesystem> // only one use of std::filesystem::file_time_type
 #include <vector>
+#include <ctime>
 
 namespace RTE {
 
@@ -166,6 +167,12 @@ namespace RTE {
 		/// @param  The exact string to look for. Case sensitive!
 		/// @return 0 if the string was found in the file or 1 if not. -1 if the file was inaccessible.
 		static int ASCIIFileContainsString(const std::string& filePath, const std::string_view& findString);
+
+		/// Formats a point in time in the player's own time zone. Every surface a player reads shares this one call.
+		/// @param when The point in time, as seconds since the epoch.
+		/// @param format A strftime format; write no zone suffix into it, the zone is the machine's.
+		/// @return The formatted time, or an empty string when it does not fit 64 characters.
+		static std::string LocalTimeText(std::time_t when, const char* format);
 #pragma endregion
 
 	private:

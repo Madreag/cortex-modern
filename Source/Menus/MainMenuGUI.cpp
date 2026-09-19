@@ -3444,16 +3444,10 @@ void MainMenuGUI::RefreshReplayList() {
 			const auto convertedTime = fs::file_time_type::clock::to_sys(written);
 #endif
 			const auto systemTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(convertedTime);
-			const std::time_t time = std::chrono::system_clock::to_time_t(systemTime) - 7 * 60 * 60;
-			std::tm local{};
-#ifdef _WIN32
-			gmtime_s(&local, &time);
-#else
-			gmtime_r(&time, &local);
-#endif
-			std::ostringstream date;
-			date << std::put_time(&local, "%Y-%m-%d %H:%M MST");
-			row.text += " | " + date.str();
+			const std::time_t time = std::chrono::system_clock::to_time_t(systemTime);
+			// The player reads the file's date in their own time zone, so no zone suffix is written.
+			const std::string date = System::LocalTimeText(time, "%Y-%m-%d %H:%M");
+			if (!date.empty()) row.text += " | " + date;
 		}
 		NetMatchReplayReader reader;
 		if (reader.Open(row.path, &row.error)) {
