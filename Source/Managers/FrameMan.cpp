@@ -17,6 +17,7 @@
 #include "Actor.h"
 #include "AHuman.h"
 #include "Controller.h"
+#include "FrameRecorder.h"
 #include "HDFirearm.h"
 #include "InputScript.h"
 #include "LocalPrediction.h"
@@ -1050,6 +1051,37 @@ int FrameMan::SaveBitmap(SaveBitmapMode modeToSave, const std::string& nameBase,
 	} else {
 		return 0;
 	}
+}
+
+void FrameMan::RecordVideoFrame(const std::string& screen, const std::string& serviceState) {
+	FrameRecorder& recorder = FrameRecorder::Instance();
+	if (!recorder.Enabled()) return;
+	const int width = g_WindowMan.GetResX();
+	const int height = g_WindowMan.GetResY();
+	if (width <= 0 || height <= 0) return;
+	const std::size_t pitch = static_cast<std::size_t>(width) * 3;
+	const long long wallMS = FrameRecorder::SteadyNowMS();
+	unsigned char* pixels = recorder.BeginFrame(wallMS, pitch * static_cast<std::size_t>(height));
+	if (!pixels) return;
+
+	// Tight rows, so the buffer's pitch is the recorder's and any width reads back whole.
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	GL_CHECK(glBindTexture(GL_TEXTURE_2D, g_WindowMan.GetScreenBuffer()->GetColorTexture().id));
+	GL_CHECK(glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels));
+	glPixelStorei(GL_PACK_ALIGNMENT, 4);
+	// The texture is bottom-up and the PNG is not.
+	for (int y = 0; y < height / 2; ++y) {
+		std::swap_ranges(pixels + y * pitch, pixels + (y + 1) * pitch, pixels + (height - y - 1) * pitch);
+	}
+
+	FrameRecorder::FrameMeta meta;
+	meta.wallMS = wallMS;
+	meta.simTick = static_cast<unsigned long long>(g_TimerMan.GetSimUpdateCount());
+	meta.screen = screen;
+	meta.serviceState = serviceState;
+	meta.width = width;
+	meta.height = height;
+	recorder.EndFrame(meta);
 }
 
 void FrameMan::SaveScreenToBitmap() {

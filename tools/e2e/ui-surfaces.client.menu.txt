@@ -1,0 +1,52 @@
+# The joining player's side of every shared surface: join setup, the read-only match details, the
+# lobby's chat in both directions, ready.
+wait 60
+activate ButtonMainToMultiplayer
+wait 15
+assert_substate Landing
+settext TextMultiplayerName Joiner
+activate ButtonMultiplayerJoinGame
+wait 20
+assert_substate JoinSetup
+settext TextJoinAddress 127.0.0.1
+settext TextJoinPort {PORT}
+wait 20
+activate ButtonMultiplayerConnect
+wait_connected 2
+wait 30
+assert_substate Lobby
+dump_lobby
+wait 40
+chat And the joiner can answer on the same line
+wait 30
+dump_lobby
+activate ButtonLobbyOptions
+wait 20
+assert_substate HostOptions
+assert_label LabelHostOptionsTitle M A T C H   D E T A I L S
+activate TabHostPageSeats
+wait 25
+assert_visible CollectionBoxHostPageSeats 1
+activate ButtonHostSeatDetails0
+wait 20
+assert_visible HostSeatDialog 1
+assert_enabled ButtonHostSeatDlgKick 0
+assert_enabled ButtonHostSeatDlgBan 0
+dump_host_options
+activate ButtonHostSeatDlgClose
+wait 15
+activate TabHostPageNetwork
+wait 25
+assert_visible CollectionBoxHostPageNetwork 1
+dump_host_options
+activate ButtonHostOptBack
+wait 15
+assert_substate Lobby
+activate ButtonMultiplayerReady
+wait 20
+dump_lobby
+wait_file {PROBE_DIR}/done.json 240
+wait 40
+dump_lobby
+wait 30
+exit

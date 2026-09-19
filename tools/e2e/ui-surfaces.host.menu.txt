@@ -1,0 +1,107 @@
+# Every host-side surface this multiplayer effort added or changed, opened in order and held long
+# enough for the recorder: landing, host setup, the six host options pages, the seat dialog with
+# kick and ban, the visibility selector, the lobby and its chat.
+wait 60
+activate ButtonMainToMultiplayer
+wait 15
+assert_substate Landing
+assert_label LabelMultiplayerNamePrompt Multiplayer name:
+settext TextMultiplayerName Host
+wait 15
+activate ButtonMultiplayerHostGame
+wait 15
+assert_substate HostSetup
+settext TextHostPort {PORT}
+settext TextHostPlayers 2
+wait 15
+activate ButtonHostOptions
+wait 15
+activate TabHostPageSeats
+wait 25
+assert_visible CollectionBoxHostPageSeats 1
+dump_host_options
+activate ButtonHostSeatDetails0
+wait 20
+assert_visible HostSeatDialog 1
+assert_enabled ButtonHostSeatDlgKick 0
+assert_enabled ButtonHostSeatDlgBan 0
+assert_label LabelHostSeatDlgActionHint The host's own seat is never kicked or banned.
+dump_host_options
+activate ButtonHostSeatDlgClose
+wait 15
+assert_visible HostSeatDialog 0
+activate TabHostPageRules
+wait 25
+assert_visible CollectionBoxHostPageRules 1
+dump_host_options
+activate TabHostPageNetwork
+wait 25
+assert_visible CollectionBoxHostPageNetwork 1
+assert_label ComboHostNetVisibility LAN only
+combo_drop ComboHostNetVisibility
+wait 20
+dump_host_options
+combo_select ComboHostNetVisibility Unlisted
+wait 20
+assert_label ComboHostNetVisibility Unlisted
+dump_host_options
+combo_select ComboHostNetVisibility Listed
+wait 20
+assert_label ComboHostNetVisibility Listed
+dump_host_options
+combo_select ComboHostNetVisibility LAN only
+wait 20
+assert_label ComboHostNetVisibility LAN only
+activate TabHostPageRecovery
+wait 25
+assert_visible CollectionBoxHostPageRecovery 1
+assert_enabled ButtonHostRecRepairNow 0
+assert_label LabelHostRecRepairHint Repair needs a live match session
+dump_host_options
+activate TabHostPageFiles
+wait 25
+assert_visible CollectionBoxHostPageFiles 1
+dump_host_options
+activate TabHostPageSession
+wait 25
+assert_visible CollectionBoxHostPageSession 1
+dump_host_options
+activate ButtonHostOptBack
+wait 15
+activate ButtonMultiplayerCreate
+wait 25
+assert_substate Lobby
+wait_connected 2
+wait 25
+dump_lobby
+chat Both peers can read this line
+wait 30
+dump_lobby
+activate ButtonLobbyOptions
+wait 20
+assert_substate HostOptions
+activate TabHostPageSeats
+wait 25
+assert_visible CollectionBoxHostPageSeats 1
+activate ButtonHostSeatDetails1
+wait 20
+assert_visible HostSeatDialog 1
+assert_enabled ButtonHostSeatDlgKick 1
+assert_enabled ButtonHostSeatDlgBan 1
+dump_host_options
+activate ButtonHostSeatDlgClose
+wait 15
+assert_visible HostSeatDialog 0
+activate ButtonHostOptBack
+wait 15
+assert_substate Lobby
+activate ButtonMultiplayerReady
+wait 20
+wait_all_ready 90
+dump_lobby
+activate ButtonMultiplayerStart
+wait_file {PROBE_DIR}/done.json 240
+wait 40
+dump_lobby
+wait 30
+exit
