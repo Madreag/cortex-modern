@@ -137,6 +137,11 @@ namespace RTE {
 		/// The lockstep state every peer agrees on at the tick just completed. One reader for two
 		/// callers: the heal's snapshot capture and every checkpoint take these four fields from here.
 		static AutosaveSideState CaptureAgreedSideState();
+		/// A peer's agreed bindings as the packet that carried them, so the checkpoint stores no second
+		/// encoding of a wire type. The round id rides along and is not checked on the way back: the
+		/// resumed round is a new one.
+		static bool EncodeAgreedBindings(uint8_t peer, uint64_t round, uint64_t frame, const NetGamePlayerBindings& bindings, std::string& outHex);
+		static bool DecodeAgreedBindings(const std::string& hex, uint64_t& outFrame, NetGamePlayerBindings& outBindings);
 		static bool RestoreNetResyncState(const NetResyncState& state, std::string* error = nullptr);
 		/// The in-progress sim tick is the drop frame; the resumed round starts there.
 		static uint64_t ResyncResumeStartFrame(uint64_t dropFrame);

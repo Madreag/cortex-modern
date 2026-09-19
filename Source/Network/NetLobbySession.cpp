@@ -203,6 +203,7 @@ namespace RTE {
 			if (m_State == NetLobbyState::WaitingForConfigAck && AllConfigAcked()) {
 				m_State = NetLobbyState::WaitingForReady;
 			}
+			GiveUpWaitingForResumeAnswers(nowMs);
 			SendQueuedStateChunks();
 			SendStartIfReady();
 		} else if (m_Config.snapshotProviderPeerId == m_Config.localPeerId) {
@@ -1211,6 +1212,26 @@ namespace RTE {
 		offer.sideStateHash = m_Config.resumeSideStateHash;
 		std::string error;
 		(void)SendTo(m_RemoteTransports.at(peerId), offer, &error);
+	}
+
+	void NetLobbySession::GiveUpWaitingForResumeAnswers(uint64_t nowMs) {
+		if (m_Config.resumeMatchId.empty() || m_OutgoingChunkCount == 0) {
+			return;
+		}
+		for (uint8_t peerId: m_RemotePeerIds) {
+			if (!ResumeAwaitsAnswer(peerId) || !IsRemoteLobbyUp(peerId)) {
+				continue;
+			}
+			// The wait starts when the remote's own lobby is up: before that it has heard no offer.
+			const auto waiting = m_ResumeWaitStartedMs.emplace(peerId, nowMs).first;
+			if (nowMs < waiting->second || nowMs - waiting->second < c_ResumeAnswerWaitMs) {
+				continue;
+			}
+			// A remote that never answers is a remote without that checkpoint as far as this round is
+			// concerned: it is streamed the state, which is the path a peer without one always takes.
+			m_ResumeAnsweredPeers.insert(peerId);
+			std::cout << "[net-lobby] resume answer timed out for peer " << static_cast<int>(peerId) << "; streaming the state" << std::endl;
+		}
 	}
 
 	void NetLobbySession::HandleResume(const NetLobbyResume& message) {

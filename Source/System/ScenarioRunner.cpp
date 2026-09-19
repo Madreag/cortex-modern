@@ -1849,12 +1849,62 @@ namespace RTE {
 		return true;
 	}
 
+	bool ScenarioRunner::EncodeAgreedBindings(uint8_t peer, uint64_t round, uint64_t frame, const NetGamePlayerBindings& bindings, std::string& outHex) {
+		NetLockstepFrame packet;
+		packet.senderPeerId = peer;
+		packet.roundId = round;
+		packet.targetFrame = frame;
+		packet.commands.push_back(NetGameCommand{peer, bindings});
+		std::vector<uint8_t> encoded;
+		if (!NetLockstepCodec::Encode({packet}, encoded)) return false;
+		static constexpr char digits[] = "0123456789abcdef";
+		outHex.clear();
+		outHex.reserve(encoded.size() * 2);
+		for (uint8_t byte: encoded) {
+			outHex.push_back(digits[byte >> 4]);
+			outHex.push_back(digits[byte & 0x0F]);
+		}
+		return true;
+	}
+
+	bool ScenarioRunner::DecodeAgreedBindings(const std::string& hex, uint64_t& outFrame, NetGamePlayerBindings& outBindings) {
+		if (hex.empty() || hex.size() % 2 != 0) return false;
+		std::vector<uint8_t> bytes;
+		bytes.reserve(hex.size() / 2);
+		for (size_t index = 0; index < hex.size(); index += 2) {
+			uint8_t value = 0;
+			for (size_t half = 0; half < 2; ++half) {
+				const char digit = hex[index + half];
+				const int nibble = digit >= '0' && digit <= '9' ? digit - '0' : (digit >= 'a' && digit <= 'f' ? digit - 'a' + 10 : -1);
+				if (nibble < 0) return false;
+				value = static_cast<uint8_t>((value << 4) | static_cast<uint8_t>(nibble));
+			}
+			bytes.push_back(value);
+		}
+		const auto decoded = NetLockstepCodec::Decode(bytes.data(), bytes.size());
+		const auto* packet = decoded.ok ? std::get_if<NetLockstepFrame>(&decoded.packet.payload) : nullptr;
+		// The round the packet was encoded under is the ended match's; the resumed round has its own.
+		if (!packet || packet->commands.size() != 1 || !packet->frames.empty() || !packet->observations.empty()) return false;
+		const auto* bindings = std::get_if<NetGamePlayerBindings>(&packet->commands.front().payload);
+		if (!bindings) return false;
+		outFrame = packet->targetFrame;
+		outBindings = *bindings;
+		return true;
+	}
+
 	AutosaveSideState ScenarioRunner::CaptureAgreedSideState() {
 		AutosaveSideState agreed;
 		agreed.controlOwners = s_LockstepControlOverrides;
 		agreed.droppedControlOwners = s_LockstepDroppedControlOverrides;
 		agreed.appliedCommands = s_AppliedCommandSequences;
 		agreed.firstTransferUid = s_E2eFirstTransferUid;
+		// The seats every peer agreed on, carried as the very packet that carried them here: the tick's
+		// bindings are lockstep state, so a resumed round restores the same seats on every peer.
+		const uint64_t round = s_LockstepCoordinator ? s_LockstepCoordinator->GetRoundId() : 0;
+		for (const auto& [peer, binding]: s_PeerPlayerBindings) {
+			std::string encoded;
+			if (EncodeAgreedBindings(peer, round, binding.frame, binding.bindings, encoded)) agreed.playerBindings[peer] = encoded;
+		}
 		return agreed;
 	}
 
