@@ -505,6 +505,13 @@ namespace RTE {
 		return true;
 	}
 
+	bool AutosaveStore::RemoveOrphanAdmission(const std::filesystem::path& directory, const std::string& matchId) {
+		if (!ValidMatchId(matchId) || !ListRestorable(directory, matchId).empty()) return false;
+		std::error_code ignored;
+		std::filesystem::remove(AdmissionPath(directory, matchId), ignored);
+		return true;
+	}
+
 	std::vector<AutosaveDescriptor> AutosaveStore::ListResumable(const std::filesystem::path& directory) {
 		std::vector<std::string> matchIds;
 		std::error_code status;

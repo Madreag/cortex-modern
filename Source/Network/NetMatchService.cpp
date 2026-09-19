@@ -1347,6 +1347,8 @@ static std::string ResyncSaveName() {
 			m_Worker.join();
 		}
 		RunCleanLeave();
+		// The round is over here too: an admission file with no checkpoint left behind it goes now.
+		SweepRestartAdmission();
 		m_LanDiscovery.Stop();
 		m_Directory.Shutdown(); // the DELETE goes out before the row would expire
 		s_PortMap.Release();    // the router mapping goes out with the listing
@@ -1838,6 +1840,7 @@ static std::string ResyncSaveName() {
 		DriveReconnectUx(nowMs);
 		// The host's restart admission rides this pump: file IO, never the sim thread.
 		PublishRestartAdmission();
+		SweepRestartAdmission();
 		// 7e: while the prompt waits for a host to come back, this is what watches for its row.
 		PumpHostReturnWatch(nowMs);
 		// Last: the expiry destroys the service, so nothing in this pump may run after it.
@@ -2933,18 +2936,28 @@ static std::string ResyncSaveName() {
 		std::vector<uint8_t> state;
 		uint64_t generation = 0, roundId = 0;
 		uint32_t interval = 0;
+		uint64_t revision = 0;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (!m_IsHost || !m_AdmissionAttached || m_AutosaveMatchId.empty() || !AutosaveStore::ValidMatchId(m_AutosaveMatchId)) return;
-			state = m_ReconnectHost.ExportMigrationState();
+			// A match that writes no checkpoint has nothing to resume, so it leaves no admission file.
+			if (m_MatchAutosaveSeconds == 0) return;
 			matchId = m_AutosaveMatchId;
 			directorySession = m_DirectorySessionId;
 			directoryToken = m_DirectoryToken;
-			// A file is rewritten only when the admission state or the row it resumes actually moved, so
-			// a running match writes nothing per tick.
-			const bool stale = m_RestartAdmissionDue.load() || state != m_LastRestartAdmissionState ||
+			revision = m_ReconnectHost.GetStateRevision();
+			// The three cheap questions first - a new checkpoint, a moved admission plane, a moved row -
+			// so an unchanged pump never pays for the export at all.
+			const bool stale = m_RestartAdmissionDue.load() || revision != m_PublishedAdmissionRevision ||
 			                   directorySession != m_PublishedDirectorySession || directoryToken != m_PublishedDirectoryToken;
-			if (state.empty() || !stale) return;
+			if (!stale) return;
+			state = m_ReconnectHost.ExportMigrationState();
+			// A revision that moved without changing what the export renders rewrites nothing.
+			if (state.empty() || state == m_LastRestartAdmissionState) {
+				m_PublishedAdmissionRevision = revision;
+				m_RestartAdmissionDue.store(false);
+				return;
+			}
 			row = NetDirectoryCodec::EncodeRegisterRequest(m_DirectoryRow);
 			roundId = m_AutosaveIdentity.roundId;
 			interval = m_AutosaveIdentity.intervalSeconds;
@@ -2972,8 +2985,31 @@ static std::string ResyncSaveName() {
 		m_LastRestartAdmissionState = std::move(state);
 		m_PublishedDirectorySession = directorySession;
 		m_PublishedDirectoryToken = directoryToken;
+		m_PublishedAdmissionRevision = revision;
+		m_PublishedAdmissionMatchId = matchId;
 		m_RestartAdmissionGeneration = generation;
 		m_RestartAdmissionDue.store(false);
+	}
+
+	void NetMatchService::SweepRestartAdmission() {
+		std::string matchId;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_PublishedAdmissionMatchId.empty()) return;
+			// Still checkpointing that very match: the file belongs to a match that can still be resumed.
+			if (m_IsHost && m_MatchAutosaveSeconds > 0 && m_AutosaveMatchId == m_PublishedAdmissionMatchId) return;
+			matchId = m_PublishedAdmissionMatchId;
+			// One sweep per ended round: the check reads every archive of the match, so it may not ride
+			// the pump more than once.
+			m_PublishedAdmissionMatchId.clear();
+		}
+		if (AutosaveStore::RemoveOrphanAdmission(AutosaveStore::Directory(), matchId)) {
+			std::cout << "[autosave] restart admission removed: no checkpoint of match=" << matchId << " is left" << std::endl;
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_LastRestartAdmissionState.clear();
+			m_PublishedDirectorySession.clear();
+			m_PublishedDirectoryToken.clear();
+		}
 	}
 
 	bool NetMatchService::PrepareResume(NetMatchServiceRequest& request, std::string* error) {

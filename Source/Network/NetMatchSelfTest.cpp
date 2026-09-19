@@ -2089,6 +2089,32 @@ namespace RTE {
 				*error = "the admission file outlived the last checkpoint of its match";
 				return false;
 			}
+			// The sweep of an ended round: an admission file with a checkpoint behind it is kept, and
+			// one with nothing left to resume is removed.
+			if (sealed) {
+				AutosaveAdmission orphan;
+				orphan.schema = AutosaveStore::c_AdmissionSchema;
+				orphan.matchId = matchId;
+				orphan.generation = 9;
+				orphan.sealed = {1, 2, 3, 4};
+				if (!AutosaveStore::PublishAdmission(scratch.path, orphan, error)) return false;
+				WriteResumeArchiveStub(scratch.path, matchId, 240);
+				AutosaveManifest standing = manifest;
+				standing.savedTick = 240;
+				if (!AutosaveStore::PublishManifest(scratch.path, standing, error)) return false;
+				if (AutosaveStore::RemoveOrphanAdmission(scratch.path, matchId) ||
+				    !std::filesystem::exists(AutosaveStore::AdmissionPath(scratch.path, matchId))) {
+					*error = "the sweep removed an admission file while a checkpoint of its match stood";
+					return false;
+				}
+				std::error_code ignored;
+				std::filesystem::remove(AutosaveStore::ArchivePath(scratch.path, matchId, 240), ignored);
+				if (!AutosaveStore::RemoveOrphanAdmission(scratch.path, matchId) ||
+				    std::filesystem::exists(AutosaveStore::AdmissionPath(scratch.path, matchId))) {
+					*error = "the sweep left an admission file for a match with no checkpoint";
+					return false;
+				}
+			}
 			return true;
 		}
 
