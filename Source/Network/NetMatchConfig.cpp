@@ -139,6 +139,7 @@ namespace RTE {
 			        {"idle_wait_minutes", config.idleWaitMinutes}, {"automatic_repair", config.automaticRepair},
 			        {"path_horizon_ticks", config.pathHorizonTicks},
 			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)},
+			        {"slow_player_bound_ticks", config.slowPlayerBoundTicks}, {"slow_player_policy", static_cast<uint8_t>(config.slowPlayerPolicy)},
 			        {"frame_redundancy_ticks", config.frameRedundancyTicks}};
 		}
 
@@ -161,6 +162,10 @@ namespace RTE {
 				{"delay_policy", std::to_string(static_cast<uint8_t>(config.delayPolicy))},
 			};
 			fields.insert(fields.end(), tail.begin(), tail.end());
+			if (config.version >= NetMatchConfigUtil::c_TimingOptionsVersion) {
+				fields.emplace_back("slow_player_bound_ticks", std::to_string(config.slowPlayerBoundTicks));
+				fields.emplace_back("slow_player_policy", std::to_string(static_cast<uint8_t>(config.slowPlayerPolicy)));
+			}
 			if (config.pathHorizonTicks != 0) {
 				fields.emplace_back("path_horizon_ticks", std::to_string(config.pathHorizonTicks));
 			}
@@ -293,11 +298,15 @@ namespace RTE {
 	}
 
 	bool NetMatchConfigUtil::ValidateLocalAlpha(const NetMatchConfig& config, std::string* error) {
-		if (config.version != 2 && config.version != 3 && config.version != c_Version && config.version != c_PersistentWorldVersion) {
+		if (config.version < 2 || config.version > c_Version) {
 			if (error) *error = "match config version is unsupported";
 			return false;
 		}
 		auto refuse = [&](const char* reason) { if (error) *error = reason; return false; };
+		if (config.version >= c_TimingOptionsVersion &&
+		    (config.slowPlayerBoundTicks == 0 || config.slowPlayerBoundTicks > c_MaxSlowPlayerBoundTicks ||
+		     (config.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute && config.slowPlayerPolicy != NetSlowPlayerPolicy::Pause)))
+			return refuse("invalid slow player bound or policy");
 		if (config.version == 2) {
 			// A v2 config predates the rules block, so it carries the pre-rules end rule too.
 			NetMatchConfig legacyDefaults;
@@ -307,12 +316,12 @@ namespace RTE {
 		}
 		// Every pre-v4 config predates the spectate byte, so it cannot carry anything but the pre-spectate rule.
 		if (config.version < 4 && config.brainlessHumansSpectate) return refuse("pre-spectate config cannot carry the spectate rule");
-		// The persistent world's fields reached the wire in v5; an ordinary match stays on v4 and hashes as it always did.
+		// Recordings before the world layout carry no world identity.
 		const auto carriesWorldCapacity = [&] {
 			return config.worldMaxSpectators != 0 || config.worldRespawnDelaySeconds != 0 ||
 			       std::any_of(config.worldTeamCapacity.begin(), config.worldTeamCapacity.end(), [](uint8_t capacity) { return capacity != 0; });
 		};
-		if (config.version < c_PersistentWorldVersion) {
+		if (config.version < c_WorldLayoutVersion) {
 			if (config.persistentWorld) return refuse("pre-world config cannot carry the persistent world rule");
 			if (!config.worldId.empty() || config.worldBoot != 0) return refuse("pre-world config cannot carry a world identity");
 			if (carriesWorldCapacity()) return refuse("pre-world config cannot carry world capacity");
@@ -544,7 +553,7 @@ namespace RTE {
 			const auto rules = RuleFields(config);
 			fields.insert(fields.end(), rules.begin(), rules.end());
 		}
-		const char* domain = config.persistentWorld ? "NetMatchConfig/v5"
+		const char* domain = config.version >= c_TimingOptionsVersion ? "NetMatchConfig/v6" : config.persistentWorld ? "NetMatchConfig/v5"
 		                                            : (config.version >= 4 ? "NetMatchConfig/v4" : (config.version >= 3 ? "NetMatchConfig/v3" : "NetMatchConfig/v2"));
 		return NetIdentity::HashCanonicalText(domain, fields);
 	}

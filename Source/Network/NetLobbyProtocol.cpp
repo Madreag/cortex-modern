@@ -326,10 +326,10 @@ namespace RTE {
 				if (config.pathHorizonTicks != 0) {
 					AppendU16LE(out, config.pathHorizonTicks);
 				}
-				if (config.version >= NetMatchConfigUtil::c_PersistentWorldVersion) {
+				if (config.version >= NetMatchConfigUtil::c_WorldLayoutVersion) {
 					if (!AppendString(out, config.worldId, NetMatchConfigUtil::c_WorldIdBytes, "world_id", error)) return false;
 					AppendU64LE(out, config.worldBoot);
-					// The world block grows at its end, so a v4 config's bytes never move.
+					// The world block keeps its recorded layout.
 					for (const uint8_t capacity: config.worldTeamCapacity) {
 						AppendU8(out, capacity);
 					}
@@ -355,6 +355,10 @@ namespace RTE {
 						if (!AppendString(out, address, NetLobbyProtocol::c_MaxShortTextBytes, "migration address", error))
 							return false;
 				}
+			}
+			if (config.version >= NetMatchConfigUtil::c_TimingOptionsVersion) {
+				AppendU16LE(out, config.slowPlayerBoundTicks);
+				AppendU8(out, static_cast<uint8_t>(config.slowPlayerPolicy));
 			}
 			return true;
 		}
@@ -384,7 +388,7 @@ namespace RTE {
 			// an older peer can never read a world's round as an ordinary match.
 			out.persistentWorld = (reserved & NetMatchConfigUtil::c_ReservedPersistentWorldBit) != 0;
 			const uint16_t allowed = static_cast<uint16_t>(NetMatchConfigUtil::c_ReservedKnownMask |
-			                                              (out.version >= NetMatchConfigUtil::c_PersistentWorldVersion ? NetMatchConfigUtil::c_ReservedPersistentWorldBit : 0));
+			                                              (out.version >= NetMatchConfigUtil::c_WorldLayoutVersion ? NetMatchConfigUtil::c_ReservedPersistentWorldBit : 0));
 			if (reserved & ~allowed) {
 				SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 2, "config reserved field must be zero");
 				return false;
@@ -458,7 +462,7 @@ namespace RTE {
 				out.worldTeamCapacity = {};
 				out.worldMaxSpectators = 0;
 				out.worldRespawnDelaySeconds = 0;
-				if (out.version >= NetMatchConfigUtil::c_PersistentWorldVersion) {
+				if (out.version >= NetMatchConfigUtil::c_WorldLayoutVersion) {
 					if (!reader.ReadString(out.worldId, NetMatchConfigUtil::c_WorldIdBytes, "world_id", error) ||
 					    !ReadOrTruncated(reader.ReadU64LE(out.worldBoot), reader, error, "world_boot")) return false;
 					for (uint8_t& capacity: out.worldTeamCapacity) {
@@ -515,6 +519,13 @@ namespace RTE {
 					}
 					out.migrationPeers.push_back(std::move(peer));
 				}
+			}
+			out.slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
+			out.slowPlayerPolicy = NetSlowPlayerPolicy::Pause;
+			if (out.version >= NetMatchConfigUtil::c_TimingOptionsVersion) {
+				uint8_t policy = 0;
+				if (!ReadOrTruncated(reader.ReadU16LE(out.slowPlayerBoundTicks) && reader.ReadU8(policy), reader, error, "slow player policy")) return false;
+				out.slowPlayerPolicy = static_cast<NetSlowPlayerPolicy>(policy);
 			}
 			std::string validateError;
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(out, &validateError)) {
