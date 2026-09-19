@@ -4,6 +4,9 @@
 #include "Scene.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
+#include "AudioMan.h"
+#include "LuaMan.h"
+#include "RTETools.h"
 
 #include "lua.hpp"
 
@@ -21,6 +24,7 @@
 #include <iterator>
 #include <map>
 #include <stdexcept>
+#include <unordered_set>
 #include <vector>
 
 using namespace RTE;
@@ -57,9 +61,10 @@ void CheckpointCow::RememberLua(std::vector<CheckpointText> graphs, uint64_t wri
 	m_LuaWriteGeneration = writeGeneration;
 }
 
-bool CheckpointCow::LuaUnchanged(uint64_t writeGeneration) const {
+bool CheckpointCow::LuaUnchanged(uint64_t writeGeneration, size_t stateCount) const {
 	std::lock_guard lock(m_Mutex);
-	return writeGeneration == m_LuaWriteGeneration && !m_LuaGraphs.empty();
+	// A state added or dropped since the last capture changes the graph set whatever the write generation says.
+	return writeGeneration == m_LuaWriteGeneration && !m_LuaGraphs.empty() && m_LuaGraphs.size() == stateCount;
 }
 
 void CheckpointCow::FinishImage(std::shared_ptr<CheckpointImage> image) {
@@ -256,6 +261,24 @@ bool RTE::RunCheckpointSceneRows() {
 		fail("image_ignores_writes_during_worker_traversal", "front actor is not a MovableObject", "a live MovableObject");
 		return false;
 	}
+	// A capture assigns sound identities and can draw counters; the rows hand the sim back what they took.
+	struct BorrowedCounters {
+		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
+		long uid = MovableObject::GetUniqueIDCounter();
+		int cursor = g_LuaMan.GetScriptStateCursor();
+		CheckpointSoundRegistry sounds = g_AudioMan.CaptureCheckpointSoundRegistry();
+		uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+		std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
+		~BorrowedCounters() {
+			g_SimRNG = sim;
+			g_RenderRNG = render;
+			MovableObject::PinUniqueIDCounter(uid);
+			g_LuaMan.SetScriptStateCursor(cursor);
+			g_AudioMan.RestoreCheckpointSoundRegistry(std::move(sounds));
+			g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
+			g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
+		}
+	} borrowed;
 	const auto capture = [live](CheckpointCache* cache) {
 		CheckpointWriter::CacheScope scope(cache);
 		return Writer::Capture([live](Writer& writer) { Scene::SaveSceneObject(writer, live, false, true); });

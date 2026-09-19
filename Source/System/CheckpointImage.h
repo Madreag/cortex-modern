@@ -55,7 +55,7 @@ namespace RTE {
 
 		void BeginImage();
 		void RememberLua(std::vector<CheckpointText> graphs, uint64_t writeGeneration);
-		bool LuaUnchanged(uint64_t writeGeneration) const;
+		bool LuaUnchanged(uint64_t writeGeneration, size_t stateCount) const;
 		std::vector<CheckpointText> LastLua() const {
 			std::lock_guard lock(m_Mutex);
 			return m_LuaGraphs;
