@@ -35,7 +35,9 @@ namespace RTE {
 		/// The newest checkpoint this process published and validated, kept so a heal names the rewind point
 		/// without reading the disk on the game thread. The archive thread writes it, the game thread reads it.
 		std::mutex s_ValidatedMutex;
-		AutosaveDescriptor s_Validated;
+		/// Keyed by match: one process can hold checkpoints of more than one match, and the newest of
+		/// each stays findable instead of the last publish evicting every other match's record.
+		std::map<std::string, AutosaveDescriptor> s_Validated;
 
 		/// This peer's "Autosaves kept" option, applied from its settings; the store never reads them itself.
 		std::atomic<size_t> s_RetainedAutosaves{AutosaveStore::c_RetainedAutosaves};
@@ -686,16 +688,18 @@ namespace RTE {
 		if (descriptor.matchId.empty() || descriptor.savedTick == 0) return;
 		std::lock_guard<std::mutex> lock(s_ValidatedMutex);
 		// A healed round can republish a tick it already wrote, so only an older tick of the same match loses.
-		if (s_Validated.matchId == descriptor.matchId && descriptor.savedTick < s_Validated.savedTick) return;
-		s_Validated = descriptor;
+		auto& held = s_Validated[descriptor.matchId];
+		if (held.matchId == descriptor.matchId && descriptor.savedTick < held.savedTick) return;
+		held = descriptor;
 	}
 
 	std::optional<AutosaveDescriptor> AutosaveStore::NewestValidated(const std::string& matchId) {
 		std::lock_guard<std::mutex> lock(s_ValidatedMutex);
-		if (matchId.empty() || s_Validated.matchId != matchId) return std::nullopt;
+		const auto held = s_Validated.find(matchId);
+		if (matchId.empty() || held == s_Validated.end()) return std::nullopt;
 		std::error_code status;
-		if (!std::filesystem::is_regular_file(s_Validated.path, status)) return std::nullopt;
-		return s_Validated;
+		if (!std::filesystem::is_regular_file(held->second.path, status)) return std::nullopt;
+		return held->second;
 	}
 
 	bool AutosaveStore::RunSelfTest(const std::string& matchId) {
