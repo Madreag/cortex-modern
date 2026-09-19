@@ -5246,7 +5246,7 @@ static std::string ResyncSaveName() {
 			                              ? static_cast<uint32_t>(config.matchConfig.idleWaitMinutes) * 60000 : 0u;
 		}
 		config.autoReady = config.host;
-		// A world keeps its start intent when a newly admitted peer refreshes the lobby roster.
+		// World hosts, including the menu path, start automatically once their bound players are ready.
 		config.autoStart = config.host && config.matchConfig.persistentWorld;
 		config.readyRequested = &m_ReadyRequested;
 		config.startRequested = &m_StartRequested;
