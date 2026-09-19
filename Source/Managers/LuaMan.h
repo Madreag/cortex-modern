@@ -202,8 +202,6 @@ namespace RTE {
 		/// Arms it with the registry as a rollback root as well, which the release's reference order makes safe.
 		/// @param rootRegistry Whether the registry rolls back with the globals.
 		void CapturePreviewGlobalFence(bool rootRegistry);
-		/// Whether a window this state armed took the registry as a rollback root, as the VM reported it at the arm.
-		bool PreviewRegistryRooted() const { return m_PreviewRegistryRooted; }
 		/// Drops the luabind references the window made, so they are off luabind's free list before any state rolls back.
 		/// @return How many cached scripts were put back.
 		int DropPreviewWindowReferences();
