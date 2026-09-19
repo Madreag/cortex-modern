@@ -2996,15 +2996,6 @@ void Scene::NoteHorizonTerrainBox(const Box& newArea) {
 	}
 }
 
-void Scene::RestoreHorizonAfterPreview() {
-	m_HorizonTerrainBoxes.clear();
-	for (std::unique_ptr<PathFinder>& pathFinder: m_pPathFinders) {
-		if (pathFinder) {
-			pathFinder->RestoreHorizonOverlay();
-		}
-	}
-}
-
 void Scene::FlushHorizonTerrainBoxes() {
 	if (m_HorizonTerrainBoxes.empty()) {
 		return;

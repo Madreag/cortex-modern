@@ -177,9 +177,6 @@ namespace RTE {
 		/// Applies every horizon job whose commit tick is due. A job not ready at T+H stalls the sim tick until it is.
 		void CommitHorizonThrough(uint64_t nowTick);
 
-		/// Drops jobs, pins and overlay cells. Waits for workers up to c_HorizonWaitCapUs.
-		void RestoreHorizonOverlay();
-
 		void CaptureHorizonFence(HorizonFenceState& out) const;
 		void RestoreHorizonFence(const HorizonFenceState& in);
 

@@ -112,22 +112,27 @@ namespace {
 	struct HorizonReadScope {
 		HorizonReadScope(PathFinder* finder, bool enable, uint64_t pinned = 0, bool alreadyHeld = false) :
 		    m_Finder(finder),
-		    m_Enable(enable) {
+		    m_Enable(enable),
+		    m_PreviousRead(s_ReadCommittedHorizon),
+		    m_PreviousGeneration(s_PinnedHorizonGeneration) {
 			if (m_Enable && m_Finder) {
-				s_ReadCommittedHorizon = true;
 				m_Generation = alreadyHeld ? pinned : m_Finder->BeginCommittedHorizonRead();
+				s_ReadCommittedHorizon = true;
 				s_PinnedHorizonGeneration = m_Generation;
 			}
 		}
 		~HorizonReadScope() {
 			if (m_Enable && m_Finder) {
 				m_Finder->EndCommittedHorizonRead(m_Generation);
-				s_ReadCommittedHorizon = false;
-				s_PinnedHorizonGeneration = 0;
+				// An enclosing shared query keeps its own pin.
+				s_ReadCommittedHorizon = m_PreviousRead;
+				s_PinnedHorizonGeneration = m_PreviousGeneration;
 			}
 		}
 		PathFinder* m_Finder = nullptr;
 		bool m_Enable = false;
+		bool m_PreviousRead = false;
+		uint64_t m_PreviousGeneration = 0;
 		uint64_t m_Generation = 0;
 	};
 
@@ -324,10 +329,6 @@ void PathFinder::ClearHorizonState() {
 	m_HorizonWorkerDelayMs = 0;
 	m_HorizonWorkerLate = false;
 	m_HorizonWorkerHold.store(false);
-}
-
-void PathFinder::RestoreHorizonOverlay() {
-	ClearHorizonState();
 }
 
 void PathFinder::CaptureHorizonFence(HorizonFenceState& out) const {
