@@ -46,6 +46,9 @@
 
 using namespace RTE;
 
+thread_local int s_PrintDepth = 0;
+thread_local int s_LastFaultDepthPath = 0;
+
 namespace {
 	class Sha256 {
 	public:
@@ -149,18 +152,29 @@ namespace {
 		if (whole.empty() || whole.back() != '\n') {
 			whole += '\n';
 		}
+		struct DepthGuard {
+			DepthGuard() { ++s_PrintDepth; }
+			~DepthGuard() { --s_PrintDepth; }
+		} depth;
 		std::scoped_lock printLock(PrintLock());
 		stream.write(whole.data(), static_cast<std::streamsize>(whole.size()));
 		stream.flush();
 	}
 
-	// A fault handler runs on the thread that faulted, which may be the thread holding the print lock: a
-	// record that waits for that lock is a record nobody ever reads, so an unlocked write is taken instead.
+	// A fault on this thread while a print is in progress takes the unlocked path; try_to_lock is only
+	// for a fault on another thread.
 	void WriteFaultLine(std::ostream& stream, std::FILE* file, const std::string& line) {
 		std::string whole = line;
 		if (whole.empty() || whole.back() != '\n') {
 			whole += '\n';
 		}
+		if (s_PrintDepth != 0) {
+			s_LastFaultDepthPath = 1;
+			std::fwrite(whole.data(), 1, whole.size(), file);
+			std::fflush(file);
+			return;
+		}
+		s_LastFaultDepthPath = 0;
 		std::unique_lock<std::mutex> printLock(PrintLock(), std::try_to_lock);
 		if (printLock.owns_lock()) {
 			stream.write(whole.data(), static_cast<std::streamsize>(whole.size()));
@@ -460,7 +474,7 @@ bool System::RunPrintDisciplineSelfTest() {
 		System::PrintDiagnosticLine("[print-discipline-selftest] outer line");
 		std::cout.rdbuf(original);
 		const std::vector<std::string> writes = nesting.Writes();
-		check("nested_print_returns", writes.size() == 1, "writes=" + std::to_string(writes.size()));
+		check("nested_print_returns", writes.size() == 1, "writes=" + std::to_string(writes.size()) + " depth_path=" + std::to_string(s_LastFaultDepthPath));
 		check("outer_line_is_one_write", writes.size() == 1 && writes.front() == "[print-discipline-selftest] outer line\n",
 		      writes.empty() ? std::string("none") : writes.front().substr(0, writes.front().size() - (writes.front().back() == '\n' ? 1 : 0)));
 	}

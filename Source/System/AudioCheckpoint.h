@@ -244,15 +244,13 @@ struct Voice {
 		try { Voice value; CheckpointReader archive(text, CheckpointVersion(text)); value.Fields(archive); archive.Finish(); if (value.identity <= 0 || value.path.empty() || value.bus < 0 || value.bus > 2 || value.priority < 0 || value.priority > 256 || value.loops < -1 || value.loopStart > value.loopEnd || !Finite(value.frequency) || !Finite(value.minimumAudibleDistance)) return false; if (!validateOnly) *this = std::move(value); return true; }
 		catch (const std::exception&) { return false; }
 	}
-	static Voice Capture(int identity, uint64_t owner, const std::string& path, float minimumAudibleDistance, FMOD::Channel* channel, int bus, bool awaitingSample) {
+	static Voice Capture(int identity, uint64_t owner, const std::string& path, float minimumAudibleDistance, FMOD::Channel* channel, int bus, bool awaitingSample, unsigned simPosition = 0) {
 		Voice voice; voice.identity = identity; voice.owner = owner; voice.path = path; voice.minimumAudibleDistance = minimumAudibleDistance; voice.bus = bus;
 		voice.playing = channel != nullptr || awaitingSample;
-		if (!channel || channel->getPosition(&voice.position, FMOD_TIMEUNIT_PCM) != FMOD_OK) return voice;
+		// The archived cursor is the sim-time position, never the mixer's.
+		voice.position = simPosition;
+		if (!channel) return voice;
 		Require(channel->getFrequency(&voice.frequency)); Require(channel->getPriority(&voice.priority));
-		// A channel that has run out of samples still reports playing, but its length is one past
-		// the last frame a restore can seek to.
-		FMOD::Sound* current = nullptr; unsigned int length = 0;
-		if (channel->getCurrentSound(&current) == FMOD_OK && current && current->getLength(&length, FMOD_TIMEUNIT_PCM) == FMOD_OK && length > 0 && voice.position >= length) voice.position = length - 1;
 		Require(channel->getLoopCount(&voice.loops)); Require(channel->getLoopPoints(&voice.loopStart, FMOD_TIMEUNIT_PCM, &voice.loopEnd, FMOD_TIMEUNIT_PCM));
 		FMOD_MODE mode; Require(channel->getMode(&mode)); voice.control = Control::Capture(channel, (mode & FMOD_3D) != 0);
 		return voice;

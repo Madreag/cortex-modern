@@ -3635,6 +3635,9 @@ Actor* MovableMan::RemoveActor(MovableObject* pActorToRem) {
 		}
 		RemoveActorFromTeamRoster(dynamic_cast<Actor*>(pActorToRem));
 		pActorToRem->SetAsAddedToMovableMan(false);
+		if (Actor* actor = dynamic_cast<Actor*>(pActorToRem)) {
+			actor->GetController()->DropLocalProduction();
+		}
 	}
 	return removed;
 }
@@ -4638,6 +4641,7 @@ void MovableMan::Update() {
 
 				// Delete
 				m_ContiguousActorIDs.erase(*aIt);
+				(*aIt)->GetController()->DropLocalProduction();
 				(*aIt)->DestroyScriptState();
 				delete (*aIt);
 				m_ValidActors.erase(*aIt);
