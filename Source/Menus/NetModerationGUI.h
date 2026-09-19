@@ -43,6 +43,8 @@ namespace RTE {
 		const OverlayRect& GetToastRect() const { return m_ToastRect; }
 		const OverlayRect& GetChatRect() const { return m_ChatRect; }
 		bool IsChatEntryOpen() const { return m_ChatEntryOpen; }
+		/// The SDL scancode the entry opens on, as the settings key name resolves it.
+		static int ChatKeyScancode();
 
 		struct Controls {
 			GUILabel* name = nullptr;

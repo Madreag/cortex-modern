@@ -916,7 +916,8 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 		rows = 1;
 	}
 	const int height = rows * lineH + inputH;
-	if (height <= 0) {
+	// An open entry that the free area cannot hold gives way rather than drawing over an occupier.
+	if (height <= 0 || height > available) {
 		for (GUILabel* label: m_MatchChat) {
 			if (!label) continue;
 			label->SetVisible(false);
@@ -1120,6 +1121,10 @@ bool NetModerationGUI::AutomationModerate(const std::string& action, int stableS
 	HandleEvents();
 	Refresh();
 	return m_ActionResult == NetH4ModerationResult::Ok;
+}
+
+int NetModerationGUI::ChatKeyScancode() {
+	return static_cast<int>(ChatScancode());
 }
 
 GUIControl* NetModerationGUI::GetControl(const std::string& name) const {

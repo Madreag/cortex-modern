@@ -2,7 +2,9 @@
 
 Writes the network-UI probe scripts the completion pass runs. Does not launch unless --launch
 is set. Viewports 640x360, 960x540 and 1280x720. The host send_chat step is the line; the guest
-waits for LabelMatchChatNewest within 120 renders; both assert_net_ui_clear chat_layout.
+waits for LabelMatchChatNewest within 120 renders; both open the seats panel so the layout
+assertion has an occupier to clear, then open the entry with the chat key and assert the band
+still yields a history row and overlaps nothing.
 """
 
 from __future__ import annotations
@@ -21,6 +23,30 @@ TICKS = 900
 PORT_BASE = 48480
 
 
+def open_panel_steps():
+    """The seats panel is the occupier the band has to keep clear of in a running match."""
+    return [
+        {"op": "key_down", "key": "F6"},
+        {"op": "key_up", "key": "F6"},
+        {"op": "wait", "panel_open": True},
+    ]
+
+
+def open_entry_steps():
+    """The chat key opens the entry; the band then owes a history row under the carved bottom."""
+    return [
+        {"op": "key_down", "key": "CHAT"},
+        {"op": "key_up", "key": "CHAT"},
+        {"op": "wait", "renders": 4, "chat_entry_open": True},
+        {"op": "assert_control", "control": "TextMatchChatInput", "equals": {"visible": True}},
+        {"op": "assert_control", "control": "LabelMatchChat0", "equals": {"visible": True}},
+        {"op": "assert_net_ui_clear", "chat_layout": True, "entry_open": True, "occupiers_at_least": 1, "status": False},
+        {"op": "key_down", "key": "Escape"},
+        {"op": "key_up", "key": "Escape"},
+        {"op": "wait", "renders": 4, "chat_entry_open": False},
+    ]
+
+
 def host_steps():
     return [
         {"op": "wait", "service": "Running"},
@@ -28,7 +54,9 @@ def host_steps():
         {"op": "send_chat", "text": CHAT_LINE, "scope": "all"},
         {"op": "wait", "renders": 8, "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
         {"op": "assert_control", "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
-        {"op": "assert_net_ui_clear", "chat_layout": True, "status": False},
+        *open_panel_steps(),
+        {"op": "assert_net_ui_clear", "chat_layout": True, "entry_open": False, "occupiers_at_least": 1, "status": False},
+        *open_entry_steps(),
         {"op": "finish"},
     ]
 
@@ -39,7 +67,9 @@ def guest_steps():
         {"op": "wait", "sim_at_least": 60},
         {"op": "wait", "renders": 120, "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
         {"op": "assert_control", "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
-        {"op": "assert_net_ui_clear", "chat_layout": True, "status": False},
+        *open_panel_steps(),
+        {"op": "assert_net_ui_clear", "chat_layout": True, "entry_open": False, "occupiers_at_least": 1, "status": False},
+        *open_entry_steps(),
         {"op": "finish"},
     ]
 
