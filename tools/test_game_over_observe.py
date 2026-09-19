@@ -3,6 +3,8 @@
 The detector is the native ApplyObserveLookAround row (observe_target_held_until_sim
 / observe_target_moves_after_sim). This driver only stages the fixture and scores
 the OVER token the fixture already prints on both trees. Written, not run.
+
+This driver owns ports 48580-48589; the menu readback detector owns 48530-48539 and 48540-48549.
 """
 from __future__ import annotations
 
@@ -64,7 +66,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=REPO)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--port", type=int, default=48531)
+    parser.add_argument("--port", type=int, default=48580)
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--ticks", type=int, default=240)
     options = parser.parse_args()
