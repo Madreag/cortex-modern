@@ -23,6 +23,12 @@
 #include "MetricsCollector.h"
 #include "ScenarioRunner.h"
 
+#ifdef SYSTEM_MINIZIP
+#include <minizip/zip.h>
+#else
+#include "zip.h"
+#endif
+
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
@@ -1976,6 +1982,41 @@ namespace RTE {
 			out << "not a zip";
 		}
 
+		/// A checkpoint the store VALIDATES: every entry a restore reads, and one tick in its name, its
+		/// descriptor and its world. A row about retention or about a hash needs the real thing, or the
+		/// first refusal it meets is the torn file and not the property under test.
+		bool WriteResumeArchive(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick, uint64_t roundId = 7) {
+			AutosaveDescriptor descriptor;
+			descriptor.schema = AutosaveStore::c_DescriptorSchema;
+			descriptor.matchId = matchId;
+			descriptor.sessionId = MakeConfig().sessionId;
+			descriptor.roundId = roundId;
+			descriptor.savedTick = tick;
+			descriptor.worldStructureHash = std::string(64, 'a');
+			descriptor.activityPreset = "Skirmish Defense";
+			descriptor.scenePreset = "Grasslands";
+			const std::string restore = AutosaveStore::WriteDescriptor(descriptor);
+			const std::string save = "SimUpdateCount = " + std::to_string(tick) + "\n";
+			zipFile file = zipOpen(AutosaveStore::ArchivePath(directory, matchId, tick).string().c_str(), APPEND_STATUS_CREATE);
+			if (!file) return false;
+			const auto write = [&](const char* name, const std::string& data) {
+				zip_fileinfo info{};
+				const auto openEntry =
+#ifdef SYSTEM_MINIZIP
+				    zipOpenNewFileInZip64;
+#else
+				    zipOpenNewFileInZip_64;
+#endif
+				return openEntry(file, name, &info, nullptr, 0, nullptr, 0, nullptr, 0, 0, 0) == ZIP_OK &&
+				       zipWriteInFileInZip(file, data.data(), static_cast<unsigned int>(data.size())) == ZIP_OK &&
+				       zipCloseFileInZip(file) == ZIP_OK;
+			};
+			const bool written = write("Index.ini", "ActivityName = Skirmish Defense\n") && write(AutosaveStore::c_DescriptorEntry, restore) &&
+			                     write("Save.ini", save) && write("Save Mat.png", "mat") && write("Save FG.png", "fg") && write("Save BG.png", "bg");
+			zipClose(file, nullptr);
+			return written;
+		}
+
 		bool TestRestartManifestAndAdmission(std::string* error) {
 			ResumeScratch scratch;
 			const std::string matchId = "00000000deadbeef-00000000000000aa";
@@ -2164,10 +2205,18 @@ namespace RTE {
 				orphan.generation = 9;
 				orphan.sealed = {1, 2, 3, 4};
 				if (!AutosaveStore::PublishAdmission(scratch.path, orphan, error)) return false;
-				WriteResumeArchiveStub(scratch.path, matchId, 240);
+				// A RESTORABLE checkpoint, because only a restorable one is a reason to keep the file.
+				if (!WriteResumeArchive(scratch.path, matchId, 240)) {
+					*error = "the row could not write a restorable checkpoint";
+					return false;
+				}
 				AutosaveManifest standing = manifest;
 				standing.savedTick = 240;
 				if (!AutosaveStore::PublishManifest(scratch.path, standing, error)) return false;
+				if (AutosaveStore::ListRestorable(scratch.path, matchId).empty()) {
+					*error = "the row's own checkpoint does not validate, so the sweep arm proves nothing";
+					return false;
+				}
 				if (AutosaveStore::RemoveOrphanAdmission(scratch.path, matchId) ||
 				    !std::filesystem::exists(AutosaveStore::AdmissionPath(scratch.path, matchId))) {
 					*error = "the sweep removed an admission file while a checkpoint of its match stood";
@@ -5155,16 +5204,20 @@ namespace RTE {
 		manifest.configPayload = ResumePayloadHex(config);
 		manifest.activityPreset = config.activityPreset;
 		manifest.scenePreset = config.sceneName;
+		manifest.sideState = ResumeSideStateFixture();
 		if (!AutosaveStore::PublishManifest(scratch.path, manifest, error)) return false;
-		const auto body = nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"admission", std::vector<uint8_t>{9, 9, 9}}, {"directory_row", std::string()},
-		                                                         {"directory_session", std::string("sess-resume")}, {"directory_token", std::string("tok-resume")},
-		                                                         {"autosave_match_id", matchId}, {"autosave_round", 11}, {"autosave_interval", 45}, {"generation", 2}});
-		AutosaveAdmission admission;
-		admission.schema = AutosaveStore::c_AdmissionSchema;
-		admission.matchId = matchId;
-		admission.generation = 2;
-		const std::vector<uint8_t> context(matchId.begin(), matchId.end());
-		if (!NetAuthSeal(key, context, body, admission.sealed) || !AutosaveStore::PublishAdmission(scratch.path, admission, error)) {
+		const auto sealAdmission = [&](uint64_t generation) {
+			const auto body = nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"admission", std::vector<uint8_t>{9, 9, 9}}, {"directory_row", std::string()},
+			                                                         {"directory_session", std::string("sess-resume")}, {"directory_token", std::string("tok-resume")},
+			                                                         {"autosave_match_id", matchId}, {"autosave_round", 11}, {"autosave_interval", 45}, {"generation", generation}});
+			AutosaveAdmission admission;
+			admission.schema = AutosaveStore::c_AdmissionSchema;
+			admission.matchId = matchId;
+			admission.generation = generation;
+			const std::vector<uint8_t> context(matchId.begin(), matchId.end());
+			return NetAuthSeal(key, context, body, admission.sealed) && AutosaveStore::PublishAdmission(scratch.path, admission, error);
+		};
+		if (!sealAdmission(2)) {
 			if (error && error->empty()) *error = "the row could not publish its sealed admission";
 			return false;
 		}
@@ -5172,25 +5225,10 @@ namespace RTE {
 		request.host = true;
 		request.resumeMatchId = matchId;
 		request.resumeTick = 900;
-		// The store reads the run's own Autosaves directory, so the row drives the same code through it.
-		const std::filesystem::path live = AutosaveStore::Directory();
-		std::error_code ignored;
-		std::filesystem::create_directories(live, ignored);
-		std::filesystem::copy_file(AutosaveStore::ManifestPath(scratch.path, matchId, 900), AutosaveStore::ManifestPath(live, matchId, 900), std::filesystem::copy_options::overwrite_existing, ignored);
-		std::filesystem::copy_file(AutosaveStore::AdmissionPath(scratch.path, matchId), AutosaveStore::AdmissionPath(live, matchId), std::filesystem::copy_options::overwrite_existing, ignored);
-		WriteResumeArchiveStub(live, matchId, 900);
-		struct Cleanup {
-			std::filesystem::path manifest, admission, archive;
-			~Cleanup() {
-				std::error_code ignored;
-				std::filesystem::remove(manifest, ignored);
-				std::filesystem::remove(admission, ignored);
-				std::filesystem::remove(archive, ignored);
-			}
-		} cleanup{AutosaveStore::ManifestPath(live, matchId, 900), AutosaveStore::AdmissionPath(live, matchId), AutosaveStore::ArchivePath(live, matchId, 900)};
 		std::string refusal;
-		// The archive is a stub, so the checkpoint itself is refused before anything is admitted.
-		if (service.PrepareResume(request, &refusal)) {
+		// A checkpoint whose archive does not read is refused before anything is admitted.
+		WriteResumeArchiveStub(scratch.path, matchId, 900);
+		if (service.PrepareResume(request, &refusal, scratch.path)) {
 			*error = "a checkpoint whose archive does not read was accepted for a resume";
 			return false;
 		}
@@ -5198,13 +5236,58 @@ namespace RTE {
 			*error = "the refusal did not name the checkpoint: " + refusal;
 			return false;
 		}
-		// A manifest whose configuration does not hash to the value beside it is refused too.
+		// From here the archive READS, so every refusal below is the property under test and not the
+		// torn file: a manifest whose configuration does not hash to the value beside it is refused,
+		// and the refusal says which of the two disagreed.
+		if (!WriteResumeArchive(scratch.path, matchId, 900, 11)) {
+			*error = "the row could not write a restorable checkpoint";
+			return false;
+		}
 		AutosaveManifest tampered = manifest;
 		tampered.configHash = NetIdentity::HashHex(NetHash32{});
-		if (!AutosaveStore::PublishManifest(live, tampered, error)) return false;
+		if (!AutosaveStore::PublishManifest(scratch.path, tampered, error)) return false;
 		request.resumeTick = 900;
-		if (service.PrepareResume(request, &refusal)) {
+		if (service.PrepareResume(request, &refusal, scratch.path)) {
 			*error = "a manifest whose configuration does not match its hash was accepted";
+			return false;
+		}
+		if (refusal.find("hash") == std::string::npos) {
+			*error = "the refusal of a tampered configuration did not name the hash: " + refusal;
+			return false;
+		}
+		// The happy path, and the generation the next publish must carry on from: a resume of a match
+		// whose admission file stands at generation 2 leaves the service ready to publish 3, or a
+		// restarted host can never replace its own file again.
+		if (!AutosaveStore::PublishManifest(scratch.path, manifest, error)) return false;
+		if (!service.PrepareResume(request, &refusal, scratch.path)) {
+			*error = "a resumable checkpoint with its own manifest and admission was refused: " + refusal;
+			return false;
+		}
+		if (!request.resumeConfig || request.resumeConfig->configRevision != config.configRevision + 1) {
+			*error = "the resumed configuration is not the agreed one at the next revision";
+			return false;
+		}
+		if (service.m_RestartAdmissionGeneration != 2) {
+			*error = "the resume did not carry the admission generation forward: " +
+			         std::to_string(service.m_RestartAdmissionGeneration);
+			return false;
+		}
+		if (service.m_ResumeSideState.playerBindings != manifest.sideState.playerBindings) {
+			*error = "the resumed round did not take the seats the checkpoint's manifest carried";
+			return false;
+		}
+		// The sealed generation is the authority, so a file whose plaintext line disagrees with it is
+		// refused rather than half-believed.
+		AutosaveAdmission mismatched;
+		if (!AutosaveStore::ReadAdmission(scratch.path, matchId, mismatched, error)) return false;
+		mismatched.generation = 5;
+		if (!AutosaveStore::PublishAdmission(scratch.path, mismatched, error)) return false;
+		if (service.PrepareResume(request, &refusal, scratch.path)) {
+			*error = "an admission file whose generation disagrees with its sealed export was accepted";
+			return false;
+		}
+		if (refusal.find("generation") == std::string::npos) {
+			*error = "the refusal did not name the generation: " + refusal;
 			return false;
 		}
 		return true;
