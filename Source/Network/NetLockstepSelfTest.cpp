@@ -14551,7 +14551,7 @@ namespace RTE {
 					collect(b, &worldB, &framesB);
 				}
 				if (worldA.applied != 5 || worldB.applied != (midHeal || skipSuccessor ? 5U : 4U)) {
-					*error = "the asymmetric host crash did not leave A at F and B at F-1";
+					*error = "pre-handover applied A=" + std::to_string(worldA.applied) + " B=" + std::to_string(worldB.applied) + " dropped=" + std::to_string(hostWire.lost);
 					return false;
 				}
 				if (skipSuccessor) {
@@ -14601,12 +14601,12 @@ namespace RTE {
 						break;
 				}
 				if (!resumed) {
-					*error = "host loss did not complete roll-call and forward recovery: " + a.BuildReportJson() + " / " + b.BuildReportJson();
+					*error = "handover A=" + a.BuildReportJson() + " B=" + b.BuildReportJson();
 					return false;
 				}
 				if (addressFallback) {
-					if (schedule->contactedAddresses.size() < 2 || schedule->contactedAddresses[0] != "unreachable" || schedule->contactedAddresses[1] != "loopback" || a.GetMigrationAddress() != "loopback") {
-						*error = "migration addresses=" + nlohmann::json(schedule->contactedAddresses).dump() + " connected=" + a.GetMigrationAddress();
+					if (schedule->contactedAddresses.size() < 2 || schedule->contactedAddresses[0] != "unreachable" || schedule->contactedAddresses[1] != "loopback") {
+						*error = "migration addresses=" + nlohmann::json(schedule->contactedAddresses).dump();
 						return false;
 					}
 				}
@@ -14673,7 +14673,7 @@ namespace RTE {
 					return true;
 				}
 				if (b.GetHostPeerId() != 3 || !b.GetConfig().relayToOtherPeers || b.GetConfig().localPeerId != 3 || (!delayedAnswer && b.GetMigrationResult().boundary != 5) || b.GetConfig().startFrame != 6 || b.GetRoundId() != 0x45791002 || b.GetConfig().matchConfig != match) {
-					*error = "successor changed its seat, config, round or C+1 boundary";
+					*error = "successor=" + b.BuildReportJson() + " config_hash=" + NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(b.GetConfig().matchConfig));
 					return false;
 				}
 				if (midHeal) {
@@ -14689,21 +14689,21 @@ namespace RTE {
 						return false;
 					worldA.Load(archive);
 					if (worldA.Hash() != worldB.Hash() || b.GetMigrationResult().resyncPeers != std::vector<uint8_t>{2}) {
-						*error = "mid-heal survivor did not take the new host's ordinary resync envelope to C";
+						*error = "mid-heal hashA=" + NetIdentity::HashHex(worldA.Hash()) + " hashB=" + NetIdentity::HashHex(worldB.Hash()) + " resyncPeers=" + nlohmann::json(b.GetMigrationResult().resyncPeers).dump();
 						return false;
 					}
 					if (!TransferMigrationSnapshot<LobbyConfig>(match, envelope, true, delivered, error) || !NetResyncCodec::Decode(delivered, match.sessionId, 6, decoded, archive, error))
 						return false;
 					worldA.Load(archive);
 					if (worldA.Hash() != worldB.Hash()) {
-						*error = "delegated successor snapshot changed the recovered simulation hash";
+						*error = "delegated hashA=" + NetIdentity::HashHex(worldA.Hash()) + " hashB=" + NetIdentity::HashHex(worldB.Hash());
 						return false;
 					}
 					std::cout << "[host-migration-selftest] PASS: mid-heal survivor receives the successor resync at the agreed boundary" << std::endl;
 					return true;
 				}
 				if (hostWire.lost != 1 || (!delayedAnswer && a.GetMigrationResult().boundary != 5) || a.GetHostPeerId() != 3 || a.GetConfig().relayToOtherPeers || a.GetConfig().localPeerId != 2 || worldA.Hash() != worldB.Hash()) {
-					*error = "survivors disagree on C, host, role or recovered simulation state";
+					*error = "recovered A=" + a.BuildReportJson() + " B=" + b.BuildReportJson() + " hashA=" + NetIdentity::HashHex(worldA.Hash()) + " hashB=" + NetIdentity::HashHex(worldB.Hash()) + " dropped=" + std::to_string(hostWire.lost);
 					return false;
 				}
 				for (uint64_t frame = 6; frame <= 65; ++frame) {
@@ -14717,7 +14717,7 @@ namespace RTE {
 					collect(a, &worldA, &framesA);
 					collect(b, &worldB, &framesB);
 					if (worldA.applied != frame || worldB.applied != frame || worldA.Hash() != worldB.Hash()) {
-						*error = "surviving simulations diverged at C+" + std::to_string(frame - 5);
+						*error = "tick=" + std::to_string(frame) + " appliedA=" + std::to_string(worldA.applied) + " appliedB=" + std::to_string(worldB.applied) + " hashA=" + NetIdentity::HashHex(worldA.Hash()) + " hashB=" + NetIdentity::HashHex(worldB.Hash());
 						return false;
 					}
 				}
@@ -14746,17 +14746,19 @@ namespace RTE {
 					ApplyLockstepLeaveHandoffs(index == 0 ? framesA.at(6) : framesB.at(6), {actor.get()}, false);
 					controllers[index] = ControllerFrameCodec::Encode(ControllerFrameCodec::Snapshot(actor->GetUniqueID(), controller));
 					checkpoints[index] = controller.SaveCheckpoint();
-					if (controller.GetInputMode() != Controller::CIM_AI || peers[index]->ResolveActorOwner(actor->GetUniqueID(), 0, true) != 3) {
+					const auto mode = controller.GetInputMode();
+					const auto owner = peers[index]->ResolveActorOwner(actor->GetUniqueID(), 0, true);
+					if (mode != Controller::CIM_AI || owner != 3) {
 						ScenarioRunner::SetLockstepCoordinator(nullptr);
 						NetActorOwnership::ClearSeededOwners();
-						*error = "the departed host's actor did not enter the shared AI handoff";
+						*error = "controller peer=" + std::to_string(index) + " mode=" + std::to_string(mode) + " owner=" + std::to_string(owner);
 						return false;
 					}
 				}
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
 				NetActorOwnership::ClearSeededOwners();
 				if (controllers[0] != controllers[1] || checkpoints[0] != checkpoints[1]) {
-					*error = "the host departure left different native controller states";
+					*error = "controller wireEqual=" + std::to_string(controllers[0] == controllers[1]) + " checkpointEqual=" + std::to_string(checkpoints[0] == checkpoints[1]) + " bytesA=" + std::to_string(controllers[0].size()) + " bytesB=" + std::to_string(controllers[1].size());
 					return false;
 				}
 				std::cout << "[host-migration-selftest] PASS: asymmetric relay recovers C=F and equal simulation hashes for C+1..C+60" << std::endl;
