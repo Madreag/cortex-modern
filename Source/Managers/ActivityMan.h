@@ -227,7 +227,7 @@ namespace RTE {
 		bool SetPendingCheckpointCallbacks(std::function<bool()> before, std::function<bool(Activity&)> after);
 
 		/// Whether the staged save carries complete VM continuation state.
-		bool HasFullScriptGraphToRestore() const { return !m_PendingCheckpoint.scriptGraphs.empty() && (m_PendingCheckpoint.scriptGraphs.front().starts_with("SG3;") || m_PendingCheckpoint.scriptGraphs.front().starts_with("SG4;")); }
+		bool HasFullScriptGraphToRestore() const { return !m_PendingCheckpoint.scriptGraphs.empty() && (m_PendingCheckpoint.scriptGraphs.front().starts_with("SG3;") || m_PendingCheckpoint.scriptGraphs.front().starts_with("SG4;") || m_PendingCheckpoint.scriptGraphs.front().starts_with("SG5;")); }
 
 		/// Checks load results and preservation of an already staged game.
 		bool RunLoadSelfTest(const std::string& fileName, bool expectLoaded);
@@ -358,6 +358,9 @@ namespace RTE {
 		bool QueueSaveSnapshot(const std::string& fileName, const std::string& path, SaveCompression compression,
 		                       std::shared_future<bool>& task, const std::string& matchId = "", uint64_t tick = 0, size_t* capturedBytes = nullptr,
 		                       const AutosaveIdentity* identity = nullptr);
+		bool QueueIncrementalAutosave(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
+		                              std::shared_future<bool>& task, size_t& bytes, SaveCompression compression = SaveCompression::Fast,
+		                              const AutosaveIdentity* identity = nullptr);
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage) const;
 		/// Serializes script graphs the way a save does and reports each refusal.
 		bool CaptureScriptGraphsOrReportRefusal(SaveKind kind, std::vector<std::string>& graphs);

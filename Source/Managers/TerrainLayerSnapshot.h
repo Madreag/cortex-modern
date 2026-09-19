@@ -52,6 +52,7 @@ namespace RTE {
 		bool CanRestore() const;
 		bool Restore() const;
 		std::string SaveMetadata() const;
+		static CheckpointText CaptureMetadata();
 		bool LoadMetadata(std::string_view text, bool validateOnly = false);
 	private:
 		static void CaptureLayer(SceneLayer* source, Layer& target, bool pixels);

@@ -169,11 +169,13 @@ TValue *lj_meta_tset(lua_State *L, cTValue *o, cTValue *k)
       cTValue *tv = lj_tab_get(L, t, k);
       if (LJ_LIKELY(!tvisnil(tv))) {
 	if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+	checkpoint_mark_state(L, t);
 	t->nomm = 0;  /* Invalidate negative metamethod cache. */
 	lj_gc_anybarriert(L, t);
 	return (TValue *)tv;
       } else if (!(mo = lj_meta_fast(L, tabref(t->metatable), MM_newindex))) {
 	if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+	checkpoint_mark_state(L, t);
 	t->nomm = 0;  /* Invalidate negative metamethod cache. */
 	lj_gc_anybarriert(L, t);
 	if (tv != niltv(L))

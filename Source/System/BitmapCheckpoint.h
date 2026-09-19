@@ -10,18 +10,29 @@ namespace RTE {
         int width = 0, height = 0, depth = 0;
         int clip = TRUE, clipLeft = 0, clipTop = 0, clipRight = 0, clipBottom = 0;
 		std::string pixels;
+		std::optional<CheckpointText> capturedPixels;
 		void Capture(BITMAP* bitmap) {
             if (!bitmap) { *this = BitmapCheckpoint{}; return; }
             width = bitmap->w; height = bitmap->h; depth = bitmap_color_depth(bitmap);
             clip = bitmap->clip; clipLeft = bitmap->cl; clipTop = bitmap->ct;
             clipRight = bitmap->cr; clipBottom = bitmap->cb;
+			if (CheckpointWriter::IsCapturing()) {
+				CheckpointCache temporary;
+				auto* cache = CheckpointWriter::CurrentCache();
+				capturedPixels = (cache ? cache : &temporary)->CapturePixels(bitmap);
+				pixels.clear();
+				return;
+			}
+			capturedPixels.reset();
 			const size_t stride = static_cast<size_t>(width) * ((depth + 7) / 8);
 			pixels.resize(stride * height);
 			for (int y = 0; y < height; ++y) std::memcpy(pixels.data() + y * stride, bitmap->line[y], stride);
 		}
 		std::string SaveCheckpoint() const {
             CheckpointWriter writer("Bitmap2");
-            writer(width, height, depth, pixels, clip, clipLeft, clipTop, clipRight, clipBottom);
+            writer(width, height, depth);
+			if (capturedPixels) writer(*capturedPixels); else writer(pixels);
+			writer(clip, clipLeft, clipTop, clipRight, clipBottom);
             return writer.Text();
 		}
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false) {
@@ -49,10 +60,12 @@ namespace RTE {
 		}
         BITMAP* Create() const {
 			if (!width) return nullptr;
+			const std::string& bytes = capturedPixels ? capturedPixels->Text() : pixels;
+			const size_t stride = static_cast<size_t>(width) * ((depth + 7) / 8);
+			if (bytes.size() != stride * height) throw std::runtime_error("invalid checkpoint bitmap pixels");
 			BITMAP* bitmap = create_bitmap_ex(depth, width, height);
 			if (!bitmap) throw std::runtime_error("could not allocate checkpoint bitmap");
-			const size_t stride = static_cast<size_t>(width) * ((depth + 7) / 8);
-            for (int y = 0; y < height; ++y) std::memcpy(bitmap->line[y], pixels.data() + y * stride, stride);
+            for (int y = 0; y < height; ++y) std::memcpy(bitmap->line[y], bytes.data() + y * stride, stride);
             bitmap->clip = clip; bitmap->cl = clipLeft; bitmap->ct = clipTop;
             bitmap->cr = clipRight; bitmap->cb = clipBottom;
             return bitmap;

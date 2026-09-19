@@ -83,7 +83,7 @@ int GenericSavedData::GenericSavedEncodedStrings::Save(Writer& writer) const {
 	for (const auto& [propName, value]: m_Data) {
 		// Need to encode as URL, so it avoids = character
 		if (!value.empty()) {
-			writer.NewPropertyWithValue(propName, base64_encode(value, true));
+			writer.NewPropertyWithValue(propName, CheckpointText(value).Base64());
 		}
 	}
 	return 0;

@@ -151,7 +151,7 @@ namespace RTE {
 
 		/// Sets the absolute position of this SceneObject in the scene.
 		/// @param newPos A Vector describing the current absolute position in pixels.
-		virtual void SetPos(const Vector& newPos) { m_Pos = newPos; }
+		virtual void SetPos(const Vector& newPos) { if (newPos != m_Pos) TouchCheckpoint(); m_Pos = newPos; }
 
 		/// Returns whether this is being drawn flipped horizontally (around the
 		/// vertical axis), or not.
@@ -177,7 +177,7 @@ namespace RTE {
 
 		/// Sets which team this belongs to.
 		/// @param team The assigned team number.
-		virtual void SetTeam(int team) { m_Team = team; }
+		virtual void SetTeam(int team) { if (m_Team != team) TouchCheckpoint(); m_Team = team; }
 
 		/// Gets which team this belongs to.
 		/// @return The currently assigned team number.

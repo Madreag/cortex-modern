@@ -28,6 +28,7 @@ typedef struct LJPreview {
   size_t ntables, tablescap, nobjects, objectscap, nseen, seencap;
   size_t nskipped, skippedcap, nupvalues, upvaluescap;
   GCtab *root;
+  uint64_t savedserial;
   GCtab *registry;
   size_t savedbytes;
   uint32_t lastwrite;

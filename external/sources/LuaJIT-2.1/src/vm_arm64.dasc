@@ -1101,6 +1101,8 @@ static void build_subroutines(BuildCtx *ctx)
   |  checktp TMP1, CARG1, LJ_TTAB, ->fff_fallback
   |  ldr TMP0w, TAB:TMP1->preview
   |  tbnz TMP0w, #31, ->fff_fallback
+  |  ldrb TMP0w, GL->checkpoint_armed
+  |  cbnz TMP0w, ->fff_fallback
   |   ldr TAB:TMP0, TAB:TMP1->metatable
   |  asr ITYPE, CARG2, #47
   |   ldrb TMP2w, TAB:TMP1->marked
@@ -3241,6 +3243,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  checktab CARG2, ->vmeta_tsetv
     |  ldr TMP0w, TAB:CARG2->preview
     |  tbnz TMP0w, #31, ->vmeta_tsetv
+    |  ldrb TMP0w, GL->checkpoint_armed
+    |  cbnz TMP0w, ->vmeta_tsetv
     |  checkint TMP1, >9		// Integer key?
     |  ldr CARG3, TAB:CARG2->array
     |   ldr CARG1w, TAB:CARG2->asize
@@ -3296,6 +3300,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  add CARG4, STR:RC, CARG4, lsl #47	// Tagged key to look for.
     |  ldr TMP1w, TAB:CARG2->preview
     |  tbnz TMP1w, #31, ->vmeta_tsets
+    |  ldrb TMP1w, GL->checkpoint_armed
+    |  cbnz TMP1w, ->vmeta_tsets
     |   strb wzr, TAB:CARG2->nomm	// Clear metamethod cache.
     |1:
     |  ldp TMP1, CARG1, NODE:CARG3->val
@@ -3357,6 +3363,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  checktab CARG2, ->vmeta_tsetb
     |  ldr TMP0w, TAB:CARG2->preview
     |  tbnz TMP0w, #31, ->vmeta_tsetb
+    |  ldrb TMP0w, GL->checkpoint_armed
+    |  cbnz TMP0w, ->vmeta_tsetb
     |  ldr CARG3, TAB:CARG2->array
     |   ldr CARG1w, TAB:CARG2->asize
     |  add CARG3, CARG3, RC, lsl #3
@@ -3393,6 +3401,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  and TAB:CARG2, CARG2, #LJ_GCVMASK
     |  ldr TMP0w, TAB:CARG2->preview
     |  tbnz TMP0w, #31, ->vmeta_tsetr
+    |  ldrb TMP0w, GL->checkpoint_armed
+    |  cbnz TMP0w, ->vmeta_tsetr
     |  ldr CARG1, TAB:CARG2->array
     |    ldrb TMP2w, TAB:CARG2->marked
     |   ldr CARG4w, TAB:CARG2->asize
@@ -3423,6 +3433,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  and TAB:CARG2, CARG2, #LJ_GCVMASK
     |  ldr TMP0w, TAB:CARG2->preview
     |  tbnz TMP0w, #31, >8
+    |  ldrb TMP0w, GL->checkpoint_armed
+    |  cbnz TMP0w, >9
     |  ldr CARG1w, TAB:CARG2->asize
     |   add CARG3w, TMP1w, RBw, lsr #3
     |   ldr CARG4, TAB:CARG2->array
@@ -3453,6 +3465,13 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  mov CARG1, L
     |  str PC, SAVE_PC
     |  bl extern lj_preview_write
+    |  b <1
+    |
+    |9:
+    |  str BASE, L->base
+    |  mov CARG1, L
+    |  str PC, SAVE_PC
+    |  bl extern lj_checkpoint_mark	// (lua_State *L, GCtab *t)
     |  b <1
     |
     |7:  // Possible table write barrier for any value. Skip valiswhite check.

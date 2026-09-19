@@ -11,6 +11,7 @@ sources += files(
 'Controller.cpp',
 'GenericSavedData.cpp',
 'Writer.cpp',
+'CheckpointImage.cpp',
 'Box.cpp',
 'Entity.cpp',
 'Vector.cpp',

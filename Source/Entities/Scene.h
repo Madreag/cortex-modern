@@ -62,6 +62,8 @@ namespace RTE {
 		};
 		void SwapRuntimeOwners(RuntimeOwners& state);
 		std::string SaveRuntimeCheckpoint() const;
+		CheckpointText CaptureSavedScene(const std::string& fileName) const;
+		void SaveSavedScene(Writer& writer, const std::string& fileName) const;
 		bool LoadRuntimeCheckpoint(std::string_view text, bool validateOnly = false, bool restoreOwners = true);
 
 		/// Something to bundle the properties of scene areas together

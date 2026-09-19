@@ -264,13 +264,14 @@ std::string SLBackground::SaveCheckpoint() const {
 		m_WrapX, m_WrapY, m_OriginOffset, m_Offset, m_ZOrder, m_ScrollInfo, m_ScrollRatio, m_ScaleFactor, m_ScaledDimensions);
 	writer(m_Drawings.size());
 	for (const auto& rectangle: m_Drawings) writer(rectangle.m_Left, rectangle.m_Top, rectangle.m_Right, rectangle.m_Bottom);
-	std::vector<std::string> frames;
+	std::vector<CheckpointText> frames;
 	int mainIndex = -1;
 	for (size_t index = 0; index < m_Bitmaps.size(); ++index) {
-		frames.push_back(GUICheckpoint::SaveBitmap(m_Bitmaps[index]));
+		frames.push_back(CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(m_Bitmaps[index]); }));
 		if (m_Bitmaps[index] == m_MainBitmap) mainIndex = static_cast<int>(index);
 	}
-	writer(frames, mainIndex, GUICheckpoint::SaveBitmap(mainIndex < 0 ? m_MainBitmap : nullptr), GUICheckpoint::SaveBitmap(m_BackBitmap));
+	writer(frames, mainIndex, CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(mainIndex < 0 ? m_MainBitmap : nullptr); }),
+	    CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(m_BackBitmap); }));
 	return writer.Text();
 }
 

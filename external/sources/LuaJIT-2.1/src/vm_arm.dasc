@@ -1054,6 +1054,9 @@ static void build_subroutines(BuildCtx *ctx)
   |  ldr RB, TAB:CARG1->preview
   |  tst RB, #LJ_PREVIEW_PENDING
   |  bne ->fff_fallback
+  |  ldrb RB, [DISPATCH, #DISPATCH_GL(checkpoint_armed)]
+  |  cmp RB, #0
+  |  bne ->fff_fallback
   |    tst CARG4, #LJ_GC_BLACK		// isblack(table)
   |     str TAB:CARG3, TAB:CARG1->metatable
   |    beq ->fff_restv
@@ -3796,6 +3799,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  ldr CARG2, TAB:CARG1->preview
     |  tst CARG2, #LJ_PREVIEW_PENDING
     |  bne ->vmeta_tsetv
+    |  ldrb CARG2, [DISPATCH, #DISPATCH_GL(checkpoint_armed)]
+    |  cmp CARG2, #0
+    |  bne ->vmeta_tsetv
     |   checktp CARG4, LJ_TISNUM	// Integer key?
     |  ldreq CARG2, TAB:CARG1->array
     |    ldreq CARG4, TAB:CARG1->asize
@@ -3856,6 +3862,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |     mov TAB:RB, TAB:CARG1
     |  ldr CARG2, TAB:RB->preview
     |  tst CARG2, #LJ_PREVIEW_PENDING
+    |  bne ->vmeta_tsets
+    |  ldrb CARG2, [DISPATCH, #DISPATCH_GL(checkpoint_armed)]
+    |  cmp CARG2, #0
     |  bne ->vmeta_tsets
     |  and CARG3, CARG3, CARG4			// idx = str->sid & tab->hmask
     |  add CARG3, CARG3, CARG3, lsl #1
@@ -3930,6 +3939,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  ldr CARG3, TAB:CARG1->preview
     |  tst CARG3, #LJ_PREVIEW_PENDING
     |  bne ->vmeta_tsetb
+    |  ldrb CARG3, [DISPATCH, #DISPATCH_GL(checkpoint_armed)]
+    |  cmp CARG3, #0
+    |  bne ->vmeta_tsetb
     |   ldr CARG3, TAB:CARG1->asize
     |  ldr RB, TAB:CARG1->array
     |  lsl CARG2, RC, #3
@@ -3973,6 +3985,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  ldr CARG4, TAB:CARG2->preview
     |  tst CARG4, #LJ_PREVIEW_PENDING
     |  bne ->vmeta_tsetr
+    |  ldrb CARG4, [DISPATCH, #DISPATCH_GL(checkpoint_armed)]
+    |  cmp CARG4, #0
+    |  bne ->vmeta_tsetr
     |     ldrb INS, TAB:CARG2->marked
     |  ldr CARG1, TAB:CARG2->array
     |    ldr CARG4, TAB:CARG2->asize
@@ -4003,6 +4018,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  ldr CARG4, TAB:CARG2->preview
     |  tst CARG4, #LJ_PREVIEW_PENDING
     |  bne >8
+    |  ldrb CARG4, [DISPATCH, #DISPATCH_GL(checkpoint_armed)]
+    |  cmp CARG4, #0
+    |  bne >9
     |  ldr CARG1, [KBASE, RC, lsl #3]	// Integer constant is in lo-word.
     |   subs RB, RB, #8
     |  ldr CARG4, TAB:CARG2->asize
@@ -4038,6 +4056,14 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  mov CARG1, L
     |  str PC, SAVE_PC
     |  bl extern lj_preview_write
+    |  .IOS ldr BASE, L->base
+    |  b <1
+
+    |9:
+    |  str BASE, L->base
+    |  mov CARG1, L
+    |  str PC, SAVE_PC
+    |  bl extern lj_checkpoint_mark
     |  .IOS ldr BASE, L->base
     |  b <1
     |

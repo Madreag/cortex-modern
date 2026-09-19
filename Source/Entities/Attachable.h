@@ -69,6 +69,12 @@ namespace RTE {
 		/// @return Whether it's attached or not.
 		bool IsAttached() const { return m_Parent != nullptr; }
 
+		/// The parent's checkpoint shadow holds this Attachable's values, so it changes too.
+		void TouchCheckpoint() override {
+			MOSRotating::TouchCheckpoint();
+			if (m_Parent) m_Parent->TouchCheckpoint();
+		}
+
 		/// Indicates whether this Attachable is attached to the specified MOSRotating or not.
 		/// @param parentToCheck A pointer to which MOSRotating you want to check for.
 		/// @return Whether it's attached or not.

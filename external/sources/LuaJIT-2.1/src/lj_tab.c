@@ -13,6 +13,104 @@
 #include "lj_gc.h"
 #include "lj_err.h"
 #include "lj_tab.h"
+#include "luajit.h"
+
+luaJIT_tab_write_cb checkpoint_tab_write;
+
+LUA_API void luaJIT_set_tab_write_callback(luaJIT_tab_write_cb cb)
+{
+  checkpoint_tab_write = cb;
+}
+
+LJ_FUNCA void lj_checkpoint_mark(lua_State *L, GCtab *t)
+{
+  checkpoint_mark_state(L, t);
+}
+
+LUA_API void luaJIT_arm_tab_write_trap(lua_State *L)
+{
+  /* Interpreted stores take the meta path and compiled stores exit while armed. */
+  if (checkpoint_tab_write) G(L)->checkpoint_armed = 1;
+}
+
+/* Arm one table: its next write reports itself, once, through the preview trap. */
+static LJ_AINLINE void checkpoint_arm_table(GCtab *t)
+{
+  if (checkpoint_tab_write && !(t->preview & LJ_PREVIEW_PENDING)) t->preview = LJ_PREVIEW_PENDING;
+}
+
+LUA_API void luaJIT_arm_tab_write(lua_State *L, int idx)
+{
+  cTValue *o = L->base + (idx - 1);
+  if (idx < 0) o = L->top + idx;
+  if (o < L->top && tvistab(o)) checkpoint_arm_table(tabV(o));
+}
+
+static GCobj *serial_object(lua_State *L, int idx)
+{
+  cTValue *o = L->base + (idx - 1);
+  if (idx < 0) o = L->top + idx;
+  if (o >= L->top || !tvisgcv(o)) return NULL;
+  return gcV(o);
+}
+
+/* Every kind of object the archive names carries its birth number in its own header. */
+static uint64_t *serial_slot(GCobj *o)
+{
+  if (!o) return NULL;
+  switch (o->gch.gct) {
+  case ~LJ_TTAB: return &gco2tab(o)->serial;
+  case ~LJ_TUDATA: return &gco2ud(o)->serial;
+  case ~LJ_TFUNC: return &gco2func(o)->c.serial;
+  case ~LJ_TTHREAD: return &gco2th(o)->serial;
+  default: return NULL;
+  }
+}
+
+static GCupval *serial_upvalue(lua_State *L, int idx, int n)
+{
+  GCobj *o = serial_object(L, idx);
+  GCfunc *fn;
+  if (!o || o->gch.gct != ~LJ_TFUNC) return NULL;
+  fn = gco2func(o);
+  if (!isluafunc(fn) || n < 1 || n > fn->l.nupvalues) return NULL;
+  return &gcref(fn->l.uvptr[n-1])->uv;
+}
+
+LUA_API uint64_t luaJIT_value_serial(lua_State *L, int idx)
+{
+  uint64_t *slot = serial_slot(serial_object(L, idx));
+  return slot ? *slot : 0;
+}
+
+/* A restored object keeps the identity the archive gave it, so a recapture numbers it the same. */
+LUA_API void luaJIT_set_value_serial(lua_State *L, int idx, uint64_t serial)
+{
+  uint64_t *slot = serial_slot(serial_object(L, idx));
+  if (slot) *slot = serial;
+}
+
+LUA_API uint64_t luaJIT_upvalue_serial(lua_State *L, int idx, int n)
+{
+  GCupval *uv = serial_upvalue(L, idx, n);
+  return uv ? uv->serial : 0;
+}
+
+LUA_API void luaJIT_set_upvalue_serial(lua_State *L, int idx, int n, uint64_t serial)
+{
+  GCupval *uv = serial_upvalue(L, idx, n);
+  if (uv) uv->serial = serial;
+}
+
+LUA_API uint64_t luaJIT_state_serial(lua_State *L)
+{
+  return G(L)->objserial;
+}
+
+LUA_API void luaJIT_set_state_serial(lua_State *L, uint64_t serial)
+{
+  G(L)->objserial = serial;
+}
 
 /* -- Object hashing ------------------------------------------------------ */
 
@@ -88,6 +186,7 @@ static GCtab *newtab(lua_State *L, uint32_t asize, uint32_t hbits)
     t = (GCtab *)lj_mem_newgco(L, sizetabcolo(asize));
     t->gct = ~LJ_TTAB;
     t->preview = 0;
+    checkpoint_arm_table(t);
     t->nomm = (uint8_t)~0;
     t->colo = (int8_t)asize;
     setmref(t->array, (TValue *)((char *)t + sizeof(GCtab)));
@@ -104,6 +203,7 @@ static GCtab *newtab(lua_State *L, uint32_t asize, uint32_t hbits)
     t = lj_mem_newobj(L, GCtab);
     t->gct = ~LJ_TTAB;
     t->preview = 0;
+    checkpoint_arm_table(t);
     t->nomm = (uint8_t)~0;
     t->colo = 0;
     setmref(t->array, NULL);
@@ -122,6 +222,8 @@ static GCtab *newtab(lua_State *L, uint32_t asize, uint32_t hbits)
       t->asize = asize;
     }
   }
+  /* Birth order is the table's identity: every peer running the same script numbers alike. */
+  t->serial = ++G(L)->objserial;
   if (hbits)
     newhpart(L, t, hbits);
   return t;
@@ -207,6 +309,7 @@ GCtab * LJ_FASTCALL lj_tab_dup(lua_State *L, const GCtab *kt)
 void LJ_FASTCALL lj_tab_clear(lua_State *L, GCtab *t)
 {
   if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+  checkpoint_mark_state(L, t);
   clearapart(t);
   if (t->hmask > 0) {
     Node *node = noderef(t->node);
@@ -238,6 +341,7 @@ void lj_tab_resize(lua_State *L, GCtab *t, uint32_t asize, uint32_t hbits)
   uint32_t oldasize = t->asize;
   uint32_t oldhmask = t->hmask;
   if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+  checkpoint_mark_state(L, t);
   if (asize > oldasize) {  /* Array part grows? */
     TValue *array;
     uint32_t i;
@@ -442,6 +546,7 @@ TValue *lj_tab_newkey(lua_State *L, GCtab *t, cTValue *key)
 {
   Node *n = hashkey(t, key);
   if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+  checkpoint_mark_state(L, t);
   if (!tvisnil(&n->val) || t->hmask == 0) {
     Node *nodebase = noderef(t->node);
     Node *collide, *freenode = getfreetop(t, nodebase);
@@ -519,6 +624,7 @@ TValue *lj_tab_setinth(lua_State *L, GCtab *t, int32_t key)
   TValue k;
   Node *n;
   if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+  checkpoint_mark_state(L, t);
   if (inarray(t, key)) return arrayslot(t, key);
   k.n = (lua_Number)key;
   n = hashnum(t, &k);
@@ -534,6 +640,7 @@ TValue *lj_tab_setstr(lua_State *L, GCtab *t, const GCstr *key)
   TValue k;
   Node *n = hashstr(t, key);
   if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+  checkpoint_mark_state(L, t);
   do {
     if (tvisstr(&n->key) && strV(&n->key) == key)
       return &n->val;
@@ -546,6 +653,7 @@ TValue *lj_tab_set(lua_State *L, GCtab *t, cTValue *key)
 {
   Node *n;
   if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(L, t);
+  checkpoint_mark_state(L, t);
   t->nomm = 0;  /* Invalidate negative metamethod cache. */
   if (tvisstr(key)) {
     return lj_tab_setstr(L, t, strV(key));

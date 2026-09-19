@@ -54,6 +54,7 @@ static GCupval *func_finduv(lua_State *L, TValue *slot)
   uv = lj_mem_newt(L, sizeof(GCupval), GCupval);
   newwhite(g, uv);
   uv->gct = ~LJ_TUPVAL;
+  uv->serial = ++g->objserial;
   uv->closed = 0;  /* Still open. */
   setmref(uv->v, slot);  /* Pointing to the stack slot. */
   /* NOBARRIER: The GCupval is new (marked white) and open. */
@@ -73,6 +74,7 @@ static GCupval *func_emptyuv(lua_State *L)
 {
   GCupval *uv = (GCupval *)lj_mem_newgco(L, sizeof(GCupval));
   uv->gct = ~LJ_TUPVAL;
+  uv->serial = ++G(L)->objserial;
   uv->closed = 1;
   setnilV(&uv->tv);
   setmref(uv->v, &uv->tv);
@@ -112,6 +114,7 @@ GCfunc *lj_func_newC(lua_State *L, MSize nelems, GCtab *env)
 {
   GCfunc *fn = (GCfunc *)lj_mem_newgco(L, sizeCfunc(nelems));
   fn->c.gct = ~LJ_TFUNC;
+  fn->c.serial = ++G(L)->objserial;
   fn->c.ffid = FF_C;
   fn->c.nupvalues = (uint8_t)nelems;
   /* NOBARRIER: The GCfunc is new (marked white). */
@@ -125,6 +128,7 @@ static GCfunc *func_newL(lua_State *L, GCproto *pt, GCtab *env)
   uint32_t count;
   GCfunc *fn = (GCfunc *)lj_mem_newgco(L, sizeLfunc((MSize)pt->sizeuv));
   fn->l.gct = ~LJ_TFUNC;
+  fn->l.serial = ++G(L)->objserial;
   fn->l.ffid = FF_LUA;
   fn->l.nupvalues = 0;  /* Set to zero until upvalues are initialized. */
   /* NOBARRIER: Really a setgcref. But the GCfunc is new (marked white). */

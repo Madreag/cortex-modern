@@ -2954,7 +2954,7 @@ BITMAP* SceneMan::GetIntermediateBitmapForSettlingIntoTerrain(int moDiameter) co
 std::string SceneMan::SaveCheckpoint() const {
     CheckpointWriter writer("SceneMan2");
     VisitCheckpoint(writer, *this);
-    writer(SaveMaterialCatalog());
+    writer(CheckpointWriter::Native([&] { return SaveMaterialCatalog(); }));
     return writer.Text();
 }
 
@@ -3091,6 +3091,16 @@ const Material* SceneMan::ResolveMaterialReference(std::string_view text, bool a
 }
 
 std::string SceneMan::SaveMaterialCatalog() const {
+    if (CheckpointWriter::IsCapturing()) {
+        std::array<CheckpointText, c_PaletteEntriesNumber> palette;
+        std::vector<CheckpointText> copies, presets;
+        for (size_t index = 0; index < m_apMatPalette.size(); ++index) if (m_apMatPalette[index]) palette[index] = CheckpointWriter::Native([&] { return m_apMatPalette[index]->SaveCheckpoint(); });
+        for (const Material* material: m_MaterialCopiesVector) copies.push_back(CheckpointWriter::Native([&] { return material->SaveCheckpoint(); }));
+        for (const Material* material: CheckpointMaterialPresets()) presets.push_back(CheckpointWriter::Native([&] { return material->SaveCheckpoint(); }));
+        CheckpointWriter writer("MaterialCatalog1");
+        writer(m_MaterialCount, m_MatNameMap, palette, copies, presets);
+        return writer.Text();
+    }
     CheckpointMaterialCatalog state;
     state.count = m_MaterialCount;
     state.names = m_MatNameMap;

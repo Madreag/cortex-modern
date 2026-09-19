@@ -95,7 +95,7 @@ int SoundSet::Save(Writer& writer) const {
 		writer << soundData.MinimumAudibleDistance;
 		writer.NewProperty("AttenuationStartDistance");
 		writer << soundData.AttenuationStartDistance;
-		if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_ContentCheckpoint", base64_encode(soundData.SoundFile.SaveCheckpoint(), true));
+		if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_ContentCheckpoint", CheckpointWriter::Native([&] { return soundData.SoundFile.SaveCheckpoint(); }).Base64(true));
 
 		writer.ObjectEnd();
 	}
@@ -105,7 +105,7 @@ int SoundSet::Save(Writer& writer) const {
 	}
 	writer.NewPropertyWithValue("SpecialBehaviour_CurrentSelectionIsSet", m_CurrentSelection.first);
 	writer.NewPropertyWithValue("SpecialBehaviour_CurrentSelectionIndex", m_CurrentSelection.second);
-	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_SimulationSelection", base64_encode(SaveSimulationCheckpoint(), true));
+	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_SimulationSelection", CheckpointWriter::Native([&] { return SaveSimulationCheckpoint(); }).Base64(true));
 
 	return 0;
 }
@@ -269,12 +269,12 @@ bool SoundSet::LoadSoundData(std::string_view text, SoundData& soundData) {
 
 std::string SoundSet::SaveStructure() const {
 	CheckpointWriter writer("SoundSetStructure1");
-	std::vector<std::string> sounds;
+	std::vector<CheckpointText> sounds;
 	sounds.reserve(m_SoundData.size());
-	for (const SoundData& soundData: m_SoundData) sounds.push_back(SaveSoundData(soundData));
-	std::vector<std::string> subSets;
+	for (const SoundData& soundData: m_SoundData) sounds.push_back(CheckpointWriter::Native([&] { return SaveSoundData(soundData); }));
+	std::vector<CheckpointText> subSets;
 	subSets.reserve(m_SubSoundSets.size());
-	for (const SoundSet* subSoundSet: m_SubSoundSets) subSets.push_back(subSoundSet->SaveStructure());
+	for (const SoundSet* subSoundSet: m_SubSoundSets) subSets.push_back(CheckpointWriter::Native([subSoundSet] { return subSoundSet->SaveStructure(); }));
 	writer(static_cast<int>(m_SoundSelectionCycleMode), sounds, subSets);
 	return writer.Text();
 }

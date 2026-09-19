@@ -31,6 +31,7 @@ SELFTESTS = [
     "net-world-join",
     "camera-null-scene",
     "rotate-primitive",
+    "cow-checkpoint",
     "float-text",
     "combo-key",
     "settings-preferences",

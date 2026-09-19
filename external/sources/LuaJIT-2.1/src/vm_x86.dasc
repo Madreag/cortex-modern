@@ -1566,6 +1566,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  // Fast path: no mt for table yet and not clearing the mt.
   |  mov TAB:RB, [BASE]
   |  test dword TAB:RB->preview, LJ_PREVIEW_PENDING; jnz ->fff_fallback
+  |  cmp byte [DISPATCH+DISPATCH_GL(checkpoint_armed)], 0; jne ->fff_fallback
   |  cmp dword TAB:RB->metatable, 0;  jne ->fff_fallback
   |  cmp dword [BASE+12], LJ_TTAB;  jne ->fff_fallback
   |  mov TAB:RC, [BASE+8]
@@ -4551,6 +4552,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  checktab RB, ->vmeta_tsetv
     |  mov TAB:RB, [BASE+RB*8]
     |  test dword TAB:RB->preview, LJ_PREVIEW_PENDING; jnz ->vmeta_tsetv
+    |  cmp byte [DISPATCH+DISPATCH_GL(checkpoint_armed)], 0; jne ->vmeta_tsetv
     |
     |  // Integer key?
     |.if DUALNUM
@@ -4613,6 +4615,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  mov TAB:RB, [BASE+RB*8]
     |->BC_TSETS_Z:	// RB = GCtab *, RC = GCstr *, refetches PC_RA.
     |  test dword TAB:RB->preview, LJ_PREVIEW_PENDING; jnz ->vmeta_tsets
+    |  cmp byte [DISPATCH+DISPATCH_GL(checkpoint_armed)], 0; jne ->vmeta_tsets
     |  mov RA, TAB:RB->hmask
     |  and RA, STR:RC->sid
     |  imul RA, #NODE
@@ -4699,6 +4702,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  checktab RB, ->vmeta_tsetb
     |  mov TAB:RB, [BASE+RB*8]
     |  test dword TAB:RB->preview, LJ_PREVIEW_PENDING; jnz ->vmeta_tsetb
+    |  cmp byte [DISPATCH+DISPATCH_GL(checkpoint_armed)], 0; jne ->vmeta_tsetb
     |  cmp RC, TAB:RB->asize
     |  jae ->vmeta_tsetb
     |  shl RC, 3
@@ -4743,6 +4747,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  cvttsd2si RC, qword [BASE+RC*8]
     |.endif
     |  test dword TAB:RB->preview, LJ_PREVIEW_PENDING; jnz ->vmeta_tsetr
+    |  cmp byte [DISPATCH+DISPATCH_GL(checkpoint_armed)], 0; jne ->vmeta_tsetr
     |  test byte TAB:RB->marked, LJ_GC_BLACK	// isblack(table)
     |  jnz >7
     |2:
@@ -4777,6 +4782,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lea RA, [BASE+RA*8]
     |  mov TAB:RB, [RA-8]		// Guaranteed to be a table.
     |  test dword TAB:RB->preview, LJ_PREVIEW_PENDING; jnz >8
+    |  cmp byte [DISPATCH+DISPATCH_GL(checkpoint_armed)], 0; jne >9
     |  test byte TAB:RB->marked, LJ_GC_BLACK	// isblack(table)
     |  jnz >7
     |2:
@@ -4842,6 +4848,24 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |.endif
     |  mov SAVE_PC, PC
     |  call extern lj_preview_write
+    |  mov BASE, L:RB->base
+    |  movzx RA, PC_RA
+    |  jmp <1
+    |
+    |9:
+    |.if X64
+    |  mov L:CARG1d, SAVE_L
+    |  mov L:CARG1d->base, BASE
+    |  mov CARG2d, TAB:RB
+    |  mov L:RB, L:CARG1d
+    |.else
+    |  mov ARG2, TAB:RB
+    |  mov L:RB, SAVE_L
+    |  mov L:RB->base, BASE
+    |  mov ARG1, L:RB
+    |.endif
+    |  mov SAVE_PC, PC
+    |  call extern lj_checkpoint_mark	// (lua_State *L, GCtab *t)
     |  mov BASE, L:RB->base
     |  movzx RA, PC_RA
     |  jmp <1

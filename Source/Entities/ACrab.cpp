@@ -343,6 +343,50 @@ std::string ACrab::GetLimbGroupInertia() const {
 	return std::string(buffer, cursor);
 }
 
+CheckpointText ACrab::CaptureLimbGroupPositions() const {
+	if (!m_PersistedLimbGroupPositions.empty()) return CheckpointText(m_PersistedLimbGroupPositions);
+	CheckpointBuffer packed;
+	bool first = true;
+	for (const AtomGroup* group: {m_pLFGFootGroup, m_pLBGFootGroup, m_pRFGFootGroup, m_pRBGFootGroup}) {
+		const Vector limbPos = group ? group->GetRawLimbPos() : Vector();
+		if (!first) packed.Raw(" ");
+		packed.Real(limbPos.m_X); packed.Raw(" "); packed.Real(limbPos.m_Y);
+		first = false;
+	}
+	return packed.Finish();
+}
+
+CheckpointText ACrab::CaptureLimbGroupInertia() const {
+	if (!m_PersistedLimbGroupInertia.empty()) return CheckpointText(m_PersistedLimbGroupInertia);
+	CheckpointBuffer packed;
+	bool first = true;
+	for (const AtomGroup* group: {m_pLFGFootGroup, m_pLBGFootGroup, m_pRFGFootGroup, m_pRBGFootGroup}) {
+		if (!first) packed.Raw(" ");
+		packed.Real(group ? group->GetStoredMomentOfInertia() : 0.0F); packed.Raw(" ");
+		packed.Real(group ? group->GetStoredOwnerMass() : 0.0F);
+		first = false;
+	}
+	return packed.Finish();
+}
+
+std::vector<CheckpointText> ACrab::CaptureLimbPathStates(bool forHashing) const {
+	std::vector<CheckpointText> states;
+	if (!m_PersistedLimbPathStates.empty()) {
+		states.reserve(m_PersistedLimbPathStates.size());
+		for (const auto& state: m_PersistedLimbPathStates) states.emplace_back(state);
+		return states;
+	}
+	states.reserve(SIDECOUNT * LAYERCOUNT * MOVEMENTSTATECOUNT);
+	for (int side = 0; side < SIDECOUNT; ++side) {
+		for (int layer = 0; layer < LAYERCOUNT; ++layer) {
+			for (int movementState = 0; movementState < MOVEMENTSTATECOUNT; ++movementState) {
+				states.push_back(m_Paths[side][layer][movementState].CaptureTraversalState(forHashing));
+			}
+		}
+	}
+	return states;
+}
+
 static void ApplyPackedLimbInertia(const std::string& packed, std::initializer_list<AtomGroup*> groups) {
 	if (packed.empty()) {
 		return;
@@ -577,7 +621,7 @@ void ACrab::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("AimRangeLowerLimit", m_AimRangeLowerLimit);
 	writer.NewPropertyWithValue("LockMouseAimInput", m_LockMouseAimInput);
 	writer.NewPropertyWithValue("StrideSound", m_StrideSound);
-	writer.NewPropertyWithValue("SpecialBehaviour_ACrabRuntime", base64_encode(m_PersistedACrabRuntime.empty() ? SaveACrabRuntime() : m_PersistedACrabRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ACrabRuntime", CheckpointWriter::Native([&] { return m_PersistedACrabRuntime.empty() ? SaveACrabRuntime() : m_PersistedACrabRuntime; }).Base64(true));
 }
 
 int ACrab::Save(Writer& writer) const {
@@ -1770,7 +1814,10 @@ std::string ACrab::SaveACrabRuntime() const {
 	CheckpointWriter archive("ACrabRuntime1");
 	archive(m_IconBlinkTimer, m_StrideFrame, m_Paths, m_Aiming, m_StrideStart, m_StrideTimer, m_AimRangeUpperLimit);
 	archive(m_AimRangeLowerLimit, m_LockMouseAimInput);
-	archive(CaptureOwnedCheckpoint(m_pLFGFootGroup), CaptureOwnedCheckpoint(m_BackupLFGFootGroup), CaptureOwnedCheckpoint(m_pLBGFootGroup), CaptureOwnedCheckpoint(m_BackupLBGFootGroup), CaptureOwnedCheckpoint(m_pRFGFootGroup), CaptureOwnedCheckpoint(m_BackupRFGFootGroup), CaptureOwnedCheckpoint(m_pRBGFootGroup), CaptureOwnedCheckpoint(m_BackupRBGFootGroup));
+	archive(CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pLFGFootGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_BackupLFGFootGroup); }),
+	    CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pLBGFootGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_BackupLBGFootGroup); }),
+	    CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pRFGFootGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_BackupRFGFootGroup); }),
+	    CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_pRBGFootGroup); }), CheckpointWriter::Native([&] { return CaptureOwnedCheckpoint(m_BackupRBGFootGroup); }));
 	return archive.Text();
 }
 

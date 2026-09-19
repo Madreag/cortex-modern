@@ -2200,6 +2200,25 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	return g_ActivityMan.RestoreRuntimeGlobals(in.runtimeGlobals) && restored;
 }
 
+bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems) const {
+	AudioMan::CheckpointRegistryScope captureSounds;
+	struct PathCapture {
+		PathCapture() { g_LuaMan.BeginPathCallbackCapture(); }
+		~PathCapture() { g_LuaMan.EndPathCallbackCapture(); }
+	} pathCapture;
+	graphs.clear();
+	const auto capture = [&](LuaStateWrapper& state) {
+		CheckpointText text;
+		const bool complete = state.CaptureScriptGraph(text, problems);
+		if (complete && CheckpointWriter::CurrentCache()) text = CheckpointWriter::CurrentCache()->Remember(&state, 16, std::move(text));
+		graphs.push_back(std::move(text));
+		return complete;
+	};
+	bool complete = capture(g_LuaMan.GetMasterScriptState());
+	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) complete = capture(state) && complete;
+	return complete;
+}
+
 bool MovableMan::SerializeScriptGraphs(std::vector<std::string>& graphs, std::vector<std::string>& problems) const {
 	AudioMan::CheckpointRegistryScope captureSounds;
 	struct PathCapture {

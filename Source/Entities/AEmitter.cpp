@@ -224,6 +224,23 @@ std::vector<std::string> AEmitter::GetEmissionTimers() const {
 	return timers;
 }
 
+std::vector<CheckpointText> AEmitter::CaptureEmissionTimers() const {
+	std::vector<CheckpointText> timers;
+	timers.reserve(m_EmissionList.size());
+	for (const Emission* emission: m_EmissionList) {
+		CheckpointBuffer packed;
+		packed.Integer(emission->m_StartTimer.GetStartSimTimeMS());
+		packed.Raw("|");
+		packed.Integer(emission->m_StartTimer.GetSimTimeLimitTicks());
+		packed.Raw("|");
+		packed.Integer(emission->m_StopTimer.GetStartSimTimeMS());
+		packed.Raw("|");
+		packed.Integer(emission->m_StopTimer.GetSimTimeLimitTicks());
+		timers.push_back(packed.Finish());
+	}
+	return timers;
+}
+
 std::vector<std::pair<double, double>> AEmitter::GetEmissionTimerElapsed() const {
 	std::vector<std::pair<double, double>> elapsed;
 	elapsed.reserve(m_EmissionList.size());
@@ -309,7 +326,7 @@ void AEmitter::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SustainBurstSound", m_SustainBurstSound);
 	writer.NewPropertyWithValue("BurstSoundFollowsEmitter", m_BurstSoundFollowsEmitter);
 	writer.NewPropertyWithValue("LoudnessOnEmit", m_LoudnessOnEmit);
-	writer.NewPropertyWithValue("SpecialBehaviour_AEmitterRuntime", base64_encode(m_PersistedAEmitterRuntime.empty() ? SaveAEmitterRuntime() : m_PersistedAEmitterRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_AEmitterRuntime", CheckpointWriter::Native([&] { return m_PersistedAEmitterRuntime.empty() ? SaveAEmitterRuntime() : m_PersistedAEmitterRuntime; }).Base64(true));
 }
 
 int AEmitter::Save(Writer& writer) const {
