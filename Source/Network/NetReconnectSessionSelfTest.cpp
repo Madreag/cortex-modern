@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <functional>
 #include <filesystem>
@@ -32,6 +33,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -6628,6 +6630,97 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestRemovedTransactionsDropped() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			// Three human seats and a CPU slot: the removed link has to hold a seat of its own AND have
+			// a transaction outstanding on another one at the same time.
+			wire.host.SetSeatTable({{0, 1, 1, false, 2, false}, {1, 2, 2, false, 3, false}, {2, 3, 3, false, 4, false}, {3, 0, 4, true, 0, false}}, NetMatchMode::PvPSkirmish);
+			Endpoint departed;
+			departed.connection = 421;
+			ConfigureEndpoint(departed, "removed-departed", &unixNow);
+			wire.Add(&departed);
+			NetH4TicketRecord departedRecord;
+			if (SeatAndDrop(wire, departed, departedRecord, unixNow, &error) != 0) {
+				return Fail("the fixture could not open a substitutable seat: " + error);
+			}
+			Endpoint holder;
+			holder.connection = 422;
+			ConfigureEndpoint(holder, "removed-holder", &unixNow);
+			wire.Add(&holder);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!holder.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error) || holder.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("the holder did not join: " + error);
+			}
+			NetH4TicketRecord holderRecord;
+			if (holder.store.Load(unixNow, holderRecord, &error) != NetH4TicketLoadResult::Loaded) {
+				return Fail(error);
+			}
+			const NetAuthBytes32 holderId = Ramp<32>(0xD4);
+			wire.host.BindParticipantId(holder.connection, holderId);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!wire.SendRaw(holder.connection, MakeApplicant(departedRecord.stableSeat, 0x51, "holder"), &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			const auto applicantsFor = [&wire](uint16_t stableSeat) {
+				for (const auto& seat : wire.host.GetModerationView()) {
+					if (seat.stableSeat == stableSeat) {
+						return seat.applicants;
+					}
+				}
+				return std::vector<NetH4ApplicantView>{};
+			};
+			if (applicantsFor(departedRecord.stableSeat).size() != 1) {
+				return Fail("the fixture did not register the holder's application for the dropped seat");
+			}
+			NetModerationSelection selected{};
+			for (const auto& seat : wire.host.GetModerationView()) {
+				if (seat.stableSeat == holderRecord.stableSeat) {
+					selected = NetSelectModerationSeat(seat);
+				}
+			}
+			NetParticipantRemovalIssue issued;
+			if (wire.host.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, wire.nowMs, unixNow, 0x4831ULL, 1, 150, issued) != NetKickBanResult::Ok) {
+				return Fail("the host could not remove the holder's own seat");
+			}
+			if (wire.host.NotifyDisconnect(holder.connection, 150) != NetH4DisconnectOutcome::Removed) {
+				return Fail("the removed holder's disconnect did not read as a removal");
+			}
+			const auto surviving = applicantsFor(departedRecord.stableSeat);
+			if (!surviving.empty()) {
+				return Fail("the removed link kept " + std::to_string(surviving.size()) + " application(s) for seat " + std::to_string(departedRecord.stableSeat));
+			}
+			if (!wire.host.IsSeatClosed(holderRecord.stableSeat)) {
+				return Fail("the removed holder's own seat was not closed");
+			}
+			// The binding dies with the link: the same transport number comes back unproven, not as the
+			// identity that was removed on it.
+			wire.host.SetParticipantProofRequired(true);
+			NetH4NewJoin reused;
+			reused.txId = Ramp<16>(0x52);
+			reused.identity = MakeIdentity();
+			reused.displayName = "reused";
+			if (!wire.SendRaw(holder.connection, reused, &error)) {
+				return Fail(error);
+			}
+			wire.DrainHostOutbound();
+			const NetJoinRejected* unproven = LastOf<NetJoinRejected>(wire.Delivered(holder.connection));
+			if (unproven == nullptr || unproven->rejectReason != NetRejectReason::IdentityUnproven) {
+				return Fail(std::string("the removed link kept its participant binding: ") + (unproven == nullptr ? "no refusal" : NetProtocol::RejectReasonName(unproven->rejectReason)));
+			}
+			wire.host.SetParticipantProofRequired(false);
+			std::cout << "[net-reconnect-session-selftest] PASS kick: a removed link loses its seat, its transactions and its binding" << std::endl;
+			return 0;
+		}
+
 		int TestBanScopes() {
 			ScriptedAuthCrypto crypto;
 			ScriptedParticipantCrypto participant;
@@ -6943,6 +7036,85 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestBanStoreUnderTwoThreads() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			const auto lane = std::filesystem::temp_directory_path() / "cccp-ban-threads";
+			std::error_code code;
+			std::filesystem::remove_all(lane, code);
+			std::filesystem::create_directories(lane, code);
+			NetHostBanStore store;
+			store.SetPath((lane / "NetworkBans").string());
+			if (!store.Load(&error)) {
+				return Fail("the threaded ban store did not load: " + error);
+			}
+			const uint64_t sid = 0x4831ULL;
+			const NetAuthBytes32 pinned = Ramp<32>(0xFF);
+			if (!store.Ban(pinned, NetHostBanScope::Session, "pinned", "pinned", sid, 1000)) {
+				return Fail("the threaded ban store refused the pinned record");
+			}
+			// Fixed work, no sleeps and no wall clock: the host's thread churns records while the setup
+			// worker reads admission, and the pinned record has to be there on every read.
+			constexpr int c_Iterations = 200;
+			std::atomic<int> arrived{0};
+			std::atomic<bool> released{false};
+			std::atomic<int> lostReads{0};
+			std::atomic<int> tornReads{0};
+			std::atomic<int> refusedWrites{0};
+			const auto barrier = [&arrived, &released] {
+				++arrived;
+				while (!released.load(std::memory_order_acquire)) {
+					std::this_thread::yield();
+				}
+			};
+			std::thread writer([&] {
+				barrier();
+				for (int i = 0; i < c_Iterations; ++i) {
+					const NetAuthBytes32 churn = Ramp<32>(static_cast<uint8_t>(i));
+					const NetHostBanScope scope = (i % 25) == 0 ? NetHostBanScope::UntilRemoved : NetHostBanScope::Session;
+					if (!store.Ban(churn, scope, "churn", "churn", sid, 2000 + static_cast<uint64_t>(i)) || !store.Unban(churn)) {
+						++refusedWrites;
+					}
+				}
+			});
+			std::thread reader([&] {
+				barrier();
+				for (int i = 0; i < c_Iterations; ++i) {
+					if (!store.IsBanned(pinned, sid)) {
+						++lostReads;
+					}
+					int seen = 0;
+					for (const NetHostBanRecord& record : store.List()) {
+						if (record.identity == pinned) {
+							++seen;
+						}
+					}
+					if (seen != 1) {
+						++tornReads;
+					}
+				}
+			});
+			while (arrived.load(std::memory_order_acquire) < 2) {
+				std::this_thread::yield();
+			}
+			released.store(true, std::memory_order_release);
+			writer.join();
+			reader.join();
+			const std::vector<NetHostBanRecord> settled = store.List();
+			if (lostReads.load() != 0 || tornReads.load() != 0 || refusedWrites.load() != 0) {
+				return Fail("the ban store lost " + std::to_string(lostReads.load()) + " reads of the pinned record, saw " +
+				            std::to_string(tornReads.load()) + " torn record sets and refused " + std::to_string(refusedWrites.load()) +
+				            " writes; it now holds " + std::to_string(settled.size()) + " records");
+			}
+			if (settled.size() != 1 || !(settled.front().identity == pinned)) {
+				return Fail("the churn left " + std::to_string(settled.size()) + " records instead of the pinned one");
+			}
+			std::filesystem::remove_all(lane, code);
+			std::cout << "[net-reconnect-session-selftest] PASS scopes: the ban store holds its records under a writer and a reader" << std::endl;
+			return 0;
+		}
+
 	int NetReconnectSessionSelfTest::Run() {
 		if (const int result = TestStoreFailsClosed(); result != 0) {
 			return result;
@@ -7106,7 +7278,13 @@ namespace RTE {
 		if (const int result = TestKickTerminal(); result != 0) {
 			return result;
 		}
+		if (const int result = TestRemovedTransactionsDropped(); result != 0) {
+			return result;
+		}
 		if (const int result = TestBanScopes(); result != 0) {
+			return result;
+		}
+		if (const int result = TestBanStoreUnderTwoThreads(); result != 0) {
 			return result;
 		}
 		if (const int result = TestRefusedReclaimReportsNewJoin(); result != 0) {
