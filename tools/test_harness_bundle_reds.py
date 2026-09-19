@@ -101,12 +101,18 @@ class GenerateObserverRepo(unittest.TestCase):
             }
             inv_path = tree / "native-fields.json"
             inv_path.write_text(json.dumps(inventory), encoding="utf-8")
+            originals = HERE / "contracts" / "observer-originals"
+            manifest = HERE / "contracts" / "observer-manifest.json"
+            self.assertFalse(originals.exists(), f"fixture needs a clean {originals}")
+            self.assertFalse(manifest.exists(), f"fixture needs a clean {manifest}")
             before = {path: path.read_bytes() for path in tree.rglob("*") if path.is_file()}
             buf = io.StringIO()
             with redirect_stdout(buf):
                 code = generate_main(["--repo", str(tree), "--inventory", str(inv_path)])
             self.assertEqual(code, 1)
             self.assertIn("refusing overwrite: generated header drops hand fields", buf.getvalue())
+            self.assertFalse(originals.exists(), f"refused run wrote {originals}")
+            self.assertFalse(manifest.exists(), f"refused run wrote {manifest}")
             after = {path: path.read_bytes() for path in tree.rglob("*") if path.is_file()}
             self.assertEqual(before, after)
 
