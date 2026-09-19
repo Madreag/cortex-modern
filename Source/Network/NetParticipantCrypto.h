@@ -60,6 +60,11 @@ namespace RTE {
 		bool HasKey() const { return m_HasKey; }
 		const NetParticipantId& PublicId() const { return m_Public; }
 		bool Sign(const std::vector<uint8_t>& message, NetParticipantSignature& signature) const;
+		/// A symmetric key for sealing this install's own files, derived from the private half under a
+		/// purpose label: HMAC-SHA-256(private key, label). The private half still never leaves the store,
+		/// and two purposes never share a key.
+		/// @return Whether a key was derived; false without a key or without real crypto.
+		bool DeriveLocalKey(const std::string& label, std::array<uint8_t, 32>& out) const;
 
 	private:
 		std::string m_Path = DefaultPath();

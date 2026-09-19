@@ -304,6 +304,7 @@ namespace RTE {
 		SendSeatAssign(peerId);
 		std::string error;
 		(void)SendTo(m_RemoteTransports.at(peerId), NetLobbyMatchConfig{m_Config.matchConfig}, &error);
+		SendResumeOfferTo(peerId);
 	}
 
 	void NetLobbySession::PumpOutgoingChunks() {
@@ -349,8 +350,21 @@ namespace RTE {
 			if (m_StateTransferOnlyPeer != 0 && peerId != m_StateTransferOnlyPeer) {
 				return false;
 			}
+			// A peer that answered with its own copy of the checkpoint is owed no chunk at all; one that
+			// has not answered yet is still owed the state, so the start keeps waiting for it.
+			if (m_StateTransferOnlyPeer == 0 && ResumeSkipsTransfer(peerId)) {
+				return false;
+			}
 			return OutgoingChunkIndex(peerId) < m_OutgoingChunkCount;
 		});
+	}
+
+	bool NetLobbySession::ResumeSkipsTransfer(uint8_t peerId) const {
+		return !m_Config.resumeMatchId.empty() && m_ResumeHeldPeers.contains(peerId);
+	}
+
+	bool NetLobbySession::ResumeAwaitsAnswer(uint8_t peerId) const {
+		return !m_Config.resumeMatchId.empty() && !m_ResumeAnsweredPeers.contains(peerId);
 	}
 
 	std::vector<uint8_t> NetLobbySession::TakeReceivedState() {
@@ -368,6 +382,7 @@ namespace RTE {
 			uint16_t index = m_OutgoingChunkCount;
 			for (uint8_t peerId: m_RemotePeerIds) {
 				if (m_StateTransferOnlyPeer != 0 && peerId != m_StateTransferOnlyPeer) continue;
+				if (m_StateTransferOnlyPeer == 0 && (ResumeSkipsTransfer(peerId) || ResumeAwaitsAnswer(peerId))) continue;
 				if (IsRemoteLobbyUp(peerId) || IsWorldTransferPeer(peerId)) index = std::min(index, OutgoingChunkIndex(peerId));
 			}
 			if (index >= m_OutgoingChunkCount) break;
@@ -381,6 +396,7 @@ namespace RTE {
 			chunk.bytes.assign(m_StateBytesToSend.begin() + begin, m_StateBytesToSend.begin() + end);
 			for (uint8_t peerId: m_RemotePeerIds) {
 				if (m_StateTransferOnlyPeer != 0 && peerId != m_StateTransferOnlyPeer) continue;
+				if (m_StateTransferOnlyPeer == 0 && (ResumeSkipsTransfer(peerId) || ResumeAwaitsAnswer(peerId))) continue;
 				if ((!IsRemoteLobbyUp(peerId) && !IsWorldTransferPeer(peerId)) || OutgoingChunkIndex(peerId) != index) continue;
 				std::string error;
 				if (!SendTo(m_RemoteTransports.at(peerId), chunk, &error)) {
@@ -855,6 +871,7 @@ namespace RTE {
 				if (!m_Config.matchConfig.successorOrder.empty()) {
 					(void)SendTo(m_RemoteTransports[peerId], capsule, &error);
 				}
+				SendResumeOfferTo(peerId);
 				sentAny = true;
 			}
 		}
@@ -1122,6 +1139,8 @@ namespace RTE {
 				HandleStateChunk(payload);
 			} else if constexpr (std::is_same_v<Payload, NetLobbySeatAssign>) {
 				HandleSeatAssign(payload);
+			} else if constexpr (std::is_same_v<Payload, NetLobbyResume>) {
+				HandleResume(payload);
 			}
 		}, message.payload);
 	}
@@ -1177,6 +1196,52 @@ namespace RTE {
 				acked = false;
 		}
 		return true;
+	}
+
+	void NetLobbySession::SendResumeOfferTo(uint8_t peerId) {
+		if (!m_Config.host || m_Config.resumeMatchId.empty() || m_Config.resumeTick == 0 || !IsKnownRemote(peerId)) {
+			return;
+		}
+		NetLobbyResume offer;
+		offer.kind = 1;
+		offer.peerId = m_Config.localPeerId;
+		offer.savedTick = m_Config.resumeTick;
+		offer.matchId = m_Config.resumeMatchId;
+		offer.digest = m_Config.resumeDigest;
+		offer.sideStateHash = m_Config.resumeSideStateHash;
+		std::string error;
+		(void)SendTo(m_RemoteTransports.at(peerId), offer, &error);
+	}
+
+	void NetLobbySession::HandleResume(const NetLobbyResume& message) {
+		if (m_Config.host) {
+			// Only the peer itself may answer for its own copy, and only about the checkpoint offered.
+			if (message.kind != 2 || !IsKnownRemote(message.peerId) || message.matchId != m_Config.resumeMatchId || message.savedTick != m_Config.resumeTick) {
+				return;
+			}
+			m_ResumeAnsweredPeers.insert(message.peerId);
+			if (message.held) {
+				m_ResumeHeldPeers.insert(message.peerId);
+			} else {
+				m_ResumeHeldPeers.erase(message.peerId);
+			}
+			return;
+		}
+		if (message.kind != 1 || !IsKnownRemote(message.peerId) || message.matchId.empty()) {
+			return;
+		}
+		NetLobbyResume answer;
+		answer.kind = 2;
+		answer.peerId = m_Config.localPeerId;
+		// The store decides; an answer without one is "not held", which costs a transfer and nothing else.
+		answer.held = m_Config.resumeHeld ? m_Config.resumeHeld(message) : false;
+		answer.savedTick = message.savedTick;
+		answer.matchId = message.matchId;
+		answer.digest = message.digest;
+		answer.sideStateHash = message.sideStateHash;
+		m_ResumeAnsweredHeld = answer.held;
+		std::string error;
+		(void)SendTo(m_RemoteTransports.at(message.peerId), answer, &error);
 	}
 
 	void NetLobbySession::HandleMigration(const NetLobbyMigration& message) {
