@@ -4,6 +4,7 @@
 #include "Scene.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
+#include "Actor.h"
 #include "AudioMan.h"
 #include "LuaMan.h"
 #include "RTETools.h"
@@ -53,10 +54,14 @@ CheckpointGraphIndex& CheckpointGraphIndex::Get() {
 
 void CheckpointGraphIndex::BeginWalk(bool full) {
 	std::lock_guard lock(m_Mutex);
+	// A capture of every state opens the walk once; each state's own capture nests inside it.
+	if (m_WalkDepth++ > 0) return;
 	m_Walking.clear();
 	m_WalkingRoots.clear();
 	m_Walk = true;
 	m_FullWalk = full;
+	m_RootsReused = 0;
+	m_RootsRewritten = 0;
 	m_Root = 0;
 	m_WalkNoteUs = 0;
 }
@@ -78,6 +83,7 @@ void CheckpointGraphIndex::NoteTable(const void* table) {
 
 void CheckpointGraphIndex::EndWalk() {
 	std::lock_guard lock(m_Mutex);
+	if (!m_Walk || --m_WalkDepth > 0) return;
 	if (m_FullWalk) {
 		m_TableRoots = std::move(m_Walking);
 		m_Roots = std::move(m_WalkingRoots);
@@ -105,10 +111,16 @@ void CheckpointGraphIndex::EndWalk() {
 
 void CheckpointGraphIndex::NoteRootReuse(size_t reused, size_t rewritten) {
 	std::lock_guard lock(m_Mutex);
-	m_RootsReused = reused;
-	m_RootsRewritten = rewritten;
+	// One walk covers every state, so the counts are the whole capture's, not the last state's.
+	if (m_Walk) {
+		m_RootsReused += reused;
+		m_RootsRewritten += rewritten;
+	} else {
+		m_RootsReused = reused;
+		m_RootsRewritten = rewritten;
+	}
 	// A capture that reused a chunk did not walk that root, so the map keeps what it recorded before.
-	m_FullWalk = reused == 0;
+	m_FullWalk = m_FullWalk && m_RootsReused == 0;
 }
 
 std::unordered_set<uint64_t> CheckpointGraphIndex::DirtyRoots() const {
@@ -436,8 +448,9 @@ namespace {
 
 bool RTE::RunCheckpointSceneRows() {
 	bool passed = true;
-	const auto fail = [&passed](const char* name, const std::string& actual, const std::string& required) {
-		std::cout << "[cow-checkpoint-selftest] FAIL " << name << " actual=" << actual << " required=" << required << std::endl;
+	// Only the failing actual goes on the line; the expectation belongs in the row, not in the log.
+	const auto fail = [&passed](const char* name, const std::string& actual) {
+		std::cout << "[cow-checkpoint-selftest] FAIL " << name << " actual=" << actual << std::endl;
 		passed = false;
 	};
 	const auto pass = [](const char* name, const std::string& detail) {
@@ -446,12 +459,12 @@ bool RTE::RunCheckpointSceneRows() {
 	std::list<SceneObject*> actors;
 	g_MovableMan.GetAllActors(false, actors);
 	if (actors.empty()) {
-		fail("image_ignores_writes_during_worker_traversal", "no live actor", "a live actor to capture");
+		fail("image_ignores_writes_during_worker_traversal", "no live actor");
 		return false;
 	}
 	auto* live = dynamic_cast<MovableObject*>(actors.front());
 	if (!live) {
-		fail("image_ignores_writes_during_worker_traversal", "front actor is not a MovableObject", "a live MovableObject");
+		fail("image_ignores_writes_during_worker_traversal", "front actor is not a MovableObject");
 		return false;
 	}
 	// A capture assigns sound identities and can draw counters; the rows hand the sim back what they took.
@@ -504,11 +517,9 @@ bool RTE::RunCheckpointSceneRows() {
 	const std::string formatted = worker.get();
 	live->SetPinStrength(pinned);
 	if (formatted.find("4242") != std::string::npos) {
-		fail("image_ignores_writes_during_worker_traversal", "worker text carries the write it raced",
-		     "the value the freeze owned");
+		fail("image_ignores_writes_during_worker_traversal", "worker text carries the write it raced");
 	} else if (formatted.find("PinStrength") == std::string::npos) {
-		fail("image_ignores_writes_during_worker_traversal", "no PinStrength in the owned text",
-		     "the live object captured through Scene::SaveSceneObject");
+		fail("image_ignores_writes_during_worker_traversal", "no PinStrength in the owned text");
 	} else {
 		pass("image_ignores_writes_during_worker_traversal", "worker formatted the frozen values of a live actor");
 	}
@@ -524,21 +535,43 @@ bool RTE::RunCheckpointSceneRows() {
 		WriteStoreZip(std::filesystem::path(dump) / "image.ccsave", {{"Save.ini", reused}});
 	}
 	if (sync != fresh) {
-		fail("restore_round_trip_matches_synchronous_capture", firstDifference(sync, fresh),
-		     "the image capture of a live actor matches its synchronous save at the same tick");
+		fail("restore_round_trip_matches_synchronous_capture", firstDifference(sync, fresh));
 	} else if (fresh != reused) {
-		fail("restore_round_trip_matches_synchronous_capture", firstDifference(fresh, reused),
-		     "a reused shadow matches a fresh capture of the same tick");
+		fail("restore_round_trip_matches_synchronous_capture", firstDifference(fresh, reused));
 	} else {
 		pass("restore_round_trip_matches_synchronous_capture", "sync, fresh and reused captures are the same bytes");
+	}
+
+	// The production peek hands back the shadow while the object's own stamp holds, so a field write
+	// that forgot TouchCheckpoint would put a stale actor in the archive.
+	if (auto* actor = dynamic_cast<Actor*>(live)) {
+		cache.Begin();
+		const std::string beforeWrite = capture(&cache).Text();
+		const uint64_t stampBefore = actor->CheckpointWriteGeneration();
+		const float health = actor->GetHealth();
+		actor->SetHealth(health - 1.0F);
+		const uint64_t stampAfter = actor->CheckpointWriteGeneration();
+		cache.Begin();
+		const std::string afterWrite = capture(&cache).Text();
+		actor->SetHealth(health);
+		if (stampAfter == stampBefore || afterWrite == beforeWrite) {
+			fail("a_stamped_write_is_not_reused_from_the_shadow",
+			     "stamp " + std::to_string(stampBefore) + "->" + std::to_string(stampAfter) +
+			         (afterWrite == beforeWrite ? " text unchanged" : " text changed"));
+		} else {
+			pass("a_stamped_write_is_not_reused_from_the_shadow", "a health write moved the stamp and the captured text");
+		}
+	} else {
+		fail("a_stamped_write_is_not_reused_from_the_shadow", "front object is not an Actor");
 	}
 	return passed;
 }
 
 bool RTE::RunCheckpointImageSelfTest() {
 	bool passed = true;
-	const auto fail = [&passed](const char* name, const std::string& actual, const std::string& required) {
-		std::cout << "[cow-checkpoint-selftest] FAIL " << name << " actual=" << actual << " required=" << required << std::endl;
+	// Only the failing actual goes on the line; the expectation belongs in the row, not in the log.
+	const auto fail = [&passed](const char* name, const std::string& actual) {
+		std::cout << "[cow-checkpoint-selftest] FAIL " << name << " actual=" << actual << std::endl;
 		passed = false;
 	};
 	const auto pass = [](const char* name, const std::string& detail) {
@@ -554,19 +587,42 @@ bool RTE::RunCheckpointImageSelfTest() {
 		CheckpointText later = Writer::Capture([&stamp](Writer& writer) { writer.NewPropertyWithValue("Value", stamp); });
 		later = cache.Remember(&stamp, 1, later, 12);
 		if (first.SameValues(later) || later.Text().find("9") == std::string::npos) {
-			fail("generational_shadow_keeps_the_freeze_value", later.Text(), "owned 9 after the stamp moved");
+			fail("generational_shadow_keeps_the_freeze_value", later.Text());
 		} else {
 			pass("generational_shadow_keeps_the_freeze_value", "later shadow holds 9");
 		}
 		stamp = 9;
 		const CheckpointText* peeked = cache.Peek(&stamp, 1);
 		if (!peeked || cache.Stamp(&stamp, 1) != 12 || !peeked->SameValues(later)) {
-			fail("peek_reuses_the_shadow_when_the_stamp_matches", "peek missed", "stamp 12 reuses the later shadow");
+			fail("peek_reuses_the_shadow_when_the_stamp_matches", "peek missed");
 		} else {
 			pass("peek_reuses_the_shadow_when_the_stamp_matches", "stamp 12");
 		}
+
+		// One walk spans every state: a state that rewrote all of its roots must not drop the tables
+		// another state kept by reusing its chunk.
+		int stateOneTable = 0, stateTwoTable = 0;
+		CheckpointGraphIndex& index = CheckpointGraphIndex::Get();
+		index.BeginWalk();
+		index.BeginRoot(11); index.NoteTable(&stateOneTable); index.NoteRootReuse(0, 1);
+		index.BeginRoot(21); index.NoteTable(&stateTwoTable); index.NoteRootReuse(0, 1);
+		index.EndWalk();
+		index.BeginWalk();
+		index.NoteRootReuse(1, 0);
+		index.BeginRoot(21); index.NoteTable(&stateTwoTable); index.NoteRootReuse(0, 1);
+		index.EndWalk();
+		const GraphDirt spanned = index.Sample();
+		index.OnTableWritten(&stateOneTable);
+		const bool reusedRootKept = !index.UnknownTableWritten() && index.DirtyRoots().count(11) == 1;
+		if (!reusedRootKept || spanned.rootsReused != 1 || spanned.rootsRewritten != 1) {
+			fail("one_walk_keeps_every_state_reused_root",
+			     "unknown=" + std::to_string(index.UnknownTableWritten()) + " dirty11=" + std::to_string(index.DirtyRoots().count(11)) +
+			         " reused=" + std::to_string(spanned.rootsReused) + " rewritten=" + std::to_string(spanned.rootsRewritten));
+		} else {
+			pass("one_walk_keeps_every_state_reused_root", "reused 1 rewritten 1");
+		}
 	} catch (const std::exception& error) {
-		fail("no_unexpected_exception", error.what(), "no exception");
+		fail("no_unexpected_exception", error.what());
 	}
 	std::cout << "[cow-checkpoint-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;
