@@ -1931,6 +1931,13 @@ bool Activity::RunPresentationViewSelfTest() {
 	peekedExpire.ExpirePresentationViews(press + delay + 2);
 	check("confirmed_expires_from_commit_tick", peekArmed == 1863.0F && peekedExpire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 2000.0F,
 	      "peek-armed " + std::to_string(peekArmed) + " after expire " + std::to_string(peekedExpire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	GameActivity gated;
+	gated.SetTeamFunds(2000, Teams::TeamOne);
+	gated.NotePreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 137, press + delay);
+	check("buy_gate_follows_the_seat_readout", gated.OrderExceedsSeatFunds(Players::PlayerOne, Teams::TeamOne, 1900.0F) && !gated.OrderExceedsSeatFunds(Players::PlayerOne, Teams::TeamOne, 1800.0F),
+	      "readout " + gated.DescribeFundsReadout(Teams::TeamOne, Players::PlayerOne) + " committed " + std::to_string(gated.GetTeamFunds(Teams::TeamOne)) +
+	          ", 1900 refused " + std::to_string(gated.OrderExceedsSeatFunds(Players::PlayerOne, Teams::TeamOne, 1900.0F) ? 1 : 0) +
+	          ", 1800 allowed " + std::to_string(gated.OrderExceedsSeatFunds(Players::PlayerOne, Teams::TeamOne, 1800.0F) ? 0 : 1));
 	GameActivity ordered;
 	ordered.SetTeamFunds(2000, Teams::TeamOne);
 	// The peek lists the unsent order first; the stamped one behind it is the one that commits first.
