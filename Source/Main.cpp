@@ -297,7 +297,8 @@ static std::string s_netMatchMode = "pvp";
 static std::string s_netMatchOwnershipPolicy = "team-owner";
 static bool s_netMatchServiceE2EEnteredEditor = false;
 static bool s_netMatchE2EBrainPlacement = false; //!< -net-match-e2e-brain-placement: this peer places its own seats' brains in the synchronized setup editor.
-static uint64_t s_netMatchE2EEditorTicks = 0; //!< Ticks the activity has spent in the setup editor, so a match that never leaves it fails instead of idling.
+static uint64_t s_netMatchE2EEditorTicks = 0; //!< Ticks the activity has spent in the setup editor since the last rendezvous, so a match that never leaves it fails instead of idling.
+static uint64_t s_netMatchE2ERendezvousSeen = 0; //!< Rendezvous points the UI probe has passed, so a deliberate wait on another peer does not spend the cap.
 static NetMatchE2ETickClock s_netMatchE2ETicks;
 static long s_netMatchE2EActorCensus = -1;
 static long s_netMatchE2EActorCensusPeak = -1; //!< The max actor count seen, so a transient heal double-spawn that later sheds back to normal is still visible.
@@ -4505,6 +4506,13 @@ void RunGameLoop() {
 					// A lockstep match's setup editor is synchronized: seats commit their placements over the
 					// wire and every peer starts on the same frame. Only an unsynchronized one is an error.
 					std::string editorError;
+					// The cap is a watchdog on a stuck editor, not a limit on the phase: a script that waits
+					// on another peer's probe signal ends its wait at a rendezvous, and the count starts there.
+					const uint64_t rendezvous = NetModerationGUIProbe::RendezvousCount();
+					if (rendezvous != s_netMatchE2ERendezvousSeen) {
+						s_netMatchE2ERendezvousSeen = rendezvous;
+						s_netMatchE2EEditorTicks = 0;
+					}
 					// A resync takes the coordinator down and rebuilds it around the host's snapshot, and the
 					// editor holds while that happens. An editor nobody synchronizes never gets one back.
 					if (!ScenarioRunner::IsLockstepControllerSyncActive() && !NetMatchResyncRebuilding()) {
