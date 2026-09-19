@@ -8112,6 +8112,7 @@ _PrimitiveQueueCapture = nil
 	checkpointValues = PreviewScriptSelfTest::CheckGlobalWriteBarrier() && checkpointValues;
 	checkpointValues = PreviewScriptSelfTest::CheckHotcountAfterAbort() && checkpointValues;
 	checkpointValues = PreviewScriptSelfTest::CheckAbortLeftoverPosition() && checkpointValues;
+	checkpointValues = PreviewScriptSelfTest::CheckPreviewMeasureEnvGate() && checkpointValues;
 	checkpointValues = PreviewScriptSelfTest::CheckAbortPenalizes() && checkpointValues;
 	checkpointValues = ScriptGraphCapturedBytecodeSelfTest(m_State) && checkpointValues;
 	bool ownedGraph = false;

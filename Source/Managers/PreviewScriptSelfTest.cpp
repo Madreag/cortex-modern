@@ -34,6 +34,7 @@ extern "C" {
 #include "lj_bc.h"
 }
 
+#include <cstdlib>
 #include <iostream>
 #include <functional>
 #include <memory>
@@ -41,6 +42,43 @@ extern "C" {
 #include <unordered_set>
 
 namespace RTE {
+
+	bool PreviewScriptSelfTest::CheckPreviewMeasureEnvGate() {
+		static const char* c_Name = "CC_PREVIEW_UPVALUE_MEASURE";
+		const char* previous = std::getenv(c_Name);
+		const bool had = previous != nullptr;
+		const std::string saved = had ? previous : std::string();
+		const auto set = [](const char* value) {
+#ifdef _WIN32
+			_putenv_s(c_Name, value ? value : "");
+#else
+			if (value) {
+				setenv(c_Name, value, 1);
+			} else {
+				unsetenv(c_Name);
+			}
+#endif
+		};
+		// A state with no preview yet takes the measurement from the environment, so this is the gate's own answer.
+		const auto fromEnvironment = [] {
+			lua_State* probe = luaL_newstate();
+			if (!probe) {
+				return -1;
+			}
+			const int measure = luaJIT_preview_measure(probe, 0);
+			lua_close(probe);
+			return measure;
+		};
+		set("0");
+		const int zero = fromEnvironment();
+		set("1");
+		const int one = fromEnvironment();
+		set(had ? saved.c_str() : nullptr);
+		const bool passed = zero == 0 && one == 1;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS " : "FAIL ")
+		          << "preview_measure_env_is_exactly_one zero=" << zero << " one=" << one << std::endl;
+		return passed;
+	}
 
 	bool PreviewScriptSelfTest::CheckGlobalWriteBarrier() {
 		static const std::string setup = R"lua(
