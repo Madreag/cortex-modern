@@ -38,6 +38,7 @@ namespace RTE {
 		Checksum = 5,
 		SeatSnapshot = 6,
 		RecoveryChunk = 7,
+		Timing = 8,
 	};
 
 	enum class NetLockstepStopReason : uint16_t {
@@ -277,6 +278,27 @@ namespace RTE {
 		bool operator==(const NetLockstepAck&) const = default;
 	};
 
+	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2 };
+	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4 };
+
+	/// A round-scoped timing decision and the peers that must acknowledge its boundary.
+	struct NetLockstepTiming {
+		uint8_t senderPeerId = 0;
+		uint8_t peerId = 0;
+		NetTimingAction action = NetTimingAction::Delay;
+		NetTimingPhase phase = NetTimingPhase::Propose;
+		uint64_t sessionId = 0;
+		uint64_t roundId = 0;
+		uint64_t revision = 0;
+		uint64_t applyFrame = 0;
+		uint64_t nextFrame = 0;
+		uint16_t delayFrames = 0;
+		uint8_t requiredPeers = 0;
+		uint32_t pingMs = 0;
+		uint32_t jitterMs = 0;
+		bool operator==(const NetLockstepTiming&) const = default;
+	};
+
 	struct NetLockstepRecoveryChunk {
 		uint8_t senderPeerId = 0;
 		uint64_t sessionId = 0;
@@ -309,7 +331,7 @@ namespace RTE {
 		bool operator==(const NetLockstepChecksum&) const = default;
 	};
 
-	using NetLockstepPayload = std::variant<NetLockstepStart, NetLockstepFrame, NetLockstepAck, NetLockstepStop, NetLockstepChecksum, NetLockstepSeatSnapshot, NetLockstepRecoveryChunk>;
+	using NetLockstepPayload = std::variant<NetLockstepStart, NetLockstepFrame, NetLockstepAck, NetLockstepStop, NetLockstepChecksum, NetLockstepSeatSnapshot, NetLockstepRecoveryChunk, NetLockstepTiming>;
 
 	struct NetLockstepPacket {
 		NetLockstepPayload payload;
@@ -359,6 +381,8 @@ namespace RTE {
 		uint8_t frameRedundancyTicks = 4;
 		// An active world's joiner owes every remote's input from startFrame without delay ramp-in.
 		bool joinsRunningRound = false;
+		bool adaptiveInputDelay = false;
+		double simTickMs = 0;
 	};
 
 	enum class NetHostMigrationPhase : uint8_t {
@@ -476,6 +500,10 @@ namespace RTE {
 		uint32_t relayBacklogPackets = 0; //!< Host: forwards still held for this peer.
 		uint64_t highestTargetFrame = 0;
 		uint64_t lastHeardMs = 0;
+		uint32_t pingMs = 0;
+		uint32_t jitterMs = 0;
+		uint16_t delayFrames = 0;
+		uint64_t reportedNextFrame = 0;
 	};
 
 	struct NetLockstepStats {
@@ -512,6 +540,10 @@ namespace RTE {
 		uint32_t outOfOrderFrames = 0;
 		uint32_t futureFrameDrops = 0; //!< Frames beyond the skew window, dropped so the maps stay bounded.
 		uint32_t missingFrameStalls = 0;
+		uint32_t delayChangesProposed = 0;
+		uint32_t delayChangesCommitted = 0;
+		uint32_t delayPaddingFrames = 0;
+		uint32_t delayDeferredSamples = 0;
 		uint32_t relayPacketsSent = 0; //!< Host-star: forwards this peer made on behalf of another.
 		uint32_t relaySendFailures = 0; //!< Forwards the transport refused; on a reliable lane the receiver never recovers them.
 		uint32_t relayResends = 0; //!< Refused forwards a later retry did deliver.
@@ -545,7 +577,8 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 22;
+		static constexpr uint16_t c_Version = 24;
+		static constexpr uint16_t c_TimingVersion = 24;
 		/// Advertised in Ack.receivedMask; the older peer decodes the Ack and ignores receivedMask.
 		static constexpr uint32_t c_FrameWindowCapabilityMask = 0x80000000U;
 		static constexpr uint8_t c_MaxWindowTicks = 8;
@@ -699,6 +732,10 @@ namespace RTE {
 		bool PeekReadyFrame(uint64_t frame, NetLockstepReadyFrame& outFrame) const;
 		/// The in-flight commands this coordinator still holds for one seat at a frame.
 		bool PeekQueuedCommands(uint64_t frame, uint8_t peerId, std::vector<NetGameCommand>& outCommands) const;
+		uint16_t InputDelayAt(uint8_t peerId, uint64_t producedFrame) const;
+		bool TimingDecisionPendingAt(uint64_t frame) const;
+		bool DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames);
+		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
 
 		NetLockstepState GetState() const { return m_State; }
 		bool IsRunning() const { return m_State == NetLockstepState::Running; }
@@ -1004,6 +1041,25 @@ namespace RTE {
 		uint8_t FirstAliveHumanPeerForTeam(uint8_t team, uint64_t frame) const;
 		void Fail(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
 		void ScheduleRecoveryStop(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
+		void HandleTiming(const NetLockstepTiming& timing, uint64_t nowMs, NetPeerId fromTransport);
+		void TickTiming(uint64_t nowMs);
+		void QueueTiming(const NetLockstepTiming& timing, uint8_t onlyPeer = 0);
+		void CommitTiming(uint64_t revision);
+		void ApplyTiming(const NetLockstepTiming& timing);
+		uint64_t FutureTimingFrame() const;
+		struct TimingDecision {
+			NetLockstepTiming proposal;
+			uint8_t acknowledgedPeers = 0;
+			bool committed = false;
+		};
+		std::map<uint64_t, TimingDecision> m_TimingDecisions;
+		std::map<uint8_t, std::map<uint64_t, uint16_t>> m_DelayChanges;
+		std::map<uint8_t, NetInputDelayEstimator> m_DelayEstimators;
+		std::map<uint8_t, std::deque<NetLockstepTiming>> m_TimingOutgoing;
+		std::map<int64_t, ControllerFrame> m_DeferredControllerFrames;
+		uint64_t m_NextTimingRevision = 1;
+		uint64_t m_LastTimingSampleMs = UINT64_MAX;
+		uint64_t m_LastTimingStatusMs = UINT64_MAX;
 
 		INetTransport* m_Transport = nullptr;
 		NetLockstepConfig m_Config;

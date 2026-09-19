@@ -664,6 +664,8 @@ namespace RTE {
 		lockstepConfig.startFrame = m_UseLobbyProtocol ? m_Lobby.GetStartFrame() : config.startFrame;
 		lockstepConfig.localPeerId = LocalLockstepPeerId(session);
 		lockstepConfig.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_MatchConfig, lockstepConfig.localPeerId);
+		lockstepConfig.adaptiveInputDelay = m_UseLobbyProtocol ? m_MatchConfig.delayPolicy == NetMatchDelayPolicy::Auto : config.autoInputDelay;
+		lockstepConfig.simTickMs = g_TimerMan.GetDeltaTimeMS();
 		// The host's redundancy window rides the agreed config, so every peer repeats the same ticks.
 		lockstepConfig.frameRedundancyTicks = m_MatchConfig.frameRedundancyTicks;
 		if (!m_MatchConfig.peerInputDelayFrames.empty()) {
