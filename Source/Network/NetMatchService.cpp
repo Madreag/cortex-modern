@@ -1799,6 +1799,10 @@ static std::string ResyncSaveName() {
 					// The admission table says which seats a late joiner could still take: the host's
 					// own seat and the CPU slot never count, a committed or closed one is taken.
 					for (const NetH4SeatStatus& seat : m_SeatStatuses) {
+						// A world's watcher seats are counted as watchers, not as gameplay seats.
+						if (seat.lockstepPeerId >= c_WorldSpectatorLobbyPeerFirst) {
+							continue;
+						}
 						if (NetH4SeatIsOpen(seat.lockstepPeerId, m_LocalPeerId, seat.committed, seat.closed)) {
 							++directorySeatsFree;
 						}
