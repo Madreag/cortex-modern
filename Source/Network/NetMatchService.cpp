@@ -1823,8 +1823,11 @@ static std::string ResyncSaveName() {
 		if (session.assignedPeerId != 0) {
 			lobby.SendMatchConfigTo(lobbyPeer);
 		}
-		lobby.BeginStateTransferTo(lobbyPeer, std::move(blob));
-		return m_WorldJoin.NoteTransferStarted(session.connection, lobby.GetOutgoingStateId(), lobby.GetOutgoingChunkCount(), lastCopied);
+		// A queued image is the lobby's now: the bootstrap must not read the archive again next pump.
+		const bool onThePump = lobby.BeginStateTransferTo(lobbyPeer, std::move(blob));
+		const uint64_t transferId = onThePump ? lobby.GetOutgoingStateId() : 0;
+		const uint16_t chunkCount = onThePump ? lobby.GetOutgoingChunkCount() : 0;
+		return m_WorldJoin.NoteTransferStarted(session.connection, transferId, chunkCount, lastCopied);
 	}
 
 	void NetMatchService::SendWorldJoinTail(const NetWorldJoinSession& session) {
@@ -1869,7 +1872,14 @@ static std::string ResyncSaveName() {
 		}
 		m_WorldJoin.ExpireStaleJoins(nowMs);
 		PumpWorldJoinLobby(nowMs);
-		for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
+		const std::vector<NetSessionPeerInfo> readyPeers = m_Session->GetReadyPeers();
+		std::vector<NetPeerId> liveConnections;
+		liveConnections.reserve(readyPeers.size());
+		for (const NetSessionPeerInfo& peer: readyPeers) {
+			liveConnections.push_back(peer.transportPeerId);
+		}
+		m_WorldJoin.ReleaseLostConnections(liveConnections);
+		for (const NetSessionPeerInfo& peer: readyPeers) {
 			if (m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
 				continue;
 			}

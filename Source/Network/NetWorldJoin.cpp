@@ -910,6 +910,13 @@ namespace RTE {
 		session.stableSeat = stableSeat;
 		session.openedAtMs = nowMs;
 		session.phase = NetWorldJoinPhase::Authenticating;
+		// A bootstrap opened after the image was frozen starts from it: PublishImage only reaches the
+		// bootstraps that were already waiting, so a later one would have no B to finish a transfer on.
+		if (m_Image.IsValid()) {
+			session.snapshotTick = m_Image.tick;
+			session.deliveredThrough = m_Image.tick;
+			session.acknowledgedThrough = m_Image.tick;
+		}
 		// A credentialed holder of an existing seat outranks a fresh allocation for the same slot.
 		const NetWorldSlot* slot = m_Membership.SlotOfSeat(stableSeat);
 		if (slot != nullptr && slot->held) {
@@ -1065,6 +1072,12 @@ namespace RTE {
 			if (outActivationTick) *outActivationTick = session->activationTick;
 			return true;
 		}
+		// A spectator with no image on the way has nothing to stream from, and announcing E would take
+		// it out of the phase its transfer is retried in.
+		if (!session->transferStarted || session->snapshotTick == 0) {
+			if (error) *error = "the spectator has no image transfer yet";
+			return false;
+		}
 		session->phase = NetWorldJoinPhase::CatchingUp;
 		session->activationTick = nowFrame + c_NetWorldActivationLeadFrames;
 		if (outActivationTick) *outActivationTick = session->activationTick;
@@ -1146,6 +1159,24 @@ namespace RTE {
 			CancelJoin(connection, "the world join deadline expired");
 		}
 		return stale.size();
+	}
+
+	size_t NetWorldJoinHost::ReleaseLostConnections(const std::vector<NetPeerId>& liveConnections) {
+		std::vector<NetPeerId> lost;
+		for (const NetWorldJoinSession& session: m_Sessions) {
+			if (session.phase == NetWorldJoinPhase::Active) {
+				continue;
+			}
+			if (std::find(liveConnections.begin(), liveConnections.end(), session.connection) == liveConnections.end()) {
+				lost.push_back(session.connection);
+			}
+		}
+		for (const NetPeerId connection: lost) {
+			// A spectator holds no seat but does hold a lobby id: its bootstrap has to end for the id
+			// to return to the pool.
+			CancelJoin(connection, "the connection left before it activated");
+		}
+		return lost.size();
 	}
 
 	uint64_t NetWorldJoinHost::OldestNeededFrame() const {
