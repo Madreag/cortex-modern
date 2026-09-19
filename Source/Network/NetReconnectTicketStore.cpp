@@ -21,11 +21,7 @@ namespace RTE {
 
 	namespace {
 		constexpr char c_Magic[8] = {'C', 'C', 'C', 'P', 'H', '4', 'T', 'K'};
-		// magic 8 + version 2 + epoch 16 + seat 2 + generation 4 + credential 32 + session 8 +
-		// issuedAt 8 + configHash 32 + address length 2 = 114, then the address, then the 32 B mac.
-		constexpr size_t c_FixedBytesV1 = 114;
-		// v2 appends one flag byte after the address, so a v1 record reads byte for byte as it always did.
-		constexpr size_t c_FixedBytes = c_FixedBytesV1 + 1;
+		constexpr size_t c_FixedBytes = NetReconnectTicketStore::c_FixedBytes;
 		constexpr uint8_t c_PersistentWorldFlag = 1;
 
 		void AppendU16LE(std::vector<uint8_t>& out, uint16_t value) {
@@ -111,13 +107,18 @@ namespace RTE {
 	}
 
 	bool NetReconnectTicketStore::Serialize(const NetH4TicketRecord& record, std::vector<uint8_t>& out) {
-		const uint16_t version = RecordVersionFor(record.persistentWorld);
-		if (record.recordVersion != version || record.holderGeneration == 0 ||
-		    record.hostAddress.size() > c_MaxHostAddressBytes) {
+		const uint16_t version = record.recordVersion;
+		if ((version != c_RecordVersion && version != c_DirectoryRecordVersion && version != c_LegacyRecordVersion) ||
+		    record.holderGeneration == 0 || record.hostAddress.size() > c_MaxHostAddressBytes ||
+		    record.directorySessionId.size() > c_MaxDirectorySessionIdBytes) {
+			return false;
+		}
+		// A body that cannot spell the world flag must not be handed a record that carries one.
+		if (record.persistentWorld && version < c_RecordVersion) {
 			return false;
 		}
 		out.clear();
-		out.reserve(c_FixedBytes + record.hostAddress.size());
+		out.reserve(c_FixedBytes + record.hostAddress.size() + 2 + record.directorySessionId.size());
 		out.insert(out.end(), std::begin(c_Magic), std::end(c_Magic));
 		AppendU16LE(out, version);
 		out.insert(out.end(), record.epoch.begin(), record.epoch.end());
@@ -129,22 +130,29 @@ namespace RTE {
 		out.insert(out.end(), record.matchConfigHash.begin(), record.matchConfigHash.end());
 		AppendU16LE(out, static_cast<uint16_t>(record.hostAddress.size()));
 		out.insert(out.end(), record.hostAddress.begin(), record.hostAddress.end());
-		if (version >= c_RecordVersion) {
-			out.push_back(c_PersistentWorldFlag);
+		if (version >= c_DirectoryRecordVersion) {
+			AppendU16LE(out, static_cast<uint16_t>(record.directorySessionId.size()));
+			out.insert(out.end(), record.directorySessionId.begin(), record.directorySessionId.end());
 		}
-		return out.size() == (version >= c_RecordVersion ? c_FixedBytes : c_FixedBytesV1) + record.hostAddress.size();
+		if (version >= c_RecordVersion) {
+			out.push_back(record.persistentWorld ? c_PersistentWorldFlag : uint8_t{0});
+		}
+		const size_t expected = c_FixedBytes + record.hostAddress.size() +
+		    (version >= c_DirectoryRecordVersion ? 2 + record.directorySessionId.size() : 0) +
+		    (version >= c_RecordVersion ? 1 : 0);
+		return out.size() == expected;
 	}
 
 	bool NetReconnectTicketStore::Deserialize(const std::vector<uint8_t>& bytes, NetH4TicketRecord& out) {
-		if (bytes.size() < c_FixedBytesV1 || std::memcmp(bytes.data(), c_Magic, sizeof(c_Magic)) != 0) {
+		if (bytes.size() < c_FixedBytes || std::memcmp(bytes.data(), c_Magic, sizeof(c_Magic)) != 0) {
 			return false;
 		}
 		size_t offset = sizeof(c_Magic);
 		NetH4TicketRecord record;
 		record.recordVersion = ReadU16LE(bytes.data() + offset);
 		offset += 2;
-		// A record this build wrote before the world flag existed still proves its seat.
-		if (record.recordVersion == 0 || record.recordVersion > c_RecordVersion) {
+		if (record.recordVersion != c_RecordVersion && record.recordVersion != c_DirectoryRecordVersion &&
+		    record.recordVersion != c_LegacyRecordVersion) {
 			return false;
 		}
 		std::memcpy(record.epoch.data(), bytes.data() + offset, record.epoch.size());
@@ -163,12 +171,27 @@ namespace RTE {
 		offset += record.matchConfigHash.size();
 		const uint16_t addressBytes = ReadU16LE(bytes.data() + offset);
 		offset += 2;
-		const size_t flagBytes = record.recordVersion >= c_RecordVersion ? 1 : 0;
-		if (addressBytes > c_MaxHostAddressBytes || bytes.size() != offset + addressBytes + flagBytes) {
+		if (addressBytes > c_MaxHostAddressBytes || bytes.size() < offset + addressBytes) {
 			return false;
 		}
 		record.hostAddress.assign(reinterpret_cast<const char*>(bytes.data() + offset), addressBytes);
 		offset += addressBytes;
+		// v3 appends one flag byte after the v2 body, so a v2 reader's length check is unchanged.
+		const size_t flagBytes = record.recordVersion >= c_RecordVersion ? 1 : 0;
+		if (record.recordVersion >= c_DirectoryRecordVersion) {
+			if (bytes.size() < offset + 2) {
+				return false;
+			}
+			const uint16_t sessionBytes = ReadU16LE(bytes.data() + offset);
+			offset += 2;
+			if (sessionBytes > c_MaxDirectorySessionIdBytes || bytes.size() != offset + sessionBytes + flagBytes) {
+				return false;
+			}
+			record.directorySessionId.assign(reinterpret_cast<const char*>(bytes.data() + offset), sessionBytes);
+			offset += sessionBytes;
+		} else if (bytes.size() != offset) {
+			return false;
+		}
 		if (flagBytes != 0) {
 			const uint8_t flags = bytes[offset];
 			if ((flags & ~c_PersistentWorldFlag) != 0) {

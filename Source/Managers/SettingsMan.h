@@ -251,6 +251,9 @@ namespace RTE {
 		/// Chat text size. Default Small.
 		NetworkChatTextSize GetNetworkChatTextSize() const { return m_NetworkChatTextSize; }
 		void SetNetworkChatTextSize(NetworkChatTextSize size) { m_NetworkChatTextSize = size; }
+		/// In-match chat key. Default T; Enter is START and is not the default.
+		const std::string& GetNetworkChatKey() const { return m_NetworkChatKey; }
+		void SetNetworkChatKey(const std::string& key);
 		/// Local automatic rejoin. Default on.
 		bool GetNetworkAutoReconnect() const { return m_NetworkAutoReconnect; } void SetNetworkAutoReconnect(bool enabled) { m_NetworkAutoReconnect = enabled; }
 		/// Startup stored-rejoin offer. Default on.
@@ -611,6 +614,7 @@ namespace RTE {
 		NetworkMatchStatusMode m_NetworkMatchStatusMode;
 		NetworkChatDefaultScope m_NetworkChatDefaultScope;
 		NetworkChatTextSize m_NetworkChatTextSize;
+		std::string m_NetworkChatKey;
 		NetworkHostDelayPolicy m_NetworkHostDelayPolicy;
 		NetworkHostVisibility m_NetworkHostVisibility;
 		bool m_NetworkToastsEnabled, m_NetworkChatVisible, m_NetworkChatNotify, m_NetworkChatSound, m_NetworkAutoReconnect, m_NetworkOfferStoredRejoin, m_NetworkRecordReplays, m_NetworkHostAutoRepair;

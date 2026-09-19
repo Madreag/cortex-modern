@@ -36,7 +36,7 @@ ENVIRONMENT = {'CCCP_HEADLESS': '1', 'CC_PREVIEW_GLOBALS_FENCE': '1',
                'CC_PREVIEW_FENCE_DEPTH': '1', 'CC_PREVIEW_FENCE_NAMES': '0', 'CC_PREVIEW_BARRIER_STATS': '1'}
 STATS = re.compile(r'\[localpred\] previews=(\d+) actor_ticks=\d+ ms_total=([\d.]+) avg_ms=([\d.]+)')
 NATIVE = re.compile(r'\[preview-write-barrier\] (.*)')
-FAIL = re.compile(r'^\[script-graph-selftest\] FAIL(?: (\S+))?', re.M)
+FAIL = re.compile(r'^\[(?:script-graph-selftest|preview-funds-selftest)\] FAIL(?: (.*))?$', re.M)
 OBSERVE = re.compile(r'^\[(?:pie-observe|pie-write-observe|pie-write|preview-module-fixture|preview-compat|preview-modcompat-fixture)[^\]]*\].*$', re.M)
 DRIVER_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
@@ -245,7 +245,7 @@ def run_case(name, flags, files=None, activity=None, quiet=False, extra_env=None
                preview_ms=float(stats[-1][2]) if stats else None,
                previews=int(stats[-1][0]) if stats else 0, native=native, interference=interference,
                graph_failures=FAIL.findall(text), observations=observations,
-               verdicts=[line for line in text.splitlines() if any(tag in line for tag in ('[lpinv]', '[script-graph-selftest]', '[preview-event-selftest]'))])
+               verdicts=[line for line in text.splitlines() if any(tag in line for tag in ('[lpinv]', '[script-graph-selftest]', '[preview-funds-selftest]', '[preview-event-selftest]'))])
     row['transport_ok'] = row['complete'] is True and row['timed_out'] is not True and same and row['desktop_unchanged']
     write(out / 'row.json', row)
     ledger('run', name=name, identity=identity, binary_unchanged=same, exit_code=row['exit_code'])
