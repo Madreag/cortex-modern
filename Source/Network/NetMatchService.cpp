@@ -3417,14 +3417,14 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
-	bool NetMatchService::PrepareResume(NetMatchServiceRequest& request, std::string* error) {
+	bool NetMatchService::PrepareResume(NetMatchServiceRequest& request, std::string* error, const std::filesystem::path& store) {
 		auto refuse = [&](const std::string& reason) {
 			if (error) *error = reason;
 			return false;
 		};
 		const std::string matchId = request.resumeMatchId;
 		if (!AutosaveStore::ValidMatchId(matchId)) return refuse("resume names no match");
-		const std::filesystem::path directory = AutosaveStore::Directory();
+		const std::filesystem::path directory = store.empty() ? AutosaveStore::Directory() : store;
 		std::string reason;
 		std::optional<AutosaveDescriptor> checkpoint;
 		if (request.resumeTick != 0) {

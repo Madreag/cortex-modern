@@ -5184,7 +5184,8 @@ namespace RTE {
 		ResumeScratch scratch;
 		const std::string matchId = "00000000deadbeef-00000000000000cc";
 		NetMatchService service;
-		// The key is derived from an identity of this row's own, never the player's.
+		// The key is derived from an identity of this row's own, and the store is read where the row
+		// wrote it: nothing here touches the player's Autosaves directory or the player's key.
 		service.m_ParticipantStore.SetPath((scratch.path / "identity.dat").string());
 		if (!service.m_ParticipantStore.LoadOrCreate(error)) return false;
 		std::array<uint8_t, 32> key{};
