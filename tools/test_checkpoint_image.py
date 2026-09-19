@@ -51,6 +51,7 @@ REQUIRED_SCENE_ROWS = (
     "autosave_capture_follows_another_in_the_same_process",
     "a_stamped_write_is_not_reused_from_the_shadow",
     "image_membership_matches_the_world_structure",
+    "archive_describes_the_hashed_instant",
 )
 
 
