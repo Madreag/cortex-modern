@@ -327,4 +327,16 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetParticipantIdentityStore::DeriveLocalKey(const std::string& label, std::array<uint8_t, 32>& out) const {
+		if (!m_HasKey || label.empty()) {
+			return false;
+		}
+		uint8_t mac[32];
+		if (!GetNetAuthCrypto().HmacSha256(m_Private.data(), m_Private.size(), reinterpret_cast<const uint8_t*>(label.data()), label.size(), mac)) {
+			return false;
+		}
+		std::memcpy(out.data(), mac, out.size());
+		return true;
+	}
+
 } // namespace RTE

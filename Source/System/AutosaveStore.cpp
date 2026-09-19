@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <charconv>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <mutex>
 #include <sstream>
 #include <system_error>
@@ -199,12 +201,295 @@ namespace RTE {
 				return false;
 			}
 			descriptor.path = path;
+			// Restorable says the world reads; resumable says a restarted host can also reopen the lobby
+			// it belongs to, which needs the checkpoint's manifest and the match's admission file.
+			AutosaveManifest manifest;
+			AutosaveAdmission admission;
+			descriptor.resumable = ReadManifest(path.parent_path(), descriptor.matchId, descriptor.savedTick, manifest) &&
+			                       manifest.savedTick == descriptor.savedTick && !manifest.configPayload.empty() &&
+			                       ReadAdmission(path.parent_path(), descriptor.matchId, admission);
 			out = std::move(descriptor);
 			return true;
 		} catch (const std::exception& exception) {
 			if (error) *error = exception.what();
 			return false;
 		}
+	}
+
+	std::filesystem::path AutosaveStore::ManifestPath(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick) {
+		return directory / (matchId + "-" + std::to_string(tick) + c_ManifestExtension);
+	}
+
+	std::filesystem::path AutosaveStore::AdmissionPath(const std::filesystem::path& directory, const std::string& matchId) {
+		return directory / (matchId + c_AdmissionExtension);
+	}
+
+	std::string AutosaveStore::WriteManifest(const AutosaveManifest& manifest) {
+		std::ostringstream out;
+		Line(out, "ManifestSchema", std::to_string(c_ManifestSchema));
+		Line(out, "MatchId", manifest.matchId);
+		Line(out, "SessionId", std::to_string(manifest.sessionId));
+		Line(out, "RoundId", std::to_string(manifest.roundId));
+		Line(out, "SavedTick", std::to_string(manifest.savedTick));
+		Line(out, "SimTimeTicks", std::to_string(manifest.simTimeTicks));
+		Line(out, "IntervalSeconds", std::to_string(manifest.intervalSeconds));
+		Line(out, "ConfigHash", manifest.configHash);
+		Line(out, "ConfigPayload", manifest.configPayload);
+		Line(out, "ActivityPreset", manifest.activityPreset);
+		Line(out, "ScenePreset", manifest.scenePreset);
+		for (const std::string& name: manifest.peerNames) Line(out, "Peer", name);
+		return out.str();
+	}
+
+	bool AutosaveStore::ParseManifest(const std::string& text, AutosaveManifest& out, std::string* error) {
+		AutosaveManifest parsed;
+		bool hasSchema = false;
+		std::istringstream lines(text);
+		std::string line;
+		while (std::getline(lines, line)) {
+			const size_t separator = line.find('=');
+			if (separator == std::string::npos) continue;
+			const std::string key = Trim(std::string_view(line).substr(0, separator));
+			const std::string value = Trim(std::string_view(line).substr(separator + 1));
+			uint64_t number = 0;
+			if (key == "ManifestSchema") {
+				if (!ParseNumber(value, number)) { if (error) *error = "unreadable ManifestSchema"; return false; }
+				parsed.schema = static_cast<int>(number);
+				hasSchema = true;
+			} else if (key == "MatchId") {
+				parsed.matchId = value;
+			} else if (key == "SessionId") {
+				if (!ParseNumber(value, number)) { if (error) *error = "unreadable SessionId"; return false; }
+				parsed.sessionId = number;
+			} else if (key == "RoundId") {
+				if (!ParseNumber(value, number)) { if (error) *error = "unreadable RoundId"; return false; }
+				parsed.roundId = number;
+			} else if (key == "SavedTick") {
+				if (!ParseNumber(value, number)) { if (error) *error = "unreadable SavedTick"; return false; }
+				parsed.savedTick = number;
+			} else if (key == "SimTimeTicks") {
+				if (!ParseNumber(value, number)) { if (error) *error = "unreadable SimTimeTicks"; return false; }
+				parsed.simTimeTicks = static_cast<long long>(number);
+			} else if (key == "IntervalSeconds") {
+				if (!ParseNumber(value, number)) { if (error) *error = "unreadable IntervalSeconds"; return false; }
+				parsed.intervalSeconds = static_cast<uint32_t>(number);
+			} else if (key == "ConfigHash") {
+				parsed.configHash = value;
+			} else if (key == "ConfigPayload") {
+				parsed.configPayload = value;
+			} else if (key == "ActivityPreset") {
+				parsed.activityPreset = value;
+			} else if (key == "ScenePreset") {
+				parsed.scenePreset = value;
+			} else if (key == "Peer") {
+				parsed.peerNames.push_back(value);
+			}
+		}
+		if (!hasSchema || parsed.schema != c_ManifestSchema) {
+			if (error) *error = "unsupported manifest schema " + std::to_string(parsed.schema);
+			return false;
+		}
+		if (parsed.savedTick == 0 || !ValidMatchId(parsed.matchId) || parsed.configPayload.empty()) {
+			if (error) *error = "manifest has no match id, committed tick or configuration";
+			return false;
+		}
+		if (parsed.configPayload.size() % 2 != 0 || parsed.configPayload.find_first_not_of("0123456789abcdef") != std::string::npos) {
+			if (error) *error = "manifest configuration is not hex";
+			return false;
+		}
+		out = std::move(parsed);
+		return true;
+	}
+
+	namespace {
+		/// Writes the text to a temporary neighbour and renames it over the target, so a reader sees the
+		/// previous generation or this one, never half of either.
+		bool PublishFile(const std::filesystem::path& path, const std::string& text, std::string* error) {
+			std::error_code status;
+			std::filesystem::create_directories(path.parent_path(), status);
+			const std::filesystem::path temporary = path.string() + ".tmp";
+			{
+				std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+				out.write(text.data(), static_cast<std::streamsize>(text.size()));
+				out.close();
+				if (!out.good()) {
+					if (error) *error = "could not write " + temporary.string();
+					std::filesystem::remove(temporary, status);
+					return false;
+				}
+			}
+			std::filesystem::rename(temporary, path, status);
+			if (status) {
+				if (error) *error = "could not publish " + path.string() + ": " + status.message();
+				std::error_code ignored;
+				std::filesystem::remove(temporary, ignored);
+				return false;
+			}
+			return true;
+		}
+
+		bool ReadFileText(const std::filesystem::path& path, std::string& out, std::string* error) {
+			std::error_code status;
+			if (!std::filesystem::is_regular_file(path, status)) {
+				if (error) *error = "not a regular file: " + path.string();
+				return false;
+			}
+			std::ifstream in(path, std::ios::binary);
+			if (!in) {
+				if (error) *error = "could not read " + path.string();
+				return false;
+			}
+			out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+			return true;
+		}
+
+		std::string ToHex(const std::vector<uint8_t>& bytes) {
+			static constexpr char Digits[] = "0123456789abcdef";
+			std::string hex;
+			hex.reserve(bytes.size() * 2);
+			for (uint8_t byte: bytes) {
+				hex.push_back(Digits[byte >> 4]);
+				hex.push_back(Digits[byte & 0x0F]);
+			}
+			return hex;
+		}
+
+		bool FromHex(const std::string& hex, std::vector<uint8_t>& out) {
+			if (hex.size() % 2 != 0) return false;
+			out.clear();
+			out.reserve(hex.size() / 2);
+			for (size_t index = 0; index < hex.size(); index += 2) {
+				uint8_t value = 0;
+				for (size_t half = 0; half < 2; ++half) {
+					const char digit = hex[index + half];
+					const int nibble = digit >= '0' && digit <= '9' ? digit - '0' : (digit >= 'a' && digit <= 'f' ? digit - 'a' + 10 : -1);
+					if (nibble < 0) return false;
+					value = static_cast<uint8_t>((value << 4) | static_cast<uint8_t>(nibble));
+				}
+				out.push_back(value);
+			}
+			return true;
+		}
+	}
+
+	bool AutosaveStore::PublishManifest(const std::filesystem::path& directory, const AutosaveManifest& manifest, std::string* error) {
+		if (!ValidMatchId(manifest.matchId) || manifest.savedTick == 0 || manifest.configPayload.empty()) {
+			if (error) *error = "manifest has no match id, committed tick or configuration";
+			return false;
+		}
+		return PublishFile(ManifestPath(directory, manifest.matchId, manifest.savedTick), WriteManifest(manifest), error);
+	}
+
+	bool AutosaveStore::ReadManifest(const std::filesystem::path& path, AutosaveManifest& out, std::string* error) {
+		std::string text;
+		if (!ReadFileText(path, text, error) || !ParseManifest(text, out, error)) return false;
+		out.path = path;
+		return true;
+	}
+
+	bool AutosaveStore::ReadManifest(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick, AutosaveManifest& out, std::string* error) {
+		if (!ValidMatchId(matchId)) {
+			if (error) *error = "no match id";
+			return false;
+		}
+		return ReadManifest(ManifestPath(directory, matchId, tick), out, error);
+	}
+
+	bool AutosaveStore::PublishAdmission(const std::filesystem::path& directory, const AutosaveAdmission& admission, std::string* error) {
+		if (!ValidMatchId(admission.matchId) || admission.sealed.empty() || admission.sealed.size() > c_MaxAdmissionBytes) {
+			if (error) *error = "admission has no match id or no sealed export";
+			return false;
+		}
+		// A generation never rewinds, so a file written by an older export cannot replace a newer one.
+		AutosaveAdmission held;
+		if (ReadAdmission(directory, admission.matchId, held) && held.generation > admission.generation) {
+			if (error) *error = "a newer admission generation is already published";
+			return false;
+		}
+		std::ostringstream out;
+		Line(out, "AdmissionSchema", std::to_string(c_AdmissionSchema));
+		Line(out, "MatchId", admission.matchId);
+		Line(out, "Generation", std::to_string(admission.generation));
+		Line(out, "Sealed", ToHex(admission.sealed));
+		return PublishFile(AdmissionPath(directory, admission.matchId), out.str(), error);
+	}
+
+	bool AutosaveStore::ReadAdmission(const std::filesystem::path& directory, const std::string& matchId, AutosaveAdmission& out, std::string* error) {
+		if (!ValidMatchId(matchId)) {
+			if (error) *error = "no match id";
+			return false;
+		}
+		const std::filesystem::path path = AdmissionPath(directory, matchId);
+		std::string text;
+		if (!ReadFileText(path, text, error)) return false;
+		AutosaveAdmission parsed;
+		bool hasSchema = false;
+		std::string sealedHex;
+		std::istringstream lines(text);
+		std::string line;
+		while (std::getline(lines, line)) {
+			const size_t separator = line.find('=');
+			if (separator == std::string::npos) continue;
+			const std::string key = Trim(std::string_view(line).substr(0, separator));
+			const std::string value = Trim(std::string_view(line).substr(separator + 1));
+			uint64_t number = 0;
+			if (key == "AdmissionSchema") {
+				if (!ParseNumber(value, number)) { if (error) *error = "unreadable AdmissionSchema"; return false; }
+				parsed.schema = static_cast<int>(number);
+				hasSchema = true;
+			} else if (key == "MatchId") {
+				parsed.matchId = value;
+			} else if (key == "Generation") {
+				if (!ParseNumber(value, number)) { if (error) *error = "unreadable Generation"; return false; }
+				parsed.generation = number;
+			} else if (key == "Sealed") {
+				sealedHex = value;
+			}
+		}
+		if (!hasSchema || parsed.schema != c_AdmissionSchema) {
+			if (error) *error = "unsupported admission schema " + std::to_string(parsed.schema);
+			return false;
+		}
+		if (parsed.matchId != matchId) {
+			if (error) *error = "admission names match " + parsed.matchId;
+			return false;
+		}
+		if (sealedHex.empty() || sealedHex.size() / 2 > c_MaxAdmissionBytes || !FromHex(sealedHex, parsed.sealed)) {
+			if (error) *error = "admission carries no readable sealed export";
+			return false;
+		}
+		parsed.path = path;
+		out = std::move(parsed);
+		return true;
+	}
+
+	std::vector<AutosaveDescriptor> AutosaveStore::ListResumable(const std::filesystem::path& directory) {
+		std::vector<std::string> matchIds;
+		std::error_code status;
+		for (const auto& entry: std::filesystem::directory_iterator(directory, status)) {
+			if (entry.is_symlink() || !entry.is_regular_file() || entry.path().extension() != c_AdmissionExtension) continue;
+			const std::string matchId = entry.path().stem().string();
+			if (ValidMatchId(matchId)) matchIds.push_back(matchId);
+		}
+		std::vector<AutosaveDescriptor> resumable;
+		for (const std::string& matchId: matchIds) {
+			for (AutosaveDescriptor& descriptor: ListRestorable(directory, matchId)) {
+				// The newest checkpoint of this match that a restart can actually reopen.
+				if (!descriptor.resumable) continue;
+				resumable.push_back(std::move(descriptor));
+				break;
+			}
+		}
+		// Across matches the newer match is the one written more recently, not the one on a higher tick.
+		std::sort(resumable.begin(), resumable.end(), [](const AutosaveDescriptor& left, const AutosaveDescriptor& right) {
+			std::error_code ignored;
+			return std::filesystem::last_write_time(left.path, ignored) > std::filesystem::last_write_time(right.path, ignored);
+		});
+		return resumable;
+	}
+
+	std::vector<AutosaveDescriptor> AutosaveStore::ListResumable() {
+		return ListResumable(Directory());
 	}
 
 	std::vector<AutosaveDescriptor> AutosaveStore::ListRestorable(const std::filesystem::path& directory, const std::string& matchId) {
@@ -295,6 +580,13 @@ namespace RTE {
 			if (std::find(kept.begin(), kept.end(), tick) != kept.end()) continue;
 			std::error_code ignored;
 			removed += std::filesystem::remove(path, ignored) ? 1 : 0;
+			// A checkpoint's restart manifest belongs to that checkpoint and goes with it.
+			std::filesystem::remove(ManifestPath(directory, matchId, tick), ignored);
+		}
+		// The admission file lives as long as any checkpoint of the match does.
+		if (kept.empty()) {
+			std::error_code ignored;
+			std::filesystem::remove(AdmissionPath(directory, matchId), ignored);
 		}
 		return removed;
 	}

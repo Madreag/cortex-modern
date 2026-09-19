@@ -31,6 +31,39 @@ namespace RTE {
 		std::string activityPreset;
 		std::string scenePreset;
 		std::filesystem::path path; //!< Where it was found; never part of the stored text.
+		/// Whether this checkpoint's restart manifest reads beside it, so a restarted host can reopen the
+		/// lobby it was written under. Derived from the files, never part of the stored text.
+		bool resumable = false;
+	};
+
+	/// What a restarted host needs beside the world to reopen the match the checkpoints were written
+	/// under: the agreed configuration exactly as the peers hashed it, and who was playing it. The
+	/// payload is opaque here - the network layer owns the lobby encoding - so the store keeps the bytes
+	/// and the hash the peers agreed on and never interprets either.
+	struct AutosaveManifest {
+		int schema = 0;
+		std::string matchId;
+		uint64_t sessionId = 0;
+		uint64_t roundId = 0;
+		uint64_t savedTick = 0;
+		long long simTimeTicks = 0;
+		uint32_t intervalSeconds = 0;
+		std::string configHash;    //!< Hex of the hash every peer acked for this configuration.
+		std::string configPayload; //!< Hex of the exact lobby payload bytes that carried it.
+		std::string activityPreset;
+		std::string scenePreset;
+		std::vector<std::string> peerNames;
+		std::filesystem::path path; //!< Where it was found; never part of the stored text.
+	};
+
+	/// The host's own admission state at rest: one live file per match, sealed for this install alone.
+	/// Its plaintext is the network layer's; the store carries the bytes and the generation they belong to.
+	struct AutosaveAdmission {
+		int schema = 0;
+		std::string matchId;
+		uint64_t generation = 0; //!< Rises with every export, so an older file never replaces a newer one.
+		std::vector<uint8_t> sealed;
+		std::filesystem::path path;
 	};
 
 	/// What the match agreed on while it runs, stamped into every checkpoint it writes.
@@ -38,6 +71,11 @@ namespace RTE {
 		uint64_t sessionId = 0;
 		uint64_t roundId = 0;
 		uint32_t intervalSeconds = 0;
+		/// The agreed configuration, as the peers hashed it, so a restart can reopen this very lobby.
+		/// Empty on a match whose configuration was never published (a local activity).
+		std::string configHash;
+		std::string configPayload;
+		std::vector<std::string> peerNames;
 		/// The agreed rewind point, read where retention runs rather than where the capture starts, so an
 		/// anchor named while a capture is in flight still protects its archive.
 		std::shared_ptr<const std::atomic<uint64_t>> pinnedTickSource;
@@ -64,11 +102,20 @@ namespace RTE {
 		static constexpr uint64_t c_NoPinnedTick = 0;
 		static constexpr const char* c_DescriptorEntry = "Restore.ini";
 		static constexpr const char* c_ArchiveExtension = ".ccsave";
+		static constexpr const char* c_ManifestExtension = ".ccmanifest";
+		static constexpr const char* c_AdmissionExtension = ".admission";
+		static constexpr int c_ManifestSchema = 1;
+		static constexpr int c_AdmissionSchema = 1;
+		/// The host's sealed admission export is small by construction; anything larger is not one.
+		static constexpr size_t c_MaxAdmissionBytes = 64U * 1024U;
 
 		static std::filesystem::path Directory();
 		static std::string ArchiveName(const std::string& matchId, uint64_t tick);
 		static std::filesystem::path ArchivePath(const std::string& matchId, uint64_t tick);
 		static std::filesystem::path ArchivePath(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick);
+		/// The restart manifest that stands beside one checkpoint, and the match's one live admission file.
+		static std::filesystem::path ManifestPath(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick);
+		static std::filesystem::path AdmissionPath(const std::filesystem::path& directory, const std::string& matchId);
 		/// A match id is hex digits and dashes only, so it can never escape the store's directory.
 		static bool ValidMatchId(const std::string& matchId);
 		/// Reads the tick out of "<matchId>-<tick>.ccsave"; false for any other name.
@@ -105,6 +152,25 @@ namespace RTE {
 		/// @return How many archives were removed.
 		static size_t ApplyRetention(const std::filesystem::path& directory, const std::string& matchId, uint64_t pinnedTick);
 		static size_t ApplyRetention(const std::string& matchId, uint64_t pinnedTick);
+
+		static std::string WriteManifest(const AutosaveManifest& manifest);
+		static bool ParseManifest(const std::string& text, AutosaveManifest& out, std::string* error = nullptr);
+		/// Publishes a checkpoint's restart manifest: written to a temporary name and renamed, so a reader
+		/// sees either the previous generation or this one. The archive is published first, so a manifest
+		/// without its world never exists; an archive without a manifest is restorable but not resumable.
+		static bool PublishManifest(const std::filesystem::path& directory, const AutosaveManifest& manifest, std::string* error = nullptr);
+		static bool ReadManifest(const std::filesystem::path& path, AutosaveManifest& out, std::string* error = nullptr);
+		static bool ReadManifest(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick, AutosaveManifest& out, std::string* error = nullptr);
+
+		/// Writes the match's one live admission file, the same atomic way. The bytes are already sealed
+		/// for this install; the store never sees their plaintext and never chooses their key.
+		static bool PublishAdmission(const std::filesystem::path& directory, const AutosaveAdmission& admission, std::string* error = nullptr);
+		static bool ReadAdmission(const std::filesystem::path& directory, const std::string& matchId, AutosaveAdmission& out, std::string* error = nullptr);
+
+		/// The matches this install can restart: for each, the newest checkpoint whose manifest reads and
+		/// whose admission file is present, newest checkpoint first.
+		static std::vector<AutosaveDescriptor> ListResumable(const std::filesystem::path& directory);
+		static std::vector<AutosaveDescriptor> ListResumable();
 
 		/// Records a checkpoint this process published and proved restorable, so a heal can name the rewind
 		/// point without reading every archive of the match again.
