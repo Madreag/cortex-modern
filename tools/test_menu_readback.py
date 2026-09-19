@@ -630,6 +630,13 @@ def scripts(case, port, root):
         text += checks("LabelHostSessHosting", "CollectionBoxHostPageSession")
         text += checks("ComboHostSessIdle", "CollectionBoxHostPageSession")
         text += checks("ButtonHostSessEnd", "CollectionBoxHostPageSession")
+        # H31: the seating wait is the host's own policy and editable while the lobby is open - it is
+        # the value a live Apply republishes, and Never leaves the lobby open instead of taking a day.
+        text += "assert_enabled ComboHostSessIdle 1\n"
+        text += checks("LabelHostSessIdle", "CollectionBoxHostPageSession")
+        # H35: Save As Host Defaults is the one origin of the versioned defaults template.
+        text += checks("ButtonHostOptDefaults", "MultiplayerHostOptionsPanel")
+        text += "assert_enabled ButtonHostOptDefaults 1\n"
         text += "dump_host_options\n"
         # Back is local navigation: the lobby is still open under the panel when it leaves.
         text += "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\nexit\n"
