@@ -369,6 +369,8 @@ void Controller::RenderUpdate() {
 	// ControlStates are owned by the sim tick and intentionally left alone here.
 	Vector move = g_UInputMan.AnalogMoveValues(GetInputPlayer());
 	Vector aim = g_UInputMan.AnalogAimValues(GetInputPlayer());
+	const Vector previousMove = m_AnalogMove;
+	const Vector previousAim = m_AnalogAim;
 
 	if (!m_ControlStates[ControlState::ACTOR_PREV_PREP] && !m_ControlStates[ControlState::ACTOR_NEXT_PREP] && ReleaseDelayPassed()) {
 		m_AnalogMove = move;
@@ -386,6 +388,9 @@ void Controller::RenderUpdate() {
 	if (LocalIsMouseControlled()) {
 		m_MouseMovement = g_UInputMan.GetMouseMovement(GetInputPlayer());
 	}
+
+	// The analog values ride in the actor's checkpoint shadow, so a frame that moves them stamps it.
+	if (m_ControlledActor && (m_AnalogMove != previousMove || m_AnalogAim != previousAim)) m_ControlledActor->TouchCheckpoint();
 }
 
 void Controller::ResetCommandState() {

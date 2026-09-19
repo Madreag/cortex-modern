@@ -388,6 +388,7 @@ void MOSprite::SetFrame(unsigned int newFrame) {
 	if (newFrame >= m_FrameCount)
 		newFrame = m_FrameCount - 1;
 
+	if (m_Frame != newFrame) TouchCheckpoint();
 	m_Frame = newFrame;
 }
 
