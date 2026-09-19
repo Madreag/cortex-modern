@@ -420,20 +420,8 @@ bool GUIManager::RunComboKeyCommitSelfTest() {
 		std::cout << "[combo-key-selftest] " << (value ? "PASS " : "FAIL ") << label << std::endl;
 	};
 	{
-		// Return on the dropped list leaves no focused panel.
-		KeyInput input;
-		GUIManager manager(&input);
-		manager.EnableMouse(false);
-		KeyPanel dropped(&manager);
-		dropped.MoveFocusOnEnter(nullptr);
-		manager.AddPanel(&dropped);
-		dropped.SetFocus();
-		input.PushEnter();
-		manager.Update();
-		check("cleared_focus_ends_the_key", dropped.m_Downs == 1 && dropped.m_Presses == 0 && !manager.GetFocusPanel());
-	}
-	{
-		// The same key hands the focus to another panel.
+		// The key hands the focus to another panel. This row runs first: a manager that follows the
+		// member instead of the panel it called prints its failure here before the next row faults.
 		KeyInput input;
 		GUIManager manager(&input);
 		manager.EnableMouse(false);
@@ -447,6 +435,19 @@ bool GUIManager::RunComboKeyCommitSelfTest() {
 		manager.Update();
 		check("moved_focus_spares_the_new_panel", dropped.m_Downs == 1 && dropped.m_Presses == 0 &&
 		                                             next.m_Downs == 0 && next.m_Presses == 0 && manager.GetFocusPanel() == &next);
+	}
+	{
+		// Return on the dropped list leaves no focused panel.
+		KeyInput input;
+		GUIManager manager(&input);
+		manager.EnableMouse(false);
+		KeyPanel dropped(&manager);
+		dropped.MoveFocusOnEnter(nullptr);
+		manager.AddPanel(&dropped);
+		dropped.SetFocus();
+		input.PushEnter();
+		manager.Update();
+		check("cleared_focus_ends_the_key", dropped.m_Downs == 1 && dropped.m_Presses == 0 && !manager.GetFocusPanel());
 	}
 	{
 		// A panel that keeps the focus still gets the key press.
