@@ -606,6 +606,14 @@ def scripts(case, port, root):
                 # picked activity/mode and the L33 row the ledger names.
                 "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
                 "assert_label LabelHostOptionsTitle H O S T   O P T I O N S\n"
+                # H09/H10: the remote human seat's Details carries pressable Kick and Ban; a lobby
+                # press names why it cannot arm yet (the admission view is published mid-match),
+                # instead of queueing a selection the drain would refuse.
+                "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
+                "assert_enabled ButtonHostSeatDlgKick 1\nassert_enabled ButtonHostSeatDlgBan 1\n"
+                "activate ButtonHostSeatDlgKick\nwait 3\n"
+                "assert_label LabelHostSeatDlgActionHint Kick: the seat's admission row is not published in the lobby.\n"
+                "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
                 "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
                 "assert_label LabelHostRulesBrainless When every human brain is lost\n"
                 "assert_label ComboHostRulesBrainless Keep playing, humans spectate\n"
@@ -656,6 +664,11 @@ def scripts(case, port, root):
                   "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
                   "assert_label ComboHostRulesBrainless End the match\n"
                   "dump_host_options\n"
+                  # A client's Details dialog is read-only: the host's own seat and every other
+                  # seat keep Kick and Ban off - moderation is never the client's call.
+                  "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
+                  "assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
+                  "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
                   "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
                   "dump_lobby\ndump_host_options\nexit\n")
         return {"host": host, "client": client}, {}
@@ -737,7 +750,8 @@ def scripts(case, port, root):
                         "ButtonHostSeatDlgCancel", "ButtonHostSeatDlgKick", "ButtonHostSeatDlgBan",
                         "LabelHostSeatDlgActionHint", "LabelHostSeatDlgStatus", "ButtonHostSeatDlgClose"):
             text += checks(control, "HostSeatDialog")
-        text += ("assert_enabled ButtonHostSeatDlgKick 1\nassert_enabled ButtonHostSeatDlgBan 1\n"
+        # H09/H10: the host's own seat is never kickable - the row stays pressable-looking but off.
+        text += ("assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
                  "dump_host_options\nactivate ButtonHostSeatDlgClose\nwait 3\n"
                  "assert_visible HostSeatDialog 0\n")
         # H07-H20 Rules: the L33 row keeps the ledger's exact label and pair of answers.
@@ -782,13 +796,16 @@ def scripts(case, port, root):
         text += checks("LabelHostSessBanned", "CollectionBoxHostPageSession")
         text += checks("ButtonHostSessBanned", "CollectionBoxHostPageSession")
         text += checks("ButtonHostSessEnd", "CollectionBoxHostPageSession")
-        # H11: the banned-player dialog. With no session ban store on this branch it opens on its
-        # empty state and the remove action stays off rather than pretend to act.
+        # H10's count is the ban store's own rows: none yet, so the session row reads zero.
+        text += "assert_label LabelHostSessBanned 0 banned this session\n"
+        # H11: the banned-player dialog reads the store through GetBanRecords - empty here, so
+        # the pick combo has no row to land Remove on and the button stays off.
         text += ("activate ButtonHostSessBanned\nwait 3\nassert_visible HostBannedDialog 1\n")
-        for control in ("LabelHostBannedList", "LabelHostBannedStatus",
+        for control in ("ComboHostBannedPick", "LabelHostBannedList", "LabelHostBannedStatus",
                         "ButtonHostBannedRemove", "ButtonHostBannedClose"):
             text += checks(control, "HostBannedDialog")
-        text += ("assert_enabled ButtonHostBannedRemove 0\n"
+        text += ("assert_label LabelHostBannedList (no banned players)\n"
+                 "assert_enabled ButtonHostBannedRemove 0\n"
                  "dump_host_options\nactivate ButtonHostBannedClose\nwait 3\n"
                  "assert_visible HostBannedDialog 0\n")
         # H31: the seating wait is the host's own policy and editable while the lobby is open - it is
