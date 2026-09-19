@@ -222,7 +222,11 @@ namespace RTE {
 			try {
 				return json::parse(f);
 			} catch (const std::exception& e) {
-				{ std::ostringstream line; line <<  "[determinism-check] failed to parse " << p << ": " << e.what(); System::PrintDiagnosticErrorLine(line.str()); }
+				{
+					std::ostringstream line;
+					line << "[determinism-check] failed to parse " << p << ": " << e.what();
+					System::PrintDiagnosticErrorLine(line.str());
+				}
 				return json();
 			}
 		}
@@ -283,7 +287,11 @@ namespace RTE {
 			return 0;
 		}
 		if (args.scenario.empty()) {
-			{ std::ostringstream line; line <<  "[determinism-check] --scenario is required.\n"; System::PrintDiagnosticErrorLine(line.str()); }
+			{
+				std::ostringstream line;
+				line << "[determinism-check] --scenario is required.\n";
+				System::PrintDiagnosticErrorLine(line.str());
+			}
 			PrintUsage(std::cerr);
 			return 2;
 		}
@@ -294,19 +302,35 @@ namespace RTE {
 		// already a valid diff; repeat-runs mode needs >= 2 to have anything to compare.
 		if (matrixMode) {
 			if (args.runs < 1) {
-				{ std::ostringstream line; line <<  "[determinism-check] --runs must be >= 1.\n"; System::PrintDiagnosticErrorLine(line.str()); }
+				{
+					std::ostringstream line;
+					line << "[determinism-check] --runs must be >= 1.\n";
+					System::PrintDiagnosticErrorLine(line.str());
+				}
 				return 2;
 			}
 			if (args.threadCounts.size() * static_cast<size_t>(args.runs) < 2) {
-				{ std::ostringstream line; line <<  "[determinism-check] thread matrix needs >= 2 total runs to diff.\n"; System::PrintDiagnosticErrorLine(line.str()); }
+				{
+					std::ostringstream line;
+					line << "[determinism-check] thread matrix needs >= 2 total runs to diff.\n";
+					System::PrintDiagnosticErrorLine(line.str());
+				}
 				return 2;
 			}
 		} else if (args.runs < 2) {
-			{ std::ostringstream line; line <<  "[determinism-check] --runs must be >= 2 (cannot diff a single run).\n"; System::PrintDiagnosticErrorLine(line.str()); }
+			{
+				std::ostringstream line;
+				line << "[determinism-check] --runs must be >= 2 (cannot diff a single run).\n";
+				System::PrintDiagnosticErrorLine(line.str());
+			}
 			return 2;
 		}
 		if (args.ticks == 0) {
-			{ std::ostringstream line; line <<  "[determinism-check] --ticks must be > 0.\n"; System::PrintDiagnosticErrorLine(line.str()); }
+			{
+				std::ostringstream line;
+				line << "[determinism-check] --ticks must be > 0.\n";
+				System::PrintDiagnosticErrorLine(line.str());
+			}
 			return 2;
 		}
 
@@ -317,11 +341,19 @@ namespace RTE {
 		} else if (argc > 0 && argv[0] != nullptr) {
 			binary = std::filesystem::absolute(std::filesystem::path(argv[0]));
 		} else {
-			{ std::ostringstream line; line <<  "[determinism-check] cannot resolve binary path (argv[0] unavailable).\n"; System::PrintDiagnosticErrorLine(line.str()); }
+			{
+				std::ostringstream line;
+				line << "[determinism-check] cannot resolve binary path (argv[0] unavailable).\n";
+				System::PrintDiagnosticErrorLine(line.str());
+			}
 			return 2;
 		}
 		if (!std::filesystem::exists(binary)) {
-			{ std::ostringstream line; line <<  "[determinism-check] binary does not exist: " << binary.string() << "\n"; System::PrintDiagnosticErrorLine(line.str()); }
+			{
+				std::ostringstream line;
+				line << "[determinism-check] binary does not exist: " << binary.string() << "\n";
+				System::PrintDiagnosticErrorLine(line.str());
+			}
 			return 2;
 		}
 
@@ -365,32 +397,64 @@ namespace RTE {
 			}
 		}
 
-		{ std::ostringstream line; line <<  "[determinism-check] binary  : " << binary.string() << "\n"; System::PrintDiagnosticLine(line.str()); }
-		{ std::ostringstream line; line <<  "[determinism-check] scenario: " << args.scenario << "\n"; System::PrintDiagnosticLine(line.str()); }
-		{ std::ostringstream line; line <<  "[determinism-check] ticks   : " << args.ticks << "\n"; System::PrintDiagnosticLine(line.str()); }
-		{ std::ostringstream line; line <<  "[determinism-check] seed    : " << args.seed << "\n"; System::PrintDiagnosticLine(line.str()); }
+		{
+			std::ostringstream line;
+			line << "[determinism-check] binary  : " << binary.string() << "\n";
+			System::PrintDiagnosticLine(line.str());
+		}
+		{
+			std::ostringstream line;
+			line << "[determinism-check] scenario: " << args.scenario << "\n";
+			System::PrintDiagnosticLine(line.str());
+		}
+		{
+			std::ostringstream line;
+			line << "[determinism-check] ticks   : " << args.ticks << "\n";
+			System::PrintDiagnosticLine(line.str());
+		}
+		{
+			std::ostringstream line;
+			line << "[determinism-check] seed    : " << args.seed << "\n";
+			System::PrintDiagnosticLine(line.str());
+		}
 		if (matrixMode) {
-			{ std::ostringstream line; line <<  "[determinism-check] mode    : thread-count matrix\n"; System::PrintDiagnosticLine(line.str()); }
 			{
 				std::ostringstream line;
-			line << "[determinism-check] threads : ";
-			for (size_t i = 0; i < args.threadCounts.size(); ++i) {
-				line << args.threadCounts[i] << (i + 1 < args.threadCounts.size() ? "," : "");
+				line << "[determinism-check] mode    : thread-count matrix\n";
+				System::PrintDiagnosticLine(line.str());
 			}
-			line << "  (x" << args.runs << " runs each = " << children.size() << " total)\n";
+			{
+				std::ostringstream line;
+				line << "[determinism-check] threads : ";
+				for (size_t i = 0; i < args.threadCounts.size(); ++i) {
+					line << args.threadCounts[i] << (i + 1 < args.threadCounts.size() ? "," : "");
+				}
+				line << "  (x" << args.runs << " runs each = " << children.size() << " total)\n";
 				System::PrintDiagnosticLine(line.str());
 			}
 		} else {
-			{ std::ostringstream line; line <<  "[determinism-check] runs    : " << args.runs << "\n"; System::PrintDiagnosticLine(line.str()); }
+			{
+				std::ostringstream line;
+				line << "[determinism-check] runs    : " << args.runs << "\n";
+				System::PrintDiagnosticLine(line.str());
+			}
 		}
-		{ std::ostringstream line; line <<  "[determinism-check] tmp dir : " << tmpRoot.string() << "\n"; System::PrintDiagnosticLine(line.str()); }
+		{
+			std::ostringstream line;
+			line << "[determinism-check] tmp dir : " << tmpRoot.string() << "\n";
+			System::PrintDiagnosticLine(line.str());
+		}
 
 		// First boot writes the Userdata settings the children then load, so a fresh checkout
 		// would make run 0 differ from every later run. Warm up with one discarded run.
 		{
 			Args warmArgs = args;
 			warmArgs.ticks = 1;
-			{ std::ostringstream line; line <<  "[determinism-check] warm-up : 1-tick run to settle first-boot settings (discarded)"; System::PrintDiagnosticLine(line.str()); }
+			{
+				std::ostringstream line;
+				line << "[determinism-check] warm-up : 1-tick run to settle first-boot settings (discarded)";
+				System::PrintDiagnosticLine(line.str());
+			}
 			RunChild(BuildChildCmd(binary, warmArgs, tmpRoot / "warmup.json", matrixMode ? args.threadCounts.front() : -1));
 		}
 
@@ -402,11 +466,11 @@ namespace RTE {
 
 			{
 				std::ostringstream line;
-			line << "[determinism-check] run " << (i + 1) << "/" << children.size();
-			if (child.threadCount >= 0) {
-				line << " (threads=" << child.threadCount << ")";
-			}
-			line << ": " << cmd << std::endl;
+				line << "[determinism-check] run " << (i + 1) << "/" << children.size();
+				if (child.threadCount >= 0) {
+					line << " (threads=" << child.threadCount << ")";
+				}
+				line << ": " << cmd << std::endl;
 				System::PrintDiagnosticLine(line.str());
 			}
 
@@ -414,14 +478,18 @@ namespace RTE {
 			// The scenario itself may legitimately exit non-zero (a fail-result trust scenario).
 			// What we really care about is whether the JSON was produced and parseable.
 			if (rc < 0) {
-				{ std::ostringstream line; line <<  "[determinism-check] run " << i << " failed to spawn (rc=" << rc << ")\n"; System::PrintDiagnosticErrorLine(line.str()); }
+				{
+					std::ostringstream line;
+					line << "[determinism-check] run " << i << " failed to spawn (rc=" << rc << ")\n";
+					System::PrintDiagnosticErrorLine(line.str());
+				}
 				return 2;
 			}
 			if (!std::filesystem::exists(child.output)) {
 				{
 					std::ostringstream line;
-					line <<  "[determinism-check] run " << i << " produced no JSON output: "
-				          << child.output.string() << "\n";
+					line << "[determinism-check] run " << i << " produced no JSON output: "
+					     << child.output.string() << "\n";
 					System::PrintDiagnosticErrorLine(line.str());
 				}
 				return 2;
@@ -434,7 +502,11 @@ namespace RTE {
 		for (const auto& child: children) {
 			json j = ReadJsonFile(child.output);
 			if (j.is_null()) {
-				{ std::ostringstream line; line <<  "[determinism-check] run " << child.output.string() << " produced unparseable JSON.\n"; System::PrintDiagnosticErrorLine(line.str()); }
+				{
+					std::ostringstream line;
+					line << "[determinism-check] run " << child.output.string() << " produced unparseable JSON.\n";
+					System::PrintDiagnosticErrorLine(line.str());
+				}
 				return 2;
 			}
 			jsons.push_back(std::move(j));
@@ -456,8 +528,8 @@ namespace RTE {
 			if (th.is_null() || !th.is_array() || th.empty()) {
 				{
 					std::ostringstream line;
-					line <<  "[determinism-check] run " << i
-				          << " contained no tick_hashes array — was -tick-hashes plumbed through?\n";
+					line << "[determinism-check] run " << i
+					     << " contained no tick_hashes array — was -tick-hashes plumbed through?\n";
 					System::PrintDiagnosticErrorLine(line.str());
 				}
 				return 2;
@@ -625,18 +697,26 @@ namespace RTE {
 
 		std::ofstream out(args.output);
 		if (!out.is_open()) {
-			{ std::ostringstream line; line <<  "[determinism-check] failed to open output: " << args.output << "\n"; System::PrintDiagnosticErrorLine(line.str()); }
+			{
+				std::ostringstream line;
+				line << "[determinism-check] failed to open output: " << args.output << "\n";
+				System::PrintDiagnosticErrorLine(line.str());
+			}
 			return 2;
 		}
 		out << reportJson.dump(2) << std::endl;
 		out.close();
 
-		{ std::ostringstream line; line <<  "\n[determinism-check] wrote report: " << args.output << "\n"; System::PrintDiagnosticLine(line.str()); }
+		{
+			std::ostringstream line;
+			line << "\n[determinism-check] wrote report: " << args.output << "\n";
+			System::PrintDiagnosticLine(line.str());
+		}
 		if (rep.diverged) {
 			{
 				std::ostringstream line;
-				line <<  "[determinism-check] RESULT: "
-			          << (rep.aiOnlyDivergence ? "MATCHED-SIM (sim identical until the AI deviated; later divergence is downstream of AI input, advisory)" : "DIVERGED") << "\n";
+				line << "[determinism-check] RESULT: "
+				     << (rep.aiOnlyDivergence ? "MATCHED-SIM (sim identical until the AI deviated; later divergence is downstream of AI input, advisory)" : "DIVERGED") << "\n";
 				System::PrintDiagnosticLine(line.str());
 			}
 			if (rep.simDivergedBeforeAI) {
@@ -667,23 +747,23 @@ namespace RTE {
 		} else {
 			{
 				std::ostringstream line;
-			line << "[determinism-check] RESULT: MATCHED (" << rep.comparedTicks
-			          << " ticks across " << children.size() << " runs";
-			if (matrixMode) {
-				line << " at thread counts ";
-				for (size_t i = 0; i < args.threadCounts.size(); ++i) {
-					line << args.threadCounts[i] << (i + 1 < args.threadCounts.size() ? "," : "");
+				line << "[determinism-check] RESULT: MATCHED (" << rep.comparedTicks
+				     << " ticks across " << children.size() << " runs";
+				if (matrixMode) {
+					line << " at thread counts ";
+					for (size_t i = 0; i < args.threadCounts.size(); ++i) {
+						line << args.threadCounts[i] << (i + 1 < args.threadCounts.size() ? "," : "");
+					}
 				}
-			}
-			line << ")\n";
+				line << ")\n";
 				System::PrintDiagnosticLine(line.str());
 			}
 			if (rep.comparedTicks < args.ticks) {
 				{
 					std::ostringstream line;
-					line <<  "[determinism-check] NOTE: trace ended at " << rep.comparedTicks
-				          << " ticks (< requested " << args.ticks << ") — scenario exited early but"
-				          << " deterministically; check its pass/fail grade.\n";
+					line << "[determinism-check] NOTE: trace ended at " << rep.comparedTicks
+					     << " ticks (< requested " << args.ticks << ") — scenario exited early but"
+					     << " deterministically; check its pass/fail grade.\n";
 					System::PrintDiagnosticLine(line.str());
 				}
 			}
@@ -694,7 +774,11 @@ namespace RTE {
 			std::error_code ec;
 			std::filesystem::remove_all(tmpRoot, ec);
 		} else {
-			{ std::ostringstream line; line <<  "[determinism-check] per-run JSONs kept at: " << tmpRoot.string() << "\n"; System::PrintDiagnosticLine(line.str()); }
+			{
+				std::ostringstream line;
+				line << "[determinism-check] per-run JSONs kept at: " << tmpRoot.string() << "\n";
+				System::PrintDiagnosticLine(line.str());
+			}
 		}
 
 		return (rep.diverged && !rep.aiOnlyDivergence) ? 1 : 0;
