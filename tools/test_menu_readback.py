@@ -17,7 +17,7 @@ from test_telemetry_bundle import set_visual_resolution
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
-         "lobby-name", "net-options", "net-activity", "net-resume", "host-defaults", "world-open-seat", "repair", "oracles")
+         "lobby-name", "net-options", "net-activity", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "world-open-seat", "repair", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
@@ -68,6 +68,11 @@ INTERNET_SEED = {"SessionDirectoryUrl": "dir.example.test/serve",
                  "SessionDirectoryCertSha256": "a" * 64}
 INTERNET_SAVED = {"SessionDirectoryUrl": "newdir.example.test/serve",
                   "SessionDirectoryCertSha256": "b" * 64}
+STUN_DEFAULT = "stun.l.google.com:19302,stun.cloudflare.com:3478,stun.nextcloud.com:443"
+NAT_KEYS = ("NetworkIceEnable", "NetworkStunServers", "NetworkTurnServers", "NetworkTurnUser", "NetworkTurnPass")
+NAT_LABEL = "Internet: NAT traversal (STUN)"
+NAT_STATES = ("Automatic", "Off (LAN or port-forwarded only)")
+NAT_HINT = "Players behind home routers connect directly. Off means they need your port forwarded."
 # One value column across the five network pages: every page's value/second-column control starts at
 # this offset from its page box, and every row rides the Misc page's 20px pitch.
 NETWORK_VALUE_COLUMN = 190
@@ -100,7 +105,7 @@ PAUSE_PAGE_FIRST_VALUE = {
     "Misc": "CheckboxShowToolTips",
 }
 SIZE_GATES = (
-    *((case, size) for case in ("lobby", "host-defaults", "world-open-seat", "repair", "pause")
+    *((case, size) for case in ("lobby", "host-defaults", "host-stun", "host-stun-empty", "world-open-seat", "repair", "pause")
       for size in ("640x360", "960x540", "1280x720")),
     ("net-chat", "960x540"),
     ("net-chat", "1280x720"),
@@ -158,7 +163,7 @@ def share_status_row(capture, port, host=None):
     return status
 NETWORK_ACTION_COLUMN = 330
 INTERNET_HINT = "host[:port][/path] - https:// is implied"
-INTERNET_REASON = "Replays and connection details come with a later update."
+INTERNET_REASON = "NAT traversal: Host Options > Network. No relay is provided."
 # The wire's display-name cap; the landing name box and -net-player-name refuse past it.
 DISPLAY_NAME_MAX_BYTES = 64
 # The host's saved session options steer the match; the client's own copy differs and must not.
@@ -222,6 +227,11 @@ def read_settings(path, names):
 
 
 def seeds(case):
+    if case in ("host-stun", "host-stun-empty"):
+        values = {"SessionDirectoryUrl": ""}
+        if case == "host-stun-empty":
+            values.update({"NetworkIceEnable": "1", "NetworkStunServers": ""})
+        return {"host": values}
     if case in ("network", "lobby-name"):
         return {"host": NETWORK_SEED}
     if case == "net-options":
@@ -440,6 +450,28 @@ def world_open_seat_readback(port):
             "assert_label LabelHostSeatName1 Open\ndump_host_options\nexit\n")
 
 
+def host_stun_readback(port):
+    row_checks = "assert_label LabelHostNetIce " + NAT_LABEL + "\n"
+    for control in ("LabelHostNetIce", "ComboHostNetIce", "LabelHostNetIceHint"):
+        row_checks += checks(control, "CollectionBoxHostPageNetwork")
+    reopen = ("activate ButtonHostOptBack\nwait 3\nactivate ButtonHostOptions\nwait 3\n"
+              "activate TabHostPageNetwork\nwait 3\n")
+    text = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
+            f"settext TextHostPort {port}\nactivate ButtonHostOptions\nwait 3\n"
+            "activate TabHostPageNetwork\nwait 3\n" + row_checks +
+            "assert_label ComboHostNetIce Automatic\ndump_host_options\n")
+    for state in (NAT_STATES[1], NAT_STATES[0]):
+        text += (f"combo_select ComboHostNetIce {state}\nwait 3\n" + reopen + row_checks +
+                 f"assert_label ComboHostNetIce {state}\ndump_host_options\n")
+    text += (f"combo_select ComboHostNetIce {NAT_STATES[1]}\nwait 3\n"
+             "activate ButtonHostOptBack\nwait 3\nactivate ButtonMultiplayerCreate\nwait 15\n"
+             "activate ButtonLobbyOptions\nwait 3\nactivate TabHostPageNetwork\nwait 3\n"
+             "combo_select ComboHostNetIce Automatic\nwait 3\n"
+             "assert_label LabelHostOptStatus End this session to change NAT traversal.\n" + row_checks +
+             f"assert_label ComboHostNetIce {NAT_STATES[1]}\ndump_host_options\nexit\n")
+    return text
+
+
 def scripts(case, port, root):
     if case == "repair":
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
@@ -449,7 +481,9 @@ def scripts(case, port, root):
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
                 {who: pause_probe(who, root) for who in ("host", "client")})
     probe = None
-    if case == "world-open-seat":
+    if case in ("host-stun", "host-stun-empty"):
+        text = host_stun_readback(port)
+    elif case == "world-open-seat":
         text = world_open_seat_readback(port)
     elif case == "host-defaults":
         text = LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
@@ -1277,6 +1311,11 @@ def run_case(options, case, root, failing=None):
             if case in ("lobby", "host-defaults"):
                 (runs[who].cwd / "Userdata/NetworkHostDefaults.ini").write_text(
                     "Version = 1\nFrameRedundancyTicks = 6\n", encoding="utf-8")
+            if case in ("host-stun", "host-stun-empty"):
+                settings_path = runs[who].cwd / "Userdata/Settings.ini"
+                settings = settings_path.read_text(encoding="utf-8-sig")
+                settings = re.sub(r"(?m)^[ \t]*(?:" + "|".join(NAT_KEYS) + r")[ \t]*=[^\r\n]*", "", settings)
+                settings_path.write_text(settings, encoding="utf-8")
             if who in seeded:
                 seed_settings(runs[who].cwd / "Userdata/Settings.ini", seeded[who])
 
@@ -1343,6 +1382,29 @@ def run_case(options, case, root, failing=None):
             observation = json.loads((probe_root(root, who) / "net-ui-result.json").read_text(encoding="utf-8"))
             result["probes"][who] = observation
             assert observation["pass"] and observation["complete"], (who, observation)
+        if case in ("host-stun", "host-stun-empty"):
+            pages = [{c["name"]: c for c in capture["controls"]} for capture in images
+                     if any(c["name"] == "ComboHostNetIce" for c in capture["controls"])]
+            assert [page["ComboHostNetIce"]["text"] for page in pages] == [*NAT_STATES, *NAT_STATES], pages
+            for page in pages:
+                label, combo, hint = (page[name] for name in ("LabelHostNetIce", "ComboHostNetIce", "LabelHostNetIceHint"))
+                assert label["text"] == NAT_LABEL and hint["text"].startswith(NAT_HINT + "\n"), (label, hint)
+                assert combo_item_names(combo) == list(NAT_STATES), combo
+                assert all(row["text_fits"] for row in (label, combo, hint)), (label, combo, hint)
+                assert label["rect"][1] == combo["rect"][1], (label, combo)
+                assert label["rect"][0] + label["rect"][2] + 8 <= combo["rect"][0], (label, combo)
+                page_rect = page["CollectionBoxHostPageNetwork"]["rect"]
+                assert page_rect[1] + page_rect[3] + 4 <= page["ButtonHostOptBack"]["rect"][1], page
+            for page in (pages[0], pages[2]):
+                expected = "STUN list empty: LAN-only candidates." if case == "host-stun-empty" else "No relay is provided;"
+                assert expected in page["LabelHostNetIceHint"]["text"], page
+                assert "session directory URL" in page["LabelHostNetIceHint"]["text"], page
+            expected_saved = dict.fromkeys(NAT_KEYS, "")
+            expected_saved.update({"NetworkIceEnable": "0", "NetworkStunServers": "" if case == "host-stun-empty" else STUN_DEFAULT})
+            result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(NAT_KEYS))
+            assert result["saved"] == expected_saved, result["saved"]
+            result["nat_rows"] = [{name: page[name]["rect"] for name in ("LabelHostNetIce", "ComboHostNetIce", "LabelHostNetIceHint")}
+                                  for page in pages]
         if case == "repair":
             snapshots = re.findall(r"\[net-match\] resync snapshot at tick (\d+)", logs["host"])
             assert len(snapshots) == 1 and int(snapshots[0]) >= 150, logs["host"][-6000:]

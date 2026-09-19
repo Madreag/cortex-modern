@@ -3,10 +3,37 @@
 #include "NetMatchConfig.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchService.h"
+#include "SettingsMan.h"
 
 #include <string>
 
 namespace RTE {
+
+	inline const char* NetHostNatTraversalState(bool enabled) {
+		return enabled ? "Automatic" : "Off (LAN or port-forwarded only)";
+	}
+
+	inline std::string NetHostNatTraversalHint(const SettingsMan& settings, bool setup, bool readOnly) {
+		std::string text = "Players behind home routers connect directly. Off means they need your port forwarded.\n";
+		if (!settings.GetNetworkIceEnableSetting()) {
+			text += "Off: use LAN or forward the host's UDP port.";
+		} else if (!settings.GetNetworkTurnServersSetting().empty()) {
+			text += "A custom relay is configured in Settings.ini.";
+		} else if (settings.GetNetworkStunServersSetting().empty()) {
+			text += "STUN list empty: LAN-only candidates. Edit NetworkStunServers in Settings.ini.";
+		} else {
+			text += "No relay is provided; some routers still need port forwarding.";
+		}
+		text += "\n";
+		if (readOnly) return text + "This is your saved preference; only the host sets up this session.";
+		if (!setup) return text + "End this session to change NAT traversal.";
+		if (settings.GetNetworkIceEnable() != settings.GetNetworkIceEnableSetting() || settings.GetNetworkStunServers() != settings.GetNetworkStunServersSetting()) {
+			return text + "Command-line ICE/STUN overrides apply to this run; this row saves your preference.";
+		}
+		return text + (settings.GetSessionDirectoryUrl().empty()
+		                   ? "Internet play needs a session directory URL in Network settings."
+		                   : "Applied when you create the lobby; direct address joins use the host's UDP port.");
+	}
 
 	inline const char* NetHostOptionsApplyText(NetMatchServiceState state) {
 		return state == NetMatchServiceState::Completed ? "Options staged for the next match." : "Apply republishes this lobby.";
