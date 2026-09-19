@@ -101,6 +101,8 @@ RED_OVERFLOW_BOUND = "world-spectator-bound-ignored"
 RED_OVERFLOW_ADMITTED = "world-admitted-past-its-bound"
 RED_OVERFLOW_SEATS = "world-seats-refused-below-capacity"
 RED_OVERFLOW_ROW = "world-row-lost-its-spectator-count"
+RED_REFUSAL_LIVE_BINDING = "world-refusal-took-a-live-binding"
+RED_REFUSAL_UNDELIVERED = "world-refusal-never-reached-the-joiner"
 RED_CAPACITY_MOVED_ORDINARY = "world-capacity-moved-an-ordinary-config"
 RED_CAPACITY_HASH = "world-capacity-left-the-v5-hash"
 RED_CAPACITY_UNBOUNDED = "world-capacity-decoded-past-its-bound"
@@ -396,6 +398,8 @@ CASES = (
             RED_OVERFLOW_ADMITTED,
             RED_OVERFLOW_SEATS,
             RED_OVERFLOW_ROW,
+            RED_REFUSAL_LIVE_BINDING,
+            RED_REFUSAL_UNDELIVERED,
         ),
         "pass_token": "[net-world-overflow-selftest] PASS",
     },

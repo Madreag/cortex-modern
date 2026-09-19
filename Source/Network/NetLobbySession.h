@@ -131,6 +131,8 @@ namespace RTE {
 		bool BindWorldTransferRemote(uint8_t peerId, NetPeerId transport, std::string* error = nullptr);
 		/// Whether that peer is a world bootstrap this host bound itself.
 		bool IsWorldTransferPeer(uint8_t peerId) const { return m_WorldTransferPeers.find(peerId) != m_WorldTransferPeers.end(); }
+		/// The transport this host bound that lobby id to; invalid when nothing is bound there.
+		NetPeerId RemoteTransportOf(uint8_t peerId) const;
 		/// Whether that remote's own lobby has spoken; before it does, its session discards lobby packets.
 		bool IsRemoteLobbyUp(uint8_t peerId) const { return m_RemoteLobbyUp.find(peerId) != m_RemoteLobbyUp.end(); }
 		void SendMatchConfigTo(uint8_t peerId);

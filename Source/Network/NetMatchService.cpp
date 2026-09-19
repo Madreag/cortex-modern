@@ -1961,6 +1961,10 @@ static std::string ResyncSaveName() {
 		m_WorldJoinImageDigest = image.digest;
 		m_WorldJoinImageArchive = entry->archive;
 		m_WorldJoin.PublishImage(image);
+		if (m_WorldCaptureRequestedTick != 0 && m_WorldCaptureRequestedTick <= image.tick) {
+			// The capture this mark stood for has landed, so the next bootstrap may ask for its own.
+			m_WorldCaptureRequestedTick = 0;
+		}
 		std::cout << "[net-world] offer " << EncodeWorldJoinOffer(image) << std::endl;
 	}
 
@@ -2170,6 +2174,7 @@ static std::string ResyncSaveName() {
 		}
 		m_WorldJoin.NoteReclaimHolds(reclaimHolds);
 		m_WorldSpectatorsFree = static_cast<int64_t>(m_WorldJoin.SpectatorsFree());
+		bool answeredRefusal = false;
 		for (const NetSessionPeerInfo& peer: readyPeers) {
 			if (m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
 				continue;
@@ -2197,11 +2202,12 @@ static std::string ResyncSaveName() {
 				    joinError == NetWorldJoinRefusalText(static_cast<uint64_t>(NetWorldJoinRefusal::WorldFull)) ? NetWorldJoinRefusal::WorldFull
 				    : joinError == NetWorldJoinRefusalText(static_cast<uint64_t>(NetWorldJoinRefusal::SeatHeld)) ? NetWorldJoinRefusal::SeatHeld
 				                                                                                                 : NetWorldJoinRefusal::None;
-				if (refusal != NetWorldJoinRefusal::None && m_WorldJoin.NoteRefusal(peer.transportPeerId, refusal) && m_Runner) {
-					NetLobbySession& lobby = m_Runner->GetLobbySession();
-					const uint8_t refusalPeer = c_WorldSpectatorLobbyPeerFirst;
-					(void)lobby.BindLateRemote(refusalPeer, peer.transportPeerId, nullptr);
-					(void)lobby.SendPayloadTo(refusalPeer, MakeWorldJoinReport(c_NetWorldReportRefused, static_cast<uint64_t>(refusal)), nullptr);
+				// One refusal per pump: the reserved id carries one answer at a time, and a connection
+				// left unanswered is asked again next pump, where a freed seat may admit it instead.
+				if (refusal != NetWorldJoinRefusal::None && !answeredRefusal && m_Runner &&
+				    AnswerWorldJoinRefusal(m_Runner->GetLobbySession(), peer.transportPeerId, refusal)) {
+					(void)m_WorldJoin.NoteRefusal(peer.transportPeerId, refusal);
+					answeredRefusal = true;
 					std::cout << "[net-world] refuse connection=" << peer.transportPeerId << " " << joinError << std::endl;
 				}
 				continue;
@@ -2365,6 +2371,18 @@ static std::string ResyncSaveName() {
 		}
 		m_WorldSpectatorDeclinesPromotion = declines;
 		return m_Runner->GetLobbySession().SendPayload(MakeWorldJoinReport(c_NetWorldReportDecline, declines ? 1 : 0), nullptr);
+	}
+
+	bool NetMatchService::AnswerWorldJoinRefusal(NetLobbySession& lobby, NetPeerId connection, NetWorldJoinRefusal refusal) {
+		if (connection == c_InvalidNetPeerId || refusal == NetWorldJoinRefusal::None) {
+			return false;
+		}
+		// The reserved id is scratch: nothing streams to it, and the answer goes out on this call,
+		// before any later refusal can point it somewhere else.
+		if (!lobby.BindLateRemote(c_WorldRefusalLobbyPeer, connection, nullptr)) {
+			return false;
+		}
+		return lobby.SendPayloadTo(c_WorldRefusalLobbyPeer, MakeWorldJoinReport(c_NetWorldReportRefused, static_cast<uint64_t>(refusal)), nullptr);
 	}
 
 	void NetMatchService::DriveWorldSeatRespawns(uint64_t nowFrame) {

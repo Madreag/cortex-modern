@@ -2845,6 +2845,52 @@ namespace RTE {
 		    beatBack.spectatorFree.has_value()) {
 			return Fail("world-row-lost-its-spectator-count: a beat that named no watcher count carried one");
 		}
+		// The refusal is answered on a reserved id, never on a live watcher's: binding re-points a known
+		// remote's transport, so answering on id 32 would hand that watcher's stream to the refused peer.
+		WorldLobbyPair pair;
+		if (!pair.Open(47131, &error)) {
+			return Fail("world-refusal-took-a-live-binding: refusal lobby pair: " + error);
+		}
+		if (!pair.host.BindLateRemote(c_WorldSpectatorLobbyPeerFirst, pair.hostRemote, &error)) {
+			return Fail("world-refusal-took-a-live-binding: the fixture could not bind a watcher on id " +
+			            std::to_string(static_cast<int>(c_WorldSpectatorLobbyPeerFirst)) + " (" + error + ")");
+		}
+		const NetPeerId watcherTransport = pair.host.RemoteTransportOf(c_WorldSpectatorLobbyPeerFirst);
+		if (watcherTransport != pair.hostRemote) {
+			return Fail("world-refusal-took-a-live-binding: the fixture's watcher is not bound to its own transport");
+		}
+		// A different connection is refused. The watcher's binding must not move.
+		const NetPeerId refusedTransport = static_cast<NetPeerId>(pair.hostRemote + 1000);
+		(void)NetMatchService::AnswerWorldJoinRefusal(pair.host, refusedTransport, NetWorldJoinRefusal::WorldFull);
+		if (pair.host.RemoteTransportOf(c_WorldSpectatorLobbyPeerFirst) != watcherTransport) {
+			return Fail("world-refusal-took-a-live-binding: the watcher on id " +
+			            std::to_string(static_cast<int>(c_WorldSpectatorLobbyPeerFirst)) + " was re-pointed from transport " +
+			            std::to_string(watcherTransport) + " to " +
+			            std::to_string(pair.host.RemoteTransportOf(c_WorldSpectatorLobbyPeerFirst)));
+		}
+		if (pair.host.RemoteTransportOf(c_WorldRefusalLobbyPeer) != refusedTransport) {
+			return Fail("world-refusal-took-a-live-binding: the refusal was answered on id " +
+			            std::to_string(static_cast<int>(c_WorldRefusalLobbyPeer)) + " bound to transport " +
+			            std::to_string(pair.host.RemoteTransportOf(c_WorldRefusalLobbyPeer)) + ", not " +
+			            std::to_string(refusedTransport));
+		}
+		// The refused connection really receives the reason, off the wire, on the reserved id.
+		(void)pair.client.TakeWorldJoinReport();
+		if (!NetMatchService::AnswerWorldJoinRefusal(pair.host, pair.hostRemote, NetWorldJoinRefusal::WorldFull)) {
+			return Fail("world-refusal-never-reached-the-joiner: the host could not answer the refused connection");
+		}
+		pair.Pump(8);
+		const NetLobbySession::WorldJoinReport refusalReport = pair.client.TakeWorldJoinReport();
+		if (!refusalReport.pending || refusalReport.kind != c_NetWorldReportRefused ||
+		    refusalReport.value != static_cast<uint64_t>(NetWorldJoinRefusal::WorldFull)) {
+			return Fail("world-refusal-never-reached-the-joiner: the joiner read kind " +
+			            std::to_string(static_cast<int>(refusalReport.kind)) + " value " + std::to_string(refusalReport.value) +
+			            " pending " + std::to_string(refusalReport.pending));
+		}
+		// The watcher's binding survived the delivered refusal too.
+		if (pair.host.RemoteTransportOf(c_WorldSpectatorLobbyPeerFirst) != watcherTransport) {
+			return Fail("world-refusal-took-a-live-binding: the delivered refusal moved the watcher's binding");
+		}
 		return 0;
 	}
 
