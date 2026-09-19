@@ -2213,15 +2213,18 @@ namespace RTE {
 	}
 
 	void NetReconnectClient::AdoptDirectorySessionId(const std::string& directorySessionId) {
-		if (directorySessionId.empty() || directorySessionId == m_DirectorySessionId) {
+		if (directorySessionId.empty()) {
 			return;
 		}
 		m_DirectorySessionId = directorySessionId;
-		m_Record.directorySessionId = directorySessionId;
-		// A record already durable is rewritten: the watch reads the file, not this object.
-		if (m_HasRecord && m_Store != nullptr) {
-			(void)m_Store->Store(m_Record, nullptr);
-		}
+		NetH4TicketRecord record = m_Record;
+		record.directorySessionId = directorySessionId;
+		record.persistentWorld = m_WorldTarget;
+		record.recordVersion = NetReconnectTicketStore::RecordVersionFor(record.persistentWorld);
+		if (record == m_Record) return;
+		// Keep the previous record on a failed write so the next lobby publish retries it.
+		if (m_HasRecord && m_Store != nullptr && !m_Store->Store(record, nullptr)) return;
+		m_Record = std::move(record);
 	}
 
 	bool NetReconnectClient::IsAdmissionPending() const {

@@ -3073,17 +3073,13 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
-	void NetMatchService::AdoptWorldTicketSession() {
-		// A world's directory row is registered under the world's own UUID, so the ticket this client
-		// keeps must name that id: it is the same every boot, and it is what the return watch browses
-		// for while the host is away.
-		if (m_IsHost || !m_Runner) {
+	void NetMatchService::AdoptWorldTicketSession(const NetMatchConfig& config) {
+		if (m_IsHost || !config.persistentWorld || !NetMatchConfigUtil::IsWorldId(config.worldId)) {
 			return;
 		}
-		const NetMatchConfig& config = m_Runner->GetLobbySession().GetMatchConfig();
-		if (!config.persistentWorld || !NetMatchConfigUtil::IsWorldId(config.worldId)) {
-			return;
-		}
+		// An address-only join learns the world's ticket context from the adopted lobby config.
+		m_LastJoinTargetPersistentWorld = true;
+		m_ReconnectClient.SetWorldTarget(true);
 		m_ReconnectClient.AdoptDirectorySessionId(config.worldId);
 	}
 
@@ -4071,7 +4067,7 @@ static std::string ResyncSaveName() {
 		if (m_IsHost && m_Coordinator && m_Coordinator->IsRunning() && m_Coordinator->IsPersistentWorldRound()) {
 			DriveWorldJoins(nowMs);
 		}
-		AdoptWorldTicketSession();
+		if (m_Runner) AdoptWorldTicketSession(m_Runner->GetLobbySession().GetMatchConfig());
 		DriveWorldJoinClient(nowMs);
 		if (events.empty()) {
 			return;
@@ -5364,6 +5360,7 @@ static std::string ResyncSaveName() {
 			// The options view reads the same agreed config on every peer; the mirror sits under the
 			// same lock the snapshot publish already holds.
 			m_AdoptedMatchConfig = config;
+			AdoptWorldTicketSession(config);
 			uint8_t localPeerId = m_LocalPeerId;
 			uint32_t pingMs = 0;
 			for (const NetLobbyMember& member: snapshot.members) {

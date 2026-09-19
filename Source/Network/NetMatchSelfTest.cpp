@@ -5483,6 +5483,12 @@ namespace RTE {
 				*error = "a default service joiner did not adopt the world's complete lobby config";
 				return false;
 			}
+			service.AdoptWorldTicketSession(clientLobby.GetMatchConfig());
+			if (!service.m_LastJoinTargetPersistentWorld || !service.m_ReconnectClient.GetRecord().persistentWorld ||
+			    service.m_ReconnectClient.GetRecord().directorySessionId != world.worldId) {
+				*error = "an unhinted world join did not adopt the world's reconnect context";
+				return false;
+			}
 			if (wrongStartHash) {
 				NetLobbyStart start;
 				start.sessionId = world.sessionId;
