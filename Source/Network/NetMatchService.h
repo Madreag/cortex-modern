@@ -567,9 +567,12 @@ namespace RTE {
 			NetModerationSelection selection;
 			NetParticipantRemovalAction action = NetParticipantRemovalAction::Kick;
 		};
-		std::optional<PendingRemoval> m_PendingRemoval;
-		NetKickBanResult ApplyRemovalLocked(const NetModerationSelection& selection, NetParticipantRemovalAction action);
-		void DrainPendingRemoval();
+		std::vector<PendingRemoval> m_PendingRemovals; //!< Starting-state kicks waiting for the setup worker, in order.
+		uint32_t m_LastRoundId = 0;                    //!< The round the peers last played; what a kick between rounds is stamped with.
+		NetKickBanResult ApplyRemovalLocked(const NetModerationSelection& selection, NetParticipantRemovalAction action, NetSession& session);
+		/// Wires the setup worker's host pump. The runner calls it with the session it ticks.
+		void AttachHostPump(NetMatchRunnerConfig& config);
+		void DrainPendingRemoval(NetSession& session);
 		bool m_AdmissionAttached = false;
 		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.
