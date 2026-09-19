@@ -14,7 +14,7 @@ using namespace RTE;
 
 std::string LimbPath::SaveCheckpoint() const {
 	CheckpointWriter archive("LimbPath1");
-	archive(Entity::SaveCheckpoint());
+	archive(static_cast<const Entity&>(*this));
 	archive(m_Start, m_StartSegCount, m_FootCollisionsDisabledSegment, m_SegProgress, m_TravelSpeed, m_SegmentEndedThreshold, m_BaseTravelSpeedMultiplier, m_CurrentTravelSpeedMultiplier, m_BaseScaleMultiplier, m_CurrentScaleMultiplier, m_PushForce, m_JointPos, m_JointVel, m_Rotation, m_RotationOffset, m_PositionOffset, m_TimeLeft, m_PathTimer, m_SegTimer, m_TotalLength, m_RegularLength, m_SegmentDone, m_Ended, m_HFlipped);
 	archive(m_Segments, static_cast<size_t>(std::distance(m_Segments.cbegin(), std::deque<Vector>::const_iterator(m_CurrentSegment))));
 	return archive.Text();
@@ -219,6 +219,64 @@ std::string LimbPath::PackTraversalState(bool forHashing) const {
 		appendVector(segment);
 	}
 	return state;
+}
+
+CheckpointText LimbPath::CaptureTraversalState(bool forHashing) const {
+	CheckpointBuffer state;
+	state.Raw("LP2");
+	const auto appendValue = [&state](auto value) {
+		state.Raw(" ");
+		if constexpr (std::is_floating_point_v<decltype(value)>) state.Real(value);
+		else if constexpr (std::is_signed_v<decltype(value)>) state.Integer(value);
+		else state.Unsigned(value);
+	};
+	const auto appendVector = [&appendValue](const Vector& value) {
+		appendValue(value.m_X);
+		appendValue(value.m_Y);
+	};
+	appendValue(static_cast<long long>(std::distance(m_Segments.begin(), static_cast<std::deque<Vector>::const_iterator>(m_CurrentSegment))));
+	appendValue(m_SegProgress);
+	appendValue(m_TimeLeft);
+	appendValue(static_cast<long long>(m_PathTimer.GetStartSimTimeMS()));
+	appendValue(static_cast<long long>(m_SegTimer.GetStartSimTimeMS()));
+	appendValue(m_Ended ? 1 : 0);
+	appendValue(m_HFlipped ? 1 : 0);
+	appendValue(m_SegmentDone ? 1 : 0);
+	appendVector(m_Start);
+	appendValue(m_StartSegCount);
+	appendValue(m_FootCollisionsDisabledSegment);
+	appendValue(m_TravelSpeed);
+	appendValue(m_SegmentEndedThreshold);
+	appendValue(m_BaseTravelSpeedMultiplier);
+	appendValue(m_CurrentTravelSpeedMultiplier);
+	appendVector(m_BaseScaleMultiplier);
+	appendVector(m_CurrentScaleMultiplier);
+	appendValue(m_PushForce);
+	appendVector(m_JointPos);
+	appendVector(m_JointVel);
+	appendValue(m_Rotation.m_Rotation);
+	appendValue(m_Rotation.m_Flipped[0] ? 1 : 0);
+	appendValue(m_Rotation.m_Flipped[1] ? 1 : 0);
+	for (const auto& row: m_Rotation.m_Elements) {
+		for (float value: row) {
+			appendValue(value);
+		}
+	}
+	appendValue(m_Rotation.m_ElementsUpdated ? 1 : 0);
+	appendVector(m_RotationOffset);
+	appendVector(m_PositionOffset);
+	for (const Timer* timer: {&m_PathTimer, &m_SegTimer}) {
+		appendValue(forHashing ? int64_t{0} : timer->GetStartRealTimeMS());
+		appendValue(timer->GetRealTimeLimitTicks());
+		appendValue(timer->GetSimTimeLimitTicks());
+	}
+	appendValue(m_TotalLength);
+	appendValue(m_RegularLength);
+	appendValue(m_Segments.size());
+	for (const Vector& segment: m_Segments) {
+		appendVector(segment);
+	}
+	return state.Finish();
 }
 
 void LimbPath::ApplyTraversalState(const std::string& state) {

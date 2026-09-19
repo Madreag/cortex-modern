@@ -319,7 +319,7 @@ void MOSprite::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SettleMaterialDisabled", m_SettleMaterialDisabled);
 	writer.NewPropertyWithValue("SpecialBehaviour_EntryWoundPreset", m_pEntryWound ? m_pEntryWound->GetModuleAndPresetName() : "None");
 	writer.NewPropertyWithValue("SpecialBehaviour_ExitWoundPreset", m_pExitWound ? m_pExitWound->GetModuleAndPresetName() : "None");
-	writer.NewPropertyWithValue("SpecialBehaviour_MOSpriteRuntime", base64_encode(m_PersistedMOSpriteRuntime.empty() ? SaveMOSpriteRuntime() : m_PersistedMOSpriteRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_MOSpriteRuntime", CheckpointWriter::Native([&] { return m_PersistedMOSpriteRuntime.empty() ? SaveMOSpriteRuntime() : m_PersistedMOSpriteRuntime; }).Base64(true));
 }
 
 int MOSprite::Save(Writer& writer) const {
@@ -388,6 +388,7 @@ void MOSprite::SetFrame(unsigned int newFrame) {
 	if (newFrame >= m_FrameCount)
 		newFrame = m_FrameCount - 1;
 
+	if (m_Frame != newFrame) TouchCheckpoint();
 	m_Frame = newFrame;
 }
 
@@ -702,7 +703,7 @@ std::string MOSprite::SaveMOSpriteRuntime() const {
 	archive(m_Rotation, m_PrevRotation, m_AngularVel, m_PrevAngVel, m_FrameCount, m_SpriteOffset, m_Frame);
 	archive(m_SpriteAnimMode, m_SpriteAnimDuration, m_SpriteAnimTimer, m_SpriteAnimIsReversingFrames, m_HFlipped, m_ForcedHFlip, m_SpriteRadius);
 	archive(m_SpriteDiameter, m_AngOscillations, m_SettleMaterialDisabled, m_SpriteModified);
-	archive(m_SpriteFile.SaveCheckpoint(), m_IconFile.SaveCheckpoint());
+	archive(m_SpriteFile, m_IconFile);
 	std::vector<BITMAP*> images;
 	std::unordered_map<BITMAP*, size_t> indices;
 	const auto index = [&](BITMAP* image) {
@@ -715,7 +716,7 @@ std::string MOSprite::SaveMOSpriteRuntime() const {
 	for (BITMAP* frame: m_aSprite) frames.push_back(index(frame));
 	const size_t icon = index(m_GraphicalIcon);
 	archive(images.size());
-	for (BITMAP* image: images) archive(GUICheckpoint::SaveSharedBitmap(image));
+	for (BITMAP* image: images) archive(CheckpointWriter::Native([image] { return GUICheckpoint::SaveSharedBitmap(image); }));
 	archive(frames, icon);
 	return archive.Text();
 }

@@ -239,6 +239,7 @@ namespace RTE {
 		/// @param flipped A bool with the new value.
 		void SetHFlipped(const bool flipped) override {
 			if (m_ForcedHFlip == -1) {
+				if (m_HFlipped != flipped) TouchCheckpoint();
 				m_HFlipped = flipped;
 			}
 		}
@@ -262,12 +263,12 @@ namespace RTE {
 
 		/// Sets the current absolute angle of rotation of this MovableObject.
 		/// @param m_Rotation.SetRadAngle(newAngle The new absolute angle in radians.
-		void SetRotAngle(float newAngle) override { m_Rotation.SetRadAngle(newAngle); }
+		void SetRotAngle(float newAngle) override { if (m_Rotation.GetRadAngle() != newAngle) TouchCheckpoint(); m_Rotation.SetRadAngle(newAngle); }
 
 		/// Sets the current angular velocity of this MovableObject. Positive is
 		/// a counter clockwise rotation.
 		/// @param newRotVel The new angular velocity in radians per second.
-		void SetAngularVel(float newRotVel) override { m_AngularVel = newRotVel; }
+		void SetAngularVel(float newRotVel) override { if (m_AngularVel != newRotVel) TouchCheckpoint(); m_AngularVel = newRotVel; }
 
 		/// Gets the GUI representation of this MOSprite, either based on the first frame of its sprite or separately defined icon file.
 		/// @return The graphical representation of this MOSprite as a BITMAP.

@@ -3,6 +3,7 @@
 #include "DynamicSong.h"
 #include "Timer.h"
 #include "Singleton.h"
+#include <functional>
 #include <string_view>
 
 #define g_MusicMan MusicMan::Instance()
@@ -14,6 +15,8 @@ namespace RTE {
 
 	public:
 		std::string SaveCheckpoint() const;
+		/// Visits the sound owners carried by the music checkpoint.
+		void VisitCheckpointSounds(const std::function<void(const SoundContainer&)>& visit) const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		bool LoadCheckpointWithAudio(std::string_view text, std::string_view audio, const std::vector<std::pair<SoundData*, std::string>>* inheritedBindings = nullptr);
 		bool RunCheckpointSelfTest();

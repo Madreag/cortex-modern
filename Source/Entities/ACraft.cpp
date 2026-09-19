@@ -453,7 +453,7 @@ void ACraft::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("MaxPassengers", m_MaxPassengers);
 	writer.NewPropertyWithValue("ScuttleIfFlippedTime", m_ScuttleIfFlippedTime);
 	writer.NewPropertyWithValue("ScuttleOnDeath", m_ScuttleOnDeath);
-	writer.NewPropertyWithValue("SpecialBehaviour_ACraftRuntime", base64_encode(m_PersistedACraftRuntime.empty() ? SaveACraftRuntime() : m_PersistedACraftRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ACraftRuntime", CheckpointWriter::Native([&] { return m_PersistedACraftRuntime.empty() ? SaveACraftRuntime() : m_PersistedACraftRuntime; }).Base64(true));
 }
 
 int ACraft::Save(Writer& writer) const {

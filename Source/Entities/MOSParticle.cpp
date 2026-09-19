@@ -1,4 +1,5 @@
 #include "MOSParticle.h"
+#include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 
 #include "Atom.h"
@@ -99,7 +100,7 @@ void MOSParticle::DiscardPersistedSnapshotState() {
 
 void MOSParticle::SaveSnapshotConfiguration(Writer& writer) const {
 	MOSprite::SaveSnapshotConfiguration(writer);
-	writer.NewPropertyWithValue("SpecialBehaviour_AtomCheckpoint", base64_encode(m_PersistedAtomCheckpoint.empty() ? CaptureOwnedCheckpoint(m_Atom) : m_PersistedAtomCheckpoint, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_AtomCheckpoint", CheckpointWriter::Native([&] { return m_PersistedAtomCheckpoint.empty() ? CaptureOwnedCheckpoint(m_Atom) : m_PersistedAtomCheckpoint; }).Base64(true));
 }
 
 int MOSParticle::Save(Writer& writer) const {

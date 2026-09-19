@@ -98,6 +98,34 @@ static void flagbits_to_strings(lua_State *L, uint32_t flags, uint32_t base,
 }
 #endif
 
+/* Allocation sinking hides a table's birth, so a captured state runs without it. */
+LUA_API int luaJIT_set_alloc_sinking(lua_State *L, int on)
+{
+#if LJ_HASJIT
+  jit_State *J = L2J(L);
+  uint32_t flags = on ? (J->flags | JIT_F_OPT_SINK) : (J->flags & ~JIT_F_OPT_SINK);
+  if (flags != J->flags) {
+    J->flags = flags;
+    /* A trace compiled under the old flag may hold a sunk allocation, so they all go. */
+    luaJIT_setmode(L, 0, LUAJIT_MODE_ENGINE|LUAJIT_MODE_FLUSH);
+  }
+  return 1;
+#else
+  UNUSED(L); UNUSED(on);
+  return 0;
+#endif
+}
+
+LUA_API int luaJIT_alloc_sinking(lua_State *L)
+{
+#if LJ_HASJIT
+  return (L2J(L)->flags & JIT_F_OPT_SINK) != 0;
+#else
+  UNUSED(L);
+  return 0;
+#endif
+}
+
 LJLIB_CF(jit_status)
 {
 #if LJ_HASJIT

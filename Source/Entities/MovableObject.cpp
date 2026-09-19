@@ -778,7 +778,7 @@ void MovableObject::ReadCustomValueProperty(Reader& reader) {
 
 std::string MovableObject::SaveMovableObjectRuntime() const {
 	CheckpointWriter archive("MovableObjectRuntime1");
-	archive(Entity::SaveCheckpoint(), m_Pos, m_OzValue, m_Buyable, m_BuyableMode, m_Team, m_PlacedByPlayer);
+	archive(static_cast<const Entity&>(*this), m_Pos, m_OzValue, m_Buyable, m_BuyableMode, m_Team, m_PlacedByPlayer);
 	archive(m_MOType, m_Mass, m_Vel, m_PrevPos, m_PrevVel, m_DistanceTravelled, m_Scale, m_GlobalAccScalar,
 		m_AirResistance, m_AirThreshold, m_PinStrength, m_RestThreshold, m_Forces, m_ImpulseForces,
 		m_AgeTimer, m_RestTimer, m_Lifetime, m_Sharpness, m_CheckTerrIntersection, m_HitsMOs, m_MOIgnoreTimer,
@@ -831,7 +831,7 @@ bool MovableObject::LoadMovableObjectRuntime(std::string_view text, bool validat
 }
 
 void MovableObject::SaveSnapshotConfiguration(Writer& writer) const {
-	writer.NewPropertyWithValue("SpecialBehaviour_MovableObjectRuntime", base64_encode(m_PersistedMovableObjectRuntime.empty() ? SaveMovableObjectRuntime() : m_PersistedMovableObjectRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_MovableObjectRuntime", CheckpointWriter::Native([&] { return m_PersistedMovableObjectRuntime.empty() ? SaveMovableObjectRuntime() : m_PersistedMovableObjectRuntime; }).Base64(true));
 	writer.NewPropertyWithValue("Mass", m_Mass);
 	writer.NewPropertyWithValue("Scale", m_Scale);
 	writer.NewPropertyWithValue("RestThreshold", m_RestThreshold);
@@ -1468,7 +1468,10 @@ void MovableObject::PostTravel() {
 	// Reset the terrain intersection warning
 	m_CheckTerrIntersection = false;
 
-	m_DistanceTravelled += m_Vel.GetMagnitude() * c_PPM * g_TimerMan.GetDeltaTimeSecs();
+	const float travelled = m_Vel.GetMagnitude() * c_PPM * g_TimerMan.GetDeltaTimeSecs();
+	m_DistanceTravelled += travelled;
+	// The travel writes position and velocity through Atom aliases, so the stamp is taken here.
+	if (travelled != 0.0F || m_Pos != m_PrevPos || m_Vel != m_PrevVel) TouchCheckpoint();
 }
 
 void MovableObject::Update() {
@@ -1729,6 +1732,7 @@ void MovableObject::SetStringValue(const std::string& key, const std::string& va
 		RecordLocalValueWrite(ValueMapKind::String, ValueMapOp::Set, key, 0, value);
 		return;
 	}
+	TouchCheckpoint();
 	m_StringValueMap[key] = value;
 }
 
@@ -1741,10 +1745,12 @@ void MovableObject::SetNumberValue(const std::string& key, double value) {
 		RecordLocalValueWrite(ValueMapKind::Number, ValueMapOp::Set, key, value, {});
 		return;
 	}
+	TouchCheckpoint();
 	m_NumberValueMap[key] = value;
 }
 
 void MovableObject::SetObjectValue(const std::string& key, Entity* value) {
+	TouchCheckpoint();
 	m_ObjectValueMap[key] = value;
 }
 
@@ -1753,6 +1759,7 @@ void MovableObject::RemoveStringValue(const std::string& key) {
 		RecordLocalValueWrite(ValueMapKind::String, ValueMapOp::Remove, key, 0, {});
 		return;
 	}
+	TouchCheckpoint();
 	m_StringValueMap.erase(key);
 }
 
@@ -1761,10 +1768,12 @@ void MovableObject::RemoveNumberValue(const std::string& key) {
 		RecordLocalValueWrite(ValueMapKind::Number, ValueMapOp::Remove, key, 0, {});
 		return;
 	}
+	TouchCheckpoint();
 	m_NumberValueMap.erase(key);
 }
 
 void MovableObject::RemoveObjectValue(const std::string& key) {
+	TouchCheckpoint();
 	m_ObjectValueMap.erase(key);
 }
 

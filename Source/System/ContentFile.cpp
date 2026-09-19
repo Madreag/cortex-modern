@@ -122,13 +122,19 @@ int ContentFile::ReadProperty(const std::string_view& propName, Reader& reader) 
 }
 
 int ContentFile::Save(Writer& writer) const {
+	if (const std::string* path = writer.ContentOverride(this)) {
+		ContentFile saved = *this;
+		saved.SetIsMemoryFile(true);
+		saved.SetDataPath(*path);
+		return saved.Save(writer);
+	}
 	Serializable::Save(writer);
 
 	if (!m_DataPath.empty()) {
 		writer.NewPropertyWithValue("FilePath", m_DataPath);
 	}
 	writer.NewPropertyWithValue("IsMemoryPNG", m_IsMemoryPNG);
-	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_ContentCheckpoint", base64_encode(SaveCheckpoint(), true));
+	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_ContentCheckpoint", CheckpointWriter::Native([&] { return SaveCheckpoint(); }).Base64(true));
 
 	return 0;
 }
@@ -396,6 +402,17 @@ SDL_Palette* ContentFile::DefaultPaletteToSDL(bool preMask) {
 }
 
 bool ContentFile::EncodeIndexedPNG(BITMAP* bitmap, std::vector<unsigned char>& output) {
+	std::array<unsigned char, 256 * 3> palette{};
+	const PALETTE& colors = g_FrameMan.GetDefaultPalette();
+	for (size_t i = 0; i < 256; ++i) {
+		palette[i * 3] = colors[i].r;
+		palette[i * 3 + 1] = colors[i].g;
+		palette[i * 3 + 2] = colors[i].b;
+	}
+	return EncodeIndexedPNG(bitmap, output, palette);
+}
+
+bool ContentFile::EncodeIndexedPNG(BITMAP* bitmap, std::vector<unsigned char>& output, const std::array<unsigned char, 256 * 3>& palette) {
 	output.clear();
 	if (!bitmap || bitmap_color_depth(bitmap) != 8 || bitmap->w <= 0 || bitmap->h <= 0) return false;
 	const auto pitch = bitmap->h > 1 ? bitmap->line[1] - bitmap->line[0] : bitmap->w;
@@ -409,13 +426,6 @@ bool ContentFile::EncodeIndexedPNG(BITMAP* bitmap, std::vector<unsigned char>& o
 	image.format = PNG_FORMAT_RGB_COLORMAP;
 	image.colormap_entries = 256;
 	image.flags = PNG_IMAGE_FLAG_FAST;
-	std::array<unsigned char, 256 * 3> palette{};
-	const PALETTE& colors = g_FrameMan.GetDefaultPalette();
-	for (size_t i = 0; i < 256; ++i) {
-		palette[i * 3] = colors[i].r;
-		palette[i * 3 + 1] = colors[i].g;
-		palette[i * 3 + 2] = colors[i].b;
-	}
 	png_alloc_size_t size = PNG_IMAGE_PNG_SIZE_MAX(image);
 	output.resize(size);
 	const bool saved = png_image_write_to_memory(&image, output.data(), &size, 0, bitmap->line[0], static_cast<png_int_32>(pitch), palette.data()) != 0;

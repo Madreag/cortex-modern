@@ -272,7 +272,7 @@ int Activity::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 int Activity::Save(Writer& writer) const {
 	Entity::Save(writer);
-	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_RuntimeCheckpoint", base64_encode(m_PendingRuntimeCheckpoint.empty() ? SaveCheckpoint() : m_PendingRuntimeCheckpoint, true));
+	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_RuntimeCheckpoint", CheckpointWriter::Native([&] { return m_PendingRuntimeCheckpoint.empty() ? SaveCheckpoint() : m_PendingRuntimeCheckpoint; }).Base64(true));
 
 	writer.NewProperty("Description");
 	writer << m_Description;
@@ -1940,7 +1940,7 @@ std::string Activity::SaveCheckpoint() const {
 	VisitCheckpoint(writer, *this);
 	std::array<std::array<long, 3>, Players::MaxPlayerCount> links{};
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) links[player] = m_HasCheckpointActorIDs ? m_CheckpointActorIDs[player] : SlotActorIDs(player);
-	writer(links, m_LockstepControlUID, Icon::SaveCheckpointSet(m_TeamIcons));
+	writer(links, m_LockstepControlUID, CheckpointWriter::Native([&] { return Icon::SaveCheckpointSet(m_TeamIcons); }));
 	return writer.Text();
 }
 

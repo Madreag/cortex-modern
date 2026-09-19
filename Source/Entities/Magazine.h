@@ -74,7 +74,7 @@ namespace RTE {
 
 		/// Sets how many rounds are left in this Magazine.
 		/// @param newCount The new number of rounds left. Negative value means infinite ammo!
-		void SetRoundCount(int newCount) { m_RoundCount = newCount; }
+		void SetRoundCount(int newCount) { if (m_RoundCount != newCount) TouchCheckpoint(); m_RoundCount = newCount; }
 
 		/// Returns whether this Magazine is out of rounds.
 		/// @return Whether this Magazine is out of rounds or not.

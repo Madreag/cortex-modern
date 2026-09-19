@@ -331,6 +331,7 @@ typedef struct GCudata {
 #endif
   GCRef metatable;	/* Must be at same offset in GCtab. */
   uint32_t align1;	/* To force 8 byte alignment of the payload. */
+  uint64_t serial;	/* Birth order in this state. The payload follows it, still 8 byte aligned. */
 } GCudata;
 
 /* Userdata types. */
@@ -445,6 +446,7 @@ typedef struct GCupval {
   };
   MRef v;		/* Points to stack slot (open) or above (closed). */
   uint32_t dhash;	/* Disambiguation hash: dh1 != dh2 => cannot alias. */
+  uint64_t serial;	/* Birth order in this state. */
 } GCupval;
 
 #define uvprev(uv_)	(&gcref((uv_)->prev)->uv)
@@ -456,7 +458,7 @@ typedef struct GCupval {
 /* Common header for functions. env should be at same offset in GCudata. */
 #define GCfuncHeader \
   GCHeader; uint8_t ffid; uint8_t nupvalues; \
-  GCRef env; GCRef gclist; MRef pc
+  GCRef env; GCRef gclist; MRef pc; uint64_t serial
 
 typedef struct GCfuncC {
   GCfuncHeader;
@@ -520,16 +522,21 @@ typedef struct GCtab {
   uint32_t preview;
   uint32_t preview_pad;
 #endif
+  uint64_t serial;	/* Birth order in this state. Identity across peers and saves. */
 } GCtab;
 
 /* The VM and the DynASM backends read t->preview at these fixed places. */
 #if LJ_GC64
-LJ_STATIC_ASSERT(sizeof(GCtab) == 64);
+LJ_STATIC_ASSERT(sizeof(GCtab) == 72);
 LJ_STATIC_ASSERT(offsetof(GCtab, preview) == 12);
+LJ_STATIC_ASSERT(offsetof(GCtab, serial) == 64);
 #else
-LJ_STATIC_ASSERT(sizeof(GCtab) == 40);
+LJ_STATIC_ASSERT(sizeof(GCtab) == 48);
 LJ_STATIC_ASSERT(offsetof(GCtab, preview) == 32);
+LJ_STATIC_ASSERT(offsetof(GCtab, serial) == 40);
 #endif
+/* The metatable offset is shared with GCudata and must not move. */
+LJ_STATIC_ASSERT(offsetof(GCtab, metatable) == offsetof(GCudata, metatable));
 
 #define sizetabcolo(n)	((n)*sizeof(TValue) + sizeof(GCtab))
 #define tabref(r)	((GCtab *)gcref((r)))
@@ -661,6 +668,7 @@ typedef struct global_State {
   uint8_t hookmask;	/* Hook mask. */
   uint8_t dispatchmode;	/* Dispatch mode. */
   uint8_t vmevmask;	/* VM event mask. */
+  uint8_t checkpoint_armed;  /* Table stores trap to the C path until one is marked. */
   StrInternState str;	/* String interning. */
   volatile int32_t vmstate;  /* VM state or current JIT code trace number. */
   GCRef mainthref;	/* Link to main thread. */
@@ -683,6 +691,7 @@ typedef struct global_State {
   PRNGState prng;	/* Global PRNG state. */
   GCRef gcroot[GCROOT_MAX];  /* GC roots. */
   struct LJPreview *preview;
+  uint64_t objserial;	/* Objects born in this state. Never reused, saved with a checkpoint. */
 } global_State;
 
 #define mainthread(g)	(&gcref(g->mainthref)->th)
@@ -724,6 +733,7 @@ struct lua_State {
   GCRef env;		/* Thread environment (table of globals). */
   void *cframe;		/* End of C stack frame chain. */
   MSize stacksize;	/* True stack size (incl. LJ_STACK_EXTRA). */
+  uint64_t serial;	/* Birth order in this state. */
 };
 
 #define G(L)			(mref(L->glref, global_State))

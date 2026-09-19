@@ -81,6 +81,11 @@ LUA_API size_t luaJIT_preview_upvalue_writes(lua_State *L);
 /* Whether the armed window holds the registry as a rollback root. */
 LUA_API int luaJIT_preview_registry_rooted(lua_State *L);
 
+typedef void (*luaJIT_tab_write_cb)(void *tab);
+LUA_API void luaJIT_set_tab_write_callback(luaJIT_tab_write_cb cb);
+LUA_API void luaJIT_arm_tab_write_trap(lua_State *L);
+LUA_API void luaJIT_arm_tab_write(lua_State *L, int idx);
+
 /* Low-overhead profiling API. */
 typedef void (*luaJIT_profile_callback)(void *data, lua_State *L,
 					int samples, int vmstate);

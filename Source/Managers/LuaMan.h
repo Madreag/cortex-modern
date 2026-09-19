@@ -24,6 +24,7 @@ namespace RTE {
 	class LuabindObjectWrapper;
 	class MovableObject;
 	class Scene;
+	class CheckpointText;
 	struct PathRequest;
 	struct LuaPathCallbackContext;
 
@@ -82,6 +83,7 @@ namespace RTE {
 
 		/// Captures this state's random generator for restoration.
 		std::string GetRandomGeneratorCheckpoint() const { return m_RandomGenerator.SerializeCheckpoint(); }
+		CheckpointText CaptureRandomGeneratorCheckpoint() const;
 
 		/// Restores this state's random generator from a checkpoint.
 		bool RestoreRandomGeneratorCheckpoint(std::string_view text) { return m_RandomGenerator.RestoreCheckpoint(text); }
@@ -157,6 +159,7 @@ namespace RTE {
 		/// @param problems Receives what could not be carried; any entry means the capture is not faithful.
 		/// @return Whether the graph carries everything.
 		bool SerializeScriptGraph(std::string& text, std::vector<std::string>& problems);
+		bool CaptureScriptGraph(CheckpointText& text, std::vector<std::string>& problems);
 
 		/// The unique ids of the objects a graph text holds fields for.
 		std::vector<long> ListScriptGraphRoots(const std::string& text);
@@ -341,6 +344,8 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		bool CollectScriptGraph(std::string* serialized, CheckpointText* captured, std::vector<std::string>& problems);
+
 		/// Gets a random integer between minInclusive and maxInclusive.
 		/// @return A random integer between minInclusive and maxInclusive.
 		int SelectRand(int minInclusive, int maxInclusive);
@@ -498,6 +503,12 @@ namespace RTE {
 		/// Returns our threaded script states which movable objects use.
 		/// @return A list of threaded script states.
 		LuaStatesArray& GetThreadedScriptStates();
+
+		/// Makes the next table write in any state mark itself for the checkpoint.
+		void ArmCheckpointWriteTrap();
+
+		/// Tables born in the master state so far. The archive names its tables by this sequence.
+		uint64_t GetTableBirthCount() const;
 
 		/// The save index of a state: 0 for the master state, 1 onwards for the threaded ones, -1 for none.
 		int GetStateIndex(const LuaStateWrapper* state) const;
@@ -681,6 +692,11 @@ namespace RTE {
 		/// Sets whether every state's tick-end collection is a full cycle, as a run that must agree with another run needs, or the incremental step.
 		/// @param deterministic Whether every tick end runs a full collection on every state.
 		static void SetDeterministicCollection(bool deterministic);
+
+		/// Turns LuaJIT's allocation sinking on or off in every captured state. A sunk table is never
+		/// born, so two peers whose traces differ would number their tables differently.
+		static void SetCheckpointAllocationSinking(bool sinking);
+		static bool IsCheckpointAllocationSinking();
 
 		/// Gets whether every state's tick-end collection is a full cycle.
 		/// @return Whether every tick end runs a full collection on every state.

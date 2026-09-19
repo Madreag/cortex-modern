@@ -388,7 +388,8 @@ void ConsoleMan::FeedString(bool feedEmptyString) {
 			if (!line.empty() && line != "\r") {
 				g_LuaMan.GetMasterScriptState().ClearErrors();
 				AppendLogEntry("\n" + line);
-				if (ScenarioRunner::IsLockstepControllerSyncActive()) {
+				// A coordinator that is attached but not yet running still numbers its peers' Lua alike.
+				if (ScenarioRunner::HasLockstepCoordinator()) {
 					AppendLogEntry("\nDISABLED during a multiplayer match -- running console scripts would desync the peers.");
 				} else {
 					g_LuaMan.GetMasterScriptState().RunScriptString(line, false);

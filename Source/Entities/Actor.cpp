@@ -704,7 +704,7 @@ void Actor::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SpecialBehaviour_PainSound", m_PainSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_DeathSound", m_DeathSound);
 	writer.NewPropertyWithValue("SpecialBehaviour_DeviceSwitchSound", m_DeviceSwitchSound);
-	writer.NewPropertyWithValue("SpecialBehaviour_ActorRuntime", base64_encode(m_PersistedActorRuntime.empty() ? SaveActorRuntime() : m_PersistedActorRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_ActorRuntime", CheckpointWriter::Native([&] { return m_PersistedActorRuntime.empty() ? SaveActorRuntime() : m_PersistedActorRuntime; }).Base64(true));
 }
 
 int Actor::Save(Writer& writer) const {
@@ -2038,6 +2038,7 @@ bool Actor::ParticlePenetration(HitData& hd) {
 		if (SceneMan::IsTrackedUID(GetUniqueID())) {
 			SceneMan::TraceTerrainEvent("hdmh", std::bit_cast<int32_t>(m_Health), std::bit_cast<int32_t>(damageToAdd), static_cast<int>(hitor->GetUniqueID()), penetrated ? 1 : 0, static_cast<int>(GetUniqueID()));
 		}
+		TouchCheckpoint();
 		m_Health = std::min(m_Health - (damageToAdd * m_DamageMultiplier), m_MaxHealth);
 	}
 	if ((penetrated || damageToAdd != 0) && m_Perceptiveness > 0 && m_Health > 0) {
@@ -2361,6 +2362,10 @@ void Actor::ApplyPersistedControllerMode() {
 void Actor::Update() {
 	ZoneScoped;
 
+	// The wound, travel and death paths write health and status straight, so the stamp is taken around them.
+	const float checkpointHealth = m_Health;
+	const int checkpointStatus = m_Status;
+
 	/////////////////////////////////
 	// Hit Body update and handling
 	MOSRotating::Update();
@@ -2433,6 +2438,7 @@ void Actor::Update() {
 		if (traced && damage != 0.0F) {
 			SceneMan::TraceTerrainEvent("hdma", std::bit_cast<int32_t>(m_Health), std::bit_cast<int32_t>(damage), static_cast<int>(attachable->GetUniqueID()), 0, static_cast<int>(GetUniqueID()));
 		}
+		if (damage != 0.0F) TouchCheckpoint();
 		m_Health -= damage;
 	}
 	m_Health = std::min(m_Health, m_MaxHealth);
@@ -2568,6 +2574,8 @@ void Actor::Update() {
 	} else {
 		DeactivateHotkeyAction(AUXILIARYHOTKEY);
 	}
+
+	if (m_Health != checkpointHealth || m_Status != checkpointStatus) TouchCheckpoint();
 }
 
 void RTE::Actor::CastSeeRays() {
@@ -2887,7 +2895,8 @@ std::string Actor::SaveActorRuntime() const {
 	archive(m_AIBaseDigStrength, m_BaseMass, m_AIMode, m_WaypointCursor, m_DrawWaypoints, m_MoveTarget, m_PrevPathTarget);
 	archive(m_LastOrderedWaypoint, m_HasOrderedWaypoint, m_LastOrderedWaypointUID);
 	archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
-	archive(m_PersistedActorIconReferences[0].empty() ? CaptureActorIconReference(m_pTeamIcon) : m_PersistedActorIconReferences[0], m_PersistedActorIconReferences[1].empty() ? CaptureActorIconReference(m_pControllerIcon) : m_PersistedActorIconReferences[1]);
+	archive(CheckpointWriter::Native([&] { return m_PersistedActorIconReferences[0].empty() ? CaptureActorIconReference(m_pTeamIcon) : m_PersistedActorIconReferences[0]; }),
+	    CheckpointWriter::Native([&] { return m_PersistedActorIconReferences[1].empty() ? CaptureActorIconReference(m_pControllerIcon) : m_PersistedActorIconReferences[1]; }));
 	return archive.Text();
 }
 

@@ -261,6 +261,7 @@ namespace RTE {
 
 		/// Every Lua state's script graph, by state index; false with the reasons when a state could not be carried faithfully.
 		bool SerializeScriptGraphs(std::vector<std::string>& graphs, std::vector<std::string>& problems) const;
+		bool CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems) const;
 
 		/// The last script graph failure a set-aside recorded, empty when none.
 		const std::string& GetScriptGraphFailure() const { return m_ScriptGraphFailure; }

@@ -179,7 +179,7 @@ std::unique_ptr<GUIInputWrapper> GUIInputWrapper::CreateAutomationInput() {
 
 std::string GUIInputWrapper::SaveCheckpoint() const {
 	CheckpointWriter writer("GUIInputWrapper1");
-	writer(GUIInput::SaveCheckpoint(), m_KeyHoldDuration, *m_KeyTimer, *m_CursorAccelTimer);
+	writer(CheckpointWriter::Native([&] { return GUIInput::SaveCheckpoint(); }), m_KeyHoldDuration, *m_KeyTimer, *m_CursorAccelTimer);
 	return writer.Text();
 }
 

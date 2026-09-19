@@ -3,6 +3,7 @@
 #include "Serializable.h"
 #include "RTEError.h"
 
+#include <cstdint>
 #include <mutex>
 #include <list>
 #include <unordered_set>
@@ -94,6 +95,8 @@ namespace RTE {
 		};
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
+		virtual void TouchCheckpoint() { ++m_CheckpointWriteGeneration; }
+		uint64_t CheckpointWriteGeneration() const { return m_CheckpointWriteGeneration; }
 		SerializableOverrideMethods;
 
 #pragma region ClassInfo
@@ -412,6 +415,7 @@ namespace RTE {
 		std::unordered_set<std::string> m_Groups; //!< List of all tags associated with this. The groups are used to categorize and organize Entities.
 
 		int m_RandomWeight; //!< Random weight used when picking item using PresetMan::GetRandomBuyableOfGroupFromTech. From 0 to 100. 0 means item won't be ever picked.
+		uint64_t m_CheckpointWriteGeneration = 0;
 
 		// Forbidding copying
 		Entity(const Entity& reference) {}

@@ -226,10 +226,7 @@ namespace RTE {
 		/// Sets one of this controller's states.
 		/// @param controlStat Which state to set.
 		/// @param setting Value of the state being set.
-		void SetState(ControlState controlState, bool setting = true) {
-			RTEAssert(controlState >= 0 && controlState < ControlState::CONTROLSTATECOUNT, "Control state out of whack");
-			m_ControlStates[controlState] = setting;
-		};
+		void SetState(ControlState controlState, bool setting = true);
 
 		/// Gets the current mode of input for this Controller.
 		/// @return The InputMode that this controller is currently using.

@@ -65,6 +65,7 @@
 #include "RTETools.h"
 #include "RotatePrimitiveSelfTest.h"
 #include "FloatTextSelfTest.h"
+#include "CheckpointImage.h"
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
@@ -176,6 +177,9 @@ static bool s_recordTickHashes = false;
 static bool s_netDesyncCheck = true;
 static bool s_telemetryBundleOnExit = false;
 static std::string s_menuMpTraceError;
+static bool s_cowCheckpointAutosave = false;
+static std::string s_loadGameName;
+static bool s_loadGameFailed = false;
 static bool s_bitmapSaveSelfTest = false;
 static int s_bitmapSaveSelfTestResult = -1;
 static bool s_cameraNullSceneSelfTest = false;
@@ -715,6 +719,21 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			s_recordTickHashes = true;
 			// Deterministic runs drain async path solves each frame so they can't race the node-cost rewrite.
 			g_SettingsMan.SetForceImmediatePathingRequestCompletion(true);
+		}
+		if (currentArg == "-cow-checkpoint-autosave") {
+			s_cowCheckpointAutosave = true;
+			++i;
+			continue;
+		}
+		if (currentArg == "-load-game") {
+			if (lastArg) {
+				std::cout << "[load-game] usage: -load-game <SaveName>, the name the load menu shows; add -max-ticks N to stop the run after N ticks" << std::endl;
+				++i;
+				continue;
+			}
+			s_loadGameName = argValue[++i];
+			++i;
+			continue;
 		}
 		if (currentArg == "-bitmap-save-selftest") {
 			s_bitmapSaveSelfTest = true;
@@ -4252,6 +4271,24 @@ void RunGameLoop() {
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
 			const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			if (!s_loadGameName.empty() && ScenarioRunner::GetArgs().maxTicks > 0 &&
+			    simTick >= static_cast<uint64_t>(ScenarioRunner::GetArgs().maxTicks)) {
+				System::SetQuit(true);
+			}
+			if (s_cowCheckpointAutosave && g_ActivityMan.ActivityRunning() && simTick == 1) {
+				// The isolation and same-tick rows need a live scene, which the standalone flag has not got.
+				RTE::RunCheckpointSceneRows();
+			}
+			if (s_cowCheckpointAutosave && g_ActivityMan.ActivityRunning() && simTick > 0 && (simTick == 1 || simTick % 60 == 0)) {
+				const bool saved = g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", simTick);
+				const int64_t freezeUs = CheckpointCow::Get().LastFreezeUs();
+				const bool under = saved && freezeUs > 0 && freezeUs < 16700;
+				std::cout << "[cow-checkpoint-selftest] " << (under ? "PASS" : "FAIL")
+				          << " freeze_240_actors_under_one_tick freeze_us=" << freezeUs
+				          << " saved=" << saved
+				          << " (limit < 16700 us / one sim tick; RED today is the ~870 ms sim-thread stall of Scene::CaptureSavedScene plus Lua graph capture)"
+				          << std::endl;
+			}
 			if (simTick == 1 && (s_netMatchServiceE2E || !s_netReplayInPath.empty() || ScenarioRunner::IsActive())) {
 				if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) {
 					std::cout << "[e2e] rules tick=" << simTick << " difficulty=" << activity->GetDifficulty()
@@ -6632,6 +6669,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
 			return RotatePrimitiveSelfTest::Run();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-cow-checkpoint-selftest") {
+			return RTE::RunCheckpointImageSelfTest() ? 0 : 1;
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-float-text-selftest") {
 			return FloatTextSelfTest::Run();
 		}
@@ -7064,7 +7104,16 @@ int main(int argc, char** argv) {
 		} else {
 			// Interactive mode: a stalled lockstep match draws the "waiting for peer" screen.
 			ScenarioRunner::SetLockstepStallOverlayEnabled(true);
-			if (!g_ActivityMan.Initialize()) {
+			bool loadedSavedGame = false;
+			if (!s_loadGameName.empty()) {
+				loadedSavedGame = g_ActivityMan.LoadAndLaunchGame(s_loadGameName);
+				std::cout << "[load-game] " << (loadedSavedGame ? "loaded " : "could not load ") << std::quoted(s_loadGameName) << std::endl;
+				if (!loadedSavedGame) {
+					s_loadGameFailed = true;
+					System::SetQuit(true);
+				}
+			}
+			if (!loadedSavedGame && !g_ActivityMan.Initialize()) {
 				RunMenuLoop();
 			}
 
@@ -7107,6 +7156,9 @@ int main(int argc, char** argv) {
 		}
 	}
 
+	if (s_loadGameFailed) {
+		scenarioExitCode = 1;
+	}
 	return ShutDown(scenarioExitCode);
 }
 

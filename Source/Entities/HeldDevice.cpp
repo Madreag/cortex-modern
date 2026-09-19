@@ -262,7 +262,7 @@ void HeldDevice::SaveSnapshotConfiguration(Writer& writer) const {
 	for (const std::string& preset: pickupableBy) {
 		writer.NewPropertyWithValue("SpecialBehaviour_PickupableByPreset", preset);
 	}
-	writer.NewPropertyWithValue("SpecialBehaviour_HeldDeviceRuntime", base64_encode(m_PersistedHeldDeviceRuntime.empty() ? SaveHeldDeviceRuntime() : m_PersistedHeldDeviceRuntime, true));
+	writer.NewPropertyWithValue("SpecialBehaviour_HeldDeviceRuntime", CheckpointWriter::Native([&] { return m_PersistedHeldDeviceRuntime.empty() ? SaveHeldDeviceRuntime() : m_PersistedHeldDeviceRuntime; }).Base64(true));
 }
 
 int HeldDevice::Save(Writer& writer) const {
