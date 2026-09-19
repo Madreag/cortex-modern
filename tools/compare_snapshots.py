@@ -134,11 +134,11 @@ def graph_references(value):
 def parse_graph(data):
     reader = GraphReader(data)
     version = reader.until()
-    if version not in ("SG1", "SG2", "SG3", "SG4", "SG5"):
+    if version not in ("SG1", "SG2", "SG3", "SG4", "SG5", "SG6"):
         raise ValueError(f"unsupported graph version {version!r}")
     graph = {"version": version}
     serial = None
-    if version == "SG5":
+    if version in ("SG5", "SG6"):
         reader.expect("S")
         serial = reader.integer(minimum=1)
     for tag, label in (("r", "roots"), ("G", "globals"), ("L", "loaded")):
@@ -153,7 +153,7 @@ def parse_graph(data):
     if version != "SG1":
         reader.expect("E")
         graph["patches"] = [tuple(reader.token() for _ in range(3)) for _ in range(reader.count())]
-    if version in ("SG3", "SG4", "SG5"):
+    if version in ("SG3", "SG4", "SG5", "SG6"):
         reader.expect("R")
         graph["rng"] = reader.token()
     if reader.peek() == "X":
@@ -491,7 +491,7 @@ def compare_graphs(first, second, actor_uids=None, cross_process=False):
     b = {key: value for key, value in second.items() if key != "nodes"}
     mapping, _, _ = solve([(a, b, "graph")], [], {}, {}, set())
     report = {"matched_nodes": len(mapping), "local_ai_boundaries": len(cuts[0])}
-    if first.get("version") == "SG5" and second.get("version") == "SG5":
+    if first.get("version") in ("SG5", "SG6") and first.get("version") == second.get("version"):
         report["serial"] = {"a": first["serial"], "b": second["serial"]}
         moved = sorted((left, right) for left, right in mapping.items() if left != right)
         if first["serial"] != second["serial"] or moved:

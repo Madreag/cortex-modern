@@ -1194,8 +1194,13 @@ end
 
 local visit
 
+-- One problem is one line, and the same problem at the same place is one line however often it is hit.
 local function problem(ctx, message)
-	ctx.problems[#ctx.problems + 1] = message .. " at " .. (ctx.location or "graph")
+	local line = message .. " at " .. (ctx.location or "graph")
+	ctx.reported = ctx.reported or {}
+	if ctx.reported[line] then return end
+	ctx.reported[line] = true
+	ctx.problems[#ctx.problems + 1] = line
 end
 
 local function visitAt(value, ctx, location)
@@ -1620,7 +1625,16 @@ serializeGraph = function(roots, rebuildEverything)
 		end
 		local meta = getmetatable(saved.object)
 		if #changes > 0 or not rawequal(meta, saved.meta) then
-			enginePatches[#enginePatches + 1] = pathToken(baseline.paths[saved.object]) .. visitAt(changes, ctx, "engine table changes") .. visit(meta, ctx)
+			-- The pairs go in one by one: the list that holds them is this capture's own scratch,
+			-- born above the base, and only objects the capture found can be named by a number.
+			local where = "engine table " .. (baseline.paths[saved.object] or "?")
+			local pairsOut = {}
+			for _, change in ipairs(changes) do
+				local label = (type(change[1]) == "string" or type(change[1]) == "number" or type(change[1]) == "boolean") and tostring(change[1]) or type(change[1])
+				pairsOut[#pairsOut + 1] = visitAt(change[1], ctx, where) .. visitAt(change[2], ctx, where .. "[" .. label .. "]")
+			end
+			enginePatches[#enginePatches + 1] = pathToken(baseline.paths[saved.object]) .. "c" .. outputNumber(#changes) .. ";" ..
+				concatenate(pairsOut) .. visitAt(meta, ctx, where .. ".metatable")
 		end
 	end
 )lua"
@@ -1653,7 +1667,7 @@ serializeGraph = function(roots, rebuildEverything)
 			end
 		end
 	end
-	local out = { "SG5;", "S", outputNumber(base), ";", "r", #rootIds, ";", concatenate(rootIds), "G", #globals, ";", concatenate(globals), "L", #loaded, ";", concatenate(loaded), "E", #enginePatches, ";", concatenate(enginePatches), "R", rng, "X", #gibReferences, ";", concatenate(gibReferences), "N", ctx.count, ";" }
+	local out = { "SG6;", "S", outputNumber(base), ";", "r", #rootIds, ";", concatenate(rootIds), "G", #globals, ";", concatenate(globals), "L", #loaded, ";", concatenate(loaded), "E", #enginePatches, ";", concatenate(enginePatches), "R", rng, "X", #gibReferences, ";", concatenate(gibReferences), "N", ctx.count, ";" }
 	for _, chunk in ipairs(ctx.chunks) do out[#out + 1] = chunk end
 	for index = tailFirst, #ctx.order do out[#out + 1] = ctx.nodes[ctx.order[index]] end
 	-- What this capture wrote is what the next one reuses; a root it skipped keeps the chunk it had.
@@ -1805,9 +1819,10 @@ end
 local function parse(text)
 	local reader = newReader(text)
 	local version = reader:readUntil(";")
-	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" and version ~= "SG5" then reader:bad("bad header") end
+	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" and version ~= "SG5" and version ~= "SG6" then reader:bad("bad header") end
 	local graph = { roots = {}, globals = {}, loaded = {}, nodes = {}, order = {}, enginePatches = {}, gibReferences = {}, nativeReferences = {}, version = version }
-	if version == "SG5" then
+	local birthNumbered = version == "SG5" or version == "SG6"
+	if birthNumbered then
 		reader:expect("S")
 		graph.serial = reader:integer(reader:readUntil(";"), 1)
 	end
@@ -1827,10 +1842,18 @@ local function parse(text)
 	if version ~= "SG1" then
 		reader:expect("E")
 		for _ = 1, reader:count() do
-			graph.enginePatches[#graph.enginePatches + 1] = { target = reader:typed("path"), changes = reader:readToken(), meta = reader:readToken() }
+			local target = reader:typed("path")
+			if version == "SG6" then
+				reader:expect("c")
+				local pairsIn = {}
+				for _ = 1, reader:count() do pairsIn[#pairsIn + 1] = { reader:readToken(), reader:readToken() } end
+				graph.enginePatches[#graph.enginePatches + 1] = { target = target, pairs = pairsIn, meta = reader:readToken() }
+			else
+				graph.enginePatches[#graph.enginePatches + 1] = { target = target, changes = reader:readToken(), meta = reader:readToken() }
+			end
 		end
 	end
-	if version == "SG3" or version == "SG4" or version == "SG5" then
+	if version == "SG3" or version == "SG4" or birthNumbered then
 		reader:expect("R")
 		graph.rng = reader:readToken()
 		if graph.rng.t ~= "nil" and graph.rng.t ~= "str" then reader:bad("invalid random state") end
@@ -1849,8 +1872,8 @@ local function parse(text)
 	end
 	reader:expect("N")
 	local count = reader:count()
-	-- SG5 names a table by its birth number, so the ids are explicit and have holes; a repeat is still bad.
-	local explicit = version == "SG5"
+	-- SG5 and SG6 name a table by its birth number, so the ids are explicit and have holes; a repeat is still bad.
+	local explicit = birthNumbered
 	local idLimit = explicit and graph.serial or count
 	for expected = 1, count do
 		local kind = reader:peek()
@@ -2461,7 +2484,11 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 	end
 	for _, patch in ipairs(graph.enginePatches) do
 		local object = resolve(patch.target)
-		for _, change in ipairs(resolve(patch.changes)) do rawset(object, change[1], change[2]) end
+		if patch.pairs then
+			for _, change in ipairs(patch.pairs) do rawset(object, resolve(change[1]), resolve(change[2])) end
+		else
+			for _, change in ipairs(resolve(patch.changes)) do rawset(object, change[1], change[2]) end
+		end
 		setmetatable(object, resolve(patch.meta))
 	end
 	local roots = {}
@@ -2486,8 +2513,8 @@ end
 function Graph.roots(text)
 	local reader = newReader(text)
 	local version = reader:readUntil(";")
-	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" and version ~= "SG5" then error("script graph: bad header") end
-	if version == "SG5" then
+	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" and version ~= "SG5" and version ~= "SG6" then error("script graph: bad header") end
+	if version == "SG5" or version == "SG6" then
 		reader:expect("S")
 		reader:readUntil(";")
 	end
@@ -3168,14 +3195,14 @@ do
 	local birthRoot = { tag = "f76", nested = { 1, 2 } }
 	local birthOne, birthProblemsOne = _ScriptGraph.serialize({ ["1"] = birthRoot })
 	local birthTwo, birthProblemsTwo = _ScriptGraph.serialize({ ["1"] = birthRoot })
-	check("sg5_capture_repeats_byte_for_byte", birthOne == birthTwo and string.sub(birthOne, 1, 4) == "SG5;" and #birthProblemsOne == 0 and #birthProblemsTwo == 0, table.concat(birthProblemsOne, " | ") .. table.concat(birthProblemsTwo, " | "))
-	local birthSerial = tonumber(string.match(birthOne, "^SG5;S(%d+);"))
+	check("sg5_capture_repeats_byte_for_byte", birthOne == birthTwo and string.sub(birthOne, 1, 4) == "SG6;" and #birthProblemsOne == 0 and #birthProblemsTwo == 0, table.concat(birthProblemsOne, " | ") .. table.concat(birthProblemsTwo, " | "))
+	local birthSerial = tonumber(string.match(birthOne, "^SG6;S(%d+);"))
 	local birthId = tonumber(string.match(birthOne, "X%d+;N%d+;T(%d+);"))
 	check("sg5_header_carries_the_state_counter", birthSerial ~= nil and birthId ~= nil and birthId <= birthSerial, tostring(birthSerial) .. " " .. tostring(birthId))
 	-- A table born elsewhere moves the counter and leaves every name already given alone.
 	local birthSpare = { 1 }
 	local birthThree = _ScriptGraph.serialize({ ["1"] = birthRoot })
-	local serialThree = tonumber(string.match(birthThree, "^SG5;S(%d+);"))
+	local serialThree = tonumber(string.match(birthThree, "^SG6;S(%d+);"))
 	local idThree = tonumber(string.match(birthThree, "X%d+;N%d+;T(%d+);"))
 	check("sg5_name_survives_a_later_table", birthSpare[1] == 1 and serialThree ~= nil and birthSerial ~= nil and serialThree > birthSerial and idThree == birthId, tostring(serialThree) .. " " .. tostring(idThree))
 	-- The ids are explicit now: a hole is a fact of the graph, a repeat is corruption.
@@ -3240,6 +3267,14 @@ do
 	check("negative_nameless_native_function_fails", #p2 > 0, table.concat(p2, " | "))
 	local _, p3 = _ScriptGraph.serialize({ ["1"] = { bad = debug.upvalueid(a.step, 1) } })
 	check("negative_light_userdata_fails", #p3 > 0, table.concat(p3, " | "))
+	-- A refusal is one line with its path once, and the same refusal at the same place is one line.
+	local pathOnce, seenProblem = #p3 > 0, {}
+	for _, line in ipairs(p3) do
+		local _, ats = string.gsub(line, " at ", "")
+		if ats ~= 1 or seenProblem[line] then pathOnce = false end
+		seenProblem[line] = true
+	end
+	check("problem_names_its_path_once", pathOnce, table.concat(p3, " | "))
 	local _, p4 = _ScriptGraph.deserialize("SG1;r1;s1:1#1;G0;L0;N1;T1;P-;Mz;k1;s3:bade99999999:s6:AHuman")
 	check("negative_missing_entity_fails_restore", #p4 > 0, table.concat(p4, " | "))
 end
@@ -8051,11 +8086,16 @@ _PrimitiveQueueCapture = nil
 		    "_AddedLibraryKeyProbe = type(rawget(string, 'f69probe')) == 'function' and string.f69probe() == 69");
 		const bool clearKept = readFlag("_AddedLibraryKeyClear");
 		const bool probeKept = readFlag("_AddedLibraryKeyProbe");
-		addedLibraryKeyReinstates = staged && settled && clearKept && probeKept && graphsEqual;
+		// A library table a mod added a key to is an engine patch: the capture has to carry it with
+		// no refusal, and no two refusals may be the same line.
+		const std::set<std::string> distinctProblems(graphProblems.begin(), graphProblems.end());
+		addedLibraryKeyReinstates = staged && settled && clearKept && probeKept && graphsEqual &&
+		                            graphProblems.empty() && distinctProblems.size() == graphProblems.size();
 		std::ostringstream detail;
 		detail << "staged=" << staged << " settled=" << settled << " graphs_equal=" << graphsEqual
 		       << " table.clear=" << (clearKept ? "kept" : "missing") << " string.f69probe=" << (probeKept ? "kept" : "missing")
-		       << " graph_problems=" << graphProblems.size();
+		       << " graph_problems=" << graphProblems.size() << " distinct=" << distinctProblems.size()
+		       << (graphProblems.empty() ? "" : " first=" + graphProblems.front());
 		addedLibraryKeyDetail = detail.str();
 		// The keys are this arm's own, so the libraries reach whatever runs next as it found them.
 		RunScriptString(
