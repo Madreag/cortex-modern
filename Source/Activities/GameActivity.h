@@ -397,6 +397,9 @@ namespace RTE {
 			return CreateDelivery(player, Actor::AIMODE_SENTRY, point, NULL);
 		};
 
+		/// Whether an order costs more than the seat's own readout shows, which is what the buy GUI prints.
+		bool OrderExceedsSeatFunds(int player, int team, float cost) const { return cost > GetTeamFundsForPresentation(team, player); }
+
 		/// One committed purchase: everything QueuePurchaseDelivery needs to build and queue the delivery.
 		struct PurchaseOrder {
 		friend struct ContractAudit;
