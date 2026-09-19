@@ -1128,6 +1128,8 @@ static std::string ResyncSaveName() {
 		m_SeatPresence.Clear();
 		ResetRosterTransitionHistory();
 		m_ModerationSeats.clear();
+		m_LobbyModerationSignature = 0;
+		m_LobbyModerationPublished = false;
 		// An action queued for a setup worker that is gone belongs to no session and is dropped here.
 		m_PendingModeration.clear();
 		m_AdmissionAttached = false;
@@ -2513,6 +2515,41 @@ static std::string ResyncSaveName() {
 				RecordRosterTransitions(snapshot->observedAtMs);
 			}
 		}
+	}
+
+	void NetMatchService::PublishLobbyModerationViewLocked() {
+		if (!m_IsHost || !m_AdmissionAttached || m_State != NetMatchServiceState::Starting) {
+			return;
+		}
+		uint64_t signature = m_ReconnectHost.GetModerationSignature();
+		for (const NetLobbyMember& member: m_LobbySnapshot.members) {
+			signature = signature * 1099511628211ULL + member.peerId;
+			for (const char letter: member.displayName) {
+				signature = (signature ^ static_cast<uint8_t>(letter)) * 1099511628211ULL;
+			}
+		}
+		if (m_LobbyModerationPublished && signature == m_LobbyModerationSignature) {
+			return;
+		}
+		auto seats = m_ReconnectHost.GetModerationView();
+		std::erase_if(seats, [](const NetH4ModerationSeat& seat) { return seat.cpu || seat.lockstepPeerId == 0; });
+		for (auto& seat: seats) {
+			for (const NetLobbyMember& member: m_LobbySnapshot.members) {
+				if (member.peerId == seat.lockstepPeerId) { seat.displayName = member.displayName; break; }
+			}
+			if (!seat.substituteName.empty()) seat.displayName = seat.substituteName;
+			if (seat.displayName.empty()) {
+				for (const auto& previous: m_ModerationSeats) {
+					if (previous.stableSeat == seat.stableSeat && previous.epoch == seat.epoch) { seat.displayName = previous.displayName; break; }
+				}
+			}
+			// Frames are the coordinator's and there is no coordinator before the match: the lobby row
+			// carries the plane's own milliseconds and leaves the frame countdown at zero.
+			seat.holdFramesRemaining = 0;
+		}
+		m_ModerationSeats = std::move(seats);
+		m_LobbyModerationSignature = signature;
+		m_LobbyModerationPublished = true;
 	}
 
 	void NetMatchService::AttachCoordinatorSessionSink() {
@@ -3972,6 +4009,9 @@ static std::string ResyncSaveName() {
 				}
 				m_ChatSession->SetChatTeams(std::move(chatTeams));
 			}
+			// The host's seat panel moderates from the admission rows, and the lobby is where it most
+			// needs them; they are named from the roster that has just been published.
+			PublishLobbyModerationViewLocked();
 		};
 
 		// One clock from here on: setup, play, stalls and every resync read the same elapsed time.
@@ -4053,8 +4093,15 @@ static std::string ResyncSaveName() {
 				m_Coordinator = std::move(coordinator);
 				m_Runner = std::move(runner);
 				m_State = NetMatchServiceState::Failed;
-				m_StatusText = (m_Session && m_Session->HasReject() && m_Session->GetRejectSummary() == "Match roster refused")
-					? "Match roster refused" : "Network setup failed";
+				// A host removal is not a network fault, and the lobby that vanished has to say so.
+				const bool removed = m_Session && m_Session->HasReject() &&
+				                     m_Session->GetRejectReason() == NetRejectReason::ParticipantRemoved;
+				const bool banned = m_Session && m_Session->HasReject() &&
+				                    m_Session->GetRejectReason() == NetRejectReason::ParticipantBanned;
+				m_StatusText = removed ? "The host removed you from this session"
+					: banned ? "The host banned you from this session"
+					: (m_Session && m_Session->HasReject() && m_Session->GetRejectSummary() == "Match roster refused")
+						? "Match roster refused" : "Network setup failed";
 				m_ErrorText = error;
 				// §9b: a live match is the one refusal a joiner can answer, by applying for a seat.
 				m_JoinRefusedByLiveMatch = !request.host && m_Session && m_Session->HasReject() &&
@@ -4222,7 +4269,13 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::AttachHostPump(NetMatchRunnerConfig& config) {
-		config.pumpHost = [this](NetSession& session) { DrainPendingModeration(session); };
+		config.pumpHost = [this](NetSession& session) {
+			DrainPendingModeration(session);
+			// The panel's rows come from here while the worker owns the plane: after the drain, so a
+			// removed seat has stopped being a row the host can act on by the time the result is read.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			PublishLobbyModerationViewLocked();
+		};
 	}
 
 	void NetMatchService::DrainPendingModeration(NetSession& session) {

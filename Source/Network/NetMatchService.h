@@ -662,6 +662,7 @@ namespace RTE {
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestServiceKick(std::string* error);
 		friend bool TestStartingKickMarshals(std::string* error);
+		friend bool TestLobbyModerationRows(std::string* error);
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
@@ -831,6 +832,11 @@ namespace RTE {
 		void DriveAutoSubstitution(uint64_t nowMs);
 		/// Called with the service lock on the game thread, when it owns the admission plane.
 		void PublishModerationView();
+		/// The lobby's moderation rows, built on the setup worker under the service lock. Same seats the
+		/// running view publishes, without the coordinator's frames - there is no coordinator yet.
+		void PublishLobbyModerationViewLocked();
+		uint64_t m_LobbyModerationSignature = 0; //!< The plane stamp the published lobby rows were built from.
+		bool m_LobbyModerationPublished = false;
 
 		static bool s_AdmissionEnabled;
 		static std::string s_TicketStorePath;
