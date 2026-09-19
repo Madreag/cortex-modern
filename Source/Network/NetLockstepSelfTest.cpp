@@ -14227,6 +14227,7 @@ namespace RTE {
 			Normal,
 			DelayedAnswer,
 			StaleAnswer,
+			AddressFallback,
 			ZeroStart
 		};
 
@@ -14238,6 +14239,7 @@ namespace RTE {
 			bool staleAnswer = false;
 			std::set<uint8_t> successors;
 			std::vector<uint16_t> contactedPorts;
+			std::vector<std::string> contactedAddresses;
 		};
 
 		class ScheduledMigrationTransport : public LoopbackTransport {
@@ -14245,6 +14247,11 @@ namespace RTE {
 			explicit ScheduledMigrationTransport(std::shared_ptr<MigrationWireSchedule> schedule) : m_Schedule(std::move(schedule)) {}
 			bool Connect(const std::string& address, uint16_t port, std::string* error = nullptr) override {
 				m_Schedule->contactedPorts.push_back(port);
+				m_Schedule->contactedAddresses.push_back(address);
+				if (address == "unreachable") {
+					if (error) *error = "fixture endpoint unreachable";
+					return false;
+				}
 				return LoopbackTransport::Connect(address, port, error);
 			}
 			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
@@ -14445,6 +14452,7 @@ namespace RTE {
 				const bool delayedAnswer = scenario == MigrationCase::DelayedAnswer;
 				const bool zeroStart = scenario == MigrationCase::ZeroStart;
 				const bool staleAnswer = scenario == MigrationCase::StaleAnswer;
+				const bool addressFallback = scenario == MigrationCase::AddressFallback;
 				const auto schedule = std::make_shared<MigrationWireSchedule>();
 				schedule->staleAnswer = staleAnswer;
 				using Match = decltype(probe.matchConfig);
@@ -14454,8 +14462,10 @@ namespace RTE {
 				match.peerCount = 3;
 				match.players.push_back({3, 2, false, "Successor"});
 				match.successorOrder = {3, 2};
-				for (uint8_t peer = 1; peer <= 3; ++peer)
-					match.migrationPeers.push_back({peer, static_cast<uint16_t>(port + peer), {"loopback"}});
+				for (uint8_t peer = 1; peer <= 3; ++peer) {
+					const std::vector<std::string> addresses = addressFallback ? std::vector<std::string>{"unreachable", "loopback"} : std::vector<std::string>{"loopback"};
+					match.migrationPeers.push_back({peer, static_cast<uint16_t>(port + peer), addresses});
+				}
 				MigrationRelayTransport hostWire;
 				LoopbackTransport aWire, bWire, restoredHostWire, restoredClientWire;
 				if (!hostWire.StartHost(port, error) || !aWire.Connect("loopback", port, error) || !bWire.Connect("loopback", port, error))
@@ -14473,7 +14483,7 @@ namespace RTE {
 					config.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
 					config.migrationKey.fill(0x39);
 					config.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
-					if (delayedAnswer || staleAnswer || skipSuccessor) {
+					if (delayedAnswer || staleAnswer || skipSuccessor || addressFallback) {
 						config.migrationTransportFactory = [schedule] { return std::make_unique<ScheduledMigrationTransport>(schedule); };
 					}
 					return config;
@@ -14594,6 +14604,12 @@ namespace RTE {
 					*error = "host loss did not complete roll-call and forward recovery: " + a.BuildReportJson() + " / " + b.BuildReportJson();
 					return false;
 				}
+				if (addressFallback) {
+					if (schedule->contactedAddresses.size() < 2 || schedule->contactedAddresses[0] != "unreachable" || schedule->contactedAddresses[1] != "loopback" || a.GetMigrationAddress() != "loopback") {
+						*error = "migration addresses=" + nlohmann::json(schedule->contactedAddresses).dump() + " connected=" + a.GetMigrationAddress();
+						return false;
+					}
+				}
 				if (delayedAnswer) {
 					if (schedule->delayedAnswers == 0 || schedule->successors != std::set<uint8_t>{3} || a.GetHostPeerId() != 3 || b.GetHostPeerId() != 3 ||
 					    a.GetMigrationResult().boundary != 4 || b.GetMigrationResult().boundary != 4 || !b.GetConfig().relayToOtherPeers || a.GetConfig().relayToOtherPeers ||
@@ -14705,7 +14721,7 @@ namespace RTE {
 						return false;
 					}
 				}
-				if (delayedAnswer || staleAnswer) {
+				if (delayedAnswer || staleAnswer || addressFallback) {
 					std::cout << "[host-migration-selftest] PASS: successor=3 case=" << static_cast<int>(scenario) << " hashes=60" << std::endl;
 					return true;
 				}
@@ -14788,7 +14804,7 @@ namespace RTE {
 		}
 		if (!migrationsPassed)
 			return fail("host migration detecting rows failed");
-		for (MigrationCase scenario: {MigrationCase::DelayedAnswer, MigrationCase::StaleAnswer, MigrationCase::ZeroStart}) {
+		for (MigrationCase scenario: {MigrationCase::DelayedAnswer, MigrationCase::StaleAnswer, MigrationCase::AddressFallback, MigrationCase::ZeroStart}) {
 			if (!TestHostMigrationRecovery<NetLockstepConfig, NetLockstepCoordinator, NetLobbySessionConfig>(false, false, &error, scenario)) {
 				return fail("migration case=" + std::to_string(static_cast<int>(scenario)) + " " + error);
 			}

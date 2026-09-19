@@ -721,6 +721,8 @@ namespace RTE {
 		bool IsMigrationCatchUp() const { return IsMigrating() && GetResumeFrame() <= m_MigrationBoundary; }
 		NetHostMigrationPhase GetMigrationPhase() const { return m_MigrationPhase; }
 		const NetHostMigrationResult& GetMigrationResult() const { return m_MigrationResult; }
+		const std::string& GetMigrationAddress() const { return m_MigrationAddress; }
+		static bool ConnectMigrationEndpoint(INetTransport& transport, const NetMatchMigrationPeer& peer, size_t& nextAddress, std::string& connectedAddress, std::string* error = nullptr);
 		bool NeedsMigrationSnapshot() const { return m_MigrationResult.snapshotProviderPeerId != 0 && m_Config.localPeerId == GetHostPeerId(); }
 		std::unique_ptr<INetTransport> TakeMigrationTransport() { return std::move(m_MigrationTransport); }
 		bool TakeMigrationNotice() { return std::exchange(m_MigrationNotice, false); }
@@ -843,7 +845,16 @@ namespace RTE {
 		NetHostMigrationPhase m_MigrationPhase = NetHostMigrationPhase::None;
 		std::unique_ptr<INetTransport> m_MigrationTransport;
 		std::unique_ptr<INetTransport> m_MigrationListener;
-		std::map<uint8_t, std::unique_ptr<INetTransport>> m_MigrationProbes;
+		struct MigrationProbe {
+			std::unique_ptr<INetTransport> transport;
+			size_t nextAddress = 0;
+			uint64_t lastDialMs = 0;
+			std::string address;
+			bool answered = false;
+		};
+		std::map<uint8_t, MigrationProbe> m_MigrationProbes;
+		size_t m_MigrationNextAddress = 0;
+		std::string m_MigrationAddress;
 		uint64_t m_MigrationGeneration = 0;
 		uint64_t m_MigrationWireRound = 0;
 		uint64_t m_MigrationSinceMs = 0;

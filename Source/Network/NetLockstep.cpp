@@ -2894,6 +2894,8 @@ namespace RTE {
 		m_MigrationBoundary = 0;
 		m_MigrationCandidateIndex = 0;
 		m_MigrationSuccessor = 0;
+		m_MigrationNextAddress = 0;
+		m_MigrationAddress.clear();
 		m_MigrationDonor = 0;
 		m_MigrationHostTransport = c_InvalidNetPeerId;
 		m_MigrationAnswers.clear();
@@ -2929,6 +2931,17 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetLockstepCoordinator::ConnectMigrationEndpoint(INetTransport& transport, const NetMatchMigrationPeer& peer, size_t& nextAddress, std::string& connectedAddress, std::string* error) {
+		while (nextAddress < peer.listenAddrs.size()) {
+			const std::string& address = peer.listenAddrs[nextAddress++];
+			if (transport.Connect(address, peer.listenPort, error)) {
+				connectedAddress = address;
+				return true;
+			}
+		}
+		return false;
+	}
+
 	bool NetLockstepCoordinator::ContactMigrationSuccessor(uint64_t nowMs) {
 		const auto& order = m_Config.matchConfig.successorOrder;
 		while (m_MigrationCandidateIndex < order.size() && (order[m_MigrationCandidateIndex] == GetHostPeerId() || IsPeerGoneAtFrame(order[m_MigrationCandidateIndex], GetResumeFrame())))
@@ -2939,6 +2952,7 @@ namespace RTE {
 		}
 		if (m_MigrationSuccessor != order[m_MigrationCandidateIndex]) {
 			m_MigrationAuthoritySeen = false;
+			m_MigrationNextAddress = 0;
 		}
 		m_MigrationSuccessor = order[m_MigrationCandidateIndex];
 		const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == m_MigrationSuccessor; });
@@ -2964,7 +2978,10 @@ namespace RTE {
 		std::string error;
 		const bool hosting = m_MigrationSuccessor == m_Config.localPeerId;
 		m_MigrationTransport = hosting ? std::move(m_MigrationListener) : m_Config.migrationTransportFactory();
-		const bool opened = m_MigrationTransport && (hosting || m_MigrationTransport->Connect(endpoint->listenAddrs.front(), endpoint->listenPort, &error));
+		if (m_MigrationNextAddress == endpoint->listenAddrs.size()) {
+			m_MigrationNextAddress = 0;
+		}
+		const bool opened = m_MigrationTransport && (hosting || ConnectMigrationEndpoint(*m_MigrationTransport, *endpoint, m_MigrationNextAddress, m_MigrationAddress, &error));
 		if (!opened && hosting) {
 			FailHostMigration("successor listen failed: " + error);
 			return false;
@@ -2980,9 +2997,12 @@ namespace RTE {
 			for (const auto& peer: m_Config.matchConfig.migrationPeers) {
 				if (peer.peerId == m_Config.localPeerId || peer.peerId == GetHostPeerId() || IsPeerGoneAtFrame(peer.peerId, GetResumeFrame()))
 					continue;
-				auto probe = m_Config.migrationTransportFactory();
-				if (probe && probe->Connect(peer.listenAddrs.front(), peer.listenPort))
+				MigrationProbe probe;
+				probe.transport = m_Config.migrationTransportFactory();
+				probe.lastDialMs = nowMs;
+				if (probe.transport && ConnectMigrationEndpoint(*probe.transport, peer, probe.nextAddress, probe.address)) {
 					m_MigrationProbes[peer.peerId] = std::move(probe);
+				}
 			}
 		if (hosting)
 			m_MigrationAnswers[m_Config.localPeerId] = MigrationMessage(NetHostMigrationMessageType::Answer);
@@ -3018,9 +3038,16 @@ namespace RTE {
 		NetTransportEvent redirect;
 		uint8_t redirectPeer = 0;
 		NetHostMigrationMessage redirectMessage;
-		for (auto& [peer, probe]: m_MigrationProbes) {
+		for (auto& [peer, dial]: m_MigrationProbes) {
+			auto& probe = dial.transport;
 			if (!probe)
 				continue;
+			const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& entry) { return entry.peerId == peer; });
+			if (!dial.answered && endpoint != m_Config.matchConfig.migrationPeers.end() && dial.nextAddress < endpoint->listenAddrs.size() && nowMs >= dial.lastDialMs + 250) {
+				probe->Stop();
+				(void)ConnectMigrationEndpoint(*probe, *endpoint, dial.nextAddress, dial.address);
+				dial.lastDialMs = nowMs;
+			}
 			for (const auto& event: probe->PollEvents()) {
 				if (event.type == NetTransportEventType::PeerConnected) {
 					std::vector<uint8_t> bytes;
@@ -3030,6 +3057,7 @@ namespace RTE {
 				NetHostMigrationMessage answer;
 				if (!authenticated(event, answer) || answer.senderPeerId != peer)
 					continue;
+				dial.answered = true;
 				if (answer.type == NetHostMigrationMessageType::Rejoin && answer.successorPeerId == peer && answer.generation >= m_MigrationGeneration) {
 					redirectPeer = peer;
 					redirect = event;
@@ -3043,7 +3071,8 @@ namespace RTE {
 			}
 		}
 		if (redirectPeer != 0) {
-			m_MigrationTransport = std::move(m_MigrationProbes.at(redirectPeer));
+			m_MigrationAddress = m_MigrationProbes.at(redirectPeer).address;
+			m_MigrationTransport = std::move(m_MigrationProbes.at(redirectPeer).transport);
 			m_MigrationProbes.clear();
 			m_MigrationOutbox.clear();
 			m_MigrationFrameQueue.clear();
@@ -3373,7 +3402,10 @@ namespace RTE {
 					PublishMigrationPlan(nowMs);
 				}
 			} else if (expired && !m_MigrationAuthoritySeen) {
-				++m_MigrationCandidateIndex;
+				const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == m_MigrationSuccessor; });
+				if (endpoint == m_Config.matchConfig.migrationPeers.end() || m_MigrationNextAddress >= endpoint->listenAddrs.size()) {
+					++m_MigrationCandidateIndex;
+				}
 				m_MigrationTransport.reset();
 				(void)ContactMigrationSuccessor(nowMs);
 			} else if (!hosting && nowMs >= m_MigrationLastSendMs + 250 && m_MigrationHostTransport != c_InvalidNetPeerId) {
