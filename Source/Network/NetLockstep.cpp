@@ -3519,6 +3519,13 @@ namespace RTE {
 			} else {
 				++m_Stats.duplicateFrames;
 				++peerStats.duplicateFrames;
+			// A member admitted mid-round reads the window copies of the ticks before its own start.
+			// They are ticks it never owed, not a broken build; only a sender's own new tick can be one.
+			if (windowCopy) {
+				++m_Stats.windowCopiesSkipped;
+				++peerStats.windowCopiesSkipped;
+			return;
+			}
 			}
 			return;
 		}
