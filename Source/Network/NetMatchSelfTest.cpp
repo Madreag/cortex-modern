@@ -5407,6 +5407,107 @@ namespace RTE {
 		}
 	}
 
+	bool TestServiceWorldJoinAdoptsConfig(std::string* error) {
+		for (const bool wrongStartHash : {false, true}) {
+			NetMatchService service;
+			NetMatchServiceRequest hostRequest, clientRequest;
+			hostRequest.host = true;
+			hostRequest.dedicated = true;
+			hostRequest.persistentWorld = true;
+			hostRequest.activityPreset = "Persistent World";
+			hostRequest.worldId = "01234567-89ab-cdef-0123-456789abcdef";
+			hostRequest.worldBoot = 3;
+			hostRequest.humans = 1;
+			hostRequest.worldTeamCapacity = std::array<uint8_t, 4>{1, 0, 0, 0};
+			hostRequest.inputDelayFrames = 3;
+			hostRequest.autosaveSeconds = 1;
+			hostRequest.frameRedundancyTicks = 2;
+			hostRequest.playerName = "Host";
+			hostRequest.port = wrongStartHash ? 43392 : 43391;
+			clientRequest.port = hostRequest.port;
+			clientRequest.activityPreset = "P4 Alpha Duel";
+			clientRequest.playerName = "Client";
+			NetMatchConfig world, placeholder;
+			if (!NetMatchService::BuildMatchConfig(hostRequest, 42, world, error) ||
+			    !NetMatchService::BuildMatchConfig(clientRequest, 42, placeholder, error)) return false;
+			NetIdentityBuildOptions hostOptions, clientOptions;
+			NetIdentity::StampOptionsForTarget(hostOptions, true);
+			NetIdentity::StampOptionsForTarget(clientOptions, false);
+			NetIdentityManifest hostIdentity, clientIdentity;
+			if (!NetIdentity::CaptureManifestInputs(hostIdentity, error, hostOptions) ||
+			    !NetIdentity::CaptureManifestInputs(clientIdentity, error, clientOptions)) return false;
+			for (NetIdentityManifest* identity : {&hostIdentity, &clientIdentity}) {
+				identity->deterministicConfigHash = NetIdentity::HashDeterministicConfig(identity->deterministicConfig);
+				identity->sessionIdentityHash = NetIdentity::HashSessionIdentity(*identity);
+			}
+			LoopbackTransport hostTransport, clientTransport;
+			NetSession hostSession, clientSession;
+			if (!hostSession.StartHost(hostTransport, service.BuildSessionConfig(hostIdentity, hostRequest, world), error) ||
+			    !clientSession.StartClient(clientTransport, "loopback", service.BuildSessionConfig(clientIdentity, clientRequest, placeholder), error)) return false;
+			for (uint64_t now = 0; now <= 1000 && hostSession.GetReadyPeerCount() != 1; now += 10) {
+				hostSession.Tick(now);
+				clientSession.Tick(now);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+			}
+			if (hostSession.GetReadyPeerCount() != 1 || !clientSession.IsReady()) {
+				*error = "a default service joiner failed world admission: " + clientSession.BuildRejectText();
+				return false;
+			}
+			NetLobbySession hostLobby, clientLobby;
+			NetLobbySessionConfig hostConfig, clientConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remotePeerId = 2;
+			hostConfig.remoteTransportPeerId = hostSession.GetReadyPeers().front().transportPeerId;
+			hostConfig.matchConfig = world;
+			hostConfig.autoStart = false;
+			hostConfig.startFrame = 77;
+			hostConfig.session = &hostSession;
+			clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientSession.GetRemoteTransportPeerId();
+			clientConfig.matchConfig = placeholder;
+			clientConfig.session = &clientSession;
+			if (!hostLobby.Start(hostTransport, hostConfig, error) || !clientLobby.Start(clientTransport, clientConfig, error)) return false;
+			for (uint64_t now = 0; now <= 1000 && !hostLobby.IsConfigAcked(2); now += 10) {
+				hostLobby.Tick(now);
+				clientLobby.Tick(now);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+			}
+			if (!hostLobby.IsConfigAcked(2) || clientLobby.GetMatchConfig() != world ||
+			    clientLobby.GetMatchConfigHash() != NetMatchConfigUtil::HashConfig(world)) {
+				*error = "a default service joiner did not adopt the world's complete lobby config";
+				return false;
+			}
+			if (wrongStartHash) {
+				NetLobbyStart start;
+				start.sessionId = world.sessionId;
+				start.startFrame = 77;
+				start.inputDelayFrames = world.inputDelayFrames;
+				start.matchConfigHash = NetMatchConfigUtil::HashConfig(placeholder);
+				std::vector<uint8_t> bytes;
+				if (!NetLobbyProtocol::Encode({start}, bytes) ||
+				    !hostTransport.Send(hostConfig.remoteTransportPeerId, NetTransportLane::ControlReliable, bytes, error)) return false;
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+				clientLobby.Tick(1010);
+				if (!clientLobby.IsRejected() || clientLobby.GetFailureReason() != "lobby start does not match accepted config") {
+					*error = "a world joiner accepted a start carrying its old placeholder config hash";
+					return false;
+				}
+			} else {
+				hostLobby.RequestStart();
+				if (!DriveLobbyPair(hostTransport, clientTransport, hostLobby, clientLobby, error, 1010)) return false;
+			}
+		}
+		std::cout << "[net-match-selftest] PASS default joiner adopts world config and refuses a different lobby hash" << std::endl;
+		return true;
+	}
+
 	bool TestResumePreparesTheAgreedLobby(std::string* error) {
 		if (!GetNetAuthCrypto().IsRealCrypto()) {
 			std::cout << "[net-match-selftest] resume preparation skipped: no real crypto in this build" << std::endl;
@@ -9790,15 +9891,13 @@ namespace RTE {
 		return true;
 	}
 
-	// A rematch lobby only one peer came back to is destroyed when its wait runs out: the kept lease
-	// is deleted once and never beaten again. A lobby seated in time keeps playing.
-	// The diagnostics worker completes an identity the game thread captured. A persistent-world match's
-	// hashes must name the world versions there too: they are stamped into every checkpoint it writes.
+	// Diagnostic target layouts differ; admission capabilities stay the same across presets.
 	bool TestCapturedWorldIdentityKeepsTheWorldStamp(std::string* error) {
 		struct Observed {
 			uint16_t capturedLockstep = 0;
 			uint16_t capturedMatchConfig = 0;
 			uint16_t completedLockstep = 0;
+			nlohmann::json supported;
 			std::string configHash;
 		};
 		const auto run = [](bool world, Observed& observed, std::string& failure) {
@@ -9829,6 +9928,10 @@ namespace RTE {
 				return;
 			}
 			observed.completedLockstep = identity["deterministic_config"].value("lockstep_codec_version", 0);
+			for (const char* key : {"supported_lockstep_codec_version", "supported_world_lockstep_codec_version",
+			                        "supported_match_config_version", "supported_world_match_config_version"}) {
+				observed.supported[key] = identity["deterministic_config"].value(key, 0);
+			}
 			observed.configHash = service.m_AutosaveIdentity.deterministicConfigHash;
 		};
 		Observed ordinary, persistent;
@@ -9848,7 +9951,11 @@ namespace RTE {
 		if (persistent.capturedLockstep != NetLockstepCodec::c_WorldTransitionVersion ||
 		    persistent.capturedMatchConfig != NetMatchConfigUtil::c_PersistentWorldVersion ||
 		    persistent.completedLockstep != NetLockstepCodec::c_WorldTransitionVersion ||
-		    persistent.configHash.empty() || persistent.configHash == ordinary.configHash) {
+		    ordinary.capturedLockstep != NetLockstepCodec::c_Version || ordinary.capturedMatchConfig != NetMatchConfigUtil::c_Version ||
+		    persistent.supported != ordinary.supported || persistent.supported != nlohmann::json{
+		        {"supported_lockstep_codec_version", 22}, {"supported_world_lockstep_codec_version", 23},
+		        {"supported_match_config_version", 4}, {"supported_world_match_config_version", 5}} ||
+		    persistent.configHash.empty() || persistent.configHash != ordinary.configHash) {
 			if (error) *error = "captured world identity: world=" + seen(persistent) + " ordinary=" + seen(ordinary);
 			return false;
 		}
@@ -10933,6 +11040,7 @@ namespace RTE {
 		if (!TestCompletedLobbyIsNotARecovery(&error)) return fail(error);
 		if (!TestCompletedLobbyExpires(&error)) return fail(error);
 		if (!TestCapturedWorldIdentityKeepsTheWorldStamp(&error)) return fail(error);
+		if (!TestServiceWorldJoinAdoptsConfig(&error)) return fail(error);
 		if (!twoIceRoundsError.empty()) return fail(twoIceRoundsError);
 		if (!stopCancelError.empty()) return fail(stopCancelError);
 		if (!endedAdmissionError.empty()) return fail(endedAdmissionError);

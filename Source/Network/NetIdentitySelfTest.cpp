@@ -319,7 +319,7 @@ namespace RTE {
 			four.pathfinderGridNodeSize = 20;
 			four.recommendedMoidCount = 240;
 			four.selectedModule = "Base.rte";
-			four.lockstepCodecVersion = 1;
+			four.supportedLockstepCodecVersion = 1;
 			four.numLuaStates = 4;
 			four.numLuaStatesOverride = 4;
 
@@ -358,7 +358,11 @@ namespace RTE {
 				*error = "deterministic_config_hash stopped reacting to ai_update_interval";
 				return false;
 			}
-			for (auto member : {&NetIdentityDeterministicConfig::matchConfigVersion, &NetIdentityDeterministicConfig::lobbyProtocolVersion}) {
+			for (auto member : {&NetIdentityDeterministicConfig::supportedLockstepCodecVersion,
+			                   &NetIdentityDeterministicConfig::supportedWorldLockstepCodecVersion,
+			                   &NetIdentityDeterministicConfig::supportedMatchConfigVersion,
+			                   &NetIdentityDeterministicConfig::supportedWorldMatchConfigVersion,
+			                   &NetIdentityDeterministicConfig::lobbyProtocolVersion}) {
 				NetIdentityManifest incompatible = manifestFour;
 				++(incompatible.deterministicConfig.*member);
 				incompatible.deterministicConfigHash = NetIdentity::HashDeterministicConfig(incompatible.deterministicConfig);
@@ -372,6 +376,45 @@ namespace RTE {
 			}
 			std::cout << "[net-identity-selftest] PASS lua state count out of identity: 4 and 32 states share deterministic_config_hash "
 			          << NetIdentity::HashHex(configFour) << " and session_identity_hash " << NetIdentity::HashHex(identityFour) << std::endl;
+			return true;
+		}
+
+		bool TestPresetIndependentAdmissionIdentity(std::string* error) {
+			NetIdentityBuildOptions worldOptions, defaultOptions;
+			NetIdentity::StampOptionsForTarget(worldOptions, true);
+			NetIdentity::StampOptionsForTarget(defaultOptions, false);
+			NetIdentityManifest worldInputs, defaultInputs;
+			if (!NetIdentity::CaptureManifestInputs(worldInputs, error, worldOptions) ||
+			    !NetIdentity::CaptureManifestInputs(defaultInputs, error, defaultOptions)) return false;
+			if (worldInputs.schema != 2 || defaultInputs.schema != 2 ||
+			    worldInputs.deterministicConfig.lockstepCodecVersion != 23 || defaultInputs.deterministicConfig.lockstepCodecVersion != 22 ||
+			    worldInputs.deterministicConfig.matchConfigVersion != 5 || defaultInputs.deterministicConfig.matchConfigVersion != 4) {
+				*error = "world and default targets lost their diagnostic layout versions";
+				return false;
+			}
+			NetIdentityManifest world = MakeManifest(), joiner = world;
+			world.deterministicConfig = worldInputs.deterministicConfig;
+			joiner.deterministicConfig = defaultInputs.deterministicConfig;
+			const auto& supported = world.deterministicConfig;
+			if (supported.supportedLockstepCodecVersion != 22 || supported.supportedWorldLockstepCodecVersion != 23 ||
+			    supported.supportedMatchConfigVersion != 4 || supported.supportedWorldMatchConfigVersion != 5) {
+				*error = "the admission identity lost a supported layout";
+				return false;
+			}
+			world.deterministicConfigHash = NetIdentity::HashDeterministicConfig(world.deterministicConfig);
+			joiner.deterministicConfigHash = NetIdentity::HashDeterministicConfig(joiner.deterministicConfig);
+			if (NetIdentity::Compare(world, joiner) || NetIdentity::HashSessionIdentity(world) != NetIdentity::HashSessionIdentity(joiner)) {
+				*error = "a default joiner cannot share a persistent world's admission identity";
+				return false;
+			}
+			++joiner.deterministicConfig.aiUpdateInterval;
+			joiner.deterministicConfigHash = NetIdentity::HashDeterministicConfig(joiner.deterministicConfig);
+			if (!ExpectMismatchKey(world, joiner, "deterministic_config_hash", error)) return false;
+			joiner.deterministicConfig = defaultInputs.deterministicConfig;
+			joiner.deterministicConfig.enabledGlobalScripts += ",different-script";
+			joiner.deterministicConfigHash = NetIdentity::HashDeterministicConfig(joiner.deterministicConfig);
+			if (!ExpectMismatchKey(world, joiner, "deterministic_config_hash", error)) return false;
+			std::cout << "[net-identity-selftest] PASS preset-independent admission identity and settings refusal" << std::endl;
 			return true;
 		}
 
@@ -409,7 +452,8 @@ namespace RTE {
 
 	int NetIdentitySelfTest::Run() {
 		std::string error;
-		if (!TestCanonicalHelpers(&error) || !TestCompare(&error) || !TestDiffModules(&error) || !TestLuaStateCountOutOfIdentity(&error) || !TestModuleRootOutOfIdentity(&error)) {
+		if (!TestCanonicalHelpers(&error) || !TestCompare(&error) || !TestDiffModules(&error) || !TestLuaStateCountOutOfIdentity(&error) ||
+		    !TestPresetIndependentAdmissionIdentity(&error) || !TestModuleRootOutOfIdentity(&error)) {
 			std::cerr << "[net-identity-selftest] FAIL: " << error << std::endl;
 			return 1;
 		}

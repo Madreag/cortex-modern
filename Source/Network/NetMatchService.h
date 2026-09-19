@@ -907,6 +907,7 @@ namespace RTE {
 		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
 		friend bool TestCompletedLobbyExpires(std::string* error);
 		friend bool TestCapturedWorldIdentityKeepsTheWorldStamp(std::string* error);
+		friend bool TestServiceWorldJoinAdoptsConfig(std::string* error);
 		friend bool TestChatSendRefusedOutsideCarry(std::string* error);
 		friend bool TestServiceReportCarriesActivityPreset(std::string* error);
 		friend bool RowRestartKey(NetMatchService& service, const std::filesystem::path& scratch, std::array<uint8_t, 32>& key, std::string* error);
