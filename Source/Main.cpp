@@ -3762,7 +3762,7 @@ void RunGameLoop() {
 			// gate OR the runtime desync detector sees a guaranteed divergence. One-shot: a resynced
 			// match reuses tick numbers, and the healed round must NOT be re-poisoned.
 			static bool s_perturbFired = false;
-			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && simTick == 50 && !s_perturbFired) {
+			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && simTick == ScenarioRunner::GetArgs().selftestPerturbTick && !s_perturbFired) {
 				s_perturbFired = true;
 				std::random_device perturbDevice;
 				const unsigned perturbAdvance = (perturbDevice() % 64u) + 1u;

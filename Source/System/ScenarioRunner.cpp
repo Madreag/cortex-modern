@@ -336,6 +336,11 @@ namespace RTE {
 			s_Args.selftestPerturb = true;
 			return 1;
 		}
+		if (a == "-determinism-selftest-perturb-tick" && hasValue) {
+			// The tick the perturbation fires at; default 50 keeps today's arming.
+			s_Args.selftestPerturbTick = static_cast<uint64_t>(std::strtoull(argValue[startIndex + 1], nullptr, 10));
+			return 2;
+		}
 		if (a == "-net-match-e2e-funds-command") {
 			// Arm the host-issued funds command. Boolean flag.
 			s_Args.selftestFundsCommand = true;
