@@ -153,7 +153,11 @@ namespace RTE {
 			next.m_Registry = &registry;
 			next.m_DropOwnershipSource = m_DropOwnershipSource;
 			next.m_DropOwnershipContext = m_DropOwnershipContext;
+			// A whole plane replaces this one, so the revision may not fall back to the import's zero:
+			// it carries on from ours, one step past the state a caller last saw.
+			const uint64_t revision = m_StateRevision + 1;
 			*this = std::move(next);
+			m_StateRevision = revision;
 			return true;
 		} catch (const nlohmann::json::exception&) {
 			return false;
@@ -285,6 +289,7 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::Configure(NetSeatAuthRegistry* registry, uint64_t hostSessionId, NetH4Identity localIdentity) {
+		NoteStateChanged();
 		const NetAuthBytes16 epoch = registry ? registry->GetEpoch() : NetAuthBytes16{};
 		if (epoch != m_ConfiguredEpoch || hostSessionId != m_HostSessionId) {
 			m_Admission.Reset();
@@ -312,6 +317,7 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::SetMatchEnded() {
+		NoteStateChanged();
 		m_LiveMatch = false;
 		m_MatchEnded = true;
 		m_PendingReseats.clear();
@@ -327,6 +333,7 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::SetSeatTable(std::vector<NetH4Seat> seats, NetMatchMode mode) {
+		NoteStateChanged();
 		m_Mode = mode;
 		std::vector<SeatState> next;
 		next.reserve(seats.size());
@@ -352,7 +359,11 @@ namespace RTE {
 		const auto found = std::find_if(m_Seats.begin(), m_Seats.end(), [stableSeat](const SeatState& state) {
 			return state.seat.stableSeat == stableSeat;
 		});
-		return found == m_Seats.end() ? nullptr : &*found;
+		if (found == m_Seats.end()) return nullptr;
+		// Handing out a mutable seat is the only way its fields change, so the revision moves here
+		// rather than at a dozen write sites it could be missing from.
+		NoteStateChanged();
+		return &*found;
 	}
 
 	const NetReconnectHost::SeatState* NetReconnectHost::FindSeat(uint16_t stableSeat) const {
@@ -363,6 +374,7 @@ namespace RTE {
 	}
 
 	NetReconnectHost::SeatState* NetReconnectHost::FindFreeNeverHeldSeat() {
+		NoteStateChanged();
 		for (SeatState& state : m_Seats) {
 			// The current host keeps its own seat out of admission offers.
 			if (state.seat.cpu || state.seat.local || state.committed || state.closed || state.holderGeneration != 0) {
@@ -379,6 +391,7 @@ namespace RTE {
 	}
 
 	NetReconnectHost::SeatState* NetReconnectHost::FindFreeWorldSeat() {
+		NoteStateChanged();
 		for (SeatState& state : m_Seats) {
 			// The host's own seat is never offered; a dropped holder's seat is still theirs to reclaim.
 			if (state.seat.cpu || state.seat.local || state.committed || state.closed || state.dropped) {
@@ -947,6 +960,7 @@ namespace RTE {
 			owned = NetReconnectLedger::CollectOwnedActorUIDs(m_DropOwnershipSource(m_DropOwnershipContext), seat.seat.lockstepPeerId);
 		}
 		m_Ledger.RecordDrop(seat.seat.stableSeat, seat.seat.lockstepPeerId, seat.seat.team, frame, std::move(owned));
+		NoteStateChanged();
 		++m_Stats.ledgerDropsRecorded;
 		if (NetA7Journal::Enabled()) {
 			const auto* ledger = m_Ledger.Find(seat.seat.stableSeat);
@@ -968,6 +982,7 @@ namespace RTE {
 		seat.retiredGeneration = 0;
 		seat.retiredUntilMs = 0;
 		m_Ledger.ClearSeat(seat.seat.stableSeat);
+		NoteStateChanged();
 		const uint16_t stableSeat = seat.seat.stableSeat;
 		m_Fences.erase(std::remove_if(m_Fences.begin(), m_Fences.end(), [stableSeat](const Fence& fence) {
 			return fence.stableSeat == stableSeat;
@@ -1093,6 +1108,7 @@ namespace RTE {
 		if (action != NetParticipantRemovalAction::Kick) {
 			const NetHostBanScope scope = action == NetParticipantRemovalAction::BanUntilRemoved ? NetHostBanScope::UntilRemoved : NetHostBanScope::Session;
 			std::string persistError;
+			NoteStateChanged();
 			if (!m_BanStore->Ban(issued.participantId, scope, "", "host ban", m_HostSessionId, unixNowMs, &persistError)) {
 				return NetKickBanResult::PersistenceFailed;
 			}
@@ -1136,6 +1152,7 @@ namespace RTE {
 			m_Registry->ClearRetired(seat.seat.stableSeat);
 		}
 		m_Ledger.ClearSeat(seat.seat.stableSeat);
+		NoteStateChanged();
 		ReleaseProvisional(seat.seat.stableSeat);
 		const uint16_t stableSeat = seat.seat.stableSeat;
 		for (size_t index = 0; index < m_Substitutions.size();) {
@@ -1265,6 +1282,7 @@ namespace RTE {
 	}
 
 	NetReconnectHost::SeatState* NetReconnectHost::FindSubstitutableSeatWithRoom() {
+		NoteStateChanged();
 		for (SeatState& seat: m_Seats) {
 			if (!IsSeatSubstitutable(seat)) {
 				continue;
@@ -1816,6 +1834,7 @@ namespace RTE {
 	void NetReconnectHost::EndHostedSession() {
 		if (m_BanStore != nullptr) {
 			m_BanStore->EndSession(m_HostSessionId);
+			NoteStateChanged();
 		}
 		m_ConnectionIds.clear();
 		if (m_Registry != nullptr) {
@@ -1824,6 +1843,7 @@ namespace RTE {
 		m_Admission.Reset();
 		m_TxCache.Clear();
 		m_Ledger.Clear();
+		NoteStateChanged();
 		m_Provisionals.clear();
 		m_PendingReclaims.clear();
 		m_Applicants.clear();

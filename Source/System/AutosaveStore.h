@@ -185,6 +185,9 @@ namespace RTE {
 		/// for this install; the store never sees their plaintext and never chooses their key.
 		static bool PublishAdmission(const std::filesystem::path& directory, const AutosaveAdmission& admission, std::string* error = nullptr);
 		static bool ReadAdmission(const std::filesystem::path& directory, const std::string& matchId, AutosaveAdmission& out, std::string* error = nullptr);
+		/// Removes a match's admission file once no checkpoint of that match is left to resume.
+		/// @return Whether the match had no checkpoint left (whether or not a file was there to remove).
+		static bool RemoveOrphanAdmission(const std::filesystem::path& directory, const std::string& matchId);
 
 		/// The matches this install can restart: for each, the newest checkpoint whose manifest reads and
 		/// whose admission file is present, newest checkpoint first.

@@ -669,6 +669,9 @@ namespace RTE {
 		/// checkpoints, sealed for this install alone. Runs on the host pump, never on the sim thread,
 		/// and only when the admission state, the directory row or a new checkpoint made it stale.
 		void PublishRestartAdmission();
+		/// Removes the admission file of a match this process is no longer checkpointing once no
+		/// checkpoint of it is left. Game thread, once per ended round.
+		void SweepRestartAdmission();
 		/// Host: the resume the request asked for - the manifest's config, the sealed admission and the
 		/// checkpoint to open on. Fills the request's roster and arms the resume, or says why it cannot.
 		bool PrepareResume(NetMatchServiceRequest& request, std::string* error);
@@ -835,8 +838,10 @@ namespace RTE {
 		std::string m_ResumeMatchId;
 		uint64_t m_ResumeTick = 0;
 		std::string m_ResumeArchiveDigest;
+		AutosaveSideState m_ResumeSideState;     //!< Host: the agreed state the checkpoint's manifest recorded.
+		AutosaveSideState m_ResumeHeldSideState; //!< Client: the same, out of its own manifest.
 		std::vector<uint8_t> m_ResumeAdmissionState;
-		std::string m_ResumeDirectorySession, m_ResumeDirectoryToken, m_ResumeDirectoryRow;
+		std::string m_ResumeDirectorySession, m_ResumeDirectoryToken;
 		//!< Client: the checkpoint this peer answered the host's resume offer with.
 		std::string m_ResumeHeldMatchId;
 		uint64_t m_ResumeHeldTick = 0;
@@ -845,6 +850,8 @@ namespace RTE {
 		uint32_t m_ResumeIntervalSeconds = 0;
 		std::vector<uint8_t> m_LastRestartAdmissionState;
 		std::string m_PublishedDirectorySession, m_PublishedDirectoryToken;
+		std::string m_PublishedAdmissionMatchId;    //!< The match the file on disk belongs to.
+		uint64_t m_PublishedAdmissionRevision = 0;  //!< The admission plane's revision that file renders.
 		NetDirectoryClient m_ReturnWatch; //!< 7e: browses for the watched session's row; never registers one.
 		bool m_ReturnWatchConfigured = false;
 		uint64_t m_RestartAdmissionGeneration = 0;
