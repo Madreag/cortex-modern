@@ -99,7 +99,10 @@ namespace RTE {
 		/// started client always holds the complete state.
 		void BeginStateTransfer(std::vector<uint8_t> fileBytes);
 		/// The same StateChunk pump, aimed at one late remote after the lobby has Started.
-		void BeginStateTransferTo(uint8_t peerId, std::vector<uint8_t> fileBytes);
+		/// @return Whether this call took the pump; a queued blob starts when the one in flight drains.
+		bool BeginStateTransferTo(uint8_t peerId, std::vector<uint8_t> fileBytes);
+		/// Whether a joiner's image is waiting for the pump.
+		size_t QueuedStateTransfers() const { return m_QueuedStateTransfers.size(); }
 		/// Binds a session-Ready joiner so the host can send it config and StateChunks.
 		bool BindLateRemote(uint8_t peerId, NetPeerId transport, std::string* error = nullptr);
 		void SendMatchConfigTo(uint8_t peerId);
@@ -157,6 +160,8 @@ namespace RTE {
 		void HandleSeatAssign(const NetLobbySeatAssign& message);
 		void SendSeatAssign(uint8_t peerId);
 		void RestartStateTransfer();
+		/// Takes the free pump for the next waiting joiner image. Returns whether one started.
+		bool StartNextQueuedStateTransfer();
 		void SendQueuedStateChunks();
 		void Reject(const std::string& reason);
 		void Fail(const std::string& reason);
@@ -198,6 +203,7 @@ namespace RTE {
 		uint64_t m_OutgoingStateId = 0;
 		uint8_t m_StateTransferOnlyPeer = 0; //!< 0 = every remote (resync); else the one world joiner.
 		std::map<uint8_t, uint16_t> m_OutgoingChunkIndexByPeer; //!< Next chunk each remote still needs.
+		std::vector<std::pair<uint8_t, std::vector<uint8_t>>> m_QueuedStateTransfers; //!< Joiner images waiting for the pump.
 		uint16_t m_OutgoingChunkCount = 0;
 		uint32_t m_ChunkSendStall = 0; //!< Consecutive ticks the transport refused a chunk (backpressure).
 		uint64_t m_StateTransferProgressSerial = 0;

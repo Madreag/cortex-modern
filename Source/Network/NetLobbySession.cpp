@@ -110,6 +110,7 @@ namespace RTE {
 		m_RemoteLobbyUp.clear();
 		m_SeatAssigned = false;
 		m_StateBytesToSend.clear();
+		m_QueuedStateTransfers.clear();
 		m_OutgoingStateId = 0;
 		m_StateTransferOnlyPeer = 0;
 		m_WorldJoinReport = {};
@@ -208,17 +209,40 @@ namespace RTE {
 		RestartStateTransfer();
 	}
 
-	void NetLobbySession::BeginStateTransferTo(uint8_t peerId, std::vector<uint8_t> fileBytes) {
+	bool NetLobbySession::BeginStateTransferTo(uint8_t peerId, std::vector<uint8_t> fileBytes) {
 		if (!m_Config.host || fileBytes.empty() || peerId == 0 || !IsKnownRemote(peerId)) {
-			return;
+			return false;
 		}
 		if (NetLobbyProtocol::GetStateChunkCount(fileBytes.size()) == 0) {
 			Fail("state transfer exceeds maximum size");
-			return;
+			return false;
+		}
+		// There is one outgoing blob: a second joiner's image would replace the one in flight, so it
+		// waits its turn instead.
+		if (HasPendingStateChunks()) {
+			std::erase_if(m_QueuedStateTransfers, [peerId](const std::pair<uint8_t, std::vector<uint8_t>>& queued) { return queued.first == peerId; });
+			m_QueuedStateTransfers.emplace_back(peerId, std::move(fileBytes));
+			return false;
 		}
 		m_StateTransferOnlyPeer = peerId;
 		m_StateBytesToSend = std::move(fileBytes);
 		RestartStateTransfer();
+		return true;
+	}
+
+	bool NetLobbySession::StartNextQueuedStateTransfer() {
+		while (!m_QueuedStateTransfers.empty()) {
+			std::pair<uint8_t, std::vector<uint8_t>> next = std::move(m_QueuedStateTransfers.front());
+			m_QueuedStateTransfers.erase(m_QueuedStateTransfers.begin());
+			if (!IsKnownRemote(next.first) || next.second.empty()) {
+				continue;
+			}
+			m_StateTransferOnlyPeer = next.first;
+			m_StateBytesToSend = std::move(next.second);
+			RestartStateTransfer();
+			return true;
+		}
+		return false;
 	}
 
 	bool NetLobbySession::BindLateRemote(uint8_t peerId, NetPeerId transport, std::string* error) {
@@ -340,6 +364,8 @@ namespace RTE {
 			if (start != 0) {
 				g_LastStateTransferMs.store(TransferSteadyMs() - start);
 			}
+			// The pump is free, so the next joiner's image can take it; its chunks go out next pump.
+			(void)StartNextQueuedStateTransfer();
 		}
 	}
 
@@ -595,7 +621,8 @@ namespace RTE {
 				if (!previous.contains(peerId)) SendSeatAssign(peerId);
 			}
 		}
-		if (addedPeer && !m_StateBytesToSend.empty()) RestartStateTransfer();
+		// A targeted transfer is one joiner's image; another peer arriving must not restart it.
+		if (addedPeer && m_StateTransferOnlyPeer == 0 && !m_StateBytesToSend.empty()) RestartStateTransfer();
 	}
 
 	bool NetLobbySession::SeatsRemoteHuman() const {
