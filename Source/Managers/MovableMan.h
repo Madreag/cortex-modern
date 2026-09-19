@@ -218,6 +218,7 @@ namespace RTE {
 				std::unique_ptr<WorldSnapshot> snapshot;
 			};
 			std::deque<Entry> m_Entries;
+			CheckpointCache m_Cache;
 			size_t m_Capacity = 0;
 			int64_t m_LastCaptureUs = 0;
 		};
