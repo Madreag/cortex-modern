@@ -570,12 +570,9 @@ namespace RTE {
 				if (error) *error = m_SetupError;
 				return false;
 			}
-			// The host's seating wait is its own idle policy, re-read every tick because a live edit
-			// republishes it, and Never means only the host (or a disconnect) ends the round. A round
-			// without a policy budgets by the message deadline, as every round did before the split.
-			const bool seatingWaitNeverExpires = m_Config.lobbySeatingWaitMs && *m_Config.lobbySeatingWaitMs == 0;
-			const uint64_t seatingWaitMs = m_Config.lobbySeatingWaitMs.value_or(static_cast<uint32_t>(maxWaitMs));
-			if (!seatingWaitNeverExpires && clocks.budgetMs >= lastTransferProgressMs && clocks.budgetMs - lastTransferProgressMs > seatingWaitMs) {
+			// The seating wait is re-read every tick because a live options edit republishes it.
+			if (clocks.budgetMs >= lastTransferProgressMs &&
+			    SeatingWaitExpired(m_Config.lobbySeatingWaitMs, static_cast<uint32_t>(maxWaitMs), clocks.budgetMs - lastTransferProgressMs)) {
 				SetFailed("timed out waiting for lobby start");
 				if (error) *error = m_SetupError;
 				return false;
