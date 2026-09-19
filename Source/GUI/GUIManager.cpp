@@ -464,8 +464,7 @@ bool GUIManager::RunComboKeyCommitSelfTest() {
 		check("kept_focus_still_presses", holder.m_Downs == 1 && holder.m_Presses == 1 && manager.GetFocusPanel() == &holder);
 	}
 	{
-		// The buy menu's module flags are owned for the menu's life: Destroy clears them where it used to
-		// hand the menu a fresh array, which left the one it had just deleted behind on every cycle.
+		// The buy menu's module flags are owned for the menu's life: a destroy cycle clears them in place.
 		if (!PresetMan::IsConstructed()) {
 			PresetMan::Construct();
 		}
