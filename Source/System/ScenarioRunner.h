@@ -48,6 +48,7 @@ namespace RTE {
 			bool        selftestPerturb = false; // -determinism-selftest-perturb: inject one genuine
 			                                 // non-determinism at a fixed tick (the determinism
 			                                 // check's positive control).
+			uint64_t    selftestPerturbTick = 50; // -determinism-selftest-perturb-tick <N>: the tick the perturbation fires at; default 50 keeps today's arming.
 			bool        selftestFundsCommand = false; // -net-match-e2e-funds-command: host-issued funds command at tick 50.
 			bool        selftestSpawnCommand = false; // -net-match-e2e-spawn-command: host-issued spawn command at tick 50.
 			bool        selftestDeliverCommand = false; // -net-match-e2e-deliver-command: host-issued delivery command at tick 50.
