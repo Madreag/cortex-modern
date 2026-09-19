@@ -780,7 +780,9 @@ namespace RTE {
 		void WriteFinalWorldCheckpoint();
 		/// Host: the resume the request asked for - the manifest's config, the sealed admission and the
 		/// checkpoint to open on. Fills the request's roster and arms the resume, or says why it cannot.
-		bool PrepareResume(NetMatchServiceRequest& request, std::string* error);
+		/// @param directory Which checkpoint store to read; empty means this install's own. A caller
+		/// that names one reads exactly that directory, so a row never has to write into the player's.
+		bool PrepareResume(NetMatchServiceRequest& request, std::string* error, const std::filesystem::path& directory = {});
 		/// World host: points the request's resume at the world's own checkpoint chain, so a boot of an
 		/// existing world reopens it through the one resume path instead of a second implementation.
 		/// Runs before PrepareResume and reads the identity record without advancing it.
