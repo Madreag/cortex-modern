@@ -26,6 +26,7 @@ RED_TRANSFER_DIGEST = "world-join-transfer-digest-mismatch"
 RED_APPLIED_THROUGH = "appliedThrough-did-not-reach-E-minus-1"
 RED_BINDING_MISSING = "activate-binding-missing"
 RED_REJOIN = "rejoin after a clean leave did not land in the running world"
+RED_REJOIN_FIRST_OFFER = "the world offered the first join no ticket"
 RED_H4_LEAVE_CLOSED_WORLD = "H4 clean leave closed a persistent-world seat"
 RED_DIRECTORY_BOOT = "world_boot 0 was accepted on the C++ register decoder"
 RED_DIRECTORY_RESUME = "directory resume did not keep the world id"
@@ -208,6 +209,7 @@ CASES = (
         "name": "rejoin-after-clean-leave",
         "argv": ["-net-world-rejoin-selftest"],
         "red": RED_REJOIN,
+        "also_red": (RED_REJOIN_FIRST_OFFER,),
         "pass_token": "[net-world-rejoin-selftest] PASS",
     },
     {
