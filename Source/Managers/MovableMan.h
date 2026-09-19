@@ -22,6 +22,7 @@
 #include "BS_thread_pool.hpp"
 
 #include <cstdint>
+#include <atomic>
 #include <mutex>
 #include <map>
 #include <set>
@@ -371,7 +372,7 @@ namespace RTE {
 			uint64_t aimIntents = 0;
 			uint64_t flipIntents = 0;
 			uint64_t directWrites = 0;
-			uint64_t localScriptMessages = 0;
+			std::atomic<uint64_t> localScriptMessages{0};
 		};
 		const ControllerBoundaryStats& GetControllerBoundaryStats() const { return m_ControllerBoundaryStats; }
 		/// The canonical actor state the owner's AI pass may not change directly.
