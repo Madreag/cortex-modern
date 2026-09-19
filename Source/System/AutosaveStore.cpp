@@ -37,6 +37,9 @@ namespace RTE {
 		std::mutex s_ValidatedMutex;
 		AutosaveDescriptor s_Validated;
 
+		/// This peer's "Autosaves kept" option, applied from its settings; the store never reads them itself.
+		std::atomic<size_t> s_RetainedAutosaves{AutosaveStore::c_RetainedAutosaves};
+
 		/// The tick the saved world itself stands on, read out of the checkpoint's own property.
 		bool WorldTick(const std::string& saveText, uint64_t& out) {
 			static constexpr std::string_view Key = "SimUpdateCount = ";
@@ -585,15 +588,24 @@ namespace RTE {
 		return Find(Directory(), matchId, tick, error);
 	}
 
+	size_t AutosaveStore::RetainedAutosaves() {
+		return s_RetainedAutosaves.load(std::memory_order_relaxed);
+	}
+
+	void AutosaveStore::SetRetainedAutosaves(size_t count) {
+		if (count >= c_MinRetainedAutosaves && count <= c_MaxRetainedAutosaves) s_RetainedAutosaves.store(count, std::memory_order_relaxed);
+	}
+
 	std::vector<uint64_t> AutosaveStore::RetainedTicks(const std::vector<AutosaveCandidate>& newestFirst, uint64_t pinnedTick) {
 		std::vector<uint64_t> kept;
+		const size_t retained = RetainedAutosaves();
 		size_t restorableKept = 0;
 		for (const AutosaveCandidate& candidate: newestFirst) {
 			// The agreed rewind point is kept whatever its age, and even when it no longer reads: a transient
 			// read failure must not destroy the checkpoint both sides are rejoining onto.
 			if (pinnedTick != c_NoPinnedTick && candidate.tick == pinnedTick) {
 				kept.push_back(candidate.tick);
-			} else if (candidate.restorable && restorableKept < c_RetainedAutosaves) {
+			} else if (candidate.restorable && restorableKept < retained) {
 				kept.push_back(candidate.tick);
 				++restorableKept;
 			}
@@ -670,6 +682,9 @@ namespace RTE {
 			std::cout << Tag << " FAIL match=" << matchId << " restorable=" << held.size() << " (two checkpoints are needed)" << std::endl;
 			return false;
 		}
+		// The rows below name the ticks the default keeps, so the peer's own option stands aside for them.
+		const size_t option = RetainedAutosaves();
+		SetRetainedAutosaves(c_RetainedAutosaves);
 		std::filesystem::create_directories(scratch, ignored);
 		for (const AutosaveDescriptor& descriptor: held) {
 			std::filesystem::copy_file(descriptor.path, scratch / descriptor.path.filename(), std::filesystem::copy_options::overwrite_existing, ignored);
@@ -701,14 +716,24 @@ namespace RTE {
 		const bool pinOutsideWindow = RetainedTicks(synthetic, 100) == std::vector<uint64_t>{500, 400, 300, 100};
 		const std::vector<AutosaveCandidate> unreadable = {{500, true}, {400, false}, {300, true}, {200, true}, {100, false}};
 		const bool unreadablePinKept = RetainedTicks(unreadable, 100) == std::vector<uint64_t>{500, 300, 200, 100};
+		// The player's own count decides the window; the pin is kept on top of it, and a count out of
+		// bounds leaves the one in force.
+		SetRetainedAutosaves(c_MinRetainedAutosaves);
+		const bool oneKeptPlusPin = RetainedTicks(synthetic, 100) == std::vector<uint64_t>{500, 100} &&
+		                            RetainedTicks(synthetic, c_NoPinnedTick) == std::vector<uint64_t>{500};
+		SetRetainedAutosaves(0);
+		SetRetainedAutosaves(c_MaxRetainedAutosaves + 1);
+		const bool boundsHeld = RetainedAutosaves() == c_MinRetainedAutosaves;
+		SetRetainedAutosaves(option);
 
 		const bool passed = sameSet && tornRefused && skippedTorn && removed >= 1 && tornDropped && pinnedKept &&
-		                    retentionWindow && pinOutsideWindow && unreadablePinKept;
+		                    retentionWindow && pinOutsideWindow && unreadablePinKept && oneKeptPlusPin && boundsHeld;
 		std::cout << Tag << (passed ? " PASS" : " FAIL") << " match=" << matchId << " restorable=" << held.size()
 		          << " same_set=" << sameSet << " torn_refused=" << tornRefused << " (" << reason << ")"
 		          << " skipped_torn=" << skippedTorn << " removed=" << removed << " torn_dropped=" << tornDropped
 		          << " pinned_kept=" << pinnedKept << " retention_window=" << retentionWindow
-		          << " pin_outside_window=" << pinOutsideWindow << " unreadable_pin_kept=" << unreadablePinKept << std::endl;
+		          << " pin_outside_window=" << pinOutsideWindow << " unreadable_pin_kept=" << unreadablePinKept
+		          << " one_kept_plus_pin=" << oneKeptPlusPin << " kept_bounds_held=" << boundsHeld << std::endl;
 		return passed;
 	}
 } // namespace RTE

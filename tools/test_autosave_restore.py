@@ -55,7 +55,8 @@ OFFER = re.compile(r"^\[autosave\] resume offer match=(\S+) tick=(\d+) (held loc
 HELD_LAUNCH = re.compile(r"^\[net-match\] launching from the held checkpoint: (\S+)$", re.MULTILINE)
 RECEIVED_LAUNCH = re.compile(r"^\[net-match\] launching from the received snapshot: (\S+)$", re.MULTILINE)
 FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
-RETAINED_AUTOSAVES = 3  # AutosaveStore::c_RetainedAutosaves; the engine's own keep= value is held to it below.
+RETAINED_AUTOSAVES = 3  # The default of the NetworkAutosavesKept option (AutosaveStore::c_RetainedAutosaves), which
+                        # these runs never set; the engine's own keep= value is held to it below.
 
 
 def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra: dict) -> dict:

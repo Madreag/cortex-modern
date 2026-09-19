@@ -9,6 +9,7 @@
 #include "PerformanceMan.h"
 #include "UInputMan.h"
 #include "NetMatchService.h"
+#include "AutosaveStore.h"
 #include "NetMatchConfig.h"
 #include "System.h"
 
@@ -188,6 +189,7 @@ void SettingsMan::Clear() {
 	m_NetworkChatSound = false;
 	m_NetworkHostIdleWaitMinutes = 10;
 	m_NetworkPathHorizonTicks = 30;
+	SetNetworkAutosavesKept(static_cast<int>(AutosaveStore::c_RetainedAutosaves));
 	m_NumberOfLuaStatesOverride = -1;
 	m_ForceImmediatePathingRequestCompletion = false;
 
@@ -379,6 +381,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("NetworkHostAutoRepair", { reader >> m_NetworkHostAutoRepair; });
 	MatchProperty("NetworkHostIdleWaitMinutes", { int minutes = m_NetworkHostIdleWaitMinutes; reader >> minutes; SetNetworkHostIdleWaitMinutes(minutes); });
 	MatchProperty("NetworkPathHorizonTicks", { int ticks = m_NetworkPathHorizonTicks; reader >> ticks; SetNetworkPathHorizonTicks(ticks); });
+	MatchProperty("NetworkAutosavesKept", { int kept = m_NetworkAutosavesKept; reader >> kept; SetNetworkAutosavesKept(kept); });
 	MatchProperty("NetworkHostVisibility", { m_NetworkHostVisibility = ParseHostVisibility(reader.ReadPropValue()); });
 	MatchProperty("NumberOfLuaStatesOverride", { reader >> m_NumberOfLuaStatesOverride; });
 	MatchProperty("ForceImmediatePathingRequestCompletion", { reader >> m_ForceImmediatePathingRequestCompletion; });
@@ -644,6 +647,13 @@ void SettingsMan::SetNetworkPathHorizonTicks(int ticks) {
 	if (ticks >= 0 && ticks <= static_cast<int>(NetMatchConfigUtil::c_MaxPathHorizonTicks)) m_NetworkPathHorizonTicks = ticks;
 }
 
+void SettingsMan::SetNetworkAutosavesKept(int kept) {
+	if (kept < static_cast<int>(AutosaveStore::c_MinRetainedAutosaves) || kept > static_cast<int>(AutosaveStore::c_MaxRetainedAutosaves)) return;
+	m_NetworkAutosavesKept = kept;
+	// The store keeps this peer's count without reading the settings itself.
+	AutosaveStore::SetRetainedAutosaves(static_cast<size_t>(kept));
+}
+
 void SettingsMan::SetNetworkChatKey(const std::string& key) {
 	std::string normalized;
 	normalized.reserve(key.size());
@@ -719,6 +729,7 @@ void SettingsMan::WriteNetworkPreferences(Writer& writer) const {
 	writer.NewPropertyWithValue("NetworkHostAutoRepair", m_NetworkHostAutoRepair);
 	writer.NewPropertyWithValue("NetworkHostIdleWaitMinutes", m_NetworkHostIdleWaitMinutes);
 	writer.NewPropertyWithValue("NetworkPathHorizonTicks", m_NetworkPathHorizonTicks);
+	writer.NewPropertyWithValue("NetworkAutosavesKept", m_NetworkAutosavesKept);
 	writer.NewPropertyWithValue("NetworkHostVisibility", VisibilityText(m_NetworkHostVisibility));
 }
 
@@ -747,6 +758,7 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	settings.SetNetworkHostAutoRepair(false);
 	settings.SetNetworkHostIdleWaitMinutes(0);
 	settings.SetNetworkPathHorizonTicks(45);
+	settings.SetNetworkAutosavesKept(7);
 
 	const std::string path = (std::filesystem::temp_directory_path() / "cccp-settings-preferences-selftest.ini").string();
 	const auto writeRead = [&](auto&& fill) {
@@ -784,7 +796,7 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 		}
 		settings.Create(reader);
 	}
-	check("roundtrip", settings.GetNetworkDisplayName() == "AlphaPilot" && settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Always && !settings.GetNetworkToastsEnabled() && !settings.GetNetworkChatVisible() && settings.GetNetworkChatDefaultScope() == NetworkChatDefaultScope::Team && !settings.GetNetworkChatNotify() && settings.GetNetworkChatSound() && settings.GetNetworkChatTextSize() == NetworkChatTextSize::Large && settings.GetNetworkChatKey() == "Y" && !settings.GetNetworkAutoReconnect() && !settings.GetNetworkOfferStoredRejoin() && settings.GetNetworkDiagnosticsDirectory() == "D:/tmp/telemetry-alt" && !settings.GetNetworkRecordReplays() && settings.GetNetworkHostDelayPolicy() == NetworkHostDelayPolicy::Fixed && !settings.GetNetworkHostAutoRepair() && settings.GetNetworkHostIdleWaitMinutes() == 0 && settings.GetNetworkPathHorizonTicks() == 45 && settings.GetNetworkHostVisibility() == NetworkHostVisibility::Unlisted);
+	check("roundtrip", settings.GetNetworkDisplayName() == "AlphaPilot" && settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Always && !settings.GetNetworkToastsEnabled() && !settings.GetNetworkChatVisible() && settings.GetNetworkChatDefaultScope() == NetworkChatDefaultScope::Team && !settings.GetNetworkChatNotify() && settings.GetNetworkChatSound() && settings.GetNetworkChatTextSize() == NetworkChatTextSize::Large && settings.GetNetworkChatKey() == "Y" && !settings.GetNetworkAutoReconnect() && !settings.GetNetworkOfferStoredRejoin() && settings.GetNetworkDiagnosticsDirectory() == "D:/tmp/telemetry-alt" && !settings.GetNetworkRecordReplays() && settings.GetNetworkHostDelayPolicy() == NetworkHostDelayPolicy::Fixed && !settings.GetNetworkHostAutoRepair() && settings.GetNetworkHostIdleWaitMinutes() == 0 && settings.GetNetworkPathHorizonTicks() == 45 && settings.GetNetworkAutosavesKept() == 7 && settings.GetNetworkHostVisibility() == NetworkHostVisibility::Unlisted);
 	if (failures != 0) {
 		return 1;
 	}
@@ -825,6 +837,9 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	settings.SetNetworkPathHorizonTicks(121);
 	settings.SetNetworkPathHorizonTicks(-1);
 	check("path-horizon range", settings.GetNetworkPathHorizonTicks() == 45);
+	settings.SetNetworkAutosavesKept(0);
+	settings.SetNetworkAutosavesKept(static_cast<int>(AutosaveStore::c_MaxRetainedAutosaves) + 1);
+	check("autosaves-kept range", settings.GetNetworkAutosavesKept() == 7 && AutosaveStore::RetainedAutosaves() == 7);
 
 	const int warningsBefore = g_UnknownEnumWarnings;
 	// Unknown-enum and case-insensitive arms leave a non-default set so the read is what changes it.
