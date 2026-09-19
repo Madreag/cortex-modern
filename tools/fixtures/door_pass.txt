@@ -1,0 +1,6 @@
+# Door pass (host, player 0): seat the dummy, then walk right through a
+# Base.rte Door Slide Short spawned on the command wire past the brain
+# (dummy 835, brain 880; door 980,715 after NEXT so the door is not seated,
+# the brain is outside the sensor X, and the sensor Y overlaps the walker).
+30 31 NEXT
+80 380 L_RIGHT
