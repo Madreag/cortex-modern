@@ -63,7 +63,7 @@ namespace RTE::MenuAutomation {
 	constexpr std::array<std::string_view, 6> c_SettingsPages{"Video", "Audio", "Input", "Gameplay", "Misc", "Network"};
 	// The network page's own selector names its sub-pages the same way; a script addresses
 	// one as "Network:<page>" once the network page is up.
-	constexpr std::array<std::string_view, 5> c_NetworkPages{"Player", "Chat", "Recovery", "Files", "Internet"};
+	constexpr std::array<std::string_view, 6> c_NetworkPages{"Player", "Chat", "Recovery", "Files", "Internet", "Connection"};
 
 	std::string SettingsPage(GUIControlManager* manager) {
 		for (const std::string_view page: c_SettingsPages) {
@@ -121,7 +121,7 @@ namespace RTE::MenuAutomation {
 	bool Text(GUIControl* control, std::string& text) {
 		if (auto* value = dynamic_cast<GUILabel*>(control)) text = value->GetText();
 		else if (auto* value = dynamic_cast<GUIButton*>(control)) text = value->GetText();
-		else if (auto* value = dynamic_cast<GUITextBox*>(control)) text = value->GetText();
+		else if (auto* value = dynamic_cast<GUITextBox*>(control)) text = value->GetDisplayText();
 		else if (auto* value = dynamic_cast<GUICheckbox*>(control)) text = value->GetText();
 		else if (auto* value = dynamic_cast<GUIRadioButton*>(control)) text = value->GetText();
 		else if (auto* value = dynamic_cast<GUITab*>(control)) text = value->GetText();

@@ -40,7 +40,7 @@ namespace RTE {
 
 	private:
 		/// The pages the tab row inside the network box selects between.
-		enum class Page { Player = 0, Chat, Recovery, Files, Internet, Count };
+		enum class Page { Player = 0, Chat, Recovery, Files, Internet, Connection, Count };
 
 		GUIControlManager* m_GUIControlManager; //!< The GUIControlManager which holds all the GUIControls of this menu. Not owned by this.
 
@@ -106,6 +106,12 @@ namespace RTE {
 		GUITextBox* m_DirPinTextbox;
 		GUILabel* m_DirStatusLabel;
 		GUILabel* m_InternetError;
+		GUIComboBox* m_ConnectionCombo;
+		GUILabel* m_ConnectionHint;
+		GUITextBox* m_StunServersTextbox;
+		GUITextBox* m_RelayAddressTextbox;
+		GUITextBox* m_RelayUserTextbox;
+		GUITextBox* m_RelayPassTextbox;
 
 #pragma region Network Settings Handling
 		/// Shows what is saved, so an opened page never states anything the settings do not hold.

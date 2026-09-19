@@ -13,16 +13,29 @@ namespace RTE {
 		return enabled ? "Automatic" : "Off (LAN or port-forwarded only)";
 	}
 
+	inline std::string NetHostNatModeText(const SettingsMan& settings) {
+		if (!settings.GetNetworkIceEnableSetting()) return "Port forwarding required";
+		if (settings.GetNetworkHostRelayMode() != SettingsMan::NetworkHostRelayMode::Off) return "NAT: STUN + relay";
+		return settings.GetNetworkStunServersSetting().empty() ? "Port forwarding required" : "NAT: STUN";
+	}
+
+	inline std::string NetHostRelayHint(const SettingsMan& settings) {
+		if (!settings.GetNetworkIceEnableSetting()) return "NAT traversal is Off, so this match offers no relay. Enable Automatic above to offer one.";
+		switch (settings.GetNetworkHostRelayMode()) {
+			case SettingsMan::NetworkHostRelayMode::Off: return "Off: direct connections have the lowest latency. Some routers need port forwarding.";
+			case SettingsMan::NetworkHostRelayMode::Fixed: return "Offer this private relay when direct fails; it adds the relay's round trip.\nAddress: host:port or comma-separated TURN URLs. Enter a login, never a signing secret.\nEach player can choose Direct only or their own relay in Settings > Network > Connection.";
+			default: return "The directory supplies a short-lived relay login; direct first has the lowest latency.\nRelay adds its round trip. A directory without relay credentials leaves direct only.\nUDP TURN only in this build; TCP/TLS and live credential renewal are unavailable.";
+		}
+	}
+
 	inline std::string NetHostNatTraversalHint(const SettingsMan& settings, bool setup, bool readOnly, const std::string& route) {
 		std::string text = "Players behind home routers connect directly. Off means they need your port forwarded.\n";
 		if (!settings.GetNetworkIceEnableSetting()) {
 			text += "Off: use LAN or forward the host's UDP port.";
-		} else if (!settings.GetNetworkTurnServersSetting().empty()) {
-			text += "A custom relay is configured in Settings.ini.";
 		} else if (settings.GetNetworkStunServersSetting().empty()) {
-			text += "STUN list empty: LAN-only candidates. Edit NetworkStunServers in Settings.ini.";
+			text += "STUN list empty: direct candidates are LAN-only. Edit Settings > Network > Connection.";
 		} else {
-			text += "No relay is provided; some routers still need port forwarding.";
+			text += "STUN finds direct routes. The Relay row offers a fallback for stricter routers.";
 		}
 		text += "\n";
 		if (readOnly) return text + "This is your saved preference; only the host sets up this session.";
