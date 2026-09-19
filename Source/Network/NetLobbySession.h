@@ -60,6 +60,12 @@ namespace RTE {
 		std::vector<std::string> migrationListenAddrs;
 		std::function<bool(uint8_t, const NetHash32&, std::vector<uint8_t>&)> sealMigration;
 		std::function<bool(const NetLobbyMigration&)> openMigration;
+		// A lobby that resumes a match from disk names the checkpoint its state carries. Every peer
+		// answers whether it holds that archive; one that does loads its own copy and is streamed nothing.
+		std::string resumeMatchId;
+		uint64_t resumeTick = 0;
+		std::string resumeDigest;
+		std::function<bool(const NetLobbyResume&)> resumeHeld; //!< Client: whether this peer holds it.
 	};
 
 	struct NetLobbyStats {
@@ -131,6 +137,10 @@ namespace RTE {
 		/// The same call, with the refusal told apart from the queue: a refused blob was never taken,
 		/// so its caller must retry it rather than wait for a transfer that will not happen.
 		NetLobbyStateTransfer BeginStateTransferToPeer(uint8_t peerId, std::vector<uint8_t> fileBytes);
+		/// Host: whether that peer answered that it already holds the resume checkpoint.
+		bool IsResumeHeldBy(uint8_t peerId) const { return m_ResumeHeldPeers.contains(peerId); }
+		/// Client: whether this peer answered the host's resume offer with its own copy of the checkpoint.
+		bool AnsweredResumeHeld() const { return m_ResumeAnsweredHeld; }
 		/// Whether a joiner's image is waiting for the pump.
 		size_t QueuedStateTransfers() const { return m_QueuedStateTransfers.size(); }
 		/// Binds a session-Ready joiner so the host can send it config and StateChunks.
@@ -177,6 +187,16 @@ namespace RTE {
 
 	private:
 		void HandleMigration(const NetLobbyMigration& message);
+		void HandleResume(const NetLobbyResume& message);
+		/// Host: offers the checkpoint this lobby resumes to that peer, so it can answer that it holds it.
+		void SendResumeOfferTo(uint8_t peerId);
+		/// Host: whether that peer holds the resume checkpoint, so it is owed no chunk of it.
+		bool ResumeSkipsTransfer(uint8_t peerId) const;
+		/// Host: whether that peer still owes its answer, so its chunks wait rather than race it.
+		bool ResumeAwaitsAnswer(uint8_t peerId) const;
+		std::set<uint8_t> m_ResumeHeldPeers;     //!< Host: peers that answered with their own copy.
+		std::set<uint8_t> m_ResumeAnsweredPeers; //!< Host: peers that answered at all; chunks wait for that.
+		bool m_ResumeAnsweredHeld = false;       //!< Client: this peer answered that it holds the checkpoint.
 		bool PrepareMigrationRoster();
 		std::map<uint8_t, NetMatchMigrationPeer> m_MigrationEndpoints;
 		NetHash32 m_OpenedMigrationHash{};

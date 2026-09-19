@@ -103,6 +103,12 @@ namespace RTE {
 		std::function<bool(uint8_t, const NetHash32&, std::vector<uint8_t>&)> sealMigration;
 		std::function<bool(const NetLobbyMigration&)> openMigration;
 		std::function<void(NetLockstepConfig&)> configureMigration;
+		// Host: the checkpoint a match resumed from disk stands on. The lobby offers it to every peer
+		// and streams its state only to those that do not already hold that archive.
+		std::string resumeMatchId;
+		uint64_t resumeTick = 0;
+		std::string resumeDigest;
+		std::function<bool(const NetLobbyResume&)> resumeHeld;
 		/// Host: apply a Starting-state kick on this worker after the session tick, never from the game thread.
 		/// The runner hands back the session it just ticked, which the worker owns for the whole setup.
 		std::function<void(NetSession&)> pumpHost;
@@ -141,6 +147,10 @@ namespace RTE {
 
 		/// Takes the state file the lobby round received (empty when the round carried none).
 		std::vector<uint8_t> TakeReceivedState() { return std::move(m_ReceivedStateBytes); }
+
+		/// Host: the match state the NEXT lobby round streams out, for a round Start() opens rather than
+		/// StartNextMatch(). The bytes stay out of the config so the round never copies a whole archive.
+		void SetStateToStream(std::vector<uint8_t> bytes) { m_StateToStream = std::move(bytes); }
 
 		/// Sets the first lockstep tick of the next round; the lobby start carries it to the clients.
 		void SetStartFrame(uint64_t startFrame) { m_Config.startFrame = startFrame; }
