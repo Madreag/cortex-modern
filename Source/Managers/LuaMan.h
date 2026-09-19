@@ -476,6 +476,9 @@ namespace RTE {
 		/// Makes the next table write in any state mark itself for the checkpoint.
 		void ArmCheckpointWriteTrap();
 
+		/// Tables born in the master state so far. The archive names its tables by this sequence.
+		uint64_t GetTableBirthCount() const;
+
 		/// The save index of a state: 0 for the master state, 1 onwards for the threaded ones, -1 for none.
 		int GetStateIndex(const LuaStateWrapper* state) const;
 
