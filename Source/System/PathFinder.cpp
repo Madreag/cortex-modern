@@ -1112,6 +1112,7 @@ void PathFinder::ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonN
 	auto neighborPresent = [](const HorizonNodeSnapshot& node, int dir) {
 		return node.neighborIds[dir] >= 0;
 	};
+	bool anyChange = false;
 	auto RayOffset = [](int dir) {
 		// The same ray offsets UpdateNodeCosts uses for right, down, up-right and right-down.
 		switch (dir) {
@@ -1135,11 +1136,30 @@ void PathFinder::ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonN
 			const Vector offset = RayOffset(dir);
 			next[dir] = getStrongerMaterial(StrongestMaterialAlongPatch(node.pos - offset, node.neighborPos[dir] - offset, patches), StrongestMaterialAlongPatch(node.pos + offset, node.neighborPos[dir] + offset, patches));
 		}
+		// UpdateNodeCosts ignores a sub-epsilon change unless a door appeared or went away; the committed grid follows it.
+		bool changed = false;
+		for (int dir = 0; dir < PathNode::c_MaxAdjacentNodeCount; ++dir) {
+			const Material* was = node.materials[dir];
+			const Material* now = next[dir];
+			if (!was || !now) {
+				continue;
+			}
+			const bool doorChanged = was != now && (was->GetIndex() == MaterialColorKeys::g_MaterialDoor || now->GetIndex() == MaterialColorKeys::g_MaterialDoor);
+			if (std::abs(was->GetIntegrity() - now->GetIntegrity()) > c_NodeCostChangeEpsilon || doorChanged) {
+				changed = true;
+				break;
+			}
+		}
+		if (!changed) {
+			next = node.materials;
+		}
+		anyChange = anyChange || changed;
 		computed[node.nodeId] = next;
 	}
+	// The mirror pass only runs when some node changed, exactly as UpdateNodeList does it.
 	for (const HorizonNodeSnapshot& node: nodes) {
 		auto found = computed.find(node.nodeId);
-		if (found == computed.end()) {
+		if (!anyChange || found == computed.end()) {
 			continue;
 		}
 		auto take = [&](int neighborId, int towardNeighbor, int towardHere) {
