@@ -2,7 +2,7 @@
 -- actor a message whose receiver writes simulation state (the pattern BrowncoatBoss.lua:103-113 and
 -- :177-201 use), and gibs a second object. Both calls must land on every peer at the committed tick.
 -- It also makes the two calls no wire can carry, to show they still behave as they always did: a
--- table context, which delivers on the machine that made it.
+-- table context, which delivers on the machine that made it, and a gib read back in the same pass.
 function Create(self)
 	self.f72bClock = Timer();
 	self.f72bSent = false;
@@ -38,6 +38,10 @@ function ThreadedUpdateAI(self)
 		if victim then
 			print("[f72b-pass] gib uid=" .. self.UniqueID);
 			victim:GibThis();
+			-- What the same pass sees of its own gib. The reference gibbed inside the call, so it reads
+			-- false there; under lockstep the gib is a command for the committed tick and the object is
+			-- still here. Printed, never asserted, so the row reads the same way on every executable.
+			print("[f72b-gib] samepass uid=" .. self.UniqueID .. " valid=" .. tostring(MovableMan:ValidMO(found)));
 		end
 	end
 end
