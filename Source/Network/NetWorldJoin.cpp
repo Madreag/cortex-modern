@@ -1,5 +1,6 @@
 #include "NetWorldJoin.h"
 
+#include "Constants.h"
 #include "NetIdentity.h"
 #include "ScenarioRunner.h"
 #include "System.h"
@@ -503,6 +504,10 @@ namespace RTE {
 			value |= static_cast<uint64_t>(chunk.bytes[static_cast<size_t>(i + 1)]) << (8 * i);
 		}
 		return true;
+	}
+
+	bool WorldTransitionBindsBrain(const NetGameWorldTransition& transition, bool seated) {
+		return transition.bindBrain && seated && transition.player >= Players::PlayerOne && transition.player < Players::MaxPlayerCount;
 	}
 
 	NetWorldActivationPlan PlanWorldActivation(const NetWorldJoinSession& session, uint64_t nextFrame, bool late) {

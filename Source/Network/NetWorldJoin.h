@@ -293,6 +293,10 @@ namespace RTE {
 	/// Host-authored Activate binding: seat, team, brain preset and spawn (Persistent World respawn API).
 	NetGameWorldTransition BuildWorldActivateTransition(const NetWorldJoinSession& session, const NetMatchConfig& config, uint64_t membershipRevision);
 
+	/// Whether an applied Activate binds the seat's brain on this peer: the host asked for it, a
+	/// resident was seated and the slot is a real player seat.
+	bool WorldTransitionBindsBrain(const NetGameWorldTransition& transition, bool seated);
+
 	/// What a bootstrap whose E has arrived gets: a member is admitted and its Activate is committed;
 	/// an overflow spectator only keeps streaming.
 	struct NetWorldActivationPlan {
