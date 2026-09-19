@@ -6908,6 +6908,40 @@ namespace RTE {
 			         " rows instead of the longest band-free run, 80 rows from row 140";
 			return false;
 		}
+		// The placement the panel actually gets: the screen solver grows each seat message band by the
+		// toast row (20) and the two gaps (4 each) the way LayoutPanel's own bands are grown.
+		constexpr int screenHeight = 360, rowHeight = 20, grown = rowHeight + 2 * 4;
+		const auto banded = [&](const std::vector<NetModerationGUI::PanelBand>& text, const NetModerationGUI::PanelPlacement& placed) {
+			int rows = 0;
+			for (const NetModerationGUI::PanelBand& band: text) {
+				rows += std::max(0, std::min(placed.top + placed.height, band.bottom + grown) - std::max(placed.top, band.top));
+			}
+			return rows;
+		};
+		const std::vector<NetModerationGUI::PanelBand> splitText{{0, 20}, {180, 200}};
+		const NetModerationGUI::PanelPlacement onScreen = NetModerationGUI::PlaceSeatsPanelOnScreen(screenHeight, rowHeight, splitText);
+		if (onScreen.top != 48 || onScreen.height != 132 || banded(splitText, onScreen) != 0) {
+			*error = "through the screen solver the panel took row " + std::to_string(onScreen.top) + " and " +
+			         std::to_string(onScreen.height) + " rows, crossing " + std::to_string(banded(splitText, onScreen)) + " banded rows";
+			return false;
+		}
+		// Every run between the bands is shorter than the panel's smallest height, so no placement is
+		// band-free: the panel covers the longest run whole and only the rows it must take beyond it.
+		const std::vector<NetModerationGUI::PanelBand> tiled{{0, 20}, {58, 152}, {200, 328}};
+		const NetModerationGUI::PanelPlacement least = NetModerationGUI::PlaceSeatsPanelOnScreen(screenHeight, rowHeight, tiled);
+		if (least.top != 180 || least.height != minHeight || banded(tiled, least) != minHeight - 20) {
+			*error = "with every run under " + std::to_string(minHeight) + " rows the panel took row " + std::to_string(least.top) +
+			         " and " + std::to_string(least.height) + " rows, crossing " + std::to_string(banded(tiled, least)) +
+			         " banded rows instead of the longest run's " + std::to_string(minHeight - 20);
+			return false;
+		}
+		// A screen with room for the box keeps the plain centred panel, bands or not.
+		const NetModerationGUI::PanelPlacement tall = NetModerationGUI::PlaceSeatsPanelOnScreen(1080, rowHeight, tiled);
+		if (tall.top != 368 || tall.height != fullHeight) {
+			*error = "on a 1080 row screen the panel took row " + std::to_string(tall.top) + " and " +
+			         std::to_string(tall.height) + " rows instead of the centred 344 from row 368";
+			return false;
+		}
 		std::cout << "[net-match-selftest] PASS overlay: the seats panel takes the highest run of rows no seat message band holds" << std::endl;
 		return true;
 	}
