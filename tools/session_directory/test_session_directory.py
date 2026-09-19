@@ -271,6 +271,30 @@ class DirectoryTests(unittest.TestCase):
                 resume_session_id=created["session_id"], resume_token=created["token"],
             ), "192.0.2.2", 23)
 
+    def test_live_resume_wrong_token_leaves_the_row_unchanged(self) -> None:
+        self.start(port=45810)
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        self.assertEqual(self.beat(sid, token, state="running")[0], 200)
+        row = self._session(sid)
+        before = (dict(row.fields), row.token, row.observed_ip, row.last_beat, row.state, row.listed)
+        status, refused = self.register(
+            resume_session_id=sid, resume_token="wrong-row-token",
+            name="unauthorized successor", listen_addrs=["203.0.113.78"], listen_port=45810,
+        )
+        self.assertEqual((status, refused), (403, {"error": "forbidden"}))
+        after = self._session(sid)
+        self.assertEqual(
+            (dict(after.fields), after.token, after.observed_ip, after.last_beat, after.state, after.listed),
+            before, "a refused live resume mutated the directory row",
+        )
+        with mock.patch.object(session_directory, "MAX_ROWS", 1):
+            status, resumed = self.register(resume_session_id=sid, resume_token=token)
+        self.assertEqual((status, resumed.get("session_id"), resumed.get("token")), (200, sid, token))
+        status, refused = self.register(resume_token=token)
+        self.assertEqual((status, refused), (403, {"error": "forbidden"}))
+
     def test_register_then_list(self) -> None:
         self.start()
         status, created = self.register()
