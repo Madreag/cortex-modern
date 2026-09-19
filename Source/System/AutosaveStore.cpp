@@ -1,0 +1,289 @@
+#include "AutosaveStore.h"
+
+#include "SaveGameArchive.h"
+#include "System.h"
+
+#include <algorithm>
+#include <charconv>
+#include <sstream>
+#include <system_error>
+
+namespace RTE {
+	namespace {
+		const char* c_RequiredEntries[] = {"Index.ini", "Save Mat.png", "Save FG.png", "Save BG.png"};
+
+		std::string Trim(std::string_view text) {
+			const size_t first = text.find_first_not_of(" \t\r\n");
+			if (first == std::string_view::npos) return {};
+			return std::string(text.substr(first, text.find_last_not_of(" \t\r\n") - first + 1));
+		}
+
+		/// One "Key = Value" line per field; a value never carries a newline, so the text needs no escaping.
+		void Line(std::ostringstream& out, const char* key, const std::string& value) {
+			out << key << " = " << value << "\n";
+		}
+
+		bool ParseNumber(const std::string& text, uint64_t& out) {
+			const auto parsed = std::from_chars(text.data(), text.data() + text.size(), out);
+			return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+		}
+
+		/// The tick the saved world itself stands on, read out of the checkpoint's own property.
+		bool WorldTick(const std::string& saveText, uint64_t& out) {
+			static constexpr std::string_view Key = "SimUpdateCount = ";
+			for (size_t start = 0; (start = saveText.find(Key, start)) != std::string::npos; start += Key.size()) {
+				const bool lineStart = start == 0 || saveText[start - 1] == '\n' || saveText[start - 1] == '\t' || saveText[start - 1] == ' ';
+				if (!lineStart) continue;
+				const size_t valueStart = start + Key.size();
+				const size_t end = saveText.find_first_of("\r\n", valueStart);
+				return ParseNumber(Trim(std::string_view(saveText).substr(valueStart, end == std::string::npos ? end : end - valueStart)), out);
+			}
+			return false;
+		}
+	}
+
+	std::filesystem::path AutosaveStore::Directory() {
+		return std::filesystem::path(System::GetWorkingDirectory()) / "Autosaves";
+	}
+
+	std::string AutosaveStore::PlatformName() {
+#if defined(_WIN32)
+		return "windows";
+#elif defined(__APPLE__)
+		return "macos";
+#elif defined(__linux__)
+		return "linux";
+#else
+		return "unknown";
+#endif
+	}
+
+	std::string AutosaveStore::ArchiveName(const std::string& matchId, uint64_t tick) {
+		return matchId + "-" + std::to_string(tick) + c_ArchiveExtension;
+	}
+
+	std::filesystem::path AutosaveStore::ArchivePath(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick) {
+		return directory / ArchiveName(matchId, tick);
+	}
+
+	std::filesystem::path AutosaveStore::ArchivePath(const std::string& matchId, uint64_t tick) {
+		return ArchivePath(Directory(), matchId, tick);
+	}
+
+	bool AutosaveStore::ValidMatchId(const std::string& matchId) {
+		return !matchId.empty() && matchId.size() <= c_MaxMatchIdBytes &&
+		       matchId.find_first_not_of("0123456789abcdef-") == std::string::npos;
+	}
+
+	bool AutosaveStore::ParseArchiveName(const std::string& fileName, const std::string& matchId, uint64_t& outTick) {
+		const std::string prefix = matchId + "-";
+		const std::string extension = c_ArchiveExtension;
+		if (!ValidMatchId(matchId) || !fileName.starts_with(prefix) || !fileName.ends_with(extension) ||
+		    fileName.size() <= prefix.size() + extension.size()) {
+			return false;
+		}
+		return ParseNumber(fileName.substr(prefix.size(), fileName.size() - prefix.size() - extension.size()), outTick);
+	}
+
+	std::string AutosaveStore::WriteDescriptor(const AutosaveDescriptor& descriptor) {
+		std::ostringstream out;
+		Line(out, "RestoreSchema", std::to_string(c_DescriptorSchema));
+		Line(out, "MatchId", descriptor.matchId);
+		Line(out, "SessionId", std::to_string(descriptor.sessionId));
+		Line(out, "RoundId", std::to_string(descriptor.roundId));
+		Line(out, "SavedTick", std::to_string(descriptor.savedTick));
+		Line(out, "SimTimeTicks", std::to_string(descriptor.simTimeTicks));
+		Line(out, "IntervalSeconds", std::to_string(descriptor.intervalSeconds));
+		Line(out, "GameVersion", descriptor.gameVersion);
+		Line(out, "Platform", descriptor.platform);
+		Line(out, "BuildId", descriptor.buildId);
+		Line(out, "DeterministicConfigHash", descriptor.deterministicConfigHash);
+		Line(out, "ModuleManifestHash", descriptor.moduleManifestHash);
+		Line(out, "SessionIdentityHash", descriptor.sessionIdentityHash);
+		Line(out, "WorldStructureHash", descriptor.worldStructureHash);
+		Line(out, "ActivityPreset", descriptor.activityPreset);
+		Line(out, "ScenePreset", descriptor.scenePreset);
+		return out.str();
+	}
+
+	bool AutosaveStore::ParseDescriptor(const std::string& text, AutosaveDescriptor& out, std::string* error) {
+		AutosaveDescriptor parsed;
+		bool hasSchema = false, hasTick = false;
+		std::istringstream lines(text);
+		std::string line;
+		while (std::getline(lines, line)) {
+			const size_t separator = line.find('=');
+			if (separator == std::string::npos) continue;
+			const std::string key = Trim(std::string_view(line).substr(0, separator));
+			const std::string value = Trim(std::string_view(line).substr(separator + 1));
+			uint64_t number = 0;
+			if (key == "RestoreSchema") {
+				if (!ParseNumber(value, number)) { if (error) *error = "unreadable RestoreSchema"; return false; }
+				parsed.schema = static_cast<int>(number);
+				hasSchema = true;
+			} else if (key == "MatchId") {
+				parsed.matchId = value;
+			} else if (key == "SessionId") {
+				if (!ParseNumber(value, parsed.sessionId)) { if (error) *error = "unreadable SessionId"; return false; }
+			} else if (key == "RoundId") {
+				if (!ParseNumber(value, parsed.roundId)) { if (error) *error = "unreadable RoundId"; return false; }
+			} else if (key == "SavedTick") {
+				if (!ParseNumber(value, parsed.savedTick)) { if (error) *error = "unreadable SavedTick"; return false; }
+				hasTick = true;
+			} else if (key == "SimTimeTicks") {
+				if (!ParseNumber(value, number)) { if (error) *error = "unreadable SimTimeTicks"; return false; }
+				parsed.simTimeTicks = static_cast<long long>(number);
+			} else if (key == "IntervalSeconds") {
+				if (!ParseNumber(value, number)) { if (error) *error = "unreadable IntervalSeconds"; return false; }
+				parsed.intervalSeconds = static_cast<uint32_t>(number);
+			} else if (key == "GameVersion") {
+				parsed.gameVersion = value;
+			} else if (key == "Platform") {
+				parsed.platform = value;
+			} else if (key == "BuildId") {
+				parsed.buildId = value;
+			} else if (key == "DeterministicConfigHash") {
+				parsed.deterministicConfigHash = value;
+			} else if (key == "ModuleManifestHash") {
+				parsed.moduleManifestHash = value;
+			} else if (key == "SessionIdentityHash") {
+				parsed.sessionIdentityHash = value;
+			} else if (key == "WorldStructureHash") {
+				parsed.worldStructureHash = value;
+			} else if (key == "ActivityPreset") {
+				parsed.activityPreset = value;
+			} else if (key == "ScenePreset") {
+				parsed.scenePreset = value;
+			}
+		}
+		if (!hasSchema || parsed.schema != c_DescriptorSchema) {
+			if (error) *error = "unsupported restore schema " + std::to_string(parsed.schema);
+			return false;
+		}
+		if (!hasTick || parsed.savedTick == 0 || !ValidMatchId(parsed.matchId)) {
+			if (error) *error = "descriptor has no match id or committed tick";
+			return false;
+		}
+		out = std::move(parsed);
+		return true;
+	}
+
+	bool AutosaveStore::Validate(const std::filesystem::path& path, AutosaveDescriptor& out, std::string* error) {
+		try {
+			std::error_code status;
+			if (!std::filesystem::is_regular_file(path, status)) {
+				if (error) *error = "not a regular file";
+				return false;
+			}
+			SaveGameArchive archive(path.string());
+			std::string descriptorText;
+			archive.ReadEntry(c_DescriptorEntry, descriptorText);
+			AutosaveDescriptor descriptor;
+			if (!ParseDescriptor(descriptorText, descriptor, error)) return false;
+			std::string entry;
+			// Reading an entry to its end is what checks its CRC, so a torn write is caught here.
+			for (const char* name: c_RequiredEntries) archive.ReadEntry(name, entry);
+			uint64_t worldTick = 0;
+			std::string saveText;
+			archive.ReadEntry("Save.ini", saveText);
+			if (saveText.empty()) {
+				if (error) *error = "the checkpoint carries no world";
+				return false;
+			}
+			if (!WorldTick(saveText, worldTick)) {
+				if (error) *error = "the world carries no SimUpdateCount";
+				return false;
+			}
+			uint64_t nameTick = 0;
+			if (!ParseArchiveName(path.filename().string(), descriptor.matchId, nameTick)) {
+				if (error) *error = "file name does not name this match and tick";
+				return false;
+			}
+			if (nameTick != descriptor.savedTick || worldTick != descriptor.savedTick) {
+				if (error) {
+					*error = "tick disagrees: name " + std::to_string(nameTick) + ", descriptor " +
+					         std::to_string(descriptor.savedTick) + ", world " + std::to_string(worldTick);
+				}
+				return false;
+			}
+			descriptor.path = path;
+			out = std::move(descriptor);
+			return true;
+		} catch (const std::exception& exception) {
+			if (error) *error = exception.what();
+			return false;
+		}
+	}
+
+	std::vector<AutosaveDescriptor> AutosaveStore::ListRestorable(const std::filesystem::path& directory, const std::string& matchId) {
+		std::vector<AutosaveDescriptor> restorable;
+		if (!ValidMatchId(matchId)) return restorable;
+		std::error_code status;
+		for (const auto& entry: std::filesystem::directory_iterator(directory, status)) {
+			uint64_t tick = 0;
+			if (entry.is_symlink() || !entry.is_regular_file() || !ParseArchiveName(entry.path().filename().string(), matchId, tick)) continue;
+			AutosaveDescriptor descriptor;
+			if (Validate(entry.path(), descriptor)) restorable.push_back(std::move(descriptor));
+		}
+		std::sort(restorable.begin(), restorable.end(), [](const AutosaveDescriptor& left, const AutosaveDescriptor& right) {
+			return left.savedTick > right.savedTick;
+		});
+		return restorable;
+	}
+
+	std::vector<AutosaveDescriptor> AutosaveStore::ListRestorable(const std::string& matchId) {
+		return ListRestorable(Directory(), matchId);
+	}
+
+	std::optional<AutosaveDescriptor> AutosaveStore::NewestRestorable(const std::filesystem::path& directory, const std::string& matchId) {
+		std::vector<AutosaveDescriptor> restorable = ListRestorable(directory, matchId);
+		if (restorable.empty()) return std::nullopt;
+		return std::move(restorable.front());
+	}
+
+	std::optional<AutosaveDescriptor> AutosaveStore::NewestRestorable(const std::string& matchId) {
+		return NewestRestorable(Directory(), matchId);
+	}
+
+	std::optional<AutosaveDescriptor> AutosaveStore::Find(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick, std::string* error) {
+		if (!ValidMatchId(matchId) || tick == 0) {
+			if (error) *error = "no match id or tick";
+			return std::nullopt;
+		}
+		AutosaveDescriptor descriptor;
+		if (!Validate(ArchivePath(directory, matchId, tick), descriptor, error)) return std::nullopt;
+		return descriptor;
+	}
+
+	std::optional<AutosaveDescriptor> AutosaveStore::Find(const std::string& matchId, uint64_t tick, std::string* error) {
+		return Find(Directory(), matchId, tick, error);
+	}
+
+	size_t AutosaveStore::ApplyRetention(const std::filesystem::path& directory, const std::string& matchId, uint64_t pinnedTick) {
+		if (!ValidMatchId(matchId)) return 0;
+		std::vector<std::pair<uint64_t, std::filesystem::path>> held;
+		std::error_code status;
+		for (const auto& entry: std::filesystem::directory_iterator(directory, status)) {
+			uint64_t tick = 0;
+			if (entry.is_symlink() || !entry.is_regular_file() || !ParseArchiveName(entry.path().filename().string(), matchId, tick)) continue;
+			held.emplace_back(tick, entry.path());
+		}
+		std::sort(held.begin(), held.end(), [](const auto& left, const auto& right) { return left.first > right.first; });
+		size_t removed = 0, kept = 0;
+		for (const auto& [tick, path]: held) {
+			AutosaveDescriptor descriptor;
+			const bool restorable = Validate(path, descriptor);
+			if (restorable && (tick == pinnedTick || kept < c_RetainedAutosaves)) {
+				if (tick != pinnedTick) ++kept;
+				continue;
+			}
+			std::error_code ignored;
+			removed += std::filesystem::remove(path, ignored) ? 1 : 0;
+		}
+		return removed;
+	}
+
+	size_t AutosaveStore::ApplyRetention(const std::string& matchId, uint64_t pinnedTick) {
+		return ApplyRetention(Directory(), matchId, pinnedTick);
+	}
+} // namespace RTE

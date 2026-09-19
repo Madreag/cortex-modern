@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="12.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug Full|Win32">
@@ -977,6 +977,7 @@
     <ClInclude Include="Source\System\FaultInjection.h" />
     <ClInclude Include="Source\System\ContentFile.h" />
     <ClInclude Include="Source\System\SaveGameArchive.h" />
+    <ClInclude Include="Source\System\AutosaveStore.h" />
     <ClInclude Include="Source\System\TelemetryBundle.h" />
     <ClInclude Include="Source\System\DataModule.h" />
     <ClInclude Include="Source\System\RTEError.h" />
@@ -1596,6 +1597,7 @@
     <ClCompile Include="Source\CI\DeterminismCheck.cpp" />
     <ClCompile Include="Source\CI\NetModerationGUIProbe.cpp" />
     <ClCompile Include="Source\System\ScenarioRunner.cpp" />
+    <ClCompile Include="Source\System\AutosaveStore.cpp" />
     <ClCompile Include="Source\System\InputScript.cpp" />
     <ClCompile Include="Source\System\AIWriteScript.cpp" />
     <ClCompile Include="Source\System\FaultInjection.cpp" />
