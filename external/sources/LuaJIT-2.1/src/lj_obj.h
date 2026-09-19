@@ -520,16 +520,21 @@ typedef struct GCtab {
   uint32_t preview;
   uint32_t preview_pad;
 #endif
+  uint64_t serial;	/* Birth order in this state. Identity across peers and saves. */
 } GCtab;
 
 /* The VM and the DynASM backends read t->preview at these fixed places. */
 #if LJ_GC64
-LJ_STATIC_ASSERT(sizeof(GCtab) == 64);
+LJ_STATIC_ASSERT(sizeof(GCtab) == 72);
 LJ_STATIC_ASSERT(offsetof(GCtab, preview) == 12);
+LJ_STATIC_ASSERT(offsetof(GCtab, serial) == 64);
 #else
-LJ_STATIC_ASSERT(sizeof(GCtab) == 40);
+LJ_STATIC_ASSERT(sizeof(GCtab) == 48);
 LJ_STATIC_ASSERT(offsetof(GCtab, preview) == 32);
+LJ_STATIC_ASSERT(offsetof(GCtab, serial) == 40);
 #endif
+/* The metatable offset is shared with GCudata and must not move. */
+LJ_STATIC_ASSERT(offsetof(GCtab, metatable) == offsetof(GCudata, metatable));
 
 #define sizetabcolo(n)	((n)*sizeof(TValue) + sizeof(GCtab))
 #define tabref(r)	((GCtab *)gcref((r)))
@@ -684,6 +689,7 @@ typedef struct global_State {
   PRNGState prng;	/* Global PRNG state. */
   GCRef gcroot[GCROOT_MAX];  /* GC roots. */
   struct LJPreview *preview;
+  uint64_t tabserial;	/* Tables born in this state. Never reused, saved with a checkpoint. */
 } global_State;
 
 #define mainthread(g)	(&gcref(g->mainthref)->th)
