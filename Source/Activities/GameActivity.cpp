@@ -2281,7 +2281,6 @@ void GameActivity::Update() {
 
 			// Player canceled the order while selecting LZ - can't be done in pregame
 			if (m_PlayerController[player].IsState(PRESS_SECONDARY) && m_ActivityState != ActivityState::PreGame) {
-				ClearPresentationView(player);
 				// Switch back to normal view
 				m_ViewState[player] = ViewState::Normal;
 				// Play err sound to indicate cancellation
@@ -2321,7 +2320,6 @@ void GameActivity::Update() {
 					m_LandingZone[player].m_Y = g_SceneMan.FindAltitude(m_LandingZone[player], g_SceneMan.GetSceneHeight(), 10, true) + lzOffsetY;
 
 					if (m_pBuyGUI[player]->GetTotalOrderCost() > GetTeamFunds(team)) {
-						ClearPresentationView(player);
 						g_GUISound.UserErrorSound()->Play(player);
 						m_FundsChanged[team] = true;
 						if (!g_MovableMan.GetNextTeamActor(team)) {

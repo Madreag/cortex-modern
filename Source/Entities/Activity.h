@@ -464,7 +464,6 @@ namespace RTE {
 		void NotePreviewedPurchase(int player, int team, float cost, uint64_t commitTick, uint64_t sequence = 0);
 		void AdoptPreviewedPurchase(int player, int team, float cost);
 		void ClearPreviewedPurchase(int player, int team, float cost);
-		void ClearPresentationView(int player);
 		void ClearAllPresentationViews();
 		void ExpirePresentationViews(uint64_t committedTick);
 		/// Fills the local seat's presentation view from the buy orders in flight at the canonical tick; the preview

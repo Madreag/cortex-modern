@@ -829,12 +829,6 @@ void Activity::ClearPreviewedPurchase(int player, int team, float cost) {
 	}
 }
 
-void Activity::ClearPresentationView(int player) {
-	if (player >= Players::PlayerOne && player < Players::MaxPlayerCount) {
-		m_PresentationView[player] = PresentationView{};
-	}
-}
-
 void Activity::ClearAllPresentationViews() {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		m_PresentationView[player] = PresentationView{};
