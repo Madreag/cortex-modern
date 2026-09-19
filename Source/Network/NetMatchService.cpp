@@ -3528,6 +3528,11 @@ static std::string ResyncSaveName() {
 			// for retention to prune and are refused by round once this round has checkpointed.
 			request.resumeMatchId.clear();
 			request.resumeTick = 0;
+			// The new admission must supersede the previous round's file under this same world id.
+			AutosaveAdmission previous;
+			if (AutosaveStore::ReadAdmission(AutosaveStore::Directory(), stored.worldId, previous)) {
+				m_RestartAdmissionGeneration = previous.generation;
+			}
 			return true;
 		}
 		const std::filesystem::path directory = AutosaveStore::Directory();
