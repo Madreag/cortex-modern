@@ -3196,16 +3196,16 @@ do
 	local birthRoot = { tag = "f76", nested = { 1, 2 } }
 	local birthOne, birthProblemsOne = _ScriptGraph.serialize({ ["1"] = birthRoot })
 	local birthTwo, birthProblemsTwo = _ScriptGraph.serialize({ ["1"] = birthRoot })
-	check("sg5_capture_repeats_byte_for_byte", birthOne == birthTwo and string.sub(birthOne, 1, 4) == "SG6;" and #birthProblemsOne == 0 and #birthProblemsTwo == 0, table.concat(birthProblemsOne, " | ") .. table.concat(birthProblemsTwo, " | "))
+	check("sg6_capture_repeats_byte_for_byte", birthOne == birthTwo and string.sub(birthOne, 1, 4) == "SG6;" and #birthProblemsOne == 0 and #birthProblemsTwo == 0, table.concat(birthProblemsOne, " | ") .. table.concat(birthProblemsTwo, " | "))
 	local birthSerial = tonumber(string.match(birthOne, "^SG6;S(%d+);"))
 	local birthId = tonumber(string.match(birthOne, "X%d+;N%d+;T(%d+);"))
-	check("sg5_header_carries_the_state_counter", birthSerial ~= nil and birthId ~= nil and birthId <= birthSerial, tostring(birthSerial) .. " " .. tostring(birthId))
+	check("sg6_header_carries_the_state_counter", birthSerial ~= nil and birthId ~= nil and birthId <= birthSerial, tostring(birthSerial) .. " " .. tostring(birthId))
 	-- A table born elsewhere moves the counter and leaves every name already given alone.
 	local birthSpare = { 1 }
 	local birthThree = _ScriptGraph.serialize({ ["1"] = birthRoot })
 	local serialThree = tonumber(string.match(birthThree, "^SG6;S(%d+);"))
 	local idThree = tonumber(string.match(birthThree, "X%d+;N%d+;T(%d+);"))
-	check("sg5_name_survives_a_later_table", birthSpare[1] == 1 and serialThree ~= nil and birthSerial ~= nil and serialThree > birthSerial and idThree == birthId, tostring(serialThree) .. " " .. tostring(idThree))
+	check("sg6_name_survives_a_later_table", birthSpare[1] == 1 and serialThree ~= nil and birthSerial ~= nil and serialThree > birthSerial and idThree == birthId, tostring(serialThree) .. " " .. tostring(idThree))
 	-- The ids are explicit now: a hole is a fact of the graph, a repeat is corruption.
 	local sg5Gap = "SG5;S100;r0;G0;L0;E0;Rz;N1;T7;P-;Mz;k0;"
 	local sg5Duplicate = "SG5;S100;r0;G0;L0;E0;Rz;N2;T7;P-;Mz;k0;T7;P-;Mz;k0;"
@@ -3259,7 +3259,7 @@ do
 	-- A restored table answers to the name the archive gave it, so the next capture writes the same bytes.
 	local carriedRoots, carriedProblems = _ScriptGraph.deserialize(birthOne)
 	local carriedText = carriedRoots and select(1, _ScriptGraph.serialize({ ["1"] = carriedRoots["1"] })) or ""
-	check("sg5_restore_then_capture_is_the_same_text", #carriedProblems == 0 and carriedText == birthOne, table.concat(carriedProblems, " | "))
+	check("sg6_restore_then_capture_is_the_same_text", #carriedProblems == 0 and carriedText == birthOne, table.concat(carriedProblems, " | "))
 	-- An engine table a mod changed rides in the archive as an inline patch: an added key, a key that is
 	-- not a string, and a metatable the baseline did not have. Writer and reader both, then again.
 	local patchMetaBefore = getmetatable(table)
