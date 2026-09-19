@@ -10865,6 +10865,11 @@ namespace RTE {
 			*error = "ice defaults: a relay or its credentials shipped enabled";
 			return false;
 		}
+		if (NetHostNatTraversalHint(settings, true, false, "").find("session directory URL") == std::string::npos ||
+		    NetHostNatTraversalHint(settings, false, false, "ip").find("Current session uses direct IP:") == std::string::npos) {
+			*error = "NAT hint hid the directory requirement or the direct route after host handover";
+			return false;
+		}
 		settings.SetNetworkStunServers("");
 		if (NetMatchService::BuildIceConfig(settings, "", 41011).iceEnable != 2) {
 			*error = "ice settings: an explicitly empty STUN list did not keep LAN-only candidates";

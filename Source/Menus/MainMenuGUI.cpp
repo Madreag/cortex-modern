@@ -1910,7 +1910,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	HostOptSelectComboIndex(m_HostNetIceCombo, g_SettingsMan.GetNetworkIceEnableSetting() ? 0 : 1);
 	HostOptSetEditable(m_HostNetIceCombo, editable);
 	if (m_HostNetIceHintLabel) {
-		m_HostNetIceHintLabel->SetText(NetHostNatTraversalHint(g_SettingsMan, m_HostOptionsSetupDraft, m_HostOptionsReadOnly));
+		m_HostNetIceHintLabel->SetText(NetHostNatTraversalHint(g_SettingsMan, m_HostOptionsSetupDraft, m_HostOptionsReadOnly, g_NetMatchService.GetIceRoute()));
 	}
 	// The port box stays pressable while hosted so the attempt can name the refusal.
 	HostOptSetEditable(m_HostNetPortBox, editable);
