@@ -31,8 +31,9 @@ namespace RTE {
 		SerializableOverrideMethods;
 		void TouchCheckpoint();
 		void ArmCheckpointValueTrap() { m_CheckpointValueTrap = true; }
+		void SetCheckpointOwner(SoundContainer* owner);
 		std::vector<std::pair<bool, int>> CheckpointSelections() const;
-		auto CheckpointStampValue() const { return CheckpointFields(SaveStructure(), CheckpointSelections()); }
+		auto CheckpointStampValue() const { return CheckpointFields(CheckpointFieldText([this] { return SaveStructure(); }), CheckpointSelections()); }
 
 		/// How the SoundSet should choose the next sound or SoundSet to play when SelectNextSound is called.
 		enum SoundSelectionCycleMode {
@@ -239,6 +240,7 @@ namespace RTE {
 
 		bool m_CheckpointInitialized = false;
 		bool m_CheckpointValueTrap = false;
+		SoundContainer* m_CheckpointOwner = nullptr;
 
 		/// Clears all the member variables of this SoundSet, effectively resetting the members of this abstraction level only.
 		void Clear();

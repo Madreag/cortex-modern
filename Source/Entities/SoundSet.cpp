@@ -33,8 +33,8 @@ SoundSet& SoundSet::operator=(const SoundSet& reference) {
 		std::swap(m_SimulationSelection, copy.m_SimulationSelection);
 		m_SoundData.swap(copy.m_SoundData);
 		m_SubSoundSets.swap(copy.m_SubSoundSets);
-		SetOwnerContainer(m_OwnerContainer);
-		copy.SetOwnerContainer(nullptr);
+		SetCheckpointOwner(m_CheckpointOwner);
+		copy.SetCheckpointOwner(nullptr);
 	}
 	return *this;
 }
@@ -46,17 +46,23 @@ void SoundSet::Clear() {
 	m_CurrentSelection = {false, -1};
 	m_SimulationSelection = {false, -1};
 	m_OwnerContainer = nullptr;
+	m_CheckpointOwner = nullptr;
 
 	m_SoundData.clear();
 	m_SubSoundSets.clear();
 }
 
 void SoundSet::TouchCheckpoint() {
-	if (m_OwnerContainer) m_OwnerContainer->TouchCheckpoint();
+	if (m_CheckpointOwner) m_CheckpointOwner->TouchCheckpoint();
 	if (m_CheckpointValueTrap) {
 		m_CheckpointValueTrap = false;
 		CheckpointValueWritten(this);
 	}
+}
+
+void SoundSet::SetCheckpointOwner(SoundContainer* owner) {
+	m_CheckpointOwner = owner;
+	for (SoundSet* child: m_SubSoundSets) child->SetCheckpointOwner(owner);
 }
 
 std::vector<std::pair<bool, int>> SoundSet::CheckpointSelections() const {
@@ -428,6 +434,7 @@ void SoundSet::GetFlattenedSoundData(std::vector<const SoundData*>& flattenedSou
 
 void SoundSet::SetOwnerContainer(SoundContainer* owner) {
 	m_OwnerContainer = owner;
+	m_CheckpointOwner = owner;
 	for (SoundSet* subSoundSet: m_SubSoundSets) {
 		subSoundSet->SetOwnerContainer(owner);
 	}
