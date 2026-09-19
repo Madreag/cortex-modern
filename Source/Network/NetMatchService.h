@@ -12,6 +12,7 @@
 #include "NetReconnectUx.h"
 #include "NetSeatAuth.h"
 #include "NetResyncState.h"
+#include "ActivityMan.h"
 #include "NetWorldJoin.h"
 #include "Singleton.h"
 
@@ -408,6 +409,10 @@ namespace RTE {
 		static bool ReleaseWorldCatchUpOnceRunning(bool coordinatorRunning, NetWorldCatchUpClient& catchUp);
 		/// §11: reads the recovery record so the landing screen can offer a rejoin after a relaunch, or
 		/// say exactly why it cannot. Read-only and safe to call repeatedly.
+		/// The image one finished archive describes. An entry the writer has not filled yields an
+		/// image that is not valid, so nothing is published for it.
+		static NetWorldCheckpointImage WorldImageFromAutosave(const ActivityMan::CompletedAutosave& entry, const NetWorldIdentity& identity,
+		                                                     const NetMatchConfig& matchConfig, uint64_t membershipRevision, double captureMs);
 		void ScanStoredTicket();
 		/// Whether the §11 retry schedule still has work, so the menu loop pumps the service whatever
 		/// screen is up rather than only while the multiplayer screen is open.
@@ -523,7 +528,9 @@ namespace RTE {
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
 		void DriveWorldJoins(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
-		void PublishWorldJoinImage(uint64_t tick);
+		/// Publishes the newest archive the autosave writer has FINISHED, when it is newer than the
+		/// image a bootstrap is already being served. Nothing here reads a file.
+		void PublishFinishedWorldJoinImage();
 		/// Writes a newly issued directory row token into the world identity record, so a reboot
 		/// resumes the same row instead of leaving a stale one to expire.
 		void PersistWorldDirectoryToken();
@@ -828,7 +835,7 @@ namespace RTE {
 		NetWorldJoinHost m_WorldJoin;
 		bool m_LastJoinTargetPersistentWorld = false;
 		NetWorldCatchUpClient m_WorldCatchUp;
-		std::vector<uint8_t> m_WorldJoinImageBytes; //!< The published archive, read once per image.
+		std::shared_ptr<const std::vector<uint8_t>> m_WorldJoinImageArchive; //!< The writer's own buffer, shared.
 		std::string m_WorldJoinImageDigest;         //!< Its digest, so a stale cache is refused without a re-hash.
 	};
 

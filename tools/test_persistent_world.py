@@ -62,6 +62,10 @@ RED_ADMIT_BEHIND_SENT_INPUT = "world-member-admitted-behind-the-sent-input"
 RED_ADMIT_REPLAY = "world-member-missed-the-frames-sent-before-its-admission"
 RED_ADMIT_DICTIONARY = "world-member-cannot-decode-the-observation-dictionary"
 RED_WINDOW_COPY = "window-copy-before-the-members-start-failed-the-round"
+RED_EXISTING_MEMBER_DICTIONARY = "existing-member-lost-the-dictionary-across-an-admission"
+RED_REPLAY_TABLE_DIVERGED = "replayed-member-table-diverged-from-the-live-table"
+RED_IMAGE_BEFORE_WRITE = "world-image-published-before-the-archive-was-written"
+RED_IMAGE_SIM_READ = "world-image-publish-read-the-sim-thread"
 
 CASES = (
     {
@@ -281,6 +285,13 @@ CASES = (
     },
     {
         "name": "host-bootstrap-refusals-and-retries",
+    {
+        "name": "world-image-published-from-the-writer",
+        "argv": ["-net-world-image-publish-selftest"],
+        "red": RED_IMAGE_BEFORE_WRITE,
+        "also_red": RED_IMAGE_SIM_READ,
+        "pass_token": "[net-world-image-publish-selftest] PASS",
+    },
         "argv": ["-net-world-bootstrap-selftest"],
         "red": RED_BOOTSTRAP_READ_THE_ARCHIVE,
         "also_red": (

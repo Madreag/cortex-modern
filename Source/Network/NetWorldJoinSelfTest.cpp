@@ -1029,6 +1029,55 @@ namespace RTE {
 
 		/// The host's bootstrap plane: a bootstrap that can never start is ended, a refused image is not
 		/// a start, and the host never keeps a joiner's tail bytes.
+		/// The image a world offers is what the autosave WRITER finished, never a file the sim thread
+		/// reads back while the zip is still being written.
+		int TestWorldImagePublishedFromTheWriter() {
+			std::string error;
+			const std::vector<uint8_t> archive = {0x50, 0x4B, 0x03, 0x04, 0x11, 0x22, 0x33, 0x44};
+			ActivityMan::CompletedAutosave finished;
+			finished.serial = 1;
+			finished.tick = 90;
+			finished.path = "Autosaves/world-90.ccsave";
+			finished.bytes = archive.size();
+			finished.digest = DigestWorldJoinBytes(archive);
+			finished.archive = std::make_shared<const std::vector<uint8_t>>(archive);
+			const NetWorldCheckpointImage image = NetMatchService::WorldImageFromAutosave(finished, MakeIdentity(), MakeWorldConfig(), 3, 1.5);
+			if (!image.IsValid() || image.tick != finished.tick || image.bytes != archive.size() ||
+			    image.digest != DigestWorldJoinBytes(archive) || image.path != finished.path) {
+				return Fail("world-image-published-before-the-archive-was-written: the offer reads tick " +
+				            std::to_string(image.tick) + " bytes " + std::to_string(image.bytes) + " digest \"" + image.digest +
+				            "\" for an archive of " + std::to_string(archive.size()) + " bytes whose digest is \"" +
+				            DigestWorldJoinBytes(archive) + "\"");
+			}
+			// A capture the writer has not finished publishes nothing: no entry, or an entry with no
+			// buffer, or one whose byte count does not match what it holds.
+			ActivityMan::CompletedAutosave capturing;
+			capturing.tick = 91;
+			capturing.path = finished.path;
+			capturing.bytes = 4096;
+			if (NetMatchService::WorldImageFromAutosave(capturing, MakeIdentity(), MakeWorldConfig(), 3, 1.5).IsValid()) {
+				return Fail("world-image-publish-read-the-sim-thread: a capture with no finished archive was published as an image");
+			}
+			ActivityMan::CompletedAutosave partial = finished;
+			partial.bytes = archive.size() + 1;
+			if (NetMatchService::WorldImageFromAutosave(partial, MakeIdentity(), MakeWorldConfig(), 3, 1.5).IsValid()) {
+				return Fail("world-image-publish-read-the-sim-thread: an entry whose byte count disagrees with its buffer was published");
+			}
+			// With nothing published a bootstrap waits in SnapshotTransfer and nothing is counted stalled.
+			NetWorldJoinHost host;
+			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) {
+				return Fail("world image host did not open a join: " + error);
+			}
+			const NetWorldJoinSession* waiting = host.FindSession(7);
+			if (host.Image().IsValid() || waiting == nullptr || waiting->phase != NetWorldJoinPhase::SnapshotTransfer ||
+			    host.Metrics().BootstrapStalls() != 0) {
+				return Fail("world-image-publish-read-the-sim-thread: with no finished archive the bootstrap is " +
+				            std::string(waiting == nullptr ? "gone" : NetWorldJoinPhaseName(waiting->phase)) + " with " +
+				            std::to_string(host.Metrics().BootstrapStalls()) + " stalls counted");
+			}
+			return 0;
+		}
+
 		int TestHostBootstrapRefusals() {
 			std::string error;
 			NetWorldJoinHost host;
@@ -2606,6 +2655,10 @@ namespace RTE {
 		}
 		if (const int result = TestQueuedImageDoesNotReplaceTheOneInFlight(); result != 0) {
 			return result;
+		if (std::strcmp(name, "image-publish") == 0 || std::strcmp(name, "-net-world-image-publish-selftest") == 0) {
+			s_FailTag = "net-world-image-publish-selftest";
+			return TestWorldImagePublishedFromTheWriter();
+		}
 		}
 		if (const int result = TestSlowJoinerReannounceThenFree(); result != 0) {
 			return result;
@@ -2655,6 +2708,9 @@ namespace RTE {
 	int NetWorldJoinSelfTest::RunCase(const char* name) {
 		if (name == nullptr || name[0] == '\0') {
 			return Run();
+		if (const int result = TestWorldImagePublishedFromTheWriter(); result != 0) {
+			return result;
+		}
 		}
 		if (const int result = RunNamed(name); result != 0) {
 			return result;
