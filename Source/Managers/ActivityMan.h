@@ -2,6 +2,7 @@
 
 #include "Singleton.h"
 #include "Activity.h"
+#include "AutosaveStore.h"
 #include "ContentFile.h"
 #include "SoundContainerRegistry.h"
 
@@ -172,6 +173,8 @@ namespace RTE {
 		bool SaveCurrentGame(const std::string& fileName, SaveCompression compression = SaveCompression::Fast);
 		/// Captures a callback-free checkpoint at a completed sim tick and queues its archive write.
 		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick);
+		/// The same capture, stamped with the identity a restore checks and the rewind point retention keeps.
+		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity);
 		/// Drains checkpoint writes at shutdown, after simulation has ended.
 		void WaitForAutosaveTasks() const;
 		/// The last automatic capture this process published; empty when none has.
@@ -214,6 +217,11 @@ namespace RTE {
 		/// @param fileName Path to the file.
 		/// @return Whether or not the saved game was successfully staged.
 		bool LoadGameToRestart(const std::string& fileName);
+
+		/// Stages one of this match's autosaves for a deferred restart. The checkpoint must validate as
+		/// restorable first, so a torn or foreign archive never reaches the staging path.
+		/// @param matchId The match both peers named; @param tick the committed tick it stands on.
+		bool LoadAutosaveToRestart(const std::string& matchId, uint64_t tick);
 
 		// These callbacks belong only to the currently staged checkpoint.
 		bool SetPendingCheckpointCallbacks(std::function<bool()> before, std::function<bool(Activity&)> after);
@@ -342,9 +350,14 @@ namespace RTE {
 		/// Reads a .ccsave into its Scene, Activity, and restart metadata; shared by the launch and
 		/// stage-for-restart load paths.
 		bool ReadSavedGame(const std::string& fileName, PendingCheckpoint& out);
+		/// The same read against a checkpoint anywhere on disk, so autosaves load like saved games.
+		bool ReadSavedGameArchive(const std::string& archivePath, const std::string& label, PendingCheckpoint& out);
+		/// Stages any checkpoint archive for the deferred restart.
+		bool LoadArchiveToRestart(const std::string& archivePath, const std::string& label);
 		/// Shares the checkpoint encoding while keeping automatic capture independent of user saves.
 		bool QueueSaveSnapshot(const std::string& fileName, const std::string& path, SaveCompression compression,
-		                       std::shared_future<bool>& task, const std::string& matchId = "", uint64_t tick = 0, size_t* capturedBytes = nullptr);
+		                       std::shared_future<bool>& task, const std::string& matchId = "", uint64_t tick = 0, size_t* capturedBytes = nullptr,
+		                       const AutosaveIdentity* identity = nullptr);
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage) const;
 		/// Serializes script graphs the way a save does and reports each refusal.
 		bool CaptureScriptGraphsOrReportRefusal(SaveKind kind, std::vector<std::string>& graphs);

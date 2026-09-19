@@ -21,6 +21,7 @@ sources += files(
 'RotatePrimitiveSelfTest.cpp',
 'FloatTextSelfTest.cpp',
 'ScenarioRunner.cpp',
+'AutosaveStore.cpp',
 'InputScript.cpp',
 'AIWriteScript.cpp',
 'FaultInjection.cpp',
