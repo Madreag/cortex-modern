@@ -439,6 +439,11 @@ static std::string ResyncSaveName() {
 		}
 		NetMatchConfig matchConfig;
 		std::string configError;
+		// A world boot resumes its own checkpoint chain by default, through the very same resume path.
+		if (request.host && !ResolveWorldResume(request, error)) {
+			SetState(NetMatchServiceState::Failed, "World resume refused", error ? *error : "world resume refused");
+			return false;
+		}
 		// A resume reopens the lobby the checkpoint was written under, so its own manifest authors the
 		// roster and the request's activity, scene and seats are taken from it.
 		if (request.host && !request.resumeMatchId.empty() && !PrepareResume(request, error)) {
@@ -456,6 +461,9 @@ static std::string ResyncSaveName() {
 			}
 			request.worldId = m_WorldIdentity.worldId;
 			request.worldBoot = m_WorldIdentity.boot;
+			if (request.resumeConfig) {
+				SeatResumedWorldConfig(*request.resumeConfig, m_WorldIdentity);
+			}
 			// A world keeps the capacity its first boot authored; a later boot only names one when the record has none.
 			if (!request.worldTeamCapacity.has_value() && WorldIdentityCarriesCapacity(m_WorldIdentity)) {
 				request.worldTeamCapacity = m_WorldIdentity.teamCapacity;
@@ -544,6 +552,7 @@ static std::string ResyncSaveName() {
 			m_AutosaveMatchId.clear();
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
+			m_FinalCheckpointWritten = false;
 			m_WorkerDone = false;
 			m_IsHost = request.host;
 			m_CurrentMatchSummary = {};
@@ -588,7 +597,8 @@ static std::string ResyncSaveName() {
 					m_DirectoryRow.resumeSessionId = matchConfig.worldId;
 					// The previous boot's row token, so this boot resumes the world's own row.
 					m_DirectoryRow.resumeToken = m_WorldIdentity.directoryToken;
-				m_DirectoryRow.spectatorFree = matchConfig.worldMaxSpectators;
+					// Nothing is connected yet, so every watcher slot the world offers is free.
+					m_DirectoryRow.spectatorFree = static_cast<int64_t>(WorldSpectatorBound(matchConfig));
 				}
 			}
 			if (request.host && !request.resumeMatchId.empty()) {
@@ -601,9 +611,17 @@ static std::string ResyncSaveName() {
 				m_AutosaveIdentity.pinnedTickSource = m_PinnedAutosaveTick;
 				m_PinnedAutosaveTick->store(m_ResumeTick);
 				m_MatchAutosaveSeconds = MatchAutosaveSeconds(matchConfig);
-				// The stored row token resumes the very session id the peers' tickets name.
-				m_DirectoryRow.resumeSessionId = m_ResumeDirectorySession;
-				m_DirectoryRow.resumeToken = m_ResumeDirectoryToken;
+				if (!matchConfig.persistentWorld) {
+					// The stored row token resumes the very session id the peers' tickets name.
+					m_DirectoryRow.resumeSessionId = m_ResumeDirectorySession;
+					m_DirectoryRow.resumeToken = m_ResumeDirectoryToken;
+				}
+				// The row advertises the seats the resumed state really leaves open, not peerCount-1:
+				// a returning player must not read a world of free seats that are all still held.
+				const int64_t openSeats = NetReconnectHost::CountExportedOpenSeats(m_ResumeAdmissionState, matchConfig.hostPeerId);
+				if (openSeats >= 0) {
+					m_DirectoryRow.seatsFree = openSeats;
+				}
 			}
 			m_DirectoryRetracted = false;
 			m_DirectoryHidden = false;
@@ -1362,6 +1380,8 @@ static std::string ResyncSaveName() {
 		if (m_Worker.joinable()) {
 			m_Worker.join();
 		}
+		// A clean stop of a world leaves the tick it stopped on, before anything is torn down.
+		WriteFinalWorldCheckpoint();
 		RunCleanLeave();
 		// The round is over here too: an admission file with no checkpoint left behind it goes now.
 		SweepRestartAdmission();
@@ -1727,7 +1747,7 @@ static std::string ResyncSaveName() {
 					// The admission table says which seats a late joiner could still take: the host's
 					// own seat and the CPU slot never count, a committed or closed one is taken.
 					for (const NetH4SeatStatus& seat : m_SeatStatuses) {
-						if (seat.lockstepPeerId != 0 && seat.lockstepPeerId != m_LocalPeerId && !seat.committed && !seat.closed) {
+						if (NetH4SeatIsOpen(seat.lockstepPeerId, m_LocalPeerId, seat.committed, seat.closed)) {
 							++directorySeatsFree;
 						}
 					}
@@ -2188,10 +2208,7 @@ static std::string ResyncSaveName() {
 		m_LastAutosaveSimTime = now;
 		if (now < m_NextAutosaveSimTime) return;
 		m_NextAutosaveSimTime += ((now - m_NextAutosaveSimTime) / interval + 1) * interval;
-		// The tick is complete, so the agreed lockstep state of THIS tick is what a restart needs; it
-		// is read once, here, through the same reader the heal's snapshot capture uses.
-		m_AutosaveIdentity.sideState = ScenarioRunner::CaptureAgreedSideState();
-		if (!g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity)) {
+		if (!SaveStampedAutosave(tick)) {
 			return;
 		}
 		// Every checkpoint wants a current admission file beside it; the pump writes it.
@@ -2200,6 +2217,13 @@ static std::string ResyncSaveName() {
 			// The image is published when the writer thread has finished this archive, from the pump.
 			std::cout << "[net-world] metrics " << m_WorldJoin.Metrics().BuildReportJson() << std::endl;
 		}
+	}
+
+	bool NetMatchService::SaveStampedAutosave(uint64_t tick) {
+		// The tick is complete, so the agreed lockstep state of THIS tick is what a restart needs; it
+		// is read once, here, through the same reader the heal's snapshot capture uses.
+		m_AutosaveIdentity.sideState = ScenarioRunner::CaptureAgreedSideState();
+		return g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
 	}
 
 	NetWorldCheckpointImage NetMatchService::WorldImageFromAutosave(const ActivityMan::CompletedAutosave& entry, const NetWorldIdentity& identity,
@@ -2497,7 +2521,7 @@ static std::string ResyncSaveName() {
 				// writer has the archive, so the second joiner waits in SnapshotTransfer for that one image
 				// instead of costing the incumbent a second sim-thread capture at the same tick.
 				m_WorldCaptureRequestedTick = tick;
-				g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
+				(void)SaveStampedAutosave(tick);
 			}
 			if (const NetWorldJoinSession* session = m_WorldJoin.FindSession(peer.transportPeerId)) {
 				if (m_Runner) {
@@ -2813,6 +2837,20 @@ static std::string ResyncSaveName() {
 		catchUp = {};
 		ScenarioRunner::ReleaseWorldCatchUp();
 		return true;
+	}
+
+	void NetMatchService::AdoptWorldTicketSession() {
+		// A world's directory row is registered under the world's own UUID, so the ticket this client
+		// keeps must name that id: it is the same every boot, and it is what the return watch browses
+		// for while the host is away.
+		if (m_IsHost || !m_Runner) {
+			return;
+		}
+		const NetMatchConfig& config = m_Runner->GetLobbySession().GetMatchConfig();
+		if (!config.persistentWorld || !NetMatchConfigUtil::IsWorldId(config.worldId)) {
+			return;
+		}
+		m_ReconnectClient.AdoptDirectorySessionId(config.worldId);
 	}
 
 	void NetMatchService::DriveWorldJoinClient(uint64_t nowMs) {
@@ -3136,6 +3174,26 @@ static std::string ResyncSaveName() {
 		m_RestartAdmissionDue.store(false);
 	}
 
+	void NetMatchService::WriteFinalWorldCheckpoint() {
+		if (m_AutosaveMatchId.empty() || !m_Coordinator || !m_Coordinator->IsRunning()) return;
+		uint64_t tick = 0;
+		if (!FinalCheckpointTick(m_IsHost, m_WorldJoin.IsConfigured(), m_FinalCheckpointWritten, m_MatchAutosaveSeconds,
+		                         ScenarioRunner::IsLockstepControllerSyncActive(), g_ActivityMan.ActivityRunning(),
+		                         m_Coordinator->GetStats().nextFrame, tick)) {
+			return;
+		}
+		m_FinalCheckpointWritten = true;
+		if (!SaveStampedAutosave(tick)) {
+			std::cout << "[net-world] final checkpoint refused at tick=" << tick << std::endl;
+			return;
+		}
+		// The manifest is published by the writer, so the process may not leave before it lands.
+		g_ActivityMan.WaitForAutosaveTasks();
+		m_RestartAdmissionDue.store(true);
+		PublishRestartAdmission();
+		std::cout << "[net-world] final checkpoint match=" << m_AutosaveMatchId << " tick=" << tick << std::endl;
+	}
+
 	void NetMatchService::SweepRestartAdmission() {
 		std::string matchId;
 		{
@@ -3155,6 +3213,72 @@ static std::string ResyncSaveName() {
 			m_PublishedDirectorySession.clear();
 			m_PublishedDirectoryToken.clear();
 		}
+	}
+
+	void NetMatchService::SeatResumedWorldConfig(NetMatchConfig& config, const NetWorldIdentity& identity) {
+		// The resumed round belongs to THIS boot, so nothing the previous boot signed is live under it;
+		// the roster, the seats and the delay policy stay the checkpoint's own.
+		config.worldId = identity.worldId;
+		config.worldBoot = identity.boot;
+	}
+
+	bool NetMatchService::FinalCheckpointTick(bool host, bool worldConfigured, bool alreadyWritten, uint32_t autosaveSeconds,
+	                                          bool lockstepActive, bool activityRunning, uint64_t nextFrame, uint64_t& outTick) {
+		outTick = 0;
+		if (!host || !worldConfigured || alreadyWritten || autosaveSeconds == 0 || !lockstepActive || !activityRunning) return false;
+		if (nextFrame == 0) return false;
+		outTick = nextFrame - 1;
+		return outTick != 0;
+	}
+
+	bool NetMatchService::ResolveWorldResume(NetMatchServiceRequest& request, std::string* error) {
+		auto refuse = [&](const std::string& reason) {
+			if (error) *error = reason;
+			return false;
+		};
+		if (!request.host || !(request.persistentWorld || request.activityPreset == "Persistent World")) return true;
+		NetWorldIdentity stored;
+		if (!NetWorldIdentityFile::Peek(NetWorldIdentityFile::DefaultPath(), stored, error)) return false;
+		if (!NetMatchConfigUtil::IsWorldId(stored.worldId)) {
+			// No record yet: this is the world's first boot and there is nothing of it to resume.
+			if (!request.resumeMatchId.empty()) return refuse("-net-resume-match names no world: this install has no world identity record");
+			return true;
+		}
+		if (!request.resumeMatchId.empty() && request.resumeMatchId != stored.worldId) {
+			return refuse("-net-resume-match must name this world " + stored.worldId);
+		}
+		if (request.worldFresh) {
+			// A fresh round opens from the scene under the same UUID; the old checkpoints stay on disk
+			// for retention to prune and are refused by round once this round has checkpointed.
+			request.resumeMatchId.clear();
+			request.resumeTick = 0;
+			return true;
+		}
+		const std::filesystem::path directory = AutosaveStore::Directory();
+		std::optional<AutosaveDescriptor> newest;
+		for (AutosaveDescriptor& held: AutosaveStore::ListRestorable(directory, stored.worldId)) {
+			if (!held.resumable) continue;
+			newest = std::move(held);
+			break;
+		}
+		if (!newest) {
+			// A world that has never checkpointed boots from its scene, exactly as it did before.
+			request.resumeMatchId.clear();
+			request.resumeTick = 0;
+			return true;
+		}
+		if (request.resumeTick != 0 && request.resumeTick != newest->savedTick) {
+			std::string reason;
+			const std::optional<AutosaveDescriptor> named = AutosaveStore::Find(directory, stored.worldId, request.resumeTick, &reason);
+			if (!named) return refuse("checkpoint refused: " + reason);
+			// A round the world has already left cannot be re-entered: its world has moved on.
+			if (named->roundId != newest->roundId) {
+				return refuse("checkpoint refused: that checkpoint belongs to round " + std::to_string(named->roundId) +
+				              ", the world stands on round " + std::to_string(newest->roundId));
+			}
+		}
+		request.resumeMatchId = stored.worldId;
+		return true;
 	}
 
 	bool NetMatchService::PrepareResume(NetMatchServiceRequest& request, std::string* error) {
@@ -3650,6 +3774,7 @@ static std::string ResyncSaveName() {
 		if (m_IsHost && m_Coordinator && m_Coordinator->IsRunning() && m_Coordinator->IsPersistentWorldRound()) {
 			DriveWorldJoins(nowMs);
 		}
+		AdoptWorldTicketSession();
 		DriveWorldJoinClient(nowMs);
 		if (events.empty()) {
 			return;
@@ -5525,7 +5650,7 @@ static std::string ResyncSaveName() {
 		// The row must be the same session, listed as a lobby or a running match.
 		const auto& rows = m_ReturnWatch.Rows();
 		m_ReconnectUx.NoteHostReturn(std::any_of(rows.begin(), rows.end(), [&](const NetDirectorySessionRow& row) {
-			return row.sessionId == sessionId && (row.state == "running" || row.state == "lobby");
+			return NetDirectoryRowIsWatchedHost(row, sessionId);
 		}));
 	}
 

@@ -15,19 +15,31 @@
 #include "NetMatchService.h"
 #include "NetReconnectTicketStore.h"
 #include "NetWorldJoin.h"
+#include "ActivityMan.h"
+#include "AutosaveStore.h"
 #include "System/ScenarioRunner.h"
+
+#ifdef SYSTEM_MINIZIP
+#include <minizip/zip.h>
+#else
+#include "zip.h"
+#endif
 
 #include "nlohmann/json.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <variant>
+#include <vector>
 
 namespace RTE {
 
@@ -191,6 +203,19 @@ namespace RTE {
 					clientTransport.AdvanceTimeMs(10);
 					nowMs += 10;
 				}
+			}
+		};
+
+		// A private directory for a row's own files; removed with them.
+		struct ResumeScratchDirectory {
+			std::filesystem::path path;
+			ResumeScratchDirectory(): path(std::filesystem::temp_directory_path() / ("cc-world-restart-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+				std::error_code ignored;
+				std::filesystem::create_directories(path, ignored);
+			}
+			~ResumeScratchDirectory() {
+				std::error_code ignored;
+				std::filesystem::remove_all(path, ignored);
 			}
 		};
 
@@ -2080,6 +2105,46 @@ namespace RTE {
 			return Fail("world_boot 0 was accepted on the C++ register decoder: the encoder wrote resume \"" +
 			            roundTrip.resumeSessionId + "\"/\"" + roundTrip.resumeToken + "\" (" + reason + ")");
 		}
+		// The boot-N+1 row: the world's own id and the token its identity record kept, and the watcher
+		// count it really offers. A host that authored no capacity offers the whole lobby-id pool.
+		if (decoded.worldBoot != 2 || decoded.worldId != c_WorldId || decoded.resumeSessionId != decoded.worldId ||
+		    !decoded.persistentWorld) {
+			return Fail("world-restart-row-lost-the-world: boot " + std::to_string(decoded.worldBoot) + " advertises world \"" +
+			            decoded.worldId + "\" resuming session \"" + decoded.resumeSessionId + "\"");
+		}
+		const NetMatchConfig unauthored = MakeWorldConfig();
+		if (WorldSpectatorBound(unauthored) != c_WorldSpectatorLobbyCap) {
+			return Fail("world-restart-row-lost-its-watchers: a world with no authored capacity offers " +
+			            std::to_string(WorldSpectatorBound(unauthored)) + " watcher slots, the pool is " +
+			            std::to_string(c_WorldSpectatorLobbyCap));
+		}
+		NetMatchConfig authored = unauthored;
+		authored.worldTeamCapacity = {1, 1, 0, 0};
+		authored.worldMaxSpectators = 3;
+		if (WorldSpectatorBound(authored) != 3) {
+			return Fail("world-restart-row-lost-its-watchers: an authored bound of 3 offers " +
+			            std::to_string(WorldSpectatorBound(authored)) + " watcher slots");
+		}
+		// The token the directory issues outlives the process that earned it: the identity record is
+		// rewritten with it, so the NEXT boot presents the token this one was given.
+		ResumeScratchDirectory scratch;
+		const std::string identityPath = (scratch.path / "persistent.identity").string();
+		NetWorldIdentity rotating;
+		std::string identityError;
+		if (!NetWorldIdentityFile::OpenForBoot(identityPath, rotating, &identityError)) {
+			return Fail("world-restart-row-lost-its-token: the record did not open: " + identityError);
+		}
+		rotating.directoryToken = "rotated-boot-n-token";
+		if (!NetWorldIdentityFile::Write(identityPath, rotating, &identityError)) {
+			return Fail("world-restart-row-lost-its-token: the rotated token was not stored: " + identityError);
+		}
+		NetWorldIdentity nextBoot;
+		if (!NetWorldIdentityFile::OpenForBoot(identityPath, nextBoot, &identityError) ||
+		    nextBoot.directoryToken != "rotated-boot-n-token" || nextBoot.boot != rotating.boot + 1) {
+			return Fail("world-restart-row-lost-its-token: boot " + std::to_string(nextBoot.boot) + " presents token \"" +
+			            nextBoot.directoryToken + "\", the directory issued \"rotated-boot-n-token\" to boot " +
+			            std::to_string(rotating.boot));
+		}
 		return 0;
 	}
 
@@ -3427,6 +3492,592 @@ namespace RTE {
 		return 0;
 	}
 
+	// A checkpoint the store validates: the descriptor, the entries a restore reads and a world whose
+	// SimUpdateCount is the tick in the file name, so a row drives the real store, not a stub.
+	bool WriteWorldCheckpointArchive(const std::filesystem::path& directory, const AutosaveDescriptor& descriptor, std::string* error) {
+		std::error_code ignored;
+		std::filesystem::create_directories(directory, ignored);
+		const std::filesystem::path path = AutosaveStore::ArchivePath(directory, descriptor.matchId, descriptor.savedTick);
+		zipFile zip = zipOpen(path.string().c_str(), APPEND_STATUS_CREATE);
+		if (zip == nullptr) {
+			*error = "could not create the checkpoint archive " + path.string();
+			return false;
+		}
+		bool ok = true;
+		auto put = [&](const char* name, const std::string& body) {
+			zip_fileinfo info{};
+			// deflate at the fast level, the same two numbers the checkpoint writer uses.
+			if (zipOpenNewFileInZip(zip, name, &info, nullptr, 0, nullptr, 0, nullptr, 8, 2) != ZIP_OK) {
+				ok = false;
+				return;
+			}
+			if (!body.empty() && zipWriteInFileInZip(zip, body.data(), static_cast<unsigned int>(body.size())) != ZIP_OK) ok = false;
+			if (zipCloseFileInZip(zip) != ZIP_OK) ok = false;
+		};
+		put(AutosaveStore::c_DescriptorEntry, AutosaveStore::WriteDescriptor(descriptor));
+		put("Index.ini", "// checkpoint index\n");
+		put("Save Mat.png", std::string("\x89PNG\r\n\x1a\n", 8));
+		put("Save FG.png", std::string("\x89PNG\r\n\x1a\n", 8));
+		put("Save BG.png", std::string("\x89PNG\r\n\x1a\n", 8));
+		put("Save.ini", "AddScene = Scene\n\tSimUpdateCount = " + std::to_string(descriptor.savedTick) + "\n");
+		zipClose(zip, nullptr);
+		if (!ok) *error = "the checkpoint archive could not be written";
+		return ok;
+	}
+
+	AutosaveDescriptor WorldCheckpointDescriptor(const std::string& worldId, uint64_t tick, uint64_t roundId, const NetMatchConfig& config) {
+		AutosaveDescriptor descriptor;
+		descriptor.schema = AutosaveStore::c_DescriptorSchema;
+		descriptor.matchId = worldId;
+		descriptor.sessionId = config.sessionId;
+		descriptor.roundId = roundId;
+		descriptor.savedTick = tick;
+		descriptor.simTimeTicks = static_cast<long long>(tick);
+		descriptor.intervalSeconds = 45;
+		descriptor.gameVersion = "7.0.0";
+		descriptor.buildId = "stage2-world";
+		descriptor.worldStructureHash = std::string(64, 'd');
+		descriptor.activityPreset = config.activityPreset;
+		descriptor.scenePreset = config.sceneName;
+		return descriptor;
+	}
+
+	std::string WorldConfigPayloadHex(const NetMatchConfig& config) {
+		std::vector<uint8_t> bytes;
+		if (!NetLobbyProtocol::Encode(NetLobbyMessage{NetLobbyMatchConfig{config}}, bytes)) return {};
+		static constexpr char digits[] = "0123456789abcdef";
+		std::string hex;
+		for (uint8_t byte: bytes) {
+			hex.push_back(digits[byte >> 4]);
+			hex.push_back(digits[byte & 0x0F]);
+		}
+		return hex;
+	}
+
+	AutosaveSideState WorldSideStateFixture() {
+		// The resync suite's own values, so no row invents a second fixture for the same four fields.
+		AutosaveSideState state;
+		state.controlOwners = {{101, 2}};
+		state.droppedControlOwners = {{301, 3}};
+		state.appliedCommands = {{2, 10}};
+		state.firstTransferUid = 101;
+		return state;
+	}
+
+	// One world checkpoint on disk: the archive, its restart manifest and the match's sealed admission.
+	bool PublishWorldCheckpoint(const std::filesystem::path& directory, const std::string& worldId, uint64_t tick, uint64_t roundId,
+	                            const NetMatchConfig& config, const std::array<uint8_t, 32>& key, uint64_t generation, std::string* error) {
+		if (!WriteWorldCheckpointArchive(directory, WorldCheckpointDescriptor(worldId, tick, roundId, config), error)) return false;
+		AutosaveManifest manifest;
+		manifest.schema = AutosaveStore::c_ManifestSchema;
+		manifest.matchId = worldId;
+		manifest.sessionId = config.sessionId;
+		manifest.roundId = roundId;
+		manifest.savedTick = tick;
+		manifest.simTimeTicks = static_cast<long long>(tick);
+		manifest.intervalSeconds = 45;
+		manifest.configHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config));
+		manifest.configPayload = WorldConfigPayloadHex(config);
+		manifest.activityPreset = config.activityPreset;
+		manifest.scenePreset = config.sceneName;
+		manifest.peerNames = {"World", "Player"};
+		manifest.sideState = WorldSideStateFixture();
+		if (manifest.configPayload.empty()) {
+			*error = "the world configuration did not encode into a manifest payload";
+			return false;
+		}
+		if (!AutosaveStore::PublishManifest(directory, manifest, error)) return false;
+		const auto body = nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"admission", std::vector<uint8_t>{7, 7, 7}}, {"directory_row", std::string()},
+		                                                         {"directory_session", worldId}, {"directory_token", std::string("boot-n-token")},
+		                                                         {"autosave_match_id", worldId}, {"autosave_round", roundId}, {"autosave_interval", 45},
+		                                                         {"generation", generation}});
+		AutosaveAdmission admission;
+		admission.schema = AutosaveStore::c_AdmissionSchema;
+		admission.matchId = worldId;
+		admission.generation = generation;
+		const std::vector<uint8_t> context(worldId.begin(), worldId.end());
+		if (!NetAuthSeal(key, context, body, admission.sealed)) {
+			*error = "the row could not seal its admission file";
+			return false;
+		}
+		return AutosaveStore::PublishAdmission(directory, admission, error);
+	}
+
+	// The live identity record and the live store are what the production path reads, so a row writes
+	// there and puts back exactly what it found.
+	struct WorldRestartScratch {
+		std::filesystem::path identityPath;
+		std::filesystem::path store;
+		std::string previousIdentity;
+		bool hadIdentity = false;
+		std::vector<std::filesystem::path> written;
+
+		WorldRestartScratch(): identityPath(NetWorldIdentityFile::DefaultPath()), store(AutosaveStore::Directory()) {
+			std::ifstream in(identityPath, std::ios::binary);
+			if (in) {
+				std::ostringstream text;
+				text << in.rdbuf();
+				previousIdentity = text.str();
+				hadIdentity = true;
+			}
+			std::error_code ignored;
+			std::filesystem::remove(identityPath, ignored);
+			std::filesystem::create_directories(store, ignored);
+		}
+		void Note(const std::string& worldId, uint64_t tick) {
+			written.push_back(AutosaveStore::ArchivePath(store, worldId, tick));
+			written.push_back(AutosaveStore::ManifestPath(store, worldId, tick));
+			written.push_back(AutosaveStore::AdmissionPath(store, worldId));
+		}
+		~WorldRestartScratch() {
+			std::error_code ignored;
+			for (const std::filesystem::path& path: written) std::filesystem::remove(path, ignored);
+			std::filesystem::remove(store / "row-identity.dat", ignored);
+			std::filesystem::remove(identityPath, ignored);
+			if (hadIdentity) {
+				std::ofstream out(identityPath, std::ios::binary | std::ios::trunc);
+				out << previousIdentity;
+			}
+		}
+	};
+
+	// A resumed world config for the row's own checks: the roster the checkpoint agreed, at boot N.
+	NetMatchConfig MakeStoredWorldConfig(const std::string& worldId) {
+		NetMatchConfig config = MakeWorldConfig();
+		config.worldId = worldId;
+		config.worldBoot = 1;
+		config.configRevision = 7;
+		config.autosaveEnabled = true;
+		config.autosaveIntervalSeconds = 45;
+		return config;
+	}
+
+	bool RowRestartKey(NetMatchService& service, const std::filesystem::path& scratch, std::array<uint8_t, 32>& key, std::string* error) {
+		// The key is derived from an identity of the row's own, never the player's.
+		service.m_ParticipantStore.SetPath((scratch / "row-identity.dat").string());
+		if (!service.m_ParticipantStore.LoadOrCreate(error)) return false;
+		if (!service.DeriveRestartKey(key)) {
+			*error = "the row could not derive its own restart key";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestWorldRestartOpensOnCheckpoint(std::string* error) {
+		if (!GetNetAuthCrypto().IsRealCrypto()) {
+			std::cout << "[net-world-restart-selftest] skipped: this build has no real crypto to seal an admission with" << std::endl;
+			return true;
+		}
+		WorldRestartScratch scratch;
+		NetWorldIdentity first;
+		if (!NetWorldIdentityFile::OpenForBoot(scratch.identityPath.string(), first, error) || !first.IsValid()) return false;
+		if (first.boot != 1 || first.round != 1) {
+			*error = "world-restart-did-not-open-on-the-checkpoint: the first boot read boot " + std::to_string(first.boot) +
+			         " round " + std::to_string(first.round) + ", a first boot is 1/1";
+			return false;
+		}
+		NetMatchService writer;
+		std::array<uint8_t, 32> key{};
+		if (!RowRestartKey(writer, scratch.store, key, error)) return false;
+		const NetMatchConfig stored = MakeStoredWorldConfig(first.worldId);
+		const std::string storedHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(stored));
+		if (!PublishWorldCheckpoint(scratch.store, first.worldId, 900, 4242, stored, key, 3, error)) return false;
+		scratch.Note(first.worldId, 900);
+
+		// The second boot takes Start's own order: resolve the world's resume, prepare it, and only
+		// then advance the identity record.
+		NetMatchService restarted;
+		std::array<uint8_t, 32> restartedKey{};
+		if (!RowRestartKey(restarted, scratch.store, restartedKey, error)) return false;
+		NetMatchServiceRequest request;
+		request.host = true;
+		request.persistentWorld = true;
+		request.activityPreset = "Persistent World";
+		if (!restarted.ResolveWorldResume(request, error)) return false;
+		if (request.resumeMatchId != first.worldId) {
+			*error = "world-restart-did-not-open-on-the-checkpoint: the boot resolved resume match \"" + request.resumeMatchId +
+			         "\", the world is " + first.worldId;
+			return false;
+		}
+		if (!restarted.PrepareResume(request, error)) return false;
+		if (!request.resumeConfig || request.resumeTick != 900) {
+			*error = "world-restart-did-not-open-on-the-checkpoint: the resume stands on tick " + std::to_string(request.resumeTick) +
+			         ", the checkpoint is 900";
+			return false;
+		}
+		if (request.resumeConfig->configRevision != stored.configRevision + 1) {
+			*error = "world-restart-did-not-open-on-the-checkpoint: the republished configuration is revision " +
+			         std::to_string(request.resumeConfig->configRevision) + ", the manifest's is " + std::to_string(stored.configRevision);
+			return false;
+		}
+		NetMatchConfig rehashed = *request.resumeConfig;
+		rehashed.configRevision = stored.configRevision;
+		if (NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(rehashed)) != storedHash) {
+			*error = "world-restart-did-not-open-on-the-checkpoint: the resumed configuration does not hash to the manifest's " + storedHash;
+			return false;
+		}
+		NetWorldIdentity second;
+		if (!NetWorldIdentityFile::OpenForBoot(scratch.identityPath.string(), second, error)) return false;
+		if (second.worldId != first.worldId || second.boot != first.boot + 1 || second.round != first.round + 1) {
+			*error = "world-restart-did-not-advance-the-boot: the restart reads world " + second.worldId + " boot " +
+			         std::to_string(second.boot) + " round " + std::to_string(second.round) + ", boot 1 was " + first.worldId + " 1/1";
+			return false;
+		}
+		NetMatchService::SeatResumedWorldConfig(*request.resumeConfig, second);
+		if (request.resumeConfig->worldId != second.worldId || request.resumeConfig->worldBoot != second.boot) {
+			*error = "world-restart-did-not-advance-the-boot: the resumed configuration names boot " +
+			         std::to_string(request.resumeConfig->worldBoot) + ", this boot is " + std::to_string(second.boot);
+			return false;
+		}
+		// The lockstep state the resumed round is played on: the checkpoint's tick, the checkpoint's
+		// round as the source, and the side state its manifest carried.
+		const NetResyncState state = NetMatchService::BuildResumeState(*request.resumeConfig, request.resumeTick, restarted.m_ResumeRoundId,
+		                                                               restarted.m_ResumeMatchId, restarted.m_ResumeSideState);
+		const AutosaveSideState fixture = WorldSideStateFixture();
+		if (state.savedTick != 900 || state.sourceRound != 4242 || state.rewindMatchId != first.worldId) {
+			*error = "world-restart-lost-the-round: the resumed state stands on tick " + std::to_string(state.savedTick) +
+			         " of round " + std::to_string(state.sourceRound) + ", the checkpoint is tick 900 of round 4242";
+			return false;
+		}
+		if (state.controlOwners != fixture.controlOwners || state.appliedCommands != fixture.appliedCommands ||
+		    state.e2eFirstTransferUid != fixture.firstTransferUid) {
+			*error = "world-restart-lost-the-side-state: the resumed state holds " + std::to_string(state.controlOwners.size()) +
+			         " control owners and " + std::to_string(state.appliedCommands.size()) + " applied sequences, the manifest carried 1 and 1";
+			return false;
+		}
+		// The image a bootstrap is offered after the resume, built by the production reader.
+		ActivityMan::CompletedAutosave entry;
+		entry.serial = 1;
+		entry.tick = 900;
+		entry.path = AutosaveStore::ArchivePath(scratch.store, first.worldId, 900).string();
+		const auto archive = std::make_shared<const std::vector<uint8_t>>(std::vector<uint8_t>{1, 2, 3, 4});
+		entry.archive = archive;
+		entry.bytes = archive->size();
+		entry.digest = DigestWorldJoinBytes(*archive);
+		const NetWorldCheckpointImage image = NetMatchService::WorldImageFromAutosave(entry, second, *request.resumeConfig, 1, 0.0);
+		if (!image.IsValid() || image.worldId != second.worldId || image.boot != second.boot || image.round != second.round || image.tick != 900) {
+			*error = "world-restart-image-named-the-old-boot: the image offers world " + image.worldId + " boot " +
+			         std::to_string(image.boot) + " round " + std::to_string(image.round) + " tick " + std::to_string(image.tick) +
+			         ", this boot is " + std::to_string(second.boot) + "/" + std::to_string(second.round) + " on tick 900";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestWorldFreshFlagOpensNewRound(std::string* error) {
+		if (!GetNetAuthCrypto().IsRealCrypto()) {
+			std::cout << "[net-world-fresh-selftest] skipped: this build has no real crypto to seal an admission with" << std::endl;
+			return true;
+		}
+		WorldRestartScratch scratch;
+		NetWorldIdentity first;
+		if (!NetWorldIdentityFile::OpenForBoot(scratch.identityPath.string(), first, error) || !first.IsValid()) return false;
+		NetMatchService writer;
+		std::array<uint8_t, 32> key{};
+		if (!RowRestartKey(writer, scratch.store, key, error)) return false;
+		const NetMatchConfig stored = MakeStoredWorldConfig(first.worldId);
+		if (!PublishWorldCheckpoint(scratch.store, first.worldId, 900, 4242, stored, key, 3, error)) return false;
+		scratch.Note(first.worldId, 900);
+
+		NetMatchServiceRequest fresh;
+		fresh.host = true;
+		fresh.persistentWorld = true;
+		fresh.activityPreset = "Persistent World";
+		fresh.worldFresh = true;
+		fresh.resumeTick = 900;
+		if (!writer.ResolveWorldResume(fresh, error)) return false;
+		if (!fresh.resumeMatchId.empty() || fresh.resumeTick != 0) {
+			*error = "world-fresh-resumed-anyway: the fresh boot resolved resume match \"" + fresh.resumeMatchId + "\" tick " +
+			         std::to_string(fresh.resumeTick) + ", a fresh round takes neither";
+			return false;
+		}
+		std::string missing;
+		if (!AutosaveStore::Find(scratch.store, first.worldId, 900, &missing)) {
+			*error = "world-fresh-dropped-the-old-checkpoints: tick 900 no longer reads after a fresh boot: " + missing;
+			return false;
+		}
+		// The fresh round runs and checkpoints under its own round; the old round's ticks are history.
+		NetWorldIdentity second;
+		if (!NetWorldIdentityFile::OpenForBoot(scratch.identityPath.string(), second, error)) return false;
+		if (!PublishWorldCheckpoint(scratch.store, first.worldId, 1500, 5151, stored, key, 4, error)) return false;
+		scratch.Note(first.worldId, 1500);
+		NetMatchServiceRequest named;
+		named.host = true;
+		named.persistentWorld = true;
+		named.activityPreset = "Persistent World";
+		named.resumeTick = 900;
+		std::string refusal;
+		if (writer.ResolveWorldResume(named, &refusal)) {
+			*error = "world-resumed-a-round-it-had-left: tick 900 of round 4242 was accepted while the world stands on round 5151";
+			return false;
+		}
+		if (refusal.find("belongs to round 4242") == std::string::npos || refusal.find("stands on round 5151") == std::string::npos) {
+			*error = "world-resumed-a-round-it-had-left: the refusal did not name the rounds: " + refusal;
+			return false;
+		}
+		NetMatchServiceRequest newest;
+		newest.host = true;
+		newest.persistentWorld = true;
+		newest.activityPreset = "Persistent World";
+		newest.resumeTick = 1500;
+		if (!writer.ResolveWorldResume(newest, error) || newest.resumeMatchId != first.worldId) {
+			*error = "world-fresh-resumed-anyway: the newest checkpoint of the live round was refused: " + *error;
+			return false;
+		}
+		// A named match id that is not this world never opens it.
+		NetMatchServiceRequest stranger;
+		stranger.host = true;
+		stranger.persistentWorld = true;
+		stranger.activityPreset = "Persistent World";
+		stranger.resumeMatchId = "00000000deadbeef-0000000000000001";
+		if (writer.ResolveWorldResume(stranger, &refusal) || refusal.find("must name this world " + first.worldId) == std::string::npos) {
+			*error = "world-resumed-another-match: a foreign -net-resume-match was not refused by name: " + refusal;
+			return false;
+		}
+		return true;
+	}
+
+	bool TestWorldCleanStopWritesFinalCheckpoint(std::string* error) {
+		uint64_t tick = 7;
+		// A world host at committed tick 900 owes the checkpoint that tick.
+		if (!NetMatchService::FinalCheckpointTick(true, true, false, 45, true, true, 901, tick) || tick != 900) {
+			*error = "world-clean-stop-wrote-no-checkpoint: a running world at tick 900 answered " + std::to_string(tick);
+			return false;
+		}
+		// A second stop writes nothing more.
+		if (NetMatchService::FinalCheckpointTick(true, true, true, 45, true, true, 901, tick) || tick != 0) {
+			*error = "world-clean-stop-wrote-twice: a teardown that had already written one answered tick " + std::to_string(tick);
+			return false;
+		}
+		struct Guard {
+			const char* name;
+			bool host, world, written, lockstep, activity;
+			uint32_t seconds;
+			uint64_t nextFrame;
+		};
+		const Guard refused[] = {
+		    {"not the host", false, true, false, true, true, 45, 901},
+		    {"not a world", true, false, false, true, true, 45, 901},
+		    {"no checkpoint cadence", true, true, false, true, true, 0, 901},
+		    {"lockstep is not running", true, true, false, false, true, 45, 901},
+		    {"no activity", true, true, false, true, false, 45, 901},
+		    {"nothing committed", true, true, false, true, true, 45, 0},
+		    {"tick 0 is not a checkpoint", true, true, false, true, true, 45, 1},
+		};
+		for (const Guard& guard: refused) {
+			if (NetMatchService::FinalCheckpointTick(guard.host, guard.world, guard.written, guard.seconds, guard.lockstep,
+			                                         guard.activity, guard.nextFrame, tick)) {
+				*error = std::string("world-clean-stop-wrote-a-checkpoint-it-should-not: ") + guard.name + " answered tick " + std::to_string(tick);
+				return false;
+			}
+		}
+		// The teardown seam itself: with no round running it captures nothing and stays unwritten, so a
+		// later stop of a world that IS running is still owed its checkpoint.
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_AutosaveMatchId = "00000000deadbeef-0000000000000002";
+		service.m_MatchAutosaveSeconds = 45;
+		service.WriteFinalWorldCheckpoint();
+		if (service.m_FinalCheckpointWritten) {
+			*error = "world-clean-stop-wrote-a-checkpoint-it-should-not: a teardown with no running round marked one written";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestWorldReturnWatchKeysOnWorldId(std::string* error) {
+		ResumeScratchDirectory scratch;
+		const std::string ticketPath = (scratch.path / "world.ticket").string();
+		NetReconnectTicketStore store;
+		store.SetPath(ticketPath);
+		NetH4TicketRecord record;
+		record.persistentWorld = true;
+		record.recordVersion = NetReconnectTicketStore::RecordVersionFor(true);
+		record.stableSeat = 1;
+		record.holderGeneration = 1;
+		record.hostSessionId = 0x574F524C44ULL;
+		record.hostAddress = "127.0.0.1:47130";
+		// The world's row is its own UUID, which is what the client stores once it adopts the config.
+		record.directorySessionId = c_WorldId;
+		record.issuedAtUnixMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		if (!store.Store(record, error)) return false;
+		NetMatchService client;
+		const std::string previousPath = NetMatchService::s_TicketStorePath;
+		NetMatchService::s_TicketStorePath = ticketPath;
+		client.m_TicketStore.SetPath(ticketPath);
+		client.ScanStoredTicket();
+		NetMatchService::s_TicketStorePath = previousPath;
+		if (!client.m_ReconnectUx.IsAwaitingHostReturn() || client.m_ReconnectUx.GetWatchedSessionId() != c_WorldId) {
+			*error = "world-watch-browsed-the-wrong-session: the watch waits on \"" + client.m_ReconnectUx.GetWatchedSessionId() +
+			         "\", the world's row is " + c_WorldId;
+			return false;
+		}
+		NetDirectorySessionRow back;
+		back.sessionId = c_WorldId;
+		back.state = "running";
+		back.persistentWorld = true;
+		back.worldId = c_WorldId;
+		back.worldBoot = 2;
+		if (!NetDirectoryRowIsWatchedHost(back, client.m_ReconnectUx.GetWatchedSessionId())) {
+			*error = "world-watch-missed-the-returned-world: the world's row under boot 2 did not satisfy the watch";
+			return false;
+		}
+		NetDirectorySessionRow lobby = back;
+		lobby.sessionId = "11111111-2222-4333-8444-555555555555";
+		if (NetDirectoryRowIsWatchedHost(lobby, c_WorldId)) {
+			*error = "world-watch-browsed-the-wrong-session: a lobby session id satisfied a watch on the world";
+			return false;
+		}
+		NetDirectorySessionRow ended = back;
+		ended.state = "ended";
+		if (NetDirectoryRowIsWatchedHost(ended, c_WorldId)) {
+			*error = "world-watch-missed-the-returned-world: an ended row enabled the rejoin";
+			return false;
+		}
+		client.m_ReconnectUx.NoteHostReturn(NetDirectoryRowIsWatchedHost(back, c_WorldId));
+		if (!client.m_ReconnectUx.HasHostReturned()) {
+			*error = "world-watch-missed-the-returned-world: the prompt did not enable on the world's own row";
+			return false;
+		}
+		// What put the world id in that record: the client adopts the world's configuration and points
+		// its ticket at the world's row instead of the lobby session it dialled.
+		NetReconnectTicketStore adopted;
+		adopted.SetPath((scratch.path / "adopt.ticket").string());
+		NetReconnectClient reconnect;
+		reconnect.Configure(&adopted, MakeH4Identity(), "Player");
+		reconnect.SetWorldTarget(true);
+		reconnect.SetDirectorySessionId("11111111-2222-4333-8444-555555555555");
+		reconnect.AdoptDirectorySessionId(c_WorldId);
+		if (reconnect.GetRecord().directorySessionId != c_WorldId) {
+			*error = "world-ticket-kept-the-lobby-session: the record names \"" + reconnect.GetRecord().directorySessionId +
+			         "\", the world's row is " + c_WorldId;
+			return false;
+		}
+		reconnect.AdoptDirectorySessionId(std::string());
+		if (reconnect.GetRecord().directorySessionId != c_WorldId) {
+			*error = "world-ticket-kept-the-lobby-session: an empty adoption cleared the world id";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestWorldRestartKeepsTickets(std::string* error) {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		const NetMatchConfig config = MakeWorldConfig();
+		const std::vector<NetH4Seat> seats = NetH4BuildSeatTable(config);
+		NetSeatAuthRegistry bootN;
+		if (!bootN.BeginHostedSession()) {
+			*error = "world-restart-lost-its-tickets: the boot-N registry did not arm";
+			return false;
+		}
+		NetReconnectHost hostN;
+		hostN.Configure(&bootN, config.sessionId, identity);
+		hostN.SetSeatTable(seats, config.mode);
+		hostN.SetLiveMatch(true);
+		hostN.SetPersistentWorld(true);
+		NetH4NewJoin join;
+		join.identity = identity;
+		join.displayName = "alice";
+		join.txId.fill(9);
+		hostN.HandleMessage(12, join, 0);
+		hostN.Tick(NetReconnectAdmission::c_DenialReleaseMs);
+		NetH4TicketOffer offer;
+		bool offered = false;
+		for (const NetH4Outbound& outbound: hostN.TakeOutbound()) {
+			if (const auto* ticket = std::get_if<NetH4TicketOffer>(&outbound.payload)) {
+				offer = *ticket;
+				offered = true;
+			}
+		}
+		if (!offered) {
+			*error = "world-restart-lost-its-tickets: boot N never offered the joiner a seat";
+			return false;
+		}
+		hostN.HandleMessage(12, NetH4TicketStoredAck{c_NetH4Version, offer.txId, offer.stableSeat, offer.holderGeneration, true},
+		                    NetReconnectAdmission::c_DenialReleaseMs + 1);
+		hostN.Tick(NetReconnectAdmission::c_DenialReleaseMs + 2);
+		NetPeerId holder = c_InvalidNetPeerId;
+		uint32_t holderGeneration = 0;
+		uint32_t incarnation = 0;
+		if (!hostN.GetSeatHolder(offer.stableSeat, holder, holderGeneration, incarnation) || holderGeneration != offer.holderGeneration) {
+			*error = "world-restart-lost-its-tickets: boot N did not commit seat " + std::to_string(offer.stableSeat) +
+			         " to the generation it issued (" + std::to_string(holderGeneration) + " vs " + std::to_string(offer.holderGeneration) + ")";
+			return false;
+		}
+		const std::vector<uint8_t> exported = hostN.ExportMigrationState();
+		if (exported.empty()) {
+			*error = "world-restart-lost-its-tickets: boot N exported no admission state";
+			return false;
+		}
+		// A seat its holder still owns is not a seat the world's row may offer.
+		const int64_t open = NetReconnectHost::CountExportedOpenSeats(exported, 1);
+		if (open != 0) {
+			*error = "world-restart-row-offered-a-held-seat: the export leaves " + std::to_string(open) +
+			         " seats open, every seat of this world is held";
+			return false;
+		}
+		// Boot N+1 is a brand-new registry: without the import it knows nothing of that credential.
+		NetSeatAuthRegistry bare;
+		if (!bare.BeginHostedSession()) {
+			*error = "world-restart-lost-its-tickets: the bare boot-N+1 registry did not arm";
+			return false;
+		}
+		if (bare.GetActiveGeneration(offer.stableSeat) == offer.holderGeneration) {
+			*error = "world-restart-lost-its-tickets: a fresh registry already held generation " +
+			         std::to_string(offer.holderGeneration) + ", so the import proves nothing";
+			return false;
+		}
+		NetSeatAuthRegistry bootNext;
+		if (!bootNext.BeginHostedSession()) {
+			*error = "world-restart-lost-its-tickets: the boot-N+1 registry did not arm";
+			return false;
+		}
+		NetReconnectHost hostNext;
+		hostNext.Configure(&bootNext, config.sessionId, identity);
+		hostNext.SetSeatTable(seats, config.mode);
+		hostNext.SetPersistentWorld(true);
+		if (!hostNext.ImportMigrationState(exported, bootNext, config, 1, {}, 10)) {
+			*error = "world-restart-lost-its-tickets: the boot-N+1 host refused the sealed plane boot N left";
+			return false;
+		}
+		if (bootNext.GetActiveGeneration(offer.stableSeat) != offer.holderGeneration) {
+			*error = "world-restart-lost-its-tickets: boot N+1 holds generation " +
+			         std::to_string(bootNext.GetActiveGeneration(offer.stableSeat)) + " for seat " + std::to_string(offer.stableSeat) +
+			         ", boot N issued " + std::to_string(offer.holderGeneration);
+			return false;
+		}
+		bool heldForItsHolder = false;
+		for (const NetH4SeatStatus& status: hostNext.GetSeatStatuses()) {
+			if (status.stableSeat == offer.stableSeat) heldForItsHolder = status.committed && status.dropped && !status.closed;
+		}
+		if (!heldForItsHolder) {
+			*error = "world-restart-lost-its-tickets: seat " + std::to_string(offer.stableSeat) +
+			         " is not held for its holder on boot N+1";
+			return false;
+		}
+		// The credential is validated against the IMPORTED generation, never against the boot number: a
+		// seat whose holder generation does not match the registry it rides with is refused outright.
+		nlohmann::json tampered = nlohmann::json::from_cbor(exported);
+		for (auto& row: tampered.at("seats")) {
+			if (row.at("seat").get<uint16_t>() == offer.stableSeat) row["holder"] = offer.holderGeneration + 1;
+		}
+		NetSeatAuthRegistry refusedRegistry;
+		if (!refusedRegistry.BeginHostedSession()) {
+			*error = "world-restart-admitted-a-stale-generation: the refusal registry did not arm";
+			return false;
+		}
+		NetReconnectHost refusedHost;
+		refusedHost.Configure(&refusedRegistry, config.sessionId, identity);
+		refusedHost.SetSeatTable(seats, config.mode);
+		if (refusedHost.ImportMigrationState(nlohmann::json::to_cbor(tampered), refusedRegistry, config, 1, {}, 10)) {
+			*error = "world-restart-admitted-a-stale-generation: a seat whose holder generation is not the registry's was imported";
+			return false;
+		}
+		return true;
+	}
+
 	int RunNamed(const char* name) {
 		if (std::strcmp(name, "identity") == 0 || std::strcmp(name, "-net-world-identity-selftest") == 0) {
 			s_FailTag = "net-world-identity-selftest";
@@ -3588,6 +4239,31 @@ namespace RTE {
 			s_FailTag = "net-world-ready-frame-selftest";
 			return TestReadyFramePackIncludesRemotes();
 		}
+		if (std::strcmp(name, "restart") == 0 || std::strcmp(name, "-net-world-restart-selftest") == 0) {
+			s_FailTag = "net-world-restart-selftest";
+			std::string error;
+			return TestWorldRestartOpensOnCheckpoint(&error) ? 0 : Fail(error);
+		}
+		if (std::strcmp(name, "restart-tickets") == 0 || std::strcmp(name, "-net-world-restart-tickets-selftest") == 0) {
+			s_FailTag = "net-world-restart-tickets-selftest";
+			std::string error;
+			return TestWorldRestartKeepsTickets(&error) ? 0 : Fail(error);
+		}
+		if (std::strcmp(name, "fresh") == 0 || std::strcmp(name, "-net-world-fresh-selftest") == 0) {
+			s_FailTag = "net-world-fresh-selftest";
+			std::string error;
+			return TestWorldFreshFlagOpensNewRound(&error) ? 0 : Fail(error);
+		}
+		if (std::strcmp(name, "final-checkpoint") == 0 || std::strcmp(name, "-net-world-final-checkpoint-selftest") == 0) {
+			s_FailTag = "net-world-final-checkpoint-selftest";
+			std::string error;
+			return TestWorldCleanStopWritesFinalCheckpoint(&error) ? 0 : Fail(error);
+		}
+		if (std::strcmp(name, "return-watch") == 0 || std::strcmp(name, "-net-world-return-watch-selftest") == 0) {
+			s_FailTag = "net-world-return-watch-selftest";
+			std::string error;
+			return TestWorldReturnWatchKeysOnWorldId(&error) ? 0 : Fail(error);
+		}
 		return Fail(std::string("unknown world-join case ") + name);
 	}
 
@@ -3718,6 +4394,14 @@ namespace RTE {
 		}
 		if (const int result = TestReadyFramePackIncludesRemotes(); result != 0) {
 			return result;
+		}
+		{
+			std::string error;
+			if (!TestWorldRestartOpensOnCheckpoint(&error)) return Fail(error);
+			if (!TestWorldRestartKeepsTickets(&error)) return Fail(error);
+			if (!TestWorldFreshFlagOpensNewRound(&error)) return Fail(error);
+			if (!TestWorldCleanStopWritesFinalCheckpoint(&error)) return Fail(error);
+			if (!TestWorldReturnWatchKeysOnWorldId(&error)) return Fail(error);
 		}
 		return Pass();
 	}

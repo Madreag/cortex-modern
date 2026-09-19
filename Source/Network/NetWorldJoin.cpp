@@ -1132,12 +1132,7 @@ namespace RTE {
 	}
 
 	size_t NetWorldJoinHost::SpectatorBound() const {
-		// The host's configured bound, held under the pool of lobby ids a spectator can be bound on.
-		// A world whose host authored no capacity takes the pool, which is what it offered before.
-		if (!WorldCapacityAuthored(m_Config)) {
-			return c_WorldSpectatorLobbyCap;
-		}
-		return std::min<size_t>(m_Config.worldMaxSpectators, c_WorldSpectatorLobbyCap);
+		return WorldSpectatorBound(m_Config);
 	}
 
 	size_t NetWorldJoinHost::SpectatorsFree() const {
