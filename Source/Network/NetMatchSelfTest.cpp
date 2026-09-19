@@ -255,6 +255,36 @@ namespace RTE {
 			}
 		}
 
+		bool TestMigrationEndpointTimeout(std::string* error) {
+			LoopbackTransport hostWire;
+			LoopbackTransport clientWire;
+			if (!hostWire.StartHost(45809, error) || !clientWire.Connect("loopback", 45809, error)) {
+				return false;
+			}
+			hostWire.PollEvents();
+			clientWire.PollEvents();
+			NetLobbySessionConfig setup;
+			setup.host = true;
+			setup.localPeerId = 1;
+			setup.remoteTransportPeerIds = {{2, 1}};
+			setup.matchConfig = NetMatchConfigUtil::MakeDefault(45809);
+			setup.matchConfig.players[1].displayName = "Missing peer";
+			setup.enableMigration = true;
+			setup.migrationListenPort = 45809;
+			setup.migrationListenAddrs = {"loopback"};
+			NetLobbySession lobby;
+			if (!lobby.Start(hostWire, setup, error)) {
+				return false;
+			}
+			lobby.Tick(1);
+			lobby.TimeoutWaitingForStart();
+			if (!lobby.IsFailed() || lobby.GetFailureReason() != "waiting for Missing peer's handover endpoint") {
+				*error = "the lobby timeout does not identify the missing handover endpoint";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestMatchConfigHashAndValidation(std::string* error) {
 			NetMatchConfig config = MakeConfig();
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(config, error)) {
@@ -8786,6 +8816,7 @@ namespace RTE {
 		std::string error;
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
 		if (!TestMigrationConfigOrder<NetMatchConfig>(&error)) return fail(error);
+		if (!TestMigrationEndpointTimeout(&error)) return fail(error);
 		if (!TestDisplayNameUtf8(&error)) return fail(error);
 		if (!TestMatchConfigDedicated(&error)) return fail(error);
 		if (!TestActivityModuleResolution(&error)) return fail(error);
