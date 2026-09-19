@@ -625,7 +625,8 @@ namespace RTE {
 			if (clocks.budgetMs >= lastTransferProgressMs &&
 			    SeatingWaitExpired(m_Config.lobbySeatingWaitMs, static_cast<uint32_t>(maxWaitMs), clocks.budgetMs - lastTransferProgressMs)) {
 				m_HostLostDuringSetup = !m_Config.host;
-				SetFailed("timed out waiting for lobby start");
+				m_Lobby.TimeoutWaitingForStart();
+				SetFailed(m_Lobby.GetFailureReason());
 				if (error) *error = m_SetupError;
 				return false;
 			}

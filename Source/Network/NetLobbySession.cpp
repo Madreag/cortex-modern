@@ -1073,6 +1073,27 @@ namespace RTE {
 		}, message.payload);
 	}
 
+	void NetLobbySession::TimeoutWaitingForStart() {
+		++m_Stats.timeouts;
+		if (m_Config.host && m_Config.enableMigration && m_Config.activePeerCount == 0) {
+			for (uint8_t peer = 1; peer <= m_Config.matchConfig.peerCount; ++peer) {
+				if (m_MigrationEndpoints.contains(peer)) {
+					continue;
+				}
+				std::string name = "peer " + std::to_string(peer);
+				for (const auto& player : m_Config.matchConfig.players) {
+					if (player.peerId == peer && !player.displayName.empty()) {
+						name = player.displayName;
+						break;
+					}
+				}
+				Fail("waiting for " + name + "'s handover endpoint");
+				return;
+			}
+		}
+		Fail("timed out waiting for lobby start");
+	}
+
 	bool NetLobbySession::PrepareMigrationRoster() {
 		if (m_Config.matchConfig.dedicated || m_Config.matchConfig.persistentWorld) return false;
 		if (m_Config.activePeerCount != 0 && !m_Config.matchConfig.successorOrder.empty()) return true;

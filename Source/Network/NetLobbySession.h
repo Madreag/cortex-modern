@@ -106,6 +106,7 @@ namespace RTE {
 		const NetHash32& GetMatchConfigHash() const { return m_MatchConfigHash; }
 		uint64_t GetStartFrame() const { return m_StartFrame; }
 		const std::string& GetFailureReason() const { return m_FailureReason; }
+		void TimeoutWaitingForStart();
 		bool DidLoseHost() const { return m_HostLost; }
 		const NetLobbyStats& GetStats() const { return m_Stats; }
 
