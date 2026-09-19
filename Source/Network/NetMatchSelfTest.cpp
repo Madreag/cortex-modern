@@ -10940,6 +10940,10 @@ namespace RTE {
 			return false;
 		}
 		settings.SetNetworkPlayerTurnServers("");
+		const auto parallel = NetRelayConfig::Fixed("one.example:3478,two.example:3478", "one-user,two-user", "one-pass,two-pass", "parallel", now + 3600);
+		std::string parallelServers, parallelUsers, parallelPasswords;
+		parallel.UdpLists(parallelServers, parallelUsers, parallelPasswords);
+		if (!parallel.Valid() || parallelServers != "one.example:3478,two.example:3478" || parallelUsers != "one-user,two-user" || parallelPasswords != "one-pass,two-pass") { *error = "existing parallel TURN logins did not retain their server mapping"; return false; }
 		NetRelayConfig expired = relay;
 		expired.expiresAt = now;
 		if (!NetMatchService::BuildIceConfig(settings, "", 41011, expired).turnServerList.empty()) {
