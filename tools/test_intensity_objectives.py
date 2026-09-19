@@ -2,6 +2,8 @@
 
 The fixture drives GameIntensityCalculator and AddObjectivePoint(AboveHeadPos).
 Saved values are compared through snapshot_runtime.project. Written, not run.
+
+This driver owns ports 48590-48599; the menu readback detector owns 48530-48539 and 48540-48549.
 """
 from __future__ import annotations
 
@@ -101,7 +103,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=REPO)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--port", type=int, default=48541)
+    parser.add_argument("--port", type=int, default=48590)
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--ticks", type=int, default=180)
     options = parser.parse_args()
