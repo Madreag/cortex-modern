@@ -176,9 +176,12 @@ class SnapshotComparisonTests(unittest.TestCase):
     def test_full_restore_keeps_threaded_birth_counters(self):
         node = table(2, ((string("k"), "n7;"),))
         first, second = [birth_graph("SG6", (node,), globals=(("t", "#2;"),), serial=value) for value in (5, 6)]
+        head = BASE.split("LuaStateGraph", 1)[0]
         master = graph_line(birth_graph("SG6"), 0)
-        self.assertEqual(self.compare(BASE + master + graph_line(first, 1),
-                                      BASE + master + graph_line(second, 1), full=True), 1)
+        self.assertEqual(self.compare(head + master + graph_line(first, 1),
+                                      head + master + graph_line(first, 1), full=True), 0)
+        self.assertEqual(self.compare(head + master + graph_line(first, 1),
+                                      head + master + graph_line(second, 1), full=True), 1)
 
     def test_a_cross_process_failure_says_which_seat_model_it_used(self):
         """Two peers on different seats of one table read as sim state unless the seats are named."""
