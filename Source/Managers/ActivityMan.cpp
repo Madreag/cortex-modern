@@ -564,10 +564,26 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 	}
 	// The pin is read where retention runs, so an anchor named while this capture is in flight still counts.
 	const std::shared_ptr<const std::atomic<uint64_t>> pinnedTickSource = identity ? identity->pinnedTickSource : nullptr;
+	// The restart manifest: what a restarted host needs beside the world to reopen this very lobby.
+	AutosaveManifest manifest;
+	if (automatic && identity && !identity->configPayload.empty()) {
+		manifest.schema = AutosaveStore::c_ManifestSchema;
+		manifest.matchId = matchId;
+		manifest.sessionId = identity->sessionId;
+		manifest.roundId = identity->roundId;
+		manifest.savedTick = tick;
+		manifest.simTimeTicks = descriptor.simTimeTicks;
+		manifest.intervalSeconds = identity->intervalSeconds;
+		manifest.configHash = identity->configHash;
+		manifest.configPayload = identity->configPayload;
+		manifest.activityPreset = descriptor.activityPreset;
+		manifest.scenePreset = descriptor.scenePreset;
+		manifest.peerNames = identity->peerNames;
+	}
 	// The world text is hashed on the archive thread, so the capture never pays for the digest.
 	const auto checkpointWorld = std::make_shared<const std::string>(automatic ? worldStructure : std::string());
 	auto saveWriterData = [fileName, savePath, sceneLayerInfos, indexWriter, writer, zipLevel, automatic, matchId,
-	                       descriptor, pinnedTickSource, checkpointWorld]() {
+	                       descriptor, manifest, pinnedTickSource, checkpointWorld]() {
 		if (automatic) {
 			std::filesystem::create_directories(savePath.parent_path());
 		}
@@ -653,6 +669,13 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 			}
 			// A heal names the rewind point from this record instead of reading every archive again.
 			AutosaveStore::NoteValidated(published);
+			// The manifest is published after its world, so a manifest without an archive never exists.
+			if (!manifest.configPayload.empty()) {
+				std::string manifestError;
+				if (!AutosaveStore::PublishManifest(savePath.parent_path(), manifest, &manifestError)) {
+					std::cout << "[autosave] restart manifest not written: " << manifestError << std::endl;
+				}
+			}
 			const uint64_t pinnedTick = pinnedTickSource ? pinnedTickSource->load() : AutosaveStore::c_NoPinnedTick;
 			const size_t removed = AutosaveStore::ApplyRetention(savePath.parent_path(), matchId, pinnedTick);
 			std::cout << std::format("[autosave] retained tick={} keep={} pinned={} removed={}\n",
