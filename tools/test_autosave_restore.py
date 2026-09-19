@@ -16,9 +16,10 @@ Three rows, each with the statement that is red without the engine change:
               record that same one; the named checkpoint survives the rotation of the ones that follow.
               RED before the change: no rewind point is named, carried or pinned anywhere.
   resume    - the host process is KILLED mid-match; a new host process restarts the same match from its
-              own checkpoint and the client rejoins with its stored ticket. Both peers reach the same
-              later tick with equal per-tick hashes, and the client's log says whether it loaded its own
-              copy of the checkpoint or was sent the host's.
+              own checkpoint and the client rejoins with its stored ticket. The client's copy of that
+              checkpoint is removed first, so the round is played with ONE held peer and ONE streamed
+              peer: both reach the same later tick with equal per-tick hashes, which they cannot do if
+              the two paths resume onto different seats.
               RED before the change: no restart manifest is written, -net-resume-match does not exist,
               and a host that dies takes its match with it.
   world-restart - a PERSISTENT WORLD host is killed and started again on the same install with no
@@ -367,6 +368,12 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
         target = second / who / "runtime/Autosaves"
         if source.exists():
             shutil.copytree(source, target, dirs_exist_ok=True)
+        if who == "client":
+            # ONE peer holds the checkpoint and ONE is streamed it: the host keeps its copy, the client
+            # loses the archive the host will resume on, so the round is played across both paths. Two
+            # peers that restore different seats or different worlds diverge on the first compared tick.
+            for leftover in target.glob(f"{match_id}-{resume_tick}.*"):
+                leftover.unlink()
         for name in ("reconnect.ticket", "NetworkIdentity.key"):
             carried = first / who / "runtime/Userdata" / name
             if carried.exists():
@@ -398,10 +405,10 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
     assert offer, "the client never answered the host's resume offer"
     assert offer[1] == match_id and int(offer[2]) == resume_tick, (offer[1], offer[2])
     held_locally = offer[3] == "held locally"
-    if held_locally:
-        assert HELD_LAUNCH.search(client_log), "the client answered that it holds the checkpoint and then loaded something else"
-    else:
-        assert RECEIVED_LAUNCH.search(client_log), f"the client neither held nor received the checkpoint: {offer[3]}"
+    # The client's own copy of that checkpoint was removed above, so it must be STREAMED the host's.
+    assert not held_locally, "the client answered held for a checkpoint this arm removed from its store"
+    assert RECEIVED_LAUNCH.search(client_log), f"the client neither held nor received the checkpoint: {offer[3]}"
+    assert HELD_LAUNCH.search(host_log), "the host did not load its own copy of the checkpoint it resumed"
     for who in ("host", "client"):
         assert resumed_records[who].get("exit_code") == 0, (who, resumed_records[who].get("exit_code"), resumed_records[who].get("error"))
         assert not resumed_records[who].get("timed_out"), who
