@@ -17,7 +17,7 @@ from test_telemetry_bundle import set_visual_resolution
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
-         "lobby-name", "net-options", "net-activity", "net-resume", "host-defaults", "oracles")
+         "lobby-name", "net-options", "net-activity", "net-resume", "host-defaults", "repair", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
@@ -100,6 +100,8 @@ PAUSE_PAGE_FIRST_VALUE = {
     "Misc": "CheckboxShowToolTips",
 }
 SIZE_GATES = (
+    *((case, size) for case in ("lobby", "host-defaults", "repair", "pause")
+      for size in ("640x360", "960x540", "1280x720")),
     ("net-chat", "960x540"),
     ("net-chat", "1280x720"),
     ("lobby-name", "640x360"),
@@ -330,6 +332,44 @@ def host_activity_label(row):
     return row["preset"] + (f" - {module}" if module else "")
 
 
+def repair_probe(who, root):
+    steps = [{"op": "wait", "service": "Running", "sim_at_least": 150},
+             {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+             {"op": "wait", "panel_open": True},
+             {"op": "mouse_down", "control": "NetworkSeatsOptions"},
+             {"op": "mouse_up", "control": "NetworkSeatsOptions"},
+             {"op": "wait", "control": "NetworkSeatsOptionsText", "equals": {"visible": True}},
+             {"op": "assert_control", "control": "NetworkSeatsOptionsText", "fits": True,
+              "text_contains": "Repair match: Ready - pause menu > Match Options" if who == "host" else "Frame redundancy:"},
+             {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+             {"op": "wait", "panel_open": False},
+             {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
+             {"op": "wait", "screen": "Pause"}, menu_step("activate ButtonMatchOptions"),
+             {"op": "wait", "screen": "PauseMatchOptions"},
+             {"op": "assert", "equals": {"service": "Running"}},
+             menu_step("assert_rect_inside MatchOptionsBox viewport"),
+             *row_checks("LabelMatchOptions", "MatchOptionsBox"),
+             *row_checks("LabelMatchRepairHint", "MatchOptionsBox"),
+             menu_step(f"assert_enabled ButtonMatchRepairNow {1 if who == 'host' else 0}")]
+    if who == "host":
+        steps += [*row_checks("ButtonMatchRepairNow", "MatchOptionsBox"),
+                  menu_step("activate ButtonMatchRepairNow"), {"op": "wait", "renders": 2},
+                  menu_step("assert_label LabelMatchRepairHint Every peer pauses and reloads the host's snapshot - press again"),
+                  menu_step("assert_enabled ButtonMatchRepairNow 1"),
+                  {"op": "assert", "equals": {"service": "Running"}},
+                  menu_step("dump_host_options"),
+                  {"op": "wait_file", "path": str(probe_root(root, "client") / "ready.json")},
+                  menu_step("activate ButtonMatchRepairNow"), {"op": "wait", "renders": 2},
+                  {"op": "signal", "name": "done"}]
+    else:
+        steps += [menu_step("assert_visible ButtonMatchRepairNow 0"),
+                  menu_step("assert_label LabelMatchRepairHint Repair is the host's call"),
+                  menu_step("dump_host_options"), {"op": "signal", "name": "ready"},
+                  {"op": "wait_file", "path": str(probe_root(root, "host") / "done.json")},
+                  {"op": "signal", "name": "done"}]
+    return {"schema": 1, "timeout_ms": 90000, "steps": steps + [{"op": "finish"}]}
+
+
 def combo_name(text):
     return text.rsplit(" - ", 1)[0] if " - " in (text or "") else (text or "")
 
@@ -386,6 +426,9 @@ def assert_combo_matches_loaded_activities(picker, dump):
 
 
 def scripts(case, port, root):
+    if case == "repair":
+        return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
+                {who: repair_probe(who, root) for who in ("host", "client")})
     if case == "pause":
         # Each peer's match pause menu is its own local surface, so each peer drives its own probe.
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
@@ -1181,7 +1224,7 @@ def run_case(options, case, root, failing=None):
         texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
     inputs = root / "input.txt"
     inputs.write_text(INPUT_SCRIPT, encoding="utf-8")
-    paired = case in ("pause", "live", "net-options", "net-activity")
+    paired = case in ("pause", "repair", "live", "net-options", "net-activity")
     # A menu-driven pair joins through the real UI, so it carries no service-e2e flags.
     menu_driven = case == "net-activity"
     seeded = {} if failing else seeds(case)
@@ -1274,6 +1317,10 @@ def run_case(options, case, root, failing=None):
             observation = json.loads((probe_root(root, who) / "net-ui-result.json").read_text(encoding="utf-8"))
             result["probes"][who] = observation
             assert observation["pass"] and observation["complete"], (who, observation)
+        if case == "repair":
+            snapshots = re.findall(r"\[net-match\] resync snapshot at tick (\d+)", logs["host"])
+            assert len(snapshots) == 1 and int(snapshots[0]) >= 150, logs["host"][-6000:]
+            result["repair_snapshot_tick"] = int(snapshots[0])
         if case in ("disabled", "scope-off"):
             first, last = images[0], images[-1]
             focused = [[c["name"] for c in capture["controls"] if c["focus"]] for capture in (first, last)]
@@ -1293,8 +1340,8 @@ def run_case(options, case, root, failing=None):
         if case == "pause":
             # Both peers read the same menu: the match rows, no single-player row, and the two settings
             # pages. The client goes on to drive the leave-confirm surface its match rows open.
-            expected_screens = {"host": ["Pause"] + ["PauseSettings"] * len(PAUSE_PAGES) + ["Pause"],
-                                "client": ["Pause"] + ["PauseSettings"] * len(PAUSE_PAGES) + ["Pause", "PauseLeaveConfirm"]}
+            expected_screens = {"host": ["Pause", "PauseMatchOptions"] + ["PauseSettings"] * len(PAUSE_PAGES) + ["Pause"],
+                                "client": ["Pause", "PauseMatchOptions"] + ["PauseSettings"] * len(PAUSE_PAGES) + ["Pause", "PauseLeaveConfirm"]}
             for who in ("host", "client"):
                 peer = [capture for capture in images if capture["peer"] == who]
                 assert [capture["screen"] for capture in peer] == expected_screens[who], (who, peer)
