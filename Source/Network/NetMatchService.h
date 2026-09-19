@@ -397,7 +397,9 @@ namespace RTE {
 		/// The bootstrap a lobby report belongs to: a bootstrap's own lobby id first, then a ready peer.
 		static NetPeerId ResolveWorldReportConnection(const NetWorldJoinHost& host, const std::vector<NetSessionPeerInfo>& readyPeers, uint8_t fromPeer);
 		/// Applies one world-join report to the host's plane and sends the E it earns.
-		static void ApplyWorldJoinReport(NetLobbySession& lobby, NetWorldJoinHost& host, const NetLobbySession::WorldJoinReport& report, NetPeerId connection, uint64_t nowFrame, uint64_t nowMs);
+		/// @return The activation tick this report earned, 0 when it announced none. The caller hands
+		/// it to the round: every sender spells its observation keys out again from there.
+		static uint64_t ApplyWorldJoinReport(NetLobbySession& lobby, NetWorldJoinHost& host, const NetLobbySession::WorldJoinReport& report, NetPeerId connection, uint64_t nowFrame, uint64_t nowMs);
 		/// Whether a bootstrap can be started at all. A bootstrap with no world lobby id never can, so
 		/// the world ends it instead of building its image again every tick.
 		static bool WorldBootstrapCanStart(const NetWorldJoinSession& session, std::string* reason);
@@ -407,12 +409,12 @@ namespace RTE {
 		/// Ends the joiner's catch-up the moment its own coordinator runs: the round owns the wire and
 		/// the pacing from there. Returns whether this call released it.
 		static bool ReleaseWorldCatchUpOnceRunning(bool coordinatorRunning, NetWorldCatchUpClient& catchUp);
-		/// §11: reads the recovery record so the landing screen can offer a rejoin after a relaunch, or
-		/// say exactly why it cannot. Read-only and safe to call repeatedly.
 		/// The image one finished archive describes. An entry the writer has not filled yields an
 		/// image that is not valid, so nothing is published for it.
 		static NetWorldCheckpointImage WorldImageFromAutosave(const ActivityMan::CompletedAutosave& entry, const NetWorldIdentity& identity,
 		                                                     const NetMatchConfig& matchConfig, uint64_t membershipRevision, double captureMs);
+		/// §11: reads the recovery record so the landing screen can offer a rejoin after a relaunch, or
+		/// say exactly why it cannot. Read-only and safe to call repeatedly.
 		void ScanStoredTicket();
 		/// Whether the §11 retry schedule still has work, so the menu loop pumps the service whatever
 		/// screen is up rather than only while the multiplayer screen is open.

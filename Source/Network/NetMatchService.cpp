@@ -1898,30 +1898,16 @@ static std::string ResyncSaveName() {
 		if (!m_WorldJoin.IsConfigured()) {
 			return;
 		}
-		std::ifstream in(g_ActivityMan.LastAutosavePath(), std::ios::binary);
-		std::vector<uint8_t> archive;
-		if (in) {
-			archive.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+		const std::optional<ActivityMan::CompletedAutosave> entry = g_ActivityMan.LastCompletedAutosave();
+		if (!entry || entry->tick <= m_WorldJoin.Image().tick) {
+			return;
 		}
 		const NetWorldCheckpointImage image = WorldImageFromAutosave(*entry, m_WorldIdentity, m_MatchConfig,
 		                                                            m_WorldJoin.Membership().Revision(), g_ActivityMan.LastAutosaveCaptureMs());
 		if (!image.IsValid()) {
 			return;
 		}
-		NetWorldCheckpointImage image;
-		image.worldId = m_WorldIdentity.worldId;
-		image.boot = m_WorldIdentity.boot;
-		image.round = m_WorldIdentity.round;
-		image.tick = tick;
-		image.configRevision = m_MatchConfig.configRevision;
-		image.membershipRevision = m_WorldJoin.Membership().Revision();
-		image.matchConfigHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(m_MatchConfig));
-		image.path = g_ActivityMan.LastAutosavePath();
-		image.bytes = archive.size();
-		image.captureMs = g_ActivityMan.LastAutosaveCaptureMs();
-		image.digest = DigestWorldJoinBytes(archive);
-		// The bytes every bootstrap ships are kept here: the file is read and hashed once per image,
-		// not once per bootstrap per sim tick.
+		// The buffer the writer produced is shared, not copied: every bootstrap ships these bytes.
 		m_WorldJoinImageDigest = image.digest;
 		m_WorldJoinImageArchive = entry->archive;
 		m_WorldJoin.PublishImage(image);
@@ -1942,9 +1928,9 @@ static std::string ResyncSaveName() {
 		return c_InvalidNetPeerId;
 	}
 
-	void NetMatchService::ApplyWorldJoinReport(NetLobbySession& lobby, NetWorldJoinHost& host, const NetLobbySession::WorldJoinReport& report, NetPeerId connection, uint64_t nowFrame, uint64_t nowMs) {
+	uint64_t NetMatchService::ApplyWorldJoinReport(NetLobbySession& lobby, NetWorldJoinHost& host, const NetLobbySession::WorldJoinReport& report, NetPeerId connection, uint64_t nowFrame, uint64_t nowMs) {
 		if (connection == c_InvalidNetPeerId) {
-			return;
+			return 0;
 		}
 		if (report.kind == c_NetWorldReportProgress) {
 			const uint16_t received = static_cast<uint16_t>(report.value & 0xFFFFU);
@@ -1967,7 +1953,9 @@ static std::string ResyncSaveName() {
 					(void)lobby.SendPayloadTo(WorldJoinLobbyPeer(*session), MakeWorldJoinReport(c_NetWorldReportActivate, activation), nullptr);
 				}
 			}
+			return activation;
 		}
+		return 0;
 	}
 
 	void NetMatchService::PumpWorldJoinLobby(uint64_t nowMs) {
@@ -1990,7 +1978,11 @@ static std::string ResyncSaveName() {
 			if (!report.pending) {
 				break;
 			}
-			ApplyWorldJoinReport(lobby, m_WorldJoin, report, ResolveWorldReportConnection(m_WorldJoin, readyPeers, report.fromPeer), nowFrame, nowMs);
+			// An announced activation is the round's epoch: from that frame every sender spells its
+			// observation keys out again, so a member admitted there decodes them with an empty table.
+			if (const uint64_t announced = ApplyWorldJoinReport(lobby, m_WorldJoin, report, ResolveWorldReportConnection(m_WorldJoin, readyPeers, report.fromPeer), nowFrame, nowMs); announced != 0) {
+				m_Coordinator->SetObservationEpoch(announced);
+			}
 		}
 	}
 
@@ -2123,8 +2115,6 @@ static std::string ResyncSaveName() {
 				continue;
 			}
 			const uint16_t stableSeat = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
-				// The capture is taken here; the image is published once the writer has the archive, so the
-				// bootstrap waits in SnapshotTransfer for a pump or two instead of reading a half-written file.
 			if (stableSeat == 0) {
 				continue;
 			}
@@ -2133,8 +2123,9 @@ static std::string ResyncSaveName() {
 			}
 			const uint64_t tick = m_Coordinator->GetStats().nextFrame > 0 ? m_Coordinator->GetStats().nextFrame - 1 : 0;
 			if (tick != 0 && m_WorldJoin.Image().tick != tick) {
+				// The capture is taken here; the image is published once the writer has the archive, so the
+				// bootstrap waits in SnapshotTransfer for a pump or two instead of reading a half-written file.
 				g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick);
-				PublishWorldJoinImage(tick);
 			}
 			if (const NetWorldJoinSession* session = m_WorldJoin.FindSession(peer.transportPeerId)) {
 				if (m_Runner) {
@@ -2176,13 +2167,18 @@ static std::string ResyncSaveName() {
 		const uint64_t nowFrame = m_Coordinator->GetStats().nextFrame;
 		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
 			if (session.spectator && session.activationTick == 0) {
-				(void)m_WorldJoin.ScheduleSpectatorActivation(session.connection, nowFrame, nullptr, nullptr);
+				uint64_t spectatorActivation = 0;
+				if (m_WorldJoin.ScheduleSpectatorActivation(session.connection, nowFrame, &spectatorActivation, nullptr) && spectatorActivation != 0) {
+					m_Coordinator->SetObservationEpoch(spectatorActivation);
+				}
 			}
 		}
 		while (const NetWorldJoinSession* slow = m_WorldJoin.SlowActivation(nowFrame)) {
 			uint64_t later = 0;
 			if (slow->activationReannounces < c_NetWorldActivationReannounceLimit &&
 			    m_WorldJoin.ReannounceActivation(slow->connection, nowFrame, &later, nullptr)) {
+				// A re-announce moves the epoch; the live stream restarts again at the new frame.
+				m_Coordinator->SetObservationEpoch(later);
 				if (m_Runner) {
 					(void)m_Runner->GetLobbySession().SendPayloadTo(WorldJoinLobbyPeer(*slow), MakeWorldJoinReport(c_NetWorldReportActivate, later), nullptr);
 				}

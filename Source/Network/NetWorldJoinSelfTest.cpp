@@ -2240,39 +2240,104 @@ namespace RTE {
 			            " with input already sent through " + std::to_string(sentThrough));
 		}
 
-		// A world already running, with its own input on the wire for the frames the member is about to
-		// owe: the admission replays them to that member and the member commits them.
+		// A world already running with a member in it, its dictionary live: the admission of a second
+		// member may not move anything under the first, and what the replay leaves the new member's
+		// table holding has to be what the live table holds.
+		NetMatchConfig worldRunning = MakeWorldConfig();
+		worldRunning.peerCount = 3;
+		worldRunning.inputDelayFrames = 4;
+		worldRunning.players = {
+		    NetMatchPlayerSlot{1, 0, true, "World"},
+		    NetMatchPlayerSlot{2, 1, false, "Joiner"},
+		    NetMatchPlayerSlot{3, 2, false, "Resident"},
+		};
 		LoopbackTransport hostLink;
 		LoopbackTransport memberLink;
-		if (!hostLink.StartHost(47124, &error) || !memberLink.Connect("loopback", 47124, &error)) {
+		LoopbackTransport residentLink;
+		if (!hostLink.StartHost(47124, &error) || !memberLink.Connect("loopback", 47124, &error) ||
+		    !residentLink.Connect("loopback", 47124, &error)) {
 			return Fail("admit replay loopback: " + error);
 		}
-		NetPeerId hostRemote = c_InvalidNetPeerId;
+		std::vector<NetPeerId> hostRemotes;
 		for (const NetTransportEvent& event: hostLink.PollEvents()) {
-			if (event.type == NetTransportEventType::PeerConnected) hostRemote = event.peerId;
+			if (event.type == NetTransportEventType::PeerConnected) hostRemotes.push_back(event.peerId);
 		}
 		NetPeerId memberRemote = c_InvalidNetPeerId;
 		for (const NetTransportEvent& event: memberLink.PollEvents()) {
 			if (event.type == NetTransportEventType::PeerConnected) memberRemote = event.peerId;
 		}
-		if (hostRemote == c_InvalidNetPeerId || memberRemote == c_InvalidNetPeerId) {
-			return Fail("admit replay loopback: the peers never connected");
+		NetPeerId residentRemote = c_InvalidNetPeerId;
+		for (const NetTransportEvent& event: residentLink.PollEvents()) {
+			if (event.type == NetTransportEventType::PeerConnected) residentRemote = event.peerId;
+		}
+		if (hostRemotes.size() != 2 || memberRemote == c_InvalidNetPeerId || residentRemote == c_InvalidNetPeerId) {
+			return Fail("admit replay loopback: the three peers never connected");
 		}
 		NetLockstepCoordinator running;
 		NetLockstepConfig runningConfig;
 		runningConfig.sessionId = 21;
 		runningConfig.localPeerId = 1;
-		runningConfig.peerCount = 2;
+		runningConfig.peerCount = 3;
 		runningConfig.timeoutMs = 1000000;
 		runningConfig.relayToOtherPeers = true;
 		runningConfig.inputDelayFrames = 4;
 		runningConfig.frameRedundancyTicks = 4;
-		runningConfig.matchConfig = MakeWorldConfig();
+		runningConfig.matchConfig = worldRunning;
 		if (!running.Start(hostLink, runningConfig, &error)) {
 			return Fail("admit replay world start: " + error);
 		}
 		const uint64_t first = running.GetStats().nextFrame;
-		const uint64_t e = first + runningConfig.inputDelayFrames;
+		// The resident joined before any of the input this case is about.
+		if (!running.AdmitWorldMember(3, hostRemotes[1], first + 1, &error)) {
+			return Fail("admit replay resident admission: " + error);
+		}
+		NetLockstepCoordinator resident;
+		NetLockstepConfig residentConfig;
+		residentConfig.sessionId = 21;
+		residentConfig.localPeerId = 3;
+		residentConfig.remoteTransportPeerIds[1] = residentRemote;
+		residentConfig.peerCount = 3;
+		residentConfig.timeoutMs = 1000000;
+		residentConfig.inputDelayFrames = 4;
+		residentConfig.frameRedundancyTicks = 4;
+		residentConfig.startFrame = first + 1;
+		residentConfig.joinsRunningRound = true;
+		residentConfig.matchConfig = worldRunning;
+		if (!resident.Start(residentLink, residentConfig, &error)) {
+			return Fail("existing-member-lost-the-dictionary-across-an-admission: peer 3 did not start: " + error);
+		}
+		for (uint64_t now = 0; now < 400 && !resident.IsRunning(); now += 10) {
+			running.Tick(now);
+			resident.Tick(now);
+			hostLink.AdvanceTimeMs(10);
+			residentLink.AdvanceTimeMs(10);
+		}
+		if (!resident.IsRunning()) {
+			return Fail("existing-member-lost-the-dictionary-across-an-admission: peer 3 is " +
+			            std::string(resident.IsFailed() ? "failed: " + resident.GetStats().timeoutReason : "not running"));
+		}
+		// One reading before the epoch, so the resident's table for the host is not empty when it moves.
+		NetSoundObservation early;
+		early.objectUID = 7001;
+		early.tick = first + 1;
+		early.phase = 1;
+		early.occurrence = 1;
+		early.ordinal = 0;
+		early.value = 0.5F;
+		for (uint64_t produced = 1; produced <= 3; ++produced) {
+			std::vector<NetSoundObservation> observations;
+			if (produced == 1) observations.push_back(early);
+			if (!running.QueueLocalInput(produced, {}, {}, &error, observations)) {
+				return Fail("admit replay pre-epoch queue at " + std::to_string(produced) + ": " + error);
+			}
+		}
+		// The announce: E is ahead of everything sent, and it is where every sender starts over.
+		const uint64_t e = running.SentInputThrough() + 1;
+		running.SetObservationEpoch(e);
+		if (running.ObservationEpoch() != e) {
+			return Fail("world-member-missed-the-frames-sent-before-its-admission: the announce set the epoch at " +
+			            std::to_string(running.ObservationEpoch()) + ", E is " + std::to_string(e));
+		}
 		NetSoundObservation reading;
 		reading.objectUID = 4242;
 		reading.tick = e + 1;
@@ -2280,93 +2345,103 @@ namespace RTE {
 		reading.occurrence = 1;
 		reading.ordinal = 0;
 		reading.value = 0.25F;
-		for (uint64_t produced = first; produced < first + 4; ++produced) {
-			NetGameCommand command;
-			command.senderPeerId = 1;
-			command.payload = NetGamePauseMatch{0, false};
+		for (uint64_t produced = 4; produced <= 7; ++produced) {
 			std::vector<NetSoundObservation> observations;
-			if (produced + runningConfig.inputDelayFrames == e + 1) {
-				observations.push_back(reading);
-			}
-			if (!running.QueueLocalInput(produced, {}, {command}, &error, observations)) {
+			if (produced + runningConfig.inputDelayFrames == e + 1) observations.push_back(reading);
+			if (!running.QueueLocalInput(produced, {}, {}, &error, observations)) {
 				return Fail("admit replay queue at " + std::to_string(produced) + ": " + error);
 			}
+		}
+		// The resident owes its own frames from its start plus its delay; without them it cannot commit
+		// the frame the reading rides.
+		for (uint64_t produced = 1; produced <= 8; ++produced) {
+			(void)resident.QueueLocalInput(produced, {}, {}, &error);
 		}
 		if (running.SentInputThrough() != e + 3) {
 			return Fail("world-member-missed-the-frames-sent-before-its-admission: the world sent through " +
 			            std::to_string(running.SentInputThrough()) + ", E..E+3 is " + std::to_string(e) + ".." + std::to_string(e + 3));
 		}
-		if (!running.AdmitWorldMember(2, hostRemote, e, &error)) {
+		if (!running.AdmitWorldMember(2, hostRemotes[0], e, &error)) {
 			return Fail("world-member-missed-the-frames-sent-before-its-admission: the admission at E " +
 			            std::to_string(e) + " was refused: " + error);
 		}
-		if (running.LastAdmissionReplayFrames() < 4 || running.ObservationEpoch() != e) {
+		if (running.LastAdmissionReplayFrames() < 4) {
 			return Fail("world-member-missed-the-frames-sent-before-its-admission: the admission replayed " +
-			            std::to_string(running.LastAdmissionReplayFrames()) + " frames and set the epoch at " +
-			            std::to_string(running.ObservationEpoch()) + ", E is " + std::to_string(e));
+			            std::to_string(running.LastAdmissionReplayFrames()) + " frames for targets " +
+			            std::to_string(e) + ".." + std::to_string(running.SentInputThrough()));
 		}
 		NetLockstepCoordinator member;
 		NetLockstepConfig memberConfig;
 		memberConfig.sessionId = 21;
 		memberConfig.localPeerId = 2;
-		memberConfig.remotePeerId = 1;
-		memberConfig.remoteTransportPeerId = memberRemote;
-		memberConfig.peerCount = 2;
+		memberConfig.remoteTransportPeerIds[1] = memberRemote;
+		memberConfig.peerCount = 3;
 		memberConfig.timeoutMs = 1000000;
 		memberConfig.inputDelayFrames = 4;
 		memberConfig.frameRedundancyTicks = 4;
 		memberConfig.startFrame = e;
 		memberConfig.joinsRunningRound = true;
-		memberConfig.matchConfig = MakeWorldConfig();
+		memberConfig.matchConfig = worldRunning;
 		if (!member.Start(memberLink, memberConfig, &error)) {
 			return Fail("world-member-missed-the-frames-sent-before-its-admission: the member's round did not start: " + error);
 		}
-		for (uint64_t now = 0; now < 200 && !member.IsRunning(); now += 10) {
+		// The host keeps producing, window and all: one more reading on the key the epoch already bound,
+		// which the live table spells as a slot. The member can only read it if the replay left its
+		// table where the live one is.
+		if (!running.QueueLocalInput(8, {}, {}, &error, {reading})) {
+			return Fail("replayed-member-table-diverged-from-the-live-table: the live frame after the replay did not queue: " + error);
+		}
+		(void)member.QueueLocalInput(8, {}, {}, &error);
+		for (uint64_t now = 400; now < 1600; now += 10) {
 			running.Tick(now);
 			member.Tick(now);
+			resident.Tick(now);
 			hostLink.AdvanceTimeMs(10);
 			memberLink.AdvanceTimeMs(10);
-		}
-		if (!member.IsRunning()) {
-			return Fail("world-member-missed-the-frames-sent-before-its-admission: the member's round is " +
-			            std::string(member.IsFailed() ? "failed" : "not running") + " after the admission");
-		}
-		// The host keeps producing with its window on; a copy of a tick before the member's own start is
-		// skipped, never a failure.
-		for (uint64_t produced = first + 4; produced < first + 8; ++produced) {
-			(void)running.QueueLocalInput(produced, {}, {}, &error);
-		}
-		for (uint64_t now = 200; now < 600 && member.GetStats().nextFrame <= e + 3; now += 10) {
-			running.Tick(now);
-			member.Tick(now);
-			hostLink.AdvanceTimeMs(10);
-			memberLink.AdvanceTimeMs(10);
+			residentLink.AdvanceTimeMs(10);
 		}
 		if (member.IsFailed()) {
 			return Fail("window-copy-before-the-members-start-failed-the-round: " + member.GetStats().timeoutReason +
 			            " after " + std::to_string(member.GetStats().windowCopiesSkipped) + " skipped copies");
 		}
-		std::vector<uint64_t> held;
-		bool sawReading = false;
-		for (NetLockstepReadyFrame ready; member.PopReadyFrame(ready);) {
-			held.push_back(ready.frame);
-			for (const NetSoundObservation& observed: ready.remoteObservations) {
-				if (observed.objectUID == reading.objectUID && observed.tick == reading.tick &&
-				    observed.phase == reading.phase && observed.occurrence == reading.occurrence &&
-				    observed.ordinal == reading.ordinal) {
-					sawReading = true;
+		auto readingsOf = [&](NetLockstepCoordinator& peer, std::vector<uint64_t>& frames, uint64_t& sawReadingAt, uint64_t& sawEarlyAt) {
+			for (NetLockstepReadyFrame ready; peer.PopReadyFrame(ready);) {
+				frames.push_back(ready.frame);
+				for (const NetSoundObservation& observed: ready.remoteObservations) {
+					if (observed.objectUID == reading.objectUID && observed.tick == reading.tick) sawReadingAt = ready.frame;
+					if (observed.objectUID == early.objectUID && observed.tick == early.tick) sawEarlyAt = ready.frame;
 				}
 			}
+		};
+		std::vector<uint64_t> residentFrames;
+		uint64_t residentReadingAt = 0;
+		uint64_t residentEarlyAt = 0;
+		readingsOf(resident, residentFrames, residentReadingAt, residentEarlyAt);
+		if (resident.IsFailed() || residentReadingAt != e + 1 || residentEarlyAt != first + 1) {
+			return Fail("existing-member-lost-the-dictionary-across-an-admission: peer 3 " +
+			            std::string(resident.IsFailed() ? "failed: " + resident.GetStats().timeoutReason : "is running") +
+			            ", read the pre-epoch key at " + std::to_string(residentEarlyAt) + " and the epoch's at " +
+			            std::to_string(residentReadingAt) + ", E+1 is " + std::to_string(e + 1));
 		}
+		std::vector<uint64_t> memberFrames;
+		uint64_t memberReadingAt = 0;
+		uint64_t memberEarlyAt = 0;
+		readingsOf(member, memberFrames, memberReadingAt, memberEarlyAt);
 		std::string heldText;
-		for (const uint64_t frame: held) heldText += (heldText.empty() ? "" : ",") + std::to_string(frame);
-		if (held.size() < 4 || held.front() != e) {
+		for (const uint64_t frame: memberFrames) heldText += (heldText.empty() ? "" : ",") + std::to_string(frame);
+		if (memberFrames.size() < 4 || memberFrames.front() != e) {
 			return Fail("world-member-missed-the-frames-sent-before-its-admission: joiner holds frames " + heldText +
 			            ", needs " + std::to_string(e) + ".." + std::to_string(e + 3));
 		}
-		if (!sawReading) {
+		if (memberReadingAt != e + 1) {
 			return Fail("world-member-cannot-decode-the-observation-dictionary: the member committed " + heldText +
-			            " without the reading the world sent at " + std::to_string(e + 1));
+			            " and read the world's reading at " + std::to_string(memberReadingAt) + ", it rides " + std::to_string(e + 1));
+		}
+		// The live frame past the replay: the host spelled its key as a slot, so the member's table must
+		// be the live table's.
+		if (std::find(memberFrames.begin(), memberFrames.end(), e + 4) == memberFrames.end()) {
+			return Fail("replayed-member-table-diverged-from-the-live-table: the member holds " + heldText +
+			            " and never committed the live frame " + std::to_string(e + 4));
 		}
 		return 0;
 	}
@@ -2580,6 +2655,10 @@ namespace RTE {
 			s_FailTag = "net-world-activate-brain-selftest";
 			return TestActivateNeverTakesAnotherMembersBrain();
 		}
+		if (std::strcmp(name, "image-publish") == 0 || std::strcmp(name, "-net-world-image-publish-selftest") == 0) {
+			s_FailTag = "net-world-image-publish-selftest";
+			return TestWorldImagePublishedFromTheWriter();
+		}
 		if (std::strcmp(name, "bootstrap") == 0 || std::strcmp(name, "-net-world-bootstrap-selftest") == 0) {
 			s_FailTag = "net-world-bootstrap-selftest";
 			return TestHostBootstrapRefusals();
@@ -2629,6 +2708,9 @@ namespace RTE {
 		if (const int result = TestHostBootstrapRefusals(); result != 0) {
 			return result;
 		}
+		if (const int result = TestWorldImagePublishedFromTheWriter(); result != 0) {
+			return result;
+		}
 		if (const int result = TestImageWatermarkSurvivesAnEmptyCopy(); result != 0) {
 			return result;
 		}
@@ -2655,10 +2737,6 @@ namespace RTE {
 		}
 		if (const int result = TestQueuedImageDoesNotReplaceTheOneInFlight(); result != 0) {
 			return result;
-		if (std::strcmp(name, "image-publish") == 0 || std::strcmp(name, "-net-world-image-publish-selftest") == 0) {
-			s_FailTag = "net-world-image-publish-selftest";
-			return TestWorldImagePublishedFromTheWriter();
-		}
 		}
 		if (const int result = TestSlowJoinerReannounceThenFree(); result != 0) {
 			return result;
@@ -2708,9 +2786,6 @@ namespace RTE {
 	int NetWorldJoinSelfTest::RunCase(const char* name) {
 		if (name == nullptr || name[0] == '\0') {
 			return Run();
-		if (const int result = TestWorldImagePublishedFromTheWriter(); result != 0) {
-			return result;
-		}
 		}
 		if (const int result = RunNamed(name); result != 0) {
 			return result;

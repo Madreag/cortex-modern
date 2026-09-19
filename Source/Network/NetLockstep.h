@@ -699,6 +699,10 @@ namespace RTE {
 		/// The frame every sender spells its observation keys out from again, so a member admitted
 		/// there decodes them with the empty table it starts with. 0 when no activation is pending.
 		uint64_t ObservationEpoch() const { return m_ObservationEpochFrame; }
+		/// The announce sets it: from this frame every sender spells its observation keys out again,
+		/// so a member admitted there reads them with the empty table it starts with. A re-announce
+		/// moves it; the live stream restarts again at the new frame.
+		void SetObservationEpoch(uint64_t frame);
 		/// How many frames the last admission replayed to the member it admitted.
 		size_t LastAdmissionReplayFrames() const { return m_LastAdmissionReplayFrames; }
 		/// Whether the peer is a member the round waits on right now.
@@ -753,8 +757,6 @@ namespace RTE {
 		size_t ReplaySentFramesTo(uint8_t peerId, uint64_t fromFrame);
 		/// Rebuilds one sender's pending frame for a target from the stores the commit drains.
 		bool BuildPendingRemoteFrame(uint64_t targetFrame, uint8_t senderPeerId, NetLockstepFrame& out) const;
-		/// Moves the observation epoch; a re-announced activation moves it again.
-		void SetObservationEpoch(uint64_t frame);
 		/// Resets one sender's encode table at the epoch, once, before its first frame at or past it.
 		void ApplyObservationEpoch(uint8_t senderPeerId, uint64_t targetFrame);
 		/// The block store of one sender, trimmed to the ticks a window can still repeat.

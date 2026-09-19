@@ -172,6 +172,8 @@ CASES = (
             RED_ADMIT_REPLAY,
             RED_ADMIT_DICTIONARY,
             RED_WINDOW_COPY,
+            RED_EXISTING_MEMBER_DICTIONARY,
+            RED_REPLAY_TABLE_DIVERGED,
         ),
         "pass_token": "[net-world-admit-selftest] PASS",
     },
@@ -284,14 +286,14 @@ CASES = (
         "pass_token": "[net-world-activate-brain-selftest] PASS",
     },
     {
-        "name": "host-bootstrap-refusals-and-retries",
-    {
         "name": "world-image-published-from-the-writer",
         "argv": ["-net-world-image-publish-selftest"],
         "red": RED_IMAGE_BEFORE_WRITE,
         "also_red": RED_IMAGE_SIM_READ,
         "pass_token": "[net-world-image-publish-selftest] PASS",
     },
+    {
+        "name": "host-bootstrap-refusals-and-retries",
         "argv": ["-net-world-bootstrap-selftest"],
         "red": RED_BOOTSTRAP_READ_THE_ARCHIVE,
         "also_red": (
