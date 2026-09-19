@@ -649,15 +649,22 @@ namespace RTE {
 		m_RemotePingByPeer.erase(peerId);
 		m_RemotePlatformsByPeer.erase(peerId);
 		// The seat is open again, so it carries the unseated name once more: a kicked or departed
-		// member's name on a seat nobody holds is a roster row that lies to every peer.
-		for (NetMatchPlayerSlot& slot: m_Config.matchConfig.players) {
-			if (slot.peerId == peerId && !slot.cpu) slot.displayName = NetMatchConfigUtil::UnseatedSlotName(peerId);
+		// member's name on a seat nobody holds is a roster row that lies to every peer. Opening it is a
+		// live roster change, so it rides the republish a host option edit rides - a new revision the
+		// peers that stayed acknowledge, and the panels mirroring the adopted config re-seed from it.
+		NetMatchConfig opened = m_Config.matchConfig;
+		bool seatOpened = false;
+		const std::string unseated = NetMatchConfigUtil::UnseatedSlotName(peerId);
+		for (NetMatchPlayerSlot& slot: opened.players) {
+			if (slot.peerId == peerId && !slot.cpu && slot.displayName != unseated) {
+				slot.displayName = unseated;
+				seatOpened = true;
+			}
 		}
-		const NetHash32 openedHash = NetMatchConfigUtil::HashConfig(m_Config.matchConfig);
-		if (openedHash != m_MatchConfigHash) {
-			for (auto& [remainingPeer, acked]: m_ConfigAckedByPeer) acked = false;
-			m_MatchConfigHash = openedHash;
-			m_ConfigResendDue = true;
+		if (seatOpened) {
+			++opened.configRevision;
+			// Only a round that is already closing refuses, and its roster is nobody's view by then.
+			(void)RepublishMatchConfig(opened);
 		}
 		m_PeerStatePending = true;
 		m_StartRequested = m_Config.autoStart;
