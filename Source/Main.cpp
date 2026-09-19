@@ -187,6 +187,8 @@ static bool s_contractAuditFinished = false;
 static std::string s_loadSelfTestName;
 static bool s_loadSelfTestExpected = false;
 static bool s_loadSelfTestPassed = false;
+static uint64_t s_netAutosaveRestoreTick = 0;
+static bool s_netAutosaveRestorePassed = false;
 static bool s_saveCatalogSelfTest = false;
 static bool s_saveCallbacksSelfTest = false;
 static bool s_saveCallbacksSelfTestPassed = false;
@@ -403,6 +405,28 @@ static void CloseNetReplayPlayback();
 bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error);
 bool StageResyncedMatchActivity(std::string* error);
 
+/// Restores this match's newest restorable checkpoint and reports whether the restored world is the
+/// one the checkpoint recorded. Ends the run, so it only ever serves a driver.
+static bool RunAutosaveRestoreCheck() {
+	g_ActivityMan.WaitForAutosaveTasks();
+	const std::string matchId = g_NetMatchService.GetAutosaveMatchId();
+	const std::optional<AutosaveDescriptor> newest = AutosaveStore::NewestRestorable(matchId);
+	if (!newest) {
+		std::cout << "[autosave] restore_check FAIL match=" << matchId << " reason=no restorable checkpoint" << std::endl;
+		return false;
+	}
+	if (!g_ActivityMan.LoadAutosaveToRestart(matchId, newest->savedTick) || !g_ActivityMan.RestartActivity()) {
+		std::cout << "[autosave] restore_check FAIL match=" << matchId << " tick=" << newest->savedTick << " reason=restore refused" << std::endl;
+		return false;
+	}
+	const std::string worldHash = NetIdentity::HashHex(NetIdentity::HashCanonicalText("autosave-world", {{"structure", g_MovableMan.SaveWorldStructure()}}));
+	const auto restoredTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	const bool passed = worldHash == newest->worldStructureHash && restoredTick == newest->savedTick;
+	std::cout << std::format("[autosave] restore_check {} match={} tick={} sim_update_count={} world_hash={} expected={}\n",
+	                         passed ? "PASS" : "FAIL", matchId, newest->savedTick, restoredTick, worldHash, newest->worldStructureHash) << std::flush;
+	return passed;
+}
+
 // A dead-end transport for replay playback: nothing to poll, nowhere to send.
 class NullNetTransport final : public INetTransport {
 public:
@@ -537,6 +561,7 @@ int ShutDown(int exitCode) {
 	if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult != 0) exitCode = EXIT_FAILURE;
 	if (!s_snapshotRoundtripSelfTestName.empty() && !s_snapshotRoundtripSelfTestPassed) exitCode = EXIT_FAILURE;
 	if (!s_loadSelfTestName.empty() && !s_loadSelfTestPassed) exitCode = EXIT_FAILURE;
+	if (s_netAutosaveRestoreTick > 0 && !s_netAutosaveRestorePassed) exitCode = EXIT_FAILURE;
 	if (s_saveCallbacksSelfTest && !s_saveCallbacksSelfTestPassed) exitCode = EXIT_FAILURE;
 	if (s_purgeSelfTest && !s_purgeSelfTestPassed) exitCode = EXIT_FAILURE;
 	if (s_globalCallbacksSelfTest && !s_globalCallbacksSelfTestPassed) exitCode = EXIT_FAILURE;
@@ -1086,6 +1111,16 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-net-replay-out") {
 			s_netReplayOutPath = argValue[++i];
 			ScenarioRunner::ArmLockstepReplayRecord(s_netReplayOutPath);
+			continue;
+		}
+		if (currentArg == "-net-autosave-restore") {
+			const std::string value = lastArg ? "" : argValue[i + 1];
+			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), s_netAutosaveRestoreTick);
+			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || s_netAutosaveRestoreTick == 0) {
+				std::cerr << "[autosave] -net-autosave-restore requires the positive sim tick to restore at" << std::endl;
+				return false;
+			}
+			i += 2;
 			continue;
 		}
 		if (currentArg == "-net-autosave-seconds") {
@@ -4384,6 +4419,14 @@ void RunGameLoop() {
 				std::cout << "[snapshot-roundtrip] " << (s_snapshotRoundtripSelfTestPassed ? "PASS" : "FAIL") << " save=" << output << std::endl;
 				System::SetQuit(true);
 				g_ActivityMan.EndActivity();
+				break;
+			}
+			if (s_netAutosaveRestoreTick > 0 && simTick >= s_netAutosaveRestoreTick) {
+				s_netAutosaveRestorePassed = RunAutosaveRestoreCheck();
+				System::SetQuit(true);
+				g_ActivityMan.EndActivity();
+				g_MetricsCollector.Record("final_tick", static_cast<double>(simTick));
+				g_MetricsCollector.SetResult(s_netAutosaveRestorePassed);
 				break;
 			}
 			if (!s_loadSelfTestName.empty() && simTick > 0) {
