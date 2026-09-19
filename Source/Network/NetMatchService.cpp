@@ -68,17 +68,7 @@ namespace RTE {
 
 	std::string NetMatchSummary::IdentityText() const {
 		if (identityLine.empty()) return {};
-		static const std::string exeHash = [] {
-			std::ifstream file(System::GetThisExePathAndName(), std::ios::binary | std::ios::ate);
-			const auto size = file.tellg();
-			if (!file || size <= 0) return std::string("unavailable");
-			std::vector<uint8_t> bytes(static_cast<size_t>(size));
-			file.seekg(0, std::ios::beg);
-			if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) return std::string("unavailable");
-			const std::string hash = NetA7Journal::Sha256(bytes.data(), bytes.size());
-			return hash.empty() ? std::string("unavailable") : hash;
-		}();
-		return identityLine + "\nSHA256: " + exeHash + "\nCodec: Controller " + std::to_string(ControllerFrame::c_Version) + " | Lockstep " + std::to_string(NetLockstepCodec::c_Version);
+		return identityLine + "\nSHA256: " + System::GetThisExeSha256() + "\nCodec: Controller " + std::to_string(ControllerFrame::c_Version) + " | Lockstep " + std::to_string(NetLockstepCodec::c_Version);
 	}
 
 	std::string NetMatchSummary::DetailsText() const {
@@ -2197,17 +2187,75 @@ static std::string ResyncSaveName() {
 			{"session_identity_hash", NetIdentity::HashHex(manifest.sessionIdentityHash)}};
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_DiagnosticIdentity = identity.dump(2, ' ', false, json::error_handler_t::replace);
+		++m_DiagnosticIdentityGeneration;
 	}
+
+	namespace {
+		NetIdentityBuildOptions DiagnosticIdentityOptions() {
+			NetIdentityBuildOptions options;
+			options.buildId = "stage2-p2d-local";
+			options.sessionRulesTag = "stage2-p2-session-rules";
+			return options;
+		}
+	} // namespace
 
 	bool NetMatchService::RefreshDiagnosticIdentity(std::string* error, double* buildMs) {
 		NetIdentityManifest manifest;
-		NetIdentityBuildOptions options;
-		options.buildId = "stage2-p2d-local";
-		options.sessionRulesTag = "stage2-p2-session-rules";
+		const NetIdentityBuildOptions options = DiagnosticIdentityOptions();
 		const auto started = std::chrono::steady_clock::now();
 		const bool built = NetIdentity::BuildCurrentManifest(manifest, error, options);
 		if (buildMs) *buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 		if (!built) return false;
+		CacheDiagnosticIdentity(manifest);
+		return true;
+	}
+
+	bool NetMatchService::CaptureDiagnosticIdentityInputs(std::string* error) {
+		NetIdentityManifest inputs;
+		if (!NetIdentity::CaptureManifestInputs(inputs, error, DiagnosticIdentityOptions())) return false;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_DiagnosticIdentityInputs = std::move(inputs);
+		m_DiagnosticIdentityInputsPending = true;
+		m_DiagnosticIdentityInputsGeneration = m_DiagnosticIdentityGeneration;
+		return true;
+	}
+
+	void NetMatchService::DropCapturedDiagnosticIdentityInputs() {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_DiagnosticIdentityInputsPending = false;
+		m_DiagnosticIdentityInputs = NetIdentityManifest{};
+	}
+
+	bool NetMatchService::BuildCapturedDiagnosticIdentity(std::string* error, double* buildMs) {
+		NetIdentityManifest manifest;
+		uint64_t capturedGeneration = 0;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!m_DiagnosticIdentityInputsPending) {
+				if (error) *error = "no captured identity inputs";
+				return false;
+			}
+			manifest = m_DiagnosticIdentityInputs;
+			capturedGeneration = m_DiagnosticIdentityInputsGeneration;
+			m_DiagnosticIdentityInputsPending = false;
+			m_DiagnosticIdentityInputs = NetIdentityManifest{};
+		}
+		const NetIdentityManifest captured = manifest;
+		const auto started = std::chrono::steady_clock::now();
+		// The game thread can write a module tree while this walk reads it, so one failed walk is retried
+		// from the captured inputs before it is reported.
+		bool built = NetIdentity::CompleteManifestFromInputs(manifest, error, DiagnosticIdentityOptions());
+		if (!built) {
+			manifest = captured;
+			built = NetIdentity::CompleteManifestFromInputs(manifest, error, DiagnosticIdentityOptions());
+		}
+		if (buildMs) *buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+		if (!built) return false;
+		{
+			// A newer identity was cached while this one hashed: that one is the current build, not this.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_DiagnosticIdentityGeneration != capturedGeneration) return true;
+		}
 		CacheDiagnosticIdentity(manifest);
 		return true;
 	}

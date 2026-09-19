@@ -22,19 +22,177 @@
 
 #ifdef __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
+#include <mach-o/dyld.h>
 #endif
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <bit>
+#include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
+#include <ostream>
+#include <sstream>
+#include <streambuf>
+#include <thread>
 #include <regex>
 #include <string>
 #include <utility>
 #include <vector>
 
 using namespace RTE;
+
+namespace {
+	class Sha256 {
+	public:
+		void Add(const char* bytes, size_t size) {
+			m_Bytes += size;
+			while (size) {
+				const size_t count = std::min(size, m_Block.size() - m_Used);
+				std::copy_n(reinterpret_cast<const uint8_t*>(bytes), count, m_Block.data() + m_Used);
+				m_Used += count;
+				bytes += count;
+				size -= count;
+				if (m_Used == m_Block.size()) { Compress(); m_Used = 0; }
+			}
+		}
+		std::string Finish() {
+			const uint64_t bits = m_Bytes * 8;
+			m_Block[m_Used++] = 0x80;
+			if (m_Used > 56) {
+				std::fill(m_Block.begin() + m_Used, m_Block.end(), 0);
+				Compress();
+				m_Used = 0;
+			}
+			std::fill(m_Block.begin() + m_Used, m_Block.begin() + 56, 0);
+			for (size_t index = 0; index < 8; ++index) m_Block[63 - index] = static_cast<uint8_t>(bits >> (index * 8));
+			Compress();
+			std::string result;
+			for (uint32_t word: m_State) {
+				for (int shift = 28; shift >= 0; shift -= 4) result += "0123456789abcdef"[(word >> shift) & 15];
+			}
+			return result;
+		}
+	private:
+		std::array<uint32_t, 8> m_State{0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+		std::array<uint8_t, 64> m_Block{};
+		size_t m_Used = 0;
+		uint64_t m_Bytes = 0;
+		void Compress() {
+			static constexpr std::array<uint32_t, 64> constants{
+				0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+				0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+				0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+				0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+				0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+				0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+				0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+				0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
+			std::array<uint32_t, 64> words{};
+			for (size_t index = 0; index < 16; ++index) {
+				for (size_t byte = 0; byte < 4; ++byte) words[index] = (words[index] << 8) | m_Block[index * 4 + byte];
+			}
+			for (size_t index = 16; index < words.size(); ++index) {
+				const uint32_t a = words[index - 15], b = words[index - 2];
+				words[index] = words[index - 16] + (std::rotr(a, 7) ^ std::rotr(a, 18) ^ (a >> 3)) +
+				               words[index - 7] + (std::rotr(b, 17) ^ std::rotr(b, 19) ^ (b >> 10));
+			}
+			auto [a, b, c, d, e, f, g, h] = m_State;
+			for (size_t index = 0; index < words.size(); ++index) {
+				const uint32_t first = h + (std::rotr(e, 6) ^ std::rotr(e, 11) ^ std::rotr(e, 25)) + ((e & f) ^ (~e & g)) + constants[index] + words[index];
+				const uint32_t second = (std::rotr(a, 2) ^ std::rotr(a, 13) ^ std::rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+				h = g; g = f; f = e; e = d + first; d = c; c = b; b = a; a = first + second;
+			}
+			const std::array<uint32_t, 8> work{a, b, c, d, e, f, g, h};
+			for (size_t index = 0; index < work.size(); ++index) m_State[index] += work[index];
+		}
+	};
+
+	// Every diagnostic line in the process goes out under this one lock, so a worker thread's line
+	// cannot land inside a line another thread is writing.
+	std::mutex& PrintLock() {
+		static std::mutex lock;
+		return lock;
+	}
+
+	// The path the OS reports for the running image; argv[0] is the fallback when it cannot say.
+	std::filesystem::path ThisExecutablePath() {
+#ifdef _WIN32
+		std::array<wchar_t, 32768> path{};
+		const DWORD size = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+		if (size && size < path.size()) {
+			return std::wstring(path.data(), size);
+		}
+#elif defined(__APPLE__)
+		uint32_t size = 0;
+		_NSGetExecutablePath(nullptr, &size);
+		std::vector<char> path(size);
+		if (size && _NSGetExecutablePath(path.data(), &size) == 0) {
+			return path.data();
+		}
+#else
+		std::error_code error;
+		const std::filesystem::path link = std::filesystem::read_symlink("/proc/self/exe", error);
+		if (!error && !link.empty()) {
+			return link;
+		}
+#endif
+		return System::GetThisExePathAndName();
+	}
+
+	void WriteWholeLine(std::ostream& stream, const std::string& line) {
+		std::string whole = line;
+		if (whole.empty() || whole.back() != '\n') {
+			whole += '\n';
+		}
+		std::scoped_lock printLock(PrintLock());
+		stream.write(whole.data(), static_cast<std::streamsize>(whole.size()));
+		stream.flush();
+	}
+
+	// A fault handler runs on the thread that faulted, which may be the thread holding the print lock: a
+	// record that waits for that lock is a record nobody ever reads, so an unlocked write is taken instead.
+	void WriteFaultLine(std::ostream& stream, std::FILE* file, const std::string& line) {
+		std::string whole = line;
+		if (whole.empty() || whole.back() != '\n') {
+			whole += '\n';
+		}
+		std::unique_lock<std::mutex> printLock(PrintLock(), std::try_to_lock);
+		if (printLock.owns_lock()) {
+			stream.write(whole.data(), static_cast<std::streamsize>(whole.size()));
+			stream.flush();
+			return;
+		}
+		std::fwrite(whole.data(), 1, whole.size(), file);
+		std::fflush(file);
+	}
+
+	std::string ComposeCliLine(const std::string& stringToPrint) {
+#if _LINUX_OR_MACOSX_
+		std::string outputString = stringToPrint;
+		// Color the words ERROR: and SYSTEM: red
+		std::regex regexError("(ERROR|SYSTEM):");
+		outputString = std::regex_replace(outputString, regexError, "\033[1;31m$&\033[0;0m");
+
+		// Color .rte-paths green
+		std::regex regexPath("\\w*\\.rte\\/(\\w| |\\.|\\/)*(\\/|\\.bmp|\\.png|\\.wav|\\.ogg|\\.flac||\\.lua|\\.ini)");
+		outputString = std::regex_replace(outputString, regexPath, "\033[1;32m$&\033[0;0m");
+
+		// Color names in quotes yellow, they have to start with an upper case letter to sort out apostrophes
+		std::regex regexName("(\"[A-Z].*\"|\'[A-Z].*\')");
+		outputString = std::regex_replace(outputString, regexName, "\033[1;33m$&\033[0;0m");
+
+		return "\r" + outputString;
+#else
+		// All the fancy formatting doesn't work with the Windows console so just print the string as it is
+		return "\r" + stringToPrint;
+#endif
+	}
+} // namespace
 
 unsigned long System::GetProcessID() {
 #ifdef _WIN32
@@ -248,6 +406,110 @@ namespace {
 	}
 } // namespace
 
+namespace {
+	// Records what reaches std::cout, one write per entry, so a torn line is visible as an entry that
+	// carries two tags or an entry that is not one of the lines a caller asked for.
+	class RecordingBuffer : public std::streambuf {
+	public:
+		explicit RecordingBuffer(bool printFromInside = false) : m_PrintFromInside(printFromInside) {}
+		std::vector<std::string> Writes() {
+			std::scoped_lock lock(m_Mutex);
+			return m_Writes;
+		}
+	protected:
+		std::streamsize xsputn(const char* data, std::streamsize size) override {
+			{
+				std::scoped_lock lock(m_Mutex);
+				m_Writes.emplace_back(data, static_cast<size_t>(size));
+			}
+			if (m_PrintFromInside && !m_Nested) {
+				// A diagnostic raised while another one is being written: the fault writer must return.
+				m_Nested = true;
+				System::PrintFaultLine("[print-discipline-selftest] nested fault line");
+				m_Nested = false;
+			}
+			return size;
+		}
+		int_type overflow(int_type ch) override {
+			if (traits_type::eq_int_type(ch, traits_type::eof())) return traits_type::not_eof(ch);
+			const char value = traits_type::to_char_type(ch);
+			xsputn(&value, 1);
+			return ch;
+		}
+	private:
+		std::mutex m_Mutex;
+		std::vector<std::string> m_Writes;
+		bool m_PrintFromInside = false;
+		bool m_Nested = false;
+	};
+} // namespace
+
+bool System::RunPrintDisciplineSelfTest() {
+	bool passed = true;
+	std::vector<std::pair<std::string, std::string>> results;
+	const auto check = [&passed, &results](const char* name, bool ok, const std::string& detail = std::string()) {
+		results.emplace_back(std::string(ok ? "PASS " : "FAIL ") + name, detail);
+		passed = passed && ok;
+	};
+
+	{
+		// One thread, no waiting: a print raised from inside a print must not block on the lock this
+		// thread already holds, and the outer line must still reach the stream in a single write.
+		RecordingBuffer nesting(true);
+		std::streambuf* original = std::cout.rdbuf(&nesting);
+		System::PrintDiagnosticLine("[print-discipline-selftest] outer line");
+		std::cout.rdbuf(original);
+		const std::vector<std::string> writes = nesting.Writes();
+		check("nested_print_returns", writes.size() == 1, "writes=" + std::to_string(writes.size()));
+		check("outer_line_is_one_write", writes.size() == 1 && writes.front() == "[print-discipline-selftest] outer line\n",
+		      writes.empty() ? std::string("none") : writes.front().substr(0, writes.front().size() - (writes.front().back() == '\n' ? 1 : 0)));
+	}
+
+	{
+		// Two threads released together: every line either peer wrote has to arrive whole.
+		constexpr int c_Lines = 200;
+		RecordingBuffer recorder;
+		std::atomic<int> ready{0};
+		std::atomic<bool> go{false};
+		std::streambuf* original = std::cout.rdbuf(&recorder);
+		auto printer = [&ready, &go](const char* tag) {
+			ready.fetch_add(1);
+			while (!go.load()) std::this_thread::yield();
+			for (int index = 0; index < c_Lines; ++index) {
+				System::PrintDiagnosticLine(std::string("[print-discipline-selftest] ") + tag + " line " + std::to_string(index));
+			}
+		};
+		std::thread first(printer, "first");
+		std::thread second(printer, "second");
+		while (ready.load() < 2) std::this_thread::yield();
+		go.store(true);
+		first.join();
+		second.join();
+		std::cout.rdbuf(original);
+		const std::vector<std::string> writes = recorder.Writes();
+		size_t ours = 0, torn = 0;
+		std::string firstTorn;
+		for (const std::string& write: writes) {
+			if (write.rfind("[print-discipline-selftest] ", 0) != 0) continue;
+			++ours;
+			const bool whole = write.back() == '\n' &&
+			                   write.find("[print-discipline-selftest] ", 1) == std::string::npos &&
+			                   write.find('\n') == write.size() - 1;
+			if (!whole) {
+				++torn;
+				if (firstTorn.empty()) firstTorn = write;
+			}
+		}
+		check("no_torn_line", torn == 0, "torn=" + std::to_string(torn) + (firstTorn.empty() ? "" : " first=" + firstTorn));
+		check("every_line_arrived", ours == static_cast<size_t>(c_Lines) * 2, "lines=" + std::to_string(ours));
+	}
+
+	for (const auto& [line, detail]: results) {
+		System::PrintDiagnosticLine("[print-discipline-selftest] " + line + (detail.empty() ? "" : " " + detail));
+	}
+	return passed;
+}
+
 bool System::RunPathCaseSelfTest() {
 	bool passed = true;
 	const auto check = [&passed](const char* name, bool ok, const std::string& detail = std::string()) {
@@ -360,25 +622,47 @@ void System::PrintLoadingToCLI(const std::string& reportString, bool newItem) {
 }
 
 void System::PrintToCLI(const std::string& stringToPrint) {
-#if _LINUX_OR_MACOSX_
-	std::string outputString = stringToPrint;
-	// Color the words ERROR: and SYSTEM: red
-	std::regex regexError("(ERROR|SYSTEM):");
-	outputString = std::regex_replace(outputString, regexError, "\033[1;31m$&\033[0;0m");
+	WriteWholeLine(std::cout, ComposeCliLine(stringToPrint));
+}
 
-	// Color .rte-paths green
-	std::regex regexPath("\\w*\\.rte\\/(\\w| |\\.|\\/)*(\\/|\\.bmp|\\.png|\\.wav|\\.ogg|\\.flac||\\.lua|\\.ini)");
-	outputString = std::regex_replace(outputString, regexPath, "\033[1;32m$&\033[0;0m");
+void System::PrintFaultToCLI(const std::string& stringToPrint) {
+	WriteFaultLine(std::cout, stdout, ComposeCliLine(stringToPrint));
+}
 
-	// Color names in quotes yellow, they have to start with an upper case letter to sort out apostrophes
-	std::regex regexName("(\"[A-Z].*\"|\'[A-Z].*\')");
-	outputString = std::regex_replace(outputString, regexName, "\033[1;33m$&\033[0;0m");
+void System::PrintFaultLine(const std::string& line) {
+	WriteFaultLine(std::cerr, stderr, line);
+}
 
-	std::cout << "\r" << outputString << std::endl;
-#elif _WIN32
-	// All the fancy formatting doesn't work with the Windows console so just print the string as it is
-	std::cout << "\r" << stringToPrint << std::endl;
-#endif
+std::string System::Sha256Hex(const void* bytes, size_t size) {
+	Sha256 hash;
+	hash.Add(static_cast<const char*>(bytes), size);
+	return hash.Finish();
+}
+
+const std::string& System::GetThisExeSha256() {
+	static const std::string digest = [] {
+		std::ifstream file(ThisExecutablePath(), std::ios::binary | std::ios::ate);
+		const std::streamoff size = file ? static_cast<std::streamoff>(file.tellg()) : 0;
+		if (!file || size <= 0) {
+			return std::string("unavailable");
+		}
+		std::vector<uint8_t> bytes(static_cast<size_t>(size));
+		file.seekg(0, std::ios::beg);
+		if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
+			return std::string("unavailable");
+		}
+		const std::string hash = System::Sha256Hex(bytes.data(), bytes.size());
+		return hash.empty() ? std::string("unavailable") : hash;
+	}();
+	return digest;
+}
+
+void System::PrintDiagnosticLine(const std::string& line) {
+	WriteWholeLine(std::cout, line);
+}
+
+void System::PrintDiagnosticErrorLine(const std::string& line) {
+	WriteWholeLine(std::cerr, line);
 }
 
 std::string System::ExtractZippedDataModule(const std::string& zippedModulePath) {

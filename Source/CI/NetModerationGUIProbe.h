@@ -12,4 +12,9 @@ namespace RTE::NetModerationGUIProbe {
 	void AfterMenuDraw();
 	/// Applies the script's sim-rate keys on the tick they name, before that tick reads them.
 	void OnSimTick(uint64_t simUpdateCount);
+
+	/// How many scripted rendezvous points (a written signal, a satisfied wait_file) this run has
+	/// passed. A hold that waits on another peer's probe ends at one of these, so a watchdog that
+	/// times the wait can count from the last one instead of from the start of the hold.
+	uint64_t RendezvousCount();
 }
