@@ -1545,7 +1545,8 @@ serializeGraph = function(roots, rebuildEverything)
 	table.sort(uids, function(a, b) return tonumber(a) < tonumber(b) end)
 	-- A root is serialized again only when the write barrier saw one of its tables move.
 	local dirt = (not rebuildEverything) and _ScriptGraphDirtyRoots and _ScriptGraphDirtyRoots() or nil
-	local cache = (dirt and dirt.walked and not dirt.unknown and graphCache and graphCache.base) and graphCache or nil
+	-- A chunk written under a counter this capture has not reached names ids it would call unborn.
+	local cache = (dirt and dirt.walked and not dirt.unknown and graphCache and graphCache.base and graphCache.base <= base) and graphCache or nil
 	local reused, rewritten = 0, 0
 	for _, uid in ipairs(uids) do
 		local key = tostring(tonumber(uid) or uid)
