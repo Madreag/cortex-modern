@@ -314,7 +314,8 @@ SCHEMAS["AEJetpackRuntime1"] = fields("jetpack_type jet_time_total jet_time_left
 SCHEMAS["ACraftRuntime1"] = [("hatch_state", "n"), ("hatch_timer", TIMER), *fields("hatch_delay exit_interval"), ("exit_timer", TIMER),
     *fields("exit_incoming_cursor exit_line_phase has_delivered landing_craft"), *fields("flipped_timer crash_timer", TIMER),
     *fields("can_enter_orbit max_passengers scuttle_if_flipped_time scuttle_on_death delivery_state altitude_move_state altitude_control "
-            "delivery_delay_multiplier network_delivery"), ("network_delivery_timer", TIMER)]
+            "delivery_delay_multiplier network_delivery"), ("network_delivery_timer", TIMER),
+    *fields("off_wire_hatch_tick off_wire_hatch_open")]
 SCHEMAS["ACRocketRuntime1"] = [("gear_state", "n"), ("paths", array(2, array(4, "o"))), ("max_gimbal_angle", "n"), ("foot_groups", array(2, "s"))]
 SCHEMAS["ACDropShipRuntime1"] = [("hatch_swing_range", "o"),
     *fields("hatch_openness lateral_control lateral_control_speed auto_stabilize max_engine_angle hover_height_modifier")]
@@ -510,6 +511,8 @@ def decode(data):
 _MULTIBAND_EQ, _MULTIBAND_EQ_LOWPASS = 36, 1
 
 
+_OFF_WIRE_INTENT = set("off_wire_aim_tick off_wire_aim off_wire_flip_tick off_wire_flip".split())
+
 _LOCAL_FIELDS = {
     "TimerMan1": set("real_time sim_accumulator sim_updates_since_drawn drawn_sim_update sim_speed pace_accrued pace_trimmed pace_wall_seen pace_cap_lost pace_paused_lost pace_update_calls pace_reset_calls".split()),
     "Controller1": set("input_mode seat_mode player seat_player team next_ignore prev_ignore weapon_next_ignore weapon_prev_ignore pickup_ignore drop_ignore reload_ignore primary_hotkey_ignore".split()),
@@ -529,9 +532,17 @@ _LOCAL_FIELDS = {
     "AudioRuntime3": {"player_positions", "listeners"},
     "AudioVoice1": {"position"},
     "AudioVoice2": {"position"},
-    "ActorRuntime1": {"hud_stack"},
-    "ActorRuntime2": {"hud_stack"},
-    "ActorRuntime3": {"hud_stack"},
+    # off_wire_*: the one-shot intent the producing machine's own speculative pass leaves on an actor
+    # (MovableMan::RestoreControllerBoundary, MovableMan.cpp:3050-3059) for that tick's frame to carry
+    # (ControllerFrame.cpp:210-213 reads it only while the stamp equals the current tick). A peer that
+    # does not produce that actor's frame never marks it, and a passed tick can never read it again -
+    # Source/System/StateInventory.csv:22-25 already calls all four transient.
+    "ActorRuntime1": _OFF_WIRE_INTENT | {"hud_stack"},
+    "ActorRuntime2": _OFF_WIRE_INTENT | {"hud_stack"},
+    "ActorRuntime3": _OFF_WIRE_INTENT | {"hud_stack"},
+    # The hatch command rides the same one-shot intent as the aim and the flip (ACraft::MarkOffWireHatch,
+    # ACraft.h:268; ControllerFrame.cpp:216-218 reads it only while the stamp is the current tick).
+    "ACraftRuntime1": {"off_wire_hatch_tick", "off_wire_hatch_open"},
     "AEmitterRuntime1": {"average_burst_impulse", "average_impulse"},
     "HDFirearmRuntime1": {"ai_fire_velocity", "ai_bullet_lifetime", "ai_bullet_acceleration"},
 }
