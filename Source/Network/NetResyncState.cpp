@@ -11,7 +11,9 @@
 
 namespace RTE {
 	namespace {
-		constexpr uint64_t c_Magic = 0x32534E595345524EULL;
+		// "NRESYNS3": version 3 carries the rewind anchor. A build that predates it refuses the whole
+		// envelope rather than ignoring a field it cannot read, so the version says so outright.
+		constexpr uint64_t c_Magic = 0x33534E595345524EULL;
 		static_assert(NetResyncCodec::c_MaxTotalBytes <= NetLobbyProtocol::c_MaxTotalStateBytes);
 
 		void Require(bool valid, const char* reason) {
@@ -207,7 +209,8 @@ namespace RTE {
 			}
 			Put(result, static_cast<uint64_t>(state.e2eFirstTransferUid), 8);
 			checkAuxiliary();
-			// The rewind anchor rides at the end, so an envelope without one is byte-identical to a pre-anchor one.
+			// The rewind anchor rides at the end, so an envelope without one differs from a version 2 one only
+			// in the version the header names.
 			if (!state.rewindMatchId.empty()) {
 				Require(state.rewindMatchId.size() <= c_MaxRewindMatchIdBytes && state.rewindTick > 0 && state.rewindTick <= state.savedTick,
 				        "rewind anchor is not a committed tick of this match");
