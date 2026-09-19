@@ -805,7 +805,17 @@ static std::string ResyncSaveName() {
 			}
 			NetResyncState state;
 			std::vector<uint8_t> envelope;
-			if (!ScenarioRunner::CaptureNetResyncState(dropFrame > 0 ? dropFrame - 1 : 0, state, error) || !NetResyncCodec::Encode(state, stateBytes, envelope, error)) return false;
+			if (!ScenarioRunner::CaptureNetResyncState(dropFrame > 0 ? dropFrame - 1 : 0, state, error)) return false;
+			// The host, and only the host, names the checkpoint this match may rewind to: one policy,
+			// one answer, carried to every peer instead of each of them choosing for itself. The archive
+			// thread proved it restorable when it published it, so the game thread reads no archive here.
+			const std::optional<AutosaveDescriptor> anchor = AutosaveStore::NewestValidated(m_AutosaveMatchId);
+			if (anchor && anchor->savedTick <= state.savedTick) {
+				state.rewindMatchId = anchor->matchId;
+				state.rewindTick = anchor->savedTick;
+			}
+			if (!NetResyncCodec::Encode(state, stateBytes, envelope, error)) return false;
+			if (!state.rewindMatchId.empty()) NoteRewindAnchor(state.rewindMatchId, state.rewindTick, true, anchor ? &*anchor : nullptr);
 			const uint64_t archiveBytes = stateBytes.size();
 			const uint64_t envelopeBytes = envelope.size();
 			const uint64_t saveMs = static_cast<uint64_t>(std::max(0LL, g_ActivityMan.LastSaveMainMs()));
@@ -924,6 +934,8 @@ static std::string ResyncSaveName() {
 			if (error) *error = "resync snapshot round does not match the ended match";
 			return false;
 		}
+		// The host named the rewind point; this peer records it and says whether it holds that archive.
+		if (!state.rewindMatchId.empty() && !m_IsHost) NoteRewindAnchor(state.rewindMatchId, state.rewindTick, false);
 		const auto name = ResyncSaveName() + "_recv";
 		const auto path = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + name + ".ccsave";
 		std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -1821,10 +1833,16 @@ static std::string ResyncSaveName() {
 			if (m_Runner && m_Runner->GetMatchConfig().persistentWorld && !m_Runner->GetMatchConfig().worldId.empty()) {
 				m_AutosaveMatchId = m_Runner->GetMatchConfig().worldId;
 			} else {
-				m_AutosaveMatchId = m_Runner ? std::format("{:x}-{:x}-{:x}", m_Runner->GetMatchConfig().sessionId, System::GetProcessID(),
-				                                        std::chrono::system_clock::now().time_since_epoch().count()) : "";
+				// Both peers must be able to name the same checkpoint, so the id is the match, not the machine.
+				m_AutosaveMatchId = m_Runner ? std::format("{:016x}-{:016x}", m_Runner->GetMatchConfig().sessionId, m_Coordinator->GetRoundId()) : "";
 			}
 			m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
+			m_AutosaveIdentity.sessionId = m_Runner ? m_Runner->GetMatchConfig().sessionId : 0;
+			m_AutosaveIdentity.roundId = m_Coordinator->GetRoundId();
+			m_AutosaveIdentity.intervalSeconds = m_MatchAutosaveSeconds;
+			m_AutosaveIdentity.pinnedTickSource = m_PinnedAutosaveTick;
+			// A new match pins nothing: the previous round's rewind point must not hold an archive here.
+			m_PinnedAutosaveTick->store(0);
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
 		}
@@ -1877,7 +1895,7 @@ static std::string ResyncSaveName() {
 		m_LastAutosaveSimTime = now;
 		if (now < m_NextAutosaveSimTime) return;
 		m_NextAutosaveSimTime += ((now - m_NextAutosaveSimTime) / interval + 1) * interval;
-		if (!g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick)) {
+		if (!g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity)) {
 			return;
 		}
 		if (m_WorldJoin.IsConfigured()) {
@@ -2138,7 +2156,7 @@ static std::string ResyncSaveName() {
 			if (tick != 0 && m_WorldJoin.Image().tick != tick) {
 				// The capture is taken here; the image is published once the writer has the archive, so the
 				// bootstrap waits in SnapshotTransfer for a pump or two instead of reading a half-written file.
-				g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick);
+				g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
 			}
 			if (const NetWorldJoinSession* session = m_WorldJoin.FindSession(peer.transportPeerId)) {
 				if (m_Runner) {
@@ -2408,6 +2426,29 @@ static std::string ResyncSaveName() {
 				std::cout << "[net-world] joiner lockstep start: " << startError << std::endl;
 			}
 		}
+	}
+
+	void NetMatchService::NoteRewindAnchor(const std::string& matchId, uint64_t tick, bool host, const AutosaveDescriptor* known) {
+		if (matchId.empty() || tick == 0) return;
+		std::string refusal;
+		// The caller that already validated this checkpoint does not pay for a second read of it.
+		const bool knownCheckpoint = known && known->matchId == matchId && known->savedTick == tick;
+		const bool held = knownCheckpoint || AutosaveStore::Find(matchId, tick, &refusal).has_value();
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			// Retention keeps the agreed checkpoint whatever its age, so the rejoin still finds it.
+			if (matchId == m_AutosaveMatchId) m_PinnedAutosaveTick->store(tick);
+			m_RewindAnchorMatchId = matchId;
+			m_RewindAnchorTick = tick;
+			m_RewindAnchorHeld = held;
+		}
+		std::cout << std::format("[autosave] anchor {} match={} tick={} local={}\n", host ? "named" : "received",
+		                         matchId, tick, held ? std::string("ok") : refusal) << std::flush;
+	}
+
+	NetMatchService::RewindAnchor NetMatchService::GetRewindAnchor() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return {m_RewindAnchorMatchId, m_RewindAnchorTick, m_RewindAnchorHeld};
 	}
 
 	void NetMatchService::PumpSeatPresence() {
@@ -3224,6 +3265,11 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_DiagnosticIdentity = identity.dump(2, ' ', false, json::error_handler_t::replace);
 		++m_DiagnosticIdentityGeneration;
+		// Stamped into every checkpoint this process writes, so a restore can say what it belongs to.
+		m_AutosaveIdentity.buildId = manifest.buildId;
+		m_AutosaveIdentity.deterministicConfigHash = NetIdentity::HashHex(manifest.deterministicConfigHash);
+		m_AutosaveIdentity.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
+		m_AutosaveIdentity.sessionIdentityHash = NetIdentity::HashHex(manifest.sessionIdentityHash);
 	}
 
 	namespace {

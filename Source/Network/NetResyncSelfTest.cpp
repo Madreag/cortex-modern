@@ -428,6 +428,53 @@ namespace RTE {
 			StateRoundTrip(empty);
 		}
 
+		void TestRewindAnchor() {
+			const std::string matchId = "00000000deadbeef-000000000000002a";
+			auto anchored = State();
+			anchored.rewindMatchId = matchId;
+			anchored.rewindTick = anchored.savedTick;
+			StateRoundTrip(anchored);
+			auto older = anchored;
+			older.rewindTick = 1;
+			StateRoundTrip(older);
+			// An envelope that names no rewind point carries none of its bytes.
+			const auto plain = EncodeState(State());
+			const auto withAnchor = EncodeState(anchored);
+			const size_t expectedSize = plain.size() + 1 + matchId.size() + 8;
+			Check(withAnchor.size() == expectedSize, "rewind anchor is not the only added metadata: " +
+			                                             std::to_string(withAnchor.size()) + " bytes, expected " + std::to_string(expectedSize));
+			// Everything past the two size fields of the header is untouched by the anchor.
+			const auto plainMetadataEnd = static_cast<std::ptrdiff_t>(plain.size() - c_Archive.size());
+			const auto matching = std::mismatch(plain.begin() + 16, plain.begin() + plainMetadataEnd, withAnchor.begin() + 16);
+			Check(matching.first == plain.begin() + plainMetadataEnd, "rewind anchor moved the metadata before it: first difference at byte " +
+			                                                             std::to_string(matching.first - plain.begin()) + " of " +
+			                                                             std::to_string(plainMetadataEnd));
+
+			auto future = anchored;
+			future.rewindTick = future.savedTick + 1;
+			RejectStateEncode(future, "rewind anchor past the saved tick");
+			auto tickless = anchored;
+			tickless.rewindTick = 0;
+			RejectStateEncode(tickless, "rewind anchor with no tick");
+			auto nameless = anchored;
+			nameless.rewindMatchId.clear();
+			RejectStateEncode(nameless, "rewind anchor tick with no match id");
+			auto foreign = anchored;
+			foreign.rewindMatchId = "../../Userdata/save";
+			RejectStateEncode(foreign, "rewind anchor match id outside the store");
+			auto huge = anchored;
+			huge.rewindMatchId.assign(NetResyncCodec::c_MaxRewindMatchIdBytes + 1, 'a');
+			RejectStateEncode(huge, "rewind anchor match id past the cap");
+
+			// The same refusals on the way in: the id sits at the end of the metadata, ahead of the archive.
+			auto corrupted = withAnchor;
+			corrupted[corrupted.size() - c_Archive.size() - 8 - matchId.size()] = 'Z';
+			RejectState(corrupted, anchored.sessionId, anchored.savedTick + 1, "decoded rewind anchor match id with a foreign character");
+			auto zeroed = withAnchor;
+			for (size_t i = 0; i < 8; ++i) zeroed[zeroed.size() - c_Archive.size() - 8 + i] = 0;
+			RejectState(zeroed, anchored.sessionId, anchored.savedTick + 1, "decoded rewind anchor with no tick");
+		}
+
 		void TestEnvelopeRefusalAtomicity() {
 			const auto expected = State();
 			const auto bytes = EncodeState(expected);
@@ -668,6 +715,7 @@ namespace RTE {
 			{"player_binding_applied_commands", TestBindingAcks},
 			{"legacy_v8_v17_bytes", TestLegacyBytes},
 			{"resync_roundtrip", TestEnvelopeRoundTrips},
+			{"resync_rewind_anchor", TestRewindAnchor},
 			{"resync_refusal_atomicity", TestEnvelopeRefusalAtomicity},
 			{"resync_input_limits", TestEnvelopeInputLimits},
 			{"future_command_input_ids", TestFutureCommandInputIds},
