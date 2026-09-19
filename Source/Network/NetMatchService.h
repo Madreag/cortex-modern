@@ -648,7 +648,7 @@ namespace RTE {
 		bool SubmitHostOptions(uint64_t expectedRevision, const NetMatchConfig& draft, std::string* error = nullptr);
 		/// The staged next-match draft, when Apply accepted one. The GUI re-seeds its next host
 		/// options draft from it; a later Start publishes it like any new-lobby request.
-		std::optional<NetMatchConfig> GetPendingHostOptions(std::string* refusal = nullptr) const;
+		std::optional<NetMatchConfig> GetPendingHostOptions() const;
 		/// Returns a copy that survives returning to the lobby and expires at the next match start.
 		std::optional<NetMatchSummary> GetLastMatchSummary() const;
 		/// Local chat send, presentation only. Reaches the session whether the lobby is still running

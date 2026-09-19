@@ -3154,10 +3154,10 @@ namespace RTE {
 			observe = {};
 			if (!service.ReturnToLobby(error)) return false;
 			service.WaitForPendingWork();
-			std::string refusal;
-			const auto retained = service.GetPendingHostOptions(&refusal);
+			const std::string refusal = service.GetErrorText();
+			const auto retained = service.GetPendingHostOptions();
 			if (!Pending() || retained != submitted || service.GetState() != NetMatchServiceState::Failed ||
-			    refusal != "Host options refused: the draft names a stale configuration revision" || service.GetErrorText() != refusal) {
+			    refusal != "Host options refused: the draft names a stale configuration revision" || service.GetLobbySnapshot().errorText != refusal) {
 				*error = "the host lost the refused rematch draft or its status: " + refusal + "; " + service.GetErrorText();
 				return false;
 			}
