@@ -33,8 +33,12 @@ using namespace RTE;
 
 namespace {
 	std::atomic<uint64_t> s_LuaWrites{0};
+	std::atomic<int> s_BarrierPaused{0};
 
 	void OnLuaTableWrite(void* table) {
+		// A capture's own writes are discarded by the walk anyway; the callback stays installed so
+		// every table born in the capture still gets its trap.
+		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) return;
 		s_LuaWrites.fetch_add(1, std::memory_order_relaxed);
 		CheckpointGraphIndex::Get().OnTableWritten(table);
 	}
@@ -355,11 +359,11 @@ void RTE::ArmLuaCheckpointBarrier() {
 
 // A capture's own scratch tables are not gameplay writes, and the walk discards every write it sees.
 RTE::LuaCheckpointBarrierPause::LuaCheckpointBarrierPause() {
-	luaJIT_set_tab_write_callback(nullptr);
+	s_BarrierPaused.fetch_add(1, std::memory_order_relaxed);
 }
 
 RTE::LuaCheckpointBarrierPause::~LuaCheckpointBarrierPause() {
-	luaJIT_set_tab_write_callback(&OnLuaTableWrite);
+	s_BarrierPaused.fetch_sub(1, std::memory_order_relaxed);
 }
 
 uint64_t RTE::LuaCheckpointWriteGeneration() {
