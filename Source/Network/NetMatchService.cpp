@@ -5295,10 +5295,11 @@ static std::string ResyncSaveName() {
 		if (transportReady && runner.Start(wire, session, coordinator, config, error)) return true;
 		if (config.host || !NetIcePrefersP2P(target, m_IceEnabled) || m_CancelRequested.load()) return false;
 		const auto routeFailed = [&] {
+			const bool unconnectedClose = session.IsClosed() && session.GetRejectReason() == NetRejectReason::InternalError && session.GetMismatchKey().empty();
 			return runner.GetLobbySession().GetState() == NetLobbyState::Idle &&
 			       (session.IsFailed() || session.IsClosed() || session.GetState() == NetSessionState::Connecting) &&
 			       session.GetRemoteTransportPeerId() == c_InvalidNetPeerId && !session.IsRejected() &&
-			       (!session.HasReject() || session.GetMismatchKey() == "transport" || session.GetMismatchKey() == "timeout_ms");
+			       (!session.HasReject() || session.GetMismatchKey() == "transport" || session.GetMismatchKey() == "timeout_ms" || unconnectedClose);
 		};
 		if (transportReady && !routeFailed()) return false;
 		noDirectRoute = true;

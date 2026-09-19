@@ -10902,7 +10902,7 @@ namespace RTE {
 			return false;
 		}
 		target.joinMode = "either";
-		for (int arm = 0; arm < 7; ++arm) {
+		for (int arm = 0; arm < 9; ++arm) {
 			std::vector<std::string> log;
 			TransportTap *muxIp = nullptr, *p2p = nullptr;
 			auto mux = MakeTappedMux(&log, &muxIp, &p2p);
@@ -10942,10 +10942,14 @@ namespace RTE {
 					return false;
 				}
 				p2p->Queue({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, {}});
+			} else if (arm == 0 || arm == 8) {
+				if (arm == 8) p2p->Queue({NetTransportEventType::PeerConnected, 1, NetTransportLane::ControlReliable, {}, {}});
+				// GNS assigns an id before connecting, so a refused candidate produces this close.
+				p2p->Queue({NetTransportEventType::PeerDisconnected, 1, NetTransportLane::ControlReliable, {}, "ICE all candidates failed"});
 			} else if (arm != 6) {
 				p2p->Queue({NetTransportEventType::ConnectionFailed, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "ICE all candidates failed"});
 			}
-			ip.Queue({NetTransportEventType::ConnectionFailed, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "IP refused"});
+			ip.Queue({NetTransportEventType::PeerDisconnected, 1, NetTransportLane::ControlReliable, {}, "IP refused"});
 			NetIceJoinTarget dial = target;
 			if (arm == 3 || arm == 6) { dial.address.clear(); dial.port = 0; }
 			bool noDirectRoute = false;
@@ -10954,9 +10958,9 @@ namespace RTE {
 				*error = "ice refusal fixture: two failed transports started a match";
 				return false;
 			}
-			const bool retry = arm < 3;
+			const bool retry = arm < 3 || arm == 7;
 			const auto ipDials = std::count(log.begin(), log.end(), "retry.Connect(203.0.113.9:41237)");
-			if (iceDials != (arm == 2 ? 0 : 1) || ipDials != (retry ? 1 : 0) || noDirectRoute != (arm < 4 || arm == 6)) {
+			if (iceDials != (arm == 2 ? 0 : 1) || ipDials != (retry ? 1 : 0) || noDirectRoute != (arm < 4 || arm == 6 || arm == 7)) {
 				*error = "ice retry arm " + std::to_string(arm) + ": ICE dials=" + std::to_string(iceDials) +
 				         ", IP dials=" + std::to_string(ipDials) + ", NAT failure=" + std::to_string(noDirectRoute);
 				return false;
