@@ -4,6 +4,7 @@
 
 #include "ControllerFrame.h"
 #include "NetLockstep.h"
+#include "NetMatchReplay.h"
 #include "NetResyncState.h"
 
 #include <cstdint>
@@ -347,6 +348,21 @@ namespace RTE {
 		static void CloseLockstepReplayRecord();
 		/// Takes a bounded, complete replay prefix at a completed simulation tick.
 		static bool CopyLockstepReplayForDiagnostics(std::string& bytes, bool& truncated);
+
+		/// A persistent world's recording is cut at every checkpoint. The segment's header names the
+		/// checkpoint's world-structure digest, which the archive thread writes after the capture, so the
+		/// frames the sim commits meanwhile wait here until the header can be named.
+		static constexpr size_t c_MaxPendingSegmentFrames = 3600;
+		/// Closes the open recording with its end marker and holds the next segment until it is sealed.
+		static void ArmLockstepWorldSegment(const NetWorldSegmentHeader& header, const std::string& path);
+		static bool HasPendingLockstepWorldSegment();
+		static uint64_t GetPendingLockstepWorldSegmentTick();
+		/// Opens the held segment with the checkpoint's digest and writes the frames that waited.
+		static bool SealLockstepWorldSegment(const std::string& worldDigest, std::string* error = nullptr);
+		/// Drops the held segment and its frames; the world keeps ticking without a recording.
+		static void DropPendingLockstepWorldSegment(const std::string& reason);
+		/// The segment the recorder is writing, empty when the recording is an ordinary match's.
+		static const NetWorldSegmentHeader& GetLockstepWorldSegment();
 		static bool SetLockstepReplaySource(const std::string& path, std::string* error = nullptr);
 		/// Releases playback input and rewind buffers, preserving its terminal outcome and counters.
 		static void CloseLockstepReplayPlayback();

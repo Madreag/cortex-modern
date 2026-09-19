@@ -2190,6 +2190,8 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
+		// A segment held for its checkpoint opens the moment the archive thread has named the digest.
+		if (ScenarioRunner::HasPendingLockstepWorldSegment()) SealWorldReplaySegment();
 		if (m_WorldJoin.IsConfigured() && m_Coordinator) {
 			NetLockstepReadyFrame ready;
 			if (m_Coordinator->PeekReadyFrame(tick, ready)) {
@@ -2213,9 +2215,35 @@ static std::string ResyncSaveName() {
 		}
 		// Every checkpoint wants a current admission file beside it; the pump writes it.
 		m_RestartAdmissionDue.store(true);
+		RollWorldReplaySegment(tick);
 		if (m_WorldJoin.IsConfigured()) {
 			// The image is published when the writer thread has finished this archive, from the pump.
 			std::cout << "[net-world] metrics " << m_WorldJoin.Metrics().BuildReportJson() << std::endl;
+		}
+	}
+
+	void NetMatchService::RollWorldReplaySegment(uint64_t tick) {
+		// Only a recording world cuts segments: an ordinary match keeps its one file, and a world that
+		// was never asked to record writes nothing.
+		if (!m_WorldJoin.IsConfigured() || m_WorldIdentity.worldId.empty() || tick == 0) return;
+		if (!ScenarioRunner::IsLockstepReplayRecording() && !ScenarioRunner::HasPendingLockstepWorldSegment()) return;
+		NetWorldSegmentHeader header;
+		header.worldId = m_WorldIdentity.worldId;
+		header.tick = tick;
+		header.round = m_AutosaveIdentity.roundId;
+		header.boot = m_WorldIdentity.boot;
+		const std::string path = AutosaveStore::SegmentPath(AutosaveStore::Directory(), header.worldId, tick).string();
+		ScenarioRunner::ArmLockstepWorldSegment(header, path);
+	}
+
+	void NetMatchService::SealWorldReplaySegment() {
+		const uint64_t tick = ScenarioRunner::GetPendingLockstepWorldSegmentTick();
+		if (tick == 0 || m_AutosaveMatchId.empty()) return;
+		const std::optional<AutosaveDescriptor> validated = AutosaveStore::NewestValidated(m_AutosaveMatchId);
+		if (!validated || validated->savedTick != tick || validated->worldStructureHash.empty()) return;
+		std::string error;
+		if (!ScenarioRunner::SealLockstepWorldSegment(validated->worldStructureHash, &error)) {
+			std::cout << "[net-world] segment not opened: " << error << std::endl;
 		}
 	}
 
