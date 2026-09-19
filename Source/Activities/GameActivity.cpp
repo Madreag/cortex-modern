@@ -1624,7 +1624,7 @@ bool GameActivity::BuildLockstepSeatBrains() {
 	if (MovableObject::GetUniqueIDCounter() > m_LockstepPlacementUidBase + c_SetupEditorUidReserve) {
 		const std::string line = "ERROR: the setup editor spent more than " + std::to_string(c_SetupEditorUidReserve) + " unique ids";
 		g_ConsoleMan.PrintString(line);
-		{ std::ostringstream line; line <<  "[net-match] " << line; System::PrintDiagnosticLine(line.str()); }
+		{ std::ostringstream diag; diag << "[net-match] " << line; System::PrintDiagnosticLine(diag.str()); }
 		return false;
 	}
 	MovableObject::PinUniqueIDCounter(m_LockstepPlacementUidBase + c_SetupEditorUidReserve);
