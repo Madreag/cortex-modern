@@ -267,7 +267,7 @@ namespace RTE {
 			AppendU8(out, static_cast<uint8_t>(config.mode));
 			AppendU8(out, static_cast<uint8_t>(config.ownershipPolicy));
 			// Reserved bit 0 carries the dedicated flag; old builds refuse the nonzero word.
-			AppendU16LE(out, config.dedicated ? 1 : 0);
+			AppendU16LE(out, (config.dedicated ? 1 : 0) | (config.successorOrder.empty() ? 0 : NetMatchConfigUtil::c_MigrationConfigFlag));
 			if (!AppendString(out, config.activityType, NetLobbyProtocol::c_MaxShortTextBytes, "activity_type", error) ||
 			    !AppendString(out, config.activityPreset, NetLobbyProtocol::c_MaxShortTextBytes, "activity_preset", error) ||
 			    !AppendString(out, config.sceneName, NetLobbyProtocol::c_MaxShortTextBytes, "scene_name", error) ||
@@ -310,6 +310,18 @@ namespace RTE {
 				AppendBool(out, config.automaticRepair);
 				AppendU8(out, static_cast<uint8_t>(config.delayPolicy));
 			}
+			if (!config.successorOrder.empty()) {
+				AppendU16LE(out, NetMatchConfigUtil::c_MigrationVersion);
+				AppendU8(out, static_cast<uint8_t>(config.successorOrder.size()));
+				for (uint8_t peer : config.successorOrder) AppendU8(out, peer);
+				AppendU8(out, static_cast<uint8_t>(config.migrationPeers.size()));
+				for (const auto& peer : config.migrationPeers) {
+					AppendU8(out, peer.peerId);
+					AppendU16LE(out, peer.listenPort);
+					AppendU8(out, static_cast<uint8_t>(peer.listenAddrs.size()));
+					for (const auto& address : peer.listenAddrs) if (!AppendString(out, address, NetLobbyProtocol::c_MaxShortTextBytes, "migration address", error)) return false;
+				}
+			}
 			return true;
 		}
 
@@ -332,7 +344,7 @@ namespace RTE {
 				return false;
 			}
 			out.dedicated = (reserved & 1) != 0;
-			if (reserved & ~static_cast<uint16_t>(1)) {
+			if (reserved & ~static_cast<uint16_t>(1 | NetMatchConfigUtil::c_MigrationConfigFlag)) {
 				SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 2, "config reserved field must be zero");
 				return false;
 			}
@@ -392,6 +404,28 @@ namespace RTE {
 				if (!ReadOrTruncated(reader.ReadBool(out.autosaveEnabled) && reader.ReadU32LE(out.autosaveIntervalSeconds) &&
 				                     reader.ReadU8(out.idleWaitMinutes) && reader.ReadBool(out.automaticRepair) && reader.ReadU8(policy), reader, error, "host match options")) return false;
 				out.delayPolicy = static_cast<NetMatchDelayPolicy>(policy);
+			}
+			if (reserved & NetMatchConfigUtil::c_MigrationConfigFlag) {
+				uint16_t version = 0;
+				uint8_t count = 0;
+				if (!ReadOrTruncated(reader.ReadU16LE(version) && version == NetMatchConfigUtil::c_MigrationVersion && reader.ReadU8(count) && count < NetMatchConfigUtil::c_MaxPeerCount, reader, error, "successor order")) return false;
+				for (uint8_t i = 0; i < count; ++i) {
+					uint8_t peer = 0;
+					if (!ReadOrTruncated(reader.ReadU8(peer), reader, error, "successor peer")) return false;
+					out.successorOrder.push_back(peer);
+				}
+				if (!ReadOrTruncated(reader.ReadU8(count) && count <= NetMatchConfigUtil::c_MaxPeerCount, reader, error, "migration endpoints")) return false;
+				for (uint8_t i = 0; i < count; ++i) {
+					NetMatchMigrationPeer peer;
+					uint8_t addresses = 0;
+					if (!ReadOrTruncated(reader.ReadU8(peer.peerId) && reader.ReadU16LE(peer.listenPort) && reader.ReadU8(addresses) && addresses <= NetMatchConfigUtil::c_MaxMigrationAddresses, reader, error, "migration endpoint")) return false;
+					for (uint8_t a = 0; a < addresses; ++a) {
+						std::string address;
+						if (!reader.ReadString(address, NetLobbyProtocol::c_MaxShortTextBytes, "migration address", error)) return false;
+						peer.listenAddrs.push_back(std::move(address));
+					}
+					out.migrationPeers.push_back(std::move(peer));
+				}
 			}
 			std::string validateError;
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(out, &validateError)) {

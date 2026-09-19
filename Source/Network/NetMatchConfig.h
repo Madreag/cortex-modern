@@ -33,6 +33,12 @@ namespace RTE {
 	};
 
 	enum class NetMatchDelayPolicy : uint8_t { Auto = 1, Fixed = 2 };
+	struct NetMatchMigrationPeer {
+		uint8_t peerId = 0;
+		uint16_t listenPort = 0;
+		std::vector<std::string> listenAddrs;
+		bool operator==(const NetMatchMigrationPeer&) const = default;
+	};
 
 	struct NetMatchTeamRules {
 		std::string technologyIntent = "-All-";
@@ -77,6 +83,8 @@ namespace RTE {
 		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		std::string modePreset = "PvP";
 		std::vector<NetMatchPlayerSlot> players;
+		std::vector<uint8_t> successorOrder;
+		std::vector<NetMatchMigrationPeer> migrationPeers;
 
 		bool operator==(const NetMatchConfig&) const = default;
 	};
@@ -84,6 +92,9 @@ namespace RTE {
 	class NetMatchConfigUtil {
 	public:
 		static constexpr uint16_t c_Version = 4; // v4 added the spectate rule; v3 and v2 envelopes stay readable.
+		static constexpr uint16_t c_MigrationVersion = 1;
+		static constexpr uint16_t c_MigrationConfigFlag = 16;
+		static constexpr size_t c_MaxMigrationAddresses = 8;
 		static constexpr uint32_t c_MaxFiniteStartingGold = 29999;
 		static constexpr uint32_t c_InfiniteGold = 1000000000;
 		static constexpr uint8_t c_MinPeerCount = 2;
