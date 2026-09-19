@@ -152,7 +152,6 @@ def generate(options):
     header += ['Visit(entity, path);', '}', '} // namespace RTE', '']
     generated = '\n'.join(header)
     dest = options.output.resolve() if options.output else repo / 'Source/System/ContractAudit.h'
-    dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         existing = dest.read_text(encoding='utf-8')
         dropped = hand_fields(existing) - hand_fields(generated)
@@ -170,6 +169,7 @@ def generate(options):
             path.write_bytes(modified)
     if not generated.endswith('\n'):
         generated += '\n'
+    dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(generated, encoding='utf-8', newline='\n')
     if not header_only:
         (root / 'observer-manifest.json').write_text(json.dumps({'status': 'read-only field access instrumentation; opaque fields explicitly reported', 'classes': sorted(selected), 'headers': manifest, 'omitted_method_macros': omitted, 'field_count': sum(map(len, fields.values())), 'observer_sha256': hashlib.sha256(dest.read_bytes()).hexdigest()}, indent=2))
