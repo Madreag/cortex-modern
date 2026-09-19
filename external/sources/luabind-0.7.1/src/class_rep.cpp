@@ -359,6 +359,9 @@ int luabind::detail::class_rep::settable_dispatcher(lua_State* L)
 {
 	object_rep* obj = static_cast<object_rep*>(lua_touserdata(L, 1));
 
+	// A property write is always a mutation, so the checkpoint hears about it before it happens.
+	checkpoint_object_mutated(obj);
+
 	bool success = obj->crep()->settable(L);
 
 #ifndef LUABIND_NO_ERROR_CHECKING
@@ -662,6 +665,13 @@ int luabind::detail::class_rep::function_dispatcher(lua_State* L)
 #endif
 
 		const overload_rep& o = rep->overloads()[match_index];
+
+		// The match has accepted the object at index 1 as this overload's self, so it is one of ours.
+		// A non-const overload may write it, which is what the checkpoint's trap wants to hear.
+		if (!o.is_const() && lua_type(L, 1) == LUA_TUSERDATA)
+		{
+			checkpoint_object_mutated(static_cast<object_rep*>(lua_touserdata(L, 1)));
+		}
 
         if (force_static_call && !o.has_static())
 		{
