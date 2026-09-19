@@ -379,6 +379,8 @@ namespace RTE {
 		GUILabel* m_HostNetPingLabel = nullptr;
 		GUILabel* m_HostNetModeLabel = nullptr;          //!< H34: "Host mode: <Dedicated|Playing> - capacity N - humans seated M".
 		GUIComboBox* m_HostNetVisibilityCombo = nullptr; //!< H34: LAN only / Internet: Unlisted / Internet: Listed.
+		GUIComboBox* m_HostNetIceCombo = nullptr;
+		GUILabel* m_HostNetIceHintLabel = nullptr;
 		GUITextBox* m_HostNetPortBox = nullptr;          //!< H34: the next hosted session's game port (the setup draft's).
 		GUICheckbox* m_HostRecRepairCheck = nullptr;
 		GUICheckbox* m_HostRecAutosaveCheck = nullptr;
