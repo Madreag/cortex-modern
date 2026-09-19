@@ -21,6 +21,7 @@ namespace RTE {
 		StateChunk = 8,
 		SeatAssign = 9,
 		Migration = 10,
+		Resume = 11,
 	};
 
 	enum class NetLobbyErrorCode {
@@ -137,6 +138,23 @@ namespace RTE {
 		bool operator==(const NetLobbyMigration&) const = default;
 	};
 
+	// A lobby that resumes a match from disk: the host offers the checkpoint it stands on (kind 1) and
+	// each peer answers whether it already holds that very archive (kind 2). A peer that holds it loads
+	// its own copy and the host streams it nothing.
+	struct NetLobbyResume {
+		uint8_t kind = 1;
+		uint8_t peerId = 0;
+		bool held = false;
+		uint64_t savedTick = 0;
+		std::string matchId;
+		std::string digest; //!< The checkpoint's world-structure digest, as the descriptor records it.
+		/// The hash of that tick's agreed lockstep state, so a peer proves it holds the same state to
+		/// resume on and not merely a checkpoint of the same tick.
+		std::string sideStateHash;
+
+		bool operator==(const NetLobbyResume&) const = default;
+	};
+
 	using NetLobbyPayload = std::variant<
 		NetLobbyHello,
 		NetLobbyPeerState,
@@ -147,7 +165,8 @@ namespace RTE {
 		NetLobbyAbort,
 		NetLobbyStateChunk,
 		NetLobbySeatAssign,
-		NetLobbyMigration>;
+		NetLobbyMigration,
+		NetLobbyResume>;
 
 	struct NetLobbyMessage {
 		NetLobbyPayload payload;
@@ -173,6 +192,9 @@ namespace RTE {
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxShortTextBytes = 128;
+		// The resume identity is an autosave match id and a world digest, both short by construction.
+		static constexpr uint16_t c_ResumeVersion = 1;
+		static constexpr size_t c_MaxResumeMatchIdBytes = 64;
 		static constexpr size_t c_MaxDisplayNameBytes = 64;
 		static constexpr size_t c_MaxStateChunkBytes = 48U * 1024U;
 		static constexpr uint32_t c_MaxTotalStateBytes = 2U * 1024U * 1024U * 1024U;

@@ -204,6 +204,8 @@ static bool s_loadSelfTestExpected = false;
 static bool s_loadSelfTestPassed = false;
 static uint64_t s_netAutosaveRestoreTick = 0; //!< The committed tick to restore; 0 when the checkpoint is named by its place.
 static std::string s_netAutosaveRestoreWhich; //!< "oldest" or "newest" of the retained set, for a caller that cannot know the cadence's ticks.
+static std::string s_netResumeMatchId; //!< -net-resume-match: restart that match from its newest resumable checkpoint.
+static uint64_t s_netResumeTick = 0;   //!< -net-resume-tick: the checkpoint to stand on; 0 takes the newest.
 static uint64_t s_netAutosaveRestoreAtTick = 0; //!< The sim tick the restore check runs at; the restored tick by default.
 static bool s_netAutosaveRestorePassed = false;
 static bool s_saveCatalogSelfTest = false;
@@ -1241,6 +1243,27 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), s_netAutosaveRestoreTick);
 			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || s_netAutosaveRestoreTick == 0) {
 				std::cerr << "[autosave] -net-autosave-restore requires the committed tick to restore, or oldest or newest" << std::endl;
+				return false;
+			}
+			i += 2;
+			continue;
+		}
+		if (currentArg == "-net-resume-match") {
+			// Restart a match that ended with its host, from the checkpoints and manifest it left behind.
+			const std::string value = lastArg ? "" : argValue[i + 1];
+			if (value.empty()) {
+				std::cerr << "[autosave] -net-resume-match requires the match id to restart" << std::endl;
+				return false;
+			}
+			s_netResumeMatchId = value;
+			++i;
+			continue;
+		}
+		if (currentArg == "-net-resume-tick") {
+			const std::string value = lastArg ? "" : argValue[i + 1];
+			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), s_netResumeTick);
+			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || s_netResumeTick == 0) {
+				std::cerr << "[autosave] -net-resume-tick requires the committed tick to resume from" << std::endl;
 				return false;
 			}
 			i += 2;
@@ -6127,6 +6150,11 @@ int RunNetMatchServiceE2E() {
 		if (s_netPersistentWorld && e2eHost) {
 			request.persistentWorld = true;
 			request.dedicated = true;
+		}
+		if (e2eHost && !s_netResumeMatchId.empty()) {
+			// The checkpoint's own manifest authors the roster, so nothing above steers this round.
+			request.resumeMatchId = s_netResumeMatchId;
+			request.resumeTick = s_netResumeTick;
 		}
 		if (!setupError.empty() || !g_NetMatchService.Start(request, &setupError)) {
 			s_netMatchServiceE2EExitCode = 1;

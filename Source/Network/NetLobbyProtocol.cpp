@@ -636,6 +636,20 @@ namespace RTE {
 			return true;
 		}
 
+		bool EncodePayload(const NetLobbyResume& payload, std::vector<uint8_t>& out, NetLobbyError* error) {
+			if (payload.kind < 1 || payload.kind > 2 || payload.peerId == 0 || payload.peerId > NetMatchConfigUtil::c_MaxPeerCount ||
+			    payload.matchId.empty() || payload.savedTick == 0 || (payload.kind == 1 && payload.held))
+				return false;
+			AppendU16LE(out, NetLobbyProtocol::c_ResumeVersion);
+			AppendU8(out, payload.kind);
+			AppendU8(out, payload.peerId);
+			AppendU8(out, payload.held ? 1 : 0);
+			AppendU64LE(out, payload.savedTick);
+			return AppendString(out, payload.matchId, NetLobbyProtocol::c_MaxResumeMatchIdBytes, "resume match id", error) &&
+			       AppendString(out, payload.digest, NetLobbyProtocol::c_MaxShortTextBytes, "resume digest", error) &&
+			       AppendString(out, payload.sideStateHash, NetLobbyProtocol::c_MaxShortTextBytes, "resume side state hash", error);
+		}
+
 		bool RefuseOversizePeerId(uint8_t peerId, size_t offset, NetLobbyError* error) {
 			if (peerId > NetLobbyProtocol::c_MaxPeers) {
 				SetError(error, NetLobbyErrorCode::InvalidValue, offset, "peer id is invalid");
@@ -663,6 +677,31 @@ namespace RTE {
 					}
 					if (!ReadOrTruncated(reader.ReadHash(payload.configHash) && reader.ReadU32LE(bytes) && bytes <= 48 * 1024 + 28 && reader.ReadBytes(payload.sealedState, bytes), reader, error, "migration capsule"))
 						return false;
+					out = std::move(payload);
+					return true;
+				}
+				case NetLobbyMessageType::Resume: {
+					NetLobbyResume payload;
+					uint16_t version = 0;
+					uint8_t held = 0;
+					if (!ReadOrTruncated(reader.ReadU16LE(version) && version == NetLobbyProtocol::c_ResumeVersion && reader.ReadU8(payload.kind) && payload.kind >= 1 && payload.kind <= 2 &&
+					                         reader.ReadU8(payload.peerId) && payload.peerId != 0 && payload.peerId <= NetMatchConfigUtil::c_MaxPeerCount && reader.ReadU8(held) && held <= 1 &&
+					                         reader.ReadU64LE(payload.savedTick) && payload.savedTick != 0,
+					                     reader, error, "resume header"))
+						return false;
+					payload.held = held != 0;
+					if (payload.kind == 1 && payload.held) {
+						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset(), "a resume offer cannot answer held");
+						return false;
+					}
+					if (!reader.ReadString(payload.matchId, NetLobbyProtocol::c_MaxResumeMatchIdBytes, "resume match id", error) ||
+					    !reader.ReadString(payload.digest, NetLobbyProtocol::c_MaxShortTextBytes, "resume digest", error) ||
+					    !reader.ReadString(payload.sideStateHash, NetLobbyProtocol::c_MaxShortTextBytes, "resume side state hash", error))
+						return false;
+					if (payload.matchId.empty()) {
+						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset(), "resume names no match");
+						return false;
+					}
 					out = std::move(payload);
 					return true;
 				}
@@ -820,6 +859,7 @@ namespace RTE {
 				case NetLobbyMessageType::StateChunk:
 				case NetLobbyMessageType::SeatAssign:
 				case NetLobbyMessageType::Migration:
+				case NetLobbyMessageType::Resume:
 					out = static_cast<NetLobbyMessageType>(raw);
 					return true;
 			}
@@ -839,6 +879,7 @@ namespace RTE {
 			[](const NetLobbyStateChunk&) { return NetLobbyMessageType::StateChunk; },
 			[](const NetLobbySeatAssign&) { return NetLobbyMessageType::SeatAssign; },
 			[](const NetLobbyMigration&) { return NetLobbyMessageType::Migration; },
+			[](const NetLobbyResume&) { return NetLobbyMessageType::Resume; },
 		}, payload);
 	}
 
@@ -855,6 +896,8 @@ namespace RTE {
 			case NetLobbyMessageType::SeatAssign: return "SeatAssign";
 			case NetLobbyMessageType::Migration:
 				return "Migration";
+			case NetLobbyMessageType::Resume:
+				return "Resume";
 		}
 		return "Unknown";
 	}

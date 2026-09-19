@@ -1876,6 +1876,248 @@ namespace RTE {
 			return true;
 		}
 
+		/// A scratch Autosaves directory of this run's own, removed when the row ends.
+		struct ResumeScratch {
+			std::filesystem::path path;
+			ResumeScratch(): path(std::filesystem::temp_directory_path() / ("cc-resume-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+				std::error_code ignored;
+				std::filesystem::create_directories(path, ignored);
+			}
+			~ResumeScratch() {
+				std::error_code ignored;
+				std::filesystem::remove_all(path, ignored);
+			}
+		};
+
+		/// The agreed side state a row stands on: the same values NetResyncSelfTest.cpp:365-368 uses for
+		/// a resync snapshot, because a checkpoint records exactly what a heal's snapshot would.
+		AutosaveSideState ResumeSideStateFixture() {
+			AutosaveSideState state;
+			state.controlOwners = {{101, 2}, {std::numeric_limits<int32_t>::max(), 16}};
+			state.droppedControlOwners = {{301, 3}};
+			state.appliedCommands = {{2, 10}, {16, std::numeric_limits<uint64_t>::max() - 1}};
+			state.firstTransferUid = 101;
+			return state;
+		}
+
+		std::string ResumePayloadHex(const NetMatchConfig& config) {
+			std::vector<uint8_t> bytes;
+			if (!NetLobbyProtocol::Encode(NetLobbyMessage{NetLobbyMatchConfig{config}}, bytes)) return {};
+			static constexpr char digits[] = "0123456789abcdef";
+			std::string hex;
+			for (uint8_t byte: bytes) {
+				hex.push_back(digits[byte >> 4]);
+				hex.push_back(digits[byte & 0x0F]);
+			}
+			return hex;
+		}
+
+		void WriteResumeArchiveStub(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick) {
+			std::ofstream out(AutosaveStore::ArchivePath(directory, matchId, tick), std::ios::binary | std::ios::trunc);
+			out << "not a zip";
+		}
+
+		bool TestRestartManifestAndAdmission(std::string* error) {
+			ResumeScratch scratch;
+			const std::string matchId = "00000000deadbeef-00000000000000aa";
+			const NetMatchConfig config = MakeConfig();
+			AutosaveManifest manifest;
+			manifest.schema = AutosaveStore::c_ManifestSchema;
+			manifest.matchId = matchId;
+			manifest.sessionId = config.sessionId;
+			manifest.roundId = 7;
+			manifest.savedTick = 480;
+			manifest.simTimeTicks = 480 * 1000;
+			manifest.intervalSeconds = 30;
+			manifest.configHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config));
+			manifest.configPayload = ResumePayloadHex(config);
+			manifest.activityPreset = config.activityPreset;
+			manifest.scenePreset = config.sceneName;
+			manifest.peerNames = {"Host", "Scout"};
+			manifest.sideState = ResumeSideStateFixture();
+			if (manifest.configPayload.empty() || !AutosaveStore::PublishManifest(scratch.path, manifest, error)) {
+				if (error && error->empty()) *error = "the restart manifest was not published";
+				return false;
+			}
+			AutosaveManifest read;
+			if (!AutosaveStore::ReadManifest(scratch.path, matchId, 480, read, error)) return false;
+			if (read.configPayload != manifest.configPayload || read.configHash != manifest.configHash || read.roundId != 7 ||
+			    read.savedTick != 480 || read.intervalSeconds != 30 || read.peerNames != manifest.peerNames ||
+			    read.activityPreset != manifest.activityPreset || read.scenePreset != manifest.scenePreset) {
+				*error = "the restart manifest read back different fields than it was written with";
+				return false;
+			}
+			// The agreed lockstep state of that tick is what a resumed round is played on, so every one
+			// of its four fields has to survive the file unchanged.
+			if (read.sideState != manifest.sideState) {
+				*error = "the restart manifest lost the tick's agreed state: owners " + std::to_string(read.sideState.controlOwners.size()) +
+				         "/" + std::to_string(manifest.sideState.controlOwners.size()) + ", dropped " + std::to_string(read.sideState.droppedControlOwners.size()) +
+				         "/" + std::to_string(manifest.sideState.droppedControlOwners.size()) + ", applied " + std::to_string(read.sideState.appliedCommands.size()) +
+				         "/" + std::to_string(manifest.sideState.appliedCommands.size()) + ", transfer " + std::to_string(read.sideState.firstTransferUid) +
+				         "/" + std::to_string(manifest.sideState.firstTransferUid);
+				return false;
+			}
+			// The hash both sides of a resume compare is taken over that one rendering, so a changed
+			// field must change it and a re-read of the same file must not.
+			if (NetMatchService::HashSideState(read.sideState) != NetMatchService::HashSideState(manifest.sideState)) {
+				*error = "the same agreed state hashed differently after a round trip";
+				return false;
+			}
+			AutosaveSideState moved = manifest.sideState;
+			moved.appliedCommands[2] += 1;
+			if (NetMatchService::HashSideState(moved) == NetMatchService::HashSideState(manifest.sideState)) {
+				*error = "a moved applied-command sequence did not change the agreed state's hash";
+				return false;
+			}
+			NetLobbyResume offer;
+			offer.digest = "worlddigest";
+			offer.sideStateHash = NetMatchService::HashSideState(manifest.sideState);
+			if (!NetMatchService::ResumeOfferMatches(offer, "worlddigest", offer.sideStateHash)) {
+				*error = "a peer holding the offered world and state was not allowed to answer held";
+				return false;
+			}
+			if (NetMatchService::ResumeOfferMatches(offer, "worlddigest", NetMatchService::HashSideState(moved)) ||
+			    NetMatchService::ResumeOfferMatches(offer, "otherworld", offer.sideStateHash)) {
+				*error = "a peer whose state or world differs from the offer was allowed to answer held";
+				return false;
+			}
+			offer.sideStateHash.clear();
+			if (NetMatchService::ResumeOfferMatches(offer, "worlddigest", NetMatchService::HashSideState(manifest.sideState))) {
+				*error = "an offer that names no agreed state was answered held";
+				return false;
+			}
+			NetMatchConfig decoded;
+			std::vector<uint8_t> payloadBytes;
+			for (size_t index = 0; index + 1 < read.configPayload.size(); index += 2) {
+				payloadBytes.push_back(static_cast<uint8_t>(std::stoul(read.configPayload.substr(index, 2), nullptr, 16)));
+			}
+			const auto message = NetLobbyProtocol::Decode(payloadBytes);
+			if (!message.ok || !std::holds_alternative<NetLobbyMatchConfig>(message.message.payload)) {
+				*error = "the manifest's stored payload is not the lobby message the peers hashed";
+				return false;
+			}
+			decoded = std::get<NetLobbyMatchConfig>(message.message.payload).config;
+			if (NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(decoded)) != read.configHash) {
+				*error = "the manifest's configuration does not hash to the value stored beside it";
+				return false;
+			}
+			AutosaveManifest refused;
+			if (AutosaveStore::ParseManifest("ManifestSchema = 9\nMatchId = " + matchId + "\nSavedTick = 480\nConfigPayload = ab\n", refused)) {
+				*error = "a manifest of an unknown schema was accepted";
+				return false;
+			}
+			if (AutosaveStore::ParseManifest("ManifestSchema = 1\nMatchId = " + matchId + "\nSavedTick = 480\nConfigPayload = zz\n", refused)) {
+				*error = "a manifest whose configuration is not hex was accepted";
+				return false;
+			}
+
+			// The sealed export opens with this install's own key and with no other.
+			if (!GetNetAuthCrypto().IsRealCrypto()) {
+				std::cout << "[net-match-selftest] restart admission sealing skipped: no real crypto in this build" << std::endl;
+			} else {
+				std::array<uint8_t, 32> own{}, other{};
+				own.fill(0x11);
+				other.fill(0x22);
+				const std::vector<uint8_t> context(matchId.begin(), matchId.end());
+				const std::vector<uint8_t> plaintext = {1, 2, 3, 4, 5, 6, 7, 8};
+				AutosaveAdmission admission;
+				admission.schema = AutosaveStore::c_AdmissionSchema;
+				admission.matchId = matchId;
+				admission.generation = 4;
+				if (!NetAuthSeal(own, context, plaintext, admission.sealed) || !AutosaveStore::PublishAdmission(scratch.path, admission, error)) {
+					if (error && error->empty()) *error = "the admission file was not published";
+					return false;
+				}
+				AutosaveAdmission stored;
+				std::vector<uint8_t> opened;
+				if (!AutosaveStore::ReadAdmission(scratch.path, matchId, stored, error)) return false;
+				if (stored.generation != 4 || stored.sealed != admission.sealed) {
+					*error = "the admission file read back a different generation or different bytes";
+					return false;
+				}
+				if (!NetAuthOpen(own, context, stored.sealed, opened) || opened != plaintext) {
+					*error = "the host could not open its own sealed admission export";
+					return false;
+				}
+				if (NetAuthOpen(other, context, stored.sealed, opened)) {
+					*error = "another install's key opened the sealed admission export";
+					return false;
+				}
+				const std::vector<uint8_t> wrongContext = {'o', 't', 'h', 'e', 'r'};
+				if (NetAuthOpen(own, wrongContext, stored.sealed, opened)) {
+					*error = "the sealed admission export opened under another match's context";
+					return false;
+				}
+				AutosaveAdmission older = admission;
+				older.generation = 3;
+				if (AutosaveStore::PublishAdmission(scratch.path, older, nullptr)) {
+					*error = "an older admission generation replaced a newer one";
+					return false;
+				}
+			}
+
+			// Retention takes each checkpoint's manifest with it and keeps the admission while one lives.
+			for (uint64_t tick: {120ULL, 240ULL, 480ULL}) {
+				WriteResumeArchiveStub(scratch.path, matchId, tick);
+				AutosaveManifest beside = manifest;
+				beside.savedTick = tick;
+				if (!AutosaveStore::PublishManifest(scratch.path, beside, error)) return false;
+			}
+			const bool sealed = GetNetAuthCrypto().IsRealCrypto();
+			// The pin keeps one checkpoint, so the match still has one and its admission file stays.
+			AutosaveStore::ApplyRetention(scratch.path, matchId, 240);
+			if (std::filesystem::exists(AutosaveStore::ManifestPath(scratch.path, matchId, 120)) ||
+			    std::filesystem::exists(AutosaveStore::ManifestPath(scratch.path, matchId, 480))) {
+				*error = "a dropped checkpoint left its restart manifest behind";
+				return false;
+			}
+			if (!std::filesystem::exists(AutosaveStore::ManifestPath(scratch.path, matchId, 240))) {
+				*error = "the pinned checkpoint lost the manifest it is resumed with";
+				return false;
+			}
+			if (sealed && !std::filesystem::exists(AutosaveStore::AdmissionPath(scratch.path, matchId))) {
+				*error = "the admission file was dropped while a checkpoint of its match still stands";
+				return false;
+			}
+			// Nothing of this match is left, so its admission file goes with it.
+			AutosaveStore::ApplyRetention(scratch.path, matchId, AutosaveStore::c_NoPinnedTick);
+			if (std::filesystem::exists(AutosaveStore::ManifestPath(scratch.path, matchId, 240))) {
+				*error = "the last checkpoint's manifest outlived its archive";
+				return false;
+			}
+			if (sealed && std::filesystem::exists(AutosaveStore::AdmissionPath(scratch.path, matchId))) {
+				*error = "the admission file outlived the last checkpoint of its match";
+				return false;
+			}
+			// The sweep of an ended round: an admission file with a checkpoint behind it is kept, and
+			// one with nothing left to resume is removed.
+			if (sealed) {
+				AutosaveAdmission orphan;
+				orphan.schema = AutosaveStore::c_AdmissionSchema;
+				orphan.matchId = matchId;
+				orphan.generation = 9;
+				orphan.sealed = {1, 2, 3, 4};
+				if (!AutosaveStore::PublishAdmission(scratch.path, orphan, error)) return false;
+				WriteResumeArchiveStub(scratch.path, matchId, 240);
+				AutosaveManifest standing = manifest;
+				standing.savedTick = 240;
+				if (!AutosaveStore::PublishManifest(scratch.path, standing, error)) return false;
+				if (AutosaveStore::RemoveOrphanAdmission(scratch.path, matchId) ||
+				    !std::filesystem::exists(AutosaveStore::AdmissionPath(scratch.path, matchId))) {
+					*error = "the sweep removed an admission file while a checkpoint of its match stood";
+					return false;
+				}
+				std::error_code ignored;
+				std::filesystem::remove(AutosaveStore::ArchivePath(scratch.path, matchId, 240), ignored);
+				if (!AutosaveStore::RemoveOrphanAdmission(scratch.path, matchId) ||
+				    std::filesystem::exists(AutosaveStore::AdmissionPath(scratch.path, matchId))) {
+					*error = "the sweep left an admission file for a match with no checkpoint";
+					return false;
+				}
+			}
+			return true;
+		}
+
 		bool TestRewindAnchorRecord(std::string* error) {
 			NetMatchService service;
 			if (const auto idle = service.GetRewindAnchor(); !idle.matchId.empty() || idle.tick != 0 || idle.heldLocally) {
@@ -2465,6 +2707,91 @@ namespace RTE {
 		private:
 			LoopbackTransport& m_Transport;
 		};
+
+		bool TestResumeHeldPeerSkipsTheTransfer(std::string* error) {
+			const std::string matchId = "00000000deadbeef-00000000000000bb";
+			constexpr uint64_t savedTick = 600;
+			// held, not held, and holding the same tick on a DIFFERENT agreed state.
+			for (int arm = 0; arm < 3; ++arm) {
+				const bool held = arm == 0;
+				const bool otherState = arm == 2;
+				LoopbackTransport hostTransport, clientTransport;
+				NetPeerId hostPeer = 0, clientPeer = 0;
+				if (!StartLoopbackTransports(static_cast<uint16_t>(43196 + arm * 2), hostTransport, clientTransport, hostPeer, clientPeer, error)) return false;
+				StateTransferTap tap(hostTransport);
+				NetLobbySession host, client;
+				NetLobbySessionConfig config;
+				config.host = true;
+				config.localPeerId = 1;
+				config.remotePeerId = 2;
+				config.remoteTransportPeerId = hostPeer;
+				config.matchConfig = MakeConfig();
+				config.autoStart = false;
+				config.startFrame = savedTick + 1;
+				config.resumeMatchId = matchId;
+				config.resumeTick = savedTick;
+				config.resumeDigest = "worlddigest";
+				config.resumeSideStateHash = NetMatchService::HashSideState(ResumeSideStateFixture());
+				if (!host.Start(tap, config, error)) return false;
+				config.host = false;
+				config.localPeerId = 2;
+				config.remotePeerId = 1;
+				config.remoteTransportPeerId = clientPeer;
+				config.resumeMatchId.clear();
+				config.resumeTick = 0;
+				config.resumeDigest.clear();
+				config.resumeSideStateHash.clear();
+				// What this peer would hold: the third arm holds that tick on a state one applied
+				// command ahead, which is not the state the host is resuming on.
+				AutosaveSideState mine = ResumeSideStateFixture();
+				if (otherState) mine.appliedCommands[2] += 1;
+				const std::string worldDigest = held || otherState ? "worlddigest" : "otherworld";
+				const std::string stateHash = NetMatchService::HashSideState(mine);
+				config.resumeHeld = [&matchId, worldDigest, stateHash](const NetLobbyResume& offer) {
+					return offer.matchId == matchId && offer.savedTick == savedTick &&
+					       NetMatchService::ResumeOfferMatches(offer, worldDigest, stateHash);
+				};
+				if (!client.Start(clientTransport, config, error)) return false;
+				const std::vector<uint8_t> state(2 * NetLobbyProtocol::c_MaxStateChunkBytes + 9, 0x5B);
+				host.BeginStateTransfer(state);
+				uint64_t now = 0;
+				for (int i = 0; i < 40 && !(host.IsStarted() && client.IsStarted()); ++i) {
+					host.Tick(now);
+					client.Tick(now++);
+					if (!host.HasPendingStateChunks()) host.RequestStart();
+				}
+				const std::string armName = held ? "held" : (otherState ? "other-state" : "unheld");
+				if (host.IsFailed() || client.IsFailed() || !host.IsStarted() || !client.IsStarted()) {
+					*error = armName + " resume arm did not start: host " + NetLobbySession::StateName(host.GetState()) +
+					         " client " + NetLobbySession::StateName(client.GetState()) + " " + host.GetFailureReason() + client.GetFailureReason();
+					return false;
+				}
+				if (client.GetStartFrame() != savedTick + 1) {
+					*error = armName + " resume arm started at frame " + std::to_string(client.GetStartFrame());
+					return false;
+				}
+				if (held) {
+					if (!host.IsResumeHeldBy(2) || !client.AnsweredResumeHeld()) {
+						*error = "the peer holding the checkpoint did not answer that it holds it";
+						return false;
+					}
+					if (!tap.chunks.empty() || client.HasCompleteStateTransfer()) {
+						*error = "the host streamed " + std::to_string(tap.chunks.size()) + " chunk(s) to a peer that holds the checkpoint";
+						return false;
+					}
+				} else {
+					if (host.IsResumeHeldBy(2) || client.AnsweredResumeHeld()) {
+						*error = armName + " peer answered that it holds the offered checkpoint";
+						return false;
+					}
+					if (tap.chunks.size() != 3 || !client.HasCompleteStateTransfer() || client.TakeReceivedState() != state) {
+						*error = armName + " peer did not receive the whole state: " + std::to_string(tap.chunks.size()) + " chunk(s)";
+						return false;
+					}
+				}
+			}
+			return true;
+		}
 
 		bool TestLobbyStateTransferRestart(std::string* error) {
 			LoopbackTransport hostTransport, clientTransport;
@@ -4732,6 +5059,89 @@ namespace RTE {
 			}
 			return true;
 		}
+	}
+
+	bool TestResumePreparesTheAgreedLobby(std::string* error) {
+		if (!GetNetAuthCrypto().IsRealCrypto()) {
+			std::cout << "[net-match-selftest] resume preparation skipped: no real crypto in this build" << std::endl;
+			return true;
+		}
+		ResumeScratch scratch;
+		const std::string matchId = "00000000deadbeef-00000000000000cc";
+		NetMatchService service;
+		// The key is derived from an identity of this row's own, never the player's.
+		service.m_ParticipantStore.SetPath((scratch.path / "identity.dat").string());
+		if (!service.m_ParticipantStore.LoadOrCreate(error)) return false;
+		std::array<uint8_t, 32> key{};
+		if (!service.DeriveRestartKey(key)) {
+			*error = "the row could not derive its own restart key";
+			return false;
+		}
+		const NetMatchConfig config = MakeConfig();
+		AutosaveManifest manifest;
+		manifest.schema = AutosaveStore::c_ManifestSchema;
+		manifest.matchId = matchId;
+		manifest.sessionId = config.sessionId;
+		manifest.roundId = 11;
+		manifest.savedTick = 900;
+		manifest.intervalSeconds = 45;
+		manifest.configHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config));
+		manifest.configPayload = ResumePayloadHex(config);
+		manifest.activityPreset = config.activityPreset;
+		manifest.scenePreset = config.sceneName;
+		if (!AutosaveStore::PublishManifest(scratch.path, manifest, error)) return false;
+		const auto body = nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"admission", std::vector<uint8_t>{9, 9, 9}}, {"directory_row", std::string()},
+		                                                         {"directory_session", std::string("sess-resume")}, {"directory_token", std::string("tok-resume")},
+		                                                         {"autosave_match_id", matchId}, {"autosave_round", 11}, {"autosave_interval", 45}, {"generation", 2}});
+		AutosaveAdmission admission;
+		admission.schema = AutosaveStore::c_AdmissionSchema;
+		admission.matchId = matchId;
+		admission.generation = 2;
+		const std::vector<uint8_t> context(matchId.begin(), matchId.end());
+		if (!NetAuthSeal(key, context, body, admission.sealed) || !AutosaveStore::PublishAdmission(scratch.path, admission, error)) {
+			if (error && error->empty()) *error = "the row could not publish its sealed admission";
+			return false;
+		}
+		NetMatchServiceRequest request;
+		request.host = true;
+		request.resumeMatchId = matchId;
+		request.resumeTick = 900;
+		// The store reads the run's own Autosaves directory, so the row drives the same code through it.
+		const std::filesystem::path live = AutosaveStore::Directory();
+		std::error_code ignored;
+		std::filesystem::create_directories(live, ignored);
+		std::filesystem::copy_file(AutosaveStore::ManifestPath(scratch.path, matchId, 900), AutosaveStore::ManifestPath(live, matchId, 900), std::filesystem::copy_options::overwrite_existing, ignored);
+		std::filesystem::copy_file(AutosaveStore::AdmissionPath(scratch.path, matchId), AutosaveStore::AdmissionPath(live, matchId), std::filesystem::copy_options::overwrite_existing, ignored);
+		WriteResumeArchiveStub(live, matchId, 900);
+		struct Cleanup {
+			std::filesystem::path manifest, admission, archive;
+			~Cleanup() {
+				std::error_code ignored;
+				std::filesystem::remove(manifest, ignored);
+				std::filesystem::remove(admission, ignored);
+				std::filesystem::remove(archive, ignored);
+			}
+		} cleanup{AutosaveStore::ManifestPath(live, matchId, 900), AutosaveStore::AdmissionPath(live, matchId), AutosaveStore::ArchivePath(live, matchId, 900)};
+		std::string refusal;
+		// The archive is a stub, so the checkpoint itself is refused before anything is admitted.
+		if (service.PrepareResume(request, &refusal)) {
+			*error = "a checkpoint whose archive does not read was accepted for a resume";
+			return false;
+		}
+		if (refusal.find("checkpoint refused") == std::string::npos) {
+			*error = "the refusal did not name the checkpoint: " + refusal;
+			return false;
+		}
+		// A manifest whose configuration does not hash to the value beside it is refused too.
+		AutosaveManifest tampered = manifest;
+		tampered.configHash = NetIdentity::HashHex(NetHash32{});
+		if (!AutosaveStore::PublishManifest(live, tampered, error)) return false;
+		request.resumeTick = 900;
+		if (service.PrepareResume(request, &refusal)) {
+			*error = "a manifest whose configuration does not match its hash was accepted";
+			return false;
+		}
+		return true;
 	}
 
 	bool TestServiceReportCarriesActivityPreset(std::string* error) {
@@ -9623,6 +10033,9 @@ namespace RTE {
 		if (!earlyOverTickError.empty()) return fail(earlyOverTickError);
 		if (!healedEndError.empty()) return fail(healedEndError);
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
+		if (!TestRestartManifestAndAdmission(&error)) return fail(error);
+		if (!TestResumeHeldPeerSkipsTheTransfer(&error)) return fail(error);
+		if (!TestResumePreparesTheAgreedLobby(&error)) return fail(error);
 		if (!TestRosterTransitionsRecordHoldThenPresent(&error)) return fail(error);
 		if (!TestRosterBannerNamesThePlayerOnce(&error)) return fail(error);
 		// The chat arms accumulate like the other independent tests so one defective build shows

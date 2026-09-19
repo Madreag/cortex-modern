@@ -44,7 +44,8 @@ namespace RTE {
 	bool NetMatchRunner::Start(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error) {
 		m_Config = config;
 		m_UseLobbyProtocol = config.useLobbyProtocol;
-		m_ResyncRound = false;
+		// A round opened on a checkpoint resumes from a snapshot exactly as a healed round does.
+		m_ResyncRound = !m_StateToStream.empty();
 		m_MatchConfig = config.matchConfig;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
 		m_SetupError.clear();
@@ -533,6 +534,11 @@ namespace RTE {
 		lobbyConfig.sealMigration = m_Config.sealMigration;
 		lobbyConfig.openMigration = m_Config.openMigration;
 		lobbyConfig.snapshotProviderPeerId = m_SnapshotProviderPeerId;
+		lobbyConfig.resumeMatchId = m_Config.resumeMatchId;
+		lobbyConfig.resumeTick = m_Config.resumeTick;
+		lobbyConfig.resumeDigest = m_Config.resumeDigest;
+		lobbyConfig.resumeSideStateHash = m_Config.resumeSideStateHash;
+		lobbyConfig.resumeHeld = m_Config.resumeHeld;
 		if (!m_ActivePeerIds.empty())
 			lobbyConfig.activePeerCount = static_cast<uint8_t>(session.GetReadyPeerCount() + 1);
 		// A client's lobby hears nothing until the last peer arrives and the host starts its round —
@@ -734,6 +740,12 @@ namespace RTE {
 		snapshot.modeName = NetMatchConfigUtil::ModeName(rosterConfig.mode);
 		snapshot.modeLabel = NetMatchConfigUtil::ModeLabel(rosterConfig.mode);
 		snapshot.localReady = m_Lobby.IsLocalReady();
+		// A lobby that resumes a match from disk names its checkpoint, so every peer's UI can say which
+		// one it stands on and whether this peer is loading its own copy.
+		snapshot.resumeMatchId = m_Config.resumeMatchId;
+		snapshot.resumeTick = m_Config.resumeTick;
+		snapshot.resumeDigest = m_Config.resumeDigest;
+		snapshot.resumeHeldLocally = m_Config.host || m_Lobby.AnsweredResumeHeld();
 		// Start waits on a live remote ready, not the idle default (a reject never seats one).
 		snapshot.remoteReady = m_Lobby.GetState() != NetLobbyState::Idle && m_Lobby.IsRemoteReady();
 		if (m_Config.host && session.HasReject() && session.GetReadyPeerCount() < m_Config.sessionConfig.maxPeers) {

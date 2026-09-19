@@ -392,7 +392,10 @@ namespace RTE {
 		/// Withdraws an approval that has not committed. The provisional record is invalidated and
 		/// removed; the seat was never given away, so there is nothing to take back.
 		NetH4ModerationResult CancelSubstitution(uint16_t stableSeat, uint64_t nowMs);
-		void SetBanStore(NetHostBanStore* store) { m_BanStore = store; }
+		void SetBanStore(NetHostBanStore* store) { m_BanStore = store; ++m_StateRevision; }
+		/// Rises with every change ExportMigrationState would render, so a caller can tell a plane that
+		/// moved from one that did not without paying for the export itself.
+		uint64_t GetStateRevision() const { return m_StateRevision; }
 		void SetParticipantProofRequired(bool required) { m_ProofRequired = required; }
 		void BindParticipantId(NetPeerId connection, const NetAuthBytes32& id);
 		/// Host: close this holder without a reclaim hold. Reuses the clean-leave seat close.
@@ -410,6 +413,9 @@ namespace RTE {
 		/// The seat table as the plane holds it now, in table order.
 		std::vector<NetH4Seat> GetSeatTable() const;
 		std::vector<uint8_t> ExportMigrationState() const;
+		/// Every mutable seat, ledger and ban path goes through NoteStateChanged, so the revision can
+		/// only ever run ahead of the truth, never behind it.
+		void NoteStateChanged() { ++m_StateRevision; }
 		bool ImportMigrationState(const std::vector<uint8_t>& bytes, NetSeatAuthRegistry& registry, const NetMatchConfig& config, uint8_t localPeerId, const std::map<uint8_t, NetPeerId>& transports, uint64_t nowMs);
 		void SetMigrationHold(bool held, uint64_t nowMs);
 		void RecordMigrationDepartures(uint64_t frame);
@@ -580,6 +586,7 @@ namespace RTE {
 		NetMatchMode m_Mode = NetMatchMode::PvPSkirmish;
 		uint64_t m_NowMs = 0; //!< The plane's own clock, so a drop can be stamped without one being passed in.
 		bool m_LiveMatch = false;
+		uint64_t m_StateRevision = 0; //!< Bumped by every mutation the migration export would render.
 		bool m_PersistentWorld = false;
 		bool m_MatchEnded = false;
 		std::vector<NetH4LedgerActor> (*m_DropOwnershipSource)(void*) = nullptr;
