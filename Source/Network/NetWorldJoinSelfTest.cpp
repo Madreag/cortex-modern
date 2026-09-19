@@ -2165,35 +2165,154 @@ namespace RTE {
 		if (!world.AdmitWorldMember(2, 1, activation, &error)) {
 			return Fail("a due activation cancelled instead of admitting: " + error);
 		}
-		// A second world round, this one with input already on the wire: a member admitted at a frame
-		// the host has already sent would wait forever for input it was not a peer for.
-		LoopbackTransport sentTransport;
-		if (!sentTransport.StartHost(47123, &error)) {
-			return Fail("admit sent-input loopback: " + error);
+		// The announce chooses E ahead of everything the round has already put on the wire, so a member
+		// is a peer of the round before the frames it owes go out.
+		NetWorldJoinHost ahead;
+		if (!ahead.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !ahead.BeginJoin(9, 3, "bob", 1000, &error)) {
+			return Fail("admit announce host did not open a join: " + error);
 		}
-		NetLockstepCoordinator sent;
-		NetLockstepConfig sentConfig = worldConfig;
-		sentConfig.sessionId = 13;
-		sentConfig.inputDelayFrames = 4;
-		if (!sent.Start(sentTransport, sentConfig, &error)) {
-			return Fail("admit sent-input world start: " + error);
+		ahead.PublishImage(image);
+        if (!ahead.NoteTransferComplete(9, 4, &error)) {
+			return Fail("admit announce transfer: " + error);
 		}
-		const uint64_t produced = sent.GetStats().nextFrame;
-		const uint64_t target = produced + sentConfig.inputDelayFrames;
-		if (!sent.QueueLocalInput(produced, {}, {}, &error)) {
-			return Fail("admit sent-input queue: " + error);
+		const uint64_t sentThrough = 500;
+		ahead.NoteSentInputThrough(sentThrough);
+		uint64_t announced = 0;
+		if (!ahead.NoteCatchUpProgress(9, sentThrough, 1, 1, sentThrough - 1, &announced, &error) || announced == 0) {
+			return Fail("admit announce did not announce E: " + error);
 		}
-		std::string refusal;
-		if (sent.AdmitWorldMember(2, 1, target, &refusal)) {
-			return Fail("world-member-admitted-behind-the-sent-input: frame " + std::to_string(target) +
-			            " was admitted although the host had already sent its input for it");
+		if (announced <= sentThrough) {
+			return Fail("world-member-admitted-behind-the-sent-input: the announce handed out E " + std::to_string(announced) +
+			            " with input already sent through " + std::to_string(sentThrough));
 		}
-		if (refusal.find(std::to_string(target)) == std::string::npos) {
-			return Fail("world-member-admitted-behind-the-sent-input: the refusal did not name the frame, it said \"" + refusal + "\"");
+
+		// A world already running, with its own input on the wire for the frames the member is about to
+		// owe: the admission replays them to that member and the member commits them.
+		LoopbackTransport hostLink;
+		LoopbackTransport memberLink;
+		if (!hostLink.StartHost(47124, &error) || !memberLink.Connect("loopback", 47124, &error)) {
+			return Fail("admit replay loopback: " + error);
 		}
-		if (!sent.AdmitWorldMember(2, 1, target + 1, &error)) {
-			return Fail("world-member-admitted-behind-the-sent-input: frame " + std::to_string(target + 1) +
-			            " is ahead of the sent input and was still refused: " + error);
+		NetPeerId hostRemote = c_InvalidNetPeerId;
+		for (const NetTransportEvent& event: hostLink.PollEvents()) {
+			if (event.type == NetTransportEventType::PeerConnected) hostRemote = event.peerId;
+		}
+		NetPeerId memberRemote = c_InvalidNetPeerId;
+		for (const NetTransportEvent& event: memberLink.PollEvents()) {
+			if (event.type == NetTransportEventType::PeerConnected) memberRemote = event.peerId;
+		}
+		if (hostRemote == c_InvalidNetPeerId || memberRemote == c_InvalidNetPeerId) {
+			return Fail("admit replay loopback: the peers never connected");
+		}
+		NetLockstepCoordinator running;
+		NetLockstepConfig runningConfig;
+		runningConfig.sessionId = 21;
+		runningConfig.localPeerId = 1;
+		runningConfig.peerCount = 2;
+		runningConfig.timeoutMs = 1000000;
+		runningConfig.relayToOtherPeers = true;
+		runningConfig.inputDelayFrames = 4;
+		runningConfig.frameRedundancyTicks = 4;
+		runningConfig.matchConfig = MakeWorldConfig();
+		if (!running.Start(hostLink, runningConfig, &error)) {
+			return Fail("admit replay world start: " + error);
+		}
+		const uint64_t first = running.GetStats().nextFrame;
+		const uint64_t e = first + runningConfig.inputDelayFrames;
+		NetSoundObservation reading;
+		reading.objectUID = 4242;
+		reading.tick = e + 1;
+		reading.phase = 1;
+		reading.occurrence = 1;
+		reading.ordinal = 0;
+		reading.value = 0.25F;
+		for (uint64_t produced = first; produced < first + 4; ++produced) {
+			NetGameCommand command;
+			command.senderPeerId = 1;
+			command.payload = NetGamePauseMatch{0, false};
+			std::vector<NetSoundObservation> observations;
+			if (produced + runningConfig.inputDelayFrames == e + 1) {
+				observations.push_back(reading);
+			}
+			if (!running.QueueLocalInput(produced, {}, {command}, &error, observations)) {
+				return Fail("admit replay queue at " + std::to_string(produced) + ": " + error);
+			}
+		}
+		if (running.SentInputThrough() != e + 3) {
+			return Fail("world-member-missed-the-frames-sent-before-its-admission: the world sent through " +
+			            std::to_string(running.SentInputThrough()) + ", E..E+3 is " + std::to_string(e) + ".." + std::to_string(e + 3));
+		}
+		if (!running.AdmitWorldMember(2, hostRemote, e, &error)) {
+			return Fail("world-member-missed-the-frames-sent-before-its-admission: the admission at E " +
+			            std::to_string(e) + " was refused: " + error);
+		}
+		if (running.LastAdmissionReplayFrames() < 4 || running.ObservationEpoch() != e) {
+			return Fail("world-member-missed-the-frames-sent-before-its-admission: the admission replayed " +
+			            std::to_string(running.LastAdmissionReplayFrames()) + " frames and set the epoch at " +
+			            std::to_string(running.ObservationEpoch()) + ", E is " + std::to_string(e));
+		}
+		NetLockstepCoordinator member;
+		NetLockstepConfig memberConfig;
+		memberConfig.sessionId = 21;
+		memberConfig.localPeerId = 2;
+		memberConfig.remotePeerId = 1;
+		memberConfig.remoteTransportPeerId = memberRemote;
+		memberConfig.peerCount = 2;
+		memberConfig.timeoutMs = 1000000;
+		memberConfig.inputDelayFrames = 4;
+		memberConfig.frameRedundancyTicks = 4;
+		memberConfig.startFrame = e;
+		memberConfig.joinsRunningRound = true;
+		memberConfig.matchConfig = MakeWorldConfig();
+		if (!member.Start(memberLink, memberConfig, &error)) {
+			return Fail("world-member-missed-the-frames-sent-before-its-admission: the member's round did not start: " + error);
+		}
+		for (uint64_t now = 0; now < 200 && !member.IsRunning(); now += 10) {
+			running.Tick(now);
+			member.Tick(now);
+			hostLink.AdvanceTimeMs(10);
+			memberLink.AdvanceTimeMs(10);
+		}
+		if (!member.IsRunning()) {
+			return Fail("world-member-missed-the-frames-sent-before-its-admission: the member's round is " +
+			            std::string(member.IsFailed() ? "failed" : "not running") + " after the admission");
+		}
+		// The host keeps producing with its window on; a copy of a tick before the member's own start is
+		// skipped, never a failure.
+		for (uint64_t produced = first + 4; produced < first + 8; ++produced) {
+			(void)running.QueueLocalInput(produced, {}, {}, &error);
+		}
+		for (uint64_t now = 200; now < 600 && member.GetStats().nextFrame <= e + 3; now += 10) {
+			running.Tick(now);
+			member.Tick(now);
+			hostLink.AdvanceTimeMs(10);
+			memberLink.AdvanceTimeMs(10);
+		}
+		if (member.IsFailed()) {
+			return Fail("window-copy-before-the-members-start-failed-the-round: " + member.GetStats().timeoutReason +
+			            " after " + std::to_string(member.GetStats().windowCopiesSkipped) + " skipped copies");
+		}
+		std::vector<uint64_t> held;
+		bool sawReading = false;
+		for (NetLockstepReadyFrame ready; member.PopReadyFrame(ready);) {
+			held.push_back(ready.frame);
+			for (const NetSoundObservation& observed: ready.remoteObservations) {
+				if (observed.objectUID == reading.objectUID && observed.tick == reading.tick &&
+				    observed.phase == reading.phase && observed.occurrence == reading.occurrence &&
+				    observed.ordinal == reading.ordinal) {
+					sawReading = true;
+				}
+			}
+		}
+		std::string heldText;
+		for (const uint64_t frame: held) heldText += (heldText.empty() ? "" : ",") + std::to_string(frame);
+		if (held.size() < 4 || held.front() != e) {
+			return Fail("world-member-missed-the-frames-sent-before-its-admission: joiner holds frames " + heldText +
+			            ", needs " + std::to_string(e) + ".." + std::to_string(e + 3));
+		}
+		if (!sawReading) {
+			return Fail("world-member-cannot-decode-the-observation-dictionary: the member committed " + heldText +
+			            " without the reading the world sent at " + std::to_string(e + 1));
 		}
 		return 0;
 	}

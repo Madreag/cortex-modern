@@ -569,6 +569,9 @@ namespace RTE {
 		lockstepConfig.remoteTransportPeerIds = BuildRemoteTransportMap(session);
 		// Host-star: the host relays each client's frames/checksums to the other clients.
 		lockstepConfig.relayToOtherPeers = config.host;
+		// A world joiner's round opens inside one that has been running: the members it joins owe it
+		// every frame from its own start, so none of them ramps in behind the input delay.
+		lockstepConfig.joinsRunningRound = m_WorldJoinStarting;
 		lockstepConfig.frameLane = NetTransportLane::ControlReliable;
 		// Peers compare the activity in the start handshake, so it comes from the adopted config like every
 		// other agreed field; a joining peer's own request only carries its local default.

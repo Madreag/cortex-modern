@@ -2764,7 +2764,14 @@ namespace RTE {
 		for (uint8_t peerId = 1; peerId <= config.peerCount; ++peerId) {
 			const auto delayIt = config.peerInputDelayFrames.find(peerId);
 			const uint16_t delay = delayIt != config.peerInputDelayFrames.end() ? delayIt->second : config.inputDelayFrames;
-			m_PeerEffectiveStart[peerId] = config.startFrame + (config.resumeFromSnapshot ? 0 : delay);
+			// A round that joins one already running has no ramp-in: every remote has been producing for
+			// a long time and owes this round's first frame, which is why the host replays what it sent
+			// before the admission. Only the local peer, which starts here, ramps in behind its delay.
+			const bool ramps = !config.joinsRunningRound || peerId == config.localPeerId;
+			m_PeerEffectiveStart[peerId] = config.startFrame + (config.resumeFromSnapshot || !ramps ? 0 : delay);
+			if (!ramps) {
+				m_PeerEffectiveStart[peerId] = config.startFrame;
+			}
 			if (m_PeerEffectiveStart[peerId] < firstCommitFrame) {
 				firstCommitFrame = m_PeerEffectiveStart[peerId];
 			}
@@ -3249,6 +3256,9 @@ namespace RTE {
 		size_t observationsEncoded = packet.observations.size();
 		size_t valueObservationsEncoded = packet.valueObservations.size();
 		if (!recovery) {
+			// Every sender spells its keys out again from the epoch, so a member admitted there reads
+			// this frame with the empty table it starts with; the window stops at the epoch too.
+			ApplyObservationEpoch(m_Config.localPeerId, packet.targetFrame);
 			AttachFrameWindow(packet);
 		}
 		if (recovery) {
@@ -3509,6 +3519,13 @@ namespace RTE {
 		NetLockstepPeerStats& peerStats = m_Stats.peers[frame.senderPeerId];
 		peerStats.highestTargetFrame = std::max(peerStats.highestTargetFrame, frame.targetFrame);
 		if (frame.targetFrame < EffectiveStartOf(frame.senderPeerId)) {
+			// A member admitted mid-round reads the window copies of the ticks before its own start.
+			// They are ticks it never owed, not a broken build; only a sender's own new tick can be one.
+			if (windowCopy) {
+				++m_Stats.windowCopiesSkipped;
+				++peerStats.windowCopiesSkipped;
+			return;
+			}
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame targets the sender's delay window");
 			return;
 		}
@@ -3519,13 +3536,6 @@ namespace RTE {
 			} else {
 				++m_Stats.duplicateFrames;
 				++peerStats.duplicateFrames;
-			// A member admitted mid-round reads the window copies of the ticks before its own start.
-			// They are ticks it never owed, not a broken build; only a sender's own new tick can be one.
-			if (windowCopy) {
-				++m_Stats.windowCopiesSkipped;
-				++peerStats.windowCopiesSkipped;
-			return;
-			}
 			}
 			return;
 		}
@@ -4518,14 +4528,6 @@ namespace RTE {
 			if (error) *error = "a world member's first required frame must be announced ahead of the committed frame";
 			return false;
 		}
-		// Every input already sent went out before this member was a peer, so a first required frame
-		// inside the input-delay window names frames it can never receive. The bootstrap takes a later
-		// E instead of waiting on a frame that is already gone.
-		if (m_LastQueuedTargetFrame != std::numeric_limits<uint64_t>::max() && firstRequiredFrame <= m_LastQueuedTargetFrame) {
-			if (error) *error = "world member first required frame " + std::to_string(firstRequiredFrame) +
-			                    " is not ahead of the input already sent through " + std::to_string(m_LastQueuedTargetFrame);
-			return false;
-		}
 		// A fresh member is not a returning seat: it enters the required set at its announced frame and
 		// never through the dropped-seat hold, so nothing about it can pause the world.
 		m_PeerLeaveFrames.erase(peerId);
@@ -4539,7 +4541,96 @@ namespace RTE {
 			std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end());
 		}
 		RefreshLeftSeatHolds();
+		// From here every sender spells its observation keys out again, so the member's empty table
+		// reads the replay and everything after it exactly as the peers that have been here do.
+		SetObservationEpoch(firstRequiredFrame);
+		// Everything already on the wire for its first required frames went out before it was a peer.
+		m_LastAdmissionReplayFrames = ReplaySentFramesTo(peerId, firstRequiredFrame);
 		return true;
+	}
+
+	void NetLockstepCoordinator::SetObservationEpoch(uint64_t frame) {
+		if (frame == 0 || frame == m_ObservationEpochFrame) {
+			return;
+		}
+		m_ObservationEpochFrame = frame;
+		m_ObservationEpochApplied.clear();
+	}
+
+	void NetLockstepCoordinator::ApplyObservationEpoch(uint8_t senderPeerId, uint64_t targetFrame) {
+		if (m_ObservationEpochFrame == 0 || targetFrame < m_ObservationEpochFrame ||
+		    m_ObservationEpochApplied.find(senderPeerId) != m_ObservationEpochApplied.end()) {
+			return;
+		}
+		// An emptied encode table says so on the wire - the block's binding count reads 0 where the
+		// receiver holds more - and every receiver resets that sender's table before it binds again.
+		m_ObservationEncodeTables.Exactly(senderPeerId).Reset();
+		// A window may not carry a copy from before the epoch: its kept block was spelled against
+		// the table this reset emptied. The encoder leaves a tick off when its block is gone.
+		NetLockstepObservationBlocks& blocks = m_ObservationBlocks[senderPeerId];
+		blocks.erase(blocks.begin(), blocks.lower_bound(m_ObservationEpochFrame));
+		m_ObservationEpochApplied.insert(senderPeerId);
+	}
+
+	bool NetLockstepCoordinator::BuildPendingRemoteFrame(uint64_t targetFrame, uint8_t senderPeerId, NetLockstepFrame& out) const {
+		const auto frameIt = m_RemoteFrames.find(targetFrame);
+		if (frameIt == m_RemoteFrames.end()) {
+			return false;
+		}
+		const auto senderIt = frameIt->second.find(senderPeerId);
+		if (senderIt == frameIt->second.end()) {
+			return false;
+		}
+		out = NetLockstepFrame{};
+		out.senderPeerId = senderPeerId;
+		out.targetFrame = targetFrame;
+		out.roundId = m_RoundId;
+		out.frames = senderIt->second;
+		if (const auto commands = m_RemoteCommands.find(targetFrame); commands != m_RemoteCommands.end()) {
+			if (const auto found = commands->second.find(senderPeerId); found != commands->second.end()) out.commands = found->second;
+		}
+		if (const auto observations = m_RemoteObservations.find(targetFrame); observations != m_RemoteObservations.end()) {
+			if (const auto found = observations->second.find(senderPeerId); found != observations->second.end()) out.observations = found->second;
+		}
+		if (const auto values = m_RemoteValueObservations.find(targetFrame); values != m_RemoteValueObservations.end()) {
+			if (const auto found = values->second.find(senderPeerId); found != values->second.end()) out.valueObservations = found->second;
+		}
+		return true;
+	}
+
+	size_t NetLockstepCoordinator::ReplaySentFramesTo(uint8_t peerId, uint64_t fromFrame) {
+		const auto transportIt = m_RemoteTransports.find(peerId);
+		if (transportIt == m_RemoteTransports.end() || m_LastQueuedTargetFrame == std::numeric_limits<uint64_t>::max() ||
+		    fromFrame > m_LastQueuedTargetFrame) {
+			return 0;
+		}
+		size_t replayed = 0;
+		for (uint64_t target = fromFrame; target <= m_LastQueuedTargetFrame; ++target) {
+			// This peer's own frame first, then the members' in peer id order: the same order every
+			// receiver already read them in, so the member's tables bind the same keys in the same way.
+			NetLockstepFrame own;
+			if (FindLocalInput(target, own)) {
+				ApplyObservationEpoch(m_Config.localPeerId, target);
+				own.priorWindow.clear();
+				std::string error;
+				if (SendPacket({own}, m_Config.frameLane, &error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), nullptr, peerId)) ++replayed;
+			}
+			for (uint8_t sender: m_RemotePeerIds) {
+				if (sender == peerId) {
+					continue;
+				}
+				NetLockstepFrame held;
+				if (!BuildPendingRemoteFrame(target, sender, held)) {
+					continue;
+				}
+				ApplyObservationEpoch(sender, target);
+				std::string error;
+				if (SendPacket({held}, m_Config.frameLane, &error, &m_ObservationEncodeTables.Exactly(sender), nullptr, peerId)) ++replayed;
+			}
+		}
+		std::cout << "[lockstep] replayed " << replayed << " frames for targets " << fromFrame << ".."
+		          << m_LastQueuedTargetFrame << " to the member admitted as peer " << static_cast<int>(peerId) << std::endl;
+		return replayed;
 	}
 
 	uint8_t NetLockstepCoordinator::LockstepPeerOfTransport(NetPeerId transportPeerId) const {
@@ -4571,6 +4662,10 @@ namespace RTE {
 		size_t observationsEncoded = 0;
 		size_t valueObservationsEncoded = 0;
 		const NetLockstepFrame* relayed = std::get_if<NetLockstepFrame>(&packet.payload);
+		if (relayed) {
+			// The forwarded sender spells its keys out again from the epoch, on the frame that says so.
+			ApplyObservationEpoch(fromPeerId, relayed->targetFrame);
+		}
 		NetLockstepObservationBlocks* blocks = relayed ? &ObservationBlocksOf(fromPeerId, relayed->targetFrame) : nullptr;
 		bool windowed = relayed && !relayed->priorWindow.empty() && blocks;
 		NetLockstepFrame classic;

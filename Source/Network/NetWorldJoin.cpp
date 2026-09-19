@@ -1081,9 +1081,15 @@ namespace RTE {
 		if (appliedThrough + c_NetWorldActivationLeadFrames < nowFrame) {
 			return true;
 		}
-		session->activationTick = nowFrame + c_NetWorldActivationLeadFrames;
+		session->activationTick = ChooseActivationTick(nowFrame);
 		if (outActivationTick) *outActivationTick = session->activationTick;
 		return true;
+	}
+
+	uint64_t NetWorldJoinHost::ChooseActivationTick(uint64_t nowFrame) const {
+		// The lead is what the joiner needs to prime its pipeline; the floor is what the round has
+		// already sent, because those frames went out before this member was a peer of it.
+		return std::max(nowFrame + c_NetWorldActivationLeadFrames, m_SentInputThrough + 1);
 	}
 
 	void NetWorldJoinHost::NoteCatchUpClock(NetPeerId connection, uint64_t nowMs) {
@@ -1126,7 +1132,7 @@ namespace RTE {
 			return false;
 		}
 		session->phase = NetWorldJoinPhase::CatchingUp;
-		session->activationTick = nowFrame + c_NetWorldActivationLeadFrames;
+		session->activationTick = ChooseActivationTick(nowFrame);
 		if (outActivationTick) *outActivationTick = session->activationTick;
 		return true;
 	}
@@ -1154,7 +1160,7 @@ namespace RTE {
 			if (error) *error = "the joiner already missed a re-announced activation";
 			return false;
 		}
-		session->activationTick = nowFrame + c_NetWorldActivationLeadFrames;
+		session->activationTick = ChooseActivationTick(nowFrame);
 		++session->activationReannounces;
 		if (outActivationTick) *outActivationTick = session->activationTick;
 		return true;

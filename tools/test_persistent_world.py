@@ -58,6 +58,9 @@ RED_HOST_KEPT_TAIL_BYTES = "host-kept-a-joiner-tail-chunk"
 RED_SPECTATOR_IMAGE_GATE = "spectator-image-never-left-the-host"
 RED_MEMBER_IMAGE_GATE = "member-image-never-left-the-host"
 RED_ADMIT_BEHIND_SENT_INPUT = "world-member-admitted-behind-the-sent-input"
+RED_ADMIT_REPLAY = "world-member-missed-the-frames-sent-before-its-admission"
+RED_ADMIT_DICTIONARY = "world-member-cannot-decode-the-observation-dictionary"
+RED_WINDOW_COPY = "window-copy-before-the-members-start-failed-the-round"
 
 CASES = (
     {
@@ -159,7 +162,12 @@ CASES = (
         "name": "due-activation-admits",
         "argv": ["-net-world-admit-selftest"],
         "red": RED_ADMIT,
-        "also_red": RED_ADMIT_BEHIND_SENT_INPUT,
+        "also_red": (
+            RED_ADMIT_BEHIND_SENT_INPUT,
+            RED_ADMIT_REPLAY,
+            RED_ADMIT_DICTIONARY,
+            RED_WINDOW_COPY,
+        ),
         "pass_token": "[net-world-admit-selftest] PASS",
     },
     {
