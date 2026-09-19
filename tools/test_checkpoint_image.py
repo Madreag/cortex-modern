@@ -127,14 +127,11 @@ def freeze_failures(rows: list[dict], *, skip_first: bool = False, limit: int = 
     for row in measured:
         if row["freeze_us"] == 0:
             failures.append(
-                f"{row['source']}:{row['line']}: {row['raw']} "
-                f"(actual freeze_us=0 required freeze_us>0 and < {limit})"
+                f"{row['source']}:{row['line']}: {row['raw']} (actual freeze_us=0)"
             )
         elif row["freeze_us"] >= limit:
             failures.append(
-                f"{row['source']}:{row['line']}: {row['raw']} "
-                f"(actual freeze_us={row['freeze_us']} required < {limit} us; "
-                f"RED today is the ~{RED_STALL_MS} ms sim-thread stall of Scene::CaptureSavedScene plus Lua graph capture)"
+                f"{row['source']}:{row['line']}: {row['raw']} (actual freeze_us={row['freeze_us']})"
             )
     return failures
 
@@ -188,16 +185,15 @@ def score_scene_rows(stdout: str, source: str) -> dict:
     ]
     timed = FREEZE_ROW.findall(stdout)
     if not timed:
-        failures.append(f"{source}: actual freeze_240_actors_under_one_tick absent required one timed row per capture")
+        failures.append(f"{source}: actual freeze_240_actors_under_one_tick=absent")
     for status, freeze_us, saved in timed:
         if saved == "0" or int(freeze_us) == 0:
             failures.append(
-                f"{source}: actual freeze_us={freeze_us} saved={saved} required a saved capture with freeze_us>0"
+                f"{source}: actual freeze_us={freeze_us} saved={saved}"
             )
         elif status == "FAIL" or int(freeze_us) >= LIMIT_US:
             failures.append(
-                f"{source}: actual freeze_us={freeze_us} required < {LIMIT_US} us / one sim tick; "
-                f"RED today is the ~{RED_STALL_MS} ms sim-thread stall of Scene::CaptureSavedScene plus Lua graph capture"
+                f"{source}: actual freeze_us={freeze_us}"
             )
     return {"pass": not failures, "failures": failures, "rows": rows, "timed": timed}
 
@@ -253,7 +249,7 @@ def score_hash_identity(off_trace: Path, on_trace: Path, ticks: int, on_stdout: 
         failures.append("actual no [autosave] freeze row in the capture-on run required at least one published capture")
     if not (len(left) == len(right) == ticks):
         failures.append(
-            f"actual off={len(left)} on={len(right)} required={ticks} tick hashes"
+            f"actual off={len(left)} on={len(right)}"
         )
     else:
         for before, after in zip(left, right):

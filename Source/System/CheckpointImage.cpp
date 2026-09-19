@@ -447,8 +447,9 @@ namespace {
 
 bool RTE::RunCheckpointSceneRows() {
 	bool passed = true;
-	const auto fail = [&passed](const char* name, const std::string& actual, const std::string& required) {
-		std::cout << "[cow-checkpoint-selftest] FAIL " << name << " actual=" << actual << " required=" << required << std::endl;
+	// Only the failing actual goes on the line; the expectation belongs in the row, not in the log.
+	const auto fail = [&passed](const char* name, const std::string& actual) {
+		std::cout << "[cow-checkpoint-selftest] FAIL " << name << " actual=" << actual << std::endl;
 		passed = false;
 	};
 	const auto pass = [](const char* name, const std::string& detail) {
@@ -457,12 +458,12 @@ bool RTE::RunCheckpointSceneRows() {
 	std::list<SceneObject*> actors;
 	g_MovableMan.GetAllActors(false, actors);
 	if (actors.empty()) {
-		fail("image_ignores_writes_during_worker_traversal", "no live actor", "a live actor to capture");
+		fail("image_ignores_writes_during_worker_traversal", "no live actor");
 		return false;
 	}
 	auto* live = dynamic_cast<MovableObject*>(actors.front());
 	if (!live) {
-		fail("image_ignores_writes_during_worker_traversal", "front actor is not a MovableObject", "a live MovableObject");
+		fail("image_ignores_writes_during_worker_traversal", "front actor is not a MovableObject");
 		return false;
 	}
 	// A capture assigns sound identities and can draw counters; the rows hand the sim back what they took.
@@ -515,11 +516,9 @@ bool RTE::RunCheckpointSceneRows() {
 	const std::string formatted = worker.get();
 	live->SetPinStrength(pinned);
 	if (formatted.find("4242") != std::string::npos) {
-		fail("image_ignores_writes_during_worker_traversal", "worker text carries the write it raced",
-		     "the value the freeze owned");
+		fail("image_ignores_writes_during_worker_traversal", "worker text carries the write it raced");
 	} else if (formatted.find("PinStrength") == std::string::npos) {
-		fail("image_ignores_writes_during_worker_traversal", "no PinStrength in the owned text",
-		     "the live object captured through Scene::SaveSceneObject");
+		fail("image_ignores_writes_during_worker_traversal", "no PinStrength in the owned text");
 	} else {
 		pass("image_ignores_writes_during_worker_traversal", "worker formatted the frozen values of a live actor");
 	}
@@ -535,11 +534,9 @@ bool RTE::RunCheckpointSceneRows() {
 		WriteStoreZip(std::filesystem::path(dump) / "image.ccsave", {{"Save.ini", reused}});
 	}
 	if (sync != fresh) {
-		fail("restore_round_trip_matches_synchronous_capture", firstDifference(sync, fresh),
-		     "the image capture of a live actor matches its synchronous save at the same tick");
+		fail("restore_round_trip_matches_synchronous_capture", firstDifference(sync, fresh));
 	} else if (fresh != reused) {
-		fail("restore_round_trip_matches_synchronous_capture", firstDifference(fresh, reused),
-		     "a reused shadow matches a fresh capture of the same tick");
+		fail("restore_round_trip_matches_synchronous_capture", firstDifference(fresh, reused));
 	} else {
 		pass("restore_round_trip_matches_synchronous_capture", "sync, fresh and reused captures are the same bytes");
 	}
@@ -548,8 +545,9 @@ bool RTE::RunCheckpointSceneRows() {
 
 bool RTE::RunCheckpointImageSelfTest() {
 	bool passed = true;
-	const auto fail = [&passed](const char* name, const std::string& actual, const std::string& required) {
-		std::cout << "[cow-checkpoint-selftest] FAIL " << name << " actual=" << actual << " required=" << required << std::endl;
+	// Only the failing actual goes on the line; the expectation belongs in the row, not in the log.
+	const auto fail = [&passed](const char* name, const std::string& actual) {
+		std::cout << "[cow-checkpoint-selftest] FAIL " << name << " actual=" << actual << std::endl;
 		passed = false;
 	};
 	const auto pass = [](const char* name, const std::string& detail) {
@@ -565,14 +563,14 @@ bool RTE::RunCheckpointImageSelfTest() {
 		CheckpointText later = Writer::Capture([&stamp](Writer& writer) { writer.NewPropertyWithValue("Value", stamp); });
 		later = cache.Remember(&stamp, 1, later, 12);
 		if (first.SameValues(later) || later.Text().find("9") == std::string::npos) {
-			fail("generational_shadow_keeps_the_freeze_value", later.Text(), "owned 9 after the stamp moved");
+			fail("generational_shadow_keeps_the_freeze_value", later.Text());
 		} else {
 			pass("generational_shadow_keeps_the_freeze_value", "later shadow holds 9");
 		}
 		stamp = 9;
 		const CheckpointText* peeked = cache.Peek(&stamp, 1);
 		if (!peeked || cache.Stamp(&stamp, 1) != 12 || !peeked->SameValues(later)) {
-			fail("peek_reuses_the_shadow_when_the_stamp_matches", "peek missed", "stamp 12 reuses the later shadow");
+			fail("peek_reuses_the_shadow_when_the_stamp_matches", "peek missed");
 		} else {
 			pass("peek_reuses_the_shadow_when_the_stamp_matches", "stamp 12");
 		}
@@ -595,13 +593,12 @@ bool RTE::RunCheckpointImageSelfTest() {
 		if (!reusedRootKept || spanned.rootsReused != 1 || spanned.rootsRewritten != 1) {
 			fail("one_walk_keeps_every_state_reused_root",
 			     "unknown=" + std::to_string(index.UnknownTableWritten()) + " dirty11=" + std::to_string(index.DirtyRoots().count(11)) +
-			         " reused=" + std::to_string(spanned.rootsReused) + " rewritten=" + std::to_string(spanned.rootsRewritten),
-			     "the reused root stays known and the counts cover both states");
+			         " reused=" + std::to_string(spanned.rootsReused) + " rewritten=" + std::to_string(spanned.rootsRewritten));
 		} else {
 			pass("one_walk_keeps_every_state_reused_root", "reused 1 rewritten 1");
 		}
 	} catch (const std::exception& error) {
-		fail("no_unexpected_exception", error.what(), "no exception");
+		fail("no_unexpected_exception", error.what());
 	}
 	std::cout << "[cow-checkpoint-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;
