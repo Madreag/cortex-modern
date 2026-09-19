@@ -1146,24 +1146,26 @@ void PathFinder::ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonN
 		computed[node.nodeId] = next;
 	}
 	// The mirror pass only runs when some node changed, exactly as UpdateNodeList does it.
-	for (const HorizonNodeSnapshot& node: nodes) {
-		auto found = computed.find(node.nodeId);
-		if (!anyChange || found == computed.end()) {
-			continue;
+	if (anyChange) {
+		for (const HorizonNodeSnapshot& node: nodes) {
+			auto found = computed.find(node.nodeId);
+			if (found == computed.end()) {
+				continue;
+			}
+			auto take = [&](int neighborId, int towardNeighbor, int towardHere) {
+				if (neighborId < 0) {
+					return;
+				}
+				auto neighborFound = computed.find(neighborId);
+				if (neighborFound != computed.end()) {
+					neighborFound->second[towardHere] = found->second[towardNeighbor];
+				}
+			};
+			take(node.neighborIds[2], 2, 6);
+			take(node.neighborIds[4], 4, 0);
+			take(node.neighborIds[1], 1, 5);
+			take(node.neighborIds[3], 3, 7);
 		}
-		auto take = [&](int neighborId, int towardNeighbor, int towardHere) {
-			if (neighborId < 0) {
-				return;
-			}
-			auto neighborFound = computed.find(neighborId);
-			if (neighborFound != computed.end()) {
-				neighborFound->second[towardHere] = found->second[towardNeighbor];
-			}
-		};
-		take(node.neighborIds[2], 2, 6);
-		take(node.neighborIds[4], 4, 0);
-		take(node.neighborIds[1], 1, 5);
-		take(node.neighborIds[3], 3, 7);
 	}
 	for (size_t index = 0; index < nodes.size(); ++index) {
 		const auto found = computed.find(nodes[index].nodeId);
