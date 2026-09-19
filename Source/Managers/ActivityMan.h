@@ -172,7 +172,7 @@ namespace RTE {
 		bool SetPendingCheckpointCallbacks(std::function<bool()> before, std::function<bool(Activity&)> after);
 
 		/// Whether the staged save carries complete VM continuation state.
-		bool HasFullScriptGraphToRestore() const { return !m_PendingCheckpoint.scriptGraphs.empty() && (m_PendingCheckpoint.scriptGraphs.front().starts_with("SG3;") || m_PendingCheckpoint.scriptGraphs.front().starts_with("SG4;")); }
+		bool HasFullScriptGraphToRestore() const { return !m_PendingCheckpoint.scriptGraphs.empty() && (m_PendingCheckpoint.scriptGraphs.front().starts_with("SG3;") || m_PendingCheckpoint.scriptGraphs.front().starts_with("SG4;") || m_PendingCheckpoint.scriptGraphs.front().starts_with("SG5;")); }
 
 		/// Checks load results and preservation of an already staged game.
 		bool RunLoadSelfTest(const std::string& fileName, bool expectLoaded);
