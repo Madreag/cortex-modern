@@ -3456,6 +3456,7 @@ static std::string ResyncSaveName() {
 		std::string directorySession, directoryToken;
 		uint64_t roundId = checkpoint->roundId;
 		uint32_t interval = checkpoint->intervalSeconds;
+		uint64_t generation = 0;
 		try {
 			const auto body = nlohmann::json::from_cbor(plaintext);
 			if (body.at("version") != 1 || body.at("autosave_match_id").get<std::string>() != matchId) {
@@ -3470,6 +3471,14 @@ static std::string ResyncSaveName() {
 			directoryToken = body.at("directory_token").get<std::string>();
 			roundId = body.at("autosave_round").get<uint64_t>();
 			interval = body.at("autosave_interval").get<uint32_t>();
+			// The SEALED generation is the authority - it is the authenticated one - and the plaintext
+			// line beside it is what the publish guard compares, so the two must agree or the file was
+			// not written whole by this install.
+			generation = body.at("generation").get<uint64_t>();
+			if (generation != admission.generation) {
+				std::fill(plaintext.begin(), plaintext.end(), 0);
+				return refuse("the admission file's generation does not match its sealed export");
+			}
 		} catch (const nlohmann::json::exception& exception) {
 			std::fill(plaintext.begin(), plaintext.end(), 0);
 			return refuse(std::string("the admission file does not decode: ") + exception.what());
@@ -3491,6 +3500,10 @@ static std::string ResyncSaveName() {
 		request.autoInputDelay = config.delayPolicy == NetMatchDelayPolicy::Auto;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			// The next publish carries on from the generation on disk; without this the restarted host
+			// offers generation 1 and the monotonic guard refuses to replace its own file.
+			m_RestartAdmissionGeneration = generation;
+			m_PublishedAdmissionMatchId = matchId;
 			m_ResumeMatchId = matchId;
 			m_ResumeTick = checkpoint->savedTick;
 			m_ResumeArchiveDigest = checkpoint->worldStructureHash;
