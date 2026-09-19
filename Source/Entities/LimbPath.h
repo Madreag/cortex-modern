@@ -83,7 +83,7 @@ namespace RTE {
 
 		/// Sets the coordinates where the limb should start at the start of the LimbPath cycle, relative to the owning AtomGroup's local origin.
 		/// @param newStartOffset A Vector with the new start offset.
-		void SetStartOffset(const Vector& newStartOffset) { m_Start = newStartOffset; }
+		void SetStartOffset(const Vector& newStartOffset) { if (m_Start != newStartOffset) TouchCheckpoint(); m_Start = newStartOffset; }
 
 		/// Gets the number of Vector:s the internal array of 'waypoints' or
 		/// segments of this LimbPath.
@@ -140,7 +140,7 @@ namespace RTE {
 
 		/// Sets the base travel speed multiplier.
 		/// @param newValue The new base travel speed multiplier.
-		void SetBaseTravelSpeedMultiplier(float newValue) { m_BaseTravelSpeedMultiplier = newValue; }
+		void SetBaseTravelSpeedMultiplier(float newValue) { if (m_BaseTravelSpeedMultiplier != newValue) TouchCheckpoint(); m_BaseTravelSpeedMultiplier = newValue; }
 
 		/// Gets the current travel speed multiplier.
 		/// @return The current travel speed multiplier.
@@ -148,7 +148,7 @@ namespace RTE {
 
 		/// Sets the current travel speed multiplier.
 		/// @param newValue The new travel speed multiplier.
-		void SetTravelSpeedMultiplier(float newValue) { m_CurrentTravelSpeedMultiplier = newValue; }
+		void SetTravelSpeedMultiplier(float newValue) { if (m_CurrentTravelSpeedMultiplier != newValue) TouchCheckpoint(); m_CurrentTravelSpeedMultiplier = newValue; }
 
 		/// Gets the total travel speed multiplier including Base and Current.
 		/// @return The total travel speed multiplier.
@@ -160,7 +160,7 @@ namespace RTE {
 
 		/// Sets the base scale multiplier.
 		/// @param newValue The new base scale multiplier.
-		void SetBaseScaleMultiplier(Vector newValue) { m_BaseScaleMultiplier = newValue; }
+		void SetBaseScaleMultiplier(Vector newValue) { if (m_BaseScaleMultiplier != newValue) TouchCheckpoint(); m_BaseScaleMultiplier = newValue; }
 
 		/// Gets the current scale multiplier.
 		/// @return The current scale multiplier.
@@ -168,7 +168,7 @@ namespace RTE {
 
 		/// Sets the current scale multiplier.
 		/// @param newValue The new scale multiplier.
-		void SetScaleMultiplier(Vector newValue) { m_CurrentScaleMultiplier = newValue; }
+		void SetScaleMultiplier(Vector newValue) { if (m_CurrentScaleMultiplier != newValue) TouchCheckpoint(); m_CurrentScaleMultiplier = newValue; }
 
 		/// Gets the total scale multiplier including Base and Current.
 		/// @return The total scale multiplier.
@@ -252,7 +252,7 @@ namespace RTE {
 
 		/// Sets the speed that a limb traveling this LimbPath should have.
 		/// @param newSpeed A float with the new speed.
-		void SetTravelSpeed(float newSpeed) { m_TravelSpeed = newSpeed; }
+		void SetTravelSpeed(float newSpeed) { if (m_TravelSpeed != newSpeed) TouchCheckpoint(); m_TravelSpeed = newSpeed; }
 
 		/// Gets the effective speed that a limb traveling this LimbPath has, including all multiplications.
 		/// @return A float with the effective travel speed.
@@ -266,17 +266,17 @@ namespace RTE {
 		/// Sets the force that a limb traveling this LimbPath can push against
 		/// stuff in the scene with.
 		/// @param newForce The new push force maximum, in kg * m/s^2.
-		void SetPushForce(float newForce) { m_PushForce = newForce; }
+		void SetPushForce(float newForce) { if (m_PushForce != newForce) TouchCheckpoint(); m_PushForce = newForce; }
 
 		/// Sets the amount of time that will be used by the limb to travel every
 		/// frame. Defined in seconds.
 		/// @param newFrameTime A float describing the time in s.
-		void SetFrameTime(float newFrameTime) { m_TimeLeft = newFrameTime; }
+		void SetFrameTime(float newFrameTime) { if (m_TimeLeft != newFrameTime) TouchCheckpoint(); m_TimeLeft = newFrameTime; }
 
 		/// Sets whether this path is flipped horizontally or not. If being
 		/// flipped the path automatically restarts.
 		/// @param hflipped A bool telling this path to be flipped or not.
-		void SetHFlip(bool hflipped) { m_HFlipped = hflipped; }
+		void SetHFlip(bool hflipped) { if (m_HFlipped != hflipped) TouchCheckpoint(); m_HFlipped = hflipped; }
 
 		/// Gets the h flip.
 		/// @return The h flip.
@@ -286,13 +286,13 @@ namespace RTE {
 		/// Actor's limb's joint for this frame. Needs to be done before
 		/// travelling anyhting along this path each frame.
 		/// @param jointPos A Vector with the updated joint position info.
-		void SetJointPos(const Vector& jointPos) { m_JointPos = jointPos; }
+		void SetJointPos(const Vector& jointPos) { if (m_JointPos != jointPos) TouchCheckpoint(); m_JointPos = jointPos; }
 
 		/// Informs this LimbPath of the current velocity  of its owning Actor's
 		/// limb's joint for this frame. Needs to be done before travelling
 		/// anyhting along this path each frame.
 		/// @param jointVel A Vector with the updated joint velocity info.
-		void SetJointVel(const Vector& jointVel) { m_JointVel = jointVel; }
+		void SetJointVel(const Vector& jointVel) { if (m_JointVel != jointVel) TouchCheckpoint(); m_JointVel = jointVel; }
 
 		/// Informs this LimbPath of the current rotation of its owning Actor's
 		/// for this frame. Needs to be done before travelling
@@ -305,11 +305,11 @@ namespace RTE {
 
 		/// Sets the new rotation offset.
 		/// @param rotationOffset The new rotation offset, in local space.
-		void SetRotationOffset(const Vector& rotationOffset) { m_RotationOffset = rotationOffset; }
+		void SetRotationOffset(const Vector& rotationOffset) { if (m_RotationOffset != rotationOffset) TouchCheckpoint(); m_RotationOffset = rotationOffset; }
 
 		/// Sets the new position offset.
 		/// @param rotationOffset The new position offset, in local space.
-		void SetPositionOffset(const Vector& positionOffset) { m_PositionOffset = positionOffset; }
+		void SetPositionOffset(const Vector& positionOffset) { if (m_PositionOffset != positionOffset) TouchCheckpoint(); m_PositionOffset = positionOffset; }
 
 		/// Returns if GetNextMoveVec() have to be called again or not on this
 		/// frame. If the last call didn't use up all the time moving on the

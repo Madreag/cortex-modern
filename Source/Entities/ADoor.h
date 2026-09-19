@@ -73,7 +73,7 @@ namespace RTE {
 
 		/// Sets whether this ADoor closes (or opens) after a while by default.
 		/// @param closedByDefault Whether the door by default goes to a closed position. If not, then it will open after a while.
-		void SetClosedByDefault(bool closedByDefault) { m_ClosedByDefault = closedByDefault; }
+		void SetClosedByDefault(bool closedByDefault) { if (m_ClosedByDefault != closedByDefault) TouchCheckpoint(); m_ClosedByDefault = closedByDefault; }
 
 		/// Tells whether the player can switch control to this at all.
 		/// @return Whether a player can control this at all.

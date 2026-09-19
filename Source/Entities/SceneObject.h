@@ -185,7 +185,7 @@ namespace RTE {
 
 		/// Sets which player placed this object in the scene, if any.
 		/// @param player The player responsible for placing this is in the scene, if any.
-		void SetPlacedByPlayer(int player) { m_PlacedByPlayer = player; }
+		void SetPlacedByPlayer(int player) { if (m_PlacedByPlayer != player) TouchCheckpoint(); m_PlacedByPlayer = player; }
 
 		/// Gets which player placed this object in the scene, if any.
 		/// @return The player responsible for placing this is in the scene, if any.
@@ -202,7 +202,7 @@ namespace RTE {
 
 		/// Sets the cost to purchase this item, in oz's of gold.
 		/// @param value The cost, in oz of gold.
-		void SetGoldValue(float value) { m_OzValue = value; }
+		void SetGoldValue(float value) { if (m_OzValue != value) TouchCheckpoint(); m_OzValue = value; }
 
 		/// DOES THE SAME THING AS GetGoldValue, USED ONLY TO PRESERVE LUA COMPATIBILITY
 		virtual float GetGoldValueOld(int nativeModule, float foreignMult) const { return GetGoldValue(nativeModule, foreignMult, 1.0); }

@@ -64,7 +64,7 @@ namespace RTE {
 
 		/// Sets the move speed of this Arm, where 1.0 is instant and 0.0 is none.
 		/// @return The new move speed of this Arm.
-		void SetMoveSpeed(float newMoveSpeed) { m_MoveSpeed = newMoveSpeed; }
+		void SetMoveSpeed(float newMoveSpeed) { if (m_MoveSpeed != newMoveSpeed) TouchCheckpoint(); m_MoveSpeed = newMoveSpeed; }
 
 		/// Gets the default idle offset of this Arm's hand, i.e. the default offset from the joint position that this Arm will try to move to when not moving towards a position.
 		/// @return The idle offset of this Arm's hand.
@@ -72,7 +72,7 @@ namespace RTE {
 
 		/// Sets the default idle offset of this Arm's hand, i.e. the default offset from the joint position that this Arm will try to move to when not moving towards a position.
 		/// @param newDefaultIdleOffset The new idle offset of this Arm's hand.
-		void SetHandIdleOffset(const Vector& newDefaultIdleOffset) { m_HandIdleOffset = newDefaultIdleOffset; }
+		void SetHandIdleOffset(const Vector& newDefaultIdleOffset) { if (m_HandIdleOffset != newDefaultIdleOffset) TouchCheckpoint(); m_HandIdleOffset = newDefaultIdleOffset; }
 
 		/// Gets the rotation that is being applied to this Arm's hand, if it's using an idle offset.
 		/// @return The idle rotation of this Arm's hand.
@@ -80,7 +80,7 @@ namespace RTE {
 
 		/// Sets the rotation that is being applied to this Arm's hand, if it's using an idle offset. Note that this value is reset to 0 every update.
 		/// @param newHandIdleRotation The new idle rotation of this Arm's hand.
-		void SetHandIdleRotation(float newHandIdleRotation) { m_HandIdleRotation = newHandIdleRotation; }
+		void SetHandIdleRotation(float newHandIdleRotation) { if (m_HandIdleRotation != newHandIdleRotation) TouchCheckpoint(); m_HandIdleRotation = newHandIdleRotation; }
 
 		/// Gets the current offset of this Arm's hand, i.e. its distance from the joint position.
 		/// @return This current offset of this Arm's hand.
@@ -118,7 +118,7 @@ namespace RTE {
 
 		/// Sets the strength with which this Arm will grip its HeldDevice.
 		/// @param newGripStrength The new grip strength for this Arm to use.
-		void SetGripStrength(float newGripStrength) { m_GripStrength = newGripStrength; }
+		void SetGripStrength(float newGripStrength) { if (m_GripStrength != newGripStrength) TouchCheckpoint(); m_GripStrength = newGripStrength; }
 
 		/// Gets the the strength with which this Arm will throw a ThrownDevice.
 		/// @return The throw strength of this Arm.
@@ -126,7 +126,7 @@ namespace RTE {
 
 		/// Sets the strength with which this Arm will throw a ThrownDevice.
 		/// @param newThrowStrength The new throw strength for this Arm to use.
-		void SetThrowStrength(float newThrowStrength) { m_ThrowStrength = newThrowStrength; }
+		void SetThrowStrength(float newThrowStrength) { if (m_ThrowStrength != newThrowStrength) TouchCheckpoint(); m_ThrowStrength = newThrowStrength; }
 #pragma endregion
 
 #pragma region Hand Animation Handling

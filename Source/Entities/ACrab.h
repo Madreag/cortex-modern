@@ -281,7 +281,7 @@ namespace RTE {
 
 		/// Sets this ACrab's stride sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this ACrab's stride sound.
-		void SetStrideSound(SoundContainer* newSound) { m_StrideSound = newSound; }
+		void SetStrideSound(SoundContainer* newSound) { if (m_StrideSound != newSound) TouchCheckpoint(); m_StrideSound = newSound; }
 
 		/// Gets the upper limit of this ACrab's aim range.
 		/// @return The upper limit of this ACrab's aim range.
@@ -289,7 +289,7 @@ namespace RTE {
 
 		/// Sets the upper limit of this ACrab's aim range.
 		/// @param aimRangeUpperLimit The new upper limit of this ACrab's aim range.
-		void SetAimRangeUpperLimit(float aimRangeUpperLimit) { m_AimRangeUpperLimit = aimRangeUpperLimit; }
+		void SetAimRangeUpperLimit(float aimRangeUpperLimit) { if (m_AimRangeUpperLimit != aimRangeUpperLimit) TouchCheckpoint(); m_AimRangeUpperLimit = aimRangeUpperLimit; }
 
 		/// Gets the lower limit of this ACrab's aim range.
 		/// @return The lower limit of this ACrab's aim range.
@@ -297,7 +297,7 @@ namespace RTE {
 
 		/// Sets the lower limit of this ACrab's aim range.
 		/// @param aimRangeLowerLimit The new lower limit of this ACrab's aim range.
-		void SetAimRangeLowerLimit(float aimRangeLowerLimit) { m_AimRangeLowerLimit = aimRangeLowerLimit; }
+		void SetAimRangeLowerLimit(float aimRangeLowerLimit) { if (m_AimRangeLowerLimit != aimRangeLowerLimit) TouchCheckpoint(); m_AimRangeLowerLimit = aimRangeLowerLimit; }
 
 		// Estimates how high this actor can jump.
 		/// @return The actor's jump height.

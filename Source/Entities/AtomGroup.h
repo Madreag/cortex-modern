@@ -116,7 +116,7 @@ namespace RTE {
 
 		/// The raw last limb position, for full-game saves.
 		const Vector& GetRawLimbPos() const { return m_LimbPos; }
-		void SetRawLimbPos(const Vector& newPos) { m_LimbPos = newPos; }
+		void SetRawLimbPos(const Vector& newPos) { if (m_LimbPos != newPos) TouchCheckpoint(); m_LimbPos = newPos; }
 
 		/// Gets max radius of the AtomGroup through the longest magnitude of all the Atom's offsets.
 		/// @return The largest magnitude of Atom's offsets, in pixels.
@@ -167,7 +167,7 @@ namespace RTE {
 
 		/// Sets the offset of the joint relative to this AtomGroup's origin when used as a limb.
 		/// @param newOffset The new joint offset.
-		void SetJointOffset(const Vector& newOffset) { m_JointOffset = newOffset; }
+		void SetJointOffset(const Vector& newOffset) { if (m_JointOffset != newOffset) TouchCheckpoint(); m_JointOffset = newOffset; }
 #pragma endregion
 
 #pragma region Atom Management

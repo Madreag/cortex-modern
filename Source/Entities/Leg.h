@@ -83,15 +83,15 @@ namespace RTE {
 
 		/// Sets the move speed of this Leg, where 1.0 is instant and 0.0 is no movement.
 		/// @return The new move speed of this Leg.
-		void SetMoveSpeed(float newMoveSpeed) { m_MoveSpeed = newMoveSpeed; }
+		void SetMoveSpeed(float newMoveSpeed) { if (m_MoveSpeed != newMoveSpeed) TouchCheckpoint(); m_MoveSpeed = newMoveSpeed; }
 
 		/// Sets the position this Leg should move towards, in absolute coordinates.
 		/// @param targetPosition The position the Leg should move towards.
-		void SetTargetPosition(const Vector& targetPosition) { m_TargetPosition = targetPosition; }
+		void SetTargetPosition(const Vector& targetPosition) { if (m_TargetPosition != targetPosition) TouchCheckpoint(); m_TargetPosition = targetPosition; }
 
 		/// Sets whether this Leg will go into idle offset mode if the target appears to be above the joint of the Leg.
 		/// @param idle Whether to enable idling if the target offset is above the joint.
-		void EnableIdle(bool idle = true) { m_WillIdle = idle; }
+		void EnableIdle(bool idle = true) { if (m_WillIdle != idle) TouchCheckpoint(); m_WillIdle = idle; }
 #pragma endregion
 
 #pragma region Concrete Methods

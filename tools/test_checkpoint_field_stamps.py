@@ -39,15 +39,18 @@ SOURCE_GLOBS = ("Source/Entities/*.cpp", "Source/System/Atom.cpp")
 
 # Classes whose archived-field setters are all stamped today. A class joins this list when its lane
 # has stamped it, never to silence a failure.
-ENFORCED = ("Atom",)
+ENFORCED = ("ACDropShip", "ACrab", "ADoor", "AHuman", "Area", "Atom", "Deployment", "Emission", "Exit",
+            "GlobalScript", "Leg", "MOPixel", "Material", "PieMenu", "SceneLayerImpl", "TDExplosive",
+            "ThrownDevice", "Turret")
 
 ARCHIVED_PROPERTY = re.compile(r"NewPropertyWithValue\(\s*\"[^\"]*\"\s*,\s*(?:CheckpointText\()?\s*(m_[A-Za-z0-9_]+)")
 ARCHIVED_MEMBER = re.compile(r"\b(?:self\.)?(m_[A-Za-z0-9_]+)")
 SETTER = re.compile(
-    r"^\s*(?:virtual\s+|inline\s+|static\s+)*[A-Za-z_][\w:<>,\s\*&]*?\b(?P<name>(?:Set|Add|Clear|Reset|Enable|Disable)[A-Za-z0-9_]*)\s*\([^;{]*\)\s*(?:const\s*)?(?:override\s*)?\{(?P<body>[^}]*)\}"
+    r"^\s*(?:virtual\s+|inline\s+|static\s+)*[A-Za-z_][\w:<>,\s\*&]*?\b(?P<name>(?:Set|Add|Clear|Reset|Enable|Disable)[A-Za-z0-9_]*)\s*\([^;{]*\)\s*(?:const\s*)?(?:override\s*)?\{(?P<body>[^}]*)\}",
+    re.MULTILINE,
 )
 ASSIGNS = re.compile(r"(m_[A-Za-z0-9_]+)\s*(?:=[^=]|\+=|-=|\*=|/=|\+\+|--)")
-CLASS_HEAD = re.compile(r"^\s*class\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b")
+CLASS_HEAD = re.compile(r"^\s*class\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b", re.MULTILINE)
 ARCHIVE_CALL = re.compile(r"\barchive\s*\(", re.MULTILINE)
 CHECKPOINT_WRITER = re.compile(r"(SaveSnapshotConfiguration|SaveCheckpoint|Save[A-Za-z]*Runtime|VisitCheckpoint)")
 

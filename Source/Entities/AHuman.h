@@ -251,7 +251,7 @@ namespace RTE {
 
 		/// Sets this AHuman's UpperBodyState to the new state.
 		/// @param newUpperBodyState This AHuman's new UpperBodyState.
-		void SetUpperBodyState(UpperBodyState newUpperBodyState) { m_ArmsState = newUpperBodyState; }
+		void SetUpperBodyState(UpperBodyState newUpperBodyState) { if (m_ArmsState != newUpperBodyState) TouchCheckpoint(); m_ArmsState = newUpperBodyState; }
 
 		/// Gets this AHuman's ProneState.
 		/// @return This AHuman's ProneState.
@@ -259,7 +259,7 @@ namespace RTE {
 
 		/// Sets this AHuman's ProneState to the new state.
 		/// @param newProneState This AHuman's new ProneState.
-		void SetProneState(ProneState newProneState) { m_ProneState = newProneState; }
+		void SetProneState(ProneState newProneState) { if (m_ProneState != newProneState) TouchCheckpoint(); m_ProneState = newProneState; }
 
 		/// Tries to handle the activated PieSlice in this object's PieMenu, if there is one, based on its SliceType.
 		/// @param pieSliceType The SliceType of the PieSlice being handled.
@@ -580,7 +580,7 @@ namespace RTE {
 
 		/// Sets the duration it takes this AHuman to fully charge a throw.
 		/// @param newPrepTime New duration to fully charge a throw in MS.
-		void SetThrowPrepTime(long newPrepTime) { m_ThrowPrepTime = newPrepTime; }
+		void SetThrowPrepTime(long newPrepTime) { if (m_ThrowPrepTime != newPrepTime) TouchCheckpoint(); m_ThrowPrepTime = newPrepTime; }
 
 		/// Gets the rate at which this AHuman's Arms will swing with Leg movement, if they're not holding or supporting a HeldDevice.
 		/// @return The arm swing rate of this AHuman.
@@ -588,7 +588,7 @@ namespace RTE {
 
 		/// Sets the rate at which this AHuman's Arms will swing with Leg movement, if they're not holding or supporting a HeldDevice.
 		/// @param newValue The new arm swing rate for this AHuman.
-		void SetArmSwingRate(float newValue) { m_ArmSwingRate = newValue; }
+		void SetArmSwingRate(float newValue) { if (m_ArmSwingRate != newValue) TouchCheckpoint(); m_ArmSwingRate = newValue; }
 
 		/// Gets the rate at which this AHuman's Arms will sway with Leg movement, if they're holding or supporting a HeldDevice.
 		/// @return The device arm sway rate of this AHuman.
@@ -596,7 +596,7 @@ namespace RTE {
 
 		/// Sets the rate at which this AHuman's Arms will sway with Leg movement, if they're holding or supporting a HeldDevice.
 		/// @param newValue The new device arm sway rate for this AHuman.
-		void SetDeviceArmSwayRate(float newValue) { m_DeviceArmSwayRate = newValue; }
+		void SetDeviceArmSwayRate(float newValue) { if (m_DeviceArmSwayRate != newValue) TouchCheckpoint(); m_DeviceArmSwayRate = newValue; }
 
 		/// Gets this AHuman's max walkpath adjustment upwards to crouch below low ceilings.
 		/// @return This AHuman's max walkpath adjustment.
@@ -604,7 +604,7 @@ namespace RTE {
 
 		/// Sets this AHuman's max walkpath adjustment upwards to crouch below low ceilings.
 		/// @param newValue The new value for this AHuman's max walkpath adjustment.
-		void SetMaxWalkPathCrouchShift(float newValue) { m_MaxWalkPathCrouchShift = newValue; }
+		void SetMaxWalkPathCrouchShift(float newValue) { if (m_MaxWalkPathCrouchShift != newValue) TouchCheckpoint(); m_MaxWalkPathCrouchShift = newValue; }
 
 		/// Gets this AHuman's current crouch amount. 0.0 == fully standing, 1.0 == fully crouched.
 		/// @return This AHuman's current crouch amount.
@@ -616,7 +616,7 @@ namespace RTE {
 
 		/// Sets this AHuman's current crouch amount override.
 		/// @param newValue The new value for this AHuman's current crouch amount override.
-		void SetCrouchAmountOverride(float newValue) { m_CrouchAmountOverride = newValue; }
+		void SetCrouchAmountOverride(float newValue) { if (m_CrouchAmountOverride != newValue) TouchCheckpoint(); m_CrouchAmountOverride = newValue; }
 
 		/// Gets this AHuman's stride sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this AHuman's stride sound.
@@ -624,7 +624,7 @@ namespace RTE {
 
 		/// Sets this AHuman's stride sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this AHuman's stride sound.
-		void SetStrideSound(SoundContainer* newSound) { m_StrideSound = newSound; }
+		void SetStrideSound(SoundContainer* newSound) { if (m_StrideSound != newSound) TouchCheckpoint(); m_StrideSound = newSound; }
 
 		/// Protected member variable and method declarations
 	protected:

@@ -329,7 +329,7 @@ namespace RTE {
 		/// Sets whether this craft can enter orbit and refund the owning team when out of the map. If false,
 		/// only default out-of-bounds deletion logic applies.
 		/// @param canEnterOrbit Whether this craft can enter orbit or not.
-		void SetCanEnterOrbit(bool canEnterOrbit) { m_CanEnterOrbit = canEnterOrbit; }
+		void SetCanEnterOrbit(bool canEnterOrbit) { if (m_CanEnterOrbit != canEnterOrbit) TouchCheckpoint(); m_CanEnterOrbit = canEnterOrbit; }
 
 		/// The recomended, not absolute, maximum number of actors that fit in the
 		/// invetory. Used by the activity AI.
@@ -341,7 +341,7 @@ namespace RTE {
 		/// invetory. Used by the activity AI.
 		/// @param max An integer with the recomended number of actors that fit in the craft.
 		/// Default is -1 (unknown).
-		virtual void SetMaxPassengers(int max) { m_MaxPassengers = max; }
+		virtual void SetMaxPassengers(int max) { if (m_MaxPassengers != max) TouchCheckpoint(); m_MaxPassengers = max; }
 
 		/// Description:		Returns delivery delay multiplier.
 		/// @return Delivery delay multiplier.
@@ -349,7 +349,7 @@ namespace RTE {
 
 		/// Description:		Sets delivery delay multiplier.
 		/// @param newValue Delivery delay multiplier.
-		void SetDeliveryDelayMultiplier(float newValue) { m_DeliveryDelayMultiplier = newValue; }
+		void SetDeliveryDelayMultiplier(float newValue) { if (m_DeliveryDelayMultiplier != newValue) TouchCheckpoint(); m_DeliveryDelayMultiplier = newValue; }
 
 		/// Gets whether this ACraft will scuttle automatically on death.
 		/// @return Whether this ACraft will scuttle automatically on death.
@@ -357,7 +357,7 @@ namespace RTE {
 
 		/// Sets whether this ACraft will scuttle automatically on death.
 		/// @param scuttleOnDeath Whether this ACraft will scuttle automatically on death.
-		void SetScuttleOnDeath(bool scuttleOnDeath) { m_ScuttleOnDeath = scuttleOnDeath; }
+		void SetScuttleOnDeath(bool scuttleOnDeath) { if (m_ScuttleOnDeath != scuttleOnDeath) TouchCheckpoint(); m_ScuttleOnDeath = scuttleOnDeath; }
 
 		/// Gets the hatch opening/closing delay of this ACraft.
 		/// @return The hatch delay of this ACraft.
@@ -365,7 +365,7 @@ namespace RTE {
 
 		/// Sets the hatch opening/closing delay of this ACraft.
 		/// @param newDelay The new hatch delay of this ACraft.
-		void SetHatchDelay(int newDelay) { m_HatchDelay = newDelay; }
+		void SetHatchDelay(int newDelay) { if (m_HatchDelay != newDelay) TouchCheckpoint(); m_HatchDelay = newDelay; }
 
 		/// Destroys this ACraft and creates its specified Gibs in its place with appropriate velocities. Any Attachables are removed and also given appropriate velocities.
 		/// @param impactImpulse The impulse (kg * m/s) of the impact causing the gibbing to happen.
@@ -378,7 +378,7 @@ namespace RTE {
 
 		/// Sets this ACraft's hatch opening sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this ACraft's hatch opening sound.
-		void SetHatchOpenSound(SoundContainer* newSound) { m_HatchOpenSound = newSound; }
+		void SetHatchOpenSound(SoundContainer* newSound) { if (m_HatchOpenSound != newSound) TouchCheckpoint(); m_HatchOpenSound = newSound; }
 
 		/// Gets this ACraft's hatch closing sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this ACraft's hatch closing sound.
@@ -386,7 +386,7 @@ namespace RTE {
 
 		/// Sets this ACraft's hatch closing sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this ACraft's hatch closing sound.
-		void SetHatchCloseSound(SoundContainer* newSound) { m_HatchCloseSound = newSound; }
+		void SetHatchCloseSound(SoundContainer* newSound) { if (m_HatchCloseSound != newSound) TouchCheckpoint(); m_HatchCloseSound = newSound; }
 
 		/// Gets this ACraft's crash sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this ACraft's crash sound.
@@ -394,7 +394,7 @@ namespace RTE {
 
 		/// Sets this ACraft's crash sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this ACraft's crash sound.
-		void SetCrashSound(SoundContainer* newSound) { m_CrashSound = newSound; }
+		void SetCrashSound(SoundContainer* newSound) { if (m_CrashSound != newSound) TouchCheckpoint(); m_CrashSound = newSound; }
 
 		/// Protected member variable and method declarations
 	protected:

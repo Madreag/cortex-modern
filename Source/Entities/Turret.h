@@ -71,7 +71,7 @@ namespace RTE {
 
 		/// Sets the current rotational offset of the mounted HeldDevice from the rest of the Turret.
 		/// @param newOffsetAngle The new offset angle in radians, relative from the rest of the Turret.
-		void SetMountedDeviceRotationOffset(float newOffsetAngle) { m_MountedDeviceRotationOffset = newOffsetAngle; }
+		void SetMountedDeviceRotationOffset(float newOffsetAngle) { if (m_MountedDeviceRotationOffset != newOffsetAngle) TouchCheckpoint(); m_MountedDeviceRotationOffset = newOffsetAngle; }
 #pragma endregion
 
 #pragma region Override Methods
