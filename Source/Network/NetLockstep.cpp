@@ -3843,6 +3843,8 @@ namespace RTE {
 		m_DeferStops = false;
 		m_State = NetLockstepState::WaitingForStart;
 		ResetRoundState();
+		m_DelayEstimators = config.initialDelaySamples;
+		for (auto& [peer, sample]: m_DelayEstimators) sample.Rebase(NetLockstepNowMs());
 		// A round of our own produces its own input; a round we FOLLOW keeps what we already queued.
 		if (!config.activePeerIds.empty()) {
 			for (uint8_t peer = 1; peer <= config.peerCount; ++peer)

@@ -43,6 +43,7 @@ namespace RTE {
 		static constexpr uint64_t c_WindowMs = 5000;
 		static constexpr uint64_t c_SampleMs = 100;
 		void Observe(uint64_t nowMs, uint32_t rttMs);
+		void Rebase(uint64_t nowMs);
 		uint32_t RequiredFrames(double tickMs, uint16_t floor = 0) const;
 		uint32_t P95Ms() const;
 		uint32_t JitterMs() const;
