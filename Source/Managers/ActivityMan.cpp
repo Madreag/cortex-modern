@@ -512,6 +512,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	Scene* scene = g_SceneMan.GetScene();
 	GAScripted* activity = dynamic_cast<GAScripted*>(GetActivity());
 	if (!scene || !activity || activity->GetActivityState() == Activity::Over) return false;
+	// Every layer of the image comes off the terrain, and a scene mid-load has none yet.
+	if (!scene->GetTerrain()) throw std::runtime_error("scene has no terrain");
 	const auto freezeStart = std::chrono::steady_clock::now();
 	g_MovableMan.CompleteQueuedMOIDDrawings();
 	g_MovableMan.WaitForActorsSeeTask();
@@ -1150,7 +1152,16 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	SceneMan::SceneSetAside originalScene;
 	g_SceneMan.SetAsideScene(originalScene);
 	SceneMan::SceneSetAside dummyScene;
-	dummyScene.scene = new Scene();
+	// A capture reads the terrain layers before it reaches the script graph this row refuses on.
+	struct RefusalTerrain : SLTerrain {
+		RefusalTerrain() {
+			m_MainBitmap = create_bitmap_ex(8, 64, 64);
+			m_MainBitmapOwned = true;
+		}
+	};
+	auto* dummy = new Scene();
+	dummy->Create(new RefusalTerrain());
+	dummyScene.scene = dummy;
 	g_SceneMan.ReinstateScene(dummyScene);
 
 	LuaStateWrapper& state = g_LuaMan.GetMasterScriptState();
@@ -1228,6 +1239,20 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	const bool refusedManual = !SaveCurrentGame("save_refusal");
 	check(refusedManual && hasLive && !live.playerLine.empty() && g_FrameMan.GetScreenText(0) == live.playerLine,
 	      "manual_repeat", g_FrameMan.GetScreenText(0));
+
+	// A scene mid-load has no terrain, and the capture reads its layers first.
+	SceneMan::SceneSetAside terrainlessScene;
+	terrainlessScene.scene = new Scene();
+	g_SceneMan.ReinstateScene(terrainlessScene);
+	std::string terrainRefusal;
+	try {
+		std::shared_future<bool> terrainlessTask;
+		size_t terrainlessBytes = 0;
+		QueueIncrementalAutosave("terrainless", "", "", 7, terrainlessTask, terrainlessBytes, SaveCompression::Fast, nullptr);
+	} catch (const std::exception& error) { terrainRefusal = error.what(); }
+	const bool terrainlessRefused = !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 7);
+	g_SceneMan.ReinstateScene(terrainlessScene);
+	check(terrainRefusal == "scene has no terrain" && terrainlessRefused, "terrainless_scene_refuses_by_name", terrainRefusal);
 
 	LoopbackTransport transport;
 	NetLockstepCoordinator coordinator;
