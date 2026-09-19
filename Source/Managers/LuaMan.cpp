@@ -3576,6 +3576,13 @@ static int ScriptGraphNoteValue(lua_State* L) {
 	return 0;
 }
 
+// Lua reaches a native's values only through luabind, so one seam reports every script-side write.
+// It arms apart from the table barrier because it costs nothing until a walk has armed an object;
+// it lives here because only this unit sees luabind's headers on every platform.
+void RTE::ArmLuaCheckpointValueBarrier() {
+	luabind::detail::checkpoint_object_write = [](void* value) { CheckpointValueWritten(value); };
+}
+
 // (count) -> nothing. How many roots the walk barred from reuse, for the capture's guard line.
 static int ScriptGraphNoteUncacheable(lua_State* L) {
 	CheckpointGraphIndex::Get().NoteUncacheableRoots(static_cast<size_t>(luaL_optnumber(L, 1, 0)));
