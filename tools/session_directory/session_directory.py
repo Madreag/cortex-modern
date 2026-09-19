@@ -7,6 +7,7 @@ import argparse
 import base64
 import binascii
 import hmac
+import hashlib
 import json
 import logging
 import re
@@ -21,6 +22,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 
 LOGGER = logging.getLogger("session_directory")
 
@@ -54,6 +56,9 @@ INSTALL_KEY_CHARS = frozenset(
 )
 VALID_JOIN_MODES = frozenset({"ip", "ice", "either"})
 VALID_STATES = frozenset({"lobby", "running"})
+TURN_MIN_TTL = 300
+TURN_MAX_TTL = 86400
+TURN_REQUESTS_PER_MIN = 4
 REGISTER_STR_FIELDS = (
     "name",
     "activity",
@@ -85,6 +90,89 @@ class FieldError(Exception):
 
     def body(self) -> dict[str, str]:
         return {"error": self.error, "field": self.field}
+
+
+class TurnError(Exception):
+    def __init__(self, status: int, code: str, retry_after_s: int = 0) -> None:
+        super().__init__(code)
+        self.status = status
+        self.body = {"error": code}
+        if retry_after_s:
+            self.body["retry_after_s"] = retry_after_s
+
+
+def clean_ice_servers(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not 1 <= len(value) <= 8:
+        raise TurnError(502, "invalid_relay_response")
+    result = []
+    has_relay = False
+    for entry in value:
+        if not isinstance(entry, dict) or set(entry) - {"urls", "username", "credential"}:
+            raise TurnError(502, "invalid_relay_response")
+        urls = entry.get("urls")
+        if isinstance(urls, str):
+            urls = [urls]
+        if not isinstance(urls, list) or not 1 <= len(urls) <= 8:
+            raise TurnError(502, "invalid_relay_response")
+        for url in urls:
+            if not isinstance(url, str) or len(url) > 256 or not re.fullmatch(
+                r"(?:stun|turn|turns):[A-Za-z0-9.\-\[\]:]+(?::[0-9]+)?(?:\?transport=(?:udp|tcp))?", url
+            ):
+                raise TurnError(502, "invalid_relay_response")
+        relay = any(url.startswith(("turn:", "turns:")) for url in urls)
+        clean = {"urls": urls}
+        if relay:
+            has_relay = True
+            for key in ("username", "credential"):
+                text = entry.get(key)
+                if not isinstance(text, str) or not 1 <= len(text) <= 1024 or any(ord(ch) < 32 or ch == "," for ch in text):
+                    raise TurnError(502, "invalid_relay_response")
+                clean[key] = text
+        result.append(clean)
+    if not has_relay:
+        raise TurnError(502, "invalid_relay_response")
+    return result
+
+
+class TurnCredentialProvider:
+    def __init__(self, config: Optional[dict[str, Any]] = None) -> None:
+        self._config = dict(config or {})
+
+    def mint(self, match_id: str, ttl: int, now: int) -> dict[str, Any]:
+        backend = self._config.get("backend", "cloudflare")
+        if backend == "coturn":
+            secret = self._config.get("static_auth_secret")
+            urls = self._config.get("relay_urls")
+            if not isinstance(secret, str) or not secret or not urls:
+                raise TurnError(503, "relay_not_configured")
+            tag = hashlib.sha256((match_id + secrets.token_hex(16)).encode()).hexdigest()[:24]
+            username = f"{now + ttl}:{tag}"
+            credential = base64.b64encode(hmac.new(secret.encode(), username.encode(), hashlib.sha1).digest()).decode("ascii")
+            servers = clean_ice_servers([{"urls": urls, "username": username, "credential": credential}])
+        elif backend == "cloudflare":
+            key_id = self._config.get("turn_key_id", "")
+            token = self._config.get("api_token", "")
+            if not isinstance(key_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", key_id) or not isinstance(token, str) or not token:
+                raise TurnError(503, "relay_not_configured")
+            request = Request(
+                f"https://rtc.live.cloudflare.com/v1/turn/keys/{key_id}/credentials/generate-ice-servers",
+                data=json.dumps({"ttl": ttl}).encode(),
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urlopen(request, timeout=5) as response:
+                    if response.status not in (200, 201):
+                        raise ValueError("status")
+                    raw = response.read(MAX_BODY + 1)
+                if len(raw) > MAX_BODY:
+                    raise ValueError("size")
+                servers = clean_ice_servers(json.loads(raw)["iceServers"])
+            except Exception:
+                raise TurnError(502, "relay_provider_unavailable") from None
+        else:
+            raise TurnError(503, "relay_not_configured")
+        return {"match_id": match_id, "expires_at": now + ttl, "iceServers": servers}
 
 
 def tokens_equal(left: str, right: str) -> bool:
@@ -336,6 +424,9 @@ class Session:
         self.next_seq: dict[str, int] = {}
         self.queue_drain_at: dict[str, float] = {}
         self.undrained_bytes = 0
+        self.install_key = ""
+        self.ice_offer: Optional[dict[str, Any]] = None
+        self.ice_generation = 0
 
     def age_s(self, now: float) -> int:
         return max(0, int(now - self.created_at))
@@ -354,7 +445,8 @@ class Session:
 
 class SessionDirectory:
     def __init__(
-        self, expiry_s: float, heartbeat_s: float, queue_idle_s: float = QUEUE_IDLE_S
+        self, expiry_s: float, heartbeat_s: float, queue_idle_s: float = QUEUE_IDLE_S,
+        turn_config: Optional[dict[str, Any]] = None,
     ) -> None:
         self.expiry_s = expiry_s
         self.heartbeat_s = heartbeat_s
@@ -364,6 +456,8 @@ class SessionDirectory:
         self._sessions: dict[str, Session] = {}
         self._resume_tokens: dict[str, tuple[str, float]] = {}
         self.limiter = DualRateLimiter()
+        self.turn_provider = TurnCredentialProvider(turn_config)
+        self.turn_limiter = RateLimiter(TURN_REQUESTS_PER_MIN, TURN_REQUESTS_PER_MIN)
         self._stop = threading.Event()
         self._pruner = threading.Thread(
             target=self._prune_loop, name="session-prune", daemon=True
@@ -395,6 +489,7 @@ class SessionDirectory:
 
     def prune(self, now: float) -> None:
         with self._lock:
+            self.turn_limiter.prune_idle(now)
             dead = [
                 sid
                 for sid, sess in self._sessions.items()
@@ -416,7 +511,7 @@ class SessionDirectory:
         self.prune(now)
         return self._sessions.get(session_id)
 
-    def register(self, data: dict[str, Any], observed_ip: str, now: float) -> dict[str, Any]:
+    def register(self, data: dict[str, Any], observed_ip: str, now: float, install_key: str = "") -> dict[str, Any]:
         self.prune(now)
         with self._lock:
             # Capacity is answered before any field work: a full directory must not spend parsing.
@@ -470,6 +565,7 @@ class SessionDirectory:
                 session_id = str(uuid.uuid4())
                 token = secrets.token_urlsafe(24)
             sess = Session(session_id, token, fields, observed_ip, now)
+            sess.install_key = install_key
             if resume is not None:
                 if not first_world:
                     sess.state = "running"
@@ -483,6 +579,48 @@ class SessionDirectory:
             "observed_ip": observed_ip,
             "supports_unlisted": True,
         }
+
+    def mint_ice_servers(self, session_id: str, data: dict[str, Any], install_key: str, now: float) -> dict[str, Any]:
+        if set(data) - {"token", "match_id", "ttl", "iceServers"}:
+            raise FieldError("invalid_field", "ice_offer")
+        token = require_str(data, "token")
+        match_id = require_str_unbounded(data, "match_id")
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", match_id):
+            raise FieldError("invalid_field", "match_id")
+        ttl = require_int(data, "ttl", TURN_MIN_TTL, TURN_MAX_TTL)
+        with self._lock:
+            sess = self._get(session_id, now)
+            if not sess:
+                raise KeyError(session_id)
+            if not valid_install_key(install_key) or not tokens_equal(sess.token, token) or (sess.install_key and not tokens_equal(sess.install_key, install_key)):
+                raise PermissionError("forbidden")
+            limited = self.turn_limiter.probe(install_key, now, False)
+            if limited:
+                raise TurnError(429, "relay_rate_limited", limited[1]["retry_after_s"])
+            self.turn_limiter.commit(install_key, now, False)
+            sess.ice_generation += 1
+            generation = sess.ice_generation
+        wall = int(time.time())
+        if "iceServers" in data:
+            offer = {"match_id": match_id, "expires_at": wall + ttl, "iceServers": clean_ice_servers(data["iceServers"])}
+        else:
+            offer = self.turn_provider.mint(match_id, ttl, wall)
+        with self._lock:
+            if self._sessions.get(session_id) is not sess or generation != sess.ice_generation:
+                raise TurnError(409, "relay_request_superseded")
+            if offer["expires_at"] <= int(time.time()):
+                raise TurnError(503, "relay_credential_expired")
+            sess.ice_offer = offer
+            return offer
+
+    def get_ice_servers(self, session_id: str, now: float) -> dict[str, Any]:
+        with self._lock:
+            sess = self._get(session_id, now)
+            if not sess:
+                raise KeyError(session_id)
+            if not sess.ice_offer or sess.ice_offer["expires_at"] <= int(time.time()):
+                raise TurnError(404, "relay_offer_unavailable")
+            return sess.ice_offer
 
     def heartbeat(
         self, session_id: str, data: dict[str, Any], now: float
@@ -747,6 +885,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--expiry-s", type=float, default=15)
     parser.add_argument("--heartbeat-s", type=float, default=5)
     parser.add_argument("--log-file", type=Path, default=None)
+    parser.add_argument("--turn-config", type=Path, default=None)
     return parser.parse_args(argv)
 
 
@@ -838,7 +977,9 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
             return header, "header"
 
         def _handle_error(self, exc: BaseException) -> None:
-            if isinstance(exc, FieldError):
+            if isinstance(exc, TurnError):
+                self._send(exc.status, exc.body)
+            elif isinstance(exc, FieldError):
                 self._send(400, exc.body())
             elif isinstance(exc, PermissionError):
                 self._send(403, {"error": "forbidden"})
@@ -866,6 +1007,9 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                     self._send(gated[0], gated[1])
                     return
                 now = time.monotonic()
+                if len(parts) == 4 and parts[:2] == ["v1", "sessions"] and parts[3] == "ice-servers":
+                    self._send(200, store.get_ice_servers(parse_session_id(parts[2]), now))
+                    return
                 if parts == ["v1", "sessions"]:
                     limit = LIST_LIMIT_DEFAULT
                     limit_raw = self._q1(query, "limit")
@@ -942,13 +1086,16 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                         self._send(gated[0], gated[1])
                         return
                     body = self._read_json()
-                    self._send(200, store.register(body, self._observed_ip(), now))
+                    self._send(200, store.register(body, self._observed_ip(), now, self.headers.get("X-Install-Key", "")))
                     return
                 gated = self._install_gate(is_register=False)
                 if gated is not None:
                     self._send(gated[0], gated[1])
                     return
                 body = self._read_json()
+                if len(parts) == 4 and parts[:2] == ["v1", "sessions"] and parts[3] == "ice-servers":
+                    self._send(200, store.mint_ice_servers(parse_session_id(parts[2]), body, self.headers.get("X-Install-Key", ""), now))
+                    return
                 if (
                     len(parts) == 4
                     and parts[0] == "v1"
@@ -1064,6 +1211,7 @@ def spawn_server(
     key: Optional[Path] = None,
     log_file: Optional[Path] = None,
     queue_idle_s: float = QUEUE_IDLE_S,
+    turn_config: Optional[dict[str, Any]] = None,
 ) -> RunningServer:
     configure_logging(log_file)
     if cert is None or key is None:
@@ -1072,7 +1220,7 @@ def spawn_server(
         cert = None
         key = None
     store = SessionDirectory(
-        expiry_s=expiry_s, heartbeat_s=heartbeat_s, queue_idle_s=queue_idle_s
+        expiry_s=expiry_s, heartbeat_s=heartbeat_s, queue_idle_s=queue_idle_s, turn_config=turn_config
     )
     store.start_pruner()
     httpd = build_httpd(bind, port, store, cert, key)
@@ -1092,6 +1240,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     check_tls_args(args)
     configure_logging(args.log_file)
     use_tls = args.cert is not None and args.key is not None
+    try:
+        turn_config = json.loads(args.turn_config.read_text(encoding="utf-8")) if args.turn_config else None
+        if turn_config is not None and not isinstance(turn_config, dict):
+            raise ValueError()
+    except Exception:
+        raise SystemExit("invalid TURN configuration file") from None
     server = spawn_server(
         bind=args.bind,
         port=args.port,
@@ -1101,6 +1255,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         cert=args.cert if use_tls else None,
         key=args.key if use_tls else None,
         log_file=args.log_file,
+        turn_config=turn_config,
     )
     print(f"session_directory listening on {args.bind}:{server.port}", flush=True)
     try:
