@@ -732,7 +732,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 					continue;
 				}
 			}
-			if (transition->kind == NetGameWorldTransition::Activate && transition->peerId != 0 && seated) {
+			if (WorldTransitionSeatsMember(*transition) && transition->peerId != 0 && seated) {
 				ScenarioRunner::SetLockstepControlOverride(static_cast<int64_t>(seated->GetUniqueID()), transition->peerId);
 			}
 			if (WorldTransitionBindsBrain(*transition, seated != nullptr)) {

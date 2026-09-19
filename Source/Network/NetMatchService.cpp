@@ -2325,6 +2325,7 @@ static std::string ResyncSaveName() {
 				std::cout << "[net-world] promote connection=" << promoted << " at=" << promotedAt << std::endl;
 			}
 		}
+		DriveWorldSeatRespawns(nowFrame);
 		const uint64_t nextFrame = m_Coordinator->GetStats().nextFrame;
 		const NetWorldJoinSession* due = m_WorldJoin.DueActivation(nextFrame);
 		bool late = false;
@@ -2351,6 +2352,38 @@ static std::string ResyncSaveName() {
 			}
 			(void)m_WorldJoin.CompleteActivation(due->connection, plan.firstRequired, nullptr);
 			std::cout << "[net-world] activate peer=" << static_cast<int>(due->assignedPeerId) << " at=" << plan.firstRequired << std::endl;
+		}
+	}
+
+	void NetMatchService::DriveWorldSeatRespawns(uint64_t nowFrame) {
+		const Activity* activity = g_ActivityMan.GetActivity();
+		if (activity == nullptr || nowFrame == 0) {
+			return;
+		}
+		const NetMatchConfig& config = m_Runner ? m_Runner->GetMatchConfig() : m_MatchConfig;
+		// A seat with no living brain keeps its seat and watches; the host authors one respawn for it
+		// after the world's configured delay, and every peer spawns it at the transition's frame.
+		for (const NetWorldSlot& slot: m_WorldJoin.Membership().Slots()) {
+			if (!slot.held) {
+				continue;
+			}
+			const int32_t player = WorldActivityPlayerOf(config, slot.peerId);
+			if (player < 0) {
+				continue;
+			}
+			const Actor* brain = activity->GetPlayerBrain(player);
+			(void)m_WorldJoin.Membership().NoteSeatBrain(slot.peerId, brain != nullptr && !brain->IsDead(), nowFrame);
+		}
+		const uint64_t delayFrames = WorldRespawnDelayFrames(config);
+		const NetWorldSlot* dueRespawn = m_WorldJoin.Membership().DueSeatRespawn(nowFrame, delayFrames);
+		if (dueRespawn == nullptr) {
+			return;
+		}
+		const uint8_t peerId = dueRespawn->peerId;
+		const NetGameWorldTransition respawn = BuildWorldSeatRespawnTransition(*dueRespawn, config, m_WorldJoin.Membership().Revision(), nowFrame);
+		if (ScenarioRunner::SubmitWorldTransition(respawn)) {
+			(void)m_WorldJoin.Membership().NoteSeatRespawn(peerId, nowFrame);
+			std::cout << "[net-world] seat respawn peer=" << static_cast<int>(peerId) << " at=" << nowFrame << std::endl;
 		}
 	}
 

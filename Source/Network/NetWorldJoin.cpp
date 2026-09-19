@@ -588,6 +588,64 @@ namespace RTE {
 		return plan;
 	}
 
+	namespace {
+		// The world's fixed team spawns. An Activate and a respawn put a brain in the same place.
+		float WorldTeamSpawnX(int32_t team) {
+			switch (team) {
+				case 1: return 1120.0F;
+				case 2: return 640.0F;
+				case 3: return 1360.0F;
+				default: return 880.0F;
+			}
+		}
+	} // namespace
+
+	int32_t WorldActivityPlayerOf(const NetMatchConfig& config, uint8_t peerId) {
+		if (peerId == 0) {
+			return -1;
+		}
+		int human = 0;
+		for (const NetMatchPlayerSlot& slot: config.players) {
+			if (slot.cpu) {
+				continue;
+			}
+			if (slot.peerId == peerId) {
+				return human;
+			}
+			++human;
+		}
+		// A capacity slot the roster does not name owns no activity player, and -1 binds none.
+		return -1;
+	}
+
+	uint64_t WorldRespawnDelayFrames(const NetMatchConfig& config) {
+		const uint16_t seconds = config.worldRespawnDelaySeconds != 0 ? config.worldRespawnDelaySeconds
+		                                                             : NetMatchConfigUtil::c_DefaultWorldRespawnDelaySeconds;
+		// The fixed timestep is the world's clock; no wall clock decides when a brain comes back.
+		const uint64_t ticksPerSecond = static_cast<uint64_t>(std::llround(1.0 / static_cast<double>(c_DefaultDeltaTimeS)));
+		return static_cast<uint64_t>(seconds) * ticksPerSecond;
+	}
+
+	NetGameWorldTransition BuildWorldSeatRespawnTransition(const NetWorldSlot& slot, const NetMatchConfig& config, uint64_t membershipRevision, uint64_t atFrame) {
+		NetGameWorldTransition transition;
+		transition.schema = c_NetWorldJoinSchema;
+		transition.kind = NetGameWorldTransition::SeatRespawn;
+		transition.peerId = slot.peerId;
+		transition.holderGeneration = slot.generation;
+		transition.membershipRevision = membershipRevision;
+		transition.activationFrame = atFrame;
+		transition.team = slot.team;
+		transition.player = WorldActivityPlayerOf(config, slot.peerId);
+		transition.bindBrain = true;
+		transition.className = "AHuman";
+		transition.preset = "Brain Robot";
+		transition.module = "Base.rte";
+		transition.aiMode = 0;
+		transition.posX = WorldTeamSpawnX(slot.team);
+		transition.posY = 0.0F;
+		return transition;
+	}
+
 	NetGameWorldTransition BuildWorldActivateTransition(const NetWorldJoinSession& session, const NetMatchConfig& config, uint64_t membershipRevision) {
 		NetGameWorldTransition transition;
 		transition.schema = c_NetWorldJoinSchema;
@@ -597,32 +655,14 @@ namespace RTE {
 		transition.membershipRevision = membershipRevision;
 		transition.activationFrame = session.activationTick;
 		transition.team = session.team;
-		int human = 0;
-		// A capacity slot the roster does not name owns no activity player, and -1 binds none: seating
-		// it on player 0 would rebind another member's brain.
-		transition.player = -1;
-		for (const NetMatchPlayerSlot& slot: config.players) {
-			if (slot.cpu) {
-				continue;
-			}
-			if (slot.peerId == session.assignedPeerId) {
-				transition.player = human;
-				break;
-			}
-			++human;
-		}
+		transition.player = WorldActivityPlayerOf(config, session.assignedPeerId);
 		transition.bindBrain = !session.spectator && session.assignedPeerId != 0;
 		if (!session.spectator) {
 			transition.className = "AHuman";
 			transition.preset = "Brain Robot";
 			transition.module = "Base.rte";
 			transition.aiMode = 0;
-			switch (session.team) {
-				case 1: transition.posX = 1120.0F; break;
-				case 2: transition.posX = 640.0F; break;
-				case 3: transition.posX = 1360.0F; break;
-				default: transition.posX = 880.0F; break;
-			}
+			transition.posX = WorldTeamSpawnX(session.team);
 			transition.posY = 0.0F;
 		}
 		return transition;
@@ -954,6 +994,46 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetWorldMembership::NoteSeatBrain(uint8_t peerId, bool alive, uint64_t nowFrame) {
+		NetWorldSlot* slot = Find(peerId);
+		if (slot == nullptr || !slot->held) {
+			return false;
+		}
+		if (alive) {
+			// A living brain closes the seat's respawn out; the next death starts a new clock.
+			slot->brainMissingSince = 0;
+			slot->respawnScheduledAt = 0;
+			return true;
+		}
+		if (slot->brainMissingSince == 0) {
+			slot->brainMissingSince = nowFrame;
+		}
+		return true;
+	}
+
+	bool NetWorldMembership::NoteSeatRespawn(uint8_t peerId, uint64_t atFrame) {
+		NetWorldSlot* slot = Find(peerId);
+		if (slot == nullptr || atFrame == 0) {
+			return false;
+		}
+		slot->respawnScheduledAt = atFrame;
+		return true;
+	}
+
+	const NetWorldSlot* NetWorldMembership::DueSeatRespawn(uint64_t nowFrame, uint64_t delayFrames) const {
+		for (const NetWorldSlot& slot: m_Slots) {
+			// A held seat with no living brain is a watching seat until its delay is up; it never
+			// loses the seat, and one death authors one respawn.
+			if (!slot.held || slot.brainMissingSince == 0 || slot.respawnScheduledAt != 0) {
+				continue;
+			}
+			if (nowFrame >= slot.brainMissingSince + delayFrames) {
+				return &slot;
+			}
+		}
+		return nullptr;
+	}
+
 	bool NetWorldMembership::HoldsForReclaim(uint8_t peerId) const {
 		const auto found = std::find_if(m_Slots.begin(), m_Slots.end(), [&](const NetWorldSlot& slot) { return slot.peerId == peerId; });
 		return found != m_Slots.end() && found->reclaimHold;
@@ -971,6 +1051,8 @@ namespace RTE {
 		}
 		slot->held = false;
 		slot->reclaimHold = false;
+		slot->brainMissingSince = 0;
+		slot->respawnScheduledAt = 0;
 		slot->holderName.clear();
 		// The next holder of this slot is a new one: an old ticket cannot pass for this generation.
 		++slot->generation;
@@ -995,7 +1077,8 @@ namespace RTE {
 		for (const NetWorldSlot& slot: m_Slots) {
 			slots.push_back({{"peer_id", static_cast<int>(slot.peerId)}, {"team", static_cast<int>(slot.team)},
 			                 {"generation", slot.generation}, {"stable_seat", slot.stableSeat},
-			                 {"held", slot.held}, {"reclaim_hold", slot.reclaimHold}, {"holder", slot.holderName}});
+			                 {"held", slot.held}, {"reclaim_hold", slot.reclaimHold},
+			                 {"brain_missing_since", slot.brainMissingSince}, {"holder", slot.holderName}});
 		}
 		json report = {{"schema", c_NetWorldJoinSchema}, {"revision", m_Revision}, {"slots", std::move(slots)}, {"free", FreeSlots()}};
 		return report.dump(-1, ' ', false, json::error_handler_t::replace);

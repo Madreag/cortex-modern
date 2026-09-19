@@ -223,6 +223,8 @@ namespace RTE {
 		uint16_t stableSeat = 0;   //!< The admission seat bound to the slot while it is held.
 		bool held = false;
 		bool reclaimHold = false; //!< Its holder dropped: only that holder may take it back.
+		uint64_t brainMissingSince = 0; //!< The committed frame its brain went; 0 while one lives.
+		uint64_t respawnScheduledAt = 0; //!< The frame the last respawn was authored for.
 		std::string holderName;
 	};
 
@@ -244,6 +246,13 @@ namespace RTE {
 		bool Reclaim(uint8_t peerId, uint16_t stableSeat, const std::string& holderName, std::string* error = nullptr);
 		/// Marks the slot as waiting for its dropped holder, so no fresh join may allocate it.
 		bool SetReclaimHold(uint8_t peerId, bool holding);
+		/// Records whether the seat's brain is alive at this committed frame. The first frame with
+		/// none starts the seat's respawn clock; a living brain clears it.
+		bool NoteSeatBrain(uint8_t peerId, bool alive, uint64_t nowFrame);
+		/// Records that a respawn has been authored for the seat, so one death spawns one brain.
+		bool NoteSeatRespawn(uint8_t peerId, uint64_t atFrame);
+		/// The seat whose brain has been gone for the whole delay and has no respawn out yet.
+		const NetWorldSlot* DueSeatRespawn(uint64_t nowFrame, uint64_t delayFrames) const;
 		/// Whether a reclaim hold is keeping this slot for its holder right now.
 		bool HoldsForReclaim(uint8_t peerId) const;
 		/// Frees the slot and advances its generation. A later return of the same player is a fresh
@@ -340,6 +349,21 @@ namespace RTE {
 
 	/// Host-authored Activate binding: seat, team, brain preset and spawn (Persistent World respawn API).
 	NetGameWorldTransition BuildWorldActivateTransition(const NetWorldJoinSession& session, const NetMatchConfig& config, uint64_t membershipRevision);
+
+	/// The activity player slot a world seat owns, or -1 when the roster names no player for it.
+	int32_t WorldActivityPlayerOf(const NetMatchConfig& config, uint8_t peerId);
+
+	/// Host-authored respawn of a seated member's brain: the same team spawn the Activate uses,
+	/// committed at one frame, so every peer puts the same actor in at the same tick.
+	NetGameWorldTransition BuildWorldSeatRespawnTransition(const NetWorldSlot& slot, const NetMatchConfig& config, uint64_t membershipRevision, uint64_t atFrame);
+
+	/// The respawn delay in committed frames. A world that names no delay takes the preset's.
+	uint64_t WorldRespawnDelayFrames(const NetMatchConfig& config);
+
+	/// Whether the transition seats a member's own brain: an Activate or its later respawn.
+	inline bool WorldTransitionSeatsMember(const NetGameWorldTransition& transition) {
+		return transition.kind == NetGameWorldTransition::Activate || transition.kind == NetGameWorldTransition::SeatRespawn;
+	}
 
 	/// Whether an applied Activate binds the seat's brain on this peer: the host asked for it, a
 	/// resident was seated and the slot is a real player seat.
