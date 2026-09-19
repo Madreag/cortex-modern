@@ -108,6 +108,7 @@ namespace RTE {
 		m_StartRequested = config.autoStart;
 		m_FailureReason.clear();
 		m_RemoteLobbyUp.clear();
+		m_WorldTransferPeers.clear();
 		m_SeatAssigned = false;
 		m_StateBytesToSend.clear();
 		m_QueuedStateTransfers.clear();
@@ -210,24 +211,28 @@ namespace RTE {
 	}
 
 	bool NetLobbySession::BeginStateTransferTo(uint8_t peerId, std::vector<uint8_t> fileBytes) {
+		return BeginStateTransferToPeer(peerId, std::move(fileBytes)) == NetLobbyStateTransfer::Started;
+	}
+
+	NetLobbyStateTransfer NetLobbySession::BeginStateTransferToPeer(uint8_t peerId, std::vector<uint8_t> fileBytes) {
 		if (!m_Config.host || fileBytes.empty() || peerId == 0 || !IsKnownRemote(peerId)) {
-			return false;
+			return NetLobbyStateTransfer::Refused;
 		}
 		if (NetLobbyProtocol::GetStateChunkCount(fileBytes.size()) == 0) {
 			Fail("state transfer exceeds maximum size");
-			return false;
+			return NetLobbyStateTransfer::Refused;
 		}
 		// There is one outgoing blob: a second joiner's image would replace the one in flight, so it
 		// waits its turn instead.
 		if (HasPendingStateChunks()) {
 			std::erase_if(m_QueuedStateTransfers, [peerId](const std::pair<uint8_t, std::vector<uint8_t>>& queued) { return queued.first == peerId; });
 			m_QueuedStateTransfers.emplace_back(peerId, std::move(fileBytes));
-			return false;
+			return NetLobbyStateTransfer::Queued;
 		}
 		m_StateTransferOnlyPeer = peerId;
 		m_StateBytesToSend = std::move(fileBytes);
 		RestartStateTransfer();
-		return true;
+		return NetLobbyStateTransfer::Started;
 	}
 
 	bool NetLobbySession::StartNextQueuedStateTransfer() {
@@ -258,6 +263,14 @@ namespace RTE {
 		m_RemoteTransports[peerId] = transport;
 		m_ConfigAckedByPeer[peerId] = false;
 		m_RemoteReadyByPeer[peerId] = false;
+		return true;
+	}
+
+	bool NetLobbySession::BindWorldTransferRemote(uint8_t peerId, NetPeerId transport, std::string* error) {
+		if (!BindLateRemote(peerId, transport, error)) {
+			return false;
+		}
+		m_WorldTransferPeers.insert(peerId);
 		return true;
 	}
 
@@ -332,7 +345,7 @@ namespace RTE {
 			uint16_t index = m_OutgoingChunkCount;
 			for (uint8_t peerId: m_RemotePeerIds) {
 				if (m_StateTransferOnlyPeer != 0 && peerId != m_StateTransferOnlyPeer) continue;
-				if (IsRemoteLobbyUp(peerId)) index = std::min(index, OutgoingChunkIndex(peerId));
+				if (IsRemoteLobbyUp(peerId) || IsWorldTransferPeer(peerId)) index = std::min(index, OutgoingChunkIndex(peerId));
 			}
 			if (index >= m_OutgoingChunkCount) break;
 			NetLobbyStateChunk chunk;
@@ -345,7 +358,7 @@ namespace RTE {
 			chunk.bytes.assign(m_StateBytesToSend.begin() + begin, m_StateBytesToSend.begin() + end);
 			for (uint8_t peerId: m_RemotePeerIds) {
 				if (m_StateTransferOnlyPeer != 0 && peerId != m_StateTransferOnlyPeer) continue;
-				if (!IsRemoteLobbyUp(peerId) || OutgoingChunkIndex(peerId) != index) continue;
+				if ((!IsRemoteLobbyUp(peerId) && !IsWorldTransferPeer(peerId)) || OutgoingChunkIndex(peerId) != index) continue;
 				std::string error;
 				if (!SendTo(m_RemoteTransports.at(peerId), chunk, &error)) {
 					if (++m_ChunkSendStall > 4000) Fail("state transfer stalled: " + error);
@@ -555,6 +568,7 @@ namespace RTE {
 		m_RemoteTransports.erase(peer);
 		std::erase(m_RemotePeerIds, peerId);
 		m_RemoteLobbyUp.erase(peerId);
+		m_WorldTransferPeers.erase(peerId);
 		m_OutgoingChunkIndexByPeer.erase(peerId);
 		m_ConfigAckedByPeer.erase(peerId);
 		m_RemoteReadyByPeer.erase(peerId);
@@ -580,6 +594,13 @@ namespace RTE {
 		std::map<uint8_t, NetPeerId> transports;
 		for (const NetSessionPeerInfo& peer: readyPeers) {
 			transports[static_cast<uint8_t>(peer.assignedPeerId + 1)] = peer.transportPeerId;
+		}
+		// A world bootstrap's id comes from the join plane, never from the session roster; without this
+		// the rebuild below would unbind it and the image in flight would stop.
+		for (uint8_t worldPeer: m_WorldTransferPeers) {
+			if (const auto bound = m_RemoteTransports.find(worldPeer); bound != m_RemoteTransports.end()) {
+				transports[worldPeer] = bound->second;
+			}
 		}
 		if (transports == m_RemoteTransports) return;
 		const auto previous = m_RemoteTransports;
@@ -910,7 +931,10 @@ namespace RTE {
 						break;
 					}
 					if (chunk->transferId == c_NetWorldTailTransferId) {
-						m_PendingTailBytes.insert(m_PendingTailBytes.end(), chunk->bytes.begin(), chunk->bytes.end());
+						// Only a joiner drains this; on the host it would grow for the world's life.
+						if (!m_Config.host) {
+							m_PendingTailBytes.insert(m_PendingTailBytes.end(), chunk->bytes.begin(), chunk->bytes.end());
+						}
 						break;
 					}
 				}
