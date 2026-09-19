@@ -388,9 +388,7 @@ NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int s
 	// A compact screen keeps the strip band and one toast row above the panel's top: the panel sits
 	// under them and loses the rows off its height, so its bottom edge - and the roster - stay put.
 	const int highestTop = std::max(top, c_StripBandBottom + rowHeight + c_PanelGap);
-	// While the editor holds the world every seat's message band owns its own rows and the toast
-	// row under them, so the panel takes the highest run of rows no band holds - above a band as
-	// readily as below one, which a lowest-band reservation could not do on a top/bottom split.
+	// A seat's message owns its own rows and the toast row under them, wherever on the screen it sits.
 	std::vector<PanelBand> bands;
 	for (const PanelBand& band: textBands) {
 		bands.push_back({band.top, band.bottom + rowHeight + 2 * c_PanelGap});
