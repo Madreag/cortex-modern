@@ -1606,6 +1606,38 @@ void ProcessMenuScript() {
 			pauseMenu ? pauseMenu->AutomationActiveScreenName() : menu->AutomationActiveScreenName(), cmd, iss, observation);
 		std::cout << "[menu-script] " << cmd << " " << observation << " " << (pass ? "PASS" : "FAIL") << std::endl;
 		if (!pass) return MenuScriptFail(cmd + " " + observation);
+	} else if (cmd == "net_panel") {
+		// The F6 seats/options panel owns its own control manager, so the script's assert_* commands
+		// need this re-aim: "net_panel open" raises it, every other word runs on its controls.
+		NetModerationGUI* panel = g_MenuMan.GetNetworkPanel();
+		std::string inner;
+		iss >> inner;
+		std::string observation;
+		bool pass = panel != nullptr;
+		if (pass && inner == "open") {
+			pass = panel->SetOpen(true);
+			observation = "open";
+		} else if (pass && inner == "close") {
+			pass = panel->SetOpen(false);
+			observation = "close";
+		} else if (pass && inner == "activate") {
+			std::string control;
+			iss >> control;
+			pass = panel->AutomationPostCommand(control);
+			observation = control;
+		} else if (pass && inner == "assert_label") {
+			std::string control, sub, text;
+			iss >> control;
+			std::getline(iss, sub);
+			if (!sub.empty() && sub[0] == ' ') { sub.erase(0, 1); }
+			pass = panel->AutomationLabelText(control, text) && text.find(sub) != std::string::npos;
+			observation = control + " \"" + sub + "\" text=\"" + text + "\"";
+		} else if (pass) {
+			pass = MenuAutomation::Handles(inner) &&
+			       MenuAutomation::Execute(panel->AutomationManager(), "NetSeats", inner, iss, observation);
+		}
+		std::cout << "[menu-script] net_panel " << inner << " " << observation << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		if (!pass) return MenuScriptFail("net_panel " + inner + " " + observation);
 	} else if (cmd == "wait") {
 		iss >> waitFrames;
 	} else if (cmd == "wait_ms") {
