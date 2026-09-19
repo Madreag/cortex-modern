@@ -2,8 +2,8 @@
 
 WRITE-ONLY until the completion pass: this file is not executed by the lane.
 GREEN is freeze_us < 16700 at a 240-actor scene, hash identity with capture on/off,
-an image that ignores writes during worker traversal, and a restore that matches a
-synchronous capture of the same tick.
+an image that ignores writes during worker traversal, and a capture that matches the
+synchronous save of the same tick.
 """
 
 from __future__ import annotations
@@ -21,6 +21,8 @@ from run_sim_test import make_run
 FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
 LIMIT_US = 16700
 RED_STALL_MS = 870
+# The all-dirty arm bounds the worst case: it may miss one tick, never the base stall.
+DIRTY_BOUND_US = RED_STALL_MS * 1000
 ACTORS = 240
 TICKS = 180
 FREEZE = re.compile(
@@ -29,9 +31,17 @@ FREEZE = re.compile(
     re.MULTILINE,
 )
 SELFTEST_ROW = re.compile(r"^\[cow-checkpoint-selftest\] (PASS|FAIL) (.+)$", re.MULTILINE)
+FREEZE_ROW = re.compile(
+    r"^\[cow-checkpoint-selftest\] (PASS|FAIL) freeze_240_actors_under_one_tick freeze_us=(\d+) saved=(\d+)",
+    re.MULTILINE,
+)
+# Rows the standalone flag can run without a scene.
 REQUIRED_ROWS = (
     "generational_shadow_keeps_the_freeze_value",
     "peek_reuses_the_shadow_when_the_stamp_matches",
+)
+# Rows that need the live 240-actor scene, printed by the autosave run.
+REQUIRED_SCENE_ROWS = (
     "image_ignores_writes_during_worker_traversal",
     "restore_round_trip_matches_synchronous_capture",
 )
@@ -106,19 +116,19 @@ end
 """
 
 
-def freeze_failures(rows: list[dict], *, skip_first: bool = False) -> list[str]:
+def freeze_failures(rows: list[dict], *, skip_first: bool = False, limit: int = LIMIT_US) -> list[str]:
     measured = rows[1:] if skip_first and len(rows) > 1 else rows
     failures = []
     for row in measured:
         if row["freeze_us"] == 0:
             failures.append(
                 f"{row['source']}:{row['line']}: {row['raw']} "
-                f"(actual freeze_us=0 required freeze_us>0 and < {LIMIT_US})"
+                f"(actual freeze_us=0 required freeze_us>0 and < {limit})"
             )
-        elif row["freeze_us"] >= LIMIT_US:
+        elif row["freeze_us"] >= limit:
             failures.append(
                 f"{row['source']}:{row['line']}: {row['raw']} "
-                f"(actual freeze_us={row['freeze_us']} required < {LIMIT_US} us / one sim tick; "
+                f"(actual freeze_us={row['freeze_us']} required < {limit} us; "
                 f"RED today is the ~{RED_STALL_MS} ms sim-thread stall of Scene::CaptureSavedScene plus Lua graph capture)"
             )
     return failures
@@ -144,29 +154,47 @@ def parse_freeze_log(text: str, source: str) -> list[dict]:
     return rows
 
 
-def score_selftest_stdout(stdout: str, exit_code: int) -> dict:
-    scored = score_selftest(stdout, exit_code, False, "cow-checkpoint-selftest")
+def named_rows(stdout: str) -> dict:
     rows = {}
     for status, name in SELFTEST_ROW.findall(stdout):
-        key = name.split()[0]
-        rows[key] = status
+        rows[name.split()[0]] = status
+    return rows
+
+
+def score_selftest_stdout(stdout: str, exit_code: int) -> dict:
+    scored = score_selftest(stdout, exit_code, False, "cow-checkpoint-selftest")
+    rows = named_rows(stdout)
     missing = [name for name in REQUIRED_ROWS if rows.get(name) != "PASS"]
-    for match in re.finditer(
-        r"\[cow-checkpoint-selftest\] (PASS|FAIL) freeze_240_actors_under_one_tick freeze_us=(\d+)",
-        stdout,
-    ):
-        if match[1] == "FAIL" or int(match[2]) == 0 or int(match[2]) >= LIMIT_US:
-            missing.append(
-                f"freeze_240_actors_under_one_tick freeze_us={match[2]} "
-                f"(actual={match[2]} required < {LIMIT_US}; RED today is the ~{RED_STALL_MS} ms "
-                "sim-thread stall of Scene::CaptureSavedScene plus Lua graph capture)"
-            )
     scored["rows"] = rows
     scored["missing"] = missing
     scored["pass"] = bool(scored["pass"] and not missing)
     if missing and not scored["reason"]:
-        scored["reason"] = "; ".join(missing)
+        scored["reason"] = "; ".join(f"actual {name}={rows.get(name, 'absent')} required PASS" for name in missing)
     return scored
+
+
+def score_scene_rows(stdout: str, source: str) -> dict:
+    """The live-scene rows and the timed freeze row are printed by the autosave run."""
+    rows = named_rows(stdout)
+    failures = [
+        f"{source}: actual {name}={rows.get(name, 'absent')} required PASS"
+        for name in REQUIRED_SCENE_ROWS
+        if rows.get(name) != "PASS"
+    ]
+    timed = FREEZE_ROW.findall(stdout)
+    if not timed:
+        failures.append(f"{source}: actual freeze_240_actors_under_one_tick absent required one timed row per capture")
+    for status, freeze_us, saved in timed:
+        if saved == "0" or int(freeze_us) == 0:
+            failures.append(
+                f"{source}: actual freeze_us={freeze_us} saved={saved} required a saved capture with freeze_us>0"
+            )
+        elif status == "FAIL" or int(freeze_us) >= LIMIT_US:
+            failures.append(
+                f"{source}: actual freeze_us={freeze_us} required < {LIMIT_US} us / one sim tick; "
+                f"RED today is the ~{RED_STALL_MS} ms sim-thread stall of Scene::CaptureSavedScene plus Lua graph capture"
+            )
+    return {"pass": not failures, "failures": failures, "rows": rows, "timed": timed}
 
 
 def score_metrics_json(path: Path) -> dict:
@@ -189,10 +217,13 @@ def score_metrics_json(path: Path) -> dict:
     return {"pass": not failures, "failures": failures, "metrics": data}
 
 
-def score_hash_identity(off_trace: Path, on_trace: Path, ticks: int) -> dict:
-    left = json.loads(off_trace.read_text(encoding="utf-8-sig"))["runs"][0]["tick_hashes"]
-    right = json.loads(on_trace.read_text(encoding="utf-8-sig"))["runs"][0]["tick_hashes"]
+def score_hash_identity(off_trace: Path, on_trace: Path, ticks: int, on_stdout: str = "") -> dict:
+    left = json.loads(off_trace.read_text(encoding="utf-8-sig"))["runs"][0].get("tick_hashes", [])
+    right = json.loads(on_trace.read_text(encoding="utf-8-sig"))["runs"][0].get("tick_hashes", [])
     failures = []
+    saved = parse_freeze_log(on_stdout, "hash-on")
+    if not saved:
+        failures.append("actual no [autosave] freeze row in the capture-on run required at least one published capture")
     if not (len(left) == len(right) == ticks):
         failures.append(
             f"actual off={len(left)} on={len(right)} required={ticks} tick hashes"
@@ -287,17 +318,11 @@ def main() -> int:
         repo, root / "cow-checkpoint-selftest",
         ["-cow-checkpoint-selftest"],
         args.timeout,
-        env={"CCCP_CHECKPOINT_ROUNDTRIP": str(roundtrip)},
     )
     scored = score_selftest_stdout(selftest["stdout"], selftest["record"].get("exit_code", 1))
     result["selftest"] = scored
     if not scored["pass"]:
         failures.append(f"selftest: {scored.get('reason')}")
-
-    archive = score_archive_round_trip(roundtrip / "sync.ccsave", roundtrip / "image.ccsave")
-    result["archive"] = archive
-    if not archive["pass"]:
-        failures.extend(f"archive: {item}" for item in archive["failures"])
 
     def run_scene(name: str, scenario: str, dirty: bool, extras: list[str], env: dict | None = None) -> dict:
         return launch(
@@ -308,10 +333,24 @@ def main() -> int:
             prepare=lambda cwd: install_fixture(cwd, dirty_all=dirty),
         )
 
-    skip = run_scene("skip", "Autosave Capture 240", False, ["-cow-checkpoint-autosave", "-tick-hashes", "-out", str(root / "skip_trace.json")])
+    skip = run_scene(
+        "skip", "Autosave Capture 240", False,
+        ["-cow-checkpoint-autosave", "-tick-hashes", "-out", str(root / "skip_trace.json")],
+        env={"CCCP_CHECKPOINT_ROUNDTRIP": str(roundtrip)},
+    )
     dirty = run_scene("dirty", "Autosave Capture 240 Dirty", True, ["-cow-checkpoint-autosave"])
     off = run_scene("hash-off", "Autosave Capture 240", False, ["-tick-hashes", "-out", str(root / "hash_off.json")])
     on = run_scene("hash-on", "Autosave Capture 240", False, ["-cow-checkpoint-autosave", "-tick-hashes", "-out", str(root / "hash_on.json")])
+
+    scene_rows = score_scene_rows(skip["stdout"], "skip")
+    result["scene_rows"] = scene_rows
+    if not scene_rows["pass"]:
+        failures.extend(scene_rows["failures"])
+
+    archive = score_archive_round_trip(roundtrip / "sync.ccsave", roundtrip / "image.ccsave")
+    result["archive"] = archive
+    if not archive["pass"]:
+        failures.extend(f"archive: {item}" for item in archive["failures"])
 
     skip_rows = parse_freeze_log(skip["stdout"], "skip")
     dirty_rows = parse_freeze_log(dirty["stdout"], "dirty")
@@ -319,9 +358,15 @@ def main() -> int:
         "first fill missing (required a SaveAutosaveSnapshot freeze on the 240-actor scene)"
     ]
     skip_fail = freeze_failures(skip_rows, skip_first=False)
-    dirty_fail = freeze_failures(dirty_rows, skip_first=False)
+    dirty_fail = freeze_failures(dirty_rows, skip_first=False, limit=DIRTY_BOUND_US)
+    if not dirty_rows:
+        dirty_fail.append("dirty arm published no freeze row (required one per capture)")
     result["freeze_skip"] = skip_rows
     result["freeze_dirty"] = dirty_rows
+    result["dirty_bound_us"] = {
+        "limit": DIRTY_BOUND_US,
+        "max": max((row["freeze_us"] for row in dirty_rows), default=0),
+    }
     result["first_fill"] = first_fill
     if first_fill:
         failures.extend(f"first_fill: {item}" for item in first_fill)
@@ -335,7 +380,7 @@ def main() -> int:
     if not metrics["pass"]:
         failures.extend(f"metrics: {item}" for item in metrics["failures"])
 
-    hashes = score_hash_identity(root / "hash_off.json", root / "hash_on.json", TICKS)
+    hashes = score_hash_identity(root / "hash_off.json", root / "hash_on.json", TICKS, on["stdout"])
     result["hashes"] = hashes
     if not hashes["pass"]:
         failures.extend(f"hashes: {item}" for item in hashes["failures"])
@@ -343,9 +388,9 @@ def main() -> int:
     (root / "result.json").write_text(json.dumps({"result": result, "failures": failures}, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"failures": failures, "selftest": scored}, indent=2))
     if failures:
-        print("FAIL cow-checkpoint: " + "; ".join(failures[:8]))
+        print("FAIL checkpoint-image: " + "; ".join(failures[:8]))
         return 1
-    print("PASS cow-checkpoint")
+    print("PASS checkpoint-image")
     return 0
 
 
