@@ -555,6 +555,7 @@ static std::string ResyncSaveName() {
 			m_AutosaveMatchId.clear();
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
+			m_FinalCheckpointWritten = false;
 			m_WorkerDone = false;
 			m_IsHost = request.host;
 			m_CurrentMatchSummary = {};
@@ -1373,6 +1374,8 @@ static std::string ResyncSaveName() {
 		if (m_Worker.joinable()) {
 			m_Worker.join();
 		}
+		// A clean stop of a world leaves the tick it stopped on, before anything is torn down.
+		WriteFinalWorldCheckpoint();
 		RunCleanLeave();
 		// The round is over here too: an admission file with no checkpoint left behind it goes now.
 		SweepRestartAdmission();
@@ -3163,6 +3166,24 @@ static std::string ResyncSaveName() {
 		m_PublishedAdmissionMatchId = matchId;
 		m_RestartAdmissionGeneration = generation;
 		m_RestartAdmissionDue.store(false);
+	}
+
+	void NetMatchService::WriteFinalWorldCheckpoint() {
+		if (m_FinalCheckpointWritten || !m_IsHost || !m_WorldJoin.IsConfigured() || m_AutosaveMatchId.empty()) return;
+		if (m_MatchAutosaveSeconds == 0 || !m_Coordinator || !m_Coordinator->IsRunning()) return;
+		if (!ScenarioRunner::IsLockstepControllerSyncActive() || !g_ActivityMan.ActivityRunning()) return;
+		const uint64_t tick = m_Coordinator->GetStats().nextFrame > 0 ? m_Coordinator->GetStats().nextFrame - 1 : 0;
+		if (tick == 0) return;
+		m_FinalCheckpointWritten = true;
+		if (!SaveStampedAutosave(tick)) {
+			std::cout << "[net-world] final checkpoint refused at tick=" << tick << std::endl;
+			return;
+		}
+		// The manifest is published by the writer, so the process may not leave before it lands.
+		g_ActivityMan.WaitForAutosaveTasks();
+		m_RestartAdmissionDue.store(true);
+		PublishRestartAdmission();
+		std::cout << "[net-world] final checkpoint match=" << m_AutosaveMatchId << " tick=" << tick << std::endl;
 	}
 
 	void NetMatchService::SweepRestartAdmission() {

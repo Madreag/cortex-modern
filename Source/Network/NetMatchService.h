@@ -700,6 +700,10 @@ namespace RTE {
 		/// Removes the admission file of a match this process is no longer checkpointing once no
 		/// checkpoint of it is left. Game thread, once per ended round.
 		void SweepRestartAdmission();
+		/// A world host that stops cleanly leaves the committed tick it stopped on, with its manifest
+		/// and admission file, so a restart loses nothing. Synchronous: the sim has stopped by here and
+		/// the writer is waited on before the process leaves the world. Once per teardown.
+		void WriteFinalWorldCheckpoint();
 		/// Host: the resume the request asked for - the manifest's config, the sealed admission and the
 		/// checkpoint to open on. Fills the request's roster and arms the resume, or says why it cannot.
 		bool PrepareResume(NetMatchServiceRequest& request, std::string* error);
@@ -888,6 +892,7 @@ namespace RTE {
 		bool m_ReturnWatchConfigured = false;
 		uint64_t m_RestartAdmissionGeneration = 0;
 		std::atomic<bool> m_RestartAdmissionDue{false};
+		bool m_FinalCheckpointWritten = false; //!< One final world checkpoint per teardown, never two.
 		bool m_ResyncRetainsLocalState = false;
 		uint64_t m_ResyncSourceRound = 0;
 		//!< The last host snapshot's tick label and the completed tick it was taken at; a gate asserts they match.
