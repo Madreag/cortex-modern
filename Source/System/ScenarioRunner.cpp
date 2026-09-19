@@ -140,6 +140,7 @@ namespace RTE {
 		NetMatchReplayWriter s_ReplayWriter;
 		NetMatchReplayReader s_ReplayReader;
 		std::string s_ReplayRecordArmedPath;
+		bool s_ReplayRecordArmedForRound = false;
 		int s_ReplayRecordRound = 0;
 		uint64_t s_ReplayRewindFrom = 0; //!< Fidelity gate: keep copies of records in [from, from+count).
 		uint64_t s_ReplayRewindCount = 0;
@@ -2158,7 +2159,13 @@ namespace RTE {
 
 	void ScenarioRunner::ArmLockstepReplayRecord(const std::string& path) {
 		s_ReplayRecordArmedPath = path;
+		s_ReplayRecordArmedForRound = false;
 		s_ReplayRecordRound = 0;
+	}
+
+	void ScenarioRunner::ArmLockstepReplayRecordForRound(const std::string& path) {
+		ArmLockstepReplayRecord(path);
+		s_ReplayRecordArmedForRound = true;
 	}
 
 	bool ScenarioRunner::IsLockstepReplayRecordArmed() {
@@ -2200,6 +2207,10 @@ namespace RTE {
 		}
 		s_ReplayWriter.Close();
 		s_WorldSegment = {};
+		if (s_ReplayRecordArmedForRound) {
+			s_ReplayRecordArmedPath.clear();
+			s_ReplayRecordArmedForRound = false;
+		}
 	}
 
 	bool ScenarioRunner::CopyLockstepReplayForDiagnostics(std::string& bytes, bool& truncated) {
