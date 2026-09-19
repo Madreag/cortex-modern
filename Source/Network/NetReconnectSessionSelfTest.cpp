@@ -569,8 +569,6 @@ namespace RTE {
 			return 0;
 		}
 
-		// P19: the canary carve-out is exactly one resolved path, and its presence is asserted whenever a
-		// ticket was issued - otherwise the exclusion could silently disarm the whole scan.
 		int TestWorldTicketContextAdoptedAfterAdmission() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -614,6 +612,7 @@ namespace RTE {
 			return 0;
 		}
 
+		// Every issued ticket has one asserted artifact path outside the canary scan.
 		int TestTicketArtifactCanary() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);

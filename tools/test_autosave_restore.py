@@ -542,8 +542,8 @@ def _compare_world_round(root: Path, world_id: str, resumed_tick: int, last_tick
 
 
 def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
-    """A persistent world host is KILLED and started again on the same install: same UUID, same
-    directory row, the seats the checkpoint held, and the client's ticket still admits it.
+    """A persistent world host is KILLED and restarted on the same install with the same UUID,
+    the seats the checkpoint held, and the client's stored ticket.
 
     The restart names no match: a world boot resumes its own newest checkpoint by default. The second
     half runs the same restart with -net-world-fresh and requires a NEW round from the scene instead.
