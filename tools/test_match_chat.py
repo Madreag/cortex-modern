@@ -34,6 +34,40 @@ TICKS = 900
 # 49180-49199, the autosave restore 48720-48739.
 PORT_BASE = 48700
 
+# The layout the band is held to, as NetModerationGUI lays it out. The fonts are the two skin fonts
+# (Base.rte/GUIs/Skins/FontSmall.png is 10 rows tall, FontLarge.png 15), and a row is floored at 12
+# rows however short the font is.
+SMALL_FONT_HEIGHT, LARGE_FONT_HEIGHT = 10, 15
+LINE_HEIGHT = {"small": max(12, SMALL_FONT_HEIGHT) + 4, "large": max(12, LARGE_FONT_HEIGHT) + 4}
+PANEL_GAP, PANEL_HEIGHT, COMPACT_MAX_HEIGHT = 4, 344, 480
+STRIP_BAND_BOTTOM, STATUS_BOX_TOP, STATUS_BOX_HEIGHT = 20, 32, 76
+PANEL_ROW_HEIGHT = max(12, SMALL_FONT_HEIGHT) + 8
+# The seat message these steps put on screen: the non-centered band the large font lays out at y=12.
+MESSAGE_TOP, MESSAGE_HEIGHT = 12, LARGE_FONT_HEIGHT
+
+
+def chat_top_limit(height):
+    """The first row the band may use: under the seat's message where the message is in the top half."""
+    return MESSAGE_TOP + MESSAGE_HEIGHT + 4 if MESSAGE_TOP + MESSAGE_HEIGHT <= height // 2 else 4
+
+
+def panel_top(height, line_height):
+    """Where the open seats panel sits, including the run it reserves for an open chat entry."""
+    band = (STRIP_BAND_BOTTOM if height < COMPACT_MAX_HEIGHT else STATUS_BOX_TOP + STATUS_BOX_HEIGHT) + PANEL_GAP
+    lowest = max(0, height - PANEL_HEIGHT - PANEL_GAP)
+    centred = min(max((height - PANEL_HEIGHT) // 2, min(band, lowest)), lowest)
+    if height >= COMPACT_MAX_HEIGHT:
+        return centred
+    # A compact screen keeps the strip band with its toast row above the panel, and an open entry's
+    # history row with its tight entry above that, so the panel takes the rows under the lower run.
+    return max(centred, STRIP_BAND_BOTTOM + PANEL_ROW_HEIGHT + PANEL_GAP,
+               chat_top_limit(height) + line_height + (line_height + 4) + PANEL_GAP)
+
+
+def chat_available(height, line_height):
+    """The run the band owns: under the seat's message and above the open seats panel."""
+    return panel_top(height, line_height) - PANEL_GAP - chat_top_limit(height)
+
 
 def occupier_steps():
     """The occupiers the band must clear: the seats panel and the seat's own message band."""
@@ -47,18 +81,17 @@ def occupier_steps():
 
 
 def history_row_fits(height, text_size):
-    """One history row rides above the entry at every supported size, the shortest included.
+    """Whether the run the band owns holds one history row above the tight entry at that size.
 
-    With the seats panel open the band lives above it: available = PanelTop(h) - 8, and at 640x360
-    PanelTop is F + 32, so available is F + 24 = 36 for the small font's F = 12. A row is lineH = F + 4
-    and the entry takes F + 10 where the band still holds a row above it and F + 8 where those two
-    pixels are what buys the row, so 640x360 seats 16 + 20 in its 36 exactly and the taller sizes keep
-    the roomy entry with rows to spare.
+    The arithmetic is the band's own: a row is lineH = max(12, font height) + 4 and the tight entry
+    is lineH + 4, so the run has to reach 2 * lineH + 4 - 36 for the small font, 42 for the large.
+    The run is chat_available(): under the seat's message band, which is 12 + 15 + 4 = 31 here, and
+    above the seats panel, whose top reserves that same minimum on a compact screen.
     """
     if height not in SUPPORTED_HEIGHTS:
         raise ValueError(f"{height} is not a supported screen height")
-    _ = text_size
-    return True
+    line_height = LINE_HEIGHT[text_size]
+    return chat_available(height, line_height) >= line_height + (line_height + 4)
 
 
 def open_entry_steps(size, text_size):
