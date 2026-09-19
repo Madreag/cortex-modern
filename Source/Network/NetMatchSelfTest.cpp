@@ -117,7 +117,7 @@ namespace RTE {
 			if (!reader.Open(path.string(), error)) return false;
 			NetLockstepFrame decoded;
 			bool eof = false;
-			if (reader.GetVersion() != 5 || reader.GetStartFrame() != 43 ||
+			if (reader.GetVersion() != 6 || reader.HasWorldSegment() || reader.GetStartFrame() != 43 ||
 			    !reader.ReadFrame(decoded, eof, error) || decoded != first ||
 			    !reader.ReadFrame(decoded, eof, error) || decoded != second ||
 			    reader.ReadFrame(decoded, eof, error) || !eof) {
@@ -139,7 +139,10 @@ namespace RTE {
 			auto write32 = [](std::vector<uint8_t>& bytes, size_t offset, uint32_t value) {
 				for (size_t i = 0; i < 4; ++i) bytes.at(offset + i) = static_cast<uint8_t>(value >> (8 * i));
 			};
-			const size_t recordOffset = 12 + read32(original, 8);
+			// The version-6 config is followed by one segment flag byte, so the records start past it.
+			const size_t configOffset = 12;
+			const size_t configLength = read32(original, 8);
+			const size_t recordOffset = configOffset + configLength + 1;
 			const size_t payloadOffset = recordOffset + 8;
 			const size_t payloadLength = read32(original, recordOffset);
 			const size_t wireLength = read32(original, payloadOffset);
@@ -149,11 +152,12 @@ namespace RTE {
 				output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 				return output.good();
 			};
-			auto checksum = [&](std::vector<uint8_t>& bytes) {
-				const size_t length = read32(bytes, recordOffset);
-				const std::vector<uint8_t> payload(bytes.begin() + payloadOffset, bytes.begin() + payloadOffset + length);
-				write32(bytes, recordOffset + 4, ControllerFrameCodec::PayloadChecksum(payload));
+			auto checksumAt = [&](std::vector<uint8_t>& bytes, size_t at) {
+				const size_t length = read32(bytes, at);
+				const std::vector<uint8_t> payload(bytes.begin() + at + 8, bytes.begin() + at + 8 + length);
+				write32(bytes, at + 4, ControllerFrameCodec::PayloadChecksum(payload));
 			};
+			auto checksum = [&](std::vector<uint8_t>& bytes) { checksumAt(bytes, recordOffset); };
 			auto rejects = [&](const std::vector<uint8_t>& bytes, const char* expectedError) {
 				if (!writeFile(bytes) || NetMatchReplayReader::Verify(path.string(), report) || report.error.find(expectedError) == std::string::npos) {
 					*error = "replay corruption check missed " + std::string(expectedError) + ": " + report.error;
@@ -173,9 +177,10 @@ namespace RTE {
 				*error = "network decode accepted a recorded v3 config envelope";
 				return false;
 			}
-			std::vector<uint8_t> historicalReplay(original.begin(), original.begin() + 12);
+			std::vector<uint8_t> historicalReplay(original.begin(), original.begin() + configOffset);
 			write32(historicalReplay, 8, static_cast<uint32_t>(historicalWire.size()));
 			historicalReplay.insert(historicalReplay.end(), historicalWire.begin(), historicalWire.end());
+			historicalReplay.push_back(0);
 			historicalReplay.insert(historicalReplay.end(), original.begin() + recordOffset, original.end());
 			if (!writeFile(historicalReplay) || !reader.Open(path.string(), error) || reader.GetConfig() != historical ||
 			    !reader.ReadFrame(decoded, eof, error) || decoded != first) {
@@ -185,7 +190,7 @@ namespace RTE {
 			reader.Close();
 			auto bytes = original;
 			bytes[16] = 2;
-			const std::vector<uint8_t> legacyConfig(bytes.begin() + 12, bytes.begin() + recordOffset);
+			const std::vector<uint8_t> legacyConfig(bytes.begin() + configOffset, bytes.begin() + configOffset + configLength);
 			if (NetLobbyProtocol::Decode(legacyConfig).ok || !writeFile(bytes) || !reader.Open(path.string(), error) ||
 			    reader.GetConfig() != MakeConfig() || !reader.ReadFrame(decoded, eof, error) || decoded != first) {
 				*error = "legacy recorded config failed or was accepted on the live wire";
@@ -213,13 +218,15 @@ namespace RTE {
 			checksum(bytes);
 			if (!rejects(bytes, "wire frame length")) return false;
 
-			// Version 4 has one authenticated sender for the entire record.
-			bytes.assign(original.begin(), original.begin() + payloadOffset);
+			// Version 4 has one authenticated sender for the entire record and no segment flag.
+			const size_t legacyRecordOffset = recordOffset - 1;
+			bytes.assign(original.begin(), original.begin() + configOffset + configLength);
 			bytes[4] = 4;
+			bytes.insert(bytes.end(), original.begin() + recordOffset, original.begin() + payloadOffset);
 			bytes.insert(bytes.end(), original.begin() + payloadOffset + 4, original.begin() + senderOffset);
 			bytes.insert(bytes.end(), 4, 0xFF);
-			write32(bytes, recordOffset, static_cast<uint32_t>(wireLength));
-			checksum(bytes);
+			write32(bytes, legacyRecordOffset, static_cast<uint32_t>(wireLength));
+			checksumAt(bytes, legacyRecordOffset);
 			if (!writeFile(bytes) || !reader.Open(path.string(), error) || !reader.ReadFrame(decoded, eof, error)) return false;
 			first.commands[1].senderPeerId = 1;
 			if (reader.GetVersion() != 4 || decoded != first || reader.ReadFrame(decoded, eof, error) || !eof) {

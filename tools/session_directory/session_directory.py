@@ -342,7 +342,7 @@ class Session:
 
     def as_list_row(self, now: float) -> dict[str, Any]:
         row = {key: self.fields[key] for key in LIST_ROW_FIELDS}
-        for key in ("persistent_world", "world_id", "world_boot", "spectator_free"):
+        for key in ("persistent_world", "world_id", "world_boot", "spectator_free", "spectator_max"):
             if key in self.fields:
                 row[key] = self.fields[key]
         row["session_id"] = self.session_id
@@ -445,6 +445,8 @@ class SessionDirectory:
                 fields["world_boot"] = require_int(data, "world_boot", 1, 10**9)
             if "spectator_free" in data:
                 fields["spectator_free"] = require_int(data, "spectator_free", 0, 10**9)
+            if "spectator_max" in data:
+                fields["spectator_max"] = require_int(data, "spectator_max", 0, 10**9)
             resume = data.get("resume_session_id")
             if resume is not None:
                 session_id = require_str(data, "resume_session_id")

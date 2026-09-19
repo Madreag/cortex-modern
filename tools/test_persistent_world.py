@@ -6,9 +6,14 @@ cannot stand in for another case.
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import sys
 from pathlib import Path
+
+# Ports: this driver owns 48860-48879; only the world-segment arm binds one (a two-peer world round).
+SEGMENT_PORT = 48860
 
 # Exact messages the completion pass will print when the wave-tip admission
 # still refuses a live world, or a clean leave still ends one.
@@ -131,6 +136,35 @@ RED_WORLD_STOP_UNOWED = "world-clean-stop-wrote-a-checkpoint-it-should-not"
 RED_WORLD_WATCH_WRONG_SESSION = "world-watch-browsed-the-wrong-session"
 RED_WORLD_WATCH_MISSED = "world-watch-missed-the-returned-world"
 RED_WORLD_TICKET_LOBBY_SESSION = "world-ticket-kept-the-lobby-session"
+
+RED_SEGMENT_HEADER_LOST = "world-segment-header-lost"
+RED_SEGMENT_ROLL_MISSED = "world-segment-roll-missed"
+RED_SEGMENT_OUTLIVED = "world-segment-outlived-its-checkpoint"
+RED_SEGMENT_DROPPED_EARLY = "world-segment-dropped-with-a-kept-checkpoint"
+RED_SEGMENT_PLAYBACK_MISSING = "world-segment-playback-admitted-a-missing-checkpoint"
+RED_SEGMENT_PLAYBACK_DIGEST = "world-segment-playback-admitted-another-world"
+RED_SEGMENT_PLAYBACK_START = "world-segment-playback-started-off-the-checkpoint"
+RED_SEGMENT_PLAYBACK_REFUSED = "world-segment-playback-refused-its-own-checkpoint"
+RED_SEGMENT_PLAYBACK_TICK = "world-segment-playback-stood-on-the-wrong-tick"
+RED_SEGMENT_PLAYBACK_SIDE_STATE = "world-segment-playback-lost-the-side-state"
+RED_SEGMENT_PLAYBACK_MANIFEST = "world-segment-playback-admitted-a-manifestless-checkpoint"
+RED_HEAL_WINDOW_CHANGED = "heal-window-changed"
+RED_HEAL_WINDOW_FIRST_THREE = "heal-window-refused-the-first-three"
+RED_HEAL_WINDOW_FOURTH = "heal-window-admitted-a-fourth"
+RED_HEAL_WINDOW_OUTSIDE = "heal-window-refused-a-heal-outside-it"
+RED_HEAL_WINDOW_RESUMED = "heal-window-survived-a-resumed-round"
+RED_BROWSER_WORLD_ROW = "browser-world-row-text-changed"
+RED_BROWSER_ORDINARY_ROW = "browser-ordinary-row-text-changed"
+RED_BROWSER_ROW_MISSING = "browser-world-row-missing"
+
+# The world-segment arm's own REDs: what the driver scores when a real world's segments are read back.
+RED_SEGMENT_NOT_WRITTEN = "world-wrote-no-segment"
+RED_SEGMENT_LOST_ITS_CHECKPOINT = "world-segment-lost-its-checkpoint"
+RED_SEGMENT_HEADER_MISSING = "world-segment-verify-reported-no-header"
+RED_SEGMENT_DIGEST = "world-segment-digest-differs-from-its-archive"
+RED_SEGMENT_BOOTED_THE_PRESET = "world-segment-playback-booted-the-preset"
+RED_SEGMENT_CHAIN_BROKE = "world-segment-chain-broke"
+RED_SEGMENT_HASHES_DIVERGED = "world-segment-playback-hashes-diverged"
 
 CASES = (
     {
@@ -510,6 +544,74 @@ CASES = (
         ),
         "pass_token": "[net-world-return-watch-selftest] PASS",
     },
+    {
+        "name": "world-segment-header-round-trips",
+        "argv": ["-net-world-segment-selftest"],
+        "red": RED_SEGMENT_HEADER_LOST,
+        "pass_token": "[net-world-segment-selftest] PASS",
+    },
+    {
+        "name": "world-recorder-rolls-at-every-checkpoint",
+        "argv": ["-net-world-segment-roll-selftest"],
+        "red": RED_SEGMENT_ROLL_MISSED,
+        "also_red": (
+            RED_SEGMENT_OUTLIVED,
+            RED_SEGMENT_DROPPED_EARLY,
+        ),
+        "pass_token": "[net-world-segment-roll-selftest] PASS",
+    },
+    {
+        "name": "world-segment-playback-stands-on-the-checkpoint",
+        "argv": ["-net-world-segment-playback-selftest"],
+        "red": RED_SEGMENT_PLAYBACK_MISSING,
+        "also_red": (
+            RED_SEGMENT_PLAYBACK_DIGEST,
+            RED_SEGMENT_PLAYBACK_START,
+            RED_SEGMENT_PLAYBACK_REFUSED,
+            RED_SEGMENT_PLAYBACK_TICK,
+            RED_SEGMENT_PLAYBACK_SIDE_STATE,
+            RED_SEGMENT_PLAYBACK_MANIFEST,
+        ),
+        "pass_token": "[net-world-segment-playback-selftest] PASS",
+    },
+    {
+        "name": "heal-cap-is-a-window",
+        "argv": ["-net-world-heal-window-selftest"],
+        "red": RED_HEAL_WINDOW_FOURTH,
+        "also_red": (
+            RED_HEAL_WINDOW_CHANGED,
+            RED_HEAL_WINDOW_FIRST_THREE,
+            RED_HEAL_WINDOW_OUTSIDE,
+            RED_HEAL_WINDOW_RESUMED,
+        ),
+        "pass_token": "[net-world-heal-window-selftest] PASS",
+    },
+    {
+        "name": "browser-world-row-text",
+        "argv": ["-net-world-browser-row-selftest"],
+        "red": RED_BROWSER_WORLD_ROW,
+        "also_red": (
+            RED_BROWSER_ORDINARY_ROW,
+            RED_BROWSER_ROW_MISSING,
+        ),
+        "pass_token": "[net-world-browser-row-selftest] PASS",
+    },
+    {
+        "name": "world-segment-replay",
+        "kind": "world_segment",
+        "fn": "world_segment_replay",
+        "argv": [],
+        "red": RED_SEGMENT_NOT_WRITTEN,
+        "also_red": (
+            RED_SEGMENT_LOST_ITS_CHECKPOINT,
+            RED_SEGMENT_HEADER_MISSING,
+            RED_SEGMENT_DIGEST,
+            RED_SEGMENT_BOOTED_THE_PRESET,
+            RED_SEGMENT_CHAIN_BROKE,
+            RED_SEGMENT_HASHES_DIVERGED,
+        ),
+        "pass_token": "[world-segment-replay] PASS",
+    },
 )
 
 
@@ -579,6 +681,83 @@ def directory_resume_same_world_id() -> None:
         raise AssertionError("directory resume took a row without its token, the row now reads %r" % (listed,))
 
 
+def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT) -> None:
+    """A recording world cuts a segment at every checkpoint; each segment replays from that checkpoint.
+
+    Written, NOT run (the 2026-09-16 order). The arm runs one short world round with the recorder
+    armed, then verifies and plays the FIRST segment the world wrote: the verify line must report the
+    segment header, the playback must stand on that checkpoint instead of booting the preset, every
+    canonical tick hash must equal the recording host's from checkpoint+1, and the playback must chain
+    into the next segment at the tick the next checkpoint was captured on.
+
+    RED before the change: no `<worldId>-<tick>.ccreplay` is ever written (the recorder keeps one
+    file), `-net-replay-verify` prints no `"segment"` field, and `-net-replay` of a world recording
+    boots the preset at the recording's first tick instead of the checkpoint's world.
+    """
+    tools = Path(__file__).resolve().parent
+    sys.path.insert(0, str(tools))
+    import run_sim_test
+    import test_autosave_restore as restore
+
+    out = Path(out)
+    world = out / "world"
+    world.mkdir(parents=True, exist_ok=True)
+    (world / "host").mkdir(parents=True, exist_ok=True)
+    recording = world / "host" / "match.ccreplay"
+    records = restore._run_world_round(repo, world, port, 1200, {"host": ["-net-replay-out", str(recording)]})
+    for who in ("host", "client"):
+        assert records[who].get("exit_code") == 0, (who, records[who].get("exit_code"), records[who].get("error"))
+    host_log = restore.peer_log(world, "host")
+    identity = restore.WORLD_IDENTITY.findall(host_log)
+    assert identity, RED_SEGMENT_NOT_WRITTEN + ": the world host never printed its identity"
+    world_id = identity[0][0]
+
+    autosaves = world / "host" / "runtime/Autosaves"
+    segments = sorted(autosaves.glob(f"{world_id}-*.ccreplay"), key=lambda path: int(path.stem.split("-")[-1]))
+    assert len(segments) >= 2, f"{RED_SEGMENT_NOT_WRITTEN}: the world wrote {[p.name for p in segments]}"
+    first_tick = int(segments[0].stem.split("-")[-1])
+    second_tick = int(segments[1].stem.split("-")[-1])
+    held = restore.checkpoints(world, "host")
+    archive = held.get(f"{world_id}-{first_tick}.ccsave")
+    assert archive, f"{RED_SEGMENT_LOST_ITS_CHECKPOINT}: no archive stands under {segments[0].name}"
+
+    # The verify line reports the header the segment stands on, digest included.
+    verify_out = out / "verify.json"
+    verify = run_sim_test.make_run(repo, ["-net-replay-verify", str(segments[0]), "-out", str(verify_out)],
+                                   out / "verify", timeout=180, env={"CCCP_HEADLESS": "1"})
+    verify.start().finish()
+    verify_log = (out / "verify" / "stdout.log").read_text(encoding="utf-8", errors="replace")
+    line = next((text for text in verify_log.splitlines() if "[net-replay-verify]" in text), "")
+    assert line, f"{RED_SEGMENT_HEADER_MISSING}: -net-replay-verify printed nothing for {segments[0].name}"
+    report = json.loads(line.split("[net-replay-verify]", 1)[1].strip())
+    assert report.get("segment") is True, f"{RED_SEGMENT_HEADER_MISSING}: {report}"
+    assert report.get("world_id") == world_id, (report.get("world_id"), world_id)
+    assert report.get("segment_tick") == first_tick, (report.get("segment_tick"), first_tick)
+    assert report.get("world_digest") == archive["WorldStructureHash"], \
+        f"{RED_SEGMENT_DIGEST}: the header says {report.get('world_digest')}, the archive {archive['WorldStructureHash']}"
+    assert report.get("first_frame") == first_tick + 1, (report.get("first_frame"), first_tick)
+
+    # Playback stands on the checkpoint: the world's own Autosaves are what the replay run reads.
+    replay = out / "replay"
+    (replay / "runtime").mkdir(parents=True, exist_ok=True)
+    shutil.copytree(autosaves, replay / "runtime/Autosaves", dirs_exist_ok=True)
+    trace = replay / "replay_trace.json"
+    play = run_sim_test.make_run(repo, ["-net-replay", str(replay / "runtime/Autosaves" / segments[0].name),
+                                        "-tick-hashes", "-out", str(trace)],
+                                 replay, timeout=600, env={"CCCP_HEADLESS": "1"})
+    play.start().finish()
+    play_log = (replay / "stdout.log").read_text(encoding="utf-8", errors="replace")
+    assert f"[net-replay] segment stands on checkpoint tick={first_tick}" in play_log, \
+        f"{RED_SEGMENT_BOOTED_THE_PRESET}: {play_log[-2000:]}"
+    assert f"segment_tick={first_tick}" in play_log and "outcome=completed" in play_log, \
+        f"{RED_SEGMENT_BOOTED_THE_PRESET}: the playback did not finish on the checkpoint"
+    # The chain: the next segment is taken at the tick its checkpoint was captured on, no reload.
+    assert f"[net-replay] segment chained into" in play_log and f"at tick {second_tick}" in play_log, \
+        f"{RED_SEGMENT_CHAIN_BROKE}: {play_log[-2000:]}"
+    # Every canonical tick hash of the replayed world equals the recording host's, from checkpoint+1.
+    passed, compared = restore.strict_compare(world / "host_trace.json", trace, first_tick=first_tick + 1)
+    assert passed, f"{RED_SEGMENT_HASHES_DIVERGED}: {compared}"
+
 def _printed_world_id(text: str) -> str:
     for line in (text or "").splitlines():
         if "world-id=" in line:
@@ -611,6 +790,10 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "directory-resume":
         directory_resume_same_world_id()
         print("[directory-resume] PASS")
+    elif len(sys.argv) > 1 and sys.argv[1] == "world-segment":
+        world_segment_replay(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()))
+        print("[world-segment-replay] PASS")
+        # Every launch went through run_sim_test.make_run: nothing here starts the executable itself.
     elif len(sys.argv) > 1 and sys.argv[1] == "host-restart":
         host_restart_same_world_id(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()))
         print("[net-world-identity-print-selftest] PASS")

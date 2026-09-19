@@ -39,6 +39,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <set>
 #include <memory>
 #include <sstream>
@@ -154,6 +155,23 @@ namespace RTE {
 		bool s_ReplayEndMarkerSeen = false;
 		uint64_t s_ReplayRecordFrames = 0;
 		bool s_ReplayRecordClosed = false;
+		/// One committed tick held back while a world segment waits for its checkpoint's digest.
+		struct HeldReplayFrame {
+			uint64_t tick = 0;
+			std::vector<ControllerFrame> frames;
+			std::vector<NetGameCommand> commands;
+			std::vector<NetSoundObservation> observations;
+			std::vector<NetValueObservation> valueObservations;
+		};
+		struct PendingWorldSegment {
+			NetWorldSegmentHeader header;
+			std::string path;
+			NetMatchConfig config;
+			std::vector<HeldReplayFrame> frames;
+		};
+		std::optional<PendingWorldSegment> s_PendingWorldSegment;
+		NetWorldSegmentHeader s_WorldSegment; //!< The open segment's header; empty for an ordinary match.
+		NetMatchConfig s_ReplayRecordConfig;  //!< The config the recording opened with; every segment carries it.
 
 		// Reads the next record: the read-ahead first, then the file. A read-ahead failure is replayed
 		// here so the feed classifies it at the tick it belongs to.
@@ -178,6 +196,57 @@ namespace RTE {
 			outStatus = s_ReplayReader.GetLastReadStatus();
 			if (error) *error = readError;
 			return false;
+		}
+
+		enum class SegmentChain { None, Opened, Refused };
+
+		// A world's recording is a chain: the next segment stands on the checkpoint the sim has just
+		// reached, so playback continues into it without reloading the world. A segment that is simply
+		// not there is the end of the recording; one that is there but names another state is refused.
+		SegmentChain AdvanceToNextWorldSegment(uint64_t lastTick, std::string* error) {
+			if (!s_ReplayReader.HasWorldSegment() || lastTick == 0) return SegmentChain::None;
+			const NetWorldSegmentHeader current = s_ReplayReader.GetWorldSegment();
+			const std::filesystem::path path = AutosaveStore::SegmentPath(AutosaveStore::Directory(), current.worldId, lastTick);
+			std::error_code ignored;
+			if (!std::filesystem::is_regular_file(path, ignored)) return SegmentChain::None;
+			const std::string named = "segment chain refused at tick " + std::to_string(lastTick) + ": ";
+			NetMatchReplayReader next;
+			std::string openError;
+			if (!next.Open(path.string(), &openError)) {
+				if (error) *error = named + openError;
+				return SegmentChain::Refused;
+			}
+			if (!next.HasWorldSegment() || next.GetWorldSegment().worldId != current.worldId || next.GetWorldSegment().tick != lastTick) {
+				if (error) *error = named + path.string() + " does not stand on this world's checkpoint " + std::to_string(lastTick);
+				return SegmentChain::Refused;
+			}
+			if (next.GetStartFrame() != lastTick + 1) {
+				if (error) *error = named + "its first frame " + std::to_string(next.GetStartFrame()) + " is not " + std::to_string(lastTick + 1);
+				return SegmentChain::Refused;
+			}
+			if (next.GetConfig().sessionId != s_ReplayReader.GetConfig().sessionId) {
+				if (error) *error = named + "it belongs to another lockstep session";
+				return SegmentChain::Refused;
+			}
+			// The state the sim reached IS that checkpoint, so its archive must carry the digest the
+			// header names; a mismatch means these records do not continue this world.
+			std::string refusal;
+			const std::optional<AutosaveDescriptor> checkpoint = AutosaveStore::Find(AutosaveStore::Directory(), current.worldId, lastTick, &refusal);
+			if (!checkpoint) {
+				if (error) *error = named + "checkpoint " + std::to_string(lastTick) + " is not on this machine: " + refusal;
+				return SegmentChain::Refused;
+			}
+			if (checkpoint->worldStructureHash != next.GetWorldSegment().worldDigest) {
+				if (error) *error = named + "checkpoint " + std::to_string(lastTick) + " digest differs";
+				return SegmentChain::Refused;
+			}
+			s_ReplayLookahead.clear();
+			s_ReplayLookaheadFailed = false;
+			s_ReplayLookaheadEof = false;
+			s_ReplayLookaheadError.clear();
+			s_ReplayReader = std::move(next);
+			std::cout << "[net-replay] segment chained into " << path.string() << " at tick " << lastTick << std::endl;
+			return SegmentChain::Opened;
 		}
 		bool s_SimSettingsPinned = false;
 		bool s_SavedAutomaticGoldDeposit = true;
@@ -1461,7 +1530,22 @@ namespace RTE {
 			NetLockstepFrame record;
 			NetReplayReadStatus status = NetReplayReadStatus::None;
 			std::string readError;
-			if (!NextReplayRecord(record, status, &readError)) {
+			bool read = NextReplayRecord(record, status, &readError);
+			if (!read && status == NetReplayReadStatus::CleanEnd) {
+				std::string chainError;
+				switch (AdvanceToNextWorldSegment(s_ReplayLastTick, &chainError)) {
+					case SegmentChain::Opened:
+						read = NextReplayRecord(record, status, &readError);
+						break;
+					case SegmentChain::Refused:
+						s_ReplayOutcome = LockstepReplayOutcome::Corrupt;
+						if (error) *error = chainError;
+						return false;
+					case SegmentChain::None:
+						break;
+				}
+			}
+			if (!read) {
 				if (status == NetReplayReadStatus::CleanEnd) {
 					s_ReplayEndMarkerSeen = s_ReplayReader.GetVersion() >= 2;
 					s_ReplayOutcome = LockstepReplayOutcome::Completed;
@@ -2016,6 +2100,7 @@ namespace RTE {
 		if (!s_ReplayWriter.Open(path, config, error)) {
 			return false;
 		}
+		s_ReplayRecordConfig = config;
 		std::cout << "[net-match] recording the match to " << path << std::endl;
 		return true;
 	}
@@ -2035,10 +2120,70 @@ namespace RTE {
 			std::cout << "[net-match] replay recorded: " << s_ReplayRecordFrames << " frames" << std::endl;
 		}
 		s_ReplayWriter.Close();
+		s_WorldSegment = {};
 	}
 
 	bool ScenarioRunner::CopyLockstepReplayForDiagnostics(std::string& bytes, bool& truncated) {
 		return s_ReplayWriter.CopyDiagnosticReplay(bytes, truncated);
+	}
+
+	void ScenarioRunner::ArmLockstepWorldSegment(const NetWorldSegmentHeader& header, const std::string& path) {
+		// A checkpoint that arrives while the previous one's archive is still unwritten takes the chain
+		// over; the frames that waited are said to be lost rather than dropped in silence.
+		DropPendingLockstepWorldSegment("the next checkpoint at tick " + std::to_string(header.tick) + " arrived first");
+		// The previous segment ends here: it is closed with its end marker before the next one starts,
+		// so a reader tells a finished segment from a host that died mid-write.
+		CloseLockstepReplayRecord();
+		s_WorldSegment = {};
+		s_PendingWorldSegment = PendingWorldSegment{header, path, s_ReplayRecordConfig, {}};
+	}
+
+	bool ScenarioRunner::HasPendingLockstepWorldSegment() {
+		return s_PendingWorldSegment.has_value();
+	}
+
+	uint64_t ScenarioRunner::GetPendingLockstepWorldSegmentTick() {
+		return s_PendingWorldSegment ? s_PendingWorldSegment->header.tick : 0;
+	}
+
+	bool ScenarioRunner::SealLockstepWorldSegment(const std::string& worldDigest, std::string* error) {
+		if (!s_PendingWorldSegment) {
+			if (error) *error = "no world segment is waiting for its checkpoint";
+			return false;
+		}
+		PendingWorldSegment pending = std::move(*s_PendingWorldSegment);
+		s_PendingWorldSegment.reset();
+		pending.header.worldDigest = worldDigest;
+		if (!s_ReplayWriter.Open(pending.path, pending.config, &pending.header, error)) {
+			return false;
+		}
+		s_WorldSegment = pending.header;
+		s_ReplayRecordClosed = false;
+		for (const HeldReplayFrame& held: pending.frames) {
+			std::string writeError;
+			if (!s_ReplayWriter.WriteFrame(held.tick, held.frames, held.commands, held.observations, held.valueObservations, &writeError)) {
+				std::cout << "[net-world] segment recording stopped: " << writeError << std::endl;
+				s_ReplayWriter.Close();
+				s_WorldSegment = {};
+				if (error) *error = writeError;
+				return false;
+			}
+		}
+		std::cout << "[net-world] segment " << pending.path << " opened on checkpoint tick=" << pending.header.tick
+		          << " round=" << pending.header.round << " boot=" << pending.header.boot
+		          << " digest=" << pending.header.worldDigest << " held_frames=" << pending.frames.size() << std::endl;
+		return true;
+	}
+
+	void ScenarioRunner::DropPendingLockstepWorldSegment(const std::string& reason) {
+		if (!s_PendingWorldSegment) return;
+		std::cout << "[net-world] segment for checkpoint tick=" << s_PendingWorldSegment->header.tick
+		          << " dropped: " << reason << std::endl;
+		s_PendingWorldSegment.reset();
+	}
+
+	const NetWorldSegmentHeader& ScenarioRunner::GetLockstepWorldSegment() {
+		return s_WorldSegment;
 	}
 
 	uint64_t ScenarioRunner::GetLockstepReplayRecordFrames() {
@@ -2121,6 +2266,14 @@ namespace RTE {
 
 	uint64_t ScenarioRunner::GetLockstepReplayStartFrame() {
 		return s_ReplayReader.GetStartFrame();
+	}
+
+	bool ScenarioRunner::IsLockstepReplayWorldSegment() {
+		return s_ReplayReader.HasWorldSegment();
+	}
+
+	const NetWorldSegmentHeader& ScenarioRunner::GetLockstepReplayWorldSegment() {
+		return s_ReplayReader.GetWorldSegment();
 	}
 
 	namespace {
@@ -2231,7 +2384,7 @@ namespace RTE {
 					}
 					// The recorder captures every committed tick: all peers' frames and commands. The
 					// codec wants one UID-sorted set; command order re-sorts by sender at apply.
-					if (s_ReplayWriter.IsOpen()) {
+					if (s_ReplayWriter.IsOpen() || s_PendingWorldSegment) {
 						std::vector<ControllerFrame> allFrames = ready.localFrames;
 						allFrames.insert(allFrames.end(), ready.remoteFrames.begin(), ready.remoteFrames.end());
 						std::sort(allFrames.begin(), allFrames.end(), [](const ControllerFrame& lhs, const ControllerFrame& rhs) {
@@ -2243,10 +2396,20 @@ namespace RTE {
 						allObservations.insert(allObservations.end(), ready.remoteObservations.begin(), ready.remoteObservations.end());
 						std::vector<NetValueObservation> allValueObservations = ready.localValueObservations;
 						allValueObservations.insert(allValueObservations.end(), ready.remoteValueObservations.begin(), ready.remoteValueObservations.end());
-						std::string writeError;
-						if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, allObservations, allValueObservations, &writeError)) {
-							std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;
-							s_ReplayWriter.Close();
+						if (s_PendingWorldSegment) {
+							if (s_PendingWorldSegment->frames.size() >= c_MaxPendingSegmentFrames) {
+								DropPendingLockstepWorldSegment("the checkpoint's archive did not land within " +
+								                               std::to_string(c_MaxPendingSegmentFrames) + " committed ticks");
+							} else {
+								s_PendingWorldSegment->frames.push_back({tick, std::move(allFrames), std::move(allCommands),
+								                                        std::move(allObservations), std::move(allValueObservations)});
+							}
+						} else {
+							std::string writeError;
+							if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, allObservations, allValueObservations, &writeError)) {
+								std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;
+								s_ReplayWriter.Close();
+							}
 						}
 					}
 					outFrame = std::move(ready);

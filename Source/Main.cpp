@@ -381,7 +381,7 @@ static bool s_rbProbeRestoreMismatch = false;
 
 static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
-static int s_netMatchResyncs = 0;
+static NetMatchHealWindow s_netMatchHeals;
 static bool s_netMatchResyncOnDesync = false;
 static bool s_netMatchAutoDelay = false;
 static std::string s_netMatchServiceE2EError;
@@ -471,6 +471,7 @@ static const int s_fundsPreviewTeam = Activity::TeamOne; //!< The team -net-matc
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
+static uint64_t s_netReplaySegmentTick = 0; //!< The world checkpoint a played segment stands on; 0 for an ordinary recording.
 static bool s_netReplayFromMenu = false;
 static bool s_netReplayReturnPending = false;
 static std::string s_netReplayReturnStatus;
@@ -4332,12 +4333,13 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				returnToMenuAfterNetworkEnd = true;
 			}
 		} else if ((error.find("Desync") != std::string::npos || error.find("ResyncRequested") != std::string::npos) &&
-		           g_NetMatchService.IsResyncOnDesyncEnabled() && (s_netMatchResyncs < 3 || g_NetMatchService.IsHostMigrationRepairPending()) &&
+		           g_NetMatchService.IsResyncOnDesyncEnabled() &&
+		           (s_netMatchHeals.Allowed(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond()) || g_NetMatchService.IsHostMigrationRepairPending()) &&
 		           g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 			// A desync (or a host-requested resync, e.g. a rejoin) heals in place: the host
 			// snapshots its state, every peer reloads the identical file, the match plays on.
-			++s_netMatchResyncs;
-			g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchResyncs) + "): " + error);
+			s_netMatchHeals.Note(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
+			g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchHeals.Total()) + "): " + error);
 			{
 				std::ostringstream line;
 				line << "[net-match] resync: " << (error.find("ResyncRequested") != std::string::npos ? "requested" : "desync detected") << ", reloading from the host snapshot";
@@ -6406,7 +6408,8 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"winner_team\":" << (reportGameActivity ? reportGameActivity->GetWinnerTeam() : Activity::NoTeam) << ",";
 	out << "\"entered_editor\":" << (s_netMatchServiceE2EEnteredEditor ? "true" : "false") << ",";
 	out << "\"rematches\":" << s_netMatchServiceE2ERematches << ",";
-	out << "\"resyncs\":" << s_netMatchResyncs << ",";
+	out << "\"resyncs\":" << s_netMatchHeals.Total() << ",";
+	out << "\"resyncs_in_window\":" << s_netMatchHeals.InWindow() << ",";
 	out << "\"stale_activity_slots\":" << g_ActivityMan.StaleActivitySlotCount() << ",";
 	// The actor census guards against sim-CONSISTENT duplication (both peers doubling identically
 	// slips every divergence gate); the peak catches a double-spawn that later sheds back to normal.
@@ -6494,6 +6497,32 @@ bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std:
 	return ConfigureNetMatchActivity(*config, g_NetMatchService.GetLocalTeam(), error);
 }
 
+// A world segment stands on a checkpoint, so the sim is loaded from that archive and given the
+// manifest's agreed lockstep state, exactly as a resumed host stands its round up.
+static bool StageWorldSegmentActivity(const NetMatchService::WorldSegmentPlayback& staged, std::string* error) {
+	if (!g_ActivityMan.LoadAutosaveToRestart(staged.checkpoint.matchId, staged.checkpoint.savedTick)) {
+		if (error) *error = "segment refused: checkpoint " + std::to_string(staged.checkpoint.savedTick) +
+		                    " of world " + staged.checkpoint.matchId + " could not be loaded";
+		return false;
+	}
+	g_ActivityMan.NoteLockstepRelaunch();
+	const auto state = std::make_shared<NetResyncState>(staged.resumeState);
+	if (!g_ActivityMan.SetPendingCheckpointCallbacks([] { return true; }, [state](Activity& activity) {
+		    if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != state->savedTick) return false;
+		    // The restored world already carries the seats it had at that tick; they are read back out
+		    // of it rather than derived from the roster.
+		    NetGamePlayerBindings own;
+		    activity.CaptureNetPlayerBindings(own);
+		    if (!activity.ApplyNetPlayerBindings(own)) return false;
+		    return ScenarioRunner::RestoreNetResyncState(*state);
+	    })) {
+		if (error) *error = "segment refused: the checkpoint could not be staged for restoration";
+		return false;
+	}
+	ScenarioRunner::ApplyDeterministicConfig();
+	return true;
+}
+
 // Drives a recorded match through the standard lockstep apply path: a no-remote coordinator over
 // a dead-end transport, fed tick records by the replay reader. The deterministic sim reproduces
 // the match, so a -tick-hashes trace must equal the recording peer's.
@@ -6509,6 +6538,7 @@ bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string*
 	}
 	s_netReplayExitCode = 0;
 	s_netReplayTicks = 0;
+	s_netReplaySegmentTick = 0;
 	s_netReplayFromMenu = fromMenu;
 	s_netReplayPreviousDeltaTime = g_TimerMan.GetDeltaTimeSecs();
 	s_netReplayPreviousFreeRun = g_TimerMan.IsFreeRunSim();
@@ -6520,13 +6550,31 @@ bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string*
 		     << ", " << static_cast<int>(replayConfig.peerCount) << " peers";
 		System::PrintDiagnosticLine(line.str());
 	}
+	// A world segment boots the world's own snapshot instead of the preset: its records begin one tick
+	// after the checkpoint, so the sim has to already stand on it.
+	const bool worldSegment = ScenarioRunner::IsLockstepReplayWorldSegment();
+	NetMatchService::WorldSegmentPlayback staged;
+	if (worldSegment) {
+		staged = NetMatchService::PrepareWorldSegmentPlayback(AutosaveStore::Directory(), ScenarioRunner::GetLockstepReplayWorldSegment(),
+		                                                      replayConfig, ScenarioRunner::GetLockstepReplayStartFrame());
+		if (!staged.refusal.empty()) {
+			if (error) *error = staged.refusal;
+			CloseNetReplayPlayback();
+			return false;
+		}
+		s_netReplaySegmentTick = staged.checkpoint.savedTick;
+		std::ostringstream line;
+		line << "[net-replay] segment stands on checkpoint tick=" << staged.checkpoint.savedTick
+		     << " world=" << staged.checkpoint.matchId << " round=" << staged.manifest.roundId;
+		System::PrintDiagnosticLine(line.str());
+	}
 
 	static NullNetTransport s_nullTransport;
 	static NetLockstepCoordinator s_replayCoordinator;
 	NetLockstepConfig lockstepConfig;
 	lockstepConfig.sessionId = replayConfig.sessionId;
 	// Align to the recording's first tick, whatever sim count its match began on.
-	lockstepConfig.startFrame = ScenarioRunner::GetLockstepReplayStartFrame();
+	lockstepConfig.startFrame = worldSegment ? staged.startFrame : ScenarioRunner::GetLockstepReplayStartFrame();
 	lockstepConfig.localPeerId = 1;
 	lockstepConfig.peerCount = replayConfig.peerCount;
 	lockstepConfig.scenario = "replay";
@@ -6547,7 +6595,7 @@ bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string*
 			break;
 		}
 	}
-	if (!ConfigureNetMatchActivity(replayConfig, localTeam, &setupError)) {
+	if (!(worldSegment ? StageWorldSegmentActivity(staged, &setupError) : ConfigureNetMatchActivity(replayConfig, localTeam, &setupError))) {
 		if (error) *error = (fromMenu ? "" : "setup failed: ") + setupError;
 		CloseNetReplayPlayback();
 		return false;
@@ -6619,7 +6667,8 @@ int RunNetReplayPlayback() {
 	{
 		std::ostringstream line;
 		line << "[net-replay] playback " << (s_netReplayExitCode == 0 ? "finished" : "FAILED") << " in " << playbackMs
-		     << "ms, ticks=" << s_netReplayTicks << " outcome=" << ScenarioRunner::ReplayOutcomeName(finalOutcome)
+		     << "ms, ticks=" << s_netReplayTicks << " segment_tick=" << s_netReplaySegmentTick
+		     << " outcome=" << ScenarioRunner::ReplayOutcomeName(finalOutcome)
 		     << " frames=" << ScenarioRunner::GetLockstepReplayFramesConsumed() << " last_tick=" << ScenarioRunner::GetLockstepReplayLastTick()
 		     << " end_marker=" << (ScenarioRunner::LockstepReplaySawEndMarker() ? 1 : 0) << " exit=" << s_netReplayExitCode;
 		System::PrintDiagnosticLine(line.str());
