@@ -1681,7 +1681,7 @@ namespace RTE {
 		m_LastLoad = m_Store->Load(UnixNowMs(), record, nullptr);
 		if (NetA7Journal::Enabled()) NetA7Journal::Session("ticket_loaded", nowMs, {{"load_result", static_cast<int>(m_LastLoad)},
 			{"ticket_sha256", m_Store->GetA7LoadedSha256()}, {"host_matches", m_LastLoad == NetH4TicketLoadResult::Loaded && record.hostAddress == m_HostAddress}}, "NetReconnectClient::nowMs");
-		// A record for a different host names a different session's seat; only this host's reclaims.
+		// A directory match keeps its ticket binding when its host address changes.
 		if (m_LastLoad == NetH4TicketLoadResult::Loaded && (record.hostAddress == m_HostAddress || (!m_DirectorySessionId.empty() && record.directorySessionId == m_DirectorySessionId))) {
 			m_UsedStoredTicket = true;
 			record.matchConfigHash = m_MatchConfigHash;
