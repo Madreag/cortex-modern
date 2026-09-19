@@ -704,7 +704,11 @@ bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor*
 		buyOrder.orderedByPlayer = static_cast<int8_t>(player);
 		buyOrder.multiOrderYOffset = multiOrderYOffset;
 		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, buyOrder});
-		{ std::ostringstream line; line <<  "[net-match] buy order issued: team " << team << " cost " << totalCost << " items " << buyOrder.cargo.size(); System::PrintDiagnosticLine(line.str()); }
+		{
+			std::ostringstream line;
+			line << "[net-match] buy order issued: team " << team << " cost " << totalCost << " items " << buyOrder.cargo.size();
+			System::PrintDiagnosticLine(line.str());
+		}
 
 		// The confirm ding plays when the order applies through QueuePurchaseDelivery.
 		// Clear out the override purchase list, whether anything was in there or not, it should not override twice.
@@ -1194,9 +1198,9 @@ bool GameActivity::CommitLockstepBrainPlacement(int player, const std::string& c
 	m_LockstepPlacementSubmitted[player] = true;
 	{
 		std::ostringstream line;
-		line <<  "[net-match] brain placement committed: seat=" << player << " team=" << placement.team
-	          << " preset=" << placement.module << "/" << placement.preset
-	          << " pos=" << placement.posX << "," << placement.posY << " via=" << via;
+		line << "[net-match] brain placement committed: seat=" << player << " team=" << placement.team
+		     << " preset=" << placement.module << "/" << placement.preset
+		     << " pos=" << placement.posX << "," << placement.posY << " via=" << via;
 		System::PrintDiagnosticLine(line.str());
 	}
 	return true;
@@ -1534,8 +1538,8 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 	const auto refuse = [&](const std::string& reason) {
 		{
 			std::ostringstream line;
-			line <<  "[net-match] brain placement refused: seat=" << player << " peer=" << static_cast<int>(senderPeerId)
-		          << " reason=" << reason;
+			line << "[net-match] brain placement refused: seat=" << player << " peer=" << static_cast<int>(senderPeerId)
+			     << " reason=" << reason;
 			System::PrintDiagnosticLine(line.str());
 		}
 		RefuseBrainPlacement(player, reason, senderPeerId == ScenarioRunner::GetLockstepLocalPeerId());
@@ -1555,9 +1559,9 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 	m_ReadyToStart[player] = true;
 	{
 		std::ostringstream line;
-		line <<  "[net-match] brain placement applied: seat=" << player << " team=" << m_Team[player]
-	          << " peer=" << static_cast<int>(senderPeerId) << " preset=" << placement.module << "/" << placement.preset
-	          << " pos=" << placement.posX << "," << placement.posY;
+		line << "[net-match] brain placement applied: seat=" << player << " team=" << m_Team[player]
+		     << " peer=" << static_cast<int>(senderPeerId) << " preset=" << placement.module << "/" << placement.preset
+		     << " pos=" << placement.posX << "," << placement.posY;
 		System::PrintDiagnosticLine(line.str());
 	}
 	// Presentation only: every peer names the seat that just placed, and the waiting strip counts down.
@@ -1624,7 +1628,11 @@ bool GameActivity::BuildLockstepSeatBrains() {
 	if (MovableObject::GetUniqueIDCounter() > m_LockstepPlacementUidBase + c_SetupEditorUidReserve) {
 		const std::string line = "ERROR: the setup editor spent more than " + std::to_string(c_SetupEditorUidReserve) + " unique ids";
 		g_ConsoleMan.PrintString(line);
-		{ std::ostringstream diag; diag << "[net-match] " << line; System::PrintDiagnosticLine(diag.str()); }
+		{
+			std::ostringstream diag;
+			diag << "[net-match] " << line;
+			System::PrintDiagnosticLine(diag.str());
+		}
 		return false;
 	}
 	MovableObject::PinUniqueIDCounter(m_LockstepPlacementUidBase + c_SetupEditorUidReserve);
@@ -1645,10 +1653,10 @@ bool GameActivity::BuildLockstepSeatBrains() {
 		scene->SetResidentBrain(player, brain);
 		{
 			std::ostringstream line;
-			line <<  "[net-match] brain placed: seat=" << player << " team=" << m_Team[player]
-		          << " peer=" << static_cast<int>(LockstepSeatPeerId(player)) << " preset=" << placement.module << "/" << placement.preset
-		          << " pos=" << placement.posX << "," << placement.posY
-		          << " uid=" << (dynamic_cast<const MovableObject*>(brain) ? dynamic_cast<const MovableObject*>(brain)->GetUniqueID() : 0);
+			line << "[net-match] brain placed: seat=" << player << " team=" << m_Team[player]
+			     << " peer=" << static_cast<int>(LockstepSeatPeerId(player)) << " preset=" << placement.module << "/" << placement.preset
+			     << " pos=" << placement.posX << "," << placement.posY
+			     << " uid=" << (dynamic_cast<const MovableObject*>(brain) ? dynamic_cast<const MovableObject*>(brain)->GetUniqueID() : 0);
 			System::PrintDiagnosticLine(line.str());
 		}
 	}
@@ -1913,7 +1921,11 @@ void GameActivity::UpdateSpectatorView(int player, bool lookedAround) {
 		// The follow name dies with the unit.
 		m_SpectatorTarget[player] = nullptr;
 		g_FrameMan.ClearScreenText(screen);
-		{ std::ostringstream line; line <<  "[spectate-follow] cleared player=" << player; System::PrintDiagnosticLine(line.str()); }
+		{
+			std::ostringstream line;
+			line << "[spectate-follow] cleared player=" << player;
+			System::PrintDiagnosticLine(line.str());
+		}
 	}
 	// Looking around by hand drops the followed unit.
 	if (lookedAround && m_SpectatorTarget[player]) {
@@ -2570,7 +2582,11 @@ void GameActivity::Update() {
 			static bool loggedLossAfter6s = false;
 			if (!loggedLossAfter6s) {
 				loggedLossAfter6s = true;
-				{ std::ostringstream line; line <<  "[p4-duel] game-over-loss-still=" << g_FrameMan.GetScreenText(ScreenOfPlayer(player)); System::PrintDiagnosticLine(line.str()); }
+				{
+					std::ostringstream line;
+					line << "[p4-duel] game-over-loss-still=" << g_FrameMan.GetScreenText(ScreenOfPlayer(player));
+					System::PrintDiagnosticLine(line.str());
+				}
 			}
 		}
 
@@ -3452,7 +3468,11 @@ bool GameActivity::LoadValueCheckpoint(std::string_view text, bool validateOnly)
 		reader.Finish();
 		return true;
 	} catch (const std::exception& error) {
-		{ std::ostringstream line; line <<  "[checkpoint] GameActivity values: " << error.what(); System::PrintDiagnosticLine(line.str()); }
+		{
+			std::ostringstream line;
+			line << "[checkpoint] GameActivity values: " << error.what();
+			System::PrintDiagnosticLine(line.str());
+		}
 		return false;
 	}
 }
@@ -3683,11 +3703,19 @@ bool GameActivity::RunDeliveryReferenceSelfTest() {
         fixture.reset();
         if (!applied) throw std::runtime_error("the archive holding a delivery craft was refused");
         if (!rebound) throw std::runtime_error("a delivery craft's borrowed reference did not survive the checkpoint");
-        { std::ostringstream line; line <<  "[native-reference-selftest] a delivery craft's borrowed reference survives the checkpoint PASS"; System::PrintDiagnosticLine(line.str()); }
-        return true;
+		{
+			std::ostringstream line;
+			line << "[native-reference-selftest] a delivery craft's borrowed reference survives the checkpoint PASS";
+			System::PrintDiagnosticLine(line.str());
+		}
+		return true;
     } catch (const std::exception& error) {
-        { std::ostringstream line; line <<  "[native-reference-selftest] " << error.what(); System::PrintDiagnosticLine(line.str()); }
-        return false;
+		{
+			std::ostringstream line;
+			line << "[native-reference-selftest] " << error.what();
+			System::PrintDiagnosticLine(line.str());
+		}
+		return false;
     }
 }
 
@@ -3912,8 +3940,8 @@ bool GameActivity::RunNetInventoryRelaunchProbe(std::string_view phase) {
 		state.passed = passed && state.passed;
 		{
 			std::ostringstream line;
-			line <<  "[net-inventory-resync] " << (passed ? "PASS" : "FAIL") << " " << name << " phase=" << phase << " peer=" << state.peer
-		          << " tick=" << g_TimerMan.GetSimUpdateCount() << " relaunch=" << g_ActivityMan.LockstepRelaunchInProgress();
+			line << "[net-inventory-resync] " << (passed ? "PASS" : "FAIL") << " " << name << " phase=" << phase << " peer=" << state.peer
+			     << " tick=" << g_TimerMan.GetSimUpdateCount() << " relaunch=" << g_ActivityMan.LockstepRelaunchInProgress();
 			System::PrintDiagnosticLine(line.str());
 		}
 		return passed;
@@ -3940,7 +3968,11 @@ bool GameActivity::RunNetInventoryRelaunchProbe(std::string_view phase) {
 			state.ordinary[index] = uid(ordinary);
 			state.collected[index] = uid(collected);
 			g_MovableMan.AddActor(craft);
-			{ std::ostringstream line; line <<  "[net-inventory-resync-fixture] index=" << index << " carrier=" << uid(craft) << " ordinary=" << uid(ordinary) << " collected=" << uid(collected); System::PrintDiagnosticLine(line.str()); }
+			{
+				std::ostringstream line;
+				line << "[net-inventory-resync-fixture] index=" << index << " carrier=" << uid(craft) << " ordinary=" << uid(ordinary) << " collected=" << uid(collected);
+				System::PrintDiagnosticLine(line.str());
+			}
 		}
 		const int index = state.peer - 1;
 		state.oldCarrier = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(state.carriers[index]));
@@ -3968,7 +4000,11 @@ bool GameActivity::RunNetInventoryRelaunchProbe(std::string_view phase) {
 		auto* craft = dynamic_cast<ACraft*>(current);
 		const bool carried = craft && std::any_of(craft->GetCollectedInventory().begin(), craft->GetCollectedInventory().end(), [&](const MovableObject* object) { return object->GetUniqueID() == state.collected[index]; });
 		++state.held;
-		{ std::ostringstream line; line <<  "[net-inventory-held] uid=" << state.carriers[index] << " old=" << state.oldCarrier << " current=" << current << " outside=" << outside << " stale=" << before << "/" << withHeld << " collected=" << carried; System::PrintDiagnosticLine(line.str()); }
+		{
+			std::ostringstream line;
+			line << "[net-inventory-held] uid=" << state.carriers[index] << " old=" << state.oldCarrier << " current=" << current << " outside=" << outside << " stale=" << before << "/" << withHeld << " collected=" << carried;
+			System::PrintDiagnosticLine(line.str());
+		}
 		return check("held_old_world_excluded_and_collected_restored", outside && withHeld == before + 1 && carried);
 	}
 	if (phase != "first" && phase != "after") return check("known_phase", false);
@@ -3981,9 +4017,9 @@ bool GameActivity::RunNetInventoryRelaunchProbe(std::string_view phase) {
 		const long controlled = uid(activity->m_ControlledActor[player]);
 		{
 			std::ostringstream line;
-			line <<  "[net-inventory-slots] phase=" << phase << " peer=" << state.peer << " player=" << player << " expected_brain=" << expectedBrain << " brain=" << brain
-		          << " saved_host_brain=" << (player == 0 ? state.ordinary[0] : state.collected[0]) << " expected_mark=" << state.carriers[index] << " mark=" << mark << " saved_host_mark=" << state.carriers[0]
-		          << " expected_controlled=" << state.controlled[player] << " controlled=" << controlled;
+			line << "[net-inventory-slots] phase=" << phase << " peer=" << state.peer << " player=" << player << " expected_brain=" << expectedBrain << " brain=" << brain
+			     << " saved_host_brain=" << (player == 0 ? state.ordinary[0] : state.collected[0]) << " expected_mark=" << state.carriers[index] << " mark=" << mark << " saved_host_mark=" << state.carriers[0]
+			     << " expected_controlled=" << state.controlled[player] << " controlled=" << controlled;
 			System::PrintDiagnosticLine(line.str());
 		}
 		matched = matched && brain == expectedBrain && mark == state.carriers[index] && controlled == state.controlled[player];
@@ -3994,15 +4030,19 @@ bool GameActivity::RunNetInventoryRelaunchProbe(std::string_view phase) {
 bool GameActivity::RunNetLocalUIRestoreSelfTest() {
 	bool passed = true;
 	const char* reclaimDiagnostic = std::getenv("CC_TEST_NET_RECLAIM_DIAG");
-	if (reclaimDiagnostic && std::strcmp(reclaimDiagnostic, "1") == 0) { std::ostringstream line; line <<  "[net-reclaim] diagnostic_enabled=1 assertions=unchanged collection=unchanged"; System::PrintDiagnosticLine(line.str()); }
+	if (reclaimDiagnostic && std::strcmp(reclaimDiagnostic, "1") == 0) {
+		std::ostringstream line;
+		line << "[net-reclaim] diagnostic_enabled=1 assertions=unchanged collection=unchanged";
+		System::PrintDiagnosticLine(line.str());
+	}
 	const auto check = [&](const char* name, bool value, const std::string& got = {}, const std::string& expected = {}) {
 		passed = passed && value;
 		{
 			std::ostringstream line;
-		line << "[net-local-ui-selftest] " << (value ? "PASS" : "FAIL") << " " << name;
-		if (!value && (!got.empty() || !expected.empty())) {
-			line << " got=" << got << " expected=" << expected;
-		}
+			line << "[net-local-ui-selftest] " << (value ? "PASS" : "FAIL") << " " << name;
+			if (!value && (!got.empty() || !expected.empty())) {
+				line << " got=" << got << " expected=" << expected;
+			}
 			System::PrintDiagnosticLine(line.str());
 		}
 	};
@@ -4011,18 +4051,34 @@ bool GameActivity::RunNetLocalUIRestoreSelfTest() {
 		std::string graph;
 		std::vector<std::string> problems;
 		const auto report = [&](const char* stage, bool result) {
-			{ std::ostringstream line; line <<  "[net-local-ui-graph] " << name << " stage=" << stage << " result=" << result << " problems=" << problems.size() << " bytes=" << graph.size(); System::PrintDiagnosticLine(line.str()); }
-			for (const auto& problem: problems) { std::ostringstream line; line <<  "[net-local-ui-graph] " << name << " stage=" << stage << " problem=" << problem; System::PrintDiagnosticLine(line.str()); }
+			{
+				std::ostringstream line;
+				line << "[net-local-ui-graph] " << name << " stage=" << stage << " result=" << result << " problems=" << problems.size() << " bytes=" << graph.size();
+				System::PrintDiagnosticLine(line.str());
+			}
+			for (const auto& problem: problems) {
+				std::ostringstream line;
+				line << "[net-local-ui-graph] " << name << " stage=" << stage << " problem=" << problem;
+				System::PrintDiagnosticLine(line.str());
+			}
 		};
 		const bool captured = lua.SerializeScriptGraph(graph, problems);
 		report("capture", captured);
 		if (!captured || !problems.empty()) return false;
-		{ std::ostringstream line; line <<  "[net-local-ui-graph] " << name << " explicit_preparation=0 implicit_preparation=deserialize"; System::PrintDiagnosticLine(line.str()); }
+		{
+			std::ostringstream line;
+			line << "[net-local-ui-graph] " << name << " explicit_preparation=0 implicit_preparation=deserialize";
+			System::PrintDiagnosticLine(line.str());
+		}
 		const bool restored = lua.RestoreScriptGraph(graph, problems);
 		report("restore", restored);
 		if (!restored || !problems.empty()) return false;
 		const int probeResult = lua.RunScriptString(script);
-		{ std::ostringstream line; line <<  "[net-local-ui-graph] " << name << " stage=probe result=" << probeResult << " error=" << (probeResult == 0 ? "" : lua.GetLastError()); System::PrintDiagnosticLine(line.str()); }
+		{
+			std::ostringstream line;
+			line << "[net-local-ui-graph] " << name << " stage=probe result=" << probeResult << " error=" << (probeResult == 0 ? "" : lua.GetLastError());
+			System::PrintDiagnosticLine(line.str());
+		}
 		return probeResult == 0;
 	};
 	const std::string clear = "_NetEditor=nil; _NetPreview=nil; _NetVector=nil; _NetController=nil; _NetPreviewUID=nil; _NetNested=nil; _NetNestedVector=nil; _NetPrivate=nil";
@@ -4196,9 +4252,9 @@ assert(_NetPrivate.RecoilOffset.X == 14.5)
 				privateActor->SetWhichMOToNotHit(static_cast<MovableObject*>(canonical.get()));
 				{
 					std::ostringstream line;
-					line <<  "[net-local-ui-publication] before incoming_uid=" << observer.GetMOToNotHitUID() << " head_uid=" << privateActor->GetHead()->GetUniqueID()
-				          << " external_uid=" << privateActor->GetMOToNotHitUID() << " canonical_uid=" << static_cast<MovableObject*>(canonical.get())->GetUniqueID()
-				          << " inventory_count=" << privateActor->GetInventory()->size();
+					line << "[net-local-ui-publication] before incoming_uid=" << observer.GetMOToNotHitUID() << " head_uid=" << privateActor->GetHead()->GetUniqueID()
+					     << " external_uid=" << privateActor->GetMOToNotHitUID() << " canonical_uid=" << static_cast<MovableObject*>(canonical.get())->GetUniqueID()
+					     << " inventory_count=" << privateActor->GetInventory()->size();
 					System::PrintDiagnosticLine(line.str());
 				}
 				const long counterBeforeCollision = MovableObject::GetUniqueIDCounter();
@@ -4224,14 +4280,14 @@ assert(_NetPrivate.RecoilOffset.X == 14.5)
 				const bool inventoryIdentity = inventoryItem && registeredItem == inventoryItem;
 				{
 					std::ostringstream line;
-					line <<  "[net-local-ui-publication] after incoming_pointer=" << incomingPointer << " incoming_identity=" << incomingIdentity
-				          << " incoming=" << observer.GetWhichMOToNotHit() << " head=" << privateActor->GetHead()
-				          << " incoming_uid=" << observer.GetMOToNotHitUID() << " head_uid=" << privateActor->GetHead()->GetUniqueID()
-				          << " external_pointer=" << externalPointer << " external_identity=" << externalIdentity
-				          << " external=" << privateActor->GetWhichMOToNotHit() << " canonical=" << canonical.get()
-				          << " external_uid=" << privateActor->GetMOToNotHitUID() << " canonical_uid=" << static_cast<MovableObject*>(canonical.get())->GetUniqueID()
-				          << " inventory_count=" << privateActor->GetInventory()->size() << " inventory_identity=" << inventoryIdentity
-				          << " inventory_item=" << inventoryItem << " registered_item=" << registeredItem << " inventory_uid=" << (inventoryItem ? inventoryItem->GetUniqueID() : 0);
+					line << "[net-local-ui-publication] after incoming_pointer=" << incomingPointer << " incoming_identity=" << incomingIdentity
+					     << " incoming=" << observer.GetWhichMOToNotHit() << " head=" << privateActor->GetHead()
+					     << " incoming_uid=" << observer.GetMOToNotHitUID() << " head_uid=" << privateActor->GetHead()->GetUniqueID()
+					     << " external_pointer=" << externalPointer << " external_identity=" << externalIdentity
+					     << " external=" << privateActor->GetWhichMOToNotHit() << " canonical=" << canonical.get()
+					     << " external_uid=" << privateActor->GetMOToNotHitUID() << " canonical_uid=" << static_cast<MovableObject*>(canonical.get())->GetUniqueID()
+					     << " inventory_count=" << privateActor->GetInventory()->size() << " inventory_identity=" << inventoryIdentity
+					     << " inventory_item=" << inventoryItem << " registered_item=" << registeredItem << " inventory_uid=" << (inventoryItem ? inventoryItem->GetUniqueID() : 0);
 					System::PrintDiagnosticLine(line.str());
 				}
 				check("publication_preserves_incoming_and_external_links", incomingPointer && incomingIdentity && externalPointer && externalIdentity && inventoryIdentity);
@@ -4261,8 +4317,8 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 					if (!diagnostic || std::strcmp(diagnostic, "1") != 0) return;
 					{
 						std::ostringstream line;
-						line <<  "[net-reclaim] stage=" << stage << " original_uid=" << uid << " retained0=" << editor->GetCheckpointRetainedOwner(0)
-					          << " original_lookup=" << g_MovableMan.FindObjectByUniqueID(uid) << " slots=" << editor->GetCheckpointRetainedOwners().size();
+						line << "[net-reclaim] stage=" << stage << " original_uid=" << uid << " retained0=" << editor->GetCheckpointRetainedOwner(0)
+						     << " original_lookup=" << g_MovableMan.FindObjectByUniqueID(uid) << " slots=" << editor->GetCheckpointRetainedOwners().size();
 						System::PrintDiagnosticLine(line.str());
 					}
 					for (size_t index = 0; index < editor->GetCheckpointRetainedOwners().size(); ++index) {
@@ -4281,18 +4337,22 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 							if (auto* actor = dynamic_cast<Actor*>(const_cast<MovableObject*>(object))) pointers.insert(actor->GetController());
 							if (g_MovableMan.FindObjectByUniqueID(object->GetUniqueID()) == object) identities.insert(object->GetUniqueID());
 						}
-						{ std::ostringstream line; line <<  "[net-reclaim] stage=" << stage << " slot=" << index << " owner=" << owner << " class=" << owner->GetClassName(); System::PrintDiagnosticLine(line.str()); }
+						{
+							std::ostringstream line;
+							line << "[net-reclaim] stage=" << stage << " slot=" << index << " owner=" << owner << " class=" << owner->GetClassName();
+							System::PrintDiagnosticLine(line.str());
+						}
 						lua.HasNativeAliases(pointers);
 						for (auto& state: g_LuaMan.GetThreadedScriptStates()) state.HasNativeAliases(pointers);
 						for (const auto* object: g_MovableMan.SnapshotKnownObjects()) {
 							if (objects.contains(object)) continue;
 							for (long target: object->GetCheckpointBorrowedReferences()) if (identities.contains(target)) {
-								{
-									std::ostringstream line;
-									line <<  "[net-reclaim-native] stage=" << stage << " slot=" << index << " source=" << object << " source_uid=" << object->GetUniqueID()
-								          << " class=" << object->GetClassName() << " target_uid=" << target;
-									System::PrintDiagnosticLine(line.str());
-								}
+									{
+										std::ostringstream line;
+										line << "[net-reclaim-native] stage=" << stage << " slot=" << index << " source=" << object << " source_uid=" << object->GetUniqueID()
+										     << " class=" << object->GetClassName() << " target_uid=" << target;
+										System::PrintDiagnosticLine(line.str());
+									}
 							}
 						}
 					}
@@ -4363,10 +4423,10 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 				const Slots pending{fixture->m_CheckpointActorIDs[0][0], fixture->m_CheckpointActorIDs[0][1], fixture->m_CheckpointActorIDs[0][2], fixture->m_HasCheckpointMarkedActorIDs ? fixture->m_CheckpointMarkedActorIDs[0] : -1};
 				{
 					std::ostringstream line;
-					line <<  "[net-local-ui-slots] arm=" << arm << " applied=" << applied << " relaunch=" << g_ActivityMan.LockstepRelaunchInProgress()
-				          << " host=" << print(Slots{hostBrain->GetUniqueID(), hostControlled->GetUniqueID(), hostController->GetUniqueID(), host->GetUniqueID()})
-				          << " local=" << print(Slots{localBrain->GetUniqueID(), localControlled->GetUniqueID(), localController->GetUniqueID(), local->GetUniqueID()})
-				          << " pending=" << print(pending) << " before=" << print(before) << " first=" << print(first) << " second=" << print(second);
+					line << "[net-local-ui-slots] arm=" << arm << " applied=" << applied << " relaunch=" << g_ActivityMan.LockstepRelaunchInProgress()
+					     << " host=" << print(Slots{hostBrain->GetUniqueID(), hostControlled->GetUniqueID(), hostController->GetUniqueID(), host->GetUniqueID()})
+					     << " local=" << print(Slots{localBrain->GetUniqueID(), localControlled->GetUniqueID(), localController->GetUniqueID(), local->GetUniqueID()})
+					     << " pending=" << print(pending) << " before=" << print(before) << " first=" << print(first) << " second=" << print(second);
 					System::PrintDiagnosticLine(line.str());
 				}
 				return std::array<Slots, 3>{before, first, second};
@@ -4437,8 +4497,8 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			fixture->m_pLastMarkedActor[0] = nullptr;
 			{
 				std::ostringstream line;
-				line <<  "[net-relaunch-inventory-probe] carrier_uid=" << craft->GetUniqueID() << " carrier_class=" << craft->GetClassName() << " carrier_world=" << g_MovableMan.IsActor(craft)
-			          << " carrier_holds_brain=" << craft->HasObjectInGroup("Brains") << " carried_uid=" << carried->GetUniqueID() << " carried_in_group=" << carried->IsInGroup("Brains");
+				line << "[net-relaunch-inventory-probe] carrier_uid=" << craft->GetUniqueID() << " carrier_class=" << craft->GetClassName() << " carrier_world=" << g_MovableMan.IsActor(craft)
+				     << " carrier_holds_brain=" << craft->HasObjectInGroup("Brains") << " carried_uid=" << carried->GetUniqueID() << " carried_in_group=" << carried->IsInGroup("Brains");
 				System::PrintDiagnosticLine(line.str());
 			}
 			struct Probe { long after; int staleBefore, staleAfter; };
@@ -4459,10 +4519,10 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 				const int staleAfter = fixture->CountStaleRelaunchSlots(-1);
 				{
 					std::ostringstream line;
-					line <<  "[net-relaunch-inventory-probe] case=" << name << " brain_uid=" << uid << " pending_brain=" << fixture->m_CheckpointActorIDs[0][0]
-				          << " lookup_hit=" << (found && found == brain) << " lookup_null=" << !found << " valid_mo=" << (brain && g_MovableMan.ValidMO(brain))
-				          << " is_actor=" << (brain && g_MovableMan.IsActor(brain)) << " known=" << (brain && g_MovableMan.IsKnownObject(brain)) << " dead=" << (brain && brain->IsDead())
-				          << " slot_before=" << slotBefore << " stale_before=" << staleBefore << " slot_after=" << slotAfter << " stale_after=" << staleAfter;
+					line << "[net-relaunch-inventory-probe] case=" << name << " brain_uid=" << uid << " pending_brain=" << fixture->m_CheckpointActorIDs[0][0]
+					     << " lookup_hit=" << (found && found == brain) << " lookup_null=" << !found << " valid_mo=" << (brain && g_MovableMan.ValidMO(brain))
+					     << " is_actor=" << (brain && g_MovableMan.IsActor(brain)) << " known=" << (brain && g_MovableMan.IsKnownObject(brain)) << " dead=" << (brain && brain->IsDead())
+					     << " slot_before=" << slotBefore << " stale_before=" << staleBefore << " slot_after=" << slotAfter << " stale_after=" << staleAfter;
 					System::PrintDiagnosticLine(line.str());
 				}
 				return Probe{slotAfter, staleBefore, staleAfter};
@@ -4497,9 +4557,9 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			if (!restore.relaunching) g_ActivityMan.EndLockstepRelaunch();
 			{
 				std::ostringstream line;
-				line <<  "[net-relaunch-inventory-probe] cleanup removed=" << allRemoved << " still_in_world=" << stillInWorld << " added_actors=" << queues.actors << "->" << drained.actors
-			          << " added_items=" << queues.items << "->" << drained.items << " added_particles=" << queues.particles << "->" << drained.particles
-			          << " relaunch=" << g_ActivityMan.LockstepRelaunchInProgress() << " restoring=" << g_MovableMan.IsRestoringSnapshot();
+				line << "[net-relaunch-inventory-probe] cleanup removed=" << allRemoved << " still_in_world=" << stillInWorld << " added_actors=" << queues.actors << "->" << drained.actors
+				     << " added_items=" << queues.items << "->" << drained.items << " added_particles=" << queues.particles << "->" << drained.particles
+				     << " relaunch=" << g_ActivityMan.LockstepRelaunchInProgress() << " restoring=" << g_MovableMan.IsRestoringSnapshot();
 				System::PrintDiagnosticLine(line.str());
 			}
 			check("relaunch_fixture_restores_world_and_flag", allRemoved && !stillInWorld && drained.actors == queues.actors && drained.items == queues.items && drained.particles == queues.particles &&
@@ -4573,8 +4633,8 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 					const bool empty = !fixture->m_IsActive[player] && fixture->m_PlayerScreen[player] == -1;
 					{
 						std::ostringstream line;
-						line <<  "[net-local-all-players] arm=" << arm << " player=" << player << " applied=" << applied << " active=" << active << " empty=" << empty << " host=" << print(hostIDs) << " expected=" << print(expected) << " pending=" << print(pending)
-					          << " before=" << print(observations[0][player]) << " first=" << print(observations[1][player]) << " second=" << print(observations[2][player]);
+						line << "[net-local-all-players] arm=" << arm << " player=" << player << " applied=" << applied << " active=" << active << " empty=" << empty << " host=" << print(hostIDs) << " expected=" << print(expected) << " pending=" << print(pending)
+						     << " before=" << print(observations[0][player]) << " first=" << print(observations[1][player]) << " second=" << print(observations[2][player]);
 						System::PrintDiagnosticLine(line.str());
 					}
 					check(("all_players_" + arm + "_" + std::to_string(player)).c_str(), applied && (arm == "empty" ? empty : active) && g_ActivityMan.LockstepRelaunchInProgress() && observations[0][player] == expected && observations[1][player] == expected && observations[2][player] == expected);
@@ -4599,7 +4659,11 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			const auto step = [&](const char* name, bool applied) {
 				if (!detail.empty()) return false;
 				const bool same = fixture->m_pBuyGUI[0] == menu, initialized = menu->IsCheckpointInitialized(), controls = menu->HasLiveCachedControls();
-				{ std::ostringstream line; line <<  "[net-local-menu] step=" << name << " applied=" << applied << " same_menu=" << same << " initialized=" << initialized << " controls_live=" << controls; System::PrintDiagnosticLine(line.str()); }
+				{
+					std::ostringstream line;
+					line << "[net-local-menu] step=" << name << " applied=" << applied << " same_menu=" << same << " initialized=" << initialized << " controls_live=" << controls;
+					System::PrintDiagnosticLine(line.str());
+				}
 				if (applied && same && initialized && controls) return true;
 				detail = std::string(name) + " applied=" + std::to_string(applied) + " same_menu=" + std::to_string(same) +
 				         " initialized=" + std::to_string(initialized) + " controls_live=" + std::to_string(controls);
@@ -4628,7 +4692,11 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			const auto step = [&](const char* name, bool applied) {
 				if (!detail.empty()) return false;
 				const bool controls = picker.HasLiveCachedControls();
-				{ std::ostringstream line; line <<  "[net-local-picker] step=" << name << " applied=" << applied << " controls_live=" << controls; System::PrintDiagnosticLine(line.str()); }
+				{
+					std::ostringstream line;
+					line << "[net-local-picker] step=" << name << " applied=" << applied << " controls_live=" << controls;
+					System::PrintDiagnosticLine(line.str());
+				}
 				if (applied && controls) return true;
 				detail = std::string(name) + " applied=" + std::to_string(applied) + " controls_live=" + std::to_string(controls);
 				return false;
@@ -4652,7 +4720,11 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			const auto step = [&](const char* name, bool applied) {
 				if (!detail.empty()) return false;
 				const bool controls = picker.HasLiveCachedControls();
-				{ std::ostringstream line; line <<  "[net-local-area-picker] step=" << name << " applied=" << applied << " controls_live=" << controls; System::PrintDiagnosticLine(line.str()); }
+				{
+					std::ostringstream line;
+					line << "[net-local-area-picker] step=" << name << " applied=" << applied << " controls_live=" << controls;
+					System::PrintDiagnosticLine(line.str());
+				}
 				if (applied && controls) return true;
 				detail = std::string(name) + " applied=" + std::to_string(applied) + " controls_live=" + std::to_string(controls);
 				return false;
@@ -4693,9 +4765,9 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			std::snprintf(rawHex, sizeof(rawHex), "%a", rawAim);
 			{
 				std::ostringstream line;
-				line <<  "[controller-boundary-selftest] preset=Gatling Drone AimRange=" << aimRange
-			          << " rot=" << rot << " adj_upper=" << adjUpper << " adj_lower=" << adjLower
-			          << " raw_aim=" << rawHex << " flipped=" << crab->IsHFlipped();
+				line << "[controller-boundary-selftest] preset=Gatling Drone AimRange=" << aimRange
+				     << " rot=" << rot << " adj_upper=" << adjUpper << " adj_lower=" << adjLower
+				     << " raw_aim=" << rawHex << " flipped=" << crab->IsHFlipped();
 				System::PrintDiagnosticLine(line.str());
 			}
 			const bool flippedBefore = crab->IsHFlipped();
@@ -4743,8 +4815,8 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			const Vector headAfter = actor->GetAboveHeadPos();
 			{
 				std::ostringstream line;
-				line <<  "[net-local-above-head] hud_before=" << hudBefore.m_Y << " hud_after=" << hudAfter.m_Y
-			          << " head_before=" << headBefore.m_Y << " head_after=" << headAfter.m_Y;
+				line << "[net-local-above-head] hud_before=" << hudBefore.m_Y << " hud_after=" << hudAfter.m_Y
+				     << " head_before=" << headBefore.m_Y << " head_after=" << headAfter.m_Y;
 				System::PrintDiagnosticLine(line.str());
 			}
 			check("above_hud_pos_moves_with_drawhud", hudBefore != hudAfter);
@@ -4807,9 +4879,9 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			const std::string clientIntensity = fixture->LoadString("GameIntensityCalculatorMainTable");
 			{
 				std::ostringstream line;
-				line <<  "[net-local-intensity] ran=" << ranHost << "/" << ranClient
-			          << " host=" << hostIntensity << " client=" << clientIntensity
-			          << " head=" << head.m_X << "," << head.m_Y;
+				line << "[net-local-intensity] ran=" << ranHost << "/" << ranClient
+				     << " host=" << hostIntensity << " client=" << clientIntensity
+				     << " head=" << head.m_X << "," << head.m_Y;
 				System::PrintDiagnosticLine(line.str());
 			}
 			check("shared_intensity_calculator_ran", ranHost == 0 && ranClient == 0 && !hostIntensity.empty() && !clientIntensity.empty(),
@@ -4895,10 +4967,10 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 				const bool heldView = fixture->m_ViewState[0] == ViewState::ActorSelect;
 				{
 					std::ostringstream line;
-					line <<  "[net-local-highlight] marked=" << marked << " view=" << static_cast<int>(fixture->m_ViewState[0])
-				          << " enabled=" << pie->IsEnabled() << " visible=" << pie->IsVisible() << " normal_mode=" << pie->IsInNormalAnimationMode()
-				          << " highlight=" << pie->HasHighlightDraw() << " radius=" << pie->GetHighlightDrawRadius()
-				          << " center=" << pie->GetPos().m_X << "," << pie->GetPos().m_Y;
+					line << "[net-local-highlight] marked=" << marked << " view=" << static_cast<int>(fixture->m_ViewState[0])
+					     << " enabled=" << pie->IsEnabled() << " visible=" << pie->IsVisible() << " normal_mode=" << pie->IsInNormalAnimationMode()
+					     << " highlight=" << pie->HasHighlightDraw() << " radius=" << pie->GetHighlightDrawRadius()
+					     << " center=" << pie->GetPos().m_X << "," << pie->GetPos().m_Y;
 					System::PrintDiagnosticLine(line.str());
 				}
 				// The rows below only mean something if Update ran the ActorSelect branch over this actor.
@@ -5004,8 +5076,8 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			const bool kept = banner->GetFontHeight() > 0 && banner->GetBannerText() == "RETURNER" && banner->SaveCheckpoint() == live;
 			{
 				std::ostringstream line;
-				line <<  "[net-local-banner] created=" << created << " applied=" << applied << " same_banner=" << same
-			          << " font=" << banner->GetFontHeight() << " kerning=" << banner->GetKerning() << " text=" << banner->GetBannerText();
+				line << "[net-local-banner] created=" << created << " applied=" << applied << " same_banner=" << same
+				     << " font=" << banner->GetFontHeight() << " kerning=" << banner->GetKerning() << " text=" << banner->GetBannerText();
 				System::PrintDiagnosticLine(line.str());
 			}
 			check("net_local_banner_survives_empty_restore", created && applied && same && kept);
@@ -5050,7 +5122,11 @@ assert(activity:GetBuyGUI(Activity.MAXPLAYERCOUNT) == nil, "buy menu of an absen
 assert(activity:GetEditorGUI(Activity.MAXPLAYERCOUNT) == nil, "editor of an absent seat")
 assert(activity:GetBanner(GUIBanner.YELLOW, Activity.MAXPLAYERCOUNT) == nil, "banner of an absent seat")
 )lua");
-			{ std::ostringstream line; line <<  "[net-local-ui-selftest] absent_local_ui result=" << result << " error=" << (result == 0 ? std::string{} : lua.GetLastError()); System::PrintDiagnosticLine(line.str()); }
+			{
+				std::ostringstream line;
+				line << "[net-local-ui-selftest] absent_local_ui result=" << result << " error=" << (result == 0 ? std::string{} : lua.GetLastError());
+				System::PrintDiagnosticLine(line.str());
+			}
 			check("absent_local_ui_returns_inert_stub", result == 0);
 		}
 	} catch (const std::exception& exception) { check(exception.what(), false); }
