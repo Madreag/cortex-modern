@@ -110,6 +110,28 @@ RED_CAPACITY_VALIDATED = "world-capacity-passed-validation"
 RED_CAPACITY_SLOTS = "world-capacity-left-the-slot-table"
 RED_CAPACITY_RECORD = "world-capacity-left-the-identity-record"
 
+RED_WORLD_RESTART_CHECKPOINT = "world-restart-did-not-open-on-the-checkpoint"
+RED_WORLD_RESTART_BOOT = "world-restart-did-not-advance-the-boot"
+RED_WORLD_RESTART_ROUND = "world-restart-lost-the-round"
+RED_WORLD_RESTART_SIDE_STATE = "world-restart-lost-the-side-state"
+RED_WORLD_RESTART_IMAGE = "world-restart-image-named-the-old-boot"
+RED_WORLD_RESTART_TICKETS = "world-restart-lost-its-tickets"
+RED_WORLD_RESTART_HELD_SEAT = "world-restart-row-offered-a-held-seat"
+RED_WORLD_RESTART_STALE_GENERATION = "world-restart-admitted-a-stale-generation"
+RED_WORLD_RESTART_ROW_WORLD = "world-restart-row-lost-the-world"
+RED_WORLD_RESTART_ROW_WATCHERS = "world-restart-row-lost-its-watchers"
+RED_WORLD_RESTART_ROW_TOKEN = "world-restart-row-lost-its-token"
+RED_WORLD_FRESH_RESUMED = "world-fresh-resumed-anyway"
+RED_WORLD_FRESH_DROPPED = "world-fresh-dropped-the-old-checkpoints"
+RED_WORLD_LEFT_ROUND = "world-resumed-a-round-it-had-left"
+RED_WORLD_ANOTHER_MATCH = "world-resumed-another-match"
+RED_WORLD_STOP_NO_CHECKPOINT = "world-clean-stop-wrote-no-checkpoint"
+RED_WORLD_STOP_TWICE = "world-clean-stop-wrote-twice"
+RED_WORLD_STOP_UNOWED = "world-clean-stop-wrote-a-checkpoint-it-should-not"
+RED_WORLD_WATCH_WRONG_SESSION = "world-watch-browsed-the-wrong-session"
+RED_WORLD_WATCH_MISSED = "world-watch-missed-the-returned-world"
+RED_WORLD_TICKET_LOBBY_SESSION = "world-ticket-kept-the-lobby-session"
+
 CASES = (
     {
         "name": "fresh-join-running-world",
@@ -184,6 +206,11 @@ CASES = (
         "name": "directory-row-resume-and-world-boot",
         "argv": ["-net-world-directory-selftest"],
         "red": RED_DIRECTORY_BOOT,
+        "also_red": (
+            RED_WORLD_RESTART_ROW_WORLD,
+            RED_WORLD_RESTART_ROW_WATCHERS,
+            RED_WORLD_RESTART_ROW_TOKEN,
+        ),
         "pass_token": "[net-world-directory-selftest] PASS",
     },
     {
@@ -429,6 +456,59 @@ CASES = (
             RED_CONFIG_RESENT,
         ),
         "pass_token": "[net-world-bootstrap-selftest] PASS",
+    },
+    {
+        "name": "world-restart-opens-on-its-checkpoint",
+        "argv": ["-net-world-restart-selftest"],
+        "red": RED_WORLD_RESTART_CHECKPOINT,
+        "also_red": (
+            RED_WORLD_RESTART_BOOT,
+            RED_WORLD_RESTART_ROUND,
+            RED_WORLD_RESTART_SIDE_STATE,
+            RED_WORLD_RESTART_IMAGE,
+        ),
+        "pass_token": "[net-world-restart-selftest] PASS",
+    },
+    {
+        "name": "world-restart-keeps-its-tickets",
+        "argv": ["-net-world-restart-tickets-selftest"],
+        "red": RED_WORLD_RESTART_TICKETS,
+        "also_red": (
+            RED_WORLD_RESTART_HELD_SEAT,
+            RED_WORLD_RESTART_STALE_GENERATION,
+        ),
+        "pass_token": "[net-world-restart-tickets-selftest] PASS",
+    },
+    {
+        "name": "world-fresh-flag-opens-a-new-round",
+        "argv": ["-net-world-fresh-selftest"],
+        "red": RED_WORLD_FRESH_RESUMED,
+        "also_red": (
+            RED_WORLD_FRESH_DROPPED,
+            RED_WORLD_LEFT_ROUND,
+            RED_WORLD_ANOTHER_MATCH,
+        ),
+        "pass_token": "[net-world-fresh-selftest] PASS",
+    },
+    {
+        "name": "world-clean-stop-writes-one-final-checkpoint",
+        "argv": ["-net-world-final-checkpoint-selftest"],
+        "red": RED_WORLD_STOP_NO_CHECKPOINT,
+        "also_red": (
+            RED_WORLD_STOP_TWICE,
+            RED_WORLD_STOP_UNOWED,
+        ),
+        "pass_token": "[net-world-final-checkpoint-selftest] PASS",
+    },
+    {
+        "name": "world-return-watch-keys-on-the-world-id",
+        "argv": ["-net-world-return-watch-selftest"],
+        "red": RED_WORLD_WATCH_WRONG_SESSION,
+        "also_red": (
+            RED_WORLD_WATCH_MISSED,
+            RED_WORLD_TICKET_LOBBY_SESSION,
+        ),
+        "pass_token": "[net-world-return-watch-selftest] PASS",
     },
 )
 
