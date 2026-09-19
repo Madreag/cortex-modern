@@ -2327,7 +2327,10 @@ static std::string ResyncSaveName() {
 				m_Coordinator->SetObservationEpoch(promotedAt);
 				if (const NetWorldJoinSession* session = m_WorldJoin.FindSession(promoted); session != nullptr && m_Runner) {
 					NetLobbySession& lobby = m_Runner->GetLobbySession();
-					(void)lobby.BindLateRemote(session->assignedPeerId, promoted, nullptr);
+					// A promoted watcher is a world bootstrap again until its Activate commits, so its id is
+					// bound on the world plane: a session-roster rebuild would drop a plain late binding and
+					// stall the tail it still needs to reach E.
+					(void)lobby.BindWorldTransferRemote(session->assignedPeerId, promoted, nullptr);
 					lobby.SendMatchConfigTo(session->assignedPeerId);
 					(void)lobby.SendPayloadTo(session->assignedPeerId, MakeWorldJoinReport(c_NetWorldReportActivate, promotedAt), nullptr);
 				}
