@@ -1536,7 +1536,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("MOIgnoreTimerLimitTicks", movableObjectToSave->GetMOIgnoreTimerLimitTicks());
 		}
 		writer.NewPropertyWithValue("LifeTime", movableObjectToSave->GetLifetime());
-		if (!writer.IsCapturing()) writer.NewPropertyWithValue("Age", movableObjectToSave->GetAge());
+		// AgeTimerStart above carries the same age as absolute ticks and is what the restore applies.
 		writer.NewPropertyWithValue("PinStrength", movableObjectToSave->GetPinStrength());
 	}
 
