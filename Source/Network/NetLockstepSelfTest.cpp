@@ -14236,11 +14236,16 @@ namespace RTE {
 			size_t plans = 0;
 			bool staleAnswer = false;
 			std::set<uint8_t> successors;
+			std::vector<uint16_t> contactedPorts;
 		};
 
 		class ScheduledMigrationTransport : public LoopbackTransport {
 		public:
 			explicit ScheduledMigrationTransport(std::shared_ptr<MigrationWireSchedule> schedule) : m_Schedule(std::move(schedule)) {}
+			bool Connect(const std::string& address, uint16_t port, std::string* error = nullptr) override {
+				m_Schedule->contactedPorts.push_back(port);
+				return LoopbackTransport::Connect(address, port, error);
+			}
 			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
 				NetHash32 key;
 				key.fill(0x39);
@@ -14423,7 +14428,7 @@ namespace RTE {
 					config.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
 					config.migrationKey.fill(0x39);
 					config.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
-					if (delayedAnswer || staleAnswer) {
+					if (delayedAnswer || staleAnswer || skipSuccessor) {
 						config.migrationTransportFactory = [schedule] { return std::make_unique<ScheduledMigrationTransport>(schedule); };
 					}
 					return config;
@@ -14496,9 +14501,19 @@ namespace RTE {
 				}
 				if (skipSuccessor) {
 					bWire.Stop();
-					host.Tick(now);
-					a.Tick(now);
-					now += 5;
+					for (int turn = 0; turn < 10; ++turn) {
+						b.Tick(now);
+						host.Tick(now);
+						a.Tick(now);
+						now += 5;
+						if (a.IsPeerGoneAtFrame(3, 6)) {
+							break;
+						}
+					}
+					if (!a.IsPeerGoneAtFrame(3, 6)) {
+						*error = "before host loss peer3Gone=" + std::to_string(a.IsPeerGoneAtFrame(3, 6)) + " A=" + a.BuildReportJson();
+						return false;
+					}
 				}
 				if (midHeal) {
 					worldA.position[101] += 37;
@@ -14511,6 +14526,7 @@ namespace RTE {
 					schedule->releaseAt = now + 1050;
 				}
 				hostWire.Stop();
+				const uint64_t migrationStarted = now;
 				bool resumed = false;
 				for (int i = 0; i < 1000; ++i) {
 					schedule->now = now;
@@ -14587,11 +14603,12 @@ namespace RTE {
 					}
 				}
 				if (skipSuccessor) {
-					if (a.GetHostPeerId() != 2 || !a.GetConfig().relayToOtherPeers || !a.IsPeerGoneAtFrame(3, 6)) {
-						*error = "a departed first successor was not skipped from the agreed order";
+					const bool contactedGone = std::find(schedule->contactedPorts.begin(), schedule->contactedPorts.end(), port + 3) != schedule->contactedPorts.end();
+					if (a.GetHostPeerId() != 2 || !a.GetConfig().relayToOtherPeers || !a.IsPeerGoneAtFrame(3, 6) || contactedGone || now - migrationStarted >= a.GetConfig().timeoutMs) {
+						*error = "skip elapsed=" + std::to_string(now - migrationStarted) + " contacted=" + nlohmann::json(schedule->contactedPorts).dump() + " A=" + a.BuildReportJson();
 						return false;
 					}
-					std::cout << "[host-migration-selftest] PASS: published successor order skips a committed departure" << std::endl;
+					std::cout << "[host-migration-selftest] PASS: peer3 leave observed before host loss; peer2 hosts without dialing peer3 or expiring Contacting" << std::endl;
 					return true;
 				}
 				if (b.GetHostPeerId() != 3 || !b.GetConfig().relayToOtherPeers || b.GetConfig().localPeerId != 3 || (!delayedAnswer && b.GetMigrationResult().boundary != 5) || b.GetConfig().startFrame != 6 || b.GetRoundId() != 0x45791002 || b.GetConfig().matchConfig != match) {
