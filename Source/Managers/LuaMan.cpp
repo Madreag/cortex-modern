@@ -1113,7 +1113,7 @@ end
 local function buildPaths(baseline)
 	_ScriptGraphBeginRoot("0", "paths")
 	_ScriptGraphNoteTable(_G)
-	local paths, engine = {}, {}
+	local paths, engine = setmetatable({}, { __mode = "k" }), setmetatable({}, { __mode = "k" })
 	for value, path in pairs(baseline.paths or {}) do paths[value], engine[value] = path, true end
 	paths[_G], engine[_G] = { "_ScriptGraphBaseline", "globalTable" }, true
 	local function note(value, segments, isEngine)
@@ -1133,7 +1133,7 @@ local function buildPaths(baseline)
 	end
 	for _, name in ipairs(names) do
 		local value = _G[name]
-		local members = type(value) == "table" and value or (_ScriptGraphMembers and _ScriptGraphMembers(value))
+		local members = type(value) == "table" and value or (_ScriptGraphMembers and _ScriptGraphMembers(value, true))
 		if type(members) == "table" and not SKIP_GLOBALS[name] and string.sub(name, 1, 12) ~= "_ScriptGraph" and value ~= _G then
 			if type(value) == "table" then _ScriptGraphNoteTable(value) end
 			local isEngine = baseline.globals[name] == true
@@ -1487,6 +1487,16 @@ local function visitFunction(value, ctx)
 	return reference(ctx, id)
 end
 
+local function noteWeakTable(value, ctx)
+	local meta = getmetatable(value)
+	local mode = type(meta) == "table" and rawget(meta, "__mode")
+	if type(mode) == "string" and string.find(mode, "[kv]") then
+		ctx.hasWeakTables = true
+		ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "table") .. ".weak_entries")
+	end
+	return meta
+end
+
 local function visitTable(value, ctx)
 	local id = ctx.ids[value]
 	if id then return reference(ctx, id) end
@@ -1498,7 +1508,7 @@ local function visitTable(value, ctx)
 	ctx.ids[value] = id
 	if _ScriptGraphNoteTable then _ScriptGraphNoteTable(value) end
 	local parts = { path and ("P" .. pathToken(path)) or "P-;" }
-	local meta = getmetatable(value)
+	local meta = noteWeakTable(value, ctx)
 	parts[#parts + 1] = "M" .. (type(meta) == "table" and visit(meta, ctx) or "z;")
 	local keys = sortedKeys(value, ctx)
 	local body = {}
@@ -1583,7 +1593,7 @@ serializeGraph = function(roots, rebuildEverything)
 	local cache = dirt and dirt.walked and graphCache and graphCache.mode == capturing and graphCache.base <= base and graphCache or nil
 	phase("setup")
 	local paths, engine
-	if cache and not dirt.parts.paths then
+	if cache and cache.pathsCacheable and not dirt.parts.paths then
 		paths, engine = cache.paths, cache.engine
 		_ScriptGraphReuseRoot("0", "paths")
 	else
@@ -1598,7 +1608,10 @@ serializeGraph = function(roots, rebuildEverything)
 	local function chunk(uid, part, value, produce, force)
 		local key = uid .. ":" .. part
 		local dirty
-		if dirt then dirty = uid == "0" and dirt.parts[part] or (uid ~= "0" and dirt.roots[uid]) end
+		if dirt then
+			if uid == "0" then dirty = dirt.parts[part]
+			else dirty = not tonumber(uid) or dirt.roots[uid] or dirt.roots[tostring(tonumber(uid))] end
+		end
 		local kept = cache and cache.chunks[key]
 		if kept and (force or dirty or not kept.cacheable or not rawequal(kept.source[1], value)) then kept = nil end
 		if kept then
@@ -1638,7 +1651,9 @@ serializeGraph = function(roots, rebuildEverything)
 		end
 		for id in pairs(refs) do ctx.refs[id] = true end
 		for pointer, object in pairs(ctx.ownedPointers) do if defines[ctx.ids[object]] then owned[pointer] = object end end
-		for address, link in pairs(ctx.areaBoxes) do if defines[ctx.ids[link.owner]] then areas[address] = link end end
+		for address, link in pairs(ctx.areaBoxes) do
+			if defines[ctx.ids[link.owner]] then areas[address] = setmetatable({ owner = link.owner, index = link.index }, { __mode = "v" }) end
+		end
 		local written = { token = token, order = order, refs = refs, text = concatenate(text), cacheable = not unwatched,
 		                  source = setmetatable({ value }, { __mode = "v" }), values = setmetatable({}, { __mode = "v" }),
 		                  owned = setmetatable(owned, { __mode = "v" }), areas = areas, envs = setmetatable({}, { __mode = "v" }) }
@@ -1648,7 +1663,7 @@ serializeGraph = function(roots, rebuildEverything)
 	end
 	phase("prepare")
 	local names, moduleNames
-	if cache and not dirt.parts.names then
+	if cache and cache.pathsCacheable and not dirt.parts.names then
 		names, moduleNames = cache.names, cache.moduleNames
 		_ScriptGraphReuseRoot("0", "names")
 	else
@@ -1698,7 +1713,7 @@ serializeGraph = function(roots, rebuildEverything)
 				local value = rawget(saved.object, key)
 				if not rawequal(value, saved.entries[key]) then changes[#changes + 1] = { key, value } end
 			end
-			local meta = getmetatable(saved.object)
+			local meta = noteWeakTable(saved.object, ctx)
 			if #changes > 0 or not rawequal(meta, saved.meta) then
 				local where = "engine table " .. pathText(baseline.paths[saved.object] or { "?" })
 				local pairsOut = {}
@@ -1727,7 +1742,7 @@ serializeGraph = function(roots, rebuildEverything)
 	if callbacks then
 		local token, kept, unwatched = chunk("0", "callbacks", callbacks, function() return stringToken("_ScriptGraphCallbacks") .. visitAt(callbacks, ctx, "callbacks") end, true)
 		globals[#globals + 1] = token
-		globalReused, globalUnwatched = false, globalUnwatched or unwatched
+		globalReused, globalUnwatched = false, globalUnwatched or unwatched or "callback registry"
 	end
 	phase("callbacks")
 	if globalReused then reused = reused + 1 else rewritten = rewritten + 1 end
@@ -1769,7 +1784,7 @@ serializeGraph = function(roots, rebuildEverything)
 			if type(value) == "function" then written.envs[id] = getfenv(value) end
 		end
 	end
-	graphCache = { base = base, mode = capturing, chunks = chunks, paths = paths, engine = engine, names = names, moduleNames = moduleNames }
+	graphCache = { base = base, mode = capturing, chunks = chunks, paths = paths, engine = engine, names = names, moduleNames = moduleNames, pathsCacheable = not ctx.hasWeakTables }
 	_ScriptGraphNoteUncacheable(uncacheable)
 	_ScriptGraphNoteRootReuse(reused, rewritten)
 	for value, id in pairs(ctx.ids) do keyLabels[value], lastObjects[id] = id, value end
@@ -3363,6 +3378,34 @@ do
 	check("an_upvalue_cell_keeps_its_root_out_of_the_cache", not unwatchedReused and not unwatchedCacheable and unwatchedText ~= unwatchedFirst,
 	      "reused=" .. tostring(unwatchedReused) .. " changed=" .. tostring(unwatchedText ~= unwatchedFirst))
 	do
+		local previous = rawget(_G, "CheckpointWeakCacheProbe")
+		local weak = setmetatable({}, { __mode = "v" })
+		local payload = { marker = 1 }
+		weak[1] = payload
+		CheckpointWeakCacheProbe = weak
+		local roots = { ["63"] = { weak = weak } }
+		local first = _ScriptGraph.serialize(roots)
+		payload = nil
+		collectgarbage("collect")
+		collectgarbage("collect")
+		local second = _ScriptGraph.serialize(roots)
+		local reused, cacheable = _ScriptGraph.cacheState("0", "global:CheckpointWeakCacheProbe")
+		check("weak_globals_are_not_retained_or_reused_by_the_cache", weak[1] == nil and not reused and not cacheable and first ~= second)
+		CheckpointWeakCacheProbe = previous
+	end
+	do
+		local previous = rawget(_G, "CheckpointRngCacheProbe")
+		CheckpointRngCacheProbe = { marker = 1 }
+		local roots = { ["64"] = { shared = CheckpointRngCacheProbe } }
+		local savedRng = _ScriptGraphRandomState()
+		local first = _ScriptGraph.serialize(roots)
+		LuaMan:SelectRand(0, 1000000)
+		local second = _ScriptGraph.serialize(roots)
+		check("rng_moves_while_the_globals_chunk_is_reused", _ScriptGraph.cacheState("0", "global:CheckpointRngCacheProbe") and first ~= second)
+		_ScriptGraphRandomState(savedRng)
+		CheckpointRngCacheProbe = previous
+	end
+	do
 		local previous = rawget(_G, "CheckpointGlobalCacheProbe")
 		local probe = { revision = 1 }
 		local graphRoots = { ["61"] = { shared = probe } }
@@ -3371,10 +3414,9 @@ do
 		local second = _ScriptGraph.serialize(graphRoots)
 		check("globals_root_reuses_when_untouched", _ScriptGraph.cacheState("0", "global:CheckpointGlobalCacheProbe") and first == second)
 		local id = _ScriptGraphValueSerial(probe)
-		check("an_object_root_referencing_a_global_table_survives_a_globals_reuse",
-		      _ScriptGraph.cacheState("61") and pcall(_ScriptGraph.validate, second) and
+		local keptAlias = _ScriptGraph.cacheState("61") and pcall(_ScriptGraph.validate, second) and
 		      select(2, string.gsub(second, "#" .. id .. ";", "")) >= 2 and
-		      select(2, string.gsub(second, "T" .. id .. ";", "")) == 1)
+		      select(2, string.gsub(second, "T" .. id .. ";", "")) == 1
 		probe.revision = 2
 		local dirty = _ScriptGraphDirtyRoots().roots["0"]
 		local third = _ScriptGraph.serialize(graphRoots)
@@ -3385,6 +3427,9 @@ do
 		local patched = _ScriptGraph.serialize(graphRoots)
 		check("engine_patches_rederive_only_on_a_library_write", engineKept and not _ScriptGraph.cacheState("0", "engine") and string.find(patched, "s20:CheckpointCacheProben73;", 1, true) ~= nil)
 		rawset(string, "CheckpointCacheProbe", previousPatch)
+		local restored, errors = _ScriptGraph.deserialize(second)
+		check("an_object_root_referencing_a_global_table_survives_a_globals_reuse", keptAlias and #errors == 0 and
+		      restored["61"] and rawequal(restored["61"].shared, CheckpointGlobalCacheProbe) and CheckpointGlobalCacheProbe.revision == 1)
 		CheckpointGlobalCacheProbe = previous
 	end
 	-- A node one root defines and another names keeps its id when the other root is written again.
@@ -3659,6 +3704,8 @@ static int ScriptGraphNoteValue(lua_State* L) {
 	if (!rep || !rep->ptr()) return 0;
 	CheckpointGraphIndex::Get().NoteValue(rep->ptr());
 	rep->set_flags(rep->flags() | luabind::detail::object_rep::checkpoint_trap);
+	if (ClassDerivesFrom(rep->crep(), "Controller")) static_cast<Controller*>(rep->ptr())->ArmCheckpointValueTrap();
+	if (ClassDerivesFrom(rep->crep(), "SoundSet")) static_cast<SoundSet*>(rep->ptr())->ArmCheckpointValueTrap();
 	if (auto* entity = ScriptGraphCheckpointEntity(rep)) {
 		// The stamp reports the Entity by its own pointer, which a base cast need not leave where
 		// luabind holds it, so both names of the object lead to the same root.
@@ -4335,11 +4382,19 @@ static int ScriptGraphNativeAddress(lua_State* L) {
 }
 
 static int ScriptGraphMembers(lua_State* L) {
+	const bool watch = lua_toboolean(L, 2) != 0;
+	const auto note = [&] {
+		if (watch && lua_istable(L, -1)) {
+			CheckpointGraphIndex::Get().NoteTable(lua_topointer(L, -1));
+			luaJIT_arm_tab_write(L, -1);
+		}
+	};
 	if (const auto* object = luabind::detail::is_class_object(L, 1); object && object->crep()) {
 		lua_newtable(L);
 		const int result = lua_gettop(L);
 		auto merge = [&]() {
 			const int source = lua_gettop(L);
+			note();
 			lua_pushnil(L);
 			while (lua_next(L, source) != 0) {
 				lua_pushvalue(L, -2);
@@ -4357,6 +4412,7 @@ static int ScriptGraphMembers(lua_State* L) {
 		}
 	} else if (luabind::detail::is_class_rep(L, 1)) {
 		static_cast<luabind::detail::class_rep*>(lua_touserdata(L, 1))->get_table(L);
+		note();
 	} else {
 		lua_pushnil(L);
 	}
@@ -5567,6 +5623,8 @@ CheckpointText LuaStateWrapper::CaptureRandomGeneratorCheckpoint() const {
 
 bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText* captured, std::vector<std::string>& problems) {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	const auto nativeStart = std::chrono::steady_clock::now();
+	LuaCheckpointBarrierPause barrierPause;
 	// A capture is taken at a committed tick boundary with no preview window armed. Inside one, the
 	// window's rollback would undo writes the graph already recorded, so the archive would name a
 	// state the live one never reaches. Refuse by name rather than record it.
@@ -5605,7 +5663,12 @@ bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText
 		explicit CarriedScope(std::unordered_set<const MovableObject*>& objects) { s_CarriedScriptOwnedObjects = &objects; }
 		~CarriedScope() { s_CarriedScriptOwnedObjects = nullptr; }
 	} carriedScope{carried};
-	if (lua_pcall(m_State, 1, 2, 0) != 0) {
+	const auto serializeStart = std::chrono::steady_clock::now();
+	const int result = lua_pcall(m_State, 1, 2, 0);
+	const auto finishStart = std::chrono::steady_clock::now();
+	CheckpointGraphIndex::Get().NoteWalkPart(m_State, "native_setup", 0, std::chrono::duration_cast<std::chrono::microseconds>(serializeStart - nativeStart).count(), false, {});
+	if (result != 0) {
+		if (s_SerialBeforeCapture.contains(m_State)) ScriptGraphEndCapture(m_State);
 		problems.push_back(std::string("script graph serialize failed: ") + (lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?"));
 		lua_settop(m_State, top);
 		return false;
@@ -5633,6 +5696,7 @@ bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText
 		problems.push_back("a script-owned " + mo->GetClassName() + " (" + mo->GetPresetName() + ") that no script graph root reaches");
 	});
 	lua_settop(m_State, top);
+	CheckpointGraphIndex::Get().NoteWalkPart(m_State, "native_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - finishStart).count(), false, {});
 	return problems.size() == before;
 }
 

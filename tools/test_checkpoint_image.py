@@ -42,7 +42,10 @@ REQUIRED_ROWS = (
     "generational_shadow_keeps_the_freeze_value",
     "peek_reuses_the_shadow_when_the_stamp_matches",
     "one_walk_keeps_every_state_reused_root",
-	"globals_roots_are_separate_in_each_state",
+    "globals_roots_are_separate_in_each_state",
+    "unwatched_roots_prevent_whole_graph_reuse",
+    "a_native_only_write_prevents_whole_graph_reuse",
+    "removed_roots_release_their_recorded_tables",
     "a_partial_walk_answers_the_unknown_table",
     "barrier_pause_reports_a_foreign_write",
 )
@@ -56,7 +59,15 @@ REQUIRED_SCENE_ROWS = (
     "image_membership_matches_the_world_structure",
     "archive_describes_the_hashed_instant",
     "a_saved_field_write_moves_the_stamp",
-	"vector_out_argument_dirties_its_root",
+    "vector_out_argument_dirties_its_root",
+    "an_atomgroup_write_moves_its_owner_stamp",
+    "a_gib_write_moves_its_owner_stamp",
+    "gib_members_and_live_offsets_stamp_the_owner",
+    "a_placement_write_moves_its_owner_stamp",
+    "a_sensor_write_moves_its_owner_stamp",
+    "a_controller_write_moves_its_owner_stamp",
+    "an_exit_reset_moves_its_owner_stamp",
+    "a_soundset_write_moves_its_owner_stamp",
     "captured_graphs_parse_in_their_own_state",
 )
 
@@ -260,7 +271,7 @@ def score_walk_attribution(stdout: str) -> dict:
     for tick in sorted(walked):
         rows = [row for row in parts if int(row[0]) == tick]
         names = {row[2] for row in rows}
-        missing = {"setup", "paths", "globals", "engine", "rng", "assembly", "concat", "finish"} - names
+        missing = {"native_setup", "setup", "paths", "globals", "engine", "rng", "assembly", "concat", "finish", "native_finish"} - names
         if missing:
             failures.append(f"tick {tick} missing walk parts {sorted(missing)}; actual {sorted(names)}")
         if "object" not in names:
