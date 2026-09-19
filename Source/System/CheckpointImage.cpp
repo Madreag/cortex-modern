@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <thread>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -34,11 +35,21 @@ using namespace RTE;
 namespace {
 	std::atomic<uint64_t> s_LuaWrites{0};
 	std::atomic<int> s_BarrierPaused{0};
+	std::atomic<std::thread::id> s_BarrierPauseOwner{};
+	std::atomic<uint64_t> s_PausedForeignWrites{0};
 
 	void OnLuaTableWrite(void* table) {
-		// A capture's own writes are discarded by the walk anyway; the callback stays installed so
-		// every table born in the capture still gets its trap.
-		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) return;
+		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) {
+			// The capture's own scratch writes are its business; the callback stays installed so
+			// every table born in the capture still gets its trap.
+			if (std::this_thread::get_id() == s_BarrierPauseOwner.load(std::memory_order_relaxed)) {
+				return;
+			}
+			// The freeze is meant to hold every Lua thread. One that wrote anyway would be lost
+			// here, and the next capture would reuse a graph that changed under it, so the write
+			// is counted and reported instead of assumed away.
+			s_PausedForeignWrites.fetch_add(1, std::memory_order_relaxed);
+		}
 		s_LuaWrites.fetch_add(1, std::memory_order_relaxed);
 		CheckpointGraphIndex::Get().OnTableWritten(table);
 	}
@@ -94,7 +105,10 @@ void CheckpointGraphIndex::EndWalk() {
 		m_DirtyRoots.clear();
 		m_UnknownTable = false;
 	} else {
-		// A partial walk keeps what the roots it skipped recorded, so their tables stay known.
+		// A partial walk keeps what the roots it skipped recorded, so their tables stay known. It
+		// has answered the unknown table too: the capture it ends rewrote every root it did not
+		// reuse, so leaving the flag set would disable the cache for the rest of the process.
+		m_UnknownTable = false;
 		for (auto entry = m_TableRoots.begin(); entry != m_TableRoots.end();) {
 			entry = m_WalkingRoots.count(entry->second) ? m_TableRoots.erase(entry) : std::next(entry);
 		}
@@ -208,6 +222,7 @@ void CheckpointCow::FinishImage(std::shared_ptr<CheckpointImage> image) {
 	m_LastRecords = {image->layersUs, image->activityUs, image->graphUs, image->sceneUs,
 	                 image->structureUs, image->sceneRuntimeUs, image->globalsUs};
 	m_LastGraph = image->graph;
+	m_LastGraphBeforeWalk = image->graphBeforeWalk;
 	m_LastGraphSerial = image->graphSerial;
 	m_LastRootsReused = image->graphRootsReused;
 	m_LastRootsRewritten = image->graphRootsRewritten;
@@ -237,6 +252,7 @@ void CheckpointCow::PublishLog(uint64_t tick) const {
 	std::vector<int64_t> samples;
 	std::array<int64_t, 7> records{};
 	GraphDirt graph;
+	GraphDirt before;
 	size_t reused = 0;
 	size_t captured = 0;
 	bool luaReused = false;
@@ -253,6 +269,7 @@ void CheckpointCow::PublishLog(uint64_t tick) const {
 		samples = m_FreezeSamples;
 		records = m_LastRecords;
 		graph = m_LastGraph;
+		before = m_LastGraphBeforeWalk;
 		reused = m_LastReused;
 		captured = m_LastCaptured;
 		luaReused = m_LastLuaReused;
@@ -267,9 +284,9 @@ void CheckpointCow::PublishLog(uint64_t tick) const {
 	// Where the freeze went, and how much of it the shadows and the graph index saved.
 	std::cout << std::format("[autosave] tick={} layers_us={} activity_us={} graph_us={} scene_us={} structure_us={} scene_runtime_us={} globals_us={}\n",
 	                         tick, records[0], records[1], records[2], records[3], records[4], records[5], records[6]);
-	std::cout << std::format("[autosave] tick={} shadows_reused={} shadows_captured={} graph_roots={} graph_tables={} graph_dirty_roots={} graph_dirty_tables={} graph_unknown_table={} graph_note_us={} graph_reused={}\n",
-	                         tick, reused, captured, graph.roots, graph.tables, graph.dirtyRoots, graph.dirtyTables,
-	                         graph.unknownTable ? 1 : 0, graph.noteUs, luaReused ? 1 : 0);
+	std::cout << std::format("[autosave] tick={} shadows_reused={} shadows_captured={} graph_roots={} graph_tables={} graph_dirty_roots={} graph_dirty_tables={} graph_unknown_table={} graph_note_us={} graph_reused={} paused_writes={}\n",
+	                         tick, reused, captured, graph.roots, graph.tables, before.dirtyRoots, before.dirtyTables,
+	                         before.unknownTable ? 1 : 0, graph.noteUs, luaReused ? 1 : 0, LuaCheckpointPausedWrites());
 	// The walk is the freeze's share and the text the worker's; the counter is the archive's numbering.
 	std::cout << std::format("[autosave] tick={} graph_walk_us={} graph_text_us={} roots_reused={} roots_rewritten={} graph_state_serial={}\n",
 	                         tick, records[2], graphTextUs, rootsReused, rootsRewritten, graphSerial) << std::flush;
@@ -286,6 +303,7 @@ void CheckpointCow::WriteMetricsJson(const std::string& path) const {
 	std::vector<int64_t> samples;
 	std::array<int64_t, 7> records{};
 	GraphDirt graph;
+	GraphDirt before;
 	size_t reused = 0;
 	size_t captured = 0;
 	bool luaReused = false;
@@ -303,6 +321,7 @@ void CheckpointCow::WriteMetricsJson(const std::string& path) const {
 		sampleCount = m_FreezeSamples.size();
 		records = m_LastRecords;
 		graph = m_LastGraph;
+		before = m_LastGraphBeforeWalk;
 		reused = m_LastReused;
 		captured = m_LastCaptured;
 		luaReused = m_LastLuaReused;
@@ -359,11 +378,19 @@ void RTE::ArmLuaCheckpointBarrier() {
 
 // A capture's own scratch tables are not gameplay writes, and the walk discards every write it sees.
 RTE::LuaCheckpointBarrierPause::LuaCheckpointBarrierPause() {
+	// The pausing thread's own writes are the capture's scratch; any other thread's are a defect.
+	s_BarrierPauseOwner.store(std::this_thread::get_id(), std::memory_order_relaxed);
 	s_BarrierPaused.fetch_add(1, std::memory_order_relaxed);
 }
 
 RTE::LuaCheckpointBarrierPause::~LuaCheckpointBarrierPause() {
-	s_BarrierPaused.fetch_sub(1, std::memory_order_relaxed);
+	if (s_BarrierPaused.fetch_sub(1, std::memory_order_relaxed) == 1) {
+		s_BarrierPauseOwner.store(std::thread::id(), std::memory_order_relaxed);
+	}
+}
+
+uint64_t RTE::LuaCheckpointPausedWrites() {
+	return s_PausedForeignWrites.load(std::memory_order_relaxed);
 }
 
 uint64_t RTE::LuaCheckpointWriteGeneration() {
@@ -480,6 +507,19 @@ bool RTE::RunCheckpointSceneRows() {
 		fail("image_ignores_writes_during_worker_traversal", "front actor is not a MovableObject");
 		return false;
 	}
+	// A write to a field the archive carries has to move the object's stamp, or its shadow is served
+	// again with the old value. NotResting writes three saved fields and no travel stamps them.
+	{
+		const uint64_t before = live->CheckpointWriteGeneration();
+		live->NotResting();
+		const uint64_t after = live->CheckpointWriteGeneration();
+		const char* row = "a_saved_field_write_moves_the_stamp";
+		if (after == before) {
+			fail(row, "generation " + std::to_string(after) + " after NotResting wrote three saved fields");
+		} else {
+			pass(row, "generation " + std::to_string(before) + " -> " + std::to_string(after));
+		}
+	}
 	// A capture assigns sound identities and can draw counters; the rows hand the sim back what they took.
 	struct BorrowedCounters {
 		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
@@ -591,6 +631,27 @@ bool RTE::RunCheckpointImageSelfTest() {
 		std::cout << "[cow-checkpoint-selftest] PASS " << name << " " << detail << std::endl;
 	};
 	try {
+		// The freeze is meant to hold every Lua thread. A write from one it did not hold is a defect
+		// the capture has to report, not a write it may drop; its own thread's scratch still passes.
+		{
+			int table = 0;
+			const uint64_t before = LuaCheckpointPausedWrites();
+			uint64_t duringOwn = 0;
+			{
+				LuaCheckpointBarrierPause pause;
+				OnLuaTableWrite(&table);
+				duringOwn = LuaCheckpointPausedWrites();
+				std::thread foreign([&table] { OnLuaTableWrite(&table); });
+				foreign.join();
+			}
+			const uint64_t after = LuaCheckpointPausedWrites();
+			const char* row = "barrier_pause_reports_a_foreign_write";
+			if (duringOwn != before || after != before + 1) {
+				fail(row, "own=" + std::to_string(duringOwn - before) + " foreign=" + std::to_string(after - duringOwn));
+			} else {
+				pass(row, "the capture's own write passed, the other thread's was counted");
+			}
+		}
 		CheckpointCache cache;
 		cache.Begin();
 		int stamp = 3;
@@ -633,6 +694,26 @@ bool RTE::RunCheckpointImageSelfTest() {
 			         " reused=" + std::to_string(spanned.rootsReused) + " rewritten=" + std::to_string(spanned.rootsRewritten));
 		} else {
 			pass("one_walk_keeps_every_state_reused_root", "reused 1 rewritten 1");
+		}
+
+		// A write to a table no walk recorded raises the unknown flag, which turns the root cache off
+		// wholesale. The walk that follows answers it, so the flag must not survive that walk -
+		// whether it reused a chunk or not. It used to survive a partial one, disabling the cache for
+		// the rest of the process the first time reuse ever succeeded.
+		{
+			int stranger = 0;
+			index.OnTableWritten(&stranger);
+			const bool raised = index.UnknownTableWritten();
+			index.BeginWalk();
+			index.NoteRootReuse(1, 0);
+			index.BeginRoot(21); index.NoteTable(&stateTwoTable); index.NoteRootReuse(0, 1);
+			index.EndWalk();
+			const char* row = "a_partial_walk_answers_the_unknown_table";
+			if (!raised || index.UnknownTableWritten()) {
+				fail(row, "raised=" + std::to_string(raised) + " still_unknown=" + std::to_string(index.UnknownTableWritten()));
+			} else {
+				pass(row, "the flag was raised and the walk that followed cleared it");
+			}
 		}
 	} catch (const std::exception& error) {
 		fail("no_unexpected_exception", error.what());

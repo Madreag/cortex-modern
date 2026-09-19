@@ -417,6 +417,19 @@ namespace RTE {
 		/// as soon as that checkpoint's archive names its world-structure digest.
 		void RollWorldReplaySegment(uint64_t tick);
 		void SealWorldReplaySegment();
+
+		/// Which recording a round of a persistent world opens: a segment that chains onto the
+		/// checkpoint it stands on, or an ordinary file. A resume and a heal both stand on one.
+		struct RoundRecordingPlan {
+			bool segment = false;
+			uint64_t tick = 0;
+			std::string digest;
+		};
+		/// @param resumeTick The tick a resumed round stands on, 0 when this round did not resume.
+		/// @param healTick The tick a healed round rewound to, 0 when this round is not a heal.
+		static RoundRecordingPlan PlanRoundRecording(bool persistentWorld, bool worldIdentityValid,
+		                                             uint64_t resumeTick, const std::string& resumeDigest,
+		                                             uint64_t healTick, const std::string& healDigest);
 		/// The lockstep state a match resumed from a checkpoint starts on, derived from the agreed
 		/// configuration alone so every peer builds the same one whether it loads its own copy of the
 		/// checkpoint or is streamed the host's. A restarted match has nothing in flight.

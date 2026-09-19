@@ -439,26 +439,35 @@ def _world_peer_args(root: Path, who: str, port: int, ticks: int, extra: list) -
     return args + extra
 
 
-def _carry_world_state(source: Path, target: Path, who: str) -> None:
+def _carry_world_state(source: Path, who: str, runtime: Path) -> None:
     """What a restarted process finds on its own disk: the world's identity record, its checkpoints,
-    its manifests and admission file, and - for the client - the ticket it still holds."""
-    for relative in ("runtime/Autosaves", "runtime/Worlds"):
-        if (source / who / relative).exists():
-            shutil.copytree(source / who / relative, target / who / relative, dirs_exist_ok=True)
+    its manifests and admission file, and - for the client - the ticket it still holds.
+
+    The copy lands in the runtime the runner has just staged, not in the run directory: `make_run`
+    refuses an output directory that already exists, so nothing may be written there beforehand."""
+    for relative in ("Autosaves", "Worlds"):
+        held = source / who / "runtime" / relative
+        if held.exists():
+            shutil.copytree(held, runtime / relative, dirs_exist_ok=True)
     for name in ("reconnect.ticket", "NetworkIdentity.key", "ParticipantIdentity.key"):
         carried = source / who / "runtime/Userdata" / name
         if carried.exists():
-            (target / who / "runtime/Userdata").mkdir(parents=True, exist_ok=True)
-            shutil.copy2(carried, target / who / "runtime/Userdata" / name)
+            (runtime / "Userdata").mkdir(parents=True, exist_ok=True)
+            shutil.copy2(carried, runtime / "Userdata" / name)
 
 
-def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict, kill_past: int = 0) -> dict:
+def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict, kill_past: int = 0,
+                     carry=None) -> dict:
+    """One round of a persistent world. `carry` is the previous round's root: its world state is
+    copied into each staged runtime after the runner prepares it and before the process starts."""
     if FAMILY_LOCK.exists():
         raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
     runs, records = {}, {}
     for who in ("host", "client"):
         runs[who] = make_run(repo, _world_peer_args(root, who, port, ticks, extra.get(who, [])),
                              root / who, 420, env={"CCCP_HEADLESS": "1"})
+        if carry is not None:
+            _carry_world_state(carry, who, Path(runs[who].cwd))
 
     def drive(who: str) -> None:
         try:
@@ -528,10 +537,7 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
 
     # Boot two: the same install, no -net-resume-match. The world reopens on its own newest checkpoint.
     second.mkdir(parents=True, exist_ok=False)
-    for who in ("host", "client"):
-        (second / who).mkdir(parents=True, exist_ok=True)
-        _carry_world_state(first, second, who)
-    resumed = _run_world_round(repo, second, port + 2, resume_ticks, {})
+    resumed = _run_world_round(repo, second, port + 2, resume_ticks, {}, carry=first)
     host_log = peer_log(second, "host")
     restarted = WORLD_IDENTITY.findall(host_log)
     assert restarted, "the restarted world printed no identity"
@@ -555,10 +561,7 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
 
     # The fresh flag: the same install and the same checkpoints, a NEW round from the scene.
     fresh.mkdir(parents=True, exist_ok=False)
-    for who in ("host", "client"):
-        (fresh / who).mkdir(parents=True, exist_ok=True)
-        _carry_world_state(second, fresh, who)
-    fresh_records = _run_world_round(repo, fresh, port + 4, resume_ticks, {"host": ["-net-world-fresh"]})
+    fresh_records = _run_world_round(repo, fresh, port + 4, resume_ticks, {"host": ["-net-world-fresh"]}, carry=second)
     fresh_log = peer_log(fresh, "host")
     assert not RESUMING.search(fresh_log), "a fresh world boot resumed a checkpoint anyway"
     fresh_identity = WORLD_IDENTITY.findall(fresh_log)

@@ -16,6 +16,7 @@ SUITES = (
     ("snapshot-inventory-roles", ["test_snapshot_inventory_roles.py"]),
     ("snapshot-runtime", ["snapshot_runtime.py", "--self-test"]),
     ("print-discipline", ["test_print_discipline.py"]),
+    ("main-arg-loop", ["test_main_arg_loop.py"]),
 )
 
 

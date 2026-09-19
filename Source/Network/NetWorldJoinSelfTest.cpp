@@ -5234,6 +5234,28 @@ namespace RTE {
 			*error = "resumed-world-recorded-unarmed: " + never.string() + " was written anyway";
 			return false;
 		}
+
+		// A healed round of a resumed world chains too: the resync rewinds to a named checkpoint, so
+		// the stretch from the heal to the next roll is a segment, not an ordinary recording.
+		const NetMatchService::RoundRecordingPlan healed =
+			NetMatchService::PlanRoundRecording(true, true, 0, std::string(), 1800, digest);
+		if (!healed.segment || healed.tick != 1800 || healed.digest != digest) {
+			*error = "healed-world-records-no-segment: a heal of a resumed world opened an ordinary recording";
+			return false;
+		}
+		const NetMatchService::RoundRecordingPlan resumed =
+			NetMatchService::PlanRoundRecording(true, true, 1200, digest, 1800, digest);
+		if (!resumed.segment || resumed.tick != 1200) {
+			*error = "resumed-world-segment-tick-wrong: a resumed round must chain on its own checkpoint";
+			return false;
+		}
+		// An ordinary match, and a world whose heal named no checkpoint, keep the plain recording.
+		if (NetMatchService::PlanRoundRecording(false, true, 1200, digest, 0, std::string()).segment ||
+		    NetMatchService::PlanRoundRecording(true, true, 0, std::string(), 0, std::string()).segment ||
+		    NetMatchService::PlanRoundRecording(true, false, 1200, digest, 0, std::string()).segment) {
+			*error = "non-world-round-recorded-a-segment: a segment opened outside a persistent world";
+			return false;
+		}
 		error->clear();
 		return true;
 	}

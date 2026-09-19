@@ -64,6 +64,9 @@ namespace RTE {
 		int64_t globalsUs = 0;
 		int64_t layersUs = 0;
 		GraphDirt graph;
+		//! The dirt as it stood BEFORE the walk, which is what decided whether the root cache
+		//! engaged; EndWalk clears those counters, so the sample above always reads them as zero.
+		GraphDirt graphBeforeWalk;
 		bool luaReused = false;
 		size_t objectsReused = 0;
 		size_t objectsCaptured = 0;
@@ -111,6 +114,7 @@ namespace RTE {
 		std::vector<int64_t> m_FreezeSamples;
 		std::array<int64_t, 7> m_LastRecords{};
 		GraphDirt m_LastGraph;
+		GraphDirt m_LastGraphBeforeWalk;
 		size_t m_LastReused = 0;
 		size_t m_LastCaptured = 0;
 		bool m_LastLuaReused = false;
@@ -166,6 +170,10 @@ namespace RTE {
 
 	void ArmLuaCheckpointBarrier();
 	uint64_t LuaCheckpointWriteGeneration();
+
+	/// How many table writes arrived from a thread the capture's freeze did not hold. The freeze is
+	/// meant to quiesce every Lua thread, so a non-zero count is a defect, not a tolerance.
+	uint64_t LuaCheckpointPausedWrites();
 
 	/// Holds the table write barrier off for a capture, so its scratch tables are never armed.
 	class LuaCheckpointBarrierPause {
