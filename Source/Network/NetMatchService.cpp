@@ -2765,18 +2765,23 @@ static std::string ResyncSaveName() {
 		}
 		DriveWorldSeatRespawns(nowFrame);
 		const uint64_t nextFrame = m_Coordinator->GetStats().nextFrame;
-		const NetWorldJoinSession* due = m_WorldJoin.DueActivation(nextFrame);
-		bool late = false;
-		if (due == nullptr) {
-			due = m_WorldJoin.LateActivation(nextFrame);
-			late = due != nullptr;
-		}
-		if (due != nullptr) {
+		// A streaming watcher costs the round nothing, so it never stands in front of a member that
+		// is due at the same frame. Each stream takes its bootstrap out of the due set, so this ends.
+		for (size_t walked = m_WorldJoin.Sessions().size() + 1; walked > 0; --walked) {
+			const NetWorldJoinSession* due = m_WorldJoin.DueActivation(nextFrame);
+			bool late = false;
+			if (due == nullptr) {
+				due = m_WorldJoin.LateActivation(nextFrame);
+				late = due != nullptr;
+			}
+			if (due == nullptr) {
+				break;
+			}
 			const NetWorldActivationPlan plan = PlanWorldActivation(*due, nextFrame, late);
 			if (!plan.admit) {
 				(void)m_WorldJoin.CompleteActivation(due->connection, plan.firstRequired, nullptr);
 				std::cout << "[net-world] spectator stream at=" << plan.firstRequired << std::endl;
-				return;
+				continue;
 			}
 			std::string admitError;
 			if (!m_Coordinator->AdmitWorldMember(due->assignedPeerId, due->connection, plan.firstRequired, &admitError)) {
@@ -2790,6 +2795,8 @@ static std::string ResyncSaveName() {
 			}
 			(void)m_WorldJoin.CompleteActivation(due->connection, plan.firstRequired, nullptr);
 			std::cout << "[net-world] activate peer=" << static_cast<int>(due->assignedPeerId) << " at=" << plan.firstRequired << std::endl;
+			// One member admission per pump, as before: two brains never enter at one tick.
+			break;
 		}
 	}
 
