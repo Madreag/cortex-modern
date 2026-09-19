@@ -1984,11 +1984,14 @@ static std::string ResyncSaveName() {
 		const uint8_t lobbyPeer = WorldJoinLobbyPeer(session);
 		NetLobbySession& lobby = m_Runner->GetLobbySession();
 		std::string bindError;
+		// The bind is idempotent: a known remote only has its transport re-pointed, so a retried
+		// transfer costs nothing here.
 		if (!lobby.BindWorldTransferRemote(lobbyPeer, session.connection, &bindError)) {
 			if (error) *error = bindError;
 			return false;
 		}
-		if (session.assignedPeerId != 0) {
+		// Once per bootstrap, not once per retry: the seat's config does not change while it waits.
+		if (session.assignedPeerId != 0 && m_WorldJoin.NoteMatchConfigSent(session.connection)) {
 			lobby.SendMatchConfigTo(lobbyPeer);
 		}
 		// The bytes and their digest were read once, when the image was published; re-reading the
@@ -2307,14 +2310,21 @@ static std::string ResyncSaveName() {
 		// The token outlives this process: the next boot proves the row is the world's own with it.
 		NetWorldIdentity stored = m_WorldIdentity;
 		stored.directoryToken = issued;
+		{
+			// The live token is this process's the moment the service issues it; the record is only how
+			// the NEXT boot proves the row is the world's, so the write follows the in-memory value.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_WorldIdentity.directoryToken = issued;
+			m_DirectoryRow.resumeToken = issued;
+		}
+		// One temp+rename of a ~100 byte record, once per issued token, never per tick. The service
+		// has no IO thread to hand it to: m_Worker (NetMatchService.h:664) is the one-shot setup
+		// thread WorkerMain/WorkerRematchMain/WorkerResyncMain own, and Update() itself runs on the
+		// game thread inside the sim tick (Main.cpp:4520).
 		std::string writeError;
 		if (!NetWorldIdentityFile::Write(m_WorldJoin.IdentityPath(), stored, &writeError)) {
 			std::cout << "[net-world] directory token not persisted: " << writeError << std::endl;
-			return;
 		}
-		std::lock_guard<std::mutex> lock(m_Mutex);
-		m_WorldIdentity.directoryToken = issued;
-		m_DirectoryRow.resumeToken = issued;
 	}
 
 	bool NetMatchService::ReleaseWorldCatchUpOnceRunning(bool coordinatorRunning, NetWorldCatchUpClient& catchUp) {
