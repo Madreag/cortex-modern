@@ -584,8 +584,7 @@ assert(seen > 0, 'no trace event after forced abort path seen='..tostring(seen).
 		for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) states.push_back(&state);
 		bool passed = true;
 #if LJ_HASJIT
-		// One arm runs the probe one Lua call deep, the other from a hook with a Lua function still on top; an
-		// attached consumer reads what each abort reported.
+		// One arm aborts with a C frame on top, the other with a Lua one, and a consumer reads both reports.
 		static const char* fixture = R"lua(
 _AbortLeftover = {}
 local seen = _AbortLeftover

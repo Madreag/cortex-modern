@@ -163,8 +163,7 @@ namespace {
 		stream.flush();
 	}
 
-	// A fault on this thread while a print is in progress takes the unlocked path; try_to_lock is only
-	// for a fault on another thread.
+	// A fault raised inside a print must not wait on the lock its own thread already holds.
 	void WriteFaultLine(std::ostream& stream, std::FILE* file, const std::string& line) {
 		std::string whole = line;
 		if (whole.empty() || whole.back() != '\n') {
