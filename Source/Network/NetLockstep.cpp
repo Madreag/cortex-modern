@@ -3433,6 +3433,10 @@ namespace RTE {
 		const uint64_t budget = std::max<uint32_t>(1, m_Config.timeoutMs);
 		const bool expired = nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= budget;
 		if (m_MigrationPhase == NetHostMigrationPhase::Contacting) {
+			if (!hosting && m_MigrationAuthoritySeen && nowMs >= m_MigrationStartedMs && nowMs - m_MigrationStartedMs >= 3 * budget) {
+				FailHostMigration("the successor did not publish a handover plan");
+				return;
+			}
 			if (hosting) {
 				// The closed roster excludes every unanswered seat at the published resume frame.
 				if (expired) {
