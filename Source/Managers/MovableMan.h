@@ -371,6 +371,7 @@ namespace RTE {
 			uint64_t aimIntents = 0;
 			uint64_t flipIntents = 0;
 			uint64_t directWrites = 0;
+			uint64_t localScriptMessages = 0;
 		};
 		const ControllerBoundaryStats& GetControllerBoundaryStats() const { return m_ControllerBoundaryStats; }
 		/// The canonical actor state the owner's AI pass may not change directly.
@@ -388,6 +389,8 @@ namespace RTE {
 		/// Turns what the pass changed into one-shot intents and puts the canonical actor back.
 		void RestoreControllerBoundary(const ControllerBoundaryBaseline& before, long long simTick);
 		void ReportControllerBoundaryViolation(const char* what, const Actor* actor);
+		/// Counts an AI pass's script message that no wire can name; it delivers locally, as it always did.
+		void NoteLocalAIPassScriptMessage();
 		/// Counts and reports a write to the world attempted from speculative execution; ordinary gameplay never gets here.
 		void ReportSpeculationViolation(const char* what, const MovableObject* mo);
 		/// Keeps a resident out of the draw loops while a preview shows its taken shadow instead.
