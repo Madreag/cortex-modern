@@ -4751,6 +4751,45 @@ void RunGameLoop() {
 				const double budgetMs = firstCapture ? firstWalkBudgetMs : static_cast<double>(captureBudgetUs) / 1000.0;
 				const bool archived = saved && g_ActivityMan.LastAutosaveBytes() > 0 && g_ActivityMan.LastAutosaveTick() == simTick &&
 				                      captureMs > 0.0 && captureMs < budgetMs;
+				// The image and the world structure must name ONE frozen instant: every object the
+				// structure's cohorts carry has to be in the scene the image wrote, and no other.
+				if (archived) {
+					const auto image = CheckpointCow::Get().Last();
+					std::set<long> cohortUIDs, sceneUIDs;
+					std::string membershipDetail;
+					if (image) {
+						// "<len> WorldStructure3 " then the six cohorts, each a count and that many ids.
+						std::istringstream structure(image->structure.Text());
+						std::string headerSize, headerTag;
+						structure >> headerSize >> headerTag;
+						for (int cohort = 0; cohort < 6 && structure; ++cohort) {
+							size_t count = 0;
+							structure >> count;
+							for (size_t index = 0; index < count && structure; ++index) {
+								long uid = 0;
+								structure >> uid;
+								cohortUIDs.insert(uid);
+							}
+						}
+						membershipDetail = headerTag;
+						const std::string& sceneText = image->scene.Text();
+						for (size_t at = sceneText.find("PlaceSceneObject"); at != std::string::npos; at = sceneText.find("PlaceSceneObject", at + 1)) {
+							const size_t next = sceneText.find("PlaceSceneObject", at + 1);
+							const size_t id = sceneText.find("UniqueID = ", at);
+							if (id != std::string::npos && (next == std::string::npos || id < next)) sceneUIDs.insert(std::strtol(sceneText.c_str() + id + 11, nullptr, 10));
+						}
+					}
+					std::set<long> missing, extra;
+					std::set_difference(cohortUIDs.begin(), cohortUIDs.end(), sceneUIDs.begin(), sceneUIDs.end(), std::inserter(missing, missing.end()));
+					std::set_difference(sceneUIDs.begin(), sceneUIDs.end(), cohortUIDs.begin(), cohortUIDs.end(), std::inserter(extra, extra.end()));
+					std::ostringstream line;
+					line << "[cow-checkpoint-selftest] " << (image && !cohortUIDs.empty() && missing.empty() && extra.empty() ? "PASS" : "FAIL")
+					     << " image_membership_matches_the_world_structure tick=" << simTick
+					     << " cohorts=" << cohortUIDs.size() << " scene=" << sceneUIDs.size()
+					     << " cohorts_only=" << (missing.empty() ? 0 : *missing.begin())
+					     << " scene_only=" << (extra.empty() ? 0 : *extra.begin()) << " tag=" << membershipDetail;
+					System::PrintDiagnosticLine(line.str());
+				}
 				if (++s_cowCheckpointCaptures <= 2) {
 					std::ostringstream line;
 					line << "[cow-checkpoint-selftest] " << (archived ? "PASS" : "FAIL")
