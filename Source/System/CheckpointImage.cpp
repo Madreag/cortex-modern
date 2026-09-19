@@ -89,29 +89,48 @@ void CheckpointGraphIndex::BeginWalk(bool full) {
 	// A capture of every state opens the walk once; each state's own capture nests inside it.
 	if (m_WalkDepth++ > 0) return;
 	m_Walking.clear();
+	m_WalkingValues.clear();
 	m_WalkingRoots.clear();
 	m_Walk = true;
 	m_FullWalk = full;
 	m_RootsReused = 0;
 	m_RootsRewritten = 0;
-	m_Root = 0;
+	m_Root = {};
+	m_UncacheableRoots = 0;
 	m_WalkNoteUs = 0;
 	m_WalkStates.clear();
 	m_WalkParts.clear();
 }
 
-void CheckpointGraphIndex::BeginRoot(uint64_t root) {
+void CheckpointGraphIndex::BeginRoot(uint64_t root, const void* state, std::string part) {
 	std::lock_guard lock(m_Mutex);
-	m_Root = root;
-	if (m_Walk) m_WalkingRoots.insert(root);
+	m_Root = {state, root, std::move(part)};
+	if (m_Walk) m_WalkingRoots.insert(m_Root);
+}
+
+void CheckpointGraphIndex::ReuseRoot(uint64_t root, const void* state, const std::string& part) {
+	std::lock_guard lock(m_Mutex);
+	m_FullWalk = false;
+	m_Roots.insert({state, root, part});
+}
+
+void CheckpointGraphIndex::RestartStateWalk(const void* state) {
+	std::lock_guard lock(m_Mutex);
+	for (auto entry = m_Walking.begin(); entry != m_Walking.end();) {
+		std::erase_if(entry->second, [state](const Root& root) { return root.state == state; });
+		entry = entry->second.empty() ? m_Walking.erase(entry) : std::next(entry);
+	}
+	std::erase_if(m_WalkingValues, [state](const auto& entry) { return entry.second.state == state; });
+	std::erase_if(m_WalkingRoots, [state](const Root& root) { return root.state == state; });
 }
 
 void CheckpointGraphIndex::NoteTable(const void* table) {
 	const auto start = std::chrono::steady_clock::now();
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || !table) return;
-	// The first root to reach a shared table owns it; that root is dirty when the table is written.
-	m_Walking.emplace(table, m_Root);
+	// Path lookup and node ownership can depend on the same table.
+	auto& roots = m_Walking[table];
+	if (std::find(roots.begin(), roots.end(), m_Root) == roots.end()) roots.push_back(m_Root);
 	m_WalkNoteUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
 }
 
@@ -125,7 +144,7 @@ void CheckpointGraphIndex::NoteValue(const void* value) {
 
 void CheckpointGraphIndex::NoteUncacheableRoots(size_t roots) {
 	std::lock_guard lock(m_Mutex);
-	m_UncacheableRoots = roots;
+	m_UncacheableRoots += roots;
 }
 
 void CheckpointGraphIndex::EndWalk() {
@@ -143,14 +162,18 @@ void CheckpointGraphIndex::EndWalk() {
 		// reuse, so leaving the flag set would disable the cache for the rest of the process.
 		m_UnknownTable = false;
 		for (auto entry = m_TableRoots.begin(); entry != m_TableRoots.end();) {
-			entry = m_WalkingRoots.count(entry->second) ? m_TableRoots.erase(entry) : std::next(entry);
+			std::erase_if(entry->second, [this](const Root& root) { return m_WalkingRoots.contains(root); });
+			entry = entry->second.empty() ? m_TableRoots.erase(entry) : std::next(entry);
 		}
 		for (auto entry = m_ValueRoots.begin(); entry != m_ValueRoots.end();) {
 			entry = m_WalkingRoots.count(entry->second) ? m_ValueRoots.erase(entry) : std::next(entry);
 		}
-		for (const auto& [table, root]: m_Walking) m_TableRoots[table] = root;
+		for (const auto& [table, roots]: m_Walking) {
+			auto& kept = m_TableRoots[table];
+			for (const Root& root: roots) if (std::find(kept.begin(), kept.end(), root) == kept.end()) kept.push_back(root);
+		}
 		for (const auto& [value, root]: m_WalkingValues) m_ValueRoots[value] = root;
-		for (uint64_t root: m_WalkingRoots) {
+		for (const Root& root: m_WalkingRoots) {
 			m_Roots.insert(root);
 			m_DirtyRoots.erase(root);
 		}
@@ -163,7 +186,7 @@ void CheckpointGraphIndex::EndWalk() {
 	m_NoteUs = m_WalkNoteUs;
 	m_Walk = false;
 	m_FullWalk = true;
-	m_Root = 0;
+	m_Root = {};
 }
 
 void CheckpointGraphIndex::NoteRootReuse(size_t reused, size_t rewritten) {
@@ -188,9 +211,18 @@ void CheckpointGraphIndex::NoteWalkPart(const void* state, std::string part, uin
 	m_WalkParts.push_back({index, std::move(part), root, elapsedUs, reused, std::move(unwatched)});
 }
 
-std::unordered_set<uint64_t> CheckpointGraphIndex::DirtyRoots() const {
+std::unordered_set<uint64_t> CheckpointGraphIndex::DirtyRoots(const void* state) const {
 	std::lock_guard lock(m_Mutex);
-	return m_DirtyRoots;
+	std::unordered_set<uint64_t> roots;
+	for (const Root& root: m_DirtyRoots) if (root.state == state) roots.insert(root.id);
+	return roots;
+}
+
+std::unordered_set<std::string> CheckpointGraphIndex::DirtyParts(const void* state, uint64_t root) const {
+	std::lock_guard lock(m_Mutex);
+	std::unordered_set<std::string> parts;
+	for (const Root& dirty: m_DirtyRoots) if (dirty.state == state && dirty.id == root) parts.insert(dirty.part);
+	return parts;
 }
 
 bool CheckpointGraphIndex::UnknownTableWritten() const {
@@ -207,7 +239,7 @@ void CheckpointGraphIndex::OnTableWritten(const void* table) {
 	std::lock_guard lock(m_Mutex);
 	if (m_Walk) return;  // The walk writes its own scratch tables.
 	if (const auto found = m_TableRoots.find(table); found != m_TableRoots.end()) {
-		m_DirtyRoots.insert(found->second);
+		for (const Root& root: found->second) m_DirtyRoots.insert(root);
 	} else if (!m_TableRoots.empty()) {
 		// A table the walk never recorded is in no chunk, so it stales none. The flag stays as the
 		// count of writes that named no root; the root cache no longer refuses itself over it.
@@ -228,9 +260,12 @@ void CheckpointGraphIndex::OnValueWritten(const void* value) {
 GraphDirt CheckpointGraphIndex::Sample() const {
 	std::lock_guard lock(m_Mutex);
 	GraphDirt dirt;
-	dirt.roots = m_Roots.size();
+	Roots roots, dirtyRoots;
+	for (const Root& root: m_Roots) roots.insert({root.state, root.id, {}});
+	for (const Root& root: m_DirtyRoots) dirtyRoots.insert({root.state, root.id, {}});
+	dirt.roots = roots.size();
 	dirt.tables = m_TableRoots.size();
-	dirt.dirtyRoots = m_DirtyRoots.size();
+	dirt.dirtyRoots = dirtyRoots.size();
 	dirt.dirtyTables = m_DirtyTables;
 	dirt.values = m_ValueRoots.size();
 	dirt.dirtyValues = m_DirtyValues;
@@ -790,6 +825,24 @@ bool RTE::RunCheckpointImageSelfTest() {
 		// another state kept by reusing its chunk.
 		int stateOneTable = 0, stateTwoTable = 0;
 		CheckpointGraphIndex& index = CheckpointGraphIndex::Get();
+		{
+			int firstState = 0, secondState = 0, firstGlobal = 0, secondGlobal = 0;
+			index.BeginWalk();
+			index.BeginRoot(0, &firstState, "global"); index.NoteTable(&firstGlobal);
+			index.BeginRoot(0, &secondState, "global"); index.NoteTable(&secondGlobal);
+			index.NoteUncacheableRoots(1); index.NoteUncacheableRoots(2);
+			index.EndWalk();
+			index.OnTableWritten(&firstGlobal);
+			const bool isolated = index.DirtyRoots(&firstState).contains(0) && index.DirtyRoots(&secondState).empty();
+			index.BeginWalk();
+			index.BeginRoot(0, &firstState, "global"); index.NoteTable(&firstGlobal);
+			index.ReuseRoot(0, &secondState, "global");
+			index.EndWalk();
+			index.OnTableWritten(&secondGlobal);
+			const bool retained = index.DirtyRoots(&secondState).contains(0) && index.DirtyRoots(&firstState).empty();
+			if (isolated && retained) pass("globals_roots_are_separate_in_each_state", "both writes reached their own state");
+			else fail("globals_roots_are_separate_in_each_state", "isolated=" + std::to_string(isolated) + " retained=" + std::to_string(retained));
+		}
 		index.BeginWalk();
 		index.BeginRoot(11); index.NoteTable(&stateOneTable); index.NoteRootReuse(0, 1);
 		index.BeginRoot(21); index.NoteTable(&stateTwoTable); index.NoteRootReuse(0, 1);

@@ -151,7 +151,9 @@ namespace RTE {
 		static CheckpointGraphIndex& Get();
 
 		void BeginWalk(bool full = true);
-		void BeginRoot(uint64_t root);
+		void BeginRoot(uint64_t root, const void* state = nullptr, std::string part = {});
+		void ReuseRoot(uint64_t root, const void* state, const std::string& part);
+		void RestartStateWalk(const void* state);
 		void NoteTable(const void* table);
 		/// Records a script-owned native whose engine values this root's chunk carries as text.
 		void NoteValue(const void* value);
@@ -163,20 +165,34 @@ namespace RTE {
 		void NoteRootReuse(size_t reused, size_t rewritten);
 		void NoteWalkPart(const void* state, std::string part, uint64_t root, int64_t elapsedUs, bool reused, std::string unwatched);
 		/// The roots holding a table written since the walk that recorded them.
-		std::unordered_set<uint64_t> DirtyRoots() const;
+		std::unordered_set<uint64_t> DirtyRoots(const void* state = nullptr) const;
+		std::unordered_set<std::string> DirtyParts(const void* state, uint64_t root) const;
 		bool UnknownTableWritten() const;
 		bool HasWalked() const;
 		GraphDirt Sample() const;
 
 	private:
+		struct Root {
+			const void* state = nullptr;
+			uint64_t id = 0;
+			std::string part;
+			bool operator==(const Root&) const = default;
+		};
+		struct RootHash {
+			size_t operator()(const Root& root) const {
+				return std::hash<const void*>{}(root.state) ^ std::hash<uint64_t>{}(root.id) ^ std::hash<std::string>{}(root.part);
+			}
+		};
+		using Roots = std::unordered_set<Root, RootHash>;
+		using Tables = std::unordered_map<const void*, std::vector<Root>>;
 		mutable std::mutex m_Mutex;
-		std::unordered_map<const void*, uint64_t> m_TableRoots;
-		std::unordered_map<const void*, uint64_t> m_ValueRoots;
-		std::unordered_set<uint64_t> m_Roots;
-		std::unordered_set<uint64_t> m_DirtyRoots;
-		std::unordered_map<const void*, uint64_t> m_Walking;
-		std::unordered_map<const void*, uint64_t> m_WalkingValues;
-		std::unordered_set<uint64_t> m_WalkingRoots;
+		Tables m_TableRoots;
+		std::unordered_map<const void*, Root> m_ValueRoots;
+		Roots m_Roots;
+		Roots m_DirtyRoots;
+		Tables m_Walking;
+		std::unordered_map<const void*, Root> m_WalkingValues;
+		Roots m_WalkingRoots;
 		size_t m_DirtyTables = 0;
 		size_t m_DirtyValues = 0;
 		size_t m_UncacheableRoots = 0;
@@ -186,7 +202,7 @@ namespace RTE {
 		int m_WalkDepth = 0;
 		size_t m_RootsReused = 0;
 		size_t m_RootsRewritten = 0;
-		uint64_t m_Root = 0;
+		Root m_Root;
 		int64_t m_NoteUs = 0;
 		int64_t m_WalkNoteUs = 0;
 		std::vector<const void*> m_WalkStates;

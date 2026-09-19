@@ -42,6 +42,7 @@ REQUIRED_ROWS = (
     "generational_shadow_keeps_the_freeze_value",
     "peek_reuses_the_shadow_when_the_stamp_matches",
     "one_walk_keeps_every_state_reused_root",
+	"globals_roots_are_separate_in_each_state",
     "a_partial_walk_answers_the_unknown_table",
     "barrier_pause_reports_a_foreign_write",
 )
