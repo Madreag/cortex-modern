@@ -4,6 +4,7 @@
 #include "NetLockstep.h"
 #include "NetMatchConfig.h"
 
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -20,10 +21,23 @@ namespace RTE {
 		uint64_t boot = 0;      //!< Host boot incarnation, advanced before the first listen of this process.
 		uint64_t round = 0;     //!< The round this boot opened; a restart opens a new one.
 		std::string directoryToken; //!< The directory row's current token, so a rebooted host resumes its row.
+		std::array<uint8_t, NetMatchConfigUtil::c_WorldTeamCount> teamCapacity{}; //!< Human seats per team; all zero when none was authored.
+		uint8_t maxSpectators = 0;         //!< Authority-free watchers the world admits past capacity.
+		uint16_t respawnDelaySeconds = 0;  //!< Seconds before a dead seat's brain is respawned.
 
 		bool IsValid() const { return NetMatchConfigUtil::IsWorldId(worldId) && boot != 0; }
 		bool operator==(const NetWorldIdentity&) const = default;
 	};
+
+	/// Whether the record names a capacity, so a later boot offers the same world instead of re-deriving one.
+	inline bool WorldIdentityCarriesCapacity(const NetWorldIdentity& identity) {
+		for (const uint8_t capacity: identity.teamCapacity) {
+			if (capacity != 0) {
+				return true;
+			}
+		}
+		return false;
+	}
 
 	/// The world identity record on disk. The two durable numbers a boot must advance before it listens.
 	class NetWorldIdentityFile {
@@ -249,6 +263,8 @@ namespace RTE {
 	inline constexpr uint8_t c_WorldSpectatorLobbyPeerFirst = 32;
 	inline constexpr uint8_t c_WorldSpectatorLobbyPeerLast = 47;
 	inline constexpr size_t c_WorldSpectatorLobbyCap = static_cast<size_t>(c_WorldSpectatorLobbyPeerLast - c_WorldSpectatorLobbyPeerFirst + 1);
+	// A host may never configure more spectators than the world has lobby ids to bind them on.
+	static_assert(NetMatchConfigUtil::c_MaxWorldSpectators <= c_WorldSpectatorLobbyCap);
 
 	inline uint8_t WorldJoinLobbyPeer(const NetWorldJoinSession& session) {
 		if (session.assignedPeerId != 0) {

@@ -135,6 +135,24 @@ namespace RTE {
 		if (!identity.directoryToken.empty()) {
 			out << "directory_token " << identity.directoryToken << "\n";
 		}
+		// The capacity a boot authored is the world's contract, so the next boot offers the same seats.
+		size_t capacitySum = 0;
+		for (const uint8_t capacity: identity.teamCapacity) {
+			capacitySum += capacity;
+		}
+		if (capacitySum != 0) {
+			out << "team_capacity";
+			for (const uint8_t capacity: identity.teamCapacity) {
+				out << " " << static_cast<int>(capacity);
+			}
+			out << "\n";
+		}
+		if (identity.maxSpectators != 0) {
+			out << "max_spectators " << static_cast<int>(identity.maxSpectators) << "\n";
+		}
+		if (identity.respawnDelaySeconds != 0) {
+			out << "respawn_delay_s " << identity.respawnDelaySeconds << "\n";
+		}
 		return out.str();
 	}
 
@@ -156,6 +174,20 @@ namespace RTE {
 				in >> parsed.round;
 			} else if (key == "directory_token") {
 				in >> parsed.directoryToken;
+			} else if (key == "team_capacity") {
+				for (uint8_t& capacity: parsed.teamCapacity) {
+					unsigned value = 0;
+					in >> value;
+					capacity = static_cast<uint8_t>(value);
+				}
+			} else if (key == "max_spectators") {
+				unsigned value = 0;
+				in >> value;
+				parsed.maxSpectators = static_cast<uint8_t>(value);
+			} else if (key == "respawn_delay_s") {
+				unsigned value = 0;
+				in >> value;
+				parsed.respawnDelaySeconds = static_cast<uint16_t>(value);
 			} else {
 				if (error) *error = "world identity record has an unknown field '" + key + "'";
 				return false;
@@ -767,6 +799,13 @@ namespace RTE {
 			return false;
 		}
 		m_Slots.clear();
+		// The host's configured capacity, when it authored one, is the slot table: teams in team order,
+		// one slot per configured seat. All zero keeps the pre-capacity rule that reads the roster.
+		size_t capacitySum = 0;
+		for (const uint8_t capacity: config.worldTeamCapacity) {
+			capacitySum += capacity;
+		}
+		std::array<uint8_t, NetMatchConfigUtil::c_WorldTeamCount> capacityLeft = config.worldTeamCapacity;
 		// The order is the config's, so every peer and every boot names the same slot for the same
 		// lockstep id; a live peer count never re-derives it.
 		for (uint8_t peerId = 1; peerId <= config.peerCount; ++peerId) {
@@ -776,6 +815,27 @@ namespace RTE {
 			NetWorldSlot slot;
 			slot.peerId = peerId;
 			slot.team = -1;
+			if (capacitySum != 0) {
+				// The capacity is spent in team order, so slot N of the world is the same team on every
+				// peer and every boot whatever the roster spells out.
+				if (m_Slots.size() >= capacitySum) {
+					break;
+				}
+				for (size_t team = 0; team < capacityLeft.size(); ++team) {
+					if (capacityLeft[team] != 0) {
+						slot.team = static_cast<int8_t>(team);
+						--capacityLeft[team];
+						break;
+					}
+				}
+				if (slot.team < 0) {
+					if (error) *error = "the world's team capacity has no seat left for peer " + std::to_string(static_cast<int>(peerId));
+					return false;
+				}
+				slot.generation = 1;
+				m_Slots.push_back(slot);
+				continue;
+			}
 			for (const NetMatchPlayerSlot& player: config.players) {
 				if (!player.cpu && player.peerId == peerId) {
 					slot.team = static_cast<int8_t>(player.team);

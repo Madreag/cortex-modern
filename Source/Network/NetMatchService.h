@@ -17,6 +17,7 @@
 #include "NetWorldJoin.h"
 #include "Singleton.h"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <map>
@@ -194,6 +195,10 @@ namespace RTE {
 		bool persistentWorld = false; // Host only: an indefinitely running world, never a last-brain or rematch.
 		std::string worldId; // Set after the host advances its durable identity; empty off a world.
 		uint64_t worldBoot = 0;
+		// Host-authored world capacity. Omitted fields take the Persistent World preset's defaults.
+		std::optional<std::array<uint8_t, 4>> worldTeamCapacity;
+		std::optional<uint8_t> worldMaxSpectators;
+		std::optional<uint16_t> worldRespawnDelaySeconds;
 		std::string sessionId; // Client only: join the directory session with this id instead of an address.
 	};
 

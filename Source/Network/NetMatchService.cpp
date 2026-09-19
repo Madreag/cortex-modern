@@ -449,6 +449,12 @@ static std::string ResyncSaveName() {
 			}
 			request.worldId = m_WorldIdentity.worldId;
 			request.worldBoot = m_WorldIdentity.boot;
+			// A world keeps the capacity its first boot authored; a later boot only names one when the record has none.
+			if (!request.worldTeamCapacity.has_value() && WorldIdentityCarriesCapacity(m_WorldIdentity)) {
+				request.worldTeamCapacity = m_WorldIdentity.teamCapacity;
+				request.worldMaxSpectators = m_WorldIdentity.maxSpectators;
+				request.worldRespawnDelaySeconds = m_WorldIdentity.respawnDelaySeconds;
+			}
 			m_WorldJoin.SetIdentityPath(NetWorldIdentityFile::DefaultPath());
 			// The writer thread hashes what it wrote; a multi-megabyte digest is not sim-thread work.
 			g_ActivityMan.SetAutosaveDigest([](const std::vector<uint8_t>& bytes) { return DigestWorldJoinBytes(bytes); });
@@ -459,6 +465,15 @@ static std::string ResyncSaveName() {
 			if (error) *error = configError;
 			SetState(NetMatchServiceState::Failed, "Match roster refused", configError);
 			return false;
+		}
+		if (matchConfig.persistentWorld && !WorldIdentityCarriesCapacity(m_WorldIdentity)) {
+			// The first boot's capacity becomes the world's own, so every later boot offers the same seats.
+			m_WorldIdentity.teamCapacity = matchConfig.worldTeamCapacity;
+			m_WorldIdentity.maxSpectators = matchConfig.worldMaxSpectators;
+			m_WorldIdentity.respawnDelaySeconds = matchConfig.worldRespawnDelaySeconds;
+			if (std::string writeError; !NetWorldIdentityFile::Write(NetWorldIdentityFile::DefaultPath(), m_WorldIdentity, &writeError)) {
+				std::cout << "[net-world] identity capacity not stored: " << writeError << std::endl;
+			}
 		}
 
 		g_TimerMan.SetDeltaTimeSecs(c_DefaultDeltaTimeS);
@@ -4575,6 +4590,19 @@ static std::string ResyncSaveName() {
 			config.version = NetMatchConfigUtil::c_PersistentWorldVersion;
 			config.worldId = request.worldId;
 			config.worldBoot = request.worldBoot;
+			// The host authors the world's capacity; the preset's default spreads the seated humans the
+			// way the mode does, so a host that names nothing still publishes an explicit contract.
+			if (request.worldTeamCapacity.has_value()) {
+				config.worldTeamCapacity = *request.worldTeamCapacity;
+			} else {
+				config.worldTeamCapacity = {};
+				for (uint32_t seat = 0; seat < seatedHumans; ++seat) {
+					const size_t team = mode == NetMatchMode::CoopPvE ? 0 : (seat % NetMatchConfigUtil::c_WorldTeamCount);
+					++config.worldTeamCapacity[team];
+				}
+			}
+			config.worldMaxSpectators = request.worldMaxSpectators.value_or(NetMatchConfigUtil::c_MaxWorldSpectators);
+			config.worldRespawnDelaySeconds = request.worldRespawnDelaySeconds.value_or(NetMatchConfigUtil::c_DefaultWorldRespawnDelaySeconds);
 			config.activityPreset = request.activityPreset.empty() ? "Persistent World" : request.activityPreset;
 			config.peerCount = request.peerCount;
 		} else {
@@ -4600,6 +4628,18 @@ static std::string ResyncSaveName() {
 			NetMatchPlayerSlot slot;
 			slot.peerId = peerId;
 			slot.team = mode == NetMatchMode::CoopPvE ? 0 : static_cast<uint8_t>(peerId - firstHumanPeer);
+			if (world) {
+				// The world's slot table is spent in team order, so the roster names the same team for the
+				// same lockstep id and an Activate binds the player slot the capacity gave it.
+				uint32_t offset = peerId - firstHumanPeer;
+				for (size_t team = 0; team < config.worldTeamCapacity.size(); ++team) {
+					if (offset < config.worldTeamCapacity[team]) {
+						slot.team = static_cast<uint8_t>(team);
+						break;
+					}
+					offset -= config.worldTeamCapacity[team];
+				}
+			}
 			slot.cpu = false;
 			slot.displayName = peerId == config.hostPeerId ? PlayerNameOrDefault(request, true)
 			                                               : ("Client " + std::to_string(peerId));

@@ -2530,6 +2530,167 @@ namespace RTE {
 		return 0;
 	}
 
+	// The world's configured capacity: the v5 block's own fields, the hash domain and the slot table.
+	int TestWorldCapacityRidesTheV5Config() {
+		const auto roundTrip = [](const NetMatchConfig& config, NetMatchConfig& out, std::vector<uint8_t>& wire) {
+			wire.clear();
+			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{config}}, wire)) {
+				return false;
+			}
+			const auto decoded = NetLobbyProtocol::Decode(wire);
+			const NetLobbyMatchConfig* payload = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
+			if (payload == nullptr) {
+				return false;
+			}
+			out = payload->config;
+			return true;
+		};
+		NetMatchConfig world = MakeWorldConfig();
+		world.peerCount = 3;
+		world.players = {NetMatchPlayerSlot{1, 0, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 1, false, "B"}};
+		world.worldTeamCapacity = {1, 1, 0, 0};
+		world.worldMaxSpectators = 3;
+		world.worldRespawnDelaySeconds = 20;
+		NetMatchConfig back;
+		std::vector<uint8_t> worldWire;
+		if (!roundTrip(world, back, worldWire)) {
+			return Fail("world-capacity-did-not-ride-the-v5-config: a v5 world config did not survive the lobby codec");
+		}
+		if (back.worldTeamCapacity != world.worldTeamCapacity || back.worldMaxSpectators != 3 || back.worldRespawnDelaySeconds != 20) {
+			return Fail("world-capacity-did-not-ride-the-v5-config: read back capacity " +
+			            std::to_string(static_cast<int>(back.worldTeamCapacity[0])) + "," + std::to_string(static_cast<int>(back.worldTeamCapacity[1])) +
+			            " spectators " + std::to_string(static_cast<int>(back.worldMaxSpectators)) +
+			            " respawn " + std::to_string(back.worldRespawnDelaySeconds));
+		}
+		// An ordinary config must not carry a byte of the world block, whatever the struct holds.
+		NetMatchConfig ordinary = NetMatchConfigUtil::MakeDefault(0x4F52443ULL);
+		std::vector<uint8_t> plainWire;
+		NetMatchConfig plainBack;
+		if (!roundTrip(ordinary, plainBack, plainWire)) {
+			return Fail("world-capacity-did-not-ride-the-v5-config: an ordinary v4 config did not survive the lobby codec");
+		}
+		NetMatchConfig stuffed = ordinary;
+		stuffed.worldTeamCapacity = {4, 4, 4, 4};
+		stuffed.worldMaxSpectators = 9;
+		stuffed.worldRespawnDelaySeconds = 99;
+		std::vector<uint8_t> stuffedWire;
+		NetMatchConfig stuffedBack;
+		if (!roundTrip(stuffed, stuffedBack, stuffedWire)) {
+			return Fail("world-capacity-did-not-ride-the-v5-config: a v4 config carrying capacity did not encode");
+		}
+		if (stuffedWire != plainWire) {
+			return Fail("world-capacity-moved-an-ordinary-config: the v4 bytes grew from " + std::to_string(plainWire.size()) +
+			            " to " + std::to_string(stuffedWire.size()) + " when the capacity fields were set");
+		}
+		if (NetMatchConfigUtil::HashConfig(stuffed) != NetMatchConfigUtil::HashConfig(ordinary)) {
+			return Fail("world-capacity-moved-an-ordinary-config: the v4 hash changed when the capacity fields were set");
+		}
+		// The world's own hash reads every capacity field, so a joiner validates the contract it was offered.
+		NetMatchConfig narrower = world;
+		narrower.worldTeamCapacity = {2, 0, 0, 0};
+		NetMatchConfig fewerWatchers = world;
+		fewerWatchers.worldMaxSpectators = 1;
+		NetMatchConfig slowerRespawn = world;
+		slowerRespawn.worldRespawnDelaySeconds = 21;
+		if (NetMatchConfigUtil::HashConfig(narrower) == NetMatchConfigUtil::HashConfig(world) ||
+		    NetMatchConfigUtil::HashConfig(fewerWatchers) == NetMatchConfigUtil::HashConfig(world) ||
+		    NetMatchConfigUtil::HashConfig(slowerRespawn) == NetMatchConfigUtil::HashConfig(world)) {
+			return Fail("world-capacity-left-the-v5-hash: two worlds with different capacity hash alike");
+		}
+		// The spectator byte is found by diffing two encodings, so no literal offset rides this case.
+		NetMatchConfig moved = world;
+		moved.worldMaxSpectators = 4;
+		std::vector<uint8_t> movedWire;
+		NetMatchConfig movedBack;
+		if (!roundTrip(moved, movedBack, movedWire) || movedWire.size() != worldWire.size()) {
+			return Fail("world-capacity-did-not-ride-the-v5-config: the spectator bound changed the encoded length");
+		}
+		size_t spectatorOffset = movedWire.size();
+		size_t differences = 0;
+		for (size_t index = 0; index < movedWire.size(); ++index) {
+			if (movedWire[index] != worldWire[index]) {
+				spectatorOffset = index;
+				++differences;
+			}
+		}
+		if (differences != 1) {
+			return Fail("world-capacity-did-not-ride-the-v5-config: the spectator bound moved " + std::to_string(differences) + " bytes");
+		}
+		std::vector<uint8_t> overBound = worldWire;
+		overBound[spectatorOffset] = static_cast<uint8_t>(NetMatchConfigUtil::c_MaxWorldSpectators + 1);
+		if (NetLobbyProtocol::Decode(overBound).ok) {
+			return Fail("world-capacity-decoded-past-its-bound: the codec accepted " +
+			            std::to_string(NetMatchConfigUtil::c_MaxWorldSpectators + 1) + " spectators");
+		}
+		// The validator is the host's fence: a capacity may never promise more seats than the roster has.
+		std::string reason;
+		NetMatchConfig tooMany = world;
+		tooMany.worldTeamCapacity = {2, 1, 0, 0};
+		if (NetMatchConfigUtil::ValidateLocalAlpha(tooMany, &reason) || reason != "world team capacity exceeds the roster's human slots") {
+			return Fail("world-capacity-passed-validation: an over-capacity world was accepted with reason \"" + reason + "\"");
+		}
+		NetMatchConfig tooManyWatchers = world;
+		tooManyWatchers.worldMaxSpectators = static_cast<uint8_t>(NetMatchConfigUtil::c_MaxWorldSpectators + 1);
+		if (NetMatchConfigUtil::ValidateLocalAlpha(tooManyWatchers, &reason) || reason != "world_max_spectators is out of range") {
+			return Fail("world-capacity-passed-validation: an over-bound spectator count was accepted with reason \"" + reason + "\"");
+		}
+		NetMatchConfig slowWorld = world;
+		slowWorld.worldRespawnDelaySeconds = static_cast<uint16_t>(NetMatchConfigUtil::c_MaxWorldRespawnDelaySeconds + 1);
+		if (NetMatchConfigUtil::ValidateLocalAlpha(slowWorld, &reason) || reason != "world_respawn_delay_seconds is out of range") {
+			return Fail("world-capacity-passed-validation: an over-bound respawn delay was accepted with reason \"" + reason + "\"");
+		}
+		NetMatchConfig legacy = ordinary;
+		legacy.worldMaxSpectators = 1;
+		if (NetMatchConfigUtil::ValidateLocalAlpha(legacy, &reason) || reason != "an ordinary match cannot carry world capacity") {
+			return Fail("world-capacity-passed-validation: an ordinary match kept a world capacity with reason \"" + reason + "\"");
+		}
+		// The slot table is the capacity, spent in team order, so every peer names the same team for the same id.
+		NetWorldMembership membership;
+		NetMatchConfig coop = MakeWorldConfig();
+		coop.peerCount = 3;
+		coop.players = {NetMatchPlayerSlot{1, 0, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 0, false, "B"}};
+		coop.worldTeamCapacity = {2, 0, 0, 0};
+		if (!membership.Configure(coop, &reason) || membership.Slots().size() != 2) {
+			return Fail("world-capacity-left-the-slot-table: a capacity of two built " +
+			            std::to_string(membership.Slots().size()) + " slots (" + reason + ")");
+		}
+		if (membership.Slots()[0].peerId != 2 || membership.Slots()[0].team != 0 ||
+		    membership.Slots()[1].peerId != 3 || membership.Slots()[1].team != 0) {
+			return Fail("world-capacity-left-the-slot-table: slots are peer " + std::to_string(static_cast<int>(membership.Slots()[0].peerId)) +
+			            " team " + std::to_string(static_cast<int>(membership.Slots()[0].team)) + " and peer " +
+			            std::to_string(static_cast<int>(membership.Slots()[1].peerId)) + " team " +
+			            std::to_string(static_cast<int>(membership.Slots()[1].team)));
+		}
+		NetMatchConfig split = coop;
+		split.worldTeamCapacity = {1, 1, 0, 0};
+		if (!membership.Configure(split, &reason) || membership.Slots().size() != 2 ||
+		    membership.Slots()[0].team != 0 || membership.Slots()[1].team != 1) {
+			return Fail("world-capacity-left-the-slot-table: a split capacity did not put peer 3 on team 1 (" + reason + ")");
+		}
+		NetMatchConfig oneSeat = coop;
+		oneSeat.worldTeamCapacity = {1, 0, 0, 0};
+		if (!membership.Configure(oneSeat, &reason) || membership.Slots().size() != 1) {
+			return Fail("world-capacity-left-the-slot-table: a capacity of one built " + std::to_string(membership.Slots().size()) + " slots");
+		}
+		// The record a boot reads back names the same world, so a restart offers the same seats.
+		NetWorldIdentity identity = MakeIdentity();
+		identity.teamCapacity = {1, 2, 0, 0};
+		identity.maxSpectators = 5;
+		identity.respawnDelaySeconds = 30;
+		NetWorldIdentity reread;
+		if (!NetWorldIdentityFile::Decode(NetWorldIdentityFile::Encode(identity), reread, &reason) || reread != identity) {
+			return Fail("world-capacity-left-the-identity-record: the record read back capacity " +
+			            std::to_string(static_cast<int>(reread.teamCapacity[0])) + "," + std::to_string(static_cast<int>(reread.teamCapacity[1])) +
+			            " spectators " + std::to_string(static_cast<int>(reread.maxSpectators)) + " (" + reason + ")");
+		}
+		NetWorldIdentity bare = MakeIdentity();
+		if (!NetWorldIdentityFile::Decode(NetWorldIdentityFile::Encode(bare), reread, &reason) || reread != bare ||
+		    WorldIdentityCarriesCapacity(reread)) {
+			return Fail("world-capacity-left-the-identity-record: a record with no capacity did not read back bare (" + reason + ")");
+		}
+		return 0;
+	}
+
 	int RunNamed(const char* name) {
 		if (std::strcmp(name, "identity") == 0 || std::strcmp(name, "-net-world-identity-selftest") == 0) {
 			s_FailTag = "net-world-identity-selftest";
@@ -2663,6 +2824,10 @@ namespace RTE {
 			s_FailTag = "net-world-bootstrap-selftest";
 			return TestHostBootstrapRefusals();
 		}
+		if (std::strcmp(name, "capacity") == 0 || std::strcmp(name, "-net-world-capacity-selftest") == 0) {
+			s_FailTag = "net-world-capacity-selftest";
+			return TestWorldCapacityRidesTheV5Config();
+		}
 		if (std::strcmp(name, "ready-frame") == 0 || std::strcmp(name, "-net-world-ready-frame-selftest") == 0) {
 			s_FailTag = "net-world-ready-frame-selftest";
 			return TestReadyFramePackIncludesRemotes();
@@ -2775,6 +2940,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestStaleWorldTransitionRefused(); result != 0) {
+			return result;
+		}
+		if (const int result = TestWorldCapacityRidesTheV5Config(); result != 0) {
 			return result;
 		}
 		if (const int result = TestReadyFramePackIncludesRemotes(); result != 0) {

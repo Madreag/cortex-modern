@@ -70,6 +70,10 @@ namespace RTE {
 		bool persistentWorld = false;
 		std::string worldId;       // The world's durable UUID; its directory registration id too. Empty off a persistent world.
 		uint64_t worldBoot = 0;    // The host boot incarnation this round belongs to; advanced before the host listens.
+		// Host-authored world capacity: human seats offered per team, in team order. All zero off a persistent world.
+		std::array<uint8_t, 4> worldTeamCapacity{};
+		uint8_t worldMaxSpectators = 0;        // Authority-free watchers admitted once every team is at capacity.
+		uint16_t worldRespawnDelaySeconds = 0; // Delay before the host respawns a seat's dead brain.
 		uint8_t peerCount = 2;
 		uint16_t inputDelayFrames = 0;
 		std::vector<uint16_t> peerInputDelayFrames; // Per-sender delay by peerId-1 (size 0 or peerCount); empty = uniform inputDelayFrames.
@@ -107,6 +111,11 @@ namespace RTE {
 		static constexpr uint16_t c_DefaultPathHorizonTicks = 30;
 		static constexpr uint16_t c_MaxPathHorizonTicks = 120;
 		static constexpr size_t c_WorldIdBytes = 36; // A canonical UUID, the directory's registration id.
+		static constexpr size_t c_WorldTeamCount = 4; // Engine teams 0..3; the capacity array's fixed length.
+		// The spectator bound a host may set. The world's lobby-id pool is the hard ceiling behind it.
+		static constexpr uint8_t c_MaxWorldSpectators = 16;
+		static constexpr uint16_t c_DefaultWorldRespawnDelaySeconds = 10;
+		static constexpr uint16_t c_MaxWorldRespawnDelaySeconds = 300;
 		static constexpr uint32_t c_MaxFiniteStartingGold = 29999;
 		static constexpr uint32_t c_InfiniteGold = 1000000000;
 		static constexpr uint8_t c_MinPeerCount = 2;
