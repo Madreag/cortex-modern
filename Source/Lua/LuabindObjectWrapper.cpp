@@ -151,7 +151,25 @@ void LuabindObjectWrapper::ApplyQueuedDeletions() {
 	s_QueuedDeletions.clear();
 }
 
+// Set while a preview window tracks the wrappers it hands out, so a wrapper that dies inside one is forgotten.
+static void (*s_PreviewDeletionHook)(LuabindObjectWrapper*) = nullptr;
+
+void LuabindObjectWrapper::SetPreviewDeletionHook(void (*hook)(LuabindObjectWrapper*)) {
+	s_PreviewDeletionHook = hook;
+}
+
+void LuabindObjectWrapper::ResetLuabindObject(luabind::adl::object* newLuabindObject, bool ownsObject) {
+	if (m_OwnsObject) {
+		delete m_LuabindObject;
+	}
+	m_LuabindObject = newLuabindObject;
+	m_OwnsObject = ownsObject;
+}
+
 LuabindObjectWrapper::~LuabindObjectWrapper() {
+	if (s_PreviewDeletionHook) {
+		s_PreviewDeletionHook(this);
+	}
 	if (m_OwnsObject) {
 		static std::mutex mut;
 		std::lock_guard<std::mutex> guard(mut);
