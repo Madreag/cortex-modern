@@ -173,6 +173,24 @@ class SnapshotComparisonTests(unittest.TestCase):
         self.assertEqual(self.compare(base, head + graph_line(odd, 0) + graph_line(even, 1)), 1)
         self.assertEqual(self.compare(base, head + graph_line(even, 0) + graph_line(odd, 1)), 0)
 
+    def test_a_cross_process_failure_says_which_seat_model_it_used(self):
+        """Two peers on different seats of one table read as sim state unless the seats are named."""
+        changed = BASE.replace("ActivityState = 3", "ActivityState = 4")
+        note = "--peer-report-a/--peer-report-b"
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / name for name in ("a.ccsave", "b.ccsave")]
+            for path, text in zip(paths, (BASE, changed)):
+                with zipfile.ZipFile(path, "w") as archive:
+                    archive.writestr("Save.ini", text)
+            for options, wanted in ((["--cross-process"], True), ([], False),
+                                    (["--cross-process", "--local-seat-a=0", "--local-seat-b=1"], False)):
+                with self.subTest(options=options):
+                    buffer = io.StringIO()
+                    with patch.object(sys, "argv", [str(CHECKER), *map(str, paths), *options]), \
+                            contextlib.redirect_stdout(buffer):
+                        self.assertEqual(checker.main(), 1)
+                    self.assertEqual(note in buffer.getvalue(), wanted)
+
     def test_configured_start_activity_is_compared_with_local_slot_scope(self):
         first = BASE + "HasCheckpointStartActivity = 1\nCheckpointStartActivity = GameActivity\n\tTeamOfPlayer1 = 0\n\tStartingGold = 100\n"
         second = first.replace("TeamOfPlayer1 = 0", "TeamOfPlayer1 = 1")

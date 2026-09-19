@@ -909,6 +909,12 @@ def compare_main() -> int:
                     f"{name} differs ({len(data_a)}B {ha} vs {len(data_b)}B {hb})"
                 )
 
+        # Two peers that hold different seats of one table are compared as if both played PlayerOne
+        # unless the caller names the seats, and their own per-seat view then reads as sim state.
+        seat_note = ("compared under the per-peer-PlayerOne seat model; peers that share a seat table need "
+            "--peer-report-a/--peer-report-b (or --local-seat-a/--local-seat-b)"
+            if failures and args.cross_process and seats[0] is None else None)
+        details.update(seat_note=seat_note)
         details.update(passed=not failures, failures=failures, activity_local_differences=activity_diff_lines,
             snapshots=[{"path": str(Path(path).resolve()), "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()} for path in (args.snapshot_a, args.snapshot_b)])
         if args.report:
@@ -916,6 +922,8 @@ def compare_main() -> int:
         if failures:
             for failure in failures:
                 print(f"FAIL: {failure}")
+            if seat_note:
+                print(f"NOTE: {seat_note}")
             return 1
         print(
             f"PASS: {details['mode']} snapshot state matches "
