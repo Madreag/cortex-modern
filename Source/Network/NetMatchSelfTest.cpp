@@ -6137,6 +6137,424 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestLobbyModerationRows(std::string* error) {
+		class ScriptedAuthCrypto : public NetAuthCrypto {
+		public:
+			bool IsRealCrypto() const override { return false; }
+			bool RandomBytes(uint8_t* buffer, size_t count) override {
+				if (buffer == nullptr) {
+					return false;
+				}
+				for (size_t i = 0; i < count; ++i) {
+					m_Counter = static_cast<uint8_t>(m_Counter * 37U + 149U);
+					buffer[i] = m_Counter;
+				}
+				return true;
+			}
+			bool HmacSha256(const uint8_t* key, size_t keyCount, const uint8_t* message, size_t messageCount, uint8_t (&mac)[32]) override {
+				if (key == nullptr || keyCount == 0) {
+					return false;
+				}
+				uint64_t fold = 1469598103934665603ull;
+				const auto mix = [&fold](uint8_t byte) { fold = (fold ^ byte) * 1099511628211ull; };
+				for (size_t i = 0; i < keyCount; ++i) {
+					mix(key[i]);
+				}
+				mix(static_cast<uint8_t>(messageCount));
+				for (size_t i = 0; i < messageCount; ++i) {
+					mix(message[i]);
+				}
+				for (size_t i = 0; i < sizeof(mac); ++i) {
+					mix(static_cast<uint8_t>(i));
+					mac[i] = static_cast<uint8_t>(fold >> 32);
+				}
+				return true;
+			}
+		private:
+			uint8_t m_Counter = 1;
+		};
+
+		// One hosted lobby in Starting per row: the setup worker owns the session, the joiner holds a
+		// committed seat, and the service carries the roster a lobby round publishes.
+		struct Lobby {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetMatchService service;
+			std::unique_ptr<NetSession> worker = std::make_unique<NetSession>();
+			NetSession client;
+			NetReconnectTicketStore store;
+			NetReconnectClient admission;
+			NetMatchRunnerConfig runnerConfig;
+			NetH4Identity h4;
+			std::filesystem::path lane;
+			NetPeerId transport = c_InvalidNetPeerId;
+			NetAuthBytes32 holderId{};
+			uint64_t unixNow = 1'700'000'000'000ULL;
+		};
+
+		const auto open = [&error](Lobby& lobby, uint16_t port, const std::string& name) {
+			lobby.service.m_IsHost = true;
+			lobby.service.m_State = NetMatchServiceState::Starting;
+			lobby.service.m_AdmissionAttached = true;
+			NetSessionConfig hostConfig;
+			hostConfig.port = port;
+			hostConfig.displayName = "Host";
+			hostConfig.maxPeers = 1;
+			hostConfig.heartbeatIntervalMs = 25;
+			NetIdentityManifest& identity = hostConfig.localIdentity;
+			identity.gameVersion = "7.0.0-test";
+			identity.networkProtocolVersion = NetProtocol::c_Version;
+			identity.controllerFrameVersion = ControllerFrame::c_Version;
+			identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			identity.buildId = name;
+			identity.platform = "test";
+			NetSessionConfig clientConfig = hostConfig;
+			clientConfig.displayName = "Joiner";
+			++clientConfig.localNonce;
+			if (!lobby.worker->StartHost(lobby.hostTransport, hostConfig, error) ||
+			    !lobby.client.StartClient(lobby.clientTransport, "loopback", clientConfig, error)) {
+				return false;
+			}
+			for (uint64_t now = 0; now <= 2000 && lobby.worker->GetReadyPeerCount() != 1; now += 10) {
+				lobby.worker->Tick(now);
+				lobby.client.Tick(now);
+				lobby.hostTransport.AdvanceTimeMs(10);
+				lobby.clientTransport.AdvanceTimeMs(10);
+			}
+			if (lobby.worker->GetReadyPeerCount() != 1) {
+				*error = "the lobby moderation fixture seated " + std::to_string(lobby.worker->GetReadyPeerCount()) + " peers";
+				return false;
+			}
+			lobby.transport = lobby.worker->GetReadyPeers().front().transportPeerId;
+			if (!lobby.service.m_SeatAuth.BeginHostedSession()) {
+				*error = "the lobby moderation fixture could not arm reconnect auth";
+				return false;
+			}
+			lobby.h4.controllerFrameVersion = ControllerFrame::c_Version;
+			lobby.h4.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			lobby.h4.gameVersion = "7.0.0-test";
+			lobby.h4.buildId = name;
+			for (size_t i = 0; i < lobby.h4.deterministicConfigHash.size(); ++i) {
+				lobby.h4.deterministicConfigHash[i] = static_cast<uint8_t>(1 + i);
+				lobby.h4.moduleManifestHash[i] = static_cast<uint8_t>(33 + i);
+				lobby.h4.sessionRulesHash[i] = static_cast<uint8_t>(65 + i);
+				lobby.h4.sessionIdentityHash[i] = static_cast<uint8_t>(97 + i);
+			}
+			lobby.service.m_ReconnectHost.Configure(&lobby.service.m_SeatAuth, lobby.worker->GetSessionId(), lobby.h4);
+			// Seat 0 is the joiner's, seat 1 the host's own, seat 2 a CPU: the panel's rows have to
+			// tell the three apart, and a lobby is the state the table is loaded in.
+			lobby.service.m_ReconnectHost.SetSeatTable({{0, 1, 1, false, 2, false}, {1, 0, 2, false, 1, true}, {2, 0, 3, true, 0, false}}, NetMatchMode::PvPSkirmish);
+			lobby.lane = std::filesystem::temp_directory_path() / ("cccp-lobby-moderation-" + name);
+			std::error_code code;
+			std::filesystem::remove_all(lobby.lane, code);
+			std::filesystem::create_directories(lobby.lane, code);
+			lobby.service.m_BanStore.SetPath((lobby.lane / "NetworkBans").string());
+			lobby.service.m_ReconnectHost.SetBanStore(&lobby.service.m_BanStore);
+			lobby.worker->SetHostBanStore(&lobby.service.m_BanStore);
+			for (size_t i = 0; i < lobby.holderId.size(); ++i) {
+				lobby.holderId[i] = static_cast<uint8_t>(0xC0 + i);
+			}
+			lobby.service.m_ReconnectHost.BindParticipantId(lobby.transport, lobby.holderId);
+			lobby.store.SetPath((lobby.lane / "seat.ticket").string());
+			lobby.admission.Configure(&lobby.store, lobby.h4, "Joiner");
+			lobby.admission.SetUnixClock([](void* context) { return *static_cast<uint64_t*>(context); }, &lobby.unixNow);
+			if (!lobby.admission.BeginNewJoin(0, error)) {
+				return false;
+			}
+			for (uint32_t round = 0; round < 16; ++round) {
+				lobby.service.m_ReconnectHost.Tick(0);
+				lobby.admission.Tick(0);
+				bool moved = false;
+				for (NetH4Outbound& outbound : lobby.service.m_ReconnectHost.TakeOutbound()) {
+					moved = true;
+					if (outbound.connection == lobby.transport) {
+						lobby.admission.HandleMessage(outbound.payload, 0);
+					}
+				}
+				lobby.service.m_ReconnectHost.TakeCommits();
+				for (NetH4Outbound& outbound : lobby.admission.TakeOutbound()) {
+					moved = true;
+					lobby.service.m_ReconnectHost.HandleMessage(lobby.transport, outbound.payload, 0);
+				}
+				if (!moved) {
+					break;
+				}
+			}
+			if (lobby.admission.GetState() != NetH4ClientState::Joined) {
+				*error = "the lobby moderation fixture left the joiner at " + std::string(NetReconnectClientStateName(lobby.admission.GetState()));
+				return false;
+			}
+			lobby.admission.SetRound(0);
+			lobby.client.SetReconnectClient(&lobby.admission);
+			NetLobbyMember hostMember;
+			hostMember.peerId = 1;
+			hostMember.displayName = "Host";
+			hostMember.team = 2;
+			hostMember.isLocal = true;
+			hostMember.ready = true;
+			hostMember.connected = true;
+			NetLobbyMember joinerMember;
+			joinerMember.peerId = 2;
+			joinerMember.displayName = "Joiner";
+			joinerMember.team = 1;
+			joinerMember.connected = true;
+			lobby.service.m_LobbySnapshot.members = {hostMember, joinerMember};
+			lobby.service.m_LobbySnapshot.localPeerId = 1;
+			lobby.service.AttachHostPump(lobby.runnerConfig);
+			if (!lobby.runnerConfig.pumpHost) {
+				*error = "the service wired no host pump for the setup worker";
+				return false;
+			}
+			// The pump is the lobby's only publisher while the worker owns the plane.
+			lobby.runnerConfig.pumpHost(*lobby.worker);
+			return true;
+		};
+		const auto settle = [](Lobby& lobby) {
+			for (uint64_t now = 0; now <= 200; now += 10) {
+				lobby.worker->Tick(now);
+				lobby.client.Tick(now);
+				lobby.hostTransport.AdvanceTimeMs(10);
+				lobby.clientTransport.AdvanceTimeMs(10);
+			}
+		};
+		const auto findRow = [](const std::vector<NetH4ModerationSeat>& rows, uint8_t lockstepPeerId) -> const NetH4ModerationSeat* {
+			for (const NetH4ModerationSeat& row : rows) {
+				if (row.lockstepPeerId == lockstepPeerId) {
+					return &row;
+				}
+			}
+			return nullptr;
+		};
+
+		// The lobby publishes a row per human seat, and a kick from it removes the member.
+		{
+			ScriptedAuthCrypto crypto;
+			SetNetAuthCryptoForTest(&crypto);
+			Lobby lobby;
+			if (!open(lobby, 43242, "lobby-kick-selftest")) {
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			const std::vector<NetH4ModerationSeat> rows = lobby.service.GetModerationSeats();
+			if (rows.size() != 2) {
+				*error = "the open lobby published " + std::to_string(rows.size()) + " moderation rows";
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			const NetH4ModerationSeat* joiner = findRow(rows, 2);
+			const NetH4ModerationSeat* hostSeat = findRow(rows, 1);
+			if (joiner == nullptr || hostSeat == nullptr) {
+				*error = std::string("the open lobby published no row for peer ") + (joiner == nullptr ? "2" : "1");
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			if (joiner->displayName != "Joiner" || hostSeat->displayName != "Host") {
+				*error = "the lobby rows are named '" + joiner->displayName + "' and '" + hostSeat->displayName + "'";
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			if (!(joiner->epoch == lobby.service.m_ReconnectHost.GetEpoch()) || joiner->holderGeneration == 0 ||
+			    joiner->seatGeneration == 0 || !joiner->committed) {
+				*error = "the joiner's lobby row carries holder " + std::to_string(joiner->holderGeneration) + ", seat generation " +
+				         std::to_string(joiner->seatGeneration) + ", committed=" + (joiner->committed ? "1" : "0") +
+				         ", epoch match=" + (joiner->epoch == lobby.service.m_ReconnectHost.GetEpoch() ? "1" : "0");
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			// No coordinator exists before the match, so the frame countdown a running row carries is zero.
+			if (joiner->holdFramesRemaining != 0 || joiner->actionsAvailable) {
+				*error = "the joiner's lobby row carries " + std::to_string(joiner->holdFramesRemaining) +
+				         " hold frames and actionsAvailable=" + (joiner->actionsAvailable ? "1" : "0");
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			const uint32_t removedBefore = lobby.service.m_ReconnectHost.GetStats().seatsRemoved;
+			const NetKickBanResult queued = lobby.service.RemoveParticipant(NetSelectModerationSeat(*joiner), NetParticipantRemovalAction::Kick);
+			if (queued != NetKickBanResult::Queued) {
+				*error = std::string("the lobby kick answered ") + NetKickBanResultName(queued);
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			lobby.runnerConfig.pumpHost(*lobby.worker);
+			if (lobby.service.GetLastKickBanResult() != NetKickBanResult::Ok ||
+			    lobby.service.m_ReconnectHost.GetStats().seatsRemoved != removedBefore + 1) {
+				*error = std::string("the drained lobby kick reported ") + NetKickBanResultName(lobby.service.GetLastKickBanResult()) +
+				         " with seatsRemoved " + std::to_string(lobby.service.m_ReconnectHost.GetStats().seatsRemoved);
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			if (lobby.worker->GetReadyPeerCount() != 0) {
+				*error = "the kicked member is still a ready peer: peers=" + std::to_string(lobby.worker->GetReadyPeerCount());
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			settle(lobby);
+			if (!lobby.admission.WasRemoved() || lobby.admission.GetLastRejectReason() != NetRejectReason::ParticipantRemoved) {
+				*error = std::string("the kicked member read removed=") + (lobby.admission.WasRemoved() ? "1" : "0") + " reason=" +
+				         (lobby.admission.HasLastRejectReason() ? NetProtocol::RejectReasonName(lobby.admission.GetLastRejectReason()) : "none");
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			// The kicked player's own lobby has to name the removal, not a generic fault.
+			if (!lobby.client.HasReject() || lobby.client.GetRejectReason() != NetRejectReason::ParticipantRemoved ||
+			    lobby.client.GetRejectSummary() != "removed from this session") {
+				*error = std::string("the kicked client's session recorded ") +
+				         (lobby.client.HasReject() ? NetProtocol::RejectReasonName(lobby.client.GetRejectReason()) : "no reject") +
+				         " - '" + lobby.client.GetRejectSummary() + "'";
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			const std::vector<NetH4ModerationSeat> after = lobby.service.GetModerationSeats();
+			const NetH4ModerationSeat* kicked = findRow(after, 2);
+			if (kicked != nullptr && !kicked->closed) {
+				*error = "the kicked seat's row is still open after the drain";
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			SetNetAuthCryptoForTest(nullptr);
+			std::error_code code;
+			std::filesystem::remove_all(lobby.lane, code);
+			std::cout << "[net-match-selftest] PASS lobby: the open lobby publishes moderation rows and a kick removes the member" << std::endl;
+		}
+
+		// A lobby ban writes the session's ban record and the identity cannot come back into it.
+		{
+			ScriptedAuthCrypto crypto;
+			SetNetAuthCryptoForTest(&crypto);
+			Lobby lobby;
+			if (!open(lobby, 43243, "lobby-ban-selftest")) {
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			const NetH4ModerationSeat* joiner = findRow(lobby.service.GetModerationSeats(), 2);
+			if (joiner == nullptr) {
+				*error = "the open lobby published no row for peer 2";
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			const NetKickBanResult queued = lobby.service.RemoveParticipant(NetSelectModerationSeat(*joiner), NetParticipantRemovalAction::BanSession);
+			if (queued != NetKickBanResult::Queued) {
+				*error = std::string("the lobby ban answered ") + NetKickBanResultName(queued);
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			lobby.runnerConfig.pumpHost(*lobby.worker);
+			if (lobby.service.GetLastKickBanResult() != NetKickBanResult::Ok) {
+				*error = std::string("the drained lobby ban reported ") + NetKickBanResultName(lobby.service.GetLastKickBanResult());
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			const std::vector<NetHostBanRecord> records = lobby.service.GetBanRecords();
+			if (records.size() != 1 || !(records.front().identity == lobby.holderId) ||
+			    records.front().sessionId != lobby.worker->GetSessionId() || records.front().scope != NetHostBanScope::Session) {
+				*error = "the lobby ban left " + std::to_string(records.size()) + " records, session " +
+				         (records.empty() ? std::string("none") : std::to_string(records.front().sessionId)) + " against session " +
+				         std::to_string(lobby.worker->GetSessionId());
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			// This is the predicate the session's participant gate evaluates before it admits a proof.
+			if (!lobby.service.m_BanStore.IsBanned(lobby.holderId, lobby.worker->GetSessionId())) {
+				*error = "the banned identity is not banned in the store this session reads";
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			settle(lobby);
+			if (!lobby.admission.WasRemoved() || lobby.admission.GetLastRejectReason() != NetRejectReason::ParticipantBanned) {
+				*error = std::string("the banned member read removed=") + (lobby.admission.WasRemoved() ? "1" : "0") + " reason=" +
+				         (lobby.admission.HasLastRejectReason() ? NetProtocol::RejectReasonName(lobby.admission.GetLastRejectReason()) : "none");
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			// A fresh join from the same identity on a new link: the seat plane refuses it by name.
+			const NetPeerId returning = static_cast<NetPeerId>(lobby.transport + 41);
+			lobby.service.m_ReconnectHost.BindParticipantId(returning, lobby.holderId);
+			NetH4NewJoin rejoin;
+			rejoin.identity = lobby.h4;
+			rejoin.displayName = "Joiner";
+			rejoin.txId.fill(0x5A);
+			lobby.service.m_ReconnectHost.HandleMessage(returning, rejoin, 0);
+			const NetJoinRejected* refusal = nullptr;
+			std::vector<NetH4Outbound> answers = lobby.service.m_ReconnectHost.TakeOutbound();
+			for (const NetH4Outbound& outbound : answers) {
+				if (outbound.connection == returning) {
+					if (const auto* rejected = std::get_if<NetJoinRejected>(&outbound.payload)) {
+						refusal = rejected;
+					}
+				}
+			}
+			if (refusal == nullptr || refusal->rejectReason != NetRejectReason::ParticipantBanned) {
+				*error = std::string("the banned identity's re-join drew ") +
+				         (refusal == nullptr ? std::to_string(answers.size()) + " answers and no refusal"
+				                             : std::string(NetProtocol::RejectReasonName(refusal->rejectReason)));
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			SetNetAuthCryptoForTest(nullptr);
+			std::error_code code;
+			std::filesystem::remove_all(lobby.lane, code);
+			std::cout << "[net-match-selftest] PASS lobby: a lobby ban records the session ban and refuses the identity's return" << std::endl;
+		}
+
+		// A selection the rows no longer match is refused, and the host's own seat is never a target.
+		{
+			ScriptedAuthCrypto crypto;
+			SetNetAuthCryptoForTest(&crypto);
+			Lobby lobby;
+			if (!open(lobby, 43244, "lobby-stale-selftest")) {
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			const std::vector<NetH4ModerationSeat> rows = lobby.service.GetModerationSeats();
+			const NetH4ModerationSeat* joiner = findRow(rows, 2);
+			const NetH4ModerationSeat* hostSeat = findRow(rows, 1);
+			if (joiner == nullptr || hostSeat == nullptr) {
+				*error = std::string("the open lobby published no row for peer ") + (joiner == nullptr ? "2" : "1");
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			const uint32_t removedBefore = lobby.service.m_ReconnectHost.GetStats().seatsRemoved;
+			NetModerationSelection stale = NetSelectModerationSeat(*joiner);
+			stale.holderGeneration += 1;
+			if (lobby.service.RemoveParticipant(stale, NetParticipantRemovalAction::Kick) != NetKickBanResult::Queued) {
+				*error = "the stale lobby selection was not queued for the setup worker";
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			lobby.runnerConfig.pumpHost(*lobby.worker);
+			if (lobby.service.GetLastKickBanResult() != NetKickBanResult::StaleSelection) {
+				*error = std::string("the stale lobby selection was answered ") + NetKickBanResultName(lobby.service.GetLastKickBanResult());
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			if (lobby.worker->GetReadyPeerCount() != 1 || lobby.service.m_ReconnectHost.IsSeatClosed(0) ||
+			    lobby.service.m_ReconnectHost.GetStats().seatsRemoved != removedBefore) {
+				*error = "the stale lobby selection still moved the session: peers=" + std::to_string(lobby.worker->GetReadyPeerCount()) +
+				         " closed=" + (lobby.service.m_ReconnectHost.IsSeatClosed(0) ? "1" : "0") +
+				         " seatsRemoved=" + std::to_string(lobby.service.m_ReconnectHost.GetStats().seatsRemoved);
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			// The host's own seat is a row like any other, and the store is what refuses it.
+			if (lobby.service.RemoveParticipant(NetSelectModerationSeat(*hostSeat), NetParticipantRemovalAction::Kick) != NetKickBanResult::Queued) {
+				*error = "the host's own seat was not queued for the setup worker";
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			lobby.runnerConfig.pumpHost(*lobby.worker);
+			if (lobby.service.GetLastKickBanResult() != NetKickBanResult::ForbiddenTarget) {
+				*error = std::string("kicking the host's own seat was answered ") + NetKickBanResultName(lobby.service.GetLastKickBanResult());
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			SetNetAuthCryptoForTest(nullptr);
+			std::error_code code;
+			std::filesystem::remove_all(lobby.lane, code);
+			std::cout << "[net-match-selftest] PASS lobby: a stale selection and the host's own seat are refused without a disconnect" << std::endl;
+		}
+		return true;
+	}
+
 	bool TestFinishMatchDrainsFencedDisconnect(std::string* error) {
 		const uint16_t port = 43229;
 		LoopbackTransport hostTransport, clientTransport;
@@ -8854,6 +9272,7 @@ namespace RTE {
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
 		if (!TestServiceKick(&error)) return fail(error);
 		if (!TestStartingKickMarshals(&error)) return fail(error);
+		if (!TestLobbyModerationRows(&error)) return fail(error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
 		std::string stopCancelError, endedAdmissionError, twoIceRoundsError;
 		if (!TestServiceIceRematchPlaysTwoRounds(&twoIceRoundsError)) std::cerr << "[net-match-selftest] FAIL: " << twoIceRoundsError << std::endl;
