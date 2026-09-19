@@ -459,6 +459,25 @@ class RuntimeProjectionTests(unittest.TestCase):
                 self.assert_field(value, (local,), True)
                 self.assert_field(value, (shared,), False)
 
+    def test_off_wire_intent_is_local_and_the_aim_it_produced_is_not(self):
+        """The producing machine's one-shot intent; a passed tick can never read it again."""
+        for version in ("ActorRuntime1", "ActorRuntime2", "ActorRuntime3"):
+            value = dict(version=version, off_wire_aim_tick=579, off_wire_aim=1, off_wire_flip_tick=579,
+                off_wire_flip=1, aim_angle=2, aim_state=3, hud_stack=4)
+            for key in ("off_wire_aim_tick", "off_wire_aim", "off_wire_flip_tick", "off_wire_flip"):
+                with self.subTest(version=version, key=key):
+                    self.assert_field(value, (key,), True)
+            for key in ("aim_angle", "aim_state"):
+                with self.subTest(version=version, key=key):
+                    self.assert_field(value, (key,), False)
+        # ACraft::SaveACraftRuntime writes the hatch command as the last two fields of the record.
+        craft = runtime.decode(runtime._payload("ACraftRuntime1"))
+        for key in ("off_wire_hatch_tick", "off_wire_hatch_open"):
+            with self.subTest(key=key):
+                self.assertIn(key, craft)
+                self.assert_field(craft, (key,), True)
+        self.assert_field(craft, ("hatch_state",), False)
+
     def test_terrain_view_offsets_have_exact_layer_scope(self):
         layer = dict(version="TerrainLayer1", offset=[1, 2], origin=[3, 4])
         value = dict(terrain_metadata=dict(terrain_layers=[layer], unseen=[copy.deepcopy(layer)], material_copy=b"terrain"), gravity=[10, 20])
@@ -596,8 +615,9 @@ class RuntimeProjectionTests(unittest.TestCase):
             with self.subTest(version=version):
                 self.assertEqual(value["version"], version)
                 for name, kind in runtime.SCHEMAS[version]:
+                    # The off-wire hatch command is the producing machine's own one-shot intent.
                     if kind == "n":
-                        self.assert_field(value, (name,), False)
+                        self.assert_field(value, (name,), name in runtime._LOCAL_FIELDS.get(version, ()))
                 with self.assertRaises(ValueError):
                     runtime.decode(runtime._payload(version) + b"1 ")
 
