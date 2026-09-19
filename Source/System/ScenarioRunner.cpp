@@ -1014,8 +1014,10 @@ namespace RTE {
 		if (!s_LockstepCoordinator) {
 			return 0;
 		}
+		const auto held = s_LockstepDroppedControlOverrides.find(actorUniqueID);
 		const auto overrideIt = s_LockstepControlOverrides.find(actorUniqueID);
 		if (overrideIt != s_LockstepControlOverrides.end()) {
+			if (held != s_LockstepDroppedControlOverrides.end() && overrideIt->second == GetLockstepHostPeerId()) return held->second;
 			return overrideIt->second;
 		}
 		const auto droppedIt = s_LockstepDroppedControlOverrides.find(actorUniqueID);
@@ -1285,6 +1287,30 @@ namespace RTE {
 
 	void ScenarioRunner::SetLockstepAppliedFrame(uint64_t frame) {
 		s_LockstepAppliedFrame = frame;
+	}
+
+	bool ScenarioRunner::IsLockstepSeatUnderAI(uint8_t peerId, uint64_t frame) {
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatUnderAI(peerId, frame);
+	}
+
+	void ScenarioRunner::ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame) {
+		if (!IsLockstepSeatUnderAI(peerId, frame)) return;
+		if (auto binding = s_PeerPlayerBindings.find(peerId); binding != s_PeerPlayerBindings.end()) {
+			binding->second.frame = frame;
+			for (auto& player: binding->second.bindings.players) player.controlledUID = 0;
+		}
+		if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) activity->ApplyNetworkSeatAI(peerId, true, frame);
+		PushNetUiToast("seat_held", "held - AI in control", peerId);
+	}
+
+	void ScenarioRunner::HandLockstepActorToAI(int64_t actorUniqueID, uint8_t heldPeerId) {
+		s_LockstepDroppedControlOverrides[actorUniqueID] = heldPeerId;
+		SetLockstepControlOverride(actorUniqueID, GetLockstepHostPeerId());
+	}
+
+	void ScenarioRunner::ReclaimLockstepActor(int64_t actorUniqueID, uint8_t peerId) {
+		s_LockstepDroppedControlOverrides.erase(actorUniqueID);
+		SetLockstepControlOverride(actorUniqueID, peerId);
 	}
 
 	void ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(uint64_t frame) {

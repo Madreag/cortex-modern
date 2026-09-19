@@ -407,6 +407,23 @@ void GameActivity::ConfigureLockstepCPUTeams(const std::array<bool, Teams::MaxTe
 	}
 }
 
+void GameActivity::ApplyNetworkSeatAI(uint8_t peerId, bool held, uint64_t frame) {
+	const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+	if (!config) return;
+	std::array<bool, Teams::MaxTeamCount> cpuTeams;
+	std::copy(std::begin(m_TeamIsCPU), std::end(m_TeamIsCPU), cpuTeams.begin());
+	for (const auto& seat: config->players) {
+		if (seat.cpu || seat.peerId != peerId) continue;
+		const bool remainingHuman = std::any_of(config->players.begin(), config->players.end(), [&](const auto& other) {
+			return !other.cpu && other.team == seat.team && other.peerId != peerId && !ScenarioRunner::IsLockstepSeatUnderAI(other.peerId, frame);
+		});
+		const bool configuredCPU = std::any_of(config->players.begin(), config->players.end(), [&](const auto& other) { return other.cpu && other.team == seat.team; });
+		cpuTeams[seat.team] = configuredCPU || (held && !remainingHuman);
+	}
+	TouchCheckpoint();
+	ConfigureLockstepCPUTeams(cpuTeams);
+}
+
 // A seat this machine does not present has no menu, editor or banner of its own, and a script that asks for one
 // gets an inert object of the same type: it is never created, so its every method is a no-op and its every getter
 // answers neutral. Offline every seat is this machine's own and the live objects are handed out as before.

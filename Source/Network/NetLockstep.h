@@ -453,6 +453,7 @@ namespace RTE {
 	struct NetLockstepReadyFrame {
 		uint64_t frame = 0;
 		std::vector<uint8_t> departedPeerIds;
+		std::vector<uint8_t> aiHeldPeerIds;
 		std::map<uint8_t, uint64_t> committedPeerLeaves;
 		std::map<uint8_t, uint64_t> committedFrameWaivers;
 		bool hasLocalInput = false;

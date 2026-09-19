@@ -270,6 +270,10 @@ namespace RTE {
 		/// The last frame the sim applied. The reclaim hold is counted in these, so anything that
 		/// shows or decides on the hold reads the tick and never a clock.
 		static uint64_t GetLockstepAppliedFrame();
+		static bool IsLockstepSeatUnderAI(uint8_t peerId, uint64_t frame);
+		static void ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame);
+		static void HandLockstepActorToAI(int64_t actorUniqueID, uint8_t heldPeerId);
+		static void ReclaimLockstepActor(int64_t actorUniqueID, uint8_t peerId);
 		/// The last completed exchange tick, including paused ticks, for presentation.
 		static uint64_t GetLockstepCompletedFrame();
 		static uint64_t GetLockstepRoundId();

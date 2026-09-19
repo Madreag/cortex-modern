@@ -472,6 +472,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		return lhs.senderPeerId < rhs.senderPeerId;
 	});
 	for (const NetGameCommand& command: commands) {
+		if (std::holds_alternative<NetGameSeatHold>(command.payload)) continue;
 		if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) {
 			ScenarioRunner::ObserveLockstepPlayerBindings(command.senderPeerId, readyFrame.frame, *bindings);
 			continue;
@@ -672,6 +673,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			}
 			std::cout << "[net-match] control of actor " << switchControl->actorUID << " -> peer " << static_cast<int>(switchControl->newOwnerPeerId) << std::endl;
 		} else if (const NetGameReseat* reseat = std::get_if<NetGameReseat>(&command.payload)) {
+			if (auto* game = dynamic_cast<GameActivity*>(activity)) game->ApplyNetworkSeatAI(reseat->newOwnerPeerId, false, readyFrame.frame);
 			// Like SwitchControl, the override lands even for an actor that is already gone so every
 			// peer's map stays identical; a live actor that left the team is not reseated.
 			int reseated = 0;
@@ -680,7 +682,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				if (actor && actor->GetTeam() != reseat->team) {
 					continue;
 				}
-				ScenarioRunner::SetLockstepControlOverride(actorUID, reseat->newOwnerPeerId);
+				ScenarioRunner::ReclaimLockstepActor(actorUID, reseat->newOwnerPeerId);
 				++reseated;
 			}
 			std::cout << "[net-match] reseat: team " << reseat->team << " -> peer " << static_cast<int>(reseat->newOwnerPeerId) << " actors " << reseated << "/" << reseat->actorUIDs.size() << std::endl;
@@ -958,10 +960,19 @@ void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, co
 	}
 	ScenarioRunner::SetLockstepAppliedFrame(readyFrame.frame);
 	ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(readyFrame.frame);
+	for (uint8_t peer: readyFrame.aiHeldPeerIds) ScenarioRunner::ApplyLockstepSeatAI(peer, readyFrame.frame);
 	for (Actor* actor: actors) {
 		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
 		const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
-		if (actor->IsPlayerControlled() && std::find(readyFrame.departedPeerIds.begin(), readyFrame.departedPeerIds.end(), claimant) != readyFrame.departedPeerIds.end()) {
+		const bool aiTakeover = std::find(readyFrame.aiHeldPeerIds.begin(), readyFrame.aiHeldPeerIds.end(), claimant) != readyFrame.aiHeldPeerIds.end();
+		if (aiTakeover || (actor->IsPlayerControlled() && std::find(readyFrame.departedPeerIds.begin(), readyFrame.departedPeerIds.end(), claimant) != readyFrame.departedPeerIds.end())) {
+			if (aiTakeover) {
+				ScenarioRunner::HandLockstepActorToAI(uid, claimant);
+				actor->GetController()->SetInputMode(Controller::CIM_AI);
+				actor->GetController()->SetPlayer(Players::NoPlayer);
+				actor->GetController()->SetDisabled(false);
+				actor->TouchCheckpoint();
+			}
 			MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
 			ScenarioRunner::NoteE2eOwnerTransfer(uid);
 		}

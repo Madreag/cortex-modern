@@ -1383,6 +1383,72 @@ namespace RTE {
 			return host.IsRunning();
 		}
 
+		bool TestHoldWaitsForSurvivorDecision(std::string* error) {
+			LoopbackTransport hostTransport, slowTransport, survivorTransport;
+			if (!hostTransport.StartHost(48893, error) || !slowTransport.Connect("loopback", 48893, error) || !survivorTransport.Connect("loopback", 48893, error)) return false;
+			const auto config = [](uint8_t local, std::map<uint8_t, NetPeerId> remotes) {
+				NetLockstepConfig value;
+				value.sessionId = 0x9A03; value.roundId = 19; value.localPeerId = local; value.peerCount = 3;
+				value.timeoutMs = 20000; value.substituteSlowPeers = true; value.simTickMs = 1000.0 / 60.0;
+				value.remoteTransportPeerIds = std::move(remotes); value.relayToOtherPeers = local == 1;
+				value.matchConfig = NetMatchConfigUtil::MakeDefault(value.sessionId);
+				value.matchConfig.peerCount = 3; value.matchConfig.players.push_back({3, 2, false, "Survivor"});
+				value.ownershipPolicy = "team-owner";
+				return value;
+			};
+			NetLockstepCoordinator host, slow, survivor;
+			if (!host.Start(hostTransport, config(1, {{2, 1}, {3, 2}}), error) || !slow.Start(slowTransport, config(2, {{1, 1}}), error) ||
+			    !survivor.Start(survivorTransport, config(3, {{1, 1}}), error)) return false;
+			for (uint64_t now = 0; now < 10; ++now) {
+				hostTransport.AdvanceTimeMs(1); slowTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
+				host.Tick(now); slow.Tick(now); survivor.Tick(now);
+			}
+			if (!host.QueueLocalInput(0, {}, {}, error) || !survivor.QueueLocalInput(0, {}, {}, error)) return false;
+			host.Tick(20);
+			host.NoteFrameWait(0, 100);
+			host.NoteFrameWait(0, 150);
+			host.Tick(150);
+			NetLockstepReadyFrame hostFrame, survivorFrame;
+			if (host.PopReadyFrame(hostFrame) || !host.TimingDecisionPendingAt(0)) {
+				*error = "a hold committed before the surviving peer acknowledged the decision"; return false;
+			}
+			for (uint64_t now = 151; now < 165; ++now) {
+				hostTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
+				host.Tick(now); survivor.Tick(now);
+			}
+			if (!host.PopReadyFrame(hostFrame) || !survivor.PopReadyFrame(survivorFrame) || hostFrame.frame != 0 || survivorFrame.frame != 0 ||
+			    hostFrame.aiHeldPeerIds != std::vector<uint8_t>{2} || survivorFrame.aiHeldPeerIds != hostFrame.aiHeldPeerIds ||
+			    host.ResolveActorOwner(987654321, 1, false) != 1 || survivor.ResolveActorOwner(987654321, 1, false) != 1 ||
+			    hostFrame.localCommands != survivorFrame.remoteCommands) {
+				*error = "survivors did not commit the same hold event and AI producer"; return false;
+			}
+			return true;
+		}
+
+		bool TestRecordedHoldReplaysAtItsFrame(std::string* error) {
+			NetLockstepFrame record;
+			record.senderPeerId = 1; record.targetFrame = 40;
+			record.commands = {{1, NetGameSeatHold{2}}};
+			if (!RoundTrip({record}, error)) return false;
+			LoopbackTransport transport;
+			NetLockstepCoordinator replay;
+			NetLockstepConfig config;
+			config.localPeerId = 1; config.startFrame = 40; config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A04);
+			if (!replay.StartReplay(transport, config, error) || !replay.QueueReplayFrame(40, {}, record.commands, error)) return false;
+			replay.Tick(0);
+			NetLockstepReadyFrame ready;
+			if (!replay.PopReadyFrame(ready) || ready.aiHeldPeerIds != std::vector<uint8_t>{2} || replay.IsSeatUnderAI(2, 39) ||
+			    !replay.IsSeatUnderAI(2, 40) || replay.ResolveActorOwner(987654321, 1, false) != 1) {
+				*error = "recorded hold did not restore its frame and AI producer"; return false;
+			}
+			if (!replay.RewindReplay(40, error) || replay.IsSeatUnderAI(2, 40) || !replay.QueueReplayFrame(40, {}, record.commands, error)) return false;
+			replay.Tick(1);
+			if (!replay.PopReadyFrame(ready) || ready.aiHeldPeerIds != std::vector<uint8_t>{2}) {
+				*error = "the replay rewind retained a future hold"; return false;
+			}
+			return true;
+		}
+
 		bool TestSenderDropsUncontrolledTeamCommands(std::string* error) {
 			LoopbackTransport hostTransport;
 			LoopbackTransport clientTransport;
@@ -15133,6 +15199,8 @@ namespace RTE {
 		    !TestTimingDecisionCodec(&error) ||
 		    !TestLiveDelayChangesAtOneFrame(&error) ||
 		    !TestBoundedHoldKeepsCommitting(&error) ||
+		    !TestHoldWaitsForSurvivorDecision(&error) ||
+		    !TestRecordedHoldReplaysAtItsFrame(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
 		    !TestAIWaypointReadThroughSamePass(&error) ||
