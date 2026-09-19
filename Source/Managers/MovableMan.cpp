@@ -44,6 +44,7 @@
 #include "ScenarioRunner.h"
 #include "NetActorOwnership.h"
 #include "NetLockstep.h"
+#include "NetWorldJoin.h"
 #include "AIWriteScript.h"
 #include "LuaMan.h"
 #include "ThreadMan.h"
@@ -755,7 +756,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			if (transition->kind == NetGameWorldTransition::Activate && transition->peerId != 0 && seated) {
 				ScenarioRunner::SetLockstepControlOverride(static_cast<int64_t>(seated->GetUniqueID()), transition->peerId);
 			}
-			if (transition->bindBrain && seated && transition->player >= Players::PlayerOne && transition->player < Players::MaxPlayerCount) {
+			if (WorldTransitionBindsBrain(*transition, seated != nullptr)) {
 				activity->SetPlayerBrain(seated, transition->player);
 			}
 			std::cout << "[net-match] world transition: kind " << static_cast<int>(transition->kind)

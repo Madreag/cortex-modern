@@ -10,13 +10,17 @@
 #include "NetReconnectAdmission.h"
 #include "NetReconnectSession.h"
 #include "NetSeatAuth.h"
+#include "NetDirectoryClient.h"
 #include "NetLobbySession.h"
+#include "NetMatchService.h"
+#include "NetReconnectTicketStore.h"
 #include "NetWorldJoin.h"
 #include "System/ScenarioRunner.h"
 
 #include "nlohmann/json.hpp"
 
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -130,7 +134,72 @@ namespace RTE {
 			return identity;
 		}
 
+		/// A host and a client lobby over one in-memory loopback link, the pair the world join plane
+		/// streams its image, tail and reports across.
+		struct WorldLobbyPair {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLobbySession host;
+			NetLobbySession client;
+			NetPeerId hostRemote = c_InvalidNetPeerId;
+			NetPeerId clientRemote = c_InvalidNetPeerId;
+			uint64_t nowMs = 0;
+
+			bool Open(uint16_t port, std::string* error) {
+				if (!hostTransport.StartHost(port, error) || !clientTransport.Connect("loopback", port, error)) {
+					return false;
+				}
+				for (const NetTransportEvent& event: hostTransport.PollEvents()) {
+					if (event.type == NetTransportEventType::PeerConnected) {
+						hostRemote = event.peerId;
+					}
+				}
+				for (const NetTransportEvent& event: clientTransport.PollEvents()) {
+					if (event.type == NetTransportEventType::PeerConnected) {
+						clientRemote = event.peerId;
+					}
+				}
+				if (hostRemote == c_InvalidNetPeerId || clientRemote == c_InvalidNetPeerId) {
+					if (error) *error = "loopback peer connection events were not observed";
+					return false;
+				}
+				NetLobbySessionConfig hostConfig;
+				hostConfig.host = true;
+				hostConfig.localPeerId = 1;
+				hostConfig.remotePeerId = 2;
+				hostConfig.remoteTransportPeerId = hostRemote;
+				hostConfig.matchConfig = MakeWorldConfig();
+				hostConfig.autoStart = false;
+				NetLobbySessionConfig clientConfig;
+				clientConfig.localPeerId = 2;
+				clientConfig.remotePeerId = 1;
+				clientConfig.remoteTransportPeerId = clientRemote;
+				clientConfig.matchConfig = MakeWorldConfig();
+				if (!host.Start(hostTransport, hostConfig, error) || !client.Start(clientTransport, clientConfig, error)) {
+					return false;
+				}
+				Pump(8);
+				return true;
+			}
+
+			void Pump(int rounds) {
+				for (int i = 0; i < rounds; ++i) {
+					host.PumpOutgoingChunks();
+					host.Tick(nowMs);
+					client.Tick(nowMs);
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+					nowMs += 10;
+				}
+			}
+		};
+
 		std::filesystem::path LaneDirectory() {
+			// Two launches of the restart case each get their own private runtime, so the driver names
+			// the one directory both of them boot their identity from.
+			if (const char* shared = std::getenv("CCCP_WORLD_IDENTITY_DIR"); shared != nullptr && shared[0] != '\0') {
+				return std::filesystem::path(shared);
+			}
 			return std::filesystem::current_path() / "Userdata" / "world-join-selftest";
 		}
 
@@ -626,6 +695,10 @@ namespace RTE {
 				return Fail("CopyFrom stamped the log tip instead of the last copied frame");
 			}
 
+			WorldLobbyPair pair;
+			if (!pair.Open(47116, &error)) {
+				return Fail("catch-up lobby pair: " + error);
+			}
 			NetWorldJoinHost host;
 			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) {
 				return Fail("catch-up host did not open a join: " + error);
@@ -642,45 +715,466 @@ namespace RTE {
 			if (!host.NoteTransferComplete(7, 8, &error)) {
 				return Fail("catch-up transfer complete refused: " + error);
 			}
-			const uint64_t nowFrame = 80;
-			uint64_t activation = 0;
-			if (!host.NoteCatchUpProgress(7, 40, 20, 50, nowFrame, &activation, &error) || activation != nowFrame + c_NetWorldActivationLeadFrames) {
-				return Fail("catch-up did not announce E: " + error);
+			// The world keeps committing while the joiner replays; these are the frames it owes it.
+			for (uint64_t frame = 41; frame <= 43; ++frame) {
+				if (!host.Tail().Append(MakeCommittedFrame(frame), &error)) {
+					return Fail("catch-up tail refused a committed frame: " + error);
+				}
 			}
+			if (!pair.host.BindLateRemote(2, pair.hostRemote, &error)) {
+				return Fail("catch-up bind: " + error);
+			}
+			const NetWorldJoinSession* bootstrap = host.FindSession(7);
+			if (bootstrap == nullptr) {
+				return Fail("catch-up host lost its bootstrap");
+			}
+			NetMatchService::SendWorldJoinTailTo(pair.host, host, *bootstrap);
+			pair.Pump(8);
 
-			std::vector<NetLockstepFrame> tail = {MakeCommittedFrame(activation - 1)};
-			if (!ScenarioRunner::InstallWorldCatchUp(40, tail, &error)) {
+			const uint64_t e = 44;
+			NetWorldCatchUpClient catchUp;
+			catchUp.active = true;
+			catchUp.snapshotTick = 40;
+			catchUp.appliedThrough = 40;
+			if (!ScenarioRunner::InstallWorldCatchUp(40, {}, &error)) {
 				return Fail("catch-up install: " + error);
 			}
-			ScenarioRunner::SetWorldCatchUpActivation(activation);
-			NetLockstepReadyFrame ready;
-			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(activation - 1, ready, &error) || ready.frame != activation - 1) {
-				return Fail("TakeWorldCatchUpReadyFrame did not apply targetFrame == simTick");
+			ScenarioRunner::SetWorldCatchUpActivation(e);
+			// The joiner's own step takes the tail off the wire; nothing here hands it frames.
+			NetMatchService::StepWorldJoinCatchUpClient(pair.client, catchUp);
+			int budget = ScenarioRunner::c_WorldCatchUpTicksPerRealFrame;
+			uint64_t simTick = 40;
+			while (ScenarioRunner::WorldCatchUpMayGrant(simTick + 1, budget)) {
+				++simTick;
+				--budget;
+				NetLockstepReadyFrame ready;
+				if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, ready, &error) || ready.frame != simTick) {
+					return Fail("appliedThrough-did-not-reach-E-minus-1: tick " + std::to_string(simTick) + " was granted with no committed frame");
+				}
 			}
-			if (ScenarioRunner::WorldCatchUpAppliedThrough() != activation - 1) {
-				return Fail("appliedThrough-did-not-reach-E-minus-1");
-			}
-			const NetLobbyStateChunk report = MakeJoinerCatchUpReport();
-			uint8_t kind = 0;
-			uint64_t value = 0;
-			if (!ParseWorldJoinReport(report, kind, value) || kind != c_NetWorldReportCatchUp ||
-			    value != ScenarioRunner::WorldCatchUpAppliedThrough() || value != activation - 1) {
-				return Fail("production joiner report did not carry appliedThrough");
-			}
-			if (!host.NoteCatchUpProgress(7, value, value > 40 ? value - 40 : 0, 10, nowFrame, nullptr, &error)) {
-				return Fail("DriveWorldJoins report.value was refused: " + error);
-			}
-			if (host.FindSession(7)->acknowledgedThrough != activation - 1) {
-				return Fail("appliedThrough-did-not-reach-E-minus-1");
-			}
-			if (host.DueActivation(activation) != nullptr) {
-				return Fail("DueActivation stayed true at E");
-			}
-			if (host.DueActivation(activation - 1) == nullptr) {
-				return Fail("DueActivation did not fire only at E-1");
+			if (simTick != e - 1 || ScenarioRunner::WorldCatchUpAppliedThrough() != e - 1) {
+				return Fail("appliedThrough-did-not-reach-E-minus-1: applied " + std::to_string(ScenarioRunner::WorldCatchUpAppliedThrough()) +
+				            " of " + std::to_string(e - 1));
 			}
 			if (ScenarioRunner::WorldCatchUpActive()) {
 				return Fail("catch-up apply flag did not clear at E-1");
+			}
+			// The value the joiner puts on the wire, read off the host's lobby - not one built here.
+			NetMatchService::StepWorldJoinCatchUpClient(pair.client, catchUp);
+			pair.Pump(6);
+			const NetLobbySession::WorldJoinReport sent = pair.host.TakeWorldJoinReport();
+			if (!sent.pending || sent.kind != c_NetWorldReportCatchUp) {
+				return Fail("appliedThrough-did-not-reach-E-minus-1: the joiner sent no catch-up report");
+			}
+			const uint64_t nowFrame = 80;
+			const NetPeerId connection = NetMatchService::ResolveWorldReportConnection(host, {}, sent.fromPeer);
+			if (connection != 7) {
+				return Fail("appliedThrough-did-not-reach-E-minus-1: the host could not place lobby peer " + std::to_string(static_cast<int>(sent.fromPeer)));
+			}
+			NetMatchService::ApplyWorldJoinReport(pair.host, host, sent, connection, nowFrame, 2000);
+			const uint64_t stored = host.FindSession(7)->acknowledgedThrough;
+			if (stored != e - 1) {
+				return Fail("appliedThrough-did-not-reach-E-minus-1: the host stored " + std::to_string(stored) + ", the joiner applied " +
+				            std::to_string(e - 1) + ", the host frame is " + std::to_string(nowFrame));
+			}
+			if (host.FindSession(7)->activationTick != nowFrame + c_NetWorldActivationLeadFrames) {
+				return Fail("catch-up did not announce E: " + std::to_string(host.FindSession(7)->activationTick));
+			}
+			return 0;
+		}
+
+		int TestCatchUpStopsAtTailGap() {
+			std::string error;
+			std::vector<NetLockstepFrame> tail = {MakeCommittedFrame(41), MakeCommittedFrame(42), MakeCommittedFrame(44)};
+			if (!ScenarioRunner::InstallWorldCatchUp(40, tail, &error)) {
+				return Fail("gapped catch-up install: " + error);
+			}
+			ScenarioRunner::SetWorldCatchUpActivation(50);
+			int budget = ScenarioRunner::c_WorldCatchUpTicksPerRealFrame;
+			uint64_t simTick = 40;
+			while (ScenarioRunner::WorldCatchUpMayGrant(simTick + 1, budget)) {
+				++simTick;
+				--budget;
+				NetLockstepReadyFrame ready;
+				if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, ready, &error)) {
+					return Fail("catch-up-ran-past-the-tail: tick " + std::to_string(simTick) + " was granted and the tail holds no frame for it");
+				}
+			}
+			if (simTick != 42) {
+				return Fail("catch-up-ran-past-the-tail: the sim clock reached " + std::to_string(simTick) + " over a tail that ends at 42 before the hole");
+			}
+			if (ScenarioRunner::WorldCatchUpAppliedThrough() != 42) {
+				return Fail("catch-up-ran-past-the-tail: applied through " + std::to_string(ScenarioRunner::WorldCatchUpAppliedThrough()) + ", the tail holds 42");
+			}
+			// The frame behind the hole is still held, so the joiner resumes when 43 arrives.
+			if (!ScenarioRunner::WorldCatchUpHasFrame(44)) {
+				return Fail("catch-up-ran-past-the-tail: the frame behind the hole was consumed");
+			}
+			return 0;
+		}
+
+		int TestCatchUpKeepsItsCeiling() {
+			std::string error;
+			std::vector<NetLockstepFrame> tail;
+			const int ceiling = ScenarioRunner::c_WorldCatchUpTicksPerRealFrame;
+			for (int i = 1; i <= ceiling + 4; ++i) {
+				tail.push_back(MakeCommittedFrame(40 + static_cast<uint64_t>(i)));
+			}
+			if (!ScenarioRunner::InstallWorldCatchUp(40, tail, &error)) {
+				return Fail("ceiling catch-up install: " + error);
+			}
+			ScenarioRunner::SetWorldCatchUpActivation(40 + static_cast<uint64_t>(ceiling) + 5);
+			int budget = ceiling;
+			uint64_t simTick = 40;
+			int granted = 0;
+			while (ScenarioRunner::WorldCatchUpMayGrant(simTick + 1, budget)) {
+				++simTick;
+				--budget;
+				++granted;
+				NetLockstepReadyFrame ready;
+				if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, ready, &error)) {
+					return Fail("catch-up-exceeded-the-ceiling: tick " + std::to_string(simTick) + " had no committed frame");
+				}
+			}
+			if (granted != ceiling) {
+				return Fail("catch-up-exceeded-the-ceiling: " + std::to_string(granted) + " ticks in one real frame, the ceiling is " + std::to_string(ceiling));
+			}
+			return 0;
+		}
+
+		int TestTakeDoesNotPumpTheSession() {
+			std::string error;
+			std::vector<NetLockstepFrame> tail = {MakeCommittedFrame(41)};
+			if (!ScenarioRunner::InstallWorldCatchUp(40, tail, &error)) {
+				return Fail("pump catch-up install: " + error);
+			}
+			ScenarioRunner::SetWorldCatchUpActivation(60);
+			bool pumped = false;
+			ScenarioRunner::SetSessionPump([&pumped]() { pumped = true; });
+			NetLockstepReadyFrame ready;
+			const bool took = ScenarioRunner::TakeWorldCatchUpReadyFrame(41, ready, &error);
+			ScenarioRunner::SetSessionPump(std::function<void()>{});
+			if (!took || ready.frame != 41) {
+				return Fail("the catch-up did not apply its committed frame: " + error);
+			}
+			if (pumped) {
+				return Fail("take-pumped-the-session: applying a committed tail frame ran the session pump on the sim thread");
+			}
+			return 0;
+		}
+
+		int TestImageWatermarkSurvivesAnEmptyCopy() {
+			std::string error;
+			NetWorldJoinHost host;
+			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) {
+				return Fail("watermark host did not open a join: " + error);
+			}
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId;
+			image.boot = 1;
+			image.round = 1;
+			image.tick = 40;
+			image.bytes = 8;
+			image.digest = "d";
+			image.path = "Worlds/image.bin";
+			host.PublishImage(image);
+			if (!host.NoteTransferStarted(7, 0x1234, 3, 0)) {
+				return Fail("watermark transfer start refused");
+			}
+			if (host.FindSession(7)->deliveredThrough != image.tick) {
+				return Fail("image-watermark-wiped: deliveredThrough " + std::to_string(host.FindSession(7)->deliveredThrough) +
+				            " after a transfer that copied no tail, the image stands at " + std::to_string(image.tick));
+			}
+			if (!host.NoteTransferStarted(7, 0x1234, 3, 42) || host.FindSession(7)->deliveredThrough != 42) {
+				return Fail("image-watermark-wiped: a copied tail frame did not move deliveredThrough");
+			}
+			return 0;
+		}
+
+		int TestTicketRejoinTargetsTheWorld() {
+			NetH4TicketRecord record;
+			record.epoch.fill(7);
+			record.stableSeat = 3;
+			record.holderGeneration = 2;
+			record.credential.fill(9);
+			record.hostSessionId = 0x5151ULL;
+			record.hostAddress = "198.51.100.7:42124";
+			record.issuedAtUnixMs = 1000;
+			record.persistentWorld = true;
+			const NetMatchServiceRequest world = NetMatchService::BuildTicketRejoinRequest(record, "alice", false);
+			if (!world.persistentWorld || world.activityPreset != "Persistent World") {
+				return Fail("ticket-rejoin-did-not-target-the-world: persistentWorld " + std::string(world.persistentWorld ? "true" : "false") +
+				            ", preset \"" + world.activityPreset + "\" from a world ticket with no live world flags");
+			}
+			if (world.address != record.hostAddress || world.host) {
+				return Fail("ticket-rejoin-did-not-target-the-world: the request left the ticket's host");
+			}
+			NetH4TicketRecord ordinary = record;
+			ordinary.persistentWorld = false;
+			if (NetMatchService::BuildTicketRejoinRequest(ordinary, "alice", false).persistentWorld) {
+				return Fail("an ordinary ticket rejoin targeted a world");
+			}
+			// The flag has to survive the record's own round trip: a relaunch reads it off disk.
+			std::vector<uint8_t> bytes;
+			if (!NetReconnectTicketStore::Serialize(record, bytes)) {
+				return Fail("ticket-rejoin-did-not-target-the-world: the world record did not serialize");
+			}
+			NetH4TicketRecord decoded;
+			if (!NetReconnectTicketStore::Deserialize(bytes, decoded) || !decoded.persistentWorld || !(decoded == record)) {
+				return Fail("ticket-rejoin-did-not-target-the-world: the stored record lost its world flag");
+			}
+			// A record written before the flag existed still proves its seat.
+			std::vector<uint8_t> legacy = bytes;
+			legacy[8] = 1;
+			legacy[9] = 0;
+			legacy.pop_back();
+			NetH4TicketRecord legacyDecoded;
+			if (!NetReconnectTicketStore::Deserialize(legacy, legacyDecoded)) {
+				return Fail("a version 1 ticket record no longer loads");
+			}
+			if (legacyDecoded.persistentWorld || legacyDecoded.stableSeat != record.stableSeat) {
+				return Fail("a version 1 ticket record did not decode as an ordinary host's");
+			}
+			return 0;
+		}
+
+		int TestSpectatorActivationWaitsForItsImage() {
+			std::string error;
+			NetMatchConfig config = MakeWorldConfig();
+			NetWorldJoinHost host;
+			if (!host.Configure(config, MakeIdentity(), &error)) {
+				return Fail("spectator host did not configure: " + error);
+			}
+			// One slot, so the second connection is an overflow spectator.
+			if (!host.BeginJoin(7, 2, "alice", 1000, &error) || !host.BeginJoin(8, 3, "bob", 1000, &error)) {
+				return Fail("spectator host did not open both joins: " + error);
+			}
+			const NetWorldJoinSession* spectator = host.FindSession(8);
+			if (spectator == nullptr || !spectator->spectator) {
+				return Fail("the overflow connection did not become a spectator");
+			}
+			uint64_t announced = 0;
+			if (host.ScheduleSpectatorActivation(8, 100, &announced, &error)) {
+				return Fail("spectator-activation-before-its-image: E " + std::to_string(announced) + " was announced with no transfer started");
+			}
+			if (host.FindSession(8)->phase != NetWorldJoinPhase::SnapshotTransfer) {
+				return Fail("spectator-activation-before-its-image: the spectator left the phase its transfer is retried in");
+			}
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId;
+			image.boot = 1;
+			image.round = 1;
+			image.tick = 40;
+			image.bytes = 8;
+			image.digest = "d";
+			image.path = "Worlds/image.bin";
+			host.PublishImage(image);
+			if (!host.NoteTransferStarted(8, 0x22, 2, 0)) {
+				return Fail("spectator transfer start refused");
+			}
+			if (!host.ScheduleSpectatorActivation(8, 100, &announced, &error) || announced != 100 + c_NetWorldActivationLeadFrames) {
+				return Fail("spectator-activation-before-its-image: E was not announced once the image was on the way: " + error);
+			}
+			return 0;
+		}
+
+		int TestSpectatorNeverTakesASeat() {
+			std::string error;
+			NetWorldJoinHost host;
+			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error) ||
+			    !host.BeginJoin(8, 3, "bob", 1000, &error)) {
+				return Fail("spectator host did not open both joins: " + error);
+			}
+			const NetWorldJoinSession* member = host.FindSession(7);
+			const NetWorldJoinSession* spectator = host.FindSession(8);
+			if (member == nullptr || spectator == nullptr || !spectator->spectator) {
+				return Fail("the overflow connection did not become a spectator");
+			}
+			const NetWorldActivationPlan spectatorPlan = PlanWorldActivation(*spectator, 200, false);
+			if (spectatorPlan.admit || spectatorPlan.submitTransition) {
+				return Fail("spectator-activated-a-seat: admit " + std::string(spectatorPlan.admit ? "true" : "false") +
+				            ", transition " + std::string(spectatorPlan.submitTransition ? "true" : "false"));
+			}
+			const NetWorldActivationPlan memberPlan = PlanWorldActivation(*member, 200, false);
+			if (!memberPlan.admit || !memberPlan.submitTransition) {
+				return Fail("a member's activation stopped admitting");
+			}
+			const NetGameWorldTransition transition = BuildWorldActivateTransition(*spectator, MakeWorldConfig(), host.Membership().Revision());
+			if (transition.bindBrain || WorldTransitionBindsBrain(transition, true)) {
+				return Fail("spectator-activated-a-seat: a spectator's transition binds a brain");
+			}
+			return 0;
+		}
+
+		int TestSpectatorLobbyIdsRecycle() {
+			std::string error;
+			NetWorldJoinHost host;
+			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) {
+				return Fail("spectator id host did not open the member join: " + error);
+			}
+			std::vector<NetPeerId> spectators;
+			for (size_t i = 0; i < c_WorldSpectatorLobbyCap; ++i) {
+				const NetPeerId connection = static_cast<NetPeerId>(100 + i);
+				if (!host.BeginJoin(connection, static_cast<uint16_t>(10 + i), "watcher", 1000, &error)) {
+					return Fail("a spectator join was refused: " + error);
+				}
+				spectators.push_back(connection);
+			}
+			const uint8_t first = host.FindSession(spectators.front())->spectatorLobbyPeer;
+			const uint8_t second = host.FindSession(spectators[1])->spectatorLobbyPeer;
+			if (first != c_WorldSpectatorLobbyPeerFirst || second != c_WorldSpectatorLobbyPeerFirst + 1 || first == second) {
+				return Fail("two overflow spectators shared one lobby id: " + std::to_string(static_cast<int>(first)) + " and " +
+				            std::to_string(static_cast<int>(second)));
+			}
+			// Past the cap there is no id to bind, which is a stream refused rather than one stolen.
+			if (!host.BeginJoin(200, 200, "overflow", 1000, &error)) {
+				return Fail("the spectator past the cap was refused a bootstrap: " + error);
+			}
+			if (host.FindSession(200)->spectatorLobbyPeer != 0) {
+				return Fail("spectator-lobby-id-leaked: the spectator past the cap took id " +
+				            std::to_string(static_cast<int>(host.FindSession(200)->spectatorLobbyPeer)));
+			}
+			host.CancelJoin(200, "past the cap");
+			// A spectator that leaves returns its id to the pool: the cap is concurrent, not lifetime.
+			host.CancelJoin(spectators[1], "left");
+			if (!host.BeginJoin(300, 300, "later", 1000, &error)) {
+				return Fail("a later spectator was refused: " + error);
+			}
+			if (host.FindSession(300)->spectatorLobbyPeer != second) {
+				return Fail("spectator-lobby-id-leaked: the freed id " + std::to_string(static_cast<int>(second)) + " was not reused, the later spectator got " +
+				            std::to_string(static_cast<int>(host.FindSession(300)->spectatorLobbyPeer)));
+			}
+			// A connection the session no longer lists ends its bootstrap, id and all.
+			const std::vector<NetPeerId> live = {7, 300};
+			if (host.ReleaseLostConnections(live) == 0 || host.FindSession(spectators.front()) != nullptr) {
+				return Fail("spectator-lobby-id-leaked: a dropped spectator kept its bootstrap");
+			}
+			if (host.FindSession(7) == nullptr || host.FindSession(300) == nullptr) {
+				return Fail("spectator-lobby-id-leaked: a live bootstrap was ended");
+			}
+			return 0;
+		}
+
+		int TestTypedAddressTargetsOnlyItsHost() {
+			std::vector<NetDirectoryClient::GameRow> rows;
+			NetDirectoryClient::GameRow world;
+			world.source = "NET";
+			world.name = "World";
+			world.activity = "Persistent World";
+			world.address = "198.51.100.7";
+			world.port = 42124;
+			world.persistentWorld = true;
+			NetDirectoryClient::GameRow ordinary;
+			ordinary.source = "LAN";
+			ordinary.name = "Duel";
+			ordinary.activity = "P4 Alpha Duel";
+			ordinary.address = "203.0.113.9";
+			ordinary.port = 8484;
+			rows.push_back(world);
+			rows.push_back(ordinary);
+			std::string activity;
+			// The world row is highlighted while another host's address is typed: the typed host decides.
+			if (NetDirectoryClient::TargetsPersistentWorld(rows, 0, ordinary.address, ordinary.port, "", 0, &activity)) {
+				return Fail("typed-address-targeted-the-wrong-world: a highlighted world row made " + ordinary.address + " a world target");
+			}
+			if (!activity.empty()) {
+				return Fail("typed-address-targeted-the-wrong-world: the ordinary target took the activity \"" + activity + "\"");
+			}
+			if (!NetDirectoryClient::TargetsPersistentWorld(rows, 0, world.address, world.port, "", 0, &activity) || activity != world.activity) {
+				return Fail("typed-address-targeted-the-wrong-world: the world's own address did not target it");
+			}
+			if (!NetDirectoryClient::TargetsPersistentWorld(rows, 1, world.address, world.port, "", 0, nullptr)) {
+				return Fail("typed-address-targeted-the-wrong-world: a listed world at the typed address was missed");
+			}
+			// The last world this process joined still answers for an address no row covers.
+			if (!NetDirectoryClient::TargetsPersistentWorld(rows, -1, "192.0.2.5", 7000, "192.0.2.5", 7000, nullptr)) {
+				return Fail("typed-address-targeted-the-wrong-world: the last world target was forgotten");
+			}
+			if (NetDirectoryClient::TargetsPersistentWorld(rows, -1, "192.0.2.5", 7001, "192.0.2.5", 7000, nullptr)) {
+				return Fail("typed-address-targeted-the-wrong-world: another port on the last world's host was taken for it");
+			}
+			return 0;
+		}
+
+		int TestSecondJoinAtTheSameTickGetsTheImage() {
+			std::string error;
+			NetWorldJoinHost host;
+			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) {
+				return Fail("second join host did not open the first join: " + error);
+			}
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId;
+			image.boot = 1;
+			image.round = 1;
+			image.tick = 40;
+			image.bytes = 8;
+			image.digest = "d";
+			image.path = "Worlds/image.bin";
+			host.PublishImage(image);
+			// The image is already frozen at this tick, so the next connection bootstraps from it.
+			if (!host.BeginJoin(8, 3, "bob", 1100, &error)) {
+				return Fail("the second join was refused: " + error);
+			}
+			if (host.FindSession(8)->snapshotTick != image.tick) {
+				return Fail("second-join-had-no-image: snapshotTick " + std::to_string(host.FindSession(8)->snapshotTick) +
+				            " while the published image stands at " + std::to_string(image.tick));
+			}
+			if (!host.NoteTransferComplete(8, image.bytes, &error)) {
+				return Fail("second-join-had-no-image: its finished transfer was refused: " + error);
+			}
+			return 0;
+		}
+
+		int TestQueuedImageDoesNotReplaceTheOneInFlight() {
+			std::string error;
+			WorldLobbyPair pair;
+			if (!pair.Open(47117, &error)) {
+				return Fail("queue lobby pair: " + error);
+			}
+			const std::vector<uint8_t> archive(6000, 0x41);
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId;
+			image.boot = 1;
+			image.round = 1;
+			image.tick = 12;
+			image.bytes = archive.size();
+			image.digest = DigestWorldJoinBytes(archive);
+			image.path = "Worlds/queue.bin";
+			std::vector<uint8_t> first;
+			std::vector<uint8_t> second;
+			if (!EncodeWorldJoinImageBlob(image, archive, {}, first, &error) || !EncodeWorldJoinImageBlob(image, archive, {}, second, &error)) {
+				return Fail("queue blob did not encode: " + error);
+			}
+			if (!pair.host.BindLateRemote(2, pair.hostRemote, &error) ||
+			    !pair.host.BindLateRemote(c_WorldSpectatorLobbyPeerFirst, pair.hostRemote, &error)) {
+				return Fail("queue bind: " + error);
+			}
+			if (!pair.host.BeginStateTransferTo(2, first)) {
+				return Fail("the first joiner's image did not take the pump");
+			}
+			const uint64_t firstTransfer = pair.host.GetOutgoingStateId();
+			pair.Pump(2);
+			if (!pair.host.IsStateTransferOutgoing()) {
+				return Fail("the first joiner's image finished before the second was offered");
+			}
+			if (pair.host.BeginStateTransferTo(c_WorldSpectatorLobbyPeerFirst, second)) {
+				return Fail("joiner-image-replaced: the second image took the pump while the first was still streaming");
+			}
+			if (pair.host.QueuedStateTransfers() != 1) {
+				return Fail("joiner-image-replaced: the second image was dropped instead of queued");
+			}
+			if (pair.host.GetOutgoingStateId() != firstTransfer) {
+				return Fail("joiner-image-replaced: the outgoing transfer changed under the first joiner");
+			}
+			for (int i = 0; i < 80 && !pair.client.HasCompleteStateTransfer(); ++i) {
+				pair.Pump(1);
+			}
+			if (!pair.client.HasCompleteStateTransfer() || pair.client.TakeReceivedState() != first) {
+				return Fail("joiner-image-replaced: the first joiner did not receive its own image");
+			}
+			pair.Pump(2);
+			if (pair.host.QueuedStateTransfers() != 0 || pair.host.GetOutgoingStateId() == firstTransfer) {
+				return Fail("joiner-image-replaced: the queued image never took the free pump");
 			}
 			return 0;
 		}
@@ -712,19 +1206,66 @@ namespace RTE {
 			if (!NetLockstepCodec::EncodeRecoveryInput(frame, recovery, &encodeError)) {
 				return Fail("activate-binding-missing: recovery encode failed: " + encodeError.message);
 			}
-			const std::vector<uint8_t> hostBytes = recovery;
-			const std::vector<uint8_t> joinerBytes = recovery;
 			NetLockstepFrame hostView;
-			NetLockstepFrame joinerView;
-			if (!NetLockstepCodec::DecodeRecoveryInput(hostBytes, hostView, nullptr) ||
-			    !NetLockstepCodec::DecodeRecoveryInput(joinerBytes, joinerView, nullptr)) {
-				return Fail("activate-binding-missing: a peer could not decode the activate at E");
+			if (!NetLockstepCodec::DecodeRecoveryInput(recovery, hostView, nullptr)) {
+				return Fail("activate-binding-missing: the host could not decode its own committed activate");
+			}
+			// The joiner's view is not a copy of that buffer: it comes off the world tail, through the
+			// lobby, out of the joiner's own catch-up step.
+			WorldLobbyPair pair;
+			if (!pair.Open(47118, &error)) {
+				return Fail("activate-binding-missing: lobby pair: " + error);
+			}
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId;
+			image.boot = 1;
+			image.round = 1;
+			image.tick = e - 1;
+			image.bytes = 8;
+			image.digest = "d";
+			image.path = "Worlds/binding.bin";
+			host.PublishImage(image);
+			if (!host.NoteTransferComplete(7, image.bytes, &error)) {
+				return Fail("activate-binding-missing: the bootstrap could not finish its transfer: " + error);
+			}
+			if (!host.Tail().Append(frame, &error)) {
+				return Fail("activate-binding-missing: the committed tail refused the activate frame: " + error);
+			}
+			if (!pair.host.BindLateRemote(2, pair.hostRemote, &error)) {
+				return Fail("activate-binding-missing: bind: " + error);
+			}
+			NetMatchService::SendWorldJoinTailTo(pair.host, host, *host.FindSession(7));
+			pair.Pump(8);
+			NetWorldCatchUpClient catchUp;
+			catchUp.active = true;
+			catchUp.snapshotTick = e - 1;
+			catchUp.appliedThrough = e - 1;
+			if (!ScenarioRunner::InstallWorldCatchUp(e - 1, {}, &error)) {
+				return Fail("activate-binding-missing: catch-up install: " + error);
+			}
+			ScenarioRunner::SetWorldCatchUpActivation(e + 1);
+			NetMatchService::StepWorldJoinCatchUpClient(pair.client, catchUp);
+			NetLockstepReadyFrame applied;
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(e, applied, &error)) {
+				return Fail("activate-binding-missing: the joiner never received the activate frame at E: " + error);
 			}
 			const auto* hostApplied = hostView.commands.empty() ? nullptr : std::get_if<NetGameWorldTransition>(&hostView.commands[0].payload);
-			const auto* joinerApplied = joinerView.commands.empty() ? nullptr : std::get_if<NetGameWorldTransition>(&joinerView.commands[0].payload);
-			if (hostApplied == nullptr || joinerApplied == nullptr || !hostApplied->bindBrain || !joinerApplied->bindBrain ||
-			    hostApplied->activationFrame != e || joinerApplied->activationFrame != e) {
-				return Fail("activate-binding-missing");
+			const auto* joinerApplied = applied.remoteCommands.empty() ? nullptr : std::get_if<NetGameWorldTransition>(&applied.remoteCommands[0].payload);
+			if (hostApplied == nullptr || joinerApplied == nullptr) {
+				return Fail("activate-binding-missing: a peer's view of E carries no world transition");
+			}
+			if (hostApplied->activationFrame != e || joinerApplied->activationFrame != e) {
+				return Fail("activate-binding-missing: the peers disagree on E: host " + std::to_string(hostApplied->activationFrame) +
+				            ", joiner " + std::to_string(joinerApplied->activationFrame));
+			}
+			if (!WorldTransitionBindsBrain(*hostApplied, true)) {
+				return Fail("activate-binding-missing: the host's apply binds no brain, player " + std::to_string(hostApplied->player));
+			}
+			if (!WorldTransitionBindsBrain(*joinerApplied, true)) {
+				return Fail("activate-binding-missing: the joiner's apply binds no brain, player " + std::to_string(joinerApplied->player));
+			}
+			if (WorldTransitionBindsBrain(*joinerApplied, false)) {
+				return Fail("activate-binding-missing: a peer with no seated resident still bound a brain");
 			}
 			if (!ScenarioRunner::AcceptWorldTransition(*hostApplied, &error) ||
 			    !ScenarioRunner::AcceptWorldTransition(*joinerApplied, &error)) {
@@ -1227,6 +1768,50 @@ namespace RTE {
 			s_FailTag = "net-world-binding-selftest";
 			return TestActivateBindingOnBothPeers();
 		}
+		if (std::strcmp(name, "catchup-gap") == 0 || std::strcmp(name, "-net-world-catchup-gap-selftest") == 0) {
+			s_FailTag = "net-world-catchup-gap-selftest";
+			return TestCatchUpStopsAtTailGap();
+		}
+		if (std::strcmp(name, "catchup-ceiling") == 0 || std::strcmp(name, "-net-world-catchup-ceiling-selftest") == 0) {
+			s_FailTag = "net-world-catchup-ceiling-selftest";
+			return TestCatchUpKeepsItsCeiling();
+		}
+		if (std::strcmp(name, "take-pump") == 0 || std::strcmp(name, "-net-world-take-pump-selftest") == 0) {
+			s_FailTag = "net-world-take-pump-selftest";
+			return TestTakeDoesNotPumpTheSession();
+		}
+		if (std::strcmp(name, "watermark") == 0 || std::strcmp(name, "-net-world-watermark-selftest") == 0) {
+			s_FailTag = "net-world-watermark-selftest";
+			return TestImageWatermarkSurvivesAnEmptyCopy();
+		}
+		if (std::strcmp(name, "ticket") == 0 || std::strcmp(name, "-net-world-ticket-selftest") == 0) {
+			s_FailTag = "net-world-ticket-selftest";
+			return TestTicketRejoinTargetsTheWorld();
+		}
+		if (std::strcmp(name, "spectator-image") == 0 || std::strcmp(name, "-net-world-spectator-image-selftest") == 0) {
+			s_FailTag = "net-world-spectator-image-selftest";
+			return TestSpectatorActivationWaitsForItsImage();
+		}
+		if (std::strcmp(name, "spectator-seat") == 0 || std::strcmp(name, "-net-world-spectator-seat-selftest") == 0) {
+			s_FailTag = "net-world-spectator-seat-selftest";
+			return TestSpectatorNeverTakesASeat();
+		}
+		if (std::strcmp(name, "spectator-ids") == 0 || std::strcmp(name, "-net-world-spectator-ids-selftest") == 0) {
+			s_FailTag = "net-world-spectator-ids-selftest";
+			return TestSpectatorLobbyIdsRecycle();
+		}
+		if (std::strcmp(name, "typed-address") == 0 || std::strcmp(name, "-net-world-typed-address-selftest") == 0) {
+			s_FailTag = "net-world-typed-address-selftest";
+			return TestTypedAddressTargetsOnlyItsHost();
+		}
+		if (std::strcmp(name, "second-join") == 0 || std::strcmp(name, "-net-world-second-join-selftest") == 0) {
+			s_FailTag = "net-world-second-join-selftest";
+			return TestSecondJoinAtTheSameTickGetsTheImage();
+		}
+		if (std::strcmp(name, "image-queue") == 0 || std::strcmp(name, "-net-world-image-queue-selftest") == 0) {
+			s_FailTag = "net-world-image-queue-selftest";
+			return TestQueuedImageDoesNotReplaceTheOneInFlight();
+		}
 		if (std::strcmp(name, "h4-leave") == 0 || std::strcmp(name, "-net-world-h4-leave-selftest") == 0) {
 			s_FailTag = "net-world-h4-leave-selftest";
 			return TestH4CleanLeaveKeepsWorldSeatOpen();
@@ -1280,6 +1865,39 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestActivateBindingOnBothPeers(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCatchUpStopsAtTailGap(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCatchUpKeepsItsCeiling(); result != 0) {
+			return result;
+		}
+		if (const int result = TestTakeDoesNotPumpTheSession(); result != 0) {
+			return result;
+		}
+		if (const int result = TestImageWatermarkSurvivesAnEmptyCopy(); result != 0) {
+			return result;
+		}
+		if (const int result = TestTicketRejoinTargetsTheWorld(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSpectatorActivationWaitsForItsImage(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSpectatorNeverTakesASeat(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSpectatorLobbyIdsRecycle(); result != 0) {
+			return result;
+		}
+		if (const int result = TestTypedAddressTargetsOnlyItsHost(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSecondJoinAtTheSameTickGetsTheImage(); result != 0) {
+			return result;
+		}
+		if (const int result = TestQueuedImageDoesNotReplaceTheOneInFlight(); result != 0) {
 			return result;
 		}
 		if (const int result = TestSlowJoinerReannounceThenFree(); result != 0) {

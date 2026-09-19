@@ -15,7 +15,6 @@ new PASS token. What that tree still reaches on its existing flags:
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -37,6 +36,17 @@ RED_CODEC = "WorldTransition codec did not round-trip"
 RED_ORDINARY_IDENTITY = "ordinary identity did not stamp lockstep 22 and match config 4"
 RED_ADMIT = "a due activation cancelled instead of admitting"
 RED_ORDINARY_JOIN_ACCEPTED = "an ordinary NewJoin was accepted"
+RED_CATCHUP_PAST_TAIL = "catch-up-ran-past-the-tail"
+RED_CATCHUP_CEILING = "catch-up-exceeded-the-ceiling"
+RED_TAKE_PUMP = "take-pumped-the-session"
+RED_WATERMARK = "image-watermark-wiped"
+RED_TICKET_WORLD = "ticket-rejoin-did-not-target-the-world"
+RED_SPECTATOR_IMAGE = "spectator-activation-before-its-image"
+RED_SPECTATOR_SEAT = "spectator-activated-a-seat"
+RED_SPECTATOR_IDS = "spectator-lobby-id-leaked"
+RED_TYPED_ADDRESS = "typed-address-targeted-the-wrong-world"
+RED_SECOND_JOIN = "second-join-had-no-image"
+RED_IMAGE_QUEUE = "joiner-image-replaced"
 
 CASES = (
     {
@@ -66,6 +76,7 @@ CASES = (
     {
         "name": "world-identity-survives-host-restart",
         "kind": "host_restart",
+        "fn": "host_restart_same_world_id",
         "argv": ["-net-world-identity-print-selftest"],
         "red": RED_WORLD_ID_DID_NOT_SURVIVE,
         "pass_token": "[net-world-identity-print-selftest] PASS",
@@ -138,6 +149,72 @@ CASES = (
         "red": RED_ADMIT,
         "pass_token": "[net-world-admit-selftest] PASS",
     },
+    {
+        "name": "catch-up-stops-at-a-tail-gap",
+        "argv": ["-net-world-catchup-gap-selftest"],
+        "red": RED_CATCHUP_PAST_TAIL,
+        "pass_token": "[net-world-catchup-gap-selftest] PASS",
+    },
+    {
+        "name": "catch-up-keeps-its-ceiling",
+        "argv": ["-net-world-catchup-ceiling-selftest"],
+        "red": RED_CATCHUP_CEILING,
+        "pass_token": "[net-world-catchup-ceiling-selftest] PASS",
+    },
+    {
+        "name": "take-does-not-pump-the-session",
+        "argv": ["-net-world-take-pump-selftest"],
+        "red": RED_TAKE_PUMP,
+        "pass_token": "[net-world-take-pump-selftest] PASS",
+    },
+    {
+        "name": "image-watermark-survives-an-empty-copy",
+        "argv": ["-net-world-watermark-selftest"],
+        "red": RED_WATERMARK,
+        "pass_token": "[net-world-watermark-selftest] PASS",
+    },
+    {
+        "name": "ticket-rejoin-targets-the-world",
+        "argv": ["-net-world-ticket-selftest"],
+        "red": RED_TICKET_WORLD,
+        "pass_token": "[net-world-ticket-selftest] PASS",
+    },
+    {
+        "name": "spectator-activation-waits-for-its-image",
+        "argv": ["-net-world-spectator-image-selftest"],
+        "red": RED_SPECTATOR_IMAGE,
+        "pass_token": "[net-world-spectator-image-selftest] PASS",
+    },
+    {
+        "name": "spectator-never-takes-a-seat",
+        "argv": ["-net-world-spectator-seat-selftest"],
+        "red": RED_SPECTATOR_SEAT,
+        "pass_token": "[net-world-spectator-seat-selftest] PASS",
+    },
+    {
+        "name": "spectator-lobby-ids-recycle",
+        "argv": ["-net-world-spectator-ids-selftest"],
+        "red": RED_SPECTATOR_IDS,
+        "pass_token": "[net-world-spectator-ids-selftest] PASS",
+    },
+    {
+        "name": "typed-address-targets-only-its-host",
+        "argv": ["-net-world-typed-address-selftest"],
+        "red": RED_TYPED_ADDRESS,
+        "pass_token": "[net-world-typed-address-selftest] PASS",
+    },
+    {
+        "name": "second-join-at-the-same-tick",
+        "argv": ["-net-world-second-join-selftest"],
+        "red": RED_SECOND_JOIN,
+        "pass_token": "[net-world-second-join-selftest] PASS",
+    },
+    {
+        "name": "queued-image-keeps-the-first-joiner",
+        "argv": ["-net-world-image-queue-selftest"],
+        "red": RED_IMAGE_QUEUE,
+        "pass_token": "[net-world-image-queue-selftest] PASS",
+    },
 )
 
 
@@ -200,15 +277,25 @@ def _printed_world_id(text: str) -> str:
     return ""
 
 
-def host_restart_same_world_id(engine: Path, userdata: Path) -> None:
-    """Two process launches; the world id on disk must match after the restart."""
-    argv = [str(engine), "-net-world-identity-print-selftest"]
-    first = subprocess.run(argv, cwd=str(userdata), capture_output=True, text=True, check=False)
-    second = subprocess.run(argv, cwd=str(userdata), capture_output=True, text=True, check=False)
-    left = _printed_world_id((first.stdout or "") + (first.stderr or ""))
-    right = _printed_world_id((second.stdout or "") + (second.stderr or ""))
-    if not left or left != right:
-        raise AssertionError("world-id-did-not-survive-restart")
+def host_restart_same_world_id(repo: Path, out: Path) -> None:
+    """Two runner launches sharing one identity directory; the world id must match after the restart."""
+    tools = Path(__file__).resolve().parent
+    sys.path.insert(0, str(tools))
+    import run_sim_test
+
+    out = Path(out)
+    # Each launch gets its own private runtime, so the identity both of them boot from is named here.
+    identity = out / "world-identity"
+    identity.mkdir(parents=True, exist_ok=True)
+    env = {"CCCP_HEADLESS": "1", "CCCP_WORLD_IDENTITY_DIR": str(identity)}
+    printed = []
+    for index in (1, 2):
+        run = run_sim_test.make_run(repo, ["-net-world-identity-print-selftest"], out / f"launch{index}", timeout=180, env=env)
+        run.start().finish()
+        log = out / f"launch{index}" / "stdout.log"
+        printed.append(_printed_world_id(log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""))
+    if not printed[0] or printed[0] != printed[1]:
+        raise AssertionError("world-id-did-not-survive-restart: " + repr(printed))
 
 
 if __name__ == "__main__":
@@ -218,6 +305,7 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "host-restart":
         host_restart_same_world_id(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()))
         print("[net-world-identity-print-selftest] PASS")
+        # Both launches went through the runner: nothing here starts the executable itself.
     else:
         directory_resume_same_world_id()
         print("[directory-resume] PASS")
