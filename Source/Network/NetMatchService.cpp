@@ -2536,6 +2536,23 @@ static std::string ResyncSaveName() {
 		return false;
 	}
 
+	std::vector<uint8_t> NetMatchService::WorldReclaimHoldSlots(const std::vector<NetH4SeatStatus>& statuses, const NetWorldMembership& membership) {
+		std::vector<uint8_t> holds;
+		for (const NetH4SeatStatus& status: statuses) {
+			if (status.stableSeat == 0 || !(status.dropped || status.reclaiming)) {
+				continue;
+			}
+			for (const NetWorldSlot& slot: membership.Slots()) {
+				// The hold belongs on the slot the seat holds, not on the slot its lockstep id names.
+				if (slot.held && slot.stableSeat == status.stableSeat) {
+					holds.push_back(slot.peerId);
+					break;
+				}
+			}
+		}
+		return holds;
+	}
+
 	bool NetMatchService::NoteImageTransferOutcome(NetLobbyStateTransfer outcome, NetLobbySession& lobby, NetWorldJoinHost& host, NetPeerId connection, uint64_t deliveredThrough) {
 		if (outcome == NetLobbyStateTransfer::Refused) {
 			// Never taken and never kept, so the bootstrap stays unstarted and the next pump retries.
@@ -2600,13 +2617,7 @@ static std::string ResyncSaveName() {
 		m_WorldJoin.ReleaseLostConnections(liveConnections);
 		// A dropped or reclaiming seat keeps its slot: only that holder may take it back, and a
 		// fresh join that arrives meanwhile watches instead of allocating it.
-		std::vector<uint8_t> reclaimHolds;
-		for (const NetH4SeatStatus& status: m_ReconnectHost.GetSeatStatuses()) {
-			if (status.lockstepPeerId != 0 && (status.dropped || status.reclaiming)) {
-				reclaimHolds.push_back(status.lockstepPeerId);
-			}
-		}
-		m_WorldJoin.NoteReclaimHolds(reclaimHolds);
+		m_WorldJoin.NoteReclaimHolds(WorldReclaimHoldSlots(m_ReconnectHost.GetSeatStatuses(), m_WorldJoin.Membership()));
 		m_WorldSpectatorsFree = static_cast<int64_t>(m_WorldJoin.SpectatorsFree());
 		bool answeredRefusal = false;
 		for (const NetSessionPeerInfo& peer: readyPeers) {

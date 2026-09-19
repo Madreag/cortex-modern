@@ -97,6 +97,10 @@ RED_PROMOTION_BEHIND_INPUT = "promotion-announced-behind-the-sent-input"
 RED_CLEAN_LEAVE_WRONG_SEAT = "clean-leave-released-the-wrong-seat"
 RED_CLEAN_LEAVE_LIVE_MEMBER = "clean-leave-released-a-live-member"
 RED_CLEAN_LEAVE_MISSED = "clean-leave-was-not-detected"
+RED_RECLAIM_HOLD_SLOT = "reclaim-hold-missed-the-slot"
+RED_RECLAIM_HOLD_WRONG_SLOT = "reclaim-hold-fenced-the-wrong-slot"
+RED_RECLAIM_HOLD_STRANGER = "reclaim-hold-let-a-stranger-in"
+RED_RECLAIM_HOLD_OWN_HOLDER = "reclaim-hold-refused-its-own-holder"
 RED_FRESH_STOLE_SEAT = "fresh-join-stole-a-held-seat"
 RED_FRESH_OPENED_HOLD = "fresh-join-opened-a-hold"
 RED_SEAT_SUBSTITUTED = "held-seat-was-substituted"
@@ -445,6 +449,17 @@ CASES = (
         "red": RED_CLEAN_LEAVE_WRONG_SEAT,
         "also_red": (RED_CLEAN_LEAVE_LIVE_MEMBER, RED_CLEAN_LEAVE_MISSED),
         "pass_token": "[net-world-clean-leave-selftest] PASS",
+    },
+    {
+        "name": "reclaim-hold-follows-the-seats-slot",
+        "argv": ["-net-world-reclaim-hold-selftest"],
+        "red": RED_RECLAIM_HOLD_SLOT,
+        "also_red": (
+            RED_RECLAIM_HOLD_WRONG_SLOT,
+            RED_RECLAIM_HOLD_STRANGER,
+            RED_RECLAIM_HOLD_OWN_HOLDER,
+        ),
+        "pass_token": "[net-world-reclaim-hold-selftest] PASS",
     },
     {
         "name": "reclaim-outranks-a-fresh-join",

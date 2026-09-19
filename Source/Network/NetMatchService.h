@@ -592,6 +592,10 @@ namespace RTE {
 		/// the seat's lockstep id - a promoted watcher plays on a slot its own seat does not name, so
 		/// a leftover row naming that id would release whoever holds it next.
 		static bool FindWorldCleanLeave(const std::vector<NetH4SeatStatus>& statuses, const NetWorldJoinHost& world, WorldCleanLeave& outLeave);
+		/// The world slots a dropped or reclaiming seat is waiting for, by the slot each seat holds.
+		/// A promoted watcher plays on a slot its seat's lockstep id does not name, so a hold keyed on
+		/// that id would leave its slot open and fence a slot nobody is coming back to.
+		static std::vector<uint8_t> WorldReclaimHoldSlots(const std::vector<NetH4SeatStatus>& statuses, const NetWorldMembership& membership);
 		/// Records what the lobby did with a bootstrap's image. A refusal is not a start: the bootstrap
 		/// stays unstarted so the next pump retries it.
 		static bool NoteImageTransferOutcome(NetLobbyStateTransfer outcome, NetLobbySession& lobby, NetWorldJoinHost& host, NetPeerId connection, uint64_t deliveredThrough);
