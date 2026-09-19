@@ -26,8 +26,12 @@ namespace RTE {
 		int numLuaStatesOverride = -1;
 		std::string selectedModule;
 		bool scenarioTestModuleLoaded = false;
-		uint16_t lockstepCodecVersion = 0;
-		uint16_t matchConfigVersion = 0;
+		uint16_t lockstepCodecVersion = 0; //!< Target layout for diagnostics and discovery; agreed through the lobby.
+		uint16_t matchConfigVersion = 0; //!< Target layout for diagnostics; agreed through the lobby.
+		uint16_t supportedLockstepCodecVersion = 0;
+		uint16_t supportedWorldLockstepCodecVersion = 0;
+		uint16_t supportedMatchConfigVersion = 0;
+		uint16_t supportedWorldMatchConfigVersion = 0;
 		uint16_t lobbyProtocolVersion = 0;
 		std::string enabledGlobalScripts; //!< Sim-mutating global scripts run off per-machine Settings; a mismatch must reject at join.
 
@@ -51,7 +55,8 @@ namespace RTE {
 	};
 
 	struct NetIdentityManifest {
-		int schema = 1;
+		static constexpr int c_Schema = 2;
+		int schema = c_Schema;
 		std::string gameVersion;
 		uint16_t networkProtocolVersion = 0;
 		uint16_t controllerFrameVersion = 0;

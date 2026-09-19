@@ -569,8 +569,50 @@ namespace RTE {
 			return 0;
 		}
 
-		// P19: the canary carve-out is exactly one resolved path, and its presence is asserted whenever a
-		// ticket was issued - otherwise the exclusion could silently disarm the whole scan.
+		int TestWorldTicketContextAdoptedAfterAdmission() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) return Fail(error);
+			Wire wire;
+			ConfigureWire(wire);
+			wire.host.SetPersistentWorld(true);
+			wire.host.SetSeatTable({{1, 1, 0, false, 2, false}}, NetMatchMode::PvPSkirmish);
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Endpoint player;
+			player.connection = 41;
+			ConfigureEndpoint(player, "world-context", &unixNow);
+			const std::string worldId = "01234567-89ab-cdef-0123-456789abcdef";
+			player.client.SetDirectorySessionId(worldId);
+			wire.Add(&player);
+			if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error) || !player.client.IsAdmitted()) {
+				return Fail("the unhinted world join did not commit: " + error);
+			}
+			NetH4TicketRecord before;
+			if (player.store.Load(unixNow, before, &error) != NetH4TicketLoadResult::Loaded || before.persistentWorld) {
+				return Fail("the unhinted join did not begin with an ordinary durable ticket: " + error);
+			}
+			player.client.SetWorldTarget(true);
+			player.client.AdoptDirectorySessionId(worldId);
+			NetH4TicketRecord adopted;
+			NetH4TicketRecord expected = before;
+			expected.persistentWorld = true;
+			expected.recordVersion = NetReconnectTicketStore::RecordVersionFor(true);
+			if (player.store.Load(unixNow, adopted, &error) != NetH4TicketLoadResult::Loaded || adopted != expected ||
+			    player.client.GetRecord() != expected) {
+				return Fail("the adopted world context did not replace the durable ticket: " + error);
+			}
+			const uint32_t stores = player.store.GetStores();
+			player.client.AdoptDirectorySessionId(worldId);
+			player.client.AdoptDirectorySessionId("");
+			if (player.store.GetStores() != stores || player.client.GetRecord() != expected) {
+				return Fail("an unchanged or empty world context rewrote the ticket");
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS world ticket context adopted after admission" << std::endl;
+			return 0;
+		}
+
+		// Every issued ticket has one asserted artifact path outside the canary scan.
 		int TestTicketArtifactCanary() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -7554,6 +7596,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestTicketStore(); result != 0) {
+			return result;
+		}
+		if (const int result = TestWorldTicketContextAdoptedAfterAdmission(); result != 0) {
 			return result;
 		}
 		if (const int result = TestReResolvePaths(); result != 0) {

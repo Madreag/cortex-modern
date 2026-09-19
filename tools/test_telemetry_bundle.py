@@ -24,7 +24,10 @@ IDENTITY_FIELDS = {"game_version", "network_protocol_version", "controller_frame
                    "controller_frame_encoded_size", "delta_time_bits", "ai_update_interval",
                    "pathfinder_grid_node_size", "recommended_moid_count", "particle_settling",
                    "mo_subtraction", "num_lua_states", "num_lua_states_override", "selected_module",
-                   "scenario_test_module_loaded", "lockstep_codec_version", "enabled_global_scripts"}
+                   "scenario_test_module_loaded", "lockstep_codec_version", "match_config_version",
+                   "supported_lockstep_codec_version", "supported_world_lockstep_codec_version",
+                   "supported_match_config_version", "supported_world_match_config_version",
+                   "lobby_protocol_version", "enabled_global_scripts"}
 SECRET_KEYS = ("SessionDirectoryInstallKey", "NetworkTurnPass", "NetworkTurnUser", "SessionDirectoryCertSha256")
 SECRET_NEEDLES = ("Pass", "Password", "Secret", "Token", "PrivateKey", "Credential", "Ticket")
 
@@ -130,6 +133,7 @@ def inspect_bundle(runtime: Path, exe_sha: str, replay: Path | None = None, secr
     assert len(contents["LogConsole.txt"]) <= LOG_CAP, "console tail cap"
     assert len(contents["NetMatch.log"]) <= LOG_CAP, "network tail cap"
     identity = json.loads(contents["JoinIdentity.json"])
+    assert identity["schema"] == 2, "identity manifest schema"
     assert IDENTITY_FIELDS == set(identity["deterministic_config"]), "identity inputs incomplete"
     assert re.fullmatch(r"[0-9a-f]{64}", identity["module_manifest_hash"]), "module manifest hash"
     # The identity hashes every module's files, so the game thread must not be the one that did it.
