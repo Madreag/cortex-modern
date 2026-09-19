@@ -3305,6 +3305,8 @@ namespace RTE {
 			return true;
 		}
 
+		NetValueObservation MakeValueObservation(uint8_t sender, uint64_t objectUID, uint64_t tick, uint32_t ordinal, const std::string& key, double number);
+
 		bool TestFrameWindowKeepsClassicReservedZero(std::string* error) {
 			NetLockstepFrame frame;
 			frame.senderPeerId = 1;
@@ -3344,6 +3346,8 @@ namespace RTE {
 			newest.frames[0].stateMask = 2;
 			older.observations = {MakeObservation(1, 11, 3, 1, 1, 0.25F)};
 			newest.observations = {MakeObservation(1, 22, 4, 1, 1, 0.5F)};
+			older.valueObservations = {MakeValueObservation(1, 11, 3, 1, "ai.order", 3.0)};
+			newest.valueObservations = {MakeValueObservation(1, 22, 4, 1, "ai.order", 4.0)};
 			newest.priorWindow = {older};
 			std::vector<uint8_t> bytes;
 			if (!EncodePacket({newest}, bytes, error)) {
@@ -3370,7 +3374,15 @@ namespace RTE {
 			    got.priorWindow[0].frames[0].analogMoveX != 123 || got.observations.size() != 1 ||
 			    got.observations[0].objectUID != 22 || got.priorWindow[0].observations.size() != 1 ||
 			    got.priorWindow[0].observations[0].objectUID != 11) {
-				*error = "window packet did not restore both ticks";
+				*error = "window packet did not restore both ticks: newest target " + std::to_string(got.targetFrame) +
+				         " state " + std::to_string(got.frames.empty() ? -1 : got.frames[0].stateMask) + ", window ticks " +
+				         std::to_string(got.priorWindow.size()) + ", newest observations " + std::to_string(got.observations.size());
+				return false;
+			}
+			if (got.valueObservations.size() != 1 || got.valueObservations[0].numberValue != 4.0 ||
+			    got.priorWindow[0].valueObservations.size() != 1 || got.priorWindow[0].valueObservations[0].numberValue != 3.0) {
+				*error = "window packet carried " + std::to_string(got.priorWindow[0].valueObservations.size()) +
+				         " value observations on the older tick and " + std::to_string(got.valueObservations.size()) + " on the newest";
 				return false;
 			}
 			NetLockstepFrame stripped = newest;
@@ -3389,14 +3401,121 @@ namespace RTE {
 			}
 			const auto& classic = std::get<NetLockstepFrame>(classicDecoded.packet.payload);
 			if (classic.targetFrame != 4 || classic.frames[0].stateMask != 2 || classic.observations.size() != 1 ||
-			    classic.observations[0].objectUID != 22 || !classic.priorWindow.empty()) {
-				*error = "stripped window copy dropped the newest observation";
+			    classic.observations[0].objectUID != 22 || !classic.priorWindow.empty() ||
+			    classic.valueObservations.size() != 1 || classic.valueObservations[0].numberValue != 4.0) {
+				*error = "stripped window copy carried " + std::to_string(classic.observations.size()) + " sound and " +
+				         std::to_string(classic.valueObservations.size()) + " value observations for the newest tick";
 				return false;
 			}
 			ControllerFrame changed = MakeFrame(100, 1);
 			changed.analogMoveX = 2000;
 			if (ControllerFrameCodec::ChangeMask(MakeFrame(100, 1), changed) == 0) {
 				*error = "ChangeMask ignored a moved analog";
+				return false;
+			}
+			return true;
+		}
+
+		// A window copy must be the block its own packet wrote: the same slots, the same binding count.
+		// Re-encoding it against the sender's live dictionary spells known keys as slots and advertises a
+		// binding count from the sender's present, which the peer that missed the tick refuses.
+		bool TestFrameWindowRepeatsObservationBlocks(std::string* error) {
+			NetSoundObservationDictionary encodeTable;
+			NetLockstepObservationBlocks blocks;
+			auto tick = [](uint64_t target, uint64_t objectUID, float value) {
+				NetLockstepFrame frame;
+				frame.senderPeerId = 1;
+				frame.targetFrame = target;
+				frame.roundId = 77;
+				frame.frames = {MakeFrame(100, 1)};
+				frame.observations = {MakeObservation(1, objectUID, target, 1, 1, value)};
+				frame.valueObservations = {MakeValueObservation(1, objectUID, target, 1, "ai.order", static_cast<double>(target))};
+				return frame;
+			};
+			const NetLockstepFrame first = tick(3, 11, 0.25F);
+			const NetLockstepFrame classicSecond = tick(4, 22, 0.5F);
+			NetLockstepFrame second = classicSecond;
+			std::vector<uint8_t> firstBytes;
+			std::vector<uint8_t> classicBytes;
+			std::vector<uint8_t> secondBytes;
+			NetLockstepError encodeError;
+			size_t encoded = 0;
+			size_t valueEncoded = 0;
+			if (!NetLockstepCodec::Encode({first}, firstBytes, &encodeError, &encodeTable, &encoded, &valueEncoded, &blocks)) {
+				*error = "the first tick did not encode: " + encodeError.message;
+				return false;
+			}
+			// The send order the coordinator uses: the classic packet spends the dictionary, the window
+			// packet repeats what it kept.
+			if (!NetLockstepCodec::Encode({classicSecond}, classicBytes, &encodeError, &encodeTable, &encoded, &valueEncoded, &blocks)) {
+				*error = "the classic copy of the newest tick did not encode: " + encodeError.message;
+				return false;
+			}
+			const uint64_t bindingsAfterClassic = encodeTable.BindingCount();
+			second.priorWindow = {first};
+			if (!NetLockstepCodec::Encode({second}, secondBytes, &encodeError, nullptr, nullptr, nullptr, &blocks)) {
+				*error = "the window packet did not encode: " + encodeError.message;
+				return false;
+			}
+			if (encodeTable.BindingCount() != bindingsAfterClassic || bindingsAfterClassic != 2) {
+				*error = "the window packet spent the dictionary: bindings " + std::to_string(bindingsAfterClassic) +
+				         " before and " + std::to_string(encodeTable.BindingCount()) + " after";
+				return false;
+			}
+			if (secondBytes.size() <= NetLockstepCodec::c_HeaderBytes + 1 || secondBytes[NetLockstepCodec::c_HeaderBytes + 1] != 2) {
+				*error = "the window packet reserved byte is " +
+				         std::to_string(secondBytes.size() > NetLockstepCodec::c_HeaderBytes + 1 ? secondBytes[NetLockstepCodec::c_HeaderBytes + 1] : 0) + ", not the tick count 2";
+				return false;
+			}
+			// The kept blocks of both ticks ride the window packet byte for byte, and the classic copy of
+			// the newest tick carries the same block a peer without the capability would have seen.
+			const auto& kept = blocks.at(3).soundBytes;
+			const auto& keptNewest = blocks.at(4).soundBytes;
+			if (std::search(secondBytes.begin(), secondBytes.end(), kept.begin(), kept.end()) == secondBytes.end()) {
+				*error = "the window copy of tick 3 is not the " + std::to_string(kept.size()) + " observation bytes its own packet wrote";
+				return false;
+			}
+			if (std::search(secondBytes.begin(), secondBytes.end(), keptNewest.begin(), keptNewest.end()) == secondBytes.end() ||
+			    std::search(classicBytes.begin(), classicBytes.end(), keptNewest.begin(), keptNewest.end()) == classicBytes.end()) {
+				*error = "the newest tick's " + std::to_string(keptNewest.size()) + " observation bytes are not in both the window and the classic packet";
+				return false;
+			}
+			// The peer that missed tick 3 reads it out of the window and stays in step for tick 4.
+			NetSoundObservationTables lagging;
+			lagging.roundId = 77;
+			const NetLockstepDecodeResult repaired = NetLockstepCodec::Decode(secondBytes.data(), secondBytes.size(), ControllerFrame::c_Version, &lagging);
+			if (!repaired.ok) {
+				*error = "a peer that missed tick 3 refused the window packet: " + repaired.error.message;
+				return false;
+			}
+			const auto& repairedFrame = std::get<NetLockstepFrame>(repaired.packet.payload);
+			if (repairedFrame.priorWindow.size() != 1 || repairedFrame.priorWindow[0].observations.size() != 1 ||
+			    repairedFrame.priorWindow[0].observations[0].objectUID != 11 || repairedFrame.priorWindow[0].valueObservations.size() != 1 ||
+			    repairedFrame.observations.size() != 1 || repairedFrame.observations[0].objectUID != 22) {
+				*error = "the repaired tick carried " + std::to_string(repairedFrame.priorWindow.empty() ? 0 : repairedFrame.priorWindow[0].observations.size()) +
+				         " of tick 3's sound observations";
+				return false;
+			}
+			// The peer that read tick 3 already reads its copy past and commits it once.
+			NetSoundObservationTables inStep;
+			inStep.roundId = 77;
+			const NetLockstepDecodeResult firstDecoded = NetLockstepCodec::Decode(firstBytes.data(), firstBytes.size(), ControllerFrame::c_Version, &inStep);
+			if (!firstDecoded.ok) {
+				*error = "the first tick did not decode: " + firstDecoded.error.message;
+				return false;
+			}
+			const NetLockstepDecodeResult windowDecoded = NetLockstepCodec::Decode(secondBytes.data(), secondBytes.size(), ControllerFrame::c_Version, &inStep);
+			if (!windowDecoded.ok) {
+				*error = "a peer that already read tick 3 refused the window packet: " + windowDecoded.error.message;
+				return false;
+			}
+			const auto& windowFrame = std::get<NetLockstepFrame>(windowDecoded.packet.payload);
+			if (windowFrame.priorWindow.size() != 1 || !windowFrame.priorWindow[0].observationsReadPast ||
+			    !windowFrame.priorWindow[0].observations.empty() || windowFrame.observations.size() != 1 ||
+			    windowFrame.observations[0].objectUID != 22) {
+				*error = "an already-read window copy was not read past: readPast " +
+				         std::to_string(windowFrame.priorWindow.empty() ? false : windowFrame.priorWindow[0].observationsReadPast) +
+				         ", observations " + std::to_string(windowFrame.priorWindow.empty() ? 0 : windowFrame.priorWindow[0].observations.size());
 				return false;
 			}
 			return true;
@@ -3442,7 +3561,13 @@ namespace RTE {
 				return false;
 			}
 			if (host.GetStats().windowCopiesSkipped != 0 || client.GetStats().windowCopiesSkipped != 0) {
-				*error = "window copies were applied without a capability advertisement";
+				*error = "window copies arrived without a capability advertisement: host skipped " +
+				         std::to_string(host.GetStats().windowCopiesSkipped) + ", client skipped " + std::to_string(client.GetStats().windowCopiesSkipped);
+				return false;
+			}
+			if (host.GetStats().windowCopiesApplied != 0 || client.GetStats().windowCopiesApplied != 0) {
+				*error = "window copies were applied without a capability advertisement: host applied " +
+				         std::to_string(host.GetStats().windowCopiesApplied) + ", client applied " + std::to_string(client.GetStats().windowCopiesApplied);
 				return false;
 			}
 			return true;
@@ -3478,9 +3603,11 @@ namespace RTE {
 				hostSent[produced] = hostValue;
 				clientSent[produced] = clientValue;
 				if (!host.QueueLocalInput(produced, {MakeFrame(100 + static_cast<int64_t>(produced), produced + 1)}, {}, error,
-				        {MakeObservation(1, 500 + produced, produced, 1, 1, hostValue)}) ||
+				        {MakeObservation(1, 500 + produced, produced, 1, 1, hostValue)},
+				        {MakeValueObservation(1, 500 + produced, produced, 1, "ai.order", static_cast<double>(hostValue))}) ||
 				    !client.QueueLocalInput(produced, {MakeFrame(200 + static_cast<int64_t>(produced), produced + 11)}, {}, error,
-				        {MakeObservation(2, 600 + produced, produced, 1, 1, clientValue)})) {
+				        {MakeObservation(2, 600 + produced, produced, 1, 1, clientValue)},
+				        {MakeValueObservation(2, 600 + produced, produced, 1, "ai.order", static_cast<double>(clientValue))})) {
 					return false;
 				}
 			}
@@ -3488,28 +3615,44 @@ namespace RTE {
 			std::vector<uint64_t> clientReady;
 			std::map<uint64_t, float> hostRemote;
 			std::map<uint64_t, float> clientRemote;
+			std::map<uint64_t, double> hostRemoteValues;
+			std::map<uint64_t, double> clientRemoteValues;
 			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
 					NetLockstepReadyFrame ready;
 					while (host.PopReadyFrame(ready)) {
 						hostReady.push_back(ready.frame);
 						if (!ready.remoteObservations.empty()) hostRemote[ready.frame] = ready.remoteObservations.front().value;
+						if (!ready.remoteValueObservations.empty()) hostRemoteValues[ready.frame] = ready.remoteValueObservations.front().numberValue;
 					}
 					while (client.PopReadyFrame(ready)) {
 						clientReady.push_back(ready.frame);
 						if (!ready.remoteObservations.empty()) clientRemote[ready.frame] = ready.remoteObservations.front().value;
+						if (!ready.remoteValueObservations.empty()) clientRemoteValues[ready.frame] = ready.remoteValueObservations.front().numberValue;
 					}
 					return hostReady.size() == 6 && clientReady.size() == 6;
 				}, error, 1500)) {
 				return false;
 			}
 			if (host.GetStats().windowCopiesApplied == 0 && client.GetStats().windowCopiesApplied == 0) {
-				*error = "a dropped target never arrived via a later window";
+				*error = "a dropped target never arrived via a later window: host applied " +
+				         std::to_string(host.GetStats().windowCopiesApplied) + ", client applied " + std::to_string(client.GetStats().windowCopiesApplied);
 				return false;
 			}
 			for (uint64_t frame = 0; frame < 6; ++frame) {
 				if (!hostRemote.contains(frame) || hostRemote[frame] != clientSent[frame] ||
 				    !clientRemote.contains(frame) || clientRemote[frame] != hostSent[frame]) {
-					*error = "a repaired window tick committed a different observation set";
+					*error = "a repaired window tick committed a different sound observation set at frame " + std::to_string(frame) +
+					         ": host read " + std::to_string(hostRemote.contains(frame) ? hostRemote[frame] : -1.0F) +
+					         " for " + std::to_string(clientSent[frame]) + ", client read " +
+					         std::to_string(clientRemote.contains(frame) ? clientRemote[frame] : -1.0F) + " for " + std::to_string(hostSent[frame]);
+					return false;
+				}
+				if (!hostRemoteValues.contains(frame) || hostRemoteValues[frame] != static_cast<double>(clientSent[frame]) ||
+				    !clientRemoteValues.contains(frame) || clientRemoteValues[frame] != static_cast<double>(hostSent[frame])) {
+					*error = "a repaired window tick committed a different value observation set at frame " + std::to_string(frame) +
+					         ": host read " + std::to_string(hostRemoteValues.contains(frame) ? hostRemoteValues[frame] : -1.0) +
+					         " for " + std::to_string(clientSent[frame]) + ", client read " +
+					         std::to_string(clientRemoteValues.contains(frame) ? clientRemoteValues[frame] : -1.0) + " for " + std::to_string(hostSent[frame]);
 					return false;
 				}
 			}
@@ -3586,8 +3729,24 @@ namespace RTE {
 				return false;
 			}
 			const auto hostToClassic = host.GetStats().peers.find(3);
-			if (hostToClassic != host.GetStats().peers.end() && hostToClassic->second.lastFrameReserved != 0) {
-				*error = "a relay to a peer that never advertised kept reserved!=0";
+			if (hostToClassic == host.GetStats().peers.end()) {
+				*error = "the host never sent the classic sibling a frame, so the strip was never exercised";
+				return false;
+			}
+			if (hostToClassic->second.lastFrameReserved != 0) {
+				*error = "a relay to a peer that never advertised kept reserved=" + std::to_string(hostToClassic->second.lastFrameReserved);
+				return false;
+			}
+			// The capable client still receives windows, or the strip proves nothing about the other link.
+			const NetLockstepStats& capable = clientA.GetStats();
+			if (capable.windowCopiesSkipped + capable.windowCopiesApplied == 0) {
+				*error = "the capable client received no window copy at all, so the per-link strip proves nothing";
+				return false;
+			}
+			const NetLockstepStats& classic = clientB.GetStats();
+			if (classic.windowCopiesSkipped + classic.windowCopiesApplied != 0) {
+				*error = "the peer that never advertised received " +
+				         std::to_string(classic.windowCopiesSkipped + classic.windowCopiesApplied) + " window copies";
 				return false;
 			}
 			if (clientB.IsFailed()) {
@@ -5589,6 +5748,75 @@ namespace RTE {
 
 		// H4 §4: a 1v1 whose only remote DROPS holds its seat for the reclaim window instead of ending,
 		// so the returner has a match to come back to. A clean leave with nobody left still ends at once.
+		// The hold heartbeat is an Ack like any other: a peer that repeats no tick must not advertise the
+		// window in it either, or its links agree a window it never sends.
+		bool TestFrameWindowHoldHeartbeatKeepsTicksOne(std::string* error) {
+			const uint16_t port = 43084;
+			const uint64_t sessionId = 0x7000000000000084ULL;
+			LoopbackTransport hostT, stayerT, leaverT;
+			if (!hostT.StartHost(port, error) || !stayerT.Connect("loopback", port, error) || !leaverT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay, uint8_t ticks) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.frameLane = NetTransportLane::InputUnreliable;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.frameRedundancyTicks = ticks;
+				return c;
+			};
+			SeatStateStub stub;
+			stub.held = true;
+			NetLockstepCoordinator host, stayer, leaver;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true, 1), error) ||
+			    !stayer.Start(stayerT, cfg(2, {{1, 1}}, false, 4), error) ||
+			    !leaver.Start(leaverT, cfg(3, {{1, 1}}, false, 4), error)) {
+				return false;
+			}
+			host.SetSeatStateSource(&QuerySeatStateStub, &stub);
+			uint64_t now = 0;
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now);
+					stayer.Tick(now);
+					leaver.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					stayerT.AdvanceTimeMs(5);
+					leaverT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return host.IsRunning() && stayer.IsRunning() && leaver.IsRunning(); })) {
+				*error = "the hold-heartbeat fixture never started";
+				return false;
+			}
+			leaverT.Stop();
+			if (!drive(4000, [&] { return host.AnyDroppedSeatHeld(); })) {
+				*error = "the drop never left the host holding a seat, so no hold heartbeat was sent";
+				return false;
+			}
+			// Heartbeats ride the held seat for as long as it is held; pump time so several go out.
+			(void)drive(2000, [] { return false; });
+			if (stayer.FrameWindowAgreed()) {
+				*error = "a peer that repeats one tick advertised the window in its hold heartbeats";
+				return false;
+			}
+			if (host.FrameWindowAgreed()) {
+				*error = "the ticks=1 host agreed a window of its own";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestCoordinatorDroppedSeatHold(std::string* error) {
 			uint16_t port = 43020;
 			bool holdingBeforeDrop = false;
@@ -13610,9 +13838,11 @@ namespace RTE {
 		    !TestCoordinatorMissingFrameTimeout(&error) ||
 		    !TestFrameWindowKeepsClassicReservedZero(&error) ||
 		    !TestFrameWindowCodecRoundTrip(&error) ||
+		    !TestFrameWindowRepeatsObservationBlocks(&error) ||
 		    !TestFrameWindowStaysClassicWithoutCapability(&error) ||
 		    !TestFrameWindowSurvivesUnreliableLoss(&error) ||
 		    !TestFrameWindowStripsRelayWithoutCapability(&error) ||
+		    !TestFrameWindowHoldHeartbeatKeepsTicksOne(&error) ||
 		    !TestActivityGateAgreesAcrossPeers(&error) ||
 		    !TestB2SeatSnapshotCodec(&error) ||
 		    !TestRecoveryWireRefusals(&error) ||
