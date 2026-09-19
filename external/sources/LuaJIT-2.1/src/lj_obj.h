@@ -331,7 +331,7 @@ typedef struct GCudata {
 #endif
   GCRef metatable;	/* Must be at same offset in GCtab. */
   uint32_t align1;	/* To force 8 byte alignment of the payload. */
-  uint64_t serial;	/* Birth order in this state. Keeps the payload 8 byte aligned. */
+  uint64_t serial;	/* Birth order in this state. The payload follows it, still 8 byte aligned. */
 } GCudata;
 
 /* Userdata types. */
