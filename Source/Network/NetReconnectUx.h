@@ -63,6 +63,20 @@ namespace RTE {
 		/// or say precisely why it cannot.
 		void OfferStoredTicket(NetH4TicketLoadResult load, std::string hostAddress);
 		void DismissOffer();
+
+		/// 7e: the match died with its host and no successor took it, so there is nobody to rejoin yet.
+		/// The prompt stays on the screen and watches the directory for that session's row to return.
+		/// @param matchName What to call the match in the prompt.
+		/// @param directorySessionId The row to watch; empty leaves only the manual address.
+		void WatchForHostReturn(std::string matchName, std::string directorySessionId);
+		/// The directory poll's answer for the watched row; a returned host enables the rejoin.
+		void NoteHostReturn(bool present);
+		void StopWatchingForHostReturn();
+		bool IsAwaitingHostReturn() const { return m_AwaitingHostReturn; }
+		bool HasHostReturned() const { return m_AwaitingHostReturn && m_HostReturned; }
+		const std::string& GetWatchedSessionId() const { return m_AwaitSessionId; }
+		/// The prompt's own line: waiting for the host, or the host is back.
+		std::string GetHostReturnText() const;
 		NetReconnectOffer GetOffer() const { return m_Offer; }
 		const std::string& GetOfferAddress() const { return m_OfferAddress; }
 		std::string GetOfferText() const;
@@ -100,6 +114,10 @@ namespace RTE {
 		std::string m_Reason;
 		NetReconnectOffer m_Offer = NetReconnectOffer::None;
 		std::string m_OfferAddress;
+		bool m_AwaitingHostReturn = false;
+		bool m_HostReturned = false;
+		std::string m_AwaitMatchName;
+		std::string m_AwaitSessionId;
 	};
 
 	/// The seats panel's title line. The hold it reports is the ROUND's pause state, so the panel and

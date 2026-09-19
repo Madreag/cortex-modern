@@ -668,6 +668,9 @@ namespace RTE {
 		bool PrepareResume(NetMatchServiceRequest& request, std::string* error);
 		/// The one purpose label the restart admission key is derived under.
 		static constexpr const char* c_RestartAdmissionKeyLabel = "cccp-restart-admission-v1";
+		/// 7e: polls the directory for the row the stored ticket names, so the rejoin prompt enables
+		/// itself the moment that host comes back. Game thread, like the directory client it drives.
+		void PumpHostReturnWatch(uint64_t nowMs);
 		/// Stamps the identity every checkpoint carries with the configuration a restart reopens on.
 		/// Caller holds the lock.
 		void SeatRestartConfigLocked(const NetMatchConfig& config);
@@ -835,6 +838,8 @@ namespace RTE {
 		uint32_t m_ResumeIntervalSeconds = 0;
 		std::vector<uint8_t> m_LastRestartAdmissionState;
 		std::string m_PublishedDirectorySession, m_PublishedDirectoryToken;
+		NetDirectoryClient m_ReturnWatch; //!< 7e: browses for the watched session's row; never registers one.
+		bool m_ReturnWatchConfigured = false;
 		uint64_t m_RestartAdmissionGeneration = 0;
 		std::atomic<bool> m_RestartAdmissionDue{false};
 		bool m_ResyncRetainsLocalState = false;

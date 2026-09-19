@@ -1813,6 +1813,8 @@ static std::string ResyncSaveName() {
 		DriveReconnectUx(nowMs);
 		// The host's restart admission rides this pump: file IO, never the sim thread.
 		PublishRestartAdmission();
+		// 7e: while the prompt waits for a host to come back, this is what watches for its row.
+		PumpHostReturnWatch(nowMs);
 		// Last: the expiry destroys the service, so nothing in this pump may run after it.
 		UpdateCompletedLobbyExpiry(nowMs);
 	}
@@ -5258,12 +5260,47 @@ static std::string ResyncSaveName() {
 	void NetMatchService::ScanStoredTicket() {
 		if (!s_AdmissionEnabled) {
 			m_ReconnectUx.DismissOffer();
+			m_ReconnectUx.StopWatchingForHostReturn();
 			return;
 		}
 		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
 		NetH4TicketRecord record;
 		const NetH4TicketLoadResult load = m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr);
 		m_ReconnectUx.OfferStoredTicket(load, record.hostAddress);
+		// 7e: the ticket names a match whose host is not here. The prompt waits for that host to come
+		// back rather than failing a rejoin at a host that is gone.
+		if (load == NetH4TicketLoadResult::Loaded) {
+			m_ReconnectUx.WatchForHostReturn(record.hostAddress, record.directorySessionId);
+		} else {
+			m_ReconnectUx.StopWatchingForHostReturn();
+		}
+	}
+
+	void NetMatchService::PumpHostReturnWatch(uint64_t nowMs) {
+		if (!m_ReconnectUx.IsAwaitingHostReturn()) {
+			m_ReturnWatch.StopBrowsing();
+			return;
+		}
+		const std::string sessionId = m_ReconnectUx.GetWatchedSessionId();
+		const std::string baseUrl = g_SettingsMan.GetSessionDirectoryUrl();
+		if (sessionId.empty() || baseUrl.empty()) {
+			// Without a directory there is nothing to watch: the prompt says so and offers the address.
+			m_ReconnectUx.NoteHostReturn(false);
+			return;
+		}
+		if (!m_ReturnWatchConfigured) {
+			m_ReturnWatch.Configure(baseUrl, g_SettingsMan.GetSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
+			m_ReturnWatchConfigured = true;
+		}
+		m_ReturnWatch.PollList(nowMs);
+		if (m_ReturnWatch.ListReplies() == 0) {
+			return;
+		}
+		// The row must be the same session, listed as a lobby or a running match.
+		const auto& rows = m_ReturnWatch.Rows();
+		m_ReconnectUx.NoteHostReturn(std::any_of(rows.begin(), rows.end(), [&](const NetDirectorySessionRow& row) {
+			return row.sessionId == sessionId && (row.state == "running" || row.state == "lobby");
+		}));
 	}
 
 	NetMatchServiceRequest NetMatchService::BuildTicketRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget) {
