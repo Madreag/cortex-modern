@@ -43,6 +43,7 @@ namespace RTE {
 
 	bool NetMatchRunner::Start(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error) {
 		m_Config = config;
+		m_HostOptionsRefused = false;
 		m_UseLobbyProtocol = config.useLobbyProtocol;
 		// A round opened on a checkpoint resumes from a snapshot exactly as a healed round does.
 		m_ResyncRound = !m_StateToStream.empty();
@@ -134,6 +135,7 @@ namespace RTE {
 		if (!slot.pending.load(std::memory_order_acquire)) return true;
 		auto refuse = [&](const std::string& reason) {
 			slot.refusal = "Host options refused: " + reason;
+			m_HostOptionsRefused = true;
 			SetFailed(slot.refusal);
 			if (error) *error = slot.refusal;
 			return false;
@@ -368,6 +370,7 @@ namespace RTE {
 
 	bool NetMatchRunner::StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error, std::vector<uint8_t> stateToStream, std::vector<NetTransportEvent> pendingLobbyEvents) {
 		m_HostLostDuringSetup = false;
+		m_HostOptionsRefused = false;
 		m_SetupError.clear();
 		m_ResyncRound = !stateToStream.empty() || m_SnapshotProviderPeerId != 0;
 		m_RematchRound = false;
