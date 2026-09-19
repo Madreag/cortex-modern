@@ -65,7 +65,18 @@ namespace RTE {
 			std::string reason;    //!< Empty when joinable, else the refusal label.
 			std::string sessionId; //!< NET rows only.
 			bool persistentWorld = false;
+			// A world's own columns; a LAN beacon carries none of them, so they stay at zero there.
+			int64_t worldBoot = 0;
+			std::string state; //!< "lobby" | "running", as the directory publishes it.
+			int64_t seatsFree = 0;
+			int64_t peerCount = 0;
+			int64_t spectatorFree = 0;
+			int64_t spectatorMax = 0;
 		};
+
+		/// The one line the join screen shows for a row. A world reads its boot, its published state and
+		/// its seat and watcher counts; every other row keeps the line it has always had.
+		static std::string DescribeGameRow(const GameRow& row);
 
 		NetDirectoryClient();
 		NetDirectoryClient(const NetDirectoryClient&) = delete;

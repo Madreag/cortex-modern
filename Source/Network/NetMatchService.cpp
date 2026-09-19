@@ -599,6 +599,7 @@ static std::string ResyncSaveName() {
 					m_DirectoryRow.resumeToken = m_WorldIdentity.directoryToken;
 					// Nothing is connected yet, so every watcher slot the world offers is free.
 					m_DirectoryRow.spectatorFree = static_cast<int64_t>(WorldSpectatorBound(matchConfig));
+					m_DirectoryRow.spectatorMax = static_cast<int64_t>(WorldSpectatorBound(matchConfig));
 				}
 			}
 			if (request.host && !request.resumeMatchId.empty()) {
@@ -2237,6 +2238,8 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
+		// A segment held for its checkpoint opens the moment the archive thread has named the digest.
+		if (ScenarioRunner::HasPendingLockstepWorldSegment()) SealWorldReplaySegment();
 		if (m_WorldJoin.IsConfigured() && m_Coordinator) {
 			NetLockstepReadyFrame ready;
 			if (m_Coordinator->PeekReadyFrame(tick, ready)) {
@@ -2260,9 +2263,35 @@ static std::string ResyncSaveName() {
 		}
 		// Every checkpoint wants a current admission file beside it; the pump writes it.
 		m_RestartAdmissionDue.store(true);
+		RollWorldReplaySegment(tick);
 		if (m_WorldJoin.IsConfigured()) {
 			// The image is published when the writer thread has finished this archive, from the pump.
 			std::cout << "[net-world] metrics " << m_WorldJoin.Metrics().BuildReportJson() << std::endl;
+		}
+	}
+
+	void NetMatchService::RollWorldReplaySegment(uint64_t tick) {
+		// Only a recording world cuts segments: an ordinary match keeps its one file, and a world that
+		// was never asked to record writes nothing.
+		if (!m_WorldJoin.IsConfigured() || m_WorldIdentity.worldId.empty() || tick == 0) return;
+		if (!ScenarioRunner::IsLockstepReplayRecording() && !ScenarioRunner::HasPendingLockstepWorldSegment()) return;
+		NetWorldSegmentHeader header;
+		header.worldId = m_WorldIdentity.worldId;
+		header.tick = tick;
+		header.round = m_AutosaveIdentity.roundId;
+		header.boot = m_WorldIdentity.boot;
+		const std::string path = AutosaveStore::SegmentPath(AutosaveStore::Directory(), header.worldId, tick).string();
+		ScenarioRunner::ArmLockstepWorldSegment(header, path);
+	}
+
+	void NetMatchService::SealWorldReplaySegment() {
+		const uint64_t tick = ScenarioRunner::GetPendingLockstepWorldSegmentTick();
+		if (tick == 0 || m_AutosaveMatchId.empty()) return;
+		const std::optional<AutosaveDescriptor> validated = AutosaveStore::NewestValidated(m_AutosaveMatchId);
+		if (!validated || validated->savedTick != tick || validated->worldStructureHash.empty()) return;
+		std::string error;
+		if (!ScenarioRunner::SealLockstepWorldSegment(validated->worldStructureHash, &error)) {
+			std::cout << "[net-world] segment not opened: " << error << std::endl;
 		}
 	}
 
@@ -3153,6 +3182,39 @@ static std::string ResyncSaveName() {
 		state.rewindMatchId = matchId;
 		state.rewindTick = savedTick;
 		return state;
+	}
+
+	NetMatchService::WorldSegmentPlayback NetMatchService::PrepareWorldSegmentPlayback(const std::filesystem::path& directory, const NetWorldSegmentHeader& header,
+	                                                                                 const NetMatchConfig& config, uint64_t firstRecordedFrame) {
+		WorldSegmentPlayback staged;
+		const std::string named = "checkpoint " + std::to_string(header.tick) + " of world " + header.worldId;
+		std::string refusal;
+		const std::optional<AutosaveDescriptor> checkpoint = AutosaveStore::Find(directory, header.worldId, header.tick, &refusal);
+		if (!checkpoint) {
+			staged.refusal = "segment refused: " + named + " is not on this machine";
+			return staged;
+		}
+		if (checkpoint->worldStructureHash != header.worldDigest) {
+			staged.refusal = "segment refused: " + named + " digest differs";
+			return staged;
+		}
+		AutosaveManifest manifest;
+		if (!AutosaveStore::ReadManifest(directory, header.worldId, header.tick, manifest, &refusal)) {
+			staged.refusal = "segment refused: " + named + " has no restart manifest: " + refusal;
+			return staged;
+		}
+		if (firstRecordedFrame != header.tick + 1) {
+			staged.refusal = "segment refused: its first frame " + std::to_string(firstRecordedFrame) +
+			                 " is not the tick after " + named;
+			return staged;
+		}
+		staged.checkpoint = *checkpoint;
+		staged.manifest = std::move(manifest);
+		// The very state a resumed host stands up with: the manifest's agreed owners and applied
+		// sequences at that tick, under the round the checkpoint was written in.
+		staged.resumeState = BuildResumeState(config, header.tick, staged.manifest.roundId, header.worldId, staged.manifest.sideState);
+		staged.startFrame = header.tick + 1;
+		return staged;
 	}
 
 	bool NetMatchService::DeriveRestartKey(std::array<uint8_t, 32>& key) {

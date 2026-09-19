@@ -3,6 +3,7 @@
 #include "NetDirectoryClient.h"
 #include "NetLanDiscovery.h"
 #include "NetLobbySnapshot.h"
+#include "NetMatchReplay.h"
 #include "NetMatchRunner.h"
 #include "NetMuxTransport.h"
 #include "NetHostBanStore.h"
@@ -17,9 +18,11 @@
 #include "NetWorldJoin.h"
 #include "Singleton.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -344,6 +347,38 @@ namespace RTE {
 		std::string IdentityText() const;
 	};
 
+	/// The in-place heal cap, held as a window of sim time instead of a process lifetime: a persistent
+	/// world that heals once a day heals forever, while a match that cannot settle still stops after
+	/// three heals inside the window. A sim time before the newest heal means the round was resumed from
+	/// an older checkpoint, which starts the window again.
+	class NetMatchHealWindow {
+	public:
+		static constexpr size_t c_Cap = 3;
+		static constexpr long long c_WindowSeconds = 600;
+
+		bool Allowed(long long nowSimTicks, long long ticksPerSecond) {
+			Trim(nowSimTicks, ticksPerSecond);
+			return m_Heals.size() < c_Cap;
+		}
+		void Note(long long nowSimTicks, long long ticksPerSecond) {
+			Trim(nowSimTicks, ticksPerSecond);
+			m_Heals.push_back(nowSimTicks);
+			++m_Total;
+		}
+		size_t InWindow() const { return m_Heals.size(); }
+		uint64_t Total() const { return m_Total; }
+
+	private:
+		void Trim(long long nowSimTicks, long long ticksPerSecond) {
+			if (!m_Heals.empty() && nowSimTicks < m_Heals.back()) m_Heals.clear();
+			const long long window = c_WindowSeconds * std::max<long long>(1, ticksPerSecond);
+			while (!m_Heals.empty() && nowSimTicks - m_Heals.front() >= window) m_Heals.pop_front();
+		}
+
+		std::deque<long long> m_Heals; //!< Sim times of the heals still inside the window, oldest first.
+		uint64_t m_Total = 0;
+	};
+
 	class NetMatchService : public Singleton<NetMatchService> {
 	public:
 		// Defined in the .cpp: the dispatcher member is only a declaration in this header.
@@ -377,10 +412,28 @@ namespace RTE {
 		/// here, so an interval checkpoint and a world's on-demand bootstrap capture carry the same
 		/// owners and applied sequences and a restart resumes on them.
 		bool SaveStampedAutosave(uint64_t tick);
+		/// Cuts a recording world's segment at the checkpoint just captured, and opens the held segment
+		/// as soon as that checkpoint's archive names its world-structure digest.
+		void RollWorldReplaySegment(uint64_t tick);
+		void SealWorldReplaySegment();
 		/// The lockstep state a match resumed from a checkpoint starts on, derived from the agreed
 		/// configuration alone so every peer builds the same one whether it loads its own copy of the
 		/// checkpoint or is streamed the host's. A restarted match has nothing in flight.
 		static NetResyncState BuildResumeState(const NetMatchConfig& config, uint64_t savedTick, uint64_t sourceRound, const std::string& matchId, const AutosaveSideState& sideState);
+		/// What a world segment needs before its records can play: the checkpoint it stands on, that
+		/// checkpoint's manifest and the lockstep state the sim stands up with. A non-empty refusal says
+		/// why the segment cannot play here and nothing else is filled.
+		struct WorldSegmentPlayback {
+			std::string refusal;
+			AutosaveDescriptor checkpoint;
+			AutosaveManifest manifest;
+			NetResyncState resumeState;
+			uint64_t startFrame = 0; //!< The checkpoint's tick + 1, where the records begin.
+		};
+		/// Checks a segment header against the checkpoints on this machine and builds that staging. The
+		/// same check answers the first segment and every chain boundary.
+		static WorldSegmentPlayback PrepareWorldSegmentPlayback(const std::filesystem::path& directory, const NetWorldSegmentHeader& header,
+		                                                       const NetMatchConfig& config, uint64_t firstRecordedFrame);
 		/// The hash a resume offer carries and a peer answers against, taken over the one rendering of
 		/// the agreed side state so both sides compare the same bytes.
 		static std::string HashSideState(const AutosaveSideState& sideState);

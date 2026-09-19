@@ -127,6 +127,8 @@ namespace RTE {
 		static constexpr const char* c_ArchiveExtension = ".ccsave";
 		static constexpr const char* c_ManifestExtension = ".ccmanifest";
 		static constexpr const char* c_AdmissionExtension = ".admission";
+		/// A world's recorded segment stands beside the checkpoint it replays from.
+		static constexpr const char* c_SegmentExtension = ".ccreplay";
 		static constexpr int c_ManifestSchema = 1;
 		static constexpr int c_AdmissionSchema = 1;
 		/// The host's sealed admission export is small by construction; anything larger is not one.
@@ -139,6 +141,8 @@ namespace RTE {
 		/// The restart manifest that stands beside one checkpoint, and the match's one live admission file.
 		static std::filesystem::path ManifestPath(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick);
 		static std::filesystem::path AdmissionPath(const std::filesystem::path& directory, const std::string& matchId);
+		/// The recorded segment that replays from one checkpoint; retention drops it with that checkpoint.
+		static std::filesystem::path SegmentPath(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick);
 		/// A match id is hex digits and dashes only, so it can never escape the store's directory.
 		static bool ValidMatchId(const std::string& matchId);
 		/// Reads the tick out of "<matchId>-<tick>.ccsave"; false for any other name.

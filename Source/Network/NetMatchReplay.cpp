@@ -19,6 +19,38 @@ namespace RTE {
 			}
 		}
 
+		void AppendU64(std::vector<uint8_t>& out, uint64_t value) {
+			for (int shift = 0; shift < 64; shift += 8) {
+				out.push_back(static_cast<uint8_t>((value >> shift) & 0xFFU));
+			}
+		}
+
+		void AppendString(std::vector<uint8_t>& out, const std::string& value) {
+			out.push_back(static_cast<uint8_t>(value.size()));
+			out.insert(out.end(), value.begin(), value.end());
+		}
+
+		bool ReadU64(std::ifstream& in, uint64_t& outValue) {
+			uint8_t bytes[8];
+			if (!in.read(reinterpret_cast<char*>(bytes), 8)) {
+				return false;
+			}
+			outValue = 0;
+			for (int i = 7; i >= 0; --i) {
+				outValue = (outValue << 8) | static_cast<uint64_t>(bytes[i]);
+			}
+			return true;
+		}
+
+		bool ReadString(std::ifstream& in, size_t maxBytes, std::string& outValue) {
+			uint8_t length = 0;
+			if (!in.read(reinterpret_cast<char*>(&length), 1) || length > maxBytes) {
+				return false;
+			}
+			outValue.assign(length, '\0');
+			return length == 0 || static_cast<bool>(in.read(outValue.data(), length));
+		}
+
 		uint32_t ReadU32(const uint8_t* bytes) {
 			return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8) |
 			       (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
@@ -63,7 +95,16 @@ namespace RTE {
 	} // namespace
 
 	bool NetMatchReplayWriter::Open(const std::string& path, const NetMatchConfig& config, std::string* error) {
+		return Open(path, config, nullptr, error);
+	}
+
+	bool NetMatchReplayWriter::Open(const std::string& path, const NetMatchConfig& config, const NetWorldSegmentHeader* segment, std::string* error) {
 		Close();
+		if (segment && (segment->worldId.empty() || segment->worldId.size() > c_MaxSegmentFieldBytes ||
+		                segment->worldDigest.size() > c_MaxSegmentFieldBytes || segment->tick == 0)) {
+			if (error) *error = "invalid world segment header";
+			return false;
+		}
 		m_DiagnosticBytes.clear();
 		m_DiagnosticFrames = 0;
 		m_DiagnosticTruncated = false;
@@ -85,17 +126,26 @@ namespace RTE {
 		AppendU16(header, c_Version);
 		AppendU16(header, ControllerFrame::c_Version);
 		AppendU32(header, static_cast<uint32_t>(configBytes.size()));
+		header.insert(header.end(), configBytes.begin(), configBytes.end());
+		// The segment block trails the config, so an ordinary version-6 recording is the version-5 bytes
+		// plus one zero: nothing that reads the config by offset moves.
+		header.push_back(segment ? 1 : 0);
+		if (segment) {
+			AppendString(header, segment->worldId);
+			AppendU64(header, segment->tick);
+			AppendU64(header, segment->round);
+			AppendU64(header, segment->boot);
+			AppendString(header, segment->worldDigest);
+		}
 		m_Out.write(reinterpret_cast<const char*>(header.data()), static_cast<std::streamsize>(header.size()));
-		m_Out.write(reinterpret_cast<const char*>(configBytes.data()), static_cast<std::streamsize>(configBytes.size()));
 		if (!m_Out) {
 			if (error) *error = "could not write the replay header";
 			Close();
 			return false;
 		}
 		m_FramesWritten = 0;
-		if (header.size() + configBytes.size() + 4 <= TelemetryBundle::c_MemberLimit) {
+		if (header.size() + 4 <= TelemetryBundle::c_MemberLimit) {
 			m_DiagnosticBytes = header;
-			m_DiagnosticBytes.insert(m_DiagnosticBytes.end(), configBytes.begin(), configBytes.end());
 		} else m_DiagnosticTruncated = true;
 		return true;
 	}
@@ -313,6 +363,30 @@ namespace RTE {
 			return false;
 		}
 		m_Config = configMessage->config;
+		if (version >= 6) {
+			uint8_t hasSegment = 0;
+			if (!m_In.read(reinterpret_cast<char*>(&hasSegment), 1) || hasSegment > 1) {
+				if (error) *error = "truncated replay header";
+				Close();
+				return false;
+			}
+			if (hasSegment == 1) {
+				const size_t maxField = NetMatchReplayWriter::c_MaxSegmentFieldBytes;
+				if (!ReadString(m_In, maxField, m_Segment.worldId) || !ReadU64(m_In, m_Segment.tick) ||
+				    !ReadU64(m_In, m_Segment.round) || !ReadU64(m_In, m_Segment.boot) ||
+				    !ReadString(m_In, maxField, m_Segment.worldDigest)) {
+					if (error) *error = "truncated world segment header";
+					Close();
+					return false;
+				}
+				if (m_Segment.worldId.empty() || m_Segment.tick == 0) {
+					if (error) *error = "invalid world segment header";
+					Close();
+					return false;
+				}
+				m_HasSegment = true;
+			}
+		}
 		// The lookahead pins the start frame, so playback aligns to the recording's first tick.
 		bool eof = false;
 		if (!ReadFrameFromFile(m_Lookahead, eof, error)) {
@@ -477,6 +551,14 @@ namespace RTE {
 		json += ",\"end_marker\":" + std::string(endMarker ? "true" : "false");
 		json += ",\"truncated\":" + std::string(truncated ? "true" : "false");
 		json += ",\"corrupt\":" + std::string(corrupt ? "true" : "false");
+		json += ",\"segment\":" + std::string(segment ? "true" : "false");
+		if (segment) {
+			json += ",\"world_id\":\"" + segmentHeader.worldId + "\"";
+			json += ",\"segment_tick\":" + std::to_string(segmentHeader.tick);
+			json += ",\"segment_round\":" + std::to_string(segmentHeader.round);
+			json += ",\"segment_boot\":" + std::to_string(segmentHeader.boot);
+			json += ",\"world_digest\":\"" + segmentHeader.worldDigest + "\"";
+		}
 		std::string escaped;
 		for (const char c: error) {
 			if (c == '"' || c == '\\') {
@@ -500,6 +582,8 @@ namespace RTE {
 		}
 		outReport.version = reader.GetVersion();
 		outReport.controllerFrameVersion = reader.GetControllerFrameVersion();
+		outReport.segment = reader.HasWorldSegment();
+		outReport.segmentHeader = reader.GetWorldSegment();
 		uint64_t previousFrame = 0;
 		while (true) {
 			NetLockstepFrame record;
@@ -552,6 +636,8 @@ namespace RTE {
 		m_StartFrame = 0;
 		m_Version = 0;
 		m_ControllerFrameVersion = 0;
+		m_HasSegment = false;
+		m_Segment = {};
 	}
 
 } // namespace RTE
