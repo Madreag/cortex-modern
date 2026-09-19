@@ -553,6 +553,7 @@ static std::string ResyncSaveName() {
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
 			m_FinalCheckpointWritten = false;
+			m_ResumeSegmentTick = 0;
 			m_WorkerDone = false;
 			m_IsHost = request.host;
 			m_CurrentMatchSummary = {};
@@ -612,6 +613,9 @@ static std::string ResyncSaveName() {
 				m_AutosaveIdentity.pinnedTickSource = m_PinnedAutosaveTick;
 				m_PinnedAutosaveTick->store(m_ResumeTick);
 				m_MatchAutosaveSeconds = MatchAutosaveSeconds(matchConfig);
+				// This world's round opens ON that checkpoint, so its recording is a segment standing on
+				// it from the first frame instead of a file that names no world.
+				if (matchConfig.persistentWorld) m_ResumeSegmentTick = m_ResumeTick;
 				if (!matchConfig.persistentWorld) {
 					// The stored row token resumes the very session id the peers' tickets name.
 					m_DirectoryRow.resumeSessionId = m_ResumeDirectorySession;
@@ -2110,7 +2114,23 @@ static std::string ResyncSaveName() {
 		AttachCoordinatorSessionSink();
 		if (m_Runner) {
 			std::string recordError;
-			(void)ScenarioRunner::BeginLockstepReplayRecord(m_Runner->GetMatchConfig(), &recordError);
+			// A round that stands on a checkpoint records a segment from its first frame: an ordinary
+			// file names no world, so playing it back would boot the preset at a mid-world tick.
+			if (m_ResumeSegmentTick != 0 && m_Runner->GetMatchConfig().persistentWorld && m_WorldIdentity.IsValid()) {
+				NetWorldSegmentHeader header;
+				header.worldId = m_WorldIdentity.worldId;
+				header.tick = m_ResumeSegmentTick;
+				header.round = m_AutosaveIdentity.roundId;
+				header.boot = m_WorldIdentity.boot;
+				header.worldDigest = m_ResumeArchiveDigest;
+				const std::string path = AutosaveStore::SegmentPath(AutosaveStore::Directory(), header.worldId, header.tick).string();
+				if (!ScenarioRunner::BeginLockstepWorldSegmentRecord(m_Runner->GetMatchConfig(), header, path, &recordError) && !recordError.empty()) {
+					std::cout << "[net-world] resumed round records nothing: " << recordError << std::endl;
+				}
+			} else {
+				(void)ScenarioRunner::BeginLockstepReplayRecord(m_Runner->GetMatchConfig(), &recordError);
+			}
+			m_ResumeSegmentTick = 0;
 		}
 		// The launch names the adopted activity: a joining peer's own request carries only its local default.
 		const std::string& adopted = m_Runner ? m_Runner->GetMatchConfig().activityPreset : m_ActivityPreset;
