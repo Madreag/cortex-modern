@@ -94,6 +94,10 @@ namespace RTE {
 
 		m_Transport = &transport;
 		m_Config = config;
+		m_MigrationEndpoints.clear(); m_OpenedMigrationHash = {};
+		m_MigrationRequested = false; m_LastMigrationRequestMs = UINT64_MAX;
+		m_HostLost = false;
+		if (config.enableMigration) m_MigrationEndpoints[config.localPeerId] = {config.localPeerId, static_cast<uint16_t>(config.migrationListenPort + config.localPeerId), config.migrationListenAddrs};
 		m_State = config.host ? NetLobbyState::WaitingForConfigAck : NetLobbyState::WaitingForConfig;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_Config.matchConfig);
 		m_StartFrame = config.startFrame;
@@ -125,6 +129,10 @@ namespace RTE {
 		m_Stats = {};
 
 		if (m_Config.host) {
+			if (m_Config.enableMigration) {
+				NetLobbyHello hello; hello.peerId = m_Config.localPeerId; hello.displayName = m_Config.displayName; hello.desiredRole = "host";
+				(void)Send(hello);
+			}
 			for (uint8_t peerId : m_RemotePeerIds) {
 				SendSeatAssign(peerId);
 			}
@@ -186,13 +194,14 @@ namespace RTE {
 			SendStartIfReady();
 		}
 		if (!m_Config.host && m_Config.timeoutMs > 0 && nowMs >= m_LastReceiveMs && nowMs - m_LastReceiveMs > m_Config.timeoutMs) {
+			m_HostLost = true;
 			++m_Stats.timeouts;
 			Fail("lobby timed out");
 		}
 	}
 
 	void NetLobbySession::BeginStateTransfer(std::vector<uint8_t> fileBytes) {
-		if (!m_Config.host || fileBytes.empty() || IsTerminal(m_State)) {
+		if ((!m_Config.host && m_Config.snapshotProviderPeerId != m_Config.localPeerId) || fileBytes.empty() || IsTerminal(m_State)) {
 			return;
 		}
 		if (NetLobbyProtocol::GetStateChunkCount(fileBytes.size()) == 0) {
@@ -275,7 +284,7 @@ namespace RTE {
 	}
 
 	void NetLobbySession::HandleStateChunk(const NetLobbyStateChunk& message) {
-		if (m_Config.host) {
+		if (m_Config.host && m_Config.snapshotProviderPeerId == 0) {
 			return;
 		}
 		if (m_IncomingStateId != message.transferId) {
@@ -317,6 +326,7 @@ namespace RTE {
 		++m_StateTransferProgressSerial;
 		if (m_IncomingNextChunkIndex != m_IncomingChunkCount) return;
 		m_IncomingStateComplete = true;
+		if (m_Config.host && m_Config.snapshotProviderPeerId != 0) BeginStateTransfer(m_ReceivedState);
 		const uint64_t start = g_TransferStartMs.exchange(0);
 		if (start != 0) {
 			g_LastStateTransferMs.store(TransferSteadyMs() - start);
@@ -521,7 +531,7 @@ namespace RTE {
 	}
 
 	bool NetLobbySession::AllConfigAcked() const {
-		if (m_Config.host && m_RemotePeerIds.size() + 1 != m_Config.matchConfig.peerCount) {
+		if (m_Config.host && m_RemotePeerIds.size() + 1 != (m_Config.activePeerCount ? m_Config.activePeerCount : m_Config.matchConfig.peerCount)) {
 			return false;
 		}
 		for (uint8_t peerId : m_RemotePeerIds) {
@@ -539,7 +549,7 @@ namespace RTE {
 		if (m_State == NetLobbyState::Idle) {
 			return false;
 		}
-		if (m_Config.host && m_RemotePeerIds.size() + 1 != m_Config.matchConfig.peerCount) {
+		if (m_Config.host && m_RemotePeerIds.size() + 1 != (m_Config.activePeerCount ? m_Config.activePeerCount : m_Config.matchConfig.peerCount)) {
 			return false;
 		}
 		for (uint8_t peerId : m_RemotePeerIds) {
@@ -582,6 +592,14 @@ namespace RTE {
 		if (!m_Config.host || AllConfigAcked() || m_State != NetLobbyState::WaitingForConfigAck) {
 			return;
 		}
+		if (m_Config.enableMigration && !PrepareMigrationRoster()) {
+			if (m_LastMigrationRequestMs == UINT64_MAX || nowMs >= m_LastMigrationRequestMs + m_Config.resendIntervalMs) {
+				NetLobbyMigration request;
+				request.peerId = m_Config.localPeerId; request.listenPort = static_cast<uint16_t>(m_Config.migrationListenPort + m_Config.localPeerId); request.listenAddrs = m_Config.migrationListenAddrs;
+				(void)Send(request); m_LastMigrationRequestMs = nowMs;
+			}
+			return;
+		}
 		if (m_Stats.configPacketsSent > 0 && nowMs < m_LastConfigSentMs + m_Config.resendIntervalMs) {
 			return;
 		}
@@ -591,9 +609,22 @@ namespace RTE {
 				continue;
 			}
 			// A peer whose lobby came up after the first send has heard neither, so both go again.
+			if (m_Config.enableMigration) {
+				NetLobbyHello hello; hello.peerId = m_Config.localPeerId; hello.displayName = m_Config.displayName; hello.desiredRole = "host";
+				(void)SendTo(m_RemoteTransports[peerId], hello);
+			}
 			SendSeatAssign(peerId);
 			std::string error;
+			NetLobbyMigration capsule;
+			if (!m_Config.matchConfig.successorOrder.empty()) {
+				capsule.kind = 2; capsule.peerId = peerId; capsule.configHash = m_MatchConfigHash;
+				if (!m_Config.sealMigration) { Fail("successor credential provider is missing"); return; }
+				if (!m_Config.sealMigration(peerId, m_MatchConfigHash, capsule.sealedState)) continue;
+			}
 			if (SendTo(m_RemoteTransports[peerId], NetLobbyMatchConfig{m_Config.matchConfig}, &error)) {
+				if (!m_Config.matchConfig.successorOrder.empty()) {
+					(void)SendTo(m_RemoteTransports[peerId], capsule, &error);
+				}
 				sentAny = true;
 			}
 		}
@@ -604,6 +635,11 @@ namespace RTE {
 	}
 
 	void NetLobbySession::SendPeerState() {
+		if (!m_Config.host && m_Config.enableMigration && m_MigrationRequested) {
+			NetLobbyMigration endpoint;
+			endpoint.peerId = m_Config.localPeerId; endpoint.listenPort = static_cast<uint16_t>(m_Config.migrationListenPort + m_Config.localPeerId); endpoint.listenAddrs = m_Config.migrationListenAddrs;
+			(void)Send(endpoint);
+		}
 		NetLobbyPeerState state;
 		state.peerId = m_Config.localPeerId;
 		state.ready = m_LocalReady;
@@ -687,6 +723,7 @@ namespace RTE {
 	}
 
 	void NetLobbySession::SendStartIfReady() {
+		if (m_Config.host && m_Config.snapshotProviderPeerId != 0 && !m_IncomingStateComplete) return;
 		// The Start rides the same ordered lane as the state chunks, so it must queue behind them.
 		if (!m_Config.host || !AllConfigAcked() || !AllRemoteReady() || !m_StartRequested || HasPendingStateChunks() || IsTerminal(m_State)) {
 			return;
@@ -719,6 +756,7 @@ namespace RTE {
 					}
 					RemoveRemote(event.peerId);
 				} else {
+					m_HostLost = IsCommittedTransport(event.peerId);
 					Fail(event.reason.empty() ? "peer disconnected" : event.reason);
 				}
 				break;
@@ -764,7 +802,8 @@ namespace RTE {
 				}
 				const bool allowed = std::visit([&](const auto& payload) {
 					using Payload = std::decay_t<decltype(payload)>;
-					if constexpr (std::is_same_v<Payload, NetLobbyStateChunk>) return !m_Config.host && event.lane == NetTransportLane::ControlReliable;
+					if constexpr (std::is_same_v<Payload, NetLobbyMigration>) return event.lane == NetTransportLane::ControlReliable && (m_Config.host ? payload.kind == 1 && payload.peerId == sender->first : (payload.kind == 2 && payload.peerId == m_Config.localPeerId) || (payload.kind == 1 && payload.peerId == sender->first));
+					if constexpr (std::is_same_v<Payload, NetLobbyStateChunk>) return event.lane == NetTransportLane::ControlReliable && (!m_Config.host || (m_Config.snapshotProviderPeerId != 0 && sender->first == m_Config.snapshotProviderPeerId));
 					// Only the hub binds seats; a client offering one is not a peer this round keeps.
 					if constexpr (std::is_same_v<Payload, NetLobbySeatAssign>) return !m_Config.host;
 					if (m_Config.host) {
@@ -774,7 +813,8 @@ namespace RTE {
 						return false;
 					}
 					if constexpr (std::is_same_v<Payload, NetLobbyReady> || std::is_same_v<Payload, NetLobbyConfigAck>) return false;
-					if constexpr (std::is_same_v<Payload, NetLobbyAbort> || std::is_same_v<Payload, NetLobbyHello>) return payload.peerId == sender->first;
+					if constexpr (std::is_same_v<Payload, NetLobbyHello>) return payload.peerId == sender->first || (m_Config.enableMigration && payload.peerId != 0 && payload.peerId <= NetMatchConfigUtil::c_MaxPeerCount);
+					if constexpr (std::is_same_v<Payload, NetLobbyAbort>) return payload.peerId == sender->first;
 					// The host is a client's only remote and the roster's sole authority, so a state for
 					// a peer we have no slot for yet is an ordering race with its match config, not an
 					// impostor: HandlePeerState drops it. Failing the session over a name-and-ping
@@ -790,7 +830,7 @@ namespace RTE {
 					return;
 				}
 				++m_Stats.messagesReceived;
-				if (m_Config.host) m_RemoteLobbyUp.insert(sender->first);
+				m_RemoteLobbyUp.insert(sender->first);
 				HandleMessage(decoded.message);
 				break;
 			}
@@ -800,7 +840,15 @@ namespace RTE {
 	void NetLobbySession::HandleMessage(const NetLobbyMessage& message) {
 		std::visit([&](const auto& payload) {
 			using Payload = std::decay_t<decltype(payload)>;
-			if constexpr (std::is_same_v<Payload, NetLobbyMatchConfig>) {
+			if constexpr (std::is_same_v<Payload, NetLobbyHello>) {
+				if (!m_Config.host && m_Config.enableMigration && !m_RemoteTransports.contains(payload.peerId) && !m_RemoteTransports.empty()) {
+					const auto transport = m_RemoteTransports.begin()->second;
+					m_RemoteTransports = {{payload.peerId, transport}}; m_RemotePeerIds = {payload.peerId};
+					if (m_Config.session) m_Config.session->AdoptLobbyHostPeerId(payload.peerId);
+				}
+			} else if constexpr (std::is_same_v<Payload, NetLobbyMigration>) {
+				HandleMigration(payload);
+			} else if constexpr (std::is_same_v<Payload, NetLobbyMatchConfig>) {
 				HandleMatchConfig(payload);
 			} else if constexpr (std::is_same_v<Payload, NetLobbyConfigAck>) {
 				HandleConfigAck(payload);
@@ -823,6 +871,38 @@ namespace RTE {
 		}, message.payload);
 	}
 
+	bool NetLobbySession::PrepareMigrationRoster() {
+		if (m_Config.matchConfig.dedicated) return false;
+		if (m_Config.activePeerCount != 0 && !m_Config.matchConfig.successorOrder.empty()) return true;
+		for (uint8_t peer = 1; peer <= m_Config.matchConfig.peerCount; ++peer) if (!m_MigrationEndpoints.contains(peer)) return false;
+		NetMatchConfig next = m_Config.matchConfig;
+		next.migrationPeers.clear();
+		for (const auto& [peer, endpoint] : m_MigrationEndpoints) if (peer <= next.peerCount) next.migrationPeers.push_back(endpoint);
+		if (next.successorOrder.empty()) for (uint8_t peer = 1; peer <= next.peerCount; ++peer) if (peer != next.hostPeerId) next.successorOrder.push_back(peer);
+		std::string error;
+		if (!NetMatchConfigUtil::ValidateLocalAlpha(next, &error)) { Fail(error); return false; }
+		const auto hash = NetMatchConfigUtil::HashConfig(next);
+		if (hash != m_MatchConfigHash) {
+			m_Config.matchConfig = std::move(next); m_MatchConfigHash = hash;
+			for (auto& [peer, acked] : m_ConfigAckedByPeer) acked = false;
+		}
+		return true;
+	}
+
+	void NetLobbySession::HandleMigration(const NetLobbyMigration& message) {
+		if (!m_Config.enableMigration) return;
+		if (m_Config.host) {
+			if (message.kind != 1 || message.listenPort == 0 || message.listenAddrs.empty() || !message.sealedState.empty()) { Fail("invalid migration endpoint"); return; }
+			m_MigrationEndpoints[message.peerId] = {message.peerId, message.listenPort, message.listenAddrs};
+			return;
+		}
+		if (message.kind == 1) { m_MigrationRequested = true; SendPeerState(); return; }
+		if (message.kind != 2 || message.configHash != m_MatchConfigHash || m_Config.matchConfig.successorOrder.empty()) return;
+		if (!m_Config.openMigration || !m_Config.openMigration(message)) { Fail("successor credential authentication failed"); return; }
+		m_OpenedMigrationHash = message.configHash;
+		HandleMatchConfig({m_Config.matchConfig});
+	}
+
 	void NetLobbySession::HandleMatchConfig(const NetLobbyMatchConfig& message) {
 		if (m_Config.host) {
 			return;
@@ -832,6 +912,10 @@ namespace RTE {
 			return;
 		}
 		const NetHash32 incomingHash = NetMatchConfigUtil::HashConfig(message.config);
+		if (!message.config.successorOrder.empty() && m_OpenedMigrationHash != incomingHash) {
+			m_Config.matchConfig = message.config; m_MatchConfigHash = incomingHash;
+			return;
+		}
 		// The host resends config until every client acks; a repeat of the accepted config just re-acks.
 		if (m_State != NetLobbyState::WaitingForConfig && incomingHash == m_MatchConfigHash) {
 			Send(NetLobbyConfigAck{m_Config.localPeerId, true, m_MatchConfigHash, ""});

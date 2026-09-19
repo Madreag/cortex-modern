@@ -171,6 +171,7 @@ namespace RTE {
 			if (error) *error = "the host is not among the surviving peers";
 			return false;
 		}
+		std::rotate(survivors.begin(), std::find(survivors.begin(), survivors.end(), previous.hostPeerId), std::find(survivors.begin(), survivors.end(), previous.hostPeerId) + 1);
 		std::map<uint8_t, uint8_t> seatMap;
 		for (size_t index = 0; index < survivors.size(); ++index) {
 			seatMap[survivors[index]] = static_cast<uint8_t>(index + 1);
@@ -183,6 +184,7 @@ namespace RTE {
 		config.migrationPeers.clear();
 		if (survivors.size() > 1 && !previous.successorOrder.empty()) {
 			for (uint8_t peer : previous.successorOrder) if (seatMap.contains(peer) && peer != previous.hostPeerId) config.successorOrder.push_back(seatMap.at(peer));
+			for (uint8_t peer : survivors) if (peer != previous.hostPeerId && std::find(config.successorOrder.begin(), config.successorOrder.end(), seatMap.at(peer)) == config.successorOrder.end()) config.successorOrder.push_back(seatMap.at(peer));
 			for (auto peer : previous.migrationPeers) {
 				if (!seatMap.contains(peer.peerId)) continue;
 				peer.peerId = seatMap.at(peer.peerId);

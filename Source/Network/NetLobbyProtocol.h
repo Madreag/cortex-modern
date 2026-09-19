@@ -20,6 +20,7 @@ namespace RTE {
 		Abort = 7,
 		StateChunk = 8,
 		SeatAssign = 9,
+		Migration = 10,
 	};
 
 	enum class NetLobbyErrorCode {
@@ -126,6 +127,16 @@ namespace RTE {
 		bool operator==(const NetLobbySeatAssign&) const = default;
 	};
 
+	struct NetLobbyMigration {
+		uint8_t kind = 1;
+		uint8_t peerId = 0;
+		uint16_t listenPort = 0;
+		std::vector<std::string> listenAddrs;
+		NetHash32 configHash{};
+		std::vector<uint8_t> sealedState;
+		bool operator==(const NetLobbyMigration&) const = default;
+	};
+
 	using NetLobbyPayload = std::variant<
 		NetLobbyHello,
 		NetLobbyPeerState,
@@ -135,7 +146,8 @@ namespace RTE {
 		NetLobbyStart,
 		NetLobbyAbort,
 		NetLobbyStateChunk,
-		NetLobbySeatAssign>;
+		NetLobbySeatAssign,
+		NetLobbyMigration>;
 
 	struct NetLobbyMessage {
 		NetLobbyPayload payload;

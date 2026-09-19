@@ -3414,7 +3414,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				returnToMenuAfterNetworkEnd = true;
 			}
 		} else if ((error.find("Desync") != std::string::npos || error.find("ResyncRequested") != std::string::npos) &&
-		           g_NetMatchService.IsResyncOnDesyncEnabled() && s_netMatchResyncs < 3 &&
+		           g_NetMatchService.IsResyncOnDesyncEnabled() && (s_netMatchResyncs < 3 || g_NetMatchService.IsHostMigrationRepairPending()) &&
 		           g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 			// A desync (or a host-requested resync, e.g. a rejoin) heals in place: the host
 			// snapshots its state, every peer reloads the identical file, the match plays on.

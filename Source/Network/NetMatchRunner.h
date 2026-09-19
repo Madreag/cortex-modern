@@ -50,6 +50,11 @@ namespace RTE {
 		// The session's clock. Supplied by the service so setup, play and every resync share one elapsed
 		// time; without it each wait clocks from its own start, which the admission deadlines cannot use.
 		std::function<uint64_t()> nowMs;
+		bool enableMigration = false;
+		std::vector<std::string> migrationListenAddrs;
+		std::function<bool(uint8_t, const NetHash32&, std::vector<uint8_t>&)> sealMigration;
+		std::function<bool(const NetLobbyMigration&)> openMigration;
+		std::function<void(NetLockstepConfig&)> configureMigration;
 	};
 
 	/// What a setup round clocks each of its parts with.
@@ -78,6 +83,9 @@ namespace RTE {
 
 		/// Sets the first lockstep tick of the next round; the lobby start carries it to the clients.
 		void SetStartFrame(uint64_t startFrame) { m_Config.startFrame = startFrame; }
+		void AdoptHostMigration(const NetHostMigrationResult& result, uint8_t localPeerId);
+		uint8_t GetSnapshotProviderPeerId() const { return m_SnapshotProviderPeerId; }
+		bool DidLoseHostDuringSetup() const { return m_HostLostDuringSetup; }
 
 		/// Client: the peers ITS round still had when it ended. The next rematch derives this peer's own
 		/// roster from them and refuses a host proposal that does not fit it. A host derives its roster
@@ -123,10 +131,14 @@ namespace RTE {
 		NetHash32 m_MatchConfigHash{};
 		bool m_UseLobbyProtocol = false;
 		bool m_ResyncRound = false;
+		bool m_HostLostDuringSetup = false;
 		std::vector<uint8_t> m_RematchRoster; //!< Client: the peers its last round still had; consumed by the next rematch.
 		NetMatchConfig m_RematchConfig;       //!< This peer's own derivation of the rematch roster.
 		uint8_t m_RematchDerivedPeerId = 0;   //!< Client: its own seat in m_RematchConfig, before the host reseats it.
 		bool m_RematchRound = false;
+		uint8_t m_ActiveHostPeerId = 0;
+		uint8_t m_SnapshotProviderPeerId = 0;
+		std::vector<uint8_t> m_ActivePeerIds;
 		std::string m_SetupError;
 		std::vector<uint8_t> m_StateToStream; //!< Host: a match-state file the next lobby round streams out.
 		std::vector<uint8_t> m_ReceivedStateBytes; //!< The state file the last lobby round received.

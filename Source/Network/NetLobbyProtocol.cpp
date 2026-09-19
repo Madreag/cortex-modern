@@ -530,6 +530,17 @@ namespace RTE {
 			return true;
 		}
 
+		bool EncodePayload(const NetLobbyMigration& payload, std::vector<uint8_t>& out, NetLobbyError* error) {
+			if (payload.kind < 1 || payload.kind > 2 || payload.peerId == 0 || payload.peerId > NetMatchConfigUtil::c_MaxPeerCount || payload.listenAddrs.size() > NetMatchConfigUtil::c_MaxMigrationAddresses || payload.sealedState.size() > 48 * 1024 + 28) return false;
+			AppendU16LE(out, NetMatchConfigUtil::c_MigrationVersion); AppendU8(out, payload.kind); AppendU8(out, payload.peerId); AppendU16LE(out, payload.listenPort);
+			AppendU8(out, static_cast<uint8_t>(payload.listenAddrs.size()));
+			for (const auto& address : payload.listenAddrs) if (!AppendString(out, address, NetLobbyProtocol::c_MaxShortTextBytes, "migration listen address", error)) return false;
+			out.insert(out.end(), payload.configHash.begin(), payload.configHash.end());
+			AppendU32LE(out, static_cast<uint32_t>(payload.sealedState.size()));
+			out.insert(out.end(), payload.sealedState.begin(), payload.sealedState.end());
+			return true;
+		}
+
 		bool RefuseOversizePeerId(uint8_t peerId, size_t offset, NetLobbyError* error) {
 			if (peerId > NetLobbyProtocol::c_MaxPeers) {
 				SetError(error, NetLobbyErrorCode::InvalidValue, offset, "peer id is invalid");
@@ -540,6 +551,19 @@ namespace RTE {
 
 		bool DecodePayload(NetLobbyMessageType type, ByteReader& reader, NetLobbyPayload& out, NetLobbyError* error, bool allowRecordedVersions) {
 			switch (type) {
+				case NetLobbyMessageType::Migration: {
+					NetLobbyMigration payload;
+					uint16_t version = 0; uint8_t addresses = 0; uint32_t bytes = 0;
+					if (!ReadOrTruncated(reader.ReadU16LE(version) && version == NetMatchConfigUtil::c_MigrationVersion && reader.ReadU8(payload.kind) && payload.kind >= 1 && payload.kind <= 2 &&
+					    reader.ReadU8(payload.peerId) && payload.peerId != 0 && payload.peerId <= NetMatchConfigUtil::c_MaxPeerCount && reader.ReadU16LE(payload.listenPort) && reader.ReadU8(addresses) && addresses <= NetMatchConfigUtil::c_MaxMigrationAddresses, reader, error, "migration header")) return false;
+					for (uint8_t i = 0; i < addresses; ++i) {
+						std::string address;
+						if (!reader.ReadString(address, NetLobbyProtocol::c_MaxShortTextBytes, "migration address", error)) return false;
+						payload.listenAddrs.push_back(std::move(address));
+					}
+					if (!ReadOrTruncated(reader.ReadHash(payload.configHash) && reader.ReadU32LE(bytes) && bytes <= 48 * 1024 + 28 && reader.ReadBytes(payload.sealedState, bytes), reader, error, "migration capsule")) return false;
+					out = std::move(payload); return true;
+				}
 				case NetLobbyMessageType::Hello: {
 					NetLobbyHello payload;
 					uint8_t reserved = 0;
@@ -693,6 +717,7 @@ namespace RTE {
 				case NetLobbyMessageType::Abort:
 				case NetLobbyMessageType::StateChunk:
 				case NetLobbyMessageType::SeatAssign:
+				case NetLobbyMessageType::Migration:
 					out = static_cast<NetLobbyMessageType>(raw);
 					return true;
 			}
@@ -711,6 +736,7 @@ namespace RTE {
 			[](const NetLobbyAbort&) { return NetLobbyMessageType::Abort; },
 			[](const NetLobbyStateChunk&) { return NetLobbyMessageType::StateChunk; },
 			[](const NetLobbySeatAssign&) { return NetLobbyMessageType::SeatAssign; },
+			[](const NetLobbyMigration&) { return NetLobbyMessageType::Migration; },
 		}, payload);
 	}
 
@@ -725,6 +751,7 @@ namespace RTE {
 			case NetLobbyMessageType::Abort: return "Abort";
 			case NetLobbyMessageType::StateChunk: return "StateChunk";
 			case NetLobbyMessageType::SeatAssign: return "SeatAssign";
+			case NetLobbyMessageType::Migration: return "Migration";
 		}
 		return "Unknown";
 	}
