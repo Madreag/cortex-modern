@@ -151,7 +151,7 @@ namespace RTE {
 
 		/// Sets the subgroup ID of this Atom.
 		/// @param newID The new subgroup ID of this Atom.
-		void SetSubID(long newID = 0) { m_SubgroupID = newID; }
+		void SetSubID(long newID = 0) { if (m_SubgroupID != newID) TouchCheckpoint(); m_SubgroupID = newID; }
 
 		/// Gets the material of this Atom.
 		/// @return The material of this Atom.
@@ -195,7 +195,7 @@ namespace RTE {
 
 		/// Sets a new offset vector for the collision calculations.
 		/// @param newOffset A const reference to a Vector that will be used as offset.
-		void SetOffset(const Vector& newOffset) { m_Offset = newOffset; }
+		void SetOffset(const Vector& newOffset) { if (m_Offset != newOffset) TouchCheckpoint(); m_Offset = newOffset; }
 
 		/// Gets the surface normal of this vector, if it has been successfully calculated. If not, it'll be a 0 vector.
 		/// @return The current normalized surface normal Vector of this.
@@ -228,7 +228,7 @@ namespace RTE {
 
 		/// Sets the HitData struct this Atom uses to represent the last hit it experienced.
 		/// @param newHitData A reference to a HitData struct that will be copied to the Atom's.
-		void SetHitData(const HitData& newHitData) { m_LastHit = newHitData; }
+		void SetHitData(const HitData& newHitData) { TouchCheckpoint(); m_LastHit = newHitData; }
 
 		/// Checks whether this Atom is set to ignore collisions with the terrain.
 		/// @return Whether or not this is ignoring hits the with terrain.
@@ -245,7 +245,7 @@ namespace RTE {
 
 		/// Adds a MOID that this Atom should ignore collisions with during its next travel sequence.
 		/// @param ignore The MOID to add to the ignore list.
-		void AddMOIDToIgnore(MOID ignore) { m_IgnoreMOIDs.push_back(ignore); }
+		void AddMOIDToIgnore(MOID ignore) { TouchCheckpoint(); m_IgnoreMOIDs.push_back(ignore); }
 
 		/// AtomGroup may set this shared list of ignored MOIDs to avoid setting and removing ignored MOIDs for every atom one by one. The list is maintained only by AtomGroup, Atom never owns it.
 		/// @param ignoreMOIDsByGroup New MOIDs list to ignore.
@@ -253,7 +253,7 @@ namespace RTE {
 
 		/// Clear the list of MOIDs that this Atom is set to ignore collisions with during its next travel sequence.
 		/// This should be done each frame so that fresh MOIDs can be re-added. (MOIDs are only valid during a frame).
-		void ClearMOIDIgnoreList() { m_IgnoreMOIDs.clear(); }
+		void ClearMOIDIgnoreList() { if (!m_IgnoreMOIDs.empty()) TouchCheckpoint(); m_IgnoreMOIDs.clear(); }
 
 		/// Gets the number of consecutive penetrations of Terrain that this Atom has successfully made, ending with wherever it is now.
 		/// @return The number of consecutive penetrations. Resets to 0 as soon as penetration streak ends.
@@ -325,7 +325,7 @@ namespace RTE {
 
 		/// Sets the ratio of how many steps are actually taken to how many calls to TakeStep are made.
 		/// @param newStepRatio A float specifying the new step ratio.
-		void SetStepRatio(float newStepRatio) { m_StepRatio = newStepRatio; }
+		void SetStepRatio(float newStepRatio) { if (m_StepRatio != newStepRatio) TouchCheckpoint(); m_StepRatio = newStepRatio; }
 
 		/// Indicates how many more steps remain to be taken to traverse the entire trajectory segment.
 		/// @return The number of steps that remain to be taken on the set trajectory segment.
@@ -336,9 +336,9 @@ namespace RTE {
 
 		/// The carried travel residue (previous move's fractional error + direction validity), for full-game saves.
 		int GetPrevError() const { return m_PrevError; }
-		void SetPrevError(int prevError) { m_PrevError = prevError; }
+		void SetPrevError(int prevError) { if (m_PrevError != prevError) TouchCheckpoint(); m_PrevError = prevError; }
 		bool GetChangedDir() const { return m_ChangedDir; }
-		void SetChangedDir(bool changedDir) { m_ChangedDir = changedDir; }
+		void SetChangedDir(bool changedDir) { if (m_ChangedDir != changedDir) TouchCheckpoint(); m_ChangedDir = changedDir; }
 
 		/// Packs the carried travel residue (fractional error, direction validity, terrain phase-out, penetration streak) into one saveable value.
 		long long PackTravelResidue() const {
