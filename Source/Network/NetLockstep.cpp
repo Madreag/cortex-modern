@@ -3403,6 +3403,11 @@ namespace RTE {
 		packet.priorWindow = std::move(older);
 	}
 
+	uint64_t NetLockstepCoordinator::ObservationBindingsSpelled(uint8_t senderPeerId) const {
+		const auto found = m_ObservationEncodeTables.bySender.find(senderPeerId);
+		return found == m_ObservationEncodeTables.bySender.end() ? 0 : found->second.BindingCount();
+	}
+
 	NetLockstepObservationBlocks& NetLockstepCoordinator::ObservationBlocksOf(uint8_t senderPeerId, uint64_t newestTargetFrame) {
 		NetLockstepObservationBlocks& blocks = m_ObservationBlocks[senderPeerId];
 		// Only the ticks a window can still name are worth keeping.

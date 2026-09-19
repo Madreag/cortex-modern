@@ -622,6 +622,8 @@ namespace RTE {
 		const NetLockstepStats& GetStats() const { return m_Stats; }
 		/// True only when every remote advertised the frame-window bit and this peer repeats ticks.
 		bool FrameWindowAgreed() const;
+		/// How many observation keys this peer has spelled out for a sender's stream this round.
+		uint64_t ObservationBindingsSpelled(uint8_t senderPeerId) const;
 		/// The readings this peer held and then had to drop. Their sampler must forget it ever sent them,
 		/// or it will not offer them again until the sound's audibility moves.
 		std::vector<NetSoundObservation> TakeDroppedObservations();
