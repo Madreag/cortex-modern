@@ -7,6 +7,7 @@
 #include "NetHostBanStore.h"
 #include "NetReconnectTranscript.h"
 #include "NetSeatAuth.h"
+#include "NetWorldJoin.h"
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
@@ -15,6 +16,15 @@
 #include <utility>
 
 namespace RTE {
+	namespace {
+		// A world's watcher seats sit above its roster and hold no world slot, so they name no roster
+		// player and carry the ids reserved for overflow spectators instead.
+		bool NetH4IsWorldSpectatorSeat(const NetMatchConfig& config, const NetH4Seat& seat) {
+			return config.persistentWorld && !seat.cpu && seat.lockstepPeerId >= c_WorldSpectatorLobbyPeerFirst &&
+			       seat.lockstepPeerId < c_WorldSpectatorLobbyPeerFirst + WorldSpectatorBound(config);
+		}
+	} // namespace
+
 	std::vector<uint8_t> NetReconnectHost::ExportMigrationState() const {
 		if (!m_Registry || !m_Registry->IsActive())
 			return {};
@@ -95,11 +105,14 @@ namespace RTE {
 				seat.team = slot.at(2).get<int32_t>();
 				seat.cpu = slot.at(3).get<bool>();
 				seat.local = seat.lockstepPeerId == localPeerId;
-				// A world numbers its seats from 1, so its last row sits one past a match's bound.
-				const uint16_t seatBound = config.persistentWorld ? NetMatchConfigUtil::c_MaxPlayers : NetMatchConfigUtil::c_MaxPlayers - 1;
+				// A world numbers its seats from 1 and keeps its watcher seats above the roster.
+				const uint16_t seatBound = config.persistentWorld
+				    ? static_cast<uint16_t>(NetMatchConfigUtil::c_MaxPlayers + WorldSpectatorBound(config))
+				    : NetMatchConfigUtil::c_MaxPlayers - 1;
+				const bool watcher = NetH4IsWorldSpectatorSeat(config, seat);
 				if (seat.stableSeat > seatBound || (config.persistentWorld && seat.stableSeat == 0) ||
 				    (seat.lockstepPeerId != 0 && seat.peerId + 1 != seat.lockstepPeerId) ||
-				    std::none_of(config.players.begin(), config.players.end(), [&](const auto& player) { return player.cpu == seat.cpu && player.peerId == seat.lockstepPeerId && player.team == seat.team; }))
+				    (!watcher && std::none_of(config.players.begin(), config.players.end(), [&](const auto& player) { return player.cpu == seat.cpu && player.peerId == seat.lockstepPeerId && player.team == seat.team; })))
 					return false;
 				table.push_back(seat);
 			}
@@ -313,6 +326,22 @@ namespace RTE {
 			seat.lockstepPeerId = slot.peerId;
 			seat.local = !slot.cpu && slot.peerId == config.hostPeerId;
 			seats.push_back(seat);
+		}
+		// A world admits watchers above its roster, so its admission table carries the seats they need:
+		// without one a joiner that arrives with every slot held is refused before the world ever sees it.
+		if (config.persistentWorld) {
+			const size_t watchers = WorldSpectatorBound(config);
+			for (size_t index = 0; index < watchers; ++index) {
+				NetH4Seat seat;
+				seat.stableSeat = static_cast<uint16_t>(firstSeat + config.players.size() + index);
+				seat.lockstepPeerId = static_cast<uint8_t>(c_WorldSpectatorLobbyPeerFirst + index);
+				seat.peerId = static_cast<uint8_t>(seat.lockstepPeerId - 1);
+				// A watcher holds no world slot, so it is on no team until the world promotes it.
+				seat.team = -1;
+				seat.cpu = false;
+				seat.local = false;
+				seats.push_back(seat);
+			}
 		}
 		return seats;
 	}

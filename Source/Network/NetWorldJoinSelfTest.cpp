@@ -3669,6 +3669,95 @@ namespace RTE {
 		return 0;
 	}
 
+	// A world that admits one watcher beside its full roster, the way the host authors it.
+	NetMatchConfig MakeWorldWithOneWatcher() {
+		NetMatchConfig config = MakeDedicatedWorldRoster();
+		config.worldMaxSpectators = 1;
+		return config;
+	}
+
+	// A watcher needs an admission seat to be seen at all, so the world's table has to carry one.
+	int TestWorldAdmitsItsConfiguredWatcher() {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		const NetMatchConfig config = MakeWorldWithOneWatcher();
+		const std::vector<NetH4Seat> table = NetH4BuildSeatTable(config);
+		const size_t expected = config.players.size() + WorldSpectatorBound(config);
+		if (WorldSpectatorBound(config) != 1) {
+			return Fail("watcher-has-no-seat: the fixture's world does not offer one watcher");
+		}
+		if (table.size() != expected) {
+			return Fail("watcher-has-no-seat: the world's admission table has " + std::to_string(table.size()) +
+			            " rows for a roster of " + std::to_string(config.players.size()) + " and " +
+			            std::to_string(WorldSpectatorBound(config)) + " watcher");
+		}
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) {
+			return Fail("watcher-has-no-seat: the registry did not arm");
+		}
+		NetReconnectHost admission;
+		admission.Configure(&registry, 0x574401ULL, identity);
+		admission.SetSeatTable(table, config.mode);
+		admission.SetLiveMatch(true);
+		admission.SetPersistentWorld(true);
+		NetH4TicketOffer firstOffer;
+		NetH4TicketOffer secondOffer;
+		if (!CommitWorldSeat(admission, identity, 61, "first", firstOffer) ||
+		    !CommitWorldSeat(admission, identity, 62, "second", secondOffer)) {
+			return Fail("watcher-has-no-seat: the world refused a roster player its seat");
+		}
+		// Every gameplay slot is spoken for; the next arrival is the watcher the host configured.
+		NetH4TicketOffer watcherOffer;
+		if (!CommitWorldSeat(admission, identity, 63, "watcher", watcherOffer)) {
+			return Fail("watcher-has-no-seat: a full world refused its configured watcher a seat");
+		}
+		if (watcherOffer.stableSeat == firstOffer.stableSeat || watcherOffer.stableSeat == secondOffer.stableSeat) {
+			return Fail("watcher-took-a-members-seat: the watcher was given seat " +
+			            std::to_string(static_cast<int>(watcherOffer.stableSeat)) + ", which a member holds");
+		}
+		if (admission.StableSeatOfConnection(63) != watcherOffer.stableSeat) {
+			return Fail("watcher-has-no-seat: the watcher's connection names no seat, so its join can never begin");
+		}
+		// One watcher is what the host authored, and the second arrival is refused.
+		NetH4TicketOffer overflowOffer;
+		if (CommitWorldSeat(admission, identity, 64, "overflow", overflowOffer)) {
+			return Fail("watcher-past-the-bound: a world configured for one watcher seated a second");
+		}
+		// The world plane admits it as a watcher, not as a refusal: both slots are held.
+		NetWorldJoinHost world;
+		std::string error;
+		if (!world.Configure(config, MakeIdentity(), &error)) {
+			return Fail("watcher-has-no-seat: the world plane refused its config (" + error + ")");
+		}
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId;
+		image.boot = 1;
+		image.round = 1;
+		image.tick = 400;
+		image.bytes = 32;
+		image.digest = "d";
+		world.PublishImage(image);
+		if (!world.BeginJoin(61, firstOffer.stableSeat, "first", 1000, &error) ||
+		    !world.BeginJoin(62, secondOffer.stableSeat, "second", 1010, &error)) {
+			return Fail("watcher-has-no-seat: the world refused a member its slot (" + error + ")");
+		}
+		if (world.Membership().FreeSlots() != 0) {
+			return Fail("watcher-has-no-seat: the fixture's world still has a free slot, so nobody would watch");
+		}
+		if (!world.BeginJoin(63, watcherOffer.stableSeat, "watcher", 1020, &error)) {
+			return Fail("watcher-refused-by-a-full-world: the full world refused the watcher (" + error + ")");
+		}
+		const NetWorldJoinSession* watching = world.FindSession(63);
+		if (watching == nullptr || !watching->spectator || watching->assignedPeerId != 0) {
+			return Fail("watcher-refused-by-a-full-world: the arrival took a gameplay slot instead of watching");
+		}
+		if (world.SpectatorsFree() != 0) {
+			return Fail("watcher-past-the-bound: the world still offers a watcher slot past its bound");
+		}
+		return 0;
+	}
+
 	// A watcher and a member due at one frame: streaming the watcher leaves the member due, not skipped.
 	int TestDueSpectatorLeavesTheMemberDue() {
 		NetWorldJoinHost host;
@@ -5494,6 +5583,10 @@ namespace RTE {
 			s_FailTag = "net-world-promoted-seat-id-selftest";
 			return TestWorldPromotedSeatDropsAndReseatsItsSlot();
 		}
+		if (std::strcmp(name, "watcher-seat") == 0 || std::strcmp(name, "-net-world-watcher-seat-selftest") == 0) {
+			s_FailTag = "net-world-watcher-seat-selftest";
+			return TestWorldAdmitsItsConfiguredWatcher();
+		}
 		if (std::strcmp(name, "first-seat") == 0 || std::strcmp(name, "-net-world-first-seat-selftest") == 0) {
 			s_FailTag = "net-world-first-seat-selftest";
 			return TestDedicatedWorldFirstSeatCanBeNamed();
@@ -5708,6 +5801,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestWorldPromotedSeatDropsAndReseatsItsSlot(); result != 0) {
+			return result;
+		}
+		if (const int result = TestWorldAdmitsItsConfiguredWatcher(); result != 0) {
 			return result;
 		}
 		if (const int result = TestDedicatedWorldFirstSeatCanBeNamed(); result != 0) {
