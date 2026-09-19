@@ -162,6 +162,9 @@ namespace RTE {
 		std::optional<NetMatchDelayPolicy> delayPolicy;
 		std::optional<uint8_t> idleWaitMinutes;
 		std::optional<bool> automaticRepair;
+		// The host's checkpoint cadence in simulation seconds; 0 disables autosaves. Unset keeps the
+		// run's AutosaveSeconds setting/override, so a request that names nothing changes nothing.
+		std::optional<uint32_t> autosaveSeconds;
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
 		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
 		std::string sessionId; // Client only: join the directory session with this id instead of an address.
@@ -327,6 +330,17 @@ namespace RTE {
 		};
 		PortMapStatus GetPortMapStatus() const;
 		NetLobbySnapshot GetLobbySnapshot() const;
+		/// The match config the live lobby round adopted and every peer acknowledged - the host's
+		/// published roster/rules/policy on each peer alike. Falls back to the request-derived config
+		/// before the lobby's first publish (a joiner's placeholder reads the same way).
+		NetMatchConfig GetLobbyMatchConfig() const;
+		/// Host options transaction (§3.1): validates a complete draft against the adopted revision
+		/// and stages it as the next-match intent. Rejects non-host calls, stale revisions, and any
+		/// draft that reallocates a seated peer's slot. Returns true when the draft was accepted.
+		bool SubmitHostOptions(uint64_t expectedRevision, const NetMatchConfig& draft, std::string* error = nullptr);
+		/// The staged next-match draft, when Apply accepted one. The GUI re-seeds its next host
+		/// options draft from it; a later Start publishes it like any new-lobby request.
+		std::optional<NetMatchConfig> GetPendingHostOptions() const;
 		/// Returns a copy that survives returning to the lobby and expires at the next match start.
 		std::optional<NetMatchSummary> GetLastMatchSummary() const;
 		/// Local chat send, presentation only. Reaches the session whether the lobby is still running
@@ -518,6 +532,8 @@ namespace RTE {
 		bool m_Dedicated = false;
 		int m_HumanSeats = 0;
 		NetMatchConfig m_MatchConfig; //!< The roster this peer asked for, until the round adopts the host's.
+		NetMatchConfig m_AdoptedMatchConfig; //!< The lobby round's agreed config, mirrored each publish for the options view.
+		std::optional<NetMatchConfig> m_PendingHostOptions; //!< Host-accepted options draft; the next match's intent.
 		bool m_ResyncOnDesync = false;
 		std::string m_PendingResyncLoad;
 		std::optional<NetResyncState> m_PendingResyncState;
