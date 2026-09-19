@@ -320,7 +320,7 @@ end
 				lua_pushinteger(L, 2);
 				lua_setfield(L, -2, "value");
 				lua_settop(L, top);
-				check("preview_barrier_double_arm_refused", index, round, luaJIT_preview_begin(L, nullptr, 0) ? -1 : 0);
+				check("preview_barrier_double_arm_refused", index, round, luaJIT_preview_begin(L, nullptr, 0, 0) ? -1 : 0);
 				check("preview_barrier_native_semantics", index, round, state->RunScriptString("assert(_PreviewBarrierProbe.capi[1] == 92 and _PreviewBarrierProbe.capi.x == 93 and _PreviewBarrierProbe.capi.added == 94)", false));
 				check("preview_barrier_fault_injection", index, round, luaJIT_preview_faultcheck(L) ? 0 : -1);
 				check("preview_barrier_gc_accounting", index, round, state->RunScriptString("_PreviewBarrierProbe.accounting()", false));
@@ -423,6 +423,279 @@ assert(seen > 0, 'no trace event after forced abort path seen='..tostring(seen).
 			std::cout << std::endl;
 			passed = status >= 0 && passed;
 		}
+		return passed;
+	}
+
+#if LJ_HASJIT
+	namespace {
+		// What the leftover abort derived from the frame, read inside the probe the Lua fixture calls.
+		const void* s_LeftoverFunction = nullptr;
+		const void* s_LeftoverProto = nullptr;
+		int s_LeftoverPos = -1;
+		int s_LeftoverState = -1;
+		int s_LeftoverFired = 0;
+
+		// The same for the arm whose top frame is the Lua function a count hook interrupted.
+		const void* s_HookTop = nullptr;
+		const void* s_HookCaller = nullptr;
+		const void* s_HookFunction = nullptr;
+		int s_HookPos = -1;
+		int s_HookState = -1;
+		int s_HookFired = 0;
+		int s_HookRan = 0;
+		int s_HookTopIsLua = 0;
+
+		// The abort only sends its event when it has a trace to release, so slot 1 is freed before the recorder is staged.
+		bool FreeLeftoverTraceSlot(lua_State* luaState) {
+			jit_State* J = L2J(luaState);
+			for (int attempt = 0; attempt < 2 && !(J->sizetrace > 1 && !gcref(J->trace[1])); ++attempt) {
+				lj_trace_flushall(luaState);
+			}
+			return J->sizetrace > 1 && !gcref(J->trace[1]);
+		}
+
+		// Leaves the recorder mid-trace with a position in the stale function's prototype and a slot to release.
+		int StageLeftoverAbort(lua_State* luaState, GCfunc* stale) {
+			jit_State* J = L2J(luaState);
+			const int fired = FreeLeftoverTraceSlot(luaState) ? 1 : 0;
+			J->pc = proto_bc(funcproto(stale)) + 1;
+			J->fn = stale;
+			J->pt = funcproto(stale);
+			J->parent = 0;
+			J->exitno = 0;
+			J->curfinal = NULL;
+			setgcrefnull(J->cur.startpt);
+			setmrefu(J->cur.startpc, 0);
+			J->cur.startins = BC_RET;
+			J->cur.traceno = static_cast<TraceNo>(fired);
+			J->state = LJ_TRACE_RECORD;
+			lj_dispatch_update(G(luaState));
+			return fired;
+		}
+
+		// Leaves the recorder mid-trace with a position in another prototype, then drives the leftover abort.
+		int AbortLeftoverProbe(lua_State* luaState) {
+			jit_State* J = L2J(luaState);
+			s_LeftoverFunction = nullptr;
+			s_LeftoverProto = nullptr;
+			s_LeftoverPos = -1;
+			s_LeftoverState = -1;
+			s_LeftoverFired = 0;
+			if (J->state != LJ_TRACE_IDLE || !lua_isfunction(luaState, 1) || lua_iscfunction(luaState, 1)) {
+				return 0;
+			}
+			GCfunc* stale = static_cast<GCfunc*>(const_cast<void*>(lua_topointer(luaState, 1)));
+			if (!isluafunc(stale)) {
+				return 0;
+			}
+			s_LeftoverFired = StageLeftoverAbort(luaState, stale);
+			lj_trace_abort_leftover(luaState);
+			s_LeftoverFunction = J->fn;
+			s_LeftoverProto = J->pt;
+			s_LeftoverPos = J->pt && J->pc ? static_cast<int>(proto_bcpos(J->pt, J->pc)) : -1;
+			s_LeftoverState = static_cast<int>(J->state);
+			return 0;
+		}
+
+		// Runs with the interrupted Lua function still on top, the frame the abort must not take its position from.
+		void AbortLeftoverHook(lua_State* luaState, lua_Debug*) {
+			lua_sethook(luaState, NULL, 0, 0);
+			s_HookRan = 1;
+			jit_State* J = L2J(luaState);
+			lua_Debug frame;
+			if (J->state != LJ_TRACE_IDLE || !lua_getstack(luaState, 0, &frame) || !lua_getinfo(luaState, "f", &frame)) {
+				return;
+			}
+			GCfunc* top = static_cast<GCfunc*>(const_cast<void*>(lua_topointer(luaState, -1)));
+			lua_pop(luaState, 1);
+			s_HookTop = top;
+			s_HookTopIsLua = top && isluafunc(top) ? 1 : 0;
+			if (!s_HookTopIsLua || !lua_getstack(luaState, 1, &frame) || !lua_getinfo(luaState, "f", &frame)) {
+				return;
+			}
+			s_HookCaller = lua_topointer(luaState, -1);
+			lua_pop(luaState, 1);
+			// The recorder is left in the interrupted function's own prototype, which is where a wrong report lands.
+			s_HookFired = StageLeftoverAbort(luaState, top);
+			lj_trace_abort_leftover(luaState);
+			s_HookFunction = J->fn;
+			s_HookPos = J->pt && J->pc ? static_cast<int>(proto_bcpos(J->pt, J->pc)) : -1;
+			s_HookState = static_cast<int>(J->state);
+		}
+
+		// Arms the hook from inside the Lua function whose frame must not be the one the abort reports.
+		int AbortLeftoverArm(lua_State* luaState) {
+			s_HookTop = nullptr;
+			s_HookCaller = nullptr;
+			s_HookFunction = nullptr;
+			s_HookPos = -1;
+			s_HookState = -1;
+			s_HookFired = 0;
+			s_HookRan = 0;
+			s_HookTopIsLua = 0;
+			// Out here, so the hook itself finds the slot free and runs no Lua of its own.
+			FreeLeftoverTraceSlot(luaState);
+			lua_sethook(luaState, &AbortLeftoverHook, LUA_MASKCOUNT, 1);
+			return 0;
+		}
+	} // namespace
+#endif
+
+	bool PreviewScriptSelfTest::CheckAbortLeftoverPosition() {
+		std::vector<LuaStateWrapper*> states{&g_LuaMan.GetMasterScriptState()};
+		for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) states.push_back(&state);
+		bool passed = true;
+#if LJ_HASJIT
+		// One arm runs the probe one Lua call deep, the other from a hook with a Lua function still on top; an
+		// attached consumer reads what each abort reported.
+		static const char* fixture = R"lua(
+_AbortLeftover = {}
+local seen = _AbortLeftover
+-- Opening jit.util writes the package cache and the engine's require list, which this arm leaves as it found them.
+local priorUtil = package.loaded['jit.util']
+local priorRequired = _RequiredPackages and _RequiredPackages['jit.util']
+local util = require('jit.util')
+seen.cleanup = function()
+  package.loaded['jit.util'] = priorUtil
+  if _RequiredPackages then _RequiredPackages['jit.util'] = priorRequired end
+end
+seen.handler = function(what, tr, func, pos, err)
+  if what ~= 'abort' then return end
+  seen.calls = (seen.calls or 0) + 1
+  seen.func, seen.pos = func, pos
+  local info = func and util.funcinfo(func, pos)
+  seen.line = info and info.currentline or -1
+  seen.bytecodes = info and info.bytecodes or -1
+end
+-- A recorded trace grows the trace array, so the flush before an arm leaves slot 1 free for the abort to release.
+seen.warm = function()
+  local t = {}
+  for i = 1, 4096 do t[i % 16 + 1] = i end
+  return t[1]
+end
+seen.run = function()
+  seen.warm()
+  seen.calls, seen.func, seen.pos, seen.line, seen.bytecodes = 0, nil, -1, -1, -1
+  local where = util.funcinfo(seen.run)
+  seen.first, seen.last = where.linedefined, where.lastlinedefined
+  jit.attach(seen.handler, 'trace')
+  _AbortLeftoverProbe(seen.handler)
+  jit.attach(seen.handler)
+  seen.same = seen.func == seen.run
+end
+seen.inner = function()
+  _AbortLeftoverArm()
+  local total = 0
+  for i = 1, 4 do total = total + i end
+  return total
+end
+seen.runHook = function()
+  seen.warm()
+  seen.calls, seen.func, seen.pos, seen.line, seen.bytecodes = 0, nil, -1, -1, -1
+  jit.attach(seen.handler, 'trace')
+  seen.inner()
+  jit.attach(seen.handler)
+  seen.hookCalls, seen.hookFunc, seen.hookPos = seen.calls, seen.func, seen.pos
+end
+)lua";
+		for (int index = 0; index < static_cast<int>(states.size()); ++index) {
+			lua_State* L = states[index]->GetLuaState();
+			if (L2J(L)->state != LJ_TRACE_IDLE) {
+				std::cout << "[script-graph-selftest] FAIL abort_leftover_position state=" << index
+				          << " jstate=" << static_cast<unsigned>(L2J(L)->state) << " expected=0" << std::endl;
+				passed = false;
+				continue;
+			}
+			if (!(L2J(L)->flags & JIT_F_ON)) {
+				// With the compiler off nothing records a trace, so the abort has no slot to release and sends no event.
+				std::cout << "[script-graph-selftest] SKIP abort_leftover_position state=" << index << " jit_off" << std::endl;
+				continue;
+			}
+			lua_pushcfunction(L, &AbortLeftoverProbe);
+			lua_setglobal(L, "_AbortLeftoverProbe");
+			lua_pushcfunction(L, &AbortLeftoverArm);
+			lua_setglobal(L, "_AbortLeftoverArm");
+			const auto field = [L](const char* name) {
+				int value = -1;
+				lua_getglobal(L, "_AbortLeftover");
+				if (lua_istable(L, -1)) {
+					lua_getfield(L, -1, name);
+					value = lua_isnumber(L, -1) ? static_cast<int>(lua_tointeger(L, -1)) : -1;
+					lua_pop(L, 1);
+				}
+				lua_pop(L, 1);
+				return value;
+			};
+			const auto pointerField = [L](const char* name) {
+				const void* value = nullptr;
+				lua_getglobal(L, "_AbortLeftover");
+				if (lua_istable(L, -1)) {
+					lua_getfield(L, -1, name);
+					value = lua_topointer(L, -1);
+					lua_pop(L, 1);
+				}
+				lua_pop(L, 1);
+				return value;
+			};
+			const auto flagField = [L](const char* name) {
+				bool value = false;
+				lua_getglobal(L, "_AbortLeftover");
+				if (lua_istable(L, -1)) {
+					lua_getfield(L, -1, name);
+					value = lua_toboolean(L, -1) != 0;
+					lua_pop(L, 1);
+				}
+				lua_pop(L, 1);
+				return value;
+			};
+			const int staged = states[index]->RunScriptString(fixture, false);
+			const int ran = staged >= 0 ? states[index]->RunScriptString("_AbortLeftover.run()", false) : -1;
+			const int calls = field("calls"), pos = field("pos"), line = field("line");
+			const int bytecodes = field("bytecodes"), first = field("first"), last = field("last");
+			const bool sameFunction = flagField("same");
+			const void* derivedCaller = pointerField("run");
+			const int ranHook = staged >= 0 ? states[index]->RunScriptString("_AbortLeftover.runHook()", false) : -1;
+			lua_sethook(L, NULL, 0, 0); // A hook that never fired is still armed, and its probe state is this arm's.
+			const int hookCalls = field("hookCalls"), hookPos = field("hookPos");
+			const void* hookFunc = pointerField("hookFunc");
+			states[index]->RunScriptString("if _AbortLeftover and _AbortLeftover.cleanup then _AbortLeftover.cleanup() end; _AbortLeftover = nil; _AbortLeftoverProbe = nil; _AbortLeftoverArm = nil", false);
+			// The derived position must name the Lua function the probe was called from, not the prototype the recorder was left in.
+			const bool derived = s_LeftoverFunction != nullptr && s_LeftoverFunction == derivedCaller &&
+			                     s_LeftoverProto != nullptr && s_LeftoverPos >= 0 && bytecodes > 0 && s_LeftoverPos < bytecodes;
+			const bool reported = s_LeftoverFired == 1 && calls == 1 && sameFunction && pos == s_LeftoverPos &&
+			                      line >= first && line <= last && first > 0;
+			const bool idle = s_LeftoverState == static_cast<int>(LJ_TRACE_IDLE);
+			// The hook arm: a Lua function on top, a different Lua caller under it, and the report is the caller's.
+			const bool hookShape = s_HookRan == 1 && s_HookTopIsLua == 1 && s_HookTop != nullptr &&
+			                       s_HookCaller != nullptr && s_HookTop != s_HookCaller;
+			const bool hookDerived = s_HookFired == 1 && s_HookFunction == s_HookCaller && s_HookPos >= 0 &&
+			                         s_HookState == static_cast<int>(LJ_TRACE_IDLE);
+			const bool hookReported = hookCalls == 1 && hookFunc == s_HookCaller && hookPos == s_HookPos;
+			std::cout << "[abort-leftover] state=" << index << " fired=" << s_LeftoverFired
+			          << " derived_pos=" << s_LeftoverPos << " derived_func=" << s_LeftoverFunction
+			          << " caller=" << derivedCaller << " event_calls=" << calls << " event_pos=" << pos
+			          << " event_line=" << line << " lines=" << first << ".." << last
+			          << " bytecodes=" << bytecodes << " jstate=" << s_LeftoverState << std::endl;
+			std::cout << "[abort-leftover-hook] state=" << index << " ran=" << s_HookRan << " fired=" << s_HookFired
+			          << " top=" << s_HookTop << " top_is_lua=" << s_HookTopIsLua << " caller=" << s_HookCaller
+			          << " derived_func=" << s_HookFunction << " derived_pos=" << s_HookPos
+			          << " event_calls=" << hookCalls << " event_func=" << hookFunc << " event_pos=" << hookPos
+			          << " jstate=" << s_HookState << std::endl;
+			const bool rowPassed = staged >= 0 && ran >= 0 && ranHook >= 0 && derived && reported && idle &&
+			                       hookShape && hookDerived && hookReported;
+			std::cout << "[script-graph-selftest] " << (rowPassed ? "PASS " : "FAIL ")
+			          << "abort_leftover_position state=" << index << " fired=" << s_LeftoverFired
+			          << " hook_fired=" << s_HookFired << " derived_func=" << s_LeftoverFunction
+			          << " caller=" << derivedCaller << " derived_pos=" << s_LeftoverPos << " event_pos=" << pos
+			          << " hook_derived_func=" << s_HookFunction << " hook_event_func=" << hookFunc
+			          << " hook_derived_pos=" << s_HookPos << " hook_event_pos=" << hookPos;
+			if (ran < 0 || ranHook < 0) std::cout << " " << states[index]->GetLastError();
+			std::cout << std::endl;
+			passed = rowPassed && passed;
+		}
+#else
+		std::cout << "[script-graph-selftest] SKIP abort_leftover_position no_jit" << std::endl;
+#endif
 		return passed;
 	}
 

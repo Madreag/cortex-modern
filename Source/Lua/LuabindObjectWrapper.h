@@ -44,6 +44,19 @@ namespace RTE {
 		~LuabindObjectWrapper();
 #pragma endregion
 
+#pragma region Preview Windows
+		/// Installs the hook a preview window uses to stop tracking a wrapper that is destructed inside it.
+		/// @param hook The hook, or nullptr to install none.
+		static void SetPreviewDeletionHook(void (*hook)(LuabindObjectWrapper*));
+
+		/// Replaces the wrapped luabind object, destructing the one held now instead of queueing it.
+		/// The wrapper's own address does not change, so a caller holding it keeps its handle.
+		/// Only safe outside the multithreaded script context, where luabind may touch the state.
+		/// @param newLuabindObject The object to wrap, or nullptr to wrap nothing.
+		/// @param ownsObject Whether this wrapper owns the new object.
+		void ResetLuabindObject(luabind::adl::object* newLuabindObject, bool ownsObject = true);
+#pragma endregion
+
 #pragma region Sim Thread Deletion
 		/// Marks the calling thread as the one every Lua-owned engine object's destructor may run on.
 		static void SetSimThread();

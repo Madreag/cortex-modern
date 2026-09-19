@@ -626,23 +626,38 @@ static int trace_abort(jit_State *J)
       cTValue *bot = tvref(L->stack)+LJ_FR2;
       cTValue *frame;
       const BCIns *pc;
+      GCfunc *fn = NULL;
+      GCproto *pt = NULL;
       BCPos pos = 0;
       setstrV(V, V->top++, lj_str_newlit(V, "abort"));
       setintV(V->top++, traceno);
-      /* Find original Lua function call to generate a better error message. */
-      for (frame = L->base-1, pc = J->pc; ; frame = frame_prev(frame)) {
-	if (isluafunc(frame_func(frame))) {
-	  pos = proto_bcpos(funcproto(frame_func(frame)), pc);
-	  break;
-	} else if (frame_prev(frame) <= bot) {
-	  break;
-	} else if (frame_iscont(frame)) {
-	  pc = frame_contpc(frame) - 1;
-	} else {
-	  pc = frame_pc(frame) - 1;
+      /* The recorder's position and its function are set together, so they name one prototype. */
+      if (J->fn && J->pt) {
+	fn = J->fn; pt = J->pt; pc = J->pc;
+      } else {
+	/* Find original Lua function call to generate a better error message. */
+	for (frame = L->base-1, pc = J->pc; frame > bot; frame = frame_prev(frame)) {
+	  if (isluafunc(frame_func(frame))) {
+	    fn = frame_func(frame);
+	    pt = funcproto(fn);
+	    break;
+	  } else if (frame_prev(frame) <= bot) {
+	    fn = frame_func(frame);
+	    break;
+	  } else if (frame_iscont(frame)) {
+	    pc = frame_contpc(frame) - 1;
+	  } else {
+	    pc = frame_pc(frame) - 1;
+	  }
 	}
       }
-      setfuncV(V, V->top++, frame_func(frame));
+      /* A pc from another prototype names no position here, and an abort at a C boundary has none. */
+      if (pt && pc && pc >= proto_bc(pt) && pc < proto_bc(pt)+pt->sizebc)
+	pos = proto_bcpos(pt, pc);
+      if (fn)
+	setfuncV(V, V->top++, fn);
+      else
+	setnilV(V->top++);
       setintV(V->top++, pos);
       copyTV(V, V->top++, L->top-1);
       copyTV(V, V->top++, &J->errinfo);
@@ -780,6 +795,34 @@ void lj_trace_ins(jit_State *J, const BCIns *pc)
     J->state = LJ_TRACE_ERR;
 }
 
+/* The recorder's own pc names the instruction it was left at, which is not where a leftover abort runs.
+** The live position is the frame below the boundary; a boundary with no Lua frame under it has none.
+*/
+static void trace_leftover_pos(jit_State *J, lua_State *L)
+{
+  cTValue *bot = tvref(L->stack)+LJ_FR2;
+  cTValue *frame;
+  const BCIns *pc = NULL;
+  J->pc = NULL;
+  J->fn = NULL;
+  J->pt = NULL;
+  for (frame = L->base-1; frame > bot; frame = frame_prev(frame)) {
+    if (pc && isluafunc(frame_func(frame))) {
+      J->pc = pc;
+      J->fn = frame_func(frame);
+      J->pt = funcproto(J->fn);
+      return;
+    }
+    /* Only a Lua call frame and a continuation carry the caller's pc; a C boundary frame carries a size. */
+    if (frame_islua(frame))
+      pc = frame_pc(frame) - 1;
+    else if (frame_iscont(frame))
+      pc = frame_contpc(frame) - 1;
+    else
+      return;
+  }
+}
+
 /* A leftover 1..6 is driven through trace_state so the real abort runs. */
 void lj_trace_abort_leftover(lua_State *L)
 {
@@ -790,6 +833,7 @@ void lj_trace_abort_leftover(lua_State *L)
     return;
   }
   J->L = L;
+  trace_leftover_pos(J, L);
   while (lj_vm_cpcall(L, NULL, (void *)J, trace_state) != 0)
     J->state = LJ_TRACE_ERR;
 }
