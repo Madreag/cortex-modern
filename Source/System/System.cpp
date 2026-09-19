@@ -29,12 +29,33 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
+#include <ostream>
 #include <regex>
 #include <string>
 #include <utility>
 #include <vector>
 
 using namespace RTE;
+
+namespace {
+	// Every diagnostic line in the process goes out under this one lock, so a worker thread's line
+	// cannot land inside a line another thread is writing.
+	std::mutex& PrintLock() {
+		static std::mutex lock;
+		return lock;
+	}
+
+	void WriteWholeLine(std::ostream& stream, const std::string& line) {
+		std::string whole = line;
+		if (whole.empty() || whole.back() != '\n') {
+			whole += '\n';
+		}
+		std::scoped_lock printLock(PrintLock());
+		stream.write(whole.data(), static_cast<std::streamsize>(whole.size()));
+		stream.flush();
+	}
+} // namespace
 
 unsigned long System::GetProcessID() {
 #ifdef _WIN32
@@ -374,11 +395,19 @@ void System::PrintToCLI(const std::string& stringToPrint) {
 	std::regex regexName("(\"[A-Z].*\"|\'[A-Z].*\')");
 	outputString = std::regex_replace(outputString, regexName, "\033[1;33m$&\033[0;0m");
 
-	std::cout << "\r" << outputString << std::endl;
+	WriteWholeLine(std::cout, "\r" + outputString);
 #elif _WIN32
 	// All the fancy formatting doesn't work with the Windows console so just print the string as it is
-	std::cout << "\r" << stringToPrint << std::endl;
+	WriteWholeLine(std::cout, "\r" + stringToPrint);
 #endif
+}
+
+void System::PrintDiagnosticLine(const std::string& line) {
+	WriteWholeLine(std::cout, line);
+}
+
+void System::PrintDiagnosticErrorLine(const std::string& line) {
+	WriteWholeLine(std::cerr, line);
 }
 
 std::string System::ExtractZippedDataModule(const std::string& zippedModulePath) {
