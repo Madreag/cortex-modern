@@ -3475,9 +3475,24 @@ namespace RTE {
 				*error = "the window copy of tick 3 is not the " + std::to_string(kept.size()) + " observation bytes its own packet wrote";
 				return false;
 			}
-			if (std::search(secondBytes.begin(), secondBytes.end(), keptNewest.begin(), keptNewest.end()) == secondBytes.end() ||
-			    std::search(classicBytes.begin(), classicBytes.end(), keptNewest.begin(), keptNewest.end()) == classicBytes.end()) {
-				*error = "the newest tick's " + std::to_string(keptNewest.size()) + " observation bytes are not in both the window and the classic packet";
+			if (std::search(secondBytes.begin(), secondBytes.end(), keptNewest.begin(), keptNewest.end()) == secondBytes.end()) {
+				*error = "the newest tick's " + std::to_string(keptNewest.size()) + " observation bytes are not in the window packet";
+				return false;
+			}
+			// What a peer without the capability gets is what a sender that never had one would have sent:
+			// the same two ticks encoded by a table and a store that never saw a window.
+			NetSoundObservationDictionary classicOnlyTable;
+			NetLockstepObservationBlocks classicOnlyBlocks;
+			std::vector<uint8_t> classicOnlyFirst;
+			std::vector<uint8_t> classicOnlySecond;
+			if (!NetLockstepCodec::Encode({first}, classicOnlyFirst, &encodeError, &classicOnlyTable, &encoded, &valueEncoded, &classicOnlyBlocks) ||
+			    !NetLockstepCodec::Encode({classicSecond}, classicOnlySecond, &encodeError, &classicOnlyTable, &encoded, &valueEncoded, &classicOnlyBlocks)) {
+				*error = "the window-free reference encode failed: " + encodeError.message;
+				return false;
+			}
+			if (classicOnlyFirst != firstBytes || classicOnlySecond != classicBytes) {
+				*error = "a classic packet from the window path differs from a window-free send: " +
+				         std::to_string(classicBytes.size()) + " bytes against " + std::to_string(classicOnlySecond.size());
 				return false;
 			}
 			// The peer that missed tick 3 reads it out of the window and stays in step for tick 4.
@@ -3504,9 +3519,16 @@ namespace RTE {
 				*error = "the first tick did not decode: " + firstDecoded.error.message;
 				return false;
 			}
+			const uint64_t bindingsBeforeWindow = inStep.Exactly(1).BindingCount();
 			const NetLockstepDecodeResult windowDecoded = NetLockstepCodec::Decode(secondBytes.data(), secondBytes.size(), ControllerFrame::c_Version, &inStep);
 			if (!windowDecoded.ok) {
 				*error = "a peer that already read tick 3 refused the window packet: " + windowDecoded.error.message;
+				return false;
+			}
+			// A copy read past never binds: the table moves only for the newest tick of the packet.
+			if (inStep.Exactly(1).BindingCount() != bindingsBeforeWindow + 1) {
+				*error = "the window packet moved the reader's table from " + std::to_string(bindingsBeforeWindow) +
+				         " to " + std::to_string(inStep.Exactly(1).BindingCount()) + ", not by the newest tick alone";
 				return false;
 			}
 			const auto& windowFrame = std::get<NetLockstepFrame>(windowDecoded.packet.payload);
@@ -3516,6 +3538,86 @@ namespace RTE {
 				*error = "an already-read window copy was not read past: readPast " +
 				         std::to_string(windowFrame.priorWindow.empty() ? false : windowFrame.priorWindow[0].observationsReadPast) +
 				         ", observations " + std::to_string(windowFrame.priorWindow.empty() ? 0 : windowFrame.priorWindow[0].observations.size());
+				return false;
+			}
+			return true;
+		}
+
+		// A delta tick reaches the simulation through the same Apply as a whole frame, so its fields meet
+		// the same rules: a value no whole frame could carry must not ride a window copy either.
+		bool TestFrameWindowDeltaRefusesInvalidFields(std::string* error) {
+			NetLockstepFrame older;
+			older.senderPeerId = 1;
+			older.targetFrame = 3;
+			older.roundId = 11;
+			ControllerFrame first = MakeFrame(100, 1);
+			first.digitalAimSpeed = 0.25F;
+			older.frames = {first};
+			NetLockstepFrame newest = older;
+			newest.targetFrame = 4;
+			ControllerFrame second = first;
+			second.digitalAimSpeed = 0.75F;
+			newest.frames = {second};
+			newest.priorWindow = {older};
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({newest}, bytes, error)) {
+				return false;
+			}
+			// 0.75 rides the newest tick's delta and nothing else in the packet spells those four bytes.
+			const std::array<uint8_t, 4> speedBytes{0x00U, 0x00U, 0x40U, 0x3FU};
+			const auto at = std::search(bytes.begin(), bytes.end(), speedBytes.begin(), speedBytes.end());
+			if (at == bytes.end()) {
+				*error = "the window packet did not carry the newest tick's digital aim speed as a delta";
+				return false;
+			}
+			const std::array<uint8_t, 4> notANumber{0x00U, 0x00U, 0xC0U, 0x7FU};
+			std::copy(notANumber.begin(), notANumber.end(), at);
+			const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes);
+			if (decoded.ok) {
+				const auto& got = std::get<NetLockstepFrame>(decoded.packet.payload);
+				*error = "a window tick carrying a NaN digital aim speed decoded, speed " +
+				         std::to_string(got.frames.empty() ? 0.0F : got.frames.front().digitalAimSpeed);
+				return false;
+			}
+			if (decoded.error.message.find("digital aim speed") == std::string::npos) {
+				*error = "a NaN delta field was refused for the wrong reason: " + decoded.error.message;
+				return false;
+			}
+			return true;
+		}
+
+		// The advertisement is one bit of the Ack's received mask and it is this one; a peer that reads a
+		// different bit agrees no window with a build that sends this.
+		bool TestFrameWindowCapabilityBitIsTheTopAckBit(std::string* error) {
+			const uint16_t port = 43086;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000086ULL, 0, NetTransportLane::InputUnreliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000086ULL, 0, NetTransportLane::InputUnreliable);
+			hostConfig.frameRedundancyTicks = 4;
+			clientConfig.frameRedundancyTicks = 1;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			if (host.FrameWindowAgreed()) {
+				*error = "the host agreed a window before the one-tick client advertised anything";
+				return false;
+			}
+			NetLockstepAck ack;
+			ack.senderPeerId = 2;
+			ack.highestContiguousFrame = 0;
+			ack.receivedMask = 0x80000000U;
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({ack}, bytes, error) || !clientTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.FrameWindowAgreed(); }, error)) {
+				*error = "an Ack carrying the top received-mask bit did not agree the window for that link";
 				return false;
 			}
 			return true;
@@ -3557,7 +3659,9 @@ namespace RTE {
 			const auto clientToHost = client.GetStats().peers.find(1);
 			if (hostToClient == host.GetStats().peers.end() || clientToHost == client.GetStats().peers.end() ||
 			    hostToClient->second.lastFrameReserved != 0 || clientToHost->second.lastFrameReserved != 0) {
-				*error = "classic frame reserved byte is not zero";
+				*error = "classic frame reserved byte is host->client " +
+				         std::to_string(hostToClient == host.GetStats().peers.end() ? -1 : hostToClient->second.lastFrameReserved) +
+				         ", client->host " + std::to_string(clientToHost == client.GetStats().peers.end() ? -1 : clientToHost->second.lastFrameReserved);
 				return false;
 			}
 			if (host.GetStats().windowCopiesSkipped != 0 || client.GetStats().windowCopiesSkipped != 0) {
@@ -3660,6 +3764,73 @@ namespace RTE {
 		}
 
 
+		// A window whose kept blocks outgrow one packet costs the send its redundancy; the tick and its
+		// readings still leave as a classic frame.
+		bool TestFrameWindowDegradesWhenItOutgrowsThePacket(std::string* error) {
+			const uint16_t port = 43087;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000087ULL, 0, NetTransportLane::InputUnreliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000087ULL, 0, NetTransportLane::InputUnreliable);
+			hostConfig.frameRedundancyTicks = 4;
+			clientConfig.frameRedundancyTicks = 4;
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			// Fresh keys every tick, enough of them to fill the observation budget, so four kept blocks
+			// cannot fit one payload.
+			const size_t perTick = 1800;
+			for (uint64_t produced = 0; produced < 5; ++produced) {
+				std::vector<NetSoundObservation> hostObservations;
+				std::vector<NetSoundObservation> clientObservations;
+				hostObservations.reserve(perTick);
+				clientObservations.reserve(perTick);
+				for (size_t index = 0; index < perTick; ++index) {
+					const uint64_t uid = produced * 100000 + index;
+					hostObservations.push_back(MakeObservation(1, 1000000 + uid, produced, 1, 1, 0.5F));
+					clientObservations.push_back(MakeObservation(2, 2000000 + uid, produced, 1, 1, 1.5F));
+				}
+				if (!host.QueueLocalInput(produced, {MakeFrame(100 + static_cast<int64_t>(produced), produced + 1)}, {}, error, hostObservations) ||
+				    !client.QueueLocalInput(produced, {MakeFrame(200 + static_cast<int64_t>(produced), produced + 11)}, {}, error, clientObservations)) {
+					return false;
+				}
+			}
+			std::vector<uint64_t> hostReady;
+			std::vector<uint64_t> clientReady;
+			std::map<uint64_t, size_t> hostRemotes;
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) {
+						hostReady.push_back(ready.frame);
+						hostRemotes[ready.frame] = ready.remoteObservations.size();
+					}
+					DrainReady(client, clientReady);
+					return hostReady.size() == 5 && clientReady.size() == 5;
+				}, error, 4000)) {
+				return false;
+			}
+			const auto hostToClient = host.GetStats().peers.find(2);
+			if (hostToClient == host.GetStats().peers.end() || hostToClient->second.lastFrameReserved != 0) {
+				*error = "a window too large for one packet still went out: reserved " +
+				         std::to_string(hostToClient == host.GetStats().peers.end() ? -1 : hostToClient->second.lastFrameReserved);
+				return false;
+			}
+			for (uint64_t frame = 0; frame < 5; ++frame) {
+				if (hostRemotes[frame] == 0) {
+					*error = "the degraded send lost the tick's readings at frame " + std::to_string(frame);
+					return false;
+				}
+			}
+			return true;
+		}
+
 		bool TestFrameWindowStripsRelayWithoutCapability(std::string* error) {
 			const uint16_t port = 43083;
 			const uint64_t sessionId = 0x7000000000000083ULL;
@@ -3707,25 +3878,51 @@ namespace RTE {
 				*error = "mixed-capability three-peer lockstep did not reach Running";
 				return false;
 			}
+			// Every tick carries a reading of its own, so the peer without the capability is the one that
+			// says whether the classic copy was written with the sender's dictionary.
+			std::map<uint64_t, float> hostSent;
 			for (uint64_t f = 0; f < 3; ++f) {
-				if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error) ||
-				    !clientA.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error) ||
-				    !clientB.QueueLocalInput(f, {MakeFrame(300 + static_cast<int64_t>(f), f + 1)}, {}, error)) {
+				const float hostValue = 0.5F + static_cast<float>(f);
+				hostSent[f] = hostValue;
+				if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error,
+				        {MakeObservation(1, 700 + f, f, 1, 1, hostValue)}) ||
+				    !clientA.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error,
+				        {MakeObservation(2, 800 + f, f, 1, 1, 2.5F + static_cast<float>(f))}) ||
+				    !clientB.QueueLocalInput(f, {MakeFrame(300 + static_cast<int64_t>(f), f + 1)}, {}, error,
+				        {MakeObservation(3, 900 + f, f, 1, 1, 3.5F + static_cast<float>(f))})) {
 					return false;
 				}
 			}
 			std::vector<uint64_t> hostReady, aReady, bReady;
+			std::map<uint64_t, size_t> classicRemotes;
 			if (!drive([&] {
 					DrainReady(host, hostReady);
 					DrainReady(clientA, aReady);
-					DrainReady(clientB, bReady);
+					NetLockstepReadyFrame ready;
+					while (clientB.PopReadyFrame(ready)) {
+						bReady.push_back(ready.frame);
+						classicRemotes[ready.frame] = ready.remoteObservations.size();
+					}
 					return hostReady.size() >= 3 && aReady.size() >= 3 && bReady.size() >= 3;
 				})) {
 				*error = "mixed-capability three-peer lockstep did not produce 3 ready frames";
 				return false;
 			}
-			if (host.FrameWindowAgreed() || clientB.FrameWindowAgreed()) {
-				*error = "the window was agreed while a peer never advertised";
+			if (host.FrameWindowAgreed() || clientA.FrameWindowAgreed()) {
+				*error = "a window was agreed while a peer never advertised";
+				return false;
+			}
+			for (uint64_t f = 0; f < 3; ++f) {
+				if (classicRemotes[f] != 2) {
+					*error = "the peer without the capability committed " + std::to_string(classicRemotes[f]) +
+					         " of the 2 remote observations at frame " + std::to_string(f);
+					return false;
+				}
+			}
+			// A classic copy written with no dictionary would leave the sender's own table empty.
+			if (host.ObservationBindingsSpelled(1) == 0 || clientA.ObservationBindingsSpelled(2) == 0) {
+				*error = "the sender spelled " + std::to_string(host.ObservationBindingsSpelled(1)) +
+				         " keys for its own stream and the capable client " + std::to_string(clientA.ObservationBindingsSpelled(2));
 				return false;
 			}
 			const auto hostToClassic = host.GetStats().peers.find(3);
@@ -5808,10 +6005,6 @@ namespace RTE {
 			(void)drive(2000, [] { return false; });
 			if (stayer.FrameWindowAgreed()) {
 				*error = "a peer that repeats one tick advertised the window in its hold heartbeats";
-				return false;
-			}
-			if (host.FrameWindowAgreed()) {
-				*error = "the ticks=1 host agreed a window of its own";
 				return false;
 			}
 			return true;
@@ -13839,6 +14032,9 @@ namespace RTE {
 		    !TestFrameWindowKeepsClassicReservedZero(&error) ||
 		    !TestFrameWindowCodecRoundTrip(&error) ||
 		    !TestFrameWindowRepeatsObservationBlocks(&error) ||
+		    !TestFrameWindowDeltaRefusesInvalidFields(&error) ||
+		    !TestFrameWindowCapabilityBitIsTheTopAckBit(&error) ||
+		    !TestFrameWindowDegradesWhenItOutgrowsThePacket(&error) ||
 		    !TestFrameWindowStaysClassicWithoutCapability(&error) ||
 		    !TestFrameWindowSurvivesUnreliableLoss(&error) ||
 		    !TestFrameWindowStripsRelayWithoutCapability(&error) ||
