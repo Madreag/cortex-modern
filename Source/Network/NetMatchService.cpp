@@ -423,6 +423,20 @@ static std::string ResyncSaveName() {
 			if (error) *error = "join address must not be empty";
 			return false;
 		}
+		if (!request.host && request.sessionId.empty() && g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) {
+			if (error) *error = "Relay only requires an Internet session; select a game from the Internet list";
+			return false;
+		}
+		if (g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly &&
+		    (g_SettingsMan.GetSessionDirectoryUrl().empty() || (request.host && !g_SettingsMan.GetNetworkIceEnable()))) {
+			if (error) *error = "Relay only needs a session directory and NAT traversal enabled";
+			return false;
+		}
+		if (request.host && g_SettingsMan.GetNetworkHostRelayMode() == SettingsMan::NetworkHostRelayMode::Fixed &&
+		    NetRelayConfig::Fixed(g_SettingsMan.GetNetworkTurnServers(), g_SettingsMan.GetNetworkTurnUser(), g_SettingsMan.GetNetworkTurnPass(), "host", UINT64_MAX).Empty()) {
+			if (error) *error = "Fixed relay needs a valid address, username and password in Host Options > Network";
+			return false;
+		}
 		// Past the refusals: the settings are read once here, where a real host starts, and ride the
 		// request to both roster builds, so the worker's copy cannot pick up a later menu edit.
 		SeatSavedOptions(request);
@@ -532,7 +546,8 @@ static std::string ResyncSaveName() {
 		// move afterwards. Only a host ever lists itself.
 		const std::string directoryListenAddr = NetLanDiscovery::GetPrimaryLocalAddress();
 		const bool directoryConfigured = !g_SettingsMan.GetSessionDirectoryUrl().empty();
-		const bool iceEnabled = g_SettingsMan.GetNetworkIceEnable() && directoryConfigured &&
+		const bool icePreference = request.host || g_SettingsMan.HasNetworkIceEnableOverride() ? g_SettingsMan.GetNetworkIceEnable() : true;
+		const bool iceEnabled = icePreference && directoryConfigured &&
 		                        (request.host || !request.sessionId.empty());
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -542,6 +557,23 @@ static std::string ResyncSaveName() {
 			m_IceJoinSessionId = request.sessionId;
 			m_IceReport.clear();
 			m_IceRoute.clear();
+			SetRelayOfferLocked({});
+			m_RelayError.clear();
+			m_RelayReady = false;
+			m_RelayPublishPending = false;
+			m_RelayAttempted = false;
+			m_RelayReplies = m_Directory.IceReplies();
+			m_NextRelayRequestMs = 0;
+			m_FreshRelayRequested = true;
+			m_HostRelayMode = static_cast<int>(g_SettingsMan.GetNetworkHostRelayMode());
+			m_ConnectionMode = static_cast<int>(g_SettingsMan.GetNetworkConnectionMode());
+			m_FixedRelayOffer = NetRelayConfig::Fixed(g_SettingsMan.GetNetworkTurnServers(), g_SettingsMan.GetNetworkTurnUser(), g_SettingsMan.GetNetworkTurnPass(),
+			                                         "host", UnixNowMs(nullptr) / 1000 + 3600);
+			if (m_HostRelayMode == 2) {
+				SetRelayOfferLocked(m_FixedRelayOffer);
+				m_RelayReady = true;
+				if (m_RelayOffer.Empty()) m_RelayError = "Fixed relay needs an address, username and password";
+			}
 			m_DirectorySessionId.clear();
 			m_DirectoryToken.clear();
 			m_DirectoryRegistered = false;
@@ -689,6 +721,7 @@ static std::string ResyncSaveName() {
 				if (error) *error = m_ErrorText;
 				return false;
 			}
+			m_FreshRelayRequested = true;
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
 			m_ResyncSourceRound = 0;
@@ -915,6 +948,7 @@ static std::string ResyncSaveName() {
 				return false;
 			}
 			isHost = m_IsHost;
+			m_FreshRelayRequested = true;
 			snapshotProvider = m_Runner ? m_Runner->GetSnapshotProviderPeerId() : 0;
 			m_DiagnosticRuntimeError = ScenarioRunner::GetControllerReplayError();
 			m_ResyncHealStartMs = SteadyNowMs();
@@ -1962,6 +1996,7 @@ static std::string ResyncSaveName() {
 			}
 		}
 		m_Directory.Update(nowMs);
+		UpdateRelayOffer(nowMs);
 		{
 			// The worker cannot touch the directory client, so what it needs is published here.
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -3279,6 +3314,13 @@ static std::string ResyncSaveName() {
 		m_Coordinator->SetSessionEventSink([this](const NetTransportEvent& event) {
 			if (event.type == NetTransportEventType::PacketReceived && NetLobbyProtocol::Decode(event.bytes).ok) {
 				const auto message = NetLobbyProtocol::Decode(event.bytes);
+				if (const auto* config = std::get_if<NetLobbyMatchConfig>(&message.message.payload)) {
+					if (!m_IsHost && m_Session && event.peerId == m_Session->GetRemoteTransportPeerId() &&
+					    NetMatchConfigUtil::HashConfig(config->config) == NetMatchConfigUtil::HashConfig(m_AdoptedMatchConfig)) {
+						m_PendingSessionEvents.push_back(event);
+						return;
+					}
+				}
 				if (const auto* capsule = std::get_if<NetLobbyMigration>(&message.message.payload)) {
 					if (!m_IsHost && capsule->kind == 2 && m_Coordinator && m_Coordinator->UsesTransportPeer(event.peerId))
 						m_PendingSessionEvents.push_back(event);
@@ -4006,6 +4048,7 @@ static std::string ResyncSaveName() {
 				// The coordinator owns the transport queue mid-match, so this pump is the only
 				// driver that ever drains the session's chat outbox here.
 				m_Session->PumpChatOutbox();
+				if (ActiveWireLocked()) PublishRelayOfferLocked(*m_Session, *ActiveWireLocked());
 			}
 		}
 		const bool hostAdmission = m_AdmissionAttached && m_IsHost;
@@ -4057,6 +4100,16 @@ static std::string ResyncSaveName() {
 		for (const NetTransportEvent& event: events) {
 			if (!m_IsHost && event.type == NetTransportEventType::PacketReceived && m_Coordinator && m_Coordinator->UsesTransportPeer(event.peerId)) {
 				const auto decoded = NetLobbyProtocol::Decode(event.bytes);
+				if (decoded.ok && m_Session && event.peerId == m_Session->GetRemoteTransportPeerId()) {
+					if (const auto* config = std::get_if<NetLobbyMatchConfig>(&decoded.message.payload)) {
+						if (NetMatchConfigUtil::HashConfig(config->config) == NetMatchConfigUtil::HashConfig(m_AdoptedMatchConfig)) {
+							SetRelayOfferLocked(config->config.relay.Usable(UnixNowMs(nullptr) / 1000) ? config->config.relay : NetRelayConfig{});
+							m_AdoptedMatchConfig.relay = m_RelayOffer;
+							if (m_Runner) m_Runner->SetRelayOffer(m_RelayOffer);
+							continue;
+						}
+					}
+				}
 				if (decoded.ok)
 					if (const auto* capsule = std::get_if<NetLobbyMigration>(&decoded.message.payload)) {
 						(void)OpenMigrationCapsuleLocked(*capsule);
@@ -5037,7 +5090,7 @@ static std::string ResyncSaveName() {
 					{"end_reason", info.endReason},
 					{"remote_identity", info.remoteIdentity},
 					{"remote_address", info.remoteAddress},
-					{"relayed", info.relayPop != 0},
+					{"relayed", (info.flags & 16) != 0},
 					{"relay_pop", info.relayPop},
 				};
 			}
@@ -5114,33 +5167,103 @@ static std::string ResyncSaveName() {
 		return false;
 	}
 
-	GnsP2PConfig NetMatchService::BuildIceConfig(const SettingsMan& settings, const std::string& localIdentity, int localVirtualPort) {
+	GnsP2PConfig NetMatchService::BuildIceConfig(const SettingsMan& settings, const std::string& localIdentity, int localVirtualPort, const NetRelayConfig& relay) {
 		GnsP2PConfig config;
 		config.stunServerList = settings.GetNetworkStunServers();
-		// An empty STUN list keeps private candidates unless the user supplies a relay.
-		config.iceEnable = config.stunServerList.empty() && settings.GetNetworkTurnServers().empty() ? 2 : 0x7fffffff;
+		config.connectionMode = static_cast<int>(settings.GetNetworkConnectionMode());
+		const uint64_t now = UnixNowMs(nullptr) / 1000;
+		NetRelayConfig selected = relay;
+		if (!settings.GetNetworkPlayerTurnServers().empty()) {
+			selected = NetRelayConfig::Fixed(settings.GetNetworkPlayerTurnServers(), settings.GetNetworkPlayerTurnUser(), settings.GetNetworkPlayerTurnPass(), "personal", now + 3600);
+		}
+		if (config.connectionMode != 1 && selected.Usable(now)) selected.UdpLists(config.turnServerList, config.turnUserList, config.turnPassList);
+		config.iceEnable = (config.stunServerList.empty() ? 2 : 6) | (config.turnServerList.empty() ? 0 : 1);
+		if (config.connectionMode == 2) {
+			config.iceEnable = 1;
+			config.stunServerList.clear();
+		}
 		config.localIdentity = localIdentity;
 		config.localVirtualPort = localVirtualPort;
 		return config;
 	}
 
-#ifdef CCCP_WITH_GNS
-	namespace {
-		// TURN has no per-connection config value, so the lists go on the global interface.
-		void ApplyGlobalIceServers() {
-			if (!SteamNetworkingUtils()) {
-				return;
+	void NetMatchService::SetRelayOfferLocked(const NetRelayConfig& offer) {
+		if (m_RelayOffer == offer && m_RelaySnapshot.load()) return;
+		m_RelayOffer = offer;
+		m_RelaySnapshot.store(std::make_shared<const NetRelayConfig>(offer));
+	}
+
+	bool NetMatchService::ReadRelayOffer(NetRelayConfig& offer) const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		offer = m_RelayOffer.Usable(UnixNowMs(nullptr) / 1000) ? m_RelayOffer : NetRelayConfig{};
+		return m_RelayReady;
+	}
+
+	std::string NetMatchService::GetNatModeText() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_IceEnabled || m_IceRoute == "ip") return "Port forwarding required";
+		if (m_RelayOffer.Usable(UnixNowMs(nullptr) / 1000)) return "NAT: STUN + relay";
+		return g_SettingsMan.GetNetworkStunServers().empty() ? "Port forwarding required" : "NAT: STUN";
+	}
+
+	std::string NetMatchService::GetRelayError() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_RelayError;
+	}
+
+	void NetMatchService::UpdateRelayOffer(uint64_t nowMs) {
+		const uint64_t wall = UnixNowMs(nullptr) / 1000;
+		bool request = false;
+		NetRelayConfig fixed;
+		std::string matchId;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!m_IsHost || !m_IceEnabled || m_HostRelayMode == 0) { m_RelayReady = true; m_FreshRelayRequested = false; return; }
+			if (m_RelayReplies != m_Directory.IceReplies()) {
+				m_RelayReplies = m_Directory.IceReplies();
+				if (m_Directory.IceServers().Usable(wall)) SetRelayOfferLocked(m_Directory.IceServers());
+				else if (!m_RelayOffer.Usable(wall)) SetRelayOfferLocked({});
+				m_RelayError = m_Directory.IceError();
+				m_RelayReady = true;
+				m_RelayPublishPending = true;
 			}
-			const auto set = [](ESteamNetworkingConfigValue value, const std::string& text) {
-				SteamNetworkingUtils()->SetGlobalConfigValueString(value, text.c_str());
-			};
-			set(k_ESteamNetworkingConfig_P2P_STUN_ServerList, g_SettingsMan.GetNetworkStunServers());
-			set(k_ESteamNetworkingConfig_P2P_TURN_ServerList, g_SettingsMan.GetNetworkTurnServers());
-			set(k_ESteamNetworkingConfig_P2P_TURN_UserList, g_SettingsMan.GetNetworkTurnUser());
-			set(k_ESteamNetworkingConfig_P2P_TURN_PassList, g_SettingsMan.GetNetworkTurnPass());
+			if (!m_RelayOffer.Empty() && !m_RelayOffer.Usable(wall)) { SetRelayOfferLocked({}); m_RelayPublishPending = true; }
+			if (m_Directory.GetState() != NetDirectoryClient::State::Registered || m_Directory.IceRequestPending()) return;
+			const bool fresh = m_FreshRelayRequested.load();
+			request = (fresh || m_RelayOffer.expiresAt <= wall + 300) && nowMs >= m_NextRelayRequestMs;
+			if (!request) return;
+			m_FreshRelayRequested = false;
+			if (fresh && m_HostRelayMode == 1) m_RelayReady = false;
+			m_NextRelayRequestMs = nowMs + 15000;
+			matchId = std::to_string(m_MatchConfig.sessionId) + ":" + std::to_string(m_LastRoundId);
+			if (m_HostRelayMode == 2) {
+				fixed = m_FixedRelayOffer;
+				if (fixed.Empty()) { m_RelayReady = true; return; }
+				fixed.matchId = matchId;
+				fixed.expiresAt = wall + 3600;
+				SetRelayOfferLocked(fixed);
+				m_RelayReady = true;
+				m_RelayPublishPending = true;
+			}
 		}
-	} // namespace
-#endif
+		if (request) m_Directory.RequestIceServers(matchId, 3600, fixed.Empty() ? nullptr : &fixed);
+	}
+
+	void NetMatchService::PublishRelayOfferLocked(NetSession& session, INetTransport& wire) {
+		if (!m_IsHost || !m_RelayPublishPending || !m_Runner) return;
+		NetMatchConfig config = m_Runner->GetMatchConfig();
+		config.relay = m_RelayOffer.Usable(UnixNowMs(nullptr) / 1000) ? m_RelayOffer : NetRelayConfig{};
+		std::vector<uint8_t> bytes;
+		if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{config}}, bytes)) return;
+		bool sent = true;
+		for (const auto& peer : session.GetReadyPeers()) {
+			sent = wire.Send(peer.transportPeerId, NetTransportLane::ControlReliable, bytes) && sent;
+		}
+		m_Runner->SetRelayOffer(config.relay);
+		m_AdoptedMatchConfig.relay = config.relay;
+		m_MatchConfig.relay = config.relay;
+		m_RelayPublishPending = !sent;
+	}
 
 	bool NetMatchService::SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error) {
 #ifndef CCCP_WITH_GNS
@@ -5151,7 +5274,6 @@ static std::string ResyncSaveName() {
 		const std::string baseUrl = g_SettingsMan.GetSessionDirectoryUrl();
 		const std::string installKey = g_SettingsMan.GetOrCreateSessionDirectoryInstallKey();
 		const std::string certPin = g_SettingsMan.GetSessionDirectoryCertSha256();
-		ApplyGlobalIceServers();
 		m_Dispatcher = std::make_unique<GnsDirectorySignalDispatcher>();
 
 		GnsDirectorySignalDispatcher::Config config;
@@ -5175,7 +5297,16 @@ static std::string ResyncSaveName() {
 			}
 			const std::string iceSeed = (request.persistentWorld && !request.worldId.empty()) ? request.worldId : sessionId;
 			const std::string identity = NetIceHostIdentity(iceSeed);
-			mux.SetHostP2P(c_IceVirtualPort, BuildIceConfig(g_SettingsMan, identity, c_IceVirtualPort));
+			NetRelayConfig relay;
+			const uint64_t relayDeadline = SteadyNowMs() + c_IceConnectBudgetMs;
+			while (!ReadRelayOffer(relay) && !m_CancelRequested.load() && SteadyNowMs() < relayDeadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+			const GnsP2PConfig ice = BuildIceConfig(g_SettingsMan, identity, c_IceVirtualPort, relay);
+			if (ice.connectionMode == 2 && ice.turnServerList.empty()) {
+				if (error) *error = "Relay setup failed: no unexpired relay credentials; configure a relay or choose Automatic";
+				return false;
+			}
+			mux.SetHostP2P(c_IceVirtualPort, ice);
+			m_RelayAttempted = !ice.turnServerList.empty();
 			m_Dispatcher->SetPolling(true, SteadyNowMs());
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
@@ -5229,6 +5360,10 @@ static std::string ResyncSaveName() {
 
 		// Automatic prefers ICE because a directory address can be private.
 		if (!NetIcePrefersP2P(target, m_IceEnabled)) {
+			if (g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) {
+				if (error) *error = "Relay only requires a host that offers an Internet ICE join";
+				return false;
+			}
 			if (target.address.empty() || target.port == 0) {
 				if (error) *error = "NAT traversal is Off: enable Automatic or ask the host for a forwarded UDP address";
 				return false;
@@ -5257,7 +5392,26 @@ static std::string ResyncSaveName() {
 		NetMuxTransport::JoinSpec spec;
 		spec.peerIdentity = target.identity;
 		spec.remoteVirtualPort = c_IceVirtualPort;
-		spec.p2p = BuildIceConfig(g_SettingsMan, std::string(), c_IceVirtualPort);
+		NetRelayConfig relay;
+		if (g_SettingsMan.GetNetworkConnectionMode() != SettingsMan::NetworkConnectionMode::DirectOnly && g_SettingsMan.GetNetworkPlayerTurnServers().empty()) {
+			browse.FetchIceServers(request.sessionId);
+			const uint64_t relayDeadline = SteadyNowMs() + c_IceConnectBudgetMs;
+			while (browse.IceRequestPending() && !m_CancelRequested.load() && SteadyNowMs() < relayDeadline) {
+				browse.Update(SteadyNowMs());
+				std::this_thread::sleep_for(std::chrono::milliseconds(20));
+			}
+			relay = browse.IceServers();
+		}
+		spec.p2p = BuildIceConfig(g_SettingsMan, std::string(), c_IceVirtualPort, relay);
+		if (spec.p2p.connectionMode == 2 && spec.p2p.turnServerList.empty()) {
+			if (error) *error = "Relay setup failed: no unexpired relay credentials; configure your relay or choose Automatic";
+			return false;
+		}
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			SetRelayOfferLocked(relay);
+			m_RelayAttempted = !spec.p2p.turnServerList.empty();
+		}
 		GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
 		spec.makeSignaling = [dispatcher] { return dispatcher->CreateJoinSignaling(); };
 		mux.SetJoinSpec(std::move(spec));
@@ -5294,6 +5448,10 @@ static std::string ResyncSaveName() {
 		if (config.nowMs) session.Tick(config.nowMs(), false);
 		if (transportReady && runner.Start(wire, session, coordinator, config, error)) return true;
 		if (config.host || !NetIcePrefersP2P(target, m_IceEnabled) || m_CancelRequested.load()) return false;
+		if (m_ConnectionMode == 2) {
+			if (error) *error = "Relay connection failed: " + *error + "; check the relay or choose Automatic";
+			return false;
+		}
 		const auto routeFailed = [&] {
 			const bool unconnectedClose = session.IsClosed() && session.GetRejectReason() == NetRejectReason::InternalError && session.GetMismatchKey().empty();
 			return runner.GetLobbySession().GetState() == NetLobbyState::Idle &&
@@ -5303,7 +5461,7 @@ static std::string ResyncSaveName() {
 		};
 		if (transportReady && !routeFailed()) return false;
 		noDirectRoute = true;
-		const std::string iceError = (transportReady ? "ICE connection failed: " : "") + (error ? *error : std::string());
+		const std::string iceError = (transportReady ? (m_RelayAttempted ? "ICE direct/relay connection failed: " : "ICE connection failed: ") : "") + (error ? *error : std::string());
 		if (target.address.empty() || target.port == 0) {
 			if (error) *error = iceError + "; no direct IP address advertised";
 			return false;
@@ -5342,16 +5500,18 @@ static std::string ResyncSaveName() {
 		return started;
 	}
 
-	std::string NetMatchService::SetupFailureStatus(const NetSession* session, bool noDirectRoute) {
+	std::string NetMatchService::SetupFailureStatus(const NetSession* session, bool noDirectRoute, bool relayFailed) {
 		if (session && session->HasReject()) {
 			if (session->GetRejectReason() == NetRejectReason::ParticipantRemoved) return "The host removed you from this session";
 			if (session->GetRejectReason() == NetRejectReason::ParticipantBanned) return "The host banned you from this session";
 			if (session->GetRejectSummary() == "Match roster refused") return "Match roster refused";
 		}
+		if (relayFailed) return "Relay route failed (TURN): check the relay or forward the host's UDP port";
 		return noDirectRoute ? "No direct route (NAT): forward the host's UDP port or use LAN" : "Network setup failed";
 	}
 
 	void NetMatchService::ConfigureLobbyStart(NetMatchRunnerConfig& config) {
+		config.relayOffer = [this](NetRelayConfig& offer) { return ReadRelayOffer(offer) && !m_FreshRelayRequested.load(); };
 		config.sessionWaitMs = c_MenuLobbyWaitMs;
 		config.lobbyWaitMs = c_MenuLobbyWaitMs;
 		if (config.host) {
@@ -5471,6 +5631,7 @@ static std::string ResyncSaveName() {
 			// The options view reads the same agreed config on every peer; the mirror sits under the
 			// same lock the snapshot publish already holds.
 			m_AdoptedMatchConfig = config;
+			if (!m_IsHost) SetRelayOfferLocked(config.relay.Usable(UnixNowMs(nullptr) / 1000) ? config.relay : NetRelayConfig{});
 			AdoptWorldTicketSession(config);
 			uint8_t localPeerId = m_LocalPeerId;
 			uint32_t pingMs = 0;
@@ -5587,11 +5748,28 @@ static std::string ResyncSaveName() {
 #ifdef CCCP_WITH_GNS
 			if (started && m_Dispatcher) {
 				GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
-				mux->SetPump([dispatcher] { dispatcher->Update(SteadyNowMs()); });
+				mux->SetPump([this, dispatcher, p2p = mux->P2PGns(), previous = NetRelayConfig{},
+				              initial = request.host ? mux->HostP2PConfig() : mux->GetJoinSpec().p2p,
+				              personal = !g_SettingsMan.GetNetworkPlayerTurnServers().empty()]() mutable {
+					dispatcher->Update(SteadyNowMs());
+					const auto snapshot = m_RelaySnapshot.load();
+					NetRelayConfig offer = snapshot ? *snapshot : NetRelayConfig{};
+					if (offer != previous) {
+						GnsP2PConfig update = initial;
+						if (!personal && initial.connectionMode != 1) {
+							update.turnServerList.clear(); update.turnUserList.clear(); update.turnPassList.clear();
+							if (offer.Usable(UnixNowMs(nullptr) / 1000)) offer.UdpLists(update.turnServerList, update.turnUserList, update.turnPassList);
+							update.iceEnable = initial.connectionMode == 2 ? 1 : (initial.stunServerList.empty() ? 2 : 6) | (update.turnServerList.empty() ? 0 : 1);
+						}
+						p2p->UpdateListenerIceServers(update);
+						previous = std::move(offer);
+					}
+				});
 			}
 #endif
 		}
 		if (started || iceSetupFailed) {
+			if (request.host) ReadRelayOffer(runnerConfig.matchConfig.relay);
 			started = StartLobbyConnection(mux, *transport, *session, *coordinator, *runner, runnerConfig, iceTarget, started, noDirectRoute, &error);
 		}
 		// A joiner whose lobby round carried a match state is RECONNECTING into a live match; it
@@ -5657,7 +5835,7 @@ static std::string ResyncSaveName() {
 				m_Coordinator = std::move(coordinator);
 				m_Runner = std::move(runner);
 				m_State = NetMatchServiceState::Failed;
-				m_StatusText = SetupFailureStatus(m_Session.get(), noDirectRoute);
+				m_StatusText = SetupFailureStatus(m_Session.get(), noDirectRoute, (m_RelayAttempted && noDirectRoute) || error.starts_with("Relay "));
 				m_ErrorText = error;
 				// §9b: a live match is the one refusal a joiner can answer, by applying for a seat.
 				m_JoinRefusedByLiveMatch = !request.host && m_Session && m_Session->HasReject() &&
@@ -5834,6 +6012,7 @@ static std::string ResyncSaveName() {
 			// The panel's rows come from here while the worker owns the plane: after the drain, so a
 			// removed seat has stopped being a row the host can act on by the time the result is read.
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (ActiveWireLocked()) PublishRelayOfferLocked(session, *ActiveWireLocked());
 			PublishLobbyModerationViewLocked();
 		};
 	}

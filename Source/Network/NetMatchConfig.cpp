@@ -7,8 +7,110 @@
 
 #include <algorithm>
 #include <set>
+#include <regex>
 
 namespace RTE {
+
+	bool NetRelayConfig::Valid() const {
+		if (Empty()) return matchId.empty() && expiresAt == 0;
+		if (matchId.empty() || matchId.size() > 128 || expiresAt == 0 || iceServers.size() > 8) return false;
+		static const std::regex urlPattern(R"((stun|turn|turns):[A-Za-z0-9.\-\[\]:]+(\?transport=(udp|tcp))?)");
+		const auto textValid = [](const std::string& text) {
+			return !text.empty() && text.size() <= 1024 && std::none_of(text.begin(), text.end(), [](unsigned char ch) { return ch < 32 || ch == ','; });
+		};
+		bool relay = false;
+		for (const auto& server : iceServers) {
+			if (server.urls.empty() || server.urls.size() > 8) return false;
+			for (const auto& url : server.urls) {
+				if (url.size() > 256 || !std::regex_match(url, urlPattern)) return false;
+				if (!url.starts_with("stun:")) {
+					relay = true;
+					if (!textValid(server.username) || !textValid(server.credential)) return false;
+				}
+			}
+		}
+		return relay;
+	}
+
+	std::string NetRelayConfig::ToJson() const {
+		if (Empty()) return "{}";
+		nlohmann::json servers = nlohmann::json::array();
+		for (const auto& server : iceServers) {
+			servers.push_back({{"urls", server.urls}, {"username", server.username}, {"credential", server.credential}});
+		}
+		return nlohmann::json{{"match_id", matchId}, {"expires_at", expiresAt}, {"iceServers", servers}}.dump();
+	}
+
+	bool NetRelayConfig::FromJson(const std::string& text, NetRelayConfig& out) {
+		if (text.size() > 32768) return false;
+		try {
+			const auto json = nlohmann::json::parse(text);
+			if (!json.is_object()) return false;
+			if (json.empty()) { out = {}; return true; }
+			for (const auto& [key, value] : json.items()) {
+				if (key != "match_id" && key != "expires_at" && key != "iceServers") return false;
+			}
+			NetRelayConfig parsed;
+			parsed.matchId = json.at("match_id").get<std::string>();
+			if (!json.at("expires_at").is_number_unsigned()) return false;
+			parsed.expiresAt = json.at("expires_at").get<uint64_t>();
+			if (!json.at("iceServers").is_array()) return false;
+			for (const auto& entry : json.at("iceServers")) {
+				if (!entry.is_object()) return false;
+				for (const auto& [key, value] : entry.items()) {
+					if (key != "urls" && key != "username" && key != "credential") return false;
+				}
+				NetIceServer server;
+				if (entry.at("urls").is_string()) server.urls.push_back(entry.at("urls").get<std::string>());
+				else server.urls = entry.at("urls").get<std::vector<std::string>>();
+				server.username = entry.value("username", std::string());
+				server.credential = entry.value("credential", std::string());
+				parsed.iceServers.push_back(std::move(server));
+			}
+			if (!parsed.Valid()) return false;
+			out = std::move(parsed);
+			return true;
+		} catch (...) { return false; }
+	}
+
+	NetRelayConfig NetRelayConfig::Fixed(const std::string& servers, const std::string& user, const std::string& password, const std::string& id, uint64_t expiry) {
+		NetRelayConfig result;
+		if (servers.empty()) return result;
+		NetIceServer server;
+		size_t begin = 0;
+		while (begin < servers.size()) {
+			const size_t end = servers.find(',', begin);
+			std::string url = servers.substr(begin, end == std::string::npos ? end : end - begin);
+			const size_t first = url.find_first_not_of(" \t");
+			if (first == std::string::npos) return {};
+			url = url.substr(first, url.find_last_not_of(" \t") - first + 1);
+			if (!url.starts_with("turn:") && !url.starts_with("turns:")) url = "turn:" + url;
+			server.urls.push_back(std::move(url));
+			if (end == std::string::npos) break;
+			begin = end + 1;
+		}
+		server.username = user;
+		server.credential = password;
+		result.matchId = id;
+		result.expiresAt = expiry;
+		result.iceServers.push_back(std::move(server));
+		return result.Valid() ? result : NetRelayConfig{};
+	}
+
+	void NetRelayConfig::UdpLists(std::string& servers, std::string& users, std::string& passwords) const {
+		servers.clear(); users.clear(); passwords.clear();
+		for (const auto& server : iceServers) {
+			for (const auto& url : server.urls) {
+				if (!url.starts_with("turn:")) continue;
+				const size_t query = url.find('?');
+				if (query != std::string::npos && url.substr(query) != "?transport=udp") continue;
+				const std::string separator = servers.empty() ? "" : ",";
+				servers += separator + url.substr(5, query == std::string::npos ? query : query - 5);
+				users += separator + server.username;
+				passwords += separator + server.credential;
+			}
+		}
+	}
 
 	namespace {
 		using json = nlohmann::json;
@@ -252,11 +354,12 @@ namespace RTE {
 	}
 
 	bool NetMatchConfigUtil::ValidateLocalAlpha(const NetMatchConfig& config, std::string* error) {
-		if (config.version != 2 && config.version != 3 && config.version != c_Version && config.version != c_PersistentWorldVersion) {
+		if (config.version < 2 || config.version > c_PersistentWorldVersion) {
 			if (error) *error = "match config version is unsupported";
 			return false;
 		}
 		auto refuse = [&](const char* reason) { if (error) *error = reason; return false; };
+		if (!config.relay.Valid() || (config.version < c_RelayLayoutVersion && !config.relay.Empty())) return refuse("relay offer is invalid for this config");
 		if (config.version == 2) {
 			// A v2 config predates the rules block, so it carries the pre-rules end rule too.
 			NetMatchConfig legacyDefaults;
@@ -266,12 +369,12 @@ namespace RTE {
 		}
 		// Every pre-v4 config predates the spectate byte, so it cannot carry anything but the pre-spectate rule.
 		if (config.version < 4 && config.brainlessHumansSpectate) return refuse("pre-spectate config cannot carry the spectate rule");
-		// The persistent world's fields reached the wire in v5; an ordinary match stays on v4 and hashes as it always did.
+		// Recorded v5 worlds retain their original layout.
 		const auto carriesWorldCapacity = [&] {
 			return config.worldMaxSpectators != 0 || config.worldRespawnDelaySeconds != 0 ||
 			       std::any_of(config.worldTeamCapacity.begin(), config.worldTeamCapacity.end(), [](uint8_t capacity) { return capacity != 0; });
 		};
-		if (config.version < c_PersistentWorldVersion) {
+		if (config.version < c_WorldLayoutVersion) {
 			if (config.persistentWorld) return refuse("pre-world config cannot carry the persistent world rule");
 			if (!config.worldId.empty() || config.worldBoot != 0) return refuse("pre-world config cannot carry a world identity");
 			if (carriesWorldCapacity()) return refuse("pre-world config cannot carry world capacity");
@@ -295,6 +398,7 @@ namespace RTE {
 		} else if (carriesWorldCapacity()) {
 			return refuse("an ordinary match cannot carry world capacity");
 		}
+		if (config.version >= c_RelayLayoutVersion && config.version != (config.persistentWorld ? c_PersistentWorldVersion : c_Version)) return refuse("match config version does not match the world mode");
 		if (config.version < 3 && config.pathHorizonTicks != 0) return refuse("legacy config cannot carry a path horizon");
 		if (config.pathHorizonTicks > c_MaxPathHorizonTicks) return refuse("path_horizon_ticks is out of range");
 		if (config.roundId == 0 || config.configRevision == 0) return refuse("round_id and config_revision must be nonzero");
@@ -503,7 +607,9 @@ namespace RTE {
 			const auto rules = RuleFields(config);
 			fields.insert(fields.end(), rules.begin(), rules.end());
 		}
-		const char* domain = config.persistentWorld ? "NetMatchConfig/v5"
+		// Credential rotation does not change deterministic match rules.
+		const char* domain = config.version >= c_RelayLayoutVersion ? (config.persistentWorld ? "NetMatchConfig/v7" : "NetMatchConfig/v6")
+		                    : config.persistentWorld ? "NetMatchConfig/v5"
 		                                            : (config.version >= 4 ? "NetMatchConfig/v4" : (config.version >= 3 ? "NetMatchConfig/v3" : "NetMatchConfig/v2"));
 		return NetIdentity::HashCanonicalText(domain, fields);
 	}

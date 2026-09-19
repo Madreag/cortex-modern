@@ -100,6 +100,7 @@ namespace RTE {
 	NetDirectoryClient::NetDirectoryClient() = default;
 
 	NetDirectoryClient::~NetDirectoryClient() {
+		if (m_IceRequest) m_IceRequest->Abort();
 		if (m_Request) {
 			m_Request->Abort();
 			m_Request.reset();
@@ -121,6 +122,9 @@ namespace RTE {
 			m_BaseUrl = "https://" + m_BaseUrl;
 		}
 		if (m_BaseUrl.empty()) {
+			if (m_IceRequest) m_IceRequest->Abort();
+			m_IceRequest.reset();
+			m_IceServers = {};
 			m_Listed = false;
 			m_BrowseWanted = false;
 			if (m_Request) {
@@ -205,6 +209,7 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::Update(uint64_t nowMs) {
+		PollIceRequest();
 		if (m_State == State::Disabled) {
 			return;
 		}
@@ -277,6 +282,9 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::Shutdown() {
+		if (m_IceRequest) m_IceRequest->Abort();
+		m_IceRequest.reset();
+		m_IceServers = {};
 		m_Listed = false;
 		m_BrowseWanted = false;
 		if (m_State == State::Disabled) {
@@ -301,6 +309,47 @@ namespace RTE {
 		m_Capable = false;
 		if (m_State != State::Disabled) {
 			SetState(State::Idle);
+		}
+	}
+
+	bool NetDirectoryClient::StartIceRequest(const Request& request) {
+		if (m_IceRequest || m_BaseUrl.empty() || !m_Factory) return false;
+		m_IceError.clear();
+		m_IceRequest = m_Factory();
+		m_IceRequest->Start(request);
+		return true;
+	}
+
+	bool NetDirectoryClient::RequestIceServers(const std::string& matchId, uint32_t ttl, const NetRelayConfig* fixed) {
+		if (m_SessionId.empty() || m_Token.empty()) return false;
+		json body{{"token", m_Token}, {"match_id", matchId}, {"ttl", ttl}};
+		if (fixed) {
+			if (!fixed->Valid() || fixed->Empty()) return false;
+			body["iceServers"] = json::parse(fixed->ToJson()).at("iceServers");
+		}
+		return StartIceRequest({"POST", "/v1/sessions/" + m_SessionId + "/ice-servers", body.dump()});
+	}
+
+	bool NetDirectoryClient::FetchIceServers(const std::string& sessionId) {
+		if (sessionId.empty() || sessionId.size() > 64 || sessionId.find_first_not_of("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-") != std::string::npos) return false;
+		return StartIceRequest({"GET", "/v1/sessions/" + sessionId + "/ice-servers", ""});
+	}
+
+	void NetDirectoryClient::PollIceRequest() {
+		if (!m_IceRequest || !m_IceRequest->Finished()) return;
+		const Reply reply = m_IceRequest->Take();
+		m_IceRequest.reset();
+		++m_IceReplies;
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		NetRelayConfig offer;
+		if (reply.statusCode == 200 && NetRelayConfig::FromJson(reply.body, offer) && offer.Usable(now)) {
+			m_IceServers = std::move(offer);
+			m_IceError.clear();
+		} else {
+			if (!m_IceServers.Usable(now)) m_IceServers = {};
+			m_IceError = reply.statusCode == 429 ? "Relay credential rate limit; retrying shortly" :
+			             reply.statusCode == 403 ? "Relay credential request refused by the directory" :
+			             "Relay credentials unavailable or expired";
 		}
 	}
 

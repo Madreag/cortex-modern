@@ -711,6 +711,8 @@ namespace RTE {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			return m_IceRoute;
 		}
+		std::string GetNatModeText() const;
+		std::string GetRelayError() const;
 		std::string BuildReportJson() const;
 		/// Builds the match roster from the request. An empty scene keeps MakeDefault unless the caller
 		/// already resolved one; a named scene overwrites the default after any launch-config rules.
@@ -887,13 +889,17 @@ namespace RTE {
 		/// Client: resolves the session id to a row and arms the join. Worker thread.
 		bool SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error);
 		/// Builds the candidate policy from the saved settings and run overrides.
-		static GnsP2PConfig BuildIceConfig(const SettingsMan& settings, const std::string& localIdentity, int localVirtualPort);
+		static GnsP2PConfig BuildIceConfig(const SettingsMan& settings, const std::string& localIdentity, int localVirtualPort, const NetRelayConfig& relay = {});
+		void UpdateRelayOffer(uint64_t nowMs);
+		void PublishRelayOfferLocked(NetSession& session, INetTransport& wire);
+		bool ReadRelayOffer(NetRelayConfig& offer) const;
+		void SetRelayOfferLocked(const NetRelayConfig& offer);
 		/// Retries a failed ICE connection once through the row's direct address.
 		bool StartLobbyConnection(std::unique_ptr<NetMuxTransport>& mux, INetTransport& ip, NetSession& session, NetLockstepCoordinator& coordinator,
 		                          NetMatchRunner& runner, NetMatchRunnerConfig& config, const NetIceJoinTarget& target,
 		                          bool transportReady, bool& noDirectRoute, std::string* error);
 		/// Keeps admission refusals distinct from a failed direct connection.
-		static std::string SetupFailureStatus(const NetSession* session, bool noDirectRoute);
+		static std::string SetupFailureStatus(const NetSession* session, bool noDirectRoute, bool relayFailed = false);
 		/// The ICE virtual port a host listens on and a joiner dials.
 		static constexpr int c_IceVirtualPort = 41011;
 		static constexpr uint64_t c_IceRegisterBudgetMs = 30000;
@@ -934,6 +940,7 @@ namespace RTE {
 		friend bool TestEndedWorldLateAdmission(std::string* error);
 		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
 		friend bool TestIceDefaultsAndOverrides(std::string* error);
+		friend bool TestRelayOfferAndPolicy(std::string* error);
 		friend bool TestIceConnectionFallback(std::string* error);
 		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
 		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
@@ -1172,6 +1179,18 @@ namespace RTE {
 		std::string m_IceJoinSessionId;     //!< Client: the session id -net-join-session named.
 		std::string m_IceReport;            //!< The dispatcher's last report, taken when a worker or teardown takes the dispatcher.
 		std::string m_IceRoute;             //!< The leg the join actually took: "ice" | "ip" | "".
+		NetRelayConfig m_RelayOffer;
+		std::atomic<std::shared_ptr<const NetRelayConfig>> m_RelaySnapshot;
+		NetRelayConfig m_FixedRelayOffer;
+		std::string m_RelayError;
+		int m_HostRelayMode = 1;
+		int m_ConnectionMode = 0;
+		bool m_RelayReady = false;
+		bool m_RelayPublishPending = false;
+		bool m_RelayAttempted = false;
+		uint64_t m_RelayReplies = 0;
+		uint64_t m_NextRelayRequestMs = 0;
+		std::atomic<bool> m_FreshRelayRequested{true};
 		//!< Published by Update() for the worker: the directory client is game-thread only.
 		std::string m_DirectorySessionId;
 		std::string m_DirectoryToken;

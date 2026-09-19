@@ -277,10 +277,11 @@ namespace RTE {
 					return false;
 				}
 				const size_t reservedOffset = NetLobbyProtocol::c_HeaderBytes + 16;
-				const size_t migrationOffset = windowBytes.size();
+				const size_t migrationOffset = windowBytes.size() - 4;
 				if (bytes.size() <= migrationOffset + 2 || bytes[reservedOffset] != (2 | 8 | 16) ||
-				    windowBytes[migrationOffset - 2] != 2 || windowBytes.back() != 0 ||
-				    !std::equal(windowBytes.begin() + reservedOffset + 2, windowBytes.end(), bytes.begin() + reservedOffset + 2) ||
+				    windowBytes[migrationOffset - 2] != 2 || windowBytes[migrationOffset - 1] != 0 ||
+				    !std::equal(windowBytes.begin() + reservedOffset + 2, windowBytes.end() - 4, bytes.begin() + reservedOffset + 2) ||
+				    !std::equal(windowBytes.end() - 4, windowBytes.end(), bytes.end() - 4) ||
 				    bytes[migrationOffset] != 1 || bytes[migrationOffset + 1] != 0) {
 					*error = "migration payload does not follow the redundancy U16 after the path horizon";
 					return false;
@@ -1034,7 +1035,8 @@ namespace RTE {
 			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{prefix}}, prefixBytes)) return false;
 			const size_t difficultyOffset = prefixBytes.size() + 20 + config.activityModule.size() + config.sceneModule.size();
 			const size_t horizonTail = config.pathHorizonTicks != 0 ? 2 : 0;
-			for (const auto& [offset, value] : std::vector<std::pair<size_t, uint8_t>>{{difficultyOffset, 101}, {bytes.size() - 9 - horizonTail, 0}, {bytes.size() - 3 - horizonTail, 61}}) {
+			const size_t rulesEnd = bytes.size() - 4; // The v6 empty relay suffix is U16 length plus {}.
+			for (const auto& [offset, value] : std::vector<std::pair<size_t, uint8_t>>{{difficultyOffset, 101}, {rulesEnd - 9 - horizonTail, 0}, {rulesEnd - 3 - horizonTail, 61}}) {
 				auto invalidWire = bytes;
 				invalidWire.at(offset) = value;
 				const auto decoded = NetLobbyProtocol::Decode(invalidWire);
@@ -1055,7 +1057,7 @@ namespace RTE {
 				if (NetLobbyProtocol::Decode(truncated).ok) { *error = "truncated rules decoded"; return false; }
 			}
 			// The spectate rule rides between deploy_units and the team rules, so its byte is offset from difficulty.
-			for (const size_t offset : {difficultyOffset + 8, bytes.size() - 8 - horizonTail, bytes.size() - 2 - horizonTail, bytes.size() - 1 - horizonTail}) {
+			for (const size_t offset : {difficultyOffset + 8, rulesEnd - 8 - horizonTail, rulesEnd - 2 - horizonTail, rulesEnd - 1 - horizonTail}) {
 				auto invalidWire = bytes;
 				invalidWire[offset] = 3;
 				if (NetLobbyProtocol::Decode(invalidWire).ok) { *error = "invalid rules bool/policy decoded"; return false; }
@@ -1111,7 +1113,7 @@ namespace RTE {
 			}
 			// The CPU team key reached the hash in v4, so the same roster re-versioned hashes by team.
 			NetMatchConfig atCurrentVersion = recordedConfig->config;
-			atCurrentVersion.version = NetMatchConfigUtil::c_Version;
+			atCurrentVersion.version = 4;
 			atCurrentVersion.pathHorizonTicks = 0;
 			const std::string currentHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(atCurrentVersion));
 			if (currentHash != "87e848dea8853ff7762ffbabf6aa0c71d09e13f979382b970b69ef305fa0f5ae") {
@@ -1512,6 +1514,36 @@ namespace RTE {
 				*error = "lobby report is missing match config diagnostics";
 				return false;
 			}
+			return true;
+		}
+
+		bool TestLobbyRelayAdoption(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetPeerId hostPeer = c_InvalidNetPeerId, clientPeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(48107, hostWire, clientWire, hostPeer, clientPeer, error)) return false;
+			NetLobbySession host, client;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remotePeerId = 2;
+			hostConfig.remoteTransportPeerId = hostPeer;
+			hostConfig.matchConfig = MakeConfig();
+			hostConfig.autoStart = false;
+			hostConfig.matchConfig.relay = NetRelayConfig::Fixed("relay.example:3478", "temporary-user", "temporary-password", "match:1", UINT64_MAX);
+			NetLobbySessionConfig clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientPeer;
+			clientConfig.matchConfig.relay = {};
+			if (!host.Start(hostWire, hostConfig, error) || !client.Start(clientWire, clientConfig, error)) return false;
+			for (uint64_t now = 0; now < 100; now += 10) { host.Tick(now); client.Tick(now); hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10); }
+			if (client.GetMatchConfig().relay != hostConfig.matchConfig.relay) { *error = "joiner did not adopt the host's relay config"; return false; }
+			NetRelayConfig renewed = hostConfig.matchConfig.relay;
+			renewed.iceServers.front().credential = "renewed-password";
+			host.SetRelayOffer(renewed);
+			for (uint64_t now = 100; now < 200; now += 10) { host.Tick(now); client.Tick(now); hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10); }
+			if (client.GetMatchConfig().relay != renewed || client.GetMatchConfigHash() != host.GetMatchConfigHash()) { *error = "joiner missed the host's renewed relay config"; return false; }
 			return true;
 		}
 
@@ -10030,7 +10062,7 @@ namespace RTE {
 		    ordinary.capturedLockstep != NetLockstepCodec::c_Version || ordinary.capturedMatchConfig != NetMatchConfigUtil::c_Version ||
 		    persistent.supported != ordinary.supported || persistent.supported != nlohmann::json{
 		        {"supported_lockstep_codec_version", 22}, {"supported_world_lockstep_codec_version", 23},
-		        {"supported_match_config_version", 4}, {"supported_world_match_config_version", 5}} ||
+		        {"supported_match_config_version", 6}, {"supported_world_match_config_version", 7}} ||
 		    persistent.configHash.empty() || persistent.configHash != ordinary.configHash) {
 			if (error) *error = "captured world identity: world=" + seen(persistent) + " ordinary=" + seen(ordinary);
 			return false;
@@ -10851,6 +10883,73 @@ namespace RTE {
 		return true;
 	}
 
+	template <class T>
+	constexpr bool HasRelaySigningSecret = requires(T value) { value.secret; } || requires(T value) { value.staticAuthSecret; } ||
+	                                      requires(T value) { value.apiToken; } || requires(T value) { value.turnKeyId; };
+	static_assert(!HasRelaySigningSecret<NetMatchConfig> && !HasRelaySigningSecret<NetRelayConfig> && !HasRelaySigningSecret<NetIceServer>);
+
+	bool TestRelayOfferAndPolicy(std::string* error) {
+		SettingsMan settings;
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		const NetRelayConfig relay = NetRelayConfig::Fixed("turn:relay.example:3478?transport=udp,turn:relay.example:3478?transport=tcp,turns:relay.example:5349?transport=tcp", "temporary-user", "temporary-password", "match:1", now + 3600);
+		NetRelayConfig decoded;
+		if (!NetRelayConfig::FromJson(relay.ToJson(), decoded) || decoded != relay || !relay.Usable(now) || relay.Usable(now + 3600)) {
+			*error = "relay offer did not round-trip or remained usable at expiry";
+			return false;
+		}
+		auto injected = nlohmann::json::parse(relay.ToJson());
+		injected["static_auth_secret"] = "backend-only";
+		if (NetRelayConfig::FromJson(injected.dump(), decoded)) {
+			*error = "relay offer accepted a backend signing secret";
+			return false;
+		}
+		NetMatchConfig config = NetMatchConfigUtil::MakeDefault(71);
+		config.relay = relay;
+		if (!RoundTrip(NetLobbyMatchConfig{config}, error)) return false;
+		const NetHash32 identity = NetMatchConfigUtil::HashConfig(config);
+		config.relay.iceServers.front().credential = "rotated-password";
+		if (NetMatchConfigUtil::HashConfig(config) != identity) {
+			*error = "relay credential rotation changed deterministic match rules";
+			return false;
+		}
+		config.version = 4;
+		std::vector<uint8_t> bytes;
+		if (NetLobbyProtocol::Encode({NetLobbyMatchConfig{config}}, bytes)) {
+			*error = "a pre-relay wire version carried relay credentials";
+			return false;
+		}
+		for (int mode = 0; mode < 3; ++mode) {
+			settings.SetNetworkConnectionMode(static_cast<SettingsMan::NetworkConnectionMode>(mode));
+			const GnsP2PConfig ice = NetMatchService::BuildIceConfig(settings, "", 41011, relay);
+			const int masks[] = {7, 6, 1};
+			if (GnsTransport::ConnectionPolicyAllowsRoute(mode, false) != (mode != 2) ||
+			    GnsTransport::ConnectionPolicyAllowsRoute(mode, true) != (mode != 1)) { *error = "selected route bypassed the player's connection policy"; return false; }
+			if (ice.iceEnable != masks[mode] || (mode == 1 ? !ice.turnServerList.empty() : ice.turnServerList != "relay.example:3478") ||
+			    (mode == 2 && !ice.stunServerList.empty())) {
+				*error = "connection preference did not constrain ICE candidate types or TURN credentials";
+				return false;
+			}
+		}
+		settings.SetNetworkConnectionMode(SettingsMan::NetworkConnectionMode::Automatic);
+		settings.SetNetworkPlayerTurnServers("own-relay.example:3478");
+		settings.SetNetworkPlayerTurnUser("own-user");
+		settings.SetNetworkPlayerTurnPass("own-password");
+		const GnsP2PConfig own = NetMatchService::BuildIceConfig(settings, "", 41011, relay);
+		if (own.turnServerList != "own-relay.example:3478" || own.turnUserList != "own-user" || own.turnPassList != "own-password") {
+			*error = "the player's fixed relay did not replace the host offer";
+			return false;
+		}
+		settings.SetNetworkPlayerTurnServers("");
+		NetRelayConfig expired = relay;
+		expired.expiresAt = now;
+		if (!NetMatchService::BuildIceConfig(settings, "", 41011, expired).turnServerList.empty()) {
+			*error = "expired relay credentials reached ICE";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS relay offer: versioned config, expiry, secret refusal, player modes and own-relay precedence" << std::endl;
+		return true;
+	}
+
 	bool TestIceDefaultsAndOverrides(std::string* error) {
 		SettingsMan settings;
 		const std::string defaults = "stun.l.google.com:19302,stun.cloudflare.com:3478,stun.nextcloud.com:443";
@@ -10878,7 +10977,8 @@ namespace RTE {
 		settings.SetNetworkTurnServers("turn.example:3478");
 		settings.SetNetworkTurnUser("user");
 		settings.SetNetworkTurnPass("password");
-		if (NetMatchService::BuildIceConfig(settings, "", 41011).iceEnable != 0x7fffffff ||
+		const auto customRelay = NetRelayConfig::Fixed(settings.GetNetworkTurnServers(), "user", "password", "test", UINT64_MAX);
+		if (NetMatchService::BuildIceConfig(settings, "", 41011, customRelay).iceEnable != 3 ||
 		    settings.GetNetworkTurnUser() != "user" || settings.GetNetworkTurnPass() != "password") {
 			*error = "ice settings: a user-supplied relay was disabled by the empty STUN list";
 			return false;
@@ -10907,7 +11007,7 @@ namespace RTE {
 			return false;
 		}
 		target.joinMode = "either";
-		for (int arm = 0; arm < 9; ++arm) {
+		for (int arm = 0; arm < 11; ++arm) {
 			std::vector<std::string> log;
 			TransportTap *muxIp = nullptr, *p2p = nullptr;
 			auto mux = MakeTappedMux(&log, &muxIp, &p2p);
@@ -10917,6 +11017,8 @@ namespace RTE {
 			NetMatchRunner runner;
 			NetMatchService service;
 			service.m_IceEnabled = true;
+			service.m_ConnectionMode = arm == 9 ? 2 : 0;
+			service.m_RelayAttempted = arm >= 9;
 			service.m_CancelRequested = arm == 5;
 			NetMatchRunnerConfig config;
 			config.matchConfig = NetMatchConfigUtil::MakeDefault(73);
@@ -10963,9 +11065,9 @@ namespace RTE {
 				*error = "ice refusal fixture: two failed transports started a match";
 				return false;
 			}
-			const bool retry = arm < 3 || arm == 7;
+			const bool retry = arm < 3 || arm == 7 || arm == 10;
 			const auto ipDials = std::count(log.begin(), log.end(), "retry.Connect(203.0.113.9:41237)");
-			if (iceDials != (arm == 2 ? 0 : 1) || ipDials != (retry ? 1 : 0) || noDirectRoute != (arm < 4 || arm == 6 || arm == 7)) {
+			if (iceDials != (arm == 2 ? 0 : 1) || ipDials != (retry ? 1 : 0) || noDirectRoute != (arm < 4 || arm == 6 || arm == 7 || arm == 10)) {
 				*error = "ice retry arm " + std::to_string(arm) + ": ICE dials=" + std::to_string(iceDials) +
 				         ", IP dials=" + std::to_string(ipDials) + ", NAT failure=" + std::to_string(noDirectRoute);
 				return false;
@@ -10992,6 +11094,8 @@ namespace RTE {
 				*error = "ice failure message hid the host's ban";
 				return false;
 			}
+			if (arm >= 9 && (why.find("relay") == std::string::npos && why.find("Relay") == std::string::npos)) { *error = "failure hid the relay stage"; return false; }
+			if (arm == 10 && NetMatchService::SetupFailureStatus(&session, true, true) != "Relay route failed (TURN): check the relay or forward the host's UDP port") { *error = "relay failure action missing"; return false; }
 		}
 		std::cout << "[net-match-selftest] PASS ice failure message: failed ICE and IP stages name the port-forward or LAN action" << std::endl;
 		std::cout << "[net-match-selftest] PASS ice IP retry: runtime, immediate and signaling refusals dial the advertised IP once" << std::endl;
@@ -11124,6 +11228,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestIceDefaultsAndOverrides(&error)) return fail(error);
+		if (!TestRelayOfferAndPolicy(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);
 		if (!TestInternetMenuJoinUsesSession(&error)) return fail(error);
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
@@ -11146,6 +11251,7 @@ namespace RTE {
 		if (!TestMalformedLobbyPayloads(&error)) return fail(error);
 		if (!TestLobbyCodecDedicatedFlag(&error)) return fail(error);
 		if (!TestLobbyStateMachineHappyPath(&error)) return fail(error);
+		if (!TestLobbyRelayAdoption(&error)) return fail(error);
 		if (!TestLiveReportDumpsSurviveBadBytes(&error)) return fail(error);
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);
 		if (!TestHostRepairEndsBeforeItsBoundary(&error)) return fail(error);
