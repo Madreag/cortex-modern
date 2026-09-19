@@ -1294,6 +1294,7 @@ namespace RTE {
 					timing.delayFrames = 26; timing.pingMs = 401; timing.jitterMs = 17;
 					timing.revision = phase == NetTimingPhase::Status ? 0 : 4;
 					timing.requiredPeers = phase == NetTimingPhase::Status ? 0 : 3;
+					if (action == NetTimingAction::Hold && phase != NetTimingPhase::Status) { timing.heldPeers = 2; timing.requiredPeers = 1; }
 					if (!RoundTrip({timing}, error)) return false;
 					std::vector<uint8_t> bytes;
 					if (!EncodePacket({timing}, bytes, error)) return false;
