@@ -17,6 +17,7 @@
 #include "NetMatchReplay.h"
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
+#include "NetModerationGUI.h"
 #include "Activity.h"
 #include "ActivityMan.h"
 #include "MetricsCollector.h"
@@ -6711,6 +6712,57 @@ namespace RTE {
 		return true;
 	}
 
+	// The seats panel never lies over a seat's message band: on a top/bottom split it takes the rows
+	// between the bands, and when no run of rows holds the whole panel the longest one takes it.
+	bool TestSeatsPanelClearsBands(std::string* error) {
+		// The compact 640x360 layout: the strip band and its toast row own the rows above 44, the panel
+		// may reach row 356, and it wants 312 of the 344 rows it draws on a screen with room for them.
+		constexpr int highestTop = 44, bottomLimit = 356, wanted = 312, minHeight = 26, fullHeight = 344, maxLost = 318;
+		const auto crosses = [](const NetModerationGUI::PanelPlacement& placed, const NetModerationGUI::PanelBand& band) {
+			return placed.top < band.bottom && placed.top + placed.height > band.top;
+		};
+		const auto scrolls = [&](const NetModerationGUI::PanelPlacement& placed) {
+			return std::min(maxLost, fullHeight - placed.height) > 0;
+		};
+		const NetModerationGUI::PanelPlacement clear = NetModerationGUI::PlaceSeatsPanel(highestTop, bottomLimit, wanted, minHeight, {});
+		if (clear.top != highestTop || clear.height != wanted || scrolls(clear) != (fullHeight > wanted)) {
+			*error = "with no band the panel took row " + std::to_string(clear.top) + " and " + std::to_string(clear.height) + " rows";
+			return false;
+		}
+		// A top-half seat and a bottom-half seat, each band grown by the toast row that sits under it.
+		const std::vector<NetModerationGUI::PanelBand> split{{0, 48}, {180, 228}};
+		const NetModerationGUI::PanelPlacement between = NetModerationGUI::PlaceSeatsPanel(highestTop, bottomLimit, wanted, minHeight, split);
+		for (const NetModerationGUI::PanelBand& band: split) {
+			if (crosses(between, band)) {
+				*error = "the panel at row " + std::to_string(between.top) + " over " + std::to_string(between.height) +
+				         " rows crosses the seat band [" + std::to_string(band.top) + ", " + std::to_string(band.bottom) + ")";
+				return false;
+			}
+		}
+		if (between.top != 48 || between.height != 132) {
+			*error = "the panel took row " + std::to_string(between.top) + " and " + std::to_string(between.height) +
+			         " rows instead of the 132 rows between the two seat bands";
+			return false;
+		}
+		// Bands down the whole window: no run holds the panel, so the longest run takes it and scrolls.
+		const std::vector<NetModerationGUI::PanelBand> crowded{{0, 48}, {100, 140}, {220, 260}, {300, 400}};
+		const NetModerationGUI::PanelPlacement longest = NetModerationGUI::PlaceSeatsPanel(highestTop, bottomLimit, wanted, minHeight, crowded);
+		for (const NetModerationGUI::PanelBand& band: crowded) {
+			if (crosses(longest, band)) {
+				*error = "the panel at row " + std::to_string(longest.top) + " over " + std::to_string(longest.height) +
+				         " rows crosses the seat band [" + std::to_string(band.top) + ", " + std::to_string(band.bottom) + ")";
+				return false;
+			}
+		}
+		if (longest.top != 140 || longest.height != 80 || !scrolls(longest)) {
+			*error = "the panel took row " + std::to_string(longest.top) + " and " + std::to_string(longest.height) +
+			         " rows instead of the longest band-free run, 80 rows from row 140";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS overlay: the seats panel takes the highest run of rows no seat message band holds" << std::endl;
+		return true;
+	}
+
 	// An empty seat is named for the roster it belongs to: a match's seat reads its client id, a
 	// persistent world's seat reads Open, and the world roster the host publishes is unchanged.
 	bool TestUnseatedSlotNameForms(std::string* error) {
@@ -10057,6 +10109,7 @@ namespace RTE {
 		if (!TestServiceKick(&error)) return fail(error);
 		if (!TestStartingKickMarshals(&error)) return fail(error);
 		if (!TestLobbyModerationRows(&error)) return fail(error);
+		if (!TestSeatsPanelClearsBands(&error)) return fail(error);
 		if (!TestUnseatedSlotNameForms(&error)) return fail(error);
 		if (!TestKickedSeatReadsOpen(&error)) return fail(error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
