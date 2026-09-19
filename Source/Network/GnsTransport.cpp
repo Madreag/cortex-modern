@@ -1,4 +1,5 @@
 #include "GnsTransport.h"
+#include "SettingsMan.h"
 
 #include <algorithm>
 #include <chrono>
@@ -887,10 +888,20 @@ namespace RTE {
 	}
 
 	bool GnsTransport::StartHost(uint16_t port, std::string* error) {
+		if (SettingsMan::IsConstructed() && g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) {
+			m_Impl->Stop();
+			SetError(error, "Relay only refuses direct IP; choose Automatic or Direct only");
+			return false;
+		}
 		return m_Impl->StartHost(port, error);
 	}
 
 	bool GnsTransport::Connect(const std::string& address, uint16_t port, std::string* error) {
+		if (SettingsMan::IsConstructed() && g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) {
+			m_Impl->Stop();
+			SetError(error, "Relay only refuses direct IP; choose Automatic or Direct only");
+			return false;
+		}
 		return m_Impl->Connect(address, port, error);
 	}
 
