@@ -497,6 +497,18 @@ def scripts(case, port, root):
                 "assert_text_fits LabelLobbyPlayersHeader\n"
                 # A seat row elides inside the fixed panel rather than wrap or widen it (UX-42).
                 "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
+                # The host's options panel edits the adopted config; its Rules page carries the
+                # picked activity/mode and the L33 row the ledger names.
+                "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
+                "assert_label LabelHostOptionsTitle H O S T   O P T I O N S\n"
+                "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
+                "assert_label LabelHostRulesBrainless When every human brain is lost\n"
+                "assert_label ComboHostRulesBrainless Keep playing, humans spectate\n"
+                "assert_enabled ComboHostRulesBrainless 1\n"
+                "assert_label ComboHostRulesActivity Brain vs Brain - Base.rte\n"
+                "assert_label ComboHostRulesMode Co-op PvE\n"
+                "dump_host_options\n"
+                "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
                 "dump_lobby\ndump_host_options\nwait 600\nexit\n")
         client = (LANDING + "settext TextMultiplayerName Joiner\n"
                   "activate ButtonMultiplayerJoinGame\nwait 10\n"
@@ -511,6 +523,21 @@ def scripts(case, port, root):
                   "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                   "assert_text_fits LabelLobbyPlayersHeader\n"
                   "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
+                  # The client's Options button opens the same adopted config as a read-only
+                  # details view: every edit control is disabled, the L33 row reads identically,
+                  # and the title names what it is.
+                  "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
+                  "assert_label LabelHostOptionsTitle M A T C H   D E T A I L S\n"
+                  "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
+                  "assert_label LabelHostRulesBrainless When every human brain is lost\n"
+                  "assert_label ComboHostRulesBrainless Keep playing, humans spectate\n"
+                  "assert_enabled ComboHostRulesBrainless 0\n"
+                  "assert_enabled ComboHostRulesActivity 0\n"
+                  "assert_label ComboHostRulesActivity Brain vs Brain - Base.rte\n"
+                  "assert_label ComboHostRulesMode Co-op PvE\n"
+                  "assert_enabled ButtonHostOptApply 0\n"
+                  "dump_host_options\n"
+                  "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
                   "dump_lobby\ndump_host_options\nexit\n")
         return {"host": host, "client": client}, {}
     elif case == "net-options":
@@ -541,7 +568,71 @@ def scripts(case, port, root):
         text += "assert_enabled ButtonMultiplayerModerate 0\n"
         text += "dump_host_options\n"
         text += checks("LabelLobbyPlayersHeader", "MultiplayerLobbyPanel")
-        text += "assert_enabled ButtonMultiplayerStart 0\nexit\n"
+        text += "assert_enabled ButtonMultiplayerStart 0\n"
+        # H01-H35: the six host-options pages behind the lobby's Options button. Each tab shows its
+        # own collection box, every visited control answers the fit checks, and the dump rows land
+        # on each page so the capture names the page's whole surface at this size.
+        text += "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
+        text += "assert_visible MultiplayerHostOptionsPanel 1\n"
+        text += "assert_label LabelHostOptionsTitle H O S T   O P T I O N S\n"
+        text += checks("TabHostPageSeats", "MultiplayerHostOptionsPanel")
+        text += checks("TabHostPageRules", "MultiplayerHostOptionsPanel")
+        text += checks("TabHostPageNetwork", "MultiplayerHostOptionsPanel")
+        text += checks("TabHostPageRecovery", "MultiplayerHostOptionsPanel")
+        text += checks("TabHostPageFiles", "MultiplayerHostOptionsPanel")
+        text += checks("TabHostPageSession", "MultiplayerHostOptionsPanel")
+        # H01-H06 Seats: the header, the seated row, and the footer the apply row sits in.
+        text += "assert_visible CollectionBoxHostPageSeats 1\n"
+        text += checks("ComboHostSeatPlayers", "CollectionBoxHostPageSeats")
+        text += checks("LabelHostSeatHeader", "CollectionBoxHostPageSeats")
+        text += checks("LabelHostSeatName0", "CollectionBoxHostPageSeats")
+        text += checks("ComboHostSeatTeam0", "CollectionBoxHostPageSeats")
+        text += checks("LabelHostSeatDelay0", "CollectionBoxHostPageSeats")
+        text += checks("LabelHostSeatState0", "CollectionBoxHostPageSeats")
+        text += checks("ButtonHostSeatDetails0", "CollectionBoxHostPageSeats")
+        text += "dump_host_options\n"
+        # H07-H20 Rules: the L33 row keeps the ledger's exact label and pair of answers.
+        text += "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
+        text += "assert_label LabelHostOptionsTitle M A T C H   R U L E S\n"
+        text += checks("ComboHostRulesActivity", "CollectionBoxHostPageRules")
+        text += checks("ComboHostRulesScene", "CollectionBoxHostPageRules")
+        text += checks("ComboHostRulesMode", "CollectionBoxHostPageRules")
+        text += "assert_visible LabelHostRulesBrainless 1\n"
+        text += "assert_rect_inside LabelHostRulesBrainless CollectionBoxHostPageRules\n"
+        text += "assert_label LabelHostRulesBrainless When every human brain is lost\n"
+        text += "assert_label ComboHostRulesBrainless Keep playing, humans spectate\n"
+        text += checks("ComboHostRulesBrainless", "CollectionBoxHostPageRules")
+        text += "dump_host_options\n"
+        # H21-H24 Network.
+        text += "activate TabHostPageNetwork\nwait 3\nassert_visible CollectionBoxHostPageNetwork 1\n"
+        text += "assert_label LabelHostOptionsTitle N E T W O R K   O P T I O N S\n"
+        text += checks("ComboHostNetPolicy", "CollectionBoxHostPageNetwork")
+        text += checks("TextHostNetMinDelay", "CollectionBoxHostPageNetwork")
+        text += checks("LabelHostNetEffective", "CollectionBoxHostPageNetwork")
+        text += checks("ButtonHostNetRecalc", "CollectionBoxHostPageNetwork")
+        text += "dump_host_options\n"
+        # H25-H28 Recovery.
+        text += "activate TabHostPageRecovery\nwait 3\nassert_visible CollectionBoxHostPageRecovery 1\n"
+        text += "assert_label LabelHostOptionsTitle M A T C H   R E C O V E R Y\n"
+        text += checks("CheckHostRecRepair", "CollectionBoxHostPageRecovery")
+        text += checks("CheckHostRecAutosave", "CollectionBoxHostPageRecovery")
+        text += checks("TextHostRecAutosaveInterval", "CollectionBoxHostPageRecovery")
+        text += "dump_host_options\n"
+        # H29-H31 Files and status.
+        text += "activate TabHostPageFiles\nwait 3\nassert_visible CollectionBoxHostPageFiles 1\n"
+        text += "assert_label LabelHostOptionsTitle F I L E S   A N D   S T A T U S\n"
+        text += checks("ButtonHostFilesSaveDiag", "CollectionBoxHostPageFiles")
+        text += checks("ComboHostFilesWidget", "CollectionBoxHostPageFiles")
+        text += "dump_host_options\n"
+        # H32-H35 Session.
+        text += "activate TabHostPageSession\nwait 3\nassert_visible CollectionBoxHostPageSession 1\n"
+        text += "assert_label LabelHostOptionsTitle S E S S I O N\n"
+        text += checks("LabelHostSessHosting", "CollectionBoxHostPageSession")
+        text += checks("ComboHostSessIdle", "CollectionBoxHostPageSession")
+        text += checks("ButtonHostSessEnd", "CollectionBoxHostPageSession")
+        text += "dump_host_options\n"
+        # Back is local navigation: the lobby is still open under the panel when it leaves.
+        text += "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\nexit\n"
     elif case == "input":
         text = (RESET_INPUT + "activate ButtonMainToMultiplayer\nwait 5\n"
                 "assert_visible TextMultiplayerName 1\nfocus_next\nassert_focus TextMultiplayerName\n"
