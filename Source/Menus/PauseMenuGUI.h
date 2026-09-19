@@ -113,6 +113,7 @@ namespace RTE {
 			LeaveConfirmButton,
 			LeaveCancelButton,
 			MatchOptionsCloseButton,
+			MatchRepairButton,
 			ButtonCount
 		};
 
@@ -164,6 +165,9 @@ namespace RTE {
 		GUICollectionBox* m_MatchOptionsBox;
 		GUILabel* m_MatchOptionsLabel;
 		bool m_MatchOptionsShown;
+		GUILabel* m_MatchRepairHint;
+		bool m_MatchRepairArmed;
+		std::string m_MatchRepairRefusal;
 
 #pragma region Menu Screen Handling
 		/// Sets the PauseMenuGUI to display a menu screen.
@@ -196,6 +200,7 @@ namespace RTE {
 
 		/// Shows or hides the match options view in place of the menu rows, refilled on open.
 		void ShowMatchOptions(bool show);
+		void RefreshMatchOptions();
 
 		/// The one line of what leaving costs this player, from the session's own hold.
 		std::string LeaveConsequenceText() const;

@@ -1593,6 +1593,7 @@ void MainMenuGUI::OpenHostOptions(bool setupDraft) {
 	m_HostSeatDlgRemovalSeat.reset();
 	m_HostKickBanWatch = false;
 	m_HostRecRepairArmed = false;
+	m_HostRecRepairRefusal.clear();
 	m_HostOptionsAwaitedRevision = 0;
 	if (m_HostNetPortBox && m_MultiplayerHostPortTextBox) {
 		// H34's port field edits the setup draft's port - the value the next hosted request carries.
@@ -1950,31 +1951,12 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 		m_HostRecWaitingLabel->SetText(waiting.empty() ? "" : ("Waiting on: " + waiting));
 	}
-	// A repair needs the host's live round and an available snapshot boundary.
-	bool resyncInFlight = false;
-	uint64_t resyncBytes = 0, resyncMs = 0;
-	g_NetMatchService.GetResyncStatus(&resyncInFlight, &resyncBytes, &resyncMs);
-	const bool repairLive = g_NetMatchService.IsHost() && g_NetMatchService.CanResyncMatch() &&
-	                        NetMatchService::ResyncSnapshotAllowed(g_ActivityMan.GetActivity());
+	// The service gates both repair controls on the same live round.
+	const bool repairLive = NetHostRepairEnabled(g_NetMatchService);
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostRepairNowButton], repairLive);
 	if (!repairLive) m_HostRecRepairArmed = false;
 	if (m_HostRecRepairHintLabel) {
-		if (resyncInFlight) {
-			// Phase from the bytes the snapshot has moved: none yet means the host is still saving.
-			m_HostRecRepairHintLabel->SetText("Repairing: " + std::string(resyncBytes > 0 ? "transfer" : "snapshot") +
-			                                  " " + std::to_string(resyncBytes) + " B " +
-			                                  std::to_string(resyncMs / 1000) + "s");
-		} else if (m_HostRecRepairArmed) {
-			m_HostRecRepairHintLabel->SetText("Every peer pauses and reloads the host's snapshot - press again");
-		} else if (resyncBytes > 0 || resyncMs > 0) {
-			m_HostRecRepairHintLabel->SetText("Repaired: " + std::to_string(resyncBytes) + " B " +
-			                                  std::to_string(resyncMs / 1000) + "s");
-		} else if (!g_NetMatchService.IsHost()) {
-			m_HostRecRepairHintLabel->SetText("Repair is the host's call");
-		} else {
-			m_HostRecRepairHintLabel->SetText(repairLive ? "Every peer reloads the host's snapshot"
-			                                           : "Repair needs a live match session");
-		}
+		m_HostRecRepairHintLabel->SetText(NetHostRepairHint(g_NetMatchService, m_HostRecRepairArmed, m_HostRecRepairRefusal));
 	}
 
 	// Files page: local paths, local retention, and the local status-widget preference.
@@ -2676,22 +2658,8 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		return;
 	}
 	if (guiEventControl == m_MainMenuButtons[MenuButton::HostRepairNowButton]) {
-		// H25's two-step: the first press arms and the hint names the shared pause and reload; the
-		// second calls the service, which queues the heal at its safe boundary.
-		if (!m_HostRecRepairArmed) {
-			m_HostRecRepairArmed = true;
-			if (m_HostRecRepairHintLabel) {
-				m_HostRecRepairHintLabel->SetText("Every peer pauses and reloads the host's snapshot - press again");
-			}
-			return;
-		}
-		m_HostRecRepairArmed = false;
-		std::string repairError;
-		if (g_NetMatchService.ResyncMatch(&repairError)) {
-			if (m_HostRecRepairHintLabel) m_HostRecRepairHintLabel->SetText("Repairing: snapshot 0 B 0s");
-		} else if (m_HostRecRepairHintLabel) {
-			m_HostRecRepairHintLabel->SetText(repairError.empty() ? "Repair refused" : "Repair refused - " + repairError);
-		}
+		NetHostRepairPress(g_NetMatchService, m_HostRecRepairArmed, m_HostRecRepairRefusal);
+		if (m_HostRecRepairHintLabel) m_HostRecRepairHintLabel->SetText(NetHostRepairHint(g_NetMatchService, m_HostRecRepairArmed, m_HostRecRepairRefusal));
 		return;
 	}
 	if (guiEventControl == m_HostNetVisibilityCombo) {

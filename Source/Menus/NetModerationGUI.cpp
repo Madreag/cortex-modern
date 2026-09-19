@@ -452,7 +452,12 @@ void NetModerationGUI::Refresh() {
 	if (m_OptionsView) {
 		// The adopted config every peer runs this round by - read-only here the way the lobby's
 		// Details reads it for a client; the editable pages are the lobby's own Options.
-		m_Options->SetText(WrapText(m_LabelFont, NetHostOptionsSummary(g_NetMatchService.GetLobbyMatchConfig(), snapshot), m_Options->GetWidth()));
+		std::string options = NetHostOptionsSummary(g_NetMatchService.GetLobbyMatchConfig(), snapshot);
+		if (snapshot.isHost) {
+			options += "\nRepair match: " + std::string(NetHostRepairEnabled(g_NetMatchService)
+			    ? "Ready - pause menu > Match Options" : NetHostRepairHint(g_NetMatchService));
+		}
+		m_Options->SetText(WrapText(m_LabelFont, options, m_Options->GetWidth()));
 		m_Summary->SetText(snapshot.isHost ? "The lobby's Options changes the next round."
 		                                 : "The host's options for this round.");
 		m_Status->SetVisible(false);

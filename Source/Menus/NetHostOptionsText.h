@@ -2,10 +2,50 @@
 
 #include "NetMatchConfig.h"
 #include "NetLobbySnapshot.h"
+#include "NetMatchService.h"
 
 #include <string>
 
 namespace RTE {
+
+	inline bool NetHostRepairEnabled(const NetMatchService& service) {
+		return service.IsHost() && service.CanResyncMatch();
+	}
+
+	inline std::string NetHostRepairHint(const NetMatchService& service, bool armed = false, const std::string& refusal = {}) {
+		if (!refusal.empty()) return refusal;
+		bool inFlight = false;
+		uint64_t bytes = 0, elapsedMs = 0;
+		service.GetResyncStatus(&inFlight, &bytes, &elapsedMs);
+		if (inFlight) {
+			return "Repairing: " + std::string(bytes > 0 ? "transfer" : "snapshot") + " " +
+			       std::to_string(bytes) + " B " + std::to_string(elapsedMs / 1000) + "s";
+		}
+		if (armed) return "Every peer pauses and reloads the host's snapshot - press again";
+		if (bytes > 0 || elapsedMs > 0) return "Repaired: " + std::to_string(bytes) + " B " + std::to_string(elapsedMs / 1000) + "s";
+		if (!service.IsHost()) return "Repair is the host's call";
+		return service.CanResyncMatch() ? "Every peer reloads the host's snapshot" : "Repair needs a live match session";
+	}
+
+	inline bool NetHostRepairPress(NetMatchService& service, bool& armed, std::string& refusal) {
+		refusal.clear();
+		if (!NetHostRepairEnabled(service)) {
+			armed = false;
+			refusal = NetHostRepairHint(service);
+			return false;
+		}
+		if (!armed) {
+			armed = true;
+			return true;
+		}
+		armed = false;
+		std::string error;
+		if (!service.ResyncMatch(&error)) {
+			refusal = "Repair refused - " + error;
+			return false;
+		}
+		return true;
+	}
 
 	/// The match's adopted host options as read-only lines - the one panel the lobby's Details, the
 	/// pause menu's Match Options and the F6 seats panel's Options view all show mid-match. It reads
