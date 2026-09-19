@@ -20,6 +20,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -193,6 +194,9 @@ namespace RTE {
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
 		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
 		bool persistentWorld = false; // Host only: an indefinitely running world, never a last-brain or rematch.
+		// World host only: open a new round from the scene instead of resuming the world's newest
+		// checkpoint. The world keeps its UUID; its old checkpoints stay for retention to prune.
+		bool worldFresh = false;
 		std::string worldId; // Set after the host advances its durable identity; empty off a world.
 		uint64_t worldBoot = 0;
 		// Host-authored world capacity. Omitted fields take the Persistent World preset's defaults.
@@ -239,6 +243,13 @@ namespace RTE {
 	/// Polls a configured directory client until it answers a list or the budget runs out; the rows it
 	/// returns are what a rejoin re-resolves against.
 	std::vector<NetDirectorySessionRow> BrowseSessionRows(NetDirectoryClient& browse, uint64_t budgetMs, const std::function<bool()>& cancelled);
+
+	/// Whether a browsed row is the host the rejoin prompt is waiting for: the same directory session,
+	/// listed as a lobby or a running match. A world's session id is its own UUID, so a world answers
+	/// this under every boot it ever takes.
+	inline bool NetDirectoryRowIsWatchedHost(const NetDirectorySessionRow& row, const std::string& sessionId) {
+		return !sessionId.empty() && row.sessionId == sessionId && (row.state == "running" || row.state == "lobby");
+	}
 
 	/// A stored ticket belongs to this join only when it names the host this request dials or the session
 	/// it joins; a record left by another host is not a re-resolve of this one.
@@ -362,6 +373,10 @@ namespace RTE {
 		}
 		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
 		void AutosaveAtTickBoundary(uint64_t tick);
+		/// The one capture of this match: the tick's agreed lockstep state is stamped onto the identity
+		/// here, so an interval checkpoint and a world's on-demand bootstrap capture carry the same
+		/// owners and applied sequences and a restart resumes on them.
+		bool SaveStampedAutosave(uint64_t tick);
 		/// The lockstep state a match resumed from a checkpoint starts on, derived from the agreed
 		/// configuration alone so every peer builds the same one whether it loads its own copy of the
 		/// checkpoint or is streamed the host's. A restarted match has nothing in flight.
@@ -638,6 +653,9 @@ namespace RTE {
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
 		void DriveWorldJoins(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
+		/// Client: names the world's own UUID in the stored ticket, so the return watch browses for the
+		/// row the world re-registers under on its next boot.
+		void AdoptWorldTicketSession();
 		/// Host: watches each seated member's brain and authors one respawn per death.
 		void DriveWorldSeatRespawns(uint64_t nowFrame);
 		/// Publishes the newest archive the autosave writer has FINISHED, when it is newer than the
@@ -690,9 +708,24 @@ namespace RTE {
 		/// Removes the admission file of a match this process is no longer checkpointing once no
 		/// checkpoint of it is left. Game thread, once per ended round.
 		void SweepRestartAdmission();
+		/// A world host that stops cleanly leaves the committed tick it stopped on, with its manifest
+		/// and admission file, so a restart loses nothing. Synchronous: the sim has stopped by here and
+		/// the writer is waited on before the process leaves the world. Once per teardown.
+		void WriteFinalWorldCheckpoint();
 		/// Host: the resume the request asked for - the manifest's config, the sealed admission and the
 		/// checkpoint to open on. Fills the request's roster and arms the resume, or says why it cannot.
 		bool PrepareResume(NetMatchServiceRequest& request, std::string* error);
+		/// World host: points the request's resume at the world's own checkpoint chain, so a boot of an
+		/// existing world reopens it through the one resume path instead of a second implementation.
+		/// Runs before PrepareResume and reads the identity record without advancing it.
+		bool ResolveWorldResume(NetMatchServiceRequest& request, std::string* error);
+		/// The configuration a resumed world plays on: the checkpoint's own roster under THIS boot's
+		/// identity, so no credential, envelope or key of the previous boot is live under it.
+		static void SeatResumedWorldConfig(NetMatchConfig& config, const NetWorldIdentity& identity);
+		/// Whether a teardown still owes a final world checkpoint, and at which committed tick. Pure,
+		/// so the decision lives in one place and never moves with the caller's state.
+		static bool FinalCheckpointTick(bool host, bool worldConfigured, bool alreadyWritten, uint32_t autosaveSeconds,
+		                                bool lockstepActive, bool activityRunning, uint64_t nextFrame, uint64_t& outTick);
 		/// The one purpose label the restart admission key is derived under.
 		static constexpr const char* c_RestartAdmissionKeyLabel = "cccp-restart-admission-v1";
 		/// 7e: polls the directory for the row the stored ticket names, so the rejoin prompt enables
@@ -756,6 +789,11 @@ namespace RTE {
 		friend bool TestCompletedLobbyExpires(std::string* error);
 		friend bool TestChatSendRefusedOutsideCarry(std::string* error);
 		friend bool TestServiceReportCarriesActivityPreset(std::string* error);
+		friend bool RowRestartKey(NetMatchService& service, const std::filesystem::path& scratch, std::array<uint8_t, 32>& key, std::string* error);
+		friend bool TestWorldRestartOpensOnCheckpoint(std::string* error);
+		friend bool TestWorldFreshFlagOpensNewRound(std::string* error);
+		friend bool TestWorldCleanStopWritesFinalCheckpoint(std::string* error);
+		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
@@ -874,6 +912,7 @@ namespace RTE {
 		bool m_ReturnWatchConfigured = false;
 		uint64_t m_RestartAdmissionGeneration = 0;
 		std::atomic<bool> m_RestartAdmissionDue{false};
+		bool m_FinalCheckpointWritten = false; //!< One final world checkpoint per teardown, never two.
 		bool m_ResyncRetainsLocalState = false;
 		uint64_t m_ResyncSourceRound = 0;
 		//!< The last host snapshot's tick label and the completed tick it was taken at; a gate asserts they match.
