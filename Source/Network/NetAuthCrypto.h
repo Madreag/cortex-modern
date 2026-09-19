@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
+#include <vector>
 
 namespace RTE {
 
@@ -31,5 +33,7 @@ namespace RTE {
 
 	/// Constant-time equality over count bytes of both buffers.
 	bool NetAuthConstantTimeEquals(const uint8_t* a, const uint8_t* b, size_t count);
+	bool NetAuthSeal(const std::array<uint8_t, 32>& key, const std::vector<uint8_t>& context, const std::vector<uint8_t>& plaintext, std::vector<uint8_t>& sealed);
+	bool NetAuthOpen(const std::array<uint8_t, 32>& key, const std::vector<uint8_t>& context, const std::vector<uint8_t>& sealed, std::vector<uint8_t>& plaintext);
 
 } // namespace RTE
