@@ -5662,6 +5662,7 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	checkpointValues = g_GUISound.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_UInputMan.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = System::RunPathCaseSelfTest() && checkpointValues;
+	checkpointValues = System::RunPrintDisciplineSelfTest() && checkpointValues;
 	checkpointValues = ContentFile::RunImageLoadSelfTest() && checkpointValues;
 	checkpointValues = Reader::RunUnknownPropertySelfTest() && checkpointValues;
 	checkpointValues = g_PostProcessMan.RunCheckpointSelfTest() && checkpointValues;

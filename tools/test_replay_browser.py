@@ -4,6 +4,12 @@ Run unchanged on the control (the Replays button has no handler) and the tip.
 Only individual fixture files are copied, into each run's private Userdata.
 The legacy fixture defaults to pickup_fire.ccreplay in the shared harness fixture
 root; --legacy-fixture overrides that path. Its 602 running ticks must read 00:10.
+
+--arm queued-restart repeats the same browse with the fault that presses a rematch on
+the frame the replay's end clears, and reads whether the queued restart survived it.
+The fault restores the pre-injection restart flag and clears the ended replay activity
+again, so the armed run ends where an unarmed run ends and the other checks still mean
+what they mean.
 """
 
 import argparse
@@ -23,6 +29,9 @@ NAMES = ("01-first.ccreplay", "02-second.ccreplay")
 LEGACY_NAME = "03-pickup_fire.ccreplay"
 FIXTURE = Path("D:/Projects/stage2_p4/fixtures/pickup_fire.ccreplay")
 PLAYBACK = re.compile(r"\[net-replay\] playback finished[^\n]*ticks=(\d+)[^\n]*outcome=completed[^\n]*frames=(\d+)[^\n]*end_marker=1")
+# The rematch press the replay's end used to drop, injected on the exact frame that clears the replay.
+RESTART_FAULT = "queued_restart_at_replay_end"
+RESTART_KEPT = re.compile(r"^\[replay-end\] injected queued restart kept=(\d)$", re.M)
 
 
 def duration_agreement(row_text, summary):
@@ -136,7 +145,7 @@ def first_row_ink(repo, path, text, geometry):
                            max(x for x, _, _ in expected), max(y for _, y, _ in expected)]}
 
 
-def run_size(repo, root, size, fixture, expected, summary=None, legacy_fixture=FIXTURE):
+def run_size(repo, root, size, fixture, expected, summary=None, legacy_fixture=FIXTURE, fault=None):
     root.mkdir(parents=True, exist_ok=False)
     checks, details = {}, {}
     before = pin(repo, expected)
@@ -147,8 +156,10 @@ def run_size(repo, root, size, fixture, expected, summary=None, legacy_fixture=F
     script = root / "browser.txt"
     expected_duration = duration_agreement("", summary)["summary"] if summary else None
     script.write_text(menu_script(date, legacy_date, expected_duration), encoding="utf-8")
-    run = make_run(repo, ["-menu-script", script, "-num-lua-states", 4], root / "browser", 240,
-                   env={"CCCP_HEADLESS": "1"})
+    env = {"CCCP_HEADLESS": "1"}
+    if fault:
+        env["CC_FAULT_INJECT"] = fault
+    run = make_run(repo, ["-menu-script", script, "-num-lua-states", 4], root / "browser", 240, env=env)
     try:
         set_resolution(run.cwd, *size)
         directory = run.cwd / "Userdata/Replays"
@@ -180,6 +191,15 @@ def run_size(repo, root, size, fixture, expected, summary=None, legacy_fixture=F
         details["playback"] = playback
         checks["playback_completed"] = len(playback) == 2 and all(int(ticks) >= 60 and int(frames) >= 60 for ticks, frames in playback)
         checks["returned_to_browser"] = "assert_substate expected=ReplayBrowser actual=ReplayBrowser PASS" in log and "Playback finished:" in log
+        if fault == RESTART_FAULT:
+            # A restart queued as the replay ends survives the end-of-replay clear: the guard's whole point.
+            kept = RESTART_KEPT.findall(log)
+            details["queued_restart"] = {"kept": kept,
+                                         "lines": [line for line in log.splitlines() if line.startswith("[replay-end] ")]}
+            checks["queued_restart_kept"] = len(kept) >= 1 and all(value == "1" for value in kept)
+            if not checks["queued_restart_kept"]:
+                for line in details["queued_restart"]["lines"] or ["[replay-end] no injected line in the log"]:
+                    print(f"{run.out / 'stdout.log'}: {line}", flush=True)
         checks["deleted_only_second"] = (not (directory / NAMES[1]).exists() and sha256(directory / NAMES[0]) == fixture_hash and
                                          sha256(directory / LEGACY_NAME) == legacy_hash)
         checks["source_unchanged"] = sha256(fixture) == fixture_hash and sha256(legacy_fixture) == legacy_hash
@@ -215,6 +235,8 @@ def main():
     parser.add_argument("--fixture", type=Path, default=FIXTURE)
     parser.add_argument("--legacy-fixture", type=Path, default=FIXTURE, help="602-tick pickup_fire replay from the shared harness fixture root")
     parser.add_argument("--summary", type=Path, help="report JSON from the same match as --fixture; checks row duration against its running ticks")
+    parser.add_argument("--arm", choices=("browse", "queued-restart", "both"), default="browse",
+                        help="queued-restart repeats the browse with CC_FAULT_INJECT=" + RESTART_FAULT)
     args = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("family lock exists; no driver may run")
@@ -225,8 +247,12 @@ def main():
     summary = report.get("last_match", report.get("service", {}).get("last_match")) if report else None
     if args.summary and not summary:
         parser.error("--summary must contain last_match from the recorded match")
-    results = {f"{w}x{h}": run_size(args.repo.resolve(), root / f"{w}x{h}", (w, h), args.fixture, args.exe_sha256.lower(), summary, args.legacy_fixture)
-               for w, h in SIZES}
+    arms = {"browse": None} if args.arm == "browse" else (
+        {"queued-restart": RESTART_FAULT} if args.arm == "queued-restart" else {"browse": None, "queued-restart": RESTART_FAULT})
+    results = {(f"{w}x{h}" if arm == "browse" else f"{arm}/{w}x{h}"):
+               run_size(args.repo.resolve(), root / (f"{w}x{h}" if arm == "browse" else f"{arm}-{w}x{h}"), (w, h),
+                        args.fixture, args.exe_sha256.lower(), summary, args.legacy_fixture, fault)
+               for arm, fault in arms.items() for w, h in SIZES}
     result = {"pass": all(row["pass"] for row in results.values()), "runs": results,
               "driver_sha256": sha256(__file__), "fixture_sha256": sha256(args.fixture),
               "legacy_fixture_sha256": sha256(args.legacy_fixture)}

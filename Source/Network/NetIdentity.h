@@ -106,6 +106,14 @@ namespace RTE {
 	class NetIdentity {
 	public:
 		static bool BuildCurrentManifest(NetIdentityManifest& outManifest, std::string* error = nullptr, NetIdentityBuildOptions options = {});
+
+		/// Reads everything the manifest needs from the live managers, and nothing from disk. Cheap, and
+		/// the only phase that has to run on the thread that owns those managers.
+		static bool CaptureManifestInputs(NetIdentityManifest& outManifest, std::string* error = nullptr, NetIdentityBuildOptions options = {});
+
+		/// Hashes the captured modules' files and fills the manifest's hashes. Touches no manager, so a
+		/// worker thread can do this work while the game thread keeps its frame budget.
+		static bool CompleteManifestFromInputs(NetIdentityManifest& manifest, std::string* error = nullptr, NetIdentityBuildOptions options = {});
 		static bool WriteManifestJson(const NetIdentityManifest& manifest, const std::string& path, std::string* error = nullptr);
 		static bool DumpCurrentManifestJson(const std::string& path, std::string* error = nullptr, NetIdentityManifest* outManifest = nullptr);
 

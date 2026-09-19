@@ -398,9 +398,7 @@ namespace RTE {
 		return HashIdentity(manifest);
 	}
 
-	bool NetIdentity::BuildCurrentManifest(NetIdentityManifest& outManifest, std::string* error, NetIdentityBuildOptions options) {
-		const auto started = std::chrono::steady_clock::now();
-
+	bool NetIdentity::CaptureManifestInputs(NetIdentityManifest& outManifest, std::string* error, NetIdentityBuildOptions options) {
 		NetIdentityManifest manifest;
 		manifest.schema = 1;
 		manifest.gameVersion = c_VersionString;
@@ -429,7 +427,6 @@ namespace RTE {
 		manifest.deterministicConfig.lobbyProtocolVersion = NetLobbyProtocol::c_Version;
 		manifest.deterministicConfig.enabledGlobalScripts = g_SettingsMan.GetEnabledGlobalScriptsCSV();
 
-		const std::string workingDirectory = System::GetWorkingDirectory();
 		const int moduleCount = g_PresetMan.GetTotalModuleCount();
 		manifest.modules.reserve(static_cast<size_t>(moduleCount));
 		for (int i = 0; i < moduleCount; ++i) {
@@ -456,13 +453,25 @@ namespace RTE {
 					continue;
 				}
 			}
+			manifest.modules.push_back(std::move(module));
+		}
 
+		outManifest = std::move(manifest);
+		return true;
+	}
+
+	bool NetIdentity::CompleteManifestFromInputs(NetIdentityManifest& manifest, std::string* error, NetIdentityBuildOptions options) {
+		const auto started = std::chrono::steady_clock::now();
+		// The working directory is fixed at startup, so the file work below reads nothing live.
+		const std::string workingDirectory = System::GetWorkingDirectory();
+		for (NetIdentityModuleEntry& module : manifest.modules) {
 			const fs::path rootAbsolute = fs::path(workingDirectory) / fs::path(module.root);
 			std::vector<ModuleFileRecord> files;
 			if (!CollectModuleFiles(rootAbsolute, files, error)) {
 				return false;
 			}
 			module.fileCount = static_cast<uint64_t>(files.size());
+			module.totalBytes = 0;
 			for (const ModuleFileRecord& file : files) {
 				module.totalBytes += file.size;
 			}
@@ -474,13 +483,23 @@ namespace RTE {
 			if (fs::exists(fs::path(workingDirectory) / fs::path(zipCandidate))) {
 				manifest.warnings.push_back("module " + module.fileName + " was hashed from extracted directory; zip canonicalization remains a follow-up");
 			}
-			manifest.modules.push_back(std::move(module));
 		}
 
 		manifest.deterministicConfigHash = HashDeterministicConfig(manifest.deterministicConfig);
 		manifest.moduleManifestHash = HashModuleManifest(manifest.modules);
 		manifest.sessionRulesHash = HashSessionRulesTag(options.sessionRulesTag);
 		manifest.sessionIdentityHash = HashIdentity(manifest);
+		manifest.hashDurationMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
+		return true;
+	}
+
+	bool NetIdentity::BuildCurrentManifest(NetIdentityManifest& outManifest, std::string* error, NetIdentityBuildOptions options) {
+		const auto started = std::chrono::steady_clock::now();
+
+		NetIdentityManifest manifest;
+		if (!CaptureManifestInputs(manifest, error, options) || !CompleteManifestFromInputs(manifest, error, options)) {
+			return false;
+		}
 		manifest.hashDurationMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
 
 		outManifest = std::move(manifest);
