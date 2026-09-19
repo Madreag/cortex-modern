@@ -516,11 +516,12 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 			descriptor.sessionIdentityHash = identity->sessionIdentityHash;
 		}
 	}
-	const uint64_t pinnedTick = identity ? identity->pinnedTick : AutosaveStore::c_NoPinnedTick;
+	// The pin is read where retention runs, so an anchor named while this capture is in flight still counts.
+	const std::shared_ptr<const std::atomic<uint64_t>> pinnedTickSource = identity ? identity->pinnedTickSource : nullptr;
 	// The world text is hashed on the archive thread, so the capture never pays for the digest.
 	const auto checkpointWorld = std::make_shared<const std::string>(automatic ? worldStructure : std::string());
 	auto saveWriterData = [fileName, savePath, sceneLayerInfos, indexWriter, writer, zipLevel, automatic, matchId,
-	                       descriptor, pinnedTick, checkpointWorld]() {
+	                       descriptor, pinnedTickSource, checkpointWorld]() {
 		if (automatic) {
 			std::filesystem::create_directories(savePath.parent_path());
 		}
@@ -604,6 +605,9 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 				std::filesystem::remove(savePath, ignored);
 				throw std::runtime_error("the published checkpoint is not restorable: " + refusal);
 			}
+			// A heal names the rewind point from this record instead of reading every archive again.
+			AutosaveStore::NoteValidated(published);
+			const uint64_t pinnedTick = pinnedTickSource ? pinnedTickSource->load() : AutosaveStore::c_NoPinnedTick;
 			const size_t removed = AutosaveStore::ApplyRetention(savePath.parent_path(), matchId, pinnedTick);
 			std::cout << std::format("[autosave] retained tick={} keep={} pinned={} removed={}\n",
 			                         published.savedTick, AutosaveStore::c_RetainedAutosaves, pinnedTick, removed) << std::flush;

@@ -1,7 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -36,11 +38,19 @@ namespace RTE {
 		uint64_t sessionId = 0;
 		uint64_t roundId = 0;
 		uint32_t intervalSeconds = 0;
-		uint64_t pinnedTick = 0; //!< The agreed rewind point; retention keeps it whatever its age.
+		/// The agreed rewind point, read where retention runs rather than where the capture starts, so an
+		/// anchor named while a capture is in flight still protects its archive.
+		std::shared_ptr<const std::atomic<uint64_t>> pinnedTickSource;
 		std::string buildId;
 		std::string deterministicConfigHash;
 		std::string moduleManifestHash;
 		std::string sessionIdentityHash;
+	};
+
+	/// One checkpoint as the retention policy sees it: which tick it stands on and whether it still reads.
+	struct AutosaveCandidate {
+		uint64_t tick = 0;
+		bool restorable = false;
 	};
 
 	/// The match checkpoint store: where autosaves live, what makes one restorable, and which ones are kept.
@@ -80,14 +90,28 @@ namespace RTE {
 		static std::optional<AutosaveDescriptor> Find(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick, std::string* error = nullptr);
 		static std::optional<AutosaveDescriptor> Find(const std::string& matchId, uint64_t tick, std::string* error = nullptr);
 
-		/// The retention policy, in one place: this match keeps its newest c_RetainedAutosaves restorable
-		/// checkpoints plus the pinned one whatever its age, and loses everything else it wrote. A checkpoint
-		/// that does not validate is never retained, so what remains is exactly what a rejoin can use. Other
-		/// matches' files and anything that is not one of this match's archives are left alone.
+		/// The retention policy itself, decided on the candidates alone: this match keeps its newest
+		/// c_RetainedAutosaves restorable checkpoints plus the pinned one whatever its age, and loses
+		/// everything else it wrote. A pinned checkpoint is kept even when it no longer reads, so one
+		/// transient read failure cannot destroy the checkpoint both sides agreed to rewind to.
+		/// @param newestFirst This match's checkpoints, newest tick first.
 		/// @param pinnedTick The tick both sides agreed to rewind to, or c_NoPinnedTick.
+		/// @return The ticks that are kept, newest first.
+		static std::vector<uint64_t> RetainedTicks(const std::vector<AutosaveCandidate>& newestFirst, uint64_t pinnedTick);
+
+		/// Applies the policy to this match's archives: what it does not keep is deleted, so what remains is
+		/// exactly what a rejoin can use. Other matches' files and anything that is not one of this match's
+		/// archives are left alone.
 		/// @return How many archives were removed.
 		static size_t ApplyRetention(const std::filesystem::path& directory, const std::string& matchId, uint64_t pinnedTick);
 		static size_t ApplyRetention(const std::string& matchId, uint64_t pinnedTick);
+
+		/// Records a checkpoint this process published and proved restorable, so a heal can name the rewind
+		/// point without reading every archive of the match again.
+		static void NoteValidated(const AutosaveDescriptor& descriptor);
+		/// The newest checkpoint of this match that this process published and validated, if it is still on
+		/// disk. Costs one file status query, never an archive read.
+		static std::optional<AutosaveDescriptor> NewestValidated(const std::string& matchId);
 
 		/// Exercises the policy on copies of this match's own checkpoints: the retained set, a torn
 		/// newest that must not be picked, and retention keeping the pinned rewind point.
