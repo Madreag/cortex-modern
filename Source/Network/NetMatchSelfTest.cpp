@@ -454,6 +454,68 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestHostRequestFallback(std::string* error) {
+			NetMatchServiceRequest empty;
+			empty.activityPreset = "P4 Alpha Duel";
+			empty.activityModule.clear();
+			NetMatchService::ApplyHostActivityFallback(empty);
+			if (empty.activityPreset != "P4 Alpha Duel" || empty.activityModule != "Base.rte") {
+				*error = "empty module fallback did not carry Base.rte: " + empty.activityPreset + "/" + empty.activityModule;
+				return false;
+			}
+			NetMatchServiceRequest blank;
+			blank.activityPreset.clear();
+			blank.activityModule.clear();
+			NetMatchService::ApplyHostActivityFallback(blank);
+			if (blank.activityPreset != "P4 Alpha Duel" || blank.activityModule != "Base.rte") {
+				*error = "empty picker fallback did not seat P4 Alpha Duel / Base.rte: " + blank.activityPreset + "/" + blank.activityModule;
+				return false;
+			}
+			NetMatchServiceRequest scene;
+			scene.activityPreset = "Skirmish Defense";
+			scene.activityModule = "Base.rte";
+			scene.sceneName = "Ketanot Hills";
+			scene.sceneModule = "Base.rte";
+			NetMatchConfig config;
+			if (!NetMatchService::BuildMatchConfig(scene, 123, config, error)) return false;
+			if (config.sceneName != "Ketanot Hills" || config.sceneModule != "Base.rte") {
+				*error = "request scene lost to the default: " + config.sceneName + "/" + config.sceneModule;
+				return false;
+			}
+			NetMatchServiceRequest typed;
+			typed.activityType = "GATutorial";
+			typed.activityPreset = "Tutorial Mission";
+			typed.activityModule = "Base.rte";
+			if (!NetMatchService::BuildMatchConfig(typed, 123, config, error)) return false;
+			if (config.activityType != "GATutorial") {
+				*error = "request activity class lost: " + config.activityType;
+				return false;
+			}
+			NetMatchServiceRequest unsetClass;
+			unsetClass.activityPreset = "P4 Alpha Duel";
+			if (!NetMatchService::BuildMatchConfig(unsetClass, 123, config, error)) return false;
+			if (config.activityType != "GAScripted") {
+				*error = "empty request class did not keep GAScripted: " + config.activityType;
+				return false;
+			}
+			bool sawTutorial = false;
+			for (const NetHostActivityChoice& row : NetMatchService::ListHostActivities()) {
+				if (row.preset == "Tutorial Mission" && row.module == "Base.rte") {
+					sawTutorial = true;
+					if (row.activityType != "GATutorial") {
+						*error = "Tutorial Mission class is " + row.activityType;
+						return false;
+					}
+				}
+			}
+			if (!sawTutorial) {
+				*error = "Tutorial Mission missing from host activities";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS host_request_fallback" << std::endl;
+			return true;
+		}
+
 		bool TestCPURosterRequests(std::string* error) {
 			for (bool host : {false, true}) {
 				for (bool dedicated : {false, true}) {
@@ -7466,6 +7528,7 @@ namespace RTE {
 		if (!TestDisplayNameUtf8(&error)) return fail(error);
 		if (!TestMatchConfigDedicated(&error)) return fail(error);
 		if (!TestActivityModuleResolution(&error)) return fail(error);
+		if (!TestHostRequestFallback(&error)) return fail(error);
 		if (!TestCPURosterRequests(&error)) return fail(error);
 		if (!TestCPURosterValidation(&error)) return fail(error);
 		if (!TestCPURosterHash(&error)) return fail(error);

@@ -257,11 +257,15 @@ namespace RTE {
 		GUICheckbox* m_MultiplayerHostPortMapCheckbox;
 		GUIComboBox* m_MultiplayerHostModeCombo = nullptr; //!< PvP / Co-op PvE / PvPvE for request.mode.
 		GUIComboBox* m_MultiplayerHostActivityCombo = nullptr; //!< The host's pick-list of lockstep-runnable activities.
+		GUIComboBox* m_MultiplayerHostSceneCombo = nullptr; //!< Compatible scenes for the picked activity.
 		GUILabel* m_MultiplayerHostInfoLabel;
-		// (preset, defining module) for each scripted activity a lockstep match can run; the module is
+		// (preset, defining module) for each GameActivity a lockstep match can run; the module is
 		// carried so a same-named preset in another module cannot swap in silently.
 		std::vector<std::pair<std::string, std::string>> m_MultiplayerHostActivities;
 		size_t m_MultiplayerHostActivityIndex = 0;
+		std::vector<std::pair<std::string, std::string>> m_MultiplayerHostScenes;
+		size_t m_MultiplayerHostSceneIndex = 0;
+		std::string m_MultiplayerHostPickNotice; //!< Vanished-pick line; empty when the current row still exists.
 		NetMatchMode m_MultiplayerHostMode;
 		GUITextBox* m_MultiplayerJoinAddressTextBox;
 		GUITextBox* m_MultiplayerJoinPortTextBox;
@@ -444,9 +448,11 @@ namespace RTE {
 
 		/// Rebuilds the host activity picker's choices from the loaded presets, keeping the current pick.
 		void RefreshMultiplayerHostActivities();
-		/// Sizes the activity combo to its longest row plus the list pad and scrollbar, clipped to the panel's right pad.
+		/// Rebuilds the scene list for the picked activity, keeping the current scene when it is still compatible.
+		void RefreshMultiplayerHostScenes();
+		/// Sizes the activity and scene combos to their own longest row plus the list pad and scrollbar, clipped to the panel's right pad; the mode combo follows the activity's width.
 		void FitHostActivityCombo();
-		/// Writes the picked activity's preset and module onto the setup screen's own display.
+		/// Writes the picked activity and scene onto the setup screen's own display.
 		void ApplyMultiplayerHostActivity();
 		/// Starts hosting or joining a multiplayer match from the setup screen fields.
 		void StartMultiplayer(bool host);

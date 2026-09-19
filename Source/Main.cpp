@@ -233,6 +233,8 @@ static bool s_netMatchServiceE2E = false;
 static bool s_netDedicated = false;
 static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
 static std::string s_netMatchServiceE2EModule;
+static std::string s_netMatchServiceE2EScene;
+static std::string s_netMatchServiceE2ESceneModule;
 static std::string s_netMatchServiceConfigPath;
 static std::string s_netPlayerName;
 
@@ -889,6 +891,14 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (!lastArg && currentArg == "-net-match-service-config") {
 			s_netMatchServiceConfigPath = argValue[++i];
+			continue;
+		}
+		if (!lastArg && currentArg == "-net-match-service-scene") {
+			s_netMatchServiceE2EScene = argValue[++i];
+			continue;
+		}
+		if (!lastArg && currentArg == "-net-match-service-scene-module") {
+			s_netMatchServiceE2ESceneModule = argValue[++i];
 			continue;
 		}
 		// The seat name this peer announces; without it the e2e path still defaults to Host/Client.
@@ -1763,6 +1773,7 @@ void ProcessMenuScript() {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::cout << "[menu-script] dump_lobby state=" << snapshot.serviceState << " members=" << snapshot.members.size()
 				  << " activity=\"" << snapshot.activityPreset << "\" module=\"" << snapshot.activityModule << "\""
+				  << " scene=\"" << snapshot.sceneName << "\" scene_module=\"" << snapshot.sceneModule << "\""
 				  << " error=\"" << snapshot.errorText << "\" status=\"" << snapshot.statusText << "\""
 				  << " input_delay=\"" << snapshot.inputDelayText << "\""
 				  << " port_map=\"" << snapshot.portMap << "\"";
@@ -5456,7 +5467,14 @@ int RunNetMatchServiceE2E() {
 			} else {
 				request.standardRules = payload->config;
 				request.activityPreset = payload->config.activityPreset;
+				request.activityModule = payload->config.activityModule;
+				request.sceneName = payload->config.sceneName;
+				request.sceneModule = payload->config.sceneModule;
 			}
+		}
+		if (!s_netMatchServiceE2EScene.empty()) {
+			request.sceneName = s_netMatchServiceE2EScene;
+			request.sceneModule = s_netMatchServiceE2ESceneModule;
 		}
 		// The e2e honours -net-match-ownership-policy; team-owner is the default so the flagless path is unchanged.
 		NetActorOwnershipPolicy e2ePolicy;
@@ -6003,6 +6021,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-float-text-selftest") {
 			return FloatTextSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-combo-key-selftest") {
+			return GUIManager::RunComboKeyCommitSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-settings-preferences-selftest") {
 			return SettingsMan::RunNetworkPreferencesSelfTest();

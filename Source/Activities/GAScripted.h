@@ -90,6 +90,9 @@ namespace RTE {
 		/// @return A string with the friendly-formatted Lua type name of this object.
 		const std::string& GetLuaClassName() const { return m_LuaClassName; }
 
+		/// Areas a scene must define before this activity will accept it.
+		const std::set<std::string>& GetRequiredAreas() const { return m_RequiredAreas; }
+
 		/// The native global scripts owned by this activity, in checkpoint order.
 		const std::vector<GlobalScript*>& GetGlobalScripts() const { return m_GlobalScriptsList; }
 

@@ -37,6 +37,7 @@
 #include "Resources/Credits.h"
 
 #include <algorithm>
+#include <map>
 #include <chrono>
 #include <charconv>
 #include <cctype>
@@ -204,9 +205,13 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerHostPortMapCheckbox = nullptr;
 	m_MultiplayerHostModeCombo = nullptr;
 	m_MultiplayerHostActivityCombo = nullptr;
+	m_MultiplayerHostSceneCombo = nullptr;
 	m_MultiplayerHostInfoLabel = nullptr;
 	m_MultiplayerHostActivities.clear();
 	m_MultiplayerHostActivityIndex = 0;
+	m_MultiplayerHostScenes.clear();
+	m_MultiplayerHostSceneIndex = 0;
+	m_MultiplayerHostPickNotice.clear();
 	m_MultiplayerHostMode = NetMatchMode::PvPSkirmish;
 	m_MultiplayerJoinAddressTextBox = nullptr;
 	m_MultiplayerJoinPortTextBox = nullptr;
@@ -351,6 +356,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostPortMapCheckbox = dynamic_cast<GUICheckbox*>(m_SubMenuScreenGUIControlManager->GetControl("CheckHostPortMap"));
 	m_MultiplayerHostModeCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostMode"));
 	m_MultiplayerHostActivityCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostActivity"));
+	m_MultiplayerHostSceneCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostScene"));
 	m_MultiplayerHostInfoLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInfo"));
 	if (m_MultiplayerHostModeCombo) {
 		m_MultiplayerHostModeCombo->ClearList();
@@ -837,7 +843,8 @@ bool MainMenuGUI::HandleInputEvents() {
 		} else if (guiEvent.GetType() == GUIEvent::Notification && (guiEvent.GetControl() == m_MultiplayerLanGamesList || guiEvent.GetControl() == m_ReplayList)) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUIComboBox::Closed &&
-		           (guiEvent.GetControl() == m_MultiplayerHostActivityCombo || guiEvent.GetControl() == m_MultiplayerHostModeCombo)) {
+		           (guiEvent.GetControl() == m_MultiplayerHostActivityCombo || guiEvent.GetControl() == m_MultiplayerHostSceneCombo ||
+		            guiEvent.GetControl() == m_MultiplayerHostModeCombo)) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUICheckbox::Changed && guiEvent.GetControl() == m_MultiplayerHostPortMapCheckbox) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
@@ -976,6 +983,15 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		if (selected >= 0 && static_cast<size_t>(selected) < m_MultiplayerHostActivities.size()) {
 			m_MultiplayerHostActivityIndex = static_cast<size_t>(selected);
 		}
+		m_MultiplayerHostPickNotice.clear();
+		RefreshMultiplayerHostScenes();
+		g_GUISound.ItemChangeSound()->Play();
+	} else if (guiEventControl == m_MultiplayerHostSceneCombo) {
+		const int selected = m_MultiplayerHostSceneCombo ? m_MultiplayerHostSceneCombo->GetSelectedIndex() : -1;
+		if (selected >= 0 && static_cast<size_t>(selected) < m_MultiplayerHostScenes.size()) {
+			m_MultiplayerHostSceneIndex = static_cast<size_t>(selected);
+		}
+		m_MultiplayerHostPickNotice.clear();
 		ApplyMultiplayerHostActivity();
 		g_GUISound.ItemChangeSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReadyButton]) {
@@ -1062,30 +1078,71 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 }
 
 void MainMenuGUI::RefreshMultiplayerHostActivities() {
-	// The host's picker offers the scripted activities a lockstep match can run, each pinned to the
-	// module that defines it so a same-named preset elsewhere cannot swap in silently. The presets do
-	// not exist until the modules load, so the list is built on entry to the host setup screen.
+	// Same walk as the scenario menu: every GameActivity that is not a test and has a compatible scene.
 	const std::pair<std::string, std::string> current =
 		m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size() ? m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex] : std::pair<std::string, std::string>{"P4 Alpha Duel", "Base.rte"};
+	const bool hadPick = !m_MultiplayerHostActivities.empty();
 	m_MultiplayerHostActivities.clear();
-	std::list<Entity*> presets;
-	if (g_PresetMan.GetAllOfType(presets, "Activity")) {
-		for (const Entity* entity: presets) {
-			const auto* activity = dynamic_cast<const Activity*>(entity);
-			if (!activity || activity->GetClassName() != "GAScripted" || activity->IsTestActivity()) continue;
-			m_MultiplayerHostActivities.emplace_back(activity->GetPresetName(), g_PresetMan.GetDataModuleName(activity->GetModuleID()));
-		}
+	for (const NetHostActivityChoice& row: g_NetMatchService.ListHostActivities()) {
+		m_MultiplayerHostActivities.emplace_back(row.preset, row.module);
 	}
 	m_MultiplayerHostActivityIndex = 0;
+	bool found = false;
 	for (size_t i = 0; i < m_MultiplayerHostActivities.size(); ++i) {
 		if (m_MultiplayerHostActivities[i] == current) {
 			m_MultiplayerHostActivityIndex = i;
+			found = true;
 		}
+	}
+	if (hadPick && !found && !m_MultiplayerHostActivities.empty()) {
+		m_MultiplayerHostPickNotice = current.first + " is no longer loaded; picked " +
+		                             m_MultiplayerHostActivities[0].first +
+		                             (m_MultiplayerHostActivities[0].second.empty() ? "" : " - " + m_MultiplayerHostActivities[0].second);
+	} else if (found) {
+		m_MultiplayerHostPickNotice.clear();
 	}
 	if (m_MultiplayerHostActivityCombo) {
 		m_MultiplayerHostActivityCombo->ClearList();
 		for (const auto& [preset, module] : m_MultiplayerHostActivities) {
 			m_MultiplayerHostActivityCombo->AddItem(preset + (module.empty() ? "" : " - " + module));
+		}
+	}
+	RefreshMultiplayerHostScenes();
+}
+
+void MainMenuGUI::RefreshMultiplayerHostScenes() {
+	const std::pair<std::string, std::string> current =
+		m_MultiplayerHostSceneIndex < m_MultiplayerHostScenes.size() ? m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex] : std::pair<std::string, std::string>{};
+	const std::string preset = m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size() ? m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].first : "P4 Alpha Duel";
+	const std::string module = m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size() ? m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].second : "Base.rte";
+	m_MultiplayerHostScenes.clear();
+	for (const NetHostSceneChoice& row: g_NetMatchService.ListHostScenes(preset, module)) {
+		m_MultiplayerHostScenes.emplace_back(row.name, row.module);
+	}
+	m_MultiplayerHostSceneIndex = 0;
+	bool found = false;
+	for (size_t i = 0; i < m_MultiplayerHostScenes.size(); ++i) {
+		if (!current.first.empty() && m_MultiplayerHostScenes[i] == current) {
+			m_MultiplayerHostSceneIndex = i;
+			found = true;
+		}
+	}
+	if (!found) {
+		for (size_t i = 0; i < m_MultiplayerHostScenes.size(); ++i) {
+			if (m_MultiplayerHostScenes[i].first == "Grasslands") {
+				m_MultiplayerHostSceneIndex = i;
+				break;
+			}
+		}
+	}
+	if (m_MultiplayerHostSceneCombo) {
+		m_MultiplayerHostSceneCombo->ClearList();
+		std::map<std::string, int> names;
+		for (const auto& [name, sceneModule] : m_MultiplayerHostScenes) {
+			++names[name];
+		}
+		for (const auto& [name, sceneModule] : m_MultiplayerHostScenes) {
+			m_MultiplayerHostSceneCombo->AddItem(name + (names[name] > 1 && !sceneModule.empty() ? " - " + sceneModule : ""));
 		}
 	}
 	FitHostActivityCombo();
@@ -1096,46 +1153,54 @@ void MainMenuGUI::FitHostActivityCombo() {
 	if (!m_MultiplayerHostActivityCombo || !m_MultiplayerHostPortTextBox || !m_MultiplayerHostPanel) {
 		return;
 	}
-	const int valueX = m_MultiplayerHostPortTextBox->GetRelXPos();
-	GUIListPanel* list = m_MultiplayerHostActivityCombo->GetListPanel();
-	GUIFont* font = list ? list->GetFont() : nullptr;
-	if (!font && m_SubMenuScreenGUIControlManager && m_SubMenuScreenGUIControlManager->GetSkin()) {
-		GUISkin* skin = m_SubMenuScreenGUIControlManager->GetSkin();
-		std::string fontName;
-		if (skin->GetValue("Listbox", "Font", &fontName)) {
-			font = skin->GetFont(fontName);
-		}
-		if (!font) {
-			font = skin->GetFont("FontLarge.png");
-		}
-	}
-	int longest = 0;
-	if (font) {
-		for (int i = 0; i < m_MultiplayerHostActivityCombo->GetCount(); ++i) {
-			if (const GUIListPanel::Item* item = m_MultiplayerHostActivityCombo->GetItem(i)) {
-				longest = std::max(longest, font->CalculateWidth(item->m_Name));
-			}
-		}
-	}
 	constexpr int namePad = 8;
 	constexpr int scrollThickness = 17;
 	constexpr int panelPad = 12;
-	const int rowHeight = font ? font->GetFontHeight() : 0;
-	const int stackHeight = std::max(list ? list->GetStackHeight() : 0,
-	                                 rowHeight * m_MultiplayerHostActivityCombo->GetCount());
-	const int scroll = (rowHeight > 0 && stackHeight > m_MultiplayerHostActivityCombo->GetDropHeight())
-	                       ? scrollThickness : 0;
-	const int needed = longest > 0 ? longest + namePad + scroll : m_MultiplayerHostActivityCombo->GetWidth();
+	const int valueX = m_MultiplayerHostPortTextBox->GetRelXPos();
 	const int maxWidth = std::max(80, m_MultiplayerHostPanel->GetWidth() - valueX - panelPad);
-	const int width = std::clamp(std::max(needed, 80), 80, maxWidth);
-	m_MultiplayerHostActivityCombo->SetPositionRel(valueX, m_MultiplayerHostActivityCombo->GetRelYPos());
-	if (m_MultiplayerHostActivityCombo->GetWidth() != width) {
-		m_MultiplayerHostActivityCombo->Resize(width, m_MultiplayerHostActivityCombo->GetHeight());
+	// Every picker in the value column is measured the same way: its own longest row plus the list
+	// pad and, when the rows overflow the drop, the scrollbar.
+	const auto fit = [&](GUIComboBox* combo) {
+		GUIListPanel* list = combo->GetListPanel();
+		GUIFont* font = list ? list->GetFont() : nullptr;
+		if (!font && m_SubMenuScreenGUIControlManager && m_SubMenuScreenGUIControlManager->GetSkin()) {
+			GUISkin* skin = m_SubMenuScreenGUIControlManager->GetSkin();
+			std::string fontName;
+			if (skin->GetValue("Listbox", "Font", &fontName)) {
+				font = skin->GetFont(fontName);
+			}
+			if (!font) {
+				font = skin->GetFont("FontLarge.png");
+			}
+		}
+		int longest = 0;
+		if (font) {
+			for (int i = 0; i < combo->GetCount(); ++i) {
+				if (const GUIListPanel::Item* item = combo->GetItem(i)) {
+					longest = std::max(longest, font->CalculateWidth(item->m_Name));
+				}
+			}
+		}
+		const int rowHeight = font ? font->GetFontHeight() : 0;
+		const int stackHeight = std::max(list ? list->GetStackHeight() : 0, rowHeight * combo->GetCount());
+		const int scroll = (rowHeight > 0 && stackHeight > combo->GetDropHeight()) ? scrollThickness : 0;
+		const int needed = longest > 0 ? longest + namePad + scroll : combo->GetWidth();
+		const int width = std::clamp(std::max(needed, 80), 80, maxWidth);
+		combo->SetPositionRel(valueX, combo->GetRelYPos());
+		if (combo->GetWidth() != width) {
+			combo->Resize(width, combo->GetHeight());
+		}
+		return width;
+	};
+	const int activityWidth = fit(m_MultiplayerHostActivityCombo);
+	if (m_MultiplayerHostSceneCombo) {
+		fit(m_MultiplayerHostSceneCombo);
 	}
+	// The mode rows are short words, so the mode picker follows the activity picker's width.
 	if (m_MultiplayerHostModeCombo) {
 		m_MultiplayerHostModeCombo->SetPositionRel(valueX, m_MultiplayerHostModeCombo->GetRelYPos());
-		if (m_MultiplayerHostModeCombo->GetWidth() != width) {
-			m_MultiplayerHostModeCombo->Resize(width, m_MultiplayerHostModeCombo->GetHeight());
+		if (m_MultiplayerHostModeCombo->GetWidth() != activityWidth) {
+			m_MultiplayerHostModeCombo->Resize(activityWidth, m_MultiplayerHostModeCombo->GetHeight());
 		}
 	}
 }
@@ -1153,12 +1218,26 @@ void MainMenuGUI::ApplyMultiplayerHostActivity() {
 			m_MultiplayerHostActivityCombo->SetText(preset + (module.empty() ? "" : " - " + module));
 		}
 	}
+	const auto* scene = m_MultiplayerHostSceneIndex < m_MultiplayerHostScenes.size()
+	                        ? &m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex] : nullptr;
+	const std::string sceneName = scene ? scene->first : "Grasslands";
+	if (m_MultiplayerHostSceneCombo) {
+		if (scene) {
+			m_MultiplayerHostSceneCombo->SetSelectedIndex(static_cast<int>(m_MultiplayerHostSceneIndex));
+		} else {
+			m_MultiplayerHostSceneCombo->SetText(sceneName);
+		}
+	}
 	if (m_MultiplayerHostModeCombo) {
 		const int modeIndex = m_MultiplayerHostMode == NetMatchMode::CoopPvE ? 1 : (m_MultiplayerHostMode == NetMatchMode::PvPvE ? 2 : 0);
 		m_MultiplayerHostModeCombo->SetSelectedIndex(modeIndex);
 	}
 	if (m_MultiplayerHostInfoLabel) {
-		m_MultiplayerHostInfoLabel->SetText(std::string("Grasslands - ") + NetMatchConfigUtil::ModeLabel(m_MultiplayerHostMode));
+		if (!m_MultiplayerHostPickNotice.empty()) {
+			m_MultiplayerHostInfoLabel->SetText(m_MultiplayerHostPickNotice);
+		} else {
+			m_MultiplayerHostInfoLabel->SetText(sceneName + " - " + NetMatchConfigUtil::ModeLabel(m_MultiplayerHostMode));
+		}
 	}
 }
 
@@ -1198,10 +1277,24 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		g_SettingsMan.UpdateSettingsFile();
 	}
 	request.activityPreset = "P4 Alpha Duel";
+	request.activityModule = "Base.rte";
 	if (host && m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size()) {
 		// The host's picker names both fields, so the lobby never resolves a bare preset name.
 		request.activityPreset = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].first;
 		request.activityModule = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].second;
+		for (const NetHostActivityChoice& row: g_NetMatchService.ListHostActivities()) {
+			if (row.preset == request.activityPreset && row.module == request.activityModule) {
+				request.activityType = row.activityType;
+				break;
+			}
+		}
+	}
+	if (host && m_MultiplayerHostSceneIndex < m_MultiplayerHostScenes.size()) {
+		request.sceneName = m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex].first;
+		request.sceneModule = m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex].second;
+	}
+	if (host) {
+		NetMatchService::ApplyHostActivityFallback(request);
 	}
 	request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 	// Headed matches self-heal: a desync (or a rejoiner) reloads everyone from the host's snapshot.
