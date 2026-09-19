@@ -90,5 +90,9 @@ namespace RTE {
 		/// @return How many archives were removed.
 		static size_t ApplyRetention(const std::filesystem::path& directory, const std::string& matchId, uint64_t pinnedTick);
 		static size_t ApplyRetention(const std::string& matchId, uint64_t pinnedTick);
+
+		/// Exercises the policy on copies of this match's own checkpoints: the retained set, a torn
+		/// newest that must not be picked, and retention keeping the pinned rewind point.
+		static bool RunSelfTest(const std::string& matchId);
 	};
 } // namespace RTE

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <iostream>
 #include <sstream>
 #include <system_error>
 
@@ -285,5 +286,46 @@ namespace RTE {
 
 	size_t AutosaveStore::ApplyRetention(const std::string& matchId, uint64_t pinnedTick) {
 		return ApplyRetention(Directory(), matchId, pinnedTick);
+	}
+
+	bool AutosaveStore::RunSelfTest(const std::string& matchId) {
+		constexpr const char* Tag = "[autosave-store-selftest]";
+		const std::filesystem::path scratch = Directory() / "selftest";
+		std::error_code ignored;
+		std::filesystem::remove_all(scratch, ignored);
+		const std::vector<AutosaveDescriptor> held = ListRestorable(Directory(), matchId);
+		if (held.size() < 2) {
+			std::cout << Tag << " FAIL match=" << matchId << " restorable=" << held.size() << " (two checkpoints are needed)" << std::endl;
+			return false;
+		}
+		std::filesystem::create_directories(scratch, ignored);
+		for (const AutosaveDescriptor& descriptor: held) {
+			std::filesystem::copy_file(descriptor.path, scratch / descriptor.path.filename(), std::filesystem::copy_options::overwrite_existing, ignored);
+		}
+		const std::vector<AutosaveDescriptor> copied = ListRestorable(scratch, matchId);
+		const bool sameSet = copied.size() == held.size() &&
+		                     std::equal(copied.begin(), copied.end(), held.begin(), [](const auto& left, const auto& right) { return left.savedTick == right.savedTick; });
+
+		const std::filesystem::path torn = ArchivePath(scratch, matchId, held.front().savedTick);
+		std::filesystem::resize_file(torn, std::filesystem::file_size(torn, ignored) / 2, ignored);
+		AutosaveDescriptor refused;
+		std::string reason;
+		const bool tornRefused = !Validate(torn, refused, &reason);
+		const std::optional<AutosaveDescriptor> picked = NewestRestorable(scratch, matchId);
+		const bool skippedTorn = picked.has_value() && picked->savedTick == held[1].savedTick;
+
+		const uint64_t pinned = held.back().savedTick;
+		const size_t removed = ApplyRetention(scratch, matchId, pinned);
+		const std::vector<AutosaveDescriptor> kept = ListRestorable(scratch, matchId);
+		const bool tornDropped = std::none_of(kept.begin(), kept.end(), [&](const auto& entry) { return entry.savedTick == held.front().savedTick; });
+		const bool pinnedKept = std::any_of(kept.begin(), kept.end(), [&](const auto& entry) { return entry.savedTick == pinned; });
+		std::filesystem::remove_all(scratch, ignored);
+
+		const bool passed = sameSet && tornRefused && skippedTorn && removed >= 1 && tornDropped && pinnedKept;
+		std::cout << Tag << (passed ? " PASS" : " FAIL") << " match=" << matchId << " restorable=" << held.size()
+		          << " same_set=" << sameSet << " torn_refused=" << tornRefused << " (" << reason << ")"
+		          << " skipped_torn=" << skippedTorn << " removed=" << removed << " torn_dropped=" << tornDropped
+		          << " pinned_kept=" << pinnedKept << std::endl;
+		return passed;
 	}
 } // namespace RTE
