@@ -3,6 +3,7 @@
 #include "Timer.h"
 #include "Vector.h"
 #include "Box.h"
+#include "FloatText.h"
 
 #include <array>
 #include <bit>
@@ -99,6 +100,23 @@ namespace RTE {
 		}
 		void OnCommit(std::function<void()> apply) { if (!m_ValidateOnly) m_Apply.push_back(std::move(apply)); }
 		template <class... Values> void operator()(Values&... values) { (Stage(values), ...); }
+		/// PieMenuRuntime1 only: four timer ticks, integer or an exact-integer dotted token.
+		void StageRuntime1Timer(Timer& value) {
+			int64_t start = 0;
+			int64_t limit = 0;
+			int64_t realStart = 0;
+			int64_t realLimit = 0;
+			ReadRuntime1Ticks(start);
+			ReadRuntime1Ticks(limit);
+			ReadRuntime1Ticks(realStart);
+			ReadRuntime1Ticks(realLimit);
+			Timer candidate;
+			candidate.SetStartSimTimeTicks(start);
+			candidate.SetSimTimeLimitTicks(limit);
+			candidate.SetStartRealTimeTicks(realStart);
+			candidate.SetRealTimeLimitTicks(realLimit);
+			OnCommit([&value, candidate = std::move(candidate)]() mutable { value = std::move(candidate); });
+		}
 
 		// Decode fields into independent storage. A malformed later field cannot partially
 		// change the target, and validation never creates/replaces an owning native object.
@@ -191,6 +209,26 @@ namespace RTE {
 		std::string_view m_Text;
 		bool m_ValidateOnly;
 		std::vector<std::function<void()>> m_Apply;
+		void ReadRuntime1Ticks(int64_t& ticks) {
+			const size_t end = m_Text.find(' ');
+			if (end == std::string_view::npos || end == 0) throw std::runtime_error("truncated runtime checkpoint timer");
+			const char* first = m_Text.data();
+			const char* last = first + end;
+			int64_t integer = 0;
+			const auto asInt = std::from_chars(first, last, integer);
+			if (asInt.ec == std::errc() && asInt.ptr == last) {
+				ticks = integer;
+				m_Text.remove_prefix(end + 1);
+				return;
+			}
+			double number = 0;
+			const auto asDouble = ParseNumberExact(first, last, number);
+			if (asDouble.ec != std::errc() || asDouble.ptr != last || std::trunc(number) != number) {
+				throw std::runtime_error("runtime checkpoint timer is not an exact integer");
+			}
+			ticks = static_cast<int64_t>(number);
+			m_Text.remove_prefix(end + 1);
+		}
 		size_t Count() {
 			size_t size = 0;
 			Value(size);

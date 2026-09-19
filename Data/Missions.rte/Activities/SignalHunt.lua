@@ -488,7 +488,7 @@ function SignalHunt:UpdateScreenTextAndObjectiveArrows(humanActorCount)
 			if self:PlayerActive(player) and self:PlayerHuman(player) then
 				local brain = self:GetPlayerBrain(player);
 				if brain and self.currentFightStage > self.fightStage.beginFight and (not self.actorHoldingControlChip or self.actorHoldingControlChip.UniqueID ~= brain.UniqueID) and (not self.evacuationRocket or self.evacuationRocket.UniqueID ~= brain.UniqueID) then
-					self:AddObjectivePoint("Protect!", brain.AboveHUDPos, self.humanTeam, GameActivity.ARROWDOWN);
+					self:AddObjectivePoint("Protect!", brain.AboveHeadPos, self.humanTeam, GameActivity.ARROWDOWN);
 				elseif not brain then
 					local screen = self:ScreenOfPlayer(player);
 					FrameMan:ClearScreenText(screen);
@@ -563,13 +563,13 @@ function SignalHunt:UpdateScreenTextAndObjectiveArrows(humanActorCount)
 				self:AddObjectivePoint("Pick up the Cloning Control Chip!", self.controlChip.Pos, self.humanTeam, GameActivity.ARROWDOWN);
 			elseif self.actorHoldingControlChip then
 				if self.actorHoldingControlChip.Team == self.humanTeam and (not self.evacuationRocket or self.actorHoldingControlChip.UniqueID ~= self.evacuationRocket.UniqueID) then
-					self:AddObjectivePoint("Evacuate the Cloning Control Chip!", self.actorHoldingControlChip.AboveHUDPos, self.humanTeam, GameActivity.ARROWDOWN);
+					self:AddObjectivePoint("Evacuate the Cloning Control Chip!", self.actorHoldingControlChip.AboveHeadPos, self.humanTeam, GameActivity.ARROWDOWN);
 				elseif self.actorHoldingControlChip.Team ~= self.humanTeam then
-					self:AddObjectivePoint("Kill to retrieve the Cloning Control Chip!", self.actorHoldingControlChip.AboveHUDPos, self.humanTeam, GameActivity.ARROWDOWN);
+					self:AddObjectivePoint("Kill to retrieve the Cloning Control Chip!", self.actorHoldingControlChip.AboveHeadPos, self.humanTeam, GameActivity.ARROWDOWN);
 				end
 			end
 			if self.evacuationRocket and (not self.actorHoldingControlChip or self.actorHoldingControlChip.UniqueID ~= self.evacuationRocket.UniqueID) then
-				self:AddObjectivePoint(self.secretIndex == nil and "Get To The Rocket!!!" or "Get the Cloning Control Chip to the rocket!", self.evacuationRocket.AboveHUDPos, self.humanTeam, GameActivity.ARROWDOWN);
+				self:AddObjectivePoint(self.secretIndex == nil and "Get To The Rocket!!!" or "Get the Cloning Control Chip to the rocket!", self.evacuationRocket.AboveHeadPos, self.humanTeam, GameActivity.ARROWDOWN);
 			end
 		end
 	elseif self.WinnerTeam == self.humanTeam and not self.screenTextTimer:IsPastSimMS(self.screenTextTimeLimit) then

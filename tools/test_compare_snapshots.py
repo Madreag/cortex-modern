@@ -762,6 +762,44 @@ class RuntimeProjectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assert_field(audio, path, False)
 
+    def shared_intensity_activity(self, intensity="-0.5", obj=(320.0, 200.0)):
+        activity = self.shared_seat_activity()
+        activity["saved_encoded"] = {}
+        activity["saved_strings"] = {"GameIntensityCalculatorMainTable": intensity}
+        activity["saved_numbers"] = {}
+        return activity, intensity, obj
+
+    def shared_intensity_game(self, obj=(320.0, 200.0)):
+        timer = lambda seat: dict(sim_start=seat, sim_limit=20, real_start=seat + 1, real_limit=30)
+        return dict(version="GameActivity1", cpu_team=1, team_is_cpu=[0, 1, 0, 1], brain_lz_width=[5, 6, 7, 8],
+            **{key: [[seat, seat + 1] for seat in range(4)] for key in
+               ("observation_target", "death_view_target", "actor_cursor", "landing_zone")},
+            actor_select_timer=[timer(seat) for seat in range(4)],
+            player_ui=[dict(buy=seat, editor=seat, inventory=seat) for seat in range(4)],
+            objectives=[dict(description="Protect!", scene_pos=[obj[0], obj[1]], team=0, arrow=0)])
+
+    def test_saved_intensity_and_objectives_are_shared(self):
+        activity, _, obj = self.shared_intensity_activity()
+        self.assert_field(activity, ("saved_strings", "GameIntensityCalculatorMainTable"), False)
+        game = self.shared_intensity_game(obj)
+        self.assert_field(game, ("objectives", 0, "scene_pos", 0), False)
+
+    def test_peer_intensity_and_objectives_match_through_the_comparer(self):
+        host_activity, _, obj = self.shared_intensity_activity("-0.1", (320.0, 200.0))
+        client_activity, _, _ = self.shared_intensity_activity("-0.1", (320.0, 200.0))
+        self.assertEqual(runtime.project(host_activity, True), runtime.project(client_activity, True))
+        other_activity, _, _ = self.shared_intensity_activity("-0.42", (320.0, 200.0))
+        self.assertNotEqual(runtime.project(host_activity, True), runtime.project(other_activity, True))
+        host_game = self.shared_intensity_game(obj)
+        client_game = self.shared_intensity_game(obj)
+        self.assertEqual(runtime.project(host_game, True), runtime.project(client_game, True))
+        other_game = self.shared_intensity_game((9.0, 9.0))
+        self.assertNotEqual(runtime.project(host_game, True), runtime.project(other_game, True))
+
+    def test_pie_menu_runtime1_schema_stays_the_runtime_tag(self):
+        self.assertIn("PieMenuRuntime1", runtime.SCHEMAS)
+        self.assertNotIn("PieMenuRuntime2", runtime.SCHEMAS)
+
     def test_sprite_pool_frames_and_pie_bitmaps_remain_strict(self):
         for version, keys in (("MOSpriteRuntime2", ("sprite_file", "icon_file", "images", "frames", "icon_index", "frame")),
                 ("MOSRotatingRuntime2", ("flip_bitmap", "silhouette_bitmap", "travel_impulse")),
