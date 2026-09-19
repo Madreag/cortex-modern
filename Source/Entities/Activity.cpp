@@ -1764,7 +1764,7 @@ bool Activity::RunPresentationViewSelfTest() {
 	buy.orderedByPlayer = static_cast<int8_t>(Players::PlayerOne);
 	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, buy});
 	std::vector<ScenarioRunner::PendingQueuedPurchase> peeked;
-	ScenarioRunner::PeekPendingLocalQueuedPurchases(peeked);
+	ScenarioRunner::PeekPendingLocalQueuedPurchases(peeked, press);
 	check("peek_sees_the_unapplied_order", peeked.size() == 1 && peeked[0].cost == 137.0F && peeked[0].player == Players::PlayerOne,
 	      "peeked " + std::to_string(peeked.size()) + (peeked.empty() ? "" : " cost " + std::to_string(peeked[0].cost)));
 	fixture.FillPresentationFromPreview(press, press + delay);
@@ -1832,7 +1832,7 @@ bool Activity::RunPresentationViewSelfTest() {
 	const float armed = consumedFix.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne);
 	ScenarioRunner::ConsumeLockstepGameCommand(consumedCmd);
 	std::vector<ScenarioRunner::PendingQueuedPurchase> consumed;
-	ScenarioRunner::PeekPendingLocalQueuedPurchases(consumed);
+	ScenarioRunner::PeekPendingLocalQueuedPurchases(consumed, press);
 	consumedFix.FillPresentationFromPreview(press, press + delay);
 	check("peek_empty_after_consumed_sequence", consumed.empty() && armed == 1863.0F && consumedFix.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 2000.0F,
 	      "peeked " + std::to_string(consumed.size()) + " armed " + std::to_string(armed) + " after fill " + std::to_string(consumedFix.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
