@@ -2157,6 +2157,15 @@ static std::string ResyncSaveName() {
 			liveConnections.push_back(peer.transportPeerId);
 		}
 		m_WorldJoin.ReleaseLostConnections(liveConnections);
+		// A dropped or reclaiming seat keeps its slot: only that holder may take it back, and a
+		// fresh join that arrives meanwhile watches instead of allocating it.
+		std::vector<uint8_t> reclaimHolds;
+		for (const NetH4SeatStatus& status: m_ReconnectHost.GetSeatStatuses()) {
+			if (status.lockstepPeerId != 0 && (status.dropped || status.reclaiming)) {
+				reclaimHolds.push_back(status.lockstepPeerId);
+			}
+		}
+		m_WorldJoin.NoteReclaimHolds(reclaimHolds);
 		m_WorldSpectatorsFree = static_cast<int64_t>(m_WorldJoin.SpectatorsFree());
 		for (const NetSessionPeerInfo& peer: readyPeers) {
 			if (m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
@@ -2173,15 +2182,23 @@ static std::string ResyncSaveName() {
 				continue;
 			}
 			std::string joinError;
-			if (!m_WorldJoin.BeginJoin(peer.transportPeerId, stableSeat, peer.displayName, nowMs, &joinError)) {
+			NetPeerId holderConnection = c_InvalidNetPeerId;
+			uint32_t holderGeneration = 0;
+			uint32_t holderIncarnation = 0;
+			const bool credentialedHolder = m_ReconnectHost.GetSeatHolder(stableSeat, holderConnection, holderGeneration, holderIncarnation) &&
+			                                holderConnection == peer.transportPeerId;
+			if (!m_WorldJoin.BeginJoin(peer.transportPeerId, stableSeat, peer.displayName, nowMs, &joinError, credentialedHolder)) {
 				// A world with no seat and no watcher slot answers the connection once, before it has
 				// read a byte of image, with the reason the joiner shows.
-				if (joinError == NetWorldJoinRefusalText(static_cast<uint64_t>(NetWorldJoinRefusal::WorldFull)) &&
-				    m_WorldJoin.NoteRefusal(peer.transportPeerId, NetWorldJoinRefusal::WorldFull) && m_Runner) {
+				const NetWorldJoinRefusal refusal =
+				    joinError == NetWorldJoinRefusalText(static_cast<uint64_t>(NetWorldJoinRefusal::WorldFull)) ? NetWorldJoinRefusal::WorldFull
+				    : joinError == NetWorldJoinRefusalText(static_cast<uint64_t>(NetWorldJoinRefusal::SeatHeld)) ? NetWorldJoinRefusal::SeatHeld
+				                                                                                                 : NetWorldJoinRefusal::None;
+				if (refusal != NetWorldJoinRefusal::None && m_WorldJoin.NoteRefusal(peer.transportPeerId, refusal) && m_Runner) {
 					NetLobbySession& lobby = m_Runner->GetLobbySession();
 					const uint8_t refusalPeer = c_WorldSpectatorLobbyPeerFirst;
 					(void)lobby.BindLateRemote(refusalPeer, peer.transportPeerId, nullptr);
-					(void)lobby.SendPayloadTo(refusalPeer, MakeWorldJoinReport(c_NetWorldReportRefused, static_cast<uint64_t>(NetWorldJoinRefusal::WorldFull)), nullptr);
+					(void)lobby.SendPayloadTo(refusalPeer, MakeWorldJoinReport(c_NetWorldReportRefused, static_cast<uint64_t>(refusal)), nullptr);
 					std::cout << "[net-world] refuse connection=" << peer.transportPeerId << " " << joinError << std::endl;
 				}
 				continue;
@@ -2293,6 +2310,20 @@ static std::string ResyncSaveName() {
 			(void)ScenarioRunner::SubmitWorldTransition(release);
 			m_WorldJoin.CancelJoin(connection, "clean leave");
 			std::cout << "[net-world] release peer=" << static_cast<int>(status.lockstepPeerId) << std::endl;
+			uint64_t promotedAt = 0;
+			NetPeerId promoted = c_InvalidNetPeerId;
+			if (m_WorldJoin.PromoteWaitingSpectator(nowFrame, &promotedAt, &promoted, nullptr) && promotedAt != 0) {
+				// The promoted watcher takes the plan a fresh join takes: its own announced E, then one
+				// Activate with one brain. Its member lobby id replaces the watcher id it gave back.
+				m_Coordinator->SetObservationEpoch(promotedAt);
+				if (const NetWorldJoinSession* session = m_WorldJoin.FindSession(promoted); session != nullptr && m_Runner) {
+					NetLobbySession& lobby = m_Runner->GetLobbySession();
+					(void)lobby.BindLateRemote(session->assignedPeerId, promoted, nullptr);
+					lobby.SendMatchConfigTo(session->assignedPeerId);
+					(void)lobby.SendPayloadTo(session->assignedPeerId, MakeWorldJoinReport(c_NetWorldReportActivate, promotedAt), nullptr);
+				}
+				std::cout << "[net-world] promote connection=" << promoted << " at=" << promotedAt << std::endl;
+			}
 		}
 		const uint64_t nextFrame = m_Coordinator->GetStats().nextFrame;
 		const NetWorldJoinSession* due = m_WorldJoin.DueActivation(nextFrame);

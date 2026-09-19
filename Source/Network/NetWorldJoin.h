@@ -108,7 +108,11 @@ namespace RTE {
 		NetPeerId connection = c_InvalidNetPeerId;
 		NetWorldJoinPhase phase = NetWorldJoinPhase::Idle;
 		uint16_t stableSeat = 0;
+		std::string holderName;      //!< The name the admission plane gave this connection.
 		uint32_t holderGeneration = 0;
+		bool declinesPromotion = false; //!< A watcher that asked to stay one; promotion skips it.
+		bool promoted = false;          //!< It reached its slot by promotion, not by a fresh join.
+		uint64_t joinOrder = 0;         //!< Monotonic open order, so promotion takes the oldest watcher.
 		uint8_t assignedPeerId = 0;       //!< The lockstep id activation will install; 0 until the host picks one.
 		int8_t team = -1;
 		bool spectator = false;
@@ -218,6 +222,7 @@ namespace RTE {
 		uint32_t generation = 0;   //!< Advanced on every clean leave, so a returner is a new holder.
 		uint16_t stableSeat = 0;   //!< The admission seat bound to the slot while it is held.
 		bool held = false;
+		bool reclaimHold = false; //!< Its holder dropped: only that holder may take it back.
 		std::string holderName;
 	};
 
@@ -228,17 +233,26 @@ namespace RTE {
 		/// Builds the fixed order from the world's config: one slot per non-host peer id, teams in the
 		/// config's team order. Called once at boot and after a restart, never mid-round.
 		bool Configure(const NetMatchConfig& config, std::string* error = nullptr);
-		/// The slot a fresh join takes: the first free one in the configured order. Null when the
-		/// world is full, which makes the joiner a spectator rather than a refusal.
+		/// The slot a fresh join takes: the first free one in the configured order that no reclaim
+		/// hold is keeping. Null when the world is full, which makes the joiner a spectator.
 		const NetWorldSlot* FirstFreeSlot() const;
 		/// The slot a credentialed holder reclaims; null when the seat is not this world's.
 		const NetWorldSlot* SlotOfSeat(uint16_t stableSeat) const;
 		bool Hold(uint8_t peerId, uint16_t stableSeat, const std::string& holderName, std::string* error = nullptr);
+		/// Gives a slot back to the holder its seat names. The generation does not move: a reclaim
+		/// is the same holder returning, not a new one, so the credentials it holds stay good.
+		bool Reclaim(uint8_t peerId, uint16_t stableSeat, const std::string& holderName, std::string* error = nullptr);
+		/// Marks the slot as waiting for its dropped holder, so no fresh join may allocate it.
+		bool SetReclaimHold(uint8_t peerId, bool holding);
+		/// Whether a reclaim hold is keeping this slot for its holder right now.
+		bool HoldsForReclaim(uint8_t peerId) const;
 		/// Frees the slot and advances its generation. A later return of the same player is a fresh
 		/// admission: the world never silently promises back the character it had.
 		bool Release(uint8_t peerId, std::string* error = nullptr);
 		const std::vector<NetWorldSlot>& Slots() const { return m_Slots; }
 		size_t FreeSlots() const;
+		/// Slots a reclaim hold is keeping; they are held, so they are not free either.
+		size_t ReclaimHolds() const;
 		size_t HeldSlots() const;
 		uint64_t Revision() const { return m_Revision; }
 		std::string BuildReportJson() const;
@@ -301,6 +315,7 @@ namespace RTE {
 	enum class NetWorldJoinRefusal : uint64_t {
 		None = 0,
 		WorldFull = 1, //!< Every team is at capacity and the spectator bound is spent.
+		SeatHeld = 2,  //!< The seat is waiting for its own holder to come back.
 	};
 	const char* NetWorldJoinRefusalText(uint64_t code);
 
@@ -373,7 +388,17 @@ namespace RTE {
 		/// Opens a bootstrap for an authenticated connection. Refuses a second one for the same
 		/// connection rather than opening a parallel transfer.
 		/// @param nowMs The host's admission clock, so a stalled transfer can expire.
-		bool BeginJoin(NetPeerId connection, uint16_t stableSeat, const std::string& holderName, uint64_t nowMs, std::string* error = nullptr);
+		/// @param credentialedHolder Whether the admission plane says this connection is the seat's
+		/// own returning holder. Only it may take back a slot a reclaim hold is keeping.
+		bool BeginJoin(NetPeerId connection, uint16_t stableSeat, const std::string& holderName, uint64_t nowMs, std::string* error = nullptr, bool credentialedHolder = false);
+		/// Records which slots are waiting for a dropped holder, from the admission plane's seats.
+		void NoteReclaimHolds(const std::vector<uint8_t>& peerIds);
+		/// A watcher's own choice: a spectator that declines is skipped when a slot frees.
+		bool NoteSpectatorPreference(NetPeerId connection, bool declinesPromotion);
+		/// Gives a freed slot to the oldest watcher that wants it, through the same announced
+		/// activation a fresh join takes: one promotion per call, one E, one brain.
+		/// @param outConnection The promoted watcher; unchanged when none was.
+		bool PromoteWaitingSpectator(uint64_t nowFrame, uint64_t* outActivationTick, NetPeerId* outConnection, std::string* error = nullptr);
 		/// Binds the frozen image to every bootstrap still waiting for one.
 		void PublishImage(const NetWorldCheckpointImage& image);
 		const NetWorldCheckpointImage& Image() const { return m_Image; }
@@ -445,6 +470,8 @@ namespace RTE {
 		NetWorldCheckpointImage m_Image;
 		std::vector<NetWorldJoinSession> m_Sessions;
 		std::vector<std::pair<NetPeerId, NetWorldJoinRefusal>> m_Refused; //!< Connections already turned away.
+		uint64_t m_NextJoinOrder = 1;    //!< Stamped on every bootstrap, so promotion reads join order.
+		uint64_t m_Promotions = 0;
 		uint64_t m_SentInputThrough = 0; //!< The round's highest sent target, from the coordinator.
 		uint64_t m_ActivationsCommitted = 0;
 		uint64_t m_JoinsCancelled = 0;
