@@ -6930,6 +6930,92 @@ namespace RTE {
 		return true;
 	}
 
+	// A ban list that is on disk and cannot be read is not an empty one: the host is told which file
+	// and hosts nothing rather than admitting every identity the file names.
+	bool TestUnreadableBanListHoldsAdmission(std::string* error) {
+		class ScriptedAuthCrypto : public NetAuthCrypto {
+		public:
+			bool IsRealCrypto() const override { return false; }
+			bool RandomBytes(uint8_t* buffer, size_t count) override {
+				if (buffer == nullptr) return false;
+				for (size_t i = 0; i < count; ++i) buffer[i] = static_cast<uint8_t>(++m_Counter);
+				return true;
+			}
+			bool HmacSha256(const uint8_t* key, size_t keyCount, const uint8_t* message, size_t messageCount, uint8_t (&mac)[32]) override {
+				if (key == nullptr || keyCount == 0) return false;
+				uint8_t fold = 1;
+				for (size_t i = 0; i < 32; ++i) {
+					fold = static_cast<uint8_t>(fold * 37U + (i < keyCount ? key[i] : 0) + (i < messageCount ? message[i] : 0));
+					mac[i] = fold;
+				}
+				return true;
+			}
+		private:
+			uint8_t m_Counter = 5;
+		};
+
+		ScriptedAuthCrypto crypto;
+		SetNetAuthCryptoForTest(&crypto);
+		const auto lane = std::filesystem::temp_directory_path() / "cccp-ban-list-unreadable";
+		std::error_code code;
+		std::filesystem::remove_all(lane, code);
+		std::filesystem::create_directories(lane, code);
+		const std::filesystem::path banPath = lane / "NetworkBans";
+		{
+			std::ofstream out(banPath, std::ios::binary);
+			out << "not a sealed host ban store";
+		}
+		const auto done = [&lane, &code](bool result) {
+			NetMatchService::SetHostBanStorePath("");
+			SetNetAuthCryptoForTest(nullptr);
+			std::error_code ignored = code;
+			std::filesystem::remove_all(lane, ignored);
+			return result;
+		};
+		NetMatchService::SetHostBanStorePath(banPath.string());
+		NetMatchService service;
+		NetSession session;
+		NetMatchServiceRequest request;
+		request.host = true;
+		const NetMatchConfig matchConfig = MakeConfig();
+		NetSessionConfig sessionConfig;
+		sessionConfig.sessionId = matchConfig.sessionId;
+		NetIdentityManifest manifest;
+		manifest.gameVersion = "7.0.0-test";
+		manifest.networkProtocolVersion = NetProtocol::c_Version;
+		manifest.controllerFrameVersion = ControllerFrame::c_Version;
+		manifest.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		manifest.buildId = "ban-list-selftest";
+		manifest.platform = "test";
+		if (!service.m_SeatAuth.BeginHostedSession()) {
+			*error = "the ban-list fixture could not arm reconnect auth";
+			return done(false);
+		}
+		std::string attachError;
+		if (service.AttachAdmissionPlane(session, request, matchConfig, sessionConfig, manifest, &attachError)) {
+			*error = "an unreadable ban list still attached the admission plane";
+			return done(false);
+		}
+		if (service.m_AdmissionAttached || !service.GetBanRecords().empty()) {
+			*error = "the refused attach left admission_attached=" + std::string(service.m_AdmissionAttached ? "1" : "0") +
+			         " with " + std::to_string(service.GetBanRecords().size()) + " ban records";
+			return done(false);
+		}
+		if (attachError.find(banPath.string()) == std::string::npos) {
+			*error = "the refusal did not name the ban list the host has to fix: '" + attachError + "'";
+			return done(false);
+		}
+		// The same host with a list it can read attaches exactly as before.
+		std::filesystem::remove(banPath, code);
+		std::string secondError;
+		if (!service.AttachAdmissionPlane(session, request, matchConfig, sessionConfig, manifest, &secondError) || !service.m_AdmissionAttached) {
+			*error = "a readable ban list did not attach the plane: " + secondError;
+			return done(false);
+		}
+		std::cout << "[net-match-selftest] PASS scopes: an unreadable host ban list holds admission instead of emptying itself" << std::endl;
+		return done(true);
+	}
+
 	// The seats panel never lies over a seat's message band: on a top/bottom split it takes the rows
 	// between the bands, and when no run of rows holds the whole panel the longest one takes it.
 	bool TestSeatsPanelClearsBands(std::string* error) {
@@ -10344,6 +10430,7 @@ namespace RTE {
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
 		if (!TestServiceKick(&error)) return fail(error);
 		if (!TestStartingKickMarshals(&error)) return fail(error);
+		if (!TestUnreadableBanListHoldsAdmission(&error)) return fail(error);
 		if (!TestLobbyModerationRows(&error)) return fail(error);
 		if (!TestSeatsPanelClearsBands(&error)) return fail(error);
 		if (!TestUnseatedSlotNameForms(&error)) return fail(error);

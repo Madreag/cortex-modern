@@ -458,6 +458,9 @@ namespace RTE {
 		/// §11: the multiprocess reconnect test shares one Userdata, so each process gets its own
 		/// recovery-record path instead of racing over the default one.
 		static void SetTicketStorePath(std::string path);
+		/// The host's ban list: a dedicated host keeps its own beside its configuration, and the
+		/// multiprocess gates keep one per process instead of sharing the default.
+		static void SetHostBanStorePath(std::string path);
 		/// Phase B, client: ask the host for this seat instead of joining one. The UI (B2) sets it from
 		/// the roster; the gate drivers set it from the command line.
 		static void SetApplyForSeat(bool enabled, uint16_t stableSeat);
@@ -844,7 +847,9 @@ namespace RTE {
 		void JoinWorkerIfDone();
 		/// Attaches the H4 admission plane to a freshly built session. Host: only with a live auth
 		/// epoch, so a build without crypto keeps the pre-admission handshake and issues no tickets.
-		void AttachAdmissionPlane(NetSession& session, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig, const NetSessionConfig& sessionConfig, const NetIdentityManifest& manifest);
+		/// False when a ban list that is present cannot be read; the host does not start on an
+		/// admission plane that would admit the identities it names.
+		bool AttachAdmissionPlane(NetSession& session, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig, const NetSessionConfig& sessionConfig, const NetIdentityManifest& manifest, std::string* error);
 		/// The drop-frame ownership census. Called by the reconnect host, and only ever from inside
 		/// PumpSessionEvents on the game thread - g_MovableMan is not safe to walk from anywhere else.
 		static std::vector<NetH4LedgerActor> CollectDropOwnership(void* context);
@@ -860,6 +865,7 @@ namespace RTE {
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestServiceKick(std::string* error);
 		friend bool TestStartingKickMarshals(std::string* error);
+		friend bool TestUnreadableBanListHoldsAdmission(std::string* error);
 		friend bool TestLobbyModerationRows(std::string* error);
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
@@ -1075,6 +1081,7 @@ namespace RTE {
 
 		static bool s_AdmissionEnabled;
 		static std::string s_TicketStorePath;
+		static std::string s_HostBanStorePath;
 		static std::string s_JoinWaitPath;
 		static bool s_ApplyForSeat;
 		static uint16_t s_ApplySeat;
