@@ -31,6 +31,13 @@ namespace RTE {
 		return values[(values.size() * percent + 99) / 100 - 1];
 	}
 
+	void NetInputDelayEstimator::Rebase(uint64_t nowMs) {
+		if (m_Samples.empty()) return;
+		const uint64_t last = m_Samples.back().first;
+		for (auto& [when, rtt]: m_Samples) when = nowMs >= last - when ? nowMs - (last - when) : 0;
+		m_BelowSince.reset();
+	}
+
 	uint32_t NetInputDelayEstimator::P95Ms() const { return Percentile(95); }
 	uint32_t NetInputDelayEstimator::JitterMs() const { return P95Ms() - Percentile(50); }
 

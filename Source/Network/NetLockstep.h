@@ -384,6 +384,7 @@ namespace RTE {
 		bool joinsRunningRound = false;
 		bool adaptiveInputDelay = false;
 		double simTickMs = 0;
+		std::map<uint8_t, NetInputDelayEstimator> initialDelaySamples;
 		bool substituteSlowPeers = false;
 		uint16_t slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
 	};

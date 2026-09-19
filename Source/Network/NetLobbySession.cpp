@@ -5,6 +5,7 @@
 #include "NetProtocol.h"
 #include "NetSession.h"
 #include "NetWorldJoin.h"
+#include "TimerMan.h"
 
 #include "nlohmann/json.hpp"
 
@@ -48,6 +49,8 @@ namespace RTE {
 	}
 
 	bool NetLobbySession::Start(INetTransport& transport, const NetLobbySessionConfig& config, std::string* error) {
+		m_InputDelaySamples.clear();
+		m_TimingClockMs = 0;
 		if (config.localPeerId == 0) {
 			if (error) *error = "lobby local peer id is invalid";
 			return false;
@@ -162,6 +165,7 @@ namespace RTE {
 		if (!m_Transport || m_State == NetLobbyState::Idle || IsTerminal(m_State)) {
 			return;
 		}
+		m_TimingClockMs = nowMs;
 		std::vector<NetTransportEvent> events;
 		events.swap(m_Config.pendingEvents);
 		for (NetTransportEvent& event : m_Transport->PollEvents()) events.push_back(std::move(event));
@@ -187,6 +191,7 @@ namespace RTE {
 		if (IsTerminal(m_State)) {
 			return;
 		}
+		SampleInputDelays(nowMs);
 		SendReadyIfNeeded();
 		if (IsTerminal(m_State)) {
 			return;
@@ -610,6 +615,7 @@ namespace RTE {
 			return false;
 		}
 		m_Config.matchConfig = config;
+		m_Config.autoInputDelay = config.delayPolicy == NetMatchDelayPolicy::Auto;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(config);
 		// Every peer acknowledges this exact revision before it counts again: HandleConfigAck drops an
 		// ack whose hash is the old one, so a delayed ack cannot accept a config its sender never saw.
@@ -701,6 +707,25 @@ namespace RTE {
 		RemoveRemote(transportPeerId);
 	}
 
+	void NetLobbySession::SampleInputDelays(uint64_t nowMs) {
+		if (!m_Config.host || !m_Config.autoInputDelay || IsTerminal(m_State)) return;
+		NetMatchConfig next = m_Config.matchConfig;
+		if (next.peerInputDelayFrames.empty()) next.peerInputDelayFrames.resize(next.peerCount, std::max<uint16_t>(1, next.inputDelayFrames));
+		bool changed = false;
+		for (const auto& [peer, transport]: m_RemoteTransports) {
+			if (peer == 0 || peer > next.peerCount) continue;
+			auto& sample = m_InputDelaySamples[peer];
+			sample.Observe(nowMs, m_Transport->GetPeerPingMs(transport));
+			if (const auto delay = sample.Change(nowMs, next.peerInputDelayFrames[peer - 1], g_TimerMan.GetDeltaTimeMS(), next.inputDelayFrames)) {
+				next.peerInputDelayFrames[peer - 1] = *delay;
+				changed = true;
+			}
+		}
+		if (!changed || next.configRevision == UINT64_MAX) return;
+		++next.configRevision;
+		RepublishMatchConfig(next);
+	}
+
 	void NetLobbySession::SyncSessionPeers() {
 		if (!m_Config.host || !m_Config.session) return;
 		const std::vector<NetSessionPeerInfo> readyPeers = m_Config.session->GetReadyPeers();
@@ -737,7 +762,9 @@ namespace RTE {
 				auto& delays = m_Config.matchConfig.peerInputDelayFrames;
 				if (delays.empty()) delays.resize(m_Config.matchConfig.peerCount, std::max<uint16_t>(1, m_Config.matchConfig.inputDelayFrames));
 				const uint32_t rttMs = m_Transport->GetPeerPingMs(peer.transportPeerId);
-				const uint16_t delay = static_cast<uint16_t>(std::min<uint32_t>(static_cast<uint32_t>(std::ceil(rttMs / (1000.0 / 30.0))) + 1, NetMatchConfigUtil::c_MaxInputDelayFrames));
+				auto& sample = m_InputDelaySamples[peerId];
+				sample.Observe(m_TimingClockMs, rttMs);
+				const uint16_t delay = static_cast<uint16_t>(std::min<uint32_t>(sample.RequiredFrames(g_TimerMan.GetDeltaTimeMS(), m_Config.matchConfig.inputDelayFrames), NetMatchConfigUtil::c_MaxInputDelayFrames));
 				delays.at(peerId - 1) = std::max(m_Config.matchConfig.inputDelayFrames, delay);
 			}
 		}
