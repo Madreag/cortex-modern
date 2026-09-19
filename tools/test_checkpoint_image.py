@@ -49,6 +49,7 @@ REQUIRED_SCENE_ROWS = (
     "restore_round_trip_matches_synchronous_capture",
     "autosave_capture_leaves_an_archive",
     "autosave_capture_follows_another_in_the_same_process",
+    "a_stamped_write_is_not_reused_from_the_shadow",
 )
 
 

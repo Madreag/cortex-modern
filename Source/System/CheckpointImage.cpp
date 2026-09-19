@@ -4,6 +4,7 @@
 #include "Scene.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
+#include "Actor.h"
 #include "AudioMan.h"
 #include "LuaMan.h"
 #include "RTETools.h"
@@ -539,6 +540,29 @@ bool RTE::RunCheckpointSceneRows() {
 		fail("restore_round_trip_matches_synchronous_capture", firstDifference(fresh, reused));
 	} else {
 		pass("restore_round_trip_matches_synchronous_capture", "sync, fresh and reused captures are the same bytes");
+	}
+
+	// The production peek hands back the shadow while the object's own stamp holds, so a field write
+	// that forgot TouchCheckpoint would put a stale actor in the archive.
+	if (auto* actor = dynamic_cast<Actor*>(live)) {
+		cache.Begin();
+		const std::string beforeWrite = capture(&cache).Text();
+		const uint64_t stampBefore = actor->CheckpointWriteGeneration();
+		const float health = actor->GetHealth();
+		actor->SetHealth(health - 1.0F);
+		const uint64_t stampAfter = actor->CheckpointWriteGeneration();
+		cache.Begin();
+		const std::string afterWrite = capture(&cache).Text();
+		actor->SetHealth(health);
+		if (stampAfter == stampBefore || afterWrite == beforeWrite) {
+			fail("a_stamped_write_is_not_reused_from_the_shadow",
+			     "stamp " + std::to_string(stampBefore) + "->" + std::to_string(stampAfter) +
+			         (afterWrite == beforeWrite ? " text unchanged" : " text changed"));
+		} else {
+			pass("a_stamped_write_is_not_reused_from_the_shadow", "a health write moved the stamp and the captured text");
+		}
+	} else {
+		fail("a_stamped_write_is_not_reused_from_the_shadow", "front object is not an Actor");
 	}
 	return passed;
 }
