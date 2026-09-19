@@ -151,6 +151,10 @@ namespace RTE {
 		return hasDirectAddress ? "either" : "ice";
 	}
 
+	bool NetIcePrefersP2P(const NetIceJoinTarget& target, bool iceEnabled) {
+		return iceEnabled && (target.joinMode == "ice" || target.joinMode == "either");
+	}
+
 	void FillDirectoryLocalIdentity(NetDirectoryLocalIdentity& local, const NetIdentityManifest& manifest) {
 		local.networkProtocolVersion = manifest.networkProtocolVersion;
 		local.lockstepCodecVersion = manifest.deterministicConfig.lockstepCodecVersion;
@@ -5134,9 +5138,9 @@ static std::string ResyncSaveName() {
 	} // namespace
 #endif
 
-	bool NetMatchService::SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, std::string* error) {
+	bool NetMatchService::SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error) {
 #ifndef CCCP_WITH_GNS
-		(void)request; (void)manifest; (void)mux; (void)sessionConfig; (void)joinAddress;
+		(void)request; (void)manifest; (void)mux; (void)sessionConfig; (void)joinAddress; (void)target;
 		if (error) *error = "a session-id join needs GameNetworkingSockets";
 		return false;
 #else
@@ -5196,7 +5200,6 @@ static std::string ResyncSaveName() {
 			FillDirectoryLocalIdentity(worldLocal, worldManifest);
 		}
 
-		NetIceJoinTarget target;
 		std::string why = "no such session";
 		const uint64_t deadline = SteadyNowMs() + c_IceResolveBudgetMs;
 		while (SteadyNowMs() < deadline && !m_CancelRequested.load()) {
@@ -5220,8 +5223,12 @@ static std::string ResyncSaveName() {
 			sessionConfig.localIdentity = worldManifest;
 		}
 
-		// An either/ip row that advertises an address is reached over it; ice rows have only ICE.
-		if (target.joinMode != "ice" && !target.address.empty() && target.port != 0) {
+		// Automatic prefers ICE because a directory address can be private.
+		if (!NetIcePrefersP2P(target, m_IceEnabled)) {
+			if (target.address.empty() || target.port == 0) {
+				if (error) *error = "NAT traversal is Off: enable Automatic or ask the host for a forwarded UDP address";
+				return false;
+			}
 			joinAddress = target.address;
 			sessionConfig.port = target.port;
 			{
@@ -5239,7 +5246,7 @@ static std::string ResyncSaveName() {
 		config.role = GnsDirectorySignalDispatcher::Role::Joiner;
 		config.sessionId = request.sessionId;
 		if (!m_Dispatcher->Start(*mux.P2PGns(), config)) {
-			if (error) *error = "the joiner signal channel would not open";
+			if (error) *error = "ICE signaling failed: the joiner signal channel would not open";
 			return false;
 		}
 		m_Dispatcher->SetPolling(true, SteadyNowMs());
@@ -5267,6 +5274,73 @@ static std::string ResyncSaveName() {
 		}
 		return true;
 #endif
+	}
+
+	bool NetMatchService::StartLobbyConnection(std::unique_ptr<NetMuxTransport>& mux, INetTransport& ip, NetSession& session, NetLockstepCoordinator& coordinator,
+	                                         NetMatchRunner& runner, NetMatchRunnerConfig& config, const NetIceJoinTarget& target,
+	                                         bool transportReady, bool& noDirectRoute, std::string* error) {
+		noDirectRoute = false;
+		const uint32_t directTimeoutMs = config.sessionConfig.timeoutMs;
+		if (!config.host && config.sessionConfig.p2pJoin.connect) {
+			// The host's JoinAccepted restores its heartbeat timeout after candidate gathering.
+			config.sessionConfig.timeoutMs = std::max(directTimeoutMs, c_IceConnectBudgetMs);
+		}
+		INetTransport& wire = mux ? static_cast<INetTransport&>(*mux) : ip;
+		if (transportReady && runner.Start(wire, session, coordinator, config, error)) return true;
+		if (config.host || !NetIcePrefersP2P(target, m_IceEnabled) || m_CancelRequested.load()) return false;
+		const auto routeFailed = [&] {
+			return runner.GetLobbySession().GetState() == NetLobbyState::Idle &&
+			       (session.IsFailed() || session.IsClosed() || session.GetState() == NetSessionState::Connecting) &&
+			       session.GetRemoteTransportPeerId() == c_InvalidNetPeerId && !session.IsRejected() &&
+			       (!session.HasReject() || session.GetMismatchKey() == "transport" || session.GetMismatchKey() == "timeout_ms");
+		};
+		if (transportReady && !routeFailed()) return false;
+		noDirectRoute = true;
+		const std::string iceError = (transportReady ? "ICE connection failed: " : "") + (error ? *error : std::string());
+		if (target.address.empty() || target.port == 0) {
+			if (error) *error = iceError + "; no direct IP address advertised";
+			return false;
+		}
+
+		session.Close("retry direct IP");
+		if (mux) mux->SetPump({});
+#ifdef CCCP_WITH_GNS
+		if (m_Dispatcher) {
+			m_Dispatcher->Stop();
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_IceReport = m_Dispatcher->BuildReportJson();
+			m_Dispatcher.reset();
+		}
+#endif
+		if (mux) mux->Stop();
+		config.sessionConfig.p2pJoin = {};
+		config.sessionConfig.timeoutMs = directTimeoutMs;
+		config.sessionConfig.port = target.port;
+		config.joinAddress = target.address;
+		// SessionFull retries must keep this leg instead of resolving back to ICE.
+		config.resolveJoinAddress = {};
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_IceRoute = "ip";
+			m_StatusText = "NAT traversal failed; trying the host's UDP address";
+		}
+		System::PrintDiagnosticLine("[net-ice] " + iceError + "; retrying IP " + target.address + ":" + std::to_string(target.port));
+		if (error) error->clear();
+		const bool started = runner.Start(ip, session, coordinator, config, error);
+		// The session has released the old wire before its owner is destroyed.
+		mux.reset();
+		noDirectRoute = !started && !m_CancelRequested.load() && routeFailed();
+		if (noDirectRoute && error) *error = iceError + "; IP connection failed: " + *error;
+		return started;
+	}
+
+	std::string NetMatchService::SetupFailureStatus(const NetSession* session, bool noDirectRoute) {
+		if (session && session->HasReject()) {
+			if (session->GetRejectReason() == NetRejectReason::ParticipantRemoved) return "The host removed you from this session";
+			if (session->GetRejectReason() == NetRejectReason::ParticipantBanned) return "The host banned you from this session";
+			if (session->GetRejectSummary() == "Match roster refused") return "Match roster refused";
+		}
+		return noDirectRoute ? "No direct route (NAT): forward the host's UDP port or use LAN" : "Network setup failed";
 	}
 
 	void NetMatchService::ConfigureLobbyStart(NetMatchRunnerConfig& config) {
@@ -5309,10 +5383,8 @@ static std::string ResyncSaveName() {
 			m_ChatSession = session.get();
 		}
 		std::unique_ptr<NetMuxTransport> mux;
-		INetTransport* wire = transport.get();
 		if (iceWanted || resolveDirectory) {
 			mux = std::make_unique<NetMuxTransport>();
-			wire = mux.get();
 		}
 
 		NetMatchRunnerConfig runnerConfig;
@@ -5498,8 +5570,12 @@ static std::string ResyncSaveName() {
 			}
 		};
 
+		NetIceJoinTarget iceTarget;
+		bool iceSetupFailed = false;
+		bool noDirectRoute = false;
 		if (started && (iceWanted || resolveDirectory)) {
-			started = SetUpIceTransport(request, manifest, *mux, runnerConfig.sessionConfig, runnerConfig.joinAddress, &error);
+			started = SetUpIceTransport(request, manifest, *mux, runnerConfig.sessionConfig, runnerConfig.joinAddress, iceTarget, &error);
+			iceSetupFailed = !started && !request.host && NetIcePrefersP2P(iceTarget, iceWanted);
 #ifdef CCCP_WITH_GNS
 			if (started && m_Dispatcher) {
 				GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
@@ -5507,8 +5583,8 @@ static std::string ResyncSaveName() {
 			}
 #endif
 		}
-		if (started) {
-			started = runner->Start(*wire, *session, *coordinator, runnerConfig, &error);
+		if (started || iceSetupFailed) {
+			started = StartLobbyConnection(mux, *transport, *session, *coordinator, *runner, runnerConfig, iceTarget, started, noDirectRoute, &error);
 		}
 		// A joiner whose lobby round carried a match state is RECONNECTING into a live match; it
 		// launches from the received snapshot instead of a fresh activity. Launching a FRESH match
@@ -5573,15 +5649,7 @@ static std::string ResyncSaveName() {
 				m_Coordinator = std::move(coordinator);
 				m_Runner = std::move(runner);
 				m_State = NetMatchServiceState::Failed;
-				// A host removal is not a network fault, and the lobby that vanished has to say so.
-				const bool removed = m_Session && m_Session->HasReject() &&
-				                     m_Session->GetRejectReason() == NetRejectReason::ParticipantRemoved;
-				const bool banned = m_Session && m_Session->HasReject() &&
-				                    m_Session->GetRejectReason() == NetRejectReason::ParticipantBanned;
-				m_StatusText = removed ? "The host removed you from this session"
-					: banned ? "The host banned you from this session"
-					: (m_Session && m_Session->HasReject() && m_Session->GetRejectSummary() == "Match roster refused")
-						? "Match roster refused" : "Network setup failed";
+				m_StatusText = SetupFailureStatus(m_Session.get(), noDirectRoute);
 				m_ErrorText = error;
 				// §9b: a live match is the one refusal a joiner can answer, by applying for a seat.
 				m_JoinRefusedByLiveMatch = !request.host && m_Session && m_Session->HasReject() &&

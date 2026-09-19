@@ -10890,6 +10890,98 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestIceConnectionFallback(std::string* error) {
+		NetIceJoinTarget target{"str:h-fallback", "either", "203.0.113.9", 41237};
+		if (!NetIcePrefersP2P(target, true) || NetIcePrefersP2P(target, false)) {
+			*error = "ice route: Automatic did not prefer ICE, or Off still used it";
+			return false;
+		}
+		target.joinMode = "ip";
+		if (NetIcePrefersP2P(target, true)) {
+			*error = "ice route: an IP-only host was dialled through ICE";
+			return false;
+		}
+		target.joinMode = "either";
+		for (int arm = 0; arm < 6; ++arm) {
+			std::vector<std::string> log;
+			TransportTap *muxIp = nullptr, *p2p = nullptr;
+			auto mux = MakeTappedMux(&log, &muxIp, &p2p);
+			TransportTap ip("retry", &log);
+			NetSession session;
+			NetLockstepCoordinator coordinator;
+			NetMatchRunner runner;
+			NetMatchService service;
+			service.m_IceEnabled = true;
+			service.m_CancelRequested = arm == 5;
+			NetMatchRunnerConfig config;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(73);
+			config.joinAddress = "session:fallback";
+			config.cancelRequested = &service.m_CancelRequested;
+			config.sessionWaitMs = 50;
+			config.sessionConfig.p2pJoin.identity = target.identity;
+			int iceDials = 0;
+			config.sessionConfig.p2pJoin.connect = [&](INetTransport&, std::string* why) {
+				++iceDials;
+				if (arm == 1) {
+					if (why) *why = "ICE dial refused";
+					return false;
+				}
+				return true;
+			};
+			config.resolveJoinAddress = [] { return "session:fallback"; };
+			if (arm == 4) {
+				NetMessage rejection;
+				rejection.payload = NetJoinRejected{NetRejectReason::ParticipantBanned, "banned", "participant", "allowed", "banned"};
+				std::vector<uint8_t> bytes;
+				if (!NetProtocol::Encode(rejection, bytes)) {
+					*error = "ice refusal fixture: ban could not be encoded";
+					return false;
+				}
+				p2p->Queue({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, {}});
+			} else {
+				p2p->Queue({NetTransportEventType::ConnectionFailed, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "ICE all candidates failed"});
+			}
+			ip.Queue({NetTransportEventType::ConnectionFailed, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "IP refused"});
+			NetIceJoinTarget dial = target;
+			if (arm == 3) { dial.address.clear(); dial.port = 0; }
+			bool noDirectRoute = false;
+			std::string why = arm == 2 ? "ICE signaling failed: channel refused" : "";
+			if (service.StartLobbyConnection(mux, ip, session, coordinator, runner, config, dial, arm != 2, noDirectRoute, &why)) {
+				*error = "ice refusal fixture: two failed transports started a match";
+				return false;
+			}
+			const bool retry = arm < 3;
+			const auto ipDials = std::count(log.begin(), log.end(), "retry.Connect(203.0.113.9:41237)");
+			if (iceDials != (arm == 2 ? 0 : 1) || ipDials != (retry ? 1 : 0) || noDirectRoute != (arm < 4)) {
+				*error = "ice retry arm " + std::to_string(arm) + ": ICE dials=" + std::to_string(iceDials) +
+				         ", IP dials=" + std::to_string(ipDials) + ", NAT failure=" + std::to_string(noDirectRoute);
+				return false;
+			}
+			if (retry && (mux || config.sessionConfig.p2pJoin.connect || config.resolveJoinAddress || config.sessionConfig.timeoutMs != 1000 || service.m_IceRoute != "ip" ||
+			              why.find("ICE ") == std::string::npos || why.find("IP connection failed:") == std::string::npos)) {
+				*error = "ice retry retained the ICE dial or lost the failed stages: " + why;
+				return false;
+			}
+			if (arm == 3 && config.sessionConfig.timeoutMs != 15000) {
+				*error = "ice gathering retained the shorter heartbeat timeout";
+				return false;
+			}
+			if (noDirectRoute && NetMatchService::SetupFailureStatus(&session, noDirectRoute) !=
+			    "No direct route (NAT): forward the host's UDP port or use LAN") {
+				*error = "ice failure message still uses the generic setup failure";
+				return false;
+			}
+			if (arm == 4 && NetMatchService::SetupFailureStatus(&session, noDirectRoute) != "The host banned you from this session") {
+				*error = "ice failure message hid the host's ban";
+				return false;
+			}
+		}
+		std::cout << "[net-match-selftest] PASS ice failure message: failed ICE and IP stages name the port-forward or LAN action" << std::endl;
+		std::cout << "[net-match-selftest] PASS ice IP retry: runtime, immediate and signaling refusals dial the advertised IP once" << std::endl;
+		std::cout << "[net-match-selftest] PASS ice refusal policy: no invented address, no retry of a ban or cancellation" << std::endl;
+		return true;
+	}
+
 	// -net-ice is a run override: it decides this run and never reaches the saved settings.
 	bool TestIceSettingsOverrideIsNotPersisted(std::string* error) {
 		// This selftest runs before the managers are built.
@@ -10980,6 +11072,7 @@ namespace RTE {
 
 		std::string error;
 		if (!TestIceDefaultsAndOverrides(&error)) return fail(error);
+		if (!TestIceConnectionFallback(&error)) return fail(error);
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
 		if (!TestMigrationConfigOrder<NetMatchConfig>(&error))
 			return fail(error);

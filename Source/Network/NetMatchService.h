@@ -140,6 +140,8 @@ namespace RTE {
 
 	/// Reports ICE reachability only for the directory id bound to the listener.
 	std::string NetIceRowJoinMode(bool iceEnabled, bool hasDirectAddress, const std::string& boundSessionId, const std::string& rowSessionId);
+	/// Prefers NAT traversal when both the setting and the directory row allow it.
+	bool NetIcePrefersP2P(const NetIceJoinTarget& target, bool iceEnabled);
 
 	/// Resolves a session id against a directory listing. Empty and a filled target when the row can
 	/// be joined, else the join list's own refusal label for it.
@@ -869,13 +871,20 @@ namespace RTE {
 		bool WaitForDirectorySession(uint64_t budgetMs, std::string& sessionId, std::string& token) const;
 		/// Host: registers first, pins the GNS identity to the session id, then opens both listens.
 		/// Client: resolves the session id to a row and arms the join. Worker thread.
-		bool SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, std::string* error);
+		bool SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error);
 		/// Builds the candidate policy from the saved settings and run overrides.
 		static GnsP2PConfig BuildIceConfig(const SettingsMan& settings, const std::string& localIdentity, int localVirtualPort);
+		/// Retries a failed ICE connection once through the row's direct address.
+		bool StartLobbyConnection(std::unique_ptr<NetMuxTransport>& mux, INetTransport& ip, NetSession& session, NetLockstepCoordinator& coordinator,
+		                          NetMatchRunner& runner, NetMatchRunnerConfig& config, const NetIceJoinTarget& target,
+		                          bool transportReady, bool& noDirectRoute, std::string* error);
+		/// Keeps admission refusals distinct from a failed direct connection.
+		static std::string SetupFailureStatus(const NetSession* session, bool noDirectRoute);
 		/// The ICE virtual port a host listens on and a joiner dials.
 		static constexpr int c_IceVirtualPort = 41011;
 		static constexpr uint64_t c_IceRegisterBudgetMs = 30000;
 		static constexpr uint64_t c_IceResolveBudgetMs = 30000;
+		static constexpr uint32_t c_IceConnectBudgetMs = 15000;
 		void JoinWorkerIfDone();
 		/// Attaches the H4 admission plane to a freshly built session. Host: only with a live auth
 		/// epoch, so a build without crypto keeps the pre-admission handshake and issues no tickets.
@@ -911,6 +920,7 @@ namespace RTE {
 		friend bool TestEndedWorldLateAdmission(std::string* error);
 		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
 		friend bool TestIceDefaultsAndOverrides(std::string* error);
+		friend bool TestIceConnectionFallback(std::string* error);
 		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
 		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
 		friend bool TestCompletedLobbyExpires(std::string* error);
