@@ -3144,6 +3144,25 @@ namespace RTE {
 			}
 			return true;
 		}
+		bool RefuseStaleRematch(std::string* error) {
+			if (!FinishRound(error)) return false;
+			--service.m_AdoptedMatchConfig.configRevision;
+			NetMatchConfig draft = service.GetLobbyMatchConfig();
+			draft.difficulty = 19;
+			if (!service.SubmitHostOptions(draft.configRevision, draft, error)) return false;
+			const auto submitted = service.GetPendingHostOptions();
+			observe = {};
+			if (!service.ReturnToLobby(error)) return false;
+			service.WaitForPendingWork();
+			std::string refusal;
+			const auto retained = service.GetPendingHostOptions(&refusal);
+			if (!Pending() || retained != submitted || service.GetState() != NetMatchServiceState::Failed ||
+			    refusal != "Host options refused: the draft names a stale configuration revision" || service.GetErrorText() != refusal) {
+				*error = "the host lost the refused rematch draft or its status: " + refusal + "; " + service.GetErrorText();
+				return false;
+			}
+			return true;
+		}
 		void Fail(const std::string& reason) {
 			if (failure.empty()) failure = reason;
 			cancel.store(true);
@@ -3278,7 +3297,7 @@ namespace RTE {
 				*error = "the rematch peer missed the live Apply";
 				return false;
 			}
-			return true;
+			return row.RefuseStaleRematch(error);
 		}
 
 		bool TestLobbyRefusesStaleOptionsRevision(std::string* error) {
