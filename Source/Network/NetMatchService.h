@@ -432,6 +432,19 @@ namespace RTE {
 		/// Recovers a desynced match: the host snapshots its state and streams it through the lobby
 		/// round; every peer relaunches from the identical file. Requires the session to be alive.
 		bool ResyncMatch(std::string* error = nullptr);
+		/// Read-only: a Repair Match press can run now - a live session, resync allowed, not over,
+		/// and no restore already in flight. CanResyncLocked's conditions without its failure
+		/// side-effects, so a per-frame UI poll never moves the service state.
+		bool CanResyncMatch() const;
+		/// Read-only repair progress for the Recovery page: inFlight while the heal is open, the
+		/// snapshot bytes moved so far, and the open (or last finished) heal's elapsed ms.
+		void GetResyncStatus(bool* inFlight, uint64_t* bytes, uint64_t* elapsedMs) const;
+		/// The lobby's directory visibility: 0 LAN only (no held row), 1 hidden lease, 2 listed.
+		int GetDirectoryVisibility() const;
+		/// Moves the lobby's directory visibility through the held lease: 0 retracts the row (LAN
+		/// only - re-listing needs a new hosted session), 1 keeps the lease hidden, 2 lists it.
+		/// False when there is no lease to move. The bound ICE identity never changes.
+		bool SetDirectoryVisibility(int visibility);
 		void NoteResyncRelaunched();
 		bool IsHostMigrationRepairPending() const;
 		bool IsResyncOnDesyncEnabled() const { return m_ResyncOnDesync; }
