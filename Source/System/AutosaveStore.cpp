@@ -238,21 +238,27 @@ namespace RTE {
 		for (const auto& [uid, peer]: state.droppedControlOwners) Line(out, "DroppedControlOwner", std::to_string(uid) + "," + std::to_string(static_cast<unsigned>(peer)));
 		for (const auto& [peer, sequence]: state.appliedCommands) Line(out, "Applied", std::to_string(static_cast<unsigned>(peer)) + "," + std::to_string(sequence));
 		Line(out, "TransferUid", std::to_string(state.firstTransferUid));
+		for (const auto& [peer, bindings]: state.playerBindings) Line(out, "Binding", std::to_string(static_cast<unsigned>(peer)) + "," + bindings);
 		return out.str();
 	}
 
 	namespace {
+		/// A signed decimal, as every uid in the side state is written.
+		bool ParseSigned(const std::string& text, int64_t& out) {
+			if (text.empty()) return false;
+			const bool negative = text.front() == '-';
+			uint64_t magnitude = 0;
+			if (!ParseNumber(negative ? text.substr(1) : text, magnitude)) return false;
+			out = negative ? -static_cast<int64_t>(magnitude) : static_cast<int64_t>(magnitude);
+			return true;
+		}
+
 		/// "<number>,<number>" as the side state writes every pair.
 		bool ParsePair(const std::string& text, int64_t& first, uint64_t& second) {
 			const size_t comma = text.find(',');
 			if (comma == std::string::npos) return false;
-			const std::string left = Trim(std::string_view(text).substr(0, comma));
 			const std::string right = Trim(std::string_view(text).substr(comma + 1));
-			if (left.empty() || right.empty()) return false;
-			const bool negative = left.front() == '-';
-			uint64_t magnitude = 0;
-			if (!ParseNumber(negative ? left.substr(1) : left, magnitude) || !ParseNumber(right, second)) return false;
-			first = negative ? -static_cast<int64_t>(magnitude) : static_cast<int64_t>(magnitude);
+			if (right.empty() || !ParseSigned(Trim(std::string_view(text).substr(0, comma)), first) || !ParseNumber(right, second)) return false;
 			return true;
 		}
 	}
@@ -329,9 +335,23 @@ namespace RTE {
 					auto& owners = key == "ControlOwner" ? parsed.sideState.controlOwners : parsed.sideState.droppedControlOwners;
 					owners[left] = static_cast<uint8_t>(right);
 				}
+			} else if (key == "Binding") {
+				const size_t comma = value.find(',');
+				uint64_t peer = 0;
+				if (comma == std::string::npos || !ParseNumber(Trim(std::string_view(value).substr(0, comma)), peer) || peer > 255) {
+					if (error) *error = "unreadable Binding";
+					return false;
+				}
+				const std::string encoded = Trim(std::string_view(value).substr(comma + 1));
+				if (encoded.empty() || encoded.size() % 2 != 0 || encoded.find_first_not_of("0123456789abcdef") != std::string::npos) {
+					if (error) *error = "Binding carries no encoded command";
+					return false;
+				}
+				parsed.sideState.playerBindings[static_cast<uint8_t>(peer)] = encoded;
 			} else if (key == "TransferUid") {
-				if (!ParseNumber(value, number)) { if (error) *error = "unreadable TransferUid"; return false; }
-				parsed.sideState.firstTransferUid = static_cast<int64_t>(number);
+				int64_t transfer = 0;
+				if (!ParseSigned(value, transfer)) { if (error) *error = "unreadable TransferUid"; return false; }
+				parsed.sideState.firstTransferUid = transfer;
 			}
 		}
 		if (!hasSchema || parsed.schema != c_ManifestSchema) {

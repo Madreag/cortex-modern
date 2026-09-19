@@ -1905,7 +1905,58 @@ namespace RTE {
 			state.droppedControlOwners = {{301, 3}};
 			state.appliedCommands = {{2, 10}, {16, std::numeric_limits<uint64_t>::max() - 1}};
 			state.firstTransferUid = 101;
+			// One seat's agreed bindings, carried as the packet that carried them: peer 2 holds player 1,
+			// on team 0, driving actor 4242 with brain 909.
+			NetGamePlayerBindings bindings;
+			bindings.players[1].active = true;
+			bindings.players[1].human = true;
+			bindings.players[1].hadBrain = true;
+			bindings.players[1].team = 0;
+			bindings.players[1].controlledUID = 4242;
+			bindings.players[1].brainUID = 909;
+			bindings.appliedCommands = {{2, 10}};
+			std::string encoded;
+			if (ScenarioRunner::EncodeAgreedBindings(2, 77, 100, bindings, encoded)) state.playerBindings[2] = encoded;
 			return state;
+		}
+
+		/// The seats a resumed round must start on, and the ones it fills in for a seat the match never
+		/// heard from. RED on a build that derives every binding instead of carrying the agreed one:
+		/// peer 2's controlled actor and brain come back as zero.
+		bool TestResumeCarriesTheAgreedSeats(std::string* error) {
+			NetMatchConfig config = MakeConfig();
+			config.players = {{1, 0, false, "Host"}, {2, 1, false, "Scout"}, {3, 2, false, "Late"}};
+			config.peerCount = 3;
+			const AutosaveSideState carried = ResumeSideStateFixture();
+			if (carried.playerBindings.empty()) {
+				*error = "the fixture carries no agreed seats, so this row proves nothing";
+				return false;
+			}
+			const NetResyncState state = NetMatchService::BuildResumeState(config, 900, 11, "00000000deadbeef-00000000000000dd", carried);
+			const auto seat = state.playerBindings.find(2);
+			if (seat == state.playerBindings.end()) {
+				*error = "the resumed round lost the seat the manifest carried";
+				return false;
+			}
+			if (seat->second.bindings.players[1].controlledUID != 4242 || seat->second.bindings.players[1].brainUID != 909 ||
+			    !seat->second.bindings.players[1].hadBrain || seat->second.bindings.appliedCommands != std::map<uint8_t, uint64_t>{{2, 10}}) {
+				*error = "the resumed seat is not the one the checkpoint recorded: actor " +
+				         std::to_string(seat->second.bindings.players[1].controlledUID) + ", brain " +
+				         std::to_string(seat->second.bindings.players[1].brainUID);
+				return false;
+			}
+			if (seat->second.frame != 100) {
+				*error = "the resumed seat lost the frame it was agreed on: " + std::to_string(seat->second.frame);
+				return false;
+			}
+			// A seat the match never heard a binding for still launches, on its roster slot alone.
+			const auto filled = state.playerBindings.find(3);
+			if (filled == state.playerBindings.end() || !filled->second.bindings.players[2].active ||
+			    filled->second.bindings.players[2].team != 2 || filled->second.bindings.players[2].controlledUID != 0) {
+				*error = "a seat with no carried binding did not fall back to its roster slot";
+				return false;
+			}
+			return true;
 		}
 
 		std::string ResumePayloadHex(const NetMatchConfig& config) {
@@ -2014,8 +2065,15 @@ namespace RTE {
 				*error = "a manifest of an unknown schema was accepted";
 				return false;
 			}
-			if (AutosaveStore::ParseManifest("ManifestSchema = 1\nMatchId = " + matchId + "\nSavedTick = 480\nConfigPayload = zz\n", refused)) {
+			const std::string schema = std::to_string(AutosaveStore::c_ManifestSchema);
+			if (AutosaveStore::ParseManifest("ManifestSchema = " + schema + "\nMatchId = " + matchId + "\nSavedTick = 480\nConfigPayload = zz\n", refused)) {
 				*error = "a manifest whose configuration is not hex was accepted";
+				return false;
+			}
+			// A manifest from before the seats were carried cannot resume: a peer reading it would start
+			// on derived seats while a peer with a newer one starts on the agreed ones.
+			if (AutosaveStore::ParseManifest("ManifestSchema = 1\nMatchId = " + matchId + "\nSavedTick = 480\nConfigPayload = ab\n", refused)) {
+				*error = "a manifest written before the agreed seats were carried was accepted";
 				return false;
 			}
 
@@ -10108,6 +10166,7 @@ namespace RTE {
 		if (!healedEndError.empty()) return fail(healedEndError);
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestRestartManifestAndAdmission(&error)) return fail(error);
+		if (!TestResumeCarriesTheAgreedSeats(&error)) return fail(error);
 		if (!TestResumeHeldPeerSkipsTheTransfer(&error)) return fail(error);
 		if (!TestResumePreparesTheAgreedLobby(&error)) return fail(error);
 		if (!TestRosterTransitionsRecordHoldThenPresent(&error)) return fail(error);

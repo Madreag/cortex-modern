@@ -1204,7 +1204,8 @@ static std::string ResyncSaveName() {
 		for (const auto& pending: state->pendingPlayerBindings) if (pending.command.senderPeerId == localPeer && (!newestBinding || pending.frame > newestBinding->frame)) {
 			newestBinding = NetResyncPlayerBindings{pending.frame, std::get<NetGamePlayerBindings>(pending.command.payload)};
 		}
-		if (!retainLocal && !newestBinding && !dedicated) {
+		// A resumed peer launches on the carried bindings, so it needs its own entry whatever it kept.
+		if ((!retainLocal || autosave) && !newestBinding && !dedicated) {
 			if (error) *error = "the resync snapshot has no player bindings for this peer";
 			return false;
 		}
@@ -1245,14 +1246,11 @@ static std::string ResyncSaveName() {
 			if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != state->savedTick ||
 			    !g_UInputMan.LoadCheckpoint(local->input, true) || !GUIInput::LoadSharedCheckpoint(local->gui, true) || !g_FrameMan.LoadNetLocalState(local->frame, true)) return false;
 			const NetGamePlayerBindings seatless{};
-			if (ownCheckpoint) {
-				// The world this peer just restored is its own state at that tick, so its bindings are
-				// read back out of it and re-applied: the seats keep their cameras, brains and
-				// controlled actors, and the net-local screens are rebuilt from them.
-				NetGamePlayerBindings own;
-				activity.CaptureNetPlayerBindings(own);
-				if (!activity.ApplyNetPlayerBindings(own)) return false;
-			} else if (!(keepLocalPlayer ? activity.RestoreNetLocalPlayerState(local->activity) : activity.ApplyNetPlayerBindings(dedicated ? seatless : newestBinding->bindings))) {
+			// A peer that loaded its own copy of the checkpoint and one that was streamed the host's copy
+			// apply the SAME bindings - the ones the checkpoint's manifest carried - or the two would
+			// resume onto different seats. Only a live heal keeps this machine's own captured state.
+			if (!(keepLocalPlayer && !ownCheckpoint ? activity.RestoreNetLocalPlayerState(local->activity)
+			                                        : activity.ApplyNetPlayerBindings(dedicated ? seatless : newestBinding->bindings))) {
 				return false;
 			}
 			if (!g_UInputMan.LoadCheckpoint(local->input) || !GUIInput::LoadSharedCheckpoint(local->gui) || !g_FrameMan.LoadNetLocalState(local->frame)) return false;
@@ -3187,8 +3185,17 @@ static std::string ResyncSaveName() {
 		state.e2eFirstTransferUid = sideState.firstTransferUid;
 		// Nothing is in flight across a restart: a command sent but not yet applied when the host died
 		// is lost, and no input, command or binding is pending at the tick the world stands on.
+		// The seats come from the checkpoint's own manifest, so every peer resumes onto the bindings the
+		// match agreed at that tick instead of one derived here and one read out of a restored world.
+		for (const auto& [peer, encoded]: sideState.playerBindings) {
+			uint64_t frame = 0;
+			NetGamePlayerBindings bindings;
+			if (!ScenarioRunner::DecodeAgreedBindings(encoded, frame, bindings)) continue;
+			state.playerBindings[peer] = NetResyncPlayerBindings{std::min(frame, savedTick), bindings};
+		}
+		// A seat the match never heard a binding for still needs one to launch on: its roster slot.
 		for (const NetMatchPlayerSlot& slot: config.players) {
-			if (slot.cpu || slot.peerId == 0) continue;
+			if (slot.cpu || slot.peerId == 0 || state.playerBindings.count(slot.peerId) != 0) continue;
 			NetResyncPlayerBindings binding;
 			binding.frame = savedTick;
 			const size_t seat = static_cast<size_t>(slot.peerId - 1);
