@@ -585,7 +585,9 @@ bool AtomGroup::RemoveAtoms(long removeID) {
 	m_Atoms.erase(
 	    std::remove_if(m_Atoms.begin(), m_Atoms.end(),
 	                   [removeID](Atom* atom) {
-		                   return atom->GetSubID() == removeID;
+		                   if (atom->GetSubID() != removeID) return false;
+		                   atom->SetCheckpointOwner(nullptr);
+		                   return true;
 	                   }),
 	    m_Atoms.end());
 
