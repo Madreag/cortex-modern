@@ -201,6 +201,11 @@ namespace RTE {
 		/// Puts them back as the fence found them: keys the preview added go, values it changed or removed come back.
 		/// @return How many tables and cached scripts were put back.
 		int ReleasePreviewGlobalFence();
+		/// Records a function object handed to a caller inside this state's preview window, so the release can put back what it named.
+		/// @param wrapper The wrapper the caller now owns.
+		/// @param scriptPath The script file the function came from.
+		/// @param functionName The function's name in that file.
+		void TrackPreviewBornWrapper(LuabindObjectWrapper* wrapper, const std::string& scriptPath, const std::string& functionName);
 		bool BindPreviewScriptObject(MovableObject* clone, bool sharedSlot);
 		bool RemapPreviewHoldReferences(long uniqueID, std::string& freezeClass);
 		void DropPreviewScriptObject(long uniqueID);
@@ -381,6 +386,8 @@ namespace RTE {
 		bool m_PreviewStatsReported = false; //!< Whether this state's barrier stats row has been printed.
 		std::unordered_set<std::string> m_PreviewScriptCacheKeys; //!< The script files this state had cached when the preview's record was taken.
 		std::unordered_map<std::string, std::unordered_map<std::string, LuabindObjectWrapper*>> m_PreviewScriptCacheHeld; //!< The cached function objects a reload replaced inside the preview, held for the release to put back.
+		uint64_t m_PreviewCallerCopiesRolledBack = 0; //!< Caller-held function objects the preview pointed back at the function they named before it.
+		uint64_t m_PreviewCallerCopiesKept = 0; //!< Caller-held function objects born inside a preview of a script file no state had before it.
 		Entity* m_TempEntity; //!< Temporary holder for an Entity object that we want to pass into the Lua state without fuss. Lets you export objects to lua easily.
 		std::vector<Entity*> m_TempEntityVector; //!< Temporary holder for a vector of Entities that we want to pass into the Lua state without a fuss. Usually used to pass arguments to special Lua functions.
 		std::string m_LastError; //!< Description of the last error that occurred in the script execution.
@@ -447,6 +454,8 @@ namespace RTE {
 		static uint64_t PreviewCodecFallbackCount() { return s_PreviewCodecFallbacks; }
 		/// Whether previews fence the Lua states' globals; CC_PREVIEW_GLOBALS_FENCE=0 turns the fence off.
 		static bool PreviewGlobalFenceEnabled();
+		/// Stops tracking a function object a preview window handed out; LuabindObjectWrapper's deletion hook.
+		static void ForgetPreviewBornWrapper(LuabindObjectWrapper* wrapper);
 		/// How many global entries previews have put back so far.
 		static uint64_t PreviewGlobalsUndoneCount() { return s_PreviewGlobalsUndone; }
 #pragma endregion
