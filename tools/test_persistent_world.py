@@ -68,6 +68,9 @@ RED_IMAGE_BEFORE_WRITE = "world-image-published-before-the-archive-was-written"
 RED_IMAGE_SIM_READ = "world-image-publish-read-the-sim-thread"
 RED_CAPACITY_WIRE = "world-capacity-did-not-ride-the-v5-config"
 RED_OVERFLOW_REFUSAL = "world-full-refusal-missing"
+RED_CONCURRENT_ACTIVATION = "concurrent-joins-shared-an-activation"
+RED_CONCURRENT_CAPTURE = "concurrent-joins-recaptured-the-world"
+RED_CONCURRENT_RESTART = "concurrent-join-dropped-the-first-restart"
 RED_OVERFLOW_BOUND = "world-spectator-bound-ignored"
 RED_OVERFLOW_ADMITTED = "world-admitted-past-its-bound"
 RED_OVERFLOW_SEATS = "world-seats-refused-below-capacity"
@@ -303,6 +306,13 @@ CASES = (
         "red": RED_IMAGE_BEFORE_WRITE,
         "also_red": RED_IMAGE_SIM_READ,
         "pass_token": "[net-world-image-publish-selftest] PASS",
+    },
+    {
+        "name": "concurrent-joins-keep-their-own-activation",
+        "argv": ["-net-world-concurrent-selftest"],
+        "red": RED_CONCURRENT_ACTIVATION,
+        "also_red": (RED_CONCURRENT_CAPTURE, RED_CONCURRENT_RESTART),
+        "pass_token": "[net-world-concurrent-selftest] PASS",
     },
     {
         "name": "spectator-overflow-is-bounded",

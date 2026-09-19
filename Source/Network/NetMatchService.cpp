@@ -2187,9 +2187,11 @@ static std::string ResyncSaveName() {
 				continue;
 			}
 			const uint64_t tick = m_Coordinator->GetStats().nextFrame > 0 ? m_Coordinator->GetStats().nextFrame - 1 : 0;
-			if (tick != 0 && m_WorldJoin.Image().tick != tick) {
-				// The capture is taken here; the image is published once the writer has the archive, so the
-				// bootstrap waits in SnapshotTransfer for a pump or two instead of reading a half-written file.
+			if (tick != 0 && m_WorldJoin.Image().tick != tick && m_WorldCaptureRequestedTick != tick) {
+				// One capture serves every bootstrap opened at this tick: the image is published once the
+				// writer has the archive, so the second joiner waits in SnapshotTransfer for that one image
+				// instead of costing the incumbent a second sim-thread capture at the same tick.
+				m_WorldCaptureRequestedTick = tick;
 				g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
 			}
 			if (const NetWorldJoinSession* session = m_WorldJoin.FindSession(peer.transportPeerId)) {
@@ -2240,10 +2242,11 @@ static std::string ResyncSaveName() {
 		}
 		while (const NetWorldJoinSession* slow = m_WorldJoin.SlowActivation(nowFrame)) {
 			uint64_t later = 0;
+			const uint64_t previous = slow->activationTick;
 			if (slow->activationReannounces < c_NetWorldActivationReannounceLimit &&
 			    m_WorldJoin.ReannounceActivation(slow->connection, nowFrame, &later, nullptr)) {
-				// A re-announce moves the epoch; the live stream restarts again at the new frame.
-				m_Coordinator->SetObservationEpoch(later);
+				// A re-announce moves this activation's restart; every other joiner's stays announced.
+				m_Coordinator->MoveObservationEpoch(previous, later);
 				if (m_Runner) {
 					(void)m_Runner->GetLobbySession().SendPayloadTo(WorldJoinLobbyPeer(*slow), MakeWorldJoinReport(c_NetWorldReportActivate, later), nullptr);
 				}

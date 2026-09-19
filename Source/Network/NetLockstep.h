@@ -698,11 +698,15 @@ namespace RTE {
 		uint64_t SentInputThrough() const { return m_LastQueuedTargetFrame == UINT64_MAX ? 0 : m_LastQueuedTargetFrame; }
 		/// The frame every sender spells its observation keys out from again, so a member admitted
 		/// there decodes them with the empty table it starts with. 0 when no activation is pending.
-		uint64_t ObservationEpoch() const { return m_ObservationEpochFrame; }
+		uint64_t ObservationEpoch() const { return m_ObservationEpochs.empty() ? 0 : *m_ObservationEpochs.rbegin(); }
+		/// Every restart still announced, oldest first. Two joiners in flight announce two.
+		const std::set<uint64_t>& ObservationEpochs() const { return m_ObservationEpochs; }
 		/// The announce sets it: from this frame every sender spells its observation keys out again,
 		/// so a member admitted there reads them with the empty table it starts with. A re-announce
 		/// moves it; the live stream restarts again at the new frame.
 		void SetObservationEpoch(uint64_t frame);
+		/// Moves one announced restart to a new frame, for a re-announce of the same activation.
+		void MoveObservationEpoch(uint64_t from, uint64_t to);
 		/// How many frames the last admission replayed to the member it admitted.
 		size_t LastAdmissionReplayFrames() const { return m_LastAdmissionReplayFrames; }
 		/// Whether the peer is a member the round waits on right now.
@@ -759,6 +763,8 @@ namespace RTE {
 		bool BuildPendingRemoteFrame(uint64_t targetFrame, uint8_t senderPeerId, NetLockstepFrame& out) const;
 		/// Resets one sender's encode table at the epoch, once, before its first frame at or past it.
 		void ApplyObservationEpoch(uint8_t senderPeerId, uint64_t targetFrame);
+		/// Forgets a restart every sender has already reset at, so the set stays the live ones.
+		void PruneObservationEpochs();
 		/// The block store of one sender, trimmed to the ticks a window can still repeat.
 		NetLockstepObservationBlocks& ObservationBlocksOf(uint8_t senderPeerId, uint64_t newestTargetFrame);
 		void AcceptRemoteTick(const NetLockstepFrame& frame, uint64_t nowMs, bool windowCopy);
@@ -877,8 +883,8 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_RelayBacklogSinceMs; //!< peerId -> when its backlog stopped draining.
 		std::map<uint8_t, uint64_t> m_PeerEffectiveStart; //!< peerId -> the first frame that carries this sender's input.
 		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
-		uint64_t m_ObservationEpochFrame = 0;          //!< Where every sender spells its keys out again.
-		std::set<uint8_t> m_ObservationEpochApplied;   //!< The senders whose encode table the epoch has reset.
+		std::set<uint64_t> m_ObservationEpochs;        //!< Every announced frame senders spell their keys out from again.
+		std::map<uint8_t, uint64_t> m_ObservationEpochApplied; //!< sender -> the newest epoch its encode table was reset at.
 		size_t m_LastAdmissionReplayFrames = 0;        //!< What the last admission replayed, for the report.
 		std::function<void(const NetTransportEvent&)> m_SessionEventSink; //!< Forwards session traffic (reconnect handshakes) mid-match.
 		NetLockstepSeatState (*m_SeatStateSource)(void*, uint8_t, NetPeerId) = nullptr;
