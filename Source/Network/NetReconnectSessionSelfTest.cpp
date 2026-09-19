@@ -7418,6 +7418,8 @@ namespace RTE {
 				return Fail(error);
 			}
 			const NetAuthBytes32 persistedId = persisted.identity.PublicId();
+			// A mid-match removal, as the session arm above it: a lobby seat goes back in the pool instead.
+			persisted.admission.SetLiveMatch(true);
 			if (!BanProven(persisted, NetParticipantRemovalAction::BanUntilRemoved, issued, &error) ||
 			    !liveStore.IsBanned(persistedId, 0x5000000000000000ULL + persisted.port) || !persisted.admission.IsSeatClosed(persistedRecord.stableSeat)) {
 				return Fail(error.empty() ? "an Until Removed ban did not evict the holder" : error);
