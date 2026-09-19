@@ -71,6 +71,7 @@ RETAINED_AUTOSAVES = 3  # The default of the NetworkAutosavesKept option (Autosa
 WORLD_IDENTITY = re.compile(r"^\[net-world\] identity (\S+) boot=(\d+) round=(\d+)$", re.MULTILINE)
 WORLD_START = re.compile(r"^\[net-lockstep\] start round=(\d+) frame=(\d+) local_peer=(\d+) peers=(\d+) input_delay=(\d+)$", re.MULTILINE)
 WORLD_LOBBY = re.compile(r"^\[net-match-service-e2e\] lobby_snapshot: [^\n]*\bactivity=Persistent World\b[^\n]*$", re.MULTILINE)
+WORLD_AGREED = re.compile(r'^\[autosave\] agreed match=(\S+) tick=(\d+) state=(".*")$', re.MULTILINE)
 
 
 def _seat_rows(root: Path, who: str) -> dict:
@@ -568,6 +569,22 @@ def _compare_world_round(root: Path, world_id: str, resumed_tick: int, last_tick
     return compared
 
 
+def _world_checkpoint_state(manifest: str, host_log: str, world_id: str, tick: int, peers: set[int]) -> dict:
+    """The manifest must preserve the exact side state handed to this checkpoint's capture."""
+    captured = [json.loads(state) for match, saved, state in WORLD_AGREED.findall(host_log)
+                if match == world_id and int(saved) == tick]
+    assert captured, f"the host never recorded the agreed state of checkpoint {world_id}-{tick}"
+    keys = ("ControlOwner = ", "DroppedControlOwner = ", "Applied = ", "TransferUid = ", "Binding = ")
+    stored = "".join(line + "\n" for line in manifest.splitlines() if line.startswith(keys))
+    assert stored == captured[-1], f"checkpoint {tick} changed its captured agreed state: {stored!r} != {captured[-1]!r}"
+    bindings = re.findall(r"(?m)^Binding = (\d+),([0-9a-f]+)$", stored)
+    assert len(bindings) == len(peers) and {int(peer) for peer, _ in bindings} == peers, \
+        f"checkpoint {tick} lacks its bound peers' agreed bindings: {bindings} expected {sorted(peers)}"
+    return {"control_owners": len(re.findall(r"(?m)^ControlOwner = ", stored)),
+            "applied_sequences": len(re.findall(r"(?m)^Applied = ", stored)),
+            "binding_peers": sorted(peers)}
+
+
 def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
     """A persistent world host is KILLED and restarted on the same install with the same UUID,
     the seats the checkpoint held, and the client's stored ticket.
@@ -596,13 +613,13 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
     assert (autosaves / f"{world_id}.admission").exists(), "the killed world left no restart admission file"
     resume_tick = max(int(fields["SavedTick"]) for fields in held.values()
                       if (autosaves / f"{world_id}-{fields['SavedTick']}.ccmanifest").exists())
-    # D5b: the world's checkpoints carry the tick's agreed lockstep state, not an empty one.
     manifest = (autosaves / f"{world_id}-{resume_tick}.ccmanifest").read_text(encoding="utf-8")
     assert re.search(r"(?m)^ManifestSchema = 3$", manifest), "the world checkpoint has no ordered manifest schema"
     assert re.search(rf"(?m)^WorldBoot = {boot_one}$", manifest), "the checkpoint manifest names a different boot"
-    owners = re.findall(r"(?m)^ControlOwner = (-?\d+),(\d+)$", manifest)
-    applied = re.findall(r"(?m)^Applied = (\d+),(\d+)$", manifest)
-    assert len(applied) >= 1, f"the world's manifest carries no applied command sequence: {manifest}"
+    host_start, client_start = (WORLD_START.search(peer_log(first, who)) for who in ("host", "client"))
+    assert host_start and client_start, "the seated peers never reported their lockstep start"
+    side_state = _world_checkpoint_state(manifest, peer_log(first, "host"), world_id, resume_tick,
+                                         {int(host_start[3]), int(client_start[3])})
     seats_one = _seat_rows(first, "client")
     assert seats_one, "the client never occupied a seat before the host was killed"
     assert (first / "client/runtime/Userdata/reconnect.ticket").is_file(), "the killed world's client kept no reconnect ticket"
@@ -668,7 +685,8 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
             "retention kept the previous boot ahead of the fresh world's completed checkpoints"
     return {"world_id": world_id, "boot": boot_one, "resume_tick": resume_tick,
             "kill_capture_tick": records["_kill_capture_tick"], "resume_end": resume_end,
-            "manifest_control_owners": len(owners), "manifest_applied_sequences": len(applied),
+            "manifest_control_owners": side_state["control_owners"], "manifest_applied_sequences": side_state["applied_sequences"],
+            "manifest_binding_peers": side_state["binding_peers"],
             "seats": sorted(seats_two), "fresh_first_capture": min(fresh_captures),
             "peer_comparison": compared, "fresh_peer_comparison": fresh_compared}
 
@@ -708,6 +726,35 @@ class WorldRestartOracleTests(unittest.TestCase):
         self.assertFalse(_world_kill_ready(host, client, 422, [361], True))
         self.assertFalse(_world_kill_ready(self.HOST_START + self.CAPTURES + self.HOST_LOBBY, client, 400, [361], True))
         self.assertFalse(_world_kill_ready(host.replace("peer2=Client", "peer3=Client"), client, 400, [361], True))
+
+    def test_checkpoint_preserves_bindings_without_sequenced_commands(self):
+        state = ("TransferUid = 0\n"
+                 "Binding = 1,43434c3316001000020000004d00000001000000b10400000000000001000d000001070100008180400000000000000000000000000000000000000000000000000000000000000000000000000000000000ad69cbb3ec4e3a24000000\n"
+                 "Binding = 2,43434c3316001000020000004f00000002000000b10400000000000001000d0000010701008180408180400080634400403b4400005c443f773b4400005c443f773b44000000000000000000005c449648344400ad69cbb3ec4e3a24000000\n")
+        world_id = "eee0a897-5451-4f26-89b8-dd86f21b9760"
+        host = f"[autosave] agreed match={world_id} tick=1201 state={json.dumps(state)}\n"
+        manifest = "ManifestSchema = 3\nWorldBoot = 1\nSavedTick = 1201\n" + state
+        checked = _world_checkpoint_state(manifest, host, world_id, 1201, {1, 2})
+        self.assertEqual(checked, {"control_owners": 0, "applied_sequences": 0, "binding_peers": [1, 2]})
+        with self.assertRaisesRegex(AssertionError, "changed its captured agreed state"):
+            _world_checkpoint_state(manifest.replace("Binding = 2,", "Binding = 3,"), host, world_id, 1201, {1, 2})
+        with self.assertRaisesRegex(AssertionError, "never recorded"):
+            _world_checkpoint_state(manifest, host, world_id, 1200, {1, 2})
+        with self.assertRaisesRegex(AssertionError, "never recorded"):
+            _world_checkpoint_state(manifest, host, "another-world", 1201, {1, 2})
+
+    def test_checkpoint_refuses_lost_or_changed_side_state(self):
+        state = "ControlOwner = 7,2\nDroppedControlOwner = 8,2\nApplied = 2,10\nTransferUid = 7\nBinding = 1,aa\nBinding = 2,bb\n"
+        host = f"[autosave] agreed match=world tick=421 state={json.dumps(state)}\n"
+        self.assertEqual(_world_checkpoint_state(state, host, "world", 421, {1, 2})["applied_sequences"], 1)
+        for line in state.splitlines(keepends=True):
+            with self.subTest(line=line), self.assertRaisesRegex(AssertionError, "changed its captured agreed state"):
+                _world_checkpoint_state(state.replace(line, ""), host, "world", 421, {1, 2})
+        with self.assertRaisesRegex(AssertionError, "changed its captured agreed state"):
+            _world_checkpoint_state(state.replace("Applied = 2,10", "Applied = 2,9"), host, "world", 421, {1, 2})
+        empty = "TransferUid = 0\n"
+        with self.assertRaisesRegex(AssertionError, "lacks its bound peers"):
+            _world_checkpoint_state(empty, f"[autosave] agreed match=world tick=421 state={json.dumps(empty)}\n", "world", 421, {1, 2})
 
 
 def main() -> int:

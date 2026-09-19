@@ -2387,6 +2387,10 @@ static std::string ResyncSaveName() {
 		// The tick is complete, so the agreed lockstep state of THIS tick is what a restart needs; it
 		// is read once, here, through the same reader the heal's snapshot capture uses.
 		m_AutosaveIdentity.sideState = ScenarioRunner::CaptureAgreedSideState();
+		if (m_IsHost && m_MatchConfig.persistentWorld) {
+			System::PrintDiagnosticLine(std::format("[autosave] agreed match={} tick={} state={}", m_AutosaveMatchId, tick,
+			                                       nlohmann::json(AutosaveStore::RenderSideState(m_AutosaveIdentity.sideState)).dump()));
+		}
 		return g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
 	}
 
