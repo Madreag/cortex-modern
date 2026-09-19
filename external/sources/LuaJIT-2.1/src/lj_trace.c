@@ -626,25 +626,36 @@ static int trace_abort(jit_State *J)
       cTValue *bot = tvref(L->stack)+LJ_FR2;
       cTValue *frame;
       const BCIns *pc;
+      GCfunc *fn = NULL;
+      GCproto *pt = NULL;
       BCPos pos = 0;
       setstrV(V, V->top++, lj_str_newlit(V, "abort"));
       setintV(V->top++, traceno);
-      /* Find original Lua function call to generate a better error message. */
-      for (frame = L->base-1, pc = J->pc; frame > bot; frame = frame_prev(frame)) {
-	if (isluafunc(frame_func(frame))) {
-	  /* An abort at a C boundary has no bytecode position of its own. */
-	  pos = pc ? proto_bcpos(funcproto(frame_func(frame)), pc) : 0;
-	  break;
-	} else if (frame_prev(frame) <= bot) {
-	  break;
-	} else if (frame_iscont(frame)) {
-	  pc = frame_contpc(frame) - 1;
-	} else {
-	  pc = frame_pc(frame) - 1;
+      /* The recorder's position and its function are set together, so they name one prototype. */
+      if (J->fn && J->pt) {
+	fn = J->fn; pt = J->pt; pc = J->pc;
+      } else {
+	/* Find original Lua function call to generate a better error message. */
+	for (frame = L->base-1, pc = J->pc; frame > bot; frame = frame_prev(frame)) {
+	  if (isluafunc(frame_func(frame))) {
+	    fn = frame_func(frame);
+	    pt = funcproto(fn);
+	    break;
+	  } else if (frame_prev(frame) <= bot) {
+	    fn = frame_func(frame);
+	    break;
+	  } else if (frame_iscont(frame)) {
+	    pc = frame_contpc(frame) - 1;
+	  } else {
+	    pc = frame_pc(frame) - 1;
+	  }
 	}
       }
-      if (frame > bot)
-	setfuncV(V, V->top++, frame_func(frame));
+      /* A pc from another prototype names no position here, and an abort at a C boundary has none. */
+      if (pt && pc && pc >= proto_bc(pt) && pc < proto_bc(pt)+pt->sizebc)
+	pos = proto_bcpos(pt, pc);
+      if (fn)
+	setfuncV(V, V->top++, fn);
       else
 	setnilV(V->top++);
       setintV(V->top++, pos);
