@@ -169,6 +169,7 @@ namespace RTE {
 		std::unordered_set<std::string> DirtyParts(const void* state, uint64_t root) const;
 		bool UnknownTableWritten() const;
 		bool HasWalked() const;
+		bool CanReuseWhole() const;
 		GraphDirt Sample() const;
 
 	private:
@@ -193,6 +194,7 @@ namespace RTE {
 		Tables m_Walking;
 		std::unordered_map<const void*, Root> m_WalkingValues;
 		Roots m_WalkingRoots;
+		Roots m_ReusedRoots;
 		size_t m_DirtyTables = 0;
 		size_t m_DirtyValues = 0;
 		size_t m_UncacheableRoots = 0;
