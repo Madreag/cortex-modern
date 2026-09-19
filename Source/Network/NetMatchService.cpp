@@ -39,7 +39,6 @@
 #include <iterator>
 #include <iostream>
 #include <iomanip>
-#include <iterator>
 #include <list>
 #include <optional>
 #include <random>
@@ -450,6 +449,8 @@ static std::string ResyncSaveName() {
 			request.worldId = m_WorldIdentity.worldId;
 			request.worldBoot = m_WorldIdentity.boot;
 			m_WorldJoin.SetIdentityPath(NetWorldIdentityFile::DefaultPath());
+			// The writer thread hashes what it wrote; a multi-megabyte digest is not sim-thread work.
+			g_ActivityMan.SetAutosaveDigest([](const std::vector<uint8_t>& bytes) { return DigestWorldJoinBytes(bytes); });
 			std::cout << "[net-world] identity " << m_WorldIdentity.worldId << " boot=" << m_WorldIdentity.boot
 			          << " round=" << m_WorldIdentity.round << std::endl;
 		}
@@ -1612,6 +1613,10 @@ static std::string ResyncSaveName() {
 			m_DirectoryToken = m_Directory.GetToken();
 			m_DirectoryRegistered = m_Directory.GetState() == NetDirectoryClient::State::Registered;
 		}
+		// The world's image follows the writer thread, never a file read on this one.
+		if (m_IsHost) {
+			PublishFinishedWorldJoinImage();
+		}
 		PersistWorldDirectoryToken();
 		if (m_WorldCatchUp.active) {
 			PumpSessionEvents();
@@ -1863,13 +1868,34 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		if (m_WorldJoin.IsConfigured()) {
-			PublishWorldJoinImage(tick);
+			// The image is published when the writer thread has finished this archive, from the pump.
 			std::cout << "[net-world] metrics " << m_WorldJoin.Metrics().BuildReportJson() << std::endl;
 		}
 	}
 
-	void NetMatchService::PublishWorldJoinImage(uint64_t tick) {
-		if (g_ActivityMan.LastAutosaveTick() != tick || g_ActivityMan.LastAutosaveBytes() == 0) {
+	NetWorldCheckpointImage NetMatchService::WorldImageFromAutosave(const ActivityMan::CompletedAutosave& entry, const NetWorldIdentity& identity,
+	                                                             const NetMatchConfig& matchConfig, uint64_t membershipRevision, double captureMs) {
+		NetWorldCheckpointImage image;
+		// Everything here comes from what the writer thread finished: no file is read to build it.
+		if (entry.archive == nullptr || entry.archive->empty() || entry.bytes != entry.archive->size() || entry.digest.empty()) {
+			return image;
+		}
+		image.worldId = identity.worldId;
+		image.boot = identity.boot;
+		image.round = identity.round;
+		image.tick = entry.tick;
+		image.configRevision = matchConfig.configRevision;
+		image.membershipRevision = membershipRevision;
+		image.matchConfigHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(matchConfig));
+		image.path = entry.path;
+		image.bytes = entry.bytes;
+		image.captureMs = captureMs;
+		image.digest = entry.digest;
+		return image;
+	}
+
+	void NetMatchService::PublishFinishedWorldJoinImage() {
+		if (!m_WorldJoin.IsConfigured()) {
 			return;
 		}
 		std::ifstream in(g_ActivityMan.LastAutosavePath(), std::ios::binary);
@@ -1877,7 +1903,9 @@ static std::string ResyncSaveName() {
 		if (in) {
 			archive.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 		}
-		if (archive.size() != g_ActivityMan.LastAutosaveBytes()) {
+		const NetWorldCheckpointImage image = WorldImageFromAutosave(*entry, m_WorldIdentity, m_MatchConfig,
+		                                                            m_WorldJoin.Membership().Revision(), g_ActivityMan.LastAutosaveCaptureMs());
+		if (!image.IsValid()) {
 			return;
 		}
 		NetWorldCheckpointImage image;
@@ -1895,7 +1923,7 @@ static std::string ResyncSaveName() {
 		// The bytes every bootstrap ships are kept here: the file is read and hashed once per image,
 		// not once per bootstrap per sim tick.
 		m_WorldJoinImageDigest = image.digest;
-		m_WorldJoinImageBytes = std::move(archive);
+		m_WorldJoinImageArchive = entry->archive;
 		m_WorldJoin.PublishImage(image);
 		std::cout << "[net-world] offer " << EncodeWorldJoinOffer(image) << std::endl;
 	}
@@ -1996,7 +2024,7 @@ static std::string ResyncSaveName() {
 		}
 		// The bytes and their digest were read once, when the image was published; re-reading the
 		// archive per pump is a sim-thread stall the world pays for every waiting bootstrap.
-		if (m_WorldJoinImageBytes.empty() || m_WorldJoinImageDigest != m_WorldJoin.Image().digest) {
+		if (m_WorldJoinImageArchive == nullptr || m_WorldJoinImageArchive->empty() || m_WorldJoinImageDigest != m_WorldJoin.Image().digest) {
 			if (error) *error = "the published archive is missing or its digest does not match";
 			m_WorldJoin.Metrics().NoteBootstrapStall();
 			return false;
@@ -2005,7 +2033,7 @@ static std::string ResyncSaveName() {
 		uint64_t lastCopied = 0;
 		(void)m_WorldJoin.Tail().CopyFrom(m_WorldJoin.Image().tick + 1, 512, 1024ULL * 1024ULL, tail, &lastCopied);
 		std::vector<uint8_t> blob;
-		if (!EncodeWorldJoinImageBlob(m_WorldJoin.Image(), m_WorldJoinImageBytes, tail, blob, error)) {
+		if (!EncodeWorldJoinImageBlob(m_WorldJoin.Image(), *m_WorldJoinImageArchive, tail, blob, error)) {
 			return false;
 		}
 		// A queued image is the lobby's now: the bootstrap must not build the blob again next pump.
@@ -2095,6 +2123,8 @@ static std::string ResyncSaveName() {
 				continue;
 			}
 			const uint16_t stableSeat = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
+				// The capture is taken here; the image is published once the writer has the archive, so the
+				// bootstrap waits in SnapshotTransfer for a pump or two instead of reading a half-written file.
 			if (stableSeat == 0) {
 				continue;
 			}

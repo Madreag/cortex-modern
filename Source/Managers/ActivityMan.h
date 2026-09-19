@@ -9,6 +9,9 @@
 
 #include <deque>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -176,6 +179,23 @@ namespace RTE {
 		uint64_t LastAutosaveTick() const { return m_LastAutosaveTick; }
 		size_t LastAutosaveBytes() const { return m_LastAutosaveBytes; }
 		double LastAutosaveCaptureMs() const { return m_LastAutosaveCaptureMs; }
+		/// One finished autosave archive, as the writer thread left it: the bytes it wrote, their
+		/// digest and the buffer itself. A capture that is still being zipped is not one of these.
+		struct CompletedAutosave {
+			uint64_t serial = 0; //!< Advances per finished archive, so a poller can tell a new one.
+			uint64_t tick = 0;
+			std::string path;
+			uint64_t bytes = 0;  //!< The finished archive's size, never the captured pre-zip count.
+			std::string digest;
+			std::shared_ptr<const std::vector<uint8_t>> archive;
+		};
+		/// The newest archive the writer thread has finished; empty before the first one lands.
+		std::optional<CompletedAutosave> LastCompletedAutosave() const;
+		/// Writer thread: reads the archive it just wrote, hashes it and publishes the entry above.
+		void PublishCompletedAutosave(uint64_t tick, const std::string& path);
+		/// Test seam: the digest the writer stamps a finished archive with. Installed by the net
+		/// layer so the hashing of a multi-megabyte archive happens on the writer, not the sim.
+		void SetAutosaveDigest(std::function<std::string(const std::vector<uint8_t>&)> digest);
 		long long LastSaveMainMs() const { return m_LastSaveMainMs; }
 		long long LastSaveZipMs() const { return m_LastSaveZipMs; }
 		std::string CaptureRuntimeGlobals() const;
@@ -371,6 +391,10 @@ namespace RTE {
 		uint64_t m_LastAutosaveTick = 0;
 		size_t m_LastAutosaveBytes = 0;
 		double m_LastAutosaveCaptureMs = 0.0;
+		mutable std::mutex m_CompletedAutosaveMutex; //!< The writer thread publishes through it.
+		std::optional<CompletedAutosave> m_CompletedAutosave;
+		uint64_t m_CompletedAutosaveSerial = 0;
+		std::function<std::string(const std::vector<uint8_t>&)> m_AutosaveDigest;
 		std::deque<SaveRefusalRecord> m_SaveRefusalRecords;
 		std::unordered_set<std::string> m_ReportedAutosaveKeys;
 		static constexpr size_t c_SaveRefusalRecordLimit = 16;

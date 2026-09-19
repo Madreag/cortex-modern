@@ -73,6 +73,8 @@
 #include <execution>
 #include <iostream>
 #include <limits>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -278,6 +280,46 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName, SaveCompression c
 	WaitForSaveGameTask();
 	const std::string path = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName + ".ccsave";
 	return QueueSaveSnapshot(fileName, path, compression, m_SaveGameTask);
+}
+
+std::optional<ActivityMan::CompletedAutosave> ActivityMan::LastCompletedAutosave() const {
+	std::lock_guard lock(m_CompletedAutosaveMutex);
+	return m_CompletedAutosave;
+}
+
+void ActivityMan::SetAutosaveDigest(std::function<std::string(const std::vector<uint8_t>&)> digest) {
+	std::lock_guard lock(m_CompletedAutosaveMutex);
+	m_AutosaveDigest = std::move(digest);
+}
+
+void ActivityMan::PublishCompletedAutosave(uint64_t tick, const std::string& path) {
+	std::function<std::string(const std::vector<uint8_t>&)> digest;
+	{
+		std::lock_guard lock(m_CompletedAutosaveMutex);
+		digest = m_AutosaveDigest;
+	}
+	if (!digest) {
+		return;
+	}
+	std::ifstream in(path, std::ios::binary);
+	if (!in) {
+		std::cout << "[autosave] finished archive could not be read back tick=" << tick << std::endl;
+		return;
+	}
+	auto archive = std::make_shared<std::vector<uint8_t>>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	if (archive->empty()) {
+		std::cout << "[autosave] finished archive is empty tick=" << tick << std::endl;
+		return;
+	}
+	CompletedAutosave entry;
+	entry.tick = tick;
+	entry.path = path;
+	entry.bytes = archive->size();
+	entry.digest = digest(*archive);
+	entry.archive = std::move(archive);
+	std::lock_guard lock(m_CompletedAutosaveMutex);
+	entry.serial = ++m_CompletedAutosaveSerial;
+	m_CompletedAutosave = std::move(entry);
 }
 
 bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick) {
@@ -600,12 +642,15 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 		for (const auto& layer: *sceneLayerInfos) bytes += static_cast<size_t>(layer.bitmap->w) * layer.bitmap->h * bitmap_color_depth(layer.bitmap.get()) / 8;
 		*capturedBytes = bytes;
 	}
-	auto writeArchive = [this, saveWriterData, saveMainMs, fileName, automatic, tick]() {
+	auto writeArchive = [this, saveWriterData, saveMainMs, fileName, path, automatic, tick]() {
 		const auto asyncStart = std::chrono::steady_clock::now();
 		bool saved = false;
 		try {
 			saveWriterData();
 			saved = true;
+			// The archive exists only now. Reading it back and hashing it here keeps both off the
+			// sim thread, and what a world publishes is this output, never a guess at the file.
+			if (automatic) PublishCompletedAutosave(tick, path);
 			if (!automatic) g_ConsoleMan.PrintString("SYSTEM: Game saved to \"" + fileName + "\"!");
 		} catch (const std::exception& error) {
 			if (automatic) std::cout << "[autosave] failed tick=" + std::to_string(tick) + " reason=" + error.what() + "\n" << std::flush;
