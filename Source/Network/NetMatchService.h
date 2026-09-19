@@ -394,6 +394,7 @@ namespace RTE {
 		/// round; every peer relaunches from the identical file. Requires the session to be alive.
 		bool ResyncMatch(std::string* error = nullptr);
 		void NoteResyncRelaunched();
+		bool IsHostMigrationRepairPending() const;
 		bool IsResyncOnDesyncEnabled() const { return m_ResyncOnDesync; }
 		/// The snapshot file the next launch must load instead of a fresh activity ("" = none).
 		std::string TakePendingResyncLoad();
@@ -589,12 +590,14 @@ namespace RTE {
 
 			std::unique_ptr<GnsTransport> ip;
 			std::unique_ptr<NetMuxTransport> mux;
+			std::unique_ptr<INetTransport> migrated;
 			std::vector<NetTransportEvent> lobbyEvents;
 #ifdef CCCP_WITH_GNS
 			std::unique_ptr<GnsDirectorySignalDispatcher> dispatcher; //!< After the mux, so it is destroyed first.
 #endif
 			/// The session's wire: the mux if there is one, else the IP transport.
-			INetTransport* Wire() const { return mux ? static_cast<INetTransport*>(mux.get()) : ip.get(); }
+			INetTransport* Wire() const { return migrated ? migrated.get() : mux ? static_cast<INetTransport*>(mux.get())
+				                                                                 : ip.get(); }
 		};
 
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
@@ -614,7 +617,28 @@ namespace RTE {
 		void WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
 		void WorkerResyncMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
 		/// The live wire, by the same rule. Caller holds the lock.
-		INetTransport* ActiveWireLocked() const { return m_Mux ? static_cast<INetTransport*>(m_Mux.get()) : m_Transport.get(); }
+		INetTransport* ActiveWireLocked() const { return m_MigratedTransport ? m_MigratedTransport.get() : m_Mux ? static_cast<INetTransport*>(m_Mux.get())
+			                                                                                                     : m_Transport.get(); }
+		bool SealMigrationCapsule(uint8_t peerId, const NetHash32& configHash, std::vector<uint8_t>& sealed);
+		bool SealMigrationCapsuleLocked(uint8_t peerId, const NetHash32& configHash, std::vector<uint8_t>& sealed);
+		bool OpenMigrationCapsule(const NetLobbyMigration& capsule);
+		bool OpenMigrationCapsuleLocked(const NetLobbyMigration& capsule);
+		void PumpHostMigration();
+		void PublishMigrationCapsulesLocked();
+		std::unique_ptr<INetTransport> m_MigratedTransport;
+		std::unique_ptr<NetLockstepCoordinator> m_MigrationFallbackCoordinator;
+		std::atomic<bool> m_MigrationFallbackReady{false};
+		uint64_t m_MigrationGeneration = 0;
+		NetHash32 m_MigrationKey{};
+		std::vector<uint8_t> m_MigrationAdmissionState;
+		std::vector<uint8_t> m_LastMigrationAdmissionState;
+		uint8_t m_MigrationAuthority = 0;
+		std::vector<uint8_t> m_MigrationMembers;
+		std::string m_MigrationDirectorySession;
+		std::string m_MigrationDirectoryToken;
+		uint64_t m_MigrationStatusUntilMs = 0;
+		bool m_MigrationDirectoryResumePending = false;
+		bool m_MigrationRepairPending = false;
 		/// Hands the transports and dispatcher to a worker, caching the dispatcher's report. Caller holds the lock.
 		TransportLink TakeTransportLinkLocked();
 		/// Takes them back from a worker. Caller holds the lock.

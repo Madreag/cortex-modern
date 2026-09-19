@@ -5092,7 +5092,7 @@ void MovableMan::UpdateControllers() {
 		return;
 	}
 	auto isLocalControllerActor = [&](const Actor* actor) {
-		return !lockstepActive || IsLockstepLocalActor(actor);
+		return !lockstepActive || (!ScenarioRunner::IsHostMigrationCatchUp() && IsLockstepLocalActor(actor));
 	};
 	// Release last tick's quarantined joiners here, where the controller wire takes over;
 	// a same-tick joiner stays held through its join tick and a corpse stays disabled.

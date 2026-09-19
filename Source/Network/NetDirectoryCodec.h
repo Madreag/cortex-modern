@@ -46,7 +46,7 @@ namespace RTE {
 		bool persistentWorld = false;
 		std::string worldId;
 		int64_t worldBoot = 0;
-		std::string resumeSessionId; //!< When set, the directory reuses this id; a world's UUID.
+		std::string resumeSessionId; //!< The existing match row or a world's durable UUID.
 		std::string resumeToken;     //!< The row's current token, the proof a resume may take it over.
 
 		bool operator==(const NetDirectoryRegisterRequest&) const = default;

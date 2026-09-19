@@ -6,6 +6,7 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <set>
 
 namespace RTE {
 
@@ -180,6 +181,7 @@ namespace RTE {
 			if (error) *error = "the host is not among the surviving peers";
 			return false;
 		}
+		std::rotate(survivors.begin(), std::find(survivors.begin(), survivors.end(), previous.hostPeerId), std::find(survivors.begin(), survivors.end(), previous.hostPeerId) + 1);
 		std::map<uint8_t, uint8_t> seatMap;
 		for (size_t index = 0; index < survivors.size(); ++index) {
 			seatMap[survivors[index]] = static_cast<uint8_t>(index + 1);
@@ -188,6 +190,22 @@ namespace RTE {
 		config.peerCount = static_cast<uint8_t>(survivors.size());
 		config.hostPeerId = seatMap.at(previous.hostPeerId);
 		config.players.clear();
+		config.successorOrder.clear();
+		config.migrationPeers.clear();
+		if (survivors.size() > 1 && !previous.successorOrder.empty()) {
+			for (uint8_t peer: previous.successorOrder)
+				if (seatMap.contains(peer) && peer != previous.hostPeerId)
+					config.successorOrder.push_back(seatMap.at(peer));
+			for (uint8_t peer: survivors)
+				if (peer != previous.hostPeerId && std::find(config.successorOrder.begin(), config.successorOrder.end(), seatMap.at(peer)) == config.successorOrder.end())
+					config.successorOrder.push_back(seatMap.at(peer));
+			for (auto peer: previous.migrationPeers) {
+				if (!seatMap.contains(peer.peerId))
+					continue;
+				peer.peerId = seatMap.at(peer.peerId);
+				config.migrationPeers.push_back(std::move(peer));
+			}
+		}
 		for (const NetMatchPlayerSlot& slot : previous.players) {
 			NetMatchPlayerSlot seat = slot;
 			if (!slot.cpu) {
@@ -289,6 +307,28 @@ namespace RTE {
 		if (config.hostPeerId == 0 || config.hostPeerId > config.peerCount) {
 			if (error) *error = "host_peer_id is out of range";
 			return false;
+		}
+		if (!config.successorOrder.empty()) {
+			if (config.dedicated || config.persistentWorld)
+				return refuse("dedicated and persistent world configs cannot migrate hosts");
+			if (config.version < 4 || config.successorOrder.size() != config.peerCount - 1 || config.migrationPeers.size() != config.peerCount)
+				return refuse("migration roster does not cover the match");
+			std::set<uint8_t> successors;
+			for (uint8_t peer: config.successorOrder) {
+				if (peer == 0 || peer > config.peerCount || peer == config.hostPeerId || !successors.insert(peer).second)
+					return refuse("successor order contains an invalid or repeated peer");
+			}
+			std::set<uint8_t> endpoints;
+			for (const auto& peer: config.migrationPeers) {
+				if (peer.peerId == 0 || peer.peerId > config.peerCount || !endpoints.insert(peer.peerId).second || peer.listenPort == 0 || peer.listenAddrs.empty() || peer.listenAddrs.size() > c_MaxMigrationAddresses)
+					return refuse("migration listen endpoint is invalid");
+				for (const auto& address: peer.listenAddrs) {
+					if (!ValidateText(address, 128, "migration listen address", error))
+						return false;
+				}
+			}
+		} else if (!config.migrationPeers.empty()) {
+			return refuse("migration endpoints require a successor order");
 		}
 		if (config.inputDelayFrames > c_MaxInputDelayFrames) {
 			if (error) *error = "input_delay_frames is out of range";
@@ -408,6 +448,17 @@ namespace RTE {
 		if (config.dedicated) {
 			fields.emplace_back("dedicated", "true");
 		}
+		if (!config.successorOrder.empty()) {
+			fields.emplace_back("migration.version", std::to_string(c_MigrationVersion));
+			for (size_t i = 0; i < config.successorOrder.size(); ++i)
+				fields.emplace_back("migration.successor." + std::to_string(i), std::to_string(config.successorOrder[i]));
+			for (const auto& peer: config.migrationPeers) {
+				const std::string prefix = "migration.peer." + std::to_string(peer.peerId);
+				fields.emplace_back(prefix + ".port", std::to_string(peer.listenPort));
+				for (size_t i = 0; i < peer.listenAddrs.size(); ++i)
+					fields.emplace_back(prefix + ".address." + std::to_string(i), peer.listenAddrs[i]);
+			}
+		}
 		// Same for the redundancy window: only a host's non-default choice rides it.
 		if (config.frameRedundancyTicks != c_DefaultFrameRedundancyTicks) {
 			fields.emplace_back("frame_redundancy_ticks", std::to_string(config.frameRedundancyTicks));
@@ -454,6 +505,8 @@ namespace RTE {
 			{"players", std::move(players)},
 		};
 		report["rules"] = RulesJson(config);
+		if (!config.successorOrder.empty())
+			report["successor_order"] = config.successorOrder;
 		// The roster takes a session-handshake name without revalidating it, so a stray byte is replaced
 		// here instead of throwing: the host builds this report while a match runs.
 		return report.dump(-1, ' ', false, json::error_handler_t::replace);

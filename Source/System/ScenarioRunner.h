@@ -153,6 +153,7 @@ namespace RTE {
 		/// that is not the interactive game. Nothing else reaches the menus or the backbuffer there.
 		static void SetLockstepStallUIProbeArmed(bool armed);
 		static bool IsLockstepControllerSyncActive();
+		static bool IsHostMigrationCatchUp();
 		/// Whether a lockstep coordinator is attached at all — a FAILED one still owns the sim (the
 		/// tick must surface its stop reason, never silently degrade to per-machine controllers).
 		static bool HasLockstepCoordinator();

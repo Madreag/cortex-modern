@@ -3039,7 +3039,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		const auto buildTail = [&member, &snapshot](const std::string& seat, bool withDelay = true) {
 			std::string tail = member.isLocal ? " (you)" : "";
 			tail += " - Team " + std::to_string(member.team + 1);
-			tail += member.peerId == 1 ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
+			tail += member.peerId == snapshot.hostPeerId ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
 			tail += seat;
 			if (withDelay && member.isLocal && !snapshot.inputDelayText.empty()) {
 				tail += " - " + snapshot.inputDelayText;

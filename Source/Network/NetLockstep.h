@@ -11,11 +11,14 @@
 #include <functional>
 #include <list>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <variant>
+#include <utility>
 #include <vector>
 
 namespace RTE {
@@ -347,16 +350,85 @@ namespace RTE {
 		uint64_t roundId = 0; //!< Host: a fresh nonzero tag per round. Client: 0, adopted from the host's start.
 		std::array<uint8_t, 16> seatPresenceEpoch{}; //!< The epoch already established by admission; zero disables roster packets.
 		bool resumeFromSnapshot = false;
+		uint8_t authorityPeerId = 0;
+		uint64_t migrationGeneration = 0;
+		std::vector<uint8_t> activePeerIds;
+		std::array<uint8_t, 32> migrationKey{};
+		std::function<std::unique_ptr<INetTransport>()> migrationTransportFactory;
 		/// How many ticks a negotiated window packet repeats. 1 keeps the classic one-tick send; 0 uses 4.
 		uint8_t frameRedundancyTicks = 4;
-		// This round joins one already running: every remote has been producing for a long time and
-		// owes its frames from startFrame on, so none of them ramps in behind the input delay here.
+		// An active world's joiner owes every remote's input from startFrame without delay ramp-in.
 		bool joinsRunningRound = false;
+	};
+
+	enum class NetHostMigrationPhase : uint8_t {
+		None,
+		Contacting,
+		Recovering,
+		WaitingForReady,
+		ResyncAdmission,
+		Complete,
+		Failed
+	};
+	enum class NetHostMigrationMessageType : uint16_t {
+		Hello = 1,
+		RollCall,
+		Answer,
+		Plan,
+		RequestInput,
+		Input,
+		Ready,
+		Commit,
+		Rejoin,
+		Abort
+	};
+
+	struct NetHostMigrationMessage {
+		NetHostMigrationMessageType type = NetHostMigrationMessageType::Hello;
+		uint64_t sessionId = 0;
+		uint64_t roundId = 0;
+		uint64_t generation = 0;
+		uint8_t senderPeerId = 0;
+		uint8_t successorPeerId = 0;
+		NetHash32 configHash{};
+		uint64_t appliedFrame = 0;
+		uint64_t completeFrom = 0;
+		uint64_t boundary = 0;
+		uint64_t frame = 0;
+		uint32_t totalBytes = 0;
+		uint32_t offset = 0;
+		std::vector<uint8_t> members;
+		std::vector<uint8_t> bytes;
+	};
+
+	class NetHostMigrationCodec {
+	public:
+		static constexpr uint32_t c_Magic = 0x314D4843;
+		static constexpr uint16_t c_Version = 1;
+		static constexpr size_t c_ChunkBytes = 48 * 1024;
+		static constexpr size_t c_MaxFrameBytes = 4 * 512 * 1024 + 256;
+		static constexpr size_t c_HistoryFrames = 2 * 240;
+		static constexpr size_t c_MaxHistoryBytes = 16 * 1024 * 1024; // Older inputs yield to resync before recovery consumes match memory.
+		static bool LooksLikePacket(const std::vector<uint8_t>& bytes);
+		static bool Encode(const NetHostMigrationMessage& message, const NetHash32& key, std::vector<uint8_t>& bytes);
+		static bool Decode(const std::vector<uint8_t>& bytes, const NetHash32& key, NetHostMigrationMessage& message);
+	};
+
+	struct NetHostMigrationResult {
+		uint64_t generation = 0;
+		uint64_t boundary = 0;
+		uint8_t hostPeerId = 0;
+		std::vector<uint8_t> members;
+		std::vector<uint8_t> resyncPeers;
+		std::map<uint8_t, NetPeerId> transports;
+		uint8_t snapshotProviderPeerId = 0;
 	};
 
 	struct NetLockstepReadyFrame {
 		uint64_t frame = 0;
 		std::vector<uint8_t> departedPeerIds;
+		std::map<uint8_t, uint64_t> committedPeerLeaves;
+		std::map<uint8_t, uint64_t> committedFrameWaivers;
 		bool hasLocalInput = false;
 		std::map<uint8_t, size_t> remoteFrameCounts;
 		std::vector<ControllerFrame> localFrames;
@@ -644,6 +716,22 @@ namespace RTE {
 		const NetLockstepConfig& GetConfig() const { return m_Config; }
 		/// The round every accepted packet carries; 0 on a client until the host's start arrives.
 		uint64_t GetRoundId() const { return m_RoundId; }
+		uint8_t GetHostPeerId() const { return m_Config.authorityPeerId != 0 ? m_Config.authorityPeerId : m_Config.matchConfig.hostPeerId; }
+		bool IsMigrating() const { return m_MigrationPhase == NetHostMigrationPhase::Contacting || m_MigrationPhase == NetHostMigrationPhase::Recovering || m_MigrationPhase == NetHostMigrationPhase::WaitingForReady || m_MigrationPhase == NetHostMigrationPhase::ResyncAdmission; }
+		bool IsMigrationCatchUp() const { return IsMigrating() && GetResumeFrame() <= m_MigrationBoundary; }
+		NetHostMigrationPhase GetMigrationPhase() const { return m_MigrationPhase; }
+		const NetHostMigrationResult& GetMigrationResult() const { return m_MigrationResult; }
+		bool NeedsMigrationSnapshot() const { return m_MigrationResult.snapshotProviderPeerId != 0 && m_Config.localPeerId == GetHostPeerId(); }
+		std::unique_ptr<INetTransport> TakeMigrationTransport() { return std::move(m_MigrationTransport); }
+		bool TakeMigrationNotice() { return std::exchange(m_MigrationNotice, false); }
+		std::vector<NetTransportEvent> TakeMigrationAdmissionEvents() { return std::exchange(m_MigrationAdmissionEvents, {}); }
+		void FinishMigrationAdmission() {
+			m_MigrationPhase = NetHostMigrationPhase::Complete;
+			RequestResync("handover survivor admitted for snapshot", true);
+		}
+		/// A transport fault starts agreement without choosing a simulation departure.
+		bool BeginHostMigration(uint64_t nowMs);
+		bool BeginHostMigrationAfterHeal(uint64_t nowMs);
 		bool IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		/// The peer that produces the actor's frames under the match's ownership policy, leaves applied; every peer resolves it identically.
 		uint8_t ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
@@ -734,6 +822,48 @@ namespace RTE {
 		friend bool TestServiceKick(std::string* error);
 
 	private:
+		void TickHostMigration(uint64_t nowMs);
+		void TickMigrationRollCallLinks(uint64_t nowMs);
+		void HandleMigrationEvent(const NetTransportEvent& event, uint64_t nowMs);
+		bool SendMigration(NetPeerId peer, NetHostMigrationMessage message);
+		NetHostMigrationMessage MigrationMessage(NetHostMigrationMessageType type) const;
+		bool ContactMigrationSuccessor(uint64_t nowMs);
+		void PublishMigrationPlan(uint64_t nowMs);
+		void CompleteHostMigration(uint64_t nowMs);
+		void FailHostMigration(const std::string& reason);
+		bool EncodeMigrationFrame(const NetLockstepReadyFrame& frame, std::vector<uint8_t>& bytes) const;
+		bool DecodeMigrationFrame(const std::vector<uint8_t>& bytes, uint64_t frame, NetLockstepReadyFrame& ready) const;
+		void SendMigrationFrame(NetPeerId peer, uint64_t frame);
+		void RetainMigrationFrame(const NetLockstepReadyFrame& ready);
+		void StoreMigrationFrame(uint64_t frame, std::vector<uint8_t> bytes);
+		NetHostMigrationPhase m_MigrationPhase = NetHostMigrationPhase::None;
+		std::unique_ptr<INetTransport> m_MigrationTransport;
+		std::unique_ptr<INetTransport> m_MigrationListener;
+		std::map<uint8_t, std::unique_ptr<INetTransport>> m_MigrationProbes;
+		uint64_t m_MigrationGeneration = 0;
+		uint64_t m_MigrationWireRound = 0;
+		uint64_t m_MigrationSinceMs = 0;
+		uint64_t m_MigrationLastSendMs = 0;
+		uint64_t m_MigrationBoundary = 0;
+		uint64_t m_MigrationFirstNeeded = 0;
+		size_t m_MigrationCandidateIndex = 0;
+		uint8_t m_MigrationSuccessor = 0;
+		uint8_t m_MigrationDonor = 0;
+		NetPeerId m_MigrationHostTransport = c_InvalidNetPeerId;
+		bool m_MigrationNotice = false;
+		bool m_MigrationNeedsResync = false;
+		bool m_MigrationCommitQueued = false;
+		NetHostMigrationResult m_MigrationResult;
+		std::map<uint8_t, NetHostMigrationMessage> m_MigrationAnswers;
+		std::map<uint8_t, NetPeerId> m_MigrationPeers;
+		std::set<uint8_t> m_MigrationReady;
+		std::map<uint64_t, std::vector<uint8_t>> m_MigrationHistory;
+		size_t m_MigrationHistoryBytes = 0;
+		std::map<uint64_t, std::vector<uint8_t>> m_MigrationIncoming;
+		std::map<NetPeerId, std::deque<std::vector<uint8_t>>> m_MigrationOutbox;
+		std::deque<std::tuple<NetPeerId, uint64_t, size_t>> m_MigrationFrameQueue;
+		std::vector<NetTransportEvent> m_MigrationAdmissionEvents;
+		std::vector<NetTransportEvent> m_MigrationEarlyInputs;
 		bool QueueInputAtTarget(uint64_t targetFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations = {});
 		/// Sends to every remote, or to one when onlyPeerId names it.
 		bool SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr, uint8_t onlyPeerId = 0, size_t* outValueObservationsEncoded = nullptr, NetLockstepObservationBlocks* blocks = nullptr);
@@ -892,6 +1022,7 @@ namespace RTE {
 		std::optional<uint64_t> m_LastCompletedSimulationTick;
 		uint64_t m_WaitingFrame = 0;
 		uint64_t m_WaitStartMs = 0;
+		uint64_t m_AuthorityLastHeardMs = 0;
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)
