@@ -680,6 +680,7 @@ static std::string ResyncSaveName() {
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
 			m_ResyncSourceRound = 0;
+			m_HostRepairPending = false;
 			m_MigrationAuthority = 0;
 			m_MigrationMembers.clear();
 			m_MigrationGeneration = 0;
@@ -809,15 +810,17 @@ static std::string ResyncSaveName() {
 		if (!ResyncSnapshotAllowed(g_ActivityMan.GetActivity())) return refuse("match over");
 		m_Coordinator->RequestResync("host requested repair");
 		m_ResyncHealStartMs = SteadyNowMs();
-		m_ResyncHealOpen = true;
+		m_HostRepairPending = true;
 		return true;
 	}
 
 	void NetMatchService::GetResyncStatus(bool* inFlight, uint64_t* bytes, uint64_t* elapsedMs) const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (inFlight) *inFlight = m_ResyncHealOpen;
-		if (bytes) *bytes = m_LastResync.envelopeBytes ? m_LastResync.envelopeBytes : m_LastResync.archiveBytes;
-		if (elapsedMs) *elapsedMs = m_ResyncHealOpen ? SteadyNowMs() - m_ResyncHealStartMs : m_LastResync.healMs;
+		const bool queued = m_HostRepairPending && m_State == NetMatchServiceState::Running && m_Coordinator &&
+		                    m_Coordinator->IsRunning() && m_Coordinator->HasPendingRecoveryStop();
+		if (inFlight) *inFlight = m_ResyncHealOpen || queued;
+		if (bytes) *bytes = queued ? 0 : (m_LastResync.envelopeBytes ? m_LastResync.envelopeBytes : m_LastResync.archiveBytes);
+		if (elapsedMs) *elapsedMs = m_ResyncHealOpen || queued ? SteadyNowMs() - m_ResyncHealStartMs : m_LastResync.healMs;
 	}
 
 	int NetMatchService::GetDirectoryVisibility() const {
@@ -904,6 +907,7 @@ static std::string ResyncSaveName() {
 			m_DiagnosticRuntimeError = ScenarioRunner::GetControllerReplayError();
 			m_ResyncHealStartMs = SteadyNowMs();
 			m_ResyncHealOpen = true;
+			m_HostRepairPending = false;
 		}
 		const uint64_t a7Resync = NetA7Journal::BeginResync();
 		const bool a7Save = NetA7Journal::Enabled() && isHost && FaultInjected("slow_resync_save");
@@ -1523,6 +1527,10 @@ static std::string ResyncSaveName() {
 			m_PendingHostOptions.reset();
 			m_HostOptionsRequest.Clear();
 			m_ResyncOnDesync = false;
+			m_ResyncHealOpen = false;
+			m_HostRepairPending = false;
+			m_ResyncHealStartMs = 0;
+			m_LastResync = {};
 			m_PendingResyncLoad.clear();
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
