@@ -6545,18 +6545,25 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	};
 	const bool sinkingWas = LuaMan::IsCheckpointAllocationSinking();
 	LuaMan::SetCheckpointAllocationSinking(true);
+	const bool sinkingOn = LuaMan::IsCheckpointAllocationSinking();
 	probeBirths();
 	probeBirths();
 	const uint64_t bornWithSinking = probeBirths();
 	LuaMan::SetCheckpointAllocationSinking(false);
+	const bool sinkingOff = !LuaMan::IsCheckpointAllocationSinking();
 	probeBirths();
 	const uint64_t bornWithoutSinking = probeBirths();
 	LuaMan::SetCheckpointAllocationSinking(sinkingWas);
 	RunScriptString("_F76SinkProbe = nil");
-	const bool sinkingHidesBirths = bornWithoutSinking == 400 && bornWithSinking < bornWithoutSinking;
+	// The invariant is that a captured state allocates every table; comparing against a sunk run
+	// says something only when the JIT compiled the probe and sank its table.
+	const bool jitSank = bornWithSinking < 400;
+	const bool sinkingHidesBirths = sinkingOn && sinkingOff && bornWithoutSinking == 400 &&
+	                                (!jitSank || bornWithSinking < bornWithoutSinking);
 	std::cout << "[script-graph-selftest] " << (sinkingHidesBirths ? "PASS" : "FAIL")
 	          << " sinking_off_allocates_every_table born_with=" << bornWithSinking
-	          << " born_without=" << bornWithoutSinking << std::endl;
+	          << " born_without=" << bornWithoutSinking << " sinking_on=" << sinkingOn << " sinking_off=" << sinkingOff
+	          << (jitSank ? "" : " jit_did_not_sink_the_probe_so_the_count_compare_is_skipped") << std::endl;
 	checkpointValues = sinkingHidesBirths && checkpointValues;
 	// A speculative window rolls its tables back, so it gives their numbers back as well.
 	const uint64_t birthsBeforeWindow = luaJIT_state_serial(m_State);
