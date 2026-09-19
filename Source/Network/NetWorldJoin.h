@@ -325,6 +325,9 @@ namespace RTE {
 		void CancelJoin(NetPeerId connection, const std::string& reason);
 		/// Cancels every bootstrap past its deadline. Returns how many it ended.
 		size_t ExpireStaleJoins(uint64_t nowMs);
+		/// Ends every bootstrap whose connection is gone, so a spectator's lobby id returns to the pool.
+		/// Returns how many it ended.
+		size_t ReleaseLostConnections(const std::vector<NetPeerId>& liveConnections);
 
 		const std::vector<NetWorldJoinSession>& Sessions() const { return m_Sessions; }
 		const NetWorldJoinSession* FindSession(NetPeerId connection) const;
