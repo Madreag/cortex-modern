@@ -1,0 +1,4 @@
+# Weapon switch (host, player 0): the dummy carries two rifles; cycle to the next held device and back.
+30 31 NEXT
+100 101 WEAPON_CHANGE_NEXT
+200 201 WEAPON_CHANGE_NEXT

@@ -2688,6 +2688,93 @@ bool AudioMan::RunCheckpointSelfTest() {
 			std::cout << "[audio-checkpoint-selftest] FAIL AudioRuntime voices lists differ at a sound's tail " << error.what() << std::endl;
 			ok = false;
 		}
+		const auto cursorArm = [&ok](const char* name, bool passed, const std::string& detail) {
+			std::cout << "[audio-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << name << " " << detail << std::endl;
+			ok = ok && passed;
+		};
+		const long long cursorArmUpdateCount = g_TimerMan.GetSimUpdateCount();
+		const long long cursorArmTimeTicks = g_TimerMan.GetSimTimeTicks();
+		try {
+			// The archived cursor is the sample position sim time puts the voice at: it moves with the
+			// sim clock and with nothing else, so two saves of one tick agree and two peers agree.
+			std::unique_ptr<SoundContainer> cursor(static_cast<SoundContainer*>(preset->Clone()));
+			cursor->SetImmobile(true);
+			cursor->SetLoopSetting(0);
+			if (!cursor->Play()) throw std::runtime_error("cursor voice did not play");
+			const int cursorId = *cursor->GetPlayingChannels()->begin();
+			FMOD::Channel* cursorChannel = nullptr;
+			AudioCheckpoint::Require(GetVoiceChannel(cursorId, &cursorChannel));
+			FMOD::Sound* cursorSound = nullptr;
+			unsigned int sampleFrames = 0;
+			AudioCheckpoint::Require(cursorChannel->getCurrentSound(&cursorSound));
+			if (!cursorSound) throw std::runtime_error("the cursor voice has no sound");
+			AudioCheckpoint::Require(cursorSound->getLength(&sampleFrames, FMOD_TIMEUNIT_PCM));
+			if (sampleFrames < 8) throw std::runtime_error("the cursor sample is too short to seek in");
+			float sampleRate = 0;
+			AudioCheckpoint::Require(cursorSound->getDefaults(&sampleRate, nullptr));
+			const auto voiceOf = [](const std::string& text, int identity) {
+				AudioRuntime state; std::string refusal;
+				if (!state.Load(text, &refusal)) throw std::runtime_error("could not parse cursor archive: " + refusal);
+				for (const auto& voice: state.voices) {
+					if (voice.identity == identity) return voice;
+				}
+				throw std::runtime_error("the cursor voice is absent from the archive");
+			};
+			// Puts the mixer's own cursor where this arm chooses, so the arm never waits on the audio thread.
+			const auto seekMixer = [cursorChannel](unsigned int position) {
+				AudioCheckpoint::Require(cursorChannel->setPosition(position, FMOD_TIMEUNIT_PCM));
+				unsigned int seeked = 0;
+				AudioCheckpoint::Require(cursorChannel->getPosition(&seeked, FMOD_TIMEUNIT_PCM));
+				return seeked;
+			};
+			unsigned int mixerBefore = 0, mixerAfter = 0, mixerLast = 0;
+			std::string firstText, secondText, thirdText;
+			{
+				AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+				mixerBefore = seekMixer(sampleFrames / 2);
+				firstText = SaveCheckpoint();
+			}
+			// One sim tick, then back: the sim clock is the only thing that moves between the saves.
+			g_TimerMan.AdvanceSimTickForPreview();
+			const long long simTicks = g_TimerMan.GetSimTimeTicks() - cursorArmTimeTicks;
+			if (static_cast<double>(simTicks) / static_cast<double>(g_TimerMan.GetTicksPerSecond()) * static_cast<double>(sampleRate) >= static_cast<double>(sampleFrames)) {
+				throw std::runtime_error("one sim tick outruns the cursor sample: frames=" + std::to_string(sampleFrames) + " rate=" + std::to_string(sampleRate));
+			}
+			{
+				AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+				mixerAfter = seekMixer(sampleFrames / 4);
+				secondText = SaveCheckpoint();
+				// The same sim tick, the mixer somewhere else again: the archive may not follow it.
+				mixerLast = seekMixer(sampleFrames / 2 + sampleFrames / 4);
+				thirdText = SaveCheckpoint();
+			}
+			g_TimerMan.RestoreSimTickAfterPreview(cursorArmUpdateCount, cursorArmTimeTicks);
+			const auto first = voiceOf(firstText, cursorId);
+			const auto second = voiceOf(secondText, cursorId);
+			const auto third = voiceOf(thirdText, cursorId);
+			// What the sample rate and pitch the archive itself carries cover in that many sim ticks.
+			const double covered = static_cast<double>(simTicks) / static_cast<double>(g_TimerMan.GetTicksPerSecond()) *
+			                       static_cast<double>(first.frequency) * static_cast<double>(first.control.pitch);
+			const unsigned int expected = static_cast<unsigned int>(std::max(0.0, std::floor(covered)));
+			const unsigned int advanced = second.position >= first.position ? second.position - first.position : 0;
+			// Both truncations of one real position: floor(anchor + covered) - floor(anchor).
+			const bool trackedSimTime = simTicks > 0 && expected > 0 && (advanced == expected || advanced == expected + 1);
+			const bool stableWithinATick = second.SaveCheckpoint() == third.SaveCheckpoint();
+			const bool offTheMixer = first.position != mixerBefore && second.position != mixerAfter && third.position != mixerLast;
+			cursorArm("voice_cursor_is_sim_times_not_the_mixers", trackedSimTime && stableWithinATick && offTheMixer,
+			          "sim_ticks=" + std::to_string(simTicks) + " archived=" + std::to_string(first.position) + "->" +
+			              std::to_string(second.position) + "->" + std::to_string(third.position) + " advanced=" + std::to_string(advanced) +
+			              " expected=" + std::to_string(expected) + " mixer=" + std::to_string(mixerBefore) + "->" +
+			              std::to_string(mixerAfter) + "->" + std::to_string(mixerLast) + " frames=" + std::to_string(sampleFrames) +
+			              " tracked=" + std::to_string(trackedSimTime ? 1 : 0) + " stable=" + std::to_string(stableWithinATick ? 1 : 0) +
+			              " off_the_mixer=" + std::to_string(offTheMixer ? 1 : 0));
+			if (cursor->IsBeingPlayed()) cursor->Stop();
+			if (m_PlayingVoices.contains(cursorId)) RetireVoice(cursorId);
+		} catch (const std::exception& error) {
+			g_TimerMan.RestoreSimTickAfterPreview(cursorArmUpdateCount, cursorArmTimeTicks);
+			std::cout << "[audio-checkpoint-selftest] FAIL voice_cursor_is_sim_times_not_the_mixers " << error.what() << std::endl;
+			ok = false;
+		}
 		try {
 			std::unique_ptr<SoundContainer> loadingOwner(static_cast<SoundContainer*>(preset->Clone()));
 			loadingOwner->SetPaused(true); loadingOwner->SetImmobile(true); loadingOwner->SetLoopSetting(-1);
