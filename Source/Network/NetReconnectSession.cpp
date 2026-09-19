@@ -1193,9 +1193,18 @@ namespace RTE {
 			m_Admission.DropConnection(issued.connection);
 		}
 		CancelHolderTransactions(seat->seat.stableSeat, nowMs);
-		if (m_LiveMatch || seat->committed || seat->dropped) {
+		if (m_LiveMatch || seat->dropped) {
+			// A seat that has been played owns actors and a reclaim window: it closes, and the hold it
+			// leaves is what keeps anyone else out of it.
 			CloseSeatWithoutHold(*seat);
 		} else {
+			// Nothing has been played yet, so the seat goes back to the pool exactly as a leave leaves
+			// it and the lobby can seat a replacement. The removal is held by the identity instead: a
+			// kick refuses this participant for the session the host is running.
+			if (action == NetParticipantRemovalAction::Kick && m_BanStore != nullptr && issued.hasParticipantId) {
+				NoteStateChanged();
+				(void)m_BanStore->Ban(issued.participantId, NetHostBanScope::Session, "", "host kick", m_HostSessionId, unixNowMs, nullptr);
+			}
 			ReleaseSeat(*seat);
 		}
 		m_LastRemovalTx = issued.notice.txId;
