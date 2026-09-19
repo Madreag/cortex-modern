@@ -5262,6 +5262,8 @@ namespace RTE {
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
+		// A lobby between rounds has no coordinator, and the peers still hold the round they played.
+		service.m_LastRoundId = 7;
 		const NetKickBanResult queued = service.RemoveParticipant(selected, NetParticipantRemovalAction::Kick);
 		if (queued != NetKickBanResult::Queued) {
 			*error = std::string("Starting RemoveParticipant answered ") + NetKickBanResultName(queued) + " instead of queueing the kick";
@@ -5302,8 +5304,19 @@ namespace RTE {
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
-		if (service.GetLastRemovalIssue().notice.stableSeat != 0) {
+		const NetParticipantRemovalIssue marshaled = service.GetLastRemovalIssue();
+		if (marshaled.notice.stableSeat != 0) {
 			*error = "the marshaled kick issued no notice for the kicked seat";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		if (marshaled.notice.sessionId != workerSession->GetSessionId()) {
+			*error = "the marshaled kick was not stamped with the worker's session";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		if (marshaled.notice.round != 7) {
+			*error = "the marshaled kick was stamped with round " + std::to_string(marshaled.notice.round) + " instead of the round the peers hold";
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
