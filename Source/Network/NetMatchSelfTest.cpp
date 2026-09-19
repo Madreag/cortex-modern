@@ -3336,6 +3336,19 @@ namespace RTE {
 		// The rematch lobby is played on the options the host staged while the finished round's lobby
 		// was still up: the draft crosses on the same slot and the next round publishes it.
 		bool TestRematchStartsFromTheStagedDraft(std::string* error) {
+			{
+				NetHostOptionsSlot cleared;
+				cleared.Post(MakeConfig());
+				const bool polled = cleared.pending.load(std::memory_order_acquire);
+				cleared.Clear();
+				std::lock_guard<std::mutex> lock(cleared.mutex);
+				NetMatchConfig out = MakeConfig();
+				// Resume Take at its locked step after Clear wins the intervening lock.
+				if (!polled || cleared.TakeLocked(out) || out != MakeConfig()) {
+					*error = "Clear lost to a stale Take poll: session=" + std::to_string(out.sessionId);
+					return false;
+				}
+			}
 			LoopbackTransport hostTransport, clientTransport;
 			StateTransferTap tap(hostTransport);
 			NetSession hostSession, clientSession;
