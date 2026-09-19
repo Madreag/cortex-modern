@@ -363,6 +363,7 @@ def repair_probe(who, root):
                   {"op": "signal", "name": "done"}]
     else:
         steps += [menu_step("assert_visible ButtonMatchRepairNow 0"),
+                  {"op": "menu", "command": "activate ButtonMatchRepairNow", "accepted": False},
                   menu_step("assert_label LabelMatchRepairHint Repair is the host's call"),
                   menu_step("dump_host_options"), {"op": "signal", "name": "ready"},
                   {"op": "wait_file", "path": str(probe_root(root, "host") / "done.json")},
